@@ -1,7 +1,7 @@
 # Database DDL
 ## auto_ai (PostgreSQL)
 
-This document lists the current database tables and their columns.
+This document lists the current database tables and their columns. **Executable DDL scripts** are in the **`DDL/`** folder (e.g. `DDL/01_ai_reader_queue.sql`). Keep both this doc and the `DDL/` scripts updated when adding, removing, or altering tables.
 
 ---
 
@@ -35,6 +35,7 @@ This document lists the current database tables and their columns.
 | `city` | `text` | YES |  | City |
 | `state` | `text` | YES |  | State |
 | `phone` | `varchar(16)` | YES |  | Phone number |
+| `file_location` | `text` | YES |  | File location / sub-folder name where scans are placed |
 
 **Primary key:** `customer_master_pkey` on (`aadhar`)
 

@@ -6,47 +6,55 @@
 
 ---
 
-## 1. Client (React) Structure
+## 1. Client (React) Structure (Modular)
 
-- **Top section:** Header with dealership name (e.g. "Arya Agencies") and current date.
-- **Screens/views:** Dealers list and form; later: documents upload, job status, review/extracted data, automation triggers.
-- **Validation:** Required fields, basic format checks; no business rules (e.g. pricing) in client.
-- **API usage:** `fetch` to backend base URL (configurable); errors surfaced to user simply.
+- **Layout:** `AppLayout` composes `Header` + `Sidebar` + main content slot.
+- **Pages:** `AddSalesPage`, `AiReaderQueuePage`, `PlaceholderPage` (Customer Details, RTO Queue).
+- **API:** `api/client.ts` (base URL, `apiFetch`), `api/uploads.ts`, `api/aiReaderQueue.ts` — microservice-friendly; swap base URL per env.
+- **Hooks:** `useToday`, `useUploadScans`, `useAiReaderQueue` — reusable, testable.
+- **Types:** `types/index.ts` — `Page`, `AddSalesStep`, `AiReaderQueueItem`, `UploadScansResponse`.
 
-### 1.1 Key Components (Current / Planned)
+### 1.1 Key Components
 
 | Component | Purpose |
 |-----------|---------|
-| `App` | Root layout, header, main content area. |
-| Dealers list/form | List dealers, add dealer (POST/GET `/dealers`). |
-| (Future) Document upload | Upload file, show job id and status. |
-| (Future) Job status | Poll or display job status for OCR and automation. |
+| `App` | Root; composes `AppLayout` and page by route. |
+| `AppLayout` | Header + Sidebar + main slot. |
+| `Header` | Dealer name (centre), right slot (e.g. date). |
+| `Sidebar` | Nav links; `onNavigate(page)`. |
+| `AddSalesPage` | Aadhar field, tiles, `UploadScansPanel`. |
+| `UploadScansPanel` | Step tiles, file input, upload button, uploaded list. |
+| `AiReaderQueuePage` | Uses `useAiReaderQueue`; renders `AiReaderQueueTable`. |
+| `PlaceholderPage` | Title + message for coming-soon pages. |
 
 ---
 
-## 2. Backend (FastAPI) Structure
+## 2. Backend (FastAPI) Structure (Modular / Microservice-Friendly)
 
 ### 2.1 Module Layout
 
 ```
-backend/
-  app/
-    main.py       # App factory, CORS, route registration
-    config.py     # Env (e.g. DATABASE_URL) via dotenv
-    db.py         # PostgreSQL connection helper
-    routers/      # (Planned) auth, dealers, vehicles, documents, jobs
-    models/       # (Planned) Pydantic request/response models
-    services/     # (Planned) business logic, job enqueue
+backend/app/
+  main.py           # App factory, CORS, include_router
+  config.py         # DATABASE_URL, UPLOADS_DIR, APP_ROOT
+  db.py             # get_connection()
+  schemas/          # Pydantic request/response (e.g. uploads)
+  repositories/     # Data access only (ai_reader_queue)
+  services/         # Business logic (UploadService)
+  routers/          # health, uploads, ai_reader_queue
 ```
 
-### 2.2 API Endpoints (Current / Planned)
+- **Routers:** Thin; call services or repos. Each router can be mounted or split into a separate service later.
+- **Services:** Stateless, injectable (e.g. `UploadService(uploads_dir=...)`).
+- **Repositories:** Table access only; no business rules.
+
+### 2.2 API Endpoints (Current)
 
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET | `/health` | Liveness. |
-| GET | `/dealers` | List dealers. |
-| POST | `/dealers` | Create dealer. |
-| (Planned) | `/vehicles`, `/customers`, `/deals`, `/documents`, `/jobs` | CRUD and job triggers. |
+| POST | `/uploads/scans` | Upload scans; enqueue to ai_reader_queue. |
+| GET | `/ai-reader-queue` | List queue items (limit=200). |
 
 ### 2.3 Database Access
 
