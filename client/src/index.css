@@ -1,5 +1,7 @@
 :root {
-  font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
+  /* Desktop dealership UI: Segoe UI (Windows), system fallbacks, Arial */
+  font-family: "Segoe UI", system-ui, -apple-system, Arial, sans-serif;
+  font-size: 14px;
   line-height: 1.5;
   font-weight: 400;
 
@@ -24,27 +26,47 @@ a:hover {
 
 body {
   margin: 0;
-  display: flex;
-  place-items: center;
   min-width: 320px;
+  min-height: 100vh;
+  width: 100%;
+}
+
+#root {
+  width: 100%;
   min-height: 100vh;
 }
 
 h1 {
-  font-size: 3.2em;
-  line-height: 1.1;
+  font-size: 22px;
+  line-height: 1.25;
+  font-weight: 600;
+}
+
+h2 {
+  font-size: 18px;
+  line-height: 1.25;
+  font-weight: 600;
 }
 
 button {
   border-radius: 8px;
   border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
+  padding: 0.5em 1rem;
+  font-size: 14px;
   font-weight: 500;
   font-family: inherit;
   background-color: #1a1a1a;
   cursor: pointer;
   transition: border-color 0.25s;
+}
+
+input, select, textarea {
+  font-family: inherit;
+  font-size: 15px;
+}
+
+label {
+  font-size: 13px;
 }
 button:hover {
   border-color: #646cff;

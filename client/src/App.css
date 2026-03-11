@@ -1,53 +1,330 @@
-.app {
+/* Outer wrapper: full viewport width */
+.app-wrap {
   min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-  font-family: system-ui, sans-serif;
+  width: 100%;
+  padding: 24px;
+  box-sizing: border-box;
+  font-family: "Segoe UI", system-ui, -apple-system, Arial, sans-serif;
+  background: #e8eef4;
 }
 
-.app-header {
+/* Clean blue box: uses full width up to 2400px (double-width layout) */
+.app-box {
+  width: 100%;
+  max-width: 2400px;
+  min-width: 640px;
+  margin: 0 auto;
+  min-height: calc(100vh - 48px);
+  border: 2px solid #1e5a9e;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 4px 12px rgba(30, 90, 158, 0.15);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Blue top bar: dealer name center, date right */
+.app-topbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 1rem 1.5rem;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(0, 0, 0, 0.2);
+  padding: 14px 24px;
+  background: #1e5a9e;
+  color: #fff;
 }
 
-.app-header-spacer {
+.app-topbar-spacer {
   flex: 1;
   min-width: 0;
 }
 
-.app-header-title {
+.app-topbar-title {
   flex: 0 0 auto;
   margin: 0;
-  font-size: 1.5rem;
+  font-size: 22px;
   font-weight: 600;
 }
 
-.app-header-date {
+.app-topbar-date {
   flex: 1;
   min-width: 0;
   text-align: right;
-  font-size: 0.95rem;
-  color: rgba(255, 255, 255, 0.75);
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.9);
 }
 
+/* Body: sidebar + main */
+.app-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+/* Left sidebar nav */
+.app-sidebar {
+  width: 200px;
+  flex-shrink: 0;
+  padding: 20px 0;
+  border-right: 1px solid #c5d9ed;
+  background: #f4f8fc;
+}
+
+.app-nav-label {
+  padding: 0 20px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #1e5a9e;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.app-nav-link {
+  display: block;
+  padding: 10px 20px;
+  font-size: 14px;
+  color: #333;
+  text-decoration: none;
+  border-left: 3px solid transparent;
+  transition: background 0.15s, color 0.15s;
+}
+
+.app-nav-link:hover {
+  background: rgba(30, 90, 158, 0.08);
+  color: #1e5a9e;
+}
+
+.app-nav-link.active {
+  background: rgba(30, 90, 158, 0.12);
+  color: #1e5a9e;
+  border-left-color: #1e5a9e;
+  font-weight: 500;
+}
+
+/* Main content area: uses remaining width (no max so it grows with box) */
 .app-main {
   flex: 1;
-  max-width: 600px;
-  margin: 0 auto;
-  padding: 2rem 1rem;
-  width: 100%;
+  min-width: 0;
+  padding: 24px 32px;
+  overflow: auto;
 }
 
-@media (prefers-color-scheme: light) {
-  .app-header {
-    border-bottom-color: rgba(0, 0, 0, 0.1);
-    background: rgba(0, 0, 0, 0.04);
-  }
-  .app-header-date {
-    color: rgba(0, 0, 0, 0.65);
-  }
+.app-main h2 {
+  margin: 0 0 1rem;
+  font-size: 18px;
+  font-weight: 600;
+  color: #1e5a9e;
+}
+
+.app-field-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 0 0 16px;
+}
+
+.app-field {
+  display: block;
+  min-width: 320px;
+}
+
+.app-field-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1b2a3a;
+  margin-bottom: 6px;
+}
+
+.app-field-input {
+  width: 280px;
+  max-width: 100%;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid #c5d9ed;
+  background: #fff;
+  font-size: 15px;
+}
+
+.app-field-input[aria-invalid="true"] {
+  border-color: #b91c1c;
+}
+
+.app-field-hint {
+  font-size: 13px;
+  color: #666;
+  padding-bottom: 2px;
+}
+
+.app-tiles {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(160px, 1fr));
+  gap: 12px;
+  margin: 0 0 18px;
+}
+
+.app-tile {
+  text-align: left;
+  border: 1px solid #c5d9ed;
+  border-radius: 10px;
+  padding: 14px 14px;
+  background: #f7fbff;
+  color: #1b2a3a;
+  cursor: pointer;
+  transition: transform 0.08s ease, box-shadow 0.12s ease, border-color 0.12s ease;
+}
+
+.app-tile:hover {
+  border-color: #1e5a9e;
+  box-shadow: 0 6px 14px rgba(30, 90, 158, 0.18);
+  transform: translateY(-1px);
+}
+
+.app-tile.active {
+  border-color: #1e5a9e;
+  box-shadow: 0 8px 18px rgba(30, 90, 158, 0.22);
+  background: #eaf4ff;
+}
+
+.app-tile-step {
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 700;
+  color: #fff;
+  background: #1e5a9e;
+  margin-bottom: 10px;
+}
+
+.app-tile-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.app-form {
+  margin-bottom: 1.5rem;
+}
+
+.app-form-row {
+  margin-bottom: 0.75rem;
+}
+
+.app-form-row label {
+  font-size: 13px;
+}
+
+.app-form-row input {
+  font-size: 15px;
+  margin-left: 4px;
+}
+
+.app-dealer-list {
+  margin: 0;
+  padding-left: 1.25rem;
+}
+
+.app-dealer-list li {
+  margin-bottom: 0.25rem;
+}
+
+.app-placeholder {
+  color: #666;
+}
+
+.app-placeholder p {
+  margin: 0.5rem 0 0;
+}
+
+.app-panel {
+  border: 1px solid #c5d9ed;
+  border-radius: 10px;
+  padding: 16px;
+  background: #fff;
+}
+
+.app-panel-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1e5a9e;
+  margin-bottom: 12px;
+}
+
+.app-panel-row {
+  margin-bottom: 12px;
+}
+
+.app-panel-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.app-panel-status {
+  font-size: 13px;
+  color: #333;
+  background: #f4f8fc;
+  border: 1px solid #c5d9ed;
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.app-panel-uploaded {
+  margin-top: 12px;
+  border-top: 1px solid #c5d9ed;
+  padding-top: 12px;
+}
+
+.app-panel-uploaded-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1e5a9e;
+  margin-bottom: 8px;
+}
+
+.app-panel-uploaded-list {
+  margin: 0;
+  padding-left: 1.25rem;
+}
+
+.app-panel-uploaded-list li {
+  margin-bottom: 0.25rem;
+}
+
+.app-table-wrap {
+  border: 1px solid #c5d9ed;
+  border-radius: 10px;
+  overflow: auto;
+  background: #fff;
+}
+
+.app-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.app-table thead th {
+  position: sticky;
+  top: 0;
+  background: #f4f8fc;
+  color: #1e5a9e;
+  text-align: left;
+  padding: 10px 12px;
+  border-bottom: 1px solid #c5d9ed;
+  white-space: nowrap;
+}
+
+.app-table tbody td {
+  padding: 10px 12px;
+  border-bottom: 1px solid #eef3f8;
+  white-space: nowrap;
+}
+
+.app-table-empty {
+  text-align: center;
+  color: #666;
 }
