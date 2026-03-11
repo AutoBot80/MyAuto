@@ -45,3 +45,6 @@ htmlcov/
 
 # Local / override (keep example only)
 *.local
+
+# Scanner / local assets (not versioned)
+Scanner/
