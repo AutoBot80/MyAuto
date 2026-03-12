@@ -6,5 +6,11 @@
     "key_no": "2509",
     "battery_no": "M7A6R860254"
   },
-  "customer": {}
+  "customer": {
+    "name": "",
+    "address": "",
+    "city": "",
+    "state": "",
+    "pin": ""
+  }
 }

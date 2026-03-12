@@ -72,10 +72,14 @@ export function AddSalesPage() {
     });
   }, [aadharLast4, mobile, savedTo, uploadedFiles, uploadStatus, extractedVehicle, extractedCustomer]);
 
-  // When we have savedTo but no vehicle data (e.g. came back from another page), fetch once to fill Extracted Information
+  const hasCustomer = Boolean(
+    extractedCustomer &&
+    (extractedCustomer.name || extractedCustomer.address || extractedCustomer.city || extractedCustomer.state || extractedCustomer.pin)
+  );
+  // When we have savedTo but missing vehicle or customer data, fetch once to fill Extracted Information
   const hasVehicle = hasVehicleData(extractedVehicle);
   useEffect(() => {
-    if (!savedTo || hasVehicle) return;
+    if (!savedTo || (hasVehicle && hasCustomer)) return;
     let cancelled = false;
     getExtractedDetails(savedTo)
       .then((details) => {
@@ -100,7 +104,7 @@ export function AddSalesPage() {
     return () => {
       cancelled = true;
     };
-  }, [savedTo, hasVehicle]);
+  }, [savedTo, hasVehicle, hasCustomer]);
 
   // Poll for extracted details when savedTo is set (e.g. right after upload)
   useEffect(() => {
@@ -219,6 +223,7 @@ export function AddSalesPage() {
 
   // Normalize for display so we always show known fields (frame_no, engine_no, etc.) regardless of key naming
   const v = normalizeVehicleDetails(extractedVehicle) ?? extractedVehicle;
+  const c = extractedCustomer;
   const display = (s: string | undefined) => (s && String(s).trim() ? String(s).trim() : "—");
 
   const panel = (
@@ -287,11 +292,11 @@ export function AddSalesPage() {
                 <div className="add-sales-v2-subsection">
                   <h3 className="add-sales-v2-subsection-title">Customer Details</h3>
                   <dl className="add-sales-v2-dl">
-                    <div className="add-sales-v2-dl-row"><dt>Name</dt><dd>—</dd></div>
-                    <div className="add-sales-v2-dl-row"><dt>Address</dt><dd>—</dd></div>
-                    <div className="add-sales-v2-dl-row"><dt>City</dt><dd>—</dd></div>
-                    <div className="add-sales-v2-dl-row"><dt>State</dt><dd>—</dd></div>
-                    <div className="add-sales-v2-dl-row"><dt>PIN</dt><dd>—</dd></div>
+                    <div className="add-sales-v2-dl-row"><dt>Name</dt><dd>{display(c?.name)}</dd></div>
+                    <div className="add-sales-v2-dl-row"><dt>Address</dt><dd>{display(c?.address)}</dd></div>
+                    <div className="add-sales-v2-dl-row"><dt>City</dt><dd>{display(c?.city)}</dd></div>
+                    <div className="add-sales-v2-dl-row"><dt>State</dt><dd>{display(c?.state)}</dd></div>
+                    <div className="add-sales-v2-dl-row"><dt>PIN</dt><dd>{display(c?.pin)}</dd></div>
                   </dl>
                 </div>
                 <div className="add-sales-v2-subsection">
@@ -301,11 +306,11 @@ export function AddSalesPage() {
                       <button
                         type="button"
                         className="app-button app-button--small"
-                        onClick={handleRefreshVehicle}
-                        disabled={vehicleRefreshLoading}
-                        title="Reload vehicle info from server"
+                        onClick={handleRefreshExtracted}
+                        disabled={extractedRefreshLoading}
+                        title="Reload customer (Aadhar) and vehicle (Details sheet) from server"
                       >
-                        {vehicleRefreshLoading ? "…" : "Refresh"}
+                        {extractedRefreshLoading ? "…" : "Refresh"}
                       </button>
                     )}
                   </div>
