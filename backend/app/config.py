@@ -3,7 +3,9 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv()
+# Load .env from backend/ so AWS and DB credentials are found when running from any cwd
+_BACKEND_DIR = Path(__file__).resolve().parents[1]
+load_dotenv(_BACKEND_DIR / ".env")
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
