@@ -227,16 +227,44 @@ class OcrService:
             }
 
     def _process_aadhar(self, qid: int, subfolder: str, filename: str, input_path: Path) -> dict:
-        """Run Aadhar extraction (OpenAI Vision); merge customer into subfolder JSON; update queue."""
+        """Run Aadhar extraction: try QR decode first, then fall back to OpenAI Vision; merge customer into subfolder JSON."""
         with get_connection() as conn:
             AiReaderQueueRepository.update_classification(conn, qid, "Aadhar", 1.0)
             conn.commit()
         try:
-            from app.services.vision_service import extract_aadhar_customer_fields
+            customer: dict[str, str] = {}
+            raw_bytes = input_path.read_bytes()
+            try:
+                from app.services.qr_decode_service import decode_qr_from_image_bytes
 
-            cust = extract_aadhar_customer_fields(image_path=input_path)
-            cust.pop("error", None)
-            customer = {k: (cust.get(k) or "") for k in ("name", "address", "city", "state", "pin")}
+                qr_result = decode_qr_from_image_bytes(raw_bytes)
+                if qr_result.get("decoded") and qr_result["decoded"][0].get("fields"):
+                    fields = qr_result["decoded"][0]["fields"]
+                    for k in (
+                        "aadhar_id", "name", "gender", "year_of_birth", "date_of_birth",
+                        "care_of", "house", "street", "location", "city", "post_office",
+                        "district", "sub_district", "state", "pin_code",
+                    ):
+                        v = fields.get(k)
+                        if v and str(v).strip():
+                            customer[k] = str(v).strip()
+                    parts = [
+                        customer.get("care_of"), customer.get("house"), customer.get("street"),
+                        customer.get("location"), customer.get("state"), customer.get("pin_code"),
+                    ]
+                    address = ", ".join(p for p in parts if p)
+                    if address:
+                        customer["address"] = address
+                else:
+                    raise ValueError("No QR fields")
+            except Exception:
+                from app.services.vision_service import extract_aadhar_customer_fields
+
+                cust = extract_aadhar_customer_fields(image_path=input_path)
+                cust.pop("error", None)
+                customer = {k: (cust.get(k) or "") for k in ("name", "address", "city", "state", "pin")}
+                if customer.get("pin"):
+                    customer["pin_code"] = customer["pin"]
 
             self._ensure_ocr_output_dir()
             json_path = _json_output_path(self.ocr_output_dir, subfolder, "Details.jpg")
@@ -255,7 +283,7 @@ class OcrService:
 
             output_path = self.get_output_path(subfolder, filename)
             summary = "\n".join(f"{k}: {v}" for k, v in customer.items() if v)
-            output_path.write_text(f"Document: Aadhar (Vision)\n\n{summary}", encoding="utf-8")
+            output_path.write_text(f"Document: Aadhar (QR/Vision)\n\n{summary}", encoding="utf-8")
 
             with get_connection() as conn:
                 AiReaderQueueRepository.update_status(conn, qid, "done")
@@ -308,14 +336,42 @@ class OcrService:
                 pass
 
         customer = data.get("customer") or {}
-        has_customer = any(customer.get(k) for k in ("name", "address", "city", "state", "pin"))
+        has_customer = any(customer.get(k) for k in ("name", "address", "aadhar_id", "city", "state", "pin", "pin_code"))
         aadhar_path = self.uploads_dir / subfolder / "Aadhar.jpg"
         if not has_customer and aadhar_path.exists():
-            from app.services.vision_service import extract_aadhar_customer_fields
+            raw_bytes = aadhar_path.read_bytes()
+            try:
+                from app.services.qr_decode_service import decode_qr_from_image_bytes
 
-            cust = extract_aadhar_customer_fields(image_path=aadhar_path)
-            cust.pop("error", None)
-            data["customer"] = {k: (cust.get(k) or "") for k in ("name", "address", "city", "state", "pin")}
+                qr_result = decode_qr_from_image_bytes(raw_bytes)
+                if qr_result.get("decoded") and qr_result["decoded"][0].get("fields"):
+                    fields = qr_result["decoded"][0]["fields"]
+                    for k in (
+                        "aadhar_id", "name", "gender", "year_of_birth", "date_of_birth",
+                        "care_of", "house", "street", "location", "city", "post_office",
+                        "district", "sub_district", "state", "pin_code",
+                    ):
+                        v = fields.get(k)
+                        if v and str(v).strip():
+                            customer[k] = str(v).strip()
+                    parts = [
+                        customer.get("care_of"), customer.get("house"), customer.get("street"),
+                        customer.get("location"), customer.get("state"), customer.get("pin_code"),
+                    ]
+                    address = ", ".join(p for p in parts if p)
+                    if address:
+                        customer["address"] = address
+                    data["customer"] = customer
+                else:
+                    raise ValueError("No QR fields")
+            except Exception:
+                from app.services.vision_service import extract_aadhar_customer_fields
+
+                cust = extract_aadhar_customer_fields(image_path=aadhar_path)
+                cust.pop("error", None)
+                data["customer"] = {k: (cust.get(k) or "") for k in ("name", "address", "city", "state", "pin")}
+                if data["customer"].get("pin"):
+                    data["customer"]["pin_code"] = data["customer"]["pin"]
             try:
                 json_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
             except Exception:

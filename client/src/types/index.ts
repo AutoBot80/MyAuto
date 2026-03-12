@@ -73,11 +73,11 @@ export interface ExtractedCustomerDetails {
   address?: string;
 }
 
-/** Build display address from granular fields (care of, house, street, location). Uses existing address if set. */
+/** Build display address from granular fields (care of, house, street, location, state, pin). Uses existing address if set. */
 export function buildDisplayAddress(c: ExtractedCustomerDetails | null | undefined): string {
   if (!c) return "—";
   if (c.address && String(c.address).trim()) return c.address.trim();
-  const parts = [c.care_of, c.house, c.street, c.location].filter((s) => s != null && String(s).trim() !== "");
+  const parts = [c.care_of, c.house, c.street, c.location, c.state, c.pin_code].filter((s) => s != null && String(s).trim() !== "");
   return parts.length > 0 ? parts.map((s) => String(s).trim()).join(", ") : "—";
 }
 

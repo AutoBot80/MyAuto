@@ -4,9 +4,6 @@ import { buildDisplayAddress } from "../types";
 import { useUploadScans } from "../hooks/useUploadScans";
 import { UploadScansPanel } from "../components/UploadScansPanel";
 import { getExtractedDetails } from "../api/aiReaderQueue";
-import { decodeQrFromImage } from "../api/qrDecode";
-import type { QrDecodeResponse } from "../api/qrDecode";
-import { QR_FIELD_ORDER, QR_FIELD_LABELS } from "../api/qrDecode";
 import { loadAddSalesForm, saveAddSalesForm, clearAddSalesForm } from "../utils/addSalesStorage";
 import { normalizeVehicleDetails, hasVehicleData } from "../utils/vehicleDetails";
 
@@ -64,10 +61,6 @@ export function AddSalesPage() {
   const [addSalesStep, setAddSalesStep] = useState<AddSalesStep>("upload-scans");
   const [formResetKey, setFormResetKey] = useState(0);
   const [extractedRefreshLoading, setExtractedRefreshLoading] = useState(false);
-  // Temporary: QR decode box
-  const [qrDecodeLoading, setQrDecodeLoading] = useState(false);
-  const [qrDecodeResult, setQrDecodeResult] = useState<QrDecodeResponse | null>(null);
-  const qrFileInputRef = useRef<HTMLInputElement>(null);
 
   const {
     upload,
@@ -196,45 +189,6 @@ export function AddSalesPage() {
     setFormResetKey((k) => k + 1);
   };
 
-  const handleQrDecode = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    e.target.value = "";
-    if (!file) return;
-    setQrDecodeLoading(true);
-    setQrDecodeResult(null);
-    try {
-      const res = await decodeQrFromImage(file);
-      setQrDecodeResult(res);
-      if (res.decoded.length > 0 && res.decoded[0].fields) {
-        const fields = res.decoded[0].fields;
-        setExtractedCustomer({
-          aadhar_id: fields.aadhar_id,
-          name: fields.name,
-          gender: fields.gender,
-          year_of_birth: fields.year_of_birth,
-          date_of_birth: fields.date_of_birth,
-          care_of: fields.care_of,
-          house: fields.house,
-          street: fields.street,
-          location: fields.location,
-          city: fields.city,
-          post_office: fields.post_office,
-          district: fields.district,
-          sub_district: fields.sub_district,
-          state: fields.state,
-          pin_code: fields.pin_code,
-        });
-      }
-    } catch (err) {
-      setQrDecodeResult({
-        decoded: [],
-        error: err instanceof Error ? err.message : "Decode failed",
-      });
-    } finally {
-      setQrDecodeLoading(false);
-    }
-  };
-
   const handleRefreshExtracted = async () => {
     if (!savedTo) return;
     setExtractedRefreshLoading(true);
@@ -319,16 +273,11 @@ export function AddSalesPage() {
                 <div className="add-sales-v2-subsection">
                   <h3 className="add-sales-v2-subsection-title">Customer Details</h3>
                   <dl className="add-sales-v2-dl">
-                    {QR_FIELD_ORDER.map((key) => (
-                      <div key={key} className="add-sales-v2-dl-row">
-                        <dt>{QR_FIELD_LABELS[key]}</dt>
-                        <dd>{display(c?.[key])}</dd>
-                      </div>
-                    ))}
-                    <div className="add-sales-v2-dl-row">
-                      <dt>Address</dt>
-                      <dd>{buildDisplayAddress(c)}</dd>
-                    </div>
+                    <div className="add-sales-v2-dl-row"><dt>Aadhar ID</dt><dd>{display(c?.aadhar_id)}</dd></div>
+                    <div className="add-sales-v2-dl-row"><dt>Name</dt><dd>{display(c?.name)}</dd></div>
+                    <div className="add-sales-v2-dl-row"><dt>Gender</dt><dd>{display(c?.gender)}</dd></div>
+                    <div className="add-sales-v2-dl-row"><dt>Date of birth</dt><dd>{display(c?.date_of_birth)}</dd></div>
+                    <div className="add-sales-v2-dl-row"><dt>Address</dt><dd>{buildDisplayAddress(c)}</dd></div>
                   </dl>
                 </div>
                 <div className="add-sales-v2-subsection">
@@ -354,82 +303,6 @@ export function AddSalesPage() {
                     <div className="add-sales-v2-dl-row"><dt>Battery no.</dt><dd>{display(v?.battery_no)}</dd></div>
                   </dl>
                 </div>
-              </div>
-            </section>
-            {/* Temporary: QR decode from scan image */}
-            <section className="add-sales-v2-box add-sales-v2-box-qr-temp">
-              <h2 className="add-sales-v2-box-title">
-                QR decode <span className="add-sales-v2-box-title-note">(temporary)</span>
-              </h2>
-              <div className="add-sales-v2-box-body">
-                <input
-                  ref={qrFileInputRef}
-                  type="file"
-                  accept="image/*,.jpg,.jpeg,.png,.webp"
-                  aria-label="Choose scan image with QR"
-                  className="add-sales-v2-qr-input"
-                  onChange={handleQrDecode}
-                  disabled={qrDecodeLoading}
-                />
-                <p className="add-sales-v2-qr-hint">Use an image under 2 MB (crop to the QR if needed).</p>
-                <button
-                  type="button"
-                  className="app-button app-button--small"
-                  onClick={() => qrFileInputRef.current?.click()}
-                  disabled={qrDecodeLoading}
-                >
-                  {qrDecodeLoading ? "Decoding…" : "Upload image & decode QR"}
-                </button>
-                {qrDecodeResult && (
-                  <div className="add-sales-v2-qr-output">
-                    {qrDecodeResult.error && (
-                      <p className="add-sales-v2-qr-error">{qrDecodeResult.error}</p>
-                    )}
-                    {qrDecodeResult.decoded.length > 0 ? (() => {
-                      const first = qrDecodeResult.decoded[0];
-                      const fields = first?.fields ?? {};
-                      const hasAnyField = QR_FIELD_ORDER.some((k) => fields[k] != null && String(fields[k]).trim() !== "");
-                      return (
-                        <div className="add-sales-v2-qr-result">
-                          {qrDecodeResult.decoded.length > 1 && (
-                            <p className="add-sales-v2-qr-multi">{qrDecodeResult.decoded.length} QR code(s) found; showing first.</p>
-                          )}
-                          {hasAnyField ? (
-                            <dl className="add-sales-v2-qr-dl">
-                              {QR_FIELD_ORDER.map((key) => {
-                                const val = fields[key];
-                                if (val == null || String(val).trim() === "") return null;
-                                return (
-                                  <div key={key} className="add-sales-v2-dl-row">
-                                    <dt>{QR_FIELD_LABELS[key]}</dt>
-                                    <dd>{String(val).trim()}</dd>
-                                  </div>
-                                );
-                              })}
-                            </dl>
-                          ) : (
-                            <div className="add-sales-v2-qr-raw-wrap">
-                              <p className="add-sales-v2-qr-no-fields">QR decoded but no standard fields matched. Raw keys from QR:</p>
-                              <dl className="add-sales-v2-qr-dl add-sales-v2-qr-raw-dl">
-                                {Object.entries(first?.parsed ?? {}).filter(([, v]) => v != null && String(v).trim() !== "" && String(v).length < 200).map(([k, v]) => (
-                                  <div key={k} className="add-sales-v2-dl-row">
-                                    <dt>{k}</dt>
-                                    <dd>{String(v).trim()}</dd>
-                                  </div>
-                                ))}
-                              </dl>
-                              {Object.keys(first?.parsed ?? {}).length === 0 && (
-                                <p className="add-sales-v2-qr-no-fields">No parsed key-value pairs.</p>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })() : !qrDecodeResult.error && (
-                      <p className="add-sales-v2-qr-no-output">No QR code found or no data extracted.</p>
-                    )}
-                  </div>
-                )}
               </div>
             </section>
           </div>
