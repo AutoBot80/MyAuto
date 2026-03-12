@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import type { AddSalesStep, ExtractedVehicleDetails } from "../types";
+import type { AddSalesStep, ExtractedVehicleDetails, ExtractedCustomerDetails } from "../types";
 import { useUploadScans } from "../hooks/useUploadScans";
 import { UploadScansPanel } from "../components/UploadScansPanel";
 import { getExtractedDetails } from "../api/aiReaderQueue";
@@ -32,9 +32,12 @@ export function AddSalesPage() {
   const [extractedVehicle, setExtractedVehicle] = useState<ExtractedVehicleDetails | null>(
     () => getInitialForm().extractedVehicle
   );
+  const [extractedCustomer, setExtractedCustomer] = useState<ExtractedCustomerDetails | null>(
+    () => getInitialForm().extractedCustomer
+  );
   const [addSalesStep, setAddSalesStep] = useState<AddSalesStep>("upload-scans");
   const [formResetKey, setFormResetKey] = useState(0);
-  const [vehicleRefreshLoading, setVehicleRefreshLoading] = useState(false);
+  const [extractedRefreshLoading, setExtractedRefreshLoading] = useState(false);
 
   const {
     upload,
@@ -65,8 +68,9 @@ export function AddSalesPage() {
       uploadedFiles,
       uploadStatus,
       extractedVehicle,
+      extractedCustomer,
     });
-  }, [aadharLast4, mobile, savedTo, uploadedFiles, uploadStatus, extractedVehicle]);
+  }, [aadharLast4, mobile, savedTo, uploadedFiles, uploadStatus, extractedVehicle, extractedCustomer]);
 
   // When we have savedTo but no vehicle data (e.g. came back from another page), fetch once to fill Extracted Information
   const hasVehicle = hasVehicleData(extractedVehicle);
@@ -76,10 +80,19 @@ export function AddSalesPage() {
     getExtractedDetails(savedTo)
       .then((details) => {
         if (cancelled) return;
-        // API returns { vehicle: {...}, customer: {} }; fallback to details itself if it has our keys
         const rawVehicle = details?.vehicle ?? details;
         const normalized = normalizeVehicleDetails(rawVehicle);
         if (normalized) setExtractedVehicle(normalized);
+        const cust = details?.customer;
+        if (cust && typeof cust === "object" && !Array.isArray(cust)) {
+          setExtractedCustomer({
+            name: String((cust as Record<string, unknown>).name ?? "").trim() || undefined,
+            address: String((cust as Record<string, unknown>).address ?? "").trim() || undefined,
+            city: String((cust as Record<string, unknown>).city ?? "").trim() || undefined,
+            state: String((cust as Record<string, unknown>).state ?? "").trim() || undefined,
+            pin: String((cust as Record<string, unknown>).pin ?? "").trim() || undefined,
+          });
+        }
       })
       .catch(() => {
         // Fetch failed (404, network, etc.) – keep existing state
@@ -106,6 +119,16 @@ export function AddSalesPage() {
         const details = await getExtractedDetails(savedTo);
         const rawVehicle = details?.vehicle ?? details;
         const normalized = normalizeVehicleDetails(rawVehicle);
+        const cust = details?.customer;
+        if (cust && typeof cust === "object" && !Array.isArray(cust)) {
+          setExtractedCustomer({
+            name: String((cust as Record<string, unknown>).name ?? "").trim() || undefined,
+            address: String((cust as Record<string, unknown>).address ?? "").trim() || undefined,
+            city: String((cust as Record<string, unknown>).city ?? "").trim() || undefined,
+            state: String((cust as Record<string, unknown>).state ?? "").trim() || undefined,
+            pin: String((cust as Record<string, unknown>).pin ?? "").trim() || undefined,
+          });
+        }
         if (normalized) {
           setExtractedVehicle(normalized);
           if (intervalId) clearInterval(intervalId);
@@ -167,19 +190,30 @@ export function AddSalesPage() {
     setMobile("");
     clearUploaded();
     setExtractedVehicle(null);
+    setExtractedCustomer(null);
     setFormResetKey((k) => k + 1);
   };
 
-  const handleRefreshVehicle = async () => {
+  const handleRefreshExtracted = async () => {
     if (!savedTo) return;
-    setVehicleRefreshLoading(true);
+    setExtractedRefreshLoading(true);
     try {
       const details = await getExtractedDetails(savedTo);
       const rawVehicle = details?.vehicle ?? details;
       const normalized = normalizeVehicleDetails(rawVehicle);
       if (normalized) setExtractedVehicle(normalized);
+      const cust = details?.customer;
+      if (cust && typeof cust === "object" && !Array.isArray(cust)) {
+        setExtractedCustomer({
+          name: String((cust as Record<string, unknown>).name ?? "").trim() || undefined,
+          address: String((cust as Record<string, unknown>).address ?? "").trim() || undefined,
+          city: String((cust as Record<string, unknown>).city ?? "").trim() || undefined,
+          state: String((cust as Record<string, unknown>).state ?? "").trim() || undefined,
+          pin: String((cust as Record<string, unknown>).pin ?? "").trim() || undefined,
+        });
+      }
     } finally {
-      setVehicleRefreshLoading(false);
+      setExtractedRefreshLoading(false);
     }
   };
 

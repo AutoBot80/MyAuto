@@ -52,7 +52,16 @@ export interface ExtractedVehicleDetails {
   battery_no?: string;
 }
 
+/** Customer details extracted from Aadhar (OpenAI Vision). */
+export interface ExtractedCustomerDetails {
+  name?: string;
+  address?: string;
+  city?: string;
+  state?: string;
+  pin?: string;
+}
+
 export interface ExtractedDetailsResponse {
   vehicle: ExtractedVehicleDetails;
-  customer: Record<string, string>;
+  customer: ExtractedCustomerDetails | Record<string, string>;
 }

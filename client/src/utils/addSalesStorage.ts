@@ -15,6 +15,13 @@ export interface AddSalesStored {
     key_no?: string;
     battery_no?: string;
   } | null;
+  extractedCustomer: {
+    name?: string;
+    address?: string;
+    city?: string;
+    state?: string;
+    pin?: string;
+  } | null;
 }
 
 const DEFAULT: AddSalesStored = {
@@ -24,6 +31,7 @@ const DEFAULT: AddSalesStored = {
   uploadedFiles: [],
   uploadStatus: "",
   extractedVehicle: null,
+  extractedCustomer: null,
 };
 
 import { normalizeVehicleDetails } from "./vehicleDetails";
@@ -36,7 +44,18 @@ export function loadAddSalesForm(): AddSalesStored {
   try {
     const raw = sessionStorage.getItem(KEY);
     if (!raw) return { ...DEFAULT };
-    const parsed = JSON.parse(raw) as Partial<AddSalesStored> & { extractedVehicle?: unknown };
+    const parsed = JSON.parse(raw) as Partial<AddSalesStored> & { extractedVehicle?: unknown; extractedCustomer?: unknown };
+    const cust = parsed.extractedCustomer;
+    const extractedCustomer =
+      cust && typeof cust === "object" && !Array.isArray(cust)
+        ? {
+            name: typeof (cust as Record<string, unknown>).name === "string" ? (cust as Record<string, string>).name : "",
+            address: typeof (cust as Record<string, unknown>).address === "string" ? (cust as Record<string, string>).address : "",
+            city: typeof (cust as Record<string, unknown>).city === "string" ? (cust as Record<string, string>).city : "",
+            state: typeof (cust as Record<string, unknown>).state === "string" ? (cust as Record<string, string>).state : "",
+            pin: typeof (cust as Record<string, unknown>).pin === "string" ? (cust as Record<string, string>).pin : "",
+          }
+        : null;
     return {
       aadharLast4: typeof parsed.aadharLast4 === "string" ? parsed.aadharLast4 : "",
       mobile: typeof parsed.mobile === "string" ? parsed.mobile : "",
@@ -49,6 +68,7 @@ export function loadAddSalesForm(): AddSalesStored {
       uploadedFiles: Array.isArray(parsed.uploadedFiles) ? parsed.uploadedFiles : [],
       uploadStatus: typeof parsed.uploadStatus === "string" ? parsed.uploadStatus : "",
       extractedVehicle: normalizeExtractedVehicle(parsed.extractedVehicle),
+      extractedCustomer: extractedCustomer && (extractedCustomer.name || extractedCustomer.address || extractedCustomer.city || extractedCustomer.state || extractedCustomer.pin) ? extractedCustomer : null,
     };
   } catch {
     return { ...DEFAULT };

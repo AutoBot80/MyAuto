@@ -154,10 +154,19 @@ class OcrService:
             output_path = self.get_output_path(subfolder, filename)
             output_path.write_text(text, encoding="utf-8")
 
-            # Write structured JSON for client (vehicle details from form keys)
+            # Write structured JSON for client (vehicle details from form keys); preserve existing customer if any
             vehicle = _map_key_value_pairs_to_vehicle(key_value_pairs)
-            details_json = {"vehicle": vehicle, "customer": {}}
             json_path = _json_output_path(self.ocr_output_dir, subfolder, filename)
+            customer = {}
+            if json_path.exists():
+                try:
+                    existing = json.loads(json_path.read_text(encoding="utf-8"))
+                    customer = existing.get("customer") or {}
+                    if not isinstance(customer, dict):
+                        customer = {}
+                except Exception:
+                    pass
+            details_json = {"vehicle": vehicle, "customer": customer}
             json_path.write_text(json.dumps(details_json, indent=2), encoding="utf-8")
 
             with get_connection() as conn:
@@ -192,14 +201,38 @@ class OcrService:
             }
 
     def get_extracted_details(self, subfolder: str) -> dict | None:
-        """Return structured extracted details (vehicle, customer) for a subfolder if Details sheet was processed."""
+        """
+        Return structured extracted details (vehicle, customer) for a subfolder.
+        Loads from JSON if present. If customer is missing/empty and Aadhar.jpg exists in the subfolder,
+        runs Aadhar reading (OpenAI Vision), merges customer, persists JSON, and returns.
+        """
+        self._ensure_ocr_output_dir()
         json_path = _json_output_path(self.ocr_output_dir, subfolder, "Details.jpg")
-        if not json_path.exists():
-            return None
-        try:
-            return json.loads(json_path.read_text(encoding="utf-8"))
-        except Exception:
-            return None
+        data = {"vehicle": {}, "customer": {}}
+        if json_path.exists():
+            try:
+                data = json.loads(json_path.read_text(encoding="utf-8"))
+                if not isinstance(data.get("vehicle"), dict):
+                    data["vehicle"] = {}
+                if not isinstance(data.get("customer"), dict):
+                    data["customer"] = {}
+            except Exception:
+                pass
+
+        customer = data.get("customer") or {}
+        has_customer = any(customer.get(k) for k in ("name", "address", "city", "state", "pin"))
+        aadhar_path = self.uploads_dir / subfolder / "Aadhar.jpg"
+        if not has_customer and aadhar_path.exists():
+            from app.services.vision_service import extract_aadhar_customer_fields
+
+            cust = extract_aadhar_customer_fields(image_path=aadhar_path)
+            cust.pop("error", None)
+            data["customer"] = {k: (cust.get(k) or "") for k in ("name", "address", "city", "state", "pin")}
+            try:
+                json_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            except Exception:
+                pass
+        return data
 
     def list_extractions(self, limit: int = 200) -> list[dict]:
         """List queue items (oldest first) with extracted text from flat files."""
