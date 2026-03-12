@@ -379,29 +379,36 @@ export function AddSalesPage() {
                     {qrDecodeResult.error && (
                       <p className="add-sales-v2-qr-error">{qrDecodeResult.error}</p>
                     )}
-                    {qrDecodeResult.decoded.length > 0 && (() => {
+                    {qrDecodeResult.decoded.length > 0 ? (() => {
                       const first = qrDecodeResult.decoded[0];
                       const fields = first?.fields ?? {};
+                      const hasAnyField = QR_FIELD_ORDER.some((k) => fields[k] != null && String(fields[k]).trim() !== "");
                       return (
                         <div className="add-sales-v2-qr-result">
                           {qrDecodeResult.decoded.length > 1 && (
                             <p className="add-sales-v2-qr-multi">{qrDecodeResult.decoded.length} QR code(s) found; showing first.</p>
                           )}
-                          <dl className="add-sales-v2-qr-dl">
-                            {QR_FIELD_ORDER.map((key) => {
-                              const val = fields[key];
-                              if (val == null || String(val).trim() === "") return null;
-                              return (
-                                <div key={key} className="add-sales-v2-dl-row">
-                                  <dt>{QR_FIELD_LABELS[key]}</dt>
-                                  <dd>{String(val).trim()}</dd>
-                                </div>
-                              );
-                            })}
-                          </dl>
+                          {hasAnyField ? (
+                            <dl className="add-sales-v2-qr-dl">
+                              {QR_FIELD_ORDER.map((key) => {
+                                const val = fields[key];
+                                if (val == null || String(val).trim() === "") return null;
+                                return (
+                                  <div key={key} className="add-sales-v2-dl-row">
+                                    <dt>{QR_FIELD_LABELS[key]}</dt>
+                                    <dd>{String(val).trim()}</dd>
+                                  </div>
+                                );
+                              })}
+                            </dl>
+                          ) : (
+                            <p className="add-sales-v2-qr-no-fields">QR decoded but no standard fields matched. Raw data may be in a different format.</p>
+                          )}
                         </div>
                       );
-                    })()}
+                    })() : !qrDecodeResult.error && (
+                      <p className="add-sales-v2-qr-no-output">No QR code found or no data extracted.</p>
+                    )}
                   </div>
                 )}
               </div>

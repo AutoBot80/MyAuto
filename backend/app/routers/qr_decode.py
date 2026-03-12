@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -36,11 +37,13 @@ def _run_decode_subprocess(image_path: Path, timeout: int) -> tuple[dict | None,
     """
     # Same Python as this process (so OpenCV/env is available); run from backend dir so "app" resolves
     backend_dir = Path(__file__).resolve().parent.parent.parent
+    env = {**os.environ, "PYTHONPATH": str(backend_dir)}
     proc = subprocess.Popen(
         [sys.executable, "-m", "app.qr_decode_worker", str(image_path)],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         cwd=str(backend_dir),
+        env=env,
         text=False,
     )
     try:
@@ -50,11 +53,13 @@ def _run_decode_subprocess(image_path: Path, timeout: int) -> tuple[dict | None,
         proc.wait()
         return None, "Decode timed out. Try a smaller image or crop to the QR only."
     if proc.returncode != 0:
-        return None, (err.decode("utf-8", errors="replace") or "Decode failed.")
+        err_msg = err.decode("utf-8", errors="replace").strip() if err else "Decode failed."
+        return None, err_msg or "Decode failed."
     try:
         return json.loads(out.decode("utf-8")), None
     except json.JSONDecodeError:
-        return None, "Invalid output from decoder."
+        err_preview = (err.decode("utf-8", errors="replace").strip()[:500] if err else "") or "No stderr."
+        return None, f"Invalid output from decoder. Worker stderr: {err_preview}"
 
 
 @router.post("")
