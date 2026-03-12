@@ -10,4 +10,25 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 # Paths (injectable for tests / different envs)
 APP_ROOT = Path(__file__).resolve().parents[1]
 UPLOADS_DIR = APP_ROOT.parent / "Uploaded scans"
+OCR_OUTPUT_DIR = APP_ROOT.parent / "ocr_output"
+
+# Tesseract OCR languages: "eng" (English), "hin" (Hindi/Devanagari). Use "+" for multiple (e.g. "eng+hin" for Aadhar).
+OCR_LANG = os.getenv("OCR_LANG", "eng+hin")
+
+# Tesseract PSM (page segmentation): 3=auto, 6=single block (default), 11=sparse text. Use 3 for docs with logos/graphics.
+OCR_PSM = int(os.getenv("OCR_PSM", "3"))
+
+# Preprocess image before OCR (grayscale + contrast) to improve text extraction when logos/pictures are present.
+OCR_PREPROCESS = os.getenv("OCR_PREPROCESS", "true").lower() in ("1", "true", "yes")
+
+# Two-step pipeline: Step 1 = AI classify image, Step 2 = Tesseract OCR. Set to "true" to use CLIP for classification.
+USE_AI_CLASSIFIER = os.getenv("USE_AI_CLASSIFIER", "false").lower() in ("1", "true", "yes")
+# Labels for zero-shot classification (comma-separated). Used when USE_AI_CLASSIFIER=true.
+DOCUMENT_CLASSIFIER_LABELS = os.getenv(
+    "DOCUMENT_CLASSIFIER_LABELS",
+    "Aadhar card,Driving license,Vehicle registration certificate,Insurance document,Other document",
+).split(",")
+
+# OpenAI (for vision: Aadhar analysis, extract customer photo region).
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 

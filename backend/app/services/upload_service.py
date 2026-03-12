@@ -25,6 +25,17 @@ class UploadService:
         ddmm = datetime.now().strftime("%d%m")
         return f"{digits}_{ddmm}"
 
+    def validate_mobile(self, mobile: str) -> tuple[bool, str | None]:
+        digits = "".join(c for c in mobile if c.isdigit())
+        if len(digits) != 10:
+            return False, "Invalid mobile. Expected 10 digits."
+        return True, None
+
+    def get_subdir_name_mobile(self, mobile: str) -> str:
+        digits = "".join(c for c in mobile if c.isdigit())
+        ddmmyy = datetime.now().strftime("%d%m%y")
+        return f"{digits}_{ddmmyy}"
+
     def _unique_path(self, base_dir: Path, filename: str) -> Path:
         target = base_dir / Path(filename).name
         if not target.exists():
@@ -61,6 +72,44 @@ class UploadService:
                 saved.append(target.name)
                 row = AiReaderQueueRepository.insert(
                     conn, subdir_name, target.name, status="queued"
+                )
+                queued.append(row)
+            conn.commit()
+
+        return {
+            "saved_count": len(saved),
+            "saved_files": saved,
+            "saved_to": str(subdir),
+            "queued_items": queued,
+        }
+
+    async def save_and_queue_v2(
+        self, mobile: str, aadhar_scan: UploadFile, sales_detail: UploadFile
+    ) -> dict:
+        """V2: subfolder = mobile_ddmmyy, save as Aadhar.jpg and Details.jpg."""
+        ok, err = self.validate_mobile(mobile)
+        if not ok:
+            return {"error": err}
+
+        subdir_name = self.get_subdir_name_mobile(mobile)
+        subdir = self.uploads_dir / subdir_name
+        subdir.mkdir(parents=True, exist_ok=True)
+
+        saved: list[str] = []
+        queued: list[dict] = []
+
+        with get_connection() as conn:
+            AiReaderQueueRepository.ensure_table(conn)
+            for role, save_name in (
+                (aadhar_scan, "Aadhar.jpg"),
+                (sales_detail, "Details.jpg"),
+            ):
+                content = await role.read()
+                target = subdir / save_name
+                target.write_bytes(content)
+                saved.append(save_name)
+                row = AiReaderQueueRepository.insert(
+                    conn, subdir_name, save_name, status="queued"
                 )
                 queued.append(row)
             conn.commit()

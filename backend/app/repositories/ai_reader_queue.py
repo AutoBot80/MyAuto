@@ -16,6 +16,8 @@ class AiReaderQueueRepository:
                     subfolder TEXT NOT NULL,
                     filename TEXT NOT NULL,
                     status TEXT NOT NULL DEFAULT 'queued',
+                    document_type VARCHAR(64),
+                    classification_confidence REAL,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )
@@ -40,7 +42,8 @@ class AiReaderQueueRepository:
         with conn.cursor() as cur:
             cur.execute(
                 f"""
-                SELECT id, subfolder, filename, status, created_at, updated_at
+                SELECT id, subfolder, filename, status, document_type, classification_confidence,
+                       created_at, updated_at
                 FROM {AiReaderQueueRepository.TABLE_NAME}
                 ORDER BY id DESC
                 LIMIT %s
@@ -48,3 +51,59 @@ class AiReaderQueueRepository:
                 (limit,),
             )
             return cur.fetchall()
+
+    @staticmethod
+    def get_oldest_queued(conn) -> dict | None:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT id, subfolder, filename, status, document_type, classification_confidence,
+                       created_at, updated_at
+                FROM {AiReaderQueueRepository.TABLE_NAME}
+                WHERE status = 'queued'
+                ORDER BY id ASC
+                LIMIT 1
+                """
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+    @staticmethod
+    def update_classification(
+        conn, id: int, document_type: str | None, classification_confidence: float | None
+    ) -> None:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                UPDATE {AiReaderQueueRepository.TABLE_NAME}
+                SET document_type = %s, classification_confidence = %s, updated_at = NOW()
+                WHERE id = %s
+                """,
+                (document_type, classification_confidence, id),
+            )
+
+    @staticmethod
+    def update_status(conn, id: int, status: str) -> None:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                UPDATE {AiReaderQueueRepository.TABLE_NAME}
+                SET status = %s, updated_at = NOW()
+                WHERE id = %s
+                """,
+                (status, id),
+            )
+
+    @staticmethod
+    def reset_for_reprocess(conn, id: int) -> int:
+        """Set row back to queued and clear classification so it can be processed again. Returns 1 if updated, 0 if not found."""
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                UPDATE {AiReaderQueueRepository.TABLE_NAME}
+                SET status = 'queued', document_type = NULL, classification_confidence = NULL, updated_at = NOW()
+                WHERE id = %s
+                """,
+                (id,),
+            )
+            return cur.rowcount

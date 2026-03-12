@@ -2,7 +2,7 @@ import { useState } from "react";
 import "./App.css";
 import type { Page } from "./types";
 import { useToday } from "./hooks/useToday";
-import { AppLayout } from "./components/AppLayout";
+import { AppLayoutV2 } from "./components/AppLayoutV2";
 import { AddSalesPage } from "./pages/AddSalesPage";
 import { AiReaderQueuePage } from "./pages/AiReaderQueuePage";
 import { PlaceholderPage } from "./pages/PlaceholderPage";
@@ -22,15 +22,21 @@ function App() {
       <AiReaderQueuePage />
     ) : null;
 
+  const headerRight = (
+    <div className="app-topbar-right">
+      <span>{today}</span>
+    </div>
+  );
+
   return (
-    <AppLayout
+    <AppLayoutV2
       headerTitle="Arya Agencies"
-      headerRight={today}
+      headerRight={headerRight}
       currentPage={page}
       onNavigate={setPage}
     >
       {mainContent}
-    </AppLayout>
+    </AppLayoutV2>
   );
 }
 

@@ -15,8 +15,18 @@ export interface AiReaderQueueItem {
   subfolder: string;
   filename: string;
   status: string;
+  document_type?: string | null;
+  classification_confidence?: number | null;
   created_at: string;
   updated_at: string;
+}
+
+export type ProcessStatus = "waiting" | "running" | "sleeping";
+
+export interface ProcessStatusResponse {
+  status: ProcessStatus;
+  processed_count: number;
+  last_error: string | null;
 }
 
 export interface UploadScansResponse {

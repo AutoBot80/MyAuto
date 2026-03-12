@@ -15,7 +15,6 @@ const LABELS: Record<Page, string> = {
 export function Sidebar({ currentPage, onNavigate }: SidebarProps) {
   return (
     <nav className="app-sidebar">
-      <div className="app-nav-label">Main</div>
       {(Object.keys(LABELS) as Page[]).map((page) => (
         <a
           key={page}

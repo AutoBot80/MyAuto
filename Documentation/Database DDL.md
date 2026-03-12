@@ -15,6 +15,8 @@ This document lists the current database tables and their columns. **Executable 
 | `subfolder` | `text` | NO |  | Upload subfolder (e.g. `1234_1103`) |
 | `filename` | `text` | NO |  | Saved filename |
 | `status` | `text` | NO | `'queued'::text` | e.g. `queued`, `processing`, `done`, `failed` |
+| `document_type` | `varchar(64)` | YES |  | Step 1: AI classification (e.g. Aadhar card, Driving license) |
+| `classification_confidence` | `real` | YES |  | Confidence 0–1 from classifier |
 | `created_at` | `timestamptz` | NO | `now()` | Created timestamp |
 | `updated_at` | `timestamptz` | NO | `now()` | Updated timestamp |
 

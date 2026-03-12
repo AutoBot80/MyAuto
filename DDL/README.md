@@ -29,7 +29,10 @@ for f in DDL/0*.sql; do psql -h localhost -U postgres -d auto_ai -f "$f"; done
 
 ## Alter / migrations
 
-One-off changes (e.g. new columns) go in **`DDL/alter/`** (e.g. `02a_customer_master_add_file_location.sql`). Run these against an existing database as needed.
+One-off changes (e.g. new columns) go in **`DDL/alter/`**. Run against an existing database as needed.
+
+- `01a_ai_reader_queue_add_classification.sql` — adds `document_type`, `classification_confidence` for the two-step (classify + OCR) pipeline.
+- `02a_customer_master_add_file_location.sql` — adds `file_location` to customer_master.
 
 ## Maintenance
 

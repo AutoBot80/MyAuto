@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { getAiReaderQueue } from "../api/aiReaderQueue";
 import type { AiReaderQueueItem } from "../types";
 
@@ -6,13 +6,22 @@ export function useAiReaderQueue(active: boolean, pollIntervalMs = 5000) {
   const [items, setItems] = useState<AiReaderQueueItem[]>([]);
   const [error, setError] = useState<string>("");
 
+  const refetch = useCallback(async () => {
+    try {
+      setError("");
+      const data = await getAiReaderQueue();
+      setItems(data);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load queue.");
+    }
+  }, []);
+
   useEffect(() => {
     if (!active) return;
     let cancelled = false;
 
     async function load() {
       try {
-        setError("");
         const data = await getAiReaderQueue();
         if (!cancelled) setItems(data);
       } catch (e) {
@@ -29,5 +38,5 @@ export function useAiReaderQueue(active: boolean, pollIntervalMs = 5000) {
     };
   }, [active, pollIntervalMs]);
 
-  return { items, error };
+  return { items, error, refetch };
 }

@@ -55,6 +55,14 @@ backend/app/
 | GET | `/health` | Liveness. |
 | POST | `/uploads/scans` | Upload scans; enqueue to ai_reader_queue. |
 | GET | `/ai-reader-queue` | List queue items (limit=200). |
+| POST | `/ai-reader-queue/process-next` | Process oldest queued item with Tesseract; write text to flat file; return extracted text. |
+| GET | `/ai-reader-queue/extractions` | List queue items (oldest first) with extracted text from flat files. |
+
+### 2.4 Tesseract OCR Reader
+
+- **Service:** `OcrService` in `services/ocr_service.py` — processes one queue item at a time (oldest first), runs Tesseract on the scan file under `UPLOADS_DIR/<subfolder>/<filename>`, writes extracted text to `OCR_OUTPUT_DIR` as `<subfolder>_<filename>.txt`.
+- **Config:** `config.OCR_OUTPUT_DIR` (default: `backend/ocr_output`). Tesseract binary must be on system PATH (or set `pytesseract.pytesseract.tesseract_cmd`). `config.OCR_LANG` (default: `eng+hin`) for English + Hindi; see **Documentation/tesseract-ocr-setup.md** for installing Hindi tessdata for Aadhar scans.
+- **Queue status:** `queued` → `processing` → `done` or `failed`.
 
 ### 2.3 Database Access
 
