@@ -48,7 +48,7 @@ export function AppLayoutV2({
             </button>
           ))}
         </nav>
-        <main className="app-main app-main-v2">{children}</main>
+        <main className="app-main-v2">{children}</main>
       </div>
     </div>
   );

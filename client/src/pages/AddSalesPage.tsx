@@ -60,7 +60,6 @@ export function AddSalesPage() {
   );
   const [addSalesStep, setAddSalesStep] = useState<AddSalesStep>("upload-scans");
   const [formResetKey, setFormResetKey] = useState(0);
-  const [extractedRefreshLoading, setExtractedRefreshLoading] = useState(false);
 
   const {
     upload,
@@ -189,23 +188,6 @@ export function AddSalesPage() {
     setFormResetKey((k) => k + 1);
   };
 
-  const handleRefreshExtracted = async () => {
-    if (!savedTo) return;
-    setExtractedRefreshLoading(true);
-    try {
-      const details = await getExtractedDetails(savedTo);
-      const rawVehicle = details?.vehicle ?? details;
-      const normalized = normalizeVehicleDetails(rawVehicle);
-      if (normalized) setExtractedVehicle(normalized);
-      const cust = details?.customer;
-      if (cust && typeof cust === "object" && !Array.isArray(cust)) {
-        setExtractedCustomer(mapApiCustomerToExtracted(cust as Record<string, unknown>));
-      }
-    } finally {
-      setExtractedRefreshLoading(false);
-    }
-  };
-
   // Normalize for display so we always show known fields (frame_no, engine_no, etc.) regardless of key naming
   const v = normalizeVehicleDetails(extractedVehicle) ?? extractedVehicle;
   const c = extractedCustomer;
@@ -220,7 +202,6 @@ export function AddSalesPage() {
       onUpload={upload}
       uploadStatus={uploadStatus}
       uploadedFiles={uploadedFiles}
-      showTiles={false}
       mobile={mobile}
       isMobileValid={isMobileValid}
       onUploadV2={uploadV2}
@@ -281,20 +262,7 @@ export function AddSalesPage() {
                   </dl>
                 </div>
                 <div className="add-sales-v2-subsection">
-                  <div className="add-sales-v2-subsection-head">
-                    <h3 className="add-sales-v2-subsection-title">Vehicle Details</h3>
-                    {savedTo && (
-                      <button
-                        type="button"
-                        className="app-button app-button--small"
-                        onClick={handleRefreshExtracted}
-                        disabled={extractedRefreshLoading}
-                        title="Reload customer (Aadhar) and vehicle (Details sheet) from server"
-                      >
-                        {extractedRefreshLoading ? "…" : "Refresh"}
-                      </button>
-                    )}
-                  </div>
+                  <h3 className="add-sales-v2-subsection-title">Vehicle Details</h3>
                   <dl className="add-sales-v2-dl">
                     <div className="add-sales-v2-dl-row"><dt>Frame no.</dt><dd>{display(v?.frame_no)}</dd></div>
                     <div className="add-sales-v2-dl-row"><dt>Engine No.</dt><dd>{display(v?.engine_no)}</dd></div>

@@ -1,2 +1,18 @@
-Document: Aadhar (Vision)
+Aadhar scan – 15 extracted fields
 
+Aadhar ID: 834569917945
+Name: Shashank Arya
+Gender: M
+Year of birth: 1980
+Date of birth: 30/05/1980
+Care of: S/O: Anil Kumar Arya
+House: 431
+Street: sector no.-3
+Location: bharatpur
+City: Bharatpur
+Post Office: Bharatpur
+District: Bharatpur
+Sub District: Bharatpur
+State: Rajasthan
+Pin Code: 321001
+Address (constructed): S/O: Anil Kumar Arya, 431, sector no.-3, bharatpur, Rajasthan, 321001

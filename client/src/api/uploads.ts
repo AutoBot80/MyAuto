@@ -18,7 +18,7 @@ export async function uploadScans(
   return data;
 }
 
-/** V2: subfolder = mobile_ddmmyy, files saved as Aadhar.jpg and Details.jpg */
+/** Subfolder = mobile_ddmmyy, files saved as Aadhar.jpg and Details.jpg */
 export async function uploadScansV2(
   mobile: string,
   aadharScan: File,

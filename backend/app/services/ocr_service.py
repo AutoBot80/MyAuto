@@ -27,6 +27,25 @@ def _json_output_path(output_dir: Path, subfolder: str, filename: str) -> Path:
 DETAILS_FILENAME_CONTAINS = "details"
 AADHAR_FILENAME_CONTAINS = "aadhar"
 
+# 15 Aadhar fields (display order and labels for ocr_output file).
+AADHAR_15_FIELDS: list[tuple[str, str]] = [
+    ("aadhar_id", "Aadhar ID"),
+    ("name", "Name"),
+    ("gender", "Gender"),
+    ("year_of_birth", "Year of birth"),
+    ("date_of_birth", "Date of birth"),
+    ("care_of", "Care of"),
+    ("house", "House"),
+    ("street", "Street"),
+    ("location", "Location"),
+    ("city", "City"),
+    ("post_office", "Post Office"),
+    ("district", "District"),
+    ("sub_district", "Sub District"),
+    ("state", "State"),
+    ("pin_code", "Pin Code"),
+]
+
 # Map Textract form keys (normalized) to our vehicle detail fields.
 _VEHICLE_KEY_ALIASES = {
     "frame_no": ["frame no", "frame no.", "frame number", "chassis", "chassis no", "chassis no."],
@@ -281,9 +300,17 @@ class OcrService:
             data["customer"] = customer
             json_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
+            # Write a file in ocr_output listing the 15 extracted Aadhar fields (with display labels)
             output_path = self.get_output_path(subfolder, filename)
+            lines = ["Aadhar scan – 15 extracted fields", ""]
+            for key, label in AADHAR_15_FIELDS:
+                value = customer.get(key)
+                if value and str(value).strip():
+                    lines.append(f"{label}: {value.strip()}")
+            if customer.get("address") and str(customer["address"]).strip():
+                lines.append(f"Address (constructed): {customer['address'].strip()}")
             summary = "\n".join(f"{k}: {v}" for k, v in customer.items() if v)
-            output_path.write_text(f"Document: Aadhar (QR/Vision)\n\n{summary}", encoding="utf-8")
+            output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
             with get_connection() as conn:
                 AiReaderQueueRepository.update_status(conn, qid, "done")
