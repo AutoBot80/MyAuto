@@ -25,8 +25,6 @@ export interface QrDecodedEntry {
   parsed: Record<string, string | number | boolean>;
   /** Mapped fields for display (Aadhar ID, Name, etc.). */
   fields: QrDecodeFields;
-  /** Base64-encoded photo from QR if present. */
-  photo_base64: string | null;
 }
 
 export interface QrDecodeResponse {

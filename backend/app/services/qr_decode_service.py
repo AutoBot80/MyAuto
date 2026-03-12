@@ -147,28 +147,6 @@ def _extract_uidai_fields(parsed: dict[str, Any]) -> dict[str, str]:
     return out
 
 
-def _extract_photo_from_parsed(parsed: dict[str, Any]) -> str | None:
-    """Extract base64 photo from Pht or any tag that looks like base64 image data."""
-    # UIDAI uses <Pht> for photo; may be nested (e.g. UidData.Pht)
-    norm_to_val: dict[str, str] = {}
-    for k, v in parsed.items():
-        if v and isinstance(v, str) and v.strip():
-            norm_to_val[_normalize_key(k)] = v.strip()
-    for tag in ["pht", "photo", "picture", "img", "image", "uiddata.pht", "poi.pht", "printletterbarcodedata.pht"]:
-        if tag in norm_to_val:
-            raw = norm_to_val[tag]
-            # Should be base64; allow with or without data URL prefix
-            if "base64," in raw:
-                raw = raw.split("base64,", 1)[-1]
-            if len(raw) > 100 and raw.replace("+", "").replace("/", "").replace("=", "").isalnum():
-                return raw
-            # May have newlines
-            raw_clean = "".join(raw.split())
-            if len(raw_clean) > 100:
-                return raw_clean
-    return None
-
-
 def decode_qr_from_image_bytes(image_bytes: bytes) -> dict[str, Any]:
     """
     Decode all QR codes in the image and parse their payloads.
@@ -194,7 +172,7 @@ def decode_qr_from_image_bytes(image_bytes: bytes) -> dict[str, Any]:
         return result
 
     for raw in strings:
-        entry: dict[str, Any] = {"raw": raw, "parsed": {}, "fields": {}, "photo_base64": None}
+        entry: dict[str, Any] = {"raw": raw, "parsed": {}, "fields": {}}
         # Try decompress (base64+zlib) then parse
         expanded = _decompress_payload(raw)
         if expanded != raw:
@@ -203,9 +181,6 @@ def decode_qr_from_image_bytes(image_bytes: bytes) -> dict[str, Any]:
         if parsed:
             entry["parsed"] = parsed
             entry["fields"] = _extract_uidai_fields(parsed)
-            photo_b64 = _extract_photo_from_parsed(parsed)
-            if photo_b64:
-                entry["photo_base64"] = photo_b64
         else:
             # Not XML: treat as key-value lines if possible (e.g. "key:value")
             lines = [s.strip() for s in expanded.splitlines() if s.strip()]

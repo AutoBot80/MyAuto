@@ -381,36 +381,23 @@ export function AddSalesPage() {
                     {qrDecodeResult.decoded.length > 0 && (() => {
                       const first = qrDecodeResult.decoded[0];
                       const fields = first?.fields ?? {};
-                      const photo = first?.photo_base64;
                       return (
                         <div className="add-sales-v2-qr-result">
                           {qrDecodeResult.decoded.length > 1 && (
                             <p className="add-sales-v2-qr-multi">{qrDecodeResult.decoded.length} QR code(s) found; showing first.</p>
                           )}
-                          <div className="add-sales-v2-qr-fields-and-photo">
-                            <dl className="add-sales-v2-qr-dl">
-                              {QR_FIELD_ORDER.map((key) => {
-                                const val = fields[key];
-                                if (val == null || String(val).trim() === "") return null;
-                                return (
-                                  <div key={key} className="add-sales-v2-dl-row">
-                                    <dt>{QR_FIELD_LABELS[key]}</dt>
-                                    <dd>{String(val).trim()}</dd>
-                                  </div>
-                                );
-                              })}
-                            </dl>
-                            {photo && (
-                              <div className="add-sales-v2-qr-photo-wrap">
-                                <span className="add-sales-v2-qr-photo-label">Photo from QR</span>
-                                <img
-                                  src={`data:image/jpeg;base64,${photo}`}
-                                  alt="Embedded from QR"
-                                  className="add-sales-v2-qr-photo"
-                                />
-                              </div>
-                            )}
-                          </div>
+                          <dl className="add-sales-v2-qr-dl">
+                            {QR_FIELD_ORDER.map((key) => {
+                              const val = fields[key];
+                              if (val == null || String(val).trim() === "") return null;
+                              return (
+                                <div key={key} className="add-sales-v2-dl-row">
+                                  <dt>{QR_FIELD_LABELS[key]}</dt>
+                                  <dd>{String(val).trim()}</dd>
+                                </div>
+                              );
+                            })}
+                          </dl>
                         </div>
                       );
                     })()}
