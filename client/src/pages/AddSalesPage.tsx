@@ -402,7 +402,20 @@ export function AddSalesPage() {
                               })}
                             </dl>
                           ) : (
-                            <p className="add-sales-v2-qr-no-fields">QR decoded but no standard fields matched. Raw data may be in a different format.</p>
+                            <div className="add-sales-v2-qr-raw-wrap">
+                              <p className="add-sales-v2-qr-no-fields">QR decoded but no standard fields matched. Raw keys from QR:</p>
+                              <dl className="add-sales-v2-qr-dl add-sales-v2-qr-raw-dl">
+                                {Object.entries(first?.parsed ?? {}).filter(([, v]) => v != null && String(v).trim() !== "" && String(v).length < 200).map(([k, v]) => (
+                                  <div key={k} className="add-sales-v2-dl-row">
+                                    <dt>{k}</dt>
+                                    <dd>{String(v).trim()}</dd>
+                                  </div>
+                                ))}
+                              </dl>
+                              {Object.keys(first?.parsed ?? {}).length === 0 && (
+                                <p className="add-sales-v2-qr-no-fields">No parsed key-value pairs.</p>
+                              )}
+                            </div>
                           )}
                         </div>
                       );

@@ -479,6 +479,16 @@
   margin: 8px 0 0;
 }
 
+.add-sales-v2-qr-raw-wrap {
+  margin-top: 8px;
+}
+
+.add-sales-v2-qr-raw-dl {
+  margin-top: 6px;
+  max-height: 200px;
+  overflow: auto;
+}
+
 .add-sales-v2-qr-multi {
   font-size: 13px;
   color: #1e5a9e;

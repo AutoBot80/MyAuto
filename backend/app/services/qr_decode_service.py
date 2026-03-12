@@ -95,22 +95,23 @@ def _parse_xml_like(text: str) -> dict[str, Any]:
 
 
 # Map display field name -> list of possible XML tag names (any case) or dotted paths
+# PrintLetterBarcodeData / Offline e-KYC use various tag names; dotted = nested e.g. PrintLetterBarcodeData.Name
 UIDAI_FIELD_MAP: dict[str, list[str]] = {
-    "aadhar_id": ["uid", "aadhaarno", "aadhar"],
-    "name": ["name", "poi.name"],
-    "gender": ["gndr", "gender", "poi.gndr"],
-    "year_of_birth": ["yob", "yearofbirth", "poi.yob"],
-    "date_of_birth": ["dob", "dateofbirth", "poi.dob"],
-    "care_of": ["careof", "co", "care_of", "poa.careof"],
-    "house": ["house", "poa.house"],
-    "street": ["street", "poa.street"],
-    "location": ["lmt", "loc", "locality", "poa.lmt", "location"],
-    "city": ["vtc", "lgc", "city", "poa.vtc", "poa.lgc", "town", "village"],
-    "post_office": ["po", "postoffice", "poa.po", "post_office"],
-    "district": ["dist", "district", "poa.dist", "lgc"],
-    "sub_district": ["subdist", "subdistrict", "poa.subdist", "sub_district", "tehsil"],
-    "state": ["state", "st", "poa.state"],
-    "pin_code": ["pc", "pincode", "pin", "poa.pc", "pin_code"],
+    "aadhar_id": ["uid", "aadhaarno", "aadhar", "printletterbarcodedata.uid"],
+    "name": ["name", "poi.name", "printletterbarcodedata.name"],
+    "gender": ["gndr", "gender", "poi.gndr", "printletterbarcodedata.gndr"],
+    "year_of_birth": ["yob", "yearofbirth", "poi.yob", "printletterbarcodedata.yob"],
+    "date_of_birth": ["dob", "dateofbirth", "poi.dob", "printletterbarcodedata.dob"],
+    "care_of": ["careof", "co", "care_of", "poa.careof", "printletterbarcodedata.co"],
+    "house": ["house", "poa.house", "printletterbarcodedata.house"],
+    "street": ["street", "poa.street", "printletterbarcodedata.street", "street2"],
+    "location": ["lmt", "loc", "locality", "poa.lmt", "location", "landmark", "printletterbarcodedata.loc"],
+    "city": ["vtc", "lgc", "city", "poa.vtc", "poa.lgc", "town", "village", "printletterbarcodedata.vtc", "printletterbarcodedata.lgc"],
+    "post_office": ["po", "postoffice", "poa.po", "post_office", "printletterbarcodedata.po"],
+    "district": ["dist", "district", "poa.dist", "lgc", "printletterbarcodedata.dist", "printletterbarcodedata.lgc"],
+    "sub_district": ["subdist", "subdistrict", "poa.subdist", "sub_district", "tehsil", "printletterbarcodedata.subdist"],
+    "state": ["state", "st", "poa.state", "printletterbarcodedata.state"],
+    "pin_code": ["pc", "pincode", "pin", "poa.pc", "pin_code", "printletterbarcodedata.pc"],
 }
 
 
@@ -127,8 +128,13 @@ def _extract_uidai_fields(parsed: dict[str, Any]) -> dict[str, str]:
     for k, v in parsed.items():
         if v is None or (isinstance(v, str) and not v.strip()):
             continue
-        norm_to_val[_normalize_key(k)] = str(v).strip()
-    # Also allow key without namespace prefix (e.g. "Poa.House" -> "house" in norm_to_val as "poa.house")
+        n = _normalize_key(k)
+        norm_to_val[n] = str(v).strip()
+        # If key is dotted (e.g. PrintLetterBarcodeData.Name), also register leaf name for matching
+        if "." in n:
+            leaf = n.split(".")[-1]
+            if leaf and leaf not in norm_to_val:
+                norm_to_val[leaf] = str(v).strip()
     for display_key, candidates in UIDAI_FIELD_MAP.items():
         for cand in candidates:
             n = _normalize_key(cand)
