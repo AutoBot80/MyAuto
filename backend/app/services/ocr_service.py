@@ -23,8 +23,9 @@ def _json_output_path(output_dir: Path, subfolder: str, filename: str) -> Path:
     return output_dir / (Path(base).stem + ".json")
 
 
-# Only process queue items whose filename contains this (Details sheet).
+# Filename patterns for queue processing.
 DETAILS_FILENAME_CONTAINS = "details"
+AADHAR_FILENAME_CONTAINS = "aadhar"
 
 # Map Textract form keys (normalized) to our vehicle detail fields.
 _VEHICLE_KEY_ALIASES = {
@@ -98,12 +99,12 @@ class OcrService:
 
     def process_next(self) -> dict | None:
         """
-        Process the oldest queued Details sheet: run Textract (forms), write key-value output, update status.
-        Only picks items where filename contains "details". Returns result dict or None if none queued.
+        Process the oldest queued item: Details sheet (Textract) or Aadhar (Vision).
+        Picks any queued item; branches on filename (details vs aadhar). Returns result dict or None if none queued.
         """
         with get_connection() as conn:
             AiReaderQueueRepository.ensure_table(conn)
-            row = AiReaderQueueRepository.get_oldest_queued(conn, filename_contains=DETAILS_FILENAME_CONTAINS)
+            row = AiReaderQueueRepository.get_oldest_queued(conn)  # any queued item
             if not row:
                 return None
 
@@ -112,7 +113,6 @@ class OcrService:
             filename = row["filename"]
 
             AiReaderQueueRepository.update_status(conn, qid, "processing")
-            AiReaderQueueRepository.update_classification(conn, qid, "Details sheet", 1.0)
             conn.commit()
 
         input_path = self.uploads_dir / subfolder / filename
@@ -132,6 +132,33 @@ class OcrService:
                 "classification_confidence": None,
             }
 
+        fn_lower = filename.lower()
+        if DETAILS_FILENAME_CONTAINS in fn_lower:
+            return self._process_details_sheet(qid, subfolder, filename, input_path)
+        if AADHAR_FILENAME_CONTAINS in fn_lower:
+            return self._process_aadhar(qid, subfolder, filename, input_path)
+        # Unknown type: mark done so queue advances
+        with get_connection() as conn:
+            AiReaderQueueRepository.update_classification(conn, qid, "Other", 0.0)
+            AiReaderQueueRepository.update_status(conn, qid, "done")
+            conn.commit()
+        return {
+            "id": qid,
+            "subfolder": subfolder,
+            "filename": filename,
+            "status": "done",
+            "error": None,
+            "extracted_text": None,
+            "output_path": None,
+            "document_type": "Other",
+            "classification_confidence": 0.0,
+        }
+
+    def _process_details_sheet(self, qid: int, subfolder: str, filename: str, input_path: Path) -> dict:
+        """Run Textract (forms) on Details sheet; write text + JSON; update queue."""
+        with get_connection() as conn:
+            AiReaderQueueRepository.update_classification(conn, qid, "Details sheet", 1.0)
+            conn.commit()
         try:
             from app.services.textract_service import extract_forms_from_bytes
 
@@ -154,7 +181,6 @@ class OcrService:
             output_path = self.get_output_path(subfolder, filename)
             output_path.write_text(text, encoding="utf-8")
 
-            # Write structured JSON for client (vehicle details from form keys); preserve existing customer if any
             vehicle = _map_key_value_pairs_to_vehicle(key_value_pairs)
             json_path = _json_output_path(self.ocr_output_dir, subfolder, filename)
             customer = {}
@@ -182,6 +208,68 @@ class OcrService:
                 "extracted_text": text,
                 "output_path": str(output_path),
                 "document_type": "Details sheet",
+                "classification_confidence": 1.0,
+            }
+        except Exception as e:
+            with get_connection() as conn:
+                AiReaderQueueRepository.update_status(conn, qid, "failed")
+                conn.commit()
+            return {
+                "id": qid,
+                "subfolder": subfolder,
+                "filename": filename,
+                "status": "failed",
+                "error": str(e),
+                "extracted_text": None,
+                "output_path": None,
+                "document_type": None,
+                "classification_confidence": None,
+            }
+
+    def _process_aadhar(self, qid: int, subfolder: str, filename: str, input_path: Path) -> dict:
+        """Run Aadhar extraction (OpenAI Vision); merge customer into subfolder JSON; update queue."""
+        with get_connection() as conn:
+            AiReaderQueueRepository.update_classification(conn, qid, "Aadhar", 1.0)
+            conn.commit()
+        try:
+            from app.services.vision_service import extract_aadhar_customer_fields
+
+            cust = extract_aadhar_customer_fields(image_path=input_path)
+            cust.pop("error", None)
+            customer = {k: (cust.get(k) or "") for k in ("name", "address", "city", "state", "pin")}
+
+            self._ensure_ocr_output_dir()
+            json_path = _json_output_path(self.ocr_output_dir, subfolder, "Details.jpg")
+            data = {"vehicle": {}, "customer": {}}
+            if json_path.exists():
+                try:
+                    data = json.loads(json_path.read_text(encoding="utf-8"))
+                    if not isinstance(data.get("vehicle"), dict):
+                        data["vehicle"] = {}
+                    if not isinstance(data.get("customer"), dict):
+                        data["customer"] = {}
+                except Exception:
+                    pass
+            data["customer"] = customer
+            json_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+            output_path = self.get_output_path(subfolder, filename)
+            summary = "\n".join(f"{k}: {v}" for k, v in customer.items() if v)
+            output_path.write_text(f"Document: Aadhar (Vision)\n\n{summary}", encoding="utf-8")
+
+            with get_connection() as conn:
+                AiReaderQueueRepository.update_status(conn, qid, "done")
+                conn.commit()
+
+            return {
+                "id": qid,
+                "subfolder": subfolder,
+                "filename": filename,
+                "status": "done",
+                "error": None,
+                "extracted_text": summary,
+                "output_path": str(output_path),
+                "document_type": "Aadhar",
                 "classification_confidence": 1.0,
             }
         except Exception as e:
