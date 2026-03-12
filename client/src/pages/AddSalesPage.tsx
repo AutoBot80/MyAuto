@@ -3,6 +3,8 @@ import type { AddSalesStep, ExtractedVehicleDetails, ExtractedCustomerDetails } 
 import { useUploadScans } from "../hooks/useUploadScans";
 import { UploadScansPanel } from "../components/UploadScansPanel";
 import { getExtractedDetails } from "../api/aiReaderQueue";
+import { decodeQrFromImage } from "../api/qrDecode";
+import type { QrDecodeResponse } from "../api/qrDecode";
 import { loadAddSalesForm, saveAddSalesForm, clearAddSalesForm } from "../utils/addSalesStorage";
 import { normalizeVehicleDetails, hasVehicleData } from "../utils/vehicleDetails";
 
@@ -38,6 +40,10 @@ export function AddSalesPage() {
   const [addSalesStep, setAddSalesStep] = useState<AddSalesStep>("upload-scans");
   const [formResetKey, setFormResetKey] = useState(0);
   const [extractedRefreshLoading, setExtractedRefreshLoading] = useState(false);
+  // Temporary: QR decode box
+  const [qrDecodeLoading, setQrDecodeLoading] = useState(false);
+  const [qrDecodeResult, setQrDecodeResult] = useState<QrDecodeResponse | null>(null);
+  const qrFileInputRef = useRef<HTMLInputElement>(null);
 
   const {
     upload,
@@ -198,6 +204,25 @@ export function AddSalesPage() {
     setFormResetKey((k) => k + 1);
   };
 
+  const handleQrDecode = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setQrDecodeLoading(true);
+    setQrDecodeResult(null);
+    try {
+      const res = await decodeQrFromImage(file);
+      setQrDecodeResult(res);
+    } catch (err) {
+      setQrDecodeResult({
+        decoded: [],
+        error: err instanceof Error ? err.message : "Decode failed",
+      });
+    } finally {
+      setQrDecodeLoading(false);
+    }
+  };
+
   const handleRefreshExtracted = async () => {
     if (!savedTo) return;
     setExtractedRefreshLoading(true);
@@ -322,6 +347,43 @@ export function AddSalesPage() {
                     <div className="add-sales-v2-dl-row"><dt>Battery no.</dt><dd>{display(v?.battery_no)}</dd></div>
                   </dl>
                 </div>
+              </div>
+            </section>
+            {/* Temporary: QR decode from scan image */}
+            <section className="add-sales-v2-box add-sales-v2-box-qr-temp">
+              <h2 className="add-sales-v2-box-title">
+                QR decode <span className="add-sales-v2-box-title-note">(temporary)</span>
+              </h2>
+              <div className="add-sales-v2-box-body">
+                <input
+                  ref={qrFileInputRef}
+                  type="file"
+                  accept="image/*,.jpg,.jpeg,.png,.webp"
+                  aria-label="Choose scan image with QR"
+                  className="add-sales-v2-qr-input"
+                  onChange={handleQrDecode}
+                  disabled={qrDecodeLoading}
+                />
+                <button
+                  type="button"
+                  className="app-button app-button--small"
+                  onClick={() => qrFileInputRef.current?.click()}
+                  disabled={qrDecodeLoading}
+                >
+                  {qrDecodeLoading ? "Decoding…" : "Upload image & decode QR"}
+                </button>
+                {qrDecodeResult && (
+                  <div className="add-sales-v2-qr-output">
+                    {qrDecodeResult.error && (
+                      <p className="add-sales-v2-qr-error">{qrDecodeResult.error}</p>
+                    )}
+                    {qrDecodeResult.decoded.length > 0 && (
+                      <pre className="add-sales-v2-qr-pre">
+                        {JSON.stringify(qrDecodeResult.decoded, null, 2)}
+                      </pre>
+                    )}
+                  </div>
+                )}
               </div>
             </section>
           </div>

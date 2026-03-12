@@ -244,6 +244,7 @@
 
 .add-sales-v2-two-col {
   display: flex;
+  flex-wrap: wrap;
   gap: 20px;
   min-height: 0;
   flex: 1;
@@ -423,6 +424,42 @@
 
 .add-sales-v2-panel-wrap .app-panel-actions {
   margin-top: 2px;
+}
+
+/* Temporary: QR decode box (full width below the two columns) */
+.add-sales-v2-box-qr-temp {
+  flex: 1 1 100%;
+  margin-top: 4px;
+  border: 1px dashed #8ba8c4;
+  background: #f8fbff;
+}
+.add-sales-v2-qr-input {
+  position: absolute;
+  width: 0;
+  height: 0;
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.add-sales-v2-qr-output {
+  margin-top: 10px;
+}
+.add-sales-v2-qr-error {
+  color: #b00;
+  font-size: 14px;
+  margin: 0 0 8px;
+}
+.add-sales-v2-qr-pre {
+  margin: 0;
+  padding: 10px;
+  font-size: 12px;
+  background: #1b2a3a;
+  color: #e4edf4;
+  border-radius: 6px;
+  overflow: auto;
+  max-height: 280px;
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 
 /* Body: sidebar + main */
