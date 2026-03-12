@@ -79,7 +79,7 @@ class UploadService:
         return {
             "saved_count": len(saved),
             "saved_files": saved,
-            "saved_to": str(subdir),
+            "saved_to": subdir_name,
             "queued_items": queued,
         }
 
@@ -117,6 +117,6 @@ class UploadService:
         return {
             "saved_count": len(saved),
             "saved_files": saved,
-            "saved_to": str(subdir),
+            "saved_to": subdir_name,
             "queued_items": queued,
         }

@@ -12,11 +12,11 @@ const FIELDS = [
 
 /** Alternate keys the backend or storage might use (e.g. from Textract labels). */
 const ALIASES: Record<(typeof FIELDS)[number], string[]> = {
-  frame_no: ["frame_no", "frame no", "frame no.", "Frame no.", "frameNo", "chassis", "chassis no"],
-  engine_no: ["engine_no", "engine no", "engine no.", "Engine no.", "engineNo", "engine"],
+  frame_no: ["frame_no", "frame no", "frame no.", "Frame no.", "frameNo", "chassis", "chassis no", "frame number"],
+  engine_no: ["engine_no", "engine no", "engine no.", "Engine no.", "engineNo", "engine", "engine number"],
   model_colour: ["model_colour", "model & colour", "model and colour", "model", "colour", "color", "modelColour"],
-  key_no: ["key_no", "key no", "key no.", "Key no.", "keyNo", "key"],
-  battery_no: ["battery_no", "battery no", "battery no.", "Battery no.", "batteryNo", "battery"],
+  key_no: ["key_no", "key no", "key no.", "Key no.", "keyNo", "key", "key number"],
+  battery_no: ["battery_no", "battery no", "battery no.", "Battery no.", "batteryNo", "battery", "battery number"],
 };
 
 function getString(val: unknown): string {
@@ -26,15 +26,26 @@ function getString(val: unknown): string {
   return "";
 }
 
+/** Normalize a key for matching: lower case, collapse spaces/punctuation. */
+function normKey(k: string): string {
+  return k
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .replace(/[.\s&\/]/g, "")
+    .trim();
+}
+
 /**
  * Normalize a raw vehicle object from the API or storage into ExtractedVehicleDetails.
- * Tries multiple key names per field and coerces values to string.
+ * 1) Tries known aliases per field.
+ * 2) Then scans all keys in the object and matches by normalized key (so any backend key shape works).
  */
 export function normalizeVehicleDetails(raw: unknown): ExtractedVehicleDetails | null {
   if (raw == null) return null;
   if (typeof raw !== "object" || Array.isArray(raw)) return null;
   const o = raw as Record<string, unknown>;
   const out: ExtractedVehicleDetails = {};
+
   for (const field of FIELDS) {
     for (const key of ALIASES[field]) {
       const val = o[key];
@@ -45,6 +56,23 @@ export function normalizeVehicleDetails(raw: unknown): ExtractedVehicleDetails |
       }
     }
   }
+
+  // Fallback: match any key in the object by normalized name (handles backend key variants)
+  const aliasNormToField = new Map<string, (typeof FIELDS)[number]>();
+  for (const field of FIELDS) {
+    for (const a of ALIASES[field]) {
+      aliasNormToField.set(normKey(a), field);
+    }
+  }
+  for (const key of Object.keys(o)) {
+    const n = normKey(key);
+    const field = aliasNormToField.get(n);
+    if (field && !out[field]) {
+      const s = getString(o[key]);
+      if (s) out[field] = s;
+    }
+  }
+
   return Object.keys(out).length > 0 ? out : null;
 }
 

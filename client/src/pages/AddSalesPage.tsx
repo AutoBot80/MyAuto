@@ -34,6 +34,7 @@ export function AddSalesPage() {
   );
   const [addSalesStep, setAddSalesStep] = useState<AddSalesStep>("upload-scans");
   const [formResetKey, setFormResetKey] = useState(0);
+  const [vehicleRefreshLoading, setVehicleRefreshLoading] = useState(false);
 
   const {
     upload,
@@ -72,11 +73,17 @@ export function AddSalesPage() {
   useEffect(() => {
     if (!savedTo || hasVehicle) return;
     let cancelled = false;
-    getExtractedDetails(savedTo).then((details) => {
-      if (cancelled) return;
-      const normalized = details?.vehicle ? normalizeVehicleDetails(details.vehicle) : null;
-      if (normalized) setExtractedVehicle(normalized);
-    });
+    getExtractedDetails(savedTo)
+      .then((details) => {
+        if (cancelled) return;
+        // API returns { vehicle: {...}, customer: {} }; fallback to details itself if it has our keys
+        const rawVehicle = details?.vehicle ?? details;
+        const normalized = normalizeVehicleDetails(rawVehicle);
+        if (normalized) setExtractedVehicle(normalized);
+      })
+      .catch(() => {
+        // Fetch failed (404, network, etc.) – keep existing state
+      });
     return () => {
       cancelled = true;
     };
@@ -97,7 +104,8 @@ export function AddSalesPage() {
       pollCountRef.current += 1;
       try {
         const details = await getExtractedDetails(savedTo);
-        const normalized = details?.vehicle ? normalizeVehicleDetails(details.vehicle) : null;
+        const rawVehicle = details?.vehicle ?? details;
+        const normalized = normalizeVehicleDetails(rawVehicle);
         if (normalized) {
           setExtractedVehicle(normalized);
           if (intervalId) clearInterval(intervalId);
@@ -160,6 +168,19 @@ export function AddSalesPage() {
     clearUploaded();
     setExtractedVehicle(null);
     setFormResetKey((k) => k + 1);
+  };
+
+  const handleRefreshVehicle = async () => {
+    if (!savedTo) return;
+    setVehicleRefreshLoading(true);
+    try {
+      const details = await getExtractedDetails(savedTo);
+      const rawVehicle = details?.vehicle ?? details;
+      const normalized = normalizeVehicleDetails(rawVehicle);
+      if (normalized) setExtractedVehicle(normalized);
+    } finally {
+      setVehicleRefreshLoading(false);
+    }
   };
 
   // Normalize for display so we always show known fields (frame_no, engine_no, etc.) regardless of key naming
@@ -240,7 +261,20 @@ export function AddSalesPage() {
                   </dl>
                 </div>
                 <div className="add-sales-v2-subsection">
-                  <h3 className="add-sales-v2-subsection-title">Vehicle Details</h3>
+                  <div className="add-sales-v2-subsection-head">
+                    <h3 className="add-sales-v2-subsection-title">Vehicle Details</h3>
+                    {savedTo && (
+                      <button
+                        type="button"
+                        className="app-button app-button--small"
+                        onClick={handleRefreshVehicle}
+                        disabled={vehicleRefreshLoading}
+                        title="Reload vehicle info from server"
+                      >
+                        {vehicleRefreshLoading ? "…" : "Refresh"}
+                      </button>
+                    )}
+                  </div>
                   <dl className="add-sales-v2-dl">
                     <div className="add-sales-v2-dl-row"><dt>Frame no.</dt><dd>{display(v?.frame_no)}</dd></div>
                     <div className="add-sales-v2-dl-row"><dt>Engine No.</dt><dd>{display(v?.engine_no)}</dd></div>

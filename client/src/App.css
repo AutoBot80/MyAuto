@@ -322,6 +322,18 @@
   margin-bottom: 0;
 }
 
+.add-sales-v2-subsection-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.add-sales-v2-subsection-head .add-sales-v2-subsection-title {
+  margin: 0;
+}
+
 .add-sales-v2-subsection-title {
   margin: 0 0 4px;
   font-size: 13px;
