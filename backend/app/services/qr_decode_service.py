@@ -61,14 +61,29 @@ def _decompress_payload(raw: str) -> str:
 
 
 def _parse_uidai_xml(xml_str: str) -> dict[str, Any]:
-    """Parse UIDAI-style XML (PrintLetterBarcodeData or Offline e-KYC) into a flat dict."""
+    """Parse UIDAI-style XML (PrintLetterBarcodeData or Offline e-KYC) into a flat dict.
+    Extracts both element text and attributes (PrintLetterBarcodeData often has uid, name, etc. as attributes)."""
     out: dict[str, Any] = {}
     try:
         root = ET.fromstring(xml_str)
     except ET.ParseError:
         return out
 
-    # Flatten common tag names (strip namespace)
+    def add_attrs(element: ET.Element, prefix: str = "") -> None:
+        for attr_name, attr_val in element.attrib.items():
+            key = attr_name.split("}")[-1] if "}" in attr_name else attr_name
+            full_key = f"{prefix}{key}" if prefix else key
+            if attr_val and str(attr_val).strip():
+                out[full_key] = str(attr_val).strip()
+        for child in element:
+            tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+            child_prefix = f"{prefix}{tag}." if prefix else f"{tag}."
+            add_attrs(child, prefix=child_prefix)
+
+    # Root attributes first (PrintLetterBarcodeData has uid, name, gender, yob, co, house, street, loc, vtc, po, dist, subdist, state, pc, dob on the root)
+    add_attrs(root)
+
+    # Flatten element text (for nested elements)
     def add_text(parent: ET.Element, prefix: str = "") -> None:
         for child in parent:
             tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
@@ -79,7 +94,6 @@ def _parse_uidai_xml(xml_str: str) -> dict[str, Any]:
 
     add_text(root)
 
-    # Also handle direct text at root level
     if root.text and root.text.strip():
         out["_root_text"] = root.text.strip()
 
