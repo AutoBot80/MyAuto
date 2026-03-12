@@ -1,11 +1,15 @@
-/* Outer wrapper: full viewport width */
+/* Outer wrapper: full viewport, no vertical scroll */
 .app-wrap {
-  min-height: 100vh;
+  height: 100%;
+  min-height: 0;
   width: 100%;
-  padding: 24px;
+  padding: 12px;
   box-sizing: border-box;
   font-family: "Segoe UI", system-ui, -apple-system, Arial, sans-serif;
   background: #e8eef4;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 /* Clean blue box: uses full width up to 2400px (double-width layout) */
@@ -14,7 +18,8 @@
   max-width: 2400px;
   min-width: 640px;
   margin: 0 auto;
-  min-height: calc(100vh - 48px);
+  flex: 1;
+  min-height: 0;
   border: 2px solid #1e5a9e;
   border-radius: 8px;
   background: #fff;
@@ -26,10 +31,11 @@
 
 /* Blue top bar: dealer name center, date right */
 .app-topbar {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 14px 24px;
+  padding: 10px 24px;
   background: #1e5a9e;
   color: #fff;
 }
@@ -67,11 +73,28 @@
   min-width: 0;
 }
 
+/* Center dealer name and city in the blue band */
+.app-topbar-title-block {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  text-align: center;
+}
+
 .app-topbar-title {
-  flex: 0 0 auto;
   margin: 0;
   font-size: 22px;
   font-weight: 600;
+}
+
+.app-topbar-subtitle {
+  font-size: 13px;
+  font-weight: 400;
+  color: rgba(255, 255, 255, 0.85);
 }
 
 .app-topbar-date {
@@ -106,7 +129,7 @@
 }
 
 .app-tab-v2 {
-  padding: 12px 20px;
+  padding: 8px 16px;
   font-size: 14px;
   font-weight: 500;
   color: #333;
@@ -131,8 +154,18 @@
 .app-main-v2 {
   flex: 1;
   min-height: 0;
-  overflow: auto;
-  padding: 24px;
+  overflow: hidden;
+  padding: 12px 24px;
+  color: #1b2a3a;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-main-v2 h2 {
+  margin: 0 0 0.5rem;
+  font-size: 18px;
+  font-weight: 600;
+  color: #1e5a9e;
 }
 
 /* Add Sales V2: left bar nav + main (steps as line items) */
@@ -146,7 +179,7 @@
 .add-sales-v2-nav {
   width: 200px;
   flex-shrink: 0;
-  padding: 12px 0;
+  padding: 8px 0;
   border-right: 1px solid #c5d9ed;
   background: #f4f8fc;
   display: flex;
@@ -206,7 +239,7 @@
 .add-sales-v2-main {
   flex: 1;
   min-width: 0;
-  padding: 0 24px 12px;
+  padding: 0 24px 8px;
 }
 
 .add-sales-v2-two-col {
@@ -233,6 +266,25 @@
   flex: 1 1 50%;
 }
 
+.add-sales-v2-box-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 14px;
+  border-bottom: 1px solid #c5d9ed;
+  flex-shrink: 0;
+}
+
+.add-sales-v2-box-title-row .add-sales-v2-box-title {
+  margin: 0;
+  padding: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: #1e5a9e;
+  border-bottom: none;
+}
+
 .add-sales-v2-box-title {
   margin: 0;
   padding: 10px 14px;
@@ -243,11 +295,17 @@
   flex-shrink: 0;
 }
 
+.add-sales-v2-box-title-note {
+  font-size: 0.85em;
+  font-weight: 500;
+  color: #5a7a9e;
+}
+
 .add-sales-v2-box-body {
   flex: 1;
   min-height: 0;
-  overflow: auto;
-  padding: 12px 14px;
+  overflow: hidden;
+  padding: 8px 14px;
 }
 
 .add-sales-v2-placeholder {
@@ -257,7 +315,7 @@
 }
 
 .add-sales-v2-subsection {
-  margin-bottom: 16px;
+  margin-bottom: 8px;
 }
 
 .add-sales-v2-subsection:last-child {
@@ -265,12 +323,36 @@
 }
 
 .add-sales-v2-subsection-title {
-  margin: 0 0 8px;
+  margin: 0 0 4px;
   font-size: 13px;
   font-weight: 600;
   color: #1e5a9e;
   text-transform: uppercase;
   letter-spacing: 0.03em;
+}
+
+.add-sales-v2-textract-output {
+  margin-top: 8px;
+}
+
+.add-sales-v2-textract-pre {
+  margin: 0;
+  padding: 8px;
+  font-size: 12px;
+  background: #f4f8fc;
+  border: 1px solid #c5d9ed;
+  border-radius: 6px;
+  max-height: 120px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #1b2a3a;
+}
+
+.add-sales-v2-textract-error {
+  margin: 0;
+  font-size: 12px;
+  color: #b91c1c;
 }
 
 .add-sales-v2-dl {
@@ -281,7 +363,7 @@
 .add-sales-v2-dl-row {
   display: flex;
   gap: 12px;
-  margin-bottom: 6px;
+  margin-bottom: 4px;
   font-size: 13px;
 }
 
@@ -306,7 +388,7 @@
   display: flex;
   gap: 24px;
   flex-wrap: nowrap;
-  margin-bottom: 10px;
+  margin-bottom: 6px;
 }
 
 .add-sales-v2-fields-row .app-field-row {
@@ -331,28 +413,28 @@
 }
 
 .add-sales-v2-panel-wrap {
-  margin-top: 4px;
+  margin-top: 2px;
 }
 
 .add-sales-v2-panel-wrap .app-panel {
   max-width: 100%;
-  padding: 10px 14px;
+  padding: 8px 12px;
 }
 
 .add-sales-v2-panel-wrap .app-panel-title {
-  margin-bottom: 8px;
+  margin-bottom: 4px;
 }
 
 .add-sales-v2-panel-wrap .app-panel-scan-row {
-  margin-bottom: 8px;
+  margin-bottom: 4px;
 }
 
 .add-sales-v2-panel-wrap .app-panel-row {
-  margin-bottom: 8px;
+  margin-bottom: 4px;
 }
 
 .add-sales-v2-panel-wrap .app-panel-actions {
-  margin-top: 4px;
+  margin-top: 2px;
 }
 
 /* Body: sidebar + main */
@@ -434,7 +516,7 @@
   font-size: 13px;
   font-weight: 600;
   color: #1b2a3a;
-  margin-bottom: 6px;
+  margin-bottom: 4px;
 }
 
 .app-field-input {
@@ -444,6 +526,7 @@
   border-radius: 10px;
   border: 1px solid #c5d9ed;
   background: #fff;
+  color: #000;
   font-size: 15px;
 }
 
@@ -711,6 +794,37 @@
   margin-bottom: 0.25rem;
 }
 
+/* AI Reader Queue page: scroll only inside the table */
+.ai-reader-queue-page {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  gap: 12px;
+}
+
+.ai-reader-queue-table-section {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.ai-reader-queue-table-root {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.ai-reader-queue-table-root .app-table-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
 .app-table-wrap {
   border: 1px solid #c5d9ed;
   border-radius: 10px;
@@ -739,9 +853,10 @@
   padding: 10px 12px;
   border-bottom: 1px solid #eef3f8;
   white-space: nowrap;
+  color: #1b2a3a;
 }
 
 .app-table-empty {
   text-align: center;
-  color: #666;
+  color: #555;
 }

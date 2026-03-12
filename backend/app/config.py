@@ -32,3 +32,7 @@ DOCUMENT_CLASSIFIER_LABELS = os.getenv(
 # OpenAI (for vision: Aadhar analysis, extract customer photo region).
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
+# AWS Textract (optional: for better extraction on details/sales sheets).
+AWS_REGION = os.getenv("AWS_REGION", "ap-south-1")
+# Credentials: set AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY (or use default profile).
+

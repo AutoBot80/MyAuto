@@ -1,16 +1,21 @@
 -- Customer master data.
+-- customer_id is PK; (aadhar last 4 + phone) uniquely identify a customer.
 -- Run against database: auto_ai
 
 CREATE TABLE IF NOT EXISTS customer_master (
-    aadhar CHAR(12) NOT NULL PRIMARY KEY,
+    customer_id SERIAL PRIMARY KEY,
+    aadhar CHAR(4) NOT NULL,
     name TEXT NOT NULL,
     address TEXT,
     pin CHAR(6),
     city TEXT,
     state TEXT,
     phone VARCHAR(16),
-    file_location TEXT
+    file_location TEXT,
+    CONSTRAINT uq_customer_aadhar_phone UNIQUE (aadhar, phone)
 );
 
-COMMENT ON TABLE customer_master IS 'Customer master; aadhar is 12-digit ID';
+COMMENT ON TABLE customer_master IS 'Customer master; customer_id is PK; aadhar stores last 4 digits only';
+COMMENT ON COLUMN customer_master.customer_id IS 'Auto-generated customer ID (integer)';
+COMMENT ON COLUMN customer_master.aadhar IS 'Last 4 digits of Aadhar only';
 COMMENT ON COLUMN customer_master.file_location IS 'Location/sub-folder name where scans are placed';

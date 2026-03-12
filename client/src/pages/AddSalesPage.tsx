@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { AddSalesStep } from "../types";
 import { useUploadScans } from "../hooks/useUploadScans";
 import { UploadScansPanel } from "../components/UploadScansPanel";
+import { extractWithTextract } from "../api/textract";
 
 const ADD_SALES_STEPS: { id: AddSalesStep; label: string; num: number }[] = [
   { id: "upload-scans", label: "Upload scans", num: 1 },
@@ -19,6 +20,10 @@ export function AddSalesPage() {
   const [aadharLast4, setAadharLast4] = useState("");
   const [mobile, setMobile] = useState("");
   const [addSalesStep, setAddSalesStep] = useState<AddSalesStep>("upload-scans");
+  const [formResetKey, setFormResetKey] = useState(0);
+  const [textractResult, setTextractResult] = useState<{ full_text: string; error: string | null } | null>(null);
+  const [textractLoading, setTextractLoading] = useState(false);
+  const textractInputRef = useRef<HTMLInputElement>(null);
   const {
     upload,
     uploadV2,
@@ -42,7 +47,6 @@ export function AddSalesPage() {
           onChange={(e) => {
             const digits = e.target.value.replace(/\D/g, "").slice(0, 4);
             setAadharLast4(digits);
-            clearUploaded();
           }}
           aria-invalid={aadharLast4.length > 0 && !isAadharValid}
         />
@@ -69,8 +73,32 @@ export function AddSalesPage() {
     </div>
   );
 
+  const handleTextractTest = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setTextractLoading(true);
+    setTextractResult(null);
+    try {
+      const data = await extractWithTextract(file);
+      setTextractResult({ full_text: data.full_text ?? "", error: data.error ?? null });
+    } catch (err) {
+      setTextractResult({ full_text: "", error: err instanceof Error ? err.message : "Textract failed" });
+    } finally {
+      setTextractLoading(false);
+    }
+  };
+
+  const handleNew = () => {
+    setAadharLast4("");
+    setMobile("");
+    clearUploaded();
+    setFormResetKey((k) => k + 1);
+  };
+
   const panel = (
     <UploadScansPanel
+      key={formResetKey}
       addSalesStep={addSalesStep}
       onStepChange={setAddSalesStep}
       isAadharValid={isAadharValid}
@@ -103,7 +131,17 @@ export function AddSalesPage() {
         <main className="add-sales-v2-main">
           <div className="add-sales-v2-two-col">
             <section className="add-sales-v2-box add-sales-v2-box-upload">
-              <h2 className="add-sales-v2-box-title">Upload Customer Information</h2>
+              <div className="add-sales-v2-box-title-row">
+                <h2 className="add-sales-v2-box-title">Upload Customer Information</h2>
+                <button
+                  type="button"
+                  className="app-button"
+                  onClick={handleNew}
+                  title="Start a new entry"
+                >
+                  New
+                </button>
+              </div>
               <div className="add-sales-v2-box-body">
                 <div className="add-sales-v2-fields-row">
                   <div className="add-sales-v2-input-wrap add-sales-v2-input-aadhar">
@@ -119,7 +157,7 @@ export function AddSalesPage() {
               </div>
             </section>
             <section className="add-sales-v2-box add-sales-v2-box-extracted">
-              <h2 className="add-sales-v2-box-title">Extracted Information</h2>
+              <h2 className="add-sales-v2-box-title">Extracted Information <span className="add-sales-v2-box-title-note">(AI enabled)</span></h2>
               <div className="add-sales-v2-box-body">
                 <div className="add-sales-v2-subsection">
                   <h3 className="add-sales-v2-subsection-title">Customer Details</h3>
@@ -138,7 +176,36 @@ export function AddSalesPage() {
                     <div className="add-sales-v2-dl-row"><dt>Engine#</dt><dd>—</dd></div>
                     <div className="add-sales-v2-dl-row"><dt>Chassis#</dt><dd>—</dd></div>
                     <div className="add-sales-v2-dl-row"><dt>Battery#</dt><dd>—</dd></div>
+                    <div className="add-sales-v2-dl-row"><dt>Model</dt><dd>—</dd></div>
+                    <div className="add-sales-v2-dl-row"><dt>Colour</dt><dd>—</dd></div>
                   </dl>
+                </div>
+                <div className="add-sales-v2-subsection">
+                  <h3 className="add-sales-v2-subsection-title">Test AWS Textract (Details sheet)</h3>
+                  <input
+                    ref={textractInputRef}
+                    type="file"
+                    accept=".jpg,.jpeg,.png,image/jpeg,image/png"
+                    style={{ display: "none" }}
+                    onChange={handleTextractTest}
+                  />
+                  <button
+                    type="button"
+                    className="app-button app-button--small"
+                    onClick={() => textractInputRef.current?.click()}
+                    disabled={textractLoading}
+                  >
+                    {textractLoading ? "Running…" : "Choose file & run Textract"}
+                  </button>
+                  {textractResult && (
+                    <div className="add-sales-v2-textract-output">
+                      {textractResult.error ? (
+                        <p className="add-sales-v2-textract-error">{textractResult.error}</p>
+                      ) : (
+                        <pre className="add-sales-v2-textract-pre">{textractResult.full_text || "(no text detected)"}</pre>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
             </section>

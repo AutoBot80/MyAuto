@@ -4,6 +4,7 @@
 CREATE TABLE IF NOT EXISTS dealer_master (
     dealer_id SERIAL PRIMARY KEY,
     dealer_name VARCHAR(255) NOT NULL,
+    dealer_of VARCHAR(255),
     address TEXT,
     pin CHAR(6),
     city TEXT,

@@ -26,7 +26,7 @@ export function AiReaderQueueTable({
   };
 
   return (
-    <div>
+    <div className="ai-reader-queue-table-root">
       <h2>AI Reader Queue</h2>
       {error ? <div className="app-panel-status">{error}</div> : null}
       <div className="app-table-wrap">

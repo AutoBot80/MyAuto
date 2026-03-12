@@ -40,6 +40,16 @@ def process_status() -> ProcessStatusResponse:
     return ProcessStatusResponse(**get_status())
 
 
+@router.post("/empty")
+def empty_queue() -> dict:
+    """Remove all items from the AI reader queue."""
+    with get_connection() as conn:
+        AiReaderQueueRepository.ensure_table(conn)
+        n = AiReaderQueueRepository.delete_all(conn)
+        conn.commit()
+    return {"ok": True, "deleted": n}
+
+
 @router.post("/process-all")
 def process_all() -> dict:
     """Start background process that reads all queued documents until the queue is empty."""

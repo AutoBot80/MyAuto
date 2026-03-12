@@ -1,0 +1,10 @@
+---
+description: Avoid scrollbars unless the user confirms
+alwaysApply: true
+---
+
+# Scrollbars
+
+- Prefer fitting content within the viewport by adjusting padding, margins, and element heights rather than relying on vertical or horizontal scroll.
+- Do not add or leave `overflow: auto` or `overflow: scroll` on main layout or content areas unless the user has explicitly asked for scrollable regions.
+- If overflow or scrolling is needed, confirm with the user before implementing.

@@ -24,6 +24,13 @@ export async function startProcessAll(): Promise<{
   );
 }
 
+export async function emptyAiReaderQueue(): Promise<{ ok: boolean; deleted: number }> {
+  return apiFetch<{ ok: boolean; deleted: number }>(
+    "/ai-reader-queue/empty",
+    { method: "POST" }
+  );
+}
+
 export async function reprocessQueueItem(
   itemId: number
 ): Promise<{ ok: boolean; id: number; message: string }> {

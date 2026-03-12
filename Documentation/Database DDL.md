@@ -30,7 +30,8 @@ This document lists the current database tables and their columns. **Executable 
 
 | Column | Type | Null | Default | Notes |
 |---|---|---:|---|---|
-| `aadhar` | `char(12)` | NO |  | Primary key (12 digits) |
+| `customer_id` | `integer` | NO | `nextval('customer_master_customer_id_seq'::regclass)` | Primary key |
+| `aadhar` | `char(4)` | NO |  | Last 4 digits of Aadhar only |
 | `name` | `text` | NO |  | Customer name |
 | `address` | `text` | YES |  | Address |
 | `pin` | `char(6)` | YES |  | PIN code |
@@ -39,7 +40,9 @@ This document lists the current database tables and their columns. **Executable 
 | `phone` | `varchar(16)` | YES |  | Phone number |
 | `file_location` | `text` | YES |  | File location / sub-folder name where scans are placed |
 
-**Primary key:** `customer_master_pkey` on (`aadhar`)
+**Primary key:** `customer_master_pkey` on (`customer_id`)
+
+**Unique:** `uq_customer_aadhar_phone` on (`aadhar`, `phone`) — customer identified by last 4 Aadhar + phone
 
 ---
 
@@ -66,15 +69,15 @@ This document lists the current database tables and their columns. **Executable 
 
 | Column | Type | Null | Default | Notes |
 |---|---|---:|---|---|
-| `aadhar` | `char(12)` | NO |  | FK → `customer_master(aadhar)` |
+| `customer_id` | `integer` | NO |  | FK → `customer_master(customer_id)` |
 | `vehicle_id` | `integer` | NO |  | FK → `vehicle_master(vehicle_id)` |
 | `billing_date` | `timestamptz` | NO | `now()` | System date/time |
 | `dealer_id` | `integer` | YES |  | FK → `dealer_master(dealer_id)` |
 
-**Primary key:** `sales_master_pkey` on (`aadhar`, `vehicle_id`)
+**Primary key:** `sales_master_pkey` on (`customer_id`, `vehicle_id`)
 
 **Foreign keys:**
-- `fk_sales_customer`: (`aadhar`) → `customer_master(aadhar)`
+- `fk_sales_customer`: (`customer_id`) → `customer_master(customer_id)`
 - `fk_sales_dealer`: (`dealer_id`) → `dealer_master(dealer_id)`
 - `fk_sales_vehicle`: (`vehicle_id`) → `vehicle_master(vehicle_id)`
 
@@ -88,6 +91,7 @@ This document lists the current database tables and their columns. **Executable 
 |---|---|---:|---|---|
 | `dealer_id` | `integer` | NO | `nextval('dealer_master_dealer_id_seq'::regclass)` | Primary key |
 | `dealer_name` | `varchar(255)` | NO |  | Dealer name |
+| `dealer_of` | `varchar(255)` | YES |  | Dealer of (e.g. brand or company) |
 | `address` | `text` | YES |  | Address |
 | `pin` | `char(6)` | YES |  | PIN code |
 | `city` | `text` | YES |  | City |

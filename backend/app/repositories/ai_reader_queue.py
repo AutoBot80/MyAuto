@@ -95,6 +95,13 @@ class AiReaderQueueRepository:
             )
 
     @staticmethod
+    def delete_all(conn) -> int:
+        """Delete all rows from the queue. Returns number of rows deleted."""
+        with conn.cursor() as cur:
+            cur.execute(f"DELETE FROM {AiReaderQueueRepository.TABLE_NAME}")
+            return cur.rowcount
+
+    @staticmethod
     def reset_for_reprocess(conn, id: int) -> int:
         """Set row back to queued and clear classification so it can be processed again. Returns 1 if updated, 0 if not found."""
         with conn.cursor() as cur:

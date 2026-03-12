@@ -11,6 +11,7 @@ const PAGE_LABELS: Record<Page, string> = {
 
 interface AppLayoutV2Props {
   headerTitle: string;
+  headerSubtitle?: string | null;
   headerRight: ReactNode;
   currentPage: Page;
   onNavigate: (page: Page) => void;
@@ -19,6 +20,7 @@ interface AppLayoutV2Props {
 
 export function AppLayoutV2({
   headerTitle,
+  headerSubtitle,
   headerRight,
   currentPage,
   onNavigate,
@@ -29,6 +31,7 @@ export function AppLayoutV2({
       <div className="app-box">
         <Header
           title={headerTitle}
+          subtitle={headerSubtitle}
           rightSlot={headerRight}
         />
         <nav className="app-tabs-v2" role="tablist">

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { uploadScans, uploadScansV2 } from "../api/uploads";
+import { startProcessAll } from "../api/aiReaderQueue";
 
 export function useUploadScans(aadharLast4: string, mobile: string = "") {
   const [uploadStatus, setUploadStatus] = useState("");
@@ -46,6 +47,11 @@ export function useUploadScans(aadharLast4: string, mobile: string = "") {
       setUploadStatus(`Uploaded ${data.saved_count} file(s) to ${data.saved_to}.`);
       if (data.saved_files?.length)
         setUploadedFiles((prev) => [...(data.saved_files ?? []), ...prev]);
+      // Trigger Tesseract reader on the new queue items
+      const processRes = await startProcessAll();
+      if (processRes.started) {
+        setUploadStatus((s) => `${s} Reader started.`);
+      }
     } catch (err) {
       setUploadStatus(err instanceof Error ? err.message : "Upload failed.");
     } finally {
