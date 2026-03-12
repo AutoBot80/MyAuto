@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import type { AddSalesStep, ExtractedVehicleDetails, ExtractedCustomerDetails } from "../types";
+import { buildDisplayAddress } from "../types";
 import { useUploadScans } from "../hooks/useUploadScans";
 import { UploadScansPanel } from "../components/UploadScansPanel";
 import { getExtractedDetails } from "../api/aiReaderQueue";
@@ -26,8 +27,30 @@ function getInitialForm() {
   return d;
 }
 
+function mapApiCustomerToExtracted(cust: Record<string, unknown>): ExtractedCustomerDetails {
+  const r = cust;
+  const pinVal = String(r.pin ?? r.pin_code ?? "").trim() || undefined;
+  return {
+    aadhar_id: String(r.aadhar_id ?? "").trim() || undefined,
+    name: String(r.name ?? "").trim() || undefined,
+    gender: String(r.gender ?? "").trim() || undefined,
+    year_of_birth: String(r.year_of_birth ?? "").trim() || undefined,
+    date_of_birth: String(r.date_of_birth ?? "").trim() || undefined,
+    care_of: String(r.care_of ?? "").trim() || undefined,
+    house: String(r.house ?? "").trim() || undefined,
+    street: String(r.street ?? "").trim() || undefined,
+    location: String(r.location ?? "").trim() || undefined,
+    city: String(r.city ?? "").trim() || undefined,
+    post_office: String(r.post_office ?? "").trim() || undefined,
+    district: String(r.district ?? "").trim() || undefined,
+    sub_district: String(r.sub_district ?? "").trim() || undefined,
+    state: String(r.state ?? "").trim() || undefined,
+    pin_code: pinVal,
+    address: String(r.address ?? "").trim() || undefined,
+  };
+}
+
 export function AddSalesPage() {
-  const [aadharLast4, setAadharLast4] = useState(() => getInitialForm().aadharLast4);
   const [mobile, setMobile] = useState(() => getInitialForm().mobile);
   const [savedTo, setSavedTo] = useState<string | null>(() => getInitialForm().savedTo);
   const [uploadedFiles, setUploadedFiles] = useState<string[]>(() => getInitialForm().uploadedFiles);
@@ -50,10 +73,9 @@ export function AddSalesPage() {
     upload,
     uploadV2,
     isUploading,
-    isAadharValid,
     isMobileValid,
     clearUploaded,
-  } = useUploadScans(aadharLast4, mobile, {
+  } = useUploadScans("", mobile, {
     savedTo,
     setSavedTo,
     uploadedFiles,
@@ -69,7 +91,6 @@ export function AddSalesPage() {
   // Persist form state so it survives navigation; clear only on "New"
   useEffect(() => {
     saveAddSalesForm({
-      aadharLast4,
       mobile,
       savedTo,
       uploadedFiles,
@@ -77,11 +98,13 @@ export function AddSalesPage() {
       extractedVehicle,
       extractedCustomer,
     });
-  }, [aadharLast4, mobile, savedTo, uploadedFiles, uploadStatus, extractedVehicle, extractedCustomer]);
+  }, [mobile, savedTo, uploadedFiles, uploadStatus, extractedVehicle, extractedCustomer]);
 
   const hasCustomer = Boolean(
     extractedCustomer &&
-    (extractedCustomer.name || extractedCustomer.address || extractedCustomer.city || extractedCustomer.state || extractedCustomer.pin)
+    (extractedCustomer.name || extractedCustomer.address || extractedCustomer.aadhar_id ||
+     extractedCustomer.city || extractedCustomer.state || extractedCustomer.pin_code ||
+     extractedCustomer.care_of || extractedCustomer.house || extractedCustomer.street || extractedCustomer.location)
   );
   // When we have savedTo but missing vehicle or customer data, fetch once to fill Extracted Information
   const hasVehicle = hasVehicleData(extractedVehicle);
@@ -96,13 +119,7 @@ export function AddSalesPage() {
         if (normalized) setExtractedVehicle(normalized);
         const cust = details?.customer;
         if (cust && typeof cust === "object" && !Array.isArray(cust)) {
-          setExtractedCustomer({
-            name: String((cust as Record<string, unknown>).name ?? "").trim() || undefined,
-            address: String((cust as Record<string, unknown>).address ?? "").trim() || undefined,
-            city: String((cust as Record<string, unknown>).city ?? "").trim() || undefined,
-            state: String((cust as Record<string, unknown>).state ?? "").trim() || undefined,
-            pin: String((cust as Record<string, unknown>).pin ?? "").trim() || undefined,
-          });
+          setExtractedCustomer(mapApiCustomerToExtracted(cust as Record<string, unknown>));
         }
       })
       .catch(() => {
@@ -132,13 +149,7 @@ export function AddSalesPage() {
         const normalized = normalizeVehicleDetails(rawVehicle);
         const cust = details?.customer;
         if (cust && typeof cust === "object" && !Array.isArray(cust)) {
-          setExtractedCustomer({
-            name: String((cust as Record<string, unknown>).name ?? "").trim() || undefined,
-            address: String((cust as Record<string, unknown>).address ?? "").trim() || undefined,
-            city: String((cust as Record<string, unknown>).city ?? "").trim() || undefined,
-            state: String((cust as Record<string, unknown>).state ?? "").trim() || undefined,
-            pin: String((cust as Record<string, unknown>).pin ?? "").trim() || undefined,
-          });
+          setExtractedCustomer(mapApiCustomerToExtracted(cust as Record<string, unknown>));
         }
         if (normalized) {
           setExtractedVehicle(normalized);
@@ -156,25 +167,6 @@ export function AddSalesPage() {
       if (intervalId) clearInterval(intervalId);
     };
   }, [savedTo]);
-
-  const aadharBlock = (
-    <div className="app-field-row">
-      <label className="app-field">
-        <div className="app-field-label">Customer Aadhar (last 4 digits)</div>
-        <input
-          className="app-field-input"
-          inputMode="numeric"
-          placeholder="1234"
-          value={aadharLast4}
-          onChange={(e) => {
-            const digits = e.target.value.replace(/\D/g, "").slice(0, 4);
-            setAadharLast4(digits);
-          }}
-          aria-invalid={aadharLast4.length > 0 && !isAadharValid}
-        />
-      </label>
-    </div>
-  );
 
   const mobileBlock = (
     <div className="app-field-row">
@@ -197,7 +189,6 @@ export function AddSalesPage() {
 
   const handleNew = () => {
     clearAddSalesForm();
-    setAadharLast4("");
     setMobile("");
     clearUploaded();
     setExtractedVehicle(null);
@@ -214,6 +205,26 @@ export function AddSalesPage() {
     try {
       const res = await decodeQrFromImage(file);
       setQrDecodeResult(res);
+      if (res.decoded.length > 0 && res.decoded[0].fields) {
+        const fields = res.decoded[0].fields;
+        setExtractedCustomer({
+          aadhar_id: fields.aadhar_id,
+          name: fields.name,
+          gender: fields.gender,
+          year_of_birth: fields.year_of_birth,
+          date_of_birth: fields.date_of_birth,
+          care_of: fields.care_of,
+          house: fields.house,
+          street: fields.street,
+          location: fields.location,
+          city: fields.city,
+          post_office: fields.post_office,
+          district: fields.district,
+          sub_district: fields.sub_district,
+          state: fields.state,
+          pin_code: fields.pin_code,
+        });
+      }
     } catch (err) {
       setQrDecodeResult({
         decoded: [],
@@ -234,13 +245,7 @@ export function AddSalesPage() {
       if (normalized) setExtractedVehicle(normalized);
       const cust = details?.customer;
       if (cust && typeof cust === "object" && !Array.isArray(cust)) {
-        setExtractedCustomer({
-          name: String((cust as Record<string, unknown>).name ?? "").trim() || undefined,
-          address: String((cust as Record<string, unknown>).address ?? "").trim() || undefined,
-          city: String((cust as Record<string, unknown>).city ?? "").trim() || undefined,
-          state: String((cust as Record<string, unknown>).state ?? "").trim() || undefined,
-          pin: String((cust as Record<string, unknown>).pin ?? "").trim() || undefined,
-        });
+        setExtractedCustomer(mapApiCustomerToExtracted(cust as Record<string, unknown>));
       }
     } finally {
       setExtractedRefreshLoading(false);
@@ -257,7 +262,6 @@ export function AddSalesPage() {
       key={formResetKey}
       addSalesStep={addSalesStep}
       onStepChange={setAddSalesStep}
-      isAadharValid={isAadharValid}
       isUploading={isUploading}
       onUpload={upload}
       uploadStatus={uploadStatus}
@@ -300,9 +304,6 @@ export function AddSalesPage() {
               </div>
               <div className="add-sales-v2-box-body">
                 <div className="add-sales-v2-fields-row">
-                  <div className="add-sales-v2-input-wrap add-sales-v2-input-aadhar">
-                    {aadharBlock}
-                  </div>
                   <div className="add-sales-v2-input-wrap add-sales-v2-input-mobile">
                     {mobileBlock}
                   </div>
@@ -318,11 +319,16 @@ export function AddSalesPage() {
                 <div className="add-sales-v2-subsection">
                   <h3 className="add-sales-v2-subsection-title">Customer Details</h3>
                   <dl className="add-sales-v2-dl">
-                    <div className="add-sales-v2-dl-row"><dt>Name</dt><dd>{display(c?.name)}</dd></div>
-                    <div className="add-sales-v2-dl-row"><dt>Address</dt><dd>{display(c?.address)}</dd></div>
-                    <div className="add-sales-v2-dl-row"><dt>City</dt><dd>{display(c?.city)}</dd></div>
-                    <div className="add-sales-v2-dl-row"><dt>State</dt><dd>{display(c?.state)}</dd></div>
-                    <div className="add-sales-v2-dl-row"><dt>PIN</dt><dd>{display(c?.pin)}</dd></div>
+                    {QR_FIELD_ORDER.map((key) => (
+                      <div key={key} className="add-sales-v2-dl-row">
+                        <dt>{QR_FIELD_LABELS[key]}</dt>
+                        <dd>{display(c?.[key])}</dd>
+                      </div>
+                    ))}
+                    <div className="add-sales-v2-dl-row">
+                      <dt>Address</dt>
+                      <dd>{buildDisplayAddress(c)}</dd>
+                    </div>
                   </dl>
                 </div>
                 <div className="add-sales-v2-subsection">

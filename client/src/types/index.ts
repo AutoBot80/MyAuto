@@ -52,13 +52,33 @@ export interface ExtractedVehicleDetails {
   battery_no?: string;
 }
 
-/** Customer details extracted from Aadhar (OpenAI Vision). */
+/** Customer details: 15 granular fields (e.g. from QR) + optional legacy address. Full Aadhar shown only on frontend; DB stores last 4 only. */
 export interface ExtractedCustomerDetails {
+  aadhar_id?: string;
   name?: string;
-  address?: string;
+  gender?: string;
+  year_of_birth?: string;
+  date_of_birth?: string;
+  care_of?: string;
+  house?: string;
+  street?: string;
+  location?: string;
   city?: string;
+  post_office?: string;
+  district?: string;
+  sub_district?: string;
   state?: string;
-  pin?: string;
+  pin_code?: string;
+  /** Legacy/constructed: from Vision or built from care_of + house + street + location */
+  address?: string;
+}
+
+/** Build display address from granular fields (care of, house, street, location). Uses existing address if set. */
+export function buildDisplayAddress(c: ExtractedCustomerDetails | null | undefined): string {
+  if (!c) return "—";
+  if (c.address && String(c.address).trim()) return c.address.trim();
+  const parts = [c.care_of, c.house, c.street, c.location].filter((s) => s != null && String(s).trim() !== "");
+  return parts.length > 0 ? parts.map((s) => String(s).trim()).join(", ") : "—";
 }
 
 export interface ExtractedDetailsResponse {

@@ -3,7 +3,6 @@
 const KEY = "addSalesForm";
 
 export interface AddSalesStored {
-  aadharLast4: string;
   mobile: string;
   savedTo: string | null;
   uploadedFiles: string[];
@@ -15,17 +14,10 @@ export interface AddSalesStored {
     key_no?: string;
     battery_no?: string;
   } | null;
-  extractedCustomer: {
-    name?: string;
-    address?: string;
-    city?: string;
-    state?: string;
-    pin?: string;
-  } | null;
+  extractedCustomer: import("../types").ExtractedCustomerDetails | null;
 }
 
 const DEFAULT: AddSalesStored = {
-  aadharLast4: "",
   mobile: "",
   savedTo: null,
   uploadedFiles: [],
@@ -34,10 +26,33 @@ const DEFAULT: AddSalesStored = {
   extractedCustomer: null,
 };
 
+import type { ExtractedCustomerDetails } from "../types";
 import { normalizeVehicleDetails } from "./vehicleDetails";
+
+const CUSTOMER_KEYS: (keyof ExtractedCustomerDetails)[] = [
+  "aadhar_id", "name", "gender", "year_of_birth", "date_of_birth",
+  "care_of", "house", "street", "location", "city", "post_office",
+  "district", "sub_district", "state", "pin_code", "address",
+];
 
 function normalizeExtractedVehicle(val: unknown): AddSalesStored["extractedVehicle"] {
   return normalizeVehicleDetails(val);
+}
+
+function normalizeExtractedCustomer(val: unknown): ExtractedCustomerDetails | null {
+  if (val == null || typeof val !== "object" || Array.isArray(val)) return null;
+  const o = val as Record<string, unknown>;
+  const out: ExtractedCustomerDetails = {};
+  for (const k of CUSTOMER_KEYS) {
+    const v = o[k];
+    if (v != null && typeof v === "string" && v.trim() !== "") out[k] = v.trim();
+  }
+  if (!out.pin_code && o.pin != null && String(o.pin).trim() !== "") out.pin_code = String(o.pin).trim();
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+function hasAnyCustomerValue(c: ExtractedCustomerDetails): boolean {
+  return CUSTOMER_KEYS.some((k) => c[k] != null && String(c[k]).trim() !== "");
 }
 
 export function loadAddSalesForm(): AddSalesStored {
@@ -46,18 +61,8 @@ export function loadAddSalesForm(): AddSalesStored {
     if (!raw) return { ...DEFAULT };
     const parsed = JSON.parse(raw) as Partial<AddSalesStored> & { extractedVehicle?: unknown; extractedCustomer?: unknown };
     const cust = parsed.extractedCustomer;
-    const extractedCustomer =
-      cust && typeof cust === "object" && !Array.isArray(cust)
-        ? {
-            name: typeof (cust as Record<string, unknown>).name === "string" ? (cust as Record<string, string>).name : "",
-            address: typeof (cust as Record<string, unknown>).address === "string" ? (cust as Record<string, string>).address : "",
-            city: typeof (cust as Record<string, unknown>).city === "string" ? (cust as Record<string, string>).city : "",
-            state: typeof (cust as Record<string, unknown>).state === "string" ? (cust as Record<string, string>).state : "",
-            pin: typeof (cust as Record<string, unknown>).pin === "string" ? (cust as Record<string, string>).pin : "",
-          }
-        : null;
+    const extractedCustomer = normalizeExtractedCustomer(cust);
     return {
-      aadharLast4: typeof parsed.aadharLast4 === "string" ? parsed.aadharLast4 : "",
       mobile: typeof parsed.mobile === "string" ? parsed.mobile : "",
       savedTo:
         parsed.savedTo === null || parsed.savedTo === undefined
@@ -68,7 +73,7 @@ export function loadAddSalesForm(): AddSalesStored {
       uploadedFiles: Array.isArray(parsed.uploadedFiles) ? parsed.uploadedFiles : [],
       uploadStatus: typeof parsed.uploadStatus === "string" ? parsed.uploadStatus : "",
       extractedVehicle: normalizeExtractedVehicle(parsed.extractedVehicle),
-      extractedCustomer: extractedCustomer && (extractedCustomer.name || extractedCustomer.address || extractedCustomer.city || extractedCustomer.state || extractedCustomer.pin) ? extractedCustomer : null,
+      extractedCustomer: extractedCustomer && hasAnyCustomerValue(extractedCustomer) ? extractedCustomer : null,
     };
   } catch {
     return { ...DEFAULT };

@@ -12,6 +12,8 @@ CREATE TABLE IF NOT EXISTS customer_master (
     state TEXT,
     phone VARCHAR(16),
     file_location TEXT,
+    gender VARCHAR(8),
+    date_of_birth VARCHAR(20),
     CONSTRAINT uq_customer_aadhar_phone UNIQUE (aadhar, phone)
 );
 
@@ -19,3 +21,4 @@ COMMENT ON TABLE customer_master IS 'Customer master; customer_id is PK; aadhar 
 COMMENT ON COLUMN customer_master.customer_id IS 'Auto-generated customer ID (integer)';
 COMMENT ON COLUMN customer_master.aadhar IS 'Last 4 digits of Aadhar only';
 COMMENT ON COLUMN customer_master.file_location IS 'Location/sub-folder name where scans are placed';
+COMMENT ON COLUMN customer_master.date_of_birth IS 'Date of birth, dd/mm/yyyy (default date format for application and database)';

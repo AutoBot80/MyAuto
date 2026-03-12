@@ -3,6 +3,8 @@
 
 This document lists the current database tables and their columns. **Executable DDL scripts** are in the **`DDL/`** folder (e.g. `DDL/01_ai_reader_queue.sql`). Keep both this doc and the `DDL/` scripts updated when adding, removing, or altering tables.
 
+**Date format:** The default date format for the application and database is **dd/mm/yyyy** (e.g. 30/05/1980). Use this format for all date fields (e.g. `date_of_birth`) in the app and in the DB.
+
 ---
 
 ## 1) `ai_reader_queue`
@@ -31,14 +33,16 @@ This document lists the current database tables and their columns. **Executable 
 | Column | Type | Null | Default | Notes |
 |---|---|---:|---|---|
 | `customer_id` | `integer` | NO | `nextval('customer_master_customer_id_seq'::regclass)` | Primary key |
-| `aadhar` | `char(4)` | NO |  | Last 4 digits of Aadhar only |
+| `aadhar` | `char(4)` | NO |  | Last 4 digits of Aadhar only (full number shown on frontend only; DB stores last 4 for compliance) |
 | `name` | `text` | NO |  | Customer name |
-| `address` | `text` | YES |  | Address |
+| `address` | `text` | YES |  | Address (constructed from care of, house, street, location when saving from QR) |
 | `pin` | `char(6)` | YES |  | PIN code |
 | `city` | `text` | YES |  | City |
 | `state` | `text` | YES |  | State |
 | `phone` | `varchar(16)` | YES |  | Phone number |
 | `file_location` | `text` | YES |  | File location / sub-folder name where scans are placed |
+| `gender` | `varchar(8)` | YES |  | Gender from Aadhar QR (e.g. M, F) |
+| `date_of_birth` | `varchar(20)` | YES |  | Date of birth (dd/mm/yyyy); default date format for app and DB |
 
 **Primary key:** `customer_master_pkey` on (`customer_id`)
 

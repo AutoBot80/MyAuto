@@ -4,7 +4,6 @@ import type { AddSalesStep } from "../types";
 interface UploadScansPanelProps {
   addSalesStep: AddSalesStep;
   onStepChange: (step: AddSalesStep) => void;
-  isAadharValid: boolean;
   isUploading: boolean;
   onUpload: (files: File[]) => Promise<void>;
   uploadStatus: string;
@@ -34,7 +33,6 @@ const V2_SCAN_LABELS = [
 export function UploadScansPanel({
   addSalesStep,
   onStepChange,
-  isAadharValid,
   isUploading,
   onUpload,
   uploadStatus,
@@ -151,7 +149,7 @@ export function UploadScansPanel({
       <div className="app-panel-row app-panel-actions">
         <button
           type="button"
-          disabled={isUploading || !isAadharValid}
+          disabled={isUploading}
           onClick={() => fileInputRef.current?.click()}
         >
           {isUploading ? "Uploading..." : "Choose files"}

@@ -34,6 +34,7 @@ One-off changes (e.g. new columns) go in **`DDL/alter/`**. Run against an existi
 - `01a_ai_reader_queue_add_classification.sql` — adds `document_type`, `classification_confidence` for the two-step (classify + OCR) pipeline.
 - `02a_customer_master_add_file_location.sql` — adds `file_location` to customer_master.
 - `02b_customer_master_customer_id_pk.sql` — adds `customer_id` as PK, aadhar last 4 only, unique (aadhar, phone); migrates sales_master to customer_id FK.
+- `02c_customer_master_add_gender_dob.sql` — adds `gender`, `date_of_birth` to customer_master (for QR/Aadhar granular data).
 - `03a_vehicle_master_add_model_colour.sql` — adds `model` and `colour` (VARCHAR 64) to vehicle_master.
 - `04a_dealer_master_add_dealer_of.sql` — adds `dealer_of` (VARCHAR 255) to dealer_master.
 
