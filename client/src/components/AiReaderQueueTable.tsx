@@ -63,7 +63,7 @@ export function AiReaderQueueTable({
                     className="app-button app-button--small"
                     onClick={() => handleReprocess(it.id)}
                     disabled={reprocessId === it.id}
-                    title="Re-queue for processing (classify + OCR)"
+                    title="Re-queue for Details sheet processing (Textract forms)"
                   >
                     {reprocessId === it.id ? "…" : "Re-process"}
                   </button>

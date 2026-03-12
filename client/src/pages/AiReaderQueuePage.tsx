@@ -81,9 +81,9 @@ export function AiReaderQueuePage() {
           className={`app-process-status app-process-status--${processStatus}`}
           title={
             processStatus === "running"
-              ? "Reading documents from queue"
+              ? "Reading Details sheets from queue (Textract forms)"
               : processStatus === "sleeping"
-                ? "Finished; all queued documents read"
+                ? "Finished; all queued Details sheets processed"
                 : "Idle; ready to start"
           }
         >
@@ -104,6 +104,7 @@ export function AiReaderQueuePage() {
           className="app-button app-button--primary"
           onClick={handleStartProcess}
           disabled={processStatus === "running"}
+          title="Process all queued Details sheets (Textract forms)"
         >
           Process all
         </button>

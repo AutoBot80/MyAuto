@@ -42,3 +42,17 @@ export interface UploadScansResponse {
   }>;
   error?: string;
 }
+
+/** Structured vehicle details from Details sheet OCR (Textract forms). */
+export interface ExtractedVehicleDetails {
+  frame_no?: string;
+  engine_no?: string;
+  model_colour?: string;
+  key_no?: string;
+  battery_no?: string;
+}
+
+export interface ExtractedDetailsResponse {
+  vehicle: ExtractedVehicleDetails;
+  customer: Record<string, string>;
+}

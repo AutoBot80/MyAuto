@@ -1,8 +1,10 @@
-import { useRef, useState } from "react";
-import type { AddSalesStep } from "../types";
+import { useState, useEffect, useRef } from "react";
+import type { AddSalesStep, ExtractedVehicleDetails } from "../types";
 import { useUploadScans } from "../hooks/useUploadScans";
 import { UploadScansPanel } from "../components/UploadScansPanel";
-import { extractWithTextract } from "../api/textract";
+import { getExtractedDetails } from "../api/aiReaderQueue";
+import { loadAddSalesForm, saveAddSalesForm, clearAddSalesForm } from "../utils/addSalesStorage";
+import { normalizeVehicleDetails, hasVehicleData } from "../utils/vehicleDetails";
 
 const ADD_SALES_STEPS: { id: AddSalesStep; label: string; num: number }[] = [
   { id: "upload-scans", label: "Upload scans", num: 1 },
@@ -16,24 +18,102 @@ const ADD_SALES_NAV = [
   ...ADD_SALES_STEPS.slice(1),
 ];
 
+function getInitialForm() {
+  const d = loadAddSalesForm();
+  return d;
+}
+
 export function AddSalesPage() {
-  const [aadharLast4, setAadharLast4] = useState("");
-  const [mobile, setMobile] = useState("");
+  const [aadharLast4, setAadharLast4] = useState(() => getInitialForm().aadharLast4);
+  const [mobile, setMobile] = useState(() => getInitialForm().mobile);
+  const [savedTo, setSavedTo] = useState<string | null>(() => getInitialForm().savedTo);
+  const [uploadedFiles, setUploadedFiles] = useState<string[]>(() => getInitialForm().uploadedFiles);
+  const [uploadStatus, setUploadStatus] = useState(() => getInitialForm().uploadStatus);
+  const [extractedVehicle, setExtractedVehicle] = useState<ExtractedVehicleDetails | null>(
+    () => getInitialForm().extractedVehicle
+  );
   const [addSalesStep, setAddSalesStep] = useState<AddSalesStep>("upload-scans");
   const [formResetKey, setFormResetKey] = useState(0);
-  const [textractResult, setTextractResult] = useState<{ full_text: string; error: string | null } | null>(null);
-  const [textractLoading, setTextractLoading] = useState(false);
-  const textractInputRef = useRef<HTMLInputElement>(null);
+
   const {
     upload,
     uploadV2,
-    uploadStatus,
     isUploading,
-    uploadedFiles,
     isAadharValid,
     isMobileValid,
     clearUploaded,
-  } = useUploadScans(aadharLast4, mobile);
+  } = useUploadScans(aadharLast4, mobile, {
+    savedTo,
+    setSavedTo,
+    uploadedFiles,
+    setUploadedFiles,
+    uploadStatus,
+    setUploadStatus,
+  });
+
+  const pollCountRef = useRef(0);
+  const POLL_MAX = 20;
+  const POLL_INTERVAL_MS = 2000;
+
+  // Persist form state so it survives navigation; clear only on "New"
+  useEffect(() => {
+    saveAddSalesForm({
+      aadharLast4,
+      mobile,
+      savedTo,
+      uploadedFiles,
+      uploadStatus,
+      extractedVehicle,
+    });
+  }, [aadharLast4, mobile, savedTo, uploadedFiles, uploadStatus, extractedVehicle]);
+
+  // When we have savedTo but no vehicle data (e.g. came back from another page), fetch once to fill Extracted Information
+  const hasVehicle = hasVehicleData(extractedVehicle);
+  useEffect(() => {
+    if (!savedTo || hasVehicle) return;
+    let cancelled = false;
+    getExtractedDetails(savedTo).then((details) => {
+      if (cancelled) return;
+      const normalized = details?.vehicle ? normalizeVehicleDetails(details.vehicle) : null;
+      if (normalized) setExtractedVehicle(normalized);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [savedTo, hasVehicle]);
+
+  // Poll for extracted details when savedTo is set (e.g. right after upload)
+  useEffect(() => {
+    if (!savedTo) {
+      pollCountRef.current = 0;
+      return;
+    }
+    pollCountRef.current = 0;
+
+    let intervalId: ReturnType<typeof setInterval> | null = null;
+
+    const poll = async () => {
+      if (pollCountRef.current >= POLL_MAX) return;
+      pollCountRef.current += 1;
+      try {
+        const details = await getExtractedDetails(savedTo);
+        const normalized = details?.vehicle ? normalizeVehicleDetails(details.vehicle) : null;
+        if (normalized) {
+          setExtractedVehicle(normalized);
+          if (intervalId) clearInterval(intervalId);
+          return;
+        }
+      } catch {
+        // keep polling
+      }
+    };
+
+    poll();
+    intervalId = setInterval(poll, POLL_INTERVAL_MS);
+    return () => {
+      if (intervalId) clearInterval(intervalId);
+    };
+  }, [savedTo]);
 
   const aadharBlock = (
     <div className="app-field-row">
@@ -73,28 +153,18 @@ export function AddSalesPage() {
     </div>
   );
 
-  const handleTextractTest = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    e.target.value = "";
-    if (!file) return;
-    setTextractLoading(true);
-    setTextractResult(null);
-    try {
-      const data = await extractWithTextract(file);
-      setTextractResult({ full_text: data.full_text ?? "", error: data.error ?? null });
-    } catch (err) {
-      setTextractResult({ full_text: "", error: err instanceof Error ? err.message : "Textract failed" });
-    } finally {
-      setTextractLoading(false);
-    }
-  };
-
   const handleNew = () => {
+    clearAddSalesForm();
     setAadharLast4("");
     setMobile("");
     clearUploaded();
+    setExtractedVehicle(null);
     setFormResetKey((k) => k + 1);
   };
+
+  // Normalize for display so we always show known fields (frame_no, engine_no, etc.) regardless of key naming
+  const v = normalizeVehicleDetails(extractedVehicle) ?? extractedVehicle;
+  const display = (s: string | undefined) => (s && String(s).trim() ? String(s).trim() : "—");
 
   const panel = (
     <UploadScansPanel
@@ -172,40 +242,12 @@ export function AddSalesPage() {
                 <div className="add-sales-v2-subsection">
                   <h3 className="add-sales-v2-subsection-title">Vehicle Details</h3>
                   <dl className="add-sales-v2-dl">
-                    <div className="add-sales-v2-dl-row"><dt>Key No.</dt><dd>—</dd></div>
-                    <div className="add-sales-v2-dl-row"><dt>Engine#</dt><dd>—</dd></div>
-                    <div className="add-sales-v2-dl-row"><dt>Chassis#</dt><dd>—</dd></div>
-                    <div className="add-sales-v2-dl-row"><dt>Battery#</dt><dd>—</dd></div>
-                    <div className="add-sales-v2-dl-row"><dt>Model</dt><dd>—</dd></div>
-                    <div className="add-sales-v2-dl-row"><dt>Colour</dt><dd>—</dd></div>
+                    <div className="add-sales-v2-dl-row"><dt>Frame no.</dt><dd>{display(v?.frame_no)}</dd></div>
+                    <div className="add-sales-v2-dl-row"><dt>Engine No.</dt><dd>{display(v?.engine_no)}</dd></div>
+                    <div className="add-sales-v2-dl-row"><dt>Model & colour</dt><dd>{display(v?.model_colour)}</dd></div>
+                    <div className="add-sales-v2-dl-row"><dt>Key no.</dt><dd>{display(v?.key_no)}</dd></div>
+                    <div className="add-sales-v2-dl-row"><dt>Battery no.</dt><dd>{display(v?.battery_no)}</dd></div>
                   </dl>
-                </div>
-                <div className="add-sales-v2-subsection">
-                  <h3 className="add-sales-v2-subsection-title">Test AWS Textract (Details sheet)</h3>
-                  <input
-                    ref={textractInputRef}
-                    type="file"
-                    accept=".jpg,.jpeg,.png,image/jpeg,image/png"
-                    style={{ display: "none" }}
-                    onChange={handleTextractTest}
-                  />
-                  <button
-                    type="button"
-                    className="app-button app-button--small"
-                    onClick={() => textractInputRef.current?.click()}
-                    disabled={textractLoading}
-                  >
-                    {textractLoading ? "Running…" : "Choose file & run Textract"}
-                  </button>
-                  {textractResult && (
-                    <div className="add-sales-v2-textract-output">
-                      {textractResult.error ? (
-                        <p className="add-sales-v2-textract-error">{textractResult.error}</p>
-                      ) : (
-                        <pre className="add-sales-v2-textract-pre">{textractResult.full_text || "(no text detected)"}</pre>
-                      )}
-                    </div>
-                  )}
                 </div>
               </div>
             </section>

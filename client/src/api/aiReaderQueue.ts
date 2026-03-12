@@ -2,6 +2,7 @@ import { apiFetch } from "./client";
 import type {
   AiReaderQueueItem,
   ProcessStatusResponse,
+  ExtractedDetailsResponse,
 } from "../types";
 
 export async function getAiReaderQueue(
@@ -38,4 +39,17 @@ export async function reprocessQueueItem(
     `/ai-reader-queue/${itemId}/reprocess`,
     { method: "POST" }
   );
+}
+
+/** Get structured extracted details (vehicle, customer) for a subfolder. Returns null if not found (e.g. not yet processed). */
+export async function getExtractedDetails(
+  subfolder: string
+): Promise<ExtractedDetailsResponse | null> {
+  const base = await import("./client").then((m) => m.getBaseUrl());
+  const res = await fetch(
+    `${base}/ai-reader-queue/extracted-details?subfolder=${encodeURIComponent(subfolder)}`
+  );
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(await res.text().then((t) => t || `Failed (${res.status})`));
+  return res.json() as Promise<ExtractedDetailsResponse>;
 }

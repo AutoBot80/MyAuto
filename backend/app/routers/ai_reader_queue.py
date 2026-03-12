@@ -18,7 +18,7 @@ def list_ai_reader_queue(limit: int = 200) -> list[dict]:
 
 @router.post("/process-next", response_model=ProcessNextResponse | None)
 def process_next_ocr() -> ProcessNextResponse | None:
-    """Process the oldest queued document with Tesseract; write text to a flat file and update status."""
+    """Process the oldest queued Details sheet with Textract (forms); write key-value output to a flat file and update status."""
     service = OcrService()
     result = service.process_next()
     if result is None:
@@ -32,6 +32,16 @@ def list_extractions(limit: int = 200) -> list[ExtractionItem]:
     service = OcrService()
     items = service.list_extractions(limit=limit)
     return [ExtractionItem(**item) for item in items]
+
+
+@router.get("/extracted-details")
+def get_extracted_details(subfolder: str) -> dict:
+    """Return structured vehicle (and customer) details for a subfolder after Details sheet processing."""
+    service = OcrService()
+    details = service.get_extracted_details(subfolder)
+    if details is None:
+        raise HTTPException(status_code=404, detail="No extracted details for this subfolder")
+    return details
 
 
 @router.get("/process-status", response_model=ProcessStatusResponse)

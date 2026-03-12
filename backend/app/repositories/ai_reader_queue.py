@@ -53,18 +53,32 @@ class AiReaderQueueRepository:
             return cur.fetchall()
 
     @staticmethod
-    def get_oldest_queued(conn) -> dict | None:
+    def get_oldest_queued(conn, filename_contains: str | None = None) -> dict | None:
+        """Get oldest queued item. If filename_contains is set (e.g. 'details'), only items whose filename contains it (case-insensitive)."""
         with conn.cursor() as cur:
-            cur.execute(
-                f"""
-                SELECT id, subfolder, filename, status, document_type, classification_confidence,
-                       created_at, updated_at
-                FROM {AiReaderQueueRepository.TABLE_NAME}
-                WHERE status = 'queued'
-                ORDER BY id ASC
-                LIMIT 1
-                """
-            )
+            if filename_contains:
+                cur.execute(
+                    f"""
+                    SELECT id, subfolder, filename, status, document_type, classification_confidence,
+                           created_at, updated_at
+                    FROM {AiReaderQueueRepository.TABLE_NAME}
+                    WHERE status = 'queued' AND filename ILIKE %s
+                    ORDER BY id ASC
+                    LIMIT 1
+                    """,
+                    (f"%{filename_contains}%",),
+                )
+            else:
+                cur.execute(
+                    f"""
+                    SELECT id, subfolder, filename, status, document_type, classification_confidence,
+                           created_at, updated_at
+                    FROM {AiReaderQueueRepository.TABLE_NAME}
+                    WHERE status = 'queued'
+                    ORDER BY id ASC
+                    LIMIT 1
+                    """
+                )
             row = cur.fetchone()
             return dict(row) if row else None
 

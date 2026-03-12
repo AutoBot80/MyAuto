@@ -1,9 +1,56 @@
-"""AWS Textract: extract text from document images (e.g. Sales Detail Sheet)."""
+"""AWS Textract: extract text and forms from document images (e.g. Sales Detail Sheet)."""
 
 from pathlib import Path
 from typing import Any
 
 from app.config import AWS_REGION
+
+# Note: Textract supports English, French, German, Italian, Portuguese, Spanish only. Hindi is not supported.
+
+
+def _get_text_from_block(block: dict, block_map: dict[str, dict]) -> str:
+    """Get concatenated text from a block via CHILD WORD blocks."""
+    text_parts = []
+    for rel in block.get("Relationships") or []:
+        if rel.get("Type") != "CHILD":
+            continue
+        for child_id in rel.get("Ids") or []:
+            child = block_map.get(child_id)
+            if not child:
+                continue
+            if child.get("BlockType") == "WORD":
+                text_parts.append(child.get("Text", ""))
+            if child.get("BlockType") == "SELECTION_ELEMENT" and child.get("SelectionStatus") == "SELECTED":
+                text_parts.append("X")
+    return " ".join(text_parts).strip()
+
+
+def _parse_key_value_pairs(blocks: list[dict]) -> list[dict[str, str]]:
+    """Parse KEY_VALUE_SET blocks into key-value pairs. Returns list of {key, value}."""
+    block_map = {b["Id"]: b for b in blocks}
+    key_blocks = [
+        b for b in blocks
+        if b.get("BlockType") == "KEY_VALUE_SET" and "KEY" in (b.get("EntityTypes") or [])
+    ]
+    value_map = {
+        b["Id"]: b for b in blocks
+        if b.get("BlockType") == "KEY_VALUE_SET" and "VALUE" in (b.get("EntityTypes") or [])
+    }
+    pairs = []
+    for key_block in key_blocks:
+        key_text = _get_text_from_block(key_block, block_map)
+        value_block = None
+        for rel in key_block.get("Relationships") or []:
+            if rel.get("Type") == "VALUE":
+                for vid in rel.get("Ids") or []:
+                    if vid in value_map:
+                        value_block = value_map[vid]
+                        break
+                break
+        value_text = _get_text_from_block(value_block, block_map) if value_block else ""
+        if key_text or value_text:
+            pairs.append({"key": key_text, "value": value_text})
+    return pairs
 
 
 def extract_text_from_bytes(document_bytes: bytes) -> dict[str, Any]:
@@ -65,6 +112,67 @@ def extract_text_from_bytes(document_bytes: bytes) -> dict[str, Any]:
     return {
         "full_text": full_text,
         "blocks": block_summary,
+        "raw_response": {
+            "BlockCount": len(blocks),
+            "DocumentMetadata": response.get("DocumentMetadata"),
+        },
+        "error": None,
+    }
+
+
+def extract_forms_from_bytes(document_bytes: bytes) -> dict[str, Any]:
+    """
+    Call AWS Textract AnalyzeDocument with FORMS (and TABLES) to get key-value pairs.
+    Returns dict with:
+      - full_text: str (all LINE text)
+      - key_value_pairs: list of {key, value}
+      - raw_response: summary
+      - error: if any
+    """
+    try:
+        import boto3
+    except ImportError:
+        return {
+            "full_text": "",
+            "key_value_pairs": [],
+            "raw_response": None,
+            "error": "boto3 not installed. pip install boto3",
+        }
+
+    if not document_bytes or len(document_bytes) > 5 * 1024 * 1024:
+        return {
+            "full_text": "",
+            "key_value_pairs": [],
+            "raw_response": None,
+            "error": "Document empty or larger than 5 MB.",
+        }
+
+    try:
+        client = boto3.client("textract", region_name=AWS_REGION)
+        response = client.analyze_document(
+            Document={"Bytes": document_bytes},
+            FeatureTypes=["FORMS", "TABLES"],
+        )
+    except Exception as e:
+        return {
+            "full_text": "",
+            "key_value_pairs": [],
+            "raw_response": None,
+            "error": str(e),
+        }
+
+    blocks = response.get("Blocks") or []
+    lines = [
+        b.get("Text", "").strip()
+        for b in blocks
+        if b.get("BlockType") == "LINE" and b.get("Text")
+    ]
+    full_text = "\n".join(lines)
+    key_value_pairs = _parse_key_value_pairs(blocks)
+
+    return {
+        "full_text": full_text,
+        "key_value_pairs": key_value_pairs,
         "raw_response": {
             "BlockCount": len(blocks),
             "DocumentMetadata": response.get("DocumentMetadata"),

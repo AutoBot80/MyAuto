@@ -331,30 +331,6 @@
   letter-spacing: 0.03em;
 }
 
-.add-sales-v2-textract-output {
-  margin-top: 8px;
-}
-
-.add-sales-v2-textract-pre {
-  margin: 0;
-  padding: 8px;
-  font-size: 12px;
-  background: #f4f8fc;
-  border: 1px solid #c5d9ed;
-  border-radius: 6px;
-  max-height: 120px;
-  overflow: auto;
-  white-space: pre-wrap;
-  word-break: break-word;
-  color: #1b2a3a;
-}
-
-.add-sales-v2-textract-error {
-  margin: 0;
-  font-size: 12px;
-  color: #b91c1c;
-}
-
 .add-sales-v2-dl {
   margin: 0;
   padding: 0;

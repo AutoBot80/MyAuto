@@ -1,35 +1,75 @@
-"""Tesseract-based OCR: process queue items, write extracted text to flat files."""
+"""Process AI reader queue with AWS Textract (forms mode). Details sheet only."""
 
+import json
 import re
 from datetime import datetime
 from pathlib import Path
-
-import pytesseract
-from PIL import Image, ImageEnhance
 
 from app.db import get_connection
 from app.repositories.ai_reader_queue import AiReaderQueueRepository
 
 
-def _preprocess_for_ocr(img: Image.Image) -> Image.Image:
-    """Improve text extraction on images with logos/graphics: grayscale and boost contrast."""
-    if img.mode != "L":
-        img = img.convert("L")
-    enhancer = ImageEnhance.Contrast(img)
-    img = enhancer.enhance(1.5)
-    return img
-
-
 def _safe_output_basename(subfolder: str, filename: str) -> str:
-    """Build a safe filename for OCR output: subfolder_filename.txt (no path chars)."""
+    """Build a safe filename for output: subfolder_filename.txt (no path chars)."""
     safe_sub = re.sub(r"[^\w\-]", "_", subfolder)
     safe_name = Path(filename).stem
     safe_name = re.sub(r"[^\w\-.]", "_", safe_name)
     return f"{safe_sub}_{safe_name}.txt"
 
 
+def _json_output_path(output_dir: Path, subfolder: str, filename: str) -> Path:
+    """Path for structured JSON output (same base as .txt but .json)."""
+    base = _safe_output_basename(subfolder, filename)
+    return output_dir / (Path(base).stem + ".json")
+
+
+# Only process queue items whose filename contains this (Details sheet).
+DETAILS_FILENAME_CONTAINS = "details"
+
+# Map Textract form keys (normalized) to our vehicle detail fields.
+_VEHICLE_KEY_ALIASES = {
+    "frame_no": ["frame no", "frame no.", "frame number", "chassis", "chassis no", "chassis no."],
+    "engine_no": ["engine no", "engine no.", "engine number", "engine"],
+    "model_colour": ["model & colour", "model and colour", "model/colour", "model", "colour", "color"],
+    "key_no": ["key no", "key no.", "key number", "key"],
+    "battery_no": ["battery no", "battery no.", "battery number", "battery"],
+}
+
+
+def _map_key_value_pairs_to_vehicle(pairs: list[dict]) -> dict[str, str]:
+    """Map key_value_pairs from Textract to structured vehicle fields (frame_no, engine_no, model_colour, key_no, battery_no)."""
+    out: dict[str, str] = {}
+    key_lower_to_value: dict[str, str] = {}
+    for kv in pairs:
+        k = (kv.get("key") or "").strip()
+        v = (kv.get("value") or "").strip()
+        if not k:
+            continue
+        key_lower_to_value[k.lower()] = v
+
+    for field, aliases in _VEHICLE_KEY_ALIASES.items():
+        if field in out:
+            continue
+        for alias in aliases:
+            if alias in key_lower_to_value:
+                out[field] = key_lower_to_value[alias]
+                break
+
+    # Combine Model and Colour into model_colour if we have them separately
+    model_val = key_lower_to_value.get("model", "").strip() or next(
+        (v for k, v in key_lower_to_value.items() if "model" in k and "colour" not in k and "color" not in k), ""
+    )
+    colour_val = key_lower_to_value.get("colour", "").strip() or key_lower_to_value.get("color", "").strip()
+    if model_val or colour_val:
+        combined = ", ".join(filter(None, [model_val, colour_val]))
+        if combined:
+            out["model_colour"] = combined
+
+    return out
+
+
 class OcrService:
-    """Process AI reader queue with Tesseract; write results to flat files."""
+    """Process AI reader queue with Textract (forms mode); write results to flat files. Details sheet only."""
 
     def __init__(
         self,
@@ -45,7 +85,7 @@ class OcrService:
         self.ocr_output_dir.mkdir(parents=True, exist_ok=True)
 
     def get_output_path(self, subfolder: str, filename: str) -> Path:
-        """Path where OCR text for this queue item is or will be written."""
+        """Path where extracted text for this queue item is or will be written."""
         self._ensure_ocr_output_dir()
         return self.ocr_output_dir / _safe_output_basename(subfolder, filename)
 
@@ -58,12 +98,12 @@ class OcrService:
 
     def process_next(self) -> dict | None:
         """
-        Process the oldest queued item: run Tesseract, write to flat file, update status.
-        Returns result dict or None if queue is empty.
+        Process the oldest queued Details sheet: run Textract (forms), write key-value output, update status.
+        Only picks items where filename contains "details". Returns result dict or None if none queued.
         """
         with get_connection() as conn:
             AiReaderQueueRepository.ensure_table(conn)
-            row = AiReaderQueueRepository.get_oldest_queued(conn)
+            row = AiReaderQueueRepository.get_oldest_queued(conn, filename_contains=DETAILS_FILENAME_CONTAINS)
             if not row:
                 return None
 
@@ -72,6 +112,7 @@ class OcrService:
             filename = row["filename"]
 
             AiReaderQueueRepository.update_status(conn, qid, "processing")
+            AiReaderQueueRepository.update_classification(conn, qid, "Details sheet", 1.0)
             conn.commit()
 
         input_path = self.uploads_dir / subfolder / filename
@@ -92,36 +133,32 @@ class OcrService:
             }
 
         try:
-            from app.config import OCR_LANG, OCR_PSM, OCR_PREPROCESS, USE_AI_CLASSIFIER
-            from app.services.document_classifier import get_document_classifier
+            from app.services.textract_service import extract_forms_from_bytes
 
-            img = Image.open(input_path).copy()
-            if img.mode == "RGBA":
-                img = img.convert("RGB")
+            document_bytes = input_path.read_bytes()
+            result = extract_forms_from_bytes(document_bytes)
+            if result.get("error"):
+                raise RuntimeError(result["error"])
 
-            # Step 1: Classify image (AI model)
-            classifier = get_document_classifier(use_ai=USE_AI_CLASSIFIER)
-            document_type, classification_confidence = classifier.classify(img)
-            with get_connection() as conn:
-                AiReaderQueueRepository.update_classification(
-                    conn, qid, document_type, classification_confidence
-                )
-                conn.commit()
-
-            # Step 2: Tesseract OCR
-            img_for_ocr = _preprocess_for_ocr(img.copy()) if OCR_PREPROCESS else img
-            config = f"--psm {OCR_PSM}"
-            text = pytesseract.image_to_string(
-                img_for_ocr, lang=OCR_LANG, config=config
-            )
-            if text is None:
-                text = ""
-            text = text.strip()
+            key_value_pairs = result.get("key_value_pairs") or []
+            lines = []
+            lines.append("Document: Details sheet (Textract Forms)\n")
+            for kv in key_value_pairs:
+                lines.append(f"{kv.get('key', '')}: {kv.get('value', '')}")
+            if result.get("full_text"):
+                lines.append("\n--- Full text ---\n")
+                lines.append(result["full_text"])
+            text = "\n".join(lines)
 
             self._ensure_ocr_output_dir()
             output_path = self.get_output_path(subfolder, filename)
-            header = f"Document type: {document_type} (confidence: {classification_confidence:.2f})\n\n"
-            output_path.write_text(header + text, encoding="utf-8")
+            output_path.write_text(text, encoding="utf-8")
+
+            # Write structured JSON for client (vehicle details from form keys)
+            vehicle = _map_key_value_pairs_to_vehicle(key_value_pairs)
+            details_json = {"vehicle": vehicle, "customer": {}}
+            json_path = _json_output_path(self.ocr_output_dir, subfolder, filename)
+            json_path.write_text(json.dumps(details_json, indent=2), encoding="utf-8")
 
             with get_connection() as conn:
                 AiReaderQueueRepository.update_status(conn, qid, "done")
@@ -135,8 +172,8 @@ class OcrService:
                 "error": None,
                 "extracted_text": text,
                 "output_path": str(output_path),
-                "document_type": document_type,
-                "classification_confidence": classification_confidence,
+                "document_type": "Details sheet",
+                "classification_confidence": 1.0,
             }
         except Exception as e:
             with get_connection() as conn:
@@ -154,15 +191,23 @@ class OcrService:
                 "classification_confidence": None,
             }
 
+    def get_extracted_details(self, subfolder: str) -> dict | None:
+        """Return structured extracted details (vehicle, customer) for a subfolder if Details sheet was processed."""
+        json_path = _json_output_path(self.ocr_output_dir, subfolder, "Details.jpg")
+        if not json_path.exists():
+            return None
+        try:
+            return json.loads(json_path.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+
     def list_extractions(self, limit: int = 200) -> list[dict]:
-        """List queue items (oldest first for display) with extracted text from flat files."""
+        """List queue items (oldest first) with extracted text from flat files."""
         with get_connection() as conn:
             AiReaderQueueRepository.ensure_table(conn)
             rows = AiReaderQueueRepository.list_all(conn, limit=limit)
 
-        # list_all returns newest first; reverse so oldest is first for "reader" view
         rows = list(reversed(rows))
-
         result = []
         for row in rows:
             r = dict(row)

@@ -1,6 +1,10 @@
 # AWS Textract for Details Sheet
 
-Use AWS Textract to extract text from the Sales Detail Sheet (or any document image) and compare with Tesseract output.
+The **AI Reader Queue** pipeline uses **AWS Textract in forms mode only** to scan the **Details sheet** (e.g. `Details.jpg`). Aadhar scans are not processed by this pipeline; separate Python code will handle Aadhar later.
+
+**Languages:** Textract supports **English, French, German, Italian, Portuguese, Spanish** only. **Hindi is not supported.**
+
+**Mode:** The pipeline uses **AnalyzeDocument** with **FORMS** and **TABLES** to extract key-value pairs and full text. Output is written to `backend/ocr_output/` and shown in the AI Reader Queue (extracted text and document type "Details sheet").
 
 ## Setup
 
@@ -20,7 +24,7 @@ The **backend** needs AWS credentials to call Textract. Add them to **`backend/.
 **Step A – Create an IAM user and keys (if you don’t have them):**
 
 1. Log in to **AWS Console** → **IAM** → **Users** → **Create user** (e.g. name: `textract-user`).
-2. Attach permission: **AmazonTextractFullAccess** (or a custom policy that allows `textract:DetectDocumentText`).
+2. Attach permission: **AmazonTextractFullAccess** (or a custom policy that allows `textract:AnalyzeDocument` and `textract:DetectDocumentText`).
 3. After the user is created: **Security credentials** → **Access keys** → **Create access key** → choose “Application running outside AWS” → create. Copy the **Access key ID** and **Secret access key** (you won’t see the secret again).
 
 **Step B – Put credentials in `backend/.env`:**
@@ -38,41 +42,30 @@ AWS_REGION=ap-south-1
 
 **Step C – Restart the backend**
 
-Stop the FastAPI/uvicorn process and start it again so it reloads `.env`. Then run “Choose file & run Textract” again from the client.
+Stop the FastAPI/uvicorn process and start it again so it reloads `.env`.
 
 **Alternative:** If you use AWS CLI and already ran `aws configure`, you can rely on the default profile instead of `.env` (boto3 will use `~/.aws/credentials`). For the app, the simplest is to add the two variables above to `backend/.env`.
+
+## Pipeline behavior
+
+- **Queue:** Uploaded files (Aadhar + Details) are added to the AI Reader Queue.
+- **Process:** “Process all” (or process-next) runs **Textract (forms)** only on queue items whose **filename contains "details"** (e.g. `Details.jpg`). Other files (e.g. `Aadhar.jpg`) remain queued; they are not processed by this pipeline.
+- **Output:** For each processed Details sheet, key-value pairs and full text are written to a `.txt` file under `backend/ocr_output/` and the queue row is updated with status `done` and document type `Details sheet`.
 
 ## API Endpoints
 
 ### POST `/textract/extract`
 
-Upload a document image (JPEG/PNG, max 5 MB). Returns:
+Upload a document image (JPEG/PNG, max 5 MB). Returns plain text extraction (DetectDocumentText). Useful for testing.
 
-- **full_text**: All detected lines concatenated with newlines.
-- **blocks**: List of blocks (BlockType, Text, Confidence) from Textract.
-- **raw_response**: Summary (e.g. BlockCount).
-- **error**: Set if something failed (e.g. missing credentials, file too large).
+### POST `/textract/extract-forms`
 
-**Example (curl):**
-```bash
-curl -X POST "http://127.0.0.1:8000/textract/extract" \
-  -F "file=@path/to/Details.jpg"
-```
+Upload a document image. Returns **full_text** and **key_value_pairs** (AnalyzeDocument with FORMS + TABLES). This is the same logic used by the AI Reader Queue pipeline for the Details sheet.
 
-**Example (Swagger):** Open `http://127.0.0.1:8000/docs`, find `POST /textract/extract`, choose a file, execute, and see the response.
+### GET `/textract/extract-from-queue?subfolder=...&filename=...&forms=true`
 
-### GET `/textract/extract-from-queue?subfolder=...&filename=...`
+Run Textract on a file already under "Uploaded scans". Use `forms=true` for forms/key-value output.
 
-Run Textract on a file already under "Uploaded scans". Useful to test on a queue file (e.g. a Details.jpg) without uploading again.
+## Aadhar
 
-**Example:**
-```text
-GET /textract/extract-from-queue?subfolder=9876543210_100325&filename=Details.jpg
-```
-
-## Comparing with Tesseract
-
-- **Tesseract**: Used by the AI Reader Queue pipeline; output is in `backend/ocr_output/` and in the queue’s extracted text.
-- **Textract**: Call the endpoints above to get `full_text` and `blocks` for the same image and compare readability and structure.
-
-If Textract gives better results, the pipeline can be extended to use Textract for specific document types (e.g. "Sales Detail Sheet" or "Details.jpg") instead of or in addition to Tesseract.
+Aadhar scans are not processed by the current pipeline. Separate Python code will be added later to handle Aadhar (e.g. with Tesseract + Hindi or another approach).
