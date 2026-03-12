@@ -365,6 +365,7 @@ export function AddSalesPage() {
                   onChange={handleQrDecode}
                   disabled={qrDecodeLoading}
                 />
+                <p className="add-sales-v2-qr-hint">Use an image under 2 MB (crop to the QR if needed).</p>
                 <button
                   type="button"
                   className="app-button app-button--small"

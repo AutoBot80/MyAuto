@@ -69,7 +69,7 @@ export const QR_FIELD_LABELS: Record<keyof QrDecodeFields, string> = {
   pin_code: "Pin Code",
 };
 
-const QR_DECODE_TIMEOUT_MS = 60_000;
+const QR_DECODE_TIMEOUT_MS = 35_000;  // Slightly longer than server timeout so user sees server message
 
 export async function decodeQrFromImage(file: File): Promise<QrDecodeResponse> {
   const form = new FormData();
@@ -82,11 +82,15 @@ export async function decodeQrFromImage(file: File): Promise<QrDecodeResponse> {
       body: form,
       signal: controller.signal,
     });
+    const text = await res.text();
     if (!res.ok) {
-      const text = await res.text();
       throw new Error(text || `QR decode failed (${res.status})`);
     }
-    return res.json() as Promise<QrDecodeResponse>;
+    try {
+      return JSON.parse(text) as QrDecodeResponse;
+    } catch {
+      throw new Error("Invalid response from server. Try again.");
+    }
   } catch (err) {
     if (err instanceof Error) {
       if (err.name === "AbortError") {

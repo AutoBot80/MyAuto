@@ -20,23 +20,25 @@ def _decode_image(image_bytes: bytes) -> np.ndarray | None:
 
 
 def _decode_qr_from_image(img: np.ndarray) -> list[str]:
-    """Detect and decode all QR codes in image. Returns list of decoded strings."""
+    """Detect and decode QR code(s) in image. Tries single-QR path first (faster, less prone to hang)."""
     detector = cv2.QRCodeDetector()
     decoded: list[str] = []
 
-    # Try multi first to get all QRs
-    ret, texts, _points, _ = detector.detectAndDecodeMulti(img)
-    if ret and texts is not None:
-        for t in texts:
-            if t and isinstance(t, str) and t.strip():
-                decoded.append(t.strip())
-    if decoded:
-        return decoded
-
-    # Single QR
+    # Try single QR first — faster and avoids known hangs with detectAndDecodeMulti on some images
     text, _, _ = detector.detectAndDecode(img)
     if text and isinstance(text, str) and text.strip():
         decoded.append(text.strip())
+        return decoded
+
+    # Fallback: multi (only if single found nothing)
+    try:
+        ret, texts, _points, _ = detector.detectAndDecodeMulti(img)
+        if ret and texts is not None:
+            for t in texts:
+                if t and isinstance(t, str) and t.strip():
+                    decoded.append(t.strip())
+    except Exception:
+        pass
     return decoded
 
 
