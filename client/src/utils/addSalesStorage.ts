@@ -4,6 +4,7 @@ const KEY = "addSalesForm";
 
 export interface AddSalesStored {
   mobile: string;
+  profession: string;
   savedTo: string | null;
   uploadedFiles: string[];
   uploadStatus: string;
@@ -15,15 +16,18 @@ export interface AddSalesStored {
     battery_no?: string;
   } | null;
   extractedCustomer: import("../types").ExtractedCustomerDetails | null;
+  extractedInsurance: { nominee_name?: string; nominee_age?: string; nominee_relationship?: string } | null;
 }
 
 const DEFAULT: AddSalesStored = {
   mobile: "",
+  profession: "",
   savedTo: null,
   uploadedFiles: [],
   uploadStatus: "",
   extractedVehicle: null,
   extractedCustomer: null,
+  extractedInsurance: null,
 };
 
 import type { ExtractedCustomerDetails } from "../types";
@@ -64,6 +68,7 @@ export function loadAddSalesForm(): AddSalesStored {
     const extractedCustomer = normalizeExtractedCustomer(cust);
     return {
       mobile: typeof parsed.mobile === "string" ? parsed.mobile : "",
+      profession: typeof parsed.profession === "string" ? parsed.profession : "",
       savedTo:
         parsed.savedTo === null || parsed.savedTo === undefined
           ? null
@@ -74,6 +79,10 @@ export function loadAddSalesForm(): AddSalesStored {
       uploadStatus: typeof parsed.uploadStatus === "string" ? parsed.uploadStatus : "",
       extractedVehicle: normalizeExtractedVehicle(parsed.extractedVehicle),
       extractedCustomer: extractedCustomer && hasAnyCustomerValue(extractedCustomer) ? extractedCustomer : null,
+      extractedInsurance:
+        parsed.extractedInsurance != null && typeof parsed.extractedInsurance === "object" && !Array.isArray(parsed.extractedInsurance)
+          ? (parsed.extractedInsurance as AddSalesStored["extractedInsurance"])
+          : null,
     };
   } catch {
     return { ...DEFAULT };

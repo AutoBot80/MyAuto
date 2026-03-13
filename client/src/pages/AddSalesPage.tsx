@@ -9,8 +9,8 @@ import { normalizeVehicleDetails, hasVehicleData } from "../utils/vehicleDetails
 
 const ADD_SALES_STEPS: { id: AddSalesStep; label: string; num: number }[] = [
   { id: "upload-scans", label: "Upload scans", num: 1 },
-  { id: "insurance", label: "Insurance", num: 2 },
-  { id: "hero-dms", label: "DMS", num: 3 },
+  { id: "hero-dms", label: "DMS", num: 2 },
+  { id: "insurance", label: "Insurance", num: 3 },
   { id: "rto", label: "RTO", num: 4 },
 ];
 

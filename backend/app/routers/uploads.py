@@ -19,7 +19,8 @@ async def upload_scans(
 async def upload_scans_v2(
     mobile: str = Form(...),
     aadhar_scan: UploadFile = File(...),
+    aadhar_back: UploadFile = File(...),
     sales_detail: UploadFile = File(...),
 ) -> dict:
-    """V2: subfolder = mobile_ddmmyy, files saved as Aadhar.jpg and Details.jpg."""
-    return await upload_service.save_and_queue_v2(mobile, aadhar_scan, sales_detail)
+    """Subfolder = mobile_ddmmyy; files saved as Aadhar.jpg, Aadhar_back.jpg, Details.jpg."""
+    return await upload_service.save_and_queue_v2(mobile, aadhar_scan, aadhar_back, sales_detail)

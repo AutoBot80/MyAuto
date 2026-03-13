@@ -12,12 +12,13 @@ interface UploadScansPanelProps {
   mobile?: string;
   /** 10-digit mobile valid */
   isMobileValid?: boolean;
-  /** Upload both scans to subfolder mobile_ddmmyy as Aadhar.jpg and Details.jpg */
-  onUploadV2?: (aadharScan: File, salesDetail: File) => Promise<void>;
+  /** Upload scans to subfolder mobile_ddmmyy as Aadhar.jpg, Aadhar_back.jpg, Details.jpg */
+  onUploadV2?: (aadharScan: File, aadharBackScan: File, salesDetail: File) => Promise<void>;
 }
 
 const SCAN_LABELS = [
   "Aadhar (front side)",
+  "Aadhar (back side)",
   "Sales Detail Sheet",
 ] as const;
 
@@ -33,14 +34,25 @@ export function UploadScansPanel({
   onUploadV2,
 }: UploadScansPanelProps) {
   const aadharInputRef = useRef<HTMLInputElement | null>(null);
+  const aadharBackInputRef = useRef<HTMLInputElement | null>(null);
   const salesInputRef = useRef<HTMLInputElement | null>(null);
   const [selectedAadharFile, setSelectedAadharFile] = useState<File | null>(null);
+  const [selectedAadharBackFile, setSelectedAadharBackFile] = useState<File | null>(null);
   const [selectedDetailsFile, setSelectedDetailsFile] = useState<File | null>(null);
+
+  const refs = [aadharInputRef, aadharBackInputRef, salesInputRef] as const;
+  const selectedFiles = [selectedAadharFile, selectedAadharBackFile, selectedDetailsFile] as const;
+  const setSelectedFiles = [
+    setSelectedAadharFile,
+    setSelectedAadharBackFile,
+    setSelectedDetailsFile,
+  ] as const;
 
   const canUploadV2 =
     onUploadV2 &&
     isMobileValid &&
     selectedAadharFile &&
+    selectedAadharBackFile &&
     selectedDetailsFile &&
     !isUploading;
 
@@ -53,16 +65,13 @@ export function UploadScansPanel({
             <div key={label} className="app-panel-row app-panel-scan-row">
               <label className="app-panel-scan-label">{label}</label>
               <input
-                ref={index === 0 ? aadharInputRef : salesInputRef}
+                ref={refs[index]}
                 type="file"
                 accept=".jpg,.jpeg,.png,.pdf,image/jpeg,image/png,application/pdf"
                 style={{ display: "none" }}
                 onChange={(e) => {
                   const file = e.target.files?.[0];
-                  if (file) {
-                    if (index === 0) setSelectedAadharFile(file);
-                    else setSelectedDetailsFile(file);
-                  }
+                  if (file) setSelectedFiles[index](file);
                   e.target.value = "";
                 }}
               />
@@ -70,15 +79,9 @@ export function UploadScansPanel({
                 type="button"
                 className="app-button"
                 disabled={isUploading}
-                onClick={() =>
-                  (index === 0 ? aadharInputRef : salesInputRef).current?.click()
-                }
+                onClick={() => refs[index].current?.click()}
               >
-                {index === 0 && selectedAadharFile
-                  ? selectedAadharFile.name
-                  : index === 1 && selectedDetailsFile
-                    ? selectedDetailsFile.name
-                    : "Choose file"}
+                {selectedFiles[index] ? selectedFiles[index].name : "Choose file"}
               </button>
             </div>
           ))}
@@ -89,8 +92,8 @@ export function UploadScansPanel({
                 className="app-button app-button--primary"
                 disabled={!canUploadV2}
                 onClick={() => {
-                  if (selectedAadharFile && selectedDetailsFile)
-                    onUploadV2(selectedAadharFile, selectedDetailsFile);
+                  if (selectedAadharFile && selectedAadharBackFile && selectedDetailsFile)
+                    onUploadV2(selectedAadharFile, selectedAadharBackFile, selectedDetailsFile);
                 }}
               >
                 {isUploading ? "Uploading..." : "Upload both"}

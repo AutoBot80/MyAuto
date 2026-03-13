@@ -84,9 +84,13 @@ class UploadService:
         }
 
     async def save_and_queue_v2(
-        self, mobile: str, aadhar_scan: UploadFile, sales_detail: UploadFile
+        self,
+        mobile: str,
+        aadhar_scan: UploadFile,
+        aadhar_back: UploadFile,
+        sales_detail: UploadFile,
     ) -> dict:
-        """V2: subfolder = mobile_ddmmyy, save as Aadhar.jpg and Details.jpg."""
+        """Subfolder = mobile_ddmmyy; save as Aadhar.jpg, Aadhar_back.jpg, Details.jpg."""
         ok, err = self.validate_mobile(mobile)
         if not ok:
             return {"error": err}
@@ -102,6 +106,7 @@ class UploadService:
             AiReaderQueueRepository.ensure_table(conn)
             for role, save_name in (
                 (aadhar_scan, "Aadhar.jpg"),
+                (aadhar_back, "Aadhar_back.jpg"),
                 (sales_detail, "Details.jpg"),
             ):
                 content = await role.read()
