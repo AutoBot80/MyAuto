@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Dummy Vahan – Payment</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: Arial, sans-serif; margin: 0; padding: 2rem; font-size: 14px; max-width: 480px; margin-left: auto; margin-right: auto; }
+    .top-nav { background: #063; color: #fff; padding: 0.4rem 1rem; margin: -2rem -2rem 2rem -2rem; }
+    .top-nav a { color: #fff; text-decoration: none; }
+    .card { border: 1px solid #ccc; border-radius: 6px; padding: 1.5rem; background: #fafafa; }
+    .card h2 { margin: 0 0 1rem 0; font-size: 16px; color: #063; }
+    .amount { font-size: 20px; font-weight: 600; margin: 0.5rem 0; }
+    .btn { display: inline-block; margin-top: 1rem; padding: 0.6rem 1.2rem; background: #063; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; text-decoration: none; }
+    .btn:hover { background: #052; }
+    .back { margin-top: 1rem; }
+  </style>
+</head>
+<body>
+  <nav class="top-nav" role="navigation">
+    <a href="application.html">← Back to Application</a>
+  </nav>
+
+  <div class="card">
+    <h2>Dummy Payment</h2>
+    <p>Total amount payable:</p>
+    <p class="amount" id="vahan-payment-amount">₹6,500</p>
+    <p style="font-size: 12px; color: #666;">(Tax + Registration + Smart card – dummy total)</p>
+    <button type="button" id="vahan-pay-now" class="btn">Pay Now (dummy)</button>
+    <p id="vahan-payment-status" style="margin-top: 1rem; font-weight: 600; display: none;"></p>
+  </div>
+
+  <div class="back">
+    <a href="application.html" id="vahan-back-to-application">Back to Application</a>
+  </div>
+
+  <script>
+    document.getElementById('vahan-pay-now').addEventListener('click', function() {
+      var el = document.getElementById('vahan-payment-status');
+      el.style.display = 'block';
+      el.textContent = 'Payment successful (dummy).';
+      el.style.color = '#063';
+    });
+  </script>
+</body>
+</html>

@@ -54,12 +54,22 @@ function App() {
 
   const dmsUrl = getValidDmsUrl(dmsLink);
   const dmsWindowRef = useRef<Window | null>(null);
+  const vahanUrl = `${getBaseUrl().replace(/\/$/, "")}/dummy-vaahan/`;
+  const vahanWindowRef = useRef<Window | null>(null);
 
   const openDmsInNewTab = () => {
     if (dmsWindowRef.current && !dmsWindowRef.current.closed) {
       dmsWindowRef.current.focus();
     } else {
       dmsWindowRef.current = window.open(dmsUrl, "_blank");
+    }
+  };
+
+  const openVahanInNewTab = () => {
+    if (vahanWindowRef.current && !vahanWindowRef.current.closed) {
+      vahanWindowRef.current.focus();
+    } else {
+      vahanWindowRef.current = window.open(vahanUrl, "_blank");
     }
   };
 
@@ -71,6 +81,7 @@ function App() {
             dealerId={DEALER_ID}
             dmsUrl={dmsUrl}
             openDmsInNewTab={openDmsInNewTab}
+            openVahanInNewTab={openVahanInNewTab}
           />
         );
       case "customer-details":

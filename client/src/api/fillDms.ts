@@ -38,10 +38,20 @@ export interface FillDmsResponse {
   error?: string | null;
 }
 
+const FILL_DMS_TIMEOUT_MS = 120000; // 2 min – Playwright opens browser, login, fill, search, download PDFs
+
 export async function fillDms(req: FillDmsRequest): Promise<FillDmsResponse> {
-  return apiFetch<FillDmsResponse>("/fill-dms", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(req),
-  });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), FILL_DMS_TIMEOUT_MS);
+  try {
+    const res = await apiFetch<FillDmsResponse>("/fill-dms", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(req),
+      signal: controller.signal,
+    });
+    return res;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }

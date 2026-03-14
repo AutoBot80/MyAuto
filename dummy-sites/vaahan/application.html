@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Dummy Vahan – Application for Registration</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: Arial, sans-serif; margin: 0; padding: 0; font-size: 12px; }
+    .top-nav { background: #063; color: #fff; padding: 0.4rem 1rem; }
+    .top-nav a { color: #fff; text-decoration: none; }
+    .main { max-width: 720px; margin: 0 auto; padding: 1rem; }
+    .section { border: 1px solid #ccc; border-radius: 4px; padding: 0.75rem 1rem; background: #fafafa; margin-bottom: 1rem; }
+    .section h2 { margin: 0 0 0.5rem 0; font-size: 14px; color: #063; }
+    .form-row { display: grid; grid-template-columns: 160px 1fr; gap: 0.5rem; align-items: center; margin-bottom: 0.35rem; }
+    .form-row label { margin: 0; }
+    .form-row input, .form-row select { padding: 0.25rem 0.4rem; max-width: 280px; }
+    .form-row.full { grid-template-columns: 1fr; }
+    .form-row.full input { max-width: 400px; }
+    .doc-list { list-style: none; margin: 0.25rem 0 0 0; padding: 0; font-size: 11px; color: #555; }
+    .doc-list li { margin-bottom: 0.2rem; }
+    .doc-upload-row { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; flex-wrap: wrap; }
+    .doc-upload-row label { min-width: 140px; }
+    .doc-upload-row .doc-upload-btn { padding: 0.35rem 0.75rem; background: #063; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; }
+    .doc-upload-row .doc-upload-btn:hover { background: #052; }
+    .doc-upload-row .doc-filename { font-size: 11px; color: #666; }
+    .doc-no-upload { font-size: 11px; color: #888; margin-bottom: 0.35rem; }
+    .vahan-submit-btn { margin-top: 1rem; padding: 0.6rem 1.2rem; background: #063; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 13px; font-weight: 600; }
+    .vahan-submit-btn:hover { background: #052; }
+    .payment-link { display: inline-block; margin-top: 1rem; padding: 0.6rem 1.2rem; background: #063; color: #fff; text-decoration: none; border-radius: 4px; font-weight: 600; }
+    .payment-link:hover { background: #052; }
+  </style>
+</head>
+<body>
+  <nav class="top-nav" role="navigation">
+    <a href="index.html">Vahan</a> | <a href="application.html" class="active">New Application</a>
+  </nav>
+
+  <div class="main">
+    <h1 style="font-size: 16px; margin-bottom: 1rem;">Application for Vehicle Registration</h1>
+
+    <!-- 1. Vehicle Details (entered by dealer) -->
+    <div class="section">
+      <h2>1. Vehicle Details (from OEM dispatch / invoice)</h2>
+      <div class="form-row">
+        <label for="vahan-vehicle-class">Vehicle class</label>
+        <input type="text" id="vahan-vehicle-class" value="Motorcycle" placeholder="e.g. Motorcycle" />
+      </div>
+      <div class="form-row">
+        <label for="vahan-maker">Maker</label>
+        <input type="text" id="vahan-maker" value="HERO" placeholder="e.g. HERO" />
+      </div>
+      <div class="form-row">
+        <label for="vahan-model">Model</label>
+        <input type="text" id="vahan-model" value="SPLENDOR PLUS" placeholder="e.g. SPLENDOR PLUS" />
+      </div>
+      <div class="form-row">
+        <label for="vahan-variant">Variant</label>
+        <input type="text" id="vahan-variant" value="Self / Alloy" placeholder="e.g. Self / Alloy" />
+      </div>
+      <div class="form-row">
+        <label for="vahan-fuel-type">Fuel type</label>
+        <select id="vahan-fuel-type"><option value="Petrol">Petrol</option><option value="Diesel">Diesel</option><option value="Electric">Electric</option></select>
+      </div>
+      <div class="form-row">
+        <label for="vahan-colour">Colour</label>
+        <input type="text" id="vahan-colour" value="Black" placeholder="e.g. Black" />
+      </div>
+      <div class="form-row">
+        <label for="vahan-chassis-number">Chassis number</label>
+        <input type="text" id="vahan-chassis-number" value="MBLXXXXXXXXXXXX" placeholder="e.g. MBLXXXXXXXXXXXX" maxlength="20" />
+      </div>
+      <div class="form-row">
+        <label for="vahan-engine-number">Engine number</label>
+        <input type="text" id="vahan-engine-number" value="HA10XXXXXXXX" placeholder="e.g. HA10XXXXXXXX" maxlength="20" />
+      </div>
+      <div class="form-row">
+        <label for="vahan-month-year-mfg">Month/year of manufacture</label>
+        <input type="text" id="vahan-month-year-mfg" value="03/2026" placeholder="MM/YYYY" />
+      </div>
+      <div class="form-row">
+        <label for="vahan-seating-capacity">Seating capacity</label>
+        <input type="number" id="vahan-seating-capacity" value="2" min="1" />
+      </div>
+      <div class="form-row">
+        <label for="vahan-cubic-capacity">Cubic capacity</label>
+        <input type="text" id="vahan-cubic-capacity" value="97.2 cc" placeholder="e.g. 97.2 cc" />
+      </div>
+      <div class="form-row">
+        <label for="vahan-unladen-weight">Unladen weight</label>
+        <input type="text" id="vahan-unladen-weight" value="~112 kg" placeholder="e.g. ~112 kg" />
+      </div>
+    </div>
+
+    <!-- 2. Owner Details -->
+    <div class="section">
+      <h2>2. Owner Details (customer data)</h2>
+      <div class="form-row">
+        <label for="vahan-owner-name">Owner name</label>
+        <input type="text" id="vahan-owner-name" value="Ravi Kumar" placeholder="e.g. Ravi Kumar" />
+      </div>
+      <div class="form-row">
+        <label for="vahan-father-husband-name">Father/Husband name</label>
+        <input type="text" id="vahan-father-husband-name" value="Rajesh Kumar" placeholder="e.g. Rajesh Kumar" />
+      </div>
+      <div class="form-row">
+        <label for="vahan-owner-type">Owner type</label>
+        <select id="vahan-owner-type"><option value="Individual">Individual</option><option value="Company">Company</option></select>
+      </div>
+      <div class="form-row">
+        <label for="vahan-dob">Date of birth</label>
+        <input type="text" id="vahan-dob" value="15-03-1995" placeholder="DD-MM-YYYY" />
+      </div>
+      <div class="form-row">
+        <label for="vahan-gender">Gender</label>
+        <select id="vahan-gender"><option value="Male">Male</option><option value="Female">Female</option><option value="Other">Other</option></select>
+      </div>
+      <div class="form-row">
+        <label for="vahan-mobile">Mobile number</label>
+        <input type="text" id="vahan-mobile" value="9876543210" placeholder="10 digits" maxlength="10" />
+      </div>
+      <div class="form-row">
+        <label for="vahan-email">Email</label>
+        <input type="text" id="vahan-email" placeholder="optional" />
+      </div>
+    </div>
+
+    <!-- 3. Address Details -->
+    <div class="section">
+      <h2>3. Address Details</h2>
+      <div class="form-row">
+        <label for="vahan-house-flat">House / flat number</label>
+        <input type="text" id="vahan-house-flat" value="45" placeholder="e.g. 45" />
+      </div>
+      <div class="form-row">
+        <label for="vahan-street-locality">Street / locality</label>
+        <input type="text" id="vahan-street-locality" value="Sector 14" placeholder="e.g. Sector 14" />
+      </div>
+      <div class="form-row">
+        <label for="vahan-village-town">Village / town</label>
+        <input type="text" id="vahan-village-town" value="Gurgaon" placeholder="e.g. Gurgaon" />
+      </div>
+      <div class="form-row">
+        <label for="vahan-district">District</label>
+        <input type="text" id="vahan-district" value="Gurugram" placeholder="e.g. Gurugram" />
+      </div>
+      <div class="form-row">
+        <label for="vahan-state">State</label>
+        <input type="text" id="vahan-state" value="Haryana" placeholder="e.g. Haryana" />
+      </div>
+      <div class="form-row">
+        <label for="vahan-pincode">Pincode</label>
+        <input type="text" id="vahan-pincode" value="122001" placeholder="e.g. 122001" maxlength="6" />
+      </div>
+    </div>
+
+    <!-- 4. Dealer / Invoice Details -->
+    <div class="section">
+      <h2>4. Dealer / Invoice Details</h2>
+      <div class="form-row">
+        <label for="vahan-dealer-code">Dealer code</label>
+        <input type="text" id="vahan-dealer-code" value="HR-HERO-045" placeholder="e.g. HR-HERO-045" />
+      </div>
+      <div class="form-row">
+        <label for="vahan-invoice-number">Invoice number</label>
+        <input type="text" id="vahan-invoice-number" value="INV-2026-234" placeholder="e.g. INV-2026-234" />
+      </div>
+      <div class="form-row">
+        <label for="vahan-invoice-date">Invoice date</label>
+        <input type="text" id="vahan-invoice-date" value="14-03-2026" placeholder="DD-MM-YYYY" />
+      </div>
+      <div class="form-row">
+        <label for="vahan-ex-showroom-price">Ex-showroom price</label>
+        <input type="text" id="vahan-ex-showroom-price" value="₹72,000" placeholder="e.g. ₹72,000" />
+      </div>
+      <div class="form-row">
+        <label for="vahan-gst-amount">GST amount</label>
+        <input type="text" id="vahan-gst-amount" value="included" placeholder="e.g. included" />
+      </div>
+      <div class="form-row">
+        <label for="vahan-sale-type">Sale type</label>
+        <select id="vahan-sale-type"><option value="Retail">Retail</option><option value="Wholesale">Wholesale</option></select>
+      </div>
+    </div>
+
+    <!-- 5. Insurance Details -->
+    <div class="section">
+      <h2>5. Insurance Details</h2>
+      <div class="form-row">
+        <label for="vahan-insurance-company">Insurance company</label>
+        <input type="text" id="vahan-insurance-company" value="ICICI Lombard" placeholder="e.g. ICICI Lombard" />
+      </div>
+      <div class="form-row">
+        <label for="vahan-policy-number">Policy number</label>
+        <input type="text" id="vahan-policy-number" value="3005XXXXXX" placeholder="e.g. 3005XXXXXX" />
+      </div>
+      <div class="form-row">
+        <label for="vahan-policy-start-date">Policy start date</label>
+        <input type="text" id="vahan-policy-start-date" value="14-03-2026" placeholder="DD-MM-YYYY" />
+      </div>
+      <div class="form-row">
+        <label for="vahan-policy-expiry-date">Policy expiry date</label>
+        <input type="text" id="vahan-policy-expiry-date" value="13-03-2031" placeholder="DD-MM-YYYY" />
+      </div>
+      <div class="form-row">
+        <label for="vahan-policy-type">Policy type</label>
+        <select id="vahan-policy-type"><option value="Comprehensive">Comprehensive</option><option value="Third Party">Third Party</option></select>
+      </div>
+    </div>
+
+    <!-- 6. Finance / Hypothecation -->
+    <div class="section">
+      <h2>6. Finance / Hypothecation (if loan)</h2>
+      <div class="form-row">
+        <label for="vahan-hypothecation">Hypothecation</label>
+        <select id="vahan-hypothecation"><option value="Yes">Yes</option><option value="No">No</option></select>
+      </div>
+      <div class="form-row">
+        <label for="vahan-financier-name">Financier name</label>
+        <input type="text" id="vahan-financier-name" value="HDFC Bank" placeholder="e.g. HDFC Bank" />
+      </div>
+      <div class="form-row">
+        <label for="vahan-branch">Branch</label>
+        <input type="text" id="vahan-branch" value="Gurgaon" placeholder="e.g. Gurgaon" />
+      </div>
+      <div class="form-row">
+        <label for="vahan-loan-agreement-number">Loan agreement number</label>
+        <input type="text" id="vahan-loan-agreement-number" value="HDFC12345" placeholder="e.g. HDFC12345" />
+      </div>
+    </div>
+
+    <!-- 7. Tax Calculation -->
+    <div class="section">
+      <h2>7. Tax Calculation</h2>
+      <p style="margin: 0 0 0.5rem 0; font-size: 11px; color: #555;">VAHAN calculates road tax automatically.</p>
+      <div class="form-row">
+        <label for="vahan-tax-mode">Tax mode</label>
+        <select id="vahan-tax-mode"><option value="Lifetime">Lifetime</option><option value="Annual">Annual</option></select>
+      </div>
+      <div class="form-row">
+        <label for="vahan-tax-amount">Tax amount</label>
+        <input type="text" id="vahan-tax-amount" value="₹6000" placeholder="e.g. ₹6000" />
+      </div>
+      <div class="form-row">
+        <label for="vahan-registration-fee">Registration fee</label>
+        <input type="text" id="vahan-registration-fee" value="₹300" placeholder="e.g. ₹300" />
+      </div>
+      <div class="form-row">
+        <label for="vahan-smart-card-fee">Smart card fee</label>
+        <input type="text" id="vahan-smart-card-fee" value="₹200" placeholder="e.g. ₹200" />
+      </div>
+    </div>
+
+    <!-- 8. Documents Uploaded -->
+    <div class="section">
+      <h2>8. Documents Uploaded (DMS)</h2>
+      <p style="margin: 0 0 0.5rem 0; font-size: 11px;">Locate and upload scans where applicable. Form 20 and Insurance – not available for upload here.</p>
+
+      <p class="doc-no-upload"><strong>Form 20</strong> – Application for registration (dealer generated) – no upload</p>
+
+      <div class="doc-upload-row">
+        <label for="vahan-doc-form21">Form 21 – Sale certificate</label>
+        <input type="file" id="vahan-doc-form21" accept=".pdf,.jpg,.jpeg,.png" style="display: none;" />
+        <button type="button" id="vahan-upload-form21" class="doc-upload-btn">Locate and upload</button>
+        <span id="vahan-filename-form21" class="doc-filename"></span>
+      </div>
+
+      <div class="doc-upload-row">
+        <label for="vahan-doc-form22">Form 22 – Roadworthiness</label>
+        <input type="file" id="vahan-doc-form22" accept=".pdf,.jpg,.jpeg,.png" style="display: none;" />
+        <button type="button" id="vahan-upload-form22" class="doc-upload-btn">Locate and upload</button>
+        <span id="vahan-filename-form22" class="doc-filename"></span>
+      </div>
+
+      <p class="doc-no-upload"><strong>Insurance certificate</strong> – insurer – no upload</p>
+
+      <div class="doc-upload-row">
+        <label for="vahan-doc-id-proof">Customer ID proof (Aadhaar / PAN)</label>
+        <input type="file" id="vahan-doc-id-proof" accept=".pdf,.jpg,.jpeg,.png" style="display: none;" />
+        <button type="button" id="vahan-upload-id-proof" class="doc-upload-btn">Locate and upload</button>
+        <span id="vahan-filename-id-proof" class="doc-filename"></span>
+      </div>
+
+      <div class="doc-upload-row">
+        <label for="vahan-doc-address-proof">Address proof</label>
+        <input type="file" id="vahan-doc-address-proof" accept=".pdf,.jpg,.jpeg,.png" style="display: none;" />
+        <button type="button" id="vahan-upload-address-proof" class="doc-upload-btn">Locate and upload</button>
+        <span id="vahan-filename-address-proof" class="doc-filename"></span>
+      </div>
+
+      <button type="button" id="vahan-submit-information" class="vahan-submit-btn">Submit information</button>
+    </div>
+
+    <!-- Payment link -->
+    <div class="section">
+      <a href="payment.html" id="vahan-payment-link" class="payment-link">Proceed to Payment</a>
+    </div>
+  </div>
+
+  <script>
+    (function() {
+      var pairs = [
+        { input: 'vahan-doc-form21', btn: 'vahan-upload-form21', name: 'vahan-filename-form21' },
+        { input: 'vahan-doc-form22', btn: 'vahan-upload-form22', name: 'vahan-filename-form22' },
+        { input: 'vahan-doc-id-proof', btn: 'vahan-upload-id-proof', name: 'vahan-filename-id-proof' },
+        { input: 'vahan-doc-address-proof', btn: 'vahan-upload-address-proof', name: 'vahan-filename-address-proof' }
+      ];
+      pairs.forEach(function(p) {
+        var inp = document.getElementById(p.input);
+        var btn = document.getElementById(p.btn);
+        var nameEl = document.getElementById(p.name);
+        if (btn && inp && nameEl) {
+          btn.addEventListener('click', function() { inp.click(); });
+          inp.addEventListener('change', function() {
+            nameEl.textContent = inp.files && inp.files[0] ? inp.files[0].name : '';
+          });
+        }
+      });
+      var submitBtn = document.getElementById('vahan-submit-information');
+      if (submitBtn) {
+        submitBtn.addEventListener('click', function() {
+          alert('Dummy Vahan: Submit information (no backend). Use for Playwright testing.');
+        });
+      }
+    })();
+  </script>
+</body>
+</html>

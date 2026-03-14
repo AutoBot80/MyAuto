@@ -55,9 +55,11 @@ interface AddSalesPageProps {
   dmsUrl?: string;
   /** When provided, clicking DMS in the left nav opens the DMS URL in a new browser tab. */
   openDmsInNewTab?: () => void;
+  /** When provided, clicking RTO in the left nav opens the Vahan (RTO) URL in a new browser tab. */
+  openVahanInNewTab?: () => void;
 }
 
-export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab }: AddSalesPageProps) {
+export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNewTab }: AddSalesPageProps) {
   const [mobile, setMobile] = useState(() => getInitialForm().mobile);
   const [savedTo, setSavedTo] = useState<string | null>(() => getInitialForm().savedTo);
   const [uploadedFiles, setUploadedFiles] = useState<string[]>(() => getInitialForm().uploadedFiles);
@@ -354,8 +356,8 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab }: AddSalesPage
               type="button"
               className={`add-sales-v2-nav-item ${addSalesStep === id ? "active" : ""}`}
               onClick={() => {
-                if (id === "hero-dms") {
-                  openDmsInNewTab?.();
+                if (id === "rto") {
+                  openVahanInNewTab?.();
                   setAddSalesStep(id);
                 } else {
                   setAddSalesStep(id);

@@ -33,8 +33,11 @@ app.add_middleware(
 # Dummy sites for Playwright automation (DMS / Vaahan); serve from project root
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _DUMMY_DMS = _PROJECT_ROOT / "dummy-sites" / "dms"
+_DUMMY_VAHAN = _PROJECT_ROOT / "dummy-sites" / "vaahan"
 if _DUMMY_DMS.is_dir():
     app.mount("/dummy-dms", StaticFiles(directory=str(_DUMMY_DMS), html=True), name="dummy-dms")
+if _DUMMY_VAHAN.is_dir():
+    app.mount("/dummy-vaahan", StaticFiles(directory=str(_DUMMY_VAHAN), html=True), name="dummy-vaahan")
 
 app.include_router(health_router)
 app.include_router(uploads_router)

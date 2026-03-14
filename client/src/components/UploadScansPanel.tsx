@@ -121,10 +121,24 @@ export function UploadScansPanel({
             </div>
           ) : null}
         </section>
+      ) : addSalesStep === "rto" ? (
+        <section className="app-panel app-panel-dms-step">
+          <div className="app-panel-title">RTO (Vahan)</div>
+          <p className="app-panel-dms-text">Vahan has been opened in a new browser tab. Use the button below to fill RTO details from extracted information.</p>
+          <div className="app-panel-row app-panel-actions">
+            <button
+              type="button"
+              className="app-button app-button--primary"
+              onClick={() => {}}
+            >
+              Fill RTO Details
+            </button>
+          </div>
+        </section>
       ) : addSalesStep === "hero-dms" ? (
         <section className="app-panel app-panel-dms-step">
           <div className="app-panel-title">DMS</div>
-          <p className="app-panel-dms-text">DMS has been opened in a new browser tab. Use the button below to fill the form from extracted information.</p>
+          <p className="app-panel-dms-text">Press the button below to open the DMS in a browser and fill login, customer details, and vehicle search from extracted information.</p>
           <div className="app-panel-row app-panel-actions">
             <button
               type="button"

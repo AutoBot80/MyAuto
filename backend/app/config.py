@@ -42,4 +42,6 @@ AWS_REGION = os.getenv("AWS_REGION", "ap-south-1")
 DMS_BASE_URL = os.getenv("DMS_BASE_URL", "").rstrip("/")  # e.g. http://127.0.0.1:8000/dummy-dms
 DMS_LOGIN_USER = os.getenv("DMS_LOGIN_USER", "demo")
 DMS_LOGIN_PASSWORD = os.getenv("DMS_LOGIN_PASSWORD", "demo")
+# Run browser visible (headed) so user sees DMS page and automation. Set to "false" for headless.
+DMS_PLAYWRIGHT_HEADED = os.getenv("DMS_PLAYWRIGHT_HEADED", "true").lower() in ("1", "true", "yes")
 
