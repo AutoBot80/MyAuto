@@ -1,6 +1,18 @@
 import { useRef, useState } from "react";
 import type { AddSalesStep } from "../types";
 
+/** Vehicle details scraped from DMS (or already in extracted info) to show on DMS page */
+export interface DmsVehicleDisplay {
+  key_no?: string;
+  frame_no?: string;
+  engine_no?: string;
+  model?: string;
+  color?: string;
+  cubic_capacity?: string;
+  total_amount?: string;
+  year_of_mfg?: string;
+}
+
 interface UploadScansPanelProps {
   addSalesStep: AddSalesStep;
   onStepChange: (step: AddSalesStep) => void;
@@ -18,6 +30,8 @@ interface UploadScansPanelProps {
   onFillDms?: () => void;
   fillDmsStatus?: string | null;
   isFillDmsLoading?: boolean;
+  /** Vehicle details to show on DMS step (from Fill DMS or existing extracted info). */
+  dmsVehicleDetails?: DmsVehicleDisplay | null;
 }
 
 const SCAN_LABELS = [
@@ -39,7 +53,10 @@ export function UploadScansPanel({
   onFillDms,
   fillDmsStatus,
   isFillDmsLoading,
+  dmsVehicleDetails,
 }: UploadScansPanelProps) {
+  const d = dmsVehicleDetails;
+  const hasDmsVehicle = d && (d.key_no ?? d.frame_no ?? d.engine_no ?? d.model ?? d.color ?? d.cubic_capacity ?? d.total_amount ?? d.year_of_mfg);
   const aadharInputRef = useRef<HTMLInputElement | null>(null);
   const aadharBackInputRef = useRef<HTMLInputElement | null>(null);
   const salesInputRef = useRef<HTMLInputElement | null>(null);
@@ -151,6 +168,21 @@ export function UploadScansPanel({
           </div>
           {fillDmsStatus && (
             <div className="app-panel-status" role="status">{fillDmsStatus}</div>
+          )}
+          {hasDmsVehicle && (
+            <div className="app-panel-dms-vehicle">
+              <div className="app-panel-dms-vehicle-title">Details from DMS</div>
+              <dl className="app-panel-dms-vehicle-dl">
+                {d?.key_no != null && d.key_no !== "" && <><dt>Key no.</dt><dd>{d.key_no}</dd></>}
+                {d?.frame_no != null && d.frame_no !== "" && <><dt>Frame no.</dt><dd>{d.frame_no}</dd></>}
+                {d?.engine_no != null && d.engine_no !== "" && <><dt>Engine no.</dt><dd>{d.engine_no}</dd></>}
+                {d?.model != null && d.model !== "" && <><dt>Model</dt><dd>{d.model}</dd></>}
+                {d?.color != null && d.color !== "" && <><dt>Color</dt><dd>{d.color}</dd></>}
+                {d?.cubic_capacity != null && d.cubic_capacity !== "" && <><dt>Cubic capacity</dt><dd>{d.cubic_capacity}</dd></>}
+                {d?.total_amount != null && d.total_amount !== "" && <><dt>Total amount</dt><dd>{d.total_amount}</dd></>}
+                {d?.year_of_mfg != null && d.year_of_mfg !== "" && <><dt>Year of Mfg</dt><dd>{d.year_of_mfg}</dd></>}
+              </dl>
+            </div>
           )}
         </section>
       ) : (

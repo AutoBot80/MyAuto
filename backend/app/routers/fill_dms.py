@@ -5,7 +5,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from app.config import UPLOADS_DIR, DMS_BASE_URL, DMS_LOGIN_USER, DMS_LOGIN_PASSWORD
+from app.config import UPLOADS_DIR, OCR_OUTPUT_DIR, DMS_BASE_URL, DMS_LOGIN_USER, DMS_LOGIN_PASSWORD
 from app.services.fill_dms_service import run_fill_dms
 
 router = APIRouter(prefix="/fill-dms", tags=["fill-dms"])
@@ -65,6 +65,7 @@ async def fill_dms(req: FillDmsRequest) -> FillDmsResponse:
             login_user=DMS_LOGIN_USER,
             login_password=DMS_LOGIN_PASSWORD,
             uploads_dir=uploads_dir,
+            ocr_output_dir=Path(OCR_OUTPUT_DIR).resolve(),
         ),
     )
     return FillDmsResponse(

@@ -81,39 +81,46 @@
       var resultsBody = document.getElementById('dms-vehicle-results-body');
       var resultsEmpty = document.getElementById('dms-vehicle-results-empty');
 
-      // Dummy match: one sample row (8-digit key, 12-char frame, 12-char engine, model, color, cc, amount, year)
-      var sampleRow = {
-        key_num: '12345678',
-        frame_chassis_num: 'MB1HJ1234567',
-        engine_num: 'HJ1234567890',
-        model: 'Splendor Plus',
-        color: 'Black',
-        cubic_capacity: '97.2',
-        total_amount: '72500',
-        year_of_mfg: '2024'
-      };
+      // Build key: 10-digit integer including the digits provided (pad left with zeros)
+      function toKey10(val) {
+        var digits = (val || '').replace(/\D/g, '').slice(-10);
+        return digits.padStart(10, '0');
+      }
+      // Build 12-char string: provided value + pad right with 'X' to 12 chars
+      function to12Chars(val) {
+        var s = (val || '').trim().slice(0, 12);
+        return (s + 'XXXXXXXXXXXX').slice(0, 12);
+      }
 
       function runSearch() {
-        var key = (document.getElementById('dms-vehicle-key').value || '').trim();
-        var frame = (document.getElementById('dms-vehicle-frame').value || '').trim();
-        var engine = (document.getElementById('dms-vehicle-engine').value || '').trim();
+        var keyInput = (document.getElementById('dms-vehicle-key').value || '').trim();
+        var frameInput = (document.getElementById('dms-vehicle-frame').value || '').trim();
+        var engineInput = (document.getElementById('dms-vehicle-engine').value || '').trim();
 
         resultsDiv.style.display = 'block';
         resultsBody.innerHTML = '';
         resultsEmpty.style.display = 'none';
 
-        // Dummy: show sample row if any search field has input
-        if (key || frame || engine) {
+        if (keyInput || frameInput || engineInput) {
+          var key_num = toKey10(keyInput);
+          var frame_chassis_num = to12Chars(frameInput);
+          var engine_num = to12Chars(engineInput);
+          var cubic_capacity = '100';
+          var model = 'Splendor Plus';
+          var color = 'Black';
+          var total_amount = '72500';
+          var year_of_mfg = '2024';
+
           var tr = document.createElement('tr');
           tr.innerHTML =
-            '<td>' + sampleRow.key_num + '</td>' +
-            '<td>' + sampleRow.frame_chassis_num + '</td>' +
-            '<td>' + sampleRow.engine_num + '</td>' +
-            '<td>' + sampleRow.model + '</td>' +
-            '<td>' + sampleRow.color + '</td>' +
-            '<td>' + sampleRow.cubic_capacity + '</td>' +
-            '<td>' + sampleRow.total_amount + '</td>' +
-            '<td>' + sampleRow.year_of_mfg + '</td>';
+            '<td>' + key_num + '</td>' +
+            '<td>' + frame_chassis_num + '</td>' +
+            '<td>' + engine_num + '</td>' +
+            '<td>' + model + '</td>' +
+            '<td>' + color + '</td>' +
+            '<td>' + cubic_capacity + '</td>' +
+            '<td>' + total_amount + '</td>' +
+            '<td>' + year_of_mfg + '</td>';
           resultsBody.appendChild(tr);
         } else {
           resultsEmpty.style.display = 'block';

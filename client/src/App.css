@@ -535,6 +535,39 @@
   color: #555;
 }
 
+.app-panel-dms-vehicle {
+  margin-top: 14px;
+  padding: 10px 12px;
+  background: #f0f7f0;
+  border: 1px solid #c8e0c8;
+  border-radius: 6px;
+}
+
+.app-panel-dms-vehicle-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #1a4d1a;
+  margin: 0 0 8px 0;
+}
+
+.app-panel-dms-vehicle-dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 12px;
+  margin: 0;
+  font-size: 12px;
+}
+
+.app-panel-dms-vehicle-dl dt {
+  font-weight: 600;
+  color: #333;
+}
+
+.app-panel-dms-vehicle-dl dd {
+  margin: 0;
+  color: #222;
+}
+
 .app-field-row {
   display: flex;
   align-items: flex-end;

@@ -9,18 +9,29 @@ from app.db import get_connection
 from app.repositories.ai_reader_queue import AiReaderQueueRepository
 
 
+def _safe_subfolder_name(subfolder: str) -> str:
+    """Safe directory name under ocr_output (one segment, no path separators)."""
+    return re.sub(r"[^\w\-]", "_", (subfolder or "").strip()) or "default"
+
+
 def _safe_output_basename(subfolder: str, filename: str) -> str:
     """Build a safe filename for output: subfolder_filename.txt (no path chars)."""
-    safe_sub = re.sub(r"[^\w\-]", "_", subfolder)
+    safe_sub = _safe_subfolder_name(subfolder)
     safe_name = Path(filename).stem
     safe_name = re.sub(r"[^\w\-.]", "_", safe_name)
     return f"{safe_sub}_{safe_name}.txt"
 
 
+def _ocr_subfolder_path(output_dir: Path, subfolder: str) -> Path:
+    """Path to per-customer subfolder under ocr_output: ocr_output/mobile_ddmmyyyy/."""
+    return output_dir / _safe_subfolder_name(subfolder)
+
+
 def _json_output_path(output_dir: Path, subfolder: str, filename: str) -> Path:
-    """Path for structured JSON output (same base as .txt but .json)."""
-    base = _safe_output_basename(subfolder, filename)
-    return output_dir / (Path(base).stem + ".json")
+    """Path for structured JSON output under subfolder: ocr_output/mobile_ddmmyy/Details.json."""
+    stem = Path(filename).stem
+    subfolder_name = _safe_subfolder_name(subfolder)
+    return output_dir / subfolder_name / f"{stem}.json"
 
 
 # Filename patterns for queue processing.
@@ -174,16 +185,22 @@ class OcrService:
     ):
         from app.config import OCR_OUTPUT_DIR, UPLOADS_DIR
 
-        self.uploads_dir = uploads_dir or UPLOADS_DIR
-        self.ocr_output_dir = ocr_output_dir or OCR_OUTPUT_DIR
+        self.uploads_dir = Path(uploads_dir or UPLOADS_DIR).resolve()
+        self.ocr_output_dir = Path(ocr_output_dir or OCR_OUTPUT_DIR).resolve()
 
     def _ensure_ocr_output_dir(self) -> None:
         self.ocr_output_dir.mkdir(parents=True, exist_ok=True)
 
     def get_output_path(self, subfolder: str, filename: str) -> Path:
-        """Path where extracted text for this queue item is or will be written."""
+        """Path where extracted text is written: ocr_output/mobile_ddmmyy/filename_stem.txt."""
         self._ensure_ocr_output_dir()
-        return self.ocr_output_dir / _safe_output_basename(subfolder, filename)
+        stem = Path(filename).stem
+        safe_stem = re.sub(r"[^\w\-.]", "_", stem)
+        # Always use a subfolder (mobile_ddmmyy); never write at ocr_output root
+        subfolder_name = _safe_subfolder_name(subfolder)
+        subfolder_path = self.ocr_output_dir / subfolder_name
+        subfolder_path.mkdir(parents=True, exist_ok=True)
+        return subfolder_path / f"{safe_stem}.txt"
 
     def read_extraction_file(self, subfolder: str, filename: str) -> str | None:
         """Read extracted text from the flat file if it exists."""
@@ -274,6 +291,7 @@ class OcrService:
 
             self._ensure_ocr_output_dir()
             output_path = self.get_output_path(subfolder, filename)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
             output_path.write_text(text, encoding="utf-8")
 
             vehicle = _map_key_value_pairs_to_vehicle(key_value_pairs)
@@ -284,6 +302,7 @@ class OcrService:
                     if v and not insurance.get(k):
                         insurance[k] = v
             json_path = _json_output_path(self.ocr_output_dir, subfolder, filename)
+            json_path.parent.mkdir(parents=True, exist_ok=True)
             customer = {}
             existing_insurance: dict = {}
             if json_path.exists():
@@ -300,6 +319,7 @@ class OcrService:
             # Preserve existing insurance fields (e.g. profession) and overlay nominee from Details sheet
             insurance_merged = {**existing_insurance, **{k: v for k, v in insurance.items() if v}}
             details_json = {"vehicle": vehicle, "customer": customer, "insurance": insurance_merged}
+            json_path.parent.mkdir(parents=True, exist_ok=True)
             json_path.write_text(json.dumps(details_json, indent=2), encoding="utf-8")
 
             with get_connection() as conn:
@@ -386,10 +406,12 @@ class OcrService:
                 except Exception:
                     pass
             data["customer"] = customer
+            json_path.parent.mkdir(parents=True, exist_ok=True)
             json_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
-            # Write a file in ocr_output listing the 15 extracted Aadhar fields (with display labels)
+            # Write a file in ocr_output/subfolder listing the 15 extracted Aadhar fields (with display labels)
             output_path = self.get_output_path(subfolder, filename)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
             lines = ["Aadhar scan – 15 extracted fields", ""]
             for key, label in AADHAR_15_FIELDS:
                 value = customer.get(key)
@@ -492,6 +514,7 @@ class OcrService:
                 if data["customer"].get("pin"):
                     data["customer"]["pin_code"] = data["customer"]["pin"]
             try:
+                json_path.parent.mkdir(parents=True, exist_ok=True)
                 json_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
             except Exception:
                 pass

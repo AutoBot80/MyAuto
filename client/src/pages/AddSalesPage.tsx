@@ -77,6 +77,8 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
   const [submitStatus, setSubmitStatus] = useState<string | null>(null);
   const [fillDmsStatus, setFillDmsStatus] = useState<string | null>(null);
   const [isFillDmsLoading, setIsFillDmsLoading] = useState(false);
+  /** DMS-scraped vehicle only; shown on DMS page, does not change Extracted Information. */
+  const [dmsScrapedVehicle, setDmsScrapedVehicle] = useState<ExtractedVehicleDetails | null>(null);
   const [addSalesStep, setAddSalesStep] = useState<AddSalesStep>("upload-scans");
   const [formResetKey, setFormResetKey] = useState(0);
 
@@ -252,6 +254,7 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
     setExtractedVehicle(null);
     setExtractedCustomer(null);
     setExtractedInsurance(null);
+    setDmsScrapedVehicle(null);
     setFormResetKey((k) => k + 1);
   };
 
@@ -319,20 +322,22 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
               engine_no: v?.engine_no ?? undefined,
             },
           });
-          if (res.success && res.vehicle) {
-            setExtractedVehicle((prev) => ({
-              ...(prev ?? {}),
-              key_no: res.vehicle.key_num ?? prev?.key_no,
-              frame_no: res.vehicle.frame_num ?? prev?.frame_no,
-              engine_no: res.vehicle.engine_num ?? prev?.engine_no,
-              model: res.vehicle.model ?? prev?.model,
-              color: res.vehicle.color ?? prev?.color,
-              cubic_capacity: res.vehicle.cubic_capacity ?? prev?.cubic_capacity,
-              total_amount: res.vehicle.total_amount ?? prev?.total_amount,
-              year_of_mfg: res.vehicle.year_of_mfg ?? prev?.year_of_mfg,
-            }));
+          const scraped = res.vehicle && (res.vehicle.key_num ?? res.vehicle.frame_num ?? res.vehicle.engine_num ?? res.vehicle.model ?? res.vehicle.color ?? res.vehicle.cubic_capacity ?? res.vehicle.total_amount ?? res.vehicle.year_of_mfg);
+          if (scraped) {
+            setDmsScrapedVehicle({
+              key_no: res.vehicle!.key_num ?? undefined,
+              frame_no: res.vehicle!.frame_num ?? undefined,
+              engine_no: res.vehicle!.engine_num ?? undefined,
+              model: res.vehicle!.model ?? undefined,
+              color: res.vehicle!.color ?? undefined,
+              cubic_capacity: res.vehicle!.cubic_capacity ?? undefined,
+              total_amount: res.vehicle!.total_amount ?? undefined,
+              year_of_mfg: res.vehicle!.year_of_mfg ?? undefined,
+            });
+          }
+          if (res.success) {
             const pdfMsg = res.pdfs_saved?.length ? ` PDFs saved: ${res.pdfs_saved.join(", ")}.` : "";
-            setFillDmsStatus(`DMS filled. Vehicle details updated.${pdfMsg}`);
+            setFillDmsStatus(scraped ? `DMS filled. See Details from DMS below.${pdfMsg}` : `DMS filled.${pdfMsg}`);
           } else {
             setFillDmsStatus(res.error ?? "Fill DMS failed.");
           }
@@ -344,6 +349,7 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
       }}
       fillDmsStatus={fillDmsStatus}
       isFillDmsLoading={isFillDmsLoading}
+      dmsVehicleDetails={addSalesStep === "hero-dms" ? (dmsScrapedVehicle ?? null) : null}
     />
   );
 
