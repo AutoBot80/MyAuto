@@ -89,49 +89,6 @@ export function UploadScansPanel({
         </div>
       ))}
       {onUploadV2 && (
-        <div className="app-panel-insurance-block">
-          <div className="app-panel-row app-panel-insurance-check-row">
-            <label className="app-panel-insurance-check">
-              <input
-                type="checkbox"
-                checked={hasInsurance}
-                onChange={(e) => {
-                  setHasInsurance(e.target.checked);
-                  if (!e.target.checked) setSelectedInsuranceFile(null);
-                }}
-                aria-label="I have insurance"
-              />
-              <span>I have insurance</span>
-            </label>
-          </div>
-          <div className="app-panel-row app-panel-scan-row">
-            <label className={`app-panel-scan-label ${!hasInsurance ? "app-panel-scan-label--muted" : ""}`}>
-              Insurance Sheet
-            </label>
-            <input
-              ref={insuranceInputRef}
-              type="file"
-              accept=".jpg,.jpeg,.png,.pdf,image/jpeg,image/png,application/pdf"
-              style={{ display: "none" }}
-              disabled={!hasInsurance}
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) setSelectedInsuranceFile(file);
-                e.target.value = "";
-              }}
-            />
-            <button
-              type="button"
-              className="app-button app-panel-scan-button"
-              disabled={!hasInsurance || isUploading}
-              onClick={() => hasInsurance && insuranceInputRef.current?.click()}
-            >
-              {selectedInsuranceFile ? selectedInsuranceFile.name : "Choose file"}
-            </button>
-          </div>
-        </div>
-      )}
-      {onUploadV2 && (
         <div className="app-panel-financing-block">
           <div className="app-panel-row app-panel-insurance-check-row">
             <label className="app-panel-insurance-check">
@@ -170,6 +127,49 @@ export function UploadScansPanel({
               onClick={() => hasFinancing && financingInputRef.current?.click()}
             >
               {selectedFinancingFile ? selectedFinancingFile.name : "Choose file"}
+            </button>
+          </div>
+        </div>
+      )}
+      {onUploadV2 && (
+        <div className="app-panel-insurance-block">
+          <div className="app-panel-row app-panel-insurance-check-row">
+            <label className="app-panel-insurance-check">
+              <input
+                type="checkbox"
+                checked={hasInsurance}
+                onChange={(e) => {
+                  setHasInsurance(e.target.checked);
+                  if (!e.target.checked) setSelectedInsuranceFile(null);
+                }}
+                aria-label="I have insurance"
+              />
+              <span>I have insurance</span>
+            </label>
+          </div>
+          <div className="app-panel-row app-panel-scan-row">
+            <label className={`app-panel-scan-label ${!hasInsurance ? "app-panel-scan-label--muted" : ""}`}>
+              Insurance Sheet
+            </label>
+            <input
+              ref={insuranceInputRef}
+              type="file"
+              accept=".jpg,.jpeg,.png,.pdf,image/jpeg,image/png,application/pdf"
+              style={{ display: "none" }}
+              disabled={!hasInsurance}
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) setSelectedInsuranceFile(file);
+                e.target.value = "";
+              }}
+            />
+            <button
+              type="button"
+              className="app-button app-panel-scan-button"
+              disabled={!hasInsurance || isUploading}
+              onClick={() => hasInsurance && insuranceInputRef.current?.click()}
+            >
+              {selectedInsuranceFile ? selectedInsuranceFile.name : "Choose file"}
             </button>
           </div>
         </div>

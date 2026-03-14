@@ -5,7 +5,7 @@ import { useUploadScans } from "../hooks/useUploadScans";
 import { UploadScansPanel } from "../components/UploadScansPanel";
 import { getExtractedDetails } from "../api/aiReaderQueue";
 import { submitInfo } from "../api/submitInfo";
-import { fillDms } from "../api/fillDms";
+import { fillDms, isFillDmsAbortError } from "../api/fillDms";
 import { loadAddSalesForm, saveAddSalesForm, clearAddSalesForm } from "../utils/addSalesStorage";
 import { normalizeVehicleDetails, hasVehicleData } from "../utils/vehicleDetails";
 
@@ -73,6 +73,16 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
   const [hasSubmittedInfo, setHasSubmittedInfo] = useState(false);
   /** True after user has used Print forms. (Used for beforeunload warning.) */
   const [hasPrintedForms, setHasPrintedForms] = useState(false);
+  /** True once Textract has returned insurance data for this upload (details sheet processed). */
+  const [insuranceReadByTextract, setInsuranceReadByTextract] = useState(() => {
+    const stored = loadAddSalesForm().extractedInsurance;
+    return Boolean(
+      stored &&
+        [stored.profession, stored.nominee_name, stored.nominee_age, stored.nominee_relationship].some(
+          (x) => x != null && String(x).trim() !== ""
+        )
+    );
+  });
   const [formResetKey, setFormResetKey] = useState(0);
 
   const {
@@ -144,6 +154,7 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
         }
         const ins = details?.insurance;
         if (ins && typeof ins === "object" && !Array.isArray(ins)) {
+          setInsuranceReadByTextract(true);
           const r = ins as Record<string, unknown>;
           setExtractedInsurance((prev) => {
             const current = prev ?? {};
@@ -197,6 +208,7 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
         }
         const ins = details?.insurance;
         if (ins && typeof ins === "object" && !Array.isArray(ins)) {
+          setInsuranceReadByTextract(true);
           const r = ins as Record<string, unknown>;
           setExtractedInsurance((prev) => {
             const current = prev ?? {};
@@ -261,6 +273,7 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
     setExtractedVehicle(null);
     setExtractedCustomer(null);
     setExtractedInsurance(null);
+    setInsuranceReadByTextract(false);
     setDmsScrapedVehicle(null);
     setDmsPdfsDownloaded(false);
     setHasSubmittedInfo(false);
@@ -274,14 +287,73 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
   const ins = extractedInsurance;
   const display = (s: string | undefined) => (s && String(s).trim() ? String(s).trim() : "—");
 
-  const hasAllRequiredExtractedFields = () => {
-    if (!c) return false;
-    const requiredCustomer = [c.aadhar_id, c.name, c.gender, c.date_of_birth, buildDisplayAddress(c)];
-    const requiredVehicle = [v?.frame_no, v?.engine_no, v?.key_no, v?.battery_no];
-    const requiredInsurance = [ins?.profession, ins?.nominee_name, ins?.nominee_age, ins?.nominee_relationship];
-    const all = [...requiredCustomer, ...requiredVehicle, ...requiredInsurance];
-    return all.every((val) => val != null && String(val).trim() !== "" && String(val).trim() !== "—");
+  const requiredFieldChecks: { label: string; value: string | undefined }[] = [
+    { label: "Aadhar ID", value: c?.aadhar_id },
+    { label: "Name", value: c?.name },
+    { label: "Gender", value: c?.gender },
+    { label: "Date of birth", value: c?.date_of_birth },
+    { label: "Address", value: c ? buildDisplayAddress(c) : undefined },
+    { label: "Frame no.", value: v?.frame_no },
+    { label: "Engine no.", value: v?.engine_no },
+    { label: "Key no.", value: v?.key_no },
+    { label: "Battery no.", value: v?.battery_no },
+    { label: "Customer Profession", value: ins?.profession },
+    { label: "Nominee Name", value: ins?.nominee_name },
+    { label: "Nominee Age", value: ins?.nominee_age },
+    { label: "Nominee Relationship", value: ins?.nominee_relationship },
+  ];
+
+  const getMissingRequiredFields = (): string[] => {
+    return requiredFieldChecks
+      .filter(({ value }) => value == null || String(value).trim() === "" || String(value).trim() === "—")
+      .map(({ label }) => label);
   };
+
+  const hasAllRequiredExtractedFields = () => {
+    return getMissingRequiredFields().length === 0;
+  };
+
+  /** Allowed: letters, digits, space, hyphen, period, slash, comma. No other special characters. */
+  const ALLOWED_CHAR_REGEX = /^[a-zA-Z0-9\s\-./,]*$/;
+  const isBlank = (val: string | undefined | null): boolean =>
+    val == null || String(val).trim() === "" || String(val).trim() === "—";
+  const hasDisallowedSpecialChars = (val: string | undefined | null): boolean =>
+    val != null && String(val).trim() !== "" && !ALLOWED_CHAR_REGEX.test(String(val).trim());
+
+  const vehicleValidationFields: { label: string; value: string | undefined }[] = [
+    { label: "Frame no.", value: v?.frame_no },
+    { label: "Engine no.", value: v?.engine_no },
+    { label: "Key no.", value: v?.key_no },
+    { label: "Battery no.", value: v?.battery_no },
+  ];
+  const getVehicleValidationErrors = (): string[] => {
+    const errors: string[] = [];
+    vehicleValidationFields.forEach(({ label, value }) => {
+      if (isBlank(value)) errors.push(`${label} is required`);
+      else if (hasDisallowedSpecialChars(value)) errors.push(`${label} must not contain special characters`);
+    });
+    return errors;
+  };
+
+  const insuranceValidationFields: { label: string; value: string | undefined }[] = [
+    { label: "Customer Profession", value: ins?.profession },
+    { label: "Nominee Name", value: ins?.nominee_name },
+    { label: "Nominee Age", value: ins?.nominee_age },
+    { label: "Nominee Relationship", value: ins?.nominee_relationship },
+  ];
+  const getInsuranceValidationErrors = (): string[] => {
+    const errors: string[] = [];
+    insuranceValidationFields.forEach(({ label, value }) => {
+      if (isBlank(value)) errors.push(`${label} is required`);
+      else if (hasDisallowedSpecialChars(value)) errors.push(`${label} must not contain special characters`);
+    });
+    return errors;
+  };
+
+  const vehicleValidationErrors = savedTo ? getVehicleValidationErrors() : [];
+  const insuranceValidationErrors = savedTo ? getInsuranceValidationErrors() : [];
+  const hasVehicleOrInsuranceValidationErrors =
+    savedTo && (vehicleValidationErrors.length > 0 || insuranceValidationErrors.length > 0);
 
   const hasMeaningfulCustomer = (cust: typeof c) =>
     cust && (cust.aadhar_id || cust.name || cust.address || buildDisplayAddress(cust) !== "—");
@@ -338,13 +410,18 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
         const hasForm21 = pdfs.some((f) => /form\s*21|form21/i.test(f));
         const hasForm22 = pdfs.some((f) => /form\s*22|form22/i.test(f));
         if (hasForm21 && hasForm22) setDmsPdfsDownloaded(true);
-        const pdfMsg = pdfs.length ? ` PDFs saved: ${pdfs.join(", ")}.` : "";
-        setFillDmsStatus(scraped ? `Done. See details below.${pdfMsg}` : `Done.${pdfMsg}`);
+        setFillDmsStatus(null);
       } else {
         setFillDmsStatus(res.error ?? "Fill DMS failed.");
       }
     } catch (err) {
-      setFillDmsStatus(err instanceof Error ? err.message : "Fill DMS failed.");
+      if (isFillDmsAbortError(err)) {
+        setFillDmsStatus(
+          "Request timed out. The DMS fill may have completed on the server—check the upload folder for Forms 21 and 22."
+        );
+      } else {
+        setFillDmsStatus(err instanceof Error ? err.message : "Fill DMS failed.");
+      }
     } finally {
       setIsFillDmsLoading(false);
     }
@@ -398,11 +475,27 @@ className="app-button app-button--primary"
                 <button
                     type="button"
                     className="app-button add-sales-v2-submit-btn"
-                    disabled={isSubmitting || !mobile || !c}
+                    disabled={
+                      isSubmitting ||
+                      !mobile ||
+                      !c ||
+                      !insuranceReadByTextract ||
+                      !hasAllRequiredExtractedFields() ||
+                      hasVehicleOrInsuranceValidationErrors
+                    }
                     onClick={async () => {
                       if (!mobile || !c) return;
+                      if (!insuranceReadByTextract) {
+                        setSubmitStatus("Waiting for insurance details from document.");
+                        return;
+                      }
                       if (!hasAllRequiredExtractedFields()) {
-                        setSubmitStatus("Please fill all extracted fields before submitting.");
+                        setSubmitStatus(`Please fill: ${getMissingRequiredFields().join(", ")}.`);
+                        return;
+                      }
+                      if (hasVehicleOrInsuranceValidationErrors) {
+                        const parts = [...vehicleValidationErrors, ...insuranceValidationErrors];
+                        setSubmitStatus(`Fix validation errors: ${parts.join("; ")}.`);
                         return;
                       }
                       setIsSubmitting(true);
@@ -431,8 +524,20 @@ className="app-button app-button--primary"
                   </button>
               </div>
               <div className="add-sales-v2-box-body">
-                {submitStatus && (
-                  <div className="add-sales-v2-status-row">
+                {savedTo && !insuranceReadByTextract && (
+                  <div className="add-sales-v2-status-row add-sales-v2-status-row--error" role="alert">
+                    <span className="add-sales-v2-status-text">Waiting for insurance details from document.</span>
+                  </div>
+                )}
+                {savedTo && insuranceReadByTextract && getMissingRequiredFields().length > 0 && (
+                  <div className="add-sales-v2-status-row add-sales-v2-status-row--error" role="alert">
+                    <span className="add-sales-v2-status-text">
+                      Please fill: {getMissingRequiredFields().join(", ")}.
+                    </span>
+                  </div>
+                )}
+                {submitStatus && (!savedTo || (insuranceReadByTextract && getMissingRequiredFields().length === 0)) && (
+                  <div className={`add-sales-v2-status-row ${submitStatus === "Saved" ? "add-sales-v2-status-row--success" : "add-sales-v2-status-row--error"}`}>
                     <span className="add-sales-v2-status-text">{submitStatus}</span>
                   </div>
                 )}
@@ -473,6 +578,13 @@ className="app-button app-button--primary"
                     <h3 className="add-sales-v2-subsection-title">Vehicle Details</h3>
                     {vehicleProcessing && <span className="add-sales-v2-processing">Processing</span>}
                   </div>
+                  {vehicleValidationErrors.length > 0 && (
+                    <div className="add-sales-v2-subsection-errors" role="alert">
+                      {vehicleValidationErrors.map((msg) => (
+                        <div key={msg} className="add-sales-v2-subsection-error-item">{msg}</div>
+                      ))}
+                    </div>
+                  )}
                   <dl className="add-sales-v2-dl add-sales-v2-dl--vehicle">
                     <div className="add-sales-v2-dl-row">
                       <dt>Frame no.</dt>
@@ -584,6 +696,13 @@ className="app-button app-button--primary"
                     <h3 className="add-sales-v2-subsection-title">Insurance Details</h3>
                     {insuranceProcessing && <span className="add-sales-v2-processing">Processing</span>}
                   </div>
+                  {insuranceValidationErrors.length > 0 && (
+                    <div className="add-sales-v2-subsection-errors" role="alert">
+                      {insuranceValidationErrors.map((msg) => (
+                        <div key={msg} className="add-sales-v2-subsection-error-item">{msg}</div>
+                      ))}
+                    </div>
+                  )}
                   <dl className="add-sales-v2-dl add-sales-v2-dl--insurance">
                     <div className="add-sales-v2-dl-row">
                       <dt>Customer Profession</dt>

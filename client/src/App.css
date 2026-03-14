@@ -54,8 +54,8 @@
   display: flex;
   align-items: stretch;
   justify-content: space-between;
-  padding: 9px 24px;
-  min-height: 51px;
+  padding: 7px 24px;
+  min-height: 49px;
   background: #1e5a9e;
   color: #fff;
 }
@@ -116,8 +116,8 @@
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
-  top: 9px;
-  bottom: 9px;
+  top: 7px;
+  bottom: 7px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -183,7 +183,7 @@
 }
 
 .app-tab-v2 {
-  padding: 7px 16px;
+  padding: 6px 16px;
   font-size: 14px;
   font-weight: 500;
   color: #333;
@@ -239,12 +239,13 @@
   color: #1e5a9e;
 }
 
-/* Add Sales: left bar nav + main (steps as line items) */
+/* Add Sales: scrollable content; only this page shows a vertical scrollbar */
 .add-sales-v2 {
   display: flex;
   gap: 0;
   min-height: 0;
   flex: 1;
+  overflow-y: auto;
 }
 
 .add-sales-v2-nav {
@@ -353,7 +354,7 @@
 }
 
 .add-sales-v2-box-fill-forms .add-sales-v2-box-title {
-  padding: 10px 14px;
+  padding: 8px 14px;
   border-bottom: 1px solid #c5d9ed;
 }
 
@@ -409,7 +410,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 6px 14px;
+  padding: 4px 14px;
   border-bottom: 1px solid #c5d9ed;
   flex-shrink: 0;
 }
@@ -425,7 +426,7 @@
 
 .add-sales-v2-box-title {
   margin: 0;
-  padding: 10px 14px;
+  padding: 8px 14px;
   font-size: 16px;
   font-weight: 600;
   color: #1e5a9e;
@@ -469,15 +470,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  margin-bottom: 4px;
-}
-
-.add-sales-v2-subsection-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 4px;
+  margin-bottom: 2px;
 }
 
 .add-sales-v2-subsection-head .add-sales-v2-subsection-title {
@@ -485,7 +478,7 @@
 }
 
 .add-sales-v2-subsection-title {
-  margin: 0 0 4px;
+  margin: 0 0 2px;
   font-size: 13px;
   font-weight: 600;
   color: #1e5a9e;
@@ -498,6 +491,16 @@
   color: #d97706;
   font-size: 12px;
   font-weight: 500;
+}
+
+.add-sales-v2-subsection-errors {
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: #c00;
+}
+
+.add-sales-v2-subsection-error-item {
+  margin-bottom: 2px;
 }
 
 .add-sales-v2-dl {
@@ -1058,6 +1061,14 @@
   margin-bottom: 4px;
   font-size: 12px;
   color: #1e5a9e;
+}
+
+.add-sales-v2-status-row--error {
+  color: #c00;
+}
+
+.add-sales-v2-status-row--success {
+  color: #0a5f0a;
 }
 
 .add-sales-v2-status-text {

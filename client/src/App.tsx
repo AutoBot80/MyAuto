@@ -72,6 +72,13 @@ function App() {
       .catch(() => setDealerName("Dealer"));
   }, []);
 
+  // When switching mode, ensure page is in the current tab list (avoid blank screen). Must run on every render (before any early return).
+  useEffect(() => {
+    if (mode === "pos" && !POS_PAGES.includes(page)) setPage("add-sales");
+    else if (mode === "service" && !SERVICE_PAGES.includes(page)) setPage("service-reminders");
+    else if (mode === "rto" && !RTO_PAGES.includes(page)) setPage("rto-status");
+  }, [mode, page]);
+
   const dmsUrl = getValidDmsUrl(dmsLink);
   const dmsWindowRef = useRef<Window | null>(null);
   const vahanUrl = `${getBaseUrl().replace(/\/$/, "")}/dummy-vaahan/`;
@@ -167,13 +174,6 @@ function App() {
     mode === "pos" ? POS_PAGES : mode === "rto" ? RTO_PAGES : SERVICE_PAGES;
   const currentPage = visiblePages.includes(page) ? page : visiblePages[0];
   const content = renderContent(currentPage) ?? renderContent(visiblePages[0]);
-
-  // When switching mode, ensure page is in the current tab list (avoid blank screen)
-  useEffect(() => {
-    if (mode === "pos" && !POS_PAGES.includes(page)) setPage("add-sales");
-    else if (mode === "service" && !SERVICE_PAGES.includes(page)) setPage("service-reminders");
-    else if (mode === "rto" && !RTO_PAGES.includes(page)) setPage("rto-status");
-  }, [mode, page]);
 
   return (
     <div className="app-layout-root" key={mode}>

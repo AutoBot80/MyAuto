@@ -38,7 +38,7 @@ export interface FillDmsResponse {
   error?: string | null;
 }
 
-const FILL_DMS_TIMEOUT_MS = 120000; // 2 min – Playwright opens browser, login, fill, search, download PDFs
+const FILL_DMS_TIMEOUT_MS = 300000; // 5 min – Playwright opens browser, login, fill, search, download PDFs
 
 export async function fillDms(req: FillDmsRequest): Promise<FillDmsResponse> {
   const controller = new AbortController();
@@ -54,4 +54,13 @@ export async function fillDms(req: FillDmsRequest): Promise<FillDmsResponse> {
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+/** True if the error is from an aborted request (timeout or user abort). */
+export function isFillDmsAbortError(err: unknown): boolean {
+  if (err instanceof Error) {
+    const m = err.message?.toLowerCase() ?? "";
+    return m.includes("abort") || m.includes("aborted");
+  }
+  return false;
 }
