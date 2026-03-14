@@ -1,5 +1,5 @@
 -- Customer master data.
--- customer_id is PK; (aadhar last 4 + phone) uniquely identify a customer.
+-- customer_id is PK; (aadhar last 4 + mobile_number) uniquely identify a customer.
 -- Run against database: auto_ai
 
 CREATE TABLE IF NOT EXISTS customer_master (
@@ -10,11 +10,12 @@ CREATE TABLE IF NOT EXISTS customer_master (
     pin CHAR(6),
     city TEXT,
     state TEXT,
-    phone VARCHAR(16),
+    mobile_number INTEGER,
+    profession VARCHAR(16),
     file_location TEXT,
     gender VARCHAR(8),
     date_of_birth VARCHAR(20),
-    CONSTRAINT uq_customer_aadhar_phone UNIQUE (aadhar, phone)
+    CONSTRAINT uq_customer_aadhar_mobile UNIQUE (aadhar, mobile_number)
 );
 
 COMMENT ON TABLE customer_master IS 'Customer master; customer_id is PK; aadhar stores last 4 digits only';

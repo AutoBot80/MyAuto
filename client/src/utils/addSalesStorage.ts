@@ -4,7 +4,6 @@ const KEY = "addSalesForm";
 
 export interface AddSalesStored {
   mobile: string;
-  profession: string;
   savedTo: string | null;
   uploadedFiles: string[];
   uploadStatus: string;
@@ -16,12 +15,11 @@ export interface AddSalesStored {
     battery_no?: string;
   } | null;
   extractedCustomer: import("../types").ExtractedCustomerDetails | null;
-  extractedInsurance: { nominee_name?: string; nominee_age?: string; nominee_relationship?: string } | null;
+  extractedInsurance: { profession?: string; nominee_name?: string; nominee_age?: string; nominee_relationship?: string } | null;
 }
 
 const DEFAULT: AddSalesStored = {
   mobile: "",
-  profession: "",
   savedTo: null,
   uploadedFiles: [],
   uploadStatus: "",
@@ -68,7 +66,6 @@ export function loadAddSalesForm(): AddSalesStored {
     const extractedCustomer = normalizeExtractedCustomer(cust);
     return {
       mobile: typeof parsed.mobile === "string" ? parsed.mobile : "",
-      profession: typeof parsed.profession === "string" ? parsed.profession : "",
       savedTo:
         parsed.savedTo === null || parsed.savedTo === undefined
           ? null
@@ -81,7 +78,13 @@ export function loadAddSalesForm(): AddSalesStored {
       extractedCustomer: extractedCustomer && hasAnyCustomerValue(extractedCustomer) ? extractedCustomer : null,
       extractedInsurance:
         parsed.extractedInsurance != null && typeof parsed.extractedInsurance === "object" && !Array.isArray(parsed.extractedInsurance)
-          ? (parsed.extractedInsurance as AddSalesStored["extractedInsurance"])
+          ? ({
+              ...(parsed.extractedInsurance as AddSalesStored["extractedInsurance"]),
+              // Back-compat: older storage used top-level "profession"
+              profession:
+                (parsed.extractedInsurance as any)?.profession ??
+                (typeof (parsed as any).profession === "string" ? (parsed as any).profession : undefined),
+            } as AddSalesStored["extractedInsurance"])
           : null,
     };
   } catch {
@@ -89,9 +92,11 @@ export function loadAddSalesForm(): AddSalesStored {
   }
 }
 
-export function saveAddSalesForm(data: AddSalesStored): void {
+export function saveAddSalesForm(data: Partial<AddSalesStored>): void {
   try {
-    sessionStorage.setItem(KEY, JSON.stringify(data));
+    const current = loadAddSalesForm();
+    const merged = { ...current, ...data };
+    sessionStorage.setItem(KEY, JSON.stringify(merged));
   } catch {
     // ignore
   }

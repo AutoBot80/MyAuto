@@ -40,6 +40,8 @@ This document lists the current database tables and their columns. **Executable 
 | `city` | `text` | YES |  | City |
 | `state` | `text` | YES |  | State |
 | `phone` | `varchar(16)` | YES |  | Phone number |
+| `mobile_number` | `integer` | YES |  | Customer mobile number (10 digits) |
+| `profession` | `varchar(16)` | YES |  | Customer profession (e.g. Service, Business) |
 | `file_location` | `text` | YES |  | File location / sub-folder name where scans are placed |
 | `gender` | `varchar(8)` | YES |  | Gender from Aadhar QR (e.g. M, F) |
 | `date_of_birth` | `varchar(20)` | YES |  | Date of birth (dd/mm/yyyy); default date format for app and DB |
@@ -62,6 +64,14 @@ This document lists the current database tables and their columns. **Executable 
 | `chassis` | `varchar(64)` | YES |  | Chassis number |
 | `battery` | `varchar(64)` | YES |  | Battery number |
 | `plate_num` | `varchar(32)` | YES |  | Plate number |
+| `raw_frame_num` | `varchar(32)` | YES |  | Raw extracted frame/chassis number |
+| `raw_engine_num` | `varchar(32)` | YES |  | Raw extracted engine number |
+| `raw_key_num` | `varchar(32)` | YES |  | Raw extracted key number |
+| `year_of_mfg` | `integer` | YES |  | Year of manufacture (yyyy) |
+| `cubic_capacity` | `numeric(10,2)` | YES |  | Cubic capacity (cc) |
+| `body_type` | `varchar(16)` | YES |  | Body type (e.g. Sedan, SUV) |
+| `seating_capacity` | `integer` | YES |  | Seating capacity |
+| `place_of_registeration` | `varchar(32)` | YES |  | Place of registration |
 
 **Primary key:** `vehicle_master_pkey` on (`vehicle_id`)
 
@@ -76,32 +86,133 @@ This document lists the current database tables and their columns. **Executable 
 | `customer_id` | `integer` | NO |  | FK → `customer_master(customer_id)` |
 | `vehicle_id` | `integer` | NO |  | FK → `vehicle_master(vehicle_id)` |
 | `billing_date` | `timestamptz` | NO | `now()` | System date/time |
-| `dealer_id` | `integer` | YES |  | FK → `dealer_master(dealer_id)` |
+| `dealer_id` | `integer` | YES |  | FK → `dealer_ref(dealer_id)` |
 
 **Primary key:** `sales_master_pkey` on (`customer_id`, `vehicle_id`)
 
 **Foreign keys:**
 - `fk_sales_customer`: (`customer_id`) → `customer_master(customer_id)`
-- `fk_sales_dealer`: (`dealer_id`) → `dealer_master(dealer_id)`
+- `fk_sales_dealer`: (`dealer_id`) → `dealer_ref(dealer_id)`
 - `fk_sales_vehicle`: (`vehicle_id`) → `vehicle_master(vehicle_id)`
 
 ---
 
-## 5) `dealer_master`
+## 5) `oem_ref`
 
-**Purpose:** Dealer master data.
+**Purpose:** OEM / brand reference (e.g. Hero Motors).
 
 | Column | Type | Null | Default | Notes |
 |---|---|---:|---|---|
-| `dealer_id` | `integer` | NO | `nextval('dealer_master_dealer_id_seq'::regclass)` | Primary key |
+| `oem_id` | `integer` | NO | `nextval('oem_ref_oem_id_seq'::regclass)` | Primary key (auto-generated) |
+| `oem_name` | `varchar(255)` | YES |  | OEM or brand name |
+| `vehicles_type` | `varchar(128)` | YES |  | Type of vehicles (e.g. 2W, 4W) |
+| `dms_link` | `varchar(512)` | YES |  | URL to OEM DMS; app uses dealer → oem_id → this link when opening DMS tab |
+
+**Primary key:** `oem_ref_pkey` on (`oem_id`)
+
+---
+
+## 5a) `oem_service_schedule`
+
+**Purpose:** OEM service schedule (service number, type, days from billing, active flag).
+
+| Column | Type | Null | Default | Notes |
+|---|---|---:|---|---|
+| `oem_id` | `integer` | NO |  | FK → `oem_ref(oem_id)` |
+| `service_num` | `integer` | YES |  | Service sequence number |
+| `service_type` | `varchar(16)` | YES |  | Free or Paid |
+| `days_from_billing` | `integer` | YES |  | Days from billing date for this service |
+| `active_flag` | `char(1)` | YES |  | Y or N |
+| `reminder_type` | `varchar(16)` | YES |  | e.g. SMS, Email; flows to service_reminders_queue |
+
+**Foreign keys:**
+- `fk_oem_service_schedule_oem`: (`oem_id`) → `oem_ref(oem_id)`
+
+**Checks:**
+- `chk_oem_service_schedule_service_type` — `service_type` IN ('Free', 'Paid')
+- `chk_oem_service_schedule_active_flag` — `active_flag` IN ('Y', 'N')
+
+---
+
+## 6) `dealer_ref`
+
+**Purpose:** Dealer reference; replaces dealer_master.
+
+| Column | Type | Null | Default | Notes |
+|---|---|---:|---|---|
+| `dealer_id` | `integer` | NO | `nextval('dealer_ref_dealer_id_seq'::regclass)` | Primary key |
 | `dealer_name` | `varchar(255)` | NO |  | Dealer name |
-| `dealer_of` | `varchar(255)` | YES |  | Dealer of (e.g. brand or company) |
+| `oem_id` | `integer` | YES |  | FK → `oem_ref(oem_id)`; supplied on insert, not auto-generated |
 | `address` | `text` | YES |  | Address |
 | `pin` | `char(6)` | YES |  | PIN code |
 | `city` | `text` | YES |  | City |
 | `state` | `text` | YES |  | State |
 | `parent_id` | `integer` | YES |  | Parent dealer id (hierarchy) |
 | `phone` | `varchar(16)` | YES |  | Phone (up to 16 digits) |
+| `auto_sms_reminders` | `char(1)` | YES |  | Y or N; when Y, trigger populates service_reminders_queue on sales_master upsert |
 
-**Primary key:** `dealer_master_pkey` on (`dealer_id`)
+**Primary key:** `dealer_ref_pkey` on (`dealer_id`)
+
+**Check:** `chk_dealer_ref_auto_sms_reminders` — `auto_sms_reminders` IN ('Y', 'N')
+
+**Foreign keys:**
+- `fk_dealer_ref_oem`: (`oem_id`) → `oem_ref(oem_id)`
+
+---
+
+## 7) `insurance_master`
+
+**Purpose:** Insurance policy records linked to customer and vehicle.
+
+| Column | Type | Null | Default | Notes |
+|---|---|---:|---|---|
+| `insurance_id` | `integer` | NO | `nextval('insurance_master_insurance_id_seq'::regclass)` | Primary key (auto-generated) |
+| `customer_id` | `integer` | NO |  | FK → `customer_master(customer_id)` |
+| `vehicle_id` | `integer` | NO |  | FK → `vehicle_master(vehicle_id)` |
+| `year` | `integer` | YES |  | Policy year (yyyy) |
+| `idv` | `numeric(12,2)` | YES |  | Insured declared value |
+| `insurer` | `varchar(255)` | YES |  | Insurer name |
+| `policy_num` | `varchar(24)` | YES |  | Policy number |
+| `policy_from` | `date` | YES |  | Policy start (display dd/mm/yyyy) |
+| `policy_to` | `date` | YES |  | Policy end (display dd/mm/yyyy) |
+| `nominee_name` | `text` | YES |  | Nominee name |
+| `nominee_age` | `integer` | YES |  | Nominee age |
+| `nominee_relationship` | `varchar(64)` | YES |  | Nominee relationship |
+| `policy_broker` | `varchar(255)` | YES |  | Policy broker |
+| `premium` | `numeric(12,2)` | YES |  | Premium amount |
+
+**Primary key:** `insurance_master_pkey` on (`insurance_id`)
+
+**Foreign keys:**
+- `fk_insurance_customer`: (`customer_id`) → `customer_master(customer_id)`
+- `fk_insurance_vehicle`: (`vehicle_id`) → `vehicle_master(vehicle_id)`
+
+---
+
+## 8) `service_reminders_queue`
+
+**Purpose:** Queue of service reminders per customer/vehicle.
+
+| Column | Type | Null | Default | Notes |
+|---|---|---:|---|---|
+| `id` | `integer` | NO | `nextval('service_reminders_queue_id_seq'::regclass)` | Primary key (auto-generated) |
+| `customer_id` | `integer` | NO |  | FK → `customer_master(customer_id)` |
+| `vehicle_id` | `integer` | NO |  | FK → `vehicle_master(vehicle_id)` |
+| `billing_date` | `date` | YES |  | Billing/sale date |
+| `service_date` | `date` | YES |  | Scheduled service date |
+| `service_type` | `varchar(16)` | YES |  | Free or Paid |
+| `reminder_num` | `integer` | YES |  | Trigger inserts one row per schedule with reminder_num 1 |
+| `reminder_date` | `date` | YES |  | Date when this reminder should be sent (e.g. 15 days before service_date) |
+| `reminder_type` | `varchar(16)` | YES |  | From oem_service_schedule (e.g. SMS) |
+| `reminder_status` | `varchar(16)` | YES |  | Status of reminder |
+| `dealer_id` | `integer` | YES |  | FK → `dealer_ref(dealer_id)` |
+
+**Primary key:** `service_reminders_queue_pkey` on (`id`)
+
+**Foreign keys:**
+- `fk_service_reminders_customer`: (`customer_id`) → `customer_master(customer_id)`
+- `fk_service_reminders_vehicle`: (`vehicle_id`) → `vehicle_master(vehicle_id)`
+- `fk_service_reminders_dealer`: (`dealer_id`) → `dealer_ref(dealer_id)`
+
+**Check:** `chk_service_reminders_service_type` — `service_type` IN ('Free', 'Paid')
 

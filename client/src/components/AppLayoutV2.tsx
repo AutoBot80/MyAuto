@@ -4,9 +4,12 @@ import type { Page } from "../types";
 
 const PAGE_LABELS: Record<Page, string> = {
   "add-sales": "Add Sales",
-  "customer-details": "Customer Details",
+  "customer-details": "All Customers",
+  "dms-queue": "DMS Queue",
+  "insurance-queue": "Insurance Queue",
   "rto-status": "RTO Queue",
-  "ai-reader-queue": "AI Reader Queue",
+  "service-reminders": "Service Reminders",
+  "contact-us": "Contact Us",
 };
 
 interface AppLayoutV2Props {
@@ -32,6 +35,7 @@ export function AppLayoutV2({
         <Header
           title={headerTitle}
           subtitle={headerSubtitle}
+          leftSlot={<div className="app-topbar-brand">Dealer Saathi <sup>©</sup></div>}
           rightSlot={headerRight}
         />
         <nav className="app-tabs-v2" role="tablist">

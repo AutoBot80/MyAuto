@@ -104,19 +104,22 @@ class UploadService:
 
         with get_connection() as conn:
             AiReaderQueueRepository.ensure_table(conn)
-            for role, save_name in (
-                (aadhar_scan, "Aadhar.jpg"),
-                (aadhar_back, "Aadhar_back.jpg"),
-                (sales_detail, "Details.jpg"),
-            ):
+            # Save all three files to disk, but only queue Aadhar front + Details for processing.
+            file_defs = [
+                (aadhar_scan, "Aadhar.jpg", True),
+                (aadhar_back, "Aadhar_back.jpg", False),
+                (sales_detail, "Details.jpg", True),
+            ]
+            for role, save_name, should_queue in file_defs:
                 content = await role.read()
                 target = subdir / save_name
                 target.write_bytes(content)
                 saved.append(save_name)
-                row = AiReaderQueueRepository.insert(
-                    conn, subdir_name, save_name, status="queued"
-                )
-                queued.append(row)
+                if should_queue:
+                    row = AiReaderQueueRepository.insert(
+                        conn, subdir_name, save_name, status="queued"
+                    )
+                    queued.append(row)
             conn.commit()
 
         return {

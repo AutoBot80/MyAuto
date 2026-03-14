@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException
 
 from app.db import get_connection
-from app.repositories.dealer_master import DealerMasterRepository
+from app.repositories.dealer_ref import DealerRefRepository
 
 router = APIRouter(prefix="/dealers", tags=["dealers"])
 
@@ -10,7 +10,7 @@ router = APIRouter(prefix="/dealers", tags=["dealers"])
 def get_dealer(dealer_id: int) -> dict:
     """Return dealer by id. Used by client to show dealer name in header."""
     with get_connection() as conn:
-        row = DealerMasterRepository.get_by_id(conn, dealer_id)
+        row = DealerRefRepository.get_by_id(conn, dealer_id)
     if not row:
         raise HTTPException(status_code=404, detail="Dealer not found")
     return dict(row)

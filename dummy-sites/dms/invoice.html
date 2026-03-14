@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Dummy DMS – Print Invoice</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; padding: 1rem; font-size: 12px; max-width: 700px; margin-left: auto; margin-right: auto; }
+    .no-print { margin-bottom: 1rem; }
+    .no-print a, .no-print button { margin-right: 0.5rem; padding: 0.4rem 0.8rem; background: #06c; color: #fff; border: none; border-radius: 4px; cursor: pointer; text-decoration: none; font-size: 12px; }
+    .no-print button { background: #196; }
+    @media print {
+      .no-print { display: none !important; }
+      body { padding: 0; }
+    }
+    .invoice { border: 1px solid #ccc; padding: 1rem; }
+    .invoice h1 { margin: 0 0 1rem 0; font-size: 16px; }
+    .invoice table { width: 100%; border-collapse: collapse; }
+    .invoice th, .invoice td { border: 1px solid #ddd; padding: 0.35rem 0.5rem; text-align: left; }
+    .invoice th { background: #f5f5f5; }
+    .invoice .totals { margin-top: 1rem; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <div class="no-print">
+    <a href="enquiry.html" id="dms-back-to-enquiry">Back to Enquiry</a>
+    <button type="button" id="dms-print-invoice" onclick="window.print();">Print</button>
+    <a href="downloads/dummy-invoice.pdf" id="dms-download-pdf" download>Download PDF</a>
+  </div>
+
+  <div class="invoice" id="dms-invoice-content">
+    <h1>Dummy DMS – Invoice</h1>
+    <table>
+      <tr><th>Item</th><th>Details</th></tr>
+      <tr><td>Invoice #</td><td>INV-001</td></tr>
+      <tr><td>Date</td><td id="dms-invoice-date">—</td></tr>
+      <tr><td>Enquiry #</td><td>—</td></tr>
+      <tr><td>Customer</td><td>—</td></tr>
+      <tr><td>Amount</td><td>—</td></tr>
+    </table>
+    <p class="totals">Total: —</p>
+  </div>
+
+  <script>
+    (function() {
+      var d = new Date();
+      var day = ('0' + d.getDate()).slice(-2);
+      var month = ('0' + (d.getMonth() + 1)).slice(-2);
+      var year = d.getFullYear();
+      var el = document.getElementById('dms-invoice-date');
+      if (el) el.textContent = day + '/' + month + '/' + year;
+    })();
+  </script>
+</body>
+</html>

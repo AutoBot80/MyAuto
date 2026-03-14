@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef } from "react";
-import type { AddSalesStep, ExtractedVehicleDetails, ExtractedCustomerDetails } from "../types";
+import type { AddSalesStep, ExtractedVehicleDetails, ExtractedCustomerDetails, ExtractedInsuranceDetails } from "../types";
 import { buildDisplayAddress } from "../types";
 import { useUploadScans } from "../hooks/useUploadScans";
 import { UploadScansPanel } from "../components/UploadScansPanel";
 import { getExtractedDetails } from "../api/aiReaderQueue";
+import { submitInfo } from "../api/submitInfo";
 import { loadAddSalesForm, saveAddSalesForm, clearAddSalesForm } from "../utils/addSalesStorage";
 import { normalizeVehicleDetails, hasVehicleData } from "../utils/vehicleDetails";
 
@@ -47,7 +48,11 @@ function mapApiCustomerToExtracted(cust: Record<string, unknown>): ExtractedCust
   };
 }
 
-export function AddSalesPage() {
+interface AddSalesPageProps {
+  dealerId: number;
+}
+
+export function AddSalesPage({ dealerId }: AddSalesPageProps) {
   const [mobile, setMobile] = useState(() => getInitialForm().mobile);
   const [savedTo, setSavedTo] = useState<string | null>(() => getInitialForm().savedTo);
   const [uploadedFiles, setUploadedFiles] = useState<string[]>(() => getInitialForm().uploadedFiles);
@@ -58,6 +63,11 @@ export function AddSalesPage() {
   const [extractedCustomer, setExtractedCustomer] = useState<ExtractedCustomerDetails | null>(
     () => getInitialForm().extractedCustomer
   );
+  const [extractedInsurance, setExtractedInsurance] = useState<ExtractedInsuranceDetails | null>(
+    () => getInitialForm().extractedInsurance
+  );
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitStatus, setSubmitStatus] = useState<string | null>(null);
   const [addSalesStep, setAddSalesStep] = useState<AddSalesStep>("upload-scans");
   const [formResetKey, setFormResetKey] = useState(0);
 
@@ -89,8 +99,9 @@ export function AddSalesPage() {
       uploadStatus,
       extractedVehicle,
       extractedCustomer,
+      extractedInsurance,
     });
-  }, [mobile, savedTo, uploadedFiles, uploadStatus, extractedVehicle, extractedCustomer]);
+  }, [mobile, savedTo, uploadedFiles, uploadStatus, extractedVehicle, extractedCustomer, extractedInsurance]);
 
   const hasCustomer = Boolean(
     extractedCustomer &&
@@ -112,6 +123,29 @@ export function AddSalesPage() {
         const cust = details?.customer;
         if (cust && typeof cust === "object" && !Array.isArray(cust)) {
           setExtractedCustomer(mapApiCustomerToExtracted(cust as Record<string, unknown>));
+        }
+        const ins = details?.insurance;
+        if (ins && typeof ins === "object" && !Array.isArray(ins)) {
+          const r = ins as Record<string, unknown>;
+          setExtractedInsurance((prev) => {
+            const current = prev ?? {};
+            const fromServer = {
+              profession: typeof r.profession === "string" ? r.profession : undefined,
+              nominee_name: typeof r.nominee_name === "string" ? r.nominee_name : undefined,
+              nominee_age: r.nominee_age != null ? String(r.nominee_age) : undefined,
+              nominee_relationship: typeof r.nominee_relationship === "string" ? r.nominee_relationship : undefined,
+            };
+            return {
+              ...current,
+              profession: current.profession && current.profession.trim() !== "" ? current.profession : fromServer.profession,
+              nominee_name: current.nominee_name && current.nominee_name.trim() !== "" ? current.nominee_name : fromServer.nominee_name,
+              nominee_age: current.nominee_age && current.nominee_age.trim() !== "" ? current.nominee_age : fromServer.nominee_age,
+              nominee_relationship:
+                current.nominee_relationship && current.nominee_relationship.trim() !== ""
+                  ? current.nominee_relationship
+                  : fromServer.nominee_relationship,
+            };
+          });
         }
       })
       .catch(() => {
@@ -143,6 +177,29 @@ export function AddSalesPage() {
         if (cust && typeof cust === "object" && !Array.isArray(cust)) {
           setExtractedCustomer(mapApiCustomerToExtracted(cust as Record<string, unknown>));
         }
+        const ins = details?.insurance;
+        if (ins && typeof ins === "object" && !Array.isArray(ins)) {
+          const r = ins as Record<string, unknown>;
+          setExtractedInsurance((prev) => {
+            const current = prev ?? {};
+            const fromServer = {
+              profession: typeof r.profession === "string" ? r.profession : undefined,
+              nominee_name: typeof r.nominee_name === "string" ? r.nominee_name : undefined,
+              nominee_age: r.nominee_age != null ? String(r.nominee_age) : undefined,
+              nominee_relationship: typeof r.nominee_relationship === "string" ? r.nominee_relationship : undefined,
+            };
+            return {
+              ...current,
+              profession: current.profession && current.profession.trim() !== "" ? current.profession : fromServer.profession,
+              nominee_name: current.nominee_name && current.nominee_name.trim() !== "" ? current.nominee_name : fromServer.nominee_name,
+              nominee_age: current.nominee_age && current.nominee_age.trim() !== "" ? current.nominee_age : fromServer.nominee_age,
+              nominee_relationship:
+                current.nominee_relationship && current.nominee_relationship.trim() !== ""
+                  ? current.nominee_relationship
+                  : fromServer.nominee_relationship,
+            };
+          });
+        }
         if (normalized) {
           setExtractedVehicle(normalized);
           if (intervalId) clearInterval(intervalId);
@@ -160,7 +217,7 @@ export function AddSalesPage() {
     };
   }, [savedTo]);
 
-  const mobileBlock = (
+  const mobileRow = (
     <div className="app-field-row">
       <label className="app-field">
         <div className="app-field-label">Customer Mobile (10 digits)</div>
@@ -185,13 +242,35 @@ export function AddSalesPage() {
     clearUploaded();
     setExtractedVehicle(null);
     setExtractedCustomer(null);
+    setExtractedInsurance(null);
     setFormResetKey((k) => k + 1);
   };
 
   // Normalize for display so we always show known fields (frame_no, engine_no, etc.) regardless of key naming
   const v = normalizeVehicleDetails(extractedVehicle) ?? extractedVehicle;
   const c = extractedCustomer;
+  const ins = extractedInsurance;
   const display = (s: string | undefined) => (s && String(s).trim() ? String(s).trim() : "—");
+
+  const hasAllRequiredExtractedFields = () => {
+    if (!c) return false;
+    const requiredCustomer = [c.aadhar_id, c.name, c.gender, c.date_of_birth, buildDisplayAddress(c)];
+    const requiredVehicle = [v?.frame_no, v?.engine_no, v?.key_no, v?.battery_no];
+    const requiredInsurance = [ins?.profession, ins?.nominee_name, ins?.nominee_age, ins?.nominee_relationship];
+    const all = [...requiredCustomer, ...requiredVehicle, ...requiredInsurance];
+    return all.every((val) => val != null && String(val).trim() !== "" && String(val).trim() !== "—");
+  };
+
+  const hasMeaningfulCustomer = (cust: typeof c) =>
+    cust && (cust.aadhar_id || cust.name || cust.address || buildDisplayAddress(cust) !== "—");
+  const hasMeaningfulInsurance = (i: typeof ins) =>
+    i && [i.profession, i.nominee_name, i.nominee_age, i.nominee_relationship].some(
+      (x) => x != null && String(x).trim() !== ""
+    );
+
+  const customerProcessing = Boolean(savedTo && !hasMeaningfulCustomer(c));
+  const vehicleProcessing = Boolean(savedTo && !hasVehicleData(v ?? null));
+  const insuranceProcessing = Boolean(savedTo && !hasMeaningfulInsurance(ins));
 
   const panel = (
     <UploadScansPanel
@@ -240,7 +319,7 @@ export function AddSalesPage() {
               <div className="add-sales-v2-box-body">
                 <div className="add-sales-v2-fields-row">
                   <div className="add-sales-v2-input-wrap add-sales-v2-input-mobile">
-                    {mobileBlock}
+                    {mobileRow}
                   </div>
                 </div>
                 <div className="add-sales-v2-panel-wrap">
@@ -249,26 +328,182 @@ export function AddSalesPage() {
               </div>
             </section>
             <section className="add-sales-v2-box add-sales-v2-box-extracted">
-              <h2 className="add-sales-v2-box-title">Extracted Information <span className="add-sales-v2-box-title-note">(AI enabled)</span></h2>
+              <div className="add-sales-v2-box-title-row">
+                <h2 className="add-sales-v2-box-title">Extracted Information <span className="add-sales-v2-box-title-note">(AI enabled)</span></h2>
+                <button
+                  type="button"
+                  className="app-button add-sales-v2-submit-btn"
+                  disabled={isSubmitting || !mobile || !c}
+                  onClick={async () => {
+                    if (!mobile || !c) return;
+                    if (!hasAllRequiredExtractedFields()) {
+                      setSubmitStatus("Please fill all extracted fields before submitting.");
+                      return;
+                    }
+                    setIsSubmitting(true);
+                    setSubmitStatus(null);
+                    try {
+                      await submitInfo({
+                        customer: c,
+                        vehicle: v ?? null,
+                        insurance: ins ?? null,
+                        mobile,
+                        profession: ins?.profession,
+                        fileLocation: savedTo,
+                        dealerId,
+                      });
+                      setSubmitStatus("Saved");
+                    } catch (err) {
+                      const msg = err instanceof Error ? err.message : "Submit failed";
+                      setSubmitStatus(msg);
+                    } finally {
+                      setIsSubmitting(false);
+                    }
+                  }}
+                >
+                  {isSubmitting ? "Saving..." : "Submit Info."}
+                </button>
+              </div>
               <div className="add-sales-v2-box-body">
+                {submitStatus && (
+                  <div className="add-sales-v2-status-row">
+                    <span className="add-sales-v2-status-text">{submitStatus}</span>
+                  </div>
+                )}
                 <div className="add-sales-v2-subsection">
-                  <h3 className="add-sales-v2-subsection-title">Customer Details</h3>
+                  <div className="add-sales-v2-subsection-head">
+                    <h3 className="add-sales-v2-subsection-title">Customer Details</h3>
+                    {customerProcessing && <span className="add-sales-v2-processing">Processing</span>}
+                  </div>
                   <dl className="add-sales-v2-dl">
-                    <div className="add-sales-v2-dl-row"><dt>Aadhar ID</dt><dd>{display(c?.aadhar_id)}</dd></div>
-                    <div className="add-sales-v2-dl-row"><dt>Name</dt><dd>{display(c?.name)}</dd></div>
-                    <div className="add-sales-v2-dl-row"><dt>Gender</dt><dd>{display(c?.gender)}</dd></div>
-                    <div className="add-sales-v2-dl-row"><dt>Date of birth</dt><dd>{display(c?.date_of_birth)}</dd></div>
-                    <div className="add-sales-v2-dl-row"><dt>Address</dt><dd>{buildDisplayAddress(c)}</dd></div>
+                    <div className="add-sales-v2-dl-row">
+                      <dt>Aadhar ID</dt>
+                      <dd>{display(c?.aadhar_id)}</dd>
+                    </div>
+                    <div className="add-sales-v2-dl-row">
+                      <dt>Name</dt>
+                      <dd>
+                        {display(c?.name)}
+                        {c?.gender && String(c.gender).trim() ? (
+                          <span style={{ marginLeft: 12 }}>
+                            <span className="add-sales-v2-inline-label">Gender</span>{" "}
+                            {String(c.gender).trim()}
+                          </span>
+                        ) : null}
+                      </dd>
+                    </div>
+                    <div className="add-sales-v2-dl-row">
+                      <dt>Date of birth</dt>
+                      <dd>{display(c?.date_of_birth)}</dd>
+                    </div>
+                    <div className="add-sales-v2-dl-row">
+                      <dt>Address</dt>
+                      <dd>{buildDisplayAddress(c)}</dd>
+                    </div>
                   </dl>
                 </div>
                 <div className="add-sales-v2-subsection">
-                  <h3 className="add-sales-v2-subsection-title">Vehicle Details</h3>
+                  <div className="add-sales-v2-subsection-head">
+                    <h3 className="add-sales-v2-subsection-title">Vehicle Details</h3>
+                    {vehicleProcessing && <span className="add-sales-v2-processing">Processing</span>}
+                  </div>
                   <dl className="add-sales-v2-dl">
-                    <div className="add-sales-v2-dl-row"><dt>Frame no.</dt><dd>{display(v?.frame_no)}</dd></div>
-                    <div className="add-sales-v2-dl-row"><dt>Engine No.</dt><dd>{display(v?.engine_no)}</dd></div>
-                    <div className="add-sales-v2-dl-row"><dt>Model & colour</dt><dd>{display(v?.model_colour)}</dd></div>
-                    <div className="add-sales-v2-dl-row"><dt>Key no.</dt><dd>{display(v?.key_no)}</dd></div>
-                    <div className="add-sales-v2-dl-row"><dt>Battery no.</dt><dd>{display(v?.battery_no)}</dd></div>
+                    <div className="add-sales-v2-dl-row">
+                      <dt>Frame no.</dt>
+                      <dd>
+                        <input
+                          className="add-sales-v2-dl-input"
+                          value={v?.frame_no ?? ""}
+                          onChange={(e) => setExtractedVehicle((prev) => ({ ...(prev ?? {}), frame_no: e.target.value }))}
+                          placeholder="—"
+                        />
+                      </dd>
+                    </div>
+                    <div className="add-sales-v2-dl-row">
+                      <dt>Engine no.</dt>
+                      <dd>
+                        <input
+                          className="add-sales-v2-dl-input"
+                          value={v?.engine_no ?? ""}
+                          onChange={(e) => setExtractedVehicle((prev) => ({ ...(prev ?? {}), engine_no: e.target.value }))}
+                          placeholder="—"
+                        />
+                      </dd>
+                    </div>
+                    <div className="add-sales-v2-dl-row">
+                      <dt>Key no.</dt>
+                      <dd>
+                        <input
+                          className="add-sales-v2-dl-input"
+                          value={v?.key_no ?? ""}
+                          onChange={(e) => setExtractedVehicle((prev) => ({ ...(prev ?? {}), key_no: e.target.value }))}
+                          placeholder="—"
+                        />
+                      </dd>
+                    </div>
+                    <div className="add-sales-v2-dl-row">
+                      <dt>Battery no.</dt>
+                      <dd>
+                        <input
+                          className="add-sales-v2-dl-input"
+                          value={v?.battery_no ?? ""}
+                          onChange={(e) => setExtractedVehicle((prev) => ({ ...(prev ?? {}), battery_no: e.target.value }))}
+                          placeholder="—"
+                        />
+                      </dd>
+                    </div>
+                  </dl>
+                </div>
+                <div className="add-sales-v2-subsection">
+                  <div className="add-sales-v2-subsection-head">
+                    <h3 className="add-sales-v2-subsection-title">Insurance Details</h3>
+                    {insuranceProcessing && <span className="add-sales-v2-processing">Processing</span>}
+                  </div>
+                  <dl className="add-sales-v2-dl">
+                    <div className="add-sales-v2-dl-row">
+                      <dt>Customer Profession</dt>
+                      <dd>
+                        <input
+                          className="add-sales-v2-dl-input"
+                          value={ins?.profession ?? ""}
+                          onChange={(e) => setExtractedInsurance((prev) => ({ ...(prev ?? {}), profession: e.target.value }))}
+                          placeholder="—"
+                        />
+                      </dd>
+                    </div>
+                    <div className="add-sales-v2-dl-row">
+                      <dt>Nominee Name</dt>
+                      <dd>
+                        <input
+                          className="add-sales-v2-dl-input"
+                          value={ins?.nominee_name ?? ""}
+                          onChange={(e) => setExtractedInsurance((prev) => ({ ...(prev ?? {}), nominee_name: e.target.value }))}
+                          placeholder="—"
+                        />
+                      </dd>
+                    </div>
+                    <div className="add-sales-v2-dl-row">
+                      <dt>Nominee Age</dt>
+                      <dd>
+                        <input
+                          className="add-sales-v2-dl-input"
+                          value={ins?.nominee_age ?? ""}
+                          onChange={(e) => setExtractedInsurance((prev) => ({ ...(prev ?? {}), nominee_age: e.target.value }))}
+                          placeholder="—"
+                        />
+                      </dd>
+                    </div>
+                    <div className="add-sales-v2-dl-row">
+                      <dt>Nominee Relationship</dt>
+                      <dd>
+                        <input
+                          className="add-sales-v2-dl-input"
+                          value={ins?.nominee_relationship ?? ""}
+                          onChange={(e) => setExtractedInsurance((prev) => ({ ...(prev ?? {}), nominee_relationship: e.target.value }))}
+                          placeholder="—"
+                        />
+                      </dd>
+                    </div>
                   </dl>
                 </div>
               </div>

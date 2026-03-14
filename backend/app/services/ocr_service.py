@@ -55,6 +55,19 @@ _VEHICLE_KEY_ALIASES = {
     "battery_no": ["battery no", "battery no.", "battery number", "battery"],
 }
 
+# Map Textract form keys to insurance/nominee fields (from Details sheet).
+_INSURANCE_KEY_ALIASES = {
+    "profession": ["profession", "profession:", "occupation", "customer profession"],
+    "nominee_name": ["nominee name", "nominee name:", "nominee"],
+    "nominee_age": ["nominee age", "nominee age:", "age of nominee"],
+    "nominee_relationship": ["nominee relationship", "nominee relationship:", "relationship", "relation"],
+}
+
+
+def _normalize_key_for_match(key: str) -> str:
+    """Lowercase and collapse spaces for key matching."""
+    return re.sub(r"\s+", " ", (key or "").lower().strip())
+
 
 def _map_key_value_pairs_to_vehicle(pairs: list[dict]) -> dict[str, str]:
     """Map key_value_pairs from Textract to structured vehicle fields (frame_no, engine_no, model_colour, key_no, battery_no)."""
@@ -85,6 +98,69 @@ def _map_key_value_pairs_to_vehicle(pairs: list[dict]) -> dict[str, str]:
         if combined:
             out["model_colour"] = combined
 
+    return out
+
+
+def _map_key_value_pairs_to_insurance(pairs: list[dict]) -> dict[str, str]:
+    """Map key_value_pairs from Textract to insurance/nominee fields."""
+    out: dict[str, str] = {}
+    key_lower_to_value: dict[str, str] = {}
+    for kv in pairs:
+        k = (kv.get("key") or "").strip()
+        v = (kv.get("value") or "").strip()
+        if not k:
+            continue
+        key_norm = _normalize_key_for_match(k)
+        key_lower_to_value[key_norm] = v
+        # Also store with colon stripped for "Nominee Name:" style
+        if ":" in key_norm:
+            key_lower_to_value[key_norm.replace(":", "").strip()] = v
+
+    for field, aliases in _INSURANCE_KEY_ALIASES.items():
+        if field in out:
+            continue
+        for alias in aliases:
+            anorm = _normalize_key_for_match(alias)
+            if anorm in key_lower_to_value:
+                out[field] = key_lower_to_value[anorm]
+                break
+            # Match if key contains alias (e.g. "nominee name" in "Nominee Name")
+            for k, v in key_lower_to_value.items():
+                if anorm in k or k in anorm:
+                    out[field] = v
+                    break
+            if field in out:
+                break
+    return out
+
+
+def _parse_insurance_from_full_text(full_text: str) -> dict[str, str]:
+    """Try to extract profession, nominee name, age, relationship from full text (fallback when not in key-value pairs)."""
+    out: dict[str, str] = {}
+    if not full_text or not isinstance(full_text, str):
+        return out
+    text = full_text.strip()
+    # Patterns: "Label" or "Label:" followed by value on same or next line
+    patterns = [
+        ("profession", "profession"),
+        ("nominee name", "nominee_name"),
+        ("nominee age", "nominee_age"),
+        ("nominee relationship", "nominee_relationship"),
+        ("occupation", "profession"),
+        ("relation", "nominee_relationship"),
+    ]
+    for label, key in patterns:
+        if key in out:
+            continue
+        pat = re.compile(
+            rf"{re.escape(label)}\s*:?\s*\n?\s*([^\n]+)",
+            re.IGNORECASE,
+        )
+        m = pat.search(text)
+        if m:
+            val = m.group(1).strip()
+            if val and len(val) < 200:
+                out[key] = val
     return out
 
 
@@ -201,17 +277,29 @@ class OcrService:
             output_path.write_text(text, encoding="utf-8")
 
             vehicle = _map_key_value_pairs_to_vehicle(key_value_pairs)
+            insurance = _map_key_value_pairs_to_insurance(key_value_pairs)
+            if result.get("full_text"):
+                from_full = _parse_insurance_from_full_text(result["full_text"])
+                for k, v in from_full.items():
+                    if v and not insurance.get(k):
+                        insurance[k] = v
             json_path = _json_output_path(self.ocr_output_dir, subfolder, filename)
             customer = {}
+            existing_insurance: dict = {}
             if json_path.exists():
                 try:
                     existing = json.loads(json_path.read_text(encoding="utf-8"))
                     customer = existing.get("customer") or {}
                     if not isinstance(customer, dict):
                         customer = {}
+                    existing_insurance = existing.get("insurance") or {}
+                    if not isinstance(existing_insurance, dict):
+                        existing_insurance = {}
                 except Exception:
                     pass
-            details_json = {"vehicle": vehicle, "customer": customer}
+            # Preserve existing insurance fields (e.g. profession) and overlay nominee from Details sheet
+            insurance_merged = {**existing_insurance, **{k: v for k, v in insurance.items() if v}}
+            details_json = {"vehicle": vehicle, "customer": customer, "insurance": insurance_merged}
             json_path.write_text(json.dumps(details_json, indent=2), encoding="utf-8")
 
             with get_connection() as conn:
@@ -359,8 +447,12 @@ class OcrService:
                     data["vehicle"] = {}
                 if not isinstance(data.get("customer"), dict):
                     data["customer"] = {}
+                if not isinstance(data.get("insurance"), dict):
+                    data["insurance"] = {}
             except Exception:
                 pass
+        if "insurance" not in data:
+            data["insurance"] = {}
 
         customer = data.get("customer") or {}
         has_customer = any(customer.get(k) for k in ("name", "address", "aadhar_id", "city", "state", "pin", "pin_code"))

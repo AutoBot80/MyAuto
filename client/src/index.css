@@ -32,8 +32,8 @@ a:hover {
 body {
   margin: 0;
   min-width: 320px;
-  min-height: 100vh;
-  height: 100vh;
+  min-height: 111vh;
+  height: 111vh;
   width: 100%;
   overflow: hidden;
 }

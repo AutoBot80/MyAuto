@@ -5,6 +5,7 @@ from .vision import router as vision_router
 from .dealers import router as dealers_router
 from .textract_router import router as textract_router
 from .qr_decode import router as qr_decode_router
+from .submit_info import router as submit_info_router
 
 __all__ = [
     "health_router",
@@ -14,4 +15,5 @@ __all__ = [
     "dealers_router",
     "textract_router",
     "qr_decode_router",
+    "submit_info_router",
 ]

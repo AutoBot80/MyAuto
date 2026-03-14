@@ -1,10 +1,14 @@
--- Insert Hero Motors (parent) and Arya Agencies into dealer_master.
--- Run once: psql -h localhost -U postgres -d auto_ai -f DDL/seed_dealer_arya.sql
+-- Insert OEM and dealers (Hero Motors parent, Arya Agencies). Uses dealer_ref and oem_ref.
+-- Run once after oem_ref and dealer_ref exist: psql -h localhost -U postgres -d auto_ai -f DDL/seed_dealer_arya.sql
 
-INSERT INTO dealer_master (
+INSERT INTO oem_ref (oem_name, vehicles_type)
+SELECT 'Hero Motors', '2W'
+WHERE NOT EXISTS (SELECT 1 FROM oem_ref WHERE oem_name = 'Hero Motors');
+
+INSERT INTO dealer_ref (
     dealer_id,
     dealer_name,
-    dealer_of,
+    oem_id,
     address,
     pin,
     city,
@@ -14,7 +18,7 @@ INSERT INTO dealer_master (
 ) VALUES (
     100000,
     'Hero Motors',
-    'hero Motors',
+    (SELECT oem_id FROM oem_ref WHERE oem_name = 'Hero Motors' LIMIT 1),
     'New Delhi',
     '110001',
     'New Delhi',
@@ -24,10 +28,10 @@ INSERT INTO dealer_master (
 )
 ON CONFLICT (dealer_id) DO NOTHING;
 
-INSERT INTO dealer_master (
+INSERT INTO dealer_ref (
     dealer_id,
     dealer_name,
-    dealer_of,
+    oem_id,
     address,
     pin,
     city,
@@ -37,7 +41,7 @@ INSERT INTO dealer_master (
 ) VALUES (
     100001,
     'Arya Agencies',
-    'Hero Motors',
+    (SELECT oem_id FROM oem_ref WHERE oem_name = 'Hero Motors' LIMIT 1),
     'Bharatpur, Rajasthan',
     '321001',
     'Bharatpur',

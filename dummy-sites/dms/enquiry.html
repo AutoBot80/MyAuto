@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Dummy DMS – Enquiry (eDealer HMCL)</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: Arial, sans-serif; margin: 0; padding: 0; font-size: 12px; }
+    .top-nav { background: #333; color: #fff; padding: 0.4rem 1rem; display: flex; gap: 1rem; align-items: center; }
+    .top-nav a { color: #fff; text-decoration: none; }
+    .top-nav a.active { font-weight: bold; text-decoration: underline; }
+    .main { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; padding: 1rem; max-width: 1200px; margin: 0 auto; }
+    .section { border: 1px solid #ccc; border-radius: 4px; padding: 0.75rem; background: #fafafa; }
+    .section h3 { margin: 0 0 0.5rem 0; font-size: 12px; color: #333; }
+    .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; align-items: center; margin-bottom: 0.4rem; }
+    .form-row label { margin: 0; min-width: 120px; }
+    .form-row input, .form-row select { padding: 0.25rem 0.4rem; }
+    .form-row.full { grid-template-columns: 1fr; }
+    .form-row.full input { max-width: 280px; }
+    a.download { display: inline-block; margin-top: 0.5rem; padding: 0.4rem 0.8rem; background: #06c; color: #fff; text-decoration: none; border-radius: 4px; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <nav class="top-nav" role="navigation">
+    <a href="index.html">Home</a>
+    <a href="#">My Dashboard</a>
+    <a href="#">Payments</a>
+    <a href="#">Vehicles</a>
+    <a href="enquiry.html" class="active">Enquiry</a>
+    <a href="#">Vehicle Sales Invoices</a>
+    <a href="#">Vehicles Receipt</a>
+    <a href="#">Vehicles Inventory</a>
+    <a href="#">Master</a>
+  </nav>
+
+  <div class="main">
+    <!-- Customer Information -->
+    <div class="section">
+      <h3>Customer Information</h3>
+      <div class="form-row">
+        <label for="dms-enquiry-type">Enquiry Type</label>
+        <select id="dms-enquiry-type" name="enquiry_type"><option value="Individual">Individual</option><option value="Fleet">Fleet</option></select>
+      </div>
+      <div class="form-row">
+        <label for="dms-enquiry-num">Enquiry#</label>
+        <input type="text" id="dms-enquiry-num" name="enquiry_num" placeholder="e.g. TXN2-1JGXME" />
+      </div>
+      <div class="form-row">
+        <label for="dms-lead-id">Lead Id</label>
+        <input type="text" id="dms-lead-id" name="lead_id" />
+      </div>
+      <div class="form-row">
+        <label for="dms-mr-ms">Mr/Ms</label>
+        <select id="dms-mr-ms" name="mr_ms"><option value="Mr.">Mr.</option><option value="Ms.">Ms.</option><option value="Mrs.">Mrs.</option></select>
+      </div>
+      <div class="form-row">
+        <label for="dms-contact-first-name">Contact First Name</label>
+        <input type="text" id="dms-contact-first-name" name="contact_first_name" />
+      </div>
+      <div class="form-row">
+        <label for="dms-contact-last-name">Contact Last Name</label>
+        <input type="text" id="dms-contact-last-name" name="contact_last_name" />
+      </div>
+      <div class="form-row">
+        <label for="dms-mobile-phone">Mobile Phone #</label>
+        <input type="text" id="dms-mobile-phone" name="mobile_phone" maxlength="10" />
+      </div>
+      <div class="form-row">
+        <label for="dms-landline">Landline #</label>
+        <input type="text" id="dms-landline" name="landline" />
+      </div>
+      <div class="form-row">
+        <label for="dms-email">Email</label>
+        <input type="text" id="dms-email" name="email" />
+      </div>
+      <div class="form-row">
+        <label for="dms-uin-type">UIN Type</label>
+        <select id="dms-uin-type" name="uin_type"><option value="">--</option><option value="Aadhaar">Aadhaar</option><option value="PAN">PAN</option></select>
+      </div>
+      <div class="form-row">
+        <label for="dms-uin-no">UIN No</label>
+        <input type="text" id="dms-uin-no" name="uin_no" />
+      </div>
+      <div class="form-row">
+        <label for="dms-booking-type">Booking Type</label>
+        <select id="dms-booking-type" name="booking_type"><option value="Regular">Regular</option><option value="Exchange">Exchange</option></select>
+      </div>
+    </div>
+
+    <!-- Address Information -->
+    <div class="section">
+      <h3>Address Information</h3>
+      <div class="form-row">
+        <label for="dms-state">State</label>
+        <select id="dms-state" name="state"><option value="">--</option><option value="RAJASTHAN">RAJASTHAN</option><option value="Delhi">Delhi</option></select>
+      </div>
+      <div class="form-row">
+        <label for="dms-district">District</label>
+        <select id="dms-district" name="district"><option value="">--</option><option value="BHARATPUR">BHARATPUR</option></select>
+      </div>
+      <div class="form-row">
+        <label for="dms-tensil">Tensil/Taluka</label>
+        <select id="dms-tensil" name="tensil"><option value="">--</option><option value="BHARATPUR">BHARATPUR</option></select>
+      </div>
+      <div class="form-row">
+        <label for="dms-city">City/Town/Village</label>
+        <select id="dms-city" name="city"><option value="">--</option><option value="BHARATPUR">BHARATPUR</option></select>
+      </div>
+      <div class="form-row full">
+        <label for="dms-address-line-1">Address Line 1</label>
+        <input type="text" id="dms-address-line-1" name="address_line_1" />
+      </div>
+      <div class="form-row full">
+        <label for="dms-address-line-2">Address Line 2</label>
+        <input type="text" id="dms-address-line-2" name="address_line_2" />
+      </div>
+      <div class="form-row">
+        <label for="dms-pin-code">Pin Code</label>
+        <input type="text" id="dms-pin-code" name="pin_code" maxlength="6" />
+      </div>
+    </div>
+
+    <!-- Customer Profile -->
+    <div class="section">
+      <h3>Customer Profile</h3>
+      <div class="form-row">
+        <label for="dms-age-years">Age/Years</label>
+        <input type="text" id="dms-age-years" name="age_years" />
+      </div>
+      <div class="form-row">
+        <label for="dms-gender">Gender</label>
+        <select id="dms-gender" name="gender"><option value="">--</option><option value="M">Male</option><option value="F">Female</option></select>
+      </div>
+      <div class="form-row">
+        <label for="dms-occupation">Occupation</label>
+        <select id="dms-occupation" name="occupation"><option value="">--</option><option value="Salaried">Salaried</option><option value="Business">Business</option></select>
+      </div>
+      <div class="form-row">
+        <label for="dms-customer-budget">Customer Budget</label>
+        <input type="text" id="dms-customer-budget" name="customer_budget" />
+      </div>
+    </div>
+
+    <!-- Vehicle Information -->
+    <div class="section">
+      <h3>Vehicle Information</h3>
+      <div class="form-row">
+        <label for="dms-model-interested">Model Interested In</label>
+        <select id="dms-model-interested" name="model_interested"><option value="">--</option><option value="Splendor">Splendor</option><option value="Passion">Passion</option></select>
+      </div>
+      <div class="form-row">
+        <label for="dms-principal-model">Principal Model</label>
+        <select id="dms-principal-model" name="principal_model"><option value="">--</option></select>
+      </div>
+      <div class="form-row">
+        <label for="dms-variant">Variant</label>
+        <select id="dms-variant" name="variant"><option value="">--</option></select>
+      </div>
+      <div class="form-row">
+        <label for="dms-color">Color</label>
+        <select id="dms-color" name="color"><option value="">--</option><option value="Black">Black</option><option value="Red">Red</option></select>
+      </div>
+      <div class="form-row">
+        <label for="dms-quantity">Quantity</label>
+        <input type="number" id="dms-quantity" name="quantity" value="1" min="1" />
+      </div>
+    </div>
+
+    <!-- Finance Details -->
+    <div class="section">
+      <h3>Finance Details</h3>
+      <div class="form-row">
+        <label for="dms-financier-name">Financier Name</label>
+        <select id="dms-financier-name" name="financier_name"><option value="">--</option></select>
+      </div>
+      <div class="form-row">
+        <label for="dms-financer">Financer</label>
+        <select id="dms-financer" name="financer"><option value="">--</option></select>
+      </div>
+      <div class="form-row">
+        <label for="dms-finance-status">Status</label>
+        <select id="dms-finance-status" name="finance_status"><option value="">--</option></select>
+      </div>
+    </div>
+
+    <!-- Enquiry Information -->
+    <div class="section" style="grid-column: 1 / -1;">
+      <h3>Enquiry Information</h3>
+      <form id="dms-enquiry-form">
+      <div class="form-row">
+        <label for="dms-exchange-required">Exchange Required</label>
+        <select id="dms-exchange-required" name="exchange_required"><option value="N">N</option><option value="Y">Y</option></select>
+      </div>
+      <div class="form-row">
+        <label for="dms-finance-required">Finance Required</label>
+        <select id="dms-finance-required" name="finance_required"><option value="N">N</option><option value="Y">Y</option></select>
+      </div>
+      <div class="form-row">
+        <label for="dms-enquiry-entry-date">Enquiry Entry Date</label>
+        <input type="text" id="dms-enquiry-entry-date" name="enquiry_entry_date" placeholder="dd/mm/yyyy" />
+      </div>
+      <div class="form-row">
+        <label for="dms-expected-date-of-purchase">Expected Date of Purchase</label>
+        <input type="text" id="dms-expected-date-of-purchase" name="expected_date_of_purchase" placeholder="dd/mm/yyyy" />
+      </div>
+      <div class="form-row">
+        <label for="dms-doe-name">DOE Name</label>
+        <input type="text" id="dms-doe-name" name="doe_name" />
+      </div>
+      <div class="form-row">
+        <label for="dms-order-num">Order#</label>
+        <input type="text" id="dms-order-num" name="order_num" />
+      </div>
+      <div class="form-row">
+        <label for="dms-enquiry-status">Enquiry Status</label>
+        <select id="dms-enquiry-status" name="enquiry_status"><option value="">--</option><option value="Open">Open</option><option value="Closed">Closed</option></select>
+      </div>
+      <div class="form-row full">
+        <label for="dms-comments">Comments</label>
+        <textarea id="dms-comments" name="comments" rows="2" style="width:100%; max-width:400px;"></textarea>
+      </div>
+      <button type="submit" id="dms-submit-enquiry">Submit Enquiry</button>
+      <a href="invoice.html" id="dms-view-print-invoice" class="download">View / Print invoice</a>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    document.getElementById('dms-enquiry-form')?.addEventListener('submit', function(e) {
+      e.preventDefault();
+      alert('Dummy DMS: Form submit (no backend). Use for Playwright fill/submit tests.');
+    });
+  </script>
+</body>
+</html>

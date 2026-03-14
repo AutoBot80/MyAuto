@@ -1,8 +1,11 @@
 export type Page =
   | "add-sales"
   | "customer-details"
+  | "dms-queue"
+  | "insurance-queue"
   | "rto-status"
-  | "ai-reader-queue";
+  | "service-reminders"
+  | "contact-us";
 
 export type AddSalesStep =
   | "upload-scans"
@@ -81,7 +84,15 @@ export function buildDisplayAddress(c: ExtractedCustomerDetails | null | undefin
   return parts.length > 0 ? parts.map((s) => String(s).trim()).join(", ") : "—";
 }
 
+export interface ExtractedInsuranceDetails {
+  profession?: string;
+  nominee_name?: string;
+  nominee_age?: string;
+  nominee_relationship?: string;
+}
+
 export interface ExtractedDetailsResponse {
   vehicle: ExtractedVehicleDetails;
   customer: ExtractedCustomerDetails | Record<string, string>;
+  insurance?: ExtractedInsuranceDetails | Record<string, string>;
 }

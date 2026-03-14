@@ -3,7 +3,7 @@
   height: 100%;
   min-height: 0;
   width: 100%;
-  padding: 12px;
+  padding: 6px 12px;
   box-sizing: border-box;
   font-family: "Segoe UI", system-ui, -apple-system, Arial, sans-serif;
   background: #e8eef4;
@@ -27,6 +27,8 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  transform: scale(0.9);
+  transform-origin: top center;
 }
 
 /* Blue top bar: dealer name center, date right */
@@ -44,6 +46,12 @@
   flex: 0 0 auto;
   display: flex;
   align-items: center;
+}
+
+.app-topbar-brand {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
 }
 
 .app-topbar-home {
@@ -154,11 +162,21 @@
 .app-main-v2 {
   flex: 1;
   min-height: 0;
-  overflow: hidden;
-  padding: 12px 24px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 8px 18px;
   color: #1b2a3a;
   display: flex;
   flex-direction: column;
+}
+
+.app-iframe-dms {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  border: none;
+  border-radius: 4px;
+  background: #fff;
 }
 
 .app-main-v2 h2 {
@@ -262,12 +280,12 @@
 }
 
 .add-sales-v2-box-upload {
-  flex: 1 1 0;
+  flex: 0.8 1 0;
   min-width: 320px;
 }
 
 .add-sales-v2-box-extracted {
-  flex: 1 1 0;
+  flex: 1.2 1 0;
   min-width: 320px;
 }
 
@@ -310,7 +328,11 @@
   flex: 1;
   min-height: 0;
   overflow: hidden;
-  padding: 8px 14px;
+  padding: 6px 14px;
+}
+
+.add-sales-v2-submit-btn {
+  /* base style; overridden below for placement-specific color */
 }
 
 .add-sales-v2-placeholder {
@@ -335,6 +357,14 @@
   margin-bottom: 4px;
 }
 
+.add-sales-v2-subsection-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
 .add-sales-v2-subsection-head .add-sales-v2-subsection-title {
   margin: 0;
 }
@@ -346,6 +376,13 @@
   color: #1e5a9e;
   text-transform: uppercase;
   letter-spacing: 0.03em;
+}
+
+.add-sales-v2-processing {
+  font-style: italic;
+  color: #d97706;
+  font-size: 12px;
+  font-weight: 500;
 }
 
 .add-sales-v2-dl {
@@ -364,13 +401,39 @@
   margin: 0;
   font-weight: 500;
   color: #555;
-  min-width: 72px;
+  min-width: 120px;
+  max-width: 120px;
   flex-shrink: 0;
 }
 
 .add-sales-v2-dl-row dd {
   margin: 0;
   color: #333;
+  flex: 1;
+  min-width: 0;
+  padding-left: 6px; /* shift extracted values slightly right while keeping labels fixed */
+}
+
+.add-sales-v2-inline-label {
+  font-weight: 500;
+  color: #555;
+}
+
+.add-sales-v2-dl-input {
+  flex: 1;
+  min-width: 0;
+  max-width: 240px;
+  padding: 6px 10px;
+  font-size: 13px;
+  border: 1px solid #c5d9ed;
+  border-radius: 6px;
+  background: #fff;
+  color: #333;
+}
+
+.add-sales-v2-dl-input:focus {
+  outline: none;
+  border-color: #1e5a9e;
 }
 
 .add-sales-v2-half {
@@ -658,6 +721,29 @@
   margin-top: 12px;
   border-top: 1px solid #c5d9ed;
   padding-top: 12px;
+}
+
+/* Submit Info button (Extracted Information header) */
+.add-sales-v2-box-extracted .add-sales-v2-submit-btn {
+  background: #ffe873;
+  color: #1a1a1a;
+  border-color: #f5d000;
+}
+
+.add-sales-v2-box-extracted .add-sales-v2-submit-btn:hover:not(:disabled) {
+  background: #f5d000;
+}
+
+.add-sales-v2-status-row {
+  margin-bottom: 4px;
+  font-size: 12px;
+  color: #1e5a9e;
+}
+
+.add-sales-v2-status-text {
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: #e8f1ff;
 }
 
 .app-panel-uploaded-title {

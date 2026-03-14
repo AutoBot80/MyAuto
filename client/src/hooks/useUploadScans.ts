@@ -71,9 +71,7 @@ export function useUploadScans(
         setUploadedFiles((prev) => [...(data.saved_files ?? []), ...prev]);
       // Trigger Details sheet reader (Textract forms) on new queue items
       const processRes = await startProcessAll();
-      if (processRes.started) {
-        setUploadStatus((s) => `${s} Details reader started.`);
-      }
+      void processRes;
     } catch (err) {
       setUploadStatus(err instanceof Error ? err.message : "Upload failed.");
     } finally {

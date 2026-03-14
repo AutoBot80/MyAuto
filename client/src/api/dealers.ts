@@ -4,6 +4,7 @@ export interface Dealer {
   dealer_id: number;
   dealer_name: string;
   dealer_of: string | null;
+  dms_link: string | null;
   address: string | null;
   pin: string | null;
   city: string | null;

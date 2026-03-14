@@ -96,7 +96,7 @@ export function UploadScansPanel({
                     onUploadV2(selectedAadharFile, selectedAadharBackFile, selectedDetailsFile);
                 }}
               >
-                {isUploading ? "Uploading..." : "Upload both"}
+                {isUploading ? "Uploading..." : "Upload all files"}
               </button>
             </div>
           )}
