@@ -10,7 +10,12 @@ git add .
 git status
 for /f "tokens=*" %%i in ('powershell -NoProfile -Command "Get-Date -Format 'yyyy-MM-dd'"') do set "DATE=%%i"
 git commit -m "Daily update: %DATE%" 2>nul
-if %errorlevel% equ 0 (git push origin main 2>nul) else echo No changes to commit or push skipped.
+echo Pushing all latest changes to remote...
+git push origin main 2>nul
+if %errorlevel% neq 0 (
+  git push origin master 2>nul
+)
+echo Git update done.
 echo.
 
 echo === Starting Backend (uvicorn) in new window ===
