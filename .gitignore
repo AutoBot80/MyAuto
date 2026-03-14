@@ -3,6 +3,9 @@
 .env.*
 !.env.example
 backend/.env
+# AWS keys (never commit)
+AWS*.csv
+*accessKeys*.csv
 
 # Python
 venv/
