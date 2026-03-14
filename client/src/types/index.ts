@@ -1,8 +1,6 @@
 export type Page =
   | "add-sales"
   | "customer-details"
-  | "dms-queue"
-  | "insurance-queue"
   | "rto-status"
   | "service-reminders"
   | "contact-us";

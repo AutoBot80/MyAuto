@@ -4,10 +4,8 @@ import type { Page } from "../types";
 
 const PAGE_LABELS: Record<Page, string> = {
   "add-sales": "Add Sales",
-  "customer-details": "All Customers",
-  "dms-queue": "DMS Queue",
-  "insurance-queue": "Insurance Queue",
-  "rto-status": "RTO Queue",
+  "customer-details": "View Customers",
+  "rto-status": "RTO Payments Pending",
   "service-reminders": "Service Reminders",
   "contact-us": "Contact Us",
 };
@@ -36,11 +34,7 @@ export function AppLayoutV2({
   onGoHome,
 }: AppLayoutV2Props) {
   const tabs: Page[] = visiblePages ?? (Object.keys(PAGE_LABELS) as Page[]);
-  const leftSlot = (
-    <span className="app-topbar-brand">Dealer Saathi <sup>©</sup></span>
-  );
-
-  const homeLogo = (
+  const homeLogo = onGoHome ? (
     <button
       type="button"
       className="app-topbar-home-logo"
@@ -53,15 +47,15 @@ export function AppLayoutV2({
         <polyline points="9 22 9 12 15 12 15 22" />
       </svg>
     </button>
-  );
+  ) : null;
 
-  const rightSlot = onGoHome ? (
+  const leftSlot = homeLogo;
+
+  const rightSlot = (
     <div className="app-topbar-right-with-home">
-      {homeLogo}
+      <span className="app-topbar-brand">Dealer Saathi <sup>©</sup></span>
       <div className="app-topbar-date">{headerRight}</div>
     </div>
-  ) : (
-    <div className="app-topbar-date">{headerRight}</div>
   );
 
   return (
@@ -87,7 +81,11 @@ export function AppLayoutV2({
             </button>
           ))}
         </nav>
-        <main className="app-main-v2">{children}</main>
+        <main className="app-main-v2">
+          <div className="app-main-v2-content" key={currentPage}>
+            {children}
+          </div>
+        </main>
       </div>
     </div>
   );

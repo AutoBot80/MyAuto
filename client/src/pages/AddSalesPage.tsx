@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import type { AddSalesStep, ExtractedVehicleDetails, ExtractedCustomerDetails, ExtractedInsuranceDetails } from "../types";
+import type { ExtractedVehicleDetails, ExtractedCustomerDetails, ExtractedInsuranceDetails } from "../types";
 import { buildDisplayAddress } from "../types";
 import { useUploadScans } from "../hooks/useUploadScans";
 import { UploadScansPanel } from "../components/UploadScansPanel";
@@ -8,18 +8,6 @@ import { submitInfo } from "../api/submitInfo";
 import { fillDms } from "../api/fillDms";
 import { loadAddSalesForm, saveAddSalesForm, clearAddSalesForm } from "../utils/addSalesStorage";
 import { normalizeVehicleDetails, hasVehicleData } from "../utils/vehicleDetails";
-
-const ADD_SALES_STEPS: { id: AddSalesStep; label: string; num: number }[] = [
-  { id: "upload-scans", label: "Upload scans", num: 1 },
-  { id: "hero-dms", label: "DMS", num: 2 },
-  { id: "insurance", label: "Insurance", num: 3 },
-  { id: "rto", label: "RTO", num: 4 },
-];
-
-const ADD_SALES_NAV = [
-  { ...ADD_SALES_STEPS[0], label: "Customer Info." },
-  ...ADD_SALES_STEPS.slice(1),
-];
 
 function getInitialForm() {
   const d = loadAddSalesForm();
@@ -77,9 +65,14 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
   const [submitStatus, setSubmitStatus] = useState<string | null>(null);
   const [fillDmsStatus, setFillDmsStatus] = useState<string | null>(null);
   const [isFillDmsLoading, setIsFillDmsLoading] = useState(false);
-  /** DMS-scraped vehicle only; shown on DMS page, does not change Extracted Information. */
+  /** DMS-scraped vehicle; shown in Fill Forms > DMS, does not change Extracted Information. */
   const [dmsScrapedVehicle, setDmsScrapedVehicle] = useState<ExtractedVehicleDetails | null>(null);
-  const [addSalesStep, setAddSalesStep] = useState<AddSalesStep>("upload-scans");
+  /** True when Form 21 and Form 22 PDFs have been downloaded from DMS. */
+  const [dmsPdfsDownloaded, setDmsPdfsDownloaded] = useState(false);
+  /** True after user has successfully pressed Submit Info. (Section 3 stays greyed until then.) */
+  const [hasSubmittedInfo, setHasSubmittedInfo] = useState(false);
+  /** True after user has used Print forms. (Used for beforeunload warning.) */
+  const [hasPrintedForms, setHasPrintedForms] = useState(false);
   const [formResetKey, setFormResetKey] = useState(0);
 
   const {
@@ -113,6 +106,20 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
       extractedInsurance,
     });
   }, [mobile, savedTo, uploadedFiles, uploadStatus, extractedVehicle, extractedCustomer, extractedInsurance]);
+
+  // Warn on close/refresh if customer processing not complete (forms not filled or print forms not done)
+  useEffect(() => {
+    const message = "Customer processing is not complete and the information will be lost.";
+    function handleBeforeUnload(e: BeforeUnloadEvent) {
+      if (hasSubmittedInfo && (!dmsPdfsDownloaded || !hasPrintedForms)) {
+        e.preventDefault();
+        e.returnValue = message;
+        return message;
+      }
+    }
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [hasSubmittedInfo, dmsPdfsDownloaded, hasPrintedForms]);
 
   const hasCustomer = Boolean(
     extractedCustomer &&
@@ -255,6 +262,9 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
     setExtractedCustomer(null);
     setExtractedInsurance(null);
     setDmsScrapedVehicle(null);
+    setDmsPdfsDownloaded(false);
+    setHasSubmittedInfo(false);
+    setHasPrintedForms(false);
     setFormResetKey((k) => k + 1);
   };
 
@@ -284,11 +294,67 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
   const vehicleProcessing = Boolean(savedTo && !hasVehicleData(v ?? null));
   const insuranceProcessing = Boolean(savedTo && !hasMeaningfulInsurance(ins));
 
+  const handleFillDms = async () => {
+    if (!savedTo || !dmsUrl) {
+      setFillDmsStatus("Upload scans first.");
+      return;
+    }
+    const c = extractedCustomer;
+    const v = extractedVehicle;
+    setIsFillDmsLoading(true);
+    setFillDmsStatus(null);
+    try {
+      const res = await fillDms({
+        subfolder: savedTo,
+        dms_base_url: dmsUrl,
+        customer: {
+          name: c?.name ?? undefined,
+          address: c?.address ?? buildDisplayAddress(c),
+          state: c?.state ?? undefined,
+          pin_code: c?.pin_code ?? undefined,
+          mobile_number: mobile ?? undefined,
+        },
+        vehicle: {
+          key_no: v?.key_no ?? undefined,
+          frame_no: v?.frame_no ?? undefined,
+          engine_no: v?.engine_no ?? undefined,
+        },
+      });
+      const scraped = res.vehicle && (res.vehicle.key_num ?? res.vehicle.frame_num ?? res.vehicle.engine_num ?? res.vehicle.model ?? res.vehicle.color ?? res.vehicle.cubic_capacity ?? res.vehicle.total_amount ?? res.vehicle.year_of_mfg);
+      if (scraped) {
+        setDmsScrapedVehicle({
+          key_no: res.vehicle!.key_num ?? undefined,
+          frame_no: res.vehicle!.frame_num ?? undefined,
+          engine_no: res.vehicle!.engine_num ?? undefined,
+          model: res.vehicle!.model ?? undefined,
+          color: res.vehicle!.color ?? undefined,
+          cubic_capacity: res.vehicle!.cubic_capacity ?? undefined,
+          total_amount: res.vehicle!.total_amount ?? undefined,
+          year_of_mfg: res.vehicle!.year_of_mfg ?? undefined,
+        });
+      }
+      if (res.success) {
+        const pdfs = res.pdfs_saved ?? [];
+        const hasForm21 = pdfs.some((f) => /form\s*21|form21/i.test(f));
+        const hasForm22 = pdfs.some((f) => /form\s*22|form22/i.test(f));
+        if (hasForm21 && hasForm22) setDmsPdfsDownloaded(true);
+        const pdfMsg = pdfs.length ? ` PDFs saved: ${pdfs.join(", ")}.` : "";
+        setFillDmsStatus(scraped ? `Done. See details below.${pdfMsg}` : `Done.${pdfMsg}`);
+      } else {
+        setFillDmsStatus(res.error ?? "Fill DMS failed.");
+      }
+    } catch (err) {
+      setFillDmsStatus(err instanceof Error ? err.message : "Fill DMS failed.");
+    } finally {
+      setIsFillDmsLoading(false);
+    }
+  };
+
+  const d = dmsScrapedVehicle;
+
   const panel = (
     <UploadScansPanel
       key={formResetKey}
-      addSalesStep={addSalesStep}
-      onStepChange={setAddSalesStep}
       isUploading={isUploading}
       onUpload={upload}
       uploadStatus={uploadStatus}
@@ -296,101 +362,25 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
       mobile={mobile}
       isMobileValid={isMobileValid}
       onUploadV2={uploadV2}
-      onFillDms={async () => {
-        if (!savedTo || !dmsUrl) {
-          setFillDmsStatus("Upload scans and open DMS first.");
-          return;
-        }
-        const c = extractedCustomer;
-        const v = extractedVehicle;
-        setIsFillDmsLoading(true);
-        setFillDmsStatus(null);
-        try {
-          const res = await fillDms({
-            subfolder: savedTo,
-            dms_base_url: dmsUrl,
-            customer: {
-              name: c?.name ?? undefined,
-              address: c?.address ?? buildDisplayAddress(c),
-              state: c?.state ?? undefined,
-              pin_code: c?.pin_code ?? undefined,
-              mobile_number: mobile ?? undefined,
-            },
-            vehicle: {
-              key_no: v?.key_no ?? undefined,
-              frame_no: v?.frame_no ?? undefined,
-              engine_no: v?.engine_no ?? undefined,
-            },
-          });
-          const scraped = res.vehicle && (res.vehicle.key_num ?? res.vehicle.frame_num ?? res.vehicle.engine_num ?? res.vehicle.model ?? res.vehicle.color ?? res.vehicle.cubic_capacity ?? res.vehicle.total_amount ?? res.vehicle.year_of_mfg);
-          if (scraped) {
-            setDmsScrapedVehicle({
-              key_no: res.vehicle!.key_num ?? undefined,
-              frame_no: res.vehicle!.frame_num ?? undefined,
-              engine_no: res.vehicle!.engine_num ?? undefined,
-              model: res.vehicle!.model ?? undefined,
-              color: res.vehicle!.color ?? undefined,
-              cubic_capacity: res.vehicle!.cubic_capacity ?? undefined,
-              total_amount: res.vehicle!.total_amount ?? undefined,
-              year_of_mfg: res.vehicle!.year_of_mfg ?? undefined,
-            });
-          }
-          if (res.success) {
-            const pdfMsg = res.pdfs_saved?.length ? ` PDFs saved: ${res.pdfs_saved.join(", ")}.` : "";
-            setFillDmsStatus(scraped ? `DMS filled. See Details from DMS below.${pdfMsg}` : `DMS filled.${pdfMsg}`);
-          } else {
-            setFillDmsStatus(res.error ?? "Fill DMS failed.");
-          }
-        } catch (err) {
-          setFillDmsStatus(err instanceof Error ? err.message : "Fill DMS failed.");
-        } finally {
-          setIsFillDmsLoading(false);
-        }
-      }}
-      fillDmsStatus={fillDmsStatus}
-      isFillDmsLoading={isFillDmsLoading}
-      dmsVehicleDetails={addSalesStep === "hero-dms" ? (dmsScrapedVehicle ?? null) : null}
     />
   );
 
   return (
     <div className="add-sales-v2">
-      <nav className="add-sales-v2-nav" aria-label="Add sales steps">
-        {ADD_SALES_NAV.map(({ id, label, num }) => (
-            <button
-              key={id}
-              type="button"
-              className={`add-sales-v2-nav-item ${addSalesStep === id ? "active" : ""}`}
-              onClick={() => {
-                if (id === "rto") {
-                  openVahanInNewTab?.();
-                  setAddSalesStep(id);
-                } else {
-                  setAddSalesStep(id);
-                }
-              }}
-            >
-              <span className="add-sales-v2-nav-num">{num}</span>
-              <span className="add-sales-v2-nav-label">{label}</span>
-            </button>
-          ))}
-        </nav>
-        <main className="add-sales-v2-main">
-          <div className="add-sales-v2-two-col">
-            <section className="add-sales-v2-box add-sales-v2-box-upload">
-              {addSalesStep !== "hero-dms" && (
-                <div className="add-sales-v2-box-title-row">
-                  <h2 className="add-sales-v2-box-title">Upload Customer Information</h2>
-                  <button
-                    type="button"
-                    className="app-button"
+      <main className="add-sales-v2-main">
+        <div className="add-sales-v2-three-col">
+          <section className="add-sales-v2-box add-sales-v2-box-upload">
+              <div className="add-sales-v2-box-title-row">
+                <h2 className="add-sales-v2-box-title">1. Upload Customer Scans</h2>
+                <button
+                  type="button"
+className="app-button app-button--primary"
                     onClick={handleNew}
                     title="Start a new entry"
                   >
                     New
-                  </button>
-                </div>
-              )}
+                </button>
+              </div>
               <div className="add-sales-v2-box-body">
                 <div className="add-sales-v2-fields-row">
                   <div className="add-sales-v2-input-wrap add-sales-v2-input-mobile">
@@ -401,12 +391,11 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
                   {panel}
                 </div>
               </div>
-            </section>
-            <section className="add-sales-v2-box add-sales-v2-box-extracted">
+          </section>
+          <section className={`add-sales-v2-box add-sales-v2-box-extracted ${!savedTo ? "add-sales-v2-box--greyed" : ""}`}>
               <div className="add-sales-v2-box-title-row">
-                <h2 className="add-sales-v2-box-title">Extracted Information <span className="add-sales-v2-box-title-note">(AI enabled)</span></h2>
-                {addSalesStep !== "hero-dms" && (
-                  <button
+                <h2 className="add-sales-v2-box-title">2. AI Extracted Information</h2>
+                <button
                     type="button"
                     className="app-button add-sales-v2-submit-btn"
                     disabled={isSubmitting || !mobile || !c}
@@ -429,6 +418,7 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
                           dealerId,
                         });
                         setSubmitStatus("Saved");
+                        setHasSubmittedInfo(true);
                       } catch (err) {
                         const msg = err instanceof Error ? err.message : "Submit failed";
                         setSubmitStatus(msg);
@@ -439,7 +429,6 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
                   >
                     {isSubmitting ? "Saving..." : "Submit Info."}
                   </button>
-                )}
               </div>
               <div className="add-sales-v2-box-body">
                 {submitStatus && (
@@ -452,7 +441,7 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
                     <h3 className="add-sales-v2-subsection-title">Customer Details</h3>
                     {customerProcessing && <span className="add-sales-v2-processing">Processing</span>}
                   </div>
-                  <dl className="add-sales-v2-dl">
+                  <dl className="add-sales-v2-dl add-sales-v2-dl--customer">
                     <div className="add-sales-v2-dl-row-group">
                       <div className="add-sales-v2-dl-row">
                         <dt>Aadhar ID</dt>
@@ -554,7 +543,7 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
                           </dd>
                         </div>
                         <div className="add-sales-v2-dl-row">
-                          <dt>Cubic capacity</dt>
+                          <dt>Cubic Cap.</dt>
                           <dd>
                             <input
                               className="add-sales-v2-dl-input"
@@ -643,9 +632,140 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
                   </dl>
                 </div>
               </div>
-            </section>
-          </div>
-        </main>
-      </div>
+          </section>
+
+          <section className={`add-sales-v2-box add-sales-v2-box-fill-forms ${!savedTo || !hasSubmittedInfo ? "add-sales-v2-box--greyed" : ""}`}>
+            <div className="add-sales-v2-box-title-row add-sales-v2-fill-forms-title-row">
+              <h2 className="add-sales-v2-box-title">3. Fill Forms</h2>
+              <button
+                type="button"
+                className="app-button app-button--primary"
+                disabled={isFillDmsLoading}
+                onClick={handleFillDms}
+              >
+                {isFillDmsLoading ? "Filling…" : "Fill Forms"}
+              </button>
+            </div>
+            <div className="add-sales-v2-box-body">
+              <div className="add-sales-v2-fill-forms-subsection">
+                <div className="add-sales-v2-subsection-head">
+                  <h3 className="add-sales-v2-subsection-title">A. DMS</h3>
+                  {isFillDmsLoading && <span className="add-sales-v2-processing">Processing</span>}
+                </div>
+                {fillDmsStatus && (
+                  <div className="app-panel-status" role="status">{fillDmsStatus}</div>
+                )}
+                <div className="add-sales-v2-dms-fields">
+                  <div className="add-sales-v2-dms-fields-title">Get fields from DMS</div>
+                  <dl className="add-sales-v2-dl add-sales-v2-dl--dms">
+                    <div className="add-sales-v2-dl-row-group">
+                      <div className="add-sales-v2-dl-row">
+                        <dt>Key no.</dt>
+                        <dd>{d?.key_no ?? "—"}</dd>
+                      </div>
+                      <div className="add-sales-v2-dl-row">
+                        <dt>Frame no.</dt>
+                        <dd>{d?.frame_no ?? "—"}</dd>
+                      </div>
+                    </div>
+                    <div className="add-sales-v2-dl-row-group">
+                      <div className="add-sales-v2-dl-row">
+                        <dt>Engine no.</dt>
+                        <dd>{d?.engine_no ?? "—"}</dd>
+                      </div>
+                      <div className="add-sales-v2-dl-row">
+                        <dt>Model</dt>
+                        <dd>{d?.model ?? "—"}</dd>
+                      </div>
+                    </div>
+                    <div className="add-sales-v2-dl-row-group">
+                      <div className="add-sales-v2-dl-row">
+                        <dt>Color</dt>
+                        <dd>{d?.color ?? "—"}</dd>
+                      </div>
+                      <div className="add-sales-v2-dl-row">
+                        <dt>Cubic Cap.</dt>
+                        <dd>{d?.cubic_capacity ?? "—"}</dd>
+                      </div>
+                    </div>
+                    <div className="add-sales-v2-dl-row-group">
+                      <div className="add-sales-v2-dl-row">
+                        <dt>Total amount</dt>
+                        <dd>{d?.total_amount ?? "—"}</dd>
+                      </div>
+                      <div className="add-sales-v2-dl-row">
+                        <dt>Year of Mfg</dt>
+                        <dd>{d?.year_of_mfg ?? "—"}</dd>
+                      </div>
+                    </div>
+                  </dl>
+                </div>
+                <div className="add-sales-v2-dms-pdfs">
+                  <div className="add-sales-v2-dms-pdfs-title">Get PDFs</div>
+                  <ul className="add-sales-v2-dms-pdfs-list">
+                    <li className={dmsPdfsDownloaded ? "add-sales-v2-dms-pdf-done" : ""}>
+                      {dmsPdfsDownloaded ? (
+                        <span className="add-sales-v2-dms-pdf-check" aria-hidden>✓</span>
+                      ) : null}
+                      Form 21
+                    </li>
+                    <li className={dmsPdfsDownloaded ? "add-sales-v2-dms-pdf-done" : ""}>
+                      {dmsPdfsDownloaded ? (
+                        <span className="add-sales-v2-dms-pdf-check" aria-hidden>✓</span>
+                      ) : null}
+                      Form 22
+                    </li>
+                  </ul>
+                  {dmsPdfsDownloaded && (
+                    <p className="add-sales-v2-dms-pdfs-msg">Forms 21 and 22 downloaded.</p>
+                  )}
+                </div>
+              </div>
+              <div className="add-sales-v2-fill-forms-subsection">
+                <div className="add-sales-v2-subsection-head">
+                  <h3 className="add-sales-v2-subsection-title">B. Insurance</h3>
+                </div>
+                <div className="add-sales-v2-dms-fields">
+                  <div className="add-sales-v2-dms-fields-title">Get Insurance details</div>
+                  <dl className="add-sales-v2-dl add-sales-v2-dl--dms">
+                    <div className="add-sales-v2-dl-row-group">
+                      <div className="add-sales-v2-dl-row">
+                        <dt>Policy No.</dt>
+                        <dd>—</dd>
+                      </div>
+                      <div className="add-sales-v2-dl-row">
+                        <dt>Gross Premium</dt>
+                        <dd>—</dd>
+                      </div>
+                    </div>
+                  </dl>
+                </div>
+                <div className="add-sales-v2-dms-pdfs">
+                  <div className="add-sales-v2-dms-pdfs-title">Get PDF</div>
+                  <ul className="add-sales-v2-dms-pdfs-list">
+                    <li>Insurance Policy</li>
+                  </ul>
+                </div>
+              </div>
+              <div className="add-sales-v2-fill-forms-subsection">
+                <div className="add-sales-v2-subsection-head">
+                  <h3 className="add-sales-v2-subsection-title">C. RTO</h3>
+                </div>
+                <div className="add-sales-v2-rto-actions">
+                  <button
+                    type="button"
+                    className="app-button"
+                    disabled
+                    title="Coming soon"
+                  >
+                    Print forms
+                  </button>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+      </main>
+    </div>
   );
 }

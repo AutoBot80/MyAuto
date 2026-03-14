@@ -1,3 +1,20 @@
+/* Wrapper when showing POS / Service / RTO (not home) – ensures full height */
+.app-layout-root {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.app-layout-root .app-wrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 /* Outer wrapper: full viewport, no vertical scroll */
 .app-wrap {
   height: 100%;
@@ -31,13 +48,14 @@
   transform-origin: top center;
 }
 
-/* Blue top bar: dealer name center, date right */
+/* Blue top bar: Dealer Saathi, Arya Agencies, home icon top-aligned; Bharatpur and date bottom-aligned */
 .app-topbar {
   position: relative;
   display: flex;
-  align-items: center;
+  align-items: stretch;
   justify-content: space-between;
-  padding: 10px 24px;
+  padding: 9px 24px;
+  min-height: 51px;
   background: #1e5a9e;
   color: #fff;
 }
@@ -45,7 +63,7 @@
 .app-topbar-left {
   flex: 0 0 auto;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
 }
 
 .app-topbar-left-inner {
@@ -58,13 +76,6 @@
   font-size: 14px;
   font-weight: 600;
   letter-spacing: 0.3px;
-}
-
-.app-topbar-right-with-home {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 4px;
 }
 
 .app-topbar-home-logo {
@@ -100,15 +111,17 @@
   min-width: 0;
 }
 
-/* Center dealer name and city in the blue band */
+/* Center dealer name and city in the blue band: title top, subtitle (Bharatpur) bottom */
 .app-topbar-title-block {
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
+  top: 9px;
+  bottom: 9px;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 2px;
+  justify-content: space-between;
   text-align: center;
 }
 
@@ -125,11 +138,25 @@
 }
 
 .app-topbar-date {
-  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: flex-end;
+  height: 100%;
   min-width: 0;
   text-align: right;
   font-size: 14px;
   color: rgba(255, 255, 255, 0.9);
+}
+
+.app-topbar-right-with-home {
+  flex: 1;
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 0;
 }
 
 .app-topbar-right {
@@ -156,7 +183,7 @@
 }
 
 .app-tab-v2 {
-  padding: 8px 16px;
+  padding: 7px 16px;
   font-size: 14px;
   font-weight: 500;
   color: #333;
@@ -180,12 +207,20 @@
 
 .app-main-v2 {
   flex: 1;
-  min-height: 0;
+  min-height: 200px;
   overflow: hidden;
   padding: 8px 18px;
   color: #1b2a3a;
   display: flex;
   flex-direction: column;
+}
+
+.app-main-v2-content {
+  flex: 1;
+  min-height: 120px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .app-iframe-dms {
@@ -275,7 +310,7 @@
 .add-sales-v2-main {
   flex: 1;
   min-width: 0;
-  padding: 0 24px 8px;
+  padding: 0 8px 8px;
 }
 
 .add-sales-v2-two-col {
@@ -286,6 +321,68 @@
   flex: 1;
   min-width: 0;
   overflow-x: auto;
+}
+
+.add-sales-v2-three-col {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 20px;
+  min-height: 0;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.add-sales-v2-three-col .add-sales-v2-box {
+  flex: 1 1 0;
+  min-width: 260px;
+  min-height: 0;
+}
+
+.add-sales-v2-box--greyed {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.add-sales-v2-box-fill-forms.add-sales-v2-box--greyed {
+  opacity: 0.8;
+}
+
+.add-sales-v2-box-fill-forms {
+  min-width: 280px;
+}
+
+.add-sales-v2-box-fill-forms .add-sales-v2-box-title {
+  padding: 10px 14px;
+  border-bottom: 1px solid #c5d9ed;
+}
+
+.add-sales-v2-fill-forms-subsection {
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #e8eef5;
+}
+
+.add-sales-v2-fill-forms-subsection:last-child {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.add-sales-v2-rto-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.add-sales-v2-fill-forms-desc {
+  margin: 0 0 10px 0;
+  font-size: 13px;
+  color: #555;
+  line-height: 1.35;
+}
+
+.add-sales-v2-panel-row {
+  margin-bottom: 8px;
 }
 
 .add-sales-v2-box {
@@ -427,6 +524,39 @@
   font-size: 13px;
 }
 
+.add-sales-v2-dl--customer .add-sales-v2-dl-row,
+.add-sales-v2-dl--customer .add-sales-v2-dl-row-group {
+  gap: 1px;
+}
+.add-sales-v2-dl--customer .add-sales-v2-dl-row {
+  margin-bottom: 2px;
+}
+.add-sales-v2-dl--customer .add-sales-v2-dl-row dt {
+  min-width: 80px;
+  max-width: 80px;
+}
+.add-sales-v2-dl--customer .add-sales-v2-dl-row dd {
+  padding-left: 1px;
+}
+
+.add-sales-v2-dl--dms .add-sales-v2-dl-row,
+.add-sales-v2-dl--dms .add-sales-v2-dl-row-group {
+  gap: 1px;
+}
+.add-sales-v2-dl--dms .add-sales-v2-dl-row {
+  margin-bottom: 2px;
+}
+.add-sales-v2-dl--dms .add-sales-v2-dl-row dt {
+  min-width: 80px;
+  max-width: 80px;
+  font-weight: 500;
+  color: #555;
+}
+.add-sales-v2-dl--dms .add-sales-v2-dl-row dd {
+  padding-left: 1px;
+  color: #333;
+}
+
 .add-sales-v2-dl-row dt {
   margin: 0;
   font-weight: 500;
@@ -492,6 +622,17 @@
   min-width: 0;
 }
 
+.add-sales-v2-input-mobile .app-field {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+}
+.add-sales-v2-input-mobile .app-field-label {
+  margin-bottom: 0;
+  flex-shrink: 0;
+}
+
 .add-sales-v2-input-aadhar .app-field-input {
   width: 5.5ch;
   min-width: 5.5ch;
@@ -511,6 +652,33 @@
 .add-sales-v2-panel-wrap .app-panel {
   max-width: 100%;
   padding: 8px 12px;
+}
+
+.add-sales-v2-box-upload .app-panel .app-button {
+  padding: 6px 16px;
+}
+
+.add-sales-v2-box-upload .app-panel .app-panel-scan-button {
+  min-width: 120px;
+  box-sizing: border-box;
+}
+
+.app-panel-insurance-block {
+  margin-bottom: 4px;
+}
+
+.app-panel-insurance-check-row {
+  margin-top: 9px;
+  margin-bottom: 6px;
+}
+
+.app-panel-insurance-block .app-panel-scan-row,
+.app-panel-financing-block .app-panel-scan-row {
+  margin-top: 6px;
+}
+
+.app-panel-financing-block {
+  margin-bottom: 4px;
 }
 
 .add-sales-v2-panel-wrap .app-panel-title {
@@ -566,6 +734,53 @@
 .app-panel-dms-vehicle-dl dd {
   margin: 0;
   color: #222;
+}
+
+.add-sales-v2-dms-fields {
+  margin-bottom: 12px;
+}
+.add-sales-v2-dms-fields-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #1a4d1a;
+  margin: 0 0 6px 0;
+}
+.add-sales-v2-dms-dl {
+  margin: 0;
+}
+.add-sales-v2-dms-pdfs-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #1a4d1a;
+  margin: 0 0 6px 0;
+}
+.add-sales-v2-dms-pdfs-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: row;
+  gap: 16px;
+}
+.add-sales-v2-dms-pdfs-list li {
+  margin-bottom: 0;
+  font-size: 13px;
+  color: #333;
+}
+.add-sales-v2-dms-pdf-check {
+  display: inline-block;
+  margin-right: 6px;
+  color: #1a7a1a;
+  font-weight: bold;
+}
+.add-sales-v2-dms-pdf-done {
+  color: #1a5a1a;
+}
+.add-sales-v2-dms-pdfs-msg {
+  margin: 6px 0 0 0;
+  font-size: 12px;
+  color: #1a7a1a;
+  font-weight: 500;
 }
 
 .app-field-row {
@@ -679,6 +894,36 @@
   font-weight: 500;
   color: #333;
   min-width: 140px;
+}
+
+.app-panel-insurance-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #333;
+  cursor: pointer;
+}
+.app-panel-insurance-check input[type="checkbox"] {
+  margin: 0;
+  cursor: pointer;
+  width: 16px;
+  height: 16px;
+  appearance: none;
+  -webkit-appearance: none;
+  background-color: #fff;
+  border: 1px solid #999;
+  border-radius: 3px;
+  accent-color: #1e5a9e;
+}
+.app-panel-insurance-check input[type="checkbox"]:checked {
+  background-color: #fff;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='%231e5a9e' d='M13.5 4.5L6 12 2.5 8.5l1-1L6 10 12.5 3.5z'/%3E%3C/svg%3E");
+}
+
+.app-panel-scan-label--muted {
+  color: #999;
 }
 
 .app-panel-actions {
@@ -800,13 +1045,13 @@
 
 /* Submit Info button (Extracted Information header) */
 .add-sales-v2-box-extracted .add-sales-v2-submit-btn {
-  background: #ffe873;
-  color: #1a1a1a;
-  border-color: #f5d000;
+  background: #1e5a9e;
+  color: #fff;
+  border-color: #1e5a9e;
 }
 
 .add-sales-v2-box-extracted .add-sales-v2-submit-btn:hover:not(:disabled) {
-  background: #f5d000;
+  background: #164a82;
 }
 
 .add-sales-v2-status-row {

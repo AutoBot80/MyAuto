@@ -89,8 +89,10 @@ class UploadService:
         aadhar_scan: UploadFile,
         aadhar_back: UploadFile,
         sales_detail: UploadFile,
+        insurance_sheet: UploadFile | None = None,
+        financing_doc: UploadFile | None = None,
     ) -> dict:
-        """Subfolder = mobile_ddmmyy; save as Aadhar.jpg, Aadhar_back.jpg, Details.jpg."""
+        """Subfolder = mobile_ddmmyy; save as Aadhar.jpg, Aadhar_back.jpg, Details.jpg; optional Insurance.jpg, Financing.jpg."""
         ok, err = self.validate_mobile(mobile)
         if not ok:
             return {"error": err}
@@ -104,12 +106,16 @@ class UploadService:
 
         with get_connection() as conn:
             AiReaderQueueRepository.ensure_table(conn)
-            # Save all three files to disk, but only queue Aadhar front + Details for processing.
-            file_defs = [
+            # Save all three required files; optional insurance and financing when provided.
+            file_defs: list[tuple[UploadFile, str, bool]] = [
                 (aadhar_scan, "Aadhar.jpg", True),
                 (aadhar_back, "Aadhar_back.jpg", False),
                 (sales_detail, "Details.jpg", True),
             ]
+            if insurance_sheet and insurance_sheet.filename:
+                file_defs.append((insurance_sheet, "Insurance.jpg", False))
+            if financing_doc and financing_doc.filename:
+                file_defs.append((financing_doc, "Financing.jpg", False))
             for role, save_name, should_queue in file_defs:
                 content = await role.read()
                 target = subdir / save_name
