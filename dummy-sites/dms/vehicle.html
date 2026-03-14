@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Dummy DMS – Vehicle Search</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: Arial, sans-serif; margin: 0; padding: 0; font-size: 12px; }
+    .top-nav { background: #333; color: #fff; padding: 0.4rem 1rem; display: flex; gap: 1rem; align-items: center; }
+    .top-nav a { color: #fff; text-decoration: none; }
+    .top-nav a.active { font-weight: bold; text-decoration: underline; }
+    .main { max-width: 900px; margin: 0 auto; padding: 1rem; }
+    .section { border: 1px solid #ccc; border-radius: 4px; padding: 1rem; background: #fafafa; margin-bottom: 1rem; }
+    .section h3 { margin: 0 0 0.75rem 0; font-size: 13px; color: #333; }
+    .form-row { display: flex; gap: 1rem; align-items: center; margin-bottom: 0.5rem; flex-wrap: wrap; }
+    .form-row label { min-width: 140px; }
+    .form-row input { padding: 0.35rem 0.5rem; width: 180px; }
+    .btn { padding: 0.4rem 1rem; background: #196; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; }
+    .btn:hover { background: #164; }
+    .results { margin-top: 1rem; }
+    .results table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .results th, .results td { border: 1px solid #ccc; padding: 0.4rem 0.5rem; text-align: left; }
+    .results th { background: #e8e8e8; font-weight: 600; }
+    .results-empty { color: #666; font-style: italic; padding: 1rem; }
+  </style>
+</head>
+<body>
+  <nav class="top-nav" role="navigation">
+    <a href="enquiry.html">Enquiry</a>
+    <a href="vehicle.html" class="active">Vehicle</a>
+    <a href="reports.html">Reports</a>
+  </nav>
+
+  <div class="main">
+    <div class="section">
+      <h3>Vehicle Search</h3>
+      <p>Search by partial Key number, Frame/Chassis number, or Engine number.</p>
+      <div class="form-row">
+        <label for="dms-vehicle-key">Key num (partial)</label>
+        <input type="text" id="dms-vehicle-key" name="key_partial" placeholder="e.g. 1234" maxlength="8" />
+      </div>
+      <div class="form-row">
+        <label for="dms-vehicle-frame">Frame / Chassis num (partial)</label>
+        <input type="text" id="dms-vehicle-frame" name="frame_partial" placeholder="e.g. MB1" maxlength="12" />
+      </div>
+      <div class="form-row">
+        <label for="dms-vehicle-engine">Engine num (partial)</label>
+        <input type="text" id="dms-vehicle-engine" name="engine_partial" placeholder="e.g. HJ" maxlength="12" />
+      </div>
+      <div class="form-row">
+        <button type="button" id="dms-vehicle-search" class="btn">Search</button>
+      </div>
+    </div>
+
+    <div class="section results" id="dms-vehicle-results" style="display: none;">
+      <h3>Results</h3>
+      <table id="dms-vehicle-results-table">
+        <thead>
+          <tr>
+            <th>Key num</th>
+            <th>Frame / Chassis num</th>
+            <th>Engine num</th>
+            <th>Model</th>
+            <th>Color</th>
+            <th>Cubic capacity</th>
+            <th>Total Amount</th>
+            <th>Year of Mfg</th>
+          </tr>
+        </thead>
+        <tbody id="dms-vehicle-results-body">
+        </tbody>
+      </table>
+      <p class="results-empty" id="dms-vehicle-results-empty" style="display: none;">No vehicles found.</p>
+    </div>
+  </div>
+
+  <script>
+    (function() {
+      var searchBtn = document.getElementById('dms-vehicle-search');
+      var resultsDiv = document.getElementById('dms-vehicle-results');
+      var resultsBody = document.getElementById('dms-vehicle-results-body');
+      var resultsEmpty = document.getElementById('dms-vehicle-results-empty');
+
+      // Dummy match: one sample row (8-digit key, 12-char frame, 12-char engine, model, color, cc, amount, year)
+      var sampleRow = {
+        key_num: '12345678',
+        frame_chassis_num: 'MB1HJ1234567',
+        engine_num: 'HJ1234567890',
+        model: 'Splendor Plus',
+        color: 'Black',
+        cubic_capacity: '97.2',
+        total_amount: '72500',
+        year_of_mfg: '2024'
+      };
+
+      function runSearch() {
+        var key = (document.getElementById('dms-vehicle-key').value || '').trim();
+        var frame = (document.getElementById('dms-vehicle-frame').value || '').trim();
+        var engine = (document.getElementById('dms-vehicle-engine').value || '').trim();
+
+        resultsDiv.style.display = 'block';
+        resultsBody.innerHTML = '';
+        resultsEmpty.style.display = 'none';
+
+        // Dummy: show sample row if any search field has input
+        if (key || frame || engine) {
+          var tr = document.createElement('tr');
+          tr.innerHTML =
+            '<td>' + sampleRow.key_num + '</td>' +
+            '<td>' + sampleRow.frame_chassis_num + '</td>' +
+            '<td>' + sampleRow.engine_num + '</td>' +
+            '<td>' + sampleRow.model + '</td>' +
+            '<td>' + sampleRow.color + '</td>' +
+            '<td>' + sampleRow.cubic_capacity + '</td>' +
+            '<td>' + sampleRow.total_amount + '</td>' +
+            '<td>' + sampleRow.year_of_mfg + '</td>';
+          resultsBody.appendChild(tr);
+        } else {
+          resultsEmpty.style.display = 'block';
+        }
+      }
+
+      if (searchBtn) searchBtn.addEventListener('click', runSearch);
+    })();
+  </script>
+</body>
+</html>

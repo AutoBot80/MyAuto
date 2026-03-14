@@ -14,6 +14,10 @@ interface UploadScansPanelProps {
   isMobileValid?: boolean;
   /** Upload scans to subfolder mobile_ddmmyy as Aadhar.jpg, Aadhar_back.jpg, Details.jpg */
   onUploadV2?: (aadharScan: File, aadharBackScan: File, salesDetail: File) => Promise<void>;
+  /** When on DMS step, called when user clicks Fill DMS (e.g. trigger automation). */
+  onFillDms?: () => void;
+  fillDmsStatus?: string | null;
+  isFillDmsLoading?: boolean;
 }
 
 const SCAN_LABELS = [
@@ -32,6 +36,9 @@ export function UploadScansPanel({
   mobile,
   isMobileValid,
   onUploadV2,
+  onFillDms,
+  fillDmsStatus,
+  isFillDmsLoading,
 }: UploadScansPanelProps) {
   const aadharInputRef = useRef<HTMLInputElement | null>(null);
   const aadharBackInputRef = useRef<HTMLInputElement | null>(null);
@@ -113,6 +120,24 @@ export function UploadScansPanel({
               </ul>
             </div>
           ) : null}
+        </section>
+      ) : addSalesStep === "hero-dms" ? (
+        <section className="app-panel app-panel-dms-step">
+          <div className="app-panel-title">DMS</div>
+          <p className="app-panel-dms-text">DMS has been opened in a new browser tab. Use the button below to fill the form from extracted information.</p>
+          <div className="app-panel-row app-panel-actions">
+            <button
+              type="button"
+              className="app-button app-button--primary"
+              disabled={isFillDmsLoading}
+              onClick={() => onFillDms?.()}
+            >
+              {isFillDmsLoading ? "Filling DMS…" : "Fill DMS"}
+            </button>
+          </div>
+          {fillDmsStatus && (
+            <div className="app-panel-status" role="status">{fillDmsStatus}</div>
+          )}
         </section>
       ) : (
         <div className="app-placeholder">

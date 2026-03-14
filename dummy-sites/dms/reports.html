@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Dummy DMS – Reports</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: Arial, sans-serif; margin: 0; padding: 0; font-size: 12px; }
+    .top-nav { background: #333; color: #fff; padding: 0.4rem 1rem; display: flex; gap: 1rem; align-items: center; }
+    .top-nav a { color: #fff; text-decoration: none; }
+    .top-nav a.active { font-weight: bold; text-decoration: underline; }
+    .main { max-width: 600px; margin: 0 auto; padding: 1rem; }
+    .section { border: 1px solid #ccc; border-radius: 4px; padding: 1rem; background: #fafafa; margin-bottom: 1rem; }
+    .section h3 { margin: 0 0 0.75rem 0; font-size: 13px; color: #333; }
+    .report-links { list-style: none; margin: 0.75rem 0 0 0; padding: 0; }
+    .report-links li { margin-bottom: 0.5rem; }
+    a.report-link { display: inline-block; padding: 0.5rem 1rem; background: #06c; color: #fff; text-decoration: none; border-radius: 4px; }
+    a.report-link:hover { background: #05a; }
+  </style>
+</head>
+<body>
+  <nav class="top-nav" role="navigation">
+    <a href="enquiry.html">Enquiry</a>
+    <a href="vehicle.html">Vehicle</a>
+    <a href="reports.html" class="active">Reports</a>
+  </nav>
+
+  <div class="main">
+    <div class="section">
+      <h3>Reports</h3>
+      <p>Open or download reports as PDF.</p>
+      <ul class="report-links">
+        <li><a href="downloads/form21.pdf" id="dms-reports-form21" class="report-link" target="_blank">Form 21</a></li>
+        <li><a href="downloads/form22.pdf" id="dms-reports-form22" class="report-link" target="_blank">Form 22</a></li>
+      </ul>
+    </div>
+  </div>
+</body>
+</html>

@@ -4,7 +4,12 @@
   <meta charset="UTF-8" />
   <title>Dummy DMS – Print Invoice</title>
   <style>
-    body { font-family: Arial, sans-serif; margin: 0; padding: 1rem; font-size: 12px; max-width: 700px; margin-left: auto; margin-right: auto; }
+    * { box-sizing: border-box; }
+    body { font-family: Arial, sans-serif; margin: 0; padding: 0; font-size: 12px; }
+    .top-nav { background: #333; color: #fff; padding: 0.4rem 1rem; display: flex; gap: 1rem; align-items: center; }
+    .top-nav a { color: #fff; text-decoration: none; }
+    .top-nav a.active { font-weight: bold; text-decoration: underline; }
+    .main-wrap { max-width: 700px; margin: 0 auto; padding: 1rem; }
     .no-print { margin-bottom: 1rem; }
     .no-print a, .no-print button { margin-right: 0.5rem; padding: 0.4rem 0.8rem; background: #06c; color: #fff; border: none; border-radius: 4px; cursor: pointer; text-decoration: none; font-size: 12px; }
     .no-print button { background: #196; }
@@ -21,6 +26,12 @@
   </style>
 </head>
 <body>
+  <nav class="top-nav" role="navigation">
+    <a href="enquiry.html">Enquiry</a>
+    <a href="vehicle.html">Vehicle</a>
+    <a href="reports.html" class="active">Reports</a>
+  </nav>
+  <div class="main-wrap">
   <div class="no-print">
     <a href="enquiry.html" id="dms-back-to-enquiry">Back to Enquiry</a>
     <button type="button" id="dms-print-invoice" onclick="window.print();">Print</button>
@@ -40,6 +51,7 @@
     <p class="totals">Total: —</p>
   </div>
 
+  </div>
   <script>
     (function() {
       var d = new Date();

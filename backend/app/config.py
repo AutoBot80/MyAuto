@@ -38,3 +38,8 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 AWS_REGION = os.getenv("AWS_REGION", "ap-south-1")
 # Credentials: set AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY (or use default profile).
 
+# DMS fill (Playwright): base URL and login. Used when client calls POST /fill-dms.
+DMS_BASE_URL = os.getenv("DMS_BASE_URL", "").rstrip("/")  # e.g. http://127.0.0.1:8000/dummy-dms
+DMS_LOGIN_USER = os.getenv("DMS_LOGIN_USER", "demo")
+DMS_LOGIN_PASSWORD = os.getenv("DMS_LOGIN_PASSWORD", "demo")
+

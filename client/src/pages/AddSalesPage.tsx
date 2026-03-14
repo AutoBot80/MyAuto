@@ -5,6 +5,7 @@ import { useUploadScans } from "../hooks/useUploadScans";
 import { UploadScansPanel } from "../components/UploadScansPanel";
 import { getExtractedDetails } from "../api/aiReaderQueue";
 import { submitInfo } from "../api/submitInfo";
+import { fillDms } from "../api/fillDms";
 import { loadAddSalesForm, saveAddSalesForm, clearAddSalesForm } from "../utils/addSalesStorage";
 import { normalizeVehicleDetails, hasVehicleData } from "../utils/vehicleDetails";
 
@@ -50,9 +51,13 @@ function mapApiCustomerToExtracted(cust: Record<string, unknown>): ExtractedCust
 
 interface AddSalesPageProps {
   dealerId: number;
+  /** DMS base URL for Fill DMS (Playwright). */
+  dmsUrl?: string;
+  /** When provided, clicking DMS in the left nav opens the DMS URL in a new browser tab. */
+  openDmsInNewTab?: () => void;
 }
 
-export function AddSalesPage({ dealerId }: AddSalesPageProps) {
+export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab }: AddSalesPageProps) {
   const [mobile, setMobile] = useState(() => getInitialForm().mobile);
   const [savedTo, setSavedTo] = useState<string | null>(() => getInitialForm().savedTo);
   const [uploadedFiles, setUploadedFiles] = useState<string[]>(() => getInitialForm().uploadedFiles);
@@ -68,6 +73,8 @@ export function AddSalesPage({ dealerId }: AddSalesPageProps) {
   );
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitStatus, setSubmitStatus] = useState<string | null>(null);
+  const [fillDmsStatus, setFillDmsStatus] = useState<string | null>(null);
+  const [isFillDmsLoading, setIsFillDmsLoading] = useState(false);
   const [addSalesStep, setAddSalesStep] = useState<AddSalesStep>("upload-scans");
   const [formResetKey, setFormResetKey] = useState(0);
 
@@ -284,6 +291,57 @@ export function AddSalesPage({ dealerId }: AddSalesPageProps) {
       mobile={mobile}
       isMobileValid={isMobileValid}
       onUploadV2={uploadV2}
+      onFillDms={async () => {
+        if (!savedTo || !dmsUrl) {
+          setFillDmsStatus("Upload scans and open DMS first.");
+          return;
+        }
+        const c = extractedCustomer;
+        const v = extractedVehicle;
+        setIsFillDmsLoading(true);
+        setFillDmsStatus(null);
+        try {
+          const res = await fillDms({
+            subfolder: savedTo,
+            dms_base_url: dmsUrl,
+            customer: {
+              name: c?.name ?? undefined,
+              address: c?.address ?? buildDisplayAddress(c),
+              state: c?.state ?? undefined,
+              pin_code: c?.pin_code ?? undefined,
+              mobile_number: mobile ?? undefined,
+            },
+            vehicle: {
+              key_no: v?.key_no ?? undefined,
+              frame_no: v?.frame_no ?? undefined,
+              engine_no: v?.engine_no ?? undefined,
+            },
+          });
+          if (res.success && res.vehicle) {
+            setExtractedVehicle((prev) => ({
+              ...(prev ?? {}),
+              key_no: res.vehicle.key_num ?? prev?.key_no,
+              frame_no: res.vehicle.frame_num ?? prev?.frame_no,
+              engine_no: res.vehicle.engine_num ?? prev?.engine_no,
+              model: res.vehicle.model ?? prev?.model,
+              color: res.vehicle.color ?? prev?.color,
+              cubic_capacity: res.vehicle.cubic_capacity ?? prev?.cubic_capacity,
+              total_amount: res.vehicle.total_amount ?? prev?.total_amount,
+              year_of_mfg: res.vehicle.year_of_mfg ?? prev?.year_of_mfg,
+            }));
+            const pdfMsg = res.pdfs_saved?.length ? ` PDFs saved: ${res.pdfs_saved.join(", ")}.` : "";
+            setFillDmsStatus(`DMS filled. Vehicle details updated.${pdfMsg}`);
+          } else {
+            setFillDmsStatus(res.error ?? "Fill DMS failed.");
+          }
+        } catch (err) {
+          setFillDmsStatus(err instanceof Error ? err.message : "Fill DMS failed.");
+        } finally {
+          setIsFillDmsLoading(false);
+        }
+      }}
+      fillDmsStatus={fillDmsStatus}
+      isFillDmsLoading={isFillDmsLoading}
     />
   );
 
@@ -295,7 +353,14 @@ export function AddSalesPage({ dealerId }: AddSalesPageProps) {
               key={id}
               type="button"
               className={`add-sales-v2-nav-item ${addSalesStep === id ? "active" : ""}`}
-              onClick={() => setAddSalesStep(id)}
+              onClick={() => {
+                if (id === "hero-dms") {
+                  openDmsInNewTab?.();
+                  setAddSalesStep(id);
+                } else {
+                  setAddSalesStep(id);
+                }
+              }}
             >
               <span className="add-sales-v2-nav-num">{num}</span>
               <span className="add-sales-v2-nav-label">{label}</span>
@@ -305,17 +370,19 @@ export function AddSalesPage({ dealerId }: AddSalesPageProps) {
         <main className="add-sales-v2-main">
           <div className="add-sales-v2-two-col">
             <section className="add-sales-v2-box add-sales-v2-box-upload">
-              <div className="add-sales-v2-box-title-row">
-                <h2 className="add-sales-v2-box-title">Upload Customer Information</h2>
-                <button
-                  type="button"
-                  className="app-button"
-                  onClick={handleNew}
-                  title="Start a new entry"
-                >
-                  New
-                </button>
-              </div>
+              {addSalesStep !== "hero-dms" && (
+                <div className="add-sales-v2-box-title-row">
+                  <h2 className="add-sales-v2-box-title">Upload Customer Information</h2>
+                  <button
+                    type="button"
+                    className="app-button"
+                    onClick={handleNew}
+                    title="Start a new entry"
+                  >
+                    New
+                  </button>
+                </div>
+              )}
               <div className="add-sales-v2-box-body">
                 <div className="add-sales-v2-fields-row">
                   <div className="add-sales-v2-input-wrap add-sales-v2-input-mobile">
@@ -330,39 +397,41 @@ export function AddSalesPage({ dealerId }: AddSalesPageProps) {
             <section className="add-sales-v2-box add-sales-v2-box-extracted">
               <div className="add-sales-v2-box-title-row">
                 <h2 className="add-sales-v2-box-title">Extracted Information <span className="add-sales-v2-box-title-note">(AI enabled)</span></h2>
-                <button
-                  type="button"
-                  className="app-button add-sales-v2-submit-btn"
-                  disabled={isSubmitting || !mobile || !c}
-                  onClick={async () => {
-                    if (!mobile || !c) return;
-                    if (!hasAllRequiredExtractedFields()) {
-                      setSubmitStatus("Please fill all extracted fields before submitting.");
-                      return;
-                    }
-                    setIsSubmitting(true);
-                    setSubmitStatus(null);
-                    try {
-                      await submitInfo({
-                        customer: c,
-                        vehicle: v ?? null,
-                        insurance: ins ?? null,
-                        mobile,
-                        profession: ins?.profession,
-                        fileLocation: savedTo,
-                        dealerId,
-                      });
-                      setSubmitStatus("Saved");
-                    } catch (err) {
-                      const msg = err instanceof Error ? err.message : "Submit failed";
-                      setSubmitStatus(msg);
-                    } finally {
-                      setIsSubmitting(false);
-                    }
-                  }}
-                >
-                  {isSubmitting ? "Saving..." : "Submit Info."}
-                </button>
+                {addSalesStep !== "hero-dms" && (
+                  <button
+                    type="button"
+                    className="app-button add-sales-v2-submit-btn"
+                    disabled={isSubmitting || !mobile || !c}
+                    onClick={async () => {
+                      if (!mobile || !c) return;
+                      if (!hasAllRequiredExtractedFields()) {
+                        setSubmitStatus("Please fill all extracted fields before submitting.");
+                        return;
+                      }
+                      setIsSubmitting(true);
+                      setSubmitStatus(null);
+                      try {
+                        await submitInfo({
+                          customer: c,
+                          vehicle: v ?? null,
+                          insurance: ins ?? null,
+                          mobile,
+                          profession: ins?.profession,
+                          fileLocation: savedTo,
+                          dealerId,
+                        });
+                        setSubmitStatus("Saved");
+                      } catch (err) {
+                        const msg = err instanceof Error ? err.message : "Submit failed";
+                        setSubmitStatus(msg);
+                      } finally {
+                        setIsSubmitting(false);
+                      }
+                    }}
+                  >
+                    {isSubmitting ? "Saving..." : "Submit Info."}
+                  </button>
+                )}
               </div>
               <div className="add-sales-v2-box-body">
                 {submitStatus && (
@@ -376,25 +445,25 @@ export function AddSalesPage({ dealerId }: AddSalesPageProps) {
                     {customerProcessing && <span className="add-sales-v2-processing">Processing</span>}
                   </div>
                   <dl className="add-sales-v2-dl">
-                    <div className="add-sales-v2-dl-row">
-                      <dt>Aadhar ID</dt>
-                      <dd>{display(c?.aadhar_id)}</dd>
+                    <div className="add-sales-v2-dl-row-group">
+                      <div className="add-sales-v2-dl-row">
+                        <dt>Aadhar ID</dt>
+                        <dd>{display(c?.aadhar_id)}</dd>
+                      </div>
+                      <div className="add-sales-v2-dl-row">
+                        <dt>Name</dt>
+                        <dd>{display(c?.name)}</dd>
+                      </div>
                     </div>
-                    <div className="add-sales-v2-dl-row">
-                      <dt>Name</dt>
-                      <dd>
-                        {display(c?.name)}
-                        {c?.gender && String(c.gender).trim() ? (
-                          <span style={{ marginLeft: 12 }}>
-                            <span className="add-sales-v2-inline-label">Gender</span>{" "}
-                            {String(c.gender).trim()}
-                          </span>
-                        ) : null}
-                      </dd>
-                    </div>
-                    <div className="add-sales-v2-dl-row">
-                      <dt>Date of birth</dt>
-                      <dd>{display(c?.date_of_birth)}</dd>
+                    <div className="add-sales-v2-dl-row-group">
+                      <div className="add-sales-v2-dl-row">
+                        <dt>Date of birth</dt>
+                        <dd>{display(c?.date_of_birth)}</dd>
+                      </div>
+                      <div className="add-sales-v2-dl-row">
+                        <dt>Gender</dt>
+                        <dd>{display(c?.gender)}</dd>
+                      </div>
                     </div>
                     <div className="add-sales-v2-dl-row">
                       <dt>Address</dt>
@@ -407,7 +476,7 @@ export function AddSalesPage({ dealerId }: AddSalesPageProps) {
                     <h3 className="add-sales-v2-subsection-title">Vehicle Details</h3>
                     {vehicleProcessing && <span className="add-sales-v2-processing">Processing</span>}
                   </div>
-                  <dl className="add-sales-v2-dl">
+                  <dl className="add-sales-v2-dl add-sales-v2-dl--vehicle">
                     <div className="add-sales-v2-dl-row">
                       <dt>Frame no.</dt>
                       <dd>
@@ -452,6 +521,65 @@ export function AddSalesPage({ dealerId }: AddSalesPageProps) {
                         />
                       </dd>
                     </div>
+                    {(v?.model ?? v?.color ?? v?.cubic_capacity ?? v?.total_amount ?? v?.year_of_mfg) && (
+                      <>
+                        <div className="add-sales-v2-dl-row">
+                          <dt>Model</dt>
+                          <dd>
+                            <input
+                              className="add-sales-v2-dl-input"
+                              value={v?.model ?? ""}
+                              onChange={(e) => setExtractedVehicle((prev) => ({ ...(prev ?? {}), model: e.target.value }))}
+                              placeholder="—"
+                            />
+                          </dd>
+                        </div>
+                        <div className="add-sales-v2-dl-row">
+                          <dt>Color</dt>
+                          <dd>
+                            <input
+                              className="add-sales-v2-dl-input"
+                              value={v?.color ?? ""}
+                              onChange={(e) => setExtractedVehicle((prev) => ({ ...(prev ?? {}), color: e.target.value }))}
+                              placeholder="—"
+                            />
+                          </dd>
+                        </div>
+                        <div className="add-sales-v2-dl-row">
+                          <dt>Cubic capacity</dt>
+                          <dd>
+                            <input
+                              className="add-sales-v2-dl-input"
+                              value={v?.cubic_capacity ?? ""}
+                              onChange={(e) => setExtractedVehicle((prev) => ({ ...(prev ?? {}), cubic_capacity: e.target.value }))}
+                              placeholder="—"
+                            />
+                          </dd>
+                        </div>
+                        <div className="add-sales-v2-dl-row">
+                          <dt>Total Amount</dt>
+                          <dd>
+                            <input
+                              className="add-sales-v2-dl-input"
+                              value={v?.total_amount ?? ""}
+                              onChange={(e) => setExtractedVehicle((prev) => ({ ...(prev ?? {}), total_amount: e.target.value }))}
+                              placeholder="—"
+                            />
+                          </dd>
+                        </div>
+                        <div className="add-sales-v2-dl-row">
+                          <dt>Year of Mfg</dt>
+                          <dd>
+                            <input
+                              className="add-sales-v2-dl-input"
+                              value={v?.year_of_mfg ?? ""}
+                              onChange={(e) => setExtractedVehicle((prev) => ({ ...(prev ?? {}), year_of_mfg: e.target.value }))}
+                              placeholder="—"
+                            />
+                          </dd>
+                        </div>
+                      </>
+                    )}
                   </dl>
                 </div>
                 <div className="add-sales-v2-subsection">
@@ -459,7 +587,7 @@ export function AddSalesPage({ dealerId }: AddSalesPageProps) {
                     <h3 className="add-sales-v2-subsection-title">Insurance Details</h3>
                     {insuranceProcessing && <span className="add-sales-v2-processing">Processing</span>}
                   </div>
-                  <dl className="add-sales-v2-dl">
+                  <dl className="add-sales-v2-dl add-sales-v2-dl--insurance">
                     <div className="add-sales-v2-dl-row">
                       <dt>Customer Profession</dt>
                       <dd>
@@ -494,7 +622,7 @@ export function AddSalesPage({ dealerId }: AddSalesPageProps) {
                       </dd>
                     </div>
                     <div className="add-sales-v2-dl-row">
-                      <dt>Nominee Relationship</dt>
+                      <dt>Relationship</dt>
                       <dd>
                         <input
                           className="add-sales-v2-dl-input"

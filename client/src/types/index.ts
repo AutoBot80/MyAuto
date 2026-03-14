@@ -53,6 +53,12 @@ export interface ExtractedVehicleDetails {
   model_colour?: string;
   key_no?: string;
   battery_no?: string;
+  /** From DMS fill */
+  model?: string;
+  color?: string;
+  cubic_capacity?: string;
+  total_amount?: string;
+  year_of_mfg?: string;
 }
 
 /** Customer details: 15 granular fields (e.g. from QR) + optional legacy address. Full Aadhar shown only on frontend; DB stores last 4 only. */
