@@ -1,7 +1,12 @@
 import { useState, useEffect } from "react";
-import { listRtoPayments, type RtoPaymentRow } from "../api/rtoPaymentDetails";
+import { listRtoPayments, getVahanPayUrl, type RtoPaymentRow } from "../api/rtoPaymentDetails";
 
-export function RtoPaymentsPendingPage() {
+interface RtoPaymentsPendingPageProps {
+  /** When true, show Pay link column (only on RTO Payment Saathi tab). */
+  showPayLink?: boolean;
+}
+
+export function RtoPaymentsPendingPage({ showPayLink = false }: RtoPaymentsPendingPageProps) {
   const [rows, setRows] = useState<RtoPaymentRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -43,6 +48,19 @@ export function RtoPaymentsPendingPage() {
     );
   }
 
+  const columns = [
+    "Customer ID",
+    "Customer Name",
+    "Mobile",
+    "Vehicle ID",
+    "Chassis No.",
+    "Application ID",
+    "Register Date",
+    "RTO Fees",
+    "Status",
+    ...(showPayLink ? ["Pay"] : []),
+  ];
+
   return (
     <div className="rto-payments-page">
       <h2 className="rto-payments-title">RTO Payments Pending</h2>
@@ -50,32 +68,40 @@ export function RtoPaymentsPendingPage() {
         <table className="rto-payments-table">
           <thead>
             <tr>
-              <th>Customer ID</th>
-              <th>Name</th>
-              <th>Mobile</th>
-              <th>Chassis num</th>
-              <th>Application Num</th>
-              <th>Date</th>
-              <th>RTO Payment Due</th>
-              <th>Status</th>
+              {columns.map((col) => (
+                <th key={col}>{col}</th>
+              ))}
             </tr>
           </thead>
           <tbody>
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={8}>No records.</td>
+                <td colSpan={columns.length}>No records.</td>
               </tr>
             ) : (
               rows.map((r) => (
-                <tr key={r.id}>
+                <tr key={r.application_id}>
                   <td>{r.customer_id}</td>
                   <td>{r.name ?? "—"}</td>
                   <td>{r.mobile ?? "—"}</td>
+                  <td>{r.vehicle_id}</td>
                   <td>{r.chassis_num ?? "—"}</td>
-                  <td>{r.application_num}</td>
-                  <td>{r.submission_date}</td>
-                  <td>{r.rto_payment_due != null ? `₹${r.rto_payment_due}` : "—"}</td>
+                  <td>{r.application_id}</td>
+                  <td>{r.register_date}</td>
+                  <td>{r.rto_fees != null ? `₹${r.rto_fees}` : "—"}</td>
                   <td>{r.status ?? "Pending"}</td>
+                  {showPayLink && (
+                    <td>
+                      <a
+                        href={getVahanPayUrl(r.application_id)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="rto-payments-pay-link"
+                      >
+                        Pay
+                      </a>
+                    </td>
+                  )}
                 </tr>
               ))
             )}

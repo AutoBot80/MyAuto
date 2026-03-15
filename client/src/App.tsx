@@ -117,7 +117,7 @@ function App() {
       case "customer-details":
         return <PlaceholderPage title="Customer Details" />;
       case "rto-status":
-        return <RtoPaymentsPendingPage />;
+        return <RtoPaymentsPendingPage showPayLink={mode === "rto"} />;
       case "service-reminders":
         return <PlaceholderPage title="Service Reminders" />;
       case "dealer-dashboard":

@@ -84,7 +84,7 @@
       }
 
       function generateApplicationId() {
-        return 'APP' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+        return String(Math.floor(10000000 + Math.random() * 90000000));
       }
 
       document.getElementById('vahan-reg-form').addEventListener('submit', function(e) {

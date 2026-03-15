@@ -50,8 +50,23 @@ def _fill_vahan_and_scrape(
         ids = qs.get("application_id", [])
         if ids:
             application_id = ids[0]
+    # Wait for search result to render (auto-submit on load), then scrape rto_fees
+    rto_fees = 200.0
     total = float(total_cost or 0)
-    rto_fees = round(total * 0.01 + 200, 2) if total else 200.0
+    fallback_fees = round(total * 0.01 + 200, 2) if total else 200.0
+    try:
+        page.wait_for_selector("#vahan-result-section:visible", timeout=8000)
+        el = page.locator("#vahan-result-rto-fees")
+        if el.count() > 0:
+            val = el.get_attribute("data-rto-fees")
+            if val and val.strip():
+                rto_fees = round(float(val), 2)
+            else:
+                rto_fees = fallback_fees
+        else:
+            rto_fees = fallback_fees
+    except Exception:
+        rto_fees = fallback_fees
     return (application_id, rto_fees)
 
 
@@ -225,10 +240,11 @@ def run_fill_dms(
                         "year_of_mfg": cells.nth(7).inner_text().strip(),
                     }
 
-            # 5) Reports: fetch Form 21 and Form 22 PDFs by URL (avoids download event / target="_blank" issues)
+            # 5) Reports: fetch Form 21, Form 22, and Invoice Details PDFs by URL (avoids download event / target="_blank" issues)
             page.goto(f"{base}/reports.html", wait_until="domcontentloaded", timeout=15000)
             path21 = subfolder_path / "form21.pdf"
             path22 = subfolder_path / "form22.pdf"
+            path_invoice = subfolder_path / "invoice_details.pdf"
             try:
                 r21 = page.request.get(f"{base}/downloads/form21.pdf", timeout=15000)
                 if r21.ok:
@@ -241,6 +257,13 @@ def run_fill_dms(
                 if r22.ok:
                     path22.write_bytes(r22.body())
                     result["pdfs_saved"].append("form22.pdf")
+            except Exception:
+                pass
+            try:
+                r_inv = page.request.get(f"{base}/downloads/invoice_details.pdf", timeout=15000)
+                if r_inv.ok:
+                    path_invoice.write_bytes(r_inv.body())
+                    result["pdfs_saved"].append("invoice_details.pdf")
             except Exception:
                 pass
 

@@ -96,7 +96,7 @@
           '<dt>Fuel type</dt><dd>' + (app.fuel_type || '—') + '</dd>' +
           '<dt>Year of mfg</dt><dd>' + (app.year_of_mfg || '—') + '</dd>' +
           '<dt>Total cost</dt><dd>₹' + (app.total_cost != null ? Number(app.total_cost).toLocaleString('en-IN') : '—') + '</dd>' +
-          '<dt>RTO fees</dt><dd>₹' + (app.rto_fees != null ? Number(app.rto_fees).toLocaleString('en-IN') : '—') + '</dd>' +
+          '<dt>RTO fees</dt><dd id="vahan-result-rto-fees" data-rto-fees="' + (app.rto_fees != null ? String(app.rto_fees) : '') + '">₹' + (app.rto_fees != null ? Number(app.rto_fees).toLocaleString('en-IN') : '—') + '</dd>' +
           '<dt>Status</dt><dd>' + (app.status || '—') + '</dd>' +
           (app.tc_number ? ('<dt>TC number</dt><dd>' + app.tc_number + '</dd>') : '') +
           '</dl>';

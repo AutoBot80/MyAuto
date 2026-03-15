@@ -906,6 +906,16 @@
   color: #c00;
 }
 
+.rto-payments-pay-link {
+  color: #1e5a9e;
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.rto-payments-pay-link:hover {
+  text-decoration: underline;
+}
+
 .app-panel {
   border: 1px solid #c5d9ed;
   border-radius: 10px;

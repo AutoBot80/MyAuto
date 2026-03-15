@@ -377,6 +377,8 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
   const customerProcessing = Boolean(savedTo && !hasMeaningfulCustomer(c));
   const vehicleProcessing = Boolean(savedTo && !hasVehicleData(v ?? null));
   const insuranceProcessing = Boolean(savedTo && !hasMeaningfulInsurance(ins));
+  /** Don't show errors until Textract/Tesseract have finished extracting all subsections */
+  const extractionComplete = !customerProcessing && !vehicleProcessing && !insuranceProcessing;
 
   const handleFillDms = async () => {
     if (!savedTo || !dmsUrl) {
@@ -427,24 +429,28 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
         const pdfs = res.pdfs_saved ?? [];
         const hasForm21 = pdfs.some((f) => /form\s*21|form21/i.test(f));
         const hasForm22 = pdfs.some((f) => /form\s*22|form22/i.test(f));
-        if (hasForm21 && hasForm22) setDmsPdfsDownloaded(true);
+        const hasInvoiceDetails = pdfs.some((f) => /invoice_details|invoice\s*details/i.test(f));
+        if (hasForm21 && hasForm22 && hasInvoiceDetails) setDmsPdfsDownloaded(true);
         setFillDmsStatus(null);
-        if (res.application_id && res.rto_fees != null && lastSubmittedCustomerId != null) {
+        if (res.application_id && res.rto_fees != null && lastSubmittedCustomerId != null && lastSubmittedVehicleId != null) {
           const today = new Date();
           const dd = String(today.getDate()).padStart(2, "0");
           const mm = String(today.getMonth() + 1).padStart(2, "0");
           const yyyy = today.getFullYear();
-          const submissionDate = `${dd}-${mm}-${yyyy}`;
+          const registerDate = `${dd}-${mm}-${yyyy}`;
           try {
             await insertRtoPayment({
+              application_id: res.application_id,
               customer_id: lastSubmittedCustomerId,
+              vehicle_id: lastSubmittedVehicleId,
+              dealer_id: dealerId,
               name: c?.name ?? undefined,
               mobile: mobile ?? undefined,
               chassis_num: res.vehicle?.frame_num ?? v?.frame_no ?? undefined,
-              application_num: res.application_id,
-              submission_date: submissionDate,
-              rto_payment_due: res.rto_fees,
+              register_date: registerDate,
+              rto_fees: res.rto_fees,
               status: "Pending",
+              rto_status: "Registered",
             });
           } catch (_) {
             setFillDmsStatus("RTO row saved but adding to Payments Pending list failed.");
@@ -565,12 +571,12 @@ className="app-button app-button--primary"
                   </button>
               </div>
               <div className="add-sales-v2-box-body">
-                {savedTo && !insuranceReadByTextract && (
+                {extractionComplete && savedTo && !insuranceReadByTextract && (
                   <div className="add-sales-v2-status-row add-sales-v2-status-row--error" role="alert">
                     <span className="add-sales-v2-status-text">Waiting for insurance details from document.</span>
                   </div>
                 )}
-                {savedTo && insuranceReadByTextract && getMissingRequiredFields().length > 0 && (
+                {extractionComplete && savedTo && insuranceReadByTextract && getMissingRequiredFields().length > 0 && (
                   <div className="add-sales-v2-status-row add-sales-v2-status-row--error" role="alert">
                     <span className="add-sales-v2-status-text">
                       Please fill: {getMissingRequiredFields().join(", ")}.
@@ -619,7 +625,7 @@ className="app-button app-button--primary"
                     <h3 className="add-sales-v2-subsection-title">Vehicle Details</h3>
                     {vehicleProcessing && <span className="add-sales-v2-processing">Processing</span>}
                   </div>
-                  {vehicleValidationErrors.length > 0 && (
+                  {extractionComplete && vehicleValidationErrors.length > 0 && (
                     <div className="add-sales-v2-subsection-errors" role="alert">
                       {vehicleValidationErrors.map((msg) => (
                         <div key={msg} className="add-sales-v2-subsection-error-item">{msg}</div>
@@ -737,7 +743,7 @@ className="app-button app-button--primary"
                     <h3 className="add-sales-v2-subsection-title">Insurance Details</h3>
                     {insuranceProcessing && <span className="add-sales-v2-processing">Processing</span>}
                   </div>
-                  {insuranceValidationErrors.length > 0 && (
+                  {extractionComplete && insuranceValidationErrors.length > 0 && (
                     <div className="add-sales-v2-subsection-errors" role="alert">
                       {insuranceValidationErrors.map((msg) => (
                         <div key={msg} className="add-sales-v2-subsection-error-item">{msg}</div>
@@ -875,9 +881,15 @@ className="app-button app-button--primary"
                       ) : null}
                       Form 22
                     </li>
+                    <li className={dmsPdfsDownloaded ? "add-sales-v2-dms-pdf-done" : ""}>
+                      {dmsPdfsDownloaded ? (
+                        <span className="add-sales-v2-dms-pdf-check" aria-hidden>✓</span>
+                      ) : null}
+                      Invoice Details
+                    </li>
                   </ul>
                   {dmsPdfsDownloaded && (
-                    <p className="add-sales-v2-dms-pdfs-msg">Forms 21 and 22 downloaded.</p>
+                    <p className="add-sales-v2-dms-pdfs-msg">Form 21, Form 22 and Invoice Details downloaded.</p>
                   )}
                 </div>
               </div>
@@ -920,7 +932,7 @@ className="app-button app-button--primary"
                         <dd>{rtoApplicationId ?? "—"}</dd>
                       </div>
                       <div className="add-sales-v2-dl-row">
-                        <dt>RTO Payment Due</dt>
+                        <dt>RTO Fees</dt>
                         <dd>{rtoPaymentDue != null ? `₹${rtoPaymentDue}` : "—"}</dd>
                       </div>
                     </div>

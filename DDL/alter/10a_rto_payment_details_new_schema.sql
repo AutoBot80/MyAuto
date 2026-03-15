@@ -1,8 +1,10 @@
--- RTO payment tracking: one row per registration application (from dummy Vahan / real RTO).
--- application_id is PK; FKs to sales_master (customer_id, vehicle_id) and dealer_ref.
+-- RTO_Payment_Details: new schema with application_id as PK, FKs to sales_master.
 -- Run after: 02_customer_master, 03_vehicle_master, 04b_dealer_ref, 05_sales_master.
+-- Migrates from old rto_payment_details (drops and recreates; existing rows are lost).
 
-CREATE TABLE IF NOT EXISTS rto_payment_details (
+DROP TABLE IF EXISTS rto_payment_details;
+
+CREATE TABLE rto_payment_details (
   application_id   VARCHAR(128) PRIMARY KEY,
   customer_id      INTEGER NOT NULL,
   vehicle_id       INTEGER NOT NULL,
