@@ -4,9 +4,10 @@ interface HomePageProps {
   onSelectPos: () => void;
   onSelectService: () => void;
   onSelectRto: () => void;
+  onSelectDealer: () => void;
 }
 
-export function HomePage({ onSelectPos, onSelectService, onSelectRto }: HomePageProps) {
+export function HomePage({ onSelectPos, onSelectService, onSelectRto, onSelectDealer }: HomePageProps) {
   return (
     <div className="home-page">
       <div className="home-page-tiles-wrap">
@@ -38,6 +39,15 @@ export function HomePage({ onSelectPos, onSelectService, onSelectRto }: HomePage
         >
           <span className="home-tile-title">Service Saathi</span>
           <span className="home-tile-desc">Increase service usage through automatic reminders.</span>
+        </button>
+        <button
+          type="button"
+          className="home-tile"
+          onClick={onSelectDealer}
+          aria-label="Open Dealer Saathi"
+        >
+          <span className="home-tile-title">Dealer Saathi</span>
+          <span className="home-tile-desc">RTO details, Sub-dealer sales etc.</span>
         </button>
       </div>
       </div>

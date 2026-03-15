@@ -31,7 +31,7 @@ class PageErrorBoundary extends Component<{ children: ReactNode }, { hasError: b
   }
 }
 
-type AppMode = "home" | "pos" | "service" | "rto";
+type AppMode = "home" | "pos" | "service" | "rto" | "dealer";
 
 const POS_PAGES: Page[] = [
   "add-sales",
@@ -43,6 +43,8 @@ const POS_PAGES: Page[] = [
 const SERVICE_PAGES: Page[] = ["service-reminders", "contact-us"];
 
 const RTO_PAGES: Page[] = ["rto-status", "contact-us"];
+
+const DEALER_PAGES: Page[] = ["dealer-dashboard", "contact-us"];
 
 function getValidDmsUrl(dmsLink: string | null): string {
   const base = getBaseUrl().replace(/\/$/, "");
@@ -117,6 +119,8 @@ function App() {
         return <PlaceholderPage title="RTO Payments Pending" />;
       case "service-reminders":
         return <PlaceholderPage title="Service Reminders" />;
+      case "dealer-dashboard":
+        return <PlaceholderPage title="Dealer Saathi" message="RTO details, Sub-dealer sales etc. – Coming soon." />;
       case "contact-us":
         return <PlaceholderPage title="Contact Us" />;
       default:
@@ -163,6 +167,10 @@ function App() {
                 setMode("rto");
                 setPage("rto-status");
               }}
+              onSelectDealer={() => {
+                setMode("dealer");
+                setPage("dealer-dashboard");
+              }}
             />
           </main>
         </div>
@@ -171,7 +179,10 @@ function App() {
   }
 
   const visiblePages =
-    mode === "pos" ? POS_PAGES : mode === "rto" ? RTO_PAGES : SERVICE_PAGES;
+    mode === "pos" ? POS_PAGES
+    : mode === "rto" ? RTO_PAGES
+    : mode === "dealer" ? DEALER_PAGES
+    : SERVICE_PAGES;
   const currentPage = visiblePages.includes(page) ? page : visiblePages[0];
   const content = renderContent(currentPage) ?? renderContent(visiblePages[0]);
 

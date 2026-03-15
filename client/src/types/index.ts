@@ -3,6 +3,7 @@ export type Page =
   | "customer-details"
   | "rto-status"
   | "service-reminders"
+  | "dealer-dashboard"
   | "contact-us";
 
 export type AddSalesStep =
