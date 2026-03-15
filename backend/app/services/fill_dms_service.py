@@ -1,15 +1,58 @@
 """
 Fill DMS flow using Playwright: login, fill enquiry, search vehicle, scrape row, save PDFs.
+Optionally fills dummy Vahan registration and returns application_id and rto_fees.
 Runs in Edge only (channel msedge). Requires: pip install playwright && playwright install msedge.
 Uses headed browser by default (set DMS_PLAYWRIGHT_HEADED=false for headless).
 Writes pulled data to ocr_output/subfolder/Data from DMS.txt for consistency with other OCR outputs.
 """
 import re
+import urllib.parse
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 
 from app.config import DMS_PLAYWRIGHT_HEADED, OCR_OUTPUT_DIR
+
+
+def _fill_vahan_and_scrape(
+    page,
+    vahan_base_url: str,
+    rto_dealer_id: str,
+    customer_name: str,
+    chassis_no: str,
+    vehicle_model: str,
+    vehicle_colour: str,
+    fuel_type: str,
+    year_of_mfg: str,
+    total_cost: float,
+) -> tuple[str | None, float]:
+    """
+    Fill dummy Vahan registration form, submit, wait for redirect, return (application_id, rto_fees).
+    rto_fees = 1% of total_cost + 200 (same as dummy Vahan formula).
+    """
+    base = vahan_base_url.rstrip("/")
+    page.goto(f"{base}/index.html", wait_until="domcontentloaded", timeout=20000)
+    page.fill("#vahan-rto-dealer-id", (rto_dealer_id or "").strip())
+    page.fill("#vahan-customer-name", (customer_name or "").strip())
+    page.fill("#vahan-chassis-no", (chassis_no or "").strip())
+    page.fill("#vahan-vehicle-model", (vehicle_model or "").strip())
+    page.fill("#vahan-vehicle-colour", (vehicle_colour or "").strip())
+    page.select_option("#vahan-fuel-type", value=(fuel_type or "Petrol").strip())
+    page.fill("#vahan-year-of-mfg", (year_of_mfg or "").strip())
+    page.fill("#vahan-total-cost", str(int(total_cost)) if total_cost else "0")
+    page.click("#vahan-reg-submit")
+    page.wait_for_url("**/search.html*", timeout=15000)
+    url = page.url
+    application_id = None
+    if "application_id=" in url:
+        parsed = urllib.parse.urlparse(url)
+        qs = urllib.parse.parse_qs(parsed.query)
+        ids = qs.get("application_id", [])
+        if ids:
+            application_id = ids[0]
+    total = float(total_cost or 0)
+    rto_fees = round(total * 0.01 + 200, 2) if total else 200.0
+    return (application_id, rto_fees)
 
 
 def _split_name(full_name: str | None) -> tuple[str, str]:
@@ -63,6 +106,18 @@ def _write_data_from_dms(ocr_output_dir: Path, subfolder: str, customer: dict, v
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
+def _parse_total_cost(vehicle: dict) -> float:
+    """Parse total_amount from vehicle (e.g. '72000' or '72,000') for Vahan total_cost."""
+    raw = vehicle.get("total_amount")
+    if raw is None:
+        return 0.0
+    s = str(raw).strip().replace(",", "")
+    try:
+        return float(s)
+    except ValueError:
+        return 0.0
+
+
 def run_fill_dms(
     dms_base_url: str,
     subfolder: str,
@@ -72,16 +127,21 @@ def run_fill_dms(
     login_password: str,
     uploads_dir: Path,
     ocr_output_dir: Path | None = None,
+    vahan_base_url: str | None = None,
+    rto_dealer_id: str | None = None,
 ) -> dict:
     """
     Run Playwright: open DMS, login, fill enquiry, submit, go to Vehicle, search, scrape first row,
     go to Reports, save Form 21 and Form 22 into uploads_dir/subfolder.
+    If vahan_base_url is set, then fill dummy Vahan registration and set result application_id and rto_fees.
     Writes pulled data to ocr_output_dir/subfolder/Data from DMS.txt (same subfolder as other OCR outputs).
-    Returns dict with vehicle details (key_num, frame_num, engine_num, model, color, etc.) and any error.
+    Returns dict with vehicle details (key_num, frame_num, ...), optional application_id, rto_fees, and any error.
     """
     result: dict = {
         "vehicle": {},
         "pdfs_saved": [],
+        "application_id": None,
+        "rto_fees": None,
         "error": None,
     }
     if not dms_base_url:
@@ -183,6 +243,31 @@ def run_fill_dms(
                     result["pdfs_saved"].append("form22.pdf")
             except Exception:
                 pass
+
+            # 6) Optional: fill dummy Vahan registration and scrape application_id + rto_fees
+            if vahan_base_url and vahan_base_url.strip():
+                try:
+                    scraped = result.get("vehicle") or {}
+                    vahan_page = context.new_page()
+                    vahan_page.set_default_timeout(15_000)
+                    total_cost = _parse_total_cost(scraped or vehicle)
+                    app_id, fees = _fill_vahan_and_scrape(
+                        vahan_page,
+                        vahan_base_url=vahan_base_url.strip(),
+                        rto_dealer_id=(rto_dealer_id or "").strip() or "RTO100001",
+                        customer_name=str(customer.get("name") or ""),
+                        chassis_no=str(scraped.get("frame_num") or vehicle.get("frame_no") or vehicle.get("frame_num") or ""),
+                        vehicle_model=str(scraped.get("model") or vehicle.get("model") or ""),
+                        vehicle_colour=str(scraped.get("color") or vehicle.get("color") or ""),
+                        fuel_type="Petrol",
+                        year_of_mfg=str(scraped.get("year_of_mfg") or vehicle.get("year_of_mfg") or ""),
+                        total_cost=total_cost or 72000.0,
+                    )
+                    result["application_id"] = app_id
+                    result["rto_fees"] = fees
+                    vahan_page.close()
+                except Exception as e:
+                    result["error"] = (result.get("error") or "") + f"; Vahan: {e!s}"
 
             browser.close()
     except PlaywrightTimeout as e:

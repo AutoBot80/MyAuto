@@ -5,7 +5,14 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from app.config import UPLOADS_DIR, OCR_OUTPUT_DIR, DMS_BASE_URL, DMS_LOGIN_USER, DMS_LOGIN_PASSWORD
+from app.config import (
+    UPLOADS_DIR,
+    OCR_OUTPUT_DIR,
+    DMS_BASE_URL,
+    DMS_LOGIN_USER,
+    DMS_LOGIN_PASSWORD,
+    VAHAN_BASE_URL,
+)
 from app.services.fill_dms_service import run_fill_dms
 
 router = APIRouter(prefix="/fill-dms", tags=["fill-dms"])
@@ -29,6 +36,8 @@ class FillDmsVehicle(BaseModel):
 class FillDmsRequest(BaseModel):
     subfolder: str
     dms_base_url: str | None = None
+    vahan_base_url: str | None = None
+    rto_dealer_id: str | None = None
     customer: FillDmsCustomer = FillDmsCustomer()
     vehicle: FillDmsVehicle = FillDmsVehicle()
 
@@ -37,6 +46,8 @@ class FillDmsResponse(BaseModel):
     success: bool
     vehicle: dict
     pdfs_saved: list[str]
+    application_id: str | None = None
+    rto_fees: float | None = None
     error: str | None = None
 
 
@@ -54,6 +65,7 @@ async def fill_dms(req: FillDmsRequest) -> FillDmsResponse:
     if req.customer.mobile:
         customer_dict["mobile"] = req.customer.mobile
     vehicle_dict = req.vehicle.model_dump(exclude_none=True)
+    vahan_url = (req.vahan_base_url or VAHAN_BASE_URL or "").strip() or None
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(
         None,
@@ -66,11 +78,15 @@ async def fill_dms(req: FillDmsRequest) -> FillDmsResponse:
             login_password=DMS_LOGIN_PASSWORD,
             uploads_dir=uploads_dir,
             ocr_output_dir=Path(OCR_OUTPUT_DIR).resolve(),
+            vahan_base_url=vahan_url,
+            rto_dealer_id=req.rto_dealer_id,
         ),
     )
     return FillDmsResponse(
         success=result.get("error") is None,
         vehicle=result.get("vehicle") or {},
         pdfs_saved=result.get("pdfs_saved") or [],
+        application_id=result.get("application_id"),
+        rto_fees=result.get("rto_fees"),
         error=result.get("error"),
     )

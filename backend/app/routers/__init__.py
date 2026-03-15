@@ -7,6 +7,7 @@ from .textract_router import router as textract_router
 from .qr_decode import router as qr_decode_router
 from .submit_info import router as submit_info_router
 from .fill_dms import router as fill_dms_router
+from .rto_payment_details import router as rto_payment_details_router
 
 __all__ = [
     "health_router",
@@ -18,4 +19,5 @@ __all__ = [
     "qr_decode_router",
     "submit_info_router",
     "fill_dms_router",
+    "rto_payment_details_router",
 ]

@@ -6,6 +6,7 @@ import { AppLayoutV2 } from "./components/AppLayoutV2";
 import { AddSalesPage } from "./pages/AddSalesPage";
 import { HomePage } from "./pages/HomePage";
 import { PlaceholderPage } from "./pages/PlaceholderPage";
+import { RtoPaymentsPendingPage } from "./pages/RtoPaymentsPendingPage";
 import { getDealer } from "./api/dealers";
 import { getBaseUrl } from "./api/client";
 
@@ -116,7 +117,7 @@ function App() {
       case "customer-details":
         return <PlaceholderPage title="Customer Details" />;
       case "rto-status":
-        return <PlaceholderPage title="RTO Payments Pending" />;
+        return <RtoPaymentsPendingPage />;
       case "service-reminders":
         return <PlaceholderPage title="Service Reminders" />;
       case "dealer-dashboard":

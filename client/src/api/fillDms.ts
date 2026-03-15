@@ -18,6 +18,8 @@ export interface FillDmsVehicle {
 export interface FillDmsRequest {
   subfolder: string;
   dms_base_url?: string | null;
+  vahan_base_url?: string | null;
+  rto_dealer_id?: string | null;
   customer: FillDmsCustomer;
   vehicle: FillDmsVehicle;
 }
@@ -35,6 +37,8 @@ export interface FillDmsResponse {
     year_of_mfg?: string;
   };
   pdfs_saved: string[];
+  application_id?: string | null;
+  rto_fees?: number | null;
   error?: string | null;
 }
 

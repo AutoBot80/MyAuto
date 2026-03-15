@@ -216,3 +216,30 @@ This document lists the current database tables and their columns. **Executable 
 
 **Check:** `chk_service_reminders_service_type` — `service_type` IN ('Free', 'Paid')
 
+---
+
+## 9) `rto_payment_details`
+
+**Purpose:** RTO registration applications; one row per application. Populated when Fill Forms completes the RTO (Vahan) step; status Pending until payment, then Paid with payment_date and txn_id.
+
+| Column | Type | Null | Default | Notes |
+|---|---|---:|---|---|
+| `id` | `integer` | NO | `nextval('rto_payment_details_id_seq'::regclass)` | Primary key (auto-generated) |
+| `customer_id` | `integer` | NO |  | FK → `customer_master(customer_id)` |
+| `name` | `varchar(255)` | YES |  | Customer name (denormalized) |
+| `mobile` | `varchar(16)` | YES |  | Customer mobile |
+| `chassis_num` | `varchar(64)` | YES |  | Chassis number |
+| `application_num` | `varchar(128)` | NO |  | Application ID from Vahan |
+| `submission_date` | `date` | NO | `CURRENT_DATE` | Date row added (dd-mm-yyyy in app) |
+| `rto_payment_due` | `numeric(12,2)` | NO |  | RTO fees due (from Vahan) |
+| `status` | `varchar(32)` | NO | `'Pending'` | e.g. Pending, Paid |
+| `pos_mgr_id` | `varchar(64)` | YES |  | POS / manager identifier |
+| `txn_id` | `varchar(64)` | YES |  | Transaction ID when paid |
+| `payment_date` | `date` | YES |  | Date paid (when status = Paid) |
+| `created_at` | `timestamptz` | NO | `now()` | Created timestamp |
+
+**Primary key:** `rto_payment_details_pkey` on (`id`)
+
+**Foreign keys:**
+- `rto_payment_details_customer_id_fkey`: (`customer_id`) → `customer_master(customer_id)`
+

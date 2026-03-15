@@ -12,6 +12,8 @@ All Postgres DDL for the **auto_ai** database. Run in order when creating a fres
 6. `04c_oem_service_schedule.sql` — requires oem_ref  
 7. `05_sales_master.sql` — requires customer_master, vehicle_master, dealer_ref  
 8. `08_service_reminders_queue.sql` — requires customer_master, vehicle_master  
+9. `09_trigger_sales_master_sync_service_reminders.sql` — trigger on sales_master  
+10. `10_rto_payment_details.sql` — requires customer_master  
 
 ## Run (examples)
 
@@ -25,6 +27,8 @@ psql -h localhost -U postgres -d auto_ai -f DDL/04b_dealer_ref.sql
 psql -h localhost -U postgres -d auto_ai -f DDL/04c_oem_service_schedule.sql
 psql -h localhost -U postgres -d auto_ai -f DDL/05_sales_master.sql
 psql -h localhost -U postgres -d auto_ai -f DDL/08_service_reminders_queue.sql
+psql -h localhost -U postgres -d auto_ai -f DDL/09_trigger_sales_master_sync_service_reminders.sql
+psql -h localhost -U postgres -d auto_ai -f DDL/10_rto_payment_details.sql
 ```
 
 Or run all in order (Unix):
@@ -49,6 +53,9 @@ One-off changes (e.g. new columns) go in **`DDL/alter/`**. Run against an existi
 - `08b_service_reminders_queue_add_reminder_type_dealer_id.sql` — adds `reminder_type`, `dealer_id` to service_reminders_queue.
 - `04f_oem_service_schedule_add_reminder_type.sql` — adds `reminder_type` to oem_service_schedule; set to SMS for existing rows.
 - `04g_oem_ref_add_dms_link.sql` — adds `dms_link` (VARCHAR 512) to oem_ref; app uses dealer → oem_id → dms_link when opening DMS tab.
+
+**New table (run after customer_master exists):**
+- `10_rto_payment_details.sql` — creates `rto_payment_details` for RTO Payments Pending (application_num, rto_payment_due, status, pos_mgr_id, txn_id, payment_date, etc.).
 
 ## Maintenance
 

@@ -6,6 +6,8 @@ import { UploadScansPanel } from "../components/UploadScansPanel";
 import { getExtractedDetails } from "../api/aiReaderQueue";
 import { submitInfo } from "../api/submitInfo";
 import { fillDms, isFillDmsAbortError } from "../api/fillDms";
+import { insertRtoPayment } from "../api/rtoPaymentDetails";
+import { getBaseUrl } from "../api/client";
 import { loadAddSalesForm, saveAddSalesForm, clearAddSalesForm } from "../utils/addSalesStorage";
 import { normalizeVehicleDetails, hasVehicleData } from "../utils/vehicleDetails";
 
@@ -73,6 +75,12 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
   const [hasSubmittedInfo, setHasSubmittedInfo] = useState(false);
   /** True after user has used Print forms. (Used for beforeunload warning.) */
   const [hasPrintedForms, setHasPrintedForms] = useState(false);
+  /** From last successful Submit Info; used when inserting RTO payment row after Fill Forms. */
+  const [lastSubmittedCustomerId, setLastSubmittedCustomerId] = useState<number | null>(null);
+  const [lastSubmittedVehicleId, setLastSubmittedVehicleId] = useState<number | null>(null);
+  /** From Fill Forms (Vahan step); shown under C. RTO. */
+  const [rtoApplicationId, setRtoApplicationId] = useState<string | null>(null);
+  const [rtoPaymentDue, setRtoPaymentDue] = useState<number | null>(null);
   /** True once Textract has returned insurance data for this upload (details sheet processed). */
   const [insuranceReadByTextract, setInsuranceReadByTextract] = useState(() => {
     const stored = loadAddSalesForm().extractedInsurance;
@@ -278,6 +286,10 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
     setDmsPdfsDownloaded(false);
     setHasSubmittedInfo(false);
     setHasPrintedForms(false);
+    setLastSubmittedCustomerId(null);
+    setLastSubmittedVehicleId(null);
+    setRtoApplicationId(null);
+    setRtoPaymentDue(null);
     setFormResetKey((k) => k + 1);
   };
 
@@ -375,10 +387,14 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
     const v = extractedVehicle;
     setIsFillDmsLoading(true);
     setFillDmsStatus(null);
+    const vahanBase = getBaseUrl().replace(/\/$/, "") + "/dummy-vaahan";
+    const rtoDealerId = "RTO" + String(dealerId);
     try {
       const res = await fillDms({
         subfolder: savedTo,
         dms_base_url: dmsUrl,
+        vahan_base_url: vahanBase,
+        rto_dealer_id: rtoDealerId,
         customer: {
           name: c?.name ?? undefined,
           address: c?.address ?? buildDisplayAddress(c),
@@ -405,12 +421,35 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
           year_of_mfg: res.vehicle!.year_of_mfg ?? undefined,
         });
       }
+      if (res.application_id != null) setRtoApplicationId(res.application_id);
+      if (res.rto_fees != null) setRtoPaymentDue(res.rto_fees);
       if (res.success) {
         const pdfs = res.pdfs_saved ?? [];
         const hasForm21 = pdfs.some((f) => /form\s*21|form21/i.test(f));
         const hasForm22 = pdfs.some((f) => /form\s*22|form22/i.test(f));
         if (hasForm21 && hasForm22) setDmsPdfsDownloaded(true);
         setFillDmsStatus(null);
+        if (res.application_id && res.rto_fees != null && lastSubmittedCustomerId != null) {
+          const today = new Date();
+          const dd = String(today.getDate()).padStart(2, "0");
+          const mm = String(today.getMonth() + 1).padStart(2, "0");
+          const yyyy = today.getFullYear();
+          const submissionDate = `${dd}-${mm}-${yyyy}`;
+          try {
+            await insertRtoPayment({
+              customer_id: lastSubmittedCustomerId,
+              name: c?.name ?? undefined,
+              mobile: mobile ?? undefined,
+              chassis_num: res.vehicle?.frame_num ?? v?.frame_no ?? undefined,
+              application_num: res.application_id,
+              submission_date: submissionDate,
+              rto_payment_due: res.rto_fees,
+              status: "Pending",
+            });
+          } catch (_) {
+            setFillDmsStatus("RTO row saved but adding to Payments Pending list failed.");
+          }
+        }
       } else {
         setFillDmsStatus(res.error ?? "Fill DMS failed.");
       }
@@ -501,7 +540,7 @@ className="app-button app-button--primary"
                       setIsSubmitting(true);
                       setSubmitStatus(null);
                       try {
-                        await submitInfo({
+                        const submitRes = await submitInfo({
                           customer: c,
                           vehicle: v ?? null,
                           insurance: ins ?? null,
@@ -512,6 +551,8 @@ className="app-button app-button--primary"
                         });
                         setSubmitStatus("Saved");
                         setHasSubmittedInfo(true);
+                        if (submitRes?.customer_id != null) setLastSubmittedCustomerId(submitRes.customer_id);
+                        if (submitRes?.vehicle_id != null) setLastSubmittedVehicleId(submitRes.vehicle_id);
                       } catch (err) {
                         const msg = err instanceof Error ? err.message : "Submit failed";
                         setSubmitStatus(msg);
@@ -869,6 +910,21 @@ className="app-button app-button--primary"
               <div className="add-sales-v2-fill-forms-subsection">
                 <div className="add-sales-v2-subsection-head">
                   <h3 className="add-sales-v2-subsection-title">C. RTO</h3>
+                  {isFillDmsLoading && <span className="add-sales-v2-processing">Processing</span>}
+                </div>
+                <div className="add-sales-v2-dms-fields">
+                  <dl className="add-sales-v2-dl add-sales-v2-dl--dms">
+                    <div className="add-sales-v2-dl-row-group">
+                      <div className="add-sales-v2-dl-row">
+                        <dt>Application ID</dt>
+                        <dd>{rtoApplicationId ?? "—"}</dd>
+                      </div>
+                      <div className="add-sales-v2-dl-row">
+                        <dt>RTO Payment Due</dt>
+                        <dd>{rtoPaymentDue != null ? `₹${rtoPaymentDue}` : "—"}</dd>
+                      </div>
+                    </div>
+                  </dl>
                 </div>
                 <div className="add-sales-v2-rto-actions">
                   <button

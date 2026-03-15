@@ -861,6 +861,51 @@
   margin: 0.5rem 0 0;
 }
 
+.rto-payments-page {
+  padding: 16px;
+  overflow: auto;
+}
+
+.rto-payments-title {
+  margin: 0 0 12px 0;
+  font-size: 18px;
+  color: #1e5a9e;
+}
+
+.rto-payments-table-wrap {
+  overflow: auto;
+  border: 1px solid #c5d9ed;
+  border-radius: 4px;
+  background: #fff;
+}
+
+.rto-payments-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.rto-payments-table th,
+.rto-payments-table td {
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid #e0e8f0;
+}
+
+.rto-payments-table th {
+  background: #e8eef4;
+  font-weight: 600;
+  color: #333;
+}
+
+.rto-payments-table tbody tr:hover {
+  background: #f5f9fd;
+}
+
+.rto-payments-error {
+  color: #c00;
+}
+
 .app-panel {
   border: 1px solid #c5d9ed;
   border-radius: 10px;
