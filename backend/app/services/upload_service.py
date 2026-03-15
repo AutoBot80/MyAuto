@@ -4,8 +4,8 @@ from pathlib import Path
 from fastapi import UploadFile
 
 from app.config import UPLOADS_DIR
-from app.db import get_connection
-from app.repositories.ai_reader_queue import AiReaderQueueRepository
+
+# ai_reader_queue disabled; extraction runs directly after upload (Option 1)
 
 
 class UploadService:
@@ -60,27 +60,19 @@ class UploadService:
         subdir.mkdir(parents=True, exist_ok=True)
 
         saved: list[str] = []
-        queued: list[dict] = []
 
-        with get_connection() as conn:
-            AiReaderQueueRepository.ensure_table(conn)
-            for f in files:
-                filename = Path(f.filename or "scan").name
-                target = self._unique_path(subdir, filename)
-                content = await f.read()
-                target.write_bytes(content)
-                saved.append(target.name)
-                row = AiReaderQueueRepository.insert(
-                    conn, subdir_name, target.name, status="queued"
-                )
-                queued.append(row)
-            conn.commit()
+        for f in files:
+            filename = Path(f.filename or "scan").name
+            target = self._unique_path(subdir, filename)
+            content = await f.read()
+            target.write_bytes(content)
+            saved.append(target.name)
 
         return {
             "saved_count": len(saved),
             "saved_files": saved,
             "saved_to": subdir_name,
-            "queued_items": queued,
+            "queued_items": [],
         }
 
     async def save_and_queue_v2(
@@ -102,35 +94,36 @@ class UploadService:
         subdir.mkdir(parents=True, exist_ok=True)
 
         saved: list[str] = []
-        queued: list[dict] = []
 
-        with get_connection() as conn:
-            AiReaderQueueRepository.ensure_table(conn)
-            # Save all three required files; optional insurance and financing when provided.
-            file_defs: list[tuple[UploadFile, str, bool]] = [
-                (aadhar_scan, "Aadhar.jpg", True),
-                (aadhar_back, "Aadhar_back.jpg", False),
-                (sales_detail, "Details.jpg", True),
-            ]
-            if insurance_sheet and insurance_sheet.filename:
-                file_defs.append((insurance_sheet, "Insurance.jpg", False))
-            if financing_doc and financing_doc.filename:
-                file_defs.append((financing_doc, "Financing.jpg", False))
-            for role, save_name, should_queue in file_defs:
-                content = await role.read()
-                target = subdir / save_name
-                target.write_bytes(content)
-                saved.append(save_name)
-                if should_queue:
-                    row = AiReaderQueueRepository.insert(
-                        conn, subdir_name, save_name, status="queued"
-                    )
-                    queued.append(row)
-            conn.commit()
+        file_defs: list[tuple[UploadFile, str]] = [
+            (aadhar_scan, "Aadhar.jpg"),
+            (aadhar_back, "Aadhar_back.jpg"),
+            (sales_detail, "Details.jpg"),
+        ]
+        if insurance_sheet and insurance_sheet.filename:
+            file_defs.append((insurance_sheet, "Insurance.jpg"))
+        if financing_doc and financing_doc.filename:
+            file_defs.append((financing_doc, "Financing.jpg"))
+        for role, save_name in file_defs:
+            content = await role.read()
+            target = subdir / save_name
+            target.write_bytes(content)
+            saved.append(save_name)
+
+        # Run extraction directly after upload (Option 1: no queue)
+        extraction_result: dict = {}
+        try:
+            from app.services.ocr_service import OcrService
+
+            ocr = OcrService()
+            extraction_result = ocr.process_uploaded_subfolder(subdir_name)
+        except Exception as e:
+            extraction_result = {"error": str(e), "processed": []}
 
         return {
             "saved_count": len(saved),
             "saved_files": saved,
             "saved_to": subdir_name,
-            "queued_items": queued,
+            "queued_items": [],
+            "extraction": extraction_result,
         }

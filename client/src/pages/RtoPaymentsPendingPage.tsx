@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { listRtoPayments, getVahanPayUrl, type RtoPaymentRow } from "../api/rtoPaymentDetails";
+import { listRtoPayments, payRtoPayment, type RtoPaymentRow } from "../api/rtoPaymentDetails";
 
 interface RtoPaymentsPendingPageProps {
   /** When true, show Pay link column (only on RTO Payment Saathi tab). */
@@ -10,27 +10,51 @@ export function RtoPaymentsPendingPage({ showPayLink = false }: RtoPaymentsPendi
   const [rows, setRows] = useState<RtoPaymentRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [payingId, setPayingId] = useState<string | null>(null);
+
+  const refreshRows = () => {
+    setError(null);
+    listRtoPayments()
+      .then((data) => setRows(data))
+      .catch((err) => setError(err instanceof Error ? err.message : "Failed to load"));
+  };
+
+  const fetchFromDb = (showLoading = true) => {
+    if (showLoading) setLoading(true);
+    setError(null);
+    listRtoPayments()
+      .then((data) => setRows(data))
+      .catch((err) => setError(err instanceof Error ? err.message : "Failed to load"))
+      .finally(() => setLoading(false));
+  };
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    setError(null);
-    listRtoPayments()
-      .then((data) => {
-        if (!cancelled) setRows(data);
-      })
-      .catch((err) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load");
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+    fetchFromDb(true);
+    const onVisible = () => {
+      if (!cancelled && document.visibilityState === "visible") fetchFromDb(false);
+    };
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
       cancelled = true;
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, []);
 
-  if (loading) {
+  const handlePay = async (applicationId: string) => {
+    if (payingId) return;
+    setPayingId(applicationId);
+    try {
+      await payRtoPayment(applicationId);
+      refreshRows();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Pay failed");
+    } finally {
+      setPayingId(null);
+    }
+  };
+
+  if (loading && rows.length === 0) {
     return (
       <div className="app-placeholder rto-payments-page">
         <h2>RTO Payments Pending</h2>
@@ -39,7 +63,7 @@ export function RtoPaymentsPendingPage({ showPayLink = false }: RtoPaymentsPendi
     );
   }
 
-  if (error) {
+  if (error && rows.length === 0) {
     return (
       <div className="app-placeholder rto-payments-page">
         <h2>RTO Payments Pending</h2>
@@ -64,6 +88,7 @@ export function RtoPaymentsPendingPage({ showPayLink = false }: RtoPaymentsPendi
   return (
     <div className="rto-payments-page">
       <h2 className="rto-payments-title">RTO Payments Pending</h2>
+      {error && <p className="rto-payments-error">{error}</p>}
       <div className="rto-payments-table-wrap">
         <table className="rto-payments-table">
           <thead>
@@ -92,14 +117,18 @@ export function RtoPaymentsPendingPage({ showPayLink = false }: RtoPaymentsPendi
                   <td>{r.status ?? "Pending"}</td>
                   {showPayLink && (
                     <td>
-                      <a
-                        href={getVahanPayUrl(r.application_id)}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="rto-payments-pay-link"
-                      >
-                        Pay
-                      </a>
+                      {r.status === "Paid" ? (
+                        <span className="rto-payments-paid">{r.pay_txn_id ?? "Paid"}</span>
+                      ) : (
+                        <button
+                          type="button"
+                          className="rto-payments-pay-link"
+                          disabled={payingId !== null}
+                          onClick={() => handlePay(r.application_id)}
+                        >
+                          {payingId === r.application_id ? "Processing…" : "Pay"}
+                        </button>
+                      )}
                     </td>
                   )}
                 </tr>

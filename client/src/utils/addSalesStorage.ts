@@ -7,6 +7,12 @@ export interface AddSalesStored {
   savedTo: string | null;
   uploadedFiles: string[];
   uploadStatus: string;
+  dmsScrapedVehicle: { key_no?: string; frame_no?: string; engine_no?: string; model?: string; color?: string; cubic_capacity?: string; total_amount?: string; year_of_mfg?: string } | null;
+  rtoApplicationId: string | null;
+  rtoPaymentDue: number | null;
+  hasSubmittedInfo: boolean;
+  lastSubmittedCustomerId: number | null;
+  lastSubmittedVehicleId: number | null;
   extractedVehicle: {
     frame_no?: string;
     engine_no?: string;
@@ -23,6 +29,12 @@ const DEFAULT: AddSalesStored = {
   savedTo: null,
   uploadedFiles: [],
   uploadStatus: "",
+  dmsScrapedVehicle: null,
+  rtoApplicationId: null,
+  rtoPaymentDue: null,
+  hasSubmittedInfo: false,
+  lastSubmittedCustomerId: null,
+  lastSubmittedVehicleId: null,
   extractedVehicle: null,
   extractedCustomer: null,
   extractedInsurance: null,
@@ -64,6 +76,11 @@ export function loadAddSalesForm(): AddSalesStored {
     const parsed = JSON.parse(raw) as Partial<AddSalesStored> & { extractedVehicle?: unknown; extractedCustomer?: unknown };
     const cust = parsed.extractedCustomer;
     const extractedCustomer = normalizeExtractedCustomer(cust);
+    const dmsV = parsed.dmsScrapedVehicle;
+    const dmsScrapedVehicle =
+      dmsV != null && typeof dmsV === "object" && !Array.isArray(dmsV)
+        ? (dmsV as AddSalesStored["dmsScrapedVehicle"])
+        : null;
     return {
       mobile: typeof parsed.mobile === "string" ? parsed.mobile : "",
       savedTo:
@@ -74,6 +91,12 @@ export function loadAddSalesForm(): AddSalesStored {
             : "",
       uploadedFiles: Array.isArray(parsed.uploadedFiles) ? parsed.uploadedFiles : [],
       uploadStatus: typeof parsed.uploadStatus === "string" ? parsed.uploadStatus : "",
+      dmsScrapedVehicle,
+      rtoApplicationId: typeof parsed.rtoApplicationId === "string" ? parsed.rtoApplicationId : null,
+      rtoPaymentDue: typeof parsed.rtoPaymentDue === "number" ? parsed.rtoPaymentDue : null,
+      hasSubmittedInfo: Boolean(parsed.hasSubmittedInfo),
+      lastSubmittedCustomerId: typeof parsed.lastSubmittedCustomerId === "number" ? parsed.lastSubmittedCustomerId : null,
+      lastSubmittedVehicleId: typeof parsed.lastSubmittedVehicleId === "number" ? parsed.lastSubmittedVehicleId : null,
       extractedVehicle: normalizeExtractedVehicle(parsed.extractedVehicle),
       extractedCustomer: extractedCustomer && hasAnyCustomerValue(extractedCustomer) ? extractedCustomer : null,
       extractedInsurance:

@@ -41,7 +41,10 @@
         <input type="text" id="vahan-search-dealer-id" placeholder="e.g. RTO100001" />
 
         <label for="vahan-search-application-id">Application ID</label>
-        <input type="text" id="vahan-search-application-id" placeholder="e.g. APP1234567890-abc123" />
+        <input type="text" id="vahan-search-application-id" placeholder="e.g. 12345678" />
+
+        <label for="vahan-search-chassis-no">Chassis No.</label>
+        <input type="text" id="vahan-search-chassis-no" placeholder="e.g. MBLXXXXXXXXXXXX" />
 
         <button type="submit" id="vahan-search-btn" class="btn">Search</button>
       </form>
@@ -98,7 +101,7 @@
           '<dt>Total cost</dt><dd>₹' + (app.total_cost != null ? Number(app.total_cost).toLocaleString('en-IN') : '—') + '</dd>' +
           '<dt>RTO fees</dt><dd id="vahan-result-rto-fees" data-rto-fees="' + (app.rto_fees != null ? String(app.rto_fees) : '') + '">₹' + (app.rto_fees != null ? Number(app.rto_fees).toLocaleString('en-IN') : '—') + '</dd>' +
           '<dt>Status</dt><dd>' + (app.status || '—') + '</dd>' +
-          (app.tc_number ? ('<dt>TC number</dt><dd>' + app.tc_number + '</dd>') : '') +
+          (app.tc_number ? ('<dt>TC number</dt><dd id="vahan-result-tc-number" data-tc="' + (app.tc_number || '') + '">' + app.tc_number + '</dd>') : '') +
           '</dl>';
         document.getElementById('vahan-result-content').innerHTML = html;
       }
@@ -107,6 +110,7 @@
         e.preventDefault();
         var dealerId = document.getElementById('vahan-search-dealer-id').value.trim();
         var appId = document.getElementById('vahan-search-application-id').value.trim();
+        var chassisNo = document.getElementById('vahan-search-chassis-no').value.trim();
         var msgEl = document.getElementById('vahan-search-msg');
         var resultSection = document.getElementById('vahan-result-section');
 
@@ -123,6 +127,9 @@
         if (appId && apps[appId]) {
           found = apps[appId];
           if (dealerId && found.rto_dealer_id !== dealerId) {
+            found = null;
+          }
+          if (found && chassisNo && found.chassis_no && found.chassis_no !== chassisNo) {
             found = null;
           }
         } else if (dealerId) {
@@ -156,6 +163,7 @@
         currentApp.tc_number = tcNumber;
         currentApp.status = 'paid';
         saveApplication(currentApp);
+        renderResult(currentApp);
 
         var win = window.open('', '_blank', 'width=600,height=700');
         var doc = win.document;
@@ -188,10 +196,52 @@
         setTimeout(function() { win.print(); }, 300);
       });
 
+      function createSyntheticAppFromParams() {
+        var appId = getQueryParam('application_id');
+        if (!appId) return null;
+        var apps = getApplications();
+        if (apps[appId]) return null;
+        var chassisNo = getQueryParam('chassis_no') || '';
+        var dealerId = getQueryParam('rto_dealer_id') || 'RTO100001';
+        var customerName = getQueryParam('customer_name') || '';
+        var rtoFees = parseFloat(getQueryParam('rto_fees') || '200', 10) || 200;
+        var totalCost = parseFloat(getQueryParam('total_cost') || '72000', 10) || 72000;
+        return {
+          application_id: appId,
+          rto_dealer_id: dealerId,
+          customer_name: customerName,
+          chassis_no: chassisNo,
+          vehicle_model: getQueryParam('vehicle_model') || '',
+          vehicle_colour: getQueryParam('vehicle_colour') || '',
+          fuel_type: getQueryParam('fuel_type') || 'Petrol',
+          year_of_mfg: getQueryParam('year_of_mfg') || '',
+          total_cost: totalCost,
+          rto_fees: rtoFees,
+          status: 'payment pending'
+        };
+      }
+
       var prefillAppId = getQueryParam('application_id');
+      var prefillChassis = getQueryParam('chassis_no');
+      var prefillDealer = getQueryParam('rto_dealer_id');
+      if (prefillDealer) {
+        document.getElementById('vahan-search-dealer-id').value = prefillDealer;
+      }
       if (prefillAppId) {
         document.getElementById('vahan-search-application-id').value = prefillAppId;
-        document.getElementById('vahan-search-form').dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+        if (prefillChassis) {
+          document.getElementById('vahan-search-chassis-no').value = prefillChassis;
+        }
+        var synthetic = createSyntheticAppFromParams();
+        if (synthetic) {
+          currentApp = synthetic;
+          saveApplication(synthetic);
+          document.getElementById('vahan-search-msg').style.display = 'none';
+          document.getElementById('vahan-result-section').style.display = 'block';
+          renderResult(synthetic);
+        } else {
+          document.getElementById('vahan-search-form').dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+        }
       }
     })();
   </script>

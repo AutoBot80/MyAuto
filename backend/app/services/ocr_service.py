@@ -266,11 +266,48 @@ class OcrService:
             "classification_confidence": 0.0,
         }
 
-    def _process_details_sheet(self, qid: int, subfolder: str, filename: str, input_path: Path) -> dict:
-        """Run Textract (forms) on Details sheet; write text + JSON; update queue."""
-        with get_connection() as conn:
-            AiReaderQueueRepository.update_classification(conn, qid, "Details sheet", 1.0)
-            conn.commit()
+    def process_uploaded_subfolder(self, subfolder: str) -> dict:
+        """
+        Run extraction directly on uploaded files (no queue).
+        Processes Details.jpg first (vehicle + insurance), then Aadhar.jpg (customer).
+        Returns summary of what was processed.
+        """
+        subdir = self.uploads_dir / subfolder
+        if not subdir.exists() or not subdir.is_dir():
+            return {"error": f"Subfolder not found: {subfolder}", "processed": []}
+
+        processed: list[str] = []
+        errors: list[str] = []
+
+        # 1. Details.jpg first (creates vehicle + insurance JSON)
+        details_path = subdir / "Details.jpg"
+        if details_path.exists():
+            try:
+                self._process_details_sheet(None, subfolder, "Details.jpg", details_path)
+                processed.append("Details.jpg")
+            except Exception as e:
+                errors.append(f"Details.jpg: {e}")
+
+        # 2. Aadhar.jpg second (adds customer to JSON)
+        aadhar_path = subdir / "Aadhar.jpg"
+        if aadhar_path.exists():
+            try:
+                self._process_aadhar(None, subfolder, "Aadhar.jpg", aadhar_path)
+                processed.append("Aadhar.jpg")
+            except Exception as e:
+                errors.append(f"Aadhar.jpg: {e}")
+
+        result: dict = {"processed": processed}
+        if errors:
+            result["errors"] = errors
+        return result
+
+    def _process_details_sheet(self, qid: int | None, subfolder: str, filename: str, input_path: Path) -> dict:
+        """Run Textract (forms) on Details sheet; write text + JSON; optionally update queue."""
+        if qid is not None:
+            with get_connection() as conn:
+                AiReaderQueueRepository.update_classification(conn, qid, "Details sheet", 1.0)
+                conn.commit()
         try:
             from app.services.textract_service import extract_forms_from_bytes
 
@@ -322,9 +359,10 @@ class OcrService:
             json_path.parent.mkdir(parents=True, exist_ok=True)
             json_path.write_text(json.dumps(details_json, indent=2), encoding="utf-8")
 
-            with get_connection() as conn:
-                AiReaderQueueRepository.update_status(conn, qid, "done")
-                conn.commit()
+            if qid is not None:
+                with get_connection() as conn:
+                    AiReaderQueueRepository.update_status(conn, qid, "done")
+                    conn.commit()
 
             return {
                 "id": qid,
@@ -338,26 +376,29 @@ class OcrService:
                 "classification_confidence": 1.0,
             }
         except Exception as e:
-            with get_connection() as conn:
-                AiReaderQueueRepository.update_status(conn, qid, "failed")
-                conn.commit()
-            return {
-                "id": qid,
-                "subfolder": subfolder,
-                "filename": filename,
-                "status": "failed",
-                "error": str(e),
-                "extracted_text": None,
-                "output_path": None,
-                "document_type": None,
-                "classification_confidence": None,
-            }
+            if qid is not None:
+                with get_connection() as conn:
+                    AiReaderQueueRepository.update_status(conn, qid, "failed")
+                    conn.commit()
+                return {
+                    "id": qid,
+                    "subfolder": subfolder,
+                    "filename": filename,
+                    "status": "failed",
+                    "error": str(e),
+                    "extracted_text": None,
+                    "output_path": None,
+                    "document_type": None,
+                    "classification_confidence": None,
+                }
+            raise
 
-    def _process_aadhar(self, qid: int, subfolder: str, filename: str, input_path: Path) -> dict:
+    def _process_aadhar(self, qid: int | None, subfolder: str, filename: str, input_path: Path) -> dict:
         """Run Aadhar extraction: try QR decode first, then fall back to OpenAI Vision; merge customer into subfolder JSON."""
-        with get_connection() as conn:
-            AiReaderQueueRepository.update_classification(conn, qid, "Aadhar", 1.0)
-            conn.commit()
+        if qid is not None:
+            with get_connection() as conn:
+                AiReaderQueueRepository.update_classification(conn, qid, "Aadhar", 1.0)
+                conn.commit()
         try:
             customer: dict[str, str] = {}
             raw_bytes = input_path.read_bytes()
@@ -422,9 +463,10 @@ class OcrService:
             summary = "\n".join(f"{k}: {v}" for k, v in customer.items() if v)
             output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-            with get_connection() as conn:
-                AiReaderQueueRepository.update_status(conn, qid, "done")
-                conn.commit()
+            if qid is not None:
+                with get_connection() as conn:
+                    AiReaderQueueRepository.update_status(conn, qid, "done")
+                    conn.commit()
 
             return {
                 "id": qid,
@@ -438,20 +480,22 @@ class OcrService:
                 "classification_confidence": 1.0,
             }
         except Exception as e:
-            with get_connection() as conn:
-                AiReaderQueueRepository.update_status(conn, qid, "failed")
-                conn.commit()
-            return {
-                "id": qid,
-                "subfolder": subfolder,
-                "filename": filename,
-                "status": "failed",
-                "error": str(e),
-                "extracted_text": None,
-                "output_path": None,
-                "document_type": None,
-                "classification_confidence": None,
-            }
+            if qid is not None:
+                with get_connection() as conn:
+                    AiReaderQueueRepository.update_status(conn, qid, "failed")
+                    conn.commit()
+                return {
+                    "id": qid,
+                    "subfolder": subfolder,
+                    "filename": filename,
+                    "status": "failed",
+                    "error": str(e),
+                    "extracted_text": None,
+                    "output_path": None,
+                    "document_type": None,
+                    "classification_confidence": None,
+                }
+            raise
 
     def get_extracted_details(self, subfolder: str) -> dict | None:
         """

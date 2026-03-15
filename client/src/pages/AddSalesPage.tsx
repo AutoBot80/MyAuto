@@ -5,7 +5,7 @@ import { useUploadScans } from "../hooks/useUploadScans";
 import { UploadScansPanel } from "../components/UploadScansPanel";
 import { getExtractedDetails } from "../api/aiReaderQueue";
 import { submitInfo } from "../api/submitInfo";
-import { fillDms, isFillDmsAbortError } from "../api/fillDms";
+import { fillDmsOnly, fillVahanOnly, isFillDmsAbortError } from "../api/fillDms";
 import { insertRtoPayment } from "../api/rtoPaymentDetails";
 import { getBaseUrl } from "../api/client";
 import { loadAddSalesForm, saveAddSalesForm, clearAddSalesForm } from "../utils/addSalesStorage";
@@ -66,19 +66,21 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitStatus, setSubmitStatus] = useState<string | null>(null);
   const [fillDmsStatus, setFillDmsStatus] = useState<string | null>(null);
+  const [fillVahanStatus, setFillVahanStatus] = useState<string | null>(null);
   const [isFillDmsLoading, setIsFillDmsLoading] = useState(false);
-  /** DMS-scraped vehicle; shown in Fill Forms > DMS, does not change Extracted Information. */
+  const [isFillVahanLoading, setIsFillVahanLoading] = useState(false);
+  /** DMS-scraped vehicle; shown in Fill Forms > DMS. Only populated when user presses Fill Forms. */
   const [dmsScrapedVehicle, setDmsScrapedVehicle] = useState<ExtractedVehicleDetails | null>(null);
   /** True when Form 21 and Form 22 PDFs have been downloaded from DMS. */
   const [dmsPdfsDownloaded, setDmsPdfsDownloaded] = useState(false);
   /** True after user has successfully pressed Submit Info. (Section 3 stays greyed until then.) */
-  const [hasSubmittedInfo, setHasSubmittedInfo] = useState(false);
+  const [hasSubmittedInfo, setHasSubmittedInfo] = useState(() => getInitialForm().hasSubmittedInfo);
   /** True after user has used Print forms. (Used for beforeunload warning.) */
   const [hasPrintedForms, setHasPrintedForms] = useState(false);
   /** From last successful Submit Info; used when inserting RTO payment row after Fill Forms. */
-  const [lastSubmittedCustomerId, setLastSubmittedCustomerId] = useState<number | null>(null);
-  const [lastSubmittedVehicleId, setLastSubmittedVehicleId] = useState<number | null>(null);
-  /** From Fill Forms (Vahan step); shown under C. RTO. */
+  const [lastSubmittedCustomerId, setLastSubmittedCustomerId] = useState<number | null>(() => getInitialForm().lastSubmittedCustomerId);
+  const [lastSubmittedVehicleId, setLastSubmittedVehicleId] = useState<number | null>(() => getInitialForm().lastSubmittedVehicleId);
+  /** From Fill Forms (Vahan step); shown under C. RTO. Only populated when user presses Fill Forms. */
   const [rtoApplicationId, setRtoApplicationId] = useState<string | null>(null);
   const [rtoPaymentDue, setRtoPaymentDue] = useState<number | null>(null);
   /** True once Textract has returned insurance data for this upload (details sheet processed). */
@@ -119,11 +121,19 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
       savedTo,
       uploadedFiles,
       uploadStatus,
+      dmsScrapedVehicle,
+      rtoApplicationId,
+      rtoPaymentDue,
+      hasSubmittedInfo,
+      lastSubmittedCustomerId,
+      lastSubmittedVehicleId,
       extractedVehicle,
       extractedCustomer,
       extractedInsurance,
     });
-  }, [mobile, savedTo, uploadedFiles, uploadStatus, extractedVehicle, extractedCustomer, extractedInsurance]);
+  }, [mobile, savedTo, uploadedFiles, uploadStatus, dmsScrapedVehicle, rtoApplicationId, rtoPaymentDue, hasSubmittedInfo, lastSubmittedCustomerId, lastSubmittedVehicleId, extractedVehicle, extractedCustomer, extractedInsurance]);
+
+  // DMS and RTO sections populate only when user presses Fill Forms. No auto-fetch from file or DB.
 
   // Warn on close/refresh if customer processing not complete (forms not filled or print forms not done)
   useEffect(() => {
@@ -284,6 +294,8 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
     setInsuranceReadByTextract(false);
     setDmsScrapedVehicle(null);
     setDmsPdfsDownloaded(false);
+    setFillDmsStatus(null);
+    setFillVahanStatus(null);
     setHasSubmittedInfo(false);
     setHasPrintedForms(false);
     setLastSubmittedCustomerId(null);
@@ -380,23 +392,28 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
   /** Don't show errors until Textract/Tesseract have finished extracting all subsections */
   const extractionComplete = !customerProcessing && !vehicleProcessing && !insuranceProcessing;
 
-  const handleFillDms = async () => {
+  const handleFillForms = async () => {
     if (!savedTo || !dmsUrl) {
       setFillDmsStatus("Upload scans first.");
       return;
     }
     const c = extractedCustomer;
     const v = extractedVehicle;
-    setIsFillDmsLoading(true);
-    setFillDmsStatus(null);
     const vahanBase = getBaseUrl().replace(/\/$/, "") + "/dummy-vaahan";
     const rtoDealerId = "RTO" + String(dealerId);
+
+    // 1) DMS section – independent process
+    setIsFillDmsLoading(true);
+    setFillDmsStatus(null);
+    setFillVahanStatus(null);
+    let dmsRes: Awaited<ReturnType<typeof fillDmsOnly>> | null = null;
+    let hasAnyVehicle = false;
     try {
-      const res = await fillDms({
+      dmsRes = await fillDmsOnly({
         subfolder: savedTo,
         dms_base_url: dmsUrl,
-        vahan_base_url: vahanBase,
-        rto_dealer_id: rtoDealerId,
+        customer_id: lastSubmittedCustomerId ?? undefined,
+        vehicle_id: lastSubmittedVehicleId ?? undefined,
         customer: {
           name: c?.name ?? undefined,
           address: c?.address ?? buildDisplayAddress(c),
@@ -410,29 +427,86 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
           engine_no: v?.engine_no ?? undefined,
         },
       });
-      const scraped = res.vehicle && (res.vehicle.key_num ?? res.vehicle.frame_num ?? res.vehicle.engine_num ?? res.vehicle.model ?? res.vehicle.color ?? res.vehicle.cubic_capacity ?? res.vehicle.total_amount ?? res.vehicle.year_of_mfg);
-      if (scraped) {
+      const scraped = dmsRes.vehicle;
+      hasAnyVehicle = !!(scraped && typeof scraped === "object" && (
+        (scraped.key_num && String(scraped.key_num).trim()) ||
+        (scraped.frame_num && String(scraped.frame_num).trim()) ||
+        (scraped.engine_num && String(scraped.engine_num).trim()) ||
+        (scraped.model && String(scraped.model).trim()) ||
+        (scraped.color && String(scraped.color).trim()) ||
+        (scraped.cubic_capacity && String(scraped.cubic_capacity).trim()) ||
+        (scraped.total_amount && String(scraped.total_amount).trim()) ||
+        (scraped.year_of_mfg && String(scraped.year_of_mfg).trim())
+      ));
+      if (hasAnyVehicle && scraped) {
         setDmsScrapedVehicle({
-          key_no: res.vehicle!.key_num ?? undefined,
-          frame_no: res.vehicle!.frame_num ?? undefined,
-          engine_no: res.vehicle!.engine_num ?? undefined,
-          model: res.vehicle!.model ?? undefined,
-          color: res.vehicle!.color ?? undefined,
-          cubic_capacity: res.vehicle!.cubic_capacity ?? undefined,
-          total_amount: res.vehicle!.total_amount ?? undefined,
-          year_of_mfg: res.vehicle!.year_of_mfg ?? undefined,
+          key_no: scraped.key_num ?? undefined,
+          frame_no: scraped.frame_num ?? undefined,
+          engine_no: scraped.engine_num ?? undefined,
+          model: scraped.model ?? undefined,
+          color: scraped.color ?? undefined,
+          cubic_capacity: scraped.cubic_capacity ?? undefined,
+          total_amount: scraped.total_amount ?? undefined,
+          year_of_mfg: scraped.year_of_mfg ?? undefined,
         });
       }
-      if (res.application_id != null) setRtoApplicationId(res.application_id);
-      if (res.rto_fees != null) setRtoPaymentDue(res.rto_fees);
-      if (res.success) {
-        const pdfs = res.pdfs_saved ?? [];
-        const hasForm21 = pdfs.some((f) => /form\s*21|form21/i.test(f));
-        const hasForm22 = pdfs.some((f) => /form\s*22|form22/i.test(f));
-        const hasInvoiceDetails = pdfs.some((f) => /invoice_details|invoice\s*details/i.test(f));
-        if (hasForm21 && hasForm22 && hasInvoiceDetails) setDmsPdfsDownloaded(true);
+      const pdfs = dmsRes.pdfs_saved ?? [];
+      const hasForm21 = pdfs.some((f) => /form\s*21|form21/i.test(f));
+      const hasForm22 = pdfs.some((f) => /form\s*22|form22/i.test(f));
+      const hasInvoiceDetails = pdfs.some((f) => /invoice_details|invoice\s*details/i.test(f));
+      if (hasForm21 && hasForm22 && hasInvoiceDetails) setDmsPdfsDownloaded(true);
+      if (!dmsRes.success) {
+        setFillDmsStatus(dmsRes.error ?? "Fill DMS failed.");
+      } else {
         setFillDmsStatus(null);
-        if (res.application_id && res.rto_fees != null && lastSubmittedCustomerId != null && lastSubmittedVehicleId != null) {
+      }
+    } catch (err) {
+      if (isFillDmsAbortError(err)) {
+        setFillDmsStatus("DMS request timed out. Check the upload folder for PDFs.");
+      } else {
+        setFillDmsStatus(err instanceof Error ? err.message : "Fill DMS failed.");
+      }
+    } finally {
+      setIsFillDmsLoading(false);
+    }
+
+    // 2) Vahan (RTO) section – independent process; uses vehicle from DMS response or extracted
+    const scrapedForVahan = dmsRes?.vehicle;
+    const vehicleForVahan = (hasAnyVehicle && scrapedForVahan) ? {
+      frame_no: scrapedForVahan.frame_num ?? scrapedForVahan.frame_no,
+      model: scrapedForVahan.model,
+      model_colour: scrapedForVahan.model,
+      color: scrapedForVahan.color,
+      year_of_mfg: scrapedForVahan.year_of_mfg,
+      total_amount: scrapedForVahan.total_amount,
+    } : v;
+    const chassisNo = vehicleForVahan?.frame_no ?? v?.frame_no ?? "";
+    const model = vehicleForVahan?.model ?? vehicleForVahan?.model_colour ?? v?.model_colour ?? "";
+    const colour = vehicleForVahan?.color ?? "";
+    const yearOfMfg = vehicleForVahan?.year_of_mfg ?? "";
+    const totalAmount = vehicleForVahan?.total_amount ?? "";
+    const totalCost = totalAmount ? parseFloat(String(totalAmount).replace(/,/g, "")) || 72000 : 72000;
+
+    setIsFillVahanLoading(true);
+    try {
+      const vahanRes = await fillVahanOnly({
+        vahan_base_url: vahanBase,
+        rto_dealer_id: rtoDealerId,
+        customer_name: c?.name ?? undefined,
+        chassis_no: chassisNo || undefined,
+        vehicle_model: model || undefined,
+        vehicle_colour: colour || undefined,
+        fuel_type: "Petrol",
+        year_of_mfg: yearOfMfg || undefined,
+        total_cost: totalCost,
+      });
+      if (vahanRes.application_id != null) setRtoApplicationId(vahanRes.application_id);
+      if (vahanRes.rto_fees != null) setRtoPaymentDue(vahanRes.rto_fees);
+      if (!vahanRes.success) {
+        setFillVahanStatus(vahanRes.error ?? "Fill RTO failed.");
+      } else {
+        setFillVahanStatus(null);
+        if (vahanRes.application_id && vahanRes.rto_fees != null && lastSubmittedCustomerId != null && lastSubmittedVehicleId != null) {
           const today = new Date();
           const dd = String(today.getDate()).padStart(2, "0");
           const mm = String(today.getMonth() + 1).padStart(2, "0");
@@ -440,35 +514,32 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
           const registerDate = `${dd}-${mm}-${yyyy}`;
           try {
             await insertRtoPayment({
-              application_id: res.application_id,
+              application_id: vahanRes.application_id,
               customer_id: lastSubmittedCustomerId,
               vehicle_id: lastSubmittedVehicleId,
               dealer_id: dealerId,
               name: c?.name ?? undefined,
               mobile: mobile ?? undefined,
-              chassis_num: res.vehicle?.frame_num ?? v?.frame_no ?? undefined,
+              chassis_num: chassisNo || undefined,
               register_date: registerDate,
-              rto_fees: res.rto_fees,
+              rto_fees: vahanRes.rto_fees,
               status: "Pending",
               rto_status: "Registered",
+              subfolder: savedTo ?? undefined,
             });
           } catch (_) {
-            setFillDmsStatus("RTO row saved but adding to Payments Pending list failed.");
+            setFillVahanStatus("RTO row saved but adding to Payments Pending list failed.");
           }
         }
-      } else {
-        setFillDmsStatus(res.error ?? "Fill DMS failed.");
       }
     } catch (err) {
       if (isFillDmsAbortError(err)) {
-        setFillDmsStatus(
-          "Request timed out. The DMS fill may have completed on the server—check the upload folder for Forms 21 and 22."
-        );
+        setFillVahanStatus("RTO request timed out.");
       } else {
-        setFillDmsStatus(err instanceof Error ? err.message : "Fill DMS failed.");
+        setFillVahanStatus(err instanceof Error ? err.message : "Fill RTO failed.");
       }
     } finally {
-      setIsFillDmsLoading(false);
+      setIsFillVahanLoading(false);
     }
   };
 
@@ -806,10 +877,11 @@ className="app-button app-button--primary"
               <button
                 type="button"
                 className="app-button app-button--primary"
-                disabled={isFillDmsLoading}
-                onClick={handleFillDms}
+                disabled={(isFillDmsLoading || isFillVahanLoading) || !hasSubmittedInfo}
+                onClick={handleFillForms}
+                title={!hasSubmittedInfo ? "Submit Info first (Section 2)" : undefined}
               >
-                {isFillDmsLoading ? "Filling…" : "Fill Forms"}
+                {isFillDmsLoading ? "DMS…" : isFillVahanLoading ? "RTO…" : "Fill Forms"}
               </button>
             </div>
             <div className="add-sales-v2-box-body">
@@ -922,8 +994,11 @@ className="app-button app-button--primary"
               <div className="add-sales-v2-fill-forms-subsection">
                 <div className="add-sales-v2-subsection-head">
                   <h3 className="add-sales-v2-subsection-title">C. RTO</h3>
-                  {isFillDmsLoading && <span className="add-sales-v2-processing">Processing</span>}
+                  {isFillVahanLoading && <span className="add-sales-v2-processing">Processing</span>}
                 </div>
+                {fillVahanStatus && (
+                  <div className="app-panel-status" role="status">{fillVahanStatus}</div>
+                )}
                 <div className="add-sales-v2-dms-fields">
                   <dl className="add-sales-v2-dl add-sales-v2-dl--dms">
                     <div className="add-sales-v2-dl-row-group">

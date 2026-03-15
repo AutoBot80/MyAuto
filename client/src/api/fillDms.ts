@@ -20,6 +20,9 @@ export interface FillDmsRequest {
   dms_base_url?: string | null;
   vahan_base_url?: string | null;
   rto_dealer_id?: string | null;
+  /** From Submit Info; used to update vehicle_master with DMS-scraped data. */
+  customer_id?: number | null;
+  vehicle_id?: number | null;
   customer: FillDmsCustomer;
   vehicle: FillDmsVehicle;
 }
@@ -42,7 +45,61 @@ export interface FillDmsResponse {
   error?: string | null;
 }
 
-const FILL_DMS_TIMEOUT_MS = 300000; // 5 min – Playwright opens browser, login, fill, search, download PDFs
+const FILL_DMS_TIMEOUT_MS = 180000; // 3 min per section
+const FILL_VAHAN_TIMEOUT_MS = 60000; // 1 min for Vahan
+
+export interface FillVahanRequest {
+  vahan_base_url: string;
+  rto_dealer_id?: string | null;
+  customer_name?: string | null;
+  chassis_no?: string | null;
+  vehicle_model?: string | null;
+  vehicle_colour?: string | null;
+  fuel_type?: string | null;
+  year_of_mfg?: string | null;
+  total_cost?: number | null;
+}
+
+export interface FillVahanResponse {
+  success: boolean;
+  application_id?: string | null;
+  rto_fees?: number | null;
+  error?: string | null;
+}
+
+/** Run only DMS section (login, enquiry, vehicle search, scrape, PDFs). Independent process. */
+export async function fillDmsOnly(req: FillDmsRequest): Promise<FillDmsResponse> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), FILL_DMS_TIMEOUT_MS);
+  try {
+    const res = await apiFetch<FillDmsResponse>("/fill-dms/dms", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(req),
+      signal: controller.signal,
+    });
+    return res;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+/** Run only Vahan (RTO) section. Independent process. */
+export async function fillVahanOnly(req: FillVahanRequest): Promise<FillVahanResponse> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), FILL_VAHAN_TIMEOUT_MS);
+  try {
+    const res = await apiFetch<FillVahanResponse>("/fill-dms/vahan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(req),
+      signal: controller.signal,
+    });
+    return res;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
 
 export async function fillDms(req: FillDmsRequest): Promise<FillDmsResponse> {
   const controller = new AbortController();
@@ -58,6 +115,13 @@ export async function fillDms(req: FillDmsRequest): Promise<FillDmsResponse> {
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+/** Fetch Data from DMS for a subfolder (fallback when Fill Forms response was lost). */
+export async function getDataFromDms(subfolder: string): Promise<{ vehicle: Record<string, string>; customer: Record<string, string> }> {
+  return apiFetch<{ vehicle: Record<string, string>; customer: Record<string, string> }>(
+    `/fill-dms/data-from-dms?subfolder=${encodeURIComponent(subfolder)}`
+  );
 }
 
 /** True if the error is from an aborted request (timeout or user abort). */

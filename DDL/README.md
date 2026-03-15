@@ -11,9 +11,10 @@ All Postgres DDL for the **auto_ai** database. Run in order when creating a fres
 5. `04b_dealer_ref.sql` — requires oem_ref  
 6. `04c_oem_service_schedule.sql` — requires oem_ref  
 7. `05_sales_master.sql` — requires customer_master, vehicle_master, dealer_ref  
-8. `08_service_reminders_queue.sql` — requires customer_master, vehicle_master  
+8. `08_service_reminders_queue.sql` — requires sales_master  
 9. `09_trigger_sales_master_sync_service_reminders.sql` — trigger on sales_master  
-10. `10_rto_payment_details.sql` — requires customer_master  
+10. `10_rto_payment_details.sql` — requires sales_master
+11. `11_rc_status_sms_queue.sql` — requires rto_payment_details  
 
 ## Run (examples)
 
@@ -29,6 +30,7 @@ psql -h localhost -U postgres -d auto_ai -f DDL/05_sales_master.sql
 psql -h localhost -U postgres -d auto_ai -f DDL/08_service_reminders_queue.sql
 psql -h localhost -U postgres -d auto_ai -f DDL/09_trigger_sales_master_sync_service_reminders.sql
 psql -h localhost -U postgres -d auto_ai -f DDL/10_rto_payment_details.sql
+psql -h localhost -U postgres -d auto_ai -f DDL/11_rc_status_sms_queue.sql
 ```
 
 Or run all in order (Unix):
@@ -53,6 +55,15 @@ One-off changes (e.g. new columns) go in **`DDL/alter/`**. Run against an existi
 - `08b_service_reminders_queue_add_reminder_type_dealer_id.sql` — adds `reminder_type`, `dealer_id` to service_reminders_queue.
 - `04f_oem_service_schedule_add_reminder_type.sql` — adds `reminder_type` to oem_service_schedule; set to SMS for existing rows.
 - `04g_oem_ref_add_dms_link.sql` — adds `dms_link` (VARCHAR 512) to oem_ref; app uses dealer → oem_id → dms_link when opening DMS tab.
+- `05a_sales_master_add_dealer_unique.sql` — adds UNIQUE (customer_id, vehicle_id, dealer_id) for FK from rto_payment_details and service_reminders_queue. (Superseded by 05b–05d.)
+- `05b_sales_master_add_sales_id_pk.sql` — adds sales_id as PK to sales_master; drops composite FKs from rto_payment_details and service_reminders_queue.
+- `05c_rto_payment_details_add_sales_id_fk.sql` — rto_payment_details: add sales_id, FK to sales_master(sales_id). Run after 05b.
+- `05d_service_reminders_queue_add_sales_id_fk.sql` — service_reminders_queue: add sales_id, FK to sales_master(sales_id). Run after 05b.
+- `09a_trigger_sales_master_use_sales_id.sql` — updates trigger to use sales_id for service_reminders_queue. Run after 05b, 05d.
+- `11a_rc_status_sms_queue_dealer_fk_via_sales.sql` — rc_status_sms_queue: add sales_id, dealer_id FK via sales_master. Run after 05b, 05c.
+- `06b_insurance_master_fk_to_sales_only.sql` — insurance_master: FK to sales_master only (drops FKs to customer_master, vehicle_master).
+- `08c_service_reminders_queue_fk_to_sales_only.sql` — service_reminders_queue: composite FK to sales_master (customer_id, vehicle_id, dealer_id). (Superseded by 05b–05d.)
+- `10d_rto_payment_details_fk_dealer_via_sales.sql` — rto_payment_details: composite FK to sales_master (customer_id, vehicle_id, dealer_id). (Superseded by 05b–05c.)
 
 **New table (run after customer_master exists):**
 - `10_rto_payment_details.sql` — creates `rto_payment_details` for RTO Payments Pending (application_num, rto_payment_due, status, pos_mgr_id, txn_id, payment_date, etc.).

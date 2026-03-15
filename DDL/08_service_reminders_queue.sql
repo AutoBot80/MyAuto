@@ -3,6 +3,7 @@
 
 CREATE TABLE IF NOT EXISTS service_reminders_queue (
     id SERIAL PRIMARY KEY,
+    sales_id INTEGER NOT NULL,
     customer_id INTEGER NOT NULL,
     vehicle_id INTEGER NOT NULL,
     billing_date DATE,
@@ -13,9 +14,7 @@ CREATE TABLE IF NOT EXISTS service_reminders_queue (
     reminder_type VARCHAR(16),
     reminder_status VARCHAR(16),
     dealer_id INTEGER,
-    CONSTRAINT fk_service_reminders_customer FOREIGN KEY (customer_id) REFERENCES customer_master(customer_id),
-    CONSTRAINT fk_service_reminders_vehicle FOREIGN KEY (vehicle_id) REFERENCES vehicle_master(vehicle_id),
-    CONSTRAINT fk_service_reminders_dealer FOREIGN KEY (dealer_id) REFERENCES dealer_ref(dealer_id),
+    CONSTRAINT fk_service_reminders_sales FOREIGN KEY (sales_id) REFERENCES sales_master(sales_id),
     CONSTRAINT chk_service_reminders_service_type CHECK (service_type IN ('Free', 'Paid'))
 );
 

@@ -5,6 +5,7 @@ Runs in Edge only (channel msedge). Requires: pip install playwright && playwrig
 Uses headed browser by default (set DMS_PLAYWRIGHT_HEADED=false for headless).
 Writes pulled data to ocr_output/subfolder/Data from DMS.txt for consistency with other OCR outputs.
 """
+import logging
 import re
 import urllib.parse
 from pathlib import Path
@@ -12,6 +13,8 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 
 from app.config import DMS_PLAYWRIGHT_HEADED, OCR_OUTPUT_DIR
+
+logger = logging.getLogger(__name__)
 
 
 def _fill_vahan_and_scrape(
@@ -133,6 +136,177 @@ def _parse_total_cost(vehicle: dict) -> float:
         return 0.0
 
 
+def run_fill_dms_only(
+    dms_base_url: str,
+    subfolder: str,
+    customer: dict,
+    vehicle: dict,
+    login_user: str,
+    login_password: str,
+    uploads_dir: Path,
+    ocr_output_dir: Path | None = None,
+) -> dict:
+    """
+    Run only DMS steps: login, enquiry, vehicle search, scrape, PDFs.
+    Separate Playwright process. Returns vehicle, pdfs_saved, error.
+    """
+    result: dict = {"vehicle": {}, "pdfs_saved": [], "error": None}
+    if not dms_base_url:
+        result["error"] = "DMS_BASE_URL not set"
+        return result
+    subfolder_path = uploads_dir / subfolder
+    subfolder_path.mkdir(parents=True, exist_ok=True)
+    ocr_dir = Path(ocr_output_dir or OCR_OUTPUT_DIR).resolve()
+
+    try:
+        logger.info("fill_dms_service: run_fill_dms_only starting dms=%s", dms_base_url[:50])
+        with sync_playwright() as p:
+            browser = p.chromium.launch(channel="msedge", headless=not DMS_PLAYWRIGHT_HEADED)
+            context = browser.new_context(accept_downloads=True)
+            page = context.new_page()
+            page.set_default_timeout(12_000)
+
+            def accept_dialog(dialog):
+                dialog.accept()
+
+            page.on("dialog", accept_dialog)
+            base = dms_base_url.rstrip("/")
+
+            page.goto(f"{base}/", wait_until="domcontentloaded", timeout=20000)
+            page.fill("#dms-username", login_user)
+            page.fill("#dms-password", login_password)
+            page.click("#dms-login-btn")
+            page.wait_for_url("**/enquiry.html**", timeout=15000)
+
+            first_name, last_name = _split_name(customer.get("name"))
+            page.fill("#dms-contact-first-name", first_name or "")
+            page.fill("#dms-contact-last-name", last_name or "")
+            page.fill("#dms-mobile-phone", str(customer.get("mobile_number") or customer.get("mobile") or "")[:10])
+            addr = (customer.get("address") or "")[:80]
+            if addr:
+                page.fill("#dms-address-line-1", addr)
+            state = (customer.get("state") or "").strip()
+            if state:
+                try:
+                    page.select_option("#dms-state", label=state)
+                except Exception:
+                    pass
+            pin = str(customer.get("pin_code") or customer.get("pin") or "")[:6]
+            if pin:
+                page.fill("#dms-pin-code", pin)
+            page.click("#dms-submit-enquiry")
+            page.wait_for_timeout(50)
+
+            page.goto(f"{base}/vehicle.html", wait_until="domcontentloaded", timeout=15000)
+            key_partial = str(vehicle.get("key_no") or "").strip()[:8]
+            frame_partial = str(vehicle.get("frame_no") or "").strip()[:12]
+            engine_partial = str(vehicle.get("engine_no") or "").strip()[:12]
+            page.fill("#dms-vehicle-key", key_partial)
+            page.fill("#dms-vehicle-frame", frame_partial)
+            page.fill("#dms-vehicle-engine", engine_partial)
+            page.click("#dms-vehicle-search")
+            page.wait_for_timeout(150)
+
+            page.wait_for_selector("#dms-vehicle-results:visible", timeout=8000)
+            row = page.locator("#dms-vehicle-results-table tbody tr").first
+            if row.count() > 0:
+                cells = row.locator("td")
+                if cells.count() >= 8:
+                    result["vehicle"] = {
+                        "key_num": cells.nth(0).inner_text().strip(),
+                        "frame_num": cells.nth(1).inner_text().strip(),
+                        "engine_num": cells.nth(2).inner_text().strip(),
+                        "model": cells.nth(3).inner_text().strip(),
+                        "color": cells.nth(4).inner_text().strip(),
+                        "cubic_capacity": cells.nth(5).inner_text().strip(),
+                        "total_amount": cells.nth(6).inner_text().strip(),
+                        "year_of_mfg": cells.nth(7).inner_text().strip(),
+                    }
+            logger.info("fill_dms_service: run_fill_dms_only scraped vehicle=%s", result.get("vehicle"))
+
+            page.goto(f"{base}/reports.html", wait_until="domcontentloaded", timeout=15000)
+            path21 = subfolder_path / "form21.pdf"
+            path22 = subfolder_path / "form22.pdf"
+            path_invoice = subfolder_path / "invoice_details.pdf"
+            for url_suffix, path, name in [
+                ("form21.pdf", path21, "form21.pdf"),
+                ("form22.pdf", path22, "form22.pdf"),
+                ("invoice_details.pdf", path_invoice, "invoice_details.pdf"),
+            ]:
+                try:
+                    r = page.request.get(f"{base}/downloads/{url_suffix}", timeout=15000)
+                    if r.ok:
+                        path.write_bytes(r.body())
+                        result["pdfs_saved"].append(name)
+                except Exception:
+                    pass
+
+            browser.close()
+    except PlaywrightTimeout as e:
+        result["error"] = f"Timeout: {e!s}"
+        logger.warning("fill_dms_service: run_fill_dms_only PlaywrightTimeout %s", e)
+    except Exception as e:
+        result["error"] = str(e)
+        logger.warning("fill_dms_service: run_fill_dms_only exception %s", e)
+
+    try:
+        _write_data_from_dms(ocr_dir, subfolder, customer, result.get("vehicle") or {})
+    except Exception as e:
+        result["error"] = (result.get("error") or "") + f"; DMS file write: {e!s}"
+    return result
+
+
+def run_fill_vahan_only(
+    vahan_base_url: str,
+    rto_dealer_id: str,
+    customer_name: str,
+    chassis_no: str,
+    vehicle_model: str,
+    vehicle_colour: str,
+    fuel_type: str,
+    year_of_mfg: str,
+    total_cost: float,
+) -> dict:
+    """
+    Run only Vahan step: fill registration form, submit, scrape application_id and rto_fees.
+    Separate Playwright process (new browser). Returns application_id, rto_fees, error.
+    """
+    result: dict = {"application_id": None, "rto_fees": None, "error": None}
+    if not vahan_base_url or not vahan_base_url.strip():
+        result["error"] = "vahan_base_url required"
+        return result
+    try:
+        logger.info("fill_dms_service: run_fill_vahan_only starting")
+        with sync_playwright() as p:
+            browser = p.chromium.launch(channel="msedge", headless=not DMS_PLAYWRIGHT_HEADED)
+            context = browser.new_context()
+            page = context.new_page()
+            page.set_default_timeout(15_000)
+            app_id, fees = _fill_vahan_and_scrape(
+                page,
+                vahan_base_url=vahan_base_url.strip(),
+                rto_dealer_id=(rto_dealer_id or "").strip() or "RTO100001",
+                customer_name=str(customer_name or ""),
+                chassis_no=str(chassis_no or ""),
+                vehicle_model=str(vehicle_model or ""),
+                vehicle_colour=str(vehicle_colour or ""),
+                fuel_type=str(fuel_type or "Petrol"),
+                year_of_mfg=str(year_of_mfg or ""),
+                total_cost=float(total_cost or 72000),
+            )
+            result["application_id"] = app_id
+            result["rto_fees"] = fees
+            logger.info("fill_dms_service: run_fill_vahan_only done application_id=%s rto_fees=%s", app_id, fees)
+            browser.close()
+    except PlaywrightTimeout as e:
+        result["error"] = f"Timeout: {e!s}"
+        logger.warning("fill_dms_service: run_fill_vahan_only PlaywrightTimeout %s", e)
+    except Exception as e:
+        result["error"] = str(e)
+        logger.warning("fill_dms_service: run_fill_vahan_only exception %s", e)
+    return result
+
+
 def run_fill_dms(
     dms_base_url: str,
     subfolder: str,
@@ -167,6 +341,7 @@ def run_fill_dms(
     ocr_dir = Path(ocr_output_dir or OCR_OUTPUT_DIR).resolve()
 
     try:
+        logger.info("fill_dms_service: starting Playwright dms=%s vahan=%s", dms_base_url[:50], bool(vahan_base_url))
         with sync_playwright() as p:
             browser = p.chromium.launch(
                 channel="msedge",
@@ -184,6 +359,7 @@ def run_fill_dms(
             base = dms_base_url.rstrip("/")
 
             # 1) Login
+            logger.info("fill_dms_service: step 1 login goto %s/", base)
             page.goto(f"{base}/", wait_until="domcontentloaded", timeout=20000)
             page.fill("#dms-username", login_user)
             page.fill("#dms-password", login_password)
@@ -195,7 +371,7 @@ def run_fill_dms(
             page.fill("#dms-contact-first-name", first_name or "")
             page.fill("#dms-contact-last-name", last_name or "")
             page.fill("#dms-mobile-phone", str(customer.get("mobile_number") or customer.get("mobile") or "")[:10])
-            addr = (customer.get("address") or "")[:200]
+            addr = (customer.get("address") or "")[:80]
             if addr:
                 page.fill("#dms-address-line-1", addr)
             state = (customer.get("state") or "").strip()
@@ -223,6 +399,7 @@ def run_fill_dms(
             page.wait_for_timeout(150)
 
             # 4) Scrape first result row (all 8 columns: key, frame, engine, model, color, cubic_capacity, total_amount, year_of_mfg)
+            logger.info("fill_dms_service: step 4 scrape vehicle results")
             page.wait_for_selector("#dms-vehicle-results:visible", timeout=8000)
             row = page.locator("#dms-vehicle-results-table tbody tr").first
             if row.count() > 0:
@@ -239,6 +416,7 @@ def run_fill_dms(
                         "total_amount": cells.nth(6).inner_text().strip(),
                         "year_of_mfg": cells.nth(7).inner_text().strip(),
                     }
+            logger.info("fill_dms_service: scraped vehicle=%s", result.get("vehicle"))
 
             # 5) Reports: fetch Form 21, Form 22, and Invoice Details PDFs by URL (avoids download event / target="_blank" issues)
             page.goto(f"{base}/reports.html", wait_until="domcontentloaded", timeout=15000)
@@ -268,6 +446,7 @@ def run_fill_dms(
                 pass
 
             # 6) Optional: fill dummy Vahan registration and scrape application_id + rto_fees
+            logger.info("fill_dms_service: step 6 vahan vahan_base_url=%s", bool(vahan_base_url and vahan_base_url.strip()))
             if vahan_base_url and vahan_base_url.strip():
                 try:
                     scraped = result.get("vehicle") or {}
@@ -288,15 +467,19 @@ def run_fill_dms(
                     )
                     result["application_id"] = app_id
                     result["rto_fees"] = fees
+                    logger.info("fill_dms_service: vahan done application_id=%s rto_fees=%s", app_id, fees)
                     vahan_page.close()
                 except Exception as e:
                     result["error"] = (result.get("error") or "") + f"; Vahan: {e!s}"
+                    logger.warning("fill_dms_service: vahan error: %s", e)
 
             browser.close()
     except PlaywrightTimeout as e:
         result["error"] = f"Timeout: {e!s}"
+        logger.warning("fill_dms_service: PlaywrightTimeout %s", e)
     except Exception as e:
         result["error"] = str(e)
+        logger.warning("fill_dms_service: exception %s", e)
 
     # Always write Data from DMS to ocr_output/mobile_ddmmyy/Data from DMS.txt
     try:

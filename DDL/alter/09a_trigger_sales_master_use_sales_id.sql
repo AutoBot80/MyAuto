@@ -1,8 +1,7 @@
--- Trigger on sales_master: on INSERT or UPDATE, refresh service_reminders_queue for that customer/vehicle.
--- Deletes existing reminders for the row's customer_id/vehicle_id. Inserts new reminder rows only when
--- dealer_ref.auto_sms_reminders = 'Y' (oem_id and oem_service_schedule used as before).
--- Run after sales_master, service_reminders_queue, dealer_ref, oem_service_schedule exist.
--- Run against database: auto_ai
+-- Update trigger to use sales_id instead of customer_id/vehicle_id for service_reminders_queue.
+-- Run after: 05b, 05d (sales_id added to sales_master and service_reminders_queue).
+
+DROP TRIGGER IF EXISTS trg_sales_master_sync_service_reminders ON sales_master;
 
 CREATE OR REPLACE FUNCTION fn_sales_master_sync_service_reminders()
 RETURNS TRIGGER
@@ -30,7 +29,7 @@ BEGIN
     RETURN NEW;
   END IF;
 
-  -- 3) Insert one row only: schedule with service_num = 1, reminder_num 1; reminder_type and dealer_id from schedule/sales
+  -- 3) Insert one row only: schedule with service_num = 1, reminder_num 1
   INSERT INTO service_reminders_queue (
     sales_id,
     customer_id,
@@ -68,8 +67,3 @@ CREATE TRIGGER trg_sales_master_sync_service_reminders
   AFTER INSERT OR UPDATE ON sales_master
   FOR EACH ROW
   EXECUTE FUNCTION fn_sales_master_sync_service_reminders();
-
--- To replace the trigger (e.g. after changing the function), run first:
---   DROP TRIGGER IF EXISTS trg_sales_master_sync_service_reminders ON sales_master;
-
-COMMENT ON FUNCTION fn_sales_master_sync_service_reminders() IS 'Refreshes service_reminders_queue when dealer_ref.auto_sms_reminders=Y; from dealer_ref + oem_service_schedule on sales_master upsert';
