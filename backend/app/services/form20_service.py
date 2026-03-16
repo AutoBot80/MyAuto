@@ -1,16 +1,38 @@
 """
-Generate Form 20 (front and back) filled with customer and vehicle data.
+Generate Form 20 (front and back) by overlaying filled data on blank PDF templates.
+Uses Raw Scans/Form 20 Front.pdf and Form 20 back.pdf as backgrounds.
+If templates are missing, falls back to HTML-based generation.
 Saves Form 20 Front.pdf and Form 20 Back.pdf to Uploaded scans/subfolder.
 """
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
-from app.config import UPLOADS_DIR
+from app.config import UPLOADS_DIR, FORM20_TEMPLATE_FRONT, FORM20_TEMPLATE_BACK, FORM20_TEMPLATE_SINGLE
 
 logger = logging.getLogger(__name__)
 
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent.parent / "templates"
+
+# Field positions (x, y) in points for Form 20 front page. Adjust if template layout differs.
+# Origin: top-left. y increases downward. Based on typical Form 20 layout.
+FORM20_FIELD_POSITIONS = {
+    "field_1_name_care_of": (120, 135),
+    "field_3_address": (120, 175),
+    "field_10_dealer_name_address": (120, 295),
+    "field_14_body_type": (120, 365),
+    "field_15_vehicle_type": (120, 390),
+    "field_16_oem_name": (120, 415),
+    "field_17_year_of_mfg": (120, 440),
+    "field_18_num_cylinders": (120, 465),
+    "field_19_horse_power": (120, 490),
+    "field_21_length": (120, 535),
+    "field_22_chassis_no": (120, 560),
+    "field_24_seating_capacity": (120, 605),
+    "field_25_fuel_type": (120, 630),
+    "field_28_colour": (120, 675),
+}
 
 
 def _get_vehicle_from_db(vehicle_id: int) -> dict[str, Any]:
@@ -166,9 +188,61 @@ def _build_form20_data(
 
     # Footer: Dealer Saathi© Vehicle ID <vehicle_id> (left, 10pt)
     vid = vehicle_id if vehicle_id else v.get("vehicle_id")
-    data["footer_text"] = f"Dealer Saathi<sup>©</sup> Vehicle ID {vid if vid else '—'}"
+    data["footer_text"] = f"Dealer Saathi\u00a9 Vehicle ID {vid if vid else '\u2014'}"
 
     return data
+
+
+def _overlay_on_pdf(
+    template_path: Path,
+    out_path: Path,
+    data: dict[str, str],
+    field_positions: dict[str, tuple[float, float]],
+    fontsize: float = 10,
+    footer_y: float = 820,
+    page_index: int = 0,
+) -> None:
+    """Overlay form data on a PDF template. Adds footer at bottom left."""
+    import fitz
+
+    if not template_path.exists():
+        raise FileNotFoundError(f"Form 20 template not found: {template_path}")
+
+    doc = fitz.open(template_path)
+    if doc.page_count <= page_index:
+        doc.close()
+        raise ValueError(f"Template has no page {page_index}: {template_path}")
+
+    page = doc[page_index]
+    # Overlay text above existing content
+    for key, (x, y) in field_positions.items():
+        val = data.get(key)
+        if val and key != "footer_text":
+            # Truncate long text to fit; insert_text doesn't wrap
+            text = str(val)[:80] if len(str(val)) > 80 else str(val)
+            page.insert_text(
+                (x, y),
+                text,
+                fontsize=fontsize,
+                fontname="helv",
+                color=(0, 0, 0),
+                overlay=True,
+            )
+
+    # Footer: left side, 10pt
+    footer = data.get("footer_text", "")
+    if footer:
+        page.insert_text(
+            (42, footer_y),
+            footer,
+            fontsize=10,
+            fontname="helv",
+            color=(0, 0, 0),
+            overlay=True,
+        )
+
+    doc.save(str(out_path))
+    doc.close()
 
 
 def generate_form20_pdfs(
@@ -180,8 +254,8 @@ def generate_form20_pdfs(
     uploads_dir: Path | None = None,
 ) -> list[str]:
     """
-    Generate Form 20 Front.pdf and Form 20 Back.pdf, save to Uploaded scans/subfolder.
-    Returns list of saved filenames.
+    Generate Form 20 Front.pdf and Form 20 Back.pdf by overlaying data on blank templates.
+    Uses Raw Scans/Form 20 Front.pdf and Form 20 back.pdf. Saves to Uploaded scans/subfolder.
     """
     import re
 
@@ -192,35 +266,112 @@ def generate_form20_pdfs(
 
     data = _build_form20_data(customer, vehicle, vehicle_id, dealer_id)
 
-    front_html = (TEMPLATES_DIR / "form20_front.html").read_text(encoding="utf-8")
-    back_html = (TEMPLATES_DIR / "form20_back.html").read_text(encoding="utf-8")
+    # Prefer single official PDF (page 0=front, page 1=back); else use separate front/back templates
+    single_template = Path(FORM20_TEMPLATE_SINGLE)
+    front_template = Path(FORM20_TEMPLATE_FRONT)
+    back_template = Path(FORM20_TEMPLATE_BACK)
 
-    for key, val in data.items():
-        front_html = front_html.replace("{{" + key + "}}", val or "—")
-        back_html = back_html.replace("{{" + key + "}}", val or "—")
+    use_single = single_template.exists()
+    use_separate = front_template.exists() and back_template.exists()
 
-    # Clear any remaining placeholders
-    import re as re_mod
-    front_html = re_mod.sub(r"\{\{[^}]+\}\}", "—", front_html)
-    back_html = re_mod.sub(r"\{\{[^}]+\}\}", "—", back_html)
+    if not use_single and not use_separate:
+        logger.info("form20: PDF templates not found, using HTML fallback")
+        return _generate_form20_via_html(subfolder_path, data)
+
+    try:
+        import fitz  # noqa: F401
+    except ImportError:
+        logger.warning("form20: pymupdf (fitz) not installed, using HTML fallback. Install with: pip install pymupdf")
+        return _generate_form20_via_html(subfolder_path, data)
 
     saved: list[str] = []
-    try:
-        from xhtml2pdf import pisa
 
-        for html, out_name in [
-            (front_html, "Form 20 Front.pdf"),
-            (back_html, "Form 20 Back.pdf"),
-        ]:
-            out_path = subfolder_path / out_name
-            with open(out_path, "w+b") as dest:
-                status = pisa.CreatePDF(html, dest=dest, encoding="utf-8")
-            if status.err:
-                raise RuntimeError(f"xhtml2pdf error: {status.err}")
-            saved.append(out_name)
-            logger.info("form20: saved %s", out_path)
-    except Exception as e:
-        logger.warning("form20: PDF generation failed: %s", e)
-        raise
+    if use_single:
+        # Official FORM-20: page 0 = front, page 1 = back
+        front_out = subfolder_path / "Form 20 Front.pdf"
+        try:
+            _overlay_on_pdf(
+                single_template,
+                front_out,
+                data,
+                FORM20_FIELD_POSITIONS,
+                fontsize=10,
+                footer_y=820,
+                page_index=0,
+            )
+            saved.append("Form 20 Front.pdf")
+            logger.info("form20: saved %s (from Official FORM-20 page 0)", front_out)
+        except Exception as e:
+            logger.warning("form20: PDF generation failed for front: %s", e)
+            raise
 
+        back_out = subfolder_path / "Form 20 Back.pdf"
+        try:
+            _overlay_on_pdf(
+                single_template,
+                back_out,
+                data,
+                {},
+                fontsize=10,
+                footer_y=820,
+                page_index=1,
+            )
+            saved.append("Form 20 Back.pdf")
+            logger.info("form20: saved %s (from Official FORM-20 page 1)", back_out)
+        except Exception as e:
+            logger.warning("form20: PDF generation failed for back: %s", e)
+            raise
+    else:
+        # Separate front and back templates
+        front_out = subfolder_path / "Form 20 Front.pdf"
+        _overlay_on_pdf(
+            front_template,
+            front_out,
+            data,
+            FORM20_FIELD_POSITIONS,
+            fontsize=10,
+            footer_y=820,
+        )
+        saved.append("Form 20 Front.pdf")
+        logger.info("form20: saved %s", front_out)
+
+        back_out = subfolder_path / "Form 20 Back.pdf"
+        _overlay_on_pdf(
+            back_template,
+            back_out,
+            data,
+            {},
+            fontsize=10,
+            footer_y=820,
+        )
+        saved.append("Form 20 Back.pdf")
+        logger.info("form20: saved %s", back_out)
+
+    return saved
+
+
+def _generate_form20_via_html(
+    subfolder_path: Path,
+    data: dict[str, str],
+) -> list[str]:
+    """Fallback: generate Form 20 using HTML templates when PDF templates are missing."""
+    front_html = (TEMPLATES_DIR / "form20_front.html").read_text(encoding="utf-8")
+    back_html = (TEMPLATES_DIR / "form20_back.html").read_text(encoding="utf-8")
+    for key, val in data.items():
+        front_html = front_html.replace("{{" + key + "}}", val or "\u2014")
+        back_html = back_html.replace("{{" + key + "}}", val or "\u2014")
+    front_html = re.sub(r"\{\{[^}]+\}\}", "\u2014", front_html)
+    back_html = re.sub(r"\{\{[^}]+\}\}", "\u2014", back_html)
+
+    from xhtml2pdf import pisa
+
+    saved = []
+    for html, out_name in [(front_html, "Form 20 Front.pdf"), (back_html, "Form 20 Back.pdf")]:
+        out_path = subfolder_path / out_name
+        with open(out_path, "w+b") as dest:
+            status = pisa.CreatePDF(html, dest=dest, encoding="utf-8")
+        if status.err:
+            raise RuntimeError(f"xhtml2pdf error: {status.err}")
+        saved.append(out_name)
+        logger.info("form20: saved %s (HTML fallback)", out_path)
     return saved

@@ -13,6 +13,14 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 APP_ROOT = Path(__file__).resolve().parents[1]
 UPLOADS_DIR = APP_ROOT.parent / "Uploaded scans"
 OCR_OUTPUT_DIR = APP_ROOT.parent / "ocr_output"
+# Form 20 blank templates (PDF). Prefer single official PDF (page 0=front, page 1=back).
+# Or use separate Form 20 Front.pdf and Form 20 back.pdf in Raw Scans/.
+_FORM20_SINGLE = os.getenv("FORM20_TEMPLATE_SINGLE", "")
+_FORM20_FRONT = os.getenv("FORM20_TEMPLATE_FRONT", "")
+_FORM20_BACK = os.getenv("FORM20_TEMPLATE_BACK", "")
+FORM20_TEMPLATE_SINGLE = Path(_FORM20_SINGLE) if _FORM20_SINGLE else APP_ROOT.parent / "Raw Scans" / "Official FORM-20 english.pdf"
+FORM20_TEMPLATE_FRONT = Path(_FORM20_FRONT) if _FORM20_FRONT else APP_ROOT.parent / "Raw Scans" / "Form 20 Front.pdf"
+FORM20_TEMPLATE_BACK = Path(_FORM20_BACK) if _FORM20_BACK else APP_ROOT.parent / "Raw Scans" / "Form 20 back.pdf"
 
 # Tesseract OCR languages: "eng" (English), "hin" (Hindi/Devanagari). Use "+" for multiple (e.g. "eng+hin" for Aadhar).
 OCR_LANG = os.getenv("OCR_LANG", "eng+hin")
