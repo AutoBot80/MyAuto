@@ -21,6 +21,9 @@ _FORM20_BACK = os.getenv("FORM20_TEMPLATE_BACK", "")
 FORM20_TEMPLATE_SINGLE = Path(_FORM20_SINGLE) if _FORM20_SINGLE else APP_ROOT.parent / "Raw Scans" / "Official FORM-20 english.pdf"
 FORM20_TEMPLATE_FRONT = Path(_FORM20_FRONT) if _FORM20_FRONT else APP_ROOT.parent / "Raw Scans" / "Form 20 Front.pdf"
 FORM20_TEMPLATE_BACK = Path(_FORM20_BACK) if _FORM20_BACK else APP_ROOT.parent / "Raw Scans" / "Form 20 back.pdf"
+# Form 20 Word template (preferred - preserves layout)
+_FORM20_DOCX = os.getenv("FORM20_TEMPLATE_DOCX", "")
+FORM20_TEMPLATE_DOCX = Path(_FORM20_DOCX) if _FORM20_DOCX else APP_ROOT.parent / "Raw Scans" / "FORM 20.docx"
 
 # Tesseract OCR languages: "eng" (English), "hin" (Hindi/Devanagari). Use "+" for multiple (e.g. "eng+hin" for Aadhar).
 OCR_LANG = os.getenv("OCR_LANG", "eng+hin")

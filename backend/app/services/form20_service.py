@@ -1,7 +1,8 @@
 """
-Generate Form 20 (front and back) by overlaying filled data on blank PDF templates.
-Uses Raw Scans/Official FORM-20 english.pdf (page 0=front, page 1=back) or separate PDFs.
-If templates are missing, falls back to HTML-based generation.
+Generate Form 20 (front and back) from templates.
+Prefer: Raw Scans/FORM 20.docx (Word) -> fill placeholders -> convert to PDF.
+Else: PDF overlay on Official FORM-20 or separate PDFs.
+Fallback: HTML-based generation.
 Saves Form 20 Front.pdf and Form 20 Back.pdf to Uploaded scans/subfolder.
 """
 import logging
@@ -9,7 +10,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from app.config import UPLOADS_DIR, FORM20_TEMPLATE_SINGLE, FORM20_TEMPLATE_FRONT, FORM20_TEMPLATE_BACK
+from app.config import UPLOADS_DIR, FORM20_TEMPLATE_SINGLE, FORM20_TEMPLATE_FRONT, FORM20_TEMPLATE_BACK, FORM20_TEMPLATE_DOCX
 
 logger = logging.getLogger(__name__)
 
@@ -195,6 +196,133 @@ def _build_form20_data(
     return data
 
 
+def _replace_in_paragraph(paragraph, replacements: dict[str, str]) -> bool:
+    """Replace {{key}} placeholders in a paragraph. Returns True if changed."""
+    full_text = paragraph.text
+    if "{{" not in full_text:
+        return False
+    new_text = full_text
+    for key, val in replacements.items():
+        new_text = new_text.replace("{{" + key + "}}", val or "\u2014")
+    if new_text == full_text:
+        return False
+    # Clear runs and set replaced text
+    for run in paragraph.runs:
+        run.text = ""
+    if paragraph.runs:
+        paragraph.runs[0].text = new_text
+    else:
+        paragraph.add_run(new_text)
+    return True
+
+
+def _fill_docx_template(docx_path: Path, data: dict[str, str], out_path: Path) -> None:
+    """Fill {{placeholder}} in Word document and save."""
+    from docx import Document
+
+    doc = Document(docx_path)
+    replacements = {k: (v or "\u2014") for k, v in data.items()}
+
+    for paragraph in doc.paragraphs:
+        _replace_in_paragraph(paragraph, replacements)
+
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                for paragraph in cell.paragraphs:
+                    _replace_in_paragraph(paragraph, replacements)
+
+    for section in doc.sections:
+        for header in section.header.paragraphs:
+            _replace_in_paragraph(header, replacements)
+        for footer in section.footer.paragraphs:
+            _replace_in_paragraph(footer, replacements)
+
+    doc.save(out_path)
+
+
+def _docx_to_pdf(docx_path: Path, pdf_path: Path) -> None:
+    """Convert docx to PDF. Tries docx2pdf (Word on Windows), then LibreOffice."""
+    docx_path = Path(docx_path).resolve()
+    pdf_path = Path(pdf_path).resolve()
+
+    try:
+        from docx2pdf import convert
+        convert(str(docx_path), str(pdf_path))
+        return
+    except ImportError:
+        pass
+    except Exception as e:
+        logger.warning("form20: docx2pdf failed: %s", e)
+
+    # Fallback: LibreOffice (outputs input.pdf in outdir)
+    import shutil
+    import subprocess
+
+    libreoffice = shutil.which("soffice") or shutil.which("libreoffice")
+    if libreoffice:
+        outdir = pdf_path.parent
+        subprocess.run(
+            [libreoffice, "--headless", "--convert-to", "pdf", "--outdir", str(outdir), str(docx_path)],
+            check=True,
+            capture_output=True,
+            timeout=60,
+        )
+        # LibreOffice creates docx_stem.pdf in outdir
+        converted = outdir / (docx_path.stem + ".pdf")
+        if converted.exists():
+            if converted.resolve() != pdf_path.resolve():
+                converted.rename(pdf_path)
+        return
+
+    raise RuntimeError(
+        "Cannot convert docx to PDF. Install docx2pdf (pip install docx2pdf) with Word, or install LibreOffice."
+    )
+
+
+def _split_pdf_pages(pdf_path: Path, out_paths: list[Path]) -> None:
+    """Split PDF into separate files (page 0 -> out_paths[0], page 1 -> out_paths[1], etc.)."""
+    import fitz
+
+    doc = fitz.open(pdf_path)
+    try:
+        for i, out_path in enumerate(out_paths):
+            page_idx = min(i, doc.page_count - 1)  # If single page, use it for both
+            new_doc = fitz.open()
+            new_doc.insert_pdf(doc, from_page=page_idx, to_page=page_idx)
+            new_doc.save(str(out_path))
+            new_doc.close()
+    finally:
+        doc.close()
+
+
+def _generate_form20_via_docx(
+    docx_template: Path,
+    subfolder_path: Path,
+    data: dict[str, str],
+) -> list[str]:
+    """Generate Form 20 from Word template: fill placeholders, convert to PDF, split into front/back."""
+    import tempfile
+
+    filled_docx = subfolder_path / "_form20_filled.docx"
+    combined_pdf = subfolder_path / "_form20_combined.pdf"
+    front_out = subfolder_path / "Form 20 Front.pdf"
+    back_out = subfolder_path / "Form 20 Back.pdf"
+
+    _fill_docx_template(docx_template, data, filled_docx)
+    _docx_to_pdf(filled_docx, combined_pdf)
+
+    # Split into front (page 0) and back (page 1)
+    _split_pdf_pages(combined_pdf, [front_out, back_out])
+
+    # Cleanup temp files
+    filled_docx.unlink(missing_ok=True)
+    combined_pdf.unlink(missing_ok=True)
+
+    logger.info("form20: saved %s and %s (from Word template)", front_out, back_out)
+    return ["Form 20 Front.pdf", "Form 20 Back.pdf"]
+
+
 def _overlay_on_pdf(
     template_path: Path,
     out_path: Path,
@@ -268,15 +396,19 @@ def generate_form20_pdfs(
 
     data = _build_form20_data(customer, vehicle, vehicle_id, dealer_id)
 
-    # Template paths: config first, then fallback using uploads_dir parent (project root)
+    # Template paths: prefer Word, then PDF overlay
     uploads_path = Path(uploads_dir or UPLOADS_DIR).resolve()
-    project_root = uploads_path.parent  # Uploaded scans is under project root
+    project_root = uploads_path.parent
+
+    docx_template = Path(FORM20_TEMPLATE_DOCX).resolve()
+    if not docx_template.exists():
+        docx_template = project_root / "Raw Scans" / "FORM 20.docx"
+        if docx_template.exists():
+            docx_template = docx_template.resolve()
 
     single_template = Path(FORM20_TEMPLATE_SINGLE).resolve()
     front_template = Path(FORM20_TEMPLATE_FRONT).resolve()
     back_template = Path(FORM20_TEMPLATE_BACK).resolve()
-
-    # Fallback: if config paths don't exist, try Raw Scans relative to project root
     if not single_template.exists():
         fallback = project_root / "Raw Scans" / "Official FORM-20 english.pdf"
         if fallback.exists():
@@ -290,18 +422,24 @@ def generate_form20_pdfs(
         if fallback.exists():
             back_template = fallback.resolve()
 
+    use_docx = docx_template.exists()
     use_single = single_template.exists()
     use_separate = front_template.exists() and back_template.exists()
 
     logger.info(
-        "form20: single=%s exists=%s | front=%s exists=%s | back=%s exists=%s",
-        single_template,
+        "form20: docx=%s exists=%s | single=%s | separate=%s",
+        docx_template,
+        use_docx,
         use_single,
-        front_template,
-        front_template.exists(),
-        back_template,
-        back_template.exists(),
+        use_separate,
     )
+
+    # Prefer Word template
+    if use_docx:
+        try:
+            return _generate_form20_via_docx(docx_template, subfolder_path, data)
+        except Exception as e:
+            logger.warning("form20: Word template failed: %s. Falling back to PDF/HTML.", e)
 
     if not use_single and not use_separate:
         logger.warning("form20: No PDF templates found at %s or %s/%s. Using HTML fallback.", single_template, front_template, back_template)

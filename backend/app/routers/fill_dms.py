@@ -262,8 +262,12 @@ def form20_status() -> dict:
     except ImportError:
         fitz_ok = False
 
+    docx_template = project_root / "Raw Scans" / "FORM 20.docx"
+    docx_exists = docx_template.exists()
     single_exists = single.exists() or fallback_single.exists()
     return {
+        "docx_template": str(docx_template),
+        "docx_exists": docx_exists,
         "single_template": str(single),
         "single_exists": single.exists(),
         "fallback_single": str(fallback_single),
@@ -274,7 +278,8 @@ def form20_status() -> dict:
         "back_exists": back.exists(),
         "project_root": str(project_root),
         "fitz_available": fitz_ok,
-        "will_use_pdf_overlay": single_exists and fitz_ok,
+        "will_use_word": docx_exists,
+        "will_use_pdf_overlay": single_exists and fitz_ok and not docx_exists,
     }
 
 
