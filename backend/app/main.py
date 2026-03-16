@@ -16,6 +16,8 @@ from app.routers import (
     submit_info_router,
     fill_dms_router,
     rto_payment_details_router,
+    customer_search_router,
+    documents_router,
 )
 
 app = FastAPI(title="Auto Dealer Server", version="0.1.0")
@@ -50,3 +52,5 @@ app.include_router(qr_decode_router)
 app.include_router(submit_info_router)
 app.include_router(fill_dms_router)
 app.include_router(rto_payment_details_router)
+app.include_router(customer_search_router)
+app.include_router(documents_router)

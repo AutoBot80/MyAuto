@@ -117,6 +117,10 @@ class UploadService:
 
             ocr = OcrService()
             extraction_result = ocr.process_uploaded_subfolder(subdir_name)
+            # Include full extracted details so client can populate immediately (no polling)
+            details = ocr.get_extracted_details(subdir_name)
+            if details:
+                extraction_result["details"] = details
         except Exception as e:
             extraction_result = {"error": str(e), "processed": []}
 

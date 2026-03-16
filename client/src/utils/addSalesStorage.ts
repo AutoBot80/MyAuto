@@ -21,7 +21,17 @@ export interface AddSalesStored {
     battery_no?: string;
   } | null;
   extractedCustomer: import("../types").ExtractedCustomerDetails | null;
-  extractedInsurance: { profession?: string; nominee_name?: string; nominee_age?: string; nominee_relationship?: string } | null;
+  extractedInsurance: {
+    profession?: string;
+    nominee_name?: string;
+    nominee_age?: string;
+    nominee_relationship?: string;
+    insurer?: string;
+    policy_num?: string;
+    policy_from?: string;
+    policy_to?: string;
+    premium?: string;
+  } | null;
 }
 
 const DEFAULT: AddSalesStored = {

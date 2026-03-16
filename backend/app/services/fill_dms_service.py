@@ -1,7 +1,7 @@
 """
 Fill DMS flow using Playwright: login, fill enquiry, search vehicle, scrape row, save PDFs.
 Optionally fills dummy Vahan registration and returns application_id and rto_fees.
-Runs in Edge only (channel msedge). Requires: pip install playwright && playwright install msedge.
+Uses Chromium (faster launch). Requires: pip install playwright && playwright install chromium.
 Uses headed browser by default (set DMS_PLAYWRIGHT_HEADED=false for headless).
 Writes pulled data to ocr_output/subfolder/Data from DMS.txt for consistency with other OCR outputs.
 """
@@ -161,7 +161,8 @@ def run_fill_dms_only(
     try:
         logger.info("fill_dms_service: run_fill_dms_only starting dms=%s", dms_base_url[:50])
         with sync_playwright() as p:
-            browser = p.chromium.launch(channel="msedge", headless=not DMS_PLAYWRIGHT_HEADED)
+            # Use chromium (faster launch than msedge); headless=False shows browser for user
+            browser = p.chromium.launch(headless=not DMS_PLAYWRIGHT_HEADED)
             context = browser.new_context(accept_downloads=True)
             page = context.new_page()
             page.set_default_timeout(12_000)
@@ -205,7 +206,7 @@ def run_fill_dms_only(
             page.fill("#dms-vehicle-frame", frame_partial)
             page.fill("#dms-vehicle-engine", engine_partial)
             page.click("#dms-vehicle-search")
-            page.wait_for_timeout(150)
+            page.wait_for_timeout(80)
 
             page.wait_for_selector("#dms-vehicle-results:visible", timeout=8000)
             row = page.locator("#dms-vehicle-results-table tbody tr").first
@@ -278,7 +279,7 @@ def run_fill_vahan_only(
     try:
         logger.info("fill_dms_service: run_fill_vahan_only starting")
         with sync_playwright() as p:
-            browser = p.chromium.launch(channel="msedge", headless=not DMS_PLAYWRIGHT_HEADED)
+            browser = p.chromium.launch(headless=not DMS_PLAYWRIGHT_HEADED)
             context = browser.new_context()
             page = context.new_page()
             page.set_default_timeout(15_000)
@@ -343,10 +344,7 @@ def run_fill_dms(
     try:
         logger.info("fill_dms_service: starting Playwright dms=%s vahan=%s", dms_base_url[:50], bool(vahan_base_url))
         with sync_playwright() as p:
-            browser = p.chromium.launch(
-                channel="msedge",
-                headless=not DMS_PLAYWRIGHT_HEADED,
-            )
+            browser = p.chromium.launch(headless=not DMS_PLAYWRIGHT_HEADED)
             context = browser.new_context(accept_downloads=True)
             page = context.new_page()
             # Shorter default timeout so actions fail fast instead of feeling slow
@@ -385,7 +383,7 @@ def run_fill_dms(
                 page.fill("#dms-pin-code", pin)
             page.click("#dms-submit-enquiry")
             # Brief wait for dialog accept and page settle before navigating
-            page.wait_for_timeout(50)
+            page.wait_for_timeout(30)
 
             # 3) Vehicle page: fill search keys and search
             page.goto(f"{base}/vehicle.html", wait_until="domcontentloaded", timeout=15000)
@@ -396,7 +394,7 @@ def run_fill_dms(
             page.fill("#dms-vehicle-frame", frame_partial)
             page.fill("#dms-vehicle-engine", engine_partial)
             page.click("#dms-vehicle-search")
-            page.wait_for_timeout(150)
+            page.wait_for_timeout(80)
 
             # 4) Scrape first result row (all 8 columns: key, frame, engine, model, color, cubic_capacity, total_amount, year_of_mfg)
             logger.info("fill_dms_service: step 4 scrape vehicle results")

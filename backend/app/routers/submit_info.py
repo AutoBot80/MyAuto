@@ -33,6 +33,11 @@ class InsurancePayload(BaseModel):
     nominee_name: str | None = None
     nominee_age: int | str | None = None
     nominee_relationship: str | None = None
+    insurer: str | None = None
+    policy_num: str | None = None
+    policy_from: str | None = None
+    policy_to: str | None = None
+    premium: str | float | None = None
 
 
 class SubmitInfoPayload(BaseModel):

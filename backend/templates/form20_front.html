@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Form 20 - Front</title>
+  <style>
+    @page {
+      size: a4 portrait;
+      margin: 15mm;
+      @frame content_frame {
+        left: 42pt;
+        width: 511pt;
+        top: 42pt;
+        height: 755pt;
+      }
+      @frame footer_frame {
+        -pdf-frame-content: footer_content;
+        left: 42pt;
+        width: 511pt;
+        top: 797pt;
+        height: 25pt;
+      }
+    }
+    * { box-sizing: border-box; }
+    body { font-family: Arial, sans-serif; font-size: 11px; margin: 0; padding: 0; color: #000; }
+    .form20-title { text-align: center; font-weight: bold; font-size: 16px; margin-bottom: 16px; }
+    .form20-table { width: 100%; border-collapse: collapse; }
+    .form20-table td, .form20-table th { border: 1px solid #333; padding: 4px 8px; vertical-align: top; }
+    .form20-table th { text-align: left; font-weight: 600; width: 120px; background: #f5f5f5; }
+    .form20-field { min-height: 20px; }
+    .form20-footer { font-size: 10pt; text-align: left; }
+  </style>
+</head>
+<body>
+  <div id="footer_content" class="form20-footer">{{footer_text}}</div>
+  <h1 class="form20-title">Form 20</h1>
+  <table class="form20-table">
+    <tr><th>1. Name & C/O</th><td class="form20-field">{{field_1_name_care_of}}</td></tr>
+    <tr><th>2.</th><td class="form20-field"></td></tr>
+    <tr><th>3. Address</th><td class="form20-field">{{field_3_address}}</td></tr>
+    <tr><th>4–9.</th><td class="form20-field"></td></tr>
+    <tr><th>10. Dealer Name & Address</th><td class="form20-field">{{field_10_dealer_name_address}}</td></tr>
+    <tr><th>11–13.</th><td class="form20-field"></td></tr>
+    <tr><th>14. Body Type</th><td class="form20-field">{{field_14_body_type}}</td></tr>
+    <tr><th>15. Vehicle Type</th><td class="form20-field">{{field_15_vehicle_type}}</td></tr>
+    <tr><th>16. OEM / Make</th><td class="form20-field">{{field_16_oem_name}}</td></tr>
+    <tr><th>17. Year of Mfg</th><td class="form20-field">{{field_17_year_of_mfg}}</td></tr>
+    <tr><th>18. No. of Cylinders</th><td class="form20-field">{{field_18_num_cylinders}}</td></tr>
+    <tr><th>19. Horse Power</th><td class="form20-field">{{field_19_horse_power}}</td></tr>
+    <tr><th>20.</th><td class="form20-field"></td></tr>
+    <tr><th>21. Length (mm)</th><td class="form20-field">{{field_21_length}}</td></tr>
+    <tr><th>22. Chassis No.</th><td class="form20-field">{{field_22_chassis_no}}</td></tr>
+    <tr><th>23.</th><td class="form20-field"></td></tr>
+    <tr><th>24. Seating Capacity</th><td class="form20-field">{{field_24_seating_capacity}}</td></tr>
+    <tr><th>25. Fuel Type</th><td class="form20-field">{{field_25_fuel_type}}</td></tr>
+    <tr><th>26–27.</th><td class="form20-field"></td></tr>
+    <tr><th>28. Colour</th><td class="form20-field">{{field_28_colour}}</td></tr>
+  </table>
+</body>
+</html>

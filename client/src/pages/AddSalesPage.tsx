@@ -5,7 +5,7 @@ import { useUploadScans } from "../hooks/useUploadScans";
 import { UploadScansPanel } from "../components/UploadScansPanel";
 import { getExtractedDetails } from "../api/aiReaderQueue";
 import { submitInfo } from "../api/submitInfo";
-import { fillDmsOnly, fillVahanOnly, isFillDmsAbortError } from "../api/fillDms";
+import { fillDmsOnly, fillVahanOnly, printForm20, getDataFromDms, isFillDmsAbortError } from "../api/fillDms";
 import { insertRtoPayment } from "../api/rtoPaymentDetails";
 import { getBaseUrl } from "../api/client";
 import { loadAddSalesForm, saveAddSalesForm, clearAddSalesForm } from "../utils/addSalesStorage";
@@ -69,6 +69,8 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
   const [fillVahanStatus, setFillVahanStatus] = useState<string | null>(null);
   const [isFillDmsLoading, setIsFillDmsLoading] = useState(false);
   const [isFillVahanLoading, setIsFillVahanLoading] = useState(false);
+  const [isPrintFormsLoading, setIsPrintFormsLoading] = useState(false);
+  const [printFormsStatus, setPrintFormsStatus] = useState<string | null>(null);
   /** DMS-scraped vehicle; shown in Fill Forms > DMS. Only populated when user presses Fill Forms. */
   const [dmsScrapedVehicle, setDmsScrapedVehicle] = useState<ExtractedVehicleDetails | null>(null);
   /** True when Form 21 and Form 22 PDFs have been downloaded from DMS. */
@@ -88,12 +90,63 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
     const stored = loadAddSalesForm().extractedInsurance;
     return Boolean(
       stored &&
-        [stored.profession, stored.nominee_name, stored.nominee_age, stored.nominee_relationship].some(
-          (x) => x != null && String(x).trim() !== ""
-        )
+        [
+          stored.profession,
+          stored.nominee_name,
+          stored.nominee_age,
+          stored.nominee_relationship,
+          stored.insurer,
+          stored.policy_from,
+          stored.policy_to,
+          stored.premium,
+        ].some((x) => x != null && String(x).trim() !== "")
     );
   });
   const [formResetKey, setFormResetKey] = useState(0);
+
+  const applyExtractedDetails = (details: { vehicle?: unknown; customer?: unknown; insurance?: unknown }) => {
+    const rawVehicle = details?.vehicle ?? details;
+    const normalized = normalizeVehicleDetails(rawVehicle);
+    if (normalized) setExtractedVehicle(normalized);
+    const cust = details?.customer;
+    if (cust && typeof cust === "object" && !Array.isArray(cust)) {
+      setExtractedCustomer(mapApiCustomerToExtracted(cust as Record<string, unknown>));
+    }
+    const ins = details?.insurance;
+    if (ins && typeof ins === "object" && !Array.isArray(ins)) {
+      setInsuranceReadByTextract(true);
+      const r = ins as Record<string, unknown>;
+      setExtractedInsurance((prev) => {
+        const current = prev ?? {};
+        const fromServer = {
+          profession: typeof r.profession === "string" ? r.profession : undefined,
+          nominee_name: typeof r.nominee_name === "string" ? r.nominee_name : undefined,
+          nominee_age: r.nominee_age != null ? String(r.nominee_age) : undefined,
+          nominee_relationship: typeof r.nominee_relationship === "string" ? r.nominee_relationship : undefined,
+          insurer: typeof r.insurer === "string" ? r.insurer : undefined,
+          policy_num: typeof r.policy_num === "string" ? r.policy_num : undefined,
+          policy_from: typeof r.policy_from === "string" ? r.policy_from : undefined,
+          policy_to: typeof r.policy_to === "string" ? r.policy_to : undefined,
+          premium: typeof r.premium === "string" ? r.premium : r.premium != null ? String(r.premium) : undefined,
+        };
+        return {
+          ...current,
+          profession: current.profession && current.profession.trim() !== "" ? current.profession : fromServer.profession,
+          nominee_name: current.nominee_name && current.nominee_name.trim() !== "" ? current.nominee_name : fromServer.nominee_name,
+          nominee_age: current.nominee_age && current.nominee_age.trim() !== "" ? current.nominee_age : fromServer.nominee_age,
+          nominee_relationship:
+            current.nominee_relationship && current.nominee_relationship.trim() !== ""
+              ? current.nominee_relationship
+              : fromServer.nominee_relationship,
+          insurer: fromServer.insurer ?? current.insurer,
+          policy_num: fromServer.policy_num ?? current.policy_num,
+          policy_from: fromServer.policy_from ?? current.policy_from,
+          policy_to: fromServer.policy_to ?? current.policy_to,
+          premium: fromServer.premium ?? current.premium,
+        };
+      });
+    }
+  };
 
   const {
     upload,
@@ -108,6 +161,7 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
     setUploadedFiles,
     uploadStatus,
     setUploadStatus,
+    onExtractionComplete: applyExtractedDetails,
   });
 
   const pollCountRef = useRef(0);
@@ -181,6 +235,11 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
               nominee_name: typeof r.nominee_name === "string" ? r.nominee_name : undefined,
               nominee_age: r.nominee_age != null ? String(r.nominee_age) : undefined,
               nominee_relationship: typeof r.nominee_relationship === "string" ? r.nominee_relationship : undefined,
+              insurer: typeof r.insurer === "string" ? r.insurer : undefined,
+              policy_num: typeof r.policy_num === "string" ? r.policy_num : undefined,
+              policy_from: typeof r.policy_from === "string" ? r.policy_from : undefined,
+              policy_to: typeof r.policy_to === "string" ? r.policy_to : undefined,
+              premium: typeof r.premium === "string" ? r.premium : r.premium != null ? String(r.premium) : undefined,
             };
             return {
               ...current,
@@ -191,6 +250,11 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
                 current.nominee_relationship && current.nominee_relationship.trim() !== ""
                   ? current.nominee_relationship
                   : fromServer.nominee_relationship,
+              insurer: fromServer.insurer ?? current.insurer,
+              policy_num: fromServer.policy_num ?? current.policy_num,
+              policy_from: fromServer.policy_from ?? current.policy_from,
+              policy_to: fromServer.policy_to ?? current.policy_to,
+              premium: fromServer.premium ?? current.premium,
             };
           });
         }
@@ -235,6 +299,11 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
               nominee_name: typeof r.nominee_name === "string" ? r.nominee_name : undefined,
               nominee_age: r.nominee_age != null ? String(r.nominee_age) : undefined,
               nominee_relationship: typeof r.nominee_relationship === "string" ? r.nominee_relationship : undefined,
+              insurer: typeof r.insurer === "string" ? r.insurer : undefined,
+              policy_num: typeof r.policy_num === "string" ? r.policy_num : undefined,
+              policy_from: typeof r.policy_from === "string" ? r.policy_from : undefined,
+              policy_to: typeof r.policy_to === "string" ? r.policy_to : undefined,
+              premium: typeof r.premium === "string" ? r.premium : r.premium != null ? String(r.premium) : undefined,
             };
             return {
               ...current,
@@ -245,6 +314,11 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
                 current.nominee_relationship && current.nominee_relationship.trim() !== ""
                   ? current.nominee_relationship
                   : fromServer.nominee_relationship,
+              insurer: fromServer.insurer ?? current.insurer,
+              policy_num: fromServer.policy_num ?? current.policy_num,
+              policy_from: fromServer.policy_from ?? current.policy_from,
+              policy_to: fromServer.policy_to ?? current.policy_to,
+              premium: fromServer.premium ?? current.premium,
             };
           });
         }
@@ -382,8 +456,18 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
   const hasMeaningfulCustomer = (cust: typeof c) =>
     cust && (cust.aadhar_id || cust.name || cust.address || buildDisplayAddress(cust) !== "—");
   const hasMeaningfulInsurance = (i: typeof ins) =>
-    i && [i.profession, i.nominee_name, i.nominee_age, i.nominee_relationship].some(
-      (x) => x != null && String(x).trim() !== ""
+    Boolean(
+      i &&
+        [
+          i.profession,
+          i.nominee_name,
+          i.nominee_age,
+          i.nominee_relationship,
+          i.insurer,
+          i.policy_from,
+          i.policy_to,
+          i.premium,
+        ].some((x) => x != null && String(x).trim() !== "")
     );
 
   const customerProcessing = Boolean(savedTo && !hasMeaningfulCustomer(c));
@@ -412,11 +496,14 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
       dmsRes = await fillDmsOnly({
         subfolder: savedTo,
         dms_base_url: dmsUrl,
+        dealer_id: dealerId,
         customer_id: lastSubmittedCustomerId ?? undefined,
         vehicle_id: lastSubmittedVehicleId ?? undefined,
         customer: {
           name: c?.name ?? undefined,
+          care_of: c?.care_of ?? undefined,
           address: c?.address ?? buildDisplayAddress(c),
+          city: c?.city ?? undefined,
           state: c?.state ?? undefined,
           pin_code: c?.pin_code ?? undefined,
           mobile_number: mobile ?? undefined,
@@ -540,6 +627,65 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
       }
     } finally {
       setIsFillVahanLoading(false);
+    }
+  };
+
+  const handlePrintForms = async () => {
+    if (!savedTo) {
+      setPrintFormsStatus("Upload scans first.");
+      return;
+    }
+    const c = extractedCustomer;
+    let vehicleData: Record<string, unknown> = {};
+    if (dmsScrapedVehicle) {
+      const s = dmsScrapedVehicle;
+      vehicleData = {
+        key_no: s.key_no,
+        frame_no: s.frame_no,
+        engine_no: s.engine_no,
+        model: s.model,
+        color: s.color,
+        cubic_capacity: s.cubic_capacity,
+        total_amount: s.total_amount,
+        year_of_mfg: s.year_of_mfg,
+      };
+    } else {
+      try {
+        const fromDms = await getDataFromDms(savedTo);
+        if (fromDms?.vehicle && typeof fromDms.vehicle === "object") {
+          vehicleData = fromDms.vehicle as Record<string, unknown>;
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    setIsPrintFormsLoading(true);
+    setPrintFormsStatus(null);
+    try {
+      const res = await printForm20({
+        subfolder: savedTo,
+        customer: {
+          name: c?.name ?? undefined,
+          care_of: c?.care_of ?? undefined,
+          address: c?.address ?? buildDisplayAddress(c),
+          city: c?.city ?? undefined,
+          state: c?.state ?? undefined,
+          pin_code: c?.pin_code ?? undefined,
+        },
+        vehicle: vehicleData,
+        vehicle_id: lastSubmittedVehicleId ?? undefined,
+        dealer_id: dealerId,
+      });
+      if (res.success) {
+        setHasPrintedForms(true);
+        setPrintFormsStatus(`Form 20 saved: ${(res.pdfs_saved ?? []).join(", ")}`);
+      } else {
+        setPrintFormsStatus(res.error ?? "Print forms failed.");
+      }
+    } catch (err) {
+      setPrintFormsStatus(err instanceof Error ? err.message : "Print forms failed.");
+    } finally {
+      setIsPrintFormsLoading(false);
     }
   };
 
@@ -970,25 +1116,51 @@ className="app-button app-button--primary"
                   <h3 className="add-sales-v2-subsection-title">B. Insurance</h3>
                 </div>
                 <div className="add-sales-v2-dms-fields">
-                  <div className="add-sales-v2-dms-fields-title">Get Insurance details</div>
+                  <div className="add-sales-v2-dms-fields-title">Insurance details (from uploaded document)</div>
                   <dl className="add-sales-v2-dl add-sales-v2-dl--dms">
                     <div className="add-sales-v2-dl-row-group">
                       <div className="add-sales-v2-dl-row">
+                        <dt>Insurance Provider</dt>
+                        <dd>{ins?.insurer ?? "—"}</dd>
+                      </div>
+                    </div>
+                    <div className="add-sales-v2-dl-row-group">
+                      <div className="add-sales-v2-dl-row">
                         <dt>Policy No.</dt>
-                        <dd>—</dd>
+                        <dd>{ins?.policy_num ?? "—"}</dd>
+                      </div>
+                    </div>
+                    <div className="add-sales-v2-dl-row-group">
+                      <div className="add-sales-v2-dl-row">
+                        <dt>Valid From</dt>
+                        <dd>{ins?.policy_from ?? "—"}</dd>
                       </div>
                       <div className="add-sales-v2-dl-row">
+                        <dt>Valid To</dt>
+                        <dd>{ins?.policy_to ?? "—"}</dd>
+                      </div>
+                    </div>
+                    <div className="add-sales-v2-dl-row-group">
+                      <div className="add-sales-v2-dl-row">
                         <dt>Gross Premium</dt>
-                        <dd>—</dd>
+                        <dd>{ins?.premium ?? "—"}</dd>
                       </div>
                     </div>
                   </dl>
                 </div>
-                <div className="add-sales-v2-dms-pdfs">
-                  <div className="add-sales-v2-dms-pdfs-title">Get PDF</div>
-                  <ul className="add-sales-v2-dms-pdfs-list">
-                    <li>Insurance Policy</li>
-                  </ul>
+                <div className="add-sales-v2-print-forms-row">
+                  <button
+                    type="button"
+                    className="app-button app-button--primary"
+                    disabled={!savedTo || !hasSubmittedInfo || isPrintFormsLoading}
+                    onClick={handlePrintForms}
+                    title={!hasSubmittedInfo ? "Submit Info first (Section 2)" : undefined}
+                  >
+                    {isPrintFormsLoading ? "Generating…" : "Print forms"}
+                  </button>
+                  {printFormsStatus && (
+                    <div className="app-panel-status" role="status">{printFormsStatus}</div>
+                  )}
                 </div>
               </div>
               <div className="add-sales-v2-fill-forms-subsection">
@@ -1012,16 +1184,6 @@ className="app-button app-button--primary"
                       </div>
                     </div>
                   </dl>
-                </div>
-                <div className="add-sales-v2-rto-actions">
-                  <button
-                    type="button"
-                    className="app-button"
-                    disabled
-                    title="Coming soon"
-                  >
-                    Print forms
-                  </button>
                 </div>
               </div>
             </div>

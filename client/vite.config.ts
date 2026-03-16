@@ -16,6 +16,8 @@ export default defineConfig({
       '/textract': 'http://127.0.0.1:8000',
       '/qr-decode': 'http://127.0.0.1:8000',
       '/health': 'http://127.0.0.1:8000',
+      '/customer-search': 'http://127.0.0.1:8000',
+      '/documents': 'http://127.0.0.1:8000',
       '/dummy-vaahan': 'http://127.0.0.1:8000',
       '/dummy-dms': 'http://127.0.0.1:8000',
     },

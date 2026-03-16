@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { uploadScans, uploadScansV2 } from "../api/uploads";
 import { startProcessAll } from "../api/aiReaderQueue";
+import type { ExtractedDetailsResponse } from "../types";
 
 export interface UseUploadScansControlled {
   savedTo: string | null;
@@ -9,6 +10,8 @@ export interface UseUploadScansControlled {
   setUploadedFiles: React.Dispatch<React.SetStateAction<string[]>>;
   uploadStatus: string;
   setUploadStatus: (v: string) => void;
+  /** Called when upload completes with extraction.details so form can populate immediately */
+  onExtractionComplete?: (details: ExtractedDetailsResponse) => void;
 }
 
 export function useUploadScans(
@@ -69,6 +72,10 @@ export function useUploadScans(
       setUploadStatus(`Uploaded ${data.saved_count} file(s) to ${data.saved_to}.`);
       if (data.saved_files?.length)
         setUploadedFiles((prev) => [...(data.saved_files ?? []), ...prev]);
+      const details = (data as { extraction?: { details?: ExtractedDetailsResponse } }).extraction?.details;
+      if (details && controlled?.onExtractionComplete) {
+        controlled.onExtractionComplete(details);
+      }
       // Trigger Details sheet reader (Textract forms) on new queue items
       const processRes = await startProcessAll();
       void processRes;

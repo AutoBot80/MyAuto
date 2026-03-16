@@ -25,6 +25,11 @@ export interface SubmitInfoPayload {
     nominee_name?: string;
     nominee_age?: string;
     nominee_relationship?: string;
+    insurer?: string;
+    policy_num?: string;
+    policy_from?: string;
+    policy_to?: string;
+    premium?: string;
   };
   dealer_id: number | null;
   file_location?: string | null;
@@ -71,6 +76,11 @@ function mapInsurance(ins: ExtractedInsuranceDetails | null): SubmitInfoPayload[
     nominee_name: ins?.nominee_name,
     nominee_age: ins?.nominee_age,
     nominee_relationship: ins?.nominee_relationship,
+    insurer: ins?.insurer,
+    policy_num: ins?.policy_num,
+    policy_from: ins?.policy_from,
+    policy_to: ins?.policy_to,
+    premium: ins?.premium,
   };
 }
 

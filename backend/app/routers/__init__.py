@@ -8,6 +8,8 @@ from .qr_decode import router as qr_decode_router
 from .submit_info import router as submit_info_router
 from .fill_dms import router as fill_dms_router
 from .rto_payment_details import router as rto_payment_details_router
+from .customer_search import router as customer_search_router
+from .documents import router as documents_router
 
 __all__ = [
     "health_router",
@@ -20,4 +22,6 @@ __all__ = [
     "submit_info_router",
     "fill_dms_router",
     "rto_payment_details_router",
+    "customer_search_router",
+    "documents_router",
 ]

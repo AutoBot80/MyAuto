@@ -23,7 +23,9 @@ router = APIRouter(prefix="/fill-dms", tags=["fill-dms"])
 
 class FillDmsCustomer(BaseModel):
     name: str | None = None
+    care_of: str | None = None
     address: str | None = None
+    city: str | None = None
     state: str | None = None
     pin_code: str | None = None
     mobile_number: str | None = None
@@ -41,6 +43,7 @@ class FillDmsRequest(BaseModel):
     dms_base_url: str | None = None
     vahan_base_url: str | None = None
     rto_dealer_id: str | None = None
+    dealer_id: int | None = None
     customer_id: int | None = None
     vehicle_id: int | None = None
     customer: FillDmsCustomer = FillDmsCustomer()
@@ -72,6 +75,20 @@ class FillVahanResponse(BaseModel):
     success: bool
     application_id: str | None = None
     rto_fees: float | None = None
+    error: str | None = None
+
+
+class PrintForm20Request(BaseModel):
+    subfolder: str
+    customer: FillDmsCustomer = FillDmsCustomer()
+    vehicle: dict = {}
+    vehicle_id: int | None = None
+    dealer_id: int | None = None
+
+
+class PrintForm20Response(BaseModel):
+    success: bool
+    pdfs_saved: list[str]
     error: str | None = None
 
 
@@ -126,7 +143,7 @@ def get_data_from_dms(subfolder: str) -> dict:
                 if val:
                     vehicle[out_key] = val
             elif section == "customer":
-                key_map = {"name": "name", "address": "address", "state": "state", "pin_code": "pin_code", "mobile": "mobile_number"}
+                key_map = {"name": "name", "care_of": "care_of", "address": "address", "city": "city", "state": "state", "pin_code": "pin_code", "mobile": "mobile_number"}
                 out_key = key_map.get(key, key)
                 if val:
                     customer[out_key] = val
@@ -216,6 +233,7 @@ async def fill_dms_only(req: FillDmsRequest) -> FillDmsResponse:
             _update_vehicle_master_from_dms(req.vehicle_id, scraped)
         except Exception as e:
             logger.warning("fill_dms: vehicle_master update failed vehicle_id=%s: %s", req.vehicle_id, e)
+
     return FillDmsResponse(
         success=result.get("error") is None,
         vehicle=scraped,
@@ -224,6 +242,42 @@ async def fill_dms_only(req: FillDmsRequest) -> FillDmsResponse:
         rto_fees=None,
         error=result.get("error"),
     )
+
+
+@router.post("/print-form20", response_model=PrintForm20Response)
+async def print_form20(req: PrintForm20Request) -> PrintForm20Response:
+    """Generate Form 20 (front + back) and save to Uploaded scans/subfolder. Called from Print forms button."""
+    uploads_dir = Path(UPLOADS_DIR)
+    if not uploads_dir.is_dir():
+        raise HTTPException(status_code=500, detail="Uploads directory not found")
+    customer_dict = req.customer.model_dump(exclude_none=True)
+    if req.customer.mobile_number:
+        customer_dict["mobile_number"] = req.customer.mobile_number
+    if req.customer.mobile:
+        customer_dict["mobile"] = req.customer.mobile
+    # Map client vehicle keys (key_no, frame_no, engine_no) to form20 expected keys
+    vehicle_dict = dict(req.vehicle or {})
+    if "key_no" in vehicle_dict and "key_num" not in vehicle_dict:
+        vehicle_dict["key_num"] = vehicle_dict.get("key_no")
+    if "frame_no" in vehicle_dict and "frame_num" not in vehicle_dict:
+        vehicle_dict["frame_num"] = vehicle_dict.get("frame_no")
+    if "engine_no" in vehicle_dict and "engine_num" not in vehicle_dict:
+        vehicle_dict["engine_num"] = vehicle_dict.get("engine_no")
+    try:
+        from app.services.form20_service import generate_form20_pdfs
+
+        form20_saved = generate_form20_pdfs(
+            subfolder=req.subfolder,
+            customer=customer_dict,
+            vehicle=vehicle_dict,
+            vehicle_id=req.vehicle_id,
+            dealer_id=req.dealer_id,
+            uploads_dir=uploads_dir,
+        )
+        return PrintForm20Response(success=True, pdfs_saved=form20_saved)
+    except Exception as e:
+        logger.warning("print_form20: Form 20 generation failed: %s", e)
+        return PrintForm20Response(success=False, pdfs_saved=[], error=str(e))
 
 
 @router.post("/vahan", response_model=FillVahanResponse)
@@ -308,6 +362,7 @@ async def fill_dms(req: FillDmsRequest) -> FillDmsResponse:
             _update_vehicle_master_from_dms(req.vehicle_id, scraped)
         except Exception as e:
             logger.warning("fill_dms: vehicle_master update failed vehicle_id=%s: %s", req.vehicle_id, e)
+
     return FillDmsResponse(
         success=result.get("error") is None,
         vehicle=scraped,

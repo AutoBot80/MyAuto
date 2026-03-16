@@ -53,3 +53,21 @@ export async function getExtractedDetails(
   if (!res.ok) throw new Error(await res.text().then((t) => t || `Failed (${res.status})`));
   return res.json() as Promise<ExtractedDetailsResponse>;
 }
+
+/** Debug: get what Textract extracted from Insurance.jpg (raw + parsed) and file status. */
+export async function getInsuranceExtraction(subfolder: string): Promise<{
+  subfolder: string;
+  insurance_jpg_exists: boolean;
+  ocr_files: string[];
+  insurance_from_details: Record<string, string> | null;
+  insurance_ocr_json: Record<string, string> | null;
+  info_from_insurance_txt: string | null;
+  insurance_txt_preview?: string;
+}> {
+  const base = await import("./client").then((m) => m.getBaseUrl());
+  const res = await fetch(
+    `${base}/ai-reader-queue/insurance-extraction?subfolder=${encodeURIComponent(subfolder)}`
+  );
+  if (!res.ok) throw new Error(await res.text().then((t) => t || `Failed (${res.status})`));
+  return res.json();
+}

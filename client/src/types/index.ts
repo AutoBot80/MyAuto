@@ -94,6 +94,16 @@ export interface ExtractedInsuranceDetails {
   nominee_name?: string;
   nominee_age?: string;
   nominee_relationship?: string;
+  /** From Insurance.jpg: insurer name (e.g. National Insurance) */
+  insurer?: string;
+  /** Policy number */
+  policy_num?: string;
+  /** Valid From / policy_from (dd-mm-yyyy or dd/mm/yyyy) */
+  policy_from?: string;
+  /** Valid To / policy_to */
+  policy_to?: string;
+  /** Gross Premium */
+  premium?: string;
 }
 
 export interface ExtractedDetailsResponse {

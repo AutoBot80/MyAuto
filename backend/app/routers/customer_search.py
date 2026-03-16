@@ -1,0 +1,175 @@
+"""Customer search by mobile and/or vehicle plate number."""
+
+import logging
+
+from fastapi import APIRouter, HTTPException, Query
+
+from app.db import get_connection
+
+logger = logging.getLogger(__name__)
+router = APIRouter(prefix="/customer-search", tags=["customer-search"])
+
+
+@router.get("/search")
+def search_customer(
+    mobile: str | None = Query(None, description="Customer mobile number"),
+    plate_num: str | None = Query(None, description="Vehicle plate number"),
+) -> dict:
+    """
+    Search by customer mobile and/or vehicle plate number.
+    Requires at least one. When both provided, customer must match both.
+    Identifies customer_id, then fetches from sales_master, vehicle_master, insurance_master.
+    """
+    mobile_clean = (mobile or "").strip()
+    plate_clean = (plate_num or "").strip()
+    if not mobile_clean and not plate_clean:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide at least customer mobile or vehicle plate number.",
+        )
+
+    by_mobile: set[int] = set()
+    by_plate: set[int] = set()
+
+    if mobile_clean:
+        try:
+            mobile_int = int("".join(c for c in mobile_clean if c.isdigit()))
+        except ValueError:
+            mobile_int = None
+        if mobile_int is not None:
+            conn = get_connection()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT customer_id FROM customer_master WHERE mobile_number = %s",
+                        (mobile_int,),
+                    )
+                    by_mobile = {row["customer_id"] for row in cur.fetchall()}
+            finally:
+                conn.close()
+        elif not plate_clean:
+            return {
+                "found": False,
+                "customer": None,
+                "vehicles": [],
+                "message": "Invalid mobile number.",
+            }
+
+    if plate_clean:
+        conn = get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT sm.customer_id
+                    FROM sales_master sm
+                    JOIN vehicle_master vm ON vm.vehicle_id = sm.vehicle_id
+                    WHERE TRIM(COALESCE(vm.plate_num, '')) <> ''
+                      AND (LOWER(TRIM(vm.plate_num)) = LOWER(TRIM(%s))
+                           OR vm.plate_num ILIKE %s)
+                    """,
+                    (plate_clean, f"%{plate_clean}%"),
+                )
+                by_plate = {row["customer_id"] for row in cur.fetchall()}
+        finally:
+            conn.close()
+
+    if mobile_clean and plate_clean:
+        customer_ids = by_mobile & by_plate
+    else:
+        customer_ids = by_mobile | by_plate
+
+    if not customer_ids:
+        return {
+            "found": False,
+            "customer": None,
+            "vehicles": [],
+            "message": "No customer found for the given criteria.",
+        }
+
+    cid = min(customer_ids)
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+
+            # 2) Customer details from customer_master
+            cur.execute(
+                """
+                SELECT customer_id, name, mobile_number, address, pin, city, state,
+                       date_of_birth, profession, file_location, gender
+                FROM customer_master
+                WHERE customer_id = %s
+                """,
+                (cid,),
+            )
+            cust_row = cur.fetchone()
+            if not cust_row:
+                return {"found": False, "customer": None, "vehicles": [], "message": "Customer not found."}
+
+            customer = dict(cust_row)
+            if customer.get("mobile_number") is not None:
+                customer["mobile"] = str(customer["mobile_number"])
+            else:
+                customer["mobile"] = None
+
+            # 3) Use customer_id to fetch from sales_master (gives customer_id + vehicle_id)
+            # 4) Fetch vehicle details from vehicle_master, insurance from insurance_master
+            cur.execute(
+                """
+                SELECT vm.vehicle_id,
+                       vm.model,
+                       vm.colour,
+                       vm.plate_num,
+                       vm.chassis,
+                       vm.engine,
+                       vm.year_of_mfg,
+                       sm.billing_date AS date_of_purchase
+                FROM sales_master sm
+                JOIN vehicle_master vm ON vm.vehicle_id = sm.vehicle_id
+                WHERE sm.customer_id = %s
+                ORDER BY sm.billing_date DESC
+                """,
+                (cid,),
+            )
+            vehicles = [dict(r) for r in cur.fetchall()]
+            for v in vehicles:
+                if v.get("date_of_purchase"):
+                    v["date_of_purchase"] = v["date_of_purchase"].strftime("%d-%m-%Y")
+                else:
+                    v["date_of_purchase"] = None
+
+            # Insurance per vehicle (latest by insurance_year)
+            vehicle_ids = [v["vehicle_id"] for v in vehicles]
+            ins_map: dict[int, dict] = {}
+            if vehicle_ids:
+                cur.execute(
+                    """
+                    SELECT DISTINCT ON (vehicle_id) vehicle_id, insurer, policy_num, policy_from, policy_to
+                    FROM insurance_master
+                    WHERE customer_id = %s AND vehicle_id = ANY(%s)
+                    ORDER BY vehicle_id, insurance_year DESC NULLS LAST
+                    """,
+                    (cid, vehicle_ids),
+                )
+                for row in cur.fetchall():
+                    r = dict(row)
+                    if r.get("policy_from"):
+                        r["policy_from"] = r["policy_from"].strftime("%d-%m-%Y")
+                    if r.get("policy_to"):
+                        r["policy_to"] = r["policy_to"].strftime("%d-%m-%Y")
+                    ins_map[r["vehicle_id"]] = r
+
+            return {
+                "found": True,
+                "customer": customer,
+                "vehicles": vehicles,
+                "insurance_by_vehicle": ins_map,
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("customer_search failed")
+        raise HTTPException(status_code=500, detail=str(e)) from e
+    finally:
+        conn.close()

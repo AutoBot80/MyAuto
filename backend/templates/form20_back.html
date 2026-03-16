@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Form 20 - Back</title>
+  <style>
+    @page {
+      size: a4 portrait;
+      margin: 15mm;
+      @frame content_frame {
+        left: 42pt;
+        width: 511pt;
+        top: 42pt;
+        height: 755pt;
+      }
+      @frame footer_frame {
+        -pdf-frame-content: footer_content;
+        left: 42pt;
+        width: 511pt;
+        top: 797pt;
+        height: 25pt;
+      }
+    }
+    * { box-sizing: border-box; }
+    body { font-family: Arial, sans-serif; font-size: 11px; margin: 0; padding: 0; color: #000; }
+    .form20-title { text-align: center; font-weight: bold; font-size: 16px; margin-bottom: 16px; }
+    .form20-back-note { margin-top: 24px; font-size: 10px; color: #666; }
+    .form20-footer { font-size: 10pt; text-align: left; }
+  </style>
+</head>
+<body>
+  <div id="footer_content" class="form20-footer">{{footer_text}}</div>
+  <h1 class="form20-title">Form 20</h1>
+  <p class="form20-back-note">(Back of Form 20 – continuation / declarations as per M.V. Act)</p>
+</body>
+</html>

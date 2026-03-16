@@ -34,6 +34,56 @@ def get_extracted_details(subfolder: str) -> dict:
     return details
 
 
+@router.get("/insurance-extraction")
+def get_insurance_extraction(subfolder: str) -> dict:
+    """Debug: return what Textract extracted from Insurance.jpg (raw + parsed) and file status."""
+    import re
+    from pathlib import Path
+
+    from app.config import OCR_OUTPUT_DIR, UPLOADS_DIR
+
+    def _safe(s: str) -> str:
+        return re.sub(r"[^\w\-]", "_", (s or "").strip()) or "default"
+
+    safe = _safe(subfolder)
+    ocr_dir = Path(OCR_OUTPUT_DIR).resolve()
+    uploads_dir = Path(UPLOADS_DIR).resolve()
+    subfolder_path = ocr_dir / safe
+    upload_path = uploads_dir / subfolder
+
+    result: dict = {
+        "subfolder": subfolder,
+        "insurance_jpg_exists": (upload_path / "Insurance.jpg").exists(),
+        "ocr_files": sorted(p.name for p in subfolder_path.iterdir()) if subfolder_path.exists() else [],
+        "insurance_from_details": None,
+        "insurance_ocr_json": None,
+        "info_from_insurance_txt": None,
+    }
+
+    service = OcrService()
+    details = service.get_extracted_details(subfolder)
+    if details and details.get("insurance"):
+        result["insurance_from_details"] = details["insurance"]
+
+    insurance_ocr = subfolder_path / "insurance_ocr.json"
+    if insurance_ocr.exists():
+        try:
+            import json
+            result["insurance_ocr_json"] = json.loads(insurance_ocr.read_text(encoding="utf-8"))
+        except Exception as e:
+            result["insurance_ocr_json_error"] = str(e)
+
+    info_txt = subfolder_path / "Info from insurance.txt"
+    if info_txt.exists():
+        result["info_from_insurance_txt"] = info_txt.read_text(encoding="utf-8")
+
+    insurance_txt = subfolder_path / "Insurance.txt"
+    if insurance_txt.exists():
+        result["insurance_txt_preview"] = insurance_txt.read_text(encoding="utf-8", errors="replace")[:2000]
+
+    return result
+
+
 @router.get("/process-status")
 def process_status() -> dict:
     """Queue disabled; returns sleeping."""

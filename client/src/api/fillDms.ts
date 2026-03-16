@@ -2,7 +2,9 @@ import { apiFetch } from "./client";
 
 export interface FillDmsCustomer {
   name?: string | null;
+  care_of?: string | null;
   address?: string | null;
+  city?: string | null;
   state?: string | null;
   pin_code?: string | null;
   mobile_number?: string | null;
@@ -20,6 +22,8 @@ export interface FillDmsRequest {
   dms_base_url?: string | null;
   vahan_base_url?: string | null;
   rto_dealer_id?: string | null;
+  /** Dealer ID for Form 20 field 10 (dealer name & address from dealer_ref). */
+  dealer_id?: number | null;
   /** From Submit Info; used to update vehicle_master with DMS-scraped data. */
   customer_id?: number | null;
   vehicle_id?: number | null;
@@ -115,6 +119,29 @@ export async function fillDms(req: FillDmsRequest): Promise<FillDmsResponse> {
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+export interface PrintForm20Request {
+  subfolder: string;
+  customer: FillDmsCustomer;
+  vehicle: Record<string, unknown>;
+  vehicle_id?: number | null;
+  dealer_id?: number | null;
+}
+
+export interface PrintForm20Response {
+  success: boolean;
+  pdfs_saved: string[];
+  error?: string | null;
+}
+
+/** Generate Form 20 (front + back) and save to Uploaded scans. Called from Print forms button. */
+export async function printForm20(req: PrintForm20Request): Promise<PrintForm20Response> {
+  return apiFetch<PrintForm20Response>("/fill-dms/print-form20", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+  });
 }
 
 /** Fetch Data from DMS for a subfolder (fallback when Fill Forms response was lost). */

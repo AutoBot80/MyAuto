@@ -74,6 +74,15 @@ _INSURANCE_KEY_ALIASES = {
     "nominee_relationship": ["nominee relationship", "nominee relationship:", "relationship", "relation"],
 }
 
+# Map Textract form keys for insurance policy document (Insurance.jpg).
+_INSURANCE_POLICY_KEY_ALIASES = {
+    "insurer": ["insurer", "insurance company", "company", "insurance provider", "name of insurer", "national insurance"],
+    "policy_num": ["policy no", "policy no.", "policy number", "policy num", "cert. no", "cert no", "certificate no"],
+    "policy_from": ["tp valid from", "valid from", "validity from", "policy from", "from date", "tp valid"],
+    "policy_to": ["tp valid to", "valid to", "validity to", "policy to", "to date", "midnight of"],
+    "premium": ["gross premium", "premium", "total premium", "gross premium amount", "premium of rs"],
+}
+
 
 def _normalize_key_for_match(key: str) -> str:
     """Lowercase and collapse spaces for key matching."""
@@ -172,6 +181,127 @@ def _parse_insurance_from_full_text(full_text: str) -> dict[str, str]:
             val = m.group(1).strip()
             if val and len(val) < 200:
                 out[key] = val
+    return out
+
+
+def _map_key_value_pairs_to_insurance_policy(pairs: list[dict]) -> dict[str, str]:
+    """Map key_value_pairs from Textract to insurance policy fields (insurer, policy_from, policy_to, premium)."""
+    out: dict[str, str] = {}
+    key_lower_to_value: dict[str, str] = {}
+    for kv in pairs:
+        k = (kv.get("key") or "").strip()
+        v = (kv.get("value") or "").strip()
+        if not k:
+            continue
+        key_norm = _normalize_key_for_match(k)
+        key_lower_to_value[key_norm] = v
+        if ":" in key_norm:
+            key_lower_to_value[key_norm.replace(":", "").strip()] = v
+
+    for field, aliases in _INSURANCE_POLICY_KEY_ALIASES.items():
+        if field in out:
+            continue
+        for alias in aliases:
+            anorm = _normalize_key_for_match(alias)
+            if anorm in key_lower_to_value:
+                out[field] = key_lower_to_value[anorm]
+                break
+            for k, v in key_lower_to_value.items():
+                if anorm in k or k in anorm:
+                    out[field] = v
+                    break
+            if field in out:
+                break
+    return out
+
+
+def _parse_insurance_policy_from_full_text(full_text: str) -> dict[str, str]:
+    """Extract policy number, insurer, policy from/to, gross premium from insurance policy full text.
+    Document layout:
+      - Policy / Cert. No. -> policy number (e.g. 39010231216200202663)
+      - Right after -> insurance provider (e.g. NATIONAL INSURANCE COMPANY LIMITED)
+      - Policy Period -> two dates: first=from, second=to (e.g. 15-06-2022, 15-06-2023)
+      - Gross Premium -> premium amount (e.g. 5291.00)
+    """
+    out: dict[str, str] = {}
+    if not full_text or not isinstance(full_text, str):
+        return out
+    text = full_text.strip()
+
+    # 1. Policy number: "Policy\nCert. No.\n39010231216200202663" - number after Cert. No.
+    if "policy_num" not in out:
+        m = re.search(
+            r"(?:Policy\s+)?Cert\.?\s*No\.?\s*:?\s*\n\s*(\d{12,})",
+            text,
+            re.IGNORECASE,
+        )
+        if m:
+            out["policy_num"] = m.group(1).strip()
+
+    # 2. Insurer: right after policy number - "NATIONAL INSURANCE COMPANY LIMITED"
+    if "insurer" not in out:
+        m = re.search(
+            r"(\d{12,})\s*\n\s*([A-Z][A-Za-z\s]+(?:INSURANCE\s+COMPANY\s+LIMITED|INSURANCE\s+COMPANY|INSURANCE))",
+            text,
+        )
+        if m:
+            out["insurer"] = m.group(2).strip()
+        else:
+            # Fallback: known insurer names
+            m = re.search(
+                r"([A-Z][A-Za-z\s]+INSURANCE[A-Za-z\s]*(?:COMPANY\s+)?(?:LIMITED|LTD\.?)?)",
+                text,
+            )
+            if m:
+                out["insurer"] = m.group(1).strip()
+
+    # 3. Policy from & to:
+    #    - policy_from: Date in "dd-mm-yyyy To" block before "OD Policy Period" (e.g. 16-06-2021 near UIN block)
+    #    - policy_to: First dd-mm-yyyy after "OD Policy Period" (e.g. 15-06-2022)
+    if "policy_from" not in out or "policy_to" not in out:
+        date_pat = re.compile(r"\b(\d{1,2}-\d{1,2}-\d{4})\b")
+        od_match = re.search(r"OD\s+Policy\s+Period\s*:?\s*\n", text, re.IGNORECASE)
+        if od_match:
+            before_od = text[: od_match.start()]
+            after_od = text[od_match.end() :]
+            if "policy_from" not in out:
+                # Prefer date in "dd-mm-yyyy To" format (policy period start); else first date before OD
+                m_from = re.search(r"(\d{1,2}-\d{1,2}-\d{4})\s+To", before_od)
+                if m_from:
+                    out["policy_from"] = m_from.group(1)
+                else:
+                    dates_before = date_pat.findall(before_od)
+                    if dates_before:
+                        out["policy_from"] = dates_before[0]
+            if "policy_to" not in out:
+                dates_after = date_pat.findall(after_od)
+                if dates_after:
+                    out["policy_to"] = dates_after[0]  # First date after OD = policy end (e.g. 15-06-2022)
+        if "policy_from" not in out or "policy_to" not in out:
+            # Fallback: Policy Period with two dates
+            for label in [r"Policy\s+Period", r"OD\s+Policy\s+Period"]:
+                m = re.search(
+                    rf"{label}\s*:?\s*\n\s*(\d{{1,2}}-\d{{1,2}}-\d{{4}})\s*\n\s*(\d{{1,2}}-\d{{1,2}}-\d{{4}})",
+                    text,
+                    re.IGNORECASE,
+                )
+                if m:
+                    if "policy_from" not in out:
+                        out["policy_from"] = m.group(1)
+                    if "policy_to" not in out:
+                        out["policy_to"] = m.group(2)
+                    break
+
+    # 4. Gross Premium: "Gross Premium\n5291.00"
+    if "premium" not in out:
+        m = re.search(r"Gross\s+Premium\s*:?\s*\n\s*([\d,]+\.?\d*)", text, re.IGNORECASE)
+        if m:
+            out["premium"] = m.group(1).strip().replace(",", "")
+        else:
+            m = re.search(r"Premium\s+of\s+Rs\.?\s*:?\s*\n\s*([\d,]+\.?\d*)", text, re.IGNORECASE)
+            if m:
+                out["premium"] = m.group(1).strip().replace(",", "")
+
     return out
 
 
@@ -296,6 +426,15 @@ class OcrService:
                 processed.append("Aadhar.jpg")
             except Exception as e:
                 errors.append(f"Aadhar.jpg: {e}")
+
+        # 3. Insurance.jpg (extract insurer, TP valid from/to, gross premium; merge into Details.json)
+        insurance_path = subdir / "Insurance.jpg"
+        if insurance_path.exists():
+            try:
+                self._process_insurance_sheet(subfolder, "Insurance.jpg", insurance_path)
+                processed.append("Insurance.jpg")
+            except Exception as e:
+                errors.append(f"Insurance.jpg: {e}")
 
         result: dict = {"processed": processed}
         if errors:
@@ -496,6 +635,69 @@ class OcrService:
                     "classification_confidence": None,
                 }
             raise
+
+    def _process_insurance_sheet(self, subfolder: str, filename: str, input_path: Path) -> None:
+        """Run Textract on Insurance.jpg (TEXT mode); extract insurer, policy from/to, premium via regex on full_text."""
+        from app.services.textract_service import extract_text_from_bytes
+
+        document_bytes = input_path.read_bytes()
+        result = extract_text_from_bytes(document_bytes)
+
+        if result.get("error"):
+            raise RuntimeError(result["error"])
+
+        full_text = result.get("full_text") or ""
+        insurance_policy = _parse_insurance_policy_from_full_text(full_text)
+
+        # Write Insurance.txt for inspection
+        output_path = self.get_output_path(subfolder, filename)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        lines = ["Document: Insurance policy (Textract Text)\n", "--- Full text ---\n", full_text]
+        output_path.write_text("\n".join(lines), encoding="utf-8")
+
+        # Write extracted values to ocr_output/subfolder/insurance_ocr.json
+        subfolder_name = _safe_subfolder_name(subfolder)
+        subfolder_path = self.ocr_output_dir / subfolder_name
+        subfolder_path.mkdir(parents=True, exist_ok=True)
+        insurance_ocr_path = subfolder_path / "insurance_ocr.json"
+        insurance_ocr_path.write_text(
+            json.dumps(insurance_policy, indent=2, default=str),
+            encoding="utf-8",
+        )
+
+        # Write human-readable Info from insurance.txt (like Data from DMS.txt)
+        info_path = subfolder_path / "Info from insurance.txt"
+        info_lines = ["Info from insurance", ""]
+        for label, key in [
+            ("Insurance Provider", "insurer"),
+            ("Policy No.", "policy_num"),
+            ("Valid From", "policy_from"),
+            ("Valid To", "policy_to"),
+            ("Gross Premium", "premium"),
+        ]:
+            val = insurance_policy.get(key)
+            info_lines.append(f"{label}: {(val or '').strip() or '—'}")
+        info_path.write_text("\n".join(info_lines), encoding="utf-8")
+
+        # Merge into Details.json insurance section
+        json_path = _json_output_path(self.ocr_output_dir, subfolder, "Details.jpg")
+        data: dict = {"vehicle": {}, "customer": {}, "insurance": {}}
+        if json_path.exists():
+            try:
+                data = json.loads(json_path.read_text(encoding="utf-8"))
+                if not isinstance(data.get("vehicle"), dict):
+                    data["vehicle"] = {}
+                if not isinstance(data.get("customer"), dict):
+                    data["customer"] = {}
+                if not isinstance(data.get("insurance"), dict):
+                    data["insurance"] = {}
+            except Exception:
+                pass
+        existing_insurance = data.get("insurance") or {}
+        insurance_merged = {**existing_insurance, **{k: v for k, v in insurance_policy.items() if v}}
+        data["insurance"] = insurance_merged
+        json_path.parent.mkdir(parents=True, exist_ok=True)
+        json_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
     def get_extracted_details(self, subfolder: str) -> dict | None:
         """

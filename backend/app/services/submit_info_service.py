@@ -5,10 +5,23 @@ in one transaction. Identity: customer by (aadhar last 4, mobile_number); vehicl
 insurance by (customer_id, vehicle_id, insurance_year).
 """
 
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 from app.db import get_connection
+
+
+def _parse_date(s: str | None) -> date | None:
+    """Parse dd-mm-yyyy, dd/mm/yyyy, or yyyy-mm-dd to date."""
+    if not s or not str(s).strip():
+        return None
+    s = str(s).strip()
+    for fmt in ("%d-%m-%Y", "%d/%m/%Y", "%Y-%m-%d", "%d.%m.%Y"):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
+            continue
+    return None
 
 
 def _last4(aadhar_id: str | None) -> str | None:
@@ -76,6 +89,20 @@ def submit_info(
     nominee_name = _str_or_none(insurance.get("nominee_name"))
     nominee_age = _int_or_none(insurance.get("nominee_age"))
     nominee_relationship = _str_or_none(insurance.get("nominee_relationship"), 64)
+    insurer = _str_or_none(insurance.get("insurer"), 255)
+    policy_num = _str_or_none(insurance.get("policy_num"), 24)
+    policy_from_str = _str_or_none(insurance.get("policy_from"), 20)
+    policy_to_str = _str_or_none(insurance.get("policy_to"), 20)
+    premium_val = insurance.get("premium")
+    premium = None
+    if premium_val is not None:
+        try:
+            premium = float(str(premium_val).replace(",", "").strip())
+        except (TypeError, ValueError):
+            pass
+
+    policy_from = _parse_date(policy_from_str)
+    policy_to = _parse_date(policy_to_str)
 
     insurance_year = date.today().year
 
@@ -158,15 +185,20 @@ def submit_info(
             # 4) Insurance upsert by (customer_id, vehicle_id, insurance_year)
             cur.execute(
                 """
-                INSERT INTO insurance_master (customer_id, vehicle_id, insurance_year, nominee_name, nominee_age, nominee_relationship)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                INSERT INTO insurance_master (customer_id, vehicle_id, insurance_year, nominee_name, nominee_age, nominee_relationship, insurer, policy_num, policy_from, policy_to, premium)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (customer_id, vehicle_id, insurance_year)
                 DO UPDATE SET
                     nominee_name = EXCLUDED.nominee_name,
                     nominee_age = EXCLUDED.nominee_age,
-                    nominee_relationship = EXCLUDED.nominee_relationship
+                    nominee_relationship = EXCLUDED.nominee_relationship,
+                    insurer = COALESCE(EXCLUDED.insurer, insurance_master.insurer),
+                    policy_num = COALESCE(EXCLUDED.policy_num, insurance_master.policy_num),
+                    policy_from = COALESCE(EXCLUDED.policy_from, insurance_master.policy_from),
+                    policy_to = COALESCE(EXCLUDED.policy_to, insurance_master.policy_to),
+                    premium = COALESCE(EXCLUDED.premium, insurance_master.premium)
                 """,
-                (customer_id, vehicle_id, insurance_year, nominee_name, nominee_age, nominee_relationship),
+                (customer_id, vehicle_id, insurance_year, nominee_name, nominee_age, nominee_relationship, insurer, policy_num, policy_from, policy_to, premium),
             )
 
         conn.commit()
