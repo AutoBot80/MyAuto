@@ -244,6 +244,40 @@ async def fill_dms_only(req: FillDmsRequest) -> FillDmsResponse:
     )
 
 
+@router.get("/form20-status")
+def form20_status() -> dict:
+    """Debug: check Form 20 template paths and fitz availability."""
+    from pathlib import Path
+
+    from app.config import FORM20_TEMPLATE_SINGLE, FORM20_TEMPLATE_FRONT, FORM20_TEMPLATE_BACK, UPLOADS_DIR
+
+    project_root = Path(UPLOADS_DIR).resolve().parent
+    single = Path(FORM20_TEMPLATE_SINGLE).resolve()
+    front = Path(FORM20_TEMPLATE_FRONT).resolve()
+    back = Path(FORM20_TEMPLATE_BACK).resolve()
+    fallback_single = project_root / "Raw Scans" / "Official FORM-20 english.pdf"
+    try:
+        import fitz  # noqa: F401
+        fitz_ok = True
+    except ImportError:
+        fitz_ok = False
+
+    single_exists = single.exists() or fallback_single.exists()
+    return {
+        "single_template": str(single),
+        "single_exists": single.exists(),
+        "fallback_single": str(fallback_single),
+        "fallback_single_exists": fallback_single.exists(),
+        "front_template": str(front),
+        "front_exists": front.exists(),
+        "back_template": str(back),
+        "back_exists": back.exists(),
+        "project_root": str(project_root),
+        "fitz_available": fitz_ok,
+        "will_use_pdf_overlay": single_exists and fitz_ok,
+    }
+
+
 @router.post("/print-form20", response_model=PrintForm20Response)
 async def print_form20(req: PrintForm20Request) -> PrintForm20Response:
     """Generate Form 20 (front + back) and save to Uploaded scans/subfolder. Called from Print forms button."""

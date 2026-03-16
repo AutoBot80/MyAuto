@@ -5,23 +5,17 @@ If templates are missing, falls back to HTML-based generation.
 Saves Form 20 Front.pdf and Form 20 Back.pdf to Uploaded scans/subfolder.
 """
 import logging
-import os
 import re
 from pathlib import Path
 from typing import Any
 
-from app.config import UPLOADS_DIR
+from app.config import UPLOADS_DIR, FORM20_TEMPLATE_SINGLE, FORM20_TEMPLATE_FRONT, FORM20_TEMPLATE_BACK
 
 logger = logging.getLogger(__name__)
 
-# Project root (parent of backend/)
+# Backend dir for HTML templates
 _BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
-_PROJECT_ROOT = _BACKEND_DIR.parent
 TEMPLATES_DIR = _BACKEND_DIR / "templates"
-# Form 20 PDF templates - resolve to absolute paths (Raw Scans is next to backend/)
-_FORM20_SINGLE_PATH = _PROJECT_ROOT / "Raw Scans" / "Official FORM-20 english.pdf"
-_FORM20_FRONT_PATH = _PROJECT_ROOT / "Raw Scans" / "Form 20 Front.pdf"
-_FORM20_BACK_PATH = _PROJECT_ROOT / "Raw Scans" / "Form 20 back.pdf"
 
 # Field positions (x, y) in points for Form 20 front page. Adjust if template layout differs.
 # Origin: top-left. y increases downward. Based on typical Form 20 layout.
@@ -274,34 +268,49 @@ def generate_form20_pdfs(
 
     data = _build_form20_data(customer, vehicle, vehicle_id, dealer_id)
 
-    # Prefer single official PDF (page 0=front, page 1=back); else use separate front/back templates
-    # Paths: env override, or Raw Scans/ relative to project root
-    _single_env = os.getenv("FORM20_TEMPLATE_SINGLE", "").strip()
-    _front_env = os.getenv("FORM20_TEMPLATE_FRONT", "").strip()
-    _back_env = os.getenv("FORM20_TEMPLATE_BACK", "").strip()
-    single_template = Path(_single_env).resolve() if _single_env else _FORM20_SINGLE_PATH.resolve()
-    front_template = Path(_front_env).resolve() if _front_env else _FORM20_FRONT_PATH.resolve()
-    back_template = Path(_back_env).resolve() if _back_env else _FORM20_BACK_PATH.resolve()
+    # Template paths: config first, then fallback using uploads_dir parent (project root)
+    uploads_path = Path(uploads_dir or UPLOADS_DIR).resolve()
+    project_root = uploads_path.parent  # Uploaded scans is under project root
+
+    single_template = Path(FORM20_TEMPLATE_SINGLE).resolve()
+    front_template = Path(FORM20_TEMPLATE_FRONT).resolve()
+    back_template = Path(FORM20_TEMPLATE_BACK).resolve()
+
+    # Fallback: if config paths don't exist, try Raw Scans relative to project root
+    if not single_template.exists():
+        fallback = project_root / "Raw Scans" / "Official FORM-20 english.pdf"
+        if fallback.exists():
+            single_template = fallback.resolve()
+    if not front_template.exists():
+        fallback = project_root / "Raw Scans" / "Form 20 Front.pdf"
+        if fallback.exists():
+            front_template = fallback.resolve()
+    if not back_template.exists():
+        fallback = project_root / "Raw Scans" / "Form 20 back.pdf"
+        if fallback.exists():
+            back_template = fallback.resolve()
 
     use_single = single_template.exists()
     use_separate = front_template.exists() and back_template.exists()
 
     logger.info(
-        "form20: template check single=%s exists=%s, separate front=%s back=%s",
+        "form20: single=%s exists=%s | front=%s exists=%s | back=%s exists=%s",
         single_template,
         use_single,
+        front_template,
         front_template.exists(),
+        back_template,
         back_template.exists(),
     )
 
     if not use_single and not use_separate:
-        logger.info("form20: PDF templates not found, using HTML fallback")
+        logger.warning("form20: No PDF templates found at %s or %s/%s. Using HTML fallback.", single_template, front_template, back_template)
         return _generate_form20_via_html(subfolder_path, data)
 
     try:
         import fitz  # noqa: F401
-    except ImportError:
-        logger.warning("form20: pymupdf (fitz) not installed, using HTML fallback. Install with: pip install pymupdf")
+    except ImportError as e:
+        logger.warning("form20: pymupdf not installed (%s). Using HTML fallback. Run: pip install pymupdf", e)
         return _generate_form20_via_html(subfolder_path, data)
 
     saved: list[str] = []
