@@ -30,7 +30,7 @@ FORM20_FIELD_POSITIONS = {
     "field_17_year_of_mfg": (120, 440),
     "field_18_num_cylinders": (120, 465),
     "field_19_horse_power": (120, 490),
-    "field_21_length": (120, 535),
+    "field_21_model": (120, 535),
     "field_22_chassis_no": (120, 560),
     "field_24_seating_capacity": (120, 605),
     "field_25_fuel_type": (120, 630),
@@ -182,8 +182,8 @@ def _build_form20_data(
     # Field 20: Cubic capacity (cc)
     data["field_20_cubic_capacity"] = _str(v.get("cubic_capacity"))
 
-    # Field 21: Length (mm)
-    data["field_21_length"] = _str(v.get("length_mm"))
+    # Field 21: Model
+    data["field_21_model"] = _str(v.get("model") or v.get("oem_name"))
 
     # Field 22: Chassis no.
     data["field_22_chassis_no"] = _str(v.get("chassis") or v.get("frame_num") or v.get("frame_no"))
