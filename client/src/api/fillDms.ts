@@ -135,7 +135,7 @@ export interface PrintForm20Response {
   error?: string | null;
 }
 
-/** Generate Form 20 (front + back) and save to Uploaded scans. Called from Print forms button. */
+/** Generate Form 20 (all pages) and save to Uploaded scans. Called from Print forms button. */
 export async function printForm20(req: PrintForm20Request): Promise<PrintForm20Response> {
   return apiFetch<PrintForm20Response>("/fill-dms/print-form20", {
     method: "POST",

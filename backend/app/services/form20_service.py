@@ -1,9 +1,9 @@
 """
-Generate Form 20 (front and back) from templates.
+Generate Form 20 (all pages) from templates.
 Prefer: Raw Scans/FORM 20.docx (Word) -> fill placeholders -> convert to PDF.
 Else: PDF overlay on Official FORM-20 or separate PDFs.
 Fallback: HTML-based generation.
-Saves Form 20 Front.pdf and Form 20 Back.pdf to Uploaded scans/subfolder.
+Saves Form 20.pdf (combined front, back, page 3) to Uploaded scans/subfolder.
 """
 import logging
 import re
@@ -122,9 +122,14 @@ def _build_form20_data(
         s = str(val).strip()
         return s if s else ""
 
-    # Field 1: Name and Care of
+    # Field 0: City (separate, for templates that use it)
+    data["field_0_city"] = _str(c.get("city"))
+
+    # Field 1: Name (separate) and Field 2: Care of (separate)
     name = _str(c.get("name"))
     care_of = _str(c.get("care_of"))
+    data["field_1_name"] = name
+    data["field_2_care_of"] = care_of
     if name and care_of:
         data["field_1_name_care_of"] = f"{name} S/O {care_of}"
     else:
@@ -174,6 +179,9 @@ def _build_form20_data(
     # Field 19: Horse power
     data["field_19_horse_power"] = _str(v.get("horse_power"))
 
+    # Field 20: Cubic capacity (cc)
+    data["field_20_cubic_capacity"] = _str(v.get("cubic_capacity"))
+
     # Field 21: Length (mm)
     data["field_21_length"] = _str(v.get("length_mm"))
 
@@ -196,26 +204,6 @@ def _build_form20_data(
     return data
 
 
-def _replace_in_paragraph(paragraph, replacements: dict[str, str]) -> bool:
-    """Replace {{key}} placeholders in a paragraph. Returns True if changed."""
-    full_text = paragraph.text
-    if "{{" not in full_text:
-        return False
-    new_text = full_text
-    for key, val in replacements.items():
-        new_text = new_text.replace("{{" + key + "}}", val or "\u2014")
-    if new_text == full_text:
-        return False
-    # Clear runs and set replaced text
-    for run in paragraph.runs:
-        run.text = ""
-    if paragraph.runs:
-        paragraph.runs[0].text = new_text
-    else:
-        paragraph.add_run(new_text)
-    return True
-
-
 def _fill_docx_template(docx_path: Path, data: dict[str, str], out_path: Path) -> None:
     """Fill {{placeholder}} in Word document and save."""
     from docx import Document
@@ -224,21 +212,36 @@ def _fill_docx_template(docx_path: Path, data: dict[str, str], out_path: Path) -
     replacements = {k: (v or "\u2014") for k, v in data.items()}
 
     for paragraph in doc.paragraphs:
-        _replace_in_paragraph(paragraph, replacements)
-
+        _simple_replace_paragraph(paragraph, replacements)
     for table in doc.tables:
         for row in table.rows:
             for cell in row.cells:
                 for paragraph in cell.paragraphs:
-                    _replace_in_paragraph(paragraph, replacements)
-
+                    _simple_replace_paragraph(paragraph, replacements)
     for section in doc.sections:
-        for header in section.header.paragraphs:
-            _replace_in_paragraph(header, replacements)
-        for footer in section.footer.paragraphs:
-            _replace_in_paragraph(footer, replacements)
+        for p in section.header.paragraphs:
+            _simple_replace_paragraph(p, replacements)
+        for p in section.footer.paragraphs:
+            _simple_replace_paragraph(p, replacements)
 
     doc.save(out_path)
+
+
+def _simple_replace_paragraph(paragraph, replacements: dict[str, str]) -> None:
+    """Simple replace when python-docx-replace not available. Uses normal font."""
+    full_text = paragraph.text
+    if "{{" not in full_text:
+        return
+    new_text = full_text
+    for key, val in replacements.items():
+        new_text = new_text.replace("{{" + key + "}}", val or "\u2014")
+    if new_text != full_text:
+        for run in paragraph.runs:
+            run.text = ""
+        if paragraph.runs:
+            paragraph.runs[0].text = new_text
+        else:
+            paragraph.add_run(new_text)
 
 
 def _docx_to_pdf(docx_path: Path, pdf_path: Path) -> None:
@@ -260,6 +263,13 @@ def _docx_to_pdf(docx_path: Path, pdf_path: Path) -> None:
     import subprocess
 
     libreoffice = shutil.which("soffice") or shutil.which("libreoffice")
+    if not libreoffice:
+        # Windows: check common install paths when not in PATH
+        for base in (Path("C:/Program Files/LibreOffice/program"), Path("C:/Program Files (x86)/LibreOffice/program")):
+            exe = base / "soffice.exe"
+            if exe.exists():
+                libreoffice = str(exe)
+                break
     if libreoffice:
         outdir = pdf_path.parent
         subprocess.run(
@@ -301,78 +311,86 @@ def _generate_form20_via_docx(
     subfolder_path: Path,
     data: dict[str, str],
 ) -> list[str]:
-    """Generate Form 20 from Word template: fill placeholders, convert to PDF, split into front/back."""
+    """Generate Form 20 from Word template: fill placeholders, convert to PDF (all pages)."""
+    import shutil
     import tempfile
+
+    # Copy template to temp file first (avoids Permission denied when original is open in Word/OneDrive)
+    with tempfile.NamedTemporaryFile(suffix=".docx", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+    try:
+        shutil.copy2(docx_template, tmp_path)
+        work_docx = tmp_path
+    except PermissionError:
+        tmp_path.unlink(missing_ok=True)
+        raise PermissionError(
+            f"Cannot read {docx_template}. Close the file if it's open in Word, and ensure OneDrive isn't locking it."
+        ) from None
 
     filled_docx = subfolder_path / "_form20_filled.docx"
     combined_pdf = subfolder_path / "_form20_combined.pdf"
-    front_out = subfolder_path / "Form 20 Front.pdf"
-    back_out = subfolder_path / "Form 20 Back.pdf"
+    form20_out = subfolder_path / "Form 20.pdf"
 
-    _fill_docx_template(docx_template, data, filled_docx)
-    _docx_to_pdf(filled_docx, combined_pdf)
+    try:
+        _fill_docx_template(work_docx, data, filled_docx)
+    finally:
+        work_docx.unlink(missing_ok=True)
+    try:
+        _docx_to_pdf(filled_docx, combined_pdf)
+    except RuntimeError as e:
+        logger.warning("form20: docx-to-PDF conversion failed (%s), falling back to HTML", e)
+        return _generate_form20_via_html(subfolder_path, data)
+    finally:
+        filled_docx.unlink(missing_ok=True)
 
-    # Split into front (page 0) and back (page 1)
-    _split_pdf_pages(combined_pdf, [front_out, back_out])
+    # Keep all pages (front, back, page 3) as one combined PDF
+    combined_pdf.rename(form20_out)
 
-    # Cleanup temp files
-    filled_docx.unlink(missing_ok=True)
-    combined_pdf.unlink(missing_ok=True)
-
-    logger.info("form20: saved %s and %s (from Word template)", front_out, back_out)
-    return ["Form 20 Front.pdf", "Form 20 Back.pdf"]
+    logger.info("form20: saved %s (from Word template, all pages)", form20_out)
+    return ["Form 20.pdf"]
 
 
-def _overlay_on_pdf(
+def _overlay_on_page(
+    page,
+    data: dict[str, str],
+    field_positions: dict[str, tuple[float, float]],
+    fontsize: float = 10,
+    footer_y: float = 820,
+) -> None:
+    """Overlay form data and footer on a single PDF page."""
+    for key, (x, y) in field_positions.items():
+        val = data.get(key)
+        if val and key != "footer_text":
+            text = str(val)[:80] if len(str(val)) > 80 else str(val)
+            page.insert_text((x, y), text, fontsize=fontsize, fontname="helv", color=(0, 0, 0), overlay=True)
+    footer = data.get("footer_text", "")
+    if footer:
+        page.insert_text((42, footer_y), footer, fontsize=8, fontname="helv", color=(0, 0, 0), overlay=True)
+
+
+def _overlay_all_pages(
     template_path: Path,
     out_path: Path,
     data: dict[str, str],
     field_positions: dict[str, tuple[float, float]],
     fontsize: float = 10,
     footer_y: float = 820,
-    page_index: int = 0,
 ) -> None:
-    """Overlay form data on a PDF template. Adds footer at bottom left."""
+    """Overlay form data on page 0, footer on all pages. Saves combined PDF."""
     import fitz
 
     if not template_path.exists():
         raise FileNotFoundError(f"Form 20 template not found: {template_path}")
 
     doc = fitz.open(template_path)
-    if doc.page_count <= page_index:
+    try:
+        for i in range(doc.page_count):
+            page = doc[i]
+            positions = field_positions if i == 0 else {}
+            _overlay_on_page(page, data, positions, fontsize, footer_y)
+        doc.save(str(out_path))
+    finally:
         doc.close()
-        raise ValueError(f"Template has no page {page_index}: {template_path}")
-
-    page = doc[page_index]
-    # Overlay text above existing content
-    for key, (x, y) in field_positions.items():
-        val = data.get(key)
-        if val and key != "footer_text":
-            # Truncate long text to fit; insert_text doesn't wrap
-            text = str(val)[:80] if len(str(val)) > 80 else str(val)
-            page.insert_text(
-                (x, y),
-                text,
-                fontsize=fontsize,
-                fontname="helv",
-                color=(0, 0, 0),
-                overlay=True,
-            )
-
-    # Footer: left side, 10pt
-    footer = data.get("footer_text", "")
-    if footer:
-        page.insert_text(
-            (42, footer_y),
-            footer,
-            fontsize=10,
-            fontname="helv",
-            color=(0, 0, 0),
-            overlay=True,
-        )
-
-    doc.save(str(out_path))
-    doc.close()
 
 
 def generate_form20_pdfs(
@@ -384,8 +402,8 @@ def generate_form20_pdfs(
     uploads_dir: Path | None = None,
 ) -> list[str]:
     """
-    Generate Form 20 Front.pdf and Form 20 Back.pdf by overlaying data on blank templates.
-    Uses Raw Scans/Form 20 Front.pdf and Form 20 back.pdf. Saves to Uploaded scans/subfolder.
+    Generate Form 20.pdf (combined front, back, page 3) by overlaying data on templates.
+    Uses Raw Scans/FORM 20.docx, or Official FORM-20, or Form 20 Front/back PDFs. Saves to Uploaded scans/subfolder.
     """
     import re
 
@@ -400,11 +418,9 @@ def generate_form20_pdfs(
     uploads_path = Path(uploads_dir or UPLOADS_DIR).resolve()
     project_root = uploads_path.parent
 
-    docx_template = Path(FORM20_TEMPLATE_DOCX).resolve()
+    docx_template = project_root / "Raw Scans" / "FORM 20.docx"
     if not docx_template.exists():
-        docx_template = project_root / "Raw Scans" / "FORM 20.docx"
-        if docx_template.exists():
-            docx_template = docx_template.resolve()
+        docx_template = Path(FORM20_TEMPLATE_DOCX).resolve()
 
     single_template = Path(FORM20_TEMPLATE_SINGLE).resolve()
     front_template = Path(FORM20_TEMPLATE_FRONT).resolve()
@@ -434,12 +450,9 @@ def generate_form20_pdfs(
         use_separate,
     )
 
-    # Prefer Word template
+    # Prefer Word template - do not fall back on failure so user sees the actual error
     if use_docx:
-        try:
-            return _generate_form20_via_docx(docx_template, subfolder_path, data)
-        except Exception as e:
-            logger.warning("form20: Word template failed: %s. Falling back to PDF/HTML.", e)
+        return _generate_form20_via_docx(docx_template, subfolder_path, data)
 
     if not use_single and not use_separate:
         logger.warning("form20: No PDF templates found at %s or %s/%s. Using HTML fallback.", single_template, front_template, back_template)
@@ -451,70 +464,48 @@ def generate_form20_pdfs(
         logger.warning("form20: pymupdf not installed (%s). Using HTML fallback. Run: pip install pymupdf", e)
         return _generate_form20_via_html(subfolder_path, data)
 
-    saved: list[str] = []
+    form20_out = subfolder_path / "Form 20.pdf"
 
     if use_single:
-        # Official FORM-20: page 0 = front, page 1 = back
-        front_out = subfolder_path / "Form 20 Front.pdf"
+        # Official FORM-20: overlay on all pages (front, back, page 3 if present)
         try:
-            _overlay_on_pdf(
+            _overlay_all_pages(
                 single_template,
-                front_out,
+                form20_out,
                 data,
                 FORM20_FIELD_POSITIONS,
                 fontsize=10,
                 footer_y=820,
-                page_index=0,
             )
-            saved.append("Form 20 Front.pdf")
-            logger.info("form20: saved %s (from Official FORM-20 page 0)", front_out)
+            logger.info("form20: saved %s (from Official FORM-20, all pages)", form20_out)
         except Exception as e:
-            logger.warning("form20: PDF generation failed for front: %s", e)
-            raise
-
-        back_out = subfolder_path / "Form 20 Back.pdf"
-        try:
-            _overlay_on_pdf(
-                single_template,
-                back_out,
-                data,
-                {},
-                fontsize=10,
-                footer_y=820,
-                page_index=1,
-            )
-            saved.append("Form 20 Back.pdf")
-            logger.info("form20: saved %s (from Official FORM-20 page 1)", back_out)
-        except Exception as e:
-            logger.warning("form20: PDF generation failed for back: %s", e)
+            logger.warning("form20: PDF generation failed: %s", e)
             raise
     else:
-        # Separate front and back templates
-        front_out = subfolder_path / "Form 20 Front.pdf"
-        _overlay_on_pdf(
-            front_template,
-            front_out,
-            data,
-            FORM20_FIELD_POSITIONS,
-            fontsize=10,
-            footer_y=820,
-        )
-        saved.append("Form 20 Front.pdf")
-        logger.info("form20: saved %s", front_out)
+        # Separate front and back templates: overlay each, merge with optional page 3
+        front_tmp = subfolder_path / "_form20_pdf_front.pdf"
+        back_tmp = subfolder_path / "_form20_pdf_back.pdf"
+        _overlay_all_pages(front_template, front_tmp, data, FORM20_FIELD_POSITIONS, fontsize=10, footer_y=820)
+        _overlay_all_pages(back_template, back_tmp, data, {}, fontsize=10, footer_y=820)
 
-        back_out = subfolder_path / "Form 20 Back.pdf"
-        _overlay_on_pdf(
-            back_template,
-            back_out,
-            data,
-            {},
-            fontsize=10,
-            footer_y=820,
-        )
-        saved.append("Form 20 Back.pdf")
-        logger.info("form20: saved %s", back_out)
+        page3_template = project_root / "Raw Scans" / "Form 20 page 3.pdf"
+        if not page3_template.exists():
+            page3_template = project_root / "Raw Scans" / "Form 20 Page 3.pdf"
+        to_merge = [front_tmp, back_tmp]
+        if page3_template.exists():
+            page3_tmp = subfolder_path / "_form20_pdf_page3.pdf"
+            _overlay_all_pages(page3_template, page3_tmp, data, {}, fontsize=10, footer_y=820)
+            to_merge.append(page3_tmp)
 
-    return saved
+        merged = fitz.open()
+        for p in to_merge:
+            merged.insert_pdf(fitz.open(p), from_page=0, to_page=-1)
+            p.unlink(missing_ok=True)
+        merged.save(str(form20_out))
+        merged.close()
+        logger.info("form20: saved %s (from separate templates, %d pages)", form20_out, len(to_merge))
+
+    return ["Form 20.pdf"]
 
 
 def _generate_form20_via_html(
@@ -524,21 +515,39 @@ def _generate_form20_via_html(
     """Fallback: generate Form 20 using HTML templates when PDF templates are missing."""
     front_html = (TEMPLATES_DIR / "form20_front.html").read_text(encoding="utf-8")
     back_html = (TEMPLATES_DIR / "form20_back.html").read_text(encoding="utf-8")
+    page3_html = (TEMPLATES_DIR / "form20_page3.html").read_text(encoding="utf-8")
     for key, val in data.items():
         front_html = front_html.replace("{{" + key + "}}", val or "\u2014")
         back_html = back_html.replace("{{" + key + "}}", val or "\u2014")
+        page3_html = page3_html.replace("{{" + key + "}}", val or "\u2014")
     front_html = re.sub(r"\{\{[^}]+\}\}", "\u2014", front_html)
     back_html = re.sub(r"\{\{[^}]+\}\}", "\u2014", back_html)
+    page3_html = re.sub(r"\{\{[^}]+\}\}", "\u2014", page3_html)
 
     from xhtml2pdf import pisa
 
-    saved = []
-    for html, out_name in [(front_html, "Form 20 Front.pdf"), (back_html, "Form 20 Back.pdf")]:
-        out_path = subfolder_path / out_name
-        with open(out_path, "w+b") as dest:
+    temp_pdfs = [
+        subfolder_path / "_form20_html_front.pdf",
+        subfolder_path / "_form20_html_back.pdf",
+        subfolder_path / "_form20_html_page3.pdf",
+    ]
+    for html, pdf_path in [(front_html, temp_pdfs[0]), (back_html, temp_pdfs[1]), (page3_html, temp_pdfs[2])]:
+        with open(pdf_path, "w+b") as dest:
             status = pisa.CreatePDF(html, dest=dest, encoding="utf-8")
         if status.err:
+            for p in temp_pdfs:
+                p.unlink(missing_ok=True)
             raise RuntimeError(f"xhtml2pdf error: {status.err}")
-        saved.append(out_name)
-        logger.info("form20: saved %s (HTML fallback)", out_path)
-    return saved
+
+    # Merge into one Form 20.pdf
+    import fitz
+    out_path = subfolder_path / "Form 20.pdf"
+    merged = fitz.open()
+    for p in temp_pdfs:
+        merged.insert_pdf(fitz.open(p), from_page=0, to_page=-1)
+        p.unlink(missing_ok=True)
+    merged.save(str(out_path))
+    merged.close()
+
+    logger.info("form20: saved %s (HTML fallback, 3 pages)", out_path)
+    return ["Form 20.pdf"]

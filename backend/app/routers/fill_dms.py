@@ -285,7 +285,7 @@ def form20_status() -> dict:
 
 @router.post("/print-form20", response_model=PrintForm20Response)
 async def print_form20(req: PrintForm20Request) -> PrintForm20Response:
-    """Generate Form 20 (front + back) and save to Uploaded scans/subfolder. Called from Print forms button."""
+    """Generate Form 20 (all pages) and save to Uploaded scans/subfolder. Called from Print forms button."""
     uploads_dir = Path(UPLOADS_DIR)
     if not uploads_dir.is_dir():
         raise HTTPException(status_code=500, detail="Uploads directory not found")
