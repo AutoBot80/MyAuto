@@ -1,19 +1,27 @@
 """
 Generate Form 20 (front and back) by overlaying filled data on blank PDF templates.
-Uses Raw Scans/Form 20 Front.pdf and Form 20 back.pdf as backgrounds.
+Uses Raw Scans/Official FORM-20 english.pdf (page 0=front, page 1=back) or separate PDFs.
 If templates are missing, falls back to HTML-based generation.
 Saves Form 20 Front.pdf and Form 20 Back.pdf to Uploaded scans/subfolder.
 """
 import logging
+import os
 import re
 from pathlib import Path
 from typing import Any
 
-from app.config import UPLOADS_DIR, FORM20_TEMPLATE_FRONT, FORM20_TEMPLATE_BACK, FORM20_TEMPLATE_SINGLE
+from app.config import UPLOADS_DIR
 
 logger = logging.getLogger(__name__)
 
-TEMPLATES_DIR = Path(__file__).resolve().parent.parent.parent / "templates"
+# Project root (parent of backend/)
+_BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
+_PROJECT_ROOT = _BACKEND_DIR.parent
+TEMPLATES_DIR = _BACKEND_DIR / "templates"
+# Form 20 PDF templates - resolve to absolute paths (Raw Scans is next to backend/)
+_FORM20_SINGLE_PATH = _PROJECT_ROOT / "Raw Scans" / "Official FORM-20 english.pdf"
+_FORM20_FRONT_PATH = _PROJECT_ROOT / "Raw Scans" / "Form 20 Front.pdf"
+_FORM20_BACK_PATH = _PROJECT_ROOT / "Raw Scans" / "Form 20 back.pdf"
 
 # Field positions (x, y) in points for Form 20 front page. Adjust if template layout differs.
 # Origin: top-left. y increases downward. Based on typical Form 20 layout.
@@ -267,12 +275,24 @@ def generate_form20_pdfs(
     data = _build_form20_data(customer, vehicle, vehicle_id, dealer_id)
 
     # Prefer single official PDF (page 0=front, page 1=back); else use separate front/back templates
-    single_template = Path(FORM20_TEMPLATE_SINGLE)
-    front_template = Path(FORM20_TEMPLATE_FRONT)
-    back_template = Path(FORM20_TEMPLATE_BACK)
+    # Paths: env override, or Raw Scans/ relative to project root
+    _single_env = os.getenv("FORM20_TEMPLATE_SINGLE", "").strip()
+    _front_env = os.getenv("FORM20_TEMPLATE_FRONT", "").strip()
+    _back_env = os.getenv("FORM20_TEMPLATE_BACK", "").strip()
+    single_template = Path(_single_env).resolve() if _single_env else _FORM20_SINGLE_PATH.resolve()
+    front_template = Path(_front_env).resolve() if _front_env else _FORM20_FRONT_PATH.resolve()
+    back_template = Path(_back_env).resolve() if _back_env else _FORM20_BACK_PATH.resolve()
 
     use_single = single_template.exists()
     use_separate = front_template.exists() and back_template.exists()
+
+    logger.info(
+        "form20: template check single=%s exists=%s, separate front=%s back=%s",
+        single_template,
+        use_single,
+        front_template.exists(),
+        back_template.exists(),
+    )
 
     if not use_single and not use_separate:
         logger.info("form20: PDF templates not found, using HTML fallback")
