@@ -39,7 +39,7 @@ export function BulkLoadsPage({ onNavigateToAddSales }: BulkLoadsPageProps) {
     document.addEventListener("visibilitychange", onVisible);
     const interval = setInterval(() => {
       if (document.visibilityState === "visible") fetchRows();
-    }, 3000);
+    }, 10000);
     return () => {
       document.removeEventListener("visibilitychange", onVisible);
       clearInterval(interval);

@@ -68,9 +68,6 @@ class BulkLoadsRepository:
             if subfolder is not None:
                 updates.append("subfolder = %s")
                 params.append(subfolder)
-            if result_folder is not None:
-                updates.append("result_folder = %s")
-                params.append(result_folder)
             params.append(id)
             cur.execute(
                 f"UPDATE {BulkLoadsRepository.TABLE_NAME} SET {', '.join(updates)} WHERE id = %s",

@@ -214,27 +214,65 @@ def _process_one(scans_pdf: Path, marker: Path | None = None) -> bool:
 
 
 def _find_pending_pdf(scans_dir: Path) -> Path | None:
-    """Find a Scans.pdf or Scan*.pdf to process. Checks subfolders first, then files directly in Scans."""
-    # 1) Subfolders: Scans/<subfolder>/Scans.pdf
-    for subdir in sorted(scans_dir.iterdir()):
-        if not subdir.is_dir():
-            continue
+    """Find a Scans.pdf or Scan*.pdf to process. Oldest first. Checks subfolders first, then files directly in Scans."""
+    # 1) Subfolders: Scans/<subfolder>/Scans.pdf — sort by mtime (oldest first)
+    subdirs = [d for d in scans_dir.iterdir() if d.is_dir()]
+    for subdir in sorted(subdirs, key=lambda p: p.stat().st_mtime):
         pdf_path = subdir / "Scans.pdf"
         if pdf_path.exists() and not (subdir / ".processed").exists():
             return pdf_path
-    # 2) Files directly in Scans: Scans/Scan1.pdf, Scans.pdf, etc.
-    for f in sorted(scans_dir.iterdir()):
-        if f.is_file() and f.suffix.lower() == ".pdf":
-            if f.stem.lower().startswith("scan"):
-                marker = scans_dir / f".processed_{f.name}"
-                if not marker.exists():
-                    return f
+    # 2) Files directly in Scans: Scans/Scan1.pdf, etc. — sort by mtime (oldest first)
+    pdf_files = [
+        f for f in scans_dir.iterdir()
+        if f.is_file() and f.suffix.lower() == ".pdf" and f.stem.lower().startswith("scan")
+    ]
+    for f in sorted(pdf_files, key=lambda p: p.stat().st_mtime):
+        marker = scans_dir / f".processed_{f.name}"
+        if not marker.exists():
+            return f
     return None
+
+
+# Consider Processing stale after this many seconds (allows recovery from crashed runs)
+PROCESSING_STALE_SEC = 900  # 15 minutes
+
+
+def _has_processing_in_progress() -> bool:
+    """Return True if any bulk_loads row has status Processing and is not stale (don't start another)."""
+    conn = get_connection()
+    try:
+        rows = BulkLoadsRepository.list_all(conn, limit=10, status_filter="Processing")
+        if not rows:
+            return False
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        for r in rows:
+            updated = r.get("updated_at")
+            if updated:
+                if isinstance(updated, str):
+                    try:
+                        updated = datetime.fromisoformat(updated.replace("Z", "+00:00"))
+                    except ValueError:
+                        continue
+                if updated.tzinfo is None:
+                    updated = updated.replace(tzinfo=timezone.utc)
+                age_sec = (now - updated).total_seconds()
+                if age_sec < PROCESSING_STALE_SEC:
+                    return True  # Recent Processing, wait
+        return False  # All stale or no updated_at
+    except Exception:
+        return True  # On error, assume in progress to be safe
+    finally:
+        conn.close()
 
 
 def _watcher_loop() -> None:
     while not _watcher_stop.is_set():
         try:
+            # Don't start new work if something is already in Processing (prevents queue buildup)
+            if _has_processing_in_progress():
+                _watcher_stop.wait(timeout=POLL_INTERVAL_SEC)
+                continue
             scans_dir = BULK_UPLOAD_DIR / "Scans"
             if scans_dir.is_dir():
                 pdf_path = _find_pending_pdf(scans_dir)
