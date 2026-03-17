@@ -38,8 +38,8 @@ type AppMode = "home" | "pos" | "service" | "rto" | "dealer";
 
 const POS_PAGES: Page[] = [
   "add-sales",
-  "bulk-loads",
   "customer-details",
+  "bulk-loads",
   "rto-status",
   "contact-us",
 ];
@@ -118,7 +118,7 @@ function App() {
           />
         );
       case "bulk-loads":
-        return <BulkLoadsPage />;
+        return <BulkLoadsPage onNavigateToAddSales={() => setPage("add-sales")} />;
       case "customer-details":
         return <ViewCustomerPage />;
       case "rto-status":

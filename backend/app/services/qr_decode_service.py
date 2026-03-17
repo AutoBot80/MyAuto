@@ -126,6 +126,7 @@ UIDAI_FIELD_MAP: dict[str, list[str]] = {
     "sub_district": ["subdist", "subdistrict", "poa.subdist", "sub_district", "tehsil", "printletterbarcodedata.subdist"],
     "state": ["state", "st", "poa.state", "printletterbarcodedata.state"],
     "pin_code": ["pc", "pincode", "pin", "poa.pc", "pin_code", "printletterbarcodedata.pc"],
+    "mobile": ["mobile", "mobileno", "phone", "tel", "ph", "mobile_number", "contact", "m"],
 }
 
 

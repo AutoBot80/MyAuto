@@ -1,5 +1,7 @@
 """
-File watcher for Bulk Upload/Scans. When Scans.pdf appears, process it and record in bulk_loads.
+File watcher for Bulk Upload/Scans. When Scans.pdf appears, copy to Processing,
+run pre-OCR (Tesseract/Textract) to extract mobile, rename to mobile.pdf if found,
+then process and record in bulk_loads.
 """
 
 import logging
@@ -7,10 +9,15 @@ import threading
 import time
 from pathlib import Path
 
-from app.config import BULK_UPLOAD_DIR
+from app.config import BULK_UPLOAD_DIR, BULK_PRE_OCR_USE_TEXTRACT
 from app.db import get_connection
 from app.repositories.bulk_loads import BulkLoadsRepository
 from app.services.bulk_upload_service import process_new_scans_and_record
+from app.services.pre_ocr_service import (
+    run_pre_ocr_and_prepare,
+    move_processing_to_success_or_error,
+    PROCESSING_DIR,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -20,41 +27,209 @@ _watcher_thread: threading.Thread | None = None
 _watcher_stop = threading.Event()
 
 
-def _process_one(scans_pdf: Path) -> bool:
-    """Process one Scans.pdf and mark folder with .processed. Returns True if processed."""
-    subfolder = scans_pdf.parent.name
-    marker = scans_pdf.parent / ".processed"
+def _move_to_error_on_exception(original_filename_stem: str, original_scan_path: Path | None = None) -> str:
+    """When pre-OCR raises, move original from Scans and Processing PDF/pre-OCR to Error. Returns result_folder path."""
+    from app.services.pre_ocr_service import ERROR_DIR
+    from datetime import datetime
+    import shutil
+
+    ddmmyyyy = datetime.now().strftime("%d%m%Y")
+    dest_subdir = f"{original_filename_stem}_{ddmmyyyy}"
+    dest_dir = ERROR_DIR / dest_subdir
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    result_folder = f"Error/{dest_subdir}"
+
+    # Move original scan from Scans folder first
+    if original_scan_path and original_scan_path.exists():
+        shutil.move(str(original_scan_path), str(dest_dir / original_scan_path.name))
+        logger.info("Moved original scan %s -> %s", original_scan_path.name, dest_dir)
+
+    # Move PDF and classified dir (if any) and pre-OCR from Processing
+    pdf_file = PROCESSING_DIR / f"{original_filename_stem}.pdf"
+    if pdf_file.exists():
+        shutil.move(str(pdf_file), str(dest_dir / pdf_file.name))
+        logger.info("Moved %s -> %s", pdf_file.name, dest_dir)
+    classified_dir = PROCESSING_DIR / f"classified_{original_filename_stem}"
+    if classified_dir.is_dir():
+        for f in classified_dir.iterdir():
+            if f.is_file():
+                shutil.move(str(f), str(dest_dir / f.name))
+                logger.info("Moved %s -> %s", f.name, dest_dir)
+        try:
+            classified_dir.rmdir()
+        except OSError:
+            pass
+    for f in PROCESSING_DIR.glob(f"{original_filename_stem}_*_pre_ocr.txt"):
+        if f.is_file():
+            shutil.move(str(f), str(dest_dir / f.name))
+            logger.info("Moved %s -> %s", f.name, dest_dir)
+
+    return result_folder
+
+
+def _process_one(scans_pdf: Path, marker: Path | None = None) -> bool:
+    """Process one Scans.pdf and mark with .processed. Returns True if processed."""
+    if marker is None:
+        marker = scans_pdf.parent / ".processed"
     if marker.exists():
         return False
+    scans_dir = BULK_UPLOAD_DIR / "Scans"
+    initial_subfolder = scans_pdf.stem if scans_pdf.parent == scans_dir else scans_pdf.parent.name
 
     conn = get_connection()
     try:
         BulkLoadsRepository.ensure_table(conn)
         row = BulkLoadsRepository.insert(
             conn,
-            subfolder=subfolder,
-            status="pending",
-            folder_path=str(scans_pdf.parent),
+            subfolder=initial_subfolder,
+            file_name=scans_pdf.name,
+            status="Processing",
+            folder_path=initial_subfolder,
         )
         conn.commit()
         bulk_load_id = row["id"]
     finally:
         conn.close()
 
+    # Mark as in-progress immediately to prevent duplicate processing
+    marker.touch()
+
     try:
-        process_new_scans_and_record(bulk_load_id, scans_pdf, dealer_id=DEALER_ID)
-        marker.touch()
+        # Pre-OCR: copy to Processing, run OCR, save as filename_ddmmyyyy_pre_ocr.txt,
+        # extract mobile. Mobile is required for Add Customer - do not proceed without it.
+        PROCESSING_DIR.mkdir(parents=True, exist_ok=True)
+        try:
+            classified_dir, subfolder, mobile, ocr_path = run_pre_ocr_and_prepare(
+                scans_pdf,
+                processing_dir=PROCESSING_DIR,
+                use_textract=BULK_PRE_OCR_USE_TEXTRACT,
+            )
+        except Exception as e:
+            logger.exception("bulk_watcher: pre-OCR failed for %s", scans_pdf)
+            conn = get_connection()
+            try:
+                BulkLoadsRepository.update_status(conn, bulk_load_id, "Error", error_message=f"Pre-OCR failed: {e}")
+                conn.commit()
+            finally:
+                conn.close()
+            # Move to Error: Processing PDF/pre-OCR and original from Scans
+            result_folder = _move_to_error_on_exception(scans_pdf.stem, original_scan_path=scans_pdf)
+            conn = get_connection()
+            try:
+                BulkLoadsRepository.update_status(conn, bulk_load_id, "Error", result_folder=result_folder)
+                conn.commit()
+            finally:
+                conn.close()
+            if marker.exists():
+                marker.unlink()
+            return True
+
+        if not mobile:
+            # Mobile is critical for Add Customer - stop and report error
+            conn = get_connection()
+            try:
+                BulkLoadsRepository.update_status(
+                    conn, bulk_load_id, "Error",
+                    error_message="Mobile number not found in pre-OCR. Add Customer requires mobile.",
+                    folder_path=subfolder,
+                    subfolder=subfolder,
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            result_folder = move_processing_to_success_or_error(
+                classified_dir, ocr_path, scans_pdf.stem, None, success=False,
+                original_scan_path=scans_pdf,
+            )
+            conn = get_connection()
+            try:
+                BulkLoadsRepository.update_status(conn, bulk_load_id, "Error", result_folder=result_folder)
+                conn.commit()
+            finally:
+                conn.close()
+            if marker.exists():
+                marker.unlink()
+            return True
+
+        # Update bulk_loads with final subfolder (mobile_ddmmyy)
+        conn = get_connection()
+        try:
+            BulkLoadsRepository.update_status(conn, bulk_load_id, "Processing", folder_path=subfolder, subfolder=subfolder, mobile=mobile)
+            conn.commit()
+        finally:
+            conn.close()
+
+        ok = process_new_scans_and_record(
+            bulk_load_id,
+            classified_dir,
+            dealer_id=DEALER_ID,
+            subfolder_override=subfolder,
+        )
+        result_folder = move_processing_to_success_or_error(
+            classified_dir, ocr_path, scans_pdf.stem, mobile, success=ok,
+            original_scan_path=scans_pdf,
+        )
+        conn = get_connection()
+        try:
+            BulkLoadsRepository.update_result_folder(conn, bulk_load_id, result_folder)
+            conn.commit()
+        finally:
+            conn.close()
+        if marker.exists():
+            marker.unlink()
         return True
     except Exception as e:
         logger.exception("bulk_watcher: process failed for %s", scans_pdf)
-        from app.db import get_connection
         conn = get_connection()
         try:
             BulkLoadsRepository.update_status(conn, bulk_load_id, "Error", error_message=str(e))
             conn.commit()
         finally:
             conn.close()
+        # Move to Error (original from Scans, classified dir or PDF, pre-OCR)
+        try:
+            classified_dir = PROCESSING_DIR / f"classified_{scans_pdf.stem}"
+            processing_path = classified_dir if classified_dir.is_dir() else next((f for f in PROCESSING_DIR.glob("*.pdf") if f.is_file()), None)
+            ocr_in_proc = next(PROCESSING_DIR.glob(f"{scans_pdf.stem}_*_pre_ocr.txt"), None)
+            if processing_path or ocr_in_proc or scans_pdf.exists():
+                result_folder = move_processing_to_success_or_error(
+                    processing_path,
+                    ocr_in_proc,
+                    scans_pdf.stem,
+                    None,
+                    success=False,
+                    original_scan_path=scans_pdf,
+                )
+                conn = get_connection()
+                try:
+                    BulkLoadsRepository.update_status(conn, bulk_load_id, "Error", result_folder=result_folder)
+                    conn.commit()
+                finally:
+                    conn.close()
+        except Exception as move_err:
+            logger.warning("Failed to move to Error: %s", move_err)
+        if marker.exists():
+            marker.unlink()
         return True  # Consider it processed so we don't retry
+
+
+def _find_pending_pdf(scans_dir: Path) -> Path | None:
+    """Find a Scans.pdf or Scan*.pdf to process. Checks subfolders first, then files directly in Scans."""
+    # 1) Subfolders: Scans/<subfolder>/Scans.pdf
+    for subdir in sorted(scans_dir.iterdir()):
+        if not subdir.is_dir():
+            continue
+        pdf_path = subdir / "Scans.pdf"
+        if pdf_path.exists() and not (subdir / ".processed").exists():
+            return pdf_path
+    # 2) Files directly in Scans: Scans/Scan1.pdf, Scans.pdf, etc.
+    for f in sorted(scans_dir.iterdir()):
+        if f.is_file() and f.suffix.lower() == ".pdf":
+            if f.stem.lower().startswith("scan"):
+                marker = scans_dir / f".processed_{f.name}"
+                if not marker.exists():
+                    return f
+    return None
 
 
 def _watcher_loop() -> None:
@@ -62,13 +237,11 @@ def _watcher_loop() -> None:
         try:
             scans_dir = BULK_UPLOAD_DIR / "Scans"
             if scans_dir.is_dir():
-                for subdir in scans_dir.iterdir():
-                    if not subdir.is_dir():
-                        continue
-                    pdf_path = subdir / "Scans.pdf"
-                    if pdf_path.exists() and not (subdir / ".processed").exists():
-                        _process_one(pdf_path)
-                        break  # Process one at a time
+                pdf_path = _find_pending_pdf(scans_dir)
+                if pdf_path:
+                    marker = (scans_dir / f".processed_{pdf_path.name}") if pdf_path.parent == scans_dir else (pdf_path.parent / ".processed")
+                    _process_one(pdf_path, marker=marker)
+                    break  # Process one at a time
         except Exception as e:
             logger.exception("bulk_watcher: loop error: %s", e)
         _watcher_stop.wait(timeout=POLL_INTERVAL_SEC)

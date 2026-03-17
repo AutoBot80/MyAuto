@@ -4,9 +4,11 @@
 CREATE TABLE IF NOT EXISTS bulk_loads (
     id SERIAL PRIMARY KEY,
     subfolder VARCHAR(128) NOT NULL,
+    file_name VARCHAR(256),
     mobile VARCHAR(16),
     name VARCHAR(128),
     folder_path VARCHAR(512),
+    result_folder VARCHAR(512),
     status VARCHAR(32) NOT NULL DEFAULT 'pending',
     error_message TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),

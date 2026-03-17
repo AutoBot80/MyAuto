@@ -1,8 +1,13 @@
 """
-Bulk upload processing: split combined PDF, classify pages, run Add Sales flow.
-Order in combined PDF: Aadhar_back, Insurance, Aadhar, Details (same as merge_scans).
+Bulk upload processing: classify pages by pre-OCR, split into logical files, run Add Sales flow.
+
+Pages can be in any order. Pre-OCR text classifies each page (Aadhar, Aadhar_back,
+Details, Insurance). Unrecognized pages go to unused.pdf. Split files are written
+to Uploaded scans/<subfolder>/. The OCR service and submit_info read these
+(Aadhar.jpg for QR/customer, Details.jpg for vehicle/insurance, etc.).
 """
 import logging
+import shutil
 from pathlib import Path
 
 from app.config import (
@@ -17,8 +22,26 @@ from app.repositories.bulk_loads import BulkLoadsRepository
 
 logger = logging.getLogger(__name__)
 
-# Page order in combined PDF (matches merge_scans MERGE_ORDER)
-PAGE_TO_FILENAME = ["Aadhar_back.jpg", "Insurance.jpg", "Aadhar.jpg", "Details.jpg"]
+# Expected filenames from page classification (order no longer fixed)
+CLASSIFIED_FILENAMES = ["Aadhar_back.jpg", "Insurance.jpg", "Aadhar.jpg", "Details.jpg"]
+
+
+def _copy_classified_to_uploads(classified_dir: Path, uploads_subdir: Path) -> list[Path]:
+    """Copy pre-classified images from Processing to uploads subfolder. Returns list of copied paths."""
+    copied: list[Path] = []
+    for name in CLASSIFIED_FILENAMES:
+        src = classified_dir / name
+        if src.exists():
+            dst = uploads_subdir / name
+            shutil.copy2(str(src), str(dst))
+            copied.append(dst)
+    # Also copy unused.pdf if present (for operator reference)
+    unused_src = classified_dir / "unused.pdf"
+    if unused_src.exists():
+        dst = uploads_subdir / "unused.pdf"
+        shutil.copy2(str(unused_src), str(dst))
+        copied.append(dst)
+    return copied
 
 
 def _split_pdf_to_images(pdf_path: Path, out_dir: Path) -> list[Path]:
@@ -30,11 +53,11 @@ def _split_pdf_to_images(pdf_path: Path, out_dir: Path) -> list[Path]:
     doc = fitz.open(str(pdf_path))
     saved: list[Path] = []
     try:
-        for i in range(min(doc.page_count, len(PAGE_TO_FILENAME))):
+        for i in range(min(doc.page_count, len(CLASSIFIED_FILENAMES))):
             page = doc[i]
             pix = page.get_pixmap(dpi=150)
             img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-            out_path = out_dir / PAGE_TO_FILENAME[i]
+            out_path = out_dir / (CLASSIFIED_FILENAMES[i] if i < len(CLASSIFIED_FILENAMES) else f"page_{i}.jpg")
             img.save(out_path, "JPEG", quality=90)
             saved.append(out_path)
     finally:
@@ -54,21 +77,38 @@ def _extract_mobile_from_subfolder(subfolder: str) -> str | None:
     return None
 
 
-def process_bulk_pdf(scans_pdf_path: Path, dealer_id: int = 100001) -> dict:
+def process_bulk_pdf(
+    source_path: Path,
+    dealer_id: int = 100001,
+    subfolder_override: str | None = None,
+) -> dict:
     """
-    Process a combined Scans.pdf: split, save to Uploaded scans, run OCR, submit info, fill DMS, print forms.
+    Process bulk upload: copy classified files or split PDF, run OCR, submit info, fill DMS, print forms.
+    source_path: either a directory with pre-classified files (Aadhar.jpg, etc.) or a PDF to split by position.
     Returns {ok, subfolder, mobile, name, error}.
+    subfolder_override: if set, use this for uploads dir (e.g. mobile_ddmmyy from pre-OCR).
     """
-    subfolder = scans_pdf_path.parent.name
+    subfolder = subfolder_override or (source_path.parent.name if source_path.is_file() else source_path.name)
     mobile = _extract_mobile_from_subfolder(subfolder)
     uploads_subdir = Path(UPLOADS_DIR) / subfolder
     uploads_subdir.mkdir(parents=True, exist_ok=True)
 
     try:
-        # 1. Split PDF to images
-        saved = _split_pdf_to_images(scans_pdf_path, uploads_subdir)
-        if not saved:
-            return {"ok": False, "subfolder": subfolder, "mobile": mobile, "error": "No pages in PDF"}
+        # 1. Copy classified files or split PDF to images
+        if source_path.is_dir():
+            saved = _copy_classified_to_uploads(source_path, uploads_subdir)
+        else:
+            saved = _split_pdf_to_images(source_path, uploads_subdir)
+        # Need at least Details.jpg and Aadhar.jpg for Add Customer
+        has_details = (uploads_subdir / "Details.jpg").exists()
+        has_aadhar = (uploads_subdir / "Aadhar.jpg").exists()
+        if not has_details or not has_aadhar:
+            missing = []
+            if not has_details:
+                missing.append("Details")
+            if not has_aadhar:
+                missing.append("Aadhar")
+            return {"ok": False, "subfolder": subfolder, "mobile": mobile, "error": f"Missing required pages: {', '.join(missing)}"}
 
         # 2. Run OCR extraction
         from app.services.ocr_service import OcrService
@@ -165,10 +205,15 @@ def process_bulk_pdf(scans_pdf_path: Path, dealer_id: int = 100001) -> dict:
         return {"ok": False, "subfolder": subfolder, "mobile": mobile, "error": str(e)}
 
 
-def process_new_scans_and_record(bulk_load_id: int, scans_pdf_path: Path, dealer_id: int = 100001) -> None:
-    """Run process_bulk_pdf and update bulk_loads row."""
+def process_new_scans_and_record(
+    bulk_load_id: int,
+    source_path: Path,
+    dealer_id: int = 100001,
+    subfolder_override: str | None = None,
+) -> bool:
+    """Run process_bulk_pdf and update bulk_loads row. source_path: classified dir or PDF. Returns True if success."""
     from app.db import get_connection
-    result = process_bulk_pdf(scans_pdf_path, dealer_id=dealer_id)
+    result = process_bulk_pdf(source_path, dealer_id=dealer_id, subfolder_override=subfolder_override)
     conn = get_connection()
     try:
         if result.get("ok"):
@@ -178,6 +223,8 @@ def process_new_scans_and_record(bulk_load_id: int, scans_pdf_path: Path, dealer
                 mobile=result.get("mobile"),
                 name=result.get("name"),
             )
+            conn.commit()
+            return True
         else:
             BulkLoadsRepository.update_status(
                 conn, bulk_load_id, "Error",
@@ -185,7 +232,8 @@ def process_new_scans_and_record(bulk_load_id: int, scans_pdf_path: Path, dealer
                 mobile=result.get("mobile"),
                 name=result.get("name"),
             )
-        conn.commit()
+            conn.commit()
+            return False
     finally:
         conn.close()
 

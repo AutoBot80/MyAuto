@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 
 from app.config import UPLOADS_DIR
 
@@ -19,6 +19,32 @@ def _safe_subfolder(name: str | None) -> str | None:
         return None
     safe = re.sub(r"[^\w\-]", "_", name.strip())
     return safe if safe else None
+
+
+@router.get("/{subfolder}", response_class=HTMLResponse)
+def browse_documents(subfolder: str) -> HTMLResponse:
+    """Return HTML page listing files in the subfolder with download links."""
+    try:
+        safe = _safe_subfolder(subfolder)
+        if not safe:
+            raise HTTPException(status_code=400, detail="Invalid subfolder")
+        folder = Path(UPLOADS_DIR) / safe
+        if not folder.is_dir():
+            raise HTTPException(status_code=404, detail="Folder not found")
+        files = sorted(f.name for f in folder.iterdir() if f.is_file())
+        rows = "".join(
+            f'<tr><td><a href="/documents/{safe}/{f}">{f}</a></td></tr>'
+            for f in files
+        )
+        html = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Uploaded scans / {safe}</title>
+<style>body{{font-family:sans-serif;margin:1rem}} table{{border-collapse:collapse}} td{{padding:0.25rem 0.5rem}} a{{color:#0066cc}}</style></head>
+<body><h1>Uploaded scans / {safe}</h1><p>Files in this folder:</p><table><tbody>{rows or "<tr><td>No files</td></tr>"}</tbody></table></body></html>"""
+        return HTMLResponse(html)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("browse_documents failed")
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.get("/{subfolder}/list")

@@ -14,6 +14,8 @@ APP_ROOT = Path(__file__).resolve().parents[1]
 UPLOADS_DIR = APP_ROOT.parent / "Uploaded scans"
 OCR_OUTPUT_DIR = APP_ROOT.parent / "ocr_output"
 BULK_UPLOAD_DIR = APP_ROOT.parent / "Bulk Upload"
+# Pre-OCR for bulk: use AWS Textract (default) for better mobile extraction; set false for Tesseract
+BULK_PRE_OCR_USE_TEXTRACT = os.getenv("BULK_PRE_OCR_USE_TEXTRACT", "true").lower() in ("1", "true", "yes")
 # Form 20 blank templates (PDF). Prefer single official PDF (page 0=front, page 1=back).
 # Or use separate Form 20 Front.pdf and Form 20 back.pdf in Raw Scans/.
 _FORM20_SINGLE = os.getenv("FORM20_TEMPLATE_SINGLE", "")

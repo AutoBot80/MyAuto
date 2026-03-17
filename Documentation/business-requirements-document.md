@@ -1,7 +1,7 @@
 # Business Requirements Document (BRD)
 ## Auto Dealer Management System — Arya Agencies
 
-**Version:** 0.2  
+**Version:** 0.3  
 **Last Updated:** March 2025  
 **Status:** Draft
 
@@ -88,7 +88,27 @@ The system is a server–client application for auto dealers. Dealers run a ligh
 
 ---
 
-## 6. Out of Scope (Current Phase)
+## 6. Bulk Upload Feature
+
+Bulk upload automates the ingestion of scanned documents from a shared folder into the Add Customer flow.
+
+### 6.1 Flow Overview
+
+1. **Scan folder** — Scanned PDFs (e.g. `Scan1.pdf` or `Scans.pdf` in subfolders) are placed in `Bulk Upload/Scans/` by the operator or an external scanner.
+2. **Pre-OCR** — A background watcher picks up new scans, copies them to a Processing folder, and runs pre-OCR (Tesseract or AWS Textract) to extract the mobile number from the document. The mobile is required for Add Customer.
+3. **Add Customer processing** — If a mobile is found, the system invokes the Add Customer flow (Submit Info, Fill DMS, Form 20, Vahan, etc.) and records the result in the bulk_loads table. On success, files are moved to `Success/{mobile_ddmmyyyy}/`; on error, to `Error/{filename_ddmmyyyy}/`.
+4. **Re-process on error** — When a bulk load fails (e.g. pre-OCR fails, mobile not found, or Add Customer fails), the operator can use the **Re-process** button on the Bulk Loads page. This opens the Add Customer screen with the mobile and associated files pre-filled so the operator can correct data and complete the flow manually.
+
+### 6.2 Key Behaviours
+
+- One scan is processed at a time; the watcher polls periodically.
+- Pre-OCR output is saved as `{filename}_ddmmyyyy_pre_ocr.txt` in the Processing folder.
+- The Bulk Loads table shows status (Processing, Success, Error), source filename, folder link, and error details.
+- Re-process uses the stored mobile and Error-folder files to pre-populate Add Customer.
+
+---
+
+## 7. Out of Scope (Current Phase)
 
 - Mobile apps.
 - Real-time collaboration.
@@ -97,7 +117,7 @@ The system is a server–client application for auto dealers. Dealers run a ligh
 
 ---
 
-## 7. Success Criteria
+## 8. Success Criteria
 
 - Dealer can add/view dealer records via the client against the live backend.
 - Document upload creates an OCR job and extracted data is stored and reviewable.
@@ -110,9 +130,10 @@ The system is a server–client application for auto dealers. Dealers run a ligh
 
 ---
 
-## 8. Document Control
+## 9. Document Control
 
 | Version | Date | Author | Changes |
 |---------|------|--------|---------|
 | 0.1 | Mar 2025 | — | Initial BRD for Auto Dealer system |
 | 0.2 | Mar 2025 | — | Added business rules (BR-1 to BR-7); FR-8 to FR-24 (Submit Info, Fill DMS, Form 20, Vahan, RTO payment, customer search, QR decode) |
+| 0.3 | Mar 2025 | — | Added Section 6: Bulk Upload Feature (Scan folder, pre-OCR, Add Customer processing, Re-process on error) |

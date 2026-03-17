@@ -940,10 +940,21 @@
   gap: 12px;
 }
 
+.bulk-loads-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .bulk-loads-title {
   margin: 0;
   font-size: 18px;
   color: #1e5a9e;
+}
+
+.bulk-loads-reprocess-btn {
+  white-space: nowrap;
 }
 
 .bulk-loads-filters {
@@ -1000,6 +1011,11 @@
   font-weight: 500;
 }
 
+.bulk-loads-status--processing {
+  color: #1e5a9e;
+  font-weight: 500;
+}
+
 .bulk-loads-error {
   color: #c00;
 }
@@ -1014,6 +1030,17 @@
 .bulk-loads-folder {
   font-family: monospace;
   font-size: 12px;
+}
+
+.bulk-loads-folder-link {
+  font-family: monospace;
+  font-size: 12px;
+  color: #0066cc;
+  text-decoration: none;
+}
+
+.bulk-loads-folder-link:hover {
+  text-decoration: underline;
 }
 
 /* View Customer page */
