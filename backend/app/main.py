@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -18,9 +19,20 @@ from app.routers import (
     rto_payment_details_router,
     customer_search_router,
     documents_router,
+    bulk_loads_router,
 )
 
-app = FastAPI(title="Auto Dealer Server", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    from app.services.bulk_watcher_service import start_watcher
+    start_watcher()
+    yield
+    from app.services.bulk_watcher_service import stop_watcher
+    stop_watcher()
+
+
+app = FastAPI(title="Auto Dealer Server", version="0.1.0", lifespan=lifespan)
 
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 OCR_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -54,3 +66,4 @@ app.include_router(fill_dms_router)
 app.include_router(rto_payment_details_router)
 app.include_router(customer_search_router)
 app.include_router(documents_router)
+app.include_router(bulk_loads_router)

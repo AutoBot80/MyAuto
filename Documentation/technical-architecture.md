@@ -92,10 +92,20 @@
 
 - **Code:** Monorepo or split (e.g. `client/`, `backend/`, `workers/`).
 - **Docs:** Kept under `Documentation/`:
-  - `business-requirements-document.md`
-  - `high-level-design.md`
-  - `low-level-design.md`
-  - `technical-architecture.md` (this file).
+  - `business-requirements-document.md` — BRD, business rules, functional requirements
+  - `high-level-design.md` — HLD, code structure, data flows
+  - `low-level-design.md` — LLD, API endpoints, modules
+  - `Database DDL.md` — all tables, columns, constraints, usage
+  - `technical-architecture.md` (this file)
+
+### Documentation Maintenance
+
+When adding or changing features, update the relevant docs:
+
+- **New API endpoint** → LLD (API Endpoints table), HLD (backend modules)
+- **New DB table/column** → `DDL/` scripts, `Database DDL.md`
+- **New business rule** → BRD (Business Rules section)
+- **New page or flow** → BRD (FRs), HLD (client pages, data flow)
 
 ---
 

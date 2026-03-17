@@ -10,6 +10,7 @@ from .fill_dms import router as fill_dms_router
 from .rto_payment_details import router as rto_payment_details_router
 from .customer_search import router as customer_search_router
 from .documents import router as documents_router
+from .bulk_loads import router as bulk_loads_router
 
 __all__ = [
     "health_router",
@@ -24,4 +25,5 @@ __all__ = [
     "rto_payment_details_router",
     "customer_search_router",
     "documents_router",
+    "bulk_loads_router",
 ]

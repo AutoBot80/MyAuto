@@ -1,5 +1,6 @@
 export type Page =
   | "add-sales"
+  | "bulk-loads"
   | "customer-details"
   | "rto-status"
   | "service-reminders"
@@ -56,6 +57,11 @@ export interface ExtractedVehicleDetails {
   model?: string;
   color?: string;
   cubic_capacity?: string;
+  seating_capacity?: string;
+  body_type?: string;
+  vehicle_type?: string;
+  num_cylinders?: string;
+  horse_power?: string;
   total_amount?: string;
   year_of_mfg?: string;
 }

@@ -9,6 +9,7 @@ export interface FillDmsCustomer {
   pin_code?: string | null;
   mobile_number?: string | null;
   mobile?: string | null;
+  aadhar_id?: string | null;
 }
 
 export interface FillDmsVehicle {
@@ -40,6 +41,11 @@ export interface FillDmsResponse {
     model?: string;
     color?: string;
     cubic_capacity?: string;
+    seating_capacity?: string;
+    body_type?: string;
+    vehicle_type?: string;
+    num_cylinders?: string;
+    horse_power?: string;
     total_amount?: string;
     year_of_mfg?: string;
   };

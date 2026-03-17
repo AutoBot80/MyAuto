@@ -522,6 +522,11 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
         (scraped.model && String(scraped.model).trim()) ||
         (scraped.color && String(scraped.color).trim()) ||
         (scraped.cubic_capacity && String(scraped.cubic_capacity).trim()) ||
+        (scraped.seating_capacity && String(scraped.seating_capacity).trim()) ||
+        (scraped.body_type && String(scraped.body_type).trim()) ||
+        (scraped.vehicle_type && String(scraped.vehicle_type).trim()) ||
+        (scraped.num_cylinders && String(scraped.num_cylinders).trim()) ||
+        (scraped.horse_power && String(scraped.horse_power).trim()) ||
         (scraped.total_amount && String(scraped.total_amount).trim()) ||
         (scraped.year_of_mfg && String(scraped.year_of_mfg).trim())
       ));
@@ -533,6 +538,11 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
           model: scraped.model ?? undefined,
           color: scraped.color ?? undefined,
           cubic_capacity: scraped.cubic_capacity ?? undefined,
+          seating_capacity: scraped.seating_capacity ?? undefined,
+          body_type: scraped.body_type ?? undefined,
+          vehicle_type: scraped.vehicle_type ?? undefined,
+          num_cylinders: scraped.num_cylinders ?? undefined,
+          horse_power: scraped.horse_power ?? undefined,
           total_amount: scraped.total_amount ?? undefined,
           year_of_mfg: scraped.year_of_mfg ?? undefined,
         });
@@ -646,6 +656,11 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
         model: s.model,
         color: s.color,
         cubic_capacity: s.cubic_capacity,
+        seating_capacity: s.seating_capacity,
+        body_type: s.body_type,
+        vehicle_type: s.vehicle_type,
+        num_cylinders: s.num_cylinders,
+        horse_power: s.horse_power,
         total_amount: s.total_amount,
         year_of_mfg: s.year_of_mfg,
       };
@@ -671,6 +686,7 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
           city: c?.city ?? undefined,
           state: c?.state ?? undefined,
           pin_code: c?.pin_code ?? undefined,
+          aadhar_id: c?.aadhar_id ?? undefined,
         },
         vehicle: vehicleData,
         vehicle_id: lastSubmittedVehicleId ?? undefined,
@@ -894,7 +910,7 @@ className="app-button app-button--primary"
                         />
                       </dd>
                     </div>
-                    {(v?.model ?? v?.color ?? v?.cubic_capacity ?? v?.total_amount ?? v?.year_of_mfg) && (
+                    {(v?.model ?? v?.color ?? v?.cubic_capacity ?? v?.seating_capacity ?? v?.body_type ?? v?.vehicle_type ?? v?.num_cylinders ?? v?.horse_power ?? v?.total_amount ?? v?.year_of_mfg) && (
                       <>
                         <div className="add-sales-v2-dl-row">
                           <dt>Model</dt>
@@ -925,6 +941,61 @@ className="app-button app-button--primary"
                               className="add-sales-v2-dl-input"
                               value={v?.cubic_capacity ?? ""}
                               onChange={(e) => setExtractedVehicle((prev) => ({ ...(prev ?? {}), cubic_capacity: e.target.value }))}
+                              placeholder="—"
+                            />
+                          </dd>
+                        </div>
+                        <div className="add-sales-v2-dl-row">
+                          <dt>Seating Cap.</dt>
+                          <dd>
+                            <input
+                              className="add-sales-v2-dl-input"
+                              value={v?.seating_capacity ?? ""}
+                              onChange={(e) => setExtractedVehicle((prev) => ({ ...(prev ?? {}), seating_capacity: e.target.value }))}
+                              placeholder="—"
+                            />
+                          </dd>
+                        </div>
+                        <div className="add-sales-v2-dl-row">
+                          <dt>Body type</dt>
+                          <dd>
+                            <input
+                              className="add-sales-v2-dl-input"
+                              value={v?.body_type ?? ""}
+                              onChange={(e) => setExtractedVehicle((prev) => ({ ...(prev ?? {}), body_type: e.target.value }))}
+                              placeholder="—"
+                            />
+                          </dd>
+                        </div>
+                        <div className="add-sales-v2-dl-row">
+                          <dt>Vehicle type</dt>
+                          <dd>
+                            <input
+                              className="add-sales-v2-dl-input"
+                              value={v?.vehicle_type ?? ""}
+                              onChange={(e) => setExtractedVehicle((prev) => ({ ...(prev ?? {}), vehicle_type: e.target.value }))}
+                              placeholder="—"
+                            />
+                          </dd>
+                        </div>
+                        <div className="add-sales-v2-dl-row">
+                          <dt>Num cylinders</dt>
+                          <dd>
+                            <input
+                              className="add-sales-v2-dl-input"
+                              value={v?.num_cylinders ?? ""}
+                              onChange={(e) => setExtractedVehicle((prev) => ({ ...(prev ?? {}), num_cylinders: e.target.value }))}
+                              placeholder="—"
+                            />
+                          </dd>
+                        </div>
+                        <div className="add-sales-v2-dl-row">
+                          <dt>Horsepower</dt>
+                          <dd>
+                            <input
+                              className="add-sales-v2-dl-input"
+                              value={v?.horse_power ?? ""}
+                              onChange={(e) => setExtractedVehicle((prev) => ({ ...(prev ?? {}), horse_power: e.target.value }))}
                               placeholder="—"
                             />
                           </dd>
@@ -1074,9 +1145,35 @@ className="app-button app-button--primary"
                     </div>
                     <div className="add-sales-v2-dl-row-group">
                       <div className="add-sales-v2-dl-row">
+                        <dt>Seating Cap.</dt>
+                        <dd>{d?.seating_capacity ?? "—"}</dd>
+                      </div>
+                      <div className="add-sales-v2-dl-row">
+                        <dt>Body type</dt>
+                        <dd>{d?.body_type ?? "—"}</dd>
+                      </div>
+                    </div>
+                    <div className="add-sales-v2-dl-row-group">
+                      <div className="add-sales-v2-dl-row">
+                        <dt>Vehicle type</dt>
+                        <dd>{d?.vehicle_type ?? "—"}</dd>
+                      </div>
+                      <div className="add-sales-v2-dl-row">
+                        <dt>Num cylinders</dt>
+                        <dd>{d?.num_cylinders ?? "—"}</dd>
+                      </div>
+                    </div>
+                    <div className="add-sales-v2-dl-row-group">
+                      <div className="add-sales-v2-dl-row">
+                        <dt>Horsepower</dt>
+                        <dd>{d?.horse_power ?? "—"}</dd>
+                      </div>
+                      <div className="add-sales-v2-dl-row">
                         <dt>Total amount</dt>
                         <dd>{d?.total_amount ?? "—"}</dd>
                       </div>
+                    </div>
+                    <div className="add-sales-v2-dl-row-group">
                       <div className="add-sales-v2-dl-row">
                         <dt>Year of Mfg</dt>
                         <dd>{d?.year_of_mfg ?? "—"}</dd>

@@ -15,7 +15,7 @@ from app.config import (
     DMS_LOGIN_PASSWORD,
     VAHAN_BASE_URL,
 )
-from app.services.fill_dms_service import run_fill_dms, run_fill_dms_only, run_fill_vahan_only
+from app.services.fill_dms_service import run_fill_dms, run_fill_dms_only, run_fill_vahan_only, update_vehicle_master_from_dms as _update_vehicle_master_from_dms
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/fill-dms", tags=["fill-dms"])
@@ -30,6 +30,7 @@ class FillDmsCustomer(BaseModel):
     pin_code: str | None = None
     mobile_number: str | None = None
     mobile: str | None = None
+    aadhar_id: str | None = None
 
 
 class FillDmsVehicle(BaseModel):
@@ -138,7 +139,7 @@ def get_data_from_dms(subfolder: str) -> dict:
             if val == "—" or not val:
                 val = ""
             if section == "vehicle":
-                key_map = {"key_num": "key_num", "frame_chassis_num": "frame_num", "frame___chassis_num": "frame_num", "engine_num": "engine_num", "model": "model", "color": "color", "cubic_capacity": "cubic_capacity", "total_amount": "total_amount", "year_of_mfg": "year_of_mfg"}
+                key_map = {"key_num": "key_num", "frame_chassis_num": "frame_num", "frame___chassis_num": "frame_num", "engine_num": "engine_num", "model": "model", "color": "color", "cubic_capacity": "cubic_capacity", "seating_capacity": "seating_capacity", "body_type": "body_type", "vehicle_type": "vehicle_type", "num_cylinders": "num_cylinders", "horse_power": "horse_power", "horsepower": "horse_power", "total_amount": "total_amount", "year_of_mfg": "year_of_mfg"}
                 out_key = key_map.get(key, key)
                 if val:
                     vehicle[out_key] = val
@@ -148,52 +149,6 @@ def get_data_from_dms(subfolder: str) -> dict:
                 if val:
                     customer[out_key] = val
     return {"vehicle": vehicle, "customer": customer}
-
-
-def _update_vehicle_master_from_dms(vehicle_id: int, scraped: dict) -> None:
-    """Update vehicle_master with DMS-scraped data (chassis, engine, key_num, model, colour, etc.)."""
-    from app.db import get_connection
-
-    chassis = (scraped.get("frame_num") or "").strip() or None
-    engine = (scraped.get("engine_num") or "").strip() or None
-    key_num = (scraped.get("key_num") or "").strip() or None
-    model = (scraped.get("model") or "").strip() or None
-    colour = (scraped.get("color") or "").strip() or None
-    cubic_capacity = scraped.get("cubic_capacity")
-    year_of_mfg = scraped.get("year_of_mfg")
-    if cubic_capacity:
-        try:
-            cubic_capacity = float(str(cubic_capacity).replace(",", ""))
-        except (ValueError, TypeError):
-            cubic_capacity = None
-    if year_of_mfg:
-        try:
-            year_of_mfg = int(str(year_of_mfg).strip())
-        except (ValueError, TypeError):
-            year_of_mfg = None
-
-    conn = get_connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                UPDATE vehicle_master SET
-                    chassis = COALESCE(%s, chassis),
-                    engine = COALESCE(%s, engine),
-                    key_num = COALESCE(%s, key_num),
-                    model = COALESCE(%s, model),
-                    colour = COALESCE(%s, colour),
-                    cubic_capacity = COALESCE(%s, cubic_capacity),
-                    year_of_mfg = COALESCE(%s, year_of_mfg)
-                WHERE vehicle_id = %s
-                """,
-                (chassis, engine, key_num, model, colour, cubic_capacity, year_of_mfg, vehicle_id),
-            )
-            conn.commit()
-            if cur.rowcount > 0:
-                logger.info("fill_dms: updated vehicle_master vehicle_id=%s with DMS data", vehicle_id)
-    finally:
-        conn.close()
 
 
 @router.post("/dms", response_model=FillDmsResponse)
@@ -249,7 +204,7 @@ def form20_status() -> dict:
     """Debug: check Form 20 template paths and fitz availability."""
     from pathlib import Path
 
-    from app.config import FORM20_TEMPLATE_SINGLE, FORM20_TEMPLATE_FRONT, FORM20_TEMPLATE_BACK, UPLOADS_DIR
+    from app.config import FORM20_TEMPLATE_SINGLE, FORM20_TEMPLATE_FRONT, FORM20_TEMPLATE_BACK, FORM20_TEMPLATE_DOCX, GATE_PASS_TEMPLATE_DOCX, UPLOADS_DIR
 
     project_root = Path(UPLOADS_DIR).resolve().parent
     single = Path(FORM20_TEMPLATE_SINGLE).resolve()
@@ -262,12 +217,16 @@ def form20_status() -> dict:
     except ImportError:
         fitz_ok = False
 
-    docx_template = project_root / "Raw Scans" / "FORM 20.docx"
+    docx_template = Path(FORM20_TEMPLATE_DOCX).resolve()
     docx_exists = docx_template.exists()
+    gate_pass_template = Path(GATE_PASS_TEMPLATE_DOCX).resolve()
+    gate_pass_exists = gate_pass_template.exists()
     single_exists = single.exists() or fallback_single.exists()
     return {
         "docx_template": str(docx_template),
         "docx_exists": docx_exists,
+        "gate_pass_template": str(gate_pass_template),
+        "gate_pass_exists": gate_pass_exists,
         "single_template": str(single),
         "single_exists": single.exists(),
         "fallback_single": str(fallback_single),

@@ -1,16 +1,24 @@
 """
-Generate Form 20 (all pages) from templates.
-Prefer: Raw Scans/FORM 20.docx (Word) -> fill placeholders -> convert to PDF.
-Else: PDF overlay on Official FORM-20 or separate PDFs.
-Fallback: HTML-based generation.
-Saves Form 20.pdf (combined front, back, page 3) to Uploaded scans/subfolder.
+Generate Form 20 (all pages) and Gate Pass from templates.
+Form 20: Prefer templates/word/FORM 20 Template.docx (Word) -> fill placeholders -> convert to PDF.
+         Else PDF overlay or HTML fallback.
+Gate Pass: templates/word/Gate Pass Template.docx -> fill placeholders -> convert to PDF.
+Saves Form 20.pdf and Gate Pass.pdf to Uploaded scans/subfolder.
 """
 import logging
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from app.config import UPLOADS_DIR, FORM20_TEMPLATE_SINGLE, FORM20_TEMPLATE_FRONT, FORM20_TEMPLATE_BACK, FORM20_TEMPLATE_DOCX
+from app.config import (
+    UPLOADS_DIR,
+    FORM20_TEMPLATE_SINGLE,
+    FORM20_TEMPLATE_FRONT,
+    FORM20_TEMPLATE_BACK,
+    FORM20_TEMPLATE_DOCX,
+    GATE_PASS_TEMPLATE_DOCX,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -212,6 +220,48 @@ def _build_form20_data(
     return data
 
 
+def _build_gate_pass_data(
+    customer: dict[str, Any],
+    vehicle: dict[str, Any],
+    vehicle_id: int | None = None,
+    dealer_id: int | None = None,
+) -> dict[str, str]:
+    """Build Gate Pass field values from customer and vehicle."""
+    data: dict[str, str] = {}
+    db_vehicle = _get_vehicle_from_db(vehicle_id) if vehicle_id else {}
+    dealer = _get_dealer_from_db(dealer_id) if dealer_id else {}
+    v = {**vehicle, **db_vehicle}
+    c = customer or {}
+
+    def _str(val: Any) -> str:
+        if val is None:
+            return ""
+        return str(val).strip() or ""
+
+    # field_1_oem_name: OEM name (Welcome to X family)
+    oem = _str(v.get("oem_name")) or _str(dealer.get("oem_name")) or _str(v.get("make") or v.get("maker"))
+    data["field_1_oem_name"] = oem
+
+    # field_0_today_date: Delivery date (today)
+    data["field_0_today_date"] = datetime.now().strftime("%d/%m/%Y")
+
+    # field_2_customer_name
+    data["field_2_customer_name"] = _str(c.get("name"))
+
+    # field_3_aadhar_id: Last 4 digits only (compliance - DB stores last 4; extraction may have full)
+    raw = c.get("aadhar_id") or c.get("aadhar")
+    digits = "".join(ch for ch in str(raw or "") if ch.isdigit())
+    data["field_3_aadhar_id"] = digits[-4:] if len(digits) >= 4 else digits
+
+    # field_4_model, field_5_color, field_6_key_num, field_7_chassis_num
+    data["field_4_model"] = _str(v.get("model") or v.get("oem_name"))
+    data["field_5_color"] = _str(v.get("colour") or v.get("color"))
+    data["field_6_key_num"] = _str(v.get("key_num") or v.get("key_no"))
+    data["field_7_chassis_num"] = _str(v.get("chassis") or v.get("frame_num") or v.get("frame_no"))
+
+    return data
+
+
 def _fill_docx_template(docx_path: Path, data: dict[str, str], out_path: Path) -> None:
     """Fill {{placeholder}} in Word document and save."""
     from docx import Document
@@ -355,6 +405,44 @@ def _generate_form20_via_docx(
     return ["Form 20.pdf"]
 
 
+def _generate_gate_pass_via_docx(
+    docx_template: Path,
+    subfolder_path: Path,
+    data: dict[str, str],
+) -> list[str]:
+    """Generate Gate Pass from Word template: fill placeholders, convert to PDF."""
+    import shutil
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(suffix=".docx", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+    try:
+        shutil.copy2(docx_template, tmp_path)
+        work_docx = tmp_path
+    except PermissionError:
+        tmp_path.unlink(missing_ok=True)
+        logger.warning("gate_pass: Cannot read %s (file may be open)", docx_template)
+        return []
+
+    gate_pass_out = subfolder_path / "Gate Pass.pdf"
+    gate_pass_out.unlink(missing_ok=True)
+
+    with tempfile.NamedTemporaryFile(suffix=".docx", delete=False) as tmp:
+        filled_docx = Path(tmp.name)
+    try:
+        _fill_docx_template(work_docx, data, filled_docx)
+        _docx_to_pdf(filled_docx, gate_pass_out)
+    except RuntimeError as e:
+        logger.warning("gate_pass: docx-to-PDF conversion failed: %s", e)
+        return []
+    finally:
+        work_docx.unlink(missing_ok=True)
+        filled_docx.unlink(missing_ok=True)
+
+    logger.info("gate_pass: saved %s", gate_pass_out)
+    return ["Gate Pass.pdf"]
+
+
 def _overlay_on_page(
     page,
     data: dict[str, str],
@@ -407,8 +495,10 @@ def generate_form20_pdfs(
     uploads_dir: Path | None = None,
 ) -> list[str]:
     """
-    Generate Form 20.pdf (combined front, back, page 3) by overlaying data on templates.
-    Uses Raw Scans/FORM 20.docx, or Official FORM-20, or Form 20 Front/back PDFs. Saves to Uploaded scans/subfolder.
+    Generate Form 20.pdf and Gate Pass.pdf by overlaying data on templates.
+    Form 20: templates/word/FORM 20 Template.docx, or Official FORM-20, or Form 20 Front/back PDFs.
+    Gate Pass: templates/word/Gate Pass Template.docx.
+    Saves to Uploaded scans/subfolder.
     """
     import re
 
@@ -423,9 +513,7 @@ def generate_form20_pdfs(
     uploads_path = Path(uploads_dir or UPLOADS_DIR).resolve()
     project_root = uploads_path.parent
 
-    docx_template = project_root / "Raw Scans" / "FORM 20.docx"
-    if not docx_template.exists():
-        docx_template = Path(FORM20_TEMPLATE_DOCX).resolve()
+    docx_template = Path(FORM20_TEMPLATE_DOCX).resolve()
 
     single_template = Path(FORM20_TEMPLATE_SINGLE).resolve()
     front_template = Path(FORM20_TEMPLATE_FRONT).resolve()
@@ -455,19 +543,30 @@ def generate_form20_pdfs(
         use_separate,
     )
 
+    def _add_gate_pass(saved: list[str]) -> list[str]:
+        """Append Gate Pass.pdf if template exists and generation succeeds."""
+        gate_pass_template = Path(GATE_PASS_TEMPLATE_DOCX).resolve()
+        if gate_pass_template.exists():
+            gate_pass_data = _build_gate_pass_data(customer, vehicle, vehicle_id, dealer_id)
+            saved = saved + _generate_gate_pass_via_docx(gate_pass_template, subfolder_path, gate_pass_data)
+        return saved
+
     # Prefer Word template - do not fall back on failure so user sees the actual error
     if use_docx:
-        return _generate_form20_via_docx(docx_template, subfolder_path, data)
+        saved = _generate_form20_via_docx(docx_template, subfolder_path, data)
+        return _add_gate_pass(saved)
 
     if not use_single and not use_separate:
         logger.warning("form20: No PDF templates found at %s or %s/%s. Using HTML fallback.", single_template, front_template, back_template)
-        return _generate_form20_via_html(subfolder_path, data)
+        saved = _generate_form20_via_html(subfolder_path, data)
+        return _add_gate_pass(saved)
 
     try:
         import fitz  # noqa: F401
     except ImportError as e:
         logger.warning("form20: pymupdf not installed (%s). Using HTML fallback. Run: pip install pymupdf", e)
-        return _generate_form20_via_html(subfolder_path, data)
+        saved = _generate_form20_via_html(subfolder_path, data)
+        return _add_gate_pass(saved)
 
     form20_out = subfolder_path / "Form 20.pdf"
 
@@ -510,7 +609,8 @@ def generate_form20_pdfs(
         merged.close()
         logger.info("form20: saved %s (from separate templates, %d pages)", form20_out, len(to_merge))
 
-    return ["Form 20.pdf"]
+    saved = ["Form 20.pdf"]
+    return _add_gate_pass(saved)
 
 
 def _generate_form20_via_html(

@@ -932,6 +932,90 @@
   opacity: 0.7;
 }
 
+/* Bulk Loads page */
+.bulk-loads-page {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.bulk-loads-title {
+  margin: 0;
+  font-size: 18px;
+  color: #1e5a9e;
+}
+
+.bulk-loads-filters {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+}
+
+.bulk-loads-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.bulk-loads-table-wrap {
+  overflow: auto;
+  border: 1px solid #c5d9ed;
+  border-radius: 4px;
+  background: #fff;
+}
+
+.bulk-loads-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.bulk-loads-table th,
+.bulk-loads-table td {
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid #e0e8f0;
+}
+
+.bulk-loads-table th {
+  background: #e8eef4;
+  font-weight: 600;
+  color: #333;
+}
+
+.bulk-loads-table tbody tr:hover {
+  background: #f5f9fd;
+}
+
+.bulk-loads-status--success {
+  color: #063;
+  font-weight: 500;
+}
+
+.bulk-loads-status--error {
+  color: #c00;
+  font-weight: 500;
+}
+
+.bulk-loads-error {
+  color: #c00;
+}
+
+.bulk-loads-error-cell {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bulk-loads-folder {
+  font-family: monospace;
+  font-size: 12px;
+}
+
 /* View Customer page */
 .view-customer-page {
   display: flex;

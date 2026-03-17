@@ -115,6 +115,11 @@ def _write_data_from_dms(ocr_output_dir: Path, subfolder: str, customer: dict, v
         ("Model", "model"),
         ("Color", "color"),
         ("Cubic capacity", "cubic_capacity"),
+        ("Seating capacity", "seating_capacity"),
+        ("Body type", "body_type"),
+        ("Vehicle type", "vehicle_type"),
+        ("Num cylinders", "num_cylinders"),
+        ("Horsepower", "horse_power"),
         ("Total amount", "total_amount"),
         ("Year of Mfg", "year_of_mfg"),
     ]:
@@ -134,6 +139,77 @@ def _parse_total_cost(vehicle: dict) -> float:
         return float(s)
     except ValueError:
         return 0.0
+
+
+def update_vehicle_master_from_dms(vehicle_id: int, scraped: dict) -> None:
+    """Update vehicle_master with DMS-scraped data (chassis, engine, key_num, model, colour, seating_capacity, etc.)."""
+    from app.db import get_connection
+
+    chassis = (scraped.get("frame_num") or "").strip() or None
+    engine = (scraped.get("engine_num") or "").strip() or None
+    key_num = (scraped.get("key_num") or "").strip() or None
+    model = (scraped.get("model") or "").strip() or None
+    colour = (scraped.get("color") or "").strip() or None
+    cubic_capacity = scraped.get("cubic_capacity")
+    seating_capacity = scraped.get("seating_capacity")
+    body_type = (scraped.get("body_type") or "").strip() or None
+    vehicle_type = (scraped.get("vehicle_type") or "").strip() or None
+    num_cylinders = scraped.get("num_cylinders")
+    horse_power = scraped.get("horse_power")
+    year_of_mfg = scraped.get("year_of_mfg")
+    if cubic_capacity:
+        try:
+            cubic_capacity = float(str(cubic_capacity).replace(",", ""))
+        except (ValueError, TypeError):
+            cubic_capacity = None
+    if seating_capacity:
+        try:
+            seating_capacity = int(str(seating_capacity).strip())
+        except (ValueError, TypeError):
+            seating_capacity = None
+    if num_cylinders:
+        try:
+            num_cylinders = int(str(num_cylinders).strip())
+        except (ValueError, TypeError):
+            num_cylinders = None
+    if horse_power:
+        try:
+            horse_power = float(str(horse_power).replace(",", ""))
+        except (ValueError, TypeError):
+            horse_power = None
+    if year_of_mfg:
+        try:
+            year_of_mfg = int(str(year_of_mfg).strip())
+        except (ValueError, TypeError):
+            year_of_mfg = None
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE vehicle_master SET
+                    chassis = COALESCE(%s, chassis),
+                    engine = COALESCE(%s, engine),
+                    key_num = COALESCE(%s, key_num),
+                    model = COALESCE(%s, model),
+                    colour = COALESCE(%s, colour),
+                    cubic_capacity = COALESCE(%s, cubic_capacity),
+                    seating_capacity = COALESCE(%s, seating_capacity),
+                    body_type = COALESCE(%s, body_type),
+                    vehicle_type = COALESCE(%s, vehicle_type),
+                    num_cylinders = COALESCE(%s, num_cylinders),
+                    horse_power = COALESCE(%s, horse_power),
+                    year_of_mfg = COALESCE(%s, year_of_mfg)
+                WHERE vehicle_id = %s
+                """,
+                (chassis, engine, key_num, model, colour, cubic_capacity, seating_capacity, body_type, vehicle_type, num_cylinders, horse_power, year_of_mfg, vehicle_id),
+            )
+            conn.commit()
+            if cur.rowcount > 0:
+                logger.info("fill_dms: updated vehicle_master vehicle_id=%s with DMS data", vehicle_id)
+    finally:
+        conn.close()
 
 
 def run_fill_dms_only(
@@ -212,7 +288,36 @@ def run_fill_dms_only(
             row = page.locator("#dms-vehicle-results-table tbody tr").first
             if row.count() > 0:
                 cells = row.locator("td")
-                if cells.count() >= 8:
+                n = cells.count()
+                if n >= 13:
+                    result["vehicle"] = {
+                        "key_num": cells.nth(0).inner_text().strip(),
+                        "frame_num": cells.nth(1).inner_text().strip(),
+                        "engine_num": cells.nth(2).inner_text().strip(),
+                        "model": cells.nth(3).inner_text().strip(),
+                        "color": cells.nth(4).inner_text().strip(),
+                        "cubic_capacity": cells.nth(5).inner_text().strip(),
+                        "seating_capacity": cells.nth(6).inner_text().strip(),
+                        "body_type": cells.nth(7).inner_text().strip(),
+                        "vehicle_type": cells.nth(8).inner_text().strip(),
+                        "num_cylinders": cells.nth(9).inner_text().strip(),
+                        "horse_power": cells.nth(10).inner_text().strip(),
+                        "total_amount": cells.nth(11).inner_text().strip(),
+                        "year_of_mfg": cells.nth(12).inner_text().strip(),
+                    }
+                elif n >= 9:
+                    result["vehicle"] = {
+                        "key_num": cells.nth(0).inner_text().strip(),
+                        "frame_num": cells.nth(1).inner_text().strip(),
+                        "engine_num": cells.nth(2).inner_text().strip(),
+                        "model": cells.nth(3).inner_text().strip(),
+                        "color": cells.nth(4).inner_text().strip(),
+                        "cubic_capacity": cells.nth(5).inner_text().strip(),
+                        "seating_capacity": cells.nth(6).inner_text().strip(),
+                        "total_amount": cells.nth(7).inner_text().strip(),
+                        "year_of_mfg": cells.nth(8).inner_text().strip(),
+                    }
+                elif n >= 8:
                     result["vehicle"] = {
                         "key_num": cells.nth(0).inner_text().strip(),
                         "frame_num": cells.nth(1).inner_text().strip(),
@@ -319,6 +424,7 @@ def run_fill_dms(
     ocr_output_dir: Path | None = None,
     vahan_base_url: str | None = None,
     rto_dealer_id: str | None = None,
+    headless: bool | None = None,
 ) -> dict:
     """
     Run Playwright: open DMS, login, fill enquiry, submit, go to Vehicle, search, scrape first row,
@@ -341,10 +447,11 @@ def run_fill_dms(
     subfolder_path.mkdir(parents=True, exist_ok=True)
     ocr_dir = Path(ocr_output_dir or OCR_OUTPUT_DIR).resolve()
 
+    headed = not headless if headless is not None else DMS_PLAYWRIGHT_HEADED
     try:
-        logger.info("fill_dms_service: starting Playwright dms=%s vahan=%s", dms_base_url[:50], bool(vahan_base_url))
+        logger.info("fill_dms_service: starting Playwright dms=%s vahan=%s headless=%s", dms_base_url[:50], bool(vahan_base_url), not headed)
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=not DMS_PLAYWRIGHT_HEADED)
+            browser = p.chromium.launch(headless=not headed)
             context = browser.new_context(accept_downloads=True)
             page = context.new_page()
             # Shorter default timeout so actions fail fast instead of feeling slow
@@ -396,14 +503,42 @@ def run_fill_dms(
             page.click("#dms-vehicle-search")
             page.wait_for_timeout(80)
 
-            # 4) Scrape first result row (all 8 columns: key, frame, engine, model, color, cubic_capacity, total_amount, year_of_mfg)
+            # 4) Scrape first result row (13 cols: key, frame, engine, model, color, cubic_capacity, seating_capacity, body_type, vehicle_type, num_cylinders, horse_power, total_amount, year_of_mfg)
             logger.info("fill_dms_service: step 4 scrape vehicle results")
             page.wait_for_selector("#dms-vehicle-results:visible", timeout=8000)
             row = page.locator("#dms-vehicle-results-table tbody tr").first
             if row.count() > 0:
                 cells = row.locator("td")
                 n = cells.count()
-                if n >= 8:
+                if n >= 13:
+                    result["vehicle"] = {
+                        "key_num": cells.nth(0).inner_text().strip(),
+                        "frame_num": cells.nth(1).inner_text().strip(),
+                        "engine_num": cells.nth(2).inner_text().strip(),
+                        "model": cells.nth(3).inner_text().strip(),
+                        "color": cells.nth(4).inner_text().strip(),
+                        "cubic_capacity": cells.nth(5).inner_text().strip(),
+                        "seating_capacity": cells.nth(6).inner_text().strip(),
+                        "body_type": cells.nth(7).inner_text().strip(),
+                        "vehicle_type": cells.nth(8).inner_text().strip(),
+                        "num_cylinders": cells.nth(9).inner_text().strip(),
+                        "horse_power": cells.nth(10).inner_text().strip(),
+                        "total_amount": cells.nth(11).inner_text().strip(),
+                        "year_of_mfg": cells.nth(12).inner_text().strip(),
+                    }
+                elif n >= 9:
+                    result["vehicle"] = {
+                        "key_num": cells.nth(0).inner_text().strip(),
+                        "frame_num": cells.nth(1).inner_text().strip(),
+                        "engine_num": cells.nth(2).inner_text().strip(),
+                        "model": cells.nth(3).inner_text().strip(),
+                        "color": cells.nth(4).inner_text().strip(),
+                        "cubic_capacity": cells.nth(5).inner_text().strip(),
+                        "seating_capacity": cells.nth(6).inner_text().strip(),
+                        "total_amount": cells.nth(7).inner_text().strip(),
+                        "year_of_mfg": cells.nth(8).inner_text().strip(),
+                    }
+                elif n >= 8:
                     result["vehicle"] = {
                         "key_num": cells.nth(0).inner_text().strip(),
                         "frame_num": cells.nth(1).inner_text().strip(),

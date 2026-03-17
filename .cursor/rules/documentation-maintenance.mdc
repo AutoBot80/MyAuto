@@ -1,0 +1,16 @@
+---
+description: Keep project documentation updated when making code or schema changes
+alwaysApply: true
+---
+
+# Documentation Maintenance
+
+When making changes to the codebase or database, update the relevant documentation:
+
+- **New API endpoint or router** → `Documentation/low-level-design.md` (API Endpoints table), `Documentation/high-level-design.md` (backend modules)
+- **New DB table or column** → Add/update DDL script in `DDL/`, update `Documentation/Database DDL.md`
+- **New business rule or constraint** → `Documentation/business-requirements-document.md` (Business Rules section)
+- **New page, flow, or feature** → BRD (Functional Requirements), HLD (client pages, data flow)
+- **New service or repository** → HLD (backend modules), LLD (module layout)
+
+Reference: `Documentation/technical-architecture.md` §6 Documentation Maintenance.

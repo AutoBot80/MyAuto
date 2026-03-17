@@ -63,6 +63,11 @@
             <th>Model</th>
             <th>Color</th>
             <th>Cubic capacity</th>
+            <th>Seating capacity</th>
+            <th>Body type</th>
+            <th>Vehicle type</th>
+            <th>Num cylinders</th>
+            <th>Horsepower</th>
             <th>Total Amount</th>
             <th>Year of Mfg</th>
           </tr>
@@ -106,6 +111,11 @@
           var frame_chassis_num = to12Chars(frameInput);
           var engine_num = to12Chars(engineInput);
           var cubic_capacity = '100';
+          var seating_capacity = '2';
+          var body_type = 'Open';
+          var vehicle_type = 'Motorcycle';
+          var num_cylinders = '2';
+          var horsepower = '3';
           var model = 'Splendor Plus';
           var color = 'Black';
           var total_amount = '72500';
@@ -119,6 +129,11 @@
             '<td>' + model + '</td>' +
             '<td>' + color + '</td>' +
             '<td>' + cubic_capacity + '</td>' +
+            '<td>' + seating_capacity + '</td>' +
+            '<td>' + body_type + '</td>' +
+            '<td>' + vehicle_type + '</td>' +
+            '<td>' + num_cylinders + '</td>' +
+            '<td>' + horsepower + '</td>' +
             '<td>' + total_amount + '</td>' +
             '<td>' + year_of_mfg + '</td>';
           resultsBody.appendChild(tr);

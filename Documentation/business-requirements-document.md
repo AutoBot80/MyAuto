@@ -1,7 +1,7 @@
 # Business Requirements Document (BRD)
 ## Auto Dealer Management System — Arya Agencies
 
-**Version:** 0.1  
+**Version:** 0.2  
 **Last Updated:** March 2025  
 **Status:** Draft
 
@@ -9,15 +9,16 @@
 
 ## 1. Executive Summary
 
-The system is a server–client application for auto dealers. Dealers run a lightweight client on their local machines; the server runs on AWS and handles data, document processing (OCR), and browser automation to push information to external portals (OEM, DMV, lenders).
+The system is a server–client application for auto dealers. Dealers run a lightweight client on their local machines; the server runs on AWS and handles data, document processing (OCR), and browser automation to push information to external portals (OEM DMS, Vahan/RTO, lenders).
 
 ---
 
 ## 2. Business Objectives
 
-- **Centralize dealer data** (vehicles, customers, deals) in a single database.
-- **Reduce manual data entry** by extracting text from uploaded documents (Tesseract OCR).
+- **Centralize dealer data** (vehicles, customers, sales) in a single database.
+- **Reduce manual data entry** by extracting text from uploaded documents (Tesseract OCR, AWS Textract, Vision API).
 - **Automate portal submissions** by filling external web forms from database data (Playwright).
+- **Streamline RTO workflow** — Submit Info, Fill DMS, Form 20 generation, Vahan submission, RTO payment tracking.
 - **Keep the client lightweight** so it runs on typical dealer workstations without heavy infrastructure.
 
 ---
@@ -31,9 +32,23 @@ The system is a server–client application for auto dealers. Dealers run a ligh
 
 ---
 
-## 4. Functional Requirements
+## 4. Business Rules and Constraints
 
-### 4.1 Client Application (Dealer Workstation)
+| ID | Rule | Description |
+|----|------|-------------|
+| BR-1 | Aadhar storage | Only last 4 digits of Aadhar stored in DB; full number shown on frontend only (compliance). |
+| BR-2 | Customer identification | Customer uniquely identified by (aadhar last 4, phone). |
+| BR-3 | Date format | Default date format for app and DB is **dd/mm/yyyy** (e.g. 30/05/1980). |
+| BR-4 | Sales uniqueness | One sale per (customer_id, vehicle_id); sales_id is auto-generated PK. |
+| BR-5 | RTO application | One RTO application per sale (sales_id); application_id from Vahan is PK. |
+| BR-6 | Service reminders | When dealer has auto_sms_reminders = Y, sales_master upsert triggers population of service_reminders_queue from oem_service_schedule. |
+| BR-7 | Form 20 data | Form 20 fields populated from customer_master, vehicle_master, dealer_ref; vehicle data merged from DB when vehicle_id provided. |
+
+---
+
+## 5. Functional Requirements
+
+### 5.1 Client Application (Dealer Workstation)
 
 - **FR-1** Display dealership branding (e.g. "Arya Agencies") and current date.
 - **FR-2** Allow users to view and manage dealer/location data (e.g. list, add dealers).
@@ -42,44 +57,62 @@ The system is a server–client application for auto dealers. Dealers run a ligh
 - **FR-5** Allow users to review and correct OCR-extracted data before it is used.
 - **FR-6** Trigger "send to portal" actions that enqueue automation jobs.
 - **FR-7** Basic client-side validation (required fields, formats) with no heavy business logic.
+- **FR-8** Add Sales flow: Submit Info (customer, vehicle, insurance) → Fill Forms (DMS, Vahan, Form 20) → RTO Payments Pending.
+- **FR-9** RTO Payments Pending page: list pending RTO applications, record payment (txn_id, payment_date).
+- **FR-10** View Customer page: search by mobile/plate, view vehicles and insurance.
 
-### 4.2 Server / Backend
+### 5.2 Server / Backend
 
-- **FR-8** Expose REST APIs for dealers, vehicles, customers, deals, and documents.
-- **FR-9** Accept document uploads, store files (e.g. S3), and create OCR jobs.
-- **FR-10** Process OCR jobs (Tesseract), parse results, and persist structured data.
-- **FR-11** Accept automation requests, enqueue them (Redis or SQS), and track status.
-- **FR-12** Run Playwright workers that log into external portals and submit data from the database.
-- **FR-13** Persist all business data in PostgreSQL with clear ownership (e.g. dealer_id) for multi-tenant use.
+- **FR-11** Expose REST APIs for dealers, vehicles, customers, sales, documents, RTO payments.
+- **FR-12** Accept document uploads, store files (local or S3), and create OCR jobs.
+- **FR-13** Process OCR jobs (Tesseract), parse results, and persist structured data.
+- **FR-14** Accept automation requests, enqueue them (Redis or SQS), and track status.
+- **FR-15** Run Playwright workers that log into external portals and submit data from the database.
+- **FR-16** Persist all business data in PostgreSQL with clear ownership (e.g. dealer_id) for multi-tenant use.
+- **FR-17** Submit Info: upsert customer_master, vehicle_master, sales_master, insurance_master from extracted/entered data.
+- **FR-18** Fill DMS: Playwright login to OEM DMS, search vehicle, scrape data, download Form 21/22; update vehicle_master from scraped data.
+- **FR-19** Form 20: Generate Form 20.pdf from Word template (or PDF overlay / HTML fallback); fill placeholders from customer, vehicle, dealer; output combined PDF (front, back, page 3).
+- **FR-19a** Gate Pass: Generate Gate Pass.pdf from Word template; fill placeholders (OEM name, today date, customer name, Aadhar, model, colour, key no., chassis no.); save to upload subfolder.
+- **FR-20** Vahan (RTO): Playwright fill Vahan portal; create rto_payment_details row with application_id, rto_fees, status Pending.
+- **FR-21** RTO payment: Update rto_payment_details to Paid with pay_txn_id, payment_date.
+- **FR-22** Customer search: Search by mobile or plate; return customers with vehicles and insurance.
+- **FR-23** QR decode: Decode Aadhar QR to extract customer details.
+- **FR-24** Vision / Textract: Optional AI extraction from documents.
 
-### 4.3 Non-Functional Requirements
+### 5.3 Non-Functional Requirements
 
 - **NFR-1** Client: lightweight; minimal logic beyond validation and API calls.
 - **NFR-2** Server: deployable on AWS; scalable for multiple dealers and job volume.
-- **NFR-3** Data: stored in PostgreSQL; files in object storage (e.g. S3).
+- **NFR-3** Data: stored in PostgreSQL; files in object storage or local uploads.
 - **NFR-4** Security: authentication and authorization; dealer data isolated by tenant.
 
 ---
 
-## 5. Out of Scope (Current Phase)
+## 6. Out of Scope (Current Phase)
 
 - Mobile apps.
 - Real-time collaboration.
 - Full OEM/DMV/lender portal coverage (to be expanded incrementally).
+- JWT/OAuth authentication (planned).
 
 ---
 
-## 6. Success Criteria
+## 7. Success Criteria
 
 - Dealer can add/view dealer records via the client against the live backend.
 - Document upload creates an OCR job and extracted data is stored and reviewable.
-- Automation jobs can be enqueued and processed by Playwright workers using DB data.
-- Documentation (HLD, LLD, Technical Architecture) is maintained under the project.
+- Submit Info persists customer, vehicle, sales, insurance.
+- Fill DMS scrapes vehicle data and downloads Form 21/22.
+- Form 20.pdf is generated and saved to upload subfolder.
+- Vahan submission creates RTO application; payment can be recorded.
+- RTO Payments Pending page lists and updates payment status.
+- Documentation (HLD, LLD, Technical Architecture, Database DDL) is maintained under the project.
 
 ---
 
-## 7. Document Control
+## 8. Document Control
 
 | Version | Date | Author | Changes |
 |---------|------|--------|---------|
 | 0.1 | Mar 2025 | — | Initial BRD for Auto Dealer system |
+| 0.2 | Mar 2025 | — | Added business rules (BR-1 to BR-7); FR-8 to FR-24 (Submit Info, Fill DMS, Form 20, Vahan, RTO payment, customer search, QR decode) |

@@ -8,6 +8,7 @@ import { HomePage } from "./pages/HomePage";
 import { PlaceholderPage } from "./pages/PlaceholderPage";
 import { ViewCustomerPage } from "./pages/ViewCustomerPage";
 import { RtoPaymentsPendingPage } from "./pages/RtoPaymentsPendingPage";
+import { BulkLoadsPage } from "./pages/BulkLoadsPage";
 import { getDealer } from "./api/dealers";
 import { getBaseUrl } from "./api/client";
 
@@ -37,6 +38,7 @@ type AppMode = "home" | "pos" | "service" | "rto" | "dealer";
 
 const POS_PAGES: Page[] = [
   "add-sales",
+  "bulk-loads",
   "customer-details",
   "rto-status",
   "contact-us",
@@ -115,6 +117,8 @@ function App() {
             openVahanInNewTab={openVahanInNewTab}
           />
         );
+      case "bulk-loads":
+        return <BulkLoadsPage />;
       case "customer-details":
         return <ViewCustomerPage />;
       case "rto-status":

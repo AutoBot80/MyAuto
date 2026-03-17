@@ -9,6 +9,14 @@ from app.db import get_connection
 from app.repositories.ai_reader_queue import AiReaderQueueRepository
 
 
+def _aadhar_last4(aadhar_id: str | None) -> str | None:
+    """Return only last 4 digits of Aadhar for compliance; never persist full 12 digits."""
+    if not aadhar_id or not str(aadhar_id).strip():
+        return None
+    digits = "".join(c for c in str(aadhar_id) if c.isdigit())
+    return digits[-4:] if len(digits) >= 4 else digits or None
+
+
 def _safe_subfolder_name(subfolder: str) -> str:
     """Safe directory name under ocr_output (one segment, no path separators)."""
     return re.sub(r"[^\w\-]", "_", (subfolder or "").strip()) or "default"
@@ -487,6 +495,9 @@ class OcrService:
                     customer = existing.get("customer") or {}
                     if not isinstance(customer, dict):
                         customer = {}
+                    # Compliance: never persist full Aadhar
+                    if customer.get("aadhar_id"):
+                        customer["aadhar_id"] = _aadhar_last4(customer["aadhar_id"]) or ""
                     existing_insurance = existing.get("insurance") or {}
                     if not isinstance(existing_insurance, dict):
                         existing_insurance = {}
@@ -572,6 +583,10 @@ class OcrService:
                 customer = {k: (cust.get(k) or "") for k in ("name", "address", "city", "state", "pin")}
                 if customer.get("pin"):
                     customer["pin_code"] = customer["pin"]
+
+            # Compliance: never persist full Aadhar; store only last 4 digits
+            if customer.get("aadhar_id"):
+                customer["aadhar_id"] = _aadhar_last4(customer["aadhar_id"]) or ""
 
             self._ensure_ocr_output_dir()
             json_path = _json_output_path(self.ocr_output_dir, subfolder, "Details.jpg")
@@ -696,6 +711,10 @@ class OcrService:
         existing_insurance = data.get("insurance") or {}
         insurance_merged = {**existing_insurance, **{k: v for k, v in insurance_policy.items() if v}}
         data["insurance"] = insurance_merged
+        # Compliance: sanitize customer aadhar before persisting
+        customer = data.get("customer") or {}
+        if customer.get("aadhar_id"):
+            customer["aadhar_id"] = _aadhar_last4(customer["aadhar_id"]) or ""
         json_path.parent.mkdir(parents=True, exist_ok=True)
         json_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
@@ -748,6 +767,9 @@ class OcrService:
                     address = ", ".join(p for p in parts if p)
                     if address:
                         customer["address"] = address
+                    # Compliance: never persist full Aadhar; store only last 4 digits
+                    if customer.get("aadhar_id"):
+                        customer["aadhar_id"] = _aadhar_last4(customer["aadhar_id"]) or ""
                     data["customer"] = customer
                 else:
                     raise ValueError("No QR fields")
@@ -764,6 +786,11 @@ class OcrService:
                 json_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
             except Exception:
                 pass
+
+        # Compliance: sanitize customer aadhar on return (handles legacy JSON with full Aadhar)
+        customer = data.get("customer") or {}
+        if customer.get("aadhar_id"):
+            customer["aadhar_id"] = _aadhar_last4(customer["aadhar_id"]) or ""
         return data
 
     def list_extractions(self, limit: int = 200) -> list[dict]:

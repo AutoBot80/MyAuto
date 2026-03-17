@@ -4,6 +4,7 @@ import type { Page } from "../types";
 
 const PAGE_LABELS: Record<Page, string> = {
   "add-sales": "Add Sales",
+  "bulk-loads": "Bulk Loads",
   "customer-details": "View Customers",
   "rto-status": "RTO Payments Pending",
   "service-reminders": "Service Reminders",
