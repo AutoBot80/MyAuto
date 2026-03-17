@@ -957,10 +957,67 @@
   white-space: nowrap;
 }
 
+.bulk-loads-tabs {
+  display: flex;
+  gap: 0;
+  margin-bottom: 1rem;
+  border-bottom: 1px solid #ccc;
+}
+
+.bulk-loads-tab {
+  padding: 0.5rem 1rem;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 1rem;
+  color: #666;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+
+.bulk-loads-tab:hover {
+  color: #333;
+}
+
+.bulk-loads-tab--active {
+  color: #0066cc;
+  font-weight: 500;
+  border-bottom-color: #0066cc;
+}
+
+.bulk-loads-date-filters {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+
+.bulk-loads-date-filters label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+}
+
+.bulk-loads-date-input {
+  width: 100px;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.9rem;
+}
+
 .bulk-loads-filters {
   display: flex;
   gap: 16px;
   align-items: center;
+}
+
+.bulk-loads-checkboxes {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 0.5rem;
 }
 
 .bulk-loads-checkbox {
@@ -1013,6 +1070,11 @@
 
 .bulk-loads-status--processing {
   color: #1e5a9e;
+  font-weight: 500;
+}
+
+.bulk-loads-status--rejected {
+  color: #a65;
   font-weight: 500;
 }
 

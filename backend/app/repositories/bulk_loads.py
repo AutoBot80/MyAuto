@@ -1,5 +1,7 @@
 """Data access for bulk_loads table."""
 
+from datetime import datetime
+
 from app.db import get_connection
 
 
@@ -36,6 +38,9 @@ class BulkLoadsRepository:
             )
             cur.execute(
                 f"ALTER TABLE {BulkLoadsRepository.TABLE_NAME} ADD COLUMN IF NOT EXISTS result_folder VARCHAR(512)"
+            )
+            cur.execute(
+                f"ALTER TABLE {BulkLoadsRepository.TABLE_NAME} ADD COLUMN IF NOT EXISTS action_taken BOOLEAN NOT NULL DEFAULT FALSE"
             )
 
     @staticmethod
@@ -99,28 +104,106 @@ class BulkLoadsRepository:
             return dict(row) if row else None
 
     @staticmethod
-    def list_all(conn, limit: int = 200, status_filter: str | None = None) -> list[dict]:
+    def list_all(
+        conn,
+        limit: int = 200,
+        status_filter: str | None = None,
+        status_in: list[str] | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> list[dict]:
+        """List bulk loads. status_filter: single status. status_in: multiple (e.g. Processed). date_from/date_to: dd-mm-yyyy."""
+        conditions: list[str] = []
+        params: list = []
+        if status_filter and status_filter.lower() in ("success", "error", "processing", "rejected"):
+            conditions.append("status = %s")
+            params.append(status_filter.capitalize())
+        elif status_in:
+            placeholders = ", ".join("%s" for _ in status_in)
+            conditions.append(f"status IN ({placeholders})")
+            params.extend(s.capitalize() for s in status_in)
+        if date_from:
+            try:
+                d = datetime.strptime(date_from.strip(), "%d-%m-%Y").date()
+                conditions.append("created_at::date >= %s")
+                params.append(d)
+            except ValueError:
+                pass
+        if date_to:
+            try:
+                d = datetime.strptime(date_to.strip(), "%d-%m-%Y").date()
+                conditions.append("created_at::date <= %s")
+                params.append(d)
+            except ValueError:
+                pass
+        where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+        params.append(limit)
         with conn.cursor() as cur:
-            if status_filter and status_filter.lower() in ("success", "error", "processing"):
-                cur.execute(
-                    f"""
-                    SELECT id, subfolder, file_name, mobile, name, folder_path, result_folder, status, error_message, created_at, updated_at
-                    FROM {BulkLoadsRepository.TABLE_NAME}
-                    WHERE status = %s
-                    ORDER BY created_at DESC
-                    LIMIT %s
-                    """,
-                    (status_filter.capitalize(), limit),
-                )
-            else:
-                cur.execute(
-                    f"""
-                    SELECT id, subfolder, file_name, mobile, name, folder_path, result_folder, status, error_message, created_at, updated_at
-                    FROM {BulkLoadsRepository.TABLE_NAME}
-                    ORDER BY created_at DESC
-                    LIMIT %s
-                    """,
-                    (limit,),
-                )
+            cur.execute(
+                f"""
+                SELECT id, subfolder, file_name, mobile, name, folder_path, result_folder, status, error_message, action_taken, created_at, updated_at
+                FROM {BulkLoadsRepository.TABLE_NAME}
+                {where}
+                ORDER BY created_at DESC
+                LIMIT %s
+                """,
+                params,
+            )
             rows = cur.fetchall()
             return [dict(r) for r in rows]
+
+    @staticmethod
+    def count_by_status(
+        conn,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> dict[str, int]:
+        """Return counts per status within date range. Keys: Success, Error, Processing, Rejected."""
+        conditions: list[str] = []
+        params: list = []
+        if date_from:
+            try:
+                d = datetime.strptime(date_from.strip(), "%d-%m-%Y").date()
+                conditions.append("created_at::date >= %s")
+                params.append(d)
+            except ValueError:
+                pass
+        if date_to:
+            try:
+                d = datetime.strptime(date_to.strip(), "%d-%m-%Y").date()
+                conditions.append("created_at::date <= %s")
+                params.append(d)
+            except ValueError:
+                pass
+        where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT status, COUNT(*) as cnt
+                FROM {BulkLoadsRepository.TABLE_NAME}
+                {where}
+                GROUP BY status
+                """,
+                params,
+            )
+            rows = cur.fetchall()
+        result = {"Success": 0, "Error": 0, "Processing": 0, "Rejected": 0}
+        for row in rows:
+            status = (row.get("status") or "").capitalize()
+            if status in result:
+                result[status] = int(row.get("cnt") or 0)
+        return result
+
+    @staticmethod
+    def count_pending_attention(conn) -> int:
+        """Count Error + Rejected records where action_taken = false (need operator attention)."""
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT COUNT(*) as cnt
+                FROM {BulkLoadsRepository.TABLE_NAME}
+                WHERE status IN ('Error', 'Rejected') AND (action_taken IS NULL OR action_taken = FALSE)
+                """
+            )
+            row = cur.fetchone()
+            return int(row.get("cnt") or 0)

@@ -2,7 +2,7 @@
 """
 Merge raw scans (Aadhar back, Insurance, Aadhar front, Details sheet) into combined PDFs.
 Order: Aadhar_back.jpg, Insurance.jpg, Aadhar.jpg, Details.jpg
-Output: My Auto.AI/Bulk Upload/Scans/<subfolder>/Scans.pdf
+Output: My Auto.AI/Bulk Upload/Input Scans/<subfolder>/Scans.pdf
 
 Run from project root: python scripts/merge_scans_to_bulk.py
 Or: python -m scripts.merge_scans_to_bulk (from project root)
@@ -29,7 +29,7 @@ def main() -> int:
             print(f"  OK {r['subfolder']} -> {r['output_path']}")
         else:
             print(f"  SKIP {r['subfolder']}: {r.get('error', 'no files')}")
-    print(f"\nDone: {ok}/{len(results)} subfolders merged into {BULK_UPLOAD_DIR / 'Scans'}")
+    print(f"\nDone: {ok}/{len(results)} subfolders merged into {BULK_UPLOAD_DIR / 'Input Scans'}")
     return 0
 
 

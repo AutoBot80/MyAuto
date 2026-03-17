@@ -1,7 +1,7 @@
 """
 Merge raw scans (Aadhar back, Insurance, Aadhar front, Details sheet) into a combined PDF.
 Order: Aadhar_back.jpg, Insurance.jpg, Aadhar.jpg, Details.jpg
-Output: Bulk Upload/Scans/<subfolder>/Scans.pdf
+Output: Bulk Upload/Input Scans/<subfolder>/Scans.pdf
 """
 import logging
 from pathlib import Path
@@ -67,10 +67,10 @@ def merge_all_scans(
     output_base: Path,
 ) -> list[dict]:
     """
-    Process all subfolders under uploads_dir; merge scans into output_base/Scans/<subfolder>/Scans.pdf.
+    Process all subfolders under uploads_dir; merge scans into output_base/Input Scans/<subfolder>/Scans.pdf.
     Returns list of {subfolder, output_path, pages, error}.
     """
-    output_dir = output_base / "Scans"
+    output_dir = output_base / "Input Scans"
     output_dir.mkdir(parents=True, exist_ok=True)
     results: list[dict] = []
 

@@ -10,6 +10,7 @@ import { ViewCustomerPage } from "./pages/ViewCustomerPage";
 import { RtoPaymentsPendingPage } from "./pages/RtoPaymentsPendingPage";
 import { BulkLoadsPage } from "./pages/BulkLoadsPage";
 import { getDealer } from "./api/dealers";
+import { getBulkLoadPendingCount } from "./api/bulkLoads";
 import { getBaseUrl } from "./api/client";
 
 const DEALER_ID = Number(import.meta.env.VITE_DEALER_ID) || 100001;
@@ -64,6 +65,7 @@ function App() {
   const today = useToday();
   const [mode, setMode] = useState<AppMode>("home");
   const [page, setPage] = useState<Page>("add-sales");
+  const [bulkLoadsPendingCount, setBulkLoadsPendingCount] = useState<number>(0);
   const [dealerName, setDealerName] = useState<string>("—");
   const [dealerCity, setDealerCity] = useState<string | null>(null);
   const [dmsLink, setDmsLink] = useState<string | null>(null);
@@ -77,6 +79,24 @@ function App() {
       })
       .catch(() => setDealerName("Dealer"));
   }, []);
+
+  const refreshBulkLoadsPendingCount = () => {
+    if (mode === "pos") {
+      getBulkLoadPendingCount()
+        .then(setBulkLoadsPendingCount)
+        .catch(() => setBulkLoadsPendingCount(0));
+    }
+  };
+
+  useEffect(() => {
+    if (mode === "pos") {
+      refreshBulkLoadsPendingCount();
+      const interval = setInterval(refreshBulkLoadsPendingCount, 15000);
+      return () => clearInterval(interval);
+    } else {
+      setBulkLoadsPendingCount(0);
+    }
+  }, [mode]);
 
   // When switching mode, ensure page is in the current tab list (avoid blank screen). Must run on every render (before any early return).
   useEffect(() => {
@@ -202,6 +222,7 @@ function App() {
         onNavigate={(p) => setPage(p)}
         visiblePages={visiblePages}
         onGoHome={() => setMode("home")}
+        tabBadges={mode === "pos" ? { "bulk-loads": bulkLoadsPendingCount } : undefined}
       >
         <PageErrorBoundary>{content}</PageErrorBoundary>
       </AppLayoutV2>

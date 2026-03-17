@@ -239,8 +239,8 @@ def process_new_scans_and_record(
 
 
 def discover_new_scans() -> list[Path]:
-    """Find Scans.pdf files in Bulk Upload/Scans that have not been processed (no .processed marker)."""
-    scans_dir = BULK_UPLOAD_DIR / "Scans"
+    """Find Scans.pdf files in Bulk Upload/Input Scans that have not been processed (no .processed marker)."""
+    scans_dir = BULK_UPLOAD_DIR / "Input Scans"
     if not scans_dir.is_dir():
         return []
     found: list[Path] = []

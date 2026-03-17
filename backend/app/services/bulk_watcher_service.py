@@ -1,5 +1,5 @@
 """
-File watcher for Bulk Upload/Scans. When Scans.pdf appears, copy to Processing,
+File watcher for Bulk Upload/Input Scans. When Scans.pdf appears, copy to Processing,
 run pre-OCR (Tesseract/Textract) to extract mobile, rename to mobile.pdf if found,
 then process and record in bulk_loads.
 """
@@ -16,6 +16,7 @@ from app.services.bulk_upload_service import process_new_scans_and_record
 from app.services.pre_ocr_service import (
     run_pre_ocr_and_prepare,
     move_processing_to_success_or_error,
+    move_to_rejected,
     PROCESSING_DIR,
 )
 
@@ -73,7 +74,7 @@ def _process_one(scans_pdf: Path, marker: Path | None = None) -> bool:
         marker = scans_pdf.parent / ".processed"
     if marker.exists():
         return False
-    scans_dir = BULK_UPLOAD_DIR / "Scans"
+    scans_dir = BULK_UPLOAD_DIR / "Input Scans"
     initial_subfolder = scans_pdf.stem if scans_pdf.parent == scans_dir else scans_pdf.parent.name
 
     conn = get_connection()
@@ -99,7 +100,7 @@ def _process_one(scans_pdf: Path, marker: Path | None = None) -> bool:
         # extract mobile. Mobile is required for Add Customer - do not proceed without it.
         PROCESSING_DIR.mkdir(parents=True, exist_ok=True)
         try:
-            classified_dir, subfolder, mobile, ocr_path = run_pre_ocr_and_prepare(
+            classified_dir, subfolder, mobile, ocr_path, missing = run_pre_ocr_and_prepare(
                 scans_pdf,
                 processing_dir=PROCESSING_DIR,
                 use_textract=BULK_PRE_OCR_USE_TEXTRACT,
@@ -112,7 +113,7 @@ def _process_one(scans_pdf: Path, marker: Path | None = None) -> bool:
                 conn.commit()
             finally:
                 conn.close()
-            # Move to Error: Processing PDF/pre-OCR and original from Scans
+            # Move to Error: Processing PDF/pre-OCR and original from Input Scans
             result_folder = _move_to_error_on_exception(scans_pdf.stem, original_scan_path=scans_pdf)
             conn = get_connection()
             try:
@@ -124,26 +125,24 @@ def _process_one(scans_pdf: Path, marker: Path | None = None) -> bool:
                 marker.unlink()
             return True
 
-        if not mobile:
-            # Mobile is critical for Add Customer - stop and report error
-            conn = get_connection()
-            try:
-                BulkLoadsRepository.update_status(
-                    conn, bulk_load_id, "Error",
-                    error_message="Mobile number not found in pre-OCR. Add Customer requires mobile.",
-                    folder_path=subfolder,
-                    subfolder=subfolder,
-                )
-                conn.commit()
-            finally:
-                conn.close()
-            result_folder = move_processing_to_success_or_error(
-                classified_dir, ocr_path, scans_pdf.stem, None, success=False,
+        # Validation failed (classification could not identify mobile + 3 critical pages) — move to Rejected, no split
+        if missing:
+            error_msg = f"Rejected: missing {', '.join(missing)}"
+            logger.warning("bulk_watcher: %s for %s", error_msg, scans_pdf)
+            pdf_in_proc = PROCESSING_DIR / f"{scans_pdf.stem}.pdf"
+            result_folder = move_to_rejected(
+                pdf_in_proc, ocr_path, scans_pdf.stem,
                 original_scan_path=scans_pdf,
             )
             conn = get_connection()
             try:
-                BulkLoadsRepository.update_status(conn, bulk_load_id, "Error", result_folder=result_folder)
+                BulkLoadsRepository.update_status(
+                    conn, bulk_load_id, "Rejected",
+                    error_message=error_msg,
+                    folder_path=result_folder,
+                    subfolder=subfolder,
+                )
+                BulkLoadsRepository.update_result_folder(conn, bulk_load_id, result_folder)
                 conn.commit()
             finally:
                 conn.close()
@@ -186,7 +185,7 @@ def _process_one(scans_pdf: Path, marker: Path | None = None) -> bool:
             conn.commit()
         finally:
             conn.close()
-        # Move to Error (original from Scans, classified dir or PDF, pre-OCR)
+        # Move to Error (original from Input Scans, classified dir or PDF, pre-OCR)
         try:
             classified_dir = PROCESSING_DIR / f"classified_{scans_pdf.stem}"
             processing_path = classified_dir if classified_dir.is_dir() else next((f for f in PROCESSING_DIR.glob("*.pdf") if f.is_file()), None)
@@ -214,14 +213,14 @@ def _process_one(scans_pdf: Path, marker: Path | None = None) -> bool:
 
 
 def _find_pending_pdf(scans_dir: Path) -> Path | None:
-    """Find a Scans.pdf or Scan*.pdf to process. Oldest first. Checks subfolders first, then files directly in Scans."""
-    # 1) Subfolders: Scans/<subfolder>/Scans.pdf — sort by mtime (oldest first)
+    """Find a Scans.pdf or Scan*.pdf to process. Oldest first. Checks subfolders first, then files directly in Input Scans."""
+    # 1) Subfolders: Input Scans/<subfolder>/Scans.pdf — sort by mtime (oldest first)
     subdirs = [d for d in scans_dir.iterdir() if d.is_dir()]
     for subdir in sorted(subdirs, key=lambda p: p.stat().st_mtime):
         pdf_path = subdir / "Scans.pdf"
         if pdf_path.exists() and not (subdir / ".processed").exists():
             return pdf_path
-    # 2) Files directly in Scans: Scans/Scan1.pdf, etc. — sort by mtime (oldest first)
+    # 2) Files directly in Input Scans: Input Scans/Scan1.pdf, etc. — sort by mtime (oldest first)
     pdf_files = [
         f for f in scans_dir.iterdir()
         if f.is_file() and f.suffix.lower() == ".pdf" and f.stem.lower().startswith("scan")
@@ -273,7 +272,7 @@ def _watcher_loop() -> None:
             if _has_processing_in_progress():
                 _watcher_stop.wait(timeout=POLL_INTERVAL_SEC)
                 continue
-            scans_dir = BULK_UPLOAD_DIR / "Scans"
+            scans_dir = BULK_UPLOAD_DIR / "Input Scans"
             if scans_dir.is_dir():
                 pdf_path = _find_pending_pdf(scans_dir)
                 if pdf_path:

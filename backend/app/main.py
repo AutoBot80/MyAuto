@@ -36,10 +36,11 @@ app = FastAPI(title="Auto Dealer Server", version="0.1.0", lifespan=lifespan)
 
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 OCR_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-(BULK_UPLOAD_DIR / "Scans").mkdir(parents=True, exist_ok=True)
+(BULK_UPLOAD_DIR / "Input Scans").mkdir(parents=True, exist_ok=True)
 (BULK_UPLOAD_DIR / "Processing").mkdir(parents=True, exist_ok=True)
 (BULK_UPLOAD_DIR / "Success").mkdir(parents=True, exist_ok=True)
 (BULK_UPLOAD_DIR / "Error").mkdir(parents=True, exist_ok=True)
+(BULK_UPLOAD_DIR / "Rejected scans").mkdir(parents=True, exist_ok=True)
 
 app.add_middleware(
     CORSMiddleware,

@@ -50,29 +50,35 @@ _INSURANCE_PATTERNS = [
     re.compile(r"premium\s+of\s+rs\.?", re.IGNORECASE),
 ]
 
-# Aadhar back: "Address of the cardholder", instructions
+# Aadhar back: Address, www.uidai.gov.in (distinctive — back has this URL)
 _AADHAR_BACK_PATTERNS = [
+    re.compile(r"www\.uidai\.gov\.in|uidai\.gov\.in", re.IGNORECASE),
     re.compile(r"address\s+of\s+the\s+cardholder", re.IGNORECASE),
     re.compile(r"address\s+is\s+as\s+per\s+(?:the\s+)?uidai", re.IGNORECASE),
-    re.compile(r"your\s+aadha?ar", re.IGNORECASE),
+    re.compile(r"\baddress\b.*\buidai\b|\buidai\b.*\baddress\b", re.IGNORECASE | re.DOTALL),
 ]
 
-# Aadhar front: Government of India, Unique Identification, main Aadhaar text
+# Aadhar front: Government of India, QR (not detectable from text); no uidai.gov.in
 _AADHAR_FRONT_PATTERNS = [
-    re.compile(r"unique\s+identification\s+authority\s+of\s+india", re.IGNORECASE),
     re.compile(r"government\s+of\s+india", re.IGNORECASE),
-    re.compile(r"\b(?:aadha?ar|aadhar|aadhaar)\b", re.IGNORECASE),
-    re.compile(r"\buidai\b", re.IGNORECASE),
+    re.compile(r"unique\s+identification\s+authority\s+of\s+india", re.IGNORECASE),
     re.compile(r"\b\d{4}\s+\d{4}\s+\d{4}\b"),  # 12-digit Aadhar format
-    re.compile(r"(?:male|female)\s*/\s*(?:m|f)\b", re.IGNORECASE),  # Gender on Aadhar
+    re.compile(r"(?:male|female)\s*/\s*(?:m|f)\b", re.IGNORECASE),
     re.compile(r"date\s+of\s+birth|year\s+of\s+birth|d\.?o\.?b\.?", re.IGNORECASE),
-    re.compile(r"care\s+of\s*[:]?", re.IGNORECASE),  # Care of field
+    re.compile(r"care\s+of\s*[:]?", re.IGNORECASE),
 ]
+
+
+# Back has www.uidai.gov.in; front must NOT have it (front has Government of India)
+_AADHAR_BACK_MARKER = re.compile(r"www\.uidai\.gov\.in|uidai\.gov\.in", re.IGNORECASE)
+_AADHAR_FRONT_MARKER = re.compile(r"government\s+of\s+india", re.IGNORECASE)
 
 
 def classify_page_by_text(text: str) -> str:
     """
     Classify a single page from its OCR text.
+    Aadhar front: Government of India (no uidai.gov.in).
+    Aadhar back: Address, www.uidai.gov.in.
     Returns one of: Aadhar, Aadhar_back, Details, Insurance, unused.
     """
     if not text or not isinstance(text, str):
@@ -82,7 +88,17 @@ def classify_page_by_text(text: str) -> str:
     if len(t) < 20:
         return PAGE_TYPE_UNUSED
 
-    # Score each type by number of pattern matches
+    # Aadhar back vs front: back has uidai.gov.in; front has Government of India
+    has_back_marker = _AADHAR_BACK_MARKER.search(t)
+    has_front_marker = _AADHAR_FRONT_MARKER.search(t)
+    if has_back_marker:
+        # www.uidai.gov.in is on the back — classify as back
+        return PAGE_TYPE_AADHAR_BACK
+    if has_front_marker:
+        # Government of India without uidai.gov.in — front
+        return PAGE_TYPE_AADHAR
+
+    # Score other types
     scores: dict[str, int] = {
         PAGE_TYPE_DETAILS: 0,
         PAGE_TYPE_INSURANCE: 0,
@@ -103,7 +119,6 @@ def classify_page_by_text(text: str) -> str:
         if pat.search(t):
             scores[PAGE_TYPE_AADHAR] += 1
 
-    # Pick best match; require at least 1 hit
     best_type = PAGE_TYPE_UNUSED
     best_score = 0
     for ptype, score in scores.items():

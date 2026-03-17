@@ -57,7 +57,6 @@ export function RtoPaymentsPendingPage({ showPayLink = false }: RtoPaymentsPendi
   if (loading && rows.length === 0) {
     return (
       <div className="app-placeholder rto-payments-page">
-        <h2>RTO Payments Pending</h2>
         <p>Loading…</p>
       </div>
     );
@@ -66,7 +65,6 @@ export function RtoPaymentsPendingPage({ showPayLink = false }: RtoPaymentsPendi
   if (error && rows.length === 0) {
     return (
       <div className="app-placeholder rto-payments-page">
-        <h2>RTO Payments Pending</h2>
         <p className="rto-payments-error">{error}</p>
       </div>
     );
@@ -87,7 +85,6 @@ export function RtoPaymentsPendingPage({ showPayLink = false }: RtoPaymentsPendi
 
   return (
     <div className="rto-payments-page">
-      <h2 className="rto-payments-title">RTO Payments Pending</h2>
       {error && <p className="rto-payments-error">{error}</p>}
       <div className="rto-payments-table-wrap">
         <table className="rto-payments-table">

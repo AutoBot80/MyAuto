@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 PROCESSING_DIR = BULK_UPLOAD_DIR / "Processing"
 SUCCESS_DIR = BULK_UPLOAD_DIR / "Success"
 ERROR_DIR = BULK_UPLOAD_DIR / "Error"
+REJECTED_DIR = BULK_UPLOAD_DIR / "Rejected scans"
 
 # Indian mobile: 10 digits starting with 6, 7, 8, or 9 (optional +91 prefix, spaces, dashes)
 MOBILE_PATTERN = re.compile(r"(?:\+91[\s\-]*)?([6-9]\d{9})\b")
@@ -199,13 +200,12 @@ def run_pre_ocr_and_prepare(
     source_pdf: Path,
     processing_dir: Path | None = None,
     use_textract: bool = True,
-) -> tuple[Path, str, str | None, Path | None]:
+) -> tuple[Path | None, str, str | None, Path | None, list[str] | None]:
     """
-    Copy PDF to Processing, run pre-OCR, classify pages, split into Aadhar.jpg,
-    Aadhar_back.jpg, Details.jpg, Insurance.jpg, unused.pdf.
-    Returns (classified_dir, subfolder, mobile_or_none, ocr_path).
-    classified_dir contains the split files; subfolder = mobile_ddmmyy if mobile found.
-    Mobile is required for Add Customer; caller must not proceed if None.
+    Copy PDF to Processing, run pre-OCR, classify pages, split into Aadhar.jpg, etc.
+    Validates BEFORE splitting: mobile + 3 critical classifications (Aadhar, Aadhar_back, Details).
+    Returns (classified_dir | None, subfolder, mobile_or_none, ocr_path, missing_list | None).
+    If missing_list is non-empty, validation failed; do not split. classified_dir is None.
     """
     from app.services.upload_service import UploadService
 
@@ -219,7 +219,23 @@ def run_pre_ocr_and_prepare(
     # Run pre-OCR
     full_text, ocr_path, mobile = pre_ocr_pdf(dest_pdf, processing_dir=proc_dir, use_textract=use_textract)
 
-    # Classify and split pages into logical files (order-independent)
+    # Validate from classification (before splitting): mobile + 3 critical page types
+    classifications = classify_pages_from_ocr_text(full_text)
+    classified_types: set[str] = {ptype for _, ptype in classifications}
+    missing: list[str] = []
+    if not mobile:
+        missing.append("mobile number")
+    if PAGE_TYPE_AADHAR not in classified_types:
+        missing.append("Aadhar front")
+    if PAGE_TYPE_AADHAR_BACK not in classified_types:
+        missing.append("Aadhar back")
+    if PAGE_TYPE_DETAILS not in classified_types:
+        missing.append("Details sheet")
+
+    if missing:
+        return None, source_pdf.stem, mobile, ocr_path, missing
+
+    # All present: split into JPGs
     classified_subdir = f"classified_{source_pdf.stem}"
     classified_dir = proc_dir / classified_subdir
     _split_pdf_by_classification(dest_pdf, full_text, classified_dir)
@@ -229,7 +245,7 @@ def run_pre_ocr_and_prepare(
     else:
         subfolder = source_pdf.stem
 
-    return classified_dir, subfolder, mobile, ocr_path
+    return classified_dir, subfolder, mobile, ocr_path, None
 
 
 def move_processing_to_success_or_error(
@@ -243,8 +259,8 @@ def move_processing_to_success_or_error(
     """
     Move processing output and pre-OCR to Success or Error.
     processing_path: classified dir (with Aadhar.jpg, etc.) or PDF; contents moved to dest.
-    Success: original scan from Scans -> Success/mobile_ddmmyyyy/
-    Error: original scan from Scans -> Error/filename_ddmmyyyy/
+    Success: original scan from Input Scans -> Success/mobile_ddmmyyyy/
+    Error: original scan from Input Scans -> Error/filename_ddmmyyyy/
     """
     ddmmyyyy = datetime.now().strftime("%d%m%Y")
     if success and mobile:
@@ -260,7 +276,7 @@ def move_processing_to_success_or_error(
     except ValueError:
         result_folder = f"{'Success' if success and mobile else 'Error'}/{dest_subdir}"
 
-    # Prefer original scan from Scans folder; move it to Success/Error so Scans is cleared
+    # Prefer original scan from Input Scans folder; move it to Success/Error so Input Scans is cleared
     if original_scan_path and original_scan_path.exists():
         dest_pdf = dest_dir / original_scan_path.name
         shutil.move(str(original_scan_path), str(dest_pdf))
@@ -287,5 +303,58 @@ def move_processing_to_success_or_error(
         dest_ocr = dest_dir / ocr_path.name
         shutil.move(str(ocr_path), str(dest_ocr))
         logger.info("Moved %s -> %s", ocr_path.name, dest_dir)
+
+    return result_folder
+
+
+def move_to_rejected(
+    processing_path: Path | None,
+    ocr_path: Path | None,
+    original_filename_stem: str,
+    original_scan_path: Path | None = None,
+) -> str:
+    """
+    Move processing output and pre-OCR to Rejected scans (validation failed).
+    dest: Rejected scans/filename_ddmmyyyy/
+    """
+    ddmmyyyy = datetime.now().strftime("%d%m%Y")
+    dest_subdir = f"{original_filename_stem}_{ddmmyyyy}"
+    dest_dir = REJECTED_DIR / dest_subdir
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        result_folder = str(dest_dir.relative_to(BULK_UPLOAD_DIR))
+    except ValueError:
+        result_folder = f"Rejected scans/{dest_subdir}"
+
+    if original_scan_path and original_scan_path.exists():
+        dest_pdf = dest_dir / original_scan_path.name
+        shutil.move(str(original_scan_path), str(dest_pdf))
+        logger.info("Moved original scan %s -> Rejected %s", original_scan_path.name, dest_dir)
+
+    if processing_path and processing_path.exists():
+        if processing_path.is_dir():
+            for f in processing_path.iterdir():
+                if f.is_file():
+                    dest_f = dest_dir / f.name
+                    shutil.move(str(f), str(dest_f))
+                    logger.info("Moved %s -> Rejected %s", f.name, dest_dir)
+            try:
+                processing_path.rmdir()
+            except OSError:
+                pass
+        else:
+            dest_pdf = dest_dir / processing_path.name
+            shutil.move(str(processing_path), str(dest_pdf))
+            logger.info("Moved %s -> Rejected %s", processing_path.name, dest_dir)
+
+    pdf_in_proc = PROCESSING_DIR / f"{original_filename_stem}.pdf"
+    if pdf_in_proc.exists():
+        shutil.move(str(pdf_in_proc), str(dest_dir / pdf_in_proc.name))
+        logger.info("Moved %s -> Rejected %s", pdf_in_proc.name, dest_dir)
+
+    if ocr_path and ocr_path.exists():
+        dest_ocr = dest_dir / ocr_path.name
+        shutil.move(str(ocr_path), str(dest_ocr))
+        logger.info("Moved %s -> Rejected %s", ocr_path.name, dest_dir)
 
     return result_folder

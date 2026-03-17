@@ -23,6 +23,8 @@ interface AppLayoutV2Props {
   visiblePages?: Page[];
   /** When set, show a Home link in the header that calls this. */
   onGoHome?: () => void;
+  /** Badge counts for tabs, e.g. { "bulk-loads": 5 } shows "Bulk Loads (5)" */
+  tabBadges?: Partial<Record<Page, number>>;
 }
 
 export function AppLayoutV2({
@@ -34,6 +36,7 @@ export function AppLayoutV2({
   children,
   visiblePages,
   onGoHome,
+  tabBadges,
 }: AppLayoutV2Props) {
   const tabs: Page[] = visiblePages ?? (Object.keys(PAGE_LABELS) as Page[]);
   const homeLogo = onGoHome ? (
@@ -70,18 +73,22 @@ export function AppLayoutV2({
           rightSlot={rightSlot}
         />
         <nav className="app-tabs-v2" role="tablist">
-          {tabs.map((p) => (
-            <button
-              key={p}
-              type="button"
-              role="tab"
-              aria-selected={currentPage === p}
-              className={`app-tab-v2 ${currentPage === p ? "active" : ""}`}
-              onClick={() => onNavigate(p)}
-            >
-              {PAGE_LABELS[p]}
-            </button>
-          ))}
+          {tabs.map((p) => {
+            const badge = tabBadges?.[p];
+            return (
+              <button
+                key={p}
+                type="button"
+                role="tab"
+                aria-selected={currentPage === p}
+                className={`app-tab-v2 ${currentPage === p ? "active" : ""}`}
+                onClick={() => onNavigate(p)}
+              >
+                {PAGE_LABELS[p]}
+                {badge != null && badge > 0 ? ` (${badge})` : ""}
+              </button>
+            );
+          })}
         </nav>
         <main className="app-main-v2">
           <div className="app-main-v2-content" key={currentPage}>
