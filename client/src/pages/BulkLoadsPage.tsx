@@ -140,7 +140,7 @@ export function BulkLoadsPage({ onNavigateToAddSales, onRefreshPendingCount }: B
           className={`bulk-loads-tab ${activeTab === "processed" ? "bulk-loads-tab--active" : ""}`}
           onClick={() => setActiveTab("processed")}
         >
-          Processed ({counts.Success + counts.Error + counts.Processing})
+          Processed ({counts.Error})
         </button>
         <button
           type="button"
@@ -196,7 +196,7 @@ export function BulkLoadsPage({ onNavigateToAddSales, onRefreshPendingCount }: B
               checked={showFailure}
               onChange={(e) => setShowFailure(e.target.checked)}
             />
-            Failure ({counts.Error})
+            Error ({counts.Error})
           </label>
           <label className="bulk-loads-checkbox">
             <input
@@ -217,7 +217,7 @@ export function BulkLoadsPage({ onNavigateToAddSales, onRefreshPendingCount }: B
                 <th>Reason</th>
                 <th>Folder</th>
                 <th>Created</th>
-                <th>Reprocessed</th>
+                <th>Seen</th>
               </tr>
             </thead>
             <tbody>
@@ -255,7 +255,7 @@ export function BulkLoadsPage({ onNavigateToAddSales, onRefreshPendingCount }: B
                           checked={r.action_taken ?? false}
                           onChange={(e) => handleActionTakenToggle(r, e.target.checked)}
                           disabled={actionTakenId !== null}
-                          title="Mark as action taken"
+                          title="Mark as seen"
                         />
                       </label>
                     </td>
@@ -275,14 +275,13 @@ export function BulkLoadsPage({ onNavigateToAddSales, onRefreshPendingCount }: B
                 <th>Status</th>
                 <th>Error</th>
                 <th>Created</th>
-                <th>Reprocessed</th>
                 <th></th>
               </tr>
             </thead>
             <tbody>
               {rows.length === 0 ? (
                 <tr>
-                  <td colSpan={9}>No records.</td>
+                  <td colSpan={8}>No records.</td>
                 </tr>
               ) : (
                 rows.map((r) => (
@@ -319,21 +318,6 @@ export function BulkLoadsPage({ onNavigateToAddSales, onRefreshPendingCount }: B
                     </td>
                     <td>{r.created_at ? new Date(r.created_at).toLocaleString() : "—"}</td>
                     <td>
-                      {(r.status === "Error" || r.status === "Rejected") ? (
-                        <label className="bulk-loads-checkbox">
-                          <input
-                            type="checkbox"
-                            checked={r.action_taken ?? false}
-                            onChange={(e) => handleActionTakenToggle(r, e.target.checked)}
-                            disabled={actionTakenId !== null}
-                            title="Mark as action taken"
-                          />
-                        </label>
-                      ) : (
-                        "—"
-                      )}
-                    </td>
-                    <td>
                       {r.status === "Error" && (
                         <button
                           type="button"
@@ -342,7 +326,7 @@ export function BulkLoadsPage({ onNavigateToAddSales, onRefreshPendingCount }: B
                           disabled={reprocessingId !== null}
                           title="Open Add Customer with mobile and scanned files"
                         >
-                          {reprocessingId === r.id ? "Preparing…" : "Re-process"}
+                          {reprocessingId === r.id ? "Preparing…" : "Re-Try"}
                         </button>
                       )}
                     </td>

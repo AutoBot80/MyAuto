@@ -89,6 +89,20 @@ class BulkLoadsRepository:
             )
 
     @staticmethod
+    def set_action_taken(conn, id: int, action_taken: bool = True) -> bool:
+        """Mark a record as action taken (reprocessed by operator). Only for Error/Rejected. Returns True if updated."""
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                UPDATE {BulkLoadsRepository.TABLE_NAME}
+                SET action_taken = %s, updated_at = NOW()
+                WHERE id = %s AND status IN ('Error', 'Rejected')
+                """,
+                (action_taken, id),
+            )
+            return cur.rowcount > 0
+
+    @staticmethod
     def get_by_id(conn, id: int) -> dict | None:
         """Get a single bulk load record by id."""
         with conn.cursor() as cur:
@@ -193,6 +207,54 @@ class BulkLoadsRepository:
             if status in result:
                 result[status] = int(row.get("cnt") or 0)
         return result
+
+    @staticmethod
+    def count_by_status_pending(
+        conn,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> dict[str, int]:
+        """Like count_by_status but Error and Rejected exclude action_taken records (for tab display)."""
+        base = BulkLoadsRepository.count_by_status(conn, date_from=date_from, date_to=date_to)
+        conditions: list[str] = [
+            "status IN ('Error', 'Rejected')",
+            "(action_taken IS NULL OR action_taken = FALSE)",
+        ]
+        params: list = []
+        if date_from:
+            try:
+                d = datetime.strptime(date_from.strip(), "%d-%m-%Y").date()
+                conditions.append("created_at::date >= %s")
+                params.append(d)
+            except ValueError:
+                pass
+        if date_to:
+            try:
+                d = datetime.strptime(date_to.strip(), "%d-%m-%Y").date()
+                conditions.append("created_at::date <= %s")
+                params.append(d)
+            except ValueError:
+                pass
+        where = " AND ".join(conditions)
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT status, COUNT(*) as cnt
+                FROM {BulkLoadsRepository.TABLE_NAME}
+                WHERE {where}
+                GROUP BY status
+                """,
+                params,
+            )
+            rows = cur.fetchall()
+        pending_err = sum(int(r.get("cnt") or 0) for r in rows if (r.get("status") or "").capitalize() == "Error")
+        pending_rej = sum(int(r.get("cnt") or 0) for r in rows if (r.get("status") or "").capitalize() == "Rejected")
+        return {
+            "Success": base["Success"],
+            "Error": pending_err,
+            "Processing": base["Processing"],
+            "Rejected": pending_rej,
+        }
 
     @staticmethod
     def count_pending_attention(conn) -> int:

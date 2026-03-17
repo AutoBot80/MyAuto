@@ -1,7 +1,7 @@
 """
-File watcher for Bulk Upload/Input Scans. When Scans.pdf appears, copy to Processing,
-run pre-OCR (Tesseract/Textract) to extract mobile, rename to mobile.pdf if found,
-then process and record in bulk_loads.
+File watcher for Bulk Upload/Input Scans. Watches Input Scans only for new PDFs
+(Scans.pdf in subfolders or Scan*.pdf directly). Copies to Processing, runs pre-OCR,
+extracts mobile, then processes and records in bulk_loads.
 """
 
 import logging
@@ -16,6 +16,7 @@ from app.services.bulk_upload_service import process_new_scans_and_record
 from app.services.pre_ocr_service import (
     run_pre_ocr_and_prepare,
     move_processing_to_success_or_error,
+    move_multi_customer_to_success_or_error,
     move_to_rejected,
     PROCESSING_DIR,
 )
@@ -29,7 +30,7 @@ _watcher_stop = threading.Event()
 
 
 def _move_to_error_on_exception(original_filename_stem: str, original_scan_path: Path | None = None) -> str:
-    """When pre-OCR raises, move original from Scans and Processing PDF/pre-OCR to Error. Returns result_folder path."""
+    """When pre-OCR raises, move original from Input Scans and Processing PDF/pre-OCR to Error. Returns result_folder path."""
     from app.services.pre_ocr_service import ERROR_DIR
     from datetime import datetime
     import shutil
@@ -40,7 +41,7 @@ def _move_to_error_on_exception(original_filename_stem: str, original_scan_path:
     dest_dir.mkdir(parents=True, exist_ok=True)
     result_folder = f"Error/{dest_subdir}"
 
-    # Move original scan from Scans folder first
+    # Move original scan from Input Scans first
     if original_scan_path and original_scan_path.exists():
         shutil.move(str(original_scan_path), str(dest_dir / original_scan_path.name))
         logger.info("Moved original scan %s -> %s", original_scan_path.name, dest_dir)
@@ -100,7 +101,7 @@ def _process_one(scans_pdf: Path, marker: Path | None = None) -> bool:
         # extract mobile. Mobile is required for Add Customer - do not proceed without it.
         PROCESSING_DIR.mkdir(parents=True, exist_ok=True)
         try:
-            classified_dir, subfolder, mobile, ocr_path, missing = run_pre_ocr_and_prepare(
+            bundles, subfolder_stem, mobile, ocr_path, missing = run_pre_ocr_and_prepare(
                 scans_pdf,
                 processing_dir=PROCESSING_DIR,
                 use_textract=BULK_PRE_OCR_USE_TEXTRACT,
@@ -140,7 +141,7 @@ def _process_one(scans_pdf: Path, marker: Path | None = None) -> bool:
                     conn, bulk_load_id, "Rejected",
                     error_message=error_msg,
                     folder_path=result_folder,
-                    subfolder=subfolder,
+                    subfolder=subfolder_stem,
                 )
                 BulkLoadsRepository.update_result_folder(conn, bulk_load_id, result_folder)
                 conn.commit()
@@ -150,7 +151,74 @@ def _process_one(scans_pdf: Path, marker: Path | None = None) -> bool:
                 marker.unlink()
             return True
 
-        # Update bulk_loads with final subfolder (mobile_ddmmyy)
+        # Multi-customer: process each bundle and create one bulk_loads row per customer
+        if len(bundles) > 1:
+            bulk_load_ids = [bulk_load_id]
+            conn = get_connection()
+            try:
+                for _ in range(len(bundles) - 1):
+                    row = BulkLoadsRepository.insert(
+                        conn,
+                        subfolder=initial_subfolder,
+                        file_name=scans_pdf.name,
+                        status="Processing",
+                        folder_path=subfolder_stem,
+                    )
+                    bulk_load_ids.append(row["id"])
+                conn.commit()
+            finally:
+                conn.close()
+
+            results: list[bool] = []
+            for i, (classified_dir, subfolder, m) in enumerate(bundles):
+                conn = get_connection()
+                try:
+                    BulkLoadsRepository.update_status(conn, bulk_load_ids[i], "Processing", folder_path=subfolder, subfolder=subfolder, mobile=m)
+                    conn.commit()
+                finally:
+                    conn.close()
+                ok = process_new_scans_and_record(
+                    bulk_load_ids[i],
+                    classified_dir,
+                    dealer_id=DEALER_ID,
+                    subfolder_override=subfolder,
+                )
+                results.append(ok)
+
+            result_folders = move_multi_customer_to_success_or_error(
+                bundles, ocr_path, scans_pdf.stem, results,
+                original_scan_path=scans_pdf,
+            )
+            conn = get_connection()
+            try:
+                for i, rf in enumerate(result_folders):
+                    if i < len(bulk_load_ids):
+                        BulkLoadsRepository.update_result_folder(conn, bulk_load_ids[i], rf)
+                conn.commit()
+            finally:
+                conn.close()
+            # Clean up base classified dir and Processing PDF
+            base_classified = PROCESSING_DIR / f"classified_{scans_pdf.stem}"
+            if base_classified.is_dir():
+                for sub in list(base_classified.iterdir()):
+                    if sub.is_dir():
+                        try:
+                            sub.rmdir()
+                        except OSError:
+                            pass
+                try:
+                    base_classified.rmdir()
+                except OSError:
+                    pass
+            dest_pdf = PROCESSING_DIR / scans_pdf.name
+            if dest_pdf.exists():
+                dest_pdf.unlink(missing_ok=True)
+            if marker.exists():
+                marker.unlink()
+            return True
+
+        # Single customer
+        classified_dir, subfolder, mobile = bundles[0]
         conn = get_connection()
         try:
             BulkLoadsRepository.update_status(conn, bulk_load_id, "Processing", folder_path=subfolder, subfolder=subfolder, mobile=mobile)

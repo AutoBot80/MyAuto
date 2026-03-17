@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 # Page type identifiers (output filenames)
 PAGE_TYPE_AADHAR = "Aadhar"
 PAGE_TYPE_AADHAR_BACK = "Aadhar_back"
+PAGE_TYPE_AADHAR_COMBINED = "Aadhar_combined"  # Single page with both front and back
 PAGE_TYPE_DETAILS = "Details"
 PAGE_TYPE_INSURANCE = "Insurance"
 PAGE_TYPE_UNUSED = "unused"
@@ -91,6 +92,9 @@ def classify_page_by_text(text: str) -> str:
     # Aadhar back vs front: back has uidai.gov.in; front has Government of India
     has_back_marker = _AADHAR_BACK_MARKER.search(t)
     has_front_marker = _AADHAR_FRONT_MARKER.search(t)
+    if has_back_marker and has_front_marker:
+        # Single page with both front and back (e.g. folded card scanned together)
+        return PAGE_TYPE_AADHAR_COMBINED
     if has_back_marker:
         # www.uidai.gov.in is on the back — classify as back
         return PAGE_TYPE_AADHAR_BACK

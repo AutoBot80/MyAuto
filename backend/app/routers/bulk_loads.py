@@ -63,11 +63,11 @@ def get_bulk_load_counts(
     date_from: str | None = Query(None, description="Filter from date (dd-mm-yyyy)"),
     date_to: str | None = Query(None, description="Filter to date (dd-mm-yyyy)"),
 ) -> dict[str, int]:
-    """Return counts per status (Success, Error, Processing, Rejected) within date range."""
+    """Return counts per status. Error and Rejected exclude action_taken records (for tab display)."""
     conn = get_connection()
     try:
         BulkLoadsRepository.ensure_table(conn)
-        return BulkLoadsRepository.count_by_status(conn, date_from=date_from, date_to=date_to)
+        return BulkLoadsRepository.count_by_status_pending(conn, date_from=date_from, date_to=date_to)
     finally:
         conn.close()
 

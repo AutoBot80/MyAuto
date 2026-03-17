@@ -94,7 +94,7 @@ Bulk upload automates the ingestion of scanned documents from a shared folder in
 
 ### 6.1 Flow Overview
 
-1. **Input Scans folder** — Scanned PDFs (e.g. `Scan1.pdf` or `Scans.pdf` in subfolders) are placed in `Bulk Upload/Input Scans/` by the operator or an external scanner.
+1. **Input Scans folder** — The only input folder for bulk processing. Scanned PDFs (e.g. `Scan1.pdf` or `Scans.pdf` in subfolders) are placed in `Bulk Upload/Input Scans/` by the operator or an external scanner. The watcher monitors this folder only.
 2. **Pre-OCR** — A background watcher picks up new scans, copies them to a Processing folder, and runs pre-OCR (Tesseract or AWS Textract) to extract the mobile number from the document. The mobile is required for Add Customer.
 3. **Add Customer processing** — If a mobile is found, the system invokes the Add Customer flow (Submit Info, Fill DMS, Form 20, Vahan, etc.) and records the result in the bulk_loads table. On success, files are moved to `Success/{mobile_ddmmyyyy}/`; on error, to `Error/{filename_ddmmyyyy}/`.
 4. **Re-process on error** — When a bulk load fails (e.g. pre-OCR fails, mobile not found, or Add Customer fails), the operator can use the **Re-process** button on the Bulk Loads page. This opens the Add Customer screen with the mobile and associated files pre-filled so the operator can correct data and complete the flow manually.
