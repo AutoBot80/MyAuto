@@ -23,7 +23,7 @@ TEMPLATES_DIR = _BACKEND_DIR / "templates"
 FORM20_FIELD_POSITIONS = {
     "field_1_name_care_of": (120, 135),
     "field_3_address": (120, 175),
-    "field_10_dealer_name_address": (120, 295),
+    "field_10_dealer_name": (120, 295),
     "field_14_body_type": (120, 365),
     "field_15_vehicle_type": (120, 390),
     "field_16_oem_name": (120, 415),
@@ -78,7 +78,7 @@ def _get_vehicle_from_db(vehicle_id: int) -> dict[str, Any]:
 
 
 def _get_dealer_from_db(dealer_id: int) -> dict[str, Any]:
-    """Fetch dealer from dealer_ref by dealer_id."""
+    """Fetch dealer from dealer_ref by dealer_id. Includes oem_name from oem_ref."""
     from app.db import get_connection
 
     conn = get_connection()
@@ -86,8 +86,11 @@ def _get_dealer_from_db(dealer_id: int) -> dict[str, Any]:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT dealer_id, dealer_name, address, pin, city, state
-                FROM dealer_ref WHERE dealer_id = %s
+                SELECT d.dealer_id, d.dealer_name, d.address, d.pin, d.city, d.state,
+                       o.oem_name
+                FROM dealer_ref d
+                LEFT JOIN oem_ref o ON o.oem_id = d.oem_id
+                WHERE d.dealer_id = %s
                 """,
                 (dealer_id,),
             )
@@ -156,6 +159,7 @@ def _build_form20_data(
         _str(dealer.get("pin") or dealer.get("pin_code")),
     ]
     dealer_address = ", ".join(p for p in dealer_addr_parts if p)
+    data["field_10_dealer_name"] = dealer_name
     if dealer_name and dealer_address:
         data["field_10_dealer_name_address"] = f"{dealer_name}, {dealer_address}"
     else:
@@ -167,8 +171,12 @@ def _build_form20_data(
     # Field 15: Vehicle type
     data["field_15_vehicle_type"] = _str(v.get("vehicle_type"))
 
-    # Field 16: OEM / Make
-    data["field_16_oem_name"] = _str(v.get("oem_name") or v.get("model"))
+    # Field 16: OEM / Make (vehicle oem_name, else dealer's oem_ref.oem_name, else make/maker from DMS)
+    data["field_16_oem_name"] = (
+        _str(v.get("oem_name"))
+        or _str(dealer.get("oem_name"))
+        or _str(v.get("make") or v.get("maker"))
+    )
 
     # Field 17: Year of mfg
     data["field_17_year_of_mfg"] = _str(v.get("year_of_mfg"))
@@ -282,6 +290,7 @@ def _docx_to_pdf(docx_path: Path, pdf_path: Path) -> None:
         converted = outdir / (docx_path.stem + ".pdf")
         if converted.exists():
             if converted.resolve() != pdf_path.resolve():
+                pdf_path.unlink(missing_ok=True)  # Windows: remove existing before rename
                 converted.rename(pdf_path)
         return
 
@@ -327,24 +336,20 @@ def _generate_form20_via_docx(
             f"Cannot read {docx_template}. Close the file if it's open in Word, and ensure OneDrive isn't locking it."
         ) from None
 
-    filled_docx = subfolder_path / "_form20_filled.docx"
-    combined_pdf = subfolder_path / "_form20_combined.pdf"
     form20_out = subfolder_path / "Form 20.pdf"
+    form20_out.unlink(missing_ok=True)  # Remove existing so rename/overwrite works on Windows
 
+    with tempfile.NamedTemporaryFile(suffix=".docx", delete=False) as tmp:
+        filled_docx = Path(tmp.name)
     try:
         _fill_docx_template(work_docx, data, filled_docx)
-    finally:
-        work_docx.unlink(missing_ok=True)
-    try:
-        _docx_to_pdf(filled_docx, combined_pdf)
+        _docx_to_pdf(filled_docx, form20_out)
     except RuntimeError as e:
         logger.warning("form20: docx-to-PDF conversion failed (%s), falling back to HTML", e)
         return _generate_form20_via_html(subfolder_path, data)
     finally:
+        work_docx.unlink(missing_ok=True)
         filled_docx.unlink(missing_ok=True)
-
-    # Keep all pages (front, back, page 3) as one combined PDF
-    combined_pdf.rename(form20_out)
 
     logger.info("form20: saved %s (from Word template, all pages)", form20_out)
     return ["Form 20.pdf"]
