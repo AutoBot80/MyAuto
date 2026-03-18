@@ -43,6 +43,7 @@ The system is a server–client application for auto dealers. Dealers run a ligh
 | BR-5 | RTO application | One RTO application per sale (sales_id); application_id from Vahan is PK. |
 | BR-6 | Service reminders | When dealer has auto_sms_reminders = Y, sales_master upsert triggers population of service_reminders_queue from oem_service_schedule. |
 | BR-7 | Form 20 data | Form 20 fields populated from customer_master, vehicle_master, dealer_ref; vehicle data merged from DB when vehicle_id provided. |
+| BR-8 | Bulk failure visibility | Bulk Upload `Error` and `Rejected` records must remain in the hot dashboard until the operator marks `action_taken=true`; only resolved failures may be archived. |
 
 ---
 
@@ -105,6 +106,8 @@ Bulk upload automates the ingestion of scanned documents from a shared folder in
 - Pre-OCR output is saved as `{filename}_ddmmyyyy_pre_ocr.txt` in the Processing folder.
 - The Bulk Loads table shows status (Processing, Success, Error), source filename, folder link, and error details.
 - Re-process uses the stored mobile and Error-folder files to pre-populate Add Customer.
+- The Bulk Loads UI and APIs read from the hot `bulk_loads` table only. Archived history is backend-only until an archive read path is added.
+- Archival keeps `Success` rows eligible after retention, but `Error` and `Rejected` rows remain in hot storage until the operator marks them corrected.
 
 ---
 
@@ -137,3 +140,4 @@ Bulk upload automates the ingestion of scanned documents from a shared folder in
 | 0.1 | Mar 2025 | — | Initial BRD for Auto Dealer system |
 | 0.2 | Mar 2025 | — | Added business rules (BR-1 to BR-7); FR-8 to FR-24 (Submit Info, Fill DMS, Form 20, Vahan, RTO payment, customer search, QR decode) |
 | 0.3 | Mar 2025 | — | Added Section 6: Bulk Upload Feature (Scan folder, pre-OCR, Add Customer processing, Re-process on error) |
+| 0.4 | Mar 2026 | — | Added bulk archival rule: unresolved Error/Rejected rows stay hot until action taken; archive remains backend-only for now |

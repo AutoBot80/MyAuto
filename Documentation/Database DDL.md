@@ -291,6 +291,71 @@ This document lists the current database tables and their columns. **Executable 
 
 ---
 
+## 11) `bulk_loads`
+
+**Purpose:** Hot operational table for bulk upload ingest, queue lifecycle, worker state, terminal status, and operator corrective actions.
+
+| Column | Type | Null | Default | Notes |
+|---|---|---:|---|---|
+| `id` | `integer` | NO | `nextval('bulk_loads_id_seq'::regclass)` | Primary key |
+| `job_id` | `varchar(64)` | YES |  | Logical job identifier; unique after queue redesign |
+| `parent_job_id` | `varchar(64)` | YES |  | Parent bulk job for multi-customer splits |
+| `subfolder` | `varchar(128)` | NO |  | Logical subfolder or result subfolder |
+| `file_name` | `varchar(256)` | YES |  | Source scan filename |
+| `mobile` | `varchar(16)` | YES |  | Extracted or assigned mobile |
+| `name` | `varchar(128)` | YES |  | Customer name when known |
+| `folder_path` | `varchar(512)` | YES |  | Relative operational folder path |
+| `result_folder` | `varchar(512)` | YES |  | Final `Success/`, `Error/`, or `Rejected scans/` folder |
+| `status` | `varchar(32)` | NO | `'Processing'` | Dashboard status: `Processing`, `Success`, `Error`, `Rejected` |
+| `job_status` | `varchar(32)` | NO | `'received'` | Queue lifecycle: `received`, `queued`, `processing`, `retry_pending`, terminal state |
+| `processing_stage` | `varchar(64)` | YES |  | Stage marker such as `INGEST`, `QUEUED`, `PRE_OCR`, `PROCESSING`, `COMPLETE`, `ERROR`, `REJECTED` |
+| `source_path` | `varchar(1024)` | YES |  | Current queued/processing file path |
+| `source_token` | `varchar(512)` | YES |  | Deduplication token from source path + file metadata |
+| `attempt_count` | `integer` | NO | `0` | Number of lease attempts |
+| `leased_until` | `timestamptz` | YES |  | Lease expiry for worker recovery |
+| `worker_id` | `varchar(128)` | YES |  | Worker currently or last handling the job |
+| `error_code` | `varchar(64)` | YES |  | Machine-readable failure code |
+| `error_message` | `text` | YES |  | Operator-visible failure reason |
+| `action_taken` | `boolean` | NO | `false` | Operator corrected the `Error` or `Rejected` record |
+| `dealer_id` | `integer` | YES |  | Dealer ownership / filter |
+| `started_at` | `timestamptz` | YES |  | First worker start time |
+| `finished_at` | `timestamptz` | YES |  | Terminal completion time |
+| `created_at` | `timestamptz` | NO | `now()` | Created timestamp |
+| `updated_at` | `timestamptz` | NO | `now()` | Updated timestamp |
+
+**Primary key:** `bulk_loads_pkey` on (`id`)
+
+**Important indexes and constraints:**
+- `idx_bulk_loads_job_id` — unique on (`job_id`)
+- `idx_bulk_loads_dealer_source_token` — unique on (`dealer_id`, `source_token`) where `source_token` is not null
+- `idx_bulk_loads_dealer_created_at_desc` — (`dealer_id`, `created_at DESC`)
+- `idx_bulk_loads_dealer_status_created_at_desc` — (`dealer_id`, `status`, `created_at DESC`)
+- `idx_bulk_loads_job_status_created_at_desc` — (`job_status`, `created_at DESC`)
+- `idx_bulk_loads_leased_until` — (`leased_until`)
+- `idx_bulk_loads_unresolved_hot` — (`dealer_id`, `updated_at DESC`) where `status IN ('Processing', 'Error', 'Rejected')`
+
+**Operational note:** The current UI/API reads only from `bulk_loads`. Old `Error` and `Rejected` rows remain hot until `action_taken=true`.
+
+---
+
+## 12) `bulk_loads_archive`
+
+**Purpose:** Archive table for older terminal bulk rows moved out of the hot operational table.
+
+| Column | Type | Null | Default | Notes |
+|---|---|---:|---|---|
+| `all bulk_loads columns` | same as `bulk_loads` |  |  | Archive uses `LIKE bulk_loads INCLUDING DEFAULTS` |
+| `archived_at` | `timestamptz` | NO | `now()` | Time the row was archived |
+
+**Important indexes and constraints:**
+- `idx_bulk_loads_archive_job_id` — unique on (`job_id`)
+- `idx_bulk_loads_archive_dealer_created` — (`dealer_id`, `created_at DESC`)
+- `idx_bulk_loads_archive_status_created` — (`dealer_id`, `status`, `created_at DESC`)
+
+**Operational note:** Archive is currently backend-only; no UI or API read path is exposed yet.
+
+---
+
 ## Table Usage Summary
 
 | Table | Used by |
@@ -306,6 +371,8 @@ This document lists the current database tables and their columns. **Executable 
 | `service_reminders_queue` | Trigger on sales_master |
 | `rto_payment_details` | RTO Payments Pending page, rc_status_sms_queue |
 | `rc_status_sms_queue` | RC status SMS sending |
+| `bulk_loads` | Bulk ingest, queue publish/lease, dashboard, retry prep, action-taken tracking |
+| `bulk_loads_archive` | Bulk archival retention storage |
 
 ---
 
@@ -315,3 +382,4 @@ This document lists the current database tables and their columns. **Executable 
 |---------|------|---------|
 | 0.1 | Mar 2025 | Initial Database DDL |
 | 0.2 | Mar 2025 | vehicle_master: added model, colour, oem_name, vehicle_type, num_cylinders, horse_power, length_mm, fuel_type; sales_master: sales_id PK; rto_payment_details: updated schema (application_id PK, sales_id, rto_fees, pay_txn_id, etc.); service_reminders_queue: sales_id FK; added rc_status_sms_queue; insurance_master: insurance_year; Table Usage Summary |
+| 0.3 | Mar 2026 | Added `bulk_loads` and `bulk_loads_archive` hot/archive schema, lifecycle columns, indexes, and operational notes |

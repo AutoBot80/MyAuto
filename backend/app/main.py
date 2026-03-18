@@ -5,7 +5,15 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.config import DEALER_ID, get_bulk_upload_dir, get_ocr_output_dir, get_uploads_dir
+from app.config import (
+    DEALER_ID,
+    get_bulk_input_scans_dir,
+    get_bulk_processing_dir,
+    get_bulk_queue_dir,
+    get_bulk_upload_dir,
+    get_ocr_output_dir,
+    get_uploads_dir,
+)
 from app.routers import (
     health_router,
     uploads_router,
@@ -37,8 +45,9 @@ app = FastAPI(title="Auto Dealer Server", version="0.1.0", lifespan=lifespan)
 # Create dealer-scoped dirs for app's DEALER_ID
 get_uploads_dir(DEALER_ID).mkdir(parents=True, exist_ok=True)
 get_ocr_output_dir(DEALER_ID).mkdir(parents=True, exist_ok=True)
-(get_bulk_upload_dir(DEALER_ID) / "Input Scans").mkdir(parents=True, exist_ok=True)
-(get_bulk_upload_dir(DEALER_ID) / "Processing").mkdir(parents=True, exist_ok=True)
+get_bulk_input_scans_dir(DEALER_ID).mkdir(parents=True, exist_ok=True)
+get_bulk_queue_dir(DEALER_ID).mkdir(parents=True, exist_ok=True)
+get_bulk_processing_dir(DEALER_ID).mkdir(parents=True, exist_ok=True)
 (get_bulk_upload_dir(DEALER_ID) / "Success").mkdir(parents=True, exist_ok=True)
 (get_bulk_upload_dir(DEALER_ID) / "Error").mkdir(parents=True, exist_ok=True)
 (get_bulk_upload_dir(DEALER_ID) / "Rejected scans").mkdir(parents=True, exist_ok=True)

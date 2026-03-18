@@ -45,10 +45,10 @@
 
 | Component | Responsibility |
 |-----------|----------------|
-| **Client (React)** | UI, forms, validation, calls to backend API; Add Sales, Fill Forms, RTO Payments, View Customer. |
-| **FastAPI App** | REST API, CRUD, Submit Info, Fill DMS, Form 20, Vahan, RTO payment, customer search, OCR queue. |
+| **Client (React)** | UI, forms, validation, calls to backend API; Add Sales, Fill Forms, RTO Payments, View Customer, Bulk Loads. |
+| **FastAPI App** | REST API, CRUD, Submit Info, Fill DMS, Form 20, Vahan, RTO payment, customer search, OCR queue, and bulk upload monitoring. |
 | **PostgreSQL** | Persistent store for dealers, vehicles, customers, sales, insurance, RTO payments, service reminders. |
-| **Queue (Redis or SQS)** | Decouple job creation from execution; OCR queue and Automation queue. |
+| **Queue (Redis or SQS)** | Decouple job creation from execution; OCR queue, automation queue, and bulk upload job dispatch. |
 | **OCR Worker** | Consumes OCR jobs; runs Tesseract (or Textract/Vision); writes results to DB. |
 | **Playwright Worker** | Consumes automation jobs; reads DB, drives browser, submits to DMS and Vahan. |
 | **Object Store (S3 or local)** | Uploaded scans, Form 20/21/22 PDFs. |
@@ -91,6 +91,7 @@ My Auto.AI/
 | `routers/uploads` | Document upload; enqueue to ai_reader_queue. |
 | `routers/ai_reader_queue` | List, process, reprocess OCR queue items. |
 | `routers/fill_dms` | Fill DMS (Playwright), Vahan, Form 20 print. |
+| `routers/bulk_loads` | Bulk hot-table dashboard APIs, retry prep, action-taken tracking, and folder browsing. |
 | `routers/submit_info` | Upsert customer, vehicle, sales, insurance. |
 | `routers/rto_payment_details` | List RTO applications, record payment. |
 | `routers/customer_search` | Search customers by mobile/plate. |
@@ -99,17 +100,21 @@ My Auto.AI/
 | `routers/qr_decode` | Decode Aadhar QR. |
 | `routers/vision` | Vision API (Aadhar analyze). |
 | `routers/textract_router` | AWS Textract extraction. |
+| `services/bulk_job_service` | Bulk ingest, queue publish, job lease, pre-OCR, and terminal status updates. |
+| `services/bulk_queue_service` | Bulk queue abstraction with SQS or local in-process fallback. |
+| `services/bulk_watcher_service` | Starts ingest, worker, and archive loops inside the API process. |
 | `services/form20_service` | Form 20 generation (Word/PDF/HTML). |
 | `services/fill_dms_service` | Playwright DMS and Vahan automation. |
 | `services/submit_info_service` | Submit Info business logic. |
 | `services/rto_payment_service` | RTO payment updates. |
-| `repositories/*` | Data access for ai_reader_queue, dealer_ref, rto_payment_details, rc_status_sms_queue. |
+| `repositories/*` | Data access for ai_reader_queue, bulk_loads, dealer_ref, rto_payment_details, rc_status_sms_queue. |
 
 ### 3.3 Client Pages
 
 | Page | Purpose |
 |------|---------|
 | `AddSalesPage` | Add Sales flow: Submit Info, Fill Forms (DMS, Vahan, Form 20), Insurance. |
+| `BulkLoadsPage` | View hot bulk processing status, unresolved failures, and retry/corrective actions. |
 | `RtoPaymentsPendingPage` | List pending RTO applications; record payment. |
 | `ViewCustomerPage` | Search customer; view vehicles and insurance. |
 | `AiReaderQueuePage` | OCR queue status and processing. |
@@ -134,6 +139,14 @@ My Auto.AI/
 1. sales_master upsert (when dealer has auto_sms_reminders = Y).
 2. Trigger `fn_sales_master_sync_service_reminders` runs.
 3. Inserts rows into service_reminders_queue from oem_service_schedule.
+
+### 4.3 Bulk Upload Flow
+
+1. Operator drops a scan PDF into `Bulk Upload/<dealer_id>/Input Scans/`.
+2. The API process starts bulk ingest and worker loops on startup; it can also be paired with a standalone `run_bulk_worker.py` process.
+3. Ingest writes a hot `bulk_loads` row, moves the file into `Queued/`, and publishes a queue message through SQS or the local fallback queue.
+4. A worker leases the job, runs pre-OCR and Add Sales automation, and updates hot-row lifecycle fields (`job_status`, `processing_stage`, `attempt_count`, `leased_until`, `worker_id`).
+5. Terminal rows stay in hot storage for the current UI; archival copies older terminal rows to `bulk_loads_archive`, but unresolved `Error` and `Rejected` rows stay hot until `action_taken=true`.
 
 ---
 
@@ -163,3 +176,4 @@ My Auto.AI/
 |---------|------|--------|---------|
 | 0.1 | Mar 2025 | — | Initial HLD |
 | 0.2 | Mar 2025 | — | Added code structure (3.1–3.3), backend modules, client pages, Add Sales flow, Service Reminders flow |
+| 0.3 | Mar 2026 | — | Added bulk upload router/services/pages, queue/deployment notes, and hot/archive retention behavior |

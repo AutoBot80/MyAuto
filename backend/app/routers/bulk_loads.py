@@ -27,13 +27,10 @@ def clear_bulk_loads(dealer_id: int | None = Query(None, description="Dealer ID;
     did = _dealer_id(dealer_id)
     conn = get_connection()
     try:
-        with conn.cursor() as cur:
-            cur.execute(
-                f"DELETE FROM {BulkLoadsRepository.TABLE_NAME} WHERE dealer_id IS NULL OR dealer_id = %s",
-                (did,),
-            )
+        BulkLoadsRepository.ensure_table(conn)
+        deleted = BulkLoadsRepository.clear_for_dealer(conn, dealer_id=did)
         conn.commit()
-        return {"ok": True, "message": f"Bulk loads cleared for dealer {did}"}
+        return {"ok": True, "deleted": deleted, "message": f"Bulk loads cleared for dealer {did}"}
     finally:
         conn.close()
 

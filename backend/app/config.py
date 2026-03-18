@@ -32,6 +32,18 @@ def get_ocr_output_dir(dealer_id: int) -> Path:
 def get_bulk_upload_dir(dealer_id: int) -> Path:
     """Dealer-scoped bulk upload: Bulk Upload/{dealer_id}/."""
     return BULK_UPLOAD_DIR / str(dealer_id)
+
+
+def get_bulk_input_scans_dir(dealer_id: int) -> Path:
+    return get_bulk_upload_dir(dealer_id) / "Input Scans"
+
+
+def get_bulk_queue_dir(dealer_id: int) -> Path:
+    return get_bulk_upload_dir(dealer_id) / "Queued"
+
+
+def get_bulk_processing_dir(dealer_id: int) -> Path:
+    return get_bulk_upload_dir(dealer_id) / "Processing"
 # Pre-OCR for bulk: use AWS Textract (default) for better mobile extraction; set false for Tesseract
 BULK_PRE_OCR_USE_TEXTRACT = os.getenv("BULK_PRE_OCR_USE_TEXTRACT", "true").lower() in ("1", "true", "yes")
 # Form 20 blank templates (PDF). Prefer single official PDF (page 0=front, page 1=back).
@@ -74,6 +86,21 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 # AWS Textract (optional: for better extraction on details/sales sheets).
 AWS_REGION = os.getenv("AWS_REGION", "ap-south-1")
 # Credentials: set AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY (or use default profile).
+
+# Bulk queue / worker settings.
+BULK_QUEUE_PROVIDER = os.getenv("BULK_QUEUE_PROVIDER", "local").strip().lower() or "local"
+BULK_SQS_QUEUE_URL = os.getenv("BULK_SQS_QUEUE_URL", "").strip()
+BULK_SQS_REGION = os.getenv("BULK_SQS_REGION", AWS_REGION).strip() or AWS_REGION
+BULK_SQS_WAIT_TIME_SEC = int(os.getenv("BULK_SQS_WAIT_TIME_SEC", "20"))
+BULK_SQS_VISIBILITY_TIMEOUT_SEC = int(os.getenv("BULK_SQS_VISIBILITY_TIMEOUT_SEC", "900"))
+BULK_INGEST_POLL_SEC = int(os.getenv("BULK_INGEST_POLL_SEC", "5"))
+BULK_WORKER_THREADS = int(os.getenv("BULK_WORKER_THREADS", "1"))
+BULK_WORKER_ENABLED = os.getenv("BULK_WORKER_ENABLED", "true").lower() in ("1", "true", "yes")
+BULK_INGEST_ENABLED = os.getenv("BULK_INGEST_ENABLED", "true").lower() in ("1", "true", "yes")
+BULK_ARCHIVE_ENABLED = os.getenv("BULK_ARCHIVE_ENABLED", "true").lower() in ("1", "true", "yes")
+BULK_ARCHIVE_RETENTION_DAYS = int(os.getenv("BULK_ARCHIVE_RETENTION_DAYS", "45"))
+BULK_ARCHIVE_POLL_SEC = int(os.getenv("BULK_ARCHIVE_POLL_SEC", "900"))
+BULK_JOB_MAX_ATTEMPTS = int(os.getenv("BULK_JOB_MAX_ATTEMPTS", "3"))
 
 # DMS fill (Playwright): base URL and login. Used when client calls POST /fill-dms.
 DMS_BASE_URL = os.getenv("DMS_BASE_URL", "").rstrip("/")  # e.g. http://127.0.0.1:8000/dummy-dms

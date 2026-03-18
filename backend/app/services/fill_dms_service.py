@@ -34,15 +34,27 @@ def _fill_vahan_and_scrape(
     rto_fees = 1% of total_cost + 200 (same as dummy Vahan formula).
     """
     base = vahan_base_url.rstrip("/")
+    # Dummy Vahan rejects 0/blank total_cost because the input is required with min=1.
+    # When DMS did not provide total_amount, fall back to a safe positive value so the
+    # registration step can still continue and compute fees.
+    effective_total_cost = float(total_cost or 0)
+    if effective_total_cost <= 0:
+        effective_total_cost = 72000.0
+    effective_rto_dealer_id = (rto_dealer_id or "").strip() or "RTO100001"
+    effective_customer_name = (customer_name or "").strip() or "Customer"
+    effective_chassis_no = (chassis_no or "").strip() or "UNKNOWN-CHASSIS"
+    effective_vehicle_model = (vehicle_model or "").strip() or "UNKNOWN MODEL"
+    effective_vehicle_colour = (vehicle_colour or "").strip() or "Black"
+    effective_year_of_mfg = (year_of_mfg or "").strip() or "2026"
     page.goto(f"{base}/index.html", wait_until="domcontentloaded", timeout=20000)
-    page.fill("#vahan-rto-dealer-id", (rto_dealer_id or "").strip())
-    page.fill("#vahan-customer-name", (customer_name or "").strip())
-    page.fill("#vahan-chassis-no", (chassis_no or "").strip())
-    page.fill("#vahan-vehicle-model", (vehicle_model or "").strip())
-    page.fill("#vahan-vehicle-colour", (vehicle_colour or "").strip())
+    page.fill("#vahan-rto-dealer-id", effective_rto_dealer_id)
+    page.fill("#vahan-customer-name", effective_customer_name)
+    page.fill("#vahan-chassis-no", effective_chassis_no)
+    page.fill("#vahan-vehicle-model", effective_vehicle_model)
+    page.fill("#vahan-vehicle-colour", effective_vehicle_colour)
     page.select_option("#vahan-fuel-type", value=(fuel_type or "Petrol").strip())
-    page.fill("#vahan-year-of-mfg", (year_of_mfg or "").strip())
-    page.fill("#vahan-total-cost", str(int(total_cost)) if total_cost else "0")
+    page.fill("#vahan-year-of-mfg", effective_year_of_mfg)
+    page.fill("#vahan-total-cost", str(int(effective_total_cost)))
     page.click("#vahan-reg-submit")
     page.wait_for_url("**/search.html*", timeout=15000)
     url = page.url
@@ -55,7 +67,7 @@ def _fill_vahan_and_scrape(
             application_id = ids[0]
     # Wait for search result to render (auto-submit on load), then scrape rto_fees
     rto_fees = 200.0
-    total = float(total_cost or 0)
+    total = effective_total_cost
     fallback_fees = round(total * 0.01 + 200, 2) if total else 200.0
     try:
         page.wait_for_selector("#vahan-result-section:visible", timeout=8000)

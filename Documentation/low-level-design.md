@@ -9,8 +9,8 @@
 ## 1. Client (React) Structure (Modular)
 
 - **Layout:** `AppLayout` composes `Header` + `Sidebar` + main content slot.
-- **Pages:** `AddSalesPage`, `AiReaderQueuePage`, `RtoPaymentsPendingPage`, `ViewCustomerPage`, `PlaceholderPage`.
-- **API:** `api/client.ts` (base URL, `apiFetch`), `api/uploads.ts`, `api/aiReaderQueue.ts`, `api/fillDms.ts`, `api/submitInfo.ts`, `api/rtoPaymentDetails.ts`, `api/customerSearch.ts` — microservice-friendly; swap base URL per env.
+- **Pages:** `AddSalesPage`, `AiReaderQueuePage`, `BulkLoadsPage`, `RtoPaymentsPendingPage`, `ViewCustomerPage`, `PlaceholderPage`.
+- **API:** `api/client.ts` (base URL, `apiFetch`), `api/uploads.ts`, `api/aiReaderQueue.ts`, `api/bulkLoads.ts`, `api/fillDms.ts`, `api/submitInfo.ts`, `api/rtoPaymentDetails.ts`, `api/customerSearch.ts` — microservice-friendly; swap base URL per env.
 - **Hooks:** `useToday`, `useUploadScans`, `useAiReaderQueue` — reusable, testable.
 - **Types:** `types/index.ts` — `Page`, `AddSalesStep`, `AiReaderQueueItem`, `ExtractedVehicleDetails`, `PrintForm20Response`, etc.
 
@@ -25,6 +25,7 @@
 | `AddSalesPage` | Add Sales flow: Submit Info, Fill Forms (DMS, Vahan, Form 20), Insurance tiles. |
 | `UploadScansPanel` | Step tiles, file input, upload button, uploaded list. |
 | `AiReaderQueuePage` | Uses `useAiReaderQueue`; renders `AiReaderQueueTable`. |
+| `BulkLoadsPage` | Uses `api/bulkLoads`; shows hot processing rows, failure tabs, retry prep, and action-taken toggles. |
 | `RtoPaymentsPendingPage` | List RTO applications; record payment. |
 | `ViewCustomerPage` | Search by mobile/plate; view vehicles and insurance. |
 | `PlaceholderPage` | Title + message for coming-soon pages. |
@@ -41,9 +42,9 @@ backend/app/
   config.py            # DATABASE_URL, UPLOADS_DIR, APP_ROOT, FORM20_*, etc.
   db.py                # get_connection()
   schemas/             # Pydantic request/response (uploads, ocr, fill_dms, etc.)
-  repositories/        # Data access only (ai_reader_queue, dealer_ref, rto_payment_details, rc_status_sms_queue)
-  services/            # Business logic (UploadService, form20_service, fill_dms_service, submit_info_service, rto_payment_service)
-  routers/             # health, uploads, ai_reader_queue, fill_dms, submit_info, rto_payment_details, customer_search, dealers, documents, qr_decode, vision, textract_router
+  repositories/        # Data access only (ai_reader_queue, bulk_loads, dealer_ref, rto_payment_details, rc_status_sms_queue)
+  services/            # Business logic (UploadService, bulk_job_service, bulk_queue_service, bulk_watcher_service, form20_service, fill_dms_service, submit_info_service, rto_payment_service)
+  routers/             # health, uploads, ai_reader_queue, bulk_loads, fill_dms, submit_info, rto_payment_details, customer_search, dealers, documents, qr_decode, vision, textract_router
   templates/           # form20_front.html, form20_back.html, form20_page3.html
 ```
 
@@ -68,6 +69,14 @@ backend/app/
 | POST | `/ai-reader-queue/process-all` | Process all. |
 | POST | `/ai-reader-queue/{item_id}/reprocess` | Reprocess item. |
 | POST | `/submit-info` | Upsert customer, vehicle, sales, insurance. |
+| GET | `/bulk-loads` | List bulk dashboard rows from hot `bulk_loads` only. |
+| GET | `/bulk-loads/counts` | Bulk tab counts from hot data only; `Error` and `Rejected` exclude `action_taken=true`. |
+| GET | `/bulk-loads/pending-count` | Count unresolved `Error` + `Rejected` hot rows for the nav badge. |
+| PATCH | `/bulk-loads/{bulk_load_id}/action-taken` | Mark an `Error` or `Rejected` row corrected. |
+| POST | `/bulk-loads/{bulk_load_id}/prepare-reprocess` | Copy error artifacts back to uploads and start OCR for manual retry. |
+| PATCH | `/bulk-loads/{bulk_load_id}/mark-success` | Mark a manually completed error as success. |
+| GET | `/bulk-loads/folder/{folder_path}/list` | List files in a bulk result folder. |
+| GET | `/bulk-loads/file/{file_path}` | Download or preview a file from a bulk result folder. |
 | POST | `/fill-dms` | Full Fill DMS flow (DMS + Vahan). |
 | POST | `/fill-dms/dms` | DMS only. |
 | GET | `/fill-dms/data-from-dms` | Get data from DMS.txt. |
@@ -126,6 +135,8 @@ See **Documentation/Database DDL.md** for full table structures. Summary:
 | `service_reminders_queue` | Service reminders; sales_id FK; populated by trigger. |
 | `rto_payment_details` | RTO applications; application_id PK; sales_id FK. |
 | `rc_status_sms_queue` | RC status SMS queue; sales_id FK. |
+| `bulk_loads` | Hot operational bulk jobs, queue lifecycle, retry state, and operator actions. |
+| `bulk_loads_archive` | Archived terminal bulk rows retained outside the current UI read path. |
 
 ---
 
@@ -144,6 +155,13 @@ See **Documentation/Database DDL.md** for full table structures. Summary:
 
 - Poll or subscribe to automation_queue; load job; fetch related rows from DB; start browser; run site-specific script (login, navigate, fill, submit); update status and store artifacts.
 
+### 4.4 Bulk Worker
+
+- Ingest scans from `Bulk Upload/<dealer_id>/Input Scans/`, create hot `bulk_loads` rows, move files into `Queued/`, and publish queue messages.
+- Worker leases jobs through `bulk_loads` lease columns and processes them through pre-OCR, Add Sales, DMS, Form 20, and terminal folder placement.
+- API/UI reads remain hot-only for now. `bulk_loads_archive` is write-only until archive read APIs are added.
+- Archival may move `Success` rows after retention, but `Error` and `Rejected` rows are archived only after `action_taken=true`.
+
 ---
 
 ## 5. Configuration and Environment
@@ -159,3 +177,4 @@ See **Documentation/Database DDL.md** for full table structures. Summary:
 |---------|------|--------|---------|
 | 0.1 | Mar 2025 | — | Initial LLD |
 | 0.2 | Mar 2025 | — | Updated backend modules, full API endpoints list, Form 20 section, database schema summary |
+| 0.3 | Mar 2026 | — | Added bulk loads page/API details, backend bulk modules, and bulk worker hot/archive behavior |

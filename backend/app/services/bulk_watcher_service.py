@@ -1,406 +1,136 @@
-"""
-File watcher for Bulk Upload/Input Scans. Watches Input Scans only for new PDFs
-(Scans.pdf in subfolders or Scan*.pdf directly). Copies to Processing, runs pre-OCR,
-extracts mobile, then processes and records in bulk_loads.
-"""
+"""Bulk ingest watcher, worker pool, and archive loop."""
+
+from __future__ import annotations
 
 import logging
 import threading
-import time
-from pathlib import Path
 
-from app.config import BULK_PRE_OCR_USE_TEXTRACT, DEALER_ID, get_bulk_upload_dir
+from app.config import (
+    BULK_ARCHIVE_ENABLED,
+    BULK_ARCHIVE_POLL_SEC,
+    BULK_ARCHIVE_RETENTION_DAYS,
+    BULK_INGEST_ENABLED,
+    BULK_INGEST_POLL_SEC,
+    BULK_WORKER_ENABLED,
+    BULK_WORKER_THREADS,
+    DEALER_ID,
+)
 from app.db import get_connection
 from app.repositories.bulk_loads import BulkLoadsRepository
-from app.services.bulk_upload_service import process_new_scans_and_record
-from app.services.pre_ocr_service import (
-    run_pre_ocr_and_prepare,
-    move_processing_to_success_or_error,
-    move_multi_customer_to_success_or_error,
-    move_to_rejected,
-)
+from app.services.bulk_job_service import ingest_pending_jobs, process_job
+from app.services.bulk_queue_service import BulkQueueService
 
 logger = logging.getLogger(__name__)
 
-# User-friendly mapping for validation errors
-_REJECTION_MESSAGES = {
-    "mobile number": "10-digit mobile number",
-    "Aadhar front": "Aadhar card (front side)",
-    "Aadhar back": "Aadhar card (back side)",
-    "sales details form (vehicle & customer info)": "sales details form (with Frame No, Chassis, Engine No, etc.)",
-}
-
-
-def _format_rejection_error(missing: list[str]) -> str:
-    """Build a clear, actionable error message for the user."""
-    items = [_REJECTION_MESSAGES.get(m, m) for m in missing]
-    return (
-        f"Could not identify required pages: {', '.join(items)}. "
-        "Please ensure your scan includes all pages clearly visible and not blurry, "
-        "with Aadhar (front & back) and the sales details form (vehicle & customer info)."
-    )
-
-
-POLL_INTERVAL_SEC = 5
-_watcher_thread: threading.Thread | None = None
 _watcher_stop = threading.Event()
+_ingest_thread: threading.Thread | None = None
+_archive_thread: threading.Thread | None = None
+_worker_threads: list[threading.Thread] = []
+_queue_service = BulkQueueService()
 
 
-def _move_to_error_on_exception(original_filename_stem: str, original_scan_path: Path | None = None, bulk_upload_dir: Path | None = None) -> str:
-    """When pre-OCR raises, move original from Input Scans and Processing PDF/pre-OCR to Error. Returns result_folder path."""
-    from datetime import datetime
-    import shutil
-
-    base = bulk_upload_dir or get_bulk_upload_dir(DEALER_ID)
-    error_dir = base / "Error"
-    proc_dir = base / "Processing"
-    ddmmyyyy = datetime.now().strftime("%d%m%Y")
-    dest_subdir = f"{original_filename_stem}_{ddmmyyyy}"
-    dest_dir = error_dir / dest_subdir
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    result_folder = f"Error/{dest_subdir}"
-
-    # Move original scan from Input Scans first
-    if original_scan_path and original_scan_path.exists():
-        shutil.move(str(original_scan_path), str(dest_dir / original_scan_path.name))
-        logger.info("Moved original scan %s -> %s", original_scan_path.name, dest_dir)
-
-    # Move PDF and classified dir (if any) and pre-OCR from Processing
-    pdf_file = proc_dir / f"{original_filename_stem}.pdf"
-    if pdf_file.exists():
-        shutil.move(str(pdf_file), str(dest_dir / pdf_file.name))
-        logger.info("Moved %s -> %s", pdf_file.name, dest_dir)
-    classified_dir = proc_dir / f"classified_{original_filename_stem}"
-    if classified_dir.is_dir():
-        for f in classified_dir.iterdir():
-            if f.is_file():
-                shutil.move(str(f), str(dest_dir / f.name))
-                logger.info("Moved %s -> %s", f.name, dest_dir)
-        try:
-            classified_dir.rmdir()
-        except OSError:
-            pass
-    for f in proc_dir.glob(f"{original_filename_stem}_*_pre_ocr.txt"):
-        if f.is_file():
-            shutil.move(str(f), str(dest_dir / f.name))
-            logger.info("Moved %s -> %s", f.name, dest_dir)
-
-    return result_folder
-
-
-def _process_one(scans_pdf: Path, marker: Path | None = None, dealer_id: int | None = None) -> bool:
-    """Process one Scans.pdf and mark with .processed. Returns True if processed."""
-    did = dealer_id if dealer_id is not None else DEALER_ID
-    bulk_base = get_bulk_upload_dir(did)
-    if marker is None:
-        marker = scans_pdf.parent / ".processed"
-    if marker.exists():
-        return False
-    scans_dir = bulk_base / "Input Scans"
-    initial_subfolder = scans_pdf.stem if scans_pdf.parent == scans_dir else scans_pdf.parent.name
-
-    conn = get_connection()
-    try:
-        BulkLoadsRepository.ensure_table(conn)
-        row = BulkLoadsRepository.insert(
-            conn,
-            subfolder=initial_subfolder,
-            file_name=scans_pdf.name,
-            status="Processing",
-            folder_path=initial_subfolder,
-            dealer_id=did,
-        )
-        conn.commit()
-        bulk_load_id = row["id"]
-    finally:
-        conn.close()
-
-    # Mark as in-progress immediately to prevent duplicate processing
-    marker.touch()
-
-    try:
-        # Pre-OCR: copy to Processing, run OCR, save as filename_ddmmyyyy_pre_ocr.txt,
-        # extract mobile. Mobile is required for Add Customer - do not proceed without it.
-        proc_dir = bulk_base / "Processing"
-        proc_dir.mkdir(parents=True, exist_ok=True)
-        try:
-            bundles, subfolder_stem, mobile, ocr_path, missing = run_pre_ocr_and_prepare(
-                scans_pdf,
-                processing_dir=proc_dir,
-                use_textract=BULK_PRE_OCR_USE_TEXTRACT,
-            )
-        except Exception as e:
-            logger.exception("bulk_watcher: pre-OCR failed for %s", scans_pdf)
-            conn = get_connection()
-            try:
-                BulkLoadsRepository.update_status(conn, bulk_load_id, "Error", error_message=f"Pre-OCR failed: {e}")
-                conn.commit()
-            finally:
-                conn.close()
-            # Move to Error: Processing PDF/pre-OCR and original from Input Scans
-            result_folder = _move_to_error_on_exception(scans_pdf.stem, original_scan_path=scans_pdf, bulk_upload_dir=bulk_base)
-            conn = get_connection()
-            try:
-                BulkLoadsRepository.update_status(conn, bulk_load_id, "Error", result_folder=result_folder)
-                conn.commit()
-            finally:
-                conn.close()
-            if marker.exists():
-                marker.unlink()
-            return True
-
-        # Validation failed (classification could not identify mobile + 3 critical pages) — move to Rejected, no split
-        if missing:
-            error_msg = _format_rejection_error(missing)
-            logger.warning("bulk_watcher: %s for %s", error_msg, scans_pdf)
-            pdf_in_proc = proc_dir / f"{scans_pdf.stem}.pdf"
-            result_folder = move_to_rejected(
-                pdf_in_proc, ocr_path, scans_pdf.stem,
-                original_scan_path=scans_pdf,
-                bulk_upload_dir=bulk_base,
-            )
-            conn = get_connection()
-            try:
-                BulkLoadsRepository.update_status(
-                    conn, bulk_load_id, "Rejected",
-                    error_message=error_msg,
-                    folder_path=result_folder,
-                    subfolder=subfolder_stem,
-                )
-                BulkLoadsRepository.update_result_folder(conn, bulk_load_id, result_folder)
-                conn.commit()
-            finally:
-                conn.close()
-            if marker.exists():
-                marker.unlink()
-            return True
-
-        # Multi-customer: create all rows immediately so UI shows 2+ Processing rows, then process each
-        if len(bundles) > 1:
-            bulk_load_ids = [bulk_load_id]
-            conn = get_connection()
-            try:
-                for i in range(len(bundles) - 1):
-                    row = BulkLoadsRepository.insert(
-                        conn,
-                        subfolder=f"{scans_pdf.stem}_Customer{i + 2}",
-                        file_name=scans_pdf.name,
-                        status="Processing",
-                        folder_path=f"{scans_pdf.stem}_Customer{i + 2}",
-                        dealer_id=did,
-                    )
-                    bulk_load_ids.append(row["id"])
-                # Update first row to show Customer 1
-                BulkLoadsRepository.update_status(conn, bulk_load_id, "Processing", subfolder=f"{scans_pdf.stem}_Customer1")
-                conn.commit()
-            finally:
-                conn.close()
-            logger.info("Multi-customer: created %d bulk_loads rows for %s", len(bulk_load_ids), scans_pdf.name)
-
-            results: list[bool] = []
-            for i, (classified_dir, subfolder, m) in enumerate(bundles):
-                conn = get_connection()
-                try:
-                    BulkLoadsRepository.update_status(conn, bulk_load_ids[i], "Processing", folder_path=subfolder, subfolder=subfolder, mobile=m)
-                    conn.commit()
-                finally:
-                    conn.close()
-                ok = process_new_scans_and_record(
-                    bulk_load_ids[i],
-                    classified_dir,
-                    dealer_id=did,
-                    subfolder_override=subfolder,
-                )
-                results.append(ok)
-
-            result_folders = move_multi_customer_to_success_or_error(
-                bundles, ocr_path, scans_pdf.stem, results,
-                original_scan_path=scans_pdf,
-                bulk_upload_dir=bulk_base,
-            )
-            conn = get_connection()
-            try:
-                for i, rf in enumerate(result_folders):
-                    if i < len(bulk_load_ids):
-                        BulkLoadsRepository.update_result_folder(conn, bulk_load_ids[i], rf)
-                conn.commit()
-            finally:
-                conn.close()
-            # Clean up base classified dir and Processing PDF
-            base_classified = proc_dir / f"classified_{scans_pdf.stem}"
-            if base_classified.is_dir():
-                for sub in list(base_classified.iterdir()):
-                    if sub.is_dir():
-                        try:
-                            sub.rmdir()
-                        except OSError:
-                            pass
-                try:
-                    base_classified.rmdir()
-                except OSError:
-                    pass
-            dest_pdf = proc_dir / scans_pdf.name
-            if dest_pdf.exists():
-                dest_pdf.unlink(missing_ok=True)
-            if marker.exists():
-                marker.unlink()
-            return True
-
-        # Single customer
-        classified_dir, subfolder, mobile = bundles[0]
-        conn = get_connection()
-        try:
-            BulkLoadsRepository.update_status(conn, bulk_load_id, "Processing", folder_path=subfolder, subfolder=subfolder, mobile=mobile)
-            conn.commit()
-        finally:
-            conn.close()
-
-        ok = process_new_scans_and_record(
-            bulk_load_id,
-            classified_dir,
-            dealer_id=did,
-            subfolder_override=subfolder,
-        )
-        result_folder = move_processing_to_success_or_error(
-            classified_dir, ocr_path, scans_pdf.stem, mobile, success=ok,
-            original_scan_path=scans_pdf,
-            bulk_upload_dir=bulk_base,
-        )
-        conn = get_connection()
-        try:
-            BulkLoadsRepository.update_result_folder(conn, bulk_load_id, result_folder)
-            conn.commit()
-        finally:
-            conn.close()
-        if marker.exists():
-            marker.unlink()
-        return True
-    except Exception as e:
-        logger.exception("bulk_watcher: process failed for %s", scans_pdf)
-        conn = get_connection()
-        try:
-            BulkLoadsRepository.update_status(conn, bulk_load_id, "Error", error_message=str(e))
-            conn.commit()
-        finally:
-            conn.close()
-        # Move to Error (original from Input Scans, classified dir or PDF, pre-OCR)
-        try:
-            classified_dir = proc_dir / f"classified_{scans_pdf.stem}"
-            processing_path = classified_dir if classified_dir.is_dir() else next((f for f in proc_dir.glob("*.pdf") if f.is_file()), None)
-            ocr_in_proc = next(proc_dir.glob(f"{scans_pdf.stem}_*_pre_ocr.txt"), None)
-            if processing_path or ocr_in_proc or scans_pdf.exists():
-                result_folder = move_processing_to_success_or_error(
-                    processing_path,
-                    ocr_in_proc,
-                    scans_pdf.stem,
-                    None,
-                    success=False,
-                    original_scan_path=scans_pdf,
-                    bulk_upload_dir=bulk_base,
-                )
-                conn = get_connection()
-                try:
-                    BulkLoadsRepository.update_status(conn, bulk_load_id, "Error", result_folder=result_folder)
-                    conn.commit()
-                finally:
-                    conn.close()
-        except Exception as move_err:
-            logger.warning("Failed to move to Error: %s", move_err)
-        if marker.exists():
-            marker.unlink()
-        return True  # Consider it processed so we don't retry
-
-
-def _find_pending_pdf(scans_dir: Path) -> Path | None:
-    """Find a Scans.pdf or Scan*.pdf to process. Oldest first. Checks subfolders first, then files directly in Input Scans."""
-    # 1) Subfolders: Input Scans/<subfolder>/Scans.pdf — sort by mtime (oldest first)
-    subdirs = [d for d in scans_dir.iterdir() if d.is_dir()]
-    for subdir in sorted(subdirs, key=lambda p: p.stat().st_mtime):
-        pdf_path = subdir / "Scans.pdf"
-        if pdf_path.exists() and not (subdir / ".processed").exists():
-            return pdf_path
-    # 2) Files directly in Input Scans: Scan1.pdf, scan 3.pdf, combined scan 3.pdf, etc. — sort by mtime (oldest first)
-    pdf_files = [
-        f for f in scans_dir.iterdir()
-        if f.is_file() and f.suffix.lower() == ".pdf" and "scan" in f.stem.lower()
-    ]
-    for f in sorted(pdf_files, key=lambda p: p.stat().st_mtime):
-        marker = scans_dir / f".processed_{f.name}"
-        if not marker.exists():
-            return f
-    return None
-
-
-# Consider Processing stale after this many seconds (allows recovery from crashed runs)
-PROCESSING_STALE_SEC = 900  # 15 minutes
-
-
-def _has_processing_in_progress(dealer_id: int | None = None) -> bool:
-    """Return True if any bulk_loads row has status Processing and is not stale (don't start another)."""
-    did = dealer_id if dealer_id is not None else DEALER_ID
-    conn = get_connection()
-    try:
-        rows = BulkLoadsRepository.list_all(conn, limit=10, status_filter="Processing", dealer_id=did)
-        if not rows:
-            return False
-        from datetime import datetime, timezone
-        now = datetime.now(timezone.utc)
-        for r in rows:
-            updated = r.get("updated_at")
-            if updated:
-                if isinstance(updated, str):
-                    try:
-                        updated = datetime.fromisoformat(updated.replace("Z", "+00:00"))
-                    except ValueError:
-                        continue
-                if updated.tzinfo is None:
-                    updated = updated.replace(tzinfo=timezone.utc)
-                age_sec = (now - updated).total_seconds()
-                if age_sec < PROCESSING_STALE_SEC:
-                    return True  # Recent Processing, wait
-        return False  # All stale or no updated_at
-    except Exception:
-        return True  # On error, assume in progress to be safe
-    finally:
-        conn.close()
-
-
-def _watcher_loop() -> None:
+def _ingest_loop() -> None:
     while not _watcher_stop.is_set():
         try:
-            # Don't start new work if something is already in Processing (prevents queue buildup)
-            if _has_processing_in_progress(DEALER_ID):
-                _watcher_stop.wait(timeout=POLL_INTERVAL_SEC)
-                continue
-            bulk_base = get_bulk_upload_dir(DEALER_ID)
-            scans_dir = bulk_base / "Input Scans"
-            if scans_dir.is_dir():
-                pdf_path = _find_pending_pdf(scans_dir)
-                if pdf_path:
-                    marker = (scans_dir / f".processed_{pdf_path.name}") if pdf_path.parent == scans_dir else (pdf_path.parent / ".processed")
-                    _process_one(pdf_path, marker=marker, dealer_id=DEALER_ID)
-                    break  # Process one at a time
-        except Exception as e:
-            logger.exception("bulk_watcher: loop error: %s", e)
-        _watcher_stop.wait(timeout=POLL_INTERVAL_SEC)
+            ingest_pending_jobs(DEALER_ID, _queue_service)
+        except Exception as exc:
+            logger.exception("bulk_watcher: ingest loop failed: %s", exc)
+        _watcher_stop.wait(timeout=BULK_INGEST_POLL_SEC)
+
+
+def _worker_loop(worker_index: int) -> None:
+    worker_id = f"bulk-worker-{worker_index}"
+    while not _watcher_stop.is_set():
+        handled = False
+        try:
+            messages = _queue_service.receive_messages(max_messages=1, wait_time_sec=1)
+            if messages:
+                handled = True
+            for message in messages:
+                try:
+                    process_job(message.job_id, message.dealer_id, worker_id)
+                finally:
+                    _queue_service.ack_message(message)
+
+            if not handled:
+                conn = get_connection()
+                try:
+                    BulkLoadsRepository.ensure_table(conn)
+                    fallback_jobs = BulkLoadsRepository.list_runnable_jobs(conn, dealer_id=DEALER_ID, limit=1)
+                    conn.commit()
+                finally:
+                    conn.close()
+                for row in fallback_jobs:
+                    handled = True
+                    process_job(row["job_id"], int(row.get("dealer_id") or DEALER_ID), worker_id)
+        except Exception as exc:
+            logger.exception("bulk_watcher: worker loop failed: %s", exc)
+        if not handled:
+            _watcher_stop.wait(timeout=1)
+
+
+def _archive_loop() -> None:
+    while not _watcher_stop.is_set():
+        try:
+            conn = get_connection()
+            try:
+                BulkLoadsRepository.ensure_table(conn)
+                moved = BulkLoadsRepository.archive_closed_rows(
+                    conn,
+                    retention_days=BULK_ARCHIVE_RETENTION_DAYS,
+                    limit=500,
+                    dealer_id=DEALER_ID,
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            if moved:
+                logger.info("bulk_watcher: archived %d closed bulk rows", moved)
+        except Exception as exc:
+            logger.exception("bulk_watcher: archive loop failed: %s", exc)
+        _watcher_stop.wait(timeout=BULK_ARCHIVE_POLL_SEC)
 
 
 def start_watcher() -> None:
-    """Start background watcher thread."""
-    global _watcher_thread
-    if _watcher_thread and _watcher_thread.is_alive():
+    global _ingest_thread, _archive_thread, _worker_threads
+    if (_ingest_thread and _ingest_thread.is_alive()) or any(t.is_alive() for t in _worker_threads):
         return
+
     _watcher_stop.clear()
-    _watcher_thread = threading.Thread(target=_watcher_loop, daemon=True)
-    _watcher_thread.start()
-    logger.info("bulk_watcher: started")
+    _worker_threads = []
+
+    if BULK_INGEST_ENABLED:
+        _ingest_thread = threading.Thread(target=_ingest_loop, daemon=True, name="bulk-ingest")
+        _ingest_thread.start()
+
+    if BULK_WORKER_ENABLED:
+        for index in range(max(1, BULK_WORKER_THREADS)):
+            thread = threading.Thread(target=_worker_loop, args=(index + 1,), daemon=True, name=f"bulk-worker-{index + 1}")
+            thread.start()
+            _worker_threads.append(thread)
+
+    if BULK_ARCHIVE_ENABLED:
+        _archive_thread = threading.Thread(target=_archive_loop, daemon=True, name="bulk-archive")
+        _archive_thread.start()
+
+    logger.info(
+        "bulk_watcher: started ingest=%s workers=%d archive=%s",
+        BULK_INGEST_ENABLED,
+        len(_worker_threads),
+        BULK_ARCHIVE_ENABLED,
+    )
 
 
 def stop_watcher() -> None:
-    """Stop background watcher thread."""
-    global _watcher_thread
+    global _ingest_thread, _archive_thread, _worker_threads
     _watcher_stop.set()
-    if _watcher_thread:
-        _watcher_thread.join(timeout=POLL_INTERVAL_SEC * 2)
-        _watcher_thread = None
+    if _ingest_thread:
+        _ingest_thread.join(timeout=max(2, BULK_INGEST_POLL_SEC * 2))
+        _ingest_thread = None
+    for thread in _worker_threads:
+        thread.join(timeout=4)
+    _worker_threads = []
+    if _archive_thread:
+        _archive_thread.join(timeout=max(2, BULK_ARCHIVE_POLL_SEC))
+        _archive_thread = None
     logger.info("bulk_watcher: stopped")

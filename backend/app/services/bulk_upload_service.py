@@ -112,6 +112,7 @@ def process_bulk_pdf(
                 "ok": False,
                 "subfolder": subfolder,
                 "mobile": mobile,
+                "retryable": False,
                 "error": f"Missing required pages: {', '.join(missing)}. Ensure your scan includes the sales details form (with Frame No, Chassis, Engine No) and Aadhar card (front & back).",
             }
 
@@ -124,11 +125,11 @@ def process_bulk_pdf(
         ocr.process_uploaded_subfolder(subfolder)
         details = ocr.get_extracted_details(subfolder)
         if not details:
-            return {"ok": False, "subfolder": subfolder, "mobile": mobile, "error": "OCR extraction failed"}
+            return {"ok": False, "subfolder": subfolder, "mobile": mobile, "retryable": True, "error": "OCR extraction failed"}
 
         name_mismatch = details.get("name_mismatch_error")
         if name_mismatch:
-            return {"ok": False, "subfolder": subfolder, "mobile": mobile, "error": name_mismatch}
+            return {"ok": False, "subfolder": subfolder, "mobile": mobile, "retryable": False, "error": name_mismatch}
 
         customer = details.get("customer") or {}
         vehicle = details.get("vehicle") or {}
@@ -137,10 +138,10 @@ def process_bulk_pdf(
         # 3. Submit info (requires aadhar last 4 + mobile)
         aadhar = customer.get("aadhar_id") or ""
         if not aadhar:
-            return {"ok": False, "subfolder": subfolder, "mobile": mobile, "error": "Aadhar not extracted"}
+            return {"ok": False, "subfolder": subfolder, "mobile": mobile, "retryable": False, "error": "Aadhar not extracted"}
         mobile_val = mobile or str(customer.get("mobile_number") or customer.get("mobile") or "")
         if not mobile_val:
-            return {"ok": False, "subfolder": subfolder, "mobile": mobile, "error": "Mobile not in subfolder or extracted"}
+            return {"ok": False, "subfolder": subfolder, "mobile": mobile, "retryable": False, "error": "Mobile not in subfolder or extracted"}
 
         from app.services.submit_info_service import submit_info
         submit_result = submit_info(
@@ -211,10 +212,10 @@ def process_bulk_pdf(
         )
 
         name = customer.get("name") or ""
-        return {"ok": True, "subfolder": subfolder, "mobile": mobile or mobile_val, "name": name}
+        return {"ok": True, "subfolder": subfolder, "mobile": mobile or mobile_val, "name": name, "retryable": False}
     except Exception as e:
         logger.exception("bulk: process failed for %s", subfolder)
-        return {"ok": False, "subfolder": subfolder, "mobile": mobile, "error": str(e)}
+        return {"ok": False, "subfolder": subfolder, "mobile": mobile, "retryable": True, "error": str(e)}
 
 
 def process_new_scans_and_record(

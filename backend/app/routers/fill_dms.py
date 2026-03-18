@@ -160,7 +160,8 @@ async def fill_dms_only(req: FillDmsRequest) -> FillDmsResponse:
     if not base_url:
         raise HTTPException(status_code=400, detail="dms_base_url required (or set DMS_BASE_URL)")
     base_url = _ensure_absolute_url(base_url)
-    uploads_dir = Path(UPLOADS_DIR)
+    did = req.dealer_id if req.dealer_id is not None else DEALER_ID
+    uploads_dir = Path(get_uploads_dir(did))
     if not uploads_dir.is_dir():
         raise HTTPException(status_code=500, detail="Uploads directory not found")
     customer_dict = req.customer.model_dump(exclude_none=True)
@@ -185,6 +186,8 @@ async def fill_dms_only(req: FillDmsRequest) -> FillDmsResponse:
     )
     scraped = result.get("vehicle") or {}
     has_vehicle = bool(scraped.get("key_num") or scraped.get("frame_num") or scraped.get("engine_num"))
+    if result.get("error") is None and not has_vehicle:
+        result["error"] = "No vehicle data was returned from DMS search. Check key/frame/engine values."
     if req.vehicle_id and has_vehicle:
         try:
             _update_vehicle_master_from_dms(req.vehicle_id, scraped)
