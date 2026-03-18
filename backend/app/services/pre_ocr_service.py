@@ -41,6 +41,11 @@ AADHAR_PATTERN = re.compile(r"\b(\d{4}\s+\d{4}\s+\d{4})\b|\b(\d{12})\b")
 # Name patterns: Aadhar (before Male/Female), Details (near Tel), Insurance (Nominee Name)
 NAME_BEFORE_GENDER = re.compile(r"([A-Za-z][A-Za-z\s\.]{2,40}?)\s+(?:Male|Female)\s*/\s*(?:M|F)\b", re.IGNORECASE)
 NAME_AFTER_LABEL = re.compile(r"(?:Name|Nominee\s+Name)\s*[:\s]+([A-Za-z][A-Za-z\s\.]{2,60})", re.IGNORECASE)
+# Sniff patterns: avoid promoting UNUSED pages that are actually Details/Insurance
+_DETAILS_OR_INSURANCE_SNIFF = [
+    re.compile(r"frame\s*no\.?|chassis|engine\s*no\.?|key\s*no\.?", re.IGNORECASE),
+    re.compile(r"gross\s*premium|policy\s*no\.?|cert\.?\s*no\.?", re.IGNORECASE),
+]
 
 
 def _pdf_to_images(pdf_path: Path, max_pages: int = 20) -> list[tuple[int, bytes]]:
@@ -103,6 +108,25 @@ def _extract_mobile_from_text(text: str) -> str | None:
     # Fallback: first 10-digit number starting with 6-9
     match = MOBILE_PATTERN.search(text)
     return match.group(1) if match else None
+
+
+def _extract_all_mobiles_from_text(text: str) -> list[str]:
+    """Extract all distinct Indian 10-digit mobiles from text, in order of first appearance."""
+    if not text:
+        return []
+    seen: set[str] = set()
+    result: list[str] = []
+    for match in CUSTOMER_MOBILE_CONTEXT.finditer(text):
+        m = match.group(1)
+        if m and m not in seen:
+            seen.add(m)
+            result.append(m)
+    for match in MOBILE_PATTERN.finditer(text):
+        m = match.group(1)
+        if m and m not in seen:
+            seen.add(m)
+            result.append(m)
+    return result
 
 
 def _extract_aadhar_number(text: str) -> str | None:
@@ -194,6 +218,7 @@ def _build_multi_customer_bundles(
     pdf_path: Path,
     full_ocr_text: str,
     classifications: list[tuple[int, str]],
+    all_mobiles: list[str] | None = None,
 ) -> list[dict] | None:
     """
     Build per-customer bundles when multi-customer detected.
@@ -225,6 +250,26 @@ def _build_multi_customer_bundles(
             details_list.append((idx, mobile, name))
         elif ptype == PAGE_TYPE_INSURANCE:
             insurance_list.append((idx, name))
+
+    # Fallback: when 2+ mobiles and 2+ Details but only 1 Aadhar pair, promote UNUSED pages with Aadhar number
+    need_more = 2 - min(len(fronts), len(backs))
+    if need_more > 0 and len(all_mobiles or []) >= 2 and len(details_list) >= 2:
+        added = 0
+        for idx, ptype in classifications:
+            if ptype != PAGE_TYPE_UNUSED or added >= need_more:
+                continue
+            text = page_texts.get(idx, "")
+            aadhar_num = _extract_aadhar_number(text)
+            if not aadhar_num:
+                continue
+            # Avoid promoting pages that look like Details/Insurance (have their markers)
+            if any(p.search(text) for p in _DETAILS_OR_INSURANCE_SNIFF):
+                continue
+            name = _extract_name_from_text(text, PAGE_TYPE_AADHAR)
+            fronts.append((idx, aadhar_num, name))
+            backs.append((idx, aadhar_num))
+            added += 1
+            logger.info("Promoted UNUSED page %d to Aadhar_combined (aadhar=%s) for multi-customer", idx, aadhar_num[:4] + "****")
 
     # Match fronts to backs by Aadhar number
     # Build customer slots: each needs (front_idx, back_idx) matched by aadhar_num
@@ -271,6 +316,9 @@ def _build_multi_customer_bundles(
     used_details: set[int] = set()
     used_insurance: set[int] = set()
 
+    all_mobiles = all_mobiles or []
+    mobile_fallback_idx = 0
+
     bundles: list[dict] = []
     for slot in customer_slots:
         aadhar_name = slot["name"]
@@ -281,14 +329,19 @@ def _build_multi_customer_bundles(
             if idx in used_details:
                 continue
             if _names_match(aadhar_name, dn):
-                d_idx, mobile, d_name = idx, m, dn
+                d_idx, mobile, d_name = idx, m or (all_mobiles[mobile_fallback_idx] if mobile_fallback_idx < len(all_mobiles) else None), dn
+                if mobile:
+                    mobile_fallback_idx += 1
                 used_details.add(idx)
                 break
         if d_idx is None or not mobile:
             # Fallback: use first unused Details (sequential) if no name match
             for idx, m, dn in details_list:
-                if idx not in used_details and m:
-                    d_idx, mobile, d_name = idx, m, dn
+                if idx not in used_details:
+                    d_idx, d_name = idx, dn
+                    mobile = m or (all_mobiles[mobile_fallback_idx] if mobile_fallback_idx < len(all_mobiles) else None)
+                    if mobile:
+                        mobile_fallback_idx += 1
                     used_details.add(idx)
                     break
         if d_idx is None or not mobile:
@@ -411,16 +464,18 @@ def _split_pdf_by_classification(
     pdf_path: Path,
     full_ocr_text: str,
     out_dir: Path,
+    classifications_override: list[tuple[int, str]] | None = None,
 ) -> Path:
     """
     Classify each page from OCR text, split PDF into Aadhar.jpg, Aadhar_back.jpg,
     Details.jpg, Insurance.jpg, and unused.pdf. Returns out_dir.
+    classifications_override: use these instead of re-classifying (e.g. when promoting Aadhar to Aadhar_combined).
     """
     import fitz
     from PIL import Image
     import io
 
-    classifications = classify_pages_from_ocr_text(full_ocr_text)
+    classifications = classifications_override if classifications_override is not None else classify_pages_from_ocr_text(full_ocr_text)
     page_type_to_idx: dict[str, int] = {}  # first page index per type
     unused_indices: list[int] = []
     for idx, ptype in classifications:
@@ -493,30 +548,46 @@ def run_pre_ocr_and_prepare(
     full_text, ocr_path, mobile = pre_ocr_pdf(dest_pdf, processing_dir=proc_dir, use_textract=use_textract)
 
     classifications = classify_pages_from_ocr_text(full_text)
+    all_mobiles = _extract_all_mobiles_from_text(full_text)
 
-    # Multi-customer: only when multiple document sets in one PDF
-    if _detect_multi_customer(classifications):
-        bundles_data = _build_multi_customer_bundles(dest_pdf, full_text, classifications)
-        if not bundles_data:
-            return None, source_pdf.stem, mobile, ocr_path, ["Multi-customer: could not associate documents"]
+    # Multi-customer: when multiple document sets OR 2+ distinct mobiles in full text
+    is_multi = _detect_multi_customer(classifications) or len(all_mobiles) >= 2
+    if is_multi:
+        bundles_data = _build_multi_customer_bundles(dest_pdf, full_text, classifications, all_mobiles)
+        if bundles_data:
+            logger.info("Multi-customer: built %d bundles for %s", len(bundles_data), source_pdf.name)
+            base_classified = proc_dir / f"classified_{source_pdf.stem}"
+            base_classified.mkdir(parents=True, exist_ok=True)
+            classified_dirs = _split_pdf_multi_customer(dest_pdf, bundles_data, base_classified)
 
-        base_classified = proc_dir / f"classified_{source_pdf.stem}"
-        base_classified.mkdir(parents=True, exist_ok=True)
-        classified_dirs = _split_pdf_multi_customer(dest_pdf, bundles_data, base_classified)
+            result_bundles: list[tuple[Path, str, str]] = []
+            for i, (bundle, cdir) in enumerate(zip(bundles_data, classified_dirs)):
+                m = bundle.get("mobile") or ""
+                subfolder = UploadService().get_subdir_name_mobile(m) if m else f"{source_pdf.stem}_cust{i + 1}"
+                result_bundles.append((cdir, subfolder, m))
 
-        result_bundles: list[tuple[Path, str, str]] = []
-        for i, (bundle, cdir) in enumerate(zip(bundles_data, classified_dirs)):
-            m = bundle.get("mobile") or ""
-            subfolder = UploadService().get_subdir_name_mobile(m) if m else f"{source_pdf.stem}_cust{i + 1}"
-            result_bundles.append((cdir, subfolder, m))
-
-        first_mobile = result_bundles[0][2] if result_bundles else mobile
-        return result_bundles, source_pdf.stem, first_mobile, ocr_path, None
+            first_mobile = result_bundles[0][2] if result_bundles else mobile
+            return result_bundles, source_pdf.stem, first_mobile, ocr_path, None
+        # Fall back to single-customer (e.g. scan has 2 mobiles but only 1 customer)
+        logger.info("Multi-customer detected but could not build bundles; falling back to single-customer (classifications=%s, mobiles=%s)",
+                    [(i, t) for i, t in classifications], all_mobiles)
 
     # Single customer
+    classifications = list(classifications)  # mutable copy
     classified_types: set[str] = {ptype for _, ptype in classifications}
     has_aadhar_front = PAGE_TYPE_AADHAR in classified_types or PAGE_TYPE_AADHAR_COMBINED in classified_types
     has_aadhar_back = PAGE_TYPE_AADHAR_BACK in classified_types or PAGE_TYPE_AADHAR_COMBINED in classified_types
+
+    # Fallback: Aadhar back may be blurred/darker on same page; OCR might miss uidai.gov.in.
+    # If we have front but no back, and exactly one Aadhar page, treat it as combined.
+    if has_aadhar_front and not has_aadhar_back:
+        aadhar_pages = [(i, p) for i, p in classifications if p in (PAGE_TYPE_AADHAR, PAGE_TYPE_AADHAR_COMBINED)]
+        if len(aadhar_pages) == 1:
+            idx, _ = aadhar_pages[0]
+            classifications = [(i, PAGE_TYPE_AADHAR_COMBINED if i == idx else p) for i, p in classifications]
+            has_aadhar_back = True
+            logger.info("Treating single Aadhar page %d as Aadhar_combined (back may be blurred)", idx + 1)
+
     missing: list[str] = []
     if not mobile:
         missing.append("mobile number")
@@ -525,14 +596,14 @@ def run_pre_ocr_and_prepare(
     if not has_aadhar_back:
         missing.append("Aadhar back")
     if PAGE_TYPE_DETAILS not in classified_types:
-        missing.append("Details sheet")
+        missing.append("sales details form (vehicle & customer info)")
 
     if missing:
         return None, source_pdf.stem, mobile, ocr_path, missing
 
     classified_subdir = f"classified_{source_pdf.stem}"
     classified_dir = proc_dir / classified_subdir
-    _split_pdf_by_classification(dest_pdf, full_text, classified_dir)
+    _split_pdf_by_classification(dest_pdf, full_text, classified_dir, classifications_override=classifications)
 
     subfolder = UploadService().get_subdir_name_mobile(mobile) if mobile else source_pdf.stem
     return [(classified_dir, subfolder, mobile or "")], source_pdf.stem, mobile, ocr_path, None
@@ -633,8 +704,10 @@ def move_processing_to_success_or_error(
                     dest_f = dest_dir / f.name
                     shutil.move(str(f), str(dest_f))
                     logger.info("Moved %s -> %s", f.name, dest_dir)
+            # Force-remove classified dir (handles subdirs, leftover files)
             try:
-                processing_path.rmdir()
+                shutil.rmtree(processing_path, ignore_errors=True)
+                logger.info("Removed classified dir %s", processing_path.name)
             except OSError:
                 pass
         else:
@@ -646,6 +719,21 @@ def move_processing_to_success_or_error(
         dest_ocr = dest_dir / ocr_path.name
         shutil.move(str(ocr_path), str(dest_ocr))
         logger.info("Moved %s -> %s", ocr_path.name, dest_dir)
+
+    # Clear Processing PDF if present (original already moved to dest; remove duplicate to clear Processing)
+    proc_pdf = PROCESSING_DIR / f"{original_filename_stem}.pdf"
+    if proc_pdf.exists():
+        proc_pdf.unlink(missing_ok=True)
+        logger.info("Removed Processing PDF %s (cleared Processing folder)", proc_pdf.name)
+
+    # Ensure classified dir is removed (in case processing_path was PDF or path mismatch)
+    classified_dir = PROCESSING_DIR / f"classified_{original_filename_stem}"
+    if classified_dir.exists() and classified_dir.is_dir():
+        try:
+            shutil.rmtree(classified_dir, ignore_errors=True)
+            logger.info("Removed classified dir %s (cleared Processing folder)", classified_dir.name)
+        except OSError:
+            pass
 
     return result_folder
 

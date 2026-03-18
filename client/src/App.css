@@ -1105,6 +1105,221 @@
   text-decoration: underline;
 }
 
+.bulk-loads-folder-link-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+}
+
+/* Bulk folder view (in-app, styled like rest of app) */
+.bulk-folder-view {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+  padding: 12px 16px;
+  border: 1px solid #c5d9ed;
+  border-radius: 8px;
+  background: #fff;
+  margin: 0 4px;
+}
+
+.bulk-folder-view-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #c5d9ed;
+}
+
+.bulk-folder-view-back {
+  flex-shrink: 0;
+}
+
+.bulk-folder-view-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #1e5a9e;
+  word-break: break-all;
+}
+
+.bulk-folder-view-body {
+  flex: 1;
+  min-height: 0;
+}
+
+.bulk-folder-view-loading,
+.bulk-folder-view-error,
+.bulk-folder-view-empty {
+  margin: 0;
+  padding: 16px;
+  color: #555;
+}
+
+.bulk-folder-view-error {
+  color: #c41e3a;
+}
+
+.bulk-folder-view-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 20px;
+  padding: 8px 0;
+}
+
+.bulk-folder-view-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 16px 12px;
+  border: 1px solid #c5d9ed;
+  border-radius: 8px;
+  background: #f8fbfe;
+  text-decoration: none;
+  color: #1e5a9e;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.bulk-folder-view-item:hover {
+  border-color: #1e5a9e;
+  background: #e8f4fc;
+}
+
+.bulk-folder-view-icon {
+  width: 64px;
+  height: 64px;
+  margin-bottom: 10px;
+  position: relative;
+  flex-shrink: 0;
+}
+
+.bulk-folder-view-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.bulk-folder-view-preview {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 4px;
+  z-index: 1;
+}
+
+.bulk-folder-view-preview-fallback {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.bulk-folder-view-preview-fallback svg {
+  width: 100%;
+  height: 100%;
+}
+
+.bulk-folder-view-name {
+  font-size: 12px;
+  font-weight: 500;
+  text-align: center;
+  word-break: break-word;
+  line-height: 1.3;
+}
+
+.bulk-folder-view-size {
+  font-size: 11px;
+  color: #666;
+  margin-top: 4px;
+}
+
+.bulk-folder-view-item--button {
+  background: none;
+  border: 1px solid #c5d9ed;
+  cursor: pointer;
+  font: inherit;
+  text-align: center;
+}
+
+.bulk-folder-view-item--button:hover {
+  border-color: #1e5a9e;
+  background: #e8f4fc;
+}
+
+/* In-app file viewer overlay (images, PDFs – opens in browser, not external app) */
+.bulk-folder-viewer-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.bulk-folder-viewer-content {
+  position: relative;
+  background: #fff;
+  border-radius: 8px;
+  max-width: 95vw;
+  max-height: 95vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.bulk-folder-viewer-close {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: #f0f0f0;
+  border-radius: 4px;
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+  color: #333;
+  z-index: 1;
+}
+
+.bulk-folder-viewer-close:hover {
+  background: #e0e0e0;
+}
+
+.bulk-folder-viewer-title {
+  margin: 12px 40px 8px 12px;
+  font-size: 14px;
+  font-weight: 500;
+  color: #333;
+  align-self: flex-start;
+}
+
+.bulk-folder-viewer-img {
+  max-width: 90vw;
+  max-height: 80vh;
+  object-fit: contain;
+  padding: 0 16px 16px;
+}
+
+.bulk-folder-viewer-iframe {
+  width: 90vw;
+  height: 80vh;
+  min-height: 400px;
+  border: none;
+  border-radius: 0 0 8px 8px;
+}
+
 /* View Customer page */
 .view-customer-page {
   display: flex;
@@ -1490,6 +1705,22 @@
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+.app-panel-pre-uploaded {
+  margin-bottom: 8px;
+}
+.app-panel-pre-uploaded-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+}
+.app-panel-pre-uploaded-file {
+  font-size: 13px;
+  color: #1e5a9e;
+  background: #e8f4fc;
+  padding: 4px 8px;
+  border-radius: 6px;
 }
 
 .app-panel-status {

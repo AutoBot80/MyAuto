@@ -9,6 +9,7 @@ import { fillDmsOnly, fillVahanOnly, printForm20, getDataFromDms, isFillDmsAbort
 import { insertRtoPayment } from "../api/rtoPaymentDetails";
 import { getBaseUrl } from "../api/client";
 import { loadAddSalesForm, saveAddSalesForm, clearAddSalesForm } from "../utils/addSalesStorage";
+import { markBulkLoadSuccess } from "../api/bulkLoads";
 import { normalizeVehicleDetails, hasVehicleData } from "../utils/vehicleDetails";
 
 function getInitialForm() {
@@ -85,6 +86,8 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
   /** From Fill Forms (Vahan step); shown under C. RTO. Only populated when user presses Fill Forms. */
   const [rtoApplicationId, setRtoApplicationId] = useState<string | null>(null);
   const [rtoPaymentDue, setRtoPaymentDue] = useState<number | null>(null);
+  /** Extraction error (e.g. QR code not readable) – stops poll and shows message. */
+  const [extractionError, setExtractionError] = useState<string | null>(null);
   /** True once Textract has returned insurance data for this upload (details sheet processed). */
   const [insuranceReadByTextract, setInsuranceReadByTextract] = useState(() => {
     const stored = loadAddSalesForm().extractedInsurance;
@@ -214,9 +217,15 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
   useEffect(() => {
     if (!savedTo || (hasVehicle && hasCustomer)) return;
     let cancelled = false;
-    getExtractedDetails(savedTo)
+      getExtractedDetails(savedTo)
       .then((details) => {
         if (cancelled) return;
+        const extractionErr = (details as Record<string, unknown>)?.extraction_error;
+        if (typeof extractionErr === "string") {
+          setExtractionError(extractionErr);
+        } else {
+          setExtractionError(null);
+        }
         const rawVehicle = details?.vehicle ?? details;
         const normalized = normalizeVehicleDetails(rawVehicle);
         if (normalized) setExtractedVehicle(normalized);
@@ -259,8 +268,10 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
           });
         }
       })
-      .catch(() => {
-        // Fetch failed (404, network, etc.) – keep existing state
+      .catch((err) => {
+        if (cancelled) return;
+        const msg = err instanceof Error ? err.message : String(err);
+        setExtractionError(msg);
       });
     return () => {
       cancelled = true;
@@ -271,9 +282,11 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
   useEffect(() => {
     if (!savedTo) {
       pollCountRef.current = 0;
+      setExtractionError(null);
       return;
     }
     pollCountRef.current = 0;
+    setExtractionError(null);
 
     let intervalId: ReturnType<typeof setInterval> | null = null;
 
@@ -282,8 +295,14 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
       pollCountRef.current += 1;
       try {
         const details = await getExtractedDetails(savedTo);
+        const extractionErr = (details as Record<string, unknown>)?.extraction_error;
+        if (typeof extractionErr === "string") {
+          setExtractionError(extractionErr);
+          if (intervalId) clearInterval(intervalId);
+        }
         const rawVehicle = details?.vehicle ?? details;
         const normalized = normalizeVehicleDetails(rawVehicle);
+        if (normalized) setExtractedVehicle(normalized);
         const cust = details?.customer;
         if (cust && typeof cust === "object" && !Array.isArray(cust)) {
           setExtractedCustomer(mapApiCustomerToExtracted(cust as Record<string, unknown>));
@@ -322,13 +341,14 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
             };
           });
         }
-        if (normalized) {
-          setExtractedVehicle(normalized);
+        if (normalized || extractionErr) {
           if (intervalId) clearInterval(intervalId);
           return;
         }
-      } catch {
-        // keep polling
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        setExtractionError(msg);
+        if (intervalId) clearInterval(intervalId);
       }
     };
 
@@ -341,9 +361,11 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
 
   const mobileRow = (
     <div className="app-field-row">
-      <label className="app-field">
+      <label className="app-field" htmlFor="add-sales-mobile">
         <div className="app-field-label">Customer Mobile (10 digits)</div>
         <input
+          id="add-sales-mobile"
+          name="mobile"
           className="app-field-input"
           inputMode="numeric"
           placeholder="9876543210"
@@ -365,6 +387,7 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
     setExtractedVehicle(null);
     setExtractedCustomer(null);
     setExtractedInsurance(null);
+    setExtractionError(null);
     setInsuranceReadByTextract(false);
     setDmsScrapedVehicle(null);
     setDmsPdfsDownloaded(false);
@@ -714,6 +737,7 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
       onUpload={upload}
       uploadStatus={uploadStatus}
       uploadedFiles={uploadedFiles}
+      savedTo={savedTo}
       mobile={mobile}
       isMobileValid={isMobileValid}
       onUploadV2={uploadV2}
@@ -792,6 +816,15 @@ className="app-button app-button--primary"
                         setHasSubmittedInfo(true);
                         if (submitRes?.customer_id != null) setLastSubmittedCustomerId(submitRes.customer_id);
                         if (submitRes?.vehicle_id != null) setLastSubmittedVehicleId(submitRes.vehicle_id);
+                        const stored = loadAddSalesForm();
+                        if (stored.reprocessBulkLoadId != null && savedTo) {
+                          try {
+                            await markBulkLoadSuccess(stored.reprocessBulkLoadId, savedTo);
+                            saveAddSalesForm({ reprocessBulkLoadId: undefined });
+                          } catch (e) {
+                            setSubmitStatus(`Saved, but failed to update bulk queue: ${e instanceof Error ? e.message : "Unknown error"}`);
+                          }
+                        }
                       } catch (err) {
                         const msg = err instanceof Error ? err.message : "Submit failed";
                         setSubmitStatus(msg);
@@ -824,8 +857,13 @@ className="app-button app-button--primary"
                 <div className="add-sales-v2-subsection">
                   <div className="add-sales-v2-subsection-head">
                     <h3 className="add-sales-v2-subsection-title">Customer Details</h3>
-                    {customerProcessing && <span className="add-sales-v2-processing">Processing</span>}
+                    {customerProcessing && !extractionError && <span className="add-sales-v2-processing">Processing</span>}
                   </div>
+                  {extractionError && (
+                    <div className="add-sales-v2-subsection-errors" role="alert">
+                      <div className="add-sales-v2-subsection-error-item">{extractionError}</div>
+                    </div>
+                  )}
                   <dl className="add-sales-v2-dl add-sales-v2-dl--customer">
                     <div className="add-sales-v2-dl-row-group">
                       <div className="add-sales-v2-dl-row">

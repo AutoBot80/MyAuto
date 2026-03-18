@@ -1,6 +1,7 @@
 """Bulk Loads: list and filter bulk upload processing results."""
 
 import logging
+import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -40,7 +41,7 @@ def list_bulk_loads(
     conn = get_connection()
     try:
         BulkLoadsRepository.ensure_table(conn)
-        status_list = [s.strip() for s in status_in.split(",") if s.strip()] if status_in else None
+        status_list = [s.strip() for s in (status_in or "").split(",") if s.strip()] or None
         rows = BulkLoadsRepository.list_all(
             conn,
             limit=limit,
@@ -54,6 +55,9 @@ def list_bulk_loads(
                 if k in r and isinstance(r[k], datetime):
                     r[k] = r[k].isoformat()
         return rows
+    except Exception as e:
+        logger.exception("list_bulk_loads failed: %s", e)
+        raise
     finally:
         conn.close()
 
@@ -68,6 +72,22 @@ def get_bulk_load_counts(
     try:
         BulkLoadsRepository.ensure_table(conn)
         return BulkLoadsRepository.count_by_status_pending(conn, date_from=date_from, date_to=date_to)
+    except Exception as e:
+        logger.exception("get_bulk_load_counts failed: %s", e)
+        raise
+    finally:
+        conn.close()
+
+
+@router.post("/reset-stale-processing")
+def reset_stale_processing(stale_sec: int = Query(60, ge=10, le=3600, description="Mark Processing older than this (seconds) as Error")) -> dict:
+    """Reset stuck Processing rows so the watcher can pick up new files. Use when scan 2 (etc.) does not start."""
+    conn = get_connection()
+    try:
+        BulkLoadsRepository.ensure_table(conn)
+        count = BulkLoadsRepository.reset_stale_processing(conn, stale_sec)
+        conn.commit()
+        return {"ok": True, "reset_count": count, "message": f"Reset {count} stuck Processing row(s)"}
     finally:
         conn.close()
 
@@ -98,18 +118,58 @@ def set_action_taken(bulk_load_id: int, action_taken: bool = True) -> dict:
         conn.close()
 
 
-@router.get("/folder/{folder_path:path}", response_class=HTMLResponse)
-def browse_bulk_folder(folder_path: str) -> HTMLResponse:
-    """List files in a Bulk Upload subfolder (e.g. Rejected scans/Scan1_15032025)."""
-    from urllib.parse import quote
+@router.patch("/{bulk_load_id:int}/mark-success")
+def mark_bulk_load_success(bulk_load_id: int, subfolder: str = Query(..., description="Uploads subfolder for documents link")) -> dict:
+    """Mark an Error record as Success after manual completion via Add Customer (Re-Try flow)."""
+    conn = get_connection()
+    try:
+        BulkLoadsRepository.ensure_table(conn)
+        row = BulkLoadsRepository.get_by_id(conn, bulk_load_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="Bulk load not found")
+        if row.get("status") != "Error":
+            raise HTTPException(status_code=400, detail="Only Error records can be marked Success")
+        BulkLoadsRepository.update_status(
+            conn, bulk_load_id, "Success",
+            error_message=None,
+            subfolder=subfolder,
+            folder_path=subfolder,
+        )
+        BulkLoadsRepository.update_result_folder(conn, bulk_load_id, subfolder)
+        conn.commit()
+        return {"ok": True, "status": "Success"}
+    finally:
+        conn.close()
+
+
+def _list_bulk_folder_files(folder_path: str) -> list[dict]:
+    """List files in a Bulk Upload subfolder. Returns list of {name, size}."""
     if ".." in folder_path or folder_path.startswith("/"):
         raise HTTPException(status_code=400, detail="Invalid path")
     folder = Path(BULK_UPLOAD_DIR) / folder_path
     if not folder.is_dir():
         raise HTTPException(status_code=404, detail=f"Folder not found: {folder_path}")
-    files = sorted(f.name for f in folder.iterdir() if f.is_file())
+    files: list[dict] = []
+    for f in sorted(folder.iterdir()):
+        if f.is_file():
+            files.append({"name": f.name, "size": f.stat().st_size})
+    return files
+
+
+@router.get("/folder/{folder_path:path}/list")
+def list_bulk_folder(folder_path: str) -> dict:
+    """List files in a Bulk Upload subfolder (JSON for in-app display)."""
+    files = _list_bulk_folder_files(folder_path)
+    return {"folder_path": folder_path, "files": files}
+
+
+@router.get("/folder/{folder_path:path}", response_class=HTMLResponse)
+def browse_bulk_folder(folder_path: str) -> HTMLResponse:
+    """List files in a Bulk Upload subfolder (legacy HTML for direct links)."""
+    from urllib.parse import quote
+    files = _list_bulk_folder_files(folder_path)
     rows = "".join(
-        f'<tr><td><a href="/bulk-loads/file/{quote(folder_path + "/" + f, safe="")}">{f}</a></td></tr>'
+        f'<tr><td><a href="/bulk-loads/file/{quote(folder_path + "/" + f["name"], safe="")}">{f["name"]}</a></td></tr>'
         for f in files
     )
     safe_path = folder_path.replace("<", "&lt;").replace(">", "&gt;")
@@ -128,7 +188,7 @@ def get_bulk_file(file_path: str):
     path = Path(BULK_UPLOAD_DIR) / file_path
     if not path.is_file():
         raise HTTPException(status_code=404, detail="File not found")
-    return FileResponse(path, filename=path.name)
+    return FileResponse(path, filename=path.name, content_disposition_type="inline")
 
 
 @router.post("/{bulk_load_id:int}/prepare-reprocess")
@@ -176,8 +236,15 @@ def prepare_reprocess(bulk_load_id: int) -> dict:
     if not saved:
         raise HTTPException(status_code=500, detail="Failed to prepare files for reprocess")
 
-    from app.services.ocr_service import OcrService
-    ocr = OcrService()
-    ocr.process_uploaded_subfolder(subfolder)
+    uploaded_files = [p.name for p in saved]
 
-    return {"subfolder": subfolder, "mobile": mobile}
+    def run_ocr_background() -> None:
+        try:
+            from app.services.ocr_service import OcrService
+            OcrService().process_uploaded_subfolder(subfolder)
+        except Exception as e:
+            logger.exception("prepare_reprocess: background OCR failed for %s: %s", subfolder, e)
+
+    threading.Thread(target=run_ocr_background, daemon=True).start()
+
+    return {"bulk_load_id": bulk_load_id, "subfolder": subfolder, "mobile": mobile, "uploadedFiles": uploaded_files}

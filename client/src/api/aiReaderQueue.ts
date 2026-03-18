@@ -50,7 +50,17 @@ export async function getExtractedDetails(
     `${base}/ai-reader-queue/extracted-details?subfolder=${encodeURIComponent(subfolder)}`
   );
   if (res.status === 404) return null;
-  if (!res.ok) throw new Error(await res.text().then((t) => t || `Failed (${res.status})`));
+  if (!res.ok) {
+    const text = await res.text();
+    let msg = text || `Failed (${res.status})`;
+    try {
+      const json = JSON.parse(text) as { detail?: string };
+      if (json.detail) msg = json.detail;
+    } catch {
+      /* use msg as is */
+    }
+    throw new Error(msg);
+  }
   return res.json() as Promise<ExtractedDetailsResponse>;
 }
 
@@ -61,7 +71,7 @@ export async function getInsuranceExtraction(subfolder: string): Promise<{
   ocr_files: string[];
   insurance_from_details: Record<string, string> | null;
   insurance_ocr_json: Record<string, string> | null;
-  info_from_insurance_txt: string | null;
+  raw_ocr_txt: string | null;
   insurance_txt_preview?: string;
 }> {
   const base = await import("./client").then((m) => m.getBaseUrl());

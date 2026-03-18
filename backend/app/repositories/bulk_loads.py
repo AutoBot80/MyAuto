@@ -89,6 +89,20 @@ class BulkLoadsRepository:
             )
 
     @staticmethod
+    def reset_stale_processing(conn, stale_sec: int = 60) -> int:
+        """Mark Processing rows older than stale_sec as Error. Returns count reset. Unblocks watcher."""
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                UPDATE {BulkLoadsRepository.TABLE_NAME}
+                SET status = 'Error', error_message = COALESCE(error_message, 'Reset: stuck in Processing')
+                WHERE status = 'Processing' AND updated_at < NOW() - make_interval(secs => %s)
+                """,
+                (stale_sec,),
+            )
+            return cur.rowcount
+
+    @staticmethod
     def set_action_taken(conn, id: int, action_taken: bool = True) -> bool:
         """Mark a record as action taken (reprocessed by operator). Only for Error/Rejected. Returns True if updated."""
         with conn.cursor() as cur:

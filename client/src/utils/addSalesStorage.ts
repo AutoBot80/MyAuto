@@ -7,6 +7,8 @@ export interface AddSalesStored {
   savedTo: string | null;
   uploadedFiles: string[];
   uploadStatus: string;
+  /** When set, this bulk load was opened via Re-Try; mark Success on submit. */
+  reprocessBulkLoadId?: number;
   dmsScrapedVehicle: { key_no?: string; frame_no?: string; engine_no?: string; model?: string; color?: string; cubic_capacity?: string; seating_capacity?: string; body_type?: string; vehicle_type?: string; num_cylinders?: string; horse_power?: string; total_amount?: string; year_of_mfg?: string } | null;
   rtoApplicationId: string | null;
   rtoPaymentDue: number | null;
@@ -101,6 +103,7 @@ export function loadAddSalesForm(): AddSalesStored {
             : "",
       uploadedFiles: Array.isArray(parsed.uploadedFiles) ? parsed.uploadedFiles : [],
       uploadStatus: typeof parsed.uploadStatus === "string" ? parsed.uploadStatus : "",
+      reprocessBulkLoadId: typeof parsed.reprocessBulkLoadId === "number" ? parsed.reprocessBulkLoadId : undefined,
       dmsScrapedVehicle,
       rtoApplicationId: typeof parsed.rtoApplicationId === "string" ? parsed.rtoApplicationId : null,
       rtoPaymentDue: typeof parsed.rtoPaymentDue === "number" ? parsed.rtoPaymentDue : null,

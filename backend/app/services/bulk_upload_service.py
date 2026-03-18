@@ -105,10 +105,15 @@ def process_bulk_pdf(
         if not has_details or not has_aadhar:
             missing = []
             if not has_details:
-                missing.append("Details")
+                missing.append("sales details form (vehicle & customer info)")
             if not has_aadhar:
-                missing.append("Aadhar")
-            return {"ok": False, "subfolder": subfolder, "mobile": mobile, "error": f"Missing required pages: {', '.join(missing)}"}
+                missing.append("Aadhar card")
+            return {
+                "ok": False,
+                "subfolder": subfolder,
+                "mobile": mobile,
+                "error": f"Missing required pages: {', '.join(missing)}. Ensure your scan includes the sales details form (with Frame No, Chassis, Engine No) and Aadhar card (front & back).",
+            }
 
         # 2. Run OCR extraction
         from app.services.ocr_service import OcrService

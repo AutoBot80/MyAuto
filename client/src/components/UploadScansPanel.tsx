@@ -5,6 +5,8 @@ interface UploadScansPanelProps {
   onUpload: (files: File[]) => Promise<void>;
   uploadStatus: string;
   uploadedFiles: string[];
+  /** When set with uploadedFiles, shows pre-uploaded state (e.g. from Re-Try) */
+  savedTo?: string | null;
   /** Mobile for subfolder mobile_ddmmyy */
   mobile?: string;
   /** 10-digit mobile valid */
@@ -24,10 +26,12 @@ export function UploadScansPanel({
   onUpload,
   uploadStatus,
   uploadedFiles,
+  savedTo,
   mobile,
   isMobileValid,
   onUploadV2,
 }: UploadScansPanelProps) {
+  const isPreUploaded = Boolean(savedTo && uploadedFiles.length > 0);
   const aadharInputRef = useRef<HTMLInputElement | null>(null);
   const aadharBackInputRef = useRef<HTMLInputElement | null>(null);
   const salesInputRef = useRef<HTMLInputElement | null>(null);
@@ -64,10 +68,21 @@ export function UploadScansPanel({
   return (
     <section className="app-panel">
       <div className="app-panel-title">Upload scans</div>
+      {isPreUploaded ? (
+        <div className="app-panel-row app-panel-pre-uploaded">
+          <div className="app-panel-pre-uploaded-files">
+            {uploadedFiles.map((f) => (
+              <span key={f} className="app-panel-pre-uploaded-file">{f}</span>
+            ))}
+          </div>
+        </div>
+      ) : (
+      <>
       {SCAN_LABELS.map((label, index) => (
         <div key={label} className="app-panel-row app-panel-scan-row">
-          <label className="app-panel-scan-label">{label}</label>
+          <label className="app-panel-scan-label" htmlFor={`upload-scan-${index}`}>{label}</label>
           <input
+            id={`upload-scan-${index}`}
             ref={refs[index]}
             type="file"
             accept=".jpg,.jpeg,.png,.pdf,image/jpeg,image/png,application/pdf"
@@ -105,10 +120,11 @@ export function UploadScansPanel({
             </label>
           </div>
           <div className="app-panel-row app-panel-scan-row">
-            <label className={`app-panel-scan-label ${!hasFinancing ? "app-panel-scan-label--muted" : ""}`}>
+            <label className={`app-panel-scan-label ${!hasFinancing ? "app-panel-scan-label--muted" : ""}`} htmlFor="upload-scan-financing">
               Financing document
             </label>
             <input
+              id="upload-scan-financing"
               ref={financingInputRef}
               type="file"
               accept=".jpg,.jpeg,.png,.pdf,image/jpeg,image/png,application/pdf"
@@ -148,10 +164,11 @@ export function UploadScansPanel({
             </label>
           </div>
           <div className="app-panel-row app-panel-scan-row">
-            <label className={`app-panel-scan-label ${!hasInsurance ? "app-panel-scan-label--muted" : ""}`}>
+            <label className={`app-panel-scan-label ${!hasInsurance ? "app-panel-scan-label--muted" : ""}`} htmlFor="upload-scan-insurance">
               Insurance Sheet
             </label>
             <input
+              id="upload-scan-insurance"
               ref={insuranceInputRef}
               type="file"
               accept=".jpg,.jpeg,.png,.pdf,image/jpeg,image/png,application/pdf"
@@ -194,6 +211,8 @@ export function UploadScansPanel({
             {isUploading ? "Uploading..." : "Upload all files"}
           </button>
         </div>
+      )}
+      </>
       )}
       {uploadStatus ? (
         <div className="app-panel-status">{uploadStatus}</div>

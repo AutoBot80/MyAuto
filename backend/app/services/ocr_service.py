@@ -35,11 +35,14 @@ def _ocr_subfolder_path(output_dir: Path, subfolder: str) -> Path:
     return output_dir / _safe_subfolder_name(subfolder)
 
 
-def _json_output_path(output_dir: Path, subfolder: str, filename: str) -> Path:
-    """Path for structured JSON output under subfolder: ocr_output/mobile_ddmmyy/Details.json."""
-    stem = Path(filename).stem
+# OCR output JSON filename (in ocr_output subfolder only; input files stay as Details.jpg)
+OCR_OUTPUT_JSON_STEM = "OCR_To_be_Used"
+
+
+def _json_output_path(output_dir: Path, subfolder: str) -> Path:
+    """Path for structured JSON output: ocr_output/mobile_ddmmyy/OCR_To_be_Used.json."""
     subfolder_name = _safe_subfolder_name(subfolder)
-    return output_dir / subfolder_name / f"{stem}.json"
+    return output_dir / subfolder_name / f"{OCR_OUTPUT_JSON_STEM}.json"
 
 
 # Filename patterns for queue processing.
@@ -408,6 +411,7 @@ class OcrService:
         """
         Run extraction directly on uploaded files (no queue).
         Processes Details.jpg first (vehicle + insurance), then Aadhar.jpg (customer).
+        Collects raw OCR text from all processed files and writes Raw_OCR.txt.
         Returns summary of what was processed.
         """
         subdir = self.uploads_dir / subfolder
@@ -416,8 +420,9 @@ class OcrService:
 
         processed: list[str] = []
         errors: list[str] = []
+        self._raw_ocr_parts: list[tuple[str, str]] = []
 
-        # 1. Details.jpg first (creates vehicle + insurance JSON)
+        # 1. Details.jpg first (creates vehicle + insurance JSON → ocr_output/.../OCR_To_be_Used.json)
         details_path = subdir / "Details.jpg"
         if details_path.exists():
             try:
@@ -435,7 +440,7 @@ class OcrService:
             except Exception as e:
                 errors.append(f"Aadhar.jpg: {e}")
 
-        # 3. Insurance.jpg (extract insurer, TP valid from/to, gross premium; merge into Details.json)
+        # 3. Insurance.jpg (extract insurer, TP valid from/to, gross premium; merge into ocr_output/.../OCR_To_be_Used.json)
         insurance_path = subdir / "Insurance.jpg"
         if insurance_path.exists():
             try:
@@ -443,6 +448,34 @@ class OcrService:
                 processed.append("Insurance.jpg")
             except Exception as e:
                 errors.append(f"Insurance.jpg: {e}")
+
+        # 4. Aadhar_back.jpg and Financing.jpg: add raw text for Raw_OCR (no structured extraction)
+        for extra_file in ["Aadhar_back.jpg", "Financing.jpg"]:
+            extra_path = subdir / extra_file
+            if extra_path.exists():
+                try:
+                    from app.services.textract_service import extract_text_from_bytes
+
+                    result = extract_text_from_bytes(extra_path.read_bytes())
+                    if not result.get("error") and result.get("full_text"):
+                        self._raw_ocr_parts.append((extra_file, result["full_text"]))
+                except Exception:
+                    pass
+
+        # 5. Write Raw_OCR.txt with raw text from all processed files
+        if self._raw_ocr_parts:
+            self._ensure_ocr_output_dir()
+            subfolder_name = _safe_subfolder_name(subfolder)
+            subfolder_path = self.ocr_output_dir / subfolder_name
+            subfolder_path.mkdir(parents=True, exist_ok=True)
+            raw_lines = []
+            for filename, text in self._raw_ocr_parts:
+                raw_lines.append(f"--- {filename} ---")
+                raw_lines.append(text.strip() if text else "")
+                raw_lines.append("")
+            (subfolder_path / "Raw_OCR.txt").write_text("\n".join(raw_lines), encoding="utf-8")
+
+        self._raw_ocr_parts = None
 
         result: dict = {"processed": processed}
         if errors:
@@ -473,10 +506,11 @@ class OcrService:
                 lines.append(result["full_text"])
             text = "\n".join(lines)
 
+            if hasattr(self, "_raw_ocr_parts") and self._raw_ocr_parts is not None:
+                self._raw_ocr_parts.append((filename, result.get("full_text") or ""))
+
             self._ensure_ocr_output_dir()
-            output_path = self.get_output_path(subfolder, filename)
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            output_path.write_text(text, encoding="utf-8")
+            output_path = self.get_output_path(subfolder, filename)  # used for return value only; no separate .txt file
 
             vehicle = _map_key_value_pairs_to_vehicle(key_value_pairs)
             insurance = _map_key_value_pairs_to_insurance(key_value_pairs)
@@ -485,7 +519,7 @@ class OcrService:
                 for k, v in from_full.items():
                     if v and not insurance.get(k):
                         insurance[k] = v
-            json_path = _json_output_path(self.ocr_output_dir, subfolder, filename)
+            json_path = _json_output_path(self.ocr_output_dir, subfolder)
             json_path.parent.mkdir(parents=True, exist_ok=True)
             customer = {}
             existing_insurance: dict = {}
@@ -552,6 +586,18 @@ class OcrService:
         try:
             customer: dict[str, str] = {}
             raw_bytes = input_path.read_bytes()
+
+            # Raw OCR: run Textract for raw text (for Raw_OCR.txt)
+            if hasattr(self, "_raw_ocr_parts") and self._raw_ocr_parts is not None:
+                try:
+                    from app.services.textract_service import extract_text_from_bytes
+
+                    txt_result = extract_text_from_bytes(raw_bytes)
+                    if not txt_result.get("error") and txt_result.get("full_text"):
+                        self._raw_ocr_parts.append((filename, txt_result["full_text"]))
+                except Exception:
+                    pass
+
             try:
                 from app.services.qr_decode_service import decode_qr_from_image_bytes
 
@@ -576,20 +622,17 @@ class OcrService:
                 else:
                     raise ValueError("No QR fields")
             except Exception:
-                from app.services.vision_service import extract_aadhar_customer_fields
-
-                cust = extract_aadhar_customer_fields(image_path=input_path)
-                cust.pop("error", None)
-                customer = {k: (cust.get(k) or "") for k in ("name", "address", "city", "state", "pin")}
-                if customer.get("pin"):
-                    customer["pin_code"] = customer["pin"]
+                raise ValueError(
+                    "QR code is not clear in scan. Re-scan the Aadhar card to ensure the QR code is readable - "
+                    "it is required for all critical details."
+                ) from None
 
             # Compliance: never persist full Aadhar; store only last 4 digits
             if customer.get("aadhar_id"):
                 customer["aadhar_id"] = _aadhar_last4(customer["aadhar_id"]) or ""
 
             self._ensure_ocr_output_dir()
-            json_path = _json_output_path(self.ocr_output_dir, subfolder, "Details.jpg")
+            json_path = _json_output_path(self.ocr_output_dir, subfolder)
             data = {"vehicle": {}, "customer": {}}
             if json_path.exists():
                 try:
@@ -664,38 +707,11 @@ class OcrService:
         full_text = result.get("full_text") or ""
         insurance_policy = _parse_insurance_policy_from_full_text(full_text)
 
-        # Write Insurance.txt for inspection
-        output_path = self.get_output_path(subfolder, filename)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        lines = ["Document: Insurance policy (Textract Text)\n", "--- Full text ---\n", full_text]
-        output_path.write_text("\n".join(lines), encoding="utf-8")
-
-        # Write extracted values to ocr_output/subfolder/insurance_ocr.json
-        subfolder_name = _safe_subfolder_name(subfolder)
-        subfolder_path = self.ocr_output_dir / subfolder_name
-        subfolder_path.mkdir(parents=True, exist_ok=True)
-        insurance_ocr_path = subfolder_path / "insurance_ocr.json"
-        insurance_ocr_path.write_text(
-            json.dumps(insurance_policy, indent=2, default=str),
-            encoding="utf-8",
-        )
-
-        # Write human-readable Info from insurance.txt (like Data from DMS.txt)
-        info_path = subfolder_path / "Info from insurance.txt"
-        info_lines = ["Info from insurance", ""]
-        for label, key in [
-            ("Insurance Provider", "insurer"),
-            ("Policy No.", "policy_num"),
-            ("Valid From", "policy_from"),
-            ("Valid To", "policy_to"),
-            ("Gross Premium", "premium"),
-        ]:
-            val = insurance_policy.get(key)
-            info_lines.append(f"{label}: {(val or '').strip() or '—'}")
-        info_path.write_text("\n".join(info_lines), encoding="utf-8")
+        if hasattr(self, "_raw_ocr_parts") and self._raw_ocr_parts is not None:
+            self._raw_ocr_parts.append(("Insurance.jpg", full_text))
 
         # Merge into Details.json insurance section
-        json_path = _json_output_path(self.ocr_output_dir, subfolder, "Details.jpg")
+        json_path = _json_output_path(self.ocr_output_dir, subfolder)
         data: dict = {"vehicle": {}, "customer": {}, "insurance": {}}
         if json_path.exists():
             try:
@@ -725,7 +741,7 @@ class OcrService:
         runs Aadhar reading (OpenAI Vision), merges customer, persists JSON, and returns.
         """
         self._ensure_ocr_output_dir()
-        json_path = _json_output_path(self.ocr_output_dir, subfolder, "Details.jpg")
+        json_path = _json_output_path(self.ocr_output_dir, subfolder)
         data = {"vehicle": {}, "customer": {}}
         if json_path.exists():
             try:
@@ -774,18 +790,18 @@ class OcrService:
                 else:
                     raise ValueError("No QR fields")
             except Exception:
-                from app.services.vision_service import extract_aadhar_customer_fields
-
-                cust = extract_aadhar_customer_fields(image_path=aadhar_path)
-                cust.pop("error", None)
-                data["customer"] = {k: (cust.get(k) or "") for k in ("name", "address", "city", "state", "pin")}
-                if data["customer"].get("pin"):
-                    data["customer"]["pin_code"] = data["customer"]["pin"]
-            try:
-                json_path.parent.mkdir(parents=True, exist_ok=True)
-                json_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-            except Exception:
-                pass
+                # Return partial data (vehicle, insurance) so UI can show them; include error for customer
+                data["extraction_error"] = (
+                    "QR code is not clear in scan. Re-scan the Aadhar card to ensure the QR code is readable - "
+                    "it is required for all critical details."
+                )
+            else:
+                # QR succeeded: persist customer to JSON
+                try:
+                    json_path.parent.mkdir(parents=True, exist_ok=True)
+                    json_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+                except Exception:
+                    pass
 
         # Compliance: sanitize customer aadhar on return (handles legacy JSON with full Aadhar)
         customer = data.get("customer") or {}

@@ -28,16 +28,18 @@ PAGE_TYPE_TO_FILENAME = {
 # Patterns to identify each page type. Order matters: more specific first.
 # Details: vehicle/customer sheet with Frame No, Chassis, Key No, etc.
 _DETAILS_PATTERNS = [
-    re.compile(r"frame\s*no\.?\s*[:]?", re.IGNORECASE),
-    re.compile(r"chassis\s*(?:no\.?)?\s*[:]?", re.IGNORECASE),
-    re.compile(r"engine\s*no\.?\s*[:]?", re.IGNORECASE),
-    re.compile(r"key\s*no\.?\s*[:]?", re.IGNORECASE),
-    re.compile(r"battery\s*no\.?\s*[:]?", re.IGNORECASE),
-    re.compile(r"model\s*(?:&|and)\s*colour", re.IGNORECASE),
+    re.compile(r"frame\s*(?:no\.?|number)?\s*[:]?", re.IGNORECASE),
+    re.compile(r"chassis\s*(?:no\.?|number)?\s*[:]?", re.IGNORECASE),
+    re.compile(r"engine\s*(?:no\.?|number)?\s*[:]?", re.IGNORECASE),
+    re.compile(r"key\s*(?:no\.?|number)?\s*[:]?", re.IGNORECASE),
+    re.compile(r"battery\s*(?:no\.?|number)?\s*[:]?", re.IGNORECASE),
+    re.compile(r"model\s*(?:&|and|\/)\s*colour", re.IGNORECASE),
     re.compile(r"nominee\s*name", re.IGNORECASE),
     re.compile(r"profession\s*[:]?", re.IGNORECASE),
     re.compile(r"tel\.?\s*name\s*no\.?", re.IGNORECASE),
     re.compile(r"buyer['\u2019]?s?\s*order", re.IGNORECASE),
+    re.compile(r"vehicle\s*(?:details|info|no\.?)?", re.IGNORECASE),
+    re.compile(r"customer\s*(?:name|mobile|details)", re.IGNORECASE),
 ]
 
 # Insurance: policy document with Gross Premium, Cert. No., etc.

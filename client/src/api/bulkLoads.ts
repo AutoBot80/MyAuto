@@ -32,9 +32,31 @@ export async function listBulkLoads(params?: ListBulkLoadsParams): Promise<BulkL
   return apiFetch<BulkLoadRow[]>(`/bulk-loads${qs ? "?" + qs : ""}`);
 }
 
-/** URL to browse a bulk folder (e.g. Rejected scans/Scan1_15032025) */
+/** URL to browse a bulk folder (e.g. Rejected scans/Scan1_15032025) - opens in new tab (legacy) */
 export function bulkFolderUrl(resultFolder: string): string {
   return `/bulk-loads/folder/${encodeURIComponent(resultFolder)}`;
+}
+
+/** Fetch file list for bulk folder (for in-app display) */
+export async function getBulkFolderFiles(folderPath: string): Promise<{
+  folder_path: string;
+  files: { name: string; size: number }[];
+}> {
+  return apiFetch(`/bulk-loads/folder/${encodeURIComponent(folderPath)}/list`);
+}
+
+/** URL to download a file from a bulk folder */
+export function bulkFileUrl(folderPath: string, filename: string): string {
+  const path = `${folderPath}/${filename}`;
+  return `/bulk-loads/file/${encodeURIComponent(path)}`;
+}
+
+/** Fetch file list for documents/uploaded scans subfolder (for Success rows in-app view) */
+export async function getDocumentsFolderFiles(subfolder: string): Promise<{
+  subfolder: string;
+  files: { name: string; size: number }[];
+}> {
+  return apiFetch(`/documents/${encodeURIComponent(subfolder)}/list`);
 }
 
 export interface BulkLoadCounts {
@@ -59,8 +81,21 @@ export async function clearBulkLoads(): Promise<void> {
   await apiFetch("/bulk-loads", { method: "DELETE" });
 }
 
-export async function prepareReprocess(bulkLoadId: number): Promise<{ subfolder: string; mobile: string | null }> {
+export async function prepareReprocess(bulkLoadId: number): Promise<{
+  bulk_load_id: number;
+  subfolder: string;
+  mobile: string | null;
+  uploadedFiles: string[];
+}> {
   return apiFetch(`/bulk-loads/${bulkLoadId}/prepare-reprocess`, { method: "POST" });
+}
+
+/** Mark an Error bulk load as Success after manual completion via Add Customer (Re-Try flow). */
+export async function markBulkLoadSuccess(bulkLoadId: number, subfolder: string): Promise<{ ok: boolean }> {
+  return apiFetch(
+    `/bulk-loads/${bulkLoadId}/mark-success?subfolder=${encodeURIComponent(subfolder)}`,
+    { method: "PATCH" }
+  );
 }
 
 export async function getBulkLoadPendingCount(): Promise<number> {

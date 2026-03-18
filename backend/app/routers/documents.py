@@ -12,6 +12,11 @@ from app.config import UPLOADS_DIR
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/documents", tags=["documents"])
 
+def _is_ocr_output_file(name: str) -> bool:
+    """True if filename is an OCR output that should not appear in Uploaded scans."""
+    base = Path(name).stem.lower().replace(" ", "_")
+    return base == "ocr_to_be_used"
+
 
 def _safe_subfolder(name: str | None) -> str | None:
     """Allow only alphanumeric, underscore, hyphen. No path traversal."""
@@ -31,7 +36,10 @@ def browse_documents(subfolder: str) -> HTMLResponse:
         folder = Path(UPLOADS_DIR) / safe
         if not folder.is_dir():
             raise HTTPException(status_code=404, detail="Folder not found")
-        files = sorted(f.name for f in folder.iterdir() if f.is_file())
+        files = sorted(
+            f.name for f in folder.iterdir()
+            if f.is_file() and not _is_ocr_output_file(f.name)
+        )
         rows = "".join(
             f'<tr><td><a href="/documents/{safe}/{f}">{f}</a></td></tr>'
             for f in files
@@ -59,7 +67,7 @@ def list_documents(subfolder: str) -> dict:
             raise HTTPException(status_code=404, detail="Folder not found")
         files: list[dict] = []
         for f in sorted(folder.iterdir()):
-            if f.is_file():
+            if f.is_file() and not _is_ocr_output_file(f.name):
                 files.append({"name": f.name, "size": f.stat().st_size})
         return {"subfolder": safe, "files": files}
     except HTTPException:
@@ -78,10 +86,12 @@ def get_document(subfolder: str, filename: str) -> FileResponse:
     # Filename: only allow safe chars, no path traversal
     if not filename or "/" in filename or "\\" in filename or filename.startswith("."):
         raise HTTPException(status_code=400, detail="Invalid filename")
+    if _is_ocr_output_file(filename):
+        raise HTTPException(status_code=404, detail="OCR output files are not served from Uploaded scans")
     safe_name = re.sub(r"[^\w\-.]", "_", filename)
     if not safe_name:
         raise HTTPException(status_code=400, detail="Invalid filename")
     path = Path(UPLOADS_DIR) / safe_sub / safe_name
     if not path.is_file():
         raise HTTPException(status_code=404, detail="File not found")
-    return FileResponse(path, filename=safe_name)
+    return FileResponse(path, filename=safe_name, content_disposition_type="inline")

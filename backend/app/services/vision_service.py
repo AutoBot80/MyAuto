@@ -6,8 +6,8 @@ import re
 from pathlib import Path
 from typing import Any
 
-# Prompt for extracting structured customer fields from Aadhar (Name, Address, City, State, PIN)
-AADHAR_EXTRACT_FIELDS_PROMPT = """Look at this Indian Aadhar (Aadhaar) card image. Extract the following fields and return ONLY a single JSON object, no other text. Use these exact keys: "name", "address", "city", "state", "pin". For "name" use the person's full name as shown. For "address" use the full address line(s). For "city", "state", "pin" use the place, state, and PIN code. If something is not visible or not in English/Hindi, use empty string "" for that key. Example format: {"name":"John Doe","address":"123 Street, Area","city":"Mumbai","state":"Maharashtra","pin":"400001"}"""
+# Prompt for extracting structured customer fields from Aadhar (Name, Address, City, State, PIN, Aadhar ID)
+AADHAR_EXTRACT_FIELDS_PROMPT = """Look at this Indian Aadhar (Aadhaar) card image. Extract the following fields and return ONLY a single JSON object, no other text. Use these exact keys: "name", "address", "city", "state", "pin", "aadhar_id". For "name" use the person's full name as shown. For "address" use the full address line(s). For "city", "state", "pin" use the place, state, and PIN code. For "aadhar_id" use the 12-digit Aadhar number (format nnnn nnnn nnnn or 12 consecutive digits) - it may appear on front or back. If something is not visible or not in English/Hindi, use empty string "" for that key. Example format: {"name":"John Doe","address":"123 Street, Area","city":"Mumbai","state":"Maharashtra","pin":"400001","aadhar_id":"1234 5678 9012"}"""
 
 # Default prompt for Aadhar scan (document type + photo region)
 AADHAR_VISION_PROMPT = """Look at this document image.
@@ -174,7 +174,7 @@ def extract_aadhar_customer_fields(
 
     key = api_key or OPENAI_API_KEY
     if not key:
-        return {"name": "", "address": "", "city": "", "state": "", "pin": "", "error": "OPENAI_API_KEY is not set"}
+        return {"name": "", "address": "", "city": "", "state": "", "pin": "", "aadhar_id": "", "error": "OPENAI_API_KEY is not set"}
 
     if image_bytes:
         b64 = base64.standard_b64encode(image_bytes).decode("ascii")
@@ -182,7 +182,7 @@ def extract_aadhar_customer_fields(
     elif image_path and image_path.exists():
         image_url = _image_to_base64_data_uri(image_path)
     else:
-        return {"name": "", "address": "", "city": "", "state": "", "pin": "", "error": "No image provided"}
+        return {"name": "", "address": "", "city": "", "state": "", "pin": "", "aadhar_id": "", "error": "No image provided"}
 
     try:
         from openai import OpenAI
@@ -208,7 +208,7 @@ def extract_aadhar_customer_fields(
     content = (choice.message.content if choice and choice.message else None) or ""
 
     # Parse JSON from response (model might wrap in markdown code block)
-    out = {"name": "", "address": "", "city": "", "state": "", "pin": ""}
+    out = {"name": "", "address": "", "city": "", "state": "", "pin": "", "aadhar_id": ""}
     content = content.strip()
     # Remove optional markdown code fence
     if content.startswith("```"):

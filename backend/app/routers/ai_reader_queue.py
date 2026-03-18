@@ -26,7 +26,8 @@ def list_extractions(limit: int = 200) -> list[dict]:
 
 @router.get("/extracted-details")
 def get_extracted_details(subfolder: str) -> dict:
-    """Return structured vehicle (and customer) details for a subfolder from JSON files."""
+    """Return structured vehicle (and customer) details for a subfolder from JSON files.
+    May include extraction_error when Aadhar QR failed; vehicle and insurance are still returned."""
     service = OcrService()
     details = service.get_extracted_details(subfolder)
     if details is None:
@@ -57,7 +58,7 @@ def get_insurance_extraction(subfolder: str) -> dict:
         "ocr_files": sorted(p.name for p in subfolder_path.iterdir()) if subfolder_path.exists() else [],
         "insurance_from_details": None,
         "insurance_ocr_json": None,
-        "info_from_insurance_txt": None,
+        "raw_ocr_txt": None,
     }
 
     service = OcrService()
@@ -73,9 +74,9 @@ def get_insurance_extraction(subfolder: str) -> dict:
         except Exception as e:
             result["insurance_ocr_json_error"] = str(e)
 
-    info_txt = subfolder_path / "Info from insurance.txt"
-    if info_txt.exists():
-        result["info_from_insurance_txt"] = info_txt.read_text(encoding="utf-8")
+    raw_ocr_txt = subfolder_path / "Raw_OCR.txt"
+    if raw_ocr_txt.exists():
+        result["raw_ocr_txt"] = raw_ocr_txt.read_text(encoding="utf-8")
 
     insurance_txt = subfolder_path / "Insurance.txt"
     if insurance_txt.exists():

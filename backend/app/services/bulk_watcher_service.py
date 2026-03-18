@@ -24,6 +24,26 @@ from app.services.pre_ocr_service import (
 logger = logging.getLogger(__name__)
 
 DEALER_ID = 100001
+
+# User-friendly mapping for validation errors
+_REJECTION_MESSAGES = {
+    "mobile number": "10-digit mobile number",
+    "Aadhar front": "Aadhar card (front side)",
+    "Aadhar back": "Aadhar card (back side)",
+    "sales details form (vehicle & customer info)": "sales details form (with Frame No, Chassis, Engine No, etc.)",
+}
+
+
+def _format_rejection_error(missing: list[str]) -> str:
+    """Build a clear, actionable error message for the user."""
+    items = [_REJECTION_MESSAGES.get(m, m) for m in missing]
+    return (
+        f"Could not identify required pages: {', '.join(items)}. "
+        "Please ensure your scan includes all pages clearly visible and not blurry, "
+        "with Aadhar (front & back) and the sales details form (vehicle & customer info)."
+    )
+
+
 POLL_INTERVAL_SEC = 5
 _watcher_thread: threading.Thread | None = None
 _watcher_stop = threading.Event()
@@ -128,7 +148,7 @@ def _process_one(scans_pdf: Path, marker: Path | None = None) -> bool:
 
         # Validation failed (classification could not identify mobile + 3 critical pages) — move to Rejected, no split
         if missing:
-            error_msg = f"Rejected: missing {', '.join(missing)}"
+            error_msg = _format_rejection_error(missing)
             logger.warning("bulk_watcher: %s for %s", error_msg, scans_pdf)
             pdf_in_proc = PROCESSING_DIR / f"{scans_pdf.stem}.pdf"
             result_folder = move_to_rejected(
@@ -151,23 +171,26 @@ def _process_one(scans_pdf: Path, marker: Path | None = None) -> bool:
                 marker.unlink()
             return True
 
-        # Multi-customer: process each bundle and create one bulk_loads row per customer
+        # Multi-customer: create all rows immediately so UI shows 2+ Processing rows, then process each
         if len(bundles) > 1:
             bulk_load_ids = [bulk_load_id]
             conn = get_connection()
             try:
-                for _ in range(len(bundles) - 1):
+                for i in range(len(bundles) - 1):
                     row = BulkLoadsRepository.insert(
                         conn,
-                        subfolder=initial_subfolder,
+                        subfolder=f"{scans_pdf.stem}_Customer{i + 2}",
                         file_name=scans_pdf.name,
                         status="Processing",
-                        folder_path=subfolder_stem,
+                        folder_path=f"{scans_pdf.stem}_Customer{i + 2}",
                     )
                     bulk_load_ids.append(row["id"])
+                # Update first row to show Customer 1
+                BulkLoadsRepository.update_status(conn, bulk_load_id, "Processing", subfolder=f"{scans_pdf.stem}_Customer1")
                 conn.commit()
             finally:
                 conn.close()
+            logger.info("Multi-customer: created %d bulk_loads rows for %s", len(bulk_load_ids), scans_pdf.name)
 
             results: list[bool] = []
             for i, (classified_dir, subfolder, m) in enumerate(bundles):
@@ -288,10 +311,10 @@ def _find_pending_pdf(scans_dir: Path) -> Path | None:
         pdf_path = subdir / "Scans.pdf"
         if pdf_path.exists() and not (subdir / ".processed").exists():
             return pdf_path
-    # 2) Files directly in Input Scans: Input Scans/Scan1.pdf, etc. — sort by mtime (oldest first)
+    # 2) Files directly in Input Scans: Scan1.pdf, scan 3.pdf, combined scan 3.pdf, etc. — sort by mtime (oldest first)
     pdf_files = [
         f for f in scans_dir.iterdir()
-        if f.is_file() and f.suffix.lower() == ".pdf" and f.stem.lower().startswith("scan")
+        if f.is_file() and f.suffix.lower() == ".pdf" and "scan" in f.stem.lower()
     ]
     for f in sorted(pdf_files, key=lambda p: p.stat().st_mtime):
         marker = scans_dir / f".processed_{f.name}"

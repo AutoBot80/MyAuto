@@ -272,7 +272,7 @@ def run_fill_dms_only(
             if pin:
                 page.fill("#dms-pin-code", pin)
             page.click("#dms-submit-enquiry")
-            page.wait_for_timeout(50)
+            page.wait_for_timeout(10)
 
             page.goto(f"{base}/vehicle.html", wait_until="domcontentloaded", timeout=15000)
             key_partial = str(vehicle.get("key_no") or "").strip()[:8]
@@ -282,7 +282,7 @@ def run_fill_dms_only(
             page.fill("#dms-vehicle-frame", frame_partial)
             page.fill("#dms-vehicle-engine", engine_partial)
             page.click("#dms-vehicle-search")
-            page.wait_for_timeout(80)
+            page.wait_for_timeout(10)
 
             page.wait_for_selector("#dms-vehicle-results:visible", timeout=8000)
             row = page.locator("#dms-vehicle-results-table tbody tr").first
@@ -490,7 +490,7 @@ def run_fill_dms(
                 page.fill("#dms-pin-code", pin)
             page.click("#dms-submit-enquiry")
             # Brief wait for dialog accept and page settle before navigating
-            page.wait_for_timeout(30)
+            page.wait_for_timeout(10)
 
             # 3) Vehicle page: fill search keys and search
             page.goto(f"{base}/vehicle.html", wait_until="domcontentloaded", timeout=15000)
@@ -501,7 +501,7 @@ def run_fill_dms(
             page.fill("#dms-vehicle-frame", frame_partial)
             page.fill("#dms-vehicle-engine", engine_partial)
             page.click("#dms-vehicle-search")
-            page.wait_for_timeout(80)
+            page.wait_for_timeout(10)
 
             # 4) Scrape first result row (13 cols: key, frame, engine, model, color, cubic_capacity, seating_capacity, body_type, vehicle_type, num_cylinders, horse_power, total_amount, year_of_mfg)
             logger.info("fill_dms_service: step 4 scrape vehicle results")
