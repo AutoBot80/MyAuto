@@ -4,10 +4,10 @@ import asyncio
 from datetime import date, datetime
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-from app.config import UPLOADS_DIR, VAHAN_BASE_URL
+from app.config import DEALER_ID, VAHAN_BASE_URL, get_uploads_dir
 from app.repositories import rto_payment_details as repo
 from app.repositories import rc_status_sms_queue as rc_sms_repo
 from app.services.rto_payment_service import run_rto_pay
@@ -105,7 +105,8 @@ async def pay_rto(application_id: str, body: RtoPayRequest | None = None) -> dic
     if not vahan_url:
         raise HTTPException(status_code=400, detail="vahan_base_url required")
 
-    rto_dealer_id = "RTO" + str(row.get("dealer_id") or 100001)
+    rto_dealer_id = "RTO" + str(row.get("dealer_id") or DEALER_ID)
+    uploads_dir = get_uploads_dir(row.get("dealer_id") or DEALER_ID)
     loop = asyncio.get_event_loop()
     pay_result = await loop.run_in_executor(
         None,
@@ -117,7 +118,7 @@ async def pay_rto(application_id: str, body: RtoPayRequest | None = None) -> dic
             rto_dealer_id=rto_dealer_id,
             customer_name=row.get("name"),
             rto_fees=float(row.get("rto_fees") or 200),
-            uploads_dir=Path(UPLOADS_DIR),
+            uploads_dir=Path(uploads_dir),
         ),
     )
 
@@ -162,9 +163,10 @@ def get_rto_payment_by_sale(customer_id: int, vehicle_id: int) -> dict | None:
 
 
 @router.get("")
-def list_rto_payments() -> list[dict]:
-    """List all RTO payment details for RTO Payments Pending table."""
-    rows = repo.list_all()
+def list_rto_payments(dealer_id: int | None = Query(None, description="Dealer ID; uses app default if omitted")) -> list[dict]:
+    """List RTO payment details for RTO Payments Pending table, filtered by dealer."""
+    did = dealer_id if dealer_id is not None else DEALER_ID
+    rows = repo.list_all(dealer_id=did)
     out = []
     for r in rows:
         d = dict(r)

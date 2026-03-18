@@ -152,19 +152,31 @@ def update_payment(
         conn.close()
 
 
-def list_all() -> list[dict]:
-    """Return all rows for RTO Payments Pending table, newest first."""
+def list_all(dealer_id: int | None = None) -> list[dict]:
+    """Return rows for RTO Payments Pending table, newest first. Filter by dealer_id when provided."""
     conn = get_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT application_id, sales_id, customer_id, vehicle_id, dealer_id, name, mobile, chassis_num,
-                       register_date, rto_fees, status, pay_txn_id, operator_id, payment_date, rto_status, subfolder, created_at
-                FROM rto_payment_details
-                ORDER BY created_at DESC
-                """
-            )
+            if dealer_id is not None:
+                cur.execute(
+                    """
+                    SELECT application_id, sales_id, customer_id, vehicle_id, dealer_id, name, mobile, chassis_num,
+                           register_date, rto_fees, status, pay_txn_id, operator_id, payment_date, rto_status, subfolder, created_at
+                    FROM rto_payment_details
+                    WHERE dealer_id IS NULL OR dealer_id = %s
+                    ORDER BY created_at DESC
+                    """,
+                    (dealer_id,),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT application_id, sales_id, customer_id, vehicle_id, dealer_id, name, mobile, chassis_num,
+                           register_date, rto_fees, status, pay_txn_id, operator_id, payment_date, rto_status, subfolder, created_at
+                    FROM rto_payment_details
+                    ORDER BY created_at DESC
+                    """
+                )
             return [dict(r) for r in cur.fetchall()]
     finally:
         conn.close()

@@ -615,6 +615,7 @@ def move_multi_customer_to_success_or_error(
     original_filename_stem: str,
     results: list[bool],
     original_scan_path: Path | None = None,
+    bulk_upload_dir: Path | None = None,
 ) -> list[str]:
     """
     Move multi-customer processing output to Success or Error per customer.
@@ -622,18 +623,21 @@ def move_multi_customer_to_success_or_error(
     results: list of success bool per bundle
     Returns list of result_folder paths.
     """
+    base = bulk_upload_dir or BULK_UPLOAD_DIR
+    success_dir = base / "Success"
+    error_dir = base / "Error"
     ddmmyyyy = datetime.now().strftime("%d%m%Y")
     result_folders: list[str] = []
     for i, ((classified_dir, subfolder, mobile), ok) in enumerate(zip(bundles, results)):
         if ok and mobile:
             dest_subdir = f"{mobile}_{ddmmyyyy}"
-            dest_dir = SUCCESS_DIR / dest_subdir
+            dest_dir = success_dir / dest_subdir
         else:
             dest_subdir = f"{original_filename_stem}_cust{i + 1}_{ddmmyyyy}"
-            dest_dir = ERROR_DIR / dest_subdir
+            dest_dir = error_dir / dest_subdir
         dest_dir.mkdir(parents=True, exist_ok=True)
         try:
-            rf = str(dest_dir.relative_to(BULK_UPLOAD_DIR))
+            rf = str(dest_dir.relative_to(base))
         except ValueError:
             rf = f"{'Success' if ok and mobile else 'Error'}/{dest_subdir}"
         result_folders.append(rf)
@@ -669,6 +673,7 @@ def move_processing_to_success_or_error(
     mobile: str | None,
     success: bool,
     original_scan_path: Path | None = None,
+    bulk_upload_dir: Path | None = None,
 ) -> str:
     """
     Move processing output and pre-OCR to Success or Error.
@@ -676,17 +681,21 @@ def move_processing_to_success_or_error(
     Success: original scan from Input Scans -> Success/mobile_ddmmyyyy/
     Error: original scan from Input Scans -> Error/filename_ddmmyyyy/
     """
+    base = bulk_upload_dir or BULK_UPLOAD_DIR
+    success_dir = base / "Success"
+    error_dir = base / "Error"
+    proc_dir = base / "Processing"
     ddmmyyyy = datetime.now().strftime("%d%m%Y")
     if success and mobile:
         dest_subdir = f"{mobile}_{ddmmyyyy}"
-        dest_dir = SUCCESS_DIR / dest_subdir
+        dest_dir = success_dir / dest_subdir
     else:
         dest_subdir = f"{original_filename_stem}_{ddmmyyyy}"
-        dest_dir = ERROR_DIR / dest_subdir
+        dest_dir = error_dir / dest_subdir
 
     dest_dir.mkdir(parents=True, exist_ok=True)
     try:
-        result_folder = str(dest_dir.relative_to(BULK_UPLOAD_DIR))
+        result_folder = str(dest_dir.relative_to(base))
     except ValueError:
         result_folder = f"{'Success' if success and mobile else 'Error'}/{dest_subdir}"
 
@@ -721,13 +730,13 @@ def move_processing_to_success_or_error(
         logger.info("Moved %s -> %s", ocr_path.name, dest_dir)
 
     # Clear Processing PDF if present (original already moved to dest; remove duplicate to clear Processing)
-    proc_pdf = PROCESSING_DIR / f"{original_filename_stem}.pdf"
+    proc_pdf = proc_dir / f"{original_filename_stem}.pdf"
     if proc_pdf.exists():
         proc_pdf.unlink(missing_ok=True)
         logger.info("Removed Processing PDF %s (cleared Processing folder)", proc_pdf.name)
 
     # Ensure classified dir is removed (in case processing_path was PDF or path mismatch)
-    classified_dir = PROCESSING_DIR / f"classified_{original_filename_stem}"
+    classified_dir = proc_dir / f"classified_{original_filename_stem}"
     if classified_dir.exists() and classified_dir.is_dir():
         try:
             shutil.rmtree(classified_dir, ignore_errors=True)
@@ -743,17 +752,21 @@ def move_to_rejected(
     ocr_path: Path | None,
     original_filename_stem: str,
     original_scan_path: Path | None = None,
+    bulk_upload_dir: Path | None = None,
 ) -> str:
     """
     Move processing output and pre-OCR to Rejected scans (validation failed).
     dest: Rejected scans/filename_ddmmyyyy/
     """
+    base = bulk_upload_dir or BULK_UPLOAD_DIR
+    rejected_dir = base / "Rejected scans"
+    proc_dir = base / "Processing"
     ddmmyyyy = datetime.now().strftime("%d%m%Y")
     dest_subdir = f"{original_filename_stem}_{ddmmyyyy}"
-    dest_dir = REJECTED_DIR / dest_subdir
+    dest_dir = rejected_dir / dest_subdir
     dest_dir.mkdir(parents=True, exist_ok=True)
     try:
-        result_folder = str(dest_dir.relative_to(BULK_UPLOAD_DIR))
+        result_folder = str(dest_dir.relative_to(base))
     except ValueError:
         result_folder = f"Rejected scans/{dest_subdir}"
 
@@ -778,7 +791,7 @@ def move_to_rejected(
             shutil.move(str(processing_path), str(dest_pdf))
             logger.info("Moved %s -> Rejected %s", processing_path.name, dest_dir)
 
-    pdf_in_proc = PROCESSING_DIR / f"{original_filename_stem}.pdf"
+    pdf_in_proc = proc_dir / f"{original_filename_stem}.pdf"
     if pdf_in_proc.exists():
         shutil.move(str(pdf_in_proc), str(dest_dir / pdf_in_proc.name))
         logger.info("Moved %s -> Rejected %s", pdf_in_proc.name, dest_dir)

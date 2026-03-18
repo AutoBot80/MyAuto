@@ -17,7 +17,8 @@ export interface UseUploadScansControlled {
 export function useUploadScans(
   aadharLast4: string,
   mobile: string = "",
-  controlled?: UseUploadScansControlled
+  controlled?: UseUploadScansControlled,
+  dealerId?: number
 ) {
   const [internalUploadStatus, setInternalUploadStatus] = useState("");
   const [isUploading, setIsUploading] = useState(false);
@@ -48,7 +49,7 @@ export function useUploadScans(
     setIsUploading(true);
     setUploadStatus("Uploading...");
     try {
-      const data = await uploadScans(aadharDigits, filesToUpload);
+      const data = await uploadScans(aadharDigits, filesToUpload, dealerId);
       setUploadStatus(`Uploaded ${data.saved_count} file(s) successfully.`);
       if (data.saved_files?.length)
         setUploadedFiles((prev) => [...(data.saved_files ?? []), ...prev]);
@@ -67,7 +68,7 @@ export function useUploadScans(
     setIsUploading(true);
     setUploadStatus("Uploading...");
     try {
-      const data = await uploadScansV2(mobileDigits, aadharScan, aadharBackScan, salesDetail, insuranceSheet, financingDoc);
+      const data = await uploadScansV2(mobileDigits, aadharScan, aadharBackScan, salesDetail, insuranceSheet, financingDoc, dealerId);
       setSavedTo(data.saved_to);
       setUploadStatus(`Uploaded ${data.saved_count} file(s) to ${data.saved_to}.`);
       if (data.saved_files?.length)

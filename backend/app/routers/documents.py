@@ -4,10 +4,10 @@ import logging
 import re
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse
 
-from app.config import UPLOADS_DIR
+from app.config import DEALER_ID, get_uploads_dir
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/documents", tags=["documents"])
@@ -27,13 +27,17 @@ def _safe_subfolder(name: str | None) -> str | None:
 
 
 @router.get("/{subfolder}", response_class=HTMLResponse)
-def browse_documents(subfolder: str) -> HTMLResponse:
+def browse_documents(
+    subfolder: str,
+    dealer_id: int | None = Query(None, description="Dealer ID; uses app default if omitted"),
+) -> HTMLResponse:
     """Return HTML page listing files in the subfolder with download links."""
+    did = dealer_id if dealer_id is not None else DEALER_ID
     try:
         safe = _safe_subfolder(subfolder)
         if not safe:
             raise HTTPException(status_code=400, detail="Invalid subfolder")
-        folder = Path(UPLOADS_DIR) / safe
+        folder = get_uploads_dir(did) / safe
         if not folder.is_dir():
             raise HTTPException(status_code=404, detail="Folder not found")
         files = sorted(
@@ -56,13 +60,17 @@ def browse_documents(subfolder: str) -> HTMLResponse:
 
 
 @router.get("/{subfolder}/list")
-def list_documents(subfolder: str) -> dict:
+def list_documents(
+    subfolder: str,
+    dealer_id: int | None = Query(None, description="Dealer ID; uses app default if omitted"),
+) -> dict:
     """List files in a customer's document subfolder (e.g. mobile_ddmmyy)."""
+    did = dealer_id if dealer_id is not None else DEALER_ID
     try:
         safe = _safe_subfolder(subfolder)
         if not safe:
             raise HTTPException(status_code=400, detail="Invalid subfolder")
-        folder = Path(UPLOADS_DIR) / safe
+        folder = get_uploads_dir(did) / safe
         if not folder.is_dir():
             raise HTTPException(status_code=404, detail="Folder not found")
         files: list[dict] = []
@@ -78,8 +86,13 @@ def list_documents(subfolder: str) -> dict:
 
 
 @router.get("/{subfolder}/{filename}")
-def get_document(subfolder: str, filename: str) -> FileResponse:
+def get_document(
+    subfolder: str,
+    filename: str,
+    dealer_id: int | None = Query(None, description="Dealer ID; uses app default if omitted"),
+) -> FileResponse:
     """Serve a single file from a customer's document subfolder."""
+    did = dealer_id if dealer_id is not None else DEALER_ID
     safe_sub = _safe_subfolder(subfolder)
     if not safe_sub:
         raise HTTPException(status_code=400, detail="Invalid subfolder")
@@ -91,7 +104,7 @@ def get_document(subfolder: str, filename: str) -> FileResponse:
     safe_name = re.sub(r"[^\w\-.]", "_", filename)
     if not safe_name:
         raise HTTPException(status_code=400, detail="Invalid filename")
-    path = Path(UPLOADS_DIR) / safe_sub / safe_name
+    path = get_uploads_dir(did) / safe_sub / safe_name
     if not path.is_file():
         raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(path, filename=safe_name, content_disposition_type="inline")

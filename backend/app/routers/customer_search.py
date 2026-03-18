@@ -4,6 +4,7 @@ import logging
 
 from fastapi import APIRouter, HTTPException, Query
 
+from app.config import DEALER_ID
 from app.db import get_connection
 
 logger = logging.getLogger(__name__)
@@ -14,6 +15,7 @@ router = APIRouter(prefix="/customer-search", tags=["customer-search"])
 def search_customer(
     mobile: str | None = Query(None, description="Customer mobile number"),
     plate_num: str | None = Query(None, description="Vehicle plate number"),
+    dealer_id: int | None = Query(None, description="Dealer ID; uses app default if omitted"),
 ) -> dict:
     """
     Search by customer mobile and/or vehicle plate number.
@@ -30,6 +32,20 @@ def search_customer(
 
     by_mobile: set[int] = set()
     by_plate: set[int] = set()
+    did = dealer_id if dealer_id is not None else DEALER_ID
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT oem_id FROM dealer_ref WHERE dealer_id = %s", (did,))
+            dealer_row = cur.fetchone()
+            if not dealer_row:
+                raise HTTPException(status_code=404, detail="Dealer not found.")
+            oem_id = dealer_row.get("oem_id")
+            if oem_id is None:
+                raise HTTPException(status_code=400, detail="Dealer has no OEM configured.")
+    finally:
+        conn.close()
 
     if mobile_clean:
         try:
@@ -41,8 +57,15 @@ def search_customer(
             try:
                 with conn.cursor() as cur:
                     cur.execute(
-                        "SELECT customer_id FROM customer_master WHERE mobile_number = %s",
-                        (mobile_int,),
+                        """
+                        SELECT DISTINCT cm.customer_id
+                        FROM customer_master cm
+                        JOIN sales_master sm ON sm.customer_id = cm.customer_id
+                        JOIN dealer_ref dr ON dr.dealer_id = sm.dealer_id
+                        WHERE cm.mobile_number = %s
+                          AND dr.oem_id = %s
+                        """,
+                        (mobile_int, oem_id),
                     )
                     by_mobile = {row["customer_id"] for row in cur.fetchall()}
             finally:
@@ -61,14 +84,16 @@ def search_customer(
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT sm.customer_id
+                    SELECT DISTINCT sm.customer_id
                     FROM sales_master sm
                     JOIN vehicle_master vm ON vm.vehicle_id = sm.vehicle_id
+                    JOIN dealer_ref dr ON dr.dealer_id = sm.dealer_id
                     WHERE TRIM(COALESCE(vm.plate_num, '')) <> ''
+                      AND dr.oem_id = %s
                       AND (LOWER(TRIM(vm.plate_num)) = LOWER(TRIM(%s))
                            OR vm.plate_num ILIKE %s)
                     """,
-                    (plate_clean, f"%{plate_clean}%"),
+                    (oem_id, plate_clean, f"%{plate_clean}%"),
                 )
                 by_plate = {row["customer_id"] for row in cur.fetchall()}
         finally:
@@ -124,13 +149,16 @@ def search_customer(
                        vm.chassis,
                        vm.engine,
                        vm.year_of_mfg,
+                       sm.file_location,
                        sm.billing_date AS date_of_purchase
                 FROM sales_master sm
                 JOIN vehicle_master vm ON vm.vehicle_id = sm.vehicle_id
+                JOIN dealer_ref dr ON dr.dealer_id = sm.dealer_id
                 WHERE sm.customer_id = %s
+                  AND dr.oem_id = %s
                 ORDER BY sm.billing_date DESC
                 """,
-                (cid,),
+                (cid, oem_id),
             )
             vehicles = [dict(r) for r in cur.fetchall()]
             for v in vehicles:

@@ -11,12 +11,12 @@ import shutil
 from pathlib import Path
 
 from app.config import (
-    UPLOADS_DIR,
-    BULK_UPLOAD_DIR,
-    OCR_OUTPUT_DIR,
     DMS_BASE_URL,
     DMS_LOGIN_USER,
     DMS_LOGIN_PASSWORD,
+    get_bulk_upload_dir,
+    get_ocr_output_dir,
+    get_uploads_dir,
 )
 from app.repositories.bulk_loads import BulkLoadsRepository
 
@@ -90,7 +90,7 @@ def process_bulk_pdf(
     """
     subfolder = subfolder_override or (source_path.parent.name if source_path.is_file() else source_path.name)
     mobile = _extract_mobile_from_subfolder(subfolder)
-    uploads_subdir = Path(UPLOADS_DIR) / subfolder
+    uploads_subdir = get_uploads_dir(dealer_id) / subfolder
     uploads_subdir.mkdir(parents=True, exist_ok=True)
 
     try:
@@ -117,7 +117,10 @@ def process_bulk_pdf(
 
         # 2. Run OCR extraction
         from app.services.ocr_service import OcrService
-        ocr = OcrService()
+        ocr = OcrService(
+            uploads_dir=get_uploads_dir(dealer_id),
+            ocr_output_dir=get_ocr_output_dir(dealer_id),
+        )
         ocr.process_uploaded_subfolder(subfolder)
         details = ocr.get_extracted_details(subfolder)
         if not details:
@@ -184,8 +187,8 @@ def process_bulk_pdf(
             vehicle={"key_no": vehicle.get("key_num") or vehicle.get("key_no"), "frame_no": vehicle.get("chassis") or vehicle.get("frame_num"), "engine_no": vehicle.get("engine_num") or vehicle.get("engine_no")},
             login_user=DMS_LOGIN_USER or "demo",
             login_password=DMS_LOGIN_PASSWORD or "demo",
-            uploads_dir=Path(UPLOADS_DIR),
-            ocr_output_dir=Path(OCR_OUTPUT_DIR),
+            uploads_dir=Path(get_uploads_dir(dealer_id)),
+            ocr_output_dir=Path(get_ocr_output_dir(dealer_id)),
             vahan_base_url=None,
             headless=True,
         )
@@ -204,7 +207,7 @@ def process_bulk_pdf(
             vehicle={**vehicle, **dms_result.get("vehicle", {})},
             vehicle_id=vehicle_id,
             dealer_id=dealer_id,
-            uploads_dir=Path(UPLOADS_DIR),
+            uploads_dir=Path(get_uploads_dir(dealer_id)),
         )
 
         name = customer.get("name") or ""
@@ -247,9 +250,9 @@ def process_new_scans_and_record(
         conn.close()
 
 
-def discover_new_scans() -> list[Path]:
+def discover_new_scans(dealer_id: int = 100001) -> list[Path]:
     """Find Scans.pdf files in Bulk Upload/Input Scans that have not been processed (no .processed marker)."""
-    scans_dir = BULK_UPLOAD_DIR / "Input Scans"
+    scans_dir = get_bulk_upload_dir(dealer_id) / "Input Scans"
     if not scans_dir.is_dir():
         return []
     found: list[Path] = []

@@ -3,7 +3,7 @@ from pathlib import Path
 
 from fastapi import UploadFile
 
-from app.config import UPLOADS_DIR
+from app.config import get_uploads_dir
 
 # ai_reader_queue disabled; extraction runs directly after upload (Option 1)
 
@@ -12,7 +12,7 @@ class UploadService:
     """Business logic for scan uploads and queueing. Stateless, testable."""
 
     def __init__(self, uploads_dir: Path | None = None):
-        self.uploads_dir = uploads_dir or UPLOADS_DIR
+        self.uploads_dir = uploads_dir
 
     def validate_aadhar_last4(self, aadhar_last4: str) -> tuple[bool, str | None]:
         digits = "".join(c for c in aadhar_last4 if c.isdigit())
@@ -49,14 +49,15 @@ class UploadService:
             i += 1
 
     async def save_and_queue(
-        self, aadhar_last4: str, files: list[UploadFile]
+        self, aadhar_last4: str, files: list[UploadFile], dealer_id: int = 100001
     ) -> dict:
         ok, err = self.validate_aadhar_last4(aadhar_last4)
         if not ok:
             return {"error": err}
 
+        uploads_dir = self.uploads_dir or get_uploads_dir(dealer_id)
         subdir_name = self.get_subdir_name(aadhar_last4)
-        subdir = self.uploads_dir / subdir_name
+        subdir = uploads_dir / subdir_name
         subdir.mkdir(parents=True, exist_ok=True)
 
         saved: list[str] = []
@@ -83,14 +84,16 @@ class UploadService:
         sales_detail: UploadFile,
         insurance_sheet: UploadFile | None = None,
         financing_doc: UploadFile | None = None,
+        dealer_id: int = 100001,
     ) -> dict:
         """Subfolder = mobile_ddmmyy; save as Aadhar.jpg, Aadhar_back.jpg, Details.jpg; optional Insurance.jpg, Financing.jpg."""
         ok, err = self.validate_mobile(mobile)
         if not ok:
             return {"error": err}
 
+        uploads_dir = self.uploads_dir or get_uploads_dir(dealer_id)
         subdir_name = self.get_subdir_name_mobile(mobile)
-        subdir = self.uploads_dir / subdir_name
+        subdir = uploads_dir / subdir_name
         subdir.mkdir(parents=True, exist_ok=True)
 
         saved: list[str] = []
@@ -113,9 +116,13 @@ class UploadService:
         # Run extraction directly after upload (Option 1: no queue)
         extraction_result: dict = {}
         try:
+            from app.config import get_ocr_output_dir
             from app.services.ocr_service import OcrService
 
-            ocr = OcrService()
+            ocr = OcrService(
+                uploads_dir=uploads_dir,
+                ocr_output_dir=get_ocr_output_dir(dealer_id),
+            )
             extraction_result = ocr.process_uploaded_subfolder(subdir_name)
             # Include full extracted details so client can populate immediately (no polling)
             details = ocr.get_extracted_details(subdir_name)

@@ -70,10 +70,11 @@ def submit_info(
 
     loc = _str_or_none(file_location) or _str_or_none(customer.get("file_location"))
     if loc:
-        from app.config import OCR_OUTPUT_DIR
+        from app.config import DEALER_ID, get_ocr_output_dir
         from app.services.ocr_service import validate_name_match_for_subfolder
 
-        name_err = validate_name_match_for_subfolder(Path(OCR_OUTPUT_DIR).resolve(), loc)
+        ocr_dir = get_ocr_output_dir(dealer_id if dealer_id is not None else DEALER_ID)
+        name_err = validate_name_match_for_subfolder(Path(ocr_dir).resolve(), loc)
         if name_err:
             raise ValueError(name_err)
 
@@ -189,11 +190,19 @@ def submit_info(
             # 3) Sales upsert: keep original billing_date on conflict
             cur.execute(
                 """
-                INSERT INTO sales_master (customer_id, vehicle_id, dealer_id)
-                VALUES (%s, %s, %s)
-                ON CONFLICT (customer_id, vehicle_id) DO UPDATE SET dealer_id = EXCLUDED.dealer_id
+                ALTER TABLE sales_master
+                ADD COLUMN IF NOT EXISTS file_location VARCHAR(128)
+                """
+            )
+            cur.execute(
+                """
+                INSERT INTO sales_master (customer_id, vehicle_id, dealer_id, file_location)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (customer_id, vehicle_id) DO UPDATE SET
+                    dealer_id = EXCLUDED.dealer_id,
+                    file_location = COALESCE(EXCLUDED.file_location, sales_master.file_location)
                 """,
-                (customer_id, vehicle_id, dealer_id),
+                (customer_id, vehicle_id, dealer_id, loc),
             )
 
             # 4) Insurance upsert by (customer_id, vehicle_id, insurance_year)

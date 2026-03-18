@@ -4,16 +4,17 @@ import logging
 import re
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from app.config import (
-    OCR_OUTPUT_DIR,
-    UPLOADS_DIR,
+    DEALER_ID,
     DMS_BASE_URL,
     DMS_LOGIN_USER,
     DMS_LOGIN_PASSWORD,
     VAHAN_BASE_URL,
+    get_ocr_output_dir,
+    get_uploads_dir,
 )
 from app.services.fill_dms_service import run_fill_dms, run_fill_dms_only, run_fill_vahan_only, update_vehicle_master_from_dms as _update_vehicle_master_from_dms
 
@@ -112,10 +113,11 @@ def _ensure_absolute_url(url: str, fallback_base: str = "http://127.0.0.1:8000")
 
 
 @router.get("/data-from-dms")
-def get_data_from_dms(subfolder: str) -> dict:
+def get_data_from_dms(subfolder: str, dealer_id: int | None = Query(None, description="Dealer ID; uses app default if omitted")) -> dict:
     """Read Data from DMS.txt for a subfolder; return parsed vehicle and customer. Used when Fill Forms data was written but UI state was lost."""
+    did = dealer_id if dealer_id is not None else DEALER_ID
     safe_name = _safe_subfolder_name(subfolder)
-    path = Path(OCR_OUTPUT_DIR).resolve() / safe_name / "Data from DMS.txt"
+    path = get_ocr_output_dir(did) / safe_name / "Data from DMS.txt"
     if not path.exists():
         return {"vehicle": {}, "customer": {}}
     text = path.read_text(encoding="utf-8", errors="replace")
@@ -178,7 +180,7 @@ async def fill_dms_only(req: FillDmsRequest) -> FillDmsResponse:
             login_user=DMS_LOGIN_USER,
             login_password=DMS_LOGIN_PASSWORD,
             uploads_dir=uploads_dir,
-            ocr_output_dir=Path(OCR_OUTPUT_DIR).resolve(),
+            ocr_output_dir=Path(get_ocr_output_dir(did)),
         ),
     )
     scraped = result.get("vehicle") or {}
@@ -206,7 +208,7 @@ def form20_status() -> dict:
 
     from app.config import FORM20_TEMPLATE_SINGLE, FORM20_TEMPLATE_FRONT, FORM20_TEMPLATE_BACK, FORM20_TEMPLATE_DOCX, GATE_PASS_TEMPLATE_DOCX, UPLOADS_DIR
 
-    project_root = Path(UPLOADS_DIR).resolve().parent
+    project_root = Path(get_uploads_dir(DEALER_ID)).resolve().parent
     single = Path(FORM20_TEMPLATE_SINGLE).resolve()
     front = Path(FORM20_TEMPLATE_FRONT).resolve()
     back = Path(FORM20_TEMPLATE_BACK).resolve()
@@ -245,7 +247,8 @@ def form20_status() -> dict:
 @router.post("/print-form20", response_model=PrintForm20Response)
 async def print_form20(req: PrintForm20Request) -> PrintForm20Response:
     """Generate Form 20 (all pages) and save to Uploaded scans/subfolder. Called from Print forms button."""
-    uploads_dir = Path(UPLOADS_DIR)
+    did = req.dealer_id if req.dealer_id is not None else DEALER_ID
+    uploads_dir = Path(get_uploads_dir(did))
     if not uploads_dir.is_dir():
         raise HTTPException(status_code=500, detail="Uploads directory not found")
     customer_dict = req.customer.model_dump(exclude_none=True)
@@ -316,7 +319,8 @@ async def fill_dms(req: FillDmsRequest) -> FillDmsResponse:
         logger.warning("fill_dms: dms_base_url missing")
         raise HTTPException(status_code=400, detail="dms_base_url required (or set DMS_BASE_URL)")
     base_url = _ensure_absolute_url(base_url)
-    uploads_dir = Path(UPLOADS_DIR)
+    did = req.dealer_id if req.dealer_id is not None else DEALER_ID
+    uploads_dir = Path(get_uploads_dir(did))
     if not uploads_dir.is_dir():
         raise HTTPException(status_code=500, detail="Uploads directory not found")
     customer_dict = req.customer.model_dump(exclude_none=True)
@@ -340,7 +344,7 @@ async def fill_dms(req: FillDmsRequest) -> FillDmsResponse:
             login_user=DMS_LOGIN_USER,
             login_password=DMS_LOGIN_PASSWORD,
             uploads_dir=uploads_dir,
-            ocr_output_dir=Path(OCR_OUTPUT_DIR).resolve(),
+            ocr_output_dir=Path(get_ocr_output_dir(did)),
             vahan_base_url=vahan_url,
             rto_dealer_id=req.rto_dealer_id,
         ),

@@ -9,6 +9,7 @@ import {
   type BulkLoadRow,
   type BulkLoadCounts,
 } from "../api/bulkLoads";
+import { DEALER_ID } from "../api/dealerId";
 import { saveAddSalesForm } from "../utils/addSalesStorage";
 
 type FolderViewType = "bulk" | "documents";
@@ -17,10 +18,12 @@ function FolderView({
   folderPath,
   folderType,
   onBack,
+  dealerId,
 }: {
   folderPath: string;
   folderType: FolderViewType;
   onBack: () => void;
+  dealerId?: number;
 }) {
   const [files, setFiles] = useState<{ name: string; size: number }[]>([]);
   const [loading, setLoading] = useState(true);
@@ -46,21 +49,22 @@ function FolderView({
     setErr(null);
     const fetchFiles =
       folderType === "bulk"
-        ? getBulkFolderFiles(folderPath).then((res) => res.files || [])
-        : getDocumentsFolderFiles(folderPath).then((res) => res.files || []);
+        ? getBulkFolderFiles(folderPath, dealerId).then((res) => res.files || [])
+        : getDocumentsFolderFiles(folderPath, dealerId).then((res) => res.files || []);
     fetchFiles
       .then(setFiles)
       .catch((e) => setErr(e instanceof Error ? e.message : "Failed to load"))
       .finally(() => setLoading(false));
-  }, [folderPath, folderType]);
+  }, [folderPath, folderType, dealerId]);
 
   const fileUrl = (name: string) => {
     const base = import.meta.env.VITE_API_URL ?? "";
+    const did = dealerId ?? DEALER_ID;
     if (folderType === "bulk") {
       const path = `${folderPath}/${name}`;
-      return `${base}/bulk-loads/file/${encodeURIComponent(path)}`;
+      return `${base}/bulk-loads/file/${encodeURIComponent(path)}?dealer_id=${did}`;
     }
-    return `${base}/documents/${encodeURIComponent(folderPath)}/${encodeURIComponent(name)}`;
+    return `${base}/documents/${encodeURIComponent(folderPath)}/${encodeURIComponent(name)}?dealer_id=${did}`;
   };
 
   const ext = (name: string) => name.split(".").pop()?.toLowerCase() ?? "";
@@ -238,11 +242,12 @@ function yesterday(): Date {
 }
 
 interface BulkLoadsPageProps {
+  dealerId?: number;
   onNavigateToAddSales?: () => void;
   onRefreshPendingCount?: () => void;
 }
 
-export function BulkLoadsPage({ onNavigateToAddSales, onRefreshPendingCount }: BulkLoadsPageProps) {
+export function BulkLoadsPage({ dealerId, onNavigateToAddSales, onRefreshPendingCount }: BulkLoadsPageProps) {
   const [activeTab, setActiveTab] = useState<"processed" | "rejected">("processed");
   const [dateFrom, setDateFrom] = useState(() => formatDateDdMmYyyy(yesterday()));
   const [dateTo, setDateTo] = useState(() => formatDateDdMmYyyy(new Date()));
@@ -278,8 +283,8 @@ export function BulkLoadsPage({ onNavigateToAddSales, onRefreshPendingCount }: B
       params.status = "Rejected";
     }
     return Promise.all([
-      listBulkLoads(params),
-      getBulkLoadCounts({ date_from: dateFrom, date_to: dateTo }),
+      listBulkLoads({ ...params, dealer_id: dealerId }),
+      getBulkLoadCounts({ date_from: dateFrom, date_to: dateTo, dealer_id: dealerId }),
     ])
       .then(([data, cnt]) => {
         setError(null);
@@ -287,7 +292,7 @@ export function BulkLoadsPage({ onNavigateToAddSales, onRefreshPendingCount }: B
         setCounts(cnt);
       })
       .catch((err) => setError(err instanceof Error ? err.message : "Failed to load"));
-  }, [activeTab, dateFrom, dateTo, showSuccess, showFailure, showProcessing]);
+  }, [activeTab, dateFrom, dateTo, showSuccess, showFailure, showProcessing, dealerId]);
 
   useEffect(() => {
     setLoading(true);
@@ -312,7 +317,7 @@ export function BulkLoadsPage({ onNavigateToAddSales, onRefreshPendingCount }: B
     if (!onNavigateToAddSales) return;
     setReprocessingId(r.id);
     try {
-      const { bulk_load_id, subfolder, mobile, uploadedFiles } = await prepareReprocess(r.id);
+      const { bulk_load_id, subfolder, mobile, uploadedFiles } = await prepareReprocess(r.id, dealerId);
       await saveAddSalesForm({
         savedTo: subfolder,
         mobile: mobile ?? "",
@@ -342,7 +347,7 @@ export function BulkLoadsPage({ onNavigateToAddSales, onRefreshPendingCount }: B
   const handleActionTakenToggle = async (r: BulkLoadRow, checked: boolean) => {
     setActionTakenId(r.id);
     try {
-      await setBulkLoadActionTaken(r.id, checked);
+      await setBulkLoadActionTaken(r.id, checked, dealerId);
       await fetchRows();
       onRefreshPendingCount?.();
     } catch (err) {
@@ -366,6 +371,7 @@ export function BulkLoadsPage({ onNavigateToAddSales, onRefreshPendingCount }: B
         folderPath={folderToView.path}
         folderType={folderToView.type}
         onBack={() => setFolderToView(null)}
+        dealerId={dealerId}
       />
     );
   }

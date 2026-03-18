@@ -5,11 +5,13 @@ import {
   type CustomerSearchResult,
 } from "../api/customerSearch";
 import { apiFetch } from "../api/client";
+import { DEALER_ID } from "../api/dealerId";
 import { loadViewCustomer, saveViewCustomer } from "../utils/viewCustomerStorage";
 
 interface ViewCustomerPageProps {
   /** Optional: pre-fill search from URL or context */
   initialMobile?: string;
+  dealerId?: number;
 }
 
 function getInitialState(initialMobile: string) {
@@ -22,7 +24,7 @@ function getInitialState(initialMobile: string) {
   };
 }
 
-export function ViewCustomerPage({ initialMobile = "" }: ViewCustomerPageProps) {
+export function ViewCustomerPage({ initialMobile = "", dealerId = DEALER_ID }: ViewCustomerPageProps) {
   const [mobile, setMobile] = useState(() => getInitialState(initialMobile).mobile);
   const [plateNum, setPlateNum] = useState(() => getInitialState(initialMobile).plateNum);
   const [result, setResult] = useState<CustomerSearchResult | null>(
@@ -52,7 +54,7 @@ export function ViewCustomerPage({ initialMobile = "" }: ViewCustomerPageProps) 
     setLoading(true);
     setResult(null);
     try {
-      const res = await searchCustomer({ mobile: m || null, plate_num: p || null });
+      const res = await searchCustomer({ mobile: m || null, plate_num: p || null, dealer_id: dealerId });
       setResult(res);
       if (res.found && res.vehicles.length === 1) {
         setSelectedVehicleId(res.vehicles[0].vehicle_id);
@@ -73,7 +75,7 @@ export function ViewCustomerPage({ initialMobile = "" }: ViewCustomerPageProps) 
     setDocFiles([]);
     try {
       const res = await apiFetch<{ files: { name: string; size: number }[] }>(
-        `/documents/${encodeURIComponent(subfolder)}/list`
+        `/documents/${encodeURIComponent(subfolder)}/list?dealer_id=${dealerId}`
       );
       setDocFiles(res.files || []);
     } catch {
@@ -89,6 +91,7 @@ export function ViewCustomerPage({ initialMobile = "" }: ViewCustomerPageProps) 
   const selectedVehicle = selectedVehicleId
     ? vehicles.find((v) => v.vehicle_id === selectedVehicleId)
     : vehicles[0];
+  const selectedFileLocation = selectedVehicle?.file_location ?? null;
   const selectedIns = selectedVehicle
     ? insMap[selectedVehicle.vehicle_id]
     : null;
@@ -165,9 +168,9 @@ export function ViewCustomerPage({ initialMobile = "" }: ViewCustomerPageProps) 
             <button
               type="button"
               className="view-customer-folder-btn"
-              onClick={() => cust.file_location && openDocuments(cust.file_location)}
-              title="View documents"
-              disabled={!cust.file_location}
+              onClick={() => selectedFileLocation && openDocuments(selectedFileLocation)}
+              title="View documents for selected vehicle"
+              disabled={!selectedFileLocation}
               aria-label="Open documents folder"
             >
               <FolderIcon />
@@ -273,7 +276,7 @@ export function ViewCustomerPage({ initialMobile = "" }: ViewCustomerPageProps) 
                   {docFiles.map((f) => (
                     <li key={f.name}>
                       <a
-                        href={cust?.file_location ? getDocumentFileUrl(cust.file_location, f.name) : "#"}
+                        href={selectedFileLocation ? getDocumentFileUrl(selectedFileLocation, f.name, dealerId) : "#"}
                         target="_blank"
                         rel="noopener noreferrer"
                       >

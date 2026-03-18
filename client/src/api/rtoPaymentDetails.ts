@@ -1,5 +1,6 @@
 import { apiFetch } from "./client";
 import { getBaseUrl } from "./client";
+import { DEALER_ID } from "./dealerId";
 
 export interface RtoPaymentInsertPayload {
   application_id: string;
@@ -47,8 +48,9 @@ export async function insertRtoPayment(payload: RtoPaymentInsertPayload): Promis
   });
 }
 
-export async function listRtoPayments(): Promise<RtoPaymentRow[]> {
-  return apiFetch<RtoPaymentRow[]>("/rto-payment-details");
+export async function listRtoPayments(dealerId?: number): Promise<RtoPaymentRow[]> {
+  const did = dealerId ?? DEALER_ID;
+  return apiFetch<RtoPaymentRow[]>(`/rto-payment-details?dealer_id=${did}`);
 }
 
 /** Get RTO payment row for a sale (to restore application_id/rto_fees on Add Sales page). */

@@ -2,11 +2,12 @@ import { useState, useEffect } from "react";
 import { listRtoPayments, payRtoPayment, type RtoPaymentRow } from "../api/rtoPaymentDetails";
 
 interface RtoPaymentsPendingPageProps {
+  dealerId?: number;
   /** When true, show Pay link column (only on RTO Payment Saathi tab). */
   showPayLink?: boolean;
 }
 
-export function RtoPaymentsPendingPage({ showPayLink = false }: RtoPaymentsPendingPageProps) {
+export function RtoPaymentsPendingPage({ dealerId, showPayLink = false }: RtoPaymentsPendingPageProps) {
   const [rows, setRows] = useState<RtoPaymentRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -14,7 +15,7 @@ export function RtoPaymentsPendingPage({ showPayLink = false }: RtoPaymentsPendi
 
   const refreshRows = () => {
     setError(null);
-    listRtoPayments()
+    listRtoPayments(dealerId)
       .then((data) => setRows(data))
       .catch((err) => setError(err instanceof Error ? err.message : "Failed to load"));
   };
@@ -22,7 +23,7 @@ export function RtoPaymentsPendingPage({ showPayLink = false }: RtoPaymentsPendi
   const fetchFromDb = (showLoading = true) => {
     if (showLoading) setLoading(true);
     setError(null);
-    listRtoPayments()
+    listRtoPayments(dealerId)
       .then((data) => setRows(data))
       .catch((err) => setError(err instanceof Error ? err.message : "Failed to load"))
       .finally(() => setLoading(false));
@@ -39,7 +40,7 @@ export function RtoPaymentsPendingPage({ showPayLink = false }: RtoPaymentsPendi
       cancelled = true;
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, []);
+  }, [dealerId]);
 
   const handlePay = async (applicationId: string) => {
     if (payingId) return;

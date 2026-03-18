@@ -8,7 +8,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import HTMLResponse
 
-from app.config import BULK_UPLOAD_DIR, UPLOADS_DIR
+from app.config import DEALER_ID, get_bulk_upload_dir, get_ocr_output_dir, get_uploads_dir
 from app.db import get_connection
 from app.repositories.bulk_loads import BulkLoadsRepository
 
@@ -16,15 +16,24 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/bulk-loads", tags=["bulk-loads"])
 
 
+def _dealer_id(dealer_id: int | None) -> int:
+    """Use provided dealer_id or app default."""
+    return dealer_id if dealer_id is not None else DEALER_ID
+
+
 @router.delete("")
-def clear_bulk_loads() -> dict:
-    """Clear all rows from bulk_loads table."""
+def clear_bulk_loads(dealer_id: int | None = Query(None, description="Dealer ID; uses app default if omitted")) -> dict:
+    """Clear bulk_loads rows for the given dealer."""
+    did = _dealer_id(dealer_id)
     conn = get_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute(f"TRUNCATE TABLE {BulkLoadsRepository.TABLE_NAME} RESTART IDENTITY")
+            cur.execute(
+                f"DELETE FROM {BulkLoadsRepository.TABLE_NAME} WHERE dealer_id IS NULL OR dealer_id = %s",
+                (did,),
+            )
         conn.commit()
-        return {"ok": True, "message": "Bulk loads table cleared"}
+        return {"ok": True, "message": f"Bulk loads cleared for dealer {did}"}
     finally:
         conn.close()
 
@@ -36,8 +45,10 @@ def list_bulk_loads(
     date_from: str | None = Query(None, description="Filter from date (dd-mm-yyyy)"),
     date_to: str | None = Query(None, description="Filter to date (dd-mm-yyyy)"),
     limit: int = Query(200, ge=1, le=500),
+    dealer_id: int | None = Query(None, description="Dealer ID; uses app default if omitted"),
 ) -> list[dict]:
     """List bulk loads, sorted latest first. Filter by status and/or date range."""
+    did = _dealer_id(dealer_id)
     conn = get_connection()
     try:
         BulkLoadsRepository.ensure_table(conn)
@@ -49,6 +60,7 @@ def list_bulk_loads(
             status_in=status_list,
             date_from=date_from,
             date_to=date_to,
+            dealer_id=did,
         )
         for r in rows:
             for k in ("created_at", "updated_at"):
@@ -66,12 +78,14 @@ def list_bulk_loads(
 def get_bulk_load_counts(
     date_from: str | None = Query(None, description="Filter from date (dd-mm-yyyy)"),
     date_to: str | None = Query(None, description="Filter to date (dd-mm-yyyy)"),
+    dealer_id: int | None = Query(None, description="Dealer ID; uses app default if omitted"),
 ) -> dict[str, int]:
     """Return counts per status. Error and Rejected exclude action_taken records (for tab display)."""
+    did = _dealer_id(dealer_id)
     conn = get_connection()
     try:
         BulkLoadsRepository.ensure_table(conn)
-        return BulkLoadsRepository.count_by_status_pending(conn, date_from=date_from, date_to=date_to)
+        return BulkLoadsRepository.count_by_status_pending(conn, date_from=date_from, date_to=date_to, dealer_id=did)
     except Exception as e:
         logger.exception("get_bulk_load_counts failed: %s", e)
         raise
@@ -80,12 +94,16 @@ def get_bulk_load_counts(
 
 
 @router.post("/reset-stale-processing")
-def reset_stale_processing(stale_sec: int = Query(60, ge=10, le=3600, description="Mark Processing older than this (seconds) as Error")) -> dict:
+def reset_stale_processing(
+    stale_sec: int = Query(60, ge=10, le=3600, description="Mark Processing older than this (seconds) as Error"),
+    dealer_id: int | None = Query(None, description="Dealer ID; uses app default if omitted"),
+) -> dict:
     """Reset stuck Processing rows so the watcher can pick up new files. Use when scan 2 (etc.) does not start."""
+    did = _dealer_id(dealer_id)
     conn = get_connection()
     try:
         BulkLoadsRepository.ensure_table(conn)
-        count = BulkLoadsRepository.reset_stale_processing(conn, stale_sec)
+        count = BulkLoadsRepository.reset_stale_processing(conn, stale_sec, dealer_id=did)
         conn.commit()
         return {"ok": True, "reset_count": count, "message": f"Reset {count} stuck Processing row(s)"}
     finally:
@@ -93,23 +111,29 @@ def reset_stale_processing(stale_sec: int = Query(60, ge=10, le=3600, descriptio
 
 
 @router.get("/pending-count")
-def get_pending_attention_count() -> dict[str, int]:
+def get_pending_attention_count(dealer_id: int | None = Query(None, description="Dealer ID; uses app default if omitted")) -> dict[str, int]:
     """Return count of Error + Rejected records not yet marked as action taken (for tab badge)."""
+    did = _dealer_id(dealer_id)
     conn = get_connection()
     try:
         BulkLoadsRepository.ensure_table(conn)
-        return {"pending": BulkLoadsRepository.count_pending_attention(conn)}
+        return {"pending": BulkLoadsRepository.count_pending_attention(conn, dealer_id=did)}
     finally:
         conn.close()
 
 
 @router.patch("/{bulk_load_id:int}/action-taken")
-def set_action_taken(bulk_load_id: int, action_taken: bool = True) -> dict:
+def set_action_taken(
+    bulk_load_id: int,
+    action_taken: bool = True,
+    dealer_id: int | None = Query(None, description="Dealer ID; uses app default if omitted"),
+) -> dict:
     """Mark a Failure or Rejected record as action taken (operator has addressed it)."""
+    did = _dealer_id(dealer_id)
     conn = get_connection()
     try:
         BulkLoadsRepository.ensure_table(conn)
-        updated = BulkLoadsRepository.set_action_taken(conn, bulk_load_id, action_taken)
+        updated = BulkLoadsRepository.set_action_taken(conn, bulk_load_id, action_taken, dealer_id=did)
         conn.commit()
         if not updated:
             raise HTTPException(status_code=404, detail="Record not found or not Error/Rejected")
@@ -119,12 +143,17 @@ def set_action_taken(bulk_load_id: int, action_taken: bool = True) -> dict:
 
 
 @router.patch("/{bulk_load_id:int}/mark-success")
-def mark_bulk_load_success(bulk_load_id: int, subfolder: str = Query(..., description="Uploads subfolder for documents link")) -> dict:
+def mark_bulk_load_success(
+    bulk_load_id: int,
+    subfolder: str = Query(..., description="Uploads subfolder for documents link"),
+    dealer_id: int | None = Query(None, description="Dealer ID; uses app default if omitted"),
+) -> dict:
     """Mark an Error record as Success after manual completion via Add Customer (Re-Try flow)."""
+    did = _dealer_id(dealer_id)
     conn = get_connection()
     try:
         BulkLoadsRepository.ensure_table(conn)
-        row = BulkLoadsRepository.get_by_id(conn, bulk_load_id)
+        row = BulkLoadsRepository.get_by_id(conn, bulk_load_id, dealer_id=did)
         if not row:
             raise HTTPException(status_code=404, detail="Bulk load not found")
         if row.get("status") != "Error":
@@ -142,11 +171,11 @@ def mark_bulk_load_success(bulk_load_id: int, subfolder: str = Query(..., descri
         conn.close()
 
 
-def _list_bulk_folder_files(folder_path: str) -> list[dict]:
+def _list_bulk_folder_files(folder_path: str, dealer_id: int) -> list[dict]:
     """List files in a Bulk Upload subfolder. Returns list of {name, size}."""
     if ".." in folder_path or folder_path.startswith("/"):
         raise HTTPException(status_code=400, detail="Invalid path")
-    folder = Path(BULK_UPLOAD_DIR) / folder_path
+    folder = get_bulk_upload_dir(dealer_id) / folder_path
     if not folder.is_dir():
         raise HTTPException(status_code=404, detail=f"Folder not found: {folder_path}")
     files: list[dict] = []
@@ -157,17 +186,25 @@ def _list_bulk_folder_files(folder_path: str) -> list[dict]:
 
 
 @router.get("/folder/{folder_path:path}/list")
-def list_bulk_folder(folder_path: str) -> dict:
+def list_bulk_folder(
+    folder_path: str,
+    dealer_id: int | None = Query(None, description="Dealer ID; uses app default if omitted"),
+) -> dict:
     """List files in a Bulk Upload subfolder (JSON for in-app display)."""
-    files = _list_bulk_folder_files(folder_path)
+    did = _dealer_id(dealer_id)
+    files = _list_bulk_folder_files(folder_path, did)
     return {"folder_path": folder_path, "files": files}
 
 
 @router.get("/folder/{folder_path:path}", response_class=HTMLResponse)
-def browse_bulk_folder(folder_path: str) -> HTMLResponse:
+def browse_bulk_folder(
+    folder_path: str,
+    dealer_id: int | None = Query(None, description="Dealer ID; uses app default if omitted"),
+) -> HTMLResponse:
     """List files in a Bulk Upload subfolder (legacy HTML for direct links)."""
     from urllib.parse import quote
-    files = _list_bulk_folder_files(folder_path)
+    did = _dealer_id(dealer_id)
+    files = _list_bulk_folder_files(folder_path, did)
     rows = "".join(
         f'<tr><td><a href="/bulk-loads/file/{quote(folder_path + "/" + f["name"], safe="")}">{f["name"]}</a></td></tr>'
         for f in files
@@ -180,26 +217,34 @@ def browse_bulk_folder(folder_path: str) -> HTMLResponse:
 
 
 @router.get("/file/{file_path:path}")
-def get_bulk_file(file_path: str):
+def get_bulk_file(
+    file_path: str,
+    dealer_id: int | None = Query(None, description="Dealer ID; uses app default if omitted"),
+):
     """Serve a file from Bulk Upload (path: Rejected scans/Scan1_15032025/file.pdf)."""
     from fastapi.responses import FileResponse
     if ".." in file_path or file_path.startswith("/"):
         raise HTTPException(status_code=400, detail="Invalid path")
-    path = Path(BULK_UPLOAD_DIR) / file_path
+    did = _dealer_id(dealer_id)
+    path = get_bulk_upload_dir(did) / file_path
     if not path.is_file():
         raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(path, filename=path.name, content_disposition_type="inline")
 
 
 @router.post("/{bulk_load_id:int}/prepare-reprocess")
-def prepare_reprocess(bulk_load_id: int) -> dict:
+def prepare_reprocess(
+    bulk_load_id: int,
+    dealer_id: int | None = Query(None, description="Dealer ID; uses app default if omitted"),
+) -> dict:
     """
     Prepare an error record for re-processing: split PDF from result_folder into Uploaded scans,
     run OCR, return subfolder and mobile for Add Customer view.
     """
+    did = _dealer_id(dealer_id)
     conn = get_connection()
     try:
-        row = BulkLoadsRepository.get_by_id(conn, bulk_load_id)
+        row = BulkLoadsRepository.get_by_id(conn, bulk_load_id, dealer_id=did)
         if not row:
             raise HTTPException(status_code=404, detail="Bulk load not found")
         if row.get("status") != "Error":
@@ -211,7 +256,7 @@ def prepare_reprocess(bulk_load_id: int) -> dict:
     finally:
         conn.close()
 
-    archive_dir = Path(BULK_UPLOAD_DIR) / result_folder
+    archive_dir = get_bulk_upload_dir(did) / result_folder
     if not archive_dir.is_dir():
         raise HTTPException(status_code=404, detail=f"Archive folder not found: {result_folder}")
 
@@ -223,7 +268,7 @@ def prepare_reprocess(bulk_load_id: int) -> dict:
     else:
         subfolder = f"reprocess_{bulk_load_id}_{datetime.now().strftime('%H%M%S')}"
 
-    uploads_subdir = Path(UPLOADS_DIR) / subfolder
+    uploads_subdir = get_uploads_dir(did) / subfolder
     uploads_subdir.mkdir(parents=True, exist_ok=True)
 
     # Prefer pre-classified images if present; else split PDF by position
@@ -241,7 +286,10 @@ def prepare_reprocess(bulk_load_id: int) -> dict:
     def run_ocr_background() -> None:
         try:
             from app.services.ocr_service import OcrService
-            OcrService().process_uploaded_subfolder(subfolder)
+            OcrService(
+                uploads_dir=get_uploads_dir(did),
+                ocr_output_dir=get_ocr_output_dir(did),
+            ).process_uploaded_subfolder(subfolder)
         except Exception as e:
             logger.exception("prepare_reprocess: background OCR failed for %s: %s", subfolder, e)
 

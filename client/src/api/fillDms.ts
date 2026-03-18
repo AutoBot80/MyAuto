@@ -151,9 +151,12 @@ export async function printForm20(req: PrintForm20Request): Promise<PrintForm20R
 }
 
 /** Fetch Data from DMS for a subfolder (fallback when Fill Forms response was lost). */
-export async function getDataFromDms(subfolder: string): Promise<{ vehicle: Record<string, string>; customer: Record<string, string> }> {
+export async function getDataFromDms(subfolder: string, dealerId?: number): Promise<{ vehicle: Record<string, string>; customer: Record<string, string> }> {
+  const params = new URLSearchParams();
+  params.set("subfolder", subfolder);
+  if (dealerId != null) params.set("dealer_id", String(dealerId));
   return apiFetch<{ vehicle: Record<string, string>; customer: Record<string, string> }>(
-    `/fill-dms/data-from-dms?subfolder=${encodeURIComponent(subfolder)}`
+    `/fill-dms/data-from-dms?${params.toString()}`
   );
 }
 

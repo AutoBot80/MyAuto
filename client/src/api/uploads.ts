@@ -1,12 +1,15 @@
 import { getBaseUrl } from "./client";
 import type { UploadScansResponse } from "../types";
+import { DEALER_ID } from "./dealerId";
 
 export async function uploadScans(
   aadharLast4: string,
-  files: File[]
+  files: File[],
+  dealerId?: number
 ): Promise<UploadScansResponse> {
   const form = new FormData();
   form.append("aadhar_last4", aadharLast4);
+  form.append("dealer_id", String(dealerId ?? DEALER_ID));
   for (const f of files) form.append("files", f);
   const res = await fetch(`${getBaseUrl()}/uploads/scans`, {
     method: "POST",
@@ -25,10 +28,12 @@ export async function uploadScansV2(
   aadharBackScan: File,
   salesDetail: File,
   insuranceSheet?: File,
-  financingDoc?: File
+  financingDoc?: File,
+  dealerId?: number
 ): Promise<UploadScansResponse> {
   const form = new FormData();
   form.append("mobile", mobile.trim());
+  form.append("dealer_id", String(dealerId ?? DEALER_ID));
   form.append("aadhar_scan", aadharScan);
   form.append("aadhar_back", aadharBackScan);
   form.append("sales_detail", salesDetail);

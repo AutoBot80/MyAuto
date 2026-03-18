@@ -1,4 +1,5 @@
 import { apiFetch, getBaseUrl } from "./client";
+import { DEALER_ID } from "./dealerId";
 
 export interface CustomerSearchResult {
   found: boolean;
@@ -23,6 +24,7 @@ export interface CustomerSearchResult {
     plate_num: string | null;
     chassis: string | null;
     date_of_purchase: string | null;
+    file_location: string | null;
   }>;
   insurance_by_vehicle: Record<
     number,
@@ -39,10 +41,12 @@ export interface CustomerSearchResult {
 export async function searchCustomer(opts: {
   mobile?: string | null;
   plate_num?: string | null;
+  dealer_id?: number | null;
 }): Promise<CustomerSearchResult> {
   const params = new URLSearchParams();
   if (opts.mobile?.trim()) params.set("mobile", opts.mobile.trim());
   if (opts.plate_num?.trim()) params.set("plate_num", opts.plate_num.trim());
+  params.set("dealer_id", String(opts.dealer_id ?? DEALER_ID));
   const qs = params.toString();
   if (!qs) throw new Error("Provide at least mobile or plate_num");
   return apiFetch<CustomerSearchResult>(
@@ -51,13 +55,13 @@ export async function searchCustomer(opts: {
 }
 
 /** Get documents list URL for a subfolder */
-export function getDocumentsListUrl(subfolder: string): string {
+export function getDocumentsListUrl(subfolder: string, dealerId?: number): string {
   const base = getBaseUrl().replace(/\/$/, "");
-  return `${base}/documents/${encodeURIComponent(subfolder)}/list`;
+  return `${base}/documents/${encodeURIComponent(subfolder)}/list?dealer_id=${dealerId ?? DEALER_ID}`;
 }
 
 /** Get document file URL for opening in new tab */
-export function getDocumentFileUrl(subfolder: string, filename: string): string {
+export function getDocumentFileUrl(subfolder: string, filename: string, dealerId?: number): string {
   const base = getBaseUrl().replace(/\/$/, "");
-  return `${base}/documents/${encodeURIComponent(subfolder)}/${encodeURIComponent(filename)}`;
+  return `${base}/documents/${encodeURIComponent(subfolder)}/${encodeURIComponent(filename)}?dealer_id=${dealerId ?? DEALER_ID}`;
 }

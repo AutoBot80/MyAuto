@@ -165,7 +165,7 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
     uploadStatus,
     setUploadStatus,
     onExtractionComplete: applyExtractedDetails,
-  });
+  }, dealerId);
 
   const pollCountRef = useRef(0);
   const POLL_MAX = 20;
@@ -217,7 +217,7 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
   useEffect(() => {
     if (!savedTo || (hasVehicle && hasCustomer)) return;
     let cancelled = false;
-      getExtractedDetails(savedTo)
+      getExtractedDetails(savedTo, dealerId)
       .then((details) => {
         if (cancelled) return;
         const extractionErr = (details as Record<string, unknown>)?.extraction_error;
@@ -292,7 +292,7 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
       if (pollCountRef.current >= POLL_MAX) return;
       pollCountRef.current += 1;
       try {
-        const details = await getExtractedDetails(savedTo);
+        const details = await getExtractedDetails(savedTo, dealerId);
         const extractionErr = (details as Record<string, unknown>)?.extraction_error;
         const nameMismatchErr = (details as Record<string, unknown>)?.name_mismatch_error;
         const err = typeof nameMismatchErr === "string" ? nameMismatchErr : typeof extractionErr === "string" ? extractionErr : null;
@@ -670,6 +670,61 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
     } finally {
       setIsFillVahanLoading(false);
     }
+
+    // 3) Form 20 and Gate Pass – create and store at end of Fill Forms (even if user never clicks Create & print file)
+    const scrapedForForm20 = scrapedForVahan ?? dmsRes?.vehicle;
+    let vehicleDataForForm20: Record<string, unknown> = {};
+    if (scrapedForForm20 && typeof scrapedForForm20 === "object") {
+      const s = scrapedForForm20 as Record<string, unknown>;
+      vehicleDataForForm20 = {
+        key_no: s.key_num ?? s.key_no,
+        frame_no: s.frame_num ?? s.frame_no,
+        engine_no: s.engine_num ?? s.engine_no,
+        model: s.model,
+        color: s.color,
+        cubic_capacity: s.cubic_capacity,
+        seating_capacity: s.seating_capacity,
+        body_type: s.body_type,
+        vehicle_type: s.vehicle_type,
+        num_cylinders: s.num_cylinders,
+        horse_power: s.horse_power,
+        total_amount: s.total_amount,
+        year_of_mfg: s.year_of_mfg,
+      };
+    } else if (v) {
+      vehicleDataForForm20 = {
+        key_no: v.key_no,
+        frame_no: v.frame_no,
+        engine_no: v.engine_no,
+        model: v.model ?? v.model_colour,
+        color: v.color,
+      };
+    }
+    try {
+      const form20Res = await printForm20({
+        subfolder: savedTo,
+        customer: {
+          name: c?.name ?? undefined,
+          care_of: c?.care_of ?? undefined,
+          address: c?.address ?? buildDisplayAddress(c),
+          city: c?.city ?? undefined,
+          state: c?.state ?? undefined,
+          pin_code: c?.pin_code ?? undefined,
+          aadhar_id: c?.aadhar_id ?? undefined,
+        },
+        vehicle: vehicleDataForForm20,
+        vehicle_id: lastSubmittedVehicleId ?? undefined,
+        dealer_id: dealerId,
+      });
+      if (form20Res.success) {
+        setHasPrintedForms(true);
+        setPrintFormsStatus(`Form 20 saved: ${(form20Res.pdfs_saved ?? []).join(", ")}`);
+      } else if (form20Res.error) {
+        setPrintFormsStatus(`Form 20: ${form20Res.error}`);
+      }
+    } catch (form20Err) {
+      setPrintFormsStatus(`Form 20: ${form20Err instanceof Error ? form20Err.message : "Create & print file failed."}`);
+    }
   };
 
   const handlePrintForms = async () => {
@@ -698,7 +753,7 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
       };
     } else {
       try {
-        const fromDms = await getDataFromDms(savedTo);
+        const fromDms = await getDataFromDms(savedTo, dealerId);
         if (fromDms?.vehicle && typeof fromDms.vehicle === "object") {
           vehicleData = fromDms.vehicle as Record<string, unknown>;
         }
@@ -728,10 +783,10 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
         setHasPrintedForms(true);
         setPrintFormsStatus(`Form 20 saved: ${(res.pdfs_saved ?? []).join(", ")}`);
       } else {
-        setPrintFormsStatus(res.error ?? "Print forms failed.");
+        setPrintFormsStatus(res.error ?? "Create & print file failed.");
       }
     } catch (err) {
-      setPrintFormsStatus(err instanceof Error ? err.message : "Print forms failed.");
+      setPrintFormsStatus(err instanceof Error ? err.message : "Create & print file failed.");
     } finally {
       setIsPrintFormsLoading(false);
     }
@@ -1310,7 +1365,7 @@ className="app-button app-button--primary"
                     onClick={handlePrintForms}
                     title={!hasSubmittedInfo ? "Submit Info first (Section 2)" : undefined}
                   >
-                    {isPrintFormsLoading ? "Generating…" : "Print forms"}
+                    {isPrintFormsLoading ? "Generating…" : "Create & print file"}
                   </button>
                   {printFormsStatus && (
                     <div className="app-panel-status" role="status">{printFormsStatus}</div>

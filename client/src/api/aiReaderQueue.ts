@@ -43,11 +43,15 @@ export async function reprocessQueueItem(
 
 /** Get structured extracted details (vehicle, customer) for a subfolder. Returns null if not found (e.g. not yet processed). */
 export async function getExtractedDetails(
-  subfolder: string
+  subfolder: string,
+  dealerId?: number
 ): Promise<ExtractedDetailsResponse | null> {
   const base = await import("./client").then((m) => m.getBaseUrl());
+  const params = new URLSearchParams();
+  params.set("subfolder", subfolder);
+  if (dealerId != null) params.set("dealer_id", String(dealerId));
   const res = await fetch(
-    `${base}/ai-reader-queue/extracted-details?subfolder=${encodeURIComponent(subfolder)}`
+    `${base}/ai-reader-queue/extracted-details?${params.toString()}`
   );
   if (res.status === 404) return null;
   if (!res.ok) {

@@ -138,11 +138,11 @@ function App() {
           />
         );
       case "bulk-loads":
-        return <BulkLoadsPage onNavigateToAddSales={() => setPage("add-sales")} />;
+        return <BulkLoadsPage dealerId={DEALER_ID} onNavigateToAddSales={() => setPage("add-sales")} />;
       case "customer-details":
-        return <ViewCustomerPage />;
+        return <ViewCustomerPage dealerId={DEALER_ID} />;
       case "rto-status":
-        return <RtoPaymentsPendingPage showPayLink={mode === "rto"} />;
+        return <RtoPaymentsPendingPage dealerId={DEALER_ID} showPayLink={mode === "rto"} />;
       case "service-reminders":
         return <PlaceholderPage title="Service Reminders" />;
       case "dealer-dashboard":

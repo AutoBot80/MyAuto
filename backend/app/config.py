@@ -14,6 +14,24 @@ APP_ROOT = Path(__file__).resolve().parents[1]
 UPLOADS_DIR = APP_ROOT.parent / "Uploaded scans"
 OCR_OUTPUT_DIR = APP_ROOT.parent / "ocr_output"
 BULK_UPLOAD_DIR = APP_ROOT.parent / "Bulk Upload"
+
+# Dealer ID for app (JWT later). Used by bulk watcher and when client omits dealer_id.
+DEALER_ID = int(os.getenv("DEALER_ID", "100001"))
+
+
+def get_uploads_dir(dealer_id: int) -> Path:
+    """Dealer-scoped uploads: Uploaded scans/{dealer_id}/."""
+    return UPLOADS_DIR / str(dealer_id)
+
+
+def get_ocr_output_dir(dealer_id: int) -> Path:
+    """Dealer-scoped OCR output: ocr_output/{dealer_id}/."""
+    return OCR_OUTPUT_DIR / str(dealer_id)
+
+
+def get_bulk_upload_dir(dealer_id: int) -> Path:
+    """Dealer-scoped bulk upload: Bulk Upload/{dealer_id}/."""
+    return BULK_UPLOAD_DIR / str(dealer_id)
 # Pre-OCR for bulk: use AWS Textract (default) for better mobile extraction; set false for Tesseract
 BULK_PRE_OCR_USE_TEXTRACT = os.getenv("BULK_PRE_OCR_USE_TEXTRACT", "true").lower() in ("1", "true", "yes")
 # Form 20 blank templates (PDF). Prefer single official PDF (page 0=front, page 1=back).

@@ -9,7 +9,7 @@ import threading
 import time
 from pathlib import Path
 
-from app.config import BULK_UPLOAD_DIR, BULK_PRE_OCR_USE_TEXTRACT
+from app.config import BULK_PRE_OCR_USE_TEXTRACT, DEALER_ID, get_bulk_upload_dir
 from app.db import get_connection
 from app.repositories.bulk_loads import BulkLoadsRepository
 from app.services.bulk_upload_service import process_new_scans_and_record
@@ -18,12 +18,9 @@ from app.services.pre_ocr_service import (
     move_processing_to_success_or_error,
     move_multi_customer_to_success_or_error,
     move_to_rejected,
-    PROCESSING_DIR,
 )
 
 logger = logging.getLogger(__name__)
-
-DEALER_ID = 100001
 
 # User-friendly mapping for validation errors
 _REJECTION_MESSAGES = {
@@ -49,15 +46,17 @@ _watcher_thread: threading.Thread | None = None
 _watcher_stop = threading.Event()
 
 
-def _move_to_error_on_exception(original_filename_stem: str, original_scan_path: Path | None = None) -> str:
+def _move_to_error_on_exception(original_filename_stem: str, original_scan_path: Path | None = None, bulk_upload_dir: Path | None = None) -> str:
     """When pre-OCR raises, move original from Input Scans and Processing PDF/pre-OCR to Error. Returns result_folder path."""
-    from app.services.pre_ocr_service import ERROR_DIR
     from datetime import datetime
     import shutil
 
+    base = bulk_upload_dir or get_bulk_upload_dir(DEALER_ID)
+    error_dir = base / "Error"
+    proc_dir = base / "Processing"
     ddmmyyyy = datetime.now().strftime("%d%m%Y")
     dest_subdir = f"{original_filename_stem}_{ddmmyyyy}"
-    dest_dir = ERROR_DIR / dest_subdir
+    dest_dir = error_dir / dest_subdir
     dest_dir.mkdir(parents=True, exist_ok=True)
     result_folder = f"Error/{dest_subdir}"
 
@@ -67,11 +66,11 @@ def _move_to_error_on_exception(original_filename_stem: str, original_scan_path:
         logger.info("Moved original scan %s -> %s", original_scan_path.name, dest_dir)
 
     # Move PDF and classified dir (if any) and pre-OCR from Processing
-    pdf_file = PROCESSING_DIR / f"{original_filename_stem}.pdf"
+    pdf_file = proc_dir / f"{original_filename_stem}.pdf"
     if pdf_file.exists():
         shutil.move(str(pdf_file), str(dest_dir / pdf_file.name))
         logger.info("Moved %s -> %s", pdf_file.name, dest_dir)
-    classified_dir = PROCESSING_DIR / f"classified_{original_filename_stem}"
+    classified_dir = proc_dir / f"classified_{original_filename_stem}"
     if classified_dir.is_dir():
         for f in classified_dir.iterdir():
             if f.is_file():
@@ -81,7 +80,7 @@ def _move_to_error_on_exception(original_filename_stem: str, original_scan_path:
             classified_dir.rmdir()
         except OSError:
             pass
-    for f in PROCESSING_DIR.glob(f"{original_filename_stem}_*_pre_ocr.txt"):
+    for f in proc_dir.glob(f"{original_filename_stem}_*_pre_ocr.txt"):
         if f.is_file():
             shutil.move(str(f), str(dest_dir / f.name))
             logger.info("Moved %s -> %s", f.name, dest_dir)
@@ -89,13 +88,15 @@ def _move_to_error_on_exception(original_filename_stem: str, original_scan_path:
     return result_folder
 
 
-def _process_one(scans_pdf: Path, marker: Path | None = None) -> bool:
+def _process_one(scans_pdf: Path, marker: Path | None = None, dealer_id: int | None = None) -> bool:
     """Process one Scans.pdf and mark with .processed. Returns True if processed."""
+    did = dealer_id if dealer_id is not None else DEALER_ID
+    bulk_base = get_bulk_upload_dir(did)
     if marker is None:
         marker = scans_pdf.parent / ".processed"
     if marker.exists():
         return False
-    scans_dir = BULK_UPLOAD_DIR / "Input Scans"
+    scans_dir = bulk_base / "Input Scans"
     initial_subfolder = scans_pdf.stem if scans_pdf.parent == scans_dir else scans_pdf.parent.name
 
     conn = get_connection()
@@ -107,6 +108,7 @@ def _process_one(scans_pdf: Path, marker: Path | None = None) -> bool:
             file_name=scans_pdf.name,
             status="Processing",
             folder_path=initial_subfolder,
+            dealer_id=did,
         )
         conn.commit()
         bulk_load_id = row["id"]
@@ -119,11 +121,12 @@ def _process_one(scans_pdf: Path, marker: Path | None = None) -> bool:
     try:
         # Pre-OCR: copy to Processing, run OCR, save as filename_ddmmyyyy_pre_ocr.txt,
         # extract mobile. Mobile is required for Add Customer - do not proceed without it.
-        PROCESSING_DIR.mkdir(parents=True, exist_ok=True)
+        proc_dir = bulk_base / "Processing"
+        proc_dir.mkdir(parents=True, exist_ok=True)
         try:
             bundles, subfolder_stem, mobile, ocr_path, missing = run_pre_ocr_and_prepare(
                 scans_pdf,
-                processing_dir=PROCESSING_DIR,
+                processing_dir=proc_dir,
                 use_textract=BULK_PRE_OCR_USE_TEXTRACT,
             )
         except Exception as e:
@@ -135,7 +138,7 @@ def _process_one(scans_pdf: Path, marker: Path | None = None) -> bool:
             finally:
                 conn.close()
             # Move to Error: Processing PDF/pre-OCR and original from Input Scans
-            result_folder = _move_to_error_on_exception(scans_pdf.stem, original_scan_path=scans_pdf)
+            result_folder = _move_to_error_on_exception(scans_pdf.stem, original_scan_path=scans_pdf, bulk_upload_dir=bulk_base)
             conn = get_connection()
             try:
                 BulkLoadsRepository.update_status(conn, bulk_load_id, "Error", result_folder=result_folder)
@@ -150,10 +153,11 @@ def _process_one(scans_pdf: Path, marker: Path | None = None) -> bool:
         if missing:
             error_msg = _format_rejection_error(missing)
             logger.warning("bulk_watcher: %s for %s", error_msg, scans_pdf)
-            pdf_in_proc = PROCESSING_DIR / f"{scans_pdf.stem}.pdf"
+            pdf_in_proc = proc_dir / f"{scans_pdf.stem}.pdf"
             result_folder = move_to_rejected(
                 pdf_in_proc, ocr_path, scans_pdf.stem,
                 original_scan_path=scans_pdf,
+                bulk_upload_dir=bulk_base,
             )
             conn = get_connection()
             try:
@@ -183,6 +187,7 @@ def _process_one(scans_pdf: Path, marker: Path | None = None) -> bool:
                         file_name=scans_pdf.name,
                         status="Processing",
                         folder_path=f"{scans_pdf.stem}_Customer{i + 2}",
+                        dealer_id=did,
                     )
                     bulk_load_ids.append(row["id"])
                 # Update first row to show Customer 1
@@ -203,7 +208,7 @@ def _process_one(scans_pdf: Path, marker: Path | None = None) -> bool:
                 ok = process_new_scans_and_record(
                     bulk_load_ids[i],
                     classified_dir,
-                    dealer_id=DEALER_ID,
+                    dealer_id=did,
                     subfolder_override=subfolder,
                 )
                 results.append(ok)
@@ -211,6 +216,7 @@ def _process_one(scans_pdf: Path, marker: Path | None = None) -> bool:
             result_folders = move_multi_customer_to_success_or_error(
                 bundles, ocr_path, scans_pdf.stem, results,
                 original_scan_path=scans_pdf,
+                bulk_upload_dir=bulk_base,
             )
             conn = get_connection()
             try:
@@ -221,7 +227,7 @@ def _process_one(scans_pdf: Path, marker: Path | None = None) -> bool:
             finally:
                 conn.close()
             # Clean up base classified dir and Processing PDF
-            base_classified = PROCESSING_DIR / f"classified_{scans_pdf.stem}"
+            base_classified = proc_dir / f"classified_{scans_pdf.stem}"
             if base_classified.is_dir():
                 for sub in list(base_classified.iterdir()):
                     if sub.is_dir():
@@ -233,7 +239,7 @@ def _process_one(scans_pdf: Path, marker: Path | None = None) -> bool:
                     base_classified.rmdir()
                 except OSError:
                     pass
-            dest_pdf = PROCESSING_DIR / scans_pdf.name
+            dest_pdf = proc_dir / scans_pdf.name
             if dest_pdf.exists():
                 dest_pdf.unlink(missing_ok=True)
             if marker.exists():
@@ -252,12 +258,13 @@ def _process_one(scans_pdf: Path, marker: Path | None = None) -> bool:
         ok = process_new_scans_and_record(
             bulk_load_id,
             classified_dir,
-            dealer_id=DEALER_ID,
+            dealer_id=did,
             subfolder_override=subfolder,
         )
         result_folder = move_processing_to_success_or_error(
             classified_dir, ocr_path, scans_pdf.stem, mobile, success=ok,
             original_scan_path=scans_pdf,
+            bulk_upload_dir=bulk_base,
         )
         conn = get_connection()
         try:
@@ -278,9 +285,9 @@ def _process_one(scans_pdf: Path, marker: Path | None = None) -> bool:
             conn.close()
         # Move to Error (original from Input Scans, classified dir or PDF, pre-OCR)
         try:
-            classified_dir = PROCESSING_DIR / f"classified_{scans_pdf.stem}"
-            processing_path = classified_dir if classified_dir.is_dir() else next((f for f in PROCESSING_DIR.glob("*.pdf") if f.is_file()), None)
-            ocr_in_proc = next(PROCESSING_DIR.glob(f"{scans_pdf.stem}_*_pre_ocr.txt"), None)
+            classified_dir = proc_dir / f"classified_{scans_pdf.stem}"
+            processing_path = classified_dir if classified_dir.is_dir() else next((f for f in proc_dir.glob("*.pdf") if f.is_file()), None)
+            ocr_in_proc = next(proc_dir.glob(f"{scans_pdf.stem}_*_pre_ocr.txt"), None)
             if processing_path or ocr_in_proc or scans_pdf.exists():
                 result_folder = move_processing_to_success_or_error(
                     processing_path,
@@ -289,6 +296,7 @@ def _process_one(scans_pdf: Path, marker: Path | None = None) -> bool:
                     None,
                     success=False,
                     original_scan_path=scans_pdf,
+                    bulk_upload_dir=bulk_base,
                 )
                 conn = get_connection()
                 try:
@@ -327,11 +335,12 @@ def _find_pending_pdf(scans_dir: Path) -> Path | None:
 PROCESSING_STALE_SEC = 900  # 15 minutes
 
 
-def _has_processing_in_progress() -> bool:
+def _has_processing_in_progress(dealer_id: int | None = None) -> bool:
     """Return True if any bulk_loads row has status Processing and is not stale (don't start another)."""
+    did = dealer_id if dealer_id is not None else DEALER_ID
     conn = get_connection()
     try:
-        rows = BulkLoadsRepository.list_all(conn, limit=10, status_filter="Processing")
+        rows = BulkLoadsRepository.list_all(conn, limit=10, status_filter="Processing", dealer_id=did)
         if not rows:
             return False
         from datetime import datetime, timezone
@@ -360,15 +369,16 @@ def _watcher_loop() -> None:
     while not _watcher_stop.is_set():
         try:
             # Don't start new work if something is already in Processing (prevents queue buildup)
-            if _has_processing_in_progress():
+            if _has_processing_in_progress(DEALER_ID):
                 _watcher_stop.wait(timeout=POLL_INTERVAL_SEC)
                 continue
-            scans_dir = BULK_UPLOAD_DIR / "Input Scans"
+            bulk_base = get_bulk_upload_dir(DEALER_ID)
+            scans_dir = bulk_base / "Input Scans"
             if scans_dir.is_dir():
                 pdf_path = _find_pending_pdf(scans_dir)
                 if pdf_path:
                     marker = (scans_dir / f".processed_{pdf_path.name}") if pdf_path.parent == scans_dir else (pdf_path.parent / ".processed")
-                    _process_one(pdf_path, marker=marker)
+                    _process_one(pdf_path, marker=marker, dealer_id=DEALER_ID)
                     break  # Process one at a time
         except Exception as e:
             logger.exception("bulk_watcher: loop error: %s", e)

@@ -1,6 +1,7 @@
 """AI reader queue endpoints. Queue disabled (table dropped); extracted-details still works from JSON files."""
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
+from app.config import DEALER_ID, get_ocr_output_dir, get_uploads_dir
 from app.services.ocr_service import OcrService
 
 router = APIRouter(prefix="/ai-reader-queue", tags=["ai-reader-queue"])
@@ -25,10 +26,17 @@ def list_extractions(limit: int = 200) -> list[dict]:
 
 
 @router.get("/extracted-details")
-def get_extracted_details(subfolder: str) -> dict:
+def get_extracted_details(
+    subfolder: str,
+    dealer_id: int | None = Query(None, description="Dealer ID; uses app default if omitted"),
+) -> dict:
     """Return structured vehicle (and customer) details for a subfolder from JSON files.
     May include extraction_error when Aadhar QR failed; vehicle and insurance are still returned."""
-    service = OcrService()
+    did = dealer_id if dealer_id is not None else DEALER_ID
+    service = OcrService(
+        uploads_dir=get_uploads_dir(did),
+        ocr_output_dir=get_ocr_output_dir(did),
+    )
     details = service.get_extracted_details(subfolder)
     if details is None:
         raise HTTPException(status_code=404, detail="No extracted details for this subfolder")
@@ -36,19 +44,22 @@ def get_extracted_details(subfolder: str) -> dict:
 
 
 @router.get("/insurance-extraction")
-def get_insurance_extraction(subfolder: str) -> dict:
+def get_insurance_extraction(
+    subfolder: str,
+    dealer_id: int | None = Query(None, description="Dealer ID; uses app default if omitted"),
+) -> dict:
     """Debug: return what Textract extracted from Insurance.jpg (raw + parsed) and file status."""
     import re
     from pathlib import Path
 
-    from app.config import OCR_OUTPUT_DIR, UPLOADS_DIR
+    did = dealer_id if dealer_id is not None else DEALER_ID
+    ocr_dir = get_ocr_output_dir(did)
+    uploads_dir = get_uploads_dir(did)
 
     def _safe(s: str) -> str:
         return re.sub(r"[^\w\-]", "_", (s or "").strip()) or "default"
 
     safe = _safe(subfolder)
-    ocr_dir = Path(OCR_OUTPUT_DIR).resolve()
-    uploads_dir = Path(UPLOADS_DIR).resolve()
     subfolder_path = ocr_dir / safe
     upload_path = uploads_dir / subfolder
 
@@ -61,7 +72,7 @@ def get_insurance_extraction(subfolder: str) -> dict:
         "raw_ocr_txt": None,
     }
 
-    service = OcrService()
+    service = OcrService(uploads_dir=uploads_dir, ocr_output_dir=ocr_dir)
     details = service.get_extracted_details(subfolder)
     if details and details.get("insurance"):
         result["insurance_from_details"] = details["insurance"]
