@@ -123,6 +123,10 @@ def process_bulk_pdf(
         if not details:
             return {"ok": False, "subfolder": subfolder, "mobile": mobile, "error": "OCR extraction failed"}
 
+        name_mismatch = details.get("name_mismatch_error")
+        if name_mismatch:
+            return {"ok": False, "subfolder": subfolder, "mobile": mobile, "error": name_mismatch}
+
         customer = details.get("customer") or {}
         vehicle = details.get("vehicle") or {}
         insurance = details.get("insurance") or {}

@@ -85,6 +85,12 @@ _INSURANCE_KEY_ALIASES = {
     "nominee_relationship": ["nominee relationship", "nominee relationship:", "relationship", "relation"],
 }
 
+# Map Textract form keys to customer name on Details sheet.
+_DETAILS_CUSTOMER_NAME_ALIASES = [
+    "customer name", "customer name:", "name", "buyer name", "buyer's name",
+    "buyer name:", "name of customer", "customer",
+]
+
 # Map Textract form keys for insurance policy document (Insurance.jpg).
 _INSURANCE_POLICY_KEY_ALIASES = {
     "insurer": ["insurer", "insurance company", "company", "insurance provider", "name of insurer", "national insurance"],
@@ -98,6 +104,57 @@ _INSURANCE_POLICY_KEY_ALIASES = {
 def _normalize_key_for_match(key: str) -> str:
     """Lowercase and collapse spaces for key matching."""
     return re.sub(r"\s+", " ", (key or "").lower().strip())
+
+
+def _sanitize_nominee_age(val: str | None) -> str | None:
+    """Extract numeric part from nominee age (e.g. '30/m' -> '30'). Returns None if no digits."""
+    if not val or not str(val).strip():
+        return None
+    s = str(val).strip()
+    m = re.match(r"^(\d{1,3})", s)
+    return m.group(1) if m and 1 <= int(m.group(1)) <= 150 else None
+
+
+def _normalize_name_for_match(name: str | None) -> str:
+    """Normalize name for matching: lowercase, strip, collapse spaces."""
+    if not name or not str(name).strip():
+        return ""
+    return " ".join(str(name).lower().strip().split())
+
+
+def _names_match(name1: str | None, name2: str | None) -> bool:
+    """Return True if names likely refer to same person. Handles OCR variations (spacing, case)."""
+    n1 = _normalize_name_for_match(name1)
+    n2 = _normalize_name_for_match(name2)
+    if not n1 or not n2:
+        return True  # Can't compare if one missing; allow
+    if n1 == n2:
+        return True
+    # One name contains the other (e.g. "john doe" in "john doe kumar")
+    if n1 in n2 or n2 in n1:
+        return True
+    # Stricter: no first-word-only fallback; require substantial match
+    return False
+
+
+def _validate_name_match(aadhar_name: str | None, details_name: str | None, insurance_name: str | None) -> str | None:
+    """Return error message if names from Aadhar, Details and Insurance do not match. None if OK."""
+    names = [
+        ("Aadhar", aadhar_name),
+        ("Details sheet", details_name),
+        ("Insurance", insurance_name),
+    ]
+    present = [(label, n) for label, n in names if n and str(n).strip()]
+    if len(present) < 2:
+        return None  # Need at least 2 to compare
+    first_label, first_val = present[0]
+    for label, val in present[1:]:
+        if not _names_match(first_val, val):
+            return (
+                f"Name mismatch: '{first_label}' has a different name than '{label}'. "
+                "Ensure the name on Aadhar front, Details sheet and Insurance document match."
+            )
+    return None
 
 
 def _map_key_value_pairs_to_vehicle(pairs: list[dict]) -> dict[str, str]:
@@ -130,6 +187,32 @@ def _map_key_value_pairs_to_vehicle(pairs: list[dict]) -> dict[str, str]:
             out["model_colour"] = combined
 
     return out
+
+
+def _extract_details_customer_name(pairs: list[dict]) -> str | None:
+    """Extract customer name from Details sheet key-value pairs."""
+    key_lower_to_value: dict[str, str] = {}
+    for kv in pairs:
+        k = (kv.get("key") or "").strip()
+        v = (kv.get("value") or "").strip()
+        if not k or not v:
+            continue
+        key_norm = _normalize_key_for_match(k)
+        key_lower_to_value[key_norm] = v
+        if ":" in key_norm:
+            key_lower_to_value[key_norm.replace(":", "").strip()] = v
+    for alias in _DETAILS_CUSTOMER_NAME_ALIASES:
+        anorm = _normalize_key_for_match(alias)
+        if anorm in key_lower_to_value:
+            val = key_lower_to_value[anorm].strip()
+            if len(val) >= 2 and len(val) <= 80:
+                return val
+        for k, v in key_lower_to_value.items():
+            if anorm in k or k in anorm:
+                val = v.strip()
+                if len(val) >= 2 and len(val) <= 80:
+                    return val
+    return None
 
 
 def _map_key_value_pairs_to_insurance(pairs: list[dict]) -> dict[str, str]:
@@ -179,6 +262,9 @@ def _parse_insurance_from_full_text(full_text: str) -> dict[str, str]:
         ("nominee relationship", "nominee_relationship"),
         ("occupation", "profession"),
         ("relation", "nominee_relationship"),
+        ("customer name", "customer_name"),
+        ("buyer name", "customer_name"),
+        ("buyer's name", "customer_name"),
     ]
     for label, key in patterns:
         if key in out:
@@ -312,6 +398,27 @@ def _parse_insurance_policy_from_full_text(full_text: str) -> dict[str, str]:
             m = re.search(r"Premium\s+of\s+Rs\.?\s*:?\s*\n\s*([\d,]+\.?\d*)", text, re.IGNORECASE)
             if m:
                 out["premium"] = m.group(1).strip().replace(",", "")
+
+    # 5. Policy holder / insured name (multiple patterns for different document formats)
+    if "policy_holder_name" not in out:
+        for label in [
+            r"Name\s+of\s+(?:the\s+)?(?:insured|proposer|policy\s*holder)",
+            r"Policy\s+holder\s*:?",
+            r"Registered\s+Owner\s*:?",
+            r"Name\s+of\s+insured\s*:?",
+            r"Proposer['\u2019]?s?\s+name\s*:?",
+            r"Name\s+of\s+proposer\s*:?",
+            r"Insured\s+name\s*:?",
+            r"(?:Name|Proposer)\s*:?\s*\n",  # "Name:" or "Proposer:" on own line
+        ]:
+            m = re.search(rf"{label}\s*\n?\s*([A-Za-z][A-Za-z\s\.]{1,79})", text, re.IGNORECASE)
+            if m:
+                val = m.group(1).strip()
+                # Exclude values that look like insurer names or numbers
+                if len(val) >= 2 and len(val) <= 80 and not re.match(r"^\d+$", val):
+                    if "insurance" not in val.lower() and "company" not in val.lower() and "ltd" not in val.lower():
+                        out["policy_holder_name"] = val
+                        break
 
     return out
 
@@ -514,9 +621,14 @@ class OcrService:
 
             vehicle = _map_key_value_pairs_to_vehicle(key_value_pairs)
             insurance = _map_key_value_pairs_to_insurance(key_value_pairs)
+            details_customer_name = _extract_details_customer_name(key_value_pairs)
             if result.get("full_text"):
                 from_full = _parse_insurance_from_full_text(result["full_text"])
+                if from_full.get("customer_name") and not details_customer_name:
+                    details_customer_name = from_full["customer_name"]
                 for k, v in from_full.items():
+                    if k == "customer_name":
+                        continue  # Used for details_customer_name, not insurance
                     if v and not insurance.get(k):
                         insurance[k] = v
             json_path = _json_output_path(self.ocr_output_dir, subfolder)
@@ -540,6 +652,8 @@ class OcrService:
             # Preserve existing insurance fields (e.g. profession) and overlay nominee from Details sheet
             insurance_merged = {**existing_insurance, **{k: v for k, v in insurance.items() if v}}
             details_json = {"vehicle": vehicle, "customer": customer, "insurance": insurance_merged}
+            if details_customer_name:
+                details_json["details_customer_name"] = details_customer_name
             json_path.parent.mkdir(parents=True, exist_ok=True)
             json_path.write_text(json.dumps(details_json, indent=2), encoding="utf-8")
 
@@ -633,7 +747,7 @@ class OcrService:
 
             self._ensure_ocr_output_dir()
             json_path = _json_output_path(self.ocr_output_dir, subfolder)
-            data = {"vehicle": {}, "customer": {}}
+            data = {"vehicle": {}, "customer": {}, "insurance": {}}
             if json_path.exists():
                 try:
                     data = json.loads(json_path.read_text(encoding="utf-8"))
@@ -641,6 +755,8 @@ class OcrService:
                         data["vehicle"] = {}
                     if not isinstance(data.get("customer"), dict):
                         data["customer"] = {}
+                    if not isinstance(data.get("insurance"), dict):
+                        data["insurance"] = {}
                 except Exception:
                     pass
             data["customer"] = customer
@@ -807,6 +923,18 @@ class OcrService:
         customer = data.get("customer") or {}
         if customer.get("aadhar_id"):
             customer["aadhar_id"] = _aadhar_last4(customer["aadhar_id"]) or ""
+        # Sanitize nominee_age: extract digits only (e.g. "30/m" -> "30"); clear if invalid
+        ins = data.get("insurance") or {}
+        if ins.get("nominee_age"):
+            sanitized = _sanitize_nominee_age(str(ins["nominee_age"]))
+            ins["nominee_age"] = sanitized
+        # Name match validation: Aadhar, Details sheet, Insurance
+        aadhar_name = customer.get("name")
+        details_name = data.get("details_customer_name")
+        insurance_name = (data.get("insurance") or {}).get("policy_holder_name")
+        name_err = _validate_name_match(aadhar_name, details_name, insurance_name)
+        if name_err:
+            data["name_mismatch_error"] = name_err
         return data
 
     def list_extractions(self, limit: int = 200) -> list[dict]:
@@ -827,3 +955,22 @@ class OcrService:
             r["output_path"] = str(self.get_output_path(r["subfolder"], r["filename"]))
             result.append(r)
         return result
+
+
+def validate_name_match_for_subfolder(ocr_output_dir: Path, subfolder: str) -> str | None:
+    """
+    Load OCR JSON for subfolder and validate name match across Aadhar, Details, Insurance.
+    Returns error message if mismatch, None if OK.
+    """
+    json_path = _json_output_path(ocr_output_dir, subfolder)
+    if not json_path.exists():
+        return None
+    try:
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    customer = data.get("customer") or {}
+    aadhar_name = customer.get("name")
+    details_name = data.get("details_customer_name")
+    insurance_name = (data.get("insurance") or {}).get("policy_holder_name")
+    return _validate_name_match(aadhar_name, details_name, insurance_name)

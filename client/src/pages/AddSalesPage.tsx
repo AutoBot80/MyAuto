@@ -221,11 +221,9 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
       .then((details) => {
         if (cancelled) return;
         const extractionErr = (details as Record<string, unknown>)?.extraction_error;
-        if (typeof extractionErr === "string") {
-          setExtractionError(extractionErr);
-        } else {
-          setExtractionError(null);
-        }
+        const nameMismatchErr = (details as Record<string, unknown>)?.name_mismatch_error;
+        const err = typeof nameMismatchErr === "string" ? nameMismatchErr : typeof extractionErr === "string" ? extractionErr : null;
+        setExtractionError(err);
         const rawVehicle = details?.vehicle ?? details;
         const normalized = normalizeVehicleDetails(rawVehicle);
         if (normalized) setExtractedVehicle(normalized);
@@ -296,10 +294,10 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
       try {
         const details = await getExtractedDetails(savedTo);
         const extractionErr = (details as Record<string, unknown>)?.extraction_error;
-        if (typeof extractionErr === "string") {
-          setExtractionError(extractionErr);
-          if (intervalId) clearInterval(intervalId);
-        }
+        const nameMismatchErr = (details as Record<string, unknown>)?.name_mismatch_error;
+        const err = typeof nameMismatchErr === "string" ? nameMismatchErr : typeof extractionErr === "string" ? extractionErr : null;
+        setExtractionError(err);
+        if (err && intervalId) clearInterval(intervalId);
         const rawVehicle = details?.vehicle ?? details;
         const normalized = normalizeVehicleDetails(rawVehicle);
         if (normalized) setExtractedVehicle(normalized);
@@ -462,11 +460,22 @@ export function AddSalesPage({ dealerId, dmsUrl, openDmsInNewTab, openVahanInNew
     { label: "Nominee Age", value: ins?.nominee_age },
     { label: "Nominee Relationship", value: ins?.nominee_relationship },
   ];
+  const isValidNomineeAge = (val: string | undefined | null): boolean => {
+    if (val == null || String(val).trim() === "") return true;
+    const s = String(val).trim();
+    if (!/^\d+$/.test(s)) return false;
+    const n = parseInt(s, 10);
+    return n >= 1 && n <= 150;
+  };
+
   const getInsuranceValidationErrors = (): string[] => {
     const errors: string[] = [];
     insuranceValidationFields.forEach(({ label, value }) => {
       if (isBlank(value)) errors.push(`${label} is required`);
-      else if (hasDisallowedSpecialChars(value)) errors.push(`${label} must not contain special characters`);
+      else if (label === "Nominee Age") {
+        if (!isValidNomineeAge(value)) errors.push("Nominee Age must be a number (1–150)");
+        else if (hasDisallowedSpecialChars(value)) errors.push(`${label} must not contain special characters`);
+      } else if (hasDisallowedSpecialChars(value)) errors.push(`${label} must not contain special characters`);
     });
     return errors;
   };
@@ -783,7 +792,8 @@ className="app-button app-button--primary"
                       !c ||
                       !insuranceReadByTextract ||
                       !hasAllRequiredExtractedFields() ||
-                      hasVehicleOrInsuranceValidationErrors
+                      hasVehicleOrInsuranceValidationErrors ||
+                      !!extractionError
                     }
                     onClick={async () => {
                       if (!mobile || !c) return;
@@ -1104,9 +1114,18 @@ className="app-button app-button--primary"
                       <dd>
                         <input
                           className="add-sales-v2-dl-input"
+                          type="text"
+                          inputMode="numeric"
+                          pattern="[0-9]*"
                           value={ins?.nominee_age ?? ""}
-                          onChange={(e) => setExtractedInsurance((prev) => ({ ...(prev ?? {}), nominee_age: e.target.value }))}
-                          placeholder="—"
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            if (v === "" || /^\d{0,3}$/.test(v)) {
+                              setExtractedInsurance((prev) => ({ ...(prev ?? {}), nominee_age: v }));
+                            }
+                          }}
+                          placeholder="e.g. 30"
+                          title="Numbers only (1–150)"
                         />
                       </dd>
                     </div>

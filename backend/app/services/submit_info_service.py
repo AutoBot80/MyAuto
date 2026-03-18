@@ -6,6 +6,7 @@ insurance by (customer_id, vehicle_id, insurance_year).
 """
 
 from datetime import date, datetime
+from pathlib import Path
 from typing import Any
 
 from app.db import get_connection
@@ -67,6 +68,15 @@ def submit_info(
     if not aadhar_last4 or mobile is None:
         raise ValueError("Customer aadhar (last 4) and mobile_number are required")
 
+    loc = _str_or_none(file_location) or _str_or_none(customer.get("file_location"))
+    if loc:
+        from app.config import OCR_OUTPUT_DIR
+        from app.services.ocr_service import validate_name_match_for_subfolder
+
+        name_err = validate_name_match_for_subfolder(Path(OCR_OUTPUT_DIR).resolve(), loc)
+        if name_err:
+            raise ValueError(name_err)
+
     name = _str_or_none(customer.get("name")) or ""
     address = _str_or_none(customer.get("address"))
     pin = _str_or_none(customer.get("pin"), 6)
@@ -75,7 +85,6 @@ def submit_info(
     gender = _str_or_none(customer.get("gender"), 8)
     date_of_birth = _str_or_none(customer.get("date_of_birth"), 20)
     profession = _str_or_none(customer.get("profession"), 16)
-    loc = _str_or_none(file_location) or _str_or_none(customer.get("file_location"))
 
     frame_no = _str_or_none(vehicle.get("frame_no"), 64)
     engine_no = _str_or_none(vehicle.get("engine_no"), 64)
@@ -87,7 +96,12 @@ def submit_info(
     raw_k = key_no or None
 
     nominee_name = _str_or_none(insurance.get("nominee_name"))
-    nominee_age = _int_or_none(insurance.get("nominee_age"))
+    nominee_age_raw = insurance.get("nominee_age")
+    nominee_age = _int_or_none(nominee_age_raw)
+    if nominee_age_raw is not None and str(nominee_age_raw).strip() and nominee_age is None:
+        raise ValueError("Nominee Age must be a number (1–150)")
+    if nominee_age is not None and (nominee_age < 1 or nominee_age > 150):
+        raise ValueError("Nominee Age must be between 1 and 150")
     nominee_relationship = _str_or_none(insurance.get("nominee_relationship"), 64)
     insurer = _str_or_none(insurance.get("insurer"), 255)
     policy_num = _str_or_none(insurance.get("policy_num"), 24)
