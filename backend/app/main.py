@@ -33,11 +33,7 @@ from app.routers import (
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    from app.services.bulk_watcher_service import start_watcher
-    start_watcher()
     yield
-    from app.services.bulk_watcher_service import stop_watcher
-    stop_watcher()
 
 
 app = FastAPI(title="Auto Dealer Server", version="0.1.0", lifespan=lifespan)
