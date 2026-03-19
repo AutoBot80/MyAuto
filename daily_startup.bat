@@ -21,6 +21,9 @@ echo.
 echo === Starting Backend (uvicorn) in new window ===
 start "MyAuto Backend" cmd /k "cd /d "%ROOT%backend" && call ..\venv\Scripts\activate.bat && python -m uvicorn app.main:app --reload --reload-dir app --port 8000"
 
+echo === Starting Watcher in new window ===
+start "MyAuto Watcher" cmd /k "cd /d "%ROOT%backend" && call ..\venv\Scripts\activate.bat && python run_watcher.py && pause"
+
 timeout /t 2 /nobreak >nul
 
 echo === Starting Client (npm run dev) in new window ===
