@@ -8,14 +8,14 @@ Mobile Phone #: 9650693610
 State: RAJASTHAN
 Address Line 1: S/O: Anil Kumar Arya, 431, sector no.-3, bharatpur, Rajasthan, 321001
 Pin Code: 321001
-Key num (partial): 2510
+Key num (partial): 2509
 Frame / Chassis num (partial): 59324
 Engine num (partial): 50581
 
 --- Runtime values used by Playwright ---
-sales_id: 36
+sales_id: 1
 customer_id: 1
-vehicle_id: 2
+vehicle_id: 1
 dealer_id: 100001
 subfolder: 9650693610_190326
 dealer_name: Arya Agencies
@@ -25,7 +25,7 @@ source_mobile_number: 9650693610
 source_address: S/O: Anil Kumar Arya, 431, sector no.-3, bharatpur, Rajasthan, 321001
 source_state: RAJASTHAN
 source_pin_code: 321001
-source_key_no: 2510
+source_key_no: 2509
 source_frame_no: 59324
 source_engine_no: 50581
-generated_at: 19-03-2026 12:03:28
+generated_at: 19-03-2026 13:17:59

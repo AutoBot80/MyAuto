@@ -707,7 +707,7 @@ export function AddSalesPage({ dealerId, dmsUrl }: AddSalesPageProps) {
           rto_status: "Pending",
           subfolder: savedTo ?? undefined,
         });
-        setFillDmsStatus(`DMS completed and added to RTO Queue (${queueRes.queue_id}).`);
+        setFillDmsStatus("DMS completed and added to RTO Queue.");
       } catch (queueErr) {
         setFillDmsStatus(
           queueErr instanceof Error
@@ -1132,7 +1132,6 @@ className="app-button app-button--primary"
             <div className="add-sales-v2-box-title-row add-sales-v2-fill-forms-title-row">
               <div className="add-sales-v2-fill-forms-title-block">
                 <h2 className="add-sales-v2-box-title">3. Fill Forms &amp; Print File</h2>
-                <span className="add-sales-v2-fill-forms-note">(Please keep DMS open for this)</span>
               </div>
               <button
                 type="button"

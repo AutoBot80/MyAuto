@@ -47,7 +47,7 @@ The system is a server–client application for auto dealers. Dealers run a ligh
 | BR-9 | Automation source of truth | DMS and Vahan Playwright fills must read site field values from `form_dms_view` and `form_vahan_view` only. |
 | BR-10 | Automation trace output | DMS and Vahan automation must write `DMS_Form_Values.txt` and `Vahan_Form_Values.txt` into the matching `ocr_output/<dealer>/<subfolder>/` folder. |
 | BR-11 | Admin data reset preservation | Admin-triggered data reset must preserve `oem_ref`, `dealer_ref`, and `oem_service_schedule` while clearing all other public base tables. |
-| BR-12 | Open-site requirement for automation | DMS and Vahan automation must reuse already open, logged-in site tabs; automation must not launch new site sessions or perform login automatically. |
+| BR-12 | Operator-assisted browser session requirement | DMS and Vahan automation should first reuse already open, logged-in site tabs; when no detectable tab is available, the system should open Edge/Chrome for the operator and ask the operator to complete login (first-time) before retrying automation. |
 
 ---
 
@@ -77,7 +77,7 @@ The system is a server–client application for auto dealers. Dealers run a ligh
 - **FR-16** Persist all business data in PostgreSQL with clear ownership (e.g. dealer_id) for multi-tenant use.
 - **FR-17** Submit Info: upsert customer_master, vehicle_master, sales_master, insurance_master from extracted/entered data.
 - **FR-18** Fill DMS: Playwright login to OEM DMS, read fill values only from `form_dms_view`, search vehicle, scrape data, download Form 21/22, write `DMS_Form_Values.txt` into the matching `ocr_output` subfolder, and update vehicle_master from scraped data.
-- **FR-18a** Existing tab reuse: DMS/Vahan steps must run only against already open logged-in tabs; if no matching site tab is open, API returns a user-facing "site not open" error and stops that step.
+- **FR-18a** Existing tab reuse with operator fallback: DMS/Vahan steps first reuse already open logged-in tabs; if none are detectable, API opens Edge/Chrome to the target site and returns a user-facing message asking the operator to login (first-time) and retry.
 - **FR-19** Form 20: Generate Form 20.pdf from Word template (or PDF overlay / HTML fallback); fill placeholders from customer, vehicle, dealer; output combined PDF (front, back, page 3).
 - **FR-19a** Gate Pass: Generate Gate Pass.pdf from Word template; fill placeholders (OEM name, today date, customer name, Aadhar, model, colour, key no., chassis no.); save to upload subfolder.
 - **FR-20** RTO Queueing: after Fill Forms completes DMS/Form 20 work, create an `rto_queue` row with the dealer/customer/vehicle reference, estimated RTO fees, and queued status instead of auto-running the dummy Vahan site.
@@ -162,3 +162,4 @@ Bulk upload automates the ingestion of scanned documents from a shared folder in
 | 0.8 | Mar 2026 | — | Updated bulk upload behavior, queue model, operator rules, and automation trace outputs to match the current implementation |
 | 0.9 | Mar 2026 | — | Added Admin Saathi reset requirement and preserved-table rule |
 | 1.0 | Mar 2026 | — | Updated automation behavior to reuse already open DMS/Vahan tabs and fail with site-not-open errors when tabs are unavailable |
+| 1.1 | Mar 2026 | — | Added operator fallback: if no detectable DMS/Vahan tab exists, backend opens Edge/Chrome and prompts first-time login before retry |

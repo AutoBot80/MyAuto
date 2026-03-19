@@ -111,7 +111,7 @@ def process_rto_batch(payload: RtoBatchStartPayload) -> dict:
     did = payload.dealer_id if payload.dealer_id is not None else DEALER_ID
     vahan_url = _ensure_absolute_url((payload.vahan_base_url or VAHAN_BASE_URL or "").strip())
     if not vahan_url:
-        raise HTTPException(status_code=400, detail="vahan_base_url required")
+        raise HTTPException(status_code=400, detail="vahan_base_url required (set VAHAN_BASE_URL in backend/.env)")
     result = start_dealer_rto_batch(
         dealer_id=did,
         operator_id=(payload.operator_id or "").strip() or None,

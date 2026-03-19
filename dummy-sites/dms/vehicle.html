@@ -81,10 +81,14 @@
 
   <script>
     (function() {
+      var STORAGE_KEY = "dummy_dms_vehicle_v1";
       var searchBtn = document.getElementById('dms-vehicle-search');
       var resultsDiv = document.getElementById('dms-vehicle-results');
       var resultsBody = document.getElementById('dms-vehicle-results-body');
       var resultsEmpty = document.getElementById('dms-vehicle-results-empty');
+      var keyEl = document.getElementById('dms-vehicle-key');
+      var frameEl = document.getElementById('dms-vehicle-frame');
+      var engineEl = document.getElementById('dms-vehicle-engine');
 
       // Build key: 10-digit integer including the digits provided (pad left with zeros)
       function toKey10(val) {
@@ -98,9 +102,9 @@
       }
 
       function runSearch() {
-        var keyInput = (document.getElementById('dms-vehicle-key').value || '').trim();
-        var frameInput = (document.getElementById('dms-vehicle-frame').value || '').trim();
-        var engineInput = (document.getElementById('dms-vehicle-engine').value || '').trim();
+        var keyInput = ((keyEl && keyEl.value) || '').trim();
+        var frameInput = ((frameEl && frameEl.value) || '').trim();
+        var engineInput = ((engineEl && engineEl.value) || '').trim();
 
         resultsDiv.style.display = 'block';
         resultsBody.innerHTML = '';
@@ -140,9 +144,56 @@
         } else {
           resultsEmpty.style.display = 'block';
         }
+
+        try {
+          localStorage.setItem(
+            STORAGE_KEY,
+            JSON.stringify({
+              key: keyInput,
+              frame: frameInput,
+              engine: engineInput,
+              hadAny: Boolean(keyInput || frameInput || engineInput),
+            })
+          );
+        } catch (e) {
+          // ignore
+        }
       }
 
       if (searchBtn) searchBtn.addEventListener('click', runSearch);
+
+      // Restore last values and results so fields don't look "blank" after automation navigation.
+      try {
+        var raw = localStorage.getItem(STORAGE_KEY);
+        if (raw) {
+          var st = JSON.parse(raw);
+          if (keyEl && st.key != null) keyEl.value = st.key;
+          if (frameEl && st.frame != null) frameEl.value = st.frame;
+          if (engineEl && st.engine != null) engineEl.value = st.engine;
+          if (st.hadAny) runSearch();
+        }
+      } catch (e) {
+        // ignore
+      }
+
+      function persistInputs() {
+        try {
+          localStorage.setItem(
+            STORAGE_KEY,
+            JSON.stringify({
+              key: ((keyEl && keyEl.value) || '').trim(),
+              frame: ((frameEl && frameEl.value) || '').trim(),
+              engine: ((engineEl && engineEl.value) || '').trim(),
+              hadAny: true,
+            })
+          );
+        } catch (e) {
+          // ignore
+        }
+      }
+      if (keyEl) keyEl.addEventListener("input", persistInputs);
+      if (frameEl) frameEl.addEventListener("input", persistInputs);
+      if (engineEl) engineEl.addEventListener("input", persistInputs);
     })();
   </script>
 </body>

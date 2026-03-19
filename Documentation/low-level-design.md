@@ -78,12 +78,12 @@ backend/app/
 | PATCH | `/bulk-loads/{bulk_load_id}/mark-success` | Mark a manually completed error as success. |
 | GET | `/bulk-loads/folder/{folder_path}/list` | List files in a bulk result folder. |
 | GET | `/bulk-loads/file/{file_path}` | Download or preview a file from a bulk result folder. |
-| POST | `/fill-dms` | Full Fill DMS flow; reuses already open logged-in DMS/Vahan tabs and returns explicit site-not-open errors when tabs are unavailable. |
-| POST | `/fill-dms/dms` | DMS only; requires an already open logged-in DMS tab. |
+| POST | `/fill-dms` | Full Fill DMS flow; reuses already open logged-in DMS/Vahan tabs when detectable, otherwise auto-opens Edge/Chrome and returns first-time-login guidance. |
+| POST | `/fill-dms/dms` | DMS only; reuses an already open logged-in DMS tab when detectable, otherwise auto-opens Edge/Chrome and asks operator to login first-time then retry. |
 | GET | `/fill-dms/data-from-dms` | Get data from DMS.txt. |
 | GET | `/fill-dms/form20-status` | Form 20 template status. |
 | POST | `/fill-dms/print-form20` | Generate Form 20.pdf. |
-| POST | `/fill-dms/vahan` | Vahan (RTO) only; requires an already open logged-in Vahan tab. |
+| POST | `/fill-dms/vahan` | Vahan (RTO) only; reuses an already open logged-in Vahan tab when detectable, otherwise auto-opens Edge/Chrome and asks operator to login first-time then retry. |
 | GET | `/rto-queue` | List RTO queue rows. |
 | GET | `/rto-queue/by-sale` | Get RTO queue row by sale (customer_id, vehicle_id). |
 | POST | `/rto-queue` | Create or update the queued RTO row for a sale. |
@@ -119,13 +119,13 @@ backend/app/
 
 - **Static site:** `dummy-sites/vaahan/` simulates the real VAHAN navigation used by Playwright tests.
 - **Pages:** landing/start (`index.html`) → owner/details entry (`application.html`) → assigned office/worklist (`search.html`) → payment gateway (`payment.html`) → bank login (`bank-login.html`) → bank confirmation (`bank-confirm.html`).
-- **Automation contract:** `fill_dms_service.py` reads DMS field values only from `form_dms_view`, writes `ocr_output/<dealer>/<subfolder>/DMS_Form_Values.txt`, and updates `vehicle_master` with the DMS scrape (including `vehicle_price`). DMS/Vahan automation reuses already open logged-in tabs and does not open new site sessions for these flows. If a matching site tab is unavailable, the API returns a site-not-open error and stops that step. The Add Sales page now stops there for user-triggered Fill Forms, then inserts an `rto_queue` row for later RTO handling.
+- **Automation contract:** `fill_dms_service.py` reads DMS field values only from `form_dms_view`, writes `ocr_output/<dealer>/<subfolder>/DMS_Form_Values.txt`, and updates `vehicle_master` with the DMS scrape (including `vehicle_price`). DMS/Vahan automation first attempts to reuse already open logged-in tabs; if no matching detectable tab is available, backend auto-opens Edge/Chrome to the target site and returns an operator message to login first-time and retry. The Add Sales page stops on that message and avoids downstream processing, then resumes normally on retry.
 
 ### 2.4b Dummy DMS Flow
 
 - **Static site:** `dummy-sites/dms/` simulates the OEM DMS journey used by Playwright tests.
 - **Pages:** login (`index.html`) → enquiry (`enquiry.html`) → vehicle search/results (`vehicle.html`) → reports/downloads (`reports.html`).
-- **Automation contract:** `fill_dms_service.py` requires `customer_id` and `vehicle_id`, loads DMS field values from `form_dms_view`, fills only those view-backed values into an already open logged-in DMS tab, scrapes the first vehicle result row, persists the scrape into `vehicle_master`, and writes `Data from DMS.txt` plus `DMS_Form_Values.txt` into the matching `ocr_output` subfolder.
+- **Automation contract:** `fill_dms_service.py` requires `customer_id` and `vehicle_id`, loads DMS field values from `form_dms_view`, fills only those view-backed values into a detectable logged-in DMS tab (or prompts first-time login after auto-opening browser when tab is unavailable), scrapes the first vehicle result row, persists the scrape into `vehicle_master`, and writes `Data from DMS.txt` plus `DMS_Form_Values.txt` into the matching `ocr_output` subfolder.
 
 ### 2.5 Database Access
 
@@ -199,3 +199,4 @@ See **Documentation/Database DDL.md** for full table structures. Summary:
 | 0.4 | Mar 2026 | — | Updated for `form_dms_view` / `form_vahan_view`, `ocr_output` automation traces, View Customer Vahan row, and current DMS/Vahan behavior |
 | 0.5 | Mar 2026 | — | Added Admin Saathi landing-tile reset action and `/admin/reset-all-data` endpoint |
 | 0.6 | Mar 2026 | — | Updated automation behavior to reuse already open logged-in DMS/Vahan tabs and return site-not-open errors when tabs are missing |
+| 0.7 | Mar 2026 | — | Added fallback automation behavior to auto-open Edge/Chrome when tabs are not detectable and prompt first-time operator login + retry |

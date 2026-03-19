@@ -62,8 +62,13 @@ def _candidate_cdp_urls() -> list[str]:
     explicit = (os.getenv("PLAYWRIGHT_CDP_URL") or "").strip()
     if explicit:
         urls.append(explicit)
-    # Default Edge remote-debugging endpoint.
+    explicit_many = (os.getenv("PLAYWRIGHT_CDP_URLS") or "").strip()
+    if explicit_many:
+        urls.extend([u.strip() for u in explicit_many.split(",") if u.strip()])
+    # Common local CDP endpoints used by operators.
+    # Edge/Chrome can both run on any port, but these defaults are typical.
     urls.append("http://127.0.0.1:9222")
+    urls.append("http://127.0.0.1:9223")
     # Keep order and uniqueness stable.
     seen: set[str] = set()
     unique_urls: list[str] = []
@@ -92,6 +97,46 @@ def _refresh_cdp_browsers() -> None:
         except Exception:
             # Endpoint may not be available; retry on next call.
             continue
+
+
+def _launch_managed_browser_for_site(base_url: str):
+    """Launch Edge/Chrome for operators when no debuggable session is currently available."""
+    pw = _get_playwright()
+    channels = ["msedge", "chrome"]
+    headless = not bool(DMS_PLAYWRIGHT_HEADED)
+    for channel in channels:
+        try:
+            browser = pw.chromium.launch(channel=channel, headless=headless)
+            _KEEP_OPEN_BROWSERS.append(browser)
+            context = browser.new_context()
+            page = context.new_page()
+            page.goto(base_url, wait_until="domcontentloaded", timeout=20000)
+            logger.info("fill_dms_service: launched managed %s browser for %s", channel, base_url)
+            return page, channel
+        except Exception as exc:
+            logger.warning("fill_dms_service: failed to launch %s browser: %s", channel, exc)
+            continue
+    return None, None
+
+
+def _get_or_open_site_page(base_url: str, site_label: str):
+    """
+    Try finding an already-open site tab.
+    If not found, open a managed browser tab for operator login and return a guidance error.
+    """
+    page = _find_open_site_page(base_url)
+    if page is not None:
+        return page, None
+
+    opened_page, channel = _launch_managed_browser_for_site(base_url)
+    if opened_page is not None:
+        return None, f"{site_label} Opened. Please login. And then press button again"
+
+    return None, (
+        f"{site_label} site not open. Please open {site_label} site and keep it logged in. "
+        "Start Edge or Chrome with a remote debugging port (for example 9222), or allow the app "
+        "to auto-open one and retry."
+    )
 
 
 def _find_open_site_page(base_url: str):
@@ -636,9 +681,9 @@ def run_fill_vahan_batch_row(
 ) -> dict:
     """Batch-safe Vahan helper that reuses one browser/context and stops after cart upload."""
     del context  # Existing open tab mode does not create/reuse server-owned contexts.
-    page = _find_open_site_page(vahan_base_url)
+    page, open_error = _get_or_open_site_page(vahan_base_url, "Vahan")
     if page is None:
-        raise ValueError("Vahan site not open. Please open Vahan site and keep it logged in.")
+        raise ValueError(open_error or "Vahan site not open. Please open Vahan site and keep it logged in.")
     vahan_values = _build_vahan_fill_values(customer_id, vehicle_id, subfolder)
     app_id, fees = _fill_vahan_and_scrape(
         page,
@@ -790,12 +835,9 @@ def run_fill_dms_only(
 
     try:
         logger.info("fill_dms_service: run_fill_dms_only starting dms=%s", dms_base_url[:50])
-        page = _find_open_site_page(dms_base_url)
+        page, open_error = _get_or_open_site_page(dms_base_url, "DMS")
         if page is None:
-            result["error"] = (
-                "DMS site not open. Please open DMS site and keep it logged in. "
-                "If using Edge, start it with --remote-debugging-port=9222."
-            )
+            result["error"] = open_error
             return result
 
         base = dms_base_url.rstrip("/")
@@ -929,12 +971,9 @@ def run_fill_vahan_only(
         return result
     try:
         logger.info("fill_dms_service: run_fill_vahan_only starting")
-        page = _find_open_site_page(vahan_base_url)
+        page, open_error = _get_or_open_site_page(vahan_base_url, "Vahan")
         if page is None:
-            result["error"] = (
-                "Vahan site not open. Please open Vahan site and keep it logged in. "
-                "If using Edge, start it with --remote-debugging-port=9222."
-            )
+            result["error"] = open_error
             return result
         vahan_values = _build_vahan_fill_values(customer_id, vehicle_id, subfolder)
         app_id, fees = _fill_vahan_and_scrape(

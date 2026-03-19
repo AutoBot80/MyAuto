@@ -220,6 +220,90 @@
   </div>
 
   <script>
+    (function() {
+      var STORAGE_KEY = "dummy_dms_enquiry_v1";
+      var form = document.getElementById("dms-enquiry-form");
+      if (!form) return;
+
+      function safeGet(id) { return document.getElementById(id); }
+      var fieldIds = [
+        "dms-enquiry-type",
+        "dms-enquiry-num",
+        "dms-lead-id",
+        "dms-mr-ms",
+        "dms-contact-first-name",
+        "dms-contact-last-name",
+        "dms-mobile-phone",
+        "dms-landline",
+        "dms-email",
+        "dms-uin-type",
+        "dms-uin-no",
+        "dms-booking-type",
+        "dms-state",
+        "dms-district",
+        "dms-tensil",
+        "dms-city",
+        "dms-address-line-1",
+        "dms-address-line-2",
+        "dms-pin-code",
+        "dms-age-years",
+        "dms-gender",
+        "dms-occupation",
+        "dms-customer-budget",
+        "dms-model-interested",
+        "dms-principal-model",
+        "dms-variant",
+        "dms-color",
+        "dms-quantity",
+        "dms-financier-name",
+        "dms-financer",
+        "dms-finance-status",
+        "dms-exchange-required",
+        "dms-finance-required",
+        "dms-enquiry-entry-date",
+        "dms-expected-date-of-purchase",
+        "dms-doe-name",
+        "dms-order-num",
+        "dms-enquiry-status",
+        "dms-comments",
+      ];
+
+      function loadState() {
+        try {
+          var raw = localStorage.getItem(STORAGE_KEY);
+          if (!raw) return;
+          var state = JSON.parse(raw);
+          fieldIds.forEach(function(id) {
+            var el = safeGet(id);
+            if (!el) return;
+            if (state[id] == null) return;
+            el.value = state[id];
+          });
+        } catch (e) {
+          // ignore
+        }
+      }
+
+      function saveState() {
+        var state = {};
+        fieldIds.forEach(function(id) {
+          var el = safeGet(id);
+          if (!el) return;
+          state[id] = el.value;
+        });
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+        } catch (e) {
+          // ignore
+        }
+      }
+
+      loadState();
+      form.addEventListener("input", saveState);
+      form.addEventListener("change", saveState);
+      window.addEventListener("beforeunload", saveState);
+    })();
+
     document.getElementById('dms-enquiry-form')?.addEventListener('submit', function(e) {
       e.preventDefault();
       alert('Dummy DMS: Form submit (no backend). Use for Playwright fill/submit tests.');

@@ -118,7 +118,6 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
             ? "Processing oldest 7..."
             : "Fill Vahan Site"}
         </button>
-        <span className="rto-batch-toolbar-note">(Please keep Vahan site open for this)</span>
         </div>
       </div>
       {batchStatus && batchStatus.state !== "idle" && (
