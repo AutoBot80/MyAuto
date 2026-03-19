@@ -107,17 +107,19 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
     <div className="rto-payments-page">
       {error && <p className="rto-payments-error">{error}</p>}
       <div className="rto-batch-toolbar">
+        <div className="rto-batch-toolbar-actions">
         <button
           type="button"
-          className="button"
+          className="app-button app-button--primary"
           onClick={handleStartBatch}
           disabled={startingBatch || batchStatus?.state === "running" || batchStatus?.state === "starting"}
         >
           {startingBatch || batchStatus?.state === "running" || batchStatus?.state === "starting"
             ? "Processing oldest 7..."
-            : "Process oldest 7"}
+            : "Fill RTO Site"}
         </button>
-        <span className="rto-batch-toolbar-note">Only one browser session runs per dealer at a time.</span>
+        <span className="rto-batch-toolbar-note">(Please keep Vahan site open for this)</span>
+        </div>
       </div>
       {batchStatus && batchStatus.state !== "idle" && (
         <section className="rto-batch-status-card">

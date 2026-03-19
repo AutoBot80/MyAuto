@@ -50,7 +50,7 @@
 | **PostgreSQL** | Persistent store for dealers, vehicles, customers, sales, insurance, RTO payments, service reminders. |
 | **Queue (local or SQS)** | Decouple bulk job creation from execution; current bulk processing uses SQS or a local in-process fallback queue. |
 | **OCR Worker** | Runs OCR/pre-OCR, writes extracted artifacts to `ocr_output`, and supports bulk processing. |
-| **Playwright Worker** | Reads DB-backed form views, drives browser automation for DMS and Vahan, and writes form trace artifacts. |
+| **Playwright Worker** | Reads DB-backed form views, reuses already open DMS/Vahan tabs for automation, and writes form trace artifacts. |
 | **File Storage (local, optional S3 later)** | Uploaded scans, generated PDFs, and OCR/form-value artifacts. |
 
 ---
@@ -105,7 +105,7 @@ My Auto.AI/
 | `services/bulk_queue_service` | Bulk queue abstraction with SQS or local in-process fallback. |
 | `services/bulk_watcher_service` | Starts ingest and worker loops inside the API process. |
 | `services/form20_service` | Form 20 generation (Word/PDF/HTML). |
-| `services/fill_dms_service` | Playwright DMS and Vahan automation; reads fill values from `form_dms_view` / `form_vahan_view` only and writes `DMS_Form_Values.txt` and `Vahan_Form_Values.txt` in the matching `ocr_output` subfolder after each automation step. |
+| `services/fill_dms_service` | Playwright DMS and Vahan automation; reads fill values from `form_dms_view` / `form_vahan_view` only, reuses open logged-in site tabs (no new login/session launch), writes `DMS_Form_Values.txt` and `Vahan_Form_Values.txt`, and returns explicit site-not-open errors when tabs are unavailable. |
 | `services/submit_info_service` | Submit Info business logic. |
 | `services/rto_payment_service` | Dealer-scoped RTO batch runner, progress state, advisory locking, scrape-back persistence into `rto_queue` / `vehicle_master`, and downstream payment updates. |
 | `repositories/*` | Data access for ai_reader_queue, bulk_loads, dealer_ref, form_dms_view, form_vahan_view, rto_queue, rc_status_sms_queue. |
@@ -131,10 +131,10 @@ My Auto.AI/
 1. User uploads scans → `uploads/scans` → ai_reader_queue.
 2. OCR processes queue → extracted text stored.
 3. User reviews/corrects → Submit Info → customer_master, vehicle_master, sales_master, insurance_master.
-4. Fill DMS → Playwright loads DMS field values from `form_dms_view`, fills the DMS flow, scrapes vehicle data, stores DMS artifacts in `ocr_output`, and updates `vehicle_master`.
+4. Fill DMS → Playwright loads DMS field values from `form_dms_view`, reuses an already open DMS tab to fill and scrape vehicle data, stores DMS artifacts in `ocr_output`, and updates `vehicle_master`.
 5. Print Form 20 → `form20_service` fills the Word template, converts to PDF, and saves Form 20.pdf / Gate Pass.pdf in the upload subfolder.
 6. RTO queue insertion → Fill Forms stores Form 20 outputs, estimates the RTO fees, and inserts an `rto_queue` row instead of auto-running the dummy Vahan flow.
-7. RTO Queue → operators review queued rows in `RTO Saathi`, process the oldest 7 rows in one dealer-scoped browser session, and wait for live progress up to the upload/cart checkpoint.
+7. RTO Queue → operators review queued rows in `RTO Saathi`, process the oldest 7 rows by reusing already open Vahan tabs, and wait for live progress up to the upload/cart checkpoint.
 
 ### 4.2 Service Reminders Flow
 
@@ -183,3 +183,4 @@ My Auto.AI/
 | 0.3 | Mar 2026 | — | Added bulk upload router/services/pages, queue/deployment notes, and hot-table retention behavior |
 | 0.4 | Mar 2026 | — | Updated for view-driven DMS/Vahan automation, `ocr_output` trace artifacts, and current queue/storage behavior |
 | 0.5 | Mar 2026 | — | Added Admin Saathi home tile and backend reset capability for clearing non-reference-table data |
+| 0.6 | Mar 2026 | — | Updated Playwright behavior to reuse already open DMS/Vahan tabs and return site-not-open errors when tabs are missing |

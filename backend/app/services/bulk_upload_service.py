@@ -211,7 +211,7 @@ def process_bulk_pdf(
             uploads_dir=Path(get_uploads_dir(dealer_id)),
             ocr_output_dir=Path(get_ocr_output_dir(dealer_id)),
             vahan_base_url=None,
-            headless=True,
+            headless=False,
         )
         if dms_result.get("vehicle") and vehicle_id:
             from app.services.fill_dms_service import update_vehicle_master_from_dms

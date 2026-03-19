@@ -78,12 +78,12 @@ backend/app/
 | PATCH | `/bulk-loads/{bulk_load_id}/mark-success` | Mark a manually completed error as success. |
 | GET | `/bulk-loads/folder/{folder_path}/list` | List files in a bulk result folder. |
 | GET | `/bulk-loads/file/{file_path}` | Download or preview a file from a bulk result folder. |
-| POST | `/fill-dms` | Full Fill DMS flow (legacy DMS + Vahan helper path). |
-| POST | `/fill-dms/dms` | DMS only. |
+| POST | `/fill-dms` | Full Fill DMS flow; reuses already open logged-in DMS/Vahan tabs and returns explicit site-not-open errors when tabs are unavailable. |
+| POST | `/fill-dms/dms` | DMS only; requires an already open logged-in DMS tab. |
 | GET | `/fill-dms/data-from-dms` | Get data from DMS.txt. |
 | GET | `/fill-dms/form20-status` | Form 20 template status. |
 | POST | `/fill-dms/print-form20` | Generate Form 20.pdf. |
-| POST | `/fill-dms/vahan` | Vahan (RTO) only. |
+| POST | `/fill-dms/vahan` | Vahan (RTO) only; requires an already open logged-in Vahan tab. |
 | GET | `/rto-queue` | List RTO queue rows. |
 | GET | `/rto-queue/by-sale` | Get RTO queue row by sale (customer_id, vehicle_id). |
 | POST | `/rto-queue` | Create or update the queued RTO row for a sale. |
@@ -119,13 +119,13 @@ backend/app/
 
 - **Static site:** `dummy-sites/vaahan/` simulates the real VAHAN navigation used by Playwright tests.
 - **Pages:** landing/start (`index.html`) → owner/details entry (`application.html`) → assigned office/worklist (`search.html`) → payment gateway (`payment.html`) → bank login (`bank-login.html`) → bank confirmation (`bank-confirm.html`).
-- **Automation contract:** `fill_dms_service.py` reads DMS field values only from `form_dms_view`, writes `ocr_output/<dealer>/<subfolder>/DMS_Form_Values.txt`, and updates `vehicle_master` with the DMS scrape (including `vehicle_price`). The Add Sales page now stops there for user-triggered Fill Forms, then inserts an `rto_queue` row for later RTO handling instead of auto-running the dummy Vahan site. `rto_payment_service.py` can then claim the oldest 7 queued rows for one dealer, reuse one Playwright browser/context, drive the dummy Vahan flow only up to the files-uploaded / added-to-cart checkpoint before any payment, and persist the scraped Vahan application id / RTO charges back into both `rto_queue` and `sales_master`.
+- **Automation contract:** `fill_dms_service.py` reads DMS field values only from `form_dms_view`, writes `ocr_output/<dealer>/<subfolder>/DMS_Form_Values.txt`, and updates `vehicle_master` with the DMS scrape (including `vehicle_price`). DMS/Vahan automation reuses already open logged-in tabs and does not open new site sessions for these flows. If a matching site tab is unavailable, the API returns a site-not-open error and stops that step. The Add Sales page now stops there for user-triggered Fill Forms, then inserts an `rto_queue` row for later RTO handling.
 
 ### 2.4b Dummy DMS Flow
 
 - **Static site:** `dummy-sites/dms/` simulates the OEM DMS journey used by Playwright tests.
 - **Pages:** login (`index.html`) → enquiry (`enquiry.html`) → vehicle search/results (`vehicle.html`) → reports/downloads (`reports.html`).
-- **Automation contract:** `fill_dms_service.py` requires `customer_id` and `vehicle_id`, loads DMS field values from `form_dms_view`, fills only those view-backed values into the page, scrapes the first vehicle result row, persists the scrape into `vehicle_master`, and writes `Data from DMS.txt` plus `DMS_Form_Values.txt` into the matching `ocr_output` subfolder.
+- **Automation contract:** `fill_dms_service.py` requires `customer_id` and `vehicle_id`, loads DMS field values from `form_dms_view`, fills only those view-backed values into an already open logged-in DMS tab, scrapes the first vehicle result row, persists the scrape into `vehicle_master`, and writes `Data from DMS.txt` plus `DMS_Form_Values.txt` into the matching `ocr_output` subfolder.
 
 ### 2.5 Database Access
 
@@ -198,3 +198,4 @@ See **Documentation/Database DDL.md** for full table structures. Summary:
 | 0.3 | Mar 2026 | — | Added bulk loads page/API details, backend bulk modules, and hot-table bulk worker behavior |
 | 0.4 | Mar 2026 | — | Updated for `form_dms_view` / `form_vahan_view`, `ocr_output` automation traces, View Customer Vahan row, and current DMS/Vahan behavior |
 | 0.5 | Mar 2026 | — | Added Admin Saathi landing-tile reset action and `/admin/reset-all-data` endpoint |
+| 0.6 | Mar 2026 | — | Updated automation behavior to reuse already open logged-in DMS/Vahan tabs and return site-not-open errors when tabs are missing |

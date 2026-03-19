@@ -21,6 +21,18 @@ from app.services.fill_dms_service import run_fill_dms, run_fill_dms_only, run_f
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/fill-dms", tags=["fill-dms"])
 
+DMS_NO_VEHICLE_ERROR = (
+    "No such vehicle found in DMS. Please edit Vehicle Info and submit form again."
+)
+
+
+def _has_scraped_vehicle(scraped: dict) -> bool:
+    """True when DMS scrape returned at least one key vehicle identifier."""
+    key_num = str(scraped.get("key_num") or "").strip()
+    frame_num = str(scraped.get("frame_num") or "").strip()
+    engine_num = str(scraped.get("engine_num") or "").strip()
+    return bool(key_num or frame_num or engine_num)
+
 
 class FillDmsCustomer(BaseModel):
     name: str | None = None
@@ -191,9 +203,9 @@ async def fill_dms_only(req: FillDmsRequest) -> FillDmsResponse:
         ),
     )
     scraped = result.get("vehicle") or {}
-    has_vehicle = bool(scraped.get("key_num") or scraped.get("frame_num") or scraped.get("engine_num"))
+    has_vehicle = _has_scraped_vehicle(scraped)
     if result.get("error") is None and not has_vehicle:
-        result["error"] = "No vehicle data was returned from DMS search. Check key/frame/engine values."
+        result["error"] = DMS_NO_VEHICLE_ERROR
     if req.vehicle_id and has_vehicle:
         try:
             _update_vehicle_master_from_dms(req.vehicle_id, scraped)
@@ -366,7 +378,7 @@ async def fill_dms(req: FillDmsRequest) -> FillDmsResponse:
         ),
     )
     scraped = result.get("vehicle") or {}
-    has_vehicle = bool(scraped.get("key_num") or scraped.get("frame_num") or scraped.get("engine_num"))
+    has_vehicle = _has_scraped_vehicle(scraped)
     logger.info(
         "fill_dms: run_fill_dms done success=%s vehicle=%s application_id=%s rto_fees=%s error=%s",
         result.get("error") is None,
@@ -375,6 +387,9 @@ async def fill_dms(req: FillDmsRequest) -> FillDmsResponse:
         result.get("rto_fees"),
         result.get("error"),
     )
+    if result.get("error") is None and not has_vehicle:
+        result["error"] = DMS_NO_VEHICLE_ERROR
+
     if req.vehicle_id and has_vehicle:
         try:
             _update_vehicle_master_from_dms(req.vehicle_id, scraped)

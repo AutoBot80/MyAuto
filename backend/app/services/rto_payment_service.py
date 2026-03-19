@@ -195,10 +195,8 @@ def _run_dealer_rto_batch(
             return
 
         ocr_output_dir = get_ocr_output_dir(dealer_id)
-        with sync_playwright() as p:
-            browser = p.chromium.launch(channel="msedge", headless=not DMS_PLAYWRIGHT_HEADED)
-            context = browser.new_context()
-            for index, row in enumerate(claimed_rows, start=1):
+        context = None
+        for index, row in enumerate(claimed_rows, start=1):
                 current_queue_id = row.get("application_id")
                 current_sales_id = int(row["sales_id"])
                 _write_batch_status(
@@ -289,7 +287,6 @@ def _run_dealer_rto_batch(
                         raise
                     current_queue_id = None
                     current_sales_id = None
-            browser.close()
         final_status = _read_batch_status(dealer_id) or {}
         _write_batch_status(
             dealer_id,

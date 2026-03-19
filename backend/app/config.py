@@ -105,6 +105,9 @@ DMS_LOGIN_USER = os.getenv("DMS_LOGIN_USER", "demo")
 DMS_LOGIN_PASSWORD = os.getenv("DMS_LOGIN_PASSWORD", "demo")
 # Run browser visible (headed) so user sees DMS page and automation. Set to "false" for headless.
 DMS_PLAYWRIGHT_HEADED = os.getenv("DMS_PLAYWRIGHT_HEADED", "true").lower() in ("1", "true", "yes")
+# When true, do not auto-close Playwright browser after automation.
+# Useful for operator inspection/debugging (server keeps the session alive).
+PLAYWRIGHT_KEEP_OPEN = os.getenv("PLAYWRIGHT_KEEP_OPEN", "false").lower() in ("1", "true", "yes")
 
 # Vahan (dummy or real) base URL for Playwright RTO registration step after DMS. e.g. http://127.0.0.1:8000/dummy-vaahan
 VAHAN_BASE_URL = os.getenv("VAHAN_BASE_URL", "").rstrip("/")

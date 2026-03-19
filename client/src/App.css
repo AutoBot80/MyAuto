@@ -881,10 +881,18 @@
 
 .rto-batch-toolbar {
   display: flex;
-  align-items: center;
+  justify-content: flex-end;
+  align-items: flex-start;
   gap: 12px;
   flex-wrap: wrap;
   margin-bottom: 12px;
+}
+
+.rto-batch-toolbar-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
 }
 
 .rto-batch-toolbar-note {

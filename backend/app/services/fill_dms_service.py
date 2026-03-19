@@ -8,16 +8,62 @@ Writes pulled data to ocr_output/subfolder/Data from DMS.txt for consistency wit
 import logging
 import re
 import urllib.parse
+import atexit
 from datetime import datetime
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 
-from app.config import DMS_PLAYWRIGHT_HEADED, OCR_OUTPUT_DIR
+from app.config import DMS_PLAYWRIGHT_HEADED, OCR_OUTPUT_DIR, PLAYWRIGHT_KEEP_OPEN
 from app.repositories import form_dms as form_dms_repo
 from app.repositories import form_vahan as form_vahan_repo
 
 logger = logging.getLogger(__name__)
+
+_PW = None
+_KEEP_OPEN_BROWSERS: list = []
+
+
+def _get_playwright():
+    """Persistent Playwright instance (only used when keep-open is enabled)."""
+    global _PW
+    if _PW is None:
+        _PW = sync_playwright().start()
+    return _PW
+
+
+@atexit.register
+def _cleanup_keep_open_browsers() -> None:
+    global _PW
+    for b in list(_KEEP_OPEN_BROWSERS):
+        try:
+            b.close()
+        except Exception:
+            pass
+    _KEEP_OPEN_BROWSERS.clear()
+    if _PW is not None:
+        try:
+            _PW.stop()
+        except Exception:
+            pass
+        _PW = None
+
+
+def _find_open_site_page(base_url: str):
+    """Find an already-open tab for the given site base URL."""
+    target = (base_url or "").rstrip("/")
+    if not target:
+        return None
+    for browser in list(_KEEP_OPEN_BROWSERS):
+        try:
+            for context in browser.contexts:
+                for page in context.pages:
+                    url = (page.url or "").rstrip("/")
+                    if url.startswith(target) or target in url:
+                        return page
+        except Exception:
+            continue
+    return None
 
 
 def _fill_vahan_and_scrape(
@@ -542,15 +588,47 @@ def run_fill_vahan_batch_row(
     ocr_output_dir: Path | None,
 ) -> dict:
     """Batch-safe Vahan helper that reuses one browser/context and stops after cart upload."""
-    return _run_vahan_in_context(
-        context,
-        vahan_base_url,
-        customer_id=customer_id,
-        vehicle_id=vehicle_id,
-        subfolder=subfolder,
-        ocr_output_dir=ocr_output_dir,
-        complete_upload_step=True,
+    del context  # Existing open tab mode does not create/reuse server-owned contexts.
+    page = _find_open_site_page(vahan_base_url)
+    if page is None:
+        raise ValueError("Vahan site not open. Please open Vahan site and keep it logged in.")
+    vahan_values = _build_vahan_fill_values(customer_id, vehicle_id, subfolder)
+    app_id, fees = _fill_vahan_and_scrape(
+        page,
+        vahan_base_url=vahan_base_url.strip(),
+        rto_dealer_id=vahan_values["rto_dealer_id"],
+        customer_name=vahan_values["customer_name"],
+        chassis_no=vahan_values["chassis_no"],
+        vehicle_model=vahan_values["vehicle_model"],
+        vehicle_colour=vahan_values["vehicle_colour"],
+        fuel_type=vahan_values["fuel_type"],
+        year_of_mfg=vahan_values["year_of_mfg"],
+        vehicle_price=vahan_values["vehicle_price"],
     )
+    added_to_cart = _complete_vahan_upload_step(page)
+    if ocr_output_dir is not None and (vahan_values.get("subfolder") or subfolder):
+        _write_vahan_form_values(
+            ocr_output_dir=ocr_output_dir,
+            subfolder=vahan_values.get("subfolder") or subfolder,
+            customer_id=customer_id,
+            vehicle_id=vehicle_id,
+            rto_dealer_id=vahan_values["rto_dealer_id"],
+            customer_name=vahan_values["customer_name"],
+            chassis_no=vahan_values["chassis_no"],
+            vehicle_model=vahan_values["vehicle_model"],
+            vehicle_colour=vahan_values["vehicle_colour"],
+            fuel_type=vahan_values["fuel_type"],
+            year_of_mfg=vahan_values["year_of_mfg"],
+            vehicle_price=vahan_values["vehicle_price"],
+            application_id=app_id,
+            rto_fees=fees,
+        )
+    return {
+        "application_id": app_id,
+        "rto_fees": fees,
+        "added_to_cart": added_to_cart,
+        "subfolder": vahan_values.get("subfolder") or subfolder,
+    }
 
 
 def update_vehicle_master_from_dms(vehicle_id: int, scraped: dict) -> None:
@@ -665,137 +743,103 @@ def run_fill_dms_only(
 
     try:
         logger.info("fill_dms_service: run_fill_dms_only starting dms=%s", dms_base_url[:50])
-        with sync_playwright() as p:
-            # Use chromium (faster launch than msedge); headless=False shows browser for user
-            browser = p.chromium.launch(headless=not DMS_PLAYWRIGHT_HEADED)
-            context = browser.new_context(accept_downloads=True)
-            page = context.new_page()
-            page.set_default_timeout(12_000)
+        page = _find_open_site_page(dms_base_url)
+        if page is None:
+            result["error"] = "DMS site not open. Please open DMS site and keep it logged in."
+            return result
 
-            def accept_dialog(dialog):
-                dialog.accept()
+        base = dms_base_url.rstrip("/")
+        page.set_default_timeout(12_000)
+        page.goto(f"{base}/enquiry.html", wait_until="domcontentloaded", timeout=20000)
 
-            page.on("dialog", accept_dialog)
-            base = dms_base_url.rstrip("/")
+        mobile_phone = dms_values["mobile_phone"]
+        addr = dms_values["address_line_1"]
+        state = dms_values["state"]
+        pin = dms_values["pin_code"]
+        key_partial = dms_values["key_partial"]
+        frame_partial = dms_values["frame_partial"]
+        engine_partial = dms_values["engine_partial"]
 
-            page.goto(f"{base}/", wait_until="domcontentloaded", timeout=20000)
-            page.fill("#dms-username", login_user)
-            page.fill("#dms-password", login_password)
-            page.click("#dms-login-btn")
-            page.wait_for_url("**/enquiry.html**", timeout=15000)
+        page.fill("#dms-contact-first-name", dms_values["first_name"])
+        page.fill("#dms-contact-last-name", dms_values["last_name"])
+        page.fill("#dms-mobile-phone", mobile_phone)
+        if addr:
+            page.fill("#dms-address-line-1", addr)
+        if state:
+            try:
+                page.select_option("#dms-state", label=state)
+            except Exception:
+                pass
+        if pin:
+            page.fill("#dms-pin-code", pin)
+        page.click("#dms-submit-enquiry")
+        page.wait_for_timeout(10)
 
-            page.fill("#dms-contact-first-name", dms_values["first_name"])
-            page.fill("#dms-contact-last-name", dms_values["last_name"])
-            mobile_phone = dms_values["mobile_phone"]
-            page.fill("#dms-mobile-phone", mobile_phone)
-            addr = dms_values["address_line_1"]
-            if addr:
-                page.fill("#dms-address-line-1", addr)
-            state = dms_values["state"]
-            if state:
-                try:
-                    page.select_option("#dms-state", label=state)
-                except Exception:
-                    pass
-            pin = dms_values["pin_code"]
-            if pin:
-                page.fill("#dms-pin-code", pin)
-            page.click("#dms-submit-enquiry")
-            page.wait_for_timeout(10)
+        page.goto(f"{base}/vehicle.html", wait_until="domcontentloaded", timeout=15000)
+        _write_dms_form_values(
+            ocr_output_dir=ocr_dir,
+            subfolder=effective_subfolder,
+            customer_id=customer_id,
+            vehicle_id=vehicle_id,
+            customer_name=dms_values["customer_name"],
+            mobile_number=mobile_phone,
+            address=addr,
+            state=state,
+            pin_code=pin,
+            key_no=key_partial,
+            frame_no=frame_partial,
+            engine_no=engine_partial,
+        )
+        page.fill("#dms-vehicle-key", key_partial)
+        page.fill("#dms-vehicle-frame", frame_partial)
+        page.fill("#dms-vehicle-engine", engine_partial)
+        page.click("#dms-vehicle-search")
+        page.wait_for_timeout(10)
 
-            page.goto(f"{base}/vehicle.html", wait_until="domcontentloaded", timeout=15000)
-            key_partial = dms_values["key_partial"]
-            frame_partial = dms_values["frame_partial"]
-            engine_partial = dms_values["engine_partial"]
-            _write_dms_form_values(
-                ocr_output_dir=ocr_dir,
-                subfolder=effective_subfolder,
-                customer_id=customer_id,
-                vehicle_id=vehicle_id,
-                customer_name=dms_values["customer_name"],
-                mobile_number=mobile_phone,
-                address=addr,
-                state=state,
-                pin_code=pin,
-                key_no=key_partial,
-                frame_no=frame_partial,
-                engine_no=engine_partial,
-            )
-            page.fill("#dms-vehicle-key", key_partial)
-            page.fill("#dms-vehicle-frame", frame_partial)
-            page.fill("#dms-vehicle-engine", engine_partial)
-            page.click("#dms-vehicle-search")
-            page.wait_for_timeout(10)
+        page.wait_for_selector("#dms-vehicle-results:visible", timeout=8000)
+        row = page.locator("#dms-vehicle-results-table tbody tr").first
+        if row.count() > 0:
+            cells = row.locator("td")
+            n = cells.count()
+            if n >= 13:
+                result["vehicle"] = {
+                    "key_num": cells.nth(0).inner_text().strip(),
+                    "frame_num": cells.nth(1).inner_text().strip(),
+                    "engine_num": cells.nth(2).inner_text().strip(),
+                    "model": cells.nth(3).inner_text().strip(),
+                    "color": cells.nth(4).inner_text().strip(),
+                    "cubic_capacity": cells.nth(5).inner_text().strip(),
+                    "seating_capacity": cells.nth(6).inner_text().strip(),
+                    "body_type": cells.nth(7).inner_text().strip(),
+                    "vehicle_type": cells.nth(8).inner_text().strip(),
+                    "num_cylinders": cells.nth(9).inner_text().strip(),
+                    "horse_power": cells.nth(10).inner_text().strip(),
+                    "vehicle_price": cells.nth(11).inner_text().strip(),
+                    "year_of_mfg": cells.nth(12).inner_text().strip(),
+                }
+        logger.info("fill_dms_service: run_fill_dms_only scraped vehicle=%s", result.get("vehicle"))
+        if vehicle_id and result.get("vehicle"):
+            try:
+                update_vehicle_master_from_dms(vehicle_id, result.get("vehicle") or {})
+            except Exception as exc:
+                logger.warning("fill_dms_service: vehicle_master update failed vehicle_id=%s: %s", vehicle_id, exc)
 
-            page.wait_for_selector("#dms-vehicle-results:visible", timeout=8000)
-            row = page.locator("#dms-vehicle-results-table tbody tr").first
-            if row.count() > 0:
-                cells = row.locator("td")
-                n = cells.count()
-                if n >= 13:
-                    result["vehicle"] = {
-                        "key_num": cells.nth(0).inner_text().strip(),
-                        "frame_num": cells.nth(1).inner_text().strip(),
-                        "engine_num": cells.nth(2).inner_text().strip(),
-                        "model": cells.nth(3).inner_text().strip(),
-                        "color": cells.nth(4).inner_text().strip(),
-                        "cubic_capacity": cells.nth(5).inner_text().strip(),
-                        "seating_capacity": cells.nth(6).inner_text().strip(),
-                        "body_type": cells.nth(7).inner_text().strip(),
-                        "vehicle_type": cells.nth(8).inner_text().strip(),
-                        "num_cylinders": cells.nth(9).inner_text().strip(),
-                        "horse_power": cells.nth(10).inner_text().strip(),
-                        "vehicle_price": cells.nth(11).inner_text().strip(),
-                        "year_of_mfg": cells.nth(12).inner_text().strip(),
-                    }
-                elif n >= 9:
-                    result["vehicle"] = {
-                        "key_num": cells.nth(0).inner_text().strip(),
-                        "frame_num": cells.nth(1).inner_text().strip(),
-                        "engine_num": cells.nth(2).inner_text().strip(),
-                        "model": cells.nth(3).inner_text().strip(),
-                        "color": cells.nth(4).inner_text().strip(),
-                        "cubic_capacity": cells.nth(5).inner_text().strip(),
-                        "seating_capacity": cells.nth(6).inner_text().strip(),
-                        "vehicle_price": cells.nth(7).inner_text().strip(),
-                        "year_of_mfg": cells.nth(8).inner_text().strip(),
-                    }
-                elif n >= 8:
-                    result["vehicle"] = {
-                        "key_num": cells.nth(0).inner_text().strip(),
-                        "frame_num": cells.nth(1).inner_text().strip(),
-                        "engine_num": cells.nth(2).inner_text().strip(),
-                        "model": cells.nth(3).inner_text().strip(),
-                        "color": cells.nth(4).inner_text().strip(),
-                        "cubic_capacity": cells.nth(5).inner_text().strip(),
-                        "vehicle_price": cells.nth(6).inner_text().strip(),
-                        "year_of_mfg": cells.nth(7).inner_text().strip(),
-                    }
-            logger.info("fill_dms_service: run_fill_dms_only scraped vehicle=%s", result.get("vehicle"))
-            if vehicle_id and result.get("vehicle"):
-                try:
-                    update_vehicle_master_from_dms(vehicle_id, result.get("vehicle") or {})
-                except Exception as exc:
-                    logger.warning("fill_dms_service: vehicle_master update failed vehicle_id=%s: %s", vehicle_id, exc)
-
-            page.goto(f"{base}/reports.html", wait_until="domcontentloaded", timeout=15000)
-            path21 = subfolder_path / "form21.pdf"
-            path22 = subfolder_path / "form22.pdf"
-            path_invoice = subfolder_path / "invoice_details.pdf"
-            for url_suffix, path, name in [
-                ("form21.pdf", path21, "form21.pdf"),
-                ("form22.pdf", path22, "form22.pdf"),
-                ("invoice_details.pdf", path_invoice, "invoice_details.pdf"),
-            ]:
-                try:
-                    r = page.request.get(f"{base}/downloads/{url_suffix}", timeout=15000)
-                    if r.ok:
-                        path.write_bytes(r.body())
-                        result["pdfs_saved"].append(name)
-                except Exception:
-                    pass
-
-            browser.close()
+        page.goto(f"{base}/reports.html", wait_until="domcontentloaded", timeout=15000)
+        path21 = subfolder_path / "form21.pdf"
+        path22 = subfolder_path / "form22.pdf"
+        path_invoice = subfolder_path / "invoice_details.pdf"
+        for url_suffix, path, name in [
+            ("form21.pdf", path21, "form21.pdf"),
+            ("form22.pdf", path22, "form22.pdf"),
+            ("invoice_details.pdf", path_invoice, "invoice_details.pdf"),
+        ]:
+            try:
+                r = page.request.get(f"{base}/downloads/{url_suffix}", timeout=15000)
+                if r.ok:
+                    path.write_bytes(r.body())
+                    result["pdfs_saved"].append(name)
+            except Exception:
+                pass
     except PlaywrightTimeout as e:
         result["error"] = f"Timeout: {e!s}"
         logger.warning("fill_dms_service: run_fill_dms_only PlaywrightTimeout %s", e)
@@ -835,25 +879,48 @@ def run_fill_vahan_only(
         return result
     try:
         logger.info("fill_dms_service: run_fill_vahan_only starting")
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=not DMS_PLAYWRIGHT_HEADED)
-            context = browser.new_context()
-            batch_result = _run_vahan_in_context(
-                context,
-                vahan_base_url=vahan_base_url.strip(),
+        page = _find_open_site_page(vahan_base_url)
+        if page is None:
+            result["error"] = "Vahan site not open. Please open Vahan site and keep it logged in."
+            return result
+        vahan_values = _build_vahan_fill_values(customer_id, vehicle_id, subfolder)
+        app_id, fees = _fill_vahan_and_scrape(
+            page,
+            vahan_base_url=vahan_base_url.strip(),
+            rto_dealer_id=vahan_values["rto_dealer_id"],
+            customer_name=vahan_values["customer_name"],
+            chassis_no=vahan_values["chassis_no"],
+            vehicle_model=vahan_values["vehicle_model"],
+            vehicle_colour=vahan_values["vehicle_colour"],
+            fuel_type=vahan_values["fuel_type"],
+            year_of_mfg=vahan_values["year_of_mfg"],
+            vehicle_price=vahan_values["vehicle_price"],
+        )
+        result.update(
+            {
+                "application_id": app_id,
+                "rto_fees": fees,
+                "added_to_cart": False,
+                "subfolder": vahan_values.get("subfolder") or subfolder,
+            }
+        )
+        if ocr_output_dir is not None and (vahan_values.get("subfolder") or subfolder):
+            _write_vahan_form_values(
+                ocr_output_dir=ocr_output_dir,
+                subfolder=vahan_values.get("subfolder") or subfolder,
                 customer_id=customer_id,
                 vehicle_id=vehicle_id,
-                subfolder=subfolder,
-                ocr_output_dir=ocr_output_dir,
-                complete_upload_step=False,
+                rto_dealer_id=vahan_values["rto_dealer_id"],
+                customer_name=vahan_values["customer_name"],
+                chassis_no=vahan_values["chassis_no"],
+                vehicle_model=vahan_values["vehicle_model"],
+                vehicle_colour=vahan_values["vehicle_colour"],
+                fuel_type=vahan_values["fuel_type"],
+                year_of_mfg=vahan_values["year_of_mfg"],
+                vehicle_price=vahan_values["vehicle_price"],
+                application_id=app_id,
+                rto_fees=fees,
             )
-            result.update(batch_result)
-            logger.info(
-                "fill_dms_service: run_fill_vahan_only done application_id=%s rto_fees=%s",
-                batch_result.get("application_id"),
-                batch_result.get("rto_fees"),
-            )
-            browser.close()
     except PlaywrightTimeout as e:
         result["error"] = f"Timeout: {e!s}"
         logger.warning("fill_dms_service: run_fill_vahan_only PlaywrightTimeout %s", e)
@@ -885,230 +952,63 @@ def run_fill_dms(
     Writes pulled data to ocr_output_dir/subfolder/Data from DMS.txt (same subfolder as other OCR outputs).
     Returns dict with vehicle details (key_num, frame_num, ...), optional application_id, rto_fees, and any error.
     """
-    result: dict = {
-        "vehicle": {},
-        "pdfs_saved": [],
+    result = run_fill_dms_only(
+        dms_base_url=dms_base_url,
+        subfolder=subfolder,
+        customer=customer,
+        vehicle=vehicle,
+        login_user=login_user,
+        login_password=login_password,
+        uploads_dir=uploads_dir,
+        ocr_output_dir=ocr_output_dir,
+        customer_id=customer_id,
+        vehicle_id=vehicle_id,
+    )
+    if result.get("error"):
+        return {
+            "vehicle": result.get("vehicle") or {},
+            "pdfs_saved": result.get("pdfs_saved") or [],
+            "application_id": None,
+            "rto_fees": None,
+            "error": result.get("error"),
+        }
+
+    if vahan_base_url and vahan_base_url.strip():
+        vahan_result = run_fill_vahan_only(
+            vahan_base_url=vahan_base_url.strip(),
+            rto_dealer_id=rto_dealer_id or "",
+            customer_name=str((customer or {}).get("name") or ""),
+            chassis_no=str((result.get("vehicle") or {}).get("frame_num") or (vehicle or {}).get("frame_no") or ""),
+            vehicle_model=str((result.get("vehicle") or {}).get("model") or ""),
+            vehicle_colour=str((result.get("vehicle") or {}).get("color") or ""),
+            fuel_type=str((result.get("vehicle") or {}).get("fuel_type") or "Petrol"),
+            year_of_mfg=str((result.get("vehicle") or {}).get("year_of_mfg") or ""),
+            vehicle_price=_parse_vehicle_price(result.get("vehicle") or {}),
+            ocr_output_dir=ocr_output_dir,
+            subfolder=subfolder,
+            customer_id=customer_id,
+            vehicle_id=vehicle_id,
+        )
+        if vahan_result.get("error"):
+            return {
+                "vehicle": result.get("vehicle") or {},
+                "pdfs_saved": result.get("pdfs_saved") or [],
+                "application_id": None,
+                "rto_fees": None,
+                "error": vahan_result.get("error"),
+            }
+        return {
+            "vehicle": result.get("vehicle") or {},
+            "pdfs_saved": result.get("pdfs_saved") or [],
+            "application_id": vahan_result.get("application_id"),
+            "rto_fees": vahan_result.get("rto_fees"),
+            "error": None,
+        }
+
+    return {
+        "vehicle": result.get("vehicle") or {},
+        "pdfs_saved": result.get("pdfs_saved") or [],
         "application_id": None,
         "rto_fees": None,
         "error": None,
     }
-    if not dms_base_url:
-        result["error"] = "DMS_BASE_URL not set"
-        return result
-    ocr_dir = Path(ocr_output_dir or OCR_OUTPUT_DIR).resolve()
-    try:
-        dms_values = _build_dms_fill_values(customer_id, vehicle_id, subfolder)
-    except Exception as e:
-        result["error"] = str(e)
-        return result
-    effective_subfolder = dms_values.get("subfolder") or subfolder
-    subfolder_path = uploads_dir / effective_subfolder
-    subfolder_path.mkdir(parents=True, exist_ok=True)
-
-    headed = not headless if headless is not None else DMS_PLAYWRIGHT_HEADED
-    try:
-        logger.info("fill_dms_service: starting Playwright dms=%s vahan=%s headless=%s", dms_base_url[:50], bool(vahan_base_url), not headed)
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=not headed)
-            context = browser.new_context(accept_downloads=True)
-            page = context.new_page()
-            # Shorter default timeout so actions fail fast instead of feeling slow
-            page.set_default_timeout(12_000)
-
-            def accept_dialog(dialog):
-                dialog.accept()
-
-            page.on("dialog", accept_dialog)
-            base = dms_base_url.rstrip("/")
-
-            # 1) Login
-            logger.info("fill_dms_service: step 1 login goto %s/", base)
-            page.goto(f"{base}/", wait_until="domcontentloaded", timeout=20000)
-            page.fill("#dms-username", login_user)
-            page.fill("#dms-password", login_password)
-            page.click("#dms-login-btn")
-            page.wait_for_url("**/enquiry.html**", timeout=15000)
-
-            # 2) Enquiry: fill customer and submit (only essential fields to speed up)
-            page.fill("#dms-contact-first-name", dms_values["first_name"])
-            page.fill("#dms-contact-last-name", dms_values["last_name"])
-            mobile_phone = dms_values["mobile_phone"]
-            page.fill("#dms-mobile-phone", mobile_phone)
-            addr = dms_values["address_line_1"]
-            if addr:
-                page.fill("#dms-address-line-1", addr)
-            state = dms_values["state"]
-            if state:
-                try:
-                    page.select_option("#dms-state", label=state)
-                except Exception:
-                    pass
-            pin = dms_values["pin_code"]
-            if pin:
-                page.fill("#dms-pin-code", pin)
-            page.click("#dms-submit-enquiry")
-            # Brief wait for dialog accept and page settle before navigating
-            page.wait_for_timeout(10)
-
-            # 3) Vehicle page: fill search keys and search
-            page.goto(f"{base}/vehicle.html", wait_until="domcontentloaded", timeout=15000)
-            key_partial = dms_values["key_partial"]
-            frame_partial = dms_values["frame_partial"]
-            engine_partial = dms_values["engine_partial"]
-            _write_dms_form_values(
-                ocr_output_dir=ocr_dir,
-                subfolder=effective_subfolder,
-                customer_id=customer_id,
-                vehicle_id=vehicle_id,
-                customer_name=dms_values["customer_name"],
-                mobile_number=mobile_phone,
-                address=addr,
-                state=state,
-                pin_code=pin,
-                key_no=key_partial,
-                frame_no=frame_partial,
-                engine_no=engine_partial,
-            )
-            page.fill("#dms-vehicle-key", key_partial)
-            page.fill("#dms-vehicle-frame", frame_partial)
-            page.fill("#dms-vehicle-engine", engine_partial)
-            page.click("#dms-vehicle-search")
-            page.wait_for_timeout(10)
-
-            # 4) Scrape first result row (13 cols: key, frame, engine, model, color, cubic_capacity, seating_capacity, body_type, vehicle_type, num_cylinders, horse_power, vehicle_price, year_of_mfg)
-            logger.info("fill_dms_service: step 4 scrape vehicle results")
-            page.wait_for_selector("#dms-vehicle-results:visible", timeout=8000)
-            row = page.locator("#dms-vehicle-results-table tbody tr").first
-            if row.count() > 0:
-                cells = row.locator("td")
-                n = cells.count()
-                if n >= 13:
-                    result["vehicle"] = {
-                        "key_num": cells.nth(0).inner_text().strip(),
-                        "frame_num": cells.nth(1).inner_text().strip(),
-                        "engine_num": cells.nth(2).inner_text().strip(),
-                        "model": cells.nth(3).inner_text().strip(),
-                        "color": cells.nth(4).inner_text().strip(),
-                        "cubic_capacity": cells.nth(5).inner_text().strip(),
-                        "seating_capacity": cells.nth(6).inner_text().strip(),
-                        "body_type": cells.nth(7).inner_text().strip(),
-                        "vehicle_type": cells.nth(8).inner_text().strip(),
-                        "num_cylinders": cells.nth(9).inner_text().strip(),
-                        "horse_power": cells.nth(10).inner_text().strip(),
-                        "vehicle_price": cells.nth(11).inner_text().strip(),
-                        "year_of_mfg": cells.nth(12).inner_text().strip(),
-                    }
-                elif n >= 9:
-                    result["vehicle"] = {
-                        "key_num": cells.nth(0).inner_text().strip(),
-                        "frame_num": cells.nth(1).inner_text().strip(),
-                        "engine_num": cells.nth(2).inner_text().strip(),
-                        "model": cells.nth(3).inner_text().strip(),
-                        "color": cells.nth(4).inner_text().strip(),
-                        "cubic_capacity": cells.nth(5).inner_text().strip(),
-                        "seating_capacity": cells.nth(6).inner_text().strip(),
-                        "vehicle_price": cells.nth(7).inner_text().strip(),
-                        "year_of_mfg": cells.nth(8).inner_text().strip(),
-                    }
-                elif n >= 8:
-                    result["vehicle"] = {
-                        "key_num": cells.nth(0).inner_text().strip(),
-                        "frame_num": cells.nth(1).inner_text().strip(),
-                        "engine_num": cells.nth(2).inner_text().strip(),
-                        "model": cells.nth(3).inner_text().strip(),
-                        "color": cells.nth(4).inner_text().strip(),
-                        "cubic_capacity": cells.nth(5).inner_text().strip(),
-                        "vehicle_price": cells.nth(6).inner_text().strip(),
-                        "year_of_mfg": cells.nth(7).inner_text().strip(),
-                    }
-            logger.info("fill_dms_service: scraped vehicle=%s", result.get("vehicle"))
-            if vehicle_id and result.get("vehicle"):
-                try:
-                    update_vehicle_master_from_dms(vehicle_id, result.get("vehicle") or {})
-                except Exception as exc:
-                    logger.warning("fill_dms_service: vehicle_master early update failed vehicle_id=%s: %s", vehicle_id, exc)
-
-            # 5) Reports: fetch Form 21, Form 22, and Invoice Details PDFs by URL (avoids download event / target="_blank" issues)
-            page.goto(f"{base}/reports.html", wait_until="domcontentloaded", timeout=15000)
-            path21 = subfolder_path / "form21.pdf"
-            path22 = subfolder_path / "form22.pdf"
-            path_invoice = subfolder_path / "invoice_details.pdf"
-            try:
-                r21 = page.request.get(f"{base}/downloads/form21.pdf", timeout=15000)
-                if r21.ok:
-                    path21.write_bytes(r21.body())
-                    result["pdfs_saved"].append("form21.pdf")
-            except Exception:
-                pass
-            try:
-                r22 = page.request.get(f"{base}/downloads/form22.pdf", timeout=15000)
-                if r22.ok:
-                    path22.write_bytes(r22.body())
-                    result["pdfs_saved"].append("form22.pdf")
-            except Exception:
-                pass
-            try:
-                r_inv = page.request.get(f"{base}/downloads/invoice_details.pdf", timeout=15000)
-                if r_inv.ok:
-                    path_invoice.write_bytes(r_inv.body())
-                    result["pdfs_saved"].append("invoice_details.pdf")
-            except Exception:
-                pass
-
-            # 6) Optional: fill dummy Vahan registration and scrape application_id + rto_fees
-            logger.info("fill_dms_service: step 6 vahan vahan_base_url=%s", bool(vahan_base_url and vahan_base_url.strip()))
-            if vahan_base_url and vahan_base_url.strip():
-                try:
-                    vahan_page = context.new_page()
-                    vahan_page.set_default_timeout(15_000)
-                    vahan_values = _build_vahan_fill_values(customer_id, vehicle_id, effective_subfolder)
-                    app_id, fees = _fill_vahan_and_scrape(
-                        vahan_page,
-                        vahan_base_url=vahan_base_url.strip(),
-                        rto_dealer_id=vahan_values["rto_dealer_id"],
-                        customer_name=vahan_values["customer_name"],
-                        chassis_no=vahan_values["chassis_no"],
-                        vehicle_model=vahan_values["vehicle_model"],
-                        vehicle_colour=vahan_values["vehicle_colour"],
-                        fuel_type=vahan_values["fuel_type"],
-                        year_of_mfg=vahan_values["year_of_mfg"],
-                        vehicle_price=vahan_values["vehicle_price"],
-                    )
-                    result["application_id"] = app_id
-                    result["rto_fees"] = fees
-                    _write_vahan_form_values(
-                        ocr_output_dir=ocr_dir,
-                        subfolder=effective_subfolder,
-                        customer_id=customer_id,
-                        vehicle_id=vehicle_id,
-                        rto_dealer_id=vahan_values["rto_dealer_id"],
-                        customer_name=vahan_values["customer_name"],
-                        chassis_no=vahan_values["chassis_no"],
-                        vehicle_model=vahan_values["vehicle_model"],
-                        vehicle_colour=vahan_values["vehicle_colour"],
-                        fuel_type=vahan_values["fuel_type"],
-                        year_of_mfg=vahan_values["year_of_mfg"],
-                        vehicle_price=vahan_values["vehicle_price"],
-                        application_id=app_id,
-                        rto_fees=fees,
-                    )
-                    logger.info("fill_dms_service: vahan done application_id=%s rto_fees=%s", app_id, fees)
-                    vahan_page.close()
-                except Exception as e:
-                    result["error"] = (result.get("error") or "") + f"; Vahan: {e!s}"
-                    logger.warning("fill_dms_service: vahan error: %s", e)
-
-            browser.close()
-    except PlaywrightTimeout as e:
-        result["error"] = f"Timeout: {e!s}"
-        logger.warning("fill_dms_service: PlaywrightTimeout %s", e)
-    except Exception as e:
-        result["error"] = str(e)
-        logger.warning("fill_dms_service: exception %s", e)
-
-    # Always write Data from DMS to ocr_output/mobile_ddmmyy/Data from DMS.txt
-    try:
-        _write_data_from_dms(ocr_dir, effective_subfolder, dms_values.get("customer_export") or {}, result.get("vehicle") or {})
-    except Exception as e:
-        result["error"] = (result.get("error") or "") + f"; DMS file write: {e!s}"
-    return result

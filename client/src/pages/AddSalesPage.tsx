@@ -1140,7 +1140,7 @@ className="app-button app-button--primary"
             <div className="add-sales-v2-box-body">
               <div className="add-sales-v2-fill-forms-subsection">
                 <div className="add-sales-v2-subsection-head">
-                  <h3 className="add-sales-v2-subsection-title">A. DMS</h3>
+                  <h3 className="add-sales-v2-subsection-title">A. DMS (Please keep DMS open for this)</h3>
                   {isFillDmsLoading && <span className="add-sales-v2-processing">Processing</span>}
                 </div>
                 {fillDmsStatus && (
