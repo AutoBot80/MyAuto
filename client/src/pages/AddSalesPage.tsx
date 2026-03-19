@@ -615,6 +615,10 @@ export function AddSalesPage({ dealerId, dmsUrl }: AddSalesPageProps) {
       setIsFillDmsLoading(false);
     }
 
+    if (!dmsRes?.success) {
+      return;
+    }
+
     // 2) Form 20 and Gate Pass – create and store at end of Fill Forms (even if user never clicks Create & print file)
     const scrapedForForm20 = dmsRes?.vehicle;
     let vehicleDataForForm20: Record<string, unknown> = {};
@@ -1126,7 +1130,10 @@ className="app-button app-button--primary"
 
           <section className={`add-sales-v2-box add-sales-v2-box-fill-forms ${!savedTo || !hasSubmittedInfo ? "add-sales-v2-box--greyed" : ""}`}>
             <div className="add-sales-v2-box-title-row add-sales-v2-fill-forms-title-row">
-              <h2 className="add-sales-v2-box-title">3. Fill Forms &amp; Print File</h2>
+              <div className="add-sales-v2-fill-forms-title-block">
+                <h2 className="add-sales-v2-box-title">3. Fill Forms &amp; Print File</h2>
+                <span className="add-sales-v2-fill-forms-note">(Please keep DMS open for this)</span>
+              </div>
               <button
                 type="button"
                 className="app-button app-button--primary"
@@ -1140,7 +1147,7 @@ className="app-button app-button--primary"
             <div className="add-sales-v2-box-body">
               <div className="add-sales-v2-fill-forms-subsection">
                 <div className="add-sales-v2-subsection-head">
-                  <h3 className="add-sales-v2-subsection-title">A. DMS (Please keep DMS open for this)</h3>
+                  <h3 className="add-sales-v2-subsection-title">A. DMS</h3>
                   {isFillDmsLoading && <span className="add-sales-v2-processing">Processing</span>}
                 </div>
                 {fillDmsStatus && (

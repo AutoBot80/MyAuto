@@ -6,6 +6,7 @@ Uses headed browser by default (set DMS_PLAYWRIGHT_HEADED=false for headless).
 Writes pulled data to ocr_output/subfolder/Data from DMS.txt for consistency with other OCR outputs.
 """
 import logging
+import os
 import re
 import urllib.parse
 import atexit
@@ -22,6 +23,7 @@ logger = logging.getLogger(__name__)
 
 _PW = None
 _KEEP_OPEN_BROWSERS: list = []
+_CDP_BROWSERS_BY_URL: dict[str, object] = {}
 
 
 def _get_playwright():
@@ -41,6 +43,12 @@ def _cleanup_keep_open_browsers() -> None:
         except Exception:
             pass
     _KEEP_OPEN_BROWSERS.clear()
+    for browser in list(_CDP_BROWSERS_BY_URL.values()):
+        try:
+            browser.close()
+        except Exception:
+            pass
+    _CDP_BROWSERS_BY_URL.clear()
     if _PW is not None:
         try:
             _PW.stop()
@@ -49,12 +57,51 @@ def _cleanup_keep_open_browsers() -> None:
         _PW = None
 
 
+def _candidate_cdp_urls() -> list[str]:
+    urls: list[str] = []
+    explicit = (os.getenv("PLAYWRIGHT_CDP_URL") or "").strip()
+    if explicit:
+        urls.append(explicit)
+    # Default Edge remote-debugging endpoint.
+    urls.append("http://127.0.0.1:9222")
+    # Keep order and uniqueness stable.
+    seen: set[str] = set()
+    unique_urls: list[str] = []
+    for u in urls:
+        if u and u not in seen:
+            seen.add(u)
+            unique_urls.append(u)
+    return unique_urls
+
+
+def _refresh_cdp_browsers() -> None:
+    """Connect to CDP endpoints (if available) so we can inspect existing Edge tabs."""
+    pw = _get_playwright()
+    for cdp_url in _candidate_cdp_urls():
+        existing = _CDP_BROWSERS_BY_URL.get(cdp_url)
+        if existing is not None:
+            try:
+                _ = existing.contexts
+                continue
+            except Exception:
+                _CDP_BROWSERS_BY_URL.pop(cdp_url, None)
+        try:
+            browser = pw.chromium.connect_over_cdp(cdp_url)
+            _CDP_BROWSERS_BY_URL[cdp_url] = browser
+            logger.info("fill_dms_service: connected to browser CDP at %s", cdp_url)
+        except Exception:
+            # Endpoint may not be available; retry on next call.
+            continue
+
+
 def _find_open_site_page(base_url: str):
     """Find an already-open tab for the given site base URL."""
     target = (base_url or "").rstrip("/")
     if not target:
         return None
-    for browser in list(_KEEP_OPEN_BROWSERS):
+    _refresh_cdp_browsers()
+    browsers_to_scan = list(_KEEP_OPEN_BROWSERS) + list(_CDP_BROWSERS_BY_URL.values())
+    for browser in browsers_to_scan:
         try:
             for context in browser.contexts:
                 for page in context.pages:
@@ -745,7 +792,10 @@ def run_fill_dms_only(
         logger.info("fill_dms_service: run_fill_dms_only starting dms=%s", dms_base_url[:50])
         page = _find_open_site_page(dms_base_url)
         if page is None:
-            result["error"] = "DMS site not open. Please open DMS site and keep it logged in."
+            result["error"] = (
+                "DMS site not open. Please open DMS site and keep it logged in. "
+                "If using Edge, start it with --remote-debugging-port=9222."
+            )
             return result
 
         base = dms_base_url.rstrip("/")
@@ -881,7 +931,10 @@ def run_fill_vahan_only(
         logger.info("fill_dms_service: run_fill_vahan_only starting")
         page = _find_open_site_page(vahan_base_url)
         if page is None:
-            result["error"] = "Vahan site not open. Please open Vahan site and keep it logged in."
+            result["error"] = (
+                "Vahan site not open. Please open Vahan site and keep it logged in. "
+                "If using Edge, start it with --remote-debugging-port=9222."
+            )
             return result
         vahan_values = _build_vahan_fill_values(customer_id, vehicle_id, subfolder)
         app_id, fees = _fill_vahan_and_scrape(
