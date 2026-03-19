@@ -1,18 +1,18 @@
-"""RTO payment details: insert, list, and pay for RTO Payments Pending page."""
+"""RTO queue: insert, list, and optionally pay queued RTO rows."""
 
 import asyncio
 from datetime import date, datetime
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.config import DEALER_ID, VAHAN_BASE_URL, get_uploads_dir
 from app.repositories import rto_payment_details as repo
 from app.repositories import rc_status_sms_queue as rc_sms_repo
-from app.services.rto_payment_service import run_rto_pay
+from app.services.rto_payment_service import get_dealer_batch_status, run_rto_pay, start_dealer_rto_batch
 
-router = APIRouter(prefix="/rto-payment-details", tags=["rto-payment-details"])
+router = APIRouter(prefix="/rto-queue", tags=["rto-queue"])
 
 
 def _parse_date(s: str | None) -> date | None:
@@ -39,7 +39,7 @@ def _ensure_absolute_url(url: str, fallback: str = "http://127.0.0.1:8000") -> s
 
 
 class RtoPaymentInsertPayload(BaseModel):
-    application_id: str
+    application_id: str | None = None
     customer_id: int
     vehicle_id: int
     dealer_id: int | None = None
@@ -48,26 +48,43 @@ class RtoPaymentInsertPayload(BaseModel):
     chassis_num: str | None = None
     register_date: str  # dd-mm-yyyy
     rto_fees: float
-    status: str = "Pending"
+    status: str = "Queued"
     pay_txn_id: str | None = None
     operator_id: str | None = None
     payment_date: str | None = None
-    rto_status: str = "Registered"
+    rto_status: str = "Pending"
     subfolder: str | None = None
+
+
+class RtoBatchStartPayload(BaseModel):
+    dealer_id: int | None = None
+    operator_id: str | None = None
+    limit: int = Field(default=7, ge=1, le=7)
+    vahan_base_url: str | None = None
+
+
+def _serialize_row(row: dict) -> dict:
+    d = dict(row)
+    d["queue_id"] = d.get("application_id")
+    for key in ("register_date", "payment_date"):
+        if d.get(key):
+            d[key] = d[key].strftime("%d-%m-%Y")
+    for key in ("leased_until", "started_at", "uploaded_at", "finished_at", "created_at", "updated_at"):
+        if d.get(key):
+            d[key] = d[key].isoformat()
+    return d
 
 
 @router.post("")
 def insert_rto_payment(payload: RtoPaymentInsertPayload) -> dict:
-    """Insert one RTO payment row (e.g. after Fill Forms completes Vahan step)."""
+    """Insert one RTO queue row after Fill Forms completes DMS/Form 20 work."""
     reg_date = _parse_date(payload.register_date)
     if not reg_date:
         raise HTTPException(status_code=400, detail="register_date required (dd-mm-yyyy)")
     pay_date = _parse_date(payload.payment_date) if payload.payment_date else None
-    if not payload.application_id or not payload.application_id.strip():
-        raise HTTPException(status_code=400, detail="application_id required")
     try:
-        app_id = repo.insert(
-            application_id=payload.application_id.strip(),
+        queue_id = repo.insert(
+            application_id=(payload.application_id or "").strip() or None,
             customer_id=payload.customer_id,
             vehicle_id=payload.vehicle_id,
             dealer_id=payload.dealer_id,
@@ -76,16 +93,43 @@ def insert_rto_payment(payload: RtoPaymentInsertPayload) -> dict:
             chassis_num=payload.chassis_num,
             register_date=reg_date,
             rto_fees=payload.rto_fees,
-            status=payload.status or "Pending",
+            status=payload.status or "Queued",
             pay_txn_id=payload.pay_txn_id,
             operator_id=payload.operator_id,
             payment_date=pay_date,
-            rto_status=payload.rto_status or "Registered",
+            rto_status=payload.rto_status or "Pending",
             subfolder=payload.subfolder,
         )
-        return {"application_id": app_id, "ok": True}
+        return {"queue_id": queue_id, "application_id": queue_id, "ok": True}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/process-batch")
+def process_rto_batch(payload: RtoBatchStartPayload) -> dict:
+    """Start dealer-scoped Vahan batch processing up to the upload/cart step."""
+    did = payload.dealer_id if payload.dealer_id is not None else DEALER_ID
+    vahan_url = _ensure_absolute_url((payload.vahan_base_url or VAHAN_BASE_URL or "").strip())
+    if not vahan_url:
+        raise HTTPException(status_code=400, detail="vahan_base_url required")
+    result = start_dealer_rto_batch(
+        dealer_id=did,
+        operator_id=(payload.operator_id or "").strip() or None,
+        vahan_base_url=vahan_url,
+        limit=payload.limit,
+    )
+    if not result.get("started"):
+        raise HTTPException(status_code=409, detail=result.get("message") or "Dealer batch already running")
+    return result
+
+
+@router.get("/process-batch/status")
+def get_process_batch_status(
+    dealer_id: int | None = Query(None, description="Dealer ID; uses app default if omitted"),
+) -> dict:
+    """Return the latest dealer batch progress snapshot."""
+    did = dealer_id if dealer_id is not None else DEALER_ID
+    return get_dealer_batch_status(did)
 
 
 class RtoPayRequest(BaseModel):
@@ -94,7 +138,7 @@ class RtoPayRequest(BaseModel):
 
 @router.post("/{application_id}/pay")
 async def pay_rto(application_id: str, body: RtoPayRequest | None = None) -> dict:
-    """Run Playwright: open Vahan search, fill Application ID and Chassis No., screenshot, Pay, update DB."""
+    """Run Playwright payment flow for a queued row that already has a Vahan application id."""
     row = repo.get_by_application_id(application_id)
     if not row:
         raise HTTPException(status_code=404, detail="Application not found")
@@ -111,7 +155,7 @@ async def pay_rto(application_id: str, body: RtoPayRequest | None = None) -> dic
     pay_result = await loop.run_in_executor(
         None,
         lambda: run_rto_pay(
-            application_id=application_id,
+            application_id=row.get("vahan_application_id") or application_id,
             chassis_num=row.get("chassis_num"),
             subfolder=row.get("subfolder"),
             vahan_base_url=vahan_url,
@@ -148,33 +192,16 @@ async def pay_rto(application_id: str, body: RtoPayRequest | None = None) -> dic
 
 @router.get("/by-sale")
 def get_rto_payment_by_sale(customer_id: int, vehicle_id: int) -> dict | None:
-    """Get RTO payment row for a sale (customer_id, vehicle_id). Used to restore application_id/rto_fees on Add Sales page."""
+    """Get RTO queue row for a sale (customer_id, vehicle_id)."""
     row = repo.get_by_customer_vehicle(customer_id, vehicle_id)
     if not row:
         return None
-    d = dict(row)
-    if d.get("register_date"):
-        d["register_date"] = d["register_date"].strftime("%d-%m-%Y")
-    if d.get("payment_date"):
-        d["payment_date"] = d["payment_date"].strftime("%d-%m-%Y")
-    if d.get("created_at"):
-        d["created_at"] = d["created_at"].isoformat()
-    return d
+    return _serialize_row(row)
 
 
 @router.get("")
 def list_rto_payments(dealer_id: int | None = Query(None, description="Dealer ID; uses app default if omitted")) -> list[dict]:
-    """List RTO payment details for RTO Payments Pending table, filtered by dealer."""
+    """List RTO queue rows, filtered by dealer."""
     did = dealer_id if dealer_id is not None else DEALER_ID
     rows = repo.list_all(dealer_id=did)
-    out = []
-    for r in rows:
-        d = dict(r)
-        if d.get("register_date"):
-            d["register_date"] = d["register_date"].strftime("%d-%m-%Y")
-        if d.get("payment_date"):
-            d["payment_date"] = d["payment_date"].strftime("%d-%m-%Y")
-        if d.get("created_at"):
-            d["created_at"] = d["created_at"].isoformat()
-        out.append(d)
-    return out
+    return [_serialize_row(r) for r in rows]

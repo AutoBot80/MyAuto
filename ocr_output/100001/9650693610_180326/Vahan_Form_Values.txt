@@ -1,0 +1,47 @@
+Vahan Form Values
+
+--- Values sent to Vahan labels ---
+Registration Type *: New Registration
+Chassis No *: 59324XXXXXXX
+Engine/Motor No (Last 5 Chars): XXXXX
+Purchase Delivery Date: 13-MAR-2026
+Do You want to Opt Choice Number / Fancy Number / Retention Number: SELECT
+Owner Name *: Shashank Arya
+Owner Type: Individual
+Son/Wife/Daughter of: —
+Ownership Serial: 1
+Aadhaar Mode: Aadhaar OTP
+Category *: General
+Mobile No: 9650693610
+PAN Card: —
+Voter ID: —
+Aadhaar No: Last 4 in DB: 7945
+Permanent Address: S/O: Anil Kumar Arya, 431, sector no.-3, bharatpur, Rajasthan, 321001
+House No & Street Name: S/O: Anil Kumar Arya, 431, sector no.-3, bharatpur, Rajasthan, 321001
+Village/Town/City: Bharatpur
+Insurance Type: Comprehensive
+Insurer: NATIONAL INSURANCE COMPANY LIMITED
+Policy No: 39010231216200202663
+Insurance From (DD-MMM-YYYY): 16-JUN-2021
+Insurance Upto (DD-MMM-YYYY): 15-JUN-2022
+Insured Declared Value: 5291.00
+Please Select Series Type: State Series
+Financier / Bank: —
+Application No: 40597810
+Assigned Office & Action: Assigned Office & Action - RTO100001
+Registration No: —
+Amount: 925.00
+
+--- Runtime values used by Playwright ---
+sales_id: 1
+customer_id: 1
+vehicle_id: 1
+dealer_id: 100001
+subfolder: 9650693610_180326
+rto_dealer_id: RTO100001
+vehicle_model: Splendor Plus
+vehicle_colour: Black
+fuel_type: Petrol
+year_of_mfg: 2024
+vehicle_price: 72500.00
+generated_at: 18-03-2026 17:48:11

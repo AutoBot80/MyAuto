@@ -1,8 +1,8 @@
 # Low Level Design (LLD)
 ## Auto Dealer Management System
 
-**Version:** 0.2  
-**Last Updated:** March 2025
+**Version:** 0.4  
+**Last Updated:** March 2026
 
 ---
 
@@ -22,12 +22,12 @@
 | `AppLayout` | Header + Sidebar + main slot. |
 | `Header` | Dealer name (centre), right slot (e.g. date). |
 | `Sidebar` | Nav links; `onNavigate(page)`. |
-| `AddSalesPage` | Add Sales flow: Submit Info, Fill Forms (DMS, Vahan, Form 20), Insurance tiles. |
+| `AddSalesPage` | Add Sales flow: Submit Info, Fill Forms & Print File (DMS, Form 20, Gate Pass, RTO queue insertion), Insurance tiles. |
 | `UploadScansPanel` | Step tiles, file input, upload button, uploaded list. |
 | `AiReaderQueuePage` | Uses `useAiReaderQueue`; renders `AiReaderQueueTable`. |
 | `BulkLoadsPage` | Uses `api/bulkLoads`; shows hot processing rows, failure tabs, retry prep, and action-taken toggles. |
 | `RtoPaymentsPendingPage` | List RTO applications; record payment. |
-| `ViewCustomerPage` | Search by mobile/plate; view vehicles and insurance. |
+| `ViewCustomerPage` | Search by mobile/plate; view vehicles, insurance, and the selected vehicle's `form_vahan_view` row. |
 | `PlaceholderPage` | Title + message for coming-soon pages. |
 
 ---
@@ -42,15 +42,15 @@ backend/app/
   config.py            # DATABASE_URL, UPLOADS_DIR, APP_ROOT, FORM20_*, etc.
   db.py                # get_connection()
   schemas/             # Pydantic request/response (uploads, ocr, fill_dms, etc.)
-  repositories/        # Data access only (ai_reader_queue, bulk_loads, dealer_ref, rto_payment_details, rc_status_sms_queue)
+  repositories/        # Data access only (ai_reader_queue, bulk_loads, dealer_ref, form_dms, form_vahan, rto_queue, rc_status_sms_queue)
   services/            # Business logic (UploadService, bulk_job_service, bulk_queue_service, bulk_watcher_service, form20_service, fill_dms_service, submit_info_service, rto_payment_service)
-  routers/             # health, uploads, ai_reader_queue, bulk_loads, fill_dms, submit_info, rto_payment_details, customer_search, dealers, documents, qr_decode, vision, textract_router
+  routers/             # health, uploads, ai_reader_queue, bulk_loads, fill_dms, submit_info, rto_queue, customer_search, dealers, documents, qr_decode, vision, textract_router
   templates/           # form20_front.html, form20_back.html, form20_page3.html
 ```
 
 - **Routers:** Thin; call services or repos. Each router can be mounted or split into a separate service later.
 - **Services:** Stateless, injectable (e.g. `UploadService(uploads_dir=...)`).
-- **Repositories:** Table access only; no business rules.
+- **Repositories:** Table access only; no business rules. `form_dms.py` and `form_vahan.py` read the label-aligned DMS/Vahan views used by operator inspection and runtime export files.
 
 ### 2.2 API Endpoints (Current)
 
@@ -77,17 +77,20 @@ backend/app/
 | PATCH | `/bulk-loads/{bulk_load_id}/mark-success` | Mark a manually completed error as success. |
 | GET | `/bulk-loads/folder/{folder_path}/list` | List files in a bulk result folder. |
 | GET | `/bulk-loads/file/{file_path}` | Download or preview a file from a bulk result folder. |
-| POST | `/fill-dms` | Full Fill DMS flow (DMS + Vahan). |
+| POST | `/fill-dms` | Full Fill DMS flow (legacy DMS + Vahan helper path). |
 | POST | `/fill-dms/dms` | DMS only. |
 | GET | `/fill-dms/data-from-dms` | Get data from DMS.txt. |
 | GET | `/fill-dms/form20-status` | Form 20 template status. |
 | POST | `/fill-dms/print-form20` | Generate Form 20.pdf. |
 | POST | `/fill-dms/vahan` | Vahan (RTO) only. |
-| GET | `/rto-payment-details` | List RTO applications. |
-| GET | `/rto-payment-details/by-sale` | Get RTO by sale (customer_id, vehicle_id). |
-| POST | `/rto-payment-details` | Create RTO application. |
-| POST | `/rto-payment-details/{application_id}/pay` | Record payment. |
+| GET | `/rto-queue` | List RTO queue rows. |
+| GET | `/rto-queue/by-sale` | Get RTO queue row by sale (customer_id, vehicle_id). |
+| POST | `/rto-queue` | Create or update the queued RTO row for a sale. |
+| POST | `/rto-queue/process-batch` | Start dealer-scoped processing of the oldest 7 queued rows through the upload/cart step. |
+| GET | `/rto-queue/process-batch/status` | Get the live progress snapshot for the current dealer batch. |
+| POST | `/rto-queue/{application_id}/pay` | Optional downstream payment update. |
 | GET | `/customer-search/search` | Search by mobile or plate. |
+| GET | `/customer-search/form-vahan` | Get the `form_vahan_view` row for one customer/vehicle pair. |
 | GET | `/dealers/{dealer_id}` | Get dealer by ID. |
 | GET | `/documents/{subfolder}/list` | List documents in subfolder. |
 | GET | `/documents/{subfolder}/{filename}` | Download document. |
@@ -109,6 +112,18 @@ backend/app/
 - **Flow:** Prefer Word template (`templates/word/FORM 20 Template.docx`) → fill placeholders → convert to PDF (docx2pdf or LibreOffice) → output `Form 20.pdf` (all pages). Fallback: PDF overlay on Official FORM-20 or separate templates. Fallback: HTML templates. Override via env `FORM20_TEMPLATE_DOCX`.
 - **Gate Pass:** Word template (`templates/word/Gate Pass Template.docx`) → fill placeholders → convert to PDF → output `Gate Pass.pdf`. Placeholders: `{{field_0_today_date}}`, `{{field_1_oem_name}}`, `{{field_2_customer_name}}`, `{{field_3_aadhar_id}}`, `{{field_4_model}}`, `{{field_5_color}}`, `{{field_6_key_num}}`, `{{field_7_chassis_num}}`. Override via env `GATE_PASS_TEMPLATE_DOCX`.
 - **Placeholders:** `{{field_0_city}}`, `{{field_1_name}}`, `{{field_2_care_of}}`, `{{field_3_address}}`, `{{field_10_dealer_name}}`, `{{field_14_body_type}}`, `{{field_16_oem_name}}`, `{{field_17_year_of_mfg}}`, `{{field_20_cubic_capacity}}`, `{{field_21_model}}`, `{{field_22_chassis_no}}`, etc.
+
+### 2.4a Dummy Vahan Flow
+
+- **Static site:** `dummy-sites/vaahan/` simulates the real VAHAN navigation used by Playwright tests.
+- **Pages:** landing/start (`index.html`) → owner/details entry (`application.html`) → assigned office/worklist (`search.html`) → payment gateway (`payment.html`) → bank login (`bank-login.html`) → bank confirmation (`bank-confirm.html`).
+- **Automation contract:** `fill_dms_service.py` reads DMS field values only from `form_dms_view`, writes `ocr_output/<dealer>/<subfolder>/DMS_Form_Values.txt`, and updates `vehicle_master` with the DMS scrape (including `vehicle_price`). The Add Sales page now stops there for user-triggered Fill Forms, then inserts an `rto_queue` row for later RTO handling instead of auto-running the dummy Vahan site. `rto_payment_service.py` can then claim the oldest 7 queued rows for one dealer, reuse one Playwright browser/context, drive the dummy Vahan flow only up to the files-uploaded / added-to-cart checkpoint before any payment, and persist the scraped Vahan application id / RTO charges back into both `rto_queue` and `sales_master`.
+
+### 2.4b Dummy DMS Flow
+
+- **Static site:** `dummy-sites/dms/` simulates the OEM DMS journey used by Playwright tests.
+- **Pages:** login (`index.html`) → enquiry (`enquiry.html`) → vehicle search/results (`vehicle.html`) → reports/downloads (`reports.html`).
+- **Automation contract:** `fill_dms_service.py` requires `customer_id` and `vehicle_id`, loads DMS field values from `form_dms_view`, fills only those view-backed values into the page, scrapes the first vehicle result row, persists the scrape into `vehicle_master`, and writes `Data from DMS.txt` plus `DMS_Form_Values.txt` into the matching `ocr_output` subfolder.
 
 ### 2.5 Database Access
 
@@ -133,10 +148,11 @@ See **Documentation/Database DDL.md** for full table structures. Summary:
 | `dealer_ref` | Dealer reference; oem_id FK. |
 | `insurance_master` | Insurance policies; FK to sales or (customer, vehicle). |
 | `service_reminders_queue` | Service reminders; sales_id FK; populated by trigger. |
-| `rto_payment_details` | RTO applications; application_id PK; sales_id FK. |
+| `rto_queue` | RTO queue/worklist rows; one row per sale; application_id stays the stable queue id while `vahan_application_id` stores the real Vahan number once a dealer batch reaches the cart/upload checkpoint. |
+| `form_dms_view` | Read-only DMS field projection that aligns DB-backed values to current DMS labels. |
+| `form_vahan_view` | Read-only Vahan field projection that aligns DB-backed values to current Vahan labels. |
 | `rc_status_sms_queue` | RC status SMS queue; sales_id FK. |
 | `bulk_loads` | Hot operational bulk jobs, queue lifecycle, retry state, and operator actions. |
-| `bulk_loads_archive` | Archived terminal bulk rows retained outside the current UI read path. |
 
 ---
 
@@ -157,10 +173,10 @@ See **Documentation/Database DDL.md** for full table structures. Summary:
 
 ### 4.4 Bulk Worker
 
-- Ingest scans from `Bulk Upload/<dealer_id>/Input Scans/`, create hot `bulk_loads` rows, move files into `Queued/`, and publish queue messages.
-- Worker leases jobs through `bulk_loads` lease columns and processes them through pre-OCR, Add Sales, DMS, Form 20, and terminal folder placement.
-- API/UI reads remain hot-only for now. `bulk_loads_archive` is write-only until archive read APIs are added.
-- Archival may move `Success` rows after retention, but `Error` and `Rejected` rows are archived only after `action_taken=true`.
+- Ingest scans from `Bulk Upload/<dealer_id>/Input Scans/`, create hot `bulk_loads` rows with `status='Queued'`, move files into `Queued/`, and publish queue messages.
+- Worker leases jobs through `bulk_loads` lease columns, switches the row to `Processing`, and processes them through pre-OCR, Add Sales, DMS, Form 20, RTO queue insertion, and terminal folder placement.
+- API/UI reads remain hot-only for now. Older bulk rows are retained directly in `bulk_loads`.
+- `Error` and `Rejected` rows remain visible in `bulk_loads` until `action_taken=true`.
 
 ---
 
@@ -177,4 +193,5 @@ See **Documentation/Database DDL.md** for full table structures. Summary:
 |---------|------|--------|---------|
 | 0.1 | Mar 2025 | — | Initial LLD |
 | 0.2 | Mar 2025 | — | Updated backend modules, full API endpoints list, Form 20 section, database schema summary |
-| 0.3 | Mar 2026 | — | Added bulk loads page/API details, backend bulk modules, and bulk worker hot/archive behavior |
+| 0.3 | Mar 2026 | — | Added bulk loads page/API details, backend bulk modules, and hot-table bulk worker behavior |
+| 0.4 | Mar 2026 | — | Updated for `form_dms_view` / `form_vahan_view`, `ocr_output` automation traces, View Customer Vahan row, and current DMS/Vahan behavior |

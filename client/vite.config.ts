@@ -6,7 +6,7 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
-      '/rto-payment-details': 'http://127.0.0.1:8000',
+      '/rto-queue': 'http://127.0.0.1:8000',
       '/fill-dms': 'http://127.0.0.1:8000',
       '/submit-info': 'http://127.0.0.1:8000',
       '/uploads': 'http://127.0.0.1:8000',

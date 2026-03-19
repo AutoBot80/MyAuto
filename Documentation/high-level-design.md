@@ -1,8 +1,8 @@
 # High Level Design (HLD)
 ## Auto Dealer Management System
 
-**Version:** 0.2  
-**Last Updated:** March 2025
+**Version:** 0.4  
+**Last Updated:** March 2026
 
 ---
 
@@ -26,7 +26,7 @@
     |                |       |       |                |
     v                v       v       v                v
 +--------+    +--------+ +--------+ +--------+   +--------+
-| FastAPI|    |  OCR   | | Playwr.| | Redis  |   | Postgres|
+| FastAPI|    |  OCR   | | Playwr.| | Local  |   | Postgres|
 |  App   |    | Worker | | Worker | | / SQS  |   |   DB    |
 +--------+    +--------+ +--------+ +--------+   +--------+
     |                |       |       ^                ^
@@ -48,10 +48,10 @@
 | **Client (React)** | UI, forms, validation, calls to backend API; Add Sales, Fill Forms, RTO Payments, View Customer, Bulk Loads. |
 | **FastAPI App** | REST API, CRUD, Submit Info, Fill DMS, Form 20, Vahan, RTO payment, customer search, OCR queue, and bulk upload monitoring. |
 | **PostgreSQL** | Persistent store for dealers, vehicles, customers, sales, insurance, RTO payments, service reminders. |
-| **Queue (Redis or SQS)** | Decouple job creation from execution; OCR queue, automation queue, and bulk upload job dispatch. |
-| **OCR Worker** | Consumes OCR jobs; runs Tesseract (or Textract/Vision); writes results to DB. |
-| **Playwright Worker** | Consumes automation jobs; reads DB, drives browser, submits to DMS and Vahan. |
-| **Object Store (S3 or local)** | Uploaded scans, Form 20/21/22 PDFs. |
+| **Queue (local or SQS)** | Decouple bulk job creation from execution; current bulk processing uses SQS or a local in-process fallback queue. |
+| **OCR Worker** | Runs OCR/pre-OCR, writes extracted artifacts to `ocr_output`, and supports bulk processing. |
+| **Playwright Worker** | Reads DB-backed form views, drives browser automation for DMS and Vahan, and writes form trace artifacts. |
+| **File Storage (local, optional S3 later)** | Uploaded scans, generated PDFs, and OCR/form-value artifacts. |
 
 ---
 
@@ -93,8 +93,8 @@ My Auto.AI/
 | `routers/fill_dms` | Fill DMS (Playwright), Vahan, Form 20 print. |
 | `routers/bulk_loads` | Bulk hot-table dashboard APIs, retry prep, action-taken tracking, and folder browsing. |
 | `routers/submit_info` | Upsert customer, vehicle, sales, insurance. |
-| `routers/rto_payment_details` | List RTO applications, record payment. |
-| `routers/customer_search` | Search customers by mobile/plate. |
+| `routers/rto_payment_details` | List and insert RTO queue rows, start dealer-scoped oldest-7 batch processing, expose batch progress, and optionally update payment later. |
+| `routers/customer_search` | Search customers by mobile/plate and expose the read-only Vahan view row used by View Customer. |
 | `routers/dealers` | Get dealer by ID. |
 | `routers/documents` | List/download documents by subfolder. |
 | `routers/qr_decode` | Decode Aadhar QR. |
@@ -102,21 +102,21 @@ My Auto.AI/
 | `routers/textract_router` | AWS Textract extraction. |
 | `services/bulk_job_service` | Bulk ingest, queue publish, job lease, pre-OCR, and terminal status updates. |
 | `services/bulk_queue_service` | Bulk queue abstraction with SQS or local in-process fallback. |
-| `services/bulk_watcher_service` | Starts ingest, worker, and archive loops inside the API process. |
+| `services/bulk_watcher_service` | Starts ingest and worker loops inside the API process. |
 | `services/form20_service` | Form 20 generation (Word/PDF/HTML). |
-| `services/fill_dms_service` | Playwright DMS and Vahan automation. |
+| `services/fill_dms_service` | Playwright DMS and Vahan automation; reads fill values from `form_dms_view` / `form_vahan_view` only and writes `DMS_Form_Values.txt` and `Vahan_Form_Values.txt` in the matching `ocr_output` subfolder after each automation step. |
 | `services/submit_info_service` | Submit Info business logic. |
-| `services/rto_payment_service` | RTO payment updates. |
-| `repositories/*` | Data access for ai_reader_queue, bulk_loads, dealer_ref, rto_payment_details, rc_status_sms_queue. |
+| `services/rto_payment_service` | Dealer-scoped RTO batch runner, progress state, advisory locking, scrape-back persistence into `rto_queue` / `vehicle_master`, and downstream payment updates. |
+| `repositories/*` | Data access for ai_reader_queue, bulk_loads, dealer_ref, form_dms_view, form_vahan_view, rto_queue, rc_status_sms_queue. |
 
 ### 3.3 Client Pages
 
 | Page | Purpose |
 |------|---------|
-| `AddSalesPage` | Add Sales flow: Submit Info, Fill Forms (DMS, Vahan, Form 20), Insurance. |
+| `AddSalesPage` | Add Sales flow: Submit Info, Fill Forms (DMS, Form 20, RTO queue insertion), Insurance. |
 | `BulkLoadsPage` | View hot bulk processing status, unresolved failures, and retry/corrective actions. |
-| `RtoPaymentsPendingPage` | List pending RTO applications; record payment. |
-| `ViewCustomerPage` | Search customer; view vehicles and insurance. |
+| `RtoPaymentsPendingPage` | List queued RTO work items, start the oldest-7 dealer batch, and show live RTO Cart progress. |
+| `ViewCustomerPage` | Search customer; view vehicles, insurance, and the bottom single-row `form_vahan_view` projection for the selected vehicle. |
 | `AiReaderQueuePage` | OCR queue status and processing. |
 | `PlaceholderPage` | Coming-soon placeholder. |
 
@@ -129,10 +129,10 @@ My Auto.AI/
 1. User uploads scans → `uploads/scans` → ai_reader_queue.
 2. OCR processes queue → extracted text stored.
 3. User reviews/corrects → Submit Info → customer_master, vehicle_master, sales_master, insurance_master.
-4. Fill DMS → Playwright logs in, searches vehicle, scrapes data, downloads Form 21/22; vehicle_master updated.
-5. Print Form 20 → form20_service fills Word template, converts to PDF, saves Form 20.pdf.
-6. Vahan → Playwright fills RTO portal → rto_payment_details created (status Pending).
-7. RTO Payments Pending → user records payment → status Paid.
+4. Fill DMS → Playwright loads DMS field values from `form_dms_view`, fills the DMS flow, scrapes vehicle data, stores DMS artifacts in `ocr_output`, and updates `vehicle_master`.
+5. Print Form 20 → `form20_service` fills the Word template, converts to PDF, and saves Form 20.pdf / Gate Pass.pdf in the upload subfolder.
+6. RTO queue insertion → Fill Forms stores Form 20 outputs, estimates the RTO fees, and inserts an `rto_queue` row instead of auto-running the dummy Vahan flow.
+7. RTO Queue → operators review queued rows in `RTO Saathi`, process the oldest 7 rows in one dealer-scoped browser session, and wait for live progress up to the upload/cart checkpoint.
 
 ### 4.2 Service Reminders Flow
 
@@ -143,17 +143,18 @@ My Auto.AI/
 ### 4.3 Bulk Upload Flow
 
 1. Operator drops a scan PDF into `Bulk Upload/<dealer_id>/Input Scans/`.
-2. The API process starts bulk ingest and worker loops on startup; it can also be paired with a standalone `run_bulk_worker.py` process.
-3. Ingest writes a hot `bulk_loads` row, moves the file into `Queued/`, and publishes a queue message through SQS or the local fallback queue.
-4. A worker leases the job, runs pre-OCR and Add Sales automation, and updates hot-row lifecycle fields (`job_status`, `processing_stage`, `attempt_count`, `leased_until`, `worker_id`).
-5. Terminal rows stay in hot storage for the current UI; archival copies older terminal rows to `bulk_loads_archive`, but unresolved `Error` and `Rejected` rows stay hot until `action_taken=true`.
+2. The API process can start bulk ingest and worker loops on startup, and the system also supports a standalone `run_bulk_worker.py` worker shape.
+3. Ingest writes a hot `bulk_loads` row with `status='Queued'`, moves the file into the queued working area, and publishes a queue message through SQS or the local fallback queue.
+4. A worker lease changes the hot row to `Processing`, then runs pre-OCR and Add Sales automation (including RTO queue insertion) and updates lifecycle fields (`job_status`, `processing_stage`, `attempt_count`, `leased_until`, `worker_id`).
+5. OCR artifacts and form-value traces are written into `ocr_output/<dealer>/<subfolder>/` while upload/result folders hold customer-facing files.
+6. Terminal rows stay in the hot `bulk_loads` table for the current UI; unresolved `Error` and `Rejected` rows remain visible until `action_taken=true`.
 
 ---
 
 ## 5. Deployment Topology (Target)
 
 - **Client:** Installed or accessed from dealer workstations (browser or Electron).
-- **AWS:** VPC with private subnets for app, workers, DB; public subnets for load balancer; RDS PostgreSQL; S3; SQS or ElastiCache Redis; ECS Fargate (or similar) for FastAPI and workers.
+- **AWS:** VPC with private subnets for app, workers, and DB; public subnets for load balancer; RDS PostgreSQL; SQS for bulk queueing; optional S3/object storage later; ECS Fargate (or similar) for FastAPI and workers.
 
 ---
 
@@ -165,8 +166,9 @@ My Auto.AI/
 | Queue between API and workers | Reliability, retries, and independent scaling of workers. |
 | PostgreSQL as system of record | Strong consistency, relational model for dealers/vehicles/sales. |
 | Playwright for automation | Reliable browser control for filling DMS and Vahan. |
+| One browser session per dealer | Matches the RTO desk workflow while still allowing multiple dealers to process in parallel. |
 | Form 20: Word → PDF → HTML fallback | Prefer Word template; LibreOffice/docx2pdf for conversion; HTML when conversion unavailable. |
-| sales_id as PK | Enables FK from rto_payment_details and service_reminders_queue; one sale per (customer, vehicle). |
+| sales_id as PK | Enables FK from `rto_queue` and `service_reminders_queue`; one sale per (customer, vehicle). |
 
 ---
 
@@ -176,4 +178,5 @@ My Auto.AI/
 |---------|------|--------|---------|
 | 0.1 | Mar 2025 | — | Initial HLD |
 | 0.2 | Mar 2025 | — | Added code structure (3.1–3.3), backend modules, client pages, Add Sales flow, Service Reminders flow |
-| 0.3 | Mar 2026 | — | Added bulk upload router/services/pages, queue/deployment notes, and hot/archive retention behavior |
+| 0.3 | Mar 2026 | — | Added bulk upload router/services/pages, queue/deployment notes, and hot-table retention behavior |
+| 0.4 | Mar 2026 | — | Updated for view-driven DMS/Vahan automation, `ocr_output` trace artifacts, and current queue/storage behavior |

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, Component, type ReactNode } from "react";
+import { useState, useEffect, Component, type ReactNode } from "react";
 import "./App.css";
 import type { Page } from "./types";
 import { useToday } from "./hooks/useToday";
@@ -41,7 +41,6 @@ const POS_PAGES: Page[] = [
   "add-sales",
   "customer-details",
   "bulk-loads",
-  "rto-status",
   "contact-us",
 ];
 
@@ -106,43 +105,17 @@ function App() {
   }, [mode, page]);
 
   const dmsUrl = getValidDmsUrl(dmsLink);
-  const dmsWindowRef = useRef<Window | null>(null);
-  const vahanUrl = `${getBaseUrl().replace(/\/$/, "")}/dummy-vaahan/`;
-  const vahanWindowRef = useRef<Window | null>(null);
-
-  const openDmsInNewTab = () => {
-    if (dmsWindowRef.current && !dmsWindowRef.current.closed) {
-      dmsWindowRef.current.focus();
-    } else {
-      dmsWindowRef.current = window.open(dmsUrl, "_blank");
-    }
-  };
-
-  const openVahanInNewTab = () => {
-    if (vahanWindowRef.current && !vahanWindowRef.current.closed) {
-      vahanWindowRef.current.focus();
-    } else {
-      vahanWindowRef.current = window.open(vahanUrl, "_blank");
-    }
-  };
 
   function renderContent(p: Page) {
     switch (p) {
       case "add-sales":
-        return (
-          <AddSalesPage
-            dealerId={DEALER_ID}
-            dmsUrl={dmsUrl}
-            openDmsInNewTab={openDmsInNewTab}
-            openVahanInNewTab={openVahanInNewTab}
-          />
-        );
+        return <AddSalesPage dealerId={DEALER_ID} dmsUrl={dmsUrl} />;
       case "bulk-loads":
         return <BulkLoadsPage dealerId={DEALER_ID} onNavigateToAddSales={() => setPage("add-sales")} />;
       case "customer-details":
         return <ViewCustomerPage dealerId={DEALER_ID} />;
       case "rto-status":
-        return <RtoPaymentsPendingPage dealerId={DEALER_ID} showPayLink={mode === "rto"} />;
+        return <RtoPaymentsPendingPage dealerId={DEALER_ID} />;
       case "service-reminders":
         return <PlaceholderPage title="Service Reminders" />;
       case "dealer-dashboard":

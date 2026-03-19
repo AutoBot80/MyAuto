@@ -17,8 +17,8 @@ export interface BulkLoadRow {
 }
 
 export interface ListBulkLoadsParams {
-  status?: "Success" | "Error" | "Rejected" | "Processing";
-  status_in?: string; // e.g. "Success,Error,Processing"
+  status?: "Success" | "Error" | "Rejected" | "Queued" | "Processing";
+  status_in?: string; // e.g. "Success,Error,Queued,Processing"
   date_from?: string; // dd-mm-yyyy
   date_to?: string; // dd-mm-yyyy
   dealer_id?: number;
@@ -71,6 +71,7 @@ export async function getDocumentsFolderFiles(subfolder: string, dealerId?: numb
 export interface BulkLoadCounts {
   Success: number;
   Error: number;
+  Queued: number;
   Processing: number;
   Rejected: number;
 }

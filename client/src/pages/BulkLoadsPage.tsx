@@ -253,11 +253,13 @@ export function BulkLoadsPage({ dealerId, onNavigateToAddSales, onRefreshPending
   const [dateTo, setDateTo] = useState(() => formatDateDdMmYyyy(new Date()));
   const [showSuccess, setShowSuccess] = useState(true);
   const [showFailure, setShowFailure] = useState(true);
+  const [showQueued, setShowQueued] = useState(true);
   const [showProcessing, setShowProcessing] = useState(true);
   const [rows, setRows] = useState<BulkLoadRow[]>([]);
   const [counts, setCounts] = useState<BulkLoadCounts>({
     Success: 0,
     Error: 0,
+    Queued: 0,
     Processing: 0,
     Rejected: 0,
   });
@@ -277,8 +279,9 @@ export function BulkLoadsPage({ dealerId, onNavigateToAddSales, onRefreshPending
       const statuses: string[] = [];
       if (showSuccess) statuses.push("Success");
       if (showFailure) statuses.push("Error");
+      if (showQueued) statuses.push("Queued");
       if (showProcessing) statuses.push("Processing");
-      params.status_in = statuses.length ? statuses.join(",") : "Success,Error,Processing";
+      params.status_in = statuses.length ? statuses.join(",") : "Success,Error,Queued,Processing";
     } else {
       params.status = "Rejected";
     }
@@ -292,7 +295,7 @@ export function BulkLoadsPage({ dealerId, onNavigateToAddSales, onRefreshPending
         setCounts(cnt);
       })
       .catch((err) => setError(err instanceof Error ? err.message : "Failed to load"));
-  }, [activeTab, dateFrom, dateTo, showSuccess, showFailure, showProcessing, dealerId]);
+  }, [activeTab, dateFrom, dateTo, showSuccess, showFailure, showQueued, showProcessing, dealerId]);
 
   useEffect(() => {
     setLoading(true);
@@ -449,6 +452,16 @@ export function BulkLoadsPage({ dealerId, onNavigateToAddSales, onRefreshPending
               onChange={(e) => setShowFailure(e.target.checked)}
             />
             Error ({counts.Error})
+          </label>
+          <label className="bulk-loads-checkbox" htmlFor="bulk-loads-show-queued">
+            <input
+              id="bulk-loads-show-queued"
+              name="showQueued"
+              type="checkbox"
+              checked={showQueued}
+              onChange={(e) => setShowQueued(e.target.checked)}
+            />
+            Queued ({counts.Queued})
           </label>
           <label className="bulk-loads-checkbox" htmlFor="bulk-loads-show-processing">
             <input

@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Verify and confirm transaction details</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-badge">SB</div>
+        <div class="brand-copy">
+          <h1>Verify and confirm Rajasthan e-GRAS transaction details</h1>
+          <p>Final confirmation step</p>
+        </div>
+      </div>
+    </header>
+
+    <main class="container">
+      <section class="bank-panel">
+        <h2>Debit Account Details</h2>
+        <div id="confirm-summary" class="panel" style="padding: 1rem;"></div>
+        <div class="confirm-actions" style="margin-top: 1rem;">
+          <button type="button" id="vahan-confirm-payment" class="button">Confirm Payment</button>
+          <a href="search.html" class="button-secondary">Return to Merchant</a>
+        </div>
+        <p id="vahan-confirm-status" class="hint hidden" style="margin-top: 1rem;"></p>
+        <p id="vahan-confirm-tc-number" class="hint hidden"></p>
+      </section>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+  <script>
+    (function () {
+      const {
+        ensureQueryBackedApplication,
+        saveApplication,
+        generateTcNumber,
+        currency,
+        escapeHtml,
+      } = window.VahanDummy;
+
+      const app = ensureQueryBackedApplication();
+      if (!app) {
+        window.location.href = "search.html";
+        return;
+      }
+
+      document.getElementById("confirm-summary").innerHTML =
+        "<dl class=\"summary-grid\">" +
+          "<dt>Application No</dt><dd>" + escapeHtml(app.application_id) + "</dd>" +
+          "<dt>Owner Name</dt><dd>" + escapeHtml(app.owner_name) + "</dd>" +
+          "<dt>Registration No</dt><dd>" + escapeHtml(app.registration_no) + "</dd>" +
+          "<dt>Amount</dt><dd>" + currency(app.rto_fees) + "</dd>" +
+        "</dl>";
+
+      document.getElementById("vahan-confirm-payment").addEventListener("click", function () {
+        if (!app.pay_txn_id) {
+          app.pay_txn_id = generateTcNumber();
+        }
+        app.status = "Paid";
+        saveApplication(app);
+        const status = document.getElementById("vahan-confirm-status");
+        const tc = document.getElementById("vahan-confirm-tc-number");
+        status.textContent = "Payment confirmed successfully.";
+        status.classList.remove("hidden");
+        tc.textContent = "TC Number: " + app.pay_txn_id;
+        tc.setAttribute("data-tc", app.pay_txn_id);
+        tc.classList.remove("hidden");
+      });
+    })();
+  </script>
+</body>
+</html>

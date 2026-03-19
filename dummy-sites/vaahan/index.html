@@ -2,123 +2,133 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Dummy Vahan – Registration</title>
-  <style>
-    * { box-sizing: border-box; }
-    body { font-family: Arial, sans-serif; margin: 0; padding: 0; font-size: 14px; }
-    .top-nav { background: #063; color: #fff; padding: 0.5rem 1rem; }
-    .top-nav a { color: #fff; text-decoration: none; margin-right: 1rem; }
-    .main { max-width: 480px; margin: 2rem auto; padding: 1rem; }
-    .section { border: 1px solid #ccc; border-radius: 4px; padding: 1rem; background: #fafafa; margin-bottom: 1rem; }
-    .section h2 { margin: 0 0 0.75rem 0; font-size: 14px; color: #063; }
-    label { display: block; margin-top: 0.5rem; font-weight: 500; }
-    input, select { width: 100%; padding: 0.4rem; margin-top: 0.2rem; box-sizing: border-box; max-width: 320px; }
-    .btn { margin-top: 1rem; padding: 0.6rem 1.2rem; background: #063; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; }
-    .btn:hover { background: #052; }
-    #vahan-reg-msg { margin-top: 0.75rem; font-weight: 600; color: #063; }
-  </style>
+  <title>VAHAN - Login</title>
+  <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <nav class="top-nav" role="navigation">
-    <a href="index.html">Registration</a>
-    <a href="search.html">Search &amp; Payment</a>
-  </nav>
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-badge">VH</div>
+        <div class="brand-copy">
+          <h1>VAHAN</h1>
+          <p>National Register e-Services - Dummy flow for automation</p>
+        </div>
+      </div>
+      <nav class="topbar-nav">
+        <button type="button" id="vahan-login-btn">LOGIN</button>
+        <a href="search.html">Pending Applications</a>
+      </nav>
+    </header>
 
-  <div class="main">
-    <h1 style="font-size: 18px; margin-bottom: 1rem;">RTO Registration Form</h1>
+    <main class="container">
+      <section class="hero">
+        <div>
+          <h2 class="page-title">Vehicle Lookup / Start</h2>
+          <p class="page-subtitle">Mirror the first VAHAN registration step shown in the recorded flow.</p>
+          <p class="hint">
+            Certificate of deposit (CD) / chassis and engine details are entered here before owner details are opened.
+          </p>
+          <div class="hero-actions">
+            <button type="button" class="button" id="hero-login-btn">LOGIN</button>
+            <a class="button-secondary" href="search.html">Assigned Office &amp; Action</a>
+          </div>
+        </div>
 
-    <div class="section">
-      <h2>Vehicle registration details</h2>
-      <form id="vahan-reg-form">
-        <label for="vahan-rto-dealer-id">RTO Dealer ID</label>
-        <input type="text" id="vahan-rto-dealer-id" placeholder="e.g. RTO100001" required />
+        <div class="form-card">
+          <h2>Registration Start</h2>
+          <form id="vahan-reg-form">
+            <div class="field-grid">
+              <div class="field">
+                <label for="vahan-registration-type-visible">Registration Type *</label>
+                <select id="vahan-registration-type-visible">
+                  <option value="New Registration">New Registration</option>
+                  <option value="Temporary Registration">Temporary Registration</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="vahan-chassis-no-visible">Chassis No *</label>
+                <input type="text" id="vahan-chassis-no-visible" placeholder="Enter chassis no" required />
+              </div>
+              <div class="field">
+                <label for="vahan-engine-last5-visible">Engine/Motor No (Last 5 Chars)</label>
+                <input type="text" id="vahan-engine-last5-visible" placeholder="Last 5 characters" maxlength="5" />
+              </div>
+            </div>
 
-        <label for="vahan-customer-name">Customer name</label>
-        <input type="text" id="vahan-customer-name" placeholder="e.g. Ravi Kumar" required />
+            <input type="hidden" id="vahan-rto-dealer-id" value="RTO100001" />
+            <input type="hidden" id="vahan-customer-name" value="Customer" />
+            <input type="hidden" id="vahan-chassis-no" value="" />
+            <input type="hidden" id="vahan-vehicle-model" value="SPLENDOR PLUS" />
+            <input type="hidden" id="vahan-vehicle-colour" value="Black" />
+            <input type="hidden" id="vahan-year-of-mfg" value="2026" />
+            <input type="hidden" id="vahan-total-cost" value="72000" />
+            <input type="hidden" id="vahan-fuel-type" value="Petrol" />
 
-        <label for="vahan-chassis-no">Chassis no.</label>
-        <input type="text" id="vahan-chassis-no" placeholder="e.g. MBLXXXXXXXXXXXX" required />
-
-        <label for="vahan-vehicle-model">Vehicle model</label>
-        <input type="text" id="vahan-vehicle-model" placeholder="e.g. SPLENDOR PLUS" required />
-
-        <label for="vahan-vehicle-colour">Vehicle colour</label>
-        <input type="text" id="vahan-vehicle-colour" placeholder="e.g. Black" required />
-
-        <label for="vahan-fuel-type">Fuel type</label>
-        <select id="vahan-fuel-type">
-          <option value="Petrol">Petrol</option>
-          <option value="Diesel">Diesel</option>
-          <option value="Electric">Electric</option>
-        </select>
-
-        <label for="vahan-year-of-mfg">Year of manufacture</label>
-        <input type="text" id="vahan-year-of-mfg" placeholder="e.g. 2026" required />
-
-        <label for="vahan-total-cost">Total cost (₹)</label>
-        <input type="number" id="vahan-total-cost" placeholder="e.g. 72000" min="1" step="1" required />
-
-        <button type="submit" id="vahan-reg-submit" class="btn">Submit registration</button>
-      </form>
-      <p id="vahan-reg-msg" style="display: none;"></p>
-    </div>
+            <div class="hero-actions">
+              <button type="submit" id="vahan-reg-submit" class="button">Get Details</button>
+            </div>
+            <p id="vahan-reg-msg" class="hint hidden"></p>
+          </form>
+        </div>
+      </section>
+    </main>
   </div>
 
+  <script src="app.js"></script>
   <script>
-    (function() {
-      var STORAGE_KEY = 'vaahan_applications';
+    (function () {
+      const {
+        defaultApplication,
+        saveApplication,
+        currency,
+      } = window.VahanDummy;
 
-      function getApplications() {
-        try {
-          var raw = localStorage.getItem(STORAGE_KEY);
-          return raw ? JSON.parse(raw) : {};
-        } catch (e) {
-          return {};
-        }
-      }
+      function startRegistration() {
+        const regType = document.getElementById("vahan-registration-type-visible").value;
+        const chassisVisible = document.getElementById("vahan-chassis-no-visible").value.trim();
+        const engineLast5 = document.getElementById("vahan-engine-last5-visible").value.trim();
+        const chassisBridge = document.getElementById("vahan-chassis-no").value.trim();
+        const effectiveChassis = chassisBridge || chassisVisible;
+        const customerName = document.getElementById("vahan-customer-name").value.trim() || "Customer";
+        const totalCost = Number(document.getElementById("vahan-total-cost").value || 72000);
 
-      function saveApplication(app) {
-        var apps = getApplications();
-        apps[app.application_id] = app;
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(apps));
-      }
-
-      function generateApplicationId() {
-        return String(Math.floor(10000000 + Math.random() * 90000000));
-      }
-
-      document.getElementById('vahan-reg-form').addEventListener('submit', function(e) {
-        e.preventDefault();
-        var totalCost = parseFloat(document.getElementById('vahan-total-cost').value, 10);
-        if (isNaN(totalCost) || totalCost <= 0) {
-          document.getElementById('vahan-reg-msg').textContent = 'Enter a valid total cost.';
-          document.getElementById('vahan-reg-msg').style.display = 'block';
-          document.getElementById('vahan-reg-msg').style.color = '#c00';
+        if (!effectiveChassis) {
+          const msg = document.getElementById("vahan-reg-msg");
+          msg.textContent = "Chassis No is required to continue.";
+          msg.classList.remove("hidden");
           return;
         }
-        var rtoFees = Math.round(totalCost * 0.01 + 200);
-        var applicationId = generateApplicationId();
-        var app = {
-          application_id: applicationId,
-          rto_dealer_id: document.getElementById('vahan-rto-dealer-id').value.trim(),
-          customer_name: document.getElementById('vahan-customer-name').value.trim(),
-          chassis_no: document.getElementById('vahan-chassis-no').value.trim(),
-          vehicle_model: document.getElementById('vahan-vehicle-model').value.trim(),
-          vehicle_colour: document.getElementById('vahan-vehicle-colour').value.trim(),
-          fuel_type: document.getElementById('vahan-fuel-type').value,
-          year_of_mfg: document.getElementById('vahan-year-of-mfg').value.trim(),
-          total_cost: totalCost,
-          rto_fees: rtoFees,
-          status: 'payment pending'
-        };
+
+        const app = defaultApplication({
+          rto_dealer_id: document.getElementById("vahan-rto-dealer-id").value.trim() || "RTO100001",
+          customer_name: customerName,
+          owner_name: customerName,
+          registration_type: regType,
+          chassis_no: effectiveChassis,
+          engine_last5: engineLast5,
+          vehicle_model: document.getElementById("vahan-vehicle-model").value.trim() || "SPLENDOR PLUS",
+          vehicle_colour: document.getElementById("vahan-vehicle-colour").value.trim() || "Black",
+          fuel_type: document.getElementById("vahan-fuel-type").value || "Petrol",
+          year_of_mfg: document.getElementById("vahan-year-of-mfg").value.trim() || "2026",
+          vehicle_price: totalCost,
+          insured_declared_value: String(totalCost),
+        });
+
         saveApplication(app);
-        document.getElementById('vahan-reg-msg').textContent = 'Saved. Application ID: ' + applicationId + '. Go to Search & Payment to pay.';
-        document.getElementById('vahan-reg-msg').style.display = 'block';
-        document.getElementById('vahan-reg-msg').style.color = '#063';
-        setTimeout(function() {
-          window.location.href = 'search.html?application_id=' + encodeURIComponent(applicationId);
-        }, 10);
+        const msg = document.getElementById("vahan-reg-msg");
+        msg.textContent = "Application created. Estimated fees " + currency(app.rto_fees) + ".";
+        msg.classList.remove("hidden");
+        window.location.href = "application.html?application_id=" + encodeURIComponent(app.application_id);
+      }
+
+      document.getElementById("vahan-reg-form").addEventListener("submit", function (event) {
+        event.preventDefault();
+        startRegistration();
       });
+
+      document.getElementById("vahan-login-btn").addEventListener("click", startRegistration);
+      document.getElementById("hero-login-btn").addEventListener("click", startRegistration);
     })();
   </script>
 </body>

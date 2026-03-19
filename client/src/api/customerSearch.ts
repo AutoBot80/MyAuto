@@ -38,6 +38,12 @@ export interface CustomerSearchResult {
   message?: string;
 }
 
+export interface FormVahanViewResult {
+  found: boolean;
+  columns: string[];
+  row: Record<string, string | number | null> | null;
+}
+
 export async function searchCustomer(opts: {
   mobile?: string | null;
   plate_num?: string | null;
@@ -52,6 +58,14 @@ export async function searchCustomer(opts: {
   return apiFetch<CustomerSearchResult>(
     `/customer-search/search?${qs}`
   );
+}
+
+export async function getFormVahanView(customerId: number, vehicleId: number): Promise<FormVahanViewResult> {
+  const params = new URLSearchParams({
+    customer_id: String(customerId),
+    vehicle_id: String(vehicleId),
+  });
+  return apiFetch<FormVahanViewResult>(`/customer-search/form-vahan?${params.toString()}`);
 }
 
 /** Get documents list URL for a subfolder */

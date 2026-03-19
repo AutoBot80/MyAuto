@@ -1,4 +1,4 @@
-"""Bulk ingest watcher, worker pool, and archive loop."""
+"""Bulk ingest watcher and worker pool."""
 
 from __future__ import annotations
 
@@ -6,9 +6,6 @@ import logging
 import threading
 
 from app.config import (
-    BULK_ARCHIVE_ENABLED,
-    BULK_ARCHIVE_POLL_SEC,
-    BULK_ARCHIVE_RETENTION_DAYS,
     BULK_INGEST_ENABLED,
     BULK_INGEST_POLL_SEC,
     BULK_WORKER_ENABLED,
@@ -24,7 +21,6 @@ logger = logging.getLogger(__name__)
 
 _watcher_stop = threading.Event()
 _ingest_thread: threading.Thread | None = None
-_archive_thread: threading.Thread | None = None
 _worker_threads: list[threading.Thread] = []
 _queue_service = BulkQueueService()
 
@@ -69,30 +65,8 @@ def _worker_loop(worker_index: int) -> None:
             _watcher_stop.wait(timeout=1)
 
 
-def _archive_loop() -> None:
-    while not _watcher_stop.is_set():
-        try:
-            conn = get_connection()
-            try:
-                BulkLoadsRepository.ensure_table(conn)
-                moved = BulkLoadsRepository.archive_closed_rows(
-                    conn,
-                    retention_days=BULK_ARCHIVE_RETENTION_DAYS,
-                    limit=500,
-                    dealer_id=DEALER_ID,
-                )
-                conn.commit()
-            finally:
-                conn.close()
-            if moved:
-                logger.info("bulk_watcher: archived %d closed bulk rows", moved)
-        except Exception as exc:
-            logger.exception("bulk_watcher: archive loop failed: %s", exc)
-        _watcher_stop.wait(timeout=BULK_ARCHIVE_POLL_SEC)
-
-
 def start_watcher() -> None:
-    global _ingest_thread, _archive_thread, _worker_threads
+    global _ingest_thread, _worker_threads
     if (_ingest_thread and _ingest_thread.is_alive()) or any(t.is_alive() for t in _worker_threads):
         return
 
@@ -109,20 +83,15 @@ def start_watcher() -> None:
             thread.start()
             _worker_threads.append(thread)
 
-    if BULK_ARCHIVE_ENABLED:
-        _archive_thread = threading.Thread(target=_archive_loop, daemon=True, name="bulk-archive")
-        _archive_thread.start()
-
     logger.info(
-        "bulk_watcher: started ingest=%s workers=%d archive=%s",
+        "bulk_watcher: started ingest=%s workers=%d",
         BULK_INGEST_ENABLED,
         len(_worker_threads),
-        BULK_ARCHIVE_ENABLED,
     )
 
 
 def stop_watcher() -> None:
-    global _ingest_thread, _archive_thread, _worker_threads
+    global _ingest_thread, _worker_threads
     _watcher_stop.set()
     if _ingest_thread:
         _ingest_thread.join(timeout=max(2, BULK_INGEST_POLL_SEC * 2))
@@ -130,7 +99,4 @@ def stop_watcher() -> None:
     for thread in _worker_threads:
         thread.join(timeout=4)
     _worker_threads = []
-    if _archive_thread:
-        _archive_thread.join(timeout=max(2, BULK_ARCHIVE_POLL_SEC))
-        _archive_thread = None
     logger.info("bulk_watcher: stopped")

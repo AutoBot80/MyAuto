@@ -64,13 +64,17 @@ class FillDmsResponse(BaseModel):
 class FillVahanRequest(BaseModel):
     vahan_base_url: str
     rto_dealer_id: str | None = None
+    dealer_id: int | None = None
+    customer_id: int | None = None
+    vehicle_id: int | None = None
+    subfolder: str | None = None
     customer_name: str | None = None
     chassis_no: str | None = None
     vehicle_model: str | None = None
     vehicle_colour: str | None = None
     fuel_type: str | None = None
     year_of_mfg: str | None = None
-    total_cost: float | None = None
+    vehicle_price: float | None = None
 
 
 class FillVahanResponse(BaseModel):
@@ -141,7 +145,7 @@ def get_data_from_dms(subfolder: str, dealer_id: int | None = Query(None, descri
             if val == "—" or not val:
                 val = ""
             if section == "vehicle":
-                key_map = {"key_num": "key_num", "frame_chassis_num": "frame_num", "frame___chassis_num": "frame_num", "engine_num": "engine_num", "model": "model", "color": "color", "cubic_capacity": "cubic_capacity", "seating_capacity": "seating_capacity", "body_type": "body_type", "vehicle_type": "vehicle_type", "num_cylinders": "num_cylinders", "horse_power": "horse_power", "horsepower": "horse_power", "total_amount": "total_amount", "year_of_mfg": "year_of_mfg"}
+                key_map = {"key_num": "key_num", "frame_chassis_num": "frame_num", "frame___chassis_num": "frame_num", "engine_num": "engine_num", "model": "model", "color": "color", "cubic_capacity": "cubic_capacity", "seating_capacity": "seating_capacity", "body_type": "body_type", "vehicle_type": "vehicle_type", "num_cylinders": "num_cylinders", "horse_power": "horse_power", "horsepower": "horse_power", "total_amount": "vehicle_price", "vehicle_price": "vehicle_price", "year_of_mfg": "year_of_mfg"}
                 out_key = key_map.get(key, key)
                 if val:
                     vehicle[out_key] = val
@@ -182,6 +186,8 @@ async def fill_dms_only(req: FillDmsRequest) -> FillDmsResponse:
             login_password=DMS_LOGIN_PASSWORD,
             uploads_dir=uploads_dir,
             ocr_output_dir=Path(get_ocr_output_dir(did)),
+            customer_id=req.customer_id,
+            vehicle_id=req.vehicle_id,
         ),
     )
     scraped = result.get("vehicle") or {}
@@ -291,6 +297,7 @@ async def fill_vahan_only(req: FillVahanRequest) -> FillVahanResponse:
     if not vahan_url:
         raise HTTPException(status_code=400, detail="vahan_base_url required")
     vahan_url = _ensure_absolute_url(vahan_url)
+    did = req.dealer_id if req.dealer_id is not None else DEALER_ID
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(
         None,
@@ -303,7 +310,11 @@ async def fill_vahan_only(req: FillVahanRequest) -> FillVahanResponse:
             vehicle_colour=str(req.vehicle_colour or ""),
             fuel_type=str(req.fuel_type or "Petrol"),
             year_of_mfg=str(req.year_of_mfg or ""),
-            total_cost=float(req.total_cost or 72000),
+            vehicle_price=float(req.vehicle_price or 72000),
+            ocr_output_dir=Path(get_ocr_output_dir(did)),
+            subfolder=req.subfolder,
+            customer_id=req.customer_id,
+            vehicle_id=req.vehicle_id,
         ),
     )
     return FillVahanResponse(
@@ -350,6 +361,8 @@ async def fill_dms(req: FillDmsRequest) -> FillDmsResponse:
             ocr_output_dir=Path(get_ocr_output_dir(did)),
             vahan_base_url=vahan_url,
             rto_dealer_id=req.rto_dealer_id,
+            customer_id=req.customer_id,
+            vehicle_id=req.vehicle_id,
         ),
     )
     scraped = result.get("vehicle") or {}

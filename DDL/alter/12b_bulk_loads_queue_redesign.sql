@@ -26,8 +26,3 @@ CREATE INDEX IF NOT EXISTS idx_bulk_loads_job_status_created_at_desc ON bulk_loa
 CREATE INDEX IF NOT EXISTS idx_bulk_loads_leased_until ON bulk_loads (leased_until);
 CREATE INDEX IF NOT EXISTS idx_bulk_loads_unresolved_hot ON bulk_loads (dealer_id, updated_at DESC) WHERE status IN ('Processing', 'Error', 'Rejected');
 
-CREATE TABLE IF NOT EXISTS bulk_loads_archive (LIKE bulk_loads INCLUDING DEFAULTS);
-ALTER TABLE bulk_loads_archive ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
-CREATE UNIQUE INDEX IF NOT EXISTS idx_bulk_loads_archive_job_id ON bulk_loads_archive (job_id);
-CREATE INDEX IF NOT EXISTS idx_bulk_loads_archive_dealer_created ON bulk_loads_archive (dealer_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_bulk_loads_archive_status_created ON bulk_loads_archive (dealer_id, status, created_at DESC);

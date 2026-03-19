@@ -46,7 +46,7 @@ export interface FillDmsResponse {
     vehicle_type?: string;
     num_cylinders?: string;
     horse_power?: string;
-    total_amount?: string;
+    vehicle_price?: string;
     year_of_mfg?: string;
   };
   pdfs_saved: string[];
@@ -61,13 +61,17 @@ const FILL_VAHAN_TIMEOUT_MS = 60000; // 1 min for Vahan
 export interface FillVahanRequest {
   vahan_base_url: string;
   rto_dealer_id?: string | null;
+  dealer_id?: number | null;
+  customer_id?: number | null;
+  vehicle_id?: number | null;
+  subfolder?: string | null;
   customer_name?: string | null;
   chassis_no?: string | null;
   vehicle_model?: string | null;
   vehicle_colour?: string | null;
   fuel_type?: string | null;
   year_of_mfg?: string | null;
-  total_cost?: number | null;
+  vehicle_price?: number | null;
 }
 
 export interface FillVahanResponse {

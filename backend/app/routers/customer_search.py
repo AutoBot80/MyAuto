@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from app.config import DEALER_ID
 from app.db import get_connection
+from app.repositories.form_vahan import get_by_customer_vehicle as get_form_vahan_by_customer_vehicle
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/customer-search", tags=["customer-search"])
@@ -46,7 +47,6 @@ def search_customer(
                 raise HTTPException(status_code=400, detail="Dealer has no OEM configured.")
     finally:
         conn.close()
-
     if mobile_clean:
         try:
             mobile_int = int("".join(c for c in mobile_clean if c.isdigit()))
@@ -201,3 +201,20 @@ def search_customer(
         raise HTTPException(status_code=500, detail=str(e)) from e
     finally:
         conn.close()
+
+
+@router.get("/form-vahan")
+def get_form_vahan_row(
+    customer_id: int = Query(..., description="Customer ID"),
+    vehicle_id: int = Query(..., description="Vehicle ID"),
+) -> dict:
+    """Return the form_vahan_view row for one customer/vehicle pair."""
+    try:
+        row = get_form_vahan_by_customer_vehicle(customer_id, vehicle_id)
+        if not row:
+            return {"found": False, "columns": [], "row": None}
+        columns = list(row.keys())
+        return {"found": True, "columns": columns, "row": row}
+    except Exception as e:
+        logger.exception("customer_search form-vahan failed")
+        raise HTTPException(status_code=500, detail=str(e)) from e

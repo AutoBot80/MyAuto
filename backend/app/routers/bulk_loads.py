@@ -37,8 +37,8 @@ def clear_bulk_loads(dealer_id: int | None = Query(None, description="Dealer ID;
 
 @router.get("")
 def list_bulk_loads(
-    status: str | None = Query(None, description="Filter: Success, Error, Rejected, Processing"),
-    status_in: str | None = Query(None, description="Comma-separated statuses, e.g. Success,Error,Processing"),
+    status: str | None = Query(None, description="Filter: Success, Error, Rejected, Queued, Processing"),
+    status_in: str | None = Query(None, description="Comma-separated statuses, e.g. Success,Error,Queued,Processing"),
     date_from: str | None = Query(None, description="Filter from date (dd-mm-yyyy)"),
     date_to: str | None = Query(None, description="Filter to date (dd-mm-yyyy)"),
     limit: int = Query(200, ge=1, le=500),

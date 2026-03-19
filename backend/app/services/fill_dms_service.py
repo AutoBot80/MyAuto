@@ -8,11 +8,14 @@ Writes pulled data to ocr_output/subfolder/Data from DMS.txt for consistency wit
 import logging
 import re
 import urllib.parse
+from datetime import datetime
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 
 from app.config import DMS_PLAYWRIGHT_HEADED, OCR_OUTPUT_DIR
+from app.repositories import form_dms as form_dms_repo
+from app.repositories import form_vahan as form_vahan_repo
 
 logger = logging.getLogger(__name__)
 
@@ -27,19 +30,19 @@ def _fill_vahan_and_scrape(
     vehicle_colour: str,
     fuel_type: str,
     year_of_mfg: str,
-    total_cost: float,
+    vehicle_price: float,
 ) -> tuple[str | None, float]:
     """
-    Fill dummy Vahan registration form, submit, wait for redirect, return (application_id, rto_fees).
-    rto_fees = 1% of total_cost + 200 (same as dummy Vahan formula).
+    Fill dummy Vahan registration flow, move the file to worklist, and return (application_id, rto_fees).
+    rto_fees = 1% of vehicle_price + 200 (same as dummy Vahan formula).
     """
     base = vahan_base_url.rstrip("/")
-    # Dummy Vahan rejects 0/blank total_cost because the input is required with min=1.
-    # When DMS did not provide total_amount, fall back to a safe positive value so the
+    # Dummy Vahan rejects 0/blank vehicle_price because the input is required with min=1.
+    # When DMS did not provide vehicle_price, fall back to a safe positive value so the
     # registration step can still continue and compute fees.
-    effective_total_cost = float(total_cost or 0)
-    if effective_total_cost <= 0:
-        effective_total_cost = 72000.0
+    effective_vehicle_price = float(vehicle_price or 0)
+    if effective_vehicle_price <= 0:
+        effective_vehicle_price = 72000.0
     effective_rto_dealer_id = (rto_dealer_id or "").strip() or "RTO100001"
     effective_customer_name = (customer_name or "").strip() or "Customer"
     effective_chassis_no = (chassis_no or "").strip() or "UNKNOWN-CHASSIS"
@@ -47,15 +50,20 @@ def _fill_vahan_and_scrape(
     effective_vehicle_colour = (vehicle_colour or "").strip() or "Black"
     effective_year_of_mfg = (year_of_mfg or "").strip() or "2026"
     page.goto(f"{base}/index.html", wait_until="domcontentloaded", timeout=20000)
-    page.fill("#vahan-rto-dealer-id", effective_rto_dealer_id)
-    page.fill("#vahan-customer-name", effective_customer_name)
-    page.fill("#vahan-chassis-no", effective_chassis_no)
-    page.fill("#vahan-vehicle-model", effective_vehicle_model)
-    page.fill("#vahan-vehicle-colour", effective_vehicle_colour)
-    page.select_option("#vahan-fuel-type", value=(fuel_type or "Petrol").strip())
-    page.fill("#vahan-year-of-mfg", effective_year_of_mfg)
-    page.fill("#vahan-total-cost", str(int(effective_total_cost)))
+    page.locator("#vahan-rto-dealer-id").evaluate("(el, value) => el.value = value", effective_rto_dealer_id)
+    page.locator("#vahan-customer-name").evaluate("(el, value) => el.value = value", effective_customer_name)
+    page.locator("#vahan-chassis-no").evaluate("(el, value) => el.value = value", effective_chassis_no)
+    page.locator("#vahan-vehicle-model").evaluate("(el, value) => el.value = value", effective_vehicle_model)
+    page.locator("#vahan-vehicle-colour").evaluate("(el, value) => el.value = value", effective_vehicle_colour)
+    page.fill("#vahan-chassis-no-visible", effective_chassis_no)
+    engine_tail = effective_chassis_no[-5:] if effective_chassis_no else "12345"
+    page.fill("#vahan-engine-last5-visible", engine_tail)
+    page.locator("#vahan-fuel-type").evaluate("(el, value) => el.value = value", (fuel_type or "Petrol").strip())
+    page.locator("#vahan-year-of-mfg").evaluate("(el, value) => el.value = value", effective_year_of_mfg)
+    page.locator("#vahan-total-cost").evaluate("(el, value) => el.value = value", str(int(effective_vehicle_price)))
     page.click("#vahan-reg-submit")
+    page.wait_for_url("**/application.html*", timeout=15000)
+    page.click("#vahan-save-movement")
     page.wait_for_url("**/search.html*", timeout=15000)
     url = page.url
     application_id = None
@@ -67,7 +75,7 @@ def _fill_vahan_and_scrape(
             application_id = ids[0]
     # Wait for search result to render (auto-submit on load), then scrape rto_fees
     rto_fees = 200.0
-    total = effective_total_cost
+    total = effective_vehicle_price
     fallback_fees = round(total * 0.01 + 200, 2) if total else 200.0
     try:
         page.wait_for_selector("#vahan-result-section:visible", timeout=8000)
@@ -83,6 +91,13 @@ def _fill_vahan_and_scrape(
     except Exception:
         rto_fees = fallback_fees
     return (application_id, rto_fees)
+
+
+def _complete_vahan_upload_step(page) -> bool:
+    """Advance the dummy Vahan flow to the files-uploaded / cart checkpoint."""
+    page.click("#vahan-upload-btn")
+    page.wait_for_selector("#vahan-upload-status[data-uploaded='1']", timeout=8000)
+    return True
 
 
 def _split_name(full_name: str | None) -> tuple[str, str]:
@@ -132,7 +147,7 @@ def _write_data_from_dms(ocr_output_dir: Path, subfolder: str, customer: dict, v
         ("Vehicle type", "vehicle_type"),
         ("Num cylinders", "num_cylinders"),
         ("Horsepower", "horse_power"),
-        ("Total amount", "total_amount"),
+        ("Vehicle price", "vehicle_price"),
         ("Year of Mfg", "year_of_mfg"),
     ]:
         val = vehicle.get(key)
@@ -141,9 +156,11 @@ def _write_data_from_dms(ocr_output_dir: Path, subfolder: str, customer: dict, v
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
-def _parse_total_cost(vehicle: dict) -> float:
-    """Parse total_amount from vehicle (e.g. '72000' or '72,000') for Vahan total_cost."""
-    raw = vehicle.get("total_amount")
+def _parse_vehicle_price(vehicle: dict) -> float:
+    """Parse vehicle_price from vehicle (e.g. '72000' or '72,000') for Vahan automation."""
+    raw = vehicle.get("vehicle_price")
+    if raw is None:
+        raw = vehicle.get("total_amount")
     if raw is None:
         return 0.0
     s = str(raw).strip().replace(",", "")
@@ -151,6 +168,389 @@ def _parse_total_cost(vehicle: dict) -> float:
         return float(s)
     except ValueError:
         return 0.0
+
+
+def _clean_text(value: object | None) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _format_amount(value: object | None) -> str:
+    if value is None or str(value).strip() == "":
+        return ""
+    try:
+        return f"{float(value):.2f}"
+    except (TypeError, ValueError):
+        return str(value).strip()
+
+
+def _parse_float_or_zero(value: object | None) -> float:
+    if value is None or str(value).strip() == "":
+        return 0.0
+    try:
+        return float(str(value).replace(",", "").strip())
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _require_customer_vehicle_ids(customer_id: int | None, vehicle_id: int | None, view_name: str) -> tuple[int, int]:
+    if customer_id is None or vehicle_id is None:
+        raise ValueError(f"customer_id and vehicle_id are required because automation now reads from {view_name} only")
+    return customer_id, vehicle_id
+
+
+def _load_form_vahan_row(customer_id: int | None, vehicle_id: int | None) -> dict:
+    if customer_id is None or vehicle_id is None:
+        return {}
+    try:
+        return form_vahan_repo.get_by_customer_vehicle(customer_id, vehicle_id) or {}
+    except Exception as exc:
+        logger.warning(
+            "fill_dms_service: form_vahan_view lookup failed customer_id=%s vehicle_id=%s: %s",
+            customer_id,
+            vehicle_id,
+            exc,
+        )
+        return {}
+
+
+def _load_required_form_vahan_row(customer_id: int | None, vehicle_id: int | None) -> dict:
+    cid, vid = _require_customer_vehicle_ids(customer_id, vehicle_id, "form_vahan_view")
+    row = _load_form_vahan_row(cid, vid)
+    if not row:
+        raise ValueError(f"No form_vahan_view row found for customer_id={cid} vehicle_id={vid}")
+    return row
+
+
+def _load_form_dms_row(customer_id: int | None, vehicle_id: int | None) -> dict:
+    if customer_id is None or vehicle_id is None:
+        return {}
+    try:
+        return form_dms_repo.get_by_customer_vehicle(customer_id, vehicle_id) or {}
+    except Exception as exc:
+        logger.warning(
+            "fill_dms_service: form_dms_view lookup failed customer_id=%s vehicle_id=%s: %s",
+            customer_id,
+            vehicle_id,
+            exc,
+        )
+        return {}
+
+
+def _load_required_form_dms_row(customer_id: int | None, vehicle_id: int | None) -> dict:
+    cid, vid = _require_customer_vehicle_ids(customer_id, vehicle_id, "form_dms_view")
+    row = _load_form_dms_row(cid, vid)
+    if not row:
+        raise ValueError(f"No form_dms_view row found for customer_id={cid} vehicle_id={vid}")
+    return row
+
+
+def _build_dms_fill_values(customer_id: int | None, vehicle_id: int | None, subfolder: str | None = None) -> dict:
+    row = _load_required_form_dms_row(customer_id, vehicle_id)
+    first_name = _clean_text(row.get("Contact First Name"))
+    last_name = _clean_text(row.get("Contact Last Name"))
+    full_name = " ".join(part for part in [first_name, last_name] if part).strip()
+    effective_subfolder = _clean_text(row.get("subfolder")) or _clean_text(subfolder)
+    return {
+        "row": row,
+        "subfolder": effective_subfolder,
+        "customer_name": full_name,
+        "first_name": first_name,
+        "last_name": last_name,
+        "mobile_phone": _clean_text(row.get("Mobile Phone #"))[:10],
+        "address_line_1": _clean_text(row.get("Address Line 1"))[:80],
+        "state": _clean_text(row.get("State")),
+        "pin_code": _clean_text(row.get("Pin Code"))[:6],
+        "key_partial": _clean_text(row.get("Key num (partial)"))[:8],
+        "frame_partial": _clean_text(row.get("Frame / Chassis num (partial)"))[:12],
+        "engine_partial": _clean_text(row.get("Engine num (partial)"))[:12],
+        "customer_export": {
+            "name": full_name,
+            "address": _clean_text(row.get("Address Line 1")),
+            "state": _clean_text(row.get("State")),
+            "pin_code": _clean_text(row.get("Pin Code")),
+            "mobile_number": _clean_text(row.get("Mobile Phone #")),
+        },
+    }
+
+
+def _build_vahan_fill_values(customer_id: int | None, vehicle_id: int | None, subfolder: str | None = None) -> dict:
+    row = _load_required_form_vahan_row(customer_id, vehicle_id)
+    vehicle_price = _parse_float_or_zero(row.get("vehicle_price"))
+    if vehicle_price <= 0:
+        raise ValueError(
+            f"form_vahan_view.vehicle_price is empty for customer_id={customer_id} vehicle_id={vehicle_id}; "
+            "run DMS first so vehicle_price is stored in vehicle_master"
+        )
+    effective_subfolder = _clean_text(row.get("subfolder")) or _clean_text(subfolder)
+    return {
+        "row": row,
+        "subfolder": effective_subfolder,
+        "rto_dealer_id": _clean_text(row.get("rto_dealer_id")) or "RTO100001",
+        "customer_name": _clean_text(row.get("Owner Name *")) or "Customer",
+        "chassis_no": _clean_text(row.get("Chassis No *")) or "UNKNOWN-CHASSIS",
+        "vehicle_model": _clean_text(row.get("vehicle_model")) or "UNKNOWN MODEL",
+        "vehicle_colour": _clean_text(row.get("vehicle_colour")) or "Black",
+        "fuel_type": _clean_text(row.get("fuel_type")) or "Petrol",
+        "year_of_mfg": _clean_text(row.get("year_of_mfg")) or "2026",
+        "vehicle_price": vehicle_price,
+    }
+
+
+def _write_dms_form_values(
+    ocr_output_dir: Path,
+    subfolder: str | None,
+    customer_id: int | None,
+    vehicle_id: int | None,
+    *,
+    customer_name: str,
+    mobile_number: str,
+    address: str,
+    state: str,
+    pin_code: str,
+    key_no: str,
+    frame_no: str,
+    engine_no: str,
+) -> None:
+    if not subfolder or not str(subfolder).strip():
+        return
+
+    row = _load_form_dms_row(customer_id, vehicle_id)
+    safe_subfolder = _safe_subfolder_name(subfolder)
+    subfolder_path = Path(ocr_output_dir).resolve() / safe_subfolder
+    subfolder_path.mkdir(parents=True, exist_ok=True)
+    path = subfolder_path / "DMS_Form_Values.txt"
+
+    row_first_name = _clean_text(row.get("Contact First Name"))
+    row_last_name = _clean_text(row.get("Contact Last Name"))
+    first_name, last_name = _split_name(customer_name or "")
+    effective_first_name = _clean_text(first_name) or row_first_name
+    effective_last_name = _clean_text(last_name) or row_last_name
+    effective_mobile = _clean_text(mobile_number)[:10] or _clean_text(row.get("Mobile Phone #"))[:10]
+    effective_address = _clean_text(address)[:80] or _clean_text(row.get("Address Line 1"))[:80]
+    effective_state = _clean_text(state) or _clean_text(row.get("State"))
+    effective_pin = _clean_text(pin_code)[:6] or _clean_text(row.get("Pin Code"))[:6]
+    effective_key = _clean_text(key_no)[:8] or _clean_text(row.get("Key num (partial)"))
+    effective_frame = _clean_text(frame_no)[:12] or _clean_text(row.get("Frame / Chassis num (partial)"))
+    effective_engine = _clean_text(engine_no)[:12] or _clean_text(row.get("Engine num (partial)"))
+
+    label_values: list[tuple[str, str]] = [
+        ("Mr/Ms", _clean_text(row.get("Mr/Ms")) or "Mr."),
+        ("Contact First Name", effective_first_name),
+        ("Contact Last Name", effective_last_name),
+        ("Mobile Phone #", effective_mobile),
+        ("State", effective_state),
+        ("Address Line 1", effective_address),
+        ("Pin Code", effective_pin),
+        ("Key num (partial)", effective_key),
+        ("Frame / Chassis num (partial)", effective_frame),
+        ("Engine num (partial)", effective_engine),
+    ]
+
+    runtime_values: list[tuple[str, str]] = [
+        ("sales_id", _clean_text(row.get("sales_id"))),
+        ("customer_id", _clean_text(customer_id or row.get("customer_id"))),
+        ("vehicle_id", _clean_text(vehicle_id or row.get("vehicle_id"))),
+        ("dealer_id", _clean_text(row.get("dealer_id"))),
+        ("subfolder", safe_subfolder),
+        ("dealer_name", _clean_text(row.get("dealer_name"))),
+        ("oem_name", _clean_text(row.get("oem_name"))),
+        ("source_customer_name", _clean_text(customer_name)),
+        ("source_mobile_number", _clean_text(mobile_number)),
+        ("source_address", _clean_text(address)),
+        ("source_state", _clean_text(state)),
+        ("source_pin_code", _clean_text(pin_code)),
+        ("source_key_no", _clean_text(key_no)),
+        ("source_frame_no", _clean_text(frame_no)),
+        ("source_engine_no", _clean_text(engine_no)),
+        ("generated_at", datetime.now().strftime("%d-%m-%Y %H:%M:%S")),
+    ]
+
+    lines = ["DMS Form Values", "", "--- Values sent to DMS labels ---"]
+    for label, value in label_values:
+        lines.append(f"{label}: {value or '—'}")
+
+    lines.extend(["", "--- Runtime values used by Playwright ---"])
+    for label, value in runtime_values:
+        lines.append(f"{label}: {value or '—'}")
+
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def _write_vahan_form_values(
+    ocr_output_dir: Path,
+    subfolder: str | None,
+    customer_id: int | None,
+    vehicle_id: int | None,
+    *,
+    rto_dealer_id: str,
+    customer_name: str,
+    chassis_no: str,
+    vehicle_model: str,
+    vehicle_colour: str,
+    fuel_type: str,
+    year_of_mfg: str,
+    vehicle_price: float,
+    application_id: str | None,
+    rto_fees: float | None,
+) -> None:
+    if not subfolder or not str(subfolder).strip():
+        return
+
+    row = _load_form_vahan_row(customer_id, vehicle_id)
+    safe_subfolder = _safe_subfolder_name(subfolder)
+    subfolder_path = Path(ocr_output_dir).resolve() / safe_subfolder
+    subfolder_path.mkdir(parents=True, exist_ok=True)
+    path = subfolder_path / "Vahan_Form_Values.txt"
+
+    effective_rto_dealer_id = _clean_text(rto_dealer_id) or _clean_text(row.get("rto_dealer_id")) or "RTO100001"
+    effective_customer_name = _clean_text(customer_name) or _clean_text(row.get("Owner Name *")) or "Customer"
+    effective_chassis_no = _clean_text(chassis_no) or _clean_text(row.get("Chassis No *")) or "UNKNOWN-CHASSIS"
+    effective_vehicle_model = _clean_text(vehicle_model) or _clean_text(row.get("vehicle_model")) or "UNKNOWN MODEL"
+    effective_vehicle_colour = _clean_text(vehicle_colour) or _clean_text(row.get("vehicle_colour")) or "Black"
+    effective_fuel_type = _clean_text(fuel_type) or _clean_text(row.get("fuel_type")) or "Petrol"
+    effective_year_of_mfg = _clean_text(year_of_mfg) or _clean_text(row.get("year_of_mfg")) or "2026"
+    effective_vehicle_price = float(vehicle_price or 0)
+    if effective_vehicle_price <= 0:
+        effective_vehicle_price = 72000.0
+
+    label_values: list[tuple[str, str]] = [
+        ("Registration Type *", _clean_text(row.get("Registration Type *")) or "New Registration"),
+        ("Chassis No *", effective_chassis_no),
+        ("Engine/Motor No (Last 5 Chars)", effective_chassis_no[-5:] if effective_chassis_no else "12345"),
+        ("Purchase Delivery Date", _clean_text(row.get("Purchase Delivery Date"))),
+        ("Do You want to Opt Choice Number / Fancy Number / Retention Number", _clean_text(row.get("Do You want to Opt Choice Number / Fancy Number / Retention Number")) or "SELECT"),
+        ("Owner Name *", effective_customer_name),
+        ("Owner Type", _clean_text(row.get("Owner Type")) or "Individual"),
+        ("Son/Wife/Daughter of", _clean_text(row.get("Son/Wife/Daughter of"))),
+        ("Ownership Serial", _clean_text(row.get("Ownership Serial")) or "1"),
+        ("Aadhaar Mode", _clean_text(row.get("Aadhaar Mode")) or "Aadhaar OTP"),
+        ("Category *", _clean_text(row.get("Category *")) or "General"),
+        ("Mobile No", _clean_text(row.get("Mobile No"))),
+        ("PAN Card", _clean_text(row.get("PAN Card"))),
+        ("Voter ID", _clean_text(row.get("Voter ID"))),
+        ("Aadhaar No", _clean_text(row.get("Aadhaar No"))),
+        ("Permanent Address", _clean_text(row.get("Permanent Address"))),
+        ("House No & Street Name", _clean_text(row.get("House No & Street Name"))),
+        ("Village/Town/City", _clean_text(row.get("Village/Town/City"))),
+        ("Insurance Type", _clean_text(row.get("Insurance Type"))),
+        ("Insurer", _clean_text(row.get("Insurer"))),
+        ("Policy No", _clean_text(row.get("Policy No"))),
+        ("Insurance From (DD-MMM-YYYY)", _clean_text(row.get("Insurance From (DD-MMM-YYYY)"))),
+        ("Insurance Upto (DD-MMM-YYYY)", _clean_text(row.get("Insurance Upto (DD-MMM-YYYY)"))),
+        ("Insured Declared Value", _clean_text(row.get("Insured Declared Value"))),
+        ("Please Select Series Type", _clean_text(row.get("Please Select Series Type")) or "State Series"),
+        ("Financier / Bank", _clean_text(row.get("Financier / Bank"))),
+        ("Application No", _clean_text(application_id) or _clean_text(row.get("Application No"))),
+        ("Assigned Office & Action", _clean_text(row.get("Assigned Office & Action")) or effective_rto_dealer_id),
+        ("Registration No", _clean_text(row.get("Registration No"))),
+        ("Amount", _format_amount(rto_fees) or _clean_text(row.get("Amount"))),
+    ]
+
+    runtime_values: list[tuple[str, str]] = [
+        ("sales_id", _clean_text(row.get("sales_id"))),
+        ("customer_id", _clean_text(customer_id or row.get("customer_id"))),
+        ("vehicle_id", _clean_text(vehicle_id or row.get("vehicle_id"))),
+        ("dealer_id", _clean_text(row.get("dealer_id"))),
+        ("subfolder", safe_subfolder),
+        ("rto_dealer_id", effective_rto_dealer_id),
+        ("vehicle_model", effective_vehicle_model),
+        ("vehicle_colour", effective_vehicle_colour),
+        ("fuel_type", effective_fuel_type),
+        ("year_of_mfg", effective_year_of_mfg),
+        ("vehicle_price", _format_amount(effective_vehicle_price)),
+        ("generated_at", datetime.now().strftime("%d-%m-%Y %H:%M:%S")),
+    ]
+
+    lines = ["Vahan Form Values", "", "--- Values sent to Vahan labels ---"]
+    for label, value in label_values:
+        lines.append(f"{label}: {value or '—'}")
+
+    lines.extend(["", "--- Runtime values used by Playwright ---"])
+    for label, value in runtime_values:
+        lines.append(f"{label}: {value or '—'}")
+
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def _run_vahan_in_context(
+    context,
+    vahan_base_url: str,
+    *,
+    customer_id: int | None,
+    vehicle_id: int | None,
+    subfolder: str | None,
+    ocr_output_dir: Path | None,
+    complete_upload_step: bool,
+) -> dict:
+    """Run Vahan using an existing browser context so batches can reuse one session."""
+    vahan_values = _build_vahan_fill_values(customer_id, vehicle_id, subfolder)
+    effective_subfolder = vahan_values.get("subfolder") or subfolder
+    page = context.new_page()
+    page.set_default_timeout(15_000)
+    try:
+        app_id, fees = _fill_vahan_and_scrape(
+            page,
+            vahan_base_url=vahan_base_url.strip(),
+            rto_dealer_id=vahan_values["rto_dealer_id"],
+            customer_name=vahan_values["customer_name"],
+            chassis_no=vahan_values["chassis_no"],
+            vehicle_model=vahan_values["vehicle_model"],
+            vehicle_colour=vahan_values["vehicle_colour"],
+            fuel_type=vahan_values["fuel_type"],
+            year_of_mfg=vahan_values["year_of_mfg"],
+            vehicle_price=vahan_values["vehicle_price"],
+        )
+        added_to_cart = False
+        if complete_upload_step:
+            added_to_cart = _complete_vahan_upload_step(page)
+        if ocr_output_dir is not None and effective_subfolder:
+            _write_vahan_form_values(
+                ocr_output_dir=ocr_output_dir,
+                subfolder=effective_subfolder,
+                customer_id=customer_id,
+                vehicle_id=vehicle_id,
+                rto_dealer_id=vahan_values["rto_dealer_id"],
+                customer_name=vahan_values["customer_name"],
+                chassis_no=vahan_values["chassis_no"],
+                vehicle_model=vahan_values["vehicle_model"],
+                vehicle_colour=vahan_values["vehicle_colour"],
+                fuel_type=vahan_values["fuel_type"],
+                year_of_mfg=vahan_values["year_of_mfg"],
+                vehicle_price=vahan_values["vehicle_price"],
+                application_id=app_id,
+                rto_fees=fees,
+            )
+        return {
+            "application_id": app_id,
+            "rto_fees": fees,
+            "added_to_cart": added_to_cart,
+            "subfolder": effective_subfolder,
+        }
+    finally:
+        page.close()
+
+
+def run_fill_vahan_batch_row(
+    context,
+    vahan_base_url: str,
+    *,
+    customer_id: int,
+    vehicle_id: int,
+    subfolder: str | None,
+    ocr_output_dir: Path | None,
+) -> dict:
+    """Batch-safe Vahan helper that reuses one browser/context and stops after cart upload."""
+    return _run_vahan_in_context(
+        context,
+        vahan_base_url,
+        customer_id=customer_id,
+        vehicle_id=vehicle_id,
+        subfolder=subfolder,
+        ocr_output_dir=ocr_output_dir,
+        complete_upload_step=True,
+    )
 
 
 def update_vehicle_master_from_dms(vehicle_id: int, scraped: dict) -> None:
@@ -169,6 +569,9 @@ def update_vehicle_master_from_dms(vehicle_id: int, scraped: dict) -> None:
     num_cylinders = scraped.get("num_cylinders")
     horse_power = scraped.get("horse_power")
     year_of_mfg = scraped.get("year_of_mfg")
+    vehicle_price = scraped.get("vehicle_price")
+    if vehicle_price is None:
+        vehicle_price = scraped.get("total_amount")
     if cubic_capacity:
         try:
             cubic_capacity = float(str(cubic_capacity).replace(",", ""))
@@ -194,6 +597,11 @@ def update_vehicle_master_from_dms(vehicle_id: int, scraped: dict) -> None:
             year_of_mfg = int(str(year_of_mfg).strip())
         except (ValueError, TypeError):
             year_of_mfg = None
+    if vehicle_price:
+        try:
+            vehicle_price = float(str(vehicle_price).replace(",", ""))
+        except (ValueError, TypeError):
+            vehicle_price = None
 
     conn = get_connection()
     try:
@@ -212,10 +620,11 @@ def update_vehicle_master_from_dms(vehicle_id: int, scraped: dict) -> None:
                     vehicle_type = COALESCE(%s, vehicle_type),
                     num_cylinders = COALESCE(%s, num_cylinders),
                     horse_power = COALESCE(%s, horse_power),
-                    year_of_mfg = COALESCE(%s, year_of_mfg)
+                    year_of_mfg = COALESCE(%s, year_of_mfg),
+                    vehicle_price = COALESCE(%s, vehicle_price)
                 WHERE vehicle_id = %s
                 """,
-                (chassis, engine, key_num, model, colour, cubic_capacity, seating_capacity, body_type, vehicle_type, num_cylinders, horse_power, year_of_mfg, vehicle_id),
+                (chassis, engine, key_num, model, colour, cubic_capacity, seating_capacity, body_type, vehicle_type, num_cylinders, horse_power, year_of_mfg, vehicle_price, vehicle_id),
             )
             conn.commit()
             if cur.rowcount > 0:
@@ -233,6 +642,8 @@ def run_fill_dms_only(
     login_password: str,
     uploads_dir: Path,
     ocr_output_dir: Path | None = None,
+    customer_id: int | None = None,
+    vehicle_id: int | None = None,
 ) -> dict:
     """
     Run only DMS steps: login, enquiry, vehicle search, scrape, PDFs.
@@ -242,9 +653,15 @@ def run_fill_dms_only(
     if not dms_base_url:
         result["error"] = "DMS_BASE_URL not set"
         return result
-    subfolder_path = uploads_dir / subfolder
-    subfolder_path.mkdir(parents=True, exist_ok=True)
     ocr_dir = Path(ocr_output_dir or OCR_OUTPUT_DIR).resolve()
+    try:
+        dms_values = _build_dms_fill_values(customer_id, vehicle_id, subfolder)
+    except Exception as e:
+        result["error"] = str(e)
+        return result
+    effective_subfolder = dms_values.get("subfolder") or subfolder
+    subfolder_path = uploads_dir / effective_subfolder
+    subfolder_path.mkdir(parents=True, exist_ok=True)
 
     try:
         logger.info("fill_dms_service: run_fill_dms_only starting dms=%s", dms_base_url[:50])
@@ -267,29 +684,43 @@ def run_fill_dms_only(
             page.click("#dms-login-btn")
             page.wait_for_url("**/enquiry.html**", timeout=15000)
 
-            first_name, last_name = _split_name(customer.get("name"))
-            page.fill("#dms-contact-first-name", first_name or "")
-            page.fill("#dms-contact-last-name", last_name or "")
-            page.fill("#dms-mobile-phone", str(customer.get("mobile_number") or customer.get("mobile") or "")[:10])
-            addr = (customer.get("address") or "")[:80]
+            page.fill("#dms-contact-first-name", dms_values["first_name"])
+            page.fill("#dms-contact-last-name", dms_values["last_name"])
+            mobile_phone = dms_values["mobile_phone"]
+            page.fill("#dms-mobile-phone", mobile_phone)
+            addr = dms_values["address_line_1"]
             if addr:
                 page.fill("#dms-address-line-1", addr)
-            state = (customer.get("state") or "").strip()
+            state = dms_values["state"]
             if state:
                 try:
                     page.select_option("#dms-state", label=state)
                 except Exception:
                     pass
-            pin = str(customer.get("pin_code") or customer.get("pin") or "")[:6]
+            pin = dms_values["pin_code"]
             if pin:
                 page.fill("#dms-pin-code", pin)
             page.click("#dms-submit-enquiry")
             page.wait_for_timeout(10)
 
             page.goto(f"{base}/vehicle.html", wait_until="domcontentloaded", timeout=15000)
-            key_partial = str(vehicle.get("key_no") or "").strip()[:8]
-            frame_partial = str(vehicle.get("frame_no") or "").strip()[:12]
-            engine_partial = str(vehicle.get("engine_no") or "").strip()[:12]
+            key_partial = dms_values["key_partial"]
+            frame_partial = dms_values["frame_partial"]
+            engine_partial = dms_values["engine_partial"]
+            _write_dms_form_values(
+                ocr_output_dir=ocr_dir,
+                subfolder=effective_subfolder,
+                customer_id=customer_id,
+                vehicle_id=vehicle_id,
+                customer_name=dms_values["customer_name"],
+                mobile_number=mobile_phone,
+                address=addr,
+                state=state,
+                pin_code=pin,
+                key_no=key_partial,
+                frame_no=frame_partial,
+                engine_no=engine_partial,
+            )
             page.fill("#dms-vehicle-key", key_partial)
             page.fill("#dms-vehicle-frame", frame_partial)
             page.fill("#dms-vehicle-engine", engine_partial)
@@ -314,7 +745,7 @@ def run_fill_dms_only(
                         "vehicle_type": cells.nth(8).inner_text().strip(),
                         "num_cylinders": cells.nth(9).inner_text().strip(),
                         "horse_power": cells.nth(10).inner_text().strip(),
-                        "total_amount": cells.nth(11).inner_text().strip(),
+                        "vehicle_price": cells.nth(11).inner_text().strip(),
                         "year_of_mfg": cells.nth(12).inner_text().strip(),
                     }
                 elif n >= 9:
@@ -326,7 +757,7 @@ def run_fill_dms_only(
                         "color": cells.nth(4).inner_text().strip(),
                         "cubic_capacity": cells.nth(5).inner_text().strip(),
                         "seating_capacity": cells.nth(6).inner_text().strip(),
-                        "total_amount": cells.nth(7).inner_text().strip(),
+                        "vehicle_price": cells.nth(7).inner_text().strip(),
                         "year_of_mfg": cells.nth(8).inner_text().strip(),
                     }
                 elif n >= 8:
@@ -337,10 +768,15 @@ def run_fill_dms_only(
                         "model": cells.nth(3).inner_text().strip(),
                         "color": cells.nth(4).inner_text().strip(),
                         "cubic_capacity": cells.nth(5).inner_text().strip(),
-                        "total_amount": cells.nth(6).inner_text().strip(),
+                        "vehicle_price": cells.nth(6).inner_text().strip(),
                         "year_of_mfg": cells.nth(7).inner_text().strip(),
                     }
             logger.info("fill_dms_service: run_fill_dms_only scraped vehicle=%s", result.get("vehicle"))
+            if vehicle_id and result.get("vehicle"):
+                try:
+                    update_vehicle_master_from_dms(vehicle_id, result.get("vehicle") or {})
+                except Exception as exc:
+                    logger.warning("fill_dms_service: vehicle_master update failed vehicle_id=%s: %s", vehicle_id, exc)
 
             page.goto(f"{base}/reports.html", wait_until="domcontentloaded", timeout=15000)
             path21 = subfolder_path / "form21.pdf"
@@ -368,7 +804,7 @@ def run_fill_dms_only(
         logger.warning("fill_dms_service: run_fill_dms_only exception %s", e)
 
     try:
-        _write_data_from_dms(ocr_dir, subfolder, customer, result.get("vehicle") or {})
+        _write_data_from_dms(ocr_dir, effective_subfolder, dms_values.get("customer_export") or {}, result.get("vehicle") or {})
     except Exception as e:
         result["error"] = (result.get("error") or "") + f"; DMS file write: {e!s}"
     return result
@@ -383,13 +819,17 @@ def run_fill_vahan_only(
     vehicle_colour: str,
     fuel_type: str,
     year_of_mfg: str,
-    total_cost: float,
+    vehicle_price: float,
+    ocr_output_dir: Path | None = None,
+    subfolder: str | None = None,
+    customer_id: int | None = None,
+    vehicle_id: int | None = None,
 ) -> dict:
     """
     Run only Vahan step: fill registration form, submit, scrape application_id and rto_fees.
     Separate Playwright process (new browser). Returns application_id, rto_fees, error.
     """
-    result: dict = {"application_id": None, "rto_fees": None, "error": None}
+    result: dict = {"application_id": None, "rto_fees": None, "added_to_cart": False, "error": None}
     if not vahan_base_url or not vahan_base_url.strip():
         result["error"] = "vahan_base_url required"
         return result
@@ -398,23 +838,21 @@ def run_fill_vahan_only(
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=not DMS_PLAYWRIGHT_HEADED)
             context = browser.new_context()
-            page = context.new_page()
-            page.set_default_timeout(15_000)
-            app_id, fees = _fill_vahan_and_scrape(
-                page,
+            batch_result = _run_vahan_in_context(
+                context,
                 vahan_base_url=vahan_base_url.strip(),
-                rto_dealer_id=(rto_dealer_id or "").strip() or "RTO100001",
-                customer_name=str(customer_name or ""),
-                chassis_no=str(chassis_no or ""),
-                vehicle_model=str(vehicle_model or ""),
-                vehicle_colour=str(vehicle_colour or ""),
-                fuel_type=str(fuel_type or "Petrol"),
-                year_of_mfg=str(year_of_mfg or ""),
-                total_cost=float(total_cost or 72000),
+                customer_id=customer_id,
+                vehicle_id=vehicle_id,
+                subfolder=subfolder,
+                ocr_output_dir=ocr_output_dir,
+                complete_upload_step=False,
             )
-            result["application_id"] = app_id
-            result["rto_fees"] = fees
-            logger.info("fill_dms_service: run_fill_vahan_only done application_id=%s rto_fees=%s", app_id, fees)
+            result.update(batch_result)
+            logger.info(
+                "fill_dms_service: run_fill_vahan_only done application_id=%s rto_fees=%s",
+                batch_result.get("application_id"),
+                batch_result.get("rto_fees"),
+            )
             browser.close()
     except PlaywrightTimeout as e:
         result["error"] = f"Timeout: {e!s}"
@@ -436,6 +874,8 @@ def run_fill_dms(
     ocr_output_dir: Path | None = None,
     vahan_base_url: str | None = None,
     rto_dealer_id: str | None = None,
+    customer_id: int | None = None,
+    vehicle_id: int | None = None,
     headless: bool | None = None,
 ) -> dict:
     """
@@ -455,9 +895,15 @@ def run_fill_dms(
     if not dms_base_url:
         result["error"] = "DMS_BASE_URL not set"
         return result
-    subfolder_path = uploads_dir / subfolder
-    subfolder_path.mkdir(parents=True, exist_ok=True)
     ocr_dir = Path(ocr_output_dir or OCR_OUTPUT_DIR).resolve()
+    try:
+        dms_values = _build_dms_fill_values(customer_id, vehicle_id, subfolder)
+    except Exception as e:
+        result["error"] = str(e)
+        return result
+    effective_subfolder = dms_values.get("subfolder") or subfolder
+    subfolder_path = uploads_dir / effective_subfolder
+    subfolder_path.mkdir(parents=True, exist_ok=True)
 
     headed = not headless if headless is not None else DMS_PLAYWRIGHT_HEADED
     try:
@@ -484,20 +930,20 @@ def run_fill_dms(
             page.wait_for_url("**/enquiry.html**", timeout=15000)
 
             # 2) Enquiry: fill customer and submit (only essential fields to speed up)
-            first_name, last_name = _split_name(customer.get("name"))
-            page.fill("#dms-contact-first-name", first_name or "")
-            page.fill("#dms-contact-last-name", last_name or "")
-            page.fill("#dms-mobile-phone", str(customer.get("mobile_number") or customer.get("mobile") or "")[:10])
-            addr = (customer.get("address") or "")[:80]
+            page.fill("#dms-contact-first-name", dms_values["first_name"])
+            page.fill("#dms-contact-last-name", dms_values["last_name"])
+            mobile_phone = dms_values["mobile_phone"]
+            page.fill("#dms-mobile-phone", mobile_phone)
+            addr = dms_values["address_line_1"]
             if addr:
                 page.fill("#dms-address-line-1", addr)
-            state = (customer.get("state") or "").strip()
+            state = dms_values["state"]
             if state:
                 try:
                     page.select_option("#dms-state", label=state)
                 except Exception:
                     pass
-            pin = str(customer.get("pin_code") or customer.get("pin") or "")[:6]
+            pin = dms_values["pin_code"]
             if pin:
                 page.fill("#dms-pin-code", pin)
             page.click("#dms-submit-enquiry")
@@ -506,16 +952,30 @@ def run_fill_dms(
 
             # 3) Vehicle page: fill search keys and search
             page.goto(f"{base}/vehicle.html", wait_until="domcontentloaded", timeout=15000)
-            key_partial = str(vehicle.get("key_no") or "").strip()[:8]
-            frame_partial = str(vehicle.get("frame_no") or "").strip()[:12]
-            engine_partial = str(vehicle.get("engine_no") or "").strip()[:12]
+            key_partial = dms_values["key_partial"]
+            frame_partial = dms_values["frame_partial"]
+            engine_partial = dms_values["engine_partial"]
+            _write_dms_form_values(
+                ocr_output_dir=ocr_dir,
+                subfolder=effective_subfolder,
+                customer_id=customer_id,
+                vehicle_id=vehicle_id,
+                customer_name=dms_values["customer_name"],
+                mobile_number=mobile_phone,
+                address=addr,
+                state=state,
+                pin_code=pin,
+                key_no=key_partial,
+                frame_no=frame_partial,
+                engine_no=engine_partial,
+            )
             page.fill("#dms-vehicle-key", key_partial)
             page.fill("#dms-vehicle-frame", frame_partial)
             page.fill("#dms-vehicle-engine", engine_partial)
             page.click("#dms-vehicle-search")
             page.wait_for_timeout(10)
 
-            # 4) Scrape first result row (13 cols: key, frame, engine, model, color, cubic_capacity, seating_capacity, body_type, vehicle_type, num_cylinders, horse_power, total_amount, year_of_mfg)
+            # 4) Scrape first result row (13 cols: key, frame, engine, model, color, cubic_capacity, seating_capacity, body_type, vehicle_type, num_cylinders, horse_power, vehicle_price, year_of_mfg)
             logger.info("fill_dms_service: step 4 scrape vehicle results")
             page.wait_for_selector("#dms-vehicle-results:visible", timeout=8000)
             row = page.locator("#dms-vehicle-results-table tbody tr").first
@@ -535,7 +995,7 @@ def run_fill_dms(
                         "vehicle_type": cells.nth(8).inner_text().strip(),
                         "num_cylinders": cells.nth(9).inner_text().strip(),
                         "horse_power": cells.nth(10).inner_text().strip(),
-                        "total_amount": cells.nth(11).inner_text().strip(),
+                        "vehicle_price": cells.nth(11).inner_text().strip(),
                         "year_of_mfg": cells.nth(12).inner_text().strip(),
                     }
                 elif n >= 9:
@@ -547,7 +1007,7 @@ def run_fill_dms(
                         "color": cells.nth(4).inner_text().strip(),
                         "cubic_capacity": cells.nth(5).inner_text().strip(),
                         "seating_capacity": cells.nth(6).inner_text().strip(),
-                        "total_amount": cells.nth(7).inner_text().strip(),
+                        "vehicle_price": cells.nth(7).inner_text().strip(),
                         "year_of_mfg": cells.nth(8).inner_text().strip(),
                     }
                 elif n >= 8:
@@ -558,10 +1018,15 @@ def run_fill_dms(
                         "model": cells.nth(3).inner_text().strip(),
                         "color": cells.nth(4).inner_text().strip(),
                         "cubic_capacity": cells.nth(5).inner_text().strip(),
-                        "total_amount": cells.nth(6).inner_text().strip(),
+                        "vehicle_price": cells.nth(6).inner_text().strip(),
                         "year_of_mfg": cells.nth(7).inner_text().strip(),
                     }
             logger.info("fill_dms_service: scraped vehicle=%s", result.get("vehicle"))
+            if vehicle_id and result.get("vehicle"):
+                try:
+                    update_vehicle_master_from_dms(vehicle_id, result.get("vehicle") or {})
+                except Exception as exc:
+                    logger.warning("fill_dms_service: vehicle_master early update failed vehicle_id=%s: %s", vehicle_id, exc)
 
             # 5) Reports: fetch Form 21, Form 22, and Invoice Details PDFs by URL (avoids download event / target="_blank" issues)
             page.goto(f"{base}/reports.html", wait_until="domcontentloaded", timeout=15000)
@@ -594,24 +1059,39 @@ def run_fill_dms(
             logger.info("fill_dms_service: step 6 vahan vahan_base_url=%s", bool(vahan_base_url and vahan_base_url.strip()))
             if vahan_base_url and vahan_base_url.strip():
                 try:
-                    scraped = result.get("vehicle") or {}
                     vahan_page = context.new_page()
                     vahan_page.set_default_timeout(15_000)
-                    total_cost = _parse_total_cost(scraped or vehicle)
+                    vahan_values = _build_vahan_fill_values(customer_id, vehicle_id, effective_subfolder)
                     app_id, fees = _fill_vahan_and_scrape(
                         vahan_page,
                         vahan_base_url=vahan_base_url.strip(),
-                        rto_dealer_id=(rto_dealer_id or "").strip() or "RTO100001",
-                        customer_name=str(customer.get("name") or ""),
-                        chassis_no=str(scraped.get("frame_num") or vehicle.get("frame_no") or vehicle.get("frame_num") or ""),
-                        vehicle_model=str(scraped.get("model") or vehicle.get("model") or ""),
-                        vehicle_colour=str(scraped.get("color") or vehicle.get("color") or ""),
-                        fuel_type="Petrol",
-                        year_of_mfg=str(scraped.get("year_of_mfg") or vehicle.get("year_of_mfg") or ""),
-                        total_cost=total_cost or 72000.0,
+                        rto_dealer_id=vahan_values["rto_dealer_id"],
+                        customer_name=vahan_values["customer_name"],
+                        chassis_no=vahan_values["chassis_no"],
+                        vehicle_model=vahan_values["vehicle_model"],
+                        vehicle_colour=vahan_values["vehicle_colour"],
+                        fuel_type=vahan_values["fuel_type"],
+                        year_of_mfg=vahan_values["year_of_mfg"],
+                        vehicle_price=vahan_values["vehicle_price"],
                     )
                     result["application_id"] = app_id
                     result["rto_fees"] = fees
+                    _write_vahan_form_values(
+                        ocr_output_dir=ocr_dir,
+                        subfolder=effective_subfolder,
+                        customer_id=customer_id,
+                        vehicle_id=vehicle_id,
+                        rto_dealer_id=vahan_values["rto_dealer_id"],
+                        customer_name=vahan_values["customer_name"],
+                        chassis_no=vahan_values["chassis_no"],
+                        vehicle_model=vahan_values["vehicle_model"],
+                        vehicle_colour=vahan_values["vehicle_colour"],
+                        fuel_type=vahan_values["fuel_type"],
+                        year_of_mfg=vahan_values["year_of_mfg"],
+                        vehicle_price=vahan_values["vehicle_price"],
+                        application_id=app_id,
+                        rto_fees=fees,
+                    )
                     logger.info("fill_dms_service: vahan done application_id=%s rto_fees=%s", app_id, fees)
                     vahan_page.close()
                 except Exception as e:
@@ -628,7 +1108,7 @@ def run_fill_dms(
 
     # Always write Data from DMS to ocr_output/mobile_ddmmyy/Data from DMS.txt
     try:
-        _write_data_from_dms(ocr_dir, subfolder, customer, result.get("vehicle") or {})
+        _write_data_from_dms(ocr_dir, effective_subfolder, dms_values.get("customer_export") or {}, result.get("vehicle") or {})
     except Exception as e:
         result["error"] = (result.get("error") or "") + f"; DMS file write: {e!s}"
     return result

@@ -1,8 +1,8 @@
 # Business Requirements Document (BRD)
 ## Auto Dealer Management System — Arya Agencies
 
-**Version:** 0.3  
-**Last Updated:** March 2025  
+**Version:** 0.8  
+**Last Updated:** March 2026  
 **Status:** Draft
 
 ---
@@ -43,7 +43,9 @@ The system is a server–client application for auto dealers. Dealers run a ligh
 | BR-5 | RTO application | One RTO application per sale (sales_id); application_id from Vahan is PK. |
 | BR-6 | Service reminders | When dealer has auto_sms_reminders = Y, sales_master upsert triggers population of service_reminders_queue from oem_service_schedule. |
 | BR-7 | Form 20 data | Form 20 fields populated from customer_master, vehicle_master, dealer_ref; vehicle data merged from DB when vehicle_id provided. |
-| BR-8 | Bulk failure visibility | Bulk Upload `Error` and `Rejected` records must remain in the hot dashboard until the operator marks `action_taken=true`; only resolved failures may be archived. |
+| BR-8 | Bulk failure visibility | Bulk Upload `Error` and `Rejected` records must remain in the hot dashboard until the operator marks `action_taken=true`; older rows are not archived. |
+| BR-9 | Automation source of truth | DMS and Vahan Playwright fills must read site field values from `form_dms_view` and `form_vahan_view` only. |
+| BR-10 | Automation trace output | DMS and Vahan automation must write `DMS_Form_Values.txt` and `Vahan_Form_Values.txt` into the matching `ocr_output/<dealer>/<subfolder>/` folder. |
 
 ---
 
@@ -58,24 +60,28 @@ The system is a server–client application for auto dealers. Dealers run a ligh
 - **FR-5** Allow users to review and correct OCR-extracted data before it is used.
 - **FR-6** Trigger "send to portal" actions that enqueue automation jobs.
 - **FR-7** Basic client-side validation (required fields, formats) with no heavy business logic.
-- **FR-8** Add Sales flow: Submit Info (customer, vehicle, insurance) → Fill Forms (DMS, Vahan, Form 20) → RTO Payments Pending.
-- **FR-9** RTO Payments Pending page: list pending RTO applications, record payment (txn_id, payment_date).
-- **FR-10** View Customer page: search by mobile/plate, view vehicles and insurance.
+- **FR-8** Add Sales flow: Submit Info (customer, vehicle, insurance) → Fill Forms (DMS, Form 20, RTO Queue insertion) → RTO Queue.
+- **FR-9** RTO Queue page: list queued RTO work items created by Fill Forms and let an operator process the oldest 7 queued rows for their dealer in one browser session.
+- **FR-10** View Customer page: search by mobile/plate, view vehicles and insurance, and inspect the selected vehicle's Vahan field mapping in a single horizontally scrollable row.
 
 ### 5.2 Server / Backend
 
-- **FR-11** Expose REST APIs for dealers, vehicles, customers, sales, documents, RTO payments.
+- **FR-11** Expose REST APIs for dealers, vehicles, customers, sales, documents, and the RTO queue.
 - **FR-12** Accept document uploads, store files (local or S3), and create OCR jobs.
 - **FR-13** Process OCR jobs (Tesseract), parse results, and persist structured data.
-- **FR-14** Accept automation requests, enqueue them (Redis or SQS), and track status.
-- **FR-15** Run Playwright workers that log into external portals and submit data from the database.
+- **FR-14** Accept automation requests, enqueue them through SQS or the local in-process fallback queue, and track status.
+- **FR-15** Run Playwright workers that log into external portals and submit data from database-backed views and records.
 - **FR-16** Persist all business data in PostgreSQL with clear ownership (e.g. dealer_id) for multi-tenant use.
 - **FR-17** Submit Info: upsert customer_master, vehicle_master, sales_master, insurance_master from extracted/entered data.
-- **FR-18** Fill DMS: Playwright login to OEM DMS, search vehicle, scrape data, download Form 21/22; update vehicle_master from scraped data.
+- **FR-18** Fill DMS: Playwright login to OEM DMS, read fill values only from `form_dms_view`, search vehicle, scrape data, download Form 21/22, write `DMS_Form_Values.txt` into the matching `ocr_output` subfolder, and update vehicle_master from scraped data.
 - **FR-19** Form 20: Generate Form 20.pdf from Word template (or PDF overlay / HTML fallback); fill placeholders from customer, vehicle, dealer; output combined PDF (front, back, page 3).
 - **FR-19a** Gate Pass: Generate Gate Pass.pdf from Word template; fill placeholders (OEM name, today date, customer name, Aadhar, model, colour, key no., chassis no.); save to upload subfolder.
-- **FR-20** Vahan (RTO): Playwright fill Vahan portal; create rto_payment_details row with application_id, rto_fees, status Pending.
-- **FR-21** RTO payment: Update rto_payment_details to Paid with pay_txn_id, payment_date.
+- **FR-20** RTO Queueing: after Fill Forms completes DMS/Form 20 work, create an `rto_queue` row with the dealer/customer/vehicle reference, estimated RTO fees, and queued status instead of auto-running the dummy Vahan site.
+- **FR-20a** View-backed automation inspection: operators can inspect `form_vahan_view` from View Customer and review DMS/Vahan form-value exports under `ocr_output`.
+- **FR-21** RTO status updates: queued rows remain visible in `rto_queue`, and downstream/manual RTO processing can update reference and payment fields later as needed.
+- **FR-21a** Dealer batch processing: for each dealer, allow only one active Vahan browser session at a time while different dealers can run their own sessions independently.
+- **FR-21b** RTO progress feedback: while a dealer batch is running, the RTO Queue page shows processed count, count added to RTO Cart, current queue row, and the latest error without requiring payment.
+- **FR-21c** RTO scrape persistence: when Vahan reaches the cart/upload checkpoint, the scraped application id and RTO charges must be stored on both `rto_queue` and `vehicle_master`, and later retries may overwrite those values with the newest scrape.
 - **FR-22** Customer search: Search by mobile or plate; return customers with vehicles and insurance.
 - **FR-23** QR decode: Decode Aadhar QR to extract customer details.
 - **FR-24** Vision / Textract: Optional AI extraction from documents.
@@ -95,19 +101,22 @@ Bulk upload automates the ingestion of scanned documents from a shared folder in
 
 ### 6.1 Flow Overview
 
-1. **Input Scans folder** — The only input folder for bulk processing. Scanned PDFs (e.g. `Scan1.pdf` or `Scans.pdf` in subfolders) are placed in `Bulk Upload/Input Scans/` by the operator or an external scanner. The watcher monitors this folder only.
-2. **Pre-OCR** — A background watcher picks up new scans, copies them to a Processing folder, and runs pre-OCR (Tesseract or AWS Textract) to extract the mobile number from the document. The mobile is required for Add Customer.
-3. **Add Customer processing** — If a mobile is found, the system invokes the Add Customer flow (Submit Info, Fill DMS, Form 20, Vahan, etc.) and records the result in the bulk_loads table. On success, files are moved to `Success/{mobile_ddmmyyyy}/`; on error, to `Error/{filename_ddmmyyyy}/`.
-4. **Re-process on error** — When a bulk load fails (e.g. pre-OCR fails, mobile not found, or Add Customer fails), the operator can use the **Re-process** button on the Bulk Loads page. This opens the Add Customer screen with the mobile and associated files pre-filled so the operator can correct data and complete the flow manually.
+1. **Input Scans folder** — The only input folder for bulk processing. Scanned PDFs are placed in `Bulk Upload/<dealer_id>/Input Scans/` by the operator or an external scanner.
+2. **Queue + ingest** — The ingest loop creates a hot `bulk_loads` row, moves the file into the queued working area, and publishes a job through the configured queue provider (`sqs` or local fallback).
+3. **Pre-OCR** — The worker runs pre-OCR to extract a mobile number and supporting artifacts. These artifacts are written into the dealer's `ocr_output/<subfolder>/` folder.
+4. **Add Customer processing** — If a mobile is found, the worker runs the Add Sales flow (Submit Info, DMS, Form 20, RTO queue insertion, terminal placement) and updates `bulk_loads` lifecycle columns.
+5. **Terminal routing** — On success, files move to `Success/{mobile_ddmmyyyy}/`; on validation or processing failures, they move to `Error/{filename_ddmmyyyy}/` or `Rejected scans/` as applicable.
+6. **Re-process on error** — When a bulk load fails, the operator can use **Re-process** on the Bulk Loads page. This opens Add Sales with the mobile and associated files pre-filled so the operator can correct data and complete the flow manually.
 
 ### 6.2 Key Behaviours
 
-- One scan is processed at a time; the watcher polls periodically.
-- Pre-OCR output is saved as `{filename}_ddmmyyyy_pre_ocr.txt` in the Processing folder.
-- The Bulk Loads table shows status (Processing, Success, Error), source filename, folder link, and error details.
-- Re-process uses the stored mobile and Error-folder files to pre-populate Add Customer.
-- The Bulk Loads UI and APIs read from the hot `bulk_loads` table only. Archived history is backend-only until an archive read path is added.
-- Archival keeps `Success` rows eligible after retention, but `Error` and `Rejected` rows remain in hot storage until the operator marks them corrected.
+- One worker lease processes a job at a time; recovery uses `leased_until`, `attempt_count`, and `worker_id`.
+- While a bulk job is waiting in SQS/local queue order, the hot row shows `status='Queued'`; once a worker leases it, the row changes to `Processing`.
+- Bulk ingest/worker can run inside the API process or through the standalone `run_bulk_worker.py` process.
+- The Bulk Loads table shows current status, queue stage, source/result folders, and operator-visible error details from the hot table.
+- Re-process uses the stored mobile and Error-folder files to pre-populate Add Sales.
+- The Bulk Loads UI and APIs read from the hot `bulk_loads` table only.
+- Older bulk rows are not archived; retention remains entirely in `bulk_loads`.
 
 ---
 
@@ -125,10 +134,12 @@ Bulk upload automates the ingestion of scanned documents from a shared folder in
 - Dealer can add/view dealer records via the client against the live backend.
 - Document upload creates an OCR job and extracted data is stored and reviewable.
 - Submit Info persists customer, vehicle, sales, insurance.
-- Fill DMS scrapes vehicle data and downloads Form 21/22.
+- Fill DMS scrapes vehicle data, downloads Form 21/22, and writes `DMS_Form_Values.txt` under `ocr_output`.
 - Form 20.pdf is generated and saved to upload subfolder.
-- Vahan submission creates RTO application; payment can be recorded.
-- RTO Payments Pending page lists and updates payment status.
+- Fill Forms inserts an `rto_queue` row instead of auto-submitting the dummy Vahan site.
+- RTO Queue page lists the queued RTO work items for follow-up processing and can process the oldest 7 rows in one dealer-scoped browser session.
+- The operator can see how many rows were added to the RTO Cart before any payment step.
+- Bulk upload processing can ingest, queue, process, and retain the required hot-table status history in `bulk_loads`.
 - Documentation (HLD, LLD, Technical Architecture, Database DDL) is maintained under the project.
 
 ---
@@ -140,4 +151,8 @@ Bulk upload automates the ingestion of scanned documents from a shared folder in
 | 0.1 | Mar 2025 | — | Initial BRD for Auto Dealer system |
 | 0.2 | Mar 2025 | — | Added business rules (BR-1 to BR-7); FR-8 to FR-24 (Submit Info, Fill DMS, Form 20, Vahan, RTO payment, customer search, QR decode) |
 | 0.3 | Mar 2025 | — | Added Section 6: Bulk Upload Feature (Scan folder, pre-OCR, Add Customer processing, Re-process on error) |
-| 0.4 | Mar 2026 | — | Added bulk archival rule: unresolved Error/Rejected rows stay hot until action taken; archive remains backend-only for now |
+| 0.4 | Mar 2026 | — | Bulk rows stay in the hot table; unresolved Error/Rejected rows remain visible until action taken |
+| 0.5 | Mar 2026 | — | Expanded View Customer to show the selected vehicle's Vahan field mapping row |
+| 0.6 | Mar 2026 | — | Added DMS field logging requirement via `DMS_Form_Values.txt` and supporting DB view |
+| 0.7 | Mar 2026 | — | DMS/Vahan automation now reads site field values only from `form_dms_view` and `form_vahan_view` |
+| 0.8 | Mar 2026 | — | Updated bulk upload behavior, queue model, operator rules, and automation trace outputs to match the current implementation |

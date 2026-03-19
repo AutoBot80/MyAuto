@@ -1,8 +1,10 @@
 import { useState, useEffect } from "react";
 import {
   searchCustomer,
+  getFormVahanView,
   getDocumentFileUrl,
   type CustomerSearchResult,
+  type FormVahanViewResult,
 } from "../api/customerSearch";
 import { apiFetch } from "../api/client";
 import { DEALER_ID } from "../api/dealerId";
@@ -38,6 +40,8 @@ export function ViewCustomerPage({ initialMobile = "", dealerId = DEALER_ID }: V
   const [documentsOpen, setDocumentsOpen] = useState(false);
   const [docFiles, setDocFiles] = useState<{ name: string; size: number }[]>([]);
   const [docLoading, setDocLoading] = useState(false);
+  const [formVahan, setFormVahan] = useState<FormVahanViewResult | null>(null);
+  const [formVahanLoading, setFormVahanLoading] = useState(false);
 
   useEffect(() => {
     saveViewCustomer({ mobile, plateNum, result, selectedVehicleId });
@@ -95,6 +99,31 @@ export function ViewCustomerPage({ initialMobile = "", dealerId = DEALER_ID }: V
   const selectedIns = selectedVehicle
     ? insMap[selectedVehicle.vehicle_id]
     : null;
+  const selectedCustomerId = cust?.customer_id ?? null;
+  const selectedVehicleKey = selectedVehicle?.vehicle_id ?? null;
+
+  useEffect(() => {
+    if (!selectedCustomerId || !selectedVehicleKey) {
+      setFormVahan(null);
+      setFormVahanLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setFormVahanLoading(true);
+    getFormVahanView(selectedCustomerId, selectedVehicleKey)
+      .then((res) => {
+        if (!cancelled) setFormVahan(res);
+      })
+      .catch(() => {
+        if (!cancelled) setFormVahan({ found: false, columns: [], row: null });
+      })
+      .finally(() => {
+        if (!cancelled) setFormVahanLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedCustomerId, selectedVehicleKey]);
 
   return (
     <div className="view-customer-page">
@@ -182,7 +211,6 @@ export function ViewCustomerPage({ initialMobile = "", dealerId = DEALER_ID }: V
       {/* Vehicles table */}
       {vehicles.length > 0 && (
         <section className="view-customer-vehicles">
-          <h3 className="view-customer-section-title">Vehicles</h3>
           <div className="view-customer-table-wrap">
             <table className="view-customer-table">
               <thead>
@@ -237,6 +265,36 @@ export function ViewCustomerPage({ initialMobile = "", dealerId = DEALER_ID }: V
           <div className="view-customer-tile">
             <h4 className="view-customer-tile-title">Service</h4>
             <p className="view-customer-tile-empty">—</p>
+          </div>
+        </section>
+      )}
+
+      {selectedVehicle && (
+        <section className="view-customer-vahan-view">
+          <div className="view-customer-vahan-wrap">
+            {formVahanLoading ? (
+              <p className="view-customer-tile-empty">Loading Vahan values…</p>
+            ) : !formVahan?.found || !formVahan.row || formVahan.columns.length === 0 ? (
+              <p className="view-customer-tile-empty">No Vahan view row available for this vehicle.</p>
+            ) : (
+              <table className="view-customer-vahan-table">
+                <thead>
+                  <tr>
+                    {formVahan.columns.map((column) => (
+                      <th key={column}>{column}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    {formVahan.columns.map((column) => {
+                      const value = formVahan.row?.[column];
+                      return <td key={column}>{value == null || value === "" ? "—" : String(value)}</td>;
+                    })}
+                  </tr>
+                </tbody>
+              </table>
+            )}
           </div>
         </section>
       )}

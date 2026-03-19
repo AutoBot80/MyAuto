@@ -26,10 +26,10 @@ export function HomePage({ onSelectPos, onSelectService, onSelectRto, onSelectDe
           type="button"
           className="home-tile"
           onClick={onSelectRto}
-          aria-label="Open RTO Payment Saathi"
+          aria-label="Open RTO Saathi"
         >
-          <span className="home-tile-title">RTO Payment Saathi</span>
-          <span className="home-tile-desc">One click payments</span>
+          <span className="home-tile-title">RTO Saathi</span>
+          <span className="home-tile-desc">Queue and track RTO work</span>
         </button>
         <button
           type="button"

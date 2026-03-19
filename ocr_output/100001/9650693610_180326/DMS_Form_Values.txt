@@ -1,0 +1,31 @@
+DMS Form Values
+
+--- Values sent to DMS labels ---
+Mr/Ms: Mr.
+Contact First Name: Shashank
+Contact Last Name: Arya
+Mobile Phone #: 9650693610
+State: RAJASTHAN
+Address Line 1: S/O: Anil Kumar Arya, 431, sector no.-3, bharatpur, Rajasthan, 321001
+Pin Code: —
+Key num (partial): 2509
+Frame / Chassis num (partial): 59324
+Engine num (partial): 50581
+
+--- Runtime values used by Playwright ---
+sales_id: 1
+customer_id: 1
+vehicle_id: 1
+dealer_id: 100001
+subfolder: 9650693610_180326
+dealer_name: Arya Agencies
+oem_name: —
+source_customer_name: Shashank Arya
+source_mobile_number: 9650693610
+source_address: S/O: Anil Kumar Arya, 431, sector no.-3, bharatpur, Rajasthan, 321001
+source_state: RAJASTHAN
+source_pin_code: —
+source_key_no: 2509
+source_frame_no: 59324
+source_engine_no: 50581
+generated_at: 18-03-2026 15:48:59

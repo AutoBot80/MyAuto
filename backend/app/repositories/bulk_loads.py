@@ -1,4 +1,4 @@
-"""Data access for the bulk-loads hot/archive job model."""
+"""Data access for the bulk-loads hot job model."""
 
 from __future__ import annotations
 
@@ -8,7 +8,6 @@ from uuid import uuid4
 
 class BulkLoadsRepository:
     TABLE_NAME = "bulk_loads"
-    ARCHIVE_TABLE_NAME = "bulk_loads_archive"
     HOT_COLUMNS = [
         "id",
         "job_id",
@@ -41,7 +40,6 @@ class BulkLoadsRepository:
     def ensure_table(conn) -> None:
         with conn.cursor() as cur:
             BulkLoadsRepository._ensure_hot_table(cur)
-            BulkLoadsRepository._ensure_archive_table(cur)
 
     @staticmethod
     def _ensure_hot_table(cur) -> None:
@@ -54,7 +52,7 @@ class BulkLoadsRepository:
                 mobile VARCHAR(16),
                 name VARCHAR(128),
                 folder_path VARCHAR(512),
-                status VARCHAR(32) NOT NULL DEFAULT 'Processing',
+                status VARCHAR(32) NOT NULL DEFAULT 'Queued',
                 error_message TEXT,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -63,29 +61,6 @@ class BulkLoadsRepository:
         )
         BulkLoadsRepository._ensure_common_columns(cur, BulkLoadsRepository.TABLE_NAME)
         BulkLoadsRepository._ensure_hot_indexes(cur, BulkLoadsRepository.TABLE_NAME)
-
-    @staticmethod
-    def _ensure_archive_table(cur) -> None:
-        cur.execute(
-            f"""
-            CREATE TABLE IF NOT EXISTS {BulkLoadsRepository.ARCHIVE_TABLE_NAME} (
-                LIKE {BulkLoadsRepository.TABLE_NAME} INCLUDING DEFAULTS
-            )
-            """
-        )
-        BulkLoadsRepository._ensure_common_columns(cur, BulkLoadsRepository.ARCHIVE_TABLE_NAME)
-        cur.execute(
-            f"ALTER TABLE {BulkLoadsRepository.ARCHIVE_TABLE_NAME} ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ NOT NULL DEFAULT NOW()"
-        )
-        cur.execute(
-            f"CREATE UNIQUE INDEX IF NOT EXISTS idx_bulk_loads_archive_job_id ON {BulkLoadsRepository.ARCHIVE_TABLE_NAME} (job_id)"
-        )
-        cur.execute(
-            f"CREATE INDEX IF NOT EXISTS idx_bulk_loads_archive_dealer_created ON {BulkLoadsRepository.ARCHIVE_TABLE_NAME} (dealer_id, created_at DESC)"
-        )
-        cur.execute(
-            f"CREATE INDEX IF NOT EXISTS idx_bulk_loads_archive_status_created ON {BulkLoadsRepository.ARCHIVE_TABLE_NAME} (dealer_id, status, created_at DESC)"
-        )
 
     @staticmethod
     def _ensure_common_columns(cur, table_name: str) -> None:
@@ -139,7 +114,7 @@ class BulkLoadsRepository:
             f"""
             CREATE INDEX IF NOT EXISTS idx_bulk_loads_unresolved_hot
             ON {table_name} (dealer_id, updated_at DESC)
-            WHERE status IN ('Processing', 'Error', 'Rejected')
+            WHERE status IN ('Queued', 'Processing', 'Error', 'Rejected')
             """
         )
 
@@ -149,7 +124,7 @@ class BulkLoadsRepository:
 
     @staticmethod
     def _terminal_statuses() -> tuple[str, ...]:
-        return ("success", "error", "rejected", "archived")
+        return ("success", "error", "rejected")
 
     @staticmethod
     def _parse_date_filters(date_from: str | None, date_to: str | None) -> tuple[list[str], list]:
@@ -186,7 +161,7 @@ class BulkLoadsRepository:
         folder_path: str | None = None,
         source_path: str | None = None,
         source_token: str | None = None,
-        status: str = "Processing",
+        status: str = "Queued",
         job_status: str = "received",
         processing_stage: str = "INGEST",
         error_message: str | None = None,
@@ -270,7 +245,7 @@ class BulkLoadsRepository:
             name=name,
             folder_path=folder_path,
             status=status,
-            job_status="processing" if status == "Processing" else status.lower(),
+            job_status="processing" if status == "Processing" else ("queued" if status == "Queued" else status.lower()),
             processing_stage="LEGACY_INLINE",
             error_message=error_message,
             dealer_id=dealer_id,
@@ -296,7 +271,7 @@ class BulkLoadsRepository:
             cur.execute(
                 f"""
                 UPDATE {BulkLoadsRepository.TABLE_NAME}
-                SET status = 'Processing',
+                SET status = 'Queued',
                     job_status = 'queued',
                     processing_stage = %s,
                     leased_until = NULL,
@@ -313,7 +288,7 @@ class BulkLoadsRepository:
             cur.execute(
                 f"""
                 UPDATE {BulkLoadsRepository.TABLE_NAME}
-                SET status = 'Processing',
+                SET status = 'Queued',
                     job_status = 'retry_pending',
                     processing_stage = 'RETRY_PENDING',
                     error_message = %s,
@@ -516,7 +491,7 @@ class BulkLoadsRepository:
     @staticmethod
     def list_runnable_jobs(conn, dealer_id: int | None = None, limit: int = 10) -> list[dict]:
         conditions = [
-            "status = 'Processing'",
+            "status IN ('Queued', 'Processing')",
             """
             (
                 job_status IN ('received', 'queued', 'retry_pending')
@@ -549,17 +524,10 @@ class BulkLoadsRepository:
         with conn.cursor() as cur:
             if dealer_id is not None:
                 cur.execute(
-                    f"DELETE FROM {BulkLoadsRepository.ARCHIVE_TABLE_NAME} WHERE dealer_id IS NULL OR dealer_id = %s",
-                    (dealer_id,),
-                )
-                total += cur.rowcount
-                cur.execute(
                     f"DELETE FROM {BulkLoadsRepository.TABLE_NAME} WHERE dealer_id IS NULL OR dealer_id = %s",
                     (dealer_id,),
                 )
             else:
-                cur.execute(f"DELETE FROM {BulkLoadsRepository.ARCHIVE_TABLE_NAME}")
-                total += cur.rowcount
                 cur.execute(f"DELETE FROM {BulkLoadsRepository.TABLE_NAME}")
             total += cur.rowcount
         return total
@@ -672,7 +640,7 @@ class BulkLoadsRepository:
         if dealer_id is not None:
             conditions.append("(dealer_id IS NULL OR dealer_id = %s)")
             params.append(dealer_id)
-        if status_filter and status_filter.lower() in ("success", "error", "processing", "rejected"):
+        if status_filter and status_filter.lower() in ("success", "error", "queued", "processing", "rejected"):
             conditions.append("status = %s")
             params.append(status_filter.capitalize())
         elif status_in:
@@ -724,7 +692,7 @@ class BulkLoadsRepository:
                 params,
             )
             rows = cur.fetchall()
-        result = {"Success": 0, "Error": 0, "Processing": 0, "Rejected": 0}
+        result = {"Success": 0, "Error": 0, "Queued": 0, "Processing": 0, "Rejected": 0}
         for row in rows:
             status = (row.get("status") or "").capitalize()
             if status in result:
@@ -767,6 +735,7 @@ class BulkLoadsRepository:
         return {
             "Success": base["Success"],
             "Error": pending_err,
+            "Queued": base["Queued"],
             "Processing": base["Processing"],
             "Rejected": pending_rej,
         }
@@ -797,54 +766,3 @@ class BulkLoadsRepository:
             row = cur.fetchone()
             return int(row.get("cnt") or 0)
 
-    @staticmethod
-    def archive_closed_rows(conn, retention_days: int, limit: int = 500, dealer_id: int | None = None) -> int:
-        conditions = [
-            """
-            (
-                status = 'Success'
-                OR (
-                    status IN ('Error', 'Rejected')
-                    AND COALESCE(action_taken, FALSE) = TRUE
-                )
-            )
-            """.strip(),
-            "updated_at < NOW() - make_interval(days => %s)",
-        ]
-        params: list = [retention_days]
-        if dealer_id is not None:
-            conditions.append("(dealer_id IS NULL OR dealer_id = %s)")
-            params.append(dealer_id)
-        params.append(limit)
-        where = " AND ".join(conditions)
-        with conn.cursor() as cur:
-            cur.execute(
-                f"""
-                SELECT id
-                FROM {BulkLoadsRepository.TABLE_NAME}
-                WHERE {where}
-                ORDER BY updated_at ASC
-                LIMIT %s
-                """,
-                params,
-            )
-            ids = [row["id"] for row in cur.fetchall()]
-            if not ids:
-                return 0
-            insert_columns = BulkLoadsRepository.HOT_COLUMNS + ["archived_at"]
-            select_columns = BulkLoadsRepository.HOT_COLUMNS + ["NOW() AS archived_at"]
-            cur.execute(
-                f"""
-                INSERT INTO {BulkLoadsRepository.ARCHIVE_TABLE_NAME} ({', '.join(insert_columns)})
-                SELECT {', '.join(select_columns)}
-                FROM {BulkLoadsRepository.TABLE_NAME}
-                WHERE id = ANY(%s)
-                ON CONFLICT (job_id) DO NOTHING
-                """,
-                (ids,),
-            )
-            cur.execute(
-                f"DELETE FROM {BulkLoadsRepository.TABLE_NAME} WHERE id = ANY(%s)",
-                (ids,),
-            )
-            return cur.rowcount

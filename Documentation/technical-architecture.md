@@ -1,8 +1,8 @@
 # Technical Architecture
 ## Auto Dealer Management System
 
-**Version:** 0.1  
-**Last Updated:** March 2025
+**Version:** 0.2  
+**Last Updated:** March 2026
 
 ---
 
@@ -13,11 +13,11 @@
 | Client | React (TypeScript), Vite | Light UI; basic validation only. |
 | API | Python 3.x, FastAPI | REST API, CORS, auth (planned). |
 | Database | PostgreSQL | RDS on AWS; local for dev. |
-| Queue | Redis or AWS SQS | Job queues for OCR and automation. |
-| OCR | Tesseract (Python: pytesseract) | Run in containerized worker. |
+| Queue | Local in-process queue or AWS SQS | Current bulk processing supports local fallback and SQS-backed dispatch. |
+| OCR | Tesseract, AWS Textract, Vision API | Tesseract for OCR/pre-OCR; Textract/Vision for document extraction. |
 | Browser automation | Playwright (Python) | Headless browser for portal submission. |
-| Object storage | AWS S3 | Documents and artifacts. |
-| Hosting (target) | AWS | VPC, ECS Fargate or similar, ALB, RDS, S3, SQS or ElastiCache. |
+| File storage | Local folders now, optional S3 later | `Uploaded scans/` for working/customer files; `ocr_output/` for OCR and automation artifacts. |
+| Hosting (target) | AWS | VPC, ECS Fargate or similar, ALB, RDS, SQS, and optional S3. |
 
 ---
 
@@ -44,8 +44,8 @@
 │                            │ enqueue             │ read/write    │
 │                            v                     │              │
 │  ┌─────────────┐    ┌──────┴───────┐    ┌────────┴────────────┐  │
-│  │ S3          │<---│ Redis / SQS  │    │  OCR Worker (ECS)    │  │
-│  │ (documents) │    │              │--->│  - Tesseract         │  │
+│  │ Local / S3  │<---│ Local / SQS  │    │  OCR Worker (ECS)    │  │
+│  │ artifacts   │    │ bulk queue   │--->│  - Tesseract         │  │
 │  └─────────────┘    └──────┬───────┘    └─────────────────────┘  │
 │                            │                                      │
 │                            v                                      │
@@ -66,8 +66,8 @@
 | PostgreSQL | Local install; DB `auto_ai`; credentials in `backend/.env`. |
 | Backend | `uvicorn app.main:app --reload --port 8000` from `backend/` with venv. |
 | Client | `npm run dev` in `client/` (e.g. port 5173). |
-| Redis | `docker run --name my-redis -p 6379:6379 -d redis`. |
-| (Future) OCR / Playwright workers | Run locally or in Docker; point to local DB and queue. |
+| Bulk worker | API-integrated loops or `python backend/run_bulk_worker.py` for a standalone worker. |
+| Queue mode | Use local fallback by default, or configure SQS in `backend/.env`. |
 
 ---
 
@@ -75,16 +75,17 @@
 
 - **Authentication:** JWT or OAuth2; refresh tokens; no secrets in client code.
 - **Authorization:** All APIs scoped by `dealer_id` (tenant); RBAC for admin.
-- **Secrets:** AWS Secrets Manager or SSM for DB and portal credentials.
-- **Network:** VPC; DB and Redis in private subnets; HTTPS only at edge.
+- **Secrets:** AWS Secrets Manager or SSM for DB, AWS, and portal credentials.
+- **Network:** VPC; DB and workers in private subnets; HTTPS only at edge.
 
 ---
 
 ## 5. Observability (Target)
 
-- **Logging:** Structured logs (FastAPI, workers) to CloudWatch.
-- **Metrics:** Job success/failure, queue depth, API latency.
-- **Alerts:** DLQ growth, high error rate, DB/Redis health.
+- **Logging:** Structured logs from FastAPI, bulk workers, OCR, and Playwright steps.
+- **Metrics:** Job success/failure, queue depth, API latency, and automation completion rate.
+- **Artifacts:** `ocr_output/<dealer>/<subfolder>/` stores OCR output plus `DMS_Form_Values.txt` and `Vahan_Form_Values.txt` for operator traceability.
+- **Alerts:** DLQ growth, high error rate, DB health, and worker lease/retry anomalies.
 
 ---
 
@@ -106,6 +107,7 @@ When adding or changing features, update the relevant docs:
 - **New DB table/column** → `DDL/` scripts, `Database DDL.md`
 - **New business rule** → BRD (Business Rules section)
 - **New page or flow** → BRD (FRs), HLD (client pages, data flow)
+- **Queue/storage/runtime behavior changes** → technical architecture, HLD, LLD, and Database DDL as applicable
 
 ---
 
@@ -114,3 +116,4 @@ When adding or changing features, update the relevant docs:
 | Version | Date | Author | Changes |
 |---------|------|--------|---------|
 | 0.1 | Mar 2025 | — | Initial technical architecture |
+| 0.2 | Mar 2026 | — | Updated queue, worker, local file storage, bulk processing, and automation artifact architecture |

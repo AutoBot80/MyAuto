@@ -155,7 +155,7 @@ def ingest_scan_file(scans_pdf: Path, dealer_id: int, queue_service: BulkQueueSe
             folder_path=initial_subfolder,
             source_path=str(scans_pdf),
             source_token=source_token,
-            status="Processing",
+            status="Queued",
             job_status="received",
             processing_stage="INGEST",
             dealer_id=dealer_id,

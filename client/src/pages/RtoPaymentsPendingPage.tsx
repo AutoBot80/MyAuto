@@ -1,24 +1,23 @@
-import { useState, useEffect } from "react";
-import { listRtoPayments, payRtoPayment, type RtoPaymentRow } from "../api/rtoPaymentDetails";
+import { useEffect, useMemo, useState } from "react";
+import {
+  getRtoBatchStatus,
+  listRtoPayments,
+  startRtoBatch,
+  type RtoBatchStatus,
+  type RtoPaymentRow,
+} from "../api/rtoPaymentDetails";
 
 interface RtoPaymentsPendingPageProps {
   dealerId?: number;
-  /** When true, show Pay link column (only on RTO Payment Saathi tab). */
-  showPayLink?: boolean;
 }
 
-export function RtoPaymentsPendingPage({ dealerId, showPayLink = false }: RtoPaymentsPendingPageProps) {
+export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps) {
   const [rows, setRows] = useState<RtoPaymentRow[]>([]);
+  const [batchStatus, setBatchStatus] = useState<RtoBatchStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [payingId, setPayingId] = useState<string | null>(null);
-
-  const refreshRows = () => {
-    setError(null);
-    listRtoPayments(dealerId)
-      .then((data) => setRows(data))
-      .catch((err) => setError(err instanceof Error ? err.message : "Failed to load"));
-  };
+  const [batchError, setBatchError] = useState<string | null>(null);
+  const [startingBatch, setStartingBatch] = useState(false);
 
   const fetchFromDb = (showLoading = true) => {
     if (showLoading) setLoading(true);
@@ -29,11 +28,32 @@ export function RtoPaymentsPendingPage({ dealerId, showPayLink = false }: RtoPay
       .finally(() => setLoading(false));
   };
 
+  const fetchBatchStatus = () => {
+    getRtoBatchStatus(dealerId)
+      .then((data) => {
+        setBatchStatus(data);
+        if (data.state === "running" || data.state === "starting") {
+          fetchFromDb(false);
+        }
+        if (data.state === "completed" || data.state === "failed") {
+          setStartingBatch(false);
+          fetchFromDb(false);
+        }
+      })
+      .catch((err) => {
+        setBatchError(err instanceof Error ? err.message : "Failed to load batch status");
+      });
+  };
+
   useEffect(() => {
     let cancelled = false;
     fetchFromDb(true);
+    fetchBatchStatus();
     const onVisible = () => {
-      if (!cancelled && document.visibilityState === "visible") fetchFromDb(false);
+      if (!cancelled && document.visibilityState === "visible") {
+        fetchFromDb(false);
+        fetchBatchStatus();
+      }
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => {
@@ -42,16 +62,27 @@ export function RtoPaymentsPendingPage({ dealerId, showPayLink = false }: RtoPay
     };
   }, [dealerId]);
 
-  const handlePay = async (applicationId: string) => {
-    if (payingId) return;
-    setPayingId(applicationId);
+  useEffect(() => {
+    if (!batchStatus || (batchStatus.state !== "running" && batchStatus.state !== "starting")) {
+      return undefined;
+    }
+    const timer = window.setInterval(() => {
+      fetchBatchStatus();
+    }, 1500);
+    return () => window.clearInterval(timer);
+  }, [batchStatus?.state, dealerId]);
+
+  const handleStartBatch = async () => {
+    setBatchError(null);
+    setStartingBatch(true);
     try {
-      await payRtoPayment(applicationId);
-      refreshRows();
+      await startRtoBatch({ dealer_id: dealerId });
+      fetchBatchStatus();
+      fetchFromDb(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Pay failed");
-    } finally {
-      setPayingId(null);
+      setStartingBatch(false);
+      setBatchError(err instanceof Error ? err.message : "Failed to start batch");
+      fetchBatchStatus();
     }
   };
 
@@ -72,21 +103,70 @@ export function RtoPaymentsPendingPage({ dealerId, showPayLink = false }: RtoPay
   }
 
   const columns = [
+    "Queue ID",
+    "Vahan App ID",
     "Customer ID",
     "Customer Name",
     "Mobile",
     "Vehicle ID",
     "Chassis No.",
-    "Application ID",
     "Register Date",
     "RTO Fees",
     "Status",
-    ...(showPayLink ? ["Pay"] : []),
   ];
+
+  const progressPercent = useMemo(() => {
+    if (!batchStatus || batchStatus.total_count <= 0) return 0;
+    return Math.min(100, Math.round((batchStatus.processed_count / batchStatus.total_count) * 100));
+  }, [batchStatus]);
+
+  const batchStateClass =
+    batchStatus?.state === "running" || batchStatus?.state === "starting"
+      ? "app-process-status app-process-status--running"
+      : batchStatus?.state === "completed"
+        ? "app-process-status app-process-status--sleeping"
+        : "app-process-status app-process-status--waiting";
 
   return (
     <div className="rto-payments-page">
       {error && <p className="rto-payments-error">{error}</p>}
+      <div className="rto-batch-toolbar">
+        <button
+          type="button"
+          className="button"
+          onClick={handleStartBatch}
+          disabled={startingBatch || batchStatus?.state === "running" || batchStatus?.state === "starting"}
+        >
+          {startingBatch || batchStatus?.state === "running" || batchStatus?.state === "starting"
+            ? "Processing oldest 7..."
+            : "Process oldest 7"}
+        </button>
+        <span className="rto-batch-toolbar-note">Only one browser session runs per dealer at a time.</span>
+      </div>
+      {batchStatus && batchStatus.state !== "idle" && (
+        <section className="rto-batch-status-card">
+          <div className="app-process-status-bar">
+            <span className="app-process-status-label">Batch status</span>
+            <span className={batchStateClass}>{batchStatus.state}</span>
+            <span className="app-process-count">
+              {batchStatus.processed_count} / {batchStatus.total_count} processed
+            </span>
+            <span className="app-process-count">{batchStatus.cart_count} added to RTO Cart</span>
+            <span className="app-process-count">{batchStatus.failed_count} failed</span>
+          </div>
+          <div className="rto-batch-progress-track" aria-hidden="true">
+            <div className="rto-batch-progress-fill" style={{ width: `${progressPercent}%` }} />
+          </div>
+          <div className="rto-batch-meta">
+            <span>{batchStatus.message}</span>
+            {batchStatus.current_queue_id && <span>Current queue: {batchStatus.current_queue_id}</span>}
+            {batchStatus.current_customer_name && <span>Customer: {batchStatus.current_customer_name}</span>}
+            {batchStatus.current_vahan_application_id && <span>Vahan App ID: {batchStatus.current_vahan_application_id}</span>}
+          </div>
+          {batchStatus.last_error && <p className="app-process-last-error">Last error: {batchStatus.last_error}</p>}
+        </section>
+      )}
+      {batchError && <p className="rto-payments-error">{batchError}</p>}
       <div className="rto-payments-table-wrap">
         <table className="rto-payments-table">
           <thead>
@@ -103,32 +183,17 @@ export function RtoPaymentsPendingPage({ dealerId, showPayLink = false }: RtoPay
               </tr>
             ) : (
               rows.map((r) => (
-                <tr key={r.application_id}>
+                <tr key={r.queue_id}>
+                  <td>{r.queue_id}</td>
+                  <td>{r.vahan_application_id ?? "—"}</td>
                   <td>{r.customer_id}</td>
                   <td>{r.name ?? "—"}</td>
                   <td>{r.mobile ?? "—"}</td>
                   <td>{r.vehicle_id}</td>
                   <td>{r.chassis_num ?? "—"}</td>
-                  <td>{r.application_id}</td>
                   <td>{r.register_date}</td>
                   <td>{r.rto_fees != null ? `₹${r.rto_fees}` : "—"}</td>
                   <td>{r.status ?? "Pending"}</td>
-                  {showPayLink && (
-                    <td>
-                      {r.status === "Paid" ? (
-                        <span className="rto-payments-paid">{r.pay_txn_id ?? "Paid"}</span>
-                      ) : (
-                        <button
-                          type="button"
-                          className="rto-payments-pay-link"
-                          disabled={payingId !== null}
-                          onClick={() => handlePay(r.application_id)}
-                        >
-                          {payingId === r.application_id ? "Processing…" : "Pay"}
-                        </button>
-                      )}
-                    </td>
-                  )}
                 </tr>
               ))
             )}

@@ -13,8 +13,8 @@ All Postgres DDL for the **auto_ai** database. Run in order when creating a fres
 7. `05_sales_master.sql` — requires customer_master, vehicle_master, dealer_ref  
 8. `08_service_reminders_queue.sql` — requires sales_master  
 9. `09_trigger_sales_master_sync_service_reminders.sql` — trigger on sales_master  
-10. `10_rto_payment_details.sql` — requires sales_master
-11. `11_rc_status_sms_queue.sql` — requires rto_payment_details  
+10. `10_rto_payment_details.sql` — requires sales_master; current deployments then run `DDL/alter/12c_rename_rto_payment_details_to_rto_queue.sql`
+11. `11_rc_status_sms_queue.sql` — requires current `rto_queue` schema  
 
 ## Run (examples)
 
@@ -30,6 +30,7 @@ psql -h localhost -U postgres -d auto_ai -f DDL/05_sales_master.sql
 psql -h localhost -U postgres -d auto_ai -f DDL/08_service_reminders_queue.sql
 psql -h localhost -U postgres -d auto_ai -f DDL/09_trigger_sales_master_sync_service_reminders.sql
 psql -h localhost -U postgres -d auto_ai -f DDL/10_rto_payment_details.sql
+psql -h localhost -U postgres -d auto_ai -f DDL/alter/12c_rename_rto_payment_details_to_rto_queue.sql
 psql -h localhost -U postgres -d auto_ai -f DDL/11_rc_status_sms_queue.sql
 ```
 
@@ -64,9 +65,13 @@ One-off changes (e.g. new columns) go in **`DDL/alter/`**. Run against an existi
 - `06b_insurance_master_fk_to_sales_only.sql` — insurance_master: FK to sales_master only (drops FKs to customer_master, vehicle_master).
 - `08c_service_reminders_queue_fk_to_sales_only.sql` — service_reminders_queue: composite FK to sales_master (customer_id, vehicle_id, dealer_id). (Superseded by 05b–05d.)
 - `10d_rto_payment_details_fk_dealer_via_sales.sql` — rto_payment_details: composite FK to sales_master (customer_id, vehicle_id, dealer_id). (Superseded by 05b–05c.)
+- `12c_rename_rto_payment_details_to_rto_queue.sql` — renames the live RTO work table to `rto_queue`; current Add Sales writes queue rows here instead of auto-running dummy Vahan.
+- `12e_rto_queue_batch_processing.sql` — adds dealer-batch lease/progress columns and indexes so the RTO Queue page can process the oldest 7 rows in one browser session per dealer.
+- `05f_sales_master_add_rto_scrape_fields.sql` — adds `sales_master.vahan_application_id` and `sales_master.rto_charges` so RTO batch scrapes are retained and overwritten on retry.
+- `05g_drop_vehicle_master_rto_scrape_fields.sql` — drops the deprecated `vehicle_master.vahan_application_id` and `vehicle_master.rto_charges` columns after storage moved to `sales_master`.
 
 **New table (run after customer_master exists):**
-- `10_rto_payment_details.sql` — creates `rto_payment_details` for RTO Payments Pending (application_num, rto_payment_due, status, pos_mgr_id, txn_id, payment_date, etc.).
+- `10_rto_payment_details.sql` — legacy base creation for the RTO table; current schema then applies `12c_rename_rto_payment_details_to_rto_queue.sql` so the active table is `rto_queue`.
 
 ## Maintenance
 

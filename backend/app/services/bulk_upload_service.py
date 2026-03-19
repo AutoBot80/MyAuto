@@ -8,6 +8,7 @@ to Uploaded scans/<subfolder>/. The OCR service and submit_info read these
 """
 import logging
 import shutil
+from datetime import date
 from pathlib import Path
 
 from app.config import (
@@ -19,11 +20,30 @@ from app.config import (
     get_uploads_dir,
 )
 from app.repositories.bulk_loads import BulkLoadsRepository
+from app.repositories import rto_payment_details as rto_queue_repo
 
 logger = logging.getLogger(__name__)
 
 # Expected filenames from page classification (order no longer fixed)
 CLASSIFIED_FILENAMES = ["Aadhar_back.jpg", "Insurance.jpg", "Aadhar.jpg", "Details.jpg"]
+
+
+def _parse_amount(value: object | None) -> float | None:
+    if value is None:
+        return None
+    cleaned = str(value).replace(",", "").strip()
+    if not cleaned:
+        return None
+    try:
+        parsed = float(cleaned)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _compute_rto_fees(value: object | None) -> float:
+    total = _parse_amount(value) or 72000.0
+    return round(total * 0.01 + 200, 2)
 
 
 def _copy_classified_to_uploads(classified_dir: Path, uploads_subdir: Path) -> list[Path]:
@@ -210,6 +230,30 @@ def process_bulk_pdf(
             dealer_id=dealer_id,
             uploads_dir=Path(get_uploads_dir(dealer_id)),
         )
+
+        # 6. Queue the sale for downstream RTO handling instead of filling Vahan inline.
+        if customer_id and vehicle_id:
+            chassis_no = (
+                (dms_result.get("vehicle") or {}).get("frame_num")
+                or vehicle.get("chassis")
+                or vehicle.get("frame_num")
+                or vehicle.get("frame_no")
+            )
+            rto_fees = _compute_rto_fees((dms_result.get("vehicle") or {}).get("vehicle_price") or vehicle.get("vehicle_price"))
+            rto_queue_repo.insert(
+                application_id=None,
+                customer_id=int(customer_id),
+                vehicle_id=int(vehicle_id),
+                dealer_id=dealer_id,
+                name=customer.get("name"),
+                mobile=mobile or mobile_val,
+                chassis_num=chassis_no,
+                register_date=date.today(),
+                rto_fees=rto_fees,
+                status="Queued",
+                rto_status="Pending",
+                subfolder=subfolder,
+            )
 
         name = customer.get("name") or ""
         return {"ok": True, "subfolder": subfolder, "mobile": mobile or mobile_val, "name": name, "retryable": False}

@@ -97,9 +97,6 @@ BULK_INGEST_POLL_SEC = int(os.getenv("BULK_INGEST_POLL_SEC", "5"))
 BULK_WORKER_THREADS = int(os.getenv("BULK_WORKER_THREADS", "1"))
 BULK_WORKER_ENABLED = os.getenv("BULK_WORKER_ENABLED", "true").lower() in ("1", "true", "yes")
 BULK_INGEST_ENABLED = os.getenv("BULK_INGEST_ENABLED", "true").lower() in ("1", "true", "yes")
-BULK_ARCHIVE_ENABLED = os.getenv("BULK_ARCHIVE_ENABLED", "true").lower() in ("1", "true", "yes")
-BULK_ARCHIVE_RETENTION_DAYS = int(os.getenv("BULK_ARCHIVE_RETENTION_DAYS", "45"))
-BULK_ARCHIVE_POLL_SEC = int(os.getenv("BULK_ARCHIVE_POLL_SEC", "900"))
 BULK_JOB_MAX_ATTEMPTS = int(os.getenv("BULK_JOB_MAX_ATTEMPTS", "3"))
 
 # DMS fill (Playwright): base URL and login. Used when client calls POST /fill-dms.

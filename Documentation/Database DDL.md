@@ -79,6 +79,7 @@ This document lists the current database tables and their columns. **Executable 
 | `horse_power` | `numeric(10,2)` | YES |  | Horse power |
 | `length_mm` | `integer` | YES |  | Length in mm |
 | `fuel_type` | `varchar(16)` | YES |  | Fuel type (e.g. Petrol, Diesel) |
+| `vehicle_price` | `numeric(12,2)` | YES |  | Latest DMS vehicle price; used as Vahan `vehicle_price` source |
 
 **Primary key:** `vehicle_master_pkey` on (`vehicle_id`)
 
@@ -88,7 +89,7 @@ This document lists the current database tables and their columns. **Executable 
 
 ## 4) `sales_master`
 
-**Purpose:** Sales master linking customer and vehicle. One row per (customer, vehicle). sales_id is PK; used by rto_payment_details and service_reminders_queue.
+**Purpose:** Sales master linking customer and vehicle. One row per (customer, vehicle). sales_id is PK; used by `rto_queue` and `service_reminders_queue`.
 
 | Column | Type | Null | Default | Notes |
 |---|---|---:|---|---|
@@ -97,6 +98,8 @@ This document lists the current database tables and their columns. **Executable 
 | `vehicle_id` | `integer` | NO |  | FK → `vehicle_master(vehicle_id)` |
 | `billing_date` | `timestamptz` | NO | `now()` | System date/time |
 | `dealer_id` | `integer` | YES |  | FK → `dealer_ref(dealer_id)` |
+| `vahan_application_id` | `varchar(128)` | YES |  | Latest Vahan application id scraped during RTO queue processing |
+| `rto_charges` | `numeric(12,2)` | YES |  | Latest Vahan RTO charges scraped during RTO queue processing |
 
 **Primary key:** `sales_master_pkey` on (`sales_id`)
 
@@ -233,13 +236,13 @@ This document lists the current database tables and their columns. **Executable 
 
 ---
 
-## 9) `rto_payment_details`
+## 9) `rto_queue`
 
-**Purpose:** RTO registration applications; one row per application. Populated when Fill Forms completes the RTO (Vahan) step; status Pending until payment, then Paid with payment_date and pay_txn_id.
+**Purpose:** RTO work queue for a sale. Populated when Fill Forms completes DMS/Form 20 work; rows start in `Queued`/`Pending` and can later be claimed in dealer-scoped oldest-first batches that run Vahan up to the upload/cart checkpoint before any payment details are added.
 
 | Column | Type | Null | Default | Notes |
 |---|---|---:|---|---|
-| `application_id` | `varchar(128)` | NO |  | Primary key; Application ID from Vahan |
+| `application_id` | `varchar(128)` | NO |  | Primary key; stable queue/reference id |
 | `sales_id` | `integer` | NO |  | FK → `sales_master(sales_id)`; UNIQUE |
 | `customer_id` | `integer` | NO |  | FK → `customer_master(customer_id)` |
 | `vehicle_id` | `integer` | NO |  | FK → `vehicle_master(vehicle_id)` |
@@ -247,22 +250,68 @@ This document lists the current database tables and their columns. **Executable 
 | `name` | `varchar(255)` | YES |  | Customer name (denormalized) |
 | `mobile` | `varchar(16)` | YES |  | Customer mobile |
 | `chassis_num` | `varchar(64)` | YES |  | Chassis number |
+| `vahan_application_id` | `varchar(128)` | YES |  | Real Vahan application number once the dealer batch reaches upload/cart |
 | `register_date` | `date` | NO | `CURRENT_DATE` | Date row added |
-| `rto_fees` | `numeric(12,2)` | NO |  | RTO fees due (from Vahan) |
-| `status` | `varchar(32)` | NO | `'Pending'` | e.g. Pending, Paid |
+| `rto_fees` | `numeric(12,2)` | NO |  | Estimated or final RTO fees; overwritten with the latest Vahan-scraped amount on successful retry |
+| `status` | `varchar(32)` | NO | `'Queued'` | e.g. Queued, In Progress, Added To Cart, Failed, Paid |
 | `pay_txn_id` | `varchar(64)` | YES |  | Transaction ID when paid |
 | `operator_id` | `varchar(64)` | YES |  | POS / operator identifier |
 | `payment_date` | `date` | YES |  | Date paid (when status = Paid) |
-| `rto_status` | `varchar(32)` | NO | `'Registered'` | RTO registration status |
+| `rto_status` | `varchar(32)` | NO | `'Pending'` | RTO work status |
 | `subfolder` | `varchar(128)` | YES |  | Upload subfolder for this sale |
+| `processing_session_id` | `varchar(128)` | YES |  | Dealer batch/session id that claimed the row |
+| `worker_id` | `varchar(128)` | YES |  | Worker/browser identifier for the active batch |
+| `leased_until` | `timestamptz` | YES |  | Lease timeout for claimed queue rows |
+| `attempt_count` | `integer` | NO | `0` | How many times the row was claimed for processing |
+| `last_error` | `text` | YES |  | Latest processing failure text |
+| `started_at` | `timestamptz` | YES |  | Time the Vahan batch started this row |
+| `uploaded_at` | `timestamptz` | YES |  | Time the row reached the upload/cart checkpoint |
+| `finished_at` | `timestamptz` | YES |  | Time the latest batch attempt completed |
 | `created_at` | `timestamptz` | NO | `now()` | Created timestamp |
+| `updated_at` | `timestamptz` | NO | `now()` | Last change timestamp |
 
-**Primary key:** `rto_payment_details_pkey` on (`application_id`)
+**Primary key:** `rto_queue_pkey` on (`application_id`)
 
 **Unique:** `uq_rto_sales_id` on (`sales_id`), `uq_rto_customer_vehicle` on (`customer_id`, `vehicle_id`)
 
 **Foreign keys:**
 - `fk_rto_sales`: (`sales_id`) → `sales_master(sales_id)`
+
+---
+
+## 9a) `form_vahan_view`
+
+**Purpose:** Read-only view that projects one sale into Vahan-friendly field labels so operators can inspect what the Vahan step will use without manually joining `sales_master`, `customer_master`, `vehicle_master`, `insurance_master`, and `rto_queue`.
+
+**Primary keys / grain:** One row per submitted `(customer_id, vehicle_id)` sale, sourced from `sales_master` and enriched with the latest insurance and RTO rows when present.
+
+**Important columns:**
+- Technical/source columns: `sales_id`, `customer_id`, `vehicle_id`, `dealer_id`, `subfolder`, `queue_id`, `application_id`, `pay_txn_id`, `rto_payment_status`, `rto_fees`, `rto_dealer_id`, `vehicle_model`, `vehicle_colour`, `fuel_type`, `year_of_mfg`, `vehicle_price`.
+- Label-aligned columns: `"Registration Type *"`, `"Chassis No *"`, `"Engine/Motor No (Last 5 Chars)"`, `"Purchase Delivery Date"`, `"Owner Name *"`, `"Category *"`, `"Mobile No"`, `"Permanent Address"`, `"Insurance Type"`, `"Insurer"`, `"Policy No"`, `"Application No"`, `"Assigned Office & Action"`, `"Amount"`, and related Vahan labels used by the dummy site/export file.
+
+**Operational notes:**
+- The view uses the latest `insurance_master` row per `(customer_id, vehicle_id)` by `insurance_year`.
+- The view uses the latest `rto_queue` row per `(customer_id, vehicle_id)` by `created_at`.
+- `queue_id` is the stable `rto_queue.application_id`; `application_id` / `"Application No"` switch to `rto_queue.vahan_application_id` once the batch reaches the Vahan cart/upload checkpoint.
+- `vehicle_price` is sourced from `vehicle_master.vehicle_price`, which is populated from the DMS scrape so Vahan automation can read only from `form_vahan_view`.
+- Successful RTO batch runs overwrite the latest scraped Vahan application id / RTO charges in both `rto_queue` and `sales_master`; session-expiry failures return the queue row to `Pending` without clearing previously scraped values.
+
+---
+
+## 9b) `form_dms_view`
+
+**Purpose:** Read-only view that projects one sale into the DMS field labels currently used by Playwright so operators can inspect the DMS inputs without manually joining customer and vehicle tables.
+
+**Primary keys / grain:** One row per submitted `(customer_id, vehicle_id)` sale, sourced from `sales_master` and enriched with `customer_master`, `vehicle_master`, and `dealer_ref`.
+
+**Important columns:**
+- Technical/source columns: `sales_id`, `customer_id`, `vehicle_id`, `dealer_id`, `subfolder`, `dealer_name`, `oem_name`.
+- Label-aligned columns: `"Mr/Ms"`, `"Contact First Name"`, `"Contact Last Name"`, `"Mobile Phone #"`, `"State"`, `"Address Line 1"`, `"Pin Code"`, `"Key num (partial)"`, `"Frame / Chassis num (partial)"`, `"Engine num (partial)"`.
+
+**Operational notes:**
+- The partial key/frame/engine columns match the truncation used by Playwright today (`8/12/12` characters respectively).
+- DMS automation now reads its fill values only from `form_dms_view`.
+- `ocr_output/<subfolder>/DMS_Form_Values.txt` supplements the DB view by recording the exact runtime values that Playwright sent.
 
 ---
 
@@ -287,7 +336,7 @@ This document lists the current database tables and their columns. **Executable 
 **Foreign keys:**
 - `fk_rc_sales`: (`sales_id`) → `sales_master(sales_id)`
 - `fk_rc_sales_dealer`: (`sales_id`, `dealer_id`) → `sales_master(sales_id`, `dealer_id)`
-- `fk_rc_rto`: (`customer_id`, `vehicle_id`) → `rto_payment_details(customer_id, vehicle_id)`
+- `fk_rc_rto`: (`customer_id`, `vehicle_id`) → `rto_queue(customer_id, vehicle_id)`
 
 ---
 
@@ -338,41 +387,24 @@ This document lists the current database tables and their columns. **Executable 
 
 ---
 
-## 12) `bulk_loads_archive`
-
-**Purpose:** Archive table for older terminal bulk rows moved out of the hot operational table.
-
-| Column | Type | Null | Default | Notes |
-|---|---|---:|---|---|
-| `all bulk_loads columns` | same as `bulk_loads` |  |  | Archive uses `LIKE bulk_loads INCLUDING DEFAULTS` |
-| `archived_at` | `timestamptz` | NO | `now()` | Time the row was archived |
-
-**Important indexes and constraints:**
-- `idx_bulk_loads_archive_job_id` — unique on (`job_id`)
-- `idx_bulk_loads_archive_dealer_created` — (`dealer_id`, `created_at DESC`)
-- `idx_bulk_loads_archive_status_created` — (`dealer_id`, `status`, `created_at DESC`)
-
-**Operational note:** Archive is currently backend-only; no UI or API read path is exposed yet.
-
----
-
 ## Table Usage Summary
 
 | Table | Used by |
 |-------|---------|
 | `ai_reader_queue` | OCR service, uploads router |
 | `customer_master` | Submit Info, customer search, Form 20, RTO |
-| `vehicle_master` | Submit Info, Form 20, Fill DMS (update), RTO |
+| `vehicle_master` | Submit Info, Form 20, Fill DMS (update), Vahan vehicle_price source, RTO |
 | `sales_master` | Submit Info, RTO, service reminders, insurance |
 | `oem_ref` | dealer_ref, Form 20 (oem_name via dealer) |
 | `oem_service_schedule` | Trigger for service_reminders_queue |
 | `dealer_ref` | Form 20, sales_master, service reminders |
 | `insurance_master` | Submit Info, View Customer |
 | `service_reminders_queue` | Trigger on sales_master |
-| `rto_payment_details` | RTO Payments Pending page, rc_status_sms_queue |
+| `rto_queue` | RTO Queue page, rc_status_sms_queue |
+| `form_dms_view` | DMS field inspection and `DMS_Form_Values.txt` generation |
+| `form_vahan_view` | Vahan field inspection and `Vahan_Form_Values.txt` generation |
 | `rc_status_sms_queue` | RC status SMS sending |
 | `bulk_loads` | Bulk ingest, queue publish/lease, dashboard, retry prep, action-taken tracking |
-| `bulk_loads_archive` | Bulk archival retention storage |
 
 ---
 
@@ -381,5 +413,10 @@ This document lists the current database tables and their columns. **Executable 
 | Version | Date | Changes |
 |---------|------|---------|
 | 0.1 | Mar 2025 | Initial Database DDL |
-| 0.2 | Mar 2025 | vehicle_master: added model, colour, oem_name, vehicle_type, num_cylinders, horse_power, length_mm, fuel_type; sales_master: sales_id PK; rto_payment_details: updated schema (application_id PK, sales_id, rto_fees, pay_txn_id, etc.); service_reminders_queue: sales_id FK; added rc_status_sms_queue; insurance_master: insurance_year; Table Usage Summary |
-| 0.3 | Mar 2026 | Added `bulk_loads` and `bulk_loads_archive` hot/archive schema, lifecycle columns, indexes, and operational notes |
+| 0.2 | Mar 2025 | vehicle_master: added model, colour, oem_name, vehicle_type, num_cylinders, horse_power, length_mm, fuel_type; sales_master: sales_id PK; RTO table schema (application_id PK, sales_id, rto_fees, pay_txn_id, etc.); service_reminders_queue: sales_id FK; added rc_status_sms_queue; insurance_master: insurance_year; Table Usage Summary |
+| 0.7 | Mar 2026 | Renamed active RTO table to `rto_queue`; Add Sales now queues RTO work instead of auto-running dummy Vahan |
+| 0.3 | Mar 2026 | Added `bulk_loads` hot schema, lifecycle columns, indexes, and operational notes |
+| 0.4 | Mar 2026 | Added `form_vahan_view` for Vahan label inspection and runtime export support |
+| 0.5 | Mar 2026 | Added `form_dms_view` for DMS label inspection and runtime export support |
+| 0.6 | Mar 2026 | Added `vehicle_master.vehicle_price`; DMS/Vahan Playwright now read field values only from `form_dms_view` / `form_vahan_view` |
+| 0.8 | Mar 2026 | Renamed `total_amount` / `total_cost` references to `vehicle_price` across schema, views, and UI |

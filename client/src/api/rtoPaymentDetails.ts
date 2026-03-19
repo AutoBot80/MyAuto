@@ -3,7 +3,7 @@ import { getBaseUrl } from "./client";
 import { DEALER_ID } from "./dealerId";
 
 export interface RtoPaymentInsertPayload {
-  application_id: string;
+  application_id?: string | null;
   customer_id: number;
   vehicle_id: number;
   dealer_id?: number | null;
@@ -21,7 +21,9 @@ export interface RtoPaymentInsertPayload {
 }
 
 export interface RtoPaymentRow {
+  queue_id: string;
   application_id: string;
+  vahan_application_id?: string | null;
   sales_id?: number;
   customer_id: number;
   vehicle_id: number;
@@ -38,10 +40,46 @@ export interface RtoPaymentRow {
   rto_status: string;
   subfolder?: string | null;
   created_at?: string;
+  leased_until?: string | null;
+  attempt_count?: number;
+  last_error?: string | null;
+  started_at?: string | null;
+  uploaded_at?: string | null;
+  finished_at?: string | null;
+  updated_at?: string | null;
+  processing_session_id?: string | null;
+  worker_id?: string | null;
 }
 
-export async function insertRtoPayment(payload: RtoPaymentInsertPayload): Promise<{ application_id: string; ok: boolean }> {
-  return apiFetch<{ application_id: string; ok: boolean }>("/rto-payment-details", {
+export interface RtoBatchRowResult {
+  queue_id: string | null;
+  customer_name: string | null;
+  status: string;
+  vahan_application_id?: string | null;
+  rto_fees?: number | null;
+  error?: string | null;
+}
+
+export interface RtoBatchStatus {
+  dealer_id: number;
+  session_id: string | null;
+  state: "idle" | "starting" | "running" | "completed" | "failed";
+  message: string;
+  started_at: string | null;
+  completed_at: string | null;
+  current_queue_id: string | null;
+  current_customer_name: string | null;
+  current_vahan_application_id: string | null;
+  total_count: number;
+  processed_count: number;
+  cart_count: number;
+  failed_count: number;
+  last_error: string | null;
+  rows: RtoBatchRowResult[];
+}
+
+export async function insertRtoPayment(payload: RtoPaymentInsertPayload): Promise<{ queue_id: string; application_id: string; ok: boolean }> {
+  return apiFetch<{ queue_id: string; application_id: string; ok: boolean }>("/rto-queue", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -50,13 +88,31 @@ export async function insertRtoPayment(payload: RtoPaymentInsertPayload): Promis
 
 export async function listRtoPayments(dealerId?: number): Promise<RtoPaymentRow[]> {
   const did = dealerId ?? DEALER_ID;
-  return apiFetch<RtoPaymentRow[]>(`/rto-payment-details?dealer_id=${did}`);
+  return apiFetch<RtoPaymentRow[]>(`/rto-queue?dealer_id=${did}`);
 }
 
-/** Get RTO payment row for a sale (to restore application_id/rto_fees on Add Sales page). */
+export async function startRtoBatch(payload?: {
+  dealer_id?: number;
+  operator_id?: string | null;
+  limit?: number;
+  vahan_base_url?: string | null;
+}): Promise<{ started: boolean; session_id: string; message: string }> {
+  return apiFetch<{ started: boolean; session_id: string; message: string }>("/rto-queue/process-batch", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload ?? {}),
+  });
+}
+
+export async function getRtoBatchStatus(dealerId?: number): Promise<RtoBatchStatus> {
+  const did = dealerId ?? DEALER_ID;
+  return apiFetch<RtoBatchStatus>(`/rto-queue/process-batch/status?dealer_id=${did}`);
+}
+
+/** Get RTO queue row for a sale. */
 export async function getRtoPaymentBySale(customerId: number, vehicleId: number): Promise<RtoPaymentRow | null> {
   const res = await apiFetch<RtoPaymentRow | null>(
-    `/rto-payment-details/by-sale?customer_id=${customerId}&vehicle_id=${vehicleId}`
+    `/rto-queue/by-sale?customer_id=${customerId}&vehicle_id=${vehicleId}`
   );
   return res;
 }
@@ -71,7 +127,7 @@ export async function payRtoPayment(applicationId: string): Promise<{ ok: boolea
   const base = getBaseUrl().replace(/\/$/, "");
   const vahanBase = base ? `${base}/dummy-vaahan` : "/dummy-vaahan";
   return apiFetch<{ ok: boolean; pay_txn_id?: string; status?: string }>(
-    `/rto-payment-details/${encodeURIComponent(applicationId)}/pay`,
+    `/rto-queue/${encodeURIComponent(applicationId)}/pay`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },

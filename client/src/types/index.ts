@@ -62,7 +62,7 @@ export interface ExtractedVehicleDetails {
   vehicle_type?: string;
   num_cylinders?: string;
   horse_power?: string;
-  total_amount?: string;
+  vehicle_price?: string;
   year_of_mfg?: string;
 }
 

@@ -9,9 +9,7 @@ export interface AddSalesStored {
   uploadStatus: string;
   /** When set, this bulk load was opened via Re-Try; mark Success on submit. */
   reprocessBulkLoadId?: number;
-  dmsScrapedVehicle: { key_no?: string; frame_no?: string; engine_no?: string; model?: string; color?: string; cubic_capacity?: string; seating_capacity?: string; body_type?: string; vehicle_type?: string; num_cylinders?: string; horse_power?: string; total_amount?: string; year_of_mfg?: string } | null;
-  rtoApplicationId: string | null;
-  rtoPaymentDue: number | null;
+  dmsScrapedVehicle: { key_no?: string; frame_no?: string; engine_no?: string; model?: string; color?: string; cubic_capacity?: string; seating_capacity?: string; body_type?: string; vehicle_type?: string; num_cylinders?: string; horse_power?: string; vehicle_price?: string; year_of_mfg?: string } | null;
   hasSubmittedInfo: boolean;
   lastSubmittedCustomerId: number | null;
   lastSubmittedVehicleId: number | null;
@@ -42,8 +40,6 @@ const DEFAULT: AddSalesStored = {
   uploadedFiles: [],
   uploadStatus: "",
   dmsScrapedVehicle: null,
-  rtoApplicationId: null,
-  rtoPaymentDue: null,
   hasSubmittedInfo: false,
   lastSubmittedCustomerId: null,
   lastSubmittedVehicleId: null,
@@ -105,8 +101,6 @@ export function loadAddSalesForm(): AddSalesStored {
       uploadStatus: typeof parsed.uploadStatus === "string" ? parsed.uploadStatus : "",
       reprocessBulkLoadId: typeof parsed.reprocessBulkLoadId === "number" ? parsed.reprocessBulkLoadId : undefined,
       dmsScrapedVehicle,
-      rtoApplicationId: typeof parsed.rtoApplicationId === "string" ? parsed.rtoApplicationId : null,
-      rtoPaymentDue: typeof parsed.rtoPaymentDue === "number" ? parsed.rtoPaymentDue : null,
       hasSubmittedInfo: Boolean(parsed.hasSubmittedInfo),
       lastSubmittedCustomerId: typeof parsed.lastSubmittedCustomerId === "number" ? parsed.lastSubmittedCustomerId : null,
       lastSubmittedVehicleId: typeof parsed.lastSubmittedVehicleId === "number" ? parsed.lastSubmittedVehicleId : null,

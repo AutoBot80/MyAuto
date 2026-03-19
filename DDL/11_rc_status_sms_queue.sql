@@ -1,6 +1,6 @@
 -- RC status SMS queue: populated when RTO payment is done.
 -- sales_id FK to sales_master; dealer_id validated via sales_master (sales_id, dealer_id).
--- Run after: 10_rto_payment_details.
+-- Run after: 10_rto_payment_details.sql + alter/12c_rename_rto_payment_details_to_rto_queue.sql.
 
 CREATE TABLE IF NOT EXISTS rc_status_sms_queue (
   id                SERIAL PRIMARY KEY,
@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS rc_status_sms_queue (
   created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT fk_rc_sales FOREIGN KEY (sales_id) REFERENCES sales_master(sales_id),
   CONSTRAINT fk_rc_sales_dealer FOREIGN KEY (sales_id, dealer_id) REFERENCES sales_master(sales_id, dealer_id),
-  CONSTRAINT fk_rc_rto FOREIGN KEY (customer_id, vehicle_id) REFERENCES rto_payment_details(customer_id, vehicle_id)
+  CONSTRAINT fk_rc_rto FOREIGN KEY (customer_id, vehicle_id) REFERENCES rto_queue(customer_id, vehicle_id)
 );
 
 COMMENT ON TABLE rc_status_sms_queue IS 'SMS queue for RC status notifications; populated when payment is done';

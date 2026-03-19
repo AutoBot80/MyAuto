@@ -6,7 +6,7 @@ const PAGE_LABELS: Record<Page, string> = {
   "add-sales": "Add Sales",
   "bulk-loads": "Bulk Loads",
   "customer-details": "View Customers",
-  "rto-status": "RTO Payments Pending",
+  "rto-status": "RTO Queue",
   "service-reminders": "Service Reminders",
   "dealer-dashboard": "Dealer Saathi",
   "contact-us": "Contact Us",

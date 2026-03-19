@@ -3,13 +3,13 @@ Data from DMS
 --- Customer (filled on enquiry) ---
 Name: Shashank Arya
 Address: S/O: Anil Kumar Arya, 431, sector no.-3, bharatpur, Rajasthan, 321001
-State: Rajasthan
-Pin code: 321001
+State: RAJASTHAN
+Pin code: —
 Mobile: 9650693610
 
 --- Vehicle (from DMS search result) ---
 Key num: 0000002509
-Frame / Chassis num: XXXXXXXXXXXX
+Frame / Chassis num: 59324XXXXXXX
 Engine num: 50581XXXXXXX
 Model: Splendor Plus
 Color: Black

@@ -879,6 +879,51 @@
   color: #1e5a9e;
 }
 
+.rto-batch-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.rto-batch-toolbar-note {
+  font-size: 12px;
+  color: #5b6b7f;
+}
+
+.rto-batch-status-card {
+  margin-bottom: 12px;
+  padding: 12px;
+  border: 1px solid #c5d9ed;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.rto-batch-progress-track {
+  width: 100%;
+  height: 10px;
+  border-radius: 999px;
+  background: #e5edf7;
+  overflow: hidden;
+}
+
+.rto-batch-progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #1e5a9e, #2f80ed);
+  transition: width 0.2s ease;
+}
+
+.rto-batch-meta {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  font-size: 12px;
+  color: #364152;
+}
+
 .rto-payments-table-wrap {
   overflow: auto;
   border: 1px solid #c5d9ed;
@@ -1539,6 +1584,43 @@
   margin: 0;
   font-size: 13px;
   color: #888;
+}
+
+.view-customer-vahan-view {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.view-customer-vahan-wrap {
+  border: 1px solid #c5d9ed;
+  border-radius: 8px;
+  background: #fff;
+  padding: 8px;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.view-customer-vahan-table {
+  border-collapse: collapse;
+  font-size: 12px;
+  min-width: max-content;
+}
+
+.view-customer-vahan-table th {
+  background: #f4f8fc;
+  color: #1e5a9e;
+  text-align: left;
+  padding: 6px 10px;
+  border-bottom: 1px solid #c5d9ed;
+  white-space: nowrap;
+}
+
+.view-customer-vahan-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid #eef3f8;
+  color: #1b2a3a;
+  white-space: nowrap;
 }
 
 .view-customer-modal-backdrop {
