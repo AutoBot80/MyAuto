@@ -9,8 +9,8 @@
 ## 1. Client (React) Structure (Modular)
 
 - **Layout:** `AppLayout` composes `Header` + `Sidebar` + main content slot.
-- **Pages:** `AddSalesPage`, `AiReaderQueuePage`, `BulkLoadsPage`, `RtoPaymentsPendingPage`, `ViewCustomerPage`, `PlaceholderPage`.
-- **API:** `api/client.ts` (base URL, `apiFetch`), `api/uploads.ts`, `api/aiReaderQueue.ts`, `api/bulkLoads.ts`, `api/fillDms.ts`, `api/submitInfo.ts`, `api/rtoPaymentDetails.ts`, `api/customerSearch.ts` — microservice-friendly; swap base URL per env.
+- **Pages:** `AddSalesPage`, `AiReaderQueuePage`, `BulkLoadsPage`, `RtoPaymentsPendingPage`, `ViewCustomerPage`, `HomePage`, `PlaceholderPage`.
+- **API:** `api/client.ts` (base URL, `apiFetch`), `api/uploads.ts`, `api/aiReaderQueue.ts`, `api/bulkLoads.ts`, `api/fillDms.ts`, `api/submitInfo.ts`, `api/rtoPaymentDetails.ts`, `api/customerSearch.ts`, `api/admin.ts` — microservice-friendly; swap base URL per env.
 - **Hooks:** `useToday`, `useUploadScans`, `useAiReaderQueue` — reusable, testable.
 - **Types:** `types/index.ts` — `Page`, `AddSalesStep`, `AiReaderQueueItem`, `ExtractedVehicleDetails`, `PrintForm20Response`, etc.
 
@@ -28,6 +28,7 @@
 | `BulkLoadsPage` | Uses `api/bulkLoads`; shows hot processing rows, failure tabs, retry prep, and action-taken toggles. |
 | `RtoPaymentsPendingPage` | List RTO applications; record payment. |
 | `ViewCustomerPage` | Search by mobile/plate; view vehicles, insurance, and the selected vehicle's `form_vahan_view` row. |
+| `HomePage` | Shows the main Saathi tiles and hosts the Admin Saathi reset button on the landing screen. |
 | `PlaceholderPage` | Title + message for coming-soon pages. |
 
 ---
@@ -92,6 +93,7 @@ backend/app/
 | GET | `/customer-search/search` | Search by mobile or plate. |
 | GET | `/customer-search/form-vahan` | Get the `form_vahan_view` row for one customer/vehicle pair. |
 | GET | `/dealers/{dealer_id}` | Get dealer by ID. |
+| POST | `/admin/reset-all-data` | Truncate all public base tables except `oem_ref`, `dealer_ref`, and `oem_service_schedule`. |
 | GET | `/documents/{subfolder}/list` | List documents in subfolder. |
 | GET | `/documents/{subfolder}/{filename}` | Download document. |
 | POST | `/qr-decode` | Decode Aadhar QR. |
@@ -195,3 +197,4 @@ See **Documentation/Database DDL.md** for full table structures. Summary:
 | 0.2 | Mar 2025 | — | Updated backend modules, full API endpoints list, Form 20 section, database schema summary |
 | 0.3 | Mar 2026 | — | Added bulk loads page/API details, backend bulk modules, and hot-table bulk worker behavior |
 | 0.4 | Mar 2026 | — | Updated for `form_dms_view` / `form_vahan_view`, `ocr_output` automation traces, View Customer Vahan row, and current DMS/Vahan behavior |
+| 0.5 | Mar 2026 | — | Added Admin Saathi landing-tile reset action and `/admin/reset-all-data` endpoint |

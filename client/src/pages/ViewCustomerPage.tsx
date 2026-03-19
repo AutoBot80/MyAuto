@@ -254,9 +254,11 @@ export function ViewCustomerPage({ initialMobile = "", dealerId = DEALER_ID }: V
                 <dt>Policy ID</dt>
                 <dd>{selectedIns.policy_num ?? "—"}</dd>
                 <dt>From</dt>
-                <dd>{selectedIns.policy_from ?? "—"}</dd>
-                <dt>To</dt>
-                <dd>{selectedIns.policy_to ?? "—"}</dd>
+                <dd>
+                  {selectedIns.policy_from ?? "—"}
+                  <span style={{ margin: "0 10px", color: "#667" }}>To</span>
+                  {selectedIns.policy_to ?? "—"}
+                </dd>
               </dl>
             ) : (
               <p className="view-customer-tile-empty">No insurance record</p>

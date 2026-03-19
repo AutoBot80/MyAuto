@@ -1,0 +1,23 @@
+Data from DMS
+
+--- Customer (filled on enquiry) ---
+Name: Shashank Arya
+Address: S/O: Anil Kumar Arya, 431, sector no.-3, bharatpur, Rajasthan, 321001
+State: RAJASTHAN
+Pin code: 321001
+Mobile: 9650693610
+
+--- Vehicle (from DMS search result) ---
+Key num: 0000002510
+Frame / Chassis num: 59324XXXXXXX
+Engine num: 50581XXXXXXX
+Model: Splendor Plus
+Color: Black
+Cubic capacity: 100
+Seating capacity: 2
+Body type: Open
+Vehicle type: Motorcycle
+Num cylinders: 2
+Horsepower: 3
+Vehicle price: 72500
+Year of Mfg: 2024

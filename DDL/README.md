@@ -49,6 +49,7 @@ One-off changes (e.g. new columns) go in **`DDL/alter/`**. Run against an existi
 - `02b_customer_master_customer_id_pk.sql` — adds `customer_id` as PK, aadhar last 4 only, unique (aadhar, phone); migrates sales_master to customer_id FK.
 - `02c_customer_master_add_gender_dob.sql` — adds `gender`, `date_of_birth` to customer_master (for QR/Aadhar granular data).
 - `03a_vehicle_master_add_model_colour.sql` — adds `model` and `colour` (VARCHAR 64) to vehicle_master.
+- `03i_vehicle_master_unique_engine_chassis.sql` — vehicle_master: add unique index on (engine, chassis) when both are non-empty.
 - `04b_rename_dealer_master_to_dealer_ref_and_oem.sql` — creates `oem_ref`, renames `dealer_master` to `dealer_ref`, replaces `dealer_of` with `oem_id` (FK to oem_ref).
 - `04c_dealer_ref_add_auto_sms_reminders.sql` — adds `auto_sms_reminders` (Y/N) to dealer_ref.
 - `04d_drop_oem_service_frequency_add_oem_service_schedule.sql` — drops `oem_service_frequency`, creates `oem_service_schedule`.
@@ -62,6 +63,7 @@ One-off changes (e.g. new columns) go in **`DDL/alter/`**. Run against an existi
 - `05d_service_reminders_queue_add_sales_id_fk.sql` — service_reminders_queue: add sales_id, FK to sales_master(sales_id). Run after 05b.
 - `09a_trigger_sales_master_use_sales_id.sql` — updates trigger to use sales_id for service_reminders_queue. Run after 05b, 05d.
 - `11a_rc_status_sms_queue_dealer_fk_via_sales.sql` — rc_status_sms_queue: add sales_id, dealer_id FK via sales_master. Run after 05b, 05c.
+- `11b_rc_status_sms_queue_dealer_fk_via_rto_queue.sql` — rc_status_sms_queue: sync dealer_id from rto_queue and enforce FK (sales_id, dealer_id) → rto_queue(sales_id, dealer_id). Run after 11a and 12c.
 - `06b_insurance_master_fk_to_sales_only.sql` — insurance_master: FK to sales_master only (drops FKs to customer_master, vehicle_master).
 - `08c_service_reminders_queue_fk_to_sales_only.sql` — service_reminders_queue: composite FK to sales_master (customer_id, vehicle_id, dealer_id). (Superseded by 05b–05d.)
 - `10d_rto_payment_details_fk_dealer_via_sales.sql` — rto_payment_details: composite FK to sales_master (customer_id, vehicle_id, dealer_id). (Superseded by 05b–05c.)

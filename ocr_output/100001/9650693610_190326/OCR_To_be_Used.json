@@ -1,0 +1,30 @@
+{
+  "vehicle": {
+    "frame_no": "59324",
+    "engine_no": "50581",
+    "key_no": "2509",
+    "battery_no": "M7A6R860254"
+  },
+  "customer": {
+    "aadhar_id": "7945",
+    "name": "Shashank Arya",
+    "gender": "M",
+    "year_of_birth": "1980",
+    "date_of_birth": "30/05/1980",
+    "care_of": "S/O: Anil Kumar Arya",
+    "house": "431",
+    "street": "sector no.-3",
+    "location": "bharatpur",
+    "city": "Bharatpur",
+    "post_office": "Bharatpur",
+    "district": "Bharatpur",
+    "sub_district": "Bharatpur",
+    "state": "Rajasthan",
+    "pin_code": "321001",
+    "address": "S/O: Anil Kumar Arya, 431, sector no.-3, bharatpur, Rajasthan, 321001"
+  },
+  "insurance": {
+    "nominee_name": "Shashank ARya"
+  },
+  "details_customer_name": "Shashank ARya"
+}

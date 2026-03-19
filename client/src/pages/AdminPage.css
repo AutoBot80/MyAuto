@@ -1,0 +1,22 @@
+.admin-page {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+.admin-danger-button {
+  background: #b42318;
+  border-color: #b42318;
+  color: #fff;
+}
+
+.admin-danger-button:hover:not(:disabled) {
+  background: #8f1c13;
+}
+
+.admin-danger-button--top-right {
+  position: absolute;
+  top: 0;
+  right: 0;
+}
+

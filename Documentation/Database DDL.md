@@ -84,6 +84,7 @@ This document lists the current database tables and their columns. **Executable 
 **Primary key:** `vehicle_master_pkey` on (`vehicle_id`)
 
 **Unique:** `uq_vehicle_raw_triple` on (`raw_frame_num`, `raw_engine_num`, `raw_key_num`)
+**Unique:** `uq_vehicle_engine_chassis` on (`engine`, `chassis`) (only when both are non-empty)
 
 ---
 
@@ -323,7 +324,7 @@ This document lists the current database tables and their columns. **Executable 
 |---|---|---:|---|---|
 | `id` | `integer` | NO | `nextval('rc_status_sms_queue_id_seq'::regclass)` | Primary key |
 | `sales_id` | `integer` | NO |  | FK → `sales_master(sales_id)` |
-| `dealer_id` | `integer` | YES |  | Dealer; validated via sales_master (sales_id, dealer_id) |
+| `dealer_id` | `integer` | YES |  | Dealer; validated via rto_queue (sales_id, dealer_id) |
 | `vehicle_id` | `integer` | NO |  | FK → `vehicle_master(vehicle_id)` |
 | `customer_id` | `integer` | NO |  | FK → `customer_master(customer_id)` |
 | `customer_mobile` | `varchar(16)` | YES |  | Customer mobile for SMS |
@@ -335,7 +336,7 @@ This document lists the current database tables and their columns. **Executable 
 
 **Foreign keys:**
 - `fk_rc_sales`: (`sales_id`) → `sales_master(sales_id)`
-- `fk_rc_sales_dealer`: (`sales_id`, `dealer_id`) → `sales_master(sales_id`, `dealer_id)`
+- `fk_rc_rto_sales_dealer`: (`sales_id`, `dealer_id`) → `rto_queue(sales_id, dealer_id)`
 - `fk_rc_rto`: (`customer_id`, `vehicle_id`) → `rto_queue(customer_id, vehicle_id)`
 
 ---

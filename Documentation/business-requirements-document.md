@@ -46,6 +46,7 @@ The system is a server–client application for auto dealers. Dealers run a ligh
 | BR-8 | Bulk failure visibility | Bulk Upload `Error` and `Rejected` records must remain in the hot dashboard until the operator marks `action_taken=true`; older rows are not archived. |
 | BR-9 | Automation source of truth | DMS and Vahan Playwright fills must read site field values from `form_dms_view` and `form_vahan_view` only. |
 | BR-10 | Automation trace output | DMS and Vahan automation must write `DMS_Form_Values.txt` and `Vahan_Form_Values.txt` into the matching `ocr_output/<dealer>/<subfolder>/` folder. |
+| BR-11 | Admin data reset preservation | Admin-triggered data reset must preserve `oem_ref`, `dealer_ref`, and `oem_service_schedule` while clearing all other public base tables. |
 
 ---
 
@@ -63,6 +64,7 @@ The system is a server–client application for auto dealers. Dealers run a ligh
 - **FR-8** Add Sales flow: Submit Info (customer, vehicle, insurance) → Fill Forms (DMS, Form 20, RTO Queue insertion) → RTO Queue.
 - **FR-9** RTO Queue page: list queued RTO work items created by Fill Forms and let an operator process the oldest 7 queued rows for their dealer in one browser session.
 - **FR-10** View Customer page: search by mobile/plate, view vehicles and insurance, and inspect the selected vehicle's Vahan field mapping in a single horizontally scrollable row.
+- **FR-10a** Main page: show an `Admin Saathi` tile with a destructive-action button that lets an operator clear all non-reference-table data after explicit confirmation.
 
 ### 5.2 Server / Backend
 
@@ -156,3 +158,4 @@ Bulk upload automates the ingestion of scanned documents from a shared folder in
 | 0.6 | Mar 2026 | — | Added DMS field logging requirement via `DMS_Form_Values.txt` and supporting DB view |
 | 0.7 | Mar 2026 | — | DMS/Vahan automation now reads site field values only from `form_dms_view` and `form_vahan_view` |
 | 0.8 | Mar 2026 | — | Updated bulk upload behavior, queue model, operator rules, and automation trace outputs to match the current implementation |
+| 0.9 | Mar 2026 | — | Added Admin Saathi reset requirement and preserved-table rule |

@@ -19,6 +19,11 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
   const [batchError, setBatchError] = useState<string | null>(null);
   const [startingBatch, setStartingBatch] = useState(false);
 
+  const progressPercent = useMemo(() => {
+    if (!batchStatus || batchStatus.total_count <= 0) return 0;
+    return Math.min(100, Math.round((batchStatus.processed_count / batchStatus.total_count) * 100));
+  }, [batchStatus]);
+
   const fetchFromDb = (showLoading = true) => {
     if (showLoading) setLoading(true);
     setError(null);
@@ -32,9 +37,6 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
     getRtoBatchStatus(dealerId)
       .then((data) => {
         setBatchStatus(data);
-        if (data.state === "running" || data.state === "starting") {
-          fetchFromDb(false);
-        }
         if (data.state === "completed" || data.state === "failed") {
           setStartingBatch(false);
           fetchFromDb(false);
@@ -46,31 +48,10 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
   };
 
   useEffect(() => {
-    let cancelled = false;
     fetchFromDb(true);
     fetchBatchStatus();
-    const onVisible = () => {
-      if (!cancelled && document.visibilityState === "visible") {
-        fetchFromDb(false);
-        fetchBatchStatus();
-      }
-    };
-    document.addEventListener("visibilitychange", onVisible);
-    return () => {
-      cancelled = true;
-      document.removeEventListener("visibilitychange", onVisible);
-    };
+    return undefined;
   }, [dealerId]);
-
-  useEffect(() => {
-    if (!batchStatus || (batchStatus.state !== "running" && batchStatus.state !== "starting")) {
-      return undefined;
-    }
-    const timer = window.setInterval(() => {
-      fetchBatchStatus();
-    }, 1500);
-    return () => window.clearInterval(timer);
-  }, [batchStatus?.state, dealerId]);
 
   const handleStartBatch = async () => {
     setBatchError(null);
@@ -114,11 +95,6 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
     "RTO Fees",
     "Status",
   ];
-
-  const progressPercent = useMemo(() => {
-    if (!batchStatus || batchStatus.total_count <= 0) return 0;
-    return Math.min(100, Math.round((batchStatus.processed_count / batchStatus.total_count) * 100));
-  }, [batchStatus]);
 
   const batchStateClass =
     batchStatus?.state === "running" || batchStatus?.state === "starting"

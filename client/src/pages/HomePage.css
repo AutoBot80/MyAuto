@@ -30,20 +30,28 @@
   pointer-events: none;
 }
 
-.home-tiles {
+.home-tiles-layout {
   position: relative;
   z-index: 1;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
+  display: flex;
   gap: 2rem;
   justify-content: center;
-  align-items: stretch;
-  max-width: 480px;
+  align-items: center;
+  max-width: 860px;
   margin: 0 auto;
 }
 
-.home-tile-service {
-  grid-column: 1;
+.home-tiles-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2rem;
+  align-items: stretch;
+}
+
+.home-tile-admin {
+  width: 220px;
+  min-height: 320px;
+  cursor: pointer;
 }
 
 .home-tile {

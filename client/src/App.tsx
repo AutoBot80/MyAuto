@@ -4,6 +4,7 @@ import type { Page } from "./types";
 import { useToday } from "./hooks/useToday";
 import { AppLayoutV2 } from "./components/AppLayoutV2";
 import { AddSalesPage } from "./pages/AddSalesPage";
+import { AdminPage } from "./pages/AdminPage";
 import { HomePage } from "./pages/HomePage";
 import { PlaceholderPage } from "./pages/PlaceholderPage";
 import { ViewCustomerPage } from "./pages/ViewCustomerPage";
@@ -35,7 +36,7 @@ class PageErrorBoundary extends Component<{ children: ReactNode }, { hasError: b
   }
 }
 
-type AppMode = "home" | "pos" | "service" | "rto" | "dealer";
+type AppMode = "home" | "pos" | "service" | "rto" | "dealer" | "admin";
 
 const POS_PAGES: Page[] = [
   "add-sales",
@@ -49,6 +50,8 @@ const SERVICE_PAGES: Page[] = ["service-reminders", "contact-us"];
 const RTO_PAGES: Page[] = ["rto-status", "contact-us"];
 
 const DEALER_PAGES: Page[] = ["dealer-dashboard", "contact-us"];
+
+const ADMIN_PAGES: Page[] = ["admin-tools", "contact-us"];
 
 function getValidDmsUrl(dmsLink: string | null): string {
   const base = getBaseUrl().replace(/\/$/, "");
@@ -102,6 +105,8 @@ function App() {
     if (mode === "pos" && !POS_PAGES.includes(page)) setPage("add-sales");
     else if (mode === "service" && !SERVICE_PAGES.includes(page)) setPage("service-reminders");
     else if (mode === "rto" && !RTO_PAGES.includes(page)) setPage("rto-status");
+    else if (mode === "dealer" && !DEALER_PAGES.includes(page)) setPage("dealer-dashboard");
+    else if (mode === "admin" && !ADMIN_PAGES.includes(page)) setPage("admin-tools");
   }, [mode, page]);
 
   const dmsUrl = getValidDmsUrl(dmsLink);
@@ -120,6 +125,8 @@ function App() {
         return <PlaceholderPage title="Service Reminders" />;
       case "dealer-dashboard":
         return <PlaceholderPage title="Dealer Saathi" message="RTO details, Sub-dealer sales etc. – Coming soon." />;
+      case "admin-tools":
+        return <AdminPage />;
       case "contact-us":
         return <PlaceholderPage title="Contact Us" />;
       default:
@@ -170,6 +177,10 @@ function App() {
                 setMode("dealer");
                 setPage("dealer-dashboard");
               }}
+              onSelectAdmin={() => {
+                setMode("admin");
+                setPage("admin-tools");
+              }}
             />
           </main>
         </div>
@@ -181,6 +192,7 @@ function App() {
     mode === "pos" ? POS_PAGES
     : mode === "rto" ? RTO_PAGES
     : mode === "dealer" ? DEALER_PAGES
+    : mode === "admin" ? ADMIN_PAGES
     : SERVICE_PAGES;
   const currentPage = visiblePages.includes(page) ? page : visiblePages[0];
   const content = renderContent(currentPage) ?? renderContent(visiblePages[0]);

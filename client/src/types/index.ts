@@ -5,6 +5,7 @@ export type Page =
   | "rto-status"
   | "service-reminders"
   | "dealer-dashboard"
+  | "admin-tools"
   | "contact-us";
 
 export type AddSalesStep =

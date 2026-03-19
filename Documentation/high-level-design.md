@@ -45,8 +45,8 @@
 
 | Component | Responsibility |
 |-----------|----------------|
-| **Client (React)** | UI, forms, validation, calls to backend API; Add Sales, Fill Forms, RTO Payments, View Customer, Bulk Loads. |
-| **FastAPI App** | REST API, CRUD, Submit Info, Fill DMS, Form 20, Vahan, RTO payment, customer search, OCR queue, and bulk upload monitoring. |
+| **Client (React)** | UI, forms, validation, calls to backend API; Add Sales, Fill Forms, RTO Payments, View Customer, Bulk Loads, and Admin reset actions. |
+| **FastAPI App** | REST API, CRUD, Submit Info, Fill DMS, Form 20, Vahan, RTO payment, customer search, OCR queue, bulk upload monitoring, and admin reset utilities. |
 | **PostgreSQL** | Persistent store for dealers, vehicles, customers, sales, insurance, RTO payments, service reminders. |
 | **Queue (local or SQS)** | Decouple bulk job creation from execution; current bulk processing uses SQS or a local in-process fallback queue. |
 | **OCR Worker** | Runs OCR/pre-OCR, writes extracted artifacts to `ocr_output`, and supports bulk processing. |
@@ -97,6 +97,7 @@ My Auto.AI/
 | `routers/customer_search` | Search customers by mobile/plate and expose the read-only Vahan view row used by View Customer. |
 | `routers/dealers` | Get dealer by ID. |
 | `routers/documents` | List/download documents by subfolder. |
+| `routers/admin` | Clear all non-reference-table data while preserving `oem_ref`, `dealer_ref`, and `oem_service_schedule`. |
 | `routers/qr_decode` | Decode Aadhar QR. |
 | `routers/vision` | Vision API (Aadhar analyze). |
 | `routers/textract_router` | AWS Textract extraction. |
@@ -117,6 +118,7 @@ My Auto.AI/
 | `BulkLoadsPage` | View hot bulk processing status, unresolved failures, and retry/corrective actions. |
 | `RtoPaymentsPendingPage` | List queued RTO work items, start the oldest-7 dealer batch, and show live RTO Cart progress. |
 | `ViewCustomerPage` | Search customer; view vehicles, insurance, and the bottom single-row `form_vahan_view` projection for the selected vehicle. |
+| `HomePage` | Landing page with POS, RTO, Service, Dealer, and Admin tiles; Admin Saathi can clear non-reference-table data after confirmation. |
 | `AiReaderQueuePage` | OCR queue status and processing. |
 | `PlaceholderPage` | Coming-soon placeholder. |
 
@@ -180,3 +182,4 @@ My Auto.AI/
 | 0.2 | Mar 2025 | — | Added code structure (3.1–3.3), backend modules, client pages, Add Sales flow, Service Reminders flow |
 | 0.3 | Mar 2026 | — | Added bulk upload router/services/pages, queue/deployment notes, and hot-table retention behavior |
 | 0.4 | Mar 2026 | — | Updated for view-driven DMS/Vahan automation, `ocr_output` trace artifacts, and current queue/storage behavior |
+| 0.5 | Mar 2026 | — | Added Admin Saathi home tile and backend reset capability for clearing non-reference-table data |
