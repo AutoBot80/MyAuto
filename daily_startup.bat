@@ -19,7 +19,7 @@ echo Git update done.
 echo.
 
 echo === Starting Backend (uvicorn) in new window ===
-start "MyAuto Backend" cmd /k "cd /d "%ROOT%" && call venv\Scripts\activate.bat && cd backend && uvicorn app.main:app --reload --port 8000"
+start "MyAuto Backend" cmd /k "cd /d "%ROOT%backend" && call ..\venv\Scripts\activate.bat && python -m uvicorn app.main:app --reload --reload-dir app --port 8000"
 
 timeout /t 2 /nobreak >nul
 
