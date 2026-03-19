@@ -144,7 +144,7 @@ def _launch_managed_browser_for_site(base_url: str):
     return None, None
 
 
-def _get_or_open_site_page(base_url: str, site_label: str):
+def _get_or_open_site_page(base_url: str, site_label: str, *, require_login_on_open: bool = True):
     """
     Try finding an already-open site tab.
     If not found, open a managed browser tab for operator login and return a guidance error.
@@ -155,6 +155,8 @@ def _get_or_open_site_page(base_url: str, site_label: str):
 
     opened_page, channel = _launch_managed_browser_for_site(base_url)
     if opened_page is not None:
+        if not require_login_on_open:
+            return opened_page, None
         return None, f"{site_label} Opened. Please login. And then press button again"
 
     return None, (
@@ -706,7 +708,7 @@ def run_fill_vahan_batch_row(
 ) -> dict:
     """Batch-safe Vahan helper that reuses one browser/context and stops after cart upload."""
     del context  # Existing open tab mode does not create/reuse server-owned contexts.
-    page, open_error = _get_or_open_site_page(vahan_base_url, "Vahan")
+    page, open_error = _get_or_open_site_page(vahan_base_url, "Vahan", require_login_on_open=False)
     if page is None:
         raise ValueError(open_error or "Vahan site not open. Please open Vahan site and keep it logged in.")
     vahan_values = _build_vahan_fill_values(customer_id, vehicle_id, subfolder)
@@ -996,7 +998,7 @@ def run_fill_vahan_only(
         return result
     try:
         logger.info("fill_dms_service: run_fill_vahan_only starting")
-        page, open_error = _get_or_open_site_page(vahan_base_url, "Vahan")
+        page, open_error = _get_or_open_site_page(vahan_base_url, "Vahan", require_login_on_open=False)
         if page is None:
             result["error"] = open_error
             return result
