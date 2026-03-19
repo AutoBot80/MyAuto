@@ -437,6 +437,34 @@ def release_batch_claims(processing_session_id: str) -> int:
         conn.close()
 
 
+def retry_failed_row(application_id: str) -> bool:
+    """Set one failed queue row back to Queued for operator retry."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE rto_queue
+                SET status = 'Queued',
+                    rto_status = 'Pending',
+                    leased_until = NULL,
+                    processing_session_id = NULL,
+                    worker_id = NULL,
+                    last_error = NULL,
+                    started_at = NULL,
+                    finished_at = NULL,
+                    updated_at = NOW()
+                WHERE application_id = %s
+                  AND status = 'Failed'
+                """,
+                ((application_id or "").strip(),),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
 def list_all(dealer_id: int | None = None) -> list[dict]:
     """Return rows for RTO Queue, newest first. Filter by dealer_id when provided."""
     conn = get_connection()

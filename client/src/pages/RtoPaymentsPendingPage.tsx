@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   getRtoBatchStatus,
   listRtoPayments,
+  retryRtoQueueRow,
   startRtoBatch,
   type RtoBatchStatus,
   type RtoPaymentRow,
@@ -18,6 +19,7 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
   const [error, setError] = useState<string | null>(null);
   const [batchError, setBatchError] = useState<string | null>(null);
   const [startingBatch, setStartingBatch] = useState(false);
+  const [retryingQueueId, setRetryingQueueId] = useState<string | null>(null);
 
   const progressPercent = useMemo(() => {
     if (!batchStatus || batchStatus.total_count <= 0) return 0;
@@ -53,6 +55,18 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
     return undefined;
   }, [dealerId]);
 
+  useEffect(() => {
+    const isActive =
+      startingBatch ||
+      batchStatus?.state === "starting" ||
+      batchStatus?.state === "running";
+    if (!isActive) return undefined;
+    const timer = window.setInterval(() => {
+      fetchBatchStatus();
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [startingBatch, batchStatus?.state, dealerId]);
+
   const handleStartBatch = async () => {
     setBatchError(null);
     setStartingBatch(true);
@@ -64,6 +78,20 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
       setStartingBatch(false);
       setBatchError(err instanceof Error ? err.message : "Failed to start batch");
       fetchBatchStatus();
+    }
+  };
+
+  const handleTryAgain = async (queueId: string) => {
+    setBatchError(null);
+    setRetryingQueueId(queueId);
+    try {
+      await retryRtoQueueRow(queueId);
+      fetchFromDb(false);
+      fetchBatchStatus();
+    } catch (err) {
+      setBatchError(err instanceof Error ? err.message : "Failed to retry row");
+    } finally {
+      setRetryingQueueId(null);
     }
   };
 
@@ -94,6 +122,7 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
     "Register Date",
     "RTO Fees",
     "Status",
+    "Actions",
   ];
 
   const batchStateClass =
@@ -102,6 +131,13 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
       : batchStatus?.state === "completed"
         ? "app-process-status app-process-status--sleeping"
         : "app-process-status app-process-status--waiting";
+  const isInstructionalVahanError = (msg?: string | null) => {
+    const text = String(msg || "").toLowerCase();
+    return (
+      text.includes("opened. please login") ||
+      text.includes("cannot switch to a different thread")
+    );
+  };
 
   return (
     <div className="rto-payments-page">
@@ -118,6 +154,7 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
             ? "Processing oldest 7..."
             : "Fill Vahan Site"}
         </button>
+        <span className="rto-batch-toolbar-note">If Vahan opens, login and press Fill Vahan Site again.</span>
         </div>
       </div>
       {batchStatus && batchStatus.state !== "idle" && (
@@ -140,10 +177,12 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
             {batchStatus.current_customer_name && <span>Customer: {batchStatus.current_customer_name}</span>}
             {batchStatus.current_vahan_application_id && <span>Vahan App ID: {batchStatus.current_vahan_application_id}</span>}
           </div>
-          {batchStatus.last_error && <p className="app-process-last-error">Last error: {batchStatus.last_error}</p>}
+          {batchStatus.last_error && !isInstructionalVahanError(batchStatus.last_error) && (
+            <p className="app-process-last-error">Last error: {batchStatus.last_error}</p>
+          )}
         </section>
       )}
-      {batchError && <p className="rto-payments-error">{batchError}</p>}
+      {batchError && !isInstructionalVahanError(batchError) && <p className="rto-payments-error">{batchError}</p>}
       <div className="rto-payments-table-wrap">
         <table className="rto-payments-table">
           <thead>
@@ -171,6 +210,20 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
                   <td>{r.register_date}</td>
                   <td>{r.rto_fees != null ? `₹${r.rto_fees}` : "—"}</td>
                   <td>{r.status ?? "Pending"}</td>
+                  <td>
+                    {String(r.status || "").toLowerCase() === "failed" ? (
+                      <button
+                        type="button"
+                        className="app-button"
+                        onClick={() => handleTryAgain(r.queue_id)}
+                        disabled={retryingQueueId === r.queue_id}
+                      >
+                        {retryingQueueId === r.queue_id ? "Retrying..." : "Retry"}
+                      </button>
+                    ) : (
+                      "—"
+                    )}
+                  </td>
                 </tr>
               ))
             )}

@@ -135,3 +135,13 @@ export async function payRtoPayment(applicationId: string): Promise<{ ok: boolea
     }
   );
 }
+
+export async function retryRtoQueueRow(applicationId: string): Promise<{ ok: boolean; application_id: string; status: string }> {
+  return apiFetch<{ ok: boolean; application_id: string; status: string }>(
+    `/rto-queue/${encodeURIComponent(applicationId)}/retry`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    }
+  );
+}

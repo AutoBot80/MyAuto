@@ -205,3 +205,12 @@ def list_rto_payments(dealer_id: int | None = Query(None, description="Dealer ID
     did = dealer_id if dealer_id is not None else DEALER_ID
     rows = repo.list_all(dealer_id=did)
     return [_serialize_row(r) for r in rows]
+
+
+@router.post("/{application_id}/retry")
+def retry_rto_queue_row(application_id: str) -> dict:
+    """Retry one failed row by setting it back to Queued."""
+    ok = repo.retry_failed_row(application_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Failed row not found for retry")
+    return {"ok": True, "application_id": application_id, "status": "Queued"}

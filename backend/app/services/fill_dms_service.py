@@ -10,6 +10,7 @@ import os
 import re
 import urllib.parse
 import atexit
+import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -22,21 +23,44 @@ from app.repositories import form_vahan as form_vahan_repo
 logger = logging.getLogger(__name__)
 
 _PW = None
+_PW_THREAD_ID: int | None = None
 _KEEP_OPEN_BROWSERS: list = []
 _CDP_BROWSERS_BY_URL: dict[str, object] = {}
 
 
 def _get_playwright():
     """Persistent Playwright instance (only used when keep-open is enabled)."""
-    global _PW
+    global _PW, _PW_THREAD_ID
+    current_thread_id = threading.get_ident()
+    # Playwright sync objects are thread-affine; recreate on thread switch.
+    if _PW is not None and _PW_THREAD_ID is not None and _PW_THREAD_ID != current_thread_id:
+        for b in list(_KEEP_OPEN_BROWSERS):
+            try:
+                b.close()
+            except Exception:
+                pass
+        _KEEP_OPEN_BROWSERS.clear()
+        for b in list(_CDP_BROWSERS_BY_URL.values()):
+            try:
+                b.close()
+            except Exception:
+                pass
+        _CDP_BROWSERS_BY_URL.clear()
+        try:
+            _PW.stop()
+        except Exception:
+            pass
+        _PW = None
+        _PW_THREAD_ID = None
     if _PW is None:
         _PW = sync_playwright().start()
+        _PW_THREAD_ID = current_thread_id
     return _PW
 
 
 @atexit.register
 def _cleanup_keep_open_browsers() -> None:
-    global _PW
+    global _PW, _PW_THREAD_ID
     for b in list(_KEEP_OPEN_BROWSERS):
         try:
             b.close()
@@ -55,6 +79,7 @@ def _cleanup_keep_open_browsers() -> None:
         except Exception:
             pass
         _PW = None
+        _PW_THREAD_ID = None
 
 
 def _candidate_cdp_urls() -> list[str]:

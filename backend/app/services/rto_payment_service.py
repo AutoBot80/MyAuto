@@ -42,6 +42,18 @@ def _is_session_expiry_error(error: Exception) -> bool:
     return isinstance(error, PlaywrightTimeout) or any(marker in message for marker in markers)
 
 
+def _is_retryable_site_login_error(error: Exception) -> bool:
+    """Errors that should return the row to Pending so operator can login and retry."""
+    message = str(error or "").lower()
+    markers = (
+        "opened. please login",
+        "site not open",
+        "please open vahan site",
+        "cannot switch to a different thread",
+    )
+    return any(marker in message for marker in markers)
+
+
 def _batch_lock_key(dealer_id: int) -> int:
     return 9_200_000 + int(dealer_id)
 
@@ -254,13 +266,14 @@ def _run_dealer_rto_batch(
                     current_sales_id = None
                 except Exception as exc:
                     logger.warning("rto_batch: failed queue_id=%s: %s", current_queue_id, exc)
-                    if _is_session_expiry_error(exc):
+                    should_return_pending = _is_session_expiry_error(exc) or _is_retryable_site_login_error(exc)
+                    if should_return_pending:
                         repo.mark_batch_row_pending(current_queue_id or "", session_id, worker_id, str(exc))
                     else:
                         repo.mark_batch_row_failed(current_queue_id or "", session_id, worker_id, str(exc))
                     updated = _read_batch_status(dealer_id) or {}
                     processed_count = int(updated.get("processed_count") or 0) + 1
-                    failed_count = int(updated.get("failed_count") or 0) + (0 if _is_session_expiry_error(exc) else 1)
+                    failed_count = int(updated.get("failed_count") or 0) + (0 if should_return_pending else 1)
                     _write_batch_status(
                         dealer_id,
                         processed_count=processed_count,
@@ -268,7 +281,7 @@ def _run_dealer_rto_batch(
                         last_error=str(exc),
                         message=(
                             f"Session expired; returned row {processed_count} of {total_count} to Pending"
-                            if _is_session_expiry_error(exc)
+                            if should_return_pending
                             else f"Failed row {processed_count} of {total_count}"
                         ),
                     )
@@ -277,13 +290,13 @@ def _run_dealer_rto_batch(
                         {
                             "queue_id": current_queue_id,
                             "customer_name": row.get("name"),
-                            "status": "Pending" if _is_session_expiry_error(exc) else "Failed",
+                            "status": "Pending" if should_return_pending else "Failed",
                             "vahan_application_id": None,
                             "rto_fees": row.get("rto_fees"),
                             "error": str(exc),
                         },
                     )
-                    if _is_session_expiry_error(exc):
+                    if should_return_pending:
                         raise
                     current_queue_id = None
                     current_sales_id = None
@@ -303,18 +316,20 @@ def _run_dealer_rto_batch(
         logger.exception("rto_batch: fatal dealer batch error dealer_id=%s", dealer_id)
         if current_queue_id:
             try:
-                if _is_session_expiry_error(exc):
+                should_return_pending = _is_session_expiry_error(exc) or _is_retryable_site_login_error(exc)
+                if should_return_pending:
                     repo.mark_batch_row_pending(current_queue_id, session_id, worker_id, str(exc))
                 else:
                     repo.mark_batch_row_failed(current_queue_id, session_id, worker_id, str(exc))
             except Exception:
                 logger.exception("rto_batch: could not mark fatal row failed")
+        pending_fatal = _is_session_expiry_error(exc) or _is_retryable_site_login_error(exc)
         _write_batch_status(
             dealer_id,
             state="failed",
             completed_at=_utc_now(),
             last_error=str(exc),
-            message="Dealer batch session expired; rows returned to Pending" if _is_session_expiry_error(exc) else "Dealer batch failed",
+            message="Dealer batch paused; rows returned to Pending" if pending_fatal else "Dealer batch failed",
         )
     finally:
         try:

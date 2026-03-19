@@ -89,6 +89,7 @@ backend/app/
 | POST | `/rto-queue` | Create or update the queued RTO row for a sale. |
 | POST | `/rto-queue/process-batch` | Start dealer-scoped processing of the oldest 7 queued rows through the upload/cart step. |
 | GET | `/rto-queue/process-batch/status` | Get the live progress snapshot for the current dealer batch. |
+| POST | `/rto-queue/{application_id}/retry` | Set one `Failed` queue row back to `Queued` so operators can retry from the UI. |
 | POST | `/rto-queue/{application_id}/pay` | Optional downstream payment update. |
 | GET | `/customer-search/search` | Search by mobile or plate. |
 | GET | `/customer-search/form-vahan` | Get the `form_vahan_view` row for one customer/vehicle pair. |
