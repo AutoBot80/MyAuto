@@ -125,12 +125,6 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
     "Actions",
   ];
 
-  const batchStateClass =
-    batchStatus?.state === "running" || batchStatus?.state === "starting"
-      ? "app-process-status app-process-status--running"
-      : batchStatus?.state === "completed"
-        ? "app-process-status app-process-status--sleeping"
-        : "app-process-status app-process-status--waiting";
   const isInstructionalVahanError = (msg?: string | null) => {
     const text = String(msg || "").toLowerCase();
     return (
@@ -160,26 +154,10 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
       {batchStatus && batchStatus.state !== "idle" && (
         <section className="rto-batch-status-card">
           <div className="app-process-status-bar">
-            <span className="app-process-status-label">Batch status</span>
-            <span className={batchStateClass}>{batchStatus.state}</span>
             <span className="app-process-count">
-              {batchStatus.processed_count} / {batchStatus.total_count} processed
+              Processing: {batchStatus.processed_count}/{batchStatus.total_count}, Added to cart: {batchStatus.cart_count}, Failed: {batchStatus.failed_count}
             </span>
-            <span className="app-process-count">{batchStatus.cart_count} added to RTO Cart</span>
-            <span className="app-process-count">{batchStatus.failed_count} failed</span>
           </div>
-          <div className="rto-batch-progress-track" aria-hidden="true">
-            <div className="rto-batch-progress-fill" style={{ width: `${progressPercent}%` }} />
-          </div>
-          <div className="rto-batch-meta">
-            <span>{batchStatus.message}</span>
-            {batchStatus.current_queue_id && <span>Current queue: {batchStatus.current_queue_id}</span>}
-            {batchStatus.current_customer_name && <span>Customer: {batchStatus.current_customer_name}</span>}
-            {batchStatus.current_vahan_application_id && <span>Vahan App ID: {batchStatus.current_vahan_application_id}</span>}
-          </div>
-          {batchStatus.last_error && !isInstructionalVahanError(batchStatus.last_error) && (
-            <p className="app-process-last-error">Last error: {batchStatus.last_error}</p>
-          )}
         </section>
       )}
       {batchError && !isInstructionalVahanError(batchError) && <p className="rto-payments-error">{batchError}</p>}
