@@ -48,6 +48,7 @@ The system is a server–client application for auto dealers. Dealers run a ligh
 | BR-10 | Automation trace output | DMS and Vahan automation must write `DMS_Form_Values.txt` and `Vahan_Form_Values.txt` into the matching `ocr_output/<dealer>/<subfolder>/` folder. |
 | BR-11 | Admin data reset preservation | Admin-triggered data reset must preserve `oem_ref`, `dealer_ref`, and `oem_service_schedule` while clearing all other public base tables. |
 | BR-12 | Operator-assisted browser session requirement | DMS and Vahan automation should first reuse already open, logged-in site tabs; when no detectable tab is available, the system should open Edge/Chrome for the operator and ask the operator to complete login (first-time) before retrying automation. |
+| BR-13 | Automation value discipline | Playwright must never assume, infer, remember, or default fill values for DMS/Vahan fields. Values sent to site fields must come directly from DB-backed views (`form_dms_view`, `form_vahan_view`) and persisted records only. |
 
 ---
 
@@ -100,7 +101,59 @@ The system is a server–client application for auto dealers. Dealers run a ligh
 
 ---
 
-## 6. Bulk Upload Feature
+## 6. Form Navigation and Required Field Entry
+
+This section defines the required operator navigation path and minimum field-entry contract for current forms.
+
+### 6.1 DMS Navigation Sequence
+
+1. Login (`index.html`)
+2. Enquiry (`enquiry.html`)
+3. Vehicle Search (`vehicle.html`)
+4. Reports (`reports.html`)
+
+### 6.2 DMS Fields to Fill (Minimum Contract)
+
+| Page | Field label | Required source |
+|------|-------------|-----------------|
+| Enquiry | Contact First Name | `form_dms_view` (customer identity derived from DB records) |
+| Enquiry | Contact Last Name | `form_dms_view` |
+| Enquiry | Mobile Phone # | `form_dms_view` |
+| Enquiry | State | `form_dms_view` |
+| Enquiry | Address Line 1 | `form_dms_view` |
+| Enquiry | Pin Code | `form_dms_view` |
+| Vehicle Search | Key num (partial) | `form_dms_view` |
+| Vehicle Search | Frame / Chassis num (partial) | `form_dms_view` |
+| Vehicle Search | Engine num (partial) | `form_dms_view` |
+
+### 6.3 Vahan Fields to Fill (Minimum Contract)
+
+- All Vahan fields must be read from `form_vahan_view` labels and DB-backed technical columns (no hardcoded assumptions during runtime).
+- Operator workflow remains: logged-in tab reuse first, fallback to auto-open browser and first-time login prompt, then retry.
+
+### 6.4 Insurance Fields to Fill (Submit Info Contract)
+
+- Insurance data captured in Submit Info must map to persisted DB columns before any downstream automation:
+  - `insurance_master`: insurer, policy number, policy dates, premium, nominee fields.
+  - `customer_master.profession`: profession captured with insurance context in Add Sales.
+
+### 6.5 Download/Save Outputs
+
+- DMS Reports must save:
+  - `form21.pdf`
+  - `form22.pdf`
+  - `invoice_details.pdf`
+- Automation trace files must save:
+  - `ocr_output/<dealer>/<subfolder>/DMS_Form_Values.txt`
+  - `ocr_output/<dealer>/<subfolder>/Vahan_Form_Values.txt`
+
+### 6.6 Pending Video Confirmation
+
+- The exact click-level sequence and any optional/extra operator entries must be confirmed from the DMS operator video and then reconciled with Playwright steps.
+
+---
+
+## 7. Bulk Upload Feature
 
 Bulk upload automates the ingestion of scanned documents from a shared folder into the Add Customer flow.
 
@@ -125,7 +178,7 @@ Bulk upload automates the ingestion of scanned documents from a shared folder in
 
 ---
 
-## 7. Out of Scope (Current Phase)
+## 8. Out of Scope (Current Phase)
 
 - Mobile apps.
 - Real-time collaboration.
@@ -134,7 +187,7 @@ Bulk upload automates the ingestion of scanned documents from a shared folder in
 
 ---
 
-## 8. Success Criteria
+## 9. Success Criteria
 
 - Dealer can add/view dealer records via the client against the live backend.
 - Document upload creates an OCR job and extracted data is stored and reviewable.
@@ -149,7 +202,7 @@ Bulk upload automates the ingestion of scanned documents from a shared folder in
 
 ---
 
-## 9. Document Control
+## 10. Document Control
 
 | Version | Date | Author | Changes |
 |---------|------|--------|---------|
@@ -164,3 +217,4 @@ Bulk upload automates the ingestion of scanned documents from a shared folder in
 | 0.9 | Mar 2026 | — | Added Admin Saathi reset requirement and preserved-table rule |
 | 1.0 | Mar 2026 | — | Updated automation behavior to reuse already open DMS/Vahan tabs and fail with site-not-open errors when tabs are unavailable |
 | 1.1 | Mar 2026 | — | Added operator fallback: if no detectable DMS/Vahan tab exists, backend opens Edge/Chrome and prompts first-time login before retry |
+| 1.2 | Mar 2026 | — | Added form navigation + minimum field-entry contracts for DMS/Vahan/Insurance and formalized no-assumption Playwright value discipline |

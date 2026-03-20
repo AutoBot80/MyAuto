@@ -50,7 +50,7 @@
 | **PostgreSQL** | Persistent store for dealers, vehicles, customers, sales, insurance, RTO payments, service reminders. |
 | **Queue (local or SQS)** | Decouple bulk job creation from execution; current bulk processing uses SQS or a local in-process fallback queue. |
 | **OCR Worker** | Runs OCR/pre-OCR, writes extracted artifacts to `ocr_output`, and supports bulk processing. |
-| **Playwright Worker** | Reads DB-backed form views, reuses already open DMS/Vahan tabs when available, can auto-open Edge/Chrome when no detectable tab exists, and writes form trace artifacts. |
+| **Playwright Worker** | Reads DB-backed form views/records only for runtime values, reuses already open DMS/Vahan tabs when available, can auto-open Edge/Chrome when no detectable tab exists, and writes form trace artifacts. It must not infer, default, remember, or interpret field values outside persisted DB data. |
 | **File Storage (local, optional S3 later)** | Uploaded scans, generated PDFs, and OCR/form-value artifacts. |
 
 ---
@@ -153,14 +153,84 @@ My Auto.AI/
 
 ---
 
-## 5. Deployment Topology (Target)
+## 5. Form Label to Database Mapping
+
+This section defines database-to-label mapping contracts for DMS, Insurance, and Vahan forms.
+
+### 5.1 DMS Mapping (`form_dms_view`)
+
+| DMS label | View column | DB source expression |
+|-----------|-------------|----------------------|
+| Mr/Ms | `"Mr/Ms"` | Derived from `customer_master.gender` (`Ms.` when female, else `Mr.`) |
+| Contact First Name | `"Contact First Name"` | First token from `customer_master.name` |
+| Contact Last Name | `"Contact Last Name"` | Remaining tokens from `customer_master.name` |
+| Mobile Phone # | `"Mobile Phone #"` | `customer_master.mobile_number::text` |
+| State | `"State"` | `UPPER(customer_master.state)` |
+| Address Line 1 | `"Address Line 1"` | `customer_master.address` |
+| Pin Code | `"Pin Code"` | `customer_master.pin` |
+| Key num (partial) | `"Key num (partial)"` | `LEFT(COALESCE(vehicle_master.raw_key_num, vehicle_master.key_num, ''), 8)` |
+| Frame / Chassis num (partial) | `"Frame / Chassis num (partial)"` | `LEFT(COALESCE(vehicle_master.raw_frame_num, vehicle_master.chassis, ''), 12)` |
+| Engine num (partial) | `"Engine num (partial)"` | `LEFT(COALESCE(vehicle_master.raw_engine_num, vehicle_master.engine, ''), 12)` |
+
+### 5.2 Insurance Mapping (Submit Info / `insurance_master`)
+
+| Insurance form label (Add Sales) | Persisted column |
+|----------------------------------|------------------|
+| Insurer | `insurance_master.insurer` |
+| Policy No | `insurance_master.policy_num` |
+| Policy From | `insurance_master.policy_from` |
+| Policy To | `insurance_master.policy_to` |
+| Premium | `insurance_master.premium` |
+| Nominee Name | `insurance_master.nominee_name` |
+| Nominee Age | `insurance_master.nominee_age` |
+| Nominee Relationship | `insurance_master.nominee_relationship` |
+| Profession (insurance capture context) | `customer_master.profession` |
+
+### 5.3 Vahan Mapping (`form_vahan_view`)
+
+| Vahan label | View column | DB source |
+|-------------|-------------|-----------|
+| Registration Type * | `"Registration Type *"` | Constant in view (`New Registration`) |
+| Chassis No * | `"Chassis No *"` | `COALESCE(rto_queue.chassis_num, vehicle_master.chassis, vehicle_master.raw_frame_num)` |
+| Engine/Motor No (Last 5 Chars) | `"Engine/Motor No (Last 5 Chars)"` | `RIGHT(COALESCE(vehicle_master.engine, vehicle_master.raw_engine_num, ''), 5)` |
+| Purchase Delivery Date | `"Purchase Delivery Date"` | `TO_CHAR(sales_master.billing_date, 'DD-MON-YYYY')` |
+| Owner Name * | `"Owner Name *"` | `COALESCE(rto_queue.name, customer_master.name)` |
+| Mobile No | `"Mobile No"` | `COALESCE(rto_queue.mobile, customer_master.mobile_number::text)` |
+| Aadhaar No | `"Aadhaar No"` | Derived from `customer_master.aadhar` (last 4 marker text) |
+| Permanent Address | `"Permanent Address"` | `customer_master.address` |
+| Village/Town/City | `"Village/Town/City"` | `customer_master.city` |
+| Insurance Type | `"Insurance Type"` | Derived from `insurance_master` latest row presence |
+| Insurer | `"Insurer"` | latest `insurance_master.insurer` |
+| Policy No | `"Policy No"` | latest `insurance_master.policy_num` |
+| Insurance From (DD-MMM-YYYY) | `"Insurance From (DD-MMM-YYYY)"` | latest `insurance_master.policy_from` formatted |
+| Insurance Upto (DD-MMM-YYYY) | `"Insurance Upto (DD-MMM-YYYY)"` | latest `insurance_master.policy_to` formatted |
+| Insured Declared Value | `"Insured Declared Value"` | `COALESCE(insurance_master.idv::text, insurance_master.premium::text)` |
+| Application No | `"Application No"` | latest `rto_queue.vahan_application_id` |
+| Assigned Office & Action | `"Assigned Office & Action"` | Derived from latest dealer id (`RTO<dealer_id>`) |
+| Registration No | `"Registration No"` | `vehicle_master.plate_num` |
+| Amount | `"Amount"` | latest `rto_queue.rto_fees::text` |
+
+### 5.4 Runtime Automation Rule
+
+- Playwright runtime values for DMS/Vahan must be sourced from DB views/records (`form_dms_view`, `form_vahan_view`, and persisted IDs).
+- Automation must not use fallback assumptions/default literals as data-entry substitutes when DB values are missing.
+- Missing required DB values should fail fast with operator-visible validation, then retry after data correction.
+
+### 5.5 Video Reconciliation Step
+
+- The operator video is the final UX truth for click-order and optional screen interactions.
+- After video review, update Playwright step order documentation to match the confirmed sequence without changing the DB-mapping contract above.
+
+---
+
+## 6. Deployment Topology (Target)
 
 - **Client:** Installed or accessed from dealer workstations (browser or Electron).
 - **AWS:** VPC with private subnets for app, workers, and DB; public subnets for load balancer; RDS PostgreSQL; SQS for bulk queueing; optional S3/object storage later; ECS Fargate (or similar) for FastAPI and workers.
 
 ---
 
-## 6. Key Design Decisions
+## 7. Key Design Decisions
 
 | Decision | Rationale |
 |----------|-----------|
@@ -168,13 +238,14 @@ My Auto.AI/
 | Queue between API and workers | Reliability, retries, and independent scaling of workers. |
 | PostgreSQL as system of record | Strong consistency, relational model for dealers/vehicles/sales. |
 | Playwright for automation | Reliable browser control for filling DMS and Vahan. |
+| DB-first field population | Ensures deterministic, auditable automation and prevents accidental field assumptions. |
 | One browser session per dealer | Matches the RTO desk workflow while still allowing multiple dealers to process in parallel. |
 | Form 20: Word → PDF → HTML fallback | Prefer Word template; LibreOffice/docx2pdf for conversion; HTML when conversion unavailable. |
 | sales_id as PK | Enables FK from `rto_queue` and `service_reminders_queue`; one sale per (customer, vehicle). |
 
 ---
 
-## 7. Document Control
+## 8. Document Control
 
 | Version | Date | Author | Changes |
 |---------|------|--------|---------|
@@ -185,3 +256,4 @@ My Auto.AI/
 | 0.5 | Mar 2026 | — | Added Admin Saathi home tile and backend reset capability for clearing non-reference-table data |
 | 0.6 | Mar 2026 | — | Updated Playwright behavior to reuse already open DMS/Vahan tabs and return site-not-open errors when tabs are missing |
 | 0.7 | Mar 2026 | — | Added fallback behavior to auto-open Edge/Chrome when tabs are not detectable and prompt operator first-time login + retry |
+| 0.8 | Mar 2026 | — | Added DMS/Insurance/Vahan label-to-DB mapping contract and strict DB-only Playwright runtime value rule |
