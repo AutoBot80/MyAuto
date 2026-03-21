@@ -88,6 +88,7 @@ function App() {
     }
   };
 
+  // Bulk-loads badge only: not tied to Add Sales OCR (upload runs extraction synchronously on the server).
   useEffect(() => {
     if (mode !== "pos") {
       setBulkLoadsPendingCount(0);

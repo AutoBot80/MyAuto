@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { uploadScans, uploadScansV2 } from "../api/uploads";
-import { startProcessAll } from "../api/aiReaderQueue";
 import type { ExtractedDetailsResponse } from "../types";
 
 export interface UseUploadScansControlled {
@@ -77,9 +76,7 @@ export function useUploadScans(
       if (details && controlled?.onExtractionComplete) {
         controlled.onExtractionComplete(details);
       }
-      // Trigger Details sheet reader (Textract forms) on new queue items
-      const processRes = await startProcessAll();
-      void processRes;
+      // Extraction already ran on the server inside upload (save_and_queue_v2). No AI reader queue / process-all.
     } catch (err) {
       setUploadStatus(err instanceof Error ? err.message : "Upload failed.");
     } finally {

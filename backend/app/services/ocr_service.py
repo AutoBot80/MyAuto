@@ -202,6 +202,26 @@ def _normalize_key_for_match(key: str) -> str:
     return re.sub(r"\s+", " ", (key or "").lower().strip())
 
 
+def _details_input_format(path: Path) -> str:
+    """
+    Detect real file type for the sales detail upload. V2 always saves as Details.jpg
+    even when the user uploads .docx or PDF, so we must sniff magic bytes.
+    """
+    try:
+        head = path.read_bytes()[:12]
+    except OSError:
+        return "unknown"
+    if len(head) >= 2 and head[:2] == b"\xff\xd8":
+        return "jpeg"
+    if len(head) >= 4 and head[:4] == b"\x89PNG":
+        return "png"
+    if len(head) >= 4 and head[:4] == b"%PDF":
+        return "pdf"
+    if len(head) >= 2 and head[:2] == b"PK":
+        return "docx"
+    return "unknown"
+
+
 def _key_value_pairs_from_docx(doc_path: Path) -> tuple[list[dict[str, str]], str]:
     """
     Parse Word Sales Detail Sheet (.docx) into Textract-like key/value pairs.
@@ -775,7 +795,8 @@ class OcrService:
     def process_uploaded_subfolder(self, subfolder: str) -> dict:
         """
         Run extraction directly on uploaded files (no queue).
-        Processes Details.jpg first (vehicle + insurance), then Aadhar.jpg (customer).
+        Order: Aadhar.jpg (customer/QR), Details.jpg (vehicle + insurance; format sniffed),
+        Insurance.jpg, then raw text for Aadhar_back/Financing.
         Collects raw OCR text from all processed files and writes Raw_OCR.txt.
         Returns summary of what was processed.
         """
@@ -787,16 +808,7 @@ class OcrService:
         errors: list[str] = []
         self._raw_ocr_parts: list[tuple[str, str]] = []
 
-        # 1. Details.jpg first (creates vehicle + insurance JSON → ocr_output/.../OCR_To_be_Used.json)
-        details_path = subdir / "Details.jpg"
-        if details_path.exists():
-            try:
-                self._process_details_sheet(None, subfolder, "Details.jpg", details_path)
-                processed.append("Details.jpg")
-            except Exception as e:
-                errors.append(f"Details.jpg: {e}")
-
-        # 2. Aadhar.jpg second (adds customer to JSON)
+        # 1. Aadhar.jpg first (QR is fast; populates customer in JSON immediately)
         aadhar_path = subdir / "Aadhar.jpg"
         if aadhar_path.exists():
             try:
@@ -804,6 +816,15 @@ class OcrService:
                 processed.append("Aadhar.jpg")
             except Exception as e:
                 errors.append(f"Aadhar.jpg: {e}")
+
+        # 2. Details.jpg (may be JPEG/PNG/PDF or .docx bytes under .jpg name — see _details_input_format)
+        details_path = subdir / "Details.jpg"
+        if details_path.exists():
+            try:
+                self._process_details_sheet(None, subfolder, "Details.jpg", details_path)
+                processed.append("Details.jpg")
+            except Exception as e:
+                errors.append(f"Details.jpg: {e}")
 
         # 3. Insurance.jpg (extract insurer, TP valid from/to, gross premium; merge into ocr_output/.../OCR_To_be_Used.json)
         insurance_path = subdir / "Insurance.jpg"
@@ -854,8 +875,8 @@ class OcrService:
                 AiReaderQueueRepository.update_classification(conn, qid, "Details sheet", 1.0)
                 conn.commit()
         try:
-            fn_lower = (filename or "").lower()
-            if fn_lower.endswith(".docx"):
+            fmt = _details_input_format(input_path)
+            if fmt == "docx":
                 key_value_pairs, docx_full = _key_value_pairs_from_docx(input_path)
                 if not key_value_pairs and not (docx_full or "").strip():
                     raise RuntimeError(
@@ -866,17 +887,18 @@ class OcrService:
                     "full_text": docx_full,
                     "key_value_pairs": key_value_pairs,
                 }
-            elif fn_lower.endswith(".doc"):
-                raise RuntimeError(
-                    "Legacy .doc is not supported for the Details sheet. Save as .docx or export to PDF, then upload."
-                )
-            else:
+            elif fmt in ("jpeg", "png", "pdf"):
                 from app.services.textract_service import extract_forms_from_bytes
 
                 document_bytes = input_path.read_bytes()
                 result = extract_forms_from_bytes(document_bytes)
                 if result.get("error"):
                     raise RuntimeError(result["error"])
+            else:
+                raise RuntimeError(
+                    f"Unsupported Details file format (detected={fmt!r}). "
+                    "Use a JPEG/PNG scan, PDF export, or .docx Sales Detail Sheet."
+                )
 
             key_value_pairs = result.get("key_value_pairs") or []
             lines = []

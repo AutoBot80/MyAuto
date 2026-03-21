@@ -60,7 +60,7 @@ backend/app/
 | GET | `/health` | Liveness. |
 | GET | `/settings/site-urls` | Returns `dms_base_url`, `vahan_base_url`, `insurance_base_url` from `backend/.env` (required at server startup; used by the client for Fill DMS and messaging; no in-code URL fallbacks). |
 | POST | `/uploads/scans` | Upload scans; enqueue to ai_reader_queue. |
-| POST | `/uploads/scans-v2` | Upload scans (v2). |
+| POST | `/uploads/scans-v2` | Add Sales v2 upload; server runs `OcrService.process_uploaded_subfolder` in the same request and returns `extraction` (client does not call `process-all`). |
 | GET | `/ai-reader-queue` | List queue items (limit=200). |
 | POST | `/ai-reader-queue/process-next` | Process oldest queued item with Tesseract. |
 | GET | `/ai-reader-queue/extractions` | List queue items with extracted text. |
@@ -111,6 +111,7 @@ backend/app/
 - **Config:** `config.OCR_OUTPUT_DIR` (default: `backend/ocr_output`). Tesseract binary must be on system PATH (or set `pytesseract.pytesseract.tesseract_cmd`). `config.OCR_LANG` (default: `eng+hin`) for English + Hindi; see **Documentation/tesseract-ocr-setup.md** for installing Hindi tessdata for Aadhar scans.
 - **Queue status:** `queued` → `processing` → `done` or `failed`.
 - **Sales detail template mapping:** Details-sheet extraction also supports the A5 Sales Detail Sheet label style (e.g., `Full Name`, `Mobile Number`, `Aadhaar Number`, `Profession`, `Marital Status`, `Nominee ...`, `Financier Name`) and merges these into `OCR_To_be_Used.json` (`customer` + `insurance`) for Add Sales auto-population.
+- **Add Sales v2 `Details.jpg`:** The file is always stored under that name; content is detected by magic bytes (JPEG/PNG/PDF or ZIP-based `.docx`), so Word exports mislabeled as `.jpg` still use the docx parser instead of Textract on invalid bytes.
 
 ### 2.4 Form 20 Generation
 
