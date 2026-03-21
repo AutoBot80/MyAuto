@@ -94,10 +94,17 @@ AADHAR_QR_CUSTOMER_KEYS: tuple[str, ...] = (
 )
 
 
-def _rebuild_aadhar_address_from_parts(customer: dict[str, str]) -> None:
+def _rebuild_aadhar_address_from_parts(
+    customer: dict[str, str],
+    *,
+    preserve_existing_address: bool = False,
+) -> None:
     """
     UIDAI POA often uses city (vtc), district, post office without house/street.
     Mutates `customer` in place: sets or clears `address`.
+    If POA parts are missing but `address` was already set (e.g. Details sheet), keep it.
+    When ``preserve_existing_address`` is True, do not replace a non-empty existing ``address``
+    (Details sheet full line) with a shorter UIDAI-composed line.
     """
     parts = [
         customer.get("care_of"),
@@ -113,8 +120,11 @@ def _rebuild_aadhar_address_from_parts(customer: dict[str, str]) -> None:
     ]
     address = ", ".join(p for p in parts if p and str(p).strip())
     if address:
+        prev = customer.get("address")
+        if preserve_existing_address and prev and str(prev).strip():
+            return
         customer["address"] = address
-    else:
+    elif not (customer.get("address") and str(customer["address"]).strip()):
         customer.pop("address", None)
 
 
@@ -137,6 +147,8 @@ def _aadhar_qr_customer_completeness_score(customer: dict[str, str]) -> int:
             score += 2
             if k in ("date_of_birth", "gender", "aadhar_id", "name"):
                 score += 3
+            if k in ("pin_code", "district", "city", "state", "street", "house", "care_of"):
+                score += 2
     if customer.get("address") and str(customer["address"]).strip():
         score += 6
     return score
@@ -174,9 +186,11 @@ def _merge_aadhar_front_back_qr_customer(
 ) -> dict[str, str]:
     """
     Prefer values from the front scan; fill missing/empty keys from the back (QR often on back only).
-    Rebuilds `address` from merged POA parts (includes city, district, PO).
+    Back may include OCR-derived ``address`` when secure QR is unreadable at low resolution.
+    Rebuilds `address` from merged POA parts, then may apply a longer back ``address`` string.
     """
     merged: dict[str, str] = dict(front)
+    back_addr = (back.get("address") or "").strip()
     for k, v in back.items():
         if k == "address":
             continue
@@ -186,6 +200,143 @@ def _merge_aadhar_front_back_qr_customer(
         if cur is None or not str(cur).strip():
             merged[k] = str(v).strip()
     _rebuild_aadhar_address_from_parts(merged)
+    if back_addr:
+        ma = (merged.get("address") or "").strip()
+        if not ma or len(back_addr) > len(ma) + 15:
+            merged["address"] = back_addr
+    return merged
+
+
+def _merge_qr_customer_into_existing(
+    existing: dict[str, str],
+    qr_merged: dict[str, str],
+) -> dict[str, str]:
+    """
+    Fill blank customer keys from UIDAI QR (front+back). Preserves Details sheet / DB values when set.
+    Used so get_extracted_details still applies back-QR when `customer` already has name/pin from Details.
+    """
+    out = dict(existing) if existing else {}
+    if not qr_merged:
+        return out
+    for k in AADHAR_QR_CUSTOMER_KEYS:
+        qv = qr_merged.get(k)
+        if not qv or not str(qv).strip():
+            continue
+        ev = out.get(k)
+        if ev is None or not str(ev).strip():
+            out[k] = str(qv).strip()
+    # Fill address from POA parts when customer had no address; keep Details sheet address otherwise
+    _rebuild_aadhar_address_from_parts(out, preserve_existing_address=True)
+    if qr_merged.get("address") and str(qr_merged["address"]).strip():
+        if not (out.get("address") and str(out["address"]).strip()):
+            out["address"] = str(qr_merged["address"]).strip()
+    return out
+
+
+def _aadhar_back_ocr_text(image_bytes: bytes) -> str:
+    """Run Tesseract on Aadhaar back (printed address). PSM 6 suits uniform card blocks."""
+    if not image_bytes:
+        return ""
+    try:
+        import io
+
+        import pytesseract
+        from PIL import Image, ImageEnhance
+
+        from app.config import OCR_LANG, OCR_PREPROCESS
+
+        img = Image.open(io.BytesIO(image_bytes)).convert("RGB").convert("L")
+        if OCR_PREPROCESS:
+            img = ImageEnhance.Contrast(img).enhance(2.0)
+        lang = OCR_LANG if OCR_LANG else "eng"
+        return pytesseract.image_to_string(img, lang=lang, config="--psm 6") or ""
+    except Exception:
+        return ""
+
+
+def _normalize_aadhar_back_address_chunk(chunk: str) -> str:
+    chunk = chunk.replace("\r\n", "\n")
+    chunk = re.sub(r"[\|`]+", " ", chunk)
+    chunk = re.sub(r"\s+", " ", chunk).strip(" ,.-|")
+    return chunk
+
+
+def _parse_aadhar_back_address_from_ocr(ocr_text: str) -> dict[str, str]:
+    """
+    English (and noisy OCR) address on Aadhaar back. UIDAI layout uses ``Address:``;
+    Tesseract often merges lines — fall back to ``C/O:`` … through PIN / Aadhaar line.
+    DOB/Gender are not printed on the back; use front scan or a higher-res QR decode.
+    """
+    out: dict[str, str] = {}
+    if not ocr_text or len(ocr_text.strip()) < 8:
+        return out
+    text = ocr_text.replace("\r\n", "\n")
+    raw = ""
+    m = re.search(
+        r"(?is)\bAddress\s*:\s*([\s\S]+?)(?=\n\s*पता\b|\n\s*C/O\s*:|$)",
+        text,
+    )
+    if m:
+        raw = m.group(1).strip()
+    if not raw or len(raw) < 12:
+        co = re.search(r"(?is)\bC/O\s*:", text)
+        if co:
+            tail = text[co.start() :]
+            stop = re.search(r"\d{4}\s+\d{4}\s+\d{4}", tail)
+            chunk = tail[: stop.start()] if stop else tail
+            stop_vid = re.search(r"(?i)\bVID\s*:", chunk)
+            if stop_vid:
+                chunk = chunk[: stop_vid.start()]
+            raw = chunk.strip()
+    if not raw:
+        return out
+    raw = _normalize_aadhar_back_address_chunk(raw)
+    foot = re.split(
+        r"(?i)(www\.uidai|help@uidai|unique\s+identification|virtual\s+id)",
+        raw,
+        maxsplit=1,
+    )
+    raw = foot[0].strip(" ,.-") if foot else raw
+    if len(raw) < 15:
+        return out
+    pins = re.findall(r"\b(\d{6})\b", raw)
+    if pins:
+        out["pin_code"] = pins[-1]
+        lp = raw.rfind(pins[-1])
+        if lp >= 0:
+            end = lp + len(pins[-1])
+            tail = raw[end:]
+            if re.search(r"[\(']", tail):
+                raw = raw[:end].strip()
+    out["address"] = raw
+    com = re.search(r"(?i)\bC/O\s*:\s*([^,]+)", raw)
+    if com:
+        out["care_of"] = com.group(1).strip()
+    return out
+
+
+def _customer_from_aadhar_back_scan(image_bytes: bytes) -> dict[str, str]:
+    """UIDAI QR when readable; else (or in addition) printed English address via OCR."""
+    merged: dict[str, str] = {}
+    qr_part = _try_customer_from_aadhar_qr_bytes(image_bytes)
+    for k, v in qr_part.items():
+        if v and str(v).strip():
+            merged[k] = str(v).strip()
+    ocr_hints = _parse_aadhar_back_address_from_ocr(_aadhar_back_ocr_text(image_bytes))
+    for k in AADHAR_QR_CUSTOMER_KEYS:
+        v = ocr_hints.get(k)
+        if not v or not str(v).strip():
+            continue
+        cur = merged.get(k)
+        if cur is None or not str(cur).strip():
+            merged[k] = str(v).strip()
+    _rebuild_aadhar_address_from_parts(merged)
+    oa = (ocr_hints.get("address") or "").strip()
+    ma = (merged.get("address") or "").strip()
+    if oa and (not ma or len(oa) > len(ma) + 15):
+        merged["address"] = oa
+        if ocr_hints.get("pin_code") and not (merged.get("pin_code") and str(merged["pin_code"]).strip()):
+            merged["pin_code"] = str(ocr_hints["pin_code"]).strip()
     return merged
 
 
@@ -1281,23 +1432,20 @@ class OcrService:
             customer_back: dict[str, str] = {}
             if back_path.is_file():
                 try:
-                    customer_back = _try_customer_from_aadhar_qr_bytes(back_path.read_bytes())
+                    customer_back = _customer_from_aadhar_back_scan(back_path.read_bytes())
                 except Exception:
                     customer_back = {}
-            customer = _merge_aadhar_front_back_qr_customer(customer_front, customer_back)
-            if not customer:
+            qr_customer = _merge_aadhar_front_back_qr_customer(customer_front, customer_back)
+            if not qr_customer:
                 raise ValueError(
                     "QR code was not found or could not be read on the Aadhar front or back scan. "
                     "UIDAI QR is often printed on the back — ensure Aadhar_back.jpg includes a readable QR. Re-scan if needed."
                 ) from None
 
-            # Compliance: never persist full Aadhar; store only last 4 digits
-            if customer.get("aadhar_id"):
-                customer["aadhar_id"] = _aadhar_last4(customer["aadhar_id"]) or ""
-
             self._ensure_ocr_output_dir()
             json_path = _json_output_path(self.ocr_output_dir, subfolder)
             data = {"vehicle": {}, "customer": {}, "insurance": {}}
+            existing_customer: dict[str, str] = {}
             if json_path.exists():
                 try:
                     data = json.loads(json_path.read_text(encoding="utf-8"))
@@ -1307,8 +1455,17 @@ class OcrService:
                         data["customer"] = {}
                     if not isinstance(data.get("insurance"), dict):
                         data["insurance"] = {}
+                    ec = data.get("customer") or {}
+                    if isinstance(ec, dict):
+                        existing_customer = {str(k): str(v) for k, v in ec.items() if v is not None}
                 except Exception:
                     pass
+            customer = _merge_qr_customer_into_existing(existing_customer, qr_customer)
+
+            # Compliance: never persist full Aadhar; store only last 4 digits
+            if customer.get("aadhar_id"):
+                customer["aadhar_id"] = _aadhar_last4(customer["aadhar_id"]) or ""
+
             data["customer"] = customer
             json_path.parent.mkdir(parents=True, exist_ok=True)
             json_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
@@ -1424,36 +1581,52 @@ class OcrService:
             data["insurance"] = {}
 
         customer = data.get("customer") or {}
-        has_customer = any(customer.get(k) for k in ("name", "address", "aadhar_id", "city", "state", "pin", "pin_code"))
+        if not isinstance(customer, dict):
+            customer = {}
         aadhar_path = self.uploads_dir / subfolder / "Aadhar.jpg"
-        if not has_customer and aadhar_path.exists():
+        back_p = self.uploads_dir / subfolder / "Aadhar_back.jpg"
+        # Always merge UIDAI QR when front and/or back scan exists — Details sheet may have set
+        # name/pin first and skipped DOB/gender/address that exist only on the back QR.
+        if aadhar_path.is_file() or back_p.is_file():
             try:
-                c_front = _try_customer_from_aadhar_qr_bytes(aadhar_path.read_bytes())
-                back_p = self.uploads_dir / subfolder / "Aadhar_back.jpg"
+                c_front = (
+                    _try_customer_from_aadhar_qr_bytes(aadhar_path.read_bytes())
+                    if aadhar_path.is_file()
+                    else {}
+                )
                 c_back: dict[str, str] = {}
                 if back_p.is_file():
                     try:
-                        c_back = _try_customer_from_aadhar_qr_bytes(back_p.read_bytes())
+                        c_back = _customer_from_aadhar_back_scan(back_p.read_bytes())
                     except Exception:
                         c_back = {}
-                customer = _merge_aadhar_front_back_qr_customer(c_front, c_back)
-                if customer:
+                qr_merged = _merge_aadhar_front_back_qr_customer(c_front, c_back)
+                if qr_merged:
+                    customer = _merge_qr_customer_into_existing(customer, qr_merged)
                     if customer.get("aadhar_id"):
                         customer["aadhar_id"] = _aadhar_last4(customer["aadhar_id"]) or ""
                     data["customer"] = customer
-                else:
-                    raise ValueError("No QR fields on front or back")
+                    data.pop("extraction_error", None)
+                    try:
+                        json_path.parent.mkdir(parents=True, exist_ok=True)
+                        json_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+                    except Exception:
+                        pass
+                elif not any(
+                    customer.get(k) for k in ("name", "aadhar_id", "address", "city", "state", "pin_code", "pin")
+                ):
+                    data["extraction_error"] = (
+                        "QR code was not found or could not be read on the Aadhar front or back scan. "
+                        "UIDAI QR is often on the back — ensure Aadhar_back.jpg includes a readable QR. Re-scan if needed."
+                    )
             except Exception:
-                data["extraction_error"] = (
-                    "QR code was not found or could not be read on the Aadhar front or back scan. "
-                    "UIDAI QR is often on the back — ensure Aadhar_back.jpg includes a readable QR. Re-scan if needed."
-                )
-            else:
-                try:
-                    json_path.parent.mkdir(parents=True, exist_ok=True)
-                    json_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-                except Exception:
-                    pass
+                if not any(
+                    customer.get(k) for k in ("name", "aadhar_id", "address", "city", "state", "pin_code", "pin")
+                ):
+                    data["extraction_error"] = (
+                        "QR code was not found or could not be read on the Aadhar front or back scan. "
+                        "UIDAI QR is often on the back — ensure Aadhar_back.jpg includes a readable QR. Re-scan if needed."
+                    )
 
         # Compliance: sanitize customer aadhar on return (handles legacy JSON with full Aadhar)
         customer = data.get("customer") or {}

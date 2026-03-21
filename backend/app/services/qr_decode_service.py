@@ -19,6 +19,34 @@ def _decode_image(image_bytes: bytes) -> np.ndarray | None:
     return img
 
 
+def _decode_qr_pyzbar_strings(img: np.ndarray) -> list[str]:
+    """Optional zbar backend — often reads glossy / skewed UIDAI QR better than OpenCV alone."""
+    try:
+        from pyzbar.pyzbar import decode as pyzbar_decode
+    except ImportError:
+        return []
+    out: list[str] = []
+    try:
+        if len(img.shape) == 3:
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = img
+        for sym in pyzbar_decode(gray):
+            raw = sym.data
+            if isinstance(raw, (bytes, bytearray)):
+                try:
+                    s = raw.decode("utf-8", errors="replace").strip()
+                except Exception:
+                    s = str(raw).strip()
+            else:
+                s = str(raw).strip()
+            if s:
+                out.append(s)
+    except Exception:
+        return []
+    return out
+
+
 def _decode_qr_from_image(img: np.ndarray) -> list[str]:
     """
     Decode all QR payloads in the image (single + multi), deduplicated.
@@ -28,24 +56,34 @@ def _decode_qr_from_image(img: np.ndarray) -> list[str]:
     decoded: list[str] = []
     seen: set[str] = set()
 
+    def add_strings(strings: list[str]) -> None:
+        for raw in strings:
+            if not raw or not str(raw).strip():
+                continue
+            s = str(raw).strip()
+            if s not in seen:
+                seen.add(s)
+                decoded.append(s)
+
     text, _, _ = detector.detectAndDecode(img)
     if text and isinstance(text, str) and text.strip():
-        s = text.strip()
-        if s not in seen:
-            seen.add(s)
-            decoded.append(s)
+        add_strings([text])
 
     try:
         ret, texts, _points, _ = detector.detectAndDecodeMulti(img)
         if ret and texts is not None:
-            for t in texts:
-                if t and isinstance(t, str) and t.strip():
-                    s = t.strip()
-                    if s not in seen:
-                        seen.add(s)
-                        decoded.append(s)
+            add_strings([t for t in texts if isinstance(t, str)])
     except Exception:
         pass
+
+    try:
+        _r, curved, _p = detector.detectAndDecodeCurved(img)
+        if isinstance(curved, str) and curved.strip():
+            add_strings([curved])
+    except Exception:
+        pass
+
+    add_strings(_decode_qr_pyzbar_strings(img))
     return decoded
 
 
@@ -58,6 +96,80 @@ def _rotated_variants(img: np.ndarray) -> list[np.ndarray]:
     except Exception:
         pass
     return out
+
+
+def _qr_preprocess_variants(img: np.ndarray) -> list[np.ndarray]:
+    """
+    BGR images to try for OpenCV QR decode (noisy / low-contrast back scans).
+    Keeps 3-channel BGR for QRCodeDetector.
+    """
+    variants: list[np.ndarray] = [img]
+    try:
+        if len(img.shape) == 2:
+            gray = img
+        else:
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        variants.append(cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR))
+        h, w = gray.shape[:2]
+        max_side = max(h, w)
+        scale = min(2.0, 2000.0 / float(max_side)) if max_side > 0 else 2.0
+        if scale > 1.01:
+            nh, nw = int(h * scale), int(w * scale)
+            up = cv2.resize(gray, (nw, nh), interpolation=cv2.INTER_CUBIC)
+            variants.append(cv2.cvtColor(up, cv2.COLOR_GRAY2BGR))
+        _, thr = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        variants.append(cv2.cvtColor(thr, cv2.COLOR_GRAY2BGR))
+        variants.append(cv2.cvtColor(cv2.bitwise_not(gray), cv2.COLOR_GRAY2BGR))
+        variants.append(cv2.cvtColor(cv2.bitwise_not(thr), cv2.COLOR_GRAY2BGR))
+        adp = cv2.adaptiveThreshold(
+            gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 5
+        )
+        variants.append(cv2.cvtColor(adp, cv2.COLOR_GRAY2BGR))
+    except Exception:
+        pass
+    return variants
+
+
+def _aadhar_dense_qr_roi_variants(img: np.ndarray) -> list[np.ndarray]:
+    """
+    UIDAI secure QR is very dense; on low-res full-card photos OpenCV often fails unless the
+    right-hand QR region is cropped and upscaled strongly. Keep this list small — each variant
+    runs a full detector pass.
+    """
+    out: list[np.ndarray] = []
+    if img is None or len(img.shape) < 2:
+        return out
+    h, w = img.shape[:2]
+    if h < 24 or w < 24:
+        return out
+    for x0_ratio in (0.42, 0.46, 0.50):
+        x0 = min(int(w * x0_ratio), w - 32)
+        crop = img[:, x0:]
+        ch, cw = crop.shape[:2]
+        if cw < 32 or ch < 24:
+            continue
+        for scale in (4, 5, 6):
+            nw, nh = cw * scale, ch * scale
+            if max(nw, nh) > 4200:
+                continue
+            try:
+                out.append(cv2.resize(crop, (nw, nh), interpolation=cv2.INTER_CUBIC))
+            except Exception:
+                pass
+    return out
+
+
+def _strings_include_uidai_payload(strings: list[str]) -> bool:
+    """True if any decoded string expands to UIDAI XML with at least uid or name (not just a random URL QR)."""
+    for raw in strings:
+        expanded = _decompress_payload(raw)
+        parsed = _parse_xml_like(expanded)
+        if not parsed:
+            continue
+        fields = _extract_uidai_fields(parsed)
+        if fields.get("aadhar_id") or (fields.get("name") and len(str(fields["name"]).strip()) > 2):
+            return True
+    return False
 
 
 def _decompress_payload(raw: str) -> str:
@@ -142,8 +254,11 @@ UIDAI_FIELD_MAP: dict[str, list[str]] = {
         "sex",
         "poi.gnd",
         "poi.gndr",
+        "poi.gender",
+        "poi.sex",
         "printletterbarcodedata.gnd",
         "printletterbarcodedata.gndr",
+        "printletterbarcodedata.gender",
     ],
     "year_of_birth": ["yob", "yearofbirth", "poi.yob", "printletterbarcodedata.yob"],
     "date_of_birth": [
@@ -154,6 +269,8 @@ UIDAI_FIELD_MAP: dict[str, list[str]] = {
         "birth_date",
         "dobon",
         "poi.dob",
+        "poi.dateofbirth",
+        "poi.date_of_birth",
         "printletterbarcodedata.dob",
         "printletterbarcodedata.dateofbirth",
     ],
@@ -208,6 +325,18 @@ def _extract_uidai_fields(parsed: dict[str, Any]) -> dict[str, str]:
                 if len(p) == 4 and p.isdigit():
                     out["year_of_birth"] = p
                     break
+        elif "/" in dob:
+            # DD/MM/YYYY or MM/DD/YYYY — take 4-digit year token
+            for p in dob.replace(".", "/").split("/"):
+                p = p.strip()
+                if len(p) == 4 and p.isdigit():
+                    out["year_of_birth"] = p
+                    break
+    # Many cards only encode YOB in QR; copy to date_of_birth so downstream (submit_info / DMS) gets a value
+    if "date_of_birth" not in out and "year_of_birth" in out:
+        y = out["year_of_birth"].strip()
+        if y.isdigit() and len(y) == 4:
+            out["date_of_birth"] = y
     return out
 
 
@@ -230,13 +359,47 @@ def decode_qr_from_image_bytes(image_bytes: bytes) -> dict[str, Any]:
         result["error"] = "Could not decode image (unsupported format or corrupt)"
         return result
 
+    # Upscale very small photos — module size becomes readable for dense UIDAI QR.
+    try:
+        h0, w0 = img.shape[:2]
+        min_side = min(h0, w0)
+        if min_side > 0 and min_side < 960:
+            scale = 960.0 / float(min_side)
+            nw, nh = int(w0 * scale), int(h0 * scale)
+            img = cv2.resize(img, (nw, nh), interpolation=cv2.INTER_CUBIC)
+    except Exception:
+        pass
+
     strings: list[str] = []
     seen_raw: set[str] = set()
-    for variant in _rotated_variants(img):
+
+    def add_from_variant(variant: np.ndarray) -> None:
         for s in _decode_qr_from_image(variant):
             if s not in seen_raw:
                 seen_raw.add(s)
                 strings.append(s)
+
+    # Fast path: rotations only (phone photos of back often need 90°/270°).
+    for variant in _rotated_variants(img):
+        add_from_variant(variant)
+
+    # Slow path: grayscale / threshold / upscale — glossy back scans, weak contrast.
+    if not strings or not _strings_include_uidai_payload(strings):
+        for variant in _rotated_variants(img):
+            prepped = _qr_preprocess_variants(variant)
+            for p in prepped[1:]:
+                add_from_variant(p)
+
+    # Last resort: crop right side (QR on Aadhaar back) + heavy upscale (few rotations).
+    if not strings or not _strings_include_uidai_payload(strings):
+        for variant in (img, cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)):
+            for roi in _aadhar_dense_qr_roi_variants(variant):
+                add_from_variant(roi)
+                if strings and _strings_include_uidai_payload(strings):
+                    break
+            if strings and _strings_include_uidai_payload(strings):
+                break
+
     if not strings:
         result["error"] = "No QR code found in image"
         return result
