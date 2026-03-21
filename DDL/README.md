@@ -53,6 +53,7 @@ One-off changes (e.g. new columns) go in **`DDL/alter/`**. Run against an existi
 - `03i_vehicle_master_unique_engine_chassis.sql` — vehicle_master: add unique index on (engine, chassis) when both are non-empty.
 - `04b_rename_dealer_master_to_dealer_ref_and_oem.sql` — creates `oem_ref`, renames `dealer_master` to `dealer_ref`, replaces `dealer_of` with `oem_id` (FK to oem_ref).
 - `04c_dealer_ref_add_auto_sms_reminders.sql` — adds `auto_sms_reminders` (Y/N) to dealer_ref.
+- `04h_dealer_ref_add_rto_name.sql` — adds `rto_name` (VARCHAR 128) to `dealer_ref` for insurance/Vahan RTO label; seeds `RTO-Bharatpur` for `dealer_id = 100001`. **Required** if Fill Insurance errors on `dr.rto_name` does not exist.
 - `04d_drop_oem_service_frequency_add_oem_service_schedule.sql` — drops `oem_service_frequency`, creates `oem_service_schedule`.
 - `08a_service_reminders_queue_add_reminder_date.sql` — adds `reminder_date` to service_reminders_queue.
 - `08b_service_reminders_queue_add_reminder_type_dealer_id.sql` — adds `reminder_type`, `dealer_id` to service_reminders_queue.

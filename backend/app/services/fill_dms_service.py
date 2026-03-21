@@ -1089,8 +1089,11 @@ def run_fill_insurance_only(
 ) -> dict:
     """
     Fill Insurance screens using DB-backed values only.
+    KYC: fill mobile → click Verify mobile → if KYC not found (`need_docs`), upload three
+    documents (Aadhaar front/rear + customer photo), tick consent, click Submit (or legacy Proceed)
+    → kyc-success → DMS entry → policy (insurance details). If KYC found, consent + Proceed only.
     Important behavior:
-    - do not click final submit/issue button
+    - do not click final submit/issue button on the policy page
     - keep browser/tab open for operator review
     - open browser and prompt operator login on first run (DMS-style)
     """
@@ -1132,8 +1135,21 @@ def run_fill_insurance_only(
             page.locator("#ins-customer-photo").set_input_files(payloads[2])
         if page.locator("#ins-consent").count() > 0 and not page.is_checked("#ins-consent"):
             page.check("#ins-consent")
-        page.locator("#ins-proceed").wait_for(state="enabled", timeout=10000)
-        page.click("#ins-proceed")
+        if kyc_state == "need_docs":
+            submit = page.locator("#ins-kyc-submit")
+            if submit.count() > 0:
+                submit.wait_for(state="visible", timeout=10000)
+                submit.wait_for(state="enabled", timeout=15000)
+                submit.click()
+            else:
+                # Older dummy page: single Proceed after uploads
+                page.locator("#ins-proceed").wait_for(state="visible", timeout=5000)
+                page.locator("#ins-proceed").wait_for(state="enabled", timeout=15000)
+                page.click("#ins-proceed")
+        else:
+            page.locator("#ins-proceed").wait_for(state="visible", timeout=10000)
+            page.locator("#ins-proceed").wait_for(state="enabled", timeout=10000)
+            page.click("#ins-proceed")
         page.wait_for_url("**/kyc-success.html*", timeout=10000)
         page.wait_for_timeout(300)
         page.goto(f"{base}/dms-entry.html", wait_until="domcontentloaded", timeout=15000)
