@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from app.db import get_connection
+from app.services.customer_address_infer import enrich_customer_address_from_freeform
 
 
 def _parse_date(s: str | None) -> date | None:
@@ -67,6 +68,8 @@ def submit_info(
     mobile = _int_or_none(customer.get("mobile_number"))
     if not aadhar_last4 or mobile is None:
         raise ValueError("Customer aadhar (last 4) and mobile_number are required")
+
+    customer = enrich_customer_address_from_freeform(dict(customer))
 
     loc = _str_or_none(file_location) or _str_or_none(customer.get("file_location"))
     if loc:

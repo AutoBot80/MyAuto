@@ -30,6 +30,7 @@ from app.config import (
 from app.repositories import form_dms as form_dms_repo
 from app.repositories import form_vahan as form_vahan_repo
 from app.db import get_connection
+from app.services.customer_address_infer import enrich_customer_address_from_freeform
 
 logger = logging.getLogger(__name__)
 
@@ -656,6 +657,22 @@ def _normalize_dms_relation_prefix(raw: object | None) -> str:
 
 def _build_dms_fill_values(customer_id: int | None, vehicle_id: int | None, subfolder: str | None = None) -> dict:
     row = _load_required_form_dms_row(customer_id, vehicle_id)
+    addr_full = _clean_text(row.get("Address Line 1"))
+    pin_raw = _clean_text(row.get("Pin Code"))[:6]
+    state_raw = _clean_text(row.get("State"))
+    father_raw = _clean_text(row.get("Father or Husband Name"))
+    inferred_addr = enrich_customer_address_from_freeform(
+        {
+            "address": addr_full,
+            "pin": pin_raw,
+            "state": state_raw,
+            "care_of": father_raw,
+        }
+    )
+    pin_e = _clean_text(inferred_addr.get("pin"))[:6] or pin_raw
+    state_e = _clean_text(inferred_addr.get("state")) or state_raw
+    addr_line = _clean_text(inferred_addr.get("address"))[:80] or addr_full[:80]
+    father_e = _clean_text(inferred_addr.get("care_of"))[:255] or father_raw[:255]
     first_name = _clean_text(row.get("Contact First Name"))
     last_name = _clean_text(row.get("Contact Last Name"))
     full_name = " ".join(part for part in [first_name, last_name] if part).strip()
@@ -676,27 +693,27 @@ def _build_dms_fill_values(customer_id: int | None, vehicle_id: int | None, subf
         "last_name": last_name,
         "mobile_phone": _clean_text(row.get("Mobile Phone #"))[:10],
         "landline": _clean_text(row.get("Landline #"))[:16],
-        "address_line_1": _clean_text(row.get("Address Line 1"))[:80],
-        "state": _clean_text(row.get("State")),
-        "pin_code": _clean_text(row.get("Pin Code"))[:6],
+        "address_line_1": addr_line,
+        "state": state_e,
+        "pin_code": pin_e,
         "key_partial": _clean_text(row.get("Key num (partial)"))[:8],
         "frame_partial": _clean_text(row.get("Frame / Chassis num (partial)"))[:12],
         "engine_partial": _clean_text(row.get("Engine num (partial)"))[:12],
         "relation_prefix": relation_prefix,
-        "father_husband_name": _clean_text(row.get("Father or Husband Name"))[:255],
+        "father_husband_name": father_e,
         "financier_name": _clean_text(row.get("Financier Name"))[:255],
         "finance_required": finance_required,
         "dms_contact_path": contact_path,
         "customer_export": {
             "name": full_name,
-            "address": _clean_text(row.get("Address Line 1")),
-            "state": _clean_text(row.get("State")),
-            "pin_code": _clean_text(row.get("Pin Code")),
+            "address": _clean_text(inferred_addr.get("address")) or addr_full,
+            "state": state_e,
+            "pin_code": pin_e,
             "mobile_number": _clean_text(row.get("Mobile Phone #")),
             "alt_phone_num": _clean_text(row.get("Landline #")),
             "relation_prefix": relation_prefix,
-            "care_of": _clean_text(row.get("Father or Husband Name")),
-            "father_or_husband_name": _clean_text(row.get("Father or Husband Name")),
+            "care_of": father_e,
+            "father_or_husband_name": father_e,
             "finance_required": finance_required,
             "financier_name": _clean_text(row.get("Financier Name")),
         },

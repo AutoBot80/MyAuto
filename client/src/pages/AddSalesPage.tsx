@@ -233,115 +233,6 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError 
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
   }, [hasSubmittedInfo, dmsPdfsDownloaded, hasPrintedForms]);
 
-  const hasCustomer = Boolean(
-    extractedCustomer &&
-    (extractedCustomer.name || extractedCustomer.address || extractedCustomer.aadhar_id ||
-     extractedCustomer.city || extractedCustomer.state || extractedCustomer.pin_code ||
-     extractedCustomer.care_of || extractedCustomer.house || extractedCustomer.street || extractedCustomer.location)
-  );
-  const hasVehicle = hasVehicleData(extractedVehicle);
-
-  // Poll for extracted details only while OCR is incomplete; pause when tab is in background.
-  useEffect(() => {
-    if (!savedTo) {
-      pollCountRef.current = 0;
-      setExtractionError(null);
-      return;
-    }
-    if (hasVehicle && hasCustomer) {
-      pollCountRef.current = 0;
-      return;
-    }
-    if (!pageVisible) {
-      return;
-    }
-    pollCountRef.current = 0;
-    setExtractionError(null);
-
-    let intervalId: ReturnType<typeof setInterval> | null = null;
-
-    const poll = async () => {
-      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
-      if (pollCountRef.current >= POLL_MAX) return;
-      pollCountRef.current += 1;
-      try {
-        const details = await getExtractedDetails(savedTo, dealerId);
-        const extractionErr = (details as Record<string, unknown>)?.extraction_error;
-        const nameMismatchErr = (details as Record<string, unknown>)?.name_mismatch_error;
-        const err = typeof nameMismatchErr === "string" ? nameMismatchErr : typeof extractionErr === "string" ? extractionErr : null;
-        setExtractionError(err);
-        if (err && intervalId) clearInterval(intervalId);
-        const rawVehicle = details?.vehicle ?? details;
-        const normalized = normalizeVehicleDetails(rawVehicle);
-        if (normalized) setExtractedVehicle(normalized);
-        const cust = details?.customer;
-        if (cust && typeof cust === "object" && !Array.isArray(cust)) {
-          setExtractedCustomer(mapApiCustomerToExtracted(cust as Record<string, unknown>));
-        }
-        const ins = details?.insurance;
-        if (ins && typeof ins === "object" && !Array.isArray(ins)) {
-          setInsuranceReadByTextract(true);
-          const r = ins as Record<string, unknown>;
-          setExtractedInsurance((prev) => {
-            const current = prev ?? {};
-            const fromServer = {
-              profession: typeof r.profession === "string" ? r.profession : undefined,
-              financier: typeof r.financier === "string" ? r.financier : undefined,
-              marital_status: typeof r.marital_status === "string" ? r.marital_status : undefined,
-              nominee_gender: typeof r.nominee_gender === "string" ? r.nominee_gender : undefined,
-              nominee_name: typeof r.nominee_name === "string" ? r.nominee_name : undefined,
-              nominee_age: r.nominee_age != null ? String(r.nominee_age) : undefined,
-              nominee_relationship: typeof r.nominee_relationship === "string" ? r.nominee_relationship : undefined,
-              insurer: typeof r.insurer === "string" ? r.insurer : undefined,
-              policy_num: typeof r.policy_num === "string" ? r.policy_num : undefined,
-              policy_from: typeof r.policy_from === "string" ? r.policy_from : undefined,
-              policy_to: typeof r.policy_to === "string" ? r.policy_to : undefined,
-              premium: typeof r.premium === "string" ? r.premium : r.premium != null ? String(r.premium) : undefined,
-            };
-            return {
-              ...current,
-              profession: current.profession && current.profession.trim() !== "" ? current.profession : fromServer.profession,
-              financier: current.financier && current.financier.trim() !== "" ? current.financier : fromServer.financier,
-              marital_status:
-                current.marital_status && current.marital_status.trim() !== ""
-                  ? current.marital_status
-                  : fromServer.marital_status,
-              nominee_gender:
-                current.nominee_gender && current.nominee_gender.trim() !== ""
-                  ? current.nominee_gender
-                  : fromServer.nominee_gender,
-              nominee_name: current.nominee_name && current.nominee_name.trim() !== "" ? current.nominee_name : fromServer.nominee_name,
-              nominee_age: current.nominee_age && current.nominee_age.trim() !== "" ? current.nominee_age : fromServer.nominee_age,
-              nominee_relationship:
-                current.nominee_relationship && current.nominee_relationship.trim() !== ""
-                  ? current.nominee_relationship
-                  : fromServer.nominee_relationship,
-              insurer: fromServer.insurer ?? current.insurer,
-              policy_num: fromServer.policy_num ?? current.policy_num,
-              policy_from: fromServer.policy_from ?? current.policy_from,
-              policy_to: fromServer.policy_to ?? current.policy_to,
-              premium: fromServer.premium ?? current.premium,
-            };
-          });
-        }
-        if (normalized || extractionErr) {
-          if (intervalId) clearInterval(intervalId);
-          return;
-        }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        setExtractionError(msg);
-        if (intervalId) clearInterval(intervalId);
-      }
-    };
-
-    poll();
-    intervalId = setInterval(poll, POLL_INTERVAL_MS);
-    return () => {
-      if (intervalId) clearInterval(intervalId);
-    };
-  }, [savedTo, hasVehicle, hasCustomer, dealerId, pageVisible]);
-
   const mobileRow = (
     <div className="app-field-row">
       <label className="app-field" htmlFor="add-sales-mobile">
@@ -486,14 +377,124 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError 
         ].some((x) => x != null && String(x).trim() !== "")
     );
 
-  const customerProcessing = Boolean(savedTo && !hasMeaningfulCustomer(c));
-  const vehicleProcessing = Boolean(savedTo && !hasVehicleData(v ?? null));
-  const insuranceProcessing = Boolean(savedTo && !hasMeaningfulInsurance(ins));
+  /** Show per-subsection status while files upload (before savedTo) and while OCR/extraction is still filling that block. */
+  const customerProcessing = Boolean(
+    (isUploading || savedTo) && !hasMeaningfulCustomer(c)
+  );
+  const vehicleProcessing = Boolean((isUploading || savedTo) && !hasVehicleData(v ?? null));
+  const insuranceProcessing = Boolean((isUploading || savedTo) && !hasMeaningfulInsurance(ins));
   const hasSuppliedInsuranceDoc = uploadedFiles.some((f) =>
     /insurance/i.test(String(f || ""))
   );
   /** Don't show errors until Textract/Tesseract have finished extracting all subsections */
   const extractionComplete = !customerProcessing && !vehicleProcessing && !insuranceProcessing;
+
+  /** When true, polling is not needed; use this as effect deps so we don't restart the interval on every field merge. */
+  const extractionSectionsDone =
+    Boolean(savedTo) &&
+    hasMeaningfulCustomer(c) &&
+    hasVehicleData(v ?? null) &&
+    hasMeaningfulInsurance(ins);
+
+  // Poll for extracted details until customer, vehicle, and insurance blocks match the same "complete" rules as the UI.
+  useEffect(() => {
+    if (!savedTo) {
+      pollCountRef.current = 0;
+      setExtractionError(null);
+      return;
+    }
+    if (extractionSectionsDone) {
+      pollCountRef.current = 0;
+      return;
+    }
+    if (!pageVisible) {
+      return;
+    }
+    pollCountRef.current = 0;
+    setExtractionError(null);
+
+    let intervalId: ReturnType<typeof setInterval> | null = null;
+
+    const poll = async () => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      if (pollCountRef.current >= POLL_MAX) {
+        if (intervalId) clearInterval(intervalId);
+        return;
+      }
+      pollCountRef.current += 1;
+      try {
+        const details = await getExtractedDetails(savedTo, dealerId);
+        const extractionErr = (details as Record<string, unknown>)?.extraction_error;
+        const nameMismatchErr = (details as Record<string, unknown>)?.name_mismatch_error;
+        const err = typeof nameMismatchErr === "string" ? nameMismatchErr : typeof extractionErr === "string" ? extractionErr : null;
+        setExtractionError(err);
+        if (err && intervalId) clearInterval(intervalId);
+        const rawVehicle = details?.vehicle ?? details;
+        const normalized = normalizeVehicleDetails(rawVehicle);
+        if (normalized) setExtractedVehicle(normalized);
+        const cust = details?.customer;
+        if (cust && typeof cust === "object" && !Array.isArray(cust)) {
+          setExtractedCustomer(mapApiCustomerToExtracted(cust as Record<string, unknown>));
+        }
+        const insPoll = details?.insurance;
+        if (insPoll && typeof insPoll === "object" && !Array.isArray(insPoll)) {
+          setInsuranceReadByTextract(true);
+          const r = insPoll as Record<string, unknown>;
+          setExtractedInsurance((prev) => {
+            const current = prev ?? {};
+            const fromServer = {
+              profession: typeof r.profession === "string" ? r.profession : undefined,
+              financier: typeof r.financier === "string" ? r.financier : undefined,
+              marital_status: typeof r.marital_status === "string" ? r.marital_status : undefined,
+              nominee_gender: typeof r.nominee_gender === "string" ? r.nominee_gender : undefined,
+              nominee_name: typeof r.nominee_name === "string" ? r.nominee_name : undefined,
+              nominee_age: r.nominee_age != null ? String(r.nominee_age) : undefined,
+              nominee_relationship: typeof r.nominee_relationship === "string" ? r.nominee_relationship : undefined,
+              insurer: typeof r.insurer === "string" ? r.insurer : undefined,
+              policy_num: typeof r.policy_num === "string" ? r.policy_num : undefined,
+              policy_from: typeof r.policy_from === "string" ? r.policy_from : undefined,
+              policy_to: typeof r.policy_to === "string" ? r.policy_to : undefined,
+              premium: typeof r.premium === "string" ? r.premium : r.premium != null ? String(r.premium) : undefined,
+            };
+            return {
+              ...current,
+              profession: current.profession && current.profession.trim() !== "" ? current.profession : fromServer.profession,
+              financier: current.financier && current.financier.trim() !== "" ? current.financier : fromServer.financier,
+              marital_status:
+                current.marital_status && current.marital_status.trim() !== ""
+                  ? current.marital_status
+                  : fromServer.marital_status,
+              nominee_gender:
+                current.nominee_gender && current.nominee_gender.trim() !== ""
+                  ? current.nominee_gender
+                  : fromServer.nominee_gender,
+              nominee_name: current.nominee_name && current.nominee_name.trim() !== "" ? current.nominee_name : fromServer.nominee_name,
+              nominee_age: current.nominee_age && current.nominee_age.trim() !== "" ? current.nominee_age : fromServer.nominee_age,
+              nominee_relationship:
+                current.nominee_relationship && current.nominee_relationship.trim() !== ""
+                  ? current.nominee_relationship
+                  : fromServer.nominee_relationship,
+              insurer: fromServer.insurer ?? current.insurer,
+              policy_num: fromServer.policy_num ?? current.policy_num,
+              policy_from: fromServer.policy_from ?? current.policy_from,
+              policy_to: fromServer.policy_to ?? current.policy_to,
+              premium: fromServer.premium ?? current.premium,
+            };
+          });
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        setExtractionError(msg);
+        if (intervalId) clearInterval(intervalId);
+      }
+    };
+
+    poll();
+    intervalId = setInterval(poll, POLL_INTERVAL_MS);
+    return () => {
+      if (intervalId) clearInterval(intervalId);
+    };
+  }, [savedTo, extractionSectionsDone, dealerId, pageVisible]);
 
   useEffect(() => {
     if (hasSuppliedInsuranceDoc) {
@@ -856,7 +857,9 @@ className="app-button app-button--primary"
                 <div className="add-sales-v2-subsection">
                   <div className="add-sales-v2-subsection-head">
                     <h3 className="add-sales-v2-subsection-title">Customer Details</h3>
-                    {customerProcessing && !extractionError && <span className="add-sales-v2-processing">Processing</span>}
+                    {customerProcessing && !extractionError && (
+                      <span className="add-sales-v2-processing">{isUploading ? "Uploading…" : "Processing…"}</span>
+                    )}
                   </div>
                   {extractionError && (
                     <div className="add-sales-v2-subsection-errors" role="alert">
@@ -897,7 +900,9 @@ className="app-button app-button--primary"
                 <div className="add-sales-v2-subsection">
                   <div className="add-sales-v2-subsection-head">
                     <h3 className="add-sales-v2-subsection-title">Vehicle Details</h3>
-                    {vehicleProcessing && <span className="add-sales-v2-processing">Processing</span>}
+                    {vehicleProcessing && !extractionError && (
+                      <span className="add-sales-v2-processing">{isUploading ? "Uploading…" : "Processing…"}</span>
+                    )}
                   </div>
                   {extractionComplete && vehicleValidationErrors.length > 0 && (
                     <div className="add-sales-v2-subsection-errors" role="alert">
@@ -1088,7 +1093,9 @@ className="app-button app-button--primary"
                 <div className="add-sales-v2-subsection">
                   <div className="add-sales-v2-subsection-head">
                     <h3 className="add-sales-v2-subsection-title">Insurance Details</h3>
-                    {insuranceProcessing && <span className="add-sales-v2-processing">Processing</span>}
+                    {insuranceProcessing && !extractionError && (
+                      <span className="add-sales-v2-processing">{isUploading ? "Uploading…" : "Processing…"}</span>
+                    )}
                   </div>
                   {extractionComplete && insuranceValidationErrors.length > 0 && (
                     <div className="add-sales-v2-subsection-errors" role="alert">

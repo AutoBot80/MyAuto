@@ -52,6 +52,8 @@ The system is a server–client application for auto dealers. Dealers run a ligh
 | BR-14 | DMS booking test budget | Dummy / training DMS flow uses a fixed **customer budget / enquiry amount of 89000** for booking generation unless the business replaces this constant in automation. |
 | BR-15 | Ex-showroom vs column name | **Order Value / ex-showroom** from DMS is persisted as `vehicle_master.vehicle_price` (no separate `vehicle_cost` column). Labels in exports and dummy UI read **Ex-showroom Price**. |
 | BR-16 | Create Invoice operator-only | DMS Playwright must not click **Create Invoice**; the operator completes invoicing, then may re-run automation after the invoice step. |
+| BR-17 | Aadhaar gender default | When **gender** is not extracted from UIDAI QR, Tesseract, or Textract for a subfolder that includes `Aadhar.jpg` and/or `Aadhar_back.jpg`, the persisted `customer.gender` in `OCR_To_be_Used.json` defaults to **Male** (operators may correct before submit). |
+| BR-18 | Address-derived locality | When **state**, **PIN**, or **care_of** is missing but **address** contains **`C/O:`** (Care of), **`DIST: <District>, <State> - <PIN>`**, and/or a 6-digit PIN, the system infers **`care_of`**, **`city`/district**, **`state`**, **`pin`**; drops text **after the PIN**; strips **C/O** from the stored address line. Applied on Submit Info, OCR JSON, Aadhaar back parsing, and DMS fill when `form_dms_view` fields are sparse. |
 
 ---
 
@@ -93,7 +95,7 @@ The system is a server–client application for auto dealers. Dealers run a ligh
 - **FR-21d** RTO failed-row retry: operators can click `Try Again` on a `Failed` RTO queue row to return it to `Queued` and run batch processing again.
 - **FR-21c** RTO scrape persistence: when Vahan reaches the cart/upload checkpoint, the scraped application id and RTO charges must be stored on both `rto_queue` and `vehicle_master`, and later retries may overwrite those values with the newest scrape.
 - **FR-22** Customer search: Search by mobile or plate; return customers with vehicles and insurance.
-- **FR-23** QR decode: Decode Aadhaar UIDAI QR to extract customer details; support QR on **front (`Aadhar.jpg`) and/or back (`Aadhar_back.jpg`)**, merging fields with front preferred when both are readable.
+- **FR-23** QR decode: Decode Aadhaar UIDAI QR to extract customer details; support QR on **front (`Aadhar.jpg`) and/or back (`Aadhar_back.jpg`)**, merging fields with front preferred when both are readable. When QR or local OCR misses fields, **AWS Textract text** from the same scans (also written to `Raw_OCR.txt`) is parsed as a fallback for **DOB and gender** on the front and **printed English address** on the back (e.g. “Near Gayatri School …”).
 - **FR-24** Vision / Textract: Optional AI extraction from documents.
 
 ### 5.3 Non-Functional Requirements

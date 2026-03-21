@@ -7,6 +7,10 @@ from pathlib import Path
 
 from app.db import get_connection
 from app.repositories.ai_reader_queue import AiReaderQueueRepository
+from app.services.customer_address_infer import (
+    enrich_customer_address_from_freeform,
+    normalize_address_freeform,
+)
 
 
 def _aadhar_last4(aadhar_id: str | None) -> str | None:
@@ -288,6 +292,24 @@ def _parse_aadhar_back_address_from_ocr(ocr_text: str) -> dict[str, str]:
             if stop_vid:
                 chunk = chunk[: stop_vid.start()]
             raw = chunk.strip()
+    if not raw or len(raw) < 8:
+        # Textract often puts "Address" on its own line, then "Near …" / locality on the next lines.
+        addr_head = re.search(r"(?is)\bAddress\s*\n+", text)
+        if addr_head:
+            window = text[addr_head.end() : addr_head.end() + 950]
+            block_m = re.search(
+                r"(?is)^\s*((?:Near|C/O|C\.?\s*O\.?|S/O|W/O|D/O)\s*:?.+?)(?=\n\s*(?:पता|VID|Virtual|Aadhaar|www\.|help@|\d{4}\s+\d{4}\s+\d{4})\b|\n{3,}|\Z)",
+                window,
+            )
+            if block_m:
+                raw = block_m.group(1).strip()
+        if (not raw or len(raw) < 8) and re.search(r"(?i)\bNear\b", text):
+            near_m = re.search(
+                r"(?is)\b(Near\s+.{15,350}?(?:Rajasthan|State|,?\s*[A-Za-z]{4,}\s*-\s*\d{6}|\d{6}))",
+                text,
+            )
+            if near_m:
+                raw = near_m.group(1).strip()
     if not raw:
         return out
     raw = _normalize_aadhar_back_address_chunk(raw)
@@ -299,19 +321,18 @@ def _parse_aadhar_back_address_from_ocr(ocr_text: str) -> dict[str, str]:
     raw = foot[0].strip(" ,.-") if foot else raw
     if len(raw) < 15:
         return out
-    pins = re.findall(r"\b(\d{6})\b", raw)
-    if pins:
-        out["pin_code"] = pins[-1]
-        lp = raw.rfind(pins[-1])
-        if lp >= 0:
-            end = lp + len(pins[-1])
-            tail = raw[end:]
-            if re.search(r"[\(']", tail):
-                raw = raw[:end].strip()
-    out["address"] = raw
-    com = re.search(r"(?i)\bC/O\s*:\s*([^,]+)", raw)
-    if com:
-        out["care_of"] = com.group(1).strip()
+    parsed = normalize_address_freeform(raw)
+    out["address"] = parsed.get("address") or re.sub(r"\s+", " ", raw).strip()
+    if parsed.get("care_of"):
+        out["care_of"] = parsed["care_of"]
+    if parsed.get("pin_code"):
+        out["pin_code"] = parsed["pin_code"]
+    if parsed.get("state"):
+        out["state"] = parsed["state"]
+    if parsed.get("city"):
+        out["city"] = parsed["city"]
+    if parsed.get("district"):
+        out["district"] = parsed["district"]
     return out
 
 
@@ -338,6 +359,218 @@ def _customer_from_aadhar_back_scan(image_bytes: bytes) -> dict[str, str]:
         if ocr_hints.get("pin_code") and not (merged.get("pin_code") and str(merged["pin_code"]).strip()):
             merged["pin_code"] = str(ocr_hints["pin_code"]).strip()
     return merged
+
+
+def _aadhar_normalize_dob_triplet(day: int, month: int, year: int) -> str | None:
+    """Validate and return DD/MM/YYYY for Indian Aadhaar-style dates."""
+    if not (1 <= month <= 12 and 1 <= day <= 31):
+        return None
+    if year < 100:
+        year = 2000 + year if year < 50 else 1900 + year
+    y_max = datetime.now().year
+    if year < 1920 or year > y_max:
+        return None
+    try:
+        datetime(year, month, day)
+    except ValueError:
+        return None
+    return f"{day:02d}/{month:02d}/{year}"
+
+
+def _normalize_aadhar_gender_token(token: str) -> str | None:
+    t = (token or "").strip()
+    if not t:
+        return None
+    u = t.upper()
+    if u in ("M", "MALE"):
+        return "Male"
+    if u in ("F", "FEMALE"):
+        return "Female"
+    if u in ("T", "TRANSGENDER"):
+        return "Transgender"
+    if t.lower() in ("male", "female", "transgender"):
+        return t[:1].upper() + t[1:].lower()
+    return None
+
+
+def _parse_aadhar_front_textract_fallback(text: str) -> dict[str, str]:
+    """
+    Pull DOB / gender from Aadhaar **front** full text (AWS Textract or same layout in Raw_OCR).
+    Used when UIDAI QR omits these fields.
+    """
+    out: dict[str, str] = {}
+    if not text or len(text.strip()) < 5:
+        return out
+    t = text.replace("\r\n", "\n")
+
+    dob_patterns = [
+        r"(?i)\b(?:DOB|D\.?\s*O\.?\s*B\.?|Date\s+of\s+Birth|Birth\s+Date)\s*[:]?\s*(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{2,4})\b",
+        r"(?i)\b(?:जन्म\s*तिथि|जन्मतिथि)\s*[:]?\s*(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{2,4})\b",
+    ]
+    for pat in dob_patterns:
+        m = re.search(pat, t)
+        if m:
+            d, mo, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            norm = _aadhar_normalize_dob_triplet(d, mo, y)
+            if norm:
+                out["date_of_birth"] = norm
+                out["year_of_birth"] = norm.split("/")[2]
+                break
+
+    if "date_of_birth" not in out:
+        for line in t.splitlines():
+            line = line.strip()
+            if len(line) > 40:
+                continue
+            if not re.search(r"(?i)(birth|dob|जन्म)", line):
+                continue
+            m = re.search(r"(\d{1,2})[/.\-](\d{1,2})[/.\-]((19|20)\d{2})\b", line)
+            if m:
+                d, mo, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+                norm = _aadhar_normalize_dob_triplet(d, mo, y)
+                if norm:
+                    out["date_of_birth"] = norm
+                    out["year_of_birth"] = str(y)
+                    break
+
+    gm = (
+        re.search(r"(?i)\bGender\s*[:]?\s*(Male|Female|Transgender|M|F|T)\b", t)
+        or re.search(r"(?i)\bGender\s+(Male|Female|Transgender)\b", t)
+        or re.search(r"(?i)\b(?:लिंग|Gender)\s*[:]?\s*(Male|Female|Transgender)\b", t)
+    )
+    if gm:
+        g = _normalize_aadhar_gender_token(gm.group(1))
+        if g:
+            out["gender"] = g
+    else:
+        for label_pat in (r"(?i)\bGender\b", r"(?i)\bलिंग\b"):
+            pos = re.search(label_pat, t)
+            if pos:
+                window = t[pos.end() : pos.end() + 40]
+                for word in ("Male", "Female", "Transgender"):
+                    if re.search(rf"(?i)\b{word}\b", window):
+                        out["gender"] = word
+                        break
+                if out.get("gender"):
+                    break
+
+    return out
+
+
+def _default_gender_male_if_unread(customer: dict[str, str]) -> None:
+    """If gender was not extracted (QR/OCR/Textract), assume Male for DMS/insurance flows."""
+    g = customer.get("gender")
+    if g is None or not str(g).strip():
+        customer["gender"] = "Male"
+
+
+def _merge_aadhar_textract_fallback_dict(customer: dict[str, str], hints: dict[str, str]) -> dict[str, str]:
+    """
+    Fill blank customer fields from Textract-derived hints. For ``address``, prefer a longer /
+    clearer Textract line over a short or empty QR/OCR value (common for back-of-card English).
+    """
+    out = dict(customer) if customer else {}
+    if not hints:
+        return out
+    for k in AADHAR_QR_CUSTOMER_KEYS:
+        if k == "address":
+            continue
+        hv = hints.get(k)
+        if not hv or not str(hv).strip():
+            continue
+        cur = out.get(k)
+        if cur is None or not str(cur).strip():
+            out[k] = str(hv).strip()
+    ha = (hints.get("address") or "").strip()
+    ca = (out.get("address") or "").strip()
+    if ha:
+        if not ca:
+            out["address"] = ha
+        elif len(ha) > len(ca) + 12:
+            out["address"] = ha
+    _rebuild_aadhar_address_from_parts(out, preserve_existing_address=True)
+    if ha and (not out.get("address") or not str(out["address"]).strip()):
+        out["address"] = ha
+    if hints.get("pin_code") and not (out.get("pin_code") and str(out["pin_code"]).strip()):
+        out["pin_code"] = str(hints["pin_code"]).strip()
+    if hints.get("care_of") and not (out.get("care_of") and str(out["care_of"]).strip()):
+        out["care_of"] = str(hints["care_of"]).strip()
+    return out
+
+
+def _parse_raw_ocr_sections(content: str) -> dict[str, str]:
+    """Split ``Raw_OCR.txt`` (``--- filename ---`` sections) into filename -> body."""
+    sections: dict[str, str] = {}
+    current: str | None = None
+    buf: list[str] = []
+    for line in content.splitlines():
+        m = re.match(r"^---\s*(.+?)\s*---\s*$", line.strip())
+        if m:
+            if current is not None:
+                sections[current] = "\n".join(buf).strip()
+            current = m.group(1).strip()
+            buf = []
+        else:
+            buf.append(line)
+    if current is not None:
+        sections[current] = "\n".join(buf).strip()
+    return sections
+
+
+def _apply_aadhar_textract_fallbacks_from_parts(
+    ocr_output_dir: Path,
+    subfolder: str,
+    parts: list[tuple[str, str]],
+) -> None:
+    """Merge DOB/gender (front) and address (back) from Textract blobs into OCR_To_be_Used.json."""
+    json_path = _json_output_path(ocr_output_dir, subfolder)
+    if not json_path.is_file():
+        return
+    try:
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    customer = data.get("customer") or {}
+    if not isinstance(customer, dict):
+        customer = {}
+    for fn, tx in parts:
+        if not tx or not str(tx).strip():
+            continue
+        fl = fn.strip().replace("\\", "/").split("/")[-1].lower()
+        if fl == "aadhar.jpg":
+            customer = _merge_aadhar_textract_fallback_dict(
+                customer, _parse_aadhar_front_textract_fallback(tx)
+            )
+        elif fl == "aadhar_back.jpg":
+            customer = _merge_aadhar_textract_fallback_dict(
+                customer, _parse_aadhar_back_address_from_ocr(tx)
+            )
+    if customer.get("aadhar_id"):
+        customer["aadhar_id"] = _aadhar_last4(customer["aadhar_id"]) or ""
+    _default_gender_male_if_unread(customer)
+    customer = enrich_customer_address_from_freeform(customer)
+    data["customer"] = customer
+    try:
+        json_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _apply_aadhar_textract_fallbacks_from_raw_ocr_file(
+    ocr_output_dir: Path,
+    subfolder: str,
+) -> None:
+    """Same as parts merge, using persisted Raw_OCR.txt (e.g. get_extracted_details)."""
+    raw_path = _ocr_subfolder_path(ocr_output_dir, subfolder) / "Raw_OCR.txt"
+    if not raw_path.is_file():
+        return
+    try:
+        sections = _parse_raw_ocr_sections(raw_path.read_text(encoding="utf-8", errors="replace"))
+    except Exception:
+        return
+    parts = [(k, v) for k, v in sections.items() if v]
+    if parts:
+        _apply_aadhar_textract_fallbacks_from_parts(ocr_output_dir, subfolder, parts)
 
 
 # Map Textract form keys (normalized) to our vehicle detail fields.
@@ -1237,6 +1470,9 @@ class OcrService:
                 raw_lines.append(text.strip() if text else "")
                 raw_lines.append("")
             (subfolder_path / "Raw_OCR.txt").write_text("\n".join(raw_lines), encoding="utf-8")
+            _apply_aadhar_textract_fallbacks_from_parts(
+                self.ocr_output_dir, subfolder, list(self._raw_ocr_parts)
+            )
 
         self._raw_ocr_parts = None
 
@@ -1367,6 +1603,7 @@ class OcrService:
                     and v
                 },
             }
+            customer_merged = enrich_customer_address_from_freeform(customer_merged)
             details_json = {"vehicle": vehicle, "customer": customer_merged, "insurance": insurance_merged}
             if details_customer_name:
                 details_json["details_customer_name"] = details_customer_name
@@ -1416,16 +1653,18 @@ class OcrService:
         try:
             raw_bytes = input_path.read_bytes()
 
-            # Raw OCR: run Textract for raw text (for Raw_OCR.txt)
-            if hasattr(self, "_raw_ocr_parts") and self._raw_ocr_parts is not None:
-                try:
-                    from app.services.textract_service import extract_text_from_bytes
+            # Textract on front: Raw_OCR.txt (when batch) + fallback for DOB/gender when QR omits them.
+            front_textract_text = ""
+            try:
+                from app.services.textract_service import extract_text_from_bytes
 
-                    txt_result = extract_text_from_bytes(raw_bytes)
-                    if not txt_result.get("error") and txt_result.get("full_text"):
-                        self._raw_ocr_parts.append((filename, txt_result["full_text"]))
-                except Exception:
-                    pass
+                txt_result = extract_text_from_bytes(raw_bytes)
+                if not txt_result.get("error") and txt_result.get("full_text"):
+                    front_textract_text = (txt_result.get("full_text") or "").strip()
+                    if hasattr(self, "_raw_ocr_parts") and self._raw_ocr_parts is not None:
+                        self._raw_ocr_parts.append((filename, front_textract_text))
+            except Exception:
+                front_textract_text = ""
 
             customer_front = _try_customer_from_aadhar_qr_bytes(raw_bytes)
             back_path = input_path.parent / "Aadhar_back.jpg"
@@ -1461,11 +1700,17 @@ class OcrService:
                 except Exception:
                     pass
             customer = _merge_qr_customer_into_existing(existing_customer, qr_customer)
+            if front_textract_text:
+                customer = _merge_aadhar_textract_fallback_dict(
+                    customer, _parse_aadhar_front_textract_fallback(front_textract_text)
+                )
 
             # Compliance: never persist full Aadhar; store only last 4 digits
             if customer.get("aadhar_id"):
                 customer["aadhar_id"] = _aadhar_last4(customer["aadhar_id"]) or ""
 
+            _default_gender_male_if_unread(customer)
+            customer = enrich_customer_address_from_freeform(customer)
             data["customer"] = customer
             json_path.parent.mkdir(parents=True, exist_ok=True)
             json_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
@@ -1628,10 +1873,33 @@ class OcrService:
                         "UIDAI QR is often on the back — ensure Aadhar_back.jpg includes a readable QR. Re-scan if needed."
                     )
 
+        # Textract text in Raw_OCR.txt: fill DOB/gender from front, address from back (when QR/OCR missed).
+        _apply_aadhar_textract_fallbacks_from_raw_ocr_file(self.ocr_output_dir, subfolder)
+        if json_path.exists():
+            try:
+                data = json.loads(json_path.read_text(encoding="utf-8"))
+                if not isinstance(data.get("vehicle"), dict):
+                    data["vehicle"] = {}
+                if not isinstance(data.get("customer"), dict):
+                    data["customer"] = {}
+                if not isinstance(data.get("insurance"), dict):
+                    data["insurance"] = {}
+            except Exception:
+                pass
+
         # Compliance: sanitize customer aadhar on return (handles legacy JSON with full Aadhar)
         customer = data.get("customer") or {}
         if customer.get("aadhar_id"):
             customer["aadhar_id"] = _aadhar_last4(customer["aadhar_id"]) or ""
+        if aadhar_path.is_file() or back_p.is_file():
+            _default_gender_male_if_unread(customer)
+            customer = enrich_customer_address_from_freeform(customer)
+            data["customer"] = customer
+            try:
+                json_path.parent.mkdir(parents=True, exist_ok=True)
+                json_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            except Exception:
+                pass
         # Sanitize nominee_age: extract digits only (e.g. "30/m" -> "30"); clear if invalid
         ins = data.get("insurance") or {}
         if ins.get("nominee_age"):

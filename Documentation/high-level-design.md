@@ -130,6 +130,7 @@ My Auto.AI/
 ### 4.1 Add Sales Flow
 
 1. User uploads scans → `uploads/scans` → ai_reader_queue.
+   - **Section 2 (AI extracted information):** Customer, Vehicle, and Insurance subsection headers show **Uploading…** while files are uploading and **Processing…** until extraction for that block is populated; the client polls `getExtractedDetails` until customer, vehicle, and insurance blocks all satisfy the same completion rules (or polling limits apply).
 2. OCR processes queue → extracted text stored.
 3. User reviews/corrects → Submit Info → customer_master, vehicle_master, sales_master, insurance_master.
 4. Fill DMS → Playwright loads DMS field values from `form_dms_view`, reuses an already open DMS tab when detectable, or opens Edge/Chrome and asks operator login on first-time, then runs enquiry/stock/PDI/vehicle scrape/allocate/invoicing-line (without Create Invoice), stores DMS artifacts in `ocr_output`, and updates `vehicle_master` (ex-showroom → `vehicle_price`).
@@ -293,3 +294,4 @@ This section defines database-to-label mapping contracts for DMS, Insurance, and
 | 1.2 | Mar 2026 | — | Updated Add Sales interaction model to split DMS/Insurance/Print actions into separate operator controls |
 | 1.3 | Mar 2026 | — | Added Alternate/Landline mapping (`customer_master.alt_phone_num`) into DMS and Insurance label mapping contracts |
 | 1.4 | Mar 2026 | — | Fill DMS flow: extended enquiry/stock/PDI/allocate/invoicing-line sequence; ex-showroom stored as `vehicle_price`; no auto Create Invoice |
+| 1.5 | Mar 2026 | — | Add Sales Section 2: per-subsection upload/processing indicators; extraction polling continues until insurance block completes (aligned with UI rules) |
