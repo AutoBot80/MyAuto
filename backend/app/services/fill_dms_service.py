@@ -21,7 +21,9 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 
 from app.config import (
     DMS_PLAYWRIGHT_HEADED,
+    INSURANCE_ACTION_TIMEOUT_MS,
     INSURANCE_LOGIN_WAIT_MS,
+    INSURANCE_POLICY_FILL_TIMEOUT_MS,
     OCR_OUTPUT_DIR,
     PLAYWRIGHT_KEEP_OPEN,
 )
@@ -88,21 +90,39 @@ def _fuzzy_best_option_label(query: str, candidates: list[str], *, min_score: fl
     return best_label
 
 
-def _insurance_select_fuzzy(page, select_selector: str, query: str) -> str | None:
+def _insurance_select_fuzzy(
+    page,
+    select_selector: str,
+    query: str,
+    *,
+    timeout_ms: int | None = None,
+) -> str | None:
     """Set <select> to option whose label best matches query; returns chosen label or None."""
-    opts = page.locator(f"{select_selector} option")
-    n = opts.count()
+    if not (query or "").strip():
+        return None
+    opt_loc = page.locator(f"{select_selector} option")
     labels: list[str] = []
-    for i in range(n):
-        t = (opts.nth(i).inner_text() or "").strip()
-        if t:
-            labels.append(t)
+    try:
+        raw = opt_loc.evaluate_all(
+            "els => els.map(e => (e.textContent || '').trim()).filter(t => t)"
+        )
+        labels = [str(x).strip() for x in (raw or []) if str(x).strip()]
+    except Exception:
+        try:
+            n = opt_loc.count()
+            for i in range(n):
+                t = (opt_loc.nth(i).inner_text() or "").strip()
+                if t:
+                    labels.append(t)
+        except Exception:
+            labels = []
     if not labels:
         return None
     picked = _fuzzy_best_option_label(query, labels)
     if picked:
         try:
-            page.select_option(select_selector, label=picked)
+            to = timeout_ms if timeout_ms is not None else INSURANCE_ACTION_TIMEOUT_MS
+            page.select_option(select_selector, label=picked, timeout=to)
         except Exception:
             logger.warning("Insurance: select_option failed for %s label=%r", select_selector, picked)
     return picked
@@ -1146,7 +1166,7 @@ def _wait_for_insurance_kyc_after_login(page, insurance_base_url: str) -> str | 
         return "insurance_base_url required"
 
     try:
-        page.wait_for_timeout(400)
+        page.wait_for_timeout(120)
         if page.evaluate(_insurance_kyc_screen_ready_js()):
             return None
     except Exception:
@@ -1210,7 +1230,8 @@ def run_fill_insurance_only(
             return result
 
         base = insurance_base_url.rstrip("/")
-        page.set_default_timeout(12_000)
+        # Snappier than global DMS default; override with INSURANCE_ACTION_TIMEOUT_MS / INSURANCE_POLICY_FILL_TIMEOUT_MS.
+        page.set_default_timeout(INSURANCE_ACTION_TIMEOUT_MS)
         wait_err = _wait_for_insurance_kyc_after_login(page, insurance_base_url)
         if wait_err:
             result["error"] = wait_err
@@ -1254,7 +1275,7 @@ def run_fill_insurance_only(
                 )
             except Exception:
                 pass
-            page.wait_for_timeout(200)
+            page.wait_for_timeout(80)
             submit_loc = page.locator("#ins-kyc-submit")
             if submit_loc.count() > 0:
                 submit_loc.wait_for(state="attached", timeout=10000)
@@ -1272,7 +1293,7 @@ def run_fill_insurance_only(
                     page.evaluate(
                         "() => { if (typeof window.__syncInsuranceKycSubmitState === 'function') window.__syncInsuranceKycSubmitState(); }"
                     )
-                    page.wait_for_timeout(200)
+                    page.wait_for_timeout(80)
                     page.wait_for_function(
                         """() => {
                           const b = document.querySelector('#ins-kyc-submit');
@@ -1291,98 +1312,116 @@ def run_fill_insurance_only(
             page.locator("#ins-proceed").wait_for(state="enabled", timeout=10000)
             page.click("#ins-proceed")
         page.wait_for_url("**/kyc-success.html*", timeout=10000)
-        page.wait_for_timeout(300)
+        page.wait_for_timeout(60)
         page.goto(f"{base}/dms-entry.html", wait_until="domcontentloaded", timeout=15000)
-        page.fill("#ins-vin", values["frame_no"])
-        page.click("a.btn[href='policy.html']")
+        page.fill("#ins-vin", values["frame_no"], timeout=INSURANCE_ACTION_TIMEOUT_MS)
+        page.click("a.btn[href='policy.html']", timeout=INSURANCE_ACTION_TIMEOUT_MS)
         page.wait_for_url("**/policy.html*", timeout=10000)
+        # Many sequential fields: use a tighter per-action ceiling so the page feels responsive.
+        page.set_default_timeout(INSURANCE_POLICY_FILL_TIMEOUT_MS)
 
         # Fill policy form fields. Do NOT click #ins-issue-policy — operator issues policy manually.
         # Chassis = VIN/Frame from vehicle_master (DMS scrape). Ex-Showroom = vehicle_price (DMS cost).
         # Insurance company: fuzzy-match to details insurer; manufacturer: fuzzy-match vehicle_master.oem_name.
         # Policy tenure & proposer type: keep dummy page defaults (no select_option).
-        _insurance_select_fuzzy(page, "#ins-sel-policy-company", values["insurer"] or "")
+        _insurance_select_fuzzy(
+            page,
+            "#ins-sel-policy-company",
+            values["insurer"] or "",
+            timeout_ms=INSURANCE_POLICY_FILL_TIMEOUT_MS,
+        )
         if values.get("oem_name"):
-            _insurance_select_fuzzy(page, "#ins-sel-manufacturer", values["oem_name"])
+            _insurance_select_fuzzy(
+                page,
+                "#ins-sel-manufacturer",
+                values["oem_name"],
+                timeout_ms=INSURANCE_POLICY_FILL_TIMEOUT_MS,
+            )
 
-        page.fill("#ins-proposer-name", values["customer_name"])
+        pt = INSURANCE_POLICY_FILL_TIMEOUT_MS
+        page.fill("#ins-proposer-name", values["customer_name"], timeout=pt)
         selects = page.locator(".main select")
         if values["gender"]:
             try:
-                selects.nth(4).select_option(label=values["gender"].capitalize())
+                selects.nth(4).select_option(label=values["gender"].capitalize(), timeout=pt)
             except Exception:
                 pass
         if values["dob"]:
-            page.fill("#ins-proposer-dob", values["dob"])
+            page.fill("#ins-proposer-dob", values["dob"], timeout=pt)
         if values["marital_status"]:
             try:
-                selects.nth(5).select_option(label=values["marital_status"])
+                selects.nth(5).select_option(label=values["marital_status"], timeout=pt)
             except Exception:
                 pass
         if values["profession"]:
             try:
-                selects.nth(6).select_option(label=values["profession"])
+                selects.nth(6).select_option(label=values["profession"], timeout=pt)
             except Exception:
                 pass
-        page.fill("#ins-policy-mobile", values["mobile_number"])
+        page.fill("#ins-policy-mobile", values["mobile_number"], timeout=pt)
         if values.get("alt_phone_num"):
             try:
-                page.fill("#ins-alt-phone", values["alt_phone_num"])
+                page.fill("#ins-alt-phone", values["alt_phone_num"], timeout=pt)
             except Exception:
                 pass
         if values["state"]:
             try:
-                selects.nth(7).select_option(label=values["state"])
+                selects.nth(7).select_option(label=values["state"], timeout=pt)
             except Exception:
                 pass
         if values["city"]:
             try:
-                selects.nth(8).select_option(label=values["city"])
+                selects.nth(8).select_option(label=values["city"], timeout=pt)
             except Exception:
                 pass
         if values["pin_code"]:
-            page.fill("#ins-proposer-pin", values["pin_code"])
+            page.fill("#ins-proposer-pin", values["pin_code"], timeout=pt)
         if values["address"]:
-            page.fill("#ins-proposer-address", values["address"])
-        page.fill("#ins-chassis", values["frame_no"])
-        page.fill("#ins-engine", values["engine_no"])
+            page.fill("#ins-proposer-address", values["address"], timeout=pt)
+        page.fill("#ins-chassis", values["frame_no"], timeout=pt)
+        page.fill("#ins-engine", values["engine_no"], timeout=pt)
         if values["model_name"]:
-            page.fill("#ins-model-name", values["model_name"])
+            page.fill("#ins-model-name", values["model_name"], timeout=pt)
         ex_show = (values.get("vehicle_price") or "").replace(",", "").strip()
-        page.fill("#ins-ex-showroom", ex_show)
+        page.fill("#ins-ex-showroom", ex_show, timeout=pt)
         if values["year_of_mfg"]:
-            page.fill("#ins-yom", values["year_of_mfg"])
+            page.fill("#ins-yom", values["year_of_mfg"], timeout=pt)
         if values["fuel_type"]:
             try:
-                selects.nth(12).select_option(label=values["fuel_type"])
+                selects.nth(12).select_option(label=values["fuel_type"], timeout=pt)
             except Exception:
                 pass
         if values["nominee_name"]:
-            page.fill("#ins-nominee-name", values["nominee_name"])
+            page.fill("#ins-nominee-name", values["nominee_name"], timeout=pt)
         if values["nominee_age"]:
-            page.fill("#ins-nominee-age", values["nominee_age"])
+            page.fill("#ins-nominee-age", values["nominee_age"], timeout=pt)
         if values["nominee_gender"]:
             try:
-                selects.nth(13).select_option(label=values["nominee_gender"].capitalize())
+                selects.nth(13).select_option(label=values["nominee_gender"].capitalize(), timeout=pt)
             except Exception:
                 pass
         if values["nominee_relationship"]:
             try:
-                selects.nth(14).select_option(label=values["nominee_relationship"])
+                selects.nth(14).select_option(label=values["nominee_relationship"], timeout=pt)
             except Exception:
                 pass
         if values["financer_name"]:
             try:
-                page.fill("#ins-financer", values["financer_name"])
+                page.fill("#ins-financer", values["financer_name"], timeout=pt)
             except Exception:
                 pass
         if values.get("rto_name"):
             try:
-                selects.nth(11).select_option(label=values["rto_name"])
+                selects.nth(11).select_option(label=values["rto_name"], timeout=pt)
             except Exception:
                 pass
 
         logger.info("run_fill_insurance_only: deliberately not clicking #ins-issue-policy")
+
+        try:
+            page.set_default_timeout(15_000)
+        except Exception:
+            pass
 
         if ocr_output_dir is not None:
             _write_insurance_form_values(
@@ -1396,9 +1435,21 @@ def run_fill_insurance_only(
         result["error"] = None
         return result
     except PlaywrightTimeout as e:
+        _p = locals().get("page")
+        if _p is not None:
+            try:
+                _p.set_default_timeout(15_000)
+            except Exception:
+                pass
         result["error"] = f"Timeout: {e!s}"
         return result
     except Exception as e:
+        _p = locals().get("page")
+        if _p is not None:
+            try:
+                _p.set_default_timeout(15_000)
+            except Exception:
+                pass
         result["error"] = str(e)
         return result
 

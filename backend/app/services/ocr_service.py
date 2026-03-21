@@ -74,6 +74,100 @@ AADHAR_15_FIELDS: list[tuple[str, str]] = [
     ("pin_code", "Pin Code"),
 ]
 
+# UIDAI QR field keys (front and/or back scan); used to build / merge `customer` from QR XML.
+AADHAR_QR_CUSTOMER_KEYS: tuple[str, ...] = (
+    "aadhar_id",
+    "name",
+    "gender",
+    "year_of_birth",
+    "date_of_birth",
+    "care_of",
+    "house",
+    "street",
+    "location",
+    "city",
+    "post_office",
+    "district",
+    "sub_district",
+    "state",
+    "pin_code",
+)
+
+
+def _customer_from_uidai_qr_fields(fields: dict) -> dict[str, str]:
+    """Build customer dict + constructed address from decoded UIDAI `fields` (qr_decode_service)."""
+    customer: dict[str, str] = {}
+    for k in AADHAR_QR_CUSTOMER_KEYS:
+        v = fields.get(k)
+        if v and str(v).strip():
+            customer[k] = str(v).strip()
+    parts = [
+        customer.get("care_of"),
+        customer.get("house"),
+        customer.get("street"),
+        customer.get("location"),
+        customer.get("state"),
+        customer.get("pin_code"),
+    ]
+    address = ", ".join(p for p in parts if p)
+    if address:
+        customer["address"] = address
+    return customer
+
+
+def _try_customer_from_aadhar_qr_bytes(image_bytes: bytes) -> dict[str, str]:
+    """Decode UIDAI QR in image bytes (uses first decoded payload with usable fields); return {} if none."""
+    if not image_bytes:
+        return {}
+    try:
+        from app.services.qr_decode_service import decode_qr_from_image_bytes
+
+        qr_result = decode_qr_from_image_bytes(image_bytes)
+        for entry in qr_result.get("decoded") or []:
+            fields = entry.get("fields") or {}
+            if not fields:
+                continue
+            customer = _customer_from_uidai_qr_fields(fields)
+            if customer:
+                return customer
+        return {}
+    except Exception:
+        return {}
+
+
+def _merge_aadhar_front_back_qr_customer(
+    front: dict[str, str],
+    back: dict[str, str],
+) -> dict[str, str]:
+    """
+    Prefer values from the front scan; fill missing/empty keys from the back (QR often on back only).
+    Rebuilds `address` from merged address parts.
+    """
+    merged: dict[str, str] = dict(front)
+    for k, v in back.items():
+        if k == "address":
+            continue
+        if not v or not str(v).strip():
+            continue
+        cur = merged.get(k)
+        if cur is None or not str(cur).strip():
+            merged[k] = str(v).strip()
+    parts = [
+        merged.get("care_of"),
+        merged.get("house"),
+        merged.get("street"),
+        merged.get("location"),
+        merged.get("state"),
+        merged.get("pin_code"),
+    ]
+    address = ", ".join(p for p in parts if p)
+    if address:
+        merged["address"] = address
+    else:
+        merged.pop("address", None)
+    return merged
+
+
 # Map Textract form keys (normalized) to our vehicle detail fields.
 _VEHICLE_KEY_ALIASES = {
     # Many dealer PDFs use "Chassis Number" / "Engine Number" (not "Chassis No.")
@@ -1142,13 +1236,12 @@ class OcrService:
             raise
 
     def _process_aadhar(self, qid: int | None, subfolder: str, filename: str, input_path: Path) -> dict:
-        """Run Aadhar extraction: try QR decode first, then fall back to OpenAI Vision; merge customer into subfolder JSON."""
+        """Run Aadhar extraction: UIDAI QR on front (Aadhar.jpg), then merge from back (Aadhar_back.jpg) if QR is there; merge customer into subfolder JSON."""
         if qid is not None:
             with get_connection() as conn:
                 AiReaderQueueRepository.update_classification(conn, qid, "Aadhar", 1.0)
                 conn.commit()
         try:
-            customer: dict[str, str] = {}
             raw_bytes = input_path.read_bytes()
 
             # Raw OCR: run Textract for raw text (for Raw_OCR.txt)
@@ -1162,33 +1255,19 @@ class OcrService:
                 except Exception:
                     pass
 
-            try:
-                from app.services.qr_decode_service import decode_qr_from_image_bytes
-
-                qr_result = decode_qr_from_image_bytes(raw_bytes)
-                if qr_result.get("decoded") and qr_result["decoded"][0].get("fields"):
-                    fields = qr_result["decoded"][0]["fields"]
-                    for k in (
-                        "aadhar_id", "name", "gender", "year_of_birth", "date_of_birth",
-                        "care_of", "house", "street", "location", "city", "post_office",
-                        "district", "sub_district", "state", "pin_code",
-                    ):
-                        v = fields.get(k)
-                        if v and str(v).strip():
-                            customer[k] = str(v).strip()
-                    parts = [
-                        customer.get("care_of"), customer.get("house"), customer.get("street"),
-                        customer.get("location"), customer.get("state"), customer.get("pin_code"),
-                    ]
-                    address = ", ".join(p for p in parts if p)
-                    if address:
-                        customer["address"] = address
-                else:
-                    raise ValueError("No QR fields")
-            except Exception:
+            customer_front = _try_customer_from_aadhar_qr_bytes(raw_bytes)
+            back_path = input_path.parent / "Aadhar_back.jpg"
+            customer_back: dict[str, str] = {}
+            if back_path.is_file():
+                try:
+                    customer_back = _try_customer_from_aadhar_qr_bytes(back_path.read_bytes())
+                except Exception:
+                    customer_back = {}
+            customer = _merge_aadhar_front_back_qr_customer(customer_front, customer_back)
+            if not customer:
                 raise ValueError(
-                    "QR code is not clear in scan. Re-scan the Aadhar card to ensure the QR code is readable - "
-                    "it is required for all critical details."
+                    "QR code was not found or could not be read on the Aadhar front or back scan. "
+                    "UIDAI QR is often printed on the back — ensure Aadhar_back.jpg includes a readable QR. Re-scan if needed."
                 ) from None
 
             # Compliance: never persist full Aadhar; store only last 4 digits
@@ -1303,8 +1382,8 @@ class OcrService:
     def get_extracted_details(self, subfolder: str) -> dict | None:
         """
         Return structured extracted details (vehicle, customer) for a subfolder.
-        Loads from JSON if present. If customer is missing/empty and Aadhar.jpg exists in the subfolder,
-        runs Aadhar reading (OpenAI Vision), merges customer, persists JSON, and returns.
+        Loads from JSON if present.         If customer is missing/empty and Aadhar.jpg exists in the subfolder,
+        runs UIDAI QR decode on front then merges Aadhar_back.jpg when present, persists JSON, and returns.
         """
         self._ensure_ocr_output_dir()
         json_path = _json_output_path(self.ocr_output_dir, subfolder)
@@ -1327,42 +1406,28 @@ class OcrService:
         has_customer = any(customer.get(k) for k in ("name", "address", "aadhar_id", "city", "state", "pin", "pin_code"))
         aadhar_path = self.uploads_dir / subfolder / "Aadhar.jpg"
         if not has_customer and aadhar_path.exists():
-            raw_bytes = aadhar_path.read_bytes()
             try:
-                from app.services.qr_decode_service import decode_qr_from_image_bytes
-
-                qr_result = decode_qr_from_image_bytes(raw_bytes)
-                if qr_result.get("decoded") and qr_result["decoded"][0].get("fields"):
-                    fields = qr_result["decoded"][0]["fields"]
-                    for k in (
-                        "aadhar_id", "name", "gender", "year_of_birth", "date_of_birth",
-                        "care_of", "house", "street", "location", "city", "post_office",
-                        "district", "sub_district", "state", "pin_code",
-                    ):
-                        v = fields.get(k)
-                        if v and str(v).strip():
-                            customer[k] = str(v).strip()
-                    parts = [
-                        customer.get("care_of"), customer.get("house"), customer.get("street"),
-                        customer.get("location"), customer.get("state"), customer.get("pin_code"),
-                    ]
-                    address = ", ".join(p for p in parts if p)
-                    if address:
-                        customer["address"] = address
-                    # Compliance: never persist full Aadhar; store only last 4 digits
+                c_front = _try_customer_from_aadhar_qr_bytes(aadhar_path.read_bytes())
+                back_p = self.uploads_dir / subfolder / "Aadhar_back.jpg"
+                c_back: dict[str, str] = {}
+                if back_p.is_file():
+                    try:
+                        c_back = _try_customer_from_aadhar_qr_bytes(back_p.read_bytes())
+                    except Exception:
+                        c_back = {}
+                customer = _merge_aadhar_front_back_qr_customer(c_front, c_back)
+                if customer:
                     if customer.get("aadhar_id"):
                         customer["aadhar_id"] = _aadhar_last4(customer["aadhar_id"]) or ""
                     data["customer"] = customer
                 else:
-                    raise ValueError("No QR fields")
+                    raise ValueError("No QR fields on front or back")
             except Exception:
-                # Return partial data (vehicle, insurance) so UI can show them; include error for customer
                 data["extraction_error"] = (
-                    "QR code is not clear in scan. Re-scan the Aadhar card to ensure the QR code is readable - "
-                    "it is required for all critical details."
+                    "QR code was not found or could not be read on the Aadhar front or back scan. "
+                    "UIDAI QR is often on the back — ensure Aadhar_back.jpg includes a readable QR. Re-scan if needed."
                 )
             else:
-                # QR succeeded: persist customer to JSON
                 try:
                     json_path.parent.mkdir(parents=True, exist_ok=True)
                     json_path.write_text(json.dumps(data, indent=2), encoding="utf-8")

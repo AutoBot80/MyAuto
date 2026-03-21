@@ -1,0 +1,25 @@
+{
+  "vehicle": {
+    "frame_no": "21026",
+    "engine_no": "5034",
+    "model_colour": "Deluxe AHO",
+    "key_no": "2533",
+    "battery_no": "BJ1A2304393"
+  },
+  "customer": {
+    "name": "Raja Ram",
+    "mobile_number": "6367215834",
+    "alt_phone_num": "8193935130",
+    "aadhar_id": "9332"
+  },
+  "insurance": {
+    "profession": "Farmer",
+    "insurer": "SOMPO",
+    "marital_status": "Married",
+    "nominee_gender": "MALE",
+    "nominee_name": "PRASHANT KUMAR",
+    "nominee_age": "14",
+    "nominee_relationship": "SON"
+  },
+  "details_customer_name": "Raja Ram"
+}

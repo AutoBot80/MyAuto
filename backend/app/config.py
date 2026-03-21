@@ -117,6 +117,10 @@ VAHAN_BASE_URL = (os.getenv("VAHAN_BASE_URL") or "").strip().rstrip("/")
 INSURANCE_BASE_URL = (os.getenv("INSURANCE_BASE_URL") or "").strip().rstrip("/")
 # Max time (ms) to wait on the login page for the operator to sign in and reach KYC.
 INSURANCE_LOGIN_WAIT_MS = int(os.getenv("INSURANCE_LOGIN_WAIT_MS", "600000"))
+# Default Playwright timeout (ms) per action during Insurance automation (KYC + navigation). Lower = snappier.
+INSURANCE_ACTION_TIMEOUT_MS = int(os.getenv("INSURANCE_ACTION_TIMEOUT_MS", "5500"))
+# Tighter timeout while filling the policy / insurance-details form (many sequential fields).
+INSURANCE_POLICY_FILL_TIMEOUT_MS = int(os.getenv("INSURANCE_POLICY_FILL_TIMEOUT_MS", "3200"))
 
 
 def validate_external_site_urls() -> None:

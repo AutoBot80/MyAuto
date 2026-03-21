@@ -110,6 +110,7 @@ backend/app/
 - **Service:** `OcrService` in `services/ocr_service.py` — processes one queue item at a time (oldest first), runs Tesseract on the scan file under `UPLOADS_DIR/<subfolder>/<filename>`, writes extracted text to `OCR_OUTPUT_DIR` as `<subfolder>_<filename>.txt`.
 - **Config:** `config.OCR_OUTPUT_DIR` (default: `backend/ocr_output`). Tesseract binary must be on system PATH (or set `pytesseract.pytesseract.tesseract_cmd`). `config.OCR_LANG` (default: `eng+hin`) for English + Hindi; see **Documentation/tesseract-ocr-setup.md** for installing Hindi tessdata for Aadhar scans.
 - **Queue status:** `queued` → `processing` → `done` or `failed`.
+- **Aadhaar UIDAI QR:** `OcrService._process_aadhar` and `get_extracted_details` decode QR from **`Aadhar.jpg` first**, then merge any missing fields from **`Aadhar_back.jpg`** when present (QR is often on the back). Uses `qr_decode_service.decode_qr_from_image_bytes`; prefers the first decoded payload that yields usable `fields` when multiple QRs exist in one image.
 - **Sales detail template mapping:** Details-sheet extraction also supports the A5 Sales Detail Sheet label style (e.g., `Full Name`, `Mobile Number`, `Aadhaar Number`, `Profession`, `Marital Status`, `Nominee ...`, `Financier Name`) and merges these into `OCR_To_be_Used.json` (`customer` + `insurance`) for Add Sales auto-population.
 - **Add Sales v2 `Details.jpg`:** The file is always stored under that name; content is detected by magic bytes (JPEG/PNG/PDF or ZIP-based `.docx`), so Word exports mislabeled as `.jpg` still use the docx parser instead of Textract on invalid bytes.
 - **Vehicle fields from Details:** Textract FORMS keys are mapped with normalized labels (including `Chassis Number`, `Engine Number`, etc.). If pairs are sparse on a PDF, `full_text` is parsed for the same labels (e.g. `Chassis Number: … Engine Number: …` on one line).
@@ -144,6 +145,7 @@ backend/app/
 ### 2.5 Database Access
 
 - **Connection:** `get_connection()` in `db.py` using `DATABASE_URL`.
+- **Insurance Playwright tuning (optional `.env`):** `INSURANCE_ACTION_TIMEOUT_MS` (default 5500) for KYC/navigation actions; `INSURANCE_POLICY_FILL_TIMEOUT_MS` (default 3200) while filling the policy / insurance-details form. Lower values speed up local dummy runs; raise if a slow portal flakes.
 - **Usage:** Context manager (`with get_connection() as conn`) in route handlers; cursor for execute/fetch.
 - **Transactions:** Commit on success; explicit or context-based.
 

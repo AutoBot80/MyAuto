@@ -93,7 +93,7 @@ The system is a server–client application for auto dealers. Dealers run a ligh
 - **FR-21d** RTO failed-row retry: operators can click `Try Again` on a `Failed` RTO queue row to return it to `Queued` and run batch processing again.
 - **FR-21c** RTO scrape persistence: when Vahan reaches the cart/upload checkpoint, the scraped application id and RTO charges must be stored on both `rto_queue` and `vehicle_master`, and later retries may overwrite those values with the newest scrape.
 - **FR-22** Customer search: Search by mobile or plate; return customers with vehicles and insurance.
-- **FR-23** QR decode: Decode Aadhar QR to extract customer details.
+- **FR-23** QR decode: Decode Aadhaar UIDAI QR to extract customer details; support QR on **front (`Aadhar.jpg`) and/or back (`Aadhar_back.jpg`)**, merging fields with front preferred when both are readable.
 - **FR-24** Vision / Textract: Optional AI extraction from documents.
 
 ### 5.3 Non-Functional Requirements
