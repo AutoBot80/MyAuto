@@ -76,7 +76,18 @@ AADHAR_15_FIELDS: list[tuple[str, str]] = [
 
 # Map Textract form keys (normalized) to our vehicle detail fields.
 _VEHICLE_KEY_ALIASES = {
-    "frame_no": ["frame no", "frame no.", "frame number", "chassis", "chassis no", "chassis no."],
+    # Many dealer PDFs use "Chassis Number" / "Engine Number" (not "Chassis No.")
+    "frame_no": [
+        "frame no",
+        "frame no.",
+        "frame number",
+        "chassis",
+        "chassis no",
+        "chassis no.",
+        "chassis number",
+        "vin",
+        "vehicle identification number",
+    ],
     "engine_no": ["engine no", "engine no.", "engine number", "engine"],
     "model_colour": ["model & colour", "model and colour", "model/colour", "model", "colour", "color"],
     "key_no": ["key no", "key no.", "key number", "key"],
@@ -339,32 +350,114 @@ def _validate_name_match(aadhar_name: str | None, details_name: str | None, insu
 def _map_key_value_pairs_to_vehicle(pairs: list[dict]) -> dict[str, str]:
     """Map key_value_pairs from Textract to structured vehicle fields (frame_no, engine_no, model_colour, key_no, battery_no)."""
     out: dict[str, str] = {}
-    key_lower_to_value: dict[str, str] = {}
+    key_norm_to_value: dict[str, str] = {}
     for kv in pairs:
         k = (kv.get("key") or "").strip()
         v = (kv.get("value") or "").strip()
         if not k:
             continue
-        key_lower_to_value[k.lower()] = v
+        key_norm = _normalize_key_for_match(k)
+        key_norm_to_value[key_norm] = v
+        if ":" in key_norm:
+            key_norm_to_value[key_norm.replace(":", "").strip()] = v
 
     for field, aliases in _VEHICLE_KEY_ALIASES.items():
         if field in out:
             continue
         for alias in aliases:
-            if alias in key_lower_to_value:
-                out[field] = key_lower_to_value[alias]
+            anorm = _normalize_key_for_match(alias)
+            if anorm in key_norm_to_value:
+                out[field] = key_norm_to_value[anorm]
+                break
+            for kn, v in key_norm_to_value.items():
+                if anorm in kn or kn in anorm:
+                    out[field] = v
+                    break
+            if field in out:
                 break
 
     # Combine Model and Colour into model_colour if we have them separately
-    model_val = key_lower_to_value.get("model", "").strip() or next(
-        (v for k, v in key_lower_to_value.items() if "model" in k and "colour" not in k and "color" not in k), ""
+    model_val = key_norm_to_value.get(_normalize_key_for_match("model"), "").strip() or next(
+        (
+            v.strip()
+            for kn, v in key_norm_to_value.items()
+            if "model" in kn and "colour" not in kn and "color" not in kn and v.strip()
+        ),
+        "",
     )
-    colour_val = key_lower_to_value.get("colour", "").strip() or key_lower_to_value.get("color", "").strip()
+    colour_val = key_norm_to_value.get(_normalize_key_for_match("colour"), "").strip() or key_norm_to_value.get(
+        _normalize_key_for_match("color"), ""
+    ).strip()
     if model_val or colour_val:
         combined = ", ".join(filter(None, [model_val, colour_val]))
         if combined:
             out["model_colour"] = combined
 
+    return out
+
+
+def _clean_sales_sheet_scalar(value: str) -> str:
+    """Strip placeholder underscores / blanks from a field value."""
+    s = (value or "").strip()
+    if not s:
+        return ""
+    if re.match(r"^[\s_.,-]+$", s):
+        return ""
+    return s.strip()
+
+
+def _parse_vehicle_from_full_text(full_text: str) -> dict[str, str]:
+    """
+    Fallback when Textract FORMS misses pairs (common on some PDFs): parse LINE layout
+    like 'Chassis Number: 59324 Engine Number: 50581'.
+    """
+    out: dict[str, str] = {}
+    if not full_text or not isinstance(full_text, str):
+        return out
+    text = full_text.replace("\r", "\n")
+
+    m = re.search(r"(?i)Model\s*:\s*([^\n]+?)(?=\s+Colour\s*:)", text)
+    if m:
+        mv = _clean_sales_sheet_scalar(m.group(1))
+        if mv:
+            out["model_colour"] = mv
+    m = re.search(r"(?i)Colour\s*:\s*([^\n]+)", text)
+    if m:
+        cv = _clean_sales_sheet_scalar(m.group(1))
+        if cv:
+            if out.get("model_colour"):
+                out["model_colour"] = f"{out['model_colour']}, {cv}"
+            else:
+                out["model_colour"] = cv
+
+    m = re.search(r"(?i)Chassis\s+Number\s*:\s*([^\n]+?)(?=\s+Engine\s+Number\s*:|\n|$)", text)
+    if m:
+        fv = _clean_sales_sheet_scalar(m.group(1))
+        if fv:
+            out["frame_no"] = fv
+    m = re.search(r"(?i)Engine\s+Number\s*:\s*([^\n]+?)(?=\s+Key\s+Number\s*:|\n|$)", text)
+    if m:
+        ev = _clean_sales_sheet_scalar(m.group(1))
+        if ev:
+            out["engine_no"] = ev
+    m = re.search(r"(?i)Key\s+Number\s*:\s*([^\n]+?)(?=\s+Battery\s+Number\s*:|\n|$)", text)
+    if m:
+        kv = _clean_sales_sheet_scalar(m.group(1))
+        if kv:
+            out["key_no"] = kv
+    m = re.search(r"(?i)Battery\s+Number\s*:\s*([^\n]+)", text)
+    if m:
+        bv = _clean_sales_sheet_scalar(m.group(1))
+        if bv:
+            out["battery_no"] = bv
+
+    # Alternate labels
+    if "frame_no" not in out:
+        m = re.search(r"(?i)(?:Frame|Chassis)\s+No\.?\s*:\s*([^\n]+?)(?=\s+Engine|\n|$)", text)
+        if m:
+            fv = _clean_sales_sheet_scalar(m.group(1))
+            if fv:
+                out["frame_no"] = fv
     return out
 
 
@@ -921,6 +1014,10 @@ class OcrService:
             details_customer = _map_key_value_pairs_to_details_customer(key_value_pairs)
             details_customer_name = _extract_details_customer_name(key_value_pairs)
             if result.get("full_text"):
+                from_vehicle = _parse_vehicle_from_full_text(result["full_text"])
+                for k, v in from_vehicle.items():
+                    if v and not vehicle.get(k):
+                        vehicle[k] = v
                 from_full = _parse_insurance_from_full_text(result["full_text"])
                 if from_full.get("customer_name") and not details_customer_name:
                     details_customer_name = from_full["customer_name"]

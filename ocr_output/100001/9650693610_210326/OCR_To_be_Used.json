@@ -1,5 +1,7 @@
 {
-  "vehicle": {},
+  "vehicle": {
+    "model_colour": "Splendor+"
+  },
   "customer": {
     "aadhar_id": "7945",
     "name": "Shashank Arya",
@@ -16,7 +18,19 @@
     "sub_district": "Bharatpur",
     "state": "Rajasthan",
     "pin_code": "321001",
-    "address": "S/O: Anil Kumar Arya, 431, sector no.-3, bharatpur, Rajasthan, 321001"
+    "address": "S/O: Anil Kumar Arya, 431, sector no.-3, bharatpur, Rajasthan, 321001",
+    "mobile_number": "9650693610",
+    "alt_phone_num": "9650693610"
   },
-  "insurance": {}
+  "insurance": {
+    "profession": "Farmer",
+    "financier": "HDFC",
+    "insurer": "SOMPO",
+    "marital_status": "Married",
+    "nominee_gender": "Female",
+    "nominee_name": "ASASDS",
+    "nominee_age": "43",
+    "nominee_relationship": "WWWE"
+  },
+  "details_customer_name": "Shashank Arya"
 }
