@@ -115,6 +115,8 @@ VAHAN_BASE_URL = (os.getenv("VAHAN_BASE_URL") or "").strip().rstrip("/")
 
 # Insurance (dummy or real) base URL for Playwright insurance fill step.
 INSURANCE_BASE_URL = (os.getenv("INSURANCE_BASE_URL") or "").strip().rstrip("/")
+# Max time (ms) to wait on the login page for the operator to sign in and reach KYC.
+INSURANCE_LOGIN_WAIT_MS = int(os.getenv("INSURANCE_LOGIN_WAIT_MS", "600000"))
 
 
 def validate_external_site_urls() -> None:

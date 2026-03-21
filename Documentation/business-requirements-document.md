@@ -148,8 +148,8 @@ This section defines the required operator navigation path and minimum field-ent
 
 ### 6.5 Insurance Navigation Sequence (Video-Aligned)
 
-1. Login redirection (`misp.heroinsurance.com`) -> KYC page
-2. KYC verification page (`ekycpage.aspx`): enter mobile → **Verify mobile**; if KYC not on file, upload three documents (Aadhaar front, rear, customer photo) → consent → **Submit** to advance; dummy site mirrors this with `#ins-check-mobile` / `#ins-kyc-submit` / `policy.html` flow
+1. Login page (`misp.heroinsurance.com` / dummy `index.html`): operator enters credentials and **Login**; Playwright waits (up to `INSURANCE_LOGIN_WAIT_MS`) until KYC is shown, then automates KYC.
+2. KYC verification page (`ekycpage.aspx` / dummy `kyc.html`): enter mobile → **Verify mobile**; if KYC not on file, upload three documents (Aadhaar front, rear, customer photo) → consent → **Submit** to advance; dummy uses `#ins-check-mobile` / `#ins-kyc-submit` / `policy.html` flow.
 3. KYC success auto-redirect screen
 4. MisDMS policy entry page (`MispDms.aspx`) with VIN input
 5. New policy creation page (`MispPolicy.aspx`) for "New Policy - Two Wheeler"

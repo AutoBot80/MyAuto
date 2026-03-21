@@ -7,6 +7,7 @@ Writes pulled data to ocr_output/subfolder/Data from DMS.txt for consistency wit
 """
 import base64
 import difflib
+import json
 import logging
 import os
 import re
@@ -18,7 +19,12 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 
-from app.config import DMS_PLAYWRIGHT_HEADED, OCR_OUTPUT_DIR, PLAYWRIGHT_KEEP_OPEN
+from app.config import (
+    DMS_PLAYWRIGHT_HEADED,
+    INSURANCE_LOGIN_WAIT_MS,
+    OCR_OUTPUT_DIR,
+    PLAYWRIGHT_KEEP_OPEN,
+)
 from app.repositories import form_dms as form_dms_repo
 from app.repositories import form_vahan as form_vahan_repo
 from app.db import get_connection
@@ -66,8 +72,14 @@ def _fuzzy_best_option_label(query: str, candidates: list[str], *, min_score: fl
             inter = len(q_words & c_words)
             union = len(q_words | c_words) or 1
             score = max(score, (inter / union) * 0.98)
-        if len(q) >= 4 and (q in cn or cn in q):
-            score = max(score, 0.88)
+        # Short brand tokens from detail sheets (e.g. SOMPO → Universal Sompo General Insurance)
+        if len(q) >= 3 and (q in cn or cn in q):
+            score = max(score, 0.92)
+        if len(q) >= 3:
+            for w in cn.split():
+                if len(w) >= len(q) and q in w:
+                    score = max(score, 0.9)
+                    break
         if score > best_score:
             best_score = score
             best_label = c
@@ -89,7 +101,10 @@ def _insurance_select_fuzzy(page, select_selector: str, query: str) -> str | Non
         return None
     picked = _fuzzy_best_option_label(query, labels)
     if picked:
-        page.select_option(select_selector, label=picked)
+        try:
+            page.select_option(select_selector, label=picked)
+        except Exception:
+            logger.warning("Insurance: select_option failed for %s label=%r", select_selector, picked)
     return picked
 
 
@@ -976,14 +991,39 @@ def _load_latest_insurance_values(customer_id: int, vehicle_id: int) -> dict:
         conn.close()
 
 
-def _build_insurance_fill_values(customer_id: int | None, vehicle_id: int | None, subfolder: str | None = None) -> dict:
+def _read_insurance_insurer_from_ocr_json(ocr_output_dir: Path | None, subfolder: str | None) -> str:
+    """Fallback: insurer from Details sheet in OCR_To_be_Used.json when insurance_master.insurer is empty."""
+    if not ocr_output_dir or not subfolder or not str(subfolder).strip():
+        return ""
+    safe = _safe_subfolder_name(subfolder)
+    path = Path(ocr_output_dir).resolve() / safe / "OCR_To_be_Used.json"
+    if not path.is_file():
+        return ""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        ins = data.get("insurance") if isinstance(data.get("insurance"), dict) else {}
+        return _clean_text((ins or {}).get("insurer"))
+    except Exception as exc:
+        logger.debug("Insurance: could not read insurer from %s: %s", path, exc)
+        return ""
+
+
+def _build_insurance_fill_values(
+    customer_id: int | None,
+    vehicle_id: int | None,
+    subfolder: str | None = None,
+    ocr_output_dir: Path | None = None,
+) -> dict:
     cid, vid = _require_customer_vehicle_ids(customer_id, vehicle_id, "customer/vehicle/insurance tables")
     row = _load_latest_insurance_values(cid, vid)
     if not row:
         raise ValueError(f"No insurance/customer data found for customer_id={cid} vehicle_id={vid}")
+    insurer_db = _clean_text(row.get("insurer"))
+    insurer_json = _read_insurance_insurer_from_ocr_json(ocr_output_dir, subfolder)
+    insurer_effective = insurer_db or insurer_json
     values = {
         "subfolder": _clean_text(subfolder),
-        "insurer": _clean_text(row.get("insurer")),
+        "insurer": insurer_effective,
         "mobile_number": _clean_text(row.get("mobile_number"))[:10],
         "alt_phone_num": _clean_text(row.get("alt_phone_num"))[:16],
         "customer_name": _clean_text(row.get("customer_name")),
@@ -1019,6 +1059,11 @@ def _build_insurance_fill_values(customer_id: int | None, vehicle_id: int | None
     missing = [label for label, val in required if not val]
     if missing:
         raise ValueError("Missing required Insurance DB values: " + ", ".join(missing))
+    if insurer_json and not insurer_db:
+        logger.info(
+            "Insurance: using insurer from OCR JSON (%r); insurance_master had no insurer",
+            insurer_json[:80],
+        )
     return values
 
 
@@ -1079,6 +1124,58 @@ def _write_insurance_form_values(
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
+def _insurance_kyc_screen_ready_js() -> str:
+    """Predicate run in the browser: true when KYC step is shown (dummy or typical MISP URLs)."""
+    return """() => {
+      const u = (window.location.href || '').toLowerCase();
+      if (u.includes('policy.html') || u.includes('misppolicy')) return false;
+      if (u.includes('kyc.html') || u.includes('ekycpage') || u.includes('kycpage.aspx') || u.includes('/ekyc')) return true;
+      const el = document.querySelector('#ins-mobile-no');
+      return !!(el && el.offsetParent !== null && el.offsetWidth > 0);
+    }"""
+
+
+def _wait_for_insurance_kyc_after_login(page, insurance_base_url: str) -> str | None:
+    """
+    Land on the insurance login page if needed, then wait until the operator has signed in
+    and the portal shows the KYC step (URL or #ins-mobile-no on dummy).
+    Returns an error message, or None on success.
+    """
+    base = (insurance_base_url or "").rstrip("/")
+    if not base:
+        return "insurance_base_url required"
+
+    try:
+        page.wait_for_timeout(400)
+        if page.evaluate(_insurance_kyc_screen_ready_js()):
+            return None
+    except Exception:
+        pass
+
+    logger.info(
+        "Insurance: login page — sign in and submit; waiting up to %s ms for KYC screen",
+        INSURANCE_LOGIN_WAIT_MS,
+    )
+    try:
+        page.goto(f"{base}/", wait_until="domcontentloaded", timeout=30000)
+    except Exception as exc:
+        logger.warning("Insurance: goto %s/: %s", base, exc)
+        try:
+            page.goto(base, wait_until="domcontentloaded", timeout=30000)
+        except Exception as exc2:
+            logger.warning("Insurance: goto %s: %s", base, exc2)
+
+    try:
+        page.wait_for_function(_insurance_kyc_screen_ready_js(), timeout=INSURANCE_LOGIN_WAIT_MS)
+    except PlaywrightTimeout:
+        return (
+            "Insurance: timed out waiting for the KYC screen after login. "
+            "On the login page, enter User ID and Password and click Login (dummy), or complete sign-in on the real portal "
+            f"so KYC opens — then press Fill Insurance again (wait limit {INSURANCE_LOGIN_WAIT_MS // 1000}s)."
+        )
+    return None
+
+
 def run_fill_insurance_only(
     insurance_base_url: str,
     *,
@@ -1089,28 +1186,42 @@ def run_fill_insurance_only(
 ) -> dict:
     """
     Fill Insurance screens using DB-backed values only.
-    KYC: fill mobile → click Verify mobile → if KYC not found (`need_docs`), upload three
-    documents (Aadhaar front/rear + customer photo), tick consent, click Submit (or legacy Proceed)
-    → kyc-success → DMS entry → policy (insurance details). If KYC found, consent + Proceed only.
+    Flow: open **login** (index) → operator signs in → wait for **KYC** → fill mobile → **Verify mobile** →
+    if `need_docs`, attach three files → **Submit** (or legacy Proceed) → kyc-success → DMS entry → policy details.
+    If KYC already on file for the mobile, consent + **Proceed** only.
+    Uses ``require_login_on_open=False`` so one Fill Insurance run can wait for manual login (see INSURANCE_LOGIN_WAIT_MS).
     Important behavior:
     - do not click final submit/issue button on the policy page
     - keep browser/tab open for operator review
-    - open browser and prompt operator login on first run (DMS-style)
     """
     result: dict = {"success": False, "error": None}
     if not insurance_base_url or not insurance_base_url.strip():
         result["error"] = "insurance_base_url required"
         return result
     try:
-        values = _build_insurance_fill_values(customer_id, vehicle_id, subfolder)
-        page, open_error = _get_or_open_site_page(insurance_base_url, "Insurance")
+        values = _build_insurance_fill_values(
+            customer_id, vehicle_id, subfolder, ocr_output_dir=ocr_output_dir
+        )
+        page, open_error = _get_or_open_site_page(
+            insurance_base_url, "Insurance", require_login_on_open=False
+        )
         if page is None:
             result["error"] = open_error
             return result
 
         base = insurance_base_url.rstrip("/")
         page.set_default_timeout(12_000)
-        page.goto(f"{base}/kyc.html", wait_until="domcontentloaded", timeout=20000)
+        wait_err = _wait_for_insurance_kyc_after_login(page, insurance_base_url)
+        if wait_err:
+            result["error"] = wait_err
+            return result
+        # Dummy site only: login lands on kyc.html; if predicate matched via URL pattern only, still ok.
+        # Real MISP stays on ekycpage.aspx — do not force /kyc.html.
+        if "dummy-insurance" in base.lower() and "kyc.html" not in (page.url or "").lower():
+            try:
+                page.goto(f"{base}/kyc.html", wait_until="domcontentloaded", timeout=20000)
+            except Exception:
+                logger.warning("Insurance: could not navigate to dummy kyc.html")
         # Insurance company: fuzzy-match details-sheet insurer (`insurance_master.insurer`) to site options.
         _insurance_select_fuzzy(page, "#ins-company", values["insurer"] or "")
         page.select_option("#ins-kyc-partner", label="Signzy")

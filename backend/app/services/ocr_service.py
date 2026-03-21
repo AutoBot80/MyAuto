@@ -121,7 +121,16 @@ _INSURANCE_KEY_ALIASES = {
         "loan from",
         "financing institution",
     ],
-    "insurer": ["insurer", "insurer name", "insurance company", "insurance provider", "company"],
+    "insurer": [
+        "insurer name (if needed)",
+        "insurer name if needed",
+        "insurer",
+        "insurer name",
+        "name of insurer",
+        "insurance company",
+        "insurance provider",
+        # Do not use bare "company" — matches unrelated labels (e.g. finance company).
+    ],
     "marital_status": ["marital status", "customer marital status", "married status"],
     "nominee_gender": ["nominee gender", "gender of nominee", "sex of nominee", "nominee sex"],
     "nominee_name": [
@@ -570,6 +579,12 @@ def _parse_insurance_from_full_text(full_text: str) -> dict[str, str]:
     text = full_text.strip()
     # Patterns: "Label" or "Label:" followed by value on same or next line
     patterns = [
+        # Detail-sheet lines e.g. "Insurer Name (if needed): SOMPO" (longer labels first)
+        ("insurer name (if needed)", "insurer"),
+        ("insurer name if needed", "insurer"),
+        ("name of insurer", "insurer"),
+        # Avoid bare "insurer name" here — it matches inside "Insurer Name (if needed)" and captures the wrong group.
+        ("insurance provider", "insurer"),
         ("customer profession", "profession"),
         ("profession of customer", "profession"),
         ("profession", "profession"),
@@ -648,6 +663,9 @@ def _parse_insurance_from_full_text(full_text: str) -> dict[str, str]:
         )
         if same_f and "financier" not in out:
             out["financier"] = same_f.group(2).strip()
+        if "insurer" not in out and "insurer" in low and "name" in low and "nominee" not in low:
+            if nxt and len(nxt) < 120 and not re.match(r"^[:\s_]+$", nxt):
+                out["insurer"] = nxt.strip()
 
     return out
 

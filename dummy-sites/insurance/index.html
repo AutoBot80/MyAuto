@@ -2,18 +2,46 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>MISP Login Redirection</title>
+  <title>MISP - Partner Login</title>
   <style>
-    body { font-family: Arial, sans-serif; max-width: 760px; margin: 2rem auto; padding: 1rem; }
-    .card { border: 1px solid #ccc; border-radius: 6px; padding: 1rem; background: #fafafa; }
-    .btn { display: inline-block; padding: 0.45rem 0.8rem; background: #0b6; color: #fff; text-decoration: none; border-radius: 4px; }
+    * { box-sizing: border-box; }
+    body { font-family: Arial, sans-serif; margin: 0; padding: 2rem; background: #e8eef2; font-size: 13px; }
+    .card { max-width: 420px; margin: 2rem auto; padding: 1.5rem; background: #fff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); border: 1px solid #ccd; }
+    h2 { margin: 0 0 0.25rem; color: #1a2b3c; font-size: 1.15rem; }
+    .sub { color: #567; font-size: 11px; margin-bottom: 1.25rem; }
+    label { display: block; margin-bottom: 0.35rem; font-weight: 600; color: #345; }
+    input { width: 100%; padding: 0.5rem 0.6rem; margin-bottom: 1rem; border: 1px solid #abc; border-radius: 4px; }
+    .btn { width: 100%; padding: 0.55rem 1rem; background: #0a6ebd; color: #fff; border: none; border-radius: 4px; font-size: 14px; font-weight: 600; cursor: pointer; }
+    .btn:hover { background: #085a9a; }
+    .hint { margin-top: 1rem; font-size: 11px; color: #666; line-height: 1.4; }
   </style>
 </head>
 <body>
   <div class="card">
-    <h2>misp.heroinsurance.com - Login Redirection</h2>
-    <p>This page simulates partner login redirection to KYC verification.</p>
-    <p><a class="btn" href="kyc.html">Continue to KYC</a></p>
+    <h2>misp.heroinsurance.com</h2>
+    <p class="sub">Partner login (dummy). Enter any User ID and Password, then click Login to open KYC.</p>
+    <form id="ins-login-form" action="#" method="get" autocomplete="on">
+      <label for="ins-login-user">User ID</label>
+      <input id="ins-login-user" name="user" type="text" autocomplete="username" placeholder="Dealer / user id" />
+      <label for="ins-login-password">Password</label>
+      <input id="ins-login-password" name="password" type="password" autocomplete="current-password" placeholder="Password" />
+      <button type="submit" id="ins-login-submit" class="btn">Login</button>
+    </form>
+    <p class="hint">Playwright opens this page first, waits while you sign in, then fills mobile, Verify mobile, uploads three documents when required, and submits on the KYC screen.</p>
   </div>
+  <script>
+(function () {
+  document.getElementById("ins-login-form").addEventListener("submit", function (e) {
+    e.preventDefault();
+    var u = (document.getElementById("ins-login-user").value || "").trim();
+    var p = (document.getElementById("ins-login-password").value || "").trim();
+    if (!u || !p) {
+      alert("Please enter User ID and Password (dummy accepts any non-empty values).");
+      return;
+    }
+    window.location.href = "kyc.html";
+  });
+})();
+  </script>
 </body>
 </html>
