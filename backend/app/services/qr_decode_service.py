@@ -20,26 +20,44 @@ def _decode_image(image_bytes: bytes) -> np.ndarray | None:
 
 
 def _decode_qr_from_image(img: np.ndarray) -> list[str]:
-    """Detect and decode QR code(s) in image. Tries single-QR path first (faster, less prone to hang)."""
+    """
+    Decode all QR payloads in the image (single + multi), deduplicated.
+    Important when multiple QRs exist: the UIDAI barcode may not be the first one OpenCV decodes.
+    """
     detector = cv2.QRCodeDetector()
     decoded: list[str] = []
+    seen: set[str] = set()
 
-    # Try single QR first — faster and avoids known hangs with detectAndDecodeMulti on some images
     text, _, _ = detector.detectAndDecode(img)
     if text and isinstance(text, str) and text.strip():
-        decoded.append(text.strip())
-        return decoded
+        s = text.strip()
+        if s not in seen:
+            seen.add(s)
+            decoded.append(s)
 
-    # Fallback: multi (only if single found nothing)
     try:
         ret, texts, _points, _ = detector.detectAndDecodeMulti(img)
         if ret and texts is not None:
             for t in texts:
                 if t and isinstance(t, str) and t.strip():
-                    decoded.append(t.strip())
+                    s = t.strip()
+                    if s not in seen:
+                        seen.add(s)
+                        decoded.append(s)
     except Exception:
         pass
     return decoded
+
+
+def _rotated_variants(img: np.ndarray) -> list[np.ndarray]:
+    """Original + 90/180/270° — back-of-card phone photos are often rotated."""
+    out = [img]
+    try:
+        for rot in (cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_180, cv2.ROTATE_90_COUNTERCLOCKWISE):
+            out.append(cv2.rotate(img, rot))
+    except Exception:
+        pass
+    return out
 
 
 def _decompress_payload(raw: str) -> str:
@@ -103,6 +121,8 @@ def _parse_uidai_xml(xml_str: str) -> dict[str, Any]:
 def _parse_xml_like(text: str) -> dict[str, Any]:
     """If text looks like XML, parse and return dict; else return empty dict."""
     text = text.strip()
+    if text.startswith("\ufeff"):
+        text = text.lstrip("\ufeff").strip()
     if not text.startswith("<"):
         return {}
     return _parse_uidai_xml(text)
@@ -113,9 +133,30 @@ def _parse_xml_like(text: str) -> dict[str, Any]:
 UIDAI_FIELD_MAP: dict[str, list[str]] = {
     "aadhar_id": ["uid", "aadhaarno", "aadhar", "printletterbarcodedata.uid"],
     "name": ["name", "poi.name", "printletterbarcodedata.name"],
-    "gender": ["gndr", "gender", "poi.gndr", "printletterbarcodedata.gndr"],
+    # UIDAI XML often uses gnd (not gndr) on PrintLetterBarcodeData root
+    "gender": [
+        "gnd",
+        "gndr",
+        "gender",
+        "gen",
+        "sex",
+        "poi.gnd",
+        "poi.gndr",
+        "printletterbarcodedata.gnd",
+        "printletterbarcodedata.gndr",
+    ],
     "year_of_birth": ["yob", "yearofbirth", "poi.yob", "printletterbarcodedata.yob"],
-    "date_of_birth": ["dob", "dateofbirth", "poi.dob", "printletterbarcodedata.dob"],
+    "date_of_birth": [
+        "dob",
+        "dateofbirth",
+        "date_of_birth",
+        "birthdate",
+        "birth_date",
+        "dobon",
+        "poi.dob",
+        "printletterbarcodedata.dob",
+        "printletterbarcodedata.dateofbirth",
+    ],
     "care_of": ["careof", "co", "care_of", "poa.careof", "printletterbarcodedata.co"],
     "house": ["house", "poa.house", "printletterbarcodedata.house"],
     "street": ["street", "poa.street", "printletterbarcodedata.street", "street2"],
@@ -189,7 +230,13 @@ def decode_qr_from_image_bytes(image_bytes: bytes) -> dict[str, Any]:
         result["error"] = "Could not decode image (unsupported format or corrupt)"
         return result
 
-    strings = _decode_qr_from_image(img)
+    strings: list[str] = []
+    seen_raw: set[str] = set()
+    for variant in _rotated_variants(img):
+        for s in _decode_qr_from_image(variant):
+            if s not in seen_raw:
+                seen_raw.add(s)
+                strings.append(s)
     if not strings:
         result["error"] = "No QR code found in image"
         return result

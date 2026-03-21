@@ -94,6 +94,30 @@ AADHAR_QR_CUSTOMER_KEYS: tuple[str, ...] = (
 )
 
 
+def _rebuild_aadhar_address_from_parts(customer: dict[str, str]) -> None:
+    """
+    UIDAI POA often uses city (vtc), district, post office without house/street.
+    Mutates `customer` in place: sets or clears `address`.
+    """
+    parts = [
+        customer.get("care_of"),
+        customer.get("house"),
+        customer.get("street"),
+        customer.get("location"),
+        customer.get("city"),
+        customer.get("district"),
+        customer.get("sub_district"),
+        customer.get("post_office"),
+        customer.get("state"),
+        customer.get("pin_code"),
+    ]
+    address = ", ".join(p for p in parts if p and str(p).strip())
+    if address:
+        customer["address"] = address
+    else:
+        customer.pop("address", None)
+
+
 def _customer_from_uidai_qr_fields(fields: dict) -> dict[str, str]:
     """Build customer dict + constructed address from decoded UIDAI `fields` (qr_decode_service)."""
     customer: dict[str, str] = {}
@@ -101,36 +125,45 @@ def _customer_from_uidai_qr_fields(fields: dict) -> dict[str, str]:
         v = fields.get(k)
         if v and str(v).strip():
             customer[k] = str(v).strip()
-    parts = [
-        customer.get("care_of"),
-        customer.get("house"),
-        customer.get("street"),
-        customer.get("location"),
-        customer.get("state"),
-        customer.get("pin_code"),
-    ]
-    address = ", ".join(p for p in parts if p)
-    if address:
-        customer["address"] = address
+    _rebuild_aadhar_address_from_parts(customer)
     return customer
 
 
+def _aadhar_qr_customer_completeness_score(customer: dict[str, str]) -> int:
+    """Prefer richer UIDAI payloads when an image yields multiple QR decodes."""
+    score = 0
+    for k in AADHAR_QR_CUSTOMER_KEYS:
+        if customer.get(k) and str(customer[k]).strip():
+            score += 2
+            if k in ("date_of_birth", "gender", "aadhar_id", "name"):
+                score += 3
+    if customer.get("address") and str(customer["address"]).strip():
+        score += 6
+    return score
+
+
 def _try_customer_from_aadhar_qr_bytes(image_bytes: bytes) -> dict[str, str]:
-    """Decode UIDAI QR in image bytes (uses first decoded payload with usable fields); return {} if none."""
+    """Decode UIDAI QR(s) in image bytes; pick the payload with the richest customer fields."""
     if not image_bytes:
         return {}
     try:
         from app.services.qr_decode_service import decode_qr_from_image_bytes
 
         qr_result = decode_qr_from_image_bytes(image_bytes)
+        best: dict[str, str] = {}
+        best_score = -1
         for entry in qr_result.get("decoded") or []:
             fields = entry.get("fields") or {}
             if not fields:
                 continue
             customer = _customer_from_uidai_qr_fields(fields)
-            if customer:
-                return customer
-        return {}
+            if not customer:
+                continue
+            sc = _aadhar_qr_customer_completeness_score(customer)
+            if sc > best_score:
+                best_score = sc
+                best = customer
+        return best
     except Exception:
         return {}
 
@@ -141,7 +174,7 @@ def _merge_aadhar_front_back_qr_customer(
 ) -> dict[str, str]:
     """
     Prefer values from the front scan; fill missing/empty keys from the back (QR often on back only).
-    Rebuilds `address` from merged address parts.
+    Rebuilds `address` from merged POA parts (includes city, district, PO).
     """
     merged: dict[str, str] = dict(front)
     for k, v in back.items():
@@ -152,19 +185,7 @@ def _merge_aadhar_front_back_qr_customer(
         cur = merged.get(k)
         if cur is None or not str(cur).strip():
             merged[k] = str(v).strip()
-    parts = [
-        merged.get("care_of"),
-        merged.get("house"),
-        merged.get("street"),
-        merged.get("location"),
-        merged.get("state"),
-        merged.get("pin_code"),
-    ]
-    address = ", ".join(p for p in parts if p)
-    if address:
-        merged["address"] = address
-    else:
-        merged.pop("address", None)
+    _rebuild_aadhar_address_from_parts(merged)
     return merged
 
 
