@@ -11,6 +11,7 @@ import { loadAddSalesForm, saveAddSalesForm, clearAddSalesForm } from "../utils/
 import { markBulkLoadSuccess } from "../api/bulkLoads";
 import { normalizeVehicleDetails, hasVehicleData } from "../utils/vehicleDetails";
 import { StatusMessage } from "../components/StatusMessage";
+import { usePageVisible } from "../hooks/usePageVisible";
 
 function getInitialForm() {
   const d = loadAddSalesForm();
@@ -65,6 +66,7 @@ interface AddSalesPageProps {
 }
 
 export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError }: AddSalesPageProps) {
+  const pageVisible = usePageVisible();
   const [mobile, setMobile] = useState(() => getInitialForm().mobile);
   const [savedTo, setSavedTo] = useState<string | null>(() => getInitialForm().savedTo);
   const [uploadedFiles, setUploadedFiles] = useState<string[]>(() => getInitialForm().uploadedFiles);
@@ -194,8 +196,9 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError 
   }, dealerId);
 
   const pollCountRef = useRef(0);
-  const POLL_MAX = 20;
-  const POLL_INTERVAL_MS = 2000;
+  /** Fewer, slower polls to avoid hammering laptop / backend when OCR is slow. */
+  const POLL_MAX = 5;
+  const POLL_INTERVAL_MS = 10000;
 
   // Persist form state so it survives navigation; clear only on "New"
   useEffect(() => {
@@ -236,87 +239,20 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError 
      extractedCustomer.city || extractedCustomer.state || extractedCustomer.pin_code ||
      extractedCustomer.care_of || extractedCustomer.house || extractedCustomer.street || extractedCustomer.location)
   );
-  // When we have savedTo but missing vehicle or customer data, fetch once to fill Extracted Information
   const hasVehicle = hasVehicleData(extractedVehicle);
-  useEffect(() => {
-    if (!savedTo || (hasVehicle && hasCustomer)) return;
-    let cancelled = false;
-      getExtractedDetails(savedTo, dealerId)
-      .then((details) => {
-        if (cancelled) return;
-        const extractionErr = (details as Record<string, unknown>)?.extraction_error;
-        const nameMismatchErr = (details as Record<string, unknown>)?.name_mismatch_error;
-        const err = typeof nameMismatchErr === "string" ? nameMismatchErr : typeof extractionErr === "string" ? extractionErr : null;
-        setExtractionError(err);
-        const rawVehicle = details?.vehicle ?? details;
-        const normalized = normalizeVehicleDetails(rawVehicle);
-        if (normalized) setExtractedVehicle(normalized);
-        const cust = details?.customer;
-        if (cust && typeof cust === "object" && !Array.isArray(cust)) {
-          setExtractedCustomer(mapApiCustomerToExtracted(cust as Record<string, unknown>));
-        }
-        const ins = details?.insurance;
-        if (ins && typeof ins === "object" && !Array.isArray(ins)) {
-          setInsuranceReadByTextract(true);
-          const r = ins as Record<string, unknown>;
-          setExtractedInsurance((prev) => {
-            const current = prev ?? {};
-            const fromServer = {
-              profession: typeof r.profession === "string" ? r.profession : undefined,
-              financier: typeof r.financier === "string" ? r.financier : undefined,
-              marital_status: typeof r.marital_status === "string" ? r.marital_status : undefined,
-              nominee_gender: typeof r.nominee_gender === "string" ? r.nominee_gender : undefined,
-              nominee_name: typeof r.nominee_name === "string" ? r.nominee_name : undefined,
-              nominee_age: r.nominee_age != null ? String(r.nominee_age) : undefined,
-              nominee_relationship: typeof r.nominee_relationship === "string" ? r.nominee_relationship : undefined,
-              insurer: typeof r.insurer === "string" ? r.insurer : undefined,
-              policy_num: typeof r.policy_num === "string" ? r.policy_num : undefined,
-              policy_from: typeof r.policy_from === "string" ? r.policy_from : undefined,
-              policy_to: typeof r.policy_to === "string" ? r.policy_to : undefined,
-              premium: typeof r.premium === "string" ? r.premium : r.premium != null ? String(r.premium) : undefined,
-            };
-            return {
-              ...current,
-              profession: current.profession && current.profession.trim() !== "" ? current.profession : fromServer.profession,
-              financier: current.financier && current.financier.trim() !== "" ? current.financier : fromServer.financier,
-              marital_status:
-                current.marital_status && current.marital_status.trim() !== ""
-                  ? current.marital_status
-                  : fromServer.marital_status,
-              nominee_gender:
-                current.nominee_gender && current.nominee_gender.trim() !== ""
-                  ? current.nominee_gender
-                  : fromServer.nominee_gender,
-              nominee_name: current.nominee_name && current.nominee_name.trim() !== "" ? current.nominee_name : fromServer.nominee_name,
-              nominee_age: current.nominee_age && current.nominee_age.trim() !== "" ? current.nominee_age : fromServer.nominee_age,
-              nominee_relationship:
-                current.nominee_relationship && current.nominee_relationship.trim() !== ""
-                  ? current.nominee_relationship
-                  : fromServer.nominee_relationship,
-              insurer: fromServer.insurer ?? current.insurer,
-              policy_num: fromServer.policy_num ?? current.policy_num,
-              policy_from: fromServer.policy_from ?? current.policy_from,
-              policy_to: fromServer.policy_to ?? current.policy_to,
-              premium: fromServer.premium ?? current.premium,
-            };
-          });
-        }
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        const msg = err instanceof Error ? err.message : String(err);
-        setExtractionError(msg);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [savedTo, hasVehicle, hasCustomer]);
 
-  // Poll for extracted details when savedTo is set (e.g. right after upload)
+  // Poll for extracted details only while OCR is incomplete; pause when tab is in background.
   useEffect(() => {
     if (!savedTo) {
       pollCountRef.current = 0;
       setExtractionError(null);
+      return;
+    }
+    if (hasVehicle && hasCustomer) {
+      pollCountRef.current = 0;
+      return;
+    }
+    if (!pageVisible) {
       return;
     }
     pollCountRef.current = 0;
@@ -325,6 +261,7 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError 
     let intervalId: ReturnType<typeof setInterval> | null = null;
 
     const poll = async () => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
       if (pollCountRef.current >= POLL_MAX) return;
       pollCountRef.current += 1;
       try {
@@ -403,7 +340,7 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError 
     return () => {
       if (intervalId) clearInterval(intervalId);
     };
-  }, [savedTo]);
+  }, [savedTo, hasVehicle, hasCustomer, dealerId, pageVisible]);
 
   const mobileRow = (
     <div className="app-field-row">

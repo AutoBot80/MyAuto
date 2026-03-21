@@ -13,6 +13,7 @@ import { BulkLoadsPage } from "./pages/BulkLoadsPage";
 import { getDealer } from "./api/dealers";
 import { getBulkLoadPendingCount } from "./api/bulkLoads";
 import { getSiteUrls, type SiteUrls } from "./api/siteUrls";
+import { usePageVisible } from "./hooks/usePageVisible";
 
 const DEALER_ID = Number(import.meta.env.VITE_DEALER_ID) || 100001;
 
@@ -55,6 +56,7 @@ const ADMIN_PAGES: Page[] = ["admin-tools", "contact-us"];
 
 function App() {
   const today = useToday();
+  const pageVisible = usePageVisible();
   const [mode, setMode] = useState<AppMode>("home");
   const [page, setPage] = useState<Page>("add-sales");
   const [bulkLoadsPendingCount, setBulkLoadsPendingCount] = useState<number>(0);
@@ -87,14 +89,17 @@ function App() {
   };
 
   useEffect(() => {
-    if (mode === "pos") {
-      refreshBulkLoadsPendingCount();
-      const interval = setInterval(refreshBulkLoadsPendingCount, 15000);
-      return () => clearInterval(interval);
-    } else {
+    if (mode !== "pos") {
       setBulkLoadsPendingCount(0);
+      return;
     }
-  }, [mode]);
+    if (!pageVisible) {
+      return;
+    }
+    refreshBulkLoadsPendingCount();
+    const interval = setInterval(refreshBulkLoadsPendingCount, 60000);
+    return () => clearInterval(interval);
+  }, [mode, pageVisible]);
 
   // When switching mode, ensure page is in the current tab list (avoid blank screen). Must run on every render (before any early return).
   useEffect(() => {
