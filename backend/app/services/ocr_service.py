@@ -85,14 +85,61 @@ _VEHICLE_KEY_ALIASES = {
 
 # Map Textract form keys to insurance/nominee fields (from Details sheet).
 _INSURANCE_KEY_ALIASES = {
-    "profession": ["profession", "profession:", "occupation", "customer profession"],
-    "financier": ["financier", "financier name", "finance company", "bank", "financer"],
+    "profession": [
+        "profession",
+        "profession:",
+        "occupation",
+        "customer profession",
+        "employment",
+        "nature of occupation",
+        "job",
+        "customer occupation",
+    ],
+    "financier": [
+        "financier",
+        "financier name",
+        "finance company",
+        "bank",
+        "financer",
+        "financing bank",
+        "name of financier",
+        "bank / financier",
+        "financier / bank",
+        "finance bank",
+        "hypothecation",
+        "loan from",
+        "financing institution",
+    ],
     "insurer": ["insurer", "insurer name", "insurance company", "insurance provider", "company"],
     "marital_status": ["marital status", "customer marital status", "married status"],
-    "nominee_gender": ["nominee gender", "gender of nominee"],
-    "nominee_name": ["nominee name", "nominee name:", "nominee"],
-    "nominee_age": ["nominee age", "nominee age:", "age of nominee"],
-    "nominee_relationship": ["nominee relationship", "nominee relationship:", "relationship", "relation"],
+    "nominee_gender": ["nominee gender", "gender of nominee", "sex of nominee", "nominee sex"],
+    "nominee_name": [
+        "nominee name",
+        "nominee name:",
+        "nominee",
+        "name of nominee",
+        "name of the nominee",
+        "nominee's name",
+        "insurance nominee",
+        "nominee details",
+    ],
+    "nominee_age": [
+        "nominee age",
+        "nominee age:",
+        "age of nominee",
+        "nominee age (years)",
+        "age (years)",
+    ],
+    "nominee_relationship": [
+        "nominee relationship",
+        "nominee relationship:",
+        "relationship with customer",
+        "relation with proposer",
+        "relation to insured",
+        "nominee relation",
+        "relationship",
+        "relation",
+    ],
 }
 
 # Map Textract form keys to customer name on Details sheet.
@@ -107,13 +154,37 @@ _DETAILS_CUSTOMER_KEY_ALIASES = {
     "mobile_number": ["mobile number", "mobile no", "mobile", "contact number", "contact no"],
     "alt_phone_num": ["alternate", "alternate no", "alternate number", "alternate mobile", "alternate mobile number", "landline", "landline number"],
     "aadhar_id": ["aadhaar number", "aadhar number", "aadhaar no", "aadhar no", "aadhaar", "aadhar"],
-    "profession": ["profession", "occupation", "customer profession"],
+    "profession": [
+        "profession",
+        "occupation",
+        "customer profession",
+        "employment",
+        "nature of occupation",
+        "customer occupation",
+    ],
     "marital_status": ["marital status", "customer marital status"],
-    "financier": ["financier name", "financier", "financer name", "financer", "finance company", "bank"],
-    "nominee_name": ["nominee name"],
-    "nominee_age": ["nominee age", "age"],
-    "nominee_gender": ["nominee gender", "gender"],
-    "nominee_relationship": ["relation", "relationship", "nominee relation", "nominee relationship"],
+    "financier": [
+        "financier name",
+        "financier",
+        "financer name",
+        "financer",
+        "finance company",
+        "bank",
+        "financing bank",
+        "name of financier",
+        "bank / financier",
+    ],
+    "nominee_name": ["nominee name", "name of nominee", "name of the nominee", "nominee's name"],
+    "nominee_age": ["nominee age", "age of nominee", "age (years)"],
+    "nominee_gender": ["nominee gender", "gender of nominee", "sex of nominee"],
+    "nominee_relationship": [
+        "nominee relationship",
+        "nominee relation",
+        "relationship with customer",
+        "relation with proposer",
+        "relationship",
+        "relation",
+    ],
 }
 
 # Map Textract form keys for insurance policy document (Insurance.jpg).
@@ -129,6 +200,69 @@ _INSURANCE_POLICY_KEY_ALIASES = {
 def _normalize_key_for_match(key: str) -> str:
     """Lowercase and collapse spaces for key matching."""
     return re.sub(r"\s+", " ", (key or "").lower().strip())
+
+
+def _key_value_pairs_from_docx(doc_path: Path) -> tuple[list[dict[str, str]], str]:
+    """
+    Parse Word Sales Detail Sheet (.docx) into Textract-like key/value pairs.
+    AWS Textract does not accept .docx bytes; this path is used for native Word uploads.
+    """
+    try:
+        from docx import Document
+    except ImportError:
+        return [], ""
+
+    doc = Document(str(doc_path))
+    pairs: list[dict[str, str]] = []
+    text_lines: list[str] = []
+
+    for p in doc.paragraphs:
+        t = (p.text or "").strip()
+        if not t:
+            continue
+        text_lines.append(t)
+        if ":" in t:
+            left, right = t.split(":", 1)
+            lk, rv = left.strip(), right.strip()
+            if lk and rv and len(lk) <= 160 and len(rv) <= 600:
+                pairs.append({"key": lk, "value": rv})
+        elif "\t" in t:
+            parts = re.split(r"\t+", t, maxsplit=1)
+            if len(parts) == 2 and parts[0].strip() and parts[1].strip():
+                pairs.append({"key": parts[0].strip(), "value": parts[1].strip()})
+
+    for table in doc.tables:
+        for row in table.rows:
+            cells = [(c.text or "").strip() for c in row.cells]
+            if not any(cells):
+                continue
+            n = len(cells)
+            if n >= 2:
+                for i in range(0, n - 1, 2):
+                    key, val = cells[i], cells[i + 1]
+                    if key and val and key.casefold() != val.casefold():
+                        pairs.append({"key": key, "value": val})
+
+    seen: set[tuple[str, str]] = set()
+    deduped: list[dict[str, str]] = []
+    for kv in pairs:
+        k = (kv.get("key") or "").strip()
+        v = (kv.get("value") or "").strip()
+        if not k or not v:
+            continue
+        sig = (k.casefold(), v.casefold())
+        if sig in seen:
+            continue
+        seen.add(sig)
+        deduped.append({"key": k, "value": v})
+
+    full_text = "\n".join(text_lines)
+    for table in doc.tables:
+        for row in table.rows:
+            row_txt = " | ".join((c.text or "").strip() for c in row.cells)
+            if row_txt.strip():
+                full_text += "\n" + row_txt
+    return deduped, full_text
 
 
 def _sanitize_nominee_age(val: str | None) -> str | None:
@@ -323,15 +457,29 @@ def _parse_insurance_from_full_text(full_text: str) -> dict[str, str]:
     text = full_text.strip()
     # Patterns: "Label" or "Label:" followed by value on same or next line
     patterns = [
+        ("customer profession", "profession"),
+        ("profession of customer", "profession"),
         ("profession", "profession"),
+        ("occupation", "profession"),
+        ("nature of occupation", "profession"),
+        ("name of financier", "financier"),
+        ("financing bank", "financier"),
+        ("finance company", "financier"),
+        ("financier / bank", "financier"),
+        ("bank / financier", "financier"),
         ("financier", "financier"),
         ("marital status", "marital_status"),
         ("nominee gender", "nominee_gender"),
+        ("sex of nominee", "nominee_gender"),
+        ("name of the nominee", "nominee_name"),
+        ("name of nominee", "nominee_name"),
         ("nominee name", "nominee_name"),
+        ("nominee's name", "nominee_name"),
         ("nominee age", "nominee_age"),
+        ("age of nominee", "nominee_age"),
         ("nominee relationship", "nominee_relationship"),
-        ("occupation", "profession"),
-        ("relation", "nominee_relationship"),
+        ("relationship with customer", "nominee_relationship"),
+        ("relation with proposer", "nominee_relationship"),
         ("customer name", "customer_name"),
         ("buyer name", "customer_name"),
         ("buyer's name", "customer_name"),
@@ -340,14 +488,54 @@ def _parse_insurance_from_full_text(full_text: str) -> dict[str, str]:
         if key in out:
             continue
         pat = re.compile(
-            rf"{re.escape(label)}\s*:?\s*\n?\s*([^\n]+)",
-            re.IGNORECASE,
+            rf"(?im){re.escape(label)}\s*[:\t]?\s*\n?\s*([^\n]+)",
         )
         m = pat.search(text)
         if m:
             val = m.group(1).strip()
             if val and len(val) < 200:
                 out[key] = val
+
+    # Word / table layouts: label alone on one line, value on the next (e.g. "Profession" then "Farmer")
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    for i, ln in enumerate(lines):
+        low = _normalize_key_for_match(ln)
+        nxt = lines[i + 1].strip() if i + 1 < len(lines) else ""
+        if not nxt or len(nxt) > 180:
+            continue
+        if "profession" not in out and low in ("profession", "occupation", "customer profession", "employment"):
+            out["profession"] = nxt
+        if "financier" not in out and low in (
+            "financier",
+            "financing bank",
+            "name of financier",
+            "finance company",
+            "bank name",
+        ):
+            out["financier"] = nxt
+        if "nominee_name" not in out and ("nominee" in low and "name" in low) and "age" not in low:
+            out["nominee_name"] = nxt
+        if "nominee_age" not in out and low in ("nominee age", "age of nominee", "nominee age (years)"):
+            out["nominee_age"] = _sanitize_nominee_age(nxt) or nxt
+        if "nominee_gender" not in out and low in ("nominee gender", "gender of nominee", "sex of nominee"):
+            out["nominee_gender"] = nxt
+        if "nominee_relationship" not in out and low in (
+            "nominee relationship",
+            "relationship with customer",
+            "relation with proposer",
+            "relation to insured",
+        ):
+            out["nominee_relationship"] = nxt
+        same = re.match(r"(?i)^(profession|occupation|customer profession)\s+(.{1,120})$", ln)
+        if same and "profession" not in out:
+            out["profession"] = same.group(2).strip()
+        same_f = re.match(
+            r"(?i)^(financier|financing bank|name of financier)\s+(.{1,160})$",
+            ln,
+        )
+        if same_f and "financier" not in out:
+            out["financier"] = same_f.group(2).strip()
+
     return out
 
 
@@ -666,12 +854,29 @@ class OcrService:
                 AiReaderQueueRepository.update_classification(conn, qid, "Details sheet", 1.0)
                 conn.commit()
         try:
-            from app.services.textract_service import extract_forms_from_bytes
+            fn_lower = (filename or "").lower()
+            if fn_lower.endswith(".docx"):
+                key_value_pairs, docx_full = _key_value_pairs_from_docx(input_path)
+                if not key_value_pairs and not (docx_full or "").strip():
+                    raise RuntimeError(
+                        "Could not read the Word document (.docx). Ensure it is a valid .docx Sales Detail Sheet."
+                    )
+                result = {
+                    "error": None,
+                    "full_text": docx_full,
+                    "key_value_pairs": key_value_pairs,
+                }
+            elif fn_lower.endswith(".doc"):
+                raise RuntimeError(
+                    "Legacy .doc is not supported for the Details sheet. Save as .docx or export to PDF, then upload."
+                )
+            else:
+                from app.services.textract_service import extract_forms_from_bytes
 
-            document_bytes = input_path.read_bytes()
-            result = extract_forms_from_bytes(document_bytes)
-            if result.get("error"):
-                raise RuntimeError(result["error"])
+                document_bytes = input_path.read_bytes()
+                result = extract_forms_from_bytes(document_bytes)
+                if result.get("error"):
+                    raise RuntimeError(result["error"])
 
             key_value_pairs = result.get("key_value_pairs") or []
             lines = []

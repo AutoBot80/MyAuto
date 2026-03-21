@@ -19,6 +19,11 @@ ALTER TABLE customer_master
 COMMENT ON COLUMN customer_master.alt_phone_num IS 'Alternate/landline customer number from Sales Detail Sheet (Alternate)';
 
 ALTER TABLE customer_master
+  ADD COLUMN IF NOT EXISTS care_of VARCHAR(255);
+
+COMMENT ON COLUMN customer_master.care_of IS 'Care of / father or husband name from Aadhaar QR; drives DMS Father/Husband field';
+
+ALTER TABLE customer_master
   ADD COLUMN IF NOT EXISTS dms_relation_prefix VARCHAR(8),
   ADD COLUMN IF NOT EXISTS father_or_husband_name VARCHAR(255),
   ADD COLUMN IF NOT EXISTS dms_contact_path VARCHAR(16) NOT NULL DEFAULT 'found';
@@ -53,7 +58,7 @@ SELECT
     LEFT(COALESCE(vm.raw_frame_num, vm.chassis, ''), 12) AS "Frame / Chassis num (partial)",
     LEFT(COALESCE(vm.raw_engine_num, vm.engine, ''), 12) AS "Engine num (partial)",
     COALESCE(NULLIF(BTRIM(cm.dms_relation_prefix), ''), CASE WHEN LOWER(COALESCE(cm.gender, '')) IN ('f', 'female') THEN 'W/o' ELSE 'S/O' END) AS "Relation (S/O or W/o)",
-    cm.father_or_husband_name AS "Father or Husband Name",
+    COALESCE(NULLIF(BTRIM(cm.care_of), ''), cm.father_or_husband_name) AS "Father or Husband Name",
     COALESCE(BTRIM(cm.financier), '') AS "Financier Name",
     CASE WHEN COALESCE(BTRIM(cm.financier), '') <> '' THEN 'Y' ELSE 'N' END AS "Finance Required",
     COALESCE(NULLIF(BTRIM(cm.dms_contact_path), ''), 'found') AS "DMS Contact Path"

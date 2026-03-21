@@ -45,8 +45,9 @@ This document lists the current database tables and their columns. **Executable 
 | `financier` | `varchar(255)` | YES |  | Financier name captured from details sheet / insurance context |
 | `marital_status` | `varchar(32)` | YES |  | Customer marital status captured from details sheet |
 | `nominee_gender` | `varchar(16)` | YES |  | Nominee gender captured from details sheet |
+| `care_of` | `varchar(255)` | YES |  | Care of / father–husband from **Aadhaar QR**; DMS Father/Husband line and Form 20 |
 | `dms_relation_prefix` | `varchar(8)` | YES |  | DMS enquiry line: `S/O` or `W/o` (details sheet / operator) |
-| `father_or_husband_name` | `varchar(255)` | YES |  | Father or husband name for DMS relation line |
+| `father_or_husband_name` | `varchar(255)` | YES |  | Legacy only; `form_dms_view` uses `care_of` first for Father/Husband |
 | `dms_contact_path` | `varchar(16)` | NO | `'found'` | Playwright branch: `found` = CRM contact exists; `new_enquiry` = save enquiry then find again |
 | `file_location` | `text` | YES |  | File location / sub-folder name where scans are placed |
 | `gender` | `varchar(8)` | YES |  | Gender from Aadhar QR (e.g. M, F) |
@@ -433,3 +434,4 @@ This document lists the current database tables and their columns. **Executable 
 | 1.0 | Mar 2026 | Added `dealer_ref.rto_name` and seeded `RTO-Bharatpur` for dealer `100001` |
 | 1.1 | Mar 2026 | Added `customer_master.alt_phone_num` for Alternate/Landline number and mapped it to DMS/Insurance automation usage |
 | 1.2 | Mar 2026 | Added `customer_master.dms_relation_prefix`, `father_or_husband_name`, `dms_contact_path`; extended `form_dms_view`; documented `vehicle_price` as ex-showroom (Order Value) |
+| 1.3 | Mar 2026 | Added `customer_master.care_of` (Aadhaar QR); DMS Father/Husband via `form_dms_view` uses `care_of` with legacy fallback to `father_or_husband_name`; Submit Info persists `care_of` |

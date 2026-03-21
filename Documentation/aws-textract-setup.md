@@ -1,6 +1,6 @@
 # AWS Textract for Details Sheet
 
-The **AI Reader Queue** pipeline uses **AWS Textract in forms mode only** to scan the **Details sheet** (e.g. `Details.jpg`). Aadhar scans are not processed by this pipeline; separate Python code will handle Aadhar later.
+The **AI Reader Queue** pipeline uses **AWS Textract in forms mode** to scan the **Details sheet** when the file is an **image or PDF** (e.g. `Details.jpg`). **Native Word `.docx`** uploads are parsed with **python-docx** (tables + `Label: Value` paragraphs) because Textract **does not** accept `.docx` bytes. Legacy **`.doc`** is rejected with a clear error (save as `.docx` or PDF). Aadhar scans use QR decode, not Textract.
 
 **Languages:** Textract supports **English, French, German, Italian, Portuguese, Spanish** only. **Hindi is not supported.**
 

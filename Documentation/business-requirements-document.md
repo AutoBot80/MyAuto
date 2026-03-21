@@ -130,7 +130,7 @@ This section defines the required operator navigation path and minimum field-ent
 | Vehicle Search | Key num (partial) | `form_dms_view` |
 | Vehicle Search | Frame / Chassis num (partial) | `form_dms_view` |
 | Vehicle Search | Engine num (partial) | `form_dms_view` |
-| Enquiry | Relation (S/O or W/o), Father/Husband name | `form_dms_view` (`customer_master`) |
+| Enquiry | Relation (S/O or W/o), Father/Husband name | `form_dms_view` — from `customer_master.care_of` (Aadhaar QR), else legacy `father_or_husband_name` |
 | Enquiry | Financier / Finance Required (invoicing line) | `form_dms_view` (`customer_master.financier`) |
 | Enquiry | New vs existing CRM contact | `form_dms_view` (`"DMS Contact Path"`: `found` / `new_enquiry`) |
 | Invoicing line | Order Value (Ex-showroom) | Scraped from DMS vehicle grid → `vehicle_master.vehicle_price` |
@@ -144,7 +144,7 @@ This section defines the required operator navigation path and minimum field-ent
 
 - Insurance data captured in Submit Info must map to persisted DB columns before any downstream automation:
   - `insurance_master`: insurer, policy number, policy dates, premium, nominee fields.
-  - `customer_master`: `profession`, `financier`, `marital_status`, `nominee_gender`, `dms_relation_prefix`, `father_or_husband_name`, `dms_contact_path` captured with details-sheet / DMS automation context in Add Sales.
+  - `customer_master`: `profession`, `financier`, `marital_status`, `nominee_gender`, `care_of` (Aadhaar QR care-of / father–husband), `dms_relation_prefix`, `dms_contact_path` captured with details-sheet / DMS automation context in Add Sales (`father_or_husband_name` is legacy only).
 
 ### 6.5 Insurance Navigation Sequence (Video-Aligned)
 

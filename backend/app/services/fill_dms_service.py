@@ -396,9 +396,9 @@ def _write_data_from_dms(ocr_output_dir: Path, subfolder: str, customer: dict, v
     rel = customer.get("relation_prefix") or customer.get("dms_relation_prefix")
     if rel:
         lines.append(f"Relation (S/O or W/o): {rel}")
-    fath = customer.get("father_or_husband_name")
+    fath = customer.get("care_of") or customer.get("father_or_husband_name")
     if fath:
-        lines.append(f"Father / Husband name: {fath}")
+        lines.append(f"Care of / Father–Husband (Aadhaar QR): {fath}")
 
     lines.append("")
     lines.append("--- Vehicle (from DMS search result) ---")
@@ -660,6 +660,7 @@ def _build_dms_fill_values(customer_id: int | None, vehicle_id: int | None, subf
             "mobile_number": _clean_text(row.get("Mobile Phone #")),
             "alt_phone_num": _clean_text(row.get("Landline #")),
             "relation_prefix": relation_prefix,
+            "care_of": _clean_text(row.get("Father or Husband Name")),
             "father_or_husband_name": _clean_text(row.get("Father or Husband Name")),
             "finance_required": finance_required,
             "financier_name": _clean_text(row.get("Financier Name")),

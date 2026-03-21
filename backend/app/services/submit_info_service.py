@@ -91,7 +91,7 @@ def submit_info(
     marital_status = _str_or_none(customer.get("marital_status"), 32)
     nominee_gender = _str_or_none(customer.get("nominee_gender"), 16)
     dms_relation_prefix = _str_or_none(customer.get("dms_relation_prefix"), 8)
-    father_or_husband_name = _str_or_none(customer.get("father_or_husband_name"), 255)
+    care_of = _str_or_none(customer.get("care_of"), 255)
     dms_contact_path = _str_or_none(customer.get("dms_contact_path"), 16) or "found"
     if dms_contact_path.lower() not in ("found", "new_enquiry"):
         dms_contact_path = "found"
@@ -150,7 +150,7 @@ def submit_info(
                         alt_phone_num = %s,
                         gender = %s, date_of_birth = %s, profession = %s,
                         financier = %s, marital_status = %s, nominee_gender = %s,
-                        dms_relation_prefix = %s, father_or_husband_name = %s, dms_contact_path = %s,
+                        dms_relation_prefix = %s, dms_contact_path = %s, care_of = %s,
                         file_location = %s
                     WHERE customer_id = %s
                     """,
@@ -168,8 +168,8 @@ def submit_info(
                         marital_status,
                         nominee_gender,
                         dms_relation_prefix,
-                        father_or_husband_name,
                         dms_contact_path,
+                        care_of,
                         loc,
                         customer_id,
                     ),
@@ -181,7 +181,7 @@ def submit_info(
                         aadhar, name, address, pin, city, state, mobile_number,
                         alt_phone_num,
                         profession, financier, marital_status, nominee_gender,
-                        dms_relation_prefix, father_or_husband_name, dms_contact_path,
+                        dms_relation_prefix, dms_contact_path, care_of,
                         file_location, gender, date_of_birth
                     )
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -201,8 +201,8 @@ def submit_info(
                         marital_status,
                         nominee_gender,
                         dms_relation_prefix,
-                        father_or_husband_name,
                         dms_contact_path,
+                        care_of,
                         loc,
                         gender,
                         date_of_birth,

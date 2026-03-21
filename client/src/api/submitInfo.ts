@@ -17,6 +17,8 @@ export interface SubmitInfoPayload {
     financier?: string;
     marital_status?: string;
     nominee_gender?: string;
+    /** Aadhaar QR care-of (father/husband); stored as customer_master.care_of */
+    care_of?: string;
     file_location?: string | null;
   };
   vehicle: {
@@ -66,6 +68,7 @@ function mapCustomer(
     financier: insurance?.financier,
     marital_status: insurance?.marital_status,
     nominee_gender: insurance?.nominee_gender,
+    care_of: c?.care_of,
     file_location: fileLocation ?? undefined,
   };
 }

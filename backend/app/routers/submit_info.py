@@ -23,6 +23,7 @@ class CustomerPayload(BaseModel):
     financier: str | None = None
     marital_status: str | None = None
     nominee_gender: str | None = None
+    care_of: str | None = None  # Aadhaar QR care-of; DMS Father/Husband + Form 20
     file_location: str | None = None
 
 

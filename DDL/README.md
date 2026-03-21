@@ -48,6 +48,7 @@ One-off changes (e.g. new columns) go in **`DDL/alter/`**. Run against an existi
 - `02a_customer_master_add_file_location.sql` — adds `file_location` to customer_master.
 - `02b_customer_master_customer_id_pk.sql` — adds `customer_id` as PK, aadhar last 4 only, unique (aadhar, phone); migrates sales_master to customer_id FK.
 - `02c_customer_master_add_gender_dob.sql` — adds `gender`, `date_of_birth` to customer_master (for QR/Aadhar granular data).
+- `02j_customer_master_add_care_of.sql` — adds `care_of` (Aadhaar QR care-of / father–husband) for DMS and Form 20.
 - `03a_vehicle_master_add_model_colour.sql` — adds `model` and `colour` (VARCHAR 64) to vehicle_master.
 - `03i_vehicle_master_unique_engine_chassis.sql` — vehicle_master: add unique index on (engine, chassis) when both are non-empty.
 - `04b_rename_dealer_master_to_dealer_ref_and_oem.sql` — creates `oem_ref`, renames `dealer_master` to `dealer_ref`, replaces `dealer_of` with `oem_id` (FK to oem_ref).
