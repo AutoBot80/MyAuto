@@ -49,6 +49,9 @@ The system is a server–client application for auto dealers. Dealers run a ligh
 | BR-11 | Admin data reset preservation | Admin-triggered data reset must preserve `oem_ref`, `dealer_ref`, and `oem_service_schedule` while clearing all other public base tables. |
 | BR-12 | Operator-assisted browser session requirement | DMS and Vahan automation should first reuse already open, logged-in site tabs; when no detectable tab is available, the system should open Edge/Chrome for the operator and ask the operator to complete login (first-time) before retrying automation. |
 | BR-13 | Automation value discipline | Playwright must never assume, infer, remember, or default fill values for DMS/Vahan fields. Values sent to site fields must come directly from DB-backed views (`form_dms_view`, `form_vahan_view`) and persisted records only. |
+| BR-14 | DMS booking test budget | Dummy / training DMS flow uses a fixed **customer budget / enquiry amount of 89000** for booking generation unless the business replaces this constant in automation. |
+| BR-15 | Ex-showroom vs column name | **Order Value / ex-showroom** from DMS is persisted as `vehicle_master.vehicle_price` (no separate `vehicle_cost` column). Labels in exports and dummy UI read **Ex-showroom Price**. |
+| BR-16 | Create Invoice operator-only | DMS Playwright must not click **Create Invoice**; the operator completes invoicing, then may re-run automation after the invoice step. |
 
 ---
 
@@ -77,7 +80,7 @@ The system is a server–client application for auto dealers. Dealers run a ligh
 - **FR-15** Run Playwright workers that log into external portals and submit data from database-backed views and records.
 - **FR-16** Persist all business data in PostgreSQL with clear ownership (e.g. dealer_id) for multi-tenant use.
 - **FR-17** Submit Info: upsert customer_master, vehicle_master, sales_master, insurance_master from extracted/entered data.
-- **FR-18** Fill DMS: Playwright login to OEM DMS, read fill values only from `form_dms_view`, search vehicle, scrape data, download Form 21/22, write `DMS_Form_Values.txt` into the matching `ocr_output` subfolder, and update vehicle_master from scraped data.
+- **FR-18** Fill DMS: Playwright login to OEM DMS, read fill values only from `form_dms_view`, run the agreed enquiry → stock/PDI → vehicle search → allocate → invoicing-line (no Create Invoice) → report download sequence on the dummy/real DMS, scrape vehicle row (**ex-showroom** into `vehicle_price`), download Form 21/22 and GST invoice sheet PDF, write traces into `ocr_output`, and update `vehicle_master` from scraped data.
 - **FR-18a** Existing tab reuse with operator fallback: DMS/Vahan steps first reuse already open logged-in tabs; if none are detectable, API opens Edge/Chrome to the target site and returns a user-facing message asking the operator to login (first-time) and retry.
 - **FR-18b** Insurance fill step: Playwright fills Insurance portal fields from persisted DB records only, reuses an already open logged-in insurance tab (or opens browser and asks operator to login first-time), does not click final issue/submit, and keeps the browser open for operator review.
 - **FR-19** Form 20: Generate Form 20.pdf from Word template (or PDF overlay / HTML fallback); fill placeholders from customer, vehicle, dealer; output combined PDF (front, back, page 3).
@@ -127,6 +130,10 @@ This section defines the required operator navigation path and minimum field-ent
 | Vehicle Search | Key num (partial) | `form_dms_view` |
 | Vehicle Search | Frame / Chassis num (partial) | `form_dms_view` |
 | Vehicle Search | Engine num (partial) | `form_dms_view` |
+| Enquiry | Relation (S/O or W/o), Father/Husband name | `form_dms_view` (`customer_master`) |
+| Enquiry | Financier / Finance Required (invoicing line) | `form_dms_view` (`customer_master.financier`) |
+| Enquiry | New vs existing CRM contact | `form_dms_view` (`"DMS Contact Path"`: `found` / `new_enquiry`) |
+| Invoicing line | Order Value (Ex-showroom) | Scraped from DMS vehicle grid → `vehicle_master.vehicle_price` |
 
 ### 6.3 Vahan Fields to Fill (Minimum Contract)
 
@@ -137,7 +144,7 @@ This section defines the required operator navigation path and minimum field-ent
 
 - Insurance data captured in Submit Info must map to persisted DB columns before any downstream automation:
   - `insurance_master`: insurer, policy number, policy dates, premium, nominee fields.
-  - `customer_master`: `profession`, `financier`, `marital_status`, and `nominee_gender` captured with details-sheet/insurance context in Add Sales.
+  - `customer_master`: `profession`, `financier`, `marital_status`, `nominee_gender`, `dms_relation_prefix`, `father_or_husband_name`, `dms_contact_path` captured with details-sheet / DMS automation context in Add Sales.
 
 ### 6.5 Insurance Navigation Sequence (Video-Aligned)
 
@@ -152,14 +159,18 @@ This section defines the required operator navigation path and minimum field-ent
 
 | Insurance page | Label | Required source (DB-backed) | Persisted DB column |
 |----------------|-------|------------------------------|---------------------|
-| KYC | Insurance Company | Dealer-configured insurer mapping | `insurance_master.insurer` |
+| KYC | Insurance Company | Details-sheet / policy **insurance provider** name (fuzzy-matched to portal options) | `insurance_master.insurer` |
 | KYC | KYC Partner | Dealer-configured onboarding value | Reference/config (runtime choice, not persisted in current schema) |
-| KYC | Proposer Type | Customer legal type | derived from `customer_master` context (current default: Individual) |
+| KYC | Proposer Type | Portal default | Dummy/default **Individual**; Playwright does not change tenure/proposer selects |
 | KYC | OVD Type | Document type from scan set | derived from uploaded docs metadata |
 | KYC | Mobile No. | Customer mobile | `customer_master.mobile_number` |
 | KYC | AADHAAR Front/Rear Image | Uploaded scan artifacts | `uploads/<dealer>/<subfolder>/` files |
 | KYC | Customer Photo | Uploaded scan artifacts | `uploads/<dealer>/<subfolder>/` files |
 | MisDMS Entry | VIN Number | Vehicle chassis/frame | `vehicle_master.chassis` (or raw frame column) |
+| New Policy | Insurance Company* | Same as KYC: fuzzy-match to details insurer | `insurance_master.insurer` |
+| New Policy | Policy Tenure | Portal default | Dummy option only; Playwright does not set |
+| New Policy | Manufacturer* | OEM / make (fuzzy-matched to portal options) | `vehicle_master.oem_name`, else dealer `oem_ref.oem_name` |
+| New Policy | Proposer Type* | Portal default | Dummy **Individual**; Playwright does not set |
 | New Policy | Proposer Name | Customer name | `customer_master.name` |
 | New Policy | Gender | Customer gender | `customer_master.gender` |
 | New Policy | Date of Birth | Customer DOB | `customer_master.dob` |
@@ -267,3 +278,4 @@ Bulk upload automates the ingestion of scanned documents from a shared folder in
 | 1.5 | Mar 2026 | — | Added Insurance Playwright functional rule: DB-only fill, operator-login fallback, no final submit click, and browser session kept open |
 | 1.6 | Mar 2026 | — | Updated Add Sales UI action flow to separate `Fill DMS`, `Fill Insurance`, and bottom `Print Forms` trigger |
 | 1.7 | Mar 2026 | — | Added Alternate/Landline field contract: capture from details sheet, persist as `customer_master.alt_phone_num`, and use for DMS/Insurance landline fills |
+| 1.8 | Mar 2026 | — | Extended DMS Playwright sequence (enquiry/stock/PDI/allocate/invoicing line), ex-showroom → `vehicle_price`, operator-only Create Invoice, BR-14–BR-16, and `form_dms_view` / customer DMS fields |

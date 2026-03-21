@@ -6,16 +6,20 @@ Local mock sites used to develop and test Playwright automation (form fill, navi
 
 ## DMS (Dealer Management System)
 
-Layout and labels now mirror the operator video flow: Hero Connect login -> Oracle Siebel Vehicle Sales/Line Items -> Auto Vehicle List/PDI -> MISP/Partner Login.
+Shell matches **Hero Connect / Oracle Siebel eDealer** (`edealerHMCL`) from the **DMS Process Video**: shared chrome (`dms-layout.css`), **Find** saved-query strip, and top tabs — **Home**, **My Dashboard**, **Payments**, **Vehicles**, **Enquiry**, **Vehicle Sales Invoices**, **Vehicles Receipt**, **Vehicles Inventory**, **Vehicle Sales**.
 
 - **Base URL** (when backend is running): `http://localhost:8000/dummy-dms/`
-- **Login**: `index.html` — Hero Connect style login (`User ID`, `Password`, `Remember my User ID`); any credentials accepted.
-- **My Vehicle Sales**: `my-sales.html` — sales list and action labels (`Create Invoice`, `Send Email`, `ReSend SMS`, `Apply Campaign`).
-- **Line Items**: `line-items.html` — invoice/detail view and transition to Vehicle.
-- **Vehicle List**: `vehicle.html` — `Auto Vehicle List` with existing search/result selectors used by Playwright.
-- **PDI**: `pdi.html` — `Auto Vehicle PDI Assessment` labels/tabs and submit transition.
-- **MISP / Partner Login**: `reports.html` — MISP dashboard labels and partner-login context, with report downloads.
-- **View / Print invoice**: link "View / Print invoice" navigates to `invoice.html`. On that page you can use **Print** (browser print dialog) or **Download PDF** for the basic invoice PDF.
+- **Styles**: `dms-layout.css` — Siebel-grey header, green active tab, sub-tabs, inner tabs row.
+- **Login**: `index.html` — **User ID**, **Password**, **Remember my User ID**; submits to **`enquiry.html`** (dummy skips real SSO).
+- **Enquiry**: `enquiry.html` — **Contact finder** (`#dms-contact-finder-go`, `sessionStorage dummy_dms_expect=new` for “not found”); **Register new enquiry**; **Relation (S/O or W/o)**, **Father / Husband name**; **Save enquiry (Playwright)** (`#dms-save-enquiry-quiet`); **Generate Booking** (sets `data-dms-booking-done`, validates **Booking Order Type\***); **Allocate vehicle** (`#dms-allocate-vehicle`); **Financier Name** as text field; same core IDs (`#dms-contact-first-name`, …).
+- **Vehicle Sales**: `my-sales.html` — sub-tabs **Sales Orders Home | Invoice | Rural Vertical Mismatch | Delivery Challan**; toolbar **Create Invoice**, **Cancel Booking**, **Validate Offer**, **WOT Details**, **Verify OTP**, **Validate GL Voucher**; **My Vehicle Sales** list.
+- **Invoice / order line**: `line-items.html` — inner tabs **Allotment | Invoices | New Payments | Contact Email | Booking Follow-Up | Corporate Identity | Document Upload | Sanction Details | More Info**; order header **Order:**, **Finance Required**, **Financer**, **Hypothecation**, **Order Value**; **Allotment** line + link to vehicle search.
+- **Auto Vehicle List (Allotment)**: `vehicle.html` — same **Key / Frame / Engine** search and `#dms-vehicle-results-table` as before (Playwright scrape contract unchanged).
+- **Vehicles (vehicle record)**: `vehicles.html` — **eAuto Vehicle Features View**; **Insurance** (Company, Policy #, Policy Expiry Date, BAAS), connectivity / service fields; inner tab labels **Contacts | PDI | Features and Image | …**.
+- **Contacts / Payments**: `contacts-payments.html` — **Contact Site Payments View**; **Payment Lines**, **Transaction Amount**, **Account\***, **Payment Details – Cash**.
+- **PDI**: `pdi.html` — **Complete PDI** `#dms-pdi-complete` (same inner tab strip as Vehicles).
+- **Reports / Run Report**: `reports.html` — **Report Name**, **Output Type** (PDF), **Submit**; downloads **Form 21 / 22 / Invoice Details** (`#dms-reports-form21`, `#dms-reports-form22`, `#dms-reports-invoice-details`).
+- **View / Print invoice**: `invoice.html` — print / dummy invoice PDF + **GST Invoice sheet** link (`downloads/invoice_details.pdf`).
 
 ### Run
 
@@ -49,10 +53,10 @@ KYC -> KYC success redirect -> MisDMS VIN entry -> New Policy - Two Wheeler.
 
 - **Base URL** (when backend is running): `http://localhost:8000/dummy-insurance/`
 - **Login/Redirect**: `index.html` -> `kyc.html`
-- **KYC**: `kyc.html` — insurer, KYC partner, proposer type, OVD type, mobile, Aadhaar front/rear, customer photo, consent, and proceed.
+- **KYC**: `kyc.html` — enter **Mobile No.** and click **Verify mobile**. If **KYC found** (demo: `9694585832`), proceed with consent only. If **KYC not found**, upload **Aadhaar front**, **Aadhaar rear**, and for **Customer Photo** use the **Aadhaar front** file again, then consent and **Proceed**. Playwright mirrors this (tiny PNG placeholders when uploads are required).
 - **KYC Success**: `kyc-success.html` — auto-redirects to MisDMS in 2 seconds.
-- **MisDMS Entry**: `dms-entry.html` — left-menu labels + VIN entry and proceed.
-- **New Policy**: `policy.html` — proposer, address, vehicle, nominee, financer, add-on, payment sections.
+- **MisDMS Entry**: `dms-entry.html` — VIN / Frame field is the **chassis number** (same as from DMS).
+- **New Policy**: `policy.html` — **Ex-Showroom (DMS cost)** maps to vehicle price scraped from DMS (`vehicle_master.vehicle_price`). **Insurance company** and **manufacturer** dropdowns include multiple labels; Playwright **fuzzy-matches** DB insurer (details sheet) and OEM name (`vehicle_master.oem_name` / dealer `oem_ref`). **Policy tenure** and **proposer type** stay as page defaults. **Issue Policy** (`#ins-issue-policy`) is operator-only; Playwright does not click it.
 - **Issue Result (dummy)**: `issued.html` — simulated policy-issued page.
 
 Notes:

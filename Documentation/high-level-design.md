@@ -132,7 +132,7 @@ My Auto.AI/
 1. User uploads scans → `uploads/scans` → ai_reader_queue.
 2. OCR processes queue → extracted text stored.
 3. User reviews/corrects → Submit Info → customer_master, vehicle_master, sales_master, insurance_master.
-4. Fill DMS → Playwright loads DMS field values from `form_dms_view`, reuses an already open DMS tab when detectable, or opens Edge/Chrome and asks operator login on first-time, then fills/scrapes vehicle data, stores DMS artifacts in `ocr_output`, and updates `vehicle_master`.
+4. Fill DMS → Playwright loads DMS field values from `form_dms_view`, reuses an already open DMS tab when detectable, or opens Edge/Chrome and asks operator login on first-time, then runs enquiry/stock/PDI/vehicle scrape/allocate/invoicing-line (without Create Invoice), stores DMS artifacts in `ocr_output`, and updates `vehicle_master` (ex-showroom → `vehicle_price`).
 5. Print Form 20 → `form20_service` fills the Word template, converts to PDF, and saves Form 20.pdf / Gate Pass.pdf in the upload subfolder.
 6. RTO queue insertion → Fill Forms stores Form 20 outputs, estimates the RTO fees, and inserts an `rto_queue` row instead of auto-running the dummy Vahan flow.
 7. RTO Queue → operators review queued rows in `RTO Saathi`, process the oldest 7 rows by reusing already open Vahan tabs (or auto-opened Edge/Chrome tabs when unavailable), and wait for live progress up to the upload/cart checkpoint.
@@ -292,3 +292,4 @@ This section defines database-to-label mapping contracts for DMS, Insurance, and
 | 1.1 | Mar 2026 | — | Added Insurance Playwright behavior contract: login fallback/open-browser, DB-only field fill, no final submit click, and session kept open |
 | 1.2 | Mar 2026 | — | Updated Add Sales interaction model to split DMS/Insurance/Print actions into separate operator controls |
 | 1.3 | Mar 2026 | — | Added Alternate/Landline mapping (`customer_master.alt_phone_num`) into DMS and Insurance label mapping contracts |
+| 1.4 | Mar 2026 | — | Fill DMS flow: extended enquiry/stock/PDI/allocate/invoicing-line sequence; ex-showroom stored as `vehicle_price`; no auto Create Invoice |

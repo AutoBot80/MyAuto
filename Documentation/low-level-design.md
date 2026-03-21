@@ -123,22 +123,21 @@ backend/app/
 
 - **Static site:** `dummy-sites/vaahan/` simulates the real VAHAN navigation used by Playwright tests.
 - **Pages:** landing/start (`index.html`) → owner/details entry (`application.html`) → assigned office/worklist (`search.html`) → payment gateway (`payment.html`) → bank login (`bank-login.html`) → bank confirmation (`bank-confirm.html`).
-- **Automation contract:** `fill_dms_service.py` reads DMS field values only from `form_dms_view`, writes `ocr_output/<dealer>/<subfolder>/DMS_Form_Values.txt`, and updates `vehicle_master` with the DMS scrape (including `vehicle_price`). DMS/Vahan automation first attempts to reuse already open logged-in tabs; if no matching detectable tab is available, backend auto-opens Edge/Chrome to the target site and returns an operator message to login first-time and retry. The Add Sales page stops on that message and avoids downstream processing, then resumes normally on retry.
+- **Automation contract:** `fill_dms_service.py` reads DMS field values only from `form_dms_view`, writes `ocr_output/<dealer>/<subfolder>/DMS_Form_Values.txt`, and updates `vehicle_master` with the DMS scrape. The **Order Value / ex-showroom** amount from the vehicle grid is stored in `vehicle_master.vehicle_price` (same column; UI label is ex-showroom). DMS/Vahan automation first attempts to reuse already open logged-in tabs; if no matching detectable tab is available, backend auto-opens Edge/Chrome to the target site and returns an operator message to login first-time and retry. The Add Sales page stops on that message and avoids downstream processing, then resumes normally on retry.
 
 ### 2.4b Dummy DMS Flow
 
-- **Static site:** `dummy-sites/dms/` simulates the OEM DMS journey used by Playwright tests.
-- **Pages:** Hero Connect login (`index.html`) → My Vehicle Sales (`my-sales.html`) → Line Items (`line-items.html`) → Auto Vehicle List (`vehicle.html`) → Auto Vehicle PDI Assessment (`pdi.html`) → MISP / Partner Login + reports/downloads (`reports.html`).
-- **Automation contract:** `fill_dms_service.py` requires `customer_id` and `vehicle_id`, loads DMS field values from `form_dms_view`, fills only those view-backed values into a detectable logged-in DMS tab (or prompts first-time login after auto-opening browser when tab is unavailable), scrapes the first vehicle result row, persists the scrape into `vehicle_master`, and writes `Data from DMS.txt` plus `DMS_Form_Values.txt` into the matching `ocr_output` subfolder.
+- **Static site:** `dummy-sites/dms/` simulates **Hero Connect / Oracle Siebel eDealer** (tabs and sub-tabs aligned to the DMS Process Video). Shared chrome: `dms-layout.css` (Siebel header, **Find** bar, main module tabs, sub-tabs, inner tab rows).
+- **Pages:** Login (`index.html` → `enquiry.html`) → **Enquiry / My Enquiries** (`enquiry.html`) → **Vehicle Sales / My Vehicle Sales** (`my-sales.html`) → **Invoice / Allotment** (`line-items.html`) → **Auto Vehicle List** (`vehicle.html`) → **Vehicles** record view (`vehicles.html`) → **Contacts / Payments** (`contacts-payments.html`) → **PDI** (`pdi.html`) → **Run Report** + downloads (`reports.html`) → optional **invoice** (`invoice.html`).
+- **Automation contract:** `fill_dms_service.py` requires `customer_id` and `vehicle_id`, loads DMS field values from `form_dms_view`, and drives the dummy DMS in order: **Enquiry** (contact find or `new_enquiry` path via `"DMS Contact Path"`, S/O or W/o + father/husband, customer budget **89000**, generate booking) → **Vehicles** (receive In-Transit, PreCheck) → **PDI** (complete) → **Auto Vehicle List** (search, scrape first row; ex-showroom → `vehicle_price`) → **Enquiry** (allocate) → **Invoice line** (order value + finance fields; **does not** click Create Invoice) → **Reports** (download Form 21, 22, invoice sheet PDFs). Tab reuse and operator **Create Invoice** gate behave as before (`#dms-line-create-invoice` counts as pending operator action).
 
 ### 2.4c Dummy Insurance Flow
 
 - **Static site:** `dummy-sites/insurance/` simulates the insurance issuance journey from the operator video.
-- **Pages:** login redirection (`index.html`) -> KYC verification (`kyc.html`) -> KYC success redirect (`kyc-success.html`) -> MisDMS VIN entry (`dms-entry.html`) -> New Policy (`policy.html`) -> issue-result (`issued.html`).
+- **Pages:** login redirection (`index.html`) -> KYC verification (`kyc.html`) -> KYC success redirect (`kyc-success.html`) -> MisDMS VIN entry (`dms-entry.html`, VIN/Frame = chassis from DMS) -> New Policy (`policy.html`, Ex-Showroom = DMS cost / `vehicle_price`, `#ins-issue-policy` for manual issue only) -> issue-result (`issued.html`).
 - **Serve path:** `main.py` mounts this directory at `/dummy-insurance`.
 - **Video-label parity:** top-level labels mirror observed strings (`Hero INSURANCE BROKING`, `HIBIPL - MisDMS Entry`, `New Policy - Two Wheeler`), including key menu items and KYC controls.
-- **Current scope:** UI and navigation parity only (no backend insurance Playwright automation endpoint yet).
-- **Automation contract:** Insurance Playwright uses persisted DB values only (`customer_master`, `vehicle_master`, `insurance_master`, `dealer_ref` mapping), fills policy fields, writes `Insurance_Form_Values.txt`, does not click final submit, and keeps the operator browser session open.
+- **Automation contract:** Insurance Playwright uses persisted DB values (`customer_master`, `vehicle_master`, `insurance_master`, `dealer_ref` / `oem_ref`). **Insurance company** options are **fuzzy-matched** to `insurance_master.insurer` (details-sheet / policy provider). **Manufacturer** is fuzzy-matched to `vehicle_master.oem_name` with fallback to the dealer’s **`oem_ref.oem_name`**. **Policy tenure** and **proposer type** keep the dummy page defaults (not driven by Playwright). KYC includes **Verify mobile** and conditional uploads when `need_docs`; does not click Issue Policy; writes `Insurance_Form_Values.txt`.
 
 ### 2.5 Database Access
 
@@ -216,3 +215,4 @@ See **Documentation/Database DDL.md** for full table structures. Summary:
 | 0.8 | Mar 2026 | — | Added dummy insurance site architecture/flow (`/dummy-insurance`) aligned to operator video navigation and labels |
 | 0.9 | Mar 2026 | — | Added `/fill-dms/insurance` endpoint and Insurance Playwright contract (DB-only fill, no final submit click, keep browser open, operator-login fallback) |
 | 1.0 | Mar 2026 | — | Updated OCR details-sheet mapping for A5 Sales Detail Sheet labels and merge behavior into AI-extracted customer/insurance fields |
+| 1.1 | Mar 2026 | — | Extended dummy DMS Playwright flow (enquiry/stock/PDI/allocate/line-items) and ex-showroom → `vehicle_price` contract |

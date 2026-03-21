@@ -5,6 +5,8 @@ Uses Chromium (faster launch). Requires: pip install playwright && playwright in
 Uses headed browser by default (set DMS_PLAYWRIGHT_HEADED=false for headless).
 Writes pulled data to ocr_output/subfolder/Data from DMS.txt for consistency with other OCR outputs.
 """
+import base64
+import difflib
 import logging
 import os
 import re
@@ -22,6 +24,74 @@ from app.repositories import form_vahan as form_vahan_repo
 from app.db import get_connection
 
 logger = logging.getLogger(__name__)
+
+# 1x1 PNG for dummy insurance KYC uploads (when mobile has no on-file KYC).
+_MIN_PNG_BYTES = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+)
+
+def _insurance_kyc_png_payloads() -> list[dict]:
+    return [
+        {"name": "aadhar_front.png", "mimeType": "image/png", "buffer": _MIN_PNG_BYTES},
+        {"name": "aadhar_rear.png", "mimeType": "image/png", "buffer": _MIN_PNG_BYTES},
+        {"name": "customer_photo_aadhar_front.png", "mimeType": "image/png", "buffer": _MIN_PNG_BYTES},
+    ]
+
+
+def _normalize_for_fuzzy_match(s: str) -> str:
+    return re.sub(r"\s+", " ", (s or "").lower().strip())
+
+
+def _fuzzy_best_option_label(query: str, candidates: list[str], *, min_score: float = 0.42) -> str | None:
+    """
+    Pick dropdown option label best matching query (insurer from details sheet / OEM name).
+    Uses SequenceMatcher + Jaccard on word tokens + substring boost.
+    """
+    if not candidates:
+        return None
+    q = _normalize_for_fuzzy_match(query)
+    if not q:
+        return candidates[0].strip() or candidates[0]
+    q_words = set(w for w in q.split() if len(w) >= 2)
+    best_label = (candidates[0] or "").strip()
+    best_score = 0.0
+    for raw in candidates:
+        c = (raw or "").strip()
+        if not c:
+            continue
+        cn = _normalize_for_fuzzy_match(c)
+        score = difflib.SequenceMatcher(None, q, cn).ratio()
+        c_words = set(w for w in cn.split() if len(w) >= 2)
+        if q_words and c_words:
+            inter = len(q_words & c_words)
+            union = len(q_words | c_words) or 1
+            score = max(score, (inter / union) * 0.98)
+        if len(q) >= 4 and (q in cn or cn in q):
+            score = max(score, 0.88)
+        if score > best_score:
+            best_score = score
+            best_label = c
+    if best_score < min_score:
+        return (candidates[0] or "").strip() or None
+    return best_label
+
+
+def _insurance_select_fuzzy(page, select_selector: str, query: str) -> str | None:
+    """Set <select> to option whose label best matches query; returns chosen label or None."""
+    opts = page.locator(f"{select_selector} option")
+    n = opts.count()
+    labels: list[str] = []
+    for i in range(n):
+        t = (opts.nth(i).inner_text() or "").strip()
+        if t:
+            labels.append(t)
+    if not labels:
+        return None
+    picked = _fuzzy_best_option_label(query, labels)
+    if picked:
+        page.select_option(select_selector, label=picked)
+    return picked
+
 
 _PW = None
 _PW_THREAD_ID: int | None = None
@@ -190,9 +260,14 @@ def _requires_operator_create_invoice(page) -> bool:
     """Detect whether the current DMS page is asking operator to click Create Invoice."""
     try:
         btn = page.get_by_role("button", name=re.compile(r"create\s*invoice", re.IGNORECASE))
-        return btn.count() > 0 and btn.first.is_visible()
+        if btn.count() > 0 and btn.first.is_visible():
+            return True
+        line_btn = page.locator("#dms-line-create-invoice")
+        if line_btn.count() > 0 and line_btn.first.is_visible():
+            return True
     except Exception:
         return False
+    return False
 
 
 def _fill_vahan_and_scrape(
@@ -318,6 +393,12 @@ def _write_data_from_dms(ocr_output_dir: Path, subfolder: str, customer: dict, v
         lines.append(f"{label}: {(val or '').strip() or '—'}")
     mobile = customer.get("mobile_number") or customer.get("mobile")
     lines.append(f"Mobile: {mobile or '—'}")
+    rel = customer.get("relation_prefix") or customer.get("dms_relation_prefix")
+    if rel:
+        lines.append(f"Relation (S/O or W/o): {rel}")
+    fath = customer.get("father_or_husband_name")
+    if fath:
+        lines.append(f"Father / Husband name: {fath}")
 
     lines.append("")
     lines.append("--- Vehicle (from DMS search result) ---")
@@ -333,13 +414,106 @@ def _write_data_from_dms(ocr_output_dir: Path, subfolder: str, customer: dict, v
         ("Vehicle type", "vehicle_type"),
         ("Num cylinders", "num_cylinders"),
         ("Horsepower", "horse_power"),
-        ("Vehicle price", "vehicle_price"),
+        ("Ex-showroom Price (Order Value)", "vehicle_price"),
         ("Year of Mfg", "year_of_mfg"),
     ]:
         val = vehicle.get(key)
         lines.append(f"{label}: {(val or '').strip() or '—'}")
 
     path.write_text("\n".join(lines), encoding="utf-8")
+
+
+# Dummy DMS booking amount (enquiry customer budget) — must match business test default.
+DMS_DUMMY_ENQUIRY_BUDGET = "89000"
+
+
+def _fill_playwright_enquiry_contact(page, dms_values: dict) -> None:
+    row = dms_values.get("row") or {}
+    mr_ms = _clean_text(row.get("Mr/Ms"))
+    if mr_ms:
+        try:
+            page.select_option("#dms-mr-ms", label=mr_ms)
+        except Exception:
+            try:
+                page.select_option("#dms-mr-ms", value=mr_ms.rstrip("."))
+            except Exception:
+                pass
+    page.fill("#dms-contact-first-name", dms_values["first_name"])
+    page.fill("#dms-contact-last-name", dms_values["last_name"])
+    page.fill("#dms-mobile-phone", dms_values["mobile_phone"])
+    landline = dms_values.get("landline") or ""
+    if landline:
+        page.fill("#dms-landline", landline)
+    addr = dms_values["address_line_1"]
+    if addr:
+        page.fill("#dms-address-line-1", addr)
+    state = dms_values["state"]
+    if state:
+        try:
+            page.select_option("#dms-state", label=state)
+        except Exception:
+            try:
+                page.select_option("#dms-state", value=state)
+            except Exception:
+                pass
+    pin = dms_values["pin_code"]
+    if pin:
+        page.fill("#dms-pin-code", pin)
+
+
+def _apply_playwright_enquiry_relation_finance(page, dms_values: dict) -> None:
+    relation = dms_values.get("relation_prefix") or ""
+    if relation:
+        try:
+            page.select_option("#dms-relation-prefix", value=relation)
+        except Exception:
+            try:
+                page.select_option("#dms-relation-prefix", label=relation)
+            except Exception:
+                logger.warning("fill_dms_service: could not set DMS relation %s", relation)
+    father = dms_values.get("father_husband_name") or ""
+    if father:
+        page.fill("#dms-father-husband-name", father[:255])
+    finance_required = (dms_values.get("finance_required") or "N").strip().upper()
+    if finance_required == "Y":
+        try:
+            page.select_option("#dms-finance-required", value="Y")
+        except Exception:
+            pass
+        fin = dms_values.get("financier_name") or ""
+        if fin:
+            try:
+                page.fill("#dms-financier-name", fin[:255])
+            except Exception:
+                pass
+
+
+def _scrape_dms_vehicle_search_row(page) -> dict:
+    page.wait_for_selector("#dms-vehicle-results:visible", timeout=8000)
+    row = page.locator("#dms-vehicle-results-table tbody tr").first
+    if row.count() == 0:
+        return {}
+    cells = row.locator("td")
+    n = cells.count()
+    if n < 13:
+        return {}
+    ex_show = cells.nth(11).inner_text().strip()
+    return {
+        "key_num": cells.nth(0).inner_text().strip(),
+        "frame_num": cells.nth(1).inner_text().strip(),
+        "engine_num": cells.nth(2).inner_text().strip(),
+        "model": cells.nth(3).inner_text().strip(),
+        "color": cells.nth(4).inner_text().strip(),
+        "cubic_capacity": cells.nth(5).inner_text().strip(),
+        "seating_capacity": cells.nth(6).inner_text().strip(),
+        "body_type": cells.nth(7).inner_text().strip(),
+        "vehicle_type": cells.nth(8).inner_text().strip(),
+        "num_cylinders": cells.nth(9).inner_text().strip(),
+        "horse_power": cells.nth(10).inner_text().strip(),
+        "vehicle_price": ex_show,
+        "ex_showroom_price": ex_show,
+        "year_of_mfg": cells.nth(12).inner_text().strip(),
+    }
 
 
 def _parse_vehicle_price(vehicle: dict) -> float:
@@ -432,12 +606,33 @@ def _load_required_form_dms_row(customer_id: int | None, vehicle_id: int | None)
     return row
 
 
+def _normalize_dms_relation_prefix(raw: object | None) -> str:
+    s = _clean_text(raw).upper().replace(" ", "")
+    if s in ("S/O", "SO"):
+        return "S/O"
+    if s in ("W/O", "WO", "W/O."):
+        return "W/o"
+    if "W" in s and "O" in s:
+        return "W/o"
+    if "S" in s and "O" in s:
+        return "S/O"
+    return _clean_text(raw)
+
+
 def _build_dms_fill_values(customer_id: int | None, vehicle_id: int | None, subfolder: str | None = None) -> dict:
     row = _load_required_form_dms_row(customer_id, vehicle_id)
     first_name = _clean_text(row.get("Contact First Name"))
     last_name = _clean_text(row.get("Contact Last Name"))
     full_name = " ".join(part for part in [first_name, last_name] if part).strip()
     effective_subfolder = _clean_text(row.get("subfolder")) or _clean_text(subfolder)
+    relation_raw = row.get("Relation (S/O or W/o)")
+    relation_prefix = _normalize_dms_relation_prefix(relation_raw) if _clean_text(relation_raw) else ""
+    contact_path = (_clean_text(row.get("DMS Contact Path")) or "found").lower()
+    if contact_path not in ("found", "new_enquiry"):
+        contact_path = "found"
+    finance_required = (_clean_text(row.get("Finance Required")) or "N").upper()
+    if finance_required not in ("Y", "N"):
+        finance_required = "N"
     values = {
         "row": row,
         "subfolder": effective_subfolder,
@@ -452,6 +647,11 @@ def _build_dms_fill_values(customer_id: int | None, vehicle_id: int | None, subf
         "key_partial": _clean_text(row.get("Key num (partial)"))[:8],
         "frame_partial": _clean_text(row.get("Frame / Chassis num (partial)"))[:12],
         "engine_partial": _clean_text(row.get("Engine num (partial)"))[:12],
+        "relation_prefix": relation_prefix,
+        "father_husband_name": _clean_text(row.get("Father or Husband Name"))[:255],
+        "financier_name": _clean_text(row.get("Financier Name"))[:255],
+        "finance_required": finance_required,
+        "dms_contact_path": contact_path,
         "customer_export": {
             "name": full_name,
             "address": _clean_text(row.get("Address Line 1")),
@@ -459,6 +659,10 @@ def _build_dms_fill_values(customer_id: int | None, vehicle_id: int | None, subf
             "pin_code": _clean_text(row.get("Pin Code")),
             "mobile_number": _clean_text(row.get("Mobile Phone #")),
             "alt_phone_num": _clean_text(row.get("Landline #")),
+            "relation_prefix": relation_prefix,
+            "father_or_husband_name": _clean_text(row.get("Father or Husband Name")),
+            "finance_required": finance_required,
+            "financier_name": _clean_text(row.get("Financier Name")),
         },
     }
     required_keys = [
@@ -528,6 +732,12 @@ def _write_dms_form_values(
     key_no: str,
     frame_no: str,
     engine_no: str,
+    relation_prefix: str = "",
+    father_husband_name: str = "",
+    customer_budget: str = "",
+    finance_required: str = "",
+    financier_name: str = "",
+    dms_contact_path: str = "",
 ) -> None:
     if not subfolder or not str(subfolder).strip():
         return
@@ -551,6 +761,12 @@ def _write_dms_form_values(
     effective_key = _clean_text(key_no)[:8] or _clean_text(row.get("Key num (partial)"))
     effective_frame = _clean_text(frame_no)[:12] or _clean_text(row.get("Frame / Chassis num (partial)"))
     effective_engine = _clean_text(engine_no)[:12] or _clean_text(row.get("Engine num (partial)"))
+    effective_relation = _clean_text(relation_prefix) or _clean_text(row.get("Relation (S/O or W/o)"))
+    effective_father = _clean_text(father_husband_name) or _clean_text(row.get("Father or Husband Name"))
+    effective_budget = _clean_text(customer_budget)
+    effective_fin_req = _clean_text(finance_required) or _clean_text(row.get("Finance Required")) or "N"
+    effective_financier = _clean_text(financier_name) or _clean_text(row.get("Financier Name"))
+    effective_path = _clean_text(dms_contact_path) or _clean_text(row.get("DMS Contact Path")) or "found"
 
     label_values: list[tuple[str, str]] = [
         ("Mr/Ms", _clean_text(row.get("Mr/Ms")) or "Mr."),
@@ -561,6 +777,12 @@ def _write_dms_form_values(
         ("State", effective_state),
         ("Address Line 1", effective_address),
         ("Pin Code", effective_pin),
+        ("Relation (S/O or W/o)", effective_relation),
+        ("Father or Husband Name", effective_father),
+        ("Customer Budget (dummy enquiry)", effective_budget),
+        ("Finance Required", effective_fin_req),
+        ("Financier Name", effective_financier),
+        ("DMS Contact Path", effective_path),
         ("Key num (partial)", effective_key),
         ("Frame / Chassis num (partial)", effective_frame),
         ("Engine num (partial)", effective_engine),
@@ -719,6 +941,7 @@ def _load_latest_insurance_values(customer_id: int, vehicle_id: int) -> dict:
                     COALESCE(vm.fuel_type, '') AS fuel_type,
                     COALESCE(vm.year_of_mfg::text, '') AS year_of_mfg,
                     COALESCE(vm.vehicle_price::text, '') AS vehicle_price,
+                    COALESCE(NULLIF(TRIM(vm.oem_name), ''), oem_dealer.oem_name, '') AS oem_name,
                     COALESCE(cm.nominee_gender, '') AS nominee_gender,
                     COALESCE(cm.financier, '') AS financer_name,
                     COALESCE(dr.rto_name, '') AS rto_name,
@@ -732,6 +955,7 @@ def _load_latest_insurance_values(customer_id: int, vehicle_id: int) -> dict:
                   ON sm.customer_id = cm.customer_id
                  AND sm.vehicle_id = vm.vehicle_id
                 LEFT JOIN dealer_ref dr ON dr.dealer_id = sm.dealer_id
+                LEFT JOIN oem_ref oem_dealer ON oem_dealer.oem_id = dr.oem_id
                 LEFT JOIN LATERAL (
                     SELECT *
                     FROM insurance_master im2
@@ -776,6 +1000,7 @@ def _build_insurance_fill_values(customer_id: int | None, vehicle_id: int | None
         "fuel_type": _clean_text(row.get("fuel_type")),
         "year_of_mfg": _clean_text(row.get("year_of_mfg")),
         "vehicle_price": _clean_text(row.get("vehicle_price")),
+        "oem_name": _clean_text(row.get("oem_name")),
         "rto_name": _clean_text(row.get("rto_name")),
         "nominee_name": _clean_text(row.get("nominee_name")),
         "nominee_age": _clean_text(row.get("nominee_age")),
@@ -811,7 +1036,8 @@ def _write_insurance_form_values(
     subfolder_path.mkdir(parents=True, exist_ok=True)
     path = subfolder_path / "Insurance_Form_Values.txt"
     label_values: list[tuple[str, str]] = [
-        ("Insurance Company", _clean_text(values.get("insurer"))),
+        ("Insurance Company (fuzzy-matched to details insurer)", _clean_text(values.get("insurer"))),
+        ("Manufacturer / OEM (vehicle_master.oem_name or dealer oem_ref)", _clean_text(values.get("oem_name"))),
         ("Mobile No.", _clean_text(values.get("mobile_number"))),
         ("Alternate / Landline No.", _clean_text(values.get("alt_phone_num"))),
         ("Proposer Name", _clean_text(values.get("customer_name"))),
@@ -823,12 +1049,12 @@ def _write_insurance_form_values(
         ("Proposer City", _clean_text(values.get("city"))),
         ("Pin Code", _clean_text(values.get("pin_code"))),
         ("Address", _clean_text(values.get("address"))),
-        ("Frame No.", _clean_text(values.get("frame_no"))),
+        ("VIN / Frame No. (Chassis)", _clean_text(values.get("frame_no"))),
         ("Engine No.", _clean_text(values.get("engine_no"))),
         ("Model Name", _clean_text(values.get("model_name"))),
         ("Fuel Type", _clean_text(values.get("fuel_type"))),
         ("Year of Manufacture", _clean_text(values.get("year_of_mfg"))),
-        ("Ex-Showroom", _clean_text(values.get("vehicle_price"))),
+        ("Ex-Showroom (DMS cost)", _clean_text(values.get("vehicle_price"))),
         ("RTO", _clean_text(values.get("rto_name"))),
         ("Nominee Name", _clean_text(values.get("nominee_name"))),
         ("Nominee Age", _clean_text(values.get("nominee_age"))),
@@ -881,18 +1107,31 @@ def run_fill_insurance_only(
         base = insurance_base_url.rstrip("/")
         page.set_default_timeout(12_000)
         page.goto(f"{base}/kyc.html", wait_until="domcontentloaded", timeout=20000)
-        page.select_option("#ins-company", label=values["insurer"] or "Universal Sompo general insurance")
+        # Insurance company: fuzzy-match details-sheet insurer (`insurance_master.insurer`) to site options.
+        _insurance_select_fuzzy(page, "#ins-company", values["insurer"] or "")
         page.select_option("#ins-kyc-partner", label="Signzy")
-        page.select_option("#ins-proposer-type", label="Individual")
+        # Proposer type / policy tenure: leave site defaults (Individual, etc.).
         page.select_option("#ins-ovd-type", label="AADHAAR EXTRACTION")
-        page.fill("#ins-mobile-no", values["mobile_number"])
+        page.fill("#ins-mobile-no", values["mobile_number"] or "")
         if values.get("alt_phone_num"):
             try:
                 page.fill("#ins-alt-phone", values["alt_phone_num"])
             except Exception:
                 pass
+        page.click("#ins-check-mobile")
+        page.wait_for_function(
+            "() => window.__insKycState === 'found' || window.__insKycState === 'need_docs'",
+            timeout=15000,
+        )
+        kyc_state = page.evaluate("() => window.__insKycState")
+        if kyc_state == "need_docs":
+            payloads = _insurance_kyc_png_payloads()
+            page.locator("#ins-aadhar-front").set_input_files(payloads[0])
+            page.locator("#ins-aadhar-rear").set_input_files(payloads[1])
+            page.locator("#ins-customer-photo").set_input_files(payloads[2])
         if page.locator("#ins-consent").count() > 0 and not page.is_checked("#ins-consent"):
             page.check("#ins-consent")
+        page.locator("#ins-proceed").wait_for(state="enabled", timeout=10000)
         page.click("#ins-proceed")
         page.wait_for_url("**/kyc-success.html*", timeout=10000)
         page.wait_for_timeout(300)
@@ -901,28 +1140,34 @@ def run_fill_insurance_only(
         page.click("a.btn[href='policy.html']")
         page.wait_for_url("**/policy.html*", timeout=10000)
 
-        # Fill policy form fields. Intentionally do NOT click Issue Policy/Submit.
-        page.fill("input[value='LEKHRAJ']", values["customer_name"])
-        selects = page.locator("select")
-        inputs = page.locator("input")
+        # Fill policy form fields. Do NOT click #ins-issue-policy — operator issues policy manually.
+        # Chassis = VIN/Frame from vehicle_master (DMS scrape). Ex-Showroom = vehicle_price (DMS cost).
+        # Insurance company: fuzzy-match to details insurer; manufacturer: fuzzy-match vehicle_master.oem_name.
+        # Policy tenure & proposer type: keep dummy page defaults (no select_option).
+        _insurance_select_fuzzy(page, "#ins-sel-policy-company", values["insurer"] or "")
+        if values.get("oem_name"):
+            _insurance_select_fuzzy(page, "#ins-sel-manufacturer", values["oem_name"])
+
+        page.fill("#ins-proposer-name", values["customer_name"])
+        selects = page.locator(".main select")
         if values["gender"]:
             try:
-                selects.nth(5).select_option(label=values["gender"].capitalize())
+                selects.nth(4).select_option(label=values["gender"].capitalize())
             except Exception:
                 pass
         if values["dob"]:
-            page.fill("input[value='01/01/2000']", values["dob"])
+            page.fill("#ins-proposer-dob", values["dob"])
         if values["marital_status"]:
             try:
-                selects.nth(6).select_option(label=values["marital_status"])
+                selects.nth(5).select_option(label=values["marital_status"])
             except Exception:
                 pass
         if values["profession"]:
             try:
-                selects.nth(7).select_option(label=values["profession"])
+                selects.nth(6).select_option(label=values["profession"])
             except Exception:
                 pass
-        page.fill("input[value='9694585832']", values["mobile_number"])
+        page.fill("#ins-policy-mobile", values["mobile_number"])
         if values.get("alt_phone_num"):
             try:
                 page.fill("#ins-alt-phone", values["alt_phone_num"])
@@ -930,50 +1175,57 @@ def run_fill_insurance_only(
                 pass
         if values["state"]:
             try:
-                selects.nth(8).select_option(label=values["state"])
+                selects.nth(7).select_option(label=values["state"])
             except Exception:
                 pass
         if values["city"]:
             try:
-                selects.nth(9).select_option(label=values["city"])
+                selects.nth(8).select_option(label=values["city"])
             except Exception:
                 pass
         if values["pin_code"]:
-            page.fill("input[value='321001']", values["pin_code"])
+            page.fill("#ins-proposer-pin", values["pin_code"])
         if values["address"]:
-            page.fill("input[value='S/O LALCHAND JAMUN KE BAAG KE PASS GOLPURA ROAD SUBHASH NAGAR']", values["address"])
-        page.fill("input[value='MBLHAW483T5C83376']", values["frame_no"])
-        page.fill("input[value='HA11F7T5C52111']", values["engine_no"])
+            page.fill("#ins-proposer-address", values["address"])
+        page.fill("#ins-chassis", values["frame_no"])
+        page.fill("#ins-engine", values["engine_no"])
         if values["model_name"]:
-            page.fill("input[value='SPL PLUS CAST']", values["model_name"])
-        if values["vehicle_price"]:
-            page.fill("input[value='75202']", values["vehicle_price"])
+            page.fill("#ins-model-name", values["model_name"])
+        ex_show = (values.get("vehicle_price") or "").replace(",", "").strip()
+        page.fill("#ins-ex-showroom", ex_show)
         if values["year_of_mfg"]:
-            page.fill("input[value='2026']", values["year_of_mfg"])
+            page.fill("#ins-yom", values["year_of_mfg"])
         if values["fuel_type"]:
             try:
-                selects.nth(15).select_option(label=values["fuel_type"])
+                selects.nth(12).select_option(label=values["fuel_type"])
             except Exception:
                 pass
         if values["nominee_name"]:
-            page.fill("input[value='SAVITRI']", values["nominee_name"])
+            page.fill("#ins-nominee-name", values["nominee_name"])
         if values["nominee_age"]:
-            page.fill("input[value='44']", values["nominee_age"])
+            page.fill("#ins-nominee-age", values["nominee_age"])
         if values["nominee_gender"]:
             try:
-                selects.nth(16).select_option(label=values["nominee_gender"].capitalize())
+                selects.nth(13).select_option(label=values["nominee_gender"].capitalize())
             except Exception:
                 pass
         if values["nominee_relationship"]:
             try:
-                selects.nth(17).select_option(label=values["nominee_relationship"])
+                selects.nth(14).select_option(label=values["nominee_relationship"])
             except Exception:
                 pass
         if values["financer_name"]:
             try:
-                inputs.nth(17).fill(values["financer_name"])
+                page.fill("#ins-financer", values["financer_name"])
             except Exception:
                 pass
+        if values.get("rto_name"):
+            try:
+                selects.nth(11).select_option(label=values["rto_name"])
+            except Exception:
+                pass
+
+        logger.info("run_fill_insurance_only: deliberately not clicking #ins-issue-policy")
 
         if ocr_output_dir is not None:
             _write_insurance_form_values(
@@ -1198,8 +1450,10 @@ def run_fill_dms_only(
     vehicle_id: int | None = None,
 ) -> dict:
     """
-    Run only DMS steps: login, enquiry, vehicle search, scrape, PDFs.
-    Separate Playwright process. Returns vehicle, pdfs_saved, error.
+    Run DMS steps: enquiry (contact find or new-enquiry path, S/O or W/o, booking budget),
+    vehicles receive/precheck, PDI, vehicle search + scrape (Order Value / ex-showroom → vehicle_price),
+    enquiry allocate, invoicing line fields (no Create Invoice), then Form 21/22 + invoice sheet PDFs.
+    Separate Playwright session. Returns vehicle, pdfs_saved, error.
     """
     result: dict = {"vehicle": {}, "pdfs_saved": [], "error": None}
     if not dms_base_url:
@@ -1230,7 +1484,6 @@ def run_fill_dms_only(
 
         base = dms_base_url.rstrip("/")
         page.set_default_timeout(12_000)
-        page.goto(f"{base}/enquiry.html", wait_until="domcontentloaded", timeout=20000)
 
         mobile_phone = dms_values["mobile_phone"]
         landline = dms_values.get("landline") or ""
@@ -1240,25 +1493,71 @@ def run_fill_dms_only(
         key_partial = dms_values["key_partial"]
         frame_partial = dms_values["frame_partial"]
         engine_partial = dms_values["engine_partial"]
+        contact_path = (dms_values.get("dms_contact_path") or "found").strip().lower()
 
-        page.fill("#dms-contact-first-name", dms_values["first_name"])
-        page.fill("#dms-contact-last-name", dms_values["last_name"])
-        page.fill("#dms-mobile-phone", mobile_phone)
-        if landline:
-            page.fill("#dms-landline", landline)
-        if addr:
-            page.fill("#dms-address-line-1", addr)
-        if state:
+        def goto(path: str) -> None:
+            page.goto(f"{base}/{path}", wait_until="domcontentloaded", timeout=20000)
+
+        goto("enquiry.html")
+
+        page.fill("#dms-contact-finder-mobile", mobile_phone)
+        if contact_path == "new_enquiry":
+            page.evaluate("() => { sessionStorage.setItem('dummy_dms_expect', 'new'); }")
+        else:
+            page.evaluate("() => { sessionStorage.removeItem('dummy_dms_expect'); }")
+        page.click("#dms-contact-finder-go")
+        page.wait_for_timeout(200)
+
+        if contact_path == "new_enquiry":
+            _fill_playwright_enquiry_contact(page, dms_values)
+            page.click("#dms-save-enquiry-quiet")
+            page.wait_for_timeout(200)
+            page.fill("#dms-contact-finder-mobile", mobile_phone)
+            page.evaluate("() => { sessionStorage.removeItem('dummy_dms_expect'); }")
+            page.click("#dms-contact-finder-go")
+            page.wait_for_timeout(200)
+
+        _fill_playwright_enquiry_contact(page, dms_values)
+        _apply_playwright_enquiry_relation_finance(page, dms_values)
+        page.fill("#dms-customer-budget", DMS_DUMMY_ENQUIRY_BUDGET)
+        try:
+            page.select_option("#dms-booking-order-type", value="Regular")
+        except Exception:
             try:
-                page.select_option("#dms-state", label=state)
+                page.select_option("#dms-booking-order-type", label="Regular")
             except Exception:
                 pass
-        if pin:
-            page.fill("#dms-pin-code", pin)
-        page.click("#dms-submit-enquiry")
-        page.wait_for_timeout(10)
+        page.click("#dms-generate-booking")
+        page.wait_for_timeout(200)
 
-        page.goto(f"{base}/vehicle.html", wait_until="domcontentloaded", timeout=15000)
+        goto("vehicles.html")
+        transit = page.locator("#dms-in-transit-panel")
+        try:
+            if transit.count() > 0 and transit.first.is_visible():
+                recv = page.locator("#dms-receive-vehicle")
+                if recv.count() > 0 and recv.first.is_visible():
+                    recv.first.click()
+                    page.wait_for_timeout(200)
+        except Exception:
+            pass
+        try:
+            pre = page.locator("#dms-precheck-complete")
+            if pre.count() > 0 and pre.first.is_visible():
+                pre.first.click()
+                page.wait_for_timeout(200)
+        except Exception:
+            pass
+
+        goto("pdi.html")
+        try:
+            pdi_btn = page.locator("#dms-pdi-complete")
+            if pdi_btn.count() > 0 and pdi_btn.first.is_visible():
+                pdi_btn.first.click()
+                page.wait_for_timeout(200)
+        except Exception:
+            pass
+
+        goto("vehicle.html")
         _write_dms_form_values(
             ocr_output_dir=ocr_dir,
             subfolder=effective_subfolder,
@@ -1273,34 +1572,25 @@ def run_fill_dms_only(
             key_no=key_partial,
             frame_no=frame_partial,
             engine_no=engine_partial,
+            relation_prefix=dms_values.get("relation_prefix") or "",
+            father_husband_name=dms_values.get("father_husband_name") or "",
+            customer_budget=DMS_DUMMY_ENQUIRY_BUDGET,
+            finance_required=dms_values.get("finance_required") or "",
+            financier_name=dms_values.get("financier_name") or "",
+            dms_contact_path=dms_values.get("dms_contact_path") or "",
         )
         page.fill("#dms-vehicle-key", key_partial)
         page.fill("#dms-vehicle-frame", frame_partial)
         page.fill("#dms-vehicle-engine", engine_partial)
         page.click("#dms-vehicle-search")
-        page.wait_for_timeout(10)
+        page.wait_for_timeout(150)
 
-        page.wait_for_selector("#dms-vehicle-results:visible", timeout=8000)
-        row = page.locator("#dms-vehicle-results-table tbody tr").first
-        if row.count() > 0:
-            cells = row.locator("td")
-            n = cells.count()
-            if n >= 13:
-                result["vehicle"] = {
-                    "key_num": cells.nth(0).inner_text().strip(),
-                    "frame_num": cells.nth(1).inner_text().strip(),
-                    "engine_num": cells.nth(2).inner_text().strip(),
-                    "model": cells.nth(3).inner_text().strip(),
-                    "color": cells.nth(4).inner_text().strip(),
-                    "cubic_capacity": cells.nth(5).inner_text().strip(),
-                    "seating_capacity": cells.nth(6).inner_text().strip(),
-                    "body_type": cells.nth(7).inner_text().strip(),
-                    "vehicle_type": cells.nth(8).inner_text().strip(),
-                    "num_cylinders": cells.nth(9).inner_text().strip(),
-                    "horse_power": cells.nth(10).inner_text().strip(),
-                    "vehicle_price": cells.nth(11).inner_text().strip(),
-                    "year_of_mfg": cells.nth(12).inner_text().strip(),
-                }
+        try:
+            result["vehicle"] = _scrape_dms_vehicle_search_row(page)
+        except Exception as scrape_exc:
+            logger.warning("fill_dms_service: vehicle table scrape failed: %s", scrape_exc)
+            result["vehicle"] = {}
+
         logger.info("fill_dms_service: run_fill_dms_only scraped vehicle=%s", result.get("vehicle"))
         if vehicle_id and result.get("vehicle"):
             try:
@@ -1308,7 +1598,43 @@ def run_fill_dms_only(
             except Exception as exc:
                 logger.warning("fill_dms_service: vehicle_master update failed vehicle_id=%s: %s", vehicle_id, exc)
 
-        page.goto(f"{base}/reports.html", wait_until="domcontentloaded", timeout=15000)
+        scraped = result.get("vehicle") or {}
+        order_val = (scraped.get("vehicle_price") or scraped.get("ex_showroom_price") or "").strip()
+
+        goto("enquiry.html")
+        try:
+            if scraped.get("frame_num"):
+                page.evaluate(
+                    "(frame) => sessionStorage.setItem('dummy_dms_last_frame', frame)",
+                    scraped.get("frame_num") or "",
+                )
+            alloc = page.locator("#dms-allocate-vehicle")
+            if alloc.count() > 0 and alloc.first.is_visible():
+                alloc.first.click()
+                page.wait_for_timeout(200)
+        except Exception:
+            pass
+
+        goto("line-items.html")
+        if order_val:
+            try:
+                page.fill("#dms-order-value", order_val)
+            except Exception:
+                pass
+        fin_req = (dms_values.get("finance_required") or "N").strip().upper()
+        if fin_req == "Y":
+            try:
+                page.select_option("#dms-line-finance-required", value="Y")
+            except Exception:
+                pass
+            fin_name = dms_values.get("financier_name") or ""
+            if fin_name:
+                try:
+                    page.fill("#dms-line-financer", fin_name[:255])
+                except Exception:
+                    pass
+
+        goto("reports.html")
         path21 = subfolder_path / "form21.pdf"
         path22 = subfolder_path / "form22.pdf"
         path_invoice = subfolder_path / "invoice_details.pdf"
@@ -1430,11 +1756,11 @@ def run_fill_dms(
     headless: bool | None = None,
 ) -> dict:
     """
-    Run Playwright: open DMS, login, fill enquiry, submit, go to Vehicle, search, scrape first row,
-    go to Reports, save Form 21 and Form 22 into uploads_dir/subfolder.
-    If vahan_base_url is set, then fill dummy Vahan registration and set result application_id and rto_fees.
-    Writes pulled data to ocr_output_dir/subfolder/Data from DMS.txt (same subfolder as other OCR outputs).
-    Returns dict with vehicle details (key_num, frame_num, ...), optional application_id, rto_fees, and any error.
+    Run Playwright: same extended DMS flow as `run_fill_dms_only` (enquiry → receive/PDI → vehicle scrape →
+    invoicing fields without Create Invoice → Form 21/22 + invoice sheet PDFs), then optional Vahan when
+    `vahan_base_url` is set.
+    Writes pulled data to ocr_output_dir/subfolder/Data from DMS.txt.
+    Returns dict with vehicle details (key_num, frame_num, vehicle_price / ex-showroom, ...), optional application_id, rto_fees, and any error.
     """
     result = run_fill_dms_only(
         dms_base_url=dms_base_url,

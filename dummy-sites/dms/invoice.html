@@ -2,64 +2,57 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Dummy DMS – Print Invoice</title>
+  <title>View / Print Invoice | Oracle Siebel eDealer</title>
+  <link rel="stylesheet" href="dms-layout.css" />
+</head>
+<body class="dms-app">
+  <div class="dms-siebel-brand"><strong>Oracle</strong> Siebel &nbsp;|&nbsp; Hero Connect &nbsp;|&nbsp; <span>edealerHMCL / enu</span></div>
+  <nav class="dms-app-tabs" aria-label="Main modules">
+    <a href="my-sales.html">Home</a>
+    <a href="my-sales.html">My Dashboard</a>
+    <a href="contacts-payments.html">Payments</a>
+    <a href="vehicles.html">Vehicles</a>
+    <a href="enquiry.html" class="active">Enquiry</a>
+    <a href="my-sales.html">Vehicle Sales Invoices</a>
+    <a href="my-sales.html">Vehicles Receipt</a>
+    <a href="my-sales.html">Vehicles Inventory</a>
+    <a href="my-sales.html">Vehicle Sales</a>
+  </nav>
+  <div class="dms-main">
+    <h1 class="dms-page-title">Sales Invoice — Print Preview (dummy)</h1>
+    <div class="no-print" style="margin-bottom:12px;">
+      <a href="enquiry.html" id="dms-back-to-enquiry" class="dms-btn dms-btn-secondary">Back to Enquiry</a>
+      <button type="button" id="dms-print-invoice" class="dms-btn" onclick="window.print();">Print</button>
+      <a href="downloads/dummy-invoice.pdf" id="dms-download-pdf" class="dms-btn" download>Download PDF</a>
+      <a href="downloads/invoice_details.pdf" id="dms-download-gst-invoice-sheet" class="dms-btn dms-btn-secondary" download>GST Invoice sheet</a>
+    </div>
+    <div class="dms-section invoice" id="dms-invoice-content">
+      <h3 style="margin-top:0;">Invoice</h3>
+      <table class="dms-table">
+        <tr><th>Item</th><th>Details</th></tr>
+        <tr><td>Invoice #</td><td>11870BC26S3064</td></tr>
+        <tr><td>Date</td><td id="dms-invoice-date">—</td></tr>
+        <tr><td>Enquiry #</td><td>—</td></tr>
+        <tr><td>Order #</td><td>11870-02-SVSO-0326-3134</td></tr>
+        <tr><td>Customer</td><td>—</td></tr>
+        <tr><td>Amount</td><td>—</td></tr>
+      </table>
+    </div>
+  </div>
   <style>
-    * { box-sizing: border-box; }
-    body { font-family: Arial, sans-serif; margin: 0; padding: 0; font-size: 12px; }
-    .top-nav { background: #333; color: #fff; padding: 0.4rem 1rem; display: flex; gap: 1rem; align-items: center; }
-    .top-nav a { color: #fff; text-decoration: none; }
-    .top-nav a.active { font-weight: bold; text-decoration: underline; }
-    .main-wrap { max-width: 700px; margin: 0 auto; padding: 1rem; }
-    .no-print { margin-bottom: 1rem; }
-    .no-print a, .no-print button { margin-right: 0.5rem; padding: 0.4rem 0.8rem; background: #06c; color: #fff; border: none; border-radius: 4px; cursor: pointer; text-decoration: none; font-size: 12px; }
-    .no-print button { background: #196; }
     @media print {
       .no-print { display: none !important; }
       body { padding: 0; }
     }
-    .invoice { border: 1px solid #ccc; padding: 1rem; }
-    .invoice h1 { margin: 0 0 1rem 0; font-size: 16px; }
-    .invoice table { width: 100%; border-collapse: collapse; }
-    .invoice th, .invoice td { border: 1px solid #ddd; padding: 0.35rem 0.5rem; text-align: left; }
-    .invoice th { background: #f5f5f5; }
-    .invoice .totals { margin-top: 1rem; font-weight: bold; }
   </style>
-</head>
-<body>
-  <nav class="top-nav" role="navigation">
-    <a href="enquiry.html">Enquiry</a>
-    <a href="vehicle.html">Vehicle</a>
-    <a href="reports.html" class="active">Reports</a>
-  </nav>
-  <div class="main-wrap">
-  <div class="no-print">
-    <a href="enquiry.html" id="dms-back-to-enquiry">Back to Enquiry</a>
-    <button type="button" id="dms-print-invoice" onclick="window.print();">Print</button>
-    <a href="downloads/dummy-invoice.pdf" id="dms-download-pdf" download>Download PDF</a>
-  </div>
-
-  <div class="invoice" id="dms-invoice-content">
-    <h1>Dummy DMS – Invoice</h1>
-    <table>
-      <tr><th>Item</th><th>Details</th></tr>
-      <tr><td>Invoice #</td><td>INV-001</td></tr>
-      <tr><td>Date</td><td id="dms-invoice-date">—</td></tr>
-      <tr><td>Enquiry #</td><td>—</td></tr>
-      <tr><td>Customer</td><td>—</td></tr>
-      <tr><td>Amount</td><td>—</td></tr>
-    </table>
-    <p class="totals">Total: —</p>
-  </div>
-
-  </div>
   <script>
     (function() {
       var d = new Date();
-      var day = ('0' + d.getDate()).slice(-2);
-      var month = ('0' + (d.getMonth() + 1)).slice(-2);
+      var day = ("0" + d.getDate()).slice(-2);
+      var month = ("0" + (d.getMonth() + 1)).slice(-2);
       var year = d.getFullYear();
-      var el = document.getElementById('dms-invoice-date');
-      if (el) el.textContent = day + '/' + month + '/' + year;
+      var el = document.getElementById("dms-invoice-date");
+      if (el) el.textContent = day + "/" + month + "/" + year;
     })();
   </script>
 </body>

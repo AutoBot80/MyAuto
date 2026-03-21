@@ -45,6 +45,9 @@ This document lists the current database tables and their columns. **Executable 
 | `financier` | `varchar(255)` | YES |  | Financier name captured from details sheet / insurance context |
 | `marital_status` | `varchar(32)` | YES |  | Customer marital status captured from details sheet |
 | `nominee_gender` | `varchar(16)` | YES |  | Nominee gender captured from details sheet |
+| `dms_relation_prefix` | `varchar(8)` | YES |  | DMS enquiry line: `S/O` or `W/o` (details sheet / operator) |
+| `father_or_husband_name` | `varchar(255)` | YES |  | Father or husband name for DMS relation line |
+| `dms_contact_path` | `varchar(16)` | NO | `'found'` | Playwright branch: `found` = CRM contact exists; `new_enquiry` = save enquiry then find again |
 | `file_location` | `text` | YES |  | File location / sub-folder name where scans are placed |
 | `gender` | `varchar(8)` | YES |  | Gender from Aadhar QR (e.g. M, F) |
 | `date_of_birth` | `varchar(20)` | YES |  | Date of birth (dd/mm/yyyy); default date format for app and DB |
@@ -83,7 +86,7 @@ This document lists the current database tables and their columns. **Executable 
 | `horse_power` | `numeric(10,2)` | YES |  | Horse power |
 | `length_mm` | `integer` | YES |  | Length in mm |
 | `fuel_type` | `varchar(16)` | YES |  | Fuel type (e.g. Petrol, Diesel) |
-| `vehicle_price` | `numeric(12,2)` | YES |  | Latest DMS vehicle price; used as Vahan `vehicle_price` source |
+| `vehicle_price` | `numeric(12,2)` | YES |  | **Ex-showroom price** (Order Value from DMS); column name remains `vehicle_price`; Vahan reads this as total/ex-showroom |
 
 **Primary key:** `vehicle_master_pkey` on (`vehicle_id`)
 
@@ -312,7 +315,7 @@ This document lists the current database tables and their columns. **Executable 
 
 **Important columns:**
 - Technical/source columns: `sales_id`, `customer_id`, `vehicle_id`, `dealer_id`, `subfolder`, `dealer_name`, `oem_name`.
-- Label-aligned columns: `"Mr/Ms"`, `"Contact First Name"`, `"Contact Last Name"`, `"Mobile Phone #"`, `"State"`, `"Address Line 1"`, `"Pin Code"`, `"Key num (partial)"`, `"Frame / Chassis num (partial)"`, `"Engine num (partial)"`.
+- Label-aligned columns: `"Mr/Ms"`, `"Contact First Name"`, `"Contact Last Name"`, `"Mobile Phone #"`, `"Landline #"`, `"State"`, `"Address Line 1"`, `"Pin Code"`, `"Key num (partial)"`, `"Frame / Chassis num (partial)"`, `"Engine num (partial)"`, `"Relation (S/O or W/o)"`, `"Father or Husband Name"`, `"Financier Name"`, `"Finance Required"`, `"DMS Contact Path"`.
 
 **Operational notes:**
 - The partial key/frame/engine columns match the truncation used by Playwright today (`8/12/12` characters respectively).
@@ -429,3 +432,4 @@ This document lists the current database tables and their columns. **Executable 
 | 0.9 | Mar 2026 | Added `customer_master.financier`, `customer_master.marital_status`, and `customer_master.nominee_gender` for details-sheet capture |
 | 1.0 | Mar 2026 | Added `dealer_ref.rto_name` and seeded `RTO-Bharatpur` for dealer `100001` |
 | 1.1 | Mar 2026 | Added `customer_master.alt_phone_num` for Alternate/Landline number and mapped it to DMS/Insurance automation usage |
+| 1.2 | Mar 2026 | Added `customer_master.dms_relation_prefix`, `father_or_husband_name`, `dms_contact_path`; extended `form_dms_view`; documented `vehicle_price` as ex-showroom (Order Value) |

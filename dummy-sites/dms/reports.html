@@ -2,45 +2,59 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>MISP Dashboard / Partner Login</title>
-  <style>
-    * { box-sizing: border-box; }
-    body { font-family: Arial, sans-serif; margin: 0; padding: 0; font-size: 12px; }
-    .top-nav { background: #333; color: #fff; padding: 0.4rem 1rem; display: flex; gap: 1rem; align-items: center; }
-    .top-nav a { color: #fff; text-decoration: none; }
-    .top-nav a.active { font-weight: bold; text-decoration: underline; }
-    .main { max-width: 600px; margin: 0 auto; padding: 1rem; }
-    .section { border: 1px solid #ccc; border-radius: 4px; padding: 1rem; background: #fafafa; margin-bottom: 1rem; }
-    .section h3 { margin: 0 0 0.75rem 0; font-size: 13px; color: #333; }
-    .report-links { list-style: none; margin: 0.75rem 0 0 0; padding: 0; }
-    .report-links li { margin-bottom: 0.5rem; }
-    a.report-link { display: inline-block; padding: 0.5rem 1rem; background: #06c; color: #fff; text-decoration: none; border-radius: 4px; }
-    a.report-link:hover { background: #05a; }
-  </style>
+  <title>Run Report | Form 22 | Oracle Siebel eDealer</title>
+  <link rel="stylesheet" href="dms-layout.css" />
 </head>
-<body>
-  <nav class="top-nav" role="navigation">
-    <a href="enquiry.html">My Vehicle Sales</a>
-    <a href="vehicle.html">Auto Vehicle List</a>
-    <a href="vehicle.html">Auto Vehicle PDI Assessment</a>
-    <a href="reports.html" class="active">MISP</a>
+<body class="dms-app">
+  <div class="dms-siebel-brand"><strong>Oracle</strong> Siebel &nbsp;|&nbsp; Hero Connect &nbsp;|&nbsp; <span>edealerHMCL / enu</span></div>
+  <div class="dms-find-bar">
+    <label for="dms-saved-query">Find</label>
+    <select id="dms-saved-query">
+      <option>Reports</option>
+    </select>
+  </div>
+  <nav class="dms-app-tabs" aria-label="Main modules">
+    <a href="my-sales.html">Home</a>
+    <a href="my-sales.html">My Dashboard</a>
+    <a href="contacts-payments.html">Payments</a>
+    <a href="vehicles.html">Vehicles</a>
+    <a href="enquiry.html">Enquiry</a>
+    <a href="my-sales.html">Vehicle Sales Invoices</a>
+    <a href="my-sales.html">Vehicles Receipt</a>
+    <a href="my-sales.html">Vehicles Inventory</a>
+    <a href="my-sales.html" class="active">Vehicle Sales</a>
   </nav>
-
-  <div class="main">
-    <div class="section">
-      <h3>MISP Dashboard</h3>
-      <p>Policy Issuance, Claims, Endorsements, Cancellation, My Account, Accounts, Reports.</p>
-      <p><strong>Partner Login</strong> available for re-authentication when session expires.</p>
+  <nav class="dms-sub-tabs" aria-label="Vehicle Sales views">
+    <a href="my-sales.html">Sales Orders Home</a>
+    <a href="line-items.html">Invoice</a>
+    <a href="reports.html" class="active">Reports / Run Report</a>
+    <a href="line-items.html">Delivery Challan</a>
+  </nav>
+  <div class="dms-main">
+    <h1 class="dms-page-title">Run Report</h1>
+    <div class="dms-section">
+      <h3>Report parameters (Siebel-style)</h3>
+      <div class="dms-form-row"><label for="dms-report-name">Report Name</label>
+        <select id="dms-report-name"><option>Form22</option><option>Sale Certificate</option><option>Tax Invoice</option></select></div>
+      <div class="dms-form-row"><label for="dms-output-type">Output Type</label>
+        <select id="dms-output-type"><option>PDF</option><option>HTML</option></select></div>
+      <p><button type="button" class="dms-btn" id="dms-run-report-submit">Submit</button> <span class="dms-hint">Dummy: use direct links below for Playwright downloads.</span></p>
     </div>
-    <div class="section">
-      <h3>Reports / Downloads</h3>
-      <p>Open or download reports as PDF.</p>
-      <ul class="report-links">
-        <li><a href="downloads/form21.pdf" id="dms-reports-form21" class="report-link" target="_blank">Form 21</a></li>
-        <li><a href="downloads/form22.pdf" id="dms-reports-form22" class="report-link" target="_blank">Form 22</a></li>
-        <li><a href="downloads/invoice_details.pdf" id="dms-reports-invoice-details" class="report-link" target="_blank">Invoice Details</a></li>
+    <div class="dms-section">
+      <h3>Downloads / MISP</h3>
+      <p class="dms-hint">Partner Login, Policy Issuance, Claims, Endorsements, Cancellation, My Account, Accounts — (insurance partner portal is separate from this DMS shell).</p>
+      <ul style="margin:0; padding-left:1.2rem;">
+        <li style="margin-bottom:8px;"><a href="downloads/form21.pdf" id="dms-reports-form21" class="dms-btn" target="_blank">Form 21</a></li>
+        <li style="margin-bottom:8px;"><a href="downloads/form22.pdf" id="dms-reports-form22" class="dms-btn" target="_blank">Form 22</a></li>
+        <li style="margin-bottom:8px;"><a href="downloads/invoice_details.pdf" id="dms-reports-invoice-details" class="dms-btn" target="_blank">Invoice Details</a></li>
       </ul>
     </div>
+    <p><a href="vehicle.html" class="dms-btn dms-btn-secondary">Back to Auto Vehicle List</a></p>
   </div>
+  <script>
+    document.getElementById("dms-run-report-submit")?.addEventListener("click", function () {
+      window.open("downloads/form22.pdf", "_blank");
+    });
+  </script>
 </body>
 </html>

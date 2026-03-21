@@ -90,6 +90,11 @@ def submit_info(
     financier = _str_or_none(customer.get("financier"), 255)
     marital_status = _str_or_none(customer.get("marital_status"), 32)
     nominee_gender = _str_or_none(customer.get("nominee_gender"), 16)
+    dms_relation_prefix = _str_or_none(customer.get("dms_relation_prefix"), 8)
+    father_or_husband_name = _str_or_none(customer.get("father_or_husband_name"), 255)
+    dms_contact_path = _str_or_none(customer.get("dms_contact_path"), 16) or "found"
+    if dms_contact_path.lower() not in ("found", "new_enquiry"):
+        dms_contact_path = "found"
 
     frame_no = _str_or_none(vehicle.get("frame_no"), 64)
     engine_no = _str_or_none(vehicle.get("engine_no"), 64)
@@ -145,6 +150,7 @@ def submit_info(
                         alt_phone_num = %s,
                         gender = %s, date_of_birth = %s, profession = %s,
                         financier = %s, marital_status = %s, nominee_gender = %s,
+                        dms_relation_prefix = %s, father_or_husband_name = %s, dms_contact_path = %s,
                         file_location = %s
                     WHERE customer_id = %s
                     """,
@@ -161,6 +167,9 @@ def submit_info(
                         financier,
                         marital_status,
                         nominee_gender,
+                        dms_relation_prefix,
+                        father_or_husband_name,
+                        dms_contact_path,
                         loc,
                         customer_id,
                     ),
@@ -172,9 +181,10 @@ def submit_info(
                         aadhar, name, address, pin, city, state, mobile_number,
                         alt_phone_num,
                         profession, financier, marital_status, nominee_gender,
+                        dms_relation_prefix, father_or_husband_name, dms_contact_path,
                         file_location, gender, date_of_birth
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING customer_id
                     """,
                     (
@@ -190,6 +200,9 @@ def submit_info(
                         financier,
                         marital_status,
                         nominee_gender,
+                        dms_relation_prefix,
+                        father_or_husband_name,
+                        dms_contact_path,
                         loc,
                         gender,
                         date_of_birth,

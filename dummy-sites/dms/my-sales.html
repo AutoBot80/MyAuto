@@ -2,62 +2,83 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Oracle Siebel - My Vehicle Sales</title>
-  <style>
-    * { box-sizing: border-box; }
-    body { font-family: Arial, sans-serif; margin: 0; padding: 0; font-size: 12px; }
-    .top-nav { background: #333; color: #fff; padding: 0.4rem 1rem; display: flex; gap: 1rem; align-items: center; }
-    .top-nav a { color: #fff; text-decoration: none; }
-    .top-nav a.active { font-weight: bold; text-decoration: underline; }
-    .main { max-width: 1100px; margin: 0 auto; padding: 1rem; }
-    .section { border: 1px solid #ccc; border-radius: 4px; padding: 1rem; background: #fafafa; margin-bottom: 1rem; }
-    .section h3 { margin: 0 0 0.75rem 0; font-size: 13px; color: #333; }
-    .btn { display: inline-block; margin-right: 0.5rem; padding: 0.4rem 0.8rem; background: #06c; color: #fff; text-decoration: none; border-radius: 4px; }
-    table { width: 100%; border-collapse: collapse; }
-    th, td { border: 1px solid #ccc; padding: 0.4rem 0.5rem; text-align: left; }
-    th { background: #e8e8e8; }
-  </style>
+  <title>Vehicle Sales – My Vehicle Sales | Oracle Siebel eDealer</title>
+  <link rel="stylesheet" href="dms-layout.css" />
 </head>
-<body>
-  <nav class="top-nav" role="navigation">
+<body class="dms-app">
+  <div class="dms-siebel-brand"><strong>Oracle</strong> Siebel &nbsp;|&nbsp; Hero Connect &nbsp;|&nbsp; <span>edealerHMCL / enu</span></div>
+  <div class="dms-find-bar">
+    <label for="dms-saved-query">Find</label>
+    <select id="dms-saved-query" name="saved_query">
+      <option>*Today's Follow Up</option>
+      <option>All Orders Today</option>
+      <option>All Vehicles</option>
+      <option>My Vehicle Sales</option>
+    </select>
+  </div>
+  <nav class="dms-app-tabs" aria-label="Main modules">
     <a href="my-sales.html">Home</a>
     <a href="my-sales.html">My Dashboard</a>
-    <a href="my-sales.html">Payments</a>
-    <a href="vehicle.html">Vehicles</a>
-    <a href="my-sales.html">Enquiry</a>
+    <a href="contacts-payments.html">Payments</a>
+    <a href="vehicles.html">Vehicles</a>
+    <a href="enquiry.html">Enquiry</a>
     <a href="my-sales.html">Vehicle Sales Invoices</a>
     <a href="my-sales.html">Vehicles Receipt</a>
+    <a href="my-sales.html">Vehicles Inventory</a>
     <a href="my-sales.html" class="active">Vehicle Sales</a>
   </nav>
-
-  <div class="main">
-    <div class="section">
-      <h3>My Vehicle Sales</h3>
-      <p>
-        <a class="btn" href="line-items.html">Create Invoice</a>
-        <a class="btn" href="line-items.html">Send Email</a>
-        <a class="btn" href="line-items.html">ReSend SMS</a>
-        <a class="btn" href="line-items.html">Apply Campaign</a>
-      </p>
-      <table>
+  <nav class="dms-sub-tabs" aria-label="Vehicle Sales views">
+    <a href="my-sales.html" class="active">Sales Orders Home</a>
+    <a href="line-items.html">Invoice</a>
+    <a href="my-sales.html">Rural Vertical Mismatch</a>
+    <a href="my-sales.html">Delivery Challan</a>
+  </nav>
+  <div class="dms-main">
+    <h1 class="dms-page-title">My Vehicle Sales — Sales Orders List</h1>
+    <div class="dms-section">
+      <h3>Order toolbar</h3>
+      <div class="dms-toolbar" role="toolbar">
+        <button type="button" class="dms-btn" id="dms-btn-create-invoice">Create Invoice</button>
+        <button type="button" class="dms-btn dms-btn-secondary" disabled>Cancel Booking</button>
+        <button type="button" class="dms-btn dms-btn-secondary" disabled>Validate Offer</button>
+        <button type="button" class="dms-btn dms-btn-secondary" disabled>WOT Details</button>
+        <button type="button" class="dms-btn dms-btn-secondary" disabled>Verify OTP</button>
+        <button type="button" class="dms-btn dms-btn-secondary" disabled>Validate GL Voucher</button>
+      </div>
+      <p class="dms-hint">If <strong>Exchange Required</strong> = Y on the order, use <strong>WOT Details</strong> (per DMS rule).</p>
+      <table class="dms-table">
         <thead>
           <tr>
             <th>Order #</th>
             <th>Customer</th>
+            <th>Mobile</th>
             <th>Status</th>
-            <th>Open</th>
+            <th>Action</th>
           </tr>
         </thead>
         <tbody>
           <tr>
+            <td>11870-02-SVSO-0326-3134</td>
+            <td>LEKHRAJ</td>
+            <td>9694585832</td>
+            <td>Pending</td>
+            <td><a class="dms-btn" href="line-items.html">Open Order</a></td>
+          </tr>
+          <tr>
             <td>11870-02-SVSO-00023</td>
             <td>Demo Customer</td>
+            <td>—</td>
             <td>Open</td>
-            <td><a class="btn" href="line-items.html">Line Items</a></td>
+            <td><a class="dms-btn" href="line-items.html">Line Items</a></td>
           </tr>
         </tbody>
       </table>
     </div>
   </div>
+  <script>
+    document.getElementById("dms-btn-create-invoice")?.addEventListener("click", function () {
+      window.location.href = "line-items.html";
+    });
+  </script>
 </body>
 </html>

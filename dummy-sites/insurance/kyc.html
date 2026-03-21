@@ -12,7 +12,18 @@
     .form-row { display: grid; grid-template-columns: 290px 1fr; gap: 0.5rem; margin-bottom: 0.5rem; align-items: center; }
     input, select { padding: 0.3rem 0.45rem; width: 100%; }
     .btn { padding: 0.45rem 0.8rem; background: #06c; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
-    .hint { color: #555; }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    .btn-secondary { background: #5a6a7a; }
+    .mobile-with-action { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+    .mobile-with-action input { flex: 1; min-width: 140px; max-width: 220px; width: auto; }
+    .hint { color: #555; font-size: 11px; margin-top: 0.25rem; }
+    .kyc-message { margin: 0.5rem 0 0.75rem; padding: 0.6rem 0.75rem; border-radius: 4px; border: 1px solid #ccc; }
+    .kyc-message[hidden] { display: none !important; }
+    .kyc-message--ok { background: #e8f6e8; border-color: #8c8; color: #163816; }
+    .kyc-message--warn { background: #fff8e6; border-color: #d9c26a; color: #4a3d10; }
+    .kyc-message--err { background: #fdeaea; border-color: #d99; color: #611; }
+    .doc-block[hidden] { display: none !important; }
+    .doc-block { margin-top: 0.5rem; padding-top: 0.5rem; border-top: 1px dashed #bbb; }
   </style>
 </head>
 <body>
@@ -20,19 +31,129 @@
   <div class="main">
     <div class="section">
       <h3>KYC Verification</h3>
-      <div class="form-row"><label>Insurance Company</label><select id="ins-company"><option>Universal Sompo general insurance</option></select></div>
+      <div class="form-row"><label for="ins-company">Insurance Company</label><select id="ins-company">
+        <option>Universal Sompo General Insurance</option>
+        <option>National Insurance Company Limited</option>
+        <option>The New India Assurance Co. Ltd.</option>
+        <option>ICICI Lombard General Insurance</option>
+        <option>Bajaj Allianz General Insurance</option>
+        <option>HDFC ERGO General Insurance</option>
+      </select></div>
       <div class="form-row"><label>KYC Partner</label><select id="ins-kyc-partner"><option>Signzy</option></select></div>
       <div class="form-row"><label>Proposer Type</label><select id="ins-proposer-type"><option>Individual</option></select></div>
       <div class="form-row"><label>Officially Valid Document (OVD) Type</label><select id="ins-ovd-type"><option>AADHAAR EXTRACTION</option><option>AADHAAR CARD</option><option>PAN CARD</option></select></div>
-      <div class="form-row"><label>Mobile No.</label><input id="ins-mobile-no" value="9694585832" /></div>
-      <div class="form-row"><label>AADHAAR Front Image</label><input id="ins-aadhar-front" type="file" /></div>
-      <div class="form-row"><label>AADHAAR Rear Image</label><input id="ins-aadhar-rear" type="file" /></div>
-      <div class="form-row"><label>Customer Photo</label><input id="ins-customer-photo" type="file" /></div>
+      <div class="form-row">
+        <label>Mobile No.</label>
+        <div>
+          <div class="mobile-with-action">
+            <input id="ins-mobile-no" type="tel" maxlength="10" inputmode="numeric" placeholder="10-digit mobile" autocomplete="tel" />
+            <button type="button" id="ins-check-mobile" class="btn btn-secondary">Verify mobile</button>
+          </div>
+          <p class="hint">After entering mobile, click <strong>Verify mobile</strong>. If KYC is already on file for this number, proceed without documents. Otherwise upload Aadhaar front, Aadhaar back, and use the <strong>same Aadhaar front</strong> file again for Customer Photo, then proceed.</p>
+          <p class="hint">Demo: <code>9694585832</code> simulates <strong>KYC found</strong>; any other valid 10-digit number requires document upload.</p>
+        </div>
+      </div>
+      <div id="ins-kyc-message" class="kyc-message" role="status" hidden></div>
+      <div id="ins-doc-block" class="doc-block" hidden>
+        <div class="form-row"><label>AADHAAR Front Image</label><input id="ins-aadhar-front" type="file" accept="image/*" /></div>
+        <div class="form-row"><label>AADHAAR Rear Image</label><input id="ins-aadhar-rear" type="file" accept="image/*" /></div>
+        <div class="form-row"><label>Customer Photo</label><input id="ins-customer-photo" type="file" accept="image/*" /></div>
+        <p class="hint">Upload Aadhaar front and rear. For <strong>Customer Photo</strong>, select your <strong>Aadhaar front</strong> image again if you do not have a separate photograph.</p>
+      </div>
       <div class="form-row"><label>Are you or anyone in your family associated with a political party or organisation?</label><select id="ins-pep"><option>No</option><option>Yes</option></select></div>
       <div class="form-row"><label>Consent</label><label><input id="ins-consent" type="checkbox" checked style="width:auto;" /> I hereby give my consent for KYC verification.</label></div>
-      <p class="hint">KYC already verified against AADHAAR CARD No. 9694585832, please proceed for policy issuance.</p>
-      <p><button id="ins-proceed" class="btn" onclick="location.href='kyc-success.html'">Proceed</button></p>
+      <p><button type="button" id="ins-proceed" class="btn" disabled>Proceed</button></p>
     </div>
   </div>
+  <script>
+(function () {
+  /** Mobile numbers that already have KYC in the dummy insurer system (mirrored in Playwright for automation). */
+  var KYC_FOUND_MOBILES = { "9694585832": true };
+
+  function normalizeMobile(v) {
+    return String(v || "").replace(/\D/g, "").slice(0, 10);
+  }
+
+  function setMessage(ok, warn, err, text) {
+    var el = document.getElementById("ins-kyc-message");
+    el.hidden = false;
+    el.className = "kyc-message" + (ok ? " kyc-message--ok" : warn ? " kyc-message--warn" : err ? " kyc-message--err" : "");
+    el.textContent = text;
+  }
+
+  function hideMessage() {
+    var el = document.getElementById("ins-kyc-message");
+    el.hidden = true;
+    el.textContent = "";
+  }
+
+  function updateProceedEnabled() {
+    var consent = document.getElementById("ins-consent").checked;
+    var proceed = document.getElementById("ins-proceed");
+    var state = window.__insKycState;
+    if (state === "invalid" || state === "pending") {
+      proceed.disabled = true;
+      return;
+    }
+    if (state === "found") {
+      proceed.disabled = !consent;
+      return;
+    }
+    if (state === "need_docs") {
+      var f = document.getElementById("ins-aadhar-front").files.length;
+      var r = document.getElementById("ins-aadhar-rear").files.length;
+      var p = document.getElementById("ins-customer-photo").files.length;
+      proceed.disabled = !(consent && f && r && p);
+      return;
+    }
+    proceed.disabled = true;
+  }
+
+  function checkMobile() {
+    var m = normalizeMobile(document.getElementById("ins-mobile-no").value);
+    var docBlock = document.getElementById("ins-doc-block");
+    if (m.length !== 10) {
+      window.__insKycState = "invalid";
+      setMessage(false, false, true, "Enter a valid 10-digit mobile number.");
+      docBlock.hidden = true;
+      updateProceedEnabled();
+      return;
+    }
+    if (KYC_FOUND_MOBILES[m]) {
+      window.__insKycState = "found";
+      setMessage(true, false, false, "KYC found for this mobile number. You can proceed without uploading documents.");
+      docBlock.hidden = true;
+      document.getElementById("ins-aadhar-front").value = "";
+      document.getElementById("ins-aadhar-rear").value = "";
+      document.getElementById("ins-customer-photo").value = "";
+    } else {
+      window.__insKycState = "need_docs";
+      setMessage(false, true, false, "KYC not found. Please upload Aadhaar front, Aadhaar rear, and for Customer Photo upload your Aadhaar front image again, then tick consent and click Proceed.");
+      docBlock.hidden = false;
+    }
+    updateProceedEnabled();
+  }
+
+  function resetAfterMobileEdit() {
+    window.__insKycState = "pending";
+    hideMessage();
+    document.getElementById("ins-doc-block").hidden = true;
+    document.getElementById("ins-proceed").disabled = true;
+  }
+
+  document.getElementById("ins-check-mobile").addEventListener("click", checkMobile);
+  document.getElementById("ins-mobile-no").addEventListener("input", resetAfterMobileEdit);
+  document.getElementById("ins-consent").addEventListener("change", updateProceedEnabled);
+  ["ins-aadhar-front", "ins-aadhar-rear", "ins-customer-photo"].forEach(function (id) {
+    document.getElementById(id).addEventListener("change", updateProceedEnabled);
+  });
+  document.getElementById("ins-proceed").addEventListener("click", function () {
+    if (this.disabled) return;
+    window.location.href = "kyc-success.html";
+  });
+
+  window.__insKycState = "pending";
+})();
+  </script>
 </body>
 </html>
