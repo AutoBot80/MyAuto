@@ -21,14 +21,13 @@ export async function uploadScans(
   return data;
 }
 
-/** Subfolder = mobile_ddmmyy; files saved as Aadhar.jpg, Aadhar_back.jpg, Details.jpg; optional Insurance.jpg, Financing.jpg */
+/** Subfolder = mobile_ddmmyy; files saved as Aadhar.jpg, Aadhar_back.jpg, Details.jpg; optional Insurance.jpg */
 export async function uploadScansV2(
   mobile: string,
   aadharScan: File,
   aadharBackScan: File,
   salesDetail: File,
   insuranceSheet?: File,
-  financingDoc?: File,
   dealerId?: number
 ): Promise<UploadScansResponse> {
   const form = new FormData();
@@ -38,7 +37,6 @@ export async function uploadScansV2(
   form.append("aadhar_back", aadharBackScan);
   form.append("sales_detail", salesDetail);
   if (insuranceSheet) form.append("insurance_sheet", insuranceSheet);
-  if (financingDoc) form.append("financing_doc", financingDoc);
   const res = await fetch(`${getBaseUrl()}/uploads/scans-v2`, {
     method: "POST",
     body: form,

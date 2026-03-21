@@ -12,11 +12,18 @@ from app.config import (
     DMS_BASE_URL,
     DMS_LOGIN_USER,
     DMS_LOGIN_PASSWORD,
+    INSURANCE_BASE_URL,
     VAHAN_BASE_URL,
     get_ocr_output_dir,
     get_uploads_dir,
 )
-from app.services.fill_dms_service import run_fill_dms, run_fill_dms_only, run_fill_vahan_only, update_vehicle_master_from_dms as _update_vehicle_master_from_dms
+from app.services.fill_dms_service import (
+    run_fill_dms,
+    run_fill_dms_only,
+    run_fill_insurance_only,
+    run_fill_vahan_only,
+    update_vehicle_master_from_dms as _update_vehicle_master_from_dms,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/fill-dms", tags=["fill-dms"])
@@ -24,6 +31,61 @@ router = APIRouter(prefix="/fill-dms", tags=["fill-dms"])
 DMS_NO_VEHICLE_ERROR = (
     "No such vehicle found in DMS. Please edit Vehicle Info and submit form again."
 )
+
+
+def _normalize_automation_error(raw_error: str | None) -> str | None:
+    if not raw_error:
+        return raw_error
+    message = str(raw_error).strip()
+    if not message:
+        return None
+
+    if "Missing required DMS DB values:" in message:
+        fields = [p.strip() for p in message.split(":", 1)[1].split(",") if p.strip()]
+        if not fields:
+            return "DMS cannot continue because required database fields are missing."
+        return (
+            "DMS cannot continue because required DB fields are missing. "
+            "Please complete Submit Info data and retry. Missing: "
+            + ", ".join(fields)
+            + "."
+        )
+
+    if "Missing required Vahan DB values:" in message:
+        fields = [p.strip() for p in message.split(":", 1)[1].split(",") if p.strip()]
+        if not fields:
+            return "Vahan cannot continue because required database fields are missing."
+        return (
+            "Vahan cannot continue because required DB fields are missing. "
+            "Please complete Submit Info / DMS data and retry. Missing: "
+            + ", ".join(fields)
+            + "."
+        )
+    if "Missing required Insurance DB values:" in message:
+        fields = [p.strip() for p in message.split(":", 1)[1].split(",") if p.strip()]
+        if not fields:
+            return "Insurance cannot continue because required database fields are missing."
+        return (
+            "Insurance cannot continue because required DB fields are missing. "
+            "Please complete Submit Info data and retry. Missing: "
+            + ", ".join(fields)
+            + "."
+        )
+
+    if "form_vahan_view.vehicle_price is empty" in message or "vehicle_price must be positive" in message:
+        return (
+            "Vahan cannot continue because vehicle price is missing in DB. "
+            "Run DMS first so vehicle price is scraped and saved, then retry."
+        )
+
+    if "Vahan result missing data-rto-fees value" in message:
+        return "Vahan completed navigation but RTO fees could not be scraped from the result screen. Please retry."
+    if "Vahan result row not found for rto_fees scrape" in message:
+        return "Vahan result section did not return a fees row. Please retry after confirming site session is active."
+    if "Vahan rto_fees could not be scraped" in message:
+        return "Vahan could not scrape RTO fees. Please retry."
+
+    return message
 
 
 def _has_scraped_vehicle(scraped: dict) -> bool:
@@ -96,6 +158,19 @@ class FillVahanResponse(BaseModel):
     error: str | None = None
 
 
+class FillInsuranceRequest(BaseModel):
+    insurance_base_url: str | None = None
+    dealer_id: int | None = None
+    customer_id: int | None = None
+    vehicle_id: int | None = None
+    subfolder: str | None = None
+
+
+class FillInsuranceResponse(BaseModel):
+    success: bool
+    error: str | None = None
+
+
 class PrintForm20Request(BaseModel):
     subfolder: str
     customer: FillDmsCustomer = FillDmsCustomer()
@@ -116,16 +191,17 @@ def _safe_subfolder_name(subfolder: str) -> str:
     return re.sub(r"[^\w\-]", "_", (subfolder or "").strip()) or "default"
 
 
-def _ensure_absolute_url(url: str, fallback_base: str = "http://127.0.0.1:8000") -> str:
-    """Convert relative URL (e.g. /dummy-vaahan) to absolute for Playwright page.goto()."""
-    if not url or not url.strip():
-        return url
-    url = url.strip()
-    if url.startswith(("http://", "https://")):
-        return url
-    if url.startswith("/"):
-        return f"{fallback_base.rstrip('/')}{url}"
-    return url
+def _require_absolute_http_url(url: str, field_name: str) -> str:
+    """Playwright needs an absolute URL; .env must supply full URLs (no host/path fallbacks)."""
+    u = (url or "").strip()
+    if not u:
+        return u
+    if not u.startswith(("http://", "https://")):
+        raise HTTPException(
+            status_code=400,
+            detail=f"{field_name} must be an absolute URL (http:// or https://). Set DMS_BASE_URL, VAHAN_BASE_URL, or INSURANCE_BASE_URL in backend/.env.",
+        )
+    return u.rstrip("/")
 
 
 @router.get("/data-from-dms")
@@ -175,7 +251,7 @@ async def fill_dms_only(req: FillDmsRequest) -> FillDmsResponse:
     base_url = (req.dms_base_url or DMS_BASE_URL or "").strip()
     if not base_url:
         raise HTTPException(status_code=400, detail="dms_base_url required (or set DMS_BASE_URL)")
-    base_url = _ensure_absolute_url(base_url)
+    base_url = _require_absolute_http_url(base_url, "dms_base_url")
     did = req.dealer_id if req.dealer_id is not None else DEALER_ID
     uploads_dir = Path(get_uploads_dir(did))
     if not uploads_dir.is_dir():
@@ -218,7 +294,7 @@ async def fill_dms_only(req: FillDmsRequest) -> FillDmsResponse:
         pdfs_saved=result.get("pdfs_saved") or [],
         application_id=None,
         rto_fees=None,
-        error=result.get("error"),
+        error=_normalize_automation_error(result.get("error")),
     )
 
 
@@ -308,21 +384,21 @@ async def fill_vahan_only(req: FillVahanRequest) -> FillVahanResponse:
     vahan_url = (req.vahan_base_url or VAHAN_BASE_URL or "").strip()
     if not vahan_url:
         raise HTTPException(status_code=400, detail="vahan_base_url required")
-    vahan_url = _ensure_absolute_url(vahan_url)
+    vahan_url = _require_absolute_http_url(vahan_url, "vahan_base_url")
     did = req.dealer_id if req.dealer_id is not None else DEALER_ID
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(
         None,
         lambda: run_fill_vahan_only(
             vahan_base_url=vahan_url,
-            rto_dealer_id=(req.rto_dealer_id or "").strip() or "RTO100001",
+            rto_dealer_id=(req.rto_dealer_id or "").strip(),
             customer_name=str(req.customer_name or ""),
             chassis_no=str(req.chassis_no or ""),
             vehicle_model=str(req.vehicle_model or ""),
             vehicle_colour=str(req.vehicle_colour or ""),
-            fuel_type=str(req.fuel_type or "Petrol"),
+            fuel_type=str(req.fuel_type or ""),
             year_of_mfg=str(req.year_of_mfg or ""),
-            vehicle_price=float(req.vehicle_price or 72000),
+            vehicle_price=float(req.vehicle_price or 0),
             ocr_output_dir=Path(get_ocr_output_dir(did)),
             subfolder=req.subfolder,
             customer_id=req.customer_id,
@@ -333,7 +409,32 @@ async def fill_vahan_only(req: FillVahanRequest) -> FillVahanResponse:
         success=result.get("error") is None,
         application_id=result.get("application_id"),
         rto_fees=result.get("rto_fees"),
-        error=result.get("error"),
+        error=_normalize_automation_error(result.get("error")),
+    )
+
+
+@router.post("/insurance", response_model=FillInsuranceResponse)
+async def fill_insurance_only(req: FillInsuranceRequest) -> FillInsuranceResponse:
+    """Run Insurance flow only. Fills fields but does not submit/issue policy."""
+    insurance_url = (req.insurance_base_url or INSURANCE_BASE_URL or "").strip()
+    if not insurance_url:
+        raise HTTPException(status_code=400, detail="insurance_base_url required")
+    insurance_url = _require_absolute_http_url(insurance_url, "insurance_base_url")
+    did = req.dealer_id if req.dealer_id is not None else DEALER_ID
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(
+        None,
+        lambda: run_fill_insurance_only(
+            insurance_base_url=insurance_url,
+            subfolder=req.subfolder,
+            customer_id=req.customer_id,
+            vehicle_id=req.vehicle_id,
+            ocr_output_dir=Path(get_ocr_output_dir(did)),
+        ),
+    )
+    return FillInsuranceResponse(
+        success=result.get("error") is None and bool(result.get("success")),
+        error=_normalize_automation_error(result.get("error")),
     )
 
 
@@ -344,7 +445,7 @@ async def fill_dms(req: FillDmsRequest) -> FillDmsResponse:
     if not base_url:
         logger.warning("fill_dms: dms_base_url missing")
         raise HTTPException(status_code=400, detail="dms_base_url required (or set DMS_BASE_URL)")
-    base_url = _ensure_absolute_url(base_url)
+    base_url = _require_absolute_http_url(base_url, "dms_base_url")
     did = req.dealer_id if req.dealer_id is not None else DEALER_ID
     uploads_dir = Path(get_uploads_dir(did))
     if not uploads_dir.is_dir():
@@ -357,7 +458,7 @@ async def fill_dms(req: FillDmsRequest) -> FillDmsResponse:
     vehicle_dict = req.vehicle.model_dump(exclude_none=True)
     vahan_url = (req.vahan_base_url or VAHAN_BASE_URL or "").strip() or None
     if vahan_url:
-        vahan_url = _ensure_absolute_url(vahan_url)
+        vahan_url = _require_absolute_http_url(vahan_url, "vahan_base_url")
     logger.info("fill_dms: calling run_fill_dms base_url=%s vahan_url=%s", base_url[:60] if base_url else None, (vahan_url[:60] if vahan_url else None))
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(
@@ -402,5 +503,5 @@ async def fill_dms(req: FillDmsRequest) -> FillDmsResponse:
         pdfs_saved=result.get("pdfs_saved") or [],
         application_id=result.get("application_id"),
         rto_fees=result.get("rto_fees"),
-        error=result.get("error"),
+        error=_normalize_automation_error(result.get("error")),
     )

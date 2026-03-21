@@ -80,12 +80,16 @@ def submit_info(
 
     name = _str_or_none(customer.get("name")) or ""
     address = _str_or_none(customer.get("address"))
+    alt_phone_num = _str_or_none(customer.get("alt_phone_num"), 16)
     pin = _str_or_none(customer.get("pin"), 6)
     city = _str_or_none(customer.get("city"))
     state = _str_or_none(customer.get("state"))
     gender = _str_or_none(customer.get("gender"), 8)
     date_of_birth = _str_or_none(customer.get("date_of_birth"), 20)
     profession = _str_or_none(customer.get("profession"), 16)
+    financier = _str_or_none(customer.get("financier"), 255)
+    marital_status = _str_or_none(customer.get("marital_status"), 32)
+    nominee_gender = _str_or_none(customer.get("nominee_gender"), 16)
 
     frame_no = _str_or_none(vehicle.get("frame_no"), 64)
     engine_no = _str_or_none(vehicle.get("engine_no"), 64)
@@ -138,19 +142,58 @@ def submit_info(
                     """
                     UPDATE customer_master SET
                         name = %s, address = %s, pin = %s, city = %s, state = %s,
-                        gender = %s, date_of_birth = %s, profession = %s, file_location = %s
+                        alt_phone_num = %s,
+                        gender = %s, date_of_birth = %s, profession = %s,
+                        financier = %s, marital_status = %s, nominee_gender = %s,
+                        file_location = %s
                     WHERE customer_id = %s
                     """,
-                    (name, address, pin, city, state, gender, date_of_birth, profession, loc, customer_id),
+                    (
+                        name,
+                        address,
+                        pin,
+                        city,
+                        state,
+                        alt_phone_num,
+                        gender,
+                        date_of_birth,
+                        profession,
+                        financier,
+                        marital_status,
+                        nominee_gender,
+                        loc,
+                        customer_id,
+                    ),
                 )
             else:
                 cur.execute(
                     """
-                    INSERT INTO customer_master (aadhar, name, address, pin, city, state, mobile_number, profession, file_location, gender, date_of_birth)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    INSERT INTO customer_master (
+                        aadhar, name, address, pin, city, state, mobile_number,
+                        alt_phone_num,
+                        profession, financier, marital_status, nominee_gender,
+                        file_location, gender, date_of_birth
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING customer_id
                     """,
-                    (aadhar_last4, name, address, pin, city, state, mobile, profession, loc, gender, date_of_birth),
+                    (
+                        aadhar_last4,
+                        name,
+                        address,
+                        pin,
+                        city,
+                        state,
+                        mobile,
+                        alt_phone_num,
+                        profession,
+                        financier,
+                        marital_status,
+                        nominee_gender,
+                        loc,
+                        gender,
+                        date_of_birth,
+                    ),
                 )
                 customer_id = cur.fetchone()["customer_id"]
 

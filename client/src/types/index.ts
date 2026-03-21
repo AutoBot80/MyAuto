@@ -71,6 +71,7 @@ export interface ExtractedVehicleDetails {
 export interface ExtractedCustomerDetails {
   aadhar_id?: string;
   name?: string;
+  alt_phone_num?: string;
   gender?: string;
   year_of_birth?: string;
   date_of_birth?: string;
@@ -98,6 +99,9 @@ export function buildDisplayAddress(c: ExtractedCustomerDetails | null | undefin
 
 export interface ExtractedInsuranceDetails {
   profession?: string;
+  financier?: string;
+  marital_status?: string;
+  nominee_gender?: string;
   nominee_name?: string;
   nominee_age?: string;
   nominee_relationship?: string;

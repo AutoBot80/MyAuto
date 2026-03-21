@@ -27,15 +27,17 @@ def _parse_date(s: str | None) -> date | None:
     return None
 
 
-def _ensure_absolute_url(url: str, fallback: str = "http://127.0.0.1:8000") -> str:
-    if not url or not url.strip():
-        return url
-    url = url.strip()
-    if url.startswith(("http://", "https://")):
-        return url
-    if url.startswith("/"):
-        return f"{fallback.rstrip('/')}{url}"
-    return url
+def _require_absolute_http_url(url: str) -> str:
+    """Vahan URLs must be absolute; set VAHAN_BASE_URL in backend/.env (no fallbacks)."""
+    u = (url or "").strip()
+    if not u:
+        return u
+    if not u.startswith(("http://", "https://")):
+        raise HTTPException(
+            status_code=400,
+            detail="vahan_base_url must be an absolute URL (http:// or https://). Set VAHAN_BASE_URL in backend/.env.",
+        )
+    return u.rstrip("/")
 
 
 class RtoPaymentInsertPayload(BaseModel):
@@ -109,7 +111,7 @@ def insert_rto_payment(payload: RtoPaymentInsertPayload) -> dict:
 def process_rto_batch(payload: RtoBatchStartPayload) -> dict:
     """Start dealer-scoped Vahan batch processing up to the upload/cart step."""
     did = payload.dealer_id if payload.dealer_id is not None else DEALER_ID
-    vahan_url = _ensure_absolute_url((payload.vahan_base_url or VAHAN_BASE_URL or "").strip())
+    vahan_url = _require_absolute_http_url((payload.vahan_base_url or VAHAN_BASE_URL or "").strip())
     if not vahan_url:
         raise HTTPException(status_code=400, detail="vahan_base_url required (set VAHAN_BASE_URL in backend/.env)")
     result = start_dealer_rto_batch(
@@ -145,7 +147,7 @@ async def pay_rto(application_id: str, body: RtoPayRequest | None = None) -> dic
     if row.get("status") == "Paid":
         return {"ok": True, "application_id": application_id, "pay_txn_id": row.get("pay_txn_id"), "message": "Already paid"}
 
-    vahan_url = _ensure_absolute_url((body.vahan_base_url if body else None) or VAHAN_BASE_URL or "")
+    vahan_url = _require_absolute_http_url((body.vahan_base_url if body else None) or VAHAN_BASE_URL or "")
     if not vahan_url:
         raise HTTPException(status_code=400, detail="vahan_base_url required")
 

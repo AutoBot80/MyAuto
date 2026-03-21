@@ -1,7 +1,7 @@
 # Business Requirements Document (BRD)
 ## Auto Dealer Management System — Arya Agencies
 
-**Version:** 0.8  
+**Version:** 1.7  
 **Last Updated:** March 2026  
 **Status:** Draft
 
@@ -63,7 +63,7 @@ The system is a server–client application for auto dealers. Dealers run a ligh
 - **FR-5** Allow users to review and correct OCR-extracted data before it is used.
 - **FR-6** Trigger "send to portal" actions that enqueue automation jobs.
 - **FR-7** Basic client-side validation (required fields, formats) with no heavy business logic.
-- **FR-8** Add Sales flow: Submit Info (customer, vehicle, insurance) → Fill Forms (DMS, Form 20, RTO Queue insertion) → RTO Queue.
+- **FR-8** Add Sales flow: Submit Info (customer, vehicle, insurance) → operator-triggered actions with separate controls (`Fill DMS`, `Fill Insurance`, `Print Forms`) → RTO Queue insertion during print step.
 - **FR-9** RTO Queue page: list queued RTO work items created by Fill Forms and let an operator process the oldest 7 queued rows for their dealer in one browser session.
 - **FR-10** View Customer page: search by mobile/plate, view vehicles and insurance, and inspect the selected vehicle's Vahan field mapping in a single horizontally scrollable row.
 - **FR-10a** Main page: show an `Admin Saathi` tile with a destructive-action button that lets an operator clear all non-reference-table data after explicit confirmation.
@@ -79,6 +79,7 @@ The system is a server–client application for auto dealers. Dealers run a ligh
 - **FR-17** Submit Info: upsert customer_master, vehicle_master, sales_master, insurance_master from extracted/entered data.
 - **FR-18** Fill DMS: Playwright login to OEM DMS, read fill values only from `form_dms_view`, search vehicle, scrape data, download Form 21/22, write `DMS_Form_Values.txt` into the matching `ocr_output` subfolder, and update vehicle_master from scraped data.
 - **FR-18a** Existing tab reuse with operator fallback: DMS/Vahan steps first reuse already open logged-in tabs; if none are detectable, API opens Edge/Chrome to the target site and returns a user-facing message asking the operator to login (first-time) and retry.
+- **FR-18b** Insurance fill step: Playwright fills Insurance portal fields from persisted DB records only, reuses an already open logged-in insurance tab (or opens browser and asks operator to login first-time), does not click final issue/submit, and keeps the browser open for operator review.
 - **FR-19** Form 20: Generate Form 20.pdf from Word template (or PDF overlay / HTML fallback); fill placeholders from customer, vehicle, dealer; output combined PDF (front, back, page 3).
 - **FR-19a** Gate Pass: Generate Gate Pass.pdf from Word template; fill placeholders (OEM name, today date, customer name, Aadhar, model, colour, key no., chassis no.); save to upload subfolder.
 - **FR-20** RTO Queueing: after Fill Forms completes DMS/Form 20 work, create an `rto_queue` row with the dealer/customer/vehicle reference, estimated RTO fees, and queued status instead of auto-running the dummy Vahan site.
@@ -119,6 +120,7 @@ This section defines the required operator navigation path and minimum field-ent
 | Enquiry | Contact First Name | `form_dms_view` (customer identity derived from DB records) |
 | Enquiry | Contact Last Name | `form_dms_view` |
 | Enquiry | Mobile Phone # | `form_dms_view` |
+| Enquiry | Landline # | `form_dms_view` (`customer_master.alt_phone_num`) |
 | Enquiry | State | `form_dms_view` |
 | Enquiry | Address Line 1 | `form_dms_view` |
 | Enquiry | Pin Code | `form_dms_view` |
@@ -135,9 +137,47 @@ This section defines the required operator navigation path and minimum field-ent
 
 - Insurance data captured in Submit Info must map to persisted DB columns before any downstream automation:
   - `insurance_master`: insurer, policy number, policy dates, premium, nominee fields.
-  - `customer_master.profession`: profession captured with insurance context in Add Sales.
+  - `customer_master`: `profession`, `financier`, `marital_status`, and `nominee_gender` captured with details-sheet/insurance context in Add Sales.
 
-### 6.5 Download/Save Outputs
+### 6.5 Insurance Navigation Sequence (Video-Aligned)
+
+1. Login redirection (`misp.heroinsurance.com`) -> KYC page
+2. KYC verification page (`ekycpage.aspx`)
+3. KYC success auto-redirect screen
+4. MisDMS policy entry page (`MispDms.aspx`) with VIN input
+5. New policy creation page (`MispPolicy.aspx`) for "New Policy - Two Wheeler"
+6. (Optional reference tab) Hero Connect lookup for invoice/vehicle context, then return to MisDMS policy flow
+
+### 6.6 Insurance Labels to Minimum Data Source Contract
+
+| Insurance page | Label | Required source (DB-backed) | Persisted DB column |
+|----------------|-------|------------------------------|---------------------|
+| KYC | Insurance Company | Dealer-configured insurer mapping | `insurance_master.insurer` |
+| KYC | KYC Partner | Dealer-configured onboarding value | Reference/config (runtime choice, not persisted in current schema) |
+| KYC | Proposer Type | Customer legal type | derived from `customer_master` context (current default: Individual) |
+| KYC | OVD Type | Document type from scan set | derived from uploaded docs metadata |
+| KYC | Mobile No. | Customer mobile | `customer_master.mobile_number` |
+| KYC | AADHAAR Front/Rear Image | Uploaded scan artifacts | `uploads/<dealer>/<subfolder>/` files |
+| KYC | Customer Photo | Uploaded scan artifacts | `uploads/<dealer>/<subfolder>/` files |
+| MisDMS Entry | VIN Number | Vehicle chassis/frame | `vehicle_master.chassis` (or raw frame column) |
+| New Policy | Proposer Name | Customer name | `customer_master.name` |
+| New Policy | Gender | Customer gender | `customer_master.gender` |
+| New Policy | Date of Birth | Customer DOB | `customer_master.dob` |
+| New Policy | Marital Status | Customer marital status | `customer_master.marital_status` |
+| New Policy | Occupation Type / Profession | Customer profession | `customer_master.profession` |
+| New Policy | Proposer State/City/Pin/Address | Customer address fields | `customer_master.state`, `customer_master.city`, `customer_master.pin`, `customer_master.address` |
+| New Policy | Frame No. | Vehicle frame/chassis | `vehicle_master.chassis` |
+| New Policy | Engine No. | Vehicle engine | `vehicle_master.engine` |
+| New Policy | Model Name | Vehicle model | `vehicle_master.model` |
+| New Policy | Year of Manufacture | Vehicle year | `vehicle_master.year_of_mfg` |
+| New Policy | Fuel Type | Vehicle fuel | `vehicle_master.fuel_type` |
+| New Policy | Ex-Showroom | Vehicle price | `vehicle_master.vehicle_price` |
+| New Policy | RTO | Dealer RTO mapping | `dealer_ref.rto_name` |
+| New Policy | Nominee Name/Age/Relation | Insurance nominee details | `insurance_master.nominee_name`, `insurance_master.nominee_age`, `insurance_master.nominee_relationship` |
+| New Policy | Nominee Gender | Customer-linked nominee capture | `customer_master.nominee_gender` |
+| New Policy | Financer Name | Finance context from details sheet | `customer_master.financier` |
+
+### 6.7 Download/Save Outputs
 
 - DMS Reports must save:
   - `form21.pdf`
@@ -146,10 +186,14 @@ This section defines the required operator navigation path and minimum field-ent
 - Automation trace files must save:
   - `ocr_output/<dealer>/<subfolder>/DMS_Form_Values.txt`
   - `ocr_output/<dealer>/<subfolder>/Vahan_Form_Values.txt`
+- Insurance run should also persist a form trace artifact when implemented:
+- Insurance run must persist a form trace artifact:
+  - `ocr_output/<dealer>/<subfolder>/Insurance_Form_Values.txt`
 
-### 6.6 Pending Video Confirmation
+### 6.8 Pending Video Confirmation
 
 - The exact click-level sequence and any optional/extra operator entries must be confirmed from the DMS operator video and then reconciled with Playwright steps.
+- Insurance video reconciliation completed for page order and core labels; final field-level optional add-on choices still require implementation-time confirmation.
 
 ---
 
@@ -218,3 +262,8 @@ Bulk upload automates the ingestion of scanned documents from a shared folder in
 | 1.0 | Mar 2026 | — | Updated automation behavior to reuse already open DMS/Vahan tabs and fail with site-not-open errors when tabs are unavailable |
 | 1.1 | Mar 2026 | — | Added operator fallback: if no detectable DMS/Vahan tab exists, backend opens Edge/Chrome and prompts first-time login before retry |
 | 1.2 | Mar 2026 | — | Added form navigation + minimum field-entry contracts for DMS/Vahan/Insurance and formalized no-assumption Playwright value discipline |
+| 1.3 | Mar 2026 | — | Updated Add Sales UX: removed financing upload/Fill Forms finance section; added Section 2 finance field and new customer fields (`financier`, `marital_status`, `nominee_gender`) sourced from details sheet |
+| 1.4 | Mar 2026 | — | Added insurance video-aligned navigation sequence and page-label to DB-column mapping contract; added planned Insurance form-value trace output |
+| 1.5 | Mar 2026 | — | Added Insurance Playwright functional rule: DB-only fill, operator-login fallback, no final submit click, and browser session kept open |
+| 1.6 | Mar 2026 | — | Updated Add Sales UI action flow to separate `Fill DMS`, `Fill Insurance`, and bottom `Print Forms` trigger |
+| 1.7 | Mar 2026 | — | Added Alternate/Landline field contract: capture from details sheet, persist as `customer_master.alt_phone_num`, and use for DMS/Insurance landline fills |

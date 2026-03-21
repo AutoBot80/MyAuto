@@ -13,6 +13,7 @@ INSERT INTO dealer_ref (
     pin,
     city,
     state,
+    rto_name,
     parent_id,
     phone
 ) VALUES (
@@ -46,6 +47,7 @@ INSERT INTO dealer_ref (
     '321001',
     'Bharatpur',
     'Rajasthan',
+    'RTO-Bharatpur',
     100000,
     '9413112499'
 )

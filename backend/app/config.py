@@ -100,7 +100,8 @@ BULK_INGEST_ENABLED = os.getenv("BULK_INGEST_ENABLED", "true").lower() in ("1", 
 BULK_JOB_MAX_ATTEMPTS = int(os.getenv("BULK_JOB_MAX_ATTEMPTS", "3"))
 
 # DMS fill (Playwright): base URL and login. Used when client calls POST /fill-dms.
-DMS_BASE_URL = os.getenv("DMS_BASE_URL", "").rstrip("/")  # e.g. http://127.0.0.1:8000/dummy-dms
+# DMS_BASE_URL / VAHAN_BASE_URL / INSURANCE_BASE_URL: required in .env (no in-code defaults); validated at app startup.
+DMS_BASE_URL = (os.getenv("DMS_BASE_URL") or "").strip().rstrip("/")
 DMS_LOGIN_USER = os.getenv("DMS_LOGIN_USER", "demo")
 DMS_LOGIN_PASSWORD = os.getenv("DMS_LOGIN_PASSWORD", "demo")
 # Run browser visible (headed) so user sees DMS page and automation. Set to "false" for headless.
@@ -109,6 +110,26 @@ DMS_PLAYWRIGHT_HEADED = os.getenv("DMS_PLAYWRIGHT_HEADED", "true").lower() in ("
 # Useful for operator inspection/debugging (server keeps the session alive).
 PLAYWRIGHT_KEEP_OPEN = os.getenv("PLAYWRIGHT_KEEP_OPEN", "false").lower() in ("1", "true", "yes")
 
-# Vahan (dummy or real) base URL for Playwright RTO registration step after DMS. e.g. http://127.0.0.1:8000/dummy-vaahan
-VAHAN_BASE_URL = os.getenv("VAHAN_BASE_URL", "").rstrip("/")
+# Vahan (dummy or real) base URL for Playwright RTO registration step after DMS.
+VAHAN_BASE_URL = (os.getenv("VAHAN_BASE_URL") or "").strip().rstrip("/")
+
+# Insurance (dummy or real) base URL for Playwright insurance fill step.
+INSURANCE_BASE_URL = (os.getenv("INSURANCE_BASE_URL") or "").strip().rstrip("/")
+
+
+def validate_external_site_urls() -> None:
+    """Fail fast if DMS/Vahan/Insurance base URLs are not set (no fallbacks)."""
+    missing: list[str] = []
+    if not DMS_BASE_URL:
+        missing.append("DMS_BASE_URL")
+    if not VAHAN_BASE_URL:
+        missing.append("VAHAN_BASE_URL")
+    if not INSURANCE_BASE_URL:
+        missing.append("INSURANCE_BASE_URL")
+    if missing:
+        raise RuntimeError(
+            "Missing required environment variables (no defaults): "
+            + ", ".join(missing)
+            + ". Set them in backend/.env — see backend/.env.example."
+        )
 

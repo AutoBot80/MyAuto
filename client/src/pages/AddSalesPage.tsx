@@ -5,12 +5,12 @@ import { useUploadScans } from "../hooks/useUploadScans";
 import { UploadScansPanel } from "../components/UploadScansPanel";
 import { getExtractedDetails } from "../api/aiReaderQueue";
 import { submitInfo } from "../api/submitInfo";
-import { fillDmsOnly, printForm20, isFillDmsAbortError } from "../api/fillDms";
+import { fillDmsOnly, fillInsuranceOnly, printForm20, isFillDmsAbortError } from "../api/fillDms";
 import { insertRtoPayment } from "../api/rtoPaymentDetails";
-import { getFormVahanView, type FormVahanViewResult } from "../api/customerSearch";
 import { loadAddSalesForm, saveAddSalesForm, clearAddSalesForm } from "../utils/addSalesStorage";
 import { markBulkLoadSuccess } from "../api/bulkLoads";
 import { normalizeVehicleDetails, hasVehicleData } from "../utils/vehicleDetails";
+import { StatusMessage } from "../components/StatusMessage";
 
 function getInitialForm() {
   const d = loadAddSalesForm();
@@ -23,6 +23,7 @@ function mapApiCustomerToExtracted(cust: Record<string, unknown>): ExtractedCust
   return {
     aadhar_id: String(r.aadhar_id ?? "").trim() || undefined,
     name: String(r.name ?? "").trim() || undefined,
+    alt_phone_num: String(r.alt_phone_num ?? r.alternate_mobile_number ?? "").trim() || undefined,
     gender: String(r.gender ?? "").trim() || undefined,
     year_of_birth: String(r.year_of_birth ?? "").trim() || undefined,
     date_of_birth: String(r.date_of_birth ?? "").trim() || undefined,
@@ -55,11 +56,15 @@ function computeRtoFees(totalAmount: unknown): number {
 
 interface AddSalesPageProps {
   dealerId: number;
-  /** DMS base URL for Fill DMS (Playwright). */
+  /** DMS base URL from GET /settings/site-urls (backend/.env DMS_BASE_URL). No client fallbacks. */
   dmsUrl?: string;
+  /** True while fetching /settings/site-urls. */
+  siteUrlsLoading?: boolean;
+  /** Set when site URL config could not be loaded from the API. */
+  siteUrlsError?: string | null;
 }
 
-export function AddSalesPage({ dealerId, dmsUrl }: AddSalesPageProps) {
+export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError }: AddSalesPageProps) {
   const [mobile, setMobile] = useState(() => getInitialForm().mobile);
   const [savedTo, setSavedTo] = useState<string | null>(() => getInitialForm().savedTo);
   const [uploadedFiles, setUploadedFiles] = useState<string[]>(() => getInitialForm().uploadedFiles);
@@ -77,8 +82,10 @@ export function AddSalesPage({ dealerId, dmsUrl }: AddSalesPageProps) {
   const [submitStatus, setSubmitStatus] = useState<string | null>(null);
   const [fillDmsStatus, setFillDmsStatus] = useState<string | null>(null);
   const [isFillDmsLoading, setIsFillDmsLoading] = useState(false);
+  const [isFillInsuranceLoading, setIsFillInsuranceLoading] = useState(false);
   const [isPrintFormsLoading, setIsPrintFormsLoading] = useState(false);
   const [printFormsStatus, setPrintFormsStatus] = useState<string | null>(null);
+  const [fillInsuranceStatus, setFillInsuranceStatus] = useState<string | null>(null);
   /** DMS-scraped vehicle; shown in Fill Forms > DMS. Only populated when user presses Fill Forms. */
   const [dmsScrapedVehicle, setDmsScrapedVehicle] = useState<ExtractedVehicleDetails | null>(null);
   /** True when Form 21 and Form 22 PDFs have been downloaded from DMS. */
@@ -90,7 +97,6 @@ export function AddSalesPage({ dealerId, dmsUrl }: AddSalesPageProps) {
   /** From last successful Submit Info; used when inserting the RTO queue row after Fill Forms. */
   const [lastSubmittedCustomerId, setLastSubmittedCustomerId] = useState<number | null>(() => getInitialForm().lastSubmittedCustomerId);
   const [lastSubmittedVehicleId, setLastSubmittedVehicleId] = useState<number | null>(() => getInitialForm().lastSubmittedVehicleId);
-  const [formVahanRow, setFormVahanRow] = useState<FormVahanViewResult["row"] | null>(null);
   /** Extraction error (e.g. QR code not readable) – stops poll and shows message. */
   const [extractionError, setExtractionError] = useState<string | null>(null);
   /** True once Textract has returned insurance data for this upload (details sheet processed). */
@@ -100,6 +106,9 @@ export function AddSalesPage({ dealerId, dmsUrl }: AddSalesPageProps) {
       stored &&
         [
           stored.profession,
+          stored.financier,
+          stored.marital_status,
+          stored.nominee_gender,
           stored.nominee_name,
           stored.nominee_age,
           stored.nominee_relationship,
@@ -128,6 +137,9 @@ export function AddSalesPage({ dealerId, dmsUrl }: AddSalesPageProps) {
         const current = prev ?? {};
         const fromServer = {
           profession: typeof r.profession === "string" ? r.profession : undefined,
+          financier: typeof r.financier === "string" ? r.financier : undefined,
+          marital_status: typeof r.marital_status === "string" ? r.marital_status : undefined,
+          nominee_gender: typeof r.nominee_gender === "string" ? r.nominee_gender : undefined,
           nominee_name: typeof r.nominee_name === "string" ? r.nominee_name : undefined,
           nominee_age: r.nominee_age != null ? String(r.nominee_age) : undefined,
           nominee_relationship: typeof r.nominee_relationship === "string" ? r.nominee_relationship : undefined,
@@ -140,6 +152,15 @@ export function AddSalesPage({ dealerId, dmsUrl }: AddSalesPageProps) {
         return {
           ...current,
           profession: current.profession && current.profession.trim() !== "" ? current.profession : fromServer.profession,
+          financier: current.financier && current.financier.trim() !== "" ? current.financier : fromServer.financier,
+          marital_status:
+            current.marital_status && current.marital_status.trim() !== ""
+              ? current.marital_status
+              : fromServer.marital_status,
+          nominee_gender:
+            current.nominee_gender && current.nominee_gender.trim() !== ""
+              ? current.nominee_gender
+              : fromServer.nominee_gender,
           nominee_name: current.nominee_name && current.nominee_name.trim() !== "" ? current.nominee_name : fromServer.nominee_name,
           nominee_age: current.nominee_age && current.nominee_age.trim() !== "" ? current.nominee_age : fromServer.nominee_age,
           nominee_relationship:
@@ -195,25 +216,6 @@ export function AddSalesPage({ dealerId, dmsUrl }: AddSalesPageProps) {
 
   // DMS and RTO sections populate only when user presses Fill Forms. No auto-fetch from file or DB.
 
-  useEffect(() => {
-    if (lastSubmittedCustomerId == null || lastSubmittedVehicleId == null) {
-      setFormVahanRow(null);
-      return;
-    }
-    let cancelled = false;
-    getFormVahanView(lastSubmittedCustomerId, lastSubmittedVehicleId)
-      .then((res) => {
-        if (cancelled) return;
-        setFormVahanRow(res.row ?? null);
-      })
-      .catch(() => {
-        if (!cancelled) setFormVahanRow(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [lastSubmittedCustomerId, lastSubmittedVehicleId]);
-
   // Warn on close/refresh if customer processing not complete (forms not filled or print forms not done)
   useEffect(() => {
     const message = "Customer processing is not complete and the information will be lost.";
@@ -261,6 +263,9 @@ export function AddSalesPage({ dealerId, dmsUrl }: AddSalesPageProps) {
             const current = prev ?? {};
             const fromServer = {
               profession: typeof r.profession === "string" ? r.profession : undefined,
+              financier: typeof r.financier === "string" ? r.financier : undefined,
+              marital_status: typeof r.marital_status === "string" ? r.marital_status : undefined,
+              nominee_gender: typeof r.nominee_gender === "string" ? r.nominee_gender : undefined,
               nominee_name: typeof r.nominee_name === "string" ? r.nominee_name : undefined,
               nominee_age: r.nominee_age != null ? String(r.nominee_age) : undefined,
               nominee_relationship: typeof r.nominee_relationship === "string" ? r.nominee_relationship : undefined,
@@ -273,6 +278,15 @@ export function AddSalesPage({ dealerId, dmsUrl }: AddSalesPageProps) {
             return {
               ...current,
               profession: current.profession && current.profession.trim() !== "" ? current.profession : fromServer.profession,
+              financier: current.financier && current.financier.trim() !== "" ? current.financier : fromServer.financier,
+              marital_status:
+                current.marital_status && current.marital_status.trim() !== ""
+                  ? current.marital_status
+                  : fromServer.marital_status,
+              nominee_gender:
+                current.nominee_gender && current.nominee_gender.trim() !== ""
+                  ? current.nominee_gender
+                  : fromServer.nominee_gender,
               nominee_name: current.nominee_name && current.nominee_name.trim() !== "" ? current.nominee_name : fromServer.nominee_name,
               nominee_age: current.nominee_age && current.nominee_age.trim() !== "" ? current.nominee_age : fromServer.nominee_age,
               nominee_relationship:
@@ -335,6 +349,9 @@ export function AddSalesPage({ dealerId, dmsUrl }: AddSalesPageProps) {
             const current = prev ?? {};
             const fromServer = {
               profession: typeof r.profession === "string" ? r.profession : undefined,
+              financier: typeof r.financier === "string" ? r.financier : undefined,
+              marital_status: typeof r.marital_status === "string" ? r.marital_status : undefined,
+              nominee_gender: typeof r.nominee_gender === "string" ? r.nominee_gender : undefined,
               nominee_name: typeof r.nominee_name === "string" ? r.nominee_name : undefined,
               nominee_age: r.nominee_age != null ? String(r.nominee_age) : undefined,
               nominee_relationship: typeof r.nominee_relationship === "string" ? r.nominee_relationship : undefined,
@@ -347,6 +364,15 @@ export function AddSalesPage({ dealerId, dmsUrl }: AddSalesPageProps) {
             return {
               ...current,
               profession: current.profession && current.profession.trim() !== "" ? current.profession : fromServer.profession,
+              financier: current.financier && current.financier.trim() !== "" ? current.financier : fromServer.financier,
+              marital_status:
+                current.marital_status && current.marital_status.trim() !== ""
+                  ? current.marital_status
+                  : fromServer.marital_status,
+              nominee_gender:
+                current.nominee_gender && current.nominee_gender.trim() !== ""
+                  ? current.nominee_gender
+                  : fromServer.nominee_gender,
               nominee_name: current.nominee_name && current.nominee_name.trim() !== "" ? current.nominee_name : fromServer.nominee_name,
               nominee_age: current.nominee_age && current.nominee_age.trim() !== "" ? current.nominee_age : fromServer.nominee_age,
               nominee_relationship:
@@ -412,6 +438,8 @@ export function AddSalesPage({ dealerId, dmsUrl }: AddSalesPageProps) {
     setDmsScrapedVehicle(null);
     setDmsPdfsDownloaded(false);
     setFillDmsStatus(null);
+    setFillInsuranceStatus(null);
+    setPrintFormsStatus(null);
     setHasSubmittedInfo(false);
     setHasPrintedForms(false);
     setLastSubmittedCustomerId(null);
@@ -524,24 +552,34 @@ export function AddSalesPage({ dealerId, dmsUrl }: AddSalesPageProps) {
   const customerProcessing = Boolean(savedTo && !hasMeaningfulCustomer(c));
   const vehicleProcessing = Boolean(savedTo && !hasVehicleData(v ?? null));
   const insuranceProcessing = Boolean(savedTo && !hasMeaningfulInsurance(ins));
+  const hasSuppliedInsuranceDoc = uploadedFiles.some((f) =>
+    /insurance/i.test(String(f || ""))
+  );
   /** Don't show errors until Textract/Tesseract have finished extracting all subsections */
   const extractionComplete = !customerProcessing && !vehicleProcessing && !insuranceProcessing;
 
-  const handleFillForms = async () => {
-    if (!savedTo || !dmsUrl) {
+  useEffect(() => {
+    if (hasSuppliedInsuranceDoc) {
+      setFillInsuranceStatus("Insurance document supplied. Insurance section is populated from document extraction.");
+    }
+  }, [hasSuppliedInsuranceDoc]);
+
+  const handleFillDms = async () => {
+    if (!savedTo) {
       setFillDmsStatus("Upload scans first.");
+      return;
+    }
+    if (!dmsUrl) {
+      setFillDmsStatus("DMS URL is not available. Set DMS_BASE_URL in backend/.env, restart the server, and refresh this page.");
       return;
     }
     const c = extractedCustomer;
     const v = extractedVehicle;
 
-    // 1) DMS section – independent process
     setIsFillDmsLoading(true);
     setFillDmsStatus(null);
-    let dmsRes: Awaited<ReturnType<typeof fillDmsOnly>> | null = null;
-    let hasAnyVehicle = false;
     try {
-      dmsRes = await fillDmsOnly({
+      const dmsRes = await fillDmsOnly({
         subfolder: savedTo,
         dms_base_url: dmsUrl,
         dealer_id: dealerId,
@@ -563,7 +601,7 @@ export function AddSalesPage({ dealerId, dmsUrl }: AddSalesPageProps) {
         },
       });
       const scraped = dmsRes.vehicle;
-      hasAnyVehicle = !!(scraped && typeof scraped === "object" && (
+      const hasAnyVehicle = !!(scraped && typeof scraped === "object" && (
         (scraped.key_num && String(scraped.key_num).trim()) ||
         (scraped.frame_num && String(scraped.frame_num).trim()) ||
         (scraped.engine_num && String(scraped.engine_num).trim()) ||
@@ -603,7 +641,7 @@ export function AddSalesPage({ dealerId, dmsUrl }: AddSalesPageProps) {
       if (!dmsRes.success) {
         setFillDmsStatus(dmsRes.error ?? "Fill DMS failed.");
       } else {
-        setFillDmsStatus(null);
+        setFillDmsStatus("DMS filled successfully.");
       }
     } catch (err) {
       if (isFillDmsAbortError(err)) {
@@ -614,13 +652,54 @@ export function AddSalesPage({ dealerId, dmsUrl }: AddSalesPageProps) {
     } finally {
       setIsFillDmsLoading(false);
     }
+  };
 
-    if (!dmsRes?.success) {
+  const handleFillInsurance = async () => {
+    if (!savedTo) {
+      setFillInsuranceStatus("Upload scans first.");
       return;
     }
+    if (siteUrlsError || siteUrlsLoading) {
+      setFillInsuranceStatus("Site URLs are not ready. Check backend/.env (INSURANCE_BASE_URL) and refresh.");
+      return;
+    }
+    if (hasSuppliedInsuranceDoc) {
+      setFillInsuranceStatus("Insurance document supplied. Fill Insurance is disabled.");
+      return;
+    }
+    setIsFillInsuranceLoading(true);
+    setFillInsuranceStatus(null);
+    try {
+      const insuranceRes = await fillInsuranceOnly({
+        subfolder: savedTo,
+        dealer_id: dealerId,
+        customer_id: lastSubmittedCustomerId ?? undefined,
+        vehicle_id: lastSubmittedVehicleId ?? undefined,
+      });
+      if (!insuranceRes.success) {
+        setFillInsuranceStatus(insuranceRes.error ?? "Insurance fill failed.");
+      } else {
+        setFillInsuranceStatus("Insurance fields filled. Submit is not clicked and browser remains open for operator.");
+      }
+    } catch (insuranceErr) {
+      if (isFillDmsAbortError(insuranceErr)) {
+        setFillInsuranceStatus("Insurance request timed out. Browser remains open for operator.");
+      } else {
+        setFillInsuranceStatus(insuranceErr instanceof Error ? insuranceErr.message : "Insurance fill failed.");
+      }
+    } finally {
+      setIsFillInsuranceLoading(false);
+    }
+  };
 
-    // 2) Form 20 and Gate Pass – create and store at end of Fill Forms (even if user never clicks Create & print file)
-    const scrapedForForm20 = dmsRes?.vehicle;
+  const handlePrintForms = async () => {
+    if (!savedTo) {
+      setPrintFormsStatus("Upload scans first.");
+      return;
+    }
+    const c = extractedCustomer;
+    const v = extractedVehicle;
+    const scrapedForForm20 = dmsScrapedVehicle as Record<string, unknown> | null;
     let vehicleDataForForm20: Record<string, unknown> = {};
     if (scrapedForForm20 && typeof scrapedForForm20 === "object") {
       const s = scrapedForForm20 as Record<string, unknown>;
@@ -677,24 +756,17 @@ export function AddSalesPage({ dealerId, dmsUrl }: AddSalesPageProps) {
       setIsPrintFormsLoading(false);
     }
 
-    // 3) Queue the sale for RTO processing instead of auto-filling the dummy Vahan flow.
-    if (dmsRes?.success && lastSubmittedCustomerId != null && lastSubmittedVehicleId != null) {
+    if (lastSubmittedCustomerId != null && lastSubmittedVehicleId != null) {
       const today = new Date();
       const dd = String(today.getDate()).padStart(2, "0");
       const mm = String(today.getMonth() + 1).padStart(2, "0");
       const yyyy = today.getFullYear();
       const registerDate = `${dd}-${mm}-${yyyy}`;
-      const queueVehicle =
-        hasAnyVehicle && dmsRes.vehicle
-          ? {
-              frame_no: dmsRes.vehicle.frame_num,
-              vehicle_price: dmsRes.vehicle.vehicle_price,
-            }
-          : v;
+      const queueVehicle = dmsScrapedVehicle ?? v;
       const chassisNo = queueVehicle?.frame_no ?? v?.frame_no ?? "";
       const rtoFees = computeRtoFees(queueVehicle?.vehicle_price);
       try {
-        const queueRes = await insertRtoPayment({
+        await insertRtoPayment({
           customer_id: lastSubmittedCustomerId,
           vehicle_id: lastSubmittedVehicleId,
           dealer_id: dealerId,
@@ -707,20 +779,18 @@ export function AddSalesPage({ dealerId, dmsUrl }: AddSalesPageProps) {
           rto_status: "Pending",
           subfolder: savedTo ?? undefined,
         });
-        setFillDmsStatus("DMS completed and added to RTO Queue.");
+        setPrintFormsStatus((prev) => (prev ? `${prev} Added to RTO Queue.` : "Added to RTO Queue."));
       } catch (queueErr) {
-        setFillDmsStatus(
+        setPrintFormsStatus(
           queueErr instanceof Error
-            ? `DMS completed but adding to RTO Queue failed: ${queueErr.message}`
-            : "DMS completed but adding to RTO Queue failed."
+            ? `Print done but adding to RTO Queue failed: ${queueErr.message}`
+            : "Print done but adding to RTO Queue failed."
         );
       }
     }
   };
 
   const d = dmsScrapedVehicle;
-  const financier = formVahanRow?.["Financier / Bank"];
-  const financeAmount = formVahanRow?.["Finance Amount"];
 
   const panel = (
     <UploadScansPanel
@@ -801,7 +871,6 @@ className="app-button app-button--primary"
                           vehicle: v ?? null,
                           insurance: ins ?? null,
                           mobile,
-                          profession: ins?.profession,
                           fileLocation: savedTo,
                           dealerId,
                         });
@@ -844,7 +913,7 @@ className="app-button app-button--primary"
                 )}
                 {submitStatus && (!savedTo || (insuranceReadByTextract && getMissingRequiredFields().length === 0)) && (
                   <div className={`add-sales-v2-status-row ${submitStatus === "Saved" ? "add-sales-v2-status-row--success" : "add-sales-v2-status-row--error"}`}>
-                    <span className="add-sales-v2-status-text">{submitStatus}</span>
+                    <StatusMessage message={submitStatus} className="add-sales-v2-status-text" role="status" />
                   </div>
                 )}
                 <div className="add-sales-v2-subsection">
@@ -877,6 +946,10 @@ className="app-button app-button--primary"
                         <dt>Gender</dt>
                         <dd>{display(c?.gender)}</dd>
                       </div>
+                    </div>
+                    <div className="add-sales-v2-dl-row">
+                      <dt>Alternate</dt>
+                      <dd>{display(c?.alt_phone_num)}</dd>
                     </div>
                     <div className="add-sales-v2-dl-row">
                       <dt>Address</dt>
@@ -1059,6 +1132,24 @@ className="app-button app-button--primary"
                 </div>
                 <div className="add-sales-v2-subsection">
                   <div className="add-sales-v2-subsection-head">
+                    <h3 className="add-sales-v2-subsection-title">Finance Details</h3>
+                  </div>
+                  <dl className="add-sales-v2-dl add-sales-v2-dl--insurance">
+                    <div className="add-sales-v2-dl-row">
+                      <dt>Financier</dt>
+                      <dd>
+                        <input
+                          className="add-sales-v2-dl-input"
+                          value={ins?.financier ?? ""}
+                          onChange={(e) => setExtractedInsurance((prev) => ({ ...(prev ?? {}), financier: e.target.value }))}
+                          placeholder="—"
+                        />
+                      </dd>
+                    </div>
+                  </dl>
+                </div>
+                <div className="add-sales-v2-subsection">
+                  <div className="add-sales-v2-subsection-head">
                     <h3 className="add-sales-v2-subsection-title">Insurance Details</h3>
                     {insuranceProcessing && <span className="add-sales-v2-processing">Processing</span>}
                   </div>
@@ -1077,6 +1168,17 @@ className="app-button app-button--primary"
                           className="add-sales-v2-dl-input"
                           value={ins?.profession ?? ""}
                           onChange={(e) => setExtractedInsurance((prev) => ({ ...(prev ?? {}), profession: e.target.value }))}
+                          placeholder="—"
+                        />
+                      </dd>
+                    </div>
+                    <div className="add-sales-v2-dl-row">
+                      <dt>Customer Marital Status</dt>
+                      <dd>
+                        <input
+                          className="add-sales-v2-dl-input"
+                          value={ins?.marital_status ?? ""}
+                          onChange={(e) => setExtractedInsurance((prev) => ({ ...(prev ?? {}), marital_status: e.target.value }))}
                           placeholder="—"
                         />
                       </dd>
@@ -1113,6 +1215,17 @@ className="app-button app-button--primary"
                       </dd>
                     </div>
                     <div className="add-sales-v2-dl-row">
+                      <dt>Nominee Gender</dt>
+                      <dd>
+                        <input
+                          className="add-sales-v2-dl-input"
+                          value={ins?.nominee_gender ?? ""}
+                          onChange={(e) => setExtractedInsurance((prev) => ({ ...(prev ?? {}), nominee_gender: e.target.value }))}
+                          placeholder="—"
+                        />
+                      </dd>
+                    </div>
+                    <div className="add-sales-v2-dl-row">
                       <dt>Relationship</dt>
                       <dd>
                         <input
@@ -1133,24 +1246,47 @@ className="app-button app-button--primary"
               <div className="add-sales-v2-fill-forms-title-block">
                 <h2 className="add-sales-v2-box-title">3. Fill Forms &amp; Print File</h2>
               </div>
-              <button
-                type="button"
-                className="app-button app-button--primary"
-                disabled={isFillDmsLoading || isPrintFormsLoading || !hasSubmittedInfo}
-                onClick={handleFillForms}
-                title={!hasSubmittedInfo ? "Submit Info first (Section 2)" : undefined}
-              >
-                {isFillDmsLoading || isPrintFormsLoading ? "Processing…" : "Fill Forms & Print File"}
-              </button>
             </div>
             <div className="add-sales-v2-box-body">
+              {siteUrlsLoading && (
+                <div className="add-sales-v2-status-row" role="status">
+                  <span className="add-sales-v2-status-text">Loading automation site URLs from server…</span>
+                </div>
+              )}
+              {siteUrlsError && (
+                <div className="add-sales-v2-status-row add-sales-v2-status-row--error" role="alert">
+                  <span className="add-sales-v2-status-text">{siteUrlsError}</span>
+                </div>
+              )}
               <div className="add-sales-v2-fill-forms-subsection">
                 <div className="add-sales-v2-subsection-head">
                   <h3 className="add-sales-v2-subsection-title">A. DMS</h3>
                   {isFillDmsLoading && <span className="add-sales-v2-processing">Processing</span>}
+                  <button
+                    type="button"
+                    className="app-button app-button--primary"
+                    disabled={
+                      isFillDmsLoading ||
+                      isPrintFormsLoading ||
+                      !hasSubmittedInfo ||
+                      siteUrlsLoading ||
+                      !!siteUrlsError ||
+                      !dmsUrl
+                    }
+                    onClick={handleFillDms}
+                    title={
+                      !hasSubmittedInfo
+                        ? "Submit Info first (Section 2)"
+                        : !dmsUrl || siteUrlsError
+                          ? "Configure DMS_BASE_URL in backend/.env"
+                          : undefined
+                    }
+                  >
+                    {isFillDmsLoading ? "Processing…" : "Fill DMS"}
+                  </button>
                 </div>
                 {fillDmsStatus && (
-                  <div className="app-panel-status" role="status">{fillDmsStatus}</div>
+                  <StatusMessage message={fillDmsStatus} className="app-panel-status" role="status" />
                 )}
                 <div className="add-sales-v2-dms-fields">
                   <div className="add-sales-v2-dms-fields-title">Get fields from DMS</div>
@@ -1222,27 +1358,32 @@ className="app-button app-button--primary"
               </div>
               <div className="add-sales-v2-fill-forms-subsection">
                 <div className="add-sales-v2-subsection-head">
-                  <h3 className="add-sales-v2-subsection-title">B. Finance</h3>
-                </div>
-                <div className="add-sales-v2-dms-fields">
-                  <div className="add-sales-v2-dms-fields-title">Finance details</div>
-                  <dl className="add-sales-v2-dl add-sales-v2-dl--dms">
-                    <div className="add-sales-v2-dl-row-group">
-                      <div className="add-sales-v2-dl-row">
-                        <dt>Financier</dt>
-                        <dd>{financier != null && String(financier).trim() !== "" ? String(financier) : "—"}</dd>
-                      </div>
-                      <div className="add-sales-v2-dl-row">
-                        <dt>Finance Amount</dt>
-                        <dd>{financeAmount != null && String(financeAmount).trim() !== "" ? String(financeAmount) : "—"}</dd>
-                      </div>
-                    </div>
-                  </dl>
-                </div>
-              </div>
-              <div className="add-sales-v2-fill-forms-subsection">
-                <div className="add-sales-v2-subsection-head">
-                  <h3 className="add-sales-v2-subsection-title">C. Insurance</h3>
+                  <h3 className="add-sales-v2-subsection-title">B. Insurance</h3>
+                  {isFillInsuranceLoading && <span className="add-sales-v2-processing">Processing</span>}
+                  <button
+                    type="button"
+                    className="app-button app-button--primary"
+                    disabled={
+                      isFillInsuranceLoading ||
+                      isPrintFormsLoading ||
+                      !hasSubmittedInfo ||
+                      hasSuppliedInsuranceDoc ||
+                      siteUrlsLoading ||
+                      !!siteUrlsError
+                    }
+                    onClick={handleFillInsurance}
+                    title={
+                      !hasSubmittedInfo
+                        ? "Submit Info first (Section 2)"
+                        : hasSuppliedInsuranceDoc
+                          ? "Insurance document supplied; values come from document extraction"
+                          : siteUrlsError
+                            ? "Configure site URLs in backend/.env"
+                            : undefined
+                    }
+                  >
+                    {isFillInsuranceLoading ? "Processing…" : "Fill Insurance"}
+                  </button>
                 </div>
                 <div className="add-sales-v2-dms-fields">
                   <div className="add-sales-v2-dms-fields-title">Insurance details (from uploaded document)</div>
@@ -1277,11 +1418,27 @@ className="app-button app-button--primary"
                     </div>
                   </dl>
                 </div>
-                {printFormsStatus && (
+                {fillInsuranceStatus && (
                   <div className="add-sales-v2-print-forms-row">
-                    <div className="app-panel-status" role="status">{printFormsStatus}</div>
+                    <StatusMessage message={fillInsuranceStatus} className="app-panel-status" role="status" />
                   </div>
                 )}
+                {printFormsStatus && (
+                  <div className="add-sales-v2-print-forms-row">
+                    <StatusMessage message={printFormsStatus} className="app-panel-status" role="status" />
+                  </div>
+                )}
+              </div>
+              <div className="add-sales-v2-print-forms-row" style={{ marginTop: 10 }}>
+                <button
+                  type="button"
+                  className="app-button app-button--primary"
+                  disabled={isPrintFormsLoading || !hasSubmittedInfo}
+                  onClick={handlePrintForms}
+                  title={!hasSubmittedInfo ? "Submit Info first (Section 2)" : undefined}
+                >
+                  {isPrintFormsLoading ? "Processing…" : "Print Forms and Queue RTO"}
+                </button>
               </div>
             </div>
           </section>

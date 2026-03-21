@@ -173,9 +173,13 @@ def process_bulk_pdf(
                 "state": customer.get("state"),
                 "pin_code": customer.get("pin_code") or customer.get("pin"),
                 "mobile_number": int(mobile_val) if mobile_val.isdigit() else mobile_val,
+                "alt_phone_num": customer.get("alt_phone_num"),
                 "gender": customer.get("gender"),
                 "date_of_birth": customer.get("date_of_birth"),
                 "profession": insurance.get("profession"),
+                "financier": insurance.get("financier"),
+                "marital_status": insurance.get("marital_status"),
+                "nominee_gender": insurance.get("nominee_gender"),
             },
             vehicle={
                 "frame_no": vehicle.get("chassis") or vehicle.get("frame_num") or vehicle.get("frame_no"),
@@ -202,7 +206,7 @@ def process_bulk_pdf(
         # 4. Fill DMS (headless)
         from app.services.fill_dms_service import run_fill_dms
         dms_result = run_fill_dms(
-            dms_base_url=DMS_BASE_URL or "http://127.0.0.1:8000/dummy-dms",
+            dms_base_url=DMS_BASE_URL,
             subfolder=subfolder,
             customer={"name": customer.get("name"), "address": customer.get("address"), "city": customer.get("city"), "state": customer.get("state"), "pin_code": customer.get("pin_code") or customer.get("pin"), "mobile_number": mobile_val},
             vehicle={"key_no": vehicle.get("key_num") or vehicle.get("key_no"), "frame_no": vehicle.get("chassis") or vehicle.get("frame_num"), "engine_no": vehicle.get("engine_num") or vehicle.get("engine_no")},

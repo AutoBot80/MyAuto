@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Dummy DMS – Vehicle Search</title>
+  <title>Auto Vehicle List / Auto Vehicle PDI Assessment</title>
   <style>
     * { box-sizing: border-box; }
     body { font-family: Arial, sans-serif; margin: 0; padding: 0; font-size: 12px; }
@@ -26,14 +26,15 @@
 </head>
 <body>
   <nav class="top-nav" role="navigation">
-    <a href="enquiry.html">Enquiry</a>
-    <a href="vehicle.html" class="active">Vehicle</a>
-    <a href="reports.html">Reports</a>
+    <a href="enquiry.html">My Vehicle Sales</a>
+    <a href="vehicle.html" class="active">Auto Vehicle List</a>
+    <a href="pdi.html">Auto Vehicle PDI Assessment</a>
+    <a href="reports.html">MISP</a>
   </nav>
 
   <div class="main">
     <div class="section">
-      <h3>Vehicle Search</h3>
+      <h3>Auto Vehicle List</h3>
       <p>Search by partial Key number, Frame/Chassis number, or Engine number.</p>
       <div class="form-row">
         <label for="dms-vehicle-key">Key num (partial)</label>
@@ -76,6 +77,10 @@
         </tbody>
       </table>
       <p class="results-empty" id="dms-vehicle-results-empty" style="display: none;">No vehicles found.</p>
+    </div>
+    <div class="section">
+      <h3>Next Step</h3>
+      <p><a href="pdi.html" class="btn">Open Auto Vehicle PDI Assessment</a></p>
     </div>
   </div>
 

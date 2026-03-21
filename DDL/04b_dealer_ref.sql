@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS dealer_ref (
     pin CHAR(6),
     city TEXT,
     state TEXT,
+    rto_name VARCHAR(128),
     parent_id INTEGER,
     phone VARCHAR(16),
     auto_sms_reminders CHAR(1),
@@ -18,4 +19,5 @@ CREATE TABLE IF NOT EXISTS dealer_ref (
 
 COMMENT ON TABLE dealer_ref IS 'Dealer reference; parent_id for hierarchy';
 COMMENT ON COLUMN dealer_ref.oem_id IS 'FK to oem_ref (OEM/brand); supplied on insert, not auto-generated';
+COMMENT ON COLUMN dealer_ref.rto_name IS 'Dealer-mapped RTO office name (e.g. RTO-Bharatpur)';
 COMMENT ON COLUMN dealer_ref.auto_sms_reminders IS 'Y or N; when Y, trigger adds rows to service_reminders_queue on sales_master upsert';

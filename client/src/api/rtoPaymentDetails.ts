@@ -1,5 +1,4 @@
 import { apiFetch } from "./client";
-import { getBaseUrl } from "./client";
 import { DEALER_ID } from "./dealerId";
 
 export interface RtoPaymentInsertPayload {
@@ -117,21 +116,23 @@ export async function getRtoPaymentBySale(customerId: number, vehicleId: number)
   return res;
 }
 
-/** URL to dummy Vahan search/payment page for a given application_id */
-export function getVahanPayUrl(applicationId: string): string {
-  const base = getBaseUrl().replace(/\/$/, "");
-  return `${base}/dummy-vaahan/search.html?application_id=${encodeURIComponent(applicationId)}`;
+/**
+ * URL to Vahan search/payment page for a given application_id.
+ * @param vahanBaseUrl Absolute base from GET /settings/site-urls (`vahan_base_url`); no client-side fallbacks.
+ */
+export function getVahanPayUrl(applicationId: string, vahanBaseUrl: string): string {
+  const base = vahanBaseUrl.replace(/\/$/, "");
+  return `${base}/search.html?application_id=${encodeURIComponent(applicationId)}`;
 }
 
+/** Pay uses VAHAN_BASE_URL from the server only (request body omitted). */
 export async function payRtoPayment(applicationId: string): Promise<{ ok: boolean; pay_txn_id?: string; status?: string }> {
-  const base = getBaseUrl().replace(/\/$/, "");
-  const vahanBase = base ? `${base}/dummy-vaahan` : "/dummy-vaahan";
   return apiFetch<{ ok: boolean; pay_txn_id?: string; status?: string }>(
     `/rto-queue/${encodeURIComponent(applicationId)}/pay`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ vahan_base_url: vahanBase }),
+      body: JSON.stringify({}),
     }
   );
 }

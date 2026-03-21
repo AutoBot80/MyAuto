@@ -1,6 +1,8 @@
 -- View of DMS-facing values from sales/customer/vehicle/dealer data.
 -- Run after: sales_master, customer_master, vehicle_master, dealer_ref.
 
+DROP VIEW IF EXISTS form_dms_view;
+
 CREATE OR REPLACE VIEW form_dms_view AS
 SELECT
     sm.sales_id,
@@ -17,6 +19,7 @@ SELECT
     SPLIT_PART(TRIM(COALESCE(cm.name, '')), ' ', 1) AS "Contact First Name",
     NULLIF(BTRIM(SUBSTRING(TRIM(COALESCE(cm.name, '')) FROM LENGTH(SPLIT_PART(TRIM(COALESCE(cm.name, '')), ' ', 1)) + 1)), '') AS "Contact Last Name",
     cm.mobile_number::text AS "Mobile Phone #",
+    cm.alt_phone_num AS "Landline #",
     UPPER(COALESCE(cm.state, '')) AS "State",
     cm.address AS "Address Line 1",
     cm.pin AS "Pin Code",

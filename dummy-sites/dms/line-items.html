@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Oracle Siebel - Line Items</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: Arial, sans-serif; margin: 0; padding: 0; font-size: 12px; }
+    .top-nav { background: #333; color: #fff; padding: 0.4rem 1rem; display: flex; gap: 1rem; align-items: center; }
+    .top-nav a { color: #fff; text-decoration: none; }
+    .top-nav a.active { font-weight: bold; text-decoration: underline; }
+    .main { max-width: 1000px; margin: 0 auto; padding: 1rem; }
+    .section { border: 1px solid #ccc; border-radius: 4px; padding: 1rem; background: #fafafa; margin-bottom: 1rem; }
+    .form-row { display: grid; grid-template-columns: 180px 1fr; gap: 0.5rem; margin-bottom: 0.5rem; }
+    .form-row input { padding: 0.35rem 0.5rem; }
+    .btn { display: inline-block; margin-right: 0.5rem; padding: 0.4rem 0.8rem; background: #06c; color: #fff; text-decoration: none; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <nav class="top-nav" role="navigation">
+    <a href="my-sales.html">My Vehicle Sales</a>
+    <a href="line-items.html" class="active">Line Items</a>
+    <a href="vehicle.html">Auto Vehicle List</a>
+    <a href="pdi.html">Auto Vehicle PDI Assessment</a>
+    <a href="reports.html">MISP</a>
+  </nav>
+
+  <div class="main">
+    <div class="section">
+      <h3>Line Items / Invoice Details</h3>
+      <div class="form-row"><label>Order #</label><input value="11870-02-SVSO-00023" readonly /></div>
+      <div class="form-row"><label>Customer</label><input value="Demo Customer" readonly /></div>
+      <div class="form-row"><label>VIN</label><input value="MBLHAW483T5C83376" readonly /></div>
+      <p>
+        <a class="btn" href="vehicle.html">Open Vehicle</a>
+        <a class="btn" href="reports.html">Hero Insurance / MISP</a>
+      </p>
+    </div>
+  </div>
+</body>
+</html>

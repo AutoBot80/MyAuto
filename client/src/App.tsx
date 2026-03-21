@@ -12,7 +12,7 @@ import { RtoPaymentsPendingPage } from "./pages/RtoPaymentsPendingPage";
 import { BulkLoadsPage } from "./pages/BulkLoadsPage";
 import { getDealer } from "./api/dealers";
 import { getBulkLoadPendingCount } from "./api/bulkLoads";
-import { getBaseUrl } from "./api/client";
+import { getSiteUrls, type SiteUrls } from "./api/siteUrls";
 
 const DEALER_ID = Number(import.meta.env.VITE_DEALER_ID) || 100001;
 
@@ -53,16 +53,6 @@ const DEALER_PAGES: Page[] = ["dealer-dashboard", "contact-us"];
 
 const ADMIN_PAGES: Page[] = ["admin-tools", "contact-us"];
 
-function getValidDmsUrl(dmsLink: string | null): string {
-  const base = getBaseUrl().replace(/\/$/, "");
-  const fallback = `${base}/dummy-dms/`;
-  if (!dmsLink || typeof dmsLink !== "string") return fallback;
-  const trimmed = dmsLink.trim();
-  if (trimmed === "" || (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")))
-    return fallback;
-  return trimmed;
-}
-
 function App() {
   const today = useToday();
   const [mode, setMode] = useState<AppMode>("home");
@@ -70,16 +60,22 @@ function App() {
   const [bulkLoadsPendingCount, setBulkLoadsPendingCount] = useState<number>(0);
   const [dealerName, setDealerName] = useState<string>("—");
   const [dealerCity, setDealerCity] = useState<string | null>(null);
-  const [dmsLink, setDmsLink] = useState<string | null>(null);
+  const [siteUrls, setSiteUrls] = useState<SiteUrls | null>(null);
+  const [siteUrlsError, setSiteUrlsError] = useState<string | null>(null);
 
   useEffect(() => {
     getDealer(DEALER_ID)
       .then((d) => {
         setDealerName(d.dealer_name);
         setDealerCity(d.city ?? null);
-        setDmsLink(d.dms_link ?? null);
       })
       .catch(() => setDealerName("Dealer"));
+  }, []);
+
+  useEffect(() => {
+    getSiteUrls()
+      .then(setSiteUrls)
+      .catch((e) => setSiteUrlsError(e instanceof Error ? e.message : "Could not load site URLs from server."));
   }, []);
 
   const refreshBulkLoadsPendingCount = () => {
@@ -109,12 +105,19 @@ function App() {
     else if (mode === "admin" && !ADMIN_PAGES.includes(page)) setPage("admin-tools");
   }, [mode, page]);
 
-  const dmsUrl = getValidDmsUrl(dmsLink);
+  const dmsUrl = siteUrls?.dms_base_url ?? "";
 
   function renderContent(p: Page) {
     switch (p) {
       case "add-sales":
-        return <AddSalesPage dealerId={DEALER_ID} dmsUrl={dmsUrl} />;
+        return (
+          <AddSalesPage
+            dealerId={DEALER_ID}
+            dmsUrl={dmsUrl}
+            siteUrlsError={siteUrlsError}
+            siteUrlsLoading={!siteUrls && !siteUrlsError}
+          />
+        );
       case "bulk-loads":
         return <BulkLoadsPage dealerId={DEALER_ID} onNavigateToAddSales={() => setPage("add-sales")} />;
       case "customer-details":

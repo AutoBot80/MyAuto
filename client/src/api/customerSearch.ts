@@ -8,12 +8,16 @@ export interface CustomerSearchResult {
     name: string;
     mobile: string | null;
     mobile_number: number | null;
+    alt_phone_num: string | null;
     address: string | null;
     pin: string | null;
     city: string | null;
     state: string | null;
     date_of_birth: string | null;
     profession: string | null;
+    financier: string | null;
+    marital_status: string | null;
+    nominee_gender: string | null;
     file_location: string | null;
     gender: string | null;
   } | null;

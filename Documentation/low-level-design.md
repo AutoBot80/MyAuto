@@ -1,7 +1,7 @@
 # Low Level Design (LLD)
 ## Auto Dealer Management System
 
-**Version:** 0.4  
+**Version:** 1.0  
 **Last Updated:** March 2026
 
 ---
@@ -10,7 +10,7 @@
 
 - **Layout:** `AppLayout` composes `Header` + `Sidebar` + main content slot.
 - **Pages:** `AddSalesPage`, `AiReaderQueuePage`, `BulkLoadsPage`, `RtoPaymentsPendingPage`, `ViewCustomerPage`, `HomePage`, `PlaceholderPage`.
-- **API:** `api/client.ts` (base URL, `apiFetch`), `api/uploads.ts`, `api/aiReaderQueue.ts`, `api/bulkLoads.ts`, `api/fillDms.ts`, `api/submitInfo.ts`, `api/rtoPaymentDetails.ts`, `api/customerSearch.ts`, `api/admin.ts` — microservice-friendly; swap base URL per env.
+- **API:** `api/client.ts` (base URL, `apiFetch`), `api/siteUrls.ts` (DMS/Vahan/Insurance bases from server `.env`), `api/uploads.ts`, `api/aiReaderQueue.ts`, `api/bulkLoads.ts`, `api/fillDms.ts`, `api/submitInfo.ts`, `api/rtoPaymentDetails.ts`, `api/customerSearch.ts`, `api/admin.ts` — microservice-friendly; swap base URL per env.
 - **Hooks:** `useToday`, `useUploadScans`, `useAiReaderQueue` — reusable, testable.
 - **Types:** `types/index.ts` — `Page`, `AddSalesStep`, `AiReaderQueueItem`, `ExtractedVehicleDetails`, `PrintForm20Response`, etc.
 
@@ -39,13 +39,13 @@
 
 ```
 backend/app/
-  main.py              # App factory, CORS, include_router
-  config.py            # DATABASE_URL, UPLOADS_DIR, APP_ROOT, FORM20_*, etc.
+  main.py              # App factory, CORS, include_router; validates DMS/VAHAN/INSURANCE base URLs at startup
+  config.py            # DATABASE_URL, UPLOADS_DIR, APP_ROOT, FORM20_*, DMS_BASE_URL, VAHAN_BASE_URL, INSURANCE_BASE_URL (required), etc.
   db.py                # get_connection()
   schemas/             # Pydantic request/response (uploads, ocr, fill_dms, etc.)
   repositories/        # Data access only (ai_reader_queue, bulk_loads, dealer_ref, form_dms, form_vahan, rto_queue, rc_status_sms_queue)
   services/            # Business logic (UploadService, bulk_job_service, bulk_queue_service, bulk_watcher_service, form20_service, fill_dms_service, submit_info_service, rto_payment_service)
-  routers/             # health, uploads, ai_reader_queue, bulk_loads, fill_dms, submit_info, rto_queue, customer_search, dealers, documents, qr_decode, vision, textract_router
+  routers/             # health, settings, uploads, ai_reader_queue, bulk_loads, fill_dms, submit_info, rto_queue, customer_search, dealers, documents, qr_decode, vision, textract_router
   templates/           # form20_front.html, form20_back.html, form20_page3.html
 ```
 
@@ -58,6 +58,7 @@ backend/app/
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET | `/health` | Liveness. |
+| GET | `/settings/site-urls` | Returns `dms_base_url`, `vahan_base_url`, `insurance_base_url` from `backend/.env` (required at server startup; used by the client for Fill DMS and messaging; no in-code URL fallbacks). |
 | POST | `/uploads/scans` | Upload scans; enqueue to ai_reader_queue. |
 | POST | `/uploads/scans-v2` | Upload scans (v2). |
 | GET | `/ai-reader-queue` | List queue items (limit=200). |
@@ -84,6 +85,7 @@ backend/app/
 | GET | `/fill-dms/form20-status` | Form 20 template status. |
 | POST | `/fill-dms/print-form20` | Generate Form 20.pdf. |
 | POST | `/fill-dms/vahan` | Vahan (RTO) only; reuses an already open logged-in Vahan tab when detectable, otherwise auto-opens Edge/Chrome and asks operator to login first-time then retry. |
+| POST | `/fill-dms/insurance` | Insurance only; reuses an already open logged-in Insurance tab when detectable, otherwise auto-opens Edge/Chrome and asks operator to login first-time then retry. Fills fields only, does not click final submit/issue, and keeps browser open. |
 | GET | `/rto-queue` | List RTO queue rows. |
 | GET | `/rto-queue/by-sale` | Get RTO queue row by sale (customer_id, vehicle_id). |
 | POST | `/rto-queue` | Create or update the queued RTO row for a sale. |
@@ -108,6 +110,7 @@ backend/app/
 - **Service:** `OcrService` in `services/ocr_service.py` — processes one queue item at a time (oldest first), runs Tesseract on the scan file under `UPLOADS_DIR/<subfolder>/<filename>`, writes extracted text to `OCR_OUTPUT_DIR` as `<subfolder>_<filename>.txt`.
 - **Config:** `config.OCR_OUTPUT_DIR` (default: `backend/ocr_output`). Tesseract binary must be on system PATH (or set `pytesseract.pytesseract.tesseract_cmd`). `config.OCR_LANG` (default: `eng+hin`) for English + Hindi; see **Documentation/tesseract-ocr-setup.md** for installing Hindi tessdata for Aadhar scans.
 - **Queue status:** `queued` → `processing` → `done` or `failed`.
+- **Sales detail template mapping:** Details-sheet extraction also supports the A5 Sales Detail Sheet label style (e.g., `Full Name`, `Mobile Number`, `Aadhaar Number`, `Profession`, `Marital Status`, `Nominee ...`, `Financier Name`) and merges these into `OCR_To_be_Used.json` (`customer` + `insurance`) for Add Sales auto-population.
 
 ### 2.4 Form 20 Generation
 
@@ -125,8 +128,17 @@ backend/app/
 ### 2.4b Dummy DMS Flow
 
 - **Static site:** `dummy-sites/dms/` simulates the OEM DMS journey used by Playwright tests.
-- **Pages:** login (`index.html`) → enquiry (`enquiry.html`) → vehicle search/results (`vehicle.html`) → reports/downloads (`reports.html`).
+- **Pages:** Hero Connect login (`index.html`) → My Vehicle Sales (`my-sales.html`) → Line Items (`line-items.html`) → Auto Vehicle List (`vehicle.html`) → Auto Vehicle PDI Assessment (`pdi.html`) → MISP / Partner Login + reports/downloads (`reports.html`).
 - **Automation contract:** `fill_dms_service.py` requires `customer_id` and `vehicle_id`, loads DMS field values from `form_dms_view`, fills only those view-backed values into a detectable logged-in DMS tab (or prompts first-time login after auto-opening browser when tab is unavailable), scrapes the first vehicle result row, persists the scrape into `vehicle_master`, and writes `Data from DMS.txt` plus `DMS_Form_Values.txt` into the matching `ocr_output` subfolder.
+
+### 2.4c Dummy Insurance Flow
+
+- **Static site:** `dummy-sites/insurance/` simulates the insurance issuance journey from the operator video.
+- **Pages:** login redirection (`index.html`) -> KYC verification (`kyc.html`) -> KYC success redirect (`kyc-success.html`) -> MisDMS VIN entry (`dms-entry.html`) -> New Policy (`policy.html`) -> issue-result (`issued.html`).
+- **Serve path:** `main.py` mounts this directory at `/dummy-insurance`.
+- **Video-label parity:** top-level labels mirror observed strings (`Hero INSURANCE BROKING`, `HIBIPL - MisDMS Entry`, `New Policy - Two Wheeler`), including key menu items and KYC controls.
+- **Current scope:** UI and navigation parity only (no backend insurance Playwright automation endpoint yet).
+- **Automation contract:** Insurance Playwright uses persisted DB values only (`customer_master`, `vehicle_master`, `insurance_master`, `dealer_ref` mapping), fills policy fields, writes `Insurance_Form_Values.txt`, does not click final submit, and keeps the operator browser session open.
 
 ### 2.5 Database Access
 
@@ -201,3 +213,6 @@ See **Documentation/Database DDL.md** for full table structures. Summary:
 | 0.5 | Mar 2026 | — | Added Admin Saathi landing-tile reset action and `/admin/reset-all-data` endpoint |
 | 0.6 | Mar 2026 | — | Updated automation behavior to reuse already open logged-in DMS/Vahan tabs and return site-not-open errors when tabs are missing |
 | 0.7 | Mar 2026 | — | Added fallback automation behavior to auto-open Edge/Chrome when tabs are not detectable and prompt first-time operator login + retry |
+| 0.8 | Mar 2026 | — | Added dummy insurance site architecture/flow (`/dummy-insurance`) aligned to operator video navigation and labels |
+| 0.9 | Mar 2026 | — | Added `/fill-dms/insurance` endpoint and Insurance Playwright contract (DB-only fill, no final submit click, keep browser open, operator-login fallback) |
+| 1.0 | Mar 2026 | — | Updated OCR details-sheet mapping for A5 Sales Detail Sheet labels and merge behavior into AI-extracted customer/insurance fields |

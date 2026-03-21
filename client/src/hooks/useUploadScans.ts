@@ -60,7 +60,7 @@ export function useUploadScans(
     }
   }
 
-  async function uploadV2(aadharScan: File, aadharBackScan: File, salesDetail: File, insuranceSheet?: File, financingDoc?: File) {
+  async function uploadV2(aadharScan: File, aadharBackScan: File, salesDetail: File, insuranceSheet?: File) {
     if (!isMobileValid) {
       setUploadStatus("Enter 10-digit Customer Mobile first.");
       return;
@@ -68,7 +68,7 @@ export function useUploadScans(
     setIsUploading(true);
     setUploadStatus("Uploading...");
     try {
-      const data = await uploadScansV2(mobileDigits, aadharScan, aadharBackScan, salesDetail, insuranceSheet, financingDoc, dealerId);
+      const data = await uploadScansV2(mobileDigits, aadharScan, aadharBackScan, salesDetail, insuranceSheet, dealerId);
       setSavedTo(data.saved_to);
       setUploadStatus(`Uploaded ${data.saved_count} file(s) to ${data.saved_to}.`);
       if (data.saved_files?.length)

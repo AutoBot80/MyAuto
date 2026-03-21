@@ -186,6 +186,22 @@ export function ViewCustomerPage({ initialMobile = "", dealerId = DEALER_ID }: V
                 <span className="vc-value">{cust.date_of_birth ?? "—"}</span>
               </div>
               <div className="view-customer-detail-item">
+                <span className="vc-label">Alternate</span>
+                <span className="vc-value">{cust.alt_phone_num ?? "—"}</span>
+              </div>
+              <div className="view-customer-detail-item">
+                <span className="vc-label">Financier</span>
+                <span className="vc-value">{cust.financier ?? "—"}</span>
+              </div>
+              <div className="view-customer-detail-item">
+                <span className="vc-label">Marital Status</span>
+                <span className="vc-value">{cust.marital_status ?? "—"}</span>
+              </div>
+              <div className="view-customer-detail-item">
+                <span className="vc-label">Nominee Gender</span>
+                <span className="vc-value">{cust.nominee_gender ?? "—"}</span>
+              </div>
+              <div className="view-customer-detail-item">
                 <span className="vc-label">Address</span>
                 <span className="vc-value">
                   {[cust.address, cust.city, cust.state, cust.pin]

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Dummy DMS – Enquiry (eDealer HMCL)</title>
+  <title>Oracle Siebel - My Vehicle Sales</title>
   <style>
     * { box-sizing: border-box; }
     body { font-family: Arial, sans-serif; margin: 0; padding: 0; font-size: 12px; }
@@ -22,12 +22,35 @@
 </head>
 <body>
   <nav class="top-nav" role="navigation">
-    <a href="enquiry.html" class="active">Enquiry</a>
-    <a href="vehicle.html">Vehicle</a>
-    <a href="reports.html">Reports</a>
+    <a href="my-sales.html">My Vehicle Sales</a>
+    <a href="line-items.html" class="active">Line Items</a>
+    <a href="vehicle.html">Auto Vehicle List</a>
+    <a href="pdi.html">Auto Vehicle PDI Assessment</a>
+    <a href="reports.html">MISP</a>
   </nav>
 
   <div class="main">
+    <div class="section" style="grid-column: 1 / -1;">
+      <h3>Line Items / Invoice Details</h3>
+      <div class="form-row">
+        <label>Actions</label>
+        <div>
+          <button type="button" class="download">Create Invoice</button>
+          <button type="button" class="download">Send Email</button>
+          <button type="button" class="download">ReSend SMS</button>
+          <button type="button" class="download">Apply Campaign</button>
+        </div>
+      </div>
+      <div class="form-row">
+        <label>Order #</label>
+        <input type="text" value="11870-02-SVSO-00023" readonly />
+      </div>
+      <div class="form-row">
+        <label>Vehicle</label>
+        <a href="vehicle.html" class="download">Open Auto Vehicle List</a>
+      </div>
+    </div>
+
     <!-- Customer Information -->
     <div class="section">
       <h3>Customer Information</h3>

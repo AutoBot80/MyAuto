@@ -57,6 +57,7 @@ export interface FillDmsResponse {
 
 const FILL_DMS_TIMEOUT_MS = 180000; // 3 min per section
 const FILL_VAHAN_TIMEOUT_MS = 60000; // 1 min for Vahan
+const FILL_INSURANCE_TIMEOUT_MS = 120000; // 2 min for Insurance
 
 export interface FillVahanRequest {
   vahan_base_url: string;
@@ -78,6 +79,19 @@ export interface FillVahanResponse {
   success: boolean;
   application_id?: string | null;
   rto_fees?: number | null;
+  error?: string | null;
+}
+
+export interface FillInsuranceRequest {
+  insurance_base_url?: string | null;
+  dealer_id?: number | null;
+  customer_id?: number | null;
+  vehicle_id?: number | null;
+  subfolder?: string | null;
+}
+
+export interface FillInsuranceResponse {
+  success: boolean;
   error?: string | null;
 }
 
@@ -120,6 +134,23 @@ export async function fillDms(req: FillDmsRequest): Promise<FillDmsResponse> {
   const timeoutId = setTimeout(() => controller.abort(), FILL_DMS_TIMEOUT_MS);
   try {
     const res = await apiFetch<FillDmsResponse>("/fill-dms", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(req),
+      signal: controller.signal,
+    });
+    return res;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+/** Run only Insurance flow. Fills data but does not submit policy. */
+export async function fillInsuranceOnly(req: FillInsuranceRequest): Promise<FillInsuranceResponse> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), FILL_INSURANCE_TIMEOUT_MS);
+  try {
+    const res = await apiFetch<FillInsuranceResponse>("/fill-dms/insurance", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(req),

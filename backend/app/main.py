@@ -13,6 +13,7 @@ from app.config import (
     get_bulk_upload_dir,
     get_ocr_output_dir,
     get_uploads_dir,
+    validate_external_site_urls,
 )
 from app.routers import (
     health_router,
@@ -20,6 +21,7 @@ from app.routers import (
     ai_reader_queue_router,
     vision_router,
     dealers_router,
+    settings_router,
     textract_router,
     qr_decode_router,
     submit_info_router,
@@ -34,6 +36,7 @@ from app.routers import (
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    validate_external_site_urls()
     yield
 
 
@@ -61,12 +64,16 @@ app.add_middleware(
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _DUMMY_DMS = _PROJECT_ROOT / "dummy-sites" / "dms"
 _DUMMY_VAHAN = _PROJECT_ROOT / "dummy-sites" / "vaahan"
+_DUMMY_INSURANCE = _PROJECT_ROOT / "dummy-sites" / "insurance"
 if _DUMMY_DMS.is_dir():
     app.mount("/dummy-dms", StaticFiles(directory=str(_DUMMY_DMS), html=True), name="dummy-dms")
 if _DUMMY_VAHAN.is_dir():
     app.mount("/dummy-vaahan", StaticFiles(directory=str(_DUMMY_VAHAN), html=True), name="dummy-vaahan")
+if _DUMMY_INSURANCE.is_dir():
+    app.mount("/dummy-insurance", StaticFiles(directory=str(_DUMMY_INSURANCE), html=True), name="dummy-insurance")
 
 app.include_router(health_router)
+app.include_router(settings_router)
 app.include_router(uploads_router)
 app.include_router(ai_reader_queue_router)
 app.include_router(vision_router)

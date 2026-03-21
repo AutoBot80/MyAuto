@@ -46,7 +46,13 @@ def _json_output_path(output_dir: Path, subfolder: str) -> Path:
 
 
 # Filename patterns for queue processing.
-DETAILS_FILENAME_CONTAINS = "details"
+DETAILS_FILENAME_HINTS = (
+    "details",
+    "detail_sheet",
+    "sales_detail",
+    "sales detail",
+    "a5 template",
+)
 AADHAR_FILENAME_CONTAINS = "aadhar"
 
 # 15 Aadhar fields (display order and labels for ocr_output file).
@@ -80,6 +86,10 @@ _VEHICLE_KEY_ALIASES = {
 # Map Textract form keys to insurance/nominee fields (from Details sheet).
 _INSURANCE_KEY_ALIASES = {
     "profession": ["profession", "profession:", "occupation", "customer profession"],
+    "financier": ["financier", "financier name", "finance company", "bank", "financer"],
+    "insurer": ["insurer", "insurer name", "insurance company", "insurance provider", "company"],
+    "marital_status": ["marital status", "customer marital status", "married status"],
+    "nominee_gender": ["nominee gender", "gender of nominee"],
     "nominee_name": ["nominee name", "nominee name:", "nominee"],
     "nominee_age": ["nominee age", "nominee age:", "age of nominee"],
     "nominee_relationship": ["nominee relationship", "nominee relationship:", "relationship", "relation"],
@@ -89,7 +99,22 @@ _INSURANCE_KEY_ALIASES = {
 _DETAILS_CUSTOMER_NAME_ALIASES = [
     "customer name", "customer name:", "name", "buyer name", "buyer's name",
     "buyer name:", "name of customer", "customer",
+    "full name", "full name:", "customer full name",
 ]
+
+_DETAILS_CUSTOMER_KEY_ALIASES = {
+    "name": ["full name", "customer name", "name of customer", "buyer name", "name"],
+    "mobile_number": ["mobile number", "mobile no", "mobile", "contact number", "contact no"],
+    "alt_phone_num": ["alternate", "alternate no", "alternate number", "alternate mobile", "alternate mobile number", "landline", "landline number"],
+    "aadhar_id": ["aadhaar number", "aadhar number", "aadhaar no", "aadhar no", "aadhaar", "aadhar"],
+    "profession": ["profession", "occupation", "customer profession"],
+    "marital_status": ["marital status", "customer marital status"],
+    "financier": ["financier name", "financier", "financer name", "financer", "finance company", "bank"],
+    "nominee_name": ["nominee name"],
+    "nominee_age": ["nominee age", "age"],
+    "nominee_gender": ["nominee gender", "gender"],
+    "nominee_relationship": ["relation", "relationship", "nominee relation", "nominee relationship"],
+}
 
 # Map Textract form keys for insurance policy document (Insurance.jpg).
 _INSURANCE_POLICY_KEY_ALIASES = {
@@ -248,8 +273,50 @@ def _map_key_value_pairs_to_insurance(pairs: list[dict]) -> dict[str, str]:
     return out
 
 
+def _map_key_value_pairs_to_details_customer(pairs: list[dict]) -> dict[str, str]:
+    """Map Details sheet key-value pairs to customer-side fields from new A5 template."""
+    out: dict[str, str] = {}
+    key_lower_to_value: dict[str, str] = {}
+    for kv in pairs:
+        k = (kv.get("key") or "").strip()
+        v = (kv.get("value") or "").strip()
+        if not k:
+            continue
+        key_norm = _normalize_key_for_match(k)
+        key_lower_to_value[key_norm] = v
+        if ":" in key_norm:
+            key_lower_to_value[key_norm.replace(":", "").strip()] = v
+
+    for field, aliases in _DETAILS_CUSTOMER_KEY_ALIASES.items():
+        if field in out:
+            continue
+        for alias in aliases:
+            anorm = _normalize_key_for_match(alias)
+            if anorm in key_lower_to_value and key_lower_to_value[anorm].strip():
+                out[field] = key_lower_to_value[anorm].strip()
+                break
+            for k, v in key_lower_to_value.items():
+                if (anorm in k or k in anorm) and v.strip():
+                    out[field] = v.strip()
+                    break
+            if field in out:
+                break
+
+    if out.get("mobile_number"):
+        digits = "".join(ch for ch in out["mobile_number"] if ch.isdigit())
+        out["mobile_number"] = digits[-10:] if digits else ""
+    if out.get("alt_phone_num"):
+        digits = "".join(ch for ch in out["alt_phone_num"] if ch.isdigit())
+        out["alt_phone_num"] = digits[-10:] if digits else ""
+    if out.get("aadhar_id"):
+        out["aadhar_id"] = _aadhar_last4(out.get("aadhar_id")) or ""
+    if out.get("nominee_age"):
+        out["nominee_age"] = _sanitize_nominee_age(out["nominee_age"]) or ""
+    return out
+
+
 def _parse_insurance_from_full_text(full_text: str) -> dict[str, str]:
-    """Try to extract profession, nominee name, age, relationship from full text (fallback when not in key-value pairs)."""
+    """Try to extract insurance/customer extras from full text (fallback when not in key-value pairs)."""
     out: dict[str, str] = {}
     if not full_text or not isinstance(full_text, str):
         return out
@@ -257,6 +324,9 @@ def _parse_insurance_from_full_text(full_text: str) -> dict[str, str]:
     # Patterns: "Label" or "Label:" followed by value on same or next line
     patterns = [
         ("profession", "profession"),
+        ("financier", "financier"),
+        ("marital status", "marital_status"),
+        ("nominee gender", "nominee_gender"),
         ("nominee name", "nominee_name"),
         ("nominee age", "nominee_age"),
         ("nominee relationship", "nominee_relationship"),
@@ -493,7 +563,7 @@ class OcrService:
             }
 
         fn_lower = filename.lower()
-        if DETAILS_FILENAME_CONTAINS in fn_lower:
+        if any(hint in fn_lower for hint in DETAILS_FILENAME_HINTS):
             return self._process_details_sheet(qid, subfolder, filename, input_path)
         if AADHAR_FILENAME_CONTAINS in fn_lower:
             return self._process_aadhar(qid, subfolder, filename, input_path)
@@ -621,6 +691,7 @@ class OcrService:
 
             vehicle = _map_key_value_pairs_to_vehicle(key_value_pairs)
             insurance = _map_key_value_pairs_to_insurance(key_value_pairs)
+            details_customer = _map_key_value_pairs_to_details_customer(key_value_pairs)
             details_customer_name = _extract_details_customer_name(key_value_pairs)
             if result.get("full_text"):
                 from_full = _parse_insurance_from_full_text(result["full_text"])
@@ -649,9 +720,46 @@ class OcrService:
                         existing_insurance = {}
                 except Exception:
                     pass
-            # Preserve existing insurance fields (e.g. profession) and overlay nominee from Details sheet
-            insurance_merged = {**existing_insurance, **{k: v for k, v in insurance.items() if v}}
-            details_json = {"vehicle": vehicle, "customer": customer, "insurance": insurance_merged}
+            if details_customer.get("name") and not details_customer_name:
+                details_customer_name = details_customer.get("name")
+
+            customer_merged = dict(customer)
+            for key, val in details_customer.items():
+                if not val:
+                    continue
+                if key in (
+                    "profession",
+                    "marital_status",
+                    "financier",
+                    "nominee_name",
+                    "nominee_age",
+                    "nominee_gender",
+                    "nominee_relationship",
+                ):
+                    continue
+                if not customer_merged.get(key):
+                    customer_merged[key] = val
+
+            insurance_merged = {
+                **existing_insurance,
+                **{k: v for k, v in insurance.items() if v},
+                **{
+                    k: v
+                    for k, v in details_customer.items()
+                    if k
+                    in (
+                        "profession",
+                        "marital_status",
+                        "financier",
+                        "nominee_name",
+                        "nominee_age",
+                        "nominee_gender",
+                        "nominee_relationship",
+                    )
+                    and v
+                },
+            }
+            details_json = {"vehicle": vehicle, "customer": customer_merged, "insurance": insurance_merged}
             if details_customer_name:
                 details_json["details_customer_name"] = details_customer_name
             json_path.parent.mkdir(parents=True, exist_ok=True)

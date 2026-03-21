@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS customer_master (
     city TEXT,
     state TEXT,
     mobile_number INTEGER,
+    alt_phone_num VARCHAR(16),
     profession VARCHAR(16),
     file_location TEXT,
     gender VARCHAR(8),

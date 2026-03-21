@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>HIBIPL - MisDMS Entry</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: Arial, sans-serif; margin: 0; padding: 0; font-size: 12px; }
+    .top-nav { background: #333; color: #fff; padding: 0.4rem 1rem; display: flex; gap: 1rem; align-items: center; }
+    .top-nav a { color: #fff; text-decoration: none; }
+    .top-nav a.active { font-weight: bold; text-decoration: underline; }
+    .main { max-width: 980px; margin: 0 auto; padding: 1rem; }
+    .section { border: 1px solid #ccc; border-radius: 4px; padding: 1rem; background: #fafafa; }
+    .form-row { display: grid; grid-template-columns: 260px 1fr; gap: 0.5rem; margin-bottom: 0.5rem; align-items: center; }
+    input { padding: 0.3rem 0.45rem; width: 100%; }
+    .btn { padding: 0.45rem 0.8rem; background: #06c; color: #fff; border: none; border-radius: 4px; text-decoration: none; }
+  </style>
+</head>
+<body>
+  <nav class="top-nav" role="navigation">
+    <a href="dms-entry.html" class="active">Policy Issuance</a>
+    <a href="dms-entry.html">Claims</a>
+    <a href="dms-entry.html">Endorsements</a>
+    <a href="dms-entry.html">Cancellation</a>
+    <a href="dms-entry.html">My Account</a>
+    <a href="dms-entry.html">Pay-In-Slip</a>
+    <a href="dms-entry.html">Accounts</a>
+    <a href="dms-entry.html">Others</a>
+    <a href="dms-entry.html">Reports</a>
+  </nav>
+  <div class="main">
+    <div class="section">
+      <h3>HIBIPL - MisDMS Entry</h3>
+      <div class="form-row"><label>Please enter the 17 digit VIN/Frame No.</label><input id="ins-vin" value="MBLHAW483T5C83376" /></div>
+      <p><a class="btn" href="policy.html">Proceed</a></p>
+      <p>Loading...</p>
+      <p><a href="../dms/index.html" target="_blank" rel="noopener">Open Hero Connect Lookup (new tab)</a></p>
+    </div>
+  </div>
+</body>
+</html>

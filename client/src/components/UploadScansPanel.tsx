@@ -11,8 +11,8 @@ interface UploadScansPanelProps {
   mobile?: string;
   /** 10-digit mobile valid */
   isMobileValid?: boolean;
-  /** Upload scans to subfolder mobile_ddmmyy as Aadhar.jpg, Aadhar_back.jpg, Details.jpg; optional Insurance.jpg, Financing.jpg */
-  onUploadV2?: (aadharScan: File, aadharBackScan: File, salesDetail: File, insuranceSheet?: File, financingDoc?: File) => Promise<void>;
+  /** Upload scans to subfolder mobile_ddmmyy as Aadhar.jpg, Aadhar_back.jpg, Details.jpg; optional Insurance.jpg */
+  onUploadV2?: (aadharScan: File, aadharBackScan: File, salesDetail: File, insuranceSheet?: File) => Promise<void>;
 }
 
 const SCAN_LABELS = [
@@ -36,14 +36,11 @@ export function UploadScansPanel({
   const aadharBackInputRef = useRef<HTMLInputElement | null>(null);
   const salesInputRef = useRef<HTMLInputElement | null>(null);
   const insuranceInputRef = useRef<HTMLInputElement | null>(null);
-  const financingInputRef = useRef<HTMLInputElement | null>(null);
   const [selectedAadharFile, setSelectedAadharFile] = useState<File | null>(null);
   const [selectedAadharBackFile, setSelectedAadharBackFile] = useState<File | null>(null);
   const [selectedDetailsFile, setSelectedDetailsFile] = useState<File | null>(null);
   const [selectedInsuranceFile, setSelectedInsuranceFile] = useState<File | null>(null);
-  const [selectedFinancingFile, setSelectedFinancingFile] = useState<File | null>(null);
   const [hasInsurance, setHasInsurance] = useState(false);
-  const [hasFinancing, setHasFinancing] = useState(false);
 
   const refs = [aadharInputRef, aadharBackInputRef, salesInputRef] as const;
   const selectedFiles = [selectedAadharFile, selectedAadharBackFile, selectedDetailsFile] as const;
@@ -54,7 +51,6 @@ export function UploadScansPanel({
   ] as const;
 
   const insuranceRequired = hasInsurance ? selectedInsuranceFile : true;
-  const financingRequired = hasFinancing ? selectedFinancingFile : true;
   const canUploadV2 =
     onUploadV2 &&
     isMobileValid &&
@@ -62,7 +58,6 @@ export function UploadScansPanel({
     selectedAadharBackFile &&
     selectedDetailsFile &&
     insuranceRequired &&
-    financingRequired &&
     !isUploading;
 
   return (
@@ -103,50 +98,6 @@ export function UploadScansPanel({
           </button>
         </div>
       ))}
-      {onUploadV2 && (
-        <div className="app-panel-financing-block">
-          <div className="app-panel-row app-panel-insurance-check-row">
-            <label className="app-panel-insurance-check">
-              <input
-                type="checkbox"
-                checked={hasFinancing}
-                onChange={(e) => {
-                  setHasFinancing(e.target.checked);
-                  if (!e.target.checked) setSelectedFinancingFile(null);
-                }}
-                aria-label="I have financing"
-              />
-              <span>I have financing</span>
-            </label>
-          </div>
-          <div className="app-panel-row app-panel-scan-row">
-            <label className={`app-panel-scan-label ${!hasFinancing ? "app-panel-scan-label--muted" : ""}`} htmlFor="upload-scan-financing">
-              Financing document
-            </label>
-            <input
-              id="upload-scan-financing"
-              ref={financingInputRef}
-              type="file"
-              accept=".jpg,.jpeg,.png,.pdf,image/jpeg,image/png,application/pdf"
-              style={{ display: "none" }}
-              disabled={!hasFinancing}
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) setSelectedFinancingFile(file);
-                e.target.value = "";
-              }}
-            />
-            <button
-              type="button"
-              className="app-button app-panel-scan-button"
-              disabled={!hasFinancing || isUploading}
-              onClick={() => hasFinancing && financingInputRef.current?.click()}
-            >
-              {selectedFinancingFile ? selectedFinancingFile.name : "Choose file"}
-            </button>
-          </div>
-        </div>
-      )}
       {onUploadV2 && (
         <div className="app-panel-insurance-block">
           <div className="app-panel-row app-panel-insurance-check-row">
@@ -203,8 +154,7 @@ export function UploadScansPanel({
                   selectedAadharFile,
                   selectedAadharBackFile,
                   selectedDetailsFile,
-                  hasInsurance ? selectedInsuranceFile ?? undefined : undefined,
-                  hasFinancing ? selectedFinancingFile ?? undefined : undefined
+                  hasInsurance ? selectedInsuranceFile ?? undefined : undefined
                 );
             }}
           >

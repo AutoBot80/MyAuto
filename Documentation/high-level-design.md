@@ -1,7 +1,7 @@
 # High Level Design (HLD)
 ## Auto Dealer Management System
 
-**Version:** 0.4  
+**Version:** 1.3  
 **Last Updated:** March 2026
 
 ---
@@ -88,6 +88,7 @@ My Auto.AI/
 | Module | Purpose |
 |--------|---------|
 | `routers/health` | Liveness check. |
+| `routers/settings` | Exposes automation site base URLs from env (`GET /settings/site-urls`) for the client; DMS/Vahan/Insurance URLs are required in `backend/.env` with no in-code fallbacks. |
 | `routers/uploads` | Document upload; enqueue to ai_reader_queue. |
 | `routers/ai_reader_queue` | List, process, reprocess OCR queue items. |
 | `routers/fill_dms` | Fill DMS (Playwright), Vahan, Form 20 print. |
@@ -105,7 +106,7 @@ My Auto.AI/
 | `services/bulk_queue_service` | Bulk queue abstraction with SQS or local in-process fallback. |
 | `services/bulk_watcher_service` | Starts ingest and worker loops inside the API process. |
 | `services/form20_service` | Form 20 generation (Word/PDF/HTML). |
-| `services/fill_dms_service` | Playwright DMS and Vahan automation; reads fill values from `form_dms_view` / `form_vahan_view` only, reuses open logged-in site tabs when detectable, auto-opens Edge/Chrome when tabs are not found, writes `DMS_Form_Values.txt` and `Vahan_Form_Values.txt`, and returns operator guidance to login first-time and retry. |
+| `services/fill_dms_service` | Playwright DMS, Vahan, and Insurance automation; reads fill values from DB-backed views/records only, reuses open logged-in site tabs when detectable, auto-opens Edge/Chrome when tabs are not found, writes `DMS_Form_Values.txt` / `Vahan_Form_Values.txt` / `Insurance_Form_Values.txt`, and returns operator guidance to login first-time and retry. |
 | `services/submit_info_service` | Submit Info business logic. |
 | `services/rto_payment_service` | Dealer-scoped RTO batch runner, progress state, advisory locking, scrape-back persistence into `rto_queue` / `vehicle_master`, and downstream payment updates. |
 | `repositories/*` | Data access for ai_reader_queue, bulk_loads, dealer_ref, form_dms_view, form_vahan_view, rto_queue, rc_status_sms_queue. |
@@ -114,7 +115,7 @@ My Auto.AI/
 
 | Page | Purpose |
 |------|---------|
-| `AddSalesPage` | Add Sales flow: Submit Info, Fill Forms (DMS, Form 20, RTO queue insertion), Insurance. |
+| `AddSalesPage` | Add Sales flow: Submit Info, then separate operator actions (`Fill DMS`, `Fill Insurance`, `Print Forms`); print step also inserts the RTO queue row. |
 | `BulkLoadsPage` | View hot bulk processing status, unresolved failures, and retry/corrective actions. |
 | `RtoPaymentsPendingPage` | List queued RTO work items, start the oldest-7 dealer batch, and show live RTO Cart progress. |
 | `ViewCustomerPage` | Search customer; view vehicles, insurance, and the bottom single-row `form_vahan_view` projection for the selected vehicle. |
@@ -165,6 +166,7 @@ This section defines database-to-label mapping contracts for DMS, Insurance, and
 | Contact First Name | `"Contact First Name"` | First token from `customer_master.name` |
 | Contact Last Name | `"Contact Last Name"` | Remaining tokens from `customer_master.name` |
 | Mobile Phone # | `"Mobile Phone #"` | `customer_master.mobile_number::text` |
+| Landline # | `"Landline #"` | `customer_master.alt_phone_num` |
 | State | `"State"` | `UPPER(customer_master.state)` |
 | Address Line 1 | `"Address Line 1"` | `customer_master.address` |
 | Pin Code | `"Pin Code"` | `customer_master.pin` |
@@ -184,7 +186,32 @@ This section defines database-to-label mapping contracts for DMS, Insurance, and
 | Nominee Name | `insurance_master.nominee_name` |
 | Nominee Age | `insurance_master.nominee_age` |
 | Nominee Relationship | `insurance_master.nominee_relationship` |
-| Profession (insurance capture context) | `customer_master.profession` |
+| Profession (details-sheet/insurance capture context) | `customer_master.profession` |
+| Financier (details-sheet capture context) | `customer_master.financier` |
+| Customer Marital Status (details-sheet capture context) | `customer_master.marital_status` |
+| Nominee Gender (details-sheet capture context) | `customer_master.nominee_gender` |
+
+### 5.2a Insurance Portal Mapping (Video-Aligned Labels)
+
+| Portal page | Insurance label | DB source contract |
+|-------------|------------------|--------------------|
+| KYC (`ekycpage.aspx`) | Insurance Company | `insurance_master.insurer` (latest policy context for the sale/customer) |
+| KYC (`ekycpage.aspx`) | Mobile No. | `customer_master.mobile_number` |
+| MisDMS Entry (`MispDms.aspx`) | VIN Number | `COALESCE(vehicle_master.chassis, vehicle_master.raw_frame_num)` |
+| New Policy (`MispPolicy.aspx`) | Proposer Name | `customer_master.name` |
+| New Policy (`MispPolicy.aspx`) | Gender | `customer_master.gender` |
+| New Policy (`MispPolicy.aspx`) | Alternate / Landline No. | `customer_master.alt_phone_num` |
+| New Policy (`MispPolicy.aspx`) | Date of Birth | `customer_master.dob` |
+| New Policy (`MispPolicy.aspx`) | Marital Status | `customer_master.marital_status` |
+| New Policy (`MispPolicy.aspx`) | Occupation Type | `customer_master.profession` |
+| New Policy (`MispPolicy.aspx`) | Proposer State / City / Pin / Address | `customer_master.state`, `customer_master.city`, `customer_master.pin`, `customer_master.address` |
+| New Policy (`MispPolicy.aspx`) | Frame No. / Engine No. | `vehicle_master.chassis`, `vehicle_master.engine` |
+| New Policy (`MispPolicy.aspx`) | Model Name / Fuel Type / Year of Manufacture | `vehicle_master.model`, `vehicle_master.fuel_type`, `vehicle_master.year_of_mfg` |
+| New Policy (`MispPolicy.aspx`) | Ex-Showroom | `vehicle_master.vehicle_price` |
+| New Policy (`MispPolicy.aspx`) | RTO | `dealer_ref.rto_name` |
+| New Policy (`MispPolicy.aspx`) | Nominee Name / Age / Relation | `insurance_master.nominee_name`, `insurance_master.nominee_age`, `insurance_master.nominee_relationship` |
+| New Policy (`MispPolicy.aspx`) | Nominee Gender | `customer_master.nominee_gender` |
+| New Policy (`MispPolicy.aspx`) | Financer Name | `customer_master.financier` |
 
 ### 5.3 Vahan Mapping (`form_vahan_view`)
 
@@ -213,13 +240,16 @@ This section defines database-to-label mapping contracts for DMS, Insurance, and
 ### 5.4 Runtime Automation Rule
 
 - Playwright runtime values for DMS/Vahan must be sourced from DB views/records (`form_dms_view`, `form_vahan_view`, and persisted IDs).
+- Playwright runtime values for Insurance must be sourced from persisted DB records only (`customer_master`, `vehicle_master`, `insurance_master`, `dealer_ref` via sale linkage).
 - Automation must not use fallback assumptions/default literals as data-entry substitutes when DB values are missing.
 - Missing required DB values should fail fast with operator-visible validation, then retry after data correction.
+- Insurance automation fills the policy form but must not press final Issue/Submit; the browser session remains open for operator control.
 
 ### 5.5 Video Reconciliation Step
 
 - The operator video is the final UX truth for click-order and optional screen interactions.
 - After video review, update Playwright step order documentation to match the confirmed sequence without changing the DB-mapping contract above.
+- Insurance video-aligned reference flow is: login redirect -> KYC -> KYC success redirect -> MisDMS VIN entry -> New Policy creation (with optional Hero Connect lookup tab).
 
 ---
 
@@ -257,3 +287,8 @@ This section defines database-to-label mapping contracts for DMS, Insurance, and
 | 0.6 | Mar 2026 | — | Updated Playwright behavior to reuse already open DMS/Vahan tabs and return site-not-open errors when tabs are missing |
 | 0.7 | Mar 2026 | — | Added fallback behavior to auto-open Edge/Chrome when tabs are not detectable and prompt operator first-time login + retry |
 | 0.8 | Mar 2026 | — | Added DMS/Insurance/Vahan label-to-DB mapping contract and strict DB-only Playwright runtime value rule |
+| 0.9 | Mar 2026 | — | Updated Add Sales mapping: finance capture moved to Section 2 and persisted to `customer_master.financier`; added customer `marital_status` and `nominee_gender` capture fields |
+| 1.0 | Mar 2026 | — | Added insurance portal (video-aligned) page-label-to-DB mapping and flow sequence for dummy insurance site + future Playwright parity |
+| 1.1 | Mar 2026 | — | Added Insurance Playwright behavior contract: login fallback/open-browser, DB-only field fill, no final submit click, and session kept open |
+| 1.2 | Mar 2026 | — | Updated Add Sales interaction model to split DMS/Insurance/Print actions into separate operator controls |
+| 1.3 | Mar 2026 | — | Added Alternate/Landline mapping (`customer_master.alt_phone_num`) into DMS and Insurance label mapping contracts |

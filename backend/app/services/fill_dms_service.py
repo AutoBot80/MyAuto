@@ -19,6 +19,7 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 from app.config import DMS_PLAYWRIGHT_HEADED, OCR_OUTPUT_DIR, PLAYWRIGHT_KEEP_OPEN
 from app.repositories import form_dms as form_dms_repo
 from app.repositories import form_vahan as form_vahan_repo
+from app.db import get_connection
 
 logger = logging.getLogger(__name__)
 
@@ -185,6 +186,15 @@ def _find_open_site_page(base_url: str):
     return None
 
 
+def _requires_operator_create_invoice(page) -> bool:
+    """Detect whether the current DMS page is asking operator to click Create Invoice."""
+    try:
+        btn = page.get_by_role("button", name=re.compile(r"create\s*invoice", re.IGNORECASE))
+        return btn.count() > 0 and btn.first.is_visible()
+    except Exception:
+        return False
+
+
 def _fill_vahan_and_scrape(
     page,
     vahan_base_url: str,
@@ -202,18 +212,28 @@ def _fill_vahan_and_scrape(
     rto_fees = 1% of vehicle_price + 200 (same as dummy Vahan formula).
     """
     base = vahan_base_url.rstrip("/")
-    # Dummy Vahan rejects 0/blank vehicle_price because the input is required with min=1.
-    # When DMS did not provide vehicle_price, fall back to a safe positive value so the
-    # registration step can still continue and compute fees.
     effective_vehicle_price = float(vehicle_price or 0)
     if effective_vehicle_price <= 0:
-        effective_vehicle_price = 72000.0
-    effective_rto_dealer_id = (rto_dealer_id or "").strip() or "RTO100001"
-    effective_customer_name = (customer_name or "").strip() or "Customer"
-    effective_chassis_no = (chassis_no or "").strip() or "UNKNOWN-CHASSIS"
-    effective_vehicle_model = (vehicle_model or "").strip() or "UNKNOWN MODEL"
-    effective_vehicle_colour = (vehicle_colour or "").strip() or "Black"
-    effective_year_of_mfg = (year_of_mfg or "").strip() or "2026"
+        raise ValueError("form_vahan_view.vehicle_price must be a positive number")
+    effective_rto_dealer_id = (rto_dealer_id or "").strip()
+    effective_customer_name = (customer_name or "").strip()
+    effective_chassis_no = (chassis_no or "").strip()
+    effective_vehicle_model = (vehicle_model or "").strip()
+    effective_vehicle_colour = (vehicle_colour or "").strip()
+    effective_year_of_mfg = (year_of_mfg or "").strip()
+    effective_fuel_type = (fuel_type or "").strip()
+    required_pairs = [
+        ("form_vahan_view.rto_dealer_id", effective_rto_dealer_id),
+        ("form_vahan_view.Owner Name *", effective_customer_name),
+        ("form_vahan_view.Chassis No *", effective_chassis_no),
+        ("form_vahan_view.vehicle_model", effective_vehicle_model),
+        ("form_vahan_view.vehicle_colour", effective_vehicle_colour),
+        ("form_vahan_view.fuel_type", effective_fuel_type),
+        ("form_vahan_view.year_of_mfg", effective_year_of_mfg),
+    ]
+    missing = [label for label, value in required_pairs if not value]
+    if missing:
+        raise ValueError("Missing required Vahan DB values: " + ", ".join(missing))
     page.goto(f"{base}/index.html", wait_until="domcontentloaded", timeout=20000)
     page.locator("#vahan-rto-dealer-id").evaluate("(el, value) => el.value = value", effective_rto_dealer_id)
     page.locator("#vahan-customer-name").evaluate("(el, value) => el.value = value", effective_customer_name)
@@ -221,9 +241,9 @@ def _fill_vahan_and_scrape(
     page.locator("#vahan-vehicle-model").evaluate("(el, value) => el.value = value", effective_vehicle_model)
     page.locator("#vahan-vehicle-colour").evaluate("(el, value) => el.value = value", effective_vehicle_colour)
     page.fill("#vahan-chassis-no-visible", effective_chassis_no)
-    engine_tail = effective_chassis_no[-5:] if effective_chassis_no else "12345"
+    engine_tail = effective_chassis_no[-5:]
     page.fill("#vahan-engine-last5-visible", engine_tail)
-    page.locator("#vahan-fuel-type").evaluate("(el, value) => el.value = value", (fuel_type or "Petrol").strip())
+    page.locator("#vahan-fuel-type").evaluate("(el, value) => el.value = value", effective_fuel_type)
     page.locator("#vahan-year-of-mfg").evaluate("(el, value) => el.value = value", effective_year_of_mfg)
     page.locator("#vahan-total-cost").evaluate("(el, value) => el.value = value", str(int(effective_vehicle_price)))
     page.click("#vahan-reg-submit")
@@ -239,9 +259,7 @@ def _fill_vahan_and_scrape(
         if ids:
             application_id = ids[0]
     # Wait for search result to render (auto-submit on load), then scrape rto_fees
-    rto_fees = 200.0
-    total = effective_vehicle_price
-    fallback_fees = round(total * 0.01 + 200, 2) if total else 200.0
+    rto_fees = None
     try:
         page.wait_for_selector("#vahan-result-section:visible", timeout=8000)
         el = page.locator("#vahan-result-rto-fees")
@@ -250,11 +268,14 @@ def _fill_vahan_and_scrape(
             if val and val.strip():
                 rto_fees = round(float(val), 2)
             else:
-                rto_fees = fallback_fees
+                raise ValueError("Vahan result missing data-rto-fees value")
         else:
-            rto_fees = fallback_fees
+            raise ValueError("Vahan result row not found for rto_fees scrape")
     except Exception:
-        rto_fees = fallback_fees
+        if rto_fees is None:
+            raise
+    if rto_fees is None:
+        raise ValueError("Vahan rto_fees could not be scraped")
     return (application_id, rto_fees)
 
 
@@ -417,13 +438,14 @@ def _build_dms_fill_values(customer_id: int | None, vehicle_id: int | None, subf
     last_name = _clean_text(row.get("Contact Last Name"))
     full_name = " ".join(part for part in [first_name, last_name] if part).strip()
     effective_subfolder = _clean_text(row.get("subfolder")) or _clean_text(subfolder)
-    return {
+    values = {
         "row": row,
         "subfolder": effective_subfolder,
         "customer_name": full_name,
         "first_name": first_name,
         "last_name": last_name,
         "mobile_phone": _clean_text(row.get("Mobile Phone #"))[:10],
+        "landline": _clean_text(row.get("Landline #"))[:16],
         "address_line_1": _clean_text(row.get("Address Line 1"))[:80],
         "state": _clean_text(row.get("State")),
         "pin_code": _clean_text(row.get("Pin Code"))[:6],
@@ -436,8 +458,23 @@ def _build_dms_fill_values(customer_id: int | None, vehicle_id: int | None, subf
             "state": _clean_text(row.get("State")),
             "pin_code": _clean_text(row.get("Pin Code")),
             "mobile_number": _clean_text(row.get("Mobile Phone #")),
+            "alt_phone_num": _clean_text(row.get("Landline #")),
         },
     }
+    required_keys = [
+        ("form_dms_view.Contact First Name", values["first_name"]),
+        ("form_dms_view.Mobile Phone #", values["mobile_phone"]),
+        ("form_dms_view.State", values["state"]),
+        ("form_dms_view.Address Line 1", values["address_line_1"]),
+        ("form_dms_view.Pin Code", values["pin_code"]),
+        ("form_dms_view.Key num (partial)", values["key_partial"]),
+        ("form_dms_view.Frame / Chassis num (partial)", values["frame_partial"]),
+        ("form_dms_view.Engine num (partial)", values["engine_partial"]),
+    ]
+    missing = [label for label, val in required_keys if not val]
+    if missing:
+        raise ValueError("Missing required DMS DB values: " + ", ".join(missing))
+    return values
 
 
 def _build_vahan_fill_values(customer_id: int | None, vehicle_id: int | None, subfolder: str | None = None) -> dict:
@@ -449,18 +486,31 @@ def _build_vahan_fill_values(customer_id: int | None, vehicle_id: int | None, su
             "run DMS first so vehicle_price is stored in vehicle_master"
         )
     effective_subfolder = _clean_text(row.get("subfolder")) or _clean_text(subfolder)
-    return {
+    values = {
         "row": row,
         "subfolder": effective_subfolder,
-        "rto_dealer_id": _clean_text(row.get("rto_dealer_id")) or "RTO100001",
-        "customer_name": _clean_text(row.get("Owner Name *")) or "Customer",
-        "chassis_no": _clean_text(row.get("Chassis No *")) or "UNKNOWN-CHASSIS",
-        "vehicle_model": _clean_text(row.get("vehicle_model")) or "UNKNOWN MODEL",
-        "vehicle_colour": _clean_text(row.get("vehicle_colour")) or "Black",
-        "fuel_type": _clean_text(row.get("fuel_type")) or "Petrol",
-        "year_of_mfg": _clean_text(row.get("year_of_mfg")) or "2026",
+        "rto_dealer_id": _clean_text(row.get("rto_dealer_id")),
+        "customer_name": _clean_text(row.get("Owner Name *")),
+        "chassis_no": _clean_text(row.get("Chassis No *")),
+        "vehicle_model": _clean_text(row.get("vehicle_model")),
+        "vehicle_colour": _clean_text(row.get("vehicle_colour")),
+        "fuel_type": _clean_text(row.get("fuel_type")),
+        "year_of_mfg": _clean_text(row.get("year_of_mfg")),
         "vehicle_price": vehicle_price,
     }
+    required_keys = [
+        ("form_vahan_view.rto_dealer_id", values["rto_dealer_id"]),
+        ("form_vahan_view.Owner Name *", values["customer_name"]),
+        ("form_vahan_view.Chassis No *", values["chassis_no"]),
+        ("form_vahan_view.vehicle_model", values["vehicle_model"]),
+        ("form_vahan_view.vehicle_colour", values["vehicle_colour"]),
+        ("form_vahan_view.fuel_type", values["fuel_type"]),
+        ("form_vahan_view.year_of_mfg", values["year_of_mfg"]),
+    ]
+    missing = [label for label, val in required_keys if not val]
+    if missing:
+        raise ValueError("Missing required Vahan DB values: " + ", ".join(missing))
+    return values
 
 
 def _write_dms_form_values(
@@ -471,6 +521,7 @@ def _write_dms_form_values(
     *,
     customer_name: str,
     mobile_number: str,
+    alt_phone_num: str,
     address: str,
     state: str,
     pin_code: str,
@@ -493,6 +544,7 @@ def _write_dms_form_values(
     effective_first_name = _clean_text(first_name) or row_first_name
     effective_last_name = _clean_text(last_name) or row_last_name
     effective_mobile = _clean_text(mobile_number)[:10] or _clean_text(row.get("Mobile Phone #"))[:10]
+    effective_landline = _clean_text(alt_phone_num)[:16] or _clean_text(row.get("Landline #"))[:16]
     effective_address = _clean_text(address)[:80] or _clean_text(row.get("Address Line 1"))[:80]
     effective_state = _clean_text(state) or _clean_text(row.get("State"))
     effective_pin = _clean_text(pin_code)[:6] or _clean_text(row.get("Pin Code"))[:6]
@@ -505,6 +557,7 @@ def _write_dms_form_values(
         ("Contact First Name", effective_first_name),
         ("Contact Last Name", effective_last_name),
         ("Mobile Phone #", effective_mobile),
+        ("Landline #", effective_landline),
         ("State", effective_state),
         ("Address Line 1", effective_address),
         ("Pin Code", effective_pin),
@@ -523,6 +576,7 @@ def _write_dms_form_values(
         ("oem_name", _clean_text(row.get("oem_name"))),
         ("source_customer_name", _clean_text(customer_name)),
         ("source_mobile_number", _clean_text(mobile_number)),
+        ("source_alt_phone_num", _clean_text(alt_phone_num)),
         ("source_address", _clean_text(address)),
         ("source_state", _clean_text(state)),
         ("source_pin_code", _clean_text(pin_code)),
@@ -569,29 +623,29 @@ def _write_vahan_form_values(
     subfolder_path.mkdir(parents=True, exist_ok=True)
     path = subfolder_path / "Vahan_Form_Values.txt"
 
-    effective_rto_dealer_id = _clean_text(rto_dealer_id) or _clean_text(row.get("rto_dealer_id")) or "RTO100001"
-    effective_customer_name = _clean_text(customer_name) or _clean_text(row.get("Owner Name *")) or "Customer"
-    effective_chassis_no = _clean_text(chassis_no) or _clean_text(row.get("Chassis No *")) or "UNKNOWN-CHASSIS"
-    effective_vehicle_model = _clean_text(vehicle_model) or _clean_text(row.get("vehicle_model")) or "UNKNOWN MODEL"
-    effective_vehicle_colour = _clean_text(vehicle_colour) or _clean_text(row.get("vehicle_colour")) or "Black"
-    effective_fuel_type = _clean_text(fuel_type) or _clean_text(row.get("fuel_type")) or "Petrol"
-    effective_year_of_mfg = _clean_text(year_of_mfg) or _clean_text(row.get("year_of_mfg")) or "2026"
+    effective_rto_dealer_id = _clean_text(rto_dealer_id) or _clean_text(row.get("rto_dealer_id"))
+    effective_customer_name = _clean_text(customer_name) or _clean_text(row.get("Owner Name *"))
+    effective_chassis_no = _clean_text(chassis_no) or _clean_text(row.get("Chassis No *"))
+    effective_vehicle_model = _clean_text(vehicle_model) or _clean_text(row.get("vehicle_model"))
+    effective_vehicle_colour = _clean_text(vehicle_colour) or _clean_text(row.get("vehicle_colour"))
+    effective_fuel_type = _clean_text(fuel_type) or _clean_text(row.get("fuel_type"))
+    effective_year_of_mfg = _clean_text(year_of_mfg) or _clean_text(row.get("year_of_mfg"))
     effective_vehicle_price = float(vehicle_price or 0)
     if effective_vehicle_price <= 0:
-        effective_vehicle_price = 72000.0
+        raise ValueError("vehicle_price must be positive for Vahan form values export")
 
     label_values: list[tuple[str, str]] = [
-        ("Registration Type *", _clean_text(row.get("Registration Type *")) or "New Registration"),
+        ("Registration Type *", _clean_text(row.get("Registration Type *"))),
         ("Chassis No *", effective_chassis_no),
-        ("Engine/Motor No (Last 5 Chars)", effective_chassis_no[-5:] if effective_chassis_no else "12345"),
+        ("Engine/Motor No (Last 5 Chars)", effective_chassis_no[-5:] if effective_chassis_no else ""),
         ("Purchase Delivery Date", _clean_text(row.get("Purchase Delivery Date"))),
-        ("Do You want to Opt Choice Number / Fancy Number / Retention Number", _clean_text(row.get("Do You want to Opt Choice Number / Fancy Number / Retention Number")) or "SELECT"),
+        ("Do You want to Opt Choice Number / Fancy Number / Retention Number", _clean_text(row.get("Do You want to Opt Choice Number / Fancy Number / Retention Number"))),
         ("Owner Name *", effective_customer_name),
-        ("Owner Type", _clean_text(row.get("Owner Type")) or "Individual"),
+        ("Owner Type", _clean_text(row.get("Owner Type"))),
         ("Son/Wife/Daughter of", _clean_text(row.get("Son/Wife/Daughter of"))),
-        ("Ownership Serial", _clean_text(row.get("Ownership Serial")) or "1"),
-        ("Aadhaar Mode", _clean_text(row.get("Aadhaar Mode")) or "Aadhaar OTP"),
-        ("Category *", _clean_text(row.get("Category *")) or "General"),
+        ("Ownership Serial", _clean_text(row.get("Ownership Serial"))),
+        ("Aadhaar Mode", _clean_text(row.get("Aadhaar Mode"))),
+        ("Category *", _clean_text(row.get("Category *"))),
         ("Mobile No", _clean_text(row.get("Mobile No"))),
         ("PAN Card", _clean_text(row.get("PAN Card"))),
         ("Voter ID", _clean_text(row.get("Voter ID"))),
@@ -605,7 +659,7 @@ def _write_vahan_form_values(
         ("Insurance From (DD-MMM-YYYY)", _clean_text(row.get("Insurance From (DD-MMM-YYYY)"))),
         ("Insurance Upto (DD-MMM-YYYY)", _clean_text(row.get("Insurance Upto (DD-MMM-YYYY)"))),
         ("Insured Declared Value", _clean_text(row.get("Insured Declared Value"))),
-        ("Please Select Series Type", _clean_text(row.get("Please Select Series Type")) or "State Series"),
+        ("Please Select Series Type", _clean_text(row.get("Please Select Series Type"))),
         ("Financier / Bank", _clean_text(row.get("Financier / Bank"))),
         ("Application No", _clean_text(application_id) or _clean_text(row.get("Application No"))),
         ("Assigned Office & Action", _clean_text(row.get("Assigned Office & Action")) or effective_rto_dealer_id),
@@ -637,6 +691,307 @@ def _write_vahan_form_values(
         lines.append(f"{label}: {value or '—'}")
 
     path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def _load_latest_insurance_values(customer_id: int, vehicle_id: int) -> dict:
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    cm.customer_id,
+                    vm.vehicle_id,
+                    COALESCE(cm.name, '') AS customer_name,
+                    COALESCE(cm.gender, '') AS gender,
+                    COALESCE(TO_CHAR(cm.dob, 'DD/MM/YYYY'), '') AS dob,
+                    COALESCE(cm.marital_status, '') AS marital_status,
+                    COALESCE(cm.profession, '') AS profession,
+                    COALESCE(cm.mobile_number::text, '') AS mobile_number,
+                    COALESCE(cm.alt_phone_num, '') AS alt_phone_num,
+                    COALESCE(cm.state, '') AS state,
+                    COALESCE(cm.city, '') AS city,
+                    COALESCE(cm.pin::text, '') AS pin_code,
+                    COALESCE(cm.address, '') AS address,
+                    COALESCE(vm.chassis, vm.raw_frame_num, '') AS frame_no,
+                    COALESCE(vm.engine, vm.raw_engine_num, '') AS engine_no,
+                    COALESCE(vm.model, '') AS model_name,
+                    COALESCE(vm.fuel_type, '') AS fuel_type,
+                    COALESCE(vm.year_of_mfg::text, '') AS year_of_mfg,
+                    COALESCE(vm.vehicle_price::text, '') AS vehicle_price,
+                    COALESCE(cm.nominee_gender, '') AS nominee_gender,
+                    COALESCE(cm.financier, '') AS financer_name,
+                    COALESCE(dr.rto_name, '') AS rto_name,
+                    COALESCE(im.insurer, '') AS insurer,
+                    COALESCE(im.nominee_name, '') AS nominee_name,
+                    COALESCE(im.nominee_age::text, '') AS nominee_age,
+                    COALESCE(im.nominee_relationship, '') AS nominee_relationship
+                FROM customer_master cm
+                JOIN vehicle_master vm ON vm.vehicle_id = %s
+                LEFT JOIN sales_master sm
+                  ON sm.customer_id = cm.customer_id
+                 AND sm.vehicle_id = vm.vehicle_id
+                LEFT JOIN dealer_ref dr ON dr.dealer_id = sm.dealer_id
+                LEFT JOIN LATERAL (
+                    SELECT *
+                    FROM insurance_master im2
+                    WHERE im2.customer_id = cm.customer_id
+                      AND im2.vehicle_id = vm.vehicle_id
+                    ORDER BY im2.policy_to DESC NULLS LAST, im2.insurance_year DESC NULLS LAST, im2.insurance_id DESC
+                    LIMIT 1
+                ) im ON TRUE
+                WHERE cm.customer_id = %s
+                LIMIT 1
+                """,
+                (vehicle_id, customer_id),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else {}
+    finally:
+        conn.close()
+
+
+def _build_insurance_fill_values(customer_id: int | None, vehicle_id: int | None, subfolder: str | None = None) -> dict:
+    cid, vid = _require_customer_vehicle_ids(customer_id, vehicle_id, "customer/vehicle/insurance tables")
+    row = _load_latest_insurance_values(cid, vid)
+    if not row:
+        raise ValueError(f"No insurance/customer data found for customer_id={cid} vehicle_id={vid}")
+    values = {
+        "subfolder": _clean_text(subfolder),
+        "insurer": _clean_text(row.get("insurer")),
+        "mobile_number": _clean_text(row.get("mobile_number"))[:10],
+        "alt_phone_num": _clean_text(row.get("alt_phone_num"))[:16],
+        "customer_name": _clean_text(row.get("customer_name")),
+        "gender": _clean_text(row.get("gender")),
+        "dob": _clean_text(row.get("dob")),
+        "marital_status": _clean_text(row.get("marital_status")),
+        "profession": _clean_text(row.get("profession")),
+        "state": _clean_text(row.get("state")),
+        "city": _clean_text(row.get("city")),
+        "pin_code": _clean_text(row.get("pin_code"))[:6],
+        "address": _clean_text(row.get("address")),
+        "frame_no": _clean_text(row.get("frame_no")),
+        "engine_no": _clean_text(row.get("engine_no")),
+        "model_name": _clean_text(row.get("model_name")),
+        "fuel_type": _clean_text(row.get("fuel_type")),
+        "year_of_mfg": _clean_text(row.get("year_of_mfg")),
+        "vehicle_price": _clean_text(row.get("vehicle_price")),
+        "rto_name": _clean_text(row.get("rto_name")),
+        "nominee_name": _clean_text(row.get("nominee_name")),
+        "nominee_age": _clean_text(row.get("nominee_age")),
+        "nominee_relationship": _clean_text(row.get("nominee_relationship")),
+        "nominee_gender": _clean_text(row.get("nominee_gender")),
+        "financer_name": _clean_text(row.get("financer_name")),
+    }
+    required = [
+        ("insurance_master.insurer", values["insurer"]),
+        ("customer_master.mobile_number", values["mobile_number"]),
+        ("customer_master.name", values["customer_name"]),
+        ("vehicle_master.chassis", values["frame_no"]),
+        ("vehicle_master.engine", values["engine_no"]),
+    ]
+    missing = [label for label, val in required if not val]
+    if missing:
+        raise ValueError("Missing required Insurance DB values: " + ", ".join(missing))
+    return values
+
+
+def _write_insurance_form_values(
+    ocr_output_dir: Path,
+    subfolder: str | None,
+    customer_id: int | None,
+    vehicle_id: int | None,
+    *,
+    values: dict,
+) -> None:
+    if not subfolder or not str(subfolder).strip():
+        return
+    safe_subfolder = _safe_subfolder_name(subfolder)
+    subfolder_path = Path(ocr_output_dir).resolve() / safe_subfolder
+    subfolder_path.mkdir(parents=True, exist_ok=True)
+    path = subfolder_path / "Insurance_Form_Values.txt"
+    label_values: list[tuple[str, str]] = [
+        ("Insurance Company", _clean_text(values.get("insurer"))),
+        ("Mobile No.", _clean_text(values.get("mobile_number"))),
+        ("Alternate / Landline No.", _clean_text(values.get("alt_phone_num"))),
+        ("Proposer Name", _clean_text(values.get("customer_name"))),
+        ("Gender", _clean_text(values.get("gender"))),
+        ("Date of Birth", _clean_text(values.get("dob"))),
+        ("Marital Status", _clean_text(values.get("marital_status"))),
+        ("Occupation Type", _clean_text(values.get("profession"))),
+        ("Proposer State", _clean_text(values.get("state"))),
+        ("Proposer City", _clean_text(values.get("city"))),
+        ("Pin Code", _clean_text(values.get("pin_code"))),
+        ("Address", _clean_text(values.get("address"))),
+        ("Frame No.", _clean_text(values.get("frame_no"))),
+        ("Engine No.", _clean_text(values.get("engine_no"))),
+        ("Model Name", _clean_text(values.get("model_name"))),
+        ("Fuel Type", _clean_text(values.get("fuel_type"))),
+        ("Year of Manufacture", _clean_text(values.get("year_of_mfg"))),
+        ("Ex-Showroom", _clean_text(values.get("vehicle_price"))),
+        ("RTO", _clean_text(values.get("rto_name"))),
+        ("Nominee Name", _clean_text(values.get("nominee_name"))),
+        ("Nominee Age", _clean_text(values.get("nominee_age"))),
+        ("Relation", _clean_text(values.get("nominee_relationship"))),
+        ("Nominee Gender", _clean_text(values.get("nominee_gender"))),
+        ("Financer Name", _clean_text(values.get("financer_name"))),
+    ]
+    lines = ["Insurance Form Values", "", "--- Values sent to Insurance labels ---"]
+    for label, value in label_values:
+        lines.append(f"{label}: {value or '—'}")
+    lines.extend(
+        [
+            "",
+            "--- Runtime values used by Playwright ---",
+            f"customer_id: {customer_id or '—'}",
+            f"vehicle_id: {vehicle_id or '—'}",
+            f"subfolder: {safe_subfolder}",
+            f"generated_at: {datetime.now().strftime('%d-%m-%Y %H:%M:%S')}",
+        ]
+    )
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def run_fill_insurance_only(
+    insurance_base_url: str,
+    *,
+    subfolder: str | None = None,
+    customer_id: int | None = None,
+    vehicle_id: int | None = None,
+    ocr_output_dir: Path | None = None,
+) -> dict:
+    """
+    Fill Insurance screens using DB-backed values only.
+    Important behavior:
+    - do not click final submit/issue button
+    - keep browser/tab open for operator review
+    - open browser and prompt operator login on first run (DMS-style)
+    """
+    result: dict = {"success": False, "error": None}
+    if not insurance_base_url or not insurance_base_url.strip():
+        result["error"] = "insurance_base_url required"
+        return result
+    try:
+        values = _build_insurance_fill_values(customer_id, vehicle_id, subfolder)
+        page, open_error = _get_or_open_site_page(insurance_base_url, "Insurance")
+        if page is None:
+            result["error"] = open_error
+            return result
+
+        base = insurance_base_url.rstrip("/")
+        page.set_default_timeout(12_000)
+        page.goto(f"{base}/kyc.html", wait_until="domcontentloaded", timeout=20000)
+        page.select_option("#ins-company", label=values["insurer"] or "Universal Sompo general insurance")
+        page.select_option("#ins-kyc-partner", label="Signzy")
+        page.select_option("#ins-proposer-type", label="Individual")
+        page.select_option("#ins-ovd-type", label="AADHAAR EXTRACTION")
+        page.fill("#ins-mobile-no", values["mobile_number"])
+        if values.get("alt_phone_num"):
+            try:
+                page.fill("#ins-alt-phone", values["alt_phone_num"])
+            except Exception:
+                pass
+        if page.locator("#ins-consent").count() > 0 and not page.is_checked("#ins-consent"):
+            page.check("#ins-consent")
+        page.click("#ins-proceed")
+        page.wait_for_url("**/kyc-success.html*", timeout=10000)
+        page.wait_for_timeout(300)
+        page.goto(f"{base}/dms-entry.html", wait_until="domcontentloaded", timeout=15000)
+        page.fill("#ins-vin", values["frame_no"])
+        page.click("a.btn[href='policy.html']")
+        page.wait_for_url("**/policy.html*", timeout=10000)
+
+        # Fill policy form fields. Intentionally do NOT click Issue Policy/Submit.
+        page.fill("input[value='LEKHRAJ']", values["customer_name"])
+        selects = page.locator("select")
+        inputs = page.locator("input")
+        if values["gender"]:
+            try:
+                selects.nth(5).select_option(label=values["gender"].capitalize())
+            except Exception:
+                pass
+        if values["dob"]:
+            page.fill("input[value='01/01/2000']", values["dob"])
+        if values["marital_status"]:
+            try:
+                selects.nth(6).select_option(label=values["marital_status"])
+            except Exception:
+                pass
+        if values["profession"]:
+            try:
+                selects.nth(7).select_option(label=values["profession"])
+            except Exception:
+                pass
+        page.fill("input[value='9694585832']", values["mobile_number"])
+        if values.get("alt_phone_num"):
+            try:
+                page.fill("#ins-alt-phone", values["alt_phone_num"])
+            except Exception:
+                pass
+        if values["state"]:
+            try:
+                selects.nth(8).select_option(label=values["state"])
+            except Exception:
+                pass
+        if values["city"]:
+            try:
+                selects.nth(9).select_option(label=values["city"])
+            except Exception:
+                pass
+        if values["pin_code"]:
+            page.fill("input[value='321001']", values["pin_code"])
+        if values["address"]:
+            page.fill("input[value='S/O LALCHAND JAMUN KE BAAG KE PASS GOLPURA ROAD SUBHASH NAGAR']", values["address"])
+        page.fill("input[value='MBLHAW483T5C83376']", values["frame_no"])
+        page.fill("input[value='HA11F7T5C52111']", values["engine_no"])
+        if values["model_name"]:
+            page.fill("input[value='SPL PLUS CAST']", values["model_name"])
+        if values["vehicle_price"]:
+            page.fill("input[value='75202']", values["vehicle_price"])
+        if values["year_of_mfg"]:
+            page.fill("input[value='2026']", values["year_of_mfg"])
+        if values["fuel_type"]:
+            try:
+                selects.nth(15).select_option(label=values["fuel_type"])
+            except Exception:
+                pass
+        if values["nominee_name"]:
+            page.fill("input[value='SAVITRI']", values["nominee_name"])
+        if values["nominee_age"]:
+            page.fill("input[value='44']", values["nominee_age"])
+        if values["nominee_gender"]:
+            try:
+                selects.nth(16).select_option(label=values["nominee_gender"].capitalize())
+            except Exception:
+                pass
+        if values["nominee_relationship"]:
+            try:
+                selects.nth(17).select_option(label=values["nominee_relationship"])
+            except Exception:
+                pass
+        if values["financer_name"]:
+            try:
+                inputs.nth(17).fill(values["financer_name"])
+            except Exception:
+                pass
+
+        if ocr_output_dir is not None:
+            _write_insurance_form_values(
+                ocr_output_dir=Path(ocr_output_dir),
+                subfolder=values.get("subfolder") or subfolder,
+                customer_id=customer_id,
+                vehicle_id=vehicle_id,
+                values=values,
+            )
+        result["success"] = True
+        result["error"] = None
+        return result
+    except PlaywrightTimeout as e:
+        result["error"] = f"Timeout: {e!s}"
+        return result
+    except Exception as e:
+        result["error"] = str(e)
+        return result
 
 
 def _run_vahan_in_context(
@@ -867,11 +1222,18 @@ def run_fill_dms_only(
             result["error"] = open_error
             return result
 
+        # Operator-controlled step: Playwright must not click "Create Invoice".
+        # If that action is pending on screen, instruct operator and stop.
+        if _requires_operator_create_invoice(page):
+            result["error"] = "Please click Create Invoice manually in DMS, then press Fill DMS again."
+            return result
+
         base = dms_base_url.rstrip("/")
         page.set_default_timeout(12_000)
         page.goto(f"{base}/enquiry.html", wait_until="domcontentloaded", timeout=20000)
 
         mobile_phone = dms_values["mobile_phone"]
+        landline = dms_values.get("landline") or ""
         addr = dms_values["address_line_1"]
         state = dms_values["state"]
         pin = dms_values["pin_code"]
@@ -882,6 +1244,8 @@ def run_fill_dms_only(
         page.fill("#dms-contact-first-name", dms_values["first_name"])
         page.fill("#dms-contact-last-name", dms_values["last_name"])
         page.fill("#dms-mobile-phone", mobile_phone)
+        if landline:
+            page.fill("#dms-landline", landline)
         if addr:
             page.fill("#dms-address-line-1", addr)
         if state:
@@ -902,6 +1266,7 @@ def run_fill_dms_only(
             vehicle_id=vehicle_id,
             customer_name=dms_values["customer_name"],
             mobile_number=mobile_phone,
+            alt_phone_num=landline,
             address=addr,
             state=state,
             pin_code=pin,
@@ -1100,7 +1465,7 @@ def run_fill_dms(
             chassis_no=str((result.get("vehicle") or {}).get("frame_num") or (vehicle or {}).get("frame_no") or ""),
             vehicle_model=str((result.get("vehicle") or {}).get("model") or ""),
             vehicle_colour=str((result.get("vehicle") or {}).get("color") or ""),
-            fuel_type=str((result.get("vehicle") or {}).get("fuel_type") or "Petrol"),
+            fuel_type=str((result.get("vehicle") or {}).get("fuel_type") or ""),
             year_of_mfg=str((result.get("vehicle") or {}).get("year_of_mfg") or ""),
             vehicle_price=_parse_vehicle_price(result.get("vehicle") or {}),
             ocr_output_dir=ocr_output_dir,

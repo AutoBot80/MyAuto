@@ -40,7 +40,11 @@ This document lists the current database tables and their columns. **Executable 
 | `city` | `text` | YES |  | City |
 | `state` | `text` | YES |  | State |
 | `mobile_number` | `integer` | YES |  | Customer mobile number (10 digits) |
+| `alt_phone_num` | `varchar(16)` | YES |  | Alternate / landline customer number (Sales Detail Sheet `Alternate`) |
 | `profession` | `varchar(16)` | YES |  | Customer profession (e.g. Service, Business) |
+| `financier` | `varchar(255)` | YES |  | Financier name captured from details sheet / insurance context |
+| `marital_status` | `varchar(32)` | YES |  | Customer marital status captured from details sheet |
+| `nominee_gender` | `varchar(16)` | YES |  | Nominee gender captured from details sheet |
 | `file_location` | `text` | YES |  | File location / sub-folder name where scans are placed |
 | `gender` | `varchar(8)` | YES |  | Gender from Aadhar QR (e.g. M, F) |
 | `date_of_birth` | `varchar(20)` | YES |  | Date of birth (dd/mm/yyyy); default date format for app and DB |
@@ -163,6 +167,7 @@ This document lists the current database tables and their columns. **Executable 
 | `pin` | `char(6)` | YES |  | PIN code |
 | `city` | `text` | YES |  | City |
 | `state` | `text` | YES |  | State |
+| `rto_name` | `varchar(128)` | YES |  | Dealer-mapped RTO office name (e.g. `RTO-Bharatpur`) |
 | `parent_id` | `integer` | YES |  | Parent dealer id (hierarchy) |
 | `phone` | `varchar(16)` | YES |  | Phone (up to 16 digits) |
 | `auto_sms_reminders` | `char(1)` | YES |  | Y or N; when Y, trigger populates service_reminders_queue on sales_master upsert |
@@ -421,3 +426,6 @@ This document lists the current database tables and their columns. **Executable 
 | 0.5 | Mar 2026 | Added `form_dms_view` for DMS label inspection and runtime export support |
 | 0.6 | Mar 2026 | Added `vehicle_master.vehicle_price`; DMS/Vahan Playwright now read field values only from `form_dms_view` / `form_vahan_view` |
 | 0.8 | Mar 2026 | Renamed `total_amount` / `total_cost` references to `vehicle_price` across schema, views, and UI |
+| 0.9 | Mar 2026 | Added `customer_master.financier`, `customer_master.marital_status`, and `customer_master.nominee_gender` for details-sheet capture |
+| 1.0 | Mar 2026 | Added `dealer_ref.rto_name` and seeded `RTO-Bharatpur` for dealer `100001` |
+| 1.1 | Mar 2026 | Added `customer_master.alt_phone_num` for Alternate/Landline number and mapped it to DMS/Insurance automation usage |

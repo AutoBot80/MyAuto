@@ -122,7 +122,8 @@ def search_customer(
             cur.execute(
                 """
                 SELECT customer_id, name, mobile_number, address, pin, city, state,
-                       date_of_birth, profession, file_location, gender
+                       date_of_birth, alt_phone_num, profession, financier, marital_status,
+                       nominee_gender, file_location, gender
                 FROM customer_master
                 WHERE customer_id = %s
                 """,

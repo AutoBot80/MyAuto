@@ -2,13 +2,19 @@
 
 Local mock sites used to develop and test Playwright automation (form fill, navigation, file download) without hitting real DMS or Parivahan/Vaahan.
 
+**Configuration:** The API server requires absolute URLs in `backend/.env` (`DMS_BASE_URL`, `VAHAN_BASE_URL`, `INSURANCE_BASE_URL`) pointing at these dummy mounts — see `backend/.env.example`. There are no in-code fallbacks; the app will not start if any are missing.
+
 ## DMS (Dealer Management System)
 
-Layout and field names mirror the Hero MotoCorp / Oracle Siebel Enquiry screen (eDealer HMCL).
+Layout and labels now mirror the operator video flow: Hero Connect login -> Oracle Siebel Vehicle Sales/Line Items -> Auto Vehicle List/PDI -> MISP/Partner Login.
 
 - **Base URL** (when backend is running): `http://localhost:8000/dummy-dms/`
-- **Login**: `index.html` — any username/password accepted (redirects to Enquiry).
-- **Enquiry**: `enquiry.html` — Customer Information, Address, Customer Profile, Vehicle Information, Finance Details, Enquiry Information. All inputs have stable `id` and `name` attributes for Playwright selectors (e.g. `#dms-contact-first-name`, `#dms-mobile-phone`, `#dms-state`, `#dms-pin-code`).
+- **Login**: `index.html` — Hero Connect style login (`User ID`, `Password`, `Remember my User ID`); any credentials accepted.
+- **My Vehicle Sales**: `my-sales.html` — sales list and action labels (`Create Invoice`, `Send Email`, `ReSend SMS`, `Apply Campaign`).
+- **Line Items**: `line-items.html` — invoice/detail view and transition to Vehicle.
+- **Vehicle List**: `vehicle.html` — `Auto Vehicle List` with existing search/result selectors used by Playwright.
+- **PDI**: `pdi.html` — `Auto Vehicle PDI Assessment` labels/tabs and submit transition.
+- **MISP / Partner Login**: `reports.html` — MISP dashboard labels and partner-login context, with report downloads.
 - **View / Print invoice**: link "View / Print invoice" navigates to `invoice.html`. On that page you can use **Print** (browser print dialog) or **Download PDF** for the basic invoice PDF.
 
 ### Run
@@ -35,3 +41,20 @@ Dummy vehicle registration flow: login → application form (all sections) → p
 - **Payment**: link **Proceed to Payment** goes to `payment.html` — dummy total and **Pay Now (dummy)** button; on click shows “Payment successful (dummy)”.
 
 All form fields use stable `id` attributes prefixed with `vahan-` (e.g. `#vahan-vehicle-class`, `#vahan-owner-name`, `#vahan-payment-link`) for Playwright.
+
+## Insurance (MISP/HIBIPL-style)
+
+Dummy insurance policy issuance flow aligned to operator video:
+KYC -> KYC success redirect -> MisDMS VIN entry -> New Policy - Two Wheeler.
+
+- **Base URL** (when backend is running): `http://localhost:8000/dummy-insurance/`
+- **Login/Redirect**: `index.html` -> `kyc.html`
+- **KYC**: `kyc.html` — insurer, KYC partner, proposer type, OVD type, mobile, Aadhaar front/rear, customer photo, consent, and proceed.
+- **KYC Success**: `kyc-success.html` — auto-redirects to MisDMS in 2 seconds.
+- **MisDMS Entry**: `dms-entry.html` — left-menu labels + VIN entry and proceed.
+- **New Policy**: `policy.html` — proposer, address, vehicle, nominee, financer, add-on, payment sections.
+- **Issue Result (dummy)**: `issued.html` — simulated policy-issued page.
+
+Notes:
+- This site mirrors labels and flow order from the video; no real policy APIs are called.
+- Hero Connect lookup is represented as an external link from `dms-entry.html` to the existing dummy DMS flow.

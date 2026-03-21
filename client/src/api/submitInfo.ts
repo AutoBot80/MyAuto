@@ -12,7 +12,11 @@ export interface SubmitInfoPayload {
     city?: string;
     state?: string;
     mobile_number: string;
+    alt_phone_num?: string;
     profession?: string;
+    financier?: string;
+    marital_status?: string;
+    nominee_gender?: string;
     file_location?: string | null;
   };
   vehicle: {
@@ -44,7 +48,7 @@ export interface SubmitInfoResponse {
 function mapCustomer(
   c: ExtractedCustomerDetails | null,
   mobile: string,
-  profession?: string,
+  insurance?: ExtractedInsuranceDetails | null,
   fileLocation?: string | null
 ): SubmitInfoPayload["customer"] {
   return {
@@ -57,7 +61,11 @@ function mapCustomer(
     city: c?.city,
     state: c?.state,
     mobile_number: mobile,
-    profession,
+    alt_phone_num: c?.alt_phone_num,
+    profession: insurance?.profession,
+    financier: insurance?.financier,
+    marital_status: insurance?.marital_status,
+    nominee_gender: insurance?.nominee_gender,
     file_location: fileLocation ?? undefined,
   };
 }
@@ -90,13 +98,12 @@ export async function submitInfo(
     vehicle: ExtractedVehicleDetails | null;
     insurance: ExtractedInsuranceDetails | null;
     mobile: string;
-    profession?: string;
     fileLocation: string | null;
     dealerId: number | null;
   }
 ): Promise<SubmitInfoResponse> {
   const payload: SubmitInfoPayload = {
-    customer: mapCustomer(opts.customer, opts.mobile, opts.profession, opts.fileLocation),
+    customer: mapCustomer(opts.customer, opts.mobile, opts.insurance, opts.fileLocation),
     vehicle: mapVehicle(opts.vehicle),
     insurance: mapInsurance(opts.insurance),
     dealer_id: opts.dealerId,

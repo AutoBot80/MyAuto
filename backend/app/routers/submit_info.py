@@ -18,7 +18,11 @@ class CustomerPayload(BaseModel):
     city: str | None = None
     state: str | None = None
     mobile_number: int | str | None = None
+    alt_phone_num: str | None = None
     profession: str | None = None
+    financier: str | None = None
+    marital_status: str | None = None
+    nominee_gender: str | None = None
     file_location: str | None = None
 
 
