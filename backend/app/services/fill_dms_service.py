@@ -1247,11 +1247,40 @@ def run_fill_insurance_only(
         if page.locator("#ins-consent").count() > 0 and not page.is_checked("#ins-consent"):
             page.check("#ins-consent")
         if kyc_state == "need_docs":
-            submit = page.locator("#ins-kyc-submit")
-            if submit.count() > 0:
-                submit.wait_for(state="visible", timeout=10000)
-                submit.wait_for(state="enabled", timeout=15000)
-                submit.click()
+            # set_input_files does not always fire "change"; dummy exposes __syncInsuranceKycSubmitState.
+            try:
+                page.evaluate(
+                    "() => { if (typeof window.__syncInsuranceKycSubmitState === 'function') window.__syncInsuranceKycSubmitState(); }"
+                )
+            except Exception:
+                pass
+            page.wait_for_timeout(200)
+            submit_loc = page.locator("#ins-kyc-submit")
+            if submit_loc.count() > 0:
+                submit_loc.wait_for(state="attached", timeout=10000)
+                try:
+                    page.wait_for_function(
+                        """() => {
+                          const b = document.querySelector('#ins-kyc-submit');
+                          if (!b) return false;
+                          if (b.hidden) return false;
+                          return !b.disabled;
+                        }""",
+                        timeout=25000,
+                    )
+                except PlaywrightTimeout:
+                    page.evaluate(
+                        "() => { if (typeof window.__syncInsuranceKycSubmitState === 'function') window.__syncInsuranceKycSubmitState(); }"
+                    )
+                    page.wait_for_timeout(200)
+                    page.wait_for_function(
+                        """() => {
+                          const b = document.querySelector('#ins-kyc-submit');
+                          return b && !b.hidden && !b.disabled;
+                        }""",
+                        timeout=15000,
+                    )
+                submit_loc.click()
             else:
                 # Older dummy page: single Proceed after uploads
                 page.locator("#ins-proceed").wait_for(state="visible", timeout=5000)

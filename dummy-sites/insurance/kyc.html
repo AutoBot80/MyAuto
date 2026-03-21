@@ -163,8 +163,17 @@
   document.getElementById("ins-mobile-no").addEventListener("input", resetAfterMobileEdit);
   document.getElementById("ins-consent").addEventListener("change", updateProceedEnabled);
   ["ins-aadhar-front", "ins-aadhar-rear", "ins-customer-photo"].forEach(function (id) {
-    document.getElementById(id).addEventListener("change", updateProceedEnabled);
+    var el = document.getElementById(id);
+    el.addEventListener("change", updateProceedEnabled);
+    /* Playwright set_input_files often skips firing "change" in Chromium; "input" covers more cases. */
+    el.addEventListener("input", updateProceedEnabled);
   });
+  /** Called by Playwright after programmatic file uploads so Submit enables. */
+  window.__syncInsuranceKycSubmitState = function () {
+    try {
+      updateProceedEnabled();
+    } catch (e) {}
+  };
   document.getElementById("ins-proceed").addEventListener("click", function () {
     if (this.disabled || this.hidden) return;
     if (window.__insKycState !== "found") return;
