@@ -201,7 +201,7 @@ This section defines database-to-label mapping contracts for DMS, Insurance, and
 | New Policy (`MispPolicy.aspx`) | Proposer Name | `customer_master.name` |
 | New Policy (`MispPolicy.aspx`) | Gender | `customer_master.gender` |
 | New Policy (`MispPolicy.aspx`) | Alternate / Landline No. | `customer_master.alt_phone_num` |
-| New Policy (`MispPolicy.aspx`) | Date of Birth | `customer_master.dob` |
+| New Policy (`MispPolicy.aspx`) | Date of Birth | `customer_master.date_of_birth` (VARCHAR `dd/mm/yyyy`) |
 | New Policy (`MispPolicy.aspx`) | Marital Status | `customer_master.marital_status` |
 | New Policy (`MispPolicy.aspx`) | Occupation Type | `customer_master.profession` |
 | New Policy (`MispPolicy.aspx`) | Proposer State / City / Pin / Address | `customer_master.state`, `customer_master.city`, `customer_master.pin`, `customer_master.address` |

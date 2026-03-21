@@ -1,6 +1,10 @@
 {
   "vehicle": {
-    "model_colour": "Splendor+"
+    "frame_no": "59324",
+    "engine_no": "50581",
+    "model_colour": "Splendor+",
+    "key_no": "2509",
+    "battery_no": "MAK2"
   },
   "customer": {
     "aadhar_id": "7945",

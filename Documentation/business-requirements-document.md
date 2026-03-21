@@ -173,7 +173,7 @@ This section defines the required operator navigation path and minimum field-ent
 | New Policy | Proposer Type* | Portal default | Dummy **Individual**; Playwright does not set |
 | New Policy | Proposer Name | Customer name | `customer_master.name` |
 | New Policy | Gender | Customer gender | `customer_master.gender` |
-| New Policy | Date of Birth | Customer DOB | `customer_master.dob` |
+| New Policy | Date of Birth | Customer DOB | `customer_master.date_of_birth` |
 | New Policy | Marital Status | Customer marital status | `customer_master.marital_status` |
 | New Policy | Occupation Type / Profession | Customer profession | `customer_master.profession` |
 | New Policy | Proposer State/City/Pin/Address | Customer address fields | `customer_master.state`, `customer_master.city`, `customer_master.pin`, `customer_master.address` |

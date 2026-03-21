@@ -927,7 +927,7 @@ def _load_latest_insurance_values(customer_id: int, vehicle_id: int) -> dict:
                     vm.vehicle_id,
                     COALESCE(cm.name, '') AS customer_name,
                     COALESCE(cm.gender, '') AS gender,
-                    COALESCE(TO_CHAR(cm.dob, 'DD/MM/YYYY'), '') AS dob,
+                    COALESCE(TRIM(cm.date_of_birth), '') AS dob,
                     COALESCE(cm.marital_status, '') AS marital_status,
                     COALESCE(cm.profession, '') AS profession,
                     COALESCE(cm.mobile_number::text, '') AS mobile_number,
