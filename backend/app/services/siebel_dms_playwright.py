@@ -1,10 +1,11 @@
 """
 Hero Connect / Oracle Siebel Open UI — Playwright helpers for real DMS automation.
 
-Siebel renders in nested iframes. The global **Find** pane (right side, object type e.g.
-**Contact**, first field **Mobile Phone** on Home and other views) often exposes the
-visible label via ``<label>`` / ``aria-labelledby``, not ``aria-label`` — we therefore
-try CSS attribute selectors first, then Playwright ``get_by_label`` / ``get_by_role``.
+Siebel renders in nested iframes. After ``goto`` contact URL we drive **Find → Contact**
+(header / applet object-type dropdown) when possible, then fill mobile. The **Find** pane
+(right side) and **Enquiries** grid use labels like **Mobile Phone**, **Mobile Phone #**,
+or **Mobile Number** — often via ``<label>`` / ``aria-labelledby``, not ``aria-label``,
+so we try CSS selectors first, then ``get_by_label`` / ``get_by_role``.
 Tune with:
 
 - ``DMS_SIEBEL_CONTENT_FRAME_SELECTOR`` — CSS selector for ``page.frame_locator(...)``
@@ -104,6 +105,99 @@ def _resolve_work_locator(page: Page, content_frame_selector: str | None):
     return None
 
 
+def _try_prepare_find_contact_applet(
+    page: Page, *, timeout_ms: int, content_frame_selector: str | None
+) -> bool:
+    """
+    Hero Connect navigation: **Find** → object type **Contact** (header dropdown or right applet),
+    so the Mobile field is the Contact search field (not Job Card / Vehicle, etc.).
+    """
+    contact_label = re.compile(r"^\s*Contact\s*$", re.I)
+
+    def _visible_selects(root):
+        try:
+            loc = root.locator("select")
+            n = loc.count()
+        except Exception:
+            return []
+        out = []
+        for i in range(min(n, 50)):
+            try:
+                s = loc.nth(i)
+                if s.is_visible(timeout=400):
+                    out.append(s)
+            except Exception:
+                continue
+        return out
+
+    def select_contact_on_native_selects(root) -> bool:
+        for sel in _visible_selects(root):
+            try:
+                texts = sel.evaluate(
+                    """el => [...el.options].map(o => (o.textContent || '').trim())"""
+                )
+                if not texts or not any((t or "").strip().lower() == "contact" for t in texts):
+                    continue
+                # Skip lists where "Contact" is only part of a longer option (e.g. "Contacts_Enquiry")
+                exact_contact = [t for t in texts if (t or "").strip().lower() == "contact"]
+                if not exact_contact:
+                    continue
+                sel.select_option(label=contact_label, timeout=timeout_ms)
+                logger.info("siebel_dms: Find object type → Contact (native select)")
+                return True
+            except Exception:
+                continue
+        return False
+
+    def click_contact_menu(page_: Page, root) -> bool:
+        """Menus often render at page level after opening a frame-local dropdown."""
+        for scope in (root, page_):
+            for role in ("menuitem", "option", "link"):
+                try:
+                    loc = scope.get_by_role(role, name=contact_label).first
+                    if loc.count() > 0 and loc.is_visible(timeout=800):
+                        loc.click(timeout=timeout_ms)
+                        logger.info("siebel_dms: chose Contact from Find menu (%s)", role)
+                        return True
+                except Exception:
+                    continue
+        return False
+
+    def open_find_dropdown_then_contact(page_: Page, root) -> bool:
+        try:
+            cb = root.get_by_role("combobox", name=re.compile(r"find", re.I)).first
+            if cb.count() > 0 and cb.is_visible(timeout=700):
+                cb.click(timeout=timeout_ms)
+                page_.wait_for_timeout(400)
+                if click_contact_menu(page_, root):
+                    return True
+        except Exception:
+            pass
+        return False
+
+    def try_on_root(page_: Page, root) -> bool:
+        if select_contact_on_native_selects(root):
+            return True
+        if open_find_dropdown_then_contact(page_, root):
+            return True
+        return False
+
+    fl = _resolve_work_locator(page, content_frame_selector)
+    if fl is not None:
+        try:
+            if try_on_root(page, fl):
+                return True
+        except Exception:
+            pass
+    for frame in _ordered_frames(page):
+        try:
+            if try_on_root(page, frame):
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def _fill_in_frame(frame: Frame, selectors: list[str], value: str, *, timeout_ms: int) -> bool:
     if not (value or "").strip():
         return False
@@ -180,8 +274,13 @@ def _mobile_selectors(extra_hints: list[str]) -> list[str]:
     base = [
         'input[aria-label*="Cellular" i]',
         'input[aria-label*="Cell Phone" i]',
+        'input[aria-label*="Mobile Phone #" i]',
         'input[aria-label*="Mobile Phone" i]',
+        'input[aria-label*="Mobile Number" i]',
         'input[aria-label*="Mobile No" i]',
+        'input[title*="Mobile Phone #" i]',
+        'input[title*="Mobile Number" i]',
+        'input[title*="Main Phone" i]',
         'input[aria-label*="Main Phone" i]',
         'input[aria-label*="Phone #" i]',
         'input[title*="Cellular" i]',
@@ -221,7 +320,9 @@ def _try_fill_mobile_semantic(
             patterns.append(re.compile(re.escape(t), re.I))
     patterns.extend(
         [
+            re.compile(r"mobile\s*phone\s*#\s*", re.I),
             re.compile(r"mobile\s*phone\s*#?", re.I),
+            re.compile(r"mobile\s*number", re.I),
             re.compile(r"mobile\s*phone", re.I),
             re.compile(r"cellular", re.I),
         ]
@@ -492,6 +593,14 @@ def run_hero_siebel_dms_flow(
     try:
         _goto(page, urls.contact, "contact", nav_timeout_ms=nav_timeout_ms)
         page.wait_for_timeout(1200)
+
+        if _try_prepare_find_contact_applet(
+            page,
+            timeout_ms=action_timeout_ms,
+            content_frame_selector=content_frame_selector,
+        ):
+            note("Find → Contact: object type selected so the mobile field is the Contact search field.")
+        page.wait_for_timeout(600)
 
         filled_mobile = _try_fill_field(
             page,
