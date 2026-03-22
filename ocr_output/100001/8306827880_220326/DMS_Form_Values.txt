@@ -1,0 +1,39 @@
+DMS Form Values
+
+--- Values sent to DMS labels ---
+Mr/Ms: Mr.
+Contact First Name: Akash
+Contact Last Name: —
+Mobile Phone #: 8306827880
+Landline #: 9602035092
+State: RAJASTHAN
+Address Line 1: S/O: S/O: Sahab Singh, street=, Bharatpur, Bharatpur, Rajasthan, 321001
+Pin Code: 321001
+Relation (S/O or W/o): S/O
+Father or Husband Name: S/O: S/O: Sahab Singh
+Customer Budget (dummy enquiry): 89000
+Finance Required: Y
+Financier Name: SHRIRAM finance
+DMS Contact Path: found
+Key num (partial): 1342
+Frame / Chassis num (partial): 40393
+Engine num (partial): 04383
+
+--- Runtime values used by Playwright ---
+sales_id: 14
+customer_id: 3
+vehicle_id: 3
+dealer_id: 100001
+subfolder: 8306827880_220326
+dealer_name: Arya Agencies
+oem_name: —
+source_customer_name: Akash
+source_mobile_number: 8306827880
+source_alt_phone_num: 9602035092
+source_address: S/O: S/O: Sahab Singh, street=, Bharatpur, Bharatpur, Rajasthan, 321001
+source_state: RAJASTHAN
+source_pin_code: 321001
+source_key_no: 1342
+source_frame_no: 40393
+source_engine_no: 04383
+generated_at: 22-03-2026 18:19:12

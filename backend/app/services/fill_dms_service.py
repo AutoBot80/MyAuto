@@ -281,6 +281,46 @@ def _launch_managed_browser_for_site(base_url: str):
     return None, None
 
 
+def _playwright_page_url_matches_site_base(page_url: str, site_base_url: str) -> bool:
+    """
+    True if ``page_url`` is the same site as ``site_base_url`` (scheme + host + path prefix).
+    Siebel/Hero Connect uses many query variants (``SWECmd=Login``, ``GotoView``, …); matching only
+    ``startswith(DMS_BASE_URL)`` can fail when bases differ slightly; host+path prefix is reliable.
+    """
+    pu = (page_url or "").strip()
+    bu = (site_base_url or "").strip()
+    if not pu or not bu:
+        return False
+    low = pu.lower()
+    if "blank" in low or low.startswith("chrome://") or low.startswith("edge://") or low.startswith("about:"):
+        return False
+    try:
+        pp = urllib.parse.urlparse(pu)
+        bp = urllib.parse.urlparse(bu.strip())
+        if not bp.netloc and bu.strip().startswith("//"):
+            bp = urllib.parse.urlparse(f"https:{bu.strip()}")
+        if not bp.netloc or not pp.netloc:
+            return pu.startswith(bu.rstrip("/")) or bu.rstrip("/") in pu
+        if pp.netloc.lower() != bp.netloc.lower():
+            return False
+
+        def norm_path(path: str) -> str:
+            p = (path or "/").rstrip("/")
+            return p.lower() if p else ""
+
+        ppath = norm_path(pp.path)
+        bpath = norm_path(bp.path)
+        if not bpath:
+            return True
+        if ppath == bpath or ppath.startswith(bpath + "/"):
+            return True
+        # Base stored as .../enu, page path .../enu (already ==). Extra: .../enu vs .../Enu case
+        return False
+    except Exception:
+        t = bu.rstrip("/")
+        return pu.startswith(t) or t in pu
+
+
 def _get_or_open_site_page(base_url: str, site_label: str, *, require_login_on_open: bool = True):
     """
     Try finding an already-open site tab.
@@ -304,21 +344,44 @@ def _get_or_open_site_page(base_url: str, site_label: str, *, require_login_on_o
 
 
 def _find_open_site_page(base_url: str):
-    """Find an already-open tab for the given site base URL."""
-    target = (base_url or "").rstrip("/")
-    if not target:
+    """Find an already-open tab for the given site base URL (CDP or same-process Playwright launch)."""
+    if not (base_url or "").strip():
         return None
     _refresh_cdp_browsers()
     browsers_to_scan = list(_KEEP_OPEN_BROWSERS) + list(_CDP_BROWSERS_BY_URL.values())
+    if not browsers_to_scan:
+        logger.warning(
+            "fill_dms_service: no browser session for tab reuse — Playwright cannot see a normal Edge/Chrome window. "
+            "Start Edge with remote debugging, e.g. "
+            '"msedge.exe" --remote-debugging-port=9222 '
+            "then set PLAYWRIGHT_CDP_URL=http://127.0.0.1:9222 in backend/.env and restart the API. "
+            "Or use the browser opened by Fill DMS (default CDP port %s). "
+            "Hero Connect login URLs such as "
+            "https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=Login… are matched once CDP works.",
+            PLAYWRIGHT_MANAGED_REMOTE_DEBUG_PORT or 9333,
+        )
+        return None
+
+    sample_urls: list[str] = []
     for browser in browsers_to_scan:
         try:
             for context in browser.contexts:
                 for page in context.pages:
-                    url = (page.url or "").rstrip("/")
-                    if url.startswith(target) or target in url:
+                    url = (page.url or "").strip()
+                    if len(sample_urls) < 15 and url:
+                        sample_urls.append(url[:160])
+                    if _playwright_page_url_matches_site_base(url, base_url):
+                        logger.info("fill_dms_service: reusing open tab for DMS_BASE_URL: %s", url[:140])
                         return page
         except Exception:
             continue
+
+    logger.warning(
+        "fill_dms_service: no tab matched DMS_BASE_URL=%r among %s session(s). Open tab URLs (sample): %s",
+        (base_url or "")[:100],
+        len(browsers_to_scan),
+        sample_urls[:8] or "(none readable)",
+    )
     return None
 
 

@@ -226,3 +226,4 @@ See **Documentation/Database DDL.md** for full table structures. Summary:
 | 1.4 | Mar 2026 | — | Aadhaar OCR: gender from **DOB anchor** (skip word, next `/`, gender token); state/PIN from **comma segments + dash runs** before last 6-digit PIN |
 | 1.5 | Mar 2026 | — | DMS: ``DMS_MODE`` / ``DMS_REAL_URL_*`` for Hero Connect Siebel navigation branch; ``GET /settings/site-urls`` exposes mode flags |
 | 1.6 | Mar 2026 | — | Playwright-managed Edge/Chrome: ``--remote-debugging-port`` via ``PLAYWRIGHT_MANAGED_REMOTE_DEBUG_PORT`` (default 9333); CDP candidate list includes that port |
+| 1.7 | Mar 2026 | — | DMS tab detection: host+path prefix match for Siebel query URLs (``SWECmd=Login``, ``GotoView``); logs when no CDP session exists |
