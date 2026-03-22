@@ -1089,6 +1089,30 @@ def _extract_details_customer_name(pairs: list[dict]) -> str | None:
     return None
 
 
+def _extract_financier_from_payment_line(text: str) -> str | None:
+    """Arya-style sales detail: 'Payment: (A) Cash ... (D) Finance: SHRIRAM FIN' (no separate Financier label)."""
+    if not text or not isinstance(text, str):
+        return None
+    low = text.lower()
+    if "finance" not in low:
+        return None
+    m = re.search(r"(?i)(?:\(D\)\s*|D\)\s*)Finance\s*:\s*([^\n]+)", text)
+    if not m and "payment" in low and re.search(r"(?i)\(D\)", text):
+        m = re.search(r"(?i)Finance\s*:\s*([^\n]+)", text)
+    if not m:
+        return None
+    val = m.group(1).strip()
+    for cut in (" I agree", " Insurer", " Insurer Name", " Customer Signature"):
+        if cut in val:
+            val = val.split(cut)[0].strip()
+    val = val.rstrip(".,; ")
+    if len(val) < 2 or len(val) > 160:
+        return None
+    if re.match(r"^(yes|no|na|n/?a|cash|required|optional)\s*$", val, re.I):
+        return None
+    return val
+
+
 def _map_key_value_pairs_to_insurance(pairs: list[dict]) -> dict[str, str]:
     """Map key_value_pairs from Textract to insurance/nominee fields."""
     out: dict[str, str] = {}
@@ -1118,6 +1142,13 @@ def _map_key_value_pairs_to_insurance(pairs: list[dict]) -> dict[str, str]:
                     out[field] = v
                     break
             if field in out:
+                break
+
+    if "financier" not in out:
+        for vv in key_lower_to_value.values():
+            got = _extract_financier_from_payment_line(vv)
+            if got:
+                out["financier"] = got
                 break
     return out
 
@@ -1170,6 +1201,9 @@ def _parse_insurance_from_full_text(full_text: str) -> dict[str, str]:
     if not full_text or not isinstance(full_text, str):
         return out
     text = full_text.strip()
+    pay_fin = _extract_financier_from_payment_line(text)
+    if pay_fin:
+        out["financier"] = pay_fin
     # Patterns: "Label" or "Label:" followed by value on same or next line
     patterns = [
         # Detail-sheet lines e.g. "Insurer Name (if needed): SOMPO" (longer labels first)

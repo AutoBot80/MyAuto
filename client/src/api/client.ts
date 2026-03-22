@@ -13,6 +13,22 @@ const BACKEND_HINT =
   "`python -m uvicorn app.main:app --reload --port 8000` " +
   "(or run `daily_startup.bat` from the project root).";
 
+/** Maps browser fetch failures (backend down, CORS, proxy reset) to a clear message. */
+export function throwMappedFetchError(err: unknown): never {
+  const name = err instanceof Error ? err.name : (err as { name?: string })?.name;
+  if (name === "AbortError") throw err;
+  const raw = err instanceof Error ? err.message : String(err);
+  const isUnreachable =
+    /ECONNREFUSED|Failed to fetch|NetworkError|Load failed|network error/i.test(raw);
+  if (isUnreachable) {
+    throw new Error(
+      `Cannot connect to the backend. ${BACKEND_HINT} ` +
+        "If the API is running, open the app at http://localhost:5173 (not only your LAN IP) unless CORS allows your origin."
+    );
+  }
+  throw err instanceof Error ? err : new Error(raw);
+}
+
 export async function apiFetch<T>(
   path: string,
   options: RequestInit = {}
@@ -24,15 +40,7 @@ export async function apiFetch<T>(
       headers: { ...options.headers },
     });
   } catch (err) {
-    const name = err instanceof Error ? err.name : (err as { name?: string })?.name;
-    if (name === "AbortError") throw err;
-    const raw = err instanceof Error ? err.message : String(err);
-    const isUnreachable =
-      /ECONNREFUSED|Failed to fetch|NetworkError|Load failed|network error/i.test(raw);
-    if (isUnreachable) {
-      throw new Error(`Cannot connect to the backend. ${BACKEND_HINT}`);
-    }
-    throw err instanceof Error ? err : new Error(raw);
+    throwMappedFetchError(err);
   }
   if (!res.ok) {
     const text = await res.text();

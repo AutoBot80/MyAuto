@@ -55,6 +55,8 @@ get_bulk_processing_dir(DEALER_ID).mkdir(parents=True, exist_ok=True)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    # Dev: Vite on LAN IP (e.g. http://192.168.x.x:5173) when VITE_API_URL points at :8000
+    allow_origin_regex=r"^http://(localhost|127\.0\.0\.1|192\.168\.\d{1,3}\.\d{1,3})(:\d+)?$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
