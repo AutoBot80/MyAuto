@@ -1,8 +1,11 @@
 """
 Hero Connect / Oracle Siebel Open UI — Playwright helpers for real DMS automation.
 
-Siebel renders in nested iframes with aria-labelled inputs. This module tries multiple
-selectors per field and walks candidate frames. Tune with:
+Siebel renders in nested iframes. The global **Find** pane (right side, object type e.g.
+**Contact**, first field **Mobile Phone** on Home and other views) often exposes the
+visible label via ``<label>`` / ``aria-labelledby``, not ``aria-label`` — we therefore
+try CSS attribute selectors first, then Playwright ``get_by_label`` / ``get_by_role``.
+Tune with:
 
 - ``DMS_SIEBEL_CONTENT_FRAME_SELECTOR`` — CSS selector for ``page.frame_locator(...)``
   when auto-detection fails (e.g. ``iframe#s_0_26``).
@@ -195,6 +198,66 @@ def _mobile_selectors(extra_hints: list[str]) -> list[str]:
             base.insert(0, f'input[aria-label*="{h}" i]')
             base.insert(0, f'input[title*="{h}" i]')
     return base
+
+
+def _try_fill_mobile_semantic(
+    page: Page,
+    value: str,
+    *,
+    timeout_ms: int,
+    content_frame_selector: str | None,
+    extra_hints: list[str],
+) -> bool:
+    """
+    Hero Connect Find applet (dark right panel, Contact → Mobile Phone): label may not
+    duplicate into aria-label; match by accessible name via Playwright.
+    """
+    if not (value or "").strip():
+        return False
+    patterns: list[re.Pattern[str]] = []
+    for h in extra_hints:
+        t = (h or "").strip()
+        if len(t) >= 2:
+            patterns.append(re.compile(re.escape(t), re.I))
+    patterns.extend(
+        [
+            re.compile(r"mobile\s*phone\s*#?", re.I),
+            re.compile(r"mobile\s*phone", re.I),
+            re.compile(r"cellular", re.I),
+        ]
+    )
+
+    def try_on_root(root) -> bool:
+        for pat in patterns:
+            for get_loc in (
+                lambda p=pat: root.get_by_label(p),
+                lambda p=pat: root.get_by_role("textbox", name=p),
+                lambda p=pat: root.get_by_role("searchbox", name=p),
+                lambda p=pat: root.get_by_role("combobox", name=p),
+            ):
+                try:
+                    loc = get_loc().first
+                    if loc.count() == 0:
+                        continue
+                    if not loc.is_visible(timeout=800):
+                        continue
+                    loc.click(timeout=min(3000, timeout_ms))
+                    loc.fill("", timeout=min(3000, timeout_ms))
+                    loc.fill(value.strip(), timeout=timeout_ms)
+                    logger.info("siebel_dms: filled mobile via semantic locator")
+                    return True
+                except Exception as e:
+                    logger.debug("siebel_dms: semantic mobile try failed: %s", e)
+                    continue
+        return False
+
+    fl = _resolve_work_locator(page, content_frame_selector)
+    if fl is not None and try_on_root(fl):
+        return True
+    for frame in _ordered_frames(page):
+        if try_on_root(frame):
+            return True
+    return False
 
 
 def _try_select_option(
@@ -438,11 +501,19 @@ def run_hero_siebel_dms_flow(
             content_frame_selector=content_frame_selector,
         )
         if not filled_mobile:
+            filled_mobile = _try_fill_mobile_semantic(
+                page,
+                mobile,
+                timeout_ms=action_timeout_ms,
+                content_frame_selector=content_frame_selector,
+                extra_hints=mobile_aria_hints,
+            )
+        if not filled_mobile:
             out["error"] = (
                 "Siebel: could not find a mobile/cellular phone input on the contact view. "
-                "Log in, open Buyer/CoBuyer, set DMS_SIEBEL_CONTENT_FRAME_SELECTOR to the "
-                "content iframe CSS selector, or add DMS_SIEBEL_MOBILE_ARIA_HINTS (comma-separated "
-                "substrings matching the field label)."
+                "Open the Find pane (right side), set object type to Contact if needed, "
+                "then set DMS_SIEBEL_CONTENT_FRAME_SELECTOR to the iframe that contains that panel, "
+                "or add DMS_SIEBEL_MOBILE_ARIA_HINTS (comma-separated substrings matching the field label)."
             )
             out["dms_milestones"] = _sort_milestone_labels(out["dms_milestones"])
             return out
