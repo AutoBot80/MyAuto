@@ -1,7 +1,7 @@
 # High Level Design (HLD)
 ## Auto Dealer Management System
 
-**Version:** 1.3  
+**Version:** 1.8  
 **Last Updated:** March 2026
 
 ---
@@ -106,7 +106,7 @@ My Auto.AI/
 | `services/bulk_queue_service` | Bulk queue abstraction with SQS or local in-process fallback. |
 | `services/bulk_watcher_service` | Starts ingest and worker loops inside the API process. |
 | `services/form20_service` | Form 20 generation (Word/PDF/HTML). |
-| `services/fill_dms_service` | Playwright DMS, Vahan, and Insurance automation; reads fill values from DB-backed views/records only, reuses open logged-in site tabs when detectable, auto-opens Edge/Chrome when tabs are not found, writes `DMS_Form_Values.txt` / `Vahan_Form_Values.txt` / `Insurance_Form_Values.txt`, and returns operator guidance to login first-time and retry. DMS branch: `DMS_MODE=dummy` (static HTML) vs `DMS_MODE=real` (`services/siebel_dms_playwright`: contact + vehicle search + grid scrape on Siebel Open UI; optional `DMS_SIEBEL_*` env). |
+| `services/fill_dms_service` | Playwright DMS, Vahan, and Insurance automation; reads fill values from DB-backed views/records only, reuses open logged-in site tabs when detectable, auto-opens Edge/Chrome when tabs are not found, writes `DMS_Form_Values.txt` / `Vahan_Form_Values.txt` / `Insurance_Form_Values.txt`, and returns operator guidance to login first-time and retry. DMS branch: `DMS_MODE=dummy` (static HTML) vs `DMS_MODE=real` (`siebel_dms_playwright.run_hero_siebel_dms_flow`, **BRD §6.1a**; `DMS_SIEBEL_*` / `DMS_REAL_URL_*` env). |
 | `services/submit_info_service` | Submit Info business logic. |
 | `services/rto_payment_service` | Dealer-scoped RTO batch runner, progress state, advisory locking, scrape-back persistence into `rto_queue` / `vehicle_master`, and downstream payment updates. |
 | `repositories/*` | Data access for ai_reader_queue, bulk_loads, dealer_ref, form_dms_view, form_vahan_view, rto_queue, rc_status_sms_queue. |
@@ -133,7 +133,7 @@ My Auto.AI/
    - **Section 2 (AI extracted information):** Customer, Vehicle, and Insurance subsection headers show **Uploading…** while files are uploading and **Processing…** until extraction for that block is populated; the client polls `getExtractedDetails` until customer, vehicle, and insurance blocks all satisfy the same completion rules (or polling limits apply).
 2. OCR processes queue → extracted text stored.
 3. User reviews/corrects → Submit Info → customer_master, vehicle_master, sales_master, insurance_master.
-4. Fill DMS → Playwright loads DMS field values from `form_dms_view`, reuses an already open DMS tab when detectable (CDP), or opens Edge/Chrome. **`DMS_MODE=dummy`:** static HTML enquiry/stock/PDI/vehicle scrape/allocate/invoicing-line (no Create Invoice). **`DMS_MODE=real`:** `siebel_dms_playwright` fills contact and vehicle search on configured Siebel GotoView URLs, scrapes list grid, then opens optional `DMS_REAL_URL_*` views; writes DMS trace files; static `/downloads` PDFs remain skipped. Updates `vehicle_master` from scrape when data is returned.
+4. Fill DMS → Playwright loads DMS field values from `form_dms_view`, reuses an already open DMS tab when detectable (CDP), or opens Edge/Chrome. **Hero Connect / Siebel** (`DMS_MODE=real`): `run_hero_siebel_dms_flow` follows **BRD §6.1a** (Find→mobile→Go, care-of vs full form, vehicle **In Transit** branch, booking/allotment, no Create Invoice); **LLD §2.4d** lists heuristics and gaps. **`DMS_MODE=dummy`:** static HTML linear path (no Create Invoice); order differs from §6.1a by design. Writes DMS traces; updates `vehicle_master` from scrape when data is returned.
 5. Print Form 20 → `form20_service` fills the Word template, converts to PDF, and saves Form 20.pdf / Gate Pass.pdf in the upload subfolder.
 6. RTO queue insertion → Fill Forms stores Form 20 outputs, estimates the RTO fees, and inserts an `rto_queue` row instead of auto-running the dummy Vahan flow.
 7. RTO Queue → operators review queued rows in `RTO Saathi`, process the oldest 7 rows by reusing already open Vahan tabs (or auto-opened Edge/Chrome tabs when unavailable), and wait for live progress up to the upload/cart checkpoint.
@@ -296,3 +296,5 @@ This section defines database-to-label mapping contracts for DMS, Insurance, and
 | 1.4 | Mar 2026 | — | Fill DMS flow: extended enquiry/stock/PDI/allocate/invoicing-line sequence; ex-showroom stored as `vehicle_price`; no auto Create Invoice |
 | 1.5 | Mar 2026 | — | Add Sales Section 2: per-subsection upload/processing indicators; extraction polling continues until insurance block completes (aligned with UI rules) |
 | 1.6 | Mar 2026 | — | DMS ``DMS_MODE`` (dummy vs real Siebel ``DMS_REAL_URL_*``); settings API exposes mode; Fill DMS real path navigates URLs only until Siebel selectors are added |
+| 1.7 | Mar 2026 | — | Add Sales **§4.1** step 4: pointers to **BRD §6.1a** (target Siebel DMS sequence) and **LLD §2.4d** (Playwright parity table) |
+| 1.8 | Mar 2026 | — | **§4.1** step 4: real Siebel implements §6.1a in code; dummy remains linear |

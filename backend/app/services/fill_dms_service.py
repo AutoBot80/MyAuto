@@ -25,6 +25,7 @@ from app.config import (
     DMS_REAL_URL_ENQUIRY,
     DMS_REAL_URL_LINE_ITEMS,
     DMS_REAL_URL_PDI,
+    DMS_REAL_URL_PRECHECK,
     DMS_REAL_URL_REPORTS,
     DMS_REAL_URL_VEHICLE,
     DMS_REAL_URL_VEHICLES,
@@ -563,10 +564,14 @@ DMS_DUMMY_ENQUIRY_BUDGET = "89000"
 # UI checklist order (Add Sales banner). Labels must match exactly for sorting.
 DMS_MILESTONE_ORDER: tuple[str, ...] = (
     "Customer found",
-    "Enquiry created",
     "Care of filled",
+    "Enquiry created",
+    "Booking generated",
     "Vehicle received",
+    "Pre check completed",
     "Vehicle inspection done",
+    "Vehicle allocated",
+    "Allotment view opened",
     "Invoice created",
 )
 
@@ -1792,8 +1797,9 @@ def _run_fill_dms_real_siebel_playwright(
     result: dict,
 ) -> None:
     """
-    Hero Connect / Siebel Open UI: fill contact (Buyer/CoBuyer), vehicle search, scrape list row;
-    then open optional configured views. Writes ``DMS_Form_Values`` trace; no dummy ``/downloads/*.pdf``.
+    Hero Connect / Siebel Open UI: ``run_hero_siebel_dms_flow`` (BRD §6.1a) — contact find or
+    skip_find enquiry, vehicle list scrape + ``in_transit`` branch (receipt/PDI vs booking/allotment).
+    Writes ``DMS_Form_Values`` trace; no dummy ``/downloads/*.pdf``.
     """
     skip_contact = (dms_values.get("dms_contact_path") or "").strip().lower() == "skip_find"
     if not DMS_REAL_URL_CONTACT and not skip_contact:
@@ -1850,6 +1856,7 @@ def _run_fill_dms_real_siebel_playwright(
     urls = SiebelDmsUrls(
         contact=DMS_REAL_URL_CONTACT,
         vehicles=DMS_REAL_URL_VEHICLES,
+        precheck=DMS_REAL_URL_PRECHECK,
         pdi=DMS_REAL_URL_PDI,
         vehicle=DMS_REAL_URL_VEHICLE,
         enquiry=DMS_REAL_URL_ENQUIRY,

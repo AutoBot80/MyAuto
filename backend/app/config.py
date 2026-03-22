@@ -114,7 +114,10 @@ DMS_MODE = (os.getenv("DMS_MODE") or "dummy").strip().lower()
 # Required when DMS_MODE is real: ``DMS_REAL_URL_CONTACT`` for normal find flow; for ``skip_find`` use
 # ``DMS_REAL_URL_ENQUIRY`` or ``DMS_REAL_URL_CONTACT`` plus ``DMS_REAL_URL_VEHICLE`` (see fill_dms_service).
 DMS_REAL_URL_CONTACT = (os.getenv("DMS_REAL_URL_CONTACT") or "").strip()
+# In Transit branch: e.g. Vehicles Receipt / HMCL In Transit (Process Receipt). See BRD §6.1a / run_hero_siebel_dms_flow.
 DMS_REAL_URL_VEHICLES = (os.getenv("DMS_REAL_URL_VEHICLES") or "").strip()
+# Optional: separate Pre Check view; if empty, Pre Check is attempted on ``DMS_REAL_URL_PDI`` after goto.
+DMS_REAL_URL_PRECHECK = (os.getenv("DMS_REAL_URL_PRECHECK") or "").strip()
 DMS_REAL_URL_PDI = (os.getenv("DMS_REAL_URL_PDI") or "").strip()
 DMS_REAL_URL_VEHICLE = (os.getenv("DMS_REAL_URL_VEHICLE") or "").strip()
 DMS_REAL_URL_ENQUIRY = (os.getenv("DMS_REAL_URL_ENQUIRY") or "").strip()

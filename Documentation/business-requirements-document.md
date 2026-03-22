@@ -1,7 +1,7 @@
 # Business Requirements Document (BRD)
 ## Auto Dealer Management System — Arya Agencies
 
-**Version:** 1.7  
+**Version:** 2.4  
 **Last Updated:** March 2026  
 **Status:** Draft
 
@@ -82,7 +82,7 @@ The system is a server–client application for auto dealers. Dealers run a ligh
 - **FR-15** Run Playwright workers that log into external portals and submit data from database-backed views and records.
 - **FR-16** Persist all business data in PostgreSQL with clear ownership (e.g. dealer_id) for multi-tenant use.
 - **FR-17** Submit Info: upsert customer_master, vehicle_master, sales_master, insurance_master from extracted/entered data.
-- **FR-18** Fill DMS: Playwright reads fill values only from `form_dms_view`. **`"DMS Contact Path"`** may be **`skip_find`**: dummy DMS skips the contact-finder Go step and proceeds to enquiry form + Generate booking and the rest; **real Siebel** skips **Find/mobile search** only, opens **`DMS_REAL_URL_ENQUIRY`** (or **`DMS_REAL_URL_CONTACT`**), fills customer on the enquiry form (including mobile), tries **Save** and **Generate Booking**, then **`DMS_REAL_URL_VEHICLE`**. **`DMS_MODE=dummy`:** otherwise run enquiry (contact find or `new_enquiry`) → stock/PDI → vehicle search → allocate → invoicing-line (no Create Invoice) → report download on static HTML under `DMS_BASE_URL`; scrape vehicle row (**ex-showroom** into `vehicle_price`); download Form 21/22 and GST invoice sheet PDF; write traces into `ocr_output`; update `vehicle_master` from scraped data. **`DMS_MODE=real`:** automate Siebel Open UI (`siebel_dms_playwright`): by default fill contact on `DMS_REAL_URL_CONTACT`, vehicle query on `DMS_REAL_URL_VEHICLE`, scrape first grid row; optional navigation to other `DMS_REAL_URL_*`; write `DMS_Form_Values.txt`; tune with `DMS_SIEBEL_CONTENT_FRAME_SELECTOR` / `DMS_SIEBEL_MOBILE_ARIA_HINTS` if needed; static training PDF downloads are not used.
+- **FR-18** Fill DMS: Playwright reads fill values only from `form_dms_view`. **Target real-DMS step order** is **§6.1a**; details and residual gaps: **LLD §2.4d**. **`"DMS Contact Path"`** may be **`skip_find`**: dummy DMS skips the contact-finder Go step and proceeds to enquiry form + Generate booking and the rest; **real Siebel** **`skip_find`:** enquiry URL, full customer form + **Save**, then **`DMS_REAL_URL_VEHICLE`**; **Generate Booking** only **after** vehicle scrape when the row is **not** In Transit. **Real Siebel default path:** Find→Contact, mobile only, Go; existing match → care-of only + Save; no match or **`new_enquiry`** → full form + Save; vehicle scrape with **In Transit** detection; branch receipt → **Pre Check** → **PDI** vs booking/allotment per **§6.1a** (optional **`DMS_REAL_URL_PRECHECK`**; else Pre Check is attempted on **`DMS_REAL_URL_PDI`** before PDI submit). **`DMS_MODE=dummy`:** enquiry (contact find or `new_enquiry`) → stock/PDI → vehicle search → allocate → invoicing-line (no Create Invoice) → reports on static HTML under `DMS_BASE_URL`; scrape vehicle row (**ex-showroom** into `vehicle_price`); download Form 21/22 and GST invoice sheet PDF; write traces into `ocr_output`; update `vehicle_master` from scraped data. **`DMS_MODE=real`:** `siebel_dms_playwright.run_hero_siebel_dms_flow`; write `DMS_Form_Values.txt`; tune `DMS_SIEBEL_*` and `DMS_REAL_URL_*`; static training PDF downloads are not used.
 - **FR-18a** Existing tab reuse with operator fallback: DMS/Vahan steps first reuse already open logged-in tabs; if none are detectable, API opens Edge/Chrome to the target site and returns a user-facing message asking the operator to login (first-time) and retry.
 - **FR-18b** Insurance fill step: Playwright fills Insurance portal fields from persisted DB records only, reuses an already open logged-in insurance tab (or opens browser and asks operator to login first-time), does not click final issue/submit, and keeps the browser open for operator review.
 - **FR-19** Form 20: Generate Form 20.pdf from Word template (or PDF overlay / HTML fallback); fill placeholders from customer, vehicle, dealer; output combined PDF (front, back, page 3).
@@ -111,12 +111,28 @@ The system is a server–client application for auto dealers. Dealers run a ligh
 
 This section defines the required operator navigation path and minimum field-entry contract for current forms.
 
-### 6.1 DMS Navigation Sequence
+### 6.1 DMS Navigation Sequence (dummy training HTML)
 
 1. Login (`index.html`)
 2. Enquiry (`enquiry.html`)
 3. Vehicle Search (`vehicle.html`)
 4. Reports (`reports.html`)
+
+### 6.1a Hero Connect / Siebel eDealer — Target DMS automation sequence (ordered)
+
+This is the **intended** real-DMS order (aligned with the operator screen recording and dealer workflow). Values on every fill step must come only from `form_dms_view` and persisted records (BR-9, BR-13). **Create Invoice** is never automated (BR-16). Playwright implementation parity is tracked in **LLD §2.4d**.
+
+| Step | Siebel module / screen (typical labels) | Action |
+|------|----------------------------------------|--------|
+| 0 | **Hero Connect** (session) | Operator is signed in. Automation reuses a logged-in tab when possible (BR-12); otherwise opens browser and waits for operator login before continuing. |
+| 1 | **Contacts** (or Buyer/CoBuyer contact view — `DMS_REAL_URL_CONTACT`) | If **Find** is collapsed, expand it; set **Find** object type to **Contact**; enter **Mobile**; run query (**Go** / **Find**). |
+| 2a | **Contact / Enquiry — not found** | **New enquiry** (or **New** on enquiry list): enter full customer + enquiry fields required by the tenant from `form_dms_view`; **Save**. If the booking path applies (step 4b), continue to **Generate Booking** after the record is valid. |
+| 2b | **Contact / Enquiry — found** | Select the correct row when **multiple matches** exist (business rule TBD: e.g. latest enquiry, exact name match). Update **S/O or W/o** and **Father / Husband / Care of** (and related care-of fields) from DB-backed values only; **Save**. Do not replace the whole customer record unless the product owner explicitly extends this rule. |
+| 3 | **Vehicles → Auto Vehicle List** (`DMS_REAL_URL_VEHICLE`) | Query by **Key / VIN (chassis) / Engine** partials; execute find; open or read the row and determine **stock status** (e.g. **In Transit** vs available for booking/allocation). |
+| 4a | **Branch: In Transit** | **Vehicles Receipt → HMCL – In Transit** (or tenant-equivalent): **Process Receipt** for the VIN. Then complete **Pre Check** / **PDI Pre-Check** (often on the same GotoView as PDI — `DMS_REAL_URL_PRECHECK` optional, else first actions on `DMS_REAL_URL_PDI`) **before** main **Auto Vehicle PDI Assessment** submit (`DMS_REAL_URL_PDI`): complete required **inspection** sub-forms; **Submit** / save as the UI requires. |
+| 4b | **Branch: not In Transit (booking path)** | **Enquiry → My Enquiries** (or current enquiry): **Generate Booking** when creating/linking the sales order. **Vehicle Sales → Invoice** (order): **Allotment** tab — **Price All** / **Allocate** (and related line actions) as required. |
+| 5 | **Tenant-dependent gates (if shown)** | Handle or stop for operator: **Vehicle Digitization** (e.g. OTP), **Document Upload**, **Sanction Details**, **Validate GL Voucher**, **WOT Details** (if exchange), **Contacts → Payments**, finance/hypothecation dialogs. No invented clicks — follow persisted flags and visible prompts. |
+| 6 | **End of automation** | **Do not** click **Create Invoice**. Leave the **browser window open** for operator review (same session discipline as insurance automation). **Run Report** / GST PDF downloads are out of scope unless added under a separate FR. |
 
 ### 6.2 DMS Fields to Fill (Minimum Contract)
 
@@ -203,10 +219,10 @@ This section defines the required operator navigation path and minimum field-ent
 - Insurance run must persist a form trace artifact:
   - `ocr_output/<dealer>/<subfolder>/Insurance_Form_Values.txt`
 
-### 6.8 Pending Video Confirmation
+### 6.8 Video and automation reconciliation
 
-- The exact click-level sequence and any optional/extra operator entries must be confirmed from the DMS operator video and then reconciled with Playwright steps.
-- Insurance video reconciliation completed for page order and core labels; final field-level optional add-on choices still require implementation-time confirmation.
+- **DMS:** The **§6.1a** sequence reflects the Hero Connect / Siebel operator recording (login, Enquiry, receipt, PDI, booking/allocation, payments, invoice/report). **Playwright parity** (what is implemented today vs §6.1a) is maintained in **LLD §2.4d** and should be updated when `siebel_dms_playwright` or the dummy flow changes.
+- **Insurance:** Page order and core labels are video-aligned; final field-level optional add-on choices still require implementation-time confirmation.
 
 ---
 
@@ -284,3 +300,6 @@ Bulk upload automates the ingestion of scanned documents from a shared folder in
 | 1.9 | Mar 2026 | — | BR-18: Aadhaar back / freeform parsing for double-dash state–PIN OCR, trailing state+PIN without `DIST:`, and `Address:` blocks that continue on the `C/O:` line |
 | 2.0 | Mar 2026 | — | FR-23: Aadhaar OCR fallbacks — **DOB-anchored gender** (skip token, `/`, gender) and **comma + dash-run** state/PIN before last PIN |
 | 2.1 | Mar 2026 | — | FR-18: **DMS_MODE** / **DMS_REAL_URL_*** for Hero Connect Siebel vs dummy HTML; settings API exposes mode |
+| 2.2 | Mar 2026 | — | **§6.1a** Hero Connect / Siebel target DMS automation checklist (ordered); **§6.8** reconciliation pointer to LLD §2.4d; **FR-18** cross-reference |
+| 2.3 | Mar 2026 | — | **FR-18** updated for real Siebel §6.1a implementation (`skip_find` + default Find branch + vehicle split) |
+| 2.4 | Mar 2026 | — | **§6.1a** step 4a: **Pre Check** before PDI on In Transit branch |
