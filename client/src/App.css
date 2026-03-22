@@ -312,6 +312,47 @@
   flex: 1;
   min-width: 0;
   padding: 0 8px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.add-sales-v2-dms-milestones-banner {
+  flex-shrink: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid #b8d4a8;
+  background: #f3faf0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.add-sales-v2-dms-milestones-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #2d5a27;
+}
+
+.add-sales-v2-dms-milestones-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  align-items: center;
+  font-size: 13px;
+  color: #1a3d16;
+}
+
+.add-sales-v2-dms-milestone-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.add-sales-v2-dms-milestone-check {
+  color: #2d7a2d;
+  font-weight: 700;
 }
 
 .add-sales-v2-two-col {

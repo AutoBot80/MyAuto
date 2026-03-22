@@ -83,6 +83,8 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitStatus, setSubmitStatus] = useState<string | null>(null);
   const [fillDmsStatus, setFillDmsStatus] = useState<string | null>(null);
+  /** Steps completed in the last Fill DMS run; shown in the banner at top of the page. */
+  const [dmsMilestones, setDmsMilestones] = useState<string[]>([]);
   const [isFillDmsLoading, setIsFillDmsLoading] = useState(false);
   const [isFillInsuranceLoading, setIsFillInsuranceLoading] = useState(false);
   const [isPrintFormsLoading, setIsPrintFormsLoading] = useState(false);
@@ -266,6 +268,7 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError 
     setDmsScrapedVehicle(null);
     setDmsPdfsDownloaded(false);
     setFillDmsStatus(null);
+    setDmsMilestones([]);
     setFillInsuranceStatus(null);
     setPrintFormsStatus(null);
     setHasSubmittedInfo(false);
@@ -516,6 +519,7 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError 
 
     setIsFillDmsLoading(true);
     setFillDmsStatus(null);
+    setDmsMilestones([]);
     try {
       const dmsRes = await fillDmsOnly({
         subfolder: savedTo,
@@ -576,8 +580,12 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError 
       const hasForm22 = pdfs.some((f) => /form\s*22|form22/i.test(f));
       const hasInvoiceDetails = pdfs.some((f) => /invoice_details|invoice\s*details/i.test(f));
       if (hasForm21 && hasForm22 && hasInvoiceDetails) setDmsPdfsDownloaded(true);
+      const steps = Array.isArray(dmsRes.dms_milestones) ? dmsRes.dms_milestones : [];
+      setDmsMilestones(steps);
       if (!dmsRes.success) {
         setFillDmsStatus(dmsRes.error ?? "Fill DMS failed.");
+      } else if (dmsRes.warning) {
+        setFillDmsStatus(dmsRes.warning);
       } else {
         setFillDmsStatus("DMS filled successfully.");
       }
@@ -747,6 +755,21 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError 
   return (
     <div className="add-sales-v2">
       <main className="add-sales-v2-main">
+        {dmsMilestones.length > 0 && (
+          <div className="add-sales-v2-dms-milestones-banner" role="status" aria-label="DMS steps completed">
+            <span className="add-sales-v2-dms-milestones-title">DMS completed</span>
+            <span className="add-sales-v2-dms-milestones-list">
+              {dmsMilestones.map((step) => (
+                <span key={step} className="add-sales-v2-dms-milestone-item">
+                  <span className="add-sales-v2-dms-milestone-check" aria-hidden>
+                    ✓
+                  </span>
+                  {step}
+                </span>
+              ))}
+            </span>
+          </div>
+        )}
         <div className="add-sales-v2-three-col">
           <section className="add-sales-v2-box add-sales-v2-box-upload">
               <div className="add-sales-v2-box-title-row">

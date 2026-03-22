@@ -28,6 +28,10 @@ from app.config import (
     DMS_REAL_URL_REPORTS,
     DMS_REAL_URL_VEHICLE,
     DMS_REAL_URL_VEHICLES,
+    DMS_SIEBEL_ACTION_TIMEOUT_MS,
+    DMS_SIEBEL_CONTENT_FRAME_SELECTOR,
+    DMS_SIEBEL_MOBILE_ARIA_HINTS,
+    DMS_SIEBEL_NAV_TIMEOUT_MS,
     INSURANCE_ACTION_TIMEOUT_MS,
     INSURANCE_LOGIN_WAIT_MS,
     INSURANCE_POLICY_FILL_TIMEOUT_MS,
@@ -36,6 +40,7 @@ from app.config import (
     PLAYWRIGHT_MANAGED_REMOTE_DEBUG_PORT,
     dms_automation_is_real_siebel,
 )
+from app.services.siebel_dms_playwright import SiebelDmsUrls, run_hero_siebel_dms_flow
 from app.repositories import form_dms as form_dms_repo
 from app.repositories import form_vahan as form_vahan_repo
 from app.db import get_connection
@@ -554,6 +559,28 @@ def _write_data_from_dms(ocr_output_dir: Path, subfolder: str, customer: dict, v
 
 # Dummy DMS booking amount (enquiry customer budget) — must match business test default.
 DMS_DUMMY_ENQUIRY_BUDGET = "89000"
+
+# UI checklist order (Add Sales banner). Labels must match exactly for sorting.
+DMS_MILESTONE_ORDER: tuple[str, ...] = (
+    "Customer found",
+    "Enquiry created",
+    "Care of filled",
+    "Vehicle received",
+    "Vehicle inspection done",
+    "Invoice created",
+)
+
+
+def _dms_milestone(result: dict, label: str) -> None:
+    m = result.setdefault("dms_milestones", [])
+    if label not in m:
+        m.append(label)
+
+
+def _sort_dms_milestones(result: dict) -> None:
+    m = list(result.get("dms_milestones") or [])
+    order = {k: i for i, k in enumerate(DMS_MILESTONE_ORDER)}
+    result["dms_milestones"] = sorted(m, key=lambda x: order.get(x, 99))
 
 
 def _fill_playwright_enquiry_contact(page, dms_values: dict) -> None:
@@ -1765,8 +1792,8 @@ def _run_fill_dms_real_siebel_playwright(
     result: dict,
 ) -> None:
     """
-    Hero Connect / Siebel: open each configured absolute URL in order.
-    Writes ``DMS_Form_Values`` trace from DB; does **not** use dummy ``#dms-*`` controls or ``/downloads/*.pdf``.
+    Hero Connect / Siebel Open UI: fill contact (Buyer/CoBuyer), vehicle search, scrape list row;
+    then open optional configured views. Writes ``DMS_Form_Values`` trace; no dummy ``/downloads/*.pdf``.
     """
     if not DMS_REAL_URL_CONTACT:
         result["error"] = (
@@ -1774,8 +1801,6 @@ def _run_fill_dms_real_siebel_playwright(
             "Set the full GotoView URL (e.g. Buyer/CoBuyer) in backend/.env."
         )
         return
-
-    page.set_default_timeout(30_000)
 
     mobile_phone = dms_values["mobile_phone"]
     landline = dms_values.get("landline") or ""
@@ -1785,15 +1810,6 @@ def _run_fill_dms_real_siebel_playwright(
     key_partial = dms_values["key_partial"]
     frame_partial = dms_values["frame_partial"]
     engine_partial = dms_values["engine_partial"]
-
-    def goto_abs(url: str, label: str) -> None:
-        u = (url or "").strip()
-        if not u:
-            return
-        logger.info("fill_dms_service: real DMS navigate %s -> %s", label, u[:160])
-        page.goto(u, wait_until="domcontentloaded", timeout=60_000)
-
-    goto_abs(DMS_REAL_URL_CONTACT, "contact")
 
     _write_dms_form_values(
         ocr_output_dir=ocr_dir,
@@ -1817,22 +1833,53 @@ def _run_fill_dms_real_siebel_playwright(
         dms_contact_path=dms_values.get("dms_contact_path") or "",
     )
 
-    for label, url in (
-        ("vehicles", DMS_REAL_URL_VEHICLES),
-        ("pdi", DMS_REAL_URL_PDI),
-        ("vehicle", DMS_REAL_URL_VEHICLE),
-        ("enquiry", DMS_REAL_URL_ENQUIRY),
-        ("line_items", DMS_REAL_URL_LINE_ITEMS),
-        ("reports", DMS_REAL_URL_REPORTS),
-    ):
-        goto_abs(url, label)
-
-    result["dms_automation_mode"] = "real"
-    result["dms_real_note"] = (
-        "Real Siebel mode: navigated configured URLs only; dummy HTML fills and /downloads PDFs are skipped. "
-        "Add Siebel selectors for field entry and scraping in a follow-up."
+    urls = SiebelDmsUrls(
+        contact=DMS_REAL_URL_CONTACT,
+        vehicles=DMS_REAL_URL_VEHICLES,
+        pdi=DMS_REAL_URL_PDI,
+        vehicle=DMS_REAL_URL_VEHICLE,
+        enquiry=DMS_REAL_URL_ENQUIRY,
+        line_items=DMS_REAL_URL_LINE_ITEMS,
+        reports=DMS_REAL_URL_REPORTS,
     )
-    logger.info("fill_dms_service: real DMS navigation sequence complete")
+    frame_sel = (DMS_SIEBEL_CONTENT_FRAME_SELECTOR or "").strip() or None
+    frag = run_hero_siebel_dms_flow(
+        page,
+        dms_values,
+        urls,
+        action_timeout_ms=DMS_SIEBEL_ACTION_TIMEOUT_MS,
+        nav_timeout_ms=DMS_SIEBEL_NAV_TIMEOUT_MS,
+        content_frame_selector=frame_sel,
+        mobile_aria_hints=list(DMS_SIEBEL_MOBILE_ARIA_HINTS),
+    )
+
+    result["vehicle"] = frag.get("vehicle") or {}
+    result["error"] = frag.get("error")
+    result["dms_siebel_forms_filled"] = bool(frag.get("dms_siebel_forms_filled"))
+    result["dms_siebel_notes"] = frag.get("dms_siebel_notes") or []
+    result["dms_milestones"] = list(frag.get("dms_milestones") or [])
+    _sort_dms_milestones(result)
+    result["dms_automation_mode"] = "real"
+    if result.get("error"):
+        result["dms_real_note"] = None
+    else:
+        notes = "; ".join(result["dms_siebel_notes"]) if result.get("dms_siebel_notes") else ""
+        result["dms_real_note"] = notes or "Siebel contact + vehicle automation finished."
+    if vehicle_id and result.get("vehicle"):
+        try:
+            update_vehicle_master_from_dms(vehicle_id, result.get("vehicle") or {})
+        except Exception as exc:
+            logger.warning(
+                "fill_dms_service: vehicle_master update failed (real Siebel) vehicle_id=%s: %s",
+                vehicle_id,
+                exc,
+            )
+    logger.info(
+        "fill_dms_service: real Siebel flow done error=%s forms_filled=%s vehicle_keys=%s",
+        bool(result.get("error")),
+        result.get("dms_siebel_forms_filled"),
+        list((result.get("vehicle") or {}).keys())[:8],
+    )
 
 
 def _run_fill_dms_dummy_playwright(
@@ -1871,6 +1918,7 @@ def _run_fill_dms_dummy_playwright(
         page.evaluate("() => { sessionStorage.removeItem('dummy_dms_expect'); }")
     page.click("#dms-contact-finder-go")
     page.wait_for_timeout(200)
+    _dms_milestone(result, "Customer found")
 
     if contact_path == "new_enquiry":
         _fill_playwright_enquiry_contact(page, dms_values)
@@ -1883,6 +1931,8 @@ def _run_fill_dms_dummy_playwright(
 
     _fill_playwright_enquiry_contact(page, dms_values)
     _apply_playwright_enquiry_relation_finance(page, dms_values)
+    if (_clean_text(dms_values.get("father_husband_name")) or _clean_text(dms_values.get("relation_prefix"))):
+        _dms_milestone(result, "Care of filled")
     page.fill("#dms-customer-budget", DMS_DUMMY_ENQUIRY_BUDGET)
     try:
         page.select_option("#dms-booking-order-type", value="Regular")
@@ -1893,6 +1943,7 @@ def _run_fill_dms_dummy_playwright(
             pass
     page.click("#dms-generate-booking")
     page.wait_for_timeout(200)
+    _dms_milestone(result, "Enquiry created")
 
     goto("vehicles.html")
     transit = page.locator("#dms-in-transit-panel")
@@ -1911,6 +1962,7 @@ def _run_fill_dms_dummy_playwright(
             page.wait_for_timeout(200)
     except Exception:
         pass
+    _dms_milestone(result, "Vehicle received")
 
     goto("pdi.html")
     try:
@@ -1920,6 +1972,7 @@ def _run_fill_dms_dummy_playwright(
             page.wait_for_timeout(200)
     except Exception:
         pass
+    _dms_milestone(result, "Vehicle inspection done")
 
     goto("vehicle.html")
     _write_dms_form_values(
@@ -1997,6 +2050,7 @@ def _run_fill_dms_dummy_playwright(
                 page.fill("#dms-line-financer", fin_name[:255])
             except Exception:
                 pass
+    _dms_milestone(result, "Invoice created")
 
     goto("reports.html")
     path21 = subfolder_path / "form21.pdf"
@@ -2016,6 +2070,7 @@ def _run_fill_dms_dummy_playwright(
             pass
 
     result["dms_automation_mode"] = "dummy"
+    _sort_dms_milestones(result)
 
 
 def run_fill_dms_only(
@@ -2038,7 +2093,7 @@ def run_fill_dms_only(
 
     Separate Playwright session. Returns vehicle, pdfs_saved, error.
     """
-    result: dict = {"vehicle": {}, "pdfs_saved": [], "error": None}
+    result: dict = {"vehicle": {}, "pdfs_saved": [], "error": None, "dms_milestones": []}
     if not dms_base_url:
         result["error"] = "DMS_BASE_URL not set"
         return result
@@ -2216,6 +2271,10 @@ def run_fill_dms(
         customer_id=customer_id,
         vehicle_id=vehicle_id,
     )
+    dms_mode = result.get("dms_automation_mode")
+    siebel_ok = result.get("dms_siebel_forms_filled")
+    milestones = list(result.get("dms_milestones") or [])
+
     if result.get("error"):
         return {
             "vehicle": result.get("vehicle") or {},
@@ -2223,6 +2282,9 @@ def run_fill_dms(
             "application_id": None,
             "rto_fees": None,
             "error": result.get("error"),
+            "dms_automation_mode": dms_mode,
+            "dms_siebel_forms_filled": siebel_ok,
+            "dms_milestones": milestones,
         }
 
     if vahan_base_url and vahan_base_url.strip():
@@ -2248,6 +2310,9 @@ def run_fill_dms(
                 "application_id": None,
                 "rto_fees": None,
                 "error": vahan_result.get("error"),
+                "dms_automation_mode": dms_mode,
+                "dms_siebel_forms_filled": siebel_ok,
+                "dms_milestones": milestones,
             }
         return {
             "vehicle": result.get("vehicle") or {},
@@ -2255,6 +2320,9 @@ def run_fill_dms(
             "application_id": vahan_result.get("application_id"),
             "rto_fees": vahan_result.get("rto_fees"),
             "error": None,
+            "dms_automation_mode": dms_mode,
+            "dms_siebel_forms_filled": siebel_ok,
+            "dms_milestones": milestones,
         }
 
     return {
@@ -2263,4 +2331,7 @@ def run_fill_dms(
         "application_id": None,
         "rto_fees": None,
         "error": None,
+        "dms_automation_mode": dms_mode,
+        "dms_siebel_forms_filled": siebel_ok,
+        "dms_milestones": milestones,
     }

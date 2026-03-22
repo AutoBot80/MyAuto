@@ -34,6 +34,9 @@ export interface FillDmsRequest {
 
 export interface FillDmsResponse {
   success: boolean;
+  /** Real Siebel mode: navigation only; forms not auto-filled — show instead of "filled successfully". */
+  warning?: string | null;
+  dms_automation_mode?: string | null;
   vehicle: {
     key_num?: string;
     frame_num?: string;
@@ -53,6 +56,8 @@ export interface FillDmsResponse {
   application_id?: string | null;
   rto_fees?: number | null;
   error?: string | null;
+  /** Completed DMS steps from last Fill DMS run (Add Sales top banner). */
+  dms_milestones?: string[];
 }
 
 const FILL_DMS_TIMEOUT_MS = 180000; // 3 min per section

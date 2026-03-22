@@ -102,7 +102,7 @@ BULK_JOB_MAX_ATTEMPTS = int(os.getenv("BULK_JOB_MAX_ATTEMPTS", "3"))
 # DMS fill (Playwright): base URL and login. Used when client calls POST /fill-dms.
 # DMS_BASE_URL / VAHAN_BASE_URL / INSURANCE_BASE_URL: required in .env (no in-code defaults); validated at app startup.
 DMS_BASE_URL = (os.getenv("DMS_BASE_URL") or "").strip().rstrip("/")
-# ``dummy`` = repo dummy HTML (enquiry.html, …). ``real`` = Hero Connect / Siebel: navigate full ``DMS_REAL_URL_*`` URLs only (no ``#dms-*`` fills yet).
+# ``dummy`` = repo dummy HTML (enquiry.html, …). ``real`` = Hero Connect / Siebel: Playwright fills contact + vehicle search via Open UI selectors (see ``siebel_dms_playwright``); optional ``DMS_SIEBEL_*`` env for iframes.
 DMS_MODE = (os.getenv("DMS_MODE") or "dummy").strip().lower()
 # Required when DMS_MODE is real: at least ``DMS_REAL_URL_CONTACT`` (Buyer/CoBuyer or main workspace).
 DMS_REAL_URL_CONTACT = (os.getenv("DMS_REAL_URL_CONTACT") or "").strip()
@@ -112,6 +112,12 @@ DMS_REAL_URL_VEHICLE = (os.getenv("DMS_REAL_URL_VEHICLE") or "").strip()
 DMS_REAL_URL_ENQUIRY = (os.getenv("DMS_REAL_URL_ENQUIRY") or "").strip()
 DMS_REAL_URL_LINE_ITEMS = (os.getenv("DMS_REAL_URL_LINE_ITEMS") or "").strip()
 DMS_REAL_URL_REPORTS = (os.getenv("DMS_REAL_URL_REPORTS") or "").strip()
+# Siebel Open UI automation (used when DMS_MODE=real): optional tuning
+DMS_SIEBEL_ACTION_TIMEOUT_MS = int(os.getenv("DMS_SIEBEL_ACTION_TIMEOUT_MS", "30000"))
+DMS_SIEBEL_NAV_TIMEOUT_MS = int(os.getenv("DMS_SIEBEL_NAV_TIMEOUT_MS", "90000"))
+DMS_SIEBEL_CONTENT_FRAME_SELECTOR = (os.getenv("DMS_SIEBEL_CONTENT_FRAME_SELECTOR") or "").strip()
+_siebel_mobile_hints = (os.getenv("DMS_SIEBEL_MOBILE_ARIA_HINTS") or "").strip()
+DMS_SIEBEL_MOBILE_ARIA_HINTS = [x.strip() for x in _siebel_mobile_hints.split(",") if x.strip()]
 DMS_LOGIN_USER = os.getenv("DMS_LOGIN_USER", "demo")
 DMS_LOGIN_PASSWORD = os.getenv("DMS_LOGIN_PASSWORD", "demo")
 # Run browser visible (headed) so user sees DMS page and automation. Set to "false" for headless.

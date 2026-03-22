@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.config import (
     DEALER_ID,
@@ -30,6 +30,13 @@ router = APIRouter(prefix="/fill-dms", tags=["fill-dms"])
 
 DMS_NO_VEHICLE_ERROR = (
     "No such vehicle found in DMS. Please edit Vehicle Info and submit form again."
+)
+
+# Shown when DMS_MODE=real: URLs open but Siebel field entry is not implemented yet.
+DMS_REAL_MODE_FORMS_NOT_FILLED_WARNING = (
+    "DMS_MODE=real: Siebel automation did not complete (no contact/vehicle fill). "
+    "Check backend logs, set DMS_SIEBEL_CONTENT_FRAME_SELECTOR / DMS_SIEBEL_MOBILE_ARIA_HINTS if needed, "
+    "or set DMS_MODE=dummy for the training site."
 )
 
 
@@ -96,6 +103,19 @@ def _has_scraped_vehicle(scraped: dict) -> bool:
     return bool(key_num or frame_num or engine_num)
 
 
+def _dms_response_warning_and_mode(result: dict) -> tuple[str | None, str | None]:
+    """If real Siebel ran but automation did not finish, warn so UI does not claim full success."""
+    raw = result.get("dms_automation_mode")
+    mode = raw if isinstance(raw, str) and raw.strip() else None
+    if result.get("error") is not None:
+        return None, mode
+    if mode == "real" and result.get("dms_siebel_forms_filled"):
+        return None, mode
+    if mode == "real":
+        return DMS_REAL_MODE_FORMS_NOT_FILLED_WARNING, mode
+    return None, mode
+
+
 class FillDmsCustomer(BaseModel):
     name: str | None = None
     care_of: str | None = None
@@ -133,6 +153,11 @@ class FillDmsResponse(BaseModel):
     application_id: str | None = None
     rto_fees: float | None = None
     error: str | None = None
+    # When set (e.g. DMS_MODE=real), UI must not claim forms were auto-filled.
+    warning: str | None = None
+    dms_automation_mode: str | None = None
+    # Ordered checklist labels completed during the last DMS run (Add Sales banner).
+    dms_milestones: list[str] = Field(default_factory=list)
 
 
 class FillVahanRequest(BaseModel):
@@ -280,7 +305,9 @@ async def fill_dms_only(req: FillDmsRequest) -> FillDmsResponse:
     )
     scraped = result.get("vehicle") or {}
     has_vehicle = _has_scraped_vehicle(scraped)
-    if result.get("error") is None and not has_vehicle:
+    # Real Siebel before automation, or incomplete run: do not force "no vehicle" when we never searched.
+    skip_no_vehicle = result.get("dms_automation_mode") == "real" and not result.get("dms_siebel_forms_filled")
+    if result.get("error") is None and not has_vehicle and not skip_no_vehicle:
         result["error"] = DMS_NO_VEHICLE_ERROR
     if req.vehicle_id and has_vehicle:
         try:
@@ -288,6 +315,7 @@ async def fill_dms_only(req: FillDmsRequest) -> FillDmsResponse:
         except Exception as e:
             logger.warning("fill_dms: vehicle_master update failed vehicle_id=%s: %s", req.vehicle_id, e)
 
+    warn, dms_mode = _dms_response_warning_and_mode(result)
     return FillDmsResponse(
         success=result.get("error") is None,
         vehicle=scraped,
@@ -295,6 +323,9 @@ async def fill_dms_only(req: FillDmsRequest) -> FillDmsResponse:
         application_id=None,
         rto_fees=None,
         error=_normalize_automation_error(result.get("error")),
+        warning=warn,
+        dms_automation_mode=dms_mode,
+        dms_milestones=list(result.get("dms_milestones") or []),
     )
 
 
@@ -488,7 +519,8 @@ async def fill_dms(req: FillDmsRequest) -> FillDmsResponse:
         result.get("rto_fees"),
         result.get("error"),
     )
-    if result.get("error") is None and not has_vehicle:
+    skip_nv = result.get("dms_automation_mode") == "real" and not result.get("dms_siebel_forms_filled")
+    if result.get("error") is None and not has_vehicle and not skip_nv:
         result["error"] = DMS_NO_VEHICLE_ERROR
 
     if req.vehicle_id and has_vehicle:
@@ -497,6 +529,7 @@ async def fill_dms(req: FillDmsRequest) -> FillDmsResponse:
         except Exception as e:
             logger.warning("fill_dms: vehicle_master update failed vehicle_id=%s: %s", req.vehicle_id, e)
 
+    warn, dms_mode = _dms_response_warning_and_mode(result)
     return FillDmsResponse(
         success=result.get("error") is None,
         vehicle=scraped,
@@ -504,4 +537,7 @@ async def fill_dms(req: FillDmsRequest) -> FillDmsResponse:
         application_id=result.get("application_id"),
         rto_fees=result.get("rto_fees"),
         error=_normalize_automation_error(result.get("error")),
+        warning=warn,
+        dms_automation_mode=dms_mode,
+        dms_milestones=list(result.get("dms_milestones") or []),
     )
