@@ -1,0 +1,25 @@
+Data from DMS
+
+--- Customer (filled on enquiry) ---
+Name: Akash
+Address: S/O: S/O: Sahab Singh, street=, Bharatpur, Bharatpur, Rajasthan, 321001
+State: RAJASTHAN
+Pin code: 321001
+Mobile: 8306827880
+Relation (S/O or W/o): S/O
+Care of / Father–Husband (Aadhaar QR): S/O: S/O: Sahab Singh
+
+--- Vehicle (from DMS search result) ---
+Key num: —
+Frame / Chassis num: —
+Engine num: —
+Model: —
+Color: —
+Cubic capacity: —
+Seating capacity: —
+Body type: —
+Vehicle type: —
+Num cylinders: —
+Horsepower: —
+Ex-showroom Price (Order Value): —
+Year of Mfg: —

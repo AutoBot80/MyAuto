@@ -1880,6 +1880,7 @@ def _run_fill_dms_real_siebel_playwright(
     result["dms_siebel_forms_filled"] = bool(frag.get("dms_siebel_forms_filled"))
     result["dms_siebel_notes"] = frag.get("dms_siebel_notes") or []
     result["dms_milestones"] = list(frag.get("dms_milestones") or [])
+    result["dms_step_messages"] = list(frag.get("dms_step_messages") or [])
     _sort_dms_milestones(result)
     result["dms_automation_mode"] = "real"
     if result.get("error"):
@@ -2116,7 +2117,13 @@ def run_fill_dms_only(
 
     Separate Playwright session. Returns vehicle, pdfs_saved, error.
     """
-    result: dict = {"vehicle": {}, "pdfs_saved": [], "error": None, "dms_milestones": []}
+    result: dict = {
+        "vehicle": {},
+        "pdfs_saved": [],
+        "error": None,
+        "dms_milestones": [],
+        "dms_step_messages": [],
+    }
     if not dms_base_url:
         result["error"] = "DMS_BASE_URL not set"
         return result
@@ -2297,6 +2304,7 @@ def run_fill_dms(
     dms_mode = result.get("dms_automation_mode")
     siebel_ok = result.get("dms_siebel_forms_filled")
     milestones = list(result.get("dms_milestones") or [])
+    step_msgs = list(result.get("dms_step_messages") or [])
 
     if result.get("error"):
         return {
@@ -2308,6 +2316,7 @@ def run_fill_dms(
             "dms_automation_mode": dms_mode,
             "dms_siebel_forms_filled": siebel_ok,
             "dms_milestones": milestones,
+            "dms_step_messages": step_msgs,
         }
 
     if vahan_base_url and vahan_base_url.strip():
@@ -2336,6 +2345,7 @@ def run_fill_dms(
                 "dms_automation_mode": dms_mode,
                 "dms_siebel_forms_filled": siebel_ok,
                 "dms_milestones": milestones,
+                "dms_step_messages": step_msgs,
             }
         return {
             "vehicle": result.get("vehicle") or {},
@@ -2346,6 +2356,7 @@ def run_fill_dms(
             "dms_automation_mode": dms_mode,
             "dms_siebel_forms_filled": siebel_ok,
             "dms_milestones": milestones,
+            "dms_step_messages": step_msgs,
         }
 
     return {
@@ -2357,4 +2368,5 @@ def run_fill_dms(
         "dms_automation_mode": dms_mode,
         "dms_siebel_forms_filled": siebel_ok,
         "dms_milestones": milestones,
+        "dms_step_messages": step_msgs,
     }

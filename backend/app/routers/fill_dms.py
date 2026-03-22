@@ -158,6 +158,8 @@ class FillDmsResponse(BaseModel):
     dms_automation_mode: str | None = None
     # Ordered checklist labels completed during the last DMS run (Add Sales banner).
     dms_milestones: list[str] = Field(default_factory=list)
+    # Real Siebel: ordered operator-facing sentences (where the flow got to); preferred over milestones in UI when non-empty.
+    dms_step_messages: list[str] = Field(default_factory=list)
 
 
 class FillVahanRequest(BaseModel):
@@ -326,6 +328,7 @@ async def fill_dms_only(req: FillDmsRequest) -> FillDmsResponse:
         warning=warn,
         dms_automation_mode=dms_mode,
         dms_milestones=list(result.get("dms_milestones") or []),
+        dms_step_messages=list(result.get("dms_step_messages") or []),
     )
 
 
@@ -540,4 +543,5 @@ async def fill_dms(req: FillDmsRequest) -> FillDmsResponse:
         warning=warn,
         dms_automation_mode=dms_mode,
         dms_milestones=list(result.get("dms_milestones") or []),
+        dms_step_messages=list(result.get("dms_step_messages") or []),
     )

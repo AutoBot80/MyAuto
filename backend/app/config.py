@@ -131,6 +131,9 @@ _siebel_mobile_hints = (os.getenv("DMS_SIEBEL_MOBILE_ARIA_HINTS") or "").strip()
 DMS_SIEBEL_MOBILE_ARIA_HINTS = [x.strip() for x in _siebel_mobile_hints.split(",") if x.strip()]
 # Extra ms after GotoView contact URL so nested iframes/applets can render (Hero Connect).
 DMS_SIEBEL_POST_GOTO_WAIT_MS = int(os.getenv("DMS_SIEBEL_POST_GOTO_WAIT_MS", "5000"))
+# Optional extra ms after every Siebel ``goto`` (before other waits). Use for flaky applets — not for
+# “anti-bot” evasion (very short values like 10ms are ineffective). Typical stability tries: 150-500.
+DMS_SIEBEL_INTER_ACTION_DELAY_MS = int(os.getenv("DMS_SIEBEL_INTER_ACTION_DELAY_MS", "0"))
 # Optional extra iframe CSS selectors (comma-separated) tried before built-in Siebel patterns.
 _siebel_if = (os.getenv("DMS_SIEBEL_AUTO_IFRAME_SELECTORS") or "").strip()
 DMS_SIEBEL_AUTO_IFRAME_SELECTORS = [x.strip() for x in _siebel_if.split(",") if x.strip()]

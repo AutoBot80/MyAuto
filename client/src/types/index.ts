@@ -33,6 +33,20 @@ export interface ProcessStatusResponse {
   last_error: string | null;
 }
 
+/** Wall-clock breakdown from `OcrService.process_uploaded_subfolder` (scans-v2). */
+export interface UploadExtractionSectionTimings {
+  /** When `OCR_UPLOAD_PARALLEL_TEXTRACT` is true: Textract jobs + local QR in parallel. */
+  aws_textract_prefetch_parallel_local_qr_ms?: number;
+  /** When parallel Textract is off: time to decode QR on Aadhaar images only. */
+  local_aadhaar_qr_decode_ms?: number;
+  parallel_aadhar_details_compile_ms?: number;
+  merge_write_json_ms?: number;
+  insurance_ms?: number;
+  extras_raw_ms?: number;
+  raw_ocr_finalize_ms?: number;
+  total_ms?: number;
+}
+
 export interface UploadScansResponse {
   saved_count: number;
   saved_files?: string[];
@@ -45,6 +59,14 @@ export interface UploadScansResponse {
     created_at?: string;
   }>;
   error?: string;
+  /** Present for scans-v2 when extraction runs in the same request. */
+  extraction?: {
+    processed?: string[];
+    errors?: string[];
+    error?: string;
+    details?: ExtractedDetailsResponse;
+    section_timings_ms?: UploadExtractionSectionTimings;
+  };
 }
 
 /** Structured vehicle details from Details sheet OCR (Textract forms). */

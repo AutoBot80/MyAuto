@@ -129,7 +129,7 @@ My Auto.AI/
 
 ### 4.1 Add Sales Flow
 
-1. User uploads scans → `uploads/scans` → ai_reader_queue.
+1. User uploads scans → `uploads/scans` → ai_reader_queue (legacy) **or** Add Sales v2 → `uploads/scans-v2` → `OcrService.process_uploaded_subfolder` in the same request (parallel Textract prefetch + local Aadhaar QR; parallel Aadhaar assembly + Details sheet compile; merged JSON; optional `extraction.section_timings_ms` on the response; upload status line shows timings).
    - **Section 2 (AI extracted information):** Customer, Vehicle, and Insurance subsection headers show **Uploading…** while files are uploading and **Processing…** until extraction for that block is populated; the client polls `getExtractedDetails` until customer, vehicle, and insurance blocks all satisfy the same completion rules (or polling limits apply).
 2. OCR processes queue → extracted text stored.
 3. User reviews/corrects → Submit Info → customer_master, vehicle_master, sales_master, insurance_master.

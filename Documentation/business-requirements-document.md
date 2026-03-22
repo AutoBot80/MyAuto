@@ -1,7 +1,7 @@
 # Business Requirements Document (BRD)
 ## Auto Dealer Management System — Arya Agencies
 
-**Version:** 2.4  
+**Version:** 2.5  
 **Last Updated:** March 2026  
 **Status:** Draft
 
@@ -95,7 +95,7 @@ The system is a server–client application for auto dealers. Dealers run a ligh
 - **FR-21d** RTO failed-row retry: operators can click `Try Again` on a `Failed` RTO queue row to return it to `Queued` and run batch processing again.
 - **FR-21c** RTO scrape persistence: when Vahan reaches the cart/upload checkpoint, the scraped application id and RTO charges must be stored on both `rto_queue` and `vehicle_master`, and later retries may overwrite those values with the newest scrape.
 - **FR-22** Customer search: Search by mobile or plate; return customers with vehicles and insurance.
-- **FR-23** QR decode: Decode Aadhaar UIDAI QR to extract customer details; support QR on **front (`Aadhar.jpg`) and/or back (`Aadhar_back.jpg`)**, merging fields with front preferred when both are readable. When QR or local OCR misses fields, **AWS Textract text** from the same scans (also written to `Raw_OCR.txt`) is parsed as a fallback for **DOB and gender** on the front and **printed English address** on the back (e.g. “Near Gayatri School …”). **Gender** uses a **DOB anchor** (after `dd/mm/yyyy`, skip one token, next `/`, then gender), with fallbacks for **`Gender:`** / **Sex/** / **yes/** OCR. **State/PIN** use **comma-separated clauses** and **dash runs** before the last 6-digit PIN, plus **`DIST:`** and trailing-state patterns; back **`Address:`** blocks include the following **`C/O:`** line.
+- **FR-23** QR decode: Decode Aadhaar UIDAI QR to extract customer details; support QR on **front (`Aadhar.jpg`) and/or back (`Aadhar_back.jpg`)**, merging fields with front preferred when both are readable. **Order of operations (scans-v2):** local QR on both images runs **in parallel with** AWS Textract prefetch where configured; **Aadhaar assembly** (QR + Textract + optional Tesseract on the back for address) runs **in parallel with** **Sales Detail sheet** parsing, then JSON is merged once. If QR does not yield a usable identity, **Textract full text** on the front is also parsed for a **heuristic name line** (in addition to **DOB** and **gender**). When address/state/PIN are still weak, **Textract on the back** (then **Tesseract** on the back) supplements **printed English address** (e.g. “Near Gayatri School …”). The upload must **not** hard-fail solely for missing QR if Textract/OCR can populate fields; otherwise the UI shows **`extraction_error`**. **Gender** uses a **DOB anchor** (after `dd/mm/yyyy`, skip one token, next `/`, then gender), with fallbacks for **`Gender:`** / **Sex/** / **yes/** OCR. **State/PIN** use **comma-separated clauses** and **dash runs** before the last 6-digit PIN, plus **`DIST:`** and trailing-state patterns; back **`Address:`** blocks include the following **`C/O:`** line. The API may return **`extraction.section_timings_ms`** so operators can see time spent per stage (prefetch, parallel Aadhaar+Details, merge, insurance, Raw_OCR).
 - **FR-24** Vision / Textract: Optional AI extraction from documents.
 
 ### 5.3 Non-Functional Requirements
@@ -303,3 +303,4 @@ Bulk upload automates the ingestion of scanned documents from a shared folder in
 | 2.2 | Mar 2026 | — | **§6.1a** Hero Connect / Siebel target DMS automation checklist (ordered); **§6.8** reconciliation pointer to LLD §2.4d; **FR-18** cross-reference |
 | 2.3 | Mar 2026 | — | **FR-18** updated for real Siebel §6.1a implementation (`skip_find` + default Find branch + vehicle split) |
 | 2.4 | Mar 2026 | — | **§6.1a** step 4a: **Pre Check** before PDI on In Transit branch |
+| 2.5 | Mar 2026 | — | **FR-23** scans-v2: QR+Textract order, parallel Aadhaar+Details, Textract name/geo fallbacks, `section_timings_ms` |

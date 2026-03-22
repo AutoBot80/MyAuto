@@ -1,10 +1,14 @@
-"""Process AI reader queue with AWS Textract (forms mode). Details sheet only."""
+"""AI reader queue and Add Sales upload extraction: Textract FORMS for structured detail sheets, QR+Textract for Aadhaar."""
+
+from __future__ import annotations
 
 import json
 import logging
 import re
+import time
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from app.db import get_connection
 from app.repositories.ai_reader_queue import AiReaderQueueRepository
@@ -554,6 +558,215 @@ def _parse_aadhar_front_textract_fallback(text: str) -> dict[str, str]:
     return out
 
 
+def _parse_aadhar_name_from_aadhaar_textract(text: str) -> dict[str, str]:
+    """
+    Heuristic name line on Aadhaar **front** when UIDAI QR is missing or has no name.
+    Avoids obvious headers / labels; prefers a Title Case line before DOB.
+    """
+    out: dict[str, str] = {}
+    if not text or len(text.strip()) < 8:
+        return out
+    lines = [ln.strip() for ln in text.replace("\r\n", "\n").split("\n") if ln.strip()]
+    skip = re.compile(
+        r"(?i)aadhaar|aadhar|enrol|enrollment|government|india|identification|male|female|transgender|"
+        r"address|dob|date\s*of\s*birth|year\s*of\s*birth|vid|virtual|help@|uidai|www\.|pin"
+    )
+    dob_line = re.compile(r"(?i)\b(dob|date\s*of\s*birth|जन्म|birth)\b")
+    for line in lines[:18]:
+        if len(line) < 4 or len(line) > 90:
+            continue
+        if skip.search(line):
+            continue
+        if dob_line.search(line):
+            break
+        if re.search(r"\d{4}\s+\d{4}\s+\d{4}", line):
+            continue
+        if re.match(r"^[\d\s/:\-.]+$", line):
+            continue
+        if re.match(r"^[A-Za-z][A-Za-z\s.'-]{2,70}$", line):
+            words = line.split()
+            if 2 <= len(words) <= 6:
+                out["name"] = line
+                break
+    return out
+
+
+def _aadhar_identity_ok(customer: dict[str, str]) -> bool:
+    name = (customer.get("name") or "").strip()
+    if len(name) >= 2:
+        return True
+    aid = "".join(c for c in str(customer.get("aadhar_id") or "") if c.isdigit())
+    return len(aid) >= 4
+
+
+def _aadhar_geo_ok(customer: dict[str, str]) -> bool:
+    pin = re.sub(r"\D", "", str(customer.get("pin_code") or ""))
+    if len(pin) >= 6:
+        return True
+    st = (customer.get("state") or "").strip()
+    if len(st) >= 3:
+        return True
+    addr = (customer.get("address") or "").strip()
+    if len(addr) >= 22:
+        return True
+    if (customer.get("district") or customer.get("city")) and len(pin) >= 6:
+        return True
+    return False
+
+
+def _pipeline_merge_aadhar_customer(
+    qr_seed: dict[str, str],
+    front_bytes: bytes | None,
+    back_bytes: bytes | None,
+    front_textract: dict | None,
+    back_textract: dict | None,
+) -> tuple[dict[str, str], list[tuple[str, str]], str | None]:
+    """
+    UIDAI QR from front and/or back first (``qr_seed``), then AWS Textract text on front for
+    DOB/gender/name gaps, then Textract (and finally Tesseract) on the back for address/state/PIN
+    when location fields are still weak.
+    """
+    from app.services.textract_service import extract_text_from_bytes
+
+    def _ftext(d: dict | None) -> str:
+        if not d or d.get("error"):
+            return ""
+        return (d.get("full_text") or "").strip()
+
+    raw_parts: list[tuple[str, str]] = []
+    customer = dict(qr_seed) if qr_seed else {}
+
+    ft = front_textract
+    if front_bytes and (not ft or ft.get("error") or not _ftext(ft)):
+        try:
+            ft = extract_text_from_bytes(front_bytes)
+        except Exception:
+            ft = {"error": "textract", "full_text": ""}
+    front_txt = _ftext(ft)
+    if front_txt:
+        raw_parts.append(("Aadhar.jpg", front_txt))
+        customer = _merge_aadhar_textract_fallback_dict(
+            customer, _parse_aadhar_front_textract_fallback(front_txt)
+        )
+        customer = _merge_aadhar_textract_fallback_dict(
+            customer, _parse_aadhar_name_from_aadhaar_textract(front_txt)
+        )
+
+    bt = back_textract
+    if back_bytes and not _aadhar_geo_ok(customer):
+        if not bt or bt.get("error") or not _ftext(bt):
+            try:
+                bt = extract_text_from_bytes(back_bytes)
+            except Exception:
+                bt = {"error": "textract", "full_text": ""}
+        back_txt = _ftext(bt)
+        if back_txt:
+            raw_parts.append(("Aadhar_back.jpg", back_txt))
+            customer = _merge_aadhar_textract_fallback_dict(
+                customer, _parse_aadhar_back_address_from_ocr(back_txt)
+            )
+
+    if back_bytes and not _aadhar_geo_ok(customer):
+        customer = _merge_aadhar_textract_fallback_dict(
+            customer, _parse_aadhar_back_address_from_ocr(_aadhar_back_ocr_text(back_bytes))
+        )
+
+    note: str | None = None
+    if not _aadhar_identity_ok(customer):
+        note = (
+            "Aadhaar QR or automated read did not yield a clear name or ID number. "
+            "Enter or verify customer fields manually."
+        )
+
+    if customer.get("aadhar_id"):
+        customer["aadhar_id"] = _aadhar_last4(customer["aadhar_id"]) or ""
+    _default_gender_male_if_unread(customer)
+    customer = enrich_customer_address_from_freeform(customer)
+    return customer, raw_parts, note
+
+
+def _local_aadhar_qr_only_bundle(subdir: Path) -> dict[str, Any]:
+    """Fast local decode: UIDAI QR on Aadhar.jpg and Aadhar_back.jpg (runs in parallel with Textract prefetch)."""
+    out: dict[str, Any] = {"qr_customer": {}, "front_bytes": None, "back_bytes": None}
+    ap = subdir / "Aadhar.jpg"
+    bp = subdir / "Aadhar_back.jpg"
+    try:
+        out["front_bytes"] = ap.read_bytes() if ap.is_file() else None
+    except OSError:
+        out["front_bytes"] = None
+    try:
+        out["back_bytes"] = bp.read_bytes() if bp.is_file() else None
+    except OSError:
+        out["back_bytes"] = None
+    fb = out["front_bytes"]
+    bb = out["back_bytes"]
+    cf = _try_customer_from_aadhar_qr_bytes(fb) if fb else {}
+    cb = _try_customer_from_aadhar_qr_bytes(bb) if bb else {}
+    out["qr_customer"] = _merge_aadhar_front_back_qr_customer(cf, cb)
+    return out
+
+
+def _compile_details_sheet_fragment(
+    input_path: Path,
+    textract_forms_prefetch: dict | None,
+) -> dict:
+    """
+    Parse Sales Detail sheet to structured fragments only (no JSON write).
+    Raster/PDF: Textract **AnalyzeDocument** FORMS+TABLES — right tool for printed form key-values.
+    """
+    fmt = _details_input_format(input_path)
+    if fmt == "docx":
+        key_value_pairs, docx_full = _key_value_pairs_from_docx(input_path)
+        if not key_value_pairs and not (docx_full or "").strip():
+            raise RuntimeError(
+                "Could not read the Word document (.docx). Ensure it is a valid .docx Sales Detail Sheet."
+            )
+        result = {"error": None, "full_text": docx_full, "key_value_pairs": key_value_pairs}
+    elif fmt in ("jpeg", "png", "pdf"):
+        from app.services.textract_service import extract_forms_from_bytes
+
+        if textract_forms_prefetch is not None:
+            result = textract_forms_prefetch
+        else:
+            result = extract_forms_from_bytes(input_path.read_bytes())
+        if result.get("error"):
+            raise RuntimeError(str(result.get("error")))
+    else:
+        raise RuntimeError(
+            f"Unsupported Details file format (detected={fmt!r}). "
+            "Use a JPEG/PNG scan, PDF export, or .docx Sales Detail Sheet."
+        )
+
+    key_value_pairs = result.get("key_value_pairs") or []
+    vehicle = _map_key_value_pairs_to_vehicle(key_value_pairs)
+    insurance = _map_key_value_pairs_to_insurance(key_value_pairs)
+    details_customer = _map_key_value_pairs_to_details_customer(key_value_pairs)
+    details_customer_name = _extract_details_customer_name(key_value_pairs)
+    if result.get("full_text"):
+        from_vehicle = _parse_vehicle_from_full_text(result["full_text"])
+        for k, v in from_vehicle.items():
+            if v and not vehicle.get(k):
+                vehicle[k] = v
+        from_full = _parse_insurance_from_full_text(result["full_text"])
+        if from_full.get("customer_name") and not details_customer_name:
+            details_customer_name = from_full["customer_name"]
+        for k, v in from_full.items():
+            if k == "customer_name":
+                continue
+            if v and not insurance.get(k):
+                insurance[k] = v
+    if details_customer.get("name") and not details_customer_name:
+        details_customer_name = details_customer.get("name")
+
+    return {
+        "vehicle": vehicle,
+        "insurance": insurance,
+        "details_customer": details_customer,
+        "details_customer_name": details_customer_name,
+        "full_text": result.get("full_text") or "",
+    }
+
+
 def _default_gender_male_if_unread(customer: dict[str, str]) -> None:
     """If gender was not extracted (QR/OCR/Textract), assume Male for DMS/insurance flows."""
     g = customer.get("gender")
@@ -841,8 +1054,9 @@ def _details_input_format(path: Path) -> str:
 def _parallel_textract_prefetch_upload_subfolder(subdir: Path) -> dict[str, dict]:
     """
     Run AWS Textract calls for all upload files concurrently to cut wall time on scans-v2.
-    Keys: ``aadhar_front``, ``details_forms`` (raster/PDF Details only), ``insurance``,
-    ``aadhar_back``, ``financing``. Docx Details is not prefetched (local parse).
+    Keys: ``aadhar_front`` / ``aadhar_back`` (DetectDocumentText), ``details_forms``
+    (**AnalyzeDocument** FORMS+TABLES for structured sales detail scans/PDFs), ``insurance``,
+    ``financing``. ``.docx`` Details is not prefetched (parsed locally).
     """
     from concurrent.futures import ThreadPoolExecutor
 
@@ -1604,13 +1818,141 @@ class OcrService:
             "classification_confidence": 0.0,
         }
 
+    def _write_aadhar_fields_summary_file(self, subfolder: str, customer: dict[str, str]) -> None:
+        self._ensure_ocr_output_dir()
+        output_path = self.get_output_path(subfolder, "Aadhar.jpg")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        lines = ["Aadhar scan – 15 extracted fields", ""]
+        for key, label in AADHAR_15_FIELDS:
+            value = customer.get(key)
+            if value and str(value).strip():
+                lines.append(f"{label}: {value.strip()}")
+        if customer.get("address") and str(customer["address"]).strip():
+            lines.append(f"Address (constructed): {customer['address'].strip()}")
+        output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def _persist_upload_merge(
+        self,
+        subfolder: str,
+        frag_a: dict[str, Any] | None,
+        frag_d: dict[str, Any] | None,
+    ) -> dict[str, str]:
+        """Single JSON write: Aadhaar customer fragment + Details vehicle/insurance (after parallel compile)."""
+        customer: dict[str, str] = {}
+        vehicle: dict = {}
+        insurance_merged: dict = {}
+        details_customer_name = None
+
+        if frag_a and frag_a.get("ok", True) and frag_a.get("customer") is not None:
+            customer = dict(frag_a["customer"])
+
+        if frag_d and not frag_d.get("error"):
+            vehicle = frag_d.get("vehicle") or {}
+            insurance = frag_d.get("insurance") or {}
+            dc = frag_d.get("details_customer") or {}
+            details_customer_name = frag_d.get("details_customer_name")
+
+            for key, val in dc.items():
+                if not val:
+                    continue
+                if key in (
+                    "profession",
+                    "marital_status",
+                    "financier",
+                    "nominee_name",
+                    "nominee_age",
+                    "nominee_gender",
+                    "nominee_relationship",
+                ):
+                    continue
+                if not customer.get(key):
+                    customer[key] = val
+
+            insurance_merged = {
+                **{k: v for k, v in insurance.items() if v},
+                **{
+                    k: v
+                    for k, v in dc.items()
+                    if k
+                    in (
+                        "profession",
+                        "marital_status",
+                        "financier",
+                        "nominee_name",
+                        "nominee_age",
+                        "nominee_gender",
+                        "nominee_relationship",
+                    )
+                    and v
+                },
+            }
+
+        customer = enrich_customer_address_from_freeform(customer)
+
+        extraction_error = None
+        if not _aadhar_identity_ok(customer):
+            extraction_error = (
+                (frag_a or {}).get("extraction_note")
+                or "Aadhaar QR or automated read did not yield a clear name or ID number. "
+                "Enter or verify customer fields manually."
+            )
+
+        json_path = _json_output_path(self.ocr_output_dir, subfolder)
+        json_path.parent.mkdir(parents=True, exist_ok=True)
+        details_json: dict[str, Any] = {
+            "vehicle": vehicle,
+            "customer": customer,
+            "insurance": insurance_merged,
+        }
+        if details_customer_name:
+            details_json["details_customer_name"] = details_customer_name
+        if extraction_error:
+            details_json["extraction_error"] = extraction_error
+        json_path.write_text(json.dumps(details_json, indent=2), encoding="utf-8")
+        return customer
+
+    def _upload_fragment_aadhar(
+        self,
+        qr_bundle: dict[str, Any],
+        prefetch: dict[str, dict],
+    ) -> dict[str, Any]:
+        customer, raw_parts, note = _pipeline_merge_aadhar_customer(
+            qr_bundle.get("qr_customer") or {},
+            qr_bundle.get("front_bytes"),
+            qr_bundle.get("back_bytes"),
+            prefetch.get("aadhar_front"),
+            prefetch.get("aadhar_back"),
+        )
+        return {
+            "ok": True,
+            "customer": customer,
+            "raw_parts": raw_parts,
+            "extraction_note": note,
+        }
+
+    def _upload_fragment_details(
+        self,
+        details_path: Path,
+        prefetch: dict[str, dict],
+    ) -> dict[str, Any]:
+        try:
+            frag = _compile_details_sheet_fragment(details_path, prefetch.get("details_forms"))
+            frag["ok"] = True
+            return frag
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
     def process_uploaded_subfolder(self, subfolder: str) -> dict:
         """
         Run extraction directly on uploaded files (no queue).
-        Order: Aadhar.jpg (customer/QR), Details.jpg (vehicle + insurance; format sniffed),
-        Insurance.jpg, then raw text for Aadhar_back/Financing.
-        Collects raw OCR text from all processed files and writes Raw_OCR.txt.
-        Returns summary of what was processed.
+
+        Flow: **UIDAI QR** is read from **Aadhar.jpg and/or Aadhar_back.jpg** (in parallel with AWS
+        Textract prefetch when enabled). **Textract** fills gaps (name/DOB/gender on front;
+        address/state/PIN on back) when QR alone is thin. **Details sheet** is compiled in
+        **parallel** with the Aadhaar pipeline, then results are merged once into JSON.
+        **Details** raster/PDF: Textract **AnalyzeDocument FORMS** (structured key-values).
+
+        Writes Raw_OCR.txt and returns ``section_timings_ms`` for operator visibility.
         """
         subdir = self.uploads_dir / subfolder
         if not subdir.exists() or not subdir.is_dir():
@@ -1618,46 +1960,83 @@ class OcrService:
 
         processed: list[str] = []
         errors: list[str] = []
-        self._raw_ocr_parts: list[tuple[str, str]] = []
+        section_timings_ms: dict[str, int] = {}
+        t_total = time.perf_counter()
+
+        from concurrent.futures import ThreadPoolExecutor
 
         from app.config import OCR_UPLOAD_PARALLEL_TEXTRACT
 
         prefetch: dict[str, dict] = {}
+        t_pref = time.perf_counter()
         if OCR_UPLOAD_PARALLEL_TEXTRACT:
-            prefetch = _parallel_textract_prefetch_upload_subfolder(subdir)
+            with ThreadPoolExecutor(max_workers=2) as ex:
+                f_tex = ex.submit(_parallel_textract_prefetch_upload_subfolder, subdir)
+                f_qr = ex.submit(_local_aadhar_qr_only_bundle, subdir)
+                prefetch = f_tex.result()
+                qr_bundle = f_qr.result()
+            section_timings_ms["aws_textract_prefetch_parallel_local_qr_ms"] = int(
+                (time.perf_counter() - t_pref) * 1000
+            )
+        else:
+            qr_bundle = _local_aadhar_qr_only_bundle(subdir)
+            section_timings_ms["local_aadhaar_qr_decode_ms"] = int(
+                (time.perf_counter() - t_pref) * 1000
+            )
 
-        # 1. Aadhar.jpg first (QR is fast; populates customer in JSON immediately)
         aadhar_path = subdir / "Aadhar.jpg"
-        if aadhar_path.exists():
-            try:
-                self._process_aadhar(
-                    None,
-                    subfolder,
-                    "Aadhar.jpg",
-                    aadhar_path,
-                    front_textract_prefetch=prefetch.get("aadhar_front"),
-                )
-                processed.append("Aadhar.jpg")
-            except Exception as e:
-                errors.append(f"Aadhar.jpg: {e}")
-
-        # 2. Details.jpg (may be JPEG/PNG/PDF or .docx bytes under .jpg name — see _details_input_format)
         details_path = subdir / "Details.jpg"
-        if details_path.exists():
-            try:
-                self._process_details_sheet(
-                    None,
-                    subfolder,
-                    "Details.jpg",
-                    details_path,
-                    textract_forms_prefetch=prefetch.get("details_forms"),
-                )
-                processed.append("Details.jpg")
-            except Exception as e:
-                errors.append(f"Details.jpg: {e}")
 
-        # 3. Insurance.jpg (extract insurer, TP valid from/to, gross premium; merge into ocr_output/.../OCR_To_be_Used.json)
+        frag_a: dict[str, Any] | None = None
+        frag_d: dict[str, Any] | None = None
+        t_par = time.perf_counter()
+        if aadhar_path.exists() or details_path.exists():
+            with ThreadPoolExecutor(max_workers=2) as ex:
+                fa = (
+                    ex.submit(self._upload_fragment_aadhar, qr_bundle, prefetch)
+                    if aadhar_path.exists()
+                    else None
+                )
+                fb = (
+                    ex.submit(self._upload_fragment_details, details_path, prefetch)
+                    if details_path.exists()
+                    else None
+                )
+                if fa is not None:
+                    frag_a = fa.result()
+                if fb is not None:
+                    frag_d = fb.result()
+        section_timings_ms["parallel_aadhar_details_compile_ms"] = int(
+            (time.perf_counter() - t_par) * 1000
+        )
+
+        self._raw_ocr_parts = []
+        if frag_a and frag_a.get("raw_parts"):
+            self._raw_ocr_parts.extend(frag_a["raw_parts"])
+        if frag_d and frag_d.get("ok") and frag_d.get("full_text"):
+            self._raw_ocr_parts.append(("Details.jpg", frag_d["full_text"]))
+
+        if aadhar_path.exists():
+            if frag_a and frag_a.get("ok"):
+                processed.append("Aadhar.jpg")
+            else:
+                errors.append(f"Aadhar.jpg: {frag_a.get('error') if frag_a else 'failed'}")
+        if details_path.exists():
+            if frag_d and frag_d.get("ok"):
+                processed.append("Details.jpg")
+            else:
+                errors.append(f"Details.jpg: {frag_d.get('error') if frag_d else 'failed'}")
+
+        t_merge = time.perf_counter()
+        merged_customer: dict[str, str] = {}
+        if aadhar_path.exists() or details_path.exists():
+            merged_customer = self._persist_upload_merge(subfolder, frag_a, frag_d)
+            if aadhar_path.exists() and merged_customer:
+                self._write_aadhar_fields_summary_file(subfolder, merged_customer)
+        section_timings_ms["merge_write_json_ms"] = int((time.perf_counter() - t_merge) * 1000)
+
         insurance_path = subdir / "Insurance.jpg"
+        t_ins = time.perf_counter()
         if insurance_path.exists():
             try:
                 self._process_insurance_sheet(
@@ -1669,12 +2048,16 @@ class OcrService:
                 processed.append("Insurance.jpg")
             except Exception as e:
                 errors.append(f"Insurance.jpg: {e}")
+        section_timings_ms["insurance_ms"] = int((time.perf_counter() - t_ins) * 1000)
 
-        # 4. Aadhar_back.jpg and Financing.jpg: add raw text for Raw_OCR (no structured extraction)
+        t_extras = time.perf_counter()
+        seen_raw = {fn for fn, _ in self._raw_ocr_parts}
         for extra_file, prefetch_key in (
             ("Aadhar_back.jpg", "aadhar_back"),
             ("Financing.jpg", "financing"),
         ):
+            if extra_file in seen_raw:
+                continue
             extra_path = subdir / extra_file
             if extra_path.exists():
                 try:
@@ -1688,26 +2071,30 @@ class OcrService:
                         self._raw_ocr_parts.append((extra_file, result["full_text"]))
                 except Exception:
                     pass
+        section_timings_ms["extras_raw_ms"] = int((time.perf_counter() - t_extras) * 1000)
 
-        # 5. Write Raw_OCR.txt with raw text from all processed files
+        t_raw = time.perf_counter()
         if self._raw_ocr_parts:
             self._ensure_ocr_output_dir()
             subfolder_name = _safe_subfolder_name(subfolder)
             subfolder_path = self.ocr_output_dir / subfolder_name
             subfolder_path.mkdir(parents=True, exist_ok=True)
             raw_lines = []
-            for filename, text in self._raw_ocr_parts:
-                raw_lines.append(f"--- {filename} ---")
+            for fname, text in self._raw_ocr_parts:
+                raw_lines.append(f"--- {fname} ---")
                 raw_lines.append(text.strip() if text else "")
                 raw_lines.append("")
             (subfolder_path / "Raw_OCR.txt").write_text("\n".join(raw_lines), encoding="utf-8")
             _apply_aadhar_textract_fallbacks_from_parts(
                 self.ocr_output_dir, subfolder, list(self._raw_ocr_parts)
             )
+        section_timings_ms["raw_ocr_finalize_ms"] = int((time.perf_counter() - t_raw) * 1000)
 
         self._raw_ocr_parts = None
 
-        result: dict = {"processed": processed}
+        section_timings_ms["total_ms"] = int((time.perf_counter() - t_total) * 1000)
+
+        result: dict[str, Any] = {"processed": processed, "section_timings_ms": section_timings_ms}
         if errors:
             result["errors"] = errors
         return result
@@ -1892,44 +2279,35 @@ class OcrService:
         input_path: Path,
         front_textract_prefetch: dict | None = None,
     ) -> dict:
-        """Run Aadhar extraction: UIDAI QR on front (Aadhar.jpg), then merge from back (Aadhar_back.jpg) if QR is there; merge customer into subfolder JSON."""
+        """Run Aadhar extraction: UIDAI QR on **front and/or back**, then Textract (and Tesseract on back) to fill gaps; merge into subfolder JSON."""
         if qid is not None:
             with get_connection() as conn:
                 AiReaderQueueRepository.update_classification(conn, qid, "Aadhar", 1.0)
                 conn.commit()
         try:
             raw_bytes = input_path.read_bytes()
-
-            # Textract on front: Raw_OCR.txt (when batch) + fallback for DOB/gender when QR omits them.
-            front_textract_text = ""
-            try:
-                from app.services.textract_service import extract_text_from_bytes
-
-                if front_textract_prefetch is not None:
-                    txt_result = front_textract_prefetch
-                else:
-                    txt_result = extract_text_from_bytes(raw_bytes)
-                if not txt_result.get("error") and txt_result.get("full_text"):
-                    front_textract_text = (txt_result.get("full_text") or "").strip()
-                    if hasattr(self, "_raw_ocr_parts") and self._raw_ocr_parts is not None:
-                        self._raw_ocr_parts.append((filename, front_textract_text))
-            except Exception:
-                front_textract_text = ""
-
-            customer_front = _try_customer_from_aadhar_qr_bytes(raw_bytes)
             back_path = input_path.parent / "Aadhar_back.jpg"
-            customer_back: dict[str, str] = {}
-            if back_path.is_file():
+            back_bytes = back_path.read_bytes() if back_path.is_file() else None
+            cf = _try_customer_from_aadhar_qr_bytes(raw_bytes)
+            cb = _try_customer_from_aadhar_qr_bytes(back_bytes) if back_bytes else {}
+            qr_seed = _merge_aadhar_front_back_qr_customer(cf, cb)
+
+            ft = front_textract_prefetch
+            if ft is None:
                 try:
-                    customer_back = _customer_from_aadhar_back_scan(back_path.read_bytes())
+                    from app.services.textract_service import extract_text_from_bytes
+
+                    ft = extract_text_from_bytes(raw_bytes)
                 except Exception:
-                    customer_back = {}
-            qr_customer = _merge_aadhar_front_back_qr_customer(customer_front, customer_back)
-            if not qr_customer:
-                raise ValueError(
-                    "QR code was not found or could not be read on the Aadhar front or back scan. "
-                    "UIDAI QR is often printed on the back — ensure Aadhar_back.jpg includes a readable QR. Re-scan if needed."
-                ) from None
+                    ft = {"error": "textract", "full_text": ""}
+
+            piped, raw_parts, note = _pipeline_merge_aadhar_customer(
+                qr_seed, raw_bytes, back_bytes, ft, None
+            )
+
+            if hasattr(self, "_raw_ocr_parts") and self._raw_ocr_parts is not None:
+                for fn, txt in raw_parts:
+                    self._raw_ocr_parts.append((fn, txt))
 
             self._ensure_ocr_output_dir()
             json_path = _json_output_path(self.ocr_output_dir, subfolder)
@@ -1949,19 +2327,16 @@ class OcrService:
                         existing_customer = {str(k): str(v) for k, v in ec.items() if v is not None}
                 except Exception:
                     pass
-            customer = _merge_qr_customer_into_existing(existing_customer, qr_customer)
-            if front_textract_text:
-                customer = _merge_aadhar_textract_fallback_dict(
-                    customer, _parse_aadhar_front_textract_fallback(front_textract_text)
-                )
-
-            # Compliance: never persist full Aadhar; store only last 4 digits
+            customer = _merge_qr_customer_into_existing(existing_customer, piped)
             if customer.get("aadhar_id"):
                 customer["aadhar_id"] = _aadhar_last4(customer["aadhar_id"]) or ""
-
             _default_gender_male_if_unread(customer)
             customer = enrich_customer_address_from_freeform(customer)
             data["customer"] = customer
+            if note and not _aadhar_identity_ok(customer):
+                data["extraction_error"] = note
+            elif "extraction_error" in data and _aadhar_identity_ok(customer):
+                data.pop("extraction_error", None)
             json_path.parent.mkdir(parents=True, exist_ok=True)
             json_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 

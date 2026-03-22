@@ -58,6 +58,8 @@ export interface FillDmsResponse {
   error?: string | null;
   /** Completed DMS steps from last Fill DMS run (Add Sales top banner). */
   dms_milestones?: string[];
+  /** Real Siebel: ordered narrative lines; UI prefers this over milestones when non-empty. */
+  dms_step_messages?: string[];
 }
 
 const FILL_DMS_TIMEOUT_MS = 180000; // 3 min per section

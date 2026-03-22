@@ -32,10 +32,71 @@ from playwright.sync_api import Frame, Page, TimeoutError as PlaywrightTimeout
 
 from app.config import (
     DMS_SIEBEL_AUTO_IFRAME_SELECTORS,
+    DMS_SIEBEL_INTER_ACTION_DELAY_MS,
     DMS_SIEBEL_POST_GOTO_WAIT_MS,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _is_browser_disconnected_error(exc: BaseException) -> bool:
+    """True when Playwright lost the browser/WebSocket (tab closed, crash, CDP ended)."""
+    msg = str(exc).lower()
+    return any(
+        n in msg
+        for n in (
+            "connection closed",
+            "target closed",
+            "browser has been closed",
+            "econnreset",
+            "websocket error",
+            "socket hang up",
+        )
+    )
+
+
+def _safe_page_wait(target, ms: int, *, log_label: str = "") -> None:
+    """
+    ``page.wait_for_timeout`` / frame wait that maps driver disconnect to a clear operator message.
+    """
+    if ms <= 0:
+        return
+    is_closed_fn = getattr(target, "is_closed", None)
+    if callable(is_closed_fn):
+        try:
+            if is_closed_fn():
+                raise RuntimeError(
+                    "Siebel: the browser page was already closed before automation could continue"
+                    + (f" ({log_label})." if log_label else ".")
+                    + " Leave the Hero Connect tab open for the full Fill DMS run."
+                )
+        except RuntimeError:
+            raise
+        except Exception:
+            pass
+    try:
+        target.wait_for_timeout(ms)
+    except Exception as e:
+        if _is_browser_disconnected_error(e):
+            raise RuntimeError(
+                "Siebel: lost connection to the browser"
+                + (f" during wait ({log_label})" if log_label else "")
+                + ". The window may have been closed, the browser may have crashed, or the debug "
+                "(CDP) session ended. Keep Edge/Chrome open on Hero Connect while Fill DMS runs; "
+                "avoid closing the browser or restarting it mid-run. If the API process restarted, "
+                "open Hero Connect again and retry Fill DMS."
+            ) from e
+        raise
+
+
+def _siebel_inter_action_pause(page: Page) -> None:
+    """Optional pause after navigation; helps heavy Open UI applets settle (see ``DMS_SIEBEL_INTER_ACTION_DELAY_MS``)."""
+    ms = int(DMS_SIEBEL_INTER_ACTION_DELAY_MS)
+    if ms <= 0:
+        return
+    cap = 60_000
+    _safe_page_wait(page, min(ms, cap), log_label="inter_action_delay")
+
 
 # Tried after explicit DMS_SIEBEL_CONTENT_FRAME_SELECTOR and before walking all frames.
 _DEFAULT_AUTO_IFRAME_SELECTORS: tuple[str, ...] = (
@@ -85,6 +146,7 @@ def _goto(page: Page, url: str, label: str, *, nav_timeout_ms: int) -> None:
         return
     logger.info("siebel_dms: navigate %s -> %s", label, u[:180])
     page.goto(u, wait_until="domcontentloaded", timeout=nav_timeout_ms)
+    _siebel_inter_action_pause(page)
 
 
 def _frame_score(url: str) -> int:
@@ -149,7 +211,7 @@ def _siebel_after_goto_wait(page: Page, *, floor_ms: int = 1200) -> None:
     cap = 120_000
     raw = int(DMS_SIEBEL_POST_GOTO_WAIT_MS)
     ms = min(max(raw, floor_ms), cap)
-    page.wait_for_timeout(ms)
+    _safe_page_wait(page, ms, log_label="post_goto")
 
 
 def _try_expand_find_flyin(
@@ -171,7 +233,7 @@ def _try_expand_find_flyin(
                 if loc.count() > 0 and loc.is_visible(timeout=500):
                     loc.click(timeout=timeout_ms)
                     logger.info("siebel_dms: expanded Find fly-in (%s)", css[:70])
-                    page.wait_for_timeout(800)
+                    _safe_page_wait(page, 800, log_label="find_flyin_expand")
                     return True
             except Exception:
                 continue
@@ -278,7 +340,7 @@ def _siebel_blur_and_settle(page: Page, *, ms: int = 400) -> None:
         page.keyboard.press("Escape")
     except Exception:
         pass
-    page.wait_for_timeout(ms)
+    _safe_page_wait(page, ms, log_label="blur_settle")
 
 
 def _locator_for_duplicate_fields(locator, *, prefer_second_if_duplicate: bool):
@@ -359,7 +421,7 @@ def _try_prepare_find_contact_applet(
             cb = root.get_by_role("combobox", name=re.compile(r"find", re.I)).first
             if cb.count() > 0 and cb.is_visible(timeout=700):
                 cb.click(timeout=timeout_ms)
-                page_.wait_for_timeout(400)
+                _safe_page_wait(page_, 400, log_label="find_combobox")
                 if click_contact_menu(page_, root):
                     return True
         except Exception:
@@ -1206,7 +1268,7 @@ def _siebel_goto_vehicle_list_and_scrape(
 ) -> tuple[dict, str | None]:
     """Navigate to Auto Vehicle List, run key/chassis/engine query, return (scraped, error)."""
     _goto(page, vehicle_url, "vehicle_list", nav_timeout_ms=nav_timeout_ms)
-    page.wait_for_timeout(1500)
+    _safe_page_wait(page, 1500, log_label="vehicle_list_open")
 
     key_ok = _try_fill_field(
         page,
@@ -1254,10 +1316,17 @@ def _siebel_goto_vehicle_list_and_scrape(
         note("Vehicle search: Find/Go not detected; waiting for grid anyway.")
 
     try:
-        page.wait_for_timeout(2500)
+        _safe_page_wait(page, 2500, log_label="vehicle_search_settle")
         page.wait_for_load_state("networkidle", timeout=12_000)
     except PlaywrightTimeout:
         note("networkidle wait timed out; continuing scrape.")
+    except Exception as e:
+        if _is_browser_disconnected_error(e):
+            raise RuntimeError(
+                "Siebel: browser disconnected while waiting for the vehicle grid. "
+                "Keep Hero Connect open; see earlier Fill DMS guidance."
+            ) from e
+        raise
 
     scraped = scrape_siebel_vehicle_row(page, content_frame_selector=content_frame_selector)
     if scraped.get("key_num") or scraped.get("frame_num") or scraped.get("engine_num"):
@@ -1277,6 +1346,7 @@ def _siebel_run_precheck_and_pdi(
     content_frame_selector: str | None,
     note,
     ms_done,
+    step=None,
 ) -> None:
     """
     §6.1a In Transit: **Pre Check** must complete before **PDI**.
@@ -1285,10 +1355,13 @@ def _siebel_run_precheck_and_pdi(
     - Different URLs: ``goto`` precheck view, complete, then ``goto`` PDI, submit.
     - Only ``pdi`` URL: ``goto`` PDI view, try Pre Check first (combined Hero screen), then PDI submit.
     """
+    say = step if callable(step) else (lambda _m: None)
+
     pu = (precheck_url or "").strip()
     du = (pdi_url or "").strip()
     if not pu and not du:
         note("Neither DMS_REAL_URL_PRECHECK nor DMS_REAL_URL_PDI is set; skipping pre-check and PDI.")
+        say("Pre-check and PDI were skipped — PDI / pre-check URLs are not configured.")
         return
 
     def mark_precheck(clicked: bool, ok_msg: str, fail_msg: str) -> None:
@@ -1309,7 +1382,7 @@ def _siebel_run_precheck_and_pdi(
             "Clicked Pre Check complete on combined PreCheck/PDI view.",
             "Pre Check control not found on combined view; operator may complete Pre Check manually.",
         )
-        page.wait_for_timeout(600)
+        _safe_page_wait(page, 600, log_label="precheck_pdi_gap")
         pdi_ok = _try_click_pdi_submit(
             page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
         )
@@ -1318,6 +1391,14 @@ def _siebel_run_precheck_and_pdi(
         else:
             note("PDI Submit not found; operator may complete PDI manually.")
         ms_done("Vehicle inspection done")
+        if pc and pdi_ok:
+            say("Pre-check and PDI were completed on the combined screen.")
+        elif pc:
+            say("Pre-check was completed; PDI submit was not found — finish PDI manually if needed.")
+        elif pdi_ok:
+            say("PDI submit was completed (pre-check control was not found).")
+        else:
+            say("Pre-check and PDI controls were not found — complete both manually if required.")
         return
 
     if pu:
@@ -1331,7 +1412,11 @@ def _siebel_run_precheck_and_pdi(
             "Clicked Pre Check complete.",
             "Pre Check control not found; operator may complete Pre Check manually.",
         )
-        page.wait_for_timeout(600)
+        _safe_page_wait(page, 600, log_label="after_precheck_view")
+        if pc:
+            say("Pre-check step was completed on the pre-check view.")
+        else:
+            say("Pre-check view opened; complete control was not found — finish pre-check manually if needed.")
 
     if du:
         _goto(page, du, "pdi", nav_timeout_ms=nav_timeout_ms)
@@ -1343,22 +1428,27 @@ def _siebel_run_precheck_and_pdi(
             if pc2:
                 note("Clicked Pre Check complete on PDI view (no separate PRECHECK URL).")
                 ms_done("Pre check completed")
+                say("Pre-check was completed on the PDI screen.")
             else:
                 note(
                     "Pre Check control not found before PDI (single PDI URL); "
                     "operator may complete Pre Check manually if the screen requires it."
                 )
-            page.wait_for_timeout(600)
+                say("Pre-check control was not found before PDI — complete manually if the screen requires it.")
+            _safe_page_wait(page, 600, log_label="before_pdi_submit")
         pdi_ok = _try_click_pdi_submit(
             page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
         )
         if pdi_ok:
             note("Clicked PDI Submit.")
+            say("PDI was submitted.")
         else:
             note("PDI Submit not found; operator may complete PDI manually.")
+            say("PDI submit was not found — complete PDI manually if required.")
         ms_done("Vehicle inspection done")
     elif pu and not du:
         note("DMS_REAL_URL_PDI is not set; only Pre Check URL was opened — set PDI URL to finish PDI.")
+        say("PDI URL is not set — only pre-check was opened; configure DMS_REAL_URL_PDI to finish PDI.")
 
 
 def run_hero_siebel_dms_flow(
@@ -1391,7 +1481,7 @@ def run_hero_siebel_dms_flow(
     Never clicks **Create Invoice**. Does not auto-open Reports.
 
     Returns fragment: ``vehicle``, ``error``, ``dms_siebel_forms_filled``, ``dms_siebel_notes``,
-    ``dms_milestones``.
+    ``dms_milestones``, ``dms_step_messages`` (ordered operator-facing progress lines).
     """
     out: dict = {
         "vehicle": {},
@@ -1399,12 +1489,18 @@ def run_hero_siebel_dms_flow(
         "dms_siebel_forms_filled": False,
         "dms_siebel_notes": [],
         "dms_milestones": [],
+        "dms_step_messages": [],
     }
 
     def ms_done(label: str) -> None:
         m = out["dms_milestones"]
         if label not in m:
             m.append(label)
+
+    def step(msg: str) -> None:
+        """Ordered user-facing progress (Add Sales banner)."""
+        if msg and (not out["dms_step_messages"] or out["dms_step_messages"][-1] != msg):
+            out["dms_step_messages"].append(msg)
 
     page.set_default_timeout(action_timeout_ms)
 
@@ -1427,10 +1523,12 @@ def run_hero_siebel_dms_flow(
 
     try:
         dms_path = (dms_values.get("dms_contact_path") or "found").strip().lower()
+        step("Started Hero Connect / Siebel DMS automation.")
 
         if not skip_contact_find:
             _goto(page, urls.contact, "contact", nav_timeout_ms=nav_timeout_ms)
             _siebel_after_goto_wait(page, floor_ms=1200)
+            step("Opened contact view (customer search).")
 
             if _try_expand_find_flyin(
                 page,
@@ -1445,7 +1543,7 @@ def run_hero_siebel_dms_flow(
                 content_frame_selector=content_frame_selector,
             ):
                 note("Find → Contact: object type selected so the mobile field is the Contact search field.")
-            page.wait_for_timeout(600)
+            _safe_page_wait(page, 600, log_label="after_find_contact_prep")
 
             _mobile_vis = 2400
             filled_mobile = _try_fill_field(
@@ -1468,6 +1566,7 @@ def run_hero_siebel_dms_flow(
             if not filled_mobile:
                 filled_mobile = _try_fill_mobile_dom_scan(page, mobile)
             if not filled_mobile:
+                step("Stopped: mobile field not found on contact view — check Find pane and iframe selectors.")
                 out["error"] = (
                     "Siebel: could not find a mobile/cellular phone input on the contact view. "
                     "Open the Find pane (right side), set object type to Contact if needed. "
@@ -1486,7 +1585,8 @@ def run_hero_siebel_dms_flow(
             else:
                 note("No Find/Go control clicked on contact view after mobile fill.")
 
-            page.wait_for_timeout(2000)
+            _safe_page_wait(page, 2000, log_label="after_contact_find_go")
+            step("Customer search ran on the mobile number.")
 
             if dms_path == "new_enquiry":
                 note("DMS Contact Path is new_enquiry: full enquiry form after Find.")
@@ -1510,6 +1610,7 @@ def run_hero_siebel_dms_flow(
                 else:
                     note("Save not detected after new_enquiry form fill.")
                 ms_done("Enquiry created")
+                step("New-enquiry path: full customer / enquiry details were filled and saved.")
             else:
                 matched = _siebel_ui_suggests_contact_match(page, mobile)
                 if matched:
@@ -1527,6 +1628,10 @@ def run_hero_siebel_dms_flow(
                         note("Clicked Save after care-of update on existing contact.")
                     else:
                         note("Save not detected after care-of update.")
+                    if father or relation:
+                        step("Customer search found a match. Care-of / relation was updated and saved.")
+                    else:
+                        step("Customer search found a match. Record saved (no care-of fields in data).")
                 else:
                     note("No contact match after Find; filling full enquiry/customer fields.")
                     _fill_siebel_enquiry_customer_applet(
@@ -1549,6 +1654,10 @@ def run_hero_siebel_dms_flow(
                     else:
                         note("Save not detected after new contact form fill.")
                     ms_done("Enquiry created")
+                    step(
+                        "Customer search did not find an existing contact. "
+                        "Enquiry / customer details were filled and saved."
+                    )
         else:
             enquiry_url = (urls.enquiry or "").strip() or (urls.contact or "").strip()
             if not enquiry_url:
@@ -1561,6 +1670,7 @@ def run_hero_siebel_dms_flow(
                 return out
             _goto(page, enquiry_url, "enquiry_or_contact", nav_timeout_ms=nav_timeout_ms)
             _siebel_after_goto_wait(page, floor_ms=1400)
+            step("Skipped Find: opened enquiry view.")
             note(
                 "skip_find: enquiry view — fill customer, Save only; "
                 "Generate Booking after vehicle branch if not In Transit."
@@ -1606,10 +1716,12 @@ def run_hero_siebel_dms_flow(
             else:
                 note("Save not detected on enquiry (skip_find).")
             ms_done("Enquiry created")
-            page.wait_for_timeout(800)
+            _safe_page_wait(page, 800, log_label="after_skip_find_save")
+            step("Enquiry form was filled and saved (skip Find path).")
 
         vehicle_url = (urls.vehicle or "").strip()
         if not vehicle_url:
+            step("Stopped: DMS_REAL_URL_VEHICLE is not configured.")
             out["error"] = (
                 "Siebel: set DMS_REAL_URL_VEHICLE to the Auto Vehicle List (or stock search) "
                 "GotoView URL so key/chassis/engine search can run."
@@ -1629,31 +1741,40 @@ def run_hero_siebel_dms_flow(
             note=note,
         )
         if veh_err:
+            step("Stopped during vehicle list search.")
             out["error"] = veh_err
             out["dms_milestones"] = _sort_milestone_labels(out["dms_milestones"])
             return out
 
         out["vehicle"] = scraped
         out["dms_siebel_forms_filled"] = True
+        step("Vehicle list: searched by key / chassis / engine and read the result row.")
 
         in_transit = bool(scraped.get("in_transit"))
 
         if in_transit:
             note("Vehicle grid suggests In Transit — receipt, Pre Check, then PDI (§6.1a).")
+            step("Vehicle appears in transit (stock / receipt path).")
             recv_u = (urls.vehicles or "").strip()
             if recv_u:
                 _goto(page, recv_u, "vehicles_receipt", nav_timeout_ms=nav_timeout_ms)
                 _siebel_after_goto_wait(page, floor_ms=1000)
                 if _try_click_process_receipt(page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector):
                     note("Clicked Process Receipt / receive control.")
+                    step("Vehicle received — Process Receipt was completed in DMS.")
                 else:
                     note("Process Receipt control not found; operator may complete receipt manually.")
+                    step(
+                        "Receipt / in-transit screen opened; Process Receipt was not found — "
+                        "complete receiving manually if required."
+                    )
                 ms_done("Vehicle received")
             else:
                 note(
                     "DMS_REAL_URL_VEHICLES is not set — cannot navigate to receipt/in-transit view; "
                     "set it to HMCL In Transit (or equivalent) GotoView URL."
                 )
+                step("Receipt URL (DMS_REAL_URL_VEHICLES) is not set — skipped receiving in UI.")
 
             _siebel_run_precheck_and_pdi(
                 page,
@@ -1664,9 +1785,11 @@ def run_hero_siebel_dms_flow(
                 content_frame_selector=content_frame_selector,
                 note=note,
                 ms_done=ms_done,
+                step=step,
             )
         else:
             note("Vehicle not flagged In Transit — booking + allotment branch (§6.1a).")
+            step("Vehicle does not appear in transit — booking and allocation path.")
             enq_u = (urls.enquiry or "").strip() or (urls.contact or "").strip()
             if enq_u:
                 _goto(page, enq_u, "enquiry_for_booking", nav_timeout_ms=nav_timeout_ms)
@@ -1674,33 +1797,44 @@ def run_hero_siebel_dms_flow(
             else:
                 note("No DMS_REAL_URL_ENQUIRY or DMS_REAL_URL_CONTACT for Generate Booking.")
 
-            page.wait_for_timeout(800)
+            _safe_page_wait(page, 800, log_label="before_generate_booking")
             if _try_click_generate_booking(
                 page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
             ):
                 note("Clicked Generate Booking.")
                 ms_done("Booking generated")
+                step("Generate Booking was completed.")
             else:
                 note("Generate Booking not found or not visible.")
+                step("Generate Booking was not found on screen — complete manually if required.")
 
             line_u = (urls.line_items or "").strip()
             if line_u:
                 _goto(page, line_u, "line_items_allotment", nav_timeout_ms=nav_timeout_ms)
                 _siebel_after_goto_wait(page, floor_ms=1200)
                 ms_done("Allotment view opened")
+                step("Allotment / order line view opened.")
                 if _try_click_price_all(page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector):
                     note("Clicked Price All (best-effort).")
+                    step("Price All was clicked.")
                 if _try_click_allocate_line(page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector):
                     note("Clicked Allocate / Allocate All.")
                     ms_done("Vehicle allocated")
+                    step("Allocation was completed (Allocate / Allocate All).")
                 else:
                     note("Allocate / Allocate All not found; operator may allocate manually.")
+                    step("Allocation control was not found — complete allocation manually if required.")
             else:
                 note("DMS_REAL_URL_LINE_ITEMS not set; skipping allotment view.")
+                step("Line items / allotment URL is not set — skipped allocation in UI.")
 
     except PlaywrightTimeout as e:
         out["error"] = f"Siebel automation timeout: {e!s}"
         logger.warning("siebel_dms: PlaywrightTimeout %s", e)
+    except RuntimeError as e:
+        # e.g. browser/tab closed during ``_safe_page_wait`` — message is already operator-facing
+        out["error"] = str(e)
+        logger.warning("siebel_dms: %s", e)
     except Exception as e:
         out["error"] = f"Siebel automation error: {e!s}"
         logger.warning("siebel_dms: exception %s", e, exc_info=True)
