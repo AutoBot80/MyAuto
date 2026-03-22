@@ -33,6 +33,7 @@ from app.config import (
     INSURANCE_POLICY_FILL_TIMEOUT_MS,
     OCR_OUTPUT_DIR,
     PLAYWRIGHT_KEEP_OPEN,
+    PLAYWRIGHT_MANAGED_REMOTE_DEBUG_PORT,
     dms_automation_is_real_siebel,
 )
 from app.repositories import form_dms as form_dms_repo
@@ -205,6 +206,9 @@ def _candidate_cdp_urls() -> list[str]:
     explicit_many = (os.getenv("PLAYWRIGHT_CDP_URLS") or "").strip()
     if explicit_many:
         urls.extend([u.strip() for u in explicit_many.split(",") if u.strip()])
+    # Same port as app-launched browser (PLAYWRIGHT_MANAGED_REMOTE_DEBUG_PORT, default 9333).
+    if PLAYWRIGHT_MANAGED_REMOTE_DEBUG_PORT:
+        urls.append(f"http://127.0.0.1:{PLAYWRIGHT_MANAGED_REMOTE_DEBUG_PORT}")
     # Common local CDP endpoints used by operators.
     # Edge/Chrome can both run on any port, but these defaults are typical.
     urls.append("http://127.0.0.1:9222")
@@ -244,14 +248,32 @@ def _launch_managed_browser_for_site(base_url: str):
     pw = _get_playwright()
     channels = ["msedge", "chrome"]
     headless = not bool(DMS_PLAYWRIGHT_HEADED)
+    launch_args: list[str] = []
+    if PLAYWRIGHT_MANAGED_REMOTE_DEBUG_PORT:
+        launch_args.append(f"--remote-debugging-port={PLAYWRIGHT_MANAGED_REMOTE_DEBUG_PORT}")
     for channel in channels:
         try:
-            browser = pw.chromium.launch(channel=channel, headless=headless)
+            browser = pw.chromium.launch(
+                channel=channel,
+                headless=headless,
+                args=launch_args if launch_args else [],
+            )
             _KEEP_OPEN_BROWSERS.append(browser)
             context = browser.new_context()
             page = context.new_page()
             page.goto(base_url, wait_until="domcontentloaded", timeout=20000)
-            logger.info("fill_dms_service: launched managed %s browser for %s", channel, base_url)
+            if PLAYWRIGHT_MANAGED_REMOTE_DEBUG_PORT:
+                logger.info(
+                    "fill_dms_service: launched managed %s for %s with remote debugging on port %s "
+                    "(set PLAYWRIGHT_CDP_URL=http://127.0.0.1:%s to reuse this window after a backend restart "
+                    "if the browser process stays alive).",
+                    channel,
+                    base_url,
+                    PLAYWRIGHT_MANAGED_REMOTE_DEBUG_PORT,
+                    PLAYWRIGHT_MANAGED_REMOTE_DEBUG_PORT,
+                )
+            else:
+                logger.info("fill_dms_service: launched managed %s browser for %s", channel, base_url)
             return page, channel
         except Exception as exc:
             logger.warning("fill_dms_service: failed to launch %s browser: %s", channel, exc)

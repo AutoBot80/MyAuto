@@ -119,6 +119,14 @@ DMS_PLAYWRIGHT_HEADED = os.getenv("DMS_PLAYWRIGHT_HEADED", "true").lower() in ("
 # When true, do not auto-close Playwright browser after automation.
 # Useful for operator inspection/debugging (server keeps the session alive).
 PLAYWRIGHT_KEEP_OPEN = os.getenv("PLAYWRIGHT_KEEP_OPEN", "false").lower() in ("1", "true", "yes")
+# When the backend launches Edge/Chrome (no existing CDP session), Chromium is started with
+# ``--remote-debugging-port=<port>`` so DevTools / ``chrome://inspect`` / a matching
+# ``PLAYWRIGHT_CDP_URL=http://127.0.0.1:<port>`` can attach. Default **9333** avoids clashing with
+# a manually started Edge on 9222. Set to **0** or empty to disable.
+_mdbg_raw = (os.getenv("PLAYWRIGHT_MANAGED_REMOTE_DEBUG_PORT") or "9333").strip()
+PLAYWRIGHT_MANAGED_REMOTE_DEBUG_PORT: int | None = (
+    int(_mdbg_raw) if _mdbg_raw.isdigit() and int(_mdbg_raw) > 0 else None
+)
 
 # Vahan (dummy or real) base URL for Playwright RTO registration step after DMS.
 VAHAN_BASE_URL = (os.getenv("VAHAN_BASE_URL") or "").strip().rstrip("/")
