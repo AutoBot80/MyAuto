@@ -1,4 +1,4 @@
-"""AI reader queue and Add Sales upload extraction: Textract FORMS for structured detail sheets, QR+Textract for Aadhaar."""
+"""AI reader queue and Add Sales upload extraction: Textract FORMS for detail sheets; Aadhaar uses Textract text only (no UIDAI QR decode)."""
 
 from __future__ import annotations
 
@@ -85,7 +85,7 @@ AADHAR_15_FIELDS: list[tuple[str, str]] = [
     ("pin_code", "Pin Code"),
 ]
 
-# UIDAI QR field keys (front and/or back scan); used to build / merge `customer` from QR XML.
+# Customer keys for Aadhaar merges (same shape as legacy UIDAI POA; filled from Textract parsers).
 AADHAR_QR_CUSTOMER_KEYS: tuple[str, ...] = (
     "aadhar_id",
     "name",
@@ -139,92 +139,13 @@ def _rebuild_aadhar_address_from_parts(
         customer.pop("address", None)
 
 
-def _customer_from_uidai_qr_fields(fields: dict) -> dict[str, str]:
-    """Build customer dict + constructed address from decoded UIDAI `fields` (qr_decode_service)."""
-    customer: dict[str, str] = {}
-    for k in AADHAR_QR_CUSTOMER_KEYS:
-        v = fields.get(k)
-        if v and str(v).strip():
-            customer[k] = str(v).strip()
-    _rebuild_aadhar_address_from_parts(customer)
-    return customer
-
-
-def _aadhar_qr_customer_completeness_score(customer: dict[str, str]) -> int:
-    """Prefer richer UIDAI payloads when an image yields multiple QR decodes."""
-    score = 0
-    for k in AADHAR_QR_CUSTOMER_KEYS:
-        if customer.get(k) and str(customer[k]).strip():
-            score += 2
-            if k in ("date_of_birth", "gender", "aadhar_id", "name"):
-                score += 3
-            if k in ("pin_code", "district", "city", "state", "street", "house", "care_of"):
-                score += 2
-    if customer.get("address") and str(customer["address"]).strip():
-        score += 6
-    return score
-
-
-def _try_customer_from_aadhar_qr_bytes(image_bytes: bytes) -> dict[str, str]:
-    """Decode UIDAI QR(s) in image bytes; pick the payload with the richest customer fields."""
-    if not image_bytes:
-        return {}
-    try:
-        from app.services.qr_decode_service import decode_qr_from_image_bytes
-
-        qr_result = decode_qr_from_image_bytes(image_bytes)
-        best: dict[str, str] = {}
-        best_score = -1
-        for entry in qr_result.get("decoded") or []:
-            fields = entry.get("fields") or {}
-            if not fields:
-                continue
-            customer = _customer_from_uidai_qr_fields(fields)
-            if not customer:
-                continue
-            sc = _aadhar_qr_customer_completeness_score(customer)
-            if sc > best_score:
-                best_score = sc
-                best = customer
-        return best
-    except Exception:
-        return {}
-
-
-def _merge_aadhar_front_back_qr_customer(
-    front: dict[str, str],
-    back: dict[str, str],
-) -> dict[str, str]:
-    """
-    Prefer values from the front scan; fill missing/empty keys from the back (QR often on back only).
-    Back may include OCR-derived ``address`` when secure QR is unreadable at low resolution.
-    Rebuilds `address` from merged POA parts, then may apply a longer back ``address`` string.
-    """
-    merged: dict[str, str] = dict(front)
-    back_addr = (back.get("address") or "").strip()
-    for k, v in back.items():
-        if k == "address":
-            continue
-        if not v or not str(v).strip():
-            continue
-        cur = merged.get(k)
-        if cur is None or not str(cur).strip():
-            merged[k] = str(v).strip()
-    _rebuild_aadhar_address_from_parts(merged)
-    if back_addr:
-        ma = (merged.get("address") or "").strip()
-        if not ma or len(back_addr) > len(ma) + 15:
-            merged["address"] = back_addr
-    return merged
-
-
 def _merge_qr_customer_into_existing(
     existing: dict[str, str],
     qr_merged: dict[str, str],
 ) -> dict[str, str]:
     """
-    Fill blank customer keys from UIDAI QR (front+back). Preserves Details sheet / DB values when set.
-    Used so get_extracted_details still applies back-QR when `customer` already has name/pin from Details.
+    Fill blank customer keys from an Aadhaar-derived fragment (Textract-parsed fields).
+    Preserves Details sheet / DB values when set.
     """
     out = dict(existing) if existing else {}
     if not qr_merged:
@@ -244,6 +165,22 @@ def _merge_qr_customer_into_existing(
     return out
 
 
+def _load_aadhar_scan_bytes(subdir: Path) -> dict[str, Any]:
+    """Load ``Aadhar.jpg`` / ``Aadhar_back.jpg`` bytes for the Textract pipeline (no QR decode)."""
+    out: dict[str, Any] = {"front_bytes": None, "back_bytes": None}
+    ap = subdir / "Aadhar.jpg"
+    bp = subdir / "Aadhar_back.jpg"
+    try:
+        out["front_bytes"] = ap.read_bytes() if ap.is_file() else None
+    except OSError:
+        out["front_bytes"] = None
+    try:
+        out["back_bytes"] = bp.read_bytes() if bp.is_file() else None
+    except OSError:
+        out["back_bytes"] = None
+    return out
+
+
 def _normalize_aadhar_back_address_chunk(chunk: str) -> str:
     chunk = chunk.replace("\r\n", "\n")
     chunk = re.sub(r"[\|`]+", " ", chunk)
@@ -255,7 +192,7 @@ def _parse_aadhar_back_address_from_ocr(ocr_text: str) -> dict[str, str]:
     """
     English (and noisy OCR) address on Aadhaar back. UIDAI layout uses ``Address:``;
     OCR often merges lines — fall back to ``C/O:`` … through PIN / Aadhaar line.
-    DOB/Gender are not printed on the back; use front scan or a higher-res QR decode.
+    DOB/Gender are not printed on the back; use **Aadhar.jpg** (front) Textract text.
     """
     out: dict[str, str] = {}
     if not ocr_text or len(ocr_text.strip()) < 8:
@@ -321,21 +258,6 @@ def _parse_aadhar_back_address_from_ocr(ocr_text: str) -> dict[str, str]:
     if parsed.get("district"):
         out["district"] = parsed["district"]
     return out
-
-
-def _customer_from_aadhar_back_scan(image_bytes: bytes) -> dict[str, str]:
-    """
-    Back image: **UIDAI QR only** here.
-
-    Printed English address uses **AWS Textract** in the upload pipeline and in ``Raw_OCR.txt``
-    (see ``_apply_aadhar_textract_fallbacks_from_raw_ocr_file``) — not repeated on every
-    ``get_extracted_details`` poll.
-    """
-    c = _try_customer_from_aadhar_qr_bytes(image_bytes)
-    if not c:
-        return {}
-    _rebuild_aadhar_address_from_parts(c)
-    return c
 
 
 def _aadhar_normalize_dob_triplet(day: int, month: int, year: int) -> str | None:
@@ -445,7 +367,7 @@ def _extract_gender_using_dob_slash_rule(full_text: str, normalized_dob: str | N
 def _parse_aadhar_front_textract_fallback(text: str) -> dict[str, str]:
     """
     Pull DOB / gender from Aadhaar **front** full text (AWS Textract or same layout in Raw_OCR).
-    Used when UIDAI QR omits these fields.
+    Used when printed front text omits these fields.
     """
     out: dict[str, str] = {}
     if not text or len(text.strip()) < 5:
@@ -482,7 +404,7 @@ def _parse_aadhar_front_textract_fallback(text: str) -> dict[str, str]:
                     out["year_of_birth"] = str(y)
                     break
 
-    # Primary (non-QR) gender: anchor on DOB, skip next token, next "/" then gender token.
+    # Primary gender from layout: anchor on DOB, skip next token, next "/" then gender token.
     g_dob = _extract_gender_using_dob_slash_rule(t, out.get("date_of_birth"))
     if g_dob:
         out["gender"] = g_dob
@@ -529,7 +451,7 @@ def _parse_aadhar_front_textract_fallback(text: str) -> dict[str, str]:
 
 def _parse_aadhar_name_from_aadhaar_textract(text: str) -> dict[str, str]:
     """
-    Heuristic name line on Aadhaar **front** when UIDAI QR is missing or has no name.
+    Heuristic name line on Aadhaar **front** when Textract text has no clear name field.
     Avoids obvious headers / labels; prefers a Title Case line before DOB.
     """
     out: dict[str, str] = {}
@@ -584,15 +506,13 @@ def _aadhar_geo_ok(customer: dict[str, str]) -> bool:
 
 
 def _pipeline_merge_aadhar_customer(
-    qr_seed: dict[str, str],
     front_bytes: bytes | None,
     back_bytes: bytes | None,
     front_textract: dict | None,
     back_textract: dict | None,
 ) -> tuple[dict[str, str], list[tuple[str, str]], str | None, dict[str, int]]:
     """
-    UIDAI QR from front and/or back first (``qr_seed``), then **AWS Textract only** (no Tesseract)
-    on front/back for text when fields are still weak — same engine as the rest of scans-v2.
+    **AWS Textract only** on front/back (no Tesseract, no UIDAI QR in this pipeline).
     """
     from app.services.textract_service import extract_text_from_bytes
 
@@ -607,7 +527,7 @@ def _pipeline_merge_aadhar_customer(
         return (d.get("full_text") or "").strip()
 
     raw_parts: list[tuple[str, str]] = []
-    customer = dict(qr_seed) if qr_seed else {}
+    customer: dict[str, str] = {}
 
     ft = front_textract
     if front_bytes and (not ft or ft.get("error") or not _ftext(ft)):
@@ -646,7 +566,7 @@ def _pipeline_merge_aadhar_customer(
     note: str | None = None
     if not _aadhar_identity_ok(customer):
         note = (
-            "Aadhaar QR or automated read did not yield a clear name or ID number. "
+            "Aadhaar automated read did not yield a clear name or ID number. "
             "Enter or verify customer fields manually."
         )
 
@@ -660,13 +580,11 @@ def _pipeline_merge_aadhar_customer(
 def _merge_granular_upload_process_timings(
     section_timings_ms: dict[str, int],
     *,
-    qr_bundle: dict[str, Any],
     prefetch_job_ms: dict[str, int],
     frag_a: dict[str, Any] | None,
     frag_d: dict[str, Any] | None,
 ) -> None:
     """Populate per-process durations (prefetch job wall times + sync pipeline/FORMS times)."""
-    section_timings_ms["aadhar_qr_reader_ms"] = int(qr_bundle.get("aadhar_qr_reader_ms", 0))
     pt = (frag_a or {}).get("process_timings") or {}
     section_timings_ms["aadhar_textract_front_ms"] = int(prefetch_job_ms.get("aadhar_front", 0)) + int(
         pt.get("aadhar_textract_front_ms", 0)
@@ -680,29 +598,6 @@ def _merge_granular_upload_process_timings(
         else 0
     )
     section_timings_ms["detail_sheet_textract_ms"] = int(prefetch_job_ms.get("details_forms", 0)) + dsync
-
-
-def _local_aadhar_qr_only_bundle(subdir: Path) -> dict[str, Any]:
-    """Fast local decode: UIDAI QR on Aadhar.jpg and Aadhar_back.jpg (runs in parallel with Textract prefetch)."""
-    t0 = time.perf_counter()
-    out: dict[str, Any] = {"qr_customer": {}, "front_bytes": None, "back_bytes": None}
-    ap = subdir / "Aadhar.jpg"
-    bp = subdir / "Aadhar_back.jpg"
-    try:
-        out["front_bytes"] = ap.read_bytes() if ap.is_file() else None
-    except OSError:
-        out["front_bytes"] = None
-    try:
-        out["back_bytes"] = bp.read_bytes() if bp.is_file() else None
-    except OSError:
-        out["back_bytes"] = None
-    fb = out["front_bytes"]
-    bb = out["back_bytes"]
-    cf = _try_customer_from_aadhar_qr_bytes(fb) if fb else {}
-    cb = _try_customer_from_aadhar_qr_bytes(bb) if bb else {}
-    out["qr_customer"] = _merge_aadhar_front_back_qr_customer(cf, cb)
-    out["aadhar_qr_reader_ms"] = int((time.perf_counter() - t0) * 1000)
-    return out
 
 
 def _compile_details_sheet_fragment(
@@ -771,7 +666,7 @@ def _compile_details_sheet_fragment(
 
 
 def _default_gender_male_if_unread(customer: dict[str, str]) -> None:
-    """If gender was not extracted (QR/OCR/Textract), assume Male for DMS/insurance flows."""
+    """If gender was not extracted (Textract/parsed text), assume Male for DMS/insurance flows."""
     g = customer.get("gender")
     if g is None or not str(g).strip():
         customer["gender"] = "Male"
@@ -780,7 +675,7 @@ def _default_gender_male_if_unread(customer: dict[str, str]) -> None:
 def _merge_aadhar_textract_fallback_dict(customer: dict[str, str], hints: dict[str, str]) -> dict[str, str]:
     """
     Fill blank customer fields from Textract-derived hints. For ``address``, prefer a longer /
-    clearer Textract line over a short or empty QR/OCR value (common for back-of-card English).
+    clearer Textract line over a short or empty prior value (common for back-of-card English).
     """
     out = dict(customer) if customer else {}
     if not hints:
@@ -1914,7 +1809,7 @@ class OcrService:
         if not _aadhar_identity_ok(customer):
             extraction_error = (
                 (frag_a or {}).get("extraction_note")
-                or "Aadhaar QR or automated read did not yield a clear name or ID number. "
+                or "Aadhaar automated read did not yield a clear name or ID number. "
                 "Enter or verify customer fields manually."
             )
 
@@ -1934,13 +1829,12 @@ class OcrService:
 
     def _upload_fragment_aadhar(
         self,
-        qr_bundle: dict[str, Any],
+        scan_bundle: dict[str, Any],
         prefetch: dict[str, dict],
     ) -> dict[str, Any]:
         customer, raw_parts, note, process_timings = _pipeline_merge_aadhar_customer(
-            qr_bundle.get("qr_customer") or {},
-            qr_bundle.get("front_bytes"),
-            qr_bundle.get("back_bytes"),
+            scan_bundle.get("front_bytes"),
+            scan_bundle.get("back_bytes"),
             prefetch.get("aadhar_front"),
             prefetch.get("aadhar_back"),
         )
@@ -1968,10 +1862,9 @@ class OcrService:
         """
         Run extraction directly on uploaded files (no queue).
 
-        Flow: **UIDAI QR** is read from **Aadhar.jpg and/or Aadhar_back.jpg** (in parallel with AWS
-        Textract prefetch when enabled). **Textract** fills gaps (name/DOB/gender on front;
-        address/state/PIN on back) when QR alone is thin. **Details sheet** is compiled in
-        **parallel** with the Aadhaar pipeline, then results are merged once into JSON.
+        Flow: **AWS Textract prefetch** (when enabled) on Aadhaar and other scans; **Aadhaar assembly**
+        uses **Textract text only** on front/back (no UIDAI QR in this path). **Details sheet** is
+        compiled in **parallel** with the Aadhaar pipeline, then results are merged once into JSON.
         **Details** raster/PDF: Textract **AnalyzeDocument FORMS** (structured key-values).
 
         Writes Raw_OCR.txt and returns ``section_timings_ms`` for operator visibility.
@@ -1989,21 +1882,13 @@ class OcrService:
 
         from app.config import OCR_UPLOAD_PARALLEL_TEXTRACT
 
+        scan_bundle = _load_aadhar_scan_bytes(subdir)
         prefetch: dict[str, dict] = {}
         prefetch_job_ms: dict[str, int] = {}
         t_pref = time.perf_counter()
         if OCR_UPLOAD_PARALLEL_TEXTRACT:
-            with ThreadPoolExecutor(max_workers=2) as ex:
-                f_tex = ex.submit(_parallel_textract_prefetch_upload_subfolder, subdir)
-                f_qr = ex.submit(_local_aadhar_qr_only_bundle, subdir)
-                prefetch, prefetch_job_ms = f_tex.result()
-                qr_bundle = f_qr.result()
-            section_timings_ms["aws_textract_prefetch_parallel_local_qr_ms"] = int(
-                (time.perf_counter() - t_pref) * 1000
-            )
-        else:
-            qr_bundle = _local_aadhar_qr_only_bundle(subdir)
-            section_timings_ms["local_aadhaar_qr_decode_ms"] = int(
+            prefetch, prefetch_job_ms = _parallel_textract_prefetch_upload_subfolder(subdir)
+            section_timings_ms["aws_textract_prefetch_ms"] = int(
                 (time.perf_counter() - t_pref) * 1000
             )
 
@@ -2016,7 +1901,7 @@ class OcrService:
         if aadhar_path.exists() or details_path.exists():
             with ThreadPoolExecutor(max_workers=2) as ex:
                 fa = (
-                    ex.submit(self._upload_fragment_aadhar, qr_bundle, prefetch)
+                    ex.submit(self._upload_fragment_aadhar, scan_bundle, prefetch)
                     if aadhar_path.exists()
                     else None
                 )
@@ -2035,16 +1920,14 @@ class OcrService:
 
         _merge_granular_upload_process_timings(
             section_timings_ms,
-            qr_bundle=qr_bundle,
             prefetch_job_ms=prefetch_job_ms,
             frag_a=frag_a,
             frag_d=frag_d,
         )
         logger.info(
-            "ocr_upload_process_timings subfolder=%s aadhar_qr_reader_ms=%s aadhar_textract_front_ms=%s "
+            "ocr_upload_process_timings subfolder=%s aadhar_textract_front_ms=%s "
             "aadhar_textract_back_ms=%s detail_sheet_textract_ms=%s",
             subfolder,
-            section_timings_ms.get("aadhar_qr_reader_ms", 0),
             section_timings_ms.get("aadhar_textract_front_ms", 0),
             section_timings_ms.get("aadhar_textract_back_ms", 0),
             section_timings_ms.get("detail_sheet_textract_ms", 0),
@@ -2319,7 +2202,7 @@ class OcrService:
         input_path: Path,
         front_textract_prefetch: dict | None = None,
     ) -> dict:
-        """Run Aadhar extraction: UIDAI QR on **front and/or back**, then Textract (and Tesseract on back) to fill gaps; merge into subfolder JSON."""
+        """Run Aadhar extraction: **AWS Textract** on front (and back when geo fields are weak); merge into subfolder JSON."""
         if qid is not None:
             with get_connection() as conn:
                 AiReaderQueueRepository.update_classification(conn, qid, "Aadhar", 1.0)
@@ -2328,12 +2211,6 @@ class OcrService:
             raw_bytes = input_path.read_bytes()
             back_path = input_path.parent / "Aadhar_back.jpg"
             back_bytes = back_path.read_bytes() if back_path.is_file() else None
-            t_qr = time.perf_counter()
-            cf = _try_customer_from_aadhar_qr_bytes(raw_bytes)
-            cb = _try_customer_from_aadhar_qr_bytes(back_bytes) if back_bytes else {}
-            qr_seed = _merge_aadhar_front_back_qr_customer(cf, cb)
-            qr_reader_ms = int((time.perf_counter() - t_qr) * 1000)
-
             ft = front_textract_prefetch
             if ft is None:
                 t_ft = time.perf_counter()
@@ -2348,14 +2225,13 @@ class OcrService:
                 front_textract_sync_ms = 0
 
             piped, raw_parts, note, pipe_timings = _pipeline_merge_aadhar_customer(
-                qr_seed, raw_bytes, back_bytes, ft, None
+                raw_bytes, back_bytes, ft, None
             )
             logger.info(
-                "ocr_queue_aadhar_process_timings subfolder=%s aadhar_qr_reader_ms=%s "
+                "ocr_queue_aadhar_process_timings subfolder=%s "
                 "aadhar_textract_front_prefetch_or_sync_ms=%s aadhar_textract_pipeline_front_ms=%s "
                 "aadhar_textract_pipeline_back_ms=%s",
                 subfolder,
-                qr_reader_ms,
                 front_textract_sync_ms,
                 pipe_timings.get("aadhar_textract_front_ms", 0),
                 pipe_timings.get("aadhar_textract_back_ms", 0),
@@ -2494,8 +2370,8 @@ class OcrService:
     def get_extracted_details(self, subfolder: str) -> dict | None:
         """
         Return structured extracted details (vehicle, customer) for a subfolder.
-        Loads from JSON if present.         If customer is missing/empty and Aadhar.jpg exists in the subfolder,
-        runs UIDAI QR decode on front then merges Aadhar_back.jpg when present, persists JSON, and returns.
+        Loads from JSON if present. Aadhaar fields are filled from upload-time Textract and
+        ``Raw_OCR.txt`` fallbacks (no per-poll UIDAI QR decode).
         """
         self._ensure_ocr_output_dir()
         json_path = _json_output_path(self.ocr_output_dir, subfolder)
@@ -2519,50 +2395,8 @@ class OcrService:
             customer = {}
         aadhar_path = self.uploads_dir / subfolder / "Aadhar.jpg"
         back_p = self.uploads_dir / subfolder / "Aadhar_back.jpg"
-        # Always merge UIDAI QR when front and/or back scan exists — Details sheet may have set
-        # name/pin first and skipped DOB/gender/address that exist only on the back QR.
-        if aadhar_path.is_file() or back_p.is_file():
-            try:
-                c_front = (
-                    _try_customer_from_aadhar_qr_bytes(aadhar_path.read_bytes())
-                    if aadhar_path.is_file()
-                    else {}
-                )
-                c_back: dict[str, str] = {}
-                if back_p.is_file():
-                    try:
-                        c_back = _customer_from_aadhar_back_scan(back_p.read_bytes())
-                    except Exception:
-                        c_back = {}
-                qr_merged = _merge_aadhar_front_back_qr_customer(c_front, c_back)
-                if qr_merged:
-                    customer = _merge_qr_customer_into_existing(customer, qr_merged)
-                    if customer.get("aadhar_id"):
-                        customer["aadhar_id"] = _aadhar_last4(customer["aadhar_id"]) or ""
-                    data["customer"] = customer
-                    data.pop("extraction_error", None)
-                    try:
-                        json_path.parent.mkdir(parents=True, exist_ok=True)
-                        json_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-                    except Exception:
-                        pass
-                elif not any(
-                    customer.get(k) for k in ("name", "aadhar_id", "address", "city", "state", "pin_code", "pin")
-                ):
-                    data["extraction_error"] = (
-                        "QR code was not found or could not be read on the Aadhar front or back scan. "
-                        "UIDAI QR is often on the back — ensure Aadhar_back.jpg includes a readable QR. Re-scan if needed."
-                    )
-            except Exception:
-                if not any(
-                    customer.get(k) for k in ("name", "aadhar_id", "address", "city", "state", "pin_code", "pin")
-                ):
-                    data["extraction_error"] = (
-                        "QR code was not found or could not be read on the Aadhar front or back scan. "
-                        "UIDAI QR is often on the back — ensure Aadhar_back.jpg includes a readable QR. Re-scan if needed."
-                    )
 
-        # Textract text in Raw_OCR.txt: fill DOB/gender from front, address from back (when QR/OCR missed).
+        # Textract text in Raw_OCR.txt: fill DOB/gender from front, address from back when parsers missed fields.
         _apply_aadhar_textract_fallbacks_from_raw_ocr_file(self.ocr_output_dir, subfolder)
         if json_path.exists():
             try:

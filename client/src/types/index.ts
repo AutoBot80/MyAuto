@@ -35,18 +35,14 @@ export interface ProcessStatusResponse {
 
 /** Wall-clock breakdown from `OcrService.process_uploaded_subfolder` (scans-v2). */
 export interface UploadExtractionSectionTimings {
-  /** Local UIDAI QR decode on `Aadhar.jpg` / `Aadhar_back.jpg` (CPU). */
-  aadhar_qr_reader_ms?: number;
   /** Aadhaar front: DetectDocumentText — prefetch job time + any sync retry in the Aadhaar pipeline. */
   aadhar_textract_front_ms?: number;
   /** Aadhaar back: DetectDocumentText — prefetch job time + any sync retry in the Aadhaar pipeline. */
   aadhar_textract_back_ms?: number;
   /** Sales detail sheet: AnalyzeDocument FORMS — prefetch job time + sync call if prefetch disabled. */
   detail_sheet_textract_ms?: number;
-  /** When `OCR_UPLOAD_PARALLEL_TEXTRACT` is true: Textract jobs + local QR in parallel. */
-  aws_textract_prefetch_parallel_local_qr_ms?: number;
-  /** When parallel Textract is off: time to decode QR on Aadhaar images only. */
-  local_aadhaar_qr_decode_ms?: number;
+  /** When `OCR_UPLOAD_PARALLEL_TEXTRACT` is true: wall time for AWS Textract prefetch jobs. */
+  aws_textract_prefetch_ms?: number;
   parallel_aadhar_details_compile_ms?: number;
   merge_write_json_ms?: number;
   insurance_ms?: number;

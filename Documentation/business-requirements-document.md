@@ -52,7 +52,7 @@ The system is a server–client application for auto dealers. Dealers run a ligh
 | BR-14 | DMS booking test budget | Dummy / training DMS flow uses a fixed **customer budget / enquiry amount of 89000** for booking generation unless the business replaces this constant in automation. |
 | BR-15 | Ex-showroom vs column name | **Order Value / ex-showroom** from DMS is persisted as `vehicle_master.vehicle_price` (no separate `vehicle_cost` column). Labels in exports and dummy UI read **Ex-showroom Price**. |
 | BR-16 | Create Invoice operator-only | DMS Playwright must not click **Create Invoice**; the operator completes invoicing, then may re-run automation after the invoice step. |
-| BR-17 | Aadhaar gender default | When **gender** is not extracted from UIDAI QR or **AWS Textract** (Aadhaar front/back text) for a subfolder that includes `Aadhar.jpg` and/or `Aadhar_back.jpg`, the persisted `customer.gender` in `OCR_To_be_Used.json` defaults to **Male** (operators may correct before submit). |
+| BR-17 | Aadhaar gender default | When **gender** is not extracted from **AWS Textract** (Aadhaar front/back text) and parsers for a subfolder that includes `Aadhar.jpg` and/or `Aadhar_back.jpg`, the persisted `customer.gender` in `OCR_To_be_Used.json` defaults to **Male** (operators may correct before submit). |
 | BR-18 | Address-derived locality | When **state**, **PIN**, or **care_of** is missing but **address** contains **`C/O:`** (Care of), **`DIST: <District>, <State> - <PIN>`** (including OCR variants like **`<State> - - <PIN>`** or **`<State> -- <PIN>`**), a trailing **`<Indian state> - <PIN>`** when **`DIST:`** is unreadable, and/or a 6-digit PIN, the system infers **`care_of`**, **`city`/district**, **`state`**, **`pin`**; drops text **after the PIN**; strips **C/O** from the stored address line. Applied on Submit Info, OCR JSON, Aadhaar back parsing, and DMS fill when `form_dms_view` fields are sparse. |
 
 ---
@@ -305,3 +305,4 @@ Bulk upload automates the ingestion of scanned documents from a shared folder in
 | 2.4 | Mar 2026 | — | **§6.1a** step 4a: **Pre Check** before PDI on In Transit branch |
 | 2.5 | Mar 2026 | — | **FR-23** scans-v2: QR+Textract order, parallel Aadhaar+Details, Textract name/geo fallbacks, `section_timings_ms` |
 | 2.6 | Mar 2026 | — | **FR-23** / **BR-17**: Aadhaar printed text uses **AWS Textract only** (no Tesseract on Aadhaar front/back) |
+| 2.7 | Mar 2026 | — | **FR-23** / **BR-17**: scans-v2 and `get_extracted_details` drop **UIDAI QR**; Aadhaar is **Textract + Raw_OCR parsers** only; **`section_timings_ms`** removes QR keys, adds **`aws_textract_prefetch_ms`** |

@@ -1,0 +1,37 @@
+{
+  "vehicle": {
+    "frame_no": "40393",
+    "engine_no": "04383",
+    "model_colour": "SPL",
+    "key_no": "1342",
+    "battery_no": "M7B6T064443"
+  },
+  "customer": {
+    "aadhar_id": "4195",
+    "name": "Akash",
+    "gender": "M",
+    "year_of_birth": "2004",
+    "date_of_birth": "01/01/2004",
+    "care_of": "S/O: S/O: Sahab Singh",
+    "house": "street=",
+    "post_office": "Bharatpur",
+    "district": "Bharatpur",
+    "state": "Rajasthan",
+    "pin_code": "321001",
+    "address": "S/O: S/O: Sahab Singh, street=, Bharatpur, Bharatpur, Rajasthan, 321001",
+    "city": "Bharatpur",
+    "mobile_number": "8306827880",
+    "alt_phone_num": "9602035092"
+  },
+  "insurance": {
+    "profession": "Farmer",
+    "insurer": "SOMPO",
+    "marital_status": "Single",
+    "nominee_gender": "MALE",
+    "nominee_name": "SAHAB SINGH",
+    "nominee_age": "44",
+    "nominee_relationship": "FATHER",
+    "financier": "SHRIRAM FIN"
+  },
+  "details_customer_name": "Akash"
+}
