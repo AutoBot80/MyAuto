@@ -276,8 +276,9 @@ def _parse_aadhar_back_address_from_ocr(ocr_text: str) -> dict[str, str]:
         return out
     text = ocr_text.replace("\r\n", "\n")
     raw = ""
+    # Do not stop at ``C/O:`` on the next line — UIDAI layout is ``Address:`` then ``C/O:`` on the following line.
     m = re.search(
-        r"(?is)\bAddress\s*:\s*([\s\S]+?)(?=\n\s*पता\b|\n\s*C/O\s*:|$)",
+        r"(?is)\bAddress\s*:\s*([\s\S]+?)(?=\n\s*पता\b|\n\s*VID\s*:|\n\s*Virtual\s+ID\b|\Z)",
         text,
     )
     if m:
@@ -393,6 +394,78 @@ def _normalize_aadhar_gender_token(token: str) -> str | None:
     return None
 
 
+def _aadhar_dob_window_not_issue_date(text: str, date_start_idx: int) -> bool:
+    """True if the date at ``date_start_idx`` is unlikely to be ``Aadhaar … issued:``."""
+    window = text[max(0, date_start_idx - 35) : date_start_idx]
+    return not re.search(r"(?i)issued|issue\s*date|date\s+of\s+issue", window)
+
+
+def _gender_skip_word_then_slash_token(suffix: str) -> str | None:
+    """
+    UIDAI front layout (OCR): after ``dd/mm/yyyy``, skip the next token, then the next ``/``
+    introduces gender (e.g. ``yes/ MALE`` where ``Sex`` OCR'd as ``yes``).
+    """
+    s = suffix.lstrip()
+    if not s:
+        return None
+    if s.startswith("/"):
+        after = s[1:].lstrip()
+        m_g = re.match(r"\S+", after)
+        return _normalize_aadhar_gender_token(m_g.group(0)) if m_g else None
+    m_skip = re.match(r"\S+", s)
+    if m_skip:
+        s = s[m_skip.end() :]
+    s = s.lstrip()
+    idx = s.find("/")
+    if idx < 0:
+        return None
+    after = s[idx + 1 :].lstrip()
+    m_g = re.match(r"\S+", after)
+    if not m_g:
+        return None
+    return _normalize_aadhar_gender_token(m_g.group(0))
+
+
+def _extract_gender_using_dob_slash_rule(full_text: str, normalized_dob: str | None) -> str | None:
+    """
+    Locate DOB (``dd/mm/yyyy``), skip the next word, find the next ``/``, read gender after it.
+    Avoids anchoring on ``issued: dd/mm/yyyy`` when possible.
+    """
+    t = full_text.replace("\r\n", "\n")
+    end_pos: int | None = None
+    if normalized_dob and re.match(r"^\d{1,2}/\d{1,2}/\d{4}$", normalized_dob.strip()):
+        p = normalized_dob.strip().split("/")
+        d, mo, yr = int(p[0]), int(p[1]), p[2]
+        variants = (
+            rf"(?<!\d){d}/{mo}/{yr}(?!\d)",
+            rf"(?<!\d){d:02d}/{mo:02d}/{yr}(?!\d)",
+            rf"(?<!\d){d}/{mo:02d}/{yr}(?!\d)",
+            rf"(?<!\d){d:02d}/{mo}/{yr}(?!\d)",
+        )
+        for rx in variants:
+            for m in re.finditer(rx, t):
+                if _aadhar_dob_window_not_issue_date(t, m.start()):
+                    end_pos = m.end()
+                    break
+            if end_pos is not None:
+                break
+    if end_pos is None:
+        for m in re.finditer(
+            r"(?<!\d)(\d{1,2})[/.\-](\d{1,2})[/.\-]((?:19|20)\d{2})(?!\d)",
+            t,
+        ):
+            if not _aadhar_dob_window_not_issue_date(t, m.start()):
+                continue
+            day, month, yr_s = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            norm = _aadhar_normalize_dob_triplet(day, month, yr_s)
+            if norm:
+                end_pos = m.end()
+                break
+    if end_pos is None:
+        return None
+    return _gender_skip_word_then_slash_token(t[end_pos:])
+
+
 def _parse_aadhar_front_textract_fallback(text: str) -> dict[str, str]:
     """
     Pull DOB / gender from Aadhaar **front** full text (AWS Textract or same layout in Raw_OCR).
@@ -433,26 +506,47 @@ def _parse_aadhar_front_textract_fallback(text: str) -> dict[str, str]:
                     out["year_of_birth"] = str(y)
                     break
 
-    gm = (
-        re.search(r"(?i)\bGender\s*[:]?\s*(Male|Female|Transgender|M|F|T)\b", t)
-        or re.search(r"(?i)\bGender\s+(Male|Female|Transgender)\b", t)
-        or re.search(r"(?i)\b(?:लिंग|Gender)\s*[:]?\s*(Male|Female|Transgender)\b", t)
-    )
-    if gm:
-        g = _normalize_aadhar_gender_token(gm.group(1))
-        if g:
-            out["gender"] = g
-    else:
-        for label_pat in (r"(?i)\bGender\b", r"(?i)\bलिंग\b"):
-            pos = re.search(label_pat, t)
-            if pos:
-                window = t[pos.end() : pos.end() + 40]
-                for word in ("Male", "Female", "Transgender"):
-                    if re.search(rf"(?i)\b{word}\b", window):
-                        out["gender"] = word
+    # Primary (non-QR) gender: anchor on DOB, skip next token, next "/" then gender token.
+    g_dob = _extract_gender_using_dob_slash_rule(t, out.get("date_of_birth"))
+    if g_dob:
+        out["gender"] = g_dob
+
+    if "gender" not in out:
+        gm = (
+            re.search(r"(?i)\bGender\s*[:]?\s*(Male|Female|Transgender|M|F|T)\b", t)
+            or re.search(r"(?i)\bGender\s+(Male|Female|Transgender)\b", t)
+            or re.search(r"(?i)\b(?:लिंग|Gender)\s*[:]?\s*(Male|Female|Transgender)\b", t)
+        )
+        if gm:
+            g = _normalize_aadhar_gender_token(gm.group(1))
+            if g:
+                out["gender"] = g
+        else:
+            for label_pat in (r"(?i)\bGender\b", r"(?i)\bलिंग\b"):
+                pos = re.search(label_pat, t)
+                if pos:
+                    window = t[pos.end() : pos.end() + 40]
+                    for word in ("Male", "Female", "Transgender"):
+                        if re.search(rf"(?i)\b{word}\b", window):
+                            out["gender"] = word
+                            break
+                    if out.get("gender"):
                         break
-                if out.get("gender"):
-                    break
+
+    if "gender" not in out:
+        # UIDAI front prints "Sex / Male" (or similar). OCR often reads "Sex" as "yes" → "yes/ MALE"
+        # with no "Gender" label, so the patterns above miss it.
+        slash_g = re.search(
+            r"(?i)\b(?:yes|yex|yos|ses|sex)\s*/\s*(Male|Female|Transgender|MALE|FEMALE|M|F|T)\b",
+            t,
+        ) or re.search(
+            r"(?i)\bSex\s*[/:]\s*(Male|Female|Transgender|MALE|FEMALE|M|F|T)\b",
+            t,
+        )
+        if slash_g:
+            g = _normalize_aadhar_gender_token(slash_g.group(1))
+            if g:
+                out["gender"] = g
 
     return out
 

@@ -7,9 +7,18 @@
     "battery_no": "BJ1A2304393"
   },
   "customer": {
+    "care_of": "Rati Ram",
+    "city": "Bharatpur",
+    "district": "Bharatpur",
+    "state": "Rajasthan",
+    "pin_code": "321001",
+    "address": "Near gayatri school, Near gayatri school, New pushpvatika colony, Bharatpur, PO: Bharatpur, DIST: Bharatpur, Rajasthan - - 321001",
+    "gender": "Male",
+    "year_of_birth": "1981",
+    "date_of_birth": "10/02/1981",
     "name": "Raja Ram",
-    "mobile_number": "6367215834",
-    "alt_phone_num": "8193935130",
+    "mobile_number": "8193935130",
+    "alt_phone_num": "6367215834",
     "aadhar_id": "9332"
   },
   "insurance": {

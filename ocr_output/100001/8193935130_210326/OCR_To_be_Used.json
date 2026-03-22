@@ -13,10 +13,13 @@
     "aadhar_id": "9332",
     "care_of": "Rati Ram",
     "pin_code": "321001",
-    "address": "C/O: Rati Ram, Near gayatri school, Near gayatri school, New pushpvatika colony, Bharatpur, PO: Bharatpur, DIST: Bharatpur, Rajasthan - - 321001 6417 7582 9332 VID : 9116 6688 1147 1521 1947 I",
+    "address": "Near gayatri school, Near gayatri school, New pushpvatika colony, Bharatpur, PO: Bharatpur, DIST: Bharatpur, Rajasthan - - 321001",
     "year_of_birth": "1981",
     "date_of_birth": "10/02/1981",
-    "gender": "Male"
+    "gender": "Male",
+    "city": "Bharatpur",
+    "district": "Bharatpur",
+    "state": "Sa Ehgr Ch Am \u0915\u0947 See Tiene \u0939\u0940 Ar"
   },
   "insurance": {
     "profession": "Farmer",
