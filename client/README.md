@@ -1,3 +1,18 @@
+# Client (Vite + React)
+
+## Local dev (with this repo’s API)
+
+The Vite dev server **proxies** `/settings`, `/dealers`, `/fill-dms`, etc. to **`http://127.0.0.1:8000`**. If the backend is not running, the terminal shows `http proxy error` / **`ECONNREFUSED 127.0.0.1:8000`**.
+
+1. In one terminal, from the **`backend`** folder (with venv activated):  
+   `python -m uvicorn app.main:app --reload --port 8000`
+2. In another, from **`client`**:  
+   `npm run dev`
+
+Or use **`daily_startup.bat`** at the project root to start both.
+
+---
+
 # React + TypeScript + Vite
 
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.

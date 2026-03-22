@@ -8,14 +8,32 @@ export function getBaseUrl(): string {
   return baseUrl;
 }
 
+const BACKEND_HINT =
+  "Start the API on port 8000 from the `backend` folder, then refresh: " +
+  "`python -m uvicorn app.main:app --reload --port 8000` " +
+  "(or run `daily_startup.bat` from the project root).";
+
 export async function apiFetch<T>(
   path: string,
   options: RequestInit = {}
 ): Promise<T> {
-  const res = await fetch(`${baseUrl}${path}`, {
-    ...options,
-    headers: { ...options.headers },
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${baseUrl}${path}`, {
+      ...options,
+      headers: { ...options.headers },
+    });
+  } catch (err) {
+    const name = err instanceof Error ? err.name : (err as { name?: string })?.name;
+    if (name === "AbortError") throw err;
+    const raw = err instanceof Error ? err.message : String(err);
+    const isUnreachable =
+      /ECONNREFUSED|Failed to fetch|NetworkError|Load failed|network error/i.test(raw);
+    if (isUnreachable) {
+      throw new Error(`Cannot connect to the backend. ${BACKEND_HINT}`);
+    }
+    throw err instanceof Error ? err : new Error(raw);
+  }
   if (!res.ok) {
     const text = await res.text();
     let detail: string | undefined;
