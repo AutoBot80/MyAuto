@@ -96,7 +96,7 @@ def submit_info(
     dms_relation_prefix = _str_or_none(customer.get("dms_relation_prefix"), 8)
     care_of = _str_or_none(customer.get("care_of"), 255)
     dms_contact_path = _str_or_none(customer.get("dms_contact_path"), 16) or "found"
-    if dms_contact_path.lower() not in ("found", "new_enquiry"):
+    if dms_contact_path.lower() not in ("found", "new_enquiry", "skip_find"):
         dms_contact_path = "found"
 
     frame_no = _str_or_none(vehicle.get("frame_no"), 64)

@@ -104,7 +104,8 @@ BULK_JOB_MAX_ATTEMPTS = int(os.getenv("BULK_JOB_MAX_ATTEMPTS", "3"))
 DMS_BASE_URL = (os.getenv("DMS_BASE_URL") or "").strip().rstrip("/")
 # ``dummy`` = repo dummy HTML (enquiry.html, …). ``real`` = Hero Connect / Siebel: Playwright fills contact + vehicle search via Open UI selectors (see ``siebel_dms_playwright``); optional ``DMS_SIEBEL_*`` env for iframes.
 DMS_MODE = (os.getenv("DMS_MODE") or "dummy").strip().lower()
-# Required when DMS_MODE is real: at least ``DMS_REAL_URL_CONTACT`` (Buyer/CoBuyer or main workspace).
+# Required when DMS_MODE is real: ``DMS_REAL_URL_CONTACT`` for normal find flow; for ``skip_find`` use
+# ``DMS_REAL_URL_ENQUIRY`` or ``DMS_REAL_URL_CONTACT`` plus ``DMS_REAL_URL_VEHICLE`` (see fill_dms_service).
 DMS_REAL_URL_CONTACT = (os.getenv("DMS_REAL_URL_CONTACT") or "").strip()
 DMS_REAL_URL_VEHICLES = (os.getenv("DMS_REAL_URL_VEHICLES") or "").strip()
 DMS_REAL_URL_PDI = (os.getenv("DMS_REAL_URL_PDI") or "").strip()

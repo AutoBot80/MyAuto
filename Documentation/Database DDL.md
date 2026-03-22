@@ -48,7 +48,7 @@ This document lists the current database tables and their columns. **Executable 
 | `care_of` | `varchar(255)` | YES |  | Care of / father–husband from **Aadhaar QR**; DMS Father/Husband line and Form 20 |
 | `dms_relation_prefix` | `varchar(8)` | YES |  | DMS enquiry line: `S/O` or `W/o` (details sheet / operator) |
 | `father_or_husband_name` | `varchar(255)` | YES |  | Legacy only; `form_dms_view` uses `care_of` first for Father/Husband |
-| `dms_contact_path` | `varchar(16)` | NO | `'found'` | Playwright branch: `found` = CRM contact exists; `new_enquiry` = save enquiry then find again |
+| `dms_contact_path` | `varchar(16)` | NO | `'found'` | Playwright branch: `found` / `new_enquiry` as before; `skip_find` = skip Find/mobile search; dummy: straight to enquiry form + Generate booking; real: `DMS_REAL_URL_ENQUIRY` or `DMS_REAL_URL_CONTACT`, customer form + Generate Booking, then vehicle URL |
 | `file_location` | `text` | YES |  | File location / sub-folder name where scans are placed |
 | `gender` | `varchar(8)` | YES |  | Gender from Aadhar QR (e.g. M, F) |
 | `date_of_birth` | `varchar(20)` | YES |  | Date of birth (dd/mm/yyyy); default date format for app and DB |

@@ -463,6 +463,205 @@ def _click_find_go_query(page: Page, *, timeout_ms: int, content_frame_selector:
     return False
 
 
+def _try_click_toolbar_by_name(
+    page: Page,
+    name_patterns: tuple[re.Pattern[str], ...],
+    *,
+    timeout_ms: int,
+    content_frame_selector: str | None,
+    log_tag: str,
+) -> bool:
+    """Click first visible button/link whose accessible name matches one of the patterns."""
+
+    def try_root(root) -> bool:
+        for pat in name_patterns:
+            for role in ("button", "link"):
+                try:
+                    loc = root.get_by_role(role, name=pat).first
+                    if loc.count() > 0 and loc.is_visible(timeout=900):
+                        loc.click(timeout=timeout_ms)
+                        logger.info("siebel_dms: clicked %s (%s)", log_tag, pat.pattern)
+                        return True
+                except Exception:
+                    continue
+        return False
+
+    fl = _resolve_work_locator(page, content_frame_selector)
+    if fl is not None and try_root(fl):
+        return True
+    for frame in _ordered_frames(page):
+        if try_root(frame):
+            return True
+    return False
+
+
+def _try_click_siebel_save(
+    page: Page, *, timeout_ms: int, content_frame_selector: str | None
+) -> bool:
+    return _try_click_toolbar_by_name(
+        page,
+        (
+            re.compile(r"^save$", re.I),
+            re.compile(r"save\s+record", re.I),
+            re.compile(r"^commit$", re.I),
+        ),
+        timeout_ms=timeout_ms,
+        content_frame_selector=content_frame_selector,
+        log_tag="Save",
+    )
+
+
+def _try_click_generate_booking(
+    page: Page, *, timeout_ms: int, content_frame_selector: str | None
+) -> bool:
+    return _try_click_toolbar_by_name(
+        page,
+        (
+            re.compile(r"generate\s+booking", re.I),
+            re.compile(r"generate\s+book", re.I),
+        ),
+        timeout_ms=timeout_ms,
+        content_frame_selector=content_frame_selector,
+        log_tag="Generate Booking",
+    )
+
+
+def _fill_siebel_enquiry_customer_applet(
+    page: Page,
+    *,
+    first: str,
+    last: str,
+    addr: str,
+    state: str,
+    pin: str,
+    landline: str,
+    father: str,
+    relation: str,
+    action_timeout_ms: int,
+    content_frame_selector: str | None,
+) -> None:
+    """Buyer/CoBuyer (or enquiry) form: names, address, state, PIN, landline, care-of fields."""
+    _try_fill_field(
+        page,
+        [
+            'input[aria-label*="First Name" i]',
+            'input[title*="First Name" i]',
+            'input[name*="FirstName" i]',
+        ],
+        first,
+        timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+    )
+    _try_fill_field(
+        page,
+        [
+            'input[aria-label*="Last Name" i]',
+            'input[title*="Last Name" i]',
+            'input[name*="LastName" i]',
+        ],
+        last,
+        timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+    )
+    _try_fill_field(
+        page,
+        [
+            'input[aria-label*="Address" i]',
+            'textarea[aria-label*="Address" i]',
+            'input[aria-label*="Street" i]',
+        ],
+        addr[:120],
+        timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+    )
+    _try_select_option(
+        page,
+        [
+            'select[aria-label*="State" i]',
+            'select[title*="State" i]',
+            'select[name*="State" i]',
+        ],
+        state,
+        timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+    )
+    _try_fill_field(
+        page,
+        [
+            'input[aria-label*="Postal" i]',
+            'input[aria-label*="ZIP" i]',
+            'input[aria-label*="Pin" i]',
+            'input[aria-label*="PIN Code" i]',
+        ],
+        pin,
+        timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+    )
+    if landline:
+        _try_fill_field(
+            page,
+            [
+                'input[aria-label*="Work Phone" i]',
+                'input[aria-label*="Alternate" i]',
+                'input[aria-label*="Landline" i]',
+            ],
+            landline,
+            timeout_ms=action_timeout_ms,
+            content_frame_selector=content_frame_selector,
+        )
+    if father:
+        _try_fill_field(
+            page,
+            [
+                'input[aria-label*="Father" i]',
+                'input[aria-label*="Husband" i]',
+                'input[aria-label*="Parent" i]',
+            ],
+            father[:255],
+            timeout_ms=action_timeout_ms,
+            content_frame_selector=content_frame_selector,
+        )
+    if relation:
+        _try_select_option(
+            page,
+            [
+                'select[aria-label*="Relation" i]',
+                'select[aria-label*="S/O" i]',
+            ],
+            relation,
+            timeout_ms=action_timeout_ms,
+            content_frame_selector=content_frame_selector,
+        )
+
+
+def _try_fill_mobile_on_enquiry_form(
+    page: Page,
+    mobile: str,
+    *,
+    action_timeout_ms: int,
+    content_frame_selector: str | None,
+    mobile_aria_hints: list[str],
+) -> bool:
+    """Mobile on enquiry/customer applet (not Find); same selectors as global Find field."""
+    if not (mobile or "").strip():
+        return False
+    if _try_fill_field(
+        page,
+        _mobile_selectors(mobile_aria_hints),
+        mobile,
+        timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+    ):
+        return True
+    return _try_fill_mobile_semantic(
+        page,
+        mobile,
+        timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+        extra_hints=mobile_aria_hints,
+    )
+
+
 def _js_best_grid_row(frame: Frame) -> dict | None:
     """Return {texts: [...], len: n} for the widest plausible data row in the frame."""
     try:
@@ -553,10 +752,15 @@ def run_hero_siebel_dms_flow(
     nav_timeout_ms: int,
     content_frame_selector: str | None,
     mobile_aria_hints: list[str],
+    skip_contact_find: bool = False,
 ) -> dict:
     """
     Execute real Siebel DMS steps. Returns a result dict fragment:
     ``vehicle``, ``error``, ``dms_siebel_forms_filled`` (bool), ``dms_siebel_notes`` (list str).
+
+    ``skip_contact_find`` (``dms_contact_path`` = ``skip_find``): skip **Find / mobile search** only.
+    Opens ``DMS_REAL_URL_ENQUIRY`` or ``DMS_REAL_URL_CONTACT``, fills customer on the enquiry form
+    (including mobile), tries **Save** then **Generate Booking**, then continues to the vehicle list.
     """
     out: dict = {
         "vehicle": {},
@@ -591,145 +795,134 @@ def run_hero_siebel_dms_flow(
         logger.info("siebel_dms: %s", msg)
 
     try:
-        _goto(page, urls.contact, "contact", nav_timeout_ms=nav_timeout_ms)
-        page.wait_for_timeout(1200)
+        if not skip_contact_find:
+            _goto(page, urls.contact, "contact", nav_timeout_ms=nav_timeout_ms)
+            page.wait_for_timeout(1200)
 
-        if _try_prepare_find_contact_applet(
-            page,
-            timeout_ms=action_timeout_ms,
-            content_frame_selector=content_frame_selector,
-        ):
-            note("Find → Contact: object type selected so the mobile field is the Contact search field.")
-        page.wait_for_timeout(600)
-
-        filled_mobile = _try_fill_field(
-            page,
-            _mobile_selectors(mobile_aria_hints),
-            mobile,
-            timeout_ms=action_timeout_ms,
-            content_frame_selector=content_frame_selector,
-        )
-        if not filled_mobile:
-            filled_mobile = _try_fill_mobile_semantic(
+            if _try_prepare_find_contact_applet(
                 page,
+                timeout_ms=action_timeout_ms,
+                content_frame_selector=content_frame_selector,
+            ):
+                note("Find → Contact: object type selected so the mobile field is the Contact search field.")
+            page.wait_for_timeout(600)
+
+            filled_mobile = _try_fill_field(
+                page,
+                _mobile_selectors(mobile_aria_hints),
                 mobile,
                 timeout_ms=action_timeout_ms,
                 content_frame_selector=content_frame_selector,
-                extra_hints=mobile_aria_hints,
             )
-        if not filled_mobile:
-            out["error"] = (
-                "Siebel: could not find a mobile/cellular phone input on the contact view. "
-                "Open the Find pane (right side), set object type to Contact if needed, "
-                "then set DMS_SIEBEL_CONTENT_FRAME_SELECTOR to the iframe that contains that panel, "
-                "or add DMS_SIEBEL_MOBILE_ARIA_HINTS (comma-separated substrings matching the field label)."
-            )
-            out["dms_milestones"] = _sort_milestone_labels(out["dms_milestones"])
-            return out
+            if not filled_mobile:
+                filled_mobile = _try_fill_mobile_semantic(
+                    page,
+                    mobile,
+                    timeout_ms=action_timeout_ms,
+                    content_frame_selector=content_frame_selector,
+                    extra_hints=mobile_aria_hints,
+                )
+            if not filled_mobile:
+                out["error"] = (
+                    "Siebel: could not find a mobile/cellular phone input on the contact view. "
+                    "Open the Find pane (right side), set object type to Contact if needed, "
+                    "then set DMS_SIEBEL_CONTENT_FRAME_SELECTOR to the iframe that contains that panel, "
+                    "or add DMS_SIEBEL_MOBILE_ARIA_HINTS (comma-separated substrings matching the field label)."
+                )
+                out["dms_milestones"] = _sort_milestone_labels(out["dms_milestones"])
+                return out
 
-        ms_done("Customer found")
+            ms_done("Customer found")
 
-        _try_fill_field(
-            page,
-            [
-                'input[aria-label*="First Name" i]',
-                'input[title*="First Name" i]',
-                'input[name*="FirstName" i]',
-            ],
-            first,
-            timeout_ms=action_timeout_ms,
-            content_frame_selector=content_frame_selector,
-        )
-        _try_fill_field(
-            page,
-            [
-                'input[aria-label*="Last Name" i]',
-                'input[title*="Last Name" i]',
-                'input[name*="LastName" i]',
-            ],
-            last,
-            timeout_ms=action_timeout_ms,
-            content_frame_selector=content_frame_selector,
-        )
-        _try_fill_field(
-            page,
-            [
-                'input[aria-label*="Address" i]',
-                'textarea[aria-label*="Address" i]',
-                'input[aria-label*="Street" i]',
-            ],
-            addr[:120],
-            timeout_ms=action_timeout_ms,
-            content_frame_selector=content_frame_selector,
-        )
-        _try_select_option(
-            page,
-            [
-                'select[aria-label*="State" i]',
-                'select[title*="State" i]',
-                'select[name*="State" i]',
-            ],
-            state,
-            timeout_ms=action_timeout_ms,
-            content_frame_selector=content_frame_selector,
-        )
-        _try_fill_field(
-            page,
-            [
-                'input[aria-label*="Postal" i]',
-                'input[aria-label*="ZIP" i]',
-                'input[aria-label*="Pin" i]',
-                'input[aria-label*="PIN Code" i]',
-            ],
-            pin,
-            timeout_ms=action_timeout_ms,
-            content_frame_selector=content_frame_selector,
-        )
-        if landline:
-            _try_fill_field(
+            _fill_siebel_enquiry_customer_applet(
                 page,
-                [
-                    'input[aria-label*="Work Phone" i]',
-                    'input[aria-label*="Alternate" i]',
-                    'input[aria-label*="Landline" i]',
-                ],
-                landline,
-                timeout_ms=action_timeout_ms,
-                content_frame_selector=content_frame_selector,
-            )
-        if father:
-            _try_fill_field(
-                page,
-                [
-                    'input[aria-label*="Father" i]',
-                    'input[aria-label*="Husband" i]',
-                    'input[aria-label*="Parent" i]',
-                ],
-                father[:255],
-                timeout_ms=action_timeout_ms,
-                content_frame_selector=content_frame_selector,
-            )
-        if relation:
-            _try_select_option(
-                page,
-                [
-                    'select[aria-label*="Relation" i]',
-                    'select[aria-label*="S/O" i]',
-                ],
-                relation,
-                timeout_ms=action_timeout_ms,
+                first=first,
+                last=last,
+                addr=addr,
+                state=state,
+                pin=pin,
+                landline=landline,
+                father=father,
+                relation=relation,
+                action_timeout_ms=action_timeout_ms,
                 content_frame_selector=content_frame_selector,
             )
 
-        if (father or relation):
-            ms_done("Care of filled")
+            if (father or relation):
+                ms_done("Care of filled")
 
-        if _click_find_go_query(page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector):
-            note("Clicked Find/Go on contact view after filling fields.")
+            if _click_find_go_query(page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector):
+                note("Clicked Find/Go on contact view after filling fields.")
+            else:
+                note("No Find/Go control clicked on contact view (fields may still persist).")
+
+            page.wait_for_timeout(1500)
         else:
-            note("No Find/Go control clicked on contact view (fields may still persist).")
+            enquiry_url = (urls.enquiry or "").strip() or (urls.contact or "").strip()
+            if not enquiry_url:
+                out["error"] = (
+                    "Siebel skip_find: set DMS_REAL_URL_ENQUIRY or DMS_REAL_URL_CONTACT to the "
+                    "enquiry view (e.g. Buyer/CoBuyer My Enquiries) so the customer can be added and "
+                    "Generate Booking can run before vehicle search."
+                )
+                out["dms_milestones"] = _sort_milestone_labels(out["dms_milestones"])
+                return out
+            _goto(page, enquiry_url, "enquiry_or_contact", nav_timeout_ms=nav_timeout_ms)
+            page.wait_for_timeout(1400)
+            note(
+                "skip_find: opening enquiry view — fill customer on form (no Find/mobile search), "
+                "then Save / Generate Booking before vehicle list."
+            )
 
-        page.wait_for_timeout(1500)
+            form_mobile_ok = _try_fill_mobile_on_enquiry_form(
+                page,
+                mobile,
+                action_timeout_ms=action_timeout_ms,
+                content_frame_selector=content_frame_selector,
+                mobile_aria_hints=mobile_aria_hints,
+            )
+            if not form_mobile_ok:
+                out["error"] = (
+                    "Siebel skip_find: could not fill mobile on the enquiry/customer form "
+                    "(or Mobile Phone # is missing in form_dms_view). "
+                    "Set DMS_SIEBEL_CONTENT_FRAME_SELECTOR / DMS_SIEBEL_MOBILE_ARIA_HINTS if needed."
+                )
+                out["dms_milestones"] = _sort_milestone_labels(out["dms_milestones"])
+                return out
+
+            _fill_siebel_enquiry_customer_applet(
+                page,
+                first=first,
+                last=last,
+                addr=addr,
+                state=state,
+                pin=pin,
+                landline=landline,
+                father=father,
+                relation=relation,
+                action_timeout_ms=action_timeout_ms,
+                content_frame_selector=content_frame_selector,
+            )
+
+            if (father or relation):
+                ms_done("Care of filled")
+
+            if _try_click_siebel_save(page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector):
+                note("Clicked Save before Generate Booking.")
+            else:
+                note("Save not clicked (optional); attempting Generate Booking.")
+
+            page.wait_for_timeout(600)
+
+            if _try_click_generate_booking(
+                page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
+            ):
+                note("Clicked Generate Booking.")
+                ms_done("Enquiry created")
+            else:
+                note("Generate Booking not found or not visible; continuing to vehicle list.")
+
+            page.wait_for_timeout(2000)
 
         vehicle_url = (urls.vehicle or "").strip()
         if not vehicle_url:

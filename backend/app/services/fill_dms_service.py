@@ -800,7 +800,7 @@ def _build_dms_fill_values(customer_id: int | None, vehicle_id: int | None, subf
     relation_raw = row.get("Relation (S/O or W/o)")
     relation_prefix = _normalize_dms_relation_prefix(relation_raw) if _clean_text(relation_raw) else ""
     contact_path = (_clean_text(row.get("DMS Contact Path")) or "found").lower()
-    if contact_path not in ("found", "new_enquiry"):
+    if contact_path not in ("found", "new_enquiry", "skip_find"):
         contact_path = "found"
     finance_required = (_clean_text(row.get("Finance Required")) or "N").upper()
     if finance_required not in ("Y", "N"):
@@ -1795,12 +1795,26 @@ def _run_fill_dms_real_siebel_playwright(
     Hero Connect / Siebel Open UI: fill contact (Buyer/CoBuyer), vehicle search, scrape list row;
     then open optional configured views. Writes ``DMS_Form_Values`` trace; no dummy ``/downloads/*.pdf``.
     """
-    if not DMS_REAL_URL_CONTACT:
+    skip_contact = (dms_values.get("dms_contact_path") or "").strip().lower() == "skip_find"
+    if not DMS_REAL_URL_CONTACT and not skip_contact:
         result["error"] = (
             "DMS_MODE is real/siebel but DMS_REAL_URL_CONTACT is not set. "
             "Set the full GotoView URL (e.g. Buyer/CoBuyer) in backend/.env."
         )
         return
+    if skip_contact:
+        if not ((DMS_REAL_URL_ENQUIRY or "").strip() or (DMS_REAL_URL_CONTACT or "").strip()):
+            result["error"] = (
+                "DMS Contact Path is skip_find: set DMS_REAL_URL_ENQUIRY or DMS_REAL_URL_CONTACT "
+                "to the enquiry view (Buyer/CoBuyer / My Enquiries) so customer + Generate Booking run before vehicles."
+            )
+            return
+        if not (DMS_REAL_URL_VEHICLE or "").strip():
+            result["error"] = (
+                "DMS Contact Path is skip_find but DMS_REAL_URL_VEHICLE is not set. "
+                "Set the Auto Vehicle List GotoView URL for key/chassis/engine search after enquiry."
+            )
+            return
 
     mobile_phone = dms_values["mobile_phone"]
     landline = dms_values.get("landline") or ""
@@ -1851,6 +1865,7 @@ def _run_fill_dms_real_siebel_playwright(
         nav_timeout_ms=DMS_SIEBEL_NAV_TIMEOUT_MS,
         content_frame_selector=frame_sel,
         mobile_aria_hints=list(DMS_SIEBEL_MOBILE_ARIA_HINTS),
+        skip_contact_find=skip_contact,
     )
 
     result["vehicle"] = frag.get("vehicle") or {}
@@ -1911,23 +1926,24 @@ def _run_fill_dms_dummy_playwright(
 
     goto("enquiry.html")
 
-    page.fill("#dms-contact-finder-mobile", mobile_phone)
-    if contact_path == "new_enquiry":
-        page.evaluate("() => { sessionStorage.setItem('dummy_dms_expect', 'new'); }")
-    else:
-        page.evaluate("() => { sessionStorage.removeItem('dummy_dms_expect'); }")
-    page.click("#dms-contact-finder-go")
-    page.wait_for_timeout(200)
-    _dms_milestone(result, "Customer found")
-
-    if contact_path == "new_enquiry":
-        _fill_playwright_enquiry_contact(page, dms_values)
-        page.click("#dms-save-enquiry-quiet")
-        page.wait_for_timeout(200)
+    if contact_path != "skip_find":
         page.fill("#dms-contact-finder-mobile", mobile_phone)
-        page.evaluate("() => { sessionStorage.removeItem('dummy_dms_expect'); }")
+        if contact_path == "new_enquiry":
+            page.evaluate("() => { sessionStorage.setItem('dummy_dms_expect', 'new'); }")
+        else:
+            page.evaluate("() => { sessionStorage.removeItem('dummy_dms_expect'); }")
         page.click("#dms-contact-finder-go")
         page.wait_for_timeout(200)
+        _dms_milestone(result, "Customer found")
+
+        if contact_path == "new_enquiry":
+            _fill_playwright_enquiry_contact(page, dms_values)
+            page.click("#dms-save-enquiry-quiet")
+            page.wait_for_timeout(200)
+            page.fill("#dms-contact-finder-mobile", mobile_phone)
+            page.evaluate("() => { sessionStorage.removeItem('dummy_dms_expect'); }")
+            page.click("#dms-contact-finder-go")
+            page.wait_for_timeout(200)
 
     _fill_playwright_enquiry_contact(page, dms_values)
     _apply_playwright_enquiry_relation_finance(page, dms_values)
