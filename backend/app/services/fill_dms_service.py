@@ -21,11 +21,19 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 
 from app.config import (
     DMS_PLAYWRIGHT_HEADED,
+    DMS_REAL_URL_CONTACT,
+    DMS_REAL_URL_ENQUIRY,
+    DMS_REAL_URL_LINE_ITEMS,
+    DMS_REAL_URL_PDI,
+    DMS_REAL_URL_REPORTS,
+    DMS_REAL_URL_VEHICLE,
+    DMS_REAL_URL_VEHICLES,
     INSURANCE_ACTION_TIMEOUT_MS,
     INSURANCE_LOGIN_WAIT_MS,
     INSURANCE_POLICY_FILL_TIMEOUT_MS,
     OCR_OUTPUT_DIR,
     PLAYWRIGHT_KEEP_OPEN,
+    dms_automation_is_real_siebel,
 )
 from app.repositories import form_dms as form_dms_repo
 from app.repositories import form_vahan as form_vahan_repo
@@ -1662,6 +1670,269 @@ def update_vehicle_master_from_dms(vehicle_id: int, scraped: dict) -> None:
         conn.close()
 
 
+def _run_fill_dms_real_siebel_playwright(
+    page,
+    dms_values: dict,
+    effective_subfolder: str,
+    ocr_dir: Path,
+    customer_id: int | None,
+    vehicle_id: int | None,
+    result: dict,
+) -> None:
+    """
+    Hero Connect / Siebel: open each configured absolute URL in order.
+    Writes ``DMS_Form_Values`` trace from DB; does **not** use dummy ``#dms-*`` controls or ``/downloads/*.pdf``.
+    """
+    if not DMS_REAL_URL_CONTACT:
+        result["error"] = (
+            "DMS_MODE is real/siebel but DMS_REAL_URL_CONTACT is not set. "
+            "Set the full GotoView URL (e.g. Buyer/CoBuyer) in backend/.env."
+        )
+        return
+
+    page.set_default_timeout(30_000)
+
+    mobile_phone = dms_values["mobile_phone"]
+    landline = dms_values.get("landline") or ""
+    addr = dms_values["address_line_1"]
+    state = dms_values["state"]
+    pin = dms_values["pin_code"]
+    key_partial = dms_values["key_partial"]
+    frame_partial = dms_values["frame_partial"]
+    engine_partial = dms_values["engine_partial"]
+
+    def goto_abs(url: str, label: str) -> None:
+        u = (url or "").strip()
+        if not u:
+            return
+        logger.info("fill_dms_service: real DMS navigate %s -> %s", label, u[:160])
+        page.goto(u, wait_until="domcontentloaded", timeout=60_000)
+
+    goto_abs(DMS_REAL_URL_CONTACT, "contact")
+
+    _write_dms_form_values(
+        ocr_output_dir=ocr_dir,
+        subfolder=effective_subfolder,
+        customer_id=customer_id,
+        vehicle_id=vehicle_id,
+        customer_name=dms_values["customer_name"],
+        mobile_number=mobile_phone,
+        alt_phone_num=landline,
+        address=addr,
+        state=state,
+        pin_code=pin,
+        key_no=key_partial,
+        frame_no=frame_partial,
+        engine_no=engine_partial,
+        relation_prefix=dms_values.get("relation_prefix") or "",
+        father_husband_name=dms_values.get("father_husband_name") or "",
+        customer_budget=DMS_DUMMY_ENQUIRY_BUDGET,
+        finance_required=dms_values.get("finance_required") or "",
+        financier_name=dms_values.get("financier_name") or "",
+        dms_contact_path=dms_values.get("dms_contact_path") or "",
+    )
+
+    for label, url in (
+        ("vehicles", DMS_REAL_URL_VEHICLES),
+        ("pdi", DMS_REAL_URL_PDI),
+        ("vehicle", DMS_REAL_URL_VEHICLE),
+        ("enquiry", DMS_REAL_URL_ENQUIRY),
+        ("line_items", DMS_REAL_URL_LINE_ITEMS),
+        ("reports", DMS_REAL_URL_REPORTS),
+    ):
+        goto_abs(url, label)
+
+    result["dms_automation_mode"] = "real"
+    result["dms_real_note"] = (
+        "Real Siebel mode: navigated configured URLs only; dummy HTML fills and /downloads PDFs are skipped. "
+        "Add Siebel selectors for field entry and scraping in a follow-up."
+    )
+    logger.info("fill_dms_service: real DMS navigation sequence complete")
+
+
+def _run_fill_dms_dummy_playwright(
+    page,
+    base: str,
+    dms_values: dict,
+    effective_subfolder: str,
+    subfolder_path: Path,
+    ocr_dir: Path,
+    customer_id: int | None,
+    vehicle_id: int | None,
+    result: dict,
+) -> None:
+    """Repo dummy DMS HTML: enquiry → vehicles → PDI → vehicle scrape → line items → PDFs."""
+    page.set_default_timeout(12_000)
+
+    mobile_phone = dms_values["mobile_phone"]
+    landline = dms_values.get("landline") or ""
+    addr = dms_values["address_line_1"]
+    state = dms_values["state"]
+    pin = dms_values["pin_code"]
+    key_partial = dms_values["key_partial"]
+    frame_partial = dms_values["frame_partial"]
+    engine_partial = dms_values["engine_partial"]
+    contact_path = (dms_values.get("dms_contact_path") or "found").strip().lower()
+
+    def goto(path: str) -> None:
+        page.goto(f"{base}/{path}", wait_until="domcontentloaded", timeout=20000)
+
+    goto("enquiry.html")
+
+    page.fill("#dms-contact-finder-mobile", mobile_phone)
+    if contact_path == "new_enquiry":
+        page.evaluate("() => { sessionStorage.setItem('dummy_dms_expect', 'new'); }")
+    else:
+        page.evaluate("() => { sessionStorage.removeItem('dummy_dms_expect'); }")
+    page.click("#dms-contact-finder-go")
+    page.wait_for_timeout(200)
+
+    if contact_path == "new_enquiry":
+        _fill_playwright_enquiry_contact(page, dms_values)
+        page.click("#dms-save-enquiry-quiet")
+        page.wait_for_timeout(200)
+        page.fill("#dms-contact-finder-mobile", mobile_phone)
+        page.evaluate("() => { sessionStorage.removeItem('dummy_dms_expect'); }")
+        page.click("#dms-contact-finder-go")
+        page.wait_for_timeout(200)
+
+    _fill_playwright_enquiry_contact(page, dms_values)
+    _apply_playwright_enquiry_relation_finance(page, dms_values)
+    page.fill("#dms-customer-budget", DMS_DUMMY_ENQUIRY_BUDGET)
+    try:
+        page.select_option("#dms-booking-order-type", value="Regular")
+    except Exception:
+        try:
+            page.select_option("#dms-booking-order-type", label="Regular")
+        except Exception:
+            pass
+    page.click("#dms-generate-booking")
+    page.wait_for_timeout(200)
+
+    goto("vehicles.html")
+    transit = page.locator("#dms-in-transit-panel")
+    try:
+        if transit.count() > 0 and transit.first.is_visible():
+            recv = page.locator("#dms-receive-vehicle")
+            if recv.count() > 0 and recv.first.is_visible():
+                recv.first.click()
+                page.wait_for_timeout(200)
+    except Exception:
+        pass
+    try:
+        pre = page.locator("#dms-precheck-complete")
+        if pre.count() > 0 and pre.first.is_visible():
+            pre.first.click()
+            page.wait_for_timeout(200)
+    except Exception:
+        pass
+
+    goto("pdi.html")
+    try:
+        pdi_btn = page.locator("#dms-pdi-complete")
+        if pdi_btn.count() > 0 and pdi_btn.first.is_visible():
+            pdi_btn.first.click()
+            page.wait_for_timeout(200)
+    except Exception:
+        pass
+
+    goto("vehicle.html")
+    _write_dms_form_values(
+        ocr_output_dir=ocr_dir,
+        subfolder=effective_subfolder,
+        customer_id=customer_id,
+        vehicle_id=vehicle_id,
+        customer_name=dms_values["customer_name"],
+        mobile_number=mobile_phone,
+        alt_phone_num=landline,
+        address=addr,
+        state=state,
+        pin_code=pin,
+        key_no=key_partial,
+        frame_no=frame_partial,
+        engine_no=engine_partial,
+        relation_prefix=dms_values.get("relation_prefix") or "",
+        father_husband_name=dms_values.get("father_husband_name") or "",
+        customer_budget=DMS_DUMMY_ENQUIRY_BUDGET,
+        finance_required=dms_values.get("finance_required") or "",
+        financier_name=dms_values.get("financier_name") or "",
+        dms_contact_path=dms_values.get("dms_contact_path") or "",
+    )
+    page.fill("#dms-vehicle-key", key_partial)
+    page.fill("#dms-vehicle-frame", frame_partial)
+    page.fill("#dms-vehicle-engine", engine_partial)
+    page.click("#dms-vehicle-search")
+    page.wait_for_timeout(150)
+
+    try:
+        result["vehicle"] = _scrape_dms_vehicle_search_row(page)
+    except Exception as scrape_exc:
+        logger.warning("fill_dms_service: vehicle table scrape failed: %s", scrape_exc)
+        result["vehicle"] = {}
+
+    logger.info("fill_dms_service: run_fill_dms_only scraped vehicle=%s", result.get("vehicle"))
+    if vehicle_id and result.get("vehicle"):
+        try:
+            update_vehicle_master_from_dms(vehicle_id, result.get("vehicle") or {})
+        except Exception as exc:
+            logger.warning("fill_dms_service: vehicle_master update failed vehicle_id=%s: %s", vehicle_id, exc)
+
+    scraped = result.get("vehicle") or {}
+    order_val = (scraped.get("vehicle_price") or scraped.get("ex_showroom_price") or "").strip()
+
+    goto("enquiry.html")
+    try:
+        if scraped.get("frame_num"):
+            page.evaluate(
+                "(frame) => sessionStorage.setItem('dummy_dms_last_frame', frame)",
+                scraped.get("frame_num") or "",
+            )
+        alloc = page.locator("#dms-allocate-vehicle")
+        if alloc.count() > 0 and alloc.first.is_visible():
+            alloc.first.click()
+            page.wait_for_timeout(200)
+    except Exception:
+        pass
+
+    goto("line-items.html")
+    if order_val:
+        try:
+            page.fill("#dms-order-value", order_val)
+        except Exception:
+            pass
+    fin_req = (dms_values.get("finance_required") or "N").strip().upper()
+    if fin_req == "Y":
+        try:
+            page.select_option("#dms-line-finance-required", value="Y")
+        except Exception:
+            pass
+        fin_name = dms_values.get("financier_name") or ""
+        if fin_name:
+            try:
+                page.fill("#dms-line-financer", fin_name[:255])
+            except Exception:
+                pass
+
+    goto("reports.html")
+    path21 = subfolder_path / "form21.pdf"
+    path22 = subfolder_path / "form22.pdf"
+    path_invoice = subfolder_path / "invoice_details.pdf"
+    for url_suffix, path, name in [
+        ("form21.pdf", path21, "form21.pdf"),
+        ("form22.pdf", path22, "form22.pdf"),
+        ("invoice_details.pdf", path_invoice, "invoice_details.pdf"),
+    ]:
+        try:
+            r = page.request.get(f"{base}/downloads/{url_suffix}", timeout=15000)
+            if r.ok:
+                path.write_bytes(r.body())
+                result["pdfs_saved"].append(name)
+        except Exception:
+            pass
+
+    result["dms_automation_mode"] = "dummy"
+
+
 def run_fill_dms_only(
     dms_base_url: str,
     subfolder: str,
@@ -1678,6 +1949,8 @@ def run_fill_dms_only(
     Run DMS steps: enquiry (contact find or new-enquiry path, S/O or W/o, booking budget),
     vehicles receive/precheck, PDI, vehicle search + scrape (Order Value / ex-showroom → vehicle_price),
     enquiry allocate, invoicing line fields (no Create Invoice), then Form 21/22 + invoice sheet PDFs.
+    When ``DMS_MODE=real`` (see ``backend/.env``), navigates configured Siebel absolute URLs instead of dummy HTML.
+
     Separate Playwright session. Returns vehicle, pdfs_saved, error.
     """
     result: dict = {"vehicle": {}, "pdfs_saved": [], "error": None}
@@ -1695,8 +1968,13 @@ def run_fill_dms_only(
     subfolder_path.mkdir(parents=True, exist_ok=True)
 
     try:
-        logger.info("fill_dms_service: run_fill_dms_only starting dms=%s", dms_base_url[:50])
-        page, open_error = _get_or_open_site_page(dms_base_url, "DMS")
+        mode = "real" if dms_automation_is_real_siebel() else "dummy"
+        logger.info("fill_dms_service: run_fill_dms_only starting mode=%s dms=%s", mode, dms_base_url[:50])
+        page, open_error = _get_or_open_site_page(
+            dms_base_url,
+            "DMS",
+            require_login_on_open=not dms_automation_is_real_siebel(),
+        )
         if page is None:
             result["error"] = open_error
             return result
@@ -1707,174 +1985,28 @@ def run_fill_dms_only(
             result["error"] = "Please click Create Invoice manually in DMS, then press Fill DMS again."
             return result
 
-        base = dms_base_url.rstrip("/")
-        page.set_default_timeout(12_000)
-
-        mobile_phone = dms_values["mobile_phone"]
-        landline = dms_values.get("landline") or ""
-        addr = dms_values["address_line_1"]
-        state = dms_values["state"]
-        pin = dms_values["pin_code"]
-        key_partial = dms_values["key_partial"]
-        frame_partial = dms_values["frame_partial"]
-        engine_partial = dms_values["engine_partial"]
-        contact_path = (dms_values.get("dms_contact_path") or "found").strip().lower()
-
-        def goto(path: str) -> None:
-            page.goto(f"{base}/{path}", wait_until="domcontentloaded", timeout=20000)
-
-        goto("enquiry.html")
-
-        page.fill("#dms-contact-finder-mobile", mobile_phone)
-        if contact_path == "new_enquiry":
-            page.evaluate("() => { sessionStorage.setItem('dummy_dms_expect', 'new'); }")
+        if dms_automation_is_real_siebel():
+            _run_fill_dms_real_siebel_playwright(
+                page,
+                dms_values,
+                effective_subfolder,
+                ocr_dir,
+                customer_id,
+                vehicle_id,
+                result,
+            )
         else:
-            page.evaluate("() => { sessionStorage.removeItem('dummy_dms_expect'); }")
-        page.click("#dms-contact-finder-go")
-        page.wait_for_timeout(200)
-
-        if contact_path == "new_enquiry":
-            _fill_playwright_enquiry_contact(page, dms_values)
-            page.click("#dms-save-enquiry-quiet")
-            page.wait_for_timeout(200)
-            page.fill("#dms-contact-finder-mobile", mobile_phone)
-            page.evaluate("() => { sessionStorage.removeItem('dummy_dms_expect'); }")
-            page.click("#dms-contact-finder-go")
-            page.wait_for_timeout(200)
-
-        _fill_playwright_enquiry_contact(page, dms_values)
-        _apply_playwright_enquiry_relation_finance(page, dms_values)
-        page.fill("#dms-customer-budget", DMS_DUMMY_ENQUIRY_BUDGET)
-        try:
-            page.select_option("#dms-booking-order-type", value="Regular")
-        except Exception:
-            try:
-                page.select_option("#dms-booking-order-type", label="Regular")
-            except Exception:
-                pass
-        page.click("#dms-generate-booking")
-        page.wait_for_timeout(200)
-
-        goto("vehicles.html")
-        transit = page.locator("#dms-in-transit-panel")
-        try:
-            if transit.count() > 0 and transit.first.is_visible():
-                recv = page.locator("#dms-receive-vehicle")
-                if recv.count() > 0 and recv.first.is_visible():
-                    recv.first.click()
-                    page.wait_for_timeout(200)
-        except Exception:
-            pass
-        try:
-            pre = page.locator("#dms-precheck-complete")
-            if pre.count() > 0 and pre.first.is_visible():
-                pre.first.click()
-                page.wait_for_timeout(200)
-        except Exception:
-            pass
-
-        goto("pdi.html")
-        try:
-            pdi_btn = page.locator("#dms-pdi-complete")
-            if pdi_btn.count() > 0 and pdi_btn.first.is_visible():
-                pdi_btn.first.click()
-                page.wait_for_timeout(200)
-        except Exception:
-            pass
-
-        goto("vehicle.html")
-        _write_dms_form_values(
-            ocr_output_dir=ocr_dir,
-            subfolder=effective_subfolder,
-            customer_id=customer_id,
-            vehicle_id=vehicle_id,
-            customer_name=dms_values["customer_name"],
-            mobile_number=mobile_phone,
-            alt_phone_num=landline,
-            address=addr,
-            state=state,
-            pin_code=pin,
-            key_no=key_partial,
-            frame_no=frame_partial,
-            engine_no=engine_partial,
-            relation_prefix=dms_values.get("relation_prefix") or "",
-            father_husband_name=dms_values.get("father_husband_name") or "",
-            customer_budget=DMS_DUMMY_ENQUIRY_BUDGET,
-            finance_required=dms_values.get("finance_required") or "",
-            financier_name=dms_values.get("financier_name") or "",
-            dms_contact_path=dms_values.get("dms_contact_path") or "",
-        )
-        page.fill("#dms-vehicle-key", key_partial)
-        page.fill("#dms-vehicle-frame", frame_partial)
-        page.fill("#dms-vehicle-engine", engine_partial)
-        page.click("#dms-vehicle-search")
-        page.wait_for_timeout(150)
-
-        try:
-            result["vehicle"] = _scrape_dms_vehicle_search_row(page)
-        except Exception as scrape_exc:
-            logger.warning("fill_dms_service: vehicle table scrape failed: %s", scrape_exc)
-            result["vehicle"] = {}
-
-        logger.info("fill_dms_service: run_fill_dms_only scraped vehicle=%s", result.get("vehicle"))
-        if vehicle_id and result.get("vehicle"):
-            try:
-                update_vehicle_master_from_dms(vehicle_id, result.get("vehicle") or {})
-            except Exception as exc:
-                logger.warning("fill_dms_service: vehicle_master update failed vehicle_id=%s: %s", vehicle_id, exc)
-
-        scraped = result.get("vehicle") or {}
-        order_val = (scraped.get("vehicle_price") or scraped.get("ex_showroom_price") or "").strip()
-
-        goto("enquiry.html")
-        try:
-            if scraped.get("frame_num"):
-                page.evaluate(
-                    "(frame) => sessionStorage.setItem('dummy_dms_last_frame', frame)",
-                    scraped.get("frame_num") or "",
-                )
-            alloc = page.locator("#dms-allocate-vehicle")
-            if alloc.count() > 0 and alloc.first.is_visible():
-                alloc.first.click()
-                page.wait_for_timeout(200)
-        except Exception:
-            pass
-
-        goto("line-items.html")
-        if order_val:
-            try:
-                page.fill("#dms-order-value", order_val)
-            except Exception:
-                pass
-        fin_req = (dms_values.get("finance_required") or "N").strip().upper()
-        if fin_req == "Y":
-            try:
-                page.select_option("#dms-line-finance-required", value="Y")
-            except Exception:
-                pass
-            fin_name = dms_values.get("financier_name") or ""
-            if fin_name:
-                try:
-                    page.fill("#dms-line-financer", fin_name[:255])
-                except Exception:
-                    pass
-
-        goto("reports.html")
-        path21 = subfolder_path / "form21.pdf"
-        path22 = subfolder_path / "form22.pdf"
-        path_invoice = subfolder_path / "invoice_details.pdf"
-        for url_suffix, path, name in [
-            ("form21.pdf", path21, "form21.pdf"),
-            ("form22.pdf", path22, "form22.pdf"),
-            ("invoice_details.pdf", path_invoice, "invoice_details.pdf"),
-        ]:
-            try:
-                r = page.request.get(f"{base}/downloads/{url_suffix}", timeout=15000)
-                if r.ok:
-                    path.write_bytes(r.body())
-                    result["pdfs_saved"].append(name)
-            except Exception:
-                pass
+            _run_fill_dms_dummy_playwright(
+                page,
+                dms_base_url.rstrip("/"),
+                dms_values,
+                effective_subfolder,
+                subfolder_path,
+                ocr_dir,
+                customer_id,
+                vehicle_id,
+                result,
+            )
     except PlaywrightTimeout as e:
         result["error"] = f"Timeout: {e!s}"
         logger.warning("fill_dms_service: run_fill_dms_only PlaywrightTimeout %s", e)

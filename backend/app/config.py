@@ -102,6 +102,16 @@ BULK_JOB_MAX_ATTEMPTS = int(os.getenv("BULK_JOB_MAX_ATTEMPTS", "3"))
 # DMS fill (Playwright): base URL and login. Used when client calls POST /fill-dms.
 # DMS_BASE_URL / VAHAN_BASE_URL / INSURANCE_BASE_URL: required in .env (no in-code defaults); validated at app startup.
 DMS_BASE_URL = (os.getenv("DMS_BASE_URL") or "").strip().rstrip("/")
+# ``dummy`` = repo dummy HTML (enquiry.html, …). ``real`` = Hero Connect / Siebel: navigate full ``DMS_REAL_URL_*`` URLs only (no ``#dms-*`` fills yet).
+DMS_MODE = (os.getenv("DMS_MODE") or "dummy").strip().lower()
+# Required when DMS_MODE is real: at least ``DMS_REAL_URL_CONTACT`` (Buyer/CoBuyer or main workspace).
+DMS_REAL_URL_CONTACT = (os.getenv("DMS_REAL_URL_CONTACT") or "").strip()
+DMS_REAL_URL_VEHICLES = (os.getenv("DMS_REAL_URL_VEHICLES") or "").strip()
+DMS_REAL_URL_PDI = (os.getenv("DMS_REAL_URL_PDI") or "").strip()
+DMS_REAL_URL_VEHICLE = (os.getenv("DMS_REAL_URL_VEHICLE") or "").strip()
+DMS_REAL_URL_ENQUIRY = (os.getenv("DMS_REAL_URL_ENQUIRY") or "").strip()
+DMS_REAL_URL_LINE_ITEMS = (os.getenv("DMS_REAL_URL_LINE_ITEMS") or "").strip()
+DMS_REAL_URL_REPORTS = (os.getenv("DMS_REAL_URL_REPORTS") or "").strip()
 DMS_LOGIN_USER = os.getenv("DMS_LOGIN_USER", "demo")
 DMS_LOGIN_PASSWORD = os.getenv("DMS_LOGIN_PASSWORD", "demo")
 # Run browser visible (headed) so user sees DMS page and automation. Set to "false" for headless.
@@ -121,6 +131,12 @@ INSURANCE_LOGIN_WAIT_MS = int(os.getenv("INSURANCE_LOGIN_WAIT_MS", "600000"))
 INSURANCE_ACTION_TIMEOUT_MS = int(os.getenv("INSURANCE_ACTION_TIMEOUT_MS", "5500"))
 # Tighter timeout while filling the policy / insurance-details form (many sequential fields).
 INSURANCE_POLICY_FILL_TIMEOUT_MS = int(os.getenv("INSURANCE_POLICY_FILL_TIMEOUT_MS", "3200"))
+
+
+def dms_automation_is_real_siebel() -> bool:
+    """True when Fill DMS should use configured Siebel absolute URLs instead of dummy HTML paths."""
+    m = (DMS_MODE or "dummy").strip().lower()
+    return m in ("real", "siebel", "live", "production", "hero")
 
 
 def validate_external_site_urls() -> None:

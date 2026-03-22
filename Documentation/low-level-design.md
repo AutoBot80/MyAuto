@@ -58,7 +58,7 @@ backend/app/
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET | `/health` | Liveness. |
-| GET | `/settings/site-urls` | Returns `dms_base_url`, `vahan_base_url`, `insurance_base_url` from `backend/.env` (required at server startup; used by the client for Fill DMS and messaging; no in-code URL fallbacks). |
+| GET | `/settings/site-urls` | Returns `dms_base_url`, `dms_mode`, `dms_real_siebel`, `dms_real_contact_url_configured`, `vahan_base_url`, `insurance_base_url` from `backend/.env` (required at server startup; used by the client for Fill DMS and messaging; no in-code URL fallbacks). |
 | POST | `/uploads/scans` | Upload scans; enqueue to ai_reader_queue. |
 | POST | `/uploads/scans-v2` | Add Sales v2 upload; server runs `OcrService.process_uploaded_subfolder` in the same request and returns `extraction` (client does not call `process-all`). |
 | GET | `/ai-reader-queue` | List queue items (limit=200). |
@@ -80,7 +80,7 @@ backend/app/
 | GET | `/bulk-loads/folder/{folder_path}/list` | List files in a bulk result folder. |
 | GET | `/bulk-loads/file/{file_path}` | Download or preview a file from a bulk result folder. |
 | POST | `/fill-dms` | Full Fill DMS flow; reuses already open logged-in DMS/Vahan tabs when detectable, otherwise auto-opens Edge/Chrome and returns first-time-login guidance. |
-| POST | `/fill-dms/dms` | DMS only; reuses an already open logged-in DMS tab when detectable, otherwise auto-opens Edge/Chrome and asks operator to login first-time then retry. |
+| POST | `/fill-dms/dms` | DMS only; `DMS_MODE=dummy` runs static HTML under `DMS_BASE_URL`; `DMS_MODE=real` navigates `DMS_REAL_URL_*` Siebel absolute URLs (writes `DMS_Form_Values.txt`, no dummy `#dms-*` fills). With `real`, `require_login_on_open` is false on auto-open (CDP reuse recommended). |
 | GET | `/fill-dms/data-from-dms` | Get data from DMS.txt. |
 | GET | `/fill-dms/form20-status` | Form 20 template status. |
 | POST | `/fill-dms/print-form20` | Generate Form 20.pdf. |
@@ -224,3 +224,4 @@ See **Documentation/Database DDL.md** for full table structures. Summary:
 | 1.2 | Mar 2026 | — | Aadhaar front Textract/Tesseract fallback: gender from **yes/ MALE** (mis-OCR of **Sex / Male**) when QR is unavailable |
 | 1.3 | Mar 2026 | — | Aadhaar back / freeform address: **DIST** line with double-dash PIN separators; trailing **state + PIN** without **DIST**; **`Address:`** OCR block includes following **C/O** line |
 | 1.4 | Mar 2026 | — | Aadhaar OCR: gender from **DOB anchor** (skip word, next `/`, gender token); state/PIN from **comma segments + dash runs** before last 6-digit PIN |
+| 1.5 | Mar 2026 | — | DMS: ``DMS_MODE`` / ``DMS_REAL_URL_*`` for Hero Connect Siebel navigation branch; ``GET /settings/site-urls`` exposes mode flags |
