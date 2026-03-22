@@ -18,12 +18,29 @@ export async function apiFetch<T>(
   });
   if (!res.ok) {
     const text = await res.text();
-    let msg = text || `Request failed (${res.status})`;
+    let detail: string | undefined;
     try {
       const json = JSON.parse(text) as { detail?: string };
-      if (typeof json.detail === "string") msg = json.detail;
+      if (typeof json.detail === "string") detail = json.detail;
     } catch {
-      /* use msg as-is */
+      /* not JSON */
+    }
+
+    const gatewayOrTimeout = res.status === 502 || res.status === 503 || res.status === 504;
+    let msg: string;
+    if (detail) {
+      msg = detail;
+    } else if (gatewayOrTimeout) {
+      msg =
+        `Service unavailable (${res.status}). The browser or a proxy stopped waiting for the server. ` +
+        `Fill DMS / Playwright can take 1–3 minutes — increase dev-server or reverse-proxy timeouts, ` +
+        `confirm the Python API on port 8000 is running, then try again.`;
+    } else {
+      const trimmed = (text || "").trim();
+      msg =
+        trimmed.length > 0 && trimmed.length < 400 && !trimmed.startsWith("<")
+          ? trimmed
+          : `Request failed (${res.status})`;
     }
     throw new Error(msg);
   }
