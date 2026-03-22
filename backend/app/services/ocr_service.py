@@ -244,27 +244,6 @@ def _merge_qr_customer_into_existing(
     return out
 
 
-def _aadhar_back_ocr_text(image_bytes: bytes) -> str:
-    """Run Tesseract on Aadhaar back (printed address). PSM 6 suits uniform card blocks."""
-    if not image_bytes:
-        return ""
-    try:
-        import io
-
-        import pytesseract
-        from PIL import Image, ImageEnhance
-
-        from app.config import OCR_LANG, OCR_PREPROCESS
-
-        img = Image.open(io.BytesIO(image_bytes)).convert("RGB").convert("L")
-        if OCR_PREPROCESS:
-            img = ImageEnhance.Contrast(img).enhance(2.0)
-        lang = OCR_LANG if OCR_LANG else "eng"
-        return pytesseract.image_to_string(img, lang=lang, config="--psm 6") or ""
-    except Exception:
-        return ""
-
-
 def _normalize_aadhar_back_address_chunk(chunk: str) -> str:
     chunk = chunk.replace("\r\n", "\n")
     chunk = re.sub(r"[\|`]+", " ", chunk)
@@ -275,7 +254,7 @@ def _normalize_aadhar_back_address_chunk(chunk: str) -> str:
 def _parse_aadhar_back_address_from_ocr(ocr_text: str) -> dict[str, str]:
     """
     English (and noisy OCR) address on Aadhaar back. UIDAI layout uses ``Address:``;
-    Tesseract often merges lines — fall back to ``C/O:`` … through PIN / Aadhaar line.
+    OCR often merges lines — fall back to ``C/O:`` … through PIN / Aadhaar line.
     DOB/Gender are not printed on the back; use front scan or a higher-res QR decode.
     """
     out: dict[str, str] = {}
@@ -345,28 +324,18 @@ def _parse_aadhar_back_address_from_ocr(ocr_text: str) -> dict[str, str]:
 
 
 def _customer_from_aadhar_back_scan(image_bytes: bytes) -> dict[str, str]:
-    """UIDAI QR when readable; else (or in addition) printed English address via OCR."""
-    merged: dict[str, str] = {}
-    qr_part = _try_customer_from_aadhar_qr_bytes(image_bytes)
-    for k, v in qr_part.items():
-        if v and str(v).strip():
-            merged[k] = str(v).strip()
-    ocr_hints = _parse_aadhar_back_address_from_ocr(_aadhar_back_ocr_text(image_bytes))
-    for k in AADHAR_QR_CUSTOMER_KEYS:
-        v = ocr_hints.get(k)
-        if not v or not str(v).strip():
-            continue
-        cur = merged.get(k)
-        if cur is None or not str(cur).strip():
-            merged[k] = str(v).strip()
-    _rebuild_aadhar_address_from_parts(merged)
-    oa = (ocr_hints.get("address") or "").strip()
-    ma = (merged.get("address") or "").strip()
-    if oa and (not ma or len(oa) > len(ma) + 15):
-        merged["address"] = oa
-        if ocr_hints.get("pin_code") and not (merged.get("pin_code") and str(merged["pin_code"]).strip()):
-            merged["pin_code"] = str(ocr_hints["pin_code"]).strip()
-    return merged
+    """
+    Back image: **UIDAI QR only** here.
+
+    Printed English address uses **AWS Textract** in the upload pipeline and in ``Raw_OCR.txt``
+    (see ``_apply_aadhar_textract_fallbacks_from_raw_ocr_file``) — not repeated on every
+    ``get_extracted_details`` poll.
+    """
+    c = _try_customer_from_aadhar_qr_bytes(image_bytes)
+    if not c:
+        return {}
+    _rebuild_aadhar_address_from_parts(c)
+    return c
 
 
 def _aadhar_normalize_dob_triplet(day: int, month: int, year: int) -> str | None:
@@ -620,13 +589,17 @@ def _pipeline_merge_aadhar_customer(
     back_bytes: bytes | None,
     front_textract: dict | None,
     back_textract: dict | None,
-) -> tuple[dict[str, str], list[tuple[str, str]], str | None]:
+) -> tuple[dict[str, str], list[tuple[str, str]], str | None, dict[str, int]]:
     """
-    UIDAI QR from front and/or back first (``qr_seed``), then AWS Textract text on front for
-    DOB/gender/name gaps, then Textract (and finally Tesseract) on the back for address/state/PIN
-    when location fields are still weak.
+    UIDAI QR from front and/or back first (``qr_seed``), then **AWS Textract only** (no Tesseract)
+    on front/back for text when fields are still weak — same engine as the rest of scans-v2.
     """
     from app.services.textract_service import extract_text_from_bytes
+
+    timings: dict[str, int] = {
+        "aadhar_textract_front_ms": 0,
+        "aadhar_textract_back_ms": 0,
+    }
 
     def _ftext(d: dict | None) -> str:
         if not d or d.get("error"):
@@ -638,10 +611,12 @@ def _pipeline_merge_aadhar_customer(
 
     ft = front_textract
     if front_bytes and (not ft or ft.get("error") or not _ftext(ft)):
+        t_tx = time.perf_counter()
         try:
             ft = extract_text_from_bytes(front_bytes)
         except Exception:
             ft = {"error": "textract", "full_text": ""}
+        timings["aadhar_textract_front_ms"] += int((time.perf_counter() - t_tx) * 1000)
     front_txt = _ftext(ft)
     if front_txt:
         raw_parts.append(("Aadhar.jpg", front_txt))
@@ -655,21 +630,18 @@ def _pipeline_merge_aadhar_customer(
     bt = back_textract
     if back_bytes and not _aadhar_geo_ok(customer):
         if not bt or bt.get("error") or not _ftext(bt):
+            t_tx = time.perf_counter()
             try:
                 bt = extract_text_from_bytes(back_bytes)
             except Exception:
                 bt = {"error": "textract", "full_text": ""}
+            timings["aadhar_textract_back_ms"] += int((time.perf_counter() - t_tx) * 1000)
         back_txt = _ftext(bt)
         if back_txt:
             raw_parts.append(("Aadhar_back.jpg", back_txt))
             customer = _merge_aadhar_textract_fallback_dict(
                 customer, _parse_aadhar_back_address_from_ocr(back_txt)
             )
-
-    if back_bytes and not _aadhar_geo_ok(customer):
-        customer = _merge_aadhar_textract_fallback_dict(
-            customer, _parse_aadhar_back_address_from_ocr(_aadhar_back_ocr_text(back_bytes))
-        )
 
     note: str | None = None
     if not _aadhar_identity_ok(customer):
@@ -682,11 +654,37 @@ def _pipeline_merge_aadhar_customer(
         customer["aadhar_id"] = _aadhar_last4(customer["aadhar_id"]) or ""
     _default_gender_male_if_unread(customer)
     customer = enrich_customer_address_from_freeform(customer)
-    return customer, raw_parts, note
+    return customer, raw_parts, note, timings
+
+
+def _merge_granular_upload_process_timings(
+    section_timings_ms: dict[str, int],
+    *,
+    qr_bundle: dict[str, Any],
+    prefetch_job_ms: dict[str, int],
+    frag_a: dict[str, Any] | None,
+    frag_d: dict[str, Any] | None,
+) -> None:
+    """Populate per-process durations (prefetch job wall times + sync pipeline/FORMS times)."""
+    section_timings_ms["aadhar_qr_reader_ms"] = int(qr_bundle.get("aadhar_qr_reader_ms", 0))
+    pt = (frag_a or {}).get("process_timings") or {}
+    section_timings_ms["aadhar_textract_front_ms"] = int(prefetch_job_ms.get("aadhar_front", 0)) + int(
+        pt.get("aadhar_textract_front_ms", 0)
+    )
+    section_timings_ms["aadhar_textract_back_ms"] = int(prefetch_job_ms.get("aadhar_back", 0)) + int(
+        pt.get("aadhar_textract_back_ms", 0)
+    )
+    dsync = (
+        int((frag_d or {}).get("detail_sheet_textract_sync_ms", 0))
+        if frag_d and frag_d.get("ok")
+        else 0
+    )
+    section_timings_ms["detail_sheet_textract_ms"] = int(prefetch_job_ms.get("details_forms", 0)) + dsync
 
 
 def _local_aadhar_qr_only_bundle(subdir: Path) -> dict[str, Any]:
     """Fast local decode: UIDAI QR on Aadhar.jpg and Aadhar_back.jpg (runs in parallel with Textract prefetch)."""
+    t0 = time.perf_counter()
     out: dict[str, Any] = {"qr_customer": {}, "front_bytes": None, "back_bytes": None}
     ap = subdir / "Aadhar.jpg"
     bp = subdir / "Aadhar_back.jpg"
@@ -703,6 +701,7 @@ def _local_aadhar_qr_only_bundle(subdir: Path) -> dict[str, Any]:
     cf = _try_customer_from_aadhar_qr_bytes(fb) if fb else {}
     cb = _try_customer_from_aadhar_qr_bytes(bb) if bb else {}
     out["qr_customer"] = _merge_aadhar_front_back_qr_customer(cf, cb)
+    out["aadhar_qr_reader_ms"] = int((time.perf_counter() - t0) * 1000)
     return out
 
 
@@ -715,6 +714,7 @@ def _compile_details_sheet_fragment(
     Raster/PDF: Textract **AnalyzeDocument** FORMS+TABLES — right tool for printed form key-values.
     """
     fmt = _details_input_format(input_path)
+    detail_sheet_textract_sync_ms = 0
     if fmt == "docx":
         key_value_pairs, docx_full = _key_value_pairs_from_docx(input_path)
         if not key_value_pairs and not (docx_full or "").strip():
@@ -728,7 +728,9 @@ def _compile_details_sheet_fragment(
         if textract_forms_prefetch is not None:
             result = textract_forms_prefetch
         else:
+            t_df = time.perf_counter()
             result = extract_forms_from_bytes(input_path.read_bytes())
+            detail_sheet_textract_sync_ms = int((time.perf_counter() - t_df) * 1000)
         if result.get("error"):
             raise RuntimeError(str(result.get("error")))
     else:
@@ -764,6 +766,7 @@ def _compile_details_sheet_fragment(
         "details_customer": details_customer,
         "details_customer_name": details_customer_name,
         "full_text": result.get("full_text") or "",
+        "detail_sheet_textract_sync_ms": detail_sheet_textract_sync_ms,
     }
 
 
@@ -1051,12 +1054,14 @@ def _details_input_format(path: Path) -> str:
     return "unknown"
 
 
-def _parallel_textract_prefetch_upload_subfolder(subdir: Path) -> dict[str, dict]:
+def _parallel_textract_prefetch_upload_subfolder(subdir: Path) -> tuple[dict[str, dict], dict[str, int]]:
     """
     Run AWS Textract calls for all upload files concurrently to cut wall time on scans-v2.
     Keys: ``aadhar_front`` / ``aadhar_back`` (DetectDocumentText), ``details_forms``
     (**AnalyzeDocument** FORMS+TABLES for structured sales detail scans/PDFs), ``insurance``,
     ``financing``. ``.docx`` Details is not prefetched (parsed locally).
+
+    Returns ``(results_by_key, job_duration_ms_by_key)`` for logging and ``section_timings_ms``.
     """
     from concurrent.futures import ThreadPoolExecutor
 
@@ -1091,17 +1096,31 @@ def _parallel_textract_prefetch_upload_subfolder(subdir: Path) -> dict[str, dict
                 logger.warning("prefetch: could not read %s: %s", fname, e)
 
     out: dict[str, dict] = {}
+    job_ms: dict[str, int] = {}
     if not jobs:
-        return out
+        return out, job_ms
 
     timeout = max(30, OCR_UPLOAD_TEXTRACT_TIMEOUT_SEC)
     max_workers = min(5, len(jobs))
 
-    def _run(job: tuple[str, bytes, str]) -> tuple[str, dict]:
+    def _run(job: tuple[str, bytes, str]) -> tuple[str, dict, int]:
         key, blob, mode = job
-        if mode == "forms":
-            return key, extract_forms_from_bytes(blob)
-        return key, extract_text_from_bytes(blob)
+        t0 = time.perf_counter()
+        try:
+            if mode == "forms":
+                res = extract_forms_from_bytes(blob)
+            else:
+                res = extract_text_from_bytes(blob)
+        except Exception as e:
+            res = {
+                "error": str(e),
+                "full_text": "",
+                "key_value_pairs": [],
+                "blocks": [],
+                "raw_response": None,
+            }
+        elapsed_ms = int((time.perf_counter() - t0) * 1000)
+        return key, res, elapsed_ms
 
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
         keyed_futures = []
@@ -1109,8 +1128,9 @@ def _parallel_textract_prefetch_upload_subfolder(subdir: Path) -> dict[str, dict
             keyed_futures.append((job[0], ex.submit(_run, job)))
         for key, fut in keyed_futures:
             try:
-                k, res = fut.result(timeout=timeout)
+                k, res, elapsed_ms = fut.result(timeout=timeout)
                 out[k] = res
+                job_ms[k] = elapsed_ms
             except Exception as e:
                 logger.warning("prefetch Textract failed for %s: %s", key, e)
                 out[key] = {
@@ -1120,7 +1140,8 @@ def _parallel_textract_prefetch_upload_subfolder(subdir: Path) -> dict[str, dict
                     "blocks": [],
                     "raw_response": None,
                 }
-    return out
+                job_ms[key] = 0
+    return out, job_ms
 
 
 def _key_value_pairs_from_docx(doc_path: Path) -> tuple[list[dict[str, str]], str]:
@@ -1916,7 +1937,7 @@ class OcrService:
         qr_bundle: dict[str, Any],
         prefetch: dict[str, dict],
     ) -> dict[str, Any]:
-        customer, raw_parts, note = _pipeline_merge_aadhar_customer(
+        customer, raw_parts, note, process_timings = _pipeline_merge_aadhar_customer(
             qr_bundle.get("qr_customer") or {},
             qr_bundle.get("front_bytes"),
             qr_bundle.get("back_bytes"),
@@ -1928,6 +1949,7 @@ class OcrService:
             "customer": customer,
             "raw_parts": raw_parts,
             "extraction_note": note,
+            "process_timings": process_timings,
         }
 
     def _upload_fragment_details(
@@ -1968,12 +1990,13 @@ class OcrService:
         from app.config import OCR_UPLOAD_PARALLEL_TEXTRACT
 
         prefetch: dict[str, dict] = {}
+        prefetch_job_ms: dict[str, int] = {}
         t_pref = time.perf_counter()
         if OCR_UPLOAD_PARALLEL_TEXTRACT:
             with ThreadPoolExecutor(max_workers=2) as ex:
                 f_tex = ex.submit(_parallel_textract_prefetch_upload_subfolder, subdir)
                 f_qr = ex.submit(_local_aadhar_qr_only_bundle, subdir)
-                prefetch = f_tex.result()
+                prefetch, prefetch_job_ms = f_tex.result()
                 qr_bundle = f_qr.result()
             section_timings_ms["aws_textract_prefetch_parallel_local_qr_ms"] = int(
                 (time.perf_counter() - t_pref) * 1000
@@ -2008,6 +2031,23 @@ class OcrService:
                     frag_d = fb.result()
         section_timings_ms["parallel_aadhar_details_compile_ms"] = int(
             (time.perf_counter() - t_par) * 1000
+        )
+
+        _merge_granular_upload_process_timings(
+            section_timings_ms,
+            qr_bundle=qr_bundle,
+            prefetch_job_ms=prefetch_job_ms,
+            frag_a=frag_a,
+            frag_d=frag_d,
+        )
+        logger.info(
+            "ocr_upload_process_timings subfolder=%s aadhar_qr_reader_ms=%s aadhar_textract_front_ms=%s "
+            "aadhar_textract_back_ms=%s detail_sheet_textract_ms=%s",
+            subfolder,
+            section_timings_ms.get("aadhar_qr_reader_ms", 0),
+            section_timings_ms.get("aadhar_textract_front_ms", 0),
+            section_timings_ms.get("aadhar_textract_back_ms", 0),
+            section_timings_ms.get("detail_sheet_textract_ms", 0),
         )
 
         self._raw_ocr_parts = []
@@ -2288,21 +2328,37 @@ class OcrService:
             raw_bytes = input_path.read_bytes()
             back_path = input_path.parent / "Aadhar_back.jpg"
             back_bytes = back_path.read_bytes() if back_path.is_file() else None
+            t_qr = time.perf_counter()
             cf = _try_customer_from_aadhar_qr_bytes(raw_bytes)
             cb = _try_customer_from_aadhar_qr_bytes(back_bytes) if back_bytes else {}
             qr_seed = _merge_aadhar_front_back_qr_customer(cf, cb)
+            qr_reader_ms = int((time.perf_counter() - t_qr) * 1000)
 
             ft = front_textract_prefetch
             if ft is None:
+                t_ft = time.perf_counter()
                 try:
                     from app.services.textract_service import extract_text_from_bytes
 
                     ft = extract_text_from_bytes(raw_bytes)
                 except Exception:
                     ft = {"error": "textract", "full_text": ""}
+                front_textract_sync_ms = int((time.perf_counter() - t_ft) * 1000)
+            else:
+                front_textract_sync_ms = 0
 
-            piped, raw_parts, note = _pipeline_merge_aadhar_customer(
+            piped, raw_parts, note, pipe_timings = _pipeline_merge_aadhar_customer(
                 qr_seed, raw_bytes, back_bytes, ft, None
+            )
+            logger.info(
+                "ocr_queue_aadhar_process_timings subfolder=%s aadhar_qr_reader_ms=%s "
+                "aadhar_textract_front_prefetch_or_sync_ms=%s aadhar_textract_pipeline_front_ms=%s "
+                "aadhar_textract_pipeline_back_ms=%s",
+                subfolder,
+                qr_reader_ms,
+                front_textract_sync_ms,
+                pipe_timings.get("aadhar_textract_front_ms", 0),
+                pipe_timings.get("aadhar_textract_back_ms", 0),
             )
 
             if hasattr(self, "_raw_ocr_parts") and self._raw_ocr_parts is not None:

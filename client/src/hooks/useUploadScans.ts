@@ -7,11 +7,15 @@ function formatUploadExtractionTimings(extraction: { section_timings_ms?: Upload
   if (!t) return "";
   const parts: string[] = [];
   if (t.total_ms != null) parts.push(`total ${t.total_ms} ms`);
+  if (t.aadhar_qr_reader_ms != null) parts.push(`Aadhaar QR ${t.aadhar_qr_reader_ms} ms`);
+  if (t.aadhar_textract_front_ms != null) parts.push(`Aadhaar Textract front ${t.aadhar_textract_front_ms} ms`);
+  if (t.aadhar_textract_back_ms != null) parts.push(`Aadhaar Textract back ${t.aadhar_textract_back_ms} ms`);
+  if (t.detail_sheet_textract_ms != null) parts.push(`Detail sheet Textract ${t.detail_sheet_textract_ms} ms`);
   if (t.aws_textract_prefetch_parallel_local_qr_ms != null) {
-    parts.push(`AWS Textract + local QR ${t.aws_textract_prefetch_parallel_local_qr_ms} ms`);
+    parts.push(`phase1 Textract+QR wall ${t.aws_textract_prefetch_parallel_local_qr_ms} ms`);
   }
   if (t.local_aadhaar_qr_decode_ms != null) {
-    parts.push(`local Aadhaar QR ${t.local_aadhaar_qr_decode_ms} ms`);
+    parts.push(`phase1 QR only ${t.local_aadhaar_qr_decode_ms} ms`);
   }
   if (t.parallel_aadhar_details_compile_ms != null) {
     parts.push(`Aadhaar + Details compile ${t.parallel_aadhar_details_compile_ms} ms`);
