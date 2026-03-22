@@ -85,6 +85,13 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 # AWS Textract (optional: for better extraction on details/sales sheets).
 AWS_REGION = os.getenv("AWS_REGION", "ap-south-1")
+# Upload scans-v2: run independent Textract API calls (Aadhar front, Details forms, Insurance, …) in parallel.
+OCR_UPLOAD_PARALLEL_TEXTRACT = os.getenv("OCR_UPLOAD_PARALLEL_TEXTRACT", "true").lower() in (
+    "1",
+    "true",
+    "yes",
+)
+OCR_UPLOAD_TEXTRACT_TIMEOUT_SEC = int(os.getenv("OCR_UPLOAD_TEXTRACT_TIMEOUT_SEC", "240"))
 # Credentials: set AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY (or use default profile).
 
 # Bulk queue / worker settings.

@@ -1,6 +1,7 @@
 """Process AI reader queue with AWS Textract (forms mode). Details sheet only."""
 
 import json
+import logging
 import re
 from datetime import datetime
 from pathlib import Path
@@ -11,6 +12,8 @@ from app.services.customer_address_infer import (
     enrich_customer_address_from_freeform,
     normalize_address_freeform,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _aadhar_last4(aadhar_id: str | None) -> str | None:
@@ -835,6 +838,77 @@ def _details_input_format(path: Path) -> str:
     return "unknown"
 
 
+def _parallel_textract_prefetch_upload_subfolder(subdir: Path) -> dict[str, dict]:
+    """
+    Run AWS Textract calls for all upload files concurrently to cut wall time on scans-v2.
+    Keys: ``aadhar_front``, ``details_forms`` (raster/PDF Details only), ``insurance``,
+    ``aadhar_back``, ``financing``. Docx Details is not prefetched (local parse).
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    from app.config import OCR_UPLOAD_TEXTRACT_TIMEOUT_SEC
+    from app.services.textract_service import extract_forms_from_bytes, extract_text_from_bytes
+
+    jobs: list[tuple[str, bytes, str]] = []
+    ap = subdir / "Aadhar.jpg"
+    if ap.is_file():
+        try:
+            jobs.append(("aadhar_front", ap.read_bytes(), "text"))
+        except OSError as e:
+            logger.warning("prefetch: could not read Aadhar.jpg: %s", e)
+    dp = subdir / "Details.jpg"
+    if dp.is_file() and _details_input_format(dp) in ("jpeg", "png", "pdf"):
+        try:
+            jobs.append(("details_forms", dp.read_bytes(), "forms"))
+        except OSError as e:
+            logger.warning("prefetch: could not read Details.jpg: %s", e)
+    ip = subdir / "Insurance.jpg"
+    if ip.is_file():
+        try:
+            jobs.append(("insurance", ip.read_bytes(), "text"))
+        except OSError as e:
+            logger.warning("prefetch: could not read Insurance.jpg: %s", e)
+    for fname, key in (("Aadhar_back.jpg", "aadhar_back"), ("Financing.jpg", "financing")):
+        p = subdir / fname
+        if p.is_file():
+            try:
+                jobs.append((key, p.read_bytes(), "text"))
+            except OSError as e:
+                logger.warning("prefetch: could not read %s: %s", fname, e)
+
+    out: dict[str, dict] = {}
+    if not jobs:
+        return out
+
+    timeout = max(30, OCR_UPLOAD_TEXTRACT_TIMEOUT_SEC)
+    max_workers = min(5, len(jobs))
+
+    def _run(job: tuple[str, bytes, str]) -> tuple[str, dict]:
+        key, blob, mode = job
+        if mode == "forms":
+            return key, extract_forms_from_bytes(blob)
+        return key, extract_text_from_bytes(blob)
+
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        keyed_futures = []
+        for job in jobs:
+            keyed_futures.append((job[0], ex.submit(_run, job)))
+        for key, fut in keyed_futures:
+            try:
+                k, res = fut.result(timeout=timeout)
+                out[k] = res
+            except Exception as e:
+                logger.warning("prefetch Textract failed for %s: %s", key, e)
+                out[key] = {
+                    "error": str(e),
+                    "full_text": "",
+                    "key_value_pairs": [],
+                    "blocks": [],
+                    "raw_response": None,
+                }
+    return out
+
+
 def _key_value_pairs_from_docx(doc_path: Path) -> tuple[list[dict[str, str]], str]:
     """
     Parse Word Sales Detail Sheet (.docx) into Textract-like key/value pairs.
@@ -1546,11 +1620,23 @@ class OcrService:
         errors: list[str] = []
         self._raw_ocr_parts: list[tuple[str, str]] = []
 
+        from app.config import OCR_UPLOAD_PARALLEL_TEXTRACT
+
+        prefetch: dict[str, dict] = {}
+        if OCR_UPLOAD_PARALLEL_TEXTRACT:
+            prefetch = _parallel_textract_prefetch_upload_subfolder(subdir)
+
         # 1. Aadhar.jpg first (QR is fast; populates customer in JSON immediately)
         aadhar_path = subdir / "Aadhar.jpg"
         if aadhar_path.exists():
             try:
-                self._process_aadhar(None, subfolder, "Aadhar.jpg", aadhar_path)
+                self._process_aadhar(
+                    None,
+                    subfolder,
+                    "Aadhar.jpg",
+                    aadhar_path,
+                    front_textract_prefetch=prefetch.get("aadhar_front"),
+                )
                 processed.append("Aadhar.jpg")
             except Exception as e:
                 errors.append(f"Aadhar.jpg: {e}")
@@ -1559,7 +1645,13 @@ class OcrService:
         details_path = subdir / "Details.jpg"
         if details_path.exists():
             try:
-                self._process_details_sheet(None, subfolder, "Details.jpg", details_path)
+                self._process_details_sheet(
+                    None,
+                    subfolder,
+                    "Details.jpg",
+                    details_path,
+                    textract_forms_prefetch=prefetch.get("details_forms"),
+                )
                 processed.append("Details.jpg")
             except Exception as e:
                 errors.append(f"Details.jpg: {e}")
@@ -1568,19 +1660,30 @@ class OcrService:
         insurance_path = subdir / "Insurance.jpg"
         if insurance_path.exists():
             try:
-                self._process_insurance_sheet(subfolder, "Insurance.jpg", insurance_path)
+                self._process_insurance_sheet(
+                    subfolder,
+                    "Insurance.jpg",
+                    insurance_path,
+                    textract_prefetch=prefetch.get("insurance"),
+                )
                 processed.append("Insurance.jpg")
             except Exception as e:
                 errors.append(f"Insurance.jpg: {e}")
 
         # 4. Aadhar_back.jpg and Financing.jpg: add raw text for Raw_OCR (no structured extraction)
-        for extra_file in ["Aadhar_back.jpg", "Financing.jpg"]:
+        for extra_file, prefetch_key in (
+            ("Aadhar_back.jpg", "aadhar_back"),
+            ("Financing.jpg", "financing"),
+        ):
             extra_path = subdir / extra_file
             if extra_path.exists():
                 try:
                     from app.services.textract_service import extract_text_from_bytes
 
-                    result = extract_text_from_bytes(extra_path.read_bytes())
+                    if prefetch_key in prefetch:
+                        result = prefetch[prefetch_key]
+                    else:
+                        result = extract_text_from_bytes(extra_path.read_bytes())
                     if not result.get("error") and result.get("full_text"):
                         self._raw_ocr_parts.append((extra_file, result["full_text"]))
                 except Exception:
@@ -1609,7 +1712,14 @@ class OcrService:
             result["errors"] = errors
         return result
 
-    def _process_details_sheet(self, qid: int | None, subfolder: str, filename: str, input_path: Path) -> dict:
+    def _process_details_sheet(
+        self,
+        qid: int | None,
+        subfolder: str,
+        filename: str,
+        input_path: Path,
+        textract_forms_prefetch: dict | None = None,
+    ) -> dict:
         """Run Textract (forms) on Details sheet; write text + JSON; optionally update queue."""
         if qid is not None:
             with get_connection() as conn:
@@ -1631,8 +1741,10 @@ class OcrService:
             elif fmt in ("jpeg", "png", "pdf"):
                 from app.services.textract_service import extract_forms_from_bytes
 
-                document_bytes = input_path.read_bytes()
-                result = extract_forms_from_bytes(document_bytes)
+                if textract_forms_prefetch is not None:
+                    result = textract_forms_prefetch
+                else:
+                    result = extract_forms_from_bytes(input_path.read_bytes())
                 if result.get("error"):
                     raise RuntimeError(result["error"])
             else:
@@ -1772,7 +1884,14 @@ class OcrService:
                 }
             raise
 
-    def _process_aadhar(self, qid: int | None, subfolder: str, filename: str, input_path: Path) -> dict:
+    def _process_aadhar(
+        self,
+        qid: int | None,
+        subfolder: str,
+        filename: str,
+        input_path: Path,
+        front_textract_prefetch: dict | None = None,
+    ) -> dict:
         """Run Aadhar extraction: UIDAI QR on front (Aadhar.jpg), then merge from back (Aadhar_back.jpg) if QR is there; merge customer into subfolder JSON."""
         if qid is not None:
             with get_connection() as conn:
@@ -1786,7 +1905,10 @@ class OcrService:
             try:
                 from app.services.textract_service import extract_text_from_bytes
 
-                txt_result = extract_text_from_bytes(raw_bytes)
+                if front_textract_prefetch is not None:
+                    txt_result = front_textract_prefetch
+                else:
+                    txt_result = extract_text_from_bytes(raw_bytes)
                 if not txt_result.get("error") and txt_result.get("full_text"):
                     front_textract_text = (txt_result.get("full_text") or "").strip()
                     if hasattr(self, "_raw_ocr_parts") and self._raw_ocr_parts is not None:
@@ -1890,12 +2012,20 @@ class OcrService:
                 }
             raise
 
-    def _process_insurance_sheet(self, subfolder: str, filename: str, input_path: Path) -> None:
+    def _process_insurance_sheet(
+        self,
+        subfolder: str,
+        filename: str,
+        input_path: Path,
+        textract_prefetch: dict | None = None,
+    ) -> None:
         """Run Textract on Insurance.jpg (TEXT mode); extract insurer, policy from/to, premium via regex on full_text."""
         from app.services.textract_service import extract_text_from_bytes
 
-        document_bytes = input_path.read_bytes()
-        result = extract_text_from_bytes(document_bytes)
+        if textract_prefetch is not None:
+            result = textract_prefetch
+        else:
+            result = extract_text_from_bytes(input_path.read_bytes())
 
         if result.get("error"):
             raise RuntimeError(result["error"])

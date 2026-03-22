@@ -60,7 +60,7 @@ backend/app/
 | GET | `/health` | Liveness. |
 | GET | `/settings/site-urls` | Returns `dms_base_url`, `dms_mode`, `dms_real_siebel`, `dms_real_contact_url_configured`, `vahan_base_url`, `insurance_base_url` from `backend/.env` (required at server startup; used by the client for Fill DMS and messaging; no in-code URL fallbacks). |
 | POST | `/uploads/scans` | Upload scans; enqueue to ai_reader_queue. |
-| POST | `/uploads/scans-v2` | Add Sales v2 upload; server runs `OcrService.process_uploaded_subfolder` in the same request and returns `extraction` (client does not call `process-all`). |
+| POST | `/uploads/scans-v2` | Add Sales v2 upload; server runs `OcrService.process_uploaded_subfolder` in the same request and returns `extraction` (client does not call `process-all`). When `OCR_UPLOAD_PARALLEL_TEXTRACT` is true (default), independent AWS Textract calls (Aadhar front, Details forms, Insurance, Aadhar back, Financing) run concurrently to reduce wall time. |
 | GET | `/ai-reader-queue` | List queue items (limit=200). |
 | POST | `/ai-reader-queue/process-next` | Process oldest queued item with Tesseract. |
 | GET | `/ai-reader-queue/extractions` | List queue items with extracted text. |

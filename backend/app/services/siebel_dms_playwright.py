@@ -105,6 +105,39 @@ def _resolve_work_locator(page: Page, content_frame_selector: str | None):
     return None
 
 
+def _siebel_blur_and_settle(page: Page, *, ms: int = 400) -> None:
+    """Siebel often keeps focus in the Find/mobile field; blur so the main enquiry applet receives clicks."""
+    try:
+        page.evaluate(
+            """() => {
+            const a = document.activeElement;
+            if (a && typeof a.blur === 'function') a.blur();
+        }"""
+        )
+    except Exception:
+        pass
+    try:
+        page.keyboard.press("Escape")
+    except Exception:
+        pass
+    page.wait_for_timeout(ms)
+
+
+def _locator_for_duplicate_fields(locator, *, prefer_second_if_duplicate: bool):
+    """
+    When Find + Customer applets both expose the same label (e.g. two First Name inputs),
+    ``.first`` targets the Find row; use index 1 for the main enquiry form when two+ exist.
+    """
+    try:
+        n = locator.count()
+        if n <= 0:
+            return None
+        idx = 1 if (prefer_second_if_duplicate and n >= 2) else 0
+        return locator.nth(idx)
+    except Exception:
+        return None
+
+
 def _try_prepare_find_contact_applet(
     page: Page, *, timeout_ms: int, content_frame_selector: str | None
 ) -> bool:
@@ -198,20 +231,33 @@ def _try_prepare_find_contact_applet(
     return False
 
 
-def _fill_in_frame(frame: Frame, selectors: list[str], value: str, *, timeout_ms: int) -> bool:
+def _fill_in_frame(
+    frame: Frame,
+    selectors: list[str],
+    value: str,
+    *,
+    timeout_ms: int,
+    prefer_second_if_duplicate: bool = False,
+) -> bool:
     if not (value or "").strip():
         return False
     for css in selectors:
         try:
-            loc = frame.locator(css).first
-            if loc.count() == 0:
+            base = frame.locator(css)
+            loc = _locator_for_duplicate_fields(
+                base, prefer_second_if_duplicate=prefer_second_if_duplicate
+            )
+            if loc is None:
                 continue
             try:
                 if not loc.is_visible(timeout=800):
                     continue
             except Exception:
                 continue
-            loc.click(timeout=min(3000, timeout_ms))
+            try:
+                loc.click(timeout=min(3000, timeout_ms))
+            except Exception:
+                loc.click(timeout=min(3000, timeout_ms), force=True)
             loc.fill("", timeout=min(3000, timeout_ms))
             loc.fill(value.strip(), timeout=timeout_ms)
             logger.info("siebel_dms: filled via %s", css[:120])
@@ -228,20 +274,27 @@ def _fill_with_frame_locator(
     value: str,
     *,
     timeout_ms: int,
+    prefer_second_if_duplicate: bool = False,
 ) -> bool:
     if not (value or "").strip():
         return False
     for css in selectors:
         try:
-            loc = fl.locator(css).first
-            if loc.count() == 0:
+            base = fl.locator(css)
+            loc = _locator_for_duplicate_fields(
+                base, prefer_second_if_duplicate=prefer_second_if_duplicate
+            )
+            if loc is None:
                 continue
             try:
                 if not loc.is_visible(timeout=800):
                     continue
             except Exception:
                 continue
-            loc.click(timeout=min(3000, timeout_ms))
+            try:
+                loc.click(timeout=min(3000, timeout_ms))
+            except Exception:
+                loc.click(timeout=min(3000, timeout_ms), force=True)
             loc.fill("", timeout=min(3000, timeout_ms))
             loc.fill(value.strip(), timeout=timeout_ms)
             logger.info("siebel_dms: filled (scoped frame) via %s", css[:120])
@@ -259,13 +312,26 @@ def _try_fill_field(
     *,
     timeout_ms: int,
     content_frame_selector: str | None,
+    prefer_second_if_duplicate: bool = False,
 ) -> bool:
     fl = _resolve_work_locator(page, content_frame_selector)
     if fl is not None:
-        if _fill_with_frame_locator(fl, selectors, value, timeout_ms=timeout_ms):
+        if _fill_with_frame_locator(
+            fl,
+            selectors,
+            value,
+            timeout_ms=timeout_ms,
+            prefer_second_if_duplicate=prefer_second_if_duplicate,
+        ):
             return True
     for frame in _ordered_frames(page):
-        if _fill_in_frame(frame, selectors, value, timeout_ms=timeout_ms):
+        if _fill_in_frame(
+            frame,
+            selectors,
+            value,
+            timeout_ms=timeout_ms,
+            prefer_second_if_duplicate=prefer_second_if_duplicate,
+        ):
             return True
     return False
 
@@ -306,6 +372,7 @@ def _try_fill_mobile_semantic(
     timeout_ms: int,
     content_frame_selector: str | None,
     extra_hints: list[str],
+    prefer_second_match: bool = False,
 ) -> bool:
     """
     Hero Connect Find applet (dark right panel, Contact → Mobile Phone): label may not
@@ -337,12 +404,18 @@ def _try_fill_mobile_semantic(
                 lambda p=pat: root.get_by_role("combobox", name=p),
             ):
                 try:
-                    loc = get_loc().first
-                    if loc.count() == 0:
+                    base = get_loc()
+                    loc = _locator_for_duplicate_fields(
+                        base, prefer_second_if_duplicate=prefer_second_match
+                    )
+                    if loc is None:
                         continue
                     if not loc.is_visible(timeout=800):
                         continue
-                    loc.click(timeout=min(3000, timeout_ms))
+                    try:
+                        loc.click(timeout=min(3000, timeout_ms))
+                    except Exception:
+                        loc.click(timeout=min(3000, timeout_ms), force=True)
                     loc.fill("", timeout=min(3000, timeout_ms))
                     loc.fill(value.strip(), timeout=timeout_ms)
                     logger.info("siebel_dms: filled mobile via semantic locator")
@@ -368,6 +441,7 @@ def _try_select_option(
     *,
     timeout_ms: int,
     content_frame_selector: str | None,
+    prefer_second_if_duplicate: bool = False,
 ) -> bool:
     if not (label or "").strip():
         return False
@@ -375,8 +449,11 @@ def _try_select_option(
     if fl is not None:
         for css in selectors:
             try:
-                loc = fl.locator(css).first
-                if loc.count() == 0:
+                base = fl.locator(css)
+                loc = _locator_for_duplicate_fields(
+                    base, prefer_second_if_duplicate=prefer_second_if_duplicate
+                )
+                if loc is None:
                     continue
                 loc.select_option(label=label.strip(), timeout=timeout_ms)
                 logger.info("siebel_dms: selected %s via %s", label[:40], css[:80])
@@ -386,8 +463,11 @@ def _try_select_option(
     for frame in _ordered_frames(page):
         for css in selectors:
             try:
-                loc = frame.locator(css).first
-                if loc.count() == 0:
+                base = frame.locator(css)
+                loc = _locator_for_duplicate_fields(
+                    base, prefer_second_if_duplicate=prefer_second_if_duplicate
+                )
+                if loc is None:
                     continue
                 loc.select_option(label=label.strip(), timeout=timeout_ms)
                 logger.info("siebel_dms: selected %s via %s", label[:40], css[:80])
@@ -541,6 +621,9 @@ def _fill_siebel_enquiry_customer_applet(
     content_frame_selector: str | None,
 ) -> None:
     """Buyer/CoBuyer (or enquiry) form: names, address, state, PIN, landline, care-of fields."""
+    _siebel_blur_and_settle(page, ms=350)
+    # Find applet often duplicates labels (First Name next to Mobile); target main form (2nd match).
+    dup = True
     _try_fill_field(
         page,
         [
@@ -551,6 +634,7 @@ def _fill_siebel_enquiry_customer_applet(
         first,
         timeout_ms=action_timeout_ms,
         content_frame_selector=content_frame_selector,
+        prefer_second_if_duplicate=dup,
     )
     _try_fill_field(
         page,
@@ -562,6 +646,7 @@ def _fill_siebel_enquiry_customer_applet(
         last,
         timeout_ms=action_timeout_ms,
         content_frame_selector=content_frame_selector,
+        prefer_second_if_duplicate=dup,
     )
     _try_fill_field(
         page,
@@ -573,6 +658,7 @@ def _fill_siebel_enquiry_customer_applet(
         addr[:120],
         timeout_ms=action_timeout_ms,
         content_frame_selector=content_frame_selector,
+        prefer_second_if_duplicate=dup,
     )
     _try_select_option(
         page,
@@ -584,6 +670,7 @@ def _fill_siebel_enquiry_customer_applet(
         state,
         timeout_ms=action_timeout_ms,
         content_frame_selector=content_frame_selector,
+        prefer_second_if_duplicate=dup,
     )
     _try_fill_field(
         page,
@@ -596,6 +683,7 @@ def _fill_siebel_enquiry_customer_applet(
         pin,
         timeout_ms=action_timeout_ms,
         content_frame_selector=content_frame_selector,
+        prefer_second_if_duplicate=dup,
     )
     if landline:
         _try_fill_field(
@@ -608,6 +696,7 @@ def _fill_siebel_enquiry_customer_applet(
             landline,
             timeout_ms=action_timeout_ms,
             content_frame_selector=content_frame_selector,
+            prefer_second_if_duplicate=dup,
         )
     if father:
         _try_fill_field(
@@ -620,6 +709,7 @@ def _fill_siebel_enquiry_customer_applet(
             father[:255],
             timeout_ms=action_timeout_ms,
             content_frame_selector=content_frame_selector,
+            prefer_second_if_duplicate=dup,
         )
     if relation:
         _try_select_option(
@@ -631,6 +721,7 @@ def _fill_siebel_enquiry_customer_applet(
             relation,
             timeout_ms=action_timeout_ms,
             content_frame_selector=content_frame_selector,
+            prefer_second_if_duplicate=dup,
         )
 
 
@@ -642,7 +733,7 @@ def _try_fill_mobile_on_enquiry_form(
     content_frame_selector: str | None,
     mobile_aria_hints: list[str],
 ) -> bool:
-    """Mobile on enquiry/customer applet (not Find); same selectors as global Find field."""
+    """Customer Information mobile (2nd match when Find also has Mobile Phone)."""
     if not (mobile or "").strip():
         return False
     if _try_fill_field(
@@ -651,15 +742,21 @@ def _try_fill_mobile_on_enquiry_form(
         mobile,
         timeout_ms=action_timeout_ms,
         content_frame_selector=content_frame_selector,
+        prefer_second_if_duplicate=True,
     ):
+        _siebel_blur_and_settle(page, ms=350)
         return True
-    return _try_fill_mobile_semantic(
+    if _try_fill_mobile_semantic(
         page,
         mobile,
         timeout_ms=action_timeout_ms,
         content_frame_selector=content_frame_selector,
         extra_hints=mobile_aria_hints,
-    )
+        prefer_second_match=True,
+    ):
+        _siebel_blur_and_settle(page, ms=350)
+        return True
+    return False
 
 
 def _js_best_grid_row(frame: Frame) -> dict | None:
@@ -833,6 +930,7 @@ def run_hero_siebel_dms_flow(
                 return out
 
             ms_done("Customer found")
+            _siebel_blur_and_settle(page, ms=350)
 
             _fill_siebel_enquiry_customer_applet(
                 page,
