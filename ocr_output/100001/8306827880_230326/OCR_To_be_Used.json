@@ -7,21 +7,15 @@
     "battery_no": "M7B6T064443"
   },
   "customer": {
-    "aadhar_id": "4195",
-    "name": "Akash",
-    "gender": "M",
-    "year_of_birth": "2004",
-    "date_of_birth": "01/01/2004",
-    "care_of": "S/O: S/O: Sahab Singh",
-    "house": "street=",
-    "post_office": "Bharatpur",
-    "district": "Bharatpur",
+    "gender": "Male",
     "state": "Rajasthan",
     "pin_code": "321001",
-    "address": "S/O: S/O: Sahab Singh, street=, Bharatpur, Bharatpur, Rajasthan, 321001",
+    "address": "S/O: Sahab Singh, Gandhi Nagar, Bharatpur, Bharatpur, Rajasthan - - 321001",
     "city": "Bharatpur",
+    "name": "Akash",
     "mobile_number": "8306827880",
-    "alt_phone_num": "9602035092"
+    "alt_phone_num": "9602035092",
+    "aadhar_id": "4195"
   },
   "insurance": {
     "profession": "Farmer",

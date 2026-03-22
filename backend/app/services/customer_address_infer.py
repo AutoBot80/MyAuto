@@ -73,11 +73,17 @@ def _squish_spaces(s: str) -> str:
     return re.sub(r"\s+", " ", (s or "").strip())
 
 
+# Relation markers on UIDAI English back (same care_of field as C/O for DMS).
+_CARE_OF_MARKERS_RE = re.compile(
+    r"(?i)\b(?:C\.?\s*/?\s*O\.?|S\.?\s*/?\s*O\.?|W\.?\s*/?\s*O\.?|D\.?\s*/?\s*O\.?)\s*:\s*([^,\n]+)"
+)
+
+
 def _extract_care_of_from_text(text: str) -> str | None:
-    """C/O, C/o, C.O. → care-of name (to first comma or end of clause)."""
+    """C/O, S/O, W/O, D/O → care-of name (to first comma or end of clause)."""
     if not text:
         return None
-    m = re.search(r"(?i)\bC\.?\s*/?\s*O\.?\s*:\s*([^,\n]+)", text)
+    m = _CARE_OF_MARKERS_RE.search(text)
     if not m:
         return None
     name = m.group(1).strip()
@@ -85,10 +91,16 @@ def _extract_care_of_from_text(text: str) -> str | None:
 
 
 def _strip_care_of_clause(text: str) -> str:
-    """Remove ``C/O: …`` segment from the free-form line (care_of stored separately)."""
+    """Remove ``C/O: …`` / ``S/O: …`` segments from the free-form line (care_of stored separately)."""
     if not text:
         return text
-    return _squish_spaces(re.sub(r"(?i)\bC\.?\s*/?\s*O\.?\s*:\s*[^,\n]+,?\s*", " ", text))
+    return _squish_spaces(
+        re.sub(
+            r"(?i)\b(?:C\.?\s*/?\s*O\.?|S\.?\s*/?\s*O\.?|W\.?\s*/?\s*O\.?|D\.?\s*/?\s*O\.?)\s*:\s*[^,\n]+,?\s*",
+            " ",
+            text,
+        )
+    )
 
 
 def _truncate_after_last_pin(text: str) -> str:

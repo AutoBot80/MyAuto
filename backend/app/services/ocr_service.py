@@ -377,6 +377,10 @@ def _parse_aadhar_front_textract_fallback(text: str) -> dict[str, str]:
     dob_patterns = [
         r"(?i)\b(?:DOB|D\.?\s*O\.?\s*B\.?|Date\s+of\s+Birth|Birth\s+Date)\s*[:]?\s*(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{2,4})\b",
         r"(?i)\b(?:जन्म\s*तिथि|जन्मतिथि)\s*[:]?\s*(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{2,4})\b",
+        # Mis-OCR: "JoH /DB:01/01/2004" — DOB read as DB; slash before DB is common.
+        r"(?i)/\s*D\.?B\.?\s*[:]?\s*(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{2,4})\b",
+        # Standalone "DB:" or "D.B:" when followed immediately by a slash-date (avoid matching "db" in words).
+        r"(?i)(?<![A-Za-z])D\.?B\.?\s*[:]?\s*(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{2,4})\b",
     ]
     for pat in dob_patterns:
         m = re.search(pat, t)
@@ -389,11 +393,38 @@ def _parse_aadhar_front_textract_fallback(text: str) -> dict[str, str]:
                 break
 
     if "date_of_birth" not in out:
+        # Prefer dd/mm/yyyy (two slashes) near DOB/DB markers over stray numeric runs.
+        dob_marker = re.compile(r"(?i)(?:\b(?:dob|date\s+of\s+birth|birth\s+date|जन्म)|/(?:dob|d\.?b\.?)\s*:?|\bd\.?b\.?\s*:)")
+        triplet_re = re.compile(r"(?<!\d)(\d{1,2})/(\d{1,2})/((?:19|20)\d{2})(?!\d)")
+        best: tuple[int, tuple[int, int, int]] | None = None
+        for m in triplet_re.finditer(t):
+            d, mo, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            norm = _aadhar_normalize_dob_triplet(d, mo, y)
+            if not norm:
+                continue
+            start, end = m.start(), m.end()
+            window_start = max(0, start - 48)
+            window = t[window_start:end]
+            if not dob_marker.search(window):
+                continue
+            slash_bonus = window.count("/")
+            dist = start - window_start
+            score = slash_bonus * 10 - dist
+            if best is None or score > best[0]:
+                best = (score, (d, mo, y))
+        if best:
+            d, mo, y = best[1]
+            norm = _aadhar_normalize_dob_triplet(d, mo, y)
+            if norm:
+                out["date_of_birth"] = norm
+                out["year_of_birth"] = str(y)
+
+    if "date_of_birth" not in out:
         for line in t.splitlines():
             line = line.strip()
-            if len(line) > 40:
+            if len(line) > 72:
                 continue
-            if not re.search(r"(?i)(birth|dob|जन्म)", line):
+            if not re.search(r"(?i)(birth|dob|db\s*:|/(?:dob|d\.?b\.?)|जन्म)", line):
                 continue
             m = re.search(r"(\d{1,2})[/.\-](\d{1,2})[/.\-]((19|20)\d{2})\b", line)
             if m:
