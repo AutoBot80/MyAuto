@@ -13,7 +13,7 @@ Relation (S/O or W/o): S/O
 Father or Husband Name: S/O: S/O: Sahab Singh
 Customer Budget (dummy enquiry): 89000
 Finance Required: Y
-Financier Name: SHRIRAM finance
+Financier Name: Shriram finance
 DMS Contact Path: found
 Key num (partial): 1342
 Frame / Chassis num (partial): 40393
@@ -36,4 +36,4 @@ source_pin_code: 321001
 source_key_no: 1342
 source_frame_no: 40393
 source_engine_no: 04383
-generated_at: 22-03-2026 18:35:20
+generated_at: 22-03-2026 19:47:04

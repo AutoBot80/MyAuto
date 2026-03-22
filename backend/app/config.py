@@ -118,6 +118,11 @@ DMS_SIEBEL_NAV_TIMEOUT_MS = int(os.getenv("DMS_SIEBEL_NAV_TIMEOUT_MS", "90000"))
 DMS_SIEBEL_CONTENT_FRAME_SELECTOR = (os.getenv("DMS_SIEBEL_CONTENT_FRAME_SELECTOR") or "").strip()
 _siebel_mobile_hints = (os.getenv("DMS_SIEBEL_MOBILE_ARIA_HINTS") or "").strip()
 DMS_SIEBEL_MOBILE_ARIA_HINTS = [x.strip() for x in _siebel_mobile_hints.split(",") if x.strip()]
+# Extra ms after GotoView contact URL so nested iframes/applets can render (Hero Connect).
+DMS_SIEBEL_POST_GOTO_WAIT_MS = int(os.getenv("DMS_SIEBEL_POST_GOTO_WAIT_MS", "5000"))
+# Optional extra iframe CSS selectors (comma-separated) tried before built-in Siebel patterns.
+_siebel_if = (os.getenv("DMS_SIEBEL_AUTO_IFRAME_SELECTORS") or "").strip()
+DMS_SIEBEL_AUTO_IFRAME_SELECTORS = [x.strip() for x in _siebel_if.split(",") if x.strip()]
 DMS_LOGIN_USER = os.getenv("DMS_LOGIN_USER", "demo")
 DMS_LOGIN_PASSWORD = os.getenv("DMS_LOGIN_PASSWORD", "demo")
 # Run browser visible (headed) so user sees DMS page and automation. Set to "false" for headless.

@@ -17,7 +17,22 @@ from dataclasses import dataclass
 
 from playwright.sync_api import Frame, Page, TimeoutError as PlaywrightTimeout
 
+from app.config import (
+    DMS_SIEBEL_AUTO_IFRAME_SELECTORS,
+    DMS_SIEBEL_POST_GOTO_WAIT_MS,
+)
+
 logger = logging.getLogger(__name__)
+
+# Tried after explicit DMS_SIEBEL_CONTENT_FRAME_SELECTOR and before walking all frames.
+_DEFAULT_AUTO_IFRAME_SELECTORS: tuple[str, ...] = (
+    'iframe[src*="start.swe" i]',
+    'iframe[src*="StartSWE" i]',
+    'iframe[src*="sweapp" i]',
+    'iframe[src*="SWECmd" i]',
+    'iframe[id^="s_"]',
+    'iframe[name^="s_"]',
+)
 
 # Same order as fill_dms_service.DMS_MILESTONE_ORDER (avoid import cycle).
 _MILESTONE_SORT_ORDER: tuple[str, ...] = (
@@ -163,14 +178,17 @@ def _mobile_selectors(extra_hints: list[str]) -> list[str]:
         'input[aria-label*="Cellular" i]',
         'input[aria-label*="Cell Phone" i]',
         'input[aria-label*="Mobile Phone" i]',
+        'input[aria-label*="Mobile No" i]',
         'input[aria-label*="Main Phone" i]',
         'input[aria-label*="Phone #" i]',
         'input[title*="Cellular" i]',
         'input[title*="Cell Phone" i]',
         'input[title*="Mobile" i]',
+        'input[title*="Mobile No" i]',
         'input[name*="Cellular" i]',
         'input[name*="CellPhone" i]',
         'input[name*="Mobile" i]',
+        'input[name*="MobileNo" i]',
     ]
     for h in extra_hints:
         if len(h) >= 2:
