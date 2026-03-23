@@ -2503,6 +2503,8 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
 
     # Exact-input path first (from provided DOM snippet), then label fallback.
     exact_selectors = (
+        "input[aria-label=\"Relation's Name\"]",
+        "textarea[aria-label=\"Relation's Name\"]",
         "input[name='s_4_1_89_0'][aria-label=\"Relation's Name\"]",
         "input[name='s_4_1_89_0']",
         "input[aria-labelledby=\"Relation's_Name_Label_4\"]",
