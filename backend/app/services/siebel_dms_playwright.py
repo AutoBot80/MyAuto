@@ -376,13 +376,40 @@ def _try_prepare_find_contact_applet(
     so the Mobile field is the Contact search field (not Job Card / Vehicle, etc.).
     """
     contact_label = re.compile(r"^\s*Contact\s*$", re.I)
+    find_label = re.compile(r"^\s*Find\s*$", re.I)
 
     def _select_global_find_contact(root) -> bool:
         """
         Top nav global finder often has a select/combobox currently showing ``Find`` with options:
         Contact, Job Card, Customer Account, etc. Choose **Contact** there first.
         """
-        # Native <select> path (most stable in Hero header)
+        # Click-path first: opening the dropdown and clicking Contact reliably triggers applet open.
+        for scope in (root, page):
+            try:
+                # Header/global finder control
+                cb = scope.get_by_role("combobox", name=find_label).first
+                if cb.count() <= 0 or not cb.is_visible(timeout=500):
+                    continue
+                cb.click(timeout=timeout_ms)
+                _safe_page_wait(page, 250, log_label="global_find_open_click")
+                clicked_contact = False
+                for role in ("option", "menuitem", "link"):
+                    try:
+                        item = page.get_by_role(role, name=contact_label).first
+                        if item.count() > 0 and item.is_visible(timeout=600):
+                            item.click(timeout=timeout_ms)
+                            clicked_contact = True
+                            logger.info("siebel_dms: global finder clicked Contact (%s)", role)
+                            break
+                    except Exception:
+                        continue
+                if clicked_contact:
+                    _safe_page_wait(page, 500, log_label="global_find_contact_clicked")
+                    return True
+            except Exception:
+                continue
+
+        # Native <select> path (fallback)
         try:
             sels = root.locator("select")
             n = sels.count()
@@ -402,6 +429,12 @@ def _try_prepare_find_contact_applet(
                 has_contact = any(x == "contact" for x in opts)
                 if not (has_find and has_contact):
                     continue
+                # Mirror operator flow exactly: Find -> Contact.
+                try:
+                    sel.select_option(label=find_label, timeout=timeout_ms)
+                    _safe_page_wait(page, 180, log_label="global_find_select_find")
+                except Exception:
+                    pass
                 sel.select_option(label=contact_label, timeout=timeout_ms)
                 logger.info("siebel_dms: global top finder selected Contact (native select)")
                 _safe_page_wait(page, 350, log_label="global_find_contact_select")
@@ -1051,25 +1084,47 @@ def _contact_view_find_by_mobile(
     _safe_page_wait(page, 600, log_label="after_find_contact_prep")
 
     _mobile_vis = 2400
-    filled_mobile = _try_fill_field(
-        page,
-        _mobile_selectors(mobile_aria_hints),
-        mobile,
-        timeout_ms=action_timeout_ms,
-        content_frame_selector=content_frame_selector,
-        visible_timeout_ms=_mobile_vis,
-    )
-    if not filled_mobile:
-        filled_mobile = _try_fill_mobile_semantic(
+
+    def _attempt_fill_mobile() -> bool:
+        ok = _try_fill_field(
             page,
+            _mobile_selectors(mobile_aria_hints),
             mobile,
             timeout_ms=action_timeout_ms,
             content_frame_selector=content_frame_selector,
-            extra_hints=mobile_aria_hints,
-            label_visible_ms=_mobile_vis,
+            visible_timeout_ms=_mobile_vis,
         )
+        if not ok:
+            ok = _try_fill_mobile_semantic(
+                page,
+                mobile,
+                timeout_ms=action_timeout_ms,
+                content_frame_selector=content_frame_selector,
+                extra_hints=mobile_aria_hints,
+                label_visible_ms=_mobile_vis,
+            )
+        if not ok:
+            ok = _try_fill_mobile_dom_scan(page, mobile)
+        return ok
+
+    filled_mobile = _attempt_fill_mobile()
     if not filled_mobile:
-        filled_mobile = _try_fill_mobile_dom_scan(page, mobile)
+        # Some tenants need an explicit second pass: open the top Find applet again, re-select Contact,
+        # then retry Mobile Phone fill.
+        note("Find mobile field not visible on first pass — retrying with forced Find→Contact applet open.")
+        _try_expand_find_flyin(
+            page,
+            timeout_ms=action_timeout_ms,
+            content_frame_selector=content_frame_selector,
+        )
+        _safe_page_wait(page, 350, log_label="retry_expand_find_flyin")
+        _try_prepare_find_contact_applet(
+            page,
+            timeout_ms=action_timeout_ms,
+            content_frame_selector=content_frame_selector,
+        )
+        _safe_page_wait(page, 700, log_label="retry_find_contact_prep")
+        filled_mobile = _attempt_fill_mobile()
     if not filled_mobile:
         return False
 

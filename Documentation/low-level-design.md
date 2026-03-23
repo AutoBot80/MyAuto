@@ -269,3 +269,4 @@ See **Documentation/Database DDL.md** for full table structures. Summary:
 | 3.6 | Mar 2026 | — | Search Results pane: target **`javascript:void(0)`** drilldown + **`.siebui-applet`** scope; normal / **force** / **dblclick** sequence for Siebel left list |
 | 3.7 | Mar 2026 | — | Find fly-in: **`_click_find_go_query`** scopes to applet with **Mobile Phone**; **`title`/`aria-label`**, Siebel classes, **`get_by_title(Find)`**, svg icon buttons with Find/Go tooltip |
 | 3.8 | Mar 2026 | — | Find path hardening: **`_try_prepare_find_contact_applet`** now explicitly selects **Contact** in the top global finder (dropdown showing **Find**) before filling mobile and firing query |
+| 3.9 | Mar 2026 | — | Find applet reliability: `_contact_view_find_by_mobile` second-pass retry forces Find fly-in reopen + Find→Contact reselection before mobile fill; global finder now mirrors operator flow **Find → Contact** |
