@@ -2000,12 +2000,9 @@ def _fill_relation_fields_verified(
 
       return { nameSet };
     }"""
-    dom_set_any = False
     for frame in _ordered_frames(page):
         try:
-            got_set = frame.evaluate(set_js, nm)
-            if isinstance(got_set, dict):
-                dom_set_any = dom_set_any or bool(got_set.get("nameSet"))
+            frame.evaluate(set_js, nm)
         except Exception:
             continue
     _safe_page_wait(page, 300, log_label="after_relation_name_dom_fallback")
@@ -2020,9 +2017,6 @@ def _fill_relation_fields_verified(
                 break
         except Exception:
             continue
-    # If JS setter reported a successful write but verify selectors still miss it, keep optimistic flags.
-    if dom_set_any and not name_ok and nm:
-        name_ok = True
     return rel_ok, name_ok
 
 
@@ -2345,17 +2339,19 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
         father_husband_name=father_husband_name,
         care_of=care_of,
     )
+    # Requested behavior: fill Relation's Name with the DB care_of text directly.
+    relation_name_to_fill = (care_of or "").strip() or eff_father
     rel_ok, name_ok = _fill_relation_fields_verified(
         page,
         relation=eff_relation,
-        relation_name=eff_father,
+        relation_name=relation_name_to_fill,
         action_timeout_ms=action_timeout_ms,
         content_frame_selector=content_frame_selector,
     )
     note(
         "Video SOP relation-fill verification: "
         f"relation_type_filled={rel_ok!r}, relation_name_filled={name_ok!r}, "
-        f"relation_used={eff_relation!r}, relation_name_used={eff_father!r}."
+        f"relation_used={eff_relation!r}, relation_name_used={relation_name_to_fill!r}."
     )
     if not name_ok:
         note("Relation's Name was not verified as filled on the opened customer form.")
