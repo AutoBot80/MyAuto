@@ -2560,6 +2560,28 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
 
     _safe_page_wait(page, 700, log_label="after_first_name_click_before_relation_fill")
 
+    def _after_relation_fill_nav() -> bool:
+        if not _siebel_try_click_mobile_search_hit_link(
+            page,
+            mobile,
+            timeout_ms=action_timeout_ms,
+            content_frame_selector=content_frame_selector,
+        ):
+            note("Could not re-click mobile in left Search Results after Relation's Name fill.")
+            return False
+        _safe_page_wait(page, 500, log_label="after_left_mobile_reclick_post_relation_fill")
+        if not _siebel_try_click_named_in_frames(
+            page,
+            re.compile(r"contact[_\s]*enquiry", re.I),
+            roles=("tab", "link"),
+            timeout_ms=action_timeout_ms,
+            content_frame_selector=content_frame_selector,
+        ):
+            note("Could not click Contact_Enquiry tab after left mobile re-click.")
+            return False
+        note("Opened Contact_Enquiry after re-clicking left mobile (video SOP).")
+        return True
+
     # Native Playwright path first: use label mapping in frame locators / frames.
     for fl in _iter_frame_locator_roots(page, content_frame_selector):
         try:
@@ -2568,7 +2590,7 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
                 loc.fill(care_val, timeout=action_timeout_ms)
                 got = (loc.input_value(timeout=action_timeout_ms) or "").strip()
                 if got and (care_val.lower() in got.lower() or got.lower() in care_val.lower()):
-                    return True
+                    return _after_relation_fill_nav()
         except Exception:
             continue
     for frame in _ordered_frames(page):
@@ -2578,14 +2600,14 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
                 loc.fill(care_val, timeout=action_timeout_ms)
                 got = (loc.input_value(timeout=action_timeout_ms) or "").strip()
                 if got and (care_val.lower() in got.lower() or got.lower() in care_val.lower()):
-                    return True
+                    return _after_relation_fill_nav()
         except Exception:
             continue
 
     for frame in _ordered_frames(page):
         try:
             if bool(frame.evaluate(fill_js, care_val)):
-                return True
+                return _after_relation_fill_nav()
         except Exception:
             continue
     note("Could not fill Relation's Name on opened customer record (video SOP).")
