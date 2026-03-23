@@ -3076,16 +3076,52 @@ def _add_customer_payment(
                 if not type_ok:
                     raise Exception("Failed to set Transaction Type = Payments")
 
-                method_ok = select_siebel_dropdown_value(
-                    page,
-                    field_label_patterns=[
-                        re.compile(r"payment\s*method", re.I)
-                    ],
-                    value="Cash",
-                    timeout_ms=action_timeout_ms,
-                    content_frame_selector=content_frame_selector,
-                    note=note,
-                )
+                # Payment Method: direct typing "Cash", then tab out thrice.
+                method_ok = False
+                for root in scoped_roots:
+                    for css in (
+                        "input[id*='Payment_Method' i]",
+                        "input[name*='Payment_Method' i]",
+                        "input[title_id*='Payment_Method' i]",
+                        "input[title-id*='Payment_Method' i]",
+                        "input[aria-label*='Payment Method' i]",
+                        "input[title*='Payment Method' i]",
+                    ):
+                        try:
+                            m = root.locator(css).first
+                            if m.count() <= 0 or not m.is_visible(timeout=700):
+                                continue
+                            try:
+                                m.click(timeout=action_timeout_ms)
+                            except Exception:
+                                m.click(timeout=action_timeout_ms, force=True)
+                            m.fill("Cash", timeout=action_timeout_ms)
+                            try:
+                                for _ in range(3):
+                                    m.press("Tab", timeout=min(1200, action_timeout_ms))
+                            except Exception:
+                                pass
+                            gotm = (m.input_value(timeout=1500) or "").strip()
+                            if gotm and "cash" in gotm.lower():
+                                method_ok = True
+                                note("Payment Method set by direct typing: 'Cash', then Tab x3.")
+                                break
+                        except Exception:
+                            continue
+                    if method_ok:
+                        break
+
+                if not method_ok:
+                    method_ok = select_siebel_dropdown_value(
+                        page,
+                        field_label_patterns=[
+                            re.compile(r"payment\s*method", re.I)
+                        ],
+                        value="Cash",
+                        timeout_ms=action_timeout_ms,
+                        content_frame_selector=content_frame_selector,
+                        note=note,
+                    )
 
                 if not method_ok:
                     raise Exception("Failed to set Payment Method")
