@@ -378,6 +378,55 @@ def _try_prepare_find_contact_applet(
     contact_label = re.compile(r"^\s*Contact\s*$", re.I)
     find_label = re.compile(r"^\s*Find\s*$", re.I)
 
+    def _force_open_contact_find_via_dom() -> bool:
+        """
+        Last-resort for custom/non-ARIA Siebel header controls:
+        - pick a visible <select> that has both Find and Contact options
+        - set Contact and fire input/change/keyboard events
+        - click nearby Find-titled trigger in same header cluster
+        """
+        js = """() => {
+          const vis = (el) => {
+            if (!el) return false;
+            const st = window.getComputedStyle(el);
+            if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+            const r = el.getBoundingClientRect();
+            return r.width >= 10 && r.height >= 10;
+          };
+          const norm = (s) => String(s || '').trim().toLowerCase();
+          const sels = Array.from(document.querySelectorAll('select')).filter(vis);
+          for (const sel of sels) {
+            const opts = Array.from(sel.options || []);
+            const hasFind = opts.some(o => norm(o.textContent) === 'find');
+            const contact = opts.find(o => norm(o.textContent) === 'contact');
+            if (!hasFind || !contact) continue;
+            sel.focus();
+            sel.value = contact.value;
+            sel.dispatchEvent(new Event('input', { bubbles: true }));
+            sel.dispatchEvent(new Event('change', { bubbles: true }));
+            sel.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+            sel.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', bubbles: true }));
+            sel.blur();
+            const host = sel.closest('div,td,th,form,header') || sel.parentElement || document.body;
+            const trig = host.querySelector(
+              '[title*="find" i], [aria-label*="find" i], button[title*="find" i], a[title*="find" i]'
+            );
+            if (trig && vis(trig)) {
+              try { trig.click(); } catch (e) {}
+            }
+            return true;
+          }
+          return false;
+        }"""
+        try:
+            ok = bool(page.evaluate(js))
+            if ok:
+                logger.info("siebel_dms: forced global Contact selection via DOM fallback")
+                _safe_page_wait(page, 700, log_label="force_open_contact_find_dom")
+            return ok
+        except Exception:
+            return False
+
     def _select_global_find_contact(root) -> bool:
         """
         Top nav global finder often has a select/combobox currently showing ``Find`` with options:
@@ -461,6 +510,8 @@ def _try_prepare_find_contact_applet(
                             continue
             except Exception:
                 continue
+        if _force_open_contact_find_via_dom():
+            return True
         return False
 
     def _visible_selects(root):
