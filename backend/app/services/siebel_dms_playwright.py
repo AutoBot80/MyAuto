@@ -1921,7 +1921,7 @@ def _fill_relation_fields_verified(
         except Exception:
             continue
 
-    # DOM force-set fallback (custom Open UI controls)
+    # DOM force-set fallback (custom Open UI controls) using label proximity.
     set_js = """(relKey, nmValue) => {
       const vis = (el) => {
         if (!el) return false;
@@ -1931,43 +1931,110 @@ def _fill_relation_fields_verified(
         return r.width >= 2 && r.height >= 2;
       };
       const norm = (s) => String(s || '').replace(/[^a-z]/gi, '').toUpperCase();
+      const txt = (s) => String(s || '').trim().toLowerCase();
       let relSet = false, nameSet = false;
 
-      const selects = Array.from(document.querySelectorAll(
-        'select[title*="S/O" i],select[aria-label*="S/O" i],select[title*="W/O" i],select[aria-label*="W/O" i],select[aria-label*="Relation" i],select[title*="Relation" i],select'
-      )).filter(vis);
-      for (const s of selects) {
-        const opts = Array.from(s.options || []);
-        const hit = opts.find(o => norm(o.textContent || '').includes(relKey));
-        if (!hit) continue;
-        try {
-          s.value = hit.value;
-          s.dispatchEvent(new Event('input', { bubbles: true }));
-          s.dispatchEvent(new Event('change', { bubbles: true }));
-          relSet = true;
-          break;
-        } catch (e) {}
-      }
+      const allTextNodes = Array.from(document.querySelectorAll('label,span,div,td,th')).filter(vis);
+      const relNameLabel = allTextNodes.find(el => txt(el.innerText || '').includes("relation's name") || txt(el.innerText || '').includes("relation name"));
+      const relationTypeLabel = allTextNodes.find(el => {
+        const t = txt(el.innerText || '');
+        return t.includes('s/o') || t.includes('w/o') || t.includes('d/o');
+      });
+
+      const nearestControlRight = (labelEl, selector) => {
+        if (!labelEl) return null;
+        const lr = labelEl.getBoundingClientRect();
+        const candidates = Array.from(document.querySelectorAll(selector)).filter(vis);
+        let best = null;
+        let bestScore = 1e9;
+        for (const c of candidates) {
+          const r = c.getBoundingClientRect();
+          const dy = Math.abs((r.top + r.height / 2) - (lr.top + lr.height / 2));
+          const dx = r.left - lr.right;
+          if (dx < -18 || dx > 380) continue;
+          if (dy > 60) continue;
+          const score = Math.max(dx, 0) + dy * 2;
+          if (score < bestScore) { bestScore = score; best = c; }
+        }
+        return best;
+      };
 
       if (nmValue) {
-        const inputs = Array.from(document.querySelectorAll(
-          'input[title*="Relation\\'s Name" i],input[aria-label*="Relation\\'s Name" i],input[title*="Relation Name" i],input[aria-label*="Relation Name" i],input[aria-label*="Father" i],input[aria-label*="Husband" i],input[type="text"]'
-        )).filter(vis);
-        for (const i of inputs) {
+        let nameInput = nearestControlRight(
+          relNameLabel,
+          'input[title*="Relation" i],input[aria-label*="Relation" i],input[type="text"],textarea'
+        );
+        if (!nameInput) {
+          nameInput = Array.from(document.querySelectorAll(
+            'input[title*="Relation\\'s Name" i],input[aria-label*="Relation\\'s Name" i],input[title*="Relation Name" i],input[aria-label*="Relation Name" i],input[type="text"]'
+          )).filter(vis)[0] || null;
+        }
+        if (nameInput) {
           try {
-            i.focus();
-            i.value = '';
-            i.value = String(nmValue).trim();
-            i.dispatchEvent(new Event('input', { bubbles: true }));
-            i.dispatchEvent(new Event('change', { bubbles: true }));
-            i.dispatchEvent(new Event('blur', { bubbles: true }));
+            nameInput.focus();
+            nameInput.value = '';
+            nameInput.value = String(nmValue).trim();
+            nameInput.dispatchEvent(new Event('input', { bubbles: true }));
+            nameInput.dispatchEvent(new Event('change', { bubbles: true }));
+            nameInput.dispatchEvent(new Event('blur', { bubbles: true }));
             nameSet = true;
-            break;
           } catch (e) {}
         }
       } else {
         nameSet = true;
       }
+
+      let relCtrl = nearestControlRight(
+        relationTypeLabel,
+        'select,input[title*="S/O" i],input[aria-label*="S/O" i],div[role="combobox"],span[role="combobox"],a[role="button"],button'
+      );
+      if (!relCtrl) {
+        relCtrl = Array.from(document.querySelectorAll(
+          'select[title*="S/O" i],select[aria-label*="S/O" i],input[title*="S/O" i],input[aria-label*="S/O" i],div[role="combobox"],span[role="combobox"]'
+        )).filter(vis)[0] || null;
+      }
+
+      if (relCtrl && relKey) {
+        try { relCtrl.click(); } catch (e) {}
+        // Native select
+        if (relCtrl.tagName === 'SELECT') {
+          const opts = Array.from(relCtrl.options || []);
+          const hit = opts.find(o => norm(o.textContent || '').includes(relKey));
+          if (hit) {
+            try {
+              relCtrl.value = hit.value;
+              relCtrl.dispatchEvent(new Event('input', { bubbles: true }));
+              relCtrl.dispatchEvent(new Event('change', { bubbles: true }));
+              relSet = true;
+            } catch (e) {}
+          }
+        }
+        // Popup option list
+        if (!relSet) {
+          const options = Array.from(document.querySelectorAll('[role="option"],li,div,span,a,td')).filter(vis);
+          for (const o of options) {
+            const t = norm(o.innerText || o.textContent || '');
+            if (t === relKey || t.includes(relKey)) {
+              try { o.click(); relSet = true; break; } catch (e) {}
+            }
+          }
+        }
+        // Input text fallback
+        if (!relSet && relCtrl.tagName === 'INPUT') {
+          try {
+            relCtrl.focus();
+            relCtrl.value = relKey === 'SO' ? 'S/O' : (relKey === 'WO' ? 'W/O' : (relKey === 'DO' ? 'D/O' : relKey));
+            relCtrl.dispatchEvent(new Event('input', { bubbles: true }));
+            relCtrl.dispatchEvent(new Event('change', { bubbles: true }));
+            relCtrl.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+            relCtrl.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', bubbles: true }));
+            relSet = true;
+          } catch (e) {}
+        }
+      } else if (!relKey) {
+        relSet = true;
+      }
+
       return { relSet, nameSet };
     }"""
     for frame in _ordered_frames(page):
@@ -2321,6 +2388,10 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
         f"relation_type_filled={rel_ok!r}, relation_name_filled={name_ok!r}, "
         f"relation_used={eff_relation!r}, relation_name_used={eff_father!r}."
     )
+    if not name_ok:
+        note("Relation's Name was not verified as filled on the opened customer form.")
+    if not rel_ok:
+        note("Relation type (S/O/W/O/D/O) was not verified as selected from dropdown.")
     return bool(rel_ok and name_ok)
 
 
