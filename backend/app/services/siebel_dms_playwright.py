@@ -335,6 +335,140 @@ def _try_fill_mobile_dom_scan(page: Page, value: str) -> bool:
     return False
 
 
+def _try_fill_mobile_and_find_in_contact_applet(
+    page: Page,
+    *,
+    mobile: str,
+    timeout_ms: int,
+    content_frame_selector: str | None,
+    mobile_aria_hints: list[str],
+) -> bool:
+    """
+    Keep interaction inside the opened global Find->Contact applet (right fly-in): fill Mobile Phone,
+    then click the local Find icon/button in the same applet.
+    """
+    if not (mobile or "").strip():
+        return False
+    mobile_selectors = _mobile_selectors(mobile_aria_hints)
+    find_css = (
+        'input[type="submit"][value*="Find" i]',
+        'input[type="button"][value*="Find" i]',
+        'button[title="Find" i]',
+        'button[title*="Find" i]',
+        'a[title="Find" i]',
+        'a[title*="Find" i]',
+        '[role="button"][title="Find" i]',
+        '[role="button"][title*="Find" i]',
+        'button[aria-label="Find" i]',
+        'button[aria-label*="Find" i]',
+        '[role="button"][aria-label="Find" i]',
+        '[role="button"][aria-label*="Find" i]',
+    )
+
+    def try_root(root) -> bool:
+        applets: list = []
+        # Prefer applet that looks like Find->Contact (contains Mobile Phone + First/Last name labels).
+        try:
+            cand = root.locator(".siebui-applet").filter(has_text=re.compile(r"Mobile\s*Phone", re.I))
+            n = cand.count()
+            for i in range(min(n, 12)):
+                a = cand.nth(i)
+                try:
+                    if not a.is_visible(timeout=500):
+                        continue
+                    txt = (a.inner_text(timeout=900) or "").lower()
+                    if ("first name" in txt or "last name" in txt or "contact type" in txt):
+                        applets.append(a)
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        # Fallback to any visible applet containing Mobile Phone.
+        if not applets:
+            try:
+                cand = root.locator(".siebui-applet").filter(has_text=re.compile(r"Mobile\s*Phone", re.I))
+                n = cand.count()
+                for i in range(min(n, 12)):
+                    a = cand.nth(i)
+                    try:
+                        if a.is_visible(timeout=450):
+                            applets.append(a)
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+
+        for applet in applets:
+            # Fill mobile only within this applet.
+            filled = False
+            for css in mobile_selectors:
+                try:
+                    loc = applet.locator(css).first
+                    if loc.count() <= 0 or not loc.is_visible(timeout=700):
+                        continue
+                    try:
+                        loc.click(timeout=min(3000, timeout_ms))
+                    except Exception:
+                        loc.click(timeout=min(3000, timeout_ms), force=True)
+                    loc.fill("", timeout=min(3000, timeout_ms))
+                    loc.fill(mobile.strip(), timeout=timeout_ms)
+                    filled = True
+                    break
+                except Exception:
+                    continue
+            if not filled:
+                try:
+                    loc = applet.get_by_label(re.compile(r"mobile\s*(phone|number|no|#)?", re.I)).first
+                    if loc.count() > 0 and loc.is_visible(timeout=700):
+                        loc.fill("", timeout=min(3000, timeout_ms))
+                        loc.fill(mobile.strip(), timeout=timeout_ms)
+                        filled = True
+                except Exception:
+                    pass
+            if not filled:
+                continue
+
+            _safe_page_wait(page, 150, log_label="contact_applet_mobile_filled")
+            # Click Find icon/button inside same applet.
+            for css in find_css:
+                try:
+                    btn = applet.locator(css).first
+                    if btn.count() > 0 and btn.is_visible(timeout=700):
+                        try:
+                            btn.click(timeout=timeout_ms)
+                        except Exception:
+                            btn.click(timeout=timeout_ms, force=True)
+                        return True
+                except Exception:
+                    continue
+            # Fallback by title
+            try:
+                btn = applet.get_by_title(re.compile(r"^\s*Find\s*$", re.I)).first
+                if btn.count() > 0 and btn.is_visible(timeout=700):
+                    try:
+                        btn.click(timeout=timeout_ms)
+                    except Exception:
+                        btn.click(timeout=timeout_ms, force=True)
+                    return True
+            except Exception:
+                pass
+        return False
+
+    for fl in _iter_frame_locator_roots(page, content_frame_selector):
+        try:
+            if try_root(fl):
+                return True
+        except Exception:
+            continue
+    for frame in _ordered_frames(page):
+        try:
+            if try_root(frame):
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def _siebel_blur_and_settle(page: Page, *, ms: int = 400) -> None:
     """Siebel often keeps focus in the Find/mobile field; blur so the main enquiry applet receives clicks."""
     try:
@@ -1135,6 +1269,18 @@ def _contact_view_find_by_mobile(
     _safe_page_wait(page, 600, log_label="after_find_contact_prep")
 
     _mobile_vis = 2400
+    # Prefer strict applet-scoped flow so focus stays in the Find->Contact fly-in.
+    scoped_applet_find_clicked = _try_fill_mobile_and_find_in_contact_applet(
+        page,
+        mobile=mobile,
+        timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+        mobile_aria_hints=mobile_aria_hints,
+    )
+    if scoped_applet_find_clicked:
+        note("Filled mobile and clicked Find inside the Contact applet (scoped).")
+        _safe_page_wait(page, wait_after_go_ms, log_label="after_contact_find_go_scoped")
+        return True
 
     def _attempt_fill_mobile() -> bool:
         ok = _try_fill_field(
