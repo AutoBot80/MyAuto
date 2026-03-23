@@ -796,13 +796,19 @@ def _load_customer_gender_from_master(customer_id: int | None) -> str:
         try:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT COALESCE(gender, '') FROM customer_master WHERE customer_id = %s",
+                    "SELECT COALESCE(gender, '') AS gender_val FROM customer_master WHERE customer_id = %s",
                     (customer_id,),
                 )
                 row = cur.fetchone()
                 if not row:
                     return ""
-                return _clean_text(row[0])
+                # RealDictCursor returns dict-like rows; keep tuple fallback for safety.
+                if isinstance(row, dict):
+                    return _clean_text(row.get("gender_val"))
+                try:
+                    return _clean_text(row[0])
+                except Exception:
+                    return ""
         finally:
             conn.close()
     except Exception as exc:
