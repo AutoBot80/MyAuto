@@ -1923,6 +1923,10 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
     page: Page,
     *,
     mobile: str,
+    first_name: str,
+    relation_prefix: str,
+    father_husband_name: str,
+    care_of: str,
     action_timeout_ms: int,
     content_frame_selector: str | None,
     note,
@@ -1954,24 +1958,34 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
     note("Opened contact from search hit hyperlink (video SOP).")
     _safe_page_wait(page, 1200, log_label="after_contact_drill_link")
 
-    nav_steps: tuple[tuple[re.Pattern[str], tuple[str, ...], str], ...] = (
-        (re.compile(r"^\s*Contacts\s*$", re.I), ("tab", "link", "button"), "Contacts"),
-        (re.compile(r"Contact[_\s-]?Enquiry", re.I), ("link", "tab", "menuitem"), "Contact_Enquiry"),
-        (re.compile(r"^\s*Enquiry\s*$", re.I), ("tab", "link", "button"), "Enquiry"),
-        (re.compile(r"All\s+Enquiries", re.I), ("link", "tab", "menuitem"), "All Enquiries"),
+    # Open full customer record by clicking the right-pane First Name cell/link (e.g., Akash).
+    opened_customer = _siebel_open_found_customer_record(
+        page,
+        mobile=mobile,
+        first_name=first_name,
+        timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
     )
-    for pat, roles, label in nav_steps:
-        if not _siebel_try_click_named_in_frames(
-            page,
-            pat,
-            roles=roles,
-            timeout_ms=action_timeout_ms,
-            content_frame_selector=content_frame_selector,
-        ):
-            note(f"Video SOP: navigation item not found or not clickable: {label!r}.")
-            return False
-        note(f"Clicked {label} (video SOP).")
-        _safe_page_wait(page, 1000, log_label=f"after_nav_{label.replace(' ', '_')}")
+    if not opened_customer:
+        note("Could not click First Name in Contacts pane (video SOP).")
+        return False
+    note("Opened customer record from Contacts pane by First Name click (video SOP).")
+
+    eff_relation, eff_father = _derive_relation_and_name(
+        relation_prefix=relation_prefix,
+        father_husband_name=father_husband_name,
+        care_of=care_of,
+    )
+    _fill_siebel_care_of_only(
+        page,
+        father=eff_father,
+        relation=eff_relation,
+        action_timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+    )
+    note(
+        "Video SOP: filled S/O/W/O/D/O and Relation's Name from care_of/father values after opening customer record."
+    )
     return True
 
 
@@ -2853,31 +2867,39 @@ def Playwright_Hero_DMS_fill(
                 return out
             form_trace(
                 "v2_drill_and_nav",
-                "Search Results + screen tabs",
-                "Siebel_Find_tab_optional_then_link_hit_then_Contacts_Contact_Enquiry_Enquiry_All_Enquiries",
+                "Search Results + Contacts detail",
+                "Siebel_Find_tab_optional_then_link_hit_then_click_first_name_then_fill_SOWODO_and_Relations_Name",
                 mobile_phone=mobile,
+                first_name=first,
+                relation_prefix=relation,
+                father_husband_name=father,
+                care_of=care_of,
             )
             if not _siebel_video_path_after_find_go_to_all_enquiries(
                 page,
                 mobile=mobile,
+                first_name=first,
+                relation_prefix=relation,
+                father_husband_name=father,
+                care_of=care_of,
                 action_timeout_ms=action_timeout_ms,
                 content_frame_selector=content_frame_selector,
                 note=note,
             ):
-                step("Stopped: video SOP navigation after Find/Go failed.")
+                step("Stopped: video SOP failed while opening customer record or filling relation fields.")
                 out["error"] = (
-                    "Siebel: video SOP — after Find/Go, could not complete drill-down or "
-                    "Contacts → Contact_Enquiry → Enquiry → All Enquiries. "
-                    "Confirm labels match Hero Connect and tune DMS_SIEBEL_CONTENT_FRAME_SELECTOR if needed."
+                    "Siebel: video SOP — after Find/Go, could not click customer/first-name or fill "
+                    "S/O-W/O-D/O and Relation's Name fields on the opened customer record. "
+                    "Confirm right-pane selectors and iframe scope."
                 )
                 return out
-            ms_done("All Enquiries opened")
+            ms_done("Care of filled")
             step(
-                "Video SOP complete: All Enquiries is open. Automation stops here "
+                "Video SOP complete: customer record opened and relation fields filled. Automation stops here "
                 "(SIEBEL_DMS_STOP_AFTER_ALL_ENQUIRIES); browser left open."
             )
             note(
-                "Stages 2–8 (basic enquiry, care-of, vehicle, booking, …) are skipped while "
+                "Stages 2–8 (basic enquiry, vehicle, booking, …) are skipped while "
                 "SIEBEL_DMS_STOP_AFTER_ALL_ENQUIRIES is True — set it False in siebel_dms_playwright.py to restore."
             )
             return out
