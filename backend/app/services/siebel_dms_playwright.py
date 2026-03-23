@@ -1637,7 +1637,7 @@ def _derive_relation_and_name(
     """
     rel = (relation_prefix or "").strip().upper().replace(".", "")
     name = (father_husband_name or "").strip()
-    co = (care_of or "").strip()
+    co = (care_of or "").strip() or name
     if not co:
         return rel, name
 
@@ -1655,6 +1655,149 @@ def _derive_relation_and_name(
     if rest:
         name = rest[:255]
     return rel, name
+
+
+def _fill_relation_fields_verified(
+    page: Page,
+    *,
+    relation: str,
+    relation_name: str,
+    action_timeout_ms: int,
+    content_frame_selector: str | None,
+) -> tuple[bool, bool]:
+    """
+    Fill relation type + Relation's Name and verify values stuck in the UI.
+    Returns ``(relation_type_filled, relation_name_filled)``.
+    """
+    rel = (relation or "").strip()
+    nm = (relation_name or "").strip()
+
+    _fill_siebel_care_of_only(
+        page,
+        father=nm,
+        relation=rel,
+        action_timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+    )
+    _safe_page_wait(page, 300, log_label="after_relation_fill_attempt")
+
+    rel_key = re.sub(r"[^A-Z]", "", rel.upper())  # S/O -> SO
+    nm_key = re.sub(r"\s+", " ", nm).strip().lower()
+
+    verify_js = """(relKey, nmKey) => {
+      const vis = (el) => {
+        if (!el) return false;
+        const st = window.getComputedStyle(el);
+        if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+        const r = el.getBoundingClientRect();
+        return r.width >= 2 && r.height >= 2;
+      };
+      const norm = (s) => String(s || '').replace(/[^a-z]/gi, '').toUpperCase();
+      let relOk = !relKey;
+      let nameOk = !nmKey;
+
+      const relSelects = Array.from(document.querySelectorAll(
+        'select[title*="S/O" i],select[aria-label*="S/O" i],select[title*="W/O" i],select[aria-label*="W/O" i],select[aria-label*="Relation" i],select[title*="Relation" i],select'
+      )).filter(vis);
+      for (const s of relSelects) {
+        try {
+          const idx = s.selectedIndex;
+          const tx = idx >= 0 ? ((s.options[idx] || {}).textContent || '') : '';
+          if (relKey && norm(tx).includes(relKey)) { relOk = true; break; }
+        } catch (e) {}
+      }
+
+      const nameInputs = Array.from(document.querySelectorAll(
+        'input[title*="Relation\\'s Name" i],input[aria-label*="Relation\\'s Name" i],input[title*="Relation Name" i],input[aria-label*="Relation Name" i],input[aria-label*="Father" i],input[aria-label*="Husband" i],input[type="text"]'
+      )).filter(vis);
+      for (const i of nameInputs) {
+        try {
+          const v = String(i.value || '').trim().toLowerCase();
+          if (nmKey && v && (v.includes(nmKey) || nmKey.includes(v))) { nameOk = true; break; }
+        } catch (e) {}
+      }
+      return { relOk, nameOk };
+    }"""
+
+    rel_ok = not rel
+    name_ok = not nm
+    for frame in _ordered_frames(page):
+        try:
+            got = frame.evaluate(verify_js, rel_key, nm_key)
+            rel_ok = rel_ok or bool((got or {}).get("relOk"))
+            name_ok = name_ok or bool((got or {}).get("nameOk"))
+            if rel_ok and name_ok:
+                return True, True
+        except Exception:
+            continue
+
+    # DOM force-set fallback (custom Open UI controls)
+    set_js = """(relKey, nmValue) => {
+      const vis = (el) => {
+        if (!el) return false;
+        const st = window.getComputedStyle(el);
+        if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+        const r = el.getBoundingClientRect();
+        return r.width >= 2 && r.height >= 2;
+      };
+      const norm = (s) => String(s || '').replace(/[^a-z]/gi, '').toUpperCase();
+      let relSet = false, nameSet = false;
+
+      const selects = Array.from(document.querySelectorAll(
+        'select[title*="S/O" i],select[aria-label*="S/O" i],select[title*="W/O" i],select[aria-label*="W/O" i],select[aria-label*="Relation" i],select[title*="Relation" i],select'
+      )).filter(vis);
+      for (const s of selects) {
+        const opts = Array.from(s.options || []);
+        const hit = opts.find(o => norm(o.textContent || '').includes(relKey));
+        if (!hit) continue;
+        try {
+          s.value = hit.value;
+          s.dispatchEvent(new Event('input', { bubbles: true }));
+          s.dispatchEvent(new Event('change', { bubbles: true }));
+          relSet = true;
+          break;
+        } catch (e) {}
+      }
+
+      if (nmValue) {
+        const inputs = Array.from(document.querySelectorAll(
+          'input[title*="Relation\\'s Name" i],input[aria-label*="Relation\\'s Name" i],input[title*="Relation Name" i],input[aria-label*="Relation Name" i],input[aria-label*="Father" i],input[aria-label*="Husband" i],input[type="text"]'
+        )).filter(vis);
+        for (const i of inputs) {
+          try {
+            i.focus();
+            i.value = '';
+            i.value = String(nmValue).trim();
+            i.dispatchEvent(new Event('input', { bubbles: true }));
+            i.dispatchEvent(new Event('change', { bubbles: true }));
+            i.dispatchEvent(new Event('blur', { bubbles: true }));
+            nameSet = true;
+            break;
+          } catch (e) {}
+        }
+      } else {
+        nameSet = true;
+      }
+      return { relSet, nameSet };
+    }"""
+    for frame in _ordered_frames(page):
+        try:
+            frame.evaluate(set_js, rel_key, nm)
+        except Exception:
+            continue
+    _safe_page_wait(page, 350, log_label="after_relation_dom_fallback")
+
+    # Verify once more
+    for frame in _ordered_frames(page):
+        try:
+            got = frame.evaluate(verify_js, rel_key, nm_key)
+            rel_ok = rel_ok or bool((got or {}).get("relOk"))
+            name_ok = name_ok or bool((got or {}).get("nameOk"))
+            if rel_ok and name_ok:
+                break
+        except Exception:
+            continue
+    return rel_ok, name_ok
 
 
 def _mobile_needle_for_contact_grid_match(mobile: str) -> str:
@@ -1976,17 +2119,19 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
         father_husband_name=father_husband_name,
         care_of=care_of,
     )
-    _fill_siebel_care_of_only(
+    rel_ok, name_ok = _fill_relation_fields_verified(
         page,
-        father=eff_father,
         relation=eff_relation,
+        relation_name=eff_father,
         action_timeout_ms=action_timeout_ms,
         content_frame_selector=content_frame_selector,
     )
     note(
-        "Video SOP: filled S/O/W/O/D/O and Relation's Name from care_of/father values after opening customer record."
+        "Video SOP relation-fill verification: "
+        f"relation_type_filled={rel_ok!r}, relation_name_filled={name_ok!r}, "
+        f"relation_used={eff_relation!r}, relation_name_used={eff_father!r}."
     )
-    return True
+    return bool(rel_ok and name_ok)
 
 
 def _siebel_open_found_customer_record(
@@ -2889,8 +3034,8 @@ def Playwright_Hero_DMS_fill(
                 step("Stopped: video SOP failed while opening customer record or filling relation fields.")
                 out["error"] = (
                     "Siebel: video SOP — after Find/Go, could not click customer/first-name or fill "
-                    "S/O-W/O-D/O and Relation's Name fields on the opened customer record. "
-                    "Confirm right-pane selectors and iframe scope."
+                    "S/O-W/O-D/O and Relation's Name fields on the opened customer record (verified). "
+                    "Confirm right-pane selectors/labels and iframe scope."
                 )
                 return out
             ms_done("Care of filled")
