@@ -350,6 +350,12 @@ def _try_fill_mobile_and_find_in_contact_applet(
     if not (mobile or "").strip():
         return False
     mobile_selectors = _mobile_selectors(mobile_aria_hints)
+    mobile_selectors = [
+        'input[title*="Mobile Phone" i]',
+        'input[title*="Mobile Phone #" i]',
+        'input[aria-label*="Mobile Phone" i]',
+        *mobile_selectors,
+    ]
     find_css = (
         'input[type="submit"][value*="Find" i]',
         'input[type="button"][value*="Find" i]',
@@ -364,6 +370,64 @@ def _try_fill_mobile_and_find_in_contact_applet(
         '[role="button"][aria-label="Find" i]',
         '[role="button"][aria-label*="Find" i]',
     )
+
+    _FILL_FIRST_IN_RIGHT_FIND_PANEL_JS = """(mobileValue) => {
+      const vis = (el) => {
+        if (!el) return false;
+        const st = window.getComputedStyle(el);
+        if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+        const r = el.getBoundingClientRect();
+        return r.width >= 2 && r.height >= 2;
+      };
+        const isTxt = (el) => {
+        if (!el || el.tagName !== 'INPUT') return false;
+        const t = String(el.type || 'text').toLowerCase();
+        return !['hidden','submit','button','checkbox','radio','file','image'].includes(t);
+      };
+      const panelCandidates = Array.from(document.querySelectorAll('div'))
+        .filter(vis)
+        .filter((d) => {
+          const r = d.getBoundingClientRect();
+          if (r.width < 220 || r.width > 480 || r.height < 180 || r.height > 620) return false;
+          if (r.left < window.innerWidth * 0.52) return false; // right-side fly-in
+          const txt = (d.innerText || '').toLowerCase();
+          return txt.includes('contact') || txt.includes('mobile') || txt.includes('rse') || txt.includes('tehsil');
+        });
+      if (!panelCandidates.length) return false;
+      panelCandidates.sort((a, b) => {
+        const ra = a.getBoundingClientRect();
+        const rb = b.getBoundingClientRect();
+        return ra.top - rb.top;
+      });
+      for (const panel of panelCandidates) {
+        const inputs = Array.from(panel.querySelectorAll('input')).filter((i) => isTxt(i) && vis(i));
+        if (!inputs.length) continue;
+        const first = inputs.find((i) => {
+          const t = String(i.getAttribute('title') || '').toLowerCase();
+          const a = String(i.getAttribute('aria-label') || '').toLowerCase();
+          return t.includes('mobile phone') || a.includes('mobile phone');
+        }) || inputs[0];
+        try {
+          first.focus();
+          first.value = '';
+          first.value = String(mobileValue || '').trim();
+          first.dispatchEvent(new Event('input', { bubbles: true }));
+          first.dispatchEvent(new Event('change', { bubbles: true }));
+          first.dispatchEvent(new Event('blur', { bubbles: true }));
+        } catch (e) {
+          continue;
+        }
+        const findBtn = panel.querySelector(
+          'button[title*="find" i],a[title*="find" i],[role="button"][title*="find" i],' +
+          'button[aria-label*="find" i],[role="button"][aria-label*="find" i],' +
+          'input[type="submit"][value*="find" i],input[type="button"][value*="find" i]'
+        );
+        if (findBtn && vis(findBtn)) {
+          try { findBtn.click(); return true; } catch (e) {}
+        }
+      }
+      return false;
+    }"""
 
     def try_root(root) -> bool:
         applets: list = []
@@ -453,6 +517,17 @@ def _try_fill_mobile_and_find_in_contact_applet(
             except Exception:
                 pass
         return False
+
+    # Strong fallback for custom Find popup: fill first visible field and click Find inside that popup.
+    for frame in _ordered_frames(page):
+        try:
+            if bool(frame.evaluate(_FILL_FIRST_IN_RIGHT_FIND_PANEL_JS, mobile.strip())):
+                logger.info(
+                    "siebel_dms: filled first visible input + clicked Find in right Contact popup (DOM fallback)"
+                )
+                return True
+        except Exception:
+            continue
 
     for fl in _iter_frame_locator_roots(page, content_frame_selector):
         try:
@@ -1278,7 +1353,10 @@ def _contact_view_find_by_mobile(
         mobile_aria_hints=mobile_aria_hints,
     )
     if scoped_applet_find_clicked:
-        note("Filled mobile and clicked Find inside the Contact applet (scoped).")
+        note(
+            "Filled mobile and clicked Find inside the Contact applet (scoped; includes first-field "
+            "right-popup fallback when labels are non-standard)."
+        )
         _safe_page_wait(page, wait_after_go_ms, log_label="after_contact_find_go_scoped")
         return True
 
