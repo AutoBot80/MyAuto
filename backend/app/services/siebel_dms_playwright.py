@@ -1158,6 +1158,37 @@ def _siebel_ui_suggests_contact_match(page: Page, mobile: str) -> bool:
     return False
 
 
+def _siebel_locator_search_roots(page: Page, content_frame_selector: str | None):
+    """Frames and chained ``FrameLocator`` roots (Siebel list is often inside inner iframes)."""
+    for fl in _iter_frame_locator_roots(page, content_frame_selector):
+        yield fl
+    for frame in _ordered_frames(page):
+        yield frame
+
+
+def _mobile_text_patterns_for_grid(mobile: str) -> list[re.Pattern[str]]:
+    """Match how Hero may show the number in grids (plain, spaced, dashed)."""
+    needle = _mobile_needle_for_contact_grid_match(mobile)
+    raw = re.sub(r"\D", "", (mobile or "").strip())
+    pats: list[re.Pattern[str]] = []
+    for chunk in (needle, raw):
+        if not chunk or len(chunk) < 8:
+            continue
+        pats.append(re.compile(re.escape(chunk)))
+        if len(chunk) == 10:
+            a, b = chunk[:5], chunk[5:]
+            pats.append(re.compile(rf"{re.escape(a)}[\s\-]{{0,3}}{re.escape(b)}"))
+    # Dedup by pattern string
+    seen: set[str] = set()
+    out: list[re.Pattern[str]] = []
+    for p in pats:
+        k = p.pattern
+        if k not in seen:
+            seen.add(k)
+            out.append(p)
+    return out
+
+
 def _siebel_try_click_named_in_frames(
     page: Page,
     pattern: re.Pattern[str],
@@ -1203,18 +1234,20 @@ def _siebel_try_click_mobile_search_hit_link(
     content_frame_selector: str | None,
 ) -> bool:
     """
-    After Find/Go, open the contact row from the left **Search Results** grid (video: blue link on
-    Title / mobile). Tries link role by number, then first ``<a>`` in a table row that contains the
-    mobile digits.
+    After Find/Go, open the contact row from the left **Search Results** list (video: blue link on
+    Title / mobile). Tries: link by accessible name, ``<a>`` filtered by phone text (spaced/dashed),
+    table rows (``tbody`` or not), ARIA ``role=row``, then **row click** if the row contains the digits
+    but has no link (some applets drill in on row activate).
     """
     needle = _mobile_needle_for_contact_grid_match(mobile)
-    raw = re.sub(r"\s+", "", (mobile or "").strip())
-    patterns: list[re.Pattern[str]] = []
-    if raw:
-        patterns.append(re.compile(re.escape(raw)))
-    if needle and needle != raw:
-        patterns.append(re.compile(re.escape(needle)))
-    for pat in patterns:
+    raw_compact = re.sub(r"\s+", "", (mobile or "").strip())
+    raw_digits = re.sub(r"\D", "", (mobile or "").strip())
+    name_patterns: list[re.Pattern[str]] = []
+    if raw_compact:
+        name_patterns.append(re.compile(re.escape(raw_compact)))
+    if needle and needle != raw_compact:
+        name_patterns.append(re.compile(re.escape(needle)))
+    for pat in name_patterns:
         if _siebel_try_click_named_in_frames(
             page,
             pat,
@@ -1224,35 +1257,85 @@ def _siebel_try_click_mobile_search_hit_link(
         ):
             return True
 
-    if not needle:
+    text_patterns = _mobile_text_patterns_for_grid(mobile or "")
+    row_selectors = (
+        "table tbody tr",
+        "table tr",
+        '[role="row"]',
+        "tr[role='row']",
+    )
+
+    def row_contains_needle(row_digits: str) -> bool:
+        if needle and needle in row_digits:
+            return True
+        if raw_digits and len(raw_digits) >= 8 and raw_digits in row_digits:
+            return True
         return False
-    for frame in _ordered_frames(page):
-        try:
-            rows = frame.locator("table tbody tr")
-            n = rows.count()
-            for i in range(min(n, 100)):
+
+    def try_click_in_root(root) -> bool:
+        # Anchors whose visible / inner text matches common phone formatting
+        for tpat in text_patterns:
+            try:
+                hits = root.locator("a").filter(has_text=tpat)
+                hn = hits.count()
+                for i in range(min(hn, 25)):
+                    a = hits.nth(i)
+                    try:
+                        if a.is_visible(timeout=500):
+                            a.click(timeout=timeout_ms)
+                            return True
+                    except Exception:
+                        continue
+            except Exception:
+                continue
+        # Scan list rows: prefer first <a> in a row that contains the mobile anywhere
+        if not needle and not (raw_digits and len(raw_digits) >= 8):
+            return False
+        for rsel in row_selectors:
+            try:
+                rows = root.locator(rsel)
+                n = rows.count()
+            except Exception:
+                continue
+            for i in range(min(n, 120)):
                 row = rows.nth(i)
                 try:
-                    if not row.is_visible(timeout=200):
+                    if not row.is_visible(timeout=250):
                         continue
                 except Exception:
                     continue
                 try:
-                    row_digits = re.sub(r"\D", "", row.inner_text(timeout=500) or "")
+                    row_digits = re.sub(r"\D", "", row.inner_text(timeout=800) or "")
                 except Exception:
                     continue
-                if needle not in row_digits:
+                if not row_contains_needle(row_digits):
                     continue
-                al = row.locator("a")
-                try:
-                    if al.count() <= 0:
+                for inner in (
+                    row.locator("a[href]"),
+                    row.locator("a"),
+                    row.get_by_role("link"),
+                ):
+                    try:
+                        if inner.count() <= 0:
+                            continue
+                        link = inner.first
+                        if link.is_visible(timeout=500):
+                            link.click(timeout=timeout_ms)
+                            return True
+                    except Exception:
                         continue
-                    link = al.first
-                    if link.is_visible(timeout=450):
-                        link.click(timeout=timeout_ms)
-                        return True
+                # Row itself is the hit target (Open UI list row)
+                try:
+                    row.click(timeout=timeout_ms)
+                    return True
                 except Exception:
                     continue
+        return False
+
+    for root in _siebel_locator_search_roots(page, content_frame_selector):
+        try:
+            if try_click_in_root(root):
+                return True
         except Exception:
             continue
     return False
@@ -1271,7 +1354,7 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
     optional **Siebel Find** tab → click hit hyperlink → **Contacts** → **Contact_Enquiry** →
     **Enquiry** → **All Enquiries**.
     """
-    _safe_page_wait(page, 800, log_label="after_find_go_before_drill")
+    _safe_page_wait(page, 2200, log_label="after_find_go_before_drill")
     if _siebel_try_click_named_in_frames(
         page,
         re.compile(r"Siebel\s*Find", re.I),
