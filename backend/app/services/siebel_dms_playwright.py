@@ -1842,7 +1842,7 @@ def _fill_relation_fields_verified(
     rel = (relation or "").strip()
     nm = (relation_name or "").strip()
 
-    # Requested order: fill Relation's Name first, then pick S/O\W/O\D/O from dropdown.
+    # User-requested mode: fill only Relation's Name and skip relation type selection.
     name_fill_attempted = False
     if nm:
         name_fill_attempted = _try_fill_field(
@@ -1862,14 +1862,7 @@ def _fill_relation_fields_verified(
             prefer_second_if_duplicate=True,
         )
     _safe_page_wait(page, 180, log_label="after_relation_name_fill")
-    if rel:
-        _pick_relation_type_from_dropdown(
-            page,
-            relation=rel,
-            timeout_ms=action_timeout_ms,
-            content_frame_selector=content_frame_selector,
-        )
-    _safe_page_wait(page, 300, log_label="after_relation_fill_attempt")
+    _safe_page_wait(page, 220, log_label="after_relation_name_only_attempt")
 
     rel_key = re.sub(r"[^A-Z]", "", rel.upper())  # S/O -> SO
     nm_key = re.sub(r"\s+", " ", nm).strip().lower()
@@ -1909,7 +1902,7 @@ def _fill_relation_fields_verified(
       return { relOk, nameOk };
     }"""
 
-    rel_ok = not rel
+    rel_ok = True  # intentionally skipped by request
     name_ok = (not nm) or bool(name_fill_attempted)
     for frame in _ordered_frames(page):
         try:
@@ -1921,8 +1914,8 @@ def _fill_relation_fields_verified(
         except Exception:
             continue
 
-    # DOM force-set fallback (custom Open UI controls) using label proximity.
-    set_js = """(relKey, nmValue) => {
+    # DOM force-set fallback for Relation's Name only (label proximity).
+    set_js = """(nmValue) => {
       const vis = (el) => {
         if (!el) return false;
         const st = window.getComputedStyle(el);
@@ -1930,18 +1923,13 @@ def _fill_relation_fields_verified(
         const r = el.getBoundingClientRect();
         return r.width >= 2 && r.height >= 2;
       };
-      const norm = (s) => String(s || '').replace(/[^a-z]/gi, '').toUpperCase();
       const txt = (s) => String(s || '').trim().toLowerCase();
-      let relSet = false, nameSet = false;
+      let nameSet = false;
 
       const allTextNodes = Array.from(document.querySelectorAll('label,span,div,td,th')).filter(vis);
       const relNameLabel = allTextNodes.find(el => {
         const t = txt(el.innerText || '');
         return (t.includes("relation") && t.includes("name")) || t.includes("relation's name");
-      });
-      const relationTypeLabel = allTextNodes.find(el => {
-        const t = txt(el.innerText || '');
-        return t.includes('s/o') || t.includes('w/o') || t.includes('d/o');
       });
 
       const nearestControlRight = (labelEl, selector) => {
@@ -2010,88 +1998,22 @@ def _fill_relation_fields_verified(
         nameSet = true;
       }
 
-      let relCtrl = nearestInSameRow(
-        relationTypeLabel,
-        'select,input[title*="S/O" i],input[aria-label*="S/O" i],div[role="combobox"],span[role="combobox"],a[role="button"],button'
-      );
-      if (!relCtrl) {
-        relCtrl = nearestControlRight(
-          relationTypeLabel,
-          'select,input[title*="S/O" i],input[aria-label*="S/O" i],div[role="combobox"],span[role="combobox"],a[role="button"],button'
-        );
-      }
-      if (!relCtrl) {
-        relCtrl = Array.from(document.querySelectorAll(
-          'select[title*="S/O" i],select[aria-label*="S/O" i],input[title*="S/O" i],input[aria-label*="S/O" i],div[role="combobox"],span[role="combobox"]'
-        )).filter(vis)[0] || null;
-      }
-
-      if (relCtrl && relKey) {
-        try { relCtrl.click(); } catch (e) {}
-        try {
-          const nearButtons = Array.from((relCtrl.parentElement || document).querySelectorAll('a,button,span,img,[role="button"]')).filter(vis);
-          for (const b of nearButtons) {
-            const bt = txt(b.getAttribute('title') || '') + ' ' + txt(b.getAttribute('aria-label') || '');
-            if (bt.includes('pick') || bt.includes('list') || bt.includes('dropdown') || bt.includes('select') || bt.includes('arrow')) {
-              try { b.click(); } catch (e) {}
-            }
-          }
-        } catch (e) {}
-        // Native select
-        if (relCtrl.tagName === 'SELECT') {
-          const opts = Array.from(relCtrl.options || []);
-          const hit = opts.find(o => norm(o.textContent || '').includes(relKey));
-          if (hit) {
-            try {
-              relCtrl.value = hit.value;
-              relCtrl.dispatchEvent(new Event('input', { bubbles: true }));
-              relCtrl.dispatchEvent(new Event('change', { bubbles: true }));
-              relSet = true;
-            } catch (e) {}
-          }
-        }
-        // Popup option list
-        if (!relSet) {
-          const options = Array.from(document.querySelectorAll('[role="option"],li,div,span,a,td')).filter(vis);
-          for (const o of options) {
-            const t = norm(o.innerText || o.textContent || '');
-            if (t === relKey || t.includes(relKey)) {
-              try { o.click(); relSet = true; break; } catch (e) {}
-            }
-          }
-        }
-        // Input text fallback
-        if (!relSet && relCtrl.tagName === 'INPUT') {
-          try {
-            relCtrl.focus();
-            relCtrl.value = relKey === 'SO' ? 'S/O' : (relKey === 'WO' ? 'W/O' : (relKey === 'DO' ? 'D/O' : relKey));
-            relCtrl.dispatchEvent(new Event('input', { bubbles: true }));
-            relCtrl.dispatchEvent(new Event('change', { bubbles: true }));
-            relCtrl.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-            relCtrl.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', bubbles: true }));
-            relSet = true;
-          } catch (e) {}
-        }
-      } else if (!relKey) {
-        relSet = true;
-      }
-
-      return { relSet, nameSet };
+      return { nameSet };
     }"""
     dom_set_any = False
     for frame in _ordered_frames(page):
         try:
-            got_set = frame.evaluate(set_js, rel_key, nm)
+            got_set = frame.evaluate(set_js, nm)
             if isinstance(got_set, dict):
-                dom_set_any = dom_set_any or bool(got_set.get("relSet")) or bool(got_set.get("nameSet"))
+                dom_set_any = dom_set_any or bool(got_set.get("nameSet"))
         except Exception:
             continue
-    _safe_page_wait(page, 350, log_label="after_relation_dom_fallback")
+    _safe_page_wait(page, 300, log_label="after_relation_name_dom_fallback")
 
     # Verify once more
     for frame in _ordered_frames(page):
         try:
-            got = frame.evaluate(verify_js, rel_key, nm_key)
+            got = frame.evaluate(verify_js, "", nm_key)
             rel_ok = rel_ok or bool((got or {}).get("relOk"))
             name_ok = name_ok or bool((got or {}).get("nameOk"))
             if rel_ok and name_ok:
@@ -2437,8 +2359,7 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
     )
     if not name_ok:
         note("Relation's Name was not verified as filled on the opened customer form.")
-    if not rel_ok:
-        note("Relation type (S/O/W/O/D/O) was not verified as selected from dropdown.")
+    note("Relation type field is intentionally skipped in this mode (user-requested).")
     return bool(rel_ok and name_ok)
 
 
@@ -3321,7 +3242,7 @@ def Playwright_Hero_DMS_fill(
             form_trace(
                 "v2_drill_and_nav",
                 "Search Results + Contacts detail",
-                "Siebel_Find_tab_optional_then_link_hit_then_click_first_name_then_fill_SOWODO_and_Relations_Name",
+                "Siebel_Find_tab_optional_then_link_hit_then_click_first_name_then_fill_Relations_Name_only",
                 mobile_phone=mobile,
                 first_name=first,
                 relation_prefix=relation,
@@ -3342,7 +3263,7 @@ def Playwright_Hero_DMS_fill(
                 step("Stopped: video SOP failed while opening customer record or filling relation fields.")
                 out["error"] = (
                     "Siebel: video SOP — after Find/Go, could not click customer/first-name or fill "
-                    "S/O-W/O-D/O and Relation's Name fields on the opened customer record (verified). "
+                    "Relation's Name field on the opened customer record (verified). "
                     "Confirm right-pane selectors/labels and iframe scope."
                 )
                 return out
