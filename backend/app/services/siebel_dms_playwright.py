@@ -2580,6 +2580,54 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
             note("Could not click Contact_Enquiry tab after left mobile re-click.")
             return False
         note("Opened Contact_Enquiry after re-clicking left mobile (video SOP).")
+        _safe_page_wait(page, 600, log_label="after_contact_enquiry_tab_open")
+
+        # If enquiry rows are shown, click Enquiry# drill-down link.
+        clicked_enquiry = False
+        if _siebel_try_click_named_in_frames(
+            page,
+            re.compile(r"enquiry\s*#?", re.I),
+            roles=("link",),
+            timeout_ms=action_timeout_ms,
+            content_frame_selector=content_frame_selector,
+        ):
+            clicked_enquiry = True
+        else:
+            for root in _siebel_locator_search_roots(page, content_frame_selector):
+                try:
+                    apps = root.locator(".siebui-applet").filter(has_text=re.compile(r"contact[_\s]*enquiry|enquiries?", re.I))
+                    n_apps = apps.count()
+                    for ai in range(min(n_apps, 6)):
+                        app = apps.nth(ai)
+                        if not app.is_visible(timeout=600):
+                            continue
+                        for css in (
+                            "table tbody tr td a.siebui-ctrl-drilldown",
+                            "table tbody tr td a[href*='javascript']",
+                            "table tbody tr td a",
+                            "table tr td a",
+                        ):
+                            try:
+                                a = app.locator(css).first
+                                if a.count() > 0 and a.is_visible(timeout=500):
+                                    try:
+                                        a.click(timeout=action_timeout_ms)
+                                    except Exception:
+                                        a.click(timeout=action_timeout_ms, force=True)
+                                    clicked_enquiry = True
+                                    break
+                            except Exception:
+                                continue
+                        if clicked_enquiry:
+                            break
+                    if clicked_enquiry:
+                        break
+                except Exception:
+                    continue
+        if clicked_enquiry:
+            note("Clicked Enquiry# from Contact_Enquiry sub form (video SOP).")
+        else:
+            note("No Enquiry# row/link shown in Contact_Enquiry sub form; skipping Enquiry# click.")
         return True
 
     # Native Playwright path first: use label mapping in frame locators / frames.
