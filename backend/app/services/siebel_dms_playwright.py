@@ -2482,69 +2482,6 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
     if not care_val:
         return True
 
-    fill_js = """(value) => {
-      const vis = (el) => {
-        if (!el) return false;
-        const st = window.getComputedStyle(el);
-        if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
-        const r = el.getBoundingClientRect();
-        return r.width >= 2 && r.height >= 2;
-      };
-      const norm = (s) => String(s || '').replace(/\\s+/g,' ').trim().toLowerCase();
-      const forms = Array.from(document.querySelectorAll('form[name="SWEForm4_0"]')).filter(vis);
-      const exactAria = "Relation's Name";
-      const fillOne = (inp) => {
-        if (!inp || !vis(inp)) return false;
-        try {
-          inp.focus();
-          inp.value = '';
-          inp.value = String(value || '').trim();
-          inp.dispatchEvent(new Event('input', { bubbles: true }));
-          inp.dispatchEvent(new Event('change', { bubbles: true }));
-          inp.dispatchEvent(new Event('blur', { bubbles: true }));
-          const got = norm(inp.value || '');
-          const want = norm(value || '');
-          return !!got && (got.includes(want) || want.includes(got));
-        } catch (e) {
-          return false;
-        }
-      };
-      const selectorPriority = [
-        'input[name="s_4_1_89_0"]',
-        'input.s_4_1_89_0',
-        'input[aria-labelledby="Relation\\'s_Name_Label_4"]',
-        'input[aria-label="Relation\\'s Name"]',
-        'textarea[aria-label="Relation\\'s Name"]',
-        'input[name^="s_4_1_"][aria-label="Relation\\'s Name"]',
-      ];
-
-      const trySelectors = (root) => {
-        for (const sel of selectorPriority) {
-          try {
-            const el = root.querySelector(sel);
-            if (fillOne(el)) return true;
-          } catch (e) {}
-        }
-        return false;
-      };
-
-      for (const f of forms) {
-        if (trySelectors(f)) return true;
-
-        const all = Array.from(f.querySelectorAll('input,textarea')).filter(vis);
-        const inpCi = all.find(el => norm(el.getAttribute('aria-label')) === norm(exactAria));
-        if (fillOne(inpCi)) return true;
-      }
-
-      // Fallback: sometimes the field is rendered in document scope, not inside SWEForm4_0.
-      if (trySelectors(document)) return true;
-      const allDoc = Array.from(document.querySelectorAll('input,textarea')).filter(vis);
-      const docCi = allDoc.find(el => norm(el.getAttribute('aria-label')) === norm(exactAria));
-      if (fillOne(docCi)) return true;
-
-      return false;
-    }"""
-
     # Deterministic navigation: after left hit, always open record via First Name.
     opened_customer = _siebel_open_found_customer_record(
         page,
@@ -2560,45 +2497,6 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
 
     _safe_page_wait(page, 700, log_label="after_first_name_click_before_relation_fill")
 
-    target_frames: list[Frame] = []
-    for frame in _ordered_frames(page):
-        try:
-            has_relation_obj = bool(
-                frame.evaluate(
-                    """() => {
-                      const vis = (el) => {
-                        if (!el) return false;
-                        const st = window.getComputedStyle(el);
-                        if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
-                        const r = el.getBoundingClientRect();
-                        return r.width >= 2 && r.height >= 2;
-                      };
-                      const candidates = [
-                        'form[name="SWEForm4_0"] input[name="s_4_1_89_0"]',
-                        'form[name="SWEForm4_0"] input[aria-label="Relation\\'s Name"]',
-                        'input[name="s_4_1_89_0"]',
-                        'input[aria-labelledby="Relation\\'s_Name_Label_4"]',
-                        'input[aria-label="Relation\\'s Name"]',
-                      ];
-                      for (const sel of candidates) {
-                        const el = document.querySelector(sel);
-                        if (vis(el)) return true;
-                      }
-                      return false;
-                    }"""
-                )
-            )
-            if has_relation_obj:
-                target_frames.append(frame)
-        except Exception:
-            continue
-    if target_frames:
-        for tf in target_frames[:3]:
-            try:
-                note(f"Relation field candidate frame detected: url={(tf.url or '')[:180]!r}, name={tf.name!r}")
-            except Exception:
-                continue
-
     def _after_relation_fill_nav() -> bool:
         if not _siebel_try_click_mobile_search_hit_link(
             page,
@@ -2612,7 +2510,7 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
         note("Re-clicked left mobile after Relation's Name fill; stop at end of this function.")
         return True
 
-    # Native Playwright path first: use label mapping in frame locators / frames.
+    # Restore earlier working style: label-based fill first.
     for fl in _iter_frame_locator_roots(page, content_frame_selector):
         try:
             loc = fl.get_by_label("Relation's Name", exact=True).first
@@ -2623,31 +2521,17 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
                     return _after_relation_fill_nav()
         except Exception:
             continue
-    for frame in (target_frames + [f for f in _ordered_frames(page) if f not in target_frames]):
+    for frame in _ordered_frames(page):
         try:
             loc = frame.get_by_label("Relation's Name", exact=True).first
             if loc.count() > 0 and loc.is_visible(timeout=700):
                 loc.fill(care_val, timeout=action_timeout_ms)
                 got = (loc.input_value(timeout=action_timeout_ms) or "").strip()
                 if got and (care_val.lower() in got.lower() or got.lower() in care_val.lower()):
-                    try:
-                        note(f"Relation's Name filled via get_by_label in frame: url={(frame.url or '')[:180]!r}, name={frame.name!r}")
-                    except Exception:
-                        pass
                     return _after_relation_fill_nav()
         except Exception:
             continue
 
-    for frame in (target_frames + [f for f in _ordered_frames(page) if f not in target_frames]):
-        try:
-            if bool(frame.evaluate(fill_js, care_val)):
-                try:
-                    note(f"Relation's Name filled via DOM selectors in frame: url={(frame.url or '')[:180]!r}, name={frame.name!r}")
-                except Exception:
-                    pass
-                return _after_relation_fill_nav()
-        except Exception:
-            continue
     note("Could not fill Relation's Name on opened customer record (video SOP).")
     return False
 
