@@ -784,6 +784,32 @@ def _load_required_form_dms_row(customer_id: int | None, vehicle_id: int | None)
     return row
 
 
+def _load_customer_gender_from_master(customer_id: int | None) -> str:
+    """
+    Preferred gender source for DMS relation-name derivation:
+    customer_master.gender (Aadhaar-derived and persisted via submit flow).
+    """
+    if customer_id is None:
+        return ""
+    try:
+        conn = get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT COALESCE(gender, '') FROM customer_master WHERE customer_id = %s",
+                    (customer_id,),
+                )
+                row = cur.fetchone()
+                if not row:
+                    return ""
+                return _clean_text(row[0])
+        finally:
+            conn.close()
+    except Exception as exc:
+        logger.warning("fill_dms_service: customer_master gender lookup failed customer_id=%s: %s", customer_id, exc)
+        return ""
+
+
 def _normalize_dms_relation_prefix(raw: object | None) -> str:
     s = _clean_text(raw).upper().replace(" ", "")
     if s in ("S/O", "SO"):
@@ -799,6 +825,7 @@ def _normalize_dms_relation_prefix(raw: object | None) -> str:
 
 def _build_dms_fill_values(customer_id: int | None, vehicle_id: int | None, subfolder: str | None = None) -> dict:
     row = _load_required_form_dms_row(customer_id, vehicle_id)
+    gender_master = _load_customer_gender_from_master(customer_id)
     addr_full = _clean_text(row.get("Address Line 1"))
     pin_raw = _clean_text(row.get("Pin Code"))[:6]
     state_raw = _clean_text(row.get("State"))
@@ -846,6 +873,7 @@ def _build_dms_fill_values(customer_id: int | None, vehicle_id: int | None, subf
         "financier_name": _clean_text(row.get("Financier Name"))[:255],
         "finance_required": finance_required,
         "dms_contact_path": contact_path,
+        "gender": gender_master or _clean_text(row.get("Gender")) or _clean_text(row.get("gender")),
         "customer_export": {
             "name": full_name,
             "address": _clean_text(inferred_addr.get("address")) or addr_full,

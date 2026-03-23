@@ -1630,6 +1630,7 @@ def _derive_relation_and_name(
     relation_prefix: str,
     father_husband_name: str,
     care_of: str,
+    gender: str,
 ) -> tuple[str, str]:
     """
     Use DB ``care_of`` when present: first marker (S/O, W/O, D/O) picks relation;
@@ -1637,12 +1638,17 @@ def _derive_relation_and_name(
     """
     rel = (relation_prefix or "").strip().upper().replace(".", "")
     name = (father_husband_name or "").strip()
+    g = (gender or "").strip().lower()
+    default_prefix = "S/o" if g.startswith("m") else "D/o"
     co = (care_of or "").strip() or name
     if not co:
         return rel, name
 
     m = re.match(r"^\s*(S\s*/?\s*O|W\s*/?\s*O|D\s*/?\s*O)\s*[:\-]?\s*(.*)\s*$", co, re.I)
     if not m:
+        # Parsed/derived fallback: prefix the name by gender rule.
+        if name and not re.match(r"^\s*[SWD]\s*/?\s*O\b", name, re.I):
+            name = f"{default_prefix} {name}".strip()
         return rel, name
     marker = re.sub(r"\s+", "", (m.group(1) or "").upper()).replace("/", "")
     rest = (m.group(2) or "").strip()
@@ -1653,7 +1659,9 @@ def _derive_relation_and_name(
     elif marker == "DO":
         rel = "D/O"
     if rest:
-        name = rest[:255]
+        name = f"{default_prefix} {rest}".strip()[:255]
+    elif name and not re.match(r"^\s*[SWD]\s*/?\s*O\b", name, re.I):
+        name = f"{default_prefix} {name}".strip()[:255]
     return rel, name
 
 
@@ -1845,8 +1853,8 @@ def _fill_relation_fields_verified(
     # User-requested mode: fill only Relation's Name on the opened customer record and skip relation type.
     def _fill_relation_name_on_opened_customer_form() -> bool:
         """
-        Strictly target the form that contains both customer first-name area and Relation's Name row.
-        Avoids writing into intermediate applets that may also have relation-like fields.
+        Strictly target the exact label text ``Relation's Name`` on the opened customer record.
+        Avoids writing into short-caps/other relation fields.
         """
         set_on_form_js = """(nmValue) => {
           const vis = (el) => {
@@ -1860,7 +1868,7 @@ def _fill_relation_fields_verified(
           const labels = Array.from(document.querySelectorAll('label,span,div,td,th')).filter(vis);
           const relLbl = labels.find(el => {
             const t = txt(el.innerText || '');
-            return (t.includes('relation') && t.includes('name')) || t.includes("relation's name");
+            return t === "relation's name" || t === "relation's name:";
           });
           if (!relLbl) return false;
           // Ensure this is the customer details form (has first-name context nearby).
@@ -1879,13 +1887,6 @@ def _fill_relation_fields_verified(
             if (dx < -10 || dx > 420) continue;
             const score = Math.max(dx, 0) + dy * 7;
             if (score < bestScore) { bestScore = score; best = c; }
-          }
-          if (!best) {
-            best = candidates.find(i => {
-              const t = txt(i.getAttribute('title') || '');
-              const a = txt(i.getAttribute('aria-label') || '');
-              return t.includes('relation') || a.includes('relation');
-            }) || null;
           }
           if (!best) return false;
           try {
@@ -1912,7 +1913,7 @@ def _fill_relation_fields_verified(
     if nm:
         name_fill_attempted = _fill_relation_name_on_opened_customer_form()
     if nm and not name_fill_attempted:
-        # Keep old selector path as fallback only.
+        # Exact selector fallback only (no Father/Husband short-caps fields).
         name_fill_attempted = _try_fill_field(
             page,
             [
@@ -1920,9 +1921,6 @@ def _fill_relation_fields_verified(
                 "input[aria-label*=\"Relation's Name\" i]",
                 "input[title*=\"Relation Name\" i]",
                 "input[aria-label*=\"Relation Name\" i]",
-                'input[aria-label*="Father" i]',
-                'input[aria-label*="Husband" i]',
-                'input[aria-label*="Parent" i]',
             ],
             nm[:255],
             timeout_ms=action_timeout_ms,
@@ -1997,7 +1995,7 @@ def _fill_relation_fields_verified(
       const allTextNodes = Array.from(document.querySelectorAll('label,span,div,td,th')).filter(vis);
       const relNameLabel = allTextNodes.find(el => {
         const t = txt(el.innerText || '');
-        return (t.includes("relation") && t.includes("name")) || t.includes("relation's name");
+        return t === "relation's name" || t === "relation's name:";
       });
 
       const nearestControlRight = (labelEl, selector) => {
@@ -2038,18 +2036,10 @@ def _fill_relation_fields_verified(
       if (nmValue) {
         let nameInput = nearestInSameRow(
           relNameLabel,
-          'input[title*="Relation" i],input[aria-label*="Relation" i],input[type="text"],textarea'
+          'input[type="text"],input,textarea'
         );
         if (!nameInput) {
-          nameInput = nearestControlRight(
-            relNameLabel,
-            'input[title*="Relation" i],input[aria-label*="Relation" i],input[type="text"],textarea'
-          );
-        }
-        if (!nameInput) {
-          nameInput = Array.from(document.querySelectorAll(
-            'input[title*="Relation\\'s Name" i],input[aria-label*="Relation\\'s Name" i],input[title*="Relation Name" i],input[aria-label*="Relation Name" i],input[type="text"]'
-          )).filter(vis)[0] || null;
+          nameInput = nearestControlRight(relNameLabel, 'input[type="text"],input,textarea');
         }
         if (nameInput) {
           try {
@@ -2358,6 +2348,7 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
     relation_prefix: str,
     father_husband_name: str,
     care_of: str,
+    gender: str,
     action_timeout_ms: int,
     content_frame_selector: str | None,
     note,
@@ -2406,6 +2397,7 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
         relation_prefix=relation_prefix,
         father_husband_name=father_husband_name,
         care_of=care_of,
+        gender=gender,
     )
     # Requested behavior: fill Relation's Name with the DB care_of text directly.
     relation_name_to_fill = (care_of or "").strip() or eff_father
@@ -3154,6 +3146,7 @@ def Playwright_Hero_DMS_fill(
     father = (dms_values.get("father_husband_name") or "").strip()
     relation = (dms_values.get("relation_prefix") or "").strip()
     care_of = (dms_values.get("care_of") or "").strip()
+    gender = (dms_values.get("gender") or "").strip()
     key_p = (dms_values.get("key_partial") or "").strip()
     frame_p = (dms_values.get("frame_partial") or "").strip()
     engine_p = (dms_values.get("engine_partial") or "").strip()
@@ -3178,6 +3171,7 @@ def Playwright_Hero_DMS_fill(
         log_fp.write(f"father_husband_name={father!r}\n")
         log_fp.write(f"relation_prefix={relation!r}\n")
         log_fp.write(f"care_of={care_of!r}\n")
+        log_fp.write(f"gender={gender!r}\n")
         log_fp.write(f"key_partial={key_p!r}\n")
         log_fp.write(f"frame_partial={frame_p!r}\n")
         log_fp.write(f"engine_partial={engine_p!r}\n")
@@ -3312,6 +3306,7 @@ def Playwright_Hero_DMS_fill(
                 relation_prefix=relation,
                 father_husband_name=father,
                 care_of=care_of,
+                gender=gender,
             )
             if not _siebel_video_path_after_find_go_to_all_enquiries(
                 page,
@@ -3320,6 +3315,7 @@ def Playwright_Hero_DMS_fill(
                 relation_prefix=relation,
                 father_husband_name=father,
                 care_of=care_of,
+                gender=gender,
                 action_timeout_ms=action_timeout_ms,
                 content_frame_selector=content_frame_selector,
                 note=note,
@@ -3349,6 +3345,7 @@ def Playwright_Hero_DMS_fill(
                 relation_prefix=relation,
                 father_husband_name=father,
                 care_of=care_of,
+                gender=gender,
             )
             if customer_was_found:
                 form_trace(
