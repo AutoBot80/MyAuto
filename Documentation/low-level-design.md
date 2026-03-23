@@ -146,7 +146,7 @@ backend/app/
 
 ### 2.4d Real Siebel DMS — BRD §6.1a checklist vs Playwright
 
-**Source of truth for intended steps:** `Documentation/business-requirements-document.md` **§6.1a**. **Code:** `backend/app/services/siebel_dms_playwright.py` (`run_hero_siebel_dms_flow`, nested `stage_5_vehicle_flow` for vehicle + In-Transit), `backend/app/services/fill_dms_service.py` (`_run_fill_dms_real_siebel_playwright`, `run_fill_dms_only`). **Operator trace:** each real **`/fill-dms/dms`** run overwrites `ocr_output/<dealer_id>/<subfolder>/Playwright_DMS.txt` with a live UTC log (values used, STEP/NOTE/MILESTONE, DECISIONs, `[END]` + error). Template folder `ocr_output/dealer/mobile_ddmmyyyy/` only explains this (no static SOP copy).
+**Source of truth for intended steps:** `Documentation/business-requirements-document.md` **§6.1a**. **Code:** `backend/app/services/siebel_dms_playwright.py` (`run_hero_siebel_dms_flow`, nested `stage_5_vehicle_flow` for vehicle + In-Transit), `backend/app/services/fill_dms_service.py` (`_run_fill_dms_real_siebel_playwright`, `run_fill_dms_only`). **Operator trace:** each real **`/fill-dms/dms`** run overwrites `ocr_output/<dealer_id>/<subfolder>/Playwright_DMS.txt` with a live UTC log (values used, STEP/NOTE/MILESTONE, **`[FORM]`** lines: `siebel_step`, form/screen label, action, field=value pairs, DECISIONs, `[END]` + error). Template folder `ocr_output/dealer/mobile_ddmmyyyy/` only explains this (no static SOP copy).
 
 | BRD §6.1a step | Intended Siebel action | Dummy (`DMS_MODE=dummy`) | Real Siebel (`DMS_MODE=real`) |
 |----------------|------------------------|---------------------------|-------------------------------|
@@ -261,3 +261,5 @@ See **Documentation/Database DDL.md** for full table structures. Summary:
 | 2.8 | Mar 2026 | — | Add Sales: no upload timing suffix; clear stale DMS banner on new upload |
 | 2.9 | Mar 2026 | — | **`Playwright_DMS.txt`** = runtime execution log (overwrite per run); Add Sales clears Fill DMS error + banner when tab visible again after hidden **only if** the last Fill DMS ended with error/warning |
 | 3.0 | Mar 2026 | — | Real Siebel: **`skip_find`** in `dms_contact_path` **ignored** — always Stage 1 Contact Find first (**§2.4d** + `fill_dms_service` docstring) |
+| 3.1 | Mar 2026 | — | Playwright: **never** `Browser.close()` / `Playwright.stop()` on API exit or thread switch; retain-list prevents GC closes; RTO payment dummy flow leaves Edge open |
+| 3.2 | Mar 2026 | — | **`Playwright_DMS.txt`**: **`[FORM]`** trace per SOP-ish step (screen, action, values); **`form_trace`** wired through vehicle scrape + pre-check/PDI helpers (**§2.4d**) |

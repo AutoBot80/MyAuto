@@ -1385,6 +1385,7 @@ def _siebel_goto_vehicle_list_and_scrape(
     action_timeout_ms: int,
     content_frame_selector: str | None,
     note,
+    form_trace=None,
 ) -> tuple[dict, str | None]:
     """Navigate to Auto Vehicle List, run key/chassis/engine query, return (scraped, error)."""
     _goto(page, vehicle_url, "vehicle_list", nav_timeout_ms=nav_timeout_ms)
@@ -1423,6 +1424,18 @@ def _siebel_goto_vehicle_list_and_scrape(
         timeout_ms=action_timeout_ms,
         content_frame_selector=content_frame_selector,
     )
+    if callable(form_trace):
+        form_trace(
+            "5_vehicle_list",
+            "Auto Vehicle List — search/query row",
+            "attempted_fill_on_key_chassis_engine_inputs_then_FindGo",
+            key_partial=key_p,
+            key_input_located=key_ok,
+            frame_partial=frame_p,
+            chassis_vin_input_located=frame_ok,
+            engine_partial=engine_p,
+            engine_input_located=engine_ok,
+        )
     if not (key_ok or frame_ok or engine_ok):
         return {}, (
             "Siebel: could not find key/chassis/engine search inputs on the vehicle view. "
@@ -1467,6 +1480,7 @@ def _siebel_run_precheck_and_pdi(
     note,
     ms_done,
     step=None,
+    form_trace=None,
 ) -> None:
     """
     §6.1a In Transit: **Pre Check** must complete before **PDI**.
@@ -1484,6 +1498,16 @@ def _siebel_run_precheck_and_pdi(
         say("Pre-check and PDI were skipped — PDI / pre-check URLs are not configured.")
         return
 
+    if callable(form_trace):
+        form_trace(
+            "5b_precheck_pdi",
+            "Pre Check / PDI (In Transit branch)",
+            "start_url_branching",
+            precheck_url_truncated=pu[:180] if pu else "",
+            pdi_url_truncated=du[:180] if du else "",
+            same_url_for_both=(pu == du) if (pu and du) else False,
+        )
+
     def mark_precheck(clicked: bool, ok_msg: str, fail_msg: str) -> None:
         if clicked:
             note(ok_msg)
@@ -1494,6 +1518,13 @@ def _siebel_run_precheck_and_pdi(
     if pu and du and pu == du:
         _goto(page, du, "pdi_precheck_same_url", nav_timeout_ms=nav_timeout_ms)
         _siebel_after_goto_wait(page, floor_ms=1000)
+        if callable(form_trace):
+            form_trace(
+                "5b_precheck_pdi",
+                "Combined Pre Check + PDI view",
+                "toolbar_click_PreCheck_Complete_then_PDI_Submit",
+                navigated_url_truncated=du[:180],
+            )
         pc = _try_click_precheck_complete(
             page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
         )
@@ -1502,10 +1533,24 @@ def _siebel_run_precheck_and_pdi(
             "Clicked Pre Check complete on combined PreCheck/PDI view.",
             "Pre Check control not found on combined view; operator may complete Pre Check manually.",
         )
+        if callable(form_trace):
+            form_trace(
+                "5b_precheck_pdi",
+                "Combined Pre Check + PDI view",
+                "after_PreCheck_click",
+                precheck_complete_clicked=pc,
+            )
         _safe_page_wait(page, 600, log_label="precheck_pdi_gap")
         pdi_ok = _try_click_pdi_submit(
             page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
         )
+        if callable(form_trace):
+            form_trace(
+                "5b_precheck_pdi",
+                "Combined Pre Check + PDI view",
+                "after_PDI_Submit_click",
+                pdi_submit_clicked=pdi_ok,
+            )
         if pdi_ok:
             note("Clicked PDI Submit.")
         else:
@@ -1524,6 +1569,13 @@ def _siebel_run_precheck_and_pdi(
     if pu:
         _goto(page, pu, "precheck", nav_timeout_ms=nav_timeout_ms)
         _siebel_after_goto_wait(page, floor_ms=1000)
+        if callable(form_trace):
+            form_trace(
+                "5b_precheck_pdi",
+                "Dedicated Pre Check view",
+                "toolbar_PreCheck_Complete",
+                navigated_url_truncated=pu[:180],
+            )
         pc = _try_click_precheck_complete(
             page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
         )
@@ -1532,6 +1584,8 @@ def _siebel_run_precheck_and_pdi(
             "Clicked Pre Check complete.",
             "Pre Check control not found; operator may complete Pre Check manually.",
         )
+        if callable(form_trace):
+            form_trace("5b_precheck_pdi", "Dedicated Pre Check view", "after_PreCheck", precheck_complete_clicked=pc)
         _safe_page_wait(page, 600, log_label="after_precheck_view")
         if pc:
             say("Pre-check step was completed on the pre-check view.")
@@ -1541,6 +1595,13 @@ def _siebel_run_precheck_and_pdi(
     if du:
         _goto(page, du, "pdi", nav_timeout_ms=nav_timeout_ms)
         _siebel_after_goto_wait(page, floor_ms=1000)
+        if callable(form_trace):
+            form_trace(
+                "5b_precheck_pdi",
+                "PDI / Auto Vehicle PDI Assessment view",
+                "navigated_for_PDI_submit_path",
+                navigated_url_truncated=du[:180],
+            )
         if not pu:
             pc2 = _try_click_precheck_complete(
                 page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
@@ -1559,6 +1620,8 @@ def _siebel_run_precheck_and_pdi(
         pdi_ok = _try_click_pdi_submit(
             page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
         )
+        if callable(form_trace):
+            form_trace("5b_precheck_pdi", "PDI view", "after_PDI_Submit_attempt", pdi_submit_clicked=pdi_ok)
         if pdi_ok:
             note("Clicked PDI Submit.")
             say("PDI was submitted.")
@@ -1656,7 +1719,11 @@ def run_hero_siebel_dms_flow(
         log_fp.write(f"url_contact_truncated={cu[:200]!r}\n")
         log_fp.write(f"url_enquiry_truncated={(urls.enquiry or '')[:200]!r}\n")
         log_fp.write(f"url_vehicle_truncated={(urls.vehicle or '')[:200]!r}\n")
-        log_fp.write("\n--- trace ---\n\n")
+        log_fp.write("\n--- trace ---\n")
+        log_fp.write(
+            "Legend: [STEP]/[NOTE]/[MILESTONE] = operator narrative; [FORM] = siebel_step + "
+            "Siebel form/screen + action + fields/values being applied on that form.\n\n"
+        )
         log_fp.flush()
 
     def _exec_log(prefix: str, msg: str) -> None:
@@ -1667,6 +1734,24 @@ def run_hero_siebel_dms_flow(
             log_fp.flush()
         except OSError:
             pass
+
+    def form_trace(siebel_step: str, form_name: str, action: str, **fields: object) -> None:
+        """Write one structured [FORM] line: step, screen/applet name, action, and field updates."""
+        segments = [f"siebel_step={siebel_step}", f"form={form_name}", f"action={action}"]
+        for key in sorted(fields.keys()):
+            val = fields[key]
+            if val is None:
+                continue
+            if isinstance(val, bool):
+                segments.append(f"{key}={val}")
+                continue
+            v = str(val).replace("\n", " ").strip()
+            if v == "":
+                continue
+            if len(v) > 500:
+                v = v[:497] + "..."
+            segments.append(f"{key}={v!r}")
+        _exec_log("FORM", " | ".join(segments))
 
     def ms_done(label: str) -> None:
         m = out["dms_milestones"]
@@ -1711,6 +1796,13 @@ def run_hero_siebel_dms_flow(
         def stage_4_add_care_of() -> None:
             note("Stage 4: care-of only (S/o, father/husband) — always runs per SOP.")
             step("Adding care-of / relation (stage 4 — mandatory after find / re-find).")
+            form_trace(
+                "4_care_of",
+                "Contact / Enquiry applet (Father–Husband + Relation line)",
+                "fill_care_of_fields_via_Siebel_selectors",
+                father_husband_name=father,
+                relation_prefix=relation,
+            )
             _fill_siebel_care_of_only(
                 page,
                 father=father,
@@ -1720,6 +1812,7 @@ def run_hero_siebel_dms_flow(
             )
             if father or relation:
                 ms_done("Care of filled")
+            form_trace("4_care_of", "same applet", "click_Save_or_Commit_toolbar_after_care_of")
             save_customer_record(
                 "Stage 4: Save after care-of update.",
                 "Stage 4: Save not detected after care-of update.",
@@ -1734,6 +1827,13 @@ def run_hero_siebel_dms_flow(
                     "so mobile search can run (stage 1)."
                 )
                 return False, False
+            form_trace(
+                "1_find_contact",
+                "Contact view — Find pane (mobile search)",
+                "goto_DMS_REAL_URL_CONTACT_expand_Find_fill_Mobile_Phone_click_FindGo",
+                contact_url_truncated=contact_url[:200],
+                mobile_phone=mobile,
+            )
             ok = _contact_view_find_by_mobile(
                 page,
                 contact_url=contact_url,
@@ -1778,6 +1878,16 @@ def run_hero_siebel_dms_flow(
                 return False
             note("Stage 2: basic enquiry only (name, address, state, PIN — no care-of on this step).")
             step("Creating new enquiry with basic details only (stage 2).")
+            form_trace(
+                "2_basic_enquiry",
+                "New enquiry / Contact main form (basic customer fields only)",
+                "fill_FirstName_LastName_Address_State_PIN",
+                first_name=first,
+                last_name=last,
+                address_line_1=(addr[:220] + "…") if len(addr) > 220 else addr,
+                state=state,
+                pin_code=pin,
+            )
             _fill_basic_enquiry_details(
                 page,
                 first=first,
@@ -1788,6 +1898,7 @@ def run_hero_siebel_dms_flow(
                 action_timeout_ms=action_timeout_ms,
                 content_frame_selector=content_frame_selector,
             )
+            form_trace("2_basic_enquiry", "same form", "click_Save_or_Commit_toolbar_after_basic_fields")
             save_customer_record(
                 "Stage 2: Save after basic enquiry details.",
                 "Stage 2: Save not detected after basic enquiry details.",
@@ -1801,6 +1912,13 @@ def run_hero_siebel_dms_flow(
                 note("Stage 3: skipped — no new enquiry (re-find mandatory only after new basic enquiry).")
                 step("Stage 3 skipped: re-find not required when contact already existed.")
                 return True
+            form_trace(
+                "3_refind_after_new_enquiry",
+                "Contact view — Find pane",
+                "goto_contact_fill_mobile_again_FindGo_to_open_saved_record",
+                contact_url_truncated=contact_url[:200],
+                mobile_phone=mobile,
+            )
             ok = _refind_customer_after_enquiry(
                 page,
                 contact_url=contact_url,
@@ -1832,6 +1950,15 @@ def run_hero_siebel_dms_flow(
             note("Stage 5: vehicle list search, scrape, and In-Transit handling.")
             step("Vehicle flow: key / chassis / engine search (stage 5).")
             vehicle_url = (urls.vehicle or "").strip()
+            form_trace(
+                "5_vehicle_list",
+                "Auto Vehicle List (DMS_REAL_URL_VEHICLE)",
+                "begin_vehicle_flow_navigate_then_search_applet",
+                vehicle_url_truncated=vehicle_url[:200] if vehicle_url else "",
+                key_partial=key_p,
+                frame_partial=frame_p,
+                engine_partial=engine_p,
+            )
             if not vehicle_url:
                 step("Stopped: DMS_REAL_URL_VEHICLE is not configured.")
                 out["error"] = (
@@ -1850,6 +1977,7 @@ def run_hero_siebel_dms_flow(
                 action_timeout_ms=action_timeout_ms,
                 content_frame_selector=content_frame_selector,
                 note=note,
+                form_trace=form_trace,
             )
             if veh_err:
                 step("Stopped during vehicle list search.")
@@ -1867,12 +1995,28 @@ def run_hero_siebel_dms_flow(
 
             in_transit_state = bool(scraped.get("in_transit"))
             note(f"DECISION: vehicle_in_transit={in_transit_state!r} (from scraped grid text).")
+            form_trace(
+                "5_vehicle_list",
+                "Auto Vehicle List — results grid (scraped row)",
+                "read_first_matching_row_from_grid",
+                key_num=str(scraped.get("key_num") or ""),
+                frame_num=str(scraped.get("frame_num") or ""),
+                engine_num=str(scraped.get("engine_num") or ""),
+                model=str(scraped.get("model") or ""),
+                in_transit=in_transit_state,
+            )
 
             if in_transit_state:
                 note("Stage 5b: vehicle grid suggests In Transit — Process Receipt, Pre Check, PDI.")
                 step("Vehicle appears in transit (receipt / pre-check / PDI path).")
                 recv_u = (urls.vehicles or "").strip()
                 if recv_u:
+                    form_trace(
+                        "5b_in_transit_receipt",
+                        "Vehicles / In Transit — receipt view (DMS_REAL_URL_VEHICLES)",
+                        "goto_receipt_URL_then_Process_Receipt_toolbar_if_present",
+                        receipt_url_truncated=recv_u[:200],
+                    )
                     _goto(page, recv_u, "vehicles_receipt", nav_timeout_ms=nav_timeout_ms)
                     _siebel_after_goto_wait(page, floor_ms=1000)
                     if _try_click_process_receipt(
@@ -1904,6 +2048,7 @@ def run_hero_siebel_dms_flow(
                     note=note,
                     ms_done=ms_done,
                     step=step,
+                    form_trace=form_trace,
                 )
             else:
                 note("Stage 5b: vehicle not In Transit — receipt/PDI branch skipped.")
@@ -1915,6 +2060,12 @@ def run_hero_siebel_dms_flow(
             note("Stage 6: Generate Booking (always after vehicle processing per SOP).")
             step("Generate Booking (stage 6 — always, regardless of In Transit).")
             enq_u = (urls.enquiry or "").strip() or (urls.contact or "").strip()
+            form_trace(
+                "6_generate_booking",
+                "Enquiry / My Enquiries (or Contact fallback)",
+                "navigate_if_configured_then_click_Generate_Booking_toolbar",
+                target_url_truncated=enq_u[:200] if enq_u else "",
+            )
             if enq_u:
                 _goto(page, enq_u, "enquiry_for_booking", nav_timeout_ms=nav_timeout_ms)
                 _siebel_after_goto_wait(page, floor_ms=1200)
@@ -1922,6 +2073,7 @@ def run_hero_siebel_dms_flow(
                 note("Stage 6: no DMS_REAL_URL_ENQUIRY or DMS_REAL_URL_CONTACT — booking may be on current view.")
 
             _safe_page_wait(page, 800, log_label="before_generate_booking")
+            form_trace("6_generate_booking", "current Siebel view", "click_Generate_Booking_toolbar_pattern_match")
             if _try_click_generate_booking(
                 page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
             ):
@@ -1940,6 +2092,12 @@ def run_hero_siebel_dms_flow(
             note("Stage 7: order line / allotment (non–In Transit only, after booking).")
             step("Opening allotment / line items after booking (stage 7).")
             line_u = (urls.line_items or "").strip()
+            form_trace(
+                "7_allotment",
+                "Order line / Allotment (DMS_REAL_URL_LINE_ITEMS)",
+                "navigate_then_Price_All_and_Allocate_toolbars_if_present",
+                line_items_url_truncated=line_u[:200] if line_u else "",
+            )
             if line_u:
                 _goto(page, line_u, "line_items_allotment", nav_timeout_ms=nav_timeout_ms)
                 _siebel_after_goto_wait(page, floor_ms=1200)
@@ -1960,6 +2118,11 @@ def run_hero_siebel_dms_flow(
                 step("Line items / allotment URL is not set — skipped allocation in UI.")
 
         def stage_8_invoice_hook() -> None:
+            form_trace(
+                "8_invoice",
+                "(no Siebel form — operator completes manually)",
+                "automation_hook_only_no_field_updates",
+            )
             note("Invoice step pending (not automated).")
             step("Ready for invoice creation.")
 
@@ -1982,9 +2145,21 @@ def run_hero_siebel_dms_flow(
                 return out
             note("skip_find: stage 1 (Find) bypassed — staged basic enquiry → re-find → care-of.")
             step("skip_find path: enquiry view opened.")
+            form_trace(
+                "skip_find_open_enquiry",
+                "Enquiry / My Enquiries (or Contact fallback)",
+                "goto_enquiry_URL_before_mobile_and_basic_fields",
+                enquiry_url_truncated=enquiry_url[:200],
+            )
             _goto(page, enquiry_url, "enquiry_or_contact", nav_timeout_ms=nav_timeout_ms)
             _siebel_after_goto_wait(page, floor_ms=1400)
 
+            form_trace(
+                "skip_find_mobile_on_enquiry",
+                "Enquiry / customer form (mobile field)",
+                "fill_Mobile_Phone_on_enquiry_applet",
+                mobile_phone=mobile,
+            )
             form_mobile_ok = _try_fill_mobile_on_enquiry_form(
                 page,
                 mobile,
@@ -2003,6 +2178,16 @@ def run_hero_siebel_dms_flow(
                 return out
 
             note("skip_find stage 2: basic enquiry details only (no care-of).")
+            form_trace(
+                "skip_find_basic_enquiry",
+                "Enquiry / customer form (basic fields)",
+                "fill_FirstName_LastName_Address_State_PIN",
+                first_name=first,
+                last_name=last,
+                address_line_1=(addr[:220] + "…") if len(addr) > 220 else addr,
+                state=state,
+                pin_code=pin,
+            )
             _fill_basic_enquiry_details(
                 page,
                 first=first,
@@ -2014,6 +2199,12 @@ def run_hero_siebel_dms_flow(
                 content_frame_selector=content_frame_selector,
             )
             if landline:
+                form_trace(
+                    "skip_find_basic_enquiry",
+                    "same form",
+                    "fill_landline_or_alternate_phone_if_configured",
+                    landline=(landline[:80] + "…") if len(landline) > 80 else landline,
+                )
                 dup = True
                 _try_fill_field(
                     page,
@@ -2027,6 +2218,7 @@ def run_hero_siebel_dms_flow(
                     content_frame_selector=content_frame_selector,
                     prefer_second_if_duplicate=dup,
                 )
+            form_trace("skip_find_basic_enquiry", "same form", "click_Save_or_Commit_toolbar_after_basic_fields")
             save_customer_record(
                 "skip_find: Save after basic enquiry details.",
                 "skip_find: Save not detected after basic enquiry details.",
@@ -2038,6 +2230,13 @@ def run_hero_siebel_dms_flow(
                     "Siebel skip_find: set DMS_REAL_URL_CONTACT for mandatory re-find (stage 3) after enquiry save."
                 )
                 return out
+            form_trace(
+                "skip_find_refind",
+                "Contact view — Find pane",
+                "goto_contact_fill_mobile_FindGo_after_enquiry_save",
+                contact_url_truncated=contact_url[:200],
+                mobile_phone=mobile,
+            )
             if not _refind_customer_after_enquiry(
                 page,
                 contact_url=contact_url,

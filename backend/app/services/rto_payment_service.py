@@ -386,38 +386,37 @@ def run_rto_pay(
     url = f"{base}/search.html?{query}"
 
     try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(
-                channel="msedge",
-                headless=not DMS_PLAYWRIGHT_HEADED,
-            )
-            context = browser.new_context()
-            page = context.new_page()
-            page.set_default_timeout(15_000)
+        # Never browser.close() / playwright.stop() — leave Edge open for the operator (same policy as Fill DMS).
+        p = sync_playwright().start()
+        browser = p.chromium.launch(
+            channel="msedge",
+            headless=not DMS_PLAYWRIGHT_HEADED,
+        )
+        context = browser.new_context()
+        page = context.new_page()
+        page.set_default_timeout(15_000)
 
-            page.goto(url, wait_until="domcontentloaded", timeout=20000)
-            page.wait_for_selector("#vahan-result-section:not(.hidden)", timeout=8000)
-            page.screenshot(path=str(screenshot_path))
-            result["screenshot_path"] = str(screenshot_path)
+        page.goto(url, wait_until="domcontentloaded", timeout=20000)
+        page.wait_for_selector("#vahan-result-section:not(.hidden)", timeout=8000)
+        page.screenshot(path=str(screenshot_path))
+        result["screenshot_path"] = str(screenshot_path)
 
-            page.click("#vahan-payment-btn")
-            page.wait_for_url("**/payment.html*", timeout=10000)
-            page.check("#vahan-accept-terms")
-            page.click("#vahan-payment-continue")
-            page.wait_for_url("**/bank-login.html*", timeout=10000)
-            page.click("#vahan-bank-login")
-            page.wait_for_url("**/bank-confirm.html*", timeout=10000)
-            page.click("#vahan-confirm-payment")
-            page.wait_for_selector("#vahan-confirm-tc-number:not(.hidden)", timeout=5000)
-            el = page.locator("#vahan-confirm-tc-number")
-            tc = el.get_attribute("data-tc") if el.count() > 0 else None
-            if tc and str(tc).strip():
-                result["pay_txn_id"] = str(tc).strip()
-                result["success"] = True
-            else:
-                result["error"] = "Could not capture TC number after Pay"
-
-            browser.close()
+        page.click("#vahan-payment-btn")
+        page.wait_for_url("**/payment.html*", timeout=10000)
+        page.check("#vahan-accept-terms")
+        page.click("#vahan-payment-continue")
+        page.wait_for_url("**/bank-login.html*", timeout=10000)
+        page.click("#vahan-bank-login")
+        page.wait_for_url("**/bank-confirm.html*", timeout=10000)
+        page.click("#vahan-confirm-payment")
+        page.wait_for_selector("#vahan-confirm-tc-number:not(.hidden)", timeout=5000)
+        el = page.locator("#vahan-confirm-tc-number")
+        tc = el.get_attribute("data-tc") if el.count() > 0 else None
+        if tc and str(tc).strip():
+            result["pay_txn_id"] = str(tc).strip()
+            result["success"] = True
+        else:
+            result["error"] = "Could not capture TC number after Pay"
     except PlaywrightTimeout as e:
         result["error"] = f"Timeout: {e!s}"
     except Exception as e:

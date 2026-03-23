@@ -4,6 +4,10 @@ Optionally fills dummy Vahan registration and returns application_id and rto_fee
 Uses Chromium (faster launch). Requires: pip install playwright && playwright install chromium.
 Uses headed browser by default (set DMS_PLAYWRIGHT_HEADED=false for headless).
 Writes pulled data to ocr_output/subfolder/Data from DMS.txt for consistency with other OCR outputs.
+
+**Browser lifetime:** This module never calls ``Browser.close()`` or ``Playwright.stop()`` for operator
+sessions (including on API process exit and thread switches). Edge/Chrome stays open for the operator;
+stale handles are moved to a retain list so GC does not implicitly close windows.
 """
 import base64
 import difflib
@@ -37,7 +41,6 @@ from app.config import (
     INSURANCE_LOGIN_WAIT_MS,
     INSURANCE_POLICY_FILL_TIMEOUT_MS,
     OCR_OUTPUT_DIR,
-    PLAYWRIGHT_KEEP_OPEN,
     PLAYWRIGHT_MANAGED_REMOTE_DEBUG_PORT,
     dms_automation_is_real_siebel,
 )
@@ -148,30 +151,28 @@ _PW = None
 _PW_THREAD_ID: int | None = None
 _KEEP_OPEN_BROWSERS: list = []
 _CDP_BROWSERS_BY_URL: dict[str, object] = {}
+# Strong refs so dropped Browser objects are not GC-finalized (which could close Edge/Chrome).
+_RETAINED_BROWSERS_NO_CLOSE: list = []
+
+
+def _retain_browsers_without_closing() -> None:
+    """Move tracked browsers to a permanent retain list; never call ``Browser.close()``."""
+    for b in list(_KEEP_OPEN_BROWSERS):
+        _RETAINED_BROWSERS_NO_CLOSE.append(b)
+    _KEEP_OPEN_BROWSERS.clear()
+    for b in list(_CDP_BROWSERS_BY_URL.values()):
+        _RETAINED_BROWSERS_NO_CLOSE.append(b)
+    _CDP_BROWSERS_BY_URL.clear()
 
 
 def _get_playwright():
-    """Persistent Playwright instance (only used when keep-open is enabled)."""
+    """Persistent Playwright instance; thread-affine — new thread gets a new driver without closing browsers."""
     global _PW, _PW_THREAD_ID
     current_thread_id = threading.get_ident()
     # Playwright sync objects are thread-affine; recreate on thread switch.
     if _PW is not None and _PW_THREAD_ID is not None and _PW_THREAD_ID != current_thread_id:
-        for b in list(_KEEP_OPEN_BROWSERS):
-            try:
-                b.close()
-            except Exception:
-                pass
-        _KEEP_OPEN_BROWSERS.clear()
-        for b in list(_CDP_BROWSERS_BY_URL.values()):
-            try:
-                b.close()
-            except Exception:
-                pass
-        _CDP_BROWSERS_BY_URL.clear()
-        try:
-            _PW.stop()
-        except Exception:
-            pass
+        _retain_browsers_without_closing()
+        # Do not _PW.stop() — that can tear down Playwright-launched browser processes.
         _PW = None
         _PW_THREAD_ID = None
     if _PW is None:
@@ -181,27 +182,12 @@ def _get_playwright():
 
 
 @atexit.register
-def _cleanup_keep_open_browsers() -> None:
-    global _PW, _PW_THREAD_ID
-    for b in list(_KEEP_OPEN_BROWSERS):
-        try:
-            b.close()
-        except Exception:
-            pass
-    _KEEP_OPEN_BROWSERS.clear()
-    for browser in list(_CDP_BROWSERS_BY_URL.values()):
-        try:
-            browser.close()
-        except Exception:
-            pass
-    _CDP_BROWSERS_BY_URL.clear()
-    if _PW is not None:
-        try:
-            _PW.stop()
-        except Exception:
-            pass
-        _PW = None
-        _PW_THREAD_ID = None
+def _preserve_browsers_on_process_exit() -> None:
+    """
+    Intentionally does not call ``Browser.close()`` or ``Playwright.stop()``.
+    Operator Edge/Chrome windows stay open when the API process exits (OS may still reap children).
+    """
+    return
 
 
 def _candidate_cdp_urls() -> list[str]:

@@ -85,6 +85,7 @@
 - **Logging:** Structured logs from FastAPI, bulk workers, OCR, and Playwright steps.
 - **Metrics:** Job success/failure, queue depth, API latency, and automation completion rate.
 - **Artifacts:** `ocr_output/<dealer>/<subfolder>/` stores OCR output plus `DMS_Form_Values.txt` and `Vahan_Form_Values.txt` for operator traceability. Real Siebel fill writes a fresh `Playwright_DMS.txt` execution log (steps, values, decisions) into that subfolder each run.
+- **Playwright:** The API does not call `Browser.close()` or `Playwright.stop()` for Fill DMS / CDP reuse / RTO payment flows (process exit and thread switches included); operator Edge/Chrome stays open. Orphaned Playwright drivers may accumulate on thread switches or repeated RTO runs.
 - **Alerts:** DLQ growth, high error rate, DB health, and worker lease/retry anomalies.
 
 ---
