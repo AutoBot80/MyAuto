@@ -2498,19 +2498,40 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
     _safe_page_wait(page, 700, log_label="after_first_name_click_before_relation_fill")
 
     def _after_relation_fill_nav() -> bool:
-        if not _siebel_try_click_mobile_search_hit_link(
-            page,
-            mobile,
-            timeout_ms=action_timeout_ms,
-            content_frame_selector=content_frame_selector,
-        ):
-            note("Could not re-click mobile in left Search Results after Relation's Name fill.")
-            return False
-        _safe_page_wait(page, 500, log_label="after_left_mobile_reclick_post_relation_fill")
-        note("Re-clicked left mobile after Relation's Name fill; stop at end of this function.")
+        note("Relation's Name filled; stopping on current field as requested.")
         return True
 
-    # Restore earlier working style: label-based fill first.
+    # Exact-input path first (from provided DOM snippet), then label fallback.
+    exact_selectors = (
+        "input[name='s_4_1_89_0'][aria-label=\"Relation's Name\"]",
+        "input[name='s_4_1_89_0']",
+        "input[aria-labelledby=\"Relation's_Name_Label_4\"]",
+        "input.s_4_1_89_0",
+    )
+    for fl in _iter_frame_locator_roots(page, content_frame_selector):
+        for css in exact_selectors:
+            try:
+                loc = fl.locator(css).first
+                if loc.count() > 0 and loc.is_visible(timeout=900):
+                    loc.fill(care_val, timeout=action_timeout_ms)
+                    got = (loc.input_value(timeout=action_timeout_ms) or "").strip()
+                    if got and (care_val.lower() in got.lower() or got.lower() in care_val.lower()):
+                        return _after_relation_fill_nav()
+            except Exception:
+                continue
+    for frame in _ordered_frames(page):
+        for css in exact_selectors:
+            try:
+                loc = frame.locator(css).first
+                if loc.count() > 0 and loc.is_visible(timeout=900):
+                    loc.fill(care_val, timeout=action_timeout_ms)
+                    got = (loc.input_value(timeout=action_timeout_ms) or "").strip()
+                    if got and (care_val.lower() in got.lower() or got.lower() in care_val.lower()):
+                        return _after_relation_fill_nav()
+            except Exception:
+                continue
+
+    # Restore earlier working style: label-based fill fallback.
     for fl in _iter_frame_locator_roots(page, content_frame_selector):
         try:
             loc = fl.get_by_label("Relation's Name", exact=True).first
