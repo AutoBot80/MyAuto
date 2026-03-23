@@ -42,9 +42,10 @@ from app.config import (
 
 logger = logging.getLogger(__name__)
 
-# Operator video: ``Find Contact Enquiry.mp4`` — global Find → Contact → mobile → Go → drill result →
-# Contacts → Contact_Enquiry → Enquiry → All Enquiries, then stop (browser stays open). Set False to
-# restore the full BRD linear SOP inside ``Playwright_Hero_DMS_fill``.
+# Operator video: ``Find Contact Enquiry.mp4`` — Find → Contact → mobile → Go; if **no contact table
+# rows**, **Add Enquiry** (vehicle chassis/VIN + engine, Enquiry tab, **Opportunities List:New**, DB fields,
+# Ctrl+S) then stop; else drill → Contacts → relation fill → Payments ``+``. Set False to restore the full
+# BRD linear SOP inside ``Playwright_Hero_DMS_fill``.
 SIEBEL_DMS_STOP_AFTER_ALL_ENQUIRIES = True
 
 
@@ -3753,6 +3754,366 @@ def _siebel_goto_vehicle_list_and_scrape(
     return scraped, None
 
 
+def _add_enquiry_vehicle_scrape_has_model_year_color(scraped: dict) -> bool:
+    """Require a grid row with model, year of manufacture, and color before creating an opportunity."""
+    m = (scraped.get("model") or "").strip()
+    y = (scraped.get("year_of_mfg") or "").strip()
+    c = (scraped.get("color") or "").strip()
+    return bool(m and y and c)
+
+
+def _merge_add_enquiry_vehicle_scrape(vehicle_merge: dict, scraped: dict) -> None:
+    """Copy scraped list-row fields into ``out['vehicle']``-style dict (same keys as stage 5 scrape)."""
+    for k in (
+        "model",
+        "color",
+        "year_of_mfg",
+        "key_num",
+        "frame_num",
+        "engine_num",
+        "vehicle_price",
+        "ex_showroom_price",
+        "in_transit",
+        "cubic_capacity",
+        "seating_capacity",
+        "body_type",
+        "vehicle_type",
+    ):
+        v = scraped.get(k)
+        if v is None:
+            continue
+        if isinstance(v, bool):
+            vehicle_merge[k] = v
+            continue
+        s = str(v).strip()
+        if s:
+            vehicle_merge[k] = s
+
+
+def _siebel_vehicle_find_chassis_engine_enter(
+    page: Page,
+    vehicle_url: str,
+    frame_p: str,
+    engine_p: str,
+    *,
+    nav_timeout_ms: int,
+    action_timeout_ms: int,
+    content_frame_selector: str | None,
+    note,
+) -> tuple[bool, dict]:
+    """
+    Vehicle list: fill VIN/Chassis + Engine from DB, Enter, optional Find/Go, then scrape grid row.
+    Returns ``(query_ok, scraped)`` — ``scraped`` may be empty if the grid did not render.
+    """
+    vu = (vehicle_url or "").strip()
+    fp = (frame_p or "").strip()
+    ep = (engine_p or "").strip()
+    if not vu:
+        note("Add Enquiry: DMS_REAL_URL_VEHICLE is not set — cannot open vehicle list.")
+        return False, {}
+    if not fp or not ep:
+        note("Add Enquiry: chassis/VIN and engine from DB are both required.")
+        return False, {}
+    _goto(page, vu, "vehicle_list_add_enquiry", nav_timeout_ms=nav_timeout_ms)
+    _safe_page_wait(page, 1500, log_label="vehicle_list_add_enquiry_open")
+    chassis_ok = _try_fill_field(
+        page,
+        [
+            'input[aria-label*="VIN" i]',
+            'input[aria-label*="Chassis" i]',
+            'input[aria-label*="Frame" i]',
+            'input[title*="VIN" i]',
+            'input[title*="Chassis" i]',
+        ],
+        fp,
+        timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+    )
+    engine_ok = _try_fill_field(
+        page,
+        [
+            'input[aria-label*="Engine" i]',
+            'input[title*="Engine" i]',
+        ],
+        ep,
+        timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+    )
+    if not chassis_ok or not engine_ok:
+        note("Add Enquiry: could not fill chassis/VIN and engine on vehicle list.")
+        return False, {}
+    try:
+        page.keyboard.press("Enter")
+    except Exception:
+        pass
+    _safe_page_wait(page, 400, log_label="after_vehicle_find_enter")
+    if _click_find_go_query(page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector):
+        note("Add Enquiry: clicked Find/Go after Enter on vehicle list.")
+    try:
+        _safe_page_wait(page, 2500, log_label="vehicle_find_query_settle")
+        page.wait_for_load_state("networkidle", timeout=12_000)
+    except PlaywrightTimeout:
+        note("Add Enquiry: networkidle wait timed out; continuing vehicle grid scrape.")
+    except Exception as e:
+        if _is_browser_disconnected_error(e):
+            raise RuntimeError(
+                "Siebel: browser disconnected while waiting for vehicle grid (Add Enquiry path)."
+            ) from e
+        raise
+
+    scraped = scrape_siebel_vehicle_row(page, content_frame_selector=content_frame_selector)
+    if scraped.get("key_num") or scraped.get("frame_num") or scraped.get("engine_num"):
+        note("Add Enquiry: vehicle list returned a row (key/chassis/engine cells present).")
+    else:
+        note("Add Enquiry: vehicle grid scrape found no key/chassis/engine row yet.")
+    return True, scraped
+
+
+def _try_click_enquiry_top_tab(
+    page: Page, *, action_timeout_ms: int, content_frame_selector: str | None
+) -> bool:
+    name_res = (
+        re.compile(r"^\s*Enquiry\s*$", re.I),
+        re.compile(r"\bEnquiry\b", re.I),
+    )
+    for root in _siebel_locator_search_roots(page, content_frame_selector):
+        for nr in name_res:
+            for role in ("tab", "link", "button"):
+                try:
+                    loc = root.get_by_role(role, name=nr).first
+                    if loc.count() > 0 and loc.is_visible(timeout=600):
+                        try:
+                            loc.click(timeout=action_timeout_ms)
+                        except Exception:
+                            loc.click(timeout=action_timeout_ms, force=True)
+                        return True
+                except Exception:
+                    continue
+    return False
+
+
+def _try_click_opportunities_list_new(
+    page: Page, *, action_timeout_ms: int, content_frame_selector: str | None
+) -> bool:
+    selectors = (
+        "a[aria-label='Opportunities List:New']",
+        "button[aria-label='Opportunities List:New']",
+        "a[title='Opportunities List:New']",
+        "button[title='Opportunities List:New']",
+    )
+    for root in _siebel_locator_search_roots(page, content_frame_selector):
+        for css in selectors:
+            try:
+                loc = root.locator(css).first
+                if loc.count() > 0 and loc.is_visible(timeout=500):
+                    try:
+                        loc.click(timeout=action_timeout_ms)
+                    except Exception:
+                        loc.click(timeout=action_timeout_ms, force=True)
+                    return True
+            except Exception:
+                continue
+    return False
+
+
+def _frame_containing_enquiry_type(page: Page) -> Frame | None:
+    for frame in _ordered_frames(page):
+        try:
+            if frame.locator('[aria-label="Enquiry Type"]').count() > 0:
+                return frame
+        except Exception:
+            continue
+    return None
+
+
+def _fill_by_label_on_frame(
+    frame: Frame,
+    label: str,
+    value: str,
+    *,
+    action_timeout_ms: int,
+) -> bool:
+    if not (value or "").strip():
+        return False
+    pats = (
+        re.compile(rf"^\s*{re.escape(label)}\s*$", re.I),
+        re.compile(re.escape(label), re.I),
+    )
+    for pat in pats:
+        try:
+            loc = frame.get_by_label(pat).first
+            if loc.count() <= 0 or not loc.is_visible(timeout=700):
+                continue
+            try:
+                loc.click(timeout=action_timeout_ms)
+            except Exception:
+                loc.click(timeout=action_timeout_ms, force=True)
+            loc.fill("", timeout=action_timeout_ms)
+            loc.fill(value.strip(), timeout=action_timeout_ms)
+            try:
+                loc.press("Tab", timeout=1200)
+            except Exception:
+                pass
+            return True
+        except Exception:
+            continue
+    return False
+
+
+def _add_enquiry_opportunity(
+    page: Page,
+    dms_values: dict,
+    urls: SiebelDmsUrls,
+    *,
+    action_timeout_ms: int,
+    nav_timeout_ms: int,
+    content_frame_selector: str | None,
+    note,
+    form_trace,
+    vehicle_merge: dict | None = None,
+) -> bool:
+    """
+    Contact Find returned no table rows: vehicle list (chassis/VIN + engine + Enter), **scrape** model /
+    year of manufacture / color from the grid, then only if that succeeds: Enquiry tab,
+    **Opportunities List:New**, fill fields from DB, Ctrl+S.
+    """
+    financier = (dms_values.get("financier_name") or "").strip()
+    finance_required = "Y" if financier else "N"
+    aadhar = (dms_values.get("aadhar_id") or "").strip()
+    frame_p = (dms_values.get("frame_partial") or "").strip()
+    engine_p = (dms_values.get("engine_partial") or "").strip()
+
+    if not aadhar:
+        note("Add Enquiry: aadhar_id from DB is empty — cannot fill UIN No.")
+        return False
+
+    if callable(form_trace):
+        form_trace(
+            "add_enquiry_branch",
+            "No contact table match → vehicle find + Opportunities",
+            "chassis_engine_Enter_then_Enquiry_tab_Opportunities_New_fields_Ctrl_S",
+            frame_partial=frame_p,
+            engine_partial=engine_p,
+            finance_required=finance_required,
+            financier_name=financier or "(empty)",
+            aadhar_id=aadhar,
+        )
+
+    vq_ok, scraped_v = _siebel_vehicle_find_chassis_engine_enter(
+        page,
+        (urls.vehicle or "").strip(),
+        frame_p,
+        engine_p,
+        nav_timeout_ms=nav_timeout_ms,
+        action_timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+        note=note,
+    )
+    if not vq_ok:
+        return False
+
+    if not _add_enquiry_vehicle_scrape_has_model_year_color(scraped_v):
+        note(
+            "Add Enquiry: vehicle search did not yield model, year of manufacture, and color in the grid — "
+            "not opening Enquiry / new opportunity (confirm list applet column layout vs scrape)."
+        )
+        return False
+
+    note(
+        "Add Enquiry: scraped from vehicle list — "
+        f"model={scraped_v.get('model')!r}, year_of_mfg={scraped_v.get('year_of_mfg')!r}, "
+        f"color={scraped_v.get('color')!r}."
+    )
+    if vehicle_merge is not None:
+        _merge_add_enquiry_vehicle_scrape(vehicle_merge, scraped_v)
+
+    if callable(form_trace):
+        form_trace(
+            "add_enquiry_vehicle_scrape",
+            "Auto Vehicle List — results grid",
+            "read_model_year_color_before_Enquiry_Opportunity",
+            model=str(scraped_v.get("model") or ""),
+            year_of_mfg=str(scraped_v.get("year_of_mfg") or ""),
+            color=str(scraped_v.get("color") or ""),
+            frame_num=str(scraped_v.get("frame_num") or ""),
+            engine_num=str(scraped_v.get("engine_num") or ""),
+        )
+
+    if not _try_click_enquiry_top_tab(
+        page, action_timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
+    ):
+        note("Add Enquiry: Enquiry tab not found.")
+        return False
+    note("Add Enquiry: Enquiry tab clicked.")
+    _safe_page_wait(page, 900, log_label="after_enquiry_tab")
+
+    if not _try_click_opportunities_list_new(
+        page, action_timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
+    ):
+        note("Add Enquiry: Opportunities List:New not found.")
+        return False
+    note("Add Enquiry: clicked Opportunities List:New.")
+    _safe_page_wait(page, 1200, log_label="after_opportunity_new")
+
+    enq_frame = _frame_containing_enquiry_type(page)
+    if enq_frame is None:
+        note('Add Enquiry: no frame contains aria-label="Enquiry Type".')
+        return False
+
+    def try_field(labels: tuple[str, ...], value: str, *, required: bool) -> bool:
+        sv = (value or "").strip()
+        if not required and not sv:
+            return True
+        for lb in labels:
+            if _fill_by_label_on_frame(enq_frame, lb, sv, action_timeout_ms=action_timeout_ms):
+                _safe_page_wait(page, 200, log_label="add_enq_after_field")
+                return True
+            for rx in (
+                re.compile(rf"^\s*{re.escape(lb)}\s*$", re.I),
+                re.compile(re.escape(lb), re.I),
+            ):
+                if select_siebel_dropdown_value(
+                    page,
+                    field_label_patterns=(rx,),
+                    value=sv,
+                    timeout_ms=min(action_timeout_ms, 8000),
+                    content_frame_selector=content_frame_selector,
+                    note=note,
+                ):
+                    _safe_page_wait(page, 200, log_label="add_enq_after_dd")
+                    return True
+        if required:
+            note(f"Add Enquiry: could not set {labels} to {sv!r}.")
+            return False
+        return True
+
+    if not try_field(("Finance Required",), finance_required, required=True):
+        return False
+    if not try_field(("Booking Order Type",), "Normal Booking", required=True):
+        return False
+    if financier:
+        if not try_field(("Financier Name", "Financier"), financier, required=True):
+            return False
+    if not try_field(("UIN Type",), "Aadhaar Card", required=True):
+        return False
+    if not try_field(("UIN No.", "UIN Number"), aadhar, required=True):
+        return False
+    if not try_field(("Point of Contact",), "Customer Walk-in", required=True):
+        return False
+
+    try:
+        page.keyboard.press("Control+s")
+    except Exception:
+        try:
+            page.keyboard.press("Meta+s")
+        except Exception:
+            note("Add Enquiry: Ctrl+S failed.")
+            return False
+    note("Add Enquiry: pressed Ctrl+S to save enquiry.")
+    _safe_page_wait(page, 1500, log_label="after_add_enquiry_save")
+    return True
+
+
 def _siebel_run_precheck_and_pdi(
     page: Page,
     *,
@@ -3979,6 +4340,7 @@ def Playwright_Hero_DMS_fill(
     key_p = (dms_values.get("key_partial") or "").strip()
     frame_p = (dms_values.get("frame_partial") or "").strip()
     engine_p = (dms_values.get("engine_partial") or "").strip()
+    aadhar_uin = (dms_values.get("aadhar_id") or "").strip()
     dms_path = (dms_values.get("dms_contact_path") or "found").strip().lower()
 
     log_fp = None
@@ -4001,6 +4363,7 @@ def Playwright_Hero_DMS_fill(
         log_fp.write(f"key_partial={key_p!r}\n")
         log_fp.write(f"frame_partial={frame_p!r}\n")
         log_fp.write(f"engine_partial={engine_p!r}\n")
+        log_fp.write(f"aadhar_id={aadhar_uin!r}\n")
         cu = (urls.contact or "").strip()
         log_fp.write(f"url_contact_truncated={cu[:200]!r}\n")
         log_fp.write(f"url_enquiry_truncated={(urls.enquiry or '')[:200]!r}\n")
@@ -4122,6 +4485,40 @@ def Playwright_Hero_DMS_fill(
                     "Siebel: video SOP — could not fill mobile or run Find/Go on the contact view. "
                     "Check Find pane, iframe selectors, and DMS_SIEBEL_* tuning."
                 )
+                return out
+            contact_matched = _siebel_ui_suggests_contact_match(page, mobile)
+            note(f"DECISION: contact_table_match_after_find={contact_matched!r}")
+            if not contact_matched:
+                note(
+                    "No contact rows after Find/Go — Add Enquiry branch: vehicle chassis/VIN + engine, "
+                    "Enquiry tab, Opportunities List:New, DB fields, Ctrl+S."
+                )
+                if not _add_enquiry_opportunity(
+                    page,
+                    dms_values,
+                    urls,
+                    action_timeout_ms=action_timeout_ms,
+                    nav_timeout_ms=nav_timeout_ms,
+                    content_frame_selector=content_frame_selector,
+                    note=note,
+                    form_trace=form_trace,
+                    vehicle_merge=out.setdefault("vehicle", {}),
+                ):
+                    step("Stopped: Add Enquiry branch failed (empty contact search).")
+                    out["error"] = (
+                        "Siebel: video SOP — contact search returned no table rows and Add Enquiry "
+                        "did not complete (vehicle list must return model, year of manufacture, and color "
+                        "in the grid before Enquiry / Opportunities). "
+                        "Confirm DMS_REAL_URL_VEHICLE, chassis/engine in form_dms_view, customer aadhar last 4, "
+                        "and Siebel grid column mapping for scrape."
+                    )
+                    return out
+                ms_done("Add enquiry saved")
+                step(
+                    "Video SOP complete: no contact match — Add Enquiry flow finished. "
+                    "Automation stops here (SIEBEL_DMS_STOP_AFTER_ALL_ENQUIRIES); browser left open."
+                )
+                note("Add Enquiry branch completed; stopping per video SOP flag.")
                 return out
             form_trace(
                 "v2_drill_and_nav",
@@ -4601,7 +4998,27 @@ def Playwright_Hero_DMS_fill(
             ok1, matched1 = find_customer()
             if not ok1:
                 return out
-            created_basic = stage_2_create_enquiry_if_needed(matched1)
+            created_basic = False
+            if not matched1:
+                note("Stage 1: no contact table match — trying Add Enquiry (vehicle + Opportunities).")
+                if _add_enquiry_opportunity(
+                    page,
+                    dms_values,
+                    urls,
+                    action_timeout_ms=action_timeout_ms,
+                    nav_timeout_ms=nav_timeout_ms,
+                    content_frame_selector=content_frame_selector,
+                    note=note,
+                    form_trace=form_trace,
+                    vehicle_merge=out.setdefault("vehicle", {}),
+                ):
+                    created_basic = True
+                    ms_done("Add enquiry saved")
+                else:
+                    note("Add Enquiry branch failed — falling back to basic enquiry form (stage 2).")
+                    created_basic = stage_2_create_enquiry_if_needed(matched1)
+            else:
+                created_basic = stage_2_create_enquiry_if_needed(matched1)
             if not stage_3_refind_customer(created_basic):
                 return out
             fill_relation_name_from_care_of(matched1)

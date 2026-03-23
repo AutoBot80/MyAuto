@@ -784,6 +784,38 @@ def _load_required_form_dms_row(customer_id: int | None, vehicle_id: int | None)
     return row
 
 
+def _load_customer_aadhar_last4(customer_id: int | None) -> str:
+    """Last 4 digits stored in ``customer_master.aadhar`` (UIDAI compliance). Used for Siebel UIN No."""
+    if customer_id is None:
+        return ""
+    try:
+        conn = get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT COALESCE(TRIM(aadhar::text), '') AS aad FROM customer_master WHERE customer_id = %s",
+                    (customer_id,),
+                )
+                row = cur.fetchone()
+                if not row:
+                    return ""
+                if isinstance(row, dict):
+                    return _clean_text(row.get("aad"))
+                try:
+                    return _clean_text(row[0])
+                except Exception:
+                    return ""
+        finally:
+            conn.close()
+    except Exception as exc:
+        logger.warning(
+            "fill_dms_service: customer_master aadhar lookup failed customer_id=%s: %s",
+            customer_id,
+            exc,
+        )
+        return ""
+
+
 def _load_customer_gender_from_master(customer_id: int | None) -> str:
     """
     Preferred gender source for DMS relation-name derivation:
@@ -880,6 +912,10 @@ def _build_dms_fill_values(customer_id: int | None, vehicle_id: int | None, subf
         finance_required = "N"
     gender_row = _clean_text(row.get("Gender")) or _clean_text(row.get("gender"))
     gender_effective = gender_master or gender_row or _derive_gender_from_care_of_text(care_of_e)
+    try:
+        cid_for_aadhar = int(row.get("customer_id")) if row.get("customer_id") is not None else None
+    except (TypeError, ValueError):
+        cid_for_aadhar = None
 
     values = {
         "row": row,
@@ -902,6 +938,7 @@ def _build_dms_fill_values(customer_id: int | None, vehicle_id: int | None, subf
         "finance_required": finance_required,
         "dms_contact_path": contact_path,
         "gender": gender_effective,
+        "aadhar_id": _load_customer_aadhar_last4(cid_for_aadhar),
         "customer_export": {
             "name": full_name,
             "address": _clean_text(inferred_addr.get("address")) or addr_full,
