@@ -1,7 +1,7 @@
 """
 Hero Connect / Oracle Siebel Open UI — Playwright helpers for real DMS automation.
 
-**Linear SOP** in ``run_hero_siebel_dms_flow`` (BRD §6.1a aligned) when ``SIEBEL_DMS_STOP_AFTER_ALL_ENQUIRIES``
+**Linear SOP** in ``Playwright_Hero_DMS_fill`` (BRD §6.1a aligned) when ``SIEBEL_DMS_STOP_AFTER_ALL_ENQUIRIES``
 is False. When True, only the operator **Find Contact Enquiry** path runs (Find → Contact → mobile → Go →
 drill hit → Contacts → Contact_Enquiry → Enquiry → All Enquiries), then returns with the browser left open.
 
@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 
 # Operator video: ``Find Contact Enquiry.mp4`` — global Find → Contact → mobile → Go → drill result →
 # Contacts → Contact_Enquiry → Enquiry → All Enquiries, then stop (browser stays open). Set False to
-# restore the full BRD linear SOP inside ``run_hero_siebel_dms_flow``.
+# restore the full BRD linear SOP inside ``Playwright_Hero_DMS_fill``.
 SIEBEL_DMS_STOP_AFTER_ALL_ENQUIRIES = True
 
 
@@ -1541,7 +1541,7 @@ def _fill_siebel_enquiry_customer_applet(
     """
     Backward-compatible **single call**: basic details + care-of.
 
-    Prefer the staged flow in ``run_hero_siebel_dms_flow`` (basic save → re-find → care-of).
+    Prefer the staged flow in ``Playwright_Hero_DMS_fill`` (basic save → re-find → care-of).
     ``landline`` is applied here only for legacy callers (not part of strict staged SOP basic step).
     """
     _fill_basic_enquiry_details(
@@ -1931,6 +1931,81 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
         note(f"Clicked {label} (video SOP).")
         _safe_page_wait(page, 1000, log_label=f"after_nav_{label.replace(' ', '_')}")
     return True
+
+
+def _siebel_open_found_customer_record(
+    page: Page,
+    *,
+    mobile: str,
+    first_name: str,
+    timeout_ms: int,
+    content_frame_selector: str | None,
+) -> bool:
+    """
+    Existing-customer flow:
+    1) left Search Results pane click on mobile/customer hit
+    2) right Contacts applet click customer first-name link (e.g., Akash) to open full record.
+    """
+    left_ok = _siebel_try_click_mobile_search_hit_link(
+        page,
+        mobile,
+        timeout_ms=timeout_ms,
+        content_frame_selector=content_frame_selector,
+    )
+    if not left_ok:
+        return False
+    _safe_page_wait(page, 1000, log_label="after_left_customer_click")
+
+    fn = (first_name or "").strip()
+    fn_pat = re.compile(rf"^\s*{re.escape(fn)}\s*$", re.I) if fn else None
+
+    def try_root(root) -> bool:
+        # Prefer links inside Contacts applet/grid.
+        try:
+            app = root.locator(".siebui-applet").filter(has_text=re.compile(r"^\s*Contacts\s*$", re.I)).first
+            if app.count() > 0 and app.is_visible(timeout=600):
+                if fn_pat is not None:
+                    try:
+                        l = app.get_by_role("link", name=fn_pat).first
+                        if l.count() > 0 and l.is_visible(timeout=700):
+                            l.click(timeout=timeout_ms)
+                            return True
+                    except Exception:
+                        pass
+                for css in (
+                    "table tbody tr td a",
+                    "table tr td a",
+                    "a.siebui-ctrl-drilldown",
+                    "a[href*='javascript']",
+                ):
+                    try:
+                        l = app.locator(css).first
+                        if l.count() > 0 and l.is_visible(timeout=700):
+                            l.click(timeout=timeout_ms)
+                            return True
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+
+        # Wider fallback: first-name link anywhere visible in the same root.
+        if fn_pat is not None:
+            try:
+                l = root.get_by_role("link", name=fn_pat).first
+                if l.count() > 0 and l.is_visible(timeout=700):
+                    l.click(timeout=timeout_ms)
+                    return True
+            except Exception:
+                pass
+        return False
+
+    for root in _siebel_locator_search_roots(page, content_frame_selector):
+        try:
+            if try_root(root):
+                return True
+        except Exception:
+            continue
+    return False
 
 
 def _grid_cells_suggest_in_transit(texts: list[str]) -> bool:
@@ -2419,7 +2494,7 @@ def _siebel_run_precheck_and_pdi(
         say("PDI URL is not set — only pre-check was opened; configure DMS_REAL_URL_PDI to finish PDI.")
 
 
-def run_hero_siebel_dms_flow(
+def Playwright_Hero_DMS_fill(
     page: Page,
     dms_values: dict,
     urls: SiebelDmsUrls,
@@ -2659,7 +2734,29 @@ def run_hero_siebel_dms_flow(
 
         # --- Full linear SOP (stages 1–8): runs only when SIEBEL_DMS_STOP_AFTER_ALL_ENQUIRIES is False. ---
 
-        def stage_4_add_care_of() -> None:
+        def fill_father_name(customer_was_found: bool = False) -> None:
+            if customer_was_found:
+                form_trace(
+                    "1_find_contact",
+                    "Search Results (left) + Contacts applet (right)",
+                    "click_customer_in_left_pane_then_click_first_name_to_open_record",
+                    mobile_phone=mobile,
+                    first_name=first,
+                )
+                opened = _siebel_open_found_customer_record(
+                    page,
+                    mobile=mobile,
+                    first_name=first,
+                    timeout_ms=action_timeout_ms,
+                    content_frame_selector=content_frame_selector,
+                )
+                if opened:
+                    note("Opened existing customer record: left hit clicked, then first-name link clicked.")
+                else:
+                    note(
+                        "Customer match found but could not open record by left-hit/first-name click; "
+                        "continuing with matched flow."
+                    )
             note("Stage 4: care-of only (S/o, father/husband) — always runs per SOP.")
             step("Adding care-of / relation (stage 4 — mandatory after find / re-find).")
             form_trace(
@@ -2685,7 +2782,7 @@ def run_hero_siebel_dms_flow(
             )
             step("Care-of step completed (stage 4).")
 
-        def stage_1_find_customer() -> tuple[bool, bool]:
+        def find_customer() -> tuple[bool, bool]:
             if not contact_url:
                 step("Stopped: DMS_REAL_URL_CONTACT is not configured.")
                 out["error"] = (
@@ -2993,13 +3090,13 @@ def run_hero_siebel_dms_flow(
             step("Ready for invoice creation.")
 
         if not skip_contact_find:
-            ok1, matched1 = stage_1_find_customer()
+            ok1, matched1 = find_customer()
             if not ok1:
                 return out
             created_basic = stage_2_create_enquiry_if_needed(matched1)
             if not stage_3_refind_customer(created_basic):
                 return out
-            stage_4_add_care_of()
+            fill_father_name(matched1)
         else:
             enquiry_url = (urls.enquiry or "").strip() or (urls.contact or "").strip()
             if not enquiry_url:
@@ -3118,7 +3215,7 @@ def run_hero_siebel_dms_flow(
                     "Siebel skip_find: mandatory re-find failed — could not run Find by mobile on Contact view."
                 )
                 return out
-            stage_4_add_care_of()
+            fill_father_name(False)
             step("skip_find: stages 2–4 complete (basic → re-find → care-of).")
 
         if not stage_5_vehicle_flow():
@@ -3154,3 +3251,32 @@ def run_hero_siebel_dms_flow(
                 pass
 
     return out
+
+
+def run_hero_siebel_dms_flow(
+    page: Page,
+    dms_values: dict,
+    urls: SiebelDmsUrls,
+    *,
+    action_timeout_ms: int,
+    nav_timeout_ms: int,
+    content_frame_selector: str | None,
+    mobile_aria_hints: list[str],
+    skip_contact_find: bool = False,
+    execution_log_path: Path | None = None,
+) -> dict:
+    """
+    Backward-compatible alias for older callers.
+    Prefer ``Playwright_Hero_DMS_fill`` for new integrations/modules.
+    """
+    return Playwright_Hero_DMS_fill(
+        page,
+        dms_values,
+        urls,
+        action_timeout_ms=action_timeout_ms,
+        nav_timeout_ms=nav_timeout_ms,
+        content_frame_selector=content_frame_selector,
+        mobile_aria_hints=mobile_aria_hints,
+        skip_contact_find=skip_contact_find,
+        execution_log_path=execution_log_path,
+    )

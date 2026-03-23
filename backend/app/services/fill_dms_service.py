@@ -47,7 +47,7 @@ from app.config import (
     PLAYWRIGHT_MANAGED_REMOTE_DEBUG_PORT,
     dms_automation_is_real_siebel,
 )
-from app.services.siebel_dms_playwright import SiebelDmsUrls, run_hero_siebel_dms_flow
+from app.services.siebel_dms_playwright import SiebelDmsUrls, Playwright_Hero_DMS_fill
 from app.repositories import form_dms as form_dms_repo
 from app.repositories import form_vahan as form_vahan_repo
 from app.db import get_connection
@@ -1814,7 +1814,7 @@ def _run_fill_dms_real_siebel_playwright(
     result: dict,
 ) -> None:
     """
-    Hero Connect / Siebel Open UI: ``run_hero_siebel_dms_flow``. When
+    Hero Connect / Siebel Open UI: ``Playwright_Hero_DMS_fill``. When
     ``siebel_dms_playwright.SIEBEL_DMS_STOP_AFTER_ALL_ENQUIRIES`` is True, only the **Find Contact →
     All Enquiries** path runs, then stops. Otherwise (BRD §6.1a) **always** Contact Find (mobile + Go)
     first; vehicle list scrape + ``in_transit`` branch (receipt/PDI vs booking/allotment).
@@ -1876,7 +1876,7 @@ def _run_fill_dms_real_siebel_playwright(
         reports=DMS_REAL_URL_REPORTS,
     )
     frame_sel = (DMS_SIEBEL_CONTENT_FRAME_SELECTOR or "").strip() or None
-    frag = run_hero_siebel_dms_flow(
+    frag = Playwright_Hero_DMS_fill(
         page,
         dms_values,
         urls,
