@@ -1234,10 +1234,10 @@ def _siebel_try_click_mobile_search_hit_link(
     content_frame_selector: str | None,
 ) -> bool:
     """
-    After Find/Go, open the contact row from the left **Search Results** list (video: blue link on
-    Title / mobile). Tries: link by accessible name, ``<a>`` filtered by phone text (spaced/dashed),
-    table rows (``tbody`` or not), ARIA ``role=row``, then **row click** if the row contains the digits
-    but has no link (some applets drill in on row activate).
+    After Find/Go, open the contact from the left **Search Results** / **Siebel Find** pane (Title
+    column). Hero often uses ``<a href="javascript:void(0);">`` for the blue mobile drill-in — scoped
+    to ``.siebui-applet`` when it contains **Search Results**. Tries: accessible-name link, javascript
+    anchors + force/double-click, generic ``<a>`` by phone text, table / ``role=row`` scan, row click.
     """
     needle = _mobile_needle_for_contact_grid_match(mobile)
     raw_compact = re.sub(r"\s+", "", (mobile or "").strip())
@@ -1272,22 +1272,58 @@ def _siebel_try_click_mobile_search_hit_link(
             return True
         return False
 
-    def try_click_in_root(root) -> bool:
-        # Anchors whose visible / inner text matches common phone formatting
-        for tpat in text_patterns:
+    def _try_click_siebel_drilldown(loc) -> bool:
+        """Siebel list drill-ins often use ``javascript:void(0)``; overlay may block a normal click."""
+        try:
+            if not loc.is_visible(timeout=600):
+                return False
+        except Exception:
+            return False
+        for click_try in (
+            lambda: loc.click(timeout=timeout_ms),
+            lambda: loc.click(timeout=timeout_ms, force=True),
+            lambda: loc.dblclick(timeout=timeout_ms),
+        ):
             try:
-                hits = root.locator("a").filter(has_text=tpat)
-                hn = hits.count()
-                for i in range(min(hn, 25)):
-                    a = hits.nth(i)
-                    try:
-                        if a.is_visible(timeout=500):
-                            a.click(timeout=timeout_ms)
-                            return True
-                    except Exception:
-                        continue
+                click_try()
+                return True
             except Exception:
                 continue
+        return False
+
+    def try_click_in_root(root) -> bool:
+        # Left **Search Results** / **Siebel Find** pane: hit is usually
+        # ``<a href="javascript:void(0)">8306827880</a>`` — status bar shows ``javascript:void(0);``.
+        scopes: list = []
+        try:
+            panel = root.locator(".siebui-applet").filter(has_text=re.compile(r"Search\s+Results", re.I)).first
+            if panel.count() > 0:
+                try:
+                    if panel.is_visible(timeout=450):
+                        scopes.append(panel)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        scopes.append(root)
+
+        for scope in scopes:
+            for tpat in text_patterns:
+                for css in (
+                    'a[href^="javascript"]',
+                    'a[href*="void(0)"]',
+                    "a[href*='javascript']",
+                    "a.siebui-ctrl-drilldown",
+                    "a",
+                ):
+                    try:
+                        hits = scope.locator(css).filter(has_text=tpat)
+                        hn = hits.count()
+                        for i in range(min(hn, 30)):
+                            if _try_click_siebel_drilldown(hits.nth(i)):
+                                return True
+                    except Exception:
+                        continue
         # Scan list rows: prefer first <a> in a row that contains the mobile anywhere
         if not needle and not (raw_digits and len(raw_digits) >= 8):
             return False
@@ -1351,8 +1387,8 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
 ) -> bool:
     """
     Steps after **Find + Go** from operator recording *Find Contact Enquiry*:
-    optional **Siebel Find** tab → click hit hyperlink → **Contacts** → **Contact_Enquiry** →
-    **Enquiry** → **All Enquiries**.
+    optional **Siebel Find** tab → click the **Search Results** mobile drill-in → **Contacts** →
+    **Contact_Enquiry** (Contacts + Enquiries tables, Enquiry# link) → **Enquiry** → **All Enquiries**.
     """
     _safe_page_wait(page, 2200, log_label="after_find_go_before_drill")
     if _siebel_try_click_named_in_frames(
