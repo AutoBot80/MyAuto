@@ -1958,20 +1958,68 @@ def _siebel_open_found_customer_record(
 
     fn = (first_name or "").strip()
     fn_pat = re.compile(rf"^\s*{re.escape(fn)}\s*$", re.I) if fn else None
+    fn_contains_pat = re.compile(re.escape(fn), re.I) if fn else None
+
+    def _clickish(loc) -> bool:
+        try:
+            if not loc.is_visible(timeout=700):
+                return False
+        except Exception:
+            return False
+        for act in (
+            lambda: loc.click(timeout=timeout_ms),
+            lambda: loc.click(timeout=timeout_ms, force=True),
+            lambda: loc.dblclick(timeout=timeout_ms),
+        ):
+            try:
+                act()
+                return True
+            except Exception:
+                continue
+        return False
 
     def try_root(root) -> bool:
         # Prefer links inside Contacts applet/grid.
         try:
             app = root.locator(".siebui-applet").filter(has_text=re.compile(r"^\s*Contacts\s*$", re.I)).first
             if app.count() > 0 and app.is_visible(timeout=600):
+                # 1) Exact first-name link in Contacts applet
                 if fn_pat is not None:
                     try:
                         l = app.get_by_role("link", name=fn_pat).first
-                        if l.count() > 0 and l.is_visible(timeout=700):
-                            l.click(timeout=timeout_ms)
+                        if l.count() > 0 and _clickish(l):
                             return True
                     except Exception:
                         pass
+                    # 2) Any element (not only role=link) that renders first name in the row
+                    for css in (
+                        "table tbody tr td",
+                        "table tr td",
+                        '[role="gridcell"]',
+                        "td",
+                    ):
+                        try:
+                            cands = app.locator(css).filter(has_text=fn_pat)
+                            n = cands.count()
+                            for i in range(min(n, 20)):
+                                c = cands.nth(i)
+                                if _clickish(c):
+                                    return True
+                        except Exception:
+                            continue
+                    # 3) If exact fails due to hidden chars, try contains pattern
+                    if fn_contains_pat is not None:
+                        try:
+                            cands = app.locator("table tbody tr td, table tr td, [role='gridcell']").filter(
+                                has_text=fn_contains_pat
+                            )
+                            n = cands.count()
+                            for i in range(min(n, 20)):
+                                c = cands.nth(i)
+                                if _clickish(c):
+                                    return True
+                        except Exception:
+                            pass
                 for css in (
                     "table tbody tr td a",
                     "table tr td a",
@@ -1980,8 +2028,7 @@ def _siebel_open_found_customer_record(
                 ):
                     try:
                         l = app.locator(css).first
-                        if l.count() > 0 and l.is_visible(timeout=700):
-                            l.click(timeout=timeout_ms)
+                        if l.count() > 0 and _clickish(l):
                             return True
                     except Exception:
                         continue
@@ -1992,9 +2039,17 @@ def _siebel_open_found_customer_record(
         if fn_pat is not None:
             try:
                 l = root.get_by_role("link", name=fn_pat).first
-                if l.count() > 0 and l.is_visible(timeout=700):
-                    l.click(timeout=timeout_ms)
+                if l.count() > 0 and _clickish(l):
                     return True
+            except Exception:
+                pass
+            # Final fallback: grid cell click anywhere in root
+            try:
+                cands = root.locator("table tbody tr td, table tr td, [role='gridcell']").filter(has_text=fn_pat)
+                n = cands.count()
+                for i in range(min(n, 24)):
+                    if _clickish(cands.nth(i)):
+                        return True
             except Exception:
                 pass
         return False

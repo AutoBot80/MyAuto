@@ -1,6 +1,6 @@
 Playwright DMS — execution log (this run only; UTC timestamps)
 
-started_utc=2026-03-23T06:49:06.174310+00:00
+started_utc=2026-03-23T06:59:39.691222+00:00
 skip_contact_find=False
 dms_contact_path='found'
 mobile_phone='8306827880'
@@ -22,16 +22,16 @@ url_vehicle_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/e
 --- trace ---
 Legend: [STEP]/[NOTE]/[MILESTONE] = operator narrative; [FORM] = siebel_step + Siebel form/screen + action + fields/values being applied on that form.
 
-2026-03-23T06:49:06.174494+00:00 [STEP] Started Hero Connect / Siebel DMS automation (linear SOP).
-2026-03-23T06:49:06.174568+00:00 [STEP] Video SOP (Find Contact Enquiry): Find → Contact → mobile → Go → open All Enquiries; then stop.
-2026-03-23T06:49:06.174614+00:00 [FORM] siebel_step=v1_find_contact | form=Global Find → Contact (Mobile Phone) + Go | action=goto_contact_find_URL_then_prepare_Find_Contact_fill_mobile_FindGo | contact_url_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+Contact+Opportunity+Buyer/CoBuyer+View+(SDW)&SWERF=1&SWEHo=&SWEBU=1' | mobile_phone='8306827880'
-2026-03-23T06:49:11.931103+00:00 [STEP] Video SOP: Find customer by mobile (Contact view).
-2026-03-23T06:49:16.693811+00:00 [NOTE] Find → Contact: object type selected so the mobile field is the Contact search field.
-2026-03-23T06:49:17.332818+00:00 [NOTE] Filled mobile and clicked Find inside the Contact applet (scoped; includes first-field right-popup fallback when labels are non-standard).
-2026-03-23T06:49:19.345049+00:00 [FORM] siebel_step=v2_drill_and_nav | form=Search Results + screen tabs | action=Siebel_Find_tab_optional_then_link_hit_then_Contacts_Contact_Enquiry_Enquiry_All_Enquiries | mobile_phone='8306827880'
-2026-03-23T06:49:21.755934+00:00 [NOTE] Activated Siebel Find tab in search results (video SOP).
-2026-03-23T06:49:22.634925+00:00 [NOTE] Opened contact from search hit hyperlink (video SOP).
-2026-03-23T06:49:23.981393+00:00 [NOTE] Video SOP: navigation item not found or not clickable: 'Contacts'.
-2026-03-23T06:49:23.981439+00:00 [STEP] Stopped: video SOP navigation after Find/Go failed.
+2026-03-23T06:59:39.691442+00:00 [STEP] Started Hero Connect / Siebel DMS automation (linear SOP).
+2026-03-23T06:59:39.691488+00:00 [STEP] Video SOP (Find Contact Enquiry): Find → Contact → mobile → Go → open All Enquiries; then stop.
+2026-03-23T06:59:39.691547+00:00 [FORM] siebel_step=v1_find_contact | form=Global Find → Contact (Mobile Phone) + Go | action=goto_contact_find_URL_then_prepare_Find_Contact_fill_mobile_FindGo | contact_url_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+Contact+Opportunity+Buyer/CoBuyer+View+(SDW)&SWERF=1&SWEHo=&SWEBU=1' | mobile_phone='8306827880'
+2026-03-23T06:59:45.698554+00:00 [STEP] Video SOP: Find customer by mobile (Contact view).
+2026-03-23T06:59:53.331916+00:00 [NOTE] Find → Contact: object type selected so the mobile field is the Contact search field.
+2026-03-23T06:59:54.074481+00:00 [NOTE] Filled mobile and clicked Find inside the Contact applet (scoped; includes first-field right-popup fallback when labels are non-standard).
+2026-03-23T06:59:56.093084+00:00 [FORM] siebel_step=v2_drill_and_nav | form=Search Results + screen tabs | action=Siebel_Find_tab_optional_then_link_hit_then_Contacts_Contact_Enquiry_Enquiry_All_Enquiries | mobile_phone='8306827880'
+2026-03-23T06:59:58.628683+00:00 [NOTE] Activated Siebel Find tab in search results (video SOP).
+2026-03-23T06:59:59.842260+00:00 [NOTE] Opened contact from search hit hyperlink (video SOP).
+2026-03-23T07:00:01.868687+00:00 [NOTE] Video SOP: navigation item not found or not clickable: 'Contacts'.
+2026-03-23T07:00:01.868759+00:00 [STEP] Stopped: video SOP navigation after Find/Go failed.
 
-2026-03-23T06:49:23.981463+00:00 [END] error=Siebel: video SOP — after Find/Go, could not complete drill-down or Contacts → Contact_Enquiry → Enquiry → All Enquiries. Confirm labels match Hero Connect and tune DMS_SIEBEL_CONTENT_FRAME_SELECTOR if needed.
+2026-03-23T07:00:01.868789+00:00 [END] error=Siebel: video SOP — after Find/Go, could not complete drill-down or Contacts → Contact_Enquiry → Enquiry → All Enquiries. Confirm labels match Hero Connect and tune DMS_SIEBEL_CONTENT_FRAME_SELECTOR if needed.
