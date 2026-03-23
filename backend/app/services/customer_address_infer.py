@@ -1,7 +1,7 @@
 """
 Infer customer_master / DMS fields from a single free-form address line (Aadhaar OCR, Textract).
 
-- C/O / C/o → ``care_of`` (Care of); removed from the stored address line.
+- C/O, S/o, W/o, D/o → ``care_of`` as **``C/o Name``** / **``S/o Name``** / **``W/o Name``** / **``D/o Name``**; that clause is stripped from the body and **prepended** back to the composed ``address`` (``S/o Name, rest…``).
 - UIDAI-style suffix: ``DIST: <District>, <State> - <PIN>`` → district/city, state, pin; text after PIN dropped.
 """
 
@@ -75,19 +75,30 @@ def _squish_spaces(s: str) -> str:
 
 # Relation markers on UIDAI English back (same care_of field as C/O for DMS).
 _CARE_OF_MARKERS_RE = re.compile(
-    r"(?i)\b(?:C\.?\s*/?\s*O\.?|S\.?\s*/?\s*O\.?|W\.?\s*/?\s*O\.?|D\.?\s*/?\s*O\.?)\s*:\s*([^,\n]+)"
+    r"(?i)\b(C\.?\s*/?\s*O\.?|S\.?\s*/?\s*O\.?|W\.?\s*/?\s*O\.?|D\.?\s*/?\s*O\.?)\s*:\s*([^,\n]+)"
 )
 
 
+def _canonical_care_of_prefix(marker_raw: str) -> str:
+    """Normalize OCR marker to ``C/o``, ``S/o``, ``W/o``, or ``D/o``."""
+    for ch in (marker_raw or "").upper():
+        if ch in ("C", "S", "W", "D"):
+            return {"C": "C/o", "S": "S/o", "W": "W/o", "D": "D/o"}[ch]
+    return "C/o"
+
+
 def _extract_care_of_from_text(text: str) -> str | None:
-    """C/O, S/O, W/O, D/O → care-of name (to first comma or end of clause)."""
+    """C/O, S/O, W/O, D/O → ``S/o Name`` style (relation kept) up to first comma or newline."""
     if not text:
         return None
     m = _CARE_OF_MARKERS_RE.search(text)
     if not m:
         return None
-    name = m.group(1).strip()
-    return name if len(name) >= 1 else None
+    prefix = _canonical_care_of_prefix(m.group(1))
+    name = m.group(2).strip()
+    if not name:
+        return None
+    return _squish_spaces(f"{prefix} {name}")
 
 
 def _strip_care_of_clause(text: str) -> str:
@@ -248,8 +259,9 @@ def _extract_city_from_text(text: str, state: str | None) -> str | None:
 
 def normalize_address_freeform(address_line: str) -> dict[str, str]:
     """
-    Parse one address string: ``care_of``, ``DIST: district, state - PIN``, strip C/O from body,
-    truncate after PIN. Returned ``address`` is the cleaned line suitable for Address Line 1.
+    Parse one address string: ``care_of`` (``C/o``/``S/o``/``W/o``/``D/o`` + name), ``DIST:`` …,
+    strip relation clause from the body, truncate after PIN, then **prepend** ``care_of`` to
+    ``address`` when present (``S/o Name, Gandhi Nagar, …``).
     """
     out: dict[str, str] = {}
     if not address_line or not str(address_line).strip():
@@ -296,8 +308,17 @@ def normalize_address_freeform(address_line: str) -> dict[str, str]:
     work = _strip_care_of_clause(text)
     work = _truncate_after_last_pin(work)
     work = _squish_spaces(work)
+    co_full = (out.get("care_of") or "").strip()
     if work:
-        out["address"] = work
+        if co_full:
+            wn = work.lower()
+            cn = co_full.lower()
+            if wn.startswith(cn):
+                out["address"] = work
+            else:
+                out["address"] = _squish_spaces(f"{co_full}, {work}")
+        else:
+            out["address"] = work
 
     return out
 

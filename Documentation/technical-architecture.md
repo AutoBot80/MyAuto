@@ -84,7 +84,7 @@
 
 - **Logging:** Structured logs from FastAPI, bulk workers, OCR, and Playwright steps.
 - **Metrics:** Job success/failure, queue depth, API latency, and automation completion rate.
-- **Artifacts:** `ocr_output/<dealer>/<subfolder>/` stores OCR output plus `DMS_Form_Values.txt` and `Vahan_Form_Values.txt` for operator traceability.
+- **Artifacts:** `ocr_output/<dealer>/<subfolder>/` stores OCR output plus `DMS_Form_Values.txt` and `Vahan_Form_Values.txt` for operator traceability. A Siebel Playwright action outline lives at `ocr_output/dealer/mobile_ddmmyyyy/Playwright_DMS.txt` (template folder names).
 - **Alerts:** DLQ growth, high error rate, DB health, and worker lease/retry anomalies.
 
 ---
@@ -109,6 +109,10 @@ When adding or changing features, update the relevant docs:
 - **New page or flow** → BRD (FRs), HLD (client pages, data flow)
 - **Queue/storage/runtime behavior changes** → technical architecture, HLD, LLD, and Database DDL as applicable
 
+### Optional: Cursor Bugbot (automated PR review)
+
+**Bugbot** is not installed as a classic editor extension from the VS Marketplace. Enable it from the **[Cursor dashboard](https://cursor.com/dashboard)** → **Integrations**: connect **GitHub** or **GitLab**, then turn on Bugbot for the repositories you want. It can comment on pull requests with findings; see the **[Cursor Bugbot documentation](https://cursor.com/docs/bugbot)** (and [Bugbot product page](https://cursor.com/bugbot) for overview).
+
 ---
 
 ## 7. Document Control
@@ -117,3 +121,4 @@ When adding or changing features, update the relevant docs:
 |---------|------|--------|---------|
 | 0.1 | Mar 2025 | — | Initial technical architecture |
 | 0.2 | Mar 2026 | — | Updated queue, worker, local file storage, bulk processing, and automation artifact architecture |
+| 0.3 | Mar 2026 | — | §6 optional **Cursor Bugbot** setup (dashboard/Git integration, not VSIX) |

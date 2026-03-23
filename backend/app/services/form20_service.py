@@ -22,6 +22,9 @@ from app.config import (
 
 logger = logging.getLogger(__name__)
 
+# ``care_of`` may already include ``S/o`` / ``W/o`` / ``D/o`` / ``C/o`` (Aadhaar OCR).
+_CARE_OF_REL_PREFIX = re.compile(r"(?i)^(C|S|W|D)/o\s+")
+
 # Backend dir for HTML templates
 _BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
 TEMPLATES_DIR = _BACKEND_DIR / "templates"
@@ -142,7 +145,10 @@ def _build_form20_data(
     data["field_1_name"] = name
     data["field_2_care_of"] = care_of
     if name and care_of:
-        data["field_1_name_care_of"] = f"{name} S/O {care_of}"
+        if _CARE_OF_REL_PREFIX.match(care_of):
+            data["field_1_name_care_of"] = f"{name}, {care_of}"
+        else:
+            data["field_1_name_care_of"] = f"{name} S/O {care_of}"
     else:
         data["field_1_name_care_of"] = name or care_of or ""
 

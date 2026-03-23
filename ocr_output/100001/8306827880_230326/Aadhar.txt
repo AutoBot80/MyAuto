@@ -3,7 +3,10 @@ Aadhar scan – 15 extracted fields
 Aadhar ID: 4195
 Name: Akash
 Gender: Male
+Year of birth: 2004
+Date of birth: 01/01/2004
+Care of: Sahab Singh
 City: Bharatpur
 State: Rajasthan
 Pin Code: 321001
-Address (constructed): S/O: Sahab Singh, Gandhi Nagar, Bharatpur, Bharatpur, Rajasthan - - 321001
+Address (constructed): Gandhi Nagar, Bharatpur, Bharatpur, Rajasthan - - 321001

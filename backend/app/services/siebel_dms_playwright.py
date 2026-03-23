@@ -1,13 +1,11 @@
 """
 Hero Connect / Oracle Siebel Open UI — Playwright helpers for real DMS automation.
 
-Flow follows **BRD §6.1a** (see ``run_hero_siebel_dms_flow``): **Find → Contact** with
-**mobile only** then **Go**; existing match → care-of fields only + **Save**; no match
-(or ``new_enquiry``) → full customer/enquiry applet + **Save**; **Auto Vehicle List**
-search/scrape with ``in_transit`` from grid text; **In Transit** → ``DMS_REAL_URL_VEHICLES``
-+ Process Receipt, then **Pre Check** (``DMS_REAL_URL_PRECHECK`` and/or before **PDI** on the same
-view as ``DMS_REAL_URL_PDI``), then **PDI** submit; else → **Generate Booking** +
-``DMS_REAL_URL_LINE_ITEMS`` + Price All / Allocate. No **Create Invoice**.
+**Linear SOP** in ``run_hero_siebel_dms_flow`` (BRD §6.1a aligned): **Find → mobile → Go**; optional
+**basic enquiry** (name/address/state/PIN) + Save + **mandatory re-find** when created; **always**
+care-of + Save; **Auto Vehicle List** + **In Transit** (receipt / Pre Check / PDI); **Generate Booking**
+**after vehicle for all paths**; allotment (line items) when **not** In Transit; invoice = message hook
+only. No **Create Invoice** automation.
 
 Siebel renders in nested iframes. The **Find** pane and grids use labels like **Mobile Phone**,
 **Mobile Phone #**, or **Mobile Number** — often via ``<label>`` / ``aria-labelledby``, not
@@ -829,7 +827,112 @@ def _try_click_generate_booking(
     )
 
 
-def _fill_siebel_enquiry_customer_applet(
+def _contact_view_find_by_mobile(
+    page: Page,
+    *,
+    contact_url: str,
+    mobile: str,
+    nav_timeout_ms: int,
+    action_timeout_ms: int,
+    content_frame_selector: str | None,
+    mobile_aria_hints: list[str],
+    note,
+    step,
+    stage_msg: str,
+    wait_after_go_ms: int = 2000,
+) -> bool:
+    """
+    Open Contact Find view, set object type to Contact when possible, fill **mobile only**, Go.
+    Shared by initial find and mandatory re-find after enquiry creation.
+    """
+    cu = (contact_url or "").strip()
+    if not cu:
+        note("Contact URL missing — cannot run Find by mobile.")
+        return False
+    _goto(page, cu, "contact_find", nav_timeout_ms=nav_timeout_ms)
+    _siebel_after_goto_wait(page, floor_ms=1200)
+    step(stage_msg)
+
+    if _try_expand_find_flyin(
+        page,
+        timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+    ):
+        note("Find pane expand control clicked (if it was collapsed).")
+
+    if _try_prepare_find_contact_applet(
+        page,
+        timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+    ):
+        note("Find → Contact: object type selected so the mobile field is the Contact search field.")
+    _safe_page_wait(page, 600, log_label="after_find_contact_prep")
+
+    _mobile_vis = 2400
+    filled_mobile = _try_fill_field(
+        page,
+        _mobile_selectors(mobile_aria_hints),
+        mobile,
+        timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+        visible_timeout_ms=_mobile_vis,
+    )
+    if not filled_mobile:
+        filled_mobile = _try_fill_mobile_semantic(
+            page,
+            mobile,
+            timeout_ms=action_timeout_ms,
+            content_frame_selector=content_frame_selector,
+            extra_hints=mobile_aria_hints,
+            label_visible_ms=_mobile_vis,
+        )
+    if not filled_mobile:
+        filled_mobile = _try_fill_mobile_dom_scan(page, mobile)
+    if not filled_mobile:
+        return False
+
+    _siebel_blur_and_settle(page, ms=350)
+
+    if _click_find_go_query(page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector):
+        note("Clicked Find/Go on contact view (mobile query).")
+    else:
+        note("No Find/Go control clicked on contact view after mobile fill.")
+
+    _safe_page_wait(page, wait_after_go_ms, log_label="after_contact_find_go")
+    return True
+
+
+def _refind_customer_after_enquiry(
+    page: Page,
+    *,
+    contact_url: str,
+    mobile: str,
+    nav_timeout_ms: int,
+    action_timeout_ms: int,
+    content_frame_selector: str | None,
+    mobile_aria_hints: list[str],
+    note,
+    step,
+) -> bool:
+    """SOP: after saving a **basic** enquiry, always Find → mobile → Go again before care-of."""
+    note("Stage 3 (mandatory re-find): searching again by mobile after enquiry save.")
+    step("Re-finding customer by mobile after enquiry creation (mandatory SOP).")
+    return _contact_view_find_by_mobile(
+        page,
+        contact_url=contact_url,
+        mobile=mobile,
+        nav_timeout_ms=nav_timeout_ms,
+        action_timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+        mobile_aria_hints=mobile_aria_hints,
+        note=note,
+        step=step,
+        stage_msg="Contact view: re-find by mobile (post-enquiry).",
+        wait_after_go_ms=2000,
+    )
+
+
+def _fill_basic_enquiry_details(
     page: Page,
     *,
     first: str,
@@ -837,15 +940,14 @@ def _fill_siebel_enquiry_customer_applet(
     addr: str,
     state: str,
     pin: str,
-    landline: str,
-    father: str,
-    relation: str,
     action_timeout_ms: int,
     content_frame_selector: str | None,
 ) -> None:
-    """Buyer/CoBuyer (or enquiry) form: names, address, state, PIN, landline, care-of fields."""
+    """
+    New enquiry / customer applet: **name, address, state, PIN only** — no care-of
+    (father/relation) and no landline (strict SOP separation from stage 4).
+    """
     _siebel_blur_and_settle(page, ms=350)
-    # Find applet often duplicates labels (First Name next to Mobile); target main form (2nd match).
     dup = True
     _try_fill_field(
         page,
@@ -908,7 +1010,40 @@ def _fill_siebel_enquiry_customer_applet(
         content_frame_selector=content_frame_selector,
         prefer_second_if_duplicate=dup,
     )
+
+
+def _fill_siebel_enquiry_customer_applet(
+    page: Page,
+    *,
+    first: str,
+    last: str,
+    addr: str,
+    state: str,
+    pin: str,
+    landline: str,
+    father: str,
+    relation: str,
+    action_timeout_ms: int,
+    content_frame_selector: str | None,
+) -> None:
+    """
+    Backward-compatible **single call**: basic details + care-of.
+
+    Prefer the staged flow in ``run_hero_siebel_dms_flow`` (basic save → re-find → care-of).
+    ``landline`` is applied here only for legacy callers (not part of strict staged SOP basic step).
+    """
+    _fill_basic_enquiry_details(
+        page,
+        first=first,
+        last=last,
+        addr=addr,
+        state=state,
+        pin=pin,
+        action_timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+    )
     if landline:
+        dup = True
         _try_fill_field(
             page,
             [
@@ -921,31 +1056,13 @@ def _fill_siebel_enquiry_customer_applet(
             content_frame_selector=content_frame_selector,
             prefer_second_if_duplicate=dup,
         )
-    if father:
-        _try_fill_field(
-            page,
-            [
-                'input[aria-label*="Father" i]',
-                'input[aria-label*="Husband" i]',
-                'input[aria-label*="Parent" i]',
-            ],
-            father[:255],
-            timeout_ms=action_timeout_ms,
-            content_frame_selector=content_frame_selector,
-            prefer_second_if_duplicate=dup,
-        )
-    if relation:
-        _try_select_option(
-            page,
-            [
-                'select[aria-label*="Relation" i]',
-                'select[aria-label*="S/O" i]',
-            ],
-            relation,
-            timeout_ms=action_timeout_ms,
-            content_frame_selector=content_frame_selector,
-            prefer_second_if_duplicate=dup,
-        )
+    _fill_siebel_care_of_only(
+        page,
+        father=father,
+        relation=relation,
+        action_timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+    )
 
 
 def _fill_siebel_care_of_only(
@@ -986,34 +1103,32 @@ def _fill_siebel_care_of_only(
         )
 
 
-def _mobile_tail_digits(mobile: str, *, min_len: int = 8) -> str:
+def _mobile_needle_for_contact_grid_match(mobile: str) -> str:
+    """
+    Prefer full **10-digit** tail for contact **list/grid** matching (fewer false positives
+    than an 8-digit substring). Falls back to 8+ digits when the number is shorter.
+    """
     d = re.sub(r"\D", "", (mobile or "").strip())
     if len(d) >= 10:
-        d = d[-10:]
-    return d if len(d) >= min_len else ""
+        return d[-10:]
+    return d if len(d) >= 8 else ""
 
 
 def _siebel_ui_suggests_contact_match(page: Page, mobile: str) -> bool:
     """
-    After Find/Go on Contact, detect loaded match: grid cell or form field contains mobile digits.
-    False → treat as new enquiry (full form). Heuristic — tune if tenant UI differs.
+    After Find/Go on Contact, detect a **search hit** only when the mobile appears in a
+    **table result row** (≥3 ``td``), not in the Find query field (which still holds the number).
+
+    If no table hit → treat as new contact / full enquiry form. Div-based grids with no
+    ``table`` may false-negative here; tune iframe/DOM or extend heuristics if needed.
     """
-    tail = _mobile_tail_digits(mobile)
-    if not tail:
+    needle = _mobile_needle_for_contact_grid_match(mobile)
+    if not needle:
         return False
-    script = """(tail) => {
-      const has = (s) => {
-        if (!tail || !s) return false;
-        const t = String(s).replace(/\\s+/g, '');
-        return t.includes(tail);
-      };
-      for (const el of document.querySelectorAll('input, textarea')) {
-        if (el.type === 'hidden' || el.type === 'password' || el.type === 'submit') continue;
-        const st = window.getComputedStyle(el);
-        if (st.display === 'none' || st.visibility === 'hidden') continue;
-        const v = (el.value || el.getAttribute('value') || '').trim();
-        if (has(v)) return true;
-      }
+    script = """(needle) => {
+      if (!needle || needle.length < 8) return false;
+      const compact = (s) => String(s).replace(/\\s+/g, '');
+      const has = (s) => compact(s).includes(needle);
       for (const tr of document.querySelectorAll('table tbody tr')) {
         const tds = tr.querySelectorAll('td');
         if (tds.length < 3) continue;
@@ -1024,7 +1139,7 @@ def _siebel_ui_suggests_contact_match(page: Page, mobile: str) -> bool:
     }"""
     for frame in _ordered_frames(page):
         try:
-            if frame.evaluate(script, tail):
+            if frame.evaluate(script, needle):
                 return True
         except Exception:
             continue
@@ -1079,13 +1194,16 @@ def _try_click_precheck_complete(
 def _try_click_pdi_submit(
     page: Page, *, timeout_ms: int, content_frame_selector: str | None
 ) -> bool:
+    # Avoid bare "Submit" first — it matches unrelated Siebel applets. Prefer PDI-specific labels.
     return _try_click_toolbar_by_name(
         page,
         (
-            re.compile(r"^\s*submit\s*$", re.I),
-            re.compile(r"submit\s+record", re.I),
             re.compile(r"pdi\s+complete", re.I),
             re.compile(r"complete\s+pdi", re.I),
+            re.compile(r"submit\s+pdi", re.I),
+            re.compile(r"pdi\s+submit", re.I),
+            re.compile(r"submit\s+record", re.I),
+            re.compile(r"finalize\s+pdi", re.I),
         ),
         timeout_ms=timeout_ms,
         content_frame_selector=content_frame_selector,
@@ -1463,25 +1581,22 @@ def run_hero_siebel_dms_flow(
     skip_contact_find: bool = False,
 ) -> dict:
     """
-    Real Hero Connect / Siebel flow aligned with **BRD §6.1a**.
+    Hero Connect / Siebel **linear SOP** (stages 1–8 inside the main ``try``):
 
-    **Contact (default):** Find → Contact → **mobile only** → Go; if UI shows a match, **care-of fields
-    only** + Save; if no match, or ``dms_contact_path`` is ``new_enquiry``, **full** enquiry/customer
-    applet + Save. **Does not** fill name/address before Find/Go.
+    1. **Find** customer by mobile (Contact view). 2. If not matched (or ``new_enquiry``), **basic
+    enquiry** only (name, address, state, PIN — no care-of) + Save. 3. **Mandatory re-find** by
+    mobile after a new basic enquiry. 4. **Care-of** (father/relation) + Save — **always** runs.
+    5. **Vehicle** — nested ``stage_5_vehicle_flow()`` (list search/scrape; if **In Transit** →
+    Process Receipt + Pre Check + PDI; unchanged helpers). 6. **Generate Booking** — **always** after
+    vehicle processing (in-transit or not). 7.
+    **Allotment** (line items, Price All, Allocate) — **non–In Transit only**, after booking. 8.
+    **Invoice hook** (message only; no automation).
 
-    **skip_find:** Opens enquiry URL, full customer form + Save (**no** Generate Booking until after
-    vehicle branch).
+    **skip_find:** Enquiry view → basic details + Save → mandatory re-find on ``DMS_REAL_URL_CONTACT``
+    → stage 4 care-of, then stages 5–8.
 
-    **Vehicle:** Auto Vehicle List query + scrape; ``in_transit`` inferred from grid cell text.
-
-    **Branch:** If ``in_transit`` — ``DMS_REAL_URL_VEHICLES`` + Process Receipt, then **Pre Check**
-    (``DMS_REAL_URL_PRECHECK`` and/or first actions on ``DMS_REAL_URL_PDI``), then **PDI** submit.
-    Else — **Generate Booking**, then ``DMS_REAL_URL_LINE_ITEMS`` + Price All (best-effort) + Allocate.
-
-    Never clicks **Create Invoice**. Does not auto-open Reports.
-
-    Returns fragment: ``vehicle``, ``error``, ``dms_siebel_forms_filled``, ``dms_siebel_notes``,
-    ``dms_milestones``, ``dms_step_messages`` (ordered operator-facing progress lines).
+    Never clicks **Create Invoice**. Returns ``vehicle``, ``error``, ``dms_siebel_forms_filled``,
+    notes, milestones, and ``dms_step_messages``.
     """
     out: dict = {
         "vehicle": {},
@@ -1521,51 +1636,64 @@ def run_hero_siebel_dms_flow(
         out["dms_siebel_notes"].append(msg)
         logger.info("siebel_dms: %s", msg)
 
+    customer_save_clicked = False
+
+    def save_customer_record(msg_clicked: str, msg_missing: str) -> None:
+        nonlocal customer_save_clicked
+        if _try_click_siebel_save(
+            page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
+        ):
+            customer_save_clicked = True
+            note(msg_clicked)
+        else:
+            note(msg_missing)
+
     try:
         dms_path = (dms_values.get("dms_contact_path") or "found").strip().lower()
-        step("Started Hero Connect / Siebel DMS automation.")
+        step("Started Hero Connect / Siebel DMS automation (linear SOP).")
 
-        if not skip_contact_find:
-            _goto(page, urls.contact, "contact", nav_timeout_ms=nav_timeout_ms)
-            _siebel_after_goto_wait(page, floor_ms=1200)
-            step("Opened contact view (customer search).")
+        contact_url = (urls.contact or "").strip()
+        in_transit_state = False
 
-            if _try_expand_find_flyin(
+        def stage_4_add_care_of() -> None:
+            note("Stage 4: care-of only (S/o, father/husband) — always runs per SOP.")
+            step("Adding care-of / relation (stage 4 — mandatory after find / re-find).")
+            _fill_siebel_care_of_only(
                 page,
-                timeout_ms=action_timeout_ms,
+                father=father,
+                relation=relation,
+                action_timeout_ms=action_timeout_ms,
                 content_frame_selector=content_frame_selector,
-            ):
-                note("Find pane expand control clicked (if it was collapsed).")
-
-            if _try_prepare_find_contact_applet(
-                page,
-                timeout_ms=action_timeout_ms,
-                content_frame_selector=content_frame_selector,
-            ):
-                note("Find → Contact: object type selected so the mobile field is the Contact search field.")
-            _safe_page_wait(page, 600, log_label="after_find_contact_prep")
-
-            _mobile_vis = 2400
-            filled_mobile = _try_fill_field(
-                page,
-                _mobile_selectors(mobile_aria_hints),
-                mobile,
-                timeout_ms=action_timeout_ms,
-                content_frame_selector=content_frame_selector,
-                visible_timeout_ms=_mobile_vis,
             )
-            if not filled_mobile:
-                filled_mobile = _try_fill_mobile_semantic(
-                    page,
-                    mobile,
-                    timeout_ms=action_timeout_ms,
-                    content_frame_selector=content_frame_selector,
-                    extra_hints=mobile_aria_hints,
-                    label_visible_ms=_mobile_vis,
+            if father or relation:
+                ms_done("Care of filled")
+            save_customer_record(
+                "Stage 4: Save after care-of update.",
+                "Stage 4: Save not detected after care-of update.",
+            )
+            step("Care-of step completed (stage 4).")
+
+        def stage_1_find_customer() -> tuple[bool, bool]:
+            if not contact_url:
+                step("Stopped: DMS_REAL_URL_CONTACT is not configured.")
+                out["error"] = (
+                    "Siebel: set DMS_REAL_URL_CONTACT to the Contact / Find view GotoView URL "
+                    "so mobile search can run (stage 1)."
                 )
-            if not filled_mobile:
-                filled_mobile = _try_fill_mobile_dom_scan(page, mobile)
-            if not filled_mobile:
+                return False, False
+            ok = _contact_view_find_by_mobile(
+                page,
+                contact_url=contact_url,
+                mobile=mobile,
+                nav_timeout_ms=nav_timeout_ms,
+                action_timeout_ms=action_timeout_ms,
+                content_frame_selector=content_frame_selector,
+                mobile_aria_hints=mobile_aria_hints,
+                note=note,
+                step=step,
+                stage_msg="Stage 1: Find customer by mobile (Contact view).",
+            )
+            if not ok:
                 step("Stopped: mobile field not found on contact view — check Find pane and iframe selectors.")
                 out["error"] = (
                     "Siebel: could not find a mobile/cellular phone input on the contact view. "
@@ -1573,241 +1701,188 @@ def run_hero_siebel_dms_flow(
                     "Tune env: DMS_SIEBEL_CONTENT_FRAME_SELECTOR (chain iframes with >>, outer to inner), "
                     "DMS_SIEBEL_AUTO_IFRAME_SELECTORS (comma-separated iframe CSS), "
                     "DMS_SIEBEL_POST_GOTO_WAIT_MS (longer wait after goto), "
-                    "DMS_SIEBEL_MOBILE_ARIA_HINTS (substrings matching the visible field label)."
+                    "or DMS_SIEBEL_MOBILE_ARIA_HINTS (substrings matching the visible field label)."
                 )
-                out["dms_milestones"] = _sort_milestone_labels(out["dms_milestones"])
-                return out
-
-            _siebel_blur_and_settle(page, ms=350)
-
-            if _click_find_go_query(page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector):
-                note("Clicked Find/Go on contact view (mobile only before query).")
-            else:
-                note("No Find/Go control clicked on contact view after mobile fill.")
-
-            _safe_page_wait(page, 2000, log_label="after_contact_find_go")
-            step("Customer search ran on the mobile number.")
-
+                return False, False
+            note("Stage 1: Find/Go completed for mobile search.")
+            step("Stage 1 complete: customer search ran on the mobile number.")
             if dms_path == "new_enquiry":
-                note("DMS Contact Path is new_enquiry: full enquiry form after Find.")
-                _fill_siebel_enquiry_customer_applet(
-                    page,
-                    first=first,
-                    last=last,
-                    addr=addr,
-                    state=state,
-                    pin=pin,
-                    landline=landline,
-                    father=father,
-                    relation=relation,
-                    action_timeout_ms=action_timeout_ms,
-                    content_frame_selector=content_frame_selector,
-                )
-                if father or relation:
-                    ms_done("Care of filled")
-                if _try_click_siebel_save(page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector):
-                    note("Clicked Save after new_enquiry form fill.")
-                else:
-                    note("Save not detected after new_enquiry form fill.")
-                ms_done("Enquiry created")
-                step("New-enquiry path: full customer / enquiry details were filled and saved.")
+                return True, False
+            matched = _siebel_ui_suggests_contact_match(page, mobile)
+            if matched:
+                ms_done("Customer found")
+                note("Stage 1: table/grid suggests an existing contact match.")
             else:
-                matched = _siebel_ui_suggests_contact_match(page, mobile)
-                if matched:
-                    ms_done("Customer found")
-                    _fill_siebel_care_of_only(
-                        page,
-                        father=father,
-                        relation=relation,
-                        action_timeout_ms=action_timeout_ms,
-                        content_frame_selector=content_frame_selector,
-                    )
-                    if father or relation:
-                        ms_done("Care of filled")
-                    if _try_click_siebel_save(page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector):
-                        note("Clicked Save after care-of update on existing contact.")
-                    else:
-                        note("Save not detected after care-of update.")
-                    if father or relation:
-                        step("Customer search found a match. Care-of / relation was updated and saved.")
-                    else:
-                        step("Customer search found a match. Record saved (no care-of fields in data).")
-                else:
-                    note("No contact match after Find; filling full enquiry/customer fields.")
-                    _fill_siebel_enquiry_customer_applet(
-                        page,
-                        first=first,
-                        last=last,
-                        addr=addr,
-                        state=state,
-                        pin=pin,
-                        landline=landline,
-                        father=father,
-                        relation=relation,
-                        action_timeout_ms=action_timeout_ms,
-                        content_frame_selector=content_frame_selector,
-                    )
-                    if father or relation:
-                        ms_done("Care of filled")
-                    if _try_click_siebel_save(page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector):
-                        note("Clicked Save after new contact/enquiry form fill.")
-                    else:
-                        note("Save not detected after new contact form fill.")
-                    ms_done("Enquiry created")
-                    step(
-                        "Customer search did not find an existing contact. "
-                        "Enquiry / customer details were filled and saved."
-                    )
-        else:
-            enquiry_url = (urls.enquiry or "").strip() or (urls.contact or "").strip()
-            if not enquiry_url:
-                out["error"] = (
-                    "Siebel skip_find: set DMS_REAL_URL_ENQUIRY or DMS_REAL_URL_CONTACT to the "
-                    "enquiry view (e.g. Buyer/CoBuyer My Enquiries) so the customer can be added "
-                    "before vehicle search (Generate Booking runs after vehicle per §6.1a)."
-                )
-                out["dms_milestones"] = _sort_milestone_labels(out["dms_milestones"])
-                return out
-            _goto(page, enquiry_url, "enquiry_or_contact", nav_timeout_ms=nav_timeout_ms)
-            _siebel_after_goto_wait(page, floor_ms=1400)
-            step("Skipped Find: opened enquiry view.")
-            note(
-                "skip_find: enquiry view — fill customer, Save only; "
-                "Generate Booking after vehicle branch if not In Transit."
-            )
+                note("Stage 1: no table/grid match — will create basic enquiry (stage 2).")
+            return True, matched
 
-            form_mobile_ok = _try_fill_mobile_on_enquiry_form(
-                page,
-                mobile,
-                action_timeout_ms=action_timeout_ms,
-                content_frame_selector=content_frame_selector,
-                mobile_aria_hints=mobile_aria_hints,
-            )
-            if not form_mobile_ok:
-                out["error"] = (
-                    "Siebel skip_find: could not fill mobile on the enquiry/customer form "
-                    "(or Mobile Phone # is missing in form_dms_view). "
-                    "Set DMS_SIEBEL_CONTENT_FRAME_SELECTOR (use >> to chain iframes), "
-                    "DMS_SIEBEL_AUTO_IFRAME_SELECTORS, DMS_SIEBEL_POST_GOTO_WAIT_MS, "
-                    "or DMS_SIEBEL_MOBILE_ARIA_HINTS if needed."
-                )
-                out["dms_milestones"] = _sort_milestone_labels(out["dms_milestones"])
-                return out
-
-            _fill_siebel_enquiry_customer_applet(
+        def stage_2_create_enquiry_if_needed(matched: bool) -> bool:
+            if matched:
+                note("Stage 2: skipped — existing contact found (no new basic enquiry).")
+                step("Stage 2 skipped: contact already exists from first search.")
+                return False
+            note("Stage 2: basic enquiry only (name, address, state, PIN — no care-of on this step).")
+            step("Creating new enquiry with basic details only (stage 2).")
+            _fill_basic_enquiry_details(
                 page,
                 first=first,
                 last=last,
                 addr=addr,
                 state=state,
                 pin=pin,
-                landline=landline,
-                father=father,
-                relation=relation,
                 action_timeout_ms=action_timeout_ms,
                 content_frame_selector=content_frame_selector,
             )
-
-            if father or relation:
-                ms_done("Care of filled")
-
-            if _try_click_siebel_save(page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector):
-                note("Clicked Save on enquiry (skip_find).")
-            else:
-                note("Save not detected on enquiry (skip_find).")
-            ms_done("Enquiry created")
-            _safe_page_wait(page, 800, log_label="after_skip_find_save")
-            step("Enquiry form was filled and saved (skip Find path).")
-
-        vehicle_url = (urls.vehicle or "").strip()
-        if not vehicle_url:
-            step("Stopped: DMS_REAL_URL_VEHICLE is not configured.")
-            out["error"] = (
-                "Siebel: set DMS_REAL_URL_VEHICLE to the Auto Vehicle List (or stock search) "
-                "GotoView URL so key/chassis/engine search can run."
+            save_customer_record(
+                "Stage 2: Save after basic enquiry details.",
+                "Stage 2: Save not detected after basic enquiry details.",
             )
-            out["dms_milestones"] = _sort_milestone_labels(out["dms_milestones"])
-            return out
+            ms_done("Enquiry created")
+            step("Stage 2 complete: basic enquiry saved.")
+            return True
 
-        scraped, veh_err = _siebel_goto_vehicle_list_and_scrape(
-            page,
-            vehicle_url,
-            key_p,
-            frame_p,
-            engine_p,
-            nav_timeout_ms=nav_timeout_ms,
-            action_timeout_ms=action_timeout_ms,
-            content_frame_selector=content_frame_selector,
-            note=note,
-        )
-        if veh_err:
-            step("Stopped during vehicle list search.")
-            out["error"] = veh_err
-            out["dms_milestones"] = _sort_milestone_labels(out["dms_milestones"])
-            return out
-
-        out["vehicle"] = scraped
-        out["dms_siebel_forms_filled"] = True
-        step("Vehicle list: searched by key / chassis / engine and read the result row.")
-
-        in_transit = bool(scraped.get("in_transit"))
-
-        if in_transit:
-            note("Vehicle grid suggests In Transit — receipt, Pre Check, then PDI (§6.1a).")
-            step("Vehicle appears in transit (stock / receipt path).")
-            recv_u = (urls.vehicles or "").strip()
-            if recv_u:
-                _goto(page, recv_u, "vehicles_receipt", nav_timeout_ms=nav_timeout_ms)
-                _siebel_after_goto_wait(page, floor_ms=1000)
-                if _try_click_process_receipt(page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector):
-                    note("Clicked Process Receipt / receive control.")
-                    step("Vehicle received — Process Receipt was completed in DMS.")
-                else:
-                    note("Process Receipt control not found; operator may complete receipt manually.")
-                    step(
-                        "Receipt / in-transit screen opened; Process Receipt was not found — "
-                        "complete receiving manually if required."
-                    )
-                ms_done("Vehicle received")
-            else:
-                note(
-                    "DMS_REAL_URL_VEHICLES is not set — cannot navigate to receipt/in-transit view; "
-                    "set it to HMCL In Transit (or equivalent) GotoView URL."
-                )
-                step("Receipt URL (DMS_REAL_URL_VEHICLES) is not set — skipped receiving in UI.")
-
-            _siebel_run_precheck_and_pdi(
+        def stage_3_refind_customer(enquiry_was_created: bool) -> bool:
+            if not enquiry_was_created:
+                note("Stage 3: skipped — no new enquiry (re-find mandatory only after new basic enquiry).")
+                step("Stage 3 skipped: re-find not required when contact already existed.")
+                return True
+            ok = _refind_customer_after_enquiry(
                 page,
-                precheck_url=urls.precheck,
-                pdi_url=urls.pdi,
+                contact_url=contact_url,
+                mobile=mobile,
+                nav_timeout_ms=nav_timeout_ms,
+                action_timeout_ms=action_timeout_ms,
+                content_frame_selector=content_frame_selector,
+                mobile_aria_hints=mobile_aria_hints,
+                note=note,
+                step=step,
+            )
+            if not ok:
+                out["error"] = (
+                    "Siebel: mandatory re-find (stage 3) failed — could not fill mobile on Contact view "
+                    "after saving the basic enquiry. Check Find pane and iframe selectors."
+                )
+                return False
+            note("Stage 3: mandatory re-find by mobile completed.")
+            step("Stage 3 complete: re-found customer after enquiry save.")
+            return True
+
+        def stage_5_vehicle_flow() -> bool:
+            """
+            Vehicle list search/scrape; if grid suggests In Transit → receipt,
+            Pre Check, PDI.             Sets ``in_transit_state`` and ``out["vehicle"]``.
+            Returns False on configuration or vehicle-search failure (``out["error"]`` set).
+            """
+            nonlocal in_transit_state
+            note("Stage 5: vehicle list search, scrape, and In-Transit handling.")
+            step("Vehicle flow: key / chassis / engine search (stage 5).")
+            vehicle_url = (urls.vehicle or "").strip()
+            if not vehicle_url:
+                step("Stopped: DMS_REAL_URL_VEHICLE is not configured.")
+                out["error"] = (
+                    "Siebel: set DMS_REAL_URL_VEHICLE to the Auto Vehicle List (or stock search) "
+                    "GotoView URL so key/chassis/engine search can run."
+                )
+                return False
+
+            scraped, veh_err = _siebel_goto_vehicle_list_and_scrape(
+                page,
+                vehicle_url,
+                key_p,
+                frame_p,
+                engine_p,
                 nav_timeout_ms=nav_timeout_ms,
                 action_timeout_ms=action_timeout_ms,
                 content_frame_selector=content_frame_selector,
                 note=note,
-                ms_done=ms_done,
-                step=step,
             )
-        else:
-            note("Vehicle not flagged In Transit — booking + allotment branch (§6.1a).")
-            step("Vehicle does not appear in transit — booking and allocation path.")
+            if veh_err:
+                step("Stopped during vehicle list search.")
+                out["error"] = veh_err
+                return False
+
+            out["vehicle"] = scraped
+            out["dms_siebel_forms_filled"] = bool(customer_save_clicked)
+            if not customer_save_clicked:
+                note(
+                    "Siebel Save was not detected on the customer/enquiry step — vehicle search still ran; "
+                    "verify the contact record in Hero Connect. dms_siebel_forms_filled=false for API consumers."
+                )
+            step("Stage 5: vehicle list query completed; result row read when present.")
+
+            in_transit_state = bool(scraped.get("in_transit"))
+
+            if in_transit_state:
+                note("Stage 5b: vehicle grid suggests In Transit — Process Receipt, Pre Check, PDI.")
+                step("Vehicle appears in transit (receipt / pre-check / PDI path).")
+                recv_u = (urls.vehicles or "").strip()
+                if recv_u:
+                    _goto(page, recv_u, "vehicles_receipt", nav_timeout_ms=nav_timeout_ms)
+                    _siebel_after_goto_wait(page, floor_ms=1000)
+                    if _try_click_process_receipt(
+                        page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
+                    ):
+                        note("Clicked Process Receipt / receive control.")
+                        step("Vehicle received — Process Receipt was completed in DMS.")
+                    else:
+                        note("Process Receipt control not found; operator may complete receipt manually.")
+                        step(
+                            "Receipt / in-transit screen opened; Process Receipt was not found — "
+                            "complete receiving manually if required."
+                        )
+                    ms_done("Vehicle received")
+                else:
+                    note(
+                        "DMS_REAL_URL_VEHICLES is not set — cannot navigate to receipt/in-transit view; "
+                        "set it to HMCL In Transit (or equivalent) GotoView URL."
+                    )
+                    step("Receipt URL (DMS_REAL_URL_VEHICLES) is not set — skipped receiving in UI.")
+
+                _siebel_run_precheck_and_pdi(
+                    page,
+                    precheck_url=urls.precheck,
+                    pdi_url=urls.pdi,
+                    nav_timeout_ms=nav_timeout_ms,
+                    action_timeout_ms=action_timeout_ms,
+                    content_frame_selector=content_frame_selector,
+                    note=note,
+                    ms_done=ms_done,
+                    step=step,
+                )
+            else:
+                note("Stage 5b: vehicle not In Transit — receipt/PDI branch skipped.")
+                step("Vehicle does not appear in transit.")
+
+            return True
+
+        def stage_6_generate_booking() -> None:
+            note("Stage 6: Generate Booking (always after vehicle processing per SOP).")
+            step("Generate Booking (stage 6 — always, regardless of In Transit).")
             enq_u = (urls.enquiry or "").strip() or (urls.contact or "").strip()
             if enq_u:
                 _goto(page, enq_u, "enquiry_for_booking", nav_timeout_ms=nav_timeout_ms)
                 _siebel_after_goto_wait(page, floor_ms=1200)
             else:
-                note("No DMS_REAL_URL_ENQUIRY or DMS_REAL_URL_CONTACT for Generate Booking.")
+                note("Stage 6: no DMS_REAL_URL_ENQUIRY or DMS_REAL_URL_CONTACT — booking may be on current view.")
 
             _safe_page_wait(page, 800, log_label="before_generate_booking")
             if _try_click_generate_booking(
                 page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
             ):
-                note("Clicked Generate Booking.")
+                note("Stage 6: clicked Generate Booking.")
                 ms_done("Booking generated")
-                step("Generate Booking was completed.")
+                step("Generate Booking was completed (stage 6).")
             else:
-                note("Generate Booking not found or not visible.")
-                step("Generate Booking was not found on screen — complete manually if required.")
+                note("Stage 6: Generate Booking control not found or not visible.")
+                step("Generate Booking was not found — complete manually if required (stage 6).")
 
+        def stage_7_allotment_if_applicable() -> None:
+            if in_transit_state:
+                note("Stage 7: Price All / Allocate skipped (In Transit path).")
+                step("Allotment skipped — vehicle was In Transit (stage 7).")
+                return
+            note("Stage 7: order line / allotment (non–In Transit only, after booking).")
+            step("Opening allotment / line items after booking (stage 7).")
             line_u = (urls.line_items or "").strip()
             if line_u:
                 _goto(page, line_u, "line_items_allotment", nav_timeout_ms=nav_timeout_ms)
@@ -1827,6 +1902,117 @@ def run_hero_siebel_dms_flow(
             else:
                 note("DMS_REAL_URL_LINE_ITEMS not set; skipping allotment view.")
                 step("Line items / allotment URL is not set — skipped allocation in UI.")
+
+        def stage_8_invoice_hook() -> None:
+            note("Invoice step pending (not automated).")
+            step("Ready for invoice creation.")
+
+        if not skip_contact_find:
+            ok1, matched1 = stage_1_find_customer()
+            if not ok1:
+                out["dms_milestones"] = _sort_milestone_labels(out["dms_milestones"])
+                return out
+            created_basic = stage_2_create_enquiry_if_needed(matched1)
+            if not stage_3_refind_customer(created_basic):
+                out["dms_milestones"] = _sort_milestone_labels(out["dms_milestones"])
+                return out
+            stage_4_add_care_of()
+        else:
+            enquiry_url = (urls.enquiry or "").strip() or (urls.contact or "").strip()
+            if not enquiry_url:
+                out["error"] = (
+                    "Siebel skip_find: set DMS_REAL_URL_ENQUIRY or DMS_REAL_URL_CONTACT to the "
+                    "enquiry view (e.g. Buyer/CoBuyer My Enquiries) so the customer can be added "
+                    "before vehicle search."
+                )
+                out["dms_milestones"] = _sort_milestone_labels(out["dms_milestones"])
+                return out
+            note("skip_find: stage 1 (Find) bypassed — staged basic enquiry → re-find → care-of.")
+            step("skip_find path: enquiry view opened.")
+            _goto(page, enquiry_url, "enquiry_or_contact", nav_timeout_ms=nav_timeout_ms)
+            _siebel_after_goto_wait(page, floor_ms=1400)
+
+            form_mobile_ok = _try_fill_mobile_on_enquiry_form(
+                page,
+                mobile,
+                action_timeout_ms=action_timeout_ms,
+                content_frame_selector=content_frame_selector,
+                mobile_aria_hints=mobile_aria_hints,
+            )
+            if not form_mobile_ok:
+                out["error"] = (
+                    "Siebel skip_find: could not fill mobile on the enquiry/customer form "
+                    "(or Mobile Phone # is missing in form_dms_view). "
+                    "Set DMS_SIEBEL_CONTENT_FRAME_SELECTOR (use >> to chain iframes), "
+                    "DMS_SIEBEL_AUTO_IFRAME_SELECTORS, DMS_SIEBEL_POST_GOTO_WAIT_MS, "
+                    "or DMS_SIEBEL_MOBILE_ARIA_HINTS if needed."
+                )
+                out["dms_milestones"] = _sort_milestone_labels(out["dms_milestones"])
+                return out
+
+            note("skip_find stage 2: basic enquiry details only (no care-of).")
+            _fill_basic_enquiry_details(
+                page,
+                first=first,
+                last=last,
+                addr=addr,
+                state=state,
+                pin=pin,
+                action_timeout_ms=action_timeout_ms,
+                content_frame_selector=content_frame_selector,
+            )
+            if landline:
+                dup = True
+                _try_fill_field(
+                    page,
+                    [
+                        'input[aria-label*="Work Phone" i]',
+                        'input[aria-label*="Alternate" i]',
+                        'input[aria-label*="Landline" i]',
+                    ],
+                    landline,
+                    timeout_ms=action_timeout_ms,
+                    content_frame_selector=content_frame_selector,
+                    prefer_second_if_duplicate=dup,
+                )
+            save_customer_record(
+                "skip_find: Save after basic enquiry details.",
+                "skip_find: Save not detected after basic enquiry details.",
+            )
+            ms_done("Enquiry created")
+            _safe_page_wait(page, 800, log_label="after_skip_find_basic_save")
+            if not contact_url:
+                out["error"] = (
+                    "Siebel skip_find: set DMS_REAL_URL_CONTACT for mandatory re-find (stage 3) after enquiry save."
+                )
+                out["dms_milestones"] = _sort_milestone_labels(out["dms_milestones"])
+                return out
+            if not _refind_customer_after_enquiry(
+                page,
+                contact_url=contact_url,
+                mobile=mobile,
+                nav_timeout_ms=nav_timeout_ms,
+                action_timeout_ms=action_timeout_ms,
+                content_frame_selector=content_frame_selector,
+                mobile_aria_hints=mobile_aria_hints,
+                note=note,
+                step=step,
+            ):
+                out["error"] = (
+                    "Siebel skip_find: mandatory re-find failed — could not run Find by mobile on Contact view."
+                )
+                out["dms_milestones"] = _sort_milestone_labels(out["dms_milestones"])
+                return out
+            stage_4_add_care_of()
+            step("skip_find: stages 2–4 complete (basic → re-find → care-of).")
+
+        if not stage_5_vehicle_flow():
+            out["dms_milestones"] = _sort_milestone_labels(out["dms_milestones"])
+            return out
+
+        stage_6_generate_booking()
+        stage_7_allotment_if_applicable()
+        stage_8_invoice_hook()
 
     except PlaywrightTimeout as e:
         out["error"] = f"Siebel automation timeout: {e!s}"
