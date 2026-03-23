@@ -2570,13 +2570,42 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
             note("Could not re-click mobile in left Search Results after Relation's Name fill.")
             return False
         _safe_page_wait(page, 500, log_label="after_left_mobile_reclick_post_relation_fill")
-        if not _siebel_try_click_named_in_frames(
+        clicked_contact_enquiry = _siebel_try_click_named_in_frames(
             page,
             re.compile(r"contact[_\s]*enquiry", re.I),
             roles=("tab", "link"),
             timeout_ms=action_timeout_ms,
             content_frame_selector=content_frame_selector,
-        ):
+        )
+        if not clicked_contact_enquiry:
+            # Extra fallback: top tab strip sometimes renders as plain anchors/spans.
+            for root in _siebel_locator_search_roots(page, content_frame_selector):
+                try:
+                    for css in (
+                        "a",
+                        "span",
+                        "div",
+                        "[role='tab']",
+                        "[role='link']",
+                    ):
+                        cands = root.locator(css).filter(has_text=re.compile(r"^\s*contact[_\s]*enquiry\s*$", re.I))
+                        n = cands.count()
+                        for i in range(min(n, 10)):
+                            c = cands.nth(i)
+                            if c.is_visible(timeout=500):
+                                try:
+                                    c.click(timeout=action_timeout_ms)
+                                except Exception:
+                                    c.click(timeout=action_timeout_ms, force=True)
+                                clicked_contact_enquiry = True
+                                break
+                        if clicked_contact_enquiry:
+                            break
+                    if clicked_contact_enquiry:
+                        break
+                except Exception:
+                    continue
+        if not clicked_contact_enquiry:
             note("Could not click Contact_Enquiry tab after left mobile re-click.")
             return False
         note("Opened Contact_Enquiry after re-clicking left mobile (video SOP).")
