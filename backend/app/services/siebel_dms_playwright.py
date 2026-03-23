@@ -2651,19 +2651,9 @@ def _add_customer_payment(
     note,
 ) -> bool:
     """
-    New isolated step: open Payments tab and click the "+" (new) icon.
+    New isolated step: click "+" (new) on current Payments frame and fill payment row.
     """
-    opened_payments = _siebel_try_click_named_in_frames(
-        page,
-        re.compile(r"^\s*payments\s*$", re.I),
-        roles=("tab", "link"),
-        timeout_ms=action_timeout_ms,
-        content_frame_selector=content_frame_selector,
-    )
-    if not opened_payments:
-        note("Could not click Payments tab.")
-        return False
-    _safe_page_wait(page, 500, log_label="after_payments_tab_click")
+    _safe_page_wait(page, 250, log_label="before_payments_plus_click")
 
     plus_selectors = (
         "a[aria-label='Payment Lines List:New']",
@@ -2743,32 +2733,82 @@ def _add_customer_payment(
                 note("Clicked '+' icon on Payments tab.")
                 _safe_page_wait(page, 500, log_label="after_payments_plus_click")
 
-                def _pick_dropdown_value(field_patterns: tuple[re.Pattern[str], ...], value: str) -> bool:
-                    # 1) Native select first if present.
-                    if _try_select_option(
-                        page,
-                        [
-                            'select[aria-label*="Transaction Type" i]',
-                            'select[title*="Transaction Type" i]',
-                            'select[aria-label*="Payment Method" i]',
-                            'select[title*="Payment Method" i]',
-                            'select[aria-label*="Type" i]',
-                            'select[title*="Type" i]',
-                            'select[aria-label*="Method" i]',
-                            'select[title*="Method" i]',
-                        ],
-                        value,
-                        timeout_ms=action_timeout_ms,
-                        content_frame_selector=content_frame_selector,
-                        prefer_second_if_duplicate=False,
-                    ):
-                        return True
+                # Lock to the frame containing Payment Lines Transaction Amount id/title_id.
+                payment_frames: list[Frame] = []
+                for frame in _ordered_frames(page):
+                    try:
+                        has_payment_lines_marker = bool(
+                            frame.evaluate(
+                                """() => {
+                                  const vis = (el) => {
+                                    if (!el) return false;
+                                    const st = window.getComputedStyle(el);
+                                    if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+                                    const r = el.getBoundingClientRect();
+                                    return r.width >= 2 && r.height >= 2;
+                                  };
+                                  const sels = [
+                                    "[id='1_s_2_1_Transaction_Amount']",
+                                    "[name='1_s_2_1_Transaction_Amount']",
+                                    "[title_id='1_s_2_1_Transaction_Amount']",
+                                    "[title-id='1_s_2_1_Transaction_Amount']",
+                                    "[title='1_s_2_1_Transaction_Amount']",
+                                  ];
+                                  for (const s of sels) {
+                                    const el = document.querySelector(s);
+                                    if (vis(el)) return true;
+                                  }
+                                  return false;
+                                }"""
+                            )
+                        )
+                        if has_payment_lines_marker:
+                            payment_frames.append(frame)
+                    except Exception:
+                        continue
 
-                    # 2) Open-UI combobox/list flow.
+                scoped_roots = payment_frames if payment_frames else list(
+                    _siebel_locator_search_roots(page, content_frame_selector)
+                )
+                if payment_frames:
+                    try:
+                        note(f"Payment lines scoped frame locked: url={(payment_frames[0].url or '')[:180]!r}, name={payment_frames[0].name!r}")
+                    except Exception:
+                        pass
+                else:
+                    note("Payment lines scoped frame not detected; using broader roots.")
+
+                def _pick_dropdown_value(field_patterns: tuple[re.Pattern[str], ...], value: str) -> bool:
                     value_pat = re.compile(rf"^\s*{re.escape(value)}\s*$", re.I)
-                    for root in _siebel_locator_search_roots(page, content_frame_selector):
+                    for root in scoped_roots:
                         # Click field/control that matches the target label.
                         opened = False
+                        # Try exact select native in this root first.
+                        try:
+                            sels = root.locator("select")
+                            ns = sels.count()
+                            for si in range(min(ns, 20)):
+                                s = sels.nth(si)
+                                if not s.is_visible(timeout=300):
+                                    continue
+                                blob = " ".join(
+                                    [
+                                        (s.get_attribute("aria-label") or ""),
+                                        (s.get_attribute("title") or ""),
+                                        (s.get_attribute("name") or ""),
+                                        (s.get_attribute("id") or ""),
+                                    ]
+                                )
+                                if not any(p.search(blob) for p in field_patterns):
+                                    continue
+                                try:
+                                    s.select_option(label=value_pat, timeout=action_timeout_ms)
+                                    return True
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
+
                         for css in (
                             "input",
                             "select",
@@ -2799,6 +2839,24 @@ def _add_customer_payment(
                                         c.click(timeout=action_timeout_ms)
                                     except Exception:
                                         c.click(timeout=action_timeout_ms, force=True)
+                                    # Try explicit keyboard open for Siebel Open UI picklists.
+                                    try:
+                                        c.press("ArrowDown", timeout=min(1200, action_timeout_ms))
+                                    except Exception:
+                                        pass
+
+                                    # Try clicking adjacent dropdown/open button near the same field.
+                                    try:
+                                        btn = c.locator(
+                                            "xpath=following::*[self::a or self::button or self::span][contains(@title,'Pick') or contains(@title,'Open') or contains(@aria-label,'Pick') or contains(@aria-label,'Open')][1]"
+                                        ).first
+                                        if btn.count() > 0 and btn.is_visible(timeout=250):
+                                            try:
+                                                btn.click(timeout=min(1200, action_timeout_ms))
+                                            except Exception:
+                                                btn.click(timeout=min(1200, action_timeout_ms), force=True)
+                                    except Exception:
+                                        pass
                                     opened = True
                                     break
                                 if opened:
@@ -2856,29 +2914,34 @@ def _add_customer_payment(
                     "Cash",
                 )
 
-                # Transaction Amount = 120000
-                _try_fill_field(
-                    page,
-                    [
+                # Transaction Amount = 120000 (strictly in Payment Lines scoped frame/roots)
+                amount_ok = False
+                for root in scoped_roots:
+                    for css in (
+                        "input[id='1_s_2_1_Transaction_Amount']",
+                        "input[name='1_s_2_1_Transaction_Amount']",
+                        "input[title_id='1_s_2_1_Transaction_Amount']",
+                        "input[title-id='1_s_2_1_Transaction_Amount']",
+                        "input[title='1_s_2_1_Transaction_Amount']",
                         'input[aria-label="Transaction Amount" i]',
-                        'input[title="Transaction Amount" i]',
-                        'input[aria-label*="Transaction Amount" i]',
                         'input[title*="Transaction Amount" i]',
-                        'input[aria-label="Transaction Amount" i]',
-                        'input[title="Transaction Amount" i]',
-                        'input[aria-label*="Transaction Amount" i]',
-                        'input[title*="Transaction Amount" i]',
-                        'input[aria-label*="Amount" i]',
-                        'input[title*="Amount" i]',
-                    ],
-                    "120000",
-                    timeout_ms=action_timeout_ms,
-                    content_frame_selector=content_frame_selector,
-                    prefer_second_if_duplicate=False,
-                )
+                    ):
+                        try:
+                            amt = root.locator(css).first
+                            if amt.count() <= 0 or not amt.is_visible(timeout=700):
+                                continue
+                            amt.fill("120000", timeout=action_timeout_ms)
+                            got_amt = (amt.input_value(timeout=action_timeout_ms) or "").strip()
+                            if got_amt and ("120000" in got_amt or got_amt in "120000"):
+                                amount_ok = True
+                                break
+                        except Exception:
+                            continue
+                    if amount_ok:
+                        break
                 note(
                     "Filled payment fields: "
-                    f"Type=Payments(ok={type_ok!r}), Method=Cash(ok={method_ok!r}), Transaction Amount=120000."
+                    f"Type=Payments(ok={type_ok!r}), Method=Cash(ok={method_ok!r}), Transaction Amount=120000(ok={amount_ok!r})."
                 )
 
                 # Save icon (down-arrow / save) click.
