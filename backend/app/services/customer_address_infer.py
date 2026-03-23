@@ -253,7 +253,32 @@ def _extract_city_from_text(text: str, state: str | None) -> str | None:
         for cand in reversed(segs):
             c = noise.sub("", cand).strip()
             if 3 <= len(c) <= 55 and not re.search(r"\d{6}", c) and not _REGION_RE.search(c):
+                words = re.findall(r"[A-Za-z][A-Za-z'.-]*", c)
+                if len(words) >= 2 and words[-1].lower() == words[-2].lower():
+                    return words[-1]
+                if len(words) >= 4:
+                    return words[-1]
                 return c
+        # No-comma OCR variant: derive city from token(s) immediately before state.
+        flat = _squish_spaces(text.replace("\n", " ").replace("\r", " "))
+        state_matches = list(re.finditer(rf"(?i)\b{re.escape(state)}\b", flat))
+        if state_matches:
+            before_state = flat[: state_matches[-1].start()].strip(" ,;:-")
+            if before_state:
+                # Drop PINs and punctuation noise before token extraction.
+                cleaned = re.sub(r"(?<!\d)\d{6}(?!\d)", " ", before_state)
+                words = re.findall(r"[A-Za-z][A-Za-z'.-]*", cleaned)
+                if words:
+                    relation_noise = {"c", "s", "w", "d", "o", "co", "so", "wo", "do", "near", "address"}
+                    city = words[-1]
+                    if city.lower() in relation_noise and len(words) >= 2:
+                        city = words[-2]
+                    # Handle repeated locality token before state: "Bharatpur Bharatpur Rajasthan".
+                    if len(words) >= 2 and words[-1].lower() == words[-2].lower():
+                        city = words[-1]
+                    city = city.strip(" .,'-")
+                    if 3 <= len(city) <= 55 and not _REGION_RE.search(city):
+                        return city
     return None
 
 
