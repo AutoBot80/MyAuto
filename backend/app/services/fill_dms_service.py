@@ -8,6 +8,9 @@ Writes pulled data to ocr_output/subfolder/Data from DMS.txt for consistency wit
 **Browser lifetime:** This module never calls ``Browser.close()`` or ``Playwright.stop()`` for operator
 sessions (including on API process exit and thread switches). Edge/Chrome stays open for the operator;
 stale handles are moved to a retain list so GC does not implicitly close windows.
+
+**JS dialogs:** ``run_fill_dms_only`` installs a per-tab ``dialog`` listener so short-lived Siebel
+``alert``/``confirm`` dialogs do not crash the Playwright Node driver (CDP race *No dialog is showing*).
 """
 import base64
 import difflib
@@ -153,6 +156,33 @@ _KEEP_OPEN_BROWSERS: list = []
 _CDP_BROWSERS_BY_URL: dict[str, object] = {}
 # Strong refs so dropped Browser objects are not GC-finalized (which could close Edge/Chrome).
 _RETAINED_BROWSERS_NO_CLOSE: list = []
+# ``id(page)`` for tabs that already have ``page.on("dialog", ...)`` installed.
+_PLAYWRIGHT_JS_DIALOG_HANDLER_PAGES: set[int] = set()
+
+
+def _install_playwright_js_dialog_handler(page) -> None:
+    """
+    Siebel / Hero Connect sometimes shows ``alert``/``confirm`` that disappear immediately. Playwright's
+    built-in auto-dismiss then races Chromium (``Page.handleJavaScriptDialog``: *No dialog is showing*),
+    which can crash the Node driver with an uncaught ``ProtocolError``. A single explicit listener that
+    calls ``accept()`` inside try/except avoids that race for this tab.
+    """
+    pid = id(page)
+    if pid in _PLAYWRIGHT_JS_DIALOG_HANDLER_PAGES:
+        return
+    _PLAYWRIGHT_JS_DIALOG_HANDLER_PAGES.add(pid)
+
+    def _on_dialog(dialog):
+        try:
+            dialog.accept()
+        except Exception as exc:
+            logger.debug("fill_dms_service: JS dialog accept skipped (already closed?): %s", exc)
+
+    try:
+        page.on("dialog", _on_dialog)
+    except Exception as exc:
+        _PLAYWRIGHT_JS_DIALOG_HANDLER_PAGES.discard(pid)
+        logger.warning("fill_dms_service: could not attach JS dialog handler: %s", exc)
 
 
 def _retain_browsers_without_closing() -> None:
@@ -2131,6 +2161,8 @@ def run_fill_dms_only(
         if page is None:
             result["error"] = open_error
             return result
+
+        _install_playwright_js_dialog_handler(page)
 
         # Operator-controlled step: Playwright must not click "Create Invoice".
         # If that action is pending on screen, instruct operator and stop.

@@ -264,3 +264,4 @@ See **Documentation/Database DDL.md** for full table structures. Summary:
 | 3.1 | Mar 2026 | — | Playwright: **never** `Browser.close()` / `Playwright.stop()` on API exit or thread switch; retain-list prevents GC closes; RTO payment dummy flow leaves Edge open |
 | 3.2 | Mar 2026 | — | **`Playwright_DMS.txt`**: **`[FORM]`** trace per SOP-ish step (screen, action, values); **`form_trace`** wired through vehicle scrape + pre-check/PDI helpers (**§2.4d**) |
 | 3.3 | Mar 2026 | — | Real Siebel: optional **`SIEBEL_DMS_STOP_AFTER_ALL_ENQUIRIES`** in `siebel_dms_playwright.py` — video **Find Contact Enquiry** path only (Find → drill → **All Enquiries**), then return; milestone **All Enquiries opened** |
+| 3.4 | Mar 2026 | — | Fill DMS: **`_install_playwright_js_dialog_handler`** on the reused tab — avoids Playwright Node **ProtocolError** (*Page.handleJavaScriptDialog: No dialog is showing*) when Siebel closes JS dialogs before default CDP dismiss |
