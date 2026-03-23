@@ -1624,7 +1624,6 @@ def _fill_siebel_care_of_only(
             prefer_second_if_duplicate=dup,
         )
 
-
 def _derive_relation_and_name(
     *,
     relation_prefix: str,
@@ -2447,10 +2446,7 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
     *,
     mobile: str,
     first_name: str,
-    relation_prefix: str,
-    father_husband_name: str,
     care_of: str,
-    gender: str,
     action_timeout_ms: int,
     content_frame_selector: str | None,
     note,
@@ -2493,12 +2489,59 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
     if not opened_customer:
         note("Could not click First Name in Contacts pane (video SOP).")
         return False
-    note("Opened customer record from Contacts pane by First Name click (video SOP).")
+    care_val = (care_of or "").strip()
+    if not care_val:
+        return True
 
-    # Operator request: stop here once the customer record is opened.
-    # Do not fill Relation's Name / Relation type (or any subsequent steps yet).
-    note("Video SOP stop: customer record opened; relation fill skipped.")
-    return True
+    fill_js = """(value) => {
+      const vis = (el) => {
+        if (!el) return false;
+        const st = window.getComputedStyle(el);
+        if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+        const r = el.getBoundingClientRect();
+        return r.width >= 2 && r.height >= 2;
+      };
+      const norm = (s) => String(s || '').replace(/\\s+/g,' ').trim().toLowerCase().replace(/\\s*:\\s*$/, '');
+      const labels = Array.from(document.querySelectorAll('td,th,label,span,div')).filter(vis);
+      const lbl = labels.find(el => {
+        const t = norm(el.innerText || el.textContent || '');
+        return t === \"relation's name\" || t.includes(\"relation's name\");
+      });
+      if (!lbl) return false;
+      const row = lbl.closest('tr') || lbl.closest('[role=\"row\"]') || document;
+      const candidates = Array.from(row.querySelectorAll('input,textarea')).filter(vis);
+      if (!candidates.length) return false;
+      const lr = lbl.getBoundingClientRect();
+      let best = null;
+      let bestScore = 1e18;
+      for (const c of candidates) {
+        const r = c.getBoundingClientRect();
+        const dy = Math.abs((r.top + r.height/2) - (lr.top + lr.height/2));
+        const dx = r.left - lr.right;
+        if (dy > 28) continue;
+        if (dx < -10) continue;
+        const score = dx + dy*5;
+        if (score < bestScore) { bestScore = score; best = c; }
+      }
+      if (!best) return false;
+      best.focus();
+      if ('value' in best) {
+        best.value = '';
+        best.value = String(value || '').trim();
+      }
+      best.dispatchEvent(new Event('input', { bubbles: true }));
+      best.dispatchEvent(new Event('change', { bubbles: true }));
+      best.dispatchEvent(new Event('blur', { bubbles: true }));
+      return true;
+    }"""
+
+    for frame in _ordered_frames(page):
+        try:
+            if bool(frame.evaluate(fill_js, care_val)):
+                return True
+        except Exception:
+            continue
+    return False
 
 
 def _siebel_open_found_customer_record(
@@ -3225,10 +3268,7 @@ def Playwright_Hero_DMS_fill(
     state = (dms_values.get("state") or "").strip()
     pin = (dms_values.get("pin_code") or "").strip()
     landline = (dms_values.get("landline") or "").strip()
-    father = (dms_values.get("father_husband_name") or "").strip()
-    relation = (dms_values.get("relation_prefix") or "").strip()
     care_of = (dms_values.get("care_of") or "").strip()
-    gender = (dms_values.get("gender") or "").strip()
     key_p = (dms_values.get("key_partial") or "").strip()
     frame_p = (dms_values.get("frame_partial") or "").strip()
     engine_p = (dms_values.get("engine_partial") or "").strip()
@@ -3250,10 +3290,7 @@ def Playwright_Hero_DMS_fill(
         log_fp.write(f"state={state!r}\n")
         log_fp.write(f"pin_code={pin!r}\n")
         log_fp.write(f"landline={landline!r}\n")
-        log_fp.write(f"father_husband_name={father!r}\n")
-        log_fp.write(f"relation_prefix={relation!r}\n")
         log_fp.write(f"care_of={care_of!r}\n")
-        log_fp.write(f"gender={gender!r}\n")
         log_fp.write(f"key_partial={key_p!r}\n")
         log_fp.write(f"frame_partial={frame_p!r}\n")
         log_fp.write(f"engine_partial={engine_p!r}\n")
@@ -3385,50 +3422,33 @@ def Playwright_Hero_DMS_fill(
                 "Siebel_Find_tab_optional_then_link_hit_then_click_first_name_then_fill_Relations_Name_only",
                 mobile_phone=mobile,
                 first_name=first,
-                relation_prefix=relation,
-                father_husband_name=father,
                 care_of=care_of,
-                gender=gender,
             )
             if not _siebel_video_path_after_find_go_to_all_enquiries(
                 page,
                 mobile=mobile,
                 first_name=first,
-                relation_prefix=relation,
-                father_husband_name=father,
                 care_of=care_of,
-                gender=gender,
                 action_timeout_ms=action_timeout_ms,
                 content_frame_selector=content_frame_selector,
                 note=note,
             ):
-                step("Stopped: video SOP failed while opening customer record or filling relation fields.")
+                step("Stopped: video SOP failed while opening customer record.")
                 out["error"] = (
-                    "Siebel: video SOP — after Find/Go, could not click customer/first-name or fill "
-                    "Relation's Name field on the opened customer record (verified). "
+                    "Siebel: video SOP — after Find/Go, could not click customer/first-name to open the record. "
                     "Confirm right-pane selectors/labels and iframe scope."
                 )
                 return out
-            ms_done("Care of filled")
             step(
-                "Video SOP complete: customer record opened and relation fields filled. Automation stops here "
+                "Video SOP complete: customer record opened. Automation stops here "
                 "(SIEBEL_DMS_STOP_AFTER_ALL_ENQUIRIES); browser left open."
             )
-            note(
-                "Stages 2–8 (basic enquiry, vehicle, booking, …) are skipped while "
-                "SIEBEL_DMS_STOP_AFTER_ALL_ENQUIRIES is True — set it False in siebel_dms_playwright.py to restore."
-            )
+            note("Relation's Name fill attempted from DB care_of; automation stops now.")
             return out
 
         # --- Full linear SOP (stages 1–8): runs only when SIEBEL_DMS_STOP_AFTER_ALL_ENQUIRIES is False. ---
 
-        def fill_father_name(customer_was_found: bool = False) -> None:
-            eff_relation, eff_father = _derive_relation_and_name(
-                relation_prefix=relation,
-                father_husband_name=father,
-                care_of=care_of,
-                gender=gender,
-            )
+        def fill_relation_name_from_care_of(customer_was_found: bool = False) -> None:
             if customer_was_found:
                 form_trace(
                     "1_find_contact",
@@ -3451,24 +3471,93 @@ def Playwright_Hero_DMS_fill(
                         "Customer match found but could not open record by left-hit/first-name click; "
                         "continuing with matched flow."
                     )
-            note("Stage 4: care-of only (S/o, father/husband) — always runs per SOP.")
-            step("Adding care-of / relation (stage 4 — mandatory after find / re-find).")
+            note("Stage 4: fill Relation's Name from DB care_of only (no relation type).")
+            step("Adding care-of only (stage 4 — mandatory after find / re-find).")
             form_trace(
                 "4_care_of",
                 "Contact / Enquiry applet (Father–Husband + Relation line)",
-                "fill_care_of_fields_via_Siebel_selectors",
-                father_husband_name=eff_father,
-                relation_prefix=eff_relation,
+                "fill_relation_name_from_care_of_only_simple",
                 care_of_source=care_of,
             )
-            _fill_siebel_care_of_only(
-                page,
-                father=eff_father,
-                relation=eff_relation,
-                action_timeout_ms=action_timeout_ms,
-                content_frame_selector=content_frame_selector,
-            )
-            if eff_father or eff_relation:
+            care_val = (care_of or "").strip()
+            filled_rel_name = False
+            if care_val:
+                fill_js = """(value) => {
+                  const vis = (el) => {
+                    if (!el) return false;
+                    const st = window.getComputedStyle(el);
+                    if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+                    const r = el.getBoundingClientRect();
+                    return r.width >= 2 && r.height >= 2;
+                  };
+                  const norm = (s) => String(s || '').replace(/\\s+/g,' ').trim().toLowerCase();
+                  const lblNorm = (s) => norm(s).replace(/\\s*:\\s*$/, '');
+
+                  const labels = Array.from(document.querySelectorAll('td,th,label,span,div'))
+                    .filter(vis)
+                    .map(el => ({ el, t: lblNorm(el.innerText || el.textContent || '') }));
+
+                  const targetLbl = labels.find(x => x.t === \"relation's name\");
+                  if (!targetLbl) return { ok: false, reason: 'label_not_found' };
+
+                  const row = targetLbl.el.closest('tr') || targetLbl.el.closest('[role=\"row\"]') || null;
+                  const scope = row || document;
+
+                  const controls = Array.from(scope.querySelectorAll('input,textarea'))
+                    .filter(vis)
+                    .filter(el => {
+                      const t = (el.getAttribute('type') || '').toLowerCase();
+                      if (t && ['hidden','submit','button','checkbox','radio','file','image'].includes(t)) return false;
+                      return true;
+                    });
+                  if (!controls.length) return { ok: false, reason: 'control_not_found' };
+
+                  const lr = targetLbl.el.getBoundingClientRect();
+                  let best = null;
+                  let bestScore = 1e18;
+                  for (const c of controls) {
+                    const r = c.getBoundingClientRect();
+                    const dy = Math.abs((r.top + r.height/2) - (lr.top + lr.height/2));
+                    const dx = r.left - lr.right;
+                    if (dy > 28) continue;
+                    if (dx < -10) continue;
+                    const score = dx + dy * 5;
+                    if (score < bestScore) { bestScore = score; best = c; }
+                  }
+                  if (!best) return { ok: false, reason: 'no_candidate' };
+
+                  try {
+                    best.focus();
+                    if ('value' in best) {
+                      best.value = '';
+                      best.value = String(value || '').trim();
+                    }
+                    best.dispatchEvent(new Event('input', { bubbles: true }));
+                    best.dispatchEvent(new Event('change', { bubbles: true }));
+                    best.dispatchEvent(new Event('blur', { bubbles: true }));
+                  } catch (e) {
+                    return { ok: false, reason: 'set_failed' };
+                  }
+
+                  try {
+                    const after = norm(best.value || '');
+                    const want = norm(value || '');
+                    const ok = after && (after.includes(want) || want.includes(after));
+                    return { ok, after, want };
+                  } catch (e) {
+                    return { ok: false, reason: 'verify_failed' };
+                  }
+                }"""
+                for frame in _ordered_frames(page):
+                    try:
+                        res = frame.evaluate(fill_js, care_val)
+                        if isinstance(res, dict) and res.get("ok") is True:
+                            filled_rel_name = True
+                            _safe_page_wait(page, 120, log_label="after_relation_name_care_of_inline_fill")
+                            break
+                    except Exception:
+                        continue
+            if filled_rel_name:
                 ms_done("Care of filled")
             form_trace("4_care_of", "same applet", "click_Save_or_Commit_toolbar_after_care_of")
             save_customer_record(
@@ -3791,7 +3880,7 @@ def Playwright_Hero_DMS_fill(
             created_basic = stage_2_create_enquiry_if_needed(matched1)
             if not stage_3_refind_customer(created_basic):
                 return out
-            fill_father_name(matched1)
+            fill_relation_name_from_care_of(matched1)
         else:
             enquiry_url = (urls.enquiry or "").strip() or (urls.contact or "").strip()
             if not enquiry_url:
@@ -3910,7 +3999,7 @@ def Playwright_Hero_DMS_fill(
                     "Siebel skip_find: mandatory re-find failed — could not run Find by mobile on Contact view."
                 )
                 return out
-            fill_father_name(False)
+            fill_relation_name_from_care_of(False)
             step("skip_find: stages 2–4 complete (basic → re-find → care-of).")
 
         if not stage_5_vehicle_flow():
