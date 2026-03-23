@@ -2482,44 +2482,6 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
     if not care_val:
         return True
 
-    relation_present_js = """() => {
-      const vis = (el) => {
-        if (!el) return false;
-        const st = window.getComputedStyle(el);
-        if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
-        const r = el.getBoundingClientRect();
-        return r.width >= 2 && r.height >= 2;
-      };
-      const norm = (s) => String(s || '').replace(/\\s+/g,' ').trim().toLowerCase();
-      const labels = Array.from(document.querySelectorAll('td,th,label,span,div')).filter(vis);
-      return labels.some(el => {
-        const t = norm(el.innerText || el.textContent || '');
-        return t === \"relation's name\" || t.includes(\"relation's name\");
-      });
-    }"""
-
-    relation_present = False
-    for frame in _ordered_frames(page):
-        try:
-            if bool(frame.evaluate(relation_present_js)):
-                relation_present = True
-                break
-        except Exception:
-            continue
-
-    if not relation_present:
-        opened_customer = _siebel_open_found_customer_record(
-            page,
-            mobile=mobile,
-            first_name=first_name,
-            timeout_ms=action_timeout_ms,
-            content_frame_selector=content_frame_selector,
-            skip_left_pane_click=True,
-        )
-        if not opened_customer:
-            note("Could not click First Name in Contacts pane (video SOP).")
-            return False
-
     fill_js = """(value) => {
       const vis = (el) => {
         if (!el) return false;
@@ -2562,12 +2524,35 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
       return true;
     }"""
 
-    for frame in _ordered_frames(page):
-        try:
-            if bool(frame.evaluate(fill_js, care_val)):
-                return True
-        except Exception:
-            continue
+    def try_fill() -> bool:
+        for frame in _ordered_frames(page):
+            try:
+                if bool(frame.evaluate(fill_js, care_val)):
+                    return True
+            except Exception:
+                continue
+        return False
+
+    # 1) Try filling immediately (record may already be open).
+    if try_fill():
+        return True
+
+    # 2) If not filled, open the customer record by First Name and try again.
+    opened_customer = _siebel_open_found_customer_record(
+        page,
+        mobile=mobile,
+        first_name=first_name,
+        timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+        skip_left_pane_click=True,
+    )
+    _safe_page_wait(page, 600, log_label="after_first_name_click_try_fill_relation")
+
+    if try_fill():
+        return True
+
+    if not opened_customer:
+        note("Could not click First Name in Contacts pane (video SOP).")
     return False
 
 
@@ -3508,7 +3493,7 @@ def Playwright_Hero_DMS_fill(
             ):
                 step("Stopped: video SOP failed while opening customer record.")
                 out["error"] = (
-                    "Siebel: video SOP — after Find/Go, could not click customer/first-name to open the record. "
+                    "Siebel: video SOP — after Find/Go, could not fill Relation's Name from care_of. "
                     "Confirm right-pane selectors/labels and iframe scope."
                 )
                 return out
