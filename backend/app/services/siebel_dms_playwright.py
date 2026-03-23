@@ -1761,6 +1761,69 @@ def _pick_relation_type_from_dropdown(
                 return True
         except Exception:
             continue
+
+    # Geometry fallback: click control directly above "Relation's Name", then pick target option.
+    js_geo_pick = """(target) => {
+      const vis = (el) => {
+        if (!el) return false;
+        const st = window.getComputedStyle(el);
+        if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+        const r = el.getBoundingClientRect();
+        return r.width >= 4 && r.height >= 4;
+      };
+      const n = (s) => String(s || '').trim().toLowerCase();
+      const relNameInput = Array.from(document.querySelectorAll('input'))
+        .find(i => vis(i) && (n(i.getAttribute('title')).includes('relation') || n(i.getAttribute('aria-label')).includes('relation')));
+      if (!relNameInput) return false;
+      const rr = relNameInput.getBoundingClientRect();
+      const candidates = Array.from(document.querySelectorAll('input,select,div[role="combobox"],span[role="combobox"],a[role="button"],button'))
+        .filter(vis)
+        .filter(el => {
+          const r = el.getBoundingClientRect();
+          const dy = rr.top - r.top;
+          const dx = Math.abs(r.left - rr.left);
+          if (dy < 12 || dy > 80) return false;  // above relation name field
+          if (dx > 70) return false;
+          const t = n(el.getAttribute('title')) + ' ' + n(el.getAttribute('aria-label'));
+          return t.includes('s/o') || t.includes('w/o') || t.includes('d/o') || t.includes('relation') || r.width < 220;
+        })
+        .sort((a,b) => Math.abs((rr.top - a.getBoundingClientRect().top) - 35) - Math.abs((rr.top - b.getBoundingClientRect().top) - 35));
+      if (!candidates.length) return false;
+      const ctrl = candidates[0];
+      try { ctrl.click(); } catch (e) {}
+
+      const targ = String(target || '').trim().toUpperCase();
+      const opts = Array.from(document.querySelectorAll('[role="option"],li,div,span,a,td'))
+        .filter(vis)
+        .filter(el => {
+          const tx = n(el.innerText || el.textContent || '').toUpperCase();
+          return tx === targ || tx.includes(' ' + targ) || tx.startsWith(targ) || tx.endsWith(targ);
+        });
+      for (const o of opts) {
+        try { o.click(); return true; } catch (e) {}
+      }
+      // Native select fallback if control is select
+      if (ctrl.tagName === 'SELECT') {
+        const sel = ctrl;
+        const options = Array.from(sel.options || []);
+        const hit = options.find(o => String(o.textContent || '').toUpperCase().includes(targ));
+        if (hit) {
+          try {
+            sel.value = hit.value;
+            sel.dispatchEvent(new Event('input', { bubbles: true }));
+            sel.dispatchEvent(new Event('change', { bubbles: true }));
+            return true;
+          } catch (e) {}
+        }
+      }
+      return false;
+    }"""
+    for frame in _ordered_frames(page):
+        try:
+            if bool(frame.evaluate(js_geo_pick, target)):
+                return True
+        except Exception:
+            continue
     return False
 
 
@@ -1780,8 +1843,9 @@ def _fill_relation_fields_verified(
     nm = (relation_name or "").strip()
 
     # Requested order: fill Relation's Name first, then pick S/O\W/O\D/O from dropdown.
+    name_fill_attempted = False
     if nm:
-        _try_fill_field(
+        name_fill_attempted = _try_fill_field(
             page,
             [
                 "input[title*=\"Relation's Name\" i]",
@@ -1846,7 +1910,7 @@ def _fill_relation_fields_verified(
     }"""
 
     rel_ok = not rel
-    name_ok = not nm
+    name_ok = (not nm) or bool(name_fill_attempted)
     for frame in _ordered_frames(page):
         try:
             got = frame.evaluate(verify_js, rel_key, nm_key)
