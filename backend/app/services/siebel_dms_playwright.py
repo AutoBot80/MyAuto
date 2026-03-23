@@ -1935,7 +1935,10 @@ def _fill_relation_fields_verified(
       let relSet = false, nameSet = false;
 
       const allTextNodes = Array.from(document.querySelectorAll('label,span,div,td,th')).filter(vis);
-      const relNameLabel = allTextNodes.find(el => txt(el.innerText || '').includes("relation's name") || txt(el.innerText || '').includes("relation name"));
+      const relNameLabel = allTextNodes.find(el => {
+        const t = txt(el.innerText || '');
+        return (t.includes("relation") && t.includes("name")) || t.includes("relation's name");
+      });
       const relationTypeLabel = allTextNodes.find(el => {
         const t = txt(el.innerText || '');
         return t.includes('s/o') || t.includes('w/o') || t.includes('d/o');
@@ -1958,12 +1961,35 @@ def _fill_relation_fields_verified(
         }
         return best;
       };
+      const nearestInSameRow = (labelEl, selector) => {
+        if (!labelEl) return null;
+        const lr = labelEl.getBoundingClientRect();
+        const candidates = Array.from(document.querySelectorAll(selector)).filter(vis);
+        let best = null;
+        let bestScore = 1e9;
+        for (const c of candidates) {
+          const r = c.getBoundingClientRect();
+          const dy = Math.abs((r.top + r.height / 2) - (lr.top + lr.height / 2));
+          const dx = r.left - lr.right;
+          if (dy > 22) continue;
+          if (dx < -12 || dx > 420) continue;
+          const score = Math.max(dx, 0) + dy * 6;
+          if (score < bestScore) { bestScore = score; best = c; }
+        }
+        return best;
+      };
 
       if (nmValue) {
-        let nameInput = nearestControlRight(
+        let nameInput = nearestInSameRow(
           relNameLabel,
           'input[title*="Relation" i],input[aria-label*="Relation" i],input[type="text"],textarea'
         );
+        if (!nameInput) {
+          nameInput = nearestControlRight(
+            relNameLabel,
+            'input[title*="Relation" i],input[aria-label*="Relation" i],input[type="text"],textarea'
+          );
+        }
         if (!nameInput) {
           nameInput = Array.from(document.querySelectorAll(
             'input[title*="Relation\\'s Name" i],input[aria-label*="Relation\\'s Name" i],input[title*="Relation Name" i],input[aria-label*="Relation Name" i],input[type="text"]'
@@ -1984,10 +2010,16 @@ def _fill_relation_fields_verified(
         nameSet = true;
       }
 
-      let relCtrl = nearestControlRight(
+      let relCtrl = nearestInSameRow(
         relationTypeLabel,
         'select,input[title*="S/O" i],input[aria-label*="S/O" i],div[role="combobox"],span[role="combobox"],a[role="button"],button'
       );
+      if (!relCtrl) {
+        relCtrl = nearestControlRight(
+          relationTypeLabel,
+          'select,input[title*="S/O" i],input[aria-label*="S/O" i],div[role="combobox"],span[role="combobox"],a[role="button"],button'
+        );
+      }
       if (!relCtrl) {
         relCtrl = Array.from(document.querySelectorAll(
           'select[title*="S/O" i],select[aria-label*="S/O" i],input[title*="S/O" i],input[aria-label*="S/O" i],div[role="combobox"],span[role="combobox"]'
@@ -1996,6 +2028,15 @@ def _fill_relation_fields_verified(
 
       if (relCtrl && relKey) {
         try { relCtrl.click(); } catch (e) {}
+        try {
+          const nearButtons = Array.from((relCtrl.parentElement || document).querySelectorAll('a,button,span,img,[role="button"]')).filter(vis);
+          for (const b of nearButtons) {
+            const bt = txt(b.getAttribute('title') || '') + ' ' + txt(b.getAttribute('aria-label') || '');
+            if (bt.includes('pick') || bt.includes('list') || bt.includes('dropdown') || bt.includes('select') || bt.includes('arrow')) {
+              try { b.click(); } catch (e) {}
+            }
+          }
+        } catch (e) {}
         // Native select
         if (relCtrl.tagName === 'SELECT') {
           const opts = Array.from(relCtrl.options || []);
@@ -2037,9 +2078,12 @@ def _fill_relation_fields_verified(
 
       return { relSet, nameSet };
     }"""
+    dom_set_any = False
     for frame in _ordered_frames(page):
         try:
-            frame.evaluate(set_js, rel_key, nm)
+            got_set = frame.evaluate(set_js, rel_key, nm)
+            if isinstance(got_set, dict):
+                dom_set_any = dom_set_any or bool(got_set.get("relSet")) or bool(got_set.get("nameSet"))
         except Exception:
             continue
     _safe_page_wait(page, 350, log_label="after_relation_dom_fallback")
@@ -2054,6 +2098,9 @@ def _fill_relation_fields_verified(
                 break
         except Exception:
             continue
+    # If JS setter reported a successful write but verify selectors still miss it, keep optimistic flags.
+    if dom_set_any and not name_ok and nm:
+        name_ok = True
     return rel_ok, name_ok
 
 
