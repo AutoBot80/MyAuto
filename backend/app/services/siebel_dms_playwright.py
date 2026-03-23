@@ -3076,9 +3076,10 @@ def _add_customer_payment(
                 if not type_ok:
                     raise Exception("Failed to set Transaction Type = Payments")
 
-                # Payment Method: direct typing "Cash", then tab out thrice.
+                # Payment Method: direct typing "Cash", then tab out 4 times.
                 method_ok = False
-                for root in scoped_roots:
+                primary_root = scoped_roots[0] if scoped_roots else None
+                if primary_root is not None:
                     for css in (
                         "input[id*='Payment_Method' i]",
                         "input[name*='Payment_Method' i]",
@@ -3088,28 +3089,26 @@ def _add_customer_payment(
                         "input[title*='Payment Method' i]",
                     ):
                         try:
-                            m = root.locator(css).first
-                            if m.count() <= 0 or not m.is_visible(timeout=700):
+                            m = primary_root.locator(css).first
+                            if m.count() <= 0 or not m.is_visible(timeout=900):
                                 continue
                             try:
                                 m.click(timeout=action_timeout_ms)
                             except Exception:
                                 m.click(timeout=action_timeout_ms, force=True)
                             m.fill("Cash", timeout=action_timeout_ms)
-                            try:
-                                for _ in range(3):
-                                    m.press("Tab", timeout=min(1200, action_timeout_ms))
-                            except Exception:
-                                pass
                             gotm = (m.input_value(timeout=1500) or "").strip()
                             if gotm and "cash" in gotm.lower():
                                 method_ok = True
-                                note("Payment Method set by direct typing: 'Cash', then Tab x3.")
+                                try:
+                                    for _ in range(4):
+                                        m.press("Tab", timeout=min(1200, action_timeout_ms))
+                                except Exception:
+                                    pass
+                                note("Payment Method set by direct typing: 'Cash', then Tab x4.")
                                 break
                         except Exception:
                             continue
-                    if method_ok:
-                        break
 
                 if not method_ok:
                     method_ok = select_siebel_dropdown_value(
