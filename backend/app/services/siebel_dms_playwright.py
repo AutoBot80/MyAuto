@@ -2743,76 +2743,117 @@ def _add_customer_payment(
                 note("Clicked '+' icon on Payments tab.")
                 _safe_page_wait(page, 500, log_label="after_payments_plus_click")
 
-                # Transaction Type = Payments
-                _try_select_option(
-                    page,
-                    [
-                        'select[aria-label="Transaction Type" i]',
-                        'select[title="Transaction Type" i]',
-                        'select[aria-label*="Transaction Type" i]',
-                        'select[title*="Transaction Type" i]',
-                        'select[aria-label="Type" i]',
-                        'select[title="Type" i]',
-                        'select[aria-label*="Type" i]',
-                        'select[title*="Type" i]',
-                    ],
-                    "Payments",
-                    timeout_ms=action_timeout_ms,
-                    content_frame_selector=content_frame_selector,
-                    prefer_second_if_duplicate=False,
-                )
-                _try_fill_field(
-                    page,
-                    [
-                        'input[aria-label="Transaction Type" i]',
-                        'input[title="Transaction Type" i]',
-                        'input[aria-label*="Transaction Type" i]',
-                        'input[title*="Transaction Type" i]',
-                        'input[aria-label="Type" i]',
-                        'input[title="Type" i]',
-                        'input[aria-label*="Type" i]',
-                        'input[title*="Type" i]',
-                    ],
-                    "Payments",
-                    timeout_ms=action_timeout_ms,
-                    content_frame_selector=content_frame_selector,
-                    prefer_second_if_duplicate=False,
-                )
+                def _pick_dropdown_value(field_patterns: tuple[re.Pattern[str], ...], value: str) -> bool:
+                    # 1) Native select first if present.
+                    if _try_select_option(
+                        page,
+                        [
+                            'select[aria-label*="Transaction Type" i]',
+                            'select[title*="Transaction Type" i]',
+                            'select[aria-label*="Payment Method" i]',
+                            'select[title*="Payment Method" i]',
+                            'select[aria-label*="Type" i]',
+                            'select[title*="Type" i]',
+                            'select[aria-label*="Method" i]',
+                            'select[title*="Method" i]',
+                        ],
+                        value,
+                        timeout_ms=action_timeout_ms,
+                        content_frame_selector=content_frame_selector,
+                        prefer_second_if_duplicate=False,
+                    ):
+                        return True
 
-                # Payment Method = Cash
-                _try_select_option(
-                    page,
-                    [
-                        'select[aria-label="Payment Method" i]',
-                        'select[title="Payment Method" i]',
-                        'select[aria-label*="Payment Method" i]',
-                        'select[title*="Payment Method" i]',
-                        'select[aria-label="Method" i]',
-                        'select[title="Method" i]',
-                        'select[aria-label*="Method" i]',
-                        'select[title*="Method" i]',
-                    ],
-                    "Cash",
-                    timeout_ms=action_timeout_ms,
-                    content_frame_selector=content_frame_selector,
-                    prefer_second_if_duplicate=False,
+                    # 2) Open-UI combobox/list flow.
+                    value_pat = re.compile(rf"^\s*{re.escape(value)}\s*$", re.I)
+                    for root in _siebel_locator_search_roots(page, content_frame_selector):
+                        # Click field/control that matches the target label.
+                        opened = False
+                        for css in (
+                            "input",
+                            "select",
+                            "span[role='combobox']",
+                            "div[role='combobox']",
+                            "a[role='button']",
+                            "button",
+                            "td",
+                            "div",
+                        ):
+                            try:
+                                cands = root.locator(css)
+                                n = cands.count()
+                                for i in range(min(n, 30)):
+                                    c = cands.nth(i)
+                                    if not c.is_visible(timeout=350):
+                                        continue
+                                    blob = " ".join(
+                                        [
+                                            (c.get_attribute("aria-label") or ""),
+                                            (c.get_attribute("title") or ""),
+                                            (c.get_attribute("name") or ""),
+                                        ]
+                                    )
+                                    if not any(p.search(blob) for p in field_patterns):
+                                        continue
+                                    try:
+                                        c.click(timeout=action_timeout_ms)
+                                    except Exception:
+                                        c.click(timeout=action_timeout_ms, force=True)
+                                    opened = True
+                                    break
+                                if opened:
+                                    break
+                            except Exception:
+                                continue
+
+                        if not opened:
+                            continue
+                        _safe_page_wait(page, 250, log_label=f"after_open_dropdown_{value.lower()}")
+
+                        # Pick option from visible list.
+                        for role in ("option", "menuitem", "listitem", "link"):
+                            try:
+                                opts = root.get_by_role(role, name=value_pat)
+                                k = opts.count()
+                                for j in range(min(k, 10)):
+                                    o = opts.nth(j)
+                                    if o.is_visible(timeout=350):
+                                        try:
+                                            o.click(timeout=action_timeout_ms)
+                                        except Exception:
+                                            o.click(timeout=action_timeout_ms, force=True)
+                                        return True
+                            except Exception:
+                                continue
+                        for css in ("li", "a", "div", "span", "td"):
+                            try:
+                                opts = root.locator(css).filter(has_text=value_pat)
+                                k = opts.count()
+                                for j in range(min(k, 20)):
+                                    o = opts.nth(j)
+                                    if o.is_visible(timeout=350):
+                                        try:
+                                            o.click(timeout=action_timeout_ms)
+                                        except Exception:
+                                            o.click(timeout=action_timeout_ms, force=True)
+                                        return True
+                            except Exception:
+                                continue
+                    return False
+
+                type_ok = _pick_dropdown_value(
+                    (
+                        re.compile(r"transaction\s*type", re.I),
+                        re.compile(r"\btype\b", re.I),
+                    ),
+                    "Payments",
                 )
-                _try_fill_field(
-                    page,
-                    [
-                        'input[aria-label="Payment Method" i]',
-                        'input[title="Payment Method" i]',
-                        'input[aria-label*="Payment Method" i]',
-                        'input[title*="Payment Method" i]',
-                        'input[aria-label="Method" i]',
-                        'input[title="Method" i]',
-                        'input[aria-label*="Method" i]',
-                        'input[title*="Method" i]',
-                    ],
+                method_ok = _pick_dropdown_value(
+                    (
+                        re.compile(r"payment\s*method", re.I),
+                        re.compile(r"\bmethod\b", re.I),
+                    ),
                     "Cash",
-                    timeout_ms=action_timeout_ms,
-                    content_frame_selector=content_frame_selector,
-                    prefer_second_if_duplicate=False,
                 )
 
                 # Transaction Amount = 120000
@@ -2835,7 +2876,10 @@ def _add_customer_payment(
                     content_frame_selector=content_frame_selector,
                     prefer_second_if_duplicate=False,
                 )
-                note("Filled payment fields: Type=Payments, Method=Cash, Transaction Amount=120000.")
+                note(
+                    "Filled payment fields: "
+                    f"Type=Payments(ok={type_ok!r}), Method=Cash(ok={method_ok!r}), Transaction Amount=120000."
+                )
 
                 # Save icon (down-arrow / save) click.
                 save_clicked = False
