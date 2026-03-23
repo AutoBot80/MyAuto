@@ -1657,6 +1657,113 @@ def _derive_relation_and_name(
     return rel, name
 
 
+def _pick_relation_type_from_dropdown(
+    page: Page,
+    *,
+    relation: str,
+    timeout_ms: int,
+    content_frame_selector: str | None,
+) -> bool:
+    """
+    Click relation type field titled like ``S/O\\W/O\\D/O:`` and pick option from opened dropdown.
+    """
+    rel = (relation or "").strip().upper().replace(".", "")
+    if rel in ("SO", "S/O"):
+        target = "S/O"
+    elif rel in ("WO", "W/O"):
+        target = "W/O"
+    elif rel in ("DO", "D/O"):
+        target = "D/O"
+    else:
+        target = relation.strip()
+    if not target:
+        return False
+
+    type_selectors = [
+        'select[title*="S/O\\W/O\\D/O" i]',
+        'select[aria-label*="S/O\\W/O\\D/O" i]',
+        'input[title*="S/O\\W/O\\D/O" i]',
+        'input[aria-label*="S/O\\W/O\\D/O" i]',
+        'select[title*="S/O" i]',
+        'select[aria-label*="S/O" i]',
+    ]
+
+    def try_root(root) -> bool:
+        # Open relation dropdown control
+        opened = False
+        control = None
+        for css in type_selectors:
+            try:
+                c = root.locator(css).first
+                if c.count() > 0 and c.is_visible(timeout=700):
+                    try:
+                        c.click(timeout=timeout_ms)
+                    except Exception:
+                        c.click(timeout=timeout_ms, force=True)
+                    opened = True
+                    control = c
+                    break
+            except Exception:
+                continue
+        if not opened:
+            return False
+        _safe_page_wait(page, 220, log_label="after_relation_type_click")
+
+        # Native select path
+        if control is not None:
+            try:
+                tag = (control.evaluate("el => (el.tagName || '').toLowerCase()") or "").strip()
+                if tag == "select":
+                    control.select_option(label=re.compile(rf"^\s*{re.escape(target)}\s*$", re.I), timeout=timeout_ms)
+                    return True
+            except Exception:
+                pass
+
+        # Open-UI dropdown list path
+        option_patterns = (
+            re.compile(rf"^\s*{re.escape(target)}\s*$", re.I),
+            re.compile(rf"\b{re.escape(target)}\b", re.I),
+        )
+        for pat in option_patterns:
+            for role in ("option", "menuitem", "listitem", "link"):
+                try:
+                    loc = root.get_by_role(role, name=pat)
+                    n = loc.count()
+                    for i in range(min(n, 12)):
+                        o = loc.nth(i)
+                        if o.is_visible(timeout=500):
+                            try:
+                                o.click(timeout=timeout_ms)
+                            except Exception:
+                                o.click(timeout=timeout_ms, force=True)
+                            return True
+                except Exception:
+                    continue
+            for css in ("li", "a", "div", "span", "td"):
+                try:
+                    opts = root.locator(css).filter(has_text=pat)
+                    n = opts.count()
+                    for i in range(min(n, 20)):
+                        o = opts.nth(i)
+                        if o.is_visible(timeout=500):
+                            try:
+                                o.click(timeout=timeout_ms)
+                            except Exception:
+                                o.click(timeout=timeout_ms, force=True)
+                            return True
+                except Exception:
+                    continue
+        return False
+
+    for r in _siebel_locator_search_roots(page, content_frame_selector):
+        try:
+            if try_root(r):
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def _fill_relation_fields_verified(
     page: Page,
     *,
@@ -1672,13 +1779,32 @@ def _fill_relation_fields_verified(
     rel = (relation or "").strip()
     nm = (relation_name or "").strip()
 
-    _fill_siebel_care_of_only(
-        page,
-        father=nm,
-        relation=rel,
-        action_timeout_ms=action_timeout_ms,
-        content_frame_selector=content_frame_selector,
-    )
+    # Requested order: fill Relation's Name first, then pick S/O\W/O\D/O from dropdown.
+    if nm:
+        _try_fill_field(
+            page,
+            [
+                "input[title*=\"Relation's Name\" i]",
+                "input[aria-label*=\"Relation's Name\" i]",
+                "input[title*=\"Relation Name\" i]",
+                "input[aria-label*=\"Relation Name\" i]",
+                'input[aria-label*="Father" i]',
+                'input[aria-label*="Husband" i]',
+                'input[aria-label*="Parent" i]',
+            ],
+            nm[:255],
+            timeout_ms=action_timeout_ms,
+            content_frame_selector=content_frame_selector,
+            prefer_second_if_duplicate=True,
+        )
+    _safe_page_wait(page, 180, log_label="after_relation_name_fill")
+    if rel:
+        _pick_relation_type_from_dropdown(
+            page,
+            relation=rel,
+            timeout_ms=action_timeout_ms,
+            content_frame_selector=content_frame_selector,
+        )
     _safe_page_wait(page, 300, log_label="after_relation_fill_attempt")
 
     rel_key = re.sub(r"[^A-Z]", "", rel.upper())  # S/O -> SO
