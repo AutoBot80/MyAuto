@@ -2478,17 +2478,7 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
     note("Opened contact from search hit hyperlink (video SOP).")
     _safe_page_wait(page, 1200, log_label="after_contact_drill_link")
 
-    # Open full customer record by clicking the right-pane First Name cell/link (e.g., Akash).
-    opened_customer = _siebel_open_found_customer_record(
-        page,
-        mobile=mobile,
-        first_name=first_name,
-        timeout_ms=action_timeout_ms,
-        content_frame_selector=content_frame_selector,
-    )
-    if not opened_customer:
-        note("Could not click First Name in Contacts pane (video SOP).")
-        return False
+    # At this point the customer record screen is expected to already be open.
     care_val = (care_of or "").strip()
     if not care_val:
         return True
@@ -2551,21 +2541,25 @@ def _siebel_open_found_customer_record(
     first_name: str,
     timeout_ms: int,
     content_frame_selector: str | None,
+    skip_left_pane_click: bool = False,
 ) -> bool:
     """
     Existing-customer flow:
-    1) left Search Results pane click on mobile/customer hit
+    1) left Search Results pane click on mobile/customer hit (optional)
     2) right Contacts applet click customer first-name link (e.g., Akash) to open full record.
     """
-    left_ok = _siebel_try_click_mobile_search_hit_link(
-        page,
-        mobile,
-        timeout_ms=timeout_ms,
-        content_frame_selector=content_frame_selector,
-    )
-    if not left_ok:
-        return False
-    _safe_page_wait(page, 1000, log_label="after_left_customer_click")
+    if not skip_left_pane_click:
+        left_ok = _siebel_try_click_mobile_search_hit_link(
+            page,
+            mobile,
+            timeout_ms=timeout_ms,
+            content_frame_selector=content_frame_selector,
+        )
+        if not left_ok:
+            return False
+        _safe_page_wait(page, 1000, log_label="after_left_customer_click")
+    else:
+        _safe_page_wait(page, 1500, log_label="after_left_customer_click_skipped")
 
     fn = (first_name or "").strip()
     fn_pat = re.compile(rf"^\s*{re.escape(fn)}\s*$", re.I) if fn else None
@@ -2592,8 +2586,12 @@ def _siebel_open_found_customer_record(
     def try_root(root) -> bool:
         # Prefer links inside Contacts applet/grid.
         try:
-            app = root.locator(".siebui-applet").filter(has_text=re.compile(r"^\s*Contacts\s*$", re.I)).first
-            if app.count() > 0 and app.is_visible(timeout=600):
+            apps = root.locator(".siebui-applet").filter(has_text=re.compile(r"Contacts", re.I))
+            n_apps = apps.count()
+            for aidx in range(min(n_apps, 6)):
+                app = apps.nth(aidx)
+                if not (app.count() > 0 and app.is_visible(timeout=600)):
+                    continue
                 # 1) Exact first-name link in Contacts applet
                 if fn_pat is not None:
                     try:
@@ -2719,6 +2717,44 @@ def _siebel_open_found_customer_record(
     for frame in _ordered_frames(page):
         try:
             if bool(frame.evaluate(js_click_first_name_col, fn)):
+                return True
+        except Exception:
+            continue
+
+    # DOM fallback for div-based grids: find visible element with exact first-name text inside Contacts applet.
+    js_click_first_name_div = """(targetName) => {
+      const vis = (el) => {
+        if (!el) return false;
+        const st = window.getComputedStyle(el);
+        if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+        const r = el.getBoundingClientRect();
+        return r.width >= 3 && r.height >= 3;
+      };
+      const norm = (s) => String(s || '').trim().toLowerCase().replace(/\\s+/g,' ');
+      const tn = norm(targetName);
+      const applets = Array.from(document.querySelectorAll('.siebui-applet'));
+      for (const app of applets) {
+        if (!vis(app)) continue;
+        const txt = (app.innerText || '').toLowerCase();
+        if (!txt.includes('contacts')) continue;
+        const exact = Array.from(app.querySelectorAll('a,span,td,div,[role=\"gridcell\"],[role=\"link\"]'))
+          .filter(vis)
+          .filter(el => norm(el.innerText || el.textContent || '') === tn);
+        for (const el of exact) {
+          try { el.click(); return true; } catch(e) {}
+        }
+        const contain = Array.from(app.querySelectorAll('a,span,td,div,[role=\"gridcell\"],[role=\"link\"]'))
+          .filter(vis)
+          .filter(el => norm(el.innerText || el.textContent || '').includes(tn));
+        for (const el of contain) {
+          try { el.click(); return true; } catch(e) {}
+        }
+      }
+      return false;
+    }"""
+    for frame in _ordered_frames(page):
+        try:
+            if bool(frame.evaluate(js_click_first_name_div, fn)):
                 return True
         except Exception:
             continue
