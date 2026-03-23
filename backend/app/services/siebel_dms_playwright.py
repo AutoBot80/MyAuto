@@ -2666,6 +2666,10 @@ def _add_customer_payment(
     _safe_page_wait(page, 500, log_label="after_payments_tab_click")
 
     plus_selectors = (
+        "a[aria-label='Payment Lines List:New']",
+        "button[aria-label='Payment Lines List:New']",
+        "a[title='Payment Lines List:New']",
+        "button[title='Payment Lines List:New']",
         "button[title='+']",
         "a[title='+']",
         "[role='button'][aria-label='+']",
@@ -2739,10 +2743,14 @@ def _add_customer_payment(
                 note("Clicked '+' icon on Payments tab.")
                 _safe_page_wait(page, 500, log_label="after_payments_plus_click")
 
-                # Type = Payments
+                # Transaction Type = Payments
                 _try_select_option(
                     page,
                     [
+                        'select[aria-label="Transaction Type" i]',
+                        'select[title="Transaction Type" i]',
+                        'select[aria-label*="Transaction Type" i]',
+                        'select[title*="Transaction Type" i]',
                         'select[aria-label="Type" i]',
                         'select[title="Type" i]',
                         'select[aria-label*="Type" i]',
@@ -2756,6 +2764,10 @@ def _add_customer_payment(
                 _try_fill_field(
                     page,
                     [
+                        'input[aria-label="Transaction Type" i]',
+                        'input[title="Transaction Type" i]',
+                        'input[aria-label*="Transaction Type" i]',
+                        'input[title*="Transaction Type" i]',
                         'input[aria-label="Type" i]',
                         'input[title="Type" i]',
                         'input[aria-label*="Type" i]',
@@ -2767,10 +2779,14 @@ def _add_customer_payment(
                     prefer_second_if_duplicate=False,
                 )
 
-                # Method = Cash
+                # Payment Method = Cash
                 _try_select_option(
                     page,
                     [
+                        'select[aria-label="Payment Method" i]',
+                        'select[title="Payment Method" i]',
+                        'select[aria-label*="Payment Method" i]',
+                        'select[title*="Payment Method" i]',
                         'select[aria-label="Method" i]',
                         'select[title="Method" i]',
                         'select[aria-label*="Method" i]',
@@ -2784,6 +2800,10 @@ def _add_customer_payment(
                 _try_fill_field(
                     page,
                     [
+                        'input[aria-label="Payment Method" i]',
+                        'input[title="Payment Method" i]',
+                        'input[aria-label*="Payment Method" i]',
+                        'input[title*="Payment Method" i]',
                         'input[aria-label="Method" i]',
                         'input[title="Method" i]',
                         'input[aria-label*="Method" i]',
@@ -2803,6 +2823,10 @@ def _add_customer_payment(
                         'input[title="Transaction Amount" i]',
                         'input[aria-label*="Transaction Amount" i]',
                         'input[title*="Transaction Amount" i]',
+                        'input[aria-label="Transaction Amount" i]',
+                        'input[title="Transaction Amount" i]',
+                        'input[aria-label*="Transaction Amount" i]',
+                        'input[title*="Transaction Amount" i]',
                         'input[aria-label*="Amount" i]',
                         'input[title*="Amount" i]',
                     ],
@@ -2817,6 +2841,14 @@ def _add_customer_payment(
                 save_clicked = False
                 for sroot in _siebel_locator_search_roots(page, content_frame_selector):
                     for css in (
+                        "a[aria-label='Payment Lines List:Save']",
+                        "button[aria-label='Payment Lines List:Save']",
+                        "a[title='Payment Lines List:Save']",
+                        "button[title='Payment Lines List:Save']",
+                        "a[aria-label='Payment Lines List: Save']",
+                        "button[aria-label='Payment Lines List: Save']",
+                        "a[title='Payment Lines List: Save']",
+                        "button[title='Payment Lines List: Save']",
                         "a[title*='Save' i]",
                         "button[title*='Save' i]",
                         "a[aria-label*='Save' i]",
