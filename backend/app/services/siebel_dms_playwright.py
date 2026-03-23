@@ -2560,6 +2560,45 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
 
     _safe_page_wait(page, 700, log_label="after_first_name_click_before_relation_fill")
 
+    target_frames: list[Frame] = []
+    for frame in _ordered_frames(page):
+        try:
+            has_relation_obj = bool(
+                frame.evaluate(
+                    """() => {
+                      const vis = (el) => {
+                        if (!el) return false;
+                        const st = window.getComputedStyle(el);
+                        if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+                        const r = el.getBoundingClientRect();
+                        return r.width >= 2 && r.height >= 2;
+                      };
+                      const candidates = [
+                        'form[name="SWEForm4_0"] input[name="s_4_1_89_0"]',
+                        'form[name="SWEForm4_0"] input[aria-label="Relation\\'s Name"]',
+                        'input[name="s_4_1_89_0"]',
+                        'input[aria-labelledby="Relation\\'s_Name_Label_4"]',
+                        'input[aria-label="Relation\\'s Name"]',
+                      ];
+                      for (const sel of candidates) {
+                        const el = document.querySelector(sel);
+                        if (vis(el)) return true;
+                      }
+                      return false;
+                    }"""
+                )
+            )
+            if has_relation_obj:
+                target_frames.append(frame)
+        except Exception:
+            continue
+    if target_frames:
+        for tf in target_frames[:3]:
+            try:
+                note(f"Relation field candidate frame detected: url={(tf.url or '')[:180]!r}, name={tf.name!r}")
+            except Exception:
+                continue
+
     def _after_relation_fill_nav() -> bool:
         if not _siebel_try_click_mobile_search_hit_link(
             page,
@@ -2570,118 +2609,7 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
             note("Could not re-click mobile in left Search Results after Relation's Name fill.")
             return False
         _safe_page_wait(page, 500, log_label="after_left_mobile_reclick_post_relation_fill")
-        clicked_contact_enquiry = _siebel_try_click_named_in_frames(
-            page,
-            re.compile(r"contact[_\s]*enquiry", re.I),
-            roles=("tab", "link"),
-            timeout_ms=action_timeout_ms,
-            content_frame_selector=content_frame_selector,
-        )
-        if not clicked_contact_enquiry:
-            # Extra fallback: top tab strip sometimes renders as plain anchors/spans.
-            for root in _siebel_locator_search_roots(page, content_frame_selector):
-                try:
-                    for css in (
-                        "a",
-                        "span",
-                        "div",
-                        "[role='tab']",
-                        "[role='link']",
-                    ):
-                        cands = root.locator(css).filter(has_text=re.compile(r"^\s*contact[_\s]*enquiry\s*$", re.I))
-                        n = cands.count()
-                        for i in range(min(n, 10)):
-                            c = cands.nth(i)
-                            if c.is_visible(timeout=500):
-                                try:
-                                    c.click(timeout=action_timeout_ms)
-                                except Exception:
-                                    c.click(timeout=action_timeout_ms, force=True)
-                                clicked_contact_enquiry = True
-                                break
-                        if clicked_contact_enquiry:
-                            break
-                    if clicked_contact_enquiry:
-                        break
-                except Exception:
-                    continue
-        if not clicked_contact_enquiry:
-            note("Could not click Contact_Enquiry tab after left mobile re-click.")
-            return False
-        note("Opened Contact_Enquiry after re-clicking left mobile (video SOP).")
-        _safe_page_wait(page, 600, log_label="after_contact_enquiry_tab_open")
-
-        # Navigate to sub form titled "Enquiries" and click link under "Enquiry #".
-        clicked_enquiry = False
-        for root in _siebel_locator_search_roots(page, content_frame_selector):
-            try:
-                apps = root.locator(".siebui-applet").filter(has_text=re.compile(r"\bEnquiries?\b", re.I))
-                n_apps = apps.count()
-                for ai in range(min(n_apps, 8)):
-                    app = apps.nth(ai)
-                    if not app.is_visible(timeout=700):
-                        continue
-
-                    # 1) Try exact "Enquiry #" column -> first row link.
-                    try:
-                        header_cells = app.locator("table thead th, table tr th")
-                        hcount = header_cells.count()
-                        enq_col_idx = -1
-                        for hi in range(min(hcount, 25)):
-                            htxt = (header_cells.nth(hi).inner_text(timeout=400) or "").strip().lower()
-                            htxt = re.sub(r"\s+", " ", htxt)
-                            if htxt in ("enquiry #", "enquiry#", "enquiry no", "enquiry no."):
-                                enq_col_idx = hi
-                                break
-                        if enq_col_idx >= 0:
-                            rows = app.locator("table tbody tr")
-                            rcount = rows.count()
-                            for ri in range(min(rcount, 20)):
-                                row = rows.nth(ri)
-                                cells = row.locator("td")
-                                if cells.count() <= enq_col_idx:
-                                    continue
-                                cell = cells.nth(enq_col_idx)
-                                link = cell.locator("a").first
-                                if link.count() > 0 and link.is_visible(timeout=400):
-                                    try:
-                                        link.click(timeout=action_timeout_ms)
-                                    except Exception:
-                                        link.click(timeout=action_timeout_ms, force=True)
-                                    clicked_enquiry = True
-                                    break
-                            if clicked_enquiry:
-                                break
-                    except Exception:
-                        pass
-
-                    # 2) Fallback: any visible drilldown link within Enquiries applet.
-                    for css in (
-                        "table tbody tr td a.siebui-ctrl-drilldown",
-                        "table tbody tr td a[href*='javascript']",
-                        "table tbody tr td a",
-                    ):
-                        try:
-                            a = app.locator(css).first
-                            if a.count() > 0 and a.is_visible(timeout=500):
-                                try:
-                                    a.click(timeout=action_timeout_ms)
-                                except Exception:
-                                    a.click(timeout=action_timeout_ms, force=True)
-                                clicked_enquiry = True
-                                break
-                        except Exception:
-                            continue
-                    if clicked_enquiry:
-                        break
-                if clicked_enquiry:
-                    break
-            except Exception:
-                continue
-        if clicked_enquiry:
-            note("Clicked Enquiry# link from Enquiries sub form (video SOP).")
-        else:
-            note("No Enquiry# link shown under Enquiries sub form; skipping Enquiry# click.")
+        note("Re-clicked left mobile after Relation's Name fill; stop at end of this function.")
         return True
 
     # Native Playwright path first: use label mapping in frame locators / frames.
@@ -2695,20 +2623,28 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
                     return _after_relation_fill_nav()
         except Exception:
             continue
-    for frame in _ordered_frames(page):
+    for frame in (target_frames + [f for f in _ordered_frames(page) if f not in target_frames]):
         try:
             loc = frame.get_by_label("Relation's Name", exact=True).first
             if loc.count() > 0 and loc.is_visible(timeout=700):
                 loc.fill(care_val, timeout=action_timeout_ms)
                 got = (loc.input_value(timeout=action_timeout_ms) or "").strip()
                 if got and (care_val.lower() in got.lower() or got.lower() in care_val.lower()):
+                    try:
+                        note(f"Relation's Name filled via get_by_label in frame: url={(frame.url or '')[:180]!r}, name={frame.name!r}")
+                    except Exception:
+                        pass
                     return _after_relation_fill_nav()
         except Exception:
             continue
 
-    for frame in _ordered_frames(page):
+    for frame in (target_frames + [f for f in _ordered_frames(page) if f not in target_frames]):
         try:
             if bool(frame.evaluate(fill_js, care_val)):
+                try:
+                    note(f"Relation's Name filled via DOM selectors in frame: url={(frame.url or '')[:180]!r}, name={frame.name!r}")
+                except Exception:
+                    pass
                 return _after_relation_fill_nav()
         except Exception:
             continue
