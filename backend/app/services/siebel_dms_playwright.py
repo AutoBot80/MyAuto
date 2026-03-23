@@ -2088,21 +2088,12 @@ def _fill_relations_name_exact(
     """
     Exact behavior: fill only the field labeled/titled ``Relation's Name`` and verify that same field.
     """
-    value = (relation_name or "").strip()
-    if not value:
+    v = (relation_name or "").strip()
+    if not v:
         return False
 
-    selectors = [
-        "input[title=\"Relation's Name\" i]",
-        "input[title=\"Relation's Name:\" i]",
-        "input[aria-label=\"Relation's Name\" i]",
-        "input[aria-label=\"Relation's Name:\" i]",
-        "input[title*=\"Relation's Name\" i]",
-        "input[aria-label*=\"Relation's Name\" i]",
-    ]
-
-    # Try exact row-anchor first: locate text cell "Relation's Name:" and fill nearest right input.
-    row_anchor_js = """(v) => {
+    # Single deterministic JS: label(text) -> nearest right input/textarea -> set -> verify same control value.
+    set_and_verify_js = """(value) => {
       const vis = (el) => {
         if (!el) return false;
         const st = window.getComputedStyle(el);
@@ -2110,135 +2101,83 @@ def _fill_relations_name_exact(
         const r = el.getBoundingClientRect();
         return r.width >= 2 && r.height >= 2;
       };
-      const n = (s) => String(s || '').trim().toLowerCase();
+      const norm = (s) => String(s || '').trim().toLowerCase();
+      const labelNorm = (txt) => norm(txt).replace(/\\s+/g, ' ').replace(/\\s*:\\s*$/g, '');
+
       const labels = Array.from(document.querySelectorAll('td,th,label,span,div')).filter(vis);
-      const rel = labels.find(el => {
-        const t = n(el.innerText || el.textContent || '');
-        return t === "relation's name" || t === "relation's name:";
+      const relLabel = labels.find(el => {
+        const t = labelNorm(el.innerText || el.textContent || '');
+        return t === \"relation's name\" || t.includes(\"relation's name\");
       });
-      if (!rel) return false;
-      const rr = rel.getBoundingClientRect();
-      const inputs = Array.from(document.querySelectorAll('input[type="text"],input,textarea')).filter(vis);
+      if (!relLabel) return { ok: false, reason: 'label_not_found' };
+
+      const row =
+        relLabel.closest('tr') ||
+        relLabel.closest('[role="row"]') ||
+        null;
+      const lr = relLabel.getBoundingClientRect();
+      const candidatesSource = row ? row : document;
+      const candidates = Array.from(candidatesSource.querySelectorAll('input,textarea')).filter(vis);
+
       let best = null;
-      let bestScore = 1e9;
-      for (const inp of inputs) {
-        const r = inp.getBoundingClientRect();
-        const dy = Math.abs((r.top + r.height / 2) - (rr.top + rr.height / 2));
-        const dx = r.left - rr.right;
-        if (dy > 20) continue;         // same row
-        if (dx < -8 || dx > 420) continue;
-        const score = Math.max(dx, 0) + dy * 8;
-        if (score < bestScore) { bestScore = score; best = inp; }
+      let bestScore = 1e18;
+      for (const el of candidates) {
+        // Skip button-like/submit-ish inputs.
+        try {
+          const t = (el.getAttribute('type') || '').toLowerCase();
+          if (t && ['hidden', 'submit', 'button', 'checkbox', 'radio', 'file', 'image'].includes(t)) continue;
+        } catch (e) {}
+
+        const r = el.getBoundingClientRect();
+        const dy = Math.abs((r.top + r.height / 2) - (lr.top + lr.height / 2));
+        const dx = r.left - lr.right;
+        // Same visual row: allow some tolerance.
+        if (dy > 40) continue;
+        // Must be to the right of the label.
+        if (dx < -12) continue;
+        // Prefer closest-right and vertically aligned.
+        const score = dx + dy * 6;
+        if (score < bestScore) {
+          bestScore = score;
+          best = el;
+        }
       }
-      if (!best) return false;
+      if (!best) return { ok: false, reason: 'target_input_not_found' };
+
       try {
         best.focus();
-        best.value = '';
-        best.value = String(v || '').trim();
+        // Clear then set; some Siebel controls need blur to commit.
+        if ('value' in best) {
+          best.value = '';
+          best.value = String(value || '').trim();
+        }
         best.dispatchEvent(new Event('input', { bubbles: true }));
         best.dispatchEvent(new Event('change', { bubbles: true }));
         best.dispatchEvent(new Event('blur', { bubbles: true }));
-        return true;
       } catch (e) {
-        return false;
+        return { ok: false, reason: 'set_failed' };
+      }
+
+      try {
+        const after = norm(best.value || '');
+        const want = norm(value || '');
+        if (!after) return { ok: false, reason: 'value_empty_after' };
+        const ok = after.includes(want) || want.includes(after);
+        return { ok, after, want };
+      } catch (e) {
+        return { ok: false, reason: 'verify_failed' };
       }
     }"""
-    filled = False
+
     for frame in _ordered_frames(page):
         try:
-            if bool(frame.evaluate(row_anchor_js, value)):
-                filled = True
-                break
+            res = frame.evaluate(set_and_verify_js, v)
+            if isinstance(res, dict) and res.get("ok"):
+                _safe_page_wait(page, 150, log_label="after_relation_name_exact_js_ok")
+                return True
         except Exception:
             continue
-
-    # Exact selector fill second.
-    if not filled:
-        filled = _try_fill_field(
-            page,
-            selectors,
-            value[:255],
-            timeout_ms=action_timeout_ms,
-            content_frame_selector=content_frame_selector,
-            prefer_second_if_duplicate=False,
-        )
-
-    # DOM exact fallback: set only exact title/aria fields.
-    if not filled:
-        js = """(v) => {
-          const vis = (el) => {
-            if (!el) return false;
-            const st = window.getComputedStyle(el);
-            if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
-            const r = el.getBoundingClientRect();
-            return r.width >= 2 && r.height >= 2;
-          };
-          const n = (s) => String(s || '').trim().toLowerCase();
-          const all = Array.from(document.querySelectorAll('input')).filter(vis);
-          const target = all.find(el => {
-            const t = n(el.getAttribute('title'));
-            const a = n(el.getAttribute('aria-label'));
-            return t === \"relation's name\" || t === \"relation's name:\" || a === \"relation's name\" || a === \"relation's name:\";
-          }) || all.find(el => {
-            const t = n(el.getAttribute('title'));
-            const a = n(el.getAttribute('aria-label'));
-            return t.includes(\"relation's name\") || a.includes(\"relation's name\");
-          });
-          if (!target) return false;
-          try {
-            target.focus();
-            target.value = '';
-            target.value = String(v || '').trim();
-            target.dispatchEvent(new Event('input', { bubbles: true }));
-            target.dispatchEvent(new Event('change', { bubbles: true }));
-            target.dispatchEvent(new Event('blur', { bubbles: true }));
-            return true;
-          } catch (e) {
-            return false;
-          }
-        }"""
-        for frame in _ordered_frames(page):
-            try:
-                if bool(frame.evaluate(js, value)):
-                    filled = True
-                    break
-            except Exception:
-                continue
-
-    _safe_page_wait(page, 200, log_label="after_relations_name_exact_fill")
-
-    # Verify exact same field set.
-    verify_js = """(v) => {
-      const vis = (el) => {
-        if (!el) return false;
-        const st = window.getComputedStyle(el);
-        if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
-        const r = el.getBoundingClientRect();
-        return r.width >= 2 && r.height >= 2;
-      };
-      const n = (s) => String(s || '').trim().toLowerCase();
-      const vk = n(v);
-      const all = Array.from(document.querySelectorAll('input')).filter(vis);
-      const candidates = all.filter(el => {
-        const t = n(el.getAttribute('title'));
-        const a = n(el.getAttribute('aria-label'));
-        return t === \"relation's name\" || t === \"relation's name:\" || a === \"relation's name\" || a === \"relation's name:\" || t.includes(\"relation's name\") || a.includes(\"relation's name\");
-      });
-      for (const c of candidates) {
-        const cv = n(c.value || '');
-        if (cv && (cv.includes(vk) || vk.includes(cv))) return true;
-      }
-      return false;
-    }"""
-    verified = False
-    for frame in _ordered_frames(page):
-        try:
-            if bool(frame.evaluate(verify_js, value)):
-                verified = True
-                break
-        except Exception:
-            continue
-    return bool(filled and verified)
+    return False
 
 
 def _mobile_needle_for_contact_grid_match(mobile: str) -> str:
