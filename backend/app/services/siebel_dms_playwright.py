@@ -377,6 +377,59 @@ def _try_prepare_find_contact_applet(
     """
     contact_label = re.compile(r"^\s*Contact\s*$", re.I)
 
+    def _select_global_find_contact(root) -> bool:
+        """
+        Top nav global finder often has a select/combobox currently showing ``Find`` with options:
+        Contact, Job Card, Customer Account, etc. Choose **Contact** there first.
+        """
+        # Native <select> path (most stable in Hero header)
+        try:
+            sels = root.locator("select")
+            n = sels.count()
+        except Exception:
+            n = 0
+        for i in range(min(n, 20)):
+            try:
+                sel = sels.nth(i)
+                if not sel.is_visible(timeout=500):
+                    continue
+                opts = sel.evaluate(
+                    """el => [...el.options].map(o => (o.textContent || '').trim().toLowerCase())"""
+                )
+                if not opts:
+                    continue
+                has_find = any(x == "find" for x in opts)
+                has_contact = any(x == "contact" for x in opts)
+                if not (has_find and has_contact):
+                    continue
+                sel.select_option(label=contact_label, timeout=timeout_ms)
+                logger.info("siebel_dms: global top finder selected Contact (native select)")
+                _safe_page_wait(page, 350, log_label="global_find_contact_select")
+                return True
+            except Exception:
+                continue
+
+        # ARIA combobox/menu path
+        for scope in (root, page):
+            try:
+                cb = scope.get_by_role("combobox", name=re.compile(r"^\s*find\s*$", re.I)).first
+                if cb.count() > 0 and cb.is_visible(timeout=500):
+                    cb.click(timeout=timeout_ms)
+                    _safe_page_wait(page, 250, log_label="global_find_open")
+                    for role in ("option", "menuitem", "link"):
+                        try:
+                            item = page.get_by_role(role, name=contact_label).first
+                            if item.count() > 0 and item.is_visible(timeout=500):
+                                item.click(timeout=timeout_ms)
+                                logger.info("siebel_dms: global top finder chose Contact (%s)", role)
+                                _safe_page_wait(page, 350, log_label="global_find_contact_menu")
+                                return True
+                        except Exception:
+                            continue
+            except Exception:
+                continue
+        return False
+
     def _visible_selects(root):
         try:
             loc = root.locator("select")
@@ -439,11 +492,12 @@ def _try_prepare_find_contact_applet(
         return False
 
     def try_on_root(page_: Page, root) -> bool:
+        changed_global = _select_global_find_contact(root)
         if select_contact_on_native_selects(root):
             return True
         if open_find_dropdown_then_contact(page_, root):
             return True
-        return False
+        return changed_global
 
     for fl in _iter_frame_locator_roots(page, content_frame_selector):
         try:
