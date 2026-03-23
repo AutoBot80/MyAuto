@@ -2078,6 +2078,117 @@ def _fill_relation_fields_verified(
     return rel_ok, name_ok
 
 
+def _fill_relations_name_exact(
+    page: Page,
+    *,
+    relation_name: str,
+    action_timeout_ms: int,
+    content_frame_selector: str | None,
+) -> bool:
+    """
+    Exact behavior: fill only the field labeled/titled ``Relation's Name`` and verify that same field.
+    """
+    value = (relation_name or "").strip()
+    if not value:
+        return False
+
+    selectors = [
+        "input[title=\"Relation's Name\" i]",
+        "input[title=\"Relation's Name:\" i]",
+        "input[aria-label=\"Relation's Name\" i]",
+        "input[aria-label=\"Relation's Name:\" i]",
+        "input[title*=\"Relation's Name\" i]",
+        "input[aria-label*=\"Relation's Name\" i]",
+    ]
+
+    # Try normal selector-based fill first.
+    filled = _try_fill_field(
+        page,
+        selectors,
+        value[:255],
+        timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+        prefer_second_if_duplicate=False,
+    )
+
+    # DOM exact fallback: set only exact title/aria fields.
+    if not filled:
+        js = """(v) => {
+          const vis = (el) => {
+            if (!el) return false;
+            const st = window.getComputedStyle(el);
+            if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+            const r = el.getBoundingClientRect();
+            return r.width >= 2 && r.height >= 2;
+          };
+          const n = (s) => String(s || '').trim().toLowerCase();
+          const all = Array.from(document.querySelectorAll('input')).filter(vis);
+          const target = all.find(el => {
+            const t = n(el.getAttribute('title'));
+            const a = n(el.getAttribute('aria-label'));
+            return t === \"relation's name\" || t === \"relation's name:\" || a === \"relation's name\" || a === \"relation's name:\";
+          }) || all.find(el => {
+            const t = n(el.getAttribute('title'));
+            const a = n(el.getAttribute('aria-label'));
+            return t.includes(\"relation's name\") || a.includes(\"relation's name\");
+          });
+          if (!target) return false;
+          try {
+            target.focus();
+            target.value = '';
+            target.value = String(v || '').trim();
+            target.dispatchEvent(new Event('input', { bubbles: true }));
+            target.dispatchEvent(new Event('change', { bubbles: true }));
+            target.dispatchEvent(new Event('blur', { bubbles: true }));
+            return true;
+          } catch (e) {
+            return false;
+          }
+        }"""
+        for frame in _ordered_frames(page):
+            try:
+                if bool(frame.evaluate(js, value)):
+                    filled = True
+                    break
+            except Exception:
+                continue
+
+    _safe_page_wait(page, 200, log_label="after_relations_name_exact_fill")
+
+    # Verify exact same field set.
+    verify_js = """(v) => {
+      const vis = (el) => {
+        if (!el) return false;
+        const st = window.getComputedStyle(el);
+        if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+        const r = el.getBoundingClientRect();
+        return r.width >= 2 && r.height >= 2;
+      };
+      const n = (s) => String(s || '').trim().toLowerCase();
+      const vk = n(v);
+      const all = Array.from(document.querySelectorAll('input')).filter(vis);
+      const candidates = all.filter(el => {
+        const t = n(el.getAttribute('title'));
+        const a = n(el.getAttribute('aria-label'));
+        return t === \"relation's name\" || t === \"relation's name:\" || a === \"relation's name\" || a === \"relation's name:\" || t.includes(\"relation's name\") || a.includes(\"relation's name\");
+      });
+      for (const c of candidates) {
+        const cv = n(c.value || '');
+        if (cv && (cv.includes(vk) || vk.includes(cv))) return true;
+      }
+      return false;
+    }"""
+    verified = False
+    for frame in _ordered_frames(page):
+        try:
+            if bool(frame.evaluate(verify_js, value)):
+                verified = True
+                break
+        except Exception:
+            continue
+    return bool(filled and verified)
+
+
 def _mobile_needle_for_contact_grid_match(mobile: str) -> str:
     """
     Prefer full **10-digit** tail for contact **list/grid** matching (fewer false positives
@@ -2401,13 +2512,14 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
     )
     # Requested behavior: fill Relation's Name with the DB care_of text directly.
     relation_name_to_fill = (care_of or "").strip() or eff_father
-    rel_ok, name_ok = _fill_relation_fields_verified(
+    # Restore simple earlier behavior: fill exact "Relation's Name" only.
+    name_ok = _fill_relations_name_exact(
         page,
-        relation=eff_relation,
         relation_name=relation_name_to_fill,
         action_timeout_ms=action_timeout_ms,
         content_frame_selector=content_frame_selector,
     )
+    rel_ok = True
     note(
         "Video SOP relation-fill verification: "
         f"relation_type_filled={rel_ok!r}, relation_name_filled={name_ok!r}, "

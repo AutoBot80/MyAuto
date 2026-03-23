@@ -1,6 +1,6 @@
 Playwright DMS — execution log (this run only; UTC timestamps)
 
-started_utc=2026-03-23T08:31:00.091193+00:00
+started_utc=2026-03-23T08:42:37.523065+00:00
 skip_contact_find=False
 dms_contact_path='found'
 mobile_phone='8306827880'
@@ -12,8 +12,8 @@ pin_code='321001'
 landline='9602035092'
 father_husband_name='S/o Sahab Singh'
 relation_prefix='S/O'
-care_of=''
-gender=''
+care_of='S/o Sahab Singh'
+gender='Male'
 key_partial='1342'
 frame_partial='40393'
 engine_partial='04383'
@@ -24,18 +24,18 @@ url_vehicle_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/e
 --- trace ---
 Legend: [STEP]/[NOTE]/[MILESTONE] = operator narrative; [FORM] = siebel_step + Siebel form/screen + action + fields/values being applied on that form.
 
-2026-03-23T08:31:00.091368+00:00 [STEP] Started Hero Connect / Siebel DMS automation (linear SOP).
-2026-03-23T08:31:00.091401+00:00 [STEP] Video SOP (Find Contact Enquiry): Find → Contact → mobile → Go → open All Enquiries; then stop.
-2026-03-23T08:31:00.091444+00:00 [FORM] siebel_step=v1_find_contact | form=Global Find → Contact (Mobile Phone) + Go | action=goto_contact_find_URL_then_prepare_Find_Contact_fill_mobile_FindGo | contact_url_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+Contact+Opportunity+Buyer/CoBuyer+View+(SDW)&SWERF=1&SWEHo=&SWEBU=1' | mobile_phone='8306827880'
-2026-03-23T08:31:06.980846+00:00 [STEP] Video SOP: Find customer by mobile (Contact view).
-2026-03-23T08:31:27.517754+00:00 [NOTE] Clicked Find/Go on contact view (mobile query).
-2026-03-23T08:31:29.537718+00:00 [FORM] siebel_step=v2_drill_and_nav | form=Search Results + Contacts detail | action=Siebel_Find_tab_optional_then_link_hit_then_click_first_name_then_fill_Relations_Name_only | father_husband_name='S/o Sahab Singh' | first_name='Akash' | mobile_phone='8306827880' | relation_prefix='S/O'
-2026-03-23T08:31:32.315779+00:00 [NOTE] Activated Siebel Find tab in search results (video SOP).
-2026-03-23T08:31:33.380738+00:00 [NOTE] Opened contact from search hit hyperlink (video SOP).
-2026-03-23T08:31:36.969376+00:00 [NOTE] Opened customer record from Contacts pane by First Name click (video SOP).
-2026-03-23T08:31:38.192388+00:00 [NOTE] Video SOP relation-fill verification: relation_type_filled=True, relation_name_filled=False, relation_used='S/O', relation_name_used='D/o Sahab Singh'.
-2026-03-23T08:31:38.192538+00:00 [NOTE] Relation's Name was not verified as filled on the opened customer form.
-2026-03-23T08:31:38.192599+00:00 [NOTE] Relation type field is intentionally skipped in this mode (user-requested).
-2026-03-23T08:31:38.192655+00:00 [STEP] Stopped: video SOP failed while opening customer record or filling relation fields.
+2026-03-23T08:42:37.523476+00:00 [STEP] Started Hero Connect / Siebel DMS automation (linear SOP).
+2026-03-23T08:42:37.523553+00:00 [STEP] Video SOP (Find Contact Enquiry): Find → Contact → mobile → Go → open All Enquiries; then stop.
+2026-03-23T08:42:37.523633+00:00 [FORM] siebel_step=v1_find_contact | form=Global Find → Contact (Mobile Phone) + Go | action=goto_contact_find_URL_then_prepare_Find_Contact_fill_mobile_FindGo | contact_url_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+Contact+Opportunity+Buyer/CoBuyer+View+(SDW)&SWERF=1&SWEHo=&SWEBU=1' | mobile_phone='8306827880'
+2026-03-23T08:42:44.126882+00:00 [STEP] Video SOP: Find customer by mobile (Contact view).
+2026-03-23T08:42:59.593490+00:00 [NOTE] Clicked Find/Go on contact view (mobile query).
+2026-03-23T08:43:01.621502+00:00 [FORM] siebel_step=v2_drill_and_nav | form=Search Results + Contacts detail | action=Siebel_Find_tab_optional_then_link_hit_then_click_first_name_then_fill_Relations_Name_only | care_of='S/o Sahab Singh' | father_husband_name='S/o Sahab Singh' | first_name='Akash' | gender='Male' | mobile_phone='8306827880' | relation_prefix='S/O'
+2026-03-23T08:43:04.199196+00:00 [NOTE] Activated Siebel Find tab in search results (video SOP).
+2026-03-23T08:43:05.474388+00:00 [NOTE] Opened contact from search hit hyperlink (video SOP).
+2026-03-23T08:43:08.833079+00:00 [NOTE] Opened customer record from Contacts pane by First Name click (video SOP).
+2026-03-23T08:43:10.268941+00:00 [NOTE] Video SOP relation-fill verification: relation_type_filled=True, relation_name_filled=False, relation_used='S/O', relation_name_used='S/o Sahab Singh'.
+2026-03-23T08:43:10.269055+00:00 [NOTE] Relation's Name was not verified as filled on the opened customer form.
+2026-03-23T08:43:10.269097+00:00 [NOTE] Relation type field is intentionally skipped in this mode (user-requested).
+2026-03-23T08:43:10.269133+00:00 [STEP] Stopped: video SOP failed while opening customer record or filling relation fields.
 
-2026-03-23T08:31:38.192770+00:00 [END] error=Siebel: video SOP — after Find/Go, could not click customer/first-name or fill Relation's Name field on the opened customer record (verified). Confirm right-pane selectors/labels and iframe scope.
+2026-03-23T08:43:10.269189+00:00 [END] error=Siebel: video SOP — after Find/Go, could not click customer/first-name or fill Relation's Name field on the opened customer record (verified). Confirm right-pane selectors/labels and iframe scope.
