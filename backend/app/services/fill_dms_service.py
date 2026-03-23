@@ -810,6 +810,23 @@ def _load_customer_gender_from_master(customer_id: int | None) -> str:
         return ""
 
 
+def _derive_gender_from_care_of_text(care_of_text: str) -> str:
+    """
+    Fallback only when DB gender is missing.
+    Infer coarse gender from relation marker in care_of/father text.
+    """
+    t = _clean_text(care_of_text).upper().replace(" ", "")
+    if not t:
+        return ""
+    if t.startswith("D/O") or t.startswith("DO"):
+        return "Female"
+    if t.startswith("W/O") or t.startswith("WO"):
+        return "Female"
+    if t.startswith("S/O") or t.startswith("SO"):
+        return "Male"
+    return ""
+
+
 def _normalize_dms_relation_prefix(raw: object | None) -> str:
     s = _clean_text(raw).upper().replace(" ", "")
     if s in ("S/O", "SO"):
@@ -842,6 +859,7 @@ def _build_dms_fill_values(customer_id: int | None, vehicle_id: int | None, subf
     state_e = _clean_text(inferred_addr.get("state")) or state_raw
     addr_line = _clean_text(inferred_addr.get("address"))[:80] or addr_full[:80]
     father_e = _clean_text(inferred_addr.get("care_of"))[:255] or father_raw[:255]
+    care_of_e = father_e
     first_name = _clean_text(row.get("Contact First Name"))
     last_name = _clean_text(row.get("Contact Last Name"))
     full_name = " ".join(part for part in [first_name, last_name] if part).strip()
@@ -854,6 +872,9 @@ def _build_dms_fill_values(customer_id: int | None, vehicle_id: int | None, subf
     finance_required = (_clean_text(row.get("Finance Required")) or "N").upper()
     if finance_required not in ("Y", "N"):
         finance_required = "N"
+    gender_row = _clean_text(row.get("Gender")) or _clean_text(row.get("gender"))
+    gender_effective = gender_master or gender_row or _derive_gender_from_care_of_text(care_of_e)
+
     values = {
         "row": row,
         "subfolder": effective_subfolder,
@@ -870,10 +891,11 @@ def _build_dms_fill_values(customer_id: int | None, vehicle_id: int | None, subf
         "engine_partial": _clean_text(row.get("Engine num (partial)"))[:12],
         "relation_prefix": relation_prefix,
         "father_husband_name": father_e,
+        "care_of": care_of_e,
         "financier_name": _clean_text(row.get("Financier Name"))[:255],
         "finance_required": finance_required,
         "dms_contact_path": contact_path,
-        "gender": gender_master or _clean_text(row.get("Gender")) or _clean_text(row.get("gender")),
+        "gender": gender_effective,
         "customer_export": {
             "name": full_name,
             "address": _clean_text(inferred_addr.get("address")) or addr_full,
