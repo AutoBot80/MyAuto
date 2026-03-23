@@ -2508,9 +2508,9 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
     if not addr_line1_value:
         addr_line1_value = ""
 
-    def _fill_address_line_1_if_available() -> None:
+    def _fill_address_line_1_if_available() -> bool:
         if not addr_line1_value:
-            return
+            return True
         addr_selectors = (
             'input[aria-label="Address Line 1"]',
             'textarea[aria-label="Address Line 1"]',
@@ -2525,7 +2525,7 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
                         got = (loc.input_value(timeout=action_timeout_ms) or "").strip()
                         if got and (addr_line1_value.lower() in got.lower() or got.lower() in addr_line1_value.lower()):
                             note(f"Address Line 1 filled from DB substring: {addr_line1_value!r}")
-                            return
+                            return True
                 except Exception:
                     continue
         for frame in _ordered_frames(page):
@@ -2537,13 +2537,17 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
                         got = (loc.input_value(timeout=action_timeout_ms) or "").strip()
                         if got and (addr_line1_value.lower() in got.lower() or got.lower() in addr_line1_value.lower()):
                             note(f"Address Line 1 filled from DB substring: {addr_line1_value!r}")
-                            return
+                            return True
                 except Exception:
                     continue
         note(f"Could not fill Address Line 1 from DB substring: {addr_line1_value!r}")
+        return False
 
     def _after_relation_fill_nav() -> bool:
-        _fill_address_line_1_if_available()
+        addr_ok = _fill_address_line_1_if_available()
+        if not addr_ok:
+            note("Stopping before Add customer payment: Address Line 1 was not filled.")
+            return False
         note("Relation's Name filled; stopping on current field as requested.")
         return True
 
