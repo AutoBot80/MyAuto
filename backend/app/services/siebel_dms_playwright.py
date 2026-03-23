@@ -2976,16 +2976,91 @@ def _add_customer_payment(
                             pass
                     return False
 
-                type_ok = select_siebel_dropdown_value(
-                    page,
-                    field_label_patterns=[
-                        re.compile(r"transaction\s*type", re.I)
-                    ],
-                    value="Payments",
-                    timeout_ms=action_timeout_ms,
-                    content_frame_selector=content_frame_selector,
-                    note=note,
-                )
+                # First try direct typing into Transaction Type field.
+                type_ok = False
+                for root in scoped_roots:
+                    for css in (
+                        "input[id*='Transaction_Type' i]",
+                        "input[name*='Transaction_Type' i]",
+                        "input[title_id*='Transaction_Type' i]",
+                        "input[title-id*='Transaction_Type' i]",
+                        "input[aria-label*='Transaction Type' i]",
+                        "input[title*='Transaction Type' i]",
+                    ):
+                        try:
+                            fld = root.locator(css).first
+                            if fld.count() <= 0 or not fld.is_visible(timeout=700):
+                                continue
+                            try:
+                                fld.click(timeout=action_timeout_ms)
+                            except Exception:
+                                fld.click(timeout=action_timeout_ms, force=True)
+                            fld.fill("Payments", timeout=action_timeout_ms)
+                            try:
+                                fld.press("Tab", timeout=min(1200, action_timeout_ms))
+                            except Exception:
+                                pass
+                            got_type = (fld.input_value(timeout=1500) or "").strip()
+                            if got_type and "payment" in got_type.lower():
+                                type_ok = True
+                                note("Transaction Type set by direct typing: 'Payments'.")
+                                break
+                        except Exception:
+                            continue
+                    if type_ok:
+                        break
+
+                if not type_ok:
+                    type_ok = select_siebel_dropdown_value(
+                        page,
+                        field_label_patterns=[
+                            re.compile(r"transaction\s*type", re.I)
+                        ],
+                        value="Payments",
+                        timeout_ms=action_timeout_ms,
+                        content_frame_selector=content_frame_selector,
+                        note=note,
+                    )
+
+                if not type_ok:
+                    # Strict fallback: target Payment Lines Transaction_Type field directly.
+                    value_pat = re.compile(r"^\s*Payments\s*$", re.I)
+                    for root in scoped_roots:
+                        for css in (
+                            "input[id*='Transaction_Type' i]",
+                            "input[name*='Transaction_Type' i]",
+                            "input[title_id*='Transaction_Type' i]",
+                            "input[title-id*='Transaction_Type' i]",
+                            "input[aria-label*='Transaction Type' i]",
+                        ):
+                            try:
+                                fld = root.locator(css).first
+                                if fld.count() <= 0 or not fld.is_visible(timeout=600):
+                                    continue
+                                try:
+                                    fld.click(timeout=action_timeout_ms)
+                                except Exception:
+                                    fld.click(timeout=action_timeout_ms, force=True)
+                                _safe_page_wait(page, 250, log_label="after_strict_txn_type_open")
+                                try:
+                                    page.keyboard.press("ArrowDown")
+                                except Exception:
+                                    pass
+                                opt = page.locator("li, div, span, a").filter(has_text=value_pat).first
+                                if opt.count() > 0 and opt.is_visible(timeout=1200):
+                                    try:
+                                        opt.click(timeout=action_timeout_ms)
+                                    except Exception:
+                                        opt.click(timeout=action_timeout_ms, force=True)
+                                    gotv = (fld.input_value(timeout=1500) or "").strip()
+                                    if gotv and "payment" in gotv.lower():
+                                        type_ok = True
+                                        note("Transaction Type set via strict Transaction_Type fallback.")
+                                        break
+                            except Exception:
+                                continue
+                        if type_ok:
+                            break
 
                 if not type_ok:
                     raise Exception("Failed to set Transaction Type = Payments")
