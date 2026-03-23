@@ -2582,52 +2582,77 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
         note("Opened Contact_Enquiry after re-clicking left mobile (video SOP).")
         _safe_page_wait(page, 600, log_label="after_contact_enquiry_tab_open")
 
-        # If enquiry rows are shown, click Enquiry# drill-down link.
+        # Navigate to sub form titled "Enquiries" and click link under "Enquiry #".
         clicked_enquiry = False
-        if _siebel_try_click_named_in_frames(
-            page,
-            re.compile(r"enquiry\s*#?", re.I),
-            roles=("link",),
-            timeout_ms=action_timeout_ms,
-            content_frame_selector=content_frame_selector,
-        ):
-            clicked_enquiry = True
-        else:
-            for root in _siebel_locator_search_roots(page, content_frame_selector):
-                try:
-                    apps = root.locator(".siebui-applet").filter(has_text=re.compile(r"contact[_\s]*enquiry|enquiries?", re.I))
-                    n_apps = apps.count()
-                    for ai in range(min(n_apps, 6)):
-                        app = apps.nth(ai)
-                        if not app.is_visible(timeout=600):
-                            continue
-                        for css in (
-                            "table tbody tr td a.siebui-ctrl-drilldown",
-                            "table tbody tr td a[href*='javascript']",
-                            "table tbody tr td a",
-                            "table tr td a",
-                        ):
-                            try:
-                                a = app.locator(css).first
-                                if a.count() > 0 and a.is_visible(timeout=500):
+        for root in _siebel_locator_search_roots(page, content_frame_selector):
+            try:
+                apps = root.locator(".siebui-applet").filter(has_text=re.compile(r"\bEnquiries?\b", re.I))
+                n_apps = apps.count()
+                for ai in range(min(n_apps, 8)):
+                    app = apps.nth(ai)
+                    if not app.is_visible(timeout=700):
+                        continue
+
+                    # 1) Try exact "Enquiry #" column -> first row link.
+                    try:
+                        header_cells = app.locator("table thead th, table tr th")
+                        hcount = header_cells.count()
+                        enq_col_idx = -1
+                        for hi in range(min(hcount, 25)):
+                            htxt = (header_cells.nth(hi).inner_text(timeout=400) or "").strip().lower()
+                            htxt = re.sub(r"\s+", " ", htxt)
+                            if htxt in ("enquiry #", "enquiry#", "enquiry no", "enquiry no."):
+                                enq_col_idx = hi
+                                break
+                        if enq_col_idx >= 0:
+                            rows = app.locator("table tbody tr")
+                            rcount = rows.count()
+                            for ri in range(min(rcount, 20)):
+                                row = rows.nth(ri)
+                                cells = row.locator("td")
+                                if cells.count() <= enq_col_idx:
+                                    continue
+                                cell = cells.nth(enq_col_idx)
+                                link = cell.locator("a").first
+                                if link.count() > 0 and link.is_visible(timeout=400):
                                     try:
-                                        a.click(timeout=action_timeout_ms)
+                                        link.click(timeout=action_timeout_ms)
                                     except Exception:
-                                        a.click(timeout=action_timeout_ms, force=True)
+                                        link.click(timeout=action_timeout_ms, force=True)
                                     clicked_enquiry = True
                                     break
-                            except Exception:
-                                continue
-                        if clicked_enquiry:
-                            break
+                            if clicked_enquiry:
+                                break
+                    except Exception:
+                        pass
+
+                    # 2) Fallback: any visible drilldown link within Enquiries applet.
+                    for css in (
+                        "table tbody tr td a.siebui-ctrl-drilldown",
+                        "table tbody tr td a[href*='javascript']",
+                        "table tbody tr td a",
+                    ):
+                        try:
+                            a = app.locator(css).first
+                            if a.count() > 0 and a.is_visible(timeout=500):
+                                try:
+                                    a.click(timeout=action_timeout_ms)
+                                except Exception:
+                                    a.click(timeout=action_timeout_ms, force=True)
+                                clicked_enquiry = True
+                                break
+                        except Exception:
+                            continue
                     if clicked_enquiry:
                         break
-                except Exception:
-                    continue
+                if clicked_enquiry:
+                    break
+            except Exception:
+                continue
         if clicked_enquiry:
-            note("Clicked Enquiry# from Contact_Enquiry sub form (video SOP).")
+            note("Clicked Enquiry# link from Enquiries sub form (video SOP).")
         else:
-            note("No Enquiry# row/link shown in Contact_Enquiry sub form; skipping Enquiry# click.")
+            note("No Enquiry# link shown under Enquiries sub form; skipping Enquiry# click.")
         return True
 
     # Native Playwright path first: use label mapping in frame locators / frames.
