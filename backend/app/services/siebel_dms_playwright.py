@@ -2101,15 +2101,67 @@ def _fill_relations_name_exact(
         "input[aria-label*=\"Relation's Name\" i]",
     ]
 
-    # Try normal selector-based fill first.
-    filled = _try_fill_field(
-        page,
-        selectors,
-        value[:255],
-        timeout_ms=action_timeout_ms,
-        content_frame_selector=content_frame_selector,
-        prefer_second_if_duplicate=False,
-    )
+    # Try exact row-anchor first: locate text cell "Relation's Name:" and fill nearest right input.
+    row_anchor_js = """(v) => {
+      const vis = (el) => {
+        if (!el) return false;
+        const st = window.getComputedStyle(el);
+        if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+        const r = el.getBoundingClientRect();
+        return r.width >= 2 && r.height >= 2;
+      };
+      const n = (s) => String(s || '').trim().toLowerCase();
+      const labels = Array.from(document.querySelectorAll('td,th,label,span,div')).filter(vis);
+      const rel = labels.find(el => {
+        const t = n(el.innerText || el.textContent || '');
+        return t === "relation's name" || t === "relation's name:";
+      });
+      if (!rel) return false;
+      const rr = rel.getBoundingClientRect();
+      const inputs = Array.from(document.querySelectorAll('input[type="text"],input,textarea')).filter(vis);
+      let best = null;
+      let bestScore = 1e9;
+      for (const inp of inputs) {
+        const r = inp.getBoundingClientRect();
+        const dy = Math.abs((r.top + r.height / 2) - (rr.top + rr.height / 2));
+        const dx = r.left - rr.right;
+        if (dy > 20) continue;         // same row
+        if (dx < -8 || dx > 420) continue;
+        const score = Math.max(dx, 0) + dy * 8;
+        if (score < bestScore) { bestScore = score; best = inp; }
+      }
+      if (!best) return false;
+      try {
+        best.focus();
+        best.value = '';
+        best.value = String(v || '').trim();
+        best.dispatchEvent(new Event('input', { bubbles: true }));
+        best.dispatchEvent(new Event('change', { bubbles: true }));
+        best.dispatchEvent(new Event('blur', { bubbles: true }));
+        return true;
+      } catch (e) {
+        return false;
+      }
+    }"""
+    filled = False
+    for frame in _ordered_frames(page):
+        try:
+            if bool(frame.evaluate(row_anchor_js, value)):
+                filled = True
+                break
+        except Exception:
+            continue
+
+    # Exact selector fill second.
+    if not filled:
+        filled = _try_fill_field(
+            page,
+            selectors,
+            value[:255],
+            timeout_ms=action_timeout_ms,
+            content_frame_selector=content_frame_selector,
+            prefer_second_if_duplicate=False,
+        )
 
     # DOM exact fallback: set only exact title/aria fields.
     if not filled:
