@@ -2495,31 +2495,10 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
         return False
     note("Opened customer record from Contacts pane by First Name click (video SOP).")
 
-    eff_relation, eff_father = _derive_relation_and_name(
-        relation_prefix=relation_prefix,
-        father_husband_name=father_husband_name,
-        care_of=care_of,
-        gender=gender,
-    )
-    # Requested behavior: fill Relation's Name with the DB care_of text directly.
-    relation_name_to_fill = (care_of or "").strip() or eff_father
-    # Restore simple earlier behavior: fill exact "Relation's Name" only.
-    name_ok = _fill_relations_name_exact(
-        page,
-        relation_name=relation_name_to_fill,
-        action_timeout_ms=action_timeout_ms,
-        content_frame_selector=content_frame_selector,
-    )
-    rel_ok = True
-    note(
-        "Video SOP relation-fill verification: "
-        f"relation_type_filled={rel_ok!r}, relation_name_filled={name_ok!r}, "
-        f"relation_used={eff_relation!r}, relation_name_used={relation_name_to_fill!r}."
-    )
-    if not name_ok:
-        note("Relation's Name was not verified as filled on the opened customer form.")
-    note("Relation type field is intentionally skipped in this mode (user-requested).")
-    return bool(rel_ok and name_ok)
+    # Operator request: stop here once the customer record is opened.
+    # Do not fill Relation's Name / Relation type (or any subsequent steps yet).
+    note("Video SOP stop: customer record opened; relation fill skipped.")
+    return True
 
 
 def _siebel_open_found_customer_record(
