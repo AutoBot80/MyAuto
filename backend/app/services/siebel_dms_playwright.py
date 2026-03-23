@@ -2509,15 +2509,38 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
           return false;
         }
       };
+      const selectorPriority = [
+        'input[name="s_4_1_89_0"]',
+        'input.s_4_1_89_0',
+        'input[aria-labelledby="Relation\\'s_Name_Label_4"]',
+        'input[aria-label="Relation\\'s Name"]',
+        'textarea[aria-label="Relation\\'s Name"]',
+        'input[name^="s_4_1_"][aria-label="Relation\\'s Name"]',
+      ];
+
+      const trySelectors = (root) => {
+        for (const sel of selectorPriority) {
+          try {
+            const el = root.querySelector(sel);
+            if (fillOne(el)) return true;
+          } catch (e) {}
+        }
+        return false;
+      };
 
       for (const f of forms) {
-        const inpExact = f.querySelector('input[aria-label="Relation\\'s Name"], textarea[aria-label="Relation\\'s Name"]');
-        if (fillOne(inpExact)) return true;
+        if (trySelectors(f)) return true;
 
         const all = Array.from(f.querySelectorAll('input,textarea')).filter(vis);
         const inpCi = all.find(el => norm(el.getAttribute('aria-label')) === norm(exactAria));
         if (fillOne(inpCi)) return true;
       }
+
+      // Fallback: sometimes the field is rendered in document scope, not inside SWEForm4_0.
+      if (trySelectors(document)) return true;
+      const allDoc = Array.from(document.querySelectorAll('input,textarea')).filter(vis);
+      const docCi = allDoc.find(el => norm(el.getAttribute('aria-label')) === norm(exactAria));
+      if (fillOne(docCi)) return true;
 
       return false;
     }"""
