@@ -2748,6 +2748,7 @@ def _add_customer_payment(
                     field_patterns: tuple[re.Pattern[str], ...],
                     value: str,
                     down_presses: int,
+                    tab_presses_after: int,
                 ) -> bool:
                     value_pat = re.compile(rf"^\s*{re.escape(value)}\s*$", re.I)
                     for root in scoped_roots:
@@ -2813,8 +2814,8 @@ def _add_customer_payment(
                                     try:
                                         for _ in range(max(1, int(down_presses))):
                                             c.press("ArrowDown", timeout=min(1200, action_timeout_ms))
-                                        c.press("Enter", timeout=min(1200, action_timeout_ms))
-                                        c.press("Tab", timeout=min(1200, action_timeout_ms))
+                                        for _ in range(max(1, int(tab_presses_after))):
+                                            c.press("Tab", timeout=min(1200, action_timeout_ms))
                                     except Exception:
                                         pass
 
@@ -2878,7 +2879,8 @@ def _add_customer_payment(
                         re.compile(r"\btype\b", re.I),
                     ),
                     "Payments",
-                    3,
+                    4,
+                    1,
                 )
                 method_ok = _pick_dropdown_value(
                     (
@@ -2886,7 +2888,8 @@ def _add_customer_payment(
                         re.compile(r"\bmethod\b", re.I),
                     ),
                     "Cash",
-                    1,
+                    2,
+                    4,
                 )
 
                 # Transaction Amount = 120000 (strictly in Payment Lines scoped frame/roots)
