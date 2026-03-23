@@ -2447,6 +2447,8 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
     mobile: str,
     first_name: str,
     care_of: str,
+    address_line_1: str,
+    pin_code: str,
     action_timeout_ms: int,
     content_frame_selector: str | None,
     note,
@@ -2497,7 +2499,89 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
 
     _safe_page_wait(page, 700, log_label="after_first_name_click_before_relation_fill")
 
+    # DB rule: Address Line 1 should be the substring between first and second comma.
+    addr_raw = (address_line_1 or "").strip()
+    addr_line1_value = ""
+    if addr_raw and "," in addr_raw:
+        parts = [p.strip() for p in addr_raw.split(",")]
+        if len(parts) >= 3:
+            addr_line1_value = parts[1]
+    if not addr_line1_value:
+        addr_line1_value = ""
+    pin_value = (pin_code or "").strip()
+
+    def _fill_address_line_1_if_available() -> None:
+        if not addr_line1_value:
+            return
+        addr_selectors = (
+            'input[aria-label="Address Line 1"]',
+            'textarea[aria-label="Address Line 1"]',
+        )
+        # Try frame-locator roots first, then frames.
+        for fl in _iter_frame_locator_roots(page, content_frame_selector):
+            for css in addr_selectors:
+                try:
+                    loc = fl.locator(css).first
+                    if loc.count() > 0 and loc.is_visible(timeout=900):
+                        loc.fill(addr_line1_value, timeout=action_timeout_ms)
+                        got = (loc.input_value(timeout=action_timeout_ms) or "").strip()
+                        if got and (addr_line1_value.lower() in got.lower() or got.lower() in addr_line1_value.lower()):
+                            note(f"Address Line 1 filled from DB substring: {addr_line1_value!r}")
+                            return
+                except Exception:
+                    continue
+        for frame in _ordered_frames(page):
+            for css in addr_selectors:
+                try:
+                    loc = frame.locator(css).first
+                    if loc.count() > 0 and loc.is_visible(timeout=900):
+                        loc.fill(addr_line1_value, timeout=action_timeout_ms)
+                        got = (loc.input_value(timeout=action_timeout_ms) or "").strip()
+                        if got and (addr_line1_value.lower() in got.lower() or got.lower() in addr_line1_value.lower()):
+                            note(f"Address Line 1 filled from DB substring: {addr_line1_value!r}")
+                            return
+                except Exception:
+                    continue
+        note(f"Could not fill Address Line 1 from DB substring: {addr_line1_value!r}")
+
+    def _fill_pincode_if_available() -> None:
+        if not pin_value:
+            return
+        pin_selectors = (
+            'input[aria-label="Pincode"]',
+            'input[aria-label="Pin Code"]',
+            'input[aria-label="PIN Code"]',
+            'input[aria-label="Pincode:"]',
+        )
+        for fl in _iter_frame_locator_roots(page, content_frame_selector):
+            for css in pin_selectors:
+                try:
+                    loc = fl.locator(css).first
+                    if loc.count() > 0 and loc.is_visible(timeout=900):
+                        loc.fill(pin_value, timeout=action_timeout_ms)
+                        got = (loc.input_value(timeout=action_timeout_ms) or "").strip()
+                        if got and (pin_value.lower() in got.lower() or got.lower() in pin_value.lower()):
+                            note(f"Pincode filled from DB pin_code: {pin_value!r}")
+                            return
+                except Exception:
+                    continue
+        for frame in _ordered_frames(page):
+            for css in pin_selectors:
+                try:
+                    loc = frame.locator(css).first
+                    if loc.count() > 0 and loc.is_visible(timeout=900):
+                        loc.fill(pin_value, timeout=action_timeout_ms)
+                        got = (loc.input_value(timeout=action_timeout_ms) or "").strip()
+                        if got and (pin_value.lower() in got.lower() or got.lower() in pin_value.lower()):
+                            note(f"Pincode filled from DB pin_code: {pin_value!r}")
+                            return
+                except Exception:
+                    continue
+        note(f"Could not fill Pincode from DB pin_code: {pin_value!r}")
+
     def _after_relation_fill_nav() -> bool:
+        _fill_address_line_1_if_available()
+        _fill_pincode_if_available()
         note("Relation's Name filled; stopping on current field as requested.")
         return True
 
@@ -3490,6 +3574,8 @@ def Playwright_Hero_DMS_fill(
                 mobile=mobile,
                 first_name=first,
                 care_of=care_of,
+                address_line_1=addr,
+                pin_code=pin,
                 action_timeout_ms=action_timeout_ms,
                 content_frame_selector=content_frame_selector,
                 note=note,
