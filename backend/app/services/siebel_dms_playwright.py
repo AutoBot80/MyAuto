@@ -2490,38 +2490,36 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
         const r = el.getBoundingClientRect();
         return r.width >= 2 && r.height >= 2;
       };
-      const norm = (s) => String(s || '').replace(/\\s+/g,' ').trim().toLowerCase().replace(/\\s*:\\s*$/, '');
-      const labels = Array.from(document.querySelectorAll('td,th,label,span,div')).filter(vis);
-      const lbl = labels.find(el => {
-        const t = norm(el.innerText || el.textContent || '');
-        return t === \"relation's name\" || t.includes(\"relation's name\");
-      });
-      if (!lbl) return false;
-      const row = lbl.closest('tr') || lbl.closest('[role=\"row\"]') || document;
-      const candidates = Array.from(row.querySelectorAll('input,textarea')).filter(vis);
-      if (!candidates.length) return false;
-      const lr = lbl.getBoundingClientRect();
-      let best = null;
-      let bestScore = 1e18;
-      for (const c of candidates) {
-        const r = c.getBoundingClientRect();
-        const dy = Math.abs((r.top + r.height/2) - (lr.top + lr.height/2));
-        const dx = r.left - lr.right;
-        if (dy > 28) continue;
-        if (dx < -10) continue;
-        const score = dx + dy*5;
-        if (score < bestScore) { bestScore = score; best = c; }
+      const norm = (s) => String(s || '').replace(/\\s+/g,' ').trim().toLowerCase();
+      const forms = Array.from(document.querySelectorAll('form[name="SWEForm4_0"]')).filter(vis);
+      const exactAria = "Relation's Name";
+      const fillOne = (inp) => {
+        if (!inp || !vis(inp)) return false;
+        try {
+          inp.focus();
+          inp.value = '';
+          inp.value = String(value || '').trim();
+          inp.dispatchEvent(new Event('input', { bubbles: true }));
+          inp.dispatchEvent(new Event('change', { bubbles: true }));
+          inp.dispatchEvent(new Event('blur', { bubbles: true }));
+          const got = norm(inp.value || '');
+          const want = norm(value || '');
+          return !!got && (got.includes(want) || want.includes(got));
+        } catch (e) {
+          return false;
+        }
+      };
+
+      for (const f of forms) {
+        const inpExact = f.querySelector('input[aria-label="Relation\\'s Name"], textarea[aria-label="Relation\\'s Name"]');
+        if (fillOne(inpExact)) return true;
+
+        const all = Array.from(f.querySelectorAll('input,textarea')).filter(vis);
+        const inpCi = all.find(el => norm(el.getAttribute('aria-label')) === norm(exactAria));
+        if (fillOne(inpCi)) return true;
       }
-      if (!best) return false;
-      best.focus();
-      if ('value' in best) {
-        best.value = '';
-        best.value = String(value || '').trim();
-      }
-      best.dispatchEvent(new Event('input', { bubbles: true }));
-      best.dispatchEvent(new Event('change', { bubbles: true }));
-      best.dispatchEvent(new Event('blur', { bubbles: true }));
-      return true;
+
+      return false;
     }"""
 
     # Deterministic navigation: after left hit, always open record via First Name.
