@@ -1842,9 +1842,77 @@ def _fill_relation_fields_verified(
     rel = (relation or "").strip()
     nm = (relation_name or "").strip()
 
-    # User-requested mode: fill only Relation's Name and skip relation type selection.
+    # User-requested mode: fill only Relation's Name on the opened customer record and skip relation type.
+    def _fill_relation_name_on_opened_customer_form() -> bool:
+        """
+        Strictly target the form that contains both customer first-name area and Relation's Name row.
+        Avoids writing into intermediate applets that may also have relation-like fields.
+        """
+        set_on_form_js = """(nmValue) => {
+          const vis = (el) => {
+            if (!el) return false;
+            const st = window.getComputedStyle(el);
+            if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+            const r = el.getBoundingClientRect();
+            return r.width >= 2 && r.height >= 2;
+          };
+          const txt = (s) => String(s || '').trim().toLowerCase();
+          const labels = Array.from(document.querySelectorAll('label,span,div,td,th')).filter(vis);
+          const relLbl = labels.find(el => {
+            const t = txt(el.innerText || '');
+            return (t.includes('relation') && t.includes('name')) || t.includes("relation's name");
+          });
+          if (!relLbl) return false;
+          // Ensure this is the customer details form (has first-name context nearby).
+          const hasFirstNameContext = labels.some(el => txt(el.innerText || '').includes('first name'));
+          if (!hasFirstNameContext) return false;
+
+          const lr = relLbl.getBoundingClientRect();
+          const candidates = Array.from(document.querySelectorAll('input[type="text"],input,textarea')).filter(vis);
+          let best = null;
+          let bestScore = 1e9;
+          for (const c of candidates) {
+            const r = c.getBoundingClientRect();
+            const dy = Math.abs((r.top + r.height / 2) - (lr.top + lr.height / 2));
+            const dx = r.left - lr.right;
+            if (dy > 24) continue;
+            if (dx < -10 || dx > 420) continue;
+            const score = Math.max(dx, 0) + dy * 7;
+            if (score < bestScore) { bestScore = score; best = c; }
+          }
+          if (!best) {
+            best = candidates.find(i => {
+              const t = txt(i.getAttribute('title') || '');
+              const a = txt(i.getAttribute('aria-label') || '');
+              return t.includes('relation') || a.includes('relation');
+            }) || null;
+          }
+          if (!best) return false;
+          try {
+            best.focus();
+            best.value = '';
+            best.value = String(nmValue || '').trim();
+            best.dispatchEvent(new Event('input', { bubbles: true }));
+            best.dispatchEvent(new Event('change', { bubbles: true }));
+            best.dispatchEvent(new Event('blur', { bubbles: true }));
+            return true;
+          } catch (e) {
+            return false;
+          }
+        }"""
+        for frame in _ordered_frames(page):
+            try:
+                if bool(frame.evaluate(set_on_form_js, nm)):
+                    return True
+            except Exception:
+                continue
+        return False
+
     name_fill_attempted = False
     if nm:
+        name_fill_attempted = _fill_relation_name_on_opened_customer_form()
+    if nm and not name_fill_attempted:
+        # Keep old selector path as fallback only.
         name_fill_attempted = _try_fill_field(
             page,
             [
