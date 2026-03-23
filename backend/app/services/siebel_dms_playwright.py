@@ -2643,6 +2643,218 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
     return False
 
 
+def _add_customer_payment(
+    page: Page,
+    *,
+    action_timeout_ms: int,
+    content_frame_selector: str | None,
+    note,
+) -> bool:
+    """
+    New isolated step: open Payments tab and click the "+" (new) icon.
+    """
+    opened_payments = _siebel_try_click_named_in_frames(
+        page,
+        re.compile(r"^\s*payments\s*$", re.I),
+        roles=("tab", "link"),
+        timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+    )
+    if not opened_payments:
+        note("Could not click Payments tab.")
+        return False
+    _safe_page_wait(page, 500, log_label="after_payments_tab_click")
+
+    plus_selectors = (
+        "button[title='+']",
+        "a[title='+']",
+        "[role='button'][aria-label='+']",
+        "button[aria-label*='new' i]",
+        "a[aria-label*='new' i]",
+        "button[title*='new' i]",
+        "a[title*='new' i]",
+        "button[title*='add' i]",
+        "a[title*='add' i]",
+        "button.siebui-icon-new",
+        "a.siebui-icon-new",
+        "button",
+        "a",
+    )
+    plus_patterns = (
+        re.compile(r"^\s*\+\s*$"),
+        re.compile(r"^\s*new\s*$", re.I),
+        re.compile(r"add", re.I),
+    )
+
+    def _click_plus_in_root(root) -> bool:
+        # Exact selectors first
+        for css in plus_selectors[:-2]:
+            try:
+                c = root.locator(css).first
+                if c.count() > 0 and c.is_visible(timeout=500):
+                    try:
+                        c.click(timeout=action_timeout_ms)
+                    except Exception:
+                        c.click(timeout=action_timeout_ms, force=True)
+                    return True
+            except Exception:
+                continue
+        # Text/aria/title fallback across generic clickable nodes
+        for css in plus_selectors[-2:]:
+            try:
+                cands = root.locator(css)
+                n = cands.count()
+                for i in range(min(n, 30)):
+                    c = cands.nth(i)
+                    if not c.is_visible(timeout=350):
+                        continue
+                    try:
+                        txt = (c.inner_text(timeout=250) or "").strip()
+                    except Exception:
+                        txt = ""
+                    try:
+                        title = (c.get_attribute("title") or "").strip()
+                    except Exception:
+                        title = ""
+                    try:
+                        aria = (c.get_attribute("aria-label") or "").strip()
+                    except Exception:
+                        aria = ""
+                    blob = " ".join([txt, title, aria]).strip()
+                    if not blob:
+                        continue
+                    if any(p.search(blob) for p in plus_patterns):
+                        try:
+                            c.click(timeout=action_timeout_ms)
+                        except Exception:
+                            c.click(timeout=action_timeout_ms, force=True)
+                        return True
+            except Exception:
+                continue
+        return False
+
+    for root in _siebel_locator_search_roots(page, content_frame_selector):
+        try:
+            if _click_plus_in_root(root):
+                note("Clicked '+' icon on Payments tab.")
+                _safe_page_wait(page, 500, log_label="after_payments_plus_click")
+
+                # Type = Payments
+                _try_select_option(
+                    page,
+                    [
+                        'select[aria-label="Type" i]',
+                        'select[title="Type" i]',
+                        'select[aria-label*="Type" i]',
+                        'select[title*="Type" i]',
+                    ],
+                    "Payments",
+                    timeout_ms=action_timeout_ms,
+                    content_frame_selector=content_frame_selector,
+                    prefer_second_if_duplicate=False,
+                )
+                _try_fill_field(
+                    page,
+                    [
+                        'input[aria-label="Type" i]',
+                        'input[title="Type" i]',
+                        'input[aria-label*="Type" i]',
+                        'input[title*="Type" i]',
+                    ],
+                    "Payments",
+                    timeout_ms=action_timeout_ms,
+                    content_frame_selector=content_frame_selector,
+                    prefer_second_if_duplicate=False,
+                )
+
+                # Method = Cash
+                _try_select_option(
+                    page,
+                    [
+                        'select[aria-label="Method" i]',
+                        'select[title="Method" i]',
+                        'select[aria-label*="Method" i]',
+                        'select[title*="Method" i]',
+                    ],
+                    "Cash",
+                    timeout_ms=action_timeout_ms,
+                    content_frame_selector=content_frame_selector,
+                    prefer_second_if_duplicate=False,
+                )
+                _try_fill_field(
+                    page,
+                    [
+                        'input[aria-label="Method" i]',
+                        'input[title="Method" i]',
+                        'input[aria-label*="Method" i]',
+                        'input[title*="Method" i]',
+                    ],
+                    "Cash",
+                    timeout_ms=action_timeout_ms,
+                    content_frame_selector=content_frame_selector,
+                    prefer_second_if_duplicate=False,
+                )
+
+                # Transaction Amount = 120000
+                _try_fill_field(
+                    page,
+                    [
+                        'input[aria-label="Transaction Amount" i]',
+                        'input[title="Transaction Amount" i]',
+                        'input[aria-label*="Transaction Amount" i]',
+                        'input[title*="Transaction Amount" i]',
+                        'input[aria-label*="Amount" i]',
+                        'input[title*="Amount" i]',
+                    ],
+                    "120000",
+                    timeout_ms=action_timeout_ms,
+                    content_frame_selector=content_frame_selector,
+                    prefer_second_if_duplicate=False,
+                )
+                note("Filled payment fields: Type=Payments, Method=Cash, Transaction Amount=120000.")
+
+                # Save icon (down-arrow / save) click.
+                save_clicked = False
+                for sroot in _siebel_locator_search_roots(page, content_frame_selector):
+                    for css in (
+                        "a[title*='Save' i]",
+                        "button[title*='Save' i]",
+                        "a[aria-label*='Save' i]",
+                        "button[aria-label*='Save' i]",
+                        "a.siebui-icon-save",
+                        "button.siebui-icon-save",
+                    ):
+                        try:
+                            btn = sroot.locator(css).first
+                            if btn.count() > 0 and btn.is_visible(timeout=500):
+                                try:
+                                    btn.click(timeout=action_timeout_ms)
+                                except Exception:
+                                    btn.click(timeout=action_timeout_ms, force=True)
+                                save_clicked = True
+                                break
+                        except Exception:
+                            continue
+                    if save_clicked:
+                        break
+                if not save_clicked:
+                    save_clicked = _try_click_siebel_save(
+                        page,
+                        timeout_ms=action_timeout_ms,
+                        content_frame_selector=content_frame_selector,
+                    )
+
+                if save_clicked:
+                    note("Clicked Save icon after payment entry.")
+                    return True
+                note("Could not click Save icon after filling payment fields.")
+                return False
+        except Exception:
+            continue
+    note("Could not click '+' icon on Payments tab.")
+    return False
+
+
 def _siebel_open_found_customer_record(
     page: Page,
     *,
@@ -3586,11 +3798,27 @@ def Playwright_Hero_DMS_fill(
                     "Confirm right-pane selectors/labels and iframe scope."
                 )
                 return out
+            form_trace(
+                "v3_add_customer_payment",
+                "Payments tab (current frame)",
+                "click_Payments_tab_then_click_plus_icon",
+            )
+            if not _add_customer_payment(
+                page,
+                action_timeout_ms=action_timeout_ms,
+                content_frame_selector=content_frame_selector,
+                note=note,
+            ):
+                step("Stopped: could not open Payments tab or click '+' icon.")
+                out["error"] = (
+                    "Siebel: video SOP — could not click Payments tab and '+' icon for Add customer payment."
+                )
+                return out
             step(
-                "Video SOP complete: customer record opened. Automation stops here "
+                "Video SOP complete: customer record opened and Add customer payment started. Automation stops here "
                 "(SIEBEL_DMS_STOP_AFTER_ALL_ENQUIRIES); browser left open."
             )
-            note("Relation's Name fill attempted from DB care_of; automation stops now.")
+            note("Relation's Name/Address/Pincode fill completed and Payments '+' clicked; automation stops now.")
             return out
 
         # --- Full linear SOP (stages 1–8): runs only when SIEBEL_DMS_STOP_AFTER_ALL_ENQUIRIES is False. ---
