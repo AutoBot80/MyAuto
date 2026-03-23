@@ -916,6 +916,96 @@ def _try_fill_field(
     return False
 
 
+def select_siebel_dropdown_value(
+    page,
+    *,
+    field_label_patterns,
+    value,
+    timeout_ms=5000,
+    content_frame_selector=None,
+    note=lambda *a, **k: None,
+):
+    import re
+
+    value_pat = re.compile(rf"^\s*{re.escape(value)}\s*$", re.I)
+
+    def _get_field(frame):
+        # Primary: label-based
+        for pat in field_label_patterns:
+            try:
+                loc = frame.get_by_label(pat).first
+                if loc.count() > 0:
+                    return loc
+            except Exception:
+                continue
+
+        # Fallback: label proximity
+        try:
+            loc = frame.locator("td, label, span").filter(
+                has_text=re.compile("transaction|payment|type|method", re.I)
+            ).locator("input").first
+            if loc.count() > 0:
+                return loc
+        except Exception:
+            pass
+
+        return None
+
+    for attempt in range(3):
+        try:
+            # --- Find field ---
+            field = None
+
+            # Try all Siebel roots (iframe-safe)
+            for root in _siebel_locator_search_roots(page, content_frame_selector):
+                field = _get_field(root)
+                if field:
+                    break
+
+            if not field:
+                raise Exception("Dropdown field not found")
+
+            field.wait_for(state="visible", timeout=timeout_ms)
+
+            # --- Click field ---
+            try:
+                field.click(timeout=2000)
+            except Exception:
+                field.click(timeout=2000, force=True)
+
+            # --- Force dropdown open ---
+            try:
+                page.keyboard.press("ArrowDown")
+            except Exception:
+                pass
+
+            page.wait_for_timeout(400)
+
+            # --- Select option globally ---
+            option = page.locator("li, div, span, a").filter(has_text=value_pat).first
+            option.wait_for(state="visible", timeout=timeout_ms)
+
+            try:
+                option.click(timeout=2000)
+            except Exception:
+                option.click(timeout=2000, force=True)
+
+            # --- Verify selection ---
+            try:
+                val = field.input_value(timeout=2000)
+                if val and value.lower() in val.lower():
+                    note(f"Dropdown set: {value}")
+                    return True
+            except Exception:
+                pass
+
+        except Exception as e:
+            note(f"[WARN] dropdown attempt {attempt+1} failed: {e}")
+            page.wait_for_timeout(800)
+
+    return False
+
+
 def _mobile_selectors(extra_hints: list[str]) -> list[str]:
     base = [
         'input[aria-label*="Cellular" i]',
@@ -2810,14 +2900,6 @@ def _add_customer_payment(
                                         c.click(timeout=action_timeout_ms)
                                     except Exception:
                                         c.click(timeout=action_timeout_ms, force=True)
-                                    # Explicit keyboard open/select for Siebel Open UI picklists.
-                                    try:
-                                        for _ in range(max(1, int(down_presses))):
-                                            c.press("ArrowDown", timeout=min(1200, action_timeout_ms))
-                                        for _ in range(max(1, int(tab_presses_after))):
-                                            c.press("Tab", timeout=min(1200, action_timeout_ms))
-                                    except Exception:
-                                        pass
 
                                     # Try clicking adjacent dropdown/open button near the same field.
                                     try:
@@ -2842,7 +2924,7 @@ def _add_customer_payment(
                             continue
                         _safe_page_wait(page, 250, log_label=f"after_open_dropdown_{value.lower()}")
 
-                        # Pick option from visible list.
+                        # Pick option from visible dropdown/list first.
                         for role in ("option", "menuitem", "listitem", "link"):
                             try:
                                 opts = root.get_by_role(role, name=value_pat)
@@ -2854,6 +2936,12 @@ def _add_customer_payment(
                                             o.click(timeout=action_timeout_ms)
                                         except Exception:
                                             o.click(timeout=action_timeout_ms, force=True)
+                                        # Commit/advance to next editable field(s)
+                                        try:
+                                            for _ in range(max(1, int(tab_presses_after))):
+                                                o.press("Tab", timeout=min(1200, action_timeout_ms))
+                                        except Exception:
+                                            pass
                                         return True
                             except Exception:
                                 continue
@@ -2868,29 +2956,53 @@ def _add_customer_payment(
                                             o.click(timeout=action_timeout_ms)
                                         except Exception:
                                             o.click(timeout=action_timeout_ms, force=True)
+                                        try:
+                                            for _ in range(max(1, int(tab_presses_after))):
+                                                o.press("Tab", timeout=min(1200, action_timeout_ms))
+                                        except Exception:
+                                            pass
                                         return True
                             except Exception:
                                 continue
+
+                        # Keyboard fallback only if option click path failed.
+                        try:
+                            for _ in range(max(1, int(down_presses))):
+                                page.keyboard.press("ArrowDown")
+                            for _ in range(max(1, int(tab_presses_after))):
+                                page.keyboard.press("Tab")
+                            return True
+                        except Exception:
+                            pass
                     return False
 
-                type_ok = _pick_dropdown_value(
-                    (
-                        re.compile(r"transaction\s*type", re.I),
-                        re.compile(r"\btype\b", re.I),
-                    ),
-                    "Payments",
-                    4,
-                    1,
+                type_ok = select_siebel_dropdown_value(
+                    page,
+                    field_label_patterns=[
+                        re.compile(r"transaction\s*type", re.I)
+                    ],
+                    value="Payments",
+                    timeout_ms=action_timeout_ms,
+                    content_frame_selector=content_frame_selector,
+                    note=note,
                 )
-                method_ok = _pick_dropdown_value(
-                    (
-                        re.compile(r"payment\s*method", re.I),
-                        re.compile(r"\bmethod\b", re.I),
-                    ),
-                    "Cash",
-                    2,
-                    4,
+
+                if not type_ok:
+                    raise Exception("Failed to set Transaction Type = Payments")
+
+                method_ok = select_siebel_dropdown_value(
+                    page,
+                    field_label_patterns=[
+                        re.compile(r"payment\s*method", re.I)
+                    ],
+                    value="Cash",
+                    timeout_ms=action_timeout_ms,
+                    content_frame_selector=content_frame_selector,
+                    note=note,
                 )
+
+                if not method_ok:
+                    raise Exception("Failed to set Payment Method")
 
                 # Transaction Amount = 120000 (strictly in Payment Lines scoped frame/roots)
                 amount_ok = False
