@@ -267,3 +267,4 @@ See **Documentation/Database DDL.md** for full table structures. Summary:
 | 3.4 | Mar 2026 | — | Fill DMS: **`_install_playwright_js_dialog_handler`** on the reused tab — avoids Playwright Node **ProtocolError** (*Page.handleJavaScriptDialog: No dialog is showing*) when Siebel closes JS dialogs before default CDP dismiss |
 | 3.5 | Mar 2026 | — | Video SOP drill-down: **`_siebel_try_click_mobile_search_hit_link`** searches **chained iframes**, spaced/dashed phone text, ``table tr`` / **role=row**, row-click fallback; longer settle after Find/Go |
 | 3.6 | Mar 2026 | — | Search Results pane: target **`javascript:void(0)`** drilldown + **`.siebui-applet`** scope; normal / **force** / **dblclick** sequence for Siebel left list |
+| 3.7 | Mar 2026 | — | Find fly-in: **`_click_find_go_query`** scopes to applet with **Mobile Phone**; **`title`/`aria-label`**, Siebel classes, **`get_by_title(Find)`**, svg icon buttons with Find/Go tooltip |

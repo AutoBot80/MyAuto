@@ -711,68 +711,184 @@ def _try_select_option(
 
 
 def _click_find_go_query(page: Page, *, timeout_ms: int, content_frame_selector: str | None) -> bool:
-    """Click Find / Go / Query on Siebel toolbar (common on list & form applets)."""
+    """
+    Click **Find** / **Go** / **Query** to run the Siebel search.
 
-    def try_on_fl(fl) -> bool:
+    Hero Connect **Find** fly-in often uses a **round teal icon** (right arrow) whose tooltip is **Find**,
+    with no visible text — match ``title`` / ``aria-label`` / Siebel classes; prefer controls inside the
+    applet that already shows **Mobile Phone**.
+    """
+
+    _find_go_css = (
+        'input[type="submit"][value*="Find" i]',
+        'input[type="button"][value*="Find" i]',
+        'input[type="submit"][value*="Go" i]',
+        'input[type="button"][value*="Go" i]',
+        'input[type="submit"][value*="Query" i]',
+        'button[title="Find" i]',
+        'button[title*="Find" i]',
+        'a[title="Find" i]',
+        'a[title*="Find" i]',
+        '[role="button"][title="Find" i]',
+        '[role="button"][title*="Find" i]',
+        'button[aria-label="Find" i]',
+        'button[aria-label*="Find" i]',
+        '[role="button"][aria-label="Find" i]',
+        '[role="button"][aria-label*="Find" i]',
+        'a[aria-label*="Find" i]',
+        '[data-tooltip*="Find" i]',
+        '[data-display*="Find" i]',
+        'button.siebui-ctrl-btn[title*="Find" i]',
+        'a.siebui-ctrl-btn[title*="Find" i]',
+        'button.siebui-ctrl-btn[aria-label*="Find" i]',
+    )
+
+    def _try_css_click_on(root, css: str, *, tag: str) -> bool:
+        try:
+            loc = root.locator(css).first
+            if loc.count() > 0 and loc.is_visible(timeout=900):
+                try:
+                    loc.click(timeout=timeout_ms)
+                except Exception:
+                    loc.click(timeout=timeout_ms, force=True)
+                logger.info("siebel_dms: clicked Find/Go via %s (%s)", tag, css[:72])
+                return True
+        except Exception:
+            pass
+        return False
+
+    def try_on_root(root) -> bool:
+        # 1) Inside Find applet (right fly-in with Mobile Phone) — avoids wrong Find on another applet
+        try:
+            find_applets = root.locator(".siebui-applet").filter(
+                has_text=re.compile(r"Mobile\s*Phone", re.I)
+            )
+            ac = find_applets.count()
+            for i in range(min(ac, 10)):
+                applet = find_applets.nth(i)
+                try:
+                    if not applet.is_visible(timeout=400):
+                        continue
+                except Exception:
+                    continue
+                for role, name_pat in (
+                    ("button", re.compile(r"^\s*Find\s*$", re.I)),
+                    ("button", re.compile(r"(Find|Go|Query)", re.I)),
+                    ("link", re.compile(r"(Find|Go|Query)", re.I)),
+                ):
+                    try:
+                        loc = applet.get_by_role(role, name=name_pat)
+                        n = loc.count()
+                        for j in range(min(n, 12)):
+                            c = loc.nth(j)
+                            if c.is_visible(timeout=700):
+                                try:
+                                    c.click(timeout=timeout_ms)
+                                except Exception:
+                                    c.click(timeout=timeout_ms, force=True)
+                                logger.info(
+                                    "siebel_dms: clicked %s in Mobile-Phone find applet (%s)",
+                                    role,
+                                    name_pat.pattern,
+                                )
+                                return True
+                    except Exception:
+                        continue
+                for css in _find_go_css:
+                    if _try_css_click_on(applet, css, tag="find_applet"):
+                        return True
+                # Tooltip-only control (teal circle + arrow): HTML ``title`` is often exactly **Find**
+                try:
+                    titled = applet.get_by_title(re.compile(r"^\s*Find\s*$", re.I))
+                    tn = titled.count()
+                    for j in range(min(tn, 8)):
+                        el = titled.nth(j)
+                        if el.is_visible(timeout=600):
+                            try:
+                                el.click(timeout=timeout_ms)
+                            except Exception:
+                                el.click(timeout=timeout_ms, force=True)
+                            logger.info("siebel_dms: clicked get_by_title(Find) in find applet")
+                            return True
+                except Exception:
+                    pass
+                # Icon-only: circular arrow — tooltip **Find** on parent; may be svg/img with no inner text
+                try:
+                    for img_sel in (
+                        'button:has(svg)',
+                        'a[role="button"]:has(svg)',
+                        '[role="button"]:has(svg)',
+                        "button:has(img)",
+                    ):
+                        btns = applet.locator(img_sel)
+                        bn = btns.count()
+                        for j in range(min(bn, 15)):
+                            b = btns.nth(j)
+                            try:
+                                t = (
+                                    (b.get_attribute("title") or "")
+                                    + " "
+                                    + (b.get_attribute("aria-label") or "")
+                                )
+                                if re.search(r"\b(find|go|query)\b", t, re.I) and b.is_visible(timeout=500):
+                                    try:
+                                        b.click(timeout=timeout_ms)
+                                    except Exception:
+                                        b.click(timeout=timeout_ms, force=True)
+                                    logger.info("siebel_dms: clicked svg/img Find control (title/aria matched)")
+                                    return True
+                            except Exception:
+                                continue
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # 2) Whole root (frames / outer shell)
         for role, name_pat in (
             ("button", re.compile(r"(Find|Go|Query)", re.I)),
             ("link", re.compile(r"(Find|Go|Query)", re.I)),
         ):
             try:
-                loc = fl.get_by_role(role, name=name_pat).first
-                if loc.count() > 0 and loc.is_visible(timeout=1000):
-                    loc.click(timeout=timeout_ms)
-                    logger.info("siebel_dms: clicked %s (%s) in scoped frame", role, name_pat.pattern)
-                    return True
+                loc = root.get_by_role(role, name=name_pat)
+                n = loc.count()
+                for i in range(min(n, 20)):
+                    c = loc.nth(i)
+                    if c.is_visible(timeout=900):
+                        try:
+                            c.click(timeout=timeout_ms)
+                        except Exception:
+                            c.click(timeout=timeout_ms, force=True)
+                        logger.info("siebel_dms: clicked %s (%s)", role, name_pat.pattern)
+                        return True
             except Exception:
                 continue
-        for css in (
-            'input[type="submit"][value*="Find" i]',
-            'input[type="button"][value*="Find" i]',
-            'button[title*="Find" i]',
-            'a[title*="Find" i]',
-        ):
-            try:
-                loc = fl.locator(css).first
-                if loc.count() > 0 and loc.is_visible(timeout=800):
-                    loc.click(timeout=timeout_ms)
-                    logger.info("siebel_dms: clicked %s (scoped)", css[:60])
+        for css in _find_go_css:
+            if _try_css_click_on(root, css, tag="root"):
+                return True
+        try:
+            titled = root.get_by_title(re.compile(r"^\s*Find\s*$", re.I))
+            tn = titled.count()
+            for j in range(min(tn, 10)):
+                el = titled.nth(j)
+                if el.is_visible(timeout=700):
+                    try:
+                        el.click(timeout=timeout_ms)
+                    except Exception:
+                        el.click(timeout=timeout_ms, force=True)
+                    logger.info("siebel_dms: clicked get_by_title(Find) on root")
                     return True
-            except Exception:
-                continue
+        except Exception:
+            pass
         return False
 
     for fl in _iter_frame_locator_roots(page, content_frame_selector):
-        if try_on_fl(fl):
+        if try_on_root(fl):
             return True
 
     for frame in _ordered_frames(page):
-        for role, name_pat in (
-            ("button", re.compile(r"(Find|Go|Query)", re.I)),
-            ("link", re.compile(r"(Find|Go|Query)", re.I)),
-        ):
-            try:
-                loc = frame.get_by_role(role, name=name_pat).first
-                if loc.count() > 0 and loc.is_visible(timeout=1000):
-                    loc.click(timeout=timeout_ms)
-                    logger.info("siebel_dms: clicked %s (%s)", role, name_pat.pattern)
-                    return True
-            except Exception:
-                continue
-        for css in (
-            'input[type="submit"][value*="Find" i]',
-            'input[type="button"][value*="Find" i]',
-            'button[title*="Find" i]',
-            'a[title*="Find" i]',
-        ):
-            try:
-                loc = frame.locator(css).first
-                if loc.count() > 0 and loc.is_visible(timeout=800):
-                    loc.click(timeout=timeout_ms)
-                    logger.info("siebel_dms: clicked %s", css[:60])
-                    return True
-            except Exception:
-                continue
+        if try_on_root(frame):
+            return True
     return False
 
 
