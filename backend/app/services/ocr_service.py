@@ -494,6 +494,7 @@ def _parse_aadhar_name_from_aadhaar_textract(text: str) -> dict[str, str]:
         r"address|dob|date\s*of\s*birth|year\s*of\s*birth|vid|virtual|help@|uidai|www\.|pin"
     )
     dob_line = re.compile(r"(?i)\b(dob|date\s*of\s*birth|जन्म|birth)\b")
+    candidates: list[str] = []
     for line in lines[:18]:
         if len(line) < 4 or len(line) > 90:
             continue
@@ -508,8 +509,10 @@ def _parse_aadhar_name_from_aadhaar_textract(text: str) -> dict[str, str]:
         if re.match(r"^[A-Za-z][A-Za-z\s.'-]{2,70}$", line):
             words = line.split()
             if 2 <= len(words) <= 6:
-                out["name"] = line
-                break
+                # Keep candidates and prefer the nearest one before DOB.
+                candidates.append(line)
+    if candidates:
+        out["name"] = candidates[-1]
     return out
 
 
