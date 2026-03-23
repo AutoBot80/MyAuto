@@ -1,27 +1,6 @@
 import { useState } from "react";
 import { uploadScans, uploadScansV2 } from "../api/uploads";
-import type { ExtractedDetailsResponse, UploadExtractionSectionTimings } from "../types";
-
-function formatUploadExtractionTimings(extraction: { section_timings_ms?: UploadExtractionSectionTimings } | undefined): string {
-  const t = extraction?.section_timings_ms;
-  if (!t) return "";
-  const parts: string[] = [];
-  if (t.total_ms != null) parts.push(`total ${t.total_ms} ms`);
-  if (t.aadhar_textract_front_ms != null) parts.push(`Aadhaar Textract front ${t.aadhar_textract_front_ms} ms`);
-  if (t.aadhar_textract_back_ms != null) parts.push(`Aadhaar Textract back ${t.aadhar_textract_back_ms} ms`);
-  if (t.detail_sheet_textract_ms != null) parts.push(`Detail sheet Textract ${t.detail_sheet_textract_ms} ms`);
-  if (t.aws_textract_prefetch_ms != null) {
-    parts.push(`phase1 Textract prefetch ${t.aws_textract_prefetch_ms} ms`);
-  }
-  if (t.parallel_aadhar_details_compile_ms != null) {
-    parts.push(`Aadhaar + Details compile ${t.parallel_aadhar_details_compile_ms} ms`);
-  }
-  if (t.merge_write_json_ms != null) parts.push(`merge ${t.merge_write_json_ms} ms`);
-  if (t.insurance_ms != null) parts.push(`insurance ${t.insurance_ms} ms`);
-  if (t.extras_raw_ms != null) parts.push(`extra pages ${t.extras_raw_ms} ms`);
-  if (t.raw_ocr_finalize_ms != null) parts.push(`Raw_OCR ${t.raw_ocr_finalize_ms} ms`);
-  return parts.length ? ` ${parts.join(" · ")}.` : "";
-}
+import type { ExtractedDetailsResponse } from "../types";
 
 export interface UseUploadScansControlled {
   savedTo: string | null;
@@ -32,6 +11,8 @@ export interface UseUploadScansControlled {
   setUploadStatus: (v: string) => void;
   /** Called when upload completes with extraction.details so form can populate immediately */
   onExtractionComplete?: (details: ExtractedDetailsResponse) => void;
+  /** After a successful upload (e.g. clear stale Fill DMS banner from a previous session). */
+  onUploadSuccess?: () => void;
 }
 
 export function useUploadScans(
@@ -71,6 +52,7 @@ export function useUploadScans(
     try {
       const data = await uploadScans(aadharDigits, filesToUpload, dealerId);
       setUploadStatus(`Uploaded ${data.saved_count} file(s) successfully.`);
+      controlled?.onUploadSuccess?.();
       if (data.saved_files?.length)
         setUploadedFiles((prev) => [...(data.saved_files ?? []), ...prev]);
     } catch (err) {
@@ -90,8 +72,8 @@ export function useUploadScans(
     try {
       const data = await uploadScansV2(mobileDigits, aadharScan, aadharBackScan, salesDetail, insuranceSheet, dealerId);
       setSavedTo(data.saved_to);
-      const timingSuffix = formatUploadExtractionTimings(data.extraction);
-      setUploadStatus(`Uploaded ${data.saved_count} file(s) to ${data.saved_to}.${timingSuffix}`);
+      setUploadStatus(`Uploaded ${data.saved_count} file(s) to ${data.saved_to}.`);
+      controlled?.onUploadSuccess?.();
       if (data.saved_files?.length)
         setUploadedFiles((prev) => [...(data.saved_files ?? []), ...prev]);
       const details = data.extraction?.details;

@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import urllib.parse
 import atexit
 import threading
@@ -556,6 +557,24 @@ def _write_data_from_dms(ocr_output_dir: Path, subfolder: str, customer: dict, v
         lines.append(f"{label}: {(val or '').strip() or '—'}")
 
     path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def _copy_playwright_dms_reference(ocr_output_dir: Path, subfolder: str) -> None:
+    """
+    Copy the Siebel SOP outline into ``ocr_output/<dealer>/<subfolder>/Playwright_DMS.txt``
+    so operators find it next to DMS traces. Template: ``ocr_output/dealer/mobile_ddmmyyyy/``.
+    """
+    safe_name = _safe_subfolder_name(subfolder)
+    src = (OCR_OUTPUT_DIR / "dealer" / "mobile_ddmmyyyy" / "Playwright_DMS.txt").resolve()
+    if not src.is_file():
+        logger.debug("fill_dms: Playwright_DMS.txt template missing at %s", src)
+        return
+    dest_dir = Path(ocr_output_dir).resolve() / safe_name
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        shutil.copy2(src, dest_dir / "Playwright_DMS.txt")
+    except OSError as exc:
+        logger.warning("fill_dms: could not copy Playwright_DMS.txt to %s: %s", dest_dir, exc)
 
 
 # Dummy DMS booking amount (enquiry customer budget) — must match business test default.
@@ -1852,6 +1871,7 @@ def _run_fill_dms_real_siebel_playwright(
         financier_name=dms_values.get("financier_name") or "",
         dms_contact_path=dms_values.get("dms_contact_path") or "",
     )
+    _copy_playwright_dms_reference(ocr_dir, effective_subfolder)
 
     urls = SiebelDmsUrls(
         contact=DMS_REAL_URL_CONTACT,

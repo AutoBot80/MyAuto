@@ -197,6 +197,13 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError 
     uploadStatus,
     setUploadStatus,
     onExtractionComplete: applyExtractedDetails,
+    onUploadSuccess: () => {
+      setFillDmsStatus(null);
+      setDmsMilestones([]);
+      setDmsBannerIsStepMessages(false);
+      setDmsScrapedVehicle(null);
+      setDmsPdfsDownloaded(false);
+    },
   }, dealerId);
 
   const pollCountRef = useRef(0);
@@ -271,6 +278,7 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError 
     setDmsPdfsDownloaded(false);
     setFillDmsStatus(null);
     setDmsMilestones([]);
+    setDmsBannerIsStepMessages(false);
     setFillInsuranceStatus(null);
     setPrintFormsStatus(null);
     setHasSubmittedInfo(false);

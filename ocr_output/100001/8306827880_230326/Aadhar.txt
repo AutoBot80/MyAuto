@@ -5,8 +5,8 @@ Name: Akash
 Gender: Male
 Year of birth: 2004
 Date of birth: 01/01/2004
-Care of: Sahab Singh
+Care of: S/o Sahab Singh
 City: Bharatpur
 State: Rajasthan
 Pin Code: 321001
-Address (constructed): Gandhi Nagar, Bharatpur, Bharatpur, Rajasthan - - 321001
+Address (constructed): S/o Sahab Singh, Gandhi Nagar, Bharatpur, Bharatpur, Rajasthan - - 321001

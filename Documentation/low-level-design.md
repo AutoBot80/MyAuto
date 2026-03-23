@@ -146,7 +146,7 @@ backend/app/
 
 ### 2.4d Real Siebel DMS — BRD §6.1a checklist vs Playwright
 
-**Source of truth for intended steps:** `Documentation/business-requirements-document.md` **§6.1a**. **Code:** `backend/app/services/siebel_dms_playwright.py` (`run_hero_siebel_dms_flow`, nested `stage_5_vehicle_flow` for vehicle + In-Transit), `backend/app/services/fill_dms_service.py` (`_run_fill_dms_real_siebel_playwright`, `run_fill_dms_only`). **Operator reference (Siebel actions / fields / branches):** `ocr_output/dealer/mobile_ddmmyyyy/Playwright_DMS.txt` (template folder shape; per-run traces use `ocr_output/<dealer_id>/<subfolder>/`).
+**Source of truth for intended steps:** `Documentation/business-requirements-document.md` **§6.1a**. **Code:** `backend/app/services/siebel_dms_playwright.py` (`run_hero_siebel_dms_flow`, nested `stage_5_vehicle_flow` for vehicle + In-Transit), `backend/app/services/fill_dms_service.py` (`_run_fill_dms_real_siebel_playwright`, `run_fill_dms_only`). **Operator reference (Siebel actions / fields / branches):** template `ocr_output/dealer/mobile_ddmmyyyy/Playwright_DMS.txt`; each real **`/fill-dms/dms`** run copies it to `ocr_output/<dealer_id>/<subfolder>/Playwright_DMS.txt` next to **`DMS_Form_Values.txt`**.
 
 | BRD §6.1a step | Intended Siebel action | Dummy (`DMS_MODE=dummy`) | Real Siebel (`DMS_MODE=real`) |
 |----------------|------------------------|---------------------------|-------------------------------|
@@ -258,3 +258,4 @@ See **Documentation/Database DDL.md** for full table structures. Summary:
 | 2.5 | Mar 2026 | — | Real Siebel: contact match = **table rows only**; **`dms_siebel_forms_filled`** requires **Save** + vehicle step OK; **PDI** clicks avoid bare **Submit**; §2.4b/§2.4d + `technical-architecture` Bugbot note |
 | 2.6 | Mar 2026 | — | Real Siebel **linear SOP**: basic enquiry vs care-of split; mandatory **re-find** after new enquiry; **Generate Booking** after vehicle for all; allotment after booking (non-transit); invoice hook (message only) |
 | 2.7 | Mar 2026 | — | Siebel: nested **`stage_5_vehicle_flow`**; **`Playwright_DMS.txt`** at `ocr_output/dealer/mobile_ddmmyyyy/`; **§2.4d** `skip_find` row aligned with booking-after-vehicle |
+| 2.8 | Mar 2026 | — | Real Siebel fill copies **`Playwright_DMS.txt`** into `ocr_output/<dealer>/<subfolder>/`; Add Sales: no upload timing suffix; clear stale DMS banner on new upload |
