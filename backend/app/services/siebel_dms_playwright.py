@@ -2598,6 +2598,35 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
     if not addr_line1_value:
         addr_line1_value = ""
 
+    def _fill_with_retry(loc, value: str, *, attempts: int = 3, visible_ms: int = 900) -> bool:
+        """
+        Stabilize flaky Siebel input commit:
+        wait visible -> fill -> blur(Tab) -> readback verify, with short backoff retries.
+        """
+        for i in range(max(1, attempts)):
+            try:
+                if loc.count() <= 0:
+                    return False
+                if not loc.is_visible(timeout=visible_ms):
+                    continue
+                try:
+                    loc.click(timeout=min(2000, action_timeout_ms))
+                except Exception:
+                    loc.click(timeout=min(2000, action_timeout_ms), force=True)
+                loc.fill(value, timeout=action_timeout_ms)
+                try:
+                    loc.press("Tab", timeout=min(1200, action_timeout_ms))
+                except Exception:
+                    pass
+                _safe_page_wait(page, 120 + (i * 200), log_label=f"retry_settle_{i+1}")
+                got = (loc.input_value(timeout=min(2500, action_timeout_ms)) or "").strip()
+                if got and (value.lower() in got.lower() or got.lower() in value.lower()):
+                    return True
+            except Exception:
+                pass
+            _safe_page_wait(page, 220 + (i * 250), log_label=f"retry_backoff_{i+1}")
+        return False
+
     def _fill_address_line_1_if_available() -> bool:
         if not addr_line1_value:
             return True
@@ -2610,24 +2639,18 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
             for css in addr_selectors:
                 try:
                     loc = fl.locator(css).first
-                    if loc.count() > 0 and loc.is_visible(timeout=900):
-                        loc.fill(addr_line1_value, timeout=action_timeout_ms)
-                        got = (loc.input_value(timeout=action_timeout_ms) or "").strip()
-                        if got and (addr_line1_value.lower() in got.lower() or got.lower() in addr_line1_value.lower()):
-                            note(f"Address Line 1 filled from DB substring: {addr_line1_value!r}")
-                            return True
+                    if _fill_with_retry(loc, addr_line1_value, attempts=3, visible_ms=900):
+                        note(f"Address Line 1 filled from DB substring: {addr_line1_value!r}")
+                        return True
                 except Exception:
                     continue
         for frame in _ordered_frames(page):
             for css in addr_selectors:
                 try:
                     loc = frame.locator(css).first
-                    if loc.count() > 0 and loc.is_visible(timeout=900):
-                        loc.fill(addr_line1_value, timeout=action_timeout_ms)
-                        got = (loc.input_value(timeout=action_timeout_ms) or "").strip()
-                        if got and (addr_line1_value.lower() in got.lower() or got.lower() in addr_line1_value.lower()):
-                            note(f"Address Line 1 filled from DB substring: {addr_line1_value!r}")
-                            return True
+                    if _fill_with_retry(loc, addr_line1_value, attempts=3, visible_ms=900):
+                        note(f"Address Line 1 filled from DB substring: {addr_line1_value!r}")
+                        return True
                 except Exception:
                     continue
         note(f"Could not fill Address Line 1 from DB substring: {addr_line1_value!r}")
@@ -2654,22 +2677,16 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
         for css in exact_selectors:
             try:
                 loc = fl.locator(css).first
-                if loc.count() > 0 and loc.is_visible(timeout=900):
-                    loc.fill(care_val, timeout=action_timeout_ms)
-                    got = (loc.input_value(timeout=action_timeout_ms) or "").strip()
-                    if got and (care_val.lower() in got.lower() or got.lower() in care_val.lower()):
-                        return _after_relation_fill_nav()
+                if _fill_with_retry(loc, care_val, attempts=3, visible_ms=900):
+                    return _after_relation_fill_nav()
             except Exception:
                 continue
     for frame in _ordered_frames(page):
         for css in exact_selectors:
             try:
                 loc = frame.locator(css).first
-                if loc.count() > 0 and loc.is_visible(timeout=900):
-                    loc.fill(care_val, timeout=action_timeout_ms)
-                    got = (loc.input_value(timeout=action_timeout_ms) or "").strip()
-                    if got and (care_val.lower() in got.lower() or got.lower() in care_val.lower()):
-                        return _after_relation_fill_nav()
+                if _fill_with_retry(loc, care_val, attempts=3, visible_ms=900):
+                    return _after_relation_fill_nav()
             except Exception:
                 continue
 
@@ -2677,21 +2694,15 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
     for fl in _iter_frame_locator_roots(page, content_frame_selector):
         try:
             loc = fl.get_by_label("Relation's Name", exact=True).first
-            if loc.count() > 0 and loc.is_visible(timeout=700):
-                loc.fill(care_val, timeout=action_timeout_ms)
-                got = (loc.input_value(timeout=action_timeout_ms) or "").strip()
-                if got and (care_val.lower() in got.lower() or got.lower() in care_val.lower()):
-                    return _after_relation_fill_nav()
+            if _fill_with_retry(loc, care_val, attempts=3, visible_ms=700):
+                return _after_relation_fill_nav()
         except Exception:
             continue
     for frame in _ordered_frames(page):
         try:
             loc = frame.get_by_label("Relation's Name", exact=True).first
-            if loc.count() > 0 and loc.is_visible(timeout=700):
-                loc.fill(care_val, timeout=action_timeout_ms)
-                got = (loc.input_value(timeout=action_timeout_ms) or "").strip()
-                if got and (care_val.lower() in got.lower() or got.lower() in care_val.lower()):
-                    return _after_relation_fill_nav()
+            if _fill_with_retry(loc, care_val, attempts=3, visible_ms=700):
+                return _after_relation_fill_nav()
         except Exception:
             continue
 
