@@ -2559,6 +2559,29 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
         return False
 
     _safe_page_wait(page, 700, log_label="after_first_name_click_before_relation_fill")
+
+    # Native Playwright path first: use label mapping in frame locators / frames.
+    for fl in _iter_frame_locator_roots(page, content_frame_selector):
+        try:
+            loc = fl.get_by_label("Relation's Name", exact=True).first
+            if loc.count() > 0 and loc.is_visible(timeout=700):
+                loc.fill(care_val, timeout=action_timeout_ms)
+                got = (loc.input_value(timeout=action_timeout_ms) or "").strip()
+                if got and (care_val.lower() in got.lower() or got.lower() in care_val.lower()):
+                    return True
+        except Exception:
+            continue
+    for frame in _ordered_frames(page):
+        try:
+            loc = frame.get_by_label("Relation's Name", exact=True).first
+            if loc.count() > 0 and loc.is_visible(timeout=700):
+                loc.fill(care_val, timeout=action_timeout_ms)
+                got = (loc.input_value(timeout=action_timeout_ms) or "").strip()
+                if got and (care_val.lower() in got.lower() or got.lower() in care_val.lower()):
+                    return True
+        except Exception:
+            continue
+
     for frame in _ordered_frames(page):
         try:
             if bool(frame.evaluate(fill_js, care_val)):
