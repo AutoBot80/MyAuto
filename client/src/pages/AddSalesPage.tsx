@@ -88,6 +88,24 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError 
   /** True when banner lines are Siebel `dms_step_messages` (sentence-style) vs checklist milestones. */
   const [dmsBannerIsStepMessages, setDmsBannerIsStepMessages] = useState(false);
   const [isFillDmsLoading, setIsFillDmsLoading] = useState(false);
+  /** True after Fill DMS returned with an error — cleared when tab is shown again (e.g. after Hero Connect login) so stale Siebel errors are not left on screen until the next click. */
+  const [dmsRunEndedWithError, setDmsRunEndedWithError] = useState(false);
+  const fillDmsTabWasHiddenRef = useRef(false);
+  useEffect(() => {
+    if (!pageVisible) {
+      fillDmsTabWasHiddenRef.current = true;
+      return;
+    }
+    if (fillDmsTabWasHiddenRef.current && !isFillDmsLoading && dmsRunEndedWithError) {
+      fillDmsTabWasHiddenRef.current = false;
+      setFillDmsStatus(null);
+      setDmsMilestones([]);
+      setDmsBannerIsStepMessages(false);
+      setDmsRunEndedWithError(false);
+    } else if (fillDmsTabWasHiddenRef.current && !isFillDmsLoading) {
+      fillDmsTabWasHiddenRef.current = false;
+    }
+  }, [pageVisible, isFillDmsLoading, dmsRunEndedWithError]);
   const [isFillInsuranceLoading, setIsFillInsuranceLoading] = useState(false);
   const [isPrintFormsLoading, setIsPrintFormsLoading] = useState(false);
   const [printFormsStatus, setPrintFormsStatus] = useState<string | null>(null);
@@ -201,6 +219,7 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError 
       setFillDmsStatus(null);
       setDmsMilestones([]);
       setDmsBannerIsStepMessages(false);
+      setDmsRunEndedWithError(false);
       setDmsScrapedVehicle(null);
       setDmsPdfsDownloaded(false);
     },
@@ -279,6 +298,7 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError 
     setFillDmsStatus(null);
     setDmsMilestones([]);
     setDmsBannerIsStepMessages(false);
+    setDmsRunEndedWithError(false);
     setFillInsuranceStatus(null);
     setPrintFormsStatus(null);
     setHasSubmittedInfo(false);
@@ -531,6 +551,7 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError 
     setFillDmsStatus(null);
     setDmsMilestones([]);
     setDmsBannerIsStepMessages(false);
+    setDmsRunEndedWithError(false);
     try {
       const dmsRes = await fillDmsOnly({
         subfolder: savedTo,
@@ -600,10 +621,13 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError 
       setDmsMilestones(narrative.length > 0 ? narrative : milestones);
       if (!dmsRes.success) {
         setFillDmsStatus(dmsRes.error ?? "Fill DMS failed.");
+        setDmsRunEndedWithError(true);
       } else if (dmsRes.warning) {
         setFillDmsStatus(dmsRes.warning);
+        setDmsRunEndedWithError(true);
       } else {
         setFillDmsStatus("DMS filled successfully.");
+        setDmsRunEndedWithError(false);
       }
     } catch (err) {
       if (isFillDmsAbortError(err)) {
@@ -611,6 +635,7 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError 
       } else {
         setFillDmsStatus(err instanceof Error ? err.message : "Fill DMS failed.");
       }
+      setDmsRunEndedWithError(true);
     } finally {
       setIsFillDmsLoading(false);
     }

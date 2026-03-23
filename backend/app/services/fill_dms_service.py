@@ -11,7 +11,6 @@ import json
 import logging
 import os
 import re
-import shutil
 import urllib.parse
 import atexit
 import threading
@@ -557,24 +556,6 @@ def _write_data_from_dms(ocr_output_dir: Path, subfolder: str, customer: dict, v
         lines.append(f"{label}: {(val or '').strip() or '—'}")
 
     path.write_text("\n".join(lines), encoding="utf-8")
-
-
-def _copy_playwright_dms_reference(ocr_output_dir: Path, subfolder: str) -> None:
-    """
-    Copy the Siebel SOP outline into ``ocr_output/<dealer>/<subfolder>/Playwright_DMS.txt``
-    so operators find it next to DMS traces. Template: ``ocr_output/dealer/mobile_ddmmyyyy/``.
-    """
-    safe_name = _safe_subfolder_name(subfolder)
-    src = (OCR_OUTPUT_DIR / "dealer" / "mobile_ddmmyyyy" / "Playwright_DMS.txt").resolve()
-    if not src.is_file():
-        logger.debug("fill_dms: Playwright_DMS.txt template missing at %s", src)
-        return
-    dest_dir = Path(ocr_output_dir).resolve() / safe_name
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    try:
-        shutil.copy2(src, dest_dir / "Playwright_DMS.txt")
-    except OSError as exc:
-        logger.warning("fill_dms: could not copy Playwright_DMS.txt to %s: %s", dest_dir, exc)
 
 
 # Dummy DMS booking amount (enquiry customer budget) — must match business test default.
@@ -1816,30 +1797,21 @@ def _run_fill_dms_real_siebel_playwright(
     result: dict,
 ) -> None:
     """
-    Hero Connect / Siebel Open UI: ``run_hero_siebel_dms_flow`` (BRD §6.1a) — contact find or
-    skip_find enquiry, vehicle list scrape + ``in_transit`` branch (receipt/PDI vs booking/allotment).
+    Hero Connect / Siebel Open UI: ``run_hero_siebel_dms_flow`` (BRD §6.1a) — **always** Contact Find
+    (mobile + Go) first; vehicle list scrape + ``in_transit`` branch (receipt/PDI vs booking/allotment).
+
+    ``dms_contact_path=skip_find`` in DB is **ignored** for real Siebel (operators still need Find so the
+    correct contact context is loaded even when the customer already exists). Dummy DMS may still use
+    ``skip_find`` for training HTML.
+
     Writes ``DMS_Form_Values`` trace; no dummy ``/downloads/*.pdf``.
     """
-    skip_contact = (dms_values.get("dms_contact_path") or "").strip().lower() == "skip_find"
-    if not DMS_REAL_URL_CONTACT and not skip_contact:
+    if not (DMS_REAL_URL_CONTACT or "").strip():
         result["error"] = (
             "DMS_MODE is real/siebel but DMS_REAL_URL_CONTACT is not set. "
             "Set the full GotoView URL (e.g. Buyer/CoBuyer) in backend/.env."
         )
         return
-    if skip_contact:
-        if not ((DMS_REAL_URL_ENQUIRY or "").strip() or (DMS_REAL_URL_CONTACT or "").strip()):
-            result["error"] = (
-                "DMS Contact Path is skip_find: set DMS_REAL_URL_ENQUIRY or DMS_REAL_URL_CONTACT "
-                "to the enquiry view (Buyer/CoBuyer / My Enquiries) so customer + Generate Booking run before vehicles."
-            )
-            return
-        if not (DMS_REAL_URL_VEHICLE or "").strip():
-            result["error"] = (
-                "DMS Contact Path is skip_find but DMS_REAL_URL_VEHICLE is not set. "
-                "Set the Auto Vehicle List GotoView URL for key/chassis/engine search after enquiry."
-            )
-            return
 
     mobile_phone = dms_values["mobile_phone"]
     landline = dms_values.get("landline") or ""
@@ -1871,7 +1843,8 @@ def _run_fill_dms_real_siebel_playwright(
         financier_name=dms_values.get("financier_name") or "",
         dms_contact_path=dms_values.get("dms_contact_path") or "",
     )
-    _copy_playwright_dms_reference(ocr_dir, effective_subfolder)
+
+    playwright_dms_log = Path(ocr_dir).resolve() / _safe_subfolder_name(effective_subfolder) / "Playwright_DMS.txt"
 
     urls = SiebelDmsUrls(
         contact=DMS_REAL_URL_CONTACT,
@@ -1892,7 +1865,8 @@ def _run_fill_dms_real_siebel_playwright(
         nav_timeout_ms=DMS_SIEBEL_NAV_TIMEOUT_MS,
         content_frame_selector=frame_sel,
         mobile_aria_hints=list(DMS_SIEBEL_MOBILE_ARIA_HINTS),
-        skip_contact_find=skip_contact,
+        skip_contact_find=False,
+        execution_log_path=playwright_dms_log,
     )
 
     result["vehicle"] = frag.get("vehicle") or {}

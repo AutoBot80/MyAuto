@@ -25,6 +25,8 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
 
 from playwright.sync_api import Frame, Page, TimeoutError as PlaywrightTimeout
 
@@ -1579,6 +1581,7 @@ def run_hero_siebel_dms_flow(
     content_frame_selector: str | None,
     mobile_aria_hints: list[str],
     skip_contact_find: bool = False,
+    execution_log_path: Path | None = None,
 ) -> dict:
     """
     Hero Connect / Siebel **linear SOP** (stages 1–8 inside the main ``try``):
@@ -1592,11 +1595,16 @@ def run_hero_siebel_dms_flow(
     **Allotment** (line items, Price All, Allocate) — **non–In Transit only**, after booking. 8.
     **Invoice hook** (message only; no automation).
 
-    **skip_find:** Enquiry view → basic details + Save → mandatory re-find on ``DMS_REAL_URL_CONTACT``
-    → stage 4 care-of, then stages 5–8.
+    **skip_find** (``skip_contact_find=True``): only for special callers — enquiry view → basic details +
+    Save → mandatory re-find on ``DMS_REAL_URL_CONTACT`` → stage 4 care-of, then stages 5–8. Real
+    Siebel fill from ``fill_dms_service`` always passes ``skip_contact_find=False`` (Find runs even if
+    ``dms_contact_path`` in DB is ``skip_find``).
 
     Never clicks **Create Invoice**. Returns ``vehicle``, ``error``, ``dms_siebel_forms_filled``,
     notes, milestones, and ``dms_step_messages``.
+
+    If ``execution_log_path`` is set, overwrites that file with a UTC timestamped trace (values used,
+    STEP / NOTE / MILESTONE lines, and a final END line with ``error`` if any).
     """
     out: dict = {
         "vehicle": {},
@@ -1606,16 +1614,6 @@ def run_hero_siebel_dms_flow(
         "dms_milestones": [],
         "dms_step_messages": [],
     }
-
-    def ms_done(label: str) -> None:
-        m = out["dms_milestones"]
-        if label not in m:
-            m.append(label)
-
-    def step(msg: str) -> None:
-        """Ordered user-facing progress (Add Sales banner)."""
-        if msg and (not out["dms_step_messages"] or out["dms_step_messages"][-1] != msg):
-            out["dms_step_messages"].append(msg)
 
     page.set_default_timeout(action_timeout_ms)
 
@@ -1631,10 +1629,61 @@ def run_hero_siebel_dms_flow(
     key_p = (dms_values.get("key_partial") or "").strip()
     frame_p = (dms_values.get("frame_partial") or "").strip()
     engine_p = (dms_values.get("engine_partial") or "").strip()
+    dms_path = (dms_values.get("dms_contact_path") or "found").strip().lower()
+
+    log_fp = None
+    if execution_log_path is not None:
+        lp = Path(execution_log_path)
+        lp.parent.mkdir(parents=True, exist_ok=True)
+        log_fp = open(lp, "w", encoding="utf-8")
+        log_fp.write("Playwright DMS — execution log (this run only; UTC timestamps)\n\n")
+        log_fp.write(f"started_utc={datetime.now(timezone.utc).isoformat()}\n")
+        log_fp.write(f"skip_contact_find={skip_contact_find}\n")
+        log_fp.write(f"dms_contact_path={dms_path!r}\n")
+        log_fp.write(f"mobile_phone={mobile!r}\n")
+        log_fp.write(f"first_name={first!r}\n")
+        log_fp.write(f"last_name={last!r}\n")
+        log_fp.write(f"address_line_1={addr!r}\n")
+        log_fp.write(f"state={state!r}\n")
+        log_fp.write(f"pin_code={pin!r}\n")
+        log_fp.write(f"landline={landline!r}\n")
+        log_fp.write(f"father_husband_name={father!r}\n")
+        log_fp.write(f"relation_prefix={relation!r}\n")
+        log_fp.write(f"key_partial={key_p!r}\n")
+        log_fp.write(f"frame_partial={frame_p!r}\n")
+        log_fp.write(f"engine_partial={engine_p!r}\n")
+        cu = (urls.contact or "").strip()
+        log_fp.write(f"url_contact_truncated={cu[:200]!r}\n")
+        log_fp.write(f"url_enquiry_truncated={(urls.enquiry or '')[:200]!r}\n")
+        log_fp.write(f"url_vehicle_truncated={(urls.vehicle or '')[:200]!r}\n")
+        log_fp.write("\n--- trace ---\n\n")
+        log_fp.flush()
+
+    def _exec_log(prefix: str, msg: str) -> None:
+        if not log_fp or not (msg or "").strip():
+            return
+        try:
+            log_fp.write(f"{datetime.now(timezone.utc).isoformat()} [{prefix}] {msg}\n")
+            log_fp.flush()
+        except OSError:
+            pass
+
+    def ms_done(label: str) -> None:
+        m = out["dms_milestones"]
+        if label not in m:
+            m.append(label)
+            _exec_log("MILESTONE", label)
+
+    def step(msg: str) -> None:
+        """Ordered user-facing progress (Add Sales banner)."""
+        if msg and (not out["dms_step_messages"] or out["dms_step_messages"][-1] != msg):
+            out["dms_step_messages"].append(msg)
+        _exec_log("STEP", msg)
 
     def note(msg: str) -> None:
         out["dms_siebel_notes"].append(msg)
         logger.info("siebel_dms: %s", msg)
+        _exec_log("NOTE", msg)
 
     customer_save_clicked = False
 
@@ -1649,8 +1698,12 @@ def run_hero_siebel_dms_flow(
             note(msg_missing)
 
     try:
-        dms_path = (dms_values.get("dms_contact_path") or "found").strip().lower()
         step("Started Hero Connect / Siebel DMS automation (linear SOP).")
+        if dms_path == "skip_find" and not skip_contact_find:
+            note(
+                "dms_contact_path=skip_find in form data — real Siebel still runs Stage 1 Contact Find "
+                "(mobile + Go) so the existing customer is loaded in the correct Siebel context."
+            )
 
         contact_url = (urls.contact or "").strip()
         in_transit_state = False
@@ -1707,8 +1760,10 @@ def run_hero_siebel_dms_flow(
             note("Stage 1: Find/Go completed for mobile search.")
             step("Stage 1 complete: customer search ran on the mobile number.")
             if dms_path == "new_enquiry":
+                note("DECISION: dms_contact_path=new_enquiry — treating as not matched; stage 2 will run.")
                 return True, False
             matched = _siebel_ui_suggests_contact_match(page, mobile)
+            note(f"DECISION: customer_found_from_contact_grid={matched!r} (heuristic: mobile in table row with ≥3 cells).")
             if matched:
                 ms_done("Customer found")
                 note("Stage 1: table/grid suggests an existing contact match.")
@@ -1811,6 +1866,7 @@ def run_hero_siebel_dms_flow(
             step("Stage 5: vehicle list query completed; result row read when present.")
 
             in_transit_state = bool(scraped.get("in_transit"))
+            note(f"DECISION: vehicle_in_transit={in_transit_state!r} (from scraped grid text).")
 
             if in_transit_state:
                 note("Stage 5b: vehicle grid suggests In Transit — Process Receipt, Pre Check, PDI.")
@@ -1910,11 +1966,9 @@ def run_hero_siebel_dms_flow(
         if not skip_contact_find:
             ok1, matched1 = stage_1_find_customer()
             if not ok1:
-                out["dms_milestones"] = _sort_milestone_labels(out["dms_milestones"])
                 return out
             created_basic = stage_2_create_enquiry_if_needed(matched1)
             if not stage_3_refind_customer(created_basic):
-                out["dms_milestones"] = _sort_milestone_labels(out["dms_milestones"])
                 return out
             stage_4_add_care_of()
         else:
@@ -1925,7 +1979,6 @@ def run_hero_siebel_dms_flow(
                     "enquiry view (e.g. Buyer/CoBuyer My Enquiries) so the customer can be added "
                     "before vehicle search."
                 )
-                out["dms_milestones"] = _sort_milestone_labels(out["dms_milestones"])
                 return out
             note("skip_find: stage 1 (Find) bypassed — staged basic enquiry → re-find → care-of.")
             step("skip_find path: enquiry view opened.")
@@ -1947,7 +2000,6 @@ def run_hero_siebel_dms_flow(
                     "DMS_SIEBEL_AUTO_IFRAME_SELECTORS, DMS_SIEBEL_POST_GOTO_WAIT_MS, "
                     "or DMS_SIEBEL_MOBILE_ARIA_HINTS if needed."
                 )
-                out["dms_milestones"] = _sort_milestone_labels(out["dms_milestones"])
                 return out
 
             note("skip_find stage 2: basic enquiry details only (no care-of).")
@@ -1985,7 +2037,6 @@ def run_hero_siebel_dms_flow(
                 out["error"] = (
                     "Siebel skip_find: set DMS_REAL_URL_CONTACT for mandatory re-find (stage 3) after enquiry save."
                 )
-                out["dms_milestones"] = _sort_milestone_labels(out["dms_milestones"])
                 return out
             if not _refind_customer_after_enquiry(
                 page,
@@ -2001,13 +2052,11 @@ def run_hero_siebel_dms_flow(
                 out["error"] = (
                     "Siebel skip_find: mandatory re-find failed — could not run Find by mobile on Contact view."
                 )
-                out["dms_milestones"] = _sort_milestone_labels(out["dms_milestones"])
                 return out
             stage_4_add_care_of()
             step("skip_find: stages 2–4 complete (basic → re-find → care-of).")
 
         if not stage_5_vehicle_flow():
-            out["dms_milestones"] = _sort_milestone_labels(out["dms_milestones"])
             return out
 
         stage_6_generate_booking()
@@ -2024,6 +2073,19 @@ def run_hero_siebel_dms_flow(
     except Exception as e:
         out["error"] = f"Siebel automation error: {e!s}"
         logger.warning("siebel_dms: exception %s", e, exc_info=True)
+    finally:
+        out["dms_milestones"] = _sort_milestone_labels(list(out.get("dms_milestones") or []))
+        if log_fp is not None:
+            try:
+                log_fp.write(
+                    f"\n{datetime.now(timezone.utc).isoformat()} [END] "
+                    f"error={out.get('error')!s}\n"
+                )
+            except OSError:
+                pass
+            try:
+                log_fp.close()
+            except OSError:
+                pass
 
-    out["dms_milestones"] = _sort_milestone_labels(list(out.get("dms_milestones") or []))
     return out

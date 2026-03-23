@@ -84,7 +84,7 @@
 
 - **Logging:** Structured logs from FastAPI, bulk workers, OCR, and Playwright steps.
 - **Metrics:** Job success/failure, queue depth, API latency, and automation completion rate.
-- **Artifacts:** `ocr_output/<dealer>/<subfolder>/` stores OCR output plus `DMS_Form_Values.txt` and `Vahan_Form_Values.txt` for operator traceability. Real Siebel fill copies `Playwright_DMS.txt` from the template folder `ocr_output/dealer/mobile_ddmmyyyy/` into the same subfolder.
+- **Artifacts:** `ocr_output/<dealer>/<subfolder>/` stores OCR output plus `DMS_Form_Values.txt` and `Vahan_Form_Values.txt` for operator traceability. Real Siebel fill writes a fresh `Playwright_DMS.txt` execution log (steps, values, decisions) into that subfolder each run.
 - **Alerts:** DLQ growth, high error rate, DB health, and worker lease/retry anomalies.
 
 ---
