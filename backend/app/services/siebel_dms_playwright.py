@@ -1592,6 +1592,8 @@ def _fill_siebel_care_of_only(
         _try_fill_field(
             page,
             [
+                "input[title*=\"Relation's Name\" i]",
+                "input[aria-label*=\"Relation's Name\" i]",
                 'input[aria-label*="Father" i]',
                 'input[aria-label*="Husband" i]',
                 'input[aria-label*="Parent" i]',
@@ -1605,6 +1607,14 @@ def _fill_siebel_care_of_only(
         _try_select_option(
             page,
             [
+                'select[title*="S/O" i]',
+                'select[aria-label*="S/O" i]',
+                'select[title*="W/O" i]',
+                'select[aria-label*="W/O" i]',
+                'select[title*="D/O" i]',
+                'select[aria-label*="D/O" i]',
+                'select[title*="(W/O)" i]',
+                'select[aria-label*="(W/O)" i]',
                 'select[aria-label*="Relation" i]',
                 'select[aria-label*="S/O" i]',
             ],
@@ -1613,6 +1623,38 @@ def _fill_siebel_care_of_only(
             content_frame_selector=content_frame_selector,
             prefer_second_if_duplicate=dup,
         )
+
+
+def _derive_relation_and_name(
+    *,
+    relation_prefix: str,
+    father_husband_name: str,
+    care_of: str,
+) -> tuple[str, str]:
+    """
+    Use DB ``care_of`` when present: first marker (S/O, W/O, D/O) picks relation;
+    remaining text becomes Relation's Name.
+    """
+    rel = (relation_prefix or "").strip().upper().replace(".", "")
+    name = (father_husband_name or "").strip()
+    co = (care_of or "").strip()
+    if not co:
+        return rel, name
+
+    m = re.match(r"^\s*(S\s*/?\s*O|W\s*/?\s*O|D\s*/?\s*O)\s*[:\-]?\s*(.*)\s*$", co, re.I)
+    if not m:
+        return rel, name
+    marker = re.sub(r"\s+", "", (m.group(1) or "").upper()).replace("/", "")
+    rest = (m.group(2) or "").strip()
+    if marker == "SO":
+        rel = "S/O"
+    elif marker == "WO":
+        rel = "W/O"
+    elif marker == "DO":
+        rel = "D/O"
+    if rest:
+        name = rest[:255]
+    return rel, name
 
 
 def _mobile_needle_for_contact_grid_match(mobile: str) -> str:
@@ -2057,6 +2099,57 @@ def _siebel_open_found_customer_record(
     for root in _siebel_locator_search_roots(page, content_frame_selector):
         try:
             if try_root(root):
+                return True
+        except Exception:
+            continue
+
+    # Deterministic fallback: click row-1 cell under "First Name" column in Contacts grid.
+    js_click_first_name_col = """(targetName) => {
+      const vis = (el) => {
+        if (!el) return false;
+        const st = window.getComputedStyle(el);
+        if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+        const r = el.getBoundingClientRect();
+        return r.width >= 4 && r.height >= 4;
+      };
+      const norm = (s) => String(s || '').trim().toLowerCase();
+      const hasName = (tx) => {
+        if (!targetName) return true;
+        return norm(tx).includes(norm(targetName));
+      };
+      const applets = Array.from(document.querySelectorAll('.siebui-applet'));
+      for (const app of applets) {
+        if (!vis(app)) continue;
+        const txt = (app.innerText || '').toLowerCase();
+        if (!txt.includes('contacts')) continue;
+        const table = app.querySelector('table');
+        if (!table) continue;
+        const heads = Array.from(table.querySelectorAll('thead th, tr th'));
+        let idx = -1;
+        heads.forEach((h, i) => { if (idx < 0 && norm(h.innerText) === 'first name') idx = i; });
+        if (idx < 0) {
+          heads.forEach((h, i) => { if (idx < 0 && norm(h.innerText).includes('first name')) idx = i; });
+        }
+        if (idx < 0) continue;
+        const rows = Array.from(table.querySelectorAll('tbody tr, tr')).filter(vis);
+        for (const tr of rows) {
+          const cells = tr.querySelectorAll('td');
+          if (!cells || cells.length <= idx) continue;
+          const td = cells[idx];
+          if (!vis(td)) continue;
+          if (!hasName(td.innerText || '')) continue;
+          try {
+            td.click();
+            td.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+            return true;
+          } catch (e) {}
+        }
+      }
+      return false;
+    }"""
+    for frame in _ordered_frames(page):
+        try:
+            if bool(frame.evaluate(js_click_first_name_col, fn)):
                 return True
         except Exception:
             continue
@@ -2608,6 +2701,7 @@ def Playwright_Hero_DMS_fill(
     landline = (dms_values.get("landline") or "").strip()
     father = (dms_values.get("father_husband_name") or "").strip()
     relation = (dms_values.get("relation_prefix") or "").strip()
+    care_of = (dms_values.get("care_of") or "").strip()
     key_p = (dms_values.get("key_partial") or "").strip()
     frame_p = (dms_values.get("frame_partial") or "").strip()
     engine_p = (dms_values.get("engine_partial") or "").strip()
@@ -2631,6 +2725,7 @@ def Playwright_Hero_DMS_fill(
         log_fp.write(f"landline={landline!r}\n")
         log_fp.write(f"father_husband_name={father!r}\n")
         log_fp.write(f"relation_prefix={relation!r}\n")
+        log_fp.write(f"care_of={care_of!r}\n")
         log_fp.write(f"key_partial={key_p!r}\n")
         log_fp.write(f"frame_partial={frame_p!r}\n")
         log_fp.write(f"engine_partial={engine_p!r}\n")
@@ -2790,6 +2885,11 @@ def Playwright_Hero_DMS_fill(
         # --- Full linear SOP (stages 1–8): runs only when SIEBEL_DMS_STOP_AFTER_ALL_ENQUIRIES is False. ---
 
         def fill_father_name(customer_was_found: bool = False) -> None:
+            eff_relation, eff_father = _derive_relation_and_name(
+                relation_prefix=relation,
+                father_husband_name=father,
+                care_of=care_of,
+            )
             if customer_was_found:
                 form_trace(
                     "1_find_contact",
@@ -2818,17 +2918,18 @@ def Playwright_Hero_DMS_fill(
                 "4_care_of",
                 "Contact / Enquiry applet (Father–Husband + Relation line)",
                 "fill_care_of_fields_via_Siebel_selectors",
-                father_husband_name=father,
-                relation_prefix=relation,
+                father_husband_name=eff_father,
+                relation_prefix=eff_relation,
+                care_of_source=care_of,
             )
             _fill_siebel_care_of_only(
                 page,
-                father=father,
-                relation=relation,
+                father=eff_father,
+                relation=eff_relation,
                 action_timeout_ms=action_timeout_ms,
                 content_frame_selector=content_frame_selector,
             )
-            if father or relation:
+            if eff_father or eff_relation:
                 ms_done("Care of filled")
             form_trace("4_care_of", "same applet", "click_Save_or_Commit_toolbar_after_care_of")
             save_customer_record(
