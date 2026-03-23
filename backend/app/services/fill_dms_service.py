@@ -550,6 +550,7 @@ DMS_DUMMY_ENQUIRY_BUDGET = "89000"
 # UI checklist order (Add Sales banner). Labels must match exactly for sorting.
 DMS_MILESTONE_ORDER: tuple[str, ...] = (
     "Customer found",
+    "All Enquiries opened",
     "Care of filled",
     "Enquiry created",
     "Booking generated",
@@ -1783,8 +1784,10 @@ def _run_fill_dms_real_siebel_playwright(
     result: dict,
 ) -> None:
     """
-    Hero Connect / Siebel Open UI: ``run_hero_siebel_dms_flow`` (BRD §6.1a) — **always** Contact Find
-    (mobile + Go) first; vehicle list scrape + ``in_transit`` branch (receipt/PDI vs booking/allotment).
+    Hero Connect / Siebel Open UI: ``run_hero_siebel_dms_flow``. When
+    ``siebel_dms_playwright.SIEBEL_DMS_STOP_AFTER_ALL_ENQUIRIES`` is True, only the **Find Contact →
+    All Enquiries** path runs, then stops. Otherwise (BRD §6.1a) **always** Contact Find (mobile + Go)
+    first; vehicle list scrape + ``in_transit`` branch (receipt/PDI vs booking/allotment).
 
     ``dms_contact_path=skip_find`` in DB is **ignored** for real Siebel (operators still need Find so the
     correct contact context is loaded even when the customer already exists). Dummy DMS may still use

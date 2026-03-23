@@ -1,7 +1,11 @@
 """
 Hero Connect / Oracle Siebel Open UI — Playwright helpers for real DMS automation.
 
-**Linear SOP** in ``run_hero_siebel_dms_flow`` (BRD §6.1a aligned): **Find → mobile → Go**; optional
+**Linear SOP** in ``run_hero_siebel_dms_flow`` (BRD §6.1a aligned) when ``SIEBEL_DMS_STOP_AFTER_ALL_ENQUIRIES``
+is False. When True, only the operator **Find Contact Enquiry** path runs (Find → Contact → mobile → Go →
+drill hit → Contacts → Contact_Enquiry → Enquiry → All Enquiries), then returns with the browser left open.
+
+Default staged flow (flag False): **Find → mobile → Go**; optional
 **basic enquiry** (name/address/state/PIN) + Save + **mandatory re-find** when created; **always**
 care-of + Save; **Auto Vehicle List** + **In Transit** (receipt / Pre Check / PDI); **Generate Booking**
 **after vehicle for all paths**; allotment (line items) when **not** In Transit; invoice = message hook
@@ -37,6 +41,11 @@ from app.config import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Operator video: ``Find Contact Enquiry.mp4`` — global Find → Contact → mobile → Go → drill result →
+# Contacts → Contact_Enquiry → Enquiry → All Enquiries, then stop (browser stays open). Set False to
+# restore the full BRD linear SOP inside ``run_hero_siebel_dms_flow``.
+SIEBEL_DMS_STOP_AFTER_ALL_ENQUIRIES = True
 
 
 def _is_browser_disconnected_error(exc: BaseException) -> bool:
@@ -111,6 +120,7 @@ _DEFAULT_AUTO_IFRAME_SELECTORS: tuple[str, ...] = (
 # Same order as fill_dms_service.DMS_MILESTONE_ORDER (avoid import cycle).
 _MILESTONE_SORT_ORDER: tuple[str, ...] = (
     "Customer found",
+    "All Enquiries opened",
     "Care of filled",
     "Enquiry created",
     "Booking generated",
@@ -1148,6 +1158,162 @@ def _siebel_ui_suggests_contact_match(page: Page, mobile: str) -> bool:
     return False
 
 
+def _siebel_try_click_named_in_frames(
+    page: Page,
+    pattern: re.Pattern[str],
+    *,
+    roles: tuple[str, ...],
+    timeout_ms: int,
+    content_frame_selector: str | None,
+    max_candidates: int = 14,
+) -> bool:
+    """Click first visible control in any Siebel frame whose accessible name matches ``pattern``."""
+
+    def try_root(root) -> bool:
+        for role in roles:
+            try:
+                loc = root.get_by_role(role, name=pattern)
+                n = loc.count()
+                for i in range(min(n, max_candidates)):
+                    try:
+                        c = loc.nth(i)
+                        if c.is_visible(timeout=500):
+                            c.click(timeout=timeout_ms)
+                            return True
+                    except Exception:
+                        continue
+            except Exception:
+                continue
+        return False
+
+    for fl in _iter_frame_locator_roots(page, content_frame_selector):
+        if try_root(fl):
+            return True
+    for frame in _ordered_frames(page):
+        if try_root(frame):
+            return True
+    return False
+
+
+def _siebel_try_click_mobile_search_hit_link(
+    page: Page,
+    mobile: str,
+    *,
+    timeout_ms: int,
+    content_frame_selector: str | None,
+) -> bool:
+    """
+    After Find/Go, open the contact row from the left **Search Results** grid (video: blue link on
+    Title / mobile). Tries link role by number, then first ``<a>`` in a table row that contains the
+    mobile digits.
+    """
+    needle = _mobile_needle_for_contact_grid_match(mobile)
+    raw = re.sub(r"\s+", "", (mobile or "").strip())
+    patterns: list[re.Pattern[str]] = []
+    if raw:
+        patterns.append(re.compile(re.escape(raw)))
+    if needle and needle != raw:
+        patterns.append(re.compile(re.escape(needle)))
+    for pat in patterns:
+        if _siebel_try_click_named_in_frames(
+            page,
+            pat,
+            roles=("link",),
+            timeout_ms=timeout_ms,
+            content_frame_selector=content_frame_selector,
+        ):
+            return True
+
+    if not needle:
+        return False
+    for frame in _ordered_frames(page):
+        try:
+            rows = frame.locator("table tbody tr")
+            n = rows.count()
+            for i in range(min(n, 100)):
+                row = rows.nth(i)
+                try:
+                    if not row.is_visible(timeout=200):
+                        continue
+                except Exception:
+                    continue
+                try:
+                    row_digits = re.sub(r"\D", "", row.inner_text(timeout=500) or "")
+                except Exception:
+                    continue
+                if needle not in row_digits:
+                    continue
+                al = row.locator("a")
+                try:
+                    if al.count() <= 0:
+                        continue
+                    link = al.first
+                    if link.is_visible(timeout=450):
+                        link.click(timeout=timeout_ms)
+                        return True
+                except Exception:
+                    continue
+        except Exception:
+            continue
+    return False
+
+
+def _siebel_video_path_after_find_go_to_all_enquiries(
+    page: Page,
+    *,
+    mobile: str,
+    action_timeout_ms: int,
+    content_frame_selector: str | None,
+    note,
+) -> bool:
+    """
+    Steps after **Find + Go** from operator recording *Find Contact Enquiry*:
+    optional **Siebel Find** tab → click hit hyperlink → **Contacts** → **Contact_Enquiry** →
+    **Enquiry** → **All Enquiries**.
+    """
+    _safe_page_wait(page, 800, log_label="after_find_go_before_drill")
+    if _siebel_try_click_named_in_frames(
+        page,
+        re.compile(r"Siebel\s*Find", re.I),
+        roles=("tab", "link"),
+        timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+    ):
+        note("Activated Siebel Find tab in search results (video SOP).")
+        _safe_page_wait(page, 700, log_label="after_siebel_find_tab")
+
+    if not _siebel_try_click_mobile_search_hit_link(
+        page,
+        mobile,
+        timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+    ):
+        note("Could not click a search-result link for the mobile — check left Search Results grid.")
+        return False
+    note("Opened contact from search hit hyperlink (video SOP).")
+    _safe_page_wait(page, 1200, log_label="after_contact_drill_link")
+
+    nav_steps: tuple[tuple[re.Pattern[str], tuple[str, ...], str], ...] = (
+        (re.compile(r"^\s*Contacts\s*$", re.I), ("tab", "link", "button"), "Contacts"),
+        (re.compile(r"Contact[_\s-]?Enquiry", re.I), ("link", "tab", "menuitem"), "Contact_Enquiry"),
+        (re.compile(r"^\s*Enquiry\s*$", re.I), ("tab", "link", "button"), "Enquiry"),
+        (re.compile(r"All\s+Enquiries", re.I), ("link", "tab", "menuitem"), "All Enquiries"),
+    )
+    for pat, roles, label in nav_steps:
+        if not _siebel_try_click_named_in_frames(
+            page,
+            pat,
+            roles=roles,
+            timeout_ms=action_timeout_ms,
+            content_frame_selector=content_frame_selector,
+        ):
+            note(f"Video SOP: navigation item not found or not clickable: {label!r}.")
+            return False
+        note(f"Clicked {label} (video SOP).")
+        _safe_page_wait(page, 1000, log_label=f"after_nav_{label.replace(' ', '_')}")
+    return True
+
+
 def _grid_cells_suggest_in_transit(texts: list[str]) -> bool:
     blob = " ".join(texts).lower()
     if re.search(r"\bin[\s-]*transit\b", blob):
@@ -1647,7 +1813,11 @@ def run_hero_siebel_dms_flow(
     execution_log_path: Path | None = None,
 ) -> dict:
     """
-    Hero Connect / Siebel **linear SOP** (stages 1–8 inside the main ``try``):
+    Hero Connect / Siebel automation. If ``SIEBEL_DMS_STOP_AFTER_ALL_ENQUIRIES`` is True (module constant),
+    runs only the **Find Contact Enquiry** video SOP through **All Enquiries**, then returns (browser
+    not closed by this function).
+
+    Otherwise **linear SOP** (stages 1–8 inside the main ``try``):
 
     1. **Find** customer by mobile (Contact view). 2. If not matched (or ``new_enquiry``), **basic
     enquiry** only (name, address, state, PIN — no care-of) + Save. 3. **Mandatory re-find** by
@@ -1792,6 +1962,83 @@ def run_hero_siebel_dms_flow(
 
         contact_url = (urls.contact or "").strip()
         in_transit_state = False
+
+        if SIEBEL_DMS_STOP_AFTER_ALL_ENQUIRIES:
+            if skip_contact_find:
+                note(
+                    "SIEBEL_DMS_STOP_AFTER_ALL_ENQUIRIES is True — skip_contact_find ignored; "
+                    "using Find → All Enquiries video path."
+                )
+            if not mobile:
+                step("Stopped: mobile_phone is required for Find Contact video path.")
+                out["error"] = "Siebel: mobile_phone is empty — cannot run Find by mobile."
+                return out
+            if not contact_url:
+                step("Stopped: DMS_REAL_URL_CONTACT is not configured.")
+                out["error"] = (
+                    "Siebel: set DMS_REAL_URL_CONTACT to the Contact / Find (or Visible Contact List for Find) "
+                    "GotoView URL so the video SOP can open the Find applet."
+                )
+                return out
+            step("Video SOP (Find Contact Enquiry): Find → Contact → mobile → Go → open All Enquiries; then stop.")
+            form_trace(
+                "v1_find_contact",
+                "Global Find → Contact (Mobile Phone) + Go",
+                "goto_contact_find_URL_then_prepare_Find_Contact_fill_mobile_FindGo",
+                contact_url_truncated=contact_url[:200],
+                mobile_phone=mobile,
+            )
+            ok_find = _contact_view_find_by_mobile(
+                page,
+                contact_url=contact_url,
+                mobile=mobile,
+                nav_timeout_ms=nav_timeout_ms,
+                action_timeout_ms=action_timeout_ms,
+                content_frame_selector=content_frame_selector,
+                mobile_aria_hints=mobile_aria_hints,
+                note=note,
+                step=step,
+                stage_msg="Video SOP: Find customer by mobile (Contact view).",
+            )
+            if not ok_find:
+                step("Stopped: could not complete Find by mobile on contact view.")
+                out["error"] = (
+                    "Siebel: video SOP — could not fill mobile or run Find/Go on the contact view. "
+                    "Check Find pane, iframe selectors, and DMS_SIEBEL_* tuning."
+                )
+                return out
+            form_trace(
+                "v2_drill_and_nav",
+                "Search Results + screen tabs",
+                "Siebel_Find_tab_optional_then_link_hit_then_Contacts_Contact_Enquiry_Enquiry_All_Enquiries",
+                mobile_phone=mobile,
+            )
+            if not _siebel_video_path_after_find_go_to_all_enquiries(
+                page,
+                mobile=mobile,
+                action_timeout_ms=action_timeout_ms,
+                content_frame_selector=content_frame_selector,
+                note=note,
+            ):
+                step("Stopped: video SOP navigation after Find/Go failed.")
+                out["error"] = (
+                    "Siebel: video SOP — after Find/Go, could not complete drill-down or "
+                    "Contacts → Contact_Enquiry → Enquiry → All Enquiries. "
+                    "Confirm labels match Hero Connect and tune DMS_SIEBEL_CONTENT_FRAME_SELECTOR if needed."
+                )
+                return out
+            ms_done("All Enquiries opened")
+            step(
+                "Video SOP complete: All Enquiries is open. Automation stops here "
+                "(SIEBEL_DMS_STOP_AFTER_ALL_ENQUIRIES); browser left open."
+            )
+            note(
+                "Stages 2–8 (basic enquiry, care-of, vehicle, booking, …) are skipped while "
+                "SIEBEL_DMS_STOP_AFTER_ALL_ENQUIRIES is True — set it False in siebel_dms_playwright.py to restore."
+            )
+            return out
+
+        # --- Full linear SOP (stages 1–8): runs only when SIEBEL_DMS_STOP_AFTER_ALL_ENQUIRIES is False. ---
 
         def stage_4_add_care_of() -> None:
             note("Stage 4: care-of only (S/o, father/husband) — always runs per SOP.")

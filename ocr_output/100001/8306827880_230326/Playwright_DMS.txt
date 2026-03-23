@@ -1,0 +1,29 @@
+Playwright DMS — execution log (this run only; UTC timestamps)
+
+started_utc=2026-03-23T05:06:15.812687+00:00
+skip_contact_find=False
+dms_contact_path='found'
+mobile_phone='8306827880'
+first_name='Akash'
+last_name=''
+address_line_1='S/o Sahab Singh, Gandhi Nagar, Bharatpur, Bharatpur, Rajasthan - - 321001'
+state='RAJASTHAN'
+pin_code='321001'
+landline='9602035092'
+father_husband_name='S/o Sahab Singh'
+relation_prefix='S/O'
+key_partial='1342'
+frame_partial='40393'
+engine_partial='04383'
+url_contact_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+Contact+Opportunity+Buyer/CoBuyer+View+(SDW)&SWERF=1&SWEHo=&SWEBU=1'
+url_enquiry_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+Contact+Opportunity+Buyer/CoBuyer+View+(SDW)&SWERF=1&SWEHo=&SWEBU=1'
+url_vehicle_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+All+Vehicle+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Auto+Vehicle+List+Applet&SWERowId0=1-100-1676'
+
+--- trace ---
+Legend: [STEP]/[NOTE]/[MILESTONE] = operator narrative; [FORM] = siebel_step + Siebel form/screen + action + fields/values being applied on that form.
+
+2026-03-23T05:06:15.812899+00:00 [STEP] Started Hero Connect / Siebel DMS automation (linear SOP).
+2026-03-23T05:06:15.812973+00:00 [FORM] siebel_step=1_find_contact | form=Contact view — Find pane (mobile search) | action=goto_DMS_REAL_URL_CONTACT_expand_Find_fill_Mobile_Phone_click_FindGo | contact_url_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+Contact+Opportunity+Buyer/CoBuyer+View+(SDW)&SWERF=1&SWEHo=&SWEBU=1' | mobile_phone='8306827880'
+2026-03-23T05:06:21.554145+00:00 [STEP] Stage 1: Find customer by mobile (Contact view).
+
+2026-03-23T05:06:31.448726+00:00 [END] error=Siebel: lost connection to the browser during wait (blur_settle). The window may have been closed, the browser may have crashed, or the debug (CDP) session ended. Keep Edge/Chrome open on Hero Connect while Fill DMS runs; avoid closing the browser or restarting it mid-run. If the API process restarted, open Hero Connect again and retry Fill DMS.
