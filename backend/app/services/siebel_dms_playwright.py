@@ -6647,17 +6647,17 @@ def Playwright_Hero_DMS_fill(
                 "Payments tab (current frame)",
                 "click_Payments_tab_then_click_plus_icon",
             )
-            if not _add_customer_payment(
-                page,
-                action_timeout_ms=action_timeout_ms,
-                content_frame_selector=content_frame_selector,
-                note=note,
-            ):
-                step("Stopped: could not open Payments tab or click '+' icon.")
-                out["error"] = (
-                    "Siebel: video SOP — could not click Payments tab and '+' icon for Add customer payment."
-                )
-                return out
+            # if not _add_customer_payment(
+            #     page,
+            #     action_timeout_ms=action_timeout_ms,
+            #     content_frame_selector=content_frame_selector,
+            #     note=note,
+            # ):
+            #     step("Stopped: could not open Payments tab or click '+' icon.")
+            #     out["error"] = (
+            #         "Siebel: video SOP — could not click Payments tab and '+' icon for Add customer payment."
+            #     )
+            #     return out
 
             full_chassis = (
                 str((out.get("vehicle") or {}).get("full_chassis") or "").strip()
