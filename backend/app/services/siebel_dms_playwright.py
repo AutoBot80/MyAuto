@@ -4149,8 +4149,9 @@ def _add_customer_payment(
                             pass
                     return False
 
-                # First try direct typing into Transaction Type field.
+                # First try direct typing/select on Transaction Type field.
                 type_ok = False
+                type_attempted = False
                 for root in scoped_roots:
                     _focus_locked_payment_frame(root)
                     for css in (
@@ -4173,6 +4174,7 @@ def _add_customer_payment(
                             if fld.count() <= 0 or not fld.is_visible(timeout=700):
                                 continue
                             note(f"Payment debug: Transaction Type selector hit: {css}")
+                            type_attempted = True
                             try:
                                 fld.click(timeout=action_timeout_ms)
                             except Exception:
@@ -4189,10 +4191,7 @@ def _add_customer_payment(
                                     fld.select_option(value="Payments", timeout=action_timeout_ms)
                             else:
                                 fld.fill("Payments", timeout=action_timeout_ms)
-                            try:
-                                fld.press("Tab", timeout=min(1200, action_timeout_ms))
-                            except Exception:
-                                pass
+                            # Do not Tab here; it can move focus into Payment Method in some Siebel layouts.
                             got_type = (fld.input_value(timeout=1500) or "").strip()
                             if got_type and "payment" in got_type.lower():
                                 type_ok = True
@@ -4290,6 +4289,7 @@ def _add_customer_payment(
                                 fld = root.locator(css).first
                                 if fld.count() <= 0 or not fld.is_visible(timeout=600):
                                     continue
+                                type_attempted = True
                                 try:
                                     fld.click(timeout=action_timeout_ms)
                                 except Exception:
@@ -4310,10 +4310,6 @@ def _add_customer_payment(
                                         opt.click(timeout=action_timeout_ms)
                                     except Exception:
                                         opt.click(timeout=action_timeout_ms, force=True)
-                                try:
-                                    fld.press("Tab", timeout=min(1200, action_timeout_ms))
-                                except Exception:
-                                    pass
                                 gotv = (fld.input_value(timeout=1500) or "").strip()
                                 if gotv and "payment" in gotv.lower():
                                     type_ok = True
@@ -4325,7 +4321,10 @@ def _add_customer_payment(
                             break
 
                 if not type_ok:
-                    raise Exception("Failed to set Transaction Type = Payments")
+                    if type_attempted:
+                        note("Transaction Type readback verification failed; proceeding directly to Transaction Amount without Tab.")
+                    else:
+                        note("Transaction Type control was not confirmed; proceeding to Transaction Amount as requested.")
 
                 # Transaction Amount = 120000 (strictly in Payment Lines scoped frame/roots)
                 amount_ok = False
@@ -4406,7 +4405,7 @@ def _add_customer_payment(
                             continue
                 note(
                     "Filled payment fields: "
-                    f"Type=Payments(ok={type_ok!r}), Transaction Amount=120000(ok={amount_ok!r})."
+                    f"Type=Payments(verified={type_ok!r}, attempted={type_attempted!r}), Transaction Amount=120000(ok={amount_ok!r})."
                 )
 
                 # Re-detect action roots after row creation; toolbar can be in a sibling frame.
