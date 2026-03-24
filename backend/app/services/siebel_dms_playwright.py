@@ -3823,9 +3823,6 @@ def _add_customer_payment(
                                     "[title-id='Transaction_Type']",
                                     "input[name*='Transaction_Type' i]",
                                     "input[id*='Transaction_Type' i]",
-                                    "[name='Payment_Method_New']",
-                                    "input[name*='Payment_Method' i]",
-                                    "input[id*='Payment_Method' i]",
                                     "[name='Transaction_Amount']",
                                   ];
                                   for (const s of sels) {
@@ -3994,9 +3991,6 @@ def _add_customer_payment(
                                 "input[id='Transaction_Type']",
                                 "input[name*='Transaction_Type' i]",
                                 "input[id*='Transaction_Type' i]",
-                                "input[name='Payment_Method_New']",
-                                "input[name*='Payment_Method' i]",
-                                "input[id*='Payment_Method' i]",
                                 "input[name='Transaction_Amount']",
                                 "input[id='1_s_2_1_Transaction_Amount']",
                                 "input[name='1_s_2_1_Transaction_Amount']",
