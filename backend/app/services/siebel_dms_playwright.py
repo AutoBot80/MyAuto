@@ -4167,119 +4167,91 @@ def _add_customer_payment(
                             pass
                     return False
 
-                # Diagnostic: dump all visible inputs in payment frame to identify real field names/IDs.
+                # Wait for new row to render and focus to land on Transaction Type.
+                _safe_page_wait(page, 1000, log_label="wait_for_new_row_focus")
+
+                # Check which element has focus after + click.
+                _focused_info = None
                 for _dframe in _ordered_frames(page):
                     try:
-                        _inputs = _dframe.evaluate("""() => {
-                          const results = [];
-                          for (const el of document.querySelectorAll('input, select, textarea')) {
-                            const st = window.getComputedStyle(el);
-                            const r = el.getBoundingClientRect();
-                            const vis = st.display !== 'none' && st.visibility !== 'hidden'
-                                        && Number(st.opacity) !== 0 && r.width >= 2 && r.height >= 2;
-                            results.push({
-                              tag: el.tagName,
-                              name: el.name || '',
-                              id: el.id || '',
-                              aria: el.getAttribute('aria-label') || '',
-                              title: el.getAttribute('title') || '',
-                              type: el.type || '',
-                              readonly: el.readOnly || false,
-                              disabled: el.disabled || false,
-                              visible: vis,
-                              value: el.value || ''
-                            });
-                          }
-                          return results;
+                        _focused_info = _dframe.evaluate("""() => {
+                          const el = document.activeElement;
+                          if (!el) return null;
+                          return {
+                            tag: el.tagName, name: el.name||'',
+                            aria: el.getAttribute('aria-label')||'',
+                            id: el.id||'', value: el.value||''
+                          };
                         }""")
-                        if _inputs:
-                            note(f"Payment frame inputs dump (frame url={(_dframe.url or '')[:80]!r}): {_inputs}")
-                    except Exception as _de:
-                        note(f"Payment frame inputs dump error: {_de!s:.80}")
+                        if _focused_info and _focused_info.get('tag') not in ('BODY', 'HTML', None):
+                            note(f"Payment: focused element after + = {_focused_info!r}")
+                            # #region agent log
+                            try:
+                                import json as _json, time as _time
+                                _dbg = {"sessionId": "f69c3a", "runId": "keyboard-approach", "hypothesisId": "A", "location": "siebel_dms_playwright.py:focus_check", "message": "focused element after + click", "data": _focused_info, "timestamp": int(_time.time() * 1000)}
+                                open("debug-f69c3a.log", "a", encoding="utf-8").write(_json.dumps(_dbg) + "\n")
+                            except Exception:
+                                pass
+                            # #endregion
+                            break
+                    except Exception:
+                        continue
 
-                # Fill Amount then Type by clicking to enter edit mode, then typing.
-                # Short per-op timeout (2s) to fail fast if field not ready.
-                _short_ms = 2000
+                # Keyboard-driven fill: Siebel puts focus on Transaction Type after +.
+                # Type Transaction Type, then Tab N times to reach Transaction Amount, type amount.
+                type_ok = False
+                amount_ok = False
 
-                def _click_and_fill_in_frame(frame, css_list: tuple, value: str, label: str) -> bool:
-                    for css in css_list:
+                try:
+                    # Type "Payments" into whatever has focus (should be Transaction Type)
+                    page.keyboard.type("Payments", delay=50)
+                    _safe_page_wait(page, 300, log_label="after_type_transaction_type")
+                    note("Payment keyboard: typed 'Payments' into focused field (Transaction Type).")
+                    type_ok = True
+
+                    # Tab through Payment Method and other fields to reach Transaction Amount.
+                    # User confirmed ~4-5 tabs from Transaction Type to Transaction Amount.
+                    for _ti in range(5):
+                        page.keyboard.press("Tab")
+                        _safe_page_wait(page, 150, log_label=f"tab_{_ti+1}")
+
+                    note("Payment keyboard: tabbed 5x to reach Transaction Amount.")
+
+                    # Check focused element after tabs
+                    for _dframe2 in _ordered_frames(page):
                         try:
-                            loc = frame.locator(css).first
-                            if loc.count() <= 0:
-                                continue
-                            # Click to enter Siebel edit mode (force=True bypasses actionability wait)
-                            try:
-                                loc.click(timeout=_short_ms)
-                            except Exception:
-                                loc.click(timeout=_short_ms, force=True)
-                            _safe_page_wait(page, 120, log_label=f"after_click_{label}")
-                            # Clear + type via keyboard so Siebel's model is updated
-                            try:
-                                loc.select_all()
-                            except Exception:
+                            _f2 = _dframe2.evaluate("""() => {
+                              const el = document.activeElement;
+                              return el ? {tag:el.tagName,name:el.name||'',aria:el.getAttribute('aria-label')||'',id:el.id||''} : null;
+                            }""")
+                            if _f2 and _f2.get('tag') not in ('BODY', 'HTML', None):
+                                note(f"Payment: focused after 5 tabs = {_f2!r}")
+                                # #region agent log
                                 try:
-                                    loc.press("Control+a", timeout=_short_ms)
+                                    import json as _json2, time as _time2
+                                    _dbg2 = {"sessionId": "f69c3a", "runId": "keyboard-approach", "hypothesisId": "B", "location": "siebel_dms_playwright.py:tab_check", "message": "focused element after 5 tabs", "data": _f2, "timestamp": int(_time2.time() * 1000)}
+                                    open("debug-f69c3a.log", "a", encoding="utf-8").write(_json2.dumps(_dbg2) + "\n")
                                 except Exception:
                                     pass
-                            try:
-                                loc.press_sequentially(value, delay=30)
-                            except Exception:
-                                loc.fill(value, timeout=_short_ms)
-                            _safe_page_wait(page, 120, log_label=f"after_type_{label}")
-                            got = (loc.input_value(timeout=_short_ms) or "").strip()
-                            note(f"Payment debug: {label} attempt css={css!r} got={got!r}")
-                            if got and (value.lower() in got.lower() or got.lower() in value.lower()):
-                                note(f"Payment: {label} = {value!r} confirmed via {css}")
-                                return True
-                        except Exception as _ex:
-                            note(f"Payment debug: {label} css={css!r} err={_ex!s:.80}")
+                                # #endregion
+                                break
+                        except Exception:
                             continue
-                    return False
 
-                # Transaction Amount
-                amount_ok = False
-                _amt_selectors = (
-                    "input[aria-label='Transaction Amount']",
-                    "input[name='Transaction_Amount']",
-                    "input[id='Transaction_Amount']",
-                    "input[id='1_s_2_1_Transaction_Amount']",
-                    "input[name='1_s_2_1_Transaction_Amount']",
-                    "input[aria-label*='Transaction Amount' i]",
-                    "input[title*='Transaction Amount' i]",
-                )
-                for _af in _ordered_frames(page):
-                    if _click_and_fill_in_frame(_af, _amt_selectors, "120000", "Transaction_Amount"):
-                        amount_ok = True
-                        break
-                if not amount_ok:
-                    note("Transaction Amount: could not fill in any frame.")
-                _safe_page_wait(page, 300, log_label="after_amount_before_type")
+                    # Type amount
+                    page.keyboard.type("120000", delay=50)
+                    _safe_page_wait(page, 300, log_label="after_type_amount")
+                    note("Payment keyboard: typed '120000' into Transaction Amount.")
+                    amount_ok = True
 
-                # Transaction Type
-                type_ok = False
-                _type_selectors = (
-                    "input[name='Transaction_Type']",
-                    "input[name='Transaction_Type_New']",
-                    "select[name='Transaction_Type']",
-                    "select[name='Transaction_Type_New']",
-                    "input[id='Transaction_Type']",
-                    "input[name*='Transaction_Type' i]",
-                    "input[id*='Transaction_Type' i]",
-                    "input[aria-label='Transaction Type']",
-                    "input[aria-label*='Transaction Type' i]",
-                    "input[title*='Transaction Type' i]",
-                )
-                for _tf in _ordered_frames(page):
-                    if _click_and_fill_in_frame(_tf, _type_selectors, "Payments", "Transaction_Type"):
-                        type_ok = True
-                        break
-                if not type_ok:
-                    note("Transaction Type: could not fill in any frame; continuing to save.")
+                except Exception as _kb_ex:
+                    note(f"Payment keyboard fill failed: {_kb_ex!s:.120}")
+
                 note(
-                    "Filled payment fields: "
+                    "Filled payment fields (keyboard): "
                     f"Type=Payments(ok={type_ok!r}), Amount=120000(ok={amount_ok!r})."
                 )
-                _safe_page_wait(page, 400, log_label="after_type_before_save")
+                _safe_page_wait(page, 400, log_label="after_amount_before_save")
 
                 # Re-detect action roots after row creation; toolbar can be in a sibling frame.
                 save_action_roots = []
