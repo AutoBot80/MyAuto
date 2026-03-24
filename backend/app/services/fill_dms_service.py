@@ -556,7 +556,9 @@ def _write_data_from_dms(ocr_output_dir: Path, subfolder: str, customer: dict, v
     for label, key in [
         ("Key num", "key_num"),
         ("Frame / Chassis num", "frame_num"),
+        ("Full chassis (VIN from detail)", "full_chassis"),
         ("Engine num", "engine_num"),
+        ("Full engine (from detail)", "full_engine"),
         ("Model", "model"),
         ("Color", "color"),
         ("Cubic capacity", "cubic_capacity"),

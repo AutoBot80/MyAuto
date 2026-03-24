@@ -1250,8 +1250,9 @@ def _try_fill_vin_engine_in_vehicles_find_applet(
 
 def _merge_scrape_vehicle_detail_applet(page: Page, scraped: dict, *, content_frame_selector: str | None) -> dict:
     """
-    When the list grid is narrow (e.g. VIN / Engine / Mobile only), read **Vehicle Information** style
-    label rows for Model, Dispatch Year → ``year_of_mfg``, and Color.
+    After the left-pane **Search Results** VIN drill-down (or when detail is visible), read **Vehicle
+    Information** from table rows and from Siebel **input** ``title`` / ``aria-label`` (Model, Color,
+    Dispatch Year → ``year_of_mfg``, SKU).
     """
     _ = content_frame_selector
     detail_js = """() => {
@@ -1264,10 +1265,21 @@ def _merge_scrape_vehicle_detail_applet(page: Page, scraped: dict, *, content_fr
         return r.width >= 2 && r.height >= 2;
       };
       const norm = (s) => String(s || '').replace(/\\s+/g, ' ').trim();
+      const lblTxt = (inp) => {
+        const t = norm(inp.getAttribute('title') || '');
+        const a = norm(inp.getAttribute('aria-label') || '');
+        return (t + ' ' + a).toLowerCase();
+      };
+      const setInp = (inp, key) => {
+        if (!inp || !vis(inp)) return;
+        const v = norm(inp.value || inp.getAttribute('value') || '');
+        if (!v || v === '*') return;
+        out[key] = v;
+      };
       const applets = Array.from(document.querySelectorAll('.siebui-applet')).filter(vis);
       for (const ap of applets) {
         const block = norm(ap.innerText || '');
-        if (!block.includes('Model') && !block.includes('Vehicle')) continue;
+        if (!block.includes('Model') && !block.includes('Vehicle') && !block.includes('Vehicle Information')) continue;
         const rows = ap.querySelectorAll('tr');
         for (const tr of rows) {
           if (!vis(tr)) continue;
@@ -1280,6 +1292,15 @@ def _merge_scrape_vehicle_detail_applet(page: Page, scraped: dict, *, content_fr
           if (/^Dispatch\\s*Year$/i.test(lab)) out.dispatch_year = val;
           if (/^Year\\s+of\\s+Manufacture$/i.test(lab) || /^Mfg\\.?\\s*Year$/i.test(lab)) out.year_of_mfg = val;
           if (/^Color$/i.test(lab) || /^Body\\s*Color$/i.test(lab) || /^Colour$/i.test(lab)) out.color = val;
+          if (/^SKU$/i.test(lab)) out.sku = val;
+        }
+        const inputs = Array.from(ap.querySelectorAll('input')).filter((i) => vis(i));
+        for (const inp of inputs) {
+          const lt = lblTxt(inp);
+          if (lt.includes('model') && !lt.includes('model year')) setInp(inp, 'model');
+          if (lt.includes('dispatch') && lt.includes('year')) setInp(inp, 'dispatch_year');
+          if ((lt.includes('color') || lt.includes('colour')) && !lt.includes('discount')) setInp(inp, 'color');
+          if (/^sku\\b/.test(lt) || lt === 'sku' || (lt.includes('sku') && !lt.includes('risk'))) setInp(inp, 'sku');
         }
       }
       return out;
@@ -1307,6 +1328,153 @@ def _merge_scrape_vehicle_detail_applet(page: Page, scraped: dict, *, content_fr
             merged["year_of_mfg"] = extra["dispatch_year"].strip()
     if extra.get("color") and not (merged.get("color") or "").strip():
         merged["color"] = extra["color"]
+    if extra.get("sku") and not (merged.get("sku") or "").strip():
+        merged["sku"] = extra["sku"]
+    return merged
+
+
+_VIN_ARIA_SCOPE_SCRAPE_JS = """() => {
+  const out = {};
+  const vis = (el) => {
+    if (!el) return false;
+    const st = window.getComputedStyle(el);
+    if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+    const r = el.getBoundingClientRect();
+    return r.width >= 2 && r.height >= 2;
+  };
+  const norm = (s) => String(s || '').replace(/\\s+/g, ' ').trim();
+  const badPh = /case sensitive|^[*]$/i;
+
+  const isVinField = (inp) => {
+    if (!inp || inp.tagName !== 'INPUT') return false;
+    const al = norm(inp.getAttribute('aria-label') || '');
+    const tt = norm(inp.getAttribute('title') || '');
+    return /^vin$/i.test(al) || /^vin$/i.test(tt);
+  };
+
+  const vinInp = Array.from(document.querySelectorAll('input')).find((i) => isVinField(i) && vis(i));
+  if (!vinInp) return out;
+
+  let root = vinInp.closest('.siebui-applet');
+  if (!root || !vis(root)) root = document.body;
+
+  const harvestValue = (el) => {
+    if (!el) return '';
+    if (el.tagName === 'SELECT') {
+      const so = el.selectedOptions && el.selectedOptions[0];
+      return norm(so ? so.textContent : el.value);
+    }
+    return norm(el.value || el.getAttribute('value') || '');
+  };
+
+  const takeIfGood = (v) => v && !badPh.test(v) && v !== '*' && v.length > 0;
+
+  const fc = harvestValue(vinInp);
+  if (takeIfGood(fc)) out.full_chassis = fc;
+
+  const inputs = Array.from(root.querySelectorAll('input, select')).filter(vis);
+  for (const el of inputs) {
+    if (el === vinInp) continue;
+    const al = norm(el.getAttribute('aria-label') || '');
+    const tt = norm(el.getAttribute('title') || '');
+    const lk = (al + ' ' + tt).toLowerCase();
+    const v = harvestValue(el);
+    if (!takeIfGood(v)) continue;
+    if (/\\bmodel\\b/.test(lk) && !/year/.test(lk) && !/code/.test(lk) && !/number/.test(lk)) out.model = v;
+    if (/dispatch\\s*year/.test(lk) || /manufacturing\\s*year/.test(lk) || /^mfg\\.?\\s*year$/i.test(lk)) {
+      out.year_of_mfg = v;
+      out.dispatch_year = v;
+    }
+    if ((/^color$/i.test(al) || /^color$/i.test(tt) || /body\\s*color/.test(lk) || /^colour$/i.test(al)) &&
+        !/discount/.test(lk)) {
+      out.color = v;
+    }
+    if (/engine\\s*#/.test(lk) || /^engine#$/i.test(al.replace(/\\s/g, '')) ||
+        (lk.includes('engine') && lk.includes('#'))) {
+      out.full_engine = v;
+    }
+    if (/^engine\\s*number$/i.test(al) || /^engine\\s*number$/i.test(tt)) out.full_engine = v;
+  }
+
+  const tables = root.querySelectorAll('table');
+  for (const t of tables) {
+    const rows = t.querySelectorAll('tr');
+    if (rows.length < 2) continue;
+    const hdrCells = rows[0].querySelectorAll('th, td');
+    let engCol = -1;
+    for (let c = 0; c < hdrCells.length; c++) {
+      const hx = norm(hdrCells[c].innerText || '');
+      if (/engine\\s*#|engine#/i.test(hx)) {
+        engCol = c;
+        break;
+      }
+    }
+    if (engCol < 0) continue;
+    for (let r = 1; r < Math.min(rows.length, 8); r++) {
+      const cells = rows[r].querySelectorAll('td, th');
+      if (cells.length <= engCol) continue;
+      const ev = norm(cells[engCol].innerText || '');
+      if (takeIfGood(ev)) {
+        out.full_engine = ev;
+        break;
+      }
+    }
+  }
+  return out;
+}"""
+
+
+def _score_vehicle_detail_dict(d: dict) -> int:
+    keys = ("full_chassis", "full_engine", "model", "year_of_mfg", "color")
+    return sum(1 for k in keys if (str(d.get(k) or "").strip()))
+
+
+def _merge_scrape_vehicle_record_from_vin_aria(
+    page: Page, scraped: dict, *, content_frame_selector: str | None
+) -> dict:
+    """
+    After left-pane VIN drill-down, read **Vehicle Information** scoped from an input with
+    ``aria-label``/title **VIN** (operator anchor). Produces ``full_chassis``, ``full_engine``,
+    and fills ``model`` / ``year_of_mfg`` / ``color`` when inputs are present.
+    """
+    _ = content_frame_selector
+    merged = dict(scraped) if scraped else {}
+    best: dict = {}
+    for frame in _ordered_frames(page):
+        try:
+            got = frame.evaluate(_VIN_ARIA_SCOPE_SCRAPE_JS)
+            if not isinstance(got, dict) or not got:
+                continue
+            if _score_vehicle_detail_dict(got) > _score_vehicle_detail_dict(best):
+                best = got
+        except Exception:
+            continue
+    if not best:
+        return merged
+    for k in ("full_chassis", "full_engine", "dispatch_year"):
+        v = best.get(k)
+        if v and str(v).strip():
+            merged[k] = str(v).strip()
+    detail_anchor = (best.get("full_chassis") or "").strip()
+    if detail_anchor:
+        for k in ("model", "year_of_mfg", "color"):
+            bv = (best.get(k) or "").strip()
+            if bv:
+                merged[k] = bv
+    else:
+        if best.get("model") and not (merged.get("model") or "").strip():
+            merged["model"] = str(best["model"]).strip()
+        yb = (best.get("year_of_mfg") or "").strip()
+        if yb and not (merged.get("year_of_mfg") or "").strip():
+            merged["year_of_mfg"] = yb
+        if best.get("color") and not (merged.get("color") or "").strip():
+            merged["color"] = str(best["color"]).strip()
+    fc = (merged.get("full_chassis") or "").strip()
+    if fc and not (merged.get("frame_num") or "").strip():
+        merged["frame_num"] = fc
+    fe = (merged.get("full_engine") or "").strip()
+    if fe and not (merged.get("engine_num") or "").strip():
+        merged["engine_num"] = fe
     return merged
 
 
@@ -3034,6 +3202,175 @@ def _siebel_try_click_mobile_search_hit_link(
     return False
 
 
+def _vin_match_key(chassis: str) -> str:
+    """Alphanumeric compact form for matching left-pane VIN links (strip wildcards / spaces)."""
+    s = (chassis or "").strip().lstrip("*").rstrip("*").strip()
+    return re.sub(r"[^A-Za-z0-9]", "", s)
+
+
+def _siebel_try_click_vin_search_hit_link(
+    page: Page,
+    chassis: str,
+    *,
+    timeout_ms: int,
+    content_frame_selector: str | None,
+) -> bool:
+    """
+    After vehicle Find/Enter, open the hit from the left **Search Results** pane (blue VIN hyperlink).
+    Loads **Vehicle Information** / detail so model, color, and year can be scraped from inputs or rows.
+    """
+    vin_key = _vin_match_key(chassis)
+    if not vin_key or len(vin_key) < 5:
+        return False
+    sub_pat = re.compile(".*" + re.escape(vin_key) + ".*", re.I)
+
+    def _try_click_siebel_drilldown(loc) -> bool:
+        try:
+            if not loc.is_visible(timeout=600):
+                return False
+        except Exception:
+            return False
+        for click_try in (
+            lambda: loc.click(timeout=timeout_ms),
+            lambda: loc.click(timeout=timeout_ms, force=True),
+            lambda: loc.dblclick(timeout=timeout_ms),
+        ):
+            try:
+                click_try()
+                return True
+            except Exception:
+                continue
+        return False
+
+    def row_contains_vin(row_compact: str) -> bool:
+        if not row_compact:
+            return False
+        rk = row_compact.upper()
+        vk = vin_key.upper()
+        if vk in rk:
+            return True
+        return rk.endswith(vk) or rk.startswith(vk)
+
+    row_selectors = (
+        "table tbody tr",
+        "table tr",
+        '[role="row"]',
+        "tr[role='row']",
+    )
+
+    def try_click_in_root(root) -> bool:
+        scopes: list = []
+        for title_re in (
+            re.compile(r"Search\s+Results", re.I),
+            re.compile(r"Siebel\s+Find", re.I),
+        ):
+            try:
+                panel = root.locator(".siebui-applet").filter(has_text=title_re).first
+                if panel.count() > 0:
+                    try:
+                        if panel.is_visible(timeout=450):
+                            scopes.append(panel)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        scopes.append(root)
+
+        for scope in scopes:
+            # Title column / list: any visible anchor whose text contains the chassis key (VIN link).
+            try:
+                alinks = scope.locator("a")
+                an = alinks.count()
+                for i in range(min(an, 45)):
+                    link = alinks.nth(i)
+                    try:
+                        if not link.is_visible(timeout=350):
+                            continue
+                        t = link.inner_text(timeout=500) or ""
+                        compact = re.sub(r"[^A-Za-z0-9]", "", t)
+                        if (
+                            len(compact) >= min(10, len(vin_key))
+                            and vin_key.upper() in compact.upper()
+                        ):
+                            if _try_click_siebel_drilldown(link):
+                                return True
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+            try:
+                loc = scope.get_by_role("link", name=sub_pat)
+                ln = loc.count()
+                for i in range(min(ln, 28)):
+                    if _try_click_siebel_drilldown(loc.nth(i)):
+                        return True
+            except Exception:
+                pass
+            for css in (
+                'a[href^="javascript"]',
+                'a[href*="void(0)"]',
+                "a[href*='javascript']",
+                "a.siebui-ctrl-drilldown",
+                "a",
+            ):
+                try:
+                    hits = scope.locator(css).filter(has_text=sub_pat)
+                    hn = hits.count()
+                    for i in range(min(hn, 35)):
+                        if _try_click_siebel_drilldown(hits.nth(i)):
+                            return True
+                except Exception:
+                    continue
+
+        for rsel in row_selectors:
+            try:
+                rows = root.locator(rsel)
+                n = rows.count()
+            except Exception:
+                continue
+            for i in range(min(n, 120)):
+                row = rows.nth(i)
+                try:
+                    if not row.is_visible(timeout=250):
+                        continue
+                except Exception:
+                    continue
+                try:
+                    row_compact = re.sub(r"[^A-Za-z0-9]", "", row.inner_text(timeout=800) or "")
+                except Exception:
+                    continue
+                if not row_contains_vin(row_compact):
+                    continue
+                for inner in (
+                    row.locator("a[href]"),
+                    row.locator("a"),
+                    row.get_by_role("link"),
+                ):
+                    try:
+                        if inner.count() <= 0:
+                            continue
+                        link = inner.first
+                        if link.is_visible(timeout=500):
+                            if _try_click_siebel_drilldown(link):
+                                return True
+                    except Exception:
+                        continue
+                try:
+                    row.click(timeout=timeout_ms)
+                    return True
+                except Exception:
+                    continue
+        return False
+
+    for root in _siebel_locator_search_roots(page, content_frame_selector):
+        try:
+            if try_click_in_root(root):
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def _siebel_video_path_after_find_go_to_all_enquiries(
     page: Page,
     *,
@@ -4270,6 +4607,10 @@ def _merge_add_enquiry_vehicle_scrape(vehicle_merge: dict, scraped: dict) -> Non
         "model",
         "color",
         "year_of_mfg",
+        "dispatch_year",
+        "sku",
+        "full_chassis",
+        "full_engine",
         "key_num",
         "frame_num",
         "engine_num",
@@ -4305,7 +4646,8 @@ def _siebel_vehicle_find_chassis_engine_enter(
 ) -> tuple[bool, dict]:
     """
     Vehicles view: **Find → Vehicles**, right fly-in **VIN** + **Engine#** with ``*`` wildcards, **Enter**,
-    optional Find/Go, then scrape grid and/or **Vehicle Information** detail for model / year / color.
+    optional Find/Go, click matching **VIN** in left **Search Results**, then scrape grid and **Vehicle
+    Information** (model / year / color).
     Returns ``(query_ok, scraped)`` — ``scraped`` may be empty if the grid did not render.
     """
     vu = (vehicle_url or "").strip()
@@ -4427,8 +4769,34 @@ def _siebel_vehicle_find_chassis_engine_enter(
             ) from e
         raise
 
+    if _siebel_try_click_named_in_frames(
+        page,
+        re.compile(r"Siebel\s*Find", re.I),
+        roles=("tab", "link"),
+        timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+    ):
+        note("Add Enquiry: activated Siebel Find tab before VIN drill-down (if present).")
+        _safe_page_wait(page, 500, log_label="after_siebel_find_tab_vehicle")
+
+    if _siebel_try_click_vin_search_hit_link(
+        page,
+        fp,
+        timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+    ):
+        note("Add Enquiry: clicked VIN in left Search Results to load vehicle detail.")
+        _safe_page_wait(page, 1800, log_label="after_vehicle_search_vin_drilldown")
+        try:
+            page.wait_for_load_state("networkidle", timeout=10_000)
+        except PlaywrightTimeout:
+            note("Add Enquiry: networkidle after VIN drill-down timed out; continuing scrape.")
+
     scraped = scrape_siebel_vehicle_row(page, content_frame_selector=content_frame_selector)
     scraped = _merge_scrape_vehicle_detail_applet(
+        page, scraped, content_frame_selector=content_frame_selector
+    )
+    scraped = _merge_scrape_vehicle_record_from_vin_aria(
         page, scraped, content_frame_selector=content_frame_selector
     )
     if scraped.get("key_num") or scraped.get("frame_num") or scraped.get("engine_num"):
@@ -4437,6 +4805,11 @@ def _siebel_vehicle_find_chassis_engine_enter(
         note("Add Enquiry: vehicle detail applet has model (narrow grid).")
     else:
         note("Add Enquiry: vehicle grid/detail scrape found no row yet.")
+    if (scraped.get("full_chassis") or "").strip():
+        note(
+            "Add Enquiry: scraped full VIN scope — "
+            f"full_chassis={scraped.get('full_chassis')!r}, full_engine={scraped.get('full_engine')!r}."
+        )
     return True, scraped
 
 
@@ -4608,6 +4981,8 @@ def _add_enquiry_opportunity(
             color=str(scraped_v.get("color") or ""),
             frame_num=str(scraped_v.get("frame_num") or ""),
             engine_num=str(scraped_v.get("engine_num") or ""),
+            full_chassis=str(scraped_v.get("full_chassis") or ""),
+            full_engine=str(scraped_v.get("full_engine") or ""),
         )
 
     if not _try_click_enquiry_top_tab(
