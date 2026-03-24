@@ -4377,35 +4377,100 @@ def _create_order(
     _vs_url = f"{_base_url}?SWECmd=GotoView&SWEView=Order+Entry+-+My+Orders+View+(Sales)&SWERF=1&SWEHo=&SWEBU=1"
     note(f"Create Order: navigating to Vehicle Sales URL. base={_base_url[:60]}")
     try:
-        page.goto(_vs_url, timeout=min(action_timeout_ms * 3, 30000), wait_until="domcontentloaded")
-    except Exception as _e:
-        note(f"Create Order: goto Vehicle Sales URL raised {_e!r} — continuing.")
-    _safe_page_wait(page, 2500, log_label="after_goto_vehicle_sales")
-    note(f"Create Order: arrived at Vehicle Sales. URL={page.url[:120]}")
+        page.goto(_vs_url, timeout=min(action_timeout_ms * 3, 45000), wait_until="load")
+    except Exception:
+        try:
+            page.goto(_vs_url, timeout=min(action_timeout_ms * 3, 45000), wait_until="domcontentloaded")
+        except Exception as _e:
+            note(f"Create Order: goto Vehicle Sales URL raised {_e!r} — continuing.")
+    _siebel_after_goto_wait(page, floor_ms=4500)
+    note(f"Create Order: arrived at Vehicle Sales (post-goto wait). URL={page.url[:120]}")
 
-    # Query by mobile in the current list/apply-enter.
-    _mobile_query_ok = _fill_any(
-        (
-            "input[id='1_Mobile_Phone']",
-            "input[name='Mobile_Phone']",
-            "input[aria-label*='Mobile Phone' i]",
-            "input[title*='Mobile Phone' i]",
-            "input[id='1_Mobile_Number']",
-            "input[name='Mobile_Number']",
-            "input[aria-label*='Mobile Number' i]",
-        ),
-        mobile,
-        timeout=min(action_timeout_ms, 3000),
+    try:
+        if _try_expand_find_flyin(page, timeout_ms=min(action_timeout_ms, 5000), content_frame_selector=content_frame_selector):
+            note("Create Order: expanded Find fly-in for Vehicle Sales list query.")
+            _safe_page_wait(page, 1000, log_label="after_vs_find_expand")
+    except Exception:
+        pass
+
+    _mobile_selectors = (
+        "input[id='1_Mobile_Phone']",
+        "input[name='Mobile_Phone']",
+        "input[aria-label*='Mobile Phone' i]",
+        "input[title*='Mobile Phone' i]",
+        "input[id='1_Mobile_Number']",
+        "input[name='Mobile_Number']",
+        "input[aria-label*='Mobile Number' i]",
+        "input[title*='Mobile Number' i]",
+        "input[id*='Mobile_Phone' i]",
+        "input[id*='Mobile_Number' i]",
     )
+
+    def _fill_mobile_via_label() -> bool:
+        m = (mobile or "").strip()
+        if not m:
+            return False
+        for root in _roots():
+            for pat in (
+                re.compile(r"mobile\s*phone", re.I),
+                re.compile(r"mobile\s*number", re.I),
+                re.compile(r"cell\s*phone", re.I),
+            ):
+                try:
+                    loc = root.get_by_label(pat).first
+                    if loc.count() > 0 and loc.is_visible(timeout=600):
+                        try:
+                            loc.click(timeout=min(action_timeout_ms, 2000))
+                        except Exception:
+                            loc.click(timeout=min(action_timeout_ms, 2000), force=True)
+                        try:
+                            loc.fill(m, timeout=min(action_timeout_ms, 3000))
+                        except Exception:
+                            try:
+                                loc.press("Control+a", timeout=800)
+                            except Exception:
+                                pass
+                            loc.type(m, delay=25, timeout=min(action_timeout_ms, 4000))
+                        return True
+                except Exception:
+                    continue
+        return False
+
+    _mobile_query_ok = False
+    for _attempt in range(4):
+        if _fill_any(_mobile_selectors, mobile, timeout=min(action_timeout_ms, 3500)):
+            _mobile_query_ok = True
+            note(f"Create Order: Vehicle Sales mobile field filled (attempt {_attempt + 1}).")
+            break
+        if _fill_mobile_via_label():
+            _mobile_query_ok = True
+            note(f"Create Order: Vehicle Sales mobile filled via get_by_label (attempt {_attempt + 1}).")
+            break
+        _safe_page_wait(page, 1400, log_label=f"vs_mobile_field_retry_{_attempt}")
+
     if _mobile_query_ok:
         try:
             page.keyboard.press("Enter")
         except Exception:
             pass
-        _safe_page_wait(page, 1000, log_label="after_vehicle_sales_mobile_search")
-        note(f"Create Order: searched Vehicle Sales by mobile={mobile!r}. URL={page.url[:120]}")
+        _safe_page_wait(page, 600, log_label="after_vs_mobile_enter")
+        _click_any(
+            (
+                "a[aria-label='My Orders List:Query']",
+                "button[aria-label='My Orders List:Query']",
+                "a[aria-label*='My Orders' i][aria-label*='Query' i]",
+                "button[aria-label*='My Orders' i][aria-label*='Query' i]",
+                "a[aria-label*='Orders List' i][aria-label*='Query' i]",
+                "button[aria-label*='Orders List' i][aria-label*='Query' i]",
+                "a[aria-label='Order Entry - My Orders List:Query']",
+                "a[aria-label*='Order Entry' i][aria-label*='Query' i]",
+            ),
+            timeout=min(action_timeout_ms, 3500),
+        )
+        _safe_page_wait(page, 4000, log_label="after_vehicle_sales_mobile_query_refresh")
+        note(f"Create Order: Vehicle Sales list queried by mobile={mobile!r}. URL={page.url[:120]}")
     else:
-        note("Create Order: mobile search field not found; continuing with fallback row handling.")
+        note("Create Order: mobile search field not found after retries; continuing without list filter.")
 
     # JS snippet run inside each frame to find and click the first Order Number drill-down link.
     # Siebel renders the link as <a name="Order Number">ORDER-VALUE</a> inside a grid td.
@@ -4465,6 +4530,43 @@ def _create_order(
         return '';
     }"""
 
+    _JS_CLICK_ORDER_LINK_MATCH_MOBILE = """(needle) => {
+        const n = String(needle || '').replace(/\\D/g, '');
+        if (!n) return '';
+        const vis = (el) => {
+            if (!el) return false;
+            const st = window.getComputedStyle(el);
+            if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity) === 0) return false;
+            const r = el.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+        };
+        const rowSels = [
+            'table.ui-jqgrid-btable tbody tr',
+            'div.ui-jqgrid-bdiv table tbody tr',
+            'table.siebui-list tbody tr',
+            'table tbody tr',
+            '[role="row"]'
+        ];
+        for (const rs of rowSels) {
+            const rows = document.querySelectorAll(rs);
+            for (const tr of rows) {
+                if (tr.closest('thead')) continue;
+                if (!vis(tr)) continue;
+                const digits = (tr.innerText || '').replace(/\\D/g, '');
+                if (!digits.includes(n)) continue;
+                const a = tr.querySelector(
+                    "a[name='Order Number'], a[name='Order #'], td[aria-describedby*='Order_Number'] a, td[aria-describedby*='Order#'] a"
+                ) || tr.querySelector('td a');
+                if (a && vis(a)) {
+                    try { a.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
+                    a.click();
+                    return 'mobile-match:' + rs;
+                }
+            }
+        }
+        return '';
+    }"""
+
     def _click_order_link_via_js() -> bool:
         """Try JS evaluate on every frame to click the Order Number drill-down link."""
         for frame in _ordered_frames(page):
@@ -4472,6 +4574,21 @@ def _create_order(
                 result = frame.evaluate(_JS_CLICK_ORDER_LINK)
                 if result:
                     note(f"Create Order: JS clicked Order link in frame. result={result!r}")
+                    return True
+            except Exception:
+                continue
+        return False
+
+    def _click_order_link_js_row_matching_mobile() -> bool:
+        """Prefer Order# link on the grid row that contains the customer's mobile digits."""
+        nd = re.sub(r"\D", "", (mobile or "").strip())
+        if not nd:
+            return False
+        for frame in _ordered_frames(page):
+            try:
+                result = frame.evaluate(_JS_CLICK_ORDER_LINK_MATCH_MOBILE, nd)
+                if result:
+                    note(f"Create Order: JS clicked Order# on mobile-matched row. result={result!r}")
                     return True
             except Exception:
                 continue
@@ -4505,8 +4622,10 @@ def _create_order(
         return False
 
     def _open_order_link(attempt_label: str) -> bool:
-        """JS path first (most reliable for nested Siebel iframes), then Playwright path."""
+        """Mobile-matched row first, then first visible Order# (JS / Playwright)."""
         note(f"Create Order: attempting Order# click ({attempt_label}).")
+        if _click_order_link_js_row_matching_mobile():
+            return True
         if _click_order_link_via_js():
             return True
         if _click_order_link_via_playwright():
