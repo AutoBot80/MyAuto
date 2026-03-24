@@ -5066,6 +5066,56 @@ def _fill_by_label_on_frame(
     return False
 
 
+def _select_dropdown_by_label_on_frame(
+    frame: Frame,
+    *,
+    label: str,
+    value: str,
+    action_timeout_ms: int,
+) -> bool:
+    """
+    Strict frame-scoped dropdown selection for Opportunity Form.
+    Avoids page/global roots that can pull focus to a different applet/frame.
+    """
+    sv = (value or "").strip()
+    if not sv:
+        return False
+    pats = (
+        re.compile(rf"^\s*{re.escape(label)}\s*$", re.I),
+        re.compile(re.escape(label), re.I),
+    )
+    val_pat = re.compile(rf"^\s*{re.escape(sv)}\s*$", re.I)
+
+    for pat in pats:
+        try:
+            fld = frame.get_by_label(pat).first
+            if fld.count() <= 0 or not fld.is_visible(timeout=700):
+                continue
+            try:
+                fld.click(timeout=action_timeout_ms)
+            except Exception:
+                fld.click(timeout=action_timeout_ms, force=True)
+            try:
+                fld.select_option(label=sv, timeout=action_timeout_ms)
+                return True
+            except Exception:
+                pass
+            for role in ("option", "menuitem", "link"):
+                try:
+                    opt = frame.get_by_role(role, name=val_pat).first
+                    if opt.count() > 0 and opt.is_visible(timeout=650):
+                        try:
+                            opt.click(timeout=action_timeout_ms)
+                        except Exception:
+                            opt.click(timeout=action_timeout_ms, force=True)
+                        return True
+                except Exception:
+                    continue
+        except Exception:
+            continue
+    return False
+
+
 def _add_enquiry_opportunity(
     page: Page,
     dms_values: dict,
@@ -5185,20 +5235,14 @@ def _add_enquiry_opportunity(
             if _fill_by_label_on_frame(enq_frame, lb, sv, action_timeout_ms=action_timeout_ms):
                 _safe_page_wait(page, 200, log_label="add_enq_after_field")
                 return True
-            for rx in (
-                re.compile(rf"^\s*{re.escape(lb)}\s*$", re.I),
-                re.compile(re.escape(lb), re.I),
+            if _select_dropdown_by_label_on_frame(
+                enq_frame,
+                label=lb,
+                value=sv,
+                action_timeout_ms=min(action_timeout_ms, 8000),
             ):
-                if select_siebel_dropdown_value(
-                    page,
-                    field_label_patterns=(rx,),
-                    value=sv,
-                    timeout_ms=min(action_timeout_ms, 8000),
-                    content_frame_selector=content_frame_selector,
-                    note=note,
-                ):
-                    _safe_page_wait(page, 200, log_label="add_enq_after_dd")
-                    return True
+                _safe_page_wait(page, 200, log_label="add_enq_after_dd_frame_scoped")
+                return True
         if required:
             note(f"Add Enquiry: could not set {labels} to {sv!r}.")
             return False
