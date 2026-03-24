@@ -4433,128 +4433,172 @@ def _create_order(
     _safe_page_wait(page, 900, log_label="after_vehicle_sales_click")
     note("Create Order: opened Vehicle Sales from first-level view bar.")
 
-    # 2) Click + (Sales Orders New:List)
-    if not _click_any(
-        (
-            "a[aria-label='Sales Orders New:List']",
-            "button[aria-label='Sales Orders New:List']",
-            "a[title='Sales Orders New:List']",
-            "button[title='Sales Orders New:List']",
-            "a[aria-label*='Sales Orders' i][aria-label*='New' i]",
-            "button[aria-label*='Sales Orders' i][aria-label*='New' i]",
-        ),
-        timeout=min(action_timeout_ms, 3000),
-    ):
-        return False, "Could not click Sales Orders New:List (+).", scraped
-    _safe_page_wait(page, 1000, log_label="after_sales_orders_new")
-    note("Create Order: clicked Sales Orders New:List (+).")
-
-    # 3) Booking Order Type = Normal Booking
-    _set_ok = False
+    # If Mobile_Number is already populated, skip new-order (+) path and directly
+    # open the existing row by double-clicking Order#.
+    _mobile_already_populated = False
     for root in _roots():
         try:
-            if _fill_by_label_on_frame(root, "Booking Order Type", "Normal Booking", action_timeout_ms=action_timeout_ms):
-                _set_ok = True
-                break
-            if _select_dropdown_by_label_on_frame(
-                root, label="Booking Order Type", value="Normal Booking", action_timeout_ms=min(action_timeout_ms, 8000)
+            for css in (
+                "input[id='1_Mobile_Number']",
+                "input[name='Mobile_Number']",
+                "input[id='1_Mobile_Phone']",
+                "input[name='Mobile_Phone']",
+                "input[aria-label*='Mobile Number' i]",
+                "input[aria-label*='Mobile Phone' i]",
             ):
-                _set_ok = True
+                loc = root.locator(css).first
+                if loc.count() <= 0:
+                    continue
+                if not loc.is_visible(timeout=300):
+                    continue
+                v = (loc.input_value(timeout=600) or "").strip()
+                if v:
+                    _mobile_already_populated = True
+                    break
+            if _mobile_already_populated:
                 break
         except Exception:
             continue
-    if not _set_ok:
-        return False, "Could not set Booking Order Type = Normal Booking.", scraped
-    _safe_page_wait(page, 600, log_label="after_booking_order_type")
-    note("Create Order: set Booking Order Type = Normal Booking.")
+    note(f"Create Order: mobile pre-filled check -> {_mobile_already_populated!r}.")
 
-    # 4) Contact Last Name pick/search icon -> opens pick applet
-    if not _click_any(
-        (
-            "a[aria-label*='Contact Last Name' i][aria-label*='Pick' i]",
-            "button[aria-label*='Contact Last Name' i][aria-label*='Pick' i]",
-            "a[title*='Contact Last Name' i][title*='Pick' i]",
-            "a[aria-label*='Pick Contact' i]",
-            "button[aria-label*='Pick Contact' i]",
-        ),
-        timeout=min(action_timeout_ms, 3000),
-    ):
-        return False, "Could not open Contact Last Name pick/search applet.", scraped
-    _safe_page_wait(page, 900, log_label="after_open_contact_pick")
-    note("Create Order: opened Contact Last Name pick/search applet.")
+    if not _mobile_already_populated:
+        # 2) Click + (Sales Orders New:List)
+        if not _click_any(
+            (
+                "a[aria-label='Sales Orders New:List']",
+                "button[aria-label='Sales Orders New:List']",
+                "a[title='Sales Orders New:List']",
+                "button[title='Sales Orders New:List']",
+                "a[aria-label*='Sales Orders' i][aria-label*='New' i]",
+                "button[aria-label*='Sales Orders' i][aria-label*='New' i]",
+            ),
+            timeout=min(action_timeout_ms, 3000),
+        ):
+            return False, "Could not click Sales Orders New:List (+).", scraped
+        _safe_page_wait(page, 1000, log_label="after_sales_orders_new")
+        note("Create Order: clicked Sales Orders New:List (+).")
 
-    # 5) Pick Contact List:Query
-    if not _click_any(
-        (
-            "a[aria-label='Pick Contact List:Query']",
-            "button[aria-label='Pick Contact List:Query']",
-            "a[title='Pick Contact List:Query']",
-            "button[title='Pick Contact List:Query']",
-            "a[aria-label*='Pick Contact List' i][aria-label*='Query' i]",
-        ),
-        timeout=min(action_timeout_ms, 3000),
-    ):
-        return False, "Could not click Pick Contact List:Query.", scraped
-    _safe_page_wait(page, 700, log_label="after_pick_contact_query")
-    note("Create Order: clicked Pick Contact List:Query.")
+        # 3) Booking Order Type = Normal Booking
+        _set_ok = False
+        for root in _roots():
+            try:
+                if _fill_by_label_on_frame(root, "Booking Order Type", "Normal Booking", action_timeout_ms=action_timeout_ms):
+                    _set_ok = True
+                    break
+                if _select_dropdown_by_label_on_frame(
+                    root, label="Booking Order Type", value="Normal Booking", action_timeout_ms=min(action_timeout_ms, 8000)
+                ):
+                    _set_ok = True
+                    break
+            except Exception:
+                continue
+        if not _set_ok:
+            return False, "Could not set Booking Order Type = Normal Booking.", scraped
+        _safe_page_wait(page, 600, log_label="after_booking_order_type")
+        note("Create Order: set Booking Order Type = Normal Booking.")
 
-    # 6) Fill id=1_Mobile_Phone + Enter
-    if not _fill_any(
-        (
-            "input[id='1_Mobile_Phone']",
-            "input[name='Mobile_Phone']",
-            "input[aria-label*='Mobile Phone' i]",
-        ),
-        mobile,
-        timeout=min(action_timeout_ms, 3000),
-    ):
-        return False, "Could not fill mobile number in Pick Contact List.", scraped
-    try:
-        page.keyboard.press("Enter")
-    except Exception:
-        pass
-    _safe_page_wait(page, 900, log_label="after_pick_contact_mobile_enter")
-    note(f"Create Order: queried Pick Contact List by mobile={mobile!r}.")
+        # 4) Contact Last Name pick/search icon -> opens pick applet
+        if not _click_any(
+            (
+                "a[aria-label*='Contact Last Name' i][aria-label*='Pick' i]",
+                "button[aria-label*='Contact Last Name' i][aria-label*='Pick' i]",
+                "a[title*='Contact Last Name' i][title*='Pick' i]",
+                "a[aria-label*='Pick Contact' i]",
+                "button[aria-label*='Pick Contact' i]",
+            ),
+            timeout=min(action_timeout_ms, 3000),
+        ):
+            return False, "Could not open Contact Last Name pick/search applet.", scraped
+        _safe_page_wait(page, 900, log_label="after_open_contact_pick")
+        note("Create Order: opened Contact Last Name pick/search applet.")
 
-    # 7) OK in pick applet
-    if not _click_any(
-        (
-            "button:has-text('OK')",
-            "a:has-text('OK')",
-            "button[aria-label='OK']",
-            "a[aria-label='OK']",
-        ),
-        timeout=min(action_timeout_ms, 3000),
-    ):
-        return False, "Could not click OK in Pick Contact List applet.", scraped
-    _safe_page_wait(page, 1200, log_label="after_pick_contact_ok")
-    note("Create Order: selected contact and closed pick applet via OK.")
+        # 5) Pick Contact List:Query
+        if not _click_any(
+            (
+                "a[aria-label='Pick Contact List:Query']",
+                "button[aria-label='Pick Contact List:Query']",
+                "a[title='Pick Contact List:Query']",
+                "button[title='Pick Contact List:Query']",
+                "a[aria-label*='Pick Contact List' i][aria-label*='Query' i]",
+            ),
+            timeout=min(action_timeout_ms, 3000),
+        ):
+            return False, "Could not click Pick Contact List:Query.", scraped
+        _safe_page_wait(page, 700, log_label="after_pick_contact_query")
+        note("Create Order: clicked Pick Contact List:Query.")
 
-    # 8) Ctrl+S save
-    try:
-        page.keyboard.press("Control+s")
-    except Exception:
+        # 6) Fill id=1_Mobile_Phone + Enter
+        if not _fill_any(
+            (
+                "input[id='1_Mobile_Phone']",
+                "input[name='Mobile_Phone']",
+                "input[aria-label*='Mobile Phone' i]",
+            ),
+            mobile,
+            timeout=min(action_timeout_ms, 3000),
+        ):
+            return False, "Could not fill mobile number in Pick Contact List.", scraped
         try:
-            page.keyboard.press("Meta+s")
+            page.keyboard.press("Enter")
         except Exception:
-            return False, "Could not press Ctrl+S on Sales Order form.", scraped
-    _safe_page_wait(page, 1500, log_label="after_create_order_save")
-    note("Create Order: pressed Ctrl+S on Sales Order form.")
+            pass
+        _safe_page_wait(page, 900, log_label="after_pick_contact_mobile_enter")
+        note(f"Create Order: queried Pick Contact List by mobile={mobile!r}.")
 
-    # 9) Click created Order# link under Order_Number column
-    _order_opened = _click_any(
-        (
+        # 7) OK in pick applet
+        if not _click_any(
+            (
+                "button:has-text('OK')",
+                "a:has-text('OK')",
+                "button[aria-label='OK']",
+                "a[aria-label='OK']",
+            ),
+            timeout=min(action_timeout_ms, 3000),
+        ):
+            return False, "Could not click OK in Pick Contact List applet.", scraped
+        _safe_page_wait(page, 1200, log_label="after_pick_contact_ok")
+        note("Create Order: selected contact and closed pick applet via OK.")
+
+        # 8) Ctrl+S save
+        try:
+            page.keyboard.press("Control+s")
+        except Exception:
+            try:
+                page.keyboard.press("Meta+s")
+            except Exception:
+                return False, "Could not press Ctrl+S on Sales Order form.", scraped
+        _safe_page_wait(page, 1500, log_label="after_create_order_save")
+        note("Create Order: pressed Ctrl+S on Sales Order form.")
+    else:
+        note("Create Order: Mobile_Number already populated; skipped + and contact-pick flow.")
+
+    # 9) Double-click Order# link under Order_Number column
+    _order_opened = False
+    for root in _roots():
+        for css in (
             "a[aria-label*='Order#' i]",
             "a[title*='Order#' i]",
             "td[aria-describedby*='Order_Number' i] a",
             "tr[id^='s_1_l'] td[aria-describedby*='Order_Number' i] a",
-        ),
-        timeout=min(action_timeout_ms, 3500),
-    )
+        ):
+            try:
+                loc = root.locator(css).first
+                if loc.count() <= 0 or not loc.is_visible(timeout=500):
+                    continue
+                try:
+                    loc.dblclick(timeout=min(action_timeout_ms, 3500))
+                except Exception:
+                    loc.dblclick(timeout=min(action_timeout_ms, 3500), force=True)
+                _order_opened = True
+                break
+            except Exception:
+                continue
+        if _order_opened:
+            break
     if not _order_opened:
-        return False, "Could not click created Order# row/link.", scraped
+        return False, "Could not double-click Order# row/link.", scraped
     _safe_page_wait(page, 1200, log_label="after_open_order_link")
-    note("Create Order: opened created Order# row.")
+    note("Create Order: double-clicked Order# row.")
 
     # 10) Vehicle Sales page: click New -> VIN fill -> search
     if not _click_any(
