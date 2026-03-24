@@ -808,6 +808,508 @@ def _try_prepare_find_contact_applet(
     return False
 
 
+def _siebel_vehicle_find_wildcard_value(raw: str) -> str:
+    """Hero Connect vehicle Find uses ``*`` prefix on VIN/Engine for partial match (see operator screenshots)."""
+    s = (raw or "").strip()
+    if not s:
+        return s
+    if s.startswith("*"):
+        return s
+    return f"*{s}"
+
+
+def _try_prepare_find_vehicles_applet(
+    page: Page, *, timeout_ms: int, content_frame_selector: str | None
+) -> bool:
+    """
+    Header **Find** → object type **Vehicles** (same pattern as Find → Contact), so the right fly-in
+    exposes **VIN** / **Engine#** query fields — not Job Card / Contact / Vehicle Sales.
+    """
+    vehicles_label = re.compile(r"^\s*Vehicles\s*$", re.I)
+    find_label = re.compile(r"^\s*Find\s*$", re.I)
+
+    def _force_open_vehicles_find_via_dom() -> bool:
+        js = """() => {
+          const vis = (el) => {
+            if (!el) return false;
+            const st = window.getComputedStyle(el);
+            if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+            const r = el.getBoundingClientRect();
+            return r.width >= 10 && r.height >= 10;
+          };
+          const norm = (s) => String(s || '').trim().toLowerCase();
+          const sels = Array.from(document.querySelectorAll('select')).filter(vis);
+          for (const sel of sels) {
+            const opts = Array.from(sel.options || []);
+            const hasFind = opts.some(o => norm(o.textContent) === 'find');
+            const veh = opts.find(o => norm(o.textContent) === 'vehicles');
+            if (!hasFind || !veh) continue;
+            sel.focus();
+            sel.value = veh.value;
+            sel.dispatchEvent(new Event('input', { bubbles: true }));
+            sel.dispatchEvent(new Event('change', { bubbles: true }));
+            sel.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+            sel.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', bubbles: true }));
+            sel.blur();
+            const host = sel.closest('div,td,th,form,header') || sel.parentElement || document.body;
+            const trig = host.querySelector(
+              '[title*="find" i], [aria-label*="find" i], button[title*="find" i], a[title*="find" i]'
+            );
+            if (trig && vis(trig)) {
+              try { trig.click(); } catch (e) {}
+            }
+            return true;
+          }
+          return false;
+        }"""
+        try:
+            ok = bool(page.evaluate(js))
+            if ok:
+                logger.info("siebel_dms: forced global Vehicles selection via DOM fallback")
+                _safe_page_wait(page, 700, log_label="force_open_vehicles_find_dom")
+            return ok
+        except Exception:
+            return False
+
+    def _select_global_find_vehicles(root) -> bool:
+        for scope in (root, page):
+            try:
+                cb = scope.get_by_role("combobox", name=find_label).first
+                if cb.count() <= 0 or not cb.is_visible(timeout=500):
+                    continue
+                cb.click(timeout=timeout_ms)
+                _safe_page_wait(page, 250, log_label="global_find_open_vehicles_click")
+                for role in ("option", "menuitem", "link"):
+                    try:
+                        item = page.get_by_role(role, name=vehicles_label).first
+                        if item.count() > 0 and item.is_visible(timeout=600):
+                            item.click(timeout=timeout_ms)
+                            logger.info("siebel_dms: global finder clicked Vehicles (%s)", role)
+                            _safe_page_wait(page, 500, log_label="global_find_vehicles_clicked")
+                            return True
+                    except Exception:
+                        continue
+            except Exception:
+                continue
+
+        try:
+            sels = root.locator("select")
+            n = sels.count()
+        except Exception:
+            n = 0
+        for i in range(min(n, 20)):
+            try:
+                sel = sels.nth(i)
+                if not sel.is_visible(timeout=500):
+                    continue
+                opts = sel.evaluate(
+                    """el => [...el.options].map(o => (o.textContent || '').trim().toLowerCase())"""
+                )
+                if not opts:
+                    continue
+                has_find = any(x == "find" for x in opts)
+                has_vehicles = any(x == "vehicles" for x in opts)
+                if not (has_find and has_vehicles):
+                    continue
+                try:
+                    sel.select_option(label=find_label, timeout=timeout_ms)
+                    _safe_page_wait(page, 180, log_label="global_find_select_find_vehicles")
+                except Exception:
+                    pass
+                sel.select_option(label=vehicles_label, timeout=timeout_ms)
+                logger.info("siebel_dms: global top finder selected Vehicles (native select)")
+                _safe_page_wait(page, 350, log_label="global_find_vehicles_select")
+                return True
+            except Exception:
+                continue
+
+        for scope in (root, page):
+            try:
+                cb = scope.get_by_role("combobox", name=re.compile(r"^\s*find\s*$", re.I)).first
+                if cb.count() > 0 and cb.is_visible(timeout=500):
+                    cb.click(timeout=timeout_ms)
+                    _safe_page_wait(page, 250, log_label="global_find_open_vehicles")
+                    for role in ("option", "menuitem", "link"):
+                        try:
+                            item = page.get_by_role(role, name=vehicles_label).first
+                            if item.count() > 0 and item.is_visible(timeout=500):
+                                item.click(timeout=timeout_ms)
+                                logger.info("siebel_dms: global top finder chose Vehicles (%s)", role)
+                                _safe_page_wait(page, 350, log_label="global_find_vehicles_menu")
+                                return True
+                        except Exception:
+                            continue
+            except Exception:
+                continue
+        if _force_open_vehicles_find_via_dom():
+            return True
+        return False
+
+    def _visible_selects(root):
+        try:
+            loc = root.locator("select")
+            n = loc.count()
+        except Exception:
+            return []
+        out = []
+        for i in range(min(n, 50)):
+            try:
+                s = loc.nth(i)
+                if s.is_visible(timeout=400):
+                    out.append(s)
+            except Exception:
+                continue
+        return out
+
+    def select_vehicles_on_native_selects(root) -> bool:
+        for sel in _visible_selects(root):
+            try:
+                texts = sel.evaluate(
+                    """el => [...el.options].map(o => (o.textContent || '').trim())"""
+                )
+                if not texts or not any((t or "").strip().lower() == "vehicles" for t in texts):
+                    continue
+                exact = [t for t in texts if (t or "").strip().lower() == "vehicles"]
+                if not exact:
+                    continue
+                sel.select_option(label=vehicles_label, timeout=timeout_ms)
+                logger.info("siebel_dms: Find object type → Vehicles (native select)")
+                return True
+            except Exception:
+                continue
+        return False
+
+    def click_vehicles_menu(page_: Page, root) -> bool:
+        for scope in (root, page_):
+            for role in ("menuitem", "option", "link"):
+                try:
+                    loc = scope.get_by_role(role, name=vehicles_label).first
+                    if loc.count() > 0 and loc.is_visible(timeout=800):
+                        loc.click(timeout=timeout_ms)
+                        logger.info("siebel_dms: chose Vehicles from Find menu (%s)", role)
+                        return True
+                except Exception:
+                    continue
+        return False
+
+    def open_find_dropdown_then_vehicles(page_: Page, root) -> bool:
+        try:
+            cb = root.get_by_role("combobox", name=re.compile(r"find", re.I)).first
+            if cb.count() > 0 and cb.is_visible(timeout=700):
+                cb.click(timeout=timeout_ms)
+                _safe_page_wait(page_, 400, log_label="find_combobox_vehicles")
+                if click_vehicles_menu(page_, root):
+                    return True
+        except Exception:
+            pass
+        return False
+
+    def try_on_root(page_: Page, root) -> bool:
+        changed_global = _select_global_find_vehicles(root)
+        if select_vehicles_on_native_selects(root):
+            return True
+        if open_find_dropdown_then_vehicles(page_, root):
+            return True
+        return changed_global
+
+    for fl in _iter_frame_locator_roots(page, content_frame_selector):
+        try:
+            if try_on_root(page, fl):
+                return True
+        except Exception:
+            pass
+    for frame in _ordered_frames(page):
+        try:
+            if try_on_root(page, frame):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _try_fill_vin_engine_in_vehicles_find_applet(
+    page: Page,
+    *,
+    chassis_wildcard: str,
+    engine_wildcard: str,
+    timeout_ms: int,
+    content_frame_selector: str | None,
+) -> bool:
+    """
+    Fill **VIN** and **Engine#** inside the Find→Vehicles right fly-in, then **Enter** on the engine field.
+    Values should already include Siebel ``*`` wildcards when required.
+    """
+    cw = (chassis_wildcard or "").strip()
+    ew = (engine_wildcard or "").strip()
+    if not cw or not ew:
+        return False
+
+    vin_css = (
+        'input[title*="VIN" i]',
+        'input[aria-label*="VIN" i]',
+        'input[title*="Chassis" i]',
+        'input[aria-label*="Chassis" i]',
+    )
+    eng_css = (
+        'input[title*="Engine#" i]',
+        'input[title*="Engine #" i]',
+        'input[aria-label*="Engine#" i]',
+        'input[aria-label*="Engine #" i]',
+        'input[title^="Engine" i]',
+        'input[aria-label*="Engine" i]',
+    )
+
+    _FILL_VIN_ENGINE_RIGHT_PANEL_JS = """(args) => {
+      const chassisW = String(args.chassis || '').trim();
+      const engineW = String(args.engine || '').trim();
+      if (!chassisW || !engineW) return false;
+      const vis = (el) => {
+        if (!el) return false;
+        const st = window.getComputedStyle(el);
+        if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+        const r = el.getBoundingClientRect();
+        return r.width >= 2 && r.height >= 2;
+      };
+      const isTxt = (el) => {
+        if (!el || el.tagName !== 'INPUT') return false;
+        const t = String(el.type || 'text').toLowerCase();
+        return !['hidden','submit','button','checkbox','radio','file','image'].includes(t);
+      };
+      const scorePanel = (d) => {
+        const t = (d.innerText || '').toLowerCase();
+        let s = 0;
+        if (t.includes('vin')) s += 5;
+        if (t.includes('engine')) s += 5;
+        if (t.includes('vehicle')) s += 2;
+        if (t.includes('registration')) s += 1;
+        return s;
+      };
+      const panelCandidates = Array.from(document.querySelectorAll('div'))
+        .filter(vis)
+        .filter((d) => {
+          const r = d.getBoundingClientRect();
+          if (r.width < 200 || r.width > 520 || r.height < 160 || r.height > 720) return false;
+          if (r.left < window.innerWidth * 0.48) return false;
+          return scorePanel(d) >= 8;
+        });
+      if (!panelCandidates.length) return false;
+      panelCandidates.sort((a, b) => scorePanel(b) - scorePanel(a));
+      for (const panel of panelCandidates) {
+        const inputs = Array.from(panel.querySelectorAll('input')).filter((i) => isTxt(i) && vis(i));
+        if (inputs.length < 2) continue;
+        const vinEl = inputs.find((i) => {
+          const t = String(i.getAttribute('title') || '').toLowerCase();
+          const a = String(i.getAttribute('aria-label') || '').toLowerCase();
+          return t.includes('vin') || a.includes('vin') || t.includes('chassis') || a.includes('chassis');
+        });
+        const engEl = inputs.find((i) => {
+          const t = String(i.getAttribute('title') || '').toLowerCase();
+          const a = String(i.getAttribute('aria-label') || '').toLowerCase();
+          return t.includes('engine') || a.includes('engine');
+        });
+        if (!vinEl || !engEl) continue;
+        try {
+          vinEl.focus();
+          vinEl.value = '';
+          vinEl.value = chassisW;
+          vinEl.dispatchEvent(new Event('input', { bubbles: true }));
+          vinEl.dispatchEvent(new Event('change', { bubbles: true }));
+          engEl.focus();
+          engEl.value = '';
+          engEl.value = engineW;
+          engEl.dispatchEvent(new Event('input', { bubbles: true }));
+          engEl.dispatchEvent(new Event('change', { bubbles: true }));
+          engEl.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
+          engEl.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
+        } catch (e) {
+          continue;
+        }
+        return true;
+      }
+      return false;
+    }"""
+
+    def try_root(root) -> bool:
+        applets: list = []
+        try:
+            cand = root.locator(".siebui-applet").filter(has_text=re.compile(r"VIN|Engine", re.I))
+            n = cand.count()
+            for i in range(min(n, 14)):
+                a = cand.nth(i)
+                try:
+                    if not a.is_visible(timeout=500):
+                        continue
+                    txt = (a.inner_text(timeout=900) or "").lower()
+                    if "vin" in txt and "engine" in txt:
+                        applets.append(a)
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        if not applets:
+            try:
+                cand = root.locator(".siebui-applet").filter(has_text=re.compile(r"Engine", re.I))
+                n = cand.count()
+                for i in range(min(n, 10)):
+                    a = cand.nth(i)
+                    try:
+                        if a.is_visible(timeout=450):
+                            applets.append(a)
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+
+        for applet in applets:
+            vin_loc = None
+            for css in vin_css:
+                try:
+                    loc = applet.locator(css).first
+                    if loc.count() > 0 and loc.is_visible(timeout=700):
+                        vin_loc = loc
+                        break
+                except Exception:
+                    continue
+            if vin_loc is None:
+                try:
+                    loc = applet.get_by_label(re.compile(r"^\s*VIN\s*$", re.I)).first
+                    if loc.count() > 0 and loc.is_visible(timeout=700):
+                        vin_loc = loc
+                except Exception:
+                    pass
+            eng_loc = None
+            for css in eng_css:
+                try:
+                    loc = applet.locator(css).first
+                    if loc.count() > 0 and loc.is_visible(timeout=700):
+                        eng_loc = loc
+                        break
+                except Exception:
+                    continue
+            if eng_loc is None:
+                for pat in (
+                    re.compile(r"Engine\s*#", re.I),
+                    re.compile(r"^\s*Engine\s*#\s*$", re.I),
+                ):
+                    try:
+                        loc = applet.get_by_label(pat).first
+                        if loc.count() > 0 and loc.is_visible(timeout=700):
+                            eng_loc = loc
+                            break
+                    except Exception:
+                        continue
+            if vin_loc is None or eng_loc is None:
+                continue
+            try:
+                try:
+                    vin_loc.click(timeout=min(3000, timeout_ms))
+                except Exception:
+                    vin_loc.click(timeout=min(3000, timeout_ms), force=True)
+                vin_loc.fill("", timeout=min(3000, timeout_ms))
+                vin_loc.fill(cw, timeout=timeout_ms)
+                try:
+                    eng_loc.click(timeout=min(3000, timeout_ms))
+                except Exception:
+                    eng_loc.click(timeout=min(3000, timeout_ms), force=True)
+                eng_loc.fill("", timeout=min(3000, timeout_ms))
+                eng_loc.fill(ew, timeout=timeout_ms)
+                eng_loc.press("Enter", timeout=min(8000, timeout_ms))
+                logger.info("siebel_dms: filled VIN + Engine# in Vehicles Find applet and pressed Enter")
+                return True
+            except Exception:
+                continue
+        return False
+
+    for frame in _ordered_frames(page):
+        try:
+            if bool(
+                frame.evaluate(
+                    _FILL_VIN_ENGINE_RIGHT_PANEL_JS,
+                    {"chassis": cw, "engine": ew},
+                )
+            ):
+                logger.info("siebel_dms: VIN+Engine filled via right-panel DOM fallback (Vehicles Find)")
+                return True
+        except Exception:
+            continue
+
+    for fl in _iter_frame_locator_roots(page, content_frame_selector):
+        try:
+            if try_root(fl):
+                return True
+        except Exception:
+            continue
+    for frame in _ordered_frames(page):
+        try:
+            if try_root(frame):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _merge_scrape_vehicle_detail_applet(page: Page, scraped: dict, *, content_frame_selector: str | None) -> dict:
+    """
+    When the list grid is narrow (e.g. VIN / Engine / Mobile only), read **Vehicle Information** style
+    label rows for Model, Dispatch Year → ``year_of_mfg``, and Color.
+    """
+    _ = content_frame_selector
+    detail_js = """() => {
+      const out = {};
+      const vis = (el) => {
+        if (!el) return false;
+        const st = window.getComputedStyle(el);
+        if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+        const r = el.getBoundingClientRect();
+        return r.width >= 2 && r.height >= 2;
+      };
+      const norm = (s) => String(s || '').replace(/\\s+/g, ' ').trim();
+      const applets = Array.from(document.querySelectorAll('.siebui-applet')).filter(vis);
+      for (const ap of applets) {
+        const block = norm(ap.innerText || '');
+        if (!block.includes('Model') && !block.includes('Vehicle')) continue;
+        const rows = ap.querySelectorAll('tr');
+        for (const tr of rows) {
+          if (!vis(tr)) continue;
+          const cells = tr.querySelectorAll('td, th');
+          if (cells.length < 2) continue;
+          const lab = norm(cells[0].innerText || '');
+          const val = norm(cells[1].innerText || '');
+          if (!lab || !val || val === '*') continue;
+          if (/^Model$/i.test(lab)) out.model = val;
+          if (/^Dispatch\\s*Year$/i.test(lab)) out.dispatch_year = val;
+          if (/^Year\\s+of\\s+Manufacture$/i.test(lab) || /^Mfg\\.?\\s*Year$/i.test(lab)) out.year_of_mfg = val;
+          if (/^Color$/i.test(lab) || /^Body\\s*Color$/i.test(lab) || /^Colour$/i.test(lab)) out.color = val;
+        }
+      }
+      return out;
+    }"""
+    extra: dict = {}
+    for frame in _ordered_frames(page):
+        try:
+            got = frame.evaluate(detail_js)
+            if isinstance(got, dict) and got:
+                for k, v in got.items():
+                    if v and str(v).strip():
+                        extra[k] = str(v).strip()
+        except Exception:
+            continue
+    if not extra:
+        return scraped
+    merged = dict(scraped) if scraped else {}
+    if extra.get("model") and not (merged.get("model") or "").strip():
+        merged["model"] = extra["model"]
+    y = (merged.get("year_of_mfg") or "").strip()
+    if not y:
+        if (extra.get("year_of_mfg") or "").strip():
+            merged["year_of_mfg"] = extra["year_of_mfg"].strip()
+        elif (extra.get("dispatch_year") or "").strip():
+            merged["year_of_mfg"] = extra["dispatch_year"].strip()
+    if extra.get("color") and not (merged.get("color") or "").strip():
+        merged["color"] = extra["color"]
+    return merged
+
+
 def _fill_in_frame(
     frame: Frame,
     selectors: list[str],
@@ -3802,7 +4304,8 @@ def _siebel_vehicle_find_chassis_engine_enter(
     note,
 ) -> tuple[bool, dict]:
     """
-    Vehicle list: fill VIN/Chassis + Engine from DB, Enter, optional Find/Go, then scrape grid row.
+    Vehicles view: **Find → Vehicles**, right fly-in **VIN** + **Engine#** with ``*`` wildcards, **Enter**,
+    optional Find/Go, then scrape grid and/or **Vehicle Information** detail for model / year / color.
     Returns ``(query_ok, scraped)`` — ``scraped`` may be empty if the grid did not render.
     """
     vu = (vehicle_url or "").strip()
@@ -3814,41 +4317,104 @@ def _siebel_vehicle_find_chassis_engine_enter(
     if not fp or not ep:
         note("Add Enquiry: chassis/VIN and engine from DB are both required.")
         return False, {}
+    cw = _siebel_vehicle_find_wildcard_value(fp)
+    ew = _siebel_vehicle_find_wildcard_value(ep)
+
     _goto(page, vu, "vehicle_list_add_enquiry", nav_timeout_ms=nav_timeout_ms)
-    _safe_page_wait(page, 1500, log_label="vehicle_list_add_enquiry_open")
-    chassis_ok = _try_fill_field(
+    _siebel_after_goto_wait(page, floor_ms=1200)
+
+    if _try_expand_find_flyin(
         page,
-        [
-            'input[aria-label*="VIN" i]',
-            'input[aria-label*="Chassis" i]',
-            'input[aria-label*="Frame" i]',
-            'input[title*="VIN" i]',
-            'input[title*="Chassis" i]',
-        ],
-        fp,
+        timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+    ):
+        note("Add Enquiry: Find fly-in expand clicked (if collapsed).")
+
+    if _try_prepare_find_vehicles_applet(
+        page,
+        timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+    ):
+        note("Add Enquiry: Find → Vehicles object type selected (header / Find menu).")
+    _safe_page_wait(page, 600, log_label="after_find_vehicles_prep")
+
+    filled_flyin = _try_fill_vin_engine_in_vehicles_find_applet(
+        page,
+        chassis_wildcard=cw,
+        engine_wildcard=ew,
         timeout_ms=action_timeout_ms,
         content_frame_selector=content_frame_selector,
     )
-    engine_ok = _try_fill_field(
-        page,
-        [
-            'input[aria-label*="Engine" i]',
-            'input[title*="Engine" i]',
-        ],
-        ep,
-        timeout_ms=action_timeout_ms,
-        content_frame_selector=content_frame_selector,
-    )
+    if filled_flyin:
+        note("Add Enquiry: filled VIN + Engine# in Vehicles Find fly-in and pressed Enter.")
+    if not filled_flyin:
+        note("Add Enquiry: Vehicles Find fly-in fill failed on first pass — retrying Find→Vehicles.")
+        _try_expand_find_flyin(
+            page,
+            timeout_ms=action_timeout_ms,
+            content_frame_selector=content_frame_selector,
+        )
+        _safe_page_wait(page, 350, log_label="retry_expand_find_flyin_vehicles")
+        _try_prepare_find_vehicles_applet(
+            page,
+            timeout_ms=action_timeout_ms,
+            content_frame_selector=content_frame_selector,
+        )
+        _safe_page_wait(page, 500, log_label="retry_find_vehicles_prep")
+        filled_flyin = _try_fill_vin_engine_in_vehicles_find_applet(
+            page,
+            chassis_wildcard=cw,
+            engine_wildcard=ew,
+            timeout_ms=action_timeout_ms,
+            content_frame_selector=content_frame_selector,
+        )
+
+    chassis_ok = filled_flyin
+    engine_ok = filled_flyin
+    if not filled_flyin:
+        chassis_ok = _try_fill_field(
+            page,
+            [
+                'input[aria-label*="VIN" i]',
+                'input[aria-label*="Chassis" i]',
+                'input[aria-label*="Frame" i]',
+                'input[title*="VIN" i]',
+                'input[title*="Chassis" i]',
+            ],
+            cw,
+            timeout_ms=action_timeout_ms,
+            content_frame_selector=content_frame_selector,
+        )
+        engine_ok = _try_fill_field(
+            page,
+            [
+                'input[aria-label*="Engine#" i]',
+                'input[aria-label*="Engine #" i]',
+                'input[title*="Engine#" i]',
+                'input[aria-label*="Engine" i]',
+                'input[title*="Engine" i]',
+            ],
+            ew,
+            timeout_ms=action_timeout_ms,
+            content_frame_selector=content_frame_selector,
+        )
+        if chassis_ok and engine_ok:
+            try:
+                page.keyboard.press("Enter")
+            except Exception:
+                pass
+            _safe_page_wait(page, 400, log_label="after_vehicle_find_enter_fallback")
+
     if not chassis_ok or not engine_ok:
-        note("Add Enquiry: could not fill chassis/VIN and engine on vehicle list.")
+        note("Add Enquiry: could not fill VIN/chassis and Engine# on Vehicles Find (fly-in + fallback).")
         return False, {}
-    try:
-        page.keyboard.press("Enter")
-    except Exception:
-        pass
+    if not filled_flyin:
+        note("Add Enquiry: used generic input fill + Enter for vehicle query.")
+
     _safe_page_wait(page, 400, log_label="after_vehicle_find_enter")
-    if _click_find_go_query(page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector):
-        note("Add Enquiry: clicked Find/Go after Enter on vehicle list.")
+    if not filled_flyin:
+        if _click_find_go_query(page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector):
+            note("Add Enquiry: clicked Find/Go after vehicle query.")
     try:
         _safe_page_wait(page, 2500, log_label="vehicle_find_query_settle")
         page.wait_for_load_state("networkidle", timeout=12_000)
@@ -3862,10 +4428,15 @@ def _siebel_vehicle_find_chassis_engine_enter(
         raise
 
     scraped = scrape_siebel_vehicle_row(page, content_frame_selector=content_frame_selector)
+    scraped = _merge_scrape_vehicle_detail_applet(
+        page, scraped, content_frame_selector=content_frame_selector
+    )
     if scraped.get("key_num") or scraped.get("frame_num") or scraped.get("engine_num"):
         note("Add Enquiry: vehicle list returned a row (key/chassis/engine cells present).")
+    elif (scraped.get("model") or "").strip():
+        note("Add Enquiry: vehicle detail applet has model (narrow grid).")
     else:
-        note("Add Enquiry: vehicle grid scrape found no key/chassis/engine row yet.")
+        note("Add Enquiry: vehicle grid/detail scrape found no row yet.")
     return True, scraped
 
 
