@@ -4363,18 +4363,30 @@ def _create_order(
             full_chassis=full_chassis,
         )
 
-    # 1) First-level view bar -> Vehicle Sales
+    # 1) Open first-level dropdown near Contacts, then pick Vehicle Sales.
+    # User-confirmed opener control: aria-label="ui-id-159".
+    if not _click_any(
+        (
+            "a[aria-label='ui-id-159']",
+            "button[aria-label='ui-id-159']",
+            "#ui-id-159",
+        ),
+        timeout=min(action_timeout_ms, 3000),
+    ):
+        return False, "Could not open Contacts dropdown (aria-label ui-id-159).", scraped
+    _safe_page_wait(page, 500, log_label="after_open_contacts_dropdown")
+
     if not _click_any(
         (
             "a[aria-label='Vehicle Sales']",
             "a[title='Vehicle Sales']",
             "a:has-text('Vehicle Sales')",
-            "option:has-text('Vehicle Sales')",
-            "select#j_s_sctrl_tabScreen",
+            "li:has-text('Vehicle Sales')",
+            "span:has-text('Vehicle Sales')",
         ),
         timeout=min(action_timeout_ms, 3000),
     ):
-        return False, "Could not open Vehicle Sales from first level view bar.", scraped
+        return False, "Could not select Vehicle Sales from Contacts dropdown.", scraped
     _safe_page_wait(page, 900, log_label="after_vehicle_sales_click")
     note("Create Order: opened Vehicle Sales from first-level view bar.")
 
