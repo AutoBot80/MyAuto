@@ -5225,6 +5225,90 @@ def _add_enquiry_opportunity(
         note('Add Enquiry: no frame contains aria-label="Enquiry Type".')
         return False, "New opportunity form not found (no Enquiry Type field)."
 
+    def _scrape_enquiry_number_from_frame(frame: Frame) -> str:
+        """
+        Best-effort read of saved Enquiry# from Opportunity form after Ctrl+S.
+        """
+        # 1) Label-based input extraction
+        for pat in (
+            re.compile(r"^\s*Enquiry\s*#\s*$", re.I),
+            re.compile(r"^\s*Enquiry\s*No\.?\s*$", re.I),
+            re.compile(r"\bEnquiry\s*#\b", re.I),
+            re.compile(r"\bEnquiry\s*No\b", re.I),
+        ):
+            try:
+                loc = frame.get_by_label(pat).first
+                if loc.count() > 0 and loc.is_visible(timeout=500):
+                    try:
+                        v = (loc.input_value(timeout=1200) or "").strip()
+                    except Exception:
+                        v = (loc.get_attribute("value") or "").strip()
+                    if v:
+                        return v
+            except Exception:
+                continue
+        # 2) Attribute-based controls
+        for css in (
+            'input[aria-label*="Enquiry#" i]',
+            'input[aria-label*="Enquiry No" i]',
+            'input[title*="Enquiry#" i]',
+            'input[title*="Enquiry No" i]',
+            'textarea[aria-label*="Enquiry#" i]',
+            'textarea[title*="Enquiry#" i]',
+        ):
+            try:
+                loc = frame.locator(css).first
+                if loc.count() > 0 and loc.is_visible(timeout=500):
+                    try:
+                        v = (loc.input_value(timeout=1200) or "").strip()
+                    except Exception:
+                        v = (loc.get_attribute("value") or "").strip()
+                    if v:
+                        return v
+            except Exception:
+                continue
+        # 3) Read-only drilldown/link text on saved row
+        for role in ("link", "gridcell", "cell"):
+            try:
+                loc = frame.get_by_role(role, name=re.compile(r"\bENQ[-/\s]?\d+\b", re.I)).first
+                if loc.count() > 0 and loc.is_visible(timeout=500):
+                    t = (loc.inner_text(timeout=1200) or "").strip()
+                    if t:
+                        return t
+            except Exception:
+                continue
+        # 4) DOM fallback
+        try:
+            js_val = frame.evaluate(
+                """() => {
+                  const norm = (s) => String(s || '').trim();
+                  const vis = (el) => {
+                    if (!el) return false;
+                    const st = window.getComputedStyle(el);
+                    if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+                    const r = el.getBoundingClientRect();
+                    return r.width >= 2 && r.height >= 2;
+                  };
+                  const controls = Array.from(document.querySelectorAll('input,textarea,a,span,div')).filter(vis);
+                  for (const el of controls) {
+                    const al = norm(el.getAttribute('aria-label') || '');
+                    const tt = norm(el.getAttribute('title') || '');
+                    const tx = norm(el.value || el.textContent || '');
+                    const k = (al + ' ' + tt).toLowerCase();
+                    if (!(k.includes('enquiry') && (k.includes('#') || k.includes('no')))) continue;
+                    if (!tx) continue;
+                    return tx;
+                  }
+                  return '';
+                }"""
+            )
+            s = str(js_val or "").strip()
+            if s:
+                return s
+        except Exception:
+            pass
+        return ""
+
     def try_field(labels: tuple[str, ...], value: str, *, required: bool) -> bool:
         sv = (value or "").strip()
         if not required and not sv:
@@ -5337,6 +5421,25 @@ def _add_enquiry_opportunity(
             return False, "Ctrl+S save failed on new opportunity form."
     note("Add Enquiry: pressed Ctrl+S to save enquiry.")
     _safe_page_wait(page, 1500, log_label="after_add_enquiry_save")
+    enquiry_no = _scrape_enquiry_number_from_frame(enq_frame)
+    if enquiry_no:
+        note(f"Add Enquiry: saved Enquiry#={enquiry_no!r}.")
+        if callable(form_trace):
+            form_trace(
+                "add_enquiry_saved",
+                "Opportunity Form",
+                "post_save_scrape_enquiry_number",
+                enquiry_number=enquiry_no,
+            )
+    else:
+        note("Add Enquiry: Enquiry# not readable after save (best-effort).")
+        if callable(form_trace):
+            form_trace(
+                "add_enquiry_saved",
+                "Opportunity Form",
+                "post_save_scrape_enquiry_number",
+                enquiry_number="",
+            )
     return True, None
 
 

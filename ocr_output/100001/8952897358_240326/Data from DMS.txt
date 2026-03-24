@@ -23,5 +23,5 @@ Body type: —
 Vehicle type: —
 Num cylinders: —
 Horsepower: —
-Ex-showroom Price (Order Value): 2,026
+Ex-showroom Price (Order Value): —
 Year of Mfg: 2026
