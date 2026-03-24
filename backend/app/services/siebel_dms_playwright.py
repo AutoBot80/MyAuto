@@ -4167,240 +4167,90 @@ def _add_customer_payment(
                             pass
                     return False
 
-                # Transaction Amount = 120000 first (before Transaction Type) to avoid focus traps.
-                # region agent log
-                import json as _json, time as _time
-                def _dbg(msg, data=None, hyp=""):
-                    try:
-                        entry = {"sessionId":"f69c3a","timestamp":int(_time.time()*1000),"location":"siebel_dms_playwright.py:payment","message":msg,"data":data or {},"hypothesisId":hyp}
-                        with open("debug-f69c3a.log","a",encoding="utf-8") as _f:
-                            _f.write(_json.dumps(entry)+"\n")
-                    except Exception:
-                        pass
-                # endregion
-                # region agent log
-                for _dbg_frame in _ordered_frames(page):
-                    try:
-                        _probe = _dbg_frame.evaluate("""() => {
-                          const el = document.querySelector("input[name='Transaction_Amount']");
-                          if (!el) return {found:false};
-                          const st = window.getComputedStyle(el);
-                          const r = el.getBoundingClientRect();
-                          return {found:true, display:st.display, visibility:st.visibility, opacity:st.opacity, w:r.width, h:r.height, type:el.type, value:el.value};
-                        }""")
-                        if _probe and _probe.get("found"):
-                            _dbg("Transaction_Amount field probe", {"frame_url": (_dbg_frame.url or "")[:180], "probe": _probe}, hyp="A")
-                            break
-                    except Exception as _pe:
-                        _dbg("Transaction_Amount frame probe error", {"err": str(_pe)}, hyp="B")
-                # endregion
+                # Transaction Amount first: scan ALL frames for name='Transaction_Amount' and set via JS directly.
                 amount_ok = False
-                for root in amount_roots:
-                    _focus_locked_payment_frame(root, prefer_amount=True)
-                    for css in (
-                        "input[name='Transaction_Amount']",
-                        "input[id='Transaction_Amount']",
-                        "input[id='1_s_2_1_Transaction_Amount']",
-                        "input[name='1_s_2_1_Transaction_Amount']",
-                        "input[title_id='1_s_2_1_Transaction_Amount']",
-                        "input[title-id='1_s_2_1_Transaction_Amount']",
-                        "input[title='1_s_2_1_Transaction_Amount']",
-                        'input[aria-label="Transaction Amount" i]',
-                        'input[title*="Transaction Amount" i]',
-                    ):
-                        try:
-                            amt = root.locator(css).first
-                            _cnt = amt.count()
-                            _vis = amt.is_visible(timeout=700) if _cnt > 0 else False
-                            # region agent log
-                            _dbg("Amount selector check", {"css": css, "count": _cnt, "is_visible": _vis}, hyp="A")
-                            # endregion
-                            if _cnt <= 0 or not _vis:
-                                continue
-                            note(f"Payment debug: Transaction Amount selector hit: {css}")
-                            amt.fill("120000", timeout=action_timeout_ms)
-                            got_amt = (amt.input_value(timeout=action_timeout_ms) or "").strip()
-                            if got_amt and ("120000" in got_amt or got_amt in "120000"):
-                                amount_ok = True
-                                note(f"Transaction Amount set to '120000' via selector: {css}")
-                                break
-                        except Exception:
-                            continue
-                    if amount_ok:
-                        break
+                _amt_js = """() => {
+                  const sels = [
+                    "input[name='Transaction_Amount']",
+                    "input[id='Transaction_Amount']",
+                    "input[id='1_s_2_1_Transaction_Amount']",
+                    "input[name='1_s_2_1_Transaction_Amount']",
+                  ];
+                  for (const s of sels) {
+                    const el = document.querySelector(s);
+                    if (!el) continue;
+                    try { el.focus(); } catch (_) {}
+                    el.value = "120000";
+                    el.dispatchEvent(new Event("input", { bubbles: true }));
+                    el.dispatchEvent(new Event("change", { bubbles: true }));
+                    try { el.blur(); } catch (_) {}
+                    const got = String(el.value || "").replace(/,/g, "").trim();
+                    if (got.includes("120000")) return {ok: true, sel: s};
+                  }
+                  return {ok: false};
+                }"""
+                for _af in _ordered_frames(page):
+                    try:
+                        _res = _af.evaluate(_amt_js)
+                        if _res and _res.get("ok"):
+                            amount_ok = True
+                            note(f"Transaction Amount set to '120000' via JS in frame: url={(_af.url or '')[:120]!r}, sel={_res.get('sel')!r}")
+                            break
+                    except Exception:
+                        continue
                 if not amount_ok:
-                    for root in amount_roots:
-                        try:
-                            wrote_amt_js = bool(
-                                root.evaluate(
-                                    """() => {
-                                      const sels = [
-                                        "input[name='Transaction_Amount']",
-                                        "input[id='Transaction_Amount']",
-                                        "input[id='1_s_2_1_Transaction_Amount']",
-                                        "input[name='1_s_2_1_Transaction_Amount']",
-                                        "input[title_id='1_s_2_1_Transaction_Amount']",
-                                        "input[title-id='1_s_2_1_Transaction_Amount']",
-                                        "input[title='1_s_2_1_Transaction_Amount']",
-                                        "input[aria-label*='Transaction Amount' i]",
-                                        "input[title*='Transaction Amount' i]",
-                                      ];
-                                      const isVisible = (el) => {
-                                        if (!el) return false;
-                                        const st = window.getComputedStyle(el);
-                                        if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
-                                        const r = el.getBoundingClientRect();
-                                        return r.width >= 2 && r.height >= 2;
-                                      };
-                                      let target = null;
-                                      for (const s of sels) {
-                                        const el = document.querySelector(s);
-                                        if (el && (isVisible(el) || !target)) target = el;
-                                        if (el && isVisible(el)) break;
-                                      }
-                                      if (!target) return false;
-                                      try { target.focus(); } catch (_) {}
-                                      target.value = "120000";
-                                      target.dispatchEvent(new Event("input", { bubbles: true }));
-                                      target.dispatchEvent(new Event("change", { bubbles: true }));
-                                      try { target.blur(); } catch (_) {}
-                                      const got = String(target.value || "").replace(/,/g, "").trim();
-                                      return got.includes("120000");
-                                    }"""
-                                )
-                            )
-                            if wrote_amt_js:
-                                amount_ok = True
-                                note("Transaction Amount set via JS fallback: '120000'.")
-                                break
-                        except Exception:
-                            continue
+                    note("Transaction Amount: no frame responded to JS set; trying Playwright fill with short timeout.")
 
-                # Transaction Type next.
+                # Transaction Type: scan ALL frames with JS directly (same pattern as amount).
                 type_ok = False
-                type_attempted = False
-                for root in scoped_roots:
-                    _focus_locked_payment_frame(root, prefer_amount=False)
-                    for css in (
-                        "input[name='Transaction_Type']",
-                        "input[name='Transaction_Type_New']",
-                        "select[name='Transaction_Type']",
-                        "select[name='Transaction_Type_New']",
-                        "input[id='Transaction_Type']",
-                        "input[title_id='Transaction_Type']",
-                        "input[title-id='Transaction_Type']",
-                        "input[id*='Transaction_Type' i]",
-                        "input[name*='Transaction_Type' i]",
-                        "input[title_id*='Transaction_Type' i]",
-                        "input[title-id*='Transaction_Type' i]",
-                        "input[aria-label*='Transaction Type' i]",
-                        "input[title*='Transaction Type' i]",
-                    ):
-                        try:
-                            fld = root.locator(css).first
-                            if fld.count() <= 0 or not fld.is_visible(timeout=700):
-                                continue
-                            note(f"Payment debug: Transaction Type selector hit: {css}")
-                            type_attempted = True
-                            try:
-                                fld.click(timeout=action_timeout_ms)
-                            except Exception:
-                                fld.click(timeout=action_timeout_ms, force=True)
-                            tag = ""
-                            try:
-                                tag = (fld.evaluate("el => (el.tagName || '').toLowerCase()") or "").strip()
-                            except Exception:
-                                tag = ""
-                            if tag == "select":
-                                try:
-                                    fld.select_option(label=re.compile(r"^\s*Payments\s*$", re.I), timeout=action_timeout_ms)
-                                except Exception:
-                                    fld.select_option(value="Payments", timeout=action_timeout_ms)
-                            else:
-                                fld.fill("Payments", timeout=action_timeout_ms)
-                            got_type = (fld.input_value(timeout=1500) or "").strip()
-                            if got_type and "payment" in got_type.lower():
-                                type_ok = True
-                                note(f"Transaction Type set to 'Payments' via selector: {css}")
-                                break
-                        except Exception:
-                            continue
-                    if type_ok:
-                        break
-
+                _type_js = """() => {
+                  const sels = [
+                    "input[name='Transaction_Type']",
+                    "input[name='Transaction_Type_New']",
+                    "select[name='Transaction_Type']",
+                    "select[name='Transaction_Type_New']",
+                    "input[id='Transaction_Type']",
+                    "input[name*='Transaction_Type' i]",
+                    "input[id*='Transaction_Type' i]",
+                  ];
+                  for (const s of sels) {
+                    const el = document.querySelector(s);
+                    if (!el) continue;
+                    try { el.focus(); } catch (_) {}
+                    const tag = (el.tagName || "").toLowerCase();
+                    if (tag === "select") {
+                      let matched = false;
+                      for (const opt of Array.from(el.options || [])) {
+                        if (String(opt.text||"").trim().toLowerCase()==="payments"||String(opt.value||"").trim().toLowerCase()==="payments") {
+                          el.value = opt.value; matched = true; break;
+                        }
+                      }
+                      if (!matched && el.options && el.options.length > 0) el.selectedIndex = 0;
+                    } else {
+                      el.value = "Payments";
+                    }
+                    el.dispatchEvent(new Event("input", { bubbles: true }));
+                    el.dispatchEvent(new Event("change", { bubbles: true }));
+                    try { el.blur(); } catch (_) {}
+                    const got = String((el.value || el.options?.[el.selectedIndex]?.text || "")).trim().toLowerCase();
+                    if (got.includes("payment")) return {ok: true, sel: s};
+                  }
+                  return {ok: false};
+                }"""
+                for _tf in _ordered_frames(page):
+                    try:
+                        _tres = _tf.evaluate(_type_js)
+                        if _tres and _tres.get("ok"):
+                            type_ok = True
+                            note(f"Transaction Type set to 'Payments' via JS in frame: url={(_tf.url or '')[:120]!r}, sel={_tres.get('sel')!r}")
+                            break
+                    except Exception:
+                        continue
                 if not type_ok:
-                    for root in (scoped_roots + _ordered_frames(page)):
-                        try:
-                            wrote_js = bool(
-                                root.evaluate(
-                                    """() => {
-                                      const sels = [
-                                        "input[name='Transaction_Type']",
-                                        "input[name='Transaction_Type_New']",
-                                        "select[name='Transaction_Type']",
-                                        "select[name='Transaction_Type_New']",
-                                        "input[id='Transaction_Type']",
-                                        "input[title_id='Transaction_Type']",
-                                        "input[title-id='Transaction_Type']",
-                                        "input[name*='Transaction_Type' i]",
-                                        "input[id*='Transaction_Type' i]",
-                                      ];
-                                      const isVisible = (el) => {
-                                        if (!el) return false;
-                                        const st = window.getComputedStyle(el);
-                                        if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
-                                        const r = el.getBoundingClientRect();
-                                        return r.width >= 2 && r.height >= 2;
-                                      };
-                                      let target = null;
-                                      for (const s of sels) {
-                                        const el = document.querySelector(s);
-                                        if (el && (isVisible(el) || !target)) target = el;
-                                        if (el && isVisible(el)) break;
-                                      }
-                                      if (!target) return false;
-                                      try { target.focus(); } catch (_) {}
-                                      const tag = (target.tagName || "").toLowerCase();
-                                      if (tag === "select") {
-                                        let matched = false;
-                                        for (const opt of Array.from(target.options || [])) {
-                                          const txt = String(opt.text || "").trim().toLowerCase();
-                                          const val = String(opt.value || "").trim().toLowerCase();
-                                          if (txt === "payments" || val === "payments") {
-                                            target.value = opt.value;
-                                            matched = true;
-                                            break;
-                                          }
-                                        }
-                                        if (!matched && target.options && target.options.length > 0) {
-                                          target.selectedIndex = 0;
-                                        }
-                                      } else {
-                                        target.value = "Payments";
-                                      }
-                                      target.dispatchEvent(new Event("input", { bubbles: true }));
-                                      target.dispatchEvent(new Event("change", { bubbles: true }));
-                                      try { target.blur(); } catch (_) {}
-                                      const got = String((target.value || target.options?.[target.selectedIndex]?.text || "")).trim().toLowerCase();
-                                      return got.includes("payment");
-                                    }"""
-                                )
-                            )
-                            if wrote_js:
-                                type_ok = True
-                                note("Transaction Type set via JS fallback: 'Payments'.")
-                                break
-                        except Exception:
-                            continue
-
-                if not type_ok:
-                    if type_attempted:
-                        note("Transaction Type readback verification failed after amount fill; continuing to save.")
-                    else:
-                        note("Transaction Type control was not confirmed after amount fill; continuing to save.")
+                    note("Transaction Type: no frame responded to JS set; continuing to save.")
                 note(
                     "Filled payment fields: "
-                    f"Type=Payments(verified={type_ok!r}, attempted={type_attempted!r}), Transaction Amount=120000(ok={amount_ok!r})."
+                    f"Type=Payments(ok={type_ok!r}), Amount=120000(ok={amount_ok!r})."
                 )
 
                 # Re-detect action roots after row creation; toolbar can be in a sibling frame.
