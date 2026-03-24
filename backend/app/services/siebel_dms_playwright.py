@@ -4189,7 +4189,7 @@ def _add_customer_payment(
                     el.value = "120000";
                     el.dispatchEvent(new Event("input", { bubbles: true }));
                     el.dispatchEvent(new Event("change", { bubbles: true }));
-                    try { el.blur(); } catch (_) {}
+                    // No blur — avoid triggering Siebel auto-save before type is filled.
                     const got = String(el.value || "").replace(/,/g, "").trim();
                     if (got.includes("120000")) return {ok: true, sel: s};
                   }
@@ -4206,10 +4206,18 @@ def _add_customer_payment(
                         continue
                 if not amount_ok:
                     note("Transaction Amount: no frame responded to JS set; trying Playwright fill with short timeout.")
+                _safe_page_wait(page, 400, log_label="after_amount_before_type")
 
                 # Transaction Type: scan ALL frames with JS directly (same pattern as amount).
                 type_ok = False
                 _type_js = """() => {
+                  const isVis = (el) => {
+                    if (!el) return false;
+                    const st = window.getComputedStyle(el);
+                    if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+                    const r = el.getBoundingClientRect();
+                    return r.width >= 2 && r.height >= 2;
+                  };
                   const sels = [
                     "input[name='Transaction_Type']",
                     "input[name='Transaction_Type_New']",
@@ -4225,8 +4233,9 @@ def _add_customer_payment(
                     "input[title*='Transaction Type' i]",
                   ];
                   for (const s of sels) {
-                    const el = document.querySelector(s);
-                    if (!el) continue;
+                    const all = Array.from(document.querySelectorAll(s));
+                    if (!all.length) continue;
+                    const el = all.find(e => isVis(e)) || all[0];
                     try { el.focus(); } catch (_) {}
                     const tag = (el.tagName || "").toLowerCase();
                     if (tag === "select") {
@@ -4242,9 +4251,8 @@ def _add_customer_payment(
                     }
                     el.dispatchEvent(new Event("input", { bubbles: true }));
                     el.dispatchEvent(new Event("change", { bubbles: true }));
-                    try { el.blur(); } catch (_) {}
-                    const got = String((el.value || el.options?.[el.selectedIndex]?.text || "")).trim().toLowerCase();
-                    if (got.includes("payment")) return {ok: true, sel: s};
+                    // No blur — avoid triggering Siebel auto-save prematurely.
+                    return {ok: true, sel: s, visible: isVis(el)};
                   }
                   return {ok: false};
                 }"""
@@ -4263,6 +4271,7 @@ def _add_customer_payment(
                     "Filled payment fields: "
                     f"Type=Payments(ok={type_ok!r}), Amount=120000(ok={amount_ok!r})."
                 )
+                _safe_page_wait(page, 400, log_label="after_type_before_save")
 
                 # Re-detect action roots after row creation; toolbar can be in a sibling frame.
                 save_action_roots = []
