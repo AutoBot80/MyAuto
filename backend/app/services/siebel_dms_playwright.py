@@ -3795,6 +3795,7 @@ def _add_customer_payment(
             if _click_plus_in_root(root):
                 note("Clicked '+' icon on Payments tab.")
                 _safe_page_wait(page, 500, log_label="after_payments_plus_click")
+                note("Payment sequence: '+' -> Transaction Amount -> Transaction Type -> Payment Lines Save icon.")
 
                 # Lock to the frame containing Payment Lines editable row fields.
                 payment_frames: list[Frame] = []
@@ -4149,186 +4150,9 @@ def _add_customer_payment(
                             pass
                     return False
 
-                # First try direct typing/select on Transaction Type field.
-                type_ok = False
-                type_attempted = False
-                for root in scoped_roots:
-                    _focus_locked_payment_frame(root)
-                    for css in (
-                        "input[name='Transaction_Type']",
-                        "input[name='Transaction_Type_New']",
-                        "select[name='Transaction_Type']",
-                        "select[name='Transaction_Type_New']",
-                        "input[id='Transaction_Type']",
-                        "input[title_id='Transaction_Type']",
-                        "input[title-id='Transaction_Type']",
-                        "input[id*='Transaction_Type' i]",
-                        "input[name*='Transaction_Type' i]",
-                        "input[title_id*='Transaction_Type' i]",
-                        "input[title-id*='Transaction_Type' i]",
-                        "input[aria-label*='Transaction Type' i]",
-                        "input[title*='Transaction Type' i]",
-                    ):
-                        try:
-                            fld = root.locator(css).first
-                            if fld.count() <= 0 or not fld.is_visible(timeout=700):
-                                continue
-                            note(f"Payment debug: Transaction Type selector hit: {css}")
-                            type_attempted = True
-                            try:
-                                fld.click(timeout=action_timeout_ms)
-                            except Exception:
-                                fld.click(timeout=action_timeout_ms, force=True)
-                            tag = ""
-                            try:
-                                tag = (fld.evaluate("el => (el.tagName || '').toLowerCase()") or "").strip()
-                            except Exception:
-                                tag = ""
-                            if tag == "select":
-                                try:
-                                    fld.select_option(label=re.compile(r"^\s*Payments\s*$", re.I), timeout=action_timeout_ms)
-                                except Exception:
-                                    fld.select_option(value="Payments", timeout=action_timeout_ms)
-                            else:
-                                fld.fill("Payments", timeout=action_timeout_ms)
-                            # Do not Tab here; it can move focus into Payment Method in some Siebel layouts.
-                            got_type = (fld.input_value(timeout=1500) or "").strip()
-                            if got_type and "payment" in got_type.lower():
-                                type_ok = True
-                                note(f"Transaction Type set to 'Payments' via selector: {css}")
-                                break
-                        except Exception:
-                            continue
-                    if type_ok:
-                        break
-
-                if not type_ok:
-                    # JS value-set fallback inside locked frame.
-                    for root in (scoped_roots + _ordered_frames(page)):
-                        try:
-                            wrote_js = bool(
-                                root.evaluate(
-                                    """() => {
-                                      const sels = [
-                                        "input[name='Transaction_Type']",
-                                        "input[name='Transaction_Type_New']",
-                                        "select[name='Transaction_Type']",
-                                        "select[name='Transaction_Type_New']",
-                                        "input[id='Transaction_Type']",
-                                        "input[title_id='Transaction_Type']",
-                                        "input[title-id='Transaction_Type']",
-                                        "input[name*='Transaction_Type' i]",
-                                        "input[id*='Transaction_Type' i]",
-                                      ];
-                                      const isVisible = (el) => {
-                                        if (!el) return false;
-                                        const st = window.getComputedStyle(el);
-                                        if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
-                                        const r = el.getBoundingClientRect();
-                                        return r.width >= 2 && r.height >= 2;
-                                      };
-                                      let target = null;
-                                      for (const s of sels) {
-                                        const el = document.querySelector(s);
-                                        if (el && (isVisible(el) || !target)) target = el;
-                                        if (el && isVisible(el)) break;
-                                      }
-                                      if (!target) return false;
-                                      try { target.focus(); } catch (_) {}
-                                      const tag = (target.tagName || "").toLowerCase();
-                                      if (tag === "select") {
-                                        let matched = false;
-                                        for (const opt of Array.from(target.options || [])) {
-                                          const txt = String(opt.text || "").trim().toLowerCase();
-                                          const val = String(opt.value || "").trim().toLowerCase();
-                                          if (txt === "payments" || val === "payments") {
-                                            target.value = opt.value;
-                                            matched = true;
-                                            break;
-                                          }
-                                        }
-                                        if (!matched && target.options && target.options.length > 0) {
-                                          target.selectedIndex = 0;
-                                        }
-                                      } else {
-                                        target.value = "Payments";
-                                      }
-                                      target.dispatchEvent(new Event("input", { bubbles: true }));
-                                      target.dispatchEvent(new Event("change", { bubbles: true }));
-                                      try { target.blur(); } catch (_) {}
-                                      const got = String((target.value || target.options?.[target.selectedIndex]?.text || "")).trim().toLowerCase();
-                                      return got.includes("payment");
-                                    }"""
-                                )
-                            )
-                            if wrote_js:
-                                type_ok = True
-                                note("Transaction Type set via JS fallback: 'Payments'.")
-                                break
-                        except Exception:
-                            continue
-
-                if not type_ok:
-                    # Strict fallback: target Payment Lines Transaction_Type field directly.
-                    value_pat = re.compile(r"^\s*Payments\s*$", re.I)
-                    for root in scoped_roots:
-                        _focus_locked_payment_frame(root)
-                        for css in (
-                            "input[name='Transaction_Type']",
-                            "input[name='Transaction_Type_New']",
-                            "input[id='Transaction_Type']",
-                            "input[title_id='Transaction_Type']",
-                            "input[title-id='Transaction_Type']",
-                            "input[id*='Transaction_Type' i]",
-                            "input[name*='Transaction_Type' i]",
-                            "input[title_id*='Transaction_Type' i]",
-                            "input[title-id*='Transaction_Type' i]",
-                            "input[aria-label*='Transaction Type' i]",
-                        ):
-                            try:
-                                fld = root.locator(css).first
-                                if fld.count() <= 0 or not fld.is_visible(timeout=600):
-                                    continue
-                                type_attempted = True
-                                try:
-                                    fld.click(timeout=action_timeout_ms)
-                                except Exception:
-                                    fld.click(timeout=action_timeout_ms, force=True)
-                                _safe_page_wait(page, 250, log_label="after_strict_txn_type_open")
-                                try:
-                                    page.keyboard.press("ArrowDown")
-                                except Exception:
-                                    pass
-                                try:
-                                    fld.fill("Payments", timeout=action_timeout_ms)
-                                except Exception:
-                                    pass
-                                # Try list pick inside same locked frame only.
-                                opt = root.locator("li, div, span, a").filter(has_text=value_pat).first
-                                if opt.count() > 0 and opt.is_visible(timeout=1200):
-                                    try:
-                                        opt.click(timeout=action_timeout_ms)
-                                    except Exception:
-                                        opt.click(timeout=action_timeout_ms, force=True)
-                                gotv = (fld.input_value(timeout=1500) or "").strip()
-                                if gotv and "payment" in gotv.lower():
-                                    type_ok = True
-                                    note("Transaction Type set via strict Transaction_Type fallback.")
-                                    break
-                            except Exception:
-                                continue
-                        if type_ok:
-                            break
-
-                if not type_ok:
-                    if type_attempted:
-                        note("Transaction Type readback verification failed; proceeding directly to Transaction Amount without Tab.")
-                    else:
-                        note("Transaction Type control was not confirmed; proceeding to Transaction Amount as requested.")
-
-                # Transaction Amount = 120000 (strictly in Payment Lines scoped frame/roots)
+                # Transaction Amount = 120000 first (before Transaction Type) to avoid focus traps.
                 amount_ok = False
-                for root in scoped_roots:
+                for root in amount_roots:
                     _focus_locked_payment_frame(root)
                     for css in (
                         "input[name='Transaction_Amount']",
@@ -4403,6 +4227,129 @@ def _add_customer_payment(
                                 break
                         except Exception:
                             continue
+
+                # Transaction Type next.
+                type_ok = False
+                type_attempted = False
+                for root in scoped_roots:
+                    _focus_locked_payment_frame(root)
+                    for css in (
+                        "input[name='Transaction_Type']",
+                        "input[name='Transaction_Type_New']",
+                        "select[name='Transaction_Type']",
+                        "select[name='Transaction_Type_New']",
+                        "input[id='Transaction_Type']",
+                        "input[title_id='Transaction_Type']",
+                        "input[title-id='Transaction_Type']",
+                        "input[id*='Transaction_Type' i]",
+                        "input[name*='Transaction_Type' i]",
+                        "input[title_id*='Transaction_Type' i]",
+                        "input[title-id*='Transaction_Type' i]",
+                        "input[aria-label*='Transaction Type' i]",
+                        "input[title*='Transaction Type' i]",
+                    ):
+                        try:
+                            fld = root.locator(css).first
+                            if fld.count() <= 0 or not fld.is_visible(timeout=700):
+                                continue
+                            note(f"Payment debug: Transaction Type selector hit: {css}")
+                            type_attempted = True
+                            try:
+                                fld.click(timeout=action_timeout_ms)
+                            except Exception:
+                                fld.click(timeout=action_timeout_ms, force=True)
+                            tag = ""
+                            try:
+                                tag = (fld.evaluate("el => (el.tagName || '').toLowerCase()") or "").strip()
+                            except Exception:
+                                tag = ""
+                            if tag == "select":
+                                try:
+                                    fld.select_option(label=re.compile(r"^\s*Payments\s*$", re.I), timeout=action_timeout_ms)
+                                except Exception:
+                                    fld.select_option(value="Payments", timeout=action_timeout_ms)
+                            else:
+                                fld.fill("Payments", timeout=action_timeout_ms)
+                            got_type = (fld.input_value(timeout=1500) or "").strip()
+                            if got_type and "payment" in got_type.lower():
+                                type_ok = True
+                                note(f"Transaction Type set to 'Payments' via selector: {css}")
+                                break
+                        except Exception:
+                            continue
+                    if type_ok:
+                        break
+
+                if not type_ok:
+                    for root in (scoped_roots + _ordered_frames(page)):
+                        try:
+                            wrote_js = bool(
+                                root.evaluate(
+                                    """() => {
+                                      const sels = [
+                                        "input[name='Transaction_Type']",
+                                        "input[name='Transaction_Type_New']",
+                                        "select[name='Transaction_Type']",
+                                        "select[name='Transaction_Type_New']",
+                                        "input[id='Transaction_Type']",
+                                        "input[title_id='Transaction_Type']",
+                                        "input[title-id='Transaction_Type']",
+                                        "input[name*='Transaction_Type' i]",
+                                        "input[id*='Transaction_Type' i]",
+                                      ];
+                                      const isVisible = (el) => {
+                                        if (!el) return false;
+                                        const st = window.getComputedStyle(el);
+                                        if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+                                        const r = el.getBoundingClientRect();
+                                        return r.width >= 2 && r.height >= 2;
+                                      };
+                                      let target = null;
+                                      for (const s of sels) {
+                                        const el = document.querySelector(s);
+                                        if (el && (isVisible(el) || !target)) target = el;
+                                        if (el && isVisible(el)) break;
+                                      }
+                                      if (!target) return false;
+                                      try { target.focus(); } catch (_) {}
+                                      const tag = (target.tagName || "").toLowerCase();
+                                      if (tag === "select") {
+                                        let matched = false;
+                                        for (const opt of Array.from(target.options || [])) {
+                                          const txt = String(opt.text || "").trim().toLowerCase();
+                                          const val = String(opt.value || "").trim().toLowerCase();
+                                          if (txt === "payments" || val === "payments") {
+                                            target.value = opt.value;
+                                            matched = true;
+                                            break;
+                                          }
+                                        }
+                                        if (!matched && target.options && target.options.length > 0) {
+                                          target.selectedIndex = 0;
+                                        }
+                                      } else {
+                                        target.value = "Payments";
+                                      }
+                                      target.dispatchEvent(new Event("input", { bubbles: true }));
+                                      target.dispatchEvent(new Event("change", { bubbles: true }));
+                                      try { target.blur(); } catch (_) {}
+                                      const got = String((target.value || target.options?.[target.selectedIndex]?.text || "")).trim().toLowerCase();
+                                      return got.includes("payment");
+                                    }"""
+                                )
+                            )
+                            if wrote_js:
+                                type_ok = True
+                                note("Transaction Type set via JS fallback: 'Payments'.")
+                                break
+                        except Exception:
+                            continue
+
+                if not type_ok:
+                    if type_attempted:
+                        note("Transaction Type readback verification failed after amount fill; continuing to save.")
+                    else:
+                        note("Transaction Type control was not confirmed after amount fill; continuing to save.")
                 note(
                     "Filled payment fields: "
                     f"Type=Payments(verified={type_ok!r}, attempted={type_attempted!r}), Transaction Amount=120000(ok={amount_ok!r})."
@@ -4459,13 +4406,6 @@ def _add_customer_payment(
                             continue
                     if save_clicked:
                         break
-                if not save_clicked:
-                    save_clicked = _try_click_siebel_save(
-                        page,
-                        timeout_ms=action_timeout_ms,
-                        content_frame_selector=content_frame_selector,
-                    )
-
                 if save_clicked:
                     note("Clicked Save icon after payment entry.")
                     return True
