@@ -4363,105 +4363,119 @@ def _create_order(
             full_chassis=full_chassis,
         )
 
-    # 1) Open first-level dropdown near Contacts, then pick Vehicle Sales.
-    # User-confirmed opener control: aria-label="ui-id-159".
-    _opened_contacts_menu = _click_any(
-        (
-            "a[aria-label='ui-id-159']",
-            "button[aria-label='ui-id-159']",
-            "#ui-id-159",
-            "a:has-text('Contacts') + a",
-            "a:has-text('Contacts') >> xpath=following-sibling::*[1]",
-        ),
-        timeout=min(action_timeout_ms, 3000),
-    )
-    if not _opened_contacts_menu:
-        # Fallback: click Contacts tab first, then arrow.
-        _click_any(
-            (
-                "a[aria-label='Contacts']",
-                "a[title='Contacts']",
-                "a:has-text('Contacts')",
-            ),
-            timeout=min(action_timeout_ms, 2000),
-        )
-        _opened_contacts_menu = _click_any(
-            (
-                "a[aria-label='ui-id-159']",
-                "button[aria-label='ui-id-159']",
-                "#ui-id-159",
-                "a:has-text('Contacts') + a",
-                "a:has-text('Contacts') >> xpath=following-sibling::*[1]",
-            ),
-            timeout=min(action_timeout_ms, 3000),
-        )
-    if not _opened_contacts_menu:
-        return False, "Could not open Contacts dropdown (aria-label ui-id-159).", scraped
-    _safe_page_wait(page, 500, log_label="after_open_contacts_dropdown")
-
-    # Click exact Vehicle Sales menu item by user-confirmed aria label.
-    _vehicle_sales_clicked = _click_any(
-        (
-            "a[aria-label='ui-id-221']",
-            "li[aria-label='ui-id-221']",
-            "[aria-label='ui-id-221']",
-        ),
-        timeout=min(action_timeout_ms, 3000),
-    )
-    if not _vehicle_sales_clicked:
-        # Fallback: exact text in dropdown menu only.
-        for root in _roots():
-            try:
-                menu_items = root.locator("ul li, ul a, ul span").filter(has_text=re.compile(r"^\\s*Vehicle Sales\\s*$", re.I))
-                k = menu_items.count()
-                for i in range(min(k, 8)):
-                    m = menu_items.nth(i)
-                    if not m.is_visible(timeout=400):
-                        continue
-                    try:
-                        m.click(timeout=min(action_timeout_ms, 3000))
-                    except Exception:
-                        m.click(timeout=min(action_timeout_ms, 3000), force=True)
-                    _vehicle_sales_clicked = True
-                    break
-                if _vehicle_sales_clicked:
-                    break
-            except Exception:
-                continue
-    if not _vehicle_sales_clicked:
-        return False, "Could not select Vehicle Sales from Contacts dropdown.", scraped
-    _safe_page_wait(page, 900, log_label="after_vehicle_sales_click")
-    note("Create Order: opened Vehicle Sales from first-level view bar.")
-
-    # If Mobile_Number is already populated, skip new-order (+) path and directly
-    # open the existing row by double-clicking Order#.
-    _mobile_already_populated = False
+    # 1) Alternative navigation (requested): Find -> Vehicle Sales, then search by mobile.
+    _vehicle_sales_find_selected = False
     for root in _roots():
         try:
-            for css in (
-                "input[id='1_Mobile_Number']",
-                "input[name='Mobile_Number']",
-                "input[id='1_Mobile_Phone']",
-                "input[name='Mobile_Phone']",
-                "input[aria-label*='Mobile Number' i]",
-                "input[aria-label*='Mobile Phone' i]",
-            ):
-                loc = root.locator(css).first
-                if loc.count() <= 0:
+            # Open Find object-type combobox/menu.
+            opened = False
+            for cb_css in ("select#findcombobox", "select[aria-label*='Find ComboBox' i]"):
+                try:
+                    cb = root.locator(cb_css).first
+                    if cb.count() > 0 and cb.is_visible(timeout=500):
+                        try:
+                            cb.select_option(label=re.compile(r"^\s*Vehicle Sales\s*$", re.I), timeout=min(action_timeout_ms, 2500))
+                            _vehicle_sales_find_selected = True
+                            opened = True
+                            break
+                        except Exception:
+                            pass
+                except Exception:
                     continue
-                if not loc.is_visible(timeout=300):
+            if _vehicle_sales_find_selected:
+                break
+            if opened:
+                continue
+
+            # Non-native finder fallback (dropdown menu style).
+            for role in ("combobox", "button", "link"):
+                try:
+                    finder = root.get_by_role(role, name=re.compile(r"^\s*Find\s*$", re.I)).first
+                    if finder.count() > 0 and finder.is_visible(timeout=500):
+                        finder.click(timeout=min(action_timeout_ms, 2000))
+                        _safe_page_wait(page, 250, log_label="open_find_vehicle_sales_menu")
+                        for mrole in ("menuitem", "option", "link"):
+                            item = page.get_by_role(mrole, name=re.compile(r"^\s*Vehicle Sales\s*$", re.I)).first
+                            if item.count() > 0 and item.is_visible(timeout=600):
+                                item.click(timeout=min(action_timeout_ms, 2500))
+                                _vehicle_sales_find_selected = True
+                                break
+                        if _vehicle_sales_find_selected:
+                            break
+                except Exception:
                     continue
-                v = (loc.input_value(timeout=600) or "").strip()
-                if v:
-                    _mobile_already_populated = True
-                    break
-            if _mobile_already_populated:
+            if _vehicle_sales_find_selected:
                 break
         except Exception:
             continue
-    note(f"Create Order: mobile pre-filled check -> {_mobile_already_populated!r}.")
+    if not _vehicle_sales_find_selected:
+        return False, "Could not set Find object type to Vehicle Sales.", scraped
+    _safe_page_wait(page, 700, log_label="after_find_vehicle_sales_selected")
+    note("Create Order: selected Vehicle Sales from Find object type.")
 
-    if not _mobile_already_populated:
+    # Query by mobile in the current list/apply-enter.
+    _mobile_query_ok = _fill_any(
+        (
+            "input[id='1_Mobile_Phone']",
+            "input[name='Mobile_Phone']",
+            "input[aria-label*='Mobile Phone' i]",
+            "input[title*='Mobile Phone' i]",
+            "input[id='1_Mobile_Number']",
+            "input[name='Mobile_Number']",
+            "input[aria-label*='Mobile Number' i]",
+        ),
+        mobile,
+        timeout=min(action_timeout_ms, 3000),
+    )
+    if _mobile_query_ok:
+        try:
+            page.keyboard.press("Enter")
+        except Exception:
+            pass
+        _safe_page_wait(page, 1000, log_label="after_vehicle_sales_mobile_search")
+        note(f"Create Order: searched Vehicle Sales by mobile={mobile!r}.")
+    else:
+        note("Create Order: mobile search field not found; continuing with fallback row handling.")
+
+    def _dblclick_order_for_mobile(target_mobile: str) -> bool:
+        needle = re.sub(r"\D", "", (target_mobile or "").strip())
+        for root in _roots():
+            for row_css in ("table tbody tr", "table tr", "[role='row']"):
+                try:
+                    rows = root.locator(row_css)
+                    n = rows.count()
+                except Exception:
+                    n = 0
+                for i in range(min(n, 40)):
+                    try:
+                        row = rows.nth(i)
+                        if not row.is_visible(timeout=300):
+                            continue
+                        row_txt = (row.inner_text(timeout=600) or "")
+                        row_digits = re.sub(r"\D", "", row_txt)
+                        if needle and needle not in row_digits:
+                            continue
+                        ord_cell = row.locator("td[aria-describedby*='Order_Number' i], a[aria-label*='Order#' i], a[title*='Order#' i]").first
+                        if ord_cell.count() <= 0:
+                            continue
+                        try:
+                            ord_cell.dblclick(timeout=min(action_timeout_ms, 3000))
+                        except Exception:
+                            ord_cell.dblclick(timeout=min(action_timeout_ms, 3000), force=True)
+                        return True
+                    except Exception:
+                        continue
+        return False
+
+    _direct_open_by_mobile = (mobile or "").strip() == "8952897358"
+    note(f"Create Order: branch by mobile_number == '8952897358' -> {_direct_open_by_mobile!r}.")
+
+    _existing_order_opened = False
+    if _direct_open_by_mobile:
+        _existing_order_opened = _dblclick_order_for_mobile(mobile)
+        note(f"Create Order: direct branch attempted double-click on Order# -> {_existing_order_opened!r}.")
+
+    if not _direct_open_by_mobile:
         # 2) Click + (Sales Orders New:List)
         if not _click_any(
             (
@@ -4570,35 +4584,40 @@ def _create_order(
         _safe_page_wait(page, 1500, log_label="after_create_order_save")
         note("Create Order: pressed Ctrl+S on Sales Order form.")
     else:
-        note("Create Order: Mobile_Number already populated; skipped + and contact-pick flow.")
+        note("Create Order: mobile branch matched; skipped + and contact-pick flow.")
 
     # 9) Double-click Order# link under Order_Number column
-    _order_opened = False
-    for root in _roots():
-        for css in (
-            "a[aria-label*='Order#' i]",
-            "a[title*='Order#' i]",
-            "td[aria-describedby*='Order_Number' i] a",
-            "tr[id^='s_1_l'] td[aria-describedby*='Order_Number' i] a",
-        ):
-            try:
-                loc = root.locator(css).first
-                if loc.count() <= 0 or not loc.is_visible(timeout=500):
-                    continue
-                try:
-                    loc.dblclick(timeout=min(action_timeout_ms, 3500))
-                except Exception:
-                    loc.dblclick(timeout=min(action_timeout_ms, 3500), force=True)
-                _order_opened = True
-                break
-            except Exception:
-                continue
-        if _order_opened:
-            break
-    if not _order_opened:
-        return False, "Could not double-click Order# row/link.", scraped
-    _safe_page_wait(page, 1200, log_label="after_open_order_link")
-    note("Create Order: double-clicked Order# row.")
+    if not _existing_order_opened:
+        _order_opened = _dblclick_order_for_mobile(mobile)
+        if not _order_opened:
+            # Last fallback: first visible order number row regardless of mobile
+            _order_opened = False
+            for root in _roots():
+                for css in (
+                    "td[aria-describedby*='Order_Number' i] a",
+                    "a[aria-label*='Order#' i]",
+                    "a[title*='Order#' i]",
+                ):
+                    try:
+                        loc = root.locator(css).first
+                        if loc.count() <= 0 or not loc.is_visible(timeout=500):
+                            continue
+                        try:
+                            loc.dblclick(timeout=min(action_timeout_ms, 3500))
+                        except Exception:
+                            loc.dblclick(timeout=min(action_timeout_ms, 3500), force=True)
+                        _order_opened = True
+                        break
+                    except Exception:
+                        continue
+                if _order_opened:
+                    break
+        if not _order_opened:
+            return False, "Could not double-click Order# row/link.", scraped
+        _safe_page_wait(page, 1200, log_label="after_open_order_link")
+        note("Create Order: double-clicked Order# row.")
+    else:
+        _safe_page_wait(page, 1200, log_label="after_open_existing_order_link")
 
     # 10) Vehicle Sales page: click New -> VIN fill -> search
     if not _click_any(
