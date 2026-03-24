@@ -4950,17 +4950,69 @@ def _try_click_opportunities_list_new(
         "button[aria-label='Opportunity Form:New']",
         "a[title='Opportunity Form:New']",
         "button[title='Opportunity Form:New']",
+        "a[aria-label='Opportunity Form: New']",
+        "button[aria-label='Opportunity Form: New']",
+        "a[title='Opportunity Form: New']",
+        "button[title='Opportunity Form: New']",
+        "[aria-label*='Opportunity Form' i][aria-label*='New' i]",
+        "[title*='Opportunity Form' i][title*='New' i]",
     )
 
-    # First pass: frame-focused click for tenant label requested by operator.
-    for frame in _ordered_frames(page):
+    def _try_activate_opportunity_form_scope(root) -> bool:
+        """
+        Some tenants keep Enquiry on an opportunity list pane first. Click any visible
+        Opportunity Form tab/link/button to shift focus into the form pane before +New.
+        """
+        for role in ("tab", "link", "button"):
+            try:
+                loc = root.get_by_role(role, name=re.compile(r"^\s*Opportunity\s*Form\s*$", re.I))
+                if _click_first_visible(loc):
+                    return True
+            except Exception:
+                continue
+        for css in (
+            "[aria-label='Opportunity Form' i]",
+            "[title='Opportunity Form' i]",
+            "[aria-label*='Opportunity Form' i]:not([aria-label*='New' i])",
+            "[title*='Opportunity Form' i]:not([title*='New' i])",
+        ):
+            try:
+                if _click_first_visible(root.locator(css)):
+                    return True
+            except Exception:
+                continue
+        return False
+
+    # Retry a few times: activate Opportunity Form scope, then click Opportunity Form:New in-frame.
+    for attempt in range(3):
+        for frame in _ordered_frames(page):
+            try:
+                _try_activate_opportunity_form_scope(frame)
+            except Exception:
+                pass
+            try:
+                for css in focused_selectors:
+                    if _click_first_visible(frame.locator(css)):
+                        logger.info(
+                            "siebel_dms: clicked Opportunity Form:New in focused frame (attempt=%s)",
+                            attempt + 1,
+                        )
+                        return frame
+            except Exception:
+                continue
+        # Main page fallback (rare tenant rendering outside iframes)
         try:
+            _try_activate_opportunity_form_scope(page)
             for css in focused_selectors:
-                if _click_first_visible(frame.locator(css)):
-                    logger.info("siebel_dms: clicked Opportunity Form:New in focused frame")
-                    return frame
+                if _click_first_visible(page.locator(css)):
+                    logger.info(
+                        "siebel_dms: clicked Opportunity Form:New on page root (attempt=%s)",
+                        attempt + 1,
+                    )
+                    return None
         except Exception:
-            continue
+            pass
+        _safe_page_wait(page, 550, log_label=f"retry_opportunity_form_new_{attempt+1}")
     return None
 
 
@@ -5109,7 +5161,7 @@ def _add_enquiry_opportunity(
         note("Add Enquiry: Enquiry tab not found (tried aria-label Enquiry Selected and Enquiry).")
         return False, "Enquiry main tab not found."
     note("Add Enquiry: Enquiry tab clicked.")
-    _safe_page_wait(page, 1400, log_label="after_enquiry_tab")
+    _safe_page_wait(page, 1800, log_label="after_enquiry_tab")
 
     opp_frame = _try_click_opportunities_list_new(
         page, action_timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
