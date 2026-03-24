@@ -3206,14 +3206,31 @@ def _vin_match_key(chassis: str) -> str:
 
 def _normalize_manufacturing_year_yyyy(raw: str) -> str:
     """
-    Siebel **Dispatch Year** / date fields may return ``2009``, ``24/03/2009``, or ISO strings.
-    Store **year_of_mfg** as four-digit ``YYYY`` (1900–2099).
+    Siebel **Dispatch Year** / date fields may return ``2009``, ``2,009`` (grouped digits), ``24/03/2009``,
+    or ISO strings. Store **year_of_mfg** as four-digit ``YYYY`` (1900–2099).
     """
     s = (raw or "").strip()
     if not s:
         return ""
+
+    def _ok_year(y: str) -> bool:
+        try:
+            n = int(y, 10)
+            return 1900 <= n <= 2099
+        except ValueError:
+            return False
+
+    # Strip common grouping so "2,009" / "2 009" / thin-space grouped years become "2009"
+    de_grouped = re.sub(r"[\s,\u00a0\u202f'ʼ`]", "", s)
+    for m in re.finditer(r"(19\d{2}|20\d{2})", de_grouped):
+        y = m.group(1)
+        if _ok_year(y):
+            return y
+
     m = re.search(r"\b(19\d{2}|20\d{2})\b", s)
-    return m.group(1) if m else ""
+    if m and _ok_year(m.group(1)):
+        return m.group(1)
+    return ""
 
 
 def _apply_year_of_mfg_yyyy(d: dict) -> None:
