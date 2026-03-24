@@ -4175,6 +4175,12 @@ def _add_customer_payment(
                     "input[id='Transaction_Amount']",
                     "input[id='1_s_2_1_Transaction_Amount']",
                     "input[name='1_s_2_1_Transaction_Amount']",
+                    "input[title_id='1_s_2_1_Transaction_Amount']",
+                    "input[title-id='1_s_2_1_Transaction_Amount']",
+                    "input[title='1_s_2_1_Transaction_Amount']",
+                    "input[aria-label='Transaction Amount']",
+                    "input[aria-label*='Transaction Amount' i]",
+                    "input[title*='Transaction Amount' i]",
                   ];
                   for (const s of sels) {
                     const el = document.querySelector(s);
@@ -4210,8 +4216,13 @@ def _add_customer_payment(
                     "select[name='Transaction_Type']",
                     "select[name='Transaction_Type_New']",
                     "input[id='Transaction_Type']",
+                    "input[title_id='Transaction_Type']",
+                    "input[title-id='Transaction_Type']",
                     "input[name*='Transaction_Type' i]",
                     "input[id*='Transaction_Type' i]",
+                    "input[aria-label='Transaction Type']",
+                    "input[aria-label*='Transaction Type' i]",
+                    "input[title*='Transaction Type' i]",
                   ];
                   for (const s of sels) {
                     const el = document.querySelector(s);
