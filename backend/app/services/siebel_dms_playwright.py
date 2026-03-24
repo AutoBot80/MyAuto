@@ -29,7 +29,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from playwright.sync_api import Frame, Page, TimeoutError as PlaywrightTimeout
@@ -5026,21 +5026,26 @@ def _add_enquiry_opportunity(
     note,
     form_trace,
     vehicle_merge: dict | None = None,
-) -> bool:
+) -> tuple[bool, str | None]:
     """
-    Contact Find returned no table rows: vehicle list (chassis/VIN + engine + Enter), **scrape** model /
-    year of manufacture / color from the grid, then only if that succeeds: Enquiry tab,
-    **Opportunities List:New**, fill fields from DB, Ctrl+S.
+    Contact Find returned no table rows: vehicle find + scrape, **Enquiry** tab, **Opportunities List:New**,
+    fill opportunity fields from DB + scraped model/color (**Financier** fields are skipped), Ctrl+S.
+
+    Returns ``(success, error_detail)`` — ``error_detail`` is a short operator-facing reason when
+    ``success`` is False (used for API ``error`` text; see Playwright_DMS.txt for full NOTES).
     """
-    financier = (dms_values.get("financier_name") or "").strip()
-    finance_required = "Y" if financier else "N"
+    fr_db = (dms_values.get("finance_required") or "").strip().upper()
+    if fr_db in ("Y", "N"):
+        finance_required = fr_db
+    else:
+        finance_required = "Y" if (dms_values.get("financier_name") or "").strip() else "N"
     aadhar = (dms_values.get("aadhar_id") or "").strip()
     frame_p = (dms_values.get("frame_partial") or "").strip()
     engine_p = (dms_values.get("engine_partial") or "").strip()
 
     if not aadhar:
         note("Add Enquiry: aadhar_id from DB is empty — cannot fill UIN No.")
-        return False
+        return False, "Missing customer Aadhaar last 4 for UIN No."
 
     if callable(form_trace):
         form_trace(
@@ -5050,7 +5055,7 @@ def _add_enquiry_opportunity(
             frame_partial=frame_p,
             engine_partial=engine_p,
             finance_required=finance_required,
-            financier_name=financier or "(empty)",
+            financier_name=(dms_values.get("financier_name") or "(empty)")[:120],
             aadhar_id=aadhar,
         )
 
@@ -5065,7 +5070,7 @@ def _add_enquiry_opportunity(
         note=note,
     )
     if not vq_ok:
-        return False
+        return False, "Vehicle find failed (chassis/engine query or VIN fly-in)."
 
     _apply_year_of_mfg_yyyy(scraped_v)
 
@@ -5074,7 +5079,10 @@ def _add_enquiry_opportunity(
             "Add Enquiry: vehicle search did not yield model, year of manufacture, and color in the grid — "
             "not opening Enquiry / new opportunity (confirm list applet column layout vs scrape)."
         )
-        return False
+        return (
+            False,
+            "Vehicle scrape did not yield model, YYYY year of manufacture, and color (see NOTES above).",
+        )
 
     note(
         "Add Enquiry: scraped from vehicle list — "
@@ -5100,7 +5108,7 @@ def _add_enquiry_opportunity(
         page, action_timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
     ):
         note("Add Enquiry: Enquiry tab not found (tried aria-label Enquiry Selected and Enquiry).")
-        return False
+        return False, "Enquiry main tab not found."
     note("Add Enquiry: Enquiry tab clicked.")
     _safe_page_wait(page, 1400, log_label="after_enquiry_tab")
 
@@ -5108,14 +5116,14 @@ def _add_enquiry_opportunity(
         page, action_timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
     ):
         note("Add Enquiry: Opportunities List:New not found.")
-        return False
+        return False, "Opportunities List:New not found on Enquiry view."
     note("Add Enquiry: clicked Opportunities List:New.")
     _safe_page_wait(page, 1200, log_label="after_opportunity_new")
 
     enq_frame = _frame_containing_enquiry_type(page)
     if enq_frame is None:
         note('Add Enquiry: no frame contains aria-label="Enquiry Type".')
-        return False
+        return False, "New opportunity form not found (no Enquiry Type field)."
 
     def try_field(labels: tuple[str, ...], value: str, *, required: bool) -> bool:
         sv = (value or "").strip()
@@ -5144,19 +5152,86 @@ def _add_enquiry_opportunity(
             return False
         return True
 
-    if not try_field(("Finance Required",), finance_required, required=True):
+    def try_field_any(labels: tuple[str, ...], candidates: tuple[str, ...]) -> bool:
+        """Best-effort: return True if any candidate was applied."""
+        for cand in candidates:
+            c = (cand or "").strip()
+            if not c:
+                continue
+            if try_field(labels, c, required=False):
+                return True
         return False
-    if not try_field(("Booking Order Type",), "Normal Booking", required=True):
-        return False
-    if financier:
-        if not try_field(("Financier Name", "Financier"), financier, required=True):
-            return False
+
+    first = (dms_values.get("first_name") or "").strip()
+    last = (dms_values.get("last_name") or "").strip()
+    mobile = (dms_values.get("mobile_phone") or "").strip()
+    landline = (dms_values.get("landline") or dms_values.get("alt_phone_num") or "").strip()
+    state = (dms_values.get("state") or "").strip()
+    district = (dms_values.get("district") or "").strip()
+    tehsil = (dms_values.get("tehsil") or "").strip()
+    city = (dms_values.get("city") or "").strip()
+    addr = (dms_values.get("address_line_1") or "").strip()
+    pin = (dms_values.get("pin_code") or "").strip()
+    age = (dms_values.get("age") or "").strip()
+    gender = (dms_values.get("gender") or "").strip()
+    model_i = (scraped_v.get("model") or "").strip()
+    color_i = (scraped_v.get("color") or "").strip()
+    today_str = date.today().strftime("%d/%m/%Y")
+
+    if not try_field(("Contact First Name", "First Name"), first, required=True):
+        return False, "Could not set Contact First Name."
+    try_field(("Contact Last Name", "Last Name"), last, required=False)
+    if not try_field(("Mobile Phone", "Mobile Phone #", "Cellular Phone"), mobile, required=True):
+        return False, "Could not set Mobile Phone."
+    try_field(("Landline", "Land Line", "Alternate Phone", "Alternate Number"), landline, required=False)
+
     if not try_field(("UIN Type",), "Aadhaar Card", required=True):
-        return False
-    if not try_field(("UIN No.", "UIN Number"), aadhar, required=True):
-        return False
+        if not try_field_any(("UIN Type",), ("Aadhaar",)):
+            return False, "Could not set UIN Type (Aadhaar)."
+    if not try_field(("UIN No.", "UIN Number", "UIN No"), aadhar, required=True):
+        return False, "Could not set UIN No."
+
+    if not try_field(("State",), state, required=True):
+        return False, "Could not set State."
+    try_field(("District",), district, required=False)
+    try_field(("Tehsil",), tehsil, required=False)
+    try_field(("City",), city, required=False)
+    if not try_field(("Address Line 1", "Address Line1", "Address"), addr, required=True):
+        return False, "Could not set Address Line 1."
+    if not try_field(("Pin Code", "Pin code", "PIN Code", "Postal Code"), pin, required=True):
+        return False, "Could not set Pin Code."
+
+    try_field(("Age",), age, required=False)
+    try_field(("Gender",), gender, required=False)
+
+    if not try_field(
+        ("Model Interested In", "Model Interested in", "Interested Model", "Model"),
+        model_i,
+        required=True,
+    ):
+        return False, "Could not set Model Interested In (from vehicle scrape)."
+    if not try_field(("Color", "Colour"), color_i, required=True):
+        return False, "Could not set Color (from vehicle scrape)."
+
+    if not try_field(("Finance Required",), finance_required, required=True):
+        return False, "Could not set Finance Required."
+    if not try_field(("Booking Order Type",), "Normal Booking", required=True):
+        return False, "Could not set Booking Order Type."
+
+    try_field_any(("Enquiry Source",), ("Walk-In", "Walk In", "Walkin"))
     if not try_field(("Point of Contact",), "Customer Walk-in", required=True):
-        return False
+        if not try_field_any(
+            ("Point of Contact",),
+            ("Customer Walk-In", "Walk-In", "Customer Walk In"),
+        ):
+            return False, "Could not set Point of Contact."
+
+    try_field_any(
+        ("Actual Enquiry Date", "Enquiry Date", "Actual Enquiry Dt"),
+        (today_str,),
+    )
+
+    note("Add Enquiry: Financier fields skipped by design (tenant control).")
 
     try:
         page.keyboard.press("Control+s")
@@ -5165,10 +5240,10 @@ def _add_enquiry_opportunity(
             page.keyboard.press("Meta+s")
         except Exception:
             note("Add Enquiry: Ctrl+S failed.")
-            return False
+            return False, "Ctrl+S save failed on new opportunity form."
     note("Add Enquiry: pressed Ctrl+S to save enquiry.")
     _safe_page_wait(page, 1500, log_label="after_add_enquiry_save")
-    return True
+    return True, None
 
 
 def _siebel_run_precheck_and_pdi(
@@ -5550,7 +5625,7 @@ def Playwright_Hero_DMS_fill(
                     "No contact rows after Find/Go — Add Enquiry branch: vehicle chassis/VIN + engine, "
                     "Enquiry tab, Opportunities List:New, DB fields, Ctrl+S."
                 )
-                if not _add_enquiry_opportunity(
+                ae_ok, ae_detail = _add_enquiry_opportunity(
                     page,
                     dms_values,
                     urls,
@@ -5560,14 +5635,12 @@ def Playwright_Hero_DMS_fill(
                     note=note,
                     form_trace=form_trace,
                     vehicle_merge=out.setdefault("vehicle", {}),
-                ):
+                )
+                if not ae_ok:
                     step("Stopped: Add Enquiry branch failed (empty contact search).")
                     out["error"] = (
-                        "Siebel: video SOP — contact search returned no table rows and Add Enquiry "
-                        "did not complete (vehicle list must return model, year of manufacture, and color "
-                        "in the grid before Enquiry / Opportunities). "
-                        "Confirm DMS_REAL_URL_VEHICLE, chassis/engine in form_dms_view, customer aadhar last 4, "
-                        "and Siebel grid column mapping for scrape."
+                        "Siebel: video SOP — contact search returned no table rows and Add Enquiry did not complete. "
+                        f"{ae_detail or 'See Playwright_DMS.txt [NOTE] lines for the failing step.'}"
                     )
                     return out
                 ms_done("Add enquiry saved")
@@ -6068,7 +6141,7 @@ def Playwright_Hero_DMS_fill(
                     note=note,
                     form_trace=form_trace,
                     vehicle_merge=out.setdefault("vehicle", {}),
-                ):
+                )[0]:
                     created_basic = True
                     ms_done("Add enquiry saved")
                 else:

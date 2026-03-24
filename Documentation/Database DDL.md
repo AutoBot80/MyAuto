@@ -88,6 +88,7 @@ This document lists the current database tables and their columns. **Executable 
 | `length_mm` | `integer` | YES |  | Length in mm |
 | `fuel_type` | `varchar(16)` | YES |  | Fuel type (e.g. Petrol, Diesel) |
 | `vehicle_price` | `numeric(12,2)` | YES |  | **Ex-showroom price** (Order Value from DMS); column name remains `vehicle_price`; Vahan reads this as total/ex-showroom |
+| `dms_sku` | `varchar(128)` | YES |  | SKU from Siebel vehicle scrape; added by `DDL/alter/10h_form_dms_view_city_vehicle_dms_sku.sql` |
 
 **Primary key:** `vehicle_master_pkey` on (`vehicle_id`)
 
@@ -316,7 +317,7 @@ This document lists the current database tables and their columns. **Executable 
 
 **Important columns:**
 - Technical/source columns: `sales_id`, `customer_id`, `vehicle_id`, `dealer_id`, `subfolder`, `dealer_name`, `oem_name`.
-- Label-aligned columns: `"Mr/Ms"`, `"Contact First Name"`, `"Contact Last Name"`, `"Mobile Phone #"`, `"Landline #"`, `"State"`, `"Address Line 1"`, `"Pin Code"`, `"Key num (partial)"`, `"Frame / Chassis num (partial)"`, `"Engine num (partial)"`, `"Relation (S/O or W/o)"`, `"Father or Husband Name"`, `"Financier Name"`, `"Finance Required"`, `"DMS Contact Path"`.
+- Label-aligned columns: `"Mr/Ms"`, `"Contact First Name"`, `"Contact Last Name"`, `"Mobile Phone #"`, `"Landline #"`, `"State"`, `"Address Line 1"`, `"City"` (from `customer_master.city`; recreated in `DDL/alter/10h_form_dms_view_city_vehicle_dms_sku.sql`), `"Pin Code"`, `"Key num (partial)"`, `"Frame / Chassis num (partial)"`, `"Engine num (partial)"`, `"Relation (S/O or W/o)"`, `"Father or Husband Name"`, `"Financier Name"`, `"Finance Required"`, `"DMS Contact Path"`.
 
 **Operational notes:**
 - The partial key/frame/engine columns match the truncation used by Playwright today (`8/12/12` characters respectively).
@@ -435,3 +436,4 @@ This document lists the current database tables and their columns. **Executable 
 | 1.1 | Mar 2026 | Added `customer_master.alt_phone_num` for Alternate/Landline number and mapped it to DMS/Insurance automation usage |
 | 1.2 | Mar 2026 | Added `customer_master.dms_relation_prefix`, `father_or_husband_name`, `dms_contact_path`; extended `form_dms_view`; documented `vehicle_price` as ex-showroom (Order Value) |
 | 1.3 | Mar 2026 | Added `customer_master.care_of` (Aadhaar QR); DMS Father/Husband via `form_dms_view` uses `care_of` with legacy fallback to `father_or_husband_name`; Submit Info persists `care_of` |
+| 1.4 | Mar 2026 | `vehicle_master.dms_sku`; `form_dms_view` includes **City** (`customer_master.city`); script `DDL/alter/10h_form_dms_view_city_vehicle_dms_sku.sql`; Fill DMS persists full Siebel scrape via `update_vehicle_master_from_dms` |

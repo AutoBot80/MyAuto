@@ -928,6 +928,10 @@ def _build_dms_fill_values(customer_id: int | None, vehicle_id: int | None, subf
         "mobile_phone": _clean_text(row.get("Mobile Phone #"))[:10],
         "landline": _clean_text(row.get("Landline #"))[:16],
         "address_line_1": addr_line,
+        "city": _clean_text(row.get("City"))[:80],
+        "district": _clean_text(row.get("District"))[:80],
+        "tehsil": _clean_text(row.get("Tehsil"))[:80],
+        "age": _clean_text(row.get("Age"))[:8],
         "state": state_e,
         "pin_code": pin_e,
         "key_partial": _clean_text(row.get("Key num (partial)"))[:8],
@@ -1819,23 +1823,59 @@ def run_fill_vahan_batch_row(
     }
 
 
+def _parse_vehicle_year_int_for_db(raw) -> int | None:
+    """Match Siebel-style year strings (``2009``, ``2,009``) to an integer yyyy for ``vehicle_master``."""
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    if not s:
+        return None
+    compact = re.sub(r"[\s,\u00a0\u202f'ʼ`]", "", s)
+    m = re.search(r"(19\d{2}|20\d{2})", compact)
+    if not m:
+        return None
+    try:
+        y = int(m.group(1), 10)
+        if 1900 <= y <= 2099:
+            return y
+    except ValueError:
+        pass
+    return None
+
+
 def update_vehicle_master_from_dms(vehicle_id: int, scraped: dict) -> None:
-    """Update vehicle_master with DMS-scraped data (chassis, engine, key_num, model, colour, seating_capacity, etc.)."""
+    """
+    Merge DMS / Siebel scrape into ``vehicle_master`` (non-null scraped values win via ``COALESCE``).
+
+    Uses **full_chassis** / **full_engine** from Siebel detail scrape when present, else **frame_num** /
+    **engine_num**; **sku** → **dms_sku** (column added in ``DDL/alter/10h_form_dms_view_city_vehicle_dms_sku.sql``).
+    """
     from app.db import get_connection
 
-    chassis = (scraped.get("frame_num") or "").strip() or None
-    engine = (scraped.get("engine_num") or "").strip() or None
-    key_num = (scraped.get("key_num") or "").strip() or None
-    model = (scraped.get("model") or "").strip() or None
-    colour = (scraped.get("color") or "").strip() or None
+    def _strip_or_none(k: str) -> str | None:
+        v = (scraped.get(k) or "").strip()
+        return v or None
+
+    chassis = _strip_or_none("full_chassis") or _strip_or_none("frame_num") or _strip_or_none("chassis")
+    engine = _strip_or_none("full_engine") or _strip_or_none("engine_num") or _strip_or_none("engine")
+    key_num = _strip_or_none("key_num")
+    model = _strip_or_none("model")
+    colour = _strip_or_none("color") or _strip_or_none("colour")
+    dms_sku = _strip_or_none("sku")
+    raw_frame = chassis
+    raw_engine = engine
     cubic_capacity = scraped.get("cubic_capacity")
     seating_capacity = scraped.get("seating_capacity")
     body_type = (scraped.get("body_type") or "").strip() or None
     vehicle_type = (scraped.get("vehicle_type") or "").strip() or None
     num_cylinders = scraped.get("num_cylinders")
     horse_power = scraped.get("horse_power")
-    year_of_mfg = scraped.get("year_of_mfg")
+    year_of_mfg = _parse_vehicle_year_int_for_db(scraped.get("year_of_mfg"))
+    if year_of_mfg is None:
+        year_of_mfg = _parse_vehicle_year_int_for_db(scraped.get("dispatch_year"))
     vehicle_price = scraped.get("vehicle_price")
+    if vehicle_price is None:
+        vehicle_price = scraped.get("ex_showroom_price")
     if vehicle_price is None:
         vehicle_price = scraped.get("total_amount")
     if cubic_capacity:
@@ -1858,28 +1898,59 @@ def update_vehicle_master_from_dms(vehicle_id: int, scraped: dict) -> None:
             horse_power = float(str(horse_power).replace(",", ""))
         except (ValueError, TypeError):
             horse_power = None
-    if year_of_mfg:
-        try:
-            year_of_mfg = int(str(year_of_mfg).strip())
-        except (ValueError, TypeError):
-            year_of_mfg = None
     if vehicle_price:
         try:
             vehicle_price = float(str(vehicle_price).replace(",", ""))
         except (ValueError, TypeError):
             vehicle_price = None
 
-    conn = get_connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
+    params_full = (
+        chassis,
+        engine,
+        key_num,
+        model,
+        colour,
+        raw_frame,
+        raw_engine,
+        dms_sku,
+        cubic_capacity,
+        seating_capacity,
+        body_type,
+        vehicle_type,
+        num_cylinders,
+        horse_power,
+        year_of_mfg,
+        vehicle_price,
+        vehicle_id,
+    )
+    params_legacy = (
+        chassis,
+        engine,
+        key_num,
+        model,
+        colour,
+        raw_frame,
+        raw_engine,
+        cubic_capacity,
+        seating_capacity,
+        body_type,
+        vehicle_type,
+        num_cylinders,
+        horse_power,
+        year_of_mfg,
+        vehicle_price,
+        vehicle_id,
+    )
+    sql_with_sku = """
                 UPDATE vehicle_master SET
                     chassis = COALESCE(%s, chassis),
                     engine = COALESCE(%s, engine),
                     key_num = COALESCE(%s, key_num),
                     model = COALESCE(%s, model),
                     colour = COALESCE(%s, colour),
+                    raw_frame_num = COALESCE(%s, raw_frame_num),
+                    raw_engine_num = COALESCE(%s, raw_engine_num),
+                    dms_sku = COALESCE(%s, dms_sku),
                     cubic_capacity = COALESCE(%s, cubic_capacity),
                     seating_capacity = COALESCE(%s, seating_capacity),
                     body_type = COALESCE(%s, body_type),
@@ -1889,9 +1960,41 @@ def update_vehicle_master_from_dms(vehicle_id: int, scraped: dict) -> None:
                     year_of_mfg = COALESCE(%s, year_of_mfg),
                     vehicle_price = COALESCE(%s, vehicle_price)
                 WHERE vehicle_id = %s
-                """,
-                (chassis, engine, key_num, model, colour, cubic_capacity, seating_capacity, body_type, vehicle_type, num_cylinders, horse_power, year_of_mfg, vehicle_price, vehicle_id),
-            )
+                """
+    sql_no_sku = """
+                UPDATE vehicle_master SET
+                    chassis = COALESCE(%s, chassis),
+                    engine = COALESCE(%s, engine),
+                    key_num = COALESCE(%s, key_num),
+                    model = COALESCE(%s, model),
+                    colour = COALESCE(%s, colour),
+                    raw_frame_num = COALESCE(%s, raw_frame_num),
+                    raw_engine_num = COALESCE(%s, raw_engine_num),
+                    cubic_capacity = COALESCE(%s, cubic_capacity),
+                    seating_capacity = COALESCE(%s, seating_capacity),
+                    body_type = COALESCE(%s, body_type),
+                    vehicle_type = COALESCE(%s, vehicle_type),
+                    num_cylinders = COALESCE(%s, num_cylinders),
+                    horse_power = COALESCE(%s, horse_power),
+                    year_of_mfg = COALESCE(%s, year_of_mfg),
+                    vehicle_price = COALESCE(%s, vehicle_price)
+                WHERE vehicle_id = %s
+                """
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            try:
+                cur.execute(sql_with_sku, params_full)
+            except Exception as exc:
+                msg = str(exc).lower()
+                if "dms_sku" in msg and ("column" in msg or "undefined" in msg):
+                    cur.execute(sql_no_sku, params_legacy)
+                    logger.info(
+                        "fill_dms: vehicle_master update without dms_sku (run DDL/alter/10h_form_dms_view_city_vehicle_dms_sku.sql)"
+                    )
+                else:
+                    raise
             conn.commit()
             if cur.rowcount > 0:
                 logger.info("fill_dms: updated vehicle_master vehicle_id=%s with DMS data", vehicle_id)
