@@ -4217,14 +4217,15 @@ def _add_customer_payment(
                     page.keyboard.press("Tab")
                     _safe_page_wait(page, 300, log_label="tab_to_payment_mode")
 
-                    # Fill Payment Mode = Cash, confirm with Enter.
+                    # Fill Payment Mode = Cash.
+                    # Use Tab (not Enter) to confirm — Enter auto-advances focus in Siebel
+                    # dropdowns, which would shift the count. Tab confirms + is Tab 1 of 4.
                     page.keyboard.type("Cash", delay=50)
                     _safe_page_wait(page, 400, log_label="after_type_payment_mode")
-                    page.keyboard.press("Enter")
-                    _safe_page_wait(page, 400, log_label="after_enter_confirm_payment_mode")
-                    note("Payment keyboard: typed 'Cash' + Enter to confirm Payment Mode.")
+                    note("Payment keyboard: typed 'Cash' into Payment Mode.")
 
-                    # Tab 4 times from Payment Mode to Transaction Amount (user-confirmed count).
+                    # Tab 4 times: first Tab confirms 'Cash' and moves forward,
+                    # then 3 more to reach Transaction Amount (user-confirmed: 4 tabs total).
                     for _ti in range(4):
                         page.keyboard.press("Tab")
                         _safe_page_wait(page, 150, log_label=f"tab_to_amount_{_ti+1}")
