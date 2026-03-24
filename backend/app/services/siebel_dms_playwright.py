@@ -3980,22 +3980,38 @@ def _add_customer_payment(
                         pass
                 note(f"Payment debug: amount roots count={len(amount_roots)}.")
 
-                def _focus_locked_payment_frame(root) -> None:
+                def _focus_locked_payment_frame(root, *, prefer_amount: bool = False) -> None:
                     """Re-focus current payment data frame before each write."""
                     try:
                         root.evaluate(
-                            """() => {
+                            """(preferAmount) => {
                               try { window.focus(); } catch (_) {}
-                              const candidates = [
+                              const amountFirst = [
+                                "input[name='Transaction_Amount']",
+                                "input[id='Transaction_Amount']",
+                                "input[id='1_s_2_1_Transaction_Amount']",
+                                "input[name='1_s_2_1_Transaction_Amount']",
+                                "input[title_id='1_s_2_1_Transaction_Amount']",
+                                "input[title-id='1_s_2_1_Transaction_Amount']",
+                                "input[title='1_s_2_1_Transaction_Amount']",
+                                "input[aria-label*='Transaction Amount' i]",
+                                "input[title*='Transaction Amount' i]",
+                                "input[name='Transaction_Type']",
+                                "input[name='Transaction_Type_New']"
+                              ];
+                              const typeFirst = [
                                 "input[name='Transaction_Type']",
                                 "input[name='Transaction_Type_New']",
+                                "select[name='Transaction_Type']",
+                                "select[name='Transaction_Type_New']",
                                 "input[id='Transaction_Type']",
                                 "input[name*='Transaction_Type' i]",
                                 "input[id*='Transaction_Type' i]",
                                 "input[name='Transaction_Amount']",
                                 "input[id='1_s_2_1_Transaction_Amount']",
-                                "input[name='1_s_2_1_Transaction_Amount']",
+                                "input[name='1_s_2_1_Transaction_Amount']"
                               ];
+                              const candidates = preferAmount ? amountFirst : typeFirst;
                               for (const s of candidates) {
                                 const el = document.querySelector(s);
                                 if (el instanceof HTMLElement) {
@@ -4003,7 +4019,8 @@ def _add_customer_payment(
                                   break;
                                 }
                               }
-                            }"""
+                            }""",
+                            prefer_amount,
                         )
                     except Exception:
                         pass
@@ -4153,7 +4170,7 @@ def _add_customer_payment(
                 # Transaction Amount = 120000 first (before Transaction Type) to avoid focus traps.
                 amount_ok = False
                 for root in amount_roots:
-                    _focus_locked_payment_frame(root)
+                    _focus_locked_payment_frame(root, prefer_amount=True)
                     for css in (
                         "input[name='Transaction_Amount']",
                         "input[id='Transaction_Amount']",
@@ -4232,7 +4249,7 @@ def _add_customer_payment(
                 type_ok = False
                 type_attempted = False
                 for root in scoped_roots:
-                    _focus_locked_payment_frame(root)
+                    _focus_locked_payment_frame(root, prefer_amount=False)
                     for css in (
                         "input[name='Transaction_Type']",
                         "input[name='Transaction_Type_New']",
