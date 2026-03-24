@@ -3658,6 +3658,10 @@ def _add_customer_payment(
     New isolated step: click "+" (new) on current Payments frame and fill payment row.
     """
     _safe_page_wait(page, 250, log_label="before_payments_plus_click")
+    try:
+        note(f"Payment debug: ordered frames count={len(_ordered_frames(page))}.")
+    except Exception:
+        pass
 
     plus_selectors = (
         "a[aria-label='Payment Lines List:New']",
@@ -3781,6 +3785,10 @@ def _add_customer_payment(
         except Exception:
             continue
     root_candidates = action_roots if action_roots else list(_siebel_locator_search_roots(page, content_frame_selector))
+    note(
+        "Payment debug: root candidates prepared "
+        f"(action_roots={len(action_roots)}, total_candidates={len(root_candidates)})."
+    )
 
     for root in root_candidates:
         try:
@@ -3925,6 +3933,7 @@ def _add_customer_payment(
                 else:
                     # Keep focus locked to the first detected Payment Lines frame.
                     scoped_roots = [payment_frames[0]]
+                note(f"Payment debug: transaction roots count={len(scoped_roots)}.")
 
                 # Transaction Amount may appear in a sibling frame; lock it independently.
                 amount_roots = scoped_roots
@@ -3971,6 +3980,7 @@ def _add_customer_payment(
                         note(f"Transaction amount frame locked: url={(amt_frame.url or '')[:180]!r}, name={amt_frame.name!r}")
                     except Exception:
                         pass
+                note(f"Payment debug: amount roots count={len(amount_roots)}.")
 
                 def _focus_locked_payment_frame(root) -> None:
                     """Re-focus current payment data frame before each write."""
@@ -4147,11 +4157,13 @@ def _add_customer_payment(
 
                 # First try direct typing into Transaction Type field.
                 type_ok = False
-                for root in amount_roots:
+                for root in scoped_roots:
                     _focus_locked_payment_frame(root)
                     for css in (
                         "input[name='Transaction_Type']",
                         "input[name='Transaction_Type_New']",
+                        "select[name='Transaction_Type']",
+                        "select[name='Transaction_Type_New']",
                         "input[id='Transaction_Type']",
                         "input[title_id='Transaction_Type']",
                         "input[title-id='Transaction_Type']",
@@ -4166,11 +4178,23 @@ def _add_customer_payment(
                             fld = root.locator(css).first
                             if fld.count() <= 0 or not fld.is_visible(timeout=700):
                                 continue
+                            note(f"Payment debug: Transaction Type selector hit: {css}")
                             try:
                                 fld.click(timeout=action_timeout_ms)
                             except Exception:
                                 fld.click(timeout=action_timeout_ms, force=True)
-                            fld.fill("Payments", timeout=action_timeout_ms)
+                            tag = ""
+                            try:
+                                tag = (fld.evaluate("el => (el.tagName || '').toLowerCase()") or "").strip()
+                            except Exception:
+                                tag = ""
+                            if tag == "select":
+                                try:
+                                    fld.select_option(label=re.compile(r"^\s*Payments\s*$", re.I), timeout=action_timeout_ms)
+                                except Exception:
+                                    fld.select_option(value="Payments", timeout=action_timeout_ms)
+                            else:
+                                fld.fill("Payments", timeout=action_timeout_ms)
                             try:
                                 fld.press("Tab", timeout=min(1200, action_timeout_ms))
                             except Exception:
@@ -4178,7 +4202,7 @@ def _add_customer_payment(
                             got_type = (fld.input_value(timeout=1500) or "").strip()
                             if got_type and "payment" in got_type.lower():
                                 type_ok = True
-                                note("Transaction Type set by direct typing: 'Payments'.")
+                                note(f"Transaction Type set to 'Payments' via selector: {css}")
                                 break
                         except Exception:
                             continue
@@ -4187,7 +4211,7 @@ def _add_customer_payment(
 
                 if not type_ok:
                     # JS value-set fallback inside locked frame.
-                    for root in scoped_roots:
+                    for root in (scoped_roots + _ordered_frames(page)):
                         try:
                             wrote_js = bool(
                                 root.evaluate(
@@ -4195,6 +4219,8 @@ def _add_customer_payment(
                                       const sels = [
                                         "input[name='Transaction_Type']",
                                         "input[name='Transaction_Type_New']",
+                                        "select[name='Transaction_Type']",
+                                        "select[name='Transaction_Type_New']",
                                         "input[id='Transaction_Type']",
                                         "input[title_id='Transaction_Type']",
                                         "input[title-id='Transaction_Type']",
@@ -4216,11 +4242,28 @@ def _add_customer_payment(
                                       }
                                       if (!target) return false;
                                       try { target.focus(); } catch (_) {}
-                                      target.value = "Payments";
+                                      const tag = (target.tagName || "").toLowerCase();
+                                      if (tag === "select") {
+                                        let matched = false;
+                                        for (const opt of Array.from(target.options || [])) {
+                                          const txt = String(opt.text || "").trim().toLowerCase();
+                                          const val = String(opt.value || "").trim().toLowerCase();
+                                          if (txt === "payments" || val === "payments") {
+                                            target.value = opt.value;
+                                            matched = true;
+                                            break;
+                                          }
+                                        }
+                                        if (!matched && target.options && target.options.length > 0) {
+                                          target.selectedIndex = 0;
+                                        }
+                                      } else {
+                                        target.value = "Payments";
+                                      }
                                       target.dispatchEvent(new Event("input", { bubbles: true }));
                                       target.dispatchEvent(new Event("change", { bubbles: true }));
                                       try { target.blur(); } catch (_) {}
-                                      const got = String(target.value || "").trim().toLowerCase();
+                                      const got = String((target.value || target.options?.[target.selectedIndex]?.text || "")).trim().toLowerCase();
                                       return got.includes("payment");
                                     }"""
                                 )
@@ -4309,10 +4352,12 @@ def _add_customer_payment(
                             amt = root.locator(css).first
                             if amt.count() <= 0 or not amt.is_visible(timeout=700):
                                 continue
+                            note(f"Payment debug: Transaction Amount selector hit: {css}")
                             amt.fill("120000", timeout=action_timeout_ms)
                             got_amt = (amt.input_value(timeout=action_timeout_ms) or "").strip()
                             if got_amt and ("120000" in got_amt or got_amt in "120000"):
                                 amount_ok = True
+                                note(f"Transaction Amount set to '120000' via selector: {css}")
                                 break
                         except Exception:
                             continue
@@ -4386,6 +4431,7 @@ def _add_customer_payment(
                         continue
                 if not save_action_roots:
                     save_action_roots = list(_siebel_locator_search_roots(page, content_frame_selector))
+                note(f"Payment debug: save action roots count={len(save_action_roots)}.")
 
                 # Save icon (down-arrow / save) click.
                 save_clicked = False
@@ -4414,6 +4460,7 @@ def _add_customer_payment(
                                 except Exception:
                                     btn.click(timeout=action_timeout_ms, force=True)
                                 save_clicked = True
+                                note(f"Payment debug: Save clicked via selector: {css}")
                                 break
                         except Exception:
                             continue
