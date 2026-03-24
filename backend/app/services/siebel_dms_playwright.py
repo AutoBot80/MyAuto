@@ -4379,7 +4379,7 @@ def _create_order(
         page.goto(_vs_url, timeout=min(action_timeout_ms * 3, 30000), wait_until="domcontentloaded")
     except Exception as _e:
         note(f"Create Order: goto Vehicle Sales URL raised {_e!r} — continuing.")
-    _safe_page_wait(page, 1200, log_label="after_goto_vehicle_sales")
+    _safe_page_wait(page, 2500, log_label="after_goto_vehicle_sales")
     note(f"Create Order: arrived at Vehicle Sales. URL={page.url[:120]}")
 
     # Query by mobile in the current list/apply-enter.
@@ -4406,126 +4406,110 @@ def _create_order(
     else:
         note("Create Order: mobile search field not found; continuing with fallback row handling.")
 
-    def _dblclick_order_for_mobile(target_mobile: str) -> bool:
-        import json as _j, time as _t, os as _os2
-        _dbl_log = _os2.path.join(_os2.path.dirname(_os2.path.abspath(__file__)), "..", "..", "..", "debug-f69c3a.log")
-        def _dblog(msg, data, hyp=""):
-            try:
-                open(_dbl_log, "a", encoding="utf-8").write(
-                    _j.dumps({"sessionId":"f69c3a","runId":"dblclick","hypothesisId":hyp,
-                               "location":"siebel_dms_playwright.py:_dblclick","message":msg,
-                               "data":data,"timestamp":int(_t.time()*1000)}) + "\n")
-            except Exception:
-                pass
+    # JS snippet run inside each frame to find and click the first Order Number drill-down link.
+    # Siebel renders the link as <a name="Order Number">ORDER-VALUE</a> inside a grid td.
+    _JS_CLICK_ORDER_LINK = """() => {
+        const selectors = [
+            "a[name='Order Number']",
+            "a[name='Order #']",
+            "td[aria-describedby*='Order_Number'] a",
+            "td[aria-describedby*='Order#'] a",
+            "td[headers*='Order_Number'] a",
+            "a[aria-label*='Order Number']",
+            "a[aria-label*='Order #']",
+            "a[title*='Order Number']",
+            "a[title*='Order #']"
+        ];
+        const vis = (el) => {
+            if (!el) return false;
+            const st = window.getComputedStyle(el);
+            if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity) === 0) return false;
+            const r = el.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+        };
+        for (const sel of selectors) {
+            const el = document.querySelector(sel);
+            if (el && vis(el)) {
+                el.click();
+                return 'clicked:' + sel;
+            }
+        }
+        // Fallback: first <a> inside any cell whose column header contains 'order'
+        const headers = Array.from(document.querySelectorAll('th, thead td'));
+        let orderColIdx = -1;
+        for (const h of headers) {
+            if ((h.innerText || '').toLowerCase().includes('order')) {
+                // find its column index
+                const tr = h.closest('tr');
+                if (tr) {
+                    const ths = Array.from(tr.querySelectorAll('th, td'));
+                    orderColIdx = ths.indexOf(h);
+                    break;
+                }
+            }
+        }
+        if (orderColIdx >= 0) {
+            const tbody = document.querySelector('table tbody') || document.querySelector('table');
+            if (tbody) {
+                const rows = tbody.querySelectorAll('tr');
+                for (const row of rows) {
+                    const cells = row.querySelectorAll('td');
+                    if (cells.length > orderColIdx) {
+                        const a = cells[orderColIdx].querySelector('a');
+                        if (a && vis(a)) { a.click(); return 'clicked:col-hdr-idx=' + orderColIdx; }
+                    }
+                }
+            }
+        }
+        return '';
+    }"""
 
-        needle = re.sub(r"\D", "", (target_mobile or "").strip())
-        # #region agent log
-        _dblog("entry", {"needle": needle}, "H-B")
-        # #endregion
-        roots_checked = 0
-        for root in _roots():
-            roots_checked += 1
-            root_label = ""
+    def _click_order_link_via_js() -> bool:
+        """Try JS evaluate on every frame to click the Order Number drill-down link."""
+        for frame in _ordered_frames(page):
             try:
-                root_label = (root.url or "")[:80]
+                result = frame.evaluate(_JS_CLICK_ORDER_LINK)
+                if result:
+                    note(f"Create Order: JS clicked Order link in frame. result={result!r}")
+                    return True
             except Exception:
-                try:
-                    root_label = str(type(root))[:60]
-                except Exception:
-                    pass
-            for row_css in ("table tbody tr", "table tr", "[role='row']"):
-                try:
-                    rows = root.locator(row_css)
-                    n = rows.count()
-                except Exception:
-                    n = 0
-                if n == 0:
-                    continue
-                # #region agent log
-                _dblog("rows found", {"root": root_label, "css": row_css, "count": n}, "H-B")
-                # #endregion
-                for i in range(min(n, 40)):
-                    try:
-                        row = rows.nth(i)
-                        if not row.is_visible(timeout=300):
-                            continue
-                        row_txt = (row.inner_text(timeout=600) or "")
-                        row_digits = re.sub(r"\D", "", row_txt)
-                        # #region agent log — first 5 rows to check mobile presence (H-C)
-                        if i < 5:
-                            _dblog("row text", {"i": i, "txt": row_txt[:120], "digits_has_needle": needle in row_digits}, "H-C")
-                        # #endregion
-                        if needle and needle not in row_digits:
-                            continue
-                        note(f"Create Order: matched row[{i}] digits={row_digits[:30]!r}")
-                        # #region agent log — check Order# cell selector (H-A, H-D)
-                        try:
-                            cell_count = row.locator("td[aria-describedby*='Order_Number' i], a[aria-label*='Order#' i], a[title*='Order#' i]").count()
-                            # also try exact jqgh id
-                            exact_count = row.locator("td[aria-describedby='jqgh_s_1_l_Order_Number']").count()
-                            any_a_count = row.locator("td a").count()
-                            # dump all td aria-describedby values
-                            tds_info = row.evaluate("el => Array.from(el.querySelectorAll('td')).map(td => ({ad:td.getAttribute('aria-describedby')||'',hasA:!!td.querySelector('a'),aText:(td.querySelector('a')||{}).innerText||''}))")
-                            _dblog("order cell probe", {"css_hit": cell_count, "exact_hit": exact_count, "any_a": any_a_count, "tds": tds_info[:6]}, "H-A-D")
-                        except Exception as _ex:
-                            _dblog("order cell probe error", {"err": str(_ex)}, "H-A-D")
-                        # #endregion
-                        ord_cell = row.locator(
-                            "td[aria-describedby='jqgh_s_1_l_Order_Number'],"
-                            "td[aria-describedby*='Order_Number' i],"
-                            "a[aria-label*='Order#' i],"
-                            "a[title*='Order#' i]"
-                        ).first
-                        if ord_cell.count() <= 0:
-                            ord_cell = row.locator("td a").first
-                        if ord_cell.count() <= 0:
-                            note(f"Create Order: row[{i}] mobile matched but no Order# cell.")
-                            continue
-                        try:
-                            ord_cell.dblclick(timeout=min(action_timeout_ms, 3000))
-                        except Exception:
-                            try:
-                                ord_cell.dblclick(timeout=min(action_timeout_ms, 3000), force=True)
-                            except Exception:
-                                try:
-                                    ord_cell.click(timeout=min(action_timeout_ms, 3000), force=True)
-                                except Exception:
-                                    continue
-                        return True
-                    except Exception:
-                        continue
-        # #region agent log
-        _dblog("exit-false-row-scan", {"roots_checked": roots_checked}, "H-B")
-        # #endregion
-        # Direct fallback: find the first visible Order Number drill-down link by name/aria attrs
-        # (Vehicle Sales list rows do not contain mobile numbers, so row-text matching fails)
+                continue
+        return False
+
+    def _click_order_link_via_playwright() -> bool:
+        """Try Playwright locators across all roots to click the Order Number link."""
         for root in _roots():
             for css in (
                 "a[name='Order Number']",
-                "a[name*='Order' i][name*='Number' i]",
+                "a[name='Order #']",
                 "td[aria-describedby*='Order_Number' i] a",
-                "td[aria-describedby='jqgh_s_1_l_Order_Number'] a",
-                "a[aria-label*='Order#' i]",
+                "td[aria-describedby*='Order#' i] a",
                 "a[aria-label*='Order Number' i]",
-                "a[title*='Order#' i]",
+                "a[aria-label*='Order #' i]",
                 "a[title*='Order Number' i]",
+                "a[title*='Order #' i]",
             ):
                 try:
                     loc = root.locator(css).first
-                    if loc.count() <= 0 or not loc.is_visible(timeout=500):
+                    if loc.count() <= 0 or not loc.is_visible(timeout=600):
                         continue
-                    _dblog("direct-name-hit", {"css": css}, "H-E")
                     try:
                         loc.click(timeout=min(action_timeout_ms, 3000))
                     except Exception:
-                        try:
-                            loc.click(timeout=min(action_timeout_ms, 3000), force=True)
-                        except Exception:
-                            loc.dblclick(timeout=min(action_timeout_ms, 3000), force=True)
+                        loc.click(timeout=min(action_timeout_ms, 3000), force=True)
+                    note(f"Create Order: Playwright clicked Order link css={css!r}")
                     return True
                 except Exception:
                     continue
-        _dblog("exit-false-all", {"roots_checked": roots_checked}, "H-B")
+        return False
+
+    def _open_order_link(attempt_label: str) -> bool:
+        """JS path first (most reliable for nested Siebel iframes), then Playwright path."""
+        note(f"Create Order: attempting Order# click ({attempt_label}).")
+        if _click_order_link_via_js():
+            return True
+        if _click_order_link_via_playwright():
+            return True
         return False
 
     _direct_open_by_mobile = (mobile or "").strip() == "8952897358"
@@ -4533,8 +4517,13 @@ def _create_order(
 
     _existing_order_opened = False
     if _direct_open_by_mobile:
-        _existing_order_opened = _dblclick_order_for_mobile(mobile)
-        note(f"Create Order: direct branch attempted double-click on Order# -> {_existing_order_opened!r}. URL={page.url[:120]}")
+        # Give Siebel's lazy-loaded iframes extra time to render before probing
+        _safe_page_wait(page, 1500, log_label="before_order_link_click_direct")
+        _existing_order_opened = _open_order_link("direct-branch-attempt-1")
+        if not _existing_order_opened:
+            _safe_page_wait(page, 1500, log_label="before_order_link_click_retry")
+            _existing_order_opened = _open_order_link("direct-branch-attempt-2")
+        note(f"Create Order: direct branch Order# click -> {_existing_order_opened!r}. URL={page.url[:120]}")
 
     if not _direct_open_by_mobile:
         # 2) Click + (Sales Orders New:List)
@@ -4647,44 +4636,16 @@ def _create_order(
     else:
         note("Create Order: mobile branch matched; skipped + and contact-pick flow.")
 
-    # 9) Double-click Order# link under Order_Number column
+    # 9) Click Order# drill-down link
     if not _existing_order_opened:
-        _order_opened = _dblclick_order_for_mobile(mobile)
+        _order_opened = _open_order_link("step-9-attempt-1")
         if not _order_opened:
-            # Last fallback: first visible order number link regardless of mobile
-            _order_opened = False
-            for root in _roots():
-                for css in (
-                    "a[name='Order Number']",
-                    "a[name*='Order' i][name*='Number' i]",
-                    "td[aria-describedby*='Order_Number' i] a",
-                    "td[aria-describedby='jqgh_s_1_l_Order_Number'] a",
-                    "a[aria-label*='Order#' i]",
-                    "a[aria-label*='Order Number' i]",
-                    "a[title*='Order#' i]",
-                    "a[title*='Order Number' i]",
-                ):
-                    try:
-                        loc = root.locator(css).first
-                        if loc.count() <= 0 or not loc.is_visible(timeout=500):
-                            continue
-                        try:
-                            loc.click(timeout=min(action_timeout_ms, 3500))
-                        except Exception:
-                            try:
-                                loc.click(timeout=min(action_timeout_ms, 3500), force=True)
-                            except Exception:
-                                loc.dblclick(timeout=min(action_timeout_ms, 3500), force=True)
-                        _order_opened = True
-                        break
-                    except Exception:
-                        continue
-                if _order_opened:
-                    break
+            _safe_page_wait(page, 1500, log_label="before_order_link_step9_retry")
+            _order_opened = _open_order_link("step-9-attempt-2")
         if not _order_opened:
-            return False, "Could not double-click Order# row/link.", scraped
+            return False, "Could not click Order# row/link.", scraped
         _safe_page_wait(page, 1200, log_label="after_open_order_link")
-        note("Create Order: double-clicked Order# row.")
+        note("Create Order: clicked Order# row.")
     else:
         _safe_page_wait(page, 1200, log_label="after_open_existing_order_link")
 
