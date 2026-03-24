@@ -41,6 +41,8 @@ export interface FillDmsResponse {
     key_num?: string;
     frame_num?: string;
     engine_num?: string;
+    full_chassis?: string;
+    full_engine?: string;
     model?: string;
     color?: string;
     cubic_capacity?: string;

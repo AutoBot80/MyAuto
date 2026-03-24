@@ -100,7 +100,9 @@ def _has_scraped_vehicle(scraped: dict) -> bool:
     key_num = str(scraped.get("key_num") or "").strip()
     frame_num = str(scraped.get("frame_num") or "").strip()
     engine_num = str(scraped.get("engine_num") or "").strip()
-    return bool(key_num or frame_num or engine_num)
+    full_chassis = str(scraped.get("full_chassis") or "").strip()
+    full_engine = str(scraped.get("full_engine") or "").strip()
+    return bool(key_num or frame_num or engine_num or full_chassis or full_engine)
 
 
 def _dms_response_warning_and_mode(result: dict) -> tuple[str | None, str | None]:

@@ -4644,8 +4644,6 @@ def _merge_add_enquiry_vehicle_scrape(vehicle_merge: dict, scraped: dict) -> Non
         "full_chassis",
         "full_engine",
         "key_num",
-        "vehicle_price",
-        "ex_showroom_price",
         "in_transit",
         "cubic_capacity",
         "seating_capacity",
@@ -5740,12 +5738,45 @@ def Playwright_Hero_DMS_fill(
                     )
                     return out
                 ms_done("Add enquiry saved")
-                step(
-                    "Video SOP complete: no contact match — Add Enquiry flow finished. "
-                    "Automation stops here (SIEBEL_DMS_STOP_AFTER_ALL_ENQUIRIES); browser left open."
+                note(
+                    "Add Enquiry saved. Returning to normal Find→Contact→mobile flow to continue "
+                    "the standard post-find route."
                 )
-                note("Add Enquiry branch completed; stopping per video SOP flag.")
-                return out
+                form_trace(
+                    "v1b_refind_after_add_enquiry",
+                    "Global Find → Contact (Mobile Phone) + Go",
+                    "rerun_find_mobile_after_add_enquiry_then_continue_normal_route",
+                    contact_url_truncated=contact_url[:200],
+                    mobile_phone=mobile,
+                )
+                ok_refind = _contact_view_find_by_mobile(
+                    page,
+                    contact_url=contact_url,
+                    mobile=mobile,
+                    nav_timeout_ms=nav_timeout_ms,
+                    action_timeout_ms=action_timeout_ms,
+                    content_frame_selector=content_frame_selector,
+                    mobile_aria_hints=mobile_aria_hints,
+                    note=note,
+                    step=step,
+                    stage_msg="Post Add Enquiry: re-find customer by mobile (Contact view).",
+                )
+                if not ok_refind:
+                    step("Stopped: Add Enquiry saved but post-save re-find by mobile failed.")
+                    out["error"] = (
+                        "Siebel: Add Enquiry was saved, but the follow-up Find→Contact mobile query "
+                        "did not complete."
+                    )
+                    return out
+                contact_matched = _siebel_ui_suggests_contact_match(page, mobile)
+                note(f"DECISION: contact_table_match_after_add_enquiry_refind={contact_matched!r}")
+                if not contact_matched:
+                    step("Stopped: Add Enquiry saved but customer still not visible after re-find.")
+                    out["error"] = (
+                        "Siebel: Add Enquiry was saved, but contact search still returned no table row "
+                        "after re-find."
+                    )
+                    return out
             form_trace(
                 "v2_drill_and_nav",
                 "Search Results + Contacts detail",

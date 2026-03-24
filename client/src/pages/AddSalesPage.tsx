@@ -577,6 +577,8 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError 
       const scraped = dmsRes.vehicle;
       const hasAnyVehicle = !!(scraped && typeof scraped === "object" && (
         (scraped.key_num && String(scraped.key_num).trim()) ||
+        (scraped.full_chassis && String(scraped.full_chassis).trim()) ||
+        (scraped.full_engine && String(scraped.full_engine).trim()) ||
         (scraped.frame_num && String(scraped.frame_num).trim()) ||
         (scraped.engine_num && String(scraped.engine_num).trim()) ||
         (scraped.model && String(scraped.model).trim()) ||
@@ -591,10 +593,14 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError 
         (scraped.year_of_mfg && String(scraped.year_of_mfg).trim())
       ));
       if (hasAnyVehicle && scraped) {
+        const frameResolved = scraped.full_chassis ?? scraped.frame_num ?? undefined;
+        const engineResolved = scraped.full_engine ?? scraped.engine_num ?? undefined;
         setDmsScrapedVehicle({
           key_no: scraped.key_num ?? undefined,
-          frame_no: scraped.frame_num ?? undefined,
-          engine_no: scraped.engine_num ?? undefined,
+          frame_no: frameResolved,
+          engine_no: engineResolved,
+          full_chassis: scraped.full_chassis ?? undefined,
+          full_engine: scraped.full_engine ?? undefined,
           model: scraped.model ?? undefined,
           color: scraped.color ?? undefined,
           cubic_capacity: scraped.cubic_capacity ?? undefined,
@@ -692,8 +698,8 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError 
       const s = scrapedForForm20 as Record<string, unknown>;
       vehicleDataForForm20 = {
         key_no: s.key_num ?? s.key_no,
-        frame_no: s.frame_num ?? s.frame_no,
-        engine_no: s.engine_num ?? s.engine_no,
+        frame_no: s.full_chassis ?? s.frame_num ?? s.frame_no,
+        engine_no: s.full_engine ?? s.engine_num ?? s.engine_no,
         model: s.model,
         color: s.color,
         cubic_capacity: s.cubic_capacity,

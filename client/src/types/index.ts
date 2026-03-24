@@ -77,6 +77,8 @@ export interface UploadScansResponse {
 export interface ExtractedVehicleDetails {
   frame_no?: string;
   engine_no?: string;
+  full_chassis?: string;
+  full_engine?: string;
   model_colour?: string;
   key_no?: string;
   battery_no?: string;

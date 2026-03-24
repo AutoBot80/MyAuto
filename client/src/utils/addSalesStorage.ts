@@ -9,7 +9,7 @@ export interface AddSalesStored {
   uploadStatus: string;
   /** When set, this bulk load was opened via Re-Try; mark Success on submit. */
   reprocessBulkLoadId?: number;
-  dmsScrapedVehicle: { key_no?: string; frame_no?: string; engine_no?: string; model?: string; color?: string; cubic_capacity?: string; seating_capacity?: string; body_type?: string; vehicle_type?: string; num_cylinders?: string; horse_power?: string; vehicle_price?: string; year_of_mfg?: string } | null;
+  dmsScrapedVehicle: { key_no?: string; frame_no?: string; engine_no?: string; full_chassis?: string; full_engine?: string; model?: string; color?: string; cubic_capacity?: string; seating_capacity?: string; body_type?: string; vehicle_type?: string; num_cylinders?: string; horse_power?: string; vehicle_price?: string; year_of_mfg?: string } | null;
   hasSubmittedInfo: boolean;
   lastSubmittedCustomerId: number | null;
   lastSubmittedVehicleId: number | null;
