@@ -4168,6 +4168,32 @@ def _add_customer_payment(
                     return False
 
                 # Transaction Amount = 120000 first (before Transaction Type) to avoid focus traps.
+                # region agent log
+                import json as _json, time as _time
+                def _dbg(msg, data=None, hyp=""):
+                    try:
+                        entry = {"sessionId":"f69c3a","timestamp":int(_time.time()*1000),"location":"siebel_dms_playwright.py:payment","message":msg,"data":data or {},"hypothesisId":hyp}
+                        with open("debug-f69c3a.log","a",encoding="utf-8") as _f:
+                            _f.write(_json.dumps(entry)+"\n")
+                    except Exception:
+                        pass
+                # endregion
+                # region agent log
+                for _dbg_frame in _ordered_frames(page):
+                    try:
+                        _probe = _dbg_frame.evaluate("""() => {
+                          const el = document.querySelector("input[name='Transaction_Amount']");
+                          if (!el) return {found:false};
+                          const st = window.getComputedStyle(el);
+                          const r = el.getBoundingClientRect();
+                          return {found:true, display:st.display, visibility:st.visibility, opacity:st.opacity, w:r.width, h:r.height, type:el.type, value:el.value};
+                        }""")
+                        if _probe and _probe.get("found"):
+                            _dbg("Transaction_Amount field probe", {"frame_url": (_dbg_frame.url or "")[:180], "probe": _probe}, hyp="A")
+                            break
+                    except Exception as _pe:
+                        _dbg("Transaction_Amount frame probe error", {"err": str(_pe)}, hyp="B")
+                # endregion
                 amount_ok = False
                 for root in amount_roots:
                     _focus_locked_payment_frame(root, prefer_amount=True)
@@ -4184,7 +4210,12 @@ def _add_customer_payment(
                     ):
                         try:
                             amt = root.locator(css).first
-                            if amt.count() <= 0 or not amt.is_visible(timeout=700):
+                            _cnt = amt.count()
+                            _vis = amt.is_visible(timeout=700) if _cnt > 0 else False
+                            # region agent log
+                            _dbg("Amount selector check", {"css": css, "count": _cnt, "is_visible": _vis}, hyp="A")
+                            # endregion
+                            if _cnt <= 0 or not _vis:
                                 continue
                             note(f"Payment debug: Transaction Amount selector hit: {css}")
                             amt.fill("120000", timeout=action_timeout_ms)
