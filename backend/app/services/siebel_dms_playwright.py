@@ -4167,6 +4167,36 @@ def _add_customer_payment(
                             pass
                     return False
 
+                # Diagnostic: dump all visible inputs in payment frame to identify real field names/IDs.
+                for _dframe in _ordered_frames(page):
+                    try:
+                        _inputs = _dframe.evaluate("""() => {
+                          const results = [];
+                          for (const el of document.querySelectorAll('input, select, textarea')) {
+                            const st = window.getComputedStyle(el);
+                            const r = el.getBoundingClientRect();
+                            const vis = st.display !== 'none' && st.visibility !== 'hidden'
+                                        && Number(st.opacity) !== 0 && r.width >= 2 && r.height >= 2;
+                            results.push({
+                              tag: el.tagName,
+                              name: el.name || '',
+                              id: el.id || '',
+                              aria: el.getAttribute('aria-label') || '',
+                              title: el.getAttribute('title') || '',
+                              type: el.type || '',
+                              readonly: el.readOnly || false,
+                              disabled: el.disabled || false,
+                              visible: vis,
+                              value: el.value || ''
+                            });
+                          }
+                          return results;
+                        }""")
+                        if _inputs:
+                            note(f"Payment frame inputs dump (frame url={(_dframe.url or '')[:80]!r}): {_inputs}")
+                    except Exception as _de:
+                        note(f"Payment frame inputs dump error: {_de!s:.80}")
+
                 # Fill Amount then Type by clicking to enter edit mode, then typing.
                 # Short per-op timeout (2s) to fail fast if field not ready.
                 _short_ms = 2000
@@ -4198,7 +4228,7 @@ def _add_customer_payment(
                             _safe_page_wait(page, 120, log_label=f"after_type_{label}")
                             got = (loc.input_value(timeout=_short_ms) or "").strip()
                             note(f"Payment debug: {label} attempt css={css!r} got={got!r}")
-                            if value.lower() in got.lower() or got.lower() in value.lower():
+                            if got and (value.lower() in got.lower() or got.lower() in value.lower()):
                                 note(f"Payment: {label} = {value!r} confirmed via {css}")
                                 return True
                         except Exception as _ex:
