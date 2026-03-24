@@ -4217,47 +4217,58 @@ def _add_customer_payment(
                     page.keyboard.press("Tab")
                     _safe_page_wait(page, 300, log_label="tab_to_payment_mode")
 
-                    # Fill Payment Mode = Cash.
-                    # Use Tab (not Enter) to confirm — Enter auto-advances focus in Siebel
-                    # dropdowns, which would shift the count. Tab confirms + is Tab 1 of 4.
+                    # Fill Payment Mode = Cash then confirm with Tab (not Enter — Enter
+                    # auto-advances in Siebel dropdowns and would shift tab position).
                     page.keyboard.type("Cash", delay=50)
                     _safe_page_wait(page, 400, log_label="after_type_payment_mode")
                     note("Payment keyboard: typed 'Cash' into Payment Mode.")
 
-                    # Tab 4 times: first Tab confirms 'Cash' and moves forward,
-                    # then 3 more to reach Transaction Amount (user-confirmed: 4 tabs total).
-                    for _ti in range(4):
-                        page.keyboard.press("Tab")
-                        _safe_page_wait(page, 150, log_label=f"tab_to_amount_{_ti+1}")
-
-                    # Log focused element so we can verify we landed on Transaction_Amount.
-                    for _dframe2 in _ordered_frames(page):
+                    # Now directly click Transaction_Amount by its confirmed id.
+                    # This avoids all tab-count drift caused by focus instability.
+                    # id='1_Transaction_Amount' confirmed from run at 11:30.
+                    _amt_frame = (amount_roots or scoped_roots)[0]
+                    _amt_loc = None
+                    for _acss in (
+                        "input[id='1_Transaction_Amount']",
+                        "input[name='Transaction_Amount']",
+                        "input[id*='Transaction_Amount']",
+                    ):
                         try:
-                            _f2 = _dframe2.evaluate("""() => {
-                              const el = document.activeElement;
-                              return el ? {tag:el.tagName,name:el.name||'',aria:el.getAttribute('aria-label')||'',id:el.id||''} : null;
-                            }""")
-                            if _f2 and _f2.get('tag') not in ('BODY', 'HTML', None):
-                                note(f"Payment: focused before typing amount = {_f2!r}")
-                                # #region agent log
-                                try:
-                                    import json as _json2, time as _time2
-                                    _dbg2 = {"sessionId": "f69c3a", "runId": "tab-confirmed", "hypothesisId": "B", "location": "siebel_dms_playwright.py:amount_focus", "message": "focused before typing 120000", "data": _f2, "timestamp": int(_time2.time() * 1000)}
-                                    open("debug-f69c3a.log", "a", encoding="utf-8").write(_json2.dumps(_dbg2) + "\n")
-                                except Exception:
-                                    pass
-                                # #endregion
+                            _candidate = _amt_frame.locator(_acss).first
+                            if _candidate.count() > 0 and _candidate.is_visible(timeout=800):
+                                _amt_loc = _candidate
+                                note(f"Payment: found Transaction_Amount via {_acss!r}.")
                                 break
                         except Exception:
                             continue
 
-                    # Type amount, then Tab once to commit the value before Save.
-                    page.keyboard.type("120000", delay=50)
-                    _safe_page_wait(page, 300, log_label="after_type_amount")
-                    page.keyboard.press("Tab")
-                    _safe_page_wait(page, 300, log_label="after_tab_commit_amount")
-                    note("Payment keyboard: typed '120000' + Tab to commit Transaction Amount.")
-                    amount_ok = True
+                    if _amt_loc is None:
+                        # Fallback: search all frames
+                        for _af in _ordered_frames(page):
+                            for _acss in ("input[id='1_Transaction_Amount']", "input[name='Transaction_Amount']"):
+                                try:
+                                    _c = _af.locator(_acss).first
+                                    if _c.count() > 0 and _c.is_visible(timeout=500):
+                                        _amt_loc = _c
+                                        note(f"Payment: found Transaction_Amount in fallback frame via {_acss!r}.")
+                                        break
+                                except Exception:
+                                    continue
+                            if _amt_loc:
+                                break
+
+                    if _amt_loc:
+                        _amt_loc.click(timeout=2000)
+                        _safe_page_wait(page, 200, log_label="after_click_amount")
+                        _amt_loc.fill("120000")
+                        _safe_page_wait(page, 300, log_label="after_fill_amount")
+                        _amt_loc.press("Tab")
+                        _safe_page_wait(page, 300, log_label="after_tab_commit_amount")
+                        note("Payment: filled Transaction_Amount = 120000 via direct locator.")
+                        amount_ok = True
+                    else:
+                        note("Payment: Transaction_Amount locator not found; amount not filled.")
+                        amount_ok = False
 
                 except Exception as _kb_ex:
                     note(f"Payment keyboard fill failed: {_kb_ex!s:.120}")
