@@ -3706,9 +3706,6 @@ def _add_customer_payment(
                     except Exception:
                         continue
 
-                scoped_roots = payment_frames if payment_frames else list(
-                    _siebel_locator_search_roots(page, content_frame_selector)
-                )
                 if payment_frames:
                     try:
                         note(f"Payment lines scoped frame locked: url={(payment_frames[0].url or '')[:180]!r}, name={payment_frames[0].name!r}")
@@ -3717,6 +3714,8 @@ def _add_customer_payment(
                 else:
                     note("Payment lines scoped frame not detected; stopping to avoid focus drift.")
                     return False
+                # Keep focus locked to the first detected Payment Lines frame.
+                scoped_roots = [payment_frames[0]]
 
                 def _pick_dropdown_value(
                     field_patterns: tuple[re.Pattern[str], ...],
@@ -3864,6 +3863,10 @@ def _add_customer_payment(
                 type_ok = False
                 for root in scoped_roots:
                     for css in (
+                        "input[name='Transaction_Type']",
+                        "input[id='Transaction_Type']",
+                        "input[title_id='Transaction_Type']",
+                        "input[title-id='Transaction_Type']",
                         "input[id*='Transaction_Type' i]",
                         "input[name*='Transaction_Type' i]",
                         "input[title_id*='Transaction_Type' i]",
@@ -3895,22 +3898,14 @@ def _add_customer_payment(
                         break
 
                 if not type_ok:
-                    type_ok = select_siebel_dropdown_value(
-                        page,
-                        field_label_patterns=[
-                            re.compile(r"transaction\s*type", re.I)
-                        ],
-                        value="Payments",
-                        timeout_ms=action_timeout_ms,
-                        content_frame_selector=content_frame_selector,
-                        note=note,
-                    )
-
-                if not type_ok:
                     # Strict fallback: target Payment Lines Transaction_Type field directly.
                     value_pat = re.compile(r"^\s*Payments\s*$", re.I)
                     for root in scoped_roots:
                         for css in (
+                            "input[name='Transaction_Type']",
+                            "input[id='Transaction_Type']",
+                            "input[title_id='Transaction_Type']",
+                            "input[title-id='Transaction_Type']",
                             "input[id*='Transaction_Type' i]",
                             "input[name*='Transaction_Type' i]",
                             "input[title_id*='Transaction_Type' i]",
@@ -3930,17 +3925,26 @@ def _add_customer_payment(
                                     page.keyboard.press("ArrowDown")
                                 except Exception:
                                     pass
-                                opt = page.locator("li, div, span, a").filter(has_text=value_pat).first
+                                try:
+                                    fld.fill("Payments", timeout=action_timeout_ms)
+                                except Exception:
+                                    pass
+                                # Try list pick inside same locked frame only.
+                                opt = root.locator("li, div, span, a").filter(has_text=value_pat).first
                                 if opt.count() > 0 and opt.is_visible(timeout=1200):
                                     try:
                                         opt.click(timeout=action_timeout_ms)
                                     except Exception:
                                         opt.click(timeout=action_timeout_ms, force=True)
-                                    gotv = (fld.input_value(timeout=1500) or "").strip()
-                                    if gotv and "payment" in gotv.lower():
-                                        type_ok = True
-                                        note("Transaction Type set via strict Transaction_Type fallback.")
-                                        break
+                                try:
+                                    fld.press("Tab", timeout=min(1200, action_timeout_ms))
+                                except Exception:
+                                    pass
+                                gotv = (fld.input_value(timeout=1500) or "").strip()
+                                if gotv and "payment" in gotv.lower():
+                                    type_ok = True
+                                    note("Transaction Type set via strict Transaction_Type fallback.")
+                                    break
                             except Exception:
                                 continue
                         if type_ok:
