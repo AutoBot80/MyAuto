@@ -4287,6 +4287,329 @@ def _add_customer_payment(
     return False
 
 
+def _create_order(
+    page: Page,
+    *,
+    mobile: str,
+    full_chassis: str,
+    action_timeout_ms: int,
+    content_frame_selector: str | None,
+    note,
+    form_trace=None,
+) -> tuple[bool, str | None, dict]:
+    """
+    Vehicle Sales -> Sales Orders New flow:
+    - Open Vehicle Sales (first-level view bar)
+    - Click Sales Orders New:List (+)
+    - Set Booking Order Type
+    - Pick contact by mobile from pick applet
+    - Save and open created Order#
+    - On Vehicle Sales page: New -> VIN search, scrape inventory location
+    - If inventory not In transit: Price all + Allocate all
+    - Scrape Total (Ex-showroom)
+    """
+    scraped: dict = {"inventory_location": "", "ex_showroom_price": ""}
+
+    def _roots():
+        return _siebel_locator_search_roots(page, content_frame_selector)
+
+    def _click_any(selectors: tuple[str, ...], *, timeout: int = 1200) -> bool:
+        for root in _roots():
+            for css in selectors:
+                try:
+                    loc = root.locator(css).first
+                    if loc.count() > 0 and loc.is_visible(timeout=500):
+                        try:
+                            loc.click(timeout=timeout)
+                        except Exception:
+                            loc.click(timeout=timeout, force=True)
+                        return True
+                except Exception:
+                    continue
+        return False
+
+    def _fill_any(selectors: tuple[str, ...], value: str, *, timeout: int = 2000) -> bool:
+        v = (value or "").strip()
+        if not v:
+            return False
+        for root in _roots():
+            for css in selectors:
+                try:
+                    loc = root.locator(css).first
+                    if loc.count() > 0 and loc.is_visible(timeout=500):
+                        try:
+                            loc.click(timeout=timeout)
+                        except Exception:
+                            loc.click(timeout=timeout, force=True)
+                        try:
+                            loc.fill(v, timeout=timeout)
+                        except Exception:
+                            try:
+                                loc.press("Control+a", timeout=timeout)
+                            except Exception:
+                                pass
+                            loc.type(v, delay=20, timeout=timeout)
+                        return True
+                except Exception:
+                    continue
+        return False
+
+    if callable(form_trace):
+        form_trace(
+            "v4_create_order",
+            "Vehicle Sales / Sales Orders",
+            "open_vehicle_sales_then_create_order",
+            mobile_phone=mobile,
+            full_chassis=full_chassis,
+        )
+
+    # 1) First-level view bar -> Vehicle Sales
+    if not _click_any(
+        (
+            "a[aria-label='Vehicle Sales']",
+            "a[title='Vehicle Sales']",
+            "a:has-text('Vehicle Sales')",
+            "option:has-text('Vehicle Sales')",
+            "select#j_s_sctrl_tabScreen",
+        ),
+        timeout=min(action_timeout_ms, 3000),
+    ):
+        return False, "Could not open Vehicle Sales from first level view bar.", scraped
+    _safe_page_wait(page, 900, log_label="after_vehicle_sales_click")
+    note("Create Order: opened Vehicle Sales from first-level view bar.")
+
+    # 2) Click + (Sales Orders New:List)
+    if not _click_any(
+        (
+            "a[aria-label='Sales Orders New:List']",
+            "button[aria-label='Sales Orders New:List']",
+            "a[title='Sales Orders New:List']",
+            "button[title='Sales Orders New:List']",
+            "a[aria-label*='Sales Orders' i][aria-label*='New' i]",
+            "button[aria-label*='Sales Orders' i][aria-label*='New' i]",
+        ),
+        timeout=min(action_timeout_ms, 3000),
+    ):
+        return False, "Could not click Sales Orders New:List (+).", scraped
+    _safe_page_wait(page, 1000, log_label="after_sales_orders_new")
+    note("Create Order: clicked Sales Orders New:List (+).")
+
+    # 3) Booking Order Type = Normal Booking
+    _set_ok = False
+    for root in _roots():
+        try:
+            if _fill_by_label_on_frame(root, "Booking Order Type", "Normal Booking", action_timeout_ms=action_timeout_ms):
+                _set_ok = True
+                break
+            if _select_dropdown_by_label_on_frame(
+                root, label="Booking Order Type", value="Normal Booking", action_timeout_ms=min(action_timeout_ms, 8000)
+            ):
+                _set_ok = True
+                break
+        except Exception:
+            continue
+    if not _set_ok:
+        return False, "Could not set Booking Order Type = Normal Booking.", scraped
+    _safe_page_wait(page, 600, log_label="after_booking_order_type")
+    note("Create Order: set Booking Order Type = Normal Booking.")
+
+    # 4) Contact Last Name pick/search icon -> opens pick applet
+    if not _click_any(
+        (
+            "a[aria-label*='Contact Last Name' i][aria-label*='Pick' i]",
+            "button[aria-label*='Contact Last Name' i][aria-label*='Pick' i]",
+            "a[title*='Contact Last Name' i][title*='Pick' i]",
+            "a[aria-label*='Pick Contact' i]",
+            "button[aria-label*='Pick Contact' i]",
+        ),
+        timeout=min(action_timeout_ms, 3000),
+    ):
+        return False, "Could not open Contact Last Name pick/search applet.", scraped
+    _safe_page_wait(page, 900, log_label="after_open_contact_pick")
+    note("Create Order: opened Contact Last Name pick/search applet.")
+
+    # 5) Pick Contact List:Query
+    if not _click_any(
+        (
+            "a[aria-label='Pick Contact List:Query']",
+            "button[aria-label='Pick Contact List:Query']",
+            "a[title='Pick Contact List:Query']",
+            "button[title='Pick Contact List:Query']",
+            "a[aria-label*='Pick Contact List' i][aria-label*='Query' i]",
+        ),
+        timeout=min(action_timeout_ms, 3000),
+    ):
+        return False, "Could not click Pick Contact List:Query.", scraped
+    _safe_page_wait(page, 700, log_label="after_pick_contact_query")
+    note("Create Order: clicked Pick Contact List:Query.")
+
+    # 6) Fill id=1_Mobile_Phone + Enter
+    if not _fill_any(
+        (
+            "input[id='1_Mobile_Phone']",
+            "input[name='Mobile_Phone']",
+            "input[aria-label*='Mobile Phone' i]",
+        ),
+        mobile,
+        timeout=min(action_timeout_ms, 3000),
+    ):
+        return False, "Could not fill mobile number in Pick Contact List.", scraped
+    try:
+        page.keyboard.press("Enter")
+    except Exception:
+        pass
+    _safe_page_wait(page, 900, log_label="after_pick_contact_mobile_enter")
+    note(f"Create Order: queried Pick Contact List by mobile={mobile!r}.")
+
+    # 7) OK in pick applet
+    if not _click_any(
+        (
+            "button:has-text('OK')",
+            "a:has-text('OK')",
+            "button[aria-label='OK']",
+            "a[aria-label='OK']",
+        ),
+        timeout=min(action_timeout_ms, 3000),
+    ):
+        return False, "Could not click OK in Pick Contact List applet.", scraped
+    _safe_page_wait(page, 1200, log_label="after_pick_contact_ok")
+    note("Create Order: selected contact and closed pick applet via OK.")
+
+    # 8) Ctrl+S save
+    try:
+        page.keyboard.press("Control+s")
+    except Exception:
+        try:
+            page.keyboard.press("Meta+s")
+        except Exception:
+            return False, "Could not press Ctrl+S on Sales Order form.", scraped
+    _safe_page_wait(page, 1500, log_label="after_create_order_save")
+    note("Create Order: pressed Ctrl+S on Sales Order form.")
+
+    # 9) Click created Order# link under Order_Number column
+    _order_opened = _click_any(
+        (
+            "a[aria-label*='Order#' i]",
+            "a[title*='Order#' i]",
+            "td[aria-describedby*='Order_Number' i] a",
+            "tr[id^='s_1_l'] td[aria-describedby*='Order_Number' i] a",
+        ),
+        timeout=min(action_timeout_ms, 3500),
+    )
+    if not _order_opened:
+        return False, "Could not click created Order# row/link.", scraped
+    _safe_page_wait(page, 1200, log_label="after_open_order_link")
+    note("Create Order: opened created Order# row.")
+
+    # 10) Vehicle Sales page: click New -> VIN fill -> search
+    if not _click_any(
+        (
+            "a:has-text('New')",
+            "button:has-text('New')",
+            "a[aria-label*='New' i]",
+            "button[aria-label*='New' i]",
+        ),
+        timeout=min(action_timeout_ms, 3000),
+    ):
+        return False, "Could not click New on Vehicle Sales page.", scraped
+    _safe_page_wait(page, 800, log_label="after_vehicle_sales_new")
+
+    if not _fill_any(
+        (
+            "input[aria-label='VIN']",
+            "input[name='VIN']",
+            "input[id*='VIN' i]",
+            "input[title='VIN']",
+        ),
+        full_chassis,
+        timeout=min(action_timeout_ms, 4000),
+    ):
+        return False, "Could not fill VIN with full chassis.", scraped
+    if not _click_any(
+        (
+            "a[aria-label*='Search' i]",
+            "button[aria-label*='Search' i]",
+            "a[title*='Search' i]",
+            "button[title*='Search' i]",
+        ),
+        timeout=min(action_timeout_ms, 3000),
+    ):
+        try:
+            page.keyboard.press("Enter")
+        except Exception:
+            return False, "Could not execute VIN search.", scraped
+    _safe_page_wait(page, 1200, log_label="after_vin_search")
+    note(f"Create Order: searched VIN={full_chassis!r}.")
+
+    # 11) Scrape Inventory Location
+    inv = ""
+    for frame in _ordered_frames(page):
+        try:
+            got = frame.evaluate(
+                """() => {
+                  const q = [
+                    "input[aria-label*='Inventory Location' i]",
+                    "input[title*='Inventory Location' i]",
+                    "input[name*='Inventory_Location' i]",
+                    "input[id*='Inventory_Location' i]"
+                  ];
+                  for (const s of q) {
+                    const el = document.querySelector(s);
+                    if (el && (el.value || '').trim()) return (el.value || '').trim();
+                  }
+                  return '';
+                }"""
+            )
+            if (got or "").strip():
+                inv = (got or "").strip()
+                break
+        except Exception:
+            continue
+    scraped["inventory_location"] = inv
+    note(f"Create Order: inventory location={inv!r}.")
+
+    if inv.strip().lower() != "in transit":
+        _click_any(("a:has-text('Price all')", "button:has-text('Price all')"), timeout=min(action_timeout_ms, 3000))
+        _safe_page_wait(page, 800, log_label="after_price_all")
+        _click_any(("a:has-text('Allocate all')", "button:has-text('Allocate all')"), timeout=min(action_timeout_ms, 3000))
+        _safe_page_wait(page, 800, log_label="after_allocate_all")
+        note("Create Order: clicked Price all and Allocate all (inventory is not In transit).")
+    else:
+        note("Create Order: inventory is In transit; skipped Price all / Allocate all.")
+
+    # 12) Scrape Total (Ex-showroom)
+    total_ex = ""
+    for frame in _ordered_frames(page):
+        try:
+            got = frame.evaluate(
+                """() => {
+                  const q = [
+                    "input[aria-label*='Total (Ex-showroom)' i]",
+                    "input[title*='Total (Ex-showroom)' i]",
+                    "input[aria-label*='Ex-showroom' i]",
+                    "input[title*='Ex-showroom' i]"
+                  ];
+                  for (const s of q) {
+                    const el = document.querySelector(s);
+                    if (el && (el.value || '').trim()) return (el.value || '').trim();
+                  }
+                  return '';
+                }"""
+            )
+            if (got or "").strip():
+                total_ex = (got or "").strip()
+                break
+        except Exception:
+            continue
+    scraped["ex_showroom_price"] = total_ex
+    if total_ex:
+        note(f"Create Order: scraped Total (Ex-showroom)={total_ex!r}.")
+    else:
+        note("Create Order: could not scrape Total (Ex-showroom).")
+
+    return True, None, scraped
+
+
 def _siebel_open_found_customer_record(
     page: Page,
     *,
@@ -6295,11 +6618,47 @@ def Playwright_Hero_DMS_fill(
                     "Siebel: video SOP — could not click Payments tab and '+' icon for Add customer payment."
                 )
                 return out
-            step(
-                "Video SOP complete: customer record opened and Add customer payment started. Automation stops here "
-                "(SIEBEL_DMS_STOP_AFTER_ALL_ENQUIRIES); browser left open."
+
+            full_chassis = (
+                str((out.get("vehicle") or {}).get("full_chassis") or "").strip()
+                or str(dms_values.get("full_chassis") or "").strip()
+                or str(dms_values.get("frame_num") or "").strip()
             )
-            note("Relation's Name/Address/Pincode fill completed and Payments '+' clicked; automation stops now.")
+            form_trace(
+                "v4_create_order",
+                "Vehicle Sales / Sales Orders",
+                "vehicle_sales_new_order_then_pick_contact_then_vin_search_price_allocate",
+                mobile_phone=mobile,
+                full_chassis=full_chassis,
+            )
+            ok_order, order_err, order_scraped = _create_order(
+                page,
+                mobile=mobile,
+                full_chassis=full_chassis,
+                action_timeout_ms=action_timeout_ms,
+                content_frame_selector=content_frame_selector,
+                note=note,
+                form_trace=form_trace,
+            )
+            if not ok_order:
+                step("Stopped: create_order flow failed.")
+                out["error"] = f"Siebel: create_order failed. {order_err or ''}".strip()
+                return out
+
+            if order_scraped:
+                veh = dict(out.get("vehicle") or {})
+                if order_scraped.get("inventory_location"):
+                    veh["inventory_location"] = order_scraped.get("inventory_location")
+                if order_scraped.get("ex_showroom_price"):
+                    veh["vehicle_price"] = order_scraped.get("ex_showroom_price")
+                    veh["ex_showroom_price"] = order_scraped.get("ex_showroom_price")
+                out["vehicle"] = veh
+
+            step(
+                "Video SOP complete: customer record opened, payment added, and create_order flow completed. "
+                "Automation stops here (SIEBEL_DMS_STOP_AFTER_ALL_ENQUIRIES); browser left open."
+            )
+            note("Relation's Name/Address/Pincode, payment entry, and create_order flow completed; automation stops now.")
             return out
 
         # --- Full linear SOP (stages 1–8): runs only when SIEBEL_DMS_STOP_AFTER_ALL_ENQUIRIES is False. ---
