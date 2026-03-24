@@ -4167,106 +4167,84 @@ def _add_customer_payment(
                             pass
                     return False
 
-                # Transaction Amount first: scan ALL frames for name='Transaction_Amount' and set via JS directly.
+                # Fill Amount then Type by clicking to enter edit mode, then typing.
+                # Short per-op timeout (2s) to fail fast if field not ready.
+                _short_ms = 2000
+
+                def _click_and_fill_in_frame(frame, css_list: tuple, value: str, label: str) -> bool:
+                    for css in css_list:
+                        try:
+                            loc = frame.locator(css).first
+                            if loc.count() <= 0:
+                                continue
+                            # Click to enter Siebel edit mode (force=True bypasses actionability wait)
+                            try:
+                                loc.click(timeout=_short_ms)
+                            except Exception:
+                                loc.click(timeout=_short_ms, force=True)
+                            _safe_page_wait(page, 120, log_label=f"after_click_{label}")
+                            # Clear + type via keyboard so Siebel's model is updated
+                            try:
+                                loc.select_all()
+                            except Exception:
+                                try:
+                                    loc.press("Control+a", timeout=_short_ms)
+                                except Exception:
+                                    pass
+                            try:
+                                loc.press_sequentially(value, delay=30)
+                            except Exception:
+                                loc.fill(value, timeout=_short_ms)
+                            _safe_page_wait(page, 120, log_label=f"after_type_{label}")
+                            got = (loc.input_value(timeout=_short_ms) or "").strip()
+                            note(f"Payment debug: {label} attempt css={css!r} got={got!r}")
+                            if value.lower() in got.lower() or got.lower() in value.lower():
+                                note(f"Payment: {label} = {value!r} confirmed via {css}")
+                                return True
+                        except Exception as _ex:
+                            note(f"Payment debug: {label} css={css!r} err={_ex!s:.80}")
+                            continue
+                    return False
+
+                # Transaction Amount
                 amount_ok = False
-                _amt_js = """() => {
-                  const sels = [
+                _amt_selectors = (
+                    "input[aria-label='Transaction Amount']",
                     "input[name='Transaction_Amount']",
                     "input[id='Transaction_Amount']",
                     "input[id='1_s_2_1_Transaction_Amount']",
                     "input[name='1_s_2_1_Transaction_Amount']",
-                    "input[title_id='1_s_2_1_Transaction_Amount']",
-                    "input[title-id='1_s_2_1_Transaction_Amount']",
-                    "input[title='1_s_2_1_Transaction_Amount']",
-                    "input[aria-label='Transaction Amount']",
                     "input[aria-label*='Transaction Amount' i]",
                     "input[title*='Transaction Amount' i]",
-                  ];
-                  for (const s of sels) {
-                    const el = document.querySelector(s);
-                    if (!el) continue;
-                    try { el.focus(); } catch (_) {}
-                    el.value = "120000";
-                    el.dispatchEvent(new Event("input", { bubbles: true }));
-                    el.dispatchEvent(new Event("change", { bubbles: true }));
-                    // No blur — avoid triggering Siebel auto-save before type is filled.
-                    const got = String(el.value || "").replace(/,/g, "").trim();
-                    if (got.includes("120000")) return {ok: true, sel: s};
-                  }
-                  return {ok: false};
-                }"""
+                )
                 for _af in _ordered_frames(page):
-                    try:
-                        _res = _af.evaluate(_amt_js)
-                        if _res and _res.get("ok"):
-                            amount_ok = True
-                            note(f"Transaction Amount set to '120000' via JS in frame: url={(_af.url or '')[:120]!r}, sel={_res.get('sel')!r}")
-                            break
-                    except Exception:
-                        continue
+                    if _click_and_fill_in_frame(_af, _amt_selectors, "120000", "Transaction_Amount"):
+                        amount_ok = True
+                        break
                 if not amount_ok:
-                    note("Transaction Amount: no frame responded to JS set; trying Playwright fill with short timeout.")
-                _safe_page_wait(page, 400, log_label="after_amount_before_type")
+                    note("Transaction Amount: could not fill in any frame.")
+                _safe_page_wait(page, 300, log_label="after_amount_before_type")
 
-                # Transaction Type: scan ALL frames with JS directly (same pattern as amount).
+                # Transaction Type
                 type_ok = False
-                _type_js = """() => {
-                  const isVis = (el) => {
-                    if (!el) return false;
-                    const st = window.getComputedStyle(el);
-                    if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
-                    const r = el.getBoundingClientRect();
-                    return r.width >= 2 && r.height >= 2;
-                  };
-                  const sels = [
+                _type_selectors = (
                     "input[name='Transaction_Type']",
                     "input[name='Transaction_Type_New']",
                     "select[name='Transaction_Type']",
                     "select[name='Transaction_Type_New']",
                     "input[id='Transaction_Type']",
-                    "input[title_id='Transaction_Type']",
-                    "input[title-id='Transaction_Type']",
                     "input[name*='Transaction_Type' i]",
                     "input[id*='Transaction_Type' i]",
                     "input[aria-label='Transaction Type']",
                     "input[aria-label*='Transaction Type' i]",
                     "input[title*='Transaction Type' i]",
-                  ];
-                  for (const s of sels) {
-                    const all = Array.from(document.querySelectorAll(s));
-                    if (!all.length) continue;
-                    const el = all.find(e => isVis(e)) || all[0];
-                    try { el.focus(); } catch (_) {}
-                    const tag = (el.tagName || "").toLowerCase();
-                    if (tag === "select") {
-                      let matched = false;
-                      for (const opt of Array.from(el.options || [])) {
-                        if (String(opt.text||"").trim().toLowerCase()==="payments"||String(opt.value||"").trim().toLowerCase()==="payments") {
-                          el.value = opt.value; matched = true; break;
-                        }
-                      }
-                      if (!matched && el.options && el.options.length > 0) el.selectedIndex = 0;
-                    } else {
-                      el.value = "Payments";
-                    }
-                    el.dispatchEvent(new Event("input", { bubbles: true }));
-                    el.dispatchEvent(new Event("change", { bubbles: true }));
-                    // No blur — avoid triggering Siebel auto-save prematurely.
-                    return {ok: true, sel: s, visible: isVis(el)};
-                  }
-                  return {ok: false};
-                }"""
+                )
                 for _tf in _ordered_frames(page):
-                    try:
-                        _tres = _tf.evaluate(_type_js)
-                        if _tres and _tres.get("ok"):
-                            type_ok = True
-                            note(f"Transaction Type set to 'Payments' via JS in frame: url={(_tf.url or '')[:120]!r}, sel={_tres.get('sel')!r}")
-                            break
-                    except Exception:
-                        continue
+                    if _click_and_fill_in_frame(_tf, _type_selectors, "Payments", "Transaction_Type"):
+                        type_ok = True
+                        break
                 if not type_ok:
-                    note("Transaction Type: no frame responded to JS set; continuing to save.")
+                    note("Transaction Type: could not fill in any frame; continuing to save.")
                 note(
                     "Filled payment fields: "
                     f"Type=Payments(ok={type_ok!r}), Amount=120000(ok={amount_ok!r})."
