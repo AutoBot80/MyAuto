@@ -74,17 +74,18 @@ def _squish_spaces(s: str) -> str:
 
 
 # Relation markers on UIDAI English back (same care_of field as C/O for DMS).
+# Colon is optional because OCR/address input may be like "S/O Madan Lal, ...".
 _CARE_OF_MARKERS_RE = re.compile(
-    r"(?i)\b(C\.?\s*/?\s*O\.?|S\.?\s*/?\s*O\.?|W\.?\s*/?\s*O\.?|D\.?\s*/?\s*O\.?)\s*:\s*([^,\n]+)"
+    r"(?i)\b(C\.?\s*/?\s*O\.?|S\.?\s*/?\s*O\.?|W\.?\s*/?\s*O\.?|D\.?\s*/?\s*O\.?)\s*:?\s*([^,\n]+)"
 )
 
 
 def _canonical_care_of_prefix(marker_raw: str) -> str:
-    """Normalize OCR marker to ``C/o``, ``S/o``, ``W/o``, or ``D/o``."""
+    """Normalize OCR marker to ``C/O``, ``S/O``, ``W/O``, or ``D/O``."""
     for ch in (marker_raw or "").upper():
         if ch in ("C", "S", "W", "D"):
-            return {"C": "C/o", "S": "S/o", "W": "W/o", "D": "D/o"}[ch]
-    return "C/o"
+            return {"C": "C/O", "S": "S/O", "W": "W/O", "D": "D/O"}[ch]
+    return "C/O"
 
 
 def _extract_care_of_from_text(text: str) -> str | None:
@@ -102,12 +103,12 @@ def _extract_care_of_from_text(text: str) -> str | None:
 
 
 def _strip_care_of_clause(text: str) -> str:
-    """Remove ``C/O: …`` / ``S/O: …`` segments from the free-form line (care_of stored separately)."""
+    """Remove ``C/O...`` / ``S/O...`` segments from the free-form line (care_of stored separately)."""
     if not text:
         return text
     return _squish_spaces(
         re.sub(
-            r"(?i)\b(?:C\.?\s*/?\s*O\.?|S\.?\s*/?\s*O\.?|W\.?\s*/?\s*O\.?|D\.?\s*/?\s*O\.?)\s*:\s*[^,\n]+,?\s*",
+            r"(?i)\b(?:C\.?\s*/?\s*O\.?|S\.?\s*/?\s*O\.?|W\.?\s*/?\s*O\.?|D\.?\s*/?\s*O\.?)\s*:?\s*[^,\n]+,?\s*",
             " ",
             text,
         )

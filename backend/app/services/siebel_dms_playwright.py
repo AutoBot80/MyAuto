@@ -4922,6 +4922,11 @@ def _try_click_enquiry_top_tab(
 def _try_click_opportunities_list_new(
     page: Page, *, action_timeout_ms: int, content_frame_selector: str | None
 ) -> bool:
+    """
+    Click the new-opportunity plus action after opening Enquiry.
+    Some tenants expose this as ``aria-label="Opportunity Form:New"`` inside a specific iframe;
+    prefer locating that frame first, then click within it.
+    """
     def _click_first_visible(locator) -> bool:
         try:
             n = locator.count()
@@ -4941,7 +4946,28 @@ def _try_click_opportunities_list_new(
                 continue
         return False
 
+    focused_selectors = (
+        "a[aria-label='Opportunity Form:New']",
+        "button[aria-label='Opportunity Form:New']",
+        "a[title='Opportunity Form:New']",
+        "button[title='Opportunity Form:New']",
+    )
+
+    # First pass: frame-focused click for tenant label requested by operator.
+    for frame in _ordered_frames(page):
+        try:
+            for css in focused_selectors:
+                if _click_first_visible(frame.locator(css)):
+                    logger.info("siebel_dms: clicked Opportunity Form:New in focused frame")
+                    return True
+        except Exception:
+            continue
+
     selectors = (
+        "a[aria-label='Opportunity Form:New']",
+        "button[aria-label='Opportunity Form:New']",
+        "a[title='Opportunity Form:New']",
+        "button[title='Opportunity Form:New']",
         "a[aria-label='Opportunities List:New']",
         "button[aria-label='Opportunities List:New']",
         "a[aria-label='Opportunities List: New']",
@@ -4949,7 +4975,7 @@ def _try_click_opportunities_list_new(
         "a[title='Opportunities List:New']",
         "button[title='Opportunities List:New']",
     )
-    opp_name = re.compile(r"^\s*Opportunities\s+List\s*:\s*New\s*$", re.I)
+    opp_name = re.compile(r"^\s*(Opportunity\s+Form|Opportunities\s+List)\s*:\s*New\s*$", re.I)
     roots: list = [page]
     for r in _siebel_locator_search_roots(page, content_frame_selector):
         if r is not page:
