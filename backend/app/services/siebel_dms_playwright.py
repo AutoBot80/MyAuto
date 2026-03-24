@@ -1330,6 +1330,7 @@ def _merge_scrape_vehicle_detail_applet(page: Page, scraped: dict, *, content_fr
         merged["color"] = extra["color"]
     if extra.get("sku") and not (merged.get("sku") or "").strip():
         merged["sku"] = extra["sku"]
+    _apply_year_of_mfg_yyyy(merged)
     return merged
 
 
@@ -1469,12 +1470,7 @@ def _merge_scrape_vehicle_record_from_vin_aria(
             merged["year_of_mfg"] = yb
         if best.get("color") and not (merged.get("color") or "").strip():
             merged["color"] = str(best["color"]).strip()
-    fc = (merged.get("full_chassis") or "").strip()
-    if fc and not (merged.get("frame_num") or "").strip():
-        merged["frame_num"] = fc
-    fe = (merged.get("full_engine") or "").strip()
-    if fe and not (merged.get("engine_num") or "").strip():
-        merged["engine_num"] = fe
+    _apply_year_of_mfg_yyyy(merged)
     return merged
 
 
@@ -3208,6 +3204,25 @@ def _vin_match_key(chassis: str) -> str:
     return re.sub(r"[^A-Za-z0-9]", "", s)
 
 
+def _normalize_manufacturing_year_yyyy(raw: str) -> str:
+    """
+    Siebel **Dispatch Year** / date fields may return ``2009``, ``24/03/2009``, or ISO strings.
+    Store **year_of_mfg** as four-digit ``YYYY`` (1900–2099).
+    """
+    s = (raw or "").strip()
+    if not s:
+        return ""
+    m = re.search(r"\b(19\d{2}|20\d{2})\b", s)
+    return m.group(1) if m else ""
+
+
+def _apply_year_of_mfg_yyyy(d: dict) -> None:
+    """Normalize ``year_of_mfg`` in place when present."""
+    y = _normalize_manufacturing_year_yyyy(str(d.get("year_of_mfg") or ""))
+    if y:
+        d["year_of_mfg"] = y
+
+
 def _siebel_try_click_vin_search_hit_link(
     page: Page,
     chassis: str,
@@ -4594,15 +4609,15 @@ def _siebel_goto_vehicle_list_and_scrape(
 
 
 def _add_enquiry_vehicle_scrape_has_model_year_color(scraped: dict) -> bool:
-    """Require a grid row with model, year of manufacture, and color before creating an opportunity."""
+    """Require model, **YYYY** year of manufacture, and color before creating an opportunity."""
     m = (scraped.get("model") or "").strip()
-    y = (scraped.get("year_of_mfg") or "").strip()
+    y = _normalize_manufacturing_year_yyyy(scraped.get("year_of_mfg") or "")
     c = (scraped.get("color") or "").strip()
     return bool(m and y and c)
 
 
 def _merge_add_enquiry_vehicle_scrape(vehicle_merge: dict, scraped: dict) -> None:
-    """Copy scraped list-row fields into ``out['vehicle']``-style dict (same keys as stage 5 scrape)."""
+    """Copy add-enquiry vehicle scrape into ``out['vehicle']`` (full_chassis / full_engine; no frame_num/engine_num)."""
     for k in (
         "model",
         "color",
@@ -4612,8 +4627,6 @@ def _merge_add_enquiry_vehicle_scrape(vehicle_merge: dict, scraped: dict) -> Non
         "full_chassis",
         "full_engine",
         "key_num",
-        "frame_num",
-        "engine_num",
         "vehicle_price",
         "ex_showroom_price",
         "in_transit",
@@ -4630,7 +4643,12 @@ def _merge_add_enquiry_vehicle_scrape(vehicle_merge: dict, scraped: dict) -> Non
             continue
         s = str(v).strip()
         if s:
-            vehicle_merge[k] = s
+            if k == "year_of_mfg":
+                yn = _normalize_manufacturing_year_yyyy(s)
+                if yn:
+                    vehicle_merge[k] = yn
+            else:
+                vehicle_merge[k] = s
 
 
 def _siebel_vehicle_find_chassis_engine_enter(
@@ -4799,8 +4817,9 @@ def _siebel_vehicle_find_chassis_engine_enter(
     scraped = _merge_scrape_vehicle_record_from_vin_aria(
         page, scraped, content_frame_selector=content_frame_selector
     )
-    if scraped.get("key_num") or scraped.get("frame_num") or scraped.get("engine_num"):
-        note("Add Enquiry: vehicle list returned a row (key/chassis/engine cells present).")
+    _apply_year_of_mfg_yyyy(scraped)
+    if (scraped.get("full_chassis") or "").strip() or (scraped.get("key_num") or "").strip():
+        note("Add Enquiry: vehicle hit present (full_chassis or list key).")
     elif (scraped.get("model") or "").strip():
         note("Add Enquiry: vehicle detail applet has model (narrow grid).")
     else:
@@ -4816,20 +4835,67 @@ def _siebel_vehicle_find_chassis_engine_enter(
 def _try_click_enquiry_top_tab(
     page: Page, *, action_timeout_ms: int, content_frame_selector: str | None
 ) -> bool:
+    """
+    Main module **Enquiry** tab. Hero Connect often marks the control with ``aria-label="Enquiry Selected"``
+    (even when switching from **Vehicles**); try that before generic **Enquiry** role/name matches.
+    """
+
+    def _click_first_visible(locator) -> bool:
+        try:
+            n = locator.count()
+        except Exception:
+            return False
+        for i in range(min(n, 12)):
+            el = locator.nth(i)
+            try:
+                if not el.is_visible(timeout=700):
+                    continue
+                try:
+                    el.click(timeout=action_timeout_ms)
+                except Exception:
+                    el.click(timeout=action_timeout_ms, force=True)
+                return True
+            except Exception:
+                continue
+        return False
+
+    enquiry_selected_css = (
+        '[aria-label="Enquiry Selected"]',
+        '[aria-label="Enquiry Selected" i]',
+    )
+
+    search_roots: list = [page]
+    for r in _siebel_locator_search_roots(page, content_frame_selector):
+        if r is not page:
+            search_roots.append(r)
+
+    for root in search_roots:
+        for css in enquiry_selected_css:
+            try:
+                if _click_first_visible(root.locator(css)):
+                    logger.info("siebel_dms: Enquiry tab via %s", css[:50])
+                    return True
+            except Exception:
+                continue
+        for role in ("tab", "link", "button"):
+            try:
+                loc = root.get_by_role(role, name=re.compile(r"^\s*Enquiry\s+Selected\s*$", re.I))
+                if _click_first_visible(loc):
+                    logger.info("siebel_dms: Enquiry tab via role=%s name=Enquiry Selected", role)
+                    return True
+            except Exception:
+                continue
+
     name_res = (
         re.compile(r"^\s*Enquiry\s*$", re.I),
         re.compile(r"\bEnquiry\b", re.I),
     )
-    for root in _siebel_locator_search_roots(page, content_frame_selector):
+    for root in search_roots:
         for nr in name_res:
             for role in ("tab", "link", "button"):
                 try:
-                    loc = root.get_by_role(role, name=nr).first
-                    if loc.count() > 0 and loc.is_visible(timeout=600):
-                        try:
-                            loc.click(timeout=action_timeout_ms)
-                        except Exception:
-                            loc.click(timeout=action_timeout_ms, force=True)
+                    loc = root.get_by_role(role, name=nr)
+                    if _click_first_visible(loc):
                         return True
                 except Exception:
                     continue
@@ -4839,21 +4905,49 @@ def _try_click_enquiry_top_tab(
 def _try_click_opportunities_list_new(
     page: Page, *, action_timeout_ms: int, content_frame_selector: str | None
 ) -> bool:
+    def _click_first_visible(locator) -> bool:
+        try:
+            n = locator.count()
+        except Exception:
+            return False
+        for i in range(min(n, 10)):
+            el = locator.nth(i)
+            try:
+                if not el.is_visible(timeout=800):
+                    continue
+                try:
+                    el.click(timeout=action_timeout_ms)
+                except Exception:
+                    el.click(timeout=action_timeout_ms, force=True)
+                return True
+            except Exception:
+                continue
+        return False
+
     selectors = (
         "a[aria-label='Opportunities List:New']",
         "button[aria-label='Opportunities List:New']",
+        "a[aria-label='Opportunities List: New']",
+        "button[aria-label='Opportunities List: New']",
         "a[title='Opportunities List:New']",
         "button[title='Opportunities List:New']",
     )
-    for root in _siebel_locator_search_roots(page, content_frame_selector):
+    opp_name = re.compile(r"^\s*Opportunities\s+List\s*:\s*New\s*$", re.I)
+    roots: list = [page]
+    for r in _siebel_locator_search_roots(page, content_frame_selector):
+        if r is not page:
+            roots.append(r)
+    for root in roots:
         for css in selectors:
             try:
-                loc = root.locator(css).first
-                if loc.count() > 0 and loc.is_visible(timeout=500):
-                    try:
-                        loc.click(timeout=action_timeout_ms)
-                    except Exception:
-                        loc.click(timeout=action_timeout_ms, force=True)
+                if _click_first_visible(root.locator(css)):
+                    return True
+            except Exception:
+                continue
+        for role in ("link", "button", "menuitem"):
+            try:
+                loc = root.get_by_role(role, name=opp_name)
+                if _click_first_visible(loc):
                     return True
             except Exception:
                 continue
@@ -4956,6 +5050,8 @@ def _add_enquiry_opportunity(
     if not vq_ok:
         return False
 
+    _apply_year_of_mfg_yyyy(scraped_v)
+
     if not _add_enquiry_vehicle_scrape_has_model_year_color(scraped_v):
         note(
             "Add Enquiry: vehicle search did not yield model, year of manufacture, and color in the grid — "
@@ -4979,8 +5075,6 @@ def _add_enquiry_opportunity(
             model=str(scraped_v.get("model") or ""),
             year_of_mfg=str(scraped_v.get("year_of_mfg") or ""),
             color=str(scraped_v.get("color") or ""),
-            frame_num=str(scraped_v.get("frame_num") or ""),
-            engine_num=str(scraped_v.get("engine_num") or ""),
             full_chassis=str(scraped_v.get("full_chassis") or ""),
             full_engine=str(scraped_v.get("full_engine") or ""),
         )
@@ -4988,10 +5082,10 @@ def _add_enquiry_opportunity(
     if not _try_click_enquiry_top_tab(
         page, action_timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
     ):
-        note("Add Enquiry: Enquiry tab not found.")
+        note("Add Enquiry: Enquiry tab not found (tried aria-label Enquiry Selected and Enquiry).")
         return False
     note("Add Enquiry: Enquiry tab clicked.")
-    _safe_page_wait(page, 900, log_label="after_enquiry_tab")
+    _safe_page_wait(page, 1400, log_label="after_enquiry_tab")
 
     if not _try_click_opportunities_list_new(
         page, action_timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector

@@ -10,15 +10,17 @@ Relation (S/O or W/o): S/O
 
 --- Vehicle (from DMS search result) ---
 Key num: —
-Frame / Chassis num: —
-Engine num: —
-Model: —
-Color: —
-Cubic capacity: —
-Seating capacity: —
+Frame / Chassis num: MBLHAW472T5C40395
+Full chassis (VIN from detail): MBLHAW472T5C40395
+Engine num: HSPUNIRSCFIBLA
+Full engine (from detail): HA11F6T5C04401
+Model: SPLENDOR +
+Color: BLA
+Cubic capacity: 87112029
+Seating capacity: 11870 DEALER SHOWROOM
 Body type: —
 Vehicle type: —
 Num cylinders: —
 Horsepower: —
-Ex-showroom Price (Order Value): —
-Year of Mfg: —
+Ex-showroom Price (Order Value): 2,026
+Year of Mfg: 2,026
