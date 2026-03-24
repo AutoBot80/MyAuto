@@ -4167,54 +4167,38 @@ def _add_customer_payment(
                             pass
                     return False
 
-                # Wait for new row to fully render before any keyboard input.
-                # No frame.evaluate() here — calling evaluate() across frames disrupts
-                # Siebel's inline-edit focus and makes tab counts unpredictable.
+                # Wait ONCE for the new row to fully render and focus to settle.
                 _safe_page_wait(page, 1500, log_label="wait_for_new_row_render")
 
-                # Pure keyboard fill — no Enter, no frame.evaluate() between keystrokes.
-                # Enter auto-advances focus in Siebel dropdowns (same as Tab), which
-                # shifts all subsequent tab counts. Tab-only keeps counts stable.
+                # Fire ALL keyboard events with NO inter-step delays.
+                # Transaction Type is a required dropdown — Siebel's validation JS
+                # calls focus() back on it ~100-200ms after it loses focus while empty.
+                # Any _safe_page_wait between keystrokes gives that timer time to fire,
+                # causing inconsistent tab positions. Firing fast beats the timer.
                 #
-                # Confirmed sequence (5 total tabs from Transaction_Type starting position):
-                #   type "Payments" → Tab×1 → Payment Mode
-                #   type "Cash"     → Tab×4 → Transaction Amount  (Tab×1 confirms Cash + moves,
-                #                                                   Tab×2-4 advance to Amount)
-                #   type "120000"   → Tab×1 → commit
+                # Sequence (5 total tabs from Transaction_Type):
+                #   "Payments" Tab×1 "Cash" Tab×4 "120000" Tab
                 type_ok = False
                 amount_ok = False
 
                 try:
-                    # Transaction Type
-                    page.keyboard.type("Payments", delay=50)
-                    _safe_page_wait(page, 300, log_label="after_type_transaction_type")
-                    note("Payment keyboard: typed 'Payments' into Transaction Type.")
+                    # All keyboard actions fired as fast as possible — no waits between them.
+                    page.keyboard.type("Payments")          # Transaction Type
+                    page.keyboard.press("Tab")              # → Payment Mode
+                    page.keyboard.type("Cash")              # Payment Mode
+                    page.keyboard.press("Tab")              # Tab 1 of 4 (confirms Cash + moves)
+                    page.keyboard.press("Tab")              # Tab 2 of 4
+                    page.keyboard.press("Tab")              # Tab 3 of 4
+                    page.keyboard.press("Tab")              # Tab 4 of 4 → Transaction Amount
+                    page.keyboard.type("120000")            # Transaction Amount
+                    page.keyboard.press("Tab")              # commit amount
+
                     type_ok = True
-
-                    # Tab ×1 → Payment Mode
-                    page.keyboard.press("Tab")
-                    _safe_page_wait(page, 300, log_label="tab_to_payment_mode")
-
-                    # Payment Mode
-                    page.keyboard.type("Cash", delay=50)
-                    _safe_page_wait(page, 300, log_label="after_type_payment_mode")
-                    note("Payment keyboard: typed 'Cash' into Payment Mode.")
-
-                    # Tab ×4 → Transaction Amount
-                    # (Tab×1 confirms Cash and moves, Tab×2-4 advance through fields)
-                    for _ti in range(4):
-                        page.keyboard.press("Tab")
-                        _safe_page_wait(page, 200, log_label=f"tab_to_amount_{_ti+1}")
-
-                    # Transaction Amount
-                    page.keyboard.type("120000", delay=50)
-                    _safe_page_wait(page, 300, log_label="after_type_amount")
-                    note("Payment keyboard: typed '120000' into Transaction Amount.")
                     amount_ok = True
+                    note("Payment keyboard: fired full sequence (Payments → Cash → 120000) without inter-step delays.")
 
-                    # Tab ×1 to commit amount before Save
-                    page.keyboard.press("Tab")
-                    _safe_page_wait(page, 300, log_label="after_tab_commit_amount")
+                    # Brief settle so Siebel processes the final Tab before Save click.
+                    _safe_page_wait(page, 600, log_label="settle_before_save")
 
                 except Exception as _kb_ex:
                     note(f"Payment keyboard fill failed: {_kb_ex!s:.120}")
