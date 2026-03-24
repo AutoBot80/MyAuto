@@ -4087,45 +4087,6 @@ def _add_customer_payment(
                 if not type_ok:
                     raise Exception("Failed to set Transaction Type = Payments")
 
-                # Payment Method: direct typing "Cash", then tab out 4 times.
-                method_ok = False
-                primary_root = scoped_roots[0] if scoped_roots else None
-                if primary_root is not None:
-                    _focus_locked_payment_frame(primary_root)
-                    for css in (
-                        "input[name='Payment_Method_New']",
-                        "input[id*='Payment_Method' i]",
-                        "input[name*='Payment_Method' i]",
-                        "input[title_id*='Payment_Method' i]",
-                        "input[title-id*='Payment_Method' i]",
-                        "input[aria-label*='Payment Method' i]",
-                        "input[title*='Payment Method' i]",
-                    ):
-                        try:
-                            m = primary_root.locator(css).first
-                            if m.count() <= 0 or not m.is_visible(timeout=900):
-                                continue
-                            try:
-                                m.click(timeout=action_timeout_ms)
-                            except Exception:
-                                m.click(timeout=action_timeout_ms, force=True)
-                            m.fill("Cash", timeout=action_timeout_ms)
-                            gotm = (m.input_value(timeout=1500) or "").strip()
-                            if gotm and "cash" in gotm.lower():
-                                method_ok = True
-                                try:
-                                    for _ in range(4):
-                                        m.press("Tab", timeout=min(1200, action_timeout_ms))
-                                except Exception:
-                                    pass
-                                note("Payment Method set by direct typing: 'Cash', then Tab x4.")
-                                break
-                        except Exception:
-                            continue
-
-                if not method_ok:
-                    raise Exception("Failed to set Payment Method")
-
                 # Transaction Amount = 120000 (strictly in Payment Lines scoped frame/roots)
                 amount_ok = False
                 for root in scoped_roots:
@@ -4156,7 +4117,7 @@ def _add_customer_payment(
                         break
                 note(
                     "Filled payment fields: "
-                    f"Type=Payments(ok={type_ok!r}), Method=Cash(ok={method_ok!r}), Transaction Amount=120000(ok={amount_ok!r})."
+                    f"Type=Payments(ok={type_ok!r}), Transaction Amount=120000(ok={amount_ok!r})."
                 )
 
                 # Re-detect action roots after row creation; toolbar can be in a sibling frame.
