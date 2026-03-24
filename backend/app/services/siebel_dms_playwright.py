@@ -3536,7 +3536,71 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
         note("Relation's Name filled; stopping on current field as requested.")
         return True
 
+    def _read_first_name_probe() -> None:
+        """
+        Rendering stabilizer: read First Name before Relation's Name attempts.
+        This intentionally adds a small settle point for late Siebel field rendering.
+        """
+        first_name_selectors = (
+            'input[aria-label="First Name"]',
+            'textarea[aria-label="First Name"]',
+            "input[name*='First_Name' i]",
+            "input[id*='First_Name' i]",
+            "input[title*='First Name' i]",
+        )
+        # Frame-locator roots first.
+        for fl in _iter_frame_locator_roots(page, content_frame_selector):
+            for css in first_name_selectors:
+                try:
+                    loc = fl.locator(css).first
+                    if loc.count() > 0 and loc.is_visible(timeout=600):
+                        try:
+                            _ = (loc.input_value(timeout=1200) or "").strip()
+                        except Exception:
+                            pass
+                        _safe_page_wait(page, 220, log_label="after_first_name_read_probe")
+                        return
+                except Exception:
+                    continue
+            try:
+                by_label = fl.get_by_label("First Name", exact=True).first
+                if by_label.count() > 0 and by_label.is_visible(timeout=500):
+                    try:
+                        _ = (by_label.input_value(timeout=1200) or "").strip()
+                    except Exception:
+                        pass
+                    _safe_page_wait(page, 220, log_label="after_first_name_read_probe")
+                    return
+            except Exception:
+                pass
+        # Then ordered frames.
+        for frame in _ordered_frames(page):
+            for css in first_name_selectors:
+                try:
+                    loc = frame.locator(css).first
+                    if loc.count() > 0 and loc.is_visible(timeout=600):
+                        try:
+                            _ = (loc.input_value(timeout=1200) or "").strip()
+                        except Exception:
+                            pass
+                        _safe_page_wait(page, 220, log_label="after_first_name_read_probe")
+                        return
+                except Exception:
+                    continue
+            try:
+                by_label = frame.get_by_label("First Name", exact=True).first
+                if by_label.count() > 0 and by_label.is_visible(timeout=500):
+                    try:
+                        _ = (by_label.input_value(timeout=1200) or "").strip()
+                    except Exception:
+                        pass
+                    _safe_page_wait(page, 220, log_label="after_first_name_read_probe")
+                    return
+            except Exception:
+                pass
+
     # Exact-input path first (from provided DOM snippet), then label fallback.
+    _read_first_name_probe()
     exact_selectors = (
         "input[aria-label=\"Relation's Name\"]",
         "textarea[aria-label=\"Relation's Name\"]",
@@ -3578,6 +3642,7 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
         except Exception:
             continue
 
+    _read_first_name_probe()
     note("Could not fill Relation's Name on opened customer record (video SOP).")
     return False
 
@@ -3820,9 +3885,18 @@ def _add_customer_payment(
                         has_txn_type = bool(
                             frame.evaluate(
                                 """() => {
+                                  const isVisible = (el) => {
+                                    if (!el) return false;
+                                    const st = window.getComputedStyle(el);
+                                    if (st.display === "none" || st.visibility === "hidden" || Number(st.opacity) === 0) return false;
+                                    const r = el.getBoundingClientRect();
+                                    return r.width >= 2 && r.height >= 2;
+                                  };
                                   const sels = [
                                     "input[name='Transaction_Type']",
                                     "input[name='Transaction_Type_New']",
+                                    "select[name='Transaction_Type']",
+                                    "select[name='Transaction_Type_New']",
                                     "input[id='Transaction_Type']",
                                     "input[title_id='Transaction_Type']",
                                     "input[title-id='Transaction_Type']",
@@ -3830,7 +3904,8 @@ def _add_customer_payment(
                                     "input[id*='Transaction_Type' i]",
                                   ];
                                   for (const s of sels) {
-                                    if (document.querySelector(s)) return true;
+                                    const el = document.querySelector(s);
+                                    if (el && isVisible(el)) return true;
                                   }
                                   return false;
                                 }"""
@@ -3859,6 +3934,13 @@ def _add_customer_payment(
                         has_txn_amt = bool(
                             frame.evaluate(
                                 """() => {
+                                  const isVisible = (el) => {
+                                    if (!el) return false;
+                                    const st = window.getComputedStyle(el);
+                                    if (st.display === "none" || st.visibility === "hidden" || Number(st.opacity) === 0) return false;
+                                    const r = el.getBoundingClientRect();
+                                    return r.width >= 2 && r.height >= 2;
+                                  };
                                   const sels = [
                                     "input[name='Transaction_Amount']",
                                     "input[id='Transaction_Amount']",
@@ -3871,7 +3953,8 @@ def _add_customer_payment(
                                     "input[title*='Transaction Amount' i]",
                                   ];
                                   for (const s of sels) {
-                                    if (document.querySelector(s)) return true;
+                                    const el = document.querySelector(s);
+                                    if (el && isVisible(el)) return true;
                                   }
                                   return false;
                                 }"""

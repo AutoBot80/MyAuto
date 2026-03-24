@@ -1,6 +1,6 @@
 Playwright DMS — execution log (this run only; UTC timestamps)
 
-started_utc=2026-03-24T08:32:38.865729+00:00
+started_utc=2026-03-24T08:44:05.821769+00:00
 skip_contact_find=False
 dms_contact_path='found'
 mobile_phone='8952897358'
@@ -22,17 +22,17 @@ url_vehicle_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/e
 --- trace ---
 Legend: [STEP]/[NOTE]/[MILESTONE] = operator narrative; [FORM] = siebel_step + Siebel form/screen + action + fields/values being applied on that form.
 
-2026-03-24T08:32:38.866026+00:00 [STEP] Started Hero Connect / Siebel DMS automation (linear SOP).
-2026-03-24T08:32:38.866090+00:00 [STEP] Video SOP (Find Contact Enquiry): Find → Contact → mobile → Go → open All Enquiries; then stop.
-2026-03-24T08:32:38.866144+00:00 [FORM] siebel_step=v1_find_contact | form=Global Find → Contact (Mobile Phone) + Go | action=goto_contact_find_URL_then_prepare_Find_Contact_fill_mobile_FindGo | contact_url_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+Contact+Opportunity+Buyer/CoBuyer+View+(SDW)&SWERF=1&SWEHo=&SWEBU=1' | mobile_phone='8952897358'
-2026-03-24T08:32:44.730734+00:00 [STEP] Video SOP: Find customer by mobile (Contact view).
-2026-03-24T08:32:51.825288+00:00 [NOTE] Find → Contact: object type selected so the mobile field is the Contact search field.
-2026-03-24T08:32:52.480948+00:00 [NOTE] Filled mobile and clicked Find inside the Contact applet (scoped; includes first-field right-popup fallback when labels are non-standard).
-2026-03-24T08:32:54.493592+00:00 [NOTE] DECISION: contact_table_match_after_find=True
-2026-03-24T08:32:54.493648+00:00 [FORM] siebel_step=v2_drill_and_nav | form=Search Results + Contacts detail | action=Siebel_Find_tab_optional_then_link_hit_then_click_first_name_then_fill_Relations_Name_only | care_of='S/O Madan Lal' | first_name='Ashok' | mobile_phone='8952897358'
-2026-03-24T08:32:56.918949+00:00 [NOTE] Activated Siebel Find tab in search results (video SOP).
-2026-03-24T08:32:57.782470+00:00 [NOTE] Opened contact from search hit hyperlink (video SOP).
-2026-03-24T08:33:01.753875+00:00 [NOTE] Could not fill Relation's Name on opened customer record (video SOP).
-2026-03-24T08:33:01.754322+00:00 [STEP] Stopped: video SOP failed while opening customer record or filling Relation's Name.
+2026-03-24T08:44:05.821922+00:00 [STEP] Started Hero Connect / Siebel DMS automation (linear SOP).
+2026-03-24T08:44:05.821951+00:00 [STEP] Video SOP (Find Contact Enquiry): Find → Contact → mobile → Go → open All Enquiries; then stop.
+2026-03-24T08:44:05.821988+00:00 [FORM] siebel_step=v1_find_contact | form=Global Find → Contact (Mobile Phone) + Go | action=goto_contact_find_URL_then_prepare_Find_Contact_fill_mobile_FindGo | contact_url_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+Contact+Opportunity+Buyer/CoBuyer+View+(SDW)&SWERF=1&SWEHo=&SWEBU=1' | mobile_phone='8952897358'
+2026-03-24T08:44:11.664181+00:00 [STEP] Video SOP: Find customer by mobile (Contact view).
+2026-03-24T08:44:22.104458+00:00 [NOTE] Find → Contact: object type selected so the mobile field is the Contact search field.
+2026-03-24T08:44:22.781897+00:00 [NOTE] Filled mobile and clicked Find inside the Contact applet (scoped; includes first-field right-popup fallback when labels are non-standard).
+2026-03-24T08:44:24.815163+00:00 [NOTE] DECISION: contact_table_match_after_find=True
+2026-03-24T08:44:24.815599+00:00 [FORM] siebel_step=v2_drill_and_nav | form=Search Results + Contacts detail | action=Siebel_Find_tab_optional_then_link_hit_then_click_first_name_then_fill_Relations_Name_only | care_of='S/O Madan Lal' | first_name='Ashok' | mobile_phone='8952897358'
+2026-03-24T08:44:27.205028+00:00 [NOTE] Activated Siebel Find tab in search results (video SOP).
+2026-03-24T08:44:28.080145+00:00 [NOTE] Opened contact from search hit hyperlink (video SOP).
+2026-03-24T08:44:32.058790+00:00 [NOTE] Could not fill Relation's Name on opened customer record (video SOP).
+2026-03-24T08:44:32.058867+00:00 [STEP] Stopped: video SOP failed while opening customer record or filling Relation's Name.
 
-2026-03-24T08:33:01.756941+00:00 [END] error=Siebel: video SOP — after Find/Go, could not fill Relation's Name from care_of. Confirm right-pane selectors/labels and iframe scope.
+2026-03-24T08:44:32.058905+00:00 [END] error=Siebel: video SOP — after Find/Go, could not fill Relation's Name from care_of. Confirm right-pane selectors/labels and iframe scope.
