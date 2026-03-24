@@ -4652,18 +4652,116 @@ def _create_order(
 
     # 10) Line Items List:New -> click VIN (name=VIN) -> full chassis + Enter; optional Vin# pick applet
     _tmo_line = min(action_timeout_ms, 4000)
-    if not _click_any(
-        (
+
+    _JS_LINE_ITEMS_NEW = """() => {
+        const want = 'line items list:new';
+        const vis = (el) => {
+            if (!el) return false;
+            const st = window.getComputedStyle(el);
+            if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity) === 0) return false;
+            const r = el.getBoundingClientRect();
+            return r.width > 1 && r.height > 1;
+        };
+        const fire = (el) => {
+            try { el.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
+            try { el.focus(); } catch (e) {}
+            const opts = { bubbles: true, cancelable: true, view: window };
+            try {
+                el.dispatchEvent(new MouseEvent('mousedown', opts));
+                el.dispatchEvent(new MouseEvent('mouseup', opts));
+                el.dispatchEvent(new MouseEvent('click', opts));
+            } catch (e) {}
+            try { if (typeof el.click === 'function') el.click(); } catch (e) {}
+            return true;
+        };
+        const cand = Array.from(
+            document.querySelectorAll('a,button,[role="button"],div[role="button"],span[role="button"]')
+        ).filter(vis);
+        for (const el of cand) {
+            const al = (el.getAttribute('aria-label') || '').trim().toLowerCase();
+            const ttl = (el.getAttribute('title') || '').trim().toLowerCase();
+            if (al === want || ttl === want || (al.includes('line items list') && al.includes('new'))) {
+                fire(el);
+                return al || ttl || 'line-items-new';
+            }
+        }
+        return '';
+    }"""
+
+    def _click_line_items_new_hardened() -> bool:
+        """
+        Siebel toolbar \"New\" often shows focus without running the applet action.
+        Try: per-frame DOM click + mouse events, then Playwright focus + click + keyboard activate.
+        """
+        for frame in _ordered_frames(page):
+            try:
+                hit = frame.evaluate(_JS_LINE_ITEMS_NEW)
+                if hit:
+                    note(f"Create Order: Line Items List:New — frame JS activation ({hit!r}).")
+                    return True
+            except Exception:
+                continue
+        _new_selectors = (
             "a[aria-label='Line Items List:New']",
             "button[aria-label='Line Items List:New']",
             "a[aria-label*='Line Items List' i][aria-label*='New' i]",
             "button[aria-label*='Line Items List' i][aria-label*='New' i]",
-        ),
-        timeout=_tmo_line,
-    ):
-        return False, "Could not click Line Items List:New.", scraped
+        )
+        def _activate_locator(target, *, label: str) -> bool:
+            target.scroll_into_view_if_needed(timeout=_tmo_line)
+            try:
+                target.focus(timeout=800)
+            except Exception:
+                pass
+            try:
+                target.click(timeout=_tmo_line)
+            except Exception:
+                target.click(timeout=_tmo_line, force=True)
+            try:
+                target.evaluate(
+                    """el => {
+                      const o = { bubbles: true, cancelable: true, view: window };
+                      el.dispatchEvent(new MouseEvent('mousedown', o));
+                      el.dispatchEvent(new MouseEvent('mouseup', o));
+                      el.dispatchEvent(new MouseEvent('click', o));
+                      if (typeof el.click === 'function') el.click();
+                    }"""
+                )
+            except Exception:
+                pass
+            for key in ("Enter", " "):
+                try:
+                    target.press(key, timeout=800)
+                    break
+                except Exception:
+                    continue
+            note(f"Create Order: Line Items List:New — {label}.")
+            return True
+
+        for root in _roots():
+            for role in ("button", "link"):
+                try:
+                    by_role = root.get_by_role(role, name=re.compile(r"line\s+items\s+list.*\bnew\b", re.I))
+                    if by_role.count() > 0:
+                        b = by_role.first
+                        if b.is_visible(timeout=600):
+                            return _activate_locator(b, label=f"get_by_role({role}) + keys")
+                except Exception:
+                    pass
+            for css in _new_selectors:
+                try:
+                    loc = root.locator(css).first
+                    if loc.count() <= 0 or not loc.is_visible(timeout=600):
+                        continue
+                    return _activate_locator(loc, label=f"locator {css!r} + keys")
+                except Exception:
+                    continue
+        return False
+
+    if not _click_line_items_new_hardened():
+        return False, "Could not activate Line Items List:New (click/focus/keyboard).", scraped
     _safe_page_wait(page, 900, log_label="after_line_items_new")
-    note("Create Order: clicked Line Items List:New.")
+    note("Create Order: Line Items List:New activation attempted.")
 
     # Focus/open the VIN control (Siebel uses name="VIN" on the line popup field)
     _click_any(
