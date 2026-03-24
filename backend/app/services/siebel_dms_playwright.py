@@ -4203,19 +4203,33 @@ def _add_customer_payment(
                 amount_ok = False
 
                 try:
-                    # Type "Payments" into whatever has focus (should be Transaction Type)
+                    # Type "Payments" into whatever has focus (Siebel routes keys to Transaction Type cell).
                     page.keyboard.type("Payments", delay=50)
-                    _safe_page_wait(page, 300, log_label="after_type_transaction_type")
-                    note("Payment keyboard: typed 'Payments' into focused field (Transaction Type).")
+                    _safe_page_wait(page, 400, log_label="after_type_transaction_type")
+                    # Confirm the autocomplete dropdown selection — without this the dropdown
+                    # stays open and keeps stealing focus indefinitely.
+                    page.keyboard.press("Enter")
+                    _safe_page_wait(page, 400, log_label="after_enter_confirm_type")
+                    note("Payment keyboard: typed 'Payments' + Enter to confirm Transaction Type dropdown.")
                     type_ok = True
 
-                    # Tab through Payment Method and other fields to reach Transaction Amount.
-                    # User confirmed ~4-5 tabs from Transaction Type to Transaction Amount.
-                    for _ti in range(5):
-                        page.keyboard.press("Tab")
-                        _safe_page_wait(page, 150, log_label=f"tab_{_ti+1}")
+                    # Tab once from Transaction Type to Payment Mode.
+                    page.keyboard.press("Tab")
+                    _safe_page_wait(page, 300, log_label="tab_to_payment_mode")
 
-                    note("Payment keyboard: tabbed 5x to reach Transaction Amount.")
+                    # Fill Payment Mode = Cash, confirm with Enter.
+                    page.keyboard.type("Cash", delay=50)
+                    _safe_page_wait(page, 400, log_label="after_type_payment_mode")
+                    page.keyboard.press("Enter")
+                    _safe_page_wait(page, 400, log_label="after_enter_confirm_payment_mode")
+                    note("Payment keyboard: typed 'Cash' + Enter to confirm Payment Mode.")
+
+                    # Tab 3 more times from Payment Mode to Transaction Amount.
+                    for _ti in range(3):
+                        page.keyboard.press("Tab")
+                        _safe_page_wait(page, 150, log_label=f"tab_to_amount_{_ti+1}")
+
+                    note("Payment keyboard: tabbed 3x toward Transaction Amount.")
 
                     # Check focused element after tabs
                     for _dframe2 in _ordered_frames(page):
@@ -4238,10 +4252,12 @@ def _add_customer_payment(
                         except Exception:
                             continue
 
-                    # Type amount
+                    # Type amount, then Tab once to commit the value before Save.
                     page.keyboard.type("120000", delay=50)
                     _safe_page_wait(page, 300, log_label="after_type_amount")
-                    note("Payment keyboard: typed '120000' into Transaction Amount.")
+                    page.keyboard.press("Tab")
+                    _safe_page_wait(page, 300, log_label="after_tab_commit_amount")
+                    note("Payment keyboard: typed '120000' + Tab to commit Transaction Amount.")
                     amount_ok = True
 
                 except Exception as _kb_ex:
@@ -4305,6 +4321,8 @@ def _add_customer_payment(
                     if save_clicked:
                         break
                 if save_clicked:
+                    # Wait for Siebel to process the save server-side before returning.
+                    _safe_page_wait(page, 2000, log_label="after_payment_save_processing")
                     note("Clicked Save icon after payment entry.")
                     return True
                 note("Could not click Save icon after filling payment fields.")
