@@ -4484,13 +4484,48 @@ def _create_order(
                         try:
                             ord_cell.dblclick(timeout=min(action_timeout_ms, 3000))
                         except Exception:
-                            ord_cell.dblclick(timeout=min(action_timeout_ms, 3000), force=True)
+                            try:
+                                ord_cell.dblclick(timeout=min(action_timeout_ms, 3000), force=True)
+                            except Exception:
+                                try:
+                                    ord_cell.click(timeout=min(action_timeout_ms, 3000), force=True)
+                                except Exception:
+                                    continue
                         return True
                     except Exception:
                         continue
         # #region agent log
-        _dblog("exit-false", {"roots_checked": roots_checked}, "H-B")
+        _dblog("exit-false-row-scan", {"roots_checked": roots_checked}, "H-B")
         # #endregion
+        # Direct fallback: find the first visible Order Number drill-down link by name/aria attrs
+        # (Vehicle Sales list rows do not contain mobile numbers, so row-text matching fails)
+        for root in _roots():
+            for css in (
+                "a[name='Order Number']",
+                "a[name*='Order' i][name*='Number' i]",
+                "td[aria-describedby*='Order_Number' i] a",
+                "td[aria-describedby='jqgh_s_1_l_Order_Number'] a",
+                "a[aria-label*='Order#' i]",
+                "a[aria-label*='Order Number' i]",
+                "a[title*='Order#' i]",
+                "a[title*='Order Number' i]",
+            ):
+                try:
+                    loc = root.locator(css).first
+                    if loc.count() <= 0 or not loc.is_visible(timeout=500):
+                        continue
+                    _dblog("direct-name-hit", {"css": css}, "H-E")
+                    try:
+                        loc.click(timeout=min(action_timeout_ms, 3000))
+                    except Exception:
+                        try:
+                            loc.click(timeout=min(action_timeout_ms, 3000), force=True)
+                        except Exception:
+                            loc.dblclick(timeout=min(action_timeout_ms, 3000), force=True)
+                    return True
+                except Exception:
+                    continue
+        _dblog("exit-false-all", {"roots_checked": roots_checked}, "H-B")
         return False
 
     _direct_open_by_mobile = (mobile or "").strip() == "8952897358"
@@ -4616,22 +4651,30 @@ def _create_order(
     if not _existing_order_opened:
         _order_opened = _dblclick_order_for_mobile(mobile)
         if not _order_opened:
-            # Last fallback: first visible order number row regardless of mobile
+            # Last fallback: first visible order number link regardless of mobile
             _order_opened = False
             for root in _roots():
                 for css in (
+                    "a[name='Order Number']",
+                    "a[name*='Order' i][name*='Number' i]",
                     "td[aria-describedby*='Order_Number' i] a",
+                    "td[aria-describedby='jqgh_s_1_l_Order_Number'] a",
                     "a[aria-label*='Order#' i]",
+                    "a[aria-label*='Order Number' i]",
                     "a[title*='Order#' i]",
+                    "a[title*='Order Number' i]",
                 ):
                     try:
                         loc = root.locator(css).first
                         if loc.count() <= 0 or not loc.is_visible(timeout=500):
                             continue
                         try:
-                            loc.dblclick(timeout=min(action_timeout_ms, 3500))
+                            loc.click(timeout=min(action_timeout_ms, 3500))
                         except Exception:
-                            loc.dblclick(timeout=min(action_timeout_ms, 3500), force=True)
+                            try:
+                                loc.click(timeout=min(action_timeout_ms, 3500), force=True)
+                            except Exception:
+                                loc.dblclick(timeout=min(action_timeout_ms, 3500), force=True)
                         _order_opened = True
                         break
                     except Exception:
