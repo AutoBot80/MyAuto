@@ -4365,24 +4365,52 @@ def _create_order(
 
     # 1) Open first-level dropdown near Contacts, then pick Vehicle Sales.
     # User-confirmed opener control: aria-label="ui-id-159".
-    if not _click_any(
+    _opened_contacts_menu = _click_any(
         (
             "a[aria-label='ui-id-159']",
             "button[aria-label='ui-id-159']",
             "#ui-id-159",
+            "a:has-text('Contacts') + a",
+            "a:has-text('Contacts') >> xpath=following-sibling::*[1]",
         ),
         timeout=min(action_timeout_ms, 3000),
-    ):
+    )
+    if not _opened_contacts_menu:
+        # Fallback: click Contacts tab first, then arrow.
+        _click_any(
+            (
+                "a[aria-label='Contacts']",
+                "a[title='Contacts']",
+                "a:has-text('Contacts')",
+            ),
+            timeout=min(action_timeout_ms, 2000),
+        )
+        _opened_contacts_menu = _click_any(
+            (
+                "a[aria-label='ui-id-159']",
+                "button[aria-label='ui-id-159']",
+                "#ui-id-159",
+                "a:has-text('Contacts') + a",
+                "a:has-text('Contacts') >> xpath=following-sibling::*[1]",
+            ),
+            timeout=min(action_timeout_ms, 3000),
+        )
+    if not _opened_contacts_menu:
         return False, "Could not open Contacts dropdown (aria-label ui-id-159).", scraped
     _safe_page_wait(page, 500, log_label="after_open_contacts_dropdown")
 
+    # In this menu, "Vehicle Sales" can be a plain <li>/<span>/<a>; support all.
     if not _click_any(
         (
+            "li:has-text('Vehicle Sales')",
+            "li[role='menuitem']:has-text('Vehicle Sales')",
+            "div[role='menu']:has-text('Vehicle Sales') li:has-text('Vehicle Sales')",
+            "ul:has-text('Vehicle Sales') li:has-text('Vehicle Sales')",
+            "span:has-text('Vehicle Sales')",
             "a[aria-label='Vehicle Sales']",
             "a[title='Vehicle Sales']",
             "a:has-text('Vehicle Sales')",
-            "li:has-text('Vehicle Sales')",
-            "span:has-text('Vehicle Sales')",
+            "xpath=//*[self::li or self::a or self::span][normalize-space()='Vehicle Sales']",
         ),
         timeout=min(action_timeout_ms, 3000),
     ):
