@@ -3744,13 +3744,16 @@ def _add_customer_payment(
                                     "[title-id='1_s_2_1_Transaction_Amount']",
                                     "[title='1_s_2_1_Transaction_Amount']",
                                     "[name='Transaction_Type']",
+                                    "[name='Transaction_Type_New']",
                                     "[id='Transaction_Type']",
                                     "[title_id='Transaction_Type']",
                                     "[title-id='Transaction_Type']",
                                     "input[name*='Transaction_Type' i]",
                                     "input[id*='Transaction_Type' i]",
+                                    "[name='Payment_Method_New']",
                                     "input[name*='Payment_Method' i]",
                                     "input[id*='Payment_Method' i]",
+                                    "[name='Transaction_Amount']",
                                   ];
                                   for (const s of sels) {
                                     const el = document.querySelector(s);
@@ -3821,11 +3824,14 @@ def _add_customer_payment(
                               try { window.focus(); } catch (_) {}
                               const candidates = [
                                 "input[name='Transaction_Type']",
+                                "input[name='Transaction_Type_New']",
                                 "input[id='Transaction_Type']",
                                 "input[name*='Transaction_Type' i]",
                                 "input[id*='Transaction_Type' i]",
+                                "input[name='Payment_Method_New']",
                                 "input[name*='Payment_Method' i]",
                                 "input[id*='Payment_Method' i]",
+                                "input[name='Transaction_Amount']",
                                 "input[id='1_s_2_1_Transaction_Amount']",
                                 "input[name='1_s_2_1_Transaction_Amount']",
                               ];
@@ -3989,6 +3995,7 @@ def _add_customer_payment(
                     _focus_locked_payment_frame(root)
                     for css in (
                         "input[name='Transaction_Type']",
+                        "input[name='Transaction_Type_New']",
                         "input[id='Transaction_Type']",
                         "input[title_id='Transaction_Type']",
                         "input[title-id='Transaction_Type']",
@@ -4029,6 +4036,7 @@ def _add_customer_payment(
                         _focus_locked_payment_frame(root)
                         for css in (
                             "input[name='Transaction_Type']",
+                            "input[name='Transaction_Type_New']",
                             "input[id='Transaction_Type']",
                             "input[title_id='Transaction_Type']",
                             "input[title-id='Transaction_Type']",
@@ -4085,6 +4093,7 @@ def _add_customer_payment(
                 if primary_root is not None:
                     _focus_locked_payment_frame(primary_root)
                     for css in (
+                        "input[name='Payment_Method_New']",
                         "input[id*='Payment_Method' i]",
                         "input[name*='Payment_Method' i]",
                         "input[title_id*='Payment_Method' i]",
@@ -4122,6 +4131,8 @@ def _add_customer_payment(
                 for root in scoped_roots:
                     _focus_locked_payment_frame(root)
                     for css in (
+                        "input[name='Transaction_Amount']",
+                        "input[id='Transaction_Amount']",
                         "input[id='1_s_2_1_Transaction_Amount']",
                         "input[name='1_s_2_1_Transaction_Amount']",
                         "input[title_id='1_s_2_1_Transaction_Amount']",
