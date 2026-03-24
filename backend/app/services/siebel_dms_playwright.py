@@ -3813,8 +3813,81 @@ def _add_customer_payment(
                     else:
                         note("Payment lines scoped frame not detected; stopping to avoid focus drift.")
                         return False
-                # Keep focus locked to the first detected Payment Lines frame.
-                scoped_roots = [payment_frames[0]]
+                # Prefer the exact frame that contains Transaction_Type fields.
+                tx_frame = None
+                for frame in _ordered_frames(page):
+                    try:
+                        has_txn_type = bool(
+                            frame.evaluate(
+                                """() => {
+                                  const sels = [
+                                    "input[name='Transaction_Type']",
+                                    "input[name='Transaction_Type_New']",
+                                    "input[id='Transaction_Type']",
+                                    "input[title_id='Transaction_Type']",
+                                    "input[title-id='Transaction_Type']",
+                                    "input[name*='Transaction_Type' i]",
+                                    "input[id*='Transaction_Type' i]",
+                                  ];
+                                  for (const s of sels) {
+                                    if (document.querySelector(s)) return true;
+                                  }
+                                  return false;
+                                }"""
+                            )
+                        )
+                        if has_txn_type:
+                            tx_frame = frame
+                            break
+                    except Exception:
+                        continue
+                if tx_frame is not None:
+                    scoped_roots = [tx_frame]
+                    try:
+                        note(f"Transaction field frame locked: url={(tx_frame.url or '')[:180]!r}, name={tx_frame.name!r}")
+                    except Exception:
+                        pass
+                else:
+                    # Keep focus locked to the first detected Payment Lines frame.
+                    scoped_roots = [payment_frames[0]]
+
+                # Transaction Amount may appear in a sibling frame; lock it independently.
+                amount_roots = scoped_roots
+                amt_frame = None
+                for frame in _ordered_frames(page):
+                    try:
+                        has_txn_amt = bool(
+                            frame.evaluate(
+                                """() => {
+                                  const sels = [
+                                    "input[name='Transaction_Amount']",
+                                    "input[id='Transaction_Amount']",
+                                    "input[id='1_s_2_1_Transaction_Amount']",
+                                    "input[name='1_s_2_1_Transaction_Amount']",
+                                    "input[title_id='1_s_2_1_Transaction_Amount']",
+                                    "input[title-id='1_s_2_1_Transaction_Amount']",
+                                    "input[title='1_s_2_1_Transaction_Amount']",
+                                    "input[aria-label*='Transaction Amount' i]",
+                                    "input[title*='Transaction Amount' i]",
+                                  ];
+                                  for (const s of sels) {
+                                    if (document.querySelector(s)) return true;
+                                  }
+                                  return false;
+                                }"""
+                            )
+                        )
+                        if has_txn_amt:
+                            amt_frame = frame
+                            break
+                    except Exception:
+                        continue
+                if amt_frame is not None:
+                    amount_roots = [amt_frame]
+                    try:
+                        note(f"Transaction amount frame locked: url={(amt_frame.url or '')[:180]!r}, name={amt_frame.name!r}")
+                    except Exception:
+                        pass
 
                 def _focus_locked_payment_frame(root) -> None:
                     """Re-focus current payment data frame before each write."""
@@ -3991,7 +4064,7 @@ def _add_customer_payment(
 
                 # First try direct typing into Transaction Type field.
                 type_ok = False
-                for root in scoped_roots:
+                for root in amount_roots:
                     _focus_locked_payment_frame(root)
                     for css in (
                         "input[name='Transaction_Type']",
@@ -4028,6 +4101,53 @@ def _add_customer_payment(
                             continue
                     if type_ok:
                         break
+
+                if not type_ok:
+                    # JS value-set fallback inside locked frame.
+                    for root in scoped_roots:
+                        try:
+                            wrote_js = bool(
+                                root.evaluate(
+                                    """() => {
+                                      const sels = [
+                                        "input[name='Transaction_Type']",
+                                        "input[name='Transaction_Type_New']",
+                                        "input[id='Transaction_Type']",
+                                        "input[title_id='Transaction_Type']",
+                                        "input[title-id='Transaction_Type']",
+                                        "input[name*='Transaction_Type' i]",
+                                        "input[id*='Transaction_Type' i]",
+                                      ];
+                                      const isVisible = (el) => {
+                                        if (!el) return false;
+                                        const st = window.getComputedStyle(el);
+                                        if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+                                        const r = el.getBoundingClientRect();
+                                        return r.width >= 2 && r.height >= 2;
+                                      };
+                                      let target = null;
+                                      for (const s of sels) {
+                                        const el = document.querySelector(s);
+                                        if (el && (isVisible(el) || !target)) target = el;
+                                        if (el && isVisible(el)) break;
+                                      }
+                                      if (!target) return false;
+                                      try { target.focus(); } catch (_) {}
+                                      target.value = "Payments";
+                                      target.dispatchEvent(new Event("input", { bubbles: true }));
+                                      target.dispatchEvent(new Event("change", { bubbles: true }));
+                                      try { target.blur(); } catch (_) {}
+                                      const got = String(target.value || "").trim().toLowerCase();
+                                      return got.includes("payment");
+                                    }"""
+                                )
+                            )
+                            if wrote_js:
+                                type_ok = True
+                                note("Transaction Type set via JS fallback: 'Payments'.")
+                                break
+                        except Exception:
+                            continue
 
                 if not type_ok:
                     # Strict fallback: target Payment Lines Transaction_Type field directly.
@@ -4115,6 +4235,53 @@ def _add_customer_payment(
                             continue
                     if amount_ok:
                         break
+                if not amount_ok:
+                    for root in amount_roots:
+                        try:
+                            wrote_amt_js = bool(
+                                root.evaluate(
+                                    """() => {
+                                      const sels = [
+                                        "input[name='Transaction_Amount']",
+                                        "input[id='Transaction_Amount']",
+                                        "input[id='1_s_2_1_Transaction_Amount']",
+                                        "input[name='1_s_2_1_Transaction_Amount']",
+                                        "input[title_id='1_s_2_1_Transaction_Amount']",
+                                        "input[title-id='1_s_2_1_Transaction_Amount']",
+                                        "input[title='1_s_2_1_Transaction_Amount']",
+                                        "input[aria-label*='Transaction Amount' i]",
+                                        "input[title*='Transaction Amount' i]",
+                                      ];
+                                      const isVisible = (el) => {
+                                        if (!el) return false;
+                                        const st = window.getComputedStyle(el);
+                                        if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+                                        const r = el.getBoundingClientRect();
+                                        return r.width >= 2 && r.height >= 2;
+                                      };
+                                      let target = null;
+                                      for (const s of sels) {
+                                        const el = document.querySelector(s);
+                                        if (el && (isVisible(el) || !target)) target = el;
+                                        if (el && isVisible(el)) break;
+                                      }
+                                      if (!target) return false;
+                                      try { target.focus(); } catch (_) {}
+                                      target.value = "120000";
+                                      target.dispatchEvent(new Event("input", { bubbles: true }));
+                                      target.dispatchEvent(new Event("change", { bubbles: true }));
+                                      try { target.blur(); } catch (_) {}
+                                      const got = String(target.value || "").replace(/,/g, "").trim();
+                                      return got.includes("120000");
+                                    }"""
+                                )
+                            )
+                            if wrote_amt_js:
+                                amount_ok = True
+                                note("Transaction Amount set via JS fallback: '120000'.")
+                                break
+                        except Exception:
+                            continue
                 note(
                     "Filled payment fields: "
                     f"Type=Payments(ok={type_ok!r}), Transaction Amount=120000(ok={amount_ok!r})."
