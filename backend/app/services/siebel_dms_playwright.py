@@ -4399,21 +4399,29 @@ def _create_order(
         return False, "Could not open Contacts dropdown (aria-label ui-id-159).", scraped
     _safe_page_wait(page, 500, log_label="after_open_contacts_dropdown")
 
-    # In this menu, "Vehicle Sales" can be a plain <li>/<span>/<a>; support all.
-    if not _click_any(
-        (
-            "li:has-text('Vehicle Sales')",
-            "li[role='menuitem']:has-text('Vehicle Sales')",
-            "div[role='menu']:has-text('Vehicle Sales') li:has-text('Vehicle Sales')",
-            "ul:has-text('Vehicle Sales') li:has-text('Vehicle Sales')",
-            "span:has-text('Vehicle Sales')",
-            "a[aria-label='Vehicle Sales']",
-            "a[title='Vehicle Sales']",
-            "a:has-text('Vehicle Sales')",
-            "xpath=//*[self::li or self::a or self::span][normalize-space()='Vehicle Sales']",
-        ),
-        timeout=min(action_timeout_ms, 3000),
-    ):
+    # IMPORTANT: click ONLY the dropdown menu item text exactly "Vehicle Sales".
+    # Avoid substring hits like "Vehicle Sales Invoices" on the top tabs.
+    _vehicle_sales_clicked = False
+    for root in _roots():
+        try:
+            # Prefer jQuery-ui menu rows (as shown in screenshot), exact text only.
+            menu_items = root.locator("ul li, ul a, ul span").filter(has_text=re.compile(r"^\s*Vehicle Sales\s*$", re.I))
+            k = menu_items.count()
+            for i in range(min(k, 8)):
+                m = menu_items.nth(i)
+                if not m.is_visible(timeout=400):
+                    continue
+                try:
+                    m.click(timeout=min(action_timeout_ms, 3000))
+                except Exception:
+                    m.click(timeout=min(action_timeout_ms, 3000), force=True)
+                _vehicle_sales_clicked = True
+                break
+            if _vehicle_sales_clicked:
+                break
+        except Exception:
+            continue
+    if not _vehicle_sales_clicked:
         return False, "Could not select Vehicle Sales from Contacts dropdown.", scraped
     _safe_page_wait(page, 900, log_label="after_vehicle_sales_click")
     note("Create Order: opened Vehicle Sales from first-level view bar.")
