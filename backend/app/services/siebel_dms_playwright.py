@@ -4364,10 +4364,11 @@ def _create_order(
         )
 
     # 1) Navigate via Find -> Vehicle Sales, using the same combobox pattern as Find->Vehicles.
-    import json as _jnav, time as _tnav
+    import json as _jnav, time as _tnav, os as _os
+    _dbg_log_path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "..", "..", "debug-f69c3a.log")
     def _navlog(msg, data, hyp=""):
         try:
-            open("debug-f69c3a.log", "a", encoding="utf-8").write(
+            open(_dbg_log_path, "a", encoding="utf-8").write(
                 _jnav.dumps({"sessionId":"f69c3a","runId":"nav","hypothesisId":hyp,
                               "location":"siebel_dms_playwright.py:nav","message":msg,
                               "data":data,"timestamp":int(_tnav.time()*1000)}) + "\n")
@@ -4471,7 +4472,7 @@ def _create_order(
     if not _vehicle_sales_find_selected:
         return False, "Could not navigate Find → Vehicle Sales.", scraped
     _safe_page_wait(page, 700, log_label="after_find_vehicle_sales_selected")
-    note("Create Order: selected Vehicle Sales from Find object type.")
+    note(f"Create Order: selected Vehicle Sales from Find object type. URL={page.url[:120]}")
 
     # Query by mobile in the current list/apply-enter.
     _mobile_query_ok = _fill_any(
@@ -4493,15 +4494,16 @@ def _create_order(
         except Exception:
             pass
         _safe_page_wait(page, 1000, log_label="after_vehicle_sales_mobile_search")
-        note(f"Create Order: searched Vehicle Sales by mobile={mobile!r}.")
+        note(f"Create Order: searched Vehicle Sales by mobile={mobile!r}. URL={page.url[:120]}")
     else:
         note("Create Order: mobile search field not found; continuing with fallback row handling.")
 
     def _dblclick_order_for_mobile(target_mobile: str) -> bool:
-        import json as _j, time as _t
+        import json as _j, time as _t, os as _os2
+        _dbl_log = _os2.path.join(_os2.path.dirname(_os2.path.abspath(__file__)), "..", "..", "..", "debug-f69c3a.log")
         def _dblog(msg, data, hyp=""):
             try:
-                open("debug-f69c3a.log", "a", encoding="utf-8").write(
+                open(_dbl_log, "a", encoding="utf-8").write(
                     _j.dumps({"sessionId":"f69c3a","runId":"dblclick","hypothesisId":hyp,
                                "location":"siebel_dms_playwright.py:_dblclick","message":msg,
                                "data":data,"timestamp":int(_t.time()*1000)}) + "\n")
@@ -4589,7 +4591,7 @@ def _create_order(
     _existing_order_opened = False
     if _direct_open_by_mobile:
         _existing_order_opened = _dblclick_order_for_mobile(mobile)
-        note(f"Create Order: direct branch attempted double-click on Order# -> {_existing_order_opened!r}.")
+        note(f"Create Order: direct branch attempted double-click on Order# -> {_existing_order_opened!r}. URL={page.url[:120]}")
 
     if not _direct_open_by_mobile:
         # 2) Click + (Sales Orders New:List)
@@ -4747,6 +4749,7 @@ def _create_order(
     ):
         return False, "Could not click New on Vehicle Sales page.", scraped
     _safe_page_wait(page, 800, log_label="after_vehicle_sales_new")
+    note(f"Create Order: after New click. URL={page.url[:120]}")
 
     if not _fill_any(
         (
