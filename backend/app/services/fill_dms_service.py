@@ -850,6 +850,34 @@ def _load_customer_gender_from_master(customer_id: int | None) -> str:
         return ""
 
 
+def _load_customer_dob_from_master(customer_id: int | None) -> str:
+    """DOB source for add-enquiry age derivation (customer_master.date_of_birth)."""
+    if customer_id is None:
+        return ""
+    try:
+        conn = get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT COALESCE(TRIM(date_of_birth::text), '') AS dob_val FROM customer_master WHERE customer_id = %s",
+                    (customer_id,),
+                )
+                row = cur.fetchone()
+                if not row:
+                    return ""
+                if isinstance(row, dict):
+                    return _clean_text(row.get("dob_val"))
+                try:
+                    return _clean_text(row[0])
+                except Exception:
+                    return ""
+        finally:
+            conn.close()
+    except Exception as exc:
+        logger.warning("fill_dms_service: customer_master DOB lookup failed customer_id=%s: %s", customer_id, exc)
+        return ""
+
+
 def _derive_gender_from_care_of_text(care_of_text: str) -> str:
     """
     Fallback only when DB gender is missing.
@@ -944,6 +972,7 @@ def _build_dms_fill_values(customer_id: int | None, vehicle_id: int | None, subf
         "finance_required": finance_required,
         "dms_contact_path": contact_path,
         "gender": gender_effective,
+        "date_of_birth": _load_customer_dob_from_master(cid_for_aadhar),
         "aadhar_id": _load_customer_aadhar_last4(cid_for_aadhar),
         "customer_export": {
             "name": full_name,

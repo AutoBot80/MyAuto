@@ -1,6 +1,6 @@
 Playwright DMS — execution log (this run only; UTC timestamps)
 
-started_utc=2026-03-24T07:04:37.003239+00:00
+started_utc=2026-03-24T07:13:41.906559+00:00
 skip_contact_find=False
 dms_contact_path='found'
 mobile_phone='8952897358'
@@ -22,38 +22,33 @@ url_vehicle_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/e
 --- trace ---
 Legend: [STEP]/[NOTE]/[MILESTONE] = operator narrative; [FORM] = siebel_step + Siebel form/screen + action + fields/values being applied on that form.
 
-2026-03-24T07:04:37.003427+00:00 [STEP] Started Hero Connect / Siebel DMS automation (linear SOP).
-2026-03-24T07:04:37.003463+00:00 [STEP] Video SOP (Find Contact Enquiry): Find → Contact → mobile → Go → open All Enquiries; then stop.
-2026-03-24T07:04:37.003506+00:00 [FORM] siebel_step=v1_find_contact | form=Global Find → Contact (Mobile Phone) + Go | action=goto_contact_find_URL_then_prepare_Find_Contact_fill_mobile_FindGo | contact_url_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+Contact+Opportunity+Buyer/CoBuyer+View+(SDW)&SWERF=1&SWEHo=&SWEBU=1' | mobile_phone='8952897358'
-2026-03-24T07:04:43.838088+00:00 [STEP] Video SOP: Find customer by mobile (Contact view).
-2026-03-24T07:04:47.340114+00:00 [NOTE] Find → Contact: object type selected so the mobile field is the Contact search field.
-2026-03-24T07:04:48.061897+00:00 [NOTE] Filled mobile and clicked Find inside the Contact applet (scoped; includes first-field right-popup fallback when labels are non-standard).
-2026-03-24T07:04:50.108169+00:00 [NOTE] DECISION: contact_table_match_after_find=False
-2026-03-24T07:04:50.108304+00:00 [NOTE] No contact rows after Find/Go — Add Enquiry branch: vehicle chassis/VIN + engine, Enquiry tab, Opportunity Form:New, DB fields, Ctrl+S.
-2026-03-24T07:04:50.108472+00:00 [FORM] siebel_step=add_enquiry_branch | form=No contact table match → vehicle find + Opportunities | action=chassis_engine_Enter_then_Enquiry_tab_Opportunities_New_fields_Ctrl_S | aadhar_id='8133' | engine_partial='04401' | finance_required='Y' | financier_name='HDFC' | frame_partial='40395'
-2026-03-24T07:05:00.441970+00:00 [NOTE] Add Enquiry: Find → Vehicles object type selected (header / Find menu).
-2026-03-24T07:05:05.106084+00:00 [NOTE] Add Enquiry: Vehicles Find fly-in fill failed on first pass — retrying Find→Vehicles.
-2026-03-24T07:05:17.909318+00:00 [NOTE] Add Enquiry: used generic input fill + Enter for vehicle query.
-2026-03-24T07:05:20.729570+00:00 [NOTE] Add Enquiry: clicked Find/Go after vehicle query.
-2026-03-24T07:05:23.789226+00:00 [NOTE] Add Enquiry: activated Siebel Find tab before VIN drill-down (if present).
-2026-03-24T07:05:25.606617+00:00 [NOTE] Add Enquiry: clicked VIN in left Search Results to load vehicle detail.
-2026-03-24T07:05:27.496283+00:00 [NOTE] Add Enquiry: vehicle hit present (full_chassis or list key).
-2026-03-24T07:05:27.496358+00:00 [NOTE] Add Enquiry: scraped full VIN scope — full_chassis='MBLHAW472T5C40395', full_engine='HA11F6T5C04401'.
-2026-03-24T07:05:27.496416+00:00 [NOTE] Add Enquiry: scraped from vehicle list — model='SPLENDOR +', year_of_mfg='2026', color='BLA'.
-2026-03-24T07:05:27.496491+00:00 [FORM] siebel_step=add_enquiry_vehicle_scrape | form=Auto Vehicle List — results grid | action=read_model_year_color_before_Enquiry_Opportunity | color='BLA' | full_chassis='MBLHAW472T5C40395' | full_engine='HA11F6T5C04401' | model='SPLENDOR +' | year_of_mfg='2026'
-2026-03-24T07:05:28.202552+00:00 [NOTE] Add Enquiry: Enquiry tab clicked.
-2026-03-24T07:05:31.797651+00:00 [NOTE] Add Enquiry: clicked Opportunity Form:New.
-2026-03-24T07:06:19.129812+00:00 [NOTE] Add Enquiry: Financier fields skipped by design (tenant control).
-2026-03-24T07:06:19.191632+00:00 [NOTE] Add Enquiry: pressed Ctrl+S to save enquiry.
-2026-03-24T07:06:20.834690+00:00 [NOTE] Add Enquiry: saved Enquiry#='TXN2-1JTLNQBX'.
-2026-03-24T07:06:20.834866+00:00 [FORM] siebel_step=add_enquiry_saved | form=Opportunity Form | action=post_save_scrape_enquiry_number | enquiry_number='TXN2-1JTLNQBX'
-2026-03-24T07:06:20.834953+00:00 [MILESTONE] Add enquiry saved
-2026-03-24T07:06:20.835022+00:00 [NOTE] Add Enquiry saved. Returning to normal Find→Contact→mobile flow to continue the standard post-find route.
-2026-03-24T07:06:20.835131+00:00 [FORM] siebel_step=v1b_refind_after_add_enquiry | form=Global Find → Contact (Mobile Phone) + Go | action=rerun_find_mobile_after_add_enquiry_then_continue_normal_route | contact_url_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+Contact+Opportunity+Buyer/CoBuyer+View+(SDW)&SWERF=1&SWEHo=&SWEBU=1' | mobile_phone='8952897358'
-2026-03-24T07:06:32.642566+00:00 [STEP] Post Add Enquiry: re-find customer by mobile (Contact view).
-2026-03-24T07:06:41.348233+00:00 [NOTE] Find → Contact: object type selected so the mobile field is the Contact search field.
-2026-03-24T07:06:42.052214+00:00 [NOTE] Filled mobile and clicked Find inside the Contact applet (scoped; includes first-field right-popup fallback when labels are non-standard).
-2026-03-24T07:06:44.096918+00:00 [NOTE] DECISION: contact_table_match_after_add_enquiry_refind=False
-2026-03-24T07:06:44.097108+00:00 [STEP] Stopped: Add Enquiry saved but customer still not visible after re-find.
+2026-03-24T07:13:41.906782+00:00 [STEP] Started Hero Connect / Siebel DMS automation (linear SOP).
+2026-03-24T07:13:41.906825+00:00 [STEP] Video SOP (Find Contact Enquiry): Find → Contact → mobile → Go → open All Enquiries; then stop.
+2026-03-24T07:13:41.906874+00:00 [FORM] siebel_step=v1_find_contact | form=Global Find → Contact (Mobile Phone) + Go | action=goto_contact_find_URL_then_prepare_Find_Contact_fill_mobile_FindGo | contact_url_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+Contact+Opportunity+Buyer/CoBuyer+View+(SDW)&SWERF=1&SWEHo=&SWEBU=1' | mobile_phone='8952897358'
+2026-03-24T07:13:47.660365+00:00 [STEP] Video SOP: Find customer by mobile (Contact view).
+2026-03-24T07:13:51.764234+00:00 [NOTE] Find → Contact: object type selected so the mobile field is the Contact search field.
+2026-03-24T07:13:52.478345+00:00 [NOTE] Filled mobile and clicked Find inside the Contact applet (scoped; includes first-field right-popup fallback when labels are non-standard).
+2026-03-24T07:13:54.528458+00:00 [NOTE] DECISION: contact_table_match_after_find=False
+2026-03-24T07:13:54.528615+00:00 [NOTE] No contact rows after Find/Go — Add Enquiry branch: vehicle chassis/VIN + engine, Enquiry tab, Opportunity Form:New, DB fields, Ctrl+S.
+2026-03-24T07:13:54.528778+00:00 [FORM] siebel_step=add_enquiry_branch | form=No contact table match → vehicle find + Opportunities | action=chassis_engine_Enter_then_Enquiry_tab_Opportunities_New_fields_Ctrl_S | aadhar_id='8133' | engine_partial='04401' | finance_required='Y' | financier_name='HDFC' | frame_partial='40395'
+2026-03-24T07:14:03.180239+00:00 [NOTE] Add Enquiry: Find → Vehicles object type selected (header / Find menu).
+2026-03-24T07:14:07.756038+00:00 [NOTE] Add Enquiry: Vehicles Find fly-in fill failed on first pass — retrying Find→Vehicles.
+2026-03-24T07:14:20.288110+00:00 [NOTE] Add Enquiry: used generic input fill + Enter for vehicle query.
+2026-03-24T07:14:23.323662+00:00 [NOTE] Add Enquiry: clicked Find/Go after vehicle query.
+2026-03-24T07:14:26.324000+00:00 [NOTE] Add Enquiry: activated Siebel Find tab before VIN drill-down (if present).
+2026-03-24T07:14:28.379233+00:00 [NOTE] Add Enquiry: clicked VIN in left Search Results to load vehicle detail.
+2026-03-24T07:14:30.286835+00:00 [NOTE] Add Enquiry: vehicle hit present (full_chassis or list key).
+2026-03-24T07:14:30.287048+00:00 [NOTE] Add Enquiry: scraped full VIN scope — full_chassis='MBLHAW472T5C40395', full_engine='HA11F6T5C04401'.
+2026-03-24T07:14:30.287322+00:00 [NOTE] Add Enquiry: scraped from vehicle list — model='SPLENDOR +', year_of_mfg='2026', color='BLA'.
+2026-03-24T07:14:30.287684+00:00 [FORM] siebel_step=add_enquiry_vehicle_scrape | form=Auto Vehicle List — results grid | action=read_model_year_color_before_Enquiry_Opportunity | color='BLA' | full_chassis='MBLHAW472T5C40395' | full_engine='HA11F6T5C04401' | model='SPLENDOR +' | year_of_mfg='2026'
+2026-03-24T07:14:30.969129+00:00 [NOTE] Add Enquiry: Enquiry tab clicked.
+2026-03-24T07:14:34.213710+00:00 [NOTE] Add Enquiry: clicked Opportunity Form:New.
+2026-03-24T07:15:23.800082+00:00 [NOTE] Add Enquiry: Financier fields skipped by design (tenant control).
+2026-03-24T07:15:23.895004+00:00 [NOTE] Add Enquiry: pressed Ctrl+S to save enquiry.
+2026-03-24T07:15:25.520869+00:00 [NOTE] Add Enquiry: saved Enquiry#='TXN2-1JTL5ZUD'.
+2026-03-24T07:15:25.521036+00:00 [FORM] siebel_step=add_enquiry_saved | form=Opportunity Form | action=post_save_scrape_enquiry_number | enquiry_number='TXN2-1JTL5ZUD'
+2026-03-24T07:15:25.521097+00:00 [MILESTONE] Add enquiry saved
+2026-03-24T07:15:25.521141+00:00 [STEP] Video SOP paused after Add Enquiry save (with Enquiry# scrape). No re-find/navigation is executed.
+2026-03-24T07:15:25.521180+00:00 [NOTE] Add Enquiry branch completed; stopping immediately after save for debug.
 
-2026-03-24T07:06:44.097264+00:00 [END] error=Siebel: Add Enquiry was saved, but contact search still returned no table row after re-find.
+2026-03-24T07:15:25.521251+00:00 [END] error=None

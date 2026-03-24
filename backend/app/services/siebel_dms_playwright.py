@@ -5309,6 +5309,151 @@ def _add_enquiry_opportunity(
             pass
         return ""
 
+    def _derive_age_from_dob_text(dob_raw: str) -> str:
+        s = (dob_raw or "").strip()
+        if not s:
+            return ""
+        for fmt in ("%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d", "%d/%m/%y", "%d-%m-%y"):
+            try:
+                dob_dt = datetime.strptime(s, fmt).date()
+                t = date.today()
+                return str(max(0, t.year - dob_dt.year - ((t.month, t.day) < (dob_dt.month, dob_dt.day))))
+            except Exception:
+                continue
+        m = re.search(r"\b(19\d{2}|20\d{2})\b", s)
+        if m:
+            try:
+                return str(max(0, date.today().year - int(m.group(1))))
+            except Exception:
+                return ""
+        return ""
+
+    def _normalize_gender_for_form(raw: str) -> str:
+        s = (raw or "").strip().lower()
+        if s in ("m", "male"):
+            return "Male"
+        if s in ("f", "female"):
+            return "Female"
+        if s in ("o", "other"):
+            return "Other"
+        return (raw or "").strip()
+
+    def _address_line1_between_first_second_comma(raw: str) -> str:
+        s = (raw or "").strip()
+        if not s:
+            return ""
+        parts = [p.strip() for p in s.split(",")]
+        if len(parts) >= 3:
+            return parts[1]
+        if len(parts) == 2:
+            return parts[1]
+        return s
+
+    def _city_pick_any_then_ok(frame: Frame) -> bool:
+        search_btn = None
+        for css in (
+            '[aria-label*="City/Town/Village" i][aria-label*="Search" i]',
+            '[title*="City/Town/Village" i][title*="Search" i]',
+            '[aria-label*="City/Town/Village" i][aria-label*="Pick" i]',
+            '[title*="City/Town/Village" i][title*="Pick" i]',
+            'button[aria-label*="City" i][aria-label*="Search" i]',
+            'a[aria-label*="City" i][aria-label*="Search" i]',
+            'button[title*="City" i][title*="Search" i]',
+            'a[title*="City" i][title*="Search" i]',
+        ):
+            try:
+                loc = frame.locator(css).first
+                if loc.count() > 0 and loc.is_visible(timeout=500):
+                    search_btn = loc
+                    break
+            except Exception:
+                continue
+        if search_btn is None:
+            return True
+        try:
+            search_btn.click(timeout=action_timeout_ms)
+        except Exception:
+            try:
+                search_btn.click(timeout=action_timeout_ms, force=True)
+            except Exception:
+                return False
+        _safe_page_wait(page, 700, log_label="city_pick_open")
+        picked = False
+        for root in (frame, page):
+            for css in ("table tbody tr td a", "table tbody tr td", '[role="option"]', '[role="row"] [role="gridcell"]'):
+                try:
+                    loc = root.locator(css).first
+                    if loc.count() > 0 and loc.is_visible(timeout=650):
+                        try:
+                            loc.click(timeout=action_timeout_ms)
+                        except Exception:
+                            loc.click(timeout=action_timeout_ms, force=True)
+                        picked = True
+                        break
+                except Exception:
+                    continue
+            if picked:
+                break
+        if not picked:
+            return False
+        for root in (frame, page):
+            for css in (
+                'button[aria-label="OK" i]',
+                'a[aria-label="OK" i]',
+                'button[title="OK" i]',
+                'a[title="OK" i]',
+                'input[type="button"][value="OK" i]',
+                'input[type="submit"][value="OK" i]',
+            ):
+                try:
+                    ok = root.locator(css).first
+                    if ok.count() > 0 and ok.is_visible(timeout=700):
+                        try:
+                            ok.click(timeout=action_timeout_ms)
+                        except Exception:
+                            ok.click(timeout=action_timeout_ms, force=True)
+                        return True
+                except Exception:
+                    continue
+        return True
+
+    def _select_variant_first_value(frame: Frame) -> bool:
+        for pat in (re.compile(r"^\s*Variant\s*$", re.I), re.compile(r"\bVariant\b", re.I)):
+            try:
+                fld = frame.get_by_label(pat).first
+                if fld.count() <= 0 or not fld.is_visible(timeout=700):
+                    continue
+                try:
+                    fld.click(timeout=action_timeout_ms)
+                except Exception:
+                    fld.click(timeout=action_timeout_ms, force=True)
+                try:
+                    opts = fld.evaluate(
+                        """el => (el.tagName === 'SELECT') ? [...el.options].map(o => ({v:o.value,t:(o.textContent||'').trim()})) : []"""
+                    )
+                    if opts:
+                        first_non_blank = None
+                        for o in opts:
+                            if str(o.get("t") or "").strip():
+                                first_non_blank = str(o.get("v") or "")
+                                break
+                        if first_non_blank is not None:
+                            fld.select_option(value=first_non_blank, timeout=action_timeout_ms)
+                            return True
+                except Exception:
+                    pass
+                try:
+                    fld.press("ArrowDown", timeout=1200)
+                    fld.press("Enter", timeout=1200)
+                    return True
+                except Exception:
+                    continue
+            except Exception:
+                continue
+        return False
+
+    pre_save_enquiry_no = _scrape_enquiry_number_from_frame(enq_frame)
+
     def try_field(labels: tuple[str, ...], value: str, *, required: bool) -> bool:
         sv = (value or "").strip()
         if not required and not sv:
@@ -5348,10 +5493,12 @@ def _add_enquiry_opportunity(
     district = (dms_values.get("district") or "").strip()
     tehsil = (dms_values.get("tehsil") or "").strip()
     city = (dms_values.get("city") or "").strip()
-    addr = (dms_values.get("address_line_1") or "").strip()
+    addr = _address_line1_between_first_second_comma((dms_values.get("address_line_1") or "").strip())
     pin = (dms_values.get("pin_code") or "").strip()
     age = (dms_values.get("age") or "").strip()
-    gender = (dms_values.get("gender") or "").strip()
+    if not age:
+        age = _derive_age_from_dob_text((dms_values.get("date_of_birth") or "").strip())
+    gender = _normalize_gender_for_form((dms_values.get("gender") or "").strip())
     model_i = (scraped_v.get("model") or "").strip()
     color_i = (scraped_v.get("color") or "").strip()
     today_str = date.today().strftime("%d/%m/%Y")
@@ -5361,7 +5508,11 @@ def _add_enquiry_opportunity(
     try_field(("Contact Last Name", "Last Name"), last, required=False)
     if not try_field(("Mobile Phone", "Mobile Phone #", "Cellular Phone"), mobile, required=True):
         return False, "Could not set Mobile Phone."
-    try_field(("Landline", "Land Line", "Alternate Phone", "Alternate Number"), landline, required=False)
+    landline_use = landline or mobile
+    if not try_field(("Landline", "Land Line", "Alternate Phone", "Alternate Number"), landline_use, required=True):
+        return False, "Could not set Landline."
+    if not try_field(("Email", "Email Address", "E-mail"), "NA", required=True):
+        return False, "Could not set Email."
 
     if not try_field(("UIN Type",), "Aadhaar Card", required=True):
         if not try_field_any(("UIN Type",), ("Aadhaar",)):
@@ -5371,16 +5522,25 @@ def _add_enquiry_opportunity(
 
     if not try_field(("State",), state, required=True):
         return False, "Could not set State."
-    try_field(("District",), district, required=False)
-    try_field(("Tehsil",), tehsil, required=False)
-    try_field(("City",), city, required=False)
+    dist_use = district or city
+    tehsil_use = tehsil or city
+    if not try_field(("District",), dist_use, required=True):
+        return False, "Could not set District."
+    if not try_field(("Tehsil", "Tehsil/Taluka", "Taluka"), tehsil_use, required=True):
+        return False, "Could not set Tehsil/Taluka."
+    if not try_field(("City", "City/Town/Village"), city, required=True):
+        return False, "Could not set City/Town/Village."
+    if not _city_pick_any_then_ok(enq_frame):
+        return False, "Could not pick City/Town/Village from search sub form."
     if not try_field(("Address Line 1", "Address Line1", "Address"), addr, required=True):
         return False, "Could not set Address Line 1."
     if not try_field(("Pin Code", "Pin code", "PIN Code", "Postal Code"), pin, required=True):
         return False, "Could not set Pin Code."
 
-    try_field(("Age",), age, required=False)
-    try_field(("Gender",), gender, required=False)
+    if not try_field(("Age",), age, required=True):
+        return False, "Could not set Age."
+    if not try_field(("Gender",), gender, required=True):
+        return False, "Could not set Gender."
 
     if not try_field(
         ("Model Interested In", "Model Interested in", "Interested Model", "Model"),
@@ -5395,6 +5555,8 @@ def _add_enquiry_opportunity(
         return False, "Could not set Finance Required."
     if not try_field(("Booking Order Type",), "Normal Booking", required=True):
         return False, "Could not set Booking Order Type."
+    if not _select_variant_first_value(enq_frame):
+        return False, "Could not select first Variant dropdown value."
 
     try_field_any(("Enquiry Source",), ("Walk-In", "Walk In", "Walkin"))
     if not try_field(("Point of Contact",), "Customer Walk-in", required=True):
@@ -5422,6 +5584,12 @@ def _add_enquiry_opportunity(
     note("Add Enquiry: pressed Ctrl+S to save enquiry.")
     _safe_page_wait(page, 1500, log_label="after_add_enquiry_save")
     enquiry_no = _scrape_enquiry_number_from_frame(enq_frame)
+    if pre_save_enquiry_no and enquiry_no and enquiry_no == pre_save_enquiry_no:
+        note(
+            "Add Enquiry: Enquiry# did not change after save; likely not persisted "
+            f"(before={pre_save_enquiry_no!r}, after={enquiry_no!r})."
+        )
+        return False, "Enquiry# did not change after Ctrl+S (save not confirmed)."
     if enquiry_no:
         note(f"Add Enquiry: saved Enquiry#={enquiry_no!r}.")
         if callable(form_trace):
@@ -5841,12 +6009,42 @@ def Playwright_Hero_DMS_fill(
                     )
                     return out
                 ms_done("Add enquiry saved")
-                step(
-                    "Video SOP paused after Add Enquiry save (with Enquiry# scrape). "
-                    "No re-find/navigation is executed."
+                note("Add Enquiry saved; resuming normal Find→Contact mobile flow.")
+                form_trace(
+                    "v1b_refind_after_add_enquiry",
+                    "Global Find → Contact (Mobile Phone) + Go",
+                    "rerun_find_mobile_after_add_enquiry_then_continue_normal_route",
+                    contact_url_truncated=contact_url[:200],
+                    mobile_phone=mobile,
                 )
-                note("Add Enquiry branch completed; stopping immediately after save for debug.")
-                return out
+                ok_refind = _contact_view_find_by_mobile(
+                    page,
+                    contact_url=contact_url,
+                    mobile=mobile,
+                    nav_timeout_ms=nav_timeout_ms,
+                    action_timeout_ms=action_timeout_ms,
+                    content_frame_selector=content_frame_selector,
+                    mobile_aria_hints=mobile_aria_hints,
+                    note=note,
+                    step=step,
+                    stage_msg="Post Add Enquiry: re-find customer by mobile (Contact view).",
+                )
+                if not ok_refind:
+                    step("Stopped: Add Enquiry saved but post-save re-find by mobile failed.")
+                    out["error"] = (
+                        "Siebel: Add Enquiry was saved, but the follow-up Find→Contact mobile query "
+                        "did not complete."
+                    )
+                    return out
+                contact_matched = _siebel_ui_suggests_contact_match(page, mobile)
+                note(f"DECISION: contact_table_match_after_add_enquiry_refind={contact_matched!r}")
+                if not contact_matched:
+                    step("Stopped: Add Enquiry saved but customer still not visible after re-find.")
+                    out["error"] = (
+                        "Siebel: Add Enquiry was saved, but contact search still returned no table row "
+                        "after re-find."
+                    )
+                    return out
             form_trace(
                 "v2_drill_and_nav",
                 "Search Results + Contacts detail",
