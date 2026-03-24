@@ -4167,108 +4167,54 @@ def _add_customer_payment(
                             pass
                     return False
 
-                # Wait for new row to render and focus to land on Transaction Type.
-                _safe_page_wait(page, 1000, log_label="wait_for_new_row_focus")
+                # Wait for new row to fully render before any keyboard input.
+                # No frame.evaluate() here — calling evaluate() across frames disrupts
+                # Siebel's inline-edit focus and makes tab counts unpredictable.
+                _safe_page_wait(page, 1500, log_label="wait_for_new_row_render")
 
-                # Check which element has focus after + click.
-                _focused_info = None
-                for _dframe in _ordered_frames(page):
-                    try:
-                        _focused_info = _dframe.evaluate("""() => {
-                          const el = document.activeElement;
-                          if (!el) return null;
-                          return {
-                            tag: el.tagName, name: el.name||'',
-                            aria: el.getAttribute('aria-label')||'',
-                            id: el.id||'', value: el.value||''
-                          };
-                        }""")
-                        if _focused_info and _focused_info.get('tag') not in ('BODY', 'HTML', None):
-                            note(f"Payment: focused element after + = {_focused_info!r}")
-                            # #region agent log
-                            try:
-                                import json as _json, time as _time
-                                _dbg = {"sessionId": "f69c3a", "runId": "keyboard-approach", "hypothesisId": "A", "location": "siebel_dms_playwright.py:focus_check", "message": "focused element after + click", "data": _focused_info, "timestamp": int(_time.time() * 1000)}
-                                open("debug-f69c3a.log", "a", encoding="utf-8").write(_json.dumps(_dbg) + "\n")
-                            except Exception:
-                                pass
-                            # #endregion
-                            break
-                    except Exception:
-                        continue
-
-                # Keyboard-driven fill: Siebel puts focus on Transaction Type after +.
-                # Type Transaction Type, then Tab N times to reach Transaction Amount, type amount.
+                # Pure keyboard fill — no Enter, no frame.evaluate() between keystrokes.
+                # Enter auto-advances focus in Siebel dropdowns (same as Tab), which
+                # shifts all subsequent tab counts. Tab-only keeps counts stable.
+                #
+                # Confirmed sequence (5 total tabs from Transaction_Type starting position):
+                #   type "Payments" → Tab×1 → Payment Mode
+                #   type "Cash"     → Tab×4 → Transaction Amount  (Tab×1 confirms Cash + moves,
+                #                                                   Tab×2-4 advance to Amount)
+                #   type "120000"   → Tab×1 → commit
                 type_ok = False
                 amount_ok = False
 
                 try:
-                    # Type "Payments" into whatever has focus (Siebel routes keys to Transaction Type cell).
+                    # Transaction Type
                     page.keyboard.type("Payments", delay=50)
-                    _safe_page_wait(page, 400, log_label="after_type_transaction_type")
-                    # Confirm the autocomplete dropdown selection — without this the dropdown
-                    # stays open and keeps stealing focus indefinitely.
-                    page.keyboard.press("Enter")
-                    _safe_page_wait(page, 400, log_label="after_enter_confirm_type")
-                    note("Payment keyboard: typed 'Payments' + Enter to confirm Transaction Type dropdown.")
+                    _safe_page_wait(page, 300, log_label="after_type_transaction_type")
+                    note("Payment keyboard: typed 'Payments' into Transaction Type.")
                     type_ok = True
 
-                    # Tab once from Transaction Type to Payment Mode.
+                    # Tab ×1 → Payment Mode
                     page.keyboard.press("Tab")
                     _safe_page_wait(page, 300, log_label="tab_to_payment_mode")
 
-                    # Fill Payment Mode = Cash then confirm with Tab (not Enter — Enter
-                    # auto-advances in Siebel dropdowns and would shift tab position).
+                    # Payment Mode
                     page.keyboard.type("Cash", delay=50)
-                    _safe_page_wait(page, 400, log_label="after_type_payment_mode")
+                    _safe_page_wait(page, 300, log_label="after_type_payment_mode")
                     note("Payment keyboard: typed 'Cash' into Payment Mode.")
 
-                    # Now directly click Transaction_Amount by its confirmed id.
-                    # This avoids all tab-count drift caused by focus instability.
-                    # id='1_Transaction_Amount' confirmed from run at 11:30.
-                    _amt_frame = (amount_roots or scoped_roots)[0]
-                    _amt_loc = None
-                    for _acss in (
-                        "input[id='1_Transaction_Amount']",
-                        "input[name='Transaction_Amount']",
-                        "input[id*='Transaction_Amount']",
-                    ):
-                        try:
-                            _candidate = _amt_frame.locator(_acss).first
-                            if _candidate.count() > 0 and _candidate.is_visible(timeout=800):
-                                _amt_loc = _candidate
-                                note(f"Payment: found Transaction_Amount via {_acss!r}.")
-                                break
-                        except Exception:
-                            continue
+                    # Tab ×4 → Transaction Amount
+                    # (Tab×1 confirms Cash and moves, Tab×2-4 advance through fields)
+                    for _ti in range(4):
+                        page.keyboard.press("Tab")
+                        _safe_page_wait(page, 200, log_label=f"tab_to_amount_{_ti+1}")
 
-                    if _amt_loc is None:
-                        # Fallback: search all frames
-                        for _af in _ordered_frames(page):
-                            for _acss in ("input[id='1_Transaction_Amount']", "input[name='Transaction_Amount']"):
-                                try:
-                                    _c = _af.locator(_acss).first
-                                    if _c.count() > 0 and _c.is_visible(timeout=500):
-                                        _amt_loc = _c
-                                        note(f"Payment: found Transaction_Amount in fallback frame via {_acss!r}.")
-                                        break
-                                except Exception:
-                                    continue
-                            if _amt_loc:
-                                break
+                    # Transaction Amount
+                    page.keyboard.type("120000", delay=50)
+                    _safe_page_wait(page, 300, log_label="after_type_amount")
+                    note("Payment keyboard: typed '120000' into Transaction Amount.")
+                    amount_ok = True
 
-                    if _amt_loc:
-                        _amt_loc.click(timeout=2000)
-                        _safe_page_wait(page, 200, log_label="after_click_amount")
-                        _amt_loc.fill("120000")
-                        _safe_page_wait(page, 300, log_label="after_fill_amount")
-                        _amt_loc.press("Tab")
-                        _safe_page_wait(page, 300, log_label="after_tab_commit_amount")
-                        note("Payment: filled Transaction_Amount = 120000 via direct locator.")
-                        amount_ok = True
-                    else:
-                        note("Payment: Transaction_Amount locator not found; amount not filled.")
-                        amount_ok = False
+                    # Tab ×1 to commit amount before Save
+                    page.keyboard.press("Tab")
+                    _safe_page_wait(page, 300, log_label="after_tab_commit_amount")
 
                 except Exception as _kb_ex:
                     note(f"Payment keyboard fill failed: {_kb_ex!s:.120}")
