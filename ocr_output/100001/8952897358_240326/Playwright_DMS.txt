@@ -1,6 +1,6 @@
 Playwright DMS — execution log (this run only; UTC timestamps)
 
-started_utc=2026-03-24T11:29:41.018697+00:00
+started_utc=2026-03-24T11:42:14.160798+00:00
 skip_contact_find=False
 dms_contact_path='found'
 mobile_phone='8952897358'
@@ -22,37 +22,39 @@ url_vehicle_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/e
 --- trace ---
 Legend: [STEP]/[NOTE]/[MILESTONE] = operator narrative; [FORM] = siebel_step + Siebel form/screen + action + fields/values being applied on that form.
 
-2026-03-24T11:29:41.019037+00:00 [STEP] Started Hero Connect / Siebel DMS automation (linear SOP).
-2026-03-24T11:29:41.019118+00:00 [STEP] Video SOP (Find Contact Enquiry): Find → Contact → mobile → Go → open All Enquiries; then stop.
-2026-03-24T11:29:41.019217+00:00 [FORM] siebel_step=v1_find_contact | form=Global Find → Contact (Mobile Phone) + Go | action=goto_contact_find_URL_then_prepare_Find_Contact_fill_mobile_FindGo | contact_url_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+Contact+Opportunity+Buyer/CoBuyer+View+(SDW)&SWERF=1&SWEHo=&SWEBU=1' | mobile_phone='8952897358'
-2026-03-24T11:29:46.737437+00:00 [STEP] Video SOP: Find customer by mobile (Contact view).
-2026-03-24T11:29:52.171920+00:00 [NOTE] Find → Contact: object type selected so the mobile field is the Contact search field.
-2026-03-24T11:29:52.901324+00:00 [NOTE] Filled mobile and clicked Find inside the Contact applet (scoped; includes first-field right-popup fallback when labels are non-standard).
-2026-03-24T11:29:54.938820+00:00 [NOTE] DECISION: contact_table_match_after_find=True
-2026-03-24T11:29:54.939018+00:00 [FORM] siebel_step=v2_drill_and_nav | form=Search Results + Contacts detail | action=Siebel_Find_tab_optional_then_link_hit_then_click_first_name_then_fill_Relations_Name_only | care_of='S/O Madan Lal' | first_name='Ashok' | mobile_phone='8952897358'
-2026-03-24T11:29:57.560021+00:00 [NOTE] Activated Siebel Find tab in search results (video SOP).
-2026-03-24T11:29:58.620772+00:00 [NOTE] Opened contact from search hit hyperlink (video SOP).
-2026-03-24T11:30:04.431773+00:00 [NOTE] Relation's Name filled; stopping on current field as requested.
-2026-03-24T11:30:04.431973+00:00 [FORM] siebel_step=v3_add_customer_payment | form=Payments tab (current frame) | action=click_Payments_tab_then_click_plus_icon
-2026-03-24T11:30:04.701215+00:00 [NOTE] Payment debug: ordered frames count=1.
-2026-03-24T11:30:04.733160+00:00 [NOTE] Payment debug: root candidates prepared (action_roots=2, total_candidates=2).
-2026-03-24T11:30:04.958769+00:00 [NOTE] Clicked '+' icon on Payments tab.
-2026-03-24T11:30:05.477352+00:00 [NOTE] Payment sequence: '+' -> Transaction Amount -> Transaction Type -> Payment Lines Save icon.
-2026-03-24T11:30:05.498661+00:00 [NOTE] Payment lines scoped frame not detected by strict markers; trying relaxed visible-input scan.
-2026-03-24T11:30:05.517943+00:00 [NOTE] Payment lines relaxed frame lock: url='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=HHML+LS+CIM+Contact+Site+Payments+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Contact+Form+Applet&SW', name=''
-2026-03-24T11:30:05.537554+00:00 [NOTE] Payment debug: transaction roots count=1.
-2026-03-24T11:30:05.557468+00:00 [NOTE] Transaction amount frame locked: url='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=HHML+LS+CIM+Contact+Site+Payments+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Contact+Form+Applet&SW', name=''
-2026-03-24T11:30:05.557803+00:00 [NOTE] Payment debug: amount roots count=1.
-2026-03-24T11:30:07.485646+00:00 [NOTE] Payment: focused element after + = {'tag': 'A', 'name': 'SWEApplet2', 'aria': '', 'id': 'SWEApplet2', 'value': ''}
-2026-03-24T11:30:08.585400+00:00 [NOTE] Payment keyboard: typed 'Payments' into focused field (Transaction Type).
-2026-03-24T11:30:10.117456+00:00 [NOTE] Payment keyboard: tabbed 5x to reach Transaction Amount.
-2026-03-24T11:30:10.135216+00:00 [NOTE] Payment: focused after 5 tabs = {'tag': 'INPUT', 'name': 'Transaction_Amount', 'aria': '', 'id': '1_Transaction_Amount'}
-2026-03-24T11:30:10.945016+00:00 [NOTE] Payment keyboard: typed '120000' into Transaction Amount.
-2026-03-24T11:30:10.945091+00:00 [NOTE] Filled payment fields (keyboard): Type=Payments(ok=True), Amount=120000(ok=True).
-2026-03-24T11:30:11.407877+00:00 [NOTE] Payment debug: save action roots count=2.
-2026-03-24T11:30:11.688587+00:00 [NOTE] Payment debug: Save clicked via selector: button[aria-label='Payment Lines List:Save']
-2026-03-24T11:30:11.688664+00:00 [NOTE] Clicked Save icon after payment entry.
-2026-03-24T11:30:11.688698+00:00 [STEP] Video SOP complete: customer record opened and Add customer payment started. Automation stops here (SIEBEL_DMS_STOP_AFTER_ALL_ENQUIRIES); browser left open.
-2026-03-24T11:30:11.688728+00:00 [NOTE] Relation's Name/Address/Pincode fill completed and Payments '+' clicked; automation stops now.
+2026-03-24T11:42:14.160996+00:00 [STEP] Started Hero Connect / Siebel DMS automation (linear SOP).
+2026-03-24T11:42:14.161054+00:00 [STEP] Video SOP (Find Contact Enquiry): Find → Contact → mobile → Go → open All Enquiries; then stop.
+2026-03-24T11:42:14.161106+00:00 [FORM] siebel_step=v1_find_contact | form=Global Find → Contact (Mobile Phone) + Go | action=goto_contact_find_URL_then_prepare_Find_Contact_fill_mobile_FindGo | contact_url_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+Contact+Opportunity+Buyer/CoBuyer+View+(SDW)&SWERF=1&SWEHo=&SWEBU=1' | mobile_phone='8952897358'
+2026-03-24T11:42:19.879522+00:00 [STEP] Video SOP: Find customer by mobile (Contact view).
+2026-03-24T11:42:26.447731+00:00 [NOTE] Find → Contact: object type selected so the mobile field is the Contact search field.
+2026-03-24T11:42:27.160774+00:00 [NOTE] Filled mobile and clicked Find inside the Contact applet (scoped; includes first-field right-popup fallback when labels are non-standard).
+2026-03-24T11:42:29.238318+00:00 [NOTE] DECISION: contact_table_match_after_find=True
+2026-03-24T11:42:29.239987+00:00 [FORM] siebel_step=v2_drill_and_nav | form=Search Results + Contacts detail | action=Siebel_Find_tab_optional_then_link_hit_then_click_first_name_then_fill_Relations_Name_only | care_of='S/O Madan Lal' | first_name='Ashok' | mobile_phone='8952897358'
+2026-03-24T11:42:31.938210+00:00 [NOTE] Activated Siebel Find tab in search results (video SOP).
+2026-03-24T11:42:33.071149+00:00 [NOTE] Opened contact from search hit hyperlink (video SOP).
+2026-03-24T11:42:38.965279+00:00 [NOTE] Relation's Name filled; stopping on current field as requested.
+2026-03-24T11:42:38.965426+00:00 [FORM] siebel_step=v3_add_customer_payment | form=Payments tab (current frame) | action=click_Payments_tab_then_click_plus_icon
+2026-03-24T11:42:39.238436+00:00 [NOTE] Payment debug: ordered frames count=1.
+2026-03-24T11:42:39.254065+00:00 [NOTE] Payment debug: root candidates prepared (action_roots=2, total_candidates=2).
+2026-03-24T11:42:39.525278+00:00 [NOTE] Clicked '+' icon on Payments tab.
+2026-03-24T11:42:40.056200+00:00 [NOTE] Payment sequence: '+' -> Transaction Amount -> Transaction Type -> Payment Lines Save icon.
+2026-03-24T11:42:40.086470+00:00 [NOTE] Payment lines scoped frame not detected by strict markers; trying relaxed visible-input scan.
+2026-03-24T11:42:40.118729+00:00 [NOTE] Payment lines relaxed frame lock: url='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=HHML+LS+CIM+Contact+Site+Payments+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Contact+Form+Applet&SW', name=''
+2026-03-24T11:42:40.142702+00:00 [NOTE] Transaction field frame locked: url='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=HHML+LS+CIM+Contact+Site+Payments+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Contact+Form+Applet&SW', name=''
+2026-03-24T11:42:40.142920+00:00 [NOTE] Payment debug: transaction roots count=1.
+2026-03-24T11:42:40.159234+00:00 [NOTE] Transaction amount frame locked: url='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=HHML+LS+CIM+Contact+Site+Payments+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Contact+Form+Applet&SW', name=''
+2026-03-24T11:42:40.159314+00:00 [NOTE] Payment debug: amount roots count=1.
+2026-03-24T11:42:41.202461+00:00 [NOTE] Payment: focused element after + = {'tag': 'INPUT', 'name': 'Transaction_Type', 'aria': '', 'id': '1_Transaction_Type', 'value': ''}
+2026-03-24T11:42:43.215859+00:00 [NOTE] Payment keyboard: typed 'Payments' + Enter to confirm Transaction Type dropdown.
+2026-03-24T11:42:45.563807+00:00 [NOTE] Payment keyboard: typed 'Cash' + Enter to confirm Payment Mode.
+2026-03-24T11:42:46.261080+00:00 [NOTE] Payment keyboard: tabbed 3x toward Transaction Amount.
+2026-03-24T11:42:46.285610+00:00 [NOTE] Payment: focused after 5 tabs = {'tag': 'INPUT', 'name': 'HMCL_Pre_GST_Amount', 'aria': '', 'id': '1_HMCL_Pre_GST_Amount'}
+2026-03-24T11:42:47.347803+00:00 [NOTE] Payment keyboard: typed '120000' + Tab to commit Transaction Amount.
+2026-03-24T11:42:47.347962+00:00 [NOTE] Filled payment fields (keyboard): Type=Payments(ok=True), Amount=120000(ok=True).
+2026-03-24T11:42:47.793529+00:00 [NOTE] Payment debug: save action roots count=2.
+2026-03-24T11:42:48.063349+00:00 [NOTE] Payment debug: Save clicked via selector: button[aria-label='Payment Lines List:Save']
+2026-03-24T11:42:50.091010+00:00 [NOTE] Clicked Save icon after payment entry.
+2026-03-24T11:42:50.091210+00:00 [STEP] Video SOP complete: customer record opened and Add customer payment started. Automation stops here (SIEBEL_DMS_STOP_AFTER_ALL_ENQUIRIES); browser left open.
+2026-03-24T11:42:50.091353+00:00 [NOTE] Relation's Name/Address/Pincode fill completed and Payments '+' clicked; automation stops now.
 
-2026-03-24T11:30:11.688801+00:00 [END] error=None
+2026-03-24T11:42:50.091530+00:00 [END] error=None

@@ -4224,12 +4224,12 @@ def _add_customer_payment(
                     _safe_page_wait(page, 400, log_label="after_enter_confirm_payment_mode")
                     note("Payment keyboard: typed 'Cash' + Enter to confirm Payment Mode.")
 
-                    # Tab 3 more times from Payment Mode to Transaction Amount.
-                    for _ti in range(3):
+                    # Tab 4 times from Payment Mode to Transaction Amount.
+                    for _ti in range(4):
                         page.keyboard.press("Tab")
                         _safe_page_wait(page, 150, log_label=f"tab_to_amount_{_ti+1}")
 
-                    note("Payment keyboard: tabbed 3x toward Transaction Amount.")
+                    note("Payment keyboard: tabbed 4x toward Transaction Amount.")
 
                     # Check focused element after tabs
                     for _dframe2 in _ordered_frames(page):
@@ -4239,7 +4239,7 @@ def _add_customer_payment(
                               return el ? {tag:el.tagName,name:el.name||'',aria:el.getAttribute('aria-label')||'',id:el.id||''} : null;
                             }""")
                             if _f2 and _f2.get('tag') not in ('BODY', 'HTML', None):
-                                note(f"Payment: focused after 5 tabs = {_f2!r}")
+                                note(f"Payment: focused after tabs (should be Transaction_Amount) = {_f2!r}")
                                 # #region agent log
                                 try:
                                     import json as _json2, time as _time2
