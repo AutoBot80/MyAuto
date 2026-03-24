@@ -3619,6 +3619,42 @@ def _add_customer_payment(
         re.compile(r"add", re.I),
     )
 
+    def _is_payment_action_root(root) -> bool:
+        """Toolbar frame/root that hosts Payment Lines New/Save controls."""
+        try:
+            return bool(
+                root.evaluate(
+                    """() => {
+                      const vis = (el) => {
+                        if (!el) return false;
+                        const st = window.getComputedStyle(el);
+                        if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+                        const r = el.getBoundingClientRect();
+                        return r.width >= 2 && r.height >= 2;
+                      };
+                      const sels = [
+                        "[aria-label='Payment Lines List:New']",
+                        "[title='Payment Lines List:New']",
+                        "[aria-label='Payment Lines List: Save']",
+                        "[aria-label='Payment Lines List:Save']",
+                        "[title='Payment Lines List: Save']",
+                        "[title='Payment Lines List:Save']",
+                        "a.siebui-icon-new",
+                        "button.siebui-icon-new",
+                        "a.siebui-icon-save",
+                        "button.siebui-icon-save",
+                      ];
+                      for (const s of sels) {
+                        const el = document.querySelector(s);
+                        if (vis(el)) return true;
+                      }
+                      return false;
+                    }"""
+                )
+            )
+        except Exception:
+            return False
+
     def _click_plus_in_root(root) -> bool:
         # Exact selectors first
         for css in plus_selectors[:-2]:
@@ -3666,7 +3702,22 @@ def _add_customer_payment(
                 continue
         return False
 
+    action_roots = []
     for root in _siebel_locator_search_roots(page, content_frame_selector):
+        try:
+            if _is_payment_action_root(root):
+                action_roots.append(root)
+        except Exception:
+            continue
+    for frame in _ordered_frames(page):
+        try:
+            if _is_payment_action_root(frame):
+                action_roots.append(frame)
+        except Exception:
+            continue
+    root_candidates = action_roots if action_roots else list(_siebel_locator_search_roots(page, content_frame_selector))
+
+    for root in root_candidates:
         try:
             if _click_plus_in_root(root):
                 note("Clicked '+' icon on Payments tab.")
@@ -4020,9 +4071,26 @@ def _add_customer_payment(
                     f"Type=Payments(ok={type_ok!r}), Method=Cash(ok={method_ok!r}), Transaction Amount=120000(ok={amount_ok!r})."
                 )
 
+                # Re-detect action roots after row creation; toolbar can be in a sibling frame.
+                save_action_roots = []
+                for sroot in _siebel_locator_search_roots(page, content_frame_selector):
+                    try:
+                        if _is_payment_action_root(sroot):
+                            save_action_roots.append(sroot)
+                    except Exception:
+                        continue
+                for sframe in _ordered_frames(page):
+                    try:
+                        if _is_payment_action_root(sframe):
+                            save_action_roots.append(sframe)
+                    except Exception:
+                        continue
+                if not save_action_roots:
+                    save_action_roots = list(_siebel_locator_search_roots(page, content_frame_selector))
+
                 # Save icon (down-arrow / save) click.
                 save_clicked = False
-                for sroot in _siebel_locator_search_roots(page, content_frame_selector):
+                for sroot in save_action_roots:
                     for css in (
                         "a[aria-label='Payment Lines List:Save']",
                         "button[aria-label='Payment Lines List:Save']",
