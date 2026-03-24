@@ -10,7 +10,7 @@ State: RAJASTHAN
 Address Line 1: S/O Madan Lal, jamun baag golpura Bharatpur Bharatpur Rajasthan 321001
 Pin Code: 321001
 Relation (S/O or W/o): S/O
-Father or Husband Name: —
+Father or Husband Name: S/O Madan Lal
 Customer Budget (dummy enquiry): 89000
 Finance Required: Y
 Financier Name: HDFC
@@ -20,9 +20,9 @@ Frame / Chassis num (partial): 40395
 Engine num (partial): 04401
 
 --- Runtime values used by Playwright ---
-sales_id: 91
+sales_id: 98
 customer_id: 4
-vehicle_id: 4
+vehicle_id: 5
 dealer_id: 100001
 subfolder: 8952897358_240326
 dealer_name: Arya Agencies
@@ -36,4 +36,4 @@ source_pin_code: 321001
 source_key_no: 13427
 source_frame_no: 40395
 source_engine_no: 04401
-generated_at: 24-03-2026 11:23:22
+generated_at: 24-03-2026 11:37:57

@@ -1,6 +1,6 @@
 Playwright DMS — execution log (this run only; UTC timestamps)
 
-started_utc=2026-03-24T05:53:22.514037+00:00
+started_utc=2026-03-24T06:07:57.120707+00:00
 skip_contact_find=False
 dms_contact_path='found'
 mobile_phone='8952897358'
@@ -10,7 +10,7 @@ address_line_1='S/O Madan Lal, jamun baag golpura Bharatpur Bharatpur Rajasthan 
 state='RAJASTHAN'
 pin_code='321001'
 landline='9079316663'
-care_of=''
+care_of='S/O Madan Lal'
 key_partial='13427'
 frame_partial='40395'
 engine_partial='04401'
@@ -22,27 +22,70 @@ url_vehicle_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/e
 --- trace ---
 Legend: [STEP]/[NOTE]/[MILESTONE] = operator narrative; [FORM] = siebel_step + Siebel form/screen + action + fields/values being applied on that form.
 
-2026-03-24T05:53:22.514238+00:00 [STEP] Started Hero Connect / Siebel DMS automation (linear SOP).
-2026-03-24T05:53:22.514329+00:00 [STEP] Video SOP (Find Contact Enquiry): Find → Contact → mobile → Go → open All Enquiries; then stop.
-2026-03-24T05:53:22.514402+00:00 [FORM] siebel_step=v1_find_contact | form=Global Find → Contact (Mobile Phone) + Go | action=goto_contact_find_URL_then_prepare_Find_Contact_fill_mobile_FindGo | contact_url_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+Contact+Opportunity+Buyer/CoBuyer+View+(SDW)&SWERF=1&SWEHo=&SWEBU=1' | mobile_phone='8952897358'
-2026-03-24T05:53:28.289403+00:00 [STEP] Video SOP: Find customer by mobile (Contact view).
-2026-03-24T05:53:32.712577+00:00 [NOTE] Find → Contact: object type selected so the mobile field is the Contact search field.
-2026-03-24T05:53:33.358526+00:00 [NOTE] Filled mobile and clicked Find inside the Contact applet (scoped; includes first-field right-popup fallback when labels are non-standard).
-2026-03-24T05:53:35.387382+00:00 [NOTE] DECISION: contact_table_match_after_find=False
-2026-03-24T05:53:35.387522+00:00 [NOTE] No contact rows after Find/Go — Add Enquiry branch: vehicle chassis/VIN + engine, Enquiry tab, Opportunities List:New, DB fields, Ctrl+S.
-2026-03-24T05:53:35.387662+00:00 [FORM] siebel_step=add_enquiry_branch | form=No contact table match → vehicle find + Opportunities | action=chassis_engine_Enter_then_Enquiry_tab_Opportunities_New_fields_Ctrl_S | aadhar_id='8133' | engine_partial='04401' | finance_required='Y' | financier_name='HDFC' | frame_partial='40395'
-2026-03-24T05:53:43.227265+00:00 [NOTE] Add Enquiry: Find → Vehicles object type selected (header / Find menu).
-2026-03-24T05:53:47.256548+00:00 [NOTE] Add Enquiry: Vehicles Find fly-in fill failed on first pass — retrying Find→Vehicles.
-2026-03-24T05:53:57.499325+00:00 [NOTE] Add Enquiry: used generic input fill + Enter for vehicle query.
-2026-03-24T05:53:59.234510+00:00 [NOTE] Add Enquiry: clicked Find/Go after vehicle query.
-2026-03-24T05:54:01.950468+00:00 [NOTE] Add Enquiry: activated Siebel Find tab before VIN drill-down (if present).
-2026-03-24T05:54:03.085976+00:00 [NOTE] Add Enquiry: clicked VIN in left Search Results to load vehicle detail.
-2026-03-24T05:54:04.966312+00:00 [NOTE] Add Enquiry: vehicle hit present (full_chassis or list key).
-2026-03-24T05:54:04.966386+00:00 [NOTE] Add Enquiry: scraped full VIN scope — full_chassis='MBLHAW472T5C40395', full_engine='HA11F6T5C04401'.
-2026-03-24T05:54:04.966446+00:00 [NOTE] Add Enquiry: scraped from vehicle list — model='SPLENDOR +', year_of_mfg='2026', color='BLA'.
-2026-03-24T05:54:04.966528+00:00 [FORM] siebel_step=add_enquiry_vehicle_scrape | form=Auto Vehicle List — results grid | action=read_model_year_color_before_Enquiry_Opportunity | color='BLA' | full_chassis='MBLHAW472T5C40395' | full_engine='HA11F6T5C04401' | model='SPLENDOR +' | year_of_mfg='2026'
-2026-03-24T05:54:05.320859+00:00 [NOTE] Add Enquiry: Enquiry tab clicked.
-2026-03-24T05:54:07.232106+00:00 [NOTE] Add Enquiry: Opportunities List:New not found.
-2026-03-24T05:54:07.232154+00:00 [STEP] Stopped: Add Enquiry branch failed (empty contact search).
+2026-03-24T06:07:57.120973+00:00 [STEP] Started Hero Connect / Siebel DMS automation (linear SOP).
+2026-03-24T06:07:57.121029+00:00 [STEP] Video SOP (Find Contact Enquiry): Find → Contact → mobile → Go → open All Enquiries; then stop.
+2026-03-24T06:07:57.121092+00:00 [FORM] siebel_step=v1_find_contact | form=Global Find → Contact (Mobile Phone) + Go | action=goto_contact_find_URL_then_prepare_Find_Contact_fill_mobile_FindGo | contact_url_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+Contact+Opportunity+Buyer/CoBuyer+View+(SDW)&SWERF=1&SWEHo=&SWEBU=1' | mobile_phone='8952897358'
+2026-03-24T06:08:02.770439+00:00 [STEP] Video SOP: Find customer by mobile (Contact view).
+2026-03-24T06:08:09.601993+00:00 [NOTE] Find mobile field not visible on first pass — retrying with forced Find→Contact applet open.
+2026-03-24T06:08:31.796213+00:00 [NOTE] Clicked Find/Go on contact view (mobile query).
+2026-03-24T06:08:33.961051+00:00 [NOTE] DECISION: contact_table_match_after_find=False
+2026-03-24T06:08:33.961264+00:00 [NOTE] No contact rows after Find/Go — Add Enquiry branch: vehicle chassis/VIN + engine, Enquiry tab, Opportunities List:New, DB fields, Ctrl+S.
+2026-03-24T06:08:33.961361+00:00 [FORM] siebel_step=add_enquiry_branch | form=No contact table match → vehicle find + Opportunities | action=chassis_engine_Enter_then_Enquiry_tab_Opportunities_New_fields_Ctrl_S | aadhar_id='8133' | engine_partial='04401' | finance_required='Y' | financier_name='HDFC' | frame_partial='40395'
+2026-03-24T06:08:42.709119+00:00 [NOTE] Add Enquiry: Find → Vehicles object type selected (header / Find menu).
+2026-03-24T06:08:47.075068+00:00 [NOTE] Add Enquiry: Vehicles Find fly-in fill failed on first pass — retrying Find→Vehicles.
+2026-03-24T06:08:59.646271+00:00 [NOTE] Add Enquiry: used generic input fill + Enter for vehicle query.
+2026-03-24T06:09:02.496873+00:00 [NOTE] Add Enquiry: clicked Find/Go after vehicle query.
+2026-03-24T06:09:05.515059+00:00 [NOTE] Add Enquiry: activated Siebel Find tab before VIN drill-down (if present).
+2026-03-24T06:09:07.012964+00:00 [NOTE] Add Enquiry: clicked VIN in left Search Results to load vehicle detail.
+2026-03-24T06:09:09.266948+00:00 [NOTE] Add Enquiry: vehicle hit present (full_chassis or list key).
+2026-03-24T06:09:09.267026+00:00 [NOTE] Add Enquiry: scraped full VIN scope — full_chassis='MBLHAW472T5C40395', full_engine='HA11F6T5C04401'.
+2026-03-24T06:09:09.267109+00:00 [NOTE] Add Enquiry: scraped from vehicle list — model='SPLENDOR +', year_of_mfg='2026', color='BLA'.
+2026-03-24T06:09:09.267204+00:00 [FORM] siebel_step=add_enquiry_vehicle_scrape | form=Auto Vehicle List — results grid | action=read_model_year_color_before_Enquiry_Opportunity | color='BLA' | full_chassis='MBLHAW472T5C40395' | full_engine='HA11F6T5C04401' | model='SPLENDOR +' | year_of_mfg='2026'
+2026-03-24T06:09:09.993473+00:00 [NOTE] Add Enquiry: Enquiry tab clicked.
+2026-03-24T06:09:13.267737+00:00 [NOTE] Add Enquiry: clicked Opportunities List:New.
+2026-03-24T06:09:25.169507+00:00 [NOTE] [WARN] dropdown attempt 1 failed: Locator.wait_for: Timeout 8000ms exceeded.
+Call log:
+  - waiting for locator("li, div, span, a").filter(has_text=re.compile(r"^\s*8952897358\s*$", re.IGNORECASE)).first to be visible
 
-2026-03-24T05:54:07.232180+00:00 [END] error=Siebel: video SOP — contact search returned no table rows and Add Enquiry did not complete. Opportunities List:New not found on Enquiry view.
+2026-03-24T06:09:34.875608+00:00 [NOTE] [WARN] dropdown attempt 2 failed: Locator.wait_for: Timeout 8000ms exceeded.
+Call log:
+  - waiting for locator("li, div, span, a").filter(has_text=re.compile(r"^\s*8952897358\s*$", re.IGNORECASE)).first to be visible
+
+2026-03-24T06:09:44.733142+00:00 [NOTE] [WARN] dropdown attempt 3 failed: Locator.wait_for: Timeout 8000ms exceeded.
+Call log:
+  - waiting for locator("li, div, span, a").filter(has_text=re.compile(r"^\s*8952897358\s*$", re.IGNORECASE)).first to be visible
+
+2026-03-24T06:09:54.684671+00:00 [NOTE] [WARN] dropdown attempt 1 failed: Locator.wait_for: Timeout 8000ms exceeded.
+Call log:
+  - waiting for locator("li, div, span, a").filter(has_text=re.compile(r"^\s*8952897358\s*$", re.IGNORECASE)).first to be visible
+
+2026-03-24T06:10:05.237348+00:00 [NOTE] [WARN] dropdown attempt 2 failed: Locator.wait_for: Timeout 8000ms exceeded.
+Call log:
+  - waiting for locator("li, div, span, a").filter(has_text=re.compile(r"^\s*8952897358\s*$", re.IGNORECASE)).first to be visible
+
+2026-03-24T06:10:16.857964+00:00 [NOTE] [WARN] dropdown attempt 3 failed: Locator.wait_for: Timeout 8000ms exceeded.
+Call log:
+  - waiting for locator("li, div, span, a").filter(has_text=re.compile(r"^\s*8952897358\s*$", re.IGNORECASE)).first to be visible
+
+2026-03-24T06:10:27.396456+00:00 [NOTE] [WARN] dropdown attempt 1 failed: Locator.wait_for: Timeout 8000ms exceeded.
+Call log:
+  - waiting for locator("li, div, span, a").filter(has_text=re.compile(r"^\s*9079316663\s*$", re.IGNORECASE)).first to be visible
+
+2026-03-24T06:10:37.147473+00:00 [NOTE] [WARN] dropdown attempt 2 failed: Locator.wait_for: Timeout 8000ms exceeded.
+Call log:
+  - waiting for locator("li, div, span, a").filter(has_text=re.compile(r"^\s*9079316663\s*$", re.IGNORECASE)).first to be visible
+
+2026-03-24T06:10:46.943652+00:00 [NOTE] [WARN] dropdown attempt 3 failed: Locator.wait_for: Timeout 8000ms exceeded.
+Call log:
+  - waiting for locator("li, div, span, a").filter(has_text=re.compile(r"^\s*9079316663\s*$", re.IGNORECASE)).first to be visible
+
+2026-03-24T06:10:56.698537+00:00 [NOTE] [WARN] dropdown attempt 1 failed: Locator.wait_for: Timeout 8000ms exceeded.
+Call log:
+  - waiting for locator("li, div, span, a").filter(has_text=re.compile(r"^\s*9079316663\s*$", re.IGNORECASE)).first to be visible
+
+2026-03-24T06:11:07.950869+00:00 [NOTE] [WARN] dropdown attempt 2 failed: Locator.wait_for: Timeout 8000ms exceeded.
+Call log:
+  - waiting for locator("li, div, span, a").filter(has_text=re.compile(r"^\s*9079316663\s*$", re.IGNORECASE)).first to be visible
+
+
+2026-03-24T06:11:08.024785+00:00 [END] error=Siebel automation error: Page.wait_for_timeout: Target page, context or browser has been closed

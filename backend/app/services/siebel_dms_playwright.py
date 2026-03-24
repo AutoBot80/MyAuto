@@ -43,7 +43,7 @@ from app.config import (
 logger = logging.getLogger(__name__)
 
 # Operator video: ``Find Contact Enquiry.mp4`` — Find → Contact → mobile → Go; if **no contact table
-# rows**, **Add Enquiry** (vehicle chassis/VIN + engine, Enquiry tab, **Opportunities List:New**, DB fields,
+# rows**, **Add Enquiry** (vehicle chassis/VIN + engine, Enquiry tab, **Opportunity Form:New**, DB fields,
 # Ctrl+S) then stop; else drill → Contacts → relation fill → Payments ``+``. Set False to restore the full
 # BRD linear SOP inside ``Playwright_Hero_DMS_fill``.
 SIEBEL_DMS_STOP_AFTER_ALL_ENQUIRIES = True
@@ -4921,11 +4921,10 @@ def _try_click_enquiry_top_tab(
 
 def _try_click_opportunities_list_new(
     page: Page, *, action_timeout_ms: int, content_frame_selector: str | None
-) -> bool:
+) -> Frame | None:
     """
-    Click the new-opportunity plus action after opening Enquiry.
-    Some tenants expose this as ``aria-label="Opportunity Form:New"`` inside a specific iframe;
-    prefer locating that frame first, then click within it.
+    Click new opportunity using only ``Opportunity Form:New`` and return the frame where it was clicked.
+    After this point, callers should keep interaction scoped to this frame to avoid focus drift.
     """
     def _click_first_visible(locator) -> bool:
         try:
@@ -4959,45 +4958,19 @@ def _try_click_opportunities_list_new(
             for css in focused_selectors:
                 if _click_first_visible(frame.locator(css)):
                     logger.info("siebel_dms: clicked Opportunity Form:New in focused frame")
-                    return True
+                    return frame
         except Exception:
             continue
-
-    selectors = (
-        "a[aria-label='Opportunity Form:New']",
-        "button[aria-label='Opportunity Form:New']",
-        "a[title='Opportunity Form:New']",
-        "button[title='Opportunity Form:New']",
-        "a[aria-label='Opportunities List:New']",
-        "button[aria-label='Opportunities List:New']",
-        "a[aria-label='Opportunities List: New']",
-        "button[aria-label='Opportunities List: New']",
-        "a[title='Opportunities List:New']",
-        "button[title='Opportunities List:New']",
-    )
-    opp_name = re.compile(r"^\s*(Opportunity\s+Form|Opportunities\s+List)\s*:\s*New\s*$", re.I)
-    roots: list = [page]
-    for r in _siebel_locator_search_roots(page, content_frame_selector):
-        if r is not page:
-            roots.append(r)
-    for root in roots:
-        for css in selectors:
-            try:
-                if _click_first_visible(root.locator(css)):
-                    return True
-            except Exception:
-                continue
-        for role in ("link", "button", "menuitem"):
-            try:
-                loc = root.get_by_role(role, name=opp_name)
-                if _click_first_visible(loc):
-                    return True
-            except Exception:
-                continue
-    return False
+    return None
 
 
-def _frame_containing_enquiry_type(page: Page) -> Frame | None:
+def _frame_containing_enquiry_type(page: Page, preferred: Frame | None = None) -> Frame | None:
+    if preferred is not None:
+        try:
+            if preferred.locator('[aria-label="Enquiry Type"]').count() > 0:
+                return preferred
+        except Exception:
+            pass
     for frame in _ordered_frames(page):
         try:
             if frame.locator('[aria-label="Enquiry Type"]').count() > 0:
@@ -5054,7 +5027,7 @@ def _add_enquiry_opportunity(
     vehicle_merge: dict | None = None,
 ) -> tuple[bool, str | None]:
     """
-    Contact Find returned no table rows: vehicle find + scrape, **Enquiry** tab, **Opportunities List:New**,
+    Contact Find returned no table rows: vehicle find + scrape, **Enquiry** tab, **Opportunity Form:New**,
     fill opportunity fields from DB + scraped model/color (**Financier** fields are skipped), Ctrl+S.
 
     Returns ``(success, error_detail)`` — ``error_detail`` is a short operator-facing reason when
@@ -5138,15 +5111,16 @@ def _add_enquiry_opportunity(
     note("Add Enquiry: Enquiry tab clicked.")
     _safe_page_wait(page, 1400, log_label="after_enquiry_tab")
 
-    if not _try_click_opportunities_list_new(
+    opp_frame = _try_click_opportunities_list_new(
         page, action_timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
-    ):
-        note("Add Enquiry: Opportunities List:New not found.")
-        return False, "Opportunities List:New not found on Enquiry view."
-    note("Add Enquiry: clicked Opportunities List:New.")
+    )
+    if opp_frame is None:
+        note('Add Enquiry: Opportunity Form:New not found in current Enquiry pane/frame.')
+        return False, 'Opportunity Form:New not found on Enquiry view.'
+    note("Add Enquiry: clicked Opportunity Form:New.")
     _safe_page_wait(page, 1200, log_label="after_opportunity_new")
 
-    enq_frame = _frame_containing_enquiry_type(page)
+    enq_frame = _frame_containing_enquiry_type(page, preferred=opp_frame)
     if enq_frame is None:
         note('Add Enquiry: no frame contains aria-label="Enquiry Type".')
         return False, "New opportunity form not found (no Enquiry Type field)."
@@ -5649,7 +5623,7 @@ def Playwright_Hero_DMS_fill(
             if not contact_matched:
                 note(
                     "No contact rows after Find/Go — Add Enquiry branch: vehicle chassis/VIN + engine, "
-                    "Enquiry tab, Opportunities List:New, DB fields, Ctrl+S."
+                    "Enquiry tab, Opportunity Form:New, DB fields, Ctrl+S."
                 )
                 ae_ok, ae_detail = _add_enquiry_opportunity(
                     page,
