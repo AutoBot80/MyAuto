@@ -3723,7 +3723,7 @@ def _add_customer_payment(
                 note("Clicked '+' icon on Payments tab.")
                 _safe_page_wait(page, 500, log_label="after_payments_plus_click")
 
-                # Lock to the frame containing Payment Lines Transaction Amount id/title_id.
+                # Lock to the frame containing Payment Lines editable row fields.
                 payment_frames: list[Frame] = []
                 for frame in _ordered_frames(page):
                     try:
@@ -3743,6 +3743,14 @@ def _add_customer_payment(
                                     "[title_id='1_s_2_1_Transaction_Amount']",
                                     "[title-id='1_s_2_1_Transaction_Amount']",
                                     "[title='1_s_2_1_Transaction_Amount']",
+                                    "[name='Transaction_Type']",
+                                    "[id='Transaction_Type']",
+                                    "[title_id='Transaction_Type']",
+                                    "[title-id='Transaction_Type']",
+                                    "input[name*='Transaction_Type' i]",
+                                    "input[id*='Transaction_Type' i]",
+                                    "input[name*='Payment_Method' i]",
+                                    "input[id*='Payment_Method' i]",
                                   ];
                                   for (const s of sels) {
                                     const el = document.querySelector(s);
@@ -3763,10 +3771,75 @@ def _add_customer_payment(
                     except Exception:
                         pass
                 else:
-                    note("Payment lines scoped frame not detected; stopping to avoid focus drift.")
-                    return False
+                    note("Payment lines scoped frame not detected by strict markers; trying relaxed visible-input scan.")
+                    for frame in _ordered_frames(page):
+                        try:
+                            maybe_data_frame = bool(
+                                frame.evaluate(
+                                    """() => {
+                                      const vis = (el) => {
+                                        if (!el) return false;
+                                        const st = window.getComputedStyle(el);
+                                        if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+                                        const r = el.getBoundingClientRect();
+                                        return r.width >= 2 && r.height >= 2;
+                                      };
+                                      const inputs = Array.from(document.querySelectorAll("input, textarea"));
+                                      let visibleEdits = 0;
+                                      for (const el of inputs) {
+                                        if (!vis(el)) continue;
+                                        const t = (el.getAttribute("type") || "").toLowerCase();
+                                        if (t === "hidden") continue;
+                                        visibleEdits += 1;
+                                        if (visibleEdits >= 4) return true;
+                                      }
+                                      return false;
+                                    }"""
+                                )
+                            )
+                            if maybe_data_frame:
+                                payment_frames.append(frame)
+                                break
+                        except Exception:
+                            continue
+                    if payment_frames:
+                        try:
+                            note(f"Payment lines relaxed frame lock: url={(payment_frames[0].url or '')[:180]!r}, name={payment_frames[0].name!r}")
+                        except Exception:
+                            pass
+                    else:
+                        note("Payment lines scoped frame not detected; stopping to avoid focus drift.")
+                        return False
                 # Keep focus locked to the first detected Payment Lines frame.
                 scoped_roots = [payment_frames[0]]
+
+                def _focus_locked_payment_frame(root) -> None:
+                    """Re-focus current payment data frame before each write."""
+                    try:
+                        root.evaluate(
+                            """() => {
+                              try { window.focus(); } catch (_) {}
+                              const candidates = [
+                                "input[name='Transaction_Type']",
+                                "input[id='Transaction_Type']",
+                                "input[name*='Transaction_Type' i]",
+                                "input[id*='Transaction_Type' i]",
+                                "input[name*='Payment_Method' i]",
+                                "input[id*='Payment_Method' i]",
+                                "input[id='1_s_2_1_Transaction_Amount']",
+                                "input[name='1_s_2_1_Transaction_Amount']",
+                              ];
+                              for (const s of candidates) {
+                                const el = document.querySelector(s);
+                                if (el instanceof HTMLElement) {
+                                  try { el.focus(); } catch (_) {}
+                                  break;
+                                }
+                              }
+                            }"""
+                        )
+                    except Exception:
+                        pass
 
                 def _pick_dropdown_value(
                     field_patterns: tuple[re.Pattern[str], ...],
@@ -3913,6 +3986,7 @@ def _add_customer_payment(
                 # First try direct typing into Transaction Type field.
                 type_ok = False
                 for root in scoped_roots:
+                    _focus_locked_payment_frame(root)
                     for css in (
                         "input[name='Transaction_Type']",
                         "input[id='Transaction_Type']",
@@ -3952,6 +4026,7 @@ def _add_customer_payment(
                     # Strict fallback: target Payment Lines Transaction_Type field directly.
                     value_pat = re.compile(r"^\s*Payments\s*$", re.I)
                     for root in scoped_roots:
+                        _focus_locked_payment_frame(root)
                         for css in (
                             "input[name='Transaction_Type']",
                             "input[id='Transaction_Type']",
@@ -4008,6 +4083,7 @@ def _add_customer_payment(
                 method_ok = False
                 primary_root = scoped_roots[0] if scoped_roots else None
                 if primary_root is not None:
+                    _focus_locked_payment_frame(primary_root)
                     for css in (
                         "input[id*='Payment_Method' i]",
                         "input[name*='Payment_Method' i]",
@@ -4044,6 +4120,7 @@ def _add_customer_payment(
                 # Transaction Amount = 120000 (strictly in Payment Lines scoped frame/roots)
                 amount_ok = False
                 for root in scoped_roots:
+                    _focus_locked_payment_frame(root)
                     for css in (
                         "input[id='1_s_2_1_Transaction_Amount']",
                         "input[name='1_s_2_1_Transaction_Amount']",
