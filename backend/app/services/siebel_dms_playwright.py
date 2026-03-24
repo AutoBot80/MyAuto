@@ -4363,116 +4363,24 @@ def _create_order(
             full_chassis=full_chassis,
         )
 
-    # 1) Navigate via Find -> Vehicle Sales, using the same combobox pattern as Find->Vehicles.
-    import json as _jnav, time as _tnav, os as _os
-    _dbg_log_path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "..", "..", "debug-f69c3a.log")
-    def _navlog(msg, data, hyp=""):
-        try:
-            open(_dbg_log_path, "a", encoding="utf-8").write(
-                _jnav.dumps({"sessionId":"f69c3a","runId":"nav","hypothesisId":hyp,
-                              "location":"siebel_dms_playwright.py:nav","message":msg,
-                              "data":data,"timestamp":int(_tnav.time()*1000)}) + "\n")
-        except Exception:
-            pass
-
-    find_label_vs = re.compile(r"^\s*Find\s*$", re.I)
-    vs_label = re.compile(r"^\s*Vehicle Sales\s*$", re.I)
-
-    # #region agent log
-    _navlog("nav-start", {"url": page.url[:100]}, "H-NAV")
-    # #endregion
-
-    def _select_global_find_vehicle_sales(root) -> bool:
-        """Exact same pattern as _select_global_find_vehicles, targeting 'Vehicle Sales'."""
-        # Path 1: combobox click-path (most reliable — mirrors what operator does)
-        for scope in (root, page):
-            try:
-                cb = scope.get_by_role("combobox", name=find_label_vs).first
-                if cb.count() <= 0 or not cb.is_visible(timeout=500):
-                    continue
-                # #region agent log
-                try:
-                    tag = cb.evaluate("el => el.tagName+':'+el.id+':'+el.className")
-                    _navlog("find-cb-found", {"scope": "root" if scope is root else "page", "tag": tag}, "H-NAV")
-                except Exception:
-                    pass
-                # #endregion
-                cb.click(timeout=action_timeout_ms)
-                _safe_page_wait(page, 250, log_label="global_find_open_vs_click")
-                for role in ("option", "menuitem", "link"):
-                    try:
-                        item = page.get_by_role(role, name=vs_label).first
-                        if item.count() > 0 and item.is_visible(timeout=600):
-                            item.click(timeout=action_timeout_ms)
-                            # #region agent log
-                            _navlog("vs-item-clicked", {"role": role, "url": page.url[:100]}, "H-NAV")
-                            # #endregion
-                            _safe_page_wait(page, 500, log_label="global_find_vs_clicked")
-                            return True
-                    except Exception:
-                        continue
-            except Exception:
-                continue
-
-        # Path 2: native <select> fallback (only if has both "Find" and "Vehicle Sales" options)
-        try:
-            sels = root.locator("select")
-            n = sels.count()
-        except Exception:
-            n = 0
-        for i in range(min(n, 20)):
-            try:
-                sel = sels.nth(i)
-                if not sel.is_visible(timeout=500):
-                    continue
-                opts = sel.evaluate(
-                    """el => [...el.options].map(o => (o.textContent || '').trim().toLowerCase())"""
-                )
-                if not opts:
-                    continue
-                has_find = any(x == "find" for x in opts)
-                has_vs = any("vehicle sales" in x for x in opts)
-                # #region agent log
-                _navlog("select-probe", {"opts": opts[:10], "has_find": has_find, "has_vs": has_vs}, "H-NAV")
-                # #endregion
-                if not (has_find and has_vs):
-                    continue
-                try:
-                    sel.select_option(label=find_label_vs, timeout=action_timeout_ms)
-                    _safe_page_wait(page, 180, log_label="global_find_select_find_vs")
-                except Exception:
-                    pass
-                # Fire a real click to trigger Siebel's change handler rather than silent DOM set
-                sel.dispatch_event("change")
-                sel.select_option(label=vs_label, timeout=action_timeout_ms)
-                sel.dispatch_event("change")
-                _navlog("native-select-vs", {"url": page.url[:100]}, "H-NAV")
-                _safe_page_wait(page, 350, log_label="global_find_vs_select")
-                return True
-            except Exception:
-                continue
-
-        return False
-
-    _vehicle_sales_find_selected = False
-    for fl in _iter_frame_locator_roots(page, content_frame_selector):
-        if _select_global_find_vehicle_sales(fl):
-            _vehicle_sales_find_selected = True
-            break
-    if not _vehicle_sales_find_selected:
-        for frame in _ordered_frames(page):
-            if _select_global_find_vehicle_sales(frame):
-                _vehicle_sales_find_selected = True
-                break
-
-    # #region agent log
-    _navlog("nav-result", {"selected": _vehicle_sales_find_selected, "url": page.url[:100]}, "H-NAV")
-    # #endregion
-
-    if not _vehicle_sales_find_selected:
-        return False, "Could not navigate Find → Vehicle Sales.", scraped
-    _safe_page_wait(page, 700, log_label="after_find_vehicle_sales_selected")
-    note(f"Create Order: selected Vehicle Sales from Find object type. URL={page.url[:120]}")
+    # 1) Navigate to Vehicle Sales view directly via URL (same pattern as Contact URL navigation in v1).
+    #    The Find combobox in Siebel is a jQuery UI autocomplete — get_by_role("combobox") finds the wrong
+    #    element (the Contact page search input). Direct URL navigation is the only reliable approach.
+    import os as _os
+    try:
+        from urllib.parse import urlparse as _up
+        _purl = _up(page.url)
+        _base_url = f"{_purl.scheme}://{_purl.netloc}{_purl.path}"
+    except Exception:
+        _base_url = "https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/"
+    _vs_url = f"{_base_url}?SWECmd=GotoView&SWEView=Order+Entry+-+My+Orders+View+(Sales)&SWERF=1&SWEHo=&SWEBU=1"
+    note(f"Create Order: navigating to Vehicle Sales URL. base={_base_url[:60]}")
+    try:
+        page.goto(_vs_url, timeout=min(action_timeout_ms * 3, 30000), wait_until="domcontentloaded")
+    except Exception as _e:
+        note(f"Create Order: goto Vehicle Sales URL raised {_e!r} — continuing.")
+    _safe_page_wait(page, 1200, log_label="after_goto_vehicle_sales")
+    note(f"Create Order: arrived at Vehicle Sales. URL={page.url[:120]}")
 
     # Query by mobile in the current list/apply-enter.
     _mobile_query_ok = _fill_any(
