@@ -164,6 +164,8 @@ backend/app/
 
 **Residual gaps / tuning:** Contact match and **In Transit** are **heuristic** (tenant grid/layout may need selector or copy tweaks). **Process Receipt**, **PDI Submit**, and **Allocate** use toolbar name patterns; dialogs/OTP/exchange/finance are **not** automated. **Reports** URL is not auto-opened. Dummy flow remains **linear** and intentionally **not** reordered to §6.1a.
 
+- **Temporary navigation override (real Siebel `create_order`):** `backend/app/services/siebel_dms_playwright.py` currently contains a hardcoded comparison `mobile_number == "8952897358"` to force the alternate **Find → Vehicle Sales** navigation branch during tenant-specific debugging. When this condition matches, automation directly attempts to open `Order#` by double-click; otherwise it takes the `Sales Orders List:New (+)` path first, then opens `Order#`.
+
 ### 2.5 Database Access
 
 - **Connection:** `get_connection()` in `db.py` using `DATABASE_URL`.

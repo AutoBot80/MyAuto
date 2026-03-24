@@ -4363,53 +4363,113 @@ def _create_order(
             full_chassis=full_chassis,
         )
 
-    # 1) Alternative navigation (requested): Find -> Vehicle Sales, then search by mobile.
-    _vehicle_sales_find_selected = False
-    for root in _roots():
+    # 1) Navigate via Find -> Vehicle Sales, using the same combobox pattern as Find->Vehicles.
+    import json as _jnav, time as _tnav
+    def _navlog(msg, data, hyp=""):
         try:
-            # Open Find object-type combobox/menu.
-            opened = False
-            for cb_css in ("select#findcombobox", "select[aria-label*='Find ComboBox' i]"):
-                try:
-                    cb = root.locator(cb_css).first
-                    if cb.count() > 0 and cb.is_visible(timeout=500):
-                        try:
-                            cb.select_option(label=re.compile(r"^\s*Vehicle Sales\s*$", re.I), timeout=min(action_timeout_ms, 2500))
-                            _vehicle_sales_find_selected = True
-                            opened = True
-                            break
-                        except Exception:
-                            pass
-                except Exception:
+            open("debug-f69c3a.log", "a", encoding="utf-8").write(
+                _jnav.dumps({"sessionId":"f69c3a","runId":"nav","hypothesisId":hyp,
+                              "location":"siebel_dms_playwright.py:nav","message":msg,
+                              "data":data,"timestamp":int(_tnav.time()*1000)}) + "\n")
+        except Exception:
+            pass
+
+    find_label_vs = re.compile(r"^\s*Find\s*$", re.I)
+    vs_label = re.compile(r"^\s*Vehicle Sales\s*$", re.I)
+
+    # #region agent log
+    _navlog("nav-start", {"url": page.url[:100]}, "H-NAV")
+    # #endregion
+
+    def _select_global_find_vehicle_sales(root) -> bool:
+        """Exact same pattern as _select_global_find_vehicles, targeting 'Vehicle Sales'."""
+        # Path 1: combobox click-path (most reliable — mirrors what operator does)
+        for scope in (root, page):
+            try:
+                cb = scope.get_by_role("combobox", name=find_label_vs).first
+                if cb.count() <= 0 or not cb.is_visible(timeout=500):
                     continue
-            if _vehicle_sales_find_selected:
-                break
-            if opened:
+                # #region agent log
+                try:
+                    tag = cb.evaluate("el => el.tagName+':'+el.id+':'+el.className")
+                    _navlog("find-cb-found", {"scope": "root" if scope is root else "page", "tag": tag}, "H-NAV")
+                except Exception:
+                    pass
+                # #endregion
+                cb.click(timeout=action_timeout_ms)
+                _safe_page_wait(page, 250, log_label="global_find_open_vs_click")
+                for role in ("option", "menuitem", "link"):
+                    try:
+                        item = page.get_by_role(role, name=vs_label).first
+                        if item.count() > 0 and item.is_visible(timeout=600):
+                            item.click(timeout=action_timeout_ms)
+                            # #region agent log
+                            _navlog("vs-item-clicked", {"role": role, "url": page.url[:100]}, "H-NAV")
+                            # #endregion
+                            _safe_page_wait(page, 500, log_label="global_find_vs_clicked")
+                            return True
+                    except Exception:
+                        continue
+            except Exception:
                 continue
 
-            # Non-native finder fallback (dropdown menu style).
-            for role in ("combobox", "button", "link"):
-                try:
-                    finder = root.get_by_role(role, name=re.compile(r"^\s*Find\s*$", re.I)).first
-                    if finder.count() > 0 and finder.is_visible(timeout=500):
-                        finder.click(timeout=min(action_timeout_ms, 2000))
-                        _safe_page_wait(page, 250, log_label="open_find_vehicle_sales_menu")
-                        for mrole in ("menuitem", "option", "link"):
-                            item = page.get_by_role(mrole, name=re.compile(r"^\s*Vehicle Sales\s*$", re.I)).first
-                            if item.count() > 0 and item.is_visible(timeout=600):
-                                item.click(timeout=min(action_timeout_ms, 2500))
-                                _vehicle_sales_find_selected = True
-                                break
-                        if _vehicle_sales_find_selected:
-                            break
-                except Exception:
-                    continue
-            if _vehicle_sales_find_selected:
-                break
+        # Path 2: native <select> fallback (only if has both "Find" and "Vehicle Sales" options)
+        try:
+            sels = root.locator("select")
+            n = sels.count()
         except Exception:
-            continue
+            n = 0
+        for i in range(min(n, 20)):
+            try:
+                sel = sels.nth(i)
+                if not sel.is_visible(timeout=500):
+                    continue
+                opts = sel.evaluate(
+                    """el => [...el.options].map(o => (o.textContent || '').trim().toLowerCase())"""
+                )
+                if not opts:
+                    continue
+                has_find = any(x == "find" for x in opts)
+                has_vs = any("vehicle sales" in x for x in opts)
+                # #region agent log
+                _navlog("select-probe", {"opts": opts[:10], "has_find": has_find, "has_vs": has_vs}, "H-NAV")
+                # #endregion
+                if not (has_find and has_vs):
+                    continue
+                try:
+                    sel.select_option(label=find_label_vs, timeout=action_timeout_ms)
+                    _safe_page_wait(page, 180, log_label="global_find_select_find_vs")
+                except Exception:
+                    pass
+                # Fire a real click to trigger Siebel's change handler rather than silent DOM set
+                sel.dispatch_event("change")
+                sel.select_option(label=vs_label, timeout=action_timeout_ms)
+                sel.dispatch_event("change")
+                _navlog("native-select-vs", {"url": page.url[:100]}, "H-NAV")
+                _safe_page_wait(page, 350, log_label="global_find_vs_select")
+                return True
+            except Exception:
+                continue
+
+        return False
+
+    _vehicle_sales_find_selected = False
+    for fl in _iter_frame_locator_roots(page, content_frame_selector):
+        if _select_global_find_vehicle_sales(fl):
+            _vehicle_sales_find_selected = True
+            break
     if not _vehicle_sales_find_selected:
-        return False, "Could not set Find object type to Vehicle Sales.", scraped
+        for frame in _ordered_frames(page):
+            if _select_global_find_vehicle_sales(frame):
+                _vehicle_sales_find_selected = True
+                break
+
+    # #region agent log
+    _navlog("nav-result", {"selected": _vehicle_sales_find_selected, "url": page.url[:100]}, "H-NAV")
+    # #endregion
+
+    if not _vehicle_sales_find_selected:
+        return False, "Could not navigate Find → Vehicle Sales.", scraped
     _safe_page_wait(page, 700, log_label="after_find_vehicle_sales_selected")
     note("Create Order: selected Vehicle Sales from Find object type.")
 
@@ -4438,14 +4498,42 @@ def _create_order(
         note("Create Order: mobile search field not found; continuing with fallback row handling.")
 
     def _dblclick_order_for_mobile(target_mobile: str) -> bool:
+        import json as _j, time as _t
+        def _dblog(msg, data, hyp=""):
+            try:
+                open("debug-f69c3a.log", "a", encoding="utf-8").write(
+                    _j.dumps({"sessionId":"f69c3a","runId":"dblclick","hypothesisId":hyp,
+                               "location":"siebel_dms_playwright.py:_dblclick","message":msg,
+                               "data":data,"timestamp":int(_t.time()*1000)}) + "\n")
+            except Exception:
+                pass
+
         needle = re.sub(r"\D", "", (target_mobile or "").strip())
+        # #region agent log
+        _dblog("entry", {"needle": needle}, "H-B")
+        # #endregion
+        roots_checked = 0
         for root in _roots():
+            roots_checked += 1
+            root_label = ""
+            try:
+                root_label = (root.url or "")[:80]
+            except Exception:
+                try:
+                    root_label = str(type(root))[:60]
+                except Exception:
+                    pass
             for row_css in ("table tbody tr", "table tr", "[role='row']"):
                 try:
                     rows = root.locator(row_css)
                     n = rows.count()
                 except Exception:
                     n = 0
+                if n == 0:
+                    continue
+                # #region agent log
+                _dblog("rows found", {"root": root_label, "css": row_css, "count": n}, "H-B")
+                # #endregion
                 for i in range(min(n, 40)):
                     try:
                         row = rows.nth(i)
@@ -4453,10 +4541,35 @@ def _create_order(
                             continue
                         row_txt = (row.inner_text(timeout=600) or "")
                         row_digits = re.sub(r"\D", "", row_txt)
+                        # #region agent log — first 5 rows to check mobile presence (H-C)
+                        if i < 5:
+                            _dblog("row text", {"i": i, "txt": row_txt[:120], "digits_has_needle": needle in row_digits}, "H-C")
+                        # #endregion
                         if needle and needle not in row_digits:
                             continue
-                        ord_cell = row.locator("td[aria-describedby*='Order_Number' i], a[aria-label*='Order#' i], a[title*='Order#' i]").first
+                        note(f"Create Order: matched row[{i}] digits={row_digits[:30]!r}")
+                        # #region agent log — check Order# cell selector (H-A, H-D)
+                        try:
+                            cell_count = row.locator("td[aria-describedby*='Order_Number' i], a[aria-label*='Order#' i], a[title*='Order#' i]").count()
+                            # also try exact jqgh id
+                            exact_count = row.locator("td[aria-describedby='jqgh_s_1_l_Order_Number']").count()
+                            any_a_count = row.locator("td a").count()
+                            # dump all td aria-describedby values
+                            tds_info = row.evaluate("el => Array.from(el.querySelectorAll('td')).map(td => ({ad:td.getAttribute('aria-describedby')||'',hasA:!!td.querySelector('a'),aText:(td.querySelector('a')||{}).innerText||''}))")
+                            _dblog("order cell probe", {"css_hit": cell_count, "exact_hit": exact_count, "any_a": any_a_count, "tds": tds_info[:6]}, "H-A-D")
+                        except Exception as _ex:
+                            _dblog("order cell probe error", {"err": str(_ex)}, "H-A-D")
+                        # #endregion
+                        ord_cell = row.locator(
+                            "td[aria-describedby='jqgh_s_1_l_Order_Number'],"
+                            "td[aria-describedby*='Order_Number' i],"
+                            "a[aria-label*='Order#' i],"
+                            "a[title*='Order#' i]"
+                        ).first
                         if ord_cell.count() <= 0:
+                            ord_cell = row.locator("td a").first
+                        if ord_cell.count() <= 0:
+                            note(f"Create Order: row[{i}] mobile matched but no Order# cell.")
                             continue
                         try:
                             ord_cell.dblclick(timeout=min(action_timeout_ms, 3000))
@@ -4465,6 +4578,9 @@ def _create_order(
                         return True
                     except Exception:
                         continue
+        # #region agent log
+        _dblog("exit-false", {"roots_checked": roots_checked}, "H-B")
+        # #endregion
         return False
 
     _direct_open_by_mobile = (mobile or "").strip() == "8952897358"
