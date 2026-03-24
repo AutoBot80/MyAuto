@@ -12,16 +12,16 @@ Care of / Father–Husband (Aadhaar QR): S/O Madan Lal
 --- Vehicle (from DMS search result) ---
 Key num: —
 Frame / Chassis num: —
-Full chassis (VIN from detail): MBLHAW472T5C40395
+Full chassis (VIN from detail): —
 Engine num: —
-Full engine (from detail): HA11F6T5C04401
-Model: SPLENDOR +
-Color: BLA
-Cubic capacity: 87112029
-Seating capacity: 11870 DEALER SHOWROOM
+Full engine (from detail): —
+Model: —
+Color: —
+Cubic capacity: —
+Seating capacity: —
 Body type: —
 Vehicle type: —
 Num cylinders: —
 Horsepower: —
 Ex-showroom Price (Order Value): —
-Year of Mfg: 2026
+Year of Mfg: —

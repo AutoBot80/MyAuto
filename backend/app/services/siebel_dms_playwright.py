@@ -3715,7 +3715,8 @@ def _add_customer_payment(
                     except Exception:
                         pass
                 else:
-                    note("Payment lines scoped frame not detected; using broader roots.")
+                    note("Payment lines scoped frame not detected; stopping to avoid focus drift.")
+                    return False
 
                 def _pick_dropdown_value(
                     field_patterns: tuple[re.Pattern[str], ...],
@@ -3983,18 +3984,6 @@ def _add_customer_payment(
                             continue
 
                 if not method_ok:
-                    method_ok = select_siebel_dropdown_value(
-                        page,
-                        field_label_patterns=[
-                            re.compile(r"payment\s*method", re.I)
-                        ],
-                        value="Cash",
-                        timeout_ms=action_timeout_ms,
-                        content_frame_selector=content_frame_selector,
-                        note=note,
-                    )
-
-                if not method_ok:
                     raise Exception("Failed to set Payment Method")
 
                 # Transaction Amount = 120000 (strictly in Payment Lines scoped frame/roots)
@@ -4071,9 +4060,10 @@ def _add_customer_payment(
                     return True
                 note("Could not click Save icon after filling payment fields.")
                 return False
-        except Exception:
-            continue
-    note("Could not click '+' icon on Payments tab.")
+        except Exception as e:
+            note(f"Add customer payment flow failed after '+' click attempt: {e}")
+            return False
+    note("Could not click '+' icon on Payments tab (Payment Lines List:New not visible).")
     return False
 
 
