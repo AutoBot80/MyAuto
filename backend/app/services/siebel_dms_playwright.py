@@ -4304,7 +4304,8 @@ def _create_order(
     - Set Booking Order Type
     - Pick contact by mobile from pick applet
     - Save and open created Order#
-    - On Vehicle Sales page: New -> VIN search, scrape inventory location
+    - On order line items: Line Items List:New -> VIN (name=VIN) -> full chassis + Enter;
+      optional pick applet (search by Vin#) -> fill chassis, select row, OK; then scrape inventory
     - If inventory not In transit: Price all + Allocate all
     - Scrape Total (Ex-showroom)
     """
@@ -4649,46 +4650,174 @@ def _create_order(
     else:
         _safe_page_wait(page, 1200, log_label="after_open_existing_order_link")
 
-    # 10) Vehicle Sales page: click New -> VIN fill -> search
+    # 10) Line Items List:New -> click VIN (name=VIN) -> full chassis + Enter; optional Vin# pick applet
+    _tmo_line = min(action_timeout_ms, 4000)
     if not _click_any(
         (
-            "a:has-text('New')",
-            "button:has-text('New')",
-            "a[aria-label*='New' i]",
-            "button[aria-label*='New' i]",
+            "a[aria-label='Line Items List:New']",
+            "button[aria-label='Line Items List:New']",
+            "a[aria-label*='Line Items List' i][aria-label*='New' i]",
+            "button[aria-label*='Line Items List' i][aria-label*='New' i]",
         ),
-        timeout=min(action_timeout_ms, 3000),
+        timeout=_tmo_line,
     ):
-        return False, "Could not click New on Vehicle Sales page.", scraped
-    _safe_page_wait(page, 800, log_label="after_vehicle_sales_new")
-    note(f"Create Order: after New click. URL={page.url[:120]}")
+        return False, "Could not click Line Items List:New.", scraped
+    _safe_page_wait(page, 900, log_label="after_line_items_new")
+    note("Create Order: clicked Line Items List:New.")
 
-    if not _fill_any(
+    # Focus/open the VIN control (Siebel uses name="VIN" on the line popup field)
+    _click_any(
         (
-            "input[aria-label='VIN']",
             "input[name='VIN']",
-            "input[id*='VIN' i]",
-            "input[title='VIN']",
+            "[name='VIN']",
         ),
-        full_chassis,
-        timeout=min(action_timeout_ms, 4000),
-    ):
-        return False, "Could not fill VIN with full chassis.", scraped
-    if not _click_any(
-        (
-            "a[aria-label*='Search' i]",
-            "button[aria-label*='Search' i]",
-            "a[title*='Search' i]",
-            "button[title*='Search' i]",
-        ),
-        timeout=min(action_timeout_ms, 3000),
-    ):
+        timeout=min(action_timeout_ms, 2500),
+    )
+    _safe_page_wait(page, 400, log_label="after_vin_focus_click")
+
+    _vin_selectors = (
+        "input[name='VIN']",
+        "input[aria-label='VIN']",
+        "input[id*='VIN' i]",
+        "input[title='VIN']",
+        "input[title*='VIN' i]",
+    )
+    if not _fill_any(_vin_selectors, full_chassis, timeout=_tmo_line):
+        return False, "Could not fill VIN with full chassis on line item.", scraped
+    try:
+        page.keyboard.press("Enter")
+    except Exception:
+        pass
+    _safe_page_wait(page, 1100, log_label="after_line_item_vin_enter")
+    note(f"Create Order: filled line VIN and pressed Enter. chassis={full_chassis!r}")
+
+    def _vin_pick_applet_query_field_visible() -> bool:
+        """True only when a Vin# *search* field appears (not the line-item name=VIN box)."""
+        for root in _roots():
+            try:
+                loc_lb = root.get_by_label(re.compile(r"vin\s*#", re.I)).first
+                if loc_lb.count() > 0 and loc_lb.is_visible(timeout=450):
+                    return True
+            except Exception:
+                pass
+            for css in (
+                "input[aria-label*='Vin#' i]",
+                "input[aria-label*='VIN#' i]",
+                "input[title*='Vin#' i]",
+                "input[title*='VIN#' i]",
+            ):
+                try:
+                    loc = root.locator(css).first
+                    if loc.count() > 0 and loc.is_visible(timeout=450):
+                        return True
+                except Exception:
+                    continue
+        return False
+
+    _JS_CLICK_FIRST_GRID_ROW = """() => {
+        const vis = (el) => {
+            if (!el) return false;
+            const st = window.getComputedStyle(el);
+            if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity) === 0) return false;
+            const r = el.getBoundingClientRect();
+            return r.width > 2 && r.height > 2;
+        };
+        const tryRows = [
+            "table.ui-jqgrid-btable tbody tr[role='row']",
+            "div.ui-jqgrid-bdiv table tbody tr",
+            "table.siebui-list tbody tr",
+            "table tbody tr"
+        ];
+        for (const sel of tryRows) {
+            const rows = Array.from(document.querySelectorAll(sel)).filter(vis);
+            for (const tr of rows) {
+                if (tr.closest('thead')) continue;
+                if ((tr.innerText || '').toLowerCase().includes('order')) continue;
+                const tds = tr.querySelectorAll('td');
+                if (tds.length === 0) continue;
+                try { tr.click(); return 'clicked:' + sel; } catch (e) {}
+            }
+        }
+        return '';
+    }"""
+
+    def _handle_vin_search_pick_applet() -> bool:
+        """If a Vin# search pick applet is open: Query (optional), fill chassis, Enter, pick row, OK."""
+        if not _vin_pick_applet_query_field_visible():
+            note("Create Order: no Vin# search pick applet detected; continuing.")
+            return True
+        note("Create Order: Vin# search pick applet detected; running query + row + OK.")
+        _click_any(
+            (
+                "a[aria-label*='Vin' i][aria-label*='Query' i]",
+                "button[aria-label*='Vin' i][aria-label*='Query' i]",
+                "a[aria-label*='List' i][aria-label*='Query' i]",
+                "button[aria-label*='List' i][aria-label*='Query' i]",
+                "a[title*='Query' i]",
+                "button[title*='Query' i]",
+            ),
+            timeout=min(action_timeout_ms, 2000),
+        )
+        _safe_page_wait(page, 500, log_label="after_vin_pick_query_click")
+        _pick_fill_selectors = (
+            "input[aria-label*='Vin#' i]",
+            "input[aria-label*='VIN#' i]",
+            "input[title*='Vin#' i]",
+            "input[title*='VIN#' i]",
+            "input[id*='1_VIN' i]",
+            "input[id*='Vin' i]",
+            "input[name*='VIN' i]",
+            "input[name*='Vin' i]",
+        )
+        if not _fill_any(_pick_fill_selectors, full_chassis, timeout=_tmo_line):
+            note("Create Order: Vin# pick applet visible but could not fill query field.")
+            return False
         try:
             page.keyboard.press("Enter")
         except Exception:
-            return False, "Could not execute VIN search.", scraped
-    _safe_page_wait(page, 1200, log_label="after_vin_search")
-    note(f"Create Order: searched VIN={full_chassis!r}.")
+            pass
+        _safe_page_wait(page, 1000, log_label="after_vin_pick_enter")
+        _row_clicked = False
+        for frame in _ordered_frames(page):
+            try:
+                r = frame.evaluate(_JS_CLICK_FIRST_GRID_ROW)
+                if r:
+                    note(f"Create Order: selected row in Vin pick applet. {r!r}")
+                    _row_clicked = True
+                    break
+            except Exception:
+                continue
+        if not _row_clicked:
+            for root in _roots():
+                try:
+                    loc = root.locator("tbody tr").first
+                    if loc.count() > 0 and loc.is_visible(timeout=500):
+                        loc.click(timeout=min(action_timeout_ms, 2500), force=True)
+                        _row_clicked = True
+                        note("Create Order: selected first tbody row in Vin pick applet (Playwright).")
+                        break
+                except Exception:
+                    continue
+        if not _row_clicked:
+            note("Create Order: warning — no grid row clicked in Vin pick applet; still trying OK.")
+        if not _click_any(
+            (
+                "button:has-text('OK')",
+                "a:has-text('OK')",
+                "button[aria-label='OK']",
+                "a[aria-label='OK']",
+            ),
+            timeout=min(action_timeout_ms, 3500),
+        ):
+            return False
+        _safe_page_wait(page, 1000, log_label="after_vin_pick_ok")
+        note("Create Order: closed Vin# pick applet with OK.")
+        return True
+
+    if not _handle_vin_search_pick_applet():
+        return False, "Could not complete Vin# search pick applet (fill row OK).", scraped
+    _safe_page_wait(page, 600, log_label="after_vin_flow")
+    note(f"Create Order: line-item VIN flow complete. chassis={full_chassis!r}.")
 
     # 11) Scrape Inventory Location
     inv = ""
