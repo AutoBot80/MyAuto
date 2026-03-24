@@ -4224,14 +4224,12 @@ def _add_customer_payment(
                     _safe_page_wait(page, 400, log_label="after_enter_confirm_payment_mode")
                     note("Payment keyboard: typed 'Cash' + Enter to confirm Payment Mode.")
 
-                    # Tab 4 times from Payment Mode to Transaction Amount.
+                    # Tab 4 times from Payment Mode to Transaction Amount (user-confirmed count).
                     for _ti in range(4):
                         page.keyboard.press("Tab")
                         _safe_page_wait(page, 150, log_label=f"tab_to_amount_{_ti+1}")
 
-                    note("Payment keyboard: tabbed 4x toward Transaction Amount.")
-
-                    # Check focused element after tabs
+                    # Log focused element so we can verify we landed on Transaction_Amount.
                     for _dframe2 in _ordered_frames(page):
                         try:
                             _f2 = _dframe2.evaluate("""() => {
@@ -4239,11 +4237,11 @@ def _add_customer_payment(
                               return el ? {tag:el.tagName,name:el.name||'',aria:el.getAttribute('aria-label')||'',id:el.id||''} : null;
                             }""")
                             if _f2 and _f2.get('tag') not in ('BODY', 'HTML', None):
-                                note(f"Payment: focused after tabs (should be Transaction_Amount) = {_f2!r}")
+                                note(f"Payment: focused before typing amount = {_f2!r}")
                                 # #region agent log
                                 try:
                                     import json as _json2, time as _time2
-                                    _dbg2 = {"sessionId": "f69c3a", "runId": "keyboard-approach", "hypothesisId": "B", "location": "siebel_dms_playwright.py:tab_check", "message": "focused element after 5 tabs", "data": _f2, "timestamp": int(_time2.time() * 1000)}
+                                    _dbg2 = {"sessionId": "f69c3a", "runId": "tab-confirmed", "hypothesisId": "B", "location": "siebel_dms_playwright.py:amount_focus", "message": "focused before typing 120000", "data": _f2, "timestamp": int(_time2.time() * 1000)}
                                     open("debug-f69c3a.log", "a", encoding="utf-8").write(_json2.dumps(_dbg2) + "\n")
                                 except Exception:
                                     pass
