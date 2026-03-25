@@ -228,14 +228,11 @@ def _candidate_cdp_urls() -> list[str]:
     explicit_many = (os.getenv("PLAYWRIGHT_CDP_URLS") or "").strip()
     if explicit_many:
         urls.extend([u.strip() for u in explicit_many.split(",") if u.strip()])
-    # Same port as app-launched browser (PLAYWRIGHT_MANAGED_REMOTE_DEBUG_PORT, default 9333).
     if PLAYWRIGHT_MANAGED_REMOTE_DEBUG_PORT:
         urls.append(f"http://127.0.0.1:{PLAYWRIGHT_MANAGED_REMOTE_DEBUG_PORT}")
-    # Common local CDP endpoints used by operators.
-    # Edge/Chrome can both run on any port, but these defaults are typical.
-    urls.append("http://127.0.0.1:9222")
-    urls.append("http://127.0.0.1:9223")
-    # Keep order and uniqueness stable.
+    if not urls:
+        urls.append("http://127.0.0.1:9222")
+        urls.append("http://127.0.0.1:9223")
     seen: set[str] = set()
     unique_urls: list[str] = []
     for u in urls:
@@ -2383,7 +2380,7 @@ def run_fill_dms_only(
         page, open_error = _get_or_open_site_page(
             dms_base_url,
             "DMS",
-            require_login_on_open=not dms_automation_is_real_siebel(),
+            require_login_on_open=True,
         )
         if page is None:
             result["error"] = open_error

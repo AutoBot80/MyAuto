@@ -3460,38 +3460,6 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
 
     _safe_page_wait(page, 700, log_label="after_first_name_click_before_relation_fill")
 
-    # #region agent log
-    import json as _json3, time as _time3
-    _dlog3 = "debug-08e634.log"
-    try:
-        _rn_dom_probe = None
-        for _fr in _ordered_frames(page):
-            try:
-                _rn_dom_probe = _fr.evaluate("""() => {
-                    const vis = el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
-                    const inputs = Array.from(document.querySelectorAll('input,textarea,select')).filter(vis);
-                    const rn = inputs.filter(i => {
-                        const a = (i.getAttribute('aria-label')||'').toLowerCase();
-                        const t = (i.getAttribute('title')||'').toLowerCase();
-                        const n = (i.name||'').toLowerCase();
-                        return a.includes('relation') || t.includes('relation') || n.includes('relation');
-                    });
-                    return { total_visible_inputs: inputs.length, relation_fields: rn.map(i => ({
-                        tag: i.tagName, name: i.name||'', id: i.id||'',
-                        ariaLabel: i.getAttribute('aria-label')||'',
-                        readOnly: i.readOnly, val: (i.value||'').substring(0,50)
-                    })) };
-                }""")
-                if _rn_dom_probe and _rn_dom_probe.get("relation_fields"):
-                    break
-            except Exception:
-                continue
-        with open(_dlog3, "a") as _df3:
-            _df3.write(_json3.dumps({"sessionId":"08e634","hypothesisId":"ADE","location":"pre_fill_dom_probe","message":"dom_state_after_700ms_wait","data":_rn_dom_probe,"timestamp":int(_time3.time()*1000)}) + "\n")
-    except Exception:
-        pass
-    # #endregion
-
     # DB rule: Address Line 1 should be the substring between first and second comma.
     addr_raw = (address_line_1 or "").strip()
     addr_line1_value = ""
@@ -3502,48 +3470,17 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
     if not addr_line1_value:
         addr_line1_value = ""
 
-    def _fill_with_retry(loc, value: str, *, attempts: int = 3, visible_ms: int = 900, field_label: str = "") -> bool:
+    def _fill_with_retry(loc, value: str, *, attempts: int = 3, visible_ms: int = 900) -> bool:
         """
         Stabilize flaky Siebel input commit:
         wait visible -> fill -> blur(Tab) -> readback verify, with short backoff retries.
         """
-        import json as _json, time as _time
-        _dlog = "debug-08e634.log"
         for i in range(max(1, attempts)):
-            _step_data = {"attempt": i + 1, "field": field_label, "value": value[:50]}
             try:
-                cnt = loc.count()
-                if cnt <= 0:
-                    # #region agent log
-                    try:
-                        with open(_dlog, "a") as _df:
-                            _df.write(_json.dumps({"sessionId":"08e634","hypothesisId":"A","location":"_fill_with_retry","message":"loc_count_zero","data":{**_step_data,"count":cnt},"timestamp":int(_time.time()*1000)}) + "\n")
-                    except Exception:
-                        pass
-                    # #endregion
+                if loc.count() <= 0:
                     return False
-                vis = loc.is_visible(timeout=visible_ms)
-                if not vis:
-                    # #region agent log
-                    try:
-                        with open(_dlog, "a") as _df:
-                            _df.write(_json.dumps({"sessionId":"08e634","hypothesisId":"A","location":"_fill_with_retry","message":"not_visible","data":{**_step_data,"visible_ms":visible_ms},"timestamp":int(_time.time()*1000)}) + "\n")
-                    except Exception:
-                        pass
-                    # #endregion
+                if not loc.is_visible(timeout=visible_ms):
                     continue
-                # #region agent log
-                _ro = None
-                try:
-                    _ro = loc.evaluate("el => ({ readOnly: el.readOnly, val: (el.value||'').substring(0,50), name: el.name||'', id: el.id||'' })")
-                except Exception:
-                    pass
-                try:
-                    with open(_dlog, "a") as _df:
-                        _df.write(_json.dumps({"sessionId":"08e634","hypothesisId":"D","location":"_fill_with_retry","message":"pre_fill_state","data":{**_step_data,"el":_ro},"timestamp":int(_time.time()*1000)}) + "\n")
-                except Exception:
-                    pass
-                # #endregion
                 try:
                     loc.click(timeout=min(2000, action_timeout_ms))
                 except Exception:
@@ -3555,24 +3492,10 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
                     pass
                 _safe_page_wait(page, 120 + (i * 200), log_label=f"retry_settle_{i+1}")
                 got = (loc.input_value(timeout=min(2500, action_timeout_ms)) or "").strip()
-                _ok = bool(got and (value.lower() in got.lower() or got.lower() in value.lower()))
-                # #region agent log
-                try:
-                    with open(_dlog, "a") as _df:
-                        _df.write(_json.dumps({"sessionId":"08e634","hypothesisId":"B","location":"_fill_with_retry","message":"readback","data":{**_step_data,"got":got[:80],"match":_ok},"timestamp":int(_time.time()*1000)}) + "\n")
-                except Exception:
-                    pass
-                # #endregion
-                if _ok:
+                if got and (value.lower() in got.lower() or got.lower() in value.lower()):
                     return True
-            except Exception as _ex:
-                # #region agent log
-                try:
-                    with open(_dlog, "a") as _df:
-                        _df.write(_json.dumps({"sessionId":"08e634","hypothesisId":"C","location":"_fill_with_retry","message":"exception","data":{**_step_data,"error":str(_ex)[:200]},"timestamp":int(_time.time()*1000)}) + "\n")
-                except Exception:
-                    pass
-                # #endregion
+            except Exception:
+                pass
             _safe_page_wait(page, 220 + (i * 250), log_label=f"retry_backoff_{i+1}")
         return False
 
@@ -3678,9 +3601,6 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
 
     # Exact-input path first (from provided DOM snippet), then label fallback.
     _read_first_name_probe()
-    import json as _json2, time as _time2
-    _dlog2 = "debug-08e634.log"
-    _rn_t0 = _time2.time()
     exact_selectors = (
         "input[aria-label=\"Relation's Name\"]",
         "textarea[aria-label=\"Relation's Name\"]",
@@ -3689,25 +3609,11 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
         "input[aria-labelledby=\"Relation's_Name_Label_4\"]",
         "input.s_4_1_89_0",
     )
-    # #region agent log
-    try:
-        with open(_dlog2, "a") as _df2:
-            _df2.write(_json2.dumps({"sessionId":"08e634","hypothesisId":"E","location":"relation_fill_start","message":"begin","data":{"care_val":care_val[:60],"selectors":len(exact_selectors)},"timestamp":int(_time2.time()*1000)}) + "\n")
-    except Exception:
-        pass
-    # #endregion
     for fl in _iter_frame_locator_roots(page, content_frame_selector):
         for css in exact_selectors:
             try:
                 loc = fl.locator(css).first
-                if _fill_with_retry(loc, care_val, attempts=3, visible_ms=900, field_label=f"RN_fl:{css[:40]}"):
-                    # #region agent log
-                    try:
-                        with open(_dlog2, "a") as _df2:
-                            _df2.write(_json2.dumps({"sessionId":"08e634","hypothesisId":"OK","location":"relation_fill_ok","message":"filled_fl_exact","data":{"css":css,"elapsed_ms":int((_time2.time()-_rn_t0)*1000)},"timestamp":int(_time2.time()*1000)}) + "\n")
-                    except Exception:
-                        pass
-                    # #endregion
+                if _fill_with_retry(loc, care_val, attempts=3, visible_ms=900):
                     return _after_relation_fill_nav()
             except Exception:
                 continue
@@ -3715,63 +3621,26 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
         for css in exact_selectors:
             try:
                 loc = frame.locator(css).first
-                if _fill_with_retry(loc, care_val, attempts=3, visible_ms=900, field_label=f"RN_fr:{css[:40]}"):
-                    # #region agent log
-                    try:
-                        with open(_dlog2, "a") as _df2:
-                            _df2.write(_json2.dumps({"sessionId":"08e634","hypothesisId":"OK","location":"relation_fill_ok","message":"filled_fr_exact","data":{"css":css,"elapsed_ms":int((_time2.time()-_rn_t0)*1000)},"timestamp":int(_time2.time()*1000)}) + "\n")
-                    except Exception:
-                        pass
-                    # #endregion
+                if _fill_with_retry(loc, care_val, attempts=3, visible_ms=900):
                     return _after_relation_fill_nav()
             except Exception:
                 continue
-
-    # #region agent log
-    try:
-        with open(_dlog2, "a") as _df2:
-            _df2.write(_json2.dumps({"sessionId":"08e634","hypothesisId":"A","location":"relation_exact_failed","message":"all_exact_selectors_failed","data":{"elapsed_ms":int((_time2.time()-_rn_t0)*1000)},"timestamp":int(_time2.time()*1000)}) + "\n")
-    except Exception:
-        pass
-    # #endregion
 
     # Restore earlier working style: label-based fill fallback.
     for fl in _iter_frame_locator_roots(page, content_frame_selector):
         try:
             loc = fl.get_by_label("Relation's Name", exact=True).first
-            if _fill_with_retry(loc, care_val, attempts=3, visible_ms=700, field_label="RN_lbl_fl"):
-                # #region agent log
-                try:
-                    with open(_dlog2, "a") as _df2:
-                        _df2.write(_json2.dumps({"sessionId":"08e634","hypothesisId":"OK","location":"relation_fill_ok","message":"filled_fl_label","data":{"elapsed_ms":int((_time2.time()-_rn_t0)*1000)},"timestamp":int(_time2.time()*1000)}) + "\n")
-                except Exception:
-                    pass
-                # #endregion
+            if _fill_with_retry(loc, care_val, attempts=3, visible_ms=700):
                 return _after_relation_fill_nav()
         except Exception:
             continue
     for frame in _ordered_frames(page):
         try:
             loc = frame.get_by_label("Relation's Name", exact=True).first
-            if _fill_with_retry(loc, care_val, attempts=3, visible_ms=700, field_label="RN_lbl_fr"):
-                # #region agent log
-                try:
-                    with open(_dlog2, "a") as _df2:
-                        _df2.write(_json2.dumps({"sessionId":"08e634","hypothesisId":"OK","location":"relation_fill_ok","message":"filled_fr_label","data":{"elapsed_ms":int((_time2.time()-_rn_t0)*1000)},"timestamp":int(_time2.time()*1000)}) + "\n")
-                except Exception:
-                    pass
-                # #endregion
+            if _fill_with_retry(loc, care_val, attempts=3, visible_ms=700):
                 return _after_relation_fill_nav()
         except Exception:
             continue
-
-    # #region agent log
-    try:
-        with open(_dlog2, "a") as _df2:
-            _df2.write(_json2.dumps({"sessionId":"08e634","hypothesisId":"FAIL","location":"relation_fill_fail","message":"all_paths_exhausted","data":{"elapsed_ms":int((_time2.time()-_rn_t0)*1000),"care_val":care_val[:60]},"timestamp":int(_time2.time()*1000)}) + "\n")
-    except Exception:
-        pass
-    # #endregion
 
     _read_first_name_probe()
     note("Could not fill Relation's Name on opened customer record (video SOP).")
