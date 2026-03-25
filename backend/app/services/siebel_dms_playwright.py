@@ -4021,11 +4021,27 @@ def _add_customer_payment(
                     Frame is used only as a locator scope — no window.focus() or
                     el.focus() calls, so focus is never forcibly trapped.
                     """
-                    for r in roots:
-                        for css in selectors:
+                    import json as _json, time as _time
+                    _dlog_path = "debug-08e634.log"
+                    for ri, r in enumerate(roots):
+                        for ci, css in enumerate(selectors):
                             try:
                                 loc = r.locator(css).first
-                                if loc.count() == 0 or not loc.is_visible(timeout=500):
+                                cnt = loc.count()
+                                vis = False
+                                if cnt > 0:
+                                    try:
+                                        vis = loc.is_visible(timeout=500)
+                                    except Exception:
+                                        vis = False
+                                # #region agent log
+                                try:
+                                    with open(_dlog_path, "a") as _df:
+                                        _df.write(_json.dumps({"sessionId":"08e634","hypothesisId":"B","location":f"_direct_fill:{label}","message":"selector_probe","data":{"root_idx":ri,"selector":css,"count":cnt,"visible":vis},"timestamp":int(_time.time()*1000)}) + "\n")
+                                except Exception:
+                                    pass
+                                # #endregion
+                                if cnt == 0 or not vis:
                                     continue
                                 tag = (loc.evaluate("el => el.tagName") or "").upper()
                                 if tag == "SELECT":
@@ -4049,7 +4065,14 @@ def _add_customer_payment(
                                 loc.press("Tab", timeout=1200)
                                 note(f"Payment direct: {label} filled → {value!r}.")
                                 return True
-                            except Exception:
+                            except Exception as _fill_ex:
+                                # #region agent log
+                                try:
+                                    with open(_dlog_path, "a") as _df:
+                                        _df.write(_json.dumps({"sessionId":"08e634","hypothesisId":"D","location":f"_direct_fill:{label}","message":"exception_swallowed","data":{"root_idx":ri,"selector":css,"error":str(_fill_ex)[:200]},"timestamp":int(_time.time()*1000)}) + "\n")
+                                except Exception:
+                                    pass
+                                # #endregion
                                 continue
                     return False
 
@@ -4097,6 +4120,20 @@ def _add_customer_payment(
                     _safe_page_wait(page, 300, log_label="direct_after_payment_mode_commit")
 
                 # 3. Transaction Amount — uses amount_roots (may be a sibling frame).
+                # #region agent log
+                try:
+                    _amt_diag = []
+                    for _ari, _ar in enumerate(amount_roots):
+                        try:
+                            _amt_diag.append({"idx": _ari, "name": getattr(_ar, 'name', '?'), "url": (getattr(_ar, 'url', '') or '')[:120]})
+                        except Exception:
+                            _amt_diag.append({"idx": _ari, "err": "probe_failed"})
+                    _same_as_scoped = amount_roots is scoped_roots or (len(amount_roots) == len(scoped_roots) and all(a is b for a, b in zip(amount_roots, scoped_roots)))
+                    with open("debug-08e634.log", "a") as _df:
+                        _df.write(_json.dumps({"sessionId":"08e634","hypothesisId":"A","location":"before_txn_amount","message":"amount_roots_diag","data":{"amount_roots_count":len(amount_roots),"same_as_scoped":_same_as_scoped,"roots":_amt_diag},"timestamp":int(_time.time()*1000)}) + "\n")
+                except Exception:
+                    pass
+                # #endregion
                 amount_ok = _direct_fill(
                     amount_roots, _TXN_AMT_SELS, "1000", label="Transaction_Amount",
                 )
