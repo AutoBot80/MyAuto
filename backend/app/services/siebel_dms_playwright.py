@@ -4005,12 +4005,15 @@ def _add_customer_payment(
                     "input[name*='Transaction_Amount' i]",
                 )
                 _PAY_MODE_SELS = (
+                    "input[name='Payment_Method_New']",
+                    "input[id='1_Payment_Method_New']",
+                    "select[name='Payment_Method_New']",
+                    "input[name*='Payment_Method' i]",
+                    "select[name*='Payment_Method' i]",
                     "input[name*='Payment_Mode' i]",
                     "select[name*='Payment_Mode' i]",
                     "input[name*='Receipt_Type' i]",
                     "select[name*='Receipt_Type' i]",
-                    "input[name*='Receipts' i]",
-                    "select[name*='Receipts' i]",
                     "input[id*='Payment_Mode' i]",
                     "select[id*='Payment_Mode' i]",
                 )
@@ -4318,16 +4321,23 @@ def _add_customer_payment(
                         # #endregion
                         if not _ae:
                             continue
+                        # In Siebel edit mode, ariaLabel is often empty — match
+                        # against name and id which are reliable in edit mode.
+                        _ae_name = (_ae.get("name") or "").lower()
+                        _ae_id = (_ae.get("id") or "").lower()
                         _ae_label = (_ae.get("ariaLabel") or "").lower()
-                        # Reached Transaction Amount — the cell should be editable
-                        # because we arrived via Tab within the active edit context.
-                        if "transaction amount" in _ae_label:
+                        _is_txn_amount = (
+                            "transaction_amount" in _ae_name
+                            or "transaction_amount" in _ae_id
+                            or "transaction amount" in _ae_label
+                        )
+                        if _is_txn_amount:
                             if not _ae.get("readOnly"):
                                 page.keyboard.type("1000")
                                 _safe_page_wait(page, 120, log_label="tab_nav_amount_fill")
                                 page.keyboard.press("Tab")
                                 _tab_filled = True
-                                note("Payment direct: Transaction_Amount filled via Tab navigation.")
+                                note(f"Payment direct: Transaction_Amount filled via Tab navigation (tab {_ti}, name={_ae.get('name')!r}).")
                             else:
                                 note(f"Payment direct: Transaction_Amount reached via Tab but still readOnly (tab {_ti}).")
                             break
