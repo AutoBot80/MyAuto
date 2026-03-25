@@ -3980,245 +3980,140 @@ def _add_customer_payment(
                         pass
                 note(f"Payment debug: amount roots count={len(amount_roots)}.")
 
-                def _focus_locked_payment_frame(root, *, prefer_amount: bool = False) -> None:
-                    """Re-focus current payment data frame before each write."""
-                    try:
-                        root.evaluate(
-                            """(preferAmount) => {
-                              try { window.focus(); } catch (_) {}
-                              const amountFirst = [
-                                "input[name='Transaction_Amount']",
-                                "input[id='Transaction_Amount']",
-                                "input[id='1_s_2_1_Transaction_Amount']",
-                                "input[name='1_s_2_1_Transaction_Amount']",
-                                "input[title_id='1_s_2_1_Transaction_Amount']",
-                                "input[title-id='1_s_2_1_Transaction_Amount']",
-                                "input[title='1_s_2_1_Transaction_Amount']",
-                                "input[aria-label*='Transaction Amount' i]",
-                                "input[title*='Transaction Amount' i]",
-                                "input[name='Transaction_Type']",
-                                "input[name='Transaction_Type_New']"
-                              ];
-                              const typeFirst = [
-                                "input[name='Transaction_Type']",
-                                "input[name='Transaction_Type_New']",
-                                "select[name='Transaction_Type']",
-                                "select[name='Transaction_Type_New']",
-                                "input[id='Transaction_Type']",
-                                "input[name*='Transaction_Type' i]",
-                                "input[id*='Transaction_Type' i]",
-                                "input[name='Transaction_Amount']",
-                                "input[id='1_s_2_1_Transaction_Amount']",
-                                "input[name='1_s_2_1_Transaction_Amount']"
-                              ];
-                              const candidates = preferAmount ? amountFirst : typeFirst;
-                              for (const s of candidates) {
-                                const el = document.querySelector(s);
-                                if (el instanceof HTMLElement) {
-                                  try { el.focus(); } catch (_) {}
-                                  break;
-                                }
-                              }
-                            }""",
-                            prefer_amount,
-                        )
-                    except Exception:
-                        pass
+                _TXN_TYPE_SELS = (
+                    "input[name='Transaction_Type']",
+                    "input[name='Transaction_Type_New']",
+                    "select[name='Transaction_Type']",
+                    "select[name='Transaction_Type_New']",
+                    "input[id='Transaction_Type']",
+                    "input[title_id='Transaction_Type']",
+                    "input[title-id='Transaction_Type']",
+                    "input[name*='Transaction_Type' i]",
+                    "input[id*='Transaction_Type' i]",
+                    "select[name*='Transaction_Type' i]",
+                )
+                _TXN_AMT_SELS = (
+                    "input[name='Transaction_Amount']",
+                    "input[id='Transaction_Amount']",
+                    "input[id='1_s_2_1_Transaction_Amount']",
+                    "input[name='1_s_2_1_Transaction_Amount']",
+                    "input[title_id='1_s_2_1_Transaction_Amount']",
+                    "input[title-id='1_s_2_1_Transaction_Amount']",
+                    "input[title='1_s_2_1_Transaction_Amount']",
+                    "input[aria-label*='Transaction Amount' i]",
+                    "input[title*='Transaction Amount' i]",
+                    "input[name*='Transaction_Amount' i]",
+                )
+                _PAY_MODE_SELS = (
+                    "input[name*='Payment_Mode' i]",
+                    "select[name*='Payment_Mode' i]",
+                    "input[name*='Receipt_Type' i]",
+                    "select[name*='Receipt_Type' i]",
+                    "input[name*='Receipts' i]",
+                    "select[name*='Receipts' i]",
+                    "input[id*='Payment_Mode' i]",
+                    "select[id*='Payment_Mode' i]",
+                )
 
-                def _pick_dropdown_value(
-                    field_patterns: tuple[re.Pattern[str], ...],
-                    value: str,
-                    down_presses: int,
-                    tab_presses_after: int,
-                ) -> bool:
-                    value_pat = re.compile(rf"^\s*{re.escape(value)}\s*$", re.I)
-                    for root in scoped_roots:
-                        # Click field/control that matches the target label.
-                        opened = False
-                        # Try exact select native in this root first.
-                        try:
-                            sels = root.locator("select")
-                            ns = sels.count()
-                            for si in range(min(ns, 20)):
-                                s = sels.nth(si)
-                                if not s.is_visible(timeout=300):
-                                    continue
-                                blob = " ".join(
-                                    [
-                                        (s.get_attribute("aria-label") or ""),
-                                        (s.get_attribute("title") or ""),
-                                        (s.get_attribute("name") or ""),
-                                        (s.get_attribute("id") or ""),
-                                    ]
-                                )
-                                if not any(p.search(blob) for p in field_patterns):
-                                    continue
-                                try:
-                                    s.select_option(label=value_pat, timeout=action_timeout_ms)
-                                    return True
-                                except Exception:
-                                    pass
-                        except Exception:
-                            pass
+                def _direct_fill(roots, selectors, value, *, label):
+                    """Locate field by selector in *roots*, click it, type value, Tab to commit.
 
-                        for css in (
-                            "input",
-                            "select",
-                            "span[role='combobox']",
-                            "div[role='combobox']",
-                            "a[role='button']",
-                            "button",
-                            "td",
-                            "div",
-                        ):
+                    Frame is used only as a locator scope — no window.focus() or
+                    el.focus() calls, so focus is never forcibly trapped.
+                    """
+                    for r in roots:
+                        for css in selectors:
                             try:
-                                cands = root.locator(css)
-                                n = cands.count()
-                                for i in range(min(n, 30)):
-                                    c = cands.nth(i)
-                                    if not c.is_visible(timeout=350):
-                                        continue
-                                    blob = " ".join(
-                                        [
-                                            (c.get_attribute("aria-label") or ""),
-                                            (c.get_attribute("title") or ""),
-                                            (c.get_attribute("name") or ""),
-                                        ]
-                                    )
-                                    if not any(p.search(blob) for p in field_patterns):
-                                        continue
+                                loc = r.locator(css).first
+                                if loc.count() == 0 or not loc.is_visible(timeout=500):
+                                    continue
+                                tag = (loc.evaluate("el => el.tagName") or "").upper()
+                                if tag == "SELECT":
                                     try:
-                                        c.click(timeout=action_timeout_ms)
-                                    except Exception:
-                                        c.click(timeout=action_timeout_ms, force=True)
-
-                                    # Try clicking adjacent dropdown/open button near the same field.
-                                    try:
-                                        btn = c.locator(
-                                            "xpath=following::*[self::a or self::button or self::span][contains(@title,'Pick') or contains(@title,'Open') or contains(@aria-label,'Pick') or contains(@aria-label,'Open')][1]"
-                                        ).first
-                                        if btn.count() > 0 and btn.is_visible(timeout=250):
-                                            try:
-                                                btn.click(timeout=min(1200, action_timeout_ms))
-                                            except Exception:
-                                                btn.click(timeout=min(1200, action_timeout_ms), force=True)
+                                        loc.select_option(
+                                            label=re.compile(rf"^\s*{re.escape(value)}\s*$", re.I),
+                                            timeout=action_timeout_ms,
+                                        )
+                                        note(f"Payment direct: {label} set via <select> → {value!r}.")
+                                        return True
                                     except Exception:
                                         pass
-                                    opened = True
-                                    break
-                                if opened:
-                                    break
+                                try:
+                                    loc.click(timeout=action_timeout_ms)
+                                except Exception:
+                                    loc.click(timeout=action_timeout_ms, force=True)
+                                _safe_page_wait(page, 120, log_label=f"direct_after_click_{label}")
+                                loc.press("Control+a", timeout=1200)
+                                loc.press_sequentially(value, delay=30)
+                                _safe_page_wait(page, 80, log_label=f"direct_before_tab_{label}")
+                                loc.press("Tab", timeout=1200)
+                                note(f"Payment direct: {label} filled → {value!r}.")
+                                return True
                             except Exception:
                                 continue
-
-                        if not opened:
-                            continue
-                        _safe_page_wait(page, 250, log_label=f"after_open_dropdown_{value.lower()}")
-
-                        # Pick option from visible dropdown/list first.
-                        for role in ("option", "menuitem", "listitem", "link"):
-                            try:
-                                opts = root.get_by_role(role, name=value_pat)
-                                k = opts.count()
-                                for j in range(min(k, 10)):
-                                    o = opts.nth(j)
-                                    if o.is_visible(timeout=350):
-                                        try:
-                                            o.click(timeout=action_timeout_ms)
-                                        except Exception:
-                                            o.click(timeout=action_timeout_ms, force=True)
-                                        # Commit/advance to next editable field(s)
-                                        try:
-                                            for _ in range(max(1, int(tab_presses_after))):
-                                                o.press("Tab", timeout=min(1200, action_timeout_ms))
-                                        except Exception:
-                                            pass
-                                        return True
-                            except Exception:
-                                continue
-                        for css in ("li", "a", "div", "span", "td"):
-                            try:
-                                opts = root.locator(css).filter(has_text=value_pat)
-                                k = opts.count()
-                                for j in range(min(k, 20)):
-                                    o = opts.nth(j)
-                                    if o.is_visible(timeout=350):
-                                        try:
-                                            o.click(timeout=action_timeout_ms)
-                                        except Exception:
-                                            o.click(timeout=action_timeout_ms, force=True)
-                                        try:
-                                            for _ in range(max(1, int(tab_presses_after))):
-                                                o.press("Tab", timeout=min(1200, action_timeout_ms))
-                                        except Exception:
-                                            pass
-                                        return True
-                            except Exception:
-                                continue
-
-                        # Keyboard fallback only if option click path failed.
-                        try:
-                            for _ in range(max(1, int(down_presses))):
-                                page.keyboard.press("ArrowDown")
-                            for _ in range(max(1, int(tab_presses_after))):
-                                page.keyboard.press("Tab")
-                            return True
-                        except Exception:
-                            pass
                     return False
 
-                # Wait ONCE for the new row to fully render and focus to settle.
+                # Wait for the new row to fully render before addressing fields.
                 _safe_page_wait(page, 1500, log_label="wait_for_new_row_render")
 
-                # Fire ALL keyboard events with NO inter-step delays.
-                # Transaction Type is a required dropdown — Siebel's validation JS
-                # calls focus() back on it ~100-200ms after it loses focus while empty.
-                # Any _safe_page_wait between keystrokes gives that timer time to fire,
-                # causing inconsistent tab positions. Firing fast beats the timer.
-                #
-                # Sequence (5 total tabs from Transaction_Type):
-                #   "Payments" Tab×1 "Cash" Tab×4 "120000" Tab
+                # Direct field addressing: each field is located by selector,
+                # clicked, filled, and Tab-committed independently.
+                # No Tab-chain navigation ⇒ immune to Siebel's focus-steal timer.
                 type_ok = False
                 amount_ok = False
+                mode_ok = False
 
-                # _T = milliseconds between Tab presses.
-                # Must be: > Siebel cell-transition time (~30-50ms) so each Tab registers
-                #        AND < Siebel focus-stealing timer (~100-200ms) so it can't fire.
-                # 80ms satisfies both constraints.
-                _T = 80
-
+                # #region agent log
                 try:
-                    page.keyboard.type("Payments")                          # Transaction Type
-                    _safe_page_wait(page, _T, log_label="t0_after_payments")
-                    page.keyboard.press("Tab")                              # → Payment Mode
-                    _safe_page_wait(page, _T, log_label="t1_to_payment_mode")
-                    page.keyboard.type("Cash")                              # Payment Mode
-                    _safe_page_wait(page, _T, log_label="t2_after_cash")
-                    page.keyboard.press("Tab")                              # Tab 1/4 (confirms Cash)
-                    _safe_page_wait(page, _T, log_label="t3_tab1")
-                    page.keyboard.press("Tab")                              # Tab 2/4
-                    _safe_page_wait(page, _T, log_label="t4_tab2")
-                    page.keyboard.press("Tab")                              # Tab 3/4
-                    _safe_page_wait(page, _T, log_label="t5_tab3")
-                    page.keyboard.press("Tab")                              # Tab 4/4 → Txn Amount
-                    _safe_page_wait(page, _T, log_label="t6_tab4")
-                    page.keyboard.type("120000")                            # Transaction Amount
-                    _safe_page_wait(page, _T, log_label="t7_after_amount")
-                    page.keyboard.press("Tab")                              # commit amount
+                    import json as _json, time as _time
+                    with open("debug-08e634.log", "a") as _df:
+                        _df.write(_json.dumps({"sessionId":"08e634","location":"siebel_dms_playwright.py:direct_fill_start","message":"Starting direct field addressing","data":{"scoped_roots_count":len(scoped_roots),"amount_roots_count":len(amount_roots)},"timestamp":int(_time.time()*1000)}) + "\n")
+                except Exception:
+                    pass
+                # #endregion
 
-                    type_ok = True
-                    amount_ok = True
-                    note("Payment keyboard: fired sequence with 80ms inter-Tab gaps (Payments→Cash→120000).")
+                # 1. Transaction Type — fill first so Siebel's required-field
+                #    validator is satisfied and stops stealing focus.
+                type_ok = _direct_fill(
+                    scoped_roots, _TXN_TYPE_SELS, "Payments", label="Transaction_Type",
+                )
+                if type_ok:
+                    _safe_page_wait(page, 300, log_label="direct_after_txn_type_commit")
 
-                    # Settle so Siebel processes the final commit Tab before Save click.
-                    _safe_page_wait(page, 500, log_label="settle_before_save")
+                # 2. Payment Mode — try direct selector; fall back to typing at
+                #    current focus position (Tab from Transaction_Type lands here).
+                mode_ok = _direct_fill(
+                    scoped_roots, _PAY_MODE_SELS, "Cash", label="Payment_Mode",
+                )
+                if not mode_ok and type_ok:
+                    try:
+                        page.keyboard.type("Cash")
+                        page.keyboard.press("Tab")
+                        mode_ok = True
+                        note("Payment direct: Payment_Mode filled via keyboard fallback.")
+                    except Exception:
+                        note("Payment direct: Payment_Mode keyboard fallback failed.")
+                if mode_ok:
+                    _safe_page_wait(page, 300, log_label="direct_after_payment_mode_commit")
 
-                except Exception as _kb_ex:
-                    note(f"Payment keyboard fill failed: {_kb_ex!s:.120}")
+                # 3. Transaction Amount — uses amount_roots (may be a sibling frame).
+                amount_ok = _direct_fill(
+                    amount_roots, _TXN_AMT_SELS, "1000", label="Transaction_Amount",
+                )
+                if amount_ok:
+                    _safe_page_wait(page, 300, log_label="direct_after_txn_amount_commit")
+
+                # #region agent log
+                try:
+                    with open("debug-08e634.log", "a") as _df:
+                        _df.write(_json.dumps({"sessionId":"08e634","location":"siebel_dms_playwright.py:direct_fill_result","message":"Direct field addressing result","data":{"type_ok":type_ok,"mode_ok":mode_ok,"amount_ok":amount_ok},"timestamp":int(_time.time()*1000)}) + "\n")
+                except Exception:
+                    pass
+                # #endregion
 
                 note(
-                    "Filled payment fields (keyboard): "
-                    f"Type=Payments(ok={type_ok!r}), Amount=120000(ok={amount_ok!r})."
+                    "Filled payment fields (direct): "
+                    f"Type=Payments(ok={type_ok!r}), Mode=Cash(ok={mode_ok!r}), Amount=1000(ok={amount_ok!r})."
                 )
                 _safe_page_wait(page, 400, log_label="after_amount_before_save")
 
@@ -7102,17 +6997,17 @@ def Playwright_Hero_DMS_fill(
                 "Payments tab (current frame)",
                 "click_Payments_tab_then_click_plus_icon",
             )
-            # if not _add_customer_payment(
-            #     page,
-            #     action_timeout_ms=action_timeout_ms,
-            #     content_frame_selector=content_frame_selector,
-            #     note=note,
-            # ):
-            #     step("Stopped: could not open Payments tab or click '+' icon.")
-            #     out["error"] = (
-            #         "Siebel: video SOP — could not click Payments tab and '+' icon for Add customer payment."
-            #     )
-            #     return out
+            if not _add_customer_payment(
+                page,
+                action_timeout_ms=action_timeout_ms,
+                content_frame_selector=content_frame_selector,
+                note=note,
+            ):
+                step("Stopped: could not open Payments tab or click '+' icon.")
+                out["error"] = (
+                    "Siebel: video SOP — could not click Payments tab and '+' icon for Add customer payment."
+                )
+                return out
 
             full_chassis = (
                 str((out.get("vehicle") or {}).get("full_chassis") or "").strip()

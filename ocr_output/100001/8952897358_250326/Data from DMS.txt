@@ -1,0 +1,27 @@
+Data from DMS
+
+--- Customer (filled on enquiry) ---
+Name: Ashok Kumar
+Address: S/O Madan Lal, jamun baag golpura Bharatpur Bharatpur Rajasthan 321001
+State: RAJASTHAN
+Pin code: 321001
+Mobile: 8952897358
+Relation (S/O or W/o): S/O
+Care of / Father–Husband (Aadhaar QR): S/O Madan Lal
+
+--- Vehicle (from DMS search result) ---
+Key num: —
+Frame / Chassis num: —
+Full chassis (VIN from detail): —
+Engine num: —
+Full engine (from detail): —
+Model: —
+Color: —
+Cubic capacity: —
+Seating capacity: —
+Body type: —
+Vehicle type: —
+Num cylinders: —
+Horsepower: —
+Ex-showroom Price (Order Value): —
+Year of Mfg: —
