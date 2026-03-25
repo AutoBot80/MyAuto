@@ -4054,15 +4054,40 @@ def _add_customer_payment(
                                         return True
                                     except Exception:
                                         pass
+                                # #region agent log
+                                _el_attrs = {}
+                                try:
+                                    _el_attrs = loc.evaluate("""el => ({
+                                        tag: el.tagName, id: el.id, name: el.name,
+                                        type: el.type, readOnly: el.readOnly,
+                                        disabled: el.disabled, ariaLabel: el.getAttribute('aria-label'),
+                                        val_before: el.value
+                                    })""")
+                                    with open(_dlog_path, "a") as _df:
+                                        _df.write(_json.dumps({"sessionId":"08e634","hypothesisId":"B2","location":f"_direct_fill:{label}","message":"element_attrs","data":_el_attrs,"timestamp":int(_time.time()*1000)}) + "\n")
+                                except Exception:
+                                    pass
+                                # #endregion
                                 try:
                                     loc.click(timeout=action_timeout_ms)
                                 except Exception:
                                     loc.click(timeout=action_timeout_ms, force=True)
-                                _safe_page_wait(page, 120, log_label=f"direct_after_click_{label}")
-                                loc.press("Control+a", timeout=1200)
-                                loc.press_sequentially(value, delay=30)
-                                _safe_page_wait(page, 80, log_label=f"direct_before_tab_{label}")
+                                _safe_page_wait(page, 250, log_label=f"direct_after_click_{label}")
+                                try:
+                                    loc.fill(value, timeout=action_timeout_ms)
+                                except Exception:
+                                    loc.press("Control+a", timeout=1200)
+                                    page.keyboard.type(value)
+                                _safe_page_wait(page, 120, log_label=f"direct_before_tab_{label}")
                                 loc.press("Tab", timeout=1200)
+                                # #region agent log
+                                try:
+                                    _val_after = loc.evaluate("el => el.value")
+                                    with open(_dlog_path, "a") as _df:
+                                        _df.write(_json.dumps({"sessionId":"08e634","hypothesisId":"B3","location":f"_direct_fill:{label}","message":"post_fill_value","data":{"val_after":str(_val_after)[:100],"expected":value},"timestamp":int(_time.time()*1000)}) + "\n")
+                                except Exception:
+                                    pass
+                                # #endregion
                                 note(f"Payment direct: {label} filled → {value!r}.")
                                 return True
                             except Exception as _fill_ex:
@@ -4206,9 +4231,52 @@ def _add_customer_payment(
                     if save_clicked:
                         break
                 if save_clicked:
-                    # Wait for Siebel to process the save server-side before returning.
-                    _safe_page_wait(page, 2000, log_label="after_payment_save_processing")
-                    note("Clicked Save icon after payment entry.")
+                    _safe_page_wait(page, 3000, log_label="after_payment_save_processing")
+                    # Check for Siebel error popup / alert dialog after save.
+                    _err_msg = None
+                    for _chk_root in list(_siebel_locator_search_roots(page, content_frame_selector)) + list(_ordered_frames(page)):
+                        try:
+                            _err_msg = _chk_root.evaluate(
+                                """() => {
+                                  const vis = (el) => {
+                                    if (!el) return false;
+                                    const st = window.getComputedStyle(el);
+                                    if (st.display === 'none' || st.visibility === 'hidden') return false;
+                                    const r = el.getBoundingClientRect();
+                                    return r.width > 5 && r.height > 5;
+                                  };
+                                  // Siebel inline error / modal popup
+                                  for (const s of [
+                                    "[role='alertdialog']", "[role='alert']",
+                                    ".siebui-popup-error", ".siebui-alert",
+                                    ".error-dialog", ".ui-dialog.ui-widget",
+                                    "[id*='ErrorPopup']", "[class*='error' i][class*='popup' i]",
+                                    "[class*='modal' i][class*='error' i]"
+                                  ]) {
+                                    const el = document.querySelector(s);
+                                    if (el && vis(el)) {
+                                      return (el.innerText || el.textContent || '').trim().substring(0, 500);
+                                    }
+                                  }
+                                  return null;
+                                }"""
+                            )
+                            if _err_msg:
+                                break
+                        except Exception:
+                            continue
+                    if _err_msg:
+                        note(f"Payment save: Siebel error popup detected → {_err_msg!r:.300}")
+                        # #region agent log
+                        try:
+                            import json as _json, time as _time
+                            with open("debug-08e634.log", "a") as _df:
+                                _df.write(_json.dumps({"sessionId":"08e634","hypothesisId":"SAVE_ERR","location":"after_save","message":"error_popup_detected","data":{"text":_err_msg[:300]},"timestamp":int(_time.time()*1000)}) + "\n")
+                        except Exception:
+                            pass
+                        # #endregion
+                    else:
+                        note("Clicked Save icon after payment entry — no error popup detected.")
                     return True
                 note("Could not click Save icon after filling payment fields.")
                 return False
