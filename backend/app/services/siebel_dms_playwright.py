@@ -4161,9 +4161,13 @@ def _add_customer_payment(
                                     except Exception:
                                         _rl.press("Control+a", timeout=1200)
                                         page.keyboard.type(value)
-                                else:
-                                    # activeElement or last-resort: type into whatever has focus.
+                                elif _activated and _activate_method == "activeElement":
                                     page.keyboard.type(value)
+                                else:
+                                    # Cell could not be activated at all — return False so
+                                    # the caller can try a Tab-navigation fallback.
+                                    note(f"Payment direct: {label} cell readOnly, activation failed.")
+                                    return False
                                 _safe_page_wait(page, 120, log_label=f"direct_before_tab_{label}")
                                 page.keyboard.press("Tab")
                                 # #region agent log
@@ -4234,21 +4238,105 @@ def _add_customer_payment(
                 # 3. Transaction Amount — uses amount_roots (may be a sibling frame).
                 # #region agent log
                 try:
-                    _amt_diag = []
-                    for _ari, _ar in enumerate(amount_roots):
+                    import json as _json, time as _time
+                    _all_inputs = []
+                    for _fi, _fr in enumerate(list(amount_roots) + list(_ordered_frames(page))):
                         try:
-                            _amt_diag.append({"idx": _ari, "name": getattr(_ar, 'name', '?'), "url": (getattr(_ar, 'url', '') or '')[:120]})
+                            _fr_name = getattr(_fr, 'name', '?')
+                            _fr_inputs = _fr.evaluate("""() => {
+                                const vis = (el) => {
+                                    if (!el) return false;
+                                    const st = window.getComputedStyle(el);
+                                    if (st.display === 'none' || st.visibility === 'hidden') return false;
+                                    const r = el.getBoundingClientRect();
+                                    return r.width > 2 && r.height > 2;
+                                };
+                                return Array.from(document.querySelectorAll('input, textarea, select'))
+                                    .filter(vis)
+                                    .slice(0, 30)
+                                    .map(el => ({
+                                        tag: el.tagName, name: el.name || '', id: el.id || '',
+                                        type: el.type || '', readOnly: !!el.readOnly,
+                                        ariaLabel: el.getAttribute('aria-label') || '',
+                                        title: el.title || '',
+                                        val: (el.value || '').substring(0, 50),
+                                        cls: (el.className || '').substring(0, 80)
+                                    }));
+                            }""")
+                            if _fr_inputs:
+                                _all_inputs.append({"frame_idx": _fi, "frame_name": _fr_name, "inputs": _fr_inputs})
                         except Exception:
-                            _amt_diag.append({"idx": _ari, "err": "probe_failed"})
-                    _same_as_scoped = amount_roots is scoped_roots or (len(amount_roots) == len(scoped_roots) and all(a is b for a, b in zip(amount_roots, scoped_roots)))
+                            continue
                     with open("debug-08e634.log", "a") as _df:
-                        _df.write(_json.dumps({"sessionId":"08e634","hypothesisId":"A","location":"before_txn_amount","message":"amount_roots_diag","data":{"amount_roots_count":len(amount_roots),"same_as_scoped":_same_as_scoped,"roots":_amt_diag},"timestamp":int(_time.time()*1000)}) + "\n")
+                        _df.write(_json.dumps({"sessionId":"08e634","hypothesisId":"DOM_DUMP","location":"before_txn_amount","message":"all_visible_inputs","data":{"frame_count":len(_all_inputs),"frames":_all_inputs},"timestamp":int(_time.time()*1000)}) + "\n")
                 except Exception:
                     pass
                 # #endregion
                 amount_ok = _direct_fill(
                     amount_roots, _TXN_AMT_SELS, "1000", label="Transaction_Amount",
                 )
+                if not amount_ok:
+                    # Siebel list cells that can't be click-activated must be
+                    # reached via Tab navigation within the active row.
+                    # Tab from current focus, checking activeElement after each Tab.
+                    note("Payment direct: Transaction_Amount direct fill failed; trying Tab navigation.")
+                    _tab_filled = False
+                    for _ti in range(8):
+                        try:
+                            page.keyboard.press("Tab")
+                            _safe_page_wait(page, 200, log_label=f"tab_nav_amount_{_ti}")
+                            _ae = None
+                            for _tr in amount_roots:
+                                try:
+                                    _ae = _tr.evaluate("""() => {
+                                        const ae = document.activeElement;
+                                        if (!ae || ae === document.body) return null;
+                                        return {
+                                            tag: ae.tagName, name: ae.name || '',
+                                            ariaLabel: ae.getAttribute('aria-label') || '',
+                                            readOnly: ae.readOnly, id: ae.id || '',
+                                            val: ae.value || ''
+                                        };
+                                    }""")
+                                    if _ae:
+                                        break
+                                except Exception:
+                                    continue
+                            # #region agent log
+                            try:
+                                import json as _json, time as _time
+                                with open("debug-08e634.log", "a") as _df:
+                                    _df.write(_json.dumps({"sessionId":"08e634","hypothesisId":"TAB_NAV","location":f"tab_nav:{_ti}","message":"activeElement_after_tab","data":{"tab_idx":_ti,"ae":_ae},"timestamp":int(_time.time()*1000)}) + "\n")
+                            except Exception:
+                                pass
+                            # #endregion
+                            if _ae and not _ae.get("readOnly") and _ae.get("tag") in ("INPUT", "TEXTAREA"):
+                                _ae_label = (_ae.get("ariaLabel") or "").lower()
+                                _ae_name = (_ae.get("name") or "").lower()
+                                if "amount" in _ae_label or "amount" in _ae_name or "transaction_amount" in _ae_name:
+                                    page.keyboard.type("1000")
+                                    _safe_page_wait(page, 120, log_label="tab_nav_amount_before_commit")
+                                    page.keyboard.press("Tab")
+                                    _tab_filled = True
+                                    note("Payment direct: Transaction_Amount filled via Tab navigation.")
+                                    break
+                        except Exception:
+                            continue
+                    if not _tab_filled:
+                        # Last resort: blindly Tab 4 times from current position and type
+                        # (mirrors the old working keyboard sequence distance from Payment_Mode).
+                        try:
+                            for _ in range(4):
+                                page.keyboard.press("Tab")
+                                _safe_page_wait(page, 100, log_label="tab_nav_blind")
+                            page.keyboard.type("1000")
+                            _safe_page_wait(page, 120, log_label="tab_nav_blind_before_commit")
+                            page.keyboard.press("Tab")
+                            _tab_filled = True
+                            note("Payment direct: Transaction_Amount filled via blind Tab×4 fallback.")
+                        except Exception:
+                            note("Payment direct: Transaction_Amount blind Tab fallback failed.")
+                    amount_ok = _tab_filled
                 if amount_ok:
                     _safe_page_wait(page, 300, log_label="direct_after_txn_amount_commit")
 
