@@ -3460,6 +3460,38 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
 
     _safe_page_wait(page, 700, log_label="after_first_name_click_before_relation_fill")
 
+    # #region agent log
+    import json as _json3, time as _time3
+    _dlog3 = "debug-08e634.log"
+    try:
+        _rn_dom_probe = None
+        for _fr in _ordered_frames(page):
+            try:
+                _rn_dom_probe = _fr.evaluate("""() => {
+                    const vis = el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+                    const inputs = Array.from(document.querySelectorAll('input,textarea,select')).filter(vis);
+                    const rn = inputs.filter(i => {
+                        const a = (i.getAttribute('aria-label')||'').toLowerCase();
+                        const t = (i.getAttribute('title')||'').toLowerCase();
+                        const n = (i.name||'').toLowerCase();
+                        return a.includes('relation') || t.includes('relation') || n.includes('relation');
+                    });
+                    return { total_visible_inputs: inputs.length, relation_fields: rn.map(i => ({
+                        tag: i.tagName, name: i.name||'', id: i.id||'',
+                        ariaLabel: i.getAttribute('aria-label')||'',
+                        readOnly: i.readOnly, val: (i.value||'').substring(0,50)
+                    })) };
+                }""")
+                if _rn_dom_probe and _rn_dom_probe.get("relation_fields"):
+                    break
+            except Exception:
+                continue
+        with open(_dlog3, "a") as _df3:
+            _df3.write(_json3.dumps({"sessionId":"08e634","hypothesisId":"ADE","location":"pre_fill_dom_probe","message":"dom_state_after_700ms_wait","data":_rn_dom_probe,"timestamp":int(_time3.time()*1000)}) + "\n")
+    except Exception:
+        pass
+    # #endregion
+
     # DB rule: Address Line 1 should be the substring between first and second comma.
     addr_raw = (address_line_1 or "").strip()
     addr_line1_value = ""
@@ -3470,17 +3502,48 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
     if not addr_line1_value:
         addr_line1_value = ""
 
-    def _fill_with_retry(loc, value: str, *, attempts: int = 3, visible_ms: int = 900) -> bool:
+    def _fill_with_retry(loc, value: str, *, attempts: int = 3, visible_ms: int = 900, field_label: str = "") -> bool:
         """
         Stabilize flaky Siebel input commit:
         wait visible -> fill -> blur(Tab) -> readback verify, with short backoff retries.
         """
+        import json as _json, time as _time
+        _dlog = "debug-08e634.log"
         for i in range(max(1, attempts)):
+            _step_data = {"attempt": i + 1, "field": field_label, "value": value[:50]}
             try:
-                if loc.count() <= 0:
+                cnt = loc.count()
+                if cnt <= 0:
+                    # #region agent log
+                    try:
+                        with open(_dlog, "a") as _df:
+                            _df.write(_json.dumps({"sessionId":"08e634","hypothesisId":"A","location":"_fill_with_retry","message":"loc_count_zero","data":{**_step_data,"count":cnt},"timestamp":int(_time.time()*1000)}) + "\n")
+                    except Exception:
+                        pass
+                    # #endregion
                     return False
-                if not loc.is_visible(timeout=visible_ms):
+                vis = loc.is_visible(timeout=visible_ms)
+                if not vis:
+                    # #region agent log
+                    try:
+                        with open(_dlog, "a") as _df:
+                            _df.write(_json.dumps({"sessionId":"08e634","hypothesisId":"A","location":"_fill_with_retry","message":"not_visible","data":{**_step_data,"visible_ms":visible_ms},"timestamp":int(_time.time()*1000)}) + "\n")
+                    except Exception:
+                        pass
+                    # #endregion
                     continue
+                # #region agent log
+                _ro = None
+                try:
+                    _ro = loc.evaluate("el => ({ readOnly: el.readOnly, val: (el.value||'').substring(0,50), name: el.name||'', id: el.id||'' })")
+                except Exception:
+                    pass
+                try:
+                    with open(_dlog, "a") as _df:
+                        _df.write(_json.dumps({"sessionId":"08e634","hypothesisId":"D","location":"_fill_with_retry","message":"pre_fill_state","data":{**_step_data,"el":_ro},"timestamp":int(_time.time()*1000)}) + "\n")
+                except Exception:
+                    pass
+                # #endregion
                 try:
                     loc.click(timeout=min(2000, action_timeout_ms))
                 except Exception:
@@ -3492,10 +3555,24 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
                     pass
                 _safe_page_wait(page, 120 + (i * 200), log_label=f"retry_settle_{i+1}")
                 got = (loc.input_value(timeout=min(2500, action_timeout_ms)) or "").strip()
-                if got and (value.lower() in got.lower() or got.lower() in value.lower()):
+                _ok = bool(got and (value.lower() in got.lower() or got.lower() in value.lower()))
+                # #region agent log
+                try:
+                    with open(_dlog, "a") as _df:
+                        _df.write(_json.dumps({"sessionId":"08e634","hypothesisId":"B","location":"_fill_with_retry","message":"readback","data":{**_step_data,"got":got[:80],"match":_ok},"timestamp":int(_time.time()*1000)}) + "\n")
+                except Exception:
+                    pass
+                # #endregion
+                if _ok:
                     return True
-            except Exception:
-                pass
+            except Exception as _ex:
+                # #region agent log
+                try:
+                    with open(_dlog, "a") as _df:
+                        _df.write(_json.dumps({"sessionId":"08e634","hypothesisId":"C","location":"_fill_with_retry","message":"exception","data":{**_step_data,"error":str(_ex)[:200]},"timestamp":int(_time.time()*1000)}) + "\n")
+                except Exception:
+                    pass
+                # #endregion
             _safe_page_wait(page, 220 + (i * 250), log_label=f"retry_backoff_{i+1}")
         return False
 
@@ -3601,6 +3678,9 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
 
     # Exact-input path first (from provided DOM snippet), then label fallback.
     _read_first_name_probe()
+    import json as _json2, time as _time2
+    _dlog2 = "debug-08e634.log"
+    _rn_t0 = _time2.time()
     exact_selectors = (
         "input[aria-label=\"Relation's Name\"]",
         "textarea[aria-label=\"Relation's Name\"]",
@@ -3609,11 +3689,25 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
         "input[aria-labelledby=\"Relation's_Name_Label_4\"]",
         "input.s_4_1_89_0",
     )
+    # #region agent log
+    try:
+        with open(_dlog2, "a") as _df2:
+            _df2.write(_json2.dumps({"sessionId":"08e634","hypothesisId":"E","location":"relation_fill_start","message":"begin","data":{"care_val":care_val[:60],"selectors":len(exact_selectors)},"timestamp":int(_time2.time()*1000)}) + "\n")
+    except Exception:
+        pass
+    # #endregion
     for fl in _iter_frame_locator_roots(page, content_frame_selector):
         for css in exact_selectors:
             try:
                 loc = fl.locator(css).first
-                if _fill_with_retry(loc, care_val, attempts=3, visible_ms=900):
+                if _fill_with_retry(loc, care_val, attempts=3, visible_ms=900, field_label=f"RN_fl:{css[:40]}"):
+                    # #region agent log
+                    try:
+                        with open(_dlog2, "a") as _df2:
+                            _df2.write(_json2.dumps({"sessionId":"08e634","hypothesisId":"OK","location":"relation_fill_ok","message":"filled_fl_exact","data":{"css":css,"elapsed_ms":int((_time2.time()-_rn_t0)*1000)},"timestamp":int(_time2.time()*1000)}) + "\n")
+                    except Exception:
+                        pass
+                    # #endregion
                     return _after_relation_fill_nav()
             except Exception:
                 continue
@@ -3621,26 +3715,63 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
         for css in exact_selectors:
             try:
                 loc = frame.locator(css).first
-                if _fill_with_retry(loc, care_val, attempts=3, visible_ms=900):
+                if _fill_with_retry(loc, care_val, attempts=3, visible_ms=900, field_label=f"RN_fr:{css[:40]}"):
+                    # #region agent log
+                    try:
+                        with open(_dlog2, "a") as _df2:
+                            _df2.write(_json2.dumps({"sessionId":"08e634","hypothesisId":"OK","location":"relation_fill_ok","message":"filled_fr_exact","data":{"css":css,"elapsed_ms":int((_time2.time()-_rn_t0)*1000)},"timestamp":int(_time2.time()*1000)}) + "\n")
+                    except Exception:
+                        pass
+                    # #endregion
                     return _after_relation_fill_nav()
             except Exception:
                 continue
+
+    # #region agent log
+    try:
+        with open(_dlog2, "a") as _df2:
+            _df2.write(_json2.dumps({"sessionId":"08e634","hypothesisId":"A","location":"relation_exact_failed","message":"all_exact_selectors_failed","data":{"elapsed_ms":int((_time2.time()-_rn_t0)*1000)},"timestamp":int(_time2.time()*1000)}) + "\n")
+    except Exception:
+        pass
+    # #endregion
 
     # Restore earlier working style: label-based fill fallback.
     for fl in _iter_frame_locator_roots(page, content_frame_selector):
         try:
             loc = fl.get_by_label("Relation's Name", exact=True).first
-            if _fill_with_retry(loc, care_val, attempts=3, visible_ms=700):
+            if _fill_with_retry(loc, care_val, attempts=3, visible_ms=700, field_label="RN_lbl_fl"):
+                # #region agent log
+                try:
+                    with open(_dlog2, "a") as _df2:
+                        _df2.write(_json2.dumps({"sessionId":"08e634","hypothesisId":"OK","location":"relation_fill_ok","message":"filled_fl_label","data":{"elapsed_ms":int((_time2.time()-_rn_t0)*1000)},"timestamp":int(_time2.time()*1000)}) + "\n")
+                except Exception:
+                    pass
+                # #endregion
                 return _after_relation_fill_nav()
         except Exception:
             continue
     for frame in _ordered_frames(page):
         try:
             loc = frame.get_by_label("Relation's Name", exact=True).first
-            if _fill_with_retry(loc, care_val, attempts=3, visible_ms=700):
+            if _fill_with_retry(loc, care_val, attempts=3, visible_ms=700, field_label="RN_lbl_fr"):
+                # #region agent log
+                try:
+                    with open(_dlog2, "a") as _df2:
+                        _df2.write(_json2.dumps({"sessionId":"08e634","hypothesisId":"OK","location":"relation_fill_ok","message":"filled_fr_label","data":{"elapsed_ms":int((_time2.time()-_rn_t0)*1000)},"timestamp":int(_time2.time()*1000)}) + "\n")
+                except Exception:
+                    pass
+                # #endregion
                 return _after_relation_fill_nav()
         except Exception:
             continue
+
+    # #region agent log
+    try:
+        with open(_dlog2, "a") as _df2:
+            _df2.write(_json2.dumps({"sessionId":"08e634","hypothesisId":"FAIL","location":"relation_fill_fail","message":"all_paths_exhausted","data":{"elapsed_ms":int((_time2.time()-_rn_t0)*1000),"care_val":care_val[:60]},"timestamp":int(_time2.time()*1000)}) + "\n")
+    except Exception:
+        pass
+    # #endregion
 
     _read_first_name_probe()
     note("Could not fill Relation's Name on opened customer record (video SOP).")
@@ -4024,27 +4155,11 @@ def _add_customer_payment(
                     Frame is used only as a locator scope — no window.focus() or
                     el.focus() calls, so focus is never forcibly trapped.
                     """
-                    import json as _json, time as _time
-                    _dlog_path = "debug-08e634.log"
-                    for ri, r in enumerate(roots):
-                        for ci, css in enumerate(selectors):
+                    for r in roots:
+                        for css in selectors:
                             try:
                                 loc = r.locator(css).first
-                                cnt = loc.count()
-                                vis = False
-                                if cnt > 0:
-                                    try:
-                                        vis = loc.is_visible(timeout=500)
-                                    except Exception:
-                                        vis = False
-                                # #region agent log
-                                try:
-                                    with open(_dlog_path, "a") as _df:
-                                        _df.write(_json.dumps({"sessionId":"08e634","hypothesisId":"B","location":f"_direct_fill:{label}","message":"selector_probe","data":{"root_idx":ri,"selector":css,"count":cnt,"visible":vis},"timestamp":int(_time.time()*1000)}) + "\n")
-                                except Exception:
-                                    pass
-                                # #endregion
-                                if cnt == 0 or not vis:
+                                if loc.count() == 0 or not loc.is_visible(timeout=500):
                                     continue
                                 tag = (loc.evaluate("el => el.tagName") or "").upper()
                                 if tag == "SELECT":
@@ -4057,141 +4172,26 @@ def _add_customer_payment(
                                         return True
                                     except Exception:
                                         pass
-                                # #region agent log
-                                _el_attrs = {}
-                                try:
-                                    _el_attrs = loc.evaluate("""el => ({
-                                        tag: el.tagName, id: el.id, name: el.name,
-                                        type: el.type, readOnly: el.readOnly,
-                                        disabled: el.disabled, ariaLabel: el.getAttribute('aria-label'),
-                                        val_before: el.value
-                                    })""")
-                                    with open(_dlog_path, "a") as _df:
-                                        _df.write(_json.dumps({"sessionId":"08e634","hypothesisId":"B2","location":f"_direct_fill:{label}","message":"element_attrs","data":_el_attrs,"timestamp":int(_time.time()*1000)}) + "\n")
-                                except Exception:
-                                    pass
-                                # #endregion
-                                # Siebel list cells are readOnly until activated.
-                                # Strategy: click → check → dblclick → check → activeElement fallback.
-                                _is_ro = _el_attrs.get("readOnly", False)
-                                _activated = False
-                                _activate_method = "none"
-
+                                _is_ro = bool(loc.evaluate("el => el.readOnly"))
                                 if not _is_ro:
-                                    # Already editable (e.g. form-mode field).
                                     try:
                                         loc.click(timeout=action_timeout_ms)
                                     except Exception:
                                         loc.click(timeout=action_timeout_ms, force=True)
                                     _safe_page_wait(page, 250, log_label=f"direct_after_click_{label}")
-                                    _activated = True
-                                    _activate_method = "click_not_ro"
-                                else:
-                                    # Step 1: single click
-                                    try:
-                                        loc.click(timeout=action_timeout_ms)
-                                    except Exception:
-                                        loc.click(timeout=action_timeout_ms, force=True)
-                                    _safe_page_wait(page, 400, log_label=f"direct_after_click_{label}")
-                                    try:
-                                        _ro1 = r.locator(css).first.evaluate("el => el.readOnly")
-                                    except Exception:
-                                        _ro1 = True
-                                    if not _ro1:
-                                        _activated = True
-                                        _activate_method = "single_click"
-                                    else:
-                                        # Step 2: double-click
-                                        try:
-                                            loc.dblclick(timeout=action_timeout_ms)
-                                        except Exception:
-                                            try:
-                                                loc.dblclick(timeout=action_timeout_ms, force=True)
-                                            except Exception:
-                                                pass
-                                        _safe_page_wait(page, 500, log_label=f"direct_after_dblclick_{label}")
-                                        try:
-                                            _ro2 = r.locator(css).first.evaluate("el => el.readOnly")
-                                        except Exception:
-                                            _ro2 = True
-                                        if not _ro2:
-                                            _activated = True
-                                            _activate_method = "dblclick"
-                                        else:
-                                            # Step 3: check if Siebel focused a DIFFERENT
-                                            # editable element (common in list applets).
-                                            try:
-                                                _ae_info = r.evaluate("""() => {
-                                                    const ae = document.activeElement;
-                                                    if (!ae || ae === document.body) return null;
-                                                    return {
-                                                        tag: ae.tagName, name: ae.name, id: ae.id,
-                                                        readOnly: ae.readOnly, type: ae.type,
-                                                        ariaLabel: ae.getAttribute('aria-label')
-                                                    };
-                                                }""")
-                                            except Exception:
-                                                _ae_info = None
-                                            # #region agent log
-                                            try:
-                                                with open(_dlog_path, "a") as _df:
-                                                    _df.write(_json.dumps({"sessionId":"08e634","hypothesisId":"ACTIVE_EL","location":f"_direct_fill:{label}","message":"activeElement_after_dblclick","data":{"ae":_ae_info},"timestamp":int(_time.time()*1000)}) + "\n")
-                                            except Exception:
-                                                pass
-                                            # #endregion
-                                            if _ae_info and _ae_info.get("tag") in ("INPUT", "TEXTAREA") and not _ae_info.get("readOnly"):
-                                                _activated = True
-                                                _activate_method = "activeElement"
-
-                                # #region agent log
-                                try:
-                                    with open(_dlog_path, "a") as _df:
-                                        _df.write(_json.dumps({"sessionId":"08e634","hypothesisId":"RO_FIX","location":f"_direct_fill:{label}","message":"activation_result","data":{"activated":_activated,"method":_activate_method},"timestamp":int(_time.time()*1000)}) + "\n")
-                                except Exception:
-                                    pass
-                                # #endregion
-
-                                if _activated and _activate_method == "click_not_ro":
                                     try:
                                         loc.fill(value, timeout=action_timeout_ms)
                                     except Exception:
                                         loc.press("Control+a", timeout=1200)
                                         page.keyboard.type(value)
-                                elif _activated and _activate_method in ("single_click", "dblclick"):
-                                    _rl = r.locator(css).first
-                                    try:
-                                        _rl.fill(value, timeout=action_timeout_ms)
-                                    except Exception:
-                                        _rl.press("Control+a", timeout=1200)
-                                        page.keyboard.type(value)
-                                elif _activated and _activate_method == "activeElement":
-                                    page.keyboard.type(value)
                                 else:
-                                    # Cell could not be activated at all — return False so
-                                    # the caller can try a Tab-navigation fallback.
                                     note(f"Payment direct: {label} cell readOnly, activation failed.")
                                     return False
                                 _safe_page_wait(page, 120, log_label=f"direct_before_tab_{label}")
                                 page.keyboard.press("Tab")
-                                # #region agent log
-                                try:
-                                    _check = r.locator(css).first
-                                    _val_after = _check.evaluate("el => el.value") if _check.count() > 0 else "???"
-                                    with open(_dlog_path, "a") as _df:
-                                        _df.write(_json.dumps({"sessionId":"08e634","hypothesisId":"B3","location":f"_direct_fill:{label}","message":"post_fill_value","data":{"val_after":str(_val_after)[:100],"expected":value},"timestamp":int(_time.time()*1000)}) + "\n")
-                                except Exception:
-                                    pass
-                                # #endregion
                                 note(f"Payment direct: {label} filled → {value!r}.")
                                 return True
-                            except Exception as _fill_ex:
-                                # #region agent log
-                                try:
-                                    with open(_dlog_path, "a") as _df:
-                                        _df.write(_json.dumps({"sessionId":"08e634","hypothesisId":"D","location":f"_direct_fill:{label}","message":"exception_swallowed","data":{"root_idx":ri,"selector":css,"error":str(_fill_ex)[:200]},"timestamp":int(_time.time()*1000)}) + "\n")
-                                except Exception:
-                                    pass
-                                # #endregion
+                            except Exception:
                                 continue
                     return False
 
@@ -4204,15 +4204,6 @@ def _add_customer_payment(
                 type_ok = False
                 amount_ok = False
                 mode_ok = False
-
-                # #region agent log
-                try:
-                    import json as _json, time as _time
-                    with open("debug-08e634.log", "a") as _df:
-                        _df.write(_json.dumps({"sessionId":"08e634","location":"siebel_dms_playwright.py:direct_fill_start","message":"Starting direct field addressing","data":{"scoped_roots_count":len(scoped_roots),"amount_roots_count":len(amount_roots)},"timestamp":int(_time.time()*1000)}) + "\n")
-                except Exception:
-                    pass
-                # #endregion
 
                 # 1. Transaction Type — fill first so Siebel's required-field
                 #    validator is satisfied and stops stealing focus.
@@ -4257,15 +4248,6 @@ def _add_customer_payment(
                             page.keyboard.press("Tab")
                         except Exception:
                             pass
-                    # #region agent log
-                    try:
-                        import json as _json, time as _time
-                        with open("debug-08e634.log", "a") as _df:
-                            _df.write(_json.dumps({"sessionId":"08e634","hypothesisId":"FOCUS_STEAL","location":"after_txn_type","message":"focus_stability_check","data":{"stable":_focus_stable,"checks_used":_fc + 1},"timestamp":int(_time.time()*1000)}) + "\n")
-                    except Exception:
-                        pass
-                    # #endregion
-
                 # 2. Payment Mode — try direct selector; fall back to typing at
                 #    current focus position (Tab from Transaction_Type lands here).
                 mode_ok = _direct_fill(
@@ -4311,14 +4293,6 @@ def _add_customer_payment(
                                     break
                             except Exception:
                                 continue
-                        # #region agent log
-                        try:
-                            import json as _json, time as _time
-                            with open("debug-08e634.log", "a") as _df:
-                                _df.write(_json.dumps({"sessionId":"08e634","hypothesisId":"TAB_NAV","location":f"tab_nav:{_ti}","message":"activeElement_after_tab","data":{"tab_idx":_ti,"ae":_ae},"timestamp":int(_time.time()*1000)}) + "\n")
-                        except Exception:
-                            pass
-                        # #endregion
                         if not _ae:
                             continue
                         # In Siebel edit mode, ariaLabel is often empty — match
@@ -4333,7 +4307,7 @@ def _add_customer_payment(
                         )
                         if _is_txn_amount:
                             if not _ae.get("readOnly"):
-                                page.keyboard.type("1000")
+                                page.keyboard.type("0")
                                 _safe_page_wait(page, 120, log_label="tab_nav_amount_fill")
                                 page.keyboard.press("Tab")
                                 _tab_filled = True
@@ -4354,17 +4328,9 @@ def _add_customer_payment(
                 if amount_ok:
                     _safe_page_wait(page, 300, log_label="direct_after_txn_amount_commit")
 
-                # #region agent log
-                try:
-                    with open("debug-08e634.log", "a") as _df:
-                        _df.write(_json.dumps({"sessionId":"08e634","location":"siebel_dms_playwright.py:direct_fill_result","message":"Direct field addressing result","data":{"type_ok":type_ok,"mode_ok":mode_ok,"amount_ok":amount_ok},"timestamp":int(_time.time()*1000)}) + "\n")
-                except Exception:
-                    pass
-                # #endregion
-
                 note(
                     "Filled payment fields (direct): "
-                    f"Type=Payments(ok={type_ok!r}), Mode=Cash(ok={mode_ok!r}), Amount=1000(ok={amount_ok!r})."
+                    f"Type=Payments(ok={type_ok!r}), Mode=Cash(ok={mode_ok!r}), Amount=0(ok={amount_ok!r})."
                 )
                 _safe_page_wait(page, 400, log_label="after_amount_before_save")
 
@@ -4456,14 +4422,6 @@ def _add_customer_payment(
                             continue
                     if _err_msg:
                         note(f"Payment save: Siebel error popup detected → {_err_msg!r:.300}")
-                        # #region agent log
-                        try:
-                            import json as _json, time as _time
-                            with open("debug-08e634.log", "a") as _df:
-                                _df.write(_json.dumps({"sessionId":"08e634","hypothesisId":"SAVE_ERR","location":"after_save","message":"error_popup_detected","data":{"text":_err_msg[:300]},"timestamp":int(_time.time()*1000)}) + "\n")
-                        except Exception:
-                            pass
-                        # #endregion
                     else:
                         note("Clicked Save icon after payment entry — no error popup detected.")
                     return True
