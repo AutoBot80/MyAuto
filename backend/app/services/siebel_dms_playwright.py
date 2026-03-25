@@ -4068,42 +4068,101 @@ def _add_customer_payment(
                                 except Exception:
                                     pass
                                 # #endregion
-                                try:
-                                    loc.click(timeout=action_timeout_ms)
-                                except Exception:
-                                    loc.click(timeout=action_timeout_ms, force=True)
-                                _safe_page_wait(page, 400, log_label=f"direct_after_click_{label}")
-                                # Siebel cells start readOnly; clicking activates edit mode.
-                                # Re-locate the input after activation — Siebel may swap
-                                # the DOM element or toggle readOnly off.
-                                _active_loc = None
-                                for _retry in range(3):
-                                    _rl = r.locator(css).first
+                                # Siebel list cells are readOnly until activated.
+                                # Strategy: click → check → dblclick → check → activeElement fallback.
+                                _is_ro = _el_attrs.get("readOnly", False)
+                                _activated = False
+                                _activate_method = "none"
+
+                                if not _is_ro:
+                                    # Already editable (e.g. form-mode field).
                                     try:
-                                        _ro = _rl.evaluate("el => el.readOnly")
+                                        loc.click(timeout=action_timeout_ms)
                                     except Exception:
-                                        _ro = True
-                                    if not _ro:
-                                        _active_loc = _rl
-                                        break
-                                    _safe_page_wait(page, 300, log_label=f"direct_wait_editable_{label}_{_retry}")
+                                        loc.click(timeout=action_timeout_ms, force=True)
+                                    _safe_page_wait(page, 250, log_label=f"direct_after_click_{label}")
+                                    _activated = True
+                                    _activate_method = "click_not_ro"
+                                else:
+                                    # Step 1: single click
+                                    try:
+                                        loc.click(timeout=action_timeout_ms)
+                                    except Exception:
+                                        loc.click(timeout=action_timeout_ms, force=True)
+                                    _safe_page_wait(page, 400, log_label=f"direct_after_click_{label}")
+                                    try:
+                                        _ro1 = r.locator(css).first.evaluate("el => el.readOnly")
+                                    except Exception:
+                                        _ro1 = True
+                                    if not _ro1:
+                                        _activated = True
+                                        _activate_method = "single_click"
+                                    else:
+                                        # Step 2: double-click
+                                        try:
+                                            loc.dblclick(timeout=action_timeout_ms)
+                                        except Exception:
+                                            try:
+                                                loc.dblclick(timeout=action_timeout_ms, force=True)
+                                            except Exception:
+                                                pass
+                                        _safe_page_wait(page, 500, log_label=f"direct_after_dblclick_{label}")
+                                        try:
+                                            _ro2 = r.locator(css).first.evaluate("el => el.readOnly")
+                                        except Exception:
+                                            _ro2 = True
+                                        if not _ro2:
+                                            _activated = True
+                                            _activate_method = "dblclick"
+                                        else:
+                                            # Step 3: check if Siebel focused a DIFFERENT
+                                            # editable element (common in list applets).
+                                            try:
+                                                _ae_info = r.evaluate("""() => {
+                                                    const ae = document.activeElement;
+                                                    if (!ae || ae === document.body) return null;
+                                                    return {
+                                                        tag: ae.tagName, name: ae.name, id: ae.id,
+                                                        readOnly: ae.readOnly, type: ae.type,
+                                                        ariaLabel: ae.getAttribute('aria-label')
+                                                    };
+                                                }""")
+                                            except Exception:
+                                                _ae_info = None
+                                            # #region agent log
+                                            try:
+                                                with open(_dlog_path, "a") as _df:
+                                                    _df.write(_json.dumps({"sessionId":"08e634","hypothesisId":"ACTIVE_EL","location":f"_direct_fill:{label}","message":"activeElement_after_dblclick","data":{"ae":_ae_info},"timestamp":int(_time.time()*1000)}) + "\n")
+                                            except Exception:
+                                                pass
+                                            # #endregion
+                                            if _ae_info and _ae_info.get("tag") in ("INPUT", "TEXTAREA") and not _ae_info.get("readOnly"):
+                                                _activated = True
+                                                _activate_method = "activeElement"
+
                                 # #region agent log
                                 try:
-                                    _post_click_ro = _active_loc is None
                                     with open(_dlog_path, "a") as _df:
-                                        _df.write(_json.dumps({"sessionId":"08e634","hypothesisId":"RO_FIX","location":f"_direct_fill:{label}","message":"post_click_readOnly","data":{"still_readOnly":_post_click_ro,"retries_used":_retry + 1},"timestamp":int(_time.time()*1000)}) + "\n")
+                                        _df.write(_json.dumps({"sessionId":"08e634","hypothesisId":"RO_FIX","location":f"_direct_fill:{label}","message":"activation_result","data":{"activated":_activated,"method":_activate_method},"timestamp":int(_time.time()*1000)}) + "\n")
                                 except Exception:
                                     pass
                                 # #endregion
-                                if _active_loc is not None:
+
+                                if _activated and _activate_method == "click_not_ro":
                                     try:
-                                        _active_loc.fill(value, timeout=action_timeout_ms)
+                                        loc.fill(value, timeout=action_timeout_ms)
                                     except Exception:
-                                        _active_loc.press("Control+a", timeout=1200)
+                                        loc.press("Control+a", timeout=1200)
+                                        page.keyboard.type(value)
+                                elif _activated and _activate_method in ("single_click", "dblclick"):
+                                    _rl = r.locator(css).first
+                                    try:
+                                        _rl.fill(value, timeout=action_timeout_ms)
+                                    except Exception:
+                                        _rl.press("Control+a", timeout=1200)
                                         page.keyboard.type(value)
                                 else:
-                                    # Cell didn't become editable via locator — type into
-                                    # whatever Siebel focused after the click.
+                                    # activeElement or last-resort: type into whatever has focus.
                                     page.keyboard.type(value)
                                 _safe_page_wait(page, 120, log_label=f"direct_before_tab_{label}")
                                 page.keyboard.press("Tab")
