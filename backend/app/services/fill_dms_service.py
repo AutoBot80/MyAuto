@@ -18,6 +18,9 @@ import json
 import logging
 import os
 import re
+import shutil
+import subprocess
+import time
 import urllib.parse
 import atexit
 import threading
@@ -262,40 +265,102 @@ def _refresh_cdp_browsers() -> None:
             continue
 
 
+def _find_browser_exe() -> tuple[str | None, str | None]:
+    """Locate Edge or Chrome executable on the system."""
+    for name, extra_paths in (
+        ("msedge", [
+            os.path.expandvars(r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe"),
+            os.path.expandvars(r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"),
+        ]),
+        ("chrome", [
+            os.path.expandvars(r"%ProgramFiles%\Google\Chrome\Application\chrome.exe"),
+            os.path.expandvars(r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"),
+        ]),
+    ):
+        exe = shutil.which(name)
+        if exe:
+            return exe, name
+        for p in extra_paths:
+            if os.path.isfile(p):
+                return p, name
+    return None, None
+
+
 def _launch_managed_browser_for_site(base_url: str):
-    """Launch Edge/Chrome for operators when no debuggable session is currently available."""
+    """
+    Launch Edge/Chrome as an independent OS process so the window survives
+    Playwright errors, then connect via CDP for automation.
+    Falls back to ``pw.chromium.launch`` if independent launch fails.
+    """
     pw = _get_playwright()
-    channels = ["msedge", "chrome"]
     headless = not bool(DMS_PLAYWRIGHT_HEADED)
+    port = PLAYWRIGHT_MANAGED_REMOTE_DEBUG_PORT or 9333
+    cdp_url = f"http://127.0.0.1:{port}"
+
+    exe, channel = _find_browser_exe()
+    if exe:
+        try:
+            cmd = [exe, f"--remote-debugging-port={port}"]
+            if headless:
+                cmd.append("--headless=new")
+            cmd.append(base_url)
+            creation_flags = 0
+            if hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
+                creation_flags |= subprocess.CREATE_NEW_PROCESS_GROUP
+            if hasattr(subprocess, "DETACHED_PROCESS"):
+                creation_flags |= subprocess.DETACHED_PROCESS
+            subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=creation_flags,
+            )
+            logger.info("fill_dms_service: launched %s independently (port %s)", channel, port)
+            for _attempt in range(20):
+                time.sleep(0.5)
+                try:
+                    browser = pw.chromium.connect_over_cdp(cdp_url)
+                    _CDP_BROWSERS_BY_URL[cdp_url] = browser
+                    for ctx in browser.contexts:
+                        for page in ctx.pages:
+                            url = (page.url or "").strip()
+                            if url and "blank" not in url.lower() and not url.startswith("chrome://") and not url.startswith("edge://"):
+                                logger.info(
+                                    "fill_dms_service: connected to %s via CDP at %s "
+                                    "(browser window stays open even on automation errors).",
+                                    channel, cdp_url,
+                                )
+                                return page, channel
+                except Exception:
+                    continue
+            logger.warning(
+                "fill_dms_service: launched %s but could not connect via CDP at %s after 10s",
+                channel, cdp_url,
+            )
+        except Exception as exc:
+            logger.warning("fill_dms_service: independent launch of %s failed: %s", channel, exc)
+
+    channels = ["msedge", "chrome"]
     launch_args: list[str] = []
     if PLAYWRIGHT_MANAGED_REMOTE_DEBUG_PORT:
         launch_args.append(f"--remote-debugging-port={PLAYWRIGHT_MANAGED_REMOTE_DEBUG_PORT}")
-    for channel in channels:
+    for ch in channels:
         try:
             browser = pw.chromium.launch(
-                channel=channel,
+                channel=ch,
                 headless=headless,
                 args=launch_args if launch_args else [],
             )
             _KEEP_OPEN_BROWSERS.append(browser)
             context = browser.new_context()
             page = context.new_page()
-            page.goto(base_url, wait_until="domcontentloaded", timeout=20000)
-            if PLAYWRIGHT_MANAGED_REMOTE_DEBUG_PORT:
-                logger.info(
-                    "fill_dms_service: launched managed %s for %s with remote debugging on port %s "
-                    "(set PLAYWRIGHT_CDP_URL=http://127.0.0.1:%s to reuse this window after a backend restart "
-                    "if the browser process stays alive).",
-                    channel,
-                    base_url,
-                    PLAYWRIGHT_MANAGED_REMOTE_DEBUG_PORT,
-                    PLAYWRIGHT_MANAGED_REMOTE_DEBUG_PORT,
-                )
-            else:
-                logger.info("fill_dms_service: launched managed %s browser for %s", channel, base_url)
-            return page, channel
+            page.goto(base_url, wait_until="domcontentloaded", timeout=5000)
+            logger.warning(
+                "fill_dms_service: fell back to Playwright-managed %s launch (browser may close on errors)", ch,
+            )
+            return page, ch
         except Exception as exc:
-            logger.warning("fill_dms_service: failed to launch %s browser: %s", channel, exc)
+            logger.warning("fill_dms_service: failed to launch %s browser: %s", ch, exc)
             continue
     return None, None
 

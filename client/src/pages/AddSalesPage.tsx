@@ -88,24 +88,7 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError 
   /** True when banner lines are Siebel `dms_step_messages` (sentence-style) vs checklist milestones. */
   const [dmsBannerIsStepMessages, setDmsBannerIsStepMessages] = useState(false);
   const [isFillDmsLoading, setIsFillDmsLoading] = useState(false);
-  /** True after Fill DMS returned with an error — cleared when tab is shown again (e.g. after Hero Connect login) so stale Siebel errors are not left on screen until the next click. */
   const [dmsRunEndedWithError, setDmsRunEndedWithError] = useState(false);
-  const fillDmsTabWasHiddenRef = useRef(false);
-  useEffect(() => {
-    if (!pageVisible) {
-      fillDmsTabWasHiddenRef.current = true;
-      return;
-    }
-    if (fillDmsTabWasHiddenRef.current && !isFillDmsLoading && dmsRunEndedWithError) {
-      fillDmsTabWasHiddenRef.current = false;
-      setFillDmsStatus(null);
-      setDmsMilestones([]);
-      setDmsBannerIsStepMessages(false);
-      setDmsRunEndedWithError(false);
-    } else if (fillDmsTabWasHiddenRef.current && !isFillDmsLoading) {
-      fillDmsTabWasHiddenRef.current = false;
-    }
-  }, [pageVisible, isFillDmsLoading, dmsRunEndedWithError]);
   const [isFillInsuranceLoading, setIsFillInsuranceLoading] = useState(false);
   const [isPrintFormsLoading, setIsPrintFormsLoading] = useState(false);
   const [printFormsStatus, setPrintFormsStatus] = useState<string | null>(null);
