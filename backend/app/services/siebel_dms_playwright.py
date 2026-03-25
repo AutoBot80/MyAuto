@@ -4072,17 +4072,45 @@ def _add_customer_payment(
                                     loc.click(timeout=action_timeout_ms)
                                 except Exception:
                                     loc.click(timeout=action_timeout_ms, force=True)
-                                _safe_page_wait(page, 250, log_label=f"direct_after_click_{label}")
-                                try:
-                                    loc.fill(value, timeout=action_timeout_ms)
-                                except Exception:
-                                    loc.press("Control+a", timeout=1200)
-                                    page.keyboard.type(value)
-                                _safe_page_wait(page, 120, log_label=f"direct_before_tab_{label}")
-                                loc.press("Tab", timeout=1200)
+                                _safe_page_wait(page, 400, log_label=f"direct_after_click_{label}")
+                                # Siebel cells start readOnly; clicking activates edit mode.
+                                # Re-locate the input after activation — Siebel may swap
+                                # the DOM element or toggle readOnly off.
+                                _active_loc = None
+                                for _retry in range(3):
+                                    _rl = r.locator(css).first
+                                    try:
+                                        _ro = _rl.evaluate("el => el.readOnly")
+                                    except Exception:
+                                        _ro = True
+                                    if not _ro:
+                                        _active_loc = _rl
+                                        break
+                                    _safe_page_wait(page, 300, log_label=f"direct_wait_editable_{label}_{_retry}")
                                 # #region agent log
                                 try:
-                                    _val_after = loc.evaluate("el => el.value")
+                                    _post_click_ro = _active_loc is None
+                                    with open(_dlog_path, "a") as _df:
+                                        _df.write(_json.dumps({"sessionId":"08e634","hypothesisId":"RO_FIX","location":f"_direct_fill:{label}","message":"post_click_readOnly","data":{"still_readOnly":_post_click_ro,"retries_used":_retry + 1},"timestamp":int(_time.time()*1000)}) + "\n")
+                                except Exception:
+                                    pass
+                                # #endregion
+                                if _active_loc is not None:
+                                    try:
+                                        _active_loc.fill(value, timeout=action_timeout_ms)
+                                    except Exception:
+                                        _active_loc.press("Control+a", timeout=1200)
+                                        page.keyboard.type(value)
+                                else:
+                                    # Cell didn't become editable via locator — type into
+                                    # whatever Siebel focused after the click.
+                                    page.keyboard.type(value)
+                                _safe_page_wait(page, 120, log_label=f"direct_before_tab_{label}")
+                                page.keyboard.press("Tab")
+                                # #region agent log
+                                try:
+                                    _check = r.locator(css).first
+                                    _val_after = _check.evaluate("el => el.value") if _check.count() > 0 else "???"
                                     with open(_dlog_path, "a") as _df:
                                         _df.write(_json.dumps({"sessionId":"08e634","hypothesisId":"B3","location":f"_direct_fill:{label}","message":"post_fill_value","data":{"val_after":str(_val_after)[:100],"expected":value},"timestamp":int(_time.time()*1000)}) + "\n")
                                 except Exception:
