@@ -1187,11 +1187,32 @@ def _names_match(name1: str | None, name2: str | None) -> bool:
     # One name contains the other (e.g. "john doe" in "john doe kumar")
     if n1 in n2 or n2 in n1:
         return True
-    # Stricter: no first-word-only fallback; require substantial match
+    # OCR-tolerant token overlap: allow partial / slightly noisy matches.
+    t1 = [t for t in re.sub(r"[^a-z\s]", " ", n1).split() if t]
+    t2 = [t for t in re.sub(r"[^a-z\s]", " ", n2).split() if t]
+    if not t1 or not t2:
+        return True
+    s1, s2 = set(t1), set(t2)
+    inter = len(s1 & s2)
+    if inter >= 1:
+        cov = inter / max(1, min(len(s1), len(s2)))
+        if cov >= 0.5:
+            return True
+        # First token often survives OCR better than suffixes.
+        if t1[0] == t2[0]:
+            return True
     return False
 
 
-def _validate_name_match(aadhar_name: str | None, details_name: str | None, insurance_name: str | None) -> str | None:
+def _validate_name_match(
+    aadhar_name: str | None,
+    details_name: str | None,
+    insurance_name: str | None,
+    *,
+    aadhar_last4: str | None = None,
+    details_aadhar_last4: str | None = None,
+    insurance_aadhar_last4: str | None = None,
+) -> str | None:
     """Return error message if names from Aadhar, Details and Insurance do not match. None if OK."""
     names = [
         ("Aadhar", aadhar_name),
@@ -1204,6 +1225,11 @@ def _validate_name_match(aadhar_name: str | None, details_name: str | None, insu
     first_label, first_val = present[0]
     for label, val in present[1:]:
         if not _names_match(first_val, val):
+            a4 = _aadhar_last4(aadhar_last4 or "")
+            d4 = _aadhar_last4(details_aadhar_last4 or "")
+            i4 = _aadhar_last4(insurance_aadhar_last4 or "")
+            if a4 and ((d4 and a4 == d4) or (i4 and a4 == i4)):
+                return None
             return (
                 f"Name mismatch: '{first_label}' has a different name than '{label}'. "
                 "Ensure the name on Aadhar front, Details sheet and Insurance document match."
@@ -1290,14 +1316,27 @@ def _parse_vehicle_from_full_text(full_text: str) -> dict[str, str]:
     def _section_or_noise_line(s: str) -> bool:
         return bool(re.search(r"(?i)\b(nominee|payment|insurance|customer details|vehicle details)\b", s))
 
-    def _best_numeric_token(s: str, *, min_len: int = 3, max_len: int = 12) -> str:
+    def _numeric_tokens(s: str, *, min_len: int = 3, max_len: int = 12) -> list[str]:
         toks = re.findall(r"\d+", s or "")
-        toks = [t for t in toks if min_len <= len(t) <= max_len]
+        return [t for t in toks if min_len <= len(t) <= max_len]
+
+    def _best_numeric_token(
+        s: str,
+        *,
+        min_len: int = 3,
+        max_len: int = 12,
+        prefer: str = "first",
+    ) -> str:
+        toks = _numeric_tokens(s, min_len=min_len, max_len=max_len)
         if not toks:
             return ""
-        # Prefer 4-6 length tokens for vehicle partials; else longest.
-        pref = [t for t in toks if 4 <= len(t) <= 6]
-        return (pref[0] if pref else sorted(toks, key=len, reverse=True)[0]).strip()
+        if prefer == "last":
+            return toks[-1].strip()
+        if prefer == "single":
+            singles = [t for t in toks if len(toks) == 1]
+            if singles:
+                return singles[0].strip()
+        return toks[0].strip()
 
     def _extract_field_near_label(
         label_rx: str,
@@ -1306,14 +1345,23 @@ def _parse_vehicle_from_full_text(full_text: str) -> dict[str, str]:
         max_len: int = 12,
         look_ahead: int = 3,
         prefer_below_over_inline: bool = False,
+        below_token_prefer: str = "first",
+        inline_token_prefer: str = "first",
+        allow_inline: bool = True,
+        allow_backward: bool = True,
     ) -> str:
         for idx, ln in enumerate(lines):
             if not re.search(label_rx, ln, re.I):
                 continue
             m_inline = re.search(r":\s*(.+)$", ln)
             cand_inline = ""
-            if m_inline:
-                cand_inline = _best_numeric_token(m_inline.group(1), min_len=min_len, max_len=max_len)
+            if m_inline and allow_inline:
+                cand_inline = _best_numeric_token(
+                    m_inline.group(1),
+                    min_len=min_len,
+                    max_len=max_len,
+                    prefer=inline_token_prefer,
+                )
             # 1) Prefer nearest numeric line below label (for scratched/overwritten values).
             for j in range(idx + 1, min(len(lines), idx + 1 + look_ahead)):
                 nln = lines[j]
@@ -1322,22 +1370,27 @@ def _parse_vehicle_from_full_text(full_text: str) -> dict[str, str]:
                 # Skip another label line.
                 if ":" in nln and re.search(r"[A-Za-z]", nln):
                     continue
-                cand = _best_numeric_token(nln, min_len=min_len, max_len=max_len)
+                cand = _best_numeric_token(
+                    nln, min_len=min_len, max_len=max_len, prefer=below_token_prefer
+                )
                 if cand:
                     return cand
             # 2) Inline value after colon in same line.
             if cand_inline and not prefer_below_over_inline:
                 return cand_inline
             # 3) Small backward window (number slightly above label).
-            for j in range(max(0, idx - 2), idx):
-                pln = lines[j]
-                if not pln or _section_or_noise_line(pln):
-                    continue
-                if ":" in pln and re.search(r"[A-Za-z]", pln):
-                    continue
-                cand = _best_numeric_token(pln, min_len=min_len, max_len=max_len)
-                if cand:
-                    return cand
+            if allow_backward:
+                for j in range(max(0, idx - 2), idx):
+                    pln = lines[j]
+                    if not pln or _section_or_noise_line(pln):
+                        continue
+                    if ":" in pln and re.search(r"[A-Za-z]", pln):
+                        continue
+                    cand = _best_numeric_token(
+                        pln, min_len=min_len, max_len=max_len, prefer=below_token_prefer
+                    )
+                    if cand:
+                        return cand
             if cand_inline:
                 return cand_inline
         return ""
@@ -1378,26 +1431,35 @@ def _parse_vehicle_from_full_text(full_text: str) -> dict[str, str]:
             out["battery_no"] = bv
 
     # Nearby-number rescue for scratched/blank fields in Details sheet.
-    if "frame_no" not in out or not str(out.get("frame_no") or "").strip():
-        v = _extract_field_near_label(
-            r"\b(chassis|frame)\s+number\b",
-            min_len=4,
-            max_len=12,
-            look_ahead=2,
-            prefer_below_over_inline=True,
-        )
-        if v:
-            out["frame_no"] = v
-    if "engine_no" not in out or not str(out.get("engine_no") or "").strip():
-        v = _extract_field_near_label(
-            r"\bengine\s+number\b",
-            min_len=4,
-            max_len=12,
-            look_ahead=2,
-            prefer_below_over_inline=True,
-        )
-        if v:
-            out["engine_no"] = v
+    # Scratch-correction pass (override): prefer corrected numbers written below labels.
+    v = _extract_field_near_label(
+        r"\b(chassis|frame)\s+number\b",
+        min_len=4,
+        max_len=12,
+        look_ahead=3,
+        prefer_below_over_inline=True,
+        below_token_prefer="last",
+        inline_token_prefer="last",
+        allow_inline=True,
+        allow_backward=False,
+    )
+    if v:
+        out["frame_no"] = v
+
+    # Engine correction: prefer a single-token corrected line below Engine label (e.g. 76658).
+    v = _extract_field_near_label(
+        r"\bengine\s+number\b",
+        min_len=4,
+        max_len=12,
+        look_ahead=3,
+        prefer_below_over_inline=True,
+        below_token_prefer="single",
+        inline_token_prefer="last",
+        allow_inline=True,
+        allow_backward=False,
+    )
+    if v:
+        out["engine_no"] = v
     if "key_no" not in out or not str(out.get("key_no") or "").strip():
         v = _extract_field_near_label(r"\bkey\s+number\b", min_len=3, max_len=10)
         if v:
@@ -2580,8 +2642,16 @@ class OcrService:
         # Name match validation: Aadhar, Details sheet, Insurance
         aadhar_name = customer.get("name")
         details_name = data.get("details_customer_name")
-        insurance_name = (data.get("insurance") or {}).get("policy_holder_name")
-        name_err = _validate_name_match(aadhar_name, details_name, insurance_name)
+        insurance = data.get("insurance") or {}
+        insurance_name = insurance.get("policy_holder_name")
+        name_err = _validate_name_match(
+            aadhar_name,
+            details_name,
+            insurance_name,
+            aadhar_last4=customer.get("aadhar_id"),
+            details_aadhar_last4=(data.get("details_customer") or {}).get("aadhar_id") if isinstance(data.get("details_customer"), dict) else None,
+            insurance_aadhar_last4=insurance.get("aadhar_id") or insurance.get("aadhaar_no") or insurance.get("aadhar_no"),
+        )
         if name_err:
             data["name_mismatch_error"] = name_err
         return data
@@ -2621,5 +2691,13 @@ def validate_name_match_for_subfolder(ocr_output_dir: Path, subfolder: str) -> s
     customer = data.get("customer") or {}
     aadhar_name = customer.get("name")
     details_name = data.get("details_customer_name")
-    insurance_name = (data.get("insurance") or {}).get("policy_holder_name")
-    return _validate_name_match(aadhar_name, details_name, insurance_name)
+    insurance = data.get("insurance") or {}
+    insurance_name = insurance.get("policy_holder_name")
+    return _validate_name_match(
+        aadhar_name,
+        details_name,
+        insurance_name,
+        aadhar_last4=customer.get("aadhar_id"),
+        details_aadhar_last4=(data.get("details_customer") or {}).get("aadhar_id") if isinstance(data.get("details_customer"), dict) else None,
+        insurance_aadhar_last4=insurance.get("aadhar_id") or insurance.get("aadhaar_no") or insurance.get("aadhar_no"),
+    )
