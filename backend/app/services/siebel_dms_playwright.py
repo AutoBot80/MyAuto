@@ -4408,6 +4408,7 @@ def _create_order(
     page: Page,
     *,
     mobile: str,
+    first_name: str,
     full_chassis: str,
     financier_name: str,
     action_timeout_ms: int,
@@ -4972,67 +4973,103 @@ def _create_order(
         _safe_page_wait(page, 400, log_label="after_hypothecation_y")
         note("Create Order: set Hypothecation = Y.")
 
-        # 4) Contact Last Name pick/search icon -> opens pick applet
-        if not _click_any(
-            (
-                "a[aria-label*='Contact Last Name' i][aria-label*='Pick' i]",
-                "button[aria-label*='Contact Last Name' i][aria-label*='Pick' i]",
-                "a[title*='Contact Last Name' i][title*='Pick' i]",
-                "a[aria-label*='Pick Contact' i]",
-                "button[aria-label*='Pick Contact' i]",
-            ),
-            timeout=min(action_timeout_ms, 3000),
-        ):
-            return False, "Could not open Contact Last Name pick/search applet.", scraped
-        _safe_page_wait(page, 900, log_label="after_open_contact_pick")
-        note("Create Order: opened Contact Last Name pick/search applet.")
+        # 4) Contact Last Name → F2 pick applet flow (operator-provided deterministic path)
+        _mob_digits = re.sub(r"\D", "", (mobile or "").strip())
+        _first_need = (first_name or "").strip().lower()
+        _applet_done = False
+        for root in _roots():
+            try:
+                fld = root.get_by_label(re.compile(r"contact\s*last\s*name", re.I)).first
+                if fld.count() <= 0 or not fld.is_visible(timeout=700):
+                    continue
+                try:
+                    fld.click(timeout=min(action_timeout_ms, 2500))
+                except Exception:
+                    fld.click(timeout=min(action_timeout_ms, 2500), force=True)
+                try:
+                    fld.press("F2", timeout=1200)
+                except Exception:
+                    pass
+                _safe_page_wait(page, 700, log_label="after_contact_lastname_f2")
 
-        # 5) Pick Contact List:Query
-        if not _click_any(
-            (
-                "a[aria-label='Pick Contact List:Query']",
-                "button[aria-label='Pick Contact List:Query']",
-                "a[title='Pick Contact List:Query']",
-                "button[title='Pick Contact List:Query']",
-                "a[aria-label*='Pick Contact List' i][aria-label*='Query' i]",
-            ),
-            timeout=min(action_timeout_ms, 3000),
-        ):
-            return False, "Could not click Pick Contact List:Query.", scraped
-        _safe_page_wait(page, 700, log_label="after_pick_contact_query")
-        note("Create Order: clicked Pick Contact List:Query.")
+                # Field name=s_5_1_312_0 => set "Mobile Phone"
+                _q1 = root.locator("input[name='s_5_1_312_0']").first
+                if _q1.count() <= 0 or not _q1.is_visible(timeout=700):
+                    continue
+                _q1.click(timeout=min(action_timeout_ms, 2000))
+                _q1.fill("", timeout=min(action_timeout_ms, 2000))
+                _q1.fill("Mobile Phone", timeout=min(action_timeout_ms, 2500))
+                try:
+                    _q1.press("Tab", timeout=1000)
+                except Exception:
+                    pass
 
-        # 6) Fill id=1_Mobile_Phone + Enter
-        if not _fill_any(
-            (
-                "input[id='1_Mobile_Phone']",
-                "input[name='Mobile_Phone']",
-                "input[aria-label*='Mobile Phone' i]",
-            ),
-            mobile,
-            timeout=min(action_timeout_ms, 3000),
-        ):
-            return False, "Could not fill mobile number in Pick Contact List.", scraped
-        try:
-            page.keyboard.press("Enter")
-        except Exception:
-            pass
-        _safe_page_wait(page, 900, log_label="after_pick_contact_mobile_enter")
-        note(f"Create Order: queried Pick Contact List by mobile={mobile!r}.")
+                # Next field => customer.mobile digits
+                _q2 = root.locator("input[name='s_5_1_313_0']").first
+                if _q2.count() <= 0 or not _q2.is_visible(timeout=700):
+                    # Fallback: next text input in pick applet row
+                    _q2 = root.locator("input[name^='s_5_1_'][type='text']").nth(1)
+                _q2.click(timeout=min(action_timeout_ms, 2000))
+                _q2.fill("", timeout=min(action_timeout_ms, 2000))
+                _q2.fill(_mob_digits or mobile, timeout=min(action_timeout_ms, 2500))
 
-        # 7) OK in pick applet
-        if not _click_any(
-            (
-                "button:has-text('OK')",
-                "a:has-text('OK')",
-                "button[aria-label='OK']",
-                "a[aria-label='OK']",
-            ),
-            timeout=min(action_timeout_ms, 3000),
-        ):
-            return False, "Could not click OK in Pick Contact List applet.", scraped
-        _safe_page_wait(page, 1200, log_label="after_pick_contact_ok")
-        note("Create Order: selected contact and closed pick applet via OK.")
+                # Query button name=s_5_1_314_0
+                _qry = root.locator("button[name='s_5_1_314_0'], a[name='s_5_1_314_0'], input[name='s_5_1_314_0']").first
+                if _qry.count() <= 0 or not _qry.is_visible(timeout=700):
+                    return False, "Could not locate contact query button s_5_1_314_0.", scraped
+                try:
+                    _qry.click(timeout=min(action_timeout_ms, 2500))
+                except Exception:
+                    _qry.click(timeout=min(action_timeout_ms, 2500), force=True)
+                _safe_page_wait(page, 900, log_label="after_contact_pick_query")
+
+                # Pick row where First Name matches customer first name; id pattern may be dynamic.
+                _row_ok = False
+                try:
+                    _row_ok = bool(root.evaluate(
+                        """(firstNeed) => {
+                            const fn = String(firstNeed || '').trim().toLowerCase();
+                            if (!fn) return false;
+                            const norm = (s) => String(s || '').trim().toLowerCase();
+                            // Preferred selector family: id contains _s_5_1_ and ends with _First_Name
+                            const firstCells = Array.from(document.querySelectorAll("[id*='_s_5_1_'][id$='_First_Name'], [id$='_First_Name']"));
+                            for (const c of firstCells) {
+                                const txt = norm(c.textContent || c.innerText || c.getAttribute('value'));
+                                if (!txt || txt !== fn) continue;
+                                const row = c.closest('tr');
+                                if (row) {
+                                    const sel = row.querySelector("input[type='radio'], input[type='checkbox'], td, a, span");
+                                    if (sel) { sel.click(); return true; }
+                                    row.click(); return true;
+                                }
+                                c.click();
+                                return true;
+                            }
+                            return false;
+                        }""",
+                        _first_need,
+                    ))
+                except Exception:
+                    _row_ok = False
+                if not _row_ok:
+                    return False, f"Contact pick applet row not found/matched for first name {first_name!r}.", scraped
+
+                # OK button name=s_5_1_315_0
+                _ok = root.locator("button[name='s_5_1_315_0'], a[name='s_5_1_315_0'], input[name='s_5_1_315_0']").first
+                if _ok.count() <= 0 or not _ok.is_visible(timeout=700):
+                    return False, "Could not locate contact OK button s_5_1_315_0.", scraped
+                try:
+                    _ok.click(timeout=min(action_timeout_ms, 2500))
+                except Exception:
+                    _ok.click(timeout=min(action_timeout_ms, 2500), force=True)
+                _safe_page_wait(page, 1200, log_label="after_contact_pick_ok")
+                note("Create Order: selected contact via F2 applet flow and confirmed OK.")
+                _applet_done = True
+                break
+            except Exception:
+                continue
+        if not _applet_done:
+            return False, "Could not complete Contact Last Name F2 applet flow.", scraped
 
         # 8) Ctrl+S save
         try:
@@ -7574,6 +7611,7 @@ def Playwright_Hero_DMS_fill(
             ok_order, order_err, order_scraped = _create_order(
                 page,
                 mobile=mobile,
+                first_name=first,
                 full_chassis=full_chassis,
                 financier_name=(dms_values.get("financier_name") or "").strip(),
                 action_timeout_ms=action_timeout_ms,
