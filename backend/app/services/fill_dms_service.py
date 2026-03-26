@@ -481,6 +481,13 @@ def _try_auto_login_if_prefilled(page) -> bool:
       return {status: 'prefilled', user: userEl.value.trim().substring(0, 40), hasPass: true};
     }"""
 
+    def _is_login_url() -> bool:
+        try:
+            u = (page.url or "").lower()
+            return ("swecmd=login" in u) or u.rstrip("/").endswith("/login")
+        except Exception:
+            return False
+
     prefilled = None
     # Poll for browser auto-fill: credentials may appear up to ~3s after page load
     for _attempt in range(6):
@@ -496,6 +503,11 @@ def _try_auto_login_if_prefilled(page) -> bool:
             break
         time.sleep(1)
 
+    # If no login form is present and URL is not login, treat as already logged in.
+    if prefilled and prefilled.get("status") == "no_form" and not _is_login_url():
+        logger.info("fill_dms_service: no login form detected; continuing with existing logged-in session.")
+        return True
+
     if not prefilled or prefilled.get("status") != "prefilled":
         return False
     logger.info(
@@ -505,6 +517,9 @@ def _try_auto_login_if_prefilled(page) -> bool:
     # Click the Login / Submit button
     login_clicked = False
     for sel in (
+        '#s_swepi_22',
+        'input[id="s_swepi_22"]',
+        'button[id="s_swepi_22"]',
         'input[type="submit"][value*="Login" i]',
         'button[type="submit"]',
         'input[type="submit"]',
@@ -528,14 +543,44 @@ def _try_auto_login_if_prefilled(page) -> bool:
             login_clicked = True
         except Exception:
             pass
+    if not login_clicked:
+        # Last fallback: submit the form directly from the page context.
+        try:
+            login_clicked = bool(
+                page.evaluate(
+                    """() => {
+                        const vis = (el) => {
+                          if (!el) return false;
+                          const st = window.getComputedStyle(el);
+                          if (st.display === 'none' || st.visibility === 'hidden') return false;
+                          const r = el.getBoundingClientRect();
+                          return r.width > 2 && r.height > 2;
+                        };
+                        const pwd = document.querySelector('input[name="SWEPassword"], input[type="password"]');
+                        const frm = (pwd && pwd.form) ? pwd.form : document.querySelector('form');
+                        if (frm) { try { frm.requestSubmit ? frm.requestSubmit() : frm.submit(); return true; } catch (e) {} }
+                        const btn = document.querySelector('input[type="submit"], button[type="submit"], input[name="s_swepi_22"]');
+                        if (btn && vis(btn)) { try { btn.click(); return true; } catch (e) {} }
+                        return false;
+                    }"""
+                )
+            )
+        except Exception:
+            pass
     if login_clicked:
         try:
             page.wait_for_load_state("domcontentloaded", timeout=15000)
         except Exception:
             pass
-        time.sleep(2)
-        logger.info("fill_dms_service: auto-login submitted; page URL now: %s", (page.url or "")[:120])
-    return login_clicked
+        # Wait briefly for URL/state transition out of login endpoint.
+        for _ in range(10):
+            if not _is_login_url():
+                logger.info("fill_dms_service: auto-login submitted; page URL now: %s", (page.url or "")[:120])
+                return True
+            time.sleep(0.5)
+        logger.warning("fill_dms_service: login submit attempted but still on login URL: %s", (page.url or "")[:120])
+        return False
+    return False
 
 
 def _get_or_open_site_page(base_url: str, site_label: str, *, require_login_on_open: bool = True):

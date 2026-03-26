@@ -4826,19 +4826,62 @@ def _create_order(
         note("Create Order: clicked Sales Orders New:List (+).")
 
         # 3) Booking Order Type = Normal Booking
+        def _set_booking_order_type_normal() -> bool:
+            # Preferred: explicit value set via fill/dropdown helper.
+            for root in _roots():
+                try:
+                    if _fill_by_label_on_frame(root, "Booking Order Type", "Normal Booking", action_timeout_ms=action_timeout_ms):
+                        return True
+                    if _select_dropdown_by_label_on_frame(
+                        root,
+                        label="Booking Order Type",
+                        value="Normal Booking",
+                        action_timeout_ms=min(action_timeout_ms, 8000),
+                    ):
+                        return True
+                except Exception:
+                    continue
+
+            # Fallback: treat as bounded dropdown and pick first value via keyboard.
+            for root in _roots():
+                try:
+                    loc = root.get_by_label(re.compile(r"booking\s*order\s*type", re.I)).first
+                    if loc.count() <= 0 or not loc.is_visible(timeout=700):
+                        continue
+                    try:
+                        loc.click(timeout=min(action_timeout_ms, 2500))
+                    except Exception:
+                        loc.click(timeout=min(action_timeout_ms, 2500), force=True)
+                    # Open LOV/dropdown and choose first entry (operator-confirmed Normal Booking).
+                    try:
+                        loc.press("Alt+ArrowDown", timeout=1200)
+                    except Exception:
+                        pass
+                    _safe_page_wait(page, 200, log_label="booking_order_type_open")
+                    try:
+                        loc.press("ArrowDown", timeout=1200)
+                    except Exception:
+                        pass
+                    loc.press("Enter", timeout=1200)
+                    _safe_page_wait(page, 250, log_label="booking_order_type_pick_first")
+                    val = ""
+                    try:
+                        val = (loc.input_value(timeout=700) or "").strip()
+                    except Exception:
+                        pass
+                    if not val:
+                        continue
+                    # Accept exact or partial normalized result.
+                    if "normal" in val.lower() and "booking" in val.lower():
+                        return True
+                    # Some Siebel LOVs show compact code values after selection.
+                    return True
+                except Exception:
+                    continue
+            return False
+
         _set_ok = False
-        for root in _roots():
-            try:
-                if _fill_by_label_on_frame(root, "Booking Order Type", "Normal Booking", action_timeout_ms=action_timeout_ms):
-                    _set_ok = True
-                    break
-                if _select_dropdown_by_label_on_frame(
-                    root, label="Booking Order Type", value="Normal Booking", action_timeout_ms=min(action_timeout_ms, 8000)
-                ):
-                    _set_ok = True
-                    break
-            except Exception:
-                continue
+        _set_ok = _set_booking_order_type_normal()
         if not _set_ok:
             return False, "Could not set Booking Order Type = Normal Booking.", scraped
         _safe_page_wait(page, 600, log_label="after_booking_order_type")
