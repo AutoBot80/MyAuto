@@ -5163,7 +5163,6 @@ def _create_order(
                     _safe_page_wait(page, 400, log_label="cls_tab_to_value")
                 else:
                     # Need to change the Find dropdown to "Mobile Phone"
-                    # Attempt: Alt+ArrowDown to open dropdown, navigate to "Mobile Phone"
                     _find_changed = False
                     try:
                         page.keyboard.press("Alt+ArrowDown")
@@ -5184,10 +5183,21 @@ def _create_order(
                     page.keyboard.press("Tab")
                     _safe_page_wait(page, 400, log_label="cls_tab_to_value")
 
-                # #region agent log — applet search params
+                # Verify focus landed on the value field after Tab
+                _val_focus = {}
+                try:
+                    _val_focus = page.evaluate("""() => {
+                        const el = document.activeElement;
+                        if (!el) return {tag: 'none'};
+                        return {tag: el.tagName, name: el.getAttribute('name') || '', aria: (el.getAttribute('aria-label') || '').substring(0,60), val: (el.value || '').substring(0,60), type: el.getAttribute('type') || ''};
+                    }""") or {}
+                except Exception:
+                    pass
+
+                # #region agent log — focus after Tab to value field
                 try:
                     with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-                        _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H17","location":"siebel_dms_playwright.py:create_order_applet_search","message":"Applet search params","data":{"search_type": _search_type, "search_val": _search_val[:30], "focused_was": _focused_val[:30], "has_contact_id": bool(contact_id)},"timestamp":int(_t_f2.time()*1000)}) + "\n")
+                        _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H18","location":"siebel_dms_playwright.py:create_order_val_focus","message":"Focus after Tab to value field","data":{**_val_focus, "search_type": _search_type, "search_val": _search_val},"timestamp":int(_t_f2.time()*1000)}) + "\n")
                 except Exception:
                     pass
                 # #endregion
@@ -5196,7 +5206,24 @@ def _create_order(
                 page.keyboard.press("Control+a")
                 _safe_page_wait(page, 100, log_label="val_selectall")
                 page.keyboard.type(_search_val, delay=30)
-                note(f"Create Order: applet value field filled '{_search_val[:20]}'.")
+                _safe_page_wait(page, 200, log_label="val_type_settle")
+
+                # Verify the value was typed
+                _val_readback = ""
+                try:
+                    _val_readback = page.evaluate("() => (document.activeElement || {}).value || ''") or ""
+                except Exception:
+                    pass
+
+                # #region agent log — value field readback after typing
+                try:
+                    with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
+                        _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H19","location":"siebel_dms_playwright.py:create_order_val_readback","message":"Value field readback after typing","data":{"typed": _search_val, "readback": _val_readback},"timestamp":int(_t_f2.time()*1000)}) + "\n")
+                except Exception:
+                    pass
+                # #endregion
+
+                note(f"Create Order: applet value field typed '{_search_val}', readback='{_val_readback}'.")
 
                 # Trigger query — try Go/Query button across all fresh roots, fallback Enter
                 _safe_page_wait(page, 300, log_label="before_query_btn")
@@ -7905,17 +7932,15 @@ def Playwright_Hero_DMS_fill(
                 )
                 return out
 
-            # Scrape Contact ID from the contact detail page (for use in Create Order F2 applet)
+            # Scrape Contact ID from the contact detail form (aria-label="Contact Id")
             _contact_id = ""
             for _cr in list(_ordered_frames(page)) + [page]:
                 try:
                     _cid = _cr.evaluate("""() => {
                         const sels = [
+                            "input[aria-label='Contact Id']",
+                            "[aria-labelledby='s_1_l_HHML_Contact_Seq_Num']",
                             "input[aria-label*='Contact Id' i]",
-                            "input[aria-label*='Contact #' i]",
-                            "input[name*='Contact_Id' i]",
-                            "span[aria-label*='Contact Id' i]",
-                            "a[aria-label*='Contact Id' i]",
                         ];
                         for (const sel of sels) {
                             const el = document.querySelector(sel);
