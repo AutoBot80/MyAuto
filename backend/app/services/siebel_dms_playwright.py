@@ -4433,6 +4433,19 @@ def _create_order(
     def _roots():
         return _siebel_locator_search_roots(page, content_frame_selector)
 
+    def _all_ui_roots():
+        roots = []
+        try:
+            roots.extend(list(_roots()))
+        except Exception:
+            pass
+        try:
+            roots.extend(list(_ordered_frames(page)))
+        except Exception:
+            pass
+        roots.append(page)
+        return roots
+
     def _click_any(selectors: tuple[str, ...], *, timeout: int = 1200) -> bool:
         for root in _roots():
             for css in selectors:
@@ -4977,7 +4990,8 @@ def _create_order(
         _mob_digits = re.sub(r"\D", "", (mobile or "").strip())
         _first_need = (first_name or "").strip().lower()
         _applet_done = False
-        for root in _roots():
+        _applet_err = ""
+        for root in _all_ui_roots():
             try:
                 fld = root.get_by_label(re.compile(r"contact\s*last\s*name", re.I)).first
                 if fld.count() <= 0 or not fld.is_visible(timeout=700):
@@ -4993,8 +5007,17 @@ def _create_order(
                 _safe_page_wait(page, 700, log_label="after_contact_lastname_f2")
 
                 # Field name=s_5_1_312_0 => set "Mobile Phone"
-                _q1 = root.locator("input[name='s_5_1_312_0']").first
-                if _q1.count() <= 0 or not _q1.is_visible(timeout=700):
+                _q1 = None
+                for r2 in _all_ui_roots():
+                    try:
+                        t = r2.locator("input[name='s_5_1_312_0']").first
+                        if t.count() > 0 and t.is_visible(timeout=500):
+                            _q1 = t
+                            break
+                    except Exception:
+                        continue
+                if _q1 is None:
+                    _applet_err = "field s_5_1_312_0 not visible after F2"
                     continue
                 _q1.click(timeout=min(action_timeout_ms, 2000))
                 _q1.fill("", timeout=min(action_timeout_ms, 2000))
@@ -5005,18 +5028,45 @@ def _create_order(
                     pass
 
                 # Next field => customer.mobile digits
-                _q2 = root.locator("input[name='s_5_1_313_0']").first
-                if _q2.count() <= 0 or not _q2.is_visible(timeout=700):
+                _q2 = None
+                for r2 in _all_ui_roots():
+                    try:
+                        t = r2.locator("input[name='s_5_1_313_0']").first
+                        if t.count() > 0 and t.is_visible(timeout=500):
+                            _q2 = t
+                            break
+                    except Exception:
+                        continue
+                if _q2 is None:
                     # Fallback: next text input in pick applet row
-                    _q2 = root.locator("input[name^='s_5_1_'][type='text']").nth(1)
+                    for r2 in _all_ui_roots():
+                        try:
+                            t = r2.locator("input[name^='s_5_1_'][type='text']").nth(1)
+                            if t.count() > 0 and t.is_visible(timeout=500):
+                                _q2 = t
+                                break
+                        except Exception:
+                            continue
+                if _q2 is None:
+                    _applet_err = "second query field not found (s_5_1_313_0)"
+                    continue
                 _q2.click(timeout=min(action_timeout_ms, 2000))
                 _q2.fill("", timeout=min(action_timeout_ms, 2000))
                 _q2.fill(_mob_digits or mobile, timeout=min(action_timeout_ms, 2500))
 
                 # Query button name=s_5_1_314_0
-                _qry = root.locator("button[name='s_5_1_314_0'], a[name='s_5_1_314_0'], input[name='s_5_1_314_0']").first
-                if _qry.count() <= 0 or not _qry.is_visible(timeout=700):
-                    return False, "Could not locate contact query button s_5_1_314_0.", scraped
+                _qry = None
+                for r2 in _all_ui_roots():
+                    try:
+                        t = r2.locator("button[name='s_5_1_314_0'], a[name='s_5_1_314_0'], input[name='s_5_1_314_0']").first
+                        if t.count() > 0 and t.is_visible(timeout=500):
+                            _qry = t
+                            break
+                    except Exception:
+                        continue
+                if _qry is None:
+                    _applet_err = "query button s_5_1_314_0 not found"
+                    continue
                 try:
                     _qry.click(timeout=min(action_timeout_ms, 2500))
                 except Exception:
@@ -5025,6 +5075,7 @@ def _create_order(
 
                 # Pick row where First Name matches customer first name; id pattern may be dynamic.
                 _row_ok = False
+                _row_diag = ""
                 try:
                     _row_ok = bool(root.evaluate(
                         """(firstNeed) => {
@@ -5052,24 +5103,73 @@ def _create_order(
                 except Exception:
                     _row_ok = False
                 if not _row_ok:
-                    return False, f"Contact pick applet row not found/matched for first name {first_name!r}.", scraped
+                    try:
+                        _row_diag = str(root.evaluate(
+                            """() => {
+                                const rows = Array.from(document.querySelectorAll("tr")).slice(0, 60);
+                                const vals = [];
+                                for (const tr of rows) {
+                                    const cands = tr.querySelectorAll("[id$='_First_Name'], td, span, a");
+                                    for (const c of cands) {
+                                        const t = (c.textContent || '').trim();
+                                        if (t && t.length <= 40) vals.push(t);
+                                        if (vals.length >= 15) break;
+                                    }
+                                    if (vals.length >= 15) break;
+                                }
+                                return vals.join(" | ");
+                            }"""
+                        ))
+                    except Exception:
+                        _row_diag = "row-scan-failed"
+                    _applet_err = f"no first-name match for {first_name!r}; seen={_row_diag[:180]}"
+                    continue
 
                 # OK button name=s_5_1_315_0
-                _ok = root.locator("button[name='s_5_1_315_0'], a[name='s_5_1_315_0'], input[name='s_5_1_315_0']").first
-                if _ok.count() <= 0 or not _ok.is_visible(timeout=700):
-                    return False, "Could not locate contact OK button s_5_1_315_0.", scraped
+                _ok = None
+                for r2 in _all_ui_roots():
+                    try:
+                        t = r2.locator("button[name='s_5_1_315_0'], a[name='s_5_1_315_0'], input[name='s_5_1_315_0']").first
+                        if t.count() > 0 and t.is_visible(timeout=500):
+                            _ok = t
+                            break
+                    except Exception:
+                        continue
+                if _ok is None:
+                    _applet_err = "OK button s_5_1_315_0 not found"
+                    continue
                 try:
                     _ok.click(timeout=min(action_timeout_ms, 2500))
                 except Exception:
                     _ok.click(timeout=min(action_timeout_ms, 2500), force=True)
                 _safe_page_wait(page, 1200, log_label="after_contact_pick_ok")
                 note("Create Order: selected contact via F2 applet flow and confirmed OK.")
+                # Best-effort verification: contact selection should auto-populate dependent fields (e.g., Pincode).
+                _pin_rb = ""
+                for r3 in _all_ui_roots():
+                    try:
+                        for _pin_sel in (
+                            "input[aria-label*='Pin Code' i]",
+                            "input[aria-label*='Pincode' i]",
+                            "input[title*='Pin Code' i]",
+                            "input[name*='Pin' i]",
+                        ):
+                            _pl = r3.locator(_pin_sel).first
+                            if _pl.count() > 0 and _pl.is_visible(timeout=500):
+                                _pin_rb = (_pl.input_value(timeout=700) or "").strip()
+                                if _pin_rb:
+                                    break
+                        if _pin_rb:
+                            break
+                    except Exception:
+                        continue
+                note(f"Create Order: post-contact applet readback — Pincode={_pin_rb!r}.")
                 _applet_done = True
                 break
             except Exception:
                 continue
         if not _applet_done:
-            return False, "Could not complete Contact Last Name F2 applet flow.", scraped
+            return False, f"Could not complete Contact Last Name F2 applet flow. {_applet_err}".strip(), scraped
 
         # 8) Ctrl+S save
         try:
