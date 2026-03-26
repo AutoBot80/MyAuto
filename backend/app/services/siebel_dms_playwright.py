@@ -6291,6 +6291,20 @@ def _fill_by_label_on_frame(
 ) -> bool:
     if not (value or "").strip():
         return False
+
+    def _do_fill(loc) -> bool:
+        try:
+            loc.click(timeout=action_timeout_ms)
+        except Exception:
+            loc.click(timeout=action_timeout_ms, force=True)
+        loc.fill("", timeout=action_timeout_ms)
+        loc.fill(value.strip(), timeout=action_timeout_ms)
+        try:
+            loc.press("Tab", timeout=1200)
+        except Exception:
+            pass
+        return True
+
     pats = (
         re.compile(rf"^\s*{re.escape(label)}\s*$", re.I),
         re.compile(re.escape(label), re.I),
@@ -6300,17 +6314,28 @@ def _fill_by_label_on_frame(
             loc = frame.get_by_label(pat).first
             if loc.count() <= 0 or not loc.is_visible(timeout=700):
                 continue
+            return _do_fill(loc)
+        except Exception:
+            continue
+    # Fallback: match raw aria-label attribute directly (bypasses aria-labelledby override).
+    esc = label.replace("'", "\\'")
+    for css in (
+        f"input[aria-label*='{esc}' i]",
+        f"textarea[aria-label*='{esc}' i]",
+        f"select[aria-label*='{esc}' i]",
+    ):
+        try:
+            loc = frame.locator(css).first
+            if loc.count() <= 0 or not loc.is_visible(timeout=700):
+                continue
+            ro = False
             try:
-                loc.click(timeout=action_timeout_ms)
-            except Exception:
-                loc.click(timeout=action_timeout_ms, force=True)
-            loc.fill("", timeout=action_timeout_ms)
-            loc.fill(value.strip(), timeout=action_timeout_ms)
-            try:
-                loc.press("Tab", timeout=1200)
+                ro = loc.evaluate("el => el.readOnly === true")
             except Exception:
                 pass
-            return True
+            if ro:
+                continue
+            return _do_fill(loc)
         except Exception:
             continue
     return False
@@ -6454,6 +6479,38 @@ def _add_enquiry_opportunity(
             full_chassis=str(scraped_v.get("full_chassis") or ""),
             full_engine=str(scraped_v.get("full_engine") or ""),
         )
+
+    key_val = (dms_values.get("key_partial") or "").strip()
+    battery_val = (dms_values.get("battery_partial") or "").strip()
+    if key_val or battery_val:
+        _veh_fill_frame = None
+        for _vf in _ordered_frames(page):
+            try:
+                if _vf.locator('input[aria-label="Key Number"]').count() > 0:
+                    _veh_fill_frame = _vf
+                    break
+            except Exception:
+                continue
+        if _veh_fill_frame is None:
+            _veh_fill_frame = page.main_frame
+        if key_val:
+            if _fill_by_label_on_frame(_veh_fill_frame, "Key Number", key_val, action_timeout_ms=action_timeout_ms):
+                note(f"Add Enquiry: filled Key Number = {key_val!r} on vehicle page.")
+            else:
+                note(f"Add Enquiry: could not fill Key Number = {key_val!r} on vehicle page (best-effort).")
+        if battery_val:
+            if _fill_by_label_on_frame(_veh_fill_frame, "Battery No.", battery_val, action_timeout_ms=action_timeout_ms):
+                note(f"Add Enquiry: filled Battery No. = {battery_val!r} on vehicle page.")
+            else:
+                note(f"Add Enquiry: could not fill Battery No. = {battery_val!r} on vehicle page (best-effort).")
+        if key_val or battery_val:
+            _safe_page_wait(page, 400, log_label="after_vehicle_key_battery_fill")
+            try:
+                page.keyboard.press("Control+s")
+                _safe_page_wait(page, 1200, log_label="after_vehicle_key_battery_save")
+                note("Add Enquiry: saved vehicle record after Key/Battery fill.")
+            except Exception:
+                note("Add Enquiry: Ctrl+S after Key/Battery fill raised an exception (best-effort).")
 
     if not _try_click_enquiry_top_tab(
         page, action_timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
@@ -6797,7 +6854,7 @@ def _add_enquiry_opportunity(
         _lf.write(_json_dbg.dumps({"sessionId":"08e634","hypothesisId":"HA","location":"siebel_dms_playwright.py:landline_attempt","message":"About to attempt Landline fill","data":{"landline_use":landline_use,"labels":["Landline","Land Line","Alternate Phone","Alternate Number"]},"timestamp":int(_time_dbg.time()*1000)}) + "\n")
     # #endregion
 
-    if not try_field(("Landline", "Land Line", "Alternate Phone", "Alternate Number"), landline_use, required=True):
+    if not try_field(("Landline #", "Landline", "Home Phone #", "Home Phone", "Land Line", "Alternate Phone", "Alternate Number"), landline_use, required=True):
         return False, "Could not set Landline."
     if not try_field(("Email", "Email Address", "E-mail"), "NA", required=True):
         return False, "Could not set Email."
@@ -7123,6 +7180,7 @@ def Playwright_Hero_DMS_fill(
     landline = (dms_values.get("landline") or "").strip()
     care_of = (dms_values.get("care_of") or "").strip()
     key_p = (dms_values.get("key_partial") or "").strip()
+    battery_p = (dms_values.get("battery_partial") or "").strip()
     frame_p = (dms_values.get("frame_partial") or "").strip()
     engine_p = (dms_values.get("engine_partial") or "").strip()
     aadhar_uin = (dms_values.get("aadhar_id") or "").strip()

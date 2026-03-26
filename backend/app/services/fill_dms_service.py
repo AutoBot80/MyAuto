@@ -1057,6 +1057,7 @@ def _build_dms_fill_values(customer_id: int | None, vehicle_id: int | None, subf
         "state": state_e,
         "pin_code": pin_e,
         "key_partial": _clean_text(row.get("Key num (partial)"))[:8],
+        "battery_partial": _clean_text(row.get("Battery No") or "")[:12],
         "frame_partial": _clean_text(row.get("Frame / Chassis num (partial)"))[:12],
         "engine_partial": _clean_text(row.get("Engine num (partial)"))[:12],
         "relation_prefix": relation_prefix,
