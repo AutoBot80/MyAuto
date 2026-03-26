@@ -596,8 +596,55 @@ def _get_or_open_site_page(base_url: str, site_label: str, *, require_login_on_o
     if opened_page is not None:
         if not require_login_on_open:
             return opened_page, None
-        if _try_auto_login_if_prefilled(opened_page):
+        auto_login_ok = _try_auto_login_if_prefilled(opened_page)
+        if auto_login_ok:
             return opened_page, None
+
+        # If auto-login did not complete, wait briefly in the same request for
+        # either automatic or manual login transition so user doesn't need a second click.
+        def _is_ready_after_login(pg) -> bool:
+            try:
+                u = (pg.url or "").lower()
+                if "swecmd=login" in u:
+                    return False
+                return bool(
+                    pg.evaluate(
+                        """() => {
+                            const vis = (el) => {
+                                if (!el) return false;
+                                const st = window.getComputedStyle(el);
+                                if (st.display === 'none' || st.visibility === 'hidden') return false;
+                                const r = el.getBoundingClientRect();
+                                return r.width > 2 && r.height > 2;
+                            };
+                            // Login form still visible => not ready.
+                            const u1 = document.querySelector('input[name="SWEUserName"]');
+                            const p1 = document.querySelector('input[name="SWEPassword"], input[type="password"]');
+                            if ((u1 && vis(u1)) || (p1 && vis(p1))) return false;
+                            // Any Siebel app shell marker.
+                            const markers = [
+                                '#findcombobox',
+                                'input[aria-label*="Find" i]',
+                                'select[id="j_s_sctrl_tabScreen"]',
+                                '[aria-label*="First Level View Bar" i]'
+                            ];
+                            for (const s of markers) {
+                                const el = document.querySelector(s);
+                                if (el && vis(el)) return true;
+                            }
+                            return false;
+                        }"""
+                    )
+                )
+            except Exception:
+                return False
+
+        for _ in range(5):  # up to ~5s
+            if _is_ready_after_login(opened_page):
+                logger.info("fill_dms_service: login/session became ready in same Fill DMS request.")
+                return opened_page, None
+            time.sleep(1)
+
         return None, f"{site_label} Opened. Please login. And then press button again"
 
     return None, (

@@ -4887,7 +4887,32 @@ def _create_order(
         _safe_page_wait(page, 600, log_label="after_booking_order_type")
         note("Create Order: set Booking Order Type = Normal Booking.")
 
-        # 3b) Hypothecation = Y (mandatory for booking flow)
+        # 3b) Finance Required = Y (prerequisite for Financier/Hypothecation enablement)
+        _fin_ok = False
+        for root in _roots():
+            try:
+                for _lbl in ("Finance Required", "FinanceRequired"):
+                    if _fill_by_label_on_frame(root, _lbl, "Y", action_timeout_ms=action_timeout_ms):
+                        _fin_ok = True
+                        break
+                    if _select_dropdown_by_label_on_frame(
+                        root,
+                        label=_lbl,
+                        value="Y",
+                        action_timeout_ms=min(action_timeout_ms, 8000),
+                    ):
+                        _fin_ok = True
+                        break
+                if _fin_ok:
+                    break
+            except Exception:
+                continue
+        if not _fin_ok:
+            return False, "Could not set Finance Required = Y.", scraped
+        _safe_page_wait(page, 400, log_label="after_finance_required_y")
+        note("Create Order: set Finance Required = Y.")
+
+        # 3c) Hypothecation = Y (enabled after Finance Required = Y)
         _hyp_ok = False
         for root in _roots():
             try:
@@ -4908,7 +4933,7 @@ def _create_order(
             except Exception:
                 continue
         if not _hyp_ok:
-            return False, "Could not set Hypothecation = Y.", scraped
+            return False, "Could not set Hypothecation = Y after Finance Required = Y.", scraped
         _safe_page_wait(page, 400, log_label="after_hypothecation_y")
         note("Create Order: set Hypothecation = Y.")
 
