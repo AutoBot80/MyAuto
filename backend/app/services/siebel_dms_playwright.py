@@ -4796,12 +4796,12 @@ def _create_order(
         # 2) Click + (Sales Orders New:List)
         if not _click_any(
             (
-                "a[aria-label='Sales Orders New:List']",
-                "button[aria-label='Sales Orders New:List']",
-                "a[title='Sales Orders New:List']",
-                "button[title='Sales Orders New:List']",
-                "a[aria-label*='Sales Orders' i][aria-label*='New' i]",
-                "button[aria-label*='Sales Orders' i][aria-label*='New' i]",
+                "a[aria-label='Sales Orders List:New']",
+                "button[aria-label='Sales Orders List:New']",
+                "a[title='Sales Orders List:New']",
+                "button[title='Sales Orders List:New']",
+                "a[aria-label*='Sales Orders List' i][aria-label*='New' i]",
+                "button[aria-label*='Sales Orders List' i][aria-label*='New' i]",
             ),
             timeout=min(action_timeout_ms, 3000),
         ):
