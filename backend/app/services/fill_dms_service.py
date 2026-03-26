@@ -443,40 +443,73 @@ def _try_auto_login_if_prefilled(page) -> bool:
     (e.g. browser saved credentials), click the Login button automatically.
     Returns True if auto-login was attempted, False if credentials were not pre-filled.
     """
+    # Wait for the page to fully load before checking for auto-filled credentials
     try:
-        prefilled = page.evaluate("""() => {
-          const vis = (el) => {
-            if (!el) return false;
-            const st = window.getComputedStyle(el);
-            if (st.display === 'none' || st.visibility === 'hidden') return false;
-            const r = el.getBoundingClientRect();
-            return r.width > 2 && r.height > 2;
-          };
-          // Find username and password fields
-          const userSels = ['input[name="SWEUserName"]', 'input[type="text"][name*="user" i]',
-                            'input[type="text"][name*="login" i]', 'input[type="email"]',
-                            'input[type="text"]:not([name=""])'];
-          const passSels = ['input[name="SWEPassword"]', 'input[type="password"]'];
-          let userEl = null, passEl = null;
-          for (const s of userSels) {
-            const el = document.querySelector(s);
-            if (el && vis(el) && (el.value || '').trim().length > 0) { userEl = el; break; }
-          }
-          for (const s of passSels) {
-            const el = document.querySelector(s);
-            if (el && vis(el) && (el.value || '').trim().length > 0) { passEl = el; break; }
-          }
-          if (!userEl || !passEl) return null;
-          return { user: userEl.value.trim().substring(0, 40), hasPass: true };
-        }""")
-        if not prefilled:
-            return False
-        logger.info(
-            "fill_dms_service: login form has pre-filled credentials (user=%s) — clicking Login",
-            prefilled.get("user", "?"),
-        )
+        page.wait_for_load_state("domcontentloaded", timeout=10000)
     except Exception:
+        pass
+    try:
+        page.wait_for_load_state("load", timeout=8000)
+    except Exception:
+        pass
+
+    _detect_js = """() => {
+      const vis = (el) => {
+        if (!el) return false;
+        const st = window.getComputedStyle(el);
+        if (st.display === 'none' || st.visibility === 'hidden') return false;
+        const r = el.getBoundingClientRect();
+        return r.width > 2 && r.height > 2;
+      };
+      const userSels = ['input[name="SWEUserName"]', 'input[type="text"][name*="user" i]',
+                        'input[type="text"][name*="login" i]', 'input[type="email"]',
+                        'input[type="text"]:not([name=""])'];
+      const passSels = ['input[name="SWEPassword"]', 'input[type="password"]'];
+      let userEl = null, passEl = null, userFound = false, passFound = false;
+      for (const s of userSels) {
+        const el = document.querySelector(s);
+        if (el && vis(el)) { userFound = true; if ((el.value || '').trim().length > 0) { userEl = el; break; } }
+      }
+      for (const s of passSels) {
+        const el = document.querySelector(s);
+        if (el && vis(el)) { passFound = true; if ((el.value || '').trim().length > 0) { passEl = el; break; } }
+      }
+      if (!userFound && !passFound) return {status: 'no_form'};
+      if (!userEl || !passEl) return {status: 'not_prefilled', userFound, passFound,
+        userValue: userEl ? userEl.value.trim().substring(0,40) : '',
+        passHasValue: passEl ? (passEl.value||'').length > 0 : false};
+      return {status: 'prefilled', user: userEl.value.trim().substring(0, 40), hasPass: true};
+    }"""
+
+    prefilled = None
+    # Poll for browser auto-fill: credentials may appear up to ~3s after page load
+    for _attempt in range(6):
+        try:
+            prefilled = page.evaluate(_detect_js)
+        except Exception:
+            prefilled = None
+
+        # #region agent log — auto-login detection attempt
+        try:
+            with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
+                import json as _j_al, time as _t_al
+                _lf.write(_j_al.dumps({"sessionId":"08e634","hypothesisId":"AUTO_LOGIN","location":"fill_dms_service.py:_try_auto_login_if_prefilled","message":f"Auto-login detect attempt {_attempt}","data":{"prefilled":prefilled,"page_url":(page.url or "")[:120]},"timestamp":int(_t_al.time()*1000)}) + "\n")
+        except Exception:
+            pass
+        # #endregion
+
+        if prefilled and prefilled.get("status") == "prefilled":
+            break
+        if prefilled and prefilled.get("status") == "no_form":
+            break
+        time.sleep(1)
+
+    if not prefilled or prefilled.get("status") != "prefilled":
         return False
+    logger.info(
+        "fill_dms_service: login form has pre-filled credentials (user=%s) — clicking Login",
+        prefilled.get("user", "?"),
+    )
     # Click the Login / Submit button
     login_clicked = False
     for sel in (
@@ -1135,7 +1168,7 @@ def _build_dms_fill_values(customer_id: int | None, vehicle_id: int | None, subf
         "state": state_e,
         "pin_code": pin_e,
         "key_partial": _clean_text(row.get("Key num (partial)"))[:8],
-        "battery_partial": _clean_text(row.get("Battery No") or "")[:12],
+        "battery_partial": "" if _clean_text(row.get("Battery No") or "").upper() in ("EMPTY", "BLANK", "NA", "N/A", "NIL", "NONE", "-") else _clean_text(row.get("Battery No") or "")[:12],
         "frame_partial": _clean_text(row.get("Frame / Chassis num (partial)"))[:12],
         "engine_partial": _clean_text(row.get("Engine num (partial)"))[:12],
         "relation_prefix": relation_prefix,

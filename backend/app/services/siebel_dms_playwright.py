@@ -110,6 +110,29 @@ def _siebel_inter_action_pause(page: Page) -> None:
 
 def _detect_siebel_error_popup(page: Page, content_frame_selector: str | None) -> str | None:
     """Return error text from a visible Siebel error/alert popup, or None."""
+
+    def _is_real_error(txt: str) -> bool:
+        """Filter out Siebel status bar / debug text that is NOT an actual error."""
+        t = (txt or "").strip()
+        if not t or len(t) < 5:
+            return False
+        tl = t.lower()
+        # Status-bar / footer boilerplate — never an error
+        if "appletRN:" in t or "ViewRN:" in t or "ScreenRN:" in t or "COPY STRING:" in t:
+            return False
+        if tl.startswith("applet") and "viewrn" in tl:
+            return False
+        # Real errors contain keywords
+        _err_kw = ("error", "required", "sbl-", "invalid", "cannot", "failed",
+                    "mandatory", "not valid", "missing", "exception", "unable")
+        for kw in _err_kw:
+            if kw in tl:
+                return True
+        # If it looks like a Siebel error code pattern (SBL-XXX-NNNNN)
+        if re.search(r"SBL-\w{3}-\d{4,}", t, re.I):
+            return True
+        return True  # Assume real if no status-bar pattern detected
+
     search_roots: list = []
     try:
         search_roots = list(_siebel_locator_search_roots(page, content_frame_selector))
@@ -127,16 +150,14 @@ def _detect_siebel_error_popup(page: Page, content_frame_selector: str | None) -
                     const r = el.getBoundingClientRect();
                     return r.width > 5 && r.height > 5;
                   };
+                  // Priority 1: alert/error-specific selectors
                   for (const s of [
                     "[role='alertdialog']", "[role='alert']",
                     ".siebui-popup-error", ".siebui-alert",
-                    ".error-dialog", ".ui-dialog",
-                    ".siebui-popup", ".siebui-msg-popup",
+                    ".error-dialog",
                     "[id*='ErrorPopup']", "[id*='_swe_alert']",
                     "[class*='error' i][class*='popup' i]",
-                    "[class*='modal' i][class*='error' i]",
-                    "[id*='popup' i][class*='ui-dialog' i]",
-                    "[role='dialog']"
+                    "[class*='modal' i][class*='error' i]"
                   ]) {
                     const el = document.querySelector(s);
                     if (el && vis(el)) {
@@ -144,21 +165,40 @@ def _detect_siebel_error_popup(page: Page, content_frame_selector: str | None) -
                       if (txt.length > 3) return txt.substring(0, 500);
                     }
                   }
+                  // Priority 2: generic dialog selectors (need content filtering)
+                  for (const s of [
+                    ".ui-dialog", ".siebui-popup", ".siebui-msg-popup",
+                    "[id*='popup' i][class*='ui-dialog' i]",
+                    "[role='dialog']"
+                  ]) {
+                    const el = document.querySelector(s);
+                    if (el && vis(el)) {
+                      const txt = (el.innerText || el.textContent || '').trim();
+                      if (txt.length > 3) return '@@NEEDS_FILTER@@' + txt.substring(0, 500);
+                    }
+                  }
                   return null;
                 }"""
             )
             if msg:
-                return msg
+                needs_filter = msg.startswith("@@NEEDS_FILTER@@")
+                clean = msg.replace("@@NEEDS_FILTER@@", "").strip()
+                if needs_filter:
+                    if _is_real_error(clean):
+                        return clean
+                else:
+                    return clean
         except Exception:
             continue
-    # Also check for native alert / confirm dialogs that Siebel sometimes uses
+    # Also check for Siebel error dialogs with specific content selectors
     try:
         alert_txt = page.evaluate("""() => {
+            const vis = (el) => { if(!el) return false; const st=window.getComputedStyle(el); return st.display!=='none' && st.visibility!=='hidden'; };
             const d = document.querySelector('.ui-dialog-content, .siebui-popup-msg, [id*="errmsg"], [id*="ErrMsg"]');
-            if (d) { const st = window.getComputedStyle(d); if (st.display !== 'none' && st.visibility !== 'hidden') return (d.innerText || d.textContent || '').trim().substring(0, 500); }
+            if (d && vis(d)) return (d.innerText || d.textContent || '').trim().substring(0, 500);
             return null;
         }""")
-        if alert_txt and len(alert_txt) > 3:
+        if alert_txt and len(alert_txt) > 3 and _is_real_error(alert_txt):
             return alert_txt
     except Exception:
         pass
@@ -7007,11 +7047,6 @@ def _add_enquiry_opportunity(
     if not try_field(("Pin Code", "Pin code", "PIN Code", "Postal Code"), pin, required=True):
         return False, "Could not set Pin Code."
 
-    if not try_field(("Age",), age, required=True):
-        return False, "Could not set Age."
-    if not try_field(("Gender",), gender, required=True):
-        return False, "Could not set Gender."
-
     if not try_field(
         ("Model Interested In", "Model Interested in", "Interested Model", "Model"),
         model_i,
@@ -7032,6 +7067,29 @@ def _add_enquiry_opportunity(
             note("Add Enquiry: Variant field could not be activated for Tab-pick.")
     else:
         note("Add Enquiry: Variant selected successfully.")
+
+    # Age & Gender filled AFTER Model/Variant — Siebel form resets these fields
+    # on Model/Variant server round-trip, so they must go last.
+    # #region agent log — pre Age/Gender fill values
+    with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
+        _lf.write(_json_dbg.dumps({"sessionId":"08e634","hypothesisId":"AGE_GENDER","location":"siebel_dms_playwright.py:pre_age_gender","message":"About to fill Age/Gender after Variant","data":{"age":age,"gender":gender},"timestamp":int(_time_dbg.time()*1000)}) + "\n")
+    # #endregion
+    if not try_field(("Age(Years)", "Age"), age, required=True):
+        return False, "Could not set Age."
+    if not try_field(("Gender",), gender, required=True):
+        return False, "Could not set Gender."
+    # #region agent log — post Age/Gender readback
+    try:
+        _age_rb = enq_frame.locator('input[aria-label*="Age" i]').first.input_value(timeout=600)
+    except Exception:
+        _age_rb = "???"
+    try:
+        _gen_rb = enq_frame.locator('input[aria-label*="Gender" i]').first.input_value(timeout=600)
+    except Exception:
+        _gen_rb = "???"
+    with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
+        _lf.write(_json_dbg.dumps({"sessionId":"08e634","hypothesisId":"AGE_GENDER","location":"siebel_dms_playwright.py:post_age_gender","message":"Age/Gender readback after fill","data":{"age_readback":_age_rb,"gender_readback":_gen_rb},"timestamp":int(_time_dbg.time()*1000)}) + "\n")
+    # #endregion
 
     try_field_any(("Enquiry Source",), ("Walk-In", "Walk In", "Walkin"))
     if not try_field(("Point of Contact",), "Customer Walk-in", required=True):
