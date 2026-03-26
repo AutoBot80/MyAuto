@@ -4546,6 +4546,54 @@ def _create_order(
         "input[id*='Mobile_Number' i]",
     )
 
+    def _go_to_invoice_selected_direct() -> bool:
+        """
+        Prefer direct context switch to Invoice Selected (requested by operator),
+        instead of querying Vehicle Sales list by mobile.
+        """
+        _sels = (
+            "#ui-id-429",
+            "a#ui-id-429",
+            "li#ui-id-429",
+            "[id='ui-id-429']",
+            "a[aria-label='Invoice Selected']",
+            "button[aria-label='Invoice Selected']",
+            "a[aria-label*='Invoice Selected' i]",
+            "button[aria-label*='Invoice Selected' i]",
+        )
+        for root in _roots():
+            try:
+                for role in ("tab", "link", "button"):
+                    try:
+                        by_role = root.get_by_role(role, name=re.compile(r"invoice\s*selected", re.I)).first
+                        if by_role.count() > 0 and by_role.is_visible(timeout=600):
+                            try:
+                                by_role.click(timeout=min(action_timeout_ms, 2500))
+                            except Exception:
+                                by_role.click(timeout=min(action_timeout_ms, 2500), force=True)
+                            _safe_page_wait(page, 1200, log_label="after_invoice_selected_role_click")
+                            note(f"Create Order: switched to Invoice Selected via get_by_role({role}).")
+                            return True
+                    except Exception:
+                        continue
+                for css in _sels:
+                    try:
+                        loc = root.locator(css).first
+                        if loc.count() <= 0 or not loc.is_visible(timeout=600):
+                            continue
+                        try:
+                            loc.click(timeout=min(action_timeout_ms, 2500))
+                        except Exception:
+                            loc.click(timeout=min(action_timeout_ms, 2500), force=True)
+                        _safe_page_wait(page, 1200, log_label="after_invoice_selected_css_click")
+                        note(f"Create Order: switched to Invoice Selected via selector {css!r}.")
+                        return True
+                    except Exception:
+                        continue
+            except Exception:
+                continue
+        return False
+
     def _fill_mobile_via_label() -> bool:
         m = (mobile or "").strip()
         if not m:
@@ -4576,41 +4624,10 @@ def _create_order(
                     continue
         return False
 
-    _mobile_query_ok = False
-    for _attempt in range(4):
-        if _fill_any(_mobile_selectors, mobile, timeout=min(action_timeout_ms, 3500)):
-            _mobile_query_ok = True
-            note(f"Create Order: Vehicle Sales mobile field filled (attempt {_attempt + 1}).")
-            break
-        if _fill_mobile_via_label():
-            _mobile_query_ok = True
-            note(f"Create Order: Vehicle Sales mobile filled via get_by_label (attempt {_attempt + 1}).")
-            break
-        _safe_page_wait(page, 1400, log_label=f"vs_mobile_field_retry_{_attempt}")
-
-    if _mobile_query_ok:
-        try:
-            page.keyboard.press("Enter")
-        except Exception:
-            pass
-        _safe_page_wait(page, 600, log_label="after_vs_mobile_enter")
-        _click_any(
-            (
-                "a[aria-label='My Orders List:Query']",
-                "button[aria-label='My Orders List:Query']",
-                "a[aria-label*='My Orders' i][aria-label*='Query' i]",
-                "button[aria-label*='My Orders' i][aria-label*='Query' i]",
-                "a[aria-label*='Orders List' i][aria-label*='Query' i]",
-                "button[aria-label*='Orders List' i][aria-label*='Query' i]",
-                "a[aria-label='Order Entry - My Orders List:Query']",
-                "a[aria-label*='Order Entry' i][aria-label*='Query' i]",
-            ),
-            timeout=min(action_timeout_ms, 3500),
-        )
-        _safe_page_wait(page, 4000, log_label="after_vehicle_sales_mobile_query_refresh")
-        note(f"Create Order: Vehicle Sales list queried by mobile={mobile!r}. URL={page.url[:120]}")
-    else:
-        note("Create Order: mobile search field not found after retries; continuing without list filter.")
+    _invoice_selected_ready = _go_to_invoice_selected_direct()
+    if not _invoice_selected_ready:
+        return False, "Could not open Invoice Selected context (including id='ui-id-429').", scraped
+    note("Create Order: Invoice Selected context opened directly; Find→Vehicle Sales→Mobile fallback disabled.")
 
     # JS snippet run inside each frame to find and click the first Order Number drill-down link.
     # Siebel renders the link as <a name="Order Number">ORDER-VALUE</a> inside a grid td.
@@ -4772,20 +4789,10 @@ def _create_order(
             return True
         return False
 
-    _direct_open_by_mobile = (mobile or "").strip() == "8952897358"
-    note(f"Create Order: branch by mobile_number == '8952897358' -> {_direct_open_by_mobile!r}.")
+    _existing_order_opened = True
+    note("Create Order: staying on Invoice Selected page; skipping order-list drill-in.")
 
-    _existing_order_opened = False
-    if _direct_open_by_mobile:
-        # Give Siebel's lazy-loaded iframes extra time to render before probing
-        _safe_page_wait(page, 1500, log_label="before_order_link_click_direct")
-        _existing_order_opened = _open_order_link("direct-branch-attempt-1")
-        if not _existing_order_opened:
-            _safe_page_wait(page, 1500, log_label="before_order_link_click_retry")
-            _existing_order_opened = _open_order_link("direct-branch-attempt-2")
-        note(f"Create Order: direct branch Order# click -> {_existing_order_opened!r}. URL={page.url[:120]}")
-
-    if not _direct_open_by_mobile:
+    if False:
         # 2) Click + (Sales Orders New:List)
         if not _click_any(
             (
