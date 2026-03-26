@@ -5214,70 +5214,89 @@ def _create_order(
                     pass
                 # #endregion
 
-                # Match row by first name across all fresh roots
+                # Match row by first name: find "Contact First Name" column index from header, then match data rows.
                 _row_ok = False
                 _row_diag = ""
                 _fresh_roots2 = list(_ordered_frames(page)) + [page]
                 for _rr in _fresh_roots2:
                     try:
-                        _row_ok = bool(_rr.evaluate(
+                        _result = _rr.evaluate(
                             """(firstNeed) => {
-                                const fn = String(firstNeed || '').trim().toLowerCase();
-                                if (!fn) return false;
                                 const norm = (s) => String(s || '').trim().toLowerCase();
-                                const firstCells = Array.from(document.querySelectorAll("[id$='_First_Name']"));
-                                for (const c of firstCells) {
-                                    const txt = norm(c.textContent || c.innerText || c.getAttribute('value'));
-                                    if (!txt || txt !== fn) continue;
-                                    const row = c.closest('tr');
-                                    if (row) {
-                                        const sel = row.querySelector("input[type='radio'], input[type='checkbox'], td, a, span");
-                                        if (sel) { sel.click(); return true; }
-                                        row.click(); return true;
+                                const fn = norm(firstNeed);
+                                if (!fn) return {clicked: false, err: 'empty first name'};
+                                const tables = document.querySelectorAll("table");
+                                for (const tbl of tables) {
+                                    const allRows = Array.from(tbl.querySelectorAll("tr"));
+                                    if (allRows.length < 2) continue;
+                                    // Find header row and "Contact First Name" column index
+                                    let fnColIdx = -1;
+                                    let headerRowIdx = -1;
+                                    for (let ri = 0; ri < Math.min(allRows.length, 5); ri++) {
+                                        const hCells = allRows[ri].querySelectorAll("th, td");
+                                        for (let ci = 0; ci < hCells.length; ci++) {
+                                            const ht = norm(hCells[ci].textContent || '');
+                                            if (ht === 'contact first name' || ht === 'first name') {
+                                                fnColIdx = ci;
+                                                headerRowIdx = ri;
+                                                break;
+                                            }
+                                        }
+                                        if (fnColIdx >= 0) break;
                                     }
-                                    c.click();
-                                    return true;
-                                }
-                                // Broader match: any cell containing the name
-                                const allCells = Array.from(document.querySelectorAll("td, span, a"));
-                                for (const c of allCells) {
-                                    const txt = norm(c.textContent || '');
-                                    if (txt === fn) {
-                                        const row = c.closest('tr');
-                                        if (row) { row.click(); return true; }
+                                    // Scan data rows
+                                    const dataStart = headerRowIdx >= 0 ? headerRowIdx + 1 : 1;
+                                    const seenNames = [];
+                                    for (let ri = dataStart; ri < allRows.length; ri++) {
+                                        const cells = allRows[ri].querySelectorAll("td");
+                                        if (cells.length < 2) continue;
+                                        const cellTexts = Array.from(cells).map(c => (c.textContent || '').trim());
+                                        // Skip header-like rows
+                                        const joined = cellTexts.join('|').toLowerCase();
+                                        if (joined.includes('contact first name') || joined.includes('search results')) continue;
+                                        // Check name match
+                                        let nameInRow = '';
+                                        if (fnColIdx >= 0 && fnColIdx < cells.length) {
+                                            nameInRow = norm(cells[fnColIdx].textContent || '');
+                                        }
+                                        if (!nameInRow) {
+                                            // Fallback: check all cells for the name
+                                            nameInRow = cellTexts.find(t => norm(t) === fn) ? fn : '';
+                                        }
+                                        if (nameInRow) seenNames.push(nameInRow);
+                                        if (nameInRow === fn) {
+                                            const clickable = allRows[ri].querySelector("a, input[type='radio'], input[type='checkbox'], td");
+                                            if (clickable) { clickable.click(); } else { allRows[ri].click(); }
+                                            return {clicked: true, preview: cellTexts.slice(0, 8).join(' | ').substring(0, 200), fnColIdx: fnColIdx};
+                                        }
+                                    }
+                                    if (seenNames.length > 0) {
+                                        return {clicked: false, err: 'name not matched', seen: seenNames.slice(0, 10).join(', '), fnColIdx: fnColIdx};
                                     }
                                 }
-                                return false;
+                                return {clicked: false, err: 'no data rows found'};
                             }""",
                             _first_need,
-                        ))
-                        if _row_ok:
+                        )
+
+                        # #region agent log — row match result
+                        try:
+                            with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
+                                _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H15","location":"siebel_dms_playwright.py:create_order_row_match","message":"Row match result","data":_result or {},"timestamp":int(_t_f2.time()*1000)}) + "\n")
+                        except Exception:
+                            pass
+                        # #endregion
+
+                        if _result and _result.get("clicked"):
+                            _row_ok = True
+                            note(f"Create Order: matched row by first name. Preview: {(_result.get('preview',''))[:80]}")
                             break
+                        elif _result:
+                            _row_diag = _result.get("err", "") + "; seen=" + _result.get("seen", "")
                     except Exception:
                         continue
                 if not _row_ok:
-                    for _rr in _fresh_roots2:
-                        try:
-                            _row_diag = str(_rr.evaluate(
-                                """() => {
-                                    const rows = Array.from(document.querySelectorAll("tr")).slice(0, 60);
-                                    const vals = [];
-                                    for (const tr of rows) {
-                                        for (const c of tr.querySelectorAll("[id$='_First_Name'], td, span, a")) {
-                                            const t = (c.textContent || '').trim();
-                                            if (t && t.length <= 40) vals.push(t);
-                                            if (vals.length >= 15) break;
-                                        }
-                                        if (vals.length >= 15) break;
-                                    }
-                                    return vals.join(" | ");
-                                }"""
-                            ))
-                            if _row_diag.strip():
-                                break
-                        except Exception:
-                            continue
-                    _applet_err = f"no first-name match for {first_name!r}; seen={_row_diag[:180]}"
+                    _applet_err = f"no first-name match for {first_name!r} in applet. {_row_diag[:180]}"
                     continue
                 _safe_page_wait(page, 400, log_label="after_row_select")
                 note("Create Order: matched contact row in applet.")
