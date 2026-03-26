@@ -5202,34 +5202,69 @@ def _create_order(
                     pass
                 # #endregion
 
-                # Value field: clear and type the search value
-                page.keyboard.press("Control+a")
-                _safe_page_wait(page, 100, log_label="val_selectall")
-                page.keyboard.type(_search_val, delay=30)
-                _safe_page_wait(page, 200, log_label="val_type_settle")
-
-                # Verify the value was typed
+                # Value field: fill via Playwright locator (page.keyboard.type doesn't work on this Siebel field).
+                _val_filled = False
                 _val_readback = ""
-                try:
-                    _val_readback = page.evaluate("() => (document.activeElement || {}).value || ''") or ""
-                except Exception:
-                    pass
 
-                # #region agent log — value field readback after typing
+                # Strategy 1: find the field by aria-label "Starting with" across all roots — click and fill
+                _all_fill_roots = list(_ordered_frames(page)) + [page]
+                for _fr in _all_fill_roots:
+                    try:
+                        _vf = _fr.locator("input[aria-label='Starting with' i]").first
+                        if _vf.count() > 0 and _vf.is_visible(timeout=500):
+                            _vf.click(timeout=1500)
+                            _vf.fill(_search_val, timeout=2000)
+                            _val_readback = (_vf.input_value(timeout=1000) or "").strip()
+                            if _val_readback:
+                                _val_filled = True
+                                break
+                    except Exception:
+                        continue
+
+                # Strategy 2: find by dynamic name suffix _313_0
+                if not _val_filled:
+                    for _fr in _all_fill_roots:
+                        try:
+                            _vf = _fr.locator("input[name$='_313_0']").first
+                            if _vf.count() > 0 and _vf.is_visible(timeout=500):
+                                _vf.click(timeout=1500)
+                                _vf.fill(_search_val, timeout=2000)
+                                _val_readback = (_vf.input_value(timeout=1000) or "").strip()
+                                if _val_readback:
+                                    _val_filled = True
+                                    break
+                        except Exception:
+                            continue
+
+                # Strategy 3: evaluate_handle on focused element + fill
+                if not _val_filled:
+                    try:
+                        _active = page.evaluate_handle("() => document.activeElement")
+                        _el = _active.as_element()
+                        if _el:
+                            _el.fill(_search_val)
+                            _val_readback = (_el.input_value() or "").strip()
+                            if _val_readback:
+                                _val_filled = True
+                    except Exception:
+                        pass
+
+                # #region agent log — value field fill result
                 try:
                     with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-                        _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H19","location":"siebel_dms_playwright.py:create_order_val_readback","message":"Value field readback after typing","data":{"typed": _search_val, "readback": _val_readback},"timestamp":int(_t_f2.time()*1000)}) + "\n")
+                        _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H20","location":"siebel_dms_playwright.py:create_order_val_fill","message":"Value field fill result","data":{"typed": _search_val, "readback": _val_readback, "filled": _val_filled},"timestamp":int(_t_f2.time()*1000)}) + "\n")
                 except Exception:
                     pass
                 # #endregion
 
-                note(f"Create Order: applet value field typed '{_search_val}', readback='{_val_readback}'.")
+                note(f"Create Order: applet value field fill={_val_filled}, readback='{_val_readback}'.")
 
                 # Trigger query — try Go/Query button across all fresh roots, fallback Enter
                 _safe_page_wait(page, 300, log_label="before_query_btn")
                 _fresh_roots = list(_ordered_frames(page)) + [page]
                 _qry_clicked = False
                 _qry_selectors = [
+                    "button[aria-label='Pick Contact List:Go']",
                     "button[name$='_314_0'], a[name$='_314_0'], input[name$='_314_0']",
                     "button[aria-label*='Go' i]",
                     "button[aria-label*='Query' i]",
