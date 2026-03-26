@@ -5065,26 +5065,49 @@ def _create_order(
                         continue
 
                 if not _applet_opened_by_f2:
-                    note("Create Order: F2 key did not open applet — trying icon click.")
+                    note("Create Order: F2 key did not open applet — trying icon click near CLS field.")
                     _icon_clicked = False
-                    for _ir in [root] + _all_roots_for_applet:
-                        try:
-                            _icon = _ir.locator("[aria-label='Press F2 for Selection Field']")
-                            for idx in range(min(_icon.count(), 6)):
-                                _el = _icon.nth(idx)
-                                if _el.is_visible(timeout=500):
-                                    _el.click(timeout=1500)
-                                    _icon_clicked = True
-                                    break
-                            if _icon_clicked:
-                                break
-                        except Exception:
-                            continue
+                    # Strategy: walk up the DOM from the CLS field to find its associated F2 icon
+                    try:
+                        _icon_clicked = bool(fld.evaluate("""(el) => {
+                            const sel = "[aria-label='Press F2 for Selection Field']";
+                            let p = el.parentElement;
+                            for (let depth = 0; p && depth < 8; depth++, p = p.parentElement) {
+                                const icon = p.querySelector(sel);
+                                if (icon) {
+                                    const st = window.getComputedStyle(icon);
+                                    if (st.display !== 'none' && st.visibility !== 'hidden') {
+                                        icon.click();
+                                        return true;
+                                    }
+                                }
+                                if (['TABLE', 'FORM', 'BODY'].includes(p.tagName)) break;
+                            }
+                            // Fallback: try next siblings of the field
+                            let sib = el.nextElementSibling;
+                            for (let i = 0; sib && i < 5; i++, sib = sib.nextElementSibling) {
+                                if (sib.matches && sib.matches(sel)) { sib.click(); return true; }
+                                const inner = sib.querySelector && sib.querySelector(sel);
+                                if (inner) { inner.click(); return true; }
+                            }
+                            return false;
+                        }"""))
+                    except Exception:
+                        _icon_clicked = False
+
+                    # #region agent log — icon click result
+                    try:
+                        with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
+                            _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H9","location":"siebel_dms_playwright.py:create_order_icon_proximity","message":"F2 icon proximity click result","data":{"icon_clicked": _icon_clicked},"timestamp":int(_t_f2.time()*1000)}) + "\n")
+                    except Exception:
+                        pass
+                    # #endregion
+
                     if _icon_clicked:
                         _safe_page_wait(page, 1500, log_label="after_f2_icon_click")
-                        note("Create Order: clicked 'Press F2 for Selection Field' icon.")
+                        note("Create Order: clicked F2 icon near Contact Last Name field.")
                     else:
-                        note("Create Order: F2 icon not found either.")
+                        note("Create Order: F2 icon not found near Contact Last Name field.")
 
                 # #region agent log — after F2/icon, check if applet controls exist anywhere
                 try:
