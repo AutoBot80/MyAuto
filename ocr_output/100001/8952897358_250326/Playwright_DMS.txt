@@ -1,6 +1,6 @@
 Playwright DMS — execution log (this run only; UTC timestamps)
 
-started_utc=2026-03-25T04:56:15.985746+00:00
+started_utc=2026-03-25T05:30:50.304846+00:00
 skip_contact_find=False
 dms_contact_path='found'
 mobile_phone='8952897358'
@@ -22,35 +22,9 @@ url_vehicle_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/e
 --- trace ---
 Legend: [STEP]/[NOTE]/[MILESTONE] = operator narrative; [FORM] = siebel_step + Siebel form/screen + action + fields/values being applied on that form.
 
-2026-03-25T04:56:15.986076+00:00 [STEP] Started Hero Connect / Siebel DMS automation (linear SOP).
-2026-03-25T04:56:15.986177+00:00 [STEP] Video SOP (Find Contact Enquiry): Find → Contact → mobile → Go → open All Enquiries; then stop.
-2026-03-25T04:56:15.986235+00:00 [FORM] siebel_step=v1_find_contact | form=Global Find → Contact (Mobile Phone) + Go | action=goto_contact_find_URL_then_prepare_Find_Contact_fill_mobile_FindGo | contact_url_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+Contact+Opportunity+Buyer/CoBuyer+View+(SDW)&SWERF=1&SWEHo=&SWEBU=1' | mobile_phone='8952897358'
-2026-03-25T04:56:21.732853+00:00 [STEP] Video SOP: Find customer by mobile (Contact view).
-2026-03-25T04:56:28.389701+00:00 [NOTE] Find → Contact: object type selected so the mobile field is the Contact search field.
-2026-03-25T04:56:29.063506+00:00 [NOTE] Filled mobile and clicked Find inside the Contact applet (scoped; includes first-field right-popup fallback when labels are non-standard).
-2026-03-25T04:56:31.086118+00:00 [NOTE] DECISION: contact_table_match_after_find=True
-2026-03-25T04:56:31.086285+00:00 [FORM] siebel_step=v2_drill_and_nav | form=Search Results + Contacts detail | action=Siebel_Find_tab_optional_then_link_hit_then_click_first_name_then_fill_Relations_Name_only | care_of='S/O Madan Lal' | first_name='Ashok' | mobile_phone='8952897358'
-2026-03-25T04:56:33.518425+00:00 [NOTE] Activated Siebel Find tab in search results (video SOP).
-2026-03-25T04:56:34.375559+00:00 [NOTE] Opened contact from search hit hyperlink (video SOP).
-2026-03-25T04:56:39.494976+00:00 [NOTE] Relation's Name filled; stopping on current field as requested.
-2026-03-25T04:56:39.495086+00:00 [FORM] siebel_step=v3_add_customer_payment | form=Payments tab (current frame) | action=click_Payments_tab_then_click_plus_icon
-2026-03-25T04:56:39.755148+00:00 [NOTE] Payment debug: ordered frames count=1.
-2026-03-25T04:56:39.785425+00:00 [NOTE] Payment debug: root candidates prepared (action_roots=2, total_candidates=2).
-2026-03-25T04:56:39.918647+00:00 [NOTE] Clicked '+' icon on Payments tab.
-2026-03-25T04:56:40.443368+00:00 [NOTE] Payment sequence: '+' -> Transaction Amount -> Transaction Type -> Payment Lines Save icon.
-2026-03-25T04:56:40.469082+00:00 [NOTE] Payment lines scoped frame locked: url='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=HHML+LS+CIM+Contact+Site+Payments+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Contact+Form+Applet&SW', name=''
-2026-03-25T04:56:40.474676+00:00 [NOTE] Transaction field frame locked: url='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=HHML+LS+CIM+Contact+Site+Payments+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Contact+Form+Applet&SW', name=''
-2026-03-25T04:56:40.474730+00:00 [NOTE] Payment debug: transaction roots count=1.
-2026-03-25T04:56:40.482998+00:00 [NOTE] Transaction amount frame locked: url='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=HHML+LS+CIM+Contact+Site+Payments+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Contact+Form+Applet&SW', name=''
-2026-03-25T04:56:40.483129+00:00 [NOTE] Payment debug: amount roots count=1.
-2026-03-25T04:56:42.782928+00:00 [NOTE] Payment direct: Transaction_Type filled → 'Payments'.
-2026-03-25T04:56:44.122827+00:00 [NOTE] Payment direct: Payment_Mode filled → 'Cash'.
-2026-03-25T04:56:44.435816+00:00 [NOTE] Payment direct: Transaction_Amount — using Tab navigation (preserving edit context).
-2026-03-25T04:56:45.893693+00:00 [NOTE] Payment direct: Transaction_Amount filled via Tab navigation (tab 4, name='Transaction_Amount').
-2026-03-25T04:56:46.215083+00:00 [NOTE] Filled payment fields (direct): Type=Payments(ok=True), Mode=Cash(ok=True), Amount=0(ok=True).
-2026-03-25T04:56:46.638077+00:00 [NOTE] Payment debug: save action roots count=2.
-2026-03-25T04:56:46.756876+00:00 [NOTE] Payment debug: Save clicked via selector: button[aria-label='Payment Lines List:Save']
-2026-03-25T04:56:49.008629+00:00 [NOTE] Add customer payment flow failed after '+' click attempt: Siebel: lost connection to the browser during wait (after_payment_save_processing). The window may have been closed, the browser may have crashed, or the debug (CDP) session ended. Keep Edge/Chrome open on Hero Connect while Fill DMS runs; avoid closing the browser or restarting it mid-run. If the API process restarted, open Hero Connect again and retry Fill DMS.
-2026-03-25T04:56:49.008702+00:00 [STEP] Stopped: could not open Payments tab or click '+' icon.
+2026-03-25T05:30:50.305183+00:00 [STEP] Started Hero Connect / Siebel DMS automation (linear SOP).
+2026-03-25T05:30:50.305264+00:00 [STEP] Video SOP (Find Contact Enquiry): Find → Contact → mobile → Go → open All Enquiries; then stop.
+2026-03-25T05:30:50.305361+00:00 [FORM] siebel_step=v1_find_contact | form=Global Find → Contact (Mobile Phone) + Go | action=goto_contact_find_URL_then_prepare_Find_Contact_fill_mobile_FindGo | contact_url_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+Contact+Opportunity+Buyer/CoBuyer+View+(SDW)&SWERF=1&SWEHo=&SWEBU=1' | mobile_phone='8952897358'
+2026-03-25T05:30:57.491428+00:00 [STEP] Video SOP: Find customer by mobile (Contact view).
 
-2026-03-25T04:56:49.008743+00:00 [END] error=Siebel: video SOP — could not click Payments tab and '+' icon for Add customer payment.
+2026-03-25T05:31:01.270666+00:00 [END] error=Siebel: the browser page was already closed before automation could continue (after_find_contact_prep). Leave the Hero Connect tab open for the full Fill DMS run.

@@ -3470,17 +3470,47 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
     if not addr_line1_value:
         addr_line1_value = ""
 
-    def _fill_with_retry(loc, value: str, *, attempts: int = 3, visible_ms: int = 900) -> bool:
+    def _fill_with_retry(loc, value: str, *, attempts: int = 3, visible_ms: int = 900, _lbl: str = "") -> bool:
         """
         Stabilize flaky Siebel input commit:
         wait visible -> fill -> blur(Tab) -> readback verify, with short backoff retries.
         """
+        import json as _j, time as _t
+        _dl = "debug-08e634.log"
         for i in range(max(1, attempts)):
             try:
-                if loc.count() <= 0:
+                cnt = loc.count()
+                if cnt <= 0:
+                    # #region agent log
+                    try:
+                        with open(_dl, "a") as _f:
+                            _f.write(_j.dumps({"sessionId":"08e634","hypothesisId":"C","location":"_fill_with_retry","message":"count_zero","data":{"lbl":_lbl,"attempt":i+1,"count":cnt},"timestamp":int(_t.time()*1000)})+"\n")
+                    except Exception:
+                        pass
+                    # #endregion
                     return False
-                if not loc.is_visible(timeout=visible_ms):
+                vis = loc.is_visible(timeout=visible_ms)
+                if not vis:
+                    # #region agent log
+                    try:
+                        with open(_dl, "a") as _f:
+                            _f.write(_j.dumps({"sessionId":"08e634","hypothesisId":"A","location":"_fill_with_retry","message":"not_visible","data":{"lbl":_lbl,"attempt":i+1,"visible_ms":visible_ms},"timestamp":int(_t.time()*1000)})+"\n")
+                    except Exception:
+                        pass
+                    # #endregion
                     continue
+                # #region agent log
+                _pre = None
+                try:
+                    _pre = loc.evaluate("el => ({readOnly:el.readOnly,val:(el.value||'').substring(0,50),tag:el.tagName,name:el.name||'',id:el.id||''})")
+                except Exception:
+                    pass
+                try:
+                    with open(_dl, "a") as _f:
+                        _f.write(_j.dumps({"sessionId":"08e634","hypothesisId":"D","location":"_fill_with_retry","message":"pre_fill","data":{"lbl":_lbl,"attempt":i+1,"el":_pre},"timestamp":int(_t.time()*1000)})+"\n")
+                except Exception:
+                    pass
+                # #endregion
                 try:
                     loc.click(timeout=min(2000, action_timeout_ms))
                 except Exception:
@@ -3492,10 +3522,24 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
                     pass
                 _safe_page_wait(page, 120 + (i * 200), log_label=f"retry_settle_{i+1}")
                 got = (loc.input_value(timeout=min(2500, action_timeout_ms)) or "").strip()
-                if got and (value.lower() in got.lower() or got.lower() in value.lower()):
+                _ok = bool(got and (value.lower() in got.lower() or got.lower() in value.lower()))
+                # #region agent log
+                try:
+                    with open(_dl, "a") as _f:
+                        _f.write(_j.dumps({"sessionId":"08e634","hypothesisId":"B","location":"_fill_with_retry","message":"readback","data":{"lbl":_lbl,"attempt":i+1,"got":got[:80],"match":_ok,"value":value[:50]},"timestamp":int(_t.time()*1000)})+"\n")
+                except Exception:
+                    pass
+                # #endregion
+                if _ok:
                     return True
-            except Exception:
-                pass
+            except Exception as _ex:
+                # #region agent log
+                try:
+                    with open(_dl, "a") as _f:
+                        _f.write(_j.dumps({"sessionId":"08e634","hypothesisId":"E","location":"_fill_with_retry","message":"exception","data":{"lbl":_lbl,"attempt":i+1,"err":str(_ex)[:200]},"timestamp":int(_t.time()*1000)})+"\n")
+                except Exception:
+                    pass
+                # #endregion
             _safe_page_wait(page, 220 + (i * 250), log_label=f"retry_backoff_{i+1}")
         return False
 
@@ -3601,6 +3645,42 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
 
     # Exact-input path first (from provided DOM snippet), then label fallback.
     _read_first_name_probe()
+    import json as _j2, time as _t2
+    _dl2 = "debug-08e634.log"
+    _rn_t0 = _t2.time()
+
+    # #region agent log
+    try:
+        _dom_snap = None
+        for _fr in _ordered_frames(page):
+            try:
+                _dom_snap = _fr.evaluate("""() => {
+                    const vis = el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+                    const all = Array.from(document.querySelectorAll('input,textarea,select')).filter(vis);
+                    const rn = all.filter(i => {
+                        const a = (i.getAttribute('aria-label')||'').toLowerCase();
+                        const t = (i.getAttribute('title')||'').toLowerCase();
+                        const n = (i.name||'').toLowerCase();
+                        return a.includes('relation') || t.includes('relation') || n.includes('relation');
+                    });
+                    return { total: all.length, relation_fields: rn.map(i => ({
+                        tag: i.tagName, name: i.name||'', id: i.id||'',
+                        ariaLabel: i.getAttribute('aria-label')||'',
+                        title: i.getAttribute('title')||'',
+                        readOnly: i.readOnly, val: (i.value||'').substring(0,50),
+                        cls: i.className||''
+                    })) };
+                }""")
+                if _dom_snap and _dom_snap.get("relation_fields"):
+                    break
+            except Exception:
+                continue
+        with open(_dl2, "a") as _f2:
+            _f2.write(_j2.dumps({"sessionId":"08e634","hypothesisId":"ADE","location":"rn_dom_probe","message":"dom_before_fill","data":_dom_snap,"timestamp":int(_t2.time()*1000)})+"\n")
+    except Exception:
+        pass
+    # #endregion
+
     exact_selectors = (
         "input[aria-label=\"Relation's Name\"]",
         "textarea[aria-label=\"Relation's Name\"]",
@@ -3613,7 +3693,14 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
         for css in exact_selectors:
             try:
                 loc = fl.locator(css).first
-                if _fill_with_retry(loc, care_val, attempts=3, visible_ms=900):
+                if _fill_with_retry(loc, care_val, attempts=3, visible_ms=900, _lbl=f"fl:{css[:40]}"):
+                    # #region agent log
+                    try:
+                        with open(_dl2, "a") as _f2:
+                            _f2.write(_j2.dumps({"sessionId":"08e634","hypothesisId":"OK","location":"rn_filled","message":"fl_exact","data":{"css":css,"ms":int((_t2.time()-_rn_t0)*1000)},"timestamp":int(_t2.time()*1000)})+"\n")
+                    except Exception:
+                        pass
+                    # #endregion
                     return _after_relation_fill_nav()
             except Exception:
                 continue
@@ -3621,26 +3708,63 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
         for css in exact_selectors:
             try:
                 loc = frame.locator(css).first
-                if _fill_with_retry(loc, care_val, attempts=3, visible_ms=900):
+                if _fill_with_retry(loc, care_val, attempts=3, visible_ms=900, _lbl=f"fr:{css[:40]}"):
+                    # #region agent log
+                    try:
+                        with open(_dl2, "a") as _f2:
+                            _f2.write(_j2.dumps({"sessionId":"08e634","hypothesisId":"OK","location":"rn_filled","message":"fr_exact","data":{"css":css,"ms":int((_t2.time()-_rn_t0)*1000)},"timestamp":int(_t2.time()*1000)})+"\n")
+                    except Exception:
+                        pass
+                    # #endregion
                     return _after_relation_fill_nav()
             except Exception:
                 continue
+
+    # #region agent log
+    try:
+        with open(_dl2, "a") as _f2:
+            _f2.write(_j2.dumps({"sessionId":"08e634","hypothesisId":"EXACT_FAIL","location":"rn_exact_failed","message":"all_exact_selectors_failed","data":{"ms":int((_t2.time()-_rn_t0)*1000)},"timestamp":int(_t2.time()*1000)})+"\n")
+    except Exception:
+        pass
+    # #endregion
 
     # Restore earlier working style: label-based fill fallback.
     for fl in _iter_frame_locator_roots(page, content_frame_selector):
         try:
             loc = fl.get_by_label("Relation's Name", exact=True).first
-            if _fill_with_retry(loc, care_val, attempts=3, visible_ms=700):
+            if _fill_with_retry(loc, care_val, attempts=3, visible_ms=700, _lbl="lbl_fl"):
+                # #region agent log
+                try:
+                    with open(_dl2, "a") as _f2:
+                        _f2.write(_j2.dumps({"sessionId":"08e634","hypothesisId":"OK","location":"rn_filled","message":"fl_label","data":{"ms":int((_t2.time()-_rn_t0)*1000)},"timestamp":int(_t2.time()*1000)})+"\n")
+                except Exception:
+                    pass
+                # #endregion
                 return _after_relation_fill_nav()
         except Exception:
             continue
     for frame in _ordered_frames(page):
         try:
             loc = frame.get_by_label("Relation's Name", exact=True).first
-            if _fill_with_retry(loc, care_val, attempts=3, visible_ms=700):
+            if _fill_with_retry(loc, care_val, attempts=3, visible_ms=700, _lbl="lbl_fr"):
+                # #region agent log
+                try:
+                    with open(_dl2, "a") as _f2:
+                        _f2.write(_j2.dumps({"sessionId":"08e634","hypothesisId":"OK","location":"rn_filled","message":"fr_label","data":{"ms":int((_t2.time()-_rn_t0)*1000)},"timestamp":int(_t2.time()*1000)})+"\n")
+                except Exception:
+                    pass
+                # #endregion
                 return _after_relation_fill_nav()
         except Exception:
             continue
+
+    # #region agent log
+    try:
+        with open(_dl2, "a") as _f2:
+            _f2.write(_j2.dumps({"sessionId":"08e634","hypothesisId":"FAIL","location":"rn_all_failed","message":"all_paths_exhausted","data":{"ms":int((_t2.time()-_rn_t0)*1000),"care_val":care_val[:60]},"timestamp":int(_t2.time()*1000)})+"\n")
+    except Exception:
+        pass
+    # #endregion
 
     _read_first_name_probe()
     note("Could not fill Relation's Name on opened customer record (video SOP).")
