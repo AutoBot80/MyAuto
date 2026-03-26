@@ -130,13 +130,18 @@ def _detect_siebel_error_popup(page: Page, content_frame_selector: str | None) -
                   for (const s of [
                     "[role='alertdialog']", "[role='alert']",
                     ".siebui-popup-error", ".siebui-alert",
-                    ".error-dialog", ".ui-dialog.ui-widget",
-                    "[id*='ErrorPopup']", "[class*='error' i][class*='popup' i]",
-                    "[class*='modal' i][class*='error' i]"
+                    ".error-dialog", ".ui-dialog",
+                    ".siebui-popup", ".siebui-msg-popup",
+                    "[id*='ErrorPopup']", "[id*='_swe_alert']",
+                    "[class*='error' i][class*='popup' i]",
+                    "[class*='modal' i][class*='error' i]",
+                    "[id*='popup' i][class*='ui-dialog' i]",
+                    "[role='dialog']"
                   ]) {
                     const el = document.querySelector(s);
                     if (el && vis(el)) {
-                      return (el.innerText || el.textContent || '').trim().substring(0, 500);
+                      const txt = (el.innerText || el.textContent || '').trim();
+                      if (txt.length > 3) return txt.substring(0, 500);
                     }
                   }
                   return null;
@@ -146,6 +151,17 @@ def _detect_siebel_error_popup(page: Page, content_frame_selector: str | None) -
                 return msg
         except Exception:
             continue
+    # Also check for native alert / confirm dialogs that Siebel sometimes uses
+    try:
+        alert_txt = page.evaluate("""() => {
+            const d = document.querySelector('.ui-dialog-content, .siebui-popup-msg, [id*="errmsg"], [id*="ErrMsg"]');
+            if (d) { const st = window.getComputedStyle(d); if (st.display !== 'none' && st.visibility !== 'hidden') return (d.innerText || d.textContent || '').trim().substring(0, 500); }
+            return null;
+        }""")
+        if alert_txt and len(alert_txt) > 3:
+            return alert_txt
+    except Exception:
+        pass
     return None
 
 
@@ -6767,7 +6783,24 @@ def _add_enquiry_opportunity(
                     continue
         return True
 
-    def _select_variant_first_value(frame: Frame) -> bool:
+    def _select_variant_first_value(frame: Frame, variant_hint: str = "") -> bool:
+        vh = (variant_hint or "").strip()
+        # #region agent log — variant attempt
+        try:
+            _var_vis = frame.locator('input[aria-label*="Variant" i]').first
+            _var_info = {"count": _var_vis.count() if _var_vis else 0, "visible": False, "value": "", "aria": ""}
+            try:
+                _var_info["visible"] = _var_vis.is_visible(timeout=500) if _var_vis.count() > 0 else False
+                _var_info["value"] = (_var_vis.input_value(timeout=500) or "") if _var_vis.count() > 0 else ""
+                _var_info["aria"] = _var_vis.evaluate("el => el.getAttribute('aria-label') || ''") if _var_vis.count() > 0 else ""
+            except Exception:
+                pass
+        except Exception:
+            _var_info = {"error": "locator failed"}
+        with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
+            import json as _j_v, time as _t_v
+            _lf.write(_j_v.dumps({"sessionId":"08e634","hypothesisId":"VARIANT","location":"siebel_dms_playwright.py:_select_variant_first_value","message":"Variant fill attempt start","data":{"variant_hint":vh,"field_info":_var_info},"timestamp":int(_t_v.time()*1000)}) + "\n")
+        # #endregion
         for pat in (re.compile(r"^\s*Variant\s*$", re.I), re.compile(r"\bVariant\b", re.I)):
             try:
                 fld = frame.get_by_label(pat).first
@@ -6777,27 +6810,77 @@ def _add_enquiry_opportunity(
                     fld.click(timeout=action_timeout_ms)
                 except Exception:
                     fld.click(timeout=action_timeout_ms, force=True)
-                try:
-                    opts = fld.evaluate(
-                        """el => (el.tagName === 'SELECT') ? [...el.options].map(o => ({v:o.value,t:(o.textContent||'').trim()})) : []"""
-                    )
-                    if opts:
-                        first_non_blank = None
-                        for o in opts:
-                            if str(o.get("t") or "").strip():
-                                first_non_blank = str(o.get("v") or "")
-                                break
-                        if first_non_blank is not None:
-                            fld.select_option(value=first_non_blank, timeout=action_timeout_ms)
+                if vh:
+                    try:
+                        fld.fill("", timeout=action_timeout_ms)
+                        fld.fill(vh, timeout=action_timeout_ms)
+                        fld.press("Tab", timeout=1200)
+                        _safe_page_wait(page, 300, log_label="variant_hint_tab")
+                        readback = ""
+                        try:
+                            readback = (fld.input_value(timeout=800) or "").strip()
+                        except Exception:
+                            pass
+                        if readback:
                             return True
-                except Exception:
-                    pass
+                    except Exception:
+                        pass
+                # Siebel bounded text input: click pick icon to open pick applet
+                for pick_css in (
+                    '[aria-label*="Variant" i][aria-label*="Pick" i]',
+                    '[title*="Variant" i][title*="Pick" i]',
+                    '[aria-label*="Variant" i][aria-label*="Search" i]',
+                ):
+                    for root in (frame, page):
+                        try:
+                            pick = root.locator(pick_css).first
+                            if pick.count() > 0 and pick.is_visible(timeout=500):
+                                pick.click(timeout=action_timeout_ms)
+                                _safe_page_wait(page, 800, log_label="variant_pick_open")
+                                for row_root in (frame, page):
+                                    for row_css in ("table tbody tr td a", "table tbody tr td", '[role="option"]', '[role="row"] [role="gridcell"]'):
+                                        try:
+                                            row = row_root.locator(row_css).first
+                                            if row.count() > 0 and row.is_visible(timeout=500):
+                                                row.click(timeout=action_timeout_ms)
+                                                _safe_page_wait(page, 300, log_label="variant_pick_row")
+                                                for ok_css in ('button[aria-label="OK" i]', 'a[aria-label="OK" i]', 'button[title="OK" i]', 'input[type="button"][value="OK" i]'):
+                                                    try:
+                                                        ok = row_root.locator(ok_css).first
+                                                        if ok.count() > 0 and ok.is_visible(timeout=500):
+                                                            ok.click(timeout=action_timeout_ms)
+                                                            break
+                                                    except Exception:
+                                                        continue
+                                                return True
+                                        except Exception:
+                                            continue
+                        except Exception:
+                            continue
+                # Fallback: ArrowDown + Enter for simple dropdown behavior
                 try:
                     fld.press("ArrowDown", timeout=1200)
                     fld.press("Enter", timeout=1200)
                     return True
                 except Exception:
                     continue
+            except Exception:
+                continue
+        # CSS fallback for aria-label mismatch
+        for css in ('input[aria-label*="Variant" i]',):
+            try:
+                fld = frame.locator(css).first
+                if fld.count() <= 0 or not fld.is_visible(timeout=500):
+                    continue
+                fld.click(timeout=action_timeout_ms)
+                if vh:
+                    fld.fill("", timeout=action_timeout_ms)
+                    fld.fill(vh, timeout=action_timeout_ms)
+                    fld.press("Tab", timeout=1200)
+                    return True
+                fld.press("ArrowDown", timeout=1200)
+                fld.press("Enter", timeout=1200)
+                return True
             except Exception:
                 continue
         return False
@@ -6848,7 +6931,7 @@ def _add_enquiry_opportunity(
         return False
 
     first = (dms_values.get("first_name") or "").strip()
-    last = (dms_values.get("last_name") or "").strip()
+    last = (dms_values.get("last_name") or "").strip() or "."
     mobile = (dms_values.get("mobile_phone") or "").strip()
     landline = (dms_values.get("landline") or dms_values.get("alt_phone_num") or "").strip()
     state = (dms_values.get("state") or "").strip()
@@ -6885,7 +6968,8 @@ def _add_enquiry_opportunity(
 
     if not try_field(("Contact First Name", "First Name"), first, required=True):
         return False, "Could not set Contact First Name."
-    try_field(("Contact Last Name", "Last Name"), last, required=False)
+    if not try_field(("Contact Last Name", "Last Name"), last, required=True):
+        return False, "Could not set Contact Last Name."
     if not try_field(("Mobile Phone", "Mobile Phone #", "Cellular Phone"), mobile, required=True):
         return False, "Could not set Mobile Phone."
     landline_use = landline or mobile
@@ -6941,8 +7025,13 @@ def _add_enquiry_opportunity(
         return False, "Could not set Finance Required."
     if not try_field(("Booking Order Type",), "Normal Booking", required=True):
         return False, "Could not set Booking Order Type."
-    if not _select_variant_first_value(enq_frame):
-        return False, "Could not select first Variant dropdown value."
+    sku_hint = (scraped_v.get("sku") or "").strip()
+    if not _select_variant_first_value(enq_frame, variant_hint=sku_hint):
+        note("Add Enquiry: Variant auto-select with SKU/pick failed — will try Tab selection after Model.")
+        if not _fill_by_label_on_frame(enq_frame, "Variant", " ", action_timeout_ms=action_timeout_ms):
+            note("Add Enquiry: Variant field could not be activated for Tab-pick.")
+    else:
+        note("Add Enquiry: Variant selected successfully.")
 
     try_field_any(("Enquiry Source",), ("Walk-In", "Walk In", "Walkin"))
     if not try_field(("Point of Contact",), "Customer Walk-in", required=True):
@@ -6982,9 +7071,20 @@ def _add_enquiry_opportunity(
         enquiry_no = _scrape_enquiry_number_from_frame(enq_frame)
 
         # #region agent log — post-save poll
+        _popup_scan = None
+        try:
+            _popup_scan = page.evaluate("""() => {
+                const vis = (el) => { if(!el) return false; const st=window.getComputedStyle(el); if(st.display==='none'||st.visibility==='hidden') return false; const r=el.getBoundingClientRect(); return r.width>5&&r.height>5; };
+                const sels = ["[role='alertdialog']","[role='alert']","[role='dialog']",".ui-dialog",".siebui-popup",".siebui-alert","[id*='ErrorPopup']","[id*='popup' i]"];
+                const found = [];
+                for (const s of sels) { const el = document.querySelector(s); if (el && vis(el)) found.push({sel:s, text:(el.innerText||'').trim().substring(0,300), tag:el.tagName, id:el.id||'', cls:(el.className||'').substring(0,120)}); }
+                return found.length ? found : null;
+            }""")
+        except Exception:
+            pass
         with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
             import json as _j_ps, time as _t_ps
-            _lf.write(_j_ps.dumps({"sessionId":"08e634","hypothesisId":"SAVE_POLL","location":"siebel_dms_playwright.py:add_enquiry_save_poll","message":f"Save poll {_poll_i}","data":{"enquiry_no":enquiry_no,"pre_save":pre_save_enquiry_no,"poll":_poll_i},"timestamp":int(_t_ps.time()*1000)}) + "\n")
+            _lf.write(_j_ps.dumps({"sessionId":"08e634","hypothesisId":"SAVE_POLL","location":"siebel_dms_playwright.py:add_enquiry_save_poll","message":f"Save poll {_poll_i}","data":{"enquiry_no":enquiry_no,"pre_save":pre_save_enquiry_no,"poll":_poll_i,"popup_scan":_popup_scan},"timestamp":int(_t_ps.time()*1000)}) + "\n")
         # #endregion
 
         if enquiry_no and enquiry_no != pre_save_enquiry_no:
