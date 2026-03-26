@@ -489,14 +489,6 @@ def _try_auto_login_if_prefilled(page) -> bool:
         except Exception:
             prefilled = None
 
-        # #region agent log — auto-login detection attempt
-        try:
-            with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-                import json as _j_al, time as _t_al
-                _lf.write(_j_al.dumps({"sessionId":"08e634","hypothesisId":"AUTO_LOGIN","location":"fill_dms_service.py:_try_auto_login_if_prefilled","message":f"Auto-login detect attempt {_attempt}","data":{"prefilled":prefilled,"page_url":(page.url or "")[:120]},"timestamp":int(_t_al.time()*1000)}) + "\n")
-        except Exception:
-            pass
-        # #endregion
 
         if prefilled and prefilled.get("status") == "prefilled":
             break

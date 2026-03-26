@@ -3572,42 +3572,14 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
         Stabilize flaky Siebel input commit:
         wait visible -> fill -> blur(Tab) -> readback verify, with short backoff retries.
         """
-        import json as _j, time as _t
-        _dl = "debug-08e634.log"
         for i in range(max(1, attempts)):
             try:
                 cnt = loc.count()
                 if cnt <= 0:
-                    # #region agent log
-                    try:
-                        with open(_dl, "a") as _f:
-                            _f.write(_j.dumps({"sessionId":"08e634","hypothesisId":"C","location":"_fill_with_retry","message":"count_zero","data":{"lbl":_lbl,"attempt":i+1,"count":cnt},"timestamp":int(_t.time()*1000)})+"\n")
-                    except Exception:
-                        pass
-                    # #endregion
                     return False
                 vis = loc.is_visible(timeout=visible_ms)
                 if not vis:
-                    # #region agent log
-                    try:
-                        with open(_dl, "a") as _f:
-                            _f.write(_j.dumps({"sessionId":"08e634","hypothesisId":"A","location":"_fill_with_retry","message":"not_visible","data":{"lbl":_lbl,"attempt":i+1,"visible_ms":visible_ms},"timestamp":int(_t.time()*1000)})+"\n")
-                    except Exception:
-                        pass
-                    # #endregion
                     continue
-                # #region agent log
-                _pre = None
-                try:
-                    _pre = loc.evaluate("el => ({readOnly:el.readOnly,val:(el.value||'').substring(0,50),tag:el.tagName,name:el.name||'',id:el.id||''})")
-                except Exception:
-                    pass
-                try:
-                    with open(_dl, "a") as _f:
-                        _f.write(_j.dumps({"sessionId":"08e634","hypothesisId":"D","location":"_fill_with_retry","message":"pre_fill","data":{"lbl":_lbl,"attempt":i+1,"el":_pre},"timestamp":int(_t.time()*1000)})+"\n")
-                except Exception:
-                    pass
-                # #endregion
                 try:
                     loc.click(timeout=min(2000, action_timeout_ms))
                 except Exception:
@@ -3620,23 +3592,10 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
                 _safe_page_wait(page, 120 + (i * 200), log_label=f"retry_settle_{i+1}")
                 got = (loc.input_value(timeout=min(2500, action_timeout_ms)) or "").strip()
                 _ok = bool(got and (value.lower() in got.lower() or got.lower() in value.lower()))
-                # #region agent log
-                try:
-                    with open(_dl, "a") as _f:
-                        _f.write(_j.dumps({"sessionId":"08e634","hypothesisId":"B","location":"_fill_with_retry","message":"readback","data":{"lbl":_lbl,"attempt":i+1,"got":got[:80],"match":_ok,"value":value[:50]},"timestamp":int(_t.time()*1000)})+"\n")
-                except Exception:
-                    pass
-                # #endregion
                 if _ok:
                     return True
-            except Exception as _ex:
-                # #region agent log
-                try:
-                    with open(_dl, "a") as _f:
-                        _f.write(_j.dumps({"sessionId":"08e634","hypothesisId":"E","location":"_fill_with_retry","message":"exception","data":{"lbl":_lbl,"attempt":i+1,"err":str(_ex)[:200]},"timestamp":int(_t.time()*1000)})+"\n")
-                except Exception:
-                    pass
-                # #endregion
+            except Exception:
+                pass
             _safe_page_wait(page, 220 + (i * 250), log_label=f"retry_backoff_{i+1}")
         return False
 
@@ -3742,41 +3701,6 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
 
     # Exact-input path first (from provided DOM snippet), then label fallback.
     _read_first_name_probe()
-    import json as _j2, time as _t2
-    _dl2 = "debug-08e634.log"
-    _rn_t0 = _t2.time()
-
-    # #region agent log
-    try:
-        _dom_snap = None
-        for _fr in _ordered_frames(page):
-            try:
-                _dom_snap = _fr.evaluate("""() => {
-                    const vis = el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
-                    const all = Array.from(document.querySelectorAll('input,textarea,select')).filter(vis);
-                    const rn = all.filter(i => {
-                        const a = (i.getAttribute('aria-label')||'').toLowerCase();
-                        const t = (i.getAttribute('title')||'').toLowerCase();
-                        const n = (i.name||'').toLowerCase();
-                        return a.includes('relation') || t.includes('relation') || n.includes('relation');
-                    });
-                    return { total: all.length, relation_fields: rn.map(i => ({
-                        tag: i.tagName, name: i.name||'', id: i.id||'',
-                        ariaLabel: i.getAttribute('aria-label')||'',
-                        title: i.getAttribute('title')||'',
-                        readOnly: i.readOnly, val: (i.value||'').substring(0,50),
-                        cls: i.className||''
-                    })) };
-                }""")
-                if _dom_snap and _dom_snap.get("relation_fields"):
-                    break
-            except Exception:
-                continue
-        with open(_dl2, "a") as _f2:
-            _f2.write(_j2.dumps({"sessionId":"08e634","hypothesisId":"ADE","location":"rn_dom_probe","message":"dom_before_fill","data":_dom_snap,"timestamp":int(_t2.time()*1000)})+"\n")
-    except Exception:
-        pass
-    # #endregion
 
     exact_selectors = (
         "input[aria-label=\"Relation's Name\"]",
@@ -3791,13 +3715,6 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
             try:
                 loc = fl.locator(css).first
                 if _fill_with_retry(loc, care_val, attempts=3, visible_ms=900, _lbl=f"fl:{css[:40]}"):
-                    # #region agent log
-                    try:
-                        with open(_dl2, "a") as _f2:
-                            _f2.write(_j2.dumps({"sessionId":"08e634","hypothesisId":"OK","location":"rn_filled","message":"fl_exact","data":{"css":css,"ms":int((_t2.time()-_rn_t0)*1000)},"timestamp":int(_t2.time()*1000)})+"\n")
-                    except Exception:
-                        pass
-                    # #endregion
                     return _after_relation_fill_nav()
             except Exception:
                 continue
@@ -3806,37 +3723,15 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
             try:
                 loc = frame.locator(css).first
                 if _fill_with_retry(loc, care_val, attempts=3, visible_ms=900, _lbl=f"fr:{css[:40]}"):
-                    # #region agent log
-                    try:
-                        with open(_dl2, "a") as _f2:
-                            _f2.write(_j2.dumps({"sessionId":"08e634","hypothesisId":"OK","location":"rn_filled","message":"fr_exact","data":{"css":css,"ms":int((_t2.time()-_rn_t0)*1000)},"timestamp":int(_t2.time()*1000)})+"\n")
-                    except Exception:
-                        pass
-                    # #endregion
                     return _after_relation_fill_nav()
             except Exception:
                 continue
-
-    # #region agent log
-    try:
-        with open(_dl2, "a") as _f2:
-            _f2.write(_j2.dumps({"sessionId":"08e634","hypothesisId":"EXACT_FAIL","location":"rn_exact_failed","message":"all_exact_selectors_failed","data":{"ms":int((_t2.time()-_rn_t0)*1000)},"timestamp":int(_t2.time()*1000)})+"\n")
-    except Exception:
-        pass
-    # #endregion
 
     # Restore earlier working style: label-based fill fallback.
     for fl in _iter_frame_locator_roots(page, content_frame_selector):
         try:
             loc = fl.get_by_label("Relation's Name", exact=True).first
             if _fill_with_retry(loc, care_val, attempts=3, visible_ms=700, _lbl="lbl_fl"):
-                # #region agent log
-                try:
-                    with open(_dl2, "a") as _f2:
-                        _f2.write(_j2.dumps({"sessionId":"08e634","hypothesisId":"OK","location":"rn_filled","message":"fl_label","data":{"ms":int((_t2.time()-_rn_t0)*1000)},"timestamp":int(_t2.time()*1000)})+"\n")
-                except Exception:
-                    pass
-                # #endregion
                 return _after_relation_fill_nav()
         except Exception:
             continue
@@ -3844,24 +3739,9 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
         try:
             loc = frame.get_by_label("Relation's Name", exact=True).first
             if _fill_with_retry(loc, care_val, attempts=3, visible_ms=700, _lbl="lbl_fr"):
-                # #region agent log
-                try:
-                    with open(_dl2, "a") as _f2:
-                        _f2.write(_j2.dumps({"sessionId":"08e634","hypothesisId":"OK","location":"rn_filled","message":"fr_label","data":{"ms":int((_t2.time()-_rn_t0)*1000)},"timestamp":int(_t2.time()*1000)})+"\n")
-                except Exception:
-                    pass
-                # #endregion
                 return _after_relation_fill_nav()
         except Exception:
             continue
-
-    # #region agent log
-    try:
-        with open(_dl2, "a") as _f2:
-            _f2.write(_j2.dumps({"sessionId":"08e634","hypothesisId":"FAIL","location":"rn_all_failed","message":"all_paths_exhausted","data":{"ms":int((_t2.time()-_rn_t0)*1000),"care_val":care_val[:60]},"timestamp":int(_t2.time()*1000)})+"\n")
-    except Exception:
-        pass
-    # #endregion
 
     _read_first_name_probe()
     note("Could not fill Relation's Name on opened customer record (video SOP).")
@@ -4546,7 +4426,7 @@ def _create_order(
     - If inventory not In transit: Price all + Allocate all
     - Scrape Total (Ex-showroom)
     """
-    scraped: dict = {"inventory_location": "", "ex_showroom_price": ""}
+    scraped: dict = {"inventory_location": "", "ex_showroom_price": "", "order_number": ""}
 
     def _roots():
         return _siebel_locator_search_roots(page, content_frame_selector)
@@ -4591,6 +4471,44 @@ def _create_order(
                 except Exception:
                     continue
         return False
+
+    def _scrape_order_number_current() -> str:
+        """Best-effort scrape of Order# from current Vehicle Sales context."""
+        for root in _roots():
+            try:
+                v = root.evaluate(
+                    """() => {
+                        const vis = (el) => {
+                            if (!el) return false;
+                            const st = window.getComputedStyle(el);
+                            if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity) === 0) return false;
+                            const r = el.getBoundingClientRect();
+                            return r.width > 2 && r.height > 2;
+                        };
+                        const tryInputs = Array.from(document.querySelectorAll(
+                            "input[aria-label*='Order' i], input[title*='Order' i], input[name*='Order' i], input[id*='Order' i]"
+                        ));
+                        for (const el of tryInputs) {
+                            if (!vis(el)) continue;
+                            const val = (el.value || '').trim();
+                            if (val && /[A-Za-z0-9-]{4,}/.test(val)) return val;
+                        }
+                        const tryLinks = Array.from(document.querySelectorAll(
+                            "a[name='Order Number'], a[name='Order #'], a[aria-label*='Order' i], a[title*='Order' i], td[aria-describedby*='Order' i] a"
+                        ));
+                        for (const a of tryLinks) {
+                            if (!vis(a)) continue;
+                            const txt = (a.textContent || '').trim();
+                            if (txt && /[A-Za-z0-9-]{4,}/.test(txt)) return txt;
+                        }
+                        return '';
+                    }"""
+                )
+                if (v or "").strip():
+                    return str(v).strip()
+            except Exception:
+                continue
+        return ""
 
     if callable(form_trace):
         form_trace(
@@ -4722,9 +4640,10 @@ def _create_order(
         return False
 
     _invoice_selected_ready = _go_to_invoice_selected_direct()
-    if not _invoice_selected_ready:
-        return False, "Could not open Invoice Selected context (including id='ui-id-429').", scraped
-    note("Create Order: Invoice Selected context opened directly; Find→Vehicle Sales→Mobile fallback disabled.")
+    if _invoice_selected_ready:
+        note("Create Order: Invoice Selected context opened directly; proceeding from selected-order view.")
+    else:
+        note("Create Order: Invoice Selected context not found; proceeding directly with '+' new booking flow on current page.")
 
     # JS snippet run inside each frame to find and click the first Order Number drill-down link.
     # Siebel renders the link as <a name="Order Number">ORDER-VALUE</a> inside a grid td.
@@ -4886,10 +4805,10 @@ def _create_order(
             return True
         return False
 
-    _existing_order_opened = True
-    note("Create Order: staying on Invoice Selected page; skipping order-list drill-in.")
-
-    if False:
+    _existing_order_opened = bool(_invoice_selected_ready)
+    if _existing_order_opened:
+        note("Create Order: staying on Invoice Selected page; skipping '+' new booking creation.")
+    else:
         # 2) Click + (Sales Orders New:List)
         if not _click_any(
             (
@@ -4924,6 +4843,31 @@ def _create_order(
             return False, "Could not set Booking Order Type = Normal Booking.", scraped
         _safe_page_wait(page, 600, log_label="after_booking_order_type")
         note("Create Order: set Booking Order Type = Normal Booking.")
+
+        # 3b) Hypothecation = Y (mandatory for booking flow)
+        _hyp_ok = False
+        for root in _roots():
+            try:
+                for _lbl in ("Hypothecation", "Hpothecation"):
+                    if _fill_by_label_on_frame(root, _lbl, "Y", action_timeout_ms=action_timeout_ms):
+                        _hyp_ok = True
+                        break
+                    if _select_dropdown_by_label_on_frame(
+                        root,
+                        label=_lbl,
+                        value="Y",
+                        action_timeout_ms=min(action_timeout_ms, 8000),
+                    ):
+                        _hyp_ok = True
+                        break
+                if _hyp_ok:
+                    break
+            except Exception:
+                continue
+        if not _hyp_ok:
+            return False, "Could not set Hypothecation = Y.", scraped
+        _safe_page_wait(page, 400, log_label="after_hypothecation_y")
+        note("Create Order: set Hypothecation = Y.")
 
         # 4) Contact Last Name pick/search icon -> opens pick applet
         if not _click_any(
@@ -4997,9 +4941,13 @@ def _create_order(
                 return False, "Could not press Ctrl+S on Sales Order form.", scraped
         _safe_page_wait(page, 1500, log_label="after_create_order_save")
         note("Create Order: pressed Ctrl+S on Sales Order form.")
-    else:
-        note("Create Order: mobile branch matched; skipped + and contact-pick flow.")
-
+        order_no = _scrape_order_number_current()
+        scraped["order_number"] = order_no
+        if order_no:
+            note(f"Create Order: scraped Order#={order_no!r} after save.")
+        else:
+            note("Create Order: Order# not readable after save (best-effort).")
+        return True, None, scraped
     # 9) Click Order# drill-down link
     if not _existing_order_opened:
         _order_opened = _open_order_link("step-9-attempt-1")
@@ -6106,38 +6054,6 @@ def _siebel_vehicle_find_chassis_engine_enter(
     )
     _apply_year_of_mfg_yyyy(scraped)
 
-    # #region agent log — dump all visible input fields on vehicle page (H-E)
-    try:
-        import json as _json_dbg_v, time as _time_dbg_v
-        _veh_roots = []
-        if content_frame_selector:
-            try:
-                _veh_roots.append(page.frame_locator(content_frame_selector).owner.content_frame())
-            except Exception:
-                pass
-        for _vf in page.frames:
-            _veh_roots.append(_vf)
-        _veh_fields_all = []
-        for _vroot in _veh_roots[:5]:
-            try:
-                _veh_flds = _vroot.evaluate("""() => {
-                  const vis = (el) => { if (!el) return false; const st = window.getComputedStyle(el); if (st.display==='none'||st.visibility==='hidden'||Number(st.opacity)===0) return false; const r=el.getBoundingClientRect(); return r.width>=2&&r.height>=2; };
-                  return Array.from(document.querySelectorAll('input,select,textarea')).filter(vis).slice(0,60).map(el => ({
-                    tag: el.tagName, type: el.type||'', name: el.name||'', id: el.id||'',
-                    ariaLabel: el.getAttribute('aria-label')||'', title: el.title||'',
-                    readOnly: el.readOnly||false, value: (el.value||'').slice(0,40)
-                  }));
-                }""")
-                if _veh_flds:
-                    _veh_fields_all.extend(_veh_flds)
-            except Exception:
-                continue
-        with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-            _lf.write(_json_dbg_v.dumps({"sessionId":"08e634","hypothesisId":"HE","location":"siebel_dms_playwright.py:vehicle_page_fields_dump","message":"All visible fields on vehicle page after scrape","data":{"fields":_veh_fields_all[:80],"scraped_keys":list(scraped.keys()),"key_num_scraped":scraped.get("key_num",""),"page_url":page.url[:200]},"timestamp":int(_time_dbg_v.time()*1000)}) + "\n")
-    except Exception:
-        pass
-    # #endregion
-
     if (scraped.get("full_chassis") or "").strip() or (scraped.get("key_num") or "").strip():
         note("Add Enquiry: vehicle hit present (full_chassis or list key).")
     elif (scraped.get("model") or "").strip():
@@ -6293,34 +6209,6 @@ def _try_click_opportunities_list_new(
                 _try_activate_opportunity_form_scope(frame)
             except Exception:
                 pass
-
-            # #region agent log — probe Opportunity Form:New in each frame (H-A scope)
-            try:
-                import json as _json_opp, time as _time_opp
-                _opp_probe = []
-                for _css_p in focused_selectors:
-                    try:
-                        _loc_p = frame.locator(_css_p)
-                        _cnt_p = _loc_p.count()
-                        _vis_p = False
-                        _bbox_p = None
-                        if _cnt_p > 0:
-                            try:
-                                _vis_p = _loc_p.first.is_visible(timeout=400)
-                            except Exception:
-                                pass
-                            try:
-                                _bbox_p = _loc_p.first.bounding_box(timeout=400)
-                            except Exception:
-                                pass
-                        _opp_probe.append({"css": _css_p[:60], "count": _cnt_p, "visible": _vis_p, "bbox": str(_bbox_p)[:80] if _bbox_p else None})
-                    except Exception:
-                        continue
-                with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-                    _lf.write(_json_opp.dumps({"sessionId":"08e634","hypothesisId":"OPP_FRAME","location":"siebel_dms_playwright.py:opp_form_new_probe","message":f"Opportunity Form:New probe attempt={attempt+1}","data":{"frame_url":(frame.url or "")[:200],"frame_name":frame.name or "","probes":_opp_probe},"timestamp":int(_time_opp.time()*1000)}) + "\n")
-            except Exception:
-                pass
-            # #endregion
 
             try:
                 for css in focused_selectors:
@@ -6825,22 +6713,6 @@ def _add_enquiry_opportunity(
 
     def _select_variant_first_value(frame: Frame, variant_hint: str = "") -> bool:
         vh = (variant_hint or "").strip()
-        # #region agent log — variant attempt
-        try:
-            _var_vis = frame.locator('input[aria-label*="Variant" i]').first
-            _var_info = {"count": _var_vis.count() if _var_vis else 0, "visible": False, "value": "", "aria": ""}
-            try:
-                _var_info["visible"] = _var_vis.is_visible(timeout=500) if _var_vis.count() > 0 else False
-                _var_info["value"] = (_var_vis.input_value(timeout=500) or "") if _var_vis.count() > 0 else ""
-                _var_info["aria"] = _var_vis.evaluate("el => el.getAttribute('aria-label') || ''") if _var_vis.count() > 0 else ""
-            except Exception:
-                pass
-        except Exception:
-            _var_info = {"error": "locator failed"}
-        with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-            import json as _j_v, time as _t_v
-            _lf.write(_j_v.dumps({"sessionId":"08e634","hypothesisId":"VARIANT","location":"siebel_dms_playwright.py:_select_variant_first_value","message":"Variant fill attempt start","data":{"variant_hint":vh,"field_info":_var_info},"timestamp":int(_t_v.time()*1000)}) + "\n")
-        # #endregion
         for pat in (re.compile(r"^\s*Variant\s*$", re.I), re.compile(r"\bVariant\b", re.I)):
             try:
                 fld = frame.get_by_label(pat).first
@@ -6934,10 +6806,6 @@ def _add_enquiry_opportunity(
         for lb in labels:
             if _fill_by_label_on_frame(enq_frame, lb, sv, action_timeout_ms=action_timeout_ms):
                 _safe_page_wait(page, 200, log_label="add_enq_after_field")
-                # #region agent log — field fill success
-                with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-                    _lf.write(_json_dbg.dumps({"sessionId":"08e634","hypothesisId":"HA","location":"siebel_dms_playwright.py:try_field","message":"Field fill SUCCESS","data":{"label":lb,"value":sv[:30],"method":"fill_by_label"},"timestamp":int(_time_dbg.time()*1000)}) + "\n")
-                # #endregion
                 return True
             if _select_dropdown_by_label_on_frame(
                 enq_frame,
@@ -6946,17 +6814,9 @@ def _add_enquiry_opportunity(
                 action_timeout_ms=min(action_timeout_ms, 8000),
             ):
                 _safe_page_wait(page, 200, log_label="add_enq_after_dd_frame_scoped")
-                # #region agent log — dropdown fill success
-                with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-                    _lf.write(_json_dbg.dumps({"sessionId":"08e634","hypothesisId":"HA","location":"siebel_dms_playwright.py:try_field","message":"Field fill SUCCESS (dropdown)","data":{"label":lb,"value":sv[:30],"method":"dropdown"},"timestamp":int(_time_dbg.time()*1000)}) + "\n")
-                # #endregion
                 return True
         if required:
             note(f"Add Enquiry: could not set {labels} to {sv!r}.")
-            # #region agent log — field fill FAILED
-            with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-                _lf.write(_json_dbg.dumps({"sessionId":"08e634","hypothesisId":"HA","location":"siebel_dms_playwright.py:try_field","message":"Field fill FAILED (required)","data":{"labels":list(labels),"value":sv[:30]},"timestamp":int(_time_dbg.time()*1000)}) + "\n")
-            # #endregion
             return False
         return True
 
@@ -6988,24 +6848,6 @@ def _add_enquiry_opportunity(
     color_i = (scraped_v.get("color") or "").strip()
     today_str = date.today().strftime("%d/%m/%Y")
 
-    # #region agent log — dump all visible input/select/textarea labels in enq_frame (H-A/B/C/D)
-    try:
-        _dbg_fields = enq_frame.evaluate("""() => {
-          const vis = (el) => { if (!el) return false; const st = window.getComputedStyle(el); if (st.display==='none'||st.visibility==='hidden'||Number(st.opacity)===0) return false; const r=el.getBoundingClientRect(); return r.width>=2&&r.height>=2; };
-          return Array.from(document.querySelectorAll('input,select,textarea')).filter(vis).slice(0,80).map(el => ({
-            tag: el.tagName, type: el.type||'', name: el.name||'', id: el.id||'',
-            ariaLabel: el.getAttribute('aria-label')||'', title: el.title||'',
-            readOnly: el.readOnly||false, disabled: el.disabled||false,
-            value: (el.value||'').slice(0,40)
-          }));
-        }""")
-    except Exception as _dbg_e:
-        _dbg_fields = f"evaluate_error: {_dbg_e!r}"
-    import json as _json_dbg, time as _time_dbg
-    with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-        _lf.write(_json_dbg.dumps({"sessionId":"08e634","hypothesisId":"HA_HB_HC_HD","location":"siebel_dms_playwright.py:add_enquiry_fields_dump","message":"All visible fields in enq_frame before Landline fill","data":{"fields":_dbg_fields,"enq_frame_name":getattr(enq_frame,'name','?'),"enq_frame_url":getattr(enq_frame,'url','?')[:200]},"timestamp":int(_time_dbg.time()*1000)}) + "\n")
-    # #endregion
-
     if not try_field(("Contact First Name", "First Name"), first, required=True):
         return False, "Could not set Contact First Name."
     if not try_field(("Contact Last Name", "Last Name"), last, required=True):
@@ -7013,11 +6855,6 @@ def _add_enquiry_opportunity(
     if not try_field(("Mobile Phone", "Mobile Phone #", "Cellular Phone"), mobile, required=True):
         return False, "Could not set Mobile Phone."
     landline_use = landline or mobile
-
-    # #region agent log — log landline fill attempt details (H-A)
-    with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-        _lf.write(_json_dbg.dumps({"sessionId":"08e634","hypothesisId":"HA","location":"siebel_dms_playwright.py:landline_attempt","message":"About to attempt Landline fill","data":{"landline_use":landline_use,"labels":["Landline","Land Line","Alternate Phone","Alternate Number"]},"timestamp":int(_time_dbg.time()*1000)}) + "\n")
-    # #endregion
 
     if not try_field(("Landline #", "Landline", "Home Phone #", "Home Phone", "Land Line", "Alternate Phone", "Alternate Number"), landline_use, required=True):
         return False, "Could not set Landline."
@@ -7070,27 +6907,10 @@ def _add_enquiry_opportunity(
 
     # Age & Gender filled AFTER Model/Variant — Siebel form resets these fields
     # on Model/Variant server round-trip, so they must go last.
-    # #region agent log — pre Age/Gender fill values
-    with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-        _lf.write(_json_dbg.dumps({"sessionId":"08e634","hypothesisId":"AGE_GENDER","location":"siebel_dms_playwright.py:pre_age_gender","message":"About to fill Age/Gender after Variant","data":{"age":age,"gender":gender},"timestamp":int(_time_dbg.time()*1000)}) + "\n")
-    # #endregion
     if not try_field(("Age(Years)", "Age"), age, required=True):
         return False, "Could not set Age."
     if not try_field(("Gender",), gender, required=True):
         return False, "Could not set Gender."
-    # #region agent log — post Age/Gender readback
-    try:
-        _age_rb = enq_frame.locator('input[aria-label*="Age" i]').first.input_value(timeout=600)
-    except Exception:
-        _age_rb = "???"
-    try:
-        _gen_rb = enq_frame.locator('input[aria-label*="Gender" i]').first.input_value(timeout=600)
-    except Exception:
-        _gen_rb = "???"
-    with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-        _lf.write(_json_dbg.dumps({"sessionId":"08e634","hypothesisId":"AGE_GENDER","location":"siebel_dms_playwright.py:post_age_gender","message":"Age/Gender readback after fill","data":{"age_readback":_age_rb,"gender_readback":_gen_rb},"timestamp":int(_time_dbg.time()*1000)}) + "\n")
-    # #endregion
-
     try_field_any(("Enquiry Source",), ("Walk-In", "Walk In", "Walkin"))
     if not try_field(("Point of Contact",), "Customer Walk-in", required=True):
         if not try_field_any(
@@ -7127,23 +6947,6 @@ def _add_enquiry_opportunity(
             note(f"Add Enquiry: Siebel error after save → {_save_error!r:.300}")
             return False, f"Siebel error after Ctrl+S: {_save_error[:200]}"
         enquiry_no = _scrape_enquiry_number_from_frame(enq_frame)
-
-        # #region agent log — post-save poll
-        _popup_scan = None
-        try:
-            _popup_scan = page.evaluate("""() => {
-                const vis = (el) => { if(!el) return false; const st=window.getComputedStyle(el); if(st.display==='none'||st.visibility==='hidden') return false; const r=el.getBoundingClientRect(); return r.width>5&&r.height>5; };
-                const sels = ["[role='alertdialog']","[role='alert']","[role='dialog']",".ui-dialog",".siebui-popup",".siebui-alert","[id*='ErrorPopup']","[id*='popup' i]"];
-                const found = [];
-                for (const s of sels) { const el = document.querySelector(s); if (el && vis(el)) found.push({sel:s, text:(el.innerText||'').trim().substring(0,300), tag:el.tagName, id:el.id||'', cls:(el.className||'').substring(0,120)}); }
-                return found.length ? found : null;
-            }""")
-        except Exception:
-            pass
-        with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-            import json as _j_ps, time as _t_ps
-            _lf.write(_j_ps.dumps({"sessionId":"08e634","hypothesisId":"SAVE_POLL","location":"siebel_dms_playwright.py:add_enquiry_save_poll","message":f"Save poll {_poll_i}","data":{"enquiry_no":enquiry_no,"pre_save":pre_save_enquiry_no,"poll":_poll_i,"popup_scan":_popup_scan},"timestamp":int(_t_ps.time()*1000)}) + "\n")
-        # #endregion
 
         if enquiry_no and enquiry_no != pre_save_enquiry_no:
             break
