@@ -5020,12 +5020,15 @@ def _create_order(
 
         for root in _contact_roots:
             try:
-                fld = root.get_by_label(re.compile(r"contact\s*last\s*name", re.I)).first
+                # Use CSS selector with exact aria-label (not get_by_label which can match via label associations)
+                fld = root.locator("input[aria-label*='Contact Last Name' i]").first
+                if fld.count() <= 0 or not fld.is_visible(timeout=700):
+                    fld = root.locator("input[aria-label='Contact Last Name']").first
                 if fld.count() <= 0 or not fld.is_visible(timeout=700):
                     # #region agent log — CLS not found in root
                     try:
                         with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-                            _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H4","location":"siebel_dms_playwright.py:create_order_cls_miss","message":"Contact Last Name not found/visible in root","data":{"root_url":getattr(root,'url','?')[:120]},"timestamp":int(_t_f2.time()*1000)}) + "\n")
+                            _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H10","location":"siebel_dms_playwright.py:create_order_cls_miss","message":"CLS field not found via aria-label CSS selector","data":{"root_url":getattr(root,'url','?')[:120]},"timestamp":int(_t_f2.time()*1000)}) + "\n")
                     except Exception:
                         pass
                     # #endregion
@@ -5035,8 +5038,9 @@ def _create_order(
                 try:
                     _cls_aria = fld.evaluate("el => el.getAttribute('aria-label') || ''")
                     _cls_name = fld.evaluate("el => el.getAttribute('name') || ''")
+                    _cls_id = fld.evaluate("el => el.getAttribute('id') || ''")
                     with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-                        _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H2_H5","location":"siebel_dms_playwright.py:create_order_cls_found","message":"CLS field found — clicking + F2","data":{"aria":_cls_aria[:80],"name":_cls_name,"root_url":getattr(root,'url','?')[:120]},"timestamp":int(_t_f2.time()*1000)}) + "\n")
+                        _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H10","location":"siebel_dms_playwright.py:create_order_cls_found","message":"CLS field found via aria-label CSS","data":{"aria":_cls_aria[:80],"name":_cls_name,"id":_cls_id[:40],"root_url":getattr(root,'url','?')[:120]},"timestamp":int(_t_f2.time()*1000)}) + "\n")
                 except Exception:
                     pass
                 # #endregion
@@ -5066,46 +5070,59 @@ def _create_order(
 
                 if not _applet_opened_by_f2:
                     note("Create Order: F2 key did not open applet — trying icon click near CLS field.")
-                    _icon_clicked = False
-                    # Strategy: walk up the DOM from the CLS field to find its associated F2 icon
+                    # Re-click field to ensure focus
                     try:
-                        _icon_clicked = bool(fld.evaluate("""(el) => {
+                        fld.click(timeout=1500)
+                    except Exception:
+                        pass
+                    _safe_page_wait(page, 300, log_label="refocus_cls_before_icon")
+                    _icon_clicked = False
+                    # Use JS to identify the correct icon index, then click it via Playwright
+                    try:
+                        _icon_index = fld.evaluate("""(el) => {
                             const sel = "[aria-label='Press F2 for Selection Field']";
+                            const allIcons = Array.from(document.querySelectorAll(sel));
                             let p = el.parentElement;
                             for (let depth = 0; p && depth < 8; depth++, p = p.parentElement) {
                                 const icon = p.querySelector(sel);
                                 if (icon) {
                                     const st = window.getComputedStyle(icon);
                                     if (st.display !== 'none' && st.visibility !== 'hidden') {
-                                        icon.click();
-                                        return true;
+                                        return allIcons.indexOf(icon);
                                     }
                                 }
                                 if (['TABLE', 'FORM', 'BODY'].includes(p.tagName)) break;
                             }
-                            // Fallback: try next siblings of the field
                             let sib = el.nextElementSibling;
                             for (let i = 0; sib && i < 5; i++, sib = sib.nextElementSibling) {
-                                if (sib.matches && sib.matches(sel)) { sib.click(); return true; }
+                                if (sib.matches && sib.matches(sel)) return allIcons.indexOf(sib);
                                 const inner = sib.querySelector && sib.querySelector(sel);
-                                if (inner) { inner.click(); return true; }
+                                if (inner) return allIcons.indexOf(inner);
                             }
-                            return false;
-                        }"""))
+                            return -1;
+                        }""")
                     except Exception:
-                        _icon_clicked = False
+                        _icon_index = -1
+
+                    if _icon_index >= 0:
+                        try:
+                            _icon_loc = root.locator("[aria-label='Press F2 for Selection Field']").nth(_icon_index)
+                            _icon_loc.click(timeout=2000)
+                            _icon_clicked = True
+                        except Exception:
+                            _icon_clicked = False
 
                     # #region agent log — icon click result
                     try:
                         with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-                            _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H9","location":"siebel_dms_playwright.py:create_order_icon_proximity","message":"F2 icon proximity click result","data":{"icon_clicked": _icon_clicked},"timestamp":int(_t_f2.time()*1000)}) + "\n")
+                            _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H11","location":"siebel_dms_playwright.py:create_order_icon_proximity","message":"F2 icon click (Playwright .click)","data":{"icon_clicked": _icon_clicked, "icon_index": _icon_index},"timestamp":int(_t_f2.time()*1000)}) + "\n")
                     except Exception:
                         pass
                     # #endregion
 
                     if _icon_clicked:
                         _safe_page_wait(page, 1500, log_label="after_f2_icon_click")
-                        note("Create Order: clicked F2 icon near Contact Last Name field.")
+                        note("Create Order: clicked F2 icon near Contact Last Name field via Playwright.")
                     else:
                         note("Create Order: F2 icon not found near Contact Last Name field.")
 
