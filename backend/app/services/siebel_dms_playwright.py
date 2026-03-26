@@ -108,6 +108,47 @@ def _siebel_inter_action_pause(page: Page) -> None:
     _safe_page_wait(page, min(ms, cap), log_label="inter_action_delay")
 
 
+def _detect_siebel_error_popup(page: Page, content_frame_selector: str | None) -> str | None:
+    """Return error text from a visible Siebel error/alert popup, or None."""
+    search_roots: list = []
+    try:
+        search_roots = list(_siebel_locator_search_roots(page, content_frame_selector))
+    except Exception:
+        pass
+    search_roots += list(_ordered_frames(page))
+    for root in search_roots:
+        try:
+            msg = root.evaluate(
+                """() => {
+                  const vis = (el) => {
+                    if (!el) return false;
+                    const st = window.getComputedStyle(el);
+                    if (st.display === 'none' || st.visibility === 'hidden') return false;
+                    const r = el.getBoundingClientRect();
+                    return r.width > 5 && r.height > 5;
+                  };
+                  for (const s of [
+                    "[role='alertdialog']", "[role='alert']",
+                    ".siebui-popup-error", ".siebui-alert",
+                    ".error-dialog", ".ui-dialog.ui-widget",
+                    "[id*='ErrorPopup']", "[class*='error' i][class*='popup' i]",
+                    "[class*='modal' i][class*='error' i]"
+                  ]) {
+                    const el = document.querySelector(s);
+                    if (el && vis(el)) {
+                      return (el.innerText || el.textContent || '').trim().substring(0, 500);
+                    }
+                  }
+                  return null;
+                }"""
+            )
+            if msg:
+                return msg
+        except Exception:
+            continue
+    return None
+
+
 # Tried after explicit DMS_SIEBEL_CONTENT_FRAME_SELECTOR and before walking all frames.
 _DEFAULT_AUTO_IFRAME_SELECTORS: tuple[str, ...] = (
     'iframe[src*="start.swe" i]',
@@ -6927,8 +6968,30 @@ def _add_enquiry_opportunity(
             note("Add Enquiry: Ctrl+S failed.")
             return False, "Ctrl+S save failed on new opportunity form."
     note("Add Enquiry: pressed Ctrl+S to save enquiry.")
-    _safe_page_wait(page, 1500, log_label="after_add_enquiry_save")
-    enquiry_no = _scrape_enquiry_number_from_frame(enq_frame)
+
+    _max_save_polls = 8
+    _poll_interval_ms = 1500
+    enquiry_no = ""
+    _save_error = None
+    for _poll_i in range(_max_save_polls):
+        _safe_page_wait(page, _poll_interval_ms, log_label=f"add_enquiry_save_poll_{_poll_i}")
+        _save_error = _detect_siebel_error_popup(page, content_frame_selector)
+        if _save_error:
+            note(f"Add Enquiry: Siebel error after save → {_save_error!r:.300}")
+            return False, f"Siebel error after Ctrl+S: {_save_error[:200]}"
+        enquiry_no = _scrape_enquiry_number_from_frame(enq_frame)
+
+        # #region agent log — post-save poll
+        with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
+            import json as _j_ps, time as _t_ps
+            _lf.write(_j_ps.dumps({"sessionId":"08e634","hypothesisId":"SAVE_POLL","location":"siebel_dms_playwright.py:add_enquiry_save_poll","message":f"Save poll {_poll_i}","data":{"enquiry_no":enquiry_no,"pre_save":pre_save_enquiry_no,"poll":_poll_i},"timestamp":int(_t_ps.time()*1000)}) + "\n")
+        # #endregion
+
+        if enquiry_no and enquiry_no != pre_save_enquiry_no:
+            break
+        if not pre_save_enquiry_no and enquiry_no:
+            break
+
     if pre_save_enquiry_no and enquiry_no and enquiry_no == pre_save_enquiry_no:
         note(
             "Add Enquiry: Enquiry# did not change after save; likely not persisted "
@@ -6945,7 +7008,7 @@ def _add_enquiry_opportunity(
                 enquiry_number=enquiry_no,
             )
     else:
-        note("Add Enquiry: Enquiry# not readable after save (best-effort).")
+        note("Add Enquiry: Enquiry# not readable after save (best-effort — no error popup detected).")
         if callable(form_trace):
             form_trace(
                 "add_enquiry_saved",

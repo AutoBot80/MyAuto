@@ -437,6 +437,82 @@ def _playwright_page_url_matches_site_base(page_url: str, site_base_url: str) ->
         return pu.startswith(t) or t in pu
 
 
+def _try_auto_login_if_prefilled(page) -> bool:
+    """
+    If a Siebel/Hero Connect login form is showing with pre-filled username and password
+    (e.g. browser saved credentials), click the Login button automatically.
+    Returns True if auto-login was attempted, False if credentials were not pre-filled.
+    """
+    try:
+        prefilled = page.evaluate("""() => {
+          const vis = (el) => {
+            if (!el) return false;
+            const st = window.getComputedStyle(el);
+            if (st.display === 'none' || st.visibility === 'hidden') return false;
+            const r = el.getBoundingClientRect();
+            return r.width > 2 && r.height > 2;
+          };
+          // Find username and password fields
+          const userSels = ['input[name="SWEUserName"]', 'input[type="text"][name*="user" i]',
+                            'input[type="text"][name*="login" i]', 'input[type="email"]',
+                            'input[type="text"]:not([name=""])'];
+          const passSels = ['input[name="SWEPassword"]', 'input[type="password"]'];
+          let userEl = null, passEl = null;
+          for (const s of userSels) {
+            const el = document.querySelector(s);
+            if (el && vis(el) && (el.value || '').trim().length > 0) { userEl = el; break; }
+          }
+          for (const s of passSels) {
+            const el = document.querySelector(s);
+            if (el && vis(el) && (el.value || '').trim().length > 0) { passEl = el; break; }
+          }
+          if (!userEl || !passEl) return null;
+          return { user: userEl.value.trim().substring(0, 40), hasPass: true };
+        }""")
+        if not prefilled:
+            return False
+        logger.info(
+            "fill_dms_service: login form has pre-filled credentials (user=%s) — clicking Login",
+            prefilled.get("user", "?"),
+        )
+    except Exception:
+        return False
+    # Click the Login / Submit button
+    login_clicked = False
+    for sel in (
+        'input[type="submit"][value*="Login" i]',
+        'button[type="submit"]',
+        'input[type="submit"]',
+        'input[name="s_swepi_22"]',
+        'a[href*="Login" i]',
+        'button:has-text("Login")',
+        'button:has-text("Sign In")',
+        'input[type="button"][value*="Login" i]',
+    ):
+        try:
+            loc = page.locator(sel).first
+            if loc.count() > 0 and loc.is_visible(timeout=800):
+                loc.click(timeout=3000)
+                login_clicked = True
+                break
+        except Exception:
+            continue
+    if not login_clicked:
+        try:
+            page.keyboard.press("Enter")
+            login_clicked = True
+        except Exception:
+            pass
+    if login_clicked:
+        try:
+            page.wait_for_load_state("domcontentloaded", timeout=15000)
+        except Exception:
+            pass
+        time.sleep(2)
+        logger.info("fill_dms_service: auto-login submitted; page URL now: %s", (page.url or "")[:120])
+    return login_clicked
+
+
 def _get_or_open_site_page(base_url: str, site_label: str, *, require_login_on_open: bool = True):
     """
     Try finding an already-open site tab.
@@ -449,6 +525,8 @@ def _get_or_open_site_page(base_url: str, site_label: str, *, require_login_on_o
     opened_page, channel = _launch_managed_browser_for_site(base_url)
     if opened_page is not None:
         if not require_login_on_open:
+            return opened_page, None
+        if _try_auto_login_if_prefilled(opened_page):
             return opened_page, None
         return None, f"{site_label} Opened. Please login. And then press button again"
 
