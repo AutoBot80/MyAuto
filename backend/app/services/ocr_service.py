@@ -1305,17 +1305,16 @@ def _parse_vehicle_from_full_text(full_text: str) -> dict[str, str]:
         min_len: int = 3,
         max_len: int = 12,
         look_ahead: int = 3,
+        prefer_below_over_inline: bool = False,
     ) -> str:
         for idx, ln in enumerate(lines):
             if not re.search(label_rx, ln, re.I):
                 continue
-            # 1) Inline value after colon in same line.
             m_inline = re.search(r":\s*(.+)$", ln)
+            cand_inline = ""
             if m_inline:
                 cand_inline = _best_numeric_token(m_inline.group(1), min_len=min_len, max_len=max_len)
-                if cand_inline:
-                    return cand_inline
-            # 2) Nearest numeric line below label (for scratched/blank field values).
+            # 1) Prefer nearest numeric line below label (for scratched/overwritten values).
             for j in range(idx + 1, min(len(lines), idx + 1 + look_ahead)):
                 nln = lines[j]
                 if not nln or _section_or_noise_line(nln):
@@ -1326,6 +1325,9 @@ def _parse_vehicle_from_full_text(full_text: str) -> dict[str, str]:
                 cand = _best_numeric_token(nln, min_len=min_len, max_len=max_len)
                 if cand:
                     return cand
+            # 2) Inline value after colon in same line.
+            if cand_inline and not prefer_below_over_inline:
+                return cand_inline
             # 3) Small backward window (number slightly above label).
             for j in range(max(0, idx - 2), idx):
                 pln = lines[j]
@@ -1336,6 +1338,8 @@ def _parse_vehicle_from_full_text(full_text: str) -> dict[str, str]:
                 cand = _best_numeric_token(pln, min_len=min_len, max_len=max_len)
                 if cand:
                     return cand
+            if cand_inline:
+                return cand_inline
         return ""
 
     m = re.search(r"(?i)Model\s*:\s*([^\n]+?)(?=\s+Colour\s*:)", text)
@@ -1375,21 +1379,30 @@ def _parse_vehicle_from_full_text(full_text: str) -> dict[str, str]:
 
     # Nearby-number rescue for scratched/blank fields in Details sheet.
     if "frame_no" not in out or not str(out.get("frame_no") or "").strip():
-        v = _extract_field_near_label(r"\b(chassis|frame)\s+number\b", min_len=4, max_len=12)
+        v = _extract_field_near_label(
+            r"\b(chassis|frame)\s+number\b",
+            min_len=4,
+            max_len=12,
+            look_ahead=2,
+            prefer_below_over_inline=True,
+        )
         if v:
             out["frame_no"] = v
     if "engine_no" not in out or not str(out.get("engine_no") or "").strip():
-        v = _extract_field_near_label(r"\bengine\s+number\b", min_len=4, max_len=12)
+        v = _extract_field_near_label(
+            r"\bengine\s+number\b",
+            min_len=4,
+            max_len=12,
+            look_ahead=2,
+            prefer_below_over_inline=True,
+        )
         if v:
             out["engine_no"] = v
     if "key_no" not in out or not str(out.get("key_no") or "").strip():
         v = _extract_field_near_label(r"\bkey\s+number\b", min_len=3, max_len=10)
         if v:
             out["key_no"] = v
-    if "battery_no" not in out or not str(out.get("battery_no") or "").strip():
-        v = _extract_field_near_label(r"\bbattery\s+number\b", min_len=3, max_len=12)
-        if v:
-            out["battery_no"] = v
+    # Battery should remain blank when blank on sheet; do not rescue from nearby numbers.
 
     # Alternate labels
     if "frame_no" not in out:
