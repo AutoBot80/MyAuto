@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import time
+from difflib import SequenceMatcher
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -1176,6 +1177,37 @@ def _normalize_name_for_match(name: str | None) -> str:
     return " ".join(str(name).lower().strip().split())
 
 
+def _initcap_words(value: str | None) -> str:
+    """Normalize spacing and convert words to InitCap."""
+    s = " ".join(str(value or "").strip().split())
+    if not s:
+        return ""
+    return s.title()
+
+
+def _apply_initcap_on_read(data: dict[str, Any]) -> None:
+    """
+    Presentation normalization for API reads:
+    convert human-readable OCR text fields to InitCap.
+    """
+    customer = data.get("customer") or {}
+    if isinstance(customer, dict):
+        for k in ("name", "care_of", "city", "district", "sub_district", "post_office", "state"):
+            if customer.get(k):
+                customer[k] = _initcap_words(customer.get(k))
+        data["customer"] = customer
+
+    insurance = data.get("insurance") or {}
+    if isinstance(insurance, dict):
+        for k in ("nominee_name", "nominee_relationship", "profession", "financier", "insurer", "policy_holder_name"):
+            if insurance.get(k):
+                insurance[k] = _initcap_words(insurance.get(k))
+        data["insurance"] = insurance
+
+    if data.get("details_customer_name"):
+        data["details_customer_name"] = _initcap_words(data.get("details_customer_name"))
+
+
 def _names_match(name1: str | None, name2: str | None) -> bool:
     """Return True if names likely refer to same person. Handles OCR variations (spacing, case)."""
     n1 = _normalize_name_for_match(name1)
@@ -1201,6 +1233,11 @@ def _names_match(name1: str | None, name2: str | None) -> bool:
         # First token often survives OCR better than suffixes.
         if t1[0] == t2[0]:
             return True
+    # Minor OCR drift tolerance (e.g. Vishnu vs Wishnu).
+    if SequenceMatcher(None, n1, n2).ratio() >= 0.82:
+        return True
+    if t1 and t2 and SequenceMatcher(None, t1[0], t2[0]).ratio() >= 0.8:
+        return True
     return False
 
 
@@ -2649,11 +2686,15 @@ class OcrService:
             details_name,
             insurance_name,
             aadhar_last4=customer.get("aadhar_id"),
-            details_aadhar_last4=(data.get("details_customer") or {}).get("aadhar_id") if isinstance(data.get("details_customer"), dict) else None,
+            details_aadhar_last4=(
+                ((data.get("details_customer") or {}).get("aadhar_id") if isinstance(data.get("details_customer"), dict) else None)
+                or customer.get("aadhar_id")
+            ),
             insurance_aadhar_last4=insurance.get("aadhar_id") or insurance.get("aadhaar_no") or insurance.get("aadhar_no"),
         )
         if name_err:
             data["name_mismatch_error"] = name_err
+        _apply_initcap_on_read(data)
         return data
 
     def list_extractions(self, limit: int = 200) -> list[dict]:
@@ -2698,6 +2739,9 @@ def validate_name_match_for_subfolder(ocr_output_dir: Path, subfolder: str) -> s
         details_name,
         insurance_name,
         aadhar_last4=customer.get("aadhar_id"),
-        details_aadhar_last4=(data.get("details_customer") or {}).get("aadhar_id") if isinstance(data.get("details_customer"), dict) else None,
+        details_aadhar_last4=(
+            ((data.get("details_customer") or {}).get("aadhar_id") if isinstance(data.get("details_customer"), dict) else None)
+            or customer.get("aadhar_id")
+        ),
         insurance_aadhar_last4=insurance.get("aadhar_id") or insurance.get("aadhaar_no") or insurance.get("aadhar_no"),
     )
