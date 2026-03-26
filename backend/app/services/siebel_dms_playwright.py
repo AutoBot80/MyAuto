@@ -6196,9 +6196,46 @@ def _try_click_opportunities_list_new(
                 _try_activate_opportunity_form_scope(frame)
             except Exception:
                 pass
+
+            # #region agent log — probe Opportunity Form:New in each frame (H-A scope)
+            try:
+                import json as _json_opp, time as _time_opp
+                _opp_probe = []
+                for _css_p in focused_selectors:
+                    try:
+                        _loc_p = frame.locator(_css_p)
+                        _cnt_p = _loc_p.count()
+                        _vis_p = False
+                        _bbox_p = None
+                        if _cnt_p > 0:
+                            try:
+                                _vis_p = _loc_p.first.is_visible(timeout=400)
+                            except Exception:
+                                pass
+                            try:
+                                _bbox_p = _loc_p.first.bounding_box(timeout=400)
+                            except Exception:
+                                pass
+                        _opp_probe.append({"css": _css_p[:60], "count": _cnt_p, "visible": _vis_p, "bbox": str(_bbox_p)[:80] if _bbox_p else None})
+                    except Exception:
+                        continue
+                with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
+                    _lf.write(_json_opp.dumps({"sessionId":"08e634","hypothesisId":"OPP_FRAME","location":"siebel_dms_playwright.py:opp_form_new_probe","message":f"Opportunity Form:New probe attempt={attempt+1}","data":{"frame_url":(frame.url or "")[:200],"frame_name":frame.name or "","probes":_opp_probe},"timestamp":int(_time_opp.time()*1000)}) + "\n")
+            except Exception:
+                pass
+            # #endregion
+
             try:
                 for css in focused_selectors:
-                    if _click_first_visible(frame.locator(css)):
+                    loc = frame.locator(css)
+                    # Try scrolling into view before visibility check
+                    try:
+                        if loc.count() > 0:
+                            loc.first.scroll_into_view_if_needed(timeout=1500)
+                            _safe_page_wait(page, 300, log_label="scroll_opp_form_new")
+                    except Exception:
+                        pass
+                    if _click_first_visible(loc):
                         logger.info(
                             "siebel_dms: clicked Opportunity Form:New in focused frame (attempt=%s)",
                             attempt + 1,
@@ -6210,7 +6247,14 @@ def _try_click_opportunities_list_new(
         try:
             _try_activate_opportunity_form_scope(page)
             for css in focused_selectors:
-                if _click_first_visible(page.locator(css)):
+                loc = page.locator(css)
+                try:
+                    if loc.count() > 0:
+                        loc.first.scroll_into_view_if_needed(timeout=1500)
+                        _safe_page_wait(page, 300, log_label="scroll_opp_form_new_page")
+                except Exception:
+                    pass
+                if _click_first_visible(loc):
                     logger.info(
                         "siebel_dms: clicked Opportunity Form:New on page root (attempt=%s)",
                         attempt + 1,
