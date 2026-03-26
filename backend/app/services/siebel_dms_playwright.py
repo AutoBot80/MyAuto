@@ -4411,6 +4411,7 @@ def _create_order(
     first_name: str,
     full_chassis: str,
     financier_name: str,
+    contact_id: str = "",
     action_timeout_ms: int,
     content_frame_selector: str | None,
     note,
@@ -5143,19 +5144,59 @@ def _create_order(
                     pass
                 # #endregion
 
-                # Field 1: clear and type "Mobile Phone"
-                page.keyboard.press("Control+a")
-                _safe_page_wait(page, 100, log_label="cls_selectall")
-                page.keyboard.type("Mobile Phone", delay=30)
-                note(f"Create Order: applet field 1 filled 'Mobile Phone' (was: {_focused_val[:30]!r}).")
-                page.keyboard.press("Tab")
-                _safe_page_wait(page, 400, log_label="cls_tab_to_value")
+                # Determine search value: use Contact ID if available (keeps default "Contact Id" dropdown),
+                # otherwise fall back to mobile with dropdown change attempt.
+                _search_val = ""
+                _search_type = ""
+                if contact_id:
+                    _search_val = contact_id
+                    _search_type = "Contact Id"
+                    note(f"Create Order: using scraped Contact ID={contact_id!r} for applet search.")
+                else:
+                    _search_val = _mob_digits or mobile
+                    _search_type = "Mobile Phone"
+                    note("Create Order: no Contact ID — will try Mobile Phone search.")
 
-                # Field 2: clear and type customer mobile
+                if _search_type == "Contact Id" and "contact id" in _focused_val.lower():
+                    # Dropdown already shows "Contact Id" — just Tab to the value field
+                    page.keyboard.press("Tab")
+                    _safe_page_wait(page, 400, log_label="cls_tab_to_value")
+                else:
+                    # Need to change the Find dropdown to "Mobile Phone"
+                    # Attempt: Alt+ArrowDown to open dropdown, navigate to "Mobile Phone"
+                    _find_changed = False
+                    try:
+                        page.keyboard.press("Alt+ArrowDown")
+                        _safe_page_wait(page, 400, log_label="find_dropdown_open")
+                        for _nav in range(12):
+                            _cur = page.evaluate("() => (document.activeElement || {}).value || ''") or ""
+                            if "mobile" in _cur.lower():
+                                _find_changed = True
+                                break
+                            page.keyboard.press("ArrowDown")
+                            _safe_page_wait(page, 150, log_label="find_dropdown_nav")
+                        if _find_changed:
+                            page.keyboard.press("Enter")
+                            _safe_page_wait(page, 200, log_label="find_dropdown_select")
+                    except Exception:
+                        pass
+                    note(f"Create Order: Find dropdown change to 'Mobile Phone' = {_find_changed}.")
+                    page.keyboard.press("Tab")
+                    _safe_page_wait(page, 400, log_label="cls_tab_to_value")
+
+                # #region agent log — applet search params
+                try:
+                    with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
+                        _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H17","location":"siebel_dms_playwright.py:create_order_applet_search","message":"Applet search params","data":{"search_type": _search_type, "search_val": _search_val[:30], "focused_was": _focused_val[:30], "has_contact_id": bool(contact_id)},"timestamp":int(_t_f2.time()*1000)}) + "\n")
+                except Exception:
+                    pass
+                # #endregion
+
+                # Value field: clear and type the search value
                 page.keyboard.press("Control+a")
                 _safe_page_wait(page, 100, log_label="val_selectall")
-                page.keyboard.type(_mob_digits or mobile, delay=30)
-                note(f"Create Order: applet field 2 filled mobile '{(_mob_digits or mobile)[:10]}'.")
+                page.keyboard.type(_search_val, delay=30)
+                note(f"Create Order: applet value field filled '{_search_val[:20]}'.")
 
                 # Trigger query — try Go/Query button across all fresh roots, fallback Enter
                 _safe_page_wait(page, 300, log_label="before_query_btn")
@@ -7863,6 +7904,38 @@ def Playwright_Hero_DMS_fill(
                     "Confirm right-pane selectors/labels and iframe scope."
                 )
                 return out
+
+            # Scrape Contact ID from the contact detail page (for use in Create Order F2 applet)
+            _contact_id = ""
+            for _cr in list(_ordered_frames(page)) + [page]:
+                try:
+                    _cid = _cr.evaluate("""() => {
+                        const sels = [
+                            "input[aria-label*='Contact Id' i]",
+                            "input[aria-label*='Contact #' i]",
+                            "input[name*='Contact_Id' i]",
+                            "span[aria-label*='Contact Id' i]",
+                            "a[aria-label*='Contact Id' i]",
+                        ];
+                        for (const sel of sels) {
+                            const el = document.querySelector(sel);
+                            if (!el) continue;
+                            const v = (el.value || el.textContent || '').trim();
+                            if (v && v.length > 2) return v;
+                        }
+                        return '';
+                    }""")
+                    if _cid:
+                        _contact_id = str(_cid).strip()
+                        break
+                except Exception:
+                    continue
+            if _contact_id:
+                note(f"Scraped Contact ID={_contact_id!r} from contact detail page.")
+                out["contact_id"] = _contact_id
+            else:
+                note("Contact ID not found on contact detail page (best-effort).")
+
             form_trace(
                 "v3_add_customer_payment",
                 "Payments tab (current frame)",
@@ -7898,6 +7971,7 @@ def Playwright_Hero_DMS_fill(
                 first_name=first,
                 full_chassis=full_chassis,
                 financier_name=(dms_values.get("financier_name") or "").strip(),
+                contact_id=out.get("contact_id", ""),
                 action_timeout_ms=action_timeout_ms,
                 content_frame_selector=content_frame_selector,
                 note=note,
