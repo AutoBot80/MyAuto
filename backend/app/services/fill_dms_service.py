@@ -20,6 +20,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import time
 import urllib.parse
 import atexit
@@ -298,9 +299,20 @@ def _launch_managed_browser_for_site(base_url: str):
     cdp_url = f"http://127.0.0.1:{port}"
 
     exe, channel = _find_browser_exe()
+    attempted_independent_launch = False
     if exe:
+        attempted_independent_launch = True
         try:
-            cmd = [exe, f"--remote-debugging-port={port}"]
+            profile_dir = os.path.join(tempfile.gettempdir(), "myautoai-dms-browser-profile")
+            os.makedirs(profile_dir, exist_ok=True)
+            cmd = [
+                exe,
+                "--new-window",
+                "--no-first-run",
+                "--no-default-browser-check",
+                f"--user-data-dir={profile_dir}",
+                f"--remote-debugging-port={port}",
+            ]
             if headless:
                 cmd.append("--headless=new")
             cmd.append(base_url)
@@ -324,13 +336,29 @@ def _launch_managed_browser_for_site(base_url: str):
                     for ctx in browser.contexts:
                         for page in ctx.pages:
                             url = (page.url or "").strip()
-                            if url and "blank" not in url.lower() and not url.startswith("chrome://") and not url.startswith("edge://"):
+                            if url and _playwright_page_url_matches_site_base(url, base_url):
                                 logger.info(
                                     "fill_dms_service: connected to %s via CDP at %s "
                                     "(browser window stays open even on automation errors).",
                                     channel, cdp_url,
                                 )
                                 return page, channel
+                    # If connected but target tab is not available yet, open it in the independent browser.
+                    try:
+                        if browser.contexts:
+                            ctx0 = browser.contexts[0]
+                        else:
+                            ctx0 = browser.new_context()
+                        page = ctx0.new_page()
+                        page.goto(base_url, wait_until="domcontentloaded", timeout=5000)
+                        logger.info(
+                            "fill_dms_service: opened target URL in independent %s window via CDP at %s",
+                            channel,
+                            cdp_url,
+                        )
+                        return page, channel
+                    except Exception:
+                        continue
                 except Exception:
                     continue
             logger.warning(
@@ -339,6 +367,10 @@ def _launch_managed_browser_for_site(base_url: str):
             )
         except Exception as exc:
             logger.warning("fill_dms_service: independent launch of %s failed: %s", channel, exc)
+
+    # Avoid opening a second browser when an independent launch was already attempted.
+    if attempted_independent_launch:
+        return None, None
 
     channels = ["msedge", "chrome"]
     launch_args: list[str] = []

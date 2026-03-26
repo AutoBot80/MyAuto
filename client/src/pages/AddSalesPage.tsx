@@ -63,9 +63,11 @@ interface AddSalesPageProps {
   siteUrlsLoading?: boolean;
   /** Set when site URL config could not be loaded from the API. */
   siteUrlsError?: string | null;
+  /** Increment to force the same behavior as pressing "New". */
+  autoNewTrigger?: number;
 }
 
-export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError }: AddSalesPageProps) {
+export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError, autoNewTrigger }: AddSalesPageProps) {
   const pageVisible = usePageVisible();
   const [mobile, setMobile] = useState(() => getInitialForm().mobile);
   const [savedTo, setSavedTo] = useState<string | null>(() => getInitialForm().savedTo);
@@ -290,6 +292,14 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError 
     setLastSubmittedVehicleId(null);
     setFormResetKey((k) => k + 1);
   };
+
+  useEffect(() => {
+    if ((autoNewTrigger ?? 0) > 0) {
+      handleNew();
+    }
+    // Intentionally reacts only to trigger increments from App (POS tile entry).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoNewTrigger]);
 
   // Normalize for display so we always show known fields (frame_no, engine_no, etc.) regardless of key naming
   const v = normalizeVehicleDetails(extractedVehicle) ?? extractedVehicle;

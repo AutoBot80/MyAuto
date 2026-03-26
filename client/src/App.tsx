@@ -64,6 +64,7 @@ function App() {
   const [dealerCity, setDealerCity] = useState<string | null>(null);
   const [siteUrls, setSiteUrls] = useState<SiteUrls | null>(null);
   const [siteUrlsError, setSiteUrlsError] = useState<string | null>(null);
+  const [addSalesAutoNewTrigger, setAddSalesAutoNewTrigger] = useState(0);
 
   useEffect(() => {
     getDealer(DEALER_ID)
@@ -122,6 +123,7 @@ function App() {
             dmsUrl={dmsUrl}
             siteUrlsError={siteUrlsError}
             siteUrlsLoading={!siteUrls && !siteUrlsError}
+            autoNewTrigger={addSalesAutoNewTrigger}
           />
         );
       case "bulk-loads":
@@ -173,6 +175,7 @@ function App() {
               onSelectPos={() => {
                 setMode("pos");
                 setPage("add-sales");
+                setAddSalesAutoNewTrigger((n) => n + 1);
               }}
               onSelectService={() => {
                 setMode("service");
