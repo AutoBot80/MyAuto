@@ -13,16 +13,16 @@ Relation (S/O or W/o): S/O
 Father or Husband Name: S/O Nirbhan Singh
 Customer Budget (dummy enquiry): 89000
 Finance Required: Y
-Financier Name: Axis Bank Ltd
+Financier Name: Axis
 DMS Contact Path: found
 Key num (partial): 1127
 Frame / Chassis num (partial): 23233
 Engine num (partial): 76658
 
 --- Runtime values used by Playwright ---
-sales_id: 163
+sales_id: 165
 customer_id: 5
-vehicle_id: 6
+vehicle_id: 7
 dealer_id: 100001
 subfolder: 7300231319_260326
 dealer_name: Arya Agencies
@@ -36,4 +36,4 @@ source_pin_code: 321402
 source_key_no: 1127
 source_frame_no: 23233
 source_engine_no: 76658
-generated_at: 26-03-2026 17:20:23
+generated_at: 26-03-2026 17:34:40
