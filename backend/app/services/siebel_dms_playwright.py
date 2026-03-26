@@ -5005,24 +5005,117 @@ def _create_order(
         _applet_done = False
         _applet_err = ""
         _contact_roots = [_locked_root] if _locked_root is not None else list(_roots())
+
+        # #region agent log — F2 applet context
+        try:
+            _lr_url = getattr(_locked_root, 'url', None) if _locked_root else None
+            _lr_type = type(_locked_root).__name__ if _locked_root else "None"
+            _cr_count = len(_contact_roots)
+            with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
+                import json as _j_f2, time as _t_f2
+                _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H1_H4","location":"siebel_dms_playwright.py:create_order_f2_start","message":"F2 applet context","data":{"locked_root_type":_lr_type,"locked_root_url":(_lr_url or "")[:150],"contact_roots_count":_cr_count},"timestamp":int(_t_f2.time()*1000)}) + "\n")
+        except Exception:
+            pass
+        # #endregion
+
         for root in _contact_roots:
             try:
                 fld = root.get_by_label(re.compile(r"contact\s*last\s*name", re.I)).first
                 if fld.count() <= 0 or not fld.is_visible(timeout=700):
+                    # #region agent log — CLS not found in root
+                    try:
+                        with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
+                            _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H4","location":"siebel_dms_playwright.py:create_order_cls_miss","message":"Contact Last Name not found/visible in root","data":{"root_url":getattr(root,'url','?')[:120]},"timestamp":int(_t_f2.time()*1000)}) + "\n")
+                    except Exception:
+                        pass
+                    # #endregion
                     continue
+
+                # #region agent log — CLS found, about to click + F2
+                try:
+                    _cls_aria = fld.evaluate("el => el.getAttribute('aria-label') || ''")
+                    _cls_name = fld.evaluate("el => el.getAttribute('name') || ''")
+                    with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
+                        _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H2_H5","location":"siebel_dms_playwright.py:create_order_cls_found","message":"CLS field found — clicking + F2","data":{"aria":_cls_aria[:80],"name":_cls_name,"root_url":getattr(root,'url','?')[:120]},"timestamp":int(_t_f2.time()*1000)}) + "\n")
+                except Exception:
+                    pass
+                # #endregion
+
                 try:
                     fld.click(timeout=min(action_timeout_ms, 2500))
                 except Exception:
                     fld.click(timeout=min(action_timeout_ms, 2500), force=True)
+                _safe_page_wait(page, 300, log_label="after_cls_click_before_f2")
                 try:
                     fld.press("F2", timeout=1200)
                 except Exception:
                     pass
-                _safe_page_wait(page, 700, log_label="after_contact_lastname_f2")
+                _safe_page_wait(page, 1200, log_label="after_contact_lastname_f2")
+
+                _all_roots_for_applet = list(_ordered_frames(page)) + [page]
+
+                # Check if F2 keyboard press opened the applet
+                _applet_opened_by_f2 = False
+                for _chk in _all_roots_for_applet:
+                    try:
+                        if _chk.locator("input[name='s_5_1_312_0']").first.is_visible(timeout=400):
+                            _applet_opened_by_f2 = True
+                            break
+                    except Exception:
+                        continue
+
+                if not _applet_opened_by_f2:
+                    note("Create Order: F2 key did not open applet — trying icon click.")
+                    _icon_clicked = False
+                    for _ir in [root] + _all_roots_for_applet:
+                        try:
+                            _icon = _ir.locator("[aria-label='Press F2 for Selection Field']")
+                            for idx in range(min(_icon.count(), 6)):
+                                _el = _icon.nth(idx)
+                                if _el.is_visible(timeout=500):
+                                    _el.click(timeout=1500)
+                                    _icon_clicked = True
+                                    break
+                            if _icon_clicked:
+                                break
+                        except Exception:
+                            continue
+                    if _icon_clicked:
+                        _safe_page_wait(page, 1500, log_label="after_f2_icon_click")
+                        note("Create Order: clicked 'Press F2 for Selection Field' icon.")
+                    else:
+                        note("Create Order: F2 icon not found either.")
+
+                # #region agent log — after F2/icon, check if applet controls exist anywhere
+                try:
+                    _f2_scan = {}
+                    for _sr in _all_roots_for_applet:
+                        try:
+                            _f2_scan = _sr.evaluate("""() => {
+                                const q1 = document.querySelector("input[name='s_5_1_312_0']");
+                                const q2 = document.querySelector("input[name='s_5_1_313_0']");
+                                const qb = document.querySelector("[name='s_5_1_314_0']");
+                                const ok = document.querySelector("[name='s_5_1_315_0']");
+                                const vis = (el) => { if(!el) return false; const st=window.getComputedStyle(el); return st.display!=='none' && st.visibility!=='hidden'; };
+                                return {q1: q1 ? vis(q1) : null, q2: q2 ? vis(q2) : null, qb: qb ? vis(qb) : null, ok: ok ? vis(ok) : null};
+                            }""")
+                            if any(v is not None for v in _f2_scan.values()):
+                                _f2_scan["frame_url"] = getattr(_sr, 'url', '?')[:120]
+                                break
+                        except Exception:
+                            continue
+                    with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
+                        _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H7_H8","location":"siebel_dms_playwright.py:create_order_f2_scan","message":"Applet controls scan after F2/icon","data":{**_f2_scan, "f2_key_opened": _applet_opened_by_f2},"timestamp":int(_t_f2.time()*1000)}) + "\n")
+                except Exception:
+                    pass
+                # #endregion
+
+                # Search applet controls across ALL frames (not just _contact_roots)
+                _applet_search_roots = _all_roots_for_applet + _contact_roots
 
                 # Field name=s_5_1_312_0 => set "Mobile Phone"
                 _q1 = None
-                for r2 in _contact_roots:
+                for r2 in _applet_search_roots:
                     try:
                         t = r2.locator("input[name='s_5_1_312_0']").first
                         if t.count() > 0 and t.is_visible(timeout=500):
@@ -5031,7 +5124,7 @@ def _create_order(
                     except Exception:
                         continue
                 if _q1 is None:
-                    _applet_err = "field s_5_1_312_0 not visible after F2"
+                    _applet_err = "field s_5_1_312_0 not visible after F2 + icon click"
                     continue
                 _q1.click(timeout=min(action_timeout_ms, 2000))
                 _q1.fill("", timeout=min(action_timeout_ms, 2000))
@@ -5043,7 +5136,7 @@ def _create_order(
 
                 # Next field => customer.mobile digits
                 _q2 = None
-                for r2 in _contact_roots:
+                for r2 in _applet_search_roots:
                     try:
                         t = r2.locator("input[name='s_5_1_313_0']").first
                         if t.count() > 0 and t.is_visible(timeout=500):
@@ -5053,7 +5146,7 @@ def _create_order(
                         continue
                 if _q2 is None:
                     # Fallback: next text input in pick applet row
-                    for r2 in _contact_roots:
+                    for r2 in _applet_search_roots:
                         try:
                             t = r2.locator("input[name^='s_5_1_'][type='text']").nth(1)
                             if t.count() > 0 and t.is_visible(timeout=500):
@@ -5070,7 +5163,7 @@ def _create_order(
 
                 # Query button name=s_5_1_314_0
                 _qry = None
-                for r2 in _contact_roots:
+                for r2 in _applet_search_roots:
                     try:
                         t = r2.locator("button[name='s_5_1_314_0'], a[name='s_5_1_314_0'], input[name='s_5_1_314_0']").first
                         if t.count() > 0 and t.is_visible(timeout=500):
@@ -5141,7 +5234,7 @@ def _create_order(
 
                 # OK button name=s_5_1_315_0
                 _ok = None
-                for r2 in _contact_roots:
+                for r2 in _applet_search_roots:
                     try:
                         t = r2.locator("button[name='s_5_1_315_0'], a[name='s_5_1_315_0'], input[name='s_5_1_315_0']").first
                         if t.count() > 0 and t.is_visible(timeout=500):
@@ -5160,7 +5253,7 @@ def _create_order(
                 note("Create Order: selected contact via F2 applet flow and confirmed OK.")
                 # Best-effort verification: contact selection should auto-populate dependent fields (e.g., Pincode).
                 _pin_rb = ""
-                for r3 in _contact_roots:
+                for r3 in _applet_search_roots:
                     try:
                         for _pin_sel in (
                             "input[aria-label*='Pin Code' i]",
