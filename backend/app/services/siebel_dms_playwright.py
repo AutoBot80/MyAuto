@@ -4902,6 +4902,8 @@ def _create_order(
         _safe_page_wait(page, 600, log_label="after_booking_order_type")
         note("Create Order: set Booking Order Type = Normal Booking.")
 
+        _locked_root = None
+
         # 3b) Finance Required = Y (prerequisite for Financier/Hypothecation enablement)
         _fin_ok = False
         for root in _roots():
@@ -4909,6 +4911,7 @@ def _create_order(
                 for _lbl in ("Finance Required", "FinanceRequired"):
                     if _fill_by_label_on_frame(root, _lbl, "Y", action_timeout_ms=action_timeout_ms):
                         _fin_ok = True
+                        _locked_root = root
                         break
                     if _select_dropdown_by_label_on_frame(
                         root,
@@ -4917,6 +4920,7 @@ def _create_order(
                         action_timeout_ms=min(action_timeout_ms, 8000),
                     ):
                         _fin_ok = True
+                        _locked_root = root
                         break
                 if _fin_ok:
                     break
@@ -4937,6 +4941,7 @@ def _create_order(
                 for _lbl in ("Financer", "Financier", "Financer Name", "Financier Name"):
                     if _fill_by_label_on_frame(root, _lbl, _fin_name, action_timeout_ms=action_timeout_ms):
                         _fin_name_ok = True
+                        _locked_root = root
                         break
                     if _select_dropdown_by_label_on_frame(
                         root,
@@ -4945,6 +4950,7 @@ def _create_order(
                         action_timeout_ms=min(action_timeout_ms, 8000),
                     ):
                         _fin_name_ok = True
+                        _locked_root = root
                         break
                 if _fin_name_ok:
                     break
@@ -4968,6 +4974,7 @@ def _create_order(
                 for _lbl in ("Hypothecation", "Hpothecation"):
                     if _fill_by_label_on_frame(root, _lbl, "Y", action_timeout_ms=action_timeout_ms):
                         _hyp_ok = True
+                        _locked_root = root
                         break
                     if _select_dropdown_by_label_on_frame(
                         root,
@@ -4976,6 +4983,7 @@ def _create_order(
                         action_timeout_ms=min(action_timeout_ms, 8000),
                     ):
                         _hyp_ok = True
+                        _locked_root = root
                         break
                 if _hyp_ok:
                     break
@@ -4985,13 +4993,19 @@ def _create_order(
             return False, "Could not set Hypothecation = Y after Finance Required = Y.", scraped
         _safe_page_wait(page, 400, log_label="after_hypothecation_y")
         note("Create Order: set Hypothecation = Y.")
+        if _locked_root is not None:
+            try:
+                note(f"Create Order: locked booking form context for Contact Last Name/F2 (url={(getattr(_locked_root, 'url', '') or '')[:120]!r}).")
+            except Exception:
+                note("Create Order: locked booking form context for Contact Last Name/F2.")
 
         # 4) Contact Last Name → F2 pick applet flow (operator-provided deterministic path)
         _mob_digits = re.sub(r"\D", "", (mobile or "").strip())
         _first_need = (first_name or "").strip().lower()
         _applet_done = False
         _applet_err = ""
-        for root in _all_ui_roots():
+        _contact_roots = [_locked_root] if _locked_root is not None else list(_roots())
+        for root in _contact_roots:
             try:
                 fld = root.get_by_label(re.compile(r"contact\s*last\s*name", re.I)).first
                 if fld.count() <= 0 or not fld.is_visible(timeout=700):
@@ -5008,7 +5022,7 @@ def _create_order(
 
                 # Field name=s_5_1_312_0 => set "Mobile Phone"
                 _q1 = None
-                for r2 in _all_ui_roots():
+                for r2 in _contact_roots:
                     try:
                         t = r2.locator("input[name='s_5_1_312_0']").first
                         if t.count() > 0 and t.is_visible(timeout=500):
@@ -5029,7 +5043,7 @@ def _create_order(
 
                 # Next field => customer.mobile digits
                 _q2 = None
-                for r2 in _all_ui_roots():
+                for r2 in _contact_roots:
                     try:
                         t = r2.locator("input[name='s_5_1_313_0']").first
                         if t.count() > 0 and t.is_visible(timeout=500):
@@ -5039,7 +5053,7 @@ def _create_order(
                         continue
                 if _q2 is None:
                     # Fallback: next text input in pick applet row
-                    for r2 in _all_ui_roots():
+                    for r2 in _contact_roots:
                         try:
                             t = r2.locator("input[name^='s_5_1_'][type='text']").nth(1)
                             if t.count() > 0 and t.is_visible(timeout=500):
@@ -5056,7 +5070,7 @@ def _create_order(
 
                 # Query button name=s_5_1_314_0
                 _qry = None
-                for r2 in _all_ui_roots():
+                for r2 in _contact_roots:
                     try:
                         t = r2.locator("button[name='s_5_1_314_0'], a[name='s_5_1_314_0'], input[name='s_5_1_314_0']").first
                         if t.count() > 0 and t.is_visible(timeout=500):
@@ -5127,7 +5141,7 @@ def _create_order(
 
                 # OK button name=s_5_1_315_0
                 _ok = None
-                for r2 in _all_ui_roots():
+                for r2 in _contact_roots:
                     try:
                         t = r2.locator("button[name='s_5_1_315_0'], a[name='s_5_1_315_0'], input[name='s_5_1_315_0']").first
                         if t.count() > 0 and t.is_visible(timeout=500):
@@ -5146,7 +5160,7 @@ def _create_order(
                 note("Create Order: selected contact via F2 applet flow and confirmed OK.")
                 # Best-effort verification: contact selection should auto-populate dependent fields (e.g., Pincode).
                 _pin_rb = ""
-                for r3 in _all_ui_roots():
+                for r3 in _contact_roots:
                     try:
                         for _pin_sel in (
                             "input[aria-label*='Pin Code' i]",
