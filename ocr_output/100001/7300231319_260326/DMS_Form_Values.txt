@@ -1,0 +1,39 @@
+DMS Form Values
+
+--- Values sent to DMS labels ---
+Mr/Ms: Mr.
+Contact First Name: Vishnu
+Contact Last Name: —
+Mobile Phone #: 7300231319
+Landline #: 9521509150
+State: RAJASTHAN
+Address Line 1: S/O Nirbhan Singh, 28-gurjar mays, 321402 balai, kheda thakur, rudawal, Rudawal,
+Pin Code: 321402
+Relation (S/O or W/o): S/O
+Father or Husband Name: S/O Nirbhan Singh
+Customer Budget (dummy enquiry): 89000
+Finance Required: Y
+Financier Name: Axis Bank Ltd
+DMS Contact Path: found
+Key num (partial): 1127
+Frame / Chassis num (partial): 23233
+Engine num (partial): 76658
+
+--- Runtime values used by Playwright ---
+sales_id: 163
+customer_id: 5
+vehicle_id: 6
+dealer_id: 100001
+subfolder: 7300231319_260326
+dealer_name: Arya Agencies
+oem_name: —
+source_customer_name: Vishnu
+source_mobile_number: 7300231319
+source_alt_phone_num: 9521509150
+source_address: S/O Nirbhan Singh, 28-gurjar mays, 321402 balai, kheda thakur, rudawal, Rudawal,
+source_state: RAJASTHAN
+source_pin_code: 321402
+source_key_no: 1127
+source_frame_no: 23233
+source_engine_no: 76658
+generated_at: 26-03-2026 17:20:23

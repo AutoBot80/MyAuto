@@ -1,0 +1,27 @@
+Data from DMS
+
+--- Customer (filled on enquiry) ---
+Name: Vishnu
+Address: S/O Nirbhan Singh, 28-gurjar mays, 321402 balai, kheda thakur, rudawal, Rudawal, Rudawal, Bharatpur, Rajasthan, 321402
+State: RAJASTHAN
+Pin code: 321402
+Mobile: 7300231319
+Relation (S/O or W/o): S/O
+Care of / Father–Husband (Aadhaar QR): S/O Nirbhan Singh
+
+--- Vehicle (from DMS search result) ---
+Key num: —
+Frame / Chassis num: —
+Full chassis (VIN from detail): MBLHAW267RHA23233
+Engine num: —
+Full engine (from detail): HA11E1RHA76658
+Model: PASSION +
+Color: BKG
+Cubic capacity: 87112029
+Seating capacity: 11870 DEALER SHOWROOM
+Body type: —
+Vehicle type: —
+Num cylinders: —
+Horsepower: —
+Ex-showroom Price (Order Value): —
+Year of Mfg: 2024

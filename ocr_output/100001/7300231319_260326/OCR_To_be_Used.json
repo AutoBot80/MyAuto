@@ -1,10 +1,10 @@
 {
   "vehicle": {
-    "frame_no": "23069",
-    "engine_no": "76498 76658",
-    "model_colour": "passion +, Alk",
+    "frame_no": "23233",
+    "engine_no": "76658",
+    "model_colour": "Passion",
     "key_no": "1127",
-    "battery_no": ""
+    "battery_no": "EMPTY"
   },
   "customer": {
     "gender": "Male",
@@ -21,14 +21,14 @@
     "aadhar_id": "1069"
   },
   "insurance": {
-    "profession": "private Job",
-    "insurer": "universal Sampao",
-    "marital_status": "Married",
-    "nominee_gender": "Female",
+    "profession": "PRIVATE JOB",
+    "financier": "AXIS",
+    "insurer": "SOMPO",
+    "marital_status": "MARRIED",
+    "nominee_gender": "FEMALE",
     "nominee_name": "Pooja",
     "nominee_age": "18",
-    "nominee_relationship": "wife",
-    "financier": "Axis Dank ltd"
+    "nominee_relationship": "WIFE"
   },
-  "details_customer_name": "wishnu S/O Nirbhan Singl"
+  "details_customer_name": "Vishnu"
 }

@@ -6008,6 +6008,39 @@ def _siebel_vehicle_find_chassis_engine_enter(
         page, scraped, content_frame_selector=content_frame_selector
     )
     _apply_year_of_mfg_yyyy(scraped)
+
+    # #region agent log — dump all visible input fields on vehicle page (H-E)
+    try:
+        import json as _json_dbg_v, time as _time_dbg_v
+        _veh_roots = []
+        if content_frame_selector:
+            try:
+                _veh_roots.append(page.frame_locator(content_frame_selector).owner.content_frame())
+            except Exception:
+                pass
+        for _vf in page.frames:
+            _veh_roots.append(_vf)
+        _veh_fields_all = []
+        for _vroot in _veh_roots[:5]:
+            try:
+                _veh_flds = _vroot.evaluate("""() => {
+                  const vis = (el) => { if (!el) return false; const st = window.getComputedStyle(el); if (st.display==='none'||st.visibility==='hidden'||Number(st.opacity)===0) return false; const r=el.getBoundingClientRect(); return r.width>=2&&r.height>=2; };
+                  return Array.from(document.querySelectorAll('input,select,textarea')).filter(vis).slice(0,60).map(el => ({
+                    tag: el.tagName, type: el.type||'', name: el.name||'', id: el.id||'',
+                    ariaLabel: el.getAttribute('aria-label')||'', title: el.title||'',
+                    readOnly: el.readOnly||false, value: (el.value||'').slice(0,40)
+                  }));
+                }""")
+                if _veh_flds:
+                    _veh_fields_all.extend(_veh_flds)
+            except Exception:
+                continue
+        with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
+            _lf.write(_json_dbg_v.dumps({"sessionId":"08e634","hypothesisId":"HE","location":"siebel_dms_playwright.py:vehicle_page_fields_dump","message":"All visible fields on vehicle page after scrape","data":{"fields":_veh_fields_all[:80],"scraped_keys":list(scraped.keys()),"key_num_scraped":scraped.get("key_num",""),"page_url":page.url[:200]},"timestamp":int(_time_dbg_v.time()*1000)}) + "\n")
+    except Exception:
+        pass
+    # #endregion
+
     if (scraped.get("full_chassis") or "").strip() or (scraped.get("key_num") or "").strip():
         note("Add Enquiry: vehicle hit present (full_chassis or list key).")
     elif (scraped.get("model") or "").strip():
@@ -6636,6 +6669,10 @@ def _add_enquiry_opportunity(
         for lb in labels:
             if _fill_by_label_on_frame(enq_frame, lb, sv, action_timeout_ms=action_timeout_ms):
                 _safe_page_wait(page, 200, log_label="add_enq_after_field")
+                # #region agent log — field fill success
+                with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
+                    _lf.write(_json_dbg.dumps({"sessionId":"08e634","hypothesisId":"HA","location":"siebel_dms_playwright.py:try_field","message":"Field fill SUCCESS","data":{"label":lb,"value":sv[:30],"method":"fill_by_label"},"timestamp":int(_time_dbg.time()*1000)}) + "\n")
+                # #endregion
                 return True
             if _select_dropdown_by_label_on_frame(
                 enq_frame,
@@ -6644,9 +6681,17 @@ def _add_enquiry_opportunity(
                 action_timeout_ms=min(action_timeout_ms, 8000),
             ):
                 _safe_page_wait(page, 200, log_label="add_enq_after_dd_frame_scoped")
+                # #region agent log — dropdown fill success
+                with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
+                    _lf.write(_json_dbg.dumps({"sessionId":"08e634","hypothesisId":"HA","location":"siebel_dms_playwright.py:try_field","message":"Field fill SUCCESS (dropdown)","data":{"label":lb,"value":sv[:30],"method":"dropdown"},"timestamp":int(_time_dbg.time()*1000)}) + "\n")
+                # #endregion
                 return True
         if required:
             note(f"Add Enquiry: could not set {labels} to {sv!r}.")
+            # #region agent log — field fill FAILED
+            with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
+                _lf.write(_json_dbg.dumps({"sessionId":"08e634","hypothesisId":"HA","location":"siebel_dms_playwright.py:try_field","message":"Field fill FAILED (required)","data":{"labels":list(labels),"value":sv[:30]},"timestamp":int(_time_dbg.time()*1000)}) + "\n")
+            # #endregion
             return False
         return True
 
@@ -6678,12 +6723,36 @@ def _add_enquiry_opportunity(
     color_i = (scraped_v.get("color") or "").strip()
     today_str = date.today().strftime("%d/%m/%Y")
 
+    # #region agent log — dump all visible input/select/textarea labels in enq_frame (H-A/B/C/D)
+    try:
+        _dbg_fields = enq_frame.evaluate("""() => {
+          const vis = (el) => { if (!el) return false; const st = window.getComputedStyle(el); if (st.display==='none'||st.visibility==='hidden'||Number(st.opacity)===0) return false; const r=el.getBoundingClientRect(); return r.width>=2&&r.height>=2; };
+          return Array.from(document.querySelectorAll('input,select,textarea')).filter(vis).slice(0,80).map(el => ({
+            tag: el.tagName, type: el.type||'', name: el.name||'', id: el.id||'',
+            ariaLabel: el.getAttribute('aria-label')||'', title: el.title||'',
+            readOnly: el.readOnly||false, disabled: el.disabled||false,
+            value: (el.value||'').slice(0,40)
+          }));
+        }""")
+    except Exception as _dbg_e:
+        _dbg_fields = f"evaluate_error: {_dbg_e!r}"
+    import json as _json_dbg, time as _time_dbg
+    with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
+        _lf.write(_json_dbg.dumps({"sessionId":"08e634","hypothesisId":"HA_HB_HC_HD","location":"siebel_dms_playwright.py:add_enquiry_fields_dump","message":"All visible fields in enq_frame before Landline fill","data":{"fields":_dbg_fields,"enq_frame_name":getattr(enq_frame,'name','?'),"enq_frame_url":getattr(enq_frame,'url','?')[:200]},"timestamp":int(_time_dbg.time()*1000)}) + "\n")
+    # #endregion
+
     if not try_field(("Contact First Name", "First Name"), first, required=True):
         return False, "Could not set Contact First Name."
     try_field(("Contact Last Name", "Last Name"), last, required=False)
     if not try_field(("Mobile Phone", "Mobile Phone #", "Cellular Phone"), mobile, required=True):
         return False, "Could not set Mobile Phone."
     landline_use = landline or mobile
+
+    # #region agent log — log landline fill attempt details (H-A)
+    with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
+        _lf.write(_json_dbg.dumps({"sessionId":"08e634","hypothesisId":"HA","location":"siebel_dms_playwright.py:landline_attempt","message":"About to attempt Landline fill","data":{"landline_use":landline_use,"labels":["Landline","Land Line","Alternate Phone","Alternate Number"]},"timestamp":int(_time_dbg.time()*1000)}) + "\n")
+    # #endregion
+
     if not try_field(("Landline", "Land Line", "Alternate Phone", "Alternate Number"), landline_use, required=True):
         return False, "Could not set Landline."
     if not try_field(("Email", "Email Address", "E-mail"), "NA", required=True):
