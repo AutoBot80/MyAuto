@@ -6737,11 +6737,11 @@ def _add_enquiry_opportunity(
     def _normalize_gender_for_form(raw: str) -> str:
         s = (raw or "").strip().lower()
         if s in ("m", "male"):
-            return "Male"
+            return "M"
         if s in ("f", "female"):
-            return "Female"
+            return "F"
         if s in ("o", "other"):
-            return "Other"
+            return "O"
         return (raw or "").strip()
 
     def _address_line1_between_first_second_comma(raw: str) -> str:
