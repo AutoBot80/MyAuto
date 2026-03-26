@@ -494,11 +494,34 @@ def _parse_aadhar_name_from_aadhaar_textract(text: str) -> dict[str, str]:
         r"address|dob|date\s*of\s*birth|year\s*of\s*birth|vid|virtual|help@|uidai|www\.|pin"
     )
     dob_line = re.compile(r"(?i)\b(dob|date\s*of\s*birth|जन्म|birth)\b")
+    gov_line = re.compile(r"(?i)government\s+of\s+india")
+    noise = re.compile(r"(?i)\b(famoy|family|service|assess|authority|unique)\b")
     candidates: list[str] = []
-    for line in lines[:18]:
+    gov_idx = -1
+    for i, line in enumerate(lines[:25]):
+        if gov_line.search(line):
+            gov_idx = i
+            break
+    if gov_idx >= 0:
+        for line in lines[gov_idx + 1 : min(gov_idx + 5, len(lines))]:
+            if len(line) < 2 or len(line) > 80:
+                continue
+            if skip.search(line) or noise.search(line):
+                continue
+            if re.search(r"\d", line):
+                continue
+            if re.match(r"^[A-Za-z][A-Za-z\s.'-]{1,70}$", line):
+                words = [w for w in line.split() if w.strip()]
+                if 1 <= len(words) <= 5:
+                    out["name"] = line.strip()
+                    return out
+
+    for line in lines[:22]:
         if len(line) < 4 or len(line) > 90:
             continue
         if skip.search(line):
+            continue
+        if noise.search(line):
             continue
         if dob_line.search(line):
             break
@@ -508,7 +531,8 @@ def _parse_aadhar_name_from_aadhaar_textract(text: str) -> dict[str, str]:
             continue
         if re.match(r"^[A-Za-z][A-Za-z\s.'-]{2,70}$", line):
             words = line.split()
-            if 2 <= len(words) <= 6:
+            initials = sum(1 for w in words if w and w[0].isupper())
+            if 1 <= len(words) <= 6 and initials >= 1:
                 # Keep candidates and prefer the nearest one before DOB.
                 candidates.append(line)
     if candidates:
@@ -905,8 +929,8 @@ _INSURANCE_KEY_ALIASES = {
 
 # Map Textract form keys to customer name on Details sheet.
 _DETAILS_CUSTOMER_NAME_ALIASES = [
-    "customer name", "customer name:", "name", "buyer name", "buyer's name",
-    "buyer name:", "name of customer", "customer",
+    "customer name", "customer name:", "buyer name", "buyer's name",
+    "buyer name:", "name of customer",
     "full name", "full name:", "customer full name",
 ]
 
@@ -1233,6 +1257,12 @@ def _map_key_value_pairs_to_vehicle(pairs: list[dict]) -> dict[str, str]:
         if combined:
             out["model_colour"] = combined
 
+    # Guard against section-heading bleed when Key/Battery fields are blank or scratched.
+    for fld in ("key_no", "battery_no"):
+        val = (out.get(fld) or "").strip()
+        if val and re.search(r"(?i)\b(nominee|payment|insurance|details|customer|vehicle)\b", val):
+            out.pop(fld, None)
+
     return out
 
 
@@ -1255,6 +1285,58 @@ def _parse_vehicle_from_full_text(full_text: str) -> dict[str, str]:
     if not full_text or not isinstance(full_text, str):
         return out
     text = full_text.replace("\r", "\n")
+    lines = [ln.strip() for ln in text.split("\n")]
+
+    def _section_or_noise_line(s: str) -> bool:
+        return bool(re.search(r"(?i)\b(nominee|payment|insurance|customer details|vehicle details)\b", s))
+
+    def _best_numeric_token(s: str, *, min_len: int = 3, max_len: int = 12) -> str:
+        toks = re.findall(r"\d+", s or "")
+        toks = [t for t in toks if min_len <= len(t) <= max_len]
+        if not toks:
+            return ""
+        # Prefer 4-6 length tokens for vehicle partials; else longest.
+        pref = [t for t in toks if 4 <= len(t) <= 6]
+        return (pref[0] if pref else sorted(toks, key=len, reverse=True)[0]).strip()
+
+    def _extract_field_near_label(
+        label_rx: str,
+        *,
+        min_len: int = 3,
+        max_len: int = 12,
+        look_ahead: int = 3,
+    ) -> str:
+        for idx, ln in enumerate(lines):
+            if not re.search(label_rx, ln, re.I):
+                continue
+            # 1) Inline value after colon in same line.
+            m_inline = re.search(r":\s*(.+)$", ln)
+            if m_inline:
+                cand_inline = _best_numeric_token(m_inline.group(1), min_len=min_len, max_len=max_len)
+                if cand_inline:
+                    return cand_inline
+            # 2) Nearest numeric line below label (for scratched/blank field values).
+            for j in range(idx + 1, min(len(lines), idx + 1 + look_ahead)):
+                nln = lines[j]
+                if not nln or _section_or_noise_line(nln):
+                    continue
+                # Skip another label line.
+                if ":" in nln and re.search(r"[A-Za-z]", nln):
+                    continue
+                cand = _best_numeric_token(nln, min_len=min_len, max_len=max_len)
+                if cand:
+                    return cand
+            # 3) Small backward window (number slightly above label).
+            for j in range(max(0, idx - 2), idx):
+                pln = lines[j]
+                if not pln or _section_or_noise_line(pln):
+                    continue
+                if ":" in pln and re.search(r"[A-Za-z]", pln):
+                    continue
+                cand = _best_numeric_token(pln, min_len=min_len, max_len=max_len)
+                if cand:
+                    return cand
+        return ""
 
     m = re.search(r"(?i)Model\s*:\s*([^\n]+?)(?=\s+Colour\s*:)", text)
     if m:
@@ -1283,13 +1365,31 @@ def _parse_vehicle_from_full_text(full_text: str) -> dict[str, str]:
     m = re.search(r"(?i)Key\s+Number\s*:\s*([^\n]+?)(?=\s+Battery\s+Number\s*:|\n|$)", text)
     if m:
         kv = _clean_sales_sheet_scalar(m.group(1))
-        if kv:
+        if kv and not re.search(r"(?i)\b(nominee|payment|insurance|details|customer|vehicle)\b", kv):
             out["key_no"] = kv
-    m = re.search(r"(?i)Battery\s+Number\s*:\s*([^\n]+)", text)
+    m = re.search(r"(?i)Battery\s+Number\s*:\s*([^\n]*)(?=\n|$)", text)
     if m:
         bv = _clean_sales_sheet_scalar(m.group(1))
-        if bv:
+        if bv and not re.search(r"(?i)\b(nominee|payment|insurance|details|customer|vehicle)\b", bv):
             out["battery_no"] = bv
+
+    # Nearby-number rescue for scratched/blank fields in Details sheet.
+    if "frame_no" not in out or not str(out.get("frame_no") or "").strip():
+        v = _extract_field_near_label(r"\b(chassis|frame)\s+number\b", min_len=4, max_len=12)
+        if v:
+            out["frame_no"] = v
+    if "engine_no" not in out or not str(out.get("engine_no") or "").strip():
+        v = _extract_field_near_label(r"\bengine\s+number\b", min_len=4, max_len=12)
+        if v:
+            out["engine_no"] = v
+    if "key_no" not in out or not str(out.get("key_no") or "").strip():
+        v = _extract_field_near_label(r"\bkey\s+number\b", min_len=3, max_len=10)
+        if v:
+            out["key_no"] = v
+    if "battery_no" not in out or not str(out.get("battery_no") or "").strip():
+        v = _extract_field_near_label(r"\bbattery\s+number\b", min_len=3, max_len=12)
+        if v:
+            out["battery_no"] = v
 
     # Alternate labels
     if "frame_no" not in out:
@@ -1317,12 +1417,14 @@ def _extract_details_customer_name(pairs: list[dict]) -> str | None:
         anorm = _normalize_key_for_match(alias)
         if anorm in key_lower_to_value:
             val = key_lower_to_value[anorm].strip()
-            if len(val) >= 2 and len(val) <= 80:
+            if len(val) >= 2 and len(val) <= 80 and not re.search(r"(?i)\bnominee\b", val):
                 return val
         for k, v in key_lower_to_value.items():
+            if re.search(r"(?i)\bnominee\b", k):
+                continue
             if anorm in k or k in anorm:
                 val = v.strip()
-                if len(val) >= 2 and len(val) <= 80:
+                if len(val) >= 2 and len(val) <= 80 and not re.search(r"(?i)\bnominee\b", val):
                     return val
     return None
 

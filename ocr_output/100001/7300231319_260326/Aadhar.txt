@@ -1,0 +1,12 @@
+Aadhar scan – 15 extracted fields
+
+Aadhar ID: 1069
+Name: assess salvice
+Gender: Male
+Year of birth: 2005
+Date of birth: 07/07/2005
+Care of: S/O Nirbhan Singh
+City: Bharatpur
+State: Rajasthan
+Pin Code: 321402
+Address (constructed): S/O Nirbhan Singh, 28-gurjar mays, 321402 balai, kheda thakur, rudawal, Rudawal, Rudawal, Bharatpur, Rajasthan, 321402
