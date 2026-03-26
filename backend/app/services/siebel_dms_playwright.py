@@ -4409,6 +4409,7 @@ def _create_order(
     *,
     mobile: str,
     full_chassis: str,
+    financier_name: str,
     action_timeout_ms: int,
     content_frame_selector: str | None,
     note,
@@ -4912,7 +4913,41 @@ def _create_order(
         _safe_page_wait(page, 400, log_label="after_finance_required_y")
         note("Create Order: set Finance Required = Y.")
 
-        # 3c) Hypothecation = Y (enabled after Finance Required = Y)
+        # 3c) Financier/Financer fill (mandatory after Finance Required = Y).
+        _fin_name = (financier_name or "").strip()
+        if not _fin_name:
+            return False, "Financier name is empty in source data.", scraped
+        _fin_name_ok = False
+        for root in _roots():
+            try:
+                for _lbl in ("Financer", "Financier", "Financer Name", "Financier Name"):
+                    if _fill_by_label_on_frame(root, _lbl, _fin_name, action_timeout_ms=action_timeout_ms):
+                        _fin_name_ok = True
+                        break
+                    if _select_dropdown_by_label_on_frame(
+                        root,
+                        label=_lbl,
+                        value=_fin_name,
+                        action_timeout_ms=min(action_timeout_ms, 8000),
+                    ):
+                        _fin_name_ok = True
+                        break
+                if _fin_name_ok:
+                    break
+            except Exception:
+                continue
+        if not _fin_name_ok:
+            _fin_err = _detect_siebel_error_popup(page, content_frame_selector)
+            if _fin_err:
+                return False, f"Siebel error while setting Financier/Financer: {_fin_err[:200]}", scraped
+            return False, f"Could not set Financier/Financer with value {_fin_name!r}.", scraped
+        _safe_page_wait(page, 500, log_label="after_financier_fill")
+        note(f"Create Order: set Financier/Financer using input {_fin_name!r}.")
+        _fin_post_err = _detect_siebel_error_popup(page, content_frame_selector)
+        if _fin_post_err:
+            return False, f"Siebel error after Financier/Financer input: {_fin_post_err[:200]}", scraped
+
+        # 3d) Hypothecation = Y (enabled after Finance Required = Y)
         _hyp_ok = False
         for root in _roots():
             try:
@@ -7540,6 +7575,7 @@ def Playwright_Hero_DMS_fill(
                 page,
                 mobile=mobile,
                 full_chassis=full_chassis,
+                financier_name=(dms_values.get("financier_name") or "").strip(),
                 action_timeout_ms=action_timeout_ms,
                 content_frame_selector=content_frame_selector,
                 note=note,

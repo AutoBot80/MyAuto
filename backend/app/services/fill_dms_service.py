@@ -605,8 +605,10 @@ def _get_or_open_site_page(base_url: str, site_label: str, *, require_login_on_o
         def _is_ready_after_login(pg) -> bool:
             try:
                 u = (pg.url or "").lower()
-                if "swecmd=login" in u:
-                    return False
+                # Most reliable: if URL moved away from login endpoint, continue.
+                if "swecmd=login" not in u:
+                    return True
+                # Otherwise check if login form disappeared.
                 return bool(
                     pg.evaluate(
                         """() => {
@@ -617,22 +619,9 @@ def _get_or_open_site_page(base_url: str, site_label: str, *, require_login_on_o
                                 const r = el.getBoundingClientRect();
                                 return r.width > 2 && r.height > 2;
                             };
-                            // Login form still visible => not ready.
                             const u1 = document.querySelector('input[name="SWEUserName"]');
                             const p1 = document.querySelector('input[name="SWEPassword"], input[type="password"]');
-                            if ((u1 && vis(u1)) || (p1 && vis(p1))) return false;
-                            // Any Siebel app shell marker.
-                            const markers = [
-                                '#findcombobox',
-                                'input[aria-label*="Find" i]',
-                                'select[id="j_s_sctrl_tabScreen"]',
-                                '[aria-label*="First Level View Bar" i]'
-                            ];
-                            for (const s of markers) {
-                                const el = document.querySelector(s);
-                                if (el && vis(el)) return true;
-                            }
-                            return false;
+                            return !((u1 && vis(u1)) || (p1 && vis(p1)));
                         }"""
                     )
                 )
@@ -644,6 +633,14 @@ def _get_or_open_site_page(base_url: str, site_label: str, *, require_login_on_o
                 logger.info("fill_dms_service: login/session became ready in same Fill DMS request.")
                 return opened_page, None
             time.sleep(1)
+
+        # Final permissive fallback: if we are no longer on login URL, continue now.
+        try:
+            if "swecmd=login" not in (opened_page.url or "").lower():
+                logger.info("fill_dms_service: continuing after login transition (final fallback).")
+                return opened_page, None
+        except Exception:
+            pass
 
         return None, f"{site_label} Opened. Please login. And then press button again"
 
