@@ -3456,25 +3456,57 @@ def _siebel_ui_suggests_contact_match_mobile_first(page: Page, mobile: str, firs
       if (!needle || needle.length < 8 || !target) return false;
       const compact = (s) => String(s || '').replace(/\\s+/g, '');
       const norm = (s) => String(s || '').replace(/\\u00a0/g, ' ').trim();
-      const normLow = (s) => norm(s).toLowerCase();
-      const tLow = normLow(target);
+      const firstNameKeyFromFind = (raw) => {
+        let s = String(raw || '').replace(/\\u00a0/g, ' ').trim().toLowerCase();
+        while (s.endsWith('.')) s = s.slice(0, -1).trim();
+        return s;
+      };
+      const textMatchesFindFirstName = (text, keyBase) => {
+        if (!keyBase || text == null) return false;
+        const c = String(text).replace(/\\u00a0/g, ' ').trim().toLowerCase();
+        if (!c) return false;
+        if (c === keyBase) return true;
+        if (c.startsWith(keyBase + ' ')) return true;
+        const keyHead = keyBase.split(/\\s+/).filter(Boolean)[0] || '';
+        if (keyHead && c === keyHead) return true;
+        const first = c.split(/\\s+/).filter(Boolean)[0] || '';
+        let fs = first;
+        while (fs.endsWith('.')) fs = fs.slice(0, -1).trim();
+        if (fs === keyBase) return true;
+        if (keyHead && fs === keyHead) return true;
+        return false;
+      };
+      const rowContainsFindFirstKey = (tr, keyBase) => {
+        if (!keyBase) return false;
+        const keyHead = keyBase.split(/\\s+/).filter(Boolean)[0] || '';
+        const raw = norm(tr.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+        if (!raw || (!raw.includes(keyBase) && !(keyHead && raw.includes(keyHead)))) return false;
+        if (raw.startsWith(keyBase + ' ')) return true;
+        if (keyHead && raw.startsWith(keyHead + ' ')) return true;
+        const parts = raw.split(/[\\s,;|\\/\\u2013\\u2014-]+/).filter(Boolean);
+        for (const p of parts) {
+          let q = p;
+          while (q.endsWith('.')) q = q.slice(0, -1).trim();
+          if (q === keyBase || (keyHead && q === keyHead)) return true;
+          if (p.startsWith(keyBase + ' ')) return true;
+          if (keyHead && p.startsWith(keyHead + ' ')) return true;
+        }
+        return false;
+      };
+      const keyBase = firstNameKeyFromFind(target);
+      if (!keyBase) return false;
       const hasM = (s) => compact(s).includes(needle);
       const rowHasFirst = (tr) => {
         const tds = tr.querySelectorAll('td');
         for (const td of tds) {
-          if (normLow(td.textContent) === tLow) return true;
-          const ttl = normLow(td.getAttribute('title') || '');
-          const alb = normLow(td.getAttribute('aria-label') || '');
-          if (ttl === tLow || alb === tLow) return true;
+          if (textMatchesFindFirstName(td.textContent, keyBase)) return true;
+          if (textMatchesFindFirstName(td.getAttribute('title') || '', keyBase)) return true;
+          if (textMatchesFindFirstName(td.getAttribute('aria-label') || '', keyBase)) return true;
           for (const inp of td.querySelectorAll('input, textarea')) {
-            if (normLow(inp.value) === tLow) return true;
+            if (textMatchesFindFirstName(inp.value, keyBase)) return true;
           }
         }
-        const rowNorm = norm(tr.textContent || '').replace(/\\s+/g, ' ').trim();
-        const rowLow = rowNorm.toLowerCase();
-        if (!rowLow.includes(tLow)) return false;
-        const parts = rowLow.split(/[\\s,;|\\/\\u2013\\u2014-]+/).filter(Boolean);
-        return parts.includes(tLow);
+        return rowContainsFindFirstKey(tr, keyBase);
       };
       for (const tr of document.querySelectorAll('table tr')) {
         if (tr.closest('thead')) continue;
@@ -3517,24 +3549,56 @@ def _siebel_ui_suggests_contact_match_mobile_first(page: Page, mobile: str, firs
     diag_js = """([needle, target]) => {
       const compact = (s) => String(s || '').replace(/\\s+/g, '');
       const norm = (s) => String(s || '').replace(/\\u00a0/g, ' ').trim();
-      const normLow = (s) => norm(s).toLowerCase();
-      const tLow = normLow(target);
+      const firstNameKeyFromFind = (raw) => {
+        let s = String(raw || '').replace(/\\u00a0/g, ' ').trim().toLowerCase();
+        while (s.endsWith('.')) s = s.slice(0, -1).trim();
+        return s;
+      };
+      const textMatchesFindFirstName = (text, keyBase) => {
+        if (!keyBase || text == null) return false;
+        const c = String(text).replace(/\\u00a0/g, ' ').trim().toLowerCase();
+        if (!c) return false;
+        if (c === keyBase) return true;
+        if (c.startsWith(keyBase + ' ')) return true;
+        const keyHead = keyBase.split(/\\s+/).filter(Boolean)[0] || '';
+        if (keyHead && c === keyHead) return true;
+        const first = c.split(/\\s+/).filter(Boolean)[0] || '';
+        let fs = first;
+        while (fs.endsWith('.')) fs = fs.slice(0, -1).trim();
+        if (fs === keyBase) return true;
+        if (keyHead && fs === keyHead) return true;
+        return false;
+      };
+      const rowContainsFindFirstKey = (tr, keyBase) => {
+        if (!keyBase) return false;
+        const keyHead = keyBase.split(/\\s+/).filter(Boolean)[0] || '';
+        const raw = norm(tr.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+        if (!raw || (!raw.includes(keyBase) && !(keyHead && raw.includes(keyHead)))) return false;
+        if (raw.startsWith(keyBase + ' ')) return true;
+        if (keyHead && raw.startsWith(keyHead + ' ')) return true;
+        const parts = raw.split(/[\\s,;|\\/\\u2013\\u2014-]+/).filter(Boolean);
+        for (const p of parts) {
+          let q = p;
+          while (q.endsWith('.')) q = q.slice(0, -1).trim();
+          if (q === keyBase || (keyHead && q === keyHead)) return true;
+          if (p.startsWith(keyBase + ' ')) return true;
+          if (keyHead && p.startsWith(keyHead + ' ')) return true;
+        }
+        return false;
+      };
+      const keyBase = firstNameKeyFromFind(target);
       const rowHasFirst = (tr) => {
+        if (!keyBase) return false;
         const tds = tr.querySelectorAll('td');
         for (const td of tds) {
-          if (normLow(td.textContent) === tLow) return true;
-          const ttl = normLow(td.getAttribute('title') || '');
-          const alb = normLow(td.getAttribute('aria-label') || '');
-          if (ttl === tLow || alb === tLow) return true;
+          if (textMatchesFindFirstName(td.textContent, keyBase)) return true;
+          if (textMatchesFindFirstName(td.getAttribute('title') || '', keyBase)) return true;
+          if (textMatchesFindFirstName(td.getAttribute('aria-label') || '', keyBase)) return true;
           for (const inp of td.querySelectorAll('input, textarea')) {
-            if (normLow(inp.value) === tLow) return true;
+            if (textMatchesFindFirstName(inp.value, keyBase)) return true;
           }
         }
-        const rowNorm = norm(tr.textContent || '').replace(/\\s+/g, ' ').trim();
-        const rowLow = rowNorm.toLowerCase();
-        if (!rowLow.includes(tLow)) return false;
-        const parts = rowLow.split(/[\\s,;|\\/\\u2013\\u2014-]+/).filter(Boolean);
-        return parts.includes(tLow);
+        return rowContainsFindFirstKey(tr, keyBase);
       };
       const out = { table_rows_seen: 0, mobile_rows_seen: 0, first_resolved_rows_seen: 0, sample_rows: [] };
       const rows = Array.from(document.querySelectorAll('table tr'));
@@ -4356,7 +4420,6 @@ def _contact_mobile_drilldown_plans(
       if (!tr) return false;
       const tds = tr.querySelectorAll('td');
       if (tds.length < 3) return false;
-      const digits = (s) => String(s || '').replace(/\\D/g, '');
       const compact = (s) => String(s || '').replace(/\\s+/g, '');
       const rowCompact = compact(tr.textContent || '');
       let mobileOk = false;
@@ -4365,24 +4428,54 @@ def _contact_mobile_drilldown_plans(
       if (!mobileOk) return false;
       if (!target) return true;
       const norm = (s) => String(s || '').replace(/\\u00a0/g, ' ').trim();
-      const normLow = (s) => norm(s).toLowerCase();
-      const tLow = normLow(target);
+      const firstNameKeyFromFind = (raw) => {
+        let s = String(raw || '').replace(/\\u00a0/g, ' ').trim().toLowerCase();
+        while (s.endsWith('.')) s = s.slice(0, -1).trim();
+        return s;
+      };
+      const textMatchesFindFirstName = (text, keyBase) => {
+        if (!keyBase || text == null) return false;
+        const c = String(text).replace(/\\u00a0/g, ' ').trim().toLowerCase();
+        if (!c) return false;
+        if (c === keyBase) return true;
+        if (c.startsWith(keyBase + ' ')) return true;
+        const keyHead = keyBase.split(/\\s+/).filter(Boolean)[0] || '';
+        if (keyHead && c === keyHead) return true;
+        const first = c.split(/\\s+/).filter(Boolean)[0] || '';
+        let fs = first;
+        while (fs.endsWith('.')) fs = fs.slice(0, -1).trim();
+        if (fs === keyBase) return true;
+        if (keyHead && fs === keyHead) return true;
+        return false;
+      };
+      const rowContainsFindFirstKey = (trel, keyBase) => {
+        if (!keyBase) return false;
+        const keyHead = keyBase.split(/\\s+/).filter(Boolean)[0] || '';
+        const rraw = norm(trel.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+        if (!rraw || (!rraw.includes(keyBase) && !(keyHead && rraw.includes(keyHead)))) return false;
+        if (rraw.startsWith(keyBase + ' ')) return true;
+        if (keyHead && rraw.startsWith(keyHead + ' ')) return true;
+        const parts = rraw.split(/[\\s,;|\\/\\u2013\\u2014-]+/).filter(Boolean);
+        for (const p of parts) {
+          let q = p;
+          while (q.endsWith('.')) q = q.slice(0, -1).trim();
+          if (q === keyBase || (keyHead && q === keyHead)) return true;
+          if (p.startsWith(keyBase + ' ')) return true;
+          if (keyHead && p.startsWith(keyHead + ' ')) return true;
+        }
+        return false;
+      };
+      const keyBase = firstNameKeyFromFind(target);
+      if (!keyBase) return true;
       for (const td of tds) {
-        if (normLow(td.textContent) === tLow) return true;
-        const ttl = normLow(td.getAttribute('title') || '');
-        const alb = normLow(td.getAttribute('aria-label') || '');
-        if (ttl === tLow || alb === tLow) return true;
+        if (textMatchesFindFirstName(td.textContent, keyBase)) return true;
+        if (textMatchesFindFirstName(td.getAttribute('title') || '', keyBase)) return true;
+        if (textMatchesFindFirstName(td.getAttribute('aria-label') || '', keyBase)) return true;
         for (const inp of td.querySelectorAll('input, textarea')) {
-          if (normLow(inp.value) === tLow) return true;
+          if (textMatchesFindFirstName(inp.value, keyBase)) return true;
         }
       }
-      const rowNorm = norm(tr.textContent || '').replace(/\\s+/g, ' ').trim();
-      const rowLow = rowNorm.toLowerCase();
-      if (rowLow.includes(tLow)) {
-        const parts = rowLow.split(/[\\s,;|\\/\\u2013\\u2014-]+/).filter(Boolean);
-        if (parts.includes(tLow)) return true;
-      }
-      return false;
+      return rowContainsFindFirstKey(tr, keyBase);
     }"""
     args = {"needle": drill_needle, "raw": drill_raw, "target": fn_ex}
 
