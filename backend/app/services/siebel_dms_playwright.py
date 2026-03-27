@@ -3699,9 +3699,6 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
             except Exception:
                 pass
 
-    # Exact-input path first (from provided DOM snippet), then label fallback.
-    _read_first_name_probe()
-
     exact_selectors = (
         "input[aria-label=\"Relation's Name\"]",
         "textarea[aria-label=\"Relation's Name\"]",
@@ -3710,40 +3707,55 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
         "input[aria-labelledby=\"Relation's_Name_Label_4\"]",
         "input.s_4_1_89_0",
     )
-    for fl in _iter_frame_locator_roots(page, content_frame_selector):
-        for css in exact_selectors:
+
+    # Outer retry: when Siebel is slow the detail form may not be rendered yet.
+    for _outer in range(4):
+        _read_first_name_probe()
+
+        # #region agent log — relation name scan attempt
+        import json as _j_rn, time as _t_rn
+        try:
+            with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
+                _lf.write(_j_rn.dumps({"sessionId":"08e634","hypothesisId":"RN1","location":"siebel_dms_playwright.py:relation_name_scan","message":"Relation Name scan attempt","data":{"attempt": _outer},"timestamp":int(_t_rn.time()*1000)}) + "\n")
+        except Exception:
+            pass
+        # #endregion
+
+        for fl in _iter_frame_locator_roots(page, content_frame_selector):
+            for css in exact_selectors:
+                try:
+                    loc = fl.locator(css).first
+                    if _fill_with_retry(loc, care_val, attempts=3, visible_ms=900, _lbl=f"fl:{css[:40]}"):
+                        return _after_relation_fill_nav()
+                except Exception:
+                    continue
+        for frame in _ordered_frames(page):
+            for css in exact_selectors:
+                try:
+                    loc = frame.locator(css).first
+                    if _fill_with_retry(loc, care_val, attempts=3, visible_ms=900, _lbl=f"fr:{css[:40]}"):
+                        return _after_relation_fill_nav()
+                except Exception:
+                    continue
+
+        for fl in _iter_frame_locator_roots(page, content_frame_selector):
             try:
-                loc = fl.locator(css).first
-                if _fill_with_retry(loc, care_val, attempts=3, visible_ms=900, _lbl=f"fl:{css[:40]}"):
+                loc = fl.get_by_label("Relation's Name", exact=True).first
+                if _fill_with_retry(loc, care_val, attempts=3, visible_ms=700, _lbl="lbl_fl"):
                     return _after_relation_fill_nav()
             except Exception:
                 continue
-    for frame in _ordered_frames(page):
-        for css in exact_selectors:
+        for frame in _ordered_frames(page):
             try:
-                loc = frame.locator(css).first
-                if _fill_with_retry(loc, care_val, attempts=3, visible_ms=900, _lbl=f"fr:{css[:40]}"):
+                loc = frame.get_by_label("Relation's Name", exact=True).first
+                if _fill_with_retry(loc, care_val, attempts=3, visible_ms=700, _lbl="lbl_fr"):
                     return _after_relation_fill_nav()
             except Exception:
                 continue
 
-    # Restore earlier working style: label-based fill fallback.
-    for fl in _iter_frame_locator_roots(page, content_frame_selector):
-        try:
-            loc = fl.get_by_label("Relation's Name", exact=True).first
-            if _fill_with_retry(loc, care_val, attempts=3, visible_ms=700, _lbl="lbl_fl"):
-                return _after_relation_fill_nav()
-        except Exception:
-            continue
-    for frame in _ordered_frames(page):
-        try:
-            loc = frame.get_by_label("Relation's Name", exact=True).first
-            if _fill_with_retry(loc, care_val, attempts=3, visible_ms=700, _lbl="lbl_fr"):
-                return _after_relation_fill_nav()
-        except Exception:
-            continue
+        if _outer < 3:
+            _safe_page_wait(page, 1200 + _outer * 800, log_label=f"relation_name_outer_retry_{_outer}")
 
-    _read_first_name_probe()
     note("Could not fill Relation's Name on opened customer record (video SOP).")
     return False
 
