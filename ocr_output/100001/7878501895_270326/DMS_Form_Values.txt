@@ -12,8 +12,8 @@ Pin Code: 321028
 Relation (S/O or W/o): S/O
 Father or Husband Name: S/O Dull Chand
 Customer Budget (dummy enquiry): 89000
-Finance Required: Y
-Financier Name: Insurer Name (If Needed): Sompo
+Finance Required: N
+Financier Name: —
 DMS Contact Path: found
 Key num (partial): 1024
 Frame / Chassis num (partial): 53911
@@ -36,4 +36,4 @@ source_pin_code: 321028
 source_key_no: 1024
 source_frame_no: 53911
 source_engine_no: 03659
-generated_at: 27-03-2026 12:32:28
+generated_at: 27-03-2026 12:44:38

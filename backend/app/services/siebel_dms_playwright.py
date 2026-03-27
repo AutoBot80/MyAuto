@@ -5152,50 +5152,53 @@ def _create_order(
             if _fin_post_err:
                 return False, f"Siebel error after Financier/Financer input: {_fin_post_err[:200]}", scraped
 
-        _hyp_val = "Y" if _is_financed else "N"
-        _hyp_ok = False
-        for root in _roots():
+        if _is_financed:
+            _hyp_val = "Y"
+            _hyp_ok = False
+            for root in _roots():
+                try:
+                    for _lbl in ("Hypothecation", "Hpothecation"):
+                        if _fill_by_label_on_frame(root, _lbl, _hyp_val, action_timeout_ms=action_timeout_ms):
+                            _hyp_ok = True
+                            _locked_root = root
+                            break
+                        if _select_dropdown_by_label_on_frame(
+                            root,
+                            label=_lbl,
+                            value=_hyp_val,
+                            action_timeout_ms=min(action_timeout_ms, 8000),
+                        ):
+                            _hyp_ok = True
+                            _locked_root = root
+                            break
+                    if _hyp_ok:
+                        break
+                except Exception:
+                    continue
+            if not _hyp_ok:
+                return False, f"Could not set Hypothecation = {_hyp_val}.", scraped
+            _safe_page_wait(page, 400, log_label="after_hypothecation")
+            note(f"Create Order: set Hypothecation = {_hyp_val}.")
+            # #region agent log — hypothecation set outcome
             try:
-                for _lbl in ("Hypothecation", "Hpothecation"):
-                    if _fill_by_label_on_frame(root, _lbl, _hyp_val, action_timeout_ms=action_timeout_ms):
-                        _hyp_ok = True
-                        _locked_root = root
-                        break
-                    if _select_dropdown_by_label_on_frame(
-                        root,
-                        label=_lbl,
-                        value=_hyp_val,
-                        action_timeout_ms=min(action_timeout_ms, 8000),
-                    ):
-                        _hyp_ok = True
-                        _locked_root = root
-                        break
-                if _hyp_ok:
-                    break
+                with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
+                    _lf.write(_j_fin.dumps({
+                        "sessionId": "08e634",
+                        "runId": "pre-fix",
+                        "hypothesisId": "H3",
+                        "location": "siebel_dms_playwright.py:_create_order_hypothecation_outcome",
+                        "message": "Hypothecation set result",
+                        "data": {
+                            "hypothecation_target": _hyp_val,
+                            "hypothecation_set": bool(_hyp_ok),
+                        },
+                        "timestamp": int(_t_fin.time() * 1000),
+                    }) + "\n")
             except Exception:
-                continue
-        if not _hyp_ok:
-            return False, f"Could not set Hypothecation = {_hyp_val}.", scraped
-        _safe_page_wait(page, 400, log_label="after_hypothecation")
-        note(f"Create Order: set Hypothecation = {_hyp_val}.")
-        # #region agent log — hypothecation set outcome
-        try:
-            with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-                _lf.write(_j_fin.dumps({
-                    "sessionId": "08e634",
-                    "runId": "pre-fix",
-                    "hypothesisId": "H3",
-                    "location": "siebel_dms_playwright.py:_create_order_hypothecation_outcome",
-                    "message": "Hypothecation set result",
-                    "data": {
-                        "hypothecation_target": _hyp_val,
-                        "hypothecation_set": bool(_hyp_ok),
-                    },
-                    "timestamp": int(_t_fin.time() * 1000),
-                }) + "\n")
-        except Exception:
-            pass
-        # #endregion
+                pass
+            # #endregion
+        else:
+            note("Create Order: financier empty — skipped Financier and Hypothecation fields.")
         if _locked_root is not None:
             try:
                 note(f"Create Order: locked booking form context for Contact Last Name/F2 (url={(getattr(_locked_root, 'url', '') or '')[:120]!r}).")

@@ -48,6 +48,13 @@ function normalizeFinancierInput(value: unknown): string | undefined {
   const low = v.toLowerCase();
   // OCR sometimes returns the placeholder label instead of an actual financer name.
   if (
+    low.includes("insurer name (if needed)") ||
+    low.includes("insurer name if needed") ||
+    low.includes("insurance provider")
+  ) {
+    return undefined;
+  }
+  if (
     low === "insurer name (if needed)" ||
     low === "insurer name if needed" ||
     low === "insurer name" ||
@@ -166,6 +173,7 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError,
       const r = ins as Record<string, unknown>;
       setExtractedInsurance((prev) => {
         const current = prev ?? {};
+        const currentFinancier = normalizeFinancierInput(current.financier);
         const fromServer = {
           profession: typeof r.profession === "string" ? r.profession : undefined,
           financier: normalizeFinancierInput(r.financier),
@@ -183,7 +191,7 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError,
         return {
           ...current,
           profession: current.profession && current.profession.trim() !== "" ? current.profession : fromServer.profession,
-          financier: current.financier && current.financier.trim() !== "" ? current.financier : fromServer.financier,
+          financier: currentFinancier ?? fromServer.financier,
           marital_status:
             current.marital_status && current.marital_status.trim() !== ""
               ? current.marital_status
@@ -490,6 +498,7 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError,
           const r = insPoll as Record<string, unknown>;
           setExtractedInsurance((prev) => {
             const current = prev ?? {};
+            const currentFinancier = normalizeFinancierInput(current.financier);
             const fromServer = {
               profession: typeof r.profession === "string" ? r.profession : undefined,
               financier: normalizeFinancierInput(r.financier),
@@ -507,7 +516,7 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError,
             return {
               ...current,
               profession: current.profession && current.profession.trim() !== "" ? current.profession : fromServer.profession,
-              financier: current.financier && current.financier.trim() !== "" ? current.financier : fromServer.financier,
+              financier: currentFinancier ?? fromServer.financier,
               marital_status:
                 current.marital_status && current.marital_status.trim() !== ""
                   ? current.marital_status
