@@ -8631,6 +8631,94 @@ def Playwright_Hero_DMS_fill(
                 ms_done("Add enquiry saved")
                 note(f"Add Enquiry saved with Enquiry#={ae2_enq_no!r} from Contact_Enquiry-null path.")
                 out.setdefault("vehicle", {})["enquiry_number"] = ae2_enq_no
+                # Re-find contact by mobile after add_enquiry (page navigated away)
+                note("Post Add Enquiry (existing customer): re-finding contact by mobile.")
+                ok_refind3 = _contact_view_find_by_mobile(
+                    page,
+                    contact_url=contact_url,
+                    mobile=mobile,
+                    nav_timeout_ms=nav_timeout_ms,
+                    action_timeout_ms=action_timeout_ms,
+                    content_frame_selector=content_frame_selector,
+                    mobile_aria_hints=mobile_aria_hints,
+                    note=note,
+                    step=step,
+                    stage_msg="Post Add Enquiry (existing customer): re-find customer by mobile.",
+                )
+                if not ok_refind3:
+                    step("Stopped: post Add Enquiry re-find by mobile failed.")
+                    out["error"] = (
+                        "Siebel: Add Enquiry was saved for existing customer, but follow-up "
+                        "Find→Contact by mobile did not complete."
+                    )
+                    return out
+                contact_matched3 = _siebel_ui_suggests_contact_match(page, mobile)
+                if not contact_matched3:
+                    step("Stopped: customer not visible after existing-customer Add Enquiry re-find.")
+                    out["error"] = (
+                        "Siebel: Add Enquiry saved for existing customer, but contact search still "
+                        "returned no table row after re-find."
+                    )
+                    return out
+                # Drill down into the contact record again
+                _drilled2 = False
+                _safe_page_wait(page, 1500, log_label="before_title_drilldown_after_add_enquiry")
+                _drill_needle2 = _mobile_needle_for_contact_grid_match(mobile)
+                _drill_raw2 = re.sub(r"\D", "", (mobile or "").strip())
+                for _dr_root2 in list(_siebel_locator_search_roots(page, content_frame_selector)) + list(_ordered_frames(page)) + [page]:
+                    if _drilled2:
+                        break
+                    for _dr_sel2 in ('a[name="Title"]', 'a[name="title"]'):
+                        try:
+                            _dr_locs2 = _dr_root2.locator(_dr_sel2)
+                            _dr_n2 = _dr_locs2.count()
+                            for _di2 in range(min(_dr_n2, 20)):
+                                _dr_el2 = _dr_locs2.nth(_di2)
+                                try:
+                                    if not _dr_el2.is_visible(timeout=500):
+                                        continue
+                                except Exception:
+                                    continue
+                                try:
+                                    _dr_txt2 = re.sub(r"\D", "", _dr_el2.inner_text(timeout=500) or "")
+                                except Exception:
+                                    _dr_txt2 = ""
+                                if _drill_needle2 and _drill_needle2 in _dr_txt2:
+                                    pass
+                                elif _drill_raw2 and len(_drill_raw2) >= 8 and _drill_raw2 in _dr_txt2:
+                                    pass
+                                else:
+                                    continue
+                                try:
+                                    _dr_el2.click(timeout=action_timeout_ms)
+                                    _drilled2 = True
+                                    break
+                                except Exception:
+                                    try:
+                                        _dr_el2.click(timeout=action_timeout_ms, force=True)
+                                        _drilled2 = True
+                                        break
+                                    except Exception:
+                                        continue
+                        except Exception:
+                            continue
+                if not _drilled2:
+                    _drilled2 = _siebel_try_click_mobile_search_hit_link(
+                        page, mobile, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector,
+                    )
+                if not _drilled2:
+                    step("Stopped: could not click Title drilldown after existing-customer Add Enquiry re-find.")
+                    out["error"] = (
+                        "Siebel: Add Enquiry saved for existing customer, re-find succeeded but could not "
+                        "click Title drilldown to open contact detail."
+                    )
+                    return out
+                note(f"Post Add Enquiry: clicked Title drilldown for mobile {mobile}.")
+                _safe_page_wait(page, 2000, log_label="after_title_drilldown_post_add_enquiry")
+                try:
+                    page.wait_for_load_state("networkidle", timeout=8_000)
+                except Exception:
+                    pass
             form_trace(
                 "v2_drill_and_nav",
                 "Search Results + Contacts detail",
