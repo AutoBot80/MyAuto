@@ -1400,7 +1400,15 @@ className="app-button app-button--primary"
                     <div className="add-sales-v2-dl-row-group">
                       <div className="add-sales-v2-dl-row">
                         <dt>Insurance Provider</dt>
-                        <dd>{ins?.insurer ?? "—"}</dd>
+                        <dd>
+                          <input
+                            type="text"
+                            className="add-sales-v2-dl-input"
+                            value={ins?.insurer ?? ""}
+                            onChange={(e) => setExtractedInsurance((prev) => ({ ...(prev ?? {}), insurer: e.target.value }))}
+                            placeholder="—"
+                          />
+                        </dd>
                       </div>
                     </div>
                     <div className="add-sales-v2-dl-row-group">

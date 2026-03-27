@@ -7,6 +7,9 @@
     "battery_no": "M725S259151AA61"
   },
   "customer": {
+    "gender": "Male",
+    "year_of_birth": "2014",
+    "date_of_birth": "23/10/2014",
     "name": "SITUTE",
     "care_of": "S/O Dull Chand",
     "city": "Bharatpur",
@@ -14,7 +17,6 @@
     "state": "Rajasthan",
     "pin_code": "321028",
     "address": "S/O Dull Chand, Jahangeerpur, PO: Jahangirpur, DIST: Bharatpur, Rajasthan - 321028",
-    "gender": "Male",
     "mobile_number": "7878501895",
     "alt_phone_num": "9602241068",
     "aadhar_id": "9281"

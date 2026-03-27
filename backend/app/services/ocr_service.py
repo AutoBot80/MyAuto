@@ -558,9 +558,6 @@ def _parse_aadhar_front_textract_fallback(text: str) -> dict[str, str]:
         r"(?i)/\s*D\.?B\.?\s*[:]?\s*(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{2,4})\b",
         # Standalone "DB:" or "D.B:" when followed immediately by a slash-date (avoid matching "db" in words).
         r"(?i)(?<![A-Za-z])D\.?B\.?\s*[:]?\s*(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{2,4})\b",
-        # Aadhaar letter: Hindi "जन्म तिथि/DOB:" garbles to "UTAH PMB:", "UTAH PAB:", etc.
-        # Catch-all: any word(s) + colon + date. Last so specific patterns take priority.
-        r":\s*(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{2,4})\b",
     ]
     for pat in dob_patterns:
         m = re.search(pat, t)
@@ -608,6 +605,23 @@ def _parse_aadhar_front_textract_fallback(text: str) -> dict[str, str]:
                 continue
             m = re.search(r"(\d{1,2})[/.\-](\d{1,2})[/.\-]((19|20)\d{2})\b", line)
             if m:
+                d, mo, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+                norm = _aadhar_normalize_dob_triplet(d, mo, y)
+                if norm:
+                    out["date_of_birth"] = norm
+                    out["year_of_birth"] = str(y)
+                    break
+
+    if "date_of_birth" not in out:
+        # Aadhaar letter: only one date is sandwiched between name and MALE/FEMALE.
+        # Find the last valid date before the gender token, excluding issue dates.
+        gender_pos = re.search(r"(?i)\b(MALE|FEMALE|Transgender)\b", t)
+        if gender_pos:
+            before_gender = t[: gender_pos.start()]
+            _triplet = re.compile(r"(?<!\d)(\d{1,2})[/.\-](\d{1,2})[/.\-]((?:19|20)\d{2})(?!\d)")
+            for m in reversed(list(_triplet.finditer(before_gender))):
+                if not _aadhar_dob_window_not_issue_date(t, m.start()):
+                    continue
                 d, mo, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
                 norm = _aadhar_normalize_dob_triplet(d, mo, y)
                 if norm:
@@ -680,6 +694,23 @@ def _parse_aadhar_name_from_aadhaar_textract(text: str) -> dict[str, str]:
     gov_line = re.compile(r"(?i)government\s+of\s+india")
     noise = re.compile(r"(?i)\b(famoy|family|service|assess|authority|unique)\b")
     candidates: list[str] = []
+
+    # Aadhaar letter: name is the first English title-case line after "Aadhaar no. issued:"
+    issued_re = re.compile(r"(?i)aadhaar\s+no\.?\s*\.?\s*issued")
+    for i, line in enumerate(lines[:25]):
+        if issued_re.search(line):
+            for next_line in lines[i + 1 : i + 5]:
+                if skip.search(next_line) or noise.search(next_line):
+                    continue
+                if re.search(r"\d", next_line):
+                    continue
+                if re.match(r"^[A-Za-z][A-Za-z\s.'-]{1,70}$", next_line):
+                    words = [w for w in next_line.split() if w.strip()]
+                    if 1 <= len(words) <= 6:
+                        out["name"] = next_line.strip()
+                        return out
+            break
+
     gov_idx = -1
     for i, line in enumerate(lines[:25]):
         if gov_line.search(line):
