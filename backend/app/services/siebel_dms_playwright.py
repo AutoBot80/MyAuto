@@ -4714,35 +4714,29 @@ def _click_nth_mobile_title_drilldown(
 def _contact_find_title_sweep_for_enquiry(
     page: Page,
     *,
-    contact_url: str,
     mobile: str,
     first_name: str | None,
     action_timeout_ms: int,
-    nav_timeout_ms: int,
     content_frame_selector: str | None,
     mobile_aria_hints: list[str],
     note,
     step,
-    refine_search_between_duplicates: Callable[[], bool] | None = None,
     max_title_ordinals: int = 12,
 ) -> tuple[bool, str, int, str | None]:
     """
-    Duplicate-mobile sweep: when the Find list shows **several rows with the same mobile** (often
-    **in the same frame**), open each in order (**ordinal** 0, 1, …): drill the row, switch to tab
-    **Contact_Enquiry**, then detect an open enquiry via ``#jqgh_s_1_l_Enquiry_`` and
-    ``input``/``textarea`` ``name=\"Enquiry_\"`` (see ``_contact_enquiry_tab_has_rows``). Between rows,
-    re-run Contact Find so the list is available again before the next drill.
+    Duplicate-mobile sweep: when the Find list shows **several rows with the same mobile**
+    (typically **Search Results** staying visible in a **left pane** while Contact / Enquiries load on
+    the right), click each drillable row **in-place** (**ordinal** 0, 1, …) — **no Contact Find re-run**
+    between rows. After each click, switch to **Contact_Enquiry** and detect an open enquiry via
+    ``#jqgh_s_1_l_Enquiry_`` and ``input``/``textarea`` ``name=\"Enquiry_\"``
+    (``_contact_enquiry_tab_has_rows``).
 
     ``first_name`` (when set) restricts **ordinal 0** drill targets (row must match Find key). For
-    **ordinal ≥ 1**, drills use **mobile-only** row/link matching so a second list row is not dropped
-    when Siebel omits or alters the first-name cell after re-find.
+    **ordinal ≥ 1**, drills use **mobile-only** row matching (same mobile in the list).
 
     Returns ``(has_existing_enquiry, enquiry_number, row_count, error_message)``.
     ``error_message`` set → caller must stop. If no error and ``has_existing_enquiry`` is False, every
     matching Title was opened and all had zero enquiry rows — caller may create a new enquiry.
-
-    ``refine_search_between_duplicates`` when provided: callable ``() -> bool`` run instead of plain
-    re-find when trying the 2nd+ Title (e.g. custom mobile + first + Go).
     """
     used_fallback_link = False
     ordinal = 0
@@ -4763,65 +4757,39 @@ def _contact_find_title_sweep_for_enquiry(
         )
     )
 
-    def _refind_before_next_duplicate_row() -> bool:
-        """
-        After drilling contact N−1, restore the **Find results list** before drilling row **ordinal**.
-
-        We still run the same **mobile + first name** Find (``*`` query on first name). We **do not**
-        require ``_siebel_ui_suggests_contact_match_mobile_first`` here: Siebel often omits the first
-        name token in list row DOM after navigate-back, which false-negatives and **aborts the sweep**
-        before ordinal 1+. We only require a **mobile table hit** and **enough drillable rows** for
-        the next index (``count >= ordinal + 1``).
-        """
-        ok_rf = _contact_view_find_by_mobile(
-            page,
-            contact_url=contact_url,
-            mobile=mobile,
-            nav_timeout_ms=nav_timeout_ms,
-            action_timeout_ms=action_timeout_ms,
-            content_frame_selector=content_frame_selector,
-            mobile_aria_hints=mobile_aria_hints,
-            note=note,
-            step=step,
-            stage_msg="Re-find Contact by mobile (duplicate row sweep — restore list).",
-            first_name=fn if fn else None,
-        )
-        if not ok_rf:
-            return False
-        _safe_page_wait(page, 1500, log_label="after_refind_duplicate_title_sweep")
-        _need = ordinal + 1
-        for _rit in range(5):
-            ok_mobile = bool(_siebel_ui_suggests_contact_match(page, mobile))
-            n_here = _contact_find_mobile_drilldown_occurrence_count(
+    while ordinal < max_title_ordinals:
+        drilled = False
+        if ordinal > 0:
+            note(
+                f"Duplicate mobile: click row {ordinal + 1} **in-place** (Search Results stay open; "
+                f"no re-find between rows)."
+            )
+            drilled = _click_nth_mobile_title_drilldown(
                 page,
                 mobile,
+                ordinal,
+                action_timeout_ms=action_timeout_ms,
                 content_frame_selector=content_frame_selector,
                 first_name_exact=None,
             )
             # #region agent log
             try:
-                import json as _j_sw
-                import time as _t_sw
-                from pathlib import Path as _p_sw
+                import json as _j_s3
+                import time as _t_s3
+                from pathlib import Path as _p_s3
 
-                _lfp = _p_sw(__file__).resolve().parents[3] / "debug-08e634.log"
-                with open(_lfp, "a", encoding="utf-8") as _lfs:
-                    _lfs.write(
-                        _j_sw.dumps(
+                _lf3 = _p_s3(__file__).resolve().parents[3] / "debug-08e634.log"
+                with open(_lf3, "a", encoding="utf-8") as _lf3f:
+                    _lf3f.write(
+                        _j_s3.dumps(
                             {
                                 "sessionId": "08e634",
                                 "runId": "post-fix",
-                                "hypothesisId": "E2",
-                                "location": "siebel_dms_playwright.py:_refind_before_next_duplicate_row",
-                                "message": "duplicate_sweep_refind_gate",
-                                "data": {
-                                    "ordinal": ordinal,
-                                    "need_rows": _need,
-                                    "n_drillable": n_here,
-                                    "ok_mobile_grid": ok_mobile,
-                                    "attempt": _rit,
-                                },
-                                "timestamp": int(_t_sw.time() * 1000),
+                                "hypothesisId": "E3",
+                                "location": "siebel_dms_playwright.py:_contact_find_title_sweep_for_enquiry",
+                                "message": "duplicate_row_in_place_drill",
+                                "data": {"ordinal": ordinal, "drilled": bool(drilled)},
+                                "timestamp": int(_t_s3.time() * 1000),
                             }
                         )
                         + "\n"
@@ -4829,45 +4797,47 @@ def _contact_find_title_sweep_for_enquiry(
             except Exception:
                 pass
             # #endregion
-            if ok_mobile and n_here >= _need:
+            if not drilled:
                 note(
-                    f"Duplicate sweep: list restored — mobile in grid, {n_here} drillable row(s) "
-                    f"(need ≥{_need} for index {ordinal})."
+                    f"In-place drill for duplicate row {ordinal + 1} failed — stopping sweep "
+                    f"(no Contact Find re-run; list should remain visible in split view)."
                 )
-                return True
-            note(
-                f"Duplicate sweep re-find: waiting for list (attempt {_rit + 1}/5) — "
-                f"mobile_grid={ok_mobile!r}, drillable={n_here}, need≥{_need}."
-            )
-            _safe_page_wait(page, 600, log_label=f"duplicate_refind_wait_{ordinal}_{_rit}")
-        return False
+                # #region agent log
+                try:
+                    import json as _j_s3b
+                    import time as _t_s3b
+                    from pathlib import Path as _p_s3b
 
-    while ordinal < max_title_ordinals:
-        if ordinal > 0:
-            note(
-                f"Duplicate mobile in Search Results: re-finding before Title match index {ordinal} "
-                f"to locate a contact that already has an enquiry."
-            )
-            if refine_search_between_duplicates is not None:
-                ok_between = refine_search_between_duplicates()
-            else:
-                ok_between = _refind_before_next_duplicate_row()
-            if not ok_between:
-                err = (
-                    "Siebel: could not re-open the contact Find list while checking duplicate mobile rows "
-                    f"(before Title index {ordinal})."
-                )
-                note(err)
-                return False, "", 0, err
+                    _lf3b = _p_s3b(__file__).resolve().parents[3] / "debug-08e634.log"
+                    with open(_lf3b, "a", encoding="utf-8") as _lf3bf:
+                        _lf3bf.write(
+                            _j_s3b.dumps(
+                                {
+                                    "sessionId": "08e634",
+                                    "runId": "post-fix",
+                                    "hypothesisId": "E3b",
+                                    "location": "siebel_dms_playwright.py:_contact_find_title_sweep_for_enquiry",
+                                    "message": "duplicate_in_place_failed_break_no_second_drill",
+                                    "data": {"ordinal": ordinal},
+                                    "timestamp": int(_t_s3b.time() * 1000),
+                                }
+                            )
+                            + "\n"
+                        )
+                except Exception:
+                    pass
+                # #endregion
+                break
 
-        drilled = _click_nth_mobile_title_drilldown(
-            page,
-            mobile,
-            ordinal,
-            action_timeout_ms=action_timeout_ms,
-            content_frame_selector=content_frame_selector,
-            first_name_exact=(fn if fn else None) if ordinal == 0 else None,
-        )
+        if not drilled:
+            drilled = _click_nth_mobile_title_drilldown(
+                page,
+                mobile,
+                ordinal,
+                action_timeout_ms=action_timeout_ms,
+                content_frame_selector=content_frame_selector,
+                first_name_exact=(fn if fn else None) if ordinal == 0 else None,
+            )
         if not drilled and ordinal == 0 and not used_fallback_link:
             drilled = _siebel_try_click_mobile_search_hit_link(
                 page,
@@ -4953,9 +4923,10 @@ def _contact_enquiry_tab_has_rows(
     """
     Open Contact_Enquiry tab and check whether Enquiry grid has data rows **on the opened contact**.
 
-    Detection: header ``#jqgh_s_1_l_Enquiry_`` (or **Enquiry#** text), then non-empty values on
-    ``input`` / ``textarea`` ``name=\"Enquiry_\"``; table cell scrape is a fallback. Frames are
-    scanned with **main document first** (usual place for post-drill contact UI), then Siebel iframes.
+    Detection: header ``#jqgh_s_1_l_Enquiry_`` (or **Enquiry#** / **Enquiries** text), then non-empty
+    values on ``input`` / ``textarea`` ``name=\"Enquiry_\"``; table cell scrape; Hero **Enquiry#** as
+    visible ``<a>`` (e.g. ``11870-01-SENQ-0623-305``) inside **.siebui-applet** when the applet text
+    references enquiries. Frames: **main first**, then Siebel iframes.
     """
     _clicked = _siebel_try_click_named_in_frames(
         page,
@@ -4966,6 +4937,31 @@ def _contact_enquiry_tab_has_rows(
     )
     if not _clicked:
         note("Contact_Enquiry tab not clickable (could not verify enquiry rows).")
+        # #region agent log
+        try:
+            import json as _j_ec
+            import time as _t_ec
+            from pathlib import Path as _p_ec
+
+            _lpc = _p_ec(__file__).resolve().parents[3] / "debug-08e634.log"
+            with open(_lpc, "a", encoding="utf-8") as _lfc:
+                _lfc.write(
+                    _j_ec.dumps(
+                        {
+                            "sessionId": "08e634",
+                            "runId": "enquiry-detect",
+                            "hypothesisId": "H1",
+                            "location": "siebel_dms_playwright.py:_contact_enquiry_tab_has_rows",
+                            "message": "contact_enquiry_tab_click_failed",
+                            "data": {},
+                            "timestamp": int(_t_ec.time() * 1000),
+                        }
+                    )
+                    + "\n"
+                )
+        except Exception:
+            pass
+        # #endregion
         return False, 0, ""
 
     _safe_page_wait(page, 900, log_label="after_contact_enquiry_tab")
@@ -4983,18 +4979,114 @@ def _contact_enquiry_tab_has_rows(
         const s = String(v || '').trim();
         return !s || s === '-' || s === '—';
       };
+      const nameLooksEnquiryCol = (nm) => {
+         const n = norm(nm || '').replace(/_/g, '');
+         if (!n) return false;
+         if (!n.includes('enquiry')) return false;
+         if (n.includes('enquirysource')) return false;
+         if (n.includes('enquirytype')) return false;
+         return true;
+      };
+
+      // Hero Connect: Enquiry# is often a blue <a> like 11870-01-SENQ-0623-305 (hyphens + SENQ).
+      const textLooksLikeHeroEnquiryKey = (t) => {
+        const s = String(t || '').replace(/^\\s+|\\s+$/g, '').trim();
+        if (s.length < 8 || s.length > 120) return false;
+        if (/SENQ/i.test(s)) return true;
+        if (/SCON/i.test(s) && /\\d+-\\d+-/.test(s)) return false;
+        if (/^\\d[\\dA-Z]*(?:-[\\dA-Z]+){2,}$/i.test(s) && s.includes('-')) return true;
+        return false;
+      };
+
+      const heroLinksInApplet = () => {
+        let best = '';
+        let cnt = 0;
+        let scope = 'none';
+        const tryAp = (root) => {
+          for (const a of root.querySelectorAll('a')) {
+            if (!vis(a)) continue;
+            const t = (a.textContent || '').trim();
+            if (!textLooksLikeHeroEnquiryKey(t)) continue;
+            cnt += 1;
+            if (!best) best = t;
+          }
+        };
+        const applets = Array.from(document.querySelectorAll('.siebui-applet')).filter(vis);
+        for (const ap of applets) {
+          const snip = norm(ap.innerText || '').slice(0, 1200);
+          if (!snip.includes('enquiries') && !snip.includes('enquiry#') && !snip.includes('enquiry #')) continue;
+          tryAp(ap);
+          if (cnt > 0) scope = 'applet';
+        }
+        if (cnt === 0) {
+          tryAp(document.body || document.documentElement);
+          if (cnt > 0) scope = 'global';
+        }
+        return { cnt, best, scope };
+      };
 
       let headerFound = !!document.querySelector('#jqgh_s_1_l_Enquiry_');
+      let jqghIdHit = '';
+      if (headerFound) {
+        const _jid = document.querySelector('#jqgh_s_1_l_Enquiry_');
+        if (_jid) jqghIdHit = String(_jid.id || '').slice(0, 80);
+      }
+      if (!headerFound) {
+        const jqhAll = Array.from(document.querySelectorAll('[id^="jqgh_"]'));
+        for (const el of jqhAll) {
+          const id = String(el.id || '');
+          if (/enquiry/i.test(id) && /jqgh/i.test(id)) {
+            headerFound = true;
+            jqghIdHit = id.slice(0, 80);
+            break;
+          }
+        }
+      }
       if (!headerFound) {
         const hdrNodes = Array.from(document.querySelectorAll('th, td, div, span, a'));
         for (const n of hdrNodes) {
-          if (norm(n.textContent || '') === 'enquiry#' || norm(n.textContent || '') === 'enquiry #') {
+          const t = norm(n.textContent || '');
+          if (t === 'enquiry#' || t === 'enquiry #' || t === 'enquiry no' || t === 'enquiry no.'
+              || t === 'enquiries'
+              || (t.includes('enquiry') && (t.includes('#') || t.includes('no')))) {
             headerFound = true;
             break;
           }
         }
       }
-      if (!headerFound) return { checked: false, rowCount: 0, enquiryNumber: '' };
+      const allInputs = Array.from(document.querySelectorAll('input, textarea'));
+      const fuzzyNamed = allInputs.filter((el) => nameLooksEnquiryCol(el.getAttribute('name')));
+      const fuzzyNonEmpty = fuzzyNamed.filter((el) => !isEmptyEnq(el.value));
+      const sampleEnquiryNames = fuzzyNamed.slice(0, 12).map((el) => String(el.getAttribute('name') || '').slice(0, 72));
+
+      if (!headerFound) {
+        const _hl = heroLinksInApplet();
+        if (_hl.cnt > 0 && _hl.best) {
+          return {
+            checked: true, rowCount: _hl.cnt, enquiryNumber: _hl.best,
+            diag: {
+              headerFound: false, jqghIdHit,
+              exactEnquiryUnderscore: document.querySelectorAll('input[name="Enquiry_"], textarea[name="Enquiry_"]').length,
+              fuzzyEnquiryNameFields: fuzzyNamed.length,
+              fuzzyNonEmptyValues: fuzzyNonEmpty.length,
+              sampleEnquiryNames,
+              usedHeroLinkScan: true,
+              heroLinkScope: _hl.scope,
+            },
+          };
+        }
+        return {
+          checked: false, rowCount: 0, enquiryNumber: '',
+          diag: {
+            headerFound: false, jqghIdHit,
+            exactEnquiryUnderscore: document.querySelectorAll('input[name="Enquiry_"], textarea[name="Enquiry_"]').length,
+            fuzzyEnquiryNameFields: fuzzyNamed.length,
+            fuzzyNonEmptyValues: fuzzyNonEmpty.length,
+            sampleEnquiryNames,
+            heroLinkScope: _hl.scope,
+          },
+        };
+      }
 
       let rowCount = 0;
       let enquiryNumber = '';
@@ -5009,11 +5101,53 @@ def _contact_enquiry_tab_has_rows(
         if (!enquiryNumber) enquiryNumber = v;
       }
       if (rowCount > 0) {
-        return { checked: true, rowCount, enquiryNumber };
+        return {
+          checked: true, rowCount, enquiryNumber,
+          diag: {
+            headerFound: true, jqghIdHit, usedFuzzyFallback: false,
+            exactEnquiryUnderscore: enqFields.length,
+            fuzzyEnquiryNameFields: fuzzyNamed.length,
+            fuzzyNonEmptyValues: fuzzyNonEmpty.length,
+            sampleEnquiryNames,
+          },
+        };
+      }
+
+      const valueLooksLikeEnquiryNo = (v) => {
+        const s = String(v || '').trim();
+        if (s.length < 3 || s.length > 120) return false;
+        if (/SENQ/i.test(s)) return true;
+        if (!/^[A-Z0-9./\\s_-]+$/i.test(s)) return false;
+        return true;
+      };
+      if (rowCount === 0 && fuzzyNonEmpty.length > 0) {
+        const numLike = fuzzyNonEmpty.filter((el) => valueLooksLikeEnquiryNo(el.value));
+        if (numLike.length > 0) {
+          rowCount = numLike.length;
+          enquiryNumber = String(numLike[0].value != null ? numLike[0].value : '').trim();
+          return {
+            checked: true, rowCount, enquiryNumber,
+            diag: {
+              headerFound: true, jqghIdHit, usedFuzzyFallback: true,
+              exactEnquiryUnderscore: enqFields.length,
+              fuzzyEnquiryNameFields: fuzzyNamed.length,
+              fuzzyNonEmptyValues: fuzzyNonEmpty.length,
+              sampleEnquiryNames: fuzzyNamed.slice(0, 12).map((el) => String(el.getAttribute('name') || '').slice(0, 72)),
+            },
+          };
+        }
       }
 
       const tables = [];
-      const jqh = document.querySelector('#jqgh_s_1_l_Enquiry_');
+      let jqh = document.querySelector('#jqgh_s_1_l_Enquiry_');
+      if (!jqh) {
+        for (const el of document.querySelectorAll('[id^="jqgh_"]')) {
+          if (/enquiry/i.test(el.id || '')) {
+            jqh = el;
+            break;
+          }
+        }
+      }
       if (jqh) {
         const anc = jqh.closest('table');
         if (anc) tables.push(anc);
@@ -5023,7 +5157,9 @@ def _contact_enquiry_tab_has_rows(
       }
       for (const tbl of tables) {
         const ttxt = norm(tbl.innerText || '');
-        if (!ttxt.includes('enquiry#') && !ttxt.includes('enquiry #')) continue;
+        if (!ttxt.includes('enquiry#') && !ttxt.includes('enquiry #')
+            && !ttxt.includes('enquiries')
+            && !ttxt.includes('enquiry no') && !(ttxt.includes('enquiry') && ttxt.includes('no'))) continue;
 
         let enqColIdx = -1;
         const hdrRow = tbl.querySelector('thead tr, tr');
@@ -5031,7 +5167,8 @@ def _contact_enquiry_tab_has_rows(
           const hCells = hdrRow.querySelectorAll('th, td');
           for (let ci = 0; ci < hCells.length; ci++) {
             const ht = norm(hCells[ci].textContent || '');
-            if (ht === 'enquiry#' || ht === 'enquiry #') {
+            if (ht === 'enquiry#' || ht === 'enquiry #' || ht === 'enquiry no' || ht === 'enquiry no.'
+                || (ht.includes('enquiry') && (ht.includes('#') || ht.includes('no')))) {
               enqColIdx = ci;
               break;
             }
@@ -5069,7 +5206,11 @@ def _contact_enquiry_tab_has_rows(
               }
               const a = cell.querySelector('a');
               const t = ((a ? a.textContent : cell.textContent) || '').trim();
-              if (t && /^[A-Z0-9_-]{5,}$/i.test(t) && !norm(t).includes('enquiry')) {
+              if (t && textLooksLikeHeroEnquiryKey(t)) {
+                enquiryNumber = t;
+                break;
+              }
+              if (t && /^[A-Z0-9][A-Z0-9._-]{2,}$/i.test(t) && !norm(t).includes('enquiry')) {
                 enquiryNumber = t;
                 break;
               }
@@ -5077,7 +5218,29 @@ def _contact_enquiry_tab_has_rows(
           }
         }
       }
-      return { checked: true, rowCount, enquiryNumber };
+      let usedHeroAtEnd = false;
+      let heroScopeEnd = '';
+      if (!enquiryNumber || rowCount === 0) {
+        const _hle = heroLinksInApplet();
+        if (_hle.cnt > 0 && _hle.best) {
+          if (!enquiryNumber) enquiryNumber = _hle.best;
+          if (rowCount === 0) rowCount = _hle.cnt;
+          usedHeroAtEnd = true;
+          heroScopeEnd = _hle.scope;
+        }
+      }
+      return {
+        checked: true, rowCount, enquiryNumber,
+        diag: {
+          headerFound: true, jqghIdHit, usedFuzzyFallback: false,
+          exactEnquiryUnderscore: enqFields.length,
+          fuzzyEnquiryNameFields: fuzzyNamed.length,
+          fuzzyNonEmptyValues: fuzzyNonEmpty.length,
+          sampleEnquiryNames,
+          usedHeroLinkScan: usedHeroAtEnd,
+          heroLinkScope: heroScopeEnd || undefined,
+        },
+      };
     }"""
 
     # #region agent log
@@ -5117,23 +5280,26 @@ def _contact_enquiry_tab_has_rows(
             _res = _r.evaluate(_js)
             if not _res:
                 continue
+            try:
+                _u = str(getattr(_r, "url", "") or "")[:120]
+            except Exception:
+                _u = ""
+            _diag = _res.get("diag") or {}
+            _enq_log(
+                "enquiry_frame_eval",
+                {
+                    "frame_url": _u,
+                    "is_main": _r == _main,
+                    "checked": bool(_res.get("checked")),
+                    "rowCount": int(_res.get("rowCount") or 0),
+                    "has_number": bool(str(_res.get("enquiryNumber") or "").strip()),
+                    "diag": _diag,
+                },
+            )
             if _res.get("checked"):
                 _any_checked = True
                 _cnt = int(_res.get("rowCount") or 0)
                 _enq_no = str(_res.get("enquiryNumber") or "").strip()
-                try:
-                    _u = str(getattr(_r, "url", "") or "")[:120]
-                except Exception:
-                    _u = ""
-                _enq_log(
-                    "enquiry_grid_probe",
-                    {
-                        "frame_url": _u,
-                        "rowCount": _cnt,
-                        "has_number": bool(_enq_no),
-                        "is_main": _r == _main,
-                    },
-                )
                 if _cnt > 0 and _r == _main:
                     return True, _cnt, _enq_no
                 if _cnt > _best_cnt:
@@ -10528,11 +10694,9 @@ def Playwright_Hero_DMS_fill(
             # Drill each Title row (exact mobile + first) until Contact_Enquiry subgrid has a data row.
             _has_enq, _enq_number, _enq_rows, _sweep_err = _contact_find_title_sweep_for_enquiry(
                 page,
-                contact_url=contact_url,
                 mobile=mobile,
                 first_name=video_first_name,
                 action_timeout_ms=action_timeout_ms,
-                nav_timeout_ms=nav_timeout_ms,
                 content_frame_selector=content_frame_selector,
                 mobile_aria_hints=mobile_aria_hints,
                 note=note,
