@@ -450,6 +450,38 @@ def _try_fill_mobile_and_find_in_contact_applet(
     """
     if not (mobile or "").strip():
         return False
+
+    # #region agent log - contact find same-frame diagnostics
+    def _dbg(hypothesis_id: str, message: str, data: dict) -> None:
+        try:
+            import json as _j_dbg, time as _t_dbg
+            with open("debug-08e634.log", "a", encoding="utf-8") as _lf_dbg:
+                _lf_dbg.write(
+                    _j_dbg.dumps(
+                        {
+                            "sessionId": "08e634",
+                            "runId": "pre-fix",
+                            "hypothesisId": hypothesis_id,
+                            "location": "siebel_dms_playwright.py:_try_fill_mobile_and_find_in_contact_applet",
+                            "message": message,
+                            "data": data,
+                            "timestamp": int(_t_dbg.time() * 1000),
+                        }
+                    )
+                    + "\n"
+                )
+        except Exception:
+            pass
+    # #endregion
+    _dbg(
+        "H1",
+        "contact_find_entry",
+        {
+            "has_mobile": bool((mobile or "").strip()),
+            "has_first_name": bool((first_name or "").strip()),
+            "first_name_len": len((first_name or "").strip()),
+        },
+    )
     mobile_selectors = _mobile_selectors(mobile_aria_hints)
     mobile_selectors = [
         'input[title="Mobile Phone"]',
@@ -596,6 +628,37 @@ def _try_fill_mobile_and_find_in_contact_applet(
 
             fn = (first_name or "").strip()
             if fn:
+                # #region agent log - same applet selector visibility
+                _strict_id_count = 0
+                _strict_id_visible = False
+                _fallback_selector_hits = 0
+                try:
+                    _strict = applet.locator('input#field_textbox_1, input[id="field_textbox_1"]')
+                    _strict_id_count = _strict.count()
+                    if _strict_id_count > 0:
+                        try:
+                            _strict_id_visible = _strict.first.is_visible(timeout=300)
+                        except Exception:
+                            _strict_id_visible = False
+                except Exception:
+                    pass
+                for _s in _SIEBEL_FIND_FIRST_NAME_SELECTORS:
+                    try:
+                        _l = applet.locator(_s)
+                        if _l.count() > 0:
+                            _fallback_selector_hits += 1
+                    except Exception:
+                        continue
+                _dbg(
+                    "H2",
+                    "first_name_selector_probe_same_applet",
+                    {
+                        "strict_id_count": _strict_id_count,
+                        "strict_id_visible": _strict_id_visible,
+                        "fallback_selector_hits": _fallback_selector_hits,
+                    },
+                )
+                # #endregion
                 fn_filled = False
                 for css in _SIEBEL_FIND_FIRST_NAME_SELECTORS:
                     try:
@@ -617,6 +680,13 @@ def _try_fill_mobile_and_find_in_contact_applet(
                     except Exception:
                         pass
                 if not fn_filled:
+                    _dbg(
+                        "H3",
+                        "first_name_not_filled_in_same_applet",
+                        {
+                            "reason": "selectors_not_visible_or_fill_failed",
+                        },
+                    )
                     continue
 
             _safe_page_wait(page, 150, log_label="contact_applet_mobile_filled")
@@ -629,6 +699,11 @@ def _try_fill_mobile_and_find_in_contact_applet(
                             btn.click(timeout=timeout_ms)
                         except Exception:
                             btn.click(timeout=timeout_ms, force=True)
+                        _dbg(
+                            "H4",
+                            "find_clicked_same_applet",
+                            {"used_selector": css, "had_first_name": bool(fn)},
+                        )
                         return True
                 except Exception:
                     continue
@@ -640,6 +715,11 @@ def _try_fill_mobile_and_find_in_contact_applet(
                         btn.click(timeout=timeout_ms)
                     except Exception:
                         btn.click(timeout=timeout_ms, force=True)
+                    _dbg(
+                        "H4",
+                        "find_clicked_same_applet_title_fallback",
+                        {"had_first_name": bool(fn)},
+                    )
                     return True
             except Exception:
                 pass
@@ -652,6 +732,7 @@ def _try_fill_mobile_and_find_in_contact_applet(
                 logger.info(
                     "siebel_dms: filled first visible input + clicked Find in right Contact popup (DOM fallback)"
                 )
+                _dbg("H5", "dom_fallback_used_for_mobile", {"first_name_required": bool((first_name or "").strip())})
                 return True
         except Exception:
             continue
@@ -668,6 +749,7 @@ def _try_fill_mobile_and_find_in_contact_applet(
                 return True
         except Exception:
             continue
+    _dbg("H1", "contact_find_same_frame_failed_all_roots", {"first_name_required": bool((first_name or "").strip())})
     return False
 
 
