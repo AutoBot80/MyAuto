@@ -5052,6 +5052,28 @@ def _create_order(
         _fin_name = (financier_name or "").strip()
         _is_financed = bool(_fin_name)
         _fin_val = "Y" if _is_financed else "N"
+        # #region agent log — finance branch input
+        try:
+            with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
+                import json as _j_fin, time as _t_fin
+                _fin_token = _fin_name.lower()
+                _lf.write(_j_fin.dumps({
+                    "sessionId": "08e634",
+                    "runId": "pre-fix",
+                    "hypothesisId": "H1_H2",
+                    "location": "siebel_dms_playwright.py:_create_order_finance_input",
+                    "message": "Finance branch decision inputs",
+                    "data": {
+                        "financier_present": bool(_fin_name),
+                        "financier_len": len(_fin_name),
+                        "financier_token": _fin_token if _fin_token in ("", "na", "n/a", "null", "none", "-") else "other",
+                        "finance_required_target": _fin_val,
+                    },
+                    "timestamp": int(_t_fin.time() * 1000),
+                }) + "\n")
+        except Exception:
+            pass
+        # #endregion
 
         _fin_ok = False
         for root in _roots():
@@ -5078,6 +5100,24 @@ def _create_order(
             return False, f"Could not set Finance Required = {_fin_val}.", scraped
         _safe_page_wait(page, 400, log_label="after_finance_required")
         note(f"Create Order: set Finance Required = {_fin_val}.")
+        # #region agent log — finance required set outcome
+        try:
+            with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
+                _lf.write(_j_fin.dumps({
+                    "sessionId": "08e634",
+                    "runId": "pre-fix",
+                    "hypothesisId": "H3",
+                    "location": "siebel_dms_playwright.py:_create_order_finance_required_outcome",
+                    "message": "Finance Required set result",
+                    "data": {
+                        "finance_required_target": _fin_val,
+                        "finance_required_set": bool(_fin_ok),
+                    },
+                    "timestamp": int(_t_fin.time() * 1000),
+                }) + "\n")
+        except Exception:
+            pass
+        # #endregion
 
         if _is_financed:
             _fin_name_ok = False
@@ -5138,6 +5178,24 @@ def _create_order(
             return False, f"Could not set Hypothecation = {_hyp_val}.", scraped
         _safe_page_wait(page, 400, log_label="after_hypothecation")
         note(f"Create Order: set Hypothecation = {_hyp_val}.")
+        # #region agent log — hypothecation set outcome
+        try:
+            with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
+                _lf.write(_j_fin.dumps({
+                    "sessionId": "08e634",
+                    "runId": "pre-fix",
+                    "hypothesisId": "H3",
+                    "location": "siebel_dms_playwright.py:_create_order_hypothecation_outcome",
+                    "message": "Hypothecation set result",
+                    "data": {
+                        "hypothecation_target": _hyp_val,
+                        "hypothecation_set": bool(_hyp_ok),
+                    },
+                    "timestamp": int(_t_fin.time() * 1000),
+                }) + "\n")
+        except Exception:
+            pass
+        # #endregion
         if _locked_root is not None:
             try:
                 note(f"Create Order: locked booking form context for Contact Last Name/F2 (url={(getattr(_locked_root, 'url', '') or '')[:120]!r}).")
@@ -5554,6 +5612,24 @@ def _create_order(
 
                 # OK button — search fresh roots, fallback Enter
                 _ok_clicked = False
+                # #region agent log — applet ok precheck
+                try:
+                    with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
+                        _lf.write(_j_f2.dumps({
+                            "sessionId": "08e634",
+                            "runId": "pre-fix",
+                            "hypothesisId": "H4_H5",
+                            "location": "siebel_dms_playwright.py:create_order_applet_ok_precheck",
+                            "message": "Preparing to click applet OK",
+                            "data": {
+                                "fresh_roots_count": len(_fresh_roots2),
+                                "row_matched": bool(_row_ok),
+                            },
+                            "timestamp": int(_t_f2.time() * 1000),
+                        }) + "\n")
+                except Exception:
+                    pass
+                # #endregion
                 for r2 in _fresh_roots2:
                     try:
                         for _ok_sel in (
@@ -5575,6 +5651,24 @@ def _create_order(
                         continue
                 if not _ok_clicked:
                     page.keyboard.press("Enter")
+                # #region agent log — applet ok click outcome
+                try:
+                    with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
+                        _lf.write(_j_f2.dumps({
+                            "sessionId": "08e634",
+                            "runId": "pre-fix",
+                            "hypothesisId": "H4",
+                            "location": "siebel_dms_playwright.py:create_order_applet_ok_outcome",
+                            "message": "Applet OK click outcome",
+                            "data": {
+                                "ok_button_clicked": bool(_ok_clicked),
+                                "enter_fallback_used": not bool(_ok_clicked),
+                            },
+                            "timestamp": int(_t_f2.time() * 1000),
+                        }) + "\n")
+                except Exception:
+                    pass
+                # #endregion
                 _safe_page_wait(page, 1200, log_label="after_contact_pick_ok")
                 note(f"Create Order: confirmed OK on applet (button={_ok_clicked}).")
 
@@ -5599,7 +5693,43 @@ def _create_order(
                     except Exception:
                         continue
                 note(f"Create Order: post-contact applet readback — Pincode={_pin_rb!r}.")
+                # #region agent log — pincode readback outcome
+                try:
+                    with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
+                        _lf.write(_j_f2.dumps({
+                            "sessionId": "08e634",
+                            "runId": "pre-fix",
+                            "hypothesisId": "H6_H7",
+                            "location": "siebel_dms_playwright.py:create_order_pincode_readback",
+                            "message": "Pincode readback after contact applet",
+                            "data": {
+                                "pincode_non_empty": bool((_pin_rb or "").strip()),
+                                "pincode_len": len((_pin_rb or "").strip()),
+                            },
+                            "timestamp": int(_t_f2.time() * 1000),
+                        }) + "\n")
+                except Exception:
+                    pass
+                # #endregion
                 _applet_done = True
+                # #region agent log — applet completion flag
+                try:
+                    with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
+                        _lf.write(_j_f2.dumps({
+                            "sessionId": "08e634",
+                            "runId": "pre-fix",
+                            "hypothesisId": "H7",
+                            "location": "siebel_dms_playwright.py:create_order_applet_done_flag",
+                            "message": "Applet flow completion flag set",
+                            "data": {
+                                "applet_done": True,
+                                "pincode_non_empty": bool((_pin_rb or "").strip()),
+                            },
+                            "timestamp": int(_t_f2.time() * 1000),
+                        }) + "\n")
+                except Exception:
+                    pass
+                # #endregion
                 break
             except Exception:
                 continue
