@@ -3465,12 +3465,75 @@ def _siebel_ui_suggests_contact_match_mobile_first(page: Page, mobile: str, firs
       }
       return false;
     }"""
+    # #region agent log - mobile+first matcher diagnostics
+    def _dbg_mf(hypothesis_id: str, message: str, data: dict) -> None:
+        try:
+            import json as _j_mf, time as _t_mf
+            from pathlib import Path as _p_mf
+            _log_path = _p_mf(__file__).resolve().parents[3] / "debug-08e634.log"
+            with open(_log_path, "a", encoding="utf-8") as _lf_mf:
+                _lf_mf.write(
+                    _j_mf.dumps(
+                        {
+                            "sessionId": "08e634",
+                            "runId": "pre-fix",
+                            "hypothesisId": hypothesis_id,
+                            "location": "siebel_dms_playwright.py:_siebel_ui_suggests_contact_match_mobile_first",
+                            "message": message,
+                            "data": data,
+                            "timestamp": int(_t_mf.time() * 1000),
+                        }
+                    )
+                    + "\n"
+                )
+        except Exception:
+            pass
+    _dbg_mf(
+        "M1",
+        "match_entry",
+        {"needle": needle, "target_first_name": target},
+    )
+    diag_js = """([needle, target]) => {
+      const compact = (s) => String(s || '').replace(/\\s+/g, '');
+      const out = { table_rows_seen: 0, mobile_rows_seen: 0, first_exact_rows_seen: 0, sample_rows: [] };
+      const rows = Array.from(document.querySelectorAll('table tbody tr, table tr'));
+      for (const tr of rows) {
+        const tds = tr.querySelectorAll('td');
+        if (tds.length < 2) continue;
+        out.table_rows_seen += 1;
+        const rowText = String(tr.innerText || '');
+        const rowCompact = compact(rowText);
+        const hasMobile = needle && rowCompact.includes(needle);
+        let firstExact = false;
+        for (const td of tds) {
+          if (String(td.textContent || '').trim() === target) { firstExact = true; break; }
+        }
+        if (hasMobile) out.mobile_rows_seen += 1;
+        if (firstExact) out.first_exact_rows_seen += 1;
+        if (out.sample_rows.length < 3) {
+          out.sample_rows.push({
+            text: rowText.slice(0, 180),
+            has_mobile: hasMobile,
+            first_exact: firstExact,
+            td_count: tds.length
+          });
+        }
+      }
+      return out;
+    }"""
+    # #endregion
     for frame in _ordered_frames(page):
         try:
+            try:
+                _dbg_mf("M2", "frame_diag", frame.evaluate(diag_js, [needle, target]) or {})
+            except Exception:
+                _dbg_mf("M2", "frame_diag_eval_failed", {})
             if frame.evaluate(script, [needle, target]):
+                _dbg_mf("M3", "match_true_frame", {"matched": True})
                 return True
         except Exception:
             continue
+    _dbg_mf("M3", "match_false_all_frames", {"matched": False})
     return False
 
 
