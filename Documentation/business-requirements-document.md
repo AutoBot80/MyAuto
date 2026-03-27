@@ -148,6 +148,7 @@ This is the **intended** real-DMS order (aligned with the operator screen record
    - If one or more rows match (including **two+ rows with the same mobile in the same list frame**), automation **drills each row in order** (re-running Find between drills so the list is available again), then on **each** opened contact switches to tab **Contact_Enquiry** and inspects the enquiry subgrid.
    - A contact has an **open enquiry** when that subgrid shows **at least one populated** Enquiry# (non-empty **`input`/`textarea` `name="Enquiry_"`**; header may be **`div#jqgh_s_1_l_Enquiry_`** / **Enquiry#** in Open UI). Evaluation prefers the **main document** when it contains a hit, then Siebel iframes.
    - If multiple matching rows have open enquiry, select the **first** one and continue normal relation/payment/order flow.
+   - After drilling row *k* and finding no enquiry, automation returns to Find (**same** mobile + first name query), then continues: it requires the **mobile** to appear in the grid and **enough drillable rows** for the next index — not a strict first-name token match on the list row (Siebel often hides that after navigate-back).
 4. **No open enquiry in any matching row:**
    - Create a new enquiry with suffixed first name by appending dots: `first.`, then `first..`, etc.
    - Re-find by mobile + suffixed first name, drill into that contact, then continue to relation fill and downstream steps.
@@ -349,3 +350,4 @@ Bulk upload automates the ingestion of scanned documents from a shared folder in
 | 3.7 | Mar 2026 | — | **§6.1b**: Contact Find First Name field uses **starts-with** query (**`<first>*`**) so compound names in Siebel match the sheet’s single-token first name |
 | 3.8 | Mar 2026 | — | **§6.1b**: **open enquiry** detection on **Contact_Enquiry** reads Enquiry# from **`name="Enquiry_"`** fields (and related table scrape), plus frame aggregation for duplicate-mobile sweep |
 | 3.9 | Mar 2026 | — | **§6.1b**: duplicate-mobile sweep — **same-frame** multi-row list: drill **each** row, **Contact_Enquiry** per open; subgrid eval order **main document first** then iframes (**LLD** **6.10**) |
+| 3.10 | Mar 2026 | — | **§6.1b**: between duplicate drills, re-find gate uses **mobile** + **drillable row count** (not strict grid first-name match); ordinal ≥1 drill uses **mobile-only** row match so the second row is still targeted |

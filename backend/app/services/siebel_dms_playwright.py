@@ -4733,7 +4733,9 @@ def _contact_find_title_sweep_for_enquiry(
     ``input``/``textarea`` ``name=\"Enquiry_\"`` (see ``_contact_enquiry_tab_has_rows``). Between rows,
     re-run Contact Find so the list is available again before the next drill.
 
-    ``first_name`` (when set) restricts which list rows count as drill targets, consistent with Find.
+    ``first_name`` (when set) restricts **ordinal 0** drill targets (row must match Find key). For
+    **ordinal ≥ 1**, drills use **mobile-only** row/link matching so a second list row is not dropped
+    when Siebel omits or alters the first-name cell after re-find.
 
     Returns ``(has_existing_enquiry, enquiry_number, row_count, error_message)``.
     ``error_message`` set → caller must stop. If no error and ``has_existing_enquiry`` is False, every
@@ -4761,7 +4763,16 @@ def _contact_find_title_sweep_for_enquiry(
         )
     )
 
-    def _refind_plain() -> bool:
+    def _refind_before_next_duplicate_row() -> bool:
+        """
+        After drilling contact N−1, restore the **Find results list** before drilling row **ordinal**.
+
+        We still run the same **mobile + first name** Find (``*`` query on first name). We **do not**
+        require ``_siebel_ui_suggests_contact_match_mobile_first`` here: Siebel often omits the first
+        name token in list row DOM after navigate-back, which false-negatives and **aborts the sweep**
+        before ordinal 1+. We only require a **mobile table hit** and **enough drillable rows** for
+        the next index (``count >= ordinal + 1``).
+        """
         ok_rf = _contact_view_find_by_mobile(
             page,
             contact_url=contact_url,
@@ -4772,15 +4783,64 @@ def _contact_find_title_sweep_for_enquiry(
             mobile_aria_hints=mobile_aria_hints,
             note=note,
             step=step,
-            stage_msg="Re-find Contact by mobile (duplicate Title sweep).",
+            stage_msg="Re-find Contact by mobile (duplicate row sweep — restore list).",
             first_name=fn if fn else None,
         )
         if not ok_rf:
             return False
         _safe_page_wait(page, 1500, log_label="after_refind_duplicate_title_sweep")
-        if fn:
-            return bool(_siebel_ui_suggests_contact_match_mobile_first(page, mobile, fn))
-        return bool(_siebel_ui_suggests_contact_match(page, mobile))
+        _need = ordinal + 1
+        for _rit in range(5):
+            ok_mobile = bool(_siebel_ui_suggests_contact_match(page, mobile))
+            n_here = _contact_find_mobile_drilldown_occurrence_count(
+                page,
+                mobile,
+                content_frame_selector=content_frame_selector,
+                first_name_exact=None,
+            )
+            # #region agent log
+            try:
+                import json as _j_sw
+                import time as _t_sw
+                from pathlib import Path as _p_sw
+
+                _lfp = _p_sw(__file__).resolve().parents[3] / "debug-08e634.log"
+                with open(_lfp, "a", encoding="utf-8") as _lfs:
+                    _lfs.write(
+                        _j_sw.dumps(
+                            {
+                                "sessionId": "08e634",
+                                "runId": "post-fix",
+                                "hypothesisId": "E2",
+                                "location": "siebel_dms_playwright.py:_refind_before_next_duplicate_row",
+                                "message": "duplicate_sweep_refind_gate",
+                                "data": {
+                                    "ordinal": ordinal,
+                                    "need_rows": _need,
+                                    "n_drillable": n_here,
+                                    "ok_mobile_grid": ok_mobile,
+                                    "attempt": _rit,
+                                },
+                                "timestamp": int(_t_sw.time() * 1000),
+                            }
+                        )
+                        + "\n"
+                    )
+            except Exception:
+                pass
+            # #endregion
+            if ok_mobile and n_here >= _need:
+                note(
+                    f"Duplicate sweep: list restored — mobile in grid, {n_here} drillable row(s) "
+                    f"(need ≥{_need} for index {ordinal})."
+                )
+                return True
+            note(
+                f"Duplicate sweep re-find: waiting for list (attempt {_rit + 1}/5) — "
+                f"mobile_grid={ok_mobile!r}, drillable={n_here}, need≥{_need}."
+            )
+            _safe_page_wait(page, 600, log_label=f"duplicate_refind_wait_{ordinal}_{_rit}")
+        return False
 
     while ordinal < max_title_ordinals:
         if ordinal > 0:
@@ -4791,7 +4851,7 @@ def _contact_find_title_sweep_for_enquiry(
             if refine_search_between_duplicates is not None:
                 ok_between = refine_search_between_duplicates()
             else:
-                ok_between = _refind_plain()
+                ok_between = _refind_before_next_duplicate_row()
             if not ok_between:
                 err = (
                     "Siebel: could not re-open the contact Find list while checking duplicate mobile rows "
@@ -4806,7 +4866,7 @@ def _contact_find_title_sweep_for_enquiry(
             ordinal,
             action_timeout_ms=action_timeout_ms,
             content_frame_selector=content_frame_selector,
-            first_name_exact=fn if fn else None,
+            first_name_exact=(fn if fn else None) if ordinal == 0 else None,
         )
         if not drilled and ordinal == 0 and not used_fallback_link:
             drilled = _siebel_try_click_mobile_search_hit_link(
