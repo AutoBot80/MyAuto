@@ -4156,6 +4156,48 @@ def _siebel_try_click_vin_search_hit_link(
     return False
 
 
+def _siebel_try_activate_find_contact_context(
+    page: Page,
+    *,
+    action_timeout_ms: int,
+    content_frame_selector: str | None,
+    note,
+) -> None:
+    """
+    After **Contact_Enquiry** / enquiry subgrid work, Siebel often leaves a sub-tab active so the
+    upper **Contacts** list (First Name drilldown) is not in focus. Best-effort: activate **Find Contact**
+    (tab/link) or the **Contacts** list sub-tab (not **Contact_Enquiry**).
+    """
+    t = min(int(action_timeout_ms), 4500)
+    for pat, label in (
+        (re.compile(r"Find\s*Contact", re.I), "Find Contact"),
+        (re.compile(r"Find\s+Contact", re.I), "Find Contact"),
+    ):
+        if _siebel_try_click_named_in_frames(
+            page,
+            pat,
+            roles=("tab", "link", "button"),
+            timeout_ms=t,
+            content_frame_selector=content_frame_selector,
+        ):
+            note(f"Activated {label!r} tab/link — switching context for Contacts / First Name.")
+            _safe_page_wait(page, 900, log_label="after_find_contact_context_tab")
+            return
+    # Sub-view "Contacts" (list) vs "Contact_Enquiry" — exact name reduces accidental top-nav hits.
+    if _siebel_try_click_named_in_frames(
+        page,
+        re.compile(r"^\s*Contacts\s*$", re.I),
+        roles=("tab", "link"),
+        timeout_ms=t,
+        content_frame_selector=content_frame_selector,
+        max_candidates=8,
+    ):
+        note("Activated Contacts sub-tab (list) — leaving Contact_Enquiry for First Name column.")
+        _safe_page_wait(page, 900, log_label="after_contacts_list_subtab")
+        return
+    note("Find Contact / Contacts list tab not found — proceeding to First Name click anyway.")
+
+
 def _siebel_video_path_after_find_go_to_all_enquiries(
     page: Page,
     *,
@@ -4198,12 +4240,16 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
         _safe_page_wait(page, 1200, log_label="after_contact_drill_link")
     else:
         note("Skipped search-hit drilldown click (already opened by caller).")
+        _siebel_try_activate_find_contact_context(
+            page,
+            action_timeout_ms=action_timeout_ms,
+            content_frame_selector=content_frame_selector,
+            note=note,
+        )
 
     care_val = (care_of or "").strip()
-    if not care_val:
-        return True
 
-    # Deterministic navigation: after left hit, always open record via First Name.
+    # Deterministic navigation: open full contact via First Name in Contacts grid (even if care_of empty).
     opened_customer = _siebel_open_found_customer_record(
         page,
         mobile=mobile,
@@ -4217,6 +4263,10 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
         return False
 
     _safe_page_wait(page, 700, log_label="after_first_name_click_before_relation_fill")
+
+    if not care_val:
+        note("No care_of from DB — skipping Relation's Name / Address Line 1 fill after First Name drilldown.")
+        return True
 
     # DB rule: Address Line 1 should be the substring between first and second comma.
     addr_raw = (address_line_1 or "").strip()
@@ -10863,24 +10913,61 @@ def Playwright_Hero_DMS_fill(
                 )
                 return out
 
-            # Scrape Contact ID from the contact detail form (aria-label="Contact Id")
+            # Scrape Contact ID: detail inputs + Contacts grid **Contact Id** column (e.g. 11870-01-SCON-…).
             _contact_id = ""
-            for _cr in list(_ordered_frames(page)) + [page]:
+            _cid_js = """() => {
+                const vis = (el) => {
+                  if (!el) return false;
+                  const st = window.getComputedStyle(el);
+                  if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+                  const r = el.getBoundingClientRect();
+                  return r.width > 2 && r.height > 2;
+                };
+                const norm = (s) => String(s || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+                const sels = [
+                  "input[aria-label='Contact Id']",
+                  "[aria-labelledby='s_1_l_HHML_Contact_Seq_Num']",
+                  "input[aria-label*='Contact Id' i]",
+                  "input[name*='Contact_Id' i]",
+                  "input[name*='HHML_Contact' i]",
+                  "input[id*='Contact_Id' i]",
+                ];
+                for (const sel of sels) {
+                  const el = document.querySelector(sel);
+                  if (!el || !vis(el)) continue;
+                  const v = (el.value != null ? String(el.value) : (el.textContent || '')).trim();
+                  if (v && v.length > 2) return v;
+                }
+                for (const app of document.querySelectorAll('.siebui-applet')) {
+                  if (!vis(app)) continue;
+                  const blob = (app.innerText || '').toLowerCase();
+                  if (!blob.includes('contact')) continue;
+                  const table = app.querySelector('table');
+                  if (!table) continue;
+                  const heads = Array.from(table.querySelectorAll('thead th, thead td, tr th'));
+                  let idx = -1;
+                  heads.forEach((h, i) => {
+                    const ht = norm(h.innerText || '');
+                    if (idx < 0 && (ht === 'contact id' || ht.includes('contact id'))) idx = i;
+                  });
+                  if (idx < 0) continue;
+                  const rows = Array.from(table.querySelectorAll('tbody tr, tr')).filter(vis);
+                  for (const tr of rows) {
+                    if (!vis(tr)) continue;
+                    const cells = tr.querySelectorAll('td');
+                    if (idx >= cells.length) continue;
+                    const cell = cells[idx];
+                    if (!vis(cell)) continue;
+                    const a = cell.querySelector('a');
+                    const raw = ((a && a.textContent) ? a.textContent : (cell.textContent || '')).trim();
+                    if (raw && raw.length > 5 && (/scon/i.test(raw) || /^\\d+-\\d+-/i.test(raw))) return raw;
+                  }
+                }
+                return '';
+            }"""
+            for _cr in _ordered_frames(page):
                 try:
-                    _cid = _cr.evaluate("""() => {
-                        const sels = [
-                            "input[aria-label='Contact Id']",
-                            "[aria-labelledby='s_1_l_HHML_Contact_Seq_Num']",
-                            "input[aria-label*='Contact Id' i]",
-                        ];
-                        for (const sel of sels) {
-                            const el = document.querySelector(sel);
-                            if (!el) continue;
-                            const v = (el.value || el.textContent || '').trim();
-                            if (v && v.length > 2) return v;
-                        }
-                        return '';
-                    }""")
+                    _cid = _cr.evaluate(_cid_js)
                     if _cid:
                         _contact_id = str(_cid).strip()
                         break
