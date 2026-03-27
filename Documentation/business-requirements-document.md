@@ -135,6 +135,32 @@ This is the **intended** real-DMS order (aligned with the operator screen record
 | 5 | **Tenant-dependent gates (if shown)** | Handle or stop for operator: **Vehicle Digitization** (e.g. OTP), **Document Upload**, **Sanction Details**, **Validate GL Voucher**, **WOT Details** (if exchange), **Contacts → Payments**, finance/hypothecation dialogs. No invented clicks — follow persisted flags and visible prompts. |
 | 6 | **End of automation** | **Do not** click **Create Invoice**. Leave the **browser window open** for operator review (same session discipline as insurance automation). **Run Report** / GST PDF downloads are out of scope unless added under a separate FR. |
 
+### 6.1b Real Siebel Contact Find & Add Enquiry Rules (Normative)
+
+1. **Contact Find inputs (required):**
+   - Fill **Mobile** using field `title="Mobile Phone"` and **First Name** using `id="field_textbox_1"` **within the same frame**.
+   - First Name is mandatory. Empty/whitespace or placeholders (for example: `NA`, `N/A`, `null`, `none`, `-`, `.`, `..`) fail the run.
+2. **Search key and row eligibility:**
+   - Contact Find and row matching use **mobile + exact first name**.
+   - If **0 rows** match mobile+first name, run Add Enquiry with the **base first name** (no dot suffix).
+3. **Open enquiry decision for duplicates:**
+   - If one or more rows match, open each matching contact (top-to-bottom) and inspect tab **Contact_Enquiry**.
+   - A contact has an **open enquiry** when the enquiry subgrid below contact has **at least one populated row**.
+   - If multiple matching rows have open enquiry, select the **first** one and continue normal relation/payment/order flow.
+4. **No open enquiry in any matching row:**
+   - Create a new enquiry with suffixed first name by appending dots: `first.`, then `first..`, etc.
+   - Re-find by mobile + suffixed first name, drill into that contact, then continue to relation fill and downstream steps.
+5. **Post-save Enquiry# hard gate (Ctrl+S):**
+   - Capture Enquiry# before save.
+   - Poll Enquiry# after save at **0.5s**, **2.5s**, and **3.5s**.
+   - Success requires Enquiry# to **change** from pre-save value within these polls.
+   - If Enquiry# remains unchanged, treat as **hard failure** and stop.
+6. **Required logging:**
+   - Log pre-save Enquiry#, each timed poll value, selected contact row index for duplicate matches, and first-name suffix used (`.`, `..`, ...).
+7. **Vehicle Find field selectors (after Find → Vehicles):**
+   - Fill **VIN** using `id="field_textbox_0"` and **Engine#** using `id="field_textbox_2"` in the **same frame**.
+   - If those same-frame controls are not available/fillable, stop with failure (do not fall back to looser selector inference).
+
 ### 6.2 DMS Fields to Fill (Minimum Contract)
 
 | Page | Field label | Required source |
@@ -315,3 +341,5 @@ Bulk upload automates the ingestion of scanned documents from a shared folder in
 | 3.0 | Mar 2026 | — | **§6.1a** step **2a**: Add Enquiry opportunity form — expanded DB/scrape fields; **Financier** not automated; API error text includes concrete **`_add_enquiry_opportunity`** failure detail |
 | 3.1 | Mar 2026 | — | **BR-16** updated: Create Invoice now automated; **DMS scrape persistence**: all scraped values (Enquiry#, Order#, Invoice#, vehicle_ex_showroom_cost, cubic_capacity, vehicle_type) persisted to DB; `update_sales_master_from_dms_scrape` runs for real Siebel path |
 | 3.2 | Mar 2026 | — | Fill DMS service renamed to **`fill_hero_dms_service.py`**; execution guarded by **`dealer_ref.oem_id`** (Hero = `1`; otherwise error: **"Currently only Hero MotoCorp Limited is  configured as OEM"**) |
+| 3.3 | Mar 2026 | — | Added **§6.1b** normative rules for real Siebel Contact Find/Add Enquiry: same-frame selectors (**Mobile** `title="Mobile Phone"`, **First Name** `id="field_textbox_1"`), exact mobile+first matching, duplicate open-enquiry selection order, dot-suffix create path, and Enquiry# timed save gate (0.5s/2.5s/3.5s) with hard-fail logging |
+| 3.4 | Mar 2026 | — | **§6.1b** updated with strict Find→Vehicles selector rule: fill **VIN** `id="field_textbox_0"` and **Engine#** `id="field_textbox_2"` in the same frame; fail if unavailable |

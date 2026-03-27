@@ -452,6 +452,7 @@ def _try_fill_mobile_and_find_in_contact_applet(
         return False
     mobile_selectors = _mobile_selectors(mobile_aria_hints)
     mobile_selectors = [
+        'input[title="Mobile Phone"]',
         'input[title*="Mobile Phone" i]',
         'input[title*="Mobile Phone #" i]',
         'input[aria-label*="Mobile Phone" i]',
@@ -1170,12 +1171,16 @@ def _try_fill_vin_engine_in_vehicles_find_applet(
         return False
 
     vin_css = (
+        'input#field_textbox_0',
+        'input[id="field_textbox_0"]',
         'input[title*="VIN" i]',
         'input[aria-label*="VIN" i]',
         'input[title*="Chassis" i]',
         'input[aria-label*="Chassis" i]',
     )
     eng_css = (
+        'input#field_textbox_2',
+        'input[id="field_textbox_2"]',
         'input[title*="Engine#" i]',
         'input[title*="Engine #" i]',
         'input[aria-label*="Engine#" i]',
@@ -1183,76 +1188,6 @@ def _try_fill_vin_engine_in_vehicles_find_applet(
         'input[title^="Engine" i]',
         'input[aria-label*="Engine" i]',
     )
-
-    _FILL_VIN_ENGINE_RIGHT_PANEL_JS = """(args) => {
-      const chassisW = String(args.chassis || '').trim();
-      const engineW = String(args.engine || '').trim();
-      if (!chassisW || !engineW) return false;
-      const vis = (el) => {
-        if (!el) return false;
-        const st = window.getComputedStyle(el);
-        if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
-        const r = el.getBoundingClientRect();
-        return r.width >= 2 && r.height >= 2;
-      };
-      const isTxt = (el) => {
-        if (!el || el.tagName !== 'INPUT') return false;
-        const t = String(el.type || 'text').toLowerCase();
-        return !['hidden','submit','button','checkbox','radio','file','image'].includes(t);
-      };
-      const scorePanel = (d) => {
-        const t = (d.innerText || '').toLowerCase();
-        let s = 0;
-        if (t.includes('vin')) s += 5;
-        if (t.includes('engine')) s += 5;
-        if (t.includes('vehicle')) s += 2;
-        if (t.includes('registration')) s += 1;
-        return s;
-      };
-      const panelCandidates = Array.from(document.querySelectorAll('div'))
-        .filter(vis)
-        .filter((d) => {
-          const r = d.getBoundingClientRect();
-          if (r.width < 200 || r.width > 520 || r.height < 160 || r.height > 720) return false;
-          if (r.left < window.innerWidth * 0.48) return false;
-          return scorePanel(d) >= 8;
-        });
-      if (!panelCandidates.length) return false;
-      panelCandidates.sort((a, b) => scorePanel(b) - scorePanel(a));
-      for (const panel of panelCandidates) {
-        const inputs = Array.from(panel.querySelectorAll('input')).filter((i) => isTxt(i) && vis(i));
-        if (inputs.length < 2) continue;
-        const vinEl = inputs.find((i) => {
-          const t = String(i.getAttribute('title') || '').toLowerCase();
-          const a = String(i.getAttribute('aria-label') || '').toLowerCase();
-          return t.includes('vin') || a.includes('vin') || t.includes('chassis') || a.includes('chassis');
-        });
-        const engEl = inputs.find((i) => {
-          const t = String(i.getAttribute('title') || '').toLowerCase();
-          const a = String(i.getAttribute('aria-label') || '').toLowerCase();
-          return t.includes('engine') || a.includes('engine');
-        });
-        if (!vinEl || !engEl) continue;
-        try {
-          vinEl.focus();
-          vinEl.value = '';
-          vinEl.value = chassisW;
-          vinEl.dispatchEvent(new Event('input', { bubbles: true }));
-          vinEl.dispatchEvent(new Event('change', { bubbles: true }));
-          engEl.focus();
-          engEl.value = '';
-          engEl.value = engineW;
-          engEl.dispatchEvent(new Event('input', { bubbles: true }));
-          engEl.dispatchEvent(new Event('change', { bubbles: true }));
-          engEl.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
-          engEl.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
-        } catch (e) {
-          continue;
-        }
-        return true;
-      }
-      return false;
-    }"""
 
     def try_root(root) -> bool:
         applets: list = []
@@ -1286,44 +1221,17 @@ def _try_fill_vin_engine_in_vehicles_find_applet(
                 pass
 
         for applet in applets:
-            vin_loc = None
-            for css in vin_css:
-                try:
-                    loc = applet.locator(css).first
-                    if loc.count() > 0 and loc.is_visible(timeout=700):
-                        vin_loc = loc
-                        break
-                except Exception:
-                    continue
-            if vin_loc is None:
-                try:
-                    loc = applet.get_by_label(re.compile(r"^\s*VIN\s*$", re.I)).first
-                    if loc.count() > 0 and loc.is_visible(timeout=700):
-                        vin_loc = loc
-                except Exception:
-                    pass
-            eng_loc = None
-            for css in eng_css:
-                try:
-                    loc = applet.locator(css).first
-                    if loc.count() > 0 and loc.is_visible(timeout=700):
-                        eng_loc = loc
-                        break
-                except Exception:
-                    continue
-            if eng_loc is None:
-                for pat in (
-                    re.compile(r"Engine\s*#", re.I),
-                    re.compile(r"^\s*Engine\s*#\s*$", re.I),
+            try:
+                vin_loc = applet.locator('input#field_textbox_0, input[id="field_textbox_0"]').first
+                eng_loc = applet.locator('input#field_textbox_2, input[id="field_textbox_2"]').first
+                if (
+                    vin_loc.count() <= 0
+                    or eng_loc.count() <= 0
+                    or not vin_loc.is_visible(timeout=700)
+                    or not eng_loc.is_visible(timeout=700)
                 ):
-                    try:
-                        loc = applet.get_by_label(pat).first
-                        if loc.count() > 0 and loc.is_visible(timeout=700):
-                            eng_loc = loc
-                            break
-                    except Exception:
-                        continue
-            if vin_loc is None or eng_loc is None:
+                    continue
+            except Exception:
                 continue
             try:
                 try:
@@ -1344,19 +1252,6 @@ def _try_fill_vin_engine_in_vehicles_find_applet(
             except Exception:
                 continue
         return False
-
-    for frame in _ordered_frames(page):
-        try:
-            if bool(
-                frame.evaluate(
-                    _FILL_VIN_ENGINE_RIGHT_PANEL_JS,
-                    {"chassis": cw, "engine": ew},
-                )
-            ):
-                logger.info("siebel_dms: VIN+Engine filled via right-panel DOM fallback (Vehicles Find)")
-                return True
-        except Exception:
-            continue
 
     for fl in _iter_frame_locator_roots(page, content_frame_selector):
         try:
@@ -2240,11 +2135,18 @@ def _contact_view_find_by_mobile(
     )
     if scoped_applet_find_clicked:
         note(
-            "Filled mobile and clicked Find inside the Contact applet (scoped; includes first-field "
-            "right-popup fallback when labels are non-standard)."
+            "Filled Mobile (title='Mobile Phone') and First Name (id='field_textbox_1' when present) "
+            "in the same Contact Find frame and clicked Find."
         )
         _safe_page_wait(page, wait_after_go_ms, log_label="after_contact_find_go_scoped")
         return True
+
+    fn_req = (first_name or "").strip()
+    if fn_req:
+        note(
+            "Find failed in strict same-frame mode (Mobile title='Mobile Phone' + First Name id='field_textbox_1')."
+        )
+        return False
 
     def _attempt_fill_mobile() -> bool:
         ok = _try_fill_field(
@@ -2289,7 +2191,6 @@ def _contact_view_find_by_mobile(
     if not filled_mobile:
         return False
 
-    fn_req = (first_name or "").strip()
     if fn_req:
         if not _fill_first_name_in_find_roots(
             page,
@@ -3081,6 +2982,8 @@ def _fill_relations_name_exact(
 
 # First Name inputs in Contact Find fly-in / applet (mobile + first name search).
 _SIEBEL_FIND_FIRST_NAME_SELECTORS: tuple[str, ...] = (
+    'input#field_textbox_1',
+    'input[id="field_textbox_1"]',
     'input[aria-label*="First Name" i]',
     'input[title*="First Name" i]',
     'input[name*="FirstName" i]',
@@ -8171,50 +8074,14 @@ def _siebel_vehicle_find_chassis_engine_enter(
 
     chassis_ok = filled_flyin
     engine_ok = filled_flyin
-    if not filled_flyin:
-        chassis_ok = _try_fill_field(
-            page,
-            [
-                'input[aria-label*="VIN" i]',
-                'input[aria-label*="Chassis" i]',
-                'input[aria-label*="Frame" i]',
-                'input[title*="VIN" i]',
-                'input[title*="Chassis" i]',
-            ],
-            cw,
-            timeout_ms=action_timeout_ms,
-            content_frame_selector=content_frame_selector,
-        )
-        engine_ok = _try_fill_field(
-            page,
-            [
-                'input[aria-label*="Engine#" i]',
-                'input[aria-label*="Engine #" i]',
-                'input[title*="Engine#" i]',
-                'input[aria-label*="Engine" i]',
-                'input[title*="Engine" i]',
-            ],
-            ew,
-            timeout_ms=action_timeout_ms,
-            content_frame_selector=content_frame_selector,
-        )
-        if chassis_ok and engine_ok:
-            try:
-                page.keyboard.press("Enter")
-            except Exception:
-                pass
-            _safe_page_wait(page, 400, log_label="after_vehicle_find_enter_fallback")
-
     if not chassis_ok or not engine_ok:
-        note("Add Enquiry: could not fill VIN/chassis and Engine# on Vehicles Find (fly-in + fallback).")
+        note(
+            "Add Enquiry: strict Vehicles Find fill failed — expected VIN id='field_textbox_0' and "
+            "Engine# id='field_textbox_2' in the same Find→Vehicles frame."
+        )
         return False, {}
-    if not filled_flyin:
-        note("Add Enquiry: used generic input fill + Enter for vehicle query.")
 
     _safe_page_wait(page, 400, log_label="after_vehicle_find_enter")
-    if not filled_flyin:
-        if _click_find_go_query(page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector):
-            note("Add Enquiry: clicked Find/Go after vehicle query.")
     try:
         _safe_page_wait(page, 2500, log_label="vehicle_find_query_settle")
         page.wait_for_load_state("networkidle", timeout=12_000)
