@@ -7435,6 +7435,92 @@ def _select_dropdown_by_label_on_frame(
     return False
 
 
+def _generate_booking(
+    page: Page,
+    *,
+    action_timeout_ms: int,
+    content_frame_selector: str | None,
+    note,
+) -> tuple[bool, str | None]:
+    """
+    Click **"Opportunity Form:Generate Booking"** for an existing customer and handle
+    any immediate Siebel error.
+
+    Returns ``(success, error_detail)``.  More steps will be added to this function
+    as the Generate Booking flow is expanded.
+    """
+    note("Generate Booking: clicking 'Opportunity Form:Generate Booking' button.")
+    _gb_clicked = False
+    _gb_selectors = [
+        "button[aria-label='Opportunity Form:Generate Booking']",
+        "a[aria-label='Opportunity Form:Generate Booking']",
+        "input[aria-label='Opportunity Form:Generate Booking']",
+        "button[aria-label*='Generate Booking' i]",
+        "a[aria-label*='Generate Booking' i]",
+        "button[title*='Generate Booking' i]",
+        "a[title*='Generate Booking' i]",
+    ]
+    _gb_roots = list(_ordered_frames(page)) + [page]
+    for _gbr in _gb_roots:
+        if _gb_clicked:
+            break
+        for _gbs in _gb_selectors:
+            try:
+                _gbloc = _gbr.locator(_gbs).first
+                if _gbloc.count() > 0 and _gbloc.is_visible(timeout=600):
+                    try:
+                        _gbloc.click(timeout=action_timeout_ms)
+                    except Exception:
+                        _gbloc.click(timeout=action_timeout_ms, force=True)
+                    _gb_clicked = True
+                    break
+            except Exception:
+                continue
+    if not _gb_clicked:
+        for _gbr in _gb_roots:
+            try:
+                _js_gb = _gbr.evaluate("""() => {
+                    const vis = (el) => {
+                      if (!el) return false;
+                      const st = window.getComputedStyle(el);
+                      if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity||'1')===0) return false;
+                      const r = el.getBoundingClientRect();
+                      return r.width > 0 && r.height > 0;
+                    };
+                    for (const s of [
+                      "button[aria-label='Opportunity Form:Generate Booking']",
+                      "a[aria-label='Opportunity Form:Generate Booking']",
+                      "input[aria-label='Opportunity Form:Generate Booking']",
+                    ]) {
+                      const el = document.querySelector(s);
+                      if (vis(el)) { el.click(); return s; }
+                    }
+                    const all = Array.from(document.querySelectorAll('button, a, input[type="button"]'));
+                    for (const el of all) {
+                      const lbl = (el.getAttribute('aria-label') || el.getAttribute('title') || el.textContent || '').trim();
+                      if (/generate\\s*booking/i.test(lbl) && vis(el)) { el.click(); return lbl; }
+                    }
+                    return '';
+                }""")
+                if _js_gb:
+                    _gb_clicked = True
+                    break
+            except Exception:
+                continue
+    if not _gb_clicked:
+        note("Generate Booking: button not found.")
+        return False, "Could not click 'Opportunity Form:Generate Booking' button."
+    note("Generate Booking: button clicked successfully.")
+    _safe_page_wait(page, 1500, log_label="after_generate_booking_click")
+
+    _gb_err = _detect_siebel_error_popup(page, content_frame_selector)
+    if _gb_err:
+        note(f"Generate Booking: Siebel error after click → {_gb_err!r:.300}")
+        return False, f"Siebel error after Generate Booking: {_gb_err[:200]}"
+
+    return True, None
+
+
 def _add_enquiry_opportunity(
     page: Page,
     dms_values: dict,
@@ -7446,10 +7532,16 @@ def _add_enquiry_opportunity(
     note,
     form_trace,
     vehicle_merge: dict | None = None,
+    customer_exists: bool = False,
 ) -> tuple[bool, str | None, str]:
     """
-    Contact Find returned no table rows: vehicle find + scrape, **Enquiry** tab, **Opportunity Form:New**,
-    fill opportunity fields from DB + scraped model/color (**Financier** fields are skipped), Ctrl+S.
+    Vehicle find + scrape, **Enquiry** tab, **Opportunity Form:New**,
+    fill opportunity fields from DB + scraped model/color (**Financier** fields are skipped).
+
+    When *customer_exists* is False (new customer): finalize with **Ctrl+S**.
+    When *customer_exists* is True (existing customer, no enquiry): finalize with
+    **"Opportunity Form:Generate Booking"** button instead of Ctrl+S (avoids the
+    "customer already exists" Siebel error).
 
     Returns ``(success, error_detail, enquiry_number)`` — ``error_detail`` is a short operator-facing
     reason when ``success`` is False; ``enquiry_number`` is the scraped Enquiry# on success (empty on
@@ -7987,20 +8079,34 @@ def _add_enquiry_opportunity(
 
     note("Add Enquiry: Financier fields skipped by design (tenant control).")
 
-    try:
-        page.keyboard.press("Control+s")
-    except Exception:
+    # --- Finalize: Ctrl+S (new customer) vs Generate Booking (existing customer) ---
+    if customer_exists:
+        note("Add Enquiry: customer already exists — using Generate Booking instead of Ctrl+S.")
+        _gb_ok, _gb_err = _generate_booking(
+            page,
+            action_timeout_ms=action_timeout_ms,
+            content_frame_selector=content_frame_selector,
+            note=note,
+        )
+        if not _gb_ok:
+            return False, _gb_err or "Generate Booking failed.", ""
+    else:
         try:
-            page.keyboard.press("Meta+s")
+            page.keyboard.press("Control+s")
         except Exception:
-            note("Add Enquiry: Ctrl+S failed.")
-            return False, "Ctrl+S save failed on new opportunity form.", ""
-    note("Add Enquiry: pressed Ctrl+S to save enquiry.")
-    _safe_page_wait(page, 350, log_label="add_enquiry_after_ctrl_s_immediate")
+            try:
+                page.keyboard.press("Meta+s")
+            except Exception:
+                note("Add Enquiry: Ctrl+S failed.")
+                return False, "Ctrl+S save failed on new opportunity form.", ""
+        note("Add Enquiry: pressed Ctrl+S to save enquiry.")
+
+    _safe_page_wait(page, 350, log_label="add_enquiry_after_save_immediate")
     _save_err_immediate = _detect_siebel_error_popup(page, content_frame_selector)
     if _save_err_immediate:
-        note(f"Add Enquiry: immediate Siebel error after Ctrl+S → {_save_err_immediate!r:.300}")
-        return False, f"Siebel error after Ctrl+S: {_save_err_immediate[:200]}", ""
+        _action_label = "Generate Booking" if customer_exists else "Ctrl+S"
+        note(f"Add Enquiry: immediate Siebel error after {_action_label} → {_save_err_immediate!r:.300}")
+        return False, f"Siebel error after {_action_label}: {_save_err_immediate[:200]}", ""
 
     _max_save_polls = 8
     _poll_interval_ms = 1500
@@ -8010,8 +8116,9 @@ def _add_enquiry_opportunity(
         _safe_page_wait(page, _poll_interval_ms, log_label=f"add_enquiry_save_poll_{_poll_i}")
         _save_error = _detect_siebel_error_popup(page, content_frame_selector)
         if _save_error:
+            _action_label = "Generate Booking" if customer_exists else "Ctrl+S"
             note(f"Add Enquiry: Siebel error after save → {_save_error!r:.300}")
-            return False, f"Siebel error after Ctrl+S: {_save_error[:200]}", ""
+            return False, f"Siebel error after {_action_label}: {_save_error[:200]}", ""
         enquiry_no = _scrape_enquiry_number_from_frame(enq_frame)
 
         if enquiry_no and enquiry_no != pre_save_enquiry_no:
@@ -8020,11 +8127,12 @@ def _add_enquiry_opportunity(
             break
 
     if pre_save_enquiry_no and enquiry_no and enquiry_no == pre_save_enquiry_no:
+        _action_label = "Generate Booking" if customer_exists else "Ctrl+S"
         note(
-            "Add Enquiry: Enquiry# did not change after save; likely not persisted "
+            f"Add Enquiry: Enquiry# did not change after {_action_label}; likely not persisted "
             f"(before={pre_save_enquiry_no!r}, after={enquiry_no!r})."
         )
-        return False, "Enquiry# did not change after Ctrl+S (save not confirmed).", ""
+        return False, f"Enquiry# did not change after {_action_label} (save not confirmed).", ""
     if enquiry_no:
         note(f"Add Enquiry: saved Enquiry#={enquiry_no!r}.")
         if callable(form_trace):
@@ -8035,16 +8143,15 @@ def _add_enquiry_opportunity(
                 enquiry_number=enquiry_no,
             )
         return True, None, enquiry_no
-    # Enquiry# empty after save — do one final error check then fail hard so
-    # the caller does not loop (add_enquiry → search → not found → add_enquiry).
-    note("Add Enquiry: Enquiry# not readable after save — running final error check.")
+    _action_label = "Generate Booking" if customer_exists else "Ctrl+S"
+    note(f"Add Enquiry: Enquiry# not readable after {_action_label} — running final error check.")
     _safe_page_wait(page, 900, log_label="add_enquiry_after_save_final_error_check")
     _save_err_final = _detect_siebel_error_popup(page, content_frame_selector)
     if _save_err_final:
         note(f"Add Enquiry: delayed Siebel error after save → {_save_err_final!r:.300}")
-        return False, f"Siebel error after Ctrl+S: {_save_err_final[:200]}", ""
-    note("Add Enquiry: no Siebel error detected, but Enquiry# is still empty — treating as failure.")
-    return False, "Add Enquiry saved without errors but Enquiry# could not be scraped. Save may not have persisted.", ""
+        return False, f"Siebel error after {_action_label}: {_save_err_final[:200]}", ""
+    note(f"Add Enquiry: no Siebel error detected, but Enquiry# is still empty — treating as failure.")
+    return False, f"Add Enquiry completed ({_action_label}) without errors but Enquiry# could not be scraped. Save may not have persisted.", ""
 
 
 def _siebel_run_precheck_and_pdi(
@@ -8600,7 +8707,7 @@ def Playwright_Hero_DMS_fill(
                 note(f"Enquiry exists: Enquiry#={_enq_number!r}. Proceeding with relation/address fill.")
                 out.setdefault("vehicle", {})["enquiry_number"] = _enq_number
             if not _enq_number:
-                note(f"Enquiry# is null (rows={_enq_rows}) — running Add Enquiry before relation/address fill.")
+                note(f"Enquiry# is null (rows={_enq_rows}) — running Add Enquiry (existing customer) before relation/address fill.")
                 ae2_ok, ae2_detail, ae2_enq_no = _add_enquiry_opportunity(
                     page,
                     dms_values,
@@ -8611,6 +8718,7 @@ def Playwright_Hero_DMS_fill(
                     note=note,
                     form_trace=form_trace,
                     vehicle_merge=out.setdefault("vehicle", {}),
+                    customer_exists=True,
                 )
                 if not ae2_ok:
                     step("Stopped: Enquiry# null and Add Enquiry fallback failed.")

@@ -12,18 +12,18 @@ Care of / Father–Husband (Aadhaar QR): S/O Dull Chand
 --- Vehicle (from DMS search result) ---
 Key num: —
 Frame / Chassis num: —
-Full chassis (VIN from detail): —
+Full chassis (VIN from detail): MBLHAW434T9A53911
 Engine num: —
-Full engine (from detail): —
-Model: —
-Color: —
-Cubic capacity: —
-Seating capacity: —
+Full engine (from detail): HA11F4T9A03659
+Model: HF DELUXE
+Color: SBK
+Cubic capacity: 87112029
+Seating capacity: 11870 DEALER SHOWROOM
 Body type: —
 Vehicle type: —
 Num cylinders: —
 Horsepower: —
 Ex-showroom Price (Order Value): —
-Year of Mfg: —
+Year of Mfg: 2026
 Order # (DMS): —
 Invoice # (DMS): —
