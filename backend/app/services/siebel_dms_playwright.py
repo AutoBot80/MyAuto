@@ -4289,7 +4289,7 @@ def _add_customer_payment(
                         )
                         if _is_txn_amount:
                             if not _ae.get("readOnly"):
-                                page.keyboard.type("0")
+                                page.keyboard.type("120000")
                                 _safe_page_wait(page, 120, log_label="tab_nav_amount_fill")
                                 page.keyboard.press("Tab")
                                 _tab_filled = True
@@ -4312,7 +4312,7 @@ def _add_customer_payment(
 
                 note(
                     "Filled payment fields (direct): "
-                    f"Type=Receipt(ok={type_ok!r}), Mode=Cash(ok={mode_ok!r}), Amount=0(ok={amount_ok!r})."
+                    f"Type=Receipt(ok={type_ok!r}), Mode=Cash(ok={mode_ok!r}), Amount=120000(ok={amount_ok!r})."
                 )
                 _safe_page_wait(page, 400, log_label="after_amount_before_save")
 

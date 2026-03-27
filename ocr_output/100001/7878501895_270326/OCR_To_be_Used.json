@@ -1,0 +1,33 @@
+{
+  "vehicle": {
+    "frame_no": "53911",
+    "engine_no": "03659",
+    "model_colour": "Deluxe",
+    "key_no": "1024",
+    "battery_no": "M725S259151AA61"
+  },
+  "customer": {
+    "name": "HRA",
+    "care_of": "S/O Duli Chand",
+    "city": "Bharatpur",
+    "district": "Bharatpur",
+    "state": "Rajasthan",
+    "pin_code": "321028",
+    "address": "S/O Duli Chand, you/ MALE Jahangeerpur, PO: Jahangirpur, DIST: Bharatpur, 3114R 48417 at 94101 8, 41 Grapafer abl 181 I Rajasthan - 321028 34411 (31/701184",
+    "gender": "Male",
+    "mobile_number": "7878501895",
+    "alt_phone_num": "9602241068",
+    "aadhar_id": "9281"
+  },
+  "insurance": {
+    "profession": "FARMER",
+    "insurer": "SOMPO",
+    "marital_status": "MARRIED",
+    "nominee_gender": "FEMALE",
+    "nominee_name": "NIDHI",
+    "nominee_age": "20",
+    "nominee_relationship": "WIFE",
+    "financier": "Insurer Name (if needed): SOMPO"
+  },
+  "details_customer_name": "Shailendra Singh"
+}

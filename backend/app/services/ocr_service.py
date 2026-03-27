@@ -182,6 +182,89 @@ def _load_aadhar_scan_bytes(subdir: Path) -> dict[str, Any]:
     return out
 
 
+def _crop_aadhar_letter_below_scissors(image_bytes: bytes) -> bytes | None:
+    """
+    Aadhaar *letter* (A4 printout from UIDAI) has scissors marks on the left and
+    right margins with a dashed/dotted cut-line across the page (~55% down).
+    Below the line is a compact **mini-card strip** with name, DOB, gender, photo,
+    address, and Aadhaar number in a clean standard layout.
+
+    Returns cropped JPEG bytes of the mini-card portion,
+    or ``None`` when the image is not a letter format or no cut-line is found.
+    """
+    import cv2
+    import numpy as np
+
+    nparr = np.frombuffer(image_bytes, dtype=np.uint8)
+    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    if img is None:
+        return None
+
+    h, w = img.shape[:2]
+    if h < 300 or w < 200:
+        return None
+
+    if h < w * 1.15:
+        return None
+
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    y_top = int(h * 0.38)
+    y_bot = int(h * 0.63)
+    band = gray[y_top:y_bot, :]
+    band_h = y_bot - y_top
+
+    _, bw = cv2.threshold(band, 175, 255, cv2.THRESH_BINARY_INV)
+
+    seg_len = max(int(w * 0.04), 12)
+    h_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (seg_len, 1))
+    h_morph = cv2.morphologyEx(bw, cv2.MORPH_OPEN, h_kernel)
+
+    row_cov = np.sum(h_morph > 0, axis=1).astype(float) / w
+
+    line_rows = np.where(row_cov >= 0.08)[0]
+    if len(line_rows) < 1:
+        return None
+
+    clusters: list[list[int]] = []
+    cur = [line_rows[0]]
+    for i in range(1, len(line_rows)):
+        if line_rows[i] - line_rows[i - 1] <= 10:
+            cur.append(line_rows[i])
+        else:
+            clusters.append(cur)
+            cur = [line_rows[i]]
+    clusters.append(cur)
+
+    best_cluster = None
+    best_score = -999.0
+    for cl in clusters:
+        median_y = float(np.median(cl))
+        center_dist = abs(median_y - band_h * 0.5) / band_h
+        avg_cov = float(np.mean(row_cov[cl]))
+        score = avg_cov * 2.0 - center_dist
+        if score > best_score:
+            best_score = score
+            best_cluster = cl
+
+    if best_cluster is None or best_score < 0.02:
+        return None
+
+    cut_y = y_top + max(best_cluster)
+    margin = max(int(h * 0.012), 8)
+    crop_y = min(cut_y + margin, h - 80)
+
+    if h - crop_y < int(h * 0.20):
+        return None
+
+    cropped = img[crop_y:, :]
+    ok, buf = cv2.imencode(".jpg", cropped, [cv2.IMWRITE_JPEG_QUALITY, 92])
+    if not ok:
+        return None
+
+    return buf.tobytes()
+
+
 def _normalize_aadhar_back_address_chunk(chunk: str) -> str:
     chunk = chunk.replace("\r\n", "\n")
     chunk = re.sub(r"[\|`]+", " ", chunk)
@@ -587,6 +670,24 @@ def _pipeline_merge_aadhar_customer(
 
     raw_parts: list[tuple[str, str]] = []
     customer: dict[str, str] = {}
+    is_letter = False
+
+    # ── Preprocess: Aadhaar letter (A4) — crop below scissors/cut-line ──
+    # The noisy top half causes Textract to read *wrong* values, not just nulls.
+    # Replace image bytes with the mini-card strip and discard any stale prefetch.
+    if front_bytes:
+        front_cropped = _crop_aadhar_letter_below_scissors(front_bytes)
+        if front_cropped:
+            front_bytes = front_cropped
+            front_textract = None
+            is_letter = True
+            logger.info("Aadhaar letter (front): cropped below scissors for Textract")
+    if back_bytes:
+        back_cropped = _crop_aadhar_letter_below_scissors(back_bytes)
+        if back_cropped:
+            back_bytes = back_cropped
+            back_textract = None
+            logger.info("Aadhaar letter (back): cropped below scissors for Textract")
 
     ft = front_textract
     if front_bytes and (not ft or ft.get("error") or not _ftext(ft)):
@@ -605,6 +706,10 @@ def _pipeline_merge_aadhar_customer(
         customer = _merge_aadhar_textract_fallback_dict(
             customer, _parse_aadhar_name_from_aadhaar_textract(front_txt)
         )
+        if is_letter:
+            customer = _merge_aadhar_textract_fallback_dict(
+                customer, _parse_aadhar_back_address_from_ocr(front_txt)
+            )
 
     bt = back_textract
     if back_bytes and not _aadhar_geo_ok(customer):
