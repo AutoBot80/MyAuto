@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -3763,6 +3764,209 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
 
     note("Could not fill Relation's Name on opened customer record (video SOP).")
     return False
+
+
+def _click_nth_mobile_title_drilldown(
+    page: Page,
+    mobile: str,
+    ordinal: int,
+    *,
+    action_timeout_ms: int,
+    content_frame_selector: str | None,
+) -> bool:
+    """
+    After Contact Find/Go, click the ``ordinal``-th (0-based) **Title** drilldown whose visible text
+    matches ``mobile`` (same digit rules as the single-drill video path). Used when several contacts
+    share one number so we can open the row that already carries an enquiry before creating another.
+    """
+    if ordinal < 0:
+        return False
+    drill_needle = _mobile_needle_for_contact_grid_match(mobile)
+    drill_raw = re.sub(r"\D", "", (mobile or "").strip())
+    plans: list[tuple[object, str, int]] = []
+    for _dr_root in list(_siebel_locator_search_roots(page, content_frame_selector)) + list(
+        _ordered_frames(page)
+    ) + [page]:
+        for _dr_sel in ('a[name="Title"]', 'a[name="title"]'):
+            try:
+                _dr_locs = _dr_root.locator(_dr_sel)
+                _dr_n = _dr_locs.count()
+                for _di in range(min(_dr_n, 40)):
+                    _dr_el = _dr_locs.nth(_di)
+                    try:
+                        if not _dr_el.is_visible(timeout=500):
+                            continue
+                    except Exception:
+                        continue
+                    try:
+                        _dr_txt = re.sub(r"\D", "", _dr_el.inner_text(timeout=500) or "")
+                    except Exception:
+                        _dr_txt = ""
+                    if drill_needle and drill_needle in _dr_txt:
+                        pass
+                    elif drill_raw and len(drill_raw) >= 8 and drill_raw in _dr_txt:
+                        pass
+                    else:
+                        continue
+                    plans.append((_dr_root, _dr_sel, _di))
+            except Exception:
+                continue
+    if ordinal >= len(plans):
+        return False
+    _dr_root, _dr_sel, _di = plans[ordinal]
+    _dr_el = _dr_root.locator(_dr_sel).nth(_di)
+    try:
+        _dr_el.click(timeout=action_timeout_ms)
+        return True
+    except Exception:
+        try:
+            _dr_el.click(timeout=action_timeout_ms, force=True)
+            return True
+        except Exception:
+            return False
+
+
+def _contact_find_title_sweep_for_enquiry(
+    page: Page,
+    *,
+    contact_url: str,
+    mobile: str,
+    action_timeout_ms: int,
+    nav_timeout_ms: int,
+    content_frame_selector: str | None,
+    mobile_aria_hints: list[str],
+    note,
+    step,
+    refine_search_between_duplicates: Callable[[], bool] | None = None,
+    max_title_ordinals: int = 12,
+) -> tuple[bool, str, int, str | None]:
+    """
+    Open each Search Results **Title** row matching ``mobile`` (re-running Find between attempts) until
+    **Contact_Enquiry** shows at least one data row or matches are exhausted.
+
+    Returns ``(has_existing_enquiry, enquiry_number, row_count, error_message)``.
+    ``error_message`` set → caller must stop. If no error and ``has_existing_enquiry`` is False, every
+    matching Title was opened and all had zero enquiry rows — safe to run Add Enquiry.
+
+    ``refine_search_between_duplicates`` when provided: callable ``() -> bool`` run instead of plain
+    mobile re-find when trying the 2nd+ Title (e.g. mobile + dotted first name + Go after Add Enquiry).
+    """
+    used_fallback_link = False
+    ordinal = 0
+
+    def _refind_plain() -> bool:
+        ok_rf = _contact_view_find_by_mobile(
+            page,
+            contact_url=contact_url,
+            mobile=mobile,
+            nav_timeout_ms=nav_timeout_ms,
+            action_timeout_ms=action_timeout_ms,
+            content_frame_selector=content_frame_selector,
+            mobile_aria_hints=mobile_aria_hints,
+            note=note,
+            step=step,
+            stage_msg="Re-find Contact by mobile (duplicate Title sweep).",
+        )
+        if not ok_rf:
+            return False
+        _safe_page_wait(page, 1500, log_label="after_refind_duplicate_title_sweep")
+        return bool(_siebel_ui_suggests_contact_match(page, mobile))
+
+    while ordinal < max_title_ordinals:
+        if ordinal > 0:
+            note(
+                f"Duplicate mobile in Search Results: re-finding before Title match index {ordinal} "
+                f"to locate a contact that already has an enquiry."
+            )
+            if refine_search_between_duplicates is not None:
+                ok_between = refine_search_between_duplicates()
+            else:
+                ok_between = _refind_plain()
+            if not ok_between:
+                err = (
+                    "Siebel: could not re-open the contact Find list while checking duplicate mobile rows "
+                    f"(before Title index {ordinal})."
+                )
+                note(err)
+                return False, "", 0, err
+
+        drilled = _click_nth_mobile_title_drilldown(
+            page,
+            mobile,
+            ordinal,
+            action_timeout_ms=action_timeout_ms,
+            content_frame_selector=content_frame_selector,
+        )
+        if not drilled and ordinal == 0 and not used_fallback_link:
+            drilled = _siebel_try_click_mobile_search_hit_link(
+                page,
+                mobile,
+                timeout_ms=action_timeout_ms,
+                content_frame_selector=content_frame_selector,
+            )
+            if drilled:
+                used_fallback_link = True
+                note("Opened contact from search-hit link (fallback) — duplicate sweep index 0.")
+        if not drilled:
+            if ordinal == 0:
+                return False, "", 0, (
+                    "Siebel: contact matched in search results, but could not click a Title drilldown "
+                    "or search-hit link to open the contact detail."
+                )
+            break
+
+        note(f"Clicked Title drilldown for mobile {mobile} (match index {ordinal}) — opening contact record.")
+        _safe_page_wait(page, 2000, log_label="after_title_drilldown_sweep")
+        try:
+            page.wait_for_load_state("networkidle", timeout=8_000)
+        except Exception:
+            pass
+
+        _enq_checked = False
+        _enq_rows = 0
+        _enq_number = ""
+        for _enq_attempt in range(3):
+            _enq_checked, _enq_rows, _enq_number = _contact_enquiry_tab_has_rows(
+                page,
+                action_timeout_ms=action_timeout_ms,
+                content_frame_selector=content_frame_selector,
+                note=note,
+            )
+            if _enq_checked:
+                break
+            note(
+                f"Contact_Enquiry tab: attempt {_enq_attempt + 1}/3 could not verify "
+                f"(Title index {ordinal}) — retrying."
+            )
+            _safe_page_wait(page, 1200, log_label=f"contact_enquiry_tab_retry_sweep_{ordinal}_{_enq_attempt}")
+
+        note(
+            f"Contact_Enquiry check (Title index {ordinal}): "
+            f"checked={_enq_checked!r}, rows={_enq_rows}, enquiry#={_enq_number!r}."
+        )
+        if not _enq_checked:
+            return False, "", 0, (
+                "Siebel: Contact_Enquiry tab could not be opened or verified. "
+                "Cannot determine whether an enquiry exists for this contact."
+            )
+
+        if (_enq_number or "").strip() or _enq_rows > 0:
+            if (_enq_number or "").strip():
+                note(f"Enquiry exists: Enquiry#={_enq_number!r}. Proceeding (Title index {ordinal}).")
+            else:
+                note(
+                    f"Contact_Enquiry has rows={_enq_rows} but Enquiry# was not scraped — "
+                    f"proceeding without Add Enquiry (Title index {ordinal})."
+                )
+            return True, (_enq_number or "").strip(), _enq_rows, None
+
+        note(
+            f"No enquiry on contact Title index {ordinal} (rows=0) — trying next duplicate row for the "
+            f"same mobile if present."
+        )
+        ordinal += 1
+
+    return False, "", 0, None
 
 
 def _contact_enquiry_tab_has_rows(
@@ -9267,96 +9471,30 @@ def Playwright_Hero_DMS_fill(
                     )
                     return out
 
-            # Drill down into the contact record by clicking the Title drilldown (contains mobile).
-            _drilled = False
-            _safe_page_wait(page, 1500, log_label="before_title_drilldown")
-            _drill_needle = _mobile_needle_for_contact_grid_match(mobile)
-            _drill_raw = re.sub(r"\D", "", (mobile or "").strip())
-            for _dr_root in list(_siebel_locator_search_roots(page, content_frame_selector)) + list(_ordered_frames(page)) + [page]:
-                if _drilled:
-                    break
-                # 1) a[name="Title"] whose text contains the mobile
-                for _dr_sel in ('a[name="Title"]', 'a[name="title"]'):
-                    try:
-                        _dr_locs = _dr_root.locator(_dr_sel)
-                        _dr_n = _dr_locs.count()
-                        for _di in range(min(_dr_n, 20)):
-                            _dr_el = _dr_locs.nth(_di)
-                            try:
-                                if not _dr_el.is_visible(timeout=500):
-                                    continue
-                            except Exception:
-                                continue
-                            try:
-                                _dr_txt = re.sub(r"\D", "", _dr_el.inner_text(timeout=500) or "")
-                            except Exception:
-                                _dr_txt = ""
-                            if _drill_needle and _drill_needle in _dr_txt:
-                                pass
-                            elif _drill_raw and len(_drill_raw) >= 8 and _drill_raw in _dr_txt:
-                                pass
-                            else:
-                                continue
-                            try:
-                                _dr_el.click(timeout=action_timeout_ms)
-                                _drilled = True
-                                break
-                            except Exception:
-                                try:
-                                    _dr_el.click(timeout=action_timeout_ms, force=True)
-                                    _drilled = True
-                                    break
-                                except Exception:
-                                    continue
-                    except Exception:
-                        continue
-            if not _drilled:
-                # Fallback: use existing search-hit link click logic
-                _drilled = _siebel_try_click_mobile_search_hit_link(
-                    page, mobile, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector,
-                )
-            if not _drilled:
-                step("Stopped: could not click Title drilldown to open contact record.")
-                out["error"] = (
-                    "Siebel: contact matched in search results, but could not click on the Title drilldown "
-                    "link (name='Title') to open the contact detail. Check Search Results grid selectors."
-                )
+            # Drill each Search Results Title matching this mobile until Contact_Enquiry shows a row
+            # (several contacts can share one number — avoid Add Enquiry when another row already has one).
+            _has_enq, _enq_number, _enq_rows, _sweep_err = _contact_find_title_sweep_for_enquiry(
+                page,
+                contact_url=contact_url,
+                mobile=mobile,
+                action_timeout_ms=action_timeout_ms,
+                nav_timeout_ms=nav_timeout_ms,
+                content_frame_selector=content_frame_selector,
+                mobile_aria_hints=mobile_aria_hints,
+                note=note,
+                step=step,
+            )
+            if _sweep_err:
+                step(f"Stopped: {_sweep_err}")
+                out["error"] = _sweep_err
                 return out
-            note(f"Clicked Title drilldown for mobile {mobile} — opening contact record.")
-            _safe_page_wait(page, 2000, log_label="after_title_drilldown")
-            try:
-                page.wait_for_load_state("networkidle", timeout=8_000)
-            except Exception:
-                pass
-
-            # Before opening customer details / filling Relation+Address, verify enquiry exists on Contact_Enquiry tab.
-            _enq_checked = False
-            _enq_rows = 0
-            _enq_number = ""
-            for _enq_attempt in range(3):
-                _enq_checked, _enq_rows, _enq_number = _contact_enquiry_tab_has_rows(
-                    page,
-                    action_timeout_ms=action_timeout_ms,
-                    content_frame_selector=content_frame_selector,
-                    note=note,
-                )
-                if _enq_checked:
-                    break
-                note(f"Contact_Enquiry tab: attempt {_enq_attempt + 1}/3 could not verify — retrying.")
-                _safe_page_wait(page, 1200, log_label=f"contact_enquiry_tab_retry_{_enq_attempt}")
-            note(f"Contact_Enquiry check: checked={_enq_checked!r}, rows={_enq_rows}, enquiry#={_enq_number!r}.")
-            if not _enq_checked:
-                step("Stopped: could not open or verify Contact_Enquiry tab after 3 attempts.")
-                out["error"] = (
-                    "Siebel: Contact_Enquiry tab could not be opened or verified. "
-                    "Cannot determine whether an enquiry exists for this contact."
-                )
-                return out
-            if _enq_number:
-                note(f"Enquiry exists: Enquiry#={_enq_number!r}. Proceeding with relation/address fill.")
+            if _has_enq and _enq_number:
                 out.setdefault("vehicle", {})["enquiry_number"] = _enq_number
-            if not _enq_number:
-                note(f"Enquiry# is null (rows={_enq_rows}) — running Add Enquiry (existing customer) before relation/address fill.")
+            if not _has_enq:
+                note(
+                    f"Enquiry# is null on every matching Title (last checked rows={_enq_rows}) — "
+                    "running Add Enquiry (existing customer) before relation/address fill."
+                )
                 ae2_ok, ae2_detail, ae2_enq_no = _add_enquiry_opportunity(
                     page,
                     dms_values,

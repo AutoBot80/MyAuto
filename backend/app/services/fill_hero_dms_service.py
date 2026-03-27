@@ -2199,6 +2199,10 @@ def update_vehicle_master_from_dms(vehicle_id: int, scraped: dict) -> None:
     **color** / **colour** → ``colour``; **vehicle_price** / **ex_showroom_price** /
     **vehicle_ex_showroom_cost** → ``vehicle_ex_showroom_price``; **year_of_mfg** (or **dispatch_year**)
     → ``year_of_mfg``; **sku** → ``dms_sku``.
+
+    Does **not** update ``raw_frame_num`` / ``raw_engine_num`` — those stay as the Sales Detail Sheet /
+    Submit Info values so ``form_dms_view`` partials used for Siebel vehicle search (Add Enquiry) are not
+    overwritten by a noisy or partial DMS grid scrape.
     """
     from app.db import get_connection
 
@@ -2212,8 +2216,6 @@ def update_vehicle_master_from_dms(vehicle_id: int, scraped: dict) -> None:
     model = _strip_or_none("model")
     colour = _strip_or_none("color") or _strip_or_none("colour")
     dms_sku = _strip_or_none("sku")
-    raw_frame = chassis
-    raw_engine = engine
     cubic_capacity = scraped.get("cubic_capacity")
     seating_capacity = scraped.get("seating_capacity")
     body_type = (scraped.get("body_type") or "").strip() or None
@@ -2262,8 +2264,6 @@ def update_vehicle_master_from_dms(vehicle_id: int, scraped: dict) -> None:
         key_num,
         model,
         colour,
-        raw_frame,
-        raw_engine,
         dms_sku,
         cubic_capacity,
         seating_capacity,
@@ -2281,8 +2281,6 @@ def update_vehicle_master_from_dms(vehicle_id: int, scraped: dict) -> None:
         key_num,
         model,
         colour,
-        raw_frame,
-        raw_engine,
         cubic_capacity,
         seating_capacity,
         body_type,
@@ -2300,8 +2298,6 @@ def update_vehicle_master_from_dms(vehicle_id: int, scraped: dict) -> None:
                     key_num = COALESCE(%s, key_num),
                     model = COALESCE(%s, model),
                     colour = COALESCE(%s, colour),
-                    raw_frame_num = COALESCE(%s, raw_frame_num),
-                    raw_engine_num = COALESCE(%s, raw_engine_num),
                     dms_sku = COALESCE(%s, dms_sku),
                     cubic_capacity = COALESCE(%s, cubic_capacity),
                     seating_capacity = COALESCE(%s, seating_capacity),
@@ -2320,8 +2316,6 @@ def update_vehicle_master_from_dms(vehicle_id: int, scraped: dict) -> None:
                     key_num = COALESCE(%s, key_num),
                     model = COALESCE(%s, model),
                     colour = COALESCE(%s, colour),
-                    raw_frame_num = COALESCE(%s, raw_frame_num),
-                    raw_engine_num = COALESCE(%s, raw_engine_num),
                     cubic_capacity = COALESCE(%s, cubic_capacity),
                     seating_capacity = COALESCE(%s, seating_capacity),
                     body_type = COALESCE(%s, body_type),

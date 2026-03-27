@@ -73,8 +73,8 @@ This document lists the current database tables and their columns. **Executable 
 | `plate_num` | `varchar(32)` | YES |  | Plate number |
 | `model` | `varchar(64)` | YES |  | Vehicle model |
 | `colour` | `varchar(64)` | YES |  | Vehicle colour |
-| `raw_frame_num` | `varchar(32)` | YES |  | Raw extracted frame/chassis number |
-| `raw_engine_num` | `varchar(32)` | YES |  | Raw extracted engine number |
+| `raw_frame_num` | `varchar(32)` | YES |  | Raw frame/chassis from Submit Info / detail sheet (Fill DMS merge does not overwrite) |
+| `raw_engine_num` | `varchar(32)` | YES |  | Raw engine from Submit Info / detail sheet (Fill DMS merge does not overwrite) |
 | `raw_key_num` | `varchar(32)` | YES |  | Raw extracted key number |
 | `year_of_mfg` | `integer` | YES |  | Year of manufacture (yyyy) |
 | `cubic_capacity` | `numeric(10,2)` | YES |  | Cubic capacity (cc) |
@@ -443,3 +443,4 @@ This document lists the current database tables and their columns. **Executable 
 | 1.5 | Mar 2026 | `vehicle_master.vehicle_price` renamed to **`vehicle_ex_showroom_price`** (`DDL/alter/03j_vehicle_master_rename_vehicle_price_to_vehicle_ex_showroom_price.sql`); `form_vahan_view` column alias remains **`vehicle_price`**; `update_vehicle_master_from_dms` maps scrape **raw_key_num** into **`key_num`** when **key_num** absent |
 | 1.6 | Mar 2026 | `sales_master.order_number`, **`invoice_number`** — DMS scrape persistence (`DDL/alter/05h_sales_master_add_order_invoice_numbers.sql`, **`update_sales_master_from_dms_scrape`** in `fill_hero_dms_service.py`) |
 | 1.7 | Mar 2026 | `sales_master.enquiry_number` — DMS Enquiry# persistence (`DDL/alter/05i_sales_master_add_enquiry_number.sql`); `vehicle_ex_showroom_cost` now mapped to `vehicle_ex_showroom_price`; `update_sales_master_from_dms_scrape` called for real Siebel path |
+| 1.8 | Mar 2026 | **`update_vehicle_master_from_dms`** no longer updates **`raw_frame_num`** / **`raw_engine_num`** (detail-sheet identity for `form_dms_view` partials / Add Enquiry search) |

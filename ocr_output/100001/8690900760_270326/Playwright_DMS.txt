@@ -1,0 +1,50 @@
+Playwright DMS — execution log (this run only; UTC timestamps)
+
+started_utc=2026-03-27T13:51:09.991684+00:00
+skip_contact_find=False
+dms_contact_path='found'
+mobile_phone='8690900760'
+first_name='Lavesh'
+last_name='Kumar'
+address_line_1='S/O Navab Singh, Awar, PO: AWAR, DIST: Bharatpur, Rajasthan - 321202'
+state='RAJASTHAN'
+pin_code='321202'
+landline='7740828710'
+care_of='S/O Navab Singh'
+key_partial='1347'
+frame_partial='MBLHAW479T5C'
+engine_partial='HA11F6T5C033'
+aadhar_id='7138'
+full_chassis_from_source=''
+full_engine_from_source=''
+vehicle_model_from_source=''
+vehicle_color_from_source=''
+# Siebel scrape: full_chassis/full_engine come from Add Enquiry vehicle detail; stage 5 Auto Vehicle List grid uses frame_num/engine_num/model/color.
+url_contact_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+Contact+Opportunity+Buyer/CoBuyer+View+(SDW)&SWERF=1&SWEHo=&SWEBU=1'
+url_enquiry_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+Contact+Opportunity+Buyer/CoBuyer+View+(SDW)&SWERF=1&SWEHo=&SWEBU=1'
+url_vehicle_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+All+Vehicle+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Auto+Vehicle+List+Applet&SWERowId0=1-100-1676'
+
+--- trace ---
+Legend: [STEP]/[NOTE]/[MILESTONE] = operator narrative; [FORM] = siebel_step + Siebel form/screen + action + fields/values being applied on that form.
+
+2026-03-27T13:51:09.991902+00:00 [STEP] Started Hero Connect / Siebel DMS automation (linear SOP).
+2026-03-27T13:51:09.991943+00:00 [STEP] Video SOP (Find Contact Enquiry): Find → Contact → mobile → Go → open All Enquiries; then stop.
+2026-03-27T13:51:09.991993+00:00 [FORM] siebel_step=v1_find_contact | form=Global Find → Contact (Mobile Phone) + Go | action=goto_contact_find_URL_then_prepare_Find_Contact_fill_mobile_FindGo | contact_url_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+Contact+Opportunity+Buyer/CoBuyer+View+(SDW)&SWERF=1&SWEHo=&SWEBU=1' | mobile_phone='8690900760'
+2026-03-27T13:51:15.520293+00:00 [STEP] Video SOP: Find customer by mobile (Contact view).
+2026-03-27T13:51:18.331362+00:00 [NOTE] Find → Contact: object type selected so the mobile field is the Contact search field.
+2026-03-27T13:51:19.006847+00:00 [NOTE] Filled mobile and clicked Find inside the Contact applet (scoped; includes first-field right-popup fallback when labels are non-standard).
+2026-03-27T13:51:21.043446+00:00 [NOTE] DECISION: contact_table_match_after_find=True
+2026-03-27T13:51:22.810462+00:00 [NOTE] Clicked Title drilldown for mobile 8690900760 — opening contact record.
+2026-03-27T13:51:25.981177+00:00 [NOTE] Contact_Enquiry check: checked=True, rows=0, enquiry#=''.
+2026-03-27T13:51:25.981253+00:00 [NOTE] Enquiry# is null (rows=0) — running Add Enquiry (existing customer) before relation/address fill.
+2026-03-27T13:51:25.981337+00:00 [FORM] siebel_step=add_enquiry_branch | form=No contact table match → vehicle find + Opportunities | action=chassis_engine_Enter_then_Enquiry_tab_Opportunities_New_fields_Ctrl_S | aadhar_id='7138' | engine_partial='HA11F6T5C033' | finance_required='Y' | financier_name='Hinduja' | frame_partial='MBLHAW479T5C'
+2026-03-27T13:51:33.757868+00:00 [NOTE] Add Enquiry: Find → Vehicles object type selected (header / Find menu).
+2026-03-27T13:51:37.894590+00:00 [NOTE] Add Enquiry: Vehicles Find fly-in fill failed on first pass — retrying Find→Vehicles.
+2026-03-27T13:51:48.405456+00:00 [NOTE] Add Enquiry: used generic input fill + Enter for vehicle query.
+2026-03-27T13:51:50.076650+00:00 [NOTE] Add Enquiry: clicked Find/Go after vehicle query.
+2026-03-27T13:51:52.788413+00:00 [NOTE] Add Enquiry: activated Siebel Find tab before VIN drill-down (if present).
+2026-03-27T13:51:57.376356+00:00 [NOTE] Add Enquiry: vehicle grid/detail scrape found no row yet.
+2026-03-27T13:51:57.376420+00:00 [NOTE] Add Enquiry: vehicle search did not yield model, year of manufacture, and color in the grid — not opening Enquiry / new opportunity (confirm list applet column layout vs scrape).
+2026-03-27T13:51:57.376525+00:00 [STEP] Stopped: Enquiry# null and Add Enquiry fallback failed.
+
+2026-03-27T13:51:57.376560+00:00 [END] error=Siebel: Enquiry# was null on Contact_Enquiry, and Add Enquiry fallback failed. Vehicle scrape did not yield model, YYYY year of manufacture, and color (see NOTES above).
