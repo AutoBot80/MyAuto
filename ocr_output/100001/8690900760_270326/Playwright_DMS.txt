@@ -1,6 +1,6 @@
 Playwright DMS — execution log (this run only; UTC timestamps)
 
-started_utc=2026-03-27T15:43:19.466250+00:00
+started_utc=2026-03-27T15:49:25.611962+00:00
 skip_contact_find=False
 dms_contact_path='found'
 mobile_phone='8690900760'
@@ -27,12 +27,12 @@ url_vehicle_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/e
 --- trace ---
 Legend: [STEP]/[NOTE]/[MILESTONE] = operator narrative; [FORM] = siebel_step + Siebel form/screen + action + fields/values being applied on that form.
 
-2026-03-27T15:43:19.466653+00:00 [STEP] Started Hero Connect / Siebel DMS automation (linear SOP).
-2026-03-27T15:43:19.466751+00:00 [STEP] Video SOP (Find Contact Enquiry): Find → Contact → mobile + first name → Go; drill / Add Enquiry per match; then All Enquiries path.
-2026-03-27T15:43:19.466854+00:00 [FORM] siebel_step=v1_find_contact | form=Global Find → Contact (Mobile + First Name) + Go | action=goto_contact_find_URL_then_prepare_Find_Contact_fill_mobile_first_FindGo | contact_url_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+Contact+Opportunity+Buyer/CoBuyer+View+(SDW)&SWERF=1&SWEHo=&SWEBU=1' | first_name='Lavesh' | mobile_phone='8690900760'
-2026-03-27T15:43:25.083689+00:00 [STEP] Video SOP: Find customer by mobile + first name (Contact view).
-2026-03-27T15:43:27.961879+00:00 [NOTE] Find → Contact: object type selected so the mobile field is the Contact search field.
-2026-03-27T15:43:44.873686+00:00 [NOTE] Find failed in strict same-frame mode (Mobile title='Mobile Phone' + First Name id='field_textbox_1').
-2026-03-27T15:43:44.873737+00:00 [STEP] Stopped: could not complete Find by mobile + first name on contact view.
+2026-03-27T15:49:25.613338+00:00 [STEP] Started Hero Connect / Siebel DMS automation (linear SOP).
+2026-03-27T15:49:25.613528+00:00 [STEP] Video SOP (Find Contact Enquiry): Find → Contact → mobile + first name → Go; drill / Add Enquiry per match; then All Enquiries path.
+2026-03-27T15:49:25.613635+00:00 [FORM] siebel_step=v1_find_contact | form=Global Find → Contact (Mobile + First Name) + Go | action=goto_contact_find_URL_then_prepare_Find_Contact_fill_mobile_first_FindGo | contact_url_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+Contact+Opportunity+Buyer/CoBuyer+View+(SDW)&SWERF=1&SWEHo=&SWEBU=1' | first_name='Lavesh' | mobile_phone='8690900760'
+2026-03-27T15:49:31.214391+00:00 [STEP] Video SOP: Find customer by mobile + first name (Contact view).
+2026-03-27T15:49:33.595560+00:00 [NOTE] Find → Contact: object type selected so the mobile field is the Contact search field.
+2026-03-27T15:49:50.672416+00:00 [NOTE] Find failed in strict same-frame mode (Mobile title='Mobile Phone' + First Name id='field_textbox_1').
+2026-03-27T15:49:50.672473+00:00 [STEP] Stopped: could not complete Find by mobile + first name on contact view.
 
-2026-03-27T15:43:44.873790+00:00 [END] error=Siebel: video SOP — could not fill mobile/first name or run Find/Go on the contact view. Check Find pane, iframe selectors, and DMS_SIEBEL_* tuning.
+2026-03-27T15:49:50.672522+00:00 [END] error=Siebel: video SOP — could not fill mobile/first name or run Find/Go on the contact view. Check Find pane, iframe selectors, and DMS_SIEBEL_* tuning.

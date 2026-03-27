@@ -599,6 +599,74 @@ def _try_fill_mobile_and_find_in_contact_applet(
         except Exception:
             _dbg("H6", "findfieldsbox_probe_eval_failed", {})
         # #endregion
+
+        # Strict path: fill inside same-frame #findfieldsbox using required selectors.
+        try:
+            fn = (first_name or "").strip()
+            ff_out = root.evaluate(
+                """(args) => {
+                  const mobileVal = String(args.mobile || '').trim();
+                  const firstVal = String(args.first || '').trim();
+                  const box = document.getElementById('findfieldsbox');
+                  if (!box) return { ok: false, reason: 'no_findfieldsbox' };
+                  const vis = (el) => {
+                    if (!el) return false;
+                    const st = window.getComputedStyle(el);
+                    if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+                    const r = el.getBoundingClientRect();
+                    return r.width >= 2 && r.height >= 2;
+                  };
+                  const editable = (el) => !!(el && vis(el) && !el.readOnly && !el.disabled);
+
+                  const m = box.querySelector('input[title="Mobile Phone"]');
+                  const f = box.querySelector('input#field_textbox_1');
+                  if (!editable(m)) return { ok: false, reason: 'mobile_not_editable_or_missing' };
+                  if (firstVal && !editable(f)) return { ok: false, reason: 'first_not_editable_or_missing' };
+
+                  m.focus();
+                  m.value = '';
+                  m.value = mobileVal;
+                  m.dispatchEvent(new Event('input', { bubbles: true }));
+                  m.dispatchEvent(new Event('change', { bubbles: true }));
+
+                  if (firstVal) {
+                    f.focus();
+                    f.value = '';
+                    f.value = firstVal;
+                    f.dispatchEvent(new Event('input', { bubbles: true }));
+                    f.dispatchEvent(new Event('change', { bubbles: true }));
+                  }
+
+                  const findSel = [
+                    'input[type="submit"][value*="Find" i]',
+                    'input[type="button"][value*="Find" i]',
+                    'button[title="Find" i]',
+                    'button[aria-label="Find" i]',
+                    '[role="button"][title="Find" i]',
+                    '[role="button"][aria-label="Find" i]'
+                  ];
+                  for (const s of findSel) {
+                    const b = box.querySelector(s);
+                    if (editable(b) || vis(b)) {
+                      try { b.click(); return { ok: true, mode: 'find_button_in_box' }; } catch (e) {}
+                    }
+                  }
+                  try {
+                    if (firstVal) f.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
+                    else m.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
+                    return { ok: true, mode: 'enter_fallback_in_box' };
+                  } catch (e) {
+                    return { ok: false, reason: 'find_click_and_enter_failed' };
+                  }
+                }""",
+                {"mobile": mobile, "first": fn},
+            )
+            _dbg("H8", "findfieldsbox_strict_fill_attempt", ff_out or {})
+            if ff_out and ff_out.get("ok"):
+                return True
+        except Exception:
+            _dbg("H8", "findfieldsbox_strict_fill_eval_failed", {})
+
         applets: list = []
         # Prefer applet that looks like Find->Contact (contains Mobile Phone + First/Last name labels).
         try:
