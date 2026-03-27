@@ -71,6 +71,60 @@ function normalizeFinancierInput(value: unknown): string | undefined {
   return v;
 }
 
+/** Prefer OCR / API value when non-empty so UI matches OCR_To_be_Used.json (stale localStorage or prior merge must not win). */
+function preferNonEmptyOcr(
+  fromJson: string | undefined,
+  current: string | undefined
+): string | undefined {
+  const j = fromJson != null && String(fromJson).trim() !== "" ? String(fromJson).trim() : undefined;
+  if (j !== undefined) return j;
+  const c = current != null && String(current).trim() !== "" ? String(current).trim() : undefined;
+  return c;
+}
+
+function mergeInsuranceFromOcrPayload(
+  prev: ExtractedInsuranceDetails | null | undefined,
+  r: Record<string, unknown>
+): ExtractedInsuranceDetails {
+  const current = prev ?? {};
+  const fromServer = {
+    profession: typeof r.profession === "string" ? r.profession : undefined,
+    marital_status: typeof r.marital_status === "string" ? r.marital_status : undefined,
+    nominee_gender: typeof r.nominee_gender === "string" ? r.nominee_gender : undefined,
+    nominee_name: typeof r.nominee_name === "string" ? r.nominee_name : undefined,
+    nominee_age: r.nominee_age != null ? String(r.nominee_age) : undefined,
+    nominee_relationship: typeof r.nominee_relationship === "string" ? r.nominee_relationship : undefined,
+    insurer: typeof r.insurer === "string" ? r.insurer : undefined,
+    policy_num: typeof r.policy_num === "string" ? r.policy_num : undefined,
+    policy_from: typeof r.policy_from === "string" ? r.policy_from : undefined,
+    policy_to: typeof r.policy_to === "string" ? r.policy_to : undefined,
+    premium: typeof r.premium === "string" ? r.premium : r.premium != null ? String(r.premium) : undefined,
+  };
+  const ocrFinancier = Object.prototype.hasOwnProperty.call(r, "financier")
+    ? normalizeFinancierInput(r.financier)
+    : preferNonEmptyOcr(undefined, normalizeFinancierInput(current.financier) ?? current.financier);
+  return {
+    ...current,
+    profession: preferNonEmptyOcr(fromServer.profession, current.profession),
+    financier: ocrFinancier,
+    marital_status: preferNonEmptyOcr(fromServer.marital_status, current.marital_status),
+    nominee_gender: preferNonEmptyOcr(fromServer.nominee_gender, current.nominee_gender),
+    nominee_name: preferNonEmptyOcr(fromServer.nominee_name, current.nominee_name),
+    nominee_age: preferNonEmptyOcr(
+      fromServer.nominee_age != null && String(fromServer.nominee_age).trim() !== ""
+        ? String(fromServer.nominee_age).trim()
+        : undefined,
+      current.nominee_age
+    ),
+    nominee_relationship: preferNonEmptyOcr(fromServer.nominee_relationship, current.nominee_relationship),
+    insurer: preferNonEmptyOcr(fromServer.insurer, current.insurer),
+    policy_num: preferNonEmptyOcr(fromServer.policy_num, current.policy_num),
+    policy_from: preferNonEmptyOcr(fromServer.policy_from, current.policy_from),
+    policy_to: preferNonEmptyOcr(fromServer.policy_to, current.policy_to),
+    premium: preferNonEmptyOcr(fromServer.premium, current.premium),
+  };
+}
+
 function parseAmount(value: unknown): number | null {
   if (value == null) return null;
   const cleaned = String(value).replace(/,/g, "").trim();
@@ -171,48 +225,7 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError,
     if (ins && typeof ins === "object" && !Array.isArray(ins)) {
       setInsuranceReadByTextract(true);
       const r = ins as Record<string, unknown>;
-      setExtractedInsurance((prev) => {
-        const current = prev ?? {};
-        const currentFinancier = normalizeFinancierInput(current.financier);
-        const fromServer = {
-          profession: typeof r.profession === "string" ? r.profession : undefined,
-          financier: normalizeFinancierInput(r.financier),
-          marital_status: typeof r.marital_status === "string" ? r.marital_status : undefined,
-          nominee_gender: typeof r.nominee_gender === "string" ? r.nominee_gender : undefined,
-          nominee_name: typeof r.nominee_name === "string" ? r.nominee_name : undefined,
-          nominee_age: r.nominee_age != null ? String(r.nominee_age) : undefined,
-          nominee_relationship: typeof r.nominee_relationship === "string" ? r.nominee_relationship : undefined,
-          insurer: typeof r.insurer === "string" ? r.insurer : undefined,
-          policy_num: typeof r.policy_num === "string" ? r.policy_num : undefined,
-          policy_from: typeof r.policy_from === "string" ? r.policy_from : undefined,
-          policy_to: typeof r.policy_to === "string" ? r.policy_to : undefined,
-          premium: typeof r.premium === "string" ? r.premium : r.premium != null ? String(r.premium) : undefined,
-        };
-        return {
-          ...current,
-          profession: current.profession && current.profession.trim() !== "" ? current.profession : fromServer.profession,
-          financier: currentFinancier ?? fromServer.financier,
-          marital_status:
-            current.marital_status && current.marital_status.trim() !== ""
-              ? current.marital_status
-              : fromServer.marital_status,
-          nominee_gender:
-            current.nominee_gender && current.nominee_gender.trim() !== ""
-              ? current.nominee_gender
-              : fromServer.nominee_gender,
-          nominee_name: current.nominee_name && current.nominee_name.trim() !== "" ? current.nominee_name : fromServer.nominee_name,
-          nominee_age: current.nominee_age && current.nominee_age.trim() !== "" ? current.nominee_age : fromServer.nominee_age,
-          nominee_relationship:
-            current.nominee_relationship && current.nominee_relationship.trim() !== ""
-              ? current.nominee_relationship
-              : fromServer.nominee_relationship,
-          insurer: fromServer.insurer ?? current.insurer,
-          policy_num: fromServer.policy_num ?? current.policy_num,
-          policy_from: fromServer.policy_from ?? current.policy_from,
-          policy_to: fromServer.policy_to ?? current.policy_to,
-          premium: fromServer.premium ?? current.premium,
-        };
-      });
+      setExtractedInsurance((prev) => mergeInsuranceFromOcrPayload(prev, r));
     }
   };
 
@@ -496,48 +509,7 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError,
         if (insPoll && typeof insPoll === "object" && !Array.isArray(insPoll)) {
           setInsuranceReadByTextract(true);
           const r = insPoll as Record<string, unknown>;
-          setExtractedInsurance((prev) => {
-            const current = prev ?? {};
-            const currentFinancier = normalizeFinancierInput(current.financier);
-            const fromServer = {
-              profession: typeof r.profession === "string" ? r.profession : undefined,
-              financier: normalizeFinancierInput(r.financier),
-              marital_status: typeof r.marital_status === "string" ? r.marital_status : undefined,
-              nominee_gender: typeof r.nominee_gender === "string" ? r.nominee_gender : undefined,
-              nominee_name: typeof r.nominee_name === "string" ? r.nominee_name : undefined,
-              nominee_age: r.nominee_age != null ? String(r.nominee_age) : undefined,
-              nominee_relationship: typeof r.nominee_relationship === "string" ? r.nominee_relationship : undefined,
-              insurer: typeof r.insurer === "string" ? r.insurer : undefined,
-              policy_num: typeof r.policy_num === "string" ? r.policy_num : undefined,
-              policy_from: typeof r.policy_from === "string" ? r.policy_from : undefined,
-              policy_to: typeof r.policy_to === "string" ? r.policy_to : undefined,
-              premium: typeof r.premium === "string" ? r.premium : r.premium != null ? String(r.premium) : undefined,
-            };
-            return {
-              ...current,
-              profession: current.profession && current.profession.trim() !== "" ? current.profession : fromServer.profession,
-              financier: currentFinancier ?? fromServer.financier,
-              marital_status:
-                current.marital_status && current.marital_status.trim() !== ""
-                  ? current.marital_status
-                  : fromServer.marital_status,
-              nominee_gender:
-                current.nominee_gender && current.nominee_gender.trim() !== ""
-                  ? current.nominee_gender
-                  : fromServer.nominee_gender,
-              nominee_name: current.nominee_name && current.nominee_name.trim() !== "" ? current.nominee_name : fromServer.nominee_name,
-              nominee_age: current.nominee_age && current.nominee_age.trim() !== "" ? current.nominee_age : fromServer.nominee_age,
-              nominee_relationship:
-                current.nominee_relationship && current.nominee_relationship.trim() !== ""
-                  ? current.nominee_relationship
-                  : fromServer.nominee_relationship,
-              insurer: fromServer.insurer ?? current.insurer,
-              policy_num: fromServer.policy_num ?? current.policy_num,
-              policy_from: fromServer.policy_from ?? current.policy_from,
-              policy_to: fromServer.policy_to ?? current.policy_to,
-              premium: fromServer.premium ?? current.premium,
-            };
-          });
+          setExtractedInsurance((prev) => mergeInsuranceFromOcrPayload(prev, r));
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
