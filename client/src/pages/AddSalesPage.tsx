@@ -976,7 +976,14 @@ className="app-button app-button--primary"
                     <div className="add-sales-v2-dl-row-group">
                       <div className="add-sales-v2-dl-row">
                         <dt>Date of birth</dt>
-                        <dd>{display(c?.date_of_birth)}</dd>
+                        <dd>
+                          <input
+                            className="add-sales-v2-dl-input"
+                            value={c?.date_of_birth ?? ""}
+                            onChange={(e) => setExtractedCustomer((prev) => ({ ...(prev ?? {}), date_of_birth: e.target.value }))}
+                            placeholder="—"
+                          />
+                        </dd>
                       </div>
                       <div className="add-sales-v2-dl-row">
                         <dt>Gender</dt>
@@ -989,7 +996,14 @@ className="app-button app-button--primary"
                     </div>
                     <div className="add-sales-v2-dl-row">
                       <dt>Address</dt>
-                      <dd>{buildDisplayAddress(c)}</dd>
+                      <dd>
+                        <input
+                          className="add-sales-v2-dl-input"
+                          value={c?.address ?? ""}
+                          onChange={(e) => setExtractedCustomer((prev) => ({ ...(prev ?? {}), address: e.target.value }))}
+                          placeholder="—"
+                        />
+                      </dd>
                     </div>
                   </dl>
                 </div>

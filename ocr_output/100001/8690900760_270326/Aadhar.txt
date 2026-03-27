@@ -1,0 +1,5 @@
+Aadhar scan – 15 extracted fields
+
+Aadhar ID: 7138
+Name: LAVESH KUMAR
+Gender: Male
