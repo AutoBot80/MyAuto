@@ -602,7 +602,8 @@ def _try_fill_mobile_and_find_in_contact_applet(
 
         # Strict path: fill inside same-frame #findfieldsbox using required selectors.
         try:
-            fn = (first_name or "").strip()
+            fn_raw = (first_name or "").strip()
+            fn_find = _first_name_for_contact_find_query_field(fn_raw)
             ff_out = root.evaluate(
                 """(args) => {
                   const mobileVal = String(args.mobile || '').trim();
@@ -659,7 +660,7 @@ def _try_fill_mobile_and_find_in_contact_applet(
                     return { ok: false, reason: 'find_click_and_enter_failed' };
                   }
                 }""",
-                {"mobile": mobile, "first": fn},
+                {"mobile": mobile, "first": fn_find},
             )
             _dbg("H8", "findfieldsbox_strict_fill_attempt", ff_out or {})
             if ff_out and ff_out.get("ok"):
@@ -756,8 +757,9 @@ def _try_fill_mobile_and_find_in_contact_applet(
             if not filled:
                 continue
 
-            fn = (first_name or "").strip()
-            if fn:
+            fn_raw = (first_name or "").strip()
+            fn_find = _first_name_for_contact_find_query_field(fn_raw)
+            if fn_find:
                 # #region agent log - same applet selector visibility
                 _strict_id_count = 0
                 _strict_id_visible = False
@@ -795,7 +797,7 @@ def _try_fill_mobile_and_find_in_contact_applet(
                         fl = applet.locator(css).first
                         if fl.count() > 0 and fl.is_visible(timeout=700):
                             fl.fill("", timeout=min(3000, timeout_ms))
-                            fl.fill(fn, timeout=timeout_ms)
+                            fl.fill(fn_find, timeout=timeout_ms)
                             fn_filled = True
                             break
                     except Exception:
@@ -805,7 +807,7 @@ def _try_fill_mobile_and_find_in_contact_applet(
                         fl = applet.get_by_label(re.compile(r"^\s*First\s*Name\s*$", re.I)).first
                         if fl.count() > 0 and fl.is_visible(timeout=700):
                             fl.fill("", timeout=min(3000, timeout_ms))
-                            fl.fill(fn, timeout=timeout_ms)
+                            fl.fill(fn_find, timeout=timeout_ms)
                             fn_filled = True
                     except Exception:
                         pass
@@ -832,7 +834,7 @@ def _try_fill_mobile_and_find_in_contact_applet(
                         _dbg(
                             "H4",
                             "find_clicked_same_applet",
-                            {"used_selector": css, "had_first_name": bool(fn)},
+                            {"used_selector": css, "had_first_name": bool(fn_raw)},
                         )
                         return True
                 except Exception:
@@ -848,7 +850,7 @@ def _try_fill_mobile_and_find_in_contact_applet(
                     _dbg(
                         "H4",
                         "find_clicked_same_applet_title_fallback",
-                        {"had_first_name": bool(fn)},
+                        {"had_first_name": bool(fn_raw)},
                     )
                     return True
             except Exception:
@@ -2465,7 +2467,8 @@ def _contact_view_find_by_mobile(
 ) -> bool:
     """
     Open Contact Find view, set object type to Contact when possible, fill **mobile**, optional
-    **First Name**, then Go. When ``first_name`` is set, both fields are filled before Find (video SOP).
+    **First Name**, then Go. When ``first_name`` is set, both fields are filled before Find; the
+    First Name field receives ``<first>*`` (starts-with) unless it already ends with ``*``.
     When ``first_name`` is omitted, behavior matches legacy **mobile-only** find (re-find after basic
     enquiry, etc.).
     """
@@ -2505,7 +2508,7 @@ def _contact_view_find_by_mobile(
     if scoped_applet_find_clicked:
         note(
             "Filled Mobile (title='Mobile Phone') and First Name (id='field_textbox_1' when present) "
-            "in the same Contact Find frame and clicked Find."
+            "as starts-with query (<first>*) in the same Contact Find frame and clicked Find."
         )
         _safe_page_wait(page, wait_after_go_ms, log_label="after_contact_find_go_scoped")
         return True
@@ -2569,7 +2572,8 @@ def _contact_view_find_by_mobile(
         ):
             note("Find: could not fill First Name in Contact Find pane after mobile fill.")
             return False
-        note(f"Filled First Name in Find pane → {fn_req!r}.")
+        _fn_q = _first_name_for_contact_find_query_field(fn_req)
+        note(f"Filled First Name in Find pane → {_fn_q!r} (starts-with * query).")
 
     _siebel_blur_and_settle(page, ms=350)
 
@@ -3396,6 +3400,26 @@ def _validate_contact_find_first_name(raw: str) -> tuple[bool, str]:
     return True, ""
 
 
+def _first_name_for_contact_find_query_field(raw: str) -> str:
+    """
+    Value typed into Siebel Contact Find **First Name**: ``<base>*`` so the query behaves as
+    **starts with** (matches compound names such as **Lavesh Faujdar** when Find uses **Lavesh**).
+
+    Trailing dots from dotted duplicate keys are stripped before appending ``*``. If the caller
+    already ended the string with ``*``, it is left unchanged.
+    """
+    s = (raw or "").strip()
+    if not s:
+        return ""
+    while s.endswith("."):
+        s = s[:-1].strip()
+    if not s:
+        return ""
+    if s.endswith("*"):
+        return s
+    return f"{s}*"
+
+
 def _mobile_needle_for_contact_grid_match(mobile: str) -> str:
     """
     Prefer full **10-digit** tail for contact **list/grid** matching (fewer false positives
@@ -3664,8 +3688,8 @@ def _fill_first_name_in_find_roots(
     action_timeout_ms: int,
     content_frame_selector: str | None,
 ) -> bool:
-    """Fill First Name in Contact Find pane (any search root / frame)."""
-    fn = (first_name or "").strip()
+    """Fill First Name in Contact Find pane (any search root / frame) using Siebel starts-with ``*``."""
+    fn = _first_name_for_contact_find_query_field((first_name or "").strip())
     if not fn:
         return False
     for root in list(_siebel_locator_search_roots(page, content_frame_selector)) + list(

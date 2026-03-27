@@ -140,6 +140,7 @@ This is the **intended** real-DMS order (aligned with the operator screen record
 1. **Contact Find inputs (required):**
    - Fill **Mobile** using field `title="Mobile Phone"` and **First Name** using `id="field_textbox_1"` **within the same frame**.
    - First Name is mandatory. Empty/whitespace or placeholders (for example: `NA`, `N/A`, `null`, `none`, `-`, `.`, `..`) fail the run.
+   - The value typed into **First Name** for the query is **`<first name>*`** (Siebel starts-with), except when the configured value already ends with `*`; trailing dot suffixes used for duplicate-contact keys are stripped before appending `*`.
 2. **Search key and row eligibility:**
    - Contact Find and row matching use **mobile + first name** aligned with the search key: **trimmed, case-insensitive** matching on the result row. **Compound CRM first names** (e.g. grid shows **“Lavesh Faujdar”**) match a Find key of **“Lavesh”**, **“Lavesh.”** (trailing dots stripped for compare), or the **full multi-word** key; the **first whitespace-delimited token** of the stored name aligns with the single-token Find key. Siebel may hide label cells from visible text while **textContent**, **input/textarea** values, or **title/aria-label** on cells still carry the name.
    - If **0 rows** match mobile+first name, run Add Enquiry with the **base first name** (no dot suffix).
@@ -345,3 +346,4 @@ Bulk upload automates the ingestion of scanned documents from a shared folder in
 | 3.4 | Mar 2026 | — | **§6.1b** updated with strict Find→Vehicles selector rule: fill **VIN** `id="field_textbox_0"` and **Engine#** `id="field_textbox_2"` in the same frame; fail if unavailable |
 | 3.5 | Mar 2026 | — | **§6.1b** / **BR-19**: grid row first-name match clarified — trimmed **case-insensitive** equality; implementation may use row **textContent**, cell **input/textarea** values, and **title/aria-label** when Siebel omits names from visible **innerText** |
 | 3.6 | Mar 2026 | — | **§6.1b**: first-name row match extended for **compound** Siebel display (**“Lavesh Faujdar”** vs Find **“Lavesh”** / **“Lavesh.”**) via first-token and prefix rules consistent with Hero CRM |
+| 3.7 | Mar 2026 | — | **§6.1b**: Contact Find First Name field uses **starts-with** query (**`<first>*`**) so compound names in Siebel match the sheet’s single-token first name |
