@@ -4416,6 +4416,92 @@ def _add_customer_payment(
     return False
 
 
+def _attach_vehicle_to_bkg(
+    page: Page,
+    *,
+    action_timeout_ms: int,
+    content_frame_selector: str | None,
+    note,
+) -> tuple[bool, str | None]:
+    """
+    After a new sales order is saved, open the order detail from the header link Siebel shows at the
+    top of the page: ``<a name="Order Number" tabindex="-1">…</a>`` (drill-down on Order#).
+    """
+    _tmo = min(int(action_timeout_ms or 3000), 4000)
+    roots: list = []
+    try:
+        roots.extend(list(_siebel_locator_search_roots(page, content_frame_selector)))
+    except Exception:
+        pass
+    try:
+        roots.extend(list(_ordered_frames(page)))
+    except Exception:
+        pass
+    roots.append(page)
+
+    _selectors = (
+        "a[name='Order Number'][tabindex='-1']",
+        "a[name='Order Number']",
+    )
+    for root in roots:
+        for css in _selectors:
+            try:
+                loc = root.locator(css).first
+                if loc.count() <= 0 or not loc.is_visible(timeout=900):
+                    continue
+                try:
+                    loc.scroll_into_view_if_needed(timeout=_tmo)
+                except Exception:
+                    pass
+                try:
+                    loc.click(timeout=_tmo)
+                except Exception:
+                    loc.click(timeout=_tmo, force=True)
+                note(f"attach_vehicle_to_bkg: clicked Order Number header link via {css!r}.")
+                _safe_page_wait(page, 1200, log_label="after_attach_vehicle_to_bkg_click")
+                return True, None
+            except Exception:
+                continue
+
+    _js = """() => {
+      const vis = (el) => {
+        if (!el) return false;
+        const st = window.getComputedStyle(el);
+        if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity) === 0) return false;
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+      };
+      let el = document.querySelector("a[name='Order Number'][tabindex='-1']");
+      if (!el || !vis(el)) el = document.querySelector("a[name='Order Number']");
+      if (!el || !vis(el)) return '';
+      try { el.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
+      el.click();
+      return 'order-number-a';
+    }"""
+    for frame in _ordered_frames(page):
+        try:
+            hit = frame.evaluate(_js)
+            if hit:
+                note(f"attach_vehicle_to_bkg: JS clicked Order Number in frame ({hit!r}).")
+                _safe_page_wait(page, 1200, log_label="after_attach_vehicle_to_bkg_js_frame")
+                return True, None
+        except Exception:
+            continue
+    try:
+        hit = page.evaluate(_js)
+        if hit:
+            note(f"attach_vehicle_to_bkg: JS clicked Order Number on main page ({hit!r}).")
+            _safe_page_wait(page, 1200, log_label="after_attach_vehicle_to_bkg_js_page")
+            return True, None
+    except Exception:
+        pass
+
+    return (
+        False,
+        "attach_vehicle_to_bkg: could not find or click Order Number link (name='Order Number', tabindex='-1').",
+    )
+
+
 def _create_order(
     page: Page,
     *,
@@ -4435,8 +4521,8 @@ def _create_order(
     - Click Sales Orders New:List (+)
     - Set Booking Order Type
     - Pick contact by mobile from pick applet
-    - Save and open created Order#
-    - On order line items: Line Items List:New -> VIN (name=VIN) -> full chassis + Enter;
+    - Save, scrape Order#, then ``_attach_vehicle_to_bkg`` (header ``a[name='Order Number'][tabindex='-1']``)
+    - (Invoice-selected / legacy path only) On order line items: Line Items List:New -> VIN (name=VIN) -> full chassis + Enter;
       optional pick applet (search by Vin#) -> fill chassis, select row, OK; then scrape inventory
     - If inventory not In transit: Price all + Allocate all
     - Scrape Total (Ex-showroom)
@@ -5490,6 +5576,22 @@ def _create_order(
             note(f"Create Order: scraped Order#={order_no!r} after save.")
         else:
             note("Create Order: Order# not readable after save (best-effort).")
+        _att_ok, _att_err = _attach_vehicle_to_bkg(
+            page,
+            action_timeout_ms=action_timeout_ms,
+            content_frame_selector=content_frame_selector,
+            note=note,
+        )
+        scraped["order_drilldown_opened"] = bool(_att_ok)
+        if not _att_ok:
+            return False, (_att_err or "attach_vehicle_to_bkg failed.").strip(), scraped
+        if callable(form_trace):
+            form_trace(
+                "v4_create_order",
+                "Vehicle Sales — order header",
+                "attach_vehicle_to_bkg_click_order_number_header",
+                order_number=str(order_no or ""),
+            )
         return True, None, scraped
     # 9) Click Order# drill-down link
     if not _existing_order_opened:
@@ -7774,6 +7876,33 @@ def Playwright_Hero_DMS_fill(
         log_fp.write(f"frame_partial={frame_p!r}\n")
         log_fp.write(f"engine_partial={engine_p!r}\n")
         log_fp.write(f"aadhar_id={aadhar_uin!r}\n")
+        _fc = str(
+            dms_values.get("full_chassis")
+            or dms_values.get("frame_num")
+            or dms_values.get("chassis")
+            or ""
+        ).strip()
+        _fe = str(
+            dms_values.get("full_engine")
+            or dms_values.get("engine_num")
+            or dms_values.get("engine")
+            or ""
+        ).strip()
+        _vm = str(dms_values.get("vehicle_model") or dms_values.get("model") or "").strip()
+        _vc = str(
+            dms_values.get("vehicle_colour")
+            or dms_values.get("color")
+            or dms_values.get("colour")
+            or ""
+        ).strip()
+        log_fp.write(f"full_chassis_from_source={_fc!r}\n")
+        log_fp.write(f"full_engine_from_source={_fe!r}\n")
+        log_fp.write(f"vehicle_model_from_source={_vm!r}\n")
+        log_fp.write(f"vehicle_color_from_source={_vc!r}\n")
+        log_fp.write(
+            "# Siebel scrape: full_chassis/full_engine come from Add Enquiry vehicle detail; "
+            "stage 5 Auto Vehicle List grid uses frame_num/engine_num/model/color.\n"
+        )
         cu = (urls.contact or "").strip()
         log_fp.write(f"url_contact_truncated={cu[:200]!r}\n")
         log_fp.write(f"url_enquiry_truncated={(urls.enquiry or '')[:200]!r}\n")
@@ -8366,6 +8495,14 @@ def Playwright_Hero_DMS_fill(
                     "Siebel Save was not detected on the customer/enquiry step — vehicle search still ran; "
                     "verify the contact record in Hero Connect. dms_siebel_forms_filled=false for API consumers."
                 )
+            note(
+                "Vehicle grid scrape (stage 5): "
+                f"model={scraped.get('model')!r}, color={scraped.get('color')!r}, "
+                f"frame_num={scraped.get('frame_num')!r}, engine_num={scraped.get('engine_num')!r}, "
+                f"key_num={scraped.get('key_num')!r}. "
+                "full_chassis/full_engine are filled on the Add Enquiry path from vehicle detail scrape, "
+                "not from this list grid."
+            )
             step("Stage 5: vehicle list query completed; result row read when present.")
 
             in_transit_state = bool(scraped.get("in_transit"))
