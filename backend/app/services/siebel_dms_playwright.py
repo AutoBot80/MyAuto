@@ -3441,8 +3441,12 @@ def _siebel_ui_suggests_contact_match(page: Page, mobile: str) -> bool:
 
 def _siebel_ui_suggests_contact_match_mobile_first(page: Page, mobile: str, first_name: str) -> bool:
     """
-    After Find/Go with **mobile + first name**, true when some ``tbody tr`` has the mobile (compact)
-    **and** a ``td`` whose text **exactly** equals ``first_name`` (trimmed).
+    After Find/Go with **mobile + first name**, true when some data row ``tr`` has the mobile in the
+    row's **textContent** (compact) and the first name is detectable on that row.
+
+    Siebel list rows often omit hidden/placeholder cells from **innerText** while **textContent**,
+    ``input``/``textarea`` values, or ``title``/``aria-label`` on ``td`` still carry First Name.
+    Matching is **case-insensitive** on trimmed text (Unicode-safe lowercasing); mobile stays digit-based.
     """
     needle = _mobile_needle_for_contact_grid_match(mobile)
     target = (first_name or "").strip()
@@ -3450,18 +3454,35 @@ def _siebel_ui_suggests_contact_match_mobile_first(page: Page, mobile: str, firs
         return False
     script = """([needle, target]) => {
       if (!needle || needle.length < 8 || !target) return false;
-      const compact = (s) => String(s).replace(/\\s+/g, '');
+      const compact = (s) => String(s || '').replace(/\\s+/g, '');
+      const norm = (s) => String(s || '').replace(/\\u00a0/g, ' ').trim();
+      const normLow = (s) => norm(s).toLowerCase();
+      const tLow = normLow(target);
       const hasM = (s) => compact(s).includes(needle);
-      for (const tr of document.querySelectorAll('table tbody tr')) {
+      const rowHasFirst = (tr) => {
+        const tds = tr.querySelectorAll('td');
+        for (const td of tds) {
+          if (normLow(td.textContent) === tLow) return true;
+          const ttl = normLow(td.getAttribute('title') || '');
+          const alb = normLow(td.getAttribute('aria-label') || '');
+          if (ttl === tLow || alb === tLow) return true;
+          for (const inp of td.querySelectorAll('input, textarea')) {
+            if (normLow(inp.value) === tLow) return true;
+          }
+        }
+        const rowNorm = norm(tr.textContent || '').replace(/\\s+/g, ' ').trim();
+        const rowLow = rowNorm.toLowerCase();
+        if (!rowLow.includes(tLow)) return false;
+        const parts = rowLow.split(/[\\s,;|\\/\\u2013\\u2014-]+/).filter(Boolean);
+        return parts.includes(tLow);
+      };
+      for (const tr of document.querySelectorAll('table tr')) {
+        if (tr.closest('thead')) continue;
         const tds = tr.querySelectorAll('td');
         if (tds.length < 3) continue;
-        const rowCompact = compact(tr.innerText || '');
-        if (!hasM(rowCompact)) continue;
-        let firstOk = false;
-        for (const td of tds) {
-          if (String(td.textContent || '').trim() === target) { firstOk = true; break; }
-        }
-        if (firstOk) return true;
+        const rowBody = tr.textContent || '';
+        if (!hasM(rowBody)) continue;
+        if (rowHasFirst(tr)) return true;
       }
       return false;
     }"""
@@ -3491,30 +3512,49 @@ def _siebel_ui_suggests_contact_match_mobile_first(page: Page, mobile: str, firs
     _dbg_mf(
         "M1",
         "match_entry",
-        {"needle": needle, "target_first_name": target},
+        {"needle": needle, "target_first_name": target, "run_tag": "post-fix-row-textcontent"},
     )
     diag_js = """([needle, target]) => {
       const compact = (s) => String(s || '').replace(/\\s+/g, '');
-      const out = { table_rows_seen: 0, mobile_rows_seen: 0, first_exact_rows_seen: 0, sample_rows: [] };
-      const rows = Array.from(document.querySelectorAll('table tbody tr, table tr'));
+      const norm = (s) => String(s || '').replace(/\\u00a0/g, ' ').trim();
+      const normLow = (s) => norm(s).toLowerCase();
+      const tLow = normLow(target);
+      const rowHasFirst = (tr) => {
+        const tds = tr.querySelectorAll('td');
+        for (const td of tds) {
+          if (normLow(td.textContent) === tLow) return true;
+          const ttl = normLow(td.getAttribute('title') || '');
+          const alb = normLow(td.getAttribute('aria-label') || '');
+          if (ttl === tLow || alb === tLow) return true;
+          for (const inp of td.querySelectorAll('input, textarea')) {
+            if (normLow(inp.value) === tLow) return true;
+          }
+        }
+        const rowNorm = norm(tr.textContent || '').replace(/\\s+/g, ' ').trim();
+        const rowLow = rowNorm.toLowerCase();
+        if (!rowLow.includes(tLow)) return false;
+        const parts = rowLow.split(/[\\s,;|\\/\\u2013\\u2014-]+/).filter(Boolean);
+        return parts.includes(tLow);
+      };
+      const out = { table_rows_seen: 0, mobile_rows_seen: 0, first_resolved_rows_seen: 0, sample_rows: [] };
+      const rows = Array.from(document.querySelectorAll('table tr'));
       for (const tr of rows) {
+        if (tr.closest('thead')) continue;
         const tds = tr.querySelectorAll('td');
         if (tds.length < 2) continue;
         out.table_rows_seen += 1;
-        const rowText = String(tr.innerText || '');
-        const rowCompact = compact(rowText);
-        const hasMobile = needle && rowCompact.includes(needle);
-        let firstExact = false;
-        for (const td of tds) {
-          if (String(td.textContent || '').trim() === target) { firstExact = true; break; }
-        }
+        const rowFull = String(tr.textContent || '');
+        const rowInner = String(tr.innerText || '');
+        const hasMobile = needle && compact(rowFull).includes(needle);
+        const firstOk = target ? rowHasFirst(tr) : false;
         if (hasMobile) out.mobile_rows_seen += 1;
-        if (firstExact) out.first_exact_rows_seen += 1;
+        if (firstOk) out.first_resolved_rows_seen += 1;
         if (out.sample_rows.length < 3) {
           out.sample_rows.push({
-            text: rowText.slice(0, 180),
+            text_inner: rowInner.slice(0, 180),
+            text_content: rowFull.slice(0, 220),
             has_mobile: hasMobile,
-            first_exact: firstExact,
+            first_resolved: firstOk,
             td_count: tds.length
           });
         }
@@ -4287,16 +4327,30 @@ def _click_nth_mobile_title_drilldown(
       if (!tr) return false;
       const tds = tr.querySelectorAll('td');
       if (tds.length < 3) return false;
-      const rowCompact = String(tr.innerText || '').replace(/\\s+/g, '');
+      const compact = (s) => String(s || '').replace(/\\s+/g, '');
+      const rowCompact = compact(tr.textContent || '');
       let mobileOk = false;
       if (needle && rowCompact.includes(needle)) mobileOk = true;
       else if (raw.length >= 8 && rowCompact.includes(raw)) mobileOk = true;
       if (!mobileOk) return false;
       if (!target) return true;
+      const norm = (s) => String(s || '').replace(/\\u00a0/g, ' ').trim();
+      const normLow = (s) => norm(s).toLowerCase();
+      const tLow = normLow(target);
       for (const td of tds) {
-        if (String(td.textContent || '').trim() === target) return true;
+        if (normLow(td.textContent) === tLow) return true;
+        const ttl = normLow(td.getAttribute('title') || '');
+        const alb = normLow(td.getAttribute('aria-label') || '');
+        if (ttl === tLow || alb === tLow) return true;
+        for (const inp of td.querySelectorAll('input, textarea')) {
+          if (normLow(inp.value) === tLow) return true;
+        }
       }
-      return false;
+      const rowNorm = norm(tr.textContent || '').replace(/\\s+/g, ' ').trim();
+      const rowLow = rowNorm.toLowerCase();
+      if (!rowLow.includes(tLow)) return false;
+      const parts = rowLow.split(/[\\s,;|\\/\\u2013\\u2014-]+/).filter(Boolean);
+      return parts.includes(tLow);
     }"""
     args = {"needle": drill_needle, "raw": drill_raw, "target": fn_ex}
     plans: list[tuple[object, str, int]] = []
