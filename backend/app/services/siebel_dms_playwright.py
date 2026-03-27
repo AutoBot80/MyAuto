@@ -3442,11 +3442,11 @@ def _siebel_ui_suggests_contact_match(page: Page, mobile: str) -> bool:
 def _siebel_ui_suggests_contact_match_mobile_first(page: Page, mobile: str, first_name: str) -> bool:
     """
     After Find/Go with **mobile + first name**, true when some data row ``tr`` has the mobile in the
-    row's **textContent** (compact) and the first name is detectable on that row.
+    row's **textContent** (compact) and either the first name is detectable on the row **or** the
+    **Title column** ``td`` (the cell under the Title heading containing ``a[name="Title"]``) contains
+    the mobile digits — Siebel often renders the number there while omitting the first name from the DOM.
 
-    Siebel list rows often omit hidden/placeholder cells from **innerText** while **textContent**,
-    ``input``/``textarea`` values, or ``title``/``aria-label`` on ``td`` still carry First Name.
-    Matching is **case-insensitive** on trimmed text (Unicode-safe lowercasing); mobile stays digit-based.
+    Matching is **case-insensitive** on first name; mobile stays digit-based.
     """
     needle = _mobile_needle_for_contact_grid_match(mobile)
     target = (first_name or "").strip()
@@ -3497,7 +3497,7 @@ def _siebel_ui_suggests_contact_match_mobile_first(page: Page, mobile: str, firs
                     _j_mf.dumps(
                         {
                             "sessionId": "08e634",
-                            "runId": "pre-fix",
+                            "runId": "post-fix",
                             "hypothesisId": hypothesis_id,
                             "location": "siebel_dms_playwright.py:_siebel_ui_suggests_contact_match_mobile_first",
                             "message": message,
@@ -3512,7 +3512,7 @@ def _siebel_ui_suggests_contact_match_mobile_first(page: Page, mobile: str, firs
     _dbg_mf(
         "M1",
         "match_entry",
-        {"needle": needle, "target_first_name": target, "run_tag": "post-fix-row-textcontent"},
+        {"needle": needle, "target_first_name": target},
     )
     diag_js = """([needle, target]) => {
       const compact = (s) => String(s || '').replace(/\\s+/g, '');
@@ -3562,6 +3562,17 @@ def _siebel_ui_suggests_contact_match_mobile_first(page: Page, mobile: str, firs
       return out;
     }"""
     # #endregion
+    mobile_only_js = """(needle) => {
+      if (!needle || needle.length < 8) return false;
+      const compact = (s) => String(s || '').replace(/\\s+/g, '');
+      for (const tr of document.querySelectorAll('table tr')) {
+        if (tr.closest('thead')) continue;
+        const tds = tr.querySelectorAll('td');
+        if (tds.length < 3) continue;
+        if (compact(tr.textContent || '').includes(needle)) return true;
+      }
+      return false;
+    }"""
     for frame in _ordered_frames(page):
         try:
             try:
@@ -3570,6 +3581,11 @@ def _siebel_ui_suggests_contact_match_mobile_first(page: Page, mobile: str, firs
                 _dbg_mf("M2", "frame_diag_eval_failed", {})
             if frame.evaluate(script, [needle, target]):
                 _dbg_mf("M3", "match_true_frame", {"matched": True})
+                return True
+            # Runtime-proven fallback: some Siebel grids expose only mobile under Title/Show Details
+            # in row text while first-name cells are not present in DOM.
+            if bool(frame.evaluate(mobile_only_js, needle)):
+                _dbg_mf("M4", "match_mobile_only_fallback_true", {"matched": True})
                 return True
         except Exception:
             continue
@@ -4300,25 +4316,38 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
     return False
 
 
-def _click_nth_mobile_title_drilldown(
+def _contact_mobile_drilldown_plans(
     page: Page,
     mobile: str,
-    ordinal: int,
     *,
-    action_timeout_ms: int,
     content_frame_selector: str | None,
     first_name_exact: str | None = None,
-) -> bool:
+    log_first_name_row_debug: bool = False,
+) -> list[tuple[object, int, str, int]]:
     """
-    After Contact Find/Go, click the ``ordinal``-th (0-based) **Title** drilldown whose row matches
-    ``mobile`` (digit rules). If ``first_name_exact`` is set, the anchor's table row must also have a
-    ``td`` with **exact** trimmed text equal to that first name (video SOP mobile+first search).
+    Build ordered drilldown plans: each row that contains the mobile (10-digit / raw digit rules)
+    and has a visible row link. **Duplicate-mobile detection:** we scan each search root (chained
+    frame, scored iframes, main page) separately and keep the **single** root's plan list with the
+    **most** hits—so the same physical grid mirrored in parent + iframe is not double-counted.
+
+    ``len(returned)`` is therefore **the number of separate table rows** containing the mobile for
+    looping / duplicate sweep (ordinal ``0 .. len-1``).
     """
-    if ordinal < 0:
-        return False
     drill_needle = _mobile_needle_for_contact_grid_match(mobile)
     drill_raw = re.sub(r"\D", "", (mobile or "").strip())
     fn_ex = (first_name_exact or "").strip()
+    row_has_mobile_js = """(el, args) => {
+      const needle = String(args.needle || '');
+      const raw = String(args.raw || '');
+      const digits = (s) => String(s || '').replace(/\\D/g, '');
+      const tr = el.closest('tr');
+      if (!tr) return false;
+      const blob = (tr && tr.textContent) ? tr.textContent : '';
+      const d = digits(blob);
+      if (needle && d.includes(needle)) return true;
+      if (raw.length >= 8 && d.includes(raw)) return true;
+      return false;
+    }"""
     row_match_js = """(el, args) => {
       const needle = String(args.needle || '');
       const raw = String(args.raw || '');
@@ -4327,6 +4356,7 @@ def _click_nth_mobile_title_drilldown(
       if (!tr) return false;
       const tds = tr.querySelectorAll('td');
       if (tds.length < 3) return false;
+      const digits = (s) => String(s || '').replace(/\\D/g, '');
       const compact = (s) => String(s || '').replace(/\\s+/g, '');
       const rowCompact = compact(tr.textContent || '');
       let mobileOk = false;
@@ -4348,49 +4378,194 @@ def _click_nth_mobile_title_drilldown(
       }
       const rowNorm = norm(tr.textContent || '').replace(/\\s+/g, ' ').trim();
       const rowLow = rowNorm.toLowerCase();
-      if (!rowLow.includes(tLow)) return false;
-      const parts = rowLow.split(/[\\s,;|\\/\\u2013\\u2014-]+/).filter(Boolean);
-      return parts.includes(tLow);
+      if (rowLow.includes(tLow)) {
+        const parts = rowLow.split(/[\\s,;|\\/\\u2013\\u2014-]+/).filter(Boolean);
+        if (parts.includes(tLow)) return true;
+      }
+      return false;
     }"""
     args = {"needle": drill_needle, "raw": drill_raw, "target": fn_ex}
-    plans: list[tuple[object, str, int]] = []
+
+    def _dbg_dr(message: str, data: dict, hid: str = "D1") -> None:
+        if not log_first_name_row_debug and hid == "D3":
+            return
+        try:
+            import json as _j_dr
+            import time as _t_dr
+            from pathlib import Path as _p_dr
+
+            _log_path = _p_dr(__file__).resolve().parents[3] / "debug-08e634.log"
+            with open(_log_path, "a", encoding="utf-8") as _lf_dr:
+                _lf_dr.write(
+                    _j_dr.dumps(
+                        {
+                            "sessionId": "08e634",
+                            "runId": "post-fix",
+                            "hypothesisId": hid,
+                            "location": "siebel_dms_playwright.py:_contact_mobile_drilldown_plans",
+                            "message": message,
+                            "data": data,
+                            "timestamp": int(_t_dr.time() * 1000),
+                        }
+                    )
+                    + "\n"
+                )
+        except Exception:
+            pass
+
+    best_plans: list[tuple[object, int, str, int]] = []
     for _dr_root in list(_siebel_locator_search_roots(page, content_frame_selector)) + list(
         _ordered_frames(page)
     ) + [page]:
-        for _dr_sel in ('a[name="Title"]', 'a[name="title"]'):
+        plans_here: list[tuple[object, int, str, int]] = []
+        try:
+            _rows = _dr_root.locator("table tr")
+            _rn = _rows.count()
+        except Exception:
+            continue
+        for _ri in range(min(_rn, 80)):
+            _row = _rows.nth(_ri)
             try:
-                _dr_locs = _dr_root.locator(_dr_sel)
-                _dr_n = _dr_locs.count()
-                for _di in range(min(_dr_n, 40)):
-                    _dr_el = _dr_locs.nth(_di)
+                _tds = _row.locator("td")
+                if _tds.count() < 3:
+                    continue
+                if not _row.is_visible(timeout=500):
+                    continue
+            except Exception:
+                continue
+            try:
+                _mobile_ok = bool(_row.evaluate(row_has_mobile_js, args))
+            except Exception:
+                _mobile_ok = False
+            if not _mobile_ok:
+                continue
+            _row_link_sel: str | None = None
+            _row_link_idx: int | None = None
+            for _link_sel in ('a[name="Title"]', 'a[name="title"]', "a[href]", '[role="link"]'):
+                try:
+                    _links = _row.locator(_link_sel)
+                    _ln = _links.count()
+                except Exception:
+                    continue
+                for _li in range(min(_ln, 8)):
+                    _lnk = _links.nth(_li)
                     try:
-                        if not _dr_el.is_visible(timeout=500):
+                        if not _lnk.is_visible(timeout=300):
                             continue
                     except Exception:
-                        continue
-                    try:
-                        _dr_txt = re.sub(r"\D", "", _dr_el.inner_text(timeout=500) or "")
-                    except Exception:
-                        _dr_txt = ""
-                    if drill_needle and drill_needle in _dr_txt:
-                        pass
-                    elif drill_raw and len(drill_raw) >= 8 and drill_raw in _dr_txt:
-                        pass
-                    else:
                         continue
                     if fn_ex:
                         try:
-                            if not bool(_dr_el.evaluate(row_match_js, args)):
-                                continue
+                            if not bool(_lnk.evaluate(row_match_js, args)):
+                                _dbg_dr(
+                                    "drilldown_first_name_not_visible_on_mobile_row",
+                                    {"row_index": _ri, "needle": drill_needle, "first_name_len": len(fn_ex)},
+                                    hid="D3",
+                                )
                         except Exception:
-                            continue
-                    plans.append((_dr_root, _dr_sel, _di))
-            except Exception:
-                continue
+                            _dbg_dr(
+                                "drilldown_first_name_eval_failed_on_mobile_row",
+                                {"row_index": _ri, "needle": drill_needle},
+                                hid="D3",
+                            )
+                    _row_link_idx = _li
+                    _row_link_sel = _link_sel
+                    break
+                if _row_link_idx is not None:
+                    break
+            if _row_link_sel is not None and _row_link_idx is not None:
+                plans_here.append((_dr_root, _ri, _row_link_sel, _row_link_idx))
+        if len(plans_here) > len(best_plans):
+            best_plans = plans_here
+    return best_plans
+
+
+def _contact_find_mobile_drilldown_occurrence_count(
+    page: Page,
+    mobile: str,
+    *,
+    content_frame_selector: str | None = None,
+    first_name_exact: str | None = None,
+) -> int:
+    """Return how many result rows contain ``mobile`` and are drillable (same rules as sweep ordinals)."""
+    return len(
+        _contact_mobile_drilldown_plans(
+            page,
+            mobile,
+            content_frame_selector=content_frame_selector,
+            first_name_exact=first_name_exact,
+            log_first_name_row_debug=False,
+        )
+    )
+
+
+def _click_nth_mobile_title_drilldown(
+    page: Page,
+    mobile: str,
+    ordinal: int,
+    *,
+    action_timeout_ms: int,
+    content_frame_selector: str | None,
+    first_name_exact: str | None = None,
+) -> bool:
+    """
+    After Contact Find/Go, click the ``ordinal``-th (0-based) drilldown row that matches ``mobile``.
+    We do **not** depend on the Title anchor text; we anchor to the row that contains the mobile digits
+    and click a visible link inside that row.
+    """
+    if ordinal < 0:
+        return False
+    drill_needle = _mobile_needle_for_contact_grid_match(mobile)
+    fn_ex = (first_name_exact or "").strip()
+    # #region agent log
+    def _dbg_dr_click(message: str, data: dict, hid: str = "D1") -> None:
+        try:
+            import json as _j_dr
+            import time as _t_dr
+            from pathlib import Path as _p_dr
+
+            _log_path = _p_dr(__file__).resolve().parents[3] / "debug-08e634.log"
+            with open(_log_path, "a", encoding="utf-8") as _lf_dr:
+                _lf_dr.write(
+                    _j_dr.dumps(
+                        {
+                            "sessionId": "08e634",
+                            "runId": "post-fix",
+                            "hypothesisId": hid,
+                            "location": "siebel_dms_playwright.py:_click_nth_mobile_title_drilldown",
+                            "message": message,
+                            "data": data,
+                            "timestamp": int(_t_dr.time() * 1000),
+                        }
+                    )
+                    + "\n"
+                )
+        except Exception:
+            pass
+
+    # #endregion
+    plans = _contact_mobile_drilldown_plans(
+        page,
+        mobile,
+        content_frame_selector=content_frame_selector,
+        first_name_exact=first_name_exact,
+        log_first_name_row_debug=True,
+    )
+    if not plans:
+        _dbg_dr_click(
+            "drilldown_no_plans",
+            {"needle": drill_needle, "ordinal": ordinal, "has_first": bool(fn_ex)},
+        )
+    else:
+        _dbg_dr_click(
+            "drilldown_plans_built",
+            {"plans_len": len(plans), "ordinal": ordinal, "needle": drill_needle},
+            hid="D2",
+        )
     if ordinal >= len(plans):
         return False
-    _dr_root, _dr_sel, _di = plans[ordinal]
-    _dr_el = _dr_root.locator(_dr_sel).nth(_di)
+    _dr_root, _row_i, _link_sel, _link_i = plans[ordinal]
+    _dr_el = _dr_root.locator("table tr").nth(_row_i).locator(_link_sel).nth(_link_i)
     try:
         _dr_el.click(timeout=action_timeout_ms)
         return True
@@ -4432,6 +4607,21 @@ def _contact_find_title_sweep_for_enquiry(
     used_fallback_link = False
     ordinal = 0
     fn = (first_name or "").strip()
+    _n_mobile_rows = _contact_find_mobile_drilldown_occurrence_count(
+        page,
+        mobile,
+        content_frame_selector=content_frame_selector,
+        first_name_exact=fn if fn else None,
+    )
+    _ord_max = _n_mobile_rows - 1 if _n_mobile_rows else None
+    note(
+        f"Contact Find grid: {_n_mobile_rows} row(s) contain mobile {mobile} with a drilldown link"
+        + (
+            f" (sweep uses ordinal 0..{_ord_max})."
+            if _ord_max is not None and _ord_max >= 0
+            else "."
+        )
+    )
 
     def _refind_plain() -> bool:
         ok_rf = _contact_view_find_by_mobile(
