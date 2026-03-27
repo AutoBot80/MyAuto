@@ -65,8 +65,8 @@ HERO_OEM_ONLY_ERROR = "Currently only Hero MotoCorp Limited is  configured as OE
 
 def _ensure_hero_oem_for_fill_dms(dealer_id: int | None) -> None:
     """
-    Guard Fill DMS execution by dealer parent_id.
-    Only Hero parent_id=100000 is currently supported.
+    Guard Fill DMS execution by dealer OEM.
+    Only Hero oem_id=100000 is currently supported.
     """
     did = int(dealer_id if dealer_id is not None else DEALER_ID)
     conn = get_connection()
@@ -74,7 +74,7 @@ def _ensure_hero_oem_for_fill_dms(dealer_id: int | None) -> None:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT COALESCE(TRIM(parent_id::text), '') AS parent_id
+                SELECT COALESCE(TRIM(oem_id::text), '') AS oem_id
                 FROM dealer_ref
                 WHERE dealer_id = %s
                 LIMIT 1
@@ -82,8 +82,8 @@ def _ensure_hero_oem_for_fill_dms(dealer_id: int | None) -> None:
                 (did,),
             )
             row = cur.fetchone() or {}
-            parent_id = str((row.get("parent_id") or "")).strip()
-            if parent_id != HERO_PARENT_ID:
+            oem_id = str((row.get("oem_id") or "")).strip()
+            if oem_id != HERO_PARENT_ID:
                 raise ValueError(HERO_OEM_ONLY_ERROR)
     finally:
         conn.close()
