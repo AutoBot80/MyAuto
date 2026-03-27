@@ -455,7 +455,9 @@ def _try_fill_mobile_and_find_in_contact_applet(
     def _dbg(hypothesis_id: str, message: str, data: dict) -> None:
         try:
             import json as _j_dbg, time as _t_dbg
-            with open("debug-08e634.log", "a", encoding="utf-8") as _lf_dbg:
+            from pathlib import Path as _P_dbg
+            _log_path = _P_dbg(__file__).resolve().parents[3] / "debug-08e634.log"
+            with open(_log_path, "a", encoding="utf-8") as _lf_dbg:
                 _lf_dbg.write(
                     _j_dbg.dumps(
                         {
@@ -726,16 +728,19 @@ def _try_fill_mobile_and_find_in_contact_applet(
         return False
 
     # Strong fallback for custom Find popup: fill first visible field and click Find inside that popup.
-    for frame in _ordered_frames(page):
-        try:
-            if bool(frame.evaluate(_FILL_FIRST_IN_RIGHT_FIND_PANEL_JS, mobile.strip())):
-                logger.info(
-                    "siebel_dms: filled first visible input + clicked Find in right Contact popup (DOM fallback)"
-                )
-                _dbg("H5", "dom_fallback_used_for_mobile", {"first_name_required": bool((first_name or "").strip())})
-                return True
-        except Exception:
-            continue
+    if not (first_name or "").strip():
+        for frame in _ordered_frames(page):
+            try:
+                if bool(frame.evaluate(_FILL_FIRST_IN_RIGHT_FIND_PANEL_JS, mobile.strip())):
+                    logger.info(
+                        "siebel_dms: filled first visible input + clicked Find in right Contact popup (DOM fallback)"
+                    )
+                    _dbg("H5", "dom_fallback_used_for_mobile", {"first_name_required": False})
+                    return True
+            except Exception:
+                continue
+    else:
+        _dbg("H5", "dom_fallback_skipped_due_to_first_name_requirement", {"first_name_required": True})
 
     for fl in _iter_frame_locator_roots(page, content_frame_selector):
         try:
