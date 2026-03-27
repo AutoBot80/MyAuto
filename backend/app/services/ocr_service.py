@@ -376,15 +376,23 @@ def _parse_aadhar_back_address_from_ocr(ocr_text: str) -> dict[str, str]:
     if m:
         raw = m.group(1).strip()
     if not raw or len(raw) < 12:
-        co = re.search(r"(?is)\bC/O\s*:", text)
-        if co:
+        so_iter = re.finditer(r"(?is)\b(?:C/O|S/O|W/O|D/O)\s*:", text)
+        best_chunk = ""
+        for co in so_iter:
             tail = text[co.start() :]
             stop = re.search(r"\d{4}\s+\d{4}\s+\d{4}", tail)
             chunk = tail[: stop.start()] if stop else tail
             stop_vid = re.search(r"(?i)\bVID\s*:", chunk)
             if stop_vid:
                 chunk = chunk[: stop_vid.start()]
-            raw = chunk.strip()
+            chunk = chunk.strip()
+            if re.search(r"(?i)\b(?:PO|DIST|District|Tehsil|Post\s*Office)\s*:", chunk):
+                best_chunk = chunk
+                break
+            if not best_chunk or len(chunk) > len(best_chunk):
+                best_chunk = chunk
+        if best_chunk:
+            raw = best_chunk
     if not raw or len(raw) < 8:
         # Textract often puts "Address" on its own line, then "Near …" / locality on the next lines.
         addr_head = re.search(r"(?is)\bAddress\s*\n+", text)
@@ -550,6 +558,9 @@ def _parse_aadhar_front_textract_fallback(text: str) -> dict[str, str]:
         r"(?i)/\s*D\.?B\.?\s*[:]?\s*(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{2,4})\b",
         # Standalone "DB:" or "D.B:" when followed immediately by a slash-date (avoid matching "db" in words).
         r"(?i)(?<![A-Za-z])D\.?B\.?\s*[:]?\s*(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{2,4})\b",
+        # Aadhaar letter: Hindi "जन्म तिथि/DOB:" garbles to "UTAH PMB:", "UTAH PAB:", etc.
+        # Catch-all: any word(s) + colon + date. Last so specific patterns take priority.
+        r":\s*(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{2,4})\b",
     ]
     for pat in dob_patterns:
         m = re.search(pat, t)
@@ -632,13 +643,16 @@ def _parse_aadhar_front_textract_fallback(text: str) -> dict[str, str]:
                         break
 
     if "gender" not in out:
-        # UIDAI front prints "Sex / Male" (or similar). OCR often reads "Sex" as "yes" → "yes/ MALE"
-        # with no "Gender" label, so the patterns above miss it.
+        # UIDAI front prints "पुरुष/ MALE" or "Sex / Male". OCR garbles the Hindi/label
+        # into "yes", "you", "yow", "yeu", "puu", etc. before "/ MALE".
         slash_g = re.search(
-            r"(?i)\b(?:yes|yex|yos|ses|sex)\s*/\s*(Male|Female|Transgender|MALE|FEMALE|M|F|T)\b",
+            r"(?i)\b(?:yes|yex|yos|ses|sex|you|yow|yeu|yoo|puu|pur)\s*/\s*(Male|Female|Transgender|MALE|FEMALE|M|F|T)\b",
             t,
         ) or re.search(
             r"(?i)\bSex\s*[/:]\s*(Male|Female|Transgender|MALE|FEMALE|M|F|T)\b",
+            t,
+        ) or re.search(
+            r"(?i)\b\w{2,6}\s*/\s*(Male|Female|Transgender|MALE|FEMALE)\b",
             t,
         )
         if slash_g:

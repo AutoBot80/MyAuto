@@ -4289,7 +4289,7 @@ def _add_customer_payment(
                         )
                         if _is_txn_amount:
                             if not _ae.get("readOnly"):
-                                page.keyboard.type("120000")
+                                page.keyboard.type("0")
                                 _safe_page_wait(page, 120, log_label="tab_nav_amount_fill")
                                 page.keyboard.press("Tab")
                                 _tab_filled = True
@@ -4312,7 +4312,7 @@ def _add_customer_payment(
 
                 note(
                     "Filled payment fields (direct): "
-                    f"Type=Receipt(ok={type_ok!r}), Mode=Cash(ok={mode_ok!r}), Amount=120000(ok={amount_ok!r})."
+                    f"Type=Receipt(ok={type_ok!r}), Mode=Cash(ok={mode_ok!r}), Amount=0(ok={amount_ok!r})."
                 )
                 _safe_page_wait(page, 400, log_label="after_amount_before_save")
 
@@ -5048,19 +5048,23 @@ def _create_order(
 
         _locked_root = None
 
-        # 3b) Finance Required = Y (prerequisite for Financier/Hypothecation enablement)
+        # 3b-3d) Finance Required, Financier, Hypothecation
+        _fin_name = (financier_name or "").strip()
+        _is_financed = bool(_fin_name)
+        _fin_val = "Y" if _is_financed else "N"
+
         _fin_ok = False
         for root in _roots():
             try:
                 for _lbl in ("Finance Required", "FinanceRequired"):
-                    if _fill_by_label_on_frame(root, _lbl, "Y", action_timeout_ms=action_timeout_ms):
+                    if _fill_by_label_on_frame(root, _lbl, _fin_val, action_timeout_ms=action_timeout_ms):
                         _fin_ok = True
                         _locked_root = root
                         break
                     if _select_dropdown_by_label_on_frame(
                         root,
                         label=_lbl,
-                        value="Y",
+                        value=_fin_val,
                         action_timeout_ms=min(action_timeout_ms, 8000),
                     ):
                         _fin_ok = True
@@ -5071,59 +5075,56 @@ def _create_order(
             except Exception:
                 continue
         if not _fin_ok:
-            return False, "Could not set Finance Required = Y.", scraped
-        _safe_page_wait(page, 400, log_label="after_finance_required_y")
-        note("Create Order: set Finance Required = Y.")
+            return False, f"Could not set Finance Required = {_fin_val}.", scraped
+        _safe_page_wait(page, 400, log_label="after_finance_required")
+        note(f"Create Order: set Finance Required = {_fin_val}.")
 
-        # 3c) Financier/Financer fill (mandatory after Finance Required = Y).
-        _fin_name = (financier_name or "").strip()
-        if not _fin_name:
-            return False, "Financier name is empty in source data.", scraped
-        _fin_name_ok = False
-        for root in _roots():
-            try:
-                for _lbl in ("Financer", "Financier", "Financer Name", "Financier Name"):
-                    if _fill_by_label_on_frame(root, _lbl, _fin_name, action_timeout_ms=action_timeout_ms):
-                        _fin_name_ok = True
-                        _locked_root = root
+        if _is_financed:
+            _fin_name_ok = False
+            for root in _roots():
+                try:
+                    for _lbl in ("Financer", "Financier", "Financer Name", "Financier Name"):
+                        if _fill_by_label_on_frame(root, _lbl, _fin_name, action_timeout_ms=action_timeout_ms):
+                            _fin_name_ok = True
+                            _locked_root = root
+                            break
+                        if _select_dropdown_by_label_on_frame(
+                            root,
+                            label=_lbl,
+                            value=_fin_name,
+                            action_timeout_ms=min(action_timeout_ms, 8000),
+                        ):
+                            _fin_name_ok = True
+                            _locked_root = root
+                            break
+                    if _fin_name_ok:
                         break
-                    if _select_dropdown_by_label_on_frame(
-                        root,
-                        label=_lbl,
-                        value=_fin_name,
-                        action_timeout_ms=min(action_timeout_ms, 8000),
-                    ):
-                        _fin_name_ok = True
-                        _locked_root = root
-                        break
-                if _fin_name_ok:
-                    break
-            except Exception:
-                continue
-        if not _fin_name_ok:
-            _fin_err = _detect_siebel_error_popup(page, content_frame_selector)
-            if _fin_err:
-                return False, f"Siebel error while setting Financier/Financer: {_fin_err[:200]}", scraped
-            return False, f"Could not set Financier/Financer with value {_fin_name!r}.", scraped
-        _safe_page_wait(page, 500, log_label="after_financier_fill")
-        note(f"Create Order: set Financier/Financer using input {_fin_name!r}.")
-        _fin_post_err = _detect_siebel_error_popup(page, content_frame_selector)
-        if _fin_post_err:
-            return False, f"Siebel error after Financier/Financer input: {_fin_post_err[:200]}", scraped
+                except Exception:
+                    continue
+            if not _fin_name_ok:
+                _fin_err = _detect_siebel_error_popup(page, content_frame_selector)
+                if _fin_err:
+                    return False, f"Siebel error while setting Financier/Financer: {_fin_err[:200]}", scraped
+                return False, f"Could not set Financier/Financer with value {_fin_name!r}.", scraped
+            _safe_page_wait(page, 500, log_label="after_financier_fill")
+            note(f"Create Order: set Financier/Financer using input {_fin_name!r}.")
+            _fin_post_err = _detect_siebel_error_popup(page, content_frame_selector)
+            if _fin_post_err:
+                return False, f"Siebel error after Financier/Financer input: {_fin_post_err[:200]}", scraped
 
-        # 3d) Hypothecation = Y (enabled after Finance Required = Y)
+        _hyp_val = "Y" if _is_financed else "N"
         _hyp_ok = False
         for root in _roots():
             try:
                 for _lbl in ("Hypothecation", "Hpothecation"):
-                    if _fill_by_label_on_frame(root, _lbl, "Y", action_timeout_ms=action_timeout_ms):
+                    if _fill_by_label_on_frame(root, _lbl, _hyp_val, action_timeout_ms=action_timeout_ms):
                         _hyp_ok = True
                         _locked_root = root
                         break
                     if _select_dropdown_by_label_on_frame(
                         root,
                         label=_lbl,
-                        value="Y",
+                        value=_hyp_val,
                         action_timeout_ms=min(action_timeout_ms, 8000),
                     ):
                         _hyp_ok = True
@@ -5134,9 +5135,9 @@ def _create_order(
             except Exception:
                 continue
         if not _hyp_ok:
-            return False, "Could not set Hypothecation = Y after Finance Required = Y.", scraped
-        _safe_page_wait(page, 400, log_label="after_hypothecation_y")
-        note("Create Order: set Hypothecation = Y.")
+            return False, f"Could not set Hypothecation = {_hyp_val}.", scraped
+        _safe_page_wait(page, 400, log_label="after_hypothecation")
+        note(f"Create Order: set Hypothecation = {_hyp_val}.")
         if _locked_root is not None:
             try:
                 note(f"Create Order: locked booking form context for Contact Last Name/F2 (url={(getattr(_locked_root, 'url', '') or '')[:120]!r}).")

@@ -1,11 +1,11 @@
 Aadhar scan – 15 extracted fields
 
 Aadhar ID: 9281
-Name: SITUTY
+Name: SITUTE
 Gender: Male
 Care of: S/O Dull Chand
 City: Bharatpur
 District: Bharatpur
 State: Rajasthan
 Pin Code: 321028
-Address (constructed): S/O Dull Chand, Jahangeerpur, PO: Jahangirpur, DIST: Bharatpur, 311112 48417 47 94101 8, AMRBAI ZIT (b) T61 I Rajasthan - 321028 $1101 340m (31/701154
+Address (constructed): S/O Dull Chand, Jahangeerpur, PO: Jahangirpur, DIST: Bharatpur, Rajasthan - 321028
