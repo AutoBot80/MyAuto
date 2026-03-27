@@ -1,11 +1,11 @@
 Aadhar scan – 15 extracted fields
 
 Aadhar ID: 9281
-Name: HRA
+Name: SITUTY
 Gender: Male
-Care of: S/O Duli Chand
+Care of: S/O Dull Chand
 City: Bharatpur
 District: Bharatpur
 State: Rajasthan
 Pin Code: 321028
-Address (constructed): S/O Duli Chand, you/ MALE Jahangeerpur, PO: Jahangirpur, DIST: Bharatpur, 3114R 48417 at 94101 8, 41 Grapafer abl 181 I Rajasthan - 321028 34411 (31/701184
+Address (constructed): S/O Dull Chand, Jahangeerpur, PO: Jahangirpur, DIST: Bharatpur, 311112 48417 47 94101 8, AMRBAI ZIT (b) T61 I Rajasthan - 321028 $1101 340m (31/701154
