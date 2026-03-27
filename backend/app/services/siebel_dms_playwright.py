@@ -5205,54 +5205,58 @@ def _create_order(
                 # Value field: fill via Playwright locator (page.keyboard.type doesn't work on this Siebel field).
                 _val_filled = False
                 _val_readback = ""
+                _fill_strategy = ""
 
-                # Strategy 1: find the field by aria-label "Starting with" across all roots — click and fill
-                _all_fill_roots = list(_ordered_frames(page)) + [page]
-                for _fr in _all_fill_roots:
-                    try:
-                        _vf = _fr.locator("input[aria-label='Starting with' i]").first
-                        if _vf.count() > 0 and _vf.is_visible(timeout=500):
-                            _vf.click(timeout=1500)
-                            _vf.fill(_search_val, timeout=2000)
-                            _val_readback = (_vf.input_value(timeout=1000) or "").strip()
-                            if _val_readback:
-                                _val_filled = True
-                                break
-                    except Exception:
-                        continue
+                # Strategy A: fill the focused element directly (fastest — no frame scanning)
+                try:
+                    _active = page.evaluate_handle("() => document.activeElement")
+                    _el = _active.as_element()
+                    if _el:
+                        _el.fill(_search_val)
+                        _val_readback = (_el.input_value() or "").strip()
+                        if _val_readback:
+                            _val_filled = True
+                            _fill_strategy = "focused_element"
+                except Exception:
+                    pass
 
-                # Strategy 2: find by dynamic name suffix _313_0
+                # Strategy B: find by aria-label — try page first (applet renders in main page), then frames
                 if not _val_filled:
+                    _all_fill_roots = [page] + list(_ordered_frames(page))
                     for _fr in _all_fill_roots:
                         try:
-                            _vf = _fr.locator("input[name$='_313_0']").first
-                            if _vf.count() > 0 and _vf.is_visible(timeout=500):
+                            _vf = _fr.locator("input[aria-label='Starting with' i]").first
+                            if _vf.count() > 0 and _vf.is_visible(timeout=800):
                                 _vf.click(timeout=1500)
                                 _vf.fill(_search_val, timeout=2000)
                                 _val_readback = (_vf.input_value(timeout=1000) or "").strip()
                                 if _val_readback:
                                     _val_filled = True
+                                    _fill_strategy = "aria_label"
                                     break
                         except Exception:
                             continue
 
-                # Strategy 3: evaluate_handle on focused element + fill
+                # Strategy C: find by dynamic name suffix _313_0
                 if not _val_filled:
-                    try:
-                        _active = page.evaluate_handle("() => document.activeElement")
-                        _el = _active.as_element()
-                        if _el:
-                            _el.fill(_search_val)
-                            _val_readback = (_el.input_value() or "").strip()
-                            if _val_readback:
-                                _val_filled = True
-                    except Exception:
-                        pass
+                    for _fr in _all_fill_roots:
+                        try:
+                            _vf = _fr.locator("input[name$='_313_0']").first
+                            if _vf.count() > 0 and _vf.is_visible(timeout=800):
+                                _vf.click(timeout=1500)
+                                _vf.fill(_search_val, timeout=2000)
+                                _val_readback = (_vf.input_value(timeout=1000) or "").strip()
+                                if _val_readback:
+                                    _val_filled = True
+                                    _fill_strategy = "name_suffix"
+                                    break
+                        except Exception:
+                            continue
 
                 # #region agent log — value field fill result
                 try:
                     with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-                        _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H20","location":"siebel_dms_playwright.py:create_order_val_fill","message":"Value field fill result","data":{"typed": _search_val, "readback": _val_readback, "filled": _val_filled},"timestamp":int(_t_f2.time()*1000)}) + "\n")
+                        _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H20","location":"siebel_dms_playwright.py:create_order_val_fill","message":"Value field fill result","data":{"typed": _search_val, "readback": _val_readback, "filled": _val_filled, "strategy": _fill_strategy},"timestamp":int(_t_f2.time()*1000)}) + "\n")
                 except Exception:
                     pass
                 # #endregion
