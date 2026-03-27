@@ -56,7 +56,7 @@ KYC -> KYC success redirect -> MisDMS VIN entry -> New Policy - Two Wheeler.
 - **KYC**: `kyc.html` — enter **Mobile No.** and click **Verify mobile**. If **KYC found** (demo: `9694585832`), proceed with consent only. If **KYC not found**, upload **Aadhaar front**, **Aadhaar rear**, and for **Customer Photo** use the **Aadhaar front** file again, then consent and **Proceed**. Playwright mirrors this (tiny PNG placeholders when uploads are required).
 - **KYC Success**: `kyc-success.html` — auto-redirects to MisDMS in 2 seconds.
 - **MisDMS Entry**: `dms-entry.html` — VIN / Frame field is the **chassis number** (same as from DMS).
-- **New Policy**: `policy.html` — **Ex-Showroom (DMS cost)** maps to vehicle price scraped from DMS (`vehicle_master.vehicle_price`). **Insurance company** and **manufacturer** dropdowns include multiple labels; Playwright **fuzzy-matches** DB insurer (details sheet) and OEM name (`vehicle_master.oem_name` / dealer `oem_ref`). **Policy tenure** and **proposer type** stay as page defaults. **Issue Policy** (`#ins-issue-policy`) is operator-only; Playwright does not click it.
+- **New Policy**: `policy.html` — **Ex-Showroom (DMS cost)** maps to vehicle price scraped from DMS (`vehicle_master.vehicle_ex_showroom_price`). **Insurance company** and **manufacturer** dropdowns include multiple labels; Playwright **fuzzy-matches** DB insurer (details sheet) and OEM name (`vehicle_master.oem_name` / dealer `oem_ref`). **Policy tenure** and **proposer type** stay as page defaults. **Issue Policy** (`#ins-issue-policy`) is operator-only; Playwright does not click it.
 - **Issue Result (dummy)**: `issued.html` — simulated policy-issued page.
 
 Notes:

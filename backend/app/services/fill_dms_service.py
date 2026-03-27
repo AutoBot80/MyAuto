@@ -855,6 +855,8 @@ def _write_data_from_dms(ocr_output_dir: Path, subfolder: str, customer: dict, v
         ("Horsepower", "horse_power"),
         ("Ex-showroom Price (Order Value)", "vehicle_price"),
         ("Year of Mfg", "year_of_mfg"),
+        ("Order # (DMS)", "order_number"),
+        ("Invoice # (DMS)", "invoice_number"),
     ]:
         val = vehicle.get(key)
         lines.append(f"{label}: {(val or '').strip() or '—'}")
@@ -1297,7 +1299,7 @@ def _build_vahan_fill_values(customer_id: int | None, vehicle_id: int | None, su
     if vehicle_price <= 0:
         raise ValueError(
             f"form_vahan_view.vehicle_price is empty for customer_id={customer_id} vehicle_id={vehicle_id}; "
-            "run DMS first so vehicle_price is stored in vehicle_master"
+            "run DMS first so vehicle_ex_showroom_price is stored on vehicle_master"
         )
     effective_subfolder = _clean_text(row.get("subfolder")) or _clean_text(subfolder)
     values = {
@@ -1550,7 +1552,7 @@ def _load_latest_insurance_values(customer_id: int, vehicle_id: int) -> dict:
                     COALESCE(vm.model, '') AS model_name,
                     COALESCE(vm.fuel_type, '') AS fuel_type,
                     COALESCE(vm.year_of_mfg::text, '') AS year_of_mfg,
-                    COALESCE(vm.vehicle_price::text, '') AS vehicle_price,
+                    COALESCE(vm.vehicle_ex_showroom_price::text, '') AS vehicle_price,
                     COALESCE(NULLIF(TRIM(vm.oem_name), ''), oem_dealer.oem_name, '') AS oem_name,
                     COALESCE(cm.nominee_gender, '') AS nominee_gender,
                     COALESCE(cm.financier, '') AS financer_name,
@@ -1895,7 +1897,7 @@ def run_fill_insurance_only(
         page.set_default_timeout(INSURANCE_POLICY_FILL_TIMEOUT_MS)
 
         # Fill policy form fields. Do NOT click #ins-issue-policy — operator issues policy manually.
-        # Chassis = VIN/Frame from vehicle_master (DMS scrape). Ex-Showroom = vehicle_price (DMS cost).
+        # Chassis = VIN/Frame from vehicle_master (DMS scrape). Ex-Showroom = vehicle_ex_showroom_price (DMS cost).
         # Insurance company: fuzzy-match to details insurer; manufacturer: fuzzy-match vehicle_master.oem_name.
         # Policy tenure & proposer type: keep dummy page defaults (no select_option).
         _insurance_select_fuzzy(
@@ -2163,8 +2165,10 @@ def update_vehicle_master_from_dms(vehicle_id: int, scraped: dict) -> None:
     """
     Merge DMS / Siebel scrape into ``vehicle_master`` (non-null scraped values win via ``COALESCE``).
 
-    Uses **full_chassis** / **full_engine** from Siebel detail scrape when present, else **frame_num** /
-    **engine_num**; **sku** → **dms_sku** (column added in ``DDL/alter/10h_form_dms_view_city_vehicle_dms_sku.sql``).
+    Maps scrape keys → columns: **full_chassis** / **frame_num** → ``chassis``; **full_engine** /
+    **engine_num** → ``engine``; **key_num** or **raw_key_num** → ``key_num``; **model** → ``model``;
+    **color** / **colour** → ``colour``; **vehicle_price** / **ex_showroom_price** →
+    ``vehicle_ex_showroom_price``; **year_of_mfg** (or **dispatch_year**) → ``year_of_mfg``; **sku** → ``dms_sku``.
     """
     from app.db import get_connection
 
@@ -2174,7 +2178,7 @@ def update_vehicle_master_from_dms(vehicle_id: int, scraped: dict) -> None:
 
     chassis = _strip_or_none("full_chassis") or _strip_or_none("frame_num") or _strip_or_none("chassis")
     engine = _strip_or_none("full_engine") or _strip_or_none("engine_num") or _strip_or_none("engine")
-    key_num = _strip_or_none("key_num")
+    key_num = _strip_or_none("key_num") or _strip_or_none("raw_key_num")
     model = _strip_or_none("model")
     colour = _strip_or_none("color") or _strip_or_none("colour")
     dms_sku = _strip_or_none("sku")
@@ -2189,11 +2193,11 @@ def update_vehicle_master_from_dms(vehicle_id: int, scraped: dict) -> None:
     year_of_mfg = _parse_vehicle_year_int_for_db(scraped.get("year_of_mfg"))
     if year_of_mfg is None:
         year_of_mfg = _parse_vehicle_year_int_for_db(scraped.get("dispatch_year"))
-    vehicle_price = scraped.get("vehicle_price")
-    if vehicle_price is None:
-        vehicle_price = scraped.get("ex_showroom_price")
-    if vehicle_price is None:
-        vehicle_price = scraped.get("total_amount")
+    ex_showroom = scraped.get("vehicle_price")
+    if ex_showroom is None:
+        ex_showroom = scraped.get("ex_showroom_price")
+    if ex_showroom is None:
+        ex_showroom = scraped.get("total_amount")
     if cubic_capacity:
         try:
             cubic_capacity = float(str(cubic_capacity).replace(",", ""))
@@ -2214,11 +2218,11 @@ def update_vehicle_master_from_dms(vehicle_id: int, scraped: dict) -> None:
             horse_power = float(str(horse_power).replace(",", ""))
         except (ValueError, TypeError):
             horse_power = None
-    if vehicle_price:
+    if ex_showroom:
         try:
-            vehicle_price = float(str(vehicle_price).replace(",", ""))
+            ex_showroom = float(str(ex_showroom).replace(",", ""))
         except (ValueError, TypeError):
-            vehicle_price = None
+            ex_showroom = None
 
     params_full = (
         chassis,
@@ -2236,7 +2240,7 @@ def update_vehicle_master_from_dms(vehicle_id: int, scraped: dict) -> None:
         num_cylinders,
         horse_power,
         year_of_mfg,
-        vehicle_price,
+        ex_showroom,
         vehicle_id,
     )
     params_legacy = (
@@ -2254,7 +2258,7 @@ def update_vehicle_master_from_dms(vehicle_id: int, scraped: dict) -> None:
         num_cylinders,
         horse_power,
         year_of_mfg,
-        vehicle_price,
+        ex_showroom,
         vehicle_id,
     )
     sql_with_sku = """
@@ -2274,7 +2278,7 @@ def update_vehicle_master_from_dms(vehicle_id: int, scraped: dict) -> None:
                     num_cylinders = COALESCE(%s, num_cylinders),
                     horse_power = COALESCE(%s, horse_power),
                     year_of_mfg = COALESCE(%s, year_of_mfg),
-                    vehicle_price = COALESCE(%s, vehicle_price)
+                    vehicle_ex_showroom_price = COALESCE(%s, vehicle_ex_showroom_price)
                 WHERE vehicle_id = %s
                 """
     sql_no_sku = """
@@ -2293,7 +2297,7 @@ def update_vehicle_master_from_dms(vehicle_id: int, scraped: dict) -> None:
                     num_cylinders = COALESCE(%s, num_cylinders),
                     horse_power = COALESCE(%s, horse_power),
                     year_of_mfg = COALESCE(%s, year_of_mfg),
-                    vehicle_price = COALESCE(%s, vehicle_price)
+                    vehicle_ex_showroom_price = COALESCE(%s, vehicle_ex_showroom_price)
                 WHERE vehicle_id = %s
                 """
 
@@ -2314,6 +2318,44 @@ def update_vehicle_master_from_dms(vehicle_id: int, scraped: dict) -> None:
             conn.commit()
             if cur.rowcount > 0:
                 logger.info("fill_dms: updated vehicle_master vehicle_id=%s with DMS data", vehicle_id)
+    finally:
+        conn.close()
+
+
+def update_sales_master_from_dms_scrape(customer_id: int, vehicle_id: int, vehicle_dict: dict) -> None:
+    """
+    Persist DMS-scraped **Order#** and **Invoice#** onto ``sales_master`` for the sale row
+    (``COALESCE`` — non-null scraped values overwrite empty DB cells only when provided).
+    """
+    order_n = (vehicle_dict.get("order_number") or "").strip() or None
+    inv_n = (vehicle_dict.get("invoice_number") or "").strip() or None
+    if not order_n and not inv_n:
+        return
+    from app.db import get_connection
+
+    sql = """
+        UPDATE sales_master SET
+            order_number = COALESCE(%s, order_number),
+            invoice_number = COALESCE(%s, invoice_number)
+        WHERE customer_id = %s AND vehicle_id = %s
+        """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql, (order_n, inv_n, customer_id, vehicle_id))
+            conn.commit()
+            if cur.rowcount > 0:
+                logger.info(
+                    "fill_dms: updated sales_master order/invoice customer_id=%s vehicle_id=%s",
+                    customer_id,
+                    vehicle_id,
+                )
+            else:
+                logger.warning(
+                    "fill_dms: sales_master row not found for customer_id=%s vehicle_id=%s (order/invoice not saved)",
+                    customer_id,
+                    vehicle_id,
+                )
     finally:
         conn.close()
 
@@ -2601,6 +2643,32 @@ def _run_fill_dms_dummy_playwright(
                 page.fill("#dms-line-financer", fin_name[:255])
             except Exception:
                 pass
+    try:
+        _hdr = page.evaluate(
+            """() => {
+              const rows = Array.from(document.querySelectorAll('.dms-form-row'));
+              const out = { order: '', invoice: '' };
+              for (const row of rows) {
+                const lab = (row.querySelector('label')?.textContent || '').trim();
+                const inp = row.querySelector('input');
+                const v = (inp && (inp.value || '').trim()) || '';
+                if (!lab) continue;
+                const L = lab.toLowerCase();
+                if (L.startsWith('order') || L === 'order:') out.order = v || out.order;
+                if (L.includes('invoice')) out.invoice = v || out.invoice;
+              }
+              return out;
+            }"""
+        )
+        if isinstance(_hdr, dict):
+            vmerge = dict(result.get("vehicle") or {})
+            if (_hdr.get("order") or "").strip():
+                vmerge["order_number"] = str(_hdr["order"]).strip()
+            if (_hdr.get("invoice") or "").strip():
+                vmerge["invoice_number"] = str(_hdr["invoice"]).strip()
+            result["vehicle"] = vmerge
+    except Exception:
+        pass
     _dms_milestone(result, "Invoice created")
 
     goto("reports.html")
@@ -2717,6 +2785,16 @@ def run_fill_dms_only(
         _write_data_from_dms(ocr_dir, effective_subfolder, dms_values.get("customer_export") or {}, result.get("vehicle") or {})
     except Exception as e:
         result["error"] = (result.get("error") or "") + f"; DMS file write: {e!s}"
+    if customer_id and vehicle_id and result.get("vehicle") and not result.get("error"):
+        try:
+            update_sales_master_from_dms_scrape(customer_id, vehicle_id, result["vehicle"])
+        except Exception as exc:
+            logger.warning(
+                "fill_dms_service: sales_master order/invoice update failed customer_id=%s vehicle_id=%s: %s",
+                customer_id,
+                vehicle_id,
+                exc,
+            )
     return result
 
 
@@ -2816,7 +2894,8 @@ def run_fill_dms(
     invoicing fields without Create Invoice → Form 21/22 + invoice sheet PDFs), then optional Vahan when
     `vahan_base_url` is set.
     Writes pulled data to ocr_output_dir/subfolder/Data from DMS.txt.
-    Returns dict with vehicle details (key_num, frame_num, vehicle_price / ex-showroom, ...), optional application_id, rto_fees, and any error.
+    Returns dict with vehicle details (key_num, frame_num, vehicle_price / ex-showroom, order_number, invoice_number, …),
+    optional application_id, rto_fees, and any error. When customer_id/vehicle_id are set, Order#/Invoice# are written to sales_master.
     """
     result = run_fill_dms_only(
         dms_base_url=dms_base_url,

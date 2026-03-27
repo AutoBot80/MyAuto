@@ -208,7 +208,7 @@ This section defines database-to-label mapping contracts for DMS, Insurance, and
 | New Policy (`MispPolicy.aspx`) | Proposer State / City / Pin / Address | `customer_master.state`, `customer_master.city`, `customer_master.pin`, `customer_master.address` |
 | New Policy (`MispPolicy.aspx`) | Frame No. / Engine No. | `vehicle_master.chassis`, `vehicle_master.engine` |
 | New Policy (`MispPolicy.aspx`) | Model Name / Fuel Type / Year of Manufacture | `vehicle_master.model`, `vehicle_master.fuel_type`, `vehicle_master.year_of_mfg` |
-| New Policy (`MispPolicy.aspx`) | Ex-Showroom | `vehicle_master.vehicle_price` |
+| New Policy (`MispPolicy.aspx`) | Ex-Showroom | `vehicle_master.vehicle_ex_showroom_price` (view: `form_vahan_view.vehicle_price`) |
 | New Policy (`MispPolicy.aspx`) | RTO | `dealer_ref.rto_name` |
 | New Policy (`MispPolicy.aspx`) | Nominee Name / Age / Relation | `insurance_master.nominee_name`, `insurance_master.nominee_age`, `insurance_master.nominee_relationship` |
 | New Policy (`MispPolicy.aspx`) | Nominee Gender | `customer_master.nominee_gender` |

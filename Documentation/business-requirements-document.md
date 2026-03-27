@@ -50,7 +50,7 @@ The system is a server–client application for auto dealers. Dealers run a ligh
 | BR-12 | Operator-assisted browser session requirement | DMS and Vahan automation should first reuse already open, logged-in site tabs; when no detectable tab is available, the system should open Edge/Chrome for the operator and ask the operator to complete login (first-time) before retrying automation. |
 | BR-13 | Automation value discipline | Playwright must never assume, infer, remember, or default fill values for DMS/Vahan fields. Values sent to site fields must come directly from DB-backed views (`form_dms_view`, `form_vahan_view`) and persisted records only. |
 | BR-14 | DMS booking test budget | Dummy / training DMS flow uses a fixed **customer budget / enquiry amount of 89000** for booking generation unless the business replaces this constant in automation. |
-| BR-15 | Ex-showroom vs column name | **Order Value / ex-showroom** from DMS is persisted as `vehicle_master.vehicle_price` (no separate `vehicle_cost` column). Labels in exports and dummy UI read **Ex-showroom Price**. |
+| BR-15 | Ex-showroom vs column name | **Order Value / ex-showroom** from DMS is persisted as `vehicle_master.vehicle_ex_showroom_price` (no separate `vehicle_cost` column). `form_vahan_view` still exposes the value as `vehicle_price`. Labels in exports and dummy UI read **Ex-showroom Price**. |
 | BR-16 | Create Invoice operator-only | DMS Playwright must not click **Create Invoice**; the operator completes invoicing, then may re-run automation after the invoice step. |
 | BR-17 | Aadhaar gender default | When **gender** is not extracted from **AWS Textract** (Aadhaar front/back text) and parsers for a subfolder that includes `Aadhar.jpg` and/or `Aadhar_back.jpg`, the persisted `customer.gender` in `OCR_To_be_Used.json` defaults to **Male** (operators may correct before submit). |
 | BR-18 | Address-derived locality | When **state**, **PIN**, or **care_of** is missing but **address** contains **`C/O:`** (Care of), **`DIST: <District>, <State> - <PIN>`** (including OCR variants like **`<State> - - <PIN>`** or **`<State> -- <PIN>`**), a trailing **`<Indian state> - <PIN>`** when **`DIST:`** is unreadable, and/or a 6-digit PIN, the system infers **`care_of`**, **`city`/district**, **`state`**, **`pin`**; drops text **after the PIN**; strips **C/O** from the stored address line. Applied on Submit Info, OCR JSON, Aadhaar back parsing, and DMS fill when `form_dms_view` fields are sparse. |
@@ -151,7 +151,7 @@ This is the **intended** real-DMS order (aligned with the operator screen record
 | Enquiry | Relation (S/O or W/o), Father/Husband name | `form_dms_view` — from `customer_master.care_of` (Aadhaar QR), else legacy `father_or_husband_name` |
 | Enquiry | Financier / Finance Required (invoicing line) | `form_dms_view` (`customer_master.financier`) |
 | Enquiry | New vs existing CRM contact | `form_dms_view` (`"DMS Contact Path"`: `found` / `new_enquiry` / **`skip_find`** — dummy: `skip_find` skips finder Go; **real Siebel: always runs Find first**; `skip_find` in DB is ignored for automation order) |
-| Invoicing line | Order Value (Ex-showroom) | Scraped from DMS vehicle grid → `vehicle_master.vehicle_price` |
+| Invoicing line | Order Value (Ex-showroom) | Scraped from DMS → `vehicle_master.vehicle_ex_showroom_price` |
 
 ### 6.3 Vahan Fields to Fill (Minimum Contract)
 
@@ -200,7 +200,7 @@ This is the **intended** real-DMS order (aligned with the operator screen record
 | New Policy | Model Name | Vehicle model | `vehicle_master.model` |
 | New Policy | Year of Manufacture | Vehicle year | `vehicle_master.year_of_mfg` |
 | New Policy | Fuel Type | Vehicle fuel | `vehicle_master.fuel_type` |
-| New Policy | Ex-Showroom | Vehicle price | `vehicle_master.vehicle_price` |
+| New Policy | Ex-Showroom | Vehicle price | `vehicle_master.vehicle_ex_showroom_price` (via `form_vahan_view.vehicle_price`) |
 | New Policy | RTO | Dealer RTO mapping | `dealer_ref.rto_name` |
 | New Policy | Nominee Name/Age/Relation | Insurance nominee details | `insurance_master.nominee_name`, `insurance_master.nominee_age`, `insurance_master.nominee_relationship` |
 | New Policy | Nominee Gender | Customer-linked nominee capture | `customer_master.nominee_gender` |

@@ -61,7 +61,7 @@ SELECT
     vm.colour AS vehicle_colour,
     COALESCE(vm.fuel_type, 'Petrol') AS fuel_type,
     COALESCE(vm.year_of_mfg::text, TO_CHAR(sm.billing_date::date, 'YYYY')) AS year_of_mfg,
-    vm.vehicle_price AS vehicle_price,
+    vm.vehicle_ex_showroom_price AS vehicle_price,
     'New Registration'::text AS "Registration Type *",
     COALESCE(lr.chassis_num, vm.chassis, vm.raw_frame_num) AS "Chassis No *",
     RIGHT(COALESCE(vm.engine, vm.raw_engine_num, ''), 5) AS "Engine/Motor No (Last 5 Chars)",

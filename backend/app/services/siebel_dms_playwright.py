@@ -4190,7 +4190,7 @@ def _add_customer_payment(
                 # 1. Transaction Type — fill first so Siebel's required-field
                 #    validator is satisfied and stops stealing focus.
                 type_ok = _direct_fill(
-                    scoped_roots, _TXN_TYPE_SELS, "Payments", label="Transaction_Type",
+                    scoped_roots, _TXN_TYPE_SELS, "Receipt", label="Transaction_Type",
                 )
                 if type_ok:
                     # Wait for Siebel to process the value server-side.
@@ -4226,7 +4226,7 @@ def _add_customer_payment(
                         _safe_page_wait(page, 500, log_label=f"focus_steal_wait_{_fc}")
                         # Re-fill if needed — the steal may have cleared the value.
                         try:
-                            page.keyboard.type("Payments")
+                            page.keyboard.type("Receipt")
                             page.keyboard.press("Tab")
                         except Exception:
                             pass
@@ -4312,7 +4312,7 @@ def _add_customer_payment(
 
                 note(
                     "Filled payment fields (direct): "
-                    f"Type=Payments(ok={type_ok!r}), Mode=Cash(ok={mode_ok!r}), Amount=0(ok={amount_ok!r})."
+                    f"Type=Receipt(ok={type_ok!r}), Mode=Cash(ok={mode_ok!r}), Amount=0(ok={amount_ok!r})."
                 )
                 _safe_page_wait(page, 400, log_label="after_amount_before_save")
 
@@ -4527,7 +4527,7 @@ def _create_order(
     - If inventory not In transit: Price all + Allocate all
     - Scrape Total (Ex-showroom)
     """
-    scraped: dict = {"inventory_location": "", "ex_showroom_price": "", "order_number": ""}
+    scraped: dict = {"inventory_location": "", "ex_showroom_price": "", "order_number": "", "invoice_number": ""}
 
     def _roots():
         return _siebel_locator_search_roots(page, content_frame_selector)
@@ -4609,6 +4609,51 @@ def _create_order(
                         }
                         const tryLinks = Array.from(document.querySelectorAll(
                             "a[name='Order Number'], a[name='Order #'], a[aria-label*='Order' i], a[title*='Order' i], td[aria-describedby*='Order' i] a"
+                        ));
+                        for (const a of tryLinks) {
+                            if (!vis(a)) continue;
+                            const txt = (a.textContent || '').trim();
+                            if (txt && /[A-Za-z0-9-]{4,}/.test(txt)) return txt;
+                        }
+                        return '';
+                    }"""
+                )
+                if (v or "").strip():
+                    return str(v).strip()
+            except Exception:
+                continue
+        return ""
+
+    def _scrape_invoice_number_current() -> str:
+        """Best-effort Invoice# from order/invoice header fields (exclude bare Order-only labels)."""
+        for root in _roots():
+            try:
+                v = root.evaluate(
+                    """() => {
+                        const vis = (el) => {
+                            if (!el) return false;
+                            const st = window.getComputedStyle(el);
+                            if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity) === 0) return false;
+                            const r = el.getBoundingClientRect();
+                            return r.width > 2 && r.height > 2;
+                        };
+                        const orderOnly = (s) => {
+                            const t = String(s || '').toLowerCase();
+                            return t.includes('order') && !t.includes('invoice');
+                        };
+                        const tryInputs = Array.from(document.querySelectorAll(
+                            "input[aria-label*='Invoice' i], input[title*='Invoice' i], input[name*='Invoice' i], input[id*='Invoice' i]"
+                        ));
+                        for (const el of tryInputs) {
+                            if (!vis(el)) continue;
+                            const al = el.getAttribute('aria-label') || '';
+                            const tt = el.getAttribute('title') || '';
+                            if (orderOnly(al) || orderOnly(tt)) continue;
+                            const val = (el.value || '').trim();
+                            if (val && val.length >= 3 && !/^(pending|—|-)$/i.test(val)) return val;
+                        }
+                        const tryLinks = Array.from(document.querySelectorAll(
+                            "a[name='Invoice Number'], a[name='Invoice #'], a[aria-label*='Invoice' i], a[title*='Invoice' i]"
                         ));
                         for (const a of tryLinks) {
                             if (!vis(a)) continue;
@@ -5585,12 +5630,25 @@ def _create_order(
         scraped["order_drilldown_opened"] = bool(_att_ok)
         if not _att_ok:
             return False, (_att_err or "attach_vehicle_to_bkg failed.").strip(), scraped
+        _safe_page_wait(page, 900, log_label="after_attach_order_invoice_scrape")
+        order_ref = _scrape_order_number_current()
+        if order_ref:
+            scraped["order_number"] = order_ref
+            if order_ref != order_no:
+                note(f"Create Order: refreshed Order#={order_ref!r} after header drill-down.")
+        inv_no = _scrape_invoice_number_current()
+        scraped["invoice_number"] = inv_no or ""
+        if inv_no:
+            note(f"Create Order: scraped Invoice#={inv_no!r} after drill-down.")
+        else:
+            note("Create Order: Invoice# not on screen or not readable yet (best-effort).")
         if callable(form_trace):
             form_trace(
                 "v4_create_order",
                 "Vehicle Sales — order header",
                 "attach_vehicle_to_bkg_click_order_number_header",
-                order_number=str(order_no or ""),
+                order_number=str(scraped.get("order_number") or ""),
+                invoice_number=str(scraped.get("invoice_number") or ""),
             )
         return True, None, scraped
     # 9) Click Order# drill-down link
@@ -5938,6 +5996,15 @@ def _create_order(
         note(f"Create Order: scraped Total (Ex-showroom)={total_ex!r}.")
     else:
         note("Create Order: could not scrape Total (Ex-showroom).")
+
+    _ord = _scrape_order_number_current()
+    if _ord:
+        scraped["order_number"] = _ord
+        note(f"Create Order: scraped Order#={_ord!r} (legacy line-item path).")
+    _inv = _scrape_invoice_number_current()
+    scraped["invoice_number"] = (_inv or scraped.get("invoice_number") or "")
+    if _inv:
+        note(f"Create Order: scraped Invoice#={_inv!r} (legacy line-item path).")
 
     return True, None, scraped
 
@@ -8194,6 +8261,10 @@ def Playwright_Hero_DMS_fill(
                 if order_scraped.get("ex_showroom_price"):
                     veh["vehicle_price"] = order_scraped.get("ex_showroom_price")
                     veh["ex_showroom_price"] = order_scraped.get("ex_showroom_price")
+                if order_scraped.get("order_number"):
+                    veh["order_number"] = order_scraped.get("order_number")
+                if order_scraped.get("invoice_number"):
+                    veh["invoice_number"] = order_scraped.get("invoice_number")
                 out["vehicle"] = veh
 
             step(

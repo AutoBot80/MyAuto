@@ -87,7 +87,7 @@ This document lists the current database tables and their columns. **Executable 
 | `horse_power` | `numeric(10,2)` | YES |  | Horse power |
 | `length_mm` | `integer` | YES |  | Length in mm |
 | `fuel_type` | `varchar(16)` | YES |  | Fuel type (e.g. Petrol, Diesel) |
-| `vehicle_price` | `numeric(12,2)` | YES |  | **Ex-showroom price** (Order Value from DMS); column name remains `vehicle_price`; Vahan reads this as total/ex-showroom |
+| `vehicle_ex_showroom_price` | `numeric(12,2)` | YES |  | **Ex-showroom / Order Value** from DMS; `form_vahan_view` exposes it as `vehicle_price` for Vahan |
 | `dms_sku` | `varchar(128)` | YES |  | SKU from Siebel vehicle scrape; added by `DDL/alter/10h_form_dms_view_city_vehicle_dms_sku.sql` |
 
 **Primary key:** `vehicle_master_pkey` on (`vehicle_id`)
@@ -108,6 +108,8 @@ This document lists the current database tables and their columns. **Executable 
 | `vehicle_id` | `integer` | NO |  | FK → `vehicle_master(vehicle_id)` |
 | `billing_date` | `timestamptz` | NO | `now()` | System date/time |
 | `dealer_id` | `integer` | YES |  | FK → `dealer_ref(dealer_id)` |
+| `order_number` | `varchar(128)` | YES |  | DMS Order# from Fill DMS scrape (`DDL/alter/05h_sales_master_add_order_invoice_numbers.sql`) |
+| `invoice_number` | `varchar(128)` | YES |  | DMS Invoice# when present (`DDL/alter/05h_sales_master_add_order_invoice_numbers.sql`) |
 | `vahan_application_id` | `varchar(128)` | YES |  | Latest Vahan application id scraped during RTO queue processing |
 | `rto_charges` | `numeric(12,2)` | YES |  | Latest Vahan RTO charges scraped during RTO queue processing |
 
@@ -304,7 +306,7 @@ This document lists the current database tables and their columns. **Executable 
 - The view uses the latest `insurance_master` row per `(customer_id, vehicle_id)` by `insurance_year`.
 - The view uses the latest `rto_queue` row per `(customer_id, vehicle_id)` by `created_at`.
 - `queue_id` is the stable `rto_queue.application_id`; `application_id` / `"Application No"` switch to `rto_queue.vahan_application_id` once the batch reaches the Vahan cart/upload checkpoint.
-- `vehicle_price` is sourced from `vehicle_master.vehicle_price`, which is populated from the DMS scrape so Vahan automation can read only from `form_vahan_view`.
+- `vehicle_price` in the view is sourced from `vehicle_master.vehicle_ex_showroom_price`, populated by Fill DMS (`update_vehicle_master_from_dms`) so Vahan automation can read only from `form_vahan_view`.
 - Successful RTO batch runs overwrite the latest scraped Vahan application id / RTO charges in both `rto_queue` and `sales_master`; session-expiry failures return the queue row to `Pending` without clearing previously scraped values.
 
 ---
@@ -437,3 +439,5 @@ This document lists the current database tables and their columns. **Executable 
 | 1.2 | Mar 2026 | Added `customer_master.dms_relation_prefix`, `father_or_husband_name`, `dms_contact_path`; extended `form_dms_view`; documented `vehicle_price` as ex-showroom (Order Value) |
 | 1.3 | Mar 2026 | Added `customer_master.care_of` (Aadhaar QR); DMS Father/Husband via `form_dms_view` uses `care_of` with legacy fallback to `father_or_husband_name`; Submit Info persists `care_of` |
 | 1.4 | Mar 2026 | `vehicle_master.dms_sku`; `form_dms_view` includes **City** (`customer_master.city`); script `DDL/alter/10h_form_dms_view_city_vehicle_dms_sku.sql`; Fill DMS persists full Siebel scrape via `update_vehicle_master_from_dms` |
+| 1.5 | Mar 2026 | `vehicle_master.vehicle_price` renamed to **`vehicle_ex_showroom_price`** (`DDL/alter/03j_vehicle_master_rename_vehicle_price_to_vehicle_ex_showroom_price.sql`); `form_vahan_view` column alias remains **`vehicle_price`**; `update_vehicle_master_from_dms` maps scrape **raw_key_num** into **`key_num`** when **key_num** absent |
+| 1.6 | Mar 2026 | `sales_master.order_number`, **`invoice_number`** — DMS scrape persistence (`DDL/alter/05h_sales_master_add_order_invoice_numbers.sql`, **`update_sales_master_from_dms_scrape`** in `fill_dms_service.py`) |
