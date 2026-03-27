@@ -16,13 +16,13 @@ Finance Required: Y
 Financier Name: Hinduja
 DMS Contact Path: found
 Key num (partial): 1347
-Frame / Chassis num (partial): MBLHAW479T5C
-Engine num (partial): HA11F6T5C033
+Frame / Chassis num (partial): 06034
+Engine num (partial): 03361
 
 --- Runtime values used by Playwright ---
-sales_id: 203
+sales_id: 207
 customer_id: 7
-vehicle_id: 10
+vehicle_id: 11
 dealer_id: 100001
 subfolder: 8690900760_270326
 dealer_name: Arya Agencies
@@ -34,6 +34,6 @@ source_address: S/O Navab Singh, Awar, PO: AWAR, DIST: Bharatpur, Rajasthan - 32
 source_state: RAJASTHAN
 source_pin_code: 321202
 source_key_no: 1347
-source_frame_no: MBLHAW479T5C
-source_engine_no: HA11F6T5C033
-generated_at: 27-03-2026 19:21:09
+source_frame_no: 06034
+source_engine_no: 03361
+generated_at: 27-03-2026 19:45:12

@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
@@ -441,6 +442,7 @@ def _try_fill_mobile_and_find_in_contact_applet(
     timeout_ms: int,
     content_frame_selector: str | None,
     mobile_aria_hints: list[str],
+    first_name: str | None = None,
 ) -> bool:
     """
     Keep interaction inside the opened global Find->Contact applet (right fly-in): fill Mobile Phone,
@@ -590,6 +592,31 @@ def _try_fill_mobile_and_find_in_contact_applet(
                     pass
             if not filled:
                 continue
+
+            fn = (first_name or "").strip()
+            if fn:
+                fn_filled = False
+                for css in _SIEBEL_FIND_FIRST_NAME_SELECTORS:
+                    try:
+                        fl = applet.locator(css).first
+                        if fl.count() > 0 and fl.is_visible(timeout=700):
+                            fl.fill("", timeout=min(3000, timeout_ms))
+                            fl.fill(fn, timeout=timeout_ms)
+                            fn_filled = True
+                            break
+                    except Exception:
+                        continue
+                if not fn_filled:
+                    try:
+                        fl = applet.get_by_label(re.compile(r"^\s*First\s*Name\s*$", re.I)).first
+                        if fl.count() > 0 and fl.is_visible(timeout=700):
+                            fl.fill("", timeout=min(3000, timeout_ms))
+                            fl.fill(fn, timeout=timeout_ms)
+                            fn_filled = True
+                    except Exception:
+                        pass
+                if not fn_filled:
+                    continue
 
             _safe_page_wait(page, 150, log_label="contact_applet_mobile_filled")
             # Click Find icon/button inside same applet.
@@ -2170,10 +2197,13 @@ def _contact_view_find_by_mobile(
     step,
     stage_msg: str,
     wait_after_go_ms: int = 2000,
+    first_name: str | None = None,
 ) -> bool:
     """
-    Open Contact Find view, set object type to Contact when possible, fill **mobile only**, Go.
-    Shared by initial find and mandatory re-find after enquiry creation.
+    Open Contact Find view, set object type to Contact when possible, fill **mobile**, optional
+    **First Name**, then Go. When ``first_name`` is set, both fields are filled before Find (video SOP).
+    When ``first_name`` is omitted, behavior matches legacy **mobile-only** find (re-find after basic
+    enquiry, etc.).
     """
     cu = (contact_url or "").strip()
     if not cu:
@@ -2206,6 +2236,7 @@ def _contact_view_find_by_mobile(
         timeout_ms=action_timeout_ms,
         content_frame_selector=content_frame_selector,
         mobile_aria_hints=mobile_aria_hints,
+        first_name=first_name,
     )
     if scoped_applet_find_clicked:
         note(
@@ -2258,6 +2289,18 @@ def _contact_view_find_by_mobile(
     if not filled_mobile:
         return False
 
+    fn_req = (first_name or "").strip()
+    if fn_req:
+        if not _fill_first_name_in_find_roots(
+            page,
+            fn_req,
+            action_timeout_ms=action_timeout_ms,
+            content_frame_selector=content_frame_selector,
+        ):
+            note("Find: could not fill First Name in Contact Find pane after mobile fill.")
+            return False
+        note(f"Filled First Name in Find pane → {fn_req!r}.")
+
     _siebel_blur_and_settle(page, ms=350)
 
     if _click_find_go_query(page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector):
@@ -2280,10 +2323,11 @@ def _refind_customer_after_enquiry(
     mobile_aria_hints: list[str],
     note,
     step,
+    first_name: str | None = None,
 ) -> bool:
-    """SOP: after saving a **basic** enquiry, always Find → mobile → Go again before care-of."""
-    note("Stage 3 (mandatory re-find): searching again by mobile after enquiry save.")
-    step("Re-finding customer by mobile after enquiry creation (mandatory SOP).")
+    """SOP: after saving a **basic** enquiry, Find → mobile (+ first name when provided) → Go before care-of."""
+    note("Stage 3 (mandatory re-find): searching again after enquiry save (mobile + first name when set).")
+    step("Re-finding customer after enquiry creation (mandatory SOP).")
     return _contact_view_find_by_mobile(
         page,
         contact_url=contact_url,
@@ -2294,8 +2338,9 @@ def _refind_customer_after_enquiry(
         mobile_aria_hints=mobile_aria_hints,
         note=note,
         step=step,
-        stage_msg="Contact view: re-find by mobile (post-enquiry).",
+        stage_msg="Contact view: re-find by mobile + first name (post-enquiry).",
         wait_after_go_ms=2000,
+        first_name=first_name,
     )
 
 
@@ -3034,6 +3079,51 @@ def _fill_relations_name_exact(
     return False
 
 
+# First Name inputs in Contact Find fly-in / applet (mobile + first name search).
+_SIEBEL_FIND_FIRST_NAME_SELECTORS: tuple[str, ...] = (
+    'input[aria-label*="First Name" i]',
+    'input[title*="First Name" i]',
+    'input[name*="FirstName" i]',
+)
+
+# Values rejected for Contact Find — must be a real first name (video SOP / §6.1a gate).
+_SIEBEL_FIRST_NAME_PLACEHOLDERS: frozenset[str] = frozenset(
+    {
+        "",
+        "na",
+        "n/a",
+        "n.a.",
+        "null",
+        "none",
+        "-",
+        "--",
+        ".",
+        "..",
+        "...",
+        "tbd",
+        "pending",
+    }
+)
+
+
+def _validate_contact_find_first_name(raw: str) -> tuple[bool, str]:
+    """
+    Contact Find requires **mobile + first name**. Rejects empty/whitespace and common placeholders.
+    Returns ``(ok, error_message)`` — ``error_message`` empty when ``ok``.
+    """
+    s = (raw or "").strip()
+    if not s:
+        return False, (
+            "Siebel: Contact First Name is required for Find (mobile + first name) but is empty or whitespace."
+        )
+    low = s.lower()
+    if low in _SIEBEL_FIRST_NAME_PLACEHOLDERS:
+        return False, f"Siebel: Contact First Name is a placeholder ({s!r}); cannot run Find."
+    if all(c == "." for c in s):
+        return False, f"Siebel: Contact First Name is invalid ({s!r}); cannot run Find."
+    return True, ""
+
+
 def _mobile_needle_for_contact_grid_match(mobile: str) -> str:
     """
     Prefer full **10-digit** tail for contact **list/grid** matching (fewer false positives
@@ -3071,6 +3161,75 @@ def _siebel_ui_suggests_contact_match(page: Page, mobile: str) -> bool:
     for frame in _ordered_frames(page):
         try:
             if frame.evaluate(script, needle):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _siebel_ui_suggests_contact_match_mobile_first(page: Page, mobile: str, first_name: str) -> bool:
+    """
+    After Find/Go with **mobile + first name**, true when some ``tbody tr`` has the mobile (compact)
+    **and** a ``td`` whose text **exactly** equals ``first_name`` (trimmed).
+    """
+    needle = _mobile_needle_for_contact_grid_match(mobile)
+    target = (first_name or "").strip()
+    if not needle or not target:
+        return False
+    script = """([needle, target]) => {
+      if (!needle || needle.length < 8 || !target) return false;
+      const compact = (s) => String(s).replace(/\\s+/g, '');
+      const hasM = (s) => compact(s).includes(needle);
+      for (const tr of document.querySelectorAll('table tbody tr')) {
+        const tds = tr.querySelectorAll('td');
+        if (tds.length < 3) continue;
+        const rowCompact = compact(tr.innerText || '');
+        if (!hasM(rowCompact)) continue;
+        let firstOk = false;
+        for (const td of tds) {
+          if (String(td.textContent || '').trim() === target) { firstOk = true; break; }
+        }
+        if (firstOk) return true;
+      }
+      return false;
+    }"""
+    for frame in _ordered_frames(page):
+        try:
+            if frame.evaluate(script, [needle, target]):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _fill_first_name_in_find_roots(
+    page: Page,
+    first_name: str,
+    *,
+    action_timeout_ms: int,
+    content_frame_selector: str | None,
+) -> bool:
+    """Fill First Name in Contact Find pane (any search root / frame)."""
+    fn = (first_name or "").strip()
+    if not fn:
+        return False
+    for root in list(_siebel_locator_search_roots(page, content_frame_selector)) + list(
+        _ordered_frames(page)
+    ) + [page]:
+        for css in _SIEBEL_FIND_FIRST_NAME_SELECTORS:
+            try:
+                loc = root.locator(css).first
+                if loc.count() > 0 and loc.is_visible(timeout=500):
+                    loc.fill("", timeout=min(3000, action_timeout_ms))
+                    loc.fill(fn, timeout=action_timeout_ms)
+                    return True
+            except Exception:
+                continue
+        try:
+            loc = root.get_by_label(re.compile(r"^\s*First\s*Name\s*$", re.I)).first
+            if loc.count() > 0 and loc.is_visible(timeout=500):
+                loc.fill("", timeout=min(3000, action_timeout_ms))
+                loc.fill(fn, timeout=action_timeout_ms)
                 return True
         except Exception:
             continue
@@ -3773,16 +3932,38 @@ def _click_nth_mobile_title_drilldown(
     *,
     action_timeout_ms: int,
     content_frame_selector: str | None,
+    first_name_exact: str | None = None,
 ) -> bool:
     """
-    After Contact Find/Go, click the ``ordinal``-th (0-based) **Title** drilldown whose visible text
-    matches ``mobile`` (same digit rules as the single-drill video path). Used when several contacts
-    share one number so we can open the row that already carries an enquiry before creating another.
+    After Contact Find/Go, click the ``ordinal``-th (0-based) **Title** drilldown whose row matches
+    ``mobile`` (digit rules). If ``first_name_exact`` is set, the anchor's table row must also have a
+    ``td`` with **exact** trimmed text equal to that first name (video SOP mobile+first search).
     """
     if ordinal < 0:
         return False
     drill_needle = _mobile_needle_for_contact_grid_match(mobile)
     drill_raw = re.sub(r"\D", "", (mobile or "").strip())
+    fn_ex = (first_name_exact or "").strip()
+    row_match_js = """(el, args) => {
+      const needle = String(args.needle || '');
+      const raw = String(args.raw || '');
+      const target = String(args.target || '').trim();
+      const tr = el.closest('tr');
+      if (!tr) return false;
+      const tds = tr.querySelectorAll('td');
+      if (tds.length < 3) return false;
+      const rowCompact = String(tr.innerText || '').replace(/\\s+/g, '');
+      let mobileOk = false;
+      if (needle && rowCompact.includes(needle)) mobileOk = true;
+      else if (raw.length >= 8 && rowCompact.includes(raw)) mobileOk = true;
+      if (!mobileOk) return false;
+      if (!target) return true;
+      for (const td of tds) {
+        if (String(td.textContent || '').trim() === target) return true;
+      }
+      return false;
+    }"""
+    args = {"needle": drill_needle, "raw": drill_raw, "target": fn_ex}
     plans: list[tuple[object, str, int]] = []
     for _dr_root in list(_siebel_locator_search_roots(page, content_frame_selector)) + list(
         _ordered_frames(page)
@@ -3808,6 +3989,12 @@ def _click_nth_mobile_title_drilldown(
                         pass
                     else:
                         continue
+                    if fn_ex:
+                        try:
+                            if not bool(_dr_el.evaluate(row_match_js, args)):
+                                continue
+                        except Exception:
+                            continue
                     plans.append((_dr_root, _dr_sel, _di))
             except Exception:
                 continue
@@ -3831,6 +4018,7 @@ def _contact_find_title_sweep_for_enquiry(
     *,
     contact_url: str,
     mobile: str,
+    first_name: str | None,
     action_timeout_ms: int,
     nav_timeout_ms: int,
     content_frame_selector: str | None,
@@ -3841,18 +4029,20 @@ def _contact_find_title_sweep_for_enquiry(
     max_title_ordinals: int = 12,
 ) -> tuple[bool, str, int, str | None]:
     """
-    Open each Search Results **Title** row matching ``mobile`` (re-running Find between attempts) until
-    **Contact_Enquiry** shows at least one data row or matches are exhausted.
+    Open each Search Results **Title** row matching ``mobile`` (and **exact** ``first_name`` on the row
+    when provided), re-running Find between attempts, until **Contact_Enquiry** shows at least one data
+    row or matches are exhausted.
 
     Returns ``(has_existing_enquiry, enquiry_number, row_count, error_message)``.
     ``error_message`` set → caller must stop. If no error and ``has_existing_enquiry`` is False, every
-    matching Title was opened and all had zero enquiry rows — safe to run Add Enquiry.
+    matching Title was opened and all had zero enquiry rows — caller may create a new enquiry.
 
     ``refine_search_between_duplicates`` when provided: callable ``() -> bool`` run instead of plain
-    mobile re-find when trying the 2nd+ Title (e.g. mobile + dotted first name + Go after Add Enquiry).
+    re-find when trying the 2nd+ Title (e.g. custom mobile + first + Go).
     """
     used_fallback_link = False
     ordinal = 0
+    fn = (first_name or "").strip()
 
     def _refind_plain() -> bool:
         ok_rf = _contact_view_find_by_mobile(
@@ -3866,10 +4056,13 @@ def _contact_find_title_sweep_for_enquiry(
             note=note,
             step=step,
             stage_msg="Re-find Contact by mobile (duplicate Title sweep).",
+            first_name=fn if fn else None,
         )
         if not ok_rf:
             return False
         _safe_page_wait(page, 1500, log_label="after_refind_duplicate_title_sweep")
+        if fn:
+            return bool(_siebel_ui_suggests_contact_match_mobile_first(page, mobile, fn))
         return bool(_siebel_ui_suggests_contact_match(page, mobile))
 
     while ordinal < max_title_ordinals:
@@ -3896,6 +4089,7 @@ def _contact_find_title_sweep_for_enquiry(
             ordinal,
             action_timeout_ms=action_timeout_ms,
             content_frame_selector=content_frame_selector,
+            first_name_exact=fn if fn else None,
         )
         if not drilled and ordinal == 0 and not used_fallback_link:
             drilled = _siebel_try_click_mobile_search_hit_link(
@@ -8398,15 +8592,16 @@ def _add_enquiry_opportunity(
     note,
     form_trace,
     vehicle_merge: dict | None = None,
-    customer_exists: bool = False,
 ) -> tuple[bool, str | None, str]:
     """
     Vehicle find + scrape, **Enquiry** tab, **Opportunity Form:New**,
     fill opportunity fields from DB + scraped model/color (**Financier** fields are skipped),
     then **Ctrl+S**.
 
-    When *customer_exists* is True the first name is suffixed with ``"."`` so that Siebel
-    treats the enquiry as a new contact entry and does not reject the save.
+    **Contact First Name** comes from ``dms_values["first_name"]`` (caller passes base or dotted name).
+
+    After **Ctrl+S**, Enquiry# must **differ** from the pre-save scrape at **0.5s, 2.5s, and 3.5s**
+    post-save; otherwise **hard fail**.
 
     Returns ``(success, error_detail, enquiry_number)`` — ``error_detail`` is a short operator-facing
     reason when ``success`` is False; ``enquiry_number`` is the scraped Enquiry# on success (empty on
@@ -8849,9 +9044,6 @@ def _add_enquiry_opportunity(
         return False
 
     first = (dms_values.get("first_name") or "").strip()
-    if customer_exists and first:
-        first = first + "."
-        note(f"Add Enquiry: customer already exists — appended '.' to first name → {first!r}.")
     last = (dms_values.get("last_name") or "").strip() or "."
     mobile = (dms_values.get("mobile_phone") or "").strip()
     landline = (dms_values.get("landline") or dms_values.get("alt_phone_num") or "").strip()
@@ -8957,6 +9149,7 @@ def _add_enquiry_opportunity(
             note("Add Enquiry: Ctrl+S failed.")
             return False, "Ctrl+S save failed on new opportunity form.", ""
     note("Add Enquiry: pressed Ctrl+S to save enquiry.")
+    _save_t0 = time.monotonic()
 
     _safe_page_wait(page, 350, log_label="add_enquiry_after_save_immediate")
     _save_err_immediate = _detect_siebel_error_popup(page, content_frame_selector)
@@ -8964,47 +9157,57 @@ def _add_enquiry_opportunity(
         note(f"Add Enquiry: immediate Siebel error after Ctrl+S → {_save_err_immediate!r:.300}")
         return False, f"Siebel error after Ctrl+S: {_save_err_immediate[:200]}", ""
 
-    _max_save_polls = 8
-    _poll_interval_ms = 1500
+    note(f"Add Enquiry: pre_save Enquiry# gate baseline → {pre_save_enquiry_no!r}.")
+    pre_norm = (pre_save_enquiry_no or "").strip()
+    poll_readings: list[tuple[float, str]] = []
     enquiry_no = ""
-    _save_error = None
-    for _poll_i in range(_max_save_polls):
-        _safe_page_wait(page, _poll_interval_ms, log_label=f"add_enquiry_save_poll_{_poll_i}")
+    for target_sec in (0.5, 2.5, 3.5):
+        elapsed = time.monotonic() - _save_t0
+        need_s = target_sec - elapsed
+        if need_s > 0:
+            _safe_page_wait(
+                page,
+                int(need_s * 1000) + 1,
+                log_label=f"add_enquiry_enquiry_gate_{target_sec}s",
+            )
         _save_error = _detect_siebel_error_popup(page, content_frame_selector)
         if _save_error:
             note(f"Add Enquiry: Siebel error after save → {_save_error!r:.300}")
             return False, f"Siebel error after Ctrl+S: {_save_error[:200]}", ""
-        enquiry_no = _scrape_enquiry_number_from_frame(enq_frame)
-
-        if enquiry_no and enquiry_no != pre_save_enquiry_no:
-            break
-        if not pre_save_enquiry_no and enquiry_no:
-            break
-
-    if pre_save_enquiry_no and enquiry_no and enquiry_no == pre_save_enquiry_no:
+        cur = _scrape_enquiry_number_from_frame(enq_frame)
+        cur_norm = (cur or "").strip()
+        poll_readings.append((target_sec, cur_norm))
         note(
-            "Add Enquiry: Enquiry# did not change after Ctrl+S; likely not persisted "
-            f"(before={pre_save_enquiry_no!r}, after={enquiry_no!r})."
+            f"Add Enquiry: enquiry# poll at {target_sec}s post-Ctrl+S → {cur_norm!r} "
+            f"(compare pre_save={pre_norm!r})."
         )
-        return False, "Enquiry# did not change after Ctrl+S (save not confirmed).", ""
-    if enquiry_no:
-        note(f"Add Enquiry: saved Enquiry#={enquiry_no!r}.")
-        if callable(form_trace):
-            form_trace(
-                "add_enquiry_saved",
-                "Opportunity Form",
-                "post_save_scrape_enquiry_number",
-                enquiry_number=enquiry_no,
-            )
-        return True, None, enquiry_no
-    note("Add Enquiry: Enquiry# not readable after Ctrl+S — running final error check.")
-    _safe_page_wait(page, 900, log_label="add_enquiry_after_save_final_error_check")
-    _save_err_final = _detect_siebel_error_popup(page, content_frame_selector)
-    if _save_err_final:
-        note(f"Add Enquiry: delayed Siebel error after save → {_save_err_final!r:.300}")
-        return False, f"Siebel error after Ctrl+S: {_save_err_final[:200]}", ""
-    note("Add Enquiry: no Siebel error detected, but Enquiry# is still empty — treating as failure.")
-    return False, "Add Enquiry saved (Ctrl+S) without errors but Enquiry# could not be scraped. Save may not have persisted.", ""
+        if cur_norm and cur_norm != pre_norm:
+            enquiry_no = cur_norm
+            break
+
+    if not enquiry_no or pre_norm == (enquiry_no or "").strip():
+        note(
+            "Add Enquiry: HARD FAIL — Enquiry# unchanged vs pre-save after timed polls "
+            f"(0.5s / 2.5s / 3.5s). pre={pre_norm!r} readings={poll_readings!r}."
+        )
+        return (
+            False,
+            "Enquiry# did not change from pre-save after Ctrl+S (polled at 0.5s, 2.5s, 3.5s). "
+            "See Playwright_DMS.txt [NOTE] lines for poll values.",
+            "",
+        )
+
+    note(f"Add Enquiry: saved Enquiry#={enquiry_no!r} (gate passed).")
+    if callable(form_trace):
+        form_trace(
+            "add_enquiry_saved",
+            "Opportunity Form",
+            "post_save_scrape_enquiry_number",
+            enquiry_number=enquiry_no,
+            pre_save_enquiry=pre_norm,
+            poll_readings_repr=str(poll_readings),
+        )
+    return True, None, enquiry_no
 
 
 def _siebel_run_precheck_and_pdi(
@@ -9354,6 +9557,12 @@ def Playwright_Hero_DMS_fill(
 
     try:
         step("Started Hero Connect / Siebel DMS automation (linear SOP).")
+        _fn_gate_ok, _fn_gate_msg = _validate_contact_find_first_name(first)
+        if not _fn_gate_ok:
+            step("Stopped: invalid or missing Contact First Name for Siebel automation.")
+            out["error"] = _fn_gate_msg
+            return out
+
         if dms_path == "skip_find" and not skip_contact_find:
             note(
                 "dms_contact_path=skip_find in form data — real Siebel still runs Stage 1 Contact Find "
@@ -9380,13 +9589,18 @@ def Playwright_Hero_DMS_fill(
                     "GotoView URL so the video SOP can open the Find applet."
                 )
                 return out
-            step("Video SOP (Find Contact Enquiry): Find → Contact → mobile → Go → open All Enquiries; then stop.")
+            video_first_name = first.strip()
+            step(
+                "Video SOP (Find Contact Enquiry): Find → Contact → mobile + first name → Go; "
+                "drill / Add Enquiry per match; then All Enquiries path."
+            )
             form_trace(
                 "v1_find_contact",
-                "Global Find → Contact (Mobile Phone) + Go",
-                "goto_contact_find_URL_then_prepare_Find_Contact_fill_mobile_FindGo",
+                "Global Find → Contact (Mobile + First Name) + Go",
+                "goto_contact_find_URL_then_prepare_Find_Contact_fill_mobile_first_FindGo",
                 contact_url_truncated=contact_url[:200],
                 mobile_phone=mobile,
+                first_name=video_first_name,
             )
             ok_find = _contact_view_find_by_mobile(
                 page,
@@ -9398,21 +9612,24 @@ def Playwright_Hero_DMS_fill(
                 mobile_aria_hints=mobile_aria_hints,
                 note=note,
                 step=step,
-                stage_msg="Video SOP: Find customer by mobile (Contact view).",
+                stage_msg="Video SOP: Find customer by mobile + first name (Contact view).",
+                first_name=video_first_name,
             )
             if not ok_find:
-                step("Stopped: could not complete Find by mobile on contact view.")
+                step("Stopped: could not complete Find by mobile + first name on contact view.")
                 out["error"] = (
-                    "Siebel: video SOP — could not fill mobile or run Find/Go on the contact view. "
+                    "Siebel: video SOP — could not fill mobile/first name or run Find/Go on the contact view. "
                     "Check Find pane, iframe selectors, and DMS_SIEBEL_* tuning."
                 )
                 return out
-            contact_matched = _siebel_ui_suggests_contact_match(page, mobile)
-            note(f"DECISION: contact_table_match_after_find={contact_matched!r}")
+            contact_matched = _siebel_ui_suggests_contact_match_mobile_first(
+                page, mobile, video_first_name
+            )
+            note(f"DECISION: contact_table_match_mobile_first_after_find={contact_matched!r}")
             if not contact_matched:
                 note(
-                    "No contact rows after Find/Go — Add Enquiry branch: vehicle chassis/VIN + engine, "
-                    "Enquiry tab, Opportunity Form:New, DB fields, Ctrl+S."
+                    "No grid row matching mobile + exact first name — Add Enquiry with base first name "
+                    "(vehicle + Opportunities + Ctrl+S)."
                 )
                 ae_ok, ae_detail, ae_enq_no = _add_enquiry_opportunity(
                     page,
@@ -9426,21 +9643,22 @@ def Playwright_Hero_DMS_fill(
                     vehicle_merge=out.setdefault("vehicle", {}),
                 )
                 if not ae_ok:
-                    step("Stopped: Add Enquiry branch failed (empty contact search).")
+                    step("Stopped: Add Enquiry branch failed (no mobile+first match).")
                     out["error"] = (
-                        "Siebel: video SOP — contact search returned no table rows and Add Enquiry did not complete. "
+                        "Siebel: video SOP — no contact row for mobile+first and Add Enquiry did not complete. "
                         f"{ae_detail or 'See Playwright_DMS.txt [NOTE] lines for the failing step.'}"
                     )
                     return out
                 ms_done("Add enquiry saved")
-                note(f"Add Enquiry saved with Enquiry#={ae_enq_no!r}; resuming normal Find→Contact mobile flow.")
+                note(f"Add Enquiry saved with Enquiry#={ae_enq_no!r}; re-finding by mobile + first name.")
                 out.setdefault("vehicle", {})["enquiry_number"] = ae_enq_no
                 form_trace(
                     "v1b_refind_after_add_enquiry",
-                    "Global Find → Contact (Mobile Phone) + Go",
-                    "rerun_find_mobile_after_add_enquiry_then_continue_normal_route",
+                    "Global Find → Contact (Mobile + First Name) + Go",
+                    "rerun_find_mobile_first_after_add_enquiry",
                     contact_url_truncated=contact_url[:200],
                     mobile_phone=mobile,
+                    first_name=video_first_name,
                 )
                 ok_refind = _contact_view_find_by_mobile(
                     page,
@@ -9452,31 +9670,34 @@ def Playwright_Hero_DMS_fill(
                     mobile_aria_hints=mobile_aria_hints,
                     note=note,
                     step=step,
-                    stage_msg="Post Add Enquiry: re-find customer by mobile (Contact view).",
+                    stage_msg="Post Add Enquiry: re-find customer by mobile + first name (Contact view).",
+                    first_name=video_first_name,
                 )
                 if not ok_refind:
-                    step("Stopped: Add Enquiry saved but post-save re-find by mobile failed.")
+                    step("Stopped: Add Enquiry saved but post-save re-find by mobile + first name failed.")
                     out["error"] = (
-                        "Siebel: Add Enquiry was saved, but the follow-up Find→Contact mobile query "
+                        "Siebel: Add Enquiry was saved, but the follow-up Find→Contact mobile+first query "
                         "did not complete."
                     )
                     return out
-                contact_matched = _siebel_ui_suggests_contact_match(page, mobile)
+                contact_matched = _siebel_ui_suggests_contact_match_mobile_first(
+                    page, mobile, video_first_name
+                )
                 note(f"DECISION: contact_table_match_after_add_enquiry_refind={contact_matched!r}")
                 if not contact_matched:
-                    step("Stopped: Add Enquiry saved but customer still not visible after re-find.")
+                    step("Stopped: Add Enquiry saved but no table row for mobile + first name after re-find.")
                     out["error"] = (
-                        "Siebel: Add Enquiry was saved, but contact search still returned no table row "
+                        "Siebel: Add Enquiry was saved, but contact search still returned no matching row "
                         "after re-find."
                     )
                     return out
 
-            # Drill each Search Results Title matching this mobile until Contact_Enquiry shows a row
-            # (several contacts can share one number — avoid Add Enquiry when another row already has one).
+            # Drill each Title row (exact mobile + first) until Contact_Enquiry subgrid has a data row.
             _has_enq, _enq_number, _enq_rows, _sweep_err = _contact_find_title_sweep_for_enquiry(
                 page,
                 contact_url=contact_url,
                 mobile=mobile,
+                first_name=video_first_name,
                 action_timeout_ms=action_timeout_ms,
                 nav_timeout_ms=nav_timeout_ms,
                 content_frame_selector=content_frame_selector,
@@ -9492,187 +9713,145 @@ def Playwright_Hero_DMS_fill(
                 out.setdefault("vehicle", {})["enquiry_number"] = _enq_number
             if not _has_enq:
                 note(
-                    f"Enquiry# is null on every matching Title (last checked rows={_enq_rows}) — "
-                    "running Add Enquiry (existing customer) before relation/address fill."
+                    f"No open enquiry on any row for mobile+first (last Contact_Enquiry rows={_enq_rows}) — "
+                    "creating Add Enquiry with suffixed first name (append dots until re-find + drill succeed)."
                 )
-                ae2_ok, ae2_detail, ae2_enq_no = _add_enquiry_opportunity(
-                    page,
-                    dms_values,
-                    urls,
-                    action_timeout_ms=action_timeout_ms,
-                    nav_timeout_ms=nav_timeout_ms,
-                    content_frame_selector=content_frame_selector,
-                    note=note,
-                    form_trace=form_trace,
-                    vehicle_merge=out.setdefault("vehicle", {}),
-                    customer_exists=True,
-                )
-                if not ae2_ok:
-                    step("Stopped: Enquiry# null and Add Enquiry fallback failed.")
-                    out["error"] = (
-                        "Siebel: Enquiry# was null on Contact_Enquiry, and Add Enquiry fallback failed. "
-                        f"{ae2_detail or ''}"
-                    ).strip()
-                    return out
-                ms_done("Add enquiry saved")
-                _dotted_first = first + "."
-                note(f"Add Enquiry saved with Enquiry#={ae2_enq_no!r} from Contact_Enquiry-null path.")
-                out.setdefault("vehicle", {})["enquiry_number"] = ae2_enq_no
-
-                # Re-find contact by mobile + dotted first name (page navigated away during add_enquiry)
-                note(f"Post Add Enquiry (existing customer): re-finding by mobile={mobile!r} + first={_dotted_first!r}.")
-                ok_refind3 = _contact_view_find_by_mobile(
-                    page,
-                    contact_url=contact_url,
-                    mobile=mobile,
-                    nav_timeout_ms=nav_timeout_ms,
-                    action_timeout_ms=action_timeout_ms,
-                    content_frame_selector=content_frame_selector,
-                    mobile_aria_hints=mobile_aria_hints,
-                    note=note,
-                    step=step,
-                    stage_msg="Post Add Enquiry (existing customer): re-find customer by mobile + first name.",
-                )
-                if not ok_refind3:
-                    step("Stopped: post Add Enquiry re-find by mobile failed.")
-                    out["error"] = (
-                        "Siebel: Add Enquiry was saved for existing customer, but follow-up "
-                        "Find→Contact by mobile did not complete."
+                _dotted_ok = False
+                _dms_base = dict(dms_values)
+                for _nd in range(1, 9):
+                    _suffix = "." * _nd
+                    _dotted_fn = first.strip() + _suffix
+                    _dms_try = {**_dms_base, "first_name": _dotted_fn}
+                    note(
+                        f"Add Enquiry (suffixed first): attempt dot_count={_nd} → first_name={_dotted_fn!r} "
+                        f"(poll gate + logs apply)."
                     )
-                    return out
-
-                # Also fill first name (dotted) in the Find pane before results settle
-                _fn_filled = False
-                _fn_selectors = [
-                    'input[aria-label*="First Name" i]',
-                    'input[title*="First Name" i]',
-                    'input[name*="FirstName" i]',
-                ]
-                for _fnr in list(_siebel_locator_search_roots(page, content_frame_selector)) + list(_ordered_frames(page)) + [page]:
-                    if _fn_filled:
-                        break
-                    for _fns in _fn_selectors:
-                        try:
-                            _fnloc = _fnr.locator(_fns).first
-                            if _fnloc.count() > 0 and _fnloc.is_visible(timeout=500):
-                                _fnloc.fill("", timeout=1200)
-                                _fnloc.fill(_dotted_first, timeout=1200)
-                                _fn_filled = True
-                                break
-                        except Exception:
-                            continue
-                if _fn_filled:
-                    note(f"Post Add Enquiry: filled First Name = {_dotted_first!r} in Find pane.")
-                    _siebel_blur_and_settle(page, ms=300)
-                    _click_find_go_query(page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector)
-                    _safe_page_wait(page, 2000, log_label="after_refind_with_first_name_go")
-                else:
-                    note("Post Add Enquiry: could not fill First Name in Find pane (proceeding with mobile-only results).")
-
-                contact_matched3 = _siebel_ui_suggests_contact_match(page, mobile)
-                if not contact_matched3:
-                    step("Stopped: customer not visible after existing-customer Add Enquiry re-find.")
-                    out["error"] = (
-                        "Siebel: Add Enquiry saved for existing customer, but contact search by "
-                        f"mobile + first name ({_dotted_first!r}) returned no table row."
-                    )
-                    return out
-
-                # Drill down into the contact record
-                _drilled2 = False
-                _safe_page_wait(page, 1500, log_label="before_title_drilldown_after_add_enquiry")
-                _drill_needle2 = _mobile_needle_for_contact_grid_match(mobile)
-                _drill_raw2 = re.sub(r"\D", "", (mobile or "").strip())
-                for _dr_root2 in list(_siebel_locator_search_roots(page, content_frame_selector)) + list(_ordered_frames(page)) + [page]:
-                    if _drilled2:
-                        break
-                    for _dr_sel2 in ('a[name="Title"]', 'a[name="title"]'):
-                        try:
-                            _dr_locs2 = _dr_root2.locator(_dr_sel2)
-                            _dr_n2 = _dr_locs2.count()
-                            for _di2 in range(min(_dr_n2, 20)):
-                                _dr_el2 = _dr_locs2.nth(_di2)
-                                try:
-                                    if not _dr_el2.is_visible(timeout=500):
-                                        continue
-                                except Exception:
-                                    continue
-                                try:
-                                    _dr_txt2 = re.sub(r"\D", "", _dr_el2.inner_text(timeout=500) or "")
-                                except Exception:
-                                    _dr_txt2 = ""
-                                if _drill_needle2 and _drill_needle2 in _dr_txt2:
-                                    pass
-                                elif _drill_raw2 and len(_drill_raw2) >= 8 and _drill_raw2 in _dr_txt2:
-                                    pass
-                                else:
-                                    continue
-                                try:
-                                    _dr_el2.click(timeout=action_timeout_ms)
-                                    _drilled2 = True
-                                    break
-                                except Exception:
-                                    try:
-                                        _dr_el2.click(timeout=action_timeout_ms, force=True)
-                                        _drilled2 = True
-                                        break
-                                    except Exception:
-                                        continue
-                        except Exception:
-                            continue
-                if not _drilled2:
-                    _drilled2 = _siebel_try_click_mobile_search_hit_link(
-                        page, mobile, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector,
-                    )
-                if not _drilled2:
-                    step("Stopped: could not click Title drilldown after existing-customer Add Enquiry re-find.")
-                    out["error"] = (
-                        "Siebel: Add Enquiry saved for existing customer, re-find succeeded but could not "
-                        "click Title drilldown to open contact detail."
-                    )
-                    return out
-                note(f"Post Add Enquiry: clicked Title drilldown for mobile {mobile}.")
-                _safe_page_wait(page, 2000, log_label="after_title_drilldown_post_add_enquiry")
-                try:
-                    page.wait_for_load_state("networkidle", timeout=8_000)
-                except Exception:
-                    pass
-
-                # Verify the newly created enquiry is visible on Contact_Enquiry tab
-                _enq3_checked = False
-                _enq3_number = ""
-                for _enq3_att in range(3):
-                    _enq3_checked, _enq3_rows3, _enq3_number = _contact_enquiry_tab_has_rows(
+                    ae2_ok, ae2_detail, ae2_enq_no = _add_enquiry_opportunity(
                         page,
+                        _dms_try,
+                        urls,
                         action_timeout_ms=action_timeout_ms,
+                        nav_timeout_ms=nav_timeout_ms,
                         content_frame_selector=content_frame_selector,
                         note=note,
+                        form_trace=form_trace,
+                        vehicle_merge=out.setdefault("vehicle", {}),
                     )
-                    if _enq3_checked and _enq3_number:
-                        break
-                    note(f"Post Add Enquiry verify: Enquiry# attempt {_enq3_att + 1}/3 — checked={_enq3_checked!r}, enquiry#={_enq3_number!r}.")
-                    _safe_page_wait(page, 1200, log_label=f"post_add_enquiry_verify_enq_{_enq3_att}")
-                if not _enq3_number:
-                    step("Stopped: newly created enquiry not found on Contact_Enquiry tab after re-find.")
+                    if not ae2_ok:
+                        _det_l = (ae2_detail or "").lower()
+                        if _nd < 8 and any(
+                            k in _det_l for k in ("duplicate", "already", "exists", "unique")
+                        ):
+                            note(f"Add Enquiry with {_dotted_fn!r} may conflict — trying longer suffix.")
+                            continue
+                        step("Stopped: Add Enquiry with suffixed first name failed.")
+                        out["error"] = (
+                            "Siebel: contacts matched mobile+first but none had an open enquiry; "
+                            f"Add Enquiry with dotted first name failed. {ae2_detail or ''}"
+                        ).strip()
+                        return out
+                    ms_done("Add enquiry saved")
+                    out.setdefault("vehicle", {})["enquiry_number"] = ae2_enq_no
+                    note(f"Add Enquiry saved Enquiry#={ae2_enq_no!r} for suffixed first {_dotted_fn!r}.")
+
+                    ok_rf_dot = _contact_view_find_by_mobile(
+                        page,
+                        contact_url=contact_url,
+                        mobile=mobile,
+                        nav_timeout_ms=nav_timeout_ms,
+                        action_timeout_ms=action_timeout_ms,
+                        content_frame_selector=content_frame_selector,
+                        mobile_aria_hints=mobile_aria_hints,
+                        note=note,
+                        step=step,
+                        stage_msg="Post suffixed Add Enquiry: re-find by mobile + suffixed first name.",
+                        first_name=_dotted_fn,
+                    )
+                    if not ok_rf_dot:
+                        note("Re-find after suffixed Add Enquiry failed — retrying longer suffix.")
+                        continue
+                    if not _siebel_ui_suggests_contact_match_mobile_first(page, mobile, _dotted_fn):
+                        note(f"No grid row for {_dotted_fn!r} after save — retrying longer suffix.")
+                        continue
+
+                    _dr_dot = _click_nth_mobile_title_drilldown(
+                        page,
+                        mobile,
+                        0,
+                        action_timeout_ms=action_timeout_ms,
+                        content_frame_selector=content_frame_selector,
+                        first_name_exact=_dotted_fn,
+                    )
+                    if not _dr_dot:
+                        _dr_dot = _siebel_try_click_mobile_search_hit_link(
+                            page,
+                            mobile,
+                            timeout_ms=action_timeout_ms,
+                            content_frame_selector=content_frame_selector,
+                        )
+                    if not _dr_dot:
+                        note("Could not drill Title after suffixed re-find — retrying longer suffix.")
+                        continue
+
+                    note(f"Drilled contact for suffixed first {_dotted_fn!r} (title_index=0).")
+                    _safe_page_wait(page, 2000, log_label="after_title_drilldown_suffixed_first")
+                    try:
+                        page.wait_for_load_state("networkidle", timeout=8_000)
+                    except Exception:
+                        pass
+
+                    _eqc = False
+                    _eqr = 0
+                    _eqn = ""
+                    for _eqa in range(3):
+                        _eqc, _eqr, _eqn = _contact_enquiry_tab_has_rows(
+                            page,
+                            action_timeout_ms=action_timeout_ms,
+                            content_frame_selector=content_frame_selector,
+                            note=note,
+                        )
+                        if _eqc and _eqr > 0:
+                            break
+                        note(
+                            f"Suffixed path: Contact_Enquiry attempt {_eqa + 1}/3 — "
+                            f"checked={_eqc!r}, rows={_eqr}, enquiry#={_eqn!r}."
+                        )
+                        _safe_page_wait(page, 1200, log_label=f"suffixed_contact_enquiry_retry_{_eqa}")
+                    if not (_eqc and _eqr > 0):
+                        note(
+                            f"Opened {_dotted_fn!r} but Contact_Enquiry has no populated row — "
+                            "trying longer dot suffix."
+                        )
+                        continue
+
+                    video_first_name = _dotted_fn
+                    _dotted_ok = True
+                    note(
+                        f"Suffixed first path OK: first={video_first_name!r}, Contact_Enquiry rows={_eqr}, "
+                        f"enquiry#={_eqn!r}, title_index=0, dot_suffix_len={_nd}."
+                    )
+                    break
+
+                if not _dotted_ok:
+                    step("Stopped: could not create/open contact with suffixed first and enquiry subgrid.")
                     out["error"] = (
-                        f"Siebel: Add Enquiry was saved (Enquiry#={ae2_enq_no!r}) for existing customer, "
-                        "but the enquiry is not visible on the Contact_Enquiry tab after re-finding the "
-                        f"contact by mobile + first name ({_dotted_first!r}). Something went wrong."
+                        "Siebel: failed after dotted first-name Add Enquiry — re-find, drill, or "
+                        "Contact_Enquiry row population did not succeed."
                     )
                     return out
-                note(f"Post Add Enquiry verify: Enquiry# {_enq3_number!r} confirmed on Contact_Enquiry tab.")
+
             form_trace(
                 "v2_drill_and_nav",
                 "Search Results + Contacts detail",
                 "Siebel_Find_tab_optional_then_link_hit_then_click_first_name_then_fill_Relations_Name_only",
                 mobile_phone=mobile,
-                first_name=first,
+                first_name=video_first_name,
                 care_of=care_of,
             )
             if not _siebel_video_path_after_find_go_to_all_enquiries(
                 page,
                 mobile=mobile,
-                first_name=first,
+                first_name=video_first_name,
                 care_of=care_of,
                 address_line_1=addr,
                 action_timeout_ms=action_timeout_ms,
@@ -9743,6 +9922,7 @@ def Playwright_Hero_DMS_fill(
                 "Vehicle Sales / Sales Orders",
                 "vehicle_sales_new_order_then_pick_contact_then_vin_search_price_allocate",
                 mobile_phone=mobile,
+                first_name=video_first_name,
                 full_chassis=full_chassis,
             )
             # #region agent log — create_order call inputs
@@ -9772,7 +9952,7 @@ def Playwright_Hero_DMS_fill(
             ok_order, order_err, order_scraped = _create_order(
                 page,
                 mobile=mobile,
-                first_name=first,
+                first_name=video_first_name,
                 full_chassis=full_chassis,
                 financier_name=(dms_values.get("financier_name") or "").strip(),
                 contact_id=out.get("contact_id", ""),
@@ -9942,10 +10122,11 @@ def Playwright_Hero_DMS_fill(
                 return False, False
             form_trace(
                 "1_find_contact",
-                "Contact view — Find pane (mobile search)",
-                "goto_DMS_REAL_URL_CONTACT_expand_Find_fill_Mobile_Phone_click_FindGo",
+                "Contact view — Find pane (mobile + first name search)",
+                "goto_DMS_REAL_URL_CONTACT_expand_Find_fill_Mobile_FirstName_click_FindGo",
                 contact_url_truncated=contact_url[:200],
                 mobile_phone=mobile,
+                first_name=first.strip(),
             )
             ok = _contact_view_find_by_mobile(
                 page,
@@ -9957,7 +10138,8 @@ def Playwright_Hero_DMS_fill(
                 mobile_aria_hints=mobile_aria_hints,
                 note=note,
                 step=step,
-                stage_msg="Stage 1: Find customer by mobile (Contact view).",
+                stage_msg="Stage 1: Find customer by mobile + first name (Contact view).",
+                first_name=first.strip(),
             )
             if not ok:
                 step("Stopped: mobile field not found on contact view — check Find pane and iframe selectors.")
@@ -9975,8 +10157,11 @@ def Playwright_Hero_DMS_fill(
             if dms_path == "new_enquiry":
                 note("DECISION: dms_contact_path=new_enquiry — treating as not matched; stage 2 will run.")
                 return True, False
-            matched = _siebel_ui_suggests_contact_match(page, mobile)
-            note(f"DECISION: customer_found_from_contact_grid={matched!r} (heuristic: mobile in table row with ≥3 cells).")
+            matched = _siebel_ui_suggests_contact_match_mobile_first(page, mobile, first.strip())
+            note(
+                f"DECISION: customer_found_from_contact_grid={matched!r} "
+                f"(mobile + exact first name in table row with ≥3 cells)."
+            )
             if matched:
                 ms_done("Customer found")
                 note("Stage 1: table/grid suggests an existing contact match.")
@@ -10042,6 +10227,7 @@ def Playwright_Hero_DMS_fill(
                 mobile_aria_hints=mobile_aria_hints,
                 note=note,
                 step=step,
+                first_name=first.strip(),
             )
             if not ok:
                 out["error"] = (
@@ -10388,6 +10574,7 @@ def Playwright_Hero_DMS_fill(
                 mobile_aria_hints=mobile_aria_hints,
                 note=note,
                 step=step,
+                first_name=first.strip(),
             ):
                 out["error"] = (
                     "Siebel skip_find: mandatory re-find failed — could not run Find by mobile on Contact view."
