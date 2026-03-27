@@ -8629,10 +8629,12 @@ def Playwright_Hero_DMS_fill(
                     ).strip()
                     return out
                 ms_done("Add enquiry saved")
+                _dotted_first = first + "."
                 note(f"Add Enquiry saved with Enquiry#={ae2_enq_no!r} from Contact_Enquiry-null path.")
                 out.setdefault("vehicle", {})["enquiry_number"] = ae2_enq_no
-                # Re-find contact by mobile after add_enquiry (page navigated away)
-                note("Post Add Enquiry (existing customer): re-finding contact by mobile.")
+
+                # Re-find contact by mobile + dotted first name (page navigated away during add_enquiry)
+                note(f"Post Add Enquiry (existing customer): re-finding by mobile={mobile!r} + first={_dotted_first!r}.")
                 ok_refind3 = _contact_view_find_by_mobile(
                     page,
                     contact_url=contact_url,
@@ -8643,7 +8645,7 @@ def Playwright_Hero_DMS_fill(
                     mobile_aria_hints=mobile_aria_hints,
                     note=note,
                     step=step,
-                    stage_msg="Post Add Enquiry (existing customer): re-find customer by mobile.",
+                    stage_msg="Post Add Enquiry (existing customer): re-find customer by mobile + first name.",
                 )
                 if not ok_refind3:
                     step("Stopped: post Add Enquiry re-find by mobile failed.")
@@ -8652,15 +8654,45 @@ def Playwright_Hero_DMS_fill(
                         "Find→Contact by mobile did not complete."
                     )
                     return out
+
+                # Also fill first name (dotted) in the Find pane before results settle
+                _fn_filled = False
+                _fn_selectors = [
+                    'input[aria-label*="First Name" i]',
+                    'input[title*="First Name" i]',
+                    'input[name*="FirstName" i]',
+                ]
+                for _fnr in list(_siebel_locator_search_roots(page, content_frame_selector)) + list(_ordered_frames(page)) + [page]:
+                    if _fn_filled:
+                        break
+                    for _fns in _fn_selectors:
+                        try:
+                            _fnloc = _fnr.locator(_fns).first
+                            if _fnloc.count() > 0 and _fnloc.is_visible(timeout=500):
+                                _fnloc.fill("", timeout=1200)
+                                _fnloc.fill(_dotted_first, timeout=1200)
+                                _fn_filled = True
+                                break
+                        except Exception:
+                            continue
+                if _fn_filled:
+                    note(f"Post Add Enquiry: filled First Name = {_dotted_first!r} in Find pane.")
+                    _siebel_blur_and_settle(page, ms=300)
+                    _click_find_go_query(page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector)
+                    _safe_page_wait(page, 2000, log_label="after_refind_with_first_name_go")
+                else:
+                    note("Post Add Enquiry: could not fill First Name in Find pane (proceeding with mobile-only results).")
+
                 contact_matched3 = _siebel_ui_suggests_contact_match(page, mobile)
                 if not contact_matched3:
                     step("Stopped: customer not visible after existing-customer Add Enquiry re-find.")
                     out["error"] = (
-                        "Siebel: Add Enquiry saved for existing customer, but contact search still "
-                        "returned no table row after re-find."
+                        "Siebel: Add Enquiry saved for existing customer, but contact search by "
+                        f"mobile + first name ({_dotted_first!r}) returned no table row."
                     )
                     return out
-                # Drill down into the contact record again
+
+                # Drill down into the contact record
                 _drilled2 = False
                 _safe_page_wait(page, 1500, log_label="before_title_drilldown_after_add_enquiry")
                 _drill_needle2 = _mobile_needle_for_contact_grid_match(mobile)
@@ -8719,6 +8751,30 @@ def Playwright_Hero_DMS_fill(
                     page.wait_for_load_state("networkidle", timeout=8_000)
                 except Exception:
                     pass
+
+                # Verify the newly created enquiry is visible on Contact_Enquiry tab
+                _enq3_checked = False
+                _enq3_number = ""
+                for _enq3_att in range(3):
+                    _enq3_checked, _enq3_rows3, _enq3_number = _contact_enquiry_tab_has_rows(
+                        page,
+                        action_timeout_ms=action_timeout_ms,
+                        content_frame_selector=content_frame_selector,
+                        note=note,
+                    )
+                    if _enq3_checked and _enq3_number:
+                        break
+                    note(f"Post Add Enquiry verify: Enquiry# attempt {_enq3_att + 1}/3 — checked={_enq3_checked!r}, enquiry#={_enq3_number!r}.")
+                    _safe_page_wait(page, 1200, log_label=f"post_add_enquiry_verify_enq_{_enq3_att}")
+                if not _enq3_number:
+                    step("Stopped: newly created enquiry not found on Contact_Enquiry tab after re-find.")
+                    out["error"] = (
+                        f"Siebel: Add Enquiry was saved (Enquiry#={ae2_enq_no!r}) for existing customer, "
+                        "but the enquiry is not visible on the Contact_Enquiry tab after re-finding the "
+                        f"contact by mobile + first name ({_dotted_first!r}). Something went wrong."
+                    )
+                    return out
+                note(f"Post Add Enquiry verify: Enquiry# {_enq3_number!r} confirmed on Contact_Enquiry tab.")
             form_trace(
                 "v2_drill_and_nav",
                 "Search Results + Contacts detail",
