@@ -75,7 +75,7 @@ def _ensure_hero_oem_for_fill_dms(dealer_id: int | None) -> None:
             cur.execute(
                 """
                 SELECT COALESCE(TRIM(parent_id::text), '') AS parent_id
-                FROM dealer_master
+                FROM dealer_ref
                 WHERE dealer_id = %s
                 LIMIT 1
                 """,
