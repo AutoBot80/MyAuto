@@ -1,6 +1,6 @@
 Playwright DMS — execution log (this run only; UTC timestamps)
 
-started_utc=2026-03-27T16:43:05.761021+00:00
+started_utc=2026-03-27T16:52:23.978058+00:00
 skip_contact_find=False
 dms_contact_path='found'
 mobile_phone='8690900760'
@@ -27,38 +27,47 @@ url_vehicle_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/e
 --- trace ---
 Legend: [STEP]/[NOTE]/[MILESTONE] = operator narrative; [FORM] = siebel_step + Siebel form/screen + action + fields/values being applied on that form.
 
-2026-03-27T16:43:05.761233+00:00 [STEP] Started Hero Connect / Siebel DMS automation (linear SOP).
-2026-03-27T16:43:05.761281+00:00 [STEP] Video SOP (Find Contact Enquiry): Find → Contact → mobile + first name → Go; drill / Add Enquiry per match; then All Enquiries path.
-2026-03-27T16:43:05.761340+00:00 [FORM] siebel_step=v1_find_contact | form=Global Find → Contact (Mobile + First Name) + Go | action=goto_contact_find_URL_then_prepare_Find_Contact_fill_mobile_first_FindGo | contact_url_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+Contact+Opportunity+Buyer/CoBuyer+View+(SDW)&SWERF=1&SWEHo=&SWEBU=1' | first_name='Lavesh' | mobile_phone='8690900760'
-2026-03-27T16:43:11.372707+00:00 [STEP] Video SOP: Find customer by mobile + first name (Contact view).
-2026-03-27T16:43:13.842968+00:00 [NOTE] Find → Contact: object type selected so the mobile field is the Contact search field.
-2026-03-27T16:43:14.618591+00:00 [NOTE] Filled Mobile (title='Mobile Phone') and First Name (id='field_textbox_1' when present) in the same Contact Find frame and clicked Find.
-2026-03-27T16:43:16.704089+00:00 [NOTE] DECISION: contact_table_match_mobile_first_after_find=True
-2026-03-27T16:43:21.784653+00:00 [NOTE] Contact Find grid: 1 row(s) contain mobile 8690900760 with a drilldown link (sweep uses ordinal 0..0).
-2026-03-27T16:43:26.742950+00:00 [NOTE] Clicked Title drilldown for mobile 8690900760 (match index 0) — opening contact record.
-2026-03-27T16:43:29.918983+00:00 [NOTE] Contact_Enquiry check (Title index 0): checked=True, rows=0, enquiry#=''.
-2026-03-27T16:43:29.919160+00:00 [NOTE] No enquiry on contact Title index 0 (rows=0) — trying next duplicate row for the same mobile if present.
-2026-03-27T16:43:29.919243+00:00 [NOTE] Duplicate mobile in Search Results: re-finding before Title match index 1 to locate a contact that already has an enquiry.
-2026-03-27T16:43:35.964146+00:00 [STEP] Re-find Contact by mobile (duplicate Title sweep).
-2026-03-27T16:43:38.619005+00:00 [NOTE] Find → Contact: object type selected so the mobile field is the Contact search field.
-2026-03-27T16:43:39.415450+00:00 [NOTE] Filled Mobile (title='Mobile Phone') and First Name (id='field_textbox_1' when present) in the same Contact Find frame and clicked Find.
-2026-03-27T16:43:47.988820+00:00 [NOTE] No open enquiry on any row for mobile+first (last Contact_Enquiry rows=0) — creating Add Enquiry with suffixed first name (append dots until re-find + drill succeed).
-2026-03-27T16:43:47.988906+00:00 [NOTE] Add Enquiry (suffixed first): attempt dot_count=1 → first_name='Lavesh.' (poll gate + logs apply).
-2026-03-27T16:43:47.989025+00:00 [FORM] siebel_step=add_enquiry_branch | form=No contact table match → vehicle find + Opportunities | action=chassis_engine_Enter_then_Enquiry_tab_Opportunities_New_fields_Ctrl_S | aadhar_id='7138' | engine_partial='03361' | finance_required='Y' | financier_name='Hinduja' | frame_partial='06034'
-2026-03-27T16:43:55.692546+00:00 [NOTE] Add Enquiry: Find → Vehicles object type selected (header / Find menu).
-2026-03-27T16:43:56.504784+00:00 [NOTE] Add Enquiry: filled VIN + Engine# in Vehicles Find fly-in and pressed Enter.
-2026-03-27T16:43:59.641101+00:00 [NOTE] Add Enquiry: activated Siebel Find tab before VIN drill-down (if present).
-2026-03-27T16:44:04.330523+00:00 [NOTE] Add Enquiry: clicked VIN in left Search Results to load vehicle detail.
-2026-03-27T16:44:09.179327+00:00 [NOTE] Add Enquiry: vehicle hit present (full_chassis or list key).
-2026-03-27T16:44:09.179432+00:00 [NOTE] Add Enquiry: scraped full VIN scope — full_chassis='MBLHAW479T5C06034', full_engine='HA11F6T5C03361'.
-2026-03-27T16:44:09.179481+00:00 [NOTE] Add Enquiry: scraped from vehicle list — model='SPLENDOR +', year_of_mfg='2026', color='BLA'.
-2026-03-27T16:44:09.179549+00:00 [FORM] siebel_step=add_enquiry_vehicle_scrape | form=Auto Vehicle List — results grid | action=read_model_year_color_before_Enquiry_Opportunity | color='BLA' | full_chassis='MBLHAW479T5C06034' | full_engine='HA11F6T5C03361' | model='SPLENDOR +' | year_of_mfg='2026'
-2026-03-27T16:44:11.936657+00:00 [NOTE] Add Enquiry: filled Key Number = '1347' on vehicle page.
-2026-03-27T16:44:13.169697+00:00 [NOTE] Add Enquiry: filled Battery No. = 'M786M832229' on vehicle page.
-2026-03-27T16:44:14.989162+00:00 [NOTE] Add Enquiry: saved vehicle record after Key/Battery fill.
-2026-03-27T16:44:15.411142+00:00 [NOTE] Add Enquiry: Enquiry tab clicked.
-2026-03-27T16:44:17.882223+00:00 [NOTE] Add Enquiry: clicked Opportunity Form:New.
-2026-03-27T16:44:37.888177+00:00 [NOTE] Add Enquiry: could not set ('Address Line 1', 'Address Line1', 'Address') to 'Awar'.
-2026-03-27T16:44:37.888278+00:00 [STEP] Stopped: Add Enquiry with suffixed first name failed.
+2026-03-27T16:52:23.978291+00:00 [STEP] Started Hero Connect / Siebel DMS automation (linear SOP).
+2026-03-27T16:52:23.978343+00:00 [STEP] Video SOP (Find Contact Enquiry): Find → Contact → mobile + first name → Go; drill / Add Enquiry per match; then All Enquiries path.
+2026-03-27T16:52:23.978449+00:00 [FORM] siebel_step=v1_find_contact | form=Global Find → Contact (Mobile + First Name) + Go | action=goto_contact_find_URL_then_prepare_Find_Contact_fill_mobile_first_FindGo | contact_url_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+Contact+Opportunity+Buyer/CoBuyer+View+(SDW)&SWERF=1&SWEHo=&SWEBU=1' | first_name='Lavesh' | mobile_phone='8690900760'
+2026-03-27T16:52:29.530026+00:00 [STEP] Video SOP: Find customer by mobile + first name (Contact view).
+2026-03-27T16:52:32.025760+00:00 [NOTE] Find → Contact: object type selected so the mobile field is the Contact search field.
+2026-03-27T16:52:32.761029+00:00 [NOTE] Filled Mobile (title='Mobile Phone') and First Name (id='field_textbox_1' when present) as starts-with query (<first>*) in the same Contact Find frame and clicked Find.
+2026-03-27T16:52:34.811894+00:00 [NOTE] DECISION: contact_table_match_mobile_first_after_find=True
+2026-03-27T16:52:40.376615+00:00 [NOTE] Contact Find grid: 2 row(s) contain mobile 8690900760 with a drilldown link (sweep uses ordinal 0..1).
+2026-03-27T16:52:45.784591+00:00 [NOTE] Clicked Title drilldown for mobile 8690900760 (match index 0) — opening contact record.
+2026-03-27T16:52:48.976211+00:00 [NOTE] Contact_Enquiry check (Title index 0): checked=True, rows=0, enquiry#=''.
+2026-03-27T16:52:48.976407+00:00 [NOTE] No enquiry on contact Title index 0 (rows=0) — trying next duplicate row for the same mobile if present.
+2026-03-27T16:52:48.976501+00:00 [NOTE] Duplicate mobile in Search Results: re-finding before Title match index 1 to locate a contact that already has an enquiry.
+2026-03-27T16:52:54.684662+00:00 [STEP] Re-find Contact by mobile (duplicate Title sweep).
+2026-03-27T16:52:57.115228+00:00 [NOTE] Find → Contact: object type selected so the mobile field is the Contact search field.
+2026-03-27T16:52:57.907415+00:00 [NOTE] Filled Mobile (title='Mobile Phone') and First Name (id='field_textbox_1' when present) as starts-with query (<first>*) in the same Contact Find frame and clicked Find.
+2026-03-27T16:53:08.918222+00:00 [NOTE] Clicked Title drilldown for mobile 8690900760 (match index 1) — opening contact record.
+2026-03-27T16:53:12.418682+00:00 [NOTE] Contact_Enquiry check (Title index 1): checked=True, rows=0, enquiry#=''.
+2026-03-27T16:53:12.418843+00:00 [NOTE] No enquiry on contact Title index 1 (rows=0) — trying next duplicate row for the same mobile if present.
+2026-03-27T16:53:12.418887+00:00 [NOTE] Duplicate mobile in Search Results: re-finding before Title match index 2 to locate a contact that already has an enquiry.
+2026-03-27T16:53:18.124325+00:00 [STEP] Re-find Contact by mobile (duplicate Title sweep).
+2026-03-27T16:53:20.512860+00:00 [NOTE] Find → Contact: object type selected so the mobile field is the Contact search field.
+2026-03-27T16:53:21.283691+00:00 [NOTE] Filled Mobile (title='Mobile Phone') and First Name (id='field_textbox_1' when present) as starts-with query (<first>*) in the same Contact Find frame and clicked Find.
+2026-03-27T16:53:30.023529+00:00 [NOTE] No open enquiry on any row for mobile+first (last Contact_Enquiry rows=0) — creating Add Enquiry with suffixed first name (append dots until re-find + drill succeed).
+2026-03-27T16:53:30.023619+00:00 [NOTE] Add Enquiry (suffixed first): attempt dot_count=1 → first_name='Lavesh.' (poll gate + logs apply).
+2026-03-27T16:53:30.023685+00:00 [FORM] siebel_step=add_enquiry_branch | form=No contact table match → vehicle find + Opportunities | action=chassis_engine_Enter_then_Enquiry_tab_Opportunities_New_fields_Ctrl_S | aadhar_id='7138' | engine_partial='03361' | finance_required='Y' | financier_name='Hinduja' | frame_partial='06034'
+2026-03-27T16:53:37.782585+00:00 [NOTE] Add Enquiry: Find → Vehicles object type selected (header / Find menu).
+2026-03-27T16:53:38.586537+00:00 [NOTE] Add Enquiry: filled VIN + Engine# in Vehicles Find fly-in and pressed Enter.
+2026-03-27T16:53:41.774109+00:00 [NOTE] Add Enquiry: activated Siebel Find tab before VIN drill-down (if present).
+2026-03-27T16:53:43.008039+00:00 [NOTE] Add Enquiry: clicked VIN in left Search Results to load vehicle detail.
+2026-03-27T16:53:44.897879+00:00 [NOTE] Add Enquiry: vehicle hit present (full_chassis or list key).
+2026-03-27T16:53:44.897930+00:00 [NOTE] Add Enquiry: scraped full VIN scope — full_chassis='MBLHAW479T5C06034', full_engine='HA11F6T5C03361'.
+2026-03-27T16:53:44.897969+00:00 [NOTE] Add Enquiry: scraped from vehicle list — model='SPLENDOR +', year_of_mfg='2026', color='BLA'.
+2026-03-27T16:53:44.898018+00:00 [FORM] siebel_step=add_enquiry_vehicle_scrape | form=Auto Vehicle List — results grid | action=read_model_year_color_before_Enquiry_Opportunity | color='BLA' | full_chassis='MBLHAW479T5C06034' | full_engine='HA11F6T5C03361' | model='SPLENDOR +' | year_of_mfg='2026'
+2026-03-27T16:53:45.139367+00:00 [NOTE] Add Enquiry: filled Key Number = '1347' on vehicle page.
+2026-03-27T16:53:45.439923+00:00 [NOTE] Add Enquiry: filled Battery No. = 'M786M832229' on vehicle page.
+2026-03-27T16:53:47.150858+00:00 [NOTE] Add Enquiry: saved vehicle record after Key/Battery fill.
+2026-03-27T16:53:47.596562+00:00 [NOTE] Add Enquiry: Enquiry tab clicked.
+2026-03-27T16:53:50.041233+00:00 [NOTE] Add Enquiry: clicked Opportunity Form:New.
+2026-03-27T16:54:17.406295+00:00 [NOTE] Add Enquiry: Variant auto-select with SKU/pick failed — will try Tab selection after Model.
+2026-03-27T16:54:17.406374+00:00 [NOTE] Add Enquiry: Variant field could not be activated for Tab-pick.
+2026-03-27T16:54:17.513799+00:00 [NOTE] Add Enquiry: could not set ('Age(Years)', 'Age') to '22'.
+2026-03-27T16:54:17.513866+00:00 [STEP] Stopped: Add Enquiry with suffixed first name failed.
 
-2026-03-27T16:44:37.888552+00:00 [END] error=Siebel: contacts matched mobile+first but none had an open enquiry; Add Enquiry with dotted first name failed. Could not set Address Line 1.
+2026-03-27T16:54:17.513893+00:00 [END] error=Siebel: contacts matched mobile+first but none had an open enquiry; Add Enquiry with dotted first name failed. Could not set Age.

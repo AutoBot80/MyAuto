@@ -280,6 +280,23 @@ def _ordered_frames(page: Page) -> list[Frame]:
     return rest + [main]
 
 
+def _frames_for_enquiry_subgrid_eval(page: Page) -> list[Frame]:
+    """
+    Frames for **Contact_Enquiry** jqGrid / ``Enquiry_`` scrape after a contact drilldown.
+
+    **Main document first** — Hero Connect often renders the opened contact, tabs, and
+    ``#jqgh_s_1_l_Enquiry_`` / ``input[name=\"Enquiry_\"]`` there. Remaining Siebel iframes follow
+    ``_ordered_frames`` order (excluding main) so duplicate-mobile sweeps still find subgrids that
+    live only inside an iframe.
+    """
+    main = page.main_frame
+    out: list[Frame] = [main]
+    for f in _ordered_frames(page):
+        if f != main:
+            out.append(f)
+    return out
+
+
 def _chained_frame_locator(page: Page, sel: str):
     """
     Build a nested ``FrameLocator`` from ``DMS_SIEBEL_CONTENT_FRAME_SELECTOR``.
@@ -4710,9 +4727,13 @@ def _contact_find_title_sweep_for_enquiry(
     max_title_ordinals: int = 12,
 ) -> tuple[bool, str, int, str | None]:
     """
-    Open each Search Results **Title** row matching ``mobile`` (and **exact** ``first_name`` on the row
-    when provided), re-running Find between attempts, until **Contact_Enquiry** shows at least one data
-    row or matches are exhausted.
+    Duplicate-mobile sweep: when the Find list shows **several rows with the same mobile** (often
+    **in the same frame**), open each in order (**ordinal** 0, 1, …): drill the row, switch to tab
+    **Contact_Enquiry**, then detect an open enquiry via ``#jqgh_s_1_l_Enquiry_`` and
+    ``input``/``textarea`` ``name=\"Enquiry_\"`` (see ``_contact_enquiry_tab_has_rows``). Between rows,
+    re-run Contact Find so the list is available again before the next drill.
+
+    ``first_name`` (when set) restricts which list rows count as drill targets, consistent with Find.
 
     Returns ``(has_existing_enquiry, enquiry_number, row_count, error_message)``.
     ``error_message`` set → caller must stop. If no error and ``has_existing_enquiry`` is False, every
@@ -4805,7 +4826,10 @@ def _contact_find_title_sweep_for_enquiry(
                 )
             break
 
-        note(f"Clicked Title drilldown for mobile {mobile} (match index {ordinal}) — opening contact record.")
+        note(
+            f"Drilldown {ordinal + 1}/{max(_n_mobile_rows, 1)} for mobile {mobile} (match index {ordinal}) "
+            f"— opening contact, then Contact_Enquiry for #jqgh_s_1_l_Enquiry_ / name=Enquiry_."
+        )
         _safe_page_wait(page, 2000, log_label="after_title_drilldown_sweep")
         try:
             page.wait_for_load_state("networkidle", timeout=8_000)
@@ -4867,10 +4891,11 @@ def _contact_enquiry_tab_has_rows(
     note,
 ) -> tuple[bool, int, str]:
     """
-    Open Contact_Enquiry tab and check whether Enquiry grid has data rows.
-    Returns ``(checked, row_count, enquiry_number)``.
-    ``checked=False`` means grid/header wasn't found.
-    ``enquiry_number`` is the scraped Enquiry# from the first data row (empty if none).
+    Open Contact_Enquiry tab and check whether Enquiry grid has data rows **on the opened contact**.
+
+    Detection: header ``#jqgh_s_1_l_Enquiry_`` (or **Enquiry#** text), then non-empty values on
+    ``input`` / ``textarea`` ``name=\"Enquiry_\"``; table cell scrape is a fallback. Frames are
+    scanned with **main document first** (usual place for post-drill contact UI), then Siebel iframes.
     """
     _clicked = _siebel_try_click_named_in_frames(
         page,
@@ -4894,6 +4919,10 @@ def _contact_enquiry_tab_has_rows(
         return r.width > 0 && r.height > 0;
       };
       const norm = (s) => String(s || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+      const isEmptyEnq = (v) => {
+        const s = String(v || '').trim();
+        return !s || s === '-' || s === '—';
+      };
 
       let headerFound = !!document.querySelector('#jqgh_s_1_l_Enquiry_');
       if (!headerFound) {
@@ -4909,12 +4938,33 @@ def _contact_enquiry_tab_has_rows(
 
       let rowCount = 0;
       let enquiryNumber = '';
-      const tables = Array.from(document.querySelectorAll('table'));
+      // Hero / Siebel Open UI: Enquiry# is often in list column inputs, not td innerText.
+      const enqFields = Array.from(
+        document.querySelectorAll('input[name="Enquiry_"], textarea[name="Enquiry_"]')
+      );
+      for (const inp of enqFields) {
+        const v = (inp.value != null ? String(inp.value) : '').trim();
+        if (isEmptyEnq(v)) continue;
+        rowCount += 1;
+        if (!enquiryNumber) enquiryNumber = v;
+      }
+      if (rowCount > 0) {
+        return { checked: true, rowCount, enquiryNumber };
+      }
+
+      const tables = [];
+      const jqh = document.querySelector('#jqgh_s_1_l_Enquiry_');
+      if (jqh) {
+        const anc = jqh.closest('table');
+        if (anc) tables.push(anc);
+      }
+      for (const tbl of document.querySelectorAll('table')) {
+        if (!tables.includes(tbl)) tables.push(tbl);
+      }
       for (const tbl of tables) {
         const ttxt = norm(tbl.innerText || '');
         if (!ttxt.includes('enquiry#') && !ttxt.includes('enquiry #')) continue;
 
-        // Find Enquiry# column index from header
         let enqColIdx = -1;
         const hdrRow = tbl.querySelector('thead tr, tr');
         if (hdrRow) {
@@ -4939,24 +4989,29 @@ def _contact_enquiry_tab_has_rows(
           if (txt.includes('enquiry#') && tdCount < 2) return false;
           return true;
         });
-        if (rows.length > rowCount) {
-          rowCount = rows.length;
-          // Scrape Enquiry# from first data row
-          if (rows.length > 0) {
-            const firstRow = rows[0];
-            const cells = firstRow.querySelectorAll('td');
-            if (enqColIdx >= 0 && enqColIdx < cells.length) {
-              enquiryNumber = (cells[enqColIdx].textContent || '').trim();
-            }
-            if (!enquiryNumber) {
-              // Fallback: look for link/anchor text that looks like an enquiry number
-              for (const cell of cells) {
-                const a = cell.querySelector('a');
-                const t = ((a ? a.textContent : cell.textContent) || '').trim();
-                if (t && /^[A-Z0-9_-]{5,}$/i.test(t) && !t.includes('enquiry')) {
-                  enquiryNumber = t;
-                  break;
-                }
+        if (rows.length > rowCount) rowCount = rows.length;
+        if (rows.length > 0 && !enquiryNumber) {
+          const firstRow = rows[0];
+          const cells = firstRow.querySelectorAll('td');
+          if (enqColIdx >= 0 && enqColIdx < cells.length) {
+            const cell = cells[enqColIdx];
+            const inp = cell.querySelector('input[name="Enquiry_"], input, textarea');
+            enquiryNumber = (inp && inp.value != null && String(inp.value).trim())
+              ? String(inp.value).trim()
+              : (cell.textContent || '').trim();
+          }
+          if (!enquiryNumber) {
+            for (const cell of cells) {
+              const inp2 = cell.querySelector('input[name="Enquiry_"], input');
+              if (inp2 && String(inp2.value || '').trim()) {
+                enquiryNumber = String(inp2.value).trim();
+                break;
+              }
+              const a = cell.querySelector('a');
+              const t = ((a ? a.textContent : cell.textContent) || '').trim();
+              if (t && /^[A-Z0-9_-]{5,}$/i.test(t) && !norm(t).includes('enquiry')) {
+                enquiryNumber = t;
+                break;
               }
             }
           }
@@ -4965,15 +5020,73 @@ def _contact_enquiry_tab_has_rows(
       return { checked: true, rowCount, enquiryNumber };
     }"""
 
-    for _r in list(_ordered_frames(page)) + [page]:
+    # #region agent log
+    def _enq_log(message: str, data: dict) -> None:
+        try:
+            import json as _j_e
+            import time as _t_e
+            from pathlib import Path as _p_e
+
+            _lp = _p_e(__file__).resolve().parents[3] / "debug-08e634.log"
+            with open(_lp, "a", encoding="utf-8") as _lf_e:
+                _lf_e.write(
+                    _j_e.dumps(
+                        {
+                            "sessionId": "08e634",
+                            "runId": "post-fix",
+                            "hypothesisId": "E1",
+                            "location": "siebel_dms_playwright.py:_contact_enquiry_tab_has_rows",
+                            "message": message,
+                            "data": data,
+                            "timestamp": int(_t_e.time() * 1000),
+                        }
+                    )
+                    + "\n"
+                )
+        except Exception:
+            pass
+
+    # #endregion
+
+    _best_cnt = 0
+    _best_no = ""
+    _any_checked = False
+    _main = page.main_frame
+    for _r in _frames_for_enquiry_subgrid_eval(page):
         try:
             _res = _r.evaluate(_js)
-            if _res and _res.get("checked"):
+            if not _res:
+                continue
+            if _res.get("checked"):
+                _any_checked = True
                 _cnt = int(_res.get("rowCount") or 0)
                 _enq_no = str(_res.get("enquiryNumber") or "").strip()
-                return True, _cnt, _enq_no
+                try:
+                    _u = str(getattr(_r, "url", "") or "")[:120]
+                except Exception:
+                    _u = ""
+                _enq_log(
+                    "enquiry_grid_probe",
+                    {
+                        "frame_url": _u,
+                        "rowCount": _cnt,
+                        "has_number": bool(_enq_no),
+                        "is_main": _r == _main,
+                    },
+                )
+                if _cnt > 0 and _r == _main:
+                    return True, _cnt, _enq_no
+                if _cnt > _best_cnt:
+                    _best_cnt = _cnt
+                    _best_no = _enq_no
+                elif _cnt == _best_cnt and _best_cnt > 0 and _enq_no and not _best_no:
+                    _best_no = _enq_no
         except Exception:
             continue
+    if _best_cnt > 0:
+        return True, _best_cnt, _best_no
+    if _any_checked:
+        return True, 0, ""
     return False, 0, ""
 
 

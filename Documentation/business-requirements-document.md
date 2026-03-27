@@ -145,8 +145,8 @@ This is the **intended** real-DMS order (aligned with the operator screen record
    - Contact Find and row matching use **mobile + first name** aligned with the search key: **trimmed, case-insensitive** matching on the result row. **Compound CRM first names** (e.g. grid shows **“Lavesh Faujdar”**) match a Find key of **“Lavesh”**, **“Lavesh.”** (trailing dots stripped for compare), or the **full multi-word** key; the **first whitespace-delimited token** of the stored name aligns with the single-token Find key. Siebel may hide label cells from visible text while **textContent**, **input/textarea** values, or **title/aria-label** on cells still carry the name.
    - If **0 rows** match mobile+first name, run Add Enquiry with the **base first name** (no dot suffix).
 3. **Open enquiry decision for duplicates:**
-   - If one or more rows match, open each matching contact (top-to-bottom) and inspect tab **Contact_Enquiry**.
-   - A contact has an **open enquiry** when the enquiry subgrid below contact has **at least one populated row**.
+   - If one or more rows match (including **two+ rows with the same mobile in the same list frame**), automation **drills each row in order** (re-running Find between drills so the list is available again), then on **each** opened contact switches to tab **Contact_Enquiry** and inspects the enquiry subgrid.
+   - A contact has an **open enquiry** when that subgrid shows **at least one populated** Enquiry# (non-empty **`input`/`textarea` `name="Enquiry_"`**; header may be **`div#jqgh_s_1_l_Enquiry_`** / **Enquiry#** in Open UI). Evaluation prefers the **main document** when it contains a hit, then Siebel iframes.
    - If multiple matching rows have open enquiry, select the **first** one and continue normal relation/payment/order flow.
 4. **No open enquiry in any matching row:**
    - Create a new enquiry with suffixed first name by appending dots: `first.`, then `first..`, etc.
@@ -347,3 +347,5 @@ Bulk upload automates the ingestion of scanned documents from a shared folder in
 | 3.5 | Mar 2026 | — | **§6.1b** / **BR-19**: grid row first-name match clarified — trimmed **case-insensitive** equality; implementation may use row **textContent**, cell **input/textarea** values, and **title/aria-label** when Siebel omits names from visible **innerText** |
 | 3.6 | Mar 2026 | — | **§6.1b**: first-name row match extended for **compound** Siebel display (**“Lavesh Faujdar”** vs Find **“Lavesh”** / **“Lavesh.”**) via first-token and prefix rules consistent with Hero CRM |
 | 3.7 | Mar 2026 | — | **§6.1b**: Contact Find First Name field uses **starts-with** query (**`<first>*`**) so compound names in Siebel match the sheet’s single-token first name |
+| 3.8 | Mar 2026 | — | **§6.1b**: **open enquiry** detection on **Contact_Enquiry** reads Enquiry# from **`name="Enquiry_"`** fields (and related table scrape), plus frame aggregation for duplicate-mobile sweep |
+| 3.9 | Mar 2026 | — | **§6.1b**: duplicate-mobile sweep — **same-frame** multi-row list: drill **each** row, **Contact_Enquiry** per open; subgrid eval order **main document first** then iframes (**LLD** **6.10**) |
