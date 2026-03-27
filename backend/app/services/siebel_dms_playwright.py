@@ -1466,6 +1466,70 @@ def _try_fill_vin_engine_in_vehicles_find_applet(
             _dbgv("V2", "vehicle_findfieldsbox_probe", _ff_probe or {})
         except Exception:
             _dbgv("V2", "vehicle_findfieldsbox_probe_eval_failed", {})
+
+        # Strict path: fill inside same-frame #findfieldsbox using required IDs.
+        try:
+            _strict_out = root.evaluate(
+                """(args) => {
+                  const vinVal = String(args.vin || '').trim();
+                  const engVal = String(args.eng || '').trim();
+                  const box = document.getElementById('findfieldsbox');
+                  if (!box) return { ok: false, reason: 'no_findfieldsbox' };
+                  const vis = (el) => {
+                    if (!el) return false;
+                    const st = window.getComputedStyle(el);
+                    if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+                    const r = el.getBoundingClientRect();
+                    return r.width >= 2 && r.height >= 2;
+                  };
+                  const editable = (el) => !!(el && vis(el) && !el.readOnly && !el.disabled);
+
+                  const vin = box.querySelector('input#field_textbox_0');
+                  const eng = box.querySelector('input#field_textbox_2');
+                  if (!editable(vin)) return { ok: false, reason: 'vin_not_editable_or_missing' };
+                  if (!editable(eng)) return { ok: false, reason: 'engine_not_editable_or_missing' };
+
+                  vin.focus();
+                  vin.value = '';
+                  vin.value = vinVal;
+                  vin.dispatchEvent(new Event('input', { bubbles: true }));
+                  vin.dispatchEvent(new Event('change', { bubbles: true }));
+
+                  eng.focus();
+                  eng.value = '';
+                  eng.value = engVal;
+                  eng.dispatchEvent(new Event('input', { bubbles: true }));
+                  eng.dispatchEvent(new Event('change', { bubbles: true }));
+
+                  const findSel = [
+                    'input[type="submit"][value*="Find" i]',
+                    'input[type="button"][value*="Find" i]',
+                    'button[title="Find" i]',
+                    'button[aria-label="Find" i]',
+                    '[role="button"][title="Find" i]',
+                    '[role="button"][aria-label="Find" i]'
+                  ];
+                  for (const s of findSel) {
+                    const b = box.querySelector(s);
+                    if (b && vis(b)) {
+                      try { b.click(); return { ok: true, mode: 'find_button_in_box' }; } catch (e) {}
+                    }
+                  }
+                  try {
+                    eng.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
+                    eng.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
+                    return { ok: true, mode: 'enter_fallback_in_box' };
+                  } catch (e) {
+                    return { ok: false, reason: 'find_click_and_enter_failed' };
+                  }
+                }""",
+                {"vin": cw, "eng": ew},
+            )
+            _dbgv("V6", "vehicle_findfieldsbox_strict_fill_attempt", _strict_out or {})
+            if _strict_out and _strict_out.get("ok"):
+                return True
+        except Exception:
+            _dbgv("V6", "vehicle_findfieldsbox_strict_fill_eval_failed", {})
         # #endregion
         applets: list = []
         try:
