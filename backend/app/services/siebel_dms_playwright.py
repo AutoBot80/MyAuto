@@ -3766,10 +3766,12 @@ def _contact_enquiry_tab_has_rows(
     action_timeout_ms: int,
     content_frame_selector: str | None,
     note,
-) -> tuple[bool, int]:
+) -> tuple[bool, int, str]:
     """
     Open Contact_Enquiry tab and check whether Enquiry grid has data rows.
-    Returns (checked, row_count). ``checked=False`` means grid/header wasn't found.
+    Returns ``(checked, row_count, enquiry_number)``.
+    ``checked=False`` means grid/header wasn't found.
+    ``enquiry_number`` is the scraped Enquiry# from the first data row (empty if none).
     """
     _clicked = _siebel_try_click_named_in_frames(
         page,
@@ -3780,7 +3782,7 @@ def _contact_enquiry_tab_has_rows(
     )
     if not _clicked:
         note("Contact_Enquiry tab not clickable (could not verify enquiry rows).")
-        return False, 0
+        return False, 0, ""
 
     _safe_page_wait(page, 900, log_label="after_contact_enquiry_tab")
 
@@ -3804,13 +3806,29 @@ def _contact_enquiry_tab_has_rows(
           }
         }
       }
-      if (!headerFound) return { checked: false, rowCount: 0 };
+      if (!headerFound) return { checked: false, rowCount: 0, enquiryNumber: '' };
 
       let rowCount = 0;
+      let enquiryNumber = '';
       const tables = Array.from(document.querySelectorAll('table'));
       for (const tbl of tables) {
         const ttxt = norm(tbl.innerText || '');
         if (!ttxt.includes('enquiry#') && !ttxt.includes('enquiry #')) continue;
+
+        // Find Enquiry# column index from header
+        let enqColIdx = -1;
+        const hdrRow = tbl.querySelector('thead tr, tr');
+        if (hdrRow) {
+          const hCells = hdrRow.querySelectorAll('th, td');
+          for (let ci = 0; ci < hCells.length; ci++) {
+            const ht = norm(hCells[ci].textContent || '');
+            if (ht === 'enquiry#' || ht === 'enquiry #') {
+              enqColIdx = ci;
+              break;
+            }
+          }
+        }
+
         const rows = Array.from(tbl.querySelectorAll('tbody tr, tr')).filter((tr) => {
           if (!vis(tr)) return false;
           const cls = tr.className || '';
@@ -3822,9 +3840,30 @@ def _contact_enquiry_tab_has_rows(
           if (txt.includes('enquiry#') && tdCount < 2) return false;
           return true;
         });
-        rowCount = Math.max(rowCount, rows.length);
+        if (rows.length > rowCount) {
+          rowCount = rows.length;
+          // Scrape Enquiry# from first data row
+          if (rows.length > 0) {
+            const firstRow = rows[0];
+            const cells = firstRow.querySelectorAll('td');
+            if (enqColIdx >= 0 && enqColIdx < cells.length) {
+              enquiryNumber = (cells[enqColIdx].textContent || '').trim();
+            }
+            if (!enquiryNumber) {
+              // Fallback: look for link/anchor text that looks like an enquiry number
+              for (const cell of cells) {
+                const a = cell.querySelector('a');
+                const t = ((a ? a.textContent : cell.textContent) || '').trim();
+                if (t && /^[A-Z0-9_-]{5,}$/i.test(t) && !t.includes('enquiry')) {
+                  enquiryNumber = t;
+                  break;
+                }
+              }
+            }
+          }
+        }
       }
-      return { checked: true, rowCount };
+      return { checked: true, rowCount, enquiryNumber };
     }"""
 
     for _r in list(_ordered_frames(page)) + [page]:
@@ -3832,10 +3871,11 @@ def _contact_enquiry_tab_has_rows(
             _res = _r.evaluate(_js)
             if _res and _res.get("checked"):
                 _cnt = int(_res.get("rowCount") or 0)
-                return True, _cnt
+                _enq_no = str(_res.get("enquiryNumber") or "").strip()
+                return True, _cnt, _enq_no
         except Exception:
             continue
-    return False, 0
+    return False, 0, ""
 
 
 def _add_customer_payment(
@@ -8459,13 +8499,38 @@ def Playwright_Hero_DMS_fill(
                     return out
 
             # Before opening customer details / filling Relation+Address, verify enquiry exists on Contact_Enquiry tab.
-            _enq_checked, _enq_rows = _contact_enquiry_tab_has_rows(
-                page,
-                action_timeout_ms=action_timeout_ms,
-                content_frame_selector=content_frame_selector,
-                note=note,
-            )
-            note(f"Contact_Enquiry check: checked={_enq_checked!r}, rows={_enq_rows}.")
+            _enq_checked = False
+            _enq_rows = 0
+            _enq_number = ""
+            for _enq_attempt in range(3):
+                _enq_checked, _enq_rows, _enq_number = _contact_enquiry_tab_has_rows(
+                    page,
+                    action_timeout_ms=action_timeout_ms,
+                    content_frame_selector=content_frame_selector,
+                    note=note,
+                )
+                if _enq_checked:
+                    break
+                note(f"Contact_Enquiry tab: attempt {_enq_attempt + 1}/3 could not verify — retrying.")
+                _safe_page_wait(page, 1200, log_label=f"contact_enquiry_tab_retry_{_enq_attempt}")
+            note(f"Contact_Enquiry check: checked={_enq_checked!r}, rows={_enq_rows}, enquiry#={_enq_number!r}.")
+            if not _enq_checked:
+                step("Stopped: could not open or verify Contact_Enquiry tab after 3 attempts.")
+                out["error"] = (
+                    "Siebel: Contact_Enquiry tab could not be opened or verified. "
+                    "Cannot determine whether an enquiry exists for this contact."
+                )
+                return out
+            if _enq_rows > 0 and not _enq_number:
+                step("Stopped: enquiry row(s) found but Enquiry# could not be scraped.")
+                out["error"] = (
+                    "Siebel: Contact_Enquiry grid has rows but Enquiry# is empty. "
+                    "Cannot proceed without a valid Enquiry#."
+                )
+                return out
+            if _enq_rows > 0 and _enq_number:
+                note(f"Enquiry exists: Enquiry#={_enq_number!r}. Proceeding with relation/address fill.")
+                out.setdefault("vehicle", {})["enquiry_number"] = _enq_number
             if _enq_checked and _enq_rows <= 0:
                 note("No Enquiry rows found on Contact_Enquiry — running Add Enquiry before relation/address fill.")
                 ae2_ok, ae2_detail = _add_enquiry_opportunity(
@@ -8516,6 +8581,29 @@ def Playwright_Hero_DMS_fill(
                         "returned no table row after re-find."
                     )
                     return out
+                # Re-verify Contact_Enquiry tab to scrape the newly created Enquiry#
+                _enq2_checked = False
+                _enq2_number = ""
+                for _enq2_att in range(5):
+                    _enq2_checked, _enq2_rows2, _enq2_number = _contact_enquiry_tab_has_rows(
+                        page,
+                        action_timeout_ms=action_timeout_ms,
+                        content_frame_selector=content_frame_selector,
+                        note=note,
+                    )
+                    if _enq2_checked and _enq2_number:
+                        break
+                    note(f"Post Add Enquiry: Enquiry# scrape attempt {_enq2_att + 1}/5 — checked={_enq2_checked!r}, enquiry#={_enq2_number!r}.")
+                    _safe_page_wait(page, 1500, log_label=f"post_add_enquiry_enq_num_retry_{_enq2_att}")
+                if not _enq2_number:
+                    step("Stopped: Add Enquiry saved but Enquiry# still empty after re-check.")
+                    out["error"] = (
+                        "Siebel: Add Enquiry was saved from Contact_Enquiry-empty path, but Enquiry# "
+                        "could not be scraped from the Contact_Enquiry grid after 5 attempts."
+                    )
+                    return out
+                note(f"Post Add Enquiry: scraped Enquiry#={_enq2_number!r}.")
+                out.setdefault("vehicle", {})["enquiry_number"] = _enq2_number
             form_trace(
                 "v2_drill_and_nav",
                 "Search Results + Contacts detail",
