@@ -204,7 +204,7 @@ def process_bulk_pdf(
         vehicle_id = submit_result.get("vehicle_id")
 
         # 4. Fill DMS (headless)
-        from app.services.fill_dms_service import run_fill_dms
+        from app.services.fill_hero_dms_service import run_fill_dms
         dms_result = run_fill_dms(
             dms_base_url=DMS_BASE_URL,
             subfolder=subfolder,
@@ -215,10 +215,11 @@ def process_bulk_pdf(
             uploads_dir=Path(get_uploads_dir(dealer_id)),
             ocr_output_dir=Path(get_ocr_output_dir(dealer_id)),
             vahan_base_url=None,
+            dealer_id=dealer_id,
             headless=False,
         )
         if dms_result.get("vehicle") and vehicle_id:
-            from app.services.fill_dms_service import update_vehicle_master_from_dms
+            from app.services.fill_hero_dms_service import update_vehicle_master_from_dms
             try:
                 update_vehicle_master_from_dms(vehicle_id, dms_result["vehicle"])
             except Exception as e:

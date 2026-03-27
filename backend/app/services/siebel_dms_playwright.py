@@ -8,8 +8,8 @@ drill hit → Contacts → Contact_Enquiry → Enquiry → All Enquiries), then 
 Default staged flow (flag False): **Find → mobile → Go**; optional
 **basic enquiry** (name/address/state/PIN) + Save + **mandatory re-find** when created; **always**
 care-of + Save; **Auto Vehicle List** + **In Transit** (receipt / Pre Check / PDI); **Generate Booking**
-**after vehicle for all paths**; allotment (line items) when **not** In Transit; invoice = message hook
-only. No **Create Invoice** automation.
+**after vehicle for all paths**; allotment (line items) when **not** In Transit;
+``_attach_vehicle_to_bkg`` runs Apply Campaign + **Create Invoice** at the end.
 
 Siebel renders in nested iframes. The **Find** pane and grids use labels like **Mobile Phone**,
 **Mobile Phone #**, or **Mobile Number** — often via ``<label>`` / ``aria-labelledby``, not
@@ -4542,32 +4542,111 @@ def _add_customer_payment(
 def _attach_vehicle_to_bkg(
     page: Page,
     *,
+    full_chassis: str,
+    order_number: str = "",
     action_timeout_ms: int,
     content_frame_selector: str | None,
     note,
-) -> tuple[bool, str | None]:
+) -> tuple[bool, str | None, dict]:
     """
-    After a new sales order is saved, open the order detail from the header link Siebel shows at the
-    top of the page: ``<a name="Order Number" tabindex="-1">…</a>`` (drill-down on Order#).
-    """
-    _tmo = min(int(action_timeout_ms or 3000), 4000)
-    roots: list = []
-    try:
-        roots.extend(list(_siebel_locator_search_roots(page, content_frame_selector)))
-    except Exception:
-        pass
-    try:
-        roots.extend(list(_ordered_frames(page)))
-    except Exception:
-        pass
-    roots.append(page)
+    After a new sales order is saved:
+    1. Click Order Number header link to open order detail.
+    2. Click **New** → fill VIN → Price All → Allocate All → scrape Total.
+    3. VIN drilldown → Vehicles tab → scrape cubic_capacity + vehicle_type.
+    4. Pre-check tab → pick first row → Submit.
+    5. PDI tab → Service Request List:New → pick icon → first row → OK → Submit.
+    6. Click ``Order:<order#>`` link → Apply Campaign → Create Invoice.
 
-    _selectors = (
+    Returns ``(success, error_detail, scraped_dict)``.
+    """
+    scraped: dict = {}
+    _tmo = min(int(action_timeout_ms or 3000), 4000)
+
+    def _all_roots() -> list:
+        r: list = []
+        try:
+            r.extend(list(_siebel_locator_search_roots(page, content_frame_selector)))
+        except Exception:
+            pass
+        try:
+            r.extend(list(_ordered_frames(page)))
+        except Exception:
+            pass
+        r.append(page)
+        return r
+
+    def _click_by_id(element_id: str, label: str, wait_ms: int = 1000) -> bool:
+        for root in _all_roots():
+            try:
+                loc = root.locator(f"#{element_id}").first
+                if loc.count() > 0 and loc.is_visible(timeout=700):
+                    try:
+                        loc.click(timeout=_tmo)
+                    except Exception:
+                        loc.click(timeout=_tmo, force=True)
+                    note(f"attach_vehicle_to_bkg: clicked {label} (id={element_id!r}).")
+                    _safe_page_wait(page, wait_ms, log_label=f"after_{label.replace(' ', '_').lower()}")
+                    return True
+            except Exception:
+                continue
+        for root in _all_roots():
+            try:
+                hit = root.evaluate(f"""() => {{
+                    const el = document.getElementById("{element_id}");
+                    if (!el) return false;
+                    const st = window.getComputedStyle(el);
+                    if (st.display === 'none' || st.visibility === 'hidden') return false;
+                    el.scrollIntoView({{ block: 'center' }});
+                    el.click();
+                    return true;
+                }}""")
+                if hit:
+                    note(f"attach_vehicle_to_bkg: JS clicked {label} (id={element_id!r}).")
+                    _safe_page_wait(page, wait_ms, log_label=f"after_{label.replace(' ', '_').lower()}_js")
+                    return True
+            except Exception:
+                continue
+        return False
+
+    def _click_by_name(name_val: str, label: str, wait_ms: int = 1000) -> bool:
+        for root in _all_roots():
+            for css in (f"[name='{name_val}']", f"a[name='{name_val}']", f"button[name='{name_val}']", f"input[name='{name_val}']"):
+                try:
+                    loc = root.locator(css).first
+                    if loc.count() > 0 and loc.is_visible(timeout=700):
+                        try:
+                            loc.click(timeout=_tmo)
+                        except Exception:
+                            loc.click(timeout=_tmo, force=True)
+                        note(f"attach_vehicle_to_bkg: clicked {label} (name={name_val!r}).")
+                        _safe_page_wait(page, wait_ms, log_label=f"after_{label.replace(' ', '_').lower()}")
+                        return True
+                except Exception:
+                    continue
+        return False
+
+    def _scrape_text_by_id(element_id: str) -> str:
+        for root in _all_roots():
+            try:
+                val = root.evaluate(f"""() => {{
+                    const el = document.getElementById("{element_id}");
+                    if (!el) return '';
+                    return (el.value || el.textContent || el.innerText || '').trim();
+                }}""")
+                if val:
+                    return str(val).strip()
+            except Exception:
+                continue
+        return ""
+
+    # ── Step 1: Click Order Number header link ──
+    _order_clicked = False
+    _order_selectors = (
         "a[name='Order Number'][tabindex='-1']",
         "a[name='Order Number']",
     )
-    for root in roots:
-        for css in _selectors:
+    for root in _all_roots():
+        for css in _order_selectors:
             try:
                 loc = root.locator(css).first
                 if loc.count() <= 0 or not loc.is_visible(timeout=900):
@@ -4581,48 +4660,713 @@ def _attach_vehicle_to_bkg(
                 except Exception:
                     loc.click(timeout=_tmo, force=True)
                 note(f"attach_vehicle_to_bkg: clicked Order Number header link via {css!r}.")
-                _safe_page_wait(page, 1200, log_label="after_attach_vehicle_to_bkg_click")
-                return True, None
+                _safe_page_wait(page, 1500, log_label="after_attach_vehicle_to_bkg_click")
+                _order_clicked = True
+                break
             except Exception:
                 continue
+        if _order_clicked:
+            break
+    if not _order_clicked:
+        _js_order = """() => {
+          const vis = (el) => {
+            if (!el) return false;
+            const st = window.getComputedStyle(el);
+            if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity) === 0) return false;
+            const r = el.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+          };
+          let el = document.querySelector("a[name='Order Number'][tabindex='-1']");
+          if (!el || !vis(el)) el = document.querySelector("a[name='Order Number']");
+          if (!el || !vis(el)) return '';
+          try { el.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
+          el.click();
+          return 'ok';
+        }"""
+        for frame in _ordered_frames(page):
+            try:
+                if frame.evaluate(_js_order):
+                    _order_clicked = True
+                    note("attach_vehicle_to_bkg: JS clicked Order Number in frame.")
+                    _safe_page_wait(page, 1500, log_label="after_attach_vehicle_to_bkg_js_frame")
+                    break
+            except Exception:
+                continue
+        if not _order_clicked:
+            try:
+                if page.evaluate(_js_order):
+                    _order_clicked = True
+                    note("attach_vehicle_to_bkg: JS clicked Order Number on main page.")
+                    _safe_page_wait(page, 1500, log_label="after_attach_vehicle_to_bkg_js_page")
+            except Exception:
+                pass
+    if not _order_clicked:
+        return False, "Could not click Order Number header link.", scraped
 
-    _js = """() => {
-      const vis = (el) => {
-        if (!el) return false;
-        const st = window.getComputedStyle(el);
-        if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity) === 0) return false;
-        const r = el.getBoundingClientRect();
-        return r.width > 0 && r.height > 0;
-      };
-      let el = document.querySelector("a[name='Order Number'][tabindex='-1']");
-      if (!el || !vis(el)) el = document.querySelector("a[name='Order Number']");
-      if (!el || !vis(el)) return '';
-      try { el.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
-      el.click();
-      return 'order-number-a';
-    }"""
-    for frame in _ordered_frames(page):
-        try:
-            hit = frame.evaluate(_js)
-            if hit:
-                note(f"attach_vehicle_to_bkg: JS clicked Order Number in frame ({hit!r}).")
-                _safe_page_wait(page, 1200, log_label="after_attach_vehicle_to_bkg_js_frame")
-                return True, None
-        except Exception:
-            continue
     try:
-        hit = page.evaluate(_js)
-        if hit:
-            note(f"attach_vehicle_to_bkg: JS clicked Order Number on main page ({hit!r}).")
-            _safe_page_wait(page, 1200, log_label="after_attach_vehicle_to_bkg_js_page")
-            return True, None
+        page.wait_for_load_state("networkidle", timeout=8_000)
     except Exception:
         pass
 
-    return (
-        False,
-        "attach_vehicle_to_bkg: could not find or click Order Number link (name='Order Number', tabindex='-1').",
+    # ── Step 2: Click New button (id="s_1_1_35_0") ──
+    if not _click_by_id("s_1_1_35_0", "New button", wait_ms=1200):
+        return False, "Could not click New button (id=s_1_1_35_0) on order line items.", scraped
+
+    # ── Step 3: Click VIN field (id="1_s_1_l_VIN"), type full chassis, Tab out ──
+    _vin_filled = False
+    for root in _all_roots():
+        try:
+            vin_loc = root.locator("#1_s_1_l_VIN, [id='1_s_1_l_VIN']").first
+            if vin_loc.count() > 0 and vin_loc.is_visible(timeout=700):
+                vin_loc.click(timeout=_tmo)
+                _safe_page_wait(page, 300, log_label="after_vin_click")
+                vin_loc.fill("", timeout=1200)
+                vin_loc.fill(full_chassis, timeout=2000)
+                vin_loc.press("Tab", timeout=1500)
+                _vin_filled = True
+                note(f"attach_vehicle_to_bkg: filled VIN = {full_chassis!r} and tabbed out.")
+                break
+        except Exception:
+            continue
+    if not _vin_filled:
+        for root in _all_roots():
+            try:
+                hit = root.evaluate(f"""(chassis) => {{
+                    const el = document.getElementById('1_s_1_l_VIN');
+                    if (!el) return false;
+                    el.scrollIntoView({{ block: 'center' }});
+                    el.focus();
+                    el.value = '';
+                    el.value = chassis;
+                    el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                    el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                    return true;
+                }}""", full_chassis)
+                if hit:
+                    _vin_filled = True
+                    note(f"attach_vehicle_to_bkg: JS filled VIN = {full_chassis!r}.")
+                    _safe_page_wait(page, 300, log_label="after_vin_js_fill")
+                    try:
+                        page.keyboard.press("Tab")
+                    except Exception:
+                        pass
+                    break
+            except Exception:
+                continue
+    if not _vin_filled:
+        return False, f"Could not fill VIN field (id=1_s_1_l_VIN) with {full_chassis!r}.", scraped
+    _safe_page_wait(page, 2000, log_label="after_vin_tab_settle")
+
+    # ── Step 4: Click Price All (name="s_1_1_7_0") ──
+    if not _click_by_name("s_1_1_7_0", "Price All", wait_ms=2000):
+        return False, "Could not click Price All (name=s_1_1_7_0).", scraped
+    _pa_err = _detect_siebel_error_popup(page, content_frame_selector)
+    if _pa_err:
+        note(f"attach_vehicle_to_bkg: Siebel error after Price All → {_pa_err!r:.300}")
+        return False, f"Siebel error after Price All: {_pa_err[:200]}", scraped
+
+    # ── Step 5: Click Allocate All (id="s_1_1_9_0_Ctrl") ──
+    if not _click_by_id("s_1_1_9_0_Ctrl", "Allocate All", wait_ms=2000):
+        return False, "Could not click Allocate All (id=s_1_1_9_0_Ctrl).", scraped
+    _aa_err = _detect_siebel_error_popup(page, content_frame_selector)
+    if _aa_err:
+        note(f"attach_vehicle_to_bkg: Siebel error after Allocate All → {_aa_err!r:.300}")
+        return False, f"Siebel error after Allocate All: {_aa_err[:200]}", scraped
+
+    # ── Step 6: Scrape Total (id="1_HHML_Total") → vehicle_ex_showroom_cost ──
+    _total = _scrape_text_by_id("1_HHML_Total")
+    scraped["vehicle_ex_showroom_cost"] = _total
+    if _total:
+        note(f"attach_vehicle_to_bkg: scraped Total = {_total!r}.")
+    else:
+        note("attach_vehicle_to_bkg: Total (id=1_HHML_Total) not readable (best-effort).")
+
+    # ── Step 7: Click VIN drilldown (name="VIN") → opens Vehicles tab ──
+    if not _click_by_name("VIN", "VIN drilldown", wait_ms=2000):
+        return False, "Could not click VIN drilldown (name=VIN) to open Vehicles tab.", scraped
+    try:
+        page.wait_for_load_state("networkidle", timeout=8_000)
+    except Exception:
+        pass
+
+    # ── Step 8: Click Serial Number (name="Serial Number") ──
+    if not _click_by_name("Serial Number", "Serial Number", wait_ms=2000):
+        return False, "Could not click Serial Number (name='Serial Number') on Vehicles tab.", scraped
+    try:
+        page.wait_for_load_state("networkidle", timeout=8_000)
+    except Exception:
+        pass
+
+    # ── Step 9: Scrape cubic_capacity and vehicle_type ──
+    scraped["cubic_capacity"] = _scrape_text_by_id("4_s_1_l_HHML_Fetaure_Value")
+    scraped["vehicle_type"] = _scrape_text_by_id("5_s_1_l_HHML_Fetaure_Value")
+    note(
+        f"attach_vehicle_to_bkg: scraped cubic_capacity={scraped['cubic_capacity']!r}, "
+        f"vehicle_type={scraped['vehicle_type']!r}."
     )
+
+    # ── Step 10: Open Pre-check tab (id="ui-id-1115") ──
+    if not _click_by_id("ui-id-1115", "Pre-check tab", wait_ms=1500):
+        return False, "Could not open Pre-check tab (id=ui-id-1115).", scraped
+    try:
+        page.wait_for_load_state("networkidle", timeout=8_000)
+    except Exception:
+        pass
+
+    # ── Step 11: Click icon (id="s_3_1_12_0_Ctrl") ──
+    if not _click_by_id("s_3_1_12_0_Ctrl", "Pre-check icon", wait_ms=1200):
+        return False, "Could not click Pre-check icon (id=s_3_1_12_0_Ctrl).", scraped
+
+    # ── Step 12: In the applet, find the search/pick input, pick first row, click OK ──
+    _safe_page_wait(page, 800, log_label="after_precheck_icon_settle")
+    _pick_ok = False
+    for root in _all_roots():
+        try:
+            _pick_result = root.evaluate("""() => {
+                const vis = (el) => {
+                    if (!el) return false;
+                    const st = window.getComputedStyle(el);
+                    if (st.display === 'none' || st.visibility === 'hidden') return false;
+                    const r = el.getBoundingClientRect();
+                    return r.width > 0 && r.height > 0;
+                };
+                // Find the search icon (localName='input' near the pick applet)
+                const inputs = Array.from(document.querySelectorAll('input'));
+                let searchBtn = null;
+                for (const inp of inputs) {
+                    const al = (inp.getAttribute('aria-label') || '').toLowerCase();
+                    const tt = (inp.getAttribute('title') || '').toLowerCase();
+                    if ((al.includes('search') || al.includes('go') || tt.includes('search') || tt.includes('go'))
+                        && vis(inp) && inp.type !== 'text') {
+                        searchBtn = inp;
+                        break;
+                    }
+                }
+                if (searchBtn) {
+                    searchBtn.click();
+                    return 'search_clicked';
+                }
+                return '';
+            }""")
+            if _pick_result:
+                note(f"attach_vehicle_to_bkg: clicked search in pick applet ({_pick_result!r}).")
+                _safe_page_wait(page, 1200, log_label="after_precheck_search_click")
+                _pick_ok = True
+                break
+        except Exception:
+            continue
+
+    if not _pick_ok:
+        note("attach_vehicle_to_bkg: search icon not found in pick applet (trying Go/Enter fallback).")
+        try:
+            page.keyboard.press("Enter")
+            _safe_page_wait(page, 1200, log_label="after_precheck_enter_fallback")
+            _pick_ok = True
+        except Exception:
+            pass
+
+    # Pick first row from results
+    _row_picked = False
+    _safe_page_wait(page, 600, log_label="before_precheck_pick_row")
+    for root in _all_roots():
+        try:
+            _row_result = root.evaluate("""() => {
+                const vis = (el) => {
+                    if (!el) return false;
+                    const st = window.getComputedStyle(el);
+                    if (st.display === 'none' || st.visibility === 'hidden') return false;
+                    const r = el.getBoundingClientRect();
+                    return r.width > 0 && r.height > 0;
+                };
+                const rows = Array.from(document.querySelectorAll('table tbody tr, table tr'));
+                for (const tr of rows) {
+                    if (!vis(tr)) continue;
+                    const tds = tr.querySelectorAll('td');
+                    if (tds.length < 2) continue;
+                    const cls = (tr.className || '').toLowerCase();
+                    if (cls.includes('jqgfirstrow') || cls.includes('header')) continue;
+                    const txt = (tr.textContent || '').trim();
+                    if (!txt || txt.length < 3) continue;
+                    const clickable = tr.querySelector('a, input[type="radio"], input[type="checkbox"], td');
+                    if (clickable) { clickable.click(); } else { tr.click(); }
+                    return 'row_clicked';
+                }
+                return '';
+            }""")
+            if _row_result:
+                _row_picked = True
+                note("attach_vehicle_to_bkg: picked first row in Pre-check applet.")
+                _safe_page_wait(page, 600, log_label="after_precheck_row_pick")
+                break
+        except Exception:
+            continue
+
+    # Click OK to close the applet
+    _ok_done = False
+    for root in _all_roots():
+        for ok_css in (
+            "button[aria-label*='OK' i]", "a[aria-label*='OK' i]",
+            "input[type='button'][value='OK' i]", "button:has-text('OK')", "a:has-text('OK')",
+        ):
+            try:
+                ok_loc = root.locator(ok_css).first
+                if ok_loc.count() > 0 and ok_loc.is_visible(timeout=500):
+                    try:
+                        ok_loc.click(timeout=_tmo)
+                    except Exception:
+                        ok_loc.click(timeout=_tmo, force=True)
+                    _ok_done = True
+                    note("attach_vehicle_to_bkg: clicked OK on Pre-check pick applet.")
+                    _safe_page_wait(page, 1000, log_label="after_precheck_ok")
+                    break
+            except Exception:
+                continue
+        if _ok_done:
+            break
+    if not _ok_done:
+        note("attach_vehicle_to_bkg: OK button not found on Pre-check pick applet (best-effort).")
+
+    # ── Step 13: Click Submit button (outerText="Submit") ──
+    _submit_done = False
+    for root in _all_roots():
+        for sub_css in (
+            "button:has-text('Submit')", "a:has-text('Submit')",
+            "input[type='button'][value='Submit' i]",
+            "button[aria-label*='Submit' i]", "a[aria-label*='Submit' i]",
+            "button[title*='Submit' i]", "a[title*='Submit' i]",
+        ):
+            try:
+                sub_loc = root.locator(sub_css).first
+                if sub_loc.count() > 0 and sub_loc.is_visible(timeout=700):
+                    try:
+                        sub_loc.click(timeout=_tmo)
+                    except Exception:
+                        sub_loc.click(timeout=_tmo, force=True)
+                    _submit_done = True
+                    note("attach_vehicle_to_bkg: clicked Submit.")
+                    _safe_page_wait(page, 1500, log_label="after_precheck_submit")
+                    break
+            except Exception:
+                continue
+        if _submit_done:
+            break
+    if not _submit_done:
+        return False, "Could not click Submit button on Pre-check.", scraped
+
+    # Check for Siebel error after Pre-check Submit
+    _submit_err = _detect_siebel_error_popup(page, content_frame_selector)
+    if _submit_err:
+        note(f"attach_vehicle_to_bkg: Siebel error after Pre-check Submit → {_submit_err!r:.300}")
+        return False, f"Siebel error after Pre-check Submit: {_submit_err[:200]}", scraped
+    note("attach_vehicle_to_bkg: Pre-check completed.")
+
+    # ── Step 14: Click PDI tab (innerText="PDI") ──
+    _pdi_tab_clicked = False
+    for root in _all_roots():
+        for _pdi_css in (
+            "a:has-text('PDI')", "li:has-text('PDI') a", "span:has-text('PDI')",
+            "[role='tab']:has-text('PDI')", "button:has-text('PDI')",
+        ):
+            try:
+                loc = root.locator(_pdi_css).first
+                if loc.count() > 0 and loc.is_visible(timeout=700):
+                    try:
+                        loc.click(timeout=_tmo)
+                    except Exception:
+                        loc.click(timeout=_tmo, force=True)
+                    _pdi_tab_clicked = True
+                    break
+            except Exception:
+                continue
+        if _pdi_tab_clicked:
+            break
+    if not _pdi_tab_clicked:
+        # JS fallback: find element with innerText === "PDI"
+        for root in _all_roots():
+            try:
+                hit = root.evaluate("""() => {
+                    const vis = (el) => {
+                        if (!el) return false;
+                        const st = window.getComputedStyle(el);
+                        if (st.display === 'none' || st.visibility === 'hidden') return false;
+                        const r = el.getBoundingClientRect();
+                        return r.width > 0 && r.height > 0;
+                    };
+                    const all = Array.from(document.querySelectorAll('a, li, span, button, [role="tab"]'));
+                    for (const el of all) {
+                        if ((el.innerText || '').trim() === 'PDI' && vis(el)) {
+                            el.click();
+                            return true;
+                        }
+                    }
+                    return false;
+                }""")
+                if hit:
+                    _pdi_tab_clicked = True
+                    break
+            except Exception:
+                continue
+    if not _pdi_tab_clicked:
+        return False, "Could not click PDI tab.", scraped
+    note("attach_vehicle_to_bkg: clicked PDI tab.")
+    _safe_page_wait(page, 1500, log_label="after_pdi_tab")
+    try:
+        page.wait_for_load_state("networkidle", timeout=8_000)
+    except Exception:
+        pass
+
+    # ── Step 15: Click "Service Request List:New" icon ──
+    _sr_new_clicked = False
+    _sr_selectors = [
+        "[aria-label='Service Request List:New']",
+        "a[aria-label='Service Request List:New']",
+        "button[aria-label='Service Request List:New']",
+        "[aria-label*='Service Request List' i][aria-label*='New' i]",
+        "[title='Service Request List:New']",
+    ]
+    for root in _all_roots():
+        if _sr_new_clicked:
+            break
+        for css in _sr_selectors:
+            try:
+                loc = root.locator(css).first
+                if loc.count() > 0 and loc.is_visible(timeout=700):
+                    try:
+                        loc.click(timeout=_tmo)
+                    except Exception:
+                        loc.click(timeout=_tmo, force=True)
+                    _sr_new_clicked = True
+                    break
+            except Exception:
+                continue
+    if not _sr_new_clicked:
+        return False, "Could not click 'Service Request List:New' on PDI tab.", scraped
+    note("attach_vehicle_to_bkg: clicked Service Request List:New on PDI tab.")
+    _safe_page_wait(page, 1200, log_label="after_sr_list_new")
+
+    # ── Step 16: Click icon-pick (id="s_2_2_32_0_icon") to open applet ──
+    if not _click_by_id("s_2_2_32_0_icon", "PDI pick icon", wait_ms=1200):
+        # Fallback: try without _icon suffix
+        if not _click_by_id("s_2_2_32_0", "PDI pick button", wait_ms=1200):
+            return False, "Could not click PDI pick icon (id=s_2_2_32_0_icon).", scraped
+
+    # ── Step 17: Pick first row in the applet and click OK ──
+    _safe_page_wait(page, 800, log_label="after_pdi_pick_icon_settle")
+    _pdi_row_picked = False
+    for root in _all_roots():
+        try:
+            _pdi_row_result = root.evaluate("""() => {
+                const vis = (el) => {
+                    if (!el) return false;
+                    const st = window.getComputedStyle(el);
+                    if (st.display === 'none' || st.visibility === 'hidden') return false;
+                    const r = el.getBoundingClientRect();
+                    return r.width > 0 && r.height > 0;
+                };
+                const rows = Array.from(document.querySelectorAll('table tbody tr, table tr'));
+                for (const tr of rows) {
+                    if (!vis(tr)) continue;
+                    const tds = tr.querySelectorAll('td');
+                    if (tds.length < 2) continue;
+                    const cls = (tr.className || '').toLowerCase();
+                    if (cls.includes('jqgfirstrow') || cls.includes('header')) continue;
+                    const txt = (tr.textContent || '').trim();
+                    if (!txt || txt.length < 3) continue;
+                    const clickable = tr.querySelector('a, input[type="radio"], input[type="checkbox"], td');
+                    if (clickable) { clickable.click(); } else { tr.click(); }
+                    return 'row_clicked';
+                }
+                return '';
+            }""")
+            if _pdi_row_result:
+                _pdi_row_picked = True
+                note("attach_vehicle_to_bkg: picked first row in PDI applet.")
+                _safe_page_wait(page, 600, log_label="after_pdi_row_pick")
+                break
+        except Exception:
+            continue
+
+    _pdi_ok_done = False
+    for root in _all_roots():
+        for ok_css in (
+            "button[aria-label*='OK' i]", "a[aria-label*='OK' i]",
+            "input[type='button'][value='OK' i]", "button:has-text('OK')", "a:has-text('OK')",
+        ):
+            try:
+                ok_loc = root.locator(ok_css).first
+                if ok_loc.count() > 0 and ok_loc.is_visible(timeout=500):
+                    try:
+                        ok_loc.click(timeout=_tmo)
+                    except Exception:
+                        ok_loc.click(timeout=_tmo, force=True)
+                    _pdi_ok_done = True
+                    note("attach_vehicle_to_bkg: clicked OK on PDI pick applet.")
+                    _safe_page_wait(page, 1000, log_label="after_pdi_ok")
+                    break
+            except Exception:
+                continue
+        if _pdi_ok_done:
+            break
+    if not _pdi_ok_done:
+        note("attach_vehicle_to_bkg: OK button not found on PDI pick applet (best-effort).")
+
+    # ── Step 18: Click Submit button (innerHTML="Submit") on the PDI form ──
+    _pdi_submit_done = False
+    for root in _all_roots():
+        for sub_css in (
+            "button:has-text('Submit')", "a:has-text('Submit')",
+            "input[type='button'][value='Submit' i]",
+            "button[aria-label*='Submit' i]", "a[aria-label*='Submit' i]",
+            "button[title*='Submit' i]", "a[title*='Submit' i]",
+        ):
+            try:
+                sub_loc = root.locator(sub_css).first
+                if sub_loc.count() > 0 and sub_loc.is_visible(timeout=700):
+                    try:
+                        sub_loc.click(timeout=_tmo)
+                    except Exception:
+                        sub_loc.click(timeout=_tmo, force=True)
+                    _pdi_submit_done = True
+                    note("attach_vehicle_to_bkg: clicked Submit on PDI form.")
+                    _safe_page_wait(page, 1500, log_label="after_pdi_submit")
+                    break
+            except Exception:
+                continue
+        if _pdi_submit_done:
+            break
+    if not _pdi_submit_done:
+        return False, "Could not click Submit button on PDI form.", scraped
+
+    # Check for Siebel error after PDI Submit
+    _pdi_submit_err = _detect_siebel_error_popup(page, content_frame_selector)
+    if _pdi_submit_err:
+        note(f"attach_vehicle_to_bkg: Siebel error after PDI Submit → {_pdi_submit_err!r:.300}")
+        return False, f"Siebel error after PDI Submit: {_pdi_submit_err[:200]}", scraped
+
+    note("attach_vehicle_to_bkg: PDI completed successfully.")
+
+    # ── Step 19: Click "Order:<order#>" link at top of page ──
+    _order_link_clicked = False
+    _order_num = (order_number or "").strip()
+    if _order_num:
+        _order_link_pattern = f"Order:{_order_num}"
+        for root in _all_roots():
+            try:
+                _ol_result = root.evaluate(f"""(pat) => {{
+                    const vis = (el) => {{
+                        if (!el) return false;
+                        const st = window.getComputedStyle(el);
+                        if (st.display === 'none' || st.visibility === 'hidden') return false;
+                        const r = el.getBoundingClientRect();
+                        return r.width > 0 && r.height > 0;
+                    }};
+                    const links = Array.from(document.querySelectorAll('a'));
+                    for (const a of links) {{
+                        const ih = (a.innerHTML || '').trim();
+                        if (ih.includes(pat) && vis(a)) {{
+                            a.scrollIntoView({{ block: 'center' }});
+                            a.click();
+                            return ih;
+                        }}
+                    }}
+                    return '';
+                }}""", _order_link_pattern)
+                if _ol_result:
+                    _order_link_clicked = True
+                    note(f"attach_vehicle_to_bkg: clicked Order link ({_ol_result!r}).")
+                    break
+            except Exception:
+                continue
+    if not _order_link_clicked:
+        # Fallback: try any anchor whose text contains "Order:" or the order number
+        for root in _all_roots():
+            try:
+                if _order_num:
+                    loc = root.locator(f"a:has-text('Order:{_order_num}')").first
+                else:
+                    loc = root.locator("a:has-text('Order:')").first
+                if loc.count() > 0 and loc.is_visible(timeout=700):
+                    try:
+                        loc.click(timeout=_tmo)
+                    except Exception:
+                        loc.click(timeout=_tmo, force=True)
+                    _order_link_clicked = True
+                    note("attach_vehicle_to_bkg: clicked Order link via Playwright locator.")
+                    break
+            except Exception:
+                continue
+    if not _order_link_clicked:
+        return False, f"Could not click 'Order:{_order_num}' link at top of page.", scraped
+    _safe_page_wait(page, 2000, log_label="after_order_link_click")
+    try:
+        page.wait_for_load_state("networkidle", timeout=8_000)
+    except Exception:
+        pass
+
+    # ── Step 20: Click "Apply Campaign" button ──
+    _ac_clicked = False
+    _ac_selectors = [
+        "button:has-text('Apply Campaign')", "a:has-text('Apply Campaign')",
+        "input[type='button'][value='Apply Campaign' i]",
+        "[aria-label*='Apply Campaign' i]",
+        "[title*='Apply Campaign' i]",
+    ]
+    for root in _all_roots():
+        if _ac_clicked:
+            break
+        for css in _ac_selectors:
+            try:
+                loc = root.locator(css).first
+                if loc.count() > 0 and loc.is_visible(timeout=700):
+                    try:
+                        loc.click(timeout=_tmo)
+                    except Exception:
+                        loc.click(timeout=_tmo, force=True)
+                    _ac_clicked = True
+                    break
+            except Exception:
+                continue
+    if not _ac_clicked:
+        # JS fallback
+        for root in _all_roots():
+            try:
+                hit = root.evaluate("""() => {
+                    const vis = (el) => {
+                        if (!el) return false;
+                        const st = window.getComputedStyle(el);
+                        if (st.display === 'none' || st.visibility === 'hidden') return false;
+                        const r = el.getBoundingClientRect();
+                        return r.width > 0 && r.height > 0;
+                    };
+                    const all = Array.from(document.querySelectorAll('button, a, input[type="button"]'));
+                    for (const el of all) {
+                        const t = (el.innerText || el.value || el.getAttribute('aria-label') || '').trim();
+                        if (/apply\\s*campaign/i.test(t) && vis(el)) { el.click(); return true; }
+                    }
+                    return false;
+                }""")
+                if hit:
+                    _ac_clicked = True
+                    break
+            except Exception:
+                continue
+    if not _ac_clicked:
+        return False, "Could not click 'Apply Campaign' button.", scraped
+    note("attach_vehicle_to_bkg: clicked Apply Campaign.")
+    _safe_page_wait(page, 1500, log_label="after_apply_campaign")
+
+    _ac_err = _detect_siebel_error_popup(page, content_frame_selector)
+    if _ac_err:
+        note(f"attach_vehicle_to_bkg: Siebel error after Apply Campaign → {_ac_err!r:.300}")
+        return False, f"Siebel error after Apply Campaign: {_ac_err[:200]}", scraped
+
+    # ── Step 21: Click "Create Invoice" button ──
+    _ci_clicked = False
+    _ci_selectors = [
+        "button:has-text('Create Invoice')", "a:has-text('Create Invoice')",
+        "input[type='button'][value='Create Invoice' i]",
+        "[aria-label*='Create Invoice' i]",
+        "[title*='Create Invoice' i]",
+    ]
+    for root in _all_roots():
+        if _ci_clicked:
+            break
+        for css in _ci_selectors:
+            try:
+                loc = root.locator(css).first
+                if loc.count() > 0 and loc.is_visible(timeout=700):
+                    try:
+                        loc.click(timeout=_tmo)
+                    except Exception:
+                        loc.click(timeout=_tmo, force=True)
+                    _ci_clicked = True
+                    break
+            except Exception:
+                continue
+    if not _ci_clicked:
+        for root in _all_roots():
+            try:
+                hit = root.evaluate("""() => {
+                    const vis = (el) => {
+                        if (!el) return false;
+                        const st = window.getComputedStyle(el);
+                        if (st.display === 'none' || st.visibility === 'hidden') return false;
+                        const r = el.getBoundingClientRect();
+                        return r.width > 0 && r.height > 0;
+                    };
+                    const all = Array.from(document.querySelectorAll('button, a, input[type="button"]'));
+                    for (const el of all) {
+                        const t = (el.innerText || el.value || el.getAttribute('aria-label') || '').trim();
+                        if (/create\\s*invoice/i.test(t) && vis(el)) { el.click(); return true; }
+                    }
+                    return false;
+                }""")
+                if hit:
+                    _ci_clicked = True
+                    break
+            except Exception:
+                continue
+    if not _ci_clicked:
+        return False, "Could not click 'Create Invoice' button.", scraped
+    note("attach_vehicle_to_bkg: clicked Create Invoice.")
+    _ci_err = ""
+    for _ci_poll in range(4):
+        _safe_page_wait(page, 800, log_label=f"create_invoice_error_poll_{_ci_poll}")
+        _ci_err = _detect_siebel_error_popup(page, content_frame_selector) or ""
+        if _ci_err:
+            break
+    if _ci_err:
+        note(f"attach_vehicle_to_bkg: Siebel error after Create Invoice → {_ci_err!r:.300}")
+        return False, f"Siebel error after Create Invoice: {_ci_err[:200]}", scraped
+
+    # ── Scrape Invoice# after Create Invoice ──
+    _inv_no = ""
+    for _inv_poll in range(5):
+        for root in _all_roots():
+            try:
+                _inv_no = root.evaluate("""() => {
+                    const vis = (el) => {
+                        if (!el) return false;
+                        const st = window.getComputedStyle(el);
+                        if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity) === 0) return false;
+                        const r = el.getBoundingClientRect();
+                        return r.width > 2 && r.height > 2;
+                    };
+                    for (const el of document.querySelectorAll(
+                        "input[aria-label*='Invoice' i], input[title*='Invoice' i], input[name*='Invoice' i], input[id*='Invoice' i]"
+                    )) {
+                        if (!vis(el)) continue;
+                        const al = (el.getAttribute('aria-label') || '').toLowerCase();
+                        const tt = (el.getAttribute('title') || '').toLowerCase();
+                        if ((al.includes('order') && !al.includes('invoice')) || (tt.includes('order') && !tt.includes('invoice'))) continue;
+                        const val = (el.value || '').trim();
+                        if (val && val.length >= 3 && !/^(pending|—|-)$/i.test(val)) return val;
+                    }
+                    for (const a of document.querySelectorAll(
+                        "a[name='Invoice Number'], a[name='Invoice #'], a[aria-label*='Invoice' i], a[title*='Invoice' i]"
+                    )) {
+                        if (!vis(a)) continue;
+                        const txt = (a.textContent || '').trim();
+                        if (txt && /[A-Za-z0-9-]{4,}/.test(txt)) return txt;
+                    }
+                    return '';
+                }""") or ""
+                _inv_no = str(_inv_no).strip()
+                if _inv_no:
+                    break
+            except Exception:
+                continue
+        if _inv_no:
+            break
+        _safe_page_wait(page, 1000, log_label=f"invoice_scrape_poll_{_inv_poll}")
+    scraped["invoice_number"] = _inv_no
+    if _inv_no:
+        note(f"attach_vehicle_to_bkg: scraped Invoice#={_inv_no!r}.")
+    else:
+        note("attach_vehicle_to_bkg: Invoice# not found after Create Invoice (best-effort).")
+
+    note("attach_vehicle_to_bkg: all steps completed (Order → VIN → Pre-check → PDI → Apply Campaign → Create Invoice).")
+    return True, None, scraped
 
 
 def _create_order(
@@ -5968,13 +6712,17 @@ def _create_order(
             note(f"Create Order: scraped Order#={order_no!r} after save.")
         else:
             note("Create Order: Order# not readable after save (best-effort).")
-        _att_ok, _att_err = _attach_vehicle_to_bkg(
+        _att_ok, _att_err, _att_scraped = _attach_vehicle_to_bkg(
             page,
+            full_chassis=full_chassis,
+            order_number=order_no or "",
             action_timeout_ms=action_timeout_ms,
             content_frame_selector=content_frame_selector,
             note=note,
         )
         scraped["order_drilldown_opened"] = bool(_att_ok)
+        if _att_scraped:
+            scraped.update(_att_scraped)
         if not _att_ok:
             return False, (_att_err or "attach_vehicle_to_bkg failed.").strip(), scraped
         _safe_page_wait(page, 900, log_label="after_attach_order_invoice_scrape")
@@ -8253,8 +9001,8 @@ def Playwright_Hero_DMS_fill(
     Siebel fill from ``fill_dms_service`` always passes ``skip_contact_find=False`` (Find runs even if
     ``dms_contact_path`` in DB is ``skip_find``).
 
-    Never clicks **Create Invoice**. Returns ``vehicle``, ``error``, ``dms_siebel_forms_filled``,
-    notes, milestones, and ``dms_step_messages``.
+    ``_attach_vehicle_to_bkg`` clicks Apply Campaign + Create Invoice. Returns ``vehicle``,
+    ``error``, ``dms_siebel_forms_filled``, notes, milestones, and ``dms_step_messages``.
 
     If ``execution_log_path`` is set, overwrites that file with a UTC timestamped trace (values used,
     STEP / NOTE / MILESTONE lines, and a final END line with ``error`` if any).
@@ -8911,6 +9659,12 @@ def Playwright_Hero_DMS_fill(
                     veh["order_number"] = order_scraped.get("order_number")
                 if order_scraped.get("invoice_number"):
                     veh["invoice_number"] = order_scraped.get("invoice_number")
+                if order_scraped.get("vehicle_ex_showroom_cost"):
+                    veh["vehicle_ex_showroom_cost"] = order_scraped.get("vehicle_ex_showroom_cost")
+                if order_scraped.get("cubic_capacity"):
+                    veh["cubic_capacity"] = order_scraped.get("cubic_capacity")
+                if order_scraped.get("vehicle_type"):
+                    veh["vehicle_type"] = order_scraped.get("vehicle_type")
                 out["vehicle"] = veh
 
             step(

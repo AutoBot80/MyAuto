@@ -110,6 +110,7 @@ This document lists the current database tables and their columns. **Executable 
 | `dealer_id` | `integer` | YES |  | FK → `dealer_ref(dealer_id)` |
 | `order_number` | `varchar(128)` | YES |  | DMS Order# from Fill DMS scrape (`DDL/alter/05h_sales_master_add_order_invoice_numbers.sql`) |
 | `invoice_number` | `varchar(128)` | YES |  | DMS Invoice# when present (`DDL/alter/05h_sales_master_add_order_invoice_numbers.sql`) |
+| `enquiry_number` | `varchar(128)` | YES |  | DMS Enquiry# from Contact_Enquiry tab (`DDL/alter/05i_sales_master_add_enquiry_number.sql`) |
 | `vahan_application_id` | `varchar(128)` | YES |  | Latest Vahan application id scraped during RTO queue processing |
 | `rto_charges` | `numeric(12,2)` | YES |  | Latest Vahan RTO charges scraped during RTO queue processing |
 
@@ -440,4 +441,5 @@ This document lists the current database tables and their columns. **Executable 
 | 1.3 | Mar 2026 | Added `customer_master.care_of` (Aadhaar QR); DMS Father/Husband via `form_dms_view` uses `care_of` with legacy fallback to `father_or_husband_name`; Submit Info persists `care_of` |
 | 1.4 | Mar 2026 | `vehicle_master.dms_sku`; `form_dms_view` includes **City** (`customer_master.city`); script `DDL/alter/10h_form_dms_view_city_vehicle_dms_sku.sql`; Fill DMS persists full Siebel scrape via `update_vehicle_master_from_dms` |
 | 1.5 | Mar 2026 | `vehicle_master.vehicle_price` renamed to **`vehicle_ex_showroom_price`** (`DDL/alter/03j_vehicle_master_rename_vehicle_price_to_vehicle_ex_showroom_price.sql`); `form_vahan_view` column alias remains **`vehicle_price`**; `update_vehicle_master_from_dms` maps scrape **raw_key_num** into **`key_num`** when **key_num** absent |
-| 1.6 | Mar 2026 | `sales_master.order_number`, **`invoice_number`** — DMS scrape persistence (`DDL/alter/05h_sales_master_add_order_invoice_numbers.sql`, **`update_sales_master_from_dms_scrape`** in `fill_dms_service.py`) |
+| 1.6 | Mar 2026 | `sales_master.order_number`, **`invoice_number`** — DMS scrape persistence (`DDL/alter/05h_sales_master_add_order_invoice_numbers.sql`, **`update_sales_master_from_dms_scrape`** in `fill_hero_dms_service.py`) |
+| 1.7 | Mar 2026 | `sales_master.enquiry_number` — DMS Enquiry# persistence (`DDL/alter/05i_sales_master_add_enquiry_number.sql`); `vehicle_ex_showroom_cost` now mapped to `vehicle_ex_showroom_price`; `update_sales_master_from_dms_scrape` called for real Siebel path |

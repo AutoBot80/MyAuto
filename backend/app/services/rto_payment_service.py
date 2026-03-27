@@ -15,7 +15,7 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 from app.config import DMS_PLAYWRIGHT_HEADED, UPLOADS_DIR, get_ocr_output_dir
 from app.db import get_connection
 from app.repositories import rto_payment_details as repo
-from app.services.fill_dms_service import run_fill_vahan_batch_row
+from app.services.fill_hero_dms_service import run_fill_vahan_batch_row
 
 logger = logging.getLogger(__name__)
 _BATCH_LOCK = threading.Lock()

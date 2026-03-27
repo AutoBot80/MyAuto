@@ -51,7 +51,7 @@ The system is a server–client application for auto dealers. Dealers run a ligh
 | BR-13 | Automation value discipline | Playwright must never assume, infer, remember, or default fill values for DMS/Vahan fields. Values sent to site fields must come directly from DB-backed views (`form_dms_view`, `form_vahan_view`) and persisted records only. |
 | BR-14 | DMS booking test budget | Dummy / training DMS flow uses a fixed **customer budget / enquiry amount of 89000** for booking generation unless the business replaces this constant in automation. |
 | BR-15 | Ex-showroom vs column name | **Order Value / ex-showroom** from DMS is persisted as `vehicle_master.vehicle_ex_showroom_price` (no separate `vehicle_cost` column). `form_vahan_view` still exposes the value as `vehicle_price`. Labels in exports and dummy UI read **Ex-showroom Price**. |
-| BR-16 | Create Invoice operator-only | DMS Playwright must not click **Create Invoice**; the operator completes invoicing, then may re-run automation after the invoice step. |
+| BR-16 | Create Invoice automated | DMS Playwright clicks **Apply Campaign** then **Create Invoice** at the end of `_attach_vehicle_to_bkg`; scrapes **Invoice#** on success. |
 | BR-17 | Aadhaar gender default | When **gender** is not extracted from **AWS Textract** (Aadhaar front/back text) and parsers for a subfolder that includes `Aadhar.jpg` and/or `Aadhar_back.jpg`, the persisted `customer.gender` in `OCR_To_be_Used.json` defaults to **Male** (operators may correct before submit). |
 | BR-18 | Address-derived locality | When **state**, **PIN**, or **care_of** is missing but **address** contains **`C/O:`** (Care of), **`DIST: <District>, <State> - <PIN>`** (including OCR variants like **`<State> - - <PIN>`** or **`<State> -- <PIN>`**), a trailing **`<Indian state> - <PIN>`** when **`DIST:`** is unreadable, and/or a 6-digit PIN, the system infers **`care_of`**, **`city`/district**, **`state`**, **`pin`**; drops text **after the PIN**; strips **C/O** from the stored address line. Applied on Submit Info, OCR JSON, Aadhaar back parsing, and DMS fill when `form_dms_view` fields are sparse. |
 
@@ -120,7 +120,7 @@ This section defines the required operator navigation path and minimum field-ent
 
 ### 6.1a Hero Connect / Siebel eDealer — Target DMS automation sequence (ordered)
 
-This is the **intended** real-DMS order (aligned with the operator screen recording and dealer workflow). Values on every fill step must come only from `form_dms_view` and persisted records (BR-9, BR-13). **Create Invoice** is never automated (BR-16). Playwright implementation parity is tracked in **LLD §2.4d**.
+This is the **intended** real-DMS order (aligned with the operator screen recording and dealer workflow). Values on every fill step must come only from `form_dms_view` and persisted records (BR-9, BR-13). **Create Invoice** is automated via `_attach_vehicle_to_bkg` (BR-16). Playwright implementation parity is tracked in **LLD §2.4d**.
 
 | Step | Siebel module / screen (typical labels) | Action |
 |------|----------------------------------------|--------|
@@ -152,6 +152,9 @@ This is the **intended** real-DMS order (aligned with the operator screen record
 | Enquiry | Financier / Finance Required (invoicing line) | `form_dms_view` (`customer_master.financier`) |
 | Enquiry | New vs existing CRM contact | `form_dms_view` (`"DMS Contact Path"`: `found` / `new_enquiry` / **`skip_find`** — dummy: `skip_find` skips finder Go; **real Siebel: always runs Find first**; `skip_find` in DB is ignored for automation order) |
 | Invoicing line | Order Value (Ex-showroom) | Scraped from DMS → `vehicle_master.vehicle_ex_showroom_price` |
+| Post-Fill DMS | Enquiry# | Scraped from Contact_Enquiry tab → `sales_master.enquiry_number` |
+| Post-Fill DMS | Order# | Scraped after Ctrl+S in create_order → `sales_master.order_number` |
+| Post-Fill DMS | Invoice# | Scraped after Create Invoice → `sales_master.invoice_number` |
 
 ### 6.3 Vahan Fields to Fill (Minimum Contract)
 
@@ -309,3 +312,5 @@ Bulk upload automates the ingestion of scanned documents from a shared folder in
 | 2.8 | Mar 2026 | — | **§6.1a** step **2a**: when Contact Find has **no table match**, preferred path is **vehicle VIN/chassis + engine** then **Enquiry** / **Opportunities List:New** with DB-only fields (see **LLD §2.4d** **`_add_enquiry_opportunity`**) before fallback basic enquiry form |
 | 2.9 | Mar 2026 | — | **§6.1a** step **2a**: clarified Hero Connect flow — **Find → Vehicles**, right fly-in **VIN** / **Engine#** with `*` wildcards + **Enter**; model/year/color from grid and/or **Vehicle Information** (**Dispatch Year**) |
 | 3.0 | Mar 2026 | — | **§6.1a** step **2a**: Add Enquiry opportunity form — expanded DB/scrape fields; **Financier** not automated; API error text includes concrete **`_add_enquiry_opportunity`** failure detail |
+| 3.1 | Mar 2026 | — | **BR-16** updated: Create Invoice now automated; **DMS scrape persistence**: all scraped values (Enquiry#, Order#, Invoice#, vehicle_ex_showroom_cost, cubic_capacity, vehicle_type) persisted to DB; `update_sales_master_from_dms_scrape` runs for real Siebel path |
+| 3.2 | Mar 2026 | — | Fill DMS service renamed to **`fill_hero_dms_service.py`**; execution now guarded by dealer `parent_id='100000'` (otherwise error: **"Currently only Hero MotoCorp Limited is  configured as OEM"**) |

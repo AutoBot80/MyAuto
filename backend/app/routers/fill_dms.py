@@ -17,7 +17,7 @@ from app.config import (
     get_ocr_output_dir,
     get_uploads_dir,
 )
-from app.services.fill_dms_service import (
+from app.services.fill_hero_dms_service import (
     run_fill_dms,
     run_fill_dms_only,
     run_fill_insurance_only,
@@ -303,6 +303,7 @@ async def fill_dms_only(req: FillDmsRequest) -> FillDmsResponse:
             login_password=DMS_LOGIN_PASSWORD,
             uploads_dir=uploads_dir,
             ocr_output_dir=Path(get_ocr_output_dir(did)),
+            dealer_id=did,
             customer_id=req.customer_id,
             vehicle_id=req.vehicle_id,
         ),
@@ -510,6 +511,7 @@ async def fill_dms(req: FillDmsRequest) -> FillDmsResponse:
             ocr_output_dir=Path(get_ocr_output_dir(did)),
             vahan_base_url=vahan_url,
             rto_dealer_id=req.rto_dealer_id,
+            dealer_id=did,
             customer_id=req.customer_id,
             vehicle_id=req.vehicle_id,
         ),
