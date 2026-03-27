@@ -59,14 +59,14 @@ from app.db import get_connection
 from app.services.customer_address_infer import enrich_customer_address_from_freeform
 
 logger = logging.getLogger(__name__)
-HERO_PARENT_ID = "100000"
+HERO_SUPPORTED_OEM_ID = "1"
 HERO_OEM_ONLY_ERROR = "Currently only Hero MotoCorp Limited is  configured as OEM"
 
 
 def _ensure_hero_oem_for_fill_dms(dealer_id: int | None) -> None:
     """
     Guard Fill DMS execution by dealer OEM.
-    Only Hero oem_id=100000 is currently supported.
+    Only Hero oem_id matching ``HERO_SUPPORTED_OEM_ID`` (see ``dealer_ref.oem_id``) is supported.
     """
     did = int(dealer_id if dealer_id is not None else DEALER_ID)
     conn = get_connection()
@@ -83,7 +83,7 @@ def _ensure_hero_oem_for_fill_dms(dealer_id: int | None) -> None:
             )
             row = cur.fetchone() or {}
             oem_id = str((row.get("oem_id") or "")).strip()
-            if oem_id != HERO_PARENT_ID:
+            if oem_id != HERO_SUPPORTED_OEM_ID:
                 raise ValueError(HERO_OEM_ONLY_ERROR)
     finally:
         conn.close()
