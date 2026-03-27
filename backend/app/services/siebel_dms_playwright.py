@@ -5775,10 +5775,6 @@ def _create_order(
                             continue
                 if not _ok_clicked:
                     page.keyboard.press("Enter")
-                _ok_err = _detect_siebel_error_popup(page, content_frame_selector)
-                if _ok_err:
-                    _applet_err = f"contact pick applet OK returned Siebel error: {_ok_err[:220]}"
-                    continue
                 # #region agent log — applet ok click outcome
                 try:
                     with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
@@ -5797,10 +5793,18 @@ def _create_order(
                 except Exception:
                     pass
                 # #endregion
-                _safe_page_wait(page, 1200, log_label="after_contact_pick_ok")
-                _ok_post_err = _detect_siebel_error_popup(page, content_frame_selector)
-                if _ok_post_err:
-                    _applet_err = f"contact pick applet post-OK Siebel error: {_ok_post_err[:220]}"
+
+                # Poll for Siebel error popup after OK — applet closes, focus
+                # shifts to main form, and error may render with a delay.
+                _ok_had_error = False
+                for _ok_poll in range(4):
+                    _safe_page_wait(page, 800, log_label=f"after_contact_pick_ok_poll_{_ok_poll}")
+                    _ok_poll_err = _detect_siebel_error_popup(page, content_frame_selector)
+                    if _ok_poll_err:
+                        _applet_err = f"contact pick applet OK Siebel error: {_ok_poll_err[:220]}"
+                        _ok_had_error = True
+                        break
+                if _ok_had_error:
                     continue
                 note(f"Create Order: confirmed OK on applet (button={_ok_clicked}).")
 
