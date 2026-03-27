@@ -3760,6 +3760,84 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
     return False
 
 
+def _contact_enquiry_tab_has_rows(
+    page: Page,
+    *,
+    action_timeout_ms: int,
+    content_frame_selector: str | None,
+    note,
+) -> tuple[bool, int]:
+    """
+    Open Contact_Enquiry tab and check whether Enquiry grid has data rows.
+    Returns (checked, row_count). ``checked=False`` means grid/header wasn't found.
+    """
+    _clicked = _siebel_try_click_named_in_frames(
+        page,
+        re.compile(r"Contact[_\s]*Enquiry", re.I),
+        roles=("tab", "link", "button"),
+        timeout_ms=min(action_timeout_ms, 3500),
+        content_frame_selector=content_frame_selector,
+    )
+    if not _clicked:
+        note("Contact_Enquiry tab not clickable (could not verify enquiry rows).")
+        return False, 0
+
+    _safe_page_wait(page, 900, log_label="after_contact_enquiry_tab")
+
+    _js = """() => {
+      const vis = (el) => {
+        if (!el) return false;
+        const st = window.getComputedStyle(el);
+        if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity || '1') === 0) return false;
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+      };
+      const norm = (s) => String(s || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+
+      let headerFound = !!document.querySelector('#jqgh_s_1_l_Enquiry_');
+      if (!headerFound) {
+        const hdrNodes = Array.from(document.querySelectorAll('th, td, div, span, a'));
+        for (const n of hdrNodes) {
+          if (norm(n.textContent || '') === 'enquiry#' || norm(n.textContent || '') === 'enquiry #') {
+            headerFound = true;
+            break;
+          }
+        }
+      }
+      if (!headerFound) return { checked: false, rowCount: 0 };
+
+      let rowCount = 0;
+      const tables = Array.from(document.querySelectorAll('table'));
+      for (const tbl of tables) {
+        const ttxt = norm(tbl.innerText || '');
+        if (!ttxt.includes('enquiry#') && !ttxt.includes('enquiry #')) continue;
+        const rows = Array.from(tbl.querySelectorAll('tbody tr, tr')).filter((tr) => {
+          if (!vis(tr)) return false;
+          const cls = tr.className || '';
+          const tdCount = tr.querySelectorAll('td').length;
+          if (tdCount <= 0) return false;
+          if (/jqgfirstrow/i.test(cls)) return false;
+          const txt = norm(tr.textContent || '');
+          if (!txt) return false;
+          if (txt.includes('enquiry#') && tdCount < 2) return false;
+          return true;
+        });
+        rowCount = Math.max(rowCount, rows.length);
+      }
+      return { checked: true, rowCount };
+    }"""
+
+    for _r in list(_ordered_frames(page)) + [page]:
+        try:
+            _res = _r.evaluate(_js)
+            if _res and _res.get("checked"):
+                _cnt = int(_res.get("rowCount") or 0)
+                return True, _cnt
+        except Exception:
+            continue
+    return False, 0
+
+
 def _add_customer_payment(
     page: Page,
     *,
@@ -5637,9 +5715,15 @@ def _create_order(
                 for r2 in _fresh_roots2:
                     try:
                         for _ok_sel in (
+                            "button[aria-label='Pick Contact List:OK']",
+                            "a[aria-label='Pick Contact List:OK']",
+                            "input[aria-label='Pick Contact List:OK']",
                             "button[name$='_315_0'], a[name$='_315_0'], input[name$='_315_0']",
                             "button[aria-label*='OK' i]",
+                            "a[aria-label*='OK' i]",
+                            "input[aria-label*='OK' i]",
                             "button:has-text('OK')",
+                            "a:has-text('OK')",
                         ):
                             t = r2.locator(_ok_sel).first
                             if t.count() > 0 and t.is_visible(timeout=500):
@@ -5654,7 +5738,47 @@ def _create_order(
                     except Exception:
                         continue
                 if not _ok_clicked:
+                    for r2 in _fresh_roots2:
+                        try:
+                            _js_ok = r2.evaluate(
+                                """() => {
+                                    const vis = (el) => {
+                                      if (!el) return false;
+                                      const st = window.getComputedStyle(el);
+                                      if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity || '1') === 0) return false;
+                                      const rc = el.getBoundingClientRect();
+                                      return rc.width > 0 && rc.height > 0;
+                                    };
+                                    const sels = [
+                                      "button[aria-label='Pick Contact List:OK']",
+                                      "a[aria-label='Pick Contact List:OK']",
+                                      "input[aria-label='Pick Contact List:OK']",
+                                      "button[name$='_315_0']",
+                                      "a[name$='_315_0']",
+                                      "input[name$='_315_0']",
+                                    ];
+                                    for (const s of sels) {
+                                      const el = document.querySelector(s);
+                                      if (vis(el)) {
+                                        try { el.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
+                                        el.click();
+                                        return s;
+                                      }
+                                    }
+                                    return "";
+                                }"""
+                            )
+                            if _js_ok:
+                                _ok_clicked = True
+                                break
+                        except Exception:
+                            continue
+                if not _ok_clicked:
                     page.keyboard.press("Enter")
+                _ok_err = _detect_siebel_error_popup(page, content_frame_selector)
+                if _ok_err:
+                    _applet_err = f"contact pick applet OK returned Siebel error: {_ok_err[:220]}"
+                    continue
                 # #region agent log — applet ok click outcome
                 try:
                     with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
@@ -5674,6 +5798,10 @@ def _create_order(
                     pass
                 # #endregion
                 _safe_page_wait(page, 1200, log_label="after_contact_pick_ok")
+                _ok_post_err = _detect_siebel_error_popup(page, content_frame_selector)
+                if _ok_post_err:
+                    _applet_err = f"contact pick applet post-OK Siebel error: {_ok_post_err[:220]}"
+                    continue
                 note(f"Create Order: confirmed OK on applet (button={_ok_clicked}).")
 
                 # Best-effort readback of Pincode after contact selection
@@ -7807,6 +7935,11 @@ def _add_enquiry_opportunity(
             note("Add Enquiry: Ctrl+S failed.")
             return False, "Ctrl+S save failed on new opportunity form."
     note("Add Enquiry: pressed Ctrl+S to save enquiry.")
+    _safe_page_wait(page, 350, log_label="add_enquiry_after_ctrl_s_immediate")
+    _save_err_immediate = _detect_siebel_error_popup(page, content_frame_selector)
+    if _save_err_immediate:
+        note(f"Add Enquiry: immediate Siebel error after Ctrl+S → {_save_err_immediate!r:.300}")
+        return False, f"Siebel error after Ctrl+S: {_save_err_immediate[:200]}"
 
     _max_save_polls = 8
     _poll_interval_ms = 1500
@@ -7842,6 +7975,12 @@ def _add_enquiry_opportunity(
             )
     else:
         note("Add Enquiry: Enquiry# not readable after save (best-effort — no error popup detected).")
+        # One final delayed popup check before treating save as successful.
+        _safe_page_wait(page, 900, log_label="add_enquiry_after_save_final_error_check")
+        _save_err_final = _detect_siebel_error_popup(page, content_frame_selector)
+        if _save_err_final:
+            note(f"Add Enquiry: delayed Siebel error after save → {_save_err_final!r:.300}")
+            return False, f"Siebel error after Ctrl+S: {_save_err_final[:200]}"
         if callable(form_trace):
             form_trace(
                 "add_enquiry_saved",
@@ -8312,6 +8451,65 @@ def Playwright_Hero_DMS_fill(
                     out["error"] = (
                         "Siebel: Add Enquiry was saved, but contact search still returned no table row "
                         "after re-find."
+                    )
+                    return out
+
+            # Before opening customer details / filling Relation+Address, verify enquiry exists on Contact_Enquiry tab.
+            _enq_checked, _enq_rows = _contact_enquiry_tab_has_rows(
+                page,
+                action_timeout_ms=action_timeout_ms,
+                content_frame_selector=content_frame_selector,
+                note=note,
+            )
+            note(f"Contact_Enquiry check: checked={_enq_checked!r}, rows={_enq_rows}.")
+            if _enq_checked and _enq_rows <= 0:
+                note("No Enquiry rows found on Contact_Enquiry — running Add Enquiry before relation/address fill.")
+                ae2_ok, ae2_detail = _add_enquiry_opportunity(
+                    page,
+                    dms_values,
+                    urls,
+                    action_timeout_ms=action_timeout_ms,
+                    nav_timeout_ms=nav_timeout_ms,
+                    content_frame_selector=content_frame_selector,
+                    note=note,
+                    form_trace=form_trace,
+                    vehicle_merge=out.setdefault("vehicle", {}),
+                )
+                if not ae2_ok:
+                    step("Stopped: Contact_Enquiry had no rows and Add Enquiry fallback failed.")
+                    out["error"] = (
+                        "Siebel: no enquiry rows found on Contact_Enquiry, and Add Enquiry fallback failed. "
+                        f"{ae2_detail or ''}"
+                    ).strip()
+                    return out
+                ms_done("Add enquiry saved")
+                note("Add Enquiry saved from Contact_Enquiry-empty path; re-running Find→Contact by mobile.")
+                ok_refind2 = _contact_view_find_by_mobile(
+                    page,
+                    contact_url=contact_url,
+                    mobile=mobile,
+                    nav_timeout_ms=nav_timeout_ms,
+                    action_timeout_ms=action_timeout_ms,
+                    content_frame_selector=content_frame_selector,
+                    mobile_aria_hints=mobile_aria_hints,
+                    note=note,
+                    step=step,
+                    stage_msg="Post Contact_Enquiry-empty Add Enquiry: re-find customer by mobile.",
+                )
+                if not ok_refind2:
+                    step("Stopped: post Add Enquiry (Contact_Enquiry-empty path) re-find failed.")
+                    out["error"] = (
+                        "Siebel: Add Enquiry was saved from Contact_Enquiry-empty path, but follow-up "
+                        "Find→Contact by mobile did not complete."
+                    )
+                    return out
+                contact_matched2 = _siebel_ui_suggests_contact_match(page, mobile)
+                note(f"DECISION: contact_table_match_after_contact_enquiry_empty_add_enquiry_refind={contact_matched2!r}")
+                if not contact_matched2:
+                    step("Stopped: customer not visible after Contact_Enquiry-empty Add Enquiry re-find.")
+                    out["error"] = (
+                        "Siebel: Add Enquiry saved from Contact_Enquiry-empty path, but contact search still "
+                        "returned no table row after re-find."
                     )
                     return out
             form_trace(
