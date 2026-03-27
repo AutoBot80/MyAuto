@@ -5207,6 +5207,7 @@ def _create_order(
         _first_need = (first_name or "").strip().lower()
         _applet_done = False
         _applet_err = ""
+        _contact_pin_rb = ""
         _contact_roots = [_locked_root] if _locked_root is not None else list(_roots())
 
         # #region agent log — F2 applet context
@@ -5693,6 +5694,7 @@ def _create_order(
                     except Exception:
                         continue
                 note(f"Create Order: post-contact applet readback — Pincode={_pin_rb!r}.")
+                _contact_pin_rb = (_pin_rb or "").strip()
                 # #region agent log — pincode readback outcome
                 try:
                     with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
@@ -5711,6 +5713,9 @@ def _create_order(
                 except Exception:
                     pass
                 # #endregion
+                if not _contact_pin_rb:
+                    _applet_err = "Contact applet completed but Pincode stayed empty after selection."
+                    continue
                 _applet_done = True
                 # #region agent log — applet completion flag
                 try:
@@ -5735,6 +5740,27 @@ def _create_order(
                 continue
         if not _applet_done:
             return False, f"Could not complete Contact Last Name F2 applet flow. {_applet_err}".strip(), scraped
+
+        # #region agent log — pre-save pincode guard
+        try:
+            with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
+                _lf.write(_j_f2.dumps({
+                    "sessionId": "08e634",
+                    "runId": "pre-fix",
+                    "hypothesisId": "H8",
+                    "location": "siebel_dms_playwright.py:create_order_pre_save_pin_guard",
+                    "message": "Pre-save pincode guard check",
+                    "data": {
+                        "pincode_non_empty": bool(_contact_pin_rb),
+                        "pincode_len": len(_contact_pin_rb),
+                    },
+                    "timestamp": int(_t_f2.time() * 1000),
+                }) + "\n")
+        except Exception:
+            pass
+        # #endregion
+        if not _contact_pin_rb:
+            return False, "Pincode is empty after contact selection; skipping save (Ctrl+S).", scraped
 
         # 8) Ctrl+S save
         try:
@@ -8368,6 +8394,30 @@ def Playwright_Hero_DMS_fill(
                 mobile_phone=mobile,
                 full_chassis=full_chassis,
             )
+            # #region agent log — create_order call inputs
+            try:
+                _fin_name_raw = (dms_values.get("financier_name") or "").strip()
+                _fin_tok = _fin_name_raw.lower()
+                _fr_raw = (dms_values.get("finance_required") or "").strip().upper()
+                with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
+                    import json as _j_co, time as _t_co
+                    _lf.write(_j_co.dumps({
+                        "sessionId": "08e634",
+                        "runId": "pre-fix",
+                        "hypothesisId": "H9",
+                        "location": "siebel_dms_playwright.py:Playwright_Hero_DMS_fill_create_order_inputs",
+                        "message": "Inputs passed to create_order",
+                        "data": {
+                            "finance_required_raw": _fr_raw if _fr_raw in ("Y", "N", "") else "OTHER",
+                            "financier_present": bool(_fin_name_raw),
+                            "financier_len": len(_fin_name_raw),
+                            "financier_token": _fin_tok if _fin_tok in ("", "na", "n/a", "null", "none", "-") else "other",
+                        },
+                        "timestamp": int(_t_co.time() * 1000),
+                    }) + "\n")
+            except Exception:
+                pass
+            # #endregion
             ok_order, order_err, order_scraped = _create_order(
                 page,
                 mobile=mobile,

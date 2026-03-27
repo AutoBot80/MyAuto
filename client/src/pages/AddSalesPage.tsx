@@ -42,6 +42,28 @@ function mapApiCustomerToExtracted(cust: Record<string, unknown>): ExtractedCust
   };
 }
 
+function normalizeFinancierInput(value: unknown): string | undefined {
+  const v = String(value ?? "").trim();
+  if (!v) return undefined;
+  const low = v.toLowerCase();
+  // OCR sometimes returns the placeholder label instead of an actual financer name.
+  if (
+    low === "insurer name (if needed)" ||
+    low === "insurer name if needed" ||
+    low === "insurer name" ||
+    low === "insurance provider" ||
+    low === "if needed" ||
+    low === "na" ||
+    low === "n/a" ||
+    low === "null" ||
+    low === "none" ||
+    low === "-"
+  ) {
+    return undefined;
+  }
+  return v;
+}
+
 function parseAmount(value: unknown): number | null {
   if (value == null) return null;
   const cleaned = String(value).replace(/,/g, "").trim();
@@ -146,7 +168,7 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError,
         const current = prev ?? {};
         const fromServer = {
           profession: typeof r.profession === "string" ? r.profession : undefined,
-          financier: typeof r.financier === "string" ? r.financier : undefined,
+          financier: normalizeFinancierInput(r.financier),
           marital_status: typeof r.marital_status === "string" ? r.marital_status : undefined,
           nominee_gender: typeof r.nominee_gender === "string" ? r.nominee_gender : undefined,
           nominee_name: typeof r.nominee_name === "string" ? r.nominee_name : undefined,
@@ -470,7 +492,7 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError,
             const current = prev ?? {};
             const fromServer = {
               profession: typeof r.profession === "string" ? r.profession : undefined,
-              financier: typeof r.financier === "string" ? r.financier : undefined,
+              financier: normalizeFinancierInput(r.financier),
               marital_status: typeof r.marital_status === "string" ? r.marital_status : undefined,
               nominee_gender: typeof r.nominee_gender === "string" ? r.nominee_gender : undefined,
               nominee_name: typeof r.nominee_name === "string" ? r.nominee_name : undefined,
