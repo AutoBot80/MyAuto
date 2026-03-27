@@ -566,6 +566,39 @@ def _try_fill_mobile_and_find_in_contact_applet(
     }"""
 
     def try_root(root) -> bool:
+        # #region agent log - findfieldsbox probe on this root
+        try:
+            _ff_probe = root.evaluate(
+                """() => {
+                  const box = document.getElementById('findfieldsbox');
+                  if (!box) return { has_box: false, editable_inputs: 0, mobile_title_inputs: 0, first_id_present: false };
+                  const vis = (el) => {
+                    if (!el) return false;
+                    const st = window.getComputedStyle(el);
+                    if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+                    const r = el.getBoundingClientRect();
+                    return r.width >= 2 && r.height >= 2;
+                  };
+                  const inputs = Array.from(box.querySelectorAll('input')).filter(vis);
+                  const editable = inputs.filter((i) => {
+                    const t = String(i.type || 'text').toLowerCase();
+                    if (['hidden','submit','button','checkbox','radio','file','image'].includes(t)) return false;
+                    return !i.readOnly && !i.disabled;
+                  });
+                  const mobileByTitle = editable.filter((i) => String(i.getAttribute('title') || '') === 'Mobile Phone').length;
+                  const firstId = !!box.querySelector('input#field_textbox_1');
+                  return {
+                    has_box: true,
+                    editable_inputs: editable.length,
+                    mobile_title_inputs: mobileByTitle,
+                    first_id_present: firstId,
+                  };
+                }"""
+            )
+            _dbg("H6", "findfieldsbox_probe", _ff_probe or {})
+        except Exception:
+            _dbg("H6", "findfieldsbox_probe_eval_failed", {})
+        # #endregion
         applets: list = []
         # Prefer applet that looks like Find->Contact (contains Mobile Phone + First/Last name labels).
         try:
@@ -599,6 +632,33 @@ def _try_fill_mobile_and_find_in_contact_applet(
                 pass
 
         for applet in applets:
+            # #region agent log - applet-level candidate quality
+            try:
+                _applet_diag = applet.evaluate(
+                    """(el) => {
+                      const vis = (n) => {
+                        if (!n) return false;
+                        const st = window.getComputedStyle(n);
+                        if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+                        const r = n.getBoundingClientRect();
+                        return r.width >= 2 && r.height >= 2;
+                      };
+                      const txt = String(el.innerText || '').slice(0, 300);
+                      const mobile = el.querySelector('input[title="Mobile Phone"]');
+                      const first = el.querySelector('input#field_textbox_1');
+                      return {
+                        has_mobile_title_exact: !!mobile,
+                        mobile_editable: !!(mobile && vis(mobile) && !mobile.readOnly && !mobile.disabled),
+                        has_first_id: !!first,
+                        first_editable: !!(first && vis(first) && !first.readOnly && !first.disabled),
+                        text_sample: txt,
+                      };
+                    }"""
+                )
+                _dbg("H7", "applet_candidate_probe", _applet_diag or {})
+            except Exception:
+                _dbg("H7", "applet_candidate_probe_eval_failed", {})
+            # #endregion
             # Fill mobile only within this applet.
             filled = False
             for css in mobile_selectors:
@@ -1257,6 +1317,37 @@ def _try_fill_vin_engine_in_vehicles_find_applet(
     if not cw or not ew:
         return False
 
+    # #region agent log - vehicle find same-frame diagnostics
+    def _dbgv(hypothesis_id: str, message: str, data: dict) -> None:
+        try:
+            import json as _j_dbgv, time as _t_dbgv
+            from pathlib import Path as _P_dbgv
+            _log_path = _P_dbgv(__file__).resolve().parents[3] / "debug-08e634.log"
+            with open(_log_path, "a", encoding="utf-8") as _lf_dbgv:
+                _lf_dbgv.write(
+                    _j_dbgv.dumps(
+                        {
+                            "sessionId": "08e634",
+                            "runId": "pre-fix",
+                            "hypothesisId": hypothesis_id,
+                            "location": "siebel_dms_playwright.py:_try_fill_vin_engine_in_vehicles_find_applet",
+                            "message": message,
+                            "data": data,
+                            "timestamp": int(_t_dbgv.time() * 1000),
+                        }
+                    )
+                    + "\n"
+                )
+        except Exception:
+            pass
+
+    _dbgv(
+        "V1",
+        "vehicle_find_entry",
+        {"has_vin": bool(cw), "has_engine": bool(ew), "vin_len": len(cw), "engine_len": len(ew)},
+    )
+    # #endregion
+
     vin_css = (
         'input#field_textbox_0',
         'input[id="field_textbox_0"]',
@@ -1277,6 +1368,37 @@ def _try_fill_vin_engine_in_vehicles_find_applet(
     )
 
     def try_root(root) -> bool:
+        # #region agent log - vehicle findfieldsbox probe on this root
+        try:
+            _ff_probe = root.evaluate(
+                """() => {
+                  const box = document.getElementById('findfieldsbox');
+                  if (!box) {
+                    return { has_box: false, vin_id_present: false, engine_id_present: false, vin_editable: false, engine_editable: false };
+                  }
+                  const vis = (el) => {
+                    if (!el) return false;
+                    const st = window.getComputedStyle(el);
+                    if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+                    const r = el.getBoundingClientRect();
+                    return r.width >= 2 && r.height >= 2;
+                  };
+                  const vin = box.querySelector('input#field_textbox_0');
+                  const eng = box.querySelector('input#field_textbox_2');
+                  const editable = (el) => !!(el && vis(el) && !el.readOnly && !el.disabled);
+                  return {
+                    has_box: true,
+                    vin_id_present: !!vin,
+                    engine_id_present: !!eng,
+                    vin_editable: editable(vin),
+                    engine_editable: editable(eng),
+                  };
+                }"""
+            )
+            _dbgv("V2", "vehicle_findfieldsbox_probe", _ff_probe or {})
+        except Exception:
+            _dbgv("V2", "vehicle_findfieldsbox_probe_eval_failed", {})
+        # #endregion
         applets: list = []
         try:
             cand = root.locator(".siebui-applet").filter(has_text=re.compile(r"VIN|Engine", re.I))
@@ -1308,6 +1430,32 @@ def _try_fill_vin_engine_in_vehicles_find_applet(
                 pass
 
         for applet in applets:
+            # #region agent log - vehicle applet candidate quality
+            try:
+                _applet_diag = applet.evaluate(
+                    """(el) => {
+                      const vis = (n) => {
+                        if (!n) return false;
+                        const st = window.getComputedStyle(n);
+                        if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+                        const r = n.getBoundingClientRect();
+                        return r.width >= 2 && r.height >= 2;
+                      };
+                      const vin = el.querySelector('input#field_textbox_0');
+                      const eng = el.querySelector('input#field_textbox_2');
+                      return {
+                        has_vin_id: !!vin,
+                        has_engine_id: !!eng,
+                        vin_editable: !!(vin && vis(vin) && !vin.readOnly && !vin.disabled),
+                        engine_editable: !!(eng && vis(eng) && !eng.readOnly && !eng.disabled),
+                        text_sample: String(el.innerText || '').slice(0, 220),
+                      };
+                    }"""
+                )
+                _dbgv("V3", "vehicle_applet_candidate_probe", _applet_diag or {})
+            except Exception:
+                _dbgv("V3", "vehicle_applet_candidate_probe_eval_failed", {})
+            # #endregion
             try:
                 vin_loc = applet.locator('input#field_textbox_0, input[id="field_textbox_0"]').first
                 eng_loc = applet.locator('input#field_textbox_2, input[id="field_textbox_2"]').first
@@ -1335,6 +1483,7 @@ def _try_fill_vin_engine_in_vehicles_find_applet(
                 eng_loc.fill(ew, timeout=timeout_ms)
                 eng_loc.press("Enter", timeout=min(8000, timeout_ms))
                 logger.info("siebel_dms: filled VIN + Engine# in Vehicles Find applet and pressed Enter")
+                _dbgv("V4", "vehicle_find_fill_success_same_applet", {"used_ids": True})
                 return True
             except Exception:
                 continue
@@ -1352,6 +1501,7 @@ def _try_fill_vin_engine_in_vehicles_find_applet(
                 return True
         except Exception:
             continue
+    _dbgv("V5", "vehicle_find_failed_all_roots", {"reason": "strict_ids_not_found_or_not_editable"})
     return False
 
 
