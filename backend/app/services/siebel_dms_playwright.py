@@ -3510,33 +3510,38 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
     action_timeout_ms: int,
     content_frame_selector: str | None,
     note,
+    skip_search_hit_click: bool = False,
 ) -> bool:
     """
     Steps after **Find + Go** from operator recording *Find Contact Enquiry*:
     optional **Siebel Find** tab → click the **Search Results** mobile drill-in → **Contacts** →
     **Contact_Enquiry** (Contacts + Enquiries tables, Enquiry# link) → **Enquiry** → **All Enquiries**.
+    If *skip_search_hit_click* is True, the left-pane drilldown click is skipped (already done by caller).
     """
-    _safe_page_wait(page, 2200, log_label="after_find_go_before_drill")
-    if _siebel_try_click_named_in_frames(
-        page,
-        re.compile(r"Siebel\s*Find", re.I),
-        roles=("tab", "link"),
-        timeout_ms=action_timeout_ms,
-        content_frame_selector=content_frame_selector,
-    ):
-        note("Activated Siebel Find tab in search results (video SOP).")
-        _safe_page_wait(page, 700, log_label="after_siebel_find_tab")
+    if not skip_search_hit_click:
+        _safe_page_wait(page, 2200, log_label="after_find_go_before_drill")
+        if _siebel_try_click_named_in_frames(
+            page,
+            re.compile(r"Siebel\s*Find", re.I),
+            roles=("tab", "link"),
+            timeout_ms=action_timeout_ms,
+            content_frame_selector=content_frame_selector,
+        ):
+            note("Activated Siebel Find tab in search results (video SOP).")
+            _safe_page_wait(page, 700, log_label="after_siebel_find_tab")
 
-    if not _siebel_try_click_mobile_search_hit_link(
-        page,
-        mobile,
-        timeout_ms=action_timeout_ms,
-        content_frame_selector=content_frame_selector,
-    ):
-        note("Could not click a search-result link for the mobile — check left Search Results grid.")
-        return False
-    note("Opened contact from search hit hyperlink (video SOP).")
-    _safe_page_wait(page, 1200, log_label="after_contact_drill_link")
+        if not _siebel_try_click_mobile_search_hit_link(
+            page,
+            mobile,
+            timeout_ms=action_timeout_ms,
+            content_frame_selector=content_frame_selector,
+        ):
+            note("Could not click a search-result link for the mobile — check left Search Results grid.")
+            return False
+        note("Opened contact from search hit hyperlink (video SOP).")
+        _safe_page_wait(page, 1200, log_label="after_contact_drill_link")
+    else:
+        note("Skipped search-hit drilldown click (already opened by caller).")
 
     care_val = (care_of or "").strip()
     if not care_val:
@@ -5728,6 +5733,16 @@ def _create_order(
                         continue
                 if not _row_ok:
                     _applet_err = f"no first-name match for {first_name!r} in applet. {_row_diag[:180]}"
+                    if _search_type == "Contact Id" and _row_diag and "no data rows found" in _row_diag:
+                        note(
+                            f"Create Order: applet query by Contact ID={_search_val!r} returned zero rows — "
+                            "no enquiry exists for this contact. Stopping applet flow."
+                        )
+                        _applet_err = (
+                            f"Applet query by Contact ID ({_search_val}) returned no results. "
+                            "No enquiry/contact record found in Siebel for this ID."
+                        )
+                        break
                     continue
                 _safe_page_wait(page, 400, log_label="after_row_select")
                 note("Create Order: matched contact row in applet.")
@@ -7431,13 +7446,14 @@ def _add_enquiry_opportunity(
     note,
     form_trace,
     vehicle_merge: dict | None = None,
-) -> tuple[bool, str | None]:
+) -> tuple[bool, str | None, str]:
     """
     Contact Find returned no table rows: vehicle find + scrape, **Enquiry** tab, **Opportunity Form:New**,
     fill opportunity fields from DB + scraped model/color (**Financier** fields are skipped), Ctrl+S.
 
-    Returns ``(success, error_detail)`` — ``error_detail`` is a short operator-facing reason when
-    ``success`` is False (used for API ``error`` text; see Playwright_DMS.txt for full NOTES).
+    Returns ``(success, error_detail, enquiry_number)`` — ``error_detail`` is a short operator-facing
+    reason when ``success`` is False; ``enquiry_number`` is the scraped Enquiry# on success (empty on
+    failure).
     """
     fr_db = (dms_values.get("finance_required") or "").strip().upper()
     if fr_db in ("Y", "N"):
@@ -7450,7 +7466,7 @@ def _add_enquiry_opportunity(
 
     if not aadhar:
         note("Add Enquiry: aadhar_id from DB is empty — cannot fill UIN No.")
-        return False, "Missing customer Aadhaar last 4 for UIN No."
+        return False, "Missing customer Aadhaar last 4 for UIN No.", ""
 
     if callable(form_trace):
         form_trace(
@@ -7475,7 +7491,7 @@ def _add_enquiry_opportunity(
         note=note,
     )
     if not vq_ok:
-        return False, "Vehicle find failed (chassis/engine query or VIN fly-in)."
+        return False, "Vehicle find failed (chassis/engine query or VIN fly-in).", ""
 
     _apply_year_of_mfg_yyyy(scraped_v)
 
@@ -7487,6 +7503,7 @@ def _add_enquiry_opportunity(
         return (
             False,
             "Vehicle scrape did not yield model, YYYY year of manufacture, and color (see NOTES above).",
+            "",
         )
 
     note(
@@ -7545,7 +7562,7 @@ def _add_enquiry_opportunity(
         page, action_timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
     ):
         note("Add Enquiry: Enquiry tab not found (tried aria-label Enquiry Selected and Enquiry).")
-        return False, "Enquiry main tab not found."
+        return False, "Enquiry main tab not found.", ""
     note("Add Enquiry: Enquiry tab clicked.")
     _safe_page_wait(page, 1800, log_label="after_enquiry_tab")
 
@@ -7561,7 +7578,7 @@ def _add_enquiry_opportunity(
     enq_frame = _frame_containing_enquiry_type(page, preferred=opp_frame)
     if enq_frame is None:
         note('Add Enquiry: no frame contains aria-label="Enquiry Type".')
-        return False, "New opportunity form not found (no Enquiry Type field)."
+        return False, "New opportunity form not found (no Enquiry Type field).", ""
 
     def _scrape_enquiry_number_from_frame(frame: Frame) -> str:
         """
@@ -7893,54 +7910,54 @@ def _add_enquiry_opportunity(
     today_str = date.today().strftime("%d/%m/%Y")
 
     if not try_field(("Contact First Name", "First Name"), first, required=True):
-        return False, "Could not set Contact First Name."
+        return False, "Could not set Contact First Name.", ""
     if not try_field(("Contact Last Name", "Last Name"), last, required=True):
-        return False, "Could not set Contact Last Name."
+        return False, "Could not set Contact Last Name.", ""
     if not try_field(("Mobile Phone", "Mobile Phone #", "Cellular Phone"), mobile, required=True):
-        return False, "Could not set Mobile Phone."
+        return False, "Could not set Mobile Phone.", ""
     landline_use = landline or mobile
 
     if not try_field(("Landline #", "Landline", "Home Phone #", "Home Phone", "Land Line", "Alternate Phone", "Alternate Number"), landline_use, required=True):
-        return False, "Could not set Landline."
+        return False, "Could not set Landline.", ""
     if not try_field(("Email", "Email Address", "E-mail"), "NA", required=True):
-        return False, "Could not set Email."
+        return False, "Could not set Email.", ""
 
     if not try_field(("UIN Type",), "Aadhaar Card", required=True):
         if not try_field_any(("UIN Type",), ("Aadhaar",)):
-            return False, "Could not set UIN Type (Aadhaar)."
+            return False, "Could not set UIN Type (Aadhaar).", ""
     if not try_field(("UIN No.", "UIN Number", "UIN No"), aadhar, required=True):
-        return False, "Could not set UIN No."
+        return False, "Could not set UIN No.", ""
 
     if not try_field(("State",), state, required=True):
-        return False, "Could not set State."
+        return False, "Could not set State.", ""
     dist_use = district or city
     tehsil_use = tehsil or city
     if not try_field(("District",), dist_use, required=True):
-        return False, "Could not set District."
+        return False, "Could not set District.", ""
     if not try_field(("Tehsil", "Tehsil/Taluka", "Taluka"), tehsil_use, required=True):
-        return False, "Could not set Tehsil/Taluka."
+        return False, "Could not set Tehsil/Taluka.", ""
     if not try_field(("City", "City/Town/Village"), city, required=True):
-        return False, "Could not set City/Town/Village."
+        return False, "Could not set City/Town/Village.", ""
     if not _city_pick_any_then_ok(enq_frame):
-        return False, "Could not pick City/Town/Village from search sub form."
+        return False, "Could not pick City/Town/Village from search sub form.", ""
     if not try_field(("Address Line 1", "Address Line1", "Address"), addr, required=True):
-        return False, "Could not set Address Line 1."
+        return False, "Could not set Address Line 1.", ""
     if not try_field(("Pin Code", "Pin code", "PIN Code", "Postal Code"), pin, required=True):
-        return False, "Could not set Pin Code."
+        return False, "Could not set Pin Code.", ""
 
     if not try_field(
         ("Model Interested In", "Model Interested in", "Interested Model", "Model"),
         model_i,
         required=True,
     ):
-        return False, "Could not set Model Interested In (from vehicle scrape)."
+        return False, "Could not set Model Interested In (from vehicle scrape).", ""
     if not try_field(("Color", "Colour"), color_i, required=True):
-        return False, "Could not set Color (from vehicle scrape)."
+        return False, "Could not set Color (from vehicle scrape).", ""
 
     if not try_field(("Finance Required",), finance_required, required=True):
-        return False, "Could not set Finance Required."
+        return False, "Could not set Finance Required.", ""
     if not try_field(("Booking Order Type",), "Normal Booking", required=True):
-        return False, "Could not set Booking Order Type."
+        return False, "Could not set Booking Order Type.", ""
     sku_hint = (scraped_v.get("sku") or "").strip()
     if not _select_variant_first_value(enq_frame, variant_hint=sku_hint):
         note("Add Enquiry: Variant auto-select with SKU/pick failed — will try Tab selection after Model.")
@@ -7952,16 +7969,16 @@ def _add_enquiry_opportunity(
     # Age & Gender filled AFTER Model/Variant — Siebel form resets these fields
     # on Model/Variant server round-trip, so they must go last.
     if not try_field(("Age(Years)", "Age"), age, required=True):
-        return False, "Could not set Age."
+        return False, "Could not set Age.", ""
     if not try_field(("Gender",), gender, required=True):
-        return False, "Could not set Gender."
+        return False, "Could not set Gender.", ""
     try_field_any(("Enquiry Source",), ("Walk-In", "Walk In", "Walkin"))
     if not try_field(("Point of Contact",), "Customer Walk-in", required=True):
         if not try_field_any(
             ("Point of Contact",),
             ("Customer Walk-In", "Walk-In", "Customer Walk In"),
         ):
-            return False, "Could not set Point of Contact."
+            return False, "Could not set Point of Contact.", ""
 
     try_field_any(
         ("Actual Enquiry Date", "Enquiry Date", "Actual Enquiry Dt"),
@@ -7977,13 +7994,13 @@ def _add_enquiry_opportunity(
             page.keyboard.press("Meta+s")
         except Exception:
             note("Add Enquiry: Ctrl+S failed.")
-            return False, "Ctrl+S save failed on new opportunity form."
+            return False, "Ctrl+S save failed on new opportunity form.", ""
     note("Add Enquiry: pressed Ctrl+S to save enquiry.")
     _safe_page_wait(page, 350, log_label="add_enquiry_after_ctrl_s_immediate")
     _save_err_immediate = _detect_siebel_error_popup(page, content_frame_selector)
     if _save_err_immediate:
         note(f"Add Enquiry: immediate Siebel error after Ctrl+S → {_save_err_immediate!r:.300}")
-        return False, f"Siebel error after Ctrl+S: {_save_err_immediate[:200]}"
+        return False, f"Siebel error after Ctrl+S: {_save_err_immediate[:200]}", ""
 
     _max_save_polls = 8
     _poll_interval_ms = 1500
@@ -7994,7 +8011,7 @@ def _add_enquiry_opportunity(
         _save_error = _detect_siebel_error_popup(page, content_frame_selector)
         if _save_error:
             note(f"Add Enquiry: Siebel error after save → {_save_error!r:.300}")
-            return False, f"Siebel error after Ctrl+S: {_save_error[:200]}"
+            return False, f"Siebel error after Ctrl+S: {_save_error[:200]}", ""
         enquiry_no = _scrape_enquiry_number_from_frame(enq_frame)
 
         if enquiry_no and enquiry_no != pre_save_enquiry_no:
@@ -8007,7 +8024,7 @@ def _add_enquiry_opportunity(
             "Add Enquiry: Enquiry# did not change after save; likely not persisted "
             f"(before={pre_save_enquiry_no!r}, after={enquiry_no!r})."
         )
-        return False, "Enquiry# did not change after Ctrl+S (save not confirmed)."
+        return False, "Enquiry# did not change after Ctrl+S (save not confirmed).", ""
     if enquiry_no:
         note(f"Add Enquiry: saved Enquiry#={enquiry_no!r}.")
         if callable(form_trace):
@@ -8017,22 +8034,17 @@ def _add_enquiry_opportunity(
                 "post_save_scrape_enquiry_number",
                 enquiry_number=enquiry_no,
             )
-    else:
-        note("Add Enquiry: Enquiry# not readable after save (best-effort — no error popup detected).")
-        # One final delayed popup check before treating save as successful.
-        _safe_page_wait(page, 900, log_label="add_enquiry_after_save_final_error_check")
-        _save_err_final = _detect_siebel_error_popup(page, content_frame_selector)
-        if _save_err_final:
-            note(f"Add Enquiry: delayed Siebel error after save → {_save_err_final!r:.300}")
-            return False, f"Siebel error after Ctrl+S: {_save_err_final[:200]}"
-        if callable(form_trace):
-            form_trace(
-                "add_enquiry_saved",
-                "Opportunity Form",
-                "post_save_scrape_enquiry_number",
-                enquiry_number="",
-            )
-    return True, None
+        return True, None, enquiry_no
+    # Enquiry# empty after save — do one final error check then fail hard so
+    # the caller does not loop (add_enquiry → search → not found → add_enquiry).
+    note("Add Enquiry: Enquiry# not readable after save — running final error check.")
+    _safe_page_wait(page, 900, log_label="add_enquiry_after_save_final_error_check")
+    _save_err_final = _detect_siebel_error_popup(page, content_frame_selector)
+    if _save_err_final:
+        note(f"Add Enquiry: delayed Siebel error after save → {_save_err_final!r:.300}")
+        return False, f"Siebel error after Ctrl+S: {_save_err_final[:200]}", ""
+    note("Add Enquiry: no Siebel error detected, but Enquiry# is still empty — treating as failure.")
+    return False, "Add Enquiry saved without errors but Enquiry# could not be scraped. Save may not have persisted.", ""
 
 
 def _siebel_run_precheck_and_pdi(
@@ -8442,7 +8454,7 @@ def Playwright_Hero_DMS_fill(
                     "No contact rows after Find/Go — Add Enquiry branch: vehicle chassis/VIN + engine, "
                     "Enquiry tab, Opportunity Form:New, DB fields, Ctrl+S."
                 )
-                ae_ok, ae_detail = _add_enquiry_opportunity(
+                ae_ok, ae_detail, ae_enq_no = _add_enquiry_opportunity(
                     page,
                     dms_values,
                     urls,
@@ -8461,7 +8473,8 @@ def Playwright_Hero_DMS_fill(
                     )
                     return out
                 ms_done("Add enquiry saved")
-                note("Add Enquiry saved; resuming normal Find→Contact mobile flow.")
+                note(f"Add Enquiry saved with Enquiry#={ae_enq_no!r}; resuming normal Find→Contact mobile flow.")
+                out.setdefault("vehicle", {})["enquiry_number"] = ae_enq_no
                 form_trace(
                     "v1b_refind_after_add_enquiry",
                     "Global Find → Contact (Mobile Phone) + Go",
@@ -8498,6 +8511,68 @@ def Playwright_Hero_DMS_fill(
                     )
                     return out
 
+            # Drill down into the contact record by clicking the Title drilldown (contains mobile).
+            _drilled = False
+            _safe_page_wait(page, 1500, log_label="before_title_drilldown")
+            _drill_needle = _mobile_needle_for_contact_grid_match(mobile)
+            _drill_raw = re.sub(r"\D", "", (mobile or "").strip())
+            for _dr_root in list(_siebel_locator_search_roots(page, content_frame_selector)) + list(_ordered_frames(page)) + [page]:
+                if _drilled:
+                    break
+                # 1) a[name="Title"] whose text contains the mobile
+                for _dr_sel in ('a[name="Title"]', 'a[name="title"]'):
+                    try:
+                        _dr_locs = _dr_root.locator(_dr_sel)
+                        _dr_n = _dr_locs.count()
+                        for _di in range(min(_dr_n, 20)):
+                            _dr_el = _dr_locs.nth(_di)
+                            try:
+                                if not _dr_el.is_visible(timeout=500):
+                                    continue
+                            except Exception:
+                                continue
+                            try:
+                                _dr_txt = re.sub(r"\D", "", _dr_el.inner_text(timeout=500) or "")
+                            except Exception:
+                                _dr_txt = ""
+                            if _drill_needle and _drill_needle in _dr_txt:
+                                pass
+                            elif _drill_raw and len(_drill_raw) >= 8 and _drill_raw in _dr_txt:
+                                pass
+                            else:
+                                continue
+                            try:
+                                _dr_el.click(timeout=action_timeout_ms)
+                                _drilled = True
+                                break
+                            except Exception:
+                                try:
+                                    _dr_el.click(timeout=action_timeout_ms, force=True)
+                                    _drilled = True
+                                    break
+                                except Exception:
+                                    continue
+                    except Exception:
+                        continue
+            if not _drilled:
+                # Fallback: use existing search-hit link click logic
+                _drilled = _siebel_try_click_mobile_search_hit_link(
+                    page, mobile, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector,
+                )
+            if not _drilled:
+                step("Stopped: could not click Title drilldown to open contact record.")
+                out["error"] = (
+                    "Siebel: contact matched in search results, but could not click on the Title drilldown "
+                    "link (name='Title') to open the contact detail. Check Search Results grid selectors."
+                )
+                return out
+            note(f"Clicked Title drilldown for mobile {mobile} — opening contact record.")
+            _safe_page_wait(page, 2000, log_label="after_title_drilldown")
+            try:
+                page.wait_for_load_state("networkidle", timeout=8_000)
+            except Exception:
+                pass
+
             # Before opening customer details / filling Relation+Address, verify enquiry exists on Contact_Enquiry tab.
             _enq_checked = False
             _enq_rows = 0
@@ -8521,19 +8596,12 @@ def Playwright_Hero_DMS_fill(
                     "Cannot determine whether an enquiry exists for this contact."
                 )
                 return out
-            if _enq_rows > 0 and not _enq_number:
-                step("Stopped: enquiry row(s) found but Enquiry# could not be scraped.")
-                out["error"] = (
-                    "Siebel: Contact_Enquiry grid has rows but Enquiry# is empty. "
-                    "Cannot proceed without a valid Enquiry#."
-                )
-                return out
-            if _enq_rows > 0 and _enq_number:
+            if _enq_number:
                 note(f"Enquiry exists: Enquiry#={_enq_number!r}. Proceeding with relation/address fill.")
                 out.setdefault("vehicle", {})["enquiry_number"] = _enq_number
-            if _enq_checked and _enq_rows <= 0:
-                note("No Enquiry rows found on Contact_Enquiry — running Add Enquiry before relation/address fill.")
-                ae2_ok, ae2_detail = _add_enquiry_opportunity(
+            if not _enq_number:
+                note(f"Enquiry# is null (rows={_enq_rows}) — running Add Enquiry before relation/address fill.")
+                ae2_ok, ae2_detail, ae2_enq_no = _add_enquiry_opportunity(
                     page,
                     dms_values,
                     urls,
@@ -8545,65 +8613,15 @@ def Playwright_Hero_DMS_fill(
                     vehicle_merge=out.setdefault("vehicle", {}),
                 )
                 if not ae2_ok:
-                    step("Stopped: Contact_Enquiry had no rows and Add Enquiry fallback failed.")
+                    step("Stopped: Enquiry# null and Add Enquiry fallback failed.")
                     out["error"] = (
-                        "Siebel: no enquiry rows found on Contact_Enquiry, and Add Enquiry fallback failed. "
+                        "Siebel: Enquiry# was null on Contact_Enquiry, and Add Enquiry fallback failed. "
                         f"{ae2_detail or ''}"
                     ).strip()
                     return out
                 ms_done("Add enquiry saved")
-                note("Add Enquiry saved from Contact_Enquiry-empty path; re-running Find→Contact by mobile.")
-                ok_refind2 = _contact_view_find_by_mobile(
-                    page,
-                    contact_url=contact_url,
-                    mobile=mobile,
-                    nav_timeout_ms=nav_timeout_ms,
-                    action_timeout_ms=action_timeout_ms,
-                    content_frame_selector=content_frame_selector,
-                    mobile_aria_hints=mobile_aria_hints,
-                    note=note,
-                    step=step,
-                    stage_msg="Post Contact_Enquiry-empty Add Enquiry: re-find customer by mobile.",
-                )
-                if not ok_refind2:
-                    step("Stopped: post Add Enquiry (Contact_Enquiry-empty path) re-find failed.")
-                    out["error"] = (
-                        "Siebel: Add Enquiry was saved from Contact_Enquiry-empty path, but follow-up "
-                        "Find→Contact by mobile did not complete."
-                    )
-                    return out
-                contact_matched2 = _siebel_ui_suggests_contact_match(page, mobile)
-                note(f"DECISION: contact_table_match_after_contact_enquiry_empty_add_enquiry_refind={contact_matched2!r}")
-                if not contact_matched2:
-                    step("Stopped: customer not visible after Contact_Enquiry-empty Add Enquiry re-find.")
-                    out["error"] = (
-                        "Siebel: Add Enquiry saved from Contact_Enquiry-empty path, but contact search still "
-                        "returned no table row after re-find."
-                    )
-                    return out
-                # Re-verify Contact_Enquiry tab to scrape the newly created Enquiry#
-                _enq2_checked = False
-                _enq2_number = ""
-                for _enq2_att in range(5):
-                    _enq2_checked, _enq2_rows2, _enq2_number = _contact_enquiry_tab_has_rows(
-                        page,
-                        action_timeout_ms=action_timeout_ms,
-                        content_frame_selector=content_frame_selector,
-                        note=note,
-                    )
-                    if _enq2_checked and _enq2_number:
-                        break
-                    note(f"Post Add Enquiry: Enquiry# scrape attempt {_enq2_att + 1}/5 — checked={_enq2_checked!r}, enquiry#={_enq2_number!r}.")
-                    _safe_page_wait(page, 1500, log_label=f"post_add_enquiry_enq_num_retry_{_enq2_att}")
-                if not _enq2_number:
-                    step("Stopped: Add Enquiry saved but Enquiry# still empty after re-check.")
-                    out["error"] = (
-                        "Siebel: Add Enquiry was saved from Contact_Enquiry-empty path, but Enquiry# "
-                        "could not be scraped from the Contact_Enquiry grid after 5 attempts."
-                    )
-                    return out
-                note(f"Post Add Enquiry: scraped Enquiry#={_enq2_number!r}.")
-                out.setdefault("vehicle", {})["enquiry_number"] = _enq2_number
+                note(f"Add Enquiry saved with Enquiry#={ae2_enq_no!r} from Contact_Enquiry-null path.")
+                out.setdefault("vehicle", {})["enquiry_number"] = ae2_enq_no
             form_trace(
                 "v2_drill_and_nav",
                 "Search Results + Contacts detail",
@@ -8621,6 +8639,7 @@ def Playwright_Hero_DMS_fill(
                 action_timeout_ms=action_timeout_ms,
                 content_frame_selector=content_frame_selector,
                 note=note,
+                skip_search_hit_click=True,
             ):
                 step("Stopped: video SOP failed while opening customer record or filling Relation's Name.")
                 out["error"] = (
