@@ -496,6 +496,50 @@ def _load_required_form_dms_row(customer_id: int | None, vehicle_id: int | None)
     return row
 
 
+def _load_vehicle_master_identity(vehicle_id: int | None) -> dict[str, str]:
+    """
+    Full VIN / engine / model / colour from ``vehicle_master`` for Siebel (create_order, attach, etc.).
+    ``form_dms_view`` carries partials; persisted master rows backfill ``full_chassis`` / ``full_engine``.
+    """
+    if vehicle_id is None:
+        return {}
+    try:
+        from app.db import get_connection
+
+        conn = get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT TRIM(COALESCE(chassis::text, '')) AS chassis,
+                           TRIM(COALESCE(engine::text, '')) AS engine,
+                           TRIM(COALESCE(model::text, '')) AS model,
+                           TRIM(COALESCE(colour::text, '')) AS colour
+                    FROM vehicle_master
+                    WHERE vehicle_id = %s
+                    """,
+                    (int(vehicle_id),),
+                )
+                row = cur.fetchone()
+                if not row:
+                    return {}
+                return {
+                    "chassis": _clean_text(row.get("chassis")),
+                    "engine": _clean_text(row.get("engine")),
+                    "model": _clean_text(row.get("model")),
+                    "colour": _clean_text(row.get("colour")),
+                }
+        finally:
+            conn.close()
+    except Exception as exc:
+        logger.warning(
+            "fill_dms_service: vehicle_master identity lookup failed vehicle_id=%s: %s",
+            vehicle_id,
+            exc,
+        )
+        return {}
+
+
 def _load_customer_aadhar_last4(customer_id: int | None) -> str:
     """Last 4 digits stored in ``customer_master.aadhar`` (UIDAI compliance). Used for Siebel UIN No."""
     if customer_id is None:
@@ -712,6 +756,26 @@ def _build_dms_fill_values(customer_id: int | None, vehicle_id: int | None, subf
     missing = [label for label, val in required_keys if not val]
     if missing:
         raise ValueError("Missing required DMS DB values: " + ", ".join(missing))
+
+    vm = _load_vehicle_master_identity(vehicle_id)
+    _ch = (vm.get("chassis") or "").strip()
+    _eng = (vm.get("engine") or "").strip()
+    _mod = (vm.get("model") or "").strip()
+    _col = (vm.get("colour") or "").strip()
+    if _ch:
+        values["full_chassis"] = _ch
+        values["frame_num"] = _ch
+    if _eng:
+        values["full_engine"] = _eng
+        values["engine_num"] = _eng
+    if _mod:
+        values["model"] = _mod
+        values["vehicle_model"] = _mod
+    if _col:
+        values["color"] = _col
+        values["vehicle_colour"] = _col
+        values["colour"] = _col
+
     return values
 
 
@@ -1374,6 +1438,8 @@ def _run_fill_dms_real_siebel_playwright(
         mobile_aria_hints=list(DMS_SIEBEL_MOBILE_ARIA_HINTS),
         skip_contact_find=False,
         execution_log_path=playwright_dms_log,
+        customer_id=customer_id,
+        vehicle_id=vehicle_id,
     )
 
     result["vehicle"] = frag.get("vehicle") or {}

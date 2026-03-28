@@ -10868,6 +10868,38 @@ def _siebel_run_precheck_and_pdi(
         say("PDI URL is not set — only pre-check was opened; configure DMS_REAL_URL_PDI to finish PDI.")
 
 
+def _persist_dms_scrape_to_db(
+    customer_id: int | None,
+    vehicle_id: int | None,
+    vehicle_dict: dict | None,
+    note: Callable[..., object],
+) -> None:
+    """
+    Merge scraped vehicle / order fields into ``vehicle_master`` and ``sales_master`` immediately
+    after a successful scrape step (Add Enquiry vehicle list, stage 5 grid, create_order, etc.).
+    Lazy-imports fill service to avoid circular imports. Safe to call repeatedly (``COALESCE`` updates).
+    """
+    if not vehicle_id or not vehicle_dict:
+        return
+    vd = dict(vehicle_dict)
+    try:
+        from app.services.fill_hero_dms_service import (
+            update_sales_master_from_dms_scrape,
+            update_vehicle_master_from_dms,
+        )
+
+        update_vehicle_master_from_dms(vehicle_id, vd)
+        if customer_id:
+            update_sales_master_from_dms_scrape(customer_id, vehicle_id, vd)
+        note(
+            "Persisted scraped DMS fields to database (vehicle_master"
+            + (" + sales_master" if customer_id else "")
+            + ")."
+        )
+    except Exception as exc:
+        logger.warning("siebel_dms: persist scrape to DB failed vehicle_id=%s: %s", vehicle_id, exc)
+
+
 def Playwright_Hero_DMS_fill(
     page: Page,
     dms_values: dict,
@@ -10879,6 +10911,8 @@ def Playwright_Hero_DMS_fill(
     mobile_aria_hints: list[str],
     skip_contact_find: bool = False,
     execution_log_path: Path | None = None,
+    customer_id: int | None = None,
+    vehicle_id: int | None = None,
 ) -> dict:
     """
     Hero Connect / Siebel automation. If ``SIEBEL_DMS_STOP_AFTER_ALL_ENQUIRIES`` is True (module constant),
@@ -11145,6 +11179,7 @@ def Playwright_Hero_DMS_fill(
                 ms_done("Add enquiry saved")
                 note(f"Add Enquiry saved with Enquiry#={ae_enq_no!r}; re-finding by mobile + first name.")
                 out.setdefault("vehicle", {})["enquiry_number"] = ae_enq_no
+                _persist_dms_scrape_to_db(customer_id, vehicle_id, out.get("vehicle") or {}, note)
                 form_trace(
                     "v1b_refind_after_add_enquiry",
                     "Global Find → Contact (Mobile + First Name) + Go",
@@ -11244,6 +11279,7 @@ def Playwright_Hero_DMS_fill(
                     ms_done("Add enquiry saved")
                     out.setdefault("vehicle", {})["enquiry_number"] = ae2_enq_no
                     note(f"Add Enquiry saved Enquiry#={ae2_enq_no!r} for suffixed first {_dotted_fn!r}.")
+                    _persist_dms_scrape_to_db(customer_id, vehicle_id, out.get("vehicle") or {}, note)
 
                     ok_rf_dot = _contact_view_find_by_mobile(
                         page,
@@ -11513,6 +11549,7 @@ def Playwright_Hero_DMS_fill(
                 if order_scraped.get("vehicle_type"):
                     veh["vehicle_type"] = order_scraped.get("vehicle_type")
                 out["vehicle"] = veh
+                _persist_dms_scrape_to_db(customer_id, vehicle_id, out.get("vehicle") or {}, note)
 
             step(
                 "Video SOP complete: customer record opened, payment added, and create_order flow completed. "
@@ -11969,7 +12006,7 @@ def Playwright_Hero_DMS_fill(
             created_basic = False
             if not matched1:
                 note("Stage 1: no contact table match — trying Add Enquiry (vehicle + Opportunities).")
-                if _add_enquiry_opportunity(
+                _ae_ok, _ae_det, _ae_enq = _add_enquiry_opportunity(
                     page,
                     dms_values,
                     urls,
@@ -11979,9 +12016,13 @@ def Playwright_Hero_DMS_fill(
                     note=note,
                     form_trace=form_trace,
                     vehicle_merge=out.setdefault("vehicle", {}),
-                )[0]:
+                )
+                if _ae_ok:
                     created_basic = True
                     ms_done("Add enquiry saved")
+                    if _ae_enq:
+                        out.setdefault("vehicle", {})["enquiry_number"] = _ae_enq
+                    _persist_dms_scrape_to_db(customer_id, vehicle_id, out.get("vehicle") or {}, note)
                 else:
                     note("Add Enquiry branch failed — falling back to basic enquiry form (stage 2).")
                     created_basic = stage_2_create_enquiry_if_needed(matched1)
@@ -12114,6 +12155,7 @@ def Playwright_Hero_DMS_fill(
 
         if not stage_5_vehicle_flow():
             return out
+        _persist_dms_scrape_to_db(customer_id, vehicle_id, out.get("vehicle") or {}, note)
 
         stage_6_generate_booking()
         stage_7_allotment_if_applicable()
@@ -12158,6 +12200,8 @@ def run_hero_siebel_dms_flow(
     mobile_aria_hints: list[str],
     skip_contact_find: bool = False,
     execution_log_path: Path | None = None,
+    customer_id: int | None = None,
+    vehicle_id: int | None = None,
 ) -> dict:
     """
     Backward-compatible alias for older callers.
@@ -12173,4 +12217,6 @@ def run_hero_siebel_dms_flow(
         mobile_aria_hints=mobile_aria_hints,
         skip_contact_find=skip_contact_find,
         execution_log_path=execution_log_path,
+        customer_id=customer_id,
+        vehicle_id=vehicle_id,
     )
