@@ -7367,41 +7367,154 @@ def _create_order(
             return False
         _safe_page_wait(page, 450, log_label="after_vs_find_button")
 
-        # Dropdown: prefer option matching Mobile Phone# / Mobile Phone (Alt+Down + ArrowDown).
-        try:
-            page.keyboard.press("Alt+ArrowDown")
-        except Exception:
-            pass
-        _safe_page_wait(page, 280, log_label="vs_find_dropdown_open")
+        # Field-type dropdown: scope to #findfieldsbox (same as Contact/Vehicles Find) so we do not
+        # hit the wrong global combobox. Prefer native <select>; else type-to-select on criteria cell.
         _matched_phone_field = False
-        for _nav_i in range(22):
-            try:
-                _cur = (
-                    page.evaluate(
-                        "() => { const e = document.activeElement; return (e && (e.value != null ? e.value : (e.textContent||''))) || ''; }"
-                    )
-                    or ""
-                )
-            except Exception:
-                _cur = ""
-            _low = _cur.lower()
-            if "mobile" in _low and "phone" in _low:
-                _matched_phone_field = True
-                try:
-                    page.keyboard.press("Enter")
-                except Exception:
-                    pass
+        _ff_sel = re.compile(r"mobile\s*phone\s*#?", re.I)
+        for _root in _ui_roots:
+            if _matched_phone_field:
                 break
             try:
-                page.keyboard.press("ArrowDown")
+                _ff = _root.locator("#findfieldsbox").first
+                if _ff.count() <= 0 or not _ff.is_visible(timeout=400):
+                    continue
+                _sel = _ff.locator("select").first
+                if _sel.count() > 0 and _sel.is_visible(timeout=350):
+                    try:
+                        _sel.select_option(label=_ff_sel, timeout=1200)
+                        _matched_phone_field = True
+                        note("Create Order: VS Find — set field type via #findfieldsbox select (Mobile Phone#).")
+                        break
+                    except Exception:
+                        try:
+                            _sel.select_option(
+                                label=re.compile(r"mobile.*phone", re.I), timeout=1200
+                            )
+                            _matched_phone_field = True
+                            note("Create Order: VS Find — set field type via select (mobile+phone label).")
+                            break
+                        except Exception:
+                            pass
             except Exception:
-                break
-            _safe_page_wait(page, 100, log_label="vs_find_type_nav")
+                continue
+
         if not _matched_phone_field:
-            note(
-                "Create Order: VS Find — could not confirm Mobile Phone# in dropdown "
-                "(best-effort; continuing to Tab)."
-            )
+            _js_ff_select_mobile = """() => {
+              const box = document.getElementById('findfieldsbox');
+              if (!box) return false;
+              const vis = (el) => {
+                if (!el) return false;
+                const st = window.getComputedStyle(el);
+                if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+                const r = el.getBoundingClientRect();
+                return r.width >= 2 && r.height >= 2;
+              };
+              for (const sel of box.querySelectorAll('select')) {
+                if (!vis(sel)) continue;
+                for (let i = 0; i < sel.options.length; i++) {
+                  const t = String(sel.options[i].textContent || '').toLowerCase();
+                  if (t.includes('mobile') && t.includes('phone')) {
+                    sel.focus();
+                    sel.selectedIndex = i;
+                    sel.dispatchEvent(new Event('input', { bubbles: true }));
+                    sel.dispatchEvent(new Event('change', { bubbles: true }));
+                    return true;
+                  }
+                }
+              }
+              return false;
+            }"""
+            for _fr in list(_ordered_frames(page)) + [page]:
+                try:
+                    if bool(_fr.evaluate(_js_ff_select_mobile)):
+                        _matched_phone_field = True
+                        note("Create Order: VS Find — set field type via JS native select in findfieldsbox.")
+                        break
+                except Exception:
+                    continue
+
+        if not _matched_phone_field:
+            _js_focus_criteria = """() => {
+              const box = document.getElementById('findfieldsbox');
+              if (!box) return false;
+              const vis = (el) => {
+                if (!el) return false;
+                const st = window.getComputedStyle(el);
+                if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+                const r = el.getBoundingClientRect();
+                return r.width >= 2 && r.height >= 2;
+              };
+              const rows = box.querySelectorAll('tbody tr, table tr');
+              for (const tr of rows) {
+                if (tr.closest('thead')) continue;
+                const tds = tr.querySelectorAll('td');
+                if (tds.length < 1) continue;
+                const inp = tds[0].querySelector('input:not([type="hidden"])');
+                if (inp && vis(inp) && !inp.readOnly && !inp.disabled) {
+                  try { inp.focus(); inp.click(); } catch (e) {}
+                  try { inp.select(); } catch (e) {}
+                  return true;
+                }
+              }
+              return false;
+            }"""
+            for _fr in list(_ordered_frames(page)) + [page]:
+                try:
+                    if bool(_fr.evaluate(_js_focus_criteria)):
+                        note("Create Order: VS Find — type-to-select Mobile Phone# on find field cell.")
+                        try:
+                            page.keyboard.type("Mobile Phone#", delay=40)
+                        except Exception:
+                            try:
+                                page.keyboard.insert_text("Mobile Phone#")
+                            except Exception:
+                                pass
+                        _safe_page_wait(page, 160, log_label="vs_find_after_type_field")
+                        try:
+                            page.keyboard.press("Enter")
+                        except Exception:
+                            pass
+                        _matched_phone_field = True
+                        _safe_page_wait(page, 200, log_label="after_vs_find_type_confirm")
+                        break
+                except Exception:
+                    continue
+
+        if not _matched_phone_field:
+            # Legacy: Alt+Down + ArrowDown on whatever has focus (may not open findfieldsbox).
+            try:
+                page.keyboard.press("Alt+ArrowDown")
+            except Exception:
+                pass
+            _safe_page_wait(page, 280, log_label="vs_find_dropdown_open")
+            for _nav_i in range(22):
+                try:
+                    _cur = (
+                        page.evaluate(
+                            "() => { const e = document.activeElement; return (e && (e.value != null ? e.value : (e.textContent||''))) || ''; }"
+                        )
+                        or ""
+                    )
+                except Exception:
+                    _cur = ""
+                _low = _cur.lower()
+                if "mobile" in _low and "phone" in _low:
+                    _matched_phone_field = True
+                    try:
+                        page.keyboard.press("Enter")
+                    except Exception:
+                        pass
+                    break
+                try:
+                    page.keyboard.press("ArrowDown")
+                except Exception:
+                    break
+                _safe_page_wait(page, 100, log_label="vs_find_type_nav")
+            if not _matched_phone_field:
+                note(
+                    "Create Order: VS Find — could not confirm Mobile Phone# in dropdown "
+                    "(best-effort; continuing to Tab)."
+                )
         _safe_page_wait(page, 220, log_label="after_vs_find_type_select")
 
         try:
