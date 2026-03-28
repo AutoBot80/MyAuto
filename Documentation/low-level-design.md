@@ -44,7 +44,7 @@ backend/app/
   db.py                # get_connection()
   schemas/             # Pydantic request/response (uploads, ocr, fill_dms, etc.)
   repositories/        # Data access only (ai_reader_queue, bulk_loads, dealer_ref, form_dms, form_vahan, rto_queue, rc_status_sms_queue)
-  services/            # Business logic (UploadService, bulk_job_service, bulk_queue_service, bulk_watcher_service, form20_service, fill_hero_dms_service, siebel_dms_playwright, submit_info_service, rto_payment_service)
+  services/            # Business logic (UploadService, bulk_job_service, bulk_queue_service, bulk_watcher_service, form20_service, handle_browser_opening, utility_functions, insurance_form_values, insurance_kyc_payloads, fill_hero_dms_service, fill_hero_insurance_service, siebel_dms_playwright, submit_info_service, rto_payment_service)
   routers/             # health, settings, uploads, ai_reader_queue, bulk_loads, fill_dms, submit_info, rto_queue, customer_search, dealers, documents, qr_decode, vision, textract_router
   templates/           # form20_front.html, form20_back.html, form20_page3.html
 ```
@@ -86,6 +86,7 @@ backend/app/
 | POST | `/fill-dms/print-form20` | Generate Form 20.pdf. |
 | POST | `/fill-dms/vahan` | Vahan (RTO) only; reuses an already open logged-in Vahan tab when detectable, otherwise auto-opens Edge/Chrome and asks operator to login first-time then retry. |
 | POST | `/fill-dms/insurance` | Insurance only; reuses an already open logged-in Insurance tab when detectable, otherwise auto-opens Edge/Chrome and asks operator to login first-time then retry. Fills fields only, does not click final submit/issue, and keeps browser open. |
+| POST | `/fill-dms/insurance/hero` | **Hero Insurance** — ``pre_process``: open ``INSURANCE_BASE_URL``; Sign In → 2W → New Policy; insurer / OVD / mobile / consent; KYC **Proceed** or uploads. ``main_process``: VIN/chassis, nominee, proposer, etc. from ``form_insurance_view`` (existing master columns); proposal defaults (email, add-ons, CPA, HDFC, reg. date) **hardcoded** in Playwright. Request: optional ``insurance_base_url``, ``customer_id``, ``vehicle_id``, ``subfolder``, ``dealer_id``. Response: ``page_url``, ``login_url``, ``match_base``. |
 | GET | `/rto-queue` | List RTO queue rows. |
 | GET | `/rto-queue/by-sale` | Get RTO queue row by sale (customer_id, vehicle_id). |
 | POST | `/rto-queue` | Create or update the queued RTO row for a sale. |
@@ -311,3 +312,9 @@ See **Documentation/Database DDL.md** for full table structures. Summary:
 | 6.12 | Mar 2026 | — | **`_contact_find_title_sweep_for_enquiry`**: on failed in-place drill for **ordinal ≥1**, **break** immediately (no second identical drill, no URL/nav parameters on this helper); **`E3b`** NDJSON on that path |
 | 6.13 | Mar 2026 | — | **`_contact_enquiry_tab_has_rows`**: Hero **Enquiries** applet — detect **Enquiry#** blue links (e.g. `*-SENQ-*`, hyphenated keys); **`heroLinksInApplet()`** scoped to **`.siebui-applet`** when body text includes **Enquiries** / **Enquiry#**; fallback scan if jqGrid header/id mismatches; **`diag.usedHeroLinkScan`** / **`heroLinkScope`** |
 | 6.14 | Mar 2026 | — | Video SOP after enquiry sweep: **`_siebel_try_activate_find_contact_context`** (**Find Contact** tab/link, else **Contacts** list sub-tab) → **`_siebel_open_found_customer_record`** (First Name) even when **care_of** is empty; **Contact ID** scrape extended to **Contacts** grid **Contact Id** column + extra `name`/`id` selectors |
+| 6.15 | Mar 2026 | — | **`fill_hero_insurance_service`**: **`pre_process`** / **`main_process`** / **`post_process`** + **`POST /fill-dms/insurance/hero`**: launch URL = **`INSURANCE_BASE_URL`**; **`_get_or_open_site_page(..., launch_url=)`**; origin match + login readiness + auto-fill selectors |
+| 6.16 | Mar 2026 | — | **`main_process`**: VIN (**``full_chassis``**) → Submit → **I agree**; proposal form through **Proposal Review**; KYC upload path clicks **Proceed**/Continue after attach; **`post_process`** prefers **`main_result.page_url`** |
+| 6.17 | Mar 2026 | — | **`form_insurance_view`**: chassis/customer/nominee/insurer from existing master columns; proposal UI defaults hardcoded; OCR insurer fallback when DB insurer empty |
+| 6.18 | Mar 2026 | — | Real Siebel Contact Find: **`_first_name_for_contact_find_query_field`** types **exact** first name (no `*`); **`_siebel_ui_suggests_contact_match_mobile_first`** and **`_contact_mobile_drilldown_plans`** row JS require **case-insensitive exact** cell match to mobile + first; **removed** mobile-only grid fallback when first name is required (**BRD §6.1b**) |
+| 6.19 | Mar 2026 | — | **`_create_order`** (Vehicle Sales → Sales Orders New): after **Booking Order Type = Normal Booking**, fills **Comments** with **`Battery is <battery_partial>`** when **`form_dms_view` / detail sheet Battery No.** (`battery_partial`) is non-empty; **`Comment`** label fallback |
+| 6.20 | Mar 2026 | — | **`_create_order`**: before **+**, **`_try_vehicle_sales_find_existing_order`** — **Find** (`aria-label` / role) → dropdown **Mobile Phone#** → **Tab** → mobile → **Go**/**Enter**; if list row matches mobile, **`elif`** **`_attach_vehicle_to_bkg`** and **return** (no **+**, no Comments-on-new-form); else existing **+** path |

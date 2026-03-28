@@ -73,6 +73,7 @@ One-off changes (e.g. new columns) go in **`DDL/alter/`**. Run against an existi
 - `12e_rto_queue_batch_processing.sql` — adds dealer-batch lease/progress columns and indexes so the RTO Queue page can process the oldest 7 rows in one browser session per dealer.
 - `05f_sales_master_add_rto_scrape_fields.sql` — adds `sales_master.vahan_application_id` and `sales_master.rto_charges` so RTO batch scrapes are retained and overwritten on retry.
 - `05g_drop_vehicle_master_rto_scrape_fields.sql` — drops the deprecated `vehicle_master.vahan_application_id` and `vehicle_master.rto_charges` columns after storage moved to `sales_master`.
+- `10j_form_insurance_view.sql` — creates **`form_insurance_view`** (Hero Insurance: chassis, customer, nominee, insurer from existing master columns per sale).
 
 **New table (run after customer_master exists):**
 - `10_rto_payment_details.sql` — legacy base creation for the RTO table; current schema then applies `12c_rename_rto_payment_details_to_rto_queue.sql` so the active table is `rto_queue`.

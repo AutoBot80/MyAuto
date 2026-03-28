@@ -329,6 +329,18 @@ This document lists the current database tables and their columns. **Executable 
 
 ---
 
+## 9c) `form_insurance_view`
+
+**Purpose:** Read-only view for Hero/MISP automation: one row per sale (`sales_master`) with `customer_master`, `vehicle_master`, `dealer_ref` / `oem_ref`, and the **latest** `insurance_master` row per `(customer_id, vehicle_id)` (order: `policy_to`, `insurance_year`, `insurance_id`).
+
+**Script:** `DDL/alter/10j_form_insurance_view.sql`.
+
+**Important columns:** Chassis/frame (`frame_no`, `full_chassis`), engine, model, proposer and address fields, `insurer`, nominee columns, `financer_name`, `rto_name`, etc. — **only** columns that already exist on the base tables. Proposal-only UI defaults (email, add-ons, CPA, payment mode, registration date) remain **hardcoded** in Playwright until optional future columns exist.
+
+**Operational notes:** `_load_latest_insurance_values` uses `SELECT * FROM form_insurance_view WHERE customer_id = ? AND vehicle_id = ?`. Insurer may still be supplemented from OCR details JSON when `insurance_master.insurer` is empty (`_build_insurance_fill_values`).
+
+---
+
 ## 10) `rc_status_sms_queue`
 
 **Purpose:** SMS queue for RC status notifications; populated when RTO payment is done.
@@ -417,6 +429,7 @@ This document lists the current database tables and their columns. **Executable 
 | `rto_queue` | RTO Queue page, rc_status_sms_queue |
 | `form_dms_view` | DMS field inspection and `DMS_Form_Values.txt` generation |
 | `form_vahan_view` | Vahan field inspection and `Vahan_Form_Values.txt` generation |
+| `form_insurance_view` | Hero/MISP insurance fill and `Insurance_Form_Values.txt` generation |
 | `rc_status_sms_queue` | RC status SMS sending |
 | `bulk_loads` | Bulk ingest, queue publish/lease, dashboard, retry prep, action-taken tracking |
 
@@ -444,3 +457,4 @@ This document lists the current database tables and their columns. **Executable 
 | 1.6 | Mar 2026 | `sales_master.order_number`, **`invoice_number`** — DMS scrape persistence (`DDL/alter/05h_sales_master_add_order_invoice_numbers.sql`, **`update_sales_master_from_dms_scrape`** in `fill_hero_dms_service.py`) |
 | 1.7 | Mar 2026 | `sales_master.enquiry_number` — DMS Enquiry# persistence (`DDL/alter/05i_sales_master_add_enquiry_number.sql`); `vehicle_ex_showroom_cost` now mapped to `vehicle_ex_showroom_price`; `update_sales_master_from_dms_scrape` called for real Siebel path |
 | 1.8 | Mar 2026 | **`update_vehicle_master_from_dms`** no longer updates **`raw_frame_num`** / **`raw_engine_num`** (detail-sheet identity for `form_dms_view` partials / Add Enquiry search) |
+| 1.9 | Mar 2026 | **`form_insurance_view`** (`DDL/alter/10j_form_insurance_view.sql`): stitches existing `customer_master` / `vehicle_master` / latest `insurance_master` per sale; Hero proposal uses hardcoded defaults for email/add-ons/payment/registration date |

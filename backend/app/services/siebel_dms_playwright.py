@@ -2485,7 +2485,7 @@ def _contact_view_find_by_mobile(
     """
     Open Contact Find view, set object type to Contact when possible, fill **mobile**, optional
     **First Name**, then Go. When ``first_name`` is set, both fields are filled before Find; the
-    First Name field receives ``<first>*`` (starts-with) unless it already ends with ``*``.
+    First Name field receives the **exact** string (no ``*`` wildcard).
     When ``first_name`` is omitted, behavior matches legacy **mobile-only** find (re-find after basic
     enquiry, etc.).
     """
@@ -2525,7 +2525,7 @@ def _contact_view_find_by_mobile(
     if scoped_applet_find_clicked:
         note(
             "Filled Mobile (title='Mobile Phone') and First Name (id='field_textbox_1' when present) "
-            "as starts-with query (<first>*) in the same Contact Find frame and clicked Find."
+            "as exact first name (no wildcard) in the same Contact Find frame and clicked Find."
         )
         _safe_page_wait(page, wait_after_go_ms, log_label="after_contact_find_go_scoped")
         return True
@@ -2590,7 +2590,7 @@ def _contact_view_find_by_mobile(
             note("Find: could not fill First Name in Contact Find pane after mobile fill.")
             return False
         _fn_q = _first_name_for_contact_find_query_field(fn_req)
-        note(f"Filled First Name in Find pane → {_fn_q!r} (starts-with * query).")
+        note(f"Filled First Name in Find pane → {_fn_q!r} (exact match query).")
 
     _siebel_blur_and_settle(page, ms=350)
 
@@ -3419,22 +3419,17 @@ def _validate_contact_find_first_name(raw: str) -> tuple[bool, str]:
 
 def _first_name_for_contact_find_query_field(raw: str) -> str:
     """
-    Value typed into Siebel Contact Find **First Name**: ``<base>*`` so the query behaves as
-    **starts with** (matches compound names such as **Lavesh Faujdar** when Find uses **Lavesh**).
+    Value typed into Siebel Contact Find **First Name**: **exact** string (no ``*`` wildcard).
 
-    Trailing dots from dotted duplicate keys are stripped before appending ``*``. If the caller
-    already ended the string with ``*``, it is left unchanged.
+    Trailing dots from dotted duplicate keys are stripped so the typed value matches the dotted
+    re-find path; the grid matcher uses the same normalization (case-insensitive exact equality).
     """
     s = (raw or "").strip()
     if not s:
         return ""
     while s.endswith("."):
         s = s[:-1].strip()
-    if not s:
-        return ""
-    if s.endswith("*"):
-        return s
-    return f"{s}*"
+    return s
 
 
 def _mobile_needle_for_contact_grid_match(mobile: str) -> str:
@@ -3482,12 +3477,13 @@ def _siebel_ui_suggests_contact_match(page: Page, mobile: str) -> bool:
 
 def _siebel_ui_suggests_contact_match_mobile_first(page: Page, mobile: str, first_name: str) -> bool:
     """
-    After Find/Go with **mobile + first name**, true when some data row ``tr`` has the mobile in the
-    row's **textContent** (compact) and either the first name is detectable on the row **or** the
-    **Title column** ``td`` (the cell under the Title heading containing ``a[name="Title"]``) contains
-    the mobile digits — Siebel often renders the number there while omitting the first name from the DOM.
+    After Find/Go with **mobile + first name**, true when some data row ``tr`` contains the mobile
+    (digit needle in row text) **and** at least one cell/input/title on that row matches the
+    **exact** first name from Find (case-insensitive, whitespace-normalized), not a first-token or
+    prefix fuzzy match.
 
-    Matching is **case-insensitive** on first name; mobile stays digit-based.
+    There is **no** mobile-only fallback: if the first name is not visible in row cells, this returns
+    false so automation does not treat the row as a match.
     """
     needle = _mobile_needle_for_contact_grid_match(mobile)
     target = (first_name or "").strip()
@@ -3496,58 +3492,30 @@ def _siebel_ui_suggests_contact_match_mobile_first(page: Page, mobile: str, firs
     script = """([needle, target]) => {
       if (!needle || needle.length < 8 || !target) return false;
       const compact = (s) => String(s || '').replace(/\\s+/g, '');
-      const norm = (s) => String(s || '').replace(/\\u00a0/g, ' ').trim();
-      const firstNameKeyFromFind = (raw) => {
-        let s = String(raw || '').replace(/\\u00a0/g, ' ').trim().toLowerCase();
-        while (s.endsWith('.')) s = s.slice(0, -1).trim();
-        return s;
+      const normExact = (s) => {
+        let t = String(s || '').replace(/\\u00a0/g, ' ').trim().toLowerCase().replace(/\\s+/g, ' ');
+        while (t.endsWith('.')) t = t.slice(0, -1).trim();
+        return t;
       };
-      const textMatchesFindFirstName = (text, keyBase) => {
+      const textMatchesExactFirstName = (text, keyBase) => {
         if (!keyBase || text == null) return false;
-        const c = String(text).replace(/\\u00a0/g, ' ').trim().toLowerCase();
-        if (!c) return false;
-        if (c === keyBase) return true;
-        if (c.startsWith(keyBase + ' ')) return true;
-        const keyHead = keyBase.split(/\\s+/).filter(Boolean)[0] || '';
-        if (keyHead && c === keyHead) return true;
-        const first = c.split(/\\s+/).filter(Boolean)[0] || '';
-        let fs = first;
-        while (fs.endsWith('.')) fs = fs.slice(0, -1).trim();
-        if (fs === keyBase) return true;
-        if (keyHead && fs === keyHead) return true;
-        return false;
+        const c = normExact(text);
+        return c.length > 0 && c === keyBase;
       };
-      const rowContainsFindFirstKey = (tr, keyBase) => {
-        if (!keyBase) return false;
-        const keyHead = keyBase.split(/\\s+/).filter(Boolean)[0] || '';
-        const raw = norm(tr.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase();
-        if (!raw || (!raw.includes(keyBase) && !(keyHead && raw.includes(keyHead)))) return false;
-        if (raw.startsWith(keyBase + ' ')) return true;
-        if (keyHead && raw.startsWith(keyHead + ' ')) return true;
-        const parts = raw.split(/[\\s,;|\\/\\u2013\\u2014-]+/).filter(Boolean);
-        for (const p of parts) {
-          let q = p;
-          while (q.endsWith('.')) q = q.slice(0, -1).trim();
-          if (q === keyBase || (keyHead && q === keyHead)) return true;
-          if (p.startsWith(keyBase + ' ')) return true;
-          if (keyHead && p.startsWith(keyHead + ' ')) return true;
-        }
-        return false;
-      };
-      const keyBase = firstNameKeyFromFind(target);
+      const keyBase = normExact(target);
       if (!keyBase) return false;
       const hasM = (s) => compact(s).includes(needle);
-      const rowHasFirst = (tr) => {
+      const rowHasExactFirst = (tr) => {
         const tds = tr.querySelectorAll('td');
         for (const td of tds) {
-          if (textMatchesFindFirstName(td.textContent, keyBase)) return true;
-          if (textMatchesFindFirstName(td.getAttribute('title') || '', keyBase)) return true;
-          if (textMatchesFindFirstName(td.getAttribute('aria-label') || '', keyBase)) return true;
+          if (textMatchesExactFirstName(td.textContent, keyBase)) return true;
+          if (textMatchesExactFirstName(td.getAttribute('title') || '', keyBase)) return true;
+          if (textMatchesExactFirstName(td.getAttribute('aria-label') || '', keyBase)) return true;
           for (const inp of td.querySelectorAll('input, textarea')) {
-            if (textMatchesFindFirstName(inp.value, keyBase)) return true;
+            if (textMatchesExactFirstName(inp.value, keyBase)) return true;
           }
         }
-        return rowContainsFindFirstKey(tr, keyBase);
+        return false;
       };
       for (const tr of document.querySelectorAll('table tr')) {
         if (tr.closest('thead')) continue;
@@ -3555,7 +3523,7 @@ def _siebel_ui_suggests_contact_match_mobile_first(page: Page, mobile: str, firs
         if (tds.length < 3) continue;
         const rowBody = tr.textContent || '';
         if (!hasM(rowBody)) continue;
-        if (rowHasFirst(tr)) return true;
+        if (rowHasExactFirst(tr)) return true;
       }
       return false;
     }"""
@@ -3589,57 +3557,29 @@ def _siebel_ui_suggests_contact_match_mobile_first(page: Page, mobile: str, firs
     )
     diag_js = """([needle, target]) => {
       const compact = (s) => String(s || '').replace(/\\s+/g, '');
-      const norm = (s) => String(s || '').replace(/\\u00a0/g, ' ').trim();
-      const firstNameKeyFromFind = (raw) => {
-        let s = String(raw || '').replace(/\\u00a0/g, ' ').trim().toLowerCase();
-        while (s.endsWith('.')) s = s.slice(0, -1).trim();
-        return s;
+      const normExact = (s) => {
+        let t = String(s || '').replace(/\\u00a0/g, ' ').trim().toLowerCase().replace(/\\s+/g, ' ');
+        while (t.endsWith('.')) t = t.slice(0, -1).trim();
+        return t;
       };
-      const textMatchesFindFirstName = (text, keyBase) => {
+      const textMatchesExactFirstName = (text, keyBase) => {
         if (!keyBase || text == null) return false;
-        const c = String(text).replace(/\\u00a0/g, ' ').trim().toLowerCase();
-        if (!c) return false;
-        if (c === keyBase) return true;
-        if (c.startsWith(keyBase + ' ')) return true;
-        const keyHead = keyBase.split(/\\s+/).filter(Boolean)[0] || '';
-        if (keyHead && c === keyHead) return true;
-        const first = c.split(/\\s+/).filter(Boolean)[0] || '';
-        let fs = first;
-        while (fs.endsWith('.')) fs = fs.slice(0, -1).trim();
-        if (fs === keyBase) return true;
-        if (keyHead && fs === keyHead) return true;
-        return false;
+        const c = normExact(text);
+        return c.length > 0 && c === keyBase;
       };
-      const rowContainsFindFirstKey = (tr, keyBase) => {
-        if (!keyBase) return false;
-        const keyHead = keyBase.split(/\\s+/).filter(Boolean)[0] || '';
-        const raw = norm(tr.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase();
-        if (!raw || (!raw.includes(keyBase) && !(keyHead && raw.includes(keyHead)))) return false;
-        if (raw.startsWith(keyBase + ' ')) return true;
-        if (keyHead && raw.startsWith(keyHead + ' ')) return true;
-        const parts = raw.split(/[\\s,;|\\/\\u2013\\u2014-]+/).filter(Boolean);
-        for (const p of parts) {
-          let q = p;
-          while (q.endsWith('.')) q = q.slice(0, -1).trim();
-          if (q === keyBase || (keyHead && q === keyHead)) return true;
-          if (p.startsWith(keyBase + ' ')) return true;
-          if (keyHead && p.startsWith(keyHead + ' ')) return true;
-        }
-        return false;
-      };
-      const keyBase = firstNameKeyFromFind(target);
+      const keyBase = normExact(target);
       const rowHasFirst = (tr) => {
         if (!keyBase) return false;
         const tds = tr.querySelectorAll('td');
         for (const td of tds) {
-          if (textMatchesFindFirstName(td.textContent, keyBase)) return true;
-          if (textMatchesFindFirstName(td.getAttribute('title') || '', keyBase)) return true;
-          if (textMatchesFindFirstName(td.getAttribute('aria-label') || '', keyBase)) return true;
+          if (textMatchesExactFirstName(td.textContent, keyBase)) return true;
+          if (textMatchesExactFirstName(td.getAttribute('title') || '', keyBase)) return true;
+          if (textMatchesExactFirstName(td.getAttribute('aria-label') || '', keyBase)) return true;
           for (const inp of td.querySelectorAll('input, textarea')) {
-            if (textMatchesFindFirstName(inp.value, keyBase)) return true;
+            if (textMatchesExactFirstName(inp.value, keyBase)) return true;
           }
         }
-        return rowContainsFindFirstKey(tr, keyBase);
+        return false;
       };
       const out = { table_rows_seen: 0, mobile_rows_seen: 0, first_resolved_rows_seen: 0, sample_rows: [] };
       const rows = Array.from(document.querySelectorAll('table tr'));
@@ -3667,17 +3607,6 @@ def _siebel_ui_suggests_contact_match_mobile_first(page: Page, mobile: str, firs
       return out;
     }"""
     # #endregion
-    mobile_only_js = """(needle) => {
-      if (!needle || needle.length < 8) return false;
-      const compact = (s) => String(s || '').replace(/\\s+/g, '');
-      for (const tr of document.querySelectorAll('table tr')) {
-        if (tr.closest('thead')) continue;
-        const tds = tr.querySelectorAll('td');
-        if (tds.length < 3) continue;
-        if (compact(tr.textContent || '').includes(needle)) return true;
-      }
-      return false;
-    }"""
     for frame in _ordered_frames(page):
         try:
             try:
@@ -3686,11 +3615,6 @@ def _siebel_ui_suggests_contact_match_mobile_first(page: Page, mobile: str, firs
                 _dbg_mf("M2", "frame_diag_eval_failed", {})
             if frame.evaluate(script, [needle, target]):
                 _dbg_mf("M3", "match_true_frame", {"matched": True})
-                return True
-            # Runtime-proven fallback: some Siebel grids expose only mobile under Title/Show Details
-            # in row text while first-name cells are not present in DOM.
-            if bool(frame.evaluate(mobile_only_js, needle)):
-                _dbg_mf("M4", "match_mobile_only_fallback_true", {"matched": True})
                 return True
         except Exception:
             continue
@@ -3705,7 +3629,7 @@ def _fill_first_name_in_find_roots(
     action_timeout_ms: int,
     content_frame_selector: str | None,
 ) -> bool:
-    """Fill First Name in Contact Find pane (any search root / frame) using Siebel starts-with ``*``."""
+    """Fill First Name in Contact Find pane (any search root / frame) with exact text (no ``*``)."""
     fn = _first_name_for_contact_find_query_field((first_name or "").strip())
     if not fn:
         return False
@@ -4518,55 +4442,27 @@ def _contact_mobile_drilldown_plans(
       else if (raw.length >= 8 && rowCompact.includes(raw)) mobileOk = true;
       if (!mobileOk) return false;
       if (!target) return true;
-      const norm = (s) => String(s || '').replace(/\\u00a0/g, ' ').trim();
-      const firstNameKeyFromFind = (raw) => {
-        let s = String(raw || '').replace(/\\u00a0/g, ' ').trim().toLowerCase();
-        while (s.endsWith('.')) s = s.slice(0, -1).trim();
-        return s;
+      const normExact = (s) => {
+        let t = String(s || '').replace(/\\u00a0/g, ' ').trim().toLowerCase().replace(/\\s+/g, ' ');
+        while (t.endsWith('.')) t = t.slice(0, -1).trim();
+        return t;
       };
-      const textMatchesFindFirstName = (text, keyBase) => {
+      const textMatchesExactFirstName = (text, keyBase) => {
         if (!keyBase || text == null) return false;
-        const c = String(text).replace(/\\u00a0/g, ' ').trim().toLowerCase();
-        if (!c) return false;
-        if (c === keyBase) return true;
-        if (c.startsWith(keyBase + ' ')) return true;
-        const keyHead = keyBase.split(/\\s+/).filter(Boolean)[0] || '';
-        if (keyHead && c === keyHead) return true;
-        const first = c.split(/\\s+/).filter(Boolean)[0] || '';
-        let fs = first;
-        while (fs.endsWith('.')) fs = fs.slice(0, -1).trim();
-        if (fs === keyBase) return true;
-        if (keyHead && fs === keyHead) return true;
-        return false;
+        const c = normExact(text);
+        return c.length > 0 && c === keyBase;
       };
-      const rowContainsFindFirstKey = (trel, keyBase) => {
-        if (!keyBase) return false;
-        const keyHead = keyBase.split(/\\s+/).filter(Boolean)[0] || '';
-        const rraw = norm(trel.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase();
-        if (!rraw || (!rraw.includes(keyBase) && !(keyHead && rraw.includes(keyHead)))) return false;
-        if (rraw.startsWith(keyBase + ' ')) return true;
-        if (keyHead && rraw.startsWith(keyHead + ' ')) return true;
-        const parts = rraw.split(/[\\s,;|\\/\\u2013\\u2014-]+/).filter(Boolean);
-        for (const p of parts) {
-          let q = p;
-          while (q.endsWith('.')) q = q.slice(0, -1).trim();
-          if (q === keyBase || (keyHead && q === keyHead)) return true;
-          if (p.startsWith(keyBase + ' ')) return true;
-          if (keyHead && p.startsWith(keyHead + ' ')) return true;
-        }
-        return false;
-      };
-      const keyBase = firstNameKeyFromFind(target);
+      const keyBase = normExact(target);
       if (!keyBase) return true;
       for (const td of tds) {
-        if (textMatchesFindFirstName(td.textContent, keyBase)) return true;
-        if (textMatchesFindFirstName(td.getAttribute('title') || '', keyBase)) return true;
-        if (textMatchesFindFirstName(td.getAttribute('aria-label') || '', keyBase)) return true;
+        if (textMatchesExactFirstName(td.textContent, keyBase)) return true;
+        if (textMatchesExactFirstName(td.getAttribute('title') || '', keyBase)) return true;
+        if (textMatchesExactFirstName(td.getAttribute('aria-label') || '', keyBase)) return true;
         for (const inp of td.querySelectorAll('input, textarea')) {
-          if (textMatchesFindFirstName(inp.value, keyBase)) return true;
+          if (textMatchesExactFirstName(inp.value, keyBase)) return true;
         }
       }
-      return rowContainsFindFirstKey(tr, keyBase);
+      return false;
     }"""
     args = {"needle": drill_needle, "raw": drill_raw, "target": fn_ex}
 
@@ -6860,6 +6756,7 @@ def _create_order(
     full_chassis: str,
     financier_name: str,
     contact_id: str = "",
+    battery_partial: str = "",
     action_timeout_ms: int,
     content_frame_selector: str | None,
     note,
@@ -6868,8 +6765,13 @@ def _create_order(
     """
     Vehicle Sales -> Sales Orders New flow:
     - Open Vehicle Sales (first-level view bar)
-    - Click Sales Orders New:List (+)
+    - **Prefer existing order:** Find (``aria-label=Find``) → field type **Mobile Phone#** → mobile → query;
+      if the list shows a matching order row, **skip** **+** and call ``_attach_vehicle_to_bkg`` only (Order Number
+      click stays inside that helper).
+    - Else: Click Sales Orders New:List (+)
     - Set Booking Order Type
+    - When ``battery_partial`` is set (detail sheet **Battery No** via ``form_dms_view``), fill **Comments**
+      with ``Battery is <number>``
     - Pick contact by mobile from pick applet
     - Save, scrape Order#, then ``_attach_vehicle_to_bkg`` (header ``a[name='Order Number'][tabindex='-1']``)
     - (Invoice-selected / legacy path only) On order line items: Line Items List:New -> VIN (name=VIN) -> full chassis + Enter;
@@ -7314,9 +7216,252 @@ def _create_order(
             return True
         return False
 
+    def _try_vehicle_sales_find_existing_order() -> bool:
+        """
+        Vehicle Sales list: click Find → choose Mobile Phone# in the find field-type dropdown →
+        Tab to value → enter mobile → run query. Returns True if at least one result row looks like
+        an order line (mobile digits present; optional Order# link). Skips **+** when True; Order#
+        drill-down is left to ``_attach_vehicle_to_bkg``.
+        """
+        _mob_digits = re.sub(r"\D", "", (mobile or "").strip())
+        if len(_mob_digits) < 8:
+            return False
+        _needle = _mob_digits[-10:] if len(_mob_digits) >= 10 else _mob_digits
+        _ui_roots = list(_roots()) + list(_ordered_frames(page)) + [page]
+
+        _find_clicked = False
+        for _root in _ui_roots:
+            for _find_sel in (
+                "[aria-label='Find']",
+                "[aria-label=\"Find\"]",
+                "button[aria-label='Find']",
+                "a[aria-label='Find']",
+                "button[aria-label*='Find' i]",
+                "a[aria-label*='Find' i]",
+            ):
+                try:
+                    _fl = _root.locator(_find_sel).first
+                    if _fl.count() > 0 and _fl.is_visible(timeout=500):
+                        try:
+                            _fl.click(timeout=min(action_timeout_ms, 2500))
+                        except Exception:
+                            _fl.click(timeout=min(action_timeout_ms, 2500), force=True)
+                        _find_clicked = True
+                        note("Create Order: VS Find — clicked Find control.")
+                        break
+                except Exception:
+                    continue
+            if _find_clicked:
+                break
+            try:
+                _by_role = _root.get_by_role("button", name=re.compile(r"^\s*find\s*$", re.I)).first
+                if _by_role.count() > 0 and _by_role.is_visible(timeout=400):
+                    _by_role.click(timeout=min(action_timeout_ms, 2500))
+                    _find_clicked = True
+                    note("Create Order: VS Find — clicked Find via role=button.")
+                    break
+            except Exception:
+                continue
+        if not _find_clicked:
+            note("Create Order: VS Find — Find control not found; will use '+' new booking.")
+            return False
+        _safe_page_wait(page, 450, log_label="after_vs_find_button")
+
+        # Dropdown: prefer option matching Mobile Phone# / Mobile Phone (Alt+Down + ArrowDown).
+        try:
+            page.keyboard.press("Alt+ArrowDown")
+        except Exception:
+            pass
+        _safe_page_wait(page, 280, log_label="vs_find_dropdown_open")
+        _matched_phone_field = False
+        for _nav_i in range(22):
+            try:
+                _cur = (
+                    page.evaluate(
+                        "() => { const e = document.activeElement; return (e && (e.value != null ? e.value : (e.textContent||''))) || ''; }"
+                    )
+                    or ""
+                )
+            except Exception:
+                _cur = ""
+            _low = _cur.lower()
+            if "mobile" in _low and "phone" in _low:
+                _matched_phone_field = True
+                try:
+                    page.keyboard.press("Enter")
+                except Exception:
+                    pass
+                break
+            try:
+                page.keyboard.press("ArrowDown")
+            except Exception:
+                break
+            _safe_page_wait(page, 100, log_label="vs_find_type_nav")
+        if not _matched_phone_field:
+            note(
+                "Create Order: VS Find — could not confirm Mobile Phone# in dropdown "
+                "(best-effort; continuing to Tab)."
+            )
+        _safe_page_wait(page, 220, log_label="after_vs_find_type_select")
+
+        try:
+            page.keyboard.press("Tab")
+        except Exception:
+            pass
+        _safe_page_wait(page, 350, log_label="vs_find_tab_to_value")
+
+        _val_ok = False
+        _mob_fill = (mobile or "").strip()
+        try:
+            _h = page.evaluate_handle("() => document.activeElement")
+            _ae = _h.as_element()
+            if _ae:
+                _ae.fill("", timeout=1200)
+                _ae.fill(_mob_fill, timeout=min(action_timeout_ms, 3500))
+                _val_ok = bool((_ae.input_value(timeout=800) or "").strip())
+        except Exception:
+            pass
+        if not _val_ok:
+            for _root in _ui_roots:
+                for _pat in (
+                    re.compile(r"starting\s*with", re.I),
+                    re.compile(r"mobile\s*phone", re.I),
+                ):
+                    try:
+                        _vl = _root.get_by_label(_pat).first
+                        if _vl.count() > 0 and _vl.is_visible(timeout=500):
+                            _vl.fill("", timeout=1000)
+                            _vl.fill(_mob_fill, timeout=min(action_timeout_ms, 3500))
+                            _val_ok = True
+                            note("Create Order: VS Find — filled mobile via get_by_label.")
+                            break
+                    except Exception:
+                        continue
+                if _val_ok:
+                    break
+        if not _val_ok:
+            note("Create Order: VS Find — could not fill mobile query field; will use '+' path.")
+            return False
+
+        _safe_page_wait(page, 250, log_label="before_vs_find_execute")
+        _go = False
+        for _root in _ui_roots:
+            for _gs in (
+                "button[aria-label*='Go' i]",
+                "input[type='submit'][value*='Go' i]",
+                "a[aria-label*='Go' i]",
+                "button:has-text('Go')",
+            ):
+                try:
+                    _gl = _root.locator(_gs).first
+                    if _gl.count() > 0 and _gl.is_visible(timeout=400):
+                        _gl.click(timeout=1500)
+                        _go = True
+                        note(f"Create Order: VS Find — clicked Go ({_gs!r}).")
+                        break
+                except Exception:
+                    continue
+            if _go:
+                break
+        if not _go:
+            try:
+                page.keyboard.press("Enter")
+                note("Create Order: VS Find — pressed Enter to run query.")
+            except Exception:
+                pass
+        _safe_page_wait(page, 1600, log_label="after_vs_find_query")
+
+        _detect_js = """(needle) => {
+          const n = String(needle || '').replace(/\\D/g, '');
+          if (!n || n.length < 8) return false;
+          const vis = (el) => {
+            if (!el) return false;
+            const st = window.getComputedStyle(el);
+            if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity || '1') === 0) return false;
+            const r = el.getBoundingClientRect();
+            return r.width > 2 && r.height > 2;
+          };
+          const rowSels = [
+            'table.ui-jqgrid-btable tbody tr',
+            'div.ui-jqgrid-bdiv table tbody tr',
+            'table.siebui-list tbody tr',
+            'table tbody tr'
+          ];
+          for (const rs of rowSels) {
+            const rows = document.querySelectorAll(rs);
+            for (const tr of rows) {
+              if (tr.closest('thead')) continue;
+              if (!vis(tr)) continue;
+              const tds = tr.querySelectorAll('td');
+              if (tds.length < 2) continue;
+              const blob = (tr.innerText || '').replace(/\\D/g, '');
+              if (!blob.includes(n)) continue;
+              const ord = tr.querySelector("a[name='Order Number'], a[name='Order #']");
+              if (ord && vis(ord)) return true;
+              return true;
+            }
+          }
+          return false;
+        }"""
+        for _fr in list(_ordered_frames(page)) + [page]:
+            try:
+                if _fr.evaluate(_detect_js, _needle):
+                    note("Create Order: VS Find — result row(s) detected for mobile; skipping '+'.")
+                    if callable(form_trace):
+                        form_trace(
+                            "v4_create_order",
+                            "Vehicle Sales — My Orders",
+                            "vs_find_mobile_hit_skip_new_booking",
+                            mobile_phone=_mob_fill[:16],
+                        )
+                    return True
+            except Exception:
+                continue
+        note("Create Order: VS Find — no matching list row after query; will use '+' path.")
+        return False
+
+    _vs_find_hit = False
+    if not _invoice_selected_ready:
+        _vs_find_hit = _try_vehicle_sales_find_existing_order()
+
     _existing_order_opened = bool(_invoice_selected_ready)
     if _existing_order_opened:
         note("Create Order: staying on Invoice Selected page; skipping '+' new booking creation.")
+    elif _vs_find_hit:
+        note(
+            "Create Order: Vehicle Sales Find returned order row(s) for mobile; "
+            "skipping '+' — running attach_vehicle_to_bkg (Order Number click inside helper)."
+        )
+        _att_ok, _att_err, _att_scraped = _attach_vehicle_to_bkg(
+            page,
+            full_chassis=full_chassis,
+            order_number="",
+            action_timeout_ms=action_timeout_ms,
+            content_frame_selector=content_frame_selector,
+            note=note,
+        )
+        scraped["order_drilldown_opened"] = bool(_att_ok)
+        if _att_scraped:
+            scraped.update(_att_scraped)
+        if not _att_ok:
+            return False, (_att_err or "attach_vehicle_to_bkg failed.").strip(), scraped
+        _safe_page_wait(page, 900, log_label="after_vs_find_attach")
+        order_ref = _scrape_order_number_current()
+        if order_ref:
+            scraped["order_number"] = order_ref
+        inv_no = _scrape_invoice_number_current()
+        scraped["invoice_number"] = inv_no or ""
+        if inv_no:
+            note(f"Create Order: scraped Invoice#={inv_no!r} after VS Find attach path.")
+        if callable(form_trace):
+            form_trace(
+                "v4_create_order",
+                "Vehicle Sales — VS Find existing order",
+                "attach_vehicle_to_bkg_after_vs_find",
+                order_number=str(scraped.get("order_number") or ""),
+                invoice_number=str(scraped.get("invoice_number") or ""),
+            )
+        return True, None, scraped
     else:
         # 2) Click + (Sales Orders New:List)
         if not _click_any(
@@ -7395,6 +7540,40 @@ def _create_order(
             return False, "Could not set Booking Order Type = Normal Booking.", scraped
         _safe_page_wait(page, 600, log_label="after_booking_order_type")
         note("Create Order: set Booking Order Type = Normal Booking.")
+
+        _bp = (battery_partial or "").strip()
+        if _bp:
+            _comments_text = f"Battery is {_bp}"
+            _filled_comments = False
+            for root in _roots():
+                try:
+                    if _fill_by_label_on_frame(
+                        root, "Comments", _comments_text, action_timeout_ms=action_timeout_ms
+                    ):
+                        _filled_comments = True
+                        break
+                    if _fill_by_label_on_frame(
+                        root, "Comment", _comments_text, action_timeout_ms=action_timeout_ms
+                    ):
+                        _filled_comments = True
+                        break
+                except Exception:
+                    continue
+            if _filled_comments:
+                note(f"Create Order: filled Comments → {_comments_text!r}.")
+                if callable(form_trace):
+                    form_trace(
+                        "v4_create_order_comments",
+                        "Sales order / create booking",
+                        "fill_Comments_battery_from_detail_sheet",
+                        comments=_comments_text,
+                    )
+                _safe_page_wait(page, 350, log_label="after_booking_comments")
+            else:
+                note(
+                    "Create Order: could not fill Comments with battery line (best-effort); "
+                    f"intended text was {_comments_text!r}."
+                )
 
         _locked_root = None
 
@@ -11040,6 +11219,7 @@ def Playwright_Hero_DMS_fill(
                 full_chassis=full_chassis,
                 financier_name=(dms_values.get("financier_name") or "").strip(),
                 contact_id=out.get("contact_id", ""),
+                battery_partial=(dms_values.get("battery_partial") or "").strip(),
                 action_timeout_ms=action_timeout_ms,
                 content_frame_selector=content_frame_selector,
                 note=note,

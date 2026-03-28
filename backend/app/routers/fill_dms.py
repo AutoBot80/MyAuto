@@ -20,9 +20,14 @@ from app.config import (
 from app.services.fill_hero_dms_service import (
     run_fill_dms,
     run_fill_dms_only,
-    run_fill_insurance_only,
     run_fill_vahan_only,
     update_vehicle_master_from_dms as _update_vehicle_master_from_dms,
+)
+from app.services.fill_hero_insurance_service import (
+    main_process,
+    post_process,
+    pre_process,
+    run_fill_insurance_only,
 )
 
 logger = logging.getLogger(__name__)
@@ -198,6 +203,28 @@ class FillInsuranceRequest(BaseModel):
 class FillInsuranceResponse(BaseModel):
     success: bool
     error: str | None = None
+
+
+class FillHeroInsuranceRequest(BaseModel):
+    """
+    ``insurance_base_url`` overrides ``INSURANCE_BASE_URL`` from ``.env``.
+    With ``customer_id`` and ``vehicle_id``, **pre_process** loads insurer / mobile / KYC steps; **main_process**
+    fills VIN (chassis from DB), **I agree**, and the proposal form (master-backed fields + hardcoded proposal defaults).
+    """
+
+    insurance_base_url: str | None = None
+    customer_id: int | None = None
+    vehicle_id: int | None = None
+    subfolder: str | None = None
+    dealer_id: int | None = None
+
+
+class FillHeroInsuranceResponse(BaseModel):
+    success: bool
+    error: str | None = None
+    page_url: str | None = None
+    login_url: str | None = None
+    match_base: str | None = None
 
 
 class PrintForm20Request(BaseModel):
@@ -447,6 +474,47 @@ async def fill_vahan_only(req: FillVahanRequest) -> FillVahanResponse:
         application_id=result.get("application_id"),
         rto_fees=result.get("rto_fees"),
         error=_normalize_automation_error(result.get("error")),
+    )
+
+
+@router.post("/insurance/hero", response_model=FillHeroInsuranceResponse)
+async def fill_hero_insurance(req: FillHeroInsuranceRequest = FillHeroInsuranceRequest()) -> FillHeroInsuranceResponse:
+    """
+    Hero Insurance: ``pre_process`` (Sign In → 2W → New Policy → insurer / OVD / mobile / KYC **Proceed**
+    or uploads) then ``main_process`` (VIN/chassis from ``form_insurance_view``, proposal defaults hardcoded).
+    Requires ``customer_id`` and ``vehicle_id`` for the main stage.
+    """
+    url = (req.insurance_base_url or INSURANCE_BASE_URL or "").strip()
+    if url:
+        url = _require_absolute_http_url(url, "insurance_base_url")
+    did = req.dealer_id if req.dealer_id is not None else DEALER_ID
+    ocr_dir = Path(get_ocr_output_dir(did))
+    loop = asyncio.get_event_loop()
+
+    def _hero_insurance_run() -> dict:
+        pre = pre_process(
+            insurance_base_url=url if url else None,
+            customer_id=req.customer_id,
+            vehicle_id=req.vehicle_id,
+            subfolder=req.subfolder,
+            ocr_output_dir=ocr_dir,
+        )
+        main = main_process(
+            pre_result=pre,
+            customer_id=req.customer_id,
+            vehicle_id=req.vehicle_id,
+            subfolder=req.subfolder,
+            ocr_output_dir=ocr_dir,
+        )
+        return post_process(pre_result=pre, main_result=main)
+
+    result = await loop.run_in_executor(None, _hero_insurance_run)
+    return FillHeroInsuranceResponse(
+        success=bool(result.get("success")),
+        error=result.get("error"),
+        page_url=result.get("page_url"),
+        login_url=result.get("login_url"),
+        match_base=result.get("match_base"),
     )
 
 

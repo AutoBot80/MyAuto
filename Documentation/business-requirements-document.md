@@ -54,7 +54,7 @@ The system is a server–client application for auto dealers. Dealers run a ligh
 | BR-16 | Create Invoice automated | DMS Playwright clicks **Apply Campaign** then **Create Invoice** at the end of `_attach_vehicle_to_bkg`; scrapes **Invoice#** on success. |
 | BR-17 | Aadhaar gender default | When **gender** is not extracted from **AWS Textract** (Aadhaar front/back text) and parsers for a subfolder that includes `Aadhar.jpg` and/or `Aadhar_back.jpg`, the persisted `customer.gender` in `OCR_To_be_Used.json` defaults to **Male** (operators may correct before submit). |
 | BR-18 | Address-derived locality | When **state**, **PIN**, or **care_of** is missing but **address** contains **`C/O:`** (Care of), **`DIST: <District>, <State> - <PIN>`** (including OCR variants like **`<State> - - <PIN>`** or **`<State> -- <PIN>`**), a trailing **`<Indian state> - <PIN>`** when **`DIST:`** is unreadable, and/or a 6-digit PIN, the system infers **`care_of`**, **`city`/district**, **`state`**, **`pin`**; drops text **after the PIN**; strips **C/O** from the stored address line. Applied on Submit Info, OCR JSON, Aadhaar back parsing, and DMS fill when `form_dms_view` fields are sparse. |
-| BR-19 | Siebel Contact Find and Add Enquiry persistence | On **real** Hero Connect / Siebel (`DMS_MODE=real`), Contact **Find** uses **Mobile** + **Contact First Name**; first name must be present and must not be a placeholder (**§6.1b**). Result rows must match **mobile** and **first name** in the grid per **§6.1b** (trimmed, case-insensitive; Siebel row DOM may use **textContent** / control values / cell attributes — **§6.1b**). **Open enquiry** and duplicate-row handling, **suffixed first name** when creating a new opportunity for an existing mobile, and the **Enquiry# post-save gate** (timed polls) are specified in **§6.1b**. |
+| BR-19 | Siebel Contact Find and Add Enquiry persistence | On **real** Hero Connect / Siebel (`DMS_MODE=real`), Contact **Find** uses **Mobile** + **Contact First Name**; first name must be present and must not be a placeholder (**§6.1b**). The **First Name** field is typed **exactly** (no wildcard); result rows must match **mobile** and **exact first name** in the grid per **§6.1b** (trimmed, case-insensitive equality on a cell/control value — **§6.1b**). **Open enquiry** and duplicate-row handling, **suffixed first name** when creating a new opportunity for an existing mobile, and the **Enquiry# post-save gate** (timed polls) are specified in **§6.1b**. |
 
 ---
 
@@ -140,9 +140,9 @@ This is the **intended** real-DMS order (aligned with the operator screen record
 1. **Contact Find inputs (required):**
    - Fill **Mobile** using field `title="Mobile Phone"` and **First Name** using `id="field_textbox_1"` **within the same frame**.
    - First Name is mandatory. Empty/whitespace or placeholders (for example: `NA`, `N/A`, `null`, `none`, `-`, `.`, `..`) fail the run.
-   - The value typed into **First Name** for the query is **`<first name>*`** (Siebel starts-with), except when the configured value already ends with `*`; trailing dot suffixes used for duplicate-contact keys are stripped before appending `*`.
+   - The value typed into **First Name** for the query is the **exact** string from automation (no **`*`** wildcard); trailing dot suffixes used for duplicate-contact keys are stripped before typing and before comparing to grid cells.
 2. **Search key and row eligibility:**
-   - Contact Find and row matching use **mobile + first name** aligned with the search key: **trimmed, case-insensitive** matching on the result row. **Compound CRM first names** (e.g. grid shows **“Lavesh Faujdar”**) match a Find key of **“Lavesh”**, **“Lavesh.”** (trailing dots stripped for compare), or the **full multi-word** key; the **first whitespace-delimited token** of the stored name aligns with the single-token Find key. Siebel may hide label cells from visible text while **textContent**, **input/textarea** values, or **title/aria-label** on cells still carry the name.
+   - Contact Find and row matching use **mobile + exact first name** aligned with the search key: **trimmed, case-insensitive** equality between the configured **Contact First Name** and **at least one** relevant cell / control value on the row (e.g. **textContent**, **input/textarea** values, **title/aria-label**). A row **does not** match if only the mobile appears in the row but no cell equals the normalized first name (no first-token or prefix fuzzy match; no mobile-only acceptance when a first name was required for Find).
    - If **0 rows** match mobile+first name, run Add Enquiry with the **base first name** (no dot suffix).
 3. **Open enquiry decision for duplicates:**
    - If one or more rows match (including **two+ rows with the same mobile in the same list frame**), automation **drills each row in order** using **in-place** row clicks (split UI: **Search Results** stay open — **no** Contact Find re-run between rows), then on **each** opened contact switches to tab **Contact_Enquiry** and inspects the enquiry subgrid. If an in-place drill for a later duplicate row fails, the sweep **stops** for that path (no second drill and no re-Find for that row).
@@ -195,6 +195,7 @@ This is the **intended** real-DMS order (aligned with the operator screen record
 - Insurance data captured in Submit Info must map to persisted DB columns before any downstream automation:
   - `insurance_master`: insurer, policy number, policy dates, premium, nominee fields.
   - `customer_master`: `profession`, `financier`, `marital_status`, `nominee_gender`, `care_of` (Aadhaar QR care-of / father–husband), `dms_relation_prefix`, `dms_contact_path` captured with details-sheet / DMS automation context in Add Sales (`father_or_husband_name` is legacy only).
+- Hero Insurance loads **chassis, customer, nominee, insurer**, etc. from **`form_insurance_view`** (existing columns on `customer_master`, `vehicle_master`, latest `insurance_master` per sale). **Email, add-ons, CPA tenure, payment mode, and registration date** on the proposal page may use **hardcoded** defaults in Playwright until optional columns exist. Insurer may fall back to the details sheet OCR JSON when `insurance_master.insurer` is empty.
 
 ### 6.5 Insurance Navigation Sequence (Video-Aligned)
 
@@ -237,6 +238,7 @@ This is the **intended** real-DMS order (aligned with the operator screen record
 | New Policy | Nominee Name/Age/Relation | Insurance nominee details | `insurance_master.nominee_name`, `insurance_master.nominee_age`, `insurance_master.nominee_relationship` |
 | New Policy | Nominee Gender | Customer-linked nominee capture | `customer_master.nominee_gender` |
 | New Policy | Financer Name | Finance context from details sheet | `customer_master.financier` |
+| New Policy | Email / add-ons / CPA / payment / reg. date (proposal) | Hardcoded Playwright defaults | Not persisted (optional future columns) |
 
 ### 6.7 Download/Save Outputs
 
@@ -330,6 +332,7 @@ Bulk upload automates the ingestion of scanned documents from a shared folder in
 | 1.7 | Mar 2026 | — | Added Alternate/Landline field contract: capture from details sheet, persist as `customer_master.alt_phone_num`, and use for DMS/Insurance landline fills |
 | 1.8 | Mar 2026 | — | Extended DMS Playwright sequence (enquiry/stock/PDI/allocate/invoicing line), ex-showroom → `vehicle_price`, operator-only Create Invoice, BR-14–BR-16, and `form_dms_view` / customer DMS fields |
 | 1.9 | Mar 2026 | — | BR-18: Aadhaar back / freeform parsing for double-dash state–PIN OCR, trailing state+PIN without `DIST:`, and `Address:` blocks that continue on the `C/O:` line |
+| 1.10 | Mar 2026 | — | **`form_insurance_view`**: master-backed fields only; proposal defaults (email, add-ons, payment, etc.) hardcoded in Playwright |
 | 2.0 | Mar 2026 | — | FR-23: Aadhaar OCR fallbacks — **DOB-anchored gender** (skip token, `/`, gender) and **comma + dash-run** state/PIN before last PIN |
 | 2.1 | Mar 2026 | — | FR-18: **DMS_MODE** / **DMS_REAL_URL_*** for Hero Connect Siebel vs dummy HTML; settings API exposes mode |
 | 2.2 | Mar 2026 | — | **§6.1a** Hero Connect / Siebel target DMS automation checklist (ordered); **§6.8** reconciliation pointer to LLD §2.4d; **FR-18** cross-reference |
@@ -351,3 +354,7 @@ Bulk upload automates the ingestion of scanned documents from a shared folder in
 | 3.8 | Mar 2026 | — | **§6.1b**: **open enquiry** detection on **Contact_Enquiry** reads Enquiry# from **`name="Enquiry_"`** fields (and related table scrape), plus frame aggregation for duplicate-mobile sweep |
 | 3.9 | Mar 2026 | — | **§6.1b**: duplicate-mobile sweep — **same-frame** multi-row list: drill **each** row, **Contact_Enquiry** per open; subgrid eval order **main document first** then iframes (**LLD** **6.10**) |
 | 3.10 | Mar 2026 | — | **§6.1b**: duplicate-mobile sweep — **in-place** drills only (**no** Contact Find between rows); on failure, sweep stops; ordinal ≥1 uses **mobile-only** row match (**LLD** **6.12**) |
+| 3.11 | Mar 2026 | — | Insurance automation decoupled from DMS: shared browser/tab logic in **`handle_browser_opening`**; insurance DB/OCR helpers in **`insurance_form_values`** / **`insurance_kyc_payloads`**; **`run_fill_insurance_only`** lives in **`fill_hero_insurance_service`**; **`Playwright_insurance.txt`** trace under `ocr_output/<dealer>/<subfolder>/` |
+| 3.12 | Mar 2026 | — | **§6.1b**: Contact Find **First Name** is **exact** (no **`*`** wildcard); grid match requires **mobile + exact first name** (case-insensitive equality on a cell); superseded fuzzy / starts-with / first-token row rules for Find + primary grid hit (**LLD** **6.18**) |
+| 3.13 | Mar 2026 | — | **Create booking** (Vehicle Sales new order): **Comments** field set to **`Battery is <Battery No>`** when detail sheet / **`form_dms_view`** battery is present (**LLD** **6.19**) |
+| 3.14 | Mar 2026 | — | Vehicle Sales **Create Order**: before **+**, **Find** → **Mobile Phone#** → mobile query; if a matching order **row** exists, skip new booking and run **`attach_vehicle_to_bkg`** only (**LLD** **6.20**) |
