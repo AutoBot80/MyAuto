@@ -1,6 +1,6 @@
 Playwright DMS — execution log (this run only; UTC timestamps)
 
-started_utc=2026-03-28T08:09:24.838782+00:00
+started_utc=2026-03-28T12:53:32.857344+00:00
 skip_contact_find=False
 dms_contact_path='found'
 mobile_phone='8690900760'
@@ -27,58 +27,54 @@ url_vehicle_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/e
 --- trace ---
 Legend: [STEP]/[NOTE]/[MILESTONE] = operator narrative; [FORM] = siebel_step + Siebel form/screen + action + fields/values being applied on that form.
 
-2026-03-28T08:09:24.838996+00:00 [STEP] Started Hero Connect / Siebel DMS automation (linear SOP).
-2026-03-28T08:09:24.839056+00:00 [STEP] Video SOP (Find Contact Enquiry): Find → Contact → mobile + first name → Go; drill / Add Enquiry per match; then All Enquiries path.
-2026-03-28T08:09:24.839116+00:00 [FORM] siebel_step=v1_find_contact | form=Global Find → Contact (Mobile + First Name) + Go | action=goto_contact_find_URL_then_prepare_Find_Contact_fill_mobile_first_FindGo | contact_url_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+Contact+Opportunity+Buyer/CoBuyer+View+(SDW)&SWERF=1&SWEHo=&SWEBU=1' | first_name='Lavesh' | mobile_phone='8690900760'
-2026-03-28T08:09:31.223962+00:00 [STEP] Video SOP: Find customer by mobile + first name (Contact view).
-2026-03-28T08:09:33.673104+00:00 [NOTE] Find → Contact: object type selected so the mobile field is the Contact search field.
-2026-03-28T08:09:34.444540+00:00 [NOTE] Filled Mobile (title='Mobile Phone') and First Name (id='field_textbox_1' when present) as exact first name (no wildcard) in the same Contact Find frame and clicked Find.
-2026-03-28T08:09:36.524214+00:00 [NOTE] DECISION: contact_table_match_mobile_first_after_find=True
-2026-03-28T08:09:42.946300+00:00 [NOTE] Contact Find grid: 1 row(s) contain mobile 8690900760 with a drilldown link (sweep uses ordinal 0..0).
-2026-03-28T08:09:48.622656+00:00 [NOTE] Drilldown 1/1 for mobile 8690900760 (match index 0) — opening contact, then Contact_Enquiry for #jqgh_s_1_l_Enquiry_ / name=Enquiry_.
-2026-03-28T08:09:51.744136+00:00 [NOTE] Contact_Enquiry check (Title index 0): checked=True, rows=1, enquiry#='11870-01-SENQ-0326-4619'.
-2026-03-28T08:09:51.744191+00:00 [NOTE] Enquiry exists: Enquiry#='11870-01-SENQ-0326-4619'. Proceeding (Title index 0).
-2026-03-28T08:09:51.744260+00:00 [FORM] siebel_step=v2_drill_and_nav | form=Search Results + Contacts detail | action=Siebel_Find_tab_optional_then_link_hit_then_click_first_name_then_fill_Relations_Name_only | care_of='S/O Navab Singh' | first_name='Lavesh' | mobile_phone='8690900760'
-2026-03-28T08:09:51.744293+00:00 [NOTE] Skipped search-hit drilldown click (already opened by caller).
-2026-03-28T08:09:51.935588+00:00 [NOTE] Activated 'Find Contact' tab/link — switching context for Contacts / First Name.
-2026-03-28T08:09:56.945636+00:00 [NOTE] Address Line 1 filled from DB substring: 'Awar'
-2026-03-28T08:09:56.945777+00:00 [NOTE] Relation's Name filled; stopping on current field as requested.
-2026-03-28T08:09:56.965560+00:00 [NOTE] Scraped Contact ID='11870-01-SCON-0326-6452' from contact detail page.
-2026-03-28T08:09:56.965967+00:00 [FORM] siebel_step=v3_add_customer_payment | form=Payments tab (current frame) | action=click_Payments_tab_then_click_plus_icon
-2026-03-28T08:09:57.242213+00:00 [NOTE] Payment debug: ordered frames count=1.
-2026-03-28T08:09:57.288336+00:00 [NOTE] Payment debug: root candidates prepared (action_roots=2, total_candidates=2).
-2026-03-28T08:09:57.430971+00:00 [NOTE] Clicked '+' icon on Payments tab.
-2026-03-28T08:09:57.951077+00:00 [NOTE] Payment sequence: '+' -> Transaction Amount -> Transaction Type -> Payment Lines Save icon.
-2026-03-28T08:09:57.975686+00:00 [NOTE] Payment lines scoped frame locked: url='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=HHML+LS+CIM+Contact+Site+Payments+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Contact+Form+Applet&SW', name=''
-2026-03-28T08:09:58.003417+00:00 [NOTE] Transaction field frame locked: url='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=HHML+LS+CIM+Contact+Site+Payments+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Contact+Form+Applet&SW', name=''
-2026-03-28T08:09:58.003608+00:00 [NOTE] Payment debug: transaction roots count=1.
-2026-03-28T08:09:58.020074+00:00 [NOTE] Transaction amount frame locked: url='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=HHML+LS+CIM+Contact+Site+Payments+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Contact+Form+Applet&SW', name=''
-2026-03-28T08:09:58.020188+00:00 [NOTE] Payment debug: amount roots count=1.
-2026-03-28T08:10:00.262748+00:00 [NOTE] Payment direct: Transaction_Type filled → 'Receipt'.
-2026-03-28T08:10:01.676740+00:00 [NOTE] Payment direct: Payment_Mode filled → 'Cash'.
-2026-03-28T08:10:01.986856+00:00 [NOTE] Payment direct: Transaction_Amount — using Tab navigation (preserving edit context).
-2026-03-28T08:10:03.749823+00:00 [NOTE] Payment direct: Transaction_Amount filled via Tab navigation (tab 4, name='Transaction_Amount').
-2026-03-28T08:10:04.064509+00:00 [NOTE] Filled payment fields (direct): Type=Receipt(ok=True), Mode=Cash(ok=True), Amount=0(ok=True).
-2026-03-28T08:10:04.532279+00:00 [NOTE] Payment debug: save action roots count=2.
-2026-03-28T08:10:04.624640+00:00 [NOTE] Payment debug: Save clicked via selector: button[aria-label='Payment Lines List:Save']
-2026-03-28T08:10:07.691653+00:00 [NOTE] Clicked Save icon after payment entry — no error popup detected.
-2026-03-28T08:10:07.691745+00:00 [FORM] siebel_step=v4_create_order | form=Vehicle Sales / Sales Orders | action=vehicle_sales_new_order_then_pick_contact_then_vin_search_price_allocate | first_name='Lavesh' | full_chassis='06034' | mobile_phone='8690900760'
-2026-03-28T08:10:07.693002+00:00 [FORM] siebel_step=v4_create_order | form=Vehicle Sales / Sales Orders | action=open_vehicle_sales_then_create_order | full_chassis='06034' | mobile_phone='8690900760'
-2026-03-28T08:10:07.693151+00:00 [NOTE] Create Order: navigating to Vehicle Sales URL. base=https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/
-2026-03-28T08:10:13.107650+00:00 [NOTE] Create Order: arrived at Vehicle Sales (post-goto wait). URL=https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=Order+Entry+-+My+Orders+View+(Sales
-2026-03-28T08:10:14.207824+00:00 [NOTE] Create Order: Invoice Selected context not found; proceeding directly with '+' new booking flow on current page.
-2026-03-28T08:10:14.559055+00:00 [NOTE] Create Order: VS Find — clicked Find control.
-2026-03-28T08:10:18.666316+00:00 [NOTE] Create Order: VS Find — pressed Enter to run query.
-2026-03-28T08:10:20.305821+00:00 [NOTE] Create Order: VS Find — result row(s) detected for mobile; skipping '+'.
-2026-03-28T08:10:20.306054+00:00 [FORM] siebel_step=v4_create_order | form=Vehicle Sales — My Orders | action=vs_find_mobile_hit_skip_new_booking | mobile_phone='8690900760'
-2026-03-28T08:10:20.306166+00:00 [NOTE] Create Order: Vehicle Sales Find returned order row(s) for mobile; skipping '+' — running attach_vehicle_to_bkg (Order Number click inside helper).
-2026-03-28T08:10:20.555521+00:00 [NOTE] attach_vehicle_to_bkg: clicked Order Number header link via "a[name='Order Number'][tabindex='-1']".
-2026-03-28T08:10:22.345190+00:00 [NOTE] attach_vehicle_to_bkg: clicked New button (id='s_1_1_35_0_Ctrl').
-2026-03-28T08:10:27.010925+00:00 [NOTE] attach_vehicle_to_bkg: VIN filled via "input[name='VIN']", chassis='06034'.
-2026-03-28T08:10:30.239862+00:00 [NOTE] attach_vehicle_to_bkg: clicked Price All (name='s_1_1_7_0').
-2026-03-28T08:10:32.486939+00:00 [NOTE] attach_vehicle_to_bkg: clicked Allocate All (id='s_1_1_9_0_Ctrl').
-2026-03-28T08:10:34.547059+00:00 [NOTE] attach_vehicle_to_bkg: Total (id=1_HHML_Total) not readable (best-effort).
-2026-03-28T08:10:34.859229+00:00 [NOTE] attach_vehicle_to_bkg: clicked VIN drilldown (name='VIN').
-2026-03-28T08:10:35.228111+00:00 [STEP] Stopped: create_order flow failed.
+2026-03-28T12:53:32.857794+00:00 [STEP] Started Hero Connect / Siebel DMS automation (linear SOP).
+2026-03-28T12:53:32.858025+00:00 [STEP] Video SOP (Find Contact Enquiry): Find → Contact → mobile + first name → Go; drill / Add Enquiry per match; then All Enquiries path.
+2026-03-28T12:53:32.858129+00:00 [FORM] siebel_step=v1_find_contact | form=Global Find → Contact (Mobile + First Name) + Go | action=goto_contact_find_URL_then_prepare_Find_Contact_fill_mobile_first_FindGo | contact_url_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+Contact+Opportunity+Buyer/CoBuyer+View+(SDW)&SWERF=1&SWEHo=&SWEBU=1' | first_name='Lavesh' | mobile_phone='8690900760'
+2026-03-28T12:53:39.640080+00:00 [STEP] Video SOP: Find customer by mobile + first name (Contact view).
+2026-03-28T12:53:42.069929+00:00 [NOTE] Find → Contact: object type selected so the mobile field is the Contact search field.
+2026-03-28T12:53:42.848766+00:00 [NOTE] Filled Mobile (title='Mobile Phone') and First Name (id='field_textbox_1' when present) as exact first name (no wildcard) in the same Contact Find frame and clicked Find.
+2026-03-28T12:53:44.887447+00:00 [NOTE] DECISION: contact_table_match_mobile_first_after_find=True
+2026-03-28T12:53:50.833021+00:00 [NOTE] Contact Find grid: 1 row(s) contain mobile 8690900760 with a drilldown link (sweep uses ordinal 0..0).
+2026-03-28T12:53:57.405190+00:00 [NOTE] Drilldown 1/1 for mobile 8690900760 (match index 0) — opening contact, then Contact_Enquiry for #jqgh_s_1_l_Enquiry_ / name=Enquiry_.
+2026-03-28T12:54:00.578371+00:00 [NOTE] Contact_Enquiry check (Title index 0): checked=True, rows=1, enquiry#='11870-01-SENQ-0326-4619'.
+2026-03-28T12:54:00.578446+00:00 [NOTE] Enquiry exists: Enquiry#='11870-01-SENQ-0326-4619'. Proceeding (Title index 0).
+2026-03-28T12:54:00.578512+00:00 [FORM] siebel_step=v2_drill_and_nav | form=Search Results + Contacts detail | action=Siebel_Find_tab_optional_then_link_hit_then_click_first_name_then_fill_Relations_Name_only | care_of='S/O Navab Singh' | first_name='Lavesh' | mobile_phone='8690900760'
+2026-03-28T12:54:00.578542+00:00 [NOTE] Skipped search-hit drilldown click (already opened by caller).
+2026-03-28T12:54:00.804800+00:00 [NOTE] Activated 'Find Contact' tab/link — switching context for Contacts / First Name.
+2026-03-28T12:54:05.872562+00:00 [NOTE] Address Line 1 filled from DB substring: 'Awar'
+2026-03-28T12:54:05.872737+00:00 [NOTE] Relation's Name filled; stopping on current field as requested.
+2026-03-28T12:54:05.889366+00:00 [NOTE] Scraped Contact ID='11870-01-SCON-0326-6452' from contact detail page.
+2026-03-28T12:54:05.889564+00:00 [FORM] siebel_step=v3_add_customer_payment | form=Payments tab (current frame) | action=click_Payments_tab_then_click_plus_icon
+2026-03-28T12:54:06.161405+00:00 [NOTE] Payment debug: ordered frames count=1.
+2026-03-28T12:54:06.182633+00:00 [NOTE] Payment debug: root candidates prepared (action_roots=2, total_candidates=2).
+2026-03-28T12:54:06.280732+00:00 [NOTE] Clicked '+' icon on Payments tab.
+2026-03-28T12:54:06.800308+00:00 [NOTE] Payment sequence: '+' -> Transaction Amount -> Transaction Type -> Payment Lines Save icon.
+2026-03-28T12:54:06.826203+00:00 [NOTE] Payment lines scoped frame locked: url='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=HHML+LS+CIM+Contact+Site+Payments+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Contact+Form+Applet&SW', name=''
+2026-03-28T12:54:06.843960+00:00 [NOTE] Transaction field frame locked: url='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=HHML+LS+CIM+Contact+Site+Payments+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Contact+Form+Applet&SW', name=''
+2026-03-28T12:54:06.844072+00:00 [NOTE] Payment debug: transaction roots count=1.
+2026-03-28T12:54:06.854618+00:00 [NOTE] Transaction amount frame locked: url='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=HHML+LS+CIM+Contact+Site+Payments+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Contact+Form+Applet&SW', name=''
+2026-03-28T12:54:06.854687+00:00 [NOTE] Payment debug: amount roots count=1.
+2026-03-28T12:54:09.107374+00:00 [NOTE] Payment direct: Transaction_Type filled → 'Receipt'.
+2026-03-28T12:54:10.574838+00:00 [NOTE] Payment direct: Payment_Mode filled → 'Cash'.
+2026-03-28T12:54:10.884178+00:00 [NOTE] Payment direct: Transaction_Amount — using Tab navigation (preserving edit context).
+2026-03-28T12:54:12.679496+00:00 [NOTE] Payment direct: Transaction_Amount filled via Tab navigation (tab 4, name='Transaction_Amount').
+2026-03-28T12:54:12.988905+00:00 [NOTE] Filled payment fields (direct): Type=Receipt(ok=True), Mode=Cash(ok=True), Amount=0(ok=True).
+2026-03-28T12:54:13.454097+00:00 [NOTE] Payment debug: save action roots count=2.
+2026-03-28T12:54:13.530588+00:00 [NOTE] Payment debug: Save clicked via selector: button[aria-label='Payment Lines List:Save']
+2026-03-28T12:54:16.554665+00:00 [NOTE] Clicked Save icon after payment entry — no error popup detected.
+2026-03-28T12:54:16.554752+00:00 [FORM] siebel_step=v4_create_order | form=Vehicle Sales / Sales Orders | action=vehicle_sales_new_order_then_pick_contact_then_vin_search_price_allocate | first_name='Lavesh' | full_chassis='06034' | mobile_phone='8690900760'
+2026-03-28T12:54:16.555763+00:00 [FORM] siebel_step=v4_create_order | form=Vehicle Sales / Sales Orders | action=open_vehicle_sales_then_create_order | full_chassis='06034' | mobile_phone='8690900760'
+2026-03-28T12:54:16.555992+00:00 [NOTE] Create Order: navigating to Vehicle Sales URL. base=https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/
+2026-03-28T12:54:22.201386+00:00 [NOTE] Create Order: arrived at Vehicle Sales (post-goto wait). URL=https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=Order+Entry+-+My+Orders+View+(Sales
+2026-03-28T12:54:22.951895+00:00 [NOTE] Create Order: Invoice Selected context not found; proceeding directly with '+' new booking flow on current page.
+2026-03-28T12:54:23.285456+00:00 [NOTE] Create Order: VS Find — clicked Find control.
+2026-03-28T12:54:27.425718+00:00 [NOTE] Create Order: VS Find — pressed Enter to run query.
+2026-03-28T12:54:29.047733+00:00 [NOTE] Create Order: VS Find — result row(s) detected for mobile; skipping '+'.
+2026-03-28T12:54:29.047836+00:00 [FORM] siebel_step=v4_create_order | form=Vehicle Sales — My Orders | action=vs_find_mobile_hit_skip_new_booking | mobile_phone='8690900760'
+2026-03-28T12:54:29.047873+00:00 [NOTE] Create Order: Vehicle Sales Find returned order row(s) for mobile; skipping '+' — running attach_vehicle_to_bkg (Order Number click inside helper).
+2026-03-28T12:54:29.302489+00:00 [NOTE] attach_vehicle_to_bkg: clicked Order Number header link via "a[name='Order Number'][tabindex='-1']".
+2026-03-28T12:54:34.944023+00:00 [NOTE] attach_vehicle_to_bkg: clicked New button (id='s_1_1_35_0_Ctrl').
+2026-03-28T12:54:43.872260+00:00 [NOTE] attach_vehicle_to_bkg: VIN filled via "input[aria-label='VIN']", chassis='06034'.
+2026-03-28T12:54:46.988331+00:00 [STEP] Stopped: create_order flow failed.
 
-2026-03-28T08:10:35.228218+00:00 [END] error=Siebel: create_order failed. Could not click VIN drilldown (name=VIN) to open Vehicles tab.
+2026-03-28T12:54:46.988390+00:00 [END] error=Siebel: create_order failed. Could not click Price All (name=s_1_1_7_0).

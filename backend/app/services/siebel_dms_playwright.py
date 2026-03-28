@@ -5362,6 +5362,42 @@ def _contact_enquiry_tab_has_rows(
     return False, 0, ""
 
 
+def _payment_lines_has_existing_row(page: Page, content_frame_selector: str | None) -> bool:
+    """
+    True when the Payment Lines list already shows at least one grid data row (jqgrid / list applet).
+    Used to skip ``+`` / new-row entry when a payment line is already present.
+    """
+    _js = """() => {
+      const vis = (el) => {
+        if (!el) return false;
+        const st = window.getComputedStyle(el);
+        if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+        const r = el.getBoundingClientRect();
+        return r.width >= 2 && r.height >= 2;
+      };
+      const rows = document.querySelectorAll(
+        'table.ui-jqgrid-btable tbody tr.jqgrow, div.ui-jqgrid-bdiv table tbody tr.jqgrow, ' +
+        'table.siebui-list tbody tr[role="row"], table.siebui-list tbody tr.jqgrow'
+      );
+      for (const tr of rows) {
+        if (!vis(tr)) continue;
+        if (tr.closest('thead')) continue;
+        const tds = tr.querySelectorAll('td');
+        if (tds.length === 0) continue;
+        const blob = (tr.innerText || '').replace(/\\s+/g, ' ').trim();
+        if (blob.length >= 1) return true;
+      }
+      return false;
+    }"""
+    for root in list(_siebel_locator_search_roots(page, content_frame_selector)) + list(_ordered_frames(page)) + [page]:
+        try:
+            if bool(root.evaluate(_js)):
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def _add_customer_payment(
     page: Page,
     *,
@@ -5370,13 +5406,22 @@ def _add_customer_payment(
     note,
 ) -> bool:
     """
-    New isolated step: click "+" (new) on current Payments frame and fill payment row.
+    Payments tab: if Payment Lines already has a row, skip ``+`` and return success.
+
+    Otherwise click ``+`` (new), fill Transaction Type / Mode / Amount (default **120000**), Save.
     """
     _safe_page_wait(page, 250, log_label="before_payments_plus_click")
     try:
         note(f"Payment debug: ordered frames count={len(_ordered_frames(page))}.")
     except Exception:
         pass
+
+    if _payment_lines_has_existing_row(page, content_frame_selector):
+        note(
+            "Payments: existing Payment Lines row detected — skipping '+' and new-row fill; "
+            "continuing to Vehicle Sales flow."
+        )
+        return True
 
     plus_selectors = (
         "a[aria-label='Payment Lines List:New']",
@@ -5891,11 +5936,19 @@ def _add_customer_payment(
                         )
                         if _is_txn_amount:
                             if not _ae.get("readOnly"):
-                                page.keyboard.type("0")
+                                try:
+                                    page.keyboard.press("Control+a")
+                                except Exception:
+                                    pass
+                                _safe_page_wait(page, 80, log_label="tab_nav_amount_clear")
+                                page.keyboard.type("120000")
                                 _safe_page_wait(page, 120, log_label="tab_nav_amount_fill")
                                 page.keyboard.press("Tab")
                                 _tab_filled = True
-                                note(f"Payment direct: Transaction_Amount filled via Tab navigation (tab {_ti}, name={_ae.get('name')!r}).")
+                                note(
+                                    f"Payment direct: Transaction_Amount filled with 120000 via Tab navigation "
+                                    f"(tab {_ti}, name={_ae.get('name')!r})."
+                                )
                             else:
                                 note(f"Payment direct: Transaction_Amount reached via Tab but still readOnly (tab {_ti}).")
                             break
@@ -5914,7 +5967,7 @@ def _add_customer_payment(
 
                 note(
                     "Filled payment fields (direct): "
-                    f"Type=Receipt(ok={type_ok!r}), Mode=Cash(ok={mode_ok!r}), Amount=0(ok={amount_ok!r})."
+                    f"Type=Receipt(ok={type_ok!r}), Mode=Cash(ok={mode_ok!r}), Amount=120000(ok={amount_ok!r})."
                 )
                 _safe_page_wait(page, 400, log_label="after_amount_before_save")
 
