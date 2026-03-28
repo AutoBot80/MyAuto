@@ -426,6 +426,45 @@ def _clean_text(value: object | None) -> str:
     return str(value).strip()
 
 
+def _coalesce_vehicle_master_vin(chassis: str, raw_frame_num: str) -> tuple[str, str]:
+    """
+    Full frame/VIN for Siebel: prefer ``vehicle_master.chassis`` when it looks like a full frame
+    (length ≥ 11). If ``chassis`` is only a short tail, use the longer of the two columns so the
+    complete VIN stored in ``raw_frame_num`` is not ignored.
+    Returns ``(vin, source)`` where source is ``chassis``, ``raw_frame_num``, or ``empty``.
+    """
+    c = _clean_text(chassis)
+    r = _clean_text(raw_frame_num)
+    if not c and not r:
+        return "", "empty"
+    if not c:
+        return r, "raw_frame_num"
+    if not r:
+        return c, "chassis"
+    if len(c) >= 11:
+        return c, "chassis"
+    if len(r) > len(c):
+        return r, "raw_frame_num"
+    return c, "chassis"
+
+
+def _coalesce_vehicle_master_engine(engine: str, raw_engine_num: str) -> tuple[str, str]:
+    """Prefer full engine number when ``engine`` is long enough; else take the longer column."""
+    e = _clean_text(engine)
+    re_ = _clean_text(raw_engine_num)
+    if not e and not re_:
+        return "", "empty"
+    if not e:
+        return re_, "raw_engine_num"
+    if not re_:
+        return e, "engine"
+    if len(e) >= 8:
+        return e, "engine"
+    if len(re_) > len(e):
+        return re_, "raw_engine_num"
+    return e, "engine"
+
+
 def _format_amount(value: object | None) -> str:
     if value is None or str(value).strip() == "":
         return ""
@@ -499,7 +538,8 @@ def _load_required_form_dms_row(customer_id: int | None, vehicle_id: int | None)
 def _load_vehicle_master_identity(vehicle_id: int | None) -> dict[str, str]:
     """
     Full VIN / engine / model / colour from ``vehicle_master`` for Siebel (create_order, attach, etc.).
-    ``form_dms_view`` carries partials; persisted master rows backfill ``full_chassis`` / ``full_engine``.
+    Reads ``chassis`` and ``raw_frame_num`` (and engine / ``raw_engine_num``); merges so the longer
+    complete value wins when one column still holds only a short tail (e.g. last five digits).
     """
     if vehicle_id is None:
         return {}
@@ -512,7 +552,9 @@ def _load_vehicle_master_identity(vehicle_id: int | None) -> dict[str, str]:
                 cur.execute(
                     """
                     SELECT TRIM(COALESCE(chassis::text, '')) AS chassis,
+                           TRIM(COALESCE(raw_frame_num::text, '')) AS raw_frame_num,
                            TRIM(COALESCE(engine::text, '')) AS engine,
+                           TRIM(COALESCE(raw_engine_num::text, '')) AS raw_engine_num,
                            TRIM(COALESCE(model::text, '')) AS model,
                            TRIM(COALESCE(colour::text, '')) AS colour
                     FROM vehicle_master
@@ -523,9 +565,45 @@ def _load_vehicle_master_identity(vehicle_id: int | None) -> dict[str, str]:
                 row = cur.fetchone()
                 if not row:
                     return {}
+                _vin, _vin_src = _coalesce_vehicle_master_vin(
+                    row.get("chassis"), row.get("raw_frame_num")
+                )
+                _eng, _eng_src = _coalesce_vehicle_master_engine(
+                    row.get("engine"), row.get("raw_engine_num")
+                )
+                # #region agent log
+                try:
+                    _dbg = Path(__file__).resolve().parents[3] / "debug-08e634.log"
+                    with open(_dbg, "a", encoding="utf-8") as _lf:
+                        _lf.write(
+                            json.dumps(
+                                {
+                                    "sessionId": "08e634",
+                                    "hypothesisId": "H_vm_vin",
+                                    "location": "fill_hero_dms_service.py:_load_vehicle_master_identity",
+                                    "message": "vehicle_master chassis/raw merge",
+                                    "data": {
+                                        "vehicle_id": int(vehicle_id),
+                                        "len_chassis_col": len(_clean_text(row.get("chassis"))),
+                                        "len_raw_frame_col": len(_clean_text(row.get("raw_frame_num"))),
+                                        "vin_source": _vin_src,
+                                        "len_merged_vin": len(_vin),
+                                        "len_engine_col": len(_clean_text(row.get("engine"))),
+                                        "len_raw_engine_col": len(_clean_text(row.get("raw_engine_num"))),
+                                        "engine_source": _eng_src,
+                                        "len_merged_engine": len(_eng),
+                                    },
+                                    "timestamp": int(time.time() * 1000),
+                                }
+                            )
+                            + "\n"
+                        )
+                except Exception:
+                    pass
+                # #endregion
                 return {
-                    "chassis": _clean_text(row.get("chassis")),
-                    "engine": _clean_text(row.get("engine")),
+                    "chassis": _vin,
+                    "engine": _eng,
                     "model": _clean_text(row.get("model")),
                     "colour": _clean_text(row.get("colour")),
                 }
