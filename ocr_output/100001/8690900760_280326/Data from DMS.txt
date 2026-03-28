@@ -1,7 +1,7 @@
 Data from DMS
 
 --- Customer (filled on enquiry) ---
-Name: Lavesh. Kumar
+Name: Lavesh Kumar
 Address: S/O Navab Singh, Awar, PO: AWAR, DIST: Bharatpur, Rajasthan - 321202
 State: RAJASTHAN
 Pin code: 321202

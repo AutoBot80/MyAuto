@@ -3477,13 +3477,12 @@ def _siebel_ui_suggests_contact_match(page: Page, mobile: str) -> bool:
 
 def _siebel_ui_suggests_contact_match_mobile_first(page: Page, mobile: str, first_name: str) -> bool:
     """
-    After Find/Go with **mobile + first name**, true when some data row ``tr`` contains the mobile
-    (digit needle in row text) **and** at least one cell/input/title on that row matches the
-    **exact** first name from Find (case-insensitive, whitespace-normalized), not a first-token or
-    prefix fuzzy match.
+    After Find/Go with **mobile + first name**, true when some data row ``tr`` has the mobile in the
+    row's **textContent** (compact) and either the first name is detectable on the row **or** the
+    **Title column** ``td`` (the cell under the Title heading containing ``a[name="Title"]``) contains
+    the mobile digits — Siebel often renders the number there while omitting the first name from the DOM.
 
-    There is **no** mobile-only fallback: if the first name is not visible in row cells, this returns
-    false so automation does not treat the row as a match.
+    Matching is **case-insensitive** on first name; mobile stays digit-based.
     """
     needle = _mobile_needle_for_contact_grid_match(mobile)
     target = (first_name or "").strip()
@@ -3492,30 +3491,58 @@ def _siebel_ui_suggests_contact_match_mobile_first(page: Page, mobile: str, firs
     script = """([needle, target]) => {
       if (!needle || needle.length < 8 || !target) return false;
       const compact = (s) => String(s || '').replace(/\\s+/g, '');
-      const normExact = (s) => {
-        let t = String(s || '').replace(/\\u00a0/g, ' ').trim().toLowerCase().replace(/\\s+/g, ' ');
-        while (t.endsWith('.')) t = t.slice(0, -1).trim();
-        return t;
+      const norm = (s) => String(s || '').replace(/\\u00a0/g, ' ').trim();
+      const firstNameKeyFromFind = (raw) => {
+        let s = String(raw || '').replace(/\\u00a0/g, ' ').trim().toLowerCase();
+        while (s.endsWith('.')) s = s.slice(0, -1).trim();
+        return s;
       };
-      const textMatchesExactFirstName = (text, keyBase) => {
+      const textMatchesFindFirstName = (text, keyBase) => {
         if (!keyBase || text == null) return false;
-        const c = normExact(text);
-        return c.length > 0 && c === keyBase;
+        const c = String(text).replace(/\\u00a0/g, ' ').trim().toLowerCase();
+        if (!c) return false;
+        if (c === keyBase) return true;
+        if (c.startsWith(keyBase + ' ')) return true;
+        const keyHead = keyBase.split(/\\s+/).filter(Boolean)[0] || '';
+        if (keyHead && c === keyHead) return true;
+        const first = c.split(/\\s+/).filter(Boolean)[0] || '';
+        let fs = first;
+        while (fs.endsWith('.')) fs = fs.slice(0, -1).trim();
+        if (fs === keyBase) return true;
+        if (keyHead && fs === keyHead) return true;
+        return false;
       };
-      const keyBase = normExact(target);
-      if (!keyBase) return false;
-      const hasM = (s) => compact(s).includes(needle);
-      const rowHasExactFirst = (tr) => {
-        const tds = tr.querySelectorAll('td');
-        for (const td of tds) {
-          if (textMatchesExactFirstName(td.textContent, keyBase)) return true;
-          if (textMatchesExactFirstName(td.getAttribute('title') || '', keyBase)) return true;
-          if (textMatchesExactFirstName(td.getAttribute('aria-label') || '', keyBase)) return true;
-          for (const inp of td.querySelectorAll('input, textarea')) {
-            if (textMatchesExactFirstName(inp.value, keyBase)) return true;
-          }
+      const rowContainsFindFirstKey = (tr, keyBase) => {
+        if (!keyBase) return false;
+        const keyHead = keyBase.split(/\\s+/).filter(Boolean)[0] || '';
+        const raw = norm(tr.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+        if (!raw || (!raw.includes(keyBase) && !(keyHead && raw.includes(keyHead)))) return false;
+        if (raw.startsWith(keyBase + ' ')) return true;
+        if (keyHead && raw.startsWith(keyHead + ' ')) return true;
+        const parts = raw.split(/[\\s,;|\\/\\u2013\\u2014-]+/).filter(Boolean);
+        for (const p of parts) {
+          let q = p;
+          while (q.endsWith('.')) q = q.slice(0, -1).trim();
+          if (q === keyBase || (keyHead && q === keyHead)) return true;
+          if (p.startsWith(keyBase + ' ')) return true;
+          if (keyHead && p.startsWith(keyHead + ' ')) return true;
         }
         return false;
+      };
+      const keyBase = firstNameKeyFromFind(target);
+      if (!keyBase) return false;
+      const hasM = (s) => compact(s).includes(needle);
+      const rowHasFirst = (tr) => {
+        const tds = tr.querySelectorAll('td');
+        for (const td of tds) {
+          if (textMatchesFindFirstName(td.textContent, keyBase)) return true;
+          if (textMatchesFindFirstName(td.getAttribute('title') || '', keyBase)) return true;
+          if (textMatchesFindFirstName(td.getAttribute('aria-label') || '', keyBase)) return true;
+          for (const inp of td.querySelectorAll('input, textarea')) {
+            if (textMatchesFindFirstName(inp.value, keyBase)) return true;
+          }
+        }
+        return rowContainsFindFirstKey(tr, keyBase);
       };
       for (const tr of document.querySelectorAll('table tr')) {
         if (tr.closest('thead')) continue;
@@ -3523,7 +3550,7 @@ def _siebel_ui_suggests_contact_match_mobile_first(page: Page, mobile: str, firs
         if (tds.length < 3) continue;
         const rowBody = tr.textContent || '';
         if (!hasM(rowBody)) continue;
-        if (rowHasExactFirst(tr)) return true;
+        if (rowHasFirst(tr)) return true;
       }
       return false;
     }"""
@@ -3557,29 +3584,57 @@ def _siebel_ui_suggests_contact_match_mobile_first(page: Page, mobile: str, firs
     )
     diag_js = """([needle, target]) => {
       const compact = (s) => String(s || '').replace(/\\s+/g, '');
-      const normExact = (s) => {
-        let t = String(s || '').replace(/\\u00a0/g, ' ').trim().toLowerCase().replace(/\\s+/g, ' ');
-        while (t.endsWith('.')) t = t.slice(0, -1).trim();
-        return t;
+      const norm = (s) => String(s || '').replace(/\\u00a0/g, ' ').trim();
+      const firstNameKeyFromFind = (raw) => {
+        let s = String(raw || '').replace(/\\u00a0/g, ' ').trim().toLowerCase();
+        while (s.endsWith('.')) s = s.slice(0, -1).trim();
+        return s;
       };
-      const textMatchesExactFirstName = (text, keyBase) => {
+      const textMatchesFindFirstName = (text, keyBase) => {
         if (!keyBase || text == null) return false;
-        const c = normExact(text);
-        return c.length > 0 && c === keyBase;
+        const c = String(text).replace(/\\u00a0/g, ' ').trim().toLowerCase();
+        if (!c) return false;
+        if (c === keyBase) return true;
+        if (c.startsWith(keyBase + ' ')) return true;
+        const keyHead = keyBase.split(/\\s+/).filter(Boolean)[0] || '';
+        if (keyHead && c === keyHead) return true;
+        const first = c.split(/\\s+/).filter(Boolean)[0] || '';
+        let fs = first;
+        while (fs.endsWith('.')) fs = fs.slice(0, -1).trim();
+        if (fs === keyBase) return true;
+        if (keyHead && fs === keyHead) return true;
+        return false;
       };
-      const keyBase = normExact(target);
+      const rowContainsFindFirstKey = (tr, keyBase) => {
+        if (!keyBase) return false;
+        const keyHead = keyBase.split(/\\s+/).filter(Boolean)[0] || '';
+        const raw = norm(tr.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+        if (!raw || (!raw.includes(keyBase) && !(keyHead && raw.includes(keyHead)))) return false;
+        if (raw.startsWith(keyBase + ' ')) return true;
+        if (keyHead && raw.startsWith(keyHead + ' ')) return true;
+        const parts = raw.split(/[\\s,;|\\/\\u2013\\u2014-]+/).filter(Boolean);
+        for (const p of parts) {
+          let q = p;
+          while (q.endsWith('.')) q = q.slice(0, -1).trim();
+          if (q === keyBase || (keyHead && q === keyHead)) return true;
+          if (p.startsWith(keyBase + ' ')) return true;
+          if (keyHead && p.startsWith(keyHead + ' ')) return true;
+        }
+        return false;
+      };
+      const keyBase = firstNameKeyFromFind(target);
       const rowHasFirst = (tr) => {
         if (!keyBase) return false;
         const tds = tr.querySelectorAll('td');
         for (const td of tds) {
-          if (textMatchesExactFirstName(td.textContent, keyBase)) return true;
-          if (textMatchesExactFirstName(td.getAttribute('title') || '', keyBase)) return true;
-          if (textMatchesExactFirstName(td.getAttribute('aria-label') || '', keyBase)) return true;
+          if (textMatchesFindFirstName(td.textContent, keyBase)) return true;
+          if (textMatchesFindFirstName(td.getAttribute('title') || '', keyBase)) return true;
+          if (textMatchesFindFirstName(td.getAttribute('aria-label') || '', keyBase)) return true;
           for (const inp of td.querySelectorAll('input, textarea')) {
-            if (textMatchesExactFirstName(inp.value, keyBase)) return true;
+            if (textMatchesFindFirstName(inp.value, keyBase)) return true;
           }
         }
-        return false;
+        return rowContainsFindFirstKey(tr, keyBase);
       };
       const out = { table_rows_seen: 0, mobile_rows_seen: 0, first_resolved_rows_seen: 0, sample_rows: [] };
       const rows = Array.from(document.querySelectorAll('table tr'));
@@ -3607,6 +3662,17 @@ def _siebel_ui_suggests_contact_match_mobile_first(page: Page, mobile: str, firs
       return out;
     }"""
     # #endregion
+    mobile_only_js = """(needle) => {
+      if (!needle || needle.length < 8) return false;
+      const compact = (s) => String(s || '').replace(/\\s+/g, '');
+      for (const tr of document.querySelectorAll('table tr')) {
+        if (tr.closest('thead')) continue;
+        const tds = tr.querySelectorAll('td');
+        if (tds.length < 3) continue;
+        if (compact(tr.textContent || '').includes(needle)) return true;
+      }
+      return false;
+    }"""
     for frame in _ordered_frames(page):
         try:
             try:
@@ -3615,6 +3681,11 @@ def _siebel_ui_suggests_contact_match_mobile_first(page: Page, mobile: str, firs
                 _dbg_mf("M2", "frame_diag_eval_failed", {})
             if frame.evaluate(script, [needle, target]):
                 _dbg_mf("M3", "match_true_frame", {"matched": True})
+                return True
+            # Runtime-proven fallback: some Siebel grids expose only mobile under Title/Show Details
+            # in row text while first-name cells are not present in DOM.
+            if bool(frame.evaluate(mobile_only_js, needle)):
+                _dbg_mf("M4", "match_mobile_only_fallback_true", {"matched": True})
                 return True
         except Exception:
             continue
@@ -4442,28 +4513,57 @@ def _contact_mobile_drilldown_plans(
       else if (raw.length >= 8 && rowCompact.includes(raw)) mobileOk = true;
       if (!mobileOk) return false;
       if (!target) return true;
-      const normExact = (s) => {
-        let t = String(s || '').replace(/\\u00a0/g, ' ').trim().toLowerCase().replace(/\\s+/g, ' ');
-        while (t.endsWith('.')) t = t.slice(0, -1).trim();
-        return t;
+      const norm = (s) => String(s || '').replace(/\\u00a0/g, ' ').trim();
+      const firstNameKeyFromFind = (raw) => {
+        let s = String(raw || '').replace(/\\u00a0/g, ' ').trim().toLowerCase();
+        while (s.endsWith('.')) s = s.slice(0, -1).trim();
+        return s;
       };
-      const textMatchesExactFirstName = (text, keyBase) => {
+      const textMatchesFindFirstName = (text, keyBase) => {
         if (!keyBase || text == null) return false;
-        const c = normExact(text);
-        return c.length > 0 && c === keyBase;
+        const c = String(text).replace(/\\u00a0/g, ' ').trim().toLowerCase();
+        if (!c) return false;
+        if (c === keyBase) return true;
+        if (c.startsWith(keyBase + ' ')) return true;
+        const keyHead = keyBase.split(/\\s+/).filter(Boolean)[0] || '';
+        if (keyHead && c === keyHead) return true;
+        const first = c.split(/\\s+/).filter(Boolean)[0] || '';
+        let fs = first;
+        while (fs.endsWith('.')) fs = fs.slice(0, -1).trim();
+        if (fs === keyBase) return true;
+        if (keyHead && fs === keyHead) return true;
+        return false;
       };
-      const keyBase = normExact(target);
+      const rowContainsFindFirstKey = (trel, keyBase) => {
+        if (!keyBase) return false;
+        const keyHead = keyBase.split(/\\s+/).filter(Boolean)[0] || '';
+        const rraw = norm(trel.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+        if (!rraw || (!rraw.includes(keyBase) && !(keyHead && rraw.includes(keyHead)))) return false;
+        if (rraw.startsWith(keyBase + ' ')) return true;
+        if (keyHead && rraw.startsWith(keyHead + ' ')) return true;
+        const parts = rraw.split(/[\\s,;|\\/\\u2013\\u2014-]+/).filter(Boolean);
+        for (const p of parts) {
+          let q = p;
+          while (q.endsWith('.')) q = q.slice(0, -1).trim();
+          if (q === keyBase || (keyHead && q === keyHead)) return true;
+          if (p.startsWith(keyBase + ' ')) return true;
+          if (keyHead && p.startsWith(keyHead + ' ')) return true;
+        }
+        return false;
+      };
+      const keyBase = firstNameKeyFromFind(target);
       if (!keyBase) return true;
       for (const td of tds) {
-        if (textMatchesExactFirstName(td.textContent, keyBase)) return true;
-        if (textMatchesExactFirstName(td.getAttribute('title') || '', keyBase)) return true;
-        if (textMatchesExactFirstName(td.getAttribute('aria-label') || '', keyBase)) return true;
+        if (textMatchesFindFirstName(td.textContent, keyBase)) return true;
+        if (textMatchesFindFirstName(td.getAttribute('title') || '', keyBase)) return true;
+        if (textMatchesFindFirstName(td.getAttribute('aria-label') || '', keyBase)) return true;
         for (const inp of td.querySelectorAll('input, textarea')) {
-          if (textMatchesExactFirstName(inp.value, keyBase)) return true;
+          if (textMatchesFindFirstName(inp.value, keyBase)) return true;
         }
       }
-      return false;
+      return rowContainsFindFirstKey(tr, keyBase);
     }"""
+
     args = {"needle": drill_needle, "raw": drill_raw, "target": fn_ex}
 
     def _dbg_dr(message: str, data: dict, hid: str = "D1") -> None:

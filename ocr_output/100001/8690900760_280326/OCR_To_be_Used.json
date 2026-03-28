@@ -8,9 +8,9 @@
   },
   "customer": {
     "gender": "Male",
-    "name": "LAVESH. KUMAR",
-    "mobile_number": "7740828710",
-    "alt_phone_num": "8690900760",
+    "name": "LAVESH KUMAR",
+    "mobile_number": "8690900760",
+    "alt_phone_num": "7740828710",
     "aadhar_id": "7138"
   },
   "insurance": {
@@ -23,5 +23,5 @@
     "nominee_relationship": "MOTHER",
     "financier": "HINDUJA"
   },
-  "details_customer_name": "LAVESH. KUMAR"
+  "details_customer_name": "LAVESH KUMAR"
 }

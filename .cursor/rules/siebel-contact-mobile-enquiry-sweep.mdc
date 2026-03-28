@@ -1,0 +1,20 @@
+---
+description: Do not alter Siebel duplicate-mobile / enquiry sweep logic without explicit user confirmation
+alwaysApply: true
+---
+
+# Siebel: fragile contact / mobile / enquiry sweep
+
+**Owner constraint:** Logic that **cycles through shown mobile numbers**, **duplicate contact rows**, **in-place drills**, **open-enquiry detection**, **Contact_Enquiry** subgrid reads, **title sweep**, **ordinal** drilldowns, and related **enquiry detail** handling is **fragile** and **must not be changed** unless the user **expressly** asks to change *that* behavior.
+
+## Required agent behavior
+
+1. **Do not** refactor, “improve”, tighten, or relax matchers, fallbacks, or sweep order in `siebel_dms_playwright.py` (and callers) for these flows **without** the user naming the exact behavior to change.
+2. If the user asks for a change that **might** touch this area (e.g. first-name matching, Find field, grid hooks), **stop** and:
+   - Summarize **which** functions/paths would be edited and **what** would change for duplicate-mobile / enquiry logic.
+   - Ask **explicit confirmation** before applying any edit that affects those paths.
+3. Prefer **minimal, localized** edits that preserve sweep/drill/enquiry semantics; if unsure, **ask** rather than ship a behavior change.
+
+## Hints (non-exhaustive)
+
+Touch with extreme care: `_contact_find_title_sweep_for_enquiry`, `_contact_mobile_drilldown_plans`, `_click_nth_mobile_title_drilldown`, `_siebel_ui_suggests_contact_match_mobile_first`, `_contact_enquiry_tab_has_rows`, mobile-only fallbacks, ordinal ≥1 drills, re-find between duplicates.
