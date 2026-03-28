@@ -1,5 +1,6 @@
 export type Page =
   | "add-sales"
+  | "subdealer-challan"
   | "bulk-loads"
   | "customer-details"
   | "rto-status"

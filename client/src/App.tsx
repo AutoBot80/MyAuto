@@ -10,6 +10,7 @@ import { PlaceholderPage } from "./pages/PlaceholderPage";
 import { ViewCustomerPage } from "./pages/ViewCustomerPage";
 import { RtoPaymentsPendingPage } from "./pages/RtoPaymentsPendingPage";
 import { BulkLoadsPage } from "./pages/BulkLoadsPage";
+import { SubdealerChallanPage } from "./pages/SubdealerChallanPage";
 import { getDealer } from "./api/dealers";
 import { getBulkLoadPendingCount } from "./api/bulkLoads";
 import { getSiteUrls, type SiteUrls } from "./api/siteUrls";
@@ -126,6 +127,8 @@ function App() {
             autoNewTrigger={addSalesAutoNewTrigger}
           />
         );
+      case "subdealer-challan":
+        return <SubdealerChallanPage />;
       case "bulk-loads":
         return <BulkLoadsPage dealerId={DEALER_ID} onNavigateToAddSales={() => setPage("add-sales")} />;
       case "customer-details":

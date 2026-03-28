@@ -2092,3 +2092,137 @@
   text-align: center;
   color: #555;
 }
+
+/* Subdealer Challan (POS Saathi) */
+.subdealer-challan {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  flex: 1;
+  padding: 4px 0 8px;
+}
+
+.subdealer-challan-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px 24px;
+}
+
+.subdealer-challan-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.subdealer-challan-field--dealer {
+  flex: 1 1 280px;
+  max-width: 520px;
+  margin-left: auto;
+}
+
+.subdealer-challan-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1e5a9e;
+}
+
+.subdealer-challan-select,
+.subdealer-challan-input {
+  font-size: 14px;
+  padding: 8px 10px;
+  border: 1px solid #c5d9ed;
+  border-radius: 6px;
+  background: #fff;
+  color: #1b2a3a;
+  min-width: 140px;
+}
+
+.subdealer-challan-input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.subdealer-challan-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.subdealer-challan-actions-left {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.subdealer-challan-actions-right {
+  margin-left: auto;
+}
+
+.subdealer-challan-tables {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px 16px;
+  align-items: start;
+  min-height: 0;
+}
+
+.subdealer-challan-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  border: 1px solid #c5d9ed;
+  border-radius: 8px;
+  background: #fff;
+  table-layout: fixed;
+}
+
+.subdealer-challan-table thead th {
+  background: #f4f8fc;
+  color: #1e5a9e;
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid #c5d9ed;
+  font-weight: 600;
+}
+
+.subdealer-challan-table tbody td {
+  padding: 2px 6px;
+  border-bottom: 1px solid #eef3f8;
+  vertical-align: middle;
+}
+
+.subdealer-challan-sno {
+  width: 3.2rem;
+  text-align: right;
+  color: #444;
+  font-variant-numeric: tabular-nums;
+}
+
+.subdealer-challan-cell-input {
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 12px;
+  padding: 4px 6px;
+  border: 1px solid #dde8f4;
+  border-radius: 4px;
+  background: #fafcfe;
+  color: #1b2a3a;
+}
+
+.subdealer-challan-cell-input:focus {
+  outline: none;
+  border-color: #1e5a9e;
+  background: #fff;
+}
+
+@media (max-width: 1100px) {
+  .subdealer-challan-tables {
+    grid-template-columns: 1fr;
+  }
+}
