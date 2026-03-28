@@ -6187,9 +6187,12 @@ def _attach_vehicle_to_bkg(
     except Exception:
         pass
 
-    # ── Step 2: Click New button (id="s_1_1_35_0") ──
-    if not _click_by_id("s_1_1_35_0", "New button", wait_ms=1200):
-        return False, "Could not click New button (id=s_1_1_35_0) on order line items.", scraped
+    # ── Step 2: Click New button on order line / allocate (Hero: control id ends with _Ctrl) ──
+    _new_clicked = _click_by_id("s_1_1_35_0_Ctrl", "New button", wait_ms=1200)
+    if not _new_clicked:
+        _new_clicked = _click_by_id("s_1_1_35_0", "New button (legacy id)", wait_ms=1200)
+    if not _new_clicked:
+        return False, "Could not click New button (id=s_1_1_35_0_Ctrl) on order line items.", scraped
 
     # ── Step 3: Click VIN field (id="1_s_1_l_VIN"), type full chassis, Tab out ──
     _vin_filled = False
