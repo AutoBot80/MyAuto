@@ -6194,89 +6194,167 @@ def _attach_vehicle_to_bkg(
     if not _new_clicked:
         return False, "Could not click New button (id=s_1_1_35_0_Ctrl) on order line items.", scraped
 
-    # ── Step 3: VIN field (id="1_s_1_l_VIN"): keystroke entry + Tab so Siebel runs lookup / engine autofill.
-    # ``fill()`` alone often does not trigger Hero line-item validation; prefer real typing then Tab.
+    # ── Step 3: Line-item VIN — same selector family as Sales Orders ``name=VIN`` path; row id may be
+    # ``1_s_1_l_VIN``, ``2_s_1_l_VIN``, etc. Use **locator.type** (not ``page.keyboard``) so iframe focus works.
     _ch = (full_chassis or "").strip()
     if not _ch:
         return False, "attach_vehicle_to_bkg: full_chassis is empty (line-item VIN).", scraped
 
+    _safe_page_wait(page, 500, log_label="after_new_before_vin_field")
+    _vin_locator_css: tuple[str, ...] = (
+        "#1_s_1_l_VIN",
+        "[id='1_s_1_l_VIN']",
+        "input[id$='_l_VIN']",
+        "input[id*='_l_VIN' i]",
+        "input[name='VIN']",
+        "input[aria-label='VIN']",
+        "input[title='VIN']",
+        "input[title*='VIN' i]",
+    )
+
+    def _vin_readback_ok(vin_loc) -> bool:
+        try:
+            got = (vin_loc.input_value(timeout=900) or "").strip()
+        except Exception:
+            got = ""
+        if not got:
+            return False
+        _digits = lambda s: re.sub(r"\D", "", s)
+        return _ch in got or _digits(_ch) in _digits(got) or len(_digits(got)) >= 8
+
+    def _js_set_vin_value_on_element(vin_loc) -> None:
+        """Siebel line inputs often ignore Playwright fill/type; set value + InputEvent on the node."""
+        try:
+            import json as _json
+
+            _v = _json.dumps(_ch)
+            vin_loc.evaluate(
+                f"""(el) => {{
+                  const v = {_v};
+                  try {{ el.focus(); }} catch (e) {{}}
+                  el.value = '';
+                  el.value = v;
+                  try {{
+                    el.dispatchEvent(new InputEvent('input', {{ bubbles: true, inputType: 'insertFromPaste', data: v }}));
+                  }} catch (e) {{
+                    el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                  }}
+                  el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                }}"""
+            )
+        except Exception:
+            pass
+
+    def _tab_out_vin(vin_loc) -> None:
+        try:
+            vin_loc.press("Tab", timeout=1500)
+        except Exception:
+            pass
+        try:
+            page.keyboard.press("Tab")
+        except Exception:
+            pass
+
+    def _try_fill_vin_locator(vin_loc) -> bool:
+        try:
+            vin_loc.scroll_into_view_if_needed(timeout=_tmo)
+        except Exception:
+            pass
+        vin_loc.click(timeout=_tmo)
+        _safe_page_wait(page, 220, log_label="after_vin_click")
+        try:
+            vin_loc.focus(timeout=1200)
+        except Exception:
+            pass
+        try:
+            vin_loc.press("Control+a", timeout=800)
+        except Exception:
+            pass
+        try:
+            vin_loc.fill("", timeout=1000)
+        except Exception:
+            pass
+        _typed = False
+        try:
+            page.keyboard.type(_ch, delay=28)
+            _typed = True
+        except Exception:
+            pass
+        if not _vin_readback_ok(vin_loc):
+            try:
+                vin_loc.type(_ch, delay=28, timeout=min(8000, int(action_timeout_ms or 3000)))
+                _typed = True
+            except Exception:
+                pass
+        if not _vin_readback_ok(vin_loc):
+            try:
+                vin_loc.fill(_ch, timeout=2000)
+            except Exception:
+                pass
+        if not _vin_readback_ok(vin_loc):
+            _js_set_vin_value_on_element(vin_loc)
+        if not _vin_readback_ok(vin_loc):
+            return False
+        _tab_out_vin(vin_loc)
+        return True
+
     _vin_filled = False
     for root in _all_roots():
-        try:
-            vin_loc = root.locator("#1_s_1_l_VIN, [id='1_s_1_l_VIN']").first
-            if vin_loc.count() <= 0 or not vin_loc.is_visible(timeout=900):
+        for css in _vin_locator_css:
+            try:
+                vin_loc = root.locator(css).first
+                if vin_loc.count() <= 0 or not vin_loc.is_visible(timeout=700):
+                    continue
+                if _try_fill_vin_locator(vin_loc):
+                    _vin_filled = True
+                    note(f"attach_vehicle_to_bkg: VIN filled via {css!r}, chassis={_ch!r}.")
+                    break
+            except Exception:
                 continue
-            try:
-                vin_loc.scroll_into_view_if_needed(timeout=_tmo)
-            except Exception:
-                pass
-            vin_loc.click(timeout=_tmo)
-            _safe_page_wait(page, 300, log_label="after_vin_click")
-            try:
-                vin_loc.focus(timeout=1200)
-            except Exception:
-                pass
-            try:
-                page.keyboard.press("Control+A")
-            except Exception:
-                pass
-            try:
-                page.keyboard.press("Backspace")
-            except Exception:
-                pass
-            try:
-                page.keyboard.type(_ch, delay=28)
-            except Exception:
-                try:
-                    vin_loc.fill(_ch, timeout=2000)
-                except Exception:
-                    pass
-            try:
-                root.evaluate(
-                    """() => {
-                      const el = document.getElementById('1_s_1_l_VIN');
-                      if (!el) return;
-                      el.dispatchEvent(new Event('input', { bubbles: true }));
-                      el.dispatchEvent(new Event('change', { bubbles: true }));
-                    }"""
-                )
-            except Exception:
-                pass
-            try:
-                vin_loc.press("Tab", timeout=1500)
-            except Exception:
-                try:
-                    page.keyboard.press("Tab")
-                except Exception:
-                    pass
-            _vin_filled = True
-            note(f"attach_vehicle_to_bkg: VIN typed + Tab for lookup, chassis={_ch!r}.")
+        if _vin_filled:
             break
-        except Exception:
-            continue
+
+    _js_vin_pick = """(chassis) => {
+      const vis = (el) => {
+        if (!el) return false;
+        const st = window.getComputedStyle(el);
+        if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+        const r = el.getBoundingClientRect();
+        return r.width >= 2 && r.height >= 2;
+      };
+      const c = String(chassis || '');
+      let el = document.getElementById('1_s_1_l_VIN');
+      if (!el || !vis(el)) {
+        const cands = Array.from(document.querySelectorAll(
+          "input[id$='_l_VIN'], input[name='VIN'], input[aria-label='VIN'], input[title='VIN']"
+        ));
+        el = cands.find((e) => vis(e)) || null;
+      }
+      if (!el) return false;
+      try { el.scrollIntoView({ block: 'center' }); } catch (e) {}
+      try { el.focus(); } catch (e) {}
+      el.value = '';
+      el.value = c;
+      try {
+        el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertFromPaste', data: c }));
+      } catch (e) {
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      return true;
+    }"""
+
     if not _vin_filled:
         for root in _all_roots():
             try:
-                hit = root.evaluate(
-                    """(chassis) => {
-                    const el = document.getElementById('1_s_1_l_VIN');
-                    if (!el) return false;
-                    el.scrollIntoView({ block: 'center' });
-                    el.focus();
-                    el.value = '';
-                    el.value = String(chassis || '');
-                    el.dispatchEvent(new Event('input', { bubbles: true }));
-                    el.dispatchEvent(new Event('change', { bubbles: true }));
-                    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', code: 'Tab', keyCode: 9, which: 9, bubbles: true }));
-                    el.dispatchEvent(new KeyboardEvent('keyup', { key: 'Tab', code: 'Tab', keyCode: 9, which: 9, bubbles: true }));
-                    return true;
-                  }""",
-                    _ch,
-                )
-                if hit:
+                if bool(root.evaluate(_js_vin_pick, _ch)):
                     _vin_filled = True
-                    note(f"attach_vehicle_to_bkg: JS set VIN + Tab events, chassis={_ch!r}.")
-                    _safe_page_wait(page, 350, log_label="after_vin_js_fill")
+                    note(f"attach_vehicle_to_bkg: JS set VIN field (broad query), chassis={_ch!r}.")
+                    _safe_page_wait(page, 200, log_label="after_vin_js_fill")
+                    try:
+                        page.keyboard.press("Tab")
+                    except Exception:
+                        pass
                     try:
                         page.keyboard.press("Tab")
                     except Exception:
@@ -6284,8 +6362,9 @@ def _attach_vehicle_to_bkg(
                     break
             except Exception:
                 continue
+
     if not _vin_filled:
-        return False, f"Could not fill VIN field (id=1_s_1_l_VIN) with {_ch!r}.", scraped
+        return False, f"Could not fill line-item VIN (selectors id/_l_VIN/name=VIN) with {_ch!r}.", scraped
     _safe_page_wait(page, 2800, log_label="after_vin_tab_settle")
 
     # ── Step 4: Click Price All (name="s_1_1_7_0") ──
