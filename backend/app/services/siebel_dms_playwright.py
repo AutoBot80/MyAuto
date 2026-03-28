@@ -6194,40 +6194,89 @@ def _attach_vehicle_to_bkg(
     if not _new_clicked:
         return False, "Could not click New button (id=s_1_1_35_0_Ctrl) on order line items.", scraped
 
-    # ── Step 3: Click VIN field (id="1_s_1_l_VIN"), type full chassis, Tab out ──
+    # ── Step 3: VIN field (id="1_s_1_l_VIN"): keystroke entry + Tab so Siebel runs lookup / engine autofill.
+    # ``fill()`` alone often does not trigger Hero line-item validation; prefer real typing then Tab.
+    _ch = (full_chassis or "").strip()
+    if not _ch:
+        return False, "attach_vehicle_to_bkg: full_chassis is empty (line-item VIN).", scraped
+
     _vin_filled = False
     for root in _all_roots():
         try:
             vin_loc = root.locator("#1_s_1_l_VIN, [id='1_s_1_l_VIN']").first
-            if vin_loc.count() > 0 and vin_loc.is_visible(timeout=700):
-                vin_loc.click(timeout=_tmo)
-                _safe_page_wait(page, 300, log_label="after_vin_click")
-                vin_loc.fill("", timeout=1200)
-                vin_loc.fill(full_chassis, timeout=2000)
+            if vin_loc.count() <= 0 or not vin_loc.is_visible(timeout=900):
+                continue
+            try:
+                vin_loc.scroll_into_view_if_needed(timeout=_tmo)
+            except Exception:
+                pass
+            vin_loc.click(timeout=_tmo)
+            _safe_page_wait(page, 300, log_label="after_vin_click")
+            try:
+                vin_loc.focus(timeout=1200)
+            except Exception:
+                pass
+            try:
+                page.keyboard.press("Control+A")
+            except Exception:
+                pass
+            try:
+                page.keyboard.press("Backspace")
+            except Exception:
+                pass
+            try:
+                page.keyboard.type(_ch, delay=28)
+            except Exception:
+                try:
+                    vin_loc.fill(_ch, timeout=2000)
+                except Exception:
+                    pass
+            try:
+                root.evaluate(
+                    """() => {
+                      const el = document.getElementById('1_s_1_l_VIN');
+                      if (!el) return;
+                      el.dispatchEvent(new Event('input', { bubbles: true }));
+                      el.dispatchEvent(new Event('change', { bubbles: true }));
+                    }"""
+                )
+            except Exception:
+                pass
+            try:
                 vin_loc.press("Tab", timeout=1500)
-                _vin_filled = True
-                note(f"attach_vehicle_to_bkg: filled VIN = {full_chassis!r} and tabbed out.")
-                break
+            except Exception:
+                try:
+                    page.keyboard.press("Tab")
+                except Exception:
+                    pass
+            _vin_filled = True
+            note(f"attach_vehicle_to_bkg: VIN typed + Tab for lookup, chassis={_ch!r}.")
+            break
         except Exception:
             continue
     if not _vin_filled:
         for root in _all_roots():
             try:
-                hit = root.evaluate(f"""(chassis) => {{
+                hit = root.evaluate(
+                    """(chassis) => {
                     const el = document.getElementById('1_s_1_l_VIN');
                     if (!el) return false;
-                    el.scrollIntoView({{ block: 'center' }});
+                    el.scrollIntoView({ block: 'center' });
                     el.focus();
                     el.value = '';
-                    el.value = chassis;
-                    el.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                    el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                    el.value = String(chassis || '');
+                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', code: 'Tab', keyCode: 9, which: 9, bubbles: true }));
+                    el.dispatchEvent(new KeyboardEvent('keyup', { key: 'Tab', code: 'Tab', keyCode: 9, which: 9, bubbles: true }));
                     return true;
-                }}""", full_chassis)
+                  }""",
+                    _ch,
+                )
                 if hit:
                     _vin_filled = True
-                    note(f"attach_vehicle_to_bkg: JS filled VIN = {full_chassis!r}.")
-                    _safe_page_wait(page, 300, log_label="after_vin_js_fill")
+                    note(f"attach_vehicle_to_bkg: JS set VIN + Tab events, chassis={_ch!r}.")
+                    _safe_page_wait(page, 350, log_label="after_vin_js_fill")
                     try:
                         page.keyboard.press("Tab")
                     except Exception:
@@ -6236,8 +6285,8 @@ def _attach_vehicle_to_bkg(
             except Exception:
                 continue
     if not _vin_filled:
-        return False, f"Could not fill VIN field (id=1_s_1_l_VIN) with {full_chassis!r}.", scraped
-    _safe_page_wait(page, 2000, log_label="after_vin_tab_settle")
+        return False, f"Could not fill VIN field (id=1_s_1_l_VIN) with {_ch!r}.", scraped
+    _safe_page_wait(page, 2800, log_label="after_vin_tab_settle")
 
     # ── Step 4: Click Price All (name="s_1_1_7_0") ──
     if not _click_by_name("s_1_1_7_0", "Price All", wait_ms=2000):
