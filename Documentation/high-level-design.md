@@ -118,7 +118,7 @@ My Auto.AI/
 | Page | Purpose |
 |------|---------|
 | `AddSalesPage` | Add Sales flow: Submit Info, then separate operator actions (`Fill DMS`, `Fill Insurance`, `Print Forms`); print step also inserts the RTO queue row. |
-| `SubdealerChallanPage` | POS Saathi — Subdealer Challan: From/To, dealer/sub-dealer field, upload/scanner actions, Add Challans, and three side-by-side chassis entry tables (S.No. 1–60). |
+| `SubdealerChallanPage` | POS Saathi — Subdealer Challan: From/To, dealer/sub-dealer field, upload/scanner actions, Create Challans, and five side-by-side chassis entry tables (12 rows each, S.No. 1–60). |
 | `BulkLoadsPage` | View hot bulk processing status, unresolved failures, and retry/corrective actions. |
 | `RtoPaymentsPendingPage` | List queued RTO work items, start the oldest-7 dealer batch, and show live RTO Cart progress. |
 | `ViewCustomerPage` | Search customer; view vehicles, insurance, and the bottom single-row `form_vahan_view` projection for the selected vehicle. |

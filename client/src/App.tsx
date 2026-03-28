@@ -42,6 +42,7 @@ type AppMode = "home" | "pos" | "service" | "rto" | "dealer" | "admin";
 
 const POS_PAGES: Page[] = [
   "add-sales",
+  "subdealer-challan",
   "customer-details",
   "bulk-loads",
   "contact-us",
