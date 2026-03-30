@@ -6209,8 +6209,8 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     Pre-check + PDI applets on the **vehicle serial** detail view (after ``Serial Number`` drilldown).
 
     Shared by ``prepare_vehicle`` and ``_attach_vehicle_to_bkg``. Third Level View Bar tabs are
-    clicked by label (with hyphen-insensitive match for **Pre-check** vs **PreCheck**) then by id fallbacks
-    (e.g. ``ui-id-160`` / ``ui-id-158`` on one tenant; legacy ``ui-id-1115`` kept as last resort for Pre-check).
+    clicked by label (with hyphen-insensitive match for **Pre-check** vs **PreCheck**). Tab ``ui-id-*``
+    values are dynamic across runs/tenants, so fixed tab ids are not treated as primary selectors.
     Applet controls: ``s_3_1_12_0_Ctrl`` (Pre-check pick), ``s_2_2_32_0_icon`` (PDI pick).
     """
     _tmo = min(int(action_timeout_ms or 3000), 4000)
@@ -6580,21 +6580,18 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
 
     _precheck_tab_ok = _click_third_level_view_bar_tab("Pre-check", wait_ms=1500)
     if not _precheck_tab_ok:
-        for _pre_id in ("ui-id-160", "ui-id-1115"):
-            if _siebel_click_by_id_anywhere(
-                page,
-                _pre_id,
-                timeout_ms=_tmo,
-                content_frame_selector=content_frame_selector,
-                note=note,
-                label=f"Pre-check tab ({_pre_id})",
-                log_prefix=log_prefix,
-                wait_ms=1500,
-            ):
-                _precheck_tab_ok = True
-                break
+        _precheck_tab_ok = _siebel_click_by_id_anywhere(
+            page,
+            "ui-id-1115",
+            timeout_ms=_tmo,
+            content_frame_selector=content_frame_selector,
+            note=note,
+            label="Pre-check tab (legacy ui-id-1115)",
+            log_prefix=log_prefix,
+            wait_ms=1500,
+        )
     if not _precheck_tab_ok:
-        return False, "Could not open Pre-check tab (Third Level View Bar or ui-id-160 / ui-id-1115)."
+        return False, "Could not open Pre-check tab (Third Level View Bar text match failed)."
 
     try:
         page.wait_for_load_state("networkidle", timeout=8_000)
@@ -6755,17 +6752,6 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     note(f"{log_prefix}: Pre-check completed.")
 
     _pdi_tab_clicked = _click_third_level_view_bar_tab("PDI", wait_ms=1500)
-    if not _pdi_tab_clicked:
-        _pdi_tab_clicked = _siebel_click_by_id_anywhere(
-            page,
-            "ui-id-158",
-            timeout_ms=_tmo,
-            content_frame_selector=content_frame_selector,
-            note=note,
-            label="PDI tab (ui-id-158)",
-            log_prefix=log_prefix,
-            wait_ms=1500,
-        )
     for root in _roots():
         if _pdi_tab_clicked:
             break
