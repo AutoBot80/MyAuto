@@ -1,6 +1,6 @@
 Playwright DMS — execution log (this run only; UTC timestamps)
 
-started_utc=2026-03-30T13:05:06.357919+00:00
+started_utc=2026-03-30T13:11:51.460107+00:00
 skip_contact_find=False
 dms_contact_path='found'
 mobile_phone='8279246146'
@@ -27,25 +27,25 @@ url_vehicle_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/e
 --- trace ---
 Legend: [STEP]/[NOTE]/[MILESTONE] = operator narrative; [FORM] = siebel_step + Siebel form/screen + action + fields/values being applied on that form.
 
-2026-03-30T13:05:06.358173+00:00 [STEP] Started Hero Connect / Siebel DMS automation (linear SOP).
-2026-03-30T13:05:06.358232+00:00 [STEP] Pre-step: preparing vehicle before contact find (video path).
-2026-03-30T13:05:06.358362+00:00 [FORM] siebel_step=5_vehicle_list | form=Auto Vehicle List (DMS_REAL_URL_VEHICLE) | action=begin_vehicle_flow_navigate_then_search_applet | engine_partial='11204' | frame_partial='43284' | key_partial='1267' | vehicle_url_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+All+Vehicle+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Auto+Vehicle+List+Applet&SWERowId0=1-100-1676'
-2026-03-30T13:05:10.760502+00:00 [NOTE] prepare_vehicle: Find → Vehicles for list query.
-2026-03-30T13:05:11.551031+00:00 [NOTE] prepare_vehicle: VIN + Engine# submitted in Find→Vehicles applet.
-2026-03-30T13:05:11.551105+00:00 [FORM] siebel_step=5_vehicle_list | form=Auto Vehicle List — search/query row | action=find_vehicles_vin_engine_applet_only | engine_partial='11204' | find_vehicles_vin_engine_ok=True | frame_partial='43284'
-2026-03-30T13:05:14.099238+00:00 [NOTE] Scraped vehicle row from Siebel grid.
-2026-03-30T13:05:14.939092+00:00 [NOTE] prepare_vehicle: opened vehicle from left Search Results (VIN link).
-2026-03-30T13:05:16.496178+00:00 [NOTE] Vehicle prep: filled Key Number = '1267' on vehicle page.
-2026-03-30T13:05:16.818790+00:00 [NOTE] Vehicle prep: filled Battery No. = '3302419' on vehicle page.
-2026-03-30T13:05:18.515176+00:00 [NOTE] Vehicle prep: saved vehicle record after Key/Battery fill.
-2026-03-30T13:05:18.782654+00:00 [NOTE] prepare_vehicle: vehicle detail applet (aria-labels) → ['full_chassis', 'model', 'year_of_mfg', 'variant', 'color', 'full_engine'].
-2026-03-30T13:05:18.782736+00:00 [FORM] siebel_step=5_vehicle_detail | form=Auto Vehicle — detail applet | action=scrape_VIN_Model_Year_Manu_SKU_Color_Engine_by_aria_label | color='RPB' | full_chassis='MBLHAW477T9C43284' | full_engine='HA11F7T9C11204' | model='SPLENDOR +' | variant='HSPLMIRSCFIRPB' | year_of_mfg='2,026'
-2026-03-30T13:05:18.812463+00:00 [NOTE] DECISION: vehicle with dealer per Inventory Location — '11870 DEALER SHOWROOM'; in_transit=False.
-2026-03-30T13:05:18.812520+00:00 [FORM] siebel_step=5_vehicle_inventory_location | form=Auto Vehicle | action=inventory_location_scrape | in_transit=False | inventory_location='11870 DEALER SHOWROOM'
-2026-03-30T13:05:18.987571+00:00 [NOTE] prepare_vehicle: clicked Serial Number drilldown (name='Serial Number').
-2026-03-30T13:05:20.245493+00:00 [NOTE] prepare_vehicle: feature-id scrape cubic_capacity='125 CC', vehicle_type='MOTORCYCLE WITH GEAR'.
-2026-03-30T13:05:20.273219+00:00 [FORM] siebel_step=vehicle_serial_precheck_pdi | form=Vehicle serial detail | action=precheck_tab_open | log_prefix='prepare_vehicle'
-2026-03-30T13:05:20.290063+00:00 [NOTE] prepare_vehicle: clicked Pre-check from Third Level View Bar.
-2026-03-30T13:05:21.860187+00:00 [STEP] Stopped: Pre-check / PDI failed on vehicle serial detail.
+2026-03-30T13:11:51.460355+00:00 [STEP] Started Hero Connect / Siebel DMS automation (linear SOP).
+2026-03-30T13:11:51.460421+00:00 [STEP] Pre-step: preparing vehicle before contact find (video path).
+2026-03-30T13:11:51.460482+00:00 [FORM] siebel_step=5_vehicle_list | form=Auto Vehicle List (DMS_REAL_URL_VEHICLE) | action=begin_vehicle_flow_navigate_then_search_applet | engine_partial='11204' | frame_partial='43284' | key_partial='1267' | vehicle_url_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+All+Vehicle+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Auto+Vehicle+List+Applet&SWERowId0=1-100-1676'
+2026-03-30T13:11:55.639168+00:00 [NOTE] prepare_vehicle: Find → Vehicles for list query.
+2026-03-30T13:11:56.428450+00:00 [NOTE] prepare_vehicle: VIN + Engine# submitted in Find→Vehicles applet.
+2026-03-30T13:11:56.428526+00:00 [FORM] siebel_step=5_vehicle_list | form=Auto Vehicle List — search/query row | action=find_vehicles_vin_engine_applet_only | engine_partial='11204' | find_vehicles_vin_engine_ok=True | frame_partial='43284'
+2026-03-30T13:11:58.960532+00:00 [NOTE] Scraped vehicle row from Siebel grid.
+2026-03-30T13:11:59.833325+00:00 [NOTE] prepare_vehicle: opened vehicle from left Search Results (VIN link).
+2026-03-30T13:12:01.353150+00:00 [NOTE] Vehicle prep: filled Key Number = '1267' on vehicle page.
+2026-03-30T13:12:01.654353+00:00 [NOTE] Vehicle prep: filled Battery No. = '3302419' on vehicle page.
+2026-03-30T13:12:03.362760+00:00 [NOTE] Vehicle prep: saved vehicle record after Key/Battery fill.
+2026-03-30T13:12:03.681173+00:00 [NOTE] prepare_vehicle: vehicle detail applet (aria-labels) → ['full_chassis', 'model', 'year_of_mfg', 'variant', 'color', 'full_engine'].
+2026-03-30T13:12:03.681237+00:00 [FORM] siebel_step=5_vehicle_detail | form=Auto Vehicle — detail applet | action=scrape_VIN_Model_Year_Manu_SKU_Color_Engine_by_aria_label | color='RPB' | full_chassis='MBLHAW477T9C43284' | full_engine='HA11F7T9C11204' | model='SPLENDOR +' | variant='HSPLMIRSCFIRPB' | year_of_mfg='2,026'
+2026-03-30T13:12:03.715402+00:00 [NOTE] DECISION: vehicle with dealer per Inventory Location — '11870 DEALER SHOWROOM'; in_transit=False.
+2026-03-30T13:12:03.715459+00:00 [FORM] siebel_step=5_vehicle_inventory_location | form=Auto Vehicle | action=inventory_location_scrape | in_transit=False | inventory_location='11870 DEALER SHOWROOM'
+2026-03-30T13:12:03.898541+00:00 [NOTE] prepare_vehicle: clicked Serial Number drilldown (name='Serial Number').
+2026-03-30T13:12:05.123098+00:00 [NOTE] prepare_vehicle: feature-id scrape cubic_capacity='125 CC', vehicle_type='MOTORCYCLE WITH GEAR'.
+2026-03-30T13:12:05.146907+00:00 [FORM] siebel_step=vehicle_serial_precheck_pdi | form=Vehicle serial detail | action=precheck_tab_open | log_prefix='prepare_vehicle'
+2026-03-30T13:12:05.164310+00:00 [NOTE] prepare_vehicle: clicked Pre-check from tab strip (container='s_vctrl_div').
+2026-03-30T13:12:06.764526+00:00 [STEP] Stopped: Pre-check / PDI failed on vehicle serial detail.
 
-2026-03-30T13:05:21.860239+00:00 [END] error=Could not click Pre-check icon (id=s_3_1_12_0_Ctrl).
+2026-03-30T13:12:06.764582+00:00 [END] error=Could not click Pre-check icon (id=s_3_1_12_0_Ctrl).

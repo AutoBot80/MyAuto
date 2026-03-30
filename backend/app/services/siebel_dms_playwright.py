@@ -6341,14 +6341,20 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                                 const raw = (t.innerText || t.textContent || t.getAttribute('aria-label') || t.getAttribute('title') || '');
                                 const txt = norm(raw);
                                 if (matches(txt, tabNeedle)) {
-                                    try { t.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
-                                    try { t.focus(); } catch (e) {}
-                                    try { t.click(); } catch (e) {}
+                                    let target = t;
+                                    // Some Siebel themes put role=tab on LI; actual tab switch is on inner A.
+                                    if ((t.tagName || '').toUpperCase() === 'LI') {
+                                        const inner = t.querySelector("a, button, [role='tab']");
+                                        if (inner) target = inner;
+                                    }
+                                    try { target.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
+                                    try { target.focus(); } catch (e) {}
+                                    try { target.click(); } catch (e) {}
                                     try {
                                         const opts = { bubbles: true, cancelable: true, view: window };
-                                        t.dispatchEvent(new MouseEvent('mousedown', opts));
-                                        t.dispatchEvent(new MouseEvent('mouseup', opts));
-                                        t.dispatchEvent(new MouseEvent('click', opts));
+                                        target.dispatchEvent(new MouseEvent('mousedown', opts));
+                                        target.dispatchEvent(new MouseEvent('mouseup', opts));
+                                        target.dispatchEvent(new MouseEvent('click', opts));
                                     } catch (e2) {}
                                     return {
                                         ok: true,
@@ -6357,8 +6363,9 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                                         matchEq: txt === tabNeedle,
                                         labelLen: String(raw).length,
                                         matchedHead: String(raw).slice(0, 24),
-                                        clickedTag: t.tagName || '',
-                                        clickId: String(t.id || '').slice(0, 48),
+                                        matchedTag: t.tagName || '',
+                                        clickedTag: target.tagName || '',
+                                        clickId: String(target.id || '').slice(0, 48),
                                     };
                                 }
                             }
