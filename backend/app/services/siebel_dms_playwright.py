@@ -6332,6 +6332,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                         )) {
                             addC(bar, 'third_level_view_aria');
                         }
+                        const allVisibleTabLabels = [];
                         for (const c of containers) {
                             const bar = c.el;
                             const tabs = Array.from(
@@ -6341,12 +6342,35 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                                 if (!vis(t)) continue;
                                 const raw = (t.innerText || t.textContent || t.getAttribute('aria-label') || t.getAttribute('title') || '');
                                 const txt = norm(raw);
+                                if (allVisibleTabLabels.length < 80) {
+                                    allVisibleTabLabels.push(String(raw).trim().slice(0, 48));
+                                }
                                 if (matches(txt, tabNeedle)) {
                                     let target = t;
-                                    // Some Siebel themes put role=tab on LI; actual tab switch is on inner A.
-                                    if ((t.tagName || '').toUpperCase() === 'LI') {
-                                        const inner = t.querySelector("a, button, [role='tab']");
-                                        if (inner) target = inner;
+                                    const tTag = (t.tagName || '').toUpperCase();
+                                    if (tTag === 'LI') {
+                                        // Never click LI wrapper directly; resolve to actionable tab control.
+                                        const li = t;
+                                        const inner = li.querySelector("a, button, [role='tab']");
+                                        if (inner && inner !== li) {
+                                            target = inner;
+                                        } else {
+                                            const sib = li.nextElementSibling;
+                                            const sibTag = (sib && sib.tagName) ? String(sib.tagName).toUpperCase() : '';
+                                            const sibIsAction = !!(sib && (sibTag === 'A' || sibTag === 'BUTTON' || String(sib.getAttribute('role') || '').toLowerCase() === 'tab'));
+                                            if (sibIsAction && vis(sib)) {
+                                                target = sib;
+                                            } else {
+                                                const ctrl = li.getAttribute('aria-controls') || '';
+                                                const linked = ctrl ? bar.querySelector(`[id="${ctrl}"], a[aria-controls="${ctrl}"], [href="#${ctrl}"]`) : null;
+                                                if (linked && linked !== li && vis(linked)) {
+                                                    target = linked;
+                                                } else {
+                                                    // No actionable element found; skip this match candidate.
+                                                    continue;
+                                                }
+                                            }
+                                        }
                                     }
                                     try { target.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
                                     try { target.focus(); } catch (e) {}
@@ -6361,17 +6385,25 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                                         ok: true,
                                         containerCount: containers.length,
                                         containerSrc: c.src,
+                                        visibleTabLabels: allVisibleTabLabels,
                                         matchEq: txt === tabNeedle,
                                         labelLen: String(raw).length,
                                         matchedHead: String(raw).slice(0, 24),
                                         matchedTag: t.tagName || '',
+                                        matchedId: String(t.id || '').slice(0, 48),
                                         clickedTag: target.tagName || '',
                                         clickId: String(target.id || '').slice(0, 48),
                                     };
                                 }
                             }
                         }
-                        return { ok: false, containerCount: containers.length, matchEq: false, labelLen: 0 };
+                        return {
+                            ok: false,
+                            containerCount: containers.length,
+                            visibleTabLabels: allVisibleTabLabels,
+                            matchEq: false,
+                            labelLen: 0,
+                        };
                     }""",
                     tab_norm,
                 )
