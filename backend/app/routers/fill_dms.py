@@ -367,7 +367,7 @@ def get_data_from_dms(subfolder: str, dealer_id: int | None = Query(None, descri
             if val == "—" or not val:
                 val = ""
             if section == "vehicle":
-                key_map = {"key_num": "key_num", "frame_chassis_num": "frame_num", "frame___chassis_num": "frame_num", "engine_num": "engine_num", "model": "model", "color": "color", "cubic_capacity": "cubic_capacity", "seating_capacity": "seating_capacity", "body_type": "body_type", "vehicle_type": "vehicle_type", "num_cylinders": "num_cylinders", "horse_power": "horse_power", "horsepower": "horse_power", "total_amount": "vehicle_price", "vehicle_price": "vehicle_price", "year_of_mfg": "year_of_mfg"}
+                key_map = {"key_num": "key_num", "frame_chassis_num": "frame_num", "frame___chassis_num": "frame_num", "engine_num": "engine_num", "model": "model", "color": "color", "cubic_capacity": "cubic_capacity", "seating_capacity": "seating_capacity", "body_type": "body_type", "vehicle_type": "vehicle_type", "num_cylinders": "num_cylinders", "total_amount": "vehicle_price", "vehicle_price": "vehicle_price", "year_of_mfg": "year_of_mfg"}
                 out_key = key_map.get(key, key)
                 if val:
                     vehicle[out_key] = val

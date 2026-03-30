@@ -665,7 +665,6 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError,
         (scraped.body_type && String(scraped.body_type).trim()) ||
         (scraped.vehicle_type && String(scraped.vehicle_type).trim()) ||
         (scraped.num_cylinders && String(scraped.num_cylinders).trim()) ||
-        (scraped.horse_power && String(scraped.horse_power).trim()) ||
         (scraped.vehicle_price && String(scraped.vehicle_price).trim()) ||
         (scraped.year_of_mfg && String(scraped.year_of_mfg).trim())
       ));
@@ -685,7 +684,6 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError,
           body_type: scraped.body_type ?? undefined,
           vehicle_type: scraped.vehicle_type ?? undefined,
           num_cylinders: scraped.num_cylinders ?? undefined,
-          horse_power: scraped.horse_power ?? undefined,
           vehicle_price: scraped.vehicle_price ?? undefined,
           year_of_mfg: scraped.year_of_mfg ?? undefined,
         });
@@ -799,7 +797,6 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError,
         body_type: s.body_type,
         vehicle_type: s.vehicle_type,
         num_cylinders: s.num_cylinders,
-        horse_power: s.horse_power,
         vehicle_price: s.vehicle_price,
         year_of_mfg: s.year_of_mfg,
       };
@@ -1231,7 +1228,7 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError,
                         />
                       </dd>
                     </div>
-                    {(v?.model ?? v?.color ?? v?.cubic_capacity ?? v?.seating_capacity ?? v?.body_type ?? v?.vehicle_type ?? v?.num_cylinders ?? v?.horse_power ?? v?.vehicle_price ?? v?.year_of_mfg) && (
+                    {(v?.model ?? v?.color ?? v?.cubic_capacity ?? v?.seating_capacity ?? v?.body_type ?? v?.vehicle_type ?? v?.num_cylinders ?? v?.vehicle_price ?? v?.year_of_mfg) && (
                       <>
                         <div className="add-sales-v2-dl-row">
                           <dt>Model</dt>
@@ -1306,17 +1303,6 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError,
                               className="add-sales-v2-dl-input"
                               value={v?.num_cylinders ?? ""}
                               onChange={(e) => setExtractedVehicle((prev) => ({ ...(prev ?? {}), num_cylinders: e.target.value }))}
-                              placeholder="—"
-                            />
-                          </dd>
-                        </div>
-                        <div className="add-sales-v2-dl-row">
-                          <dt>Horsepower</dt>
-                          <dd>
-                            <input
-                              className="add-sales-v2-dl-input"
-                              value={v?.horse_power ?? ""}
-                              onChange={(e) => setExtractedVehicle((prev) => ({ ...(prev ?? {}), horse_power: e.target.value }))}
                               placeholder="—"
                             />
                           </dd>

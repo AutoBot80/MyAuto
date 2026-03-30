@@ -56,6 +56,15 @@ SIEBEL_DMS_STOP_AFTER_ALL_ENQUIRIES = True
 SIEBEL_DMS_FORCE_FAIL_BEFORE_FIND_CONTACT = True
 
 
+def _normalize_cubic_cc_digits(val: object) -> str:
+    """Extract numeric cc from Siebel grid/feature text (e.g. ``125 CC`` → ``125``)."""
+    s = str(val or "").strip().replace(",", "")
+    if not s:
+        return ""
+    m = re.search(r"(\d+(?:\.\d+)?)", s)
+    return m.group(1) if m else ""
+
+
 def _is_browser_disconnected_error(exc: BaseException) -> bool:
     """True when Playwright lost the browser/WebSocket (tab closed, crash, CDP ended)."""
     msg = str(exc).lower()
@@ -6194,6 +6203,24 @@ def _siebel_click_by_id_anywhere(
     return False
 
 
+def _siebel_parse_grid_date_cell_to_date(text: str) -> date | None:
+    """Best-effort parse for Siebel list/grid date cells (often DD/MM/YYYY). Returns None if unknown."""
+    t = (text or "").strip()
+    if not t:
+        return None
+    for sep in (" ", "T"):
+        if sep in t:
+            t = t.split(sep)[0].strip()
+            break
+    t = t[:10].strip()
+    for fmt in ("%d/%m/%Y", "%d/%m/%y", "%m/%d/%Y", "%m/%d/%y", "%Y-%m-%d", "%d-%m-%Y"):
+        try:
+            return datetime.strptime(t, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
 def _siebel_run_vehicle_serial_detail_precheck_pdi(
     page: Page,
     *,
@@ -6478,11 +6505,12 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             page, "5_s_1_l_HHML_Fetaure_Value", content_frame_selector=content_frame_selector
         )
         if cc:
-            scraped["cubic_capacity"] = cc
+            scraped["cubic_capacity"] = _normalize_cubic_cc_digits(cc) or str(cc).strip()
         if vt:
             scraped["vehicle_type"] = vt
+        _cc_log = scraped.get("cubic_capacity") or cc
         note(
-            f"{log_prefix}: feature-id scrape cubic_capacity={cc!r}, vehicle_type={vt!r}."
+            f"{log_prefix}: feature-id scrape cubic_capacity={_cc_log!r}, vehicle_type={vt!r}."
         )
 
     # region agent log
@@ -7137,156 +7165,302 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     except Exception:
         pass
 
-    _sr_new_clicked = False
-    _sr_selectors = [
-        "[aria-label='Service Request List:New']",
-        "a[aria-label='Service Request List:New']",
-        "button[aria-label='Service Request List:New']",
-        "[aria-label*='Service Request List' i][aria-label*='New' i]",
-        "[title='Service Request List:New']",
-    ]
-    for root in _roots():
-        if _sr_new_clicked:
-            break
-        for css in _sr_selectors:
-            try:
-                loc = root.locator(css).first
-                if loc.count() > 0 and loc.is_visible(timeout=700):
-                    try:
-                        loc.click(timeout=_tmo)
-                    except Exception:
-                        loc.click(timeout=_tmo, force=True)
-                    _sr_new_clicked = True
-                    break
-            except Exception:
+    _pdi_js = """() => {
+        const norm = (s) => String(s || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+        const vis = (el) => {
+            if (!el) return false;
+            const st = window.getComputedStyle(el);
+            if (st.display === 'none' || st.visibility === 'hidden') return false;
+            const r = el.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+        };
+        const headerIsPdiExpiry = (txt) => {
+            const c = norm(txt);
+            return (c.includes('pdi') && c.includes('expir')) || c === 'pdi expiry date' || c.includes('pdi expiry');
+        };
+        const tables = Array.from(document.querySelectorAll('table')).filter(vis);
+        let best = { rowCount: 0, headerMatched: false, colIdx: -1, expiryRaw: [] };
+        for (const tb of tables) {
+            const rows = Array.from(tb.querySelectorAll('tr')).filter(vis);
+            if (rows.length < 1) continue;
+            let colIdx = -1;
+            for (let ri = 0; ri < Math.min(4, rows.length); ri++) {
+                const cells = rows[ri].querySelectorAll('th, td');
+                for (let ci = 0; ci < cells.length; ci++) {
+                    if (headerIsPdiExpiry(cells[ci].textContent || '')) {
+                        colIdx = ci;
+                        break;
+                    }
+                }
+                if (colIdx >= 0) break;
+            }
+            const expiryRaw = [];
+            let dataRows = 0;
+            for (const tr of rows) {
+                const cls = String(tr.className || '').toLowerCase();
+                if (cls.includes('jqgfirstrow')) continue;
+                const tds = tr.querySelectorAll('td');
+                if (tds.length < 2) continue;
+                const rowTxt = (tr.textContent || '').trim();
+                if (rowTxt.length < 2) continue;
+                const ths = tr.querySelectorAll('th');
+                if (ths.length > 0 && tds.length === 0) continue;
+                dataRows++;
+                if (colIdx >= 0 && colIdx < tds.length) {
+                    const cellVal = (tds[colIdx].innerText || tds[colIdx].textContent || '').trim();
+                    if (cellVal) expiryRaw.push(cellVal.slice(0, 48));
+                }
+            }
+            if (dataRows > best.rowCount || (colIdx >= 0 && !best.headerMatched)) {
+                best = {
+                    rowCount: Math.max(best.rowCount, dataRows),
+                    headerMatched: colIdx >= 0,
+                    colIdx,
+                    expiryRaw: colIdx >= 0 ? expiryRaw.slice(0, 12) : [],
+                };
+            }
+        }
+        return best;
+    }"""
+    _pdi_row_count = 0
+    _pdi_header_matched = False
+    _pdi_expiry_raw: list[str] = []
+    _pdi_best_score = -1
+    for _pri, _proot in enumerate(_roots()):
+        try:
+            _pr = _proot.evaluate(_pdi_js)
+            if not isinstance(_pr, dict):
                 continue
-    if not _sr_new_clicked:
-        return False, "Could not click 'Service Request List:New' on PDI tab."
-    note(f"{log_prefix}: clicked Service Request List:New on PDI tab.")
-    _safe_page_wait(page, 1200, log_label="after_sr_list_new")
+            _rc = int(_pr.get("rowCount") or 0)
+            _hm = bool(_pr.get("headerMatched"))
+            _er = list(_pr.get("expiryRaw") or [])
+            _sc = _rc + (10_000 if _hm else 0)
+            if _sc > _pdi_best_score:
+                _pdi_best_score = _sc
+                _pdi_row_count = _rc
+                _pdi_header_matched = _hm
+                _pdi_expiry_raw = _er
+        except Exception:
+            continue
+    _pdi_dates: list[date] = []
+    for _raw in _pdi_expiry_raw:
+        _d = _siebel_parse_grid_date_cell_to_date(_raw)
+        if _d is not None:
+            _pdi_dates.append(_d)
+    _today = date.today()
+    _pdi_max_expiry: date | None = max(_pdi_dates) if _pdi_dates else None
+    _pdi_expired = (
+        _pdi_header_matched
+        and len(_pdi_dates) > 0
+        and _pdi_max_expiry is not None
+        and _pdi_max_expiry < _today
+    )
+    _pdi_need_new_row = _pdi_row_count == 0 or _pdi_expired
+    if _pdi_row_count > 0 and not _pdi_need_new_row:
+        if _pdi_max_expiry is not None:
+            note(
+                f"{log_prefix}: PDI list has row(s) with valid expiry "
+                f"(latest parsed PDI Expiry={_pdi_max_expiry.isoformat()}, today={_today.isoformat()}) — "
+                "skipping Service Request New / pick / Submit."
+            )
+        else:
+            note(
+                f"{log_prefix}: PDI list has row(s) (count≈{_pdi_row_count}) but PDI Expiry could not be parsed "
+                f"(headerMatched={_pdi_header_matched}, samples={_pdi_expiry_raw[:3]!r}) — "
+                "assuming valid PDI; skipping Service Request New / pick / Submit."
+            )
+    elif _pdi_expired and _pdi_max_expiry is not None:
+        note(
+            f"{log_prefix}: PDI Expiry {_pdi_max_expiry.isoformat()} is before today ({_today.isoformat()}) — "
+            "adding a new PDI row."
+        )
+    elif _pdi_row_count == 0:
+        note(f"{log_prefix}: PDI list has no data rows — adding new PDI row.")
 
-    if not _siebel_click_by_id_anywhere(
-        page,
-        "s_2_2_32_0_icon",
-        timeout_ms=_tmo,
-        content_frame_selector=content_frame_selector,
-        note=note,
-        label="PDI pick icon",
-        log_prefix=log_prefix,
-        wait_ms=1200,
-    ):
+    try:
+        import json as _json_pdi_probe
+
+        with open(
+            Path(__file__).resolve().parents[3] / "debug-0875fe.log",
+            "a",
+            encoding="utf-8",
+        ) as _lf_pdi_probe:
+            _lf_pdi_probe.write(
+                _json_pdi_probe.dumps(
+                    {
+                        "sessionId": "0875fe",
+                        "runId": "pre-fix",
+                        "hypothesisId": "G6",
+                        "location": "siebel_dms_playwright.py:_siebel_run_vehicle_serial_detail_precheck_pdi",
+                        "message": "pdi_existing_probe",
+                        "data": {
+                            "row_count": _pdi_row_count,
+                            "header_matched": _pdi_header_matched,
+                            "expiry_samples": _pdi_expiry_raw[:8],
+                            "parsed_max_expiry": _pdi_max_expiry.isoformat() if _pdi_max_expiry else "",
+                            "today": _today.isoformat(),
+                            "need_new_row": _pdi_need_new_row,
+                        },
+                        "timestamp": int(time.time() * 1000),
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+    except Exception:
+        pass
+
+    if _pdi_need_new_row:
+        _sr_new_clicked = False
+        _sr_selectors = [
+            "[aria-label='Service Request List:New']",
+            "a[aria-label='Service Request List:New']",
+            "button[aria-label='Service Request List:New']",
+            "[aria-label*='Service Request List' i][aria-label*='New' i]",
+            "[title='Service Request List:New']",
+        ]
+        for root in _roots():
+            if _sr_new_clicked:
+                break
+            for css in _sr_selectors:
+                try:
+                    loc = root.locator(css).first
+                    if loc.count() > 0 and loc.is_visible(timeout=700):
+                        try:
+                            loc.click(timeout=_tmo)
+                        except Exception:
+                            loc.click(timeout=_tmo, force=True)
+                        _sr_new_clicked = True
+                        break
+                except Exception:
+                    continue
+        if not _sr_new_clicked:
+            return False, "Could not click 'Service Request List:New' on PDI tab."
+        note(f"{log_prefix}: clicked Service Request List:New on PDI tab.")
+        _safe_page_wait(page, 1200, log_label="after_sr_list_new")
+
         if not _siebel_click_by_id_anywhere(
             page,
-            "s_2_2_32_0",
+            "s_2_2_32_0_icon",
             timeout_ms=_tmo,
             content_frame_selector=content_frame_selector,
             note=note,
-            label="PDI pick button",
+            label="PDI pick icon",
             log_prefix=log_prefix,
             wait_ms=1200,
         ):
-            return False, "Could not click PDI pick icon (id=s_2_2_32_0_icon)."
+            if not _siebel_click_by_id_anywhere(
+                page,
+                "s_2_2_32_0",
+                timeout_ms=_tmo,
+                content_frame_selector=content_frame_selector,
+                note=note,
+                label="PDI pick button",
+                log_prefix=log_prefix,
+                wait_ms=1200,
+            ):
+                return False, "Could not click PDI pick icon (id=s_2_2_32_0_icon)."
 
-    _safe_page_wait(page, 800, log_label="after_pdi_pick_icon_settle")
-    for root in _roots():
-        try:
-            _pdi_row_result = root.evaluate("""() => {
-                const vis = (el) => {
-                    if (!el) return false;
-                    const st = window.getComputedStyle(el);
-                    if (st.display === 'none' || st.visibility === 'hidden') return false;
-                    const r = el.getBoundingClientRect();
-                    return r.width > 0 && r.height > 0;
-                };
-                const rows = Array.from(document.querySelectorAll('table tbody tr, table tr'));
-                for (const tr of rows) {
-                    if (!vis(tr)) continue;
-                    const tds = tr.querySelectorAll('td');
-                    if (tds.length < 2) continue;
-                    const cls = (tr.className || '').toLowerCase();
-                    if (cls.includes('jqgfirstrow') || cls.includes('header')) continue;
-                    const txt = (tr.textContent || '').trim();
-                    if (!txt || txt.length < 3) continue;
-                    const clickable = tr.querySelector('a, input[type="radio"], input[type="checkbox"], td');
-                    if (clickable) { clickable.click(); } else { tr.click(); }
-                    return 'row_clicked';
-                }
-                return '';
-            }""")
-            if _pdi_row_result:
-                note(f"{log_prefix}: picked first row in PDI applet.")
-                _safe_page_wait(page, 600, log_label="after_pdi_row_pick")
+        _safe_page_wait(page, 800, log_label="after_pdi_pick_icon_settle")
+        for root in _roots():
+            try:
+                _pdi_row_result = root.evaluate("""() => {
+                    const vis = (el) => {
+                        if (!el) return false;
+                        const st = window.getComputedStyle(el);
+                        if (st.display === 'none' || st.visibility === 'hidden') return false;
+                        const r = el.getBoundingClientRect();
+                        return r.width > 0 && r.height > 0;
+                    };
+                    const rows = Array.from(document.querySelectorAll('table tbody tr, table tr'));
+                    for (const tr of rows) {
+                        if (!vis(tr)) continue;
+                        const tds = tr.querySelectorAll('td');
+                        if (tds.length < 2) continue;
+                        const cls = (tr.className || '').toLowerCase();
+                        if (cls.includes('jqgfirstrow') || cls.includes('header')) continue;
+                        const txt = (tr.textContent || '').trim();
+                        if (!txt || txt.length < 3) continue;
+                        const clickable = tr.querySelector('a, input[type="radio"], input[type="checkbox"], td');
+                        if (clickable) { clickable.click(); } else { tr.click(); }
+                        return 'row_clicked';
+                    }
+                    return '';
+                }""")
+                if _pdi_row_result:
+                    note(f"{log_prefix}: picked first row in PDI applet.")
+                    _safe_page_wait(page, 600, log_label="after_pdi_row_pick")
+                    break
+            except Exception:
+                continue
+
+        _pdi_ok_done = False
+        for root in _roots():
+            for ok_css in (
+                "button[aria-label*='OK' i]",
+                "a[aria-label*='OK' i]",
+                "input[type='button'][value='OK' i]",
+                "button:has-text('OK')",
+                "a:has-text('OK')",
+            ):
+                try:
+                    ok_loc = root.locator(ok_css).first
+                    if ok_loc.count() > 0 and ok_loc.is_visible(timeout=500):
+                        try:
+                            ok_loc.click(timeout=_tmo)
+                        except Exception:
+                            ok_loc.click(timeout=_tmo, force=True)
+                        _pdi_ok_done = True
+                        note(f"{log_prefix}: clicked OK on PDI pick applet.")
+                        _safe_page_wait(page, 1000, log_label="after_pdi_ok")
+                        break
+                except Exception:
+                    continue
+            if _pdi_ok_done:
                 break
-        except Exception:
-            continue
+        if not _pdi_ok_done:
+            note(f"{log_prefix}: OK button not found on PDI pick applet (best-effort).")
 
-    _pdi_ok_done = False
-    for root in _roots():
-        for ok_css in (
-            "button[aria-label*='OK' i]",
-            "a[aria-label*='OK' i]",
-            "input[type='button'][value='OK' i]",
-            "button:has-text('OK')",
-            "a:has-text('OK')",
-        ):
-            try:
-                ok_loc = root.locator(ok_css).first
-                if ok_loc.count() > 0 and ok_loc.is_visible(timeout=500):
-                    try:
-                        ok_loc.click(timeout=_tmo)
-                    except Exception:
-                        ok_loc.click(timeout=_tmo, force=True)
-                    _pdi_ok_done = True
-                    note(f"{log_prefix}: clicked OK on PDI pick applet.")
-                    _safe_page_wait(page, 1000, log_label="after_pdi_ok")
-                    break
-            except Exception:
-                continue
-        if _pdi_ok_done:
-            break
-    if not _pdi_ok_done:
-        note(f"{log_prefix}: OK button not found on PDI pick applet (best-effort).")
+        _pdi_submit_done = False
+        for root in _roots():
+            for sub_css in (
+                "button:has-text('Submit')",
+                "a:has-text('Submit')",
+                "input[type='button'][value='Submit' i]",
+                "button[aria-label*='Submit' i]",
+                "a[aria-label*='Submit' i]",
+                "button[title*='Submit' i]",
+                "a[title*='Submit' i]",
+            ):
+                try:
+                    sub_loc = root.locator(sub_css).first
+                    if sub_loc.count() > 0 and sub_loc.is_visible(timeout=700):
+                        try:
+                            sub_loc.click(timeout=_tmo)
+                        except Exception:
+                            sub_loc.click(timeout=_tmo, force=True)
+                        _pdi_submit_done = True
+                        note(f"{log_prefix}: clicked Submit on PDI form.")
+                        _safe_page_wait(page, 1500, log_label="after_pdi_submit")
+                        break
+                except Exception:
+                    continue
+            if _pdi_submit_done:
+                break
+        if not _pdi_submit_done:
+            return False, "Could not click Submit button on PDI form."
 
-    _pdi_submit_done = False
-    for root in _roots():
-        for sub_css in (
-            "button:has-text('Submit')",
-            "a:has-text('Submit')",
-            "input[type='button'][value='Submit' i]",
-            "button[aria-label*='Submit' i]",
-            "a[aria-label*='Submit' i]",
-            "button[title*='Submit' i]",
-            "a[title*='Submit' i]",
-        ):
-            try:
-                sub_loc = root.locator(sub_css).first
-                if sub_loc.count() > 0 and sub_loc.is_visible(timeout=700):
-                    try:
-                        sub_loc.click(timeout=_tmo)
-                    except Exception:
-                        sub_loc.click(timeout=_tmo, force=True)
-                    _pdi_submit_done = True
-                    note(f"{log_prefix}: clicked Submit on PDI form.")
-                    _safe_page_wait(page, 1500, log_label="after_pdi_submit")
-                    break
-            except Exception:
-                continue
-        if _pdi_submit_done:
-            break
-    if not _pdi_submit_done:
-        return False, "Could not click Submit button on PDI form."
-
-    _pdi_submit_err = _detect_siebel_error_popup(page, content_frame_selector)
-    if _pdi_submit_err:
-        note(f"{log_prefix}: Siebel error after PDI Submit → {_pdi_submit_err!r:.300}")
-        return False, f"Siebel error after PDI Submit: {_pdi_submit_err[:200]}"
+        _pdi_submit_err = _detect_siebel_error_popup(page, content_frame_selector)
+        if _pdi_submit_err:
+            note(f"{log_prefix}: Siebel error after PDI Submit → {_pdi_submit_err!r:.300}")
+            return False, f"Siebel error after PDI Submit: {_pdi_submit_err[:200]}"
 
     note(f"{log_prefix}: PDI completed successfully.")
     if callable(form_trace):
         form_trace(
             "vehicle_serial_precheck_pdi",
             "Vehicle serial detail",
-            "pdi_submit_done",
+            "pdi_submit_done" if _pdi_need_new_row else "pdi_valid_existing_skipped_new_row",
             log_prefix=log_prefix,
         )
     return True, None
@@ -7304,14 +7478,15 @@ def _attach_vehicle_to_bkg(
     """
     After a new sales order is saved:
     1. Click Order Number header link to open order detail.
-    2. Click **New** → fill VIN → Price All → Allocate All → scrape Total.
+    2. Click **New** → fill VIN → Price All → Allocate All.
     3. Single-click **VIN** drilldown (name=VIN) → **Serial Number** →
-       ``_siebel_run_vehicle_serial_detail_precheck_pdi`` (feature ids + Pre-check + PDI).
+       ``_siebel_run_vehicle_serial_detail_precheck_pdi`` (Pre-check + PDI only; no field scrapes).
     4. Click ``Order:<order#>`` link → Apply Campaign → Create Invoice.
 
-    Returns ``(success, error_detail, scraped_dict)``.
+    Does **not** read Totals, feature ids, or Invoice# from the DOM — vehicle and ex-showroom values
+    come from ``prepare_vehicle`` / grid merge and ``_create_order`` scrapes where applicable.
+    Returns ``(success, error_detail, extra_dict)`` with ``extra_dict`` always ``{}`` for API compatibility.
     """
-    scraped: dict = {}
     _tmo = min(int(action_timeout_ms or 3000), 4000)
 
     def _all_roots() -> list:
@@ -7377,20 +7552,6 @@ def _attach_vehicle_to_bkg(
                     continue
         return False
 
-    def _scrape_text_by_id(element_id: str) -> str:
-        for root in _all_roots():
-            try:
-                val = root.evaluate(f"""() => {{
-                    const el = document.getElementById("{element_id}");
-                    if (!el) return '';
-                    return (el.value || el.textContent || el.innerText || '').trim();
-                }}""")
-                if val:
-                    return str(val).strip()
-            except Exception:
-                continue
-        return ""
-
     # ── Step 1: Click Order Number header link ──
     _order_clicked = False
     _order_selectors = (
@@ -7453,7 +7614,7 @@ def _attach_vehicle_to_bkg(
             except Exception:
                 pass
     if not _order_clicked:
-        return False, "Could not click Order Number header link.", scraped
+        return False, "Could not click Order Number header link.", {}
 
     try:
         page.wait_for_load_state("networkidle", timeout=8_000)
@@ -7465,13 +7626,13 @@ def _attach_vehicle_to_bkg(
     if not _new_clicked:
         _new_clicked = _click_by_id("s_1_1_35_0", "New button (legacy id)", wait_ms=1200)
     if not _new_clicked:
-        return False, "Could not click New button (id=s_1_1_35_0_Ctrl) on order line items.", scraped
+        return False, "Could not click New button (id=s_1_1_35_0_Ctrl) on order line items.", {}
 
     # ── Step 3: Line-item VIN — same selector family as Sales Orders ``name=VIN`` path; row id may be
     # ``1_s_1_l_VIN``, ``2_s_1_l_VIN``, etc. Use **locator.type** (not ``page.keyboard``) so iframe focus works.
     _ch = (full_chassis or "").strip()
     if not _ch:
-        return False, "attach_vehicle_to_bkg: full_chassis is empty (line-item VIN).", scraped
+        return False, "attach_vehicle_to_bkg: full_chassis is empty (line-item VIN).", {}
 
     _safe_page_wait(page, 500, log_label="after_new_before_vin_field")
     _vin_locator_css: tuple[str, ...] = (
@@ -7637,50 +7798,42 @@ def _attach_vehicle_to_bkg(
                 continue
 
     if not _vin_filled:
-        return False, f"Could not fill line-item VIN (selectors id/_l_VIN/name=VIN) with {_ch!r}.", scraped
+        return False, f"Could not fill line-item VIN (selectors id/_l_VIN/name=VIN) with {_ch!r}.", {}
     _safe_page_wait(page, 2800, log_label="after_vin_tab_settle")
 
     # ── Step 4: Click Price All (name="s_1_1_7_0") ──
     if not _click_by_name("s_1_1_7_0", "Price All", wait_ms=2000):
-        return False, "Could not click Price All (name=s_1_1_7_0).", scraped
+        return False, "Could not click Price All (name=s_1_1_7_0).", {}
     _pa_err = _detect_siebel_error_popup(page, content_frame_selector)
     if _pa_err:
         note(f"attach_vehicle_to_bkg: Siebel error after Price All → {_pa_err!r:.300}")
-        return False, f"Siebel error after Price All: {_pa_err[:200]}", scraped
+        return False, f"Siebel error after Price All: {_pa_err[:200]}", {}
 
     # ── Step 5: Click Allocate All (id="s_1_1_9_0_Ctrl") ──
     if not _click_by_id("s_1_1_9_0_Ctrl", "Allocate All", wait_ms=2000):
-        return False, "Could not click Allocate All (id=s_1_1_9_0_Ctrl).", scraped
+        return False, "Could not click Allocate All (id=s_1_1_9_0_Ctrl).", {}
     _aa_err = _detect_siebel_error_popup(page, content_frame_selector)
     if _aa_err:
         note(f"attach_vehicle_to_bkg: Siebel error after Allocate All → {_aa_err!r:.300}")
-        return False, f"Siebel error after Allocate All: {_aa_err[:200]}", scraped
+        return False, f"Siebel error after Allocate All: {_aa_err[:200]}", {}
 
-    # ── Step 6: Scrape Total (id="1_HHML_Total") → vehicle_ex_showroom_cost ──
-    _total = _scrape_text_by_id("1_HHML_Total")
-    scraped["vehicle_ex_showroom_cost"] = _total
-    if _total:
-        note(f"attach_vehicle_to_bkg: scraped Total = {_total!r}.")
-    else:
-        note("attach_vehicle_to_bkg: Total (id=1_HHML_Total) not readable (best-effort).")
-
-    # ── Step 7: Click VIN drilldown (name="VIN") → opens Vehicles tab ──
+    # ── Step 6: Click VIN drilldown (name="VIN") → opens Vehicles tab ──
     if not _click_by_name("VIN", "VIN drilldown", wait_ms=2000):
-        return False, "Could not click VIN drilldown (name=VIN) to open Vehicles tab.", scraped
+        return False, "Could not click VIN drilldown (name=VIN) to open Vehicles tab.", {}
     try:
         page.wait_for_load_state("networkidle", timeout=8_000)
     except Exception:
         pass
 
-    # ── Step 8: Click Serial Number (name="Serial Number") ──
+    # ── Step 7: Click Serial Number (name="Serial Number") ──
     if not _click_by_name("Serial Number", "Serial Number", wait_ms=2000):
-        return False, "Could not click Serial Number (name='Serial Number') on Vehicles tab.", scraped
+        return False, "Could not click Serial Number (name='Serial Number') on Vehicles tab.", {}
     try:
         page.wait_for_load_state("networkidle", timeout=8_000)
     except Exception:
         pass
 
-    # ── Steps 9–11: Feature ids + Pre-check + PDI (``_siebel_run_vehicle_serial_detail_precheck_pdi``) ──
+    # ── Steps 8–9: Pre-check + PDI only (no DOM field scrapes; shared with ``prepare_vehicle`` semantics).
     _pc_ok, _pc_err = _siebel_run_vehicle_serial_detail_precheck_pdi(
         page,
         action_timeout_ms=action_timeout_ms,
@@ -7688,13 +7841,13 @@ def _attach_vehicle_to_bkg(
         note=note,
         form_trace=None,
         log_prefix="attach_vehicle_to_bkg",
-        scraped=scraped,
-        do_feature_id_scrape=True,
+        scraped=None,
+        do_feature_id_scrape=False,
     )
     if not _pc_ok:
-        return False, _pc_err or "Pre-check / PDI failed after Serial Number drilldown.", scraped
+        return False, _pc_err or "Pre-check / PDI failed after Serial Number drilldown.", {}
 
-    # ── Step 12: Click "Order:<order#>" link at top of page ──
+    # ── Step 10: Click "Order:<order#>" link at top of page ──
     _order_link_clicked = False
     _order_num = (order_number or "").strip()
     if _order_num:
@@ -7745,14 +7898,14 @@ def _attach_vehicle_to_bkg(
             except Exception:
                 continue
     if not _order_link_clicked:
-        return False, f"Could not click 'Order:{_order_num}' link at top of page.", scraped
+        return False, f"Could not click 'Order:{_order_num}' link at top of page.", {}
     _safe_page_wait(page, 2000, log_label="after_order_link_click")
     try:
         page.wait_for_load_state("networkidle", timeout=8_000)
     except Exception:
         pass
 
-    # ── Step 13: Click "Apply Campaign" button ──
+    # ── Step 11: Click "Apply Campaign" button ──
     _ac_clicked = False
     _ac_selectors = [
         "button:has-text('Apply Campaign')", "a:has-text('Apply Campaign')",
@@ -7800,16 +7953,16 @@ def _attach_vehicle_to_bkg(
             except Exception:
                 continue
     if not _ac_clicked:
-        return False, "Could not click 'Apply Campaign' button.", scraped
+        return False, "Could not click 'Apply Campaign' button.", {}
     note("attach_vehicle_to_bkg: clicked Apply Campaign.")
     _safe_page_wait(page, 1500, log_label="after_apply_campaign")
 
     _ac_err = _detect_siebel_error_popup(page, content_frame_selector)
     if _ac_err:
         note(f"attach_vehicle_to_bkg: Siebel error after Apply Campaign → {_ac_err!r:.300}")
-        return False, f"Siebel error after Apply Campaign: {_ac_err[:200]}", scraped
+        return False, f"Siebel error after Apply Campaign: {_ac_err[:200]}", {}
 
-    # ── Step 14: Click "Create Invoice" button ──
+    # ── Step 12: Click "Create Invoice" button ──
     _ci_clicked = False
     _ci_selectors = [
         "button:has-text('Create Invoice')", "a:has-text('Create Invoice')",
@@ -7856,7 +8009,7 @@ def _attach_vehicle_to_bkg(
             except Exception:
                 continue
     if not _ci_clicked:
-        return False, "Could not click 'Create Invoice' button.", scraped
+        return False, "Could not click 'Create Invoice' button.", {}
     note("attach_vehicle_to_bkg: clicked Create Invoice.")
     _ci_err = ""
     for _ci_poll in range(4):
@@ -7866,56 +8019,10 @@ def _attach_vehicle_to_bkg(
             break
     if _ci_err:
         note(f"attach_vehicle_to_bkg: Siebel error after Create Invoice → {_ci_err!r:.300}")
-        return False, f"Siebel error after Create Invoice: {_ci_err[:200]}", scraped
-
-    # ── Scrape Invoice# after Create Invoice ──
-    _inv_no = ""
-    for _inv_poll in range(5):
-        for root in _all_roots():
-            try:
-                _inv_no = root.evaluate("""() => {
-                    const vis = (el) => {
-                        if (!el) return false;
-                        const st = window.getComputedStyle(el);
-                        if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity) === 0) return false;
-                        const r = el.getBoundingClientRect();
-                        return r.width > 2 && r.height > 2;
-                    };
-                    for (const el of document.querySelectorAll(
-                        "input[aria-label*='Invoice' i], input[title*='Invoice' i], input[name*='Invoice' i], input[id*='Invoice' i]"
-                    )) {
-                        if (!vis(el)) continue;
-                        const al = (el.getAttribute('aria-label') || '').toLowerCase();
-                        const tt = (el.getAttribute('title') || '').toLowerCase();
-                        if ((al.includes('order') && !al.includes('invoice')) || (tt.includes('order') && !tt.includes('invoice'))) continue;
-                        const val = (el.value || '').trim();
-                        if (val && val.length >= 3 && !/^(pending|—|-)$/i.test(val)) return val;
-                    }
-                    for (const a of document.querySelectorAll(
-                        "a[name='Invoice Number'], a[name='Invoice #'], a[aria-label*='Invoice' i], a[title*='Invoice' i]"
-                    )) {
-                        if (!vis(a)) continue;
-                        const txt = (a.textContent || '').trim();
-                        if (txt && /[A-Za-z0-9-]{4,}/.test(txt)) return txt;
-                    }
-                    return '';
-                }""") or ""
-                _inv_no = str(_inv_no).strip()
-                if _inv_no:
-                    break
-            except Exception:
-                continue
-        if _inv_no:
-            break
-        _safe_page_wait(page, 1000, log_label=f"invoice_scrape_poll_{_inv_poll}")
-    scraped["invoice_number"] = _inv_no
-    if _inv_no:
-        note(f"attach_vehicle_to_bkg: scraped Invoice#={_inv_no!r}.")
-    else:
-        note("attach_vehicle_to_bkg: Invoice# not found after Create Invoice (best-effort).")
+        return False, f"Siebel error after Create Invoice: {_ci_err[:200]}", {}
 
     note("attach_vehicle_to_bkg: all steps completed (Order → VIN → Pre-check → PDI → Apply Campaign → Create Invoice).")
-    return True, None, scraped
+    return True, None, {}
 
 
 def _create_order(
@@ -7940,13 +8047,14 @@ def _create_order(
     - When ``battery_partial`` is set (detail sheet **Battery No** from DMS fill payload), fill **Comments**
       with ``Battery is <number>``
     - Pick contact by mobile from pick applet
-    - Save, scrape Order#, then ``_attach_vehicle_to_bkg`` (header ``a[name='Order Number'][tabindex='-1']``)
+    - Save, scrape Order#, then ``_attach_vehicle_to_bkg`` (header ``a[name='Order Number'][tabindex='-1']``):
+      line-item VIN, Price All, Allocate All, VIN drill → Serial → Pre-check/PDI (clicks only — **no** DOM scrapes in attach).
     - (Invoice-selected / legacy path only) On order line items: Line Items List:New -> VIN (name=VIN) -> full chassis + Enter;
       optional pick applet (search by Vin#) -> fill chassis, select row, OK; then scrape inventory
     - If inventory not In transit: Price all + Allocate all
-    - Scrape Total (Ex-showroom)
+    - Legacy path: scrape Total (Ex-showroom). Primary attach path: ex-showroom from ``prepare_vehicle`` grid / DMS merge.
     """
-    scraped: dict = {"inventory_location": "", "ex_showroom_price": "", "order_number": "", "invoice_number": ""}
+    scraped: dict = {"inventory_location": "", "vehicle_price": "", "order_number": "", "invoice_number": ""}
 
     def _roots():
         return _siebel_locator_search_roots(page, content_frame_selector)
@@ -9622,7 +9730,7 @@ def _create_order(
                 break
         except Exception:
             continue
-    scraped["ex_showroom_price"] = total_ex
+    scraped["vehicle_price"] = total_ex
     if total_ex:
         note(f"Create Order: scraped Total (Ex-showroom)={total_ex!r}.")
     else:
@@ -10023,20 +10131,19 @@ def scrape_siebel_vehicle_row(page: Page, *, content_frame_selector: str | None)
     in_tr = _grid_cells_suggest_in_transit(texts)
     if len(texts) >= 13:
         ex_show = texts[11].strip()
+        _cc = _normalize_cubic_cc_digits(texts[5].strip()) or texts[5].strip()
         return {
             "key_num": texts[0].strip(),
             "frame_num": texts[1].strip(),
             "engine_num": texts[2].strip(),
             "model": texts[3].strip(),
             "color": texts[4].strip(),
-            "cubic_capacity": texts[5].strip(),
+            "cubic_capacity": _cc,
             "seating_capacity": texts[6].strip(),
             "body_type": texts[7].strip(),
             "vehicle_type": texts[8].strip(),
             "num_cylinders": texts[9].strip(),
-            "horse_power": texts[10].strip(),
             "vehicle_price": ex_show,
-            "ex_showroom_price": ex_show,
             "year_of_mfg": texts[12].strip(),
             "in_transit": in_tr,
         }
@@ -10478,6 +10585,23 @@ def _prepare_vehicle_scrape_serial_precheck_pdi_and_features(
     if not _serial_pc_ok:
         return _serial_pc_err or "Pre-check / PDI failed after Serial Number drilldown (prepare_vehicle)."
 
+    _cc_prev = str(scraped.get("cubic_capacity") or "").strip()
+    _vt_prev = str(scraped.get("vehicle_type") or "").strip()
+    if _cc_prev and _vt_prev:
+        note(
+            "prepare_vehicle: cubic_capacity and vehicle_type already set after serial Pre-check/PDI "
+            f"({_cc_prev!r}, {_vt_prev!r}) — skipping Features tab rescrape."
+        )
+        if callable(form_trace):
+            form_trace(
+                "5_vehicle_features",
+                "Features and Image",
+                "skip_features_tab_rescrape_already_populated",
+                cubic_capacity=_cc_prev,
+                vehicle_type=_vt_prev,
+            )
+        return None
+
     if not _siebel_try_click_features_and_image_tab(
         page, action_timeout_ms=action_timeout_ms, note=note
     ):
@@ -10490,16 +10614,17 @@ def _prepare_vehicle_scrape_serial_precheck_pdi_and_features(
 
     cc, vt = _siebel_scrape_features_cubic_and_vehicle_type(page)
     if cc:
-        scraped["cubic_capacity"] = cc
+        scraped["cubic_capacity"] = _normalize_cubic_cc_digits(cc) or str(cc).strip()
     if vt:
         scraped["vehicle_type"] = vt
-    note(f"prepare_vehicle: Features tab → cubic_capacity={cc!r}, vehicle_type={vt!r}.")
+    _feat_cc = scraped.get("cubic_capacity") or cc
+    note(f"prepare_vehicle: Features tab → cubic_capacity={_feat_cc!r}, vehicle_type={vt!r}.")
     if callable(form_trace):
         form_trace(
             "5_vehicle_features",
             "Features and Image",
             "scrape_HHML_Feature_Value_cubic_and_vehicle_type",
-            cubic_capacity=str(cc or ""),
+            cubic_capacity=str(scraped.get("cubic_capacity") or cc or ""),
             vehicle_type=str(vt or ""),
         )
     return None
@@ -10565,13 +10690,11 @@ def _merge_dms_and_grid_for_vehicle_master(dms_values: dict, grid: dict) -> dict
     v = (out.get("variant") or "").strip() or _ds("variant", "vehicle_variant")
     if v:
         out["variant"] = v
-    if not (out.get("vehicle_price") or "").strip() and not (out.get("ex_showroom_price") or "").strip():
-        for k in ("vehicle_ex_showroom_price", "ex_showroom_price", "vehicle_ex_showroom_cost", "total_amount"):
+    if not (out.get("vehicle_price") or "").strip():
+        for k in ("vehicle_ex_showroom_price", "vehicle_ex_showroom_cost", "total_amount"):
             raw = dms_values.get(k)
             if raw is not None and str(raw).strip():
-                s = str(raw).strip()
-                out["vehicle_price"] = s
-                out["ex_showroom_price"] = s
+                out["vehicle_price"] = str(raw).strip()
                 break
     _apply_year_of_mfg_yyyy(out)
     return out
@@ -10630,10 +10753,10 @@ def _vehicle_master_prepare_gaps(merged: dict) -> tuple[list[str], list[str]]:
     if not (merged.get("cubic_capacity") or "").strip():
         info.append(
             "cubic_capacity: often absent when the grid row has fewer than 13 cells; "
-            "may be scraped after Generate Booking via order-line VIN drill (_attach_vehicle_to_bkg)."
+            "use Serial/Features in prepare_vehicle or DMS/staging."
         )
 
-    if not (merged.get("vehicle_price") or merged.get("ex_showroom_price") or "").strip():
+    if not (merged.get("vehicle_price") or "").strip():
         info.append(
             "vehicle_ex_showroom_price: not in merge — grid price column or DMS price fields may be empty."
         )
@@ -10666,10 +10789,8 @@ def _write_playwright_vehicle_master_section(
         "body_type",
         "vehicle_type",
         "num_cylinders",
-        "horse_power",
         "year_of_mfg",
         "vehicle_price",
-        "ex_showroom_price",
         "in_transit",
         "inventory_location",
     )
@@ -10709,11 +10830,11 @@ def _siebel_fill_key_battery_from_dms_values(
     log_prefix: str = "Vehicle prep",
 ) -> None:
     """
-    Best-effort **Key Number** and **Battery No.** fill on the current vehicle form, then Ctrl+S.
+    Best-effort **Battery No.** then **Key Number** fill on the current vehicle form, then Ctrl+S.
 
     Expects the **vehicle detail** applet (e.g. after left **Search Results** VIN drill-in). Used from
     Add Enquiry and from ``prepare_vehicle`` after opening that view. Does nothing when both partials are
-    empty.
+    empty. Battery is filled before Key to match Siebel tab order / operator SOP on the vehicle page.
     """
     key_val = (dms_values.get("key_partial") or "").strip()
     battery_val = (dms_values.get("battery_partial") or "").strip()
@@ -10722,6 +10843,9 @@ def _siebel_fill_key_battery_from_dms_values(
     _veh_fill_frame = None
     for _vf in _ordered_frames(page):
         try:
+            if _vf.locator('input[aria-label="Battery No."]').count() > 0:
+                _veh_fill_frame = _vf
+                break
             if _vf.locator('input[aria-label="Key Number"]').count() > 0:
                 _veh_fill_frame = _vf
                 break
@@ -10763,16 +10887,16 @@ def _siebel_fill_key_battery_from_dms_values(
     except Exception:
         pass
     # #endregion
-    if key_val:
-        if _fill_by_label_on_frame(_veh_fill_frame, "Key Number", key_val, action_timeout_ms=action_timeout_ms):
-            note(f"{log_prefix}: filled Key Number = {key_val!r} on vehicle page.")
-        else:
-            note(f"{log_prefix}: could not fill Key Number = {key_val!r} on vehicle page (best-effort).")
     if battery_val:
         if _fill_by_label_on_frame(_veh_fill_frame, "Battery No.", battery_val, action_timeout_ms=action_timeout_ms):
             note(f"{log_prefix}: filled Battery No. = {battery_val!r} on vehicle page.")
         else:
             note(f"{log_prefix}: could not fill Battery No. = {battery_val!r} on vehicle page (best-effort).")
+    if key_val:
+        if _fill_by_label_on_frame(_veh_fill_frame, "Key Number", key_val, action_timeout_ms=action_timeout_ms):
+            note(f"{log_prefix}: filled Key Number = {key_val!r} on vehicle page.")
+        else:
+            note(f"{log_prefix}: could not fill Key Number = {key_val!r} on vehicle page (best-effort).")
     if key_val or battery_val:
         _safe_page_wait(page, 400, log_label="after_vehicle_key_battery_fill")
         try:
@@ -10883,7 +11007,7 @@ def prepare_vehicle(
     """
     Pre-booking **vehicle preparation** (runs before Generate Booking): navigate to **Auto Vehicle List**,
     query by key / chassis(VIN) / engine, scrape the first grid row, then open **vehicle detail** from the
-    left **Search Results** VIN hit, fill **Key Number** / **Battery** on that form (best-effort), merge
+    left **Search Results** VIN hit, fill **Battery No.** then **Key Number** on that form (best-effort), merge
     **Vehicle Information** from aria-labels (**VIN**, **Model**, **Manufacturing Year**, **SKU**,
     **Color**, **Engine Number**), evaluate **Inventory Location** (fail if **in transit**), then click
     **Serial Number**, run tab **Pre-check** + **PDI**
@@ -12408,32 +12532,9 @@ def Playwright_Hero_DMS_fill(
         log_fp.write(f"frame_partial={frame_p!r}\n")
         log_fp.write(f"engine_partial={engine_p!r}\n")
         log_fp.write(f"aadhar_id={aadhar_uin!r}\n")
-        _fc = str(
-            dms_values.get("full_chassis")
-            or dms_values.get("frame_num")
-            or dms_values.get("chassis")
-            or ""
-        ).strip()
-        _fe = str(
-            dms_values.get("full_engine")
-            or dms_values.get("engine_num")
-            or dms_values.get("engine")
-            or ""
-        ).strip()
-        _vm = str(dms_values.get("vehicle_model") or dms_values.get("model") or "").strip()
-        _vc = str(
-            dms_values.get("vehicle_colour")
-            or dms_values.get("color")
-            or dms_values.get("colour")
-            or ""
-        ).strip()
-        log_fp.write(f"full_chassis_from_source={_fc!r}\n")
-        log_fp.write(f"full_engine_from_source={_fe!r}\n")
-        log_fp.write(f"vehicle_model_from_source={_vm!r}\n")
-        log_fp.write(f"vehicle_color_from_source={_vc!r}\n")
         log_fp.write(
             "# Siebel: after stage 5, a --- vehicle_master --- block lists merged keys for "
-            "update_vehicle_master_from_dms (grid + DMS/staging). Add Enquiry path can still add "
+            "update_vehicle_master_from_dms (grid + DMS). Add Enquiry path can still add "
             "full_chassis/full_engine from vehicle detail drill before that.\n"
         )
         cu = (urls.contact or "").strip()
@@ -13046,9 +13147,8 @@ def Playwright_Hero_DMS_fill(
                 veh = dict(out.get("vehicle") or {})
                 if order_scraped.get("inventory_location"):
                     veh["inventory_location"] = order_scraped.get("inventory_location")
-                if order_scraped.get("ex_showroom_price"):
-                    veh["vehicle_price"] = order_scraped.get("ex_showroom_price")
-                    veh["ex_showroom_price"] = order_scraped.get("ex_showroom_price")
+                if order_scraped.get("vehicle_price"):
+                    veh["vehicle_price"] = order_scraped.get("vehicle_price")
                 if order_scraped.get("order_number"):
                     veh["order_number"] = order_scraped.get("order_number")
                 if order_scraped.get("invoice_number"):

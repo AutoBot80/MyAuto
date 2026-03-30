@@ -84,7 +84,6 @@ This document lists the current database tables and their columns. **Executable 
 | `variant` | `varchar(64)` | YES |  | Variant from Siebel Vehicles page scrape |
 | `vehicle_type` | `varchar(32)` | YES |  | Type of vehicle; stored **ALL CAPS** after DMS merge (normalized from mixed-case Siebel) |
 | `num_cylinders` | `integer` | YES |  | Number of cylinders |
-| `horse_power` | `numeric(10,2)` | YES |  | Horse power |
 | `length_mm` | `integer` | YES |  | Length in mm |
 | `fuel_type` | `varchar(16)` | YES |  | Fuel type (e.g. Petrol, Diesel) |
 | `vehicle_ex_showroom_price` | `numeric(12,2)` | YES |  | **Ex-showroom / Order Value** from DMS (e.g. after **Price All / Allocate All** in booking attach); `form_vahan_view` exposes it as `vehicle_price` for Vahan |
@@ -492,3 +491,4 @@ This document lists the current database tables and their columns. **Executable 
 | 2.9 | Mar 2026 | **`sales_master`**: **`order_number`** / **`invoice_number`** / **`enquiry_number`** documented as scraped at **different DMS stages**; **`vahan_application_id`** / **`rto_charges`** documented as **Vahan/RTO** only — **BRD §6.1d** |
 | 2.10 | Mar 2026 | **`sales_master`**: master commit **fails on duplicate** **`(customer_id, vehicle_id)`** — **`add_sales_commit_service`** plain `INSERT` + **`ValueError`** on **`uq_sales_customer_vehicle`** |
 | 2.11 | Mar 2026 | **`insurance_master`**: app **INSERT** only for **`(customer_id, vehicle_id, insurance_year)`** (**`uq_insurance_customer_vehicle_year`**); post–**Issue Policy** scrape **UPDATE**s **`policy_num`** / **`insurance_cost`** (**`DDL/alter/14b_insurance_master_add_insurance_cost.sql`**) — **FR-18b** / **`add_sales_commit_service`** |
+| 2.12 | Mar 2026 | Dropped **`vehicle_master.horse_power`** — not sourced from DMS (**`DDL/alter/15b_vehicle_master_drop_horse_power.sql`**); Form 20 field 19 remains in the template but is left blank |

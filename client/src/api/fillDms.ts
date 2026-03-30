@@ -58,7 +58,6 @@ export interface FillDmsResponse {
     body_type?: string;
     vehicle_type?: string;
     num_cylinders?: string;
-    horse_power?: string;
     vehicle_price?: string;
     year_of_mfg?: string;
   };

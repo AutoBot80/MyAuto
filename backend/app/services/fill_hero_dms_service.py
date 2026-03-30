@@ -226,7 +226,6 @@ def _write_data_from_dms(ocr_output_dir: Path, subfolder: str, customer: dict, v
         ("Body type", "body_type"),
         ("Vehicle type", "vehicle_type"),
         ("Num cylinders", "num_cylinders"),
-        ("Horsepower", "horse_power"),
         ("Ex-showroom Price (Order Value)", "vehicle_price"),
         ("Year of Mfg", "year_of_mfg"),
         ("Order # (DMS)", "order_number"),
@@ -767,10 +766,8 @@ def _build_dms_fill_values(
         values["engine_num"] = _eng
     if _mod:
         values["model"] = _mod
-        values["vehicle_model"] = _mod
     if _col:
         values["color"] = _col
-        values["vehicle_colour"] = _col
         values["colour"] = _col
 
     return values
@@ -1151,8 +1148,22 @@ def _normalize_vehicle_type_for_db(raw: object | None) -> str | None:
 def _is_two_wheeler_vehicle_type(vehicle_type_upper: str | None) -> bool:
     if not vehicle_type_upper:
         return False
-    u = vehicle_type_upper.upper()
+    u = re.sub(r"\s+", "", vehicle_type_upper.upper())
     return "MOTORCYCLE" in u or "SCOOTER" in u
+
+
+def _parse_cubic_cc_numeric_for_db(raw: object) -> float | None:
+    """First numeric token from cc text (e.g. ``125 CC`` → ``125.0``)."""
+    s = str(raw or "").strip().replace(",", "")
+    if not s:
+        return None
+    m = re.search(r"(\d+(?:\.\d+)?)", s)
+    if not m:
+        return None
+    try:
+        return float(m.group(1))
+    except ValueError:
+        return None
 
 
 def update_vehicle_master_from_dms(vehicle_id: int, scraped: dict) -> None:
@@ -1162,11 +1173,14 @@ def update_vehicle_master_from_dms(vehicle_id: int, scraped: dict) -> None:
     Maps scrape keys → columns: **full_chassis** / **frame_num** → ``chassis``; **full_engine** /
     **engine_num** → ``engine``; **key_num** or **raw_key_num** → ``key_num``; **model** → ``model``;
     **color** / **colour** → ``colour``; **variant** → ``variant``; **vehicle_price** (after Price All /
-    Allocate All in booking attach) / **ex_showroom_price** / **vehicle_ex_showroom_cost** →
+    Allocate All in booking attach) / **vehicle_ex_showroom_cost** →
     ``vehicle_ex_showroom_price``; **year_of_mfg** (or **dispatch_year**) → ``year_of_mfg``.
 
-    ``vehicle_type`` is normalized to **ALL CAPS**. When it contains **MOTORCYCLE** or **SCOOTER**,
-    sets ``seating_capacity`` = 2, ``body_type`` = ``Open``, ``num_cylinders`` = 1.
+    ``vehicle_type`` is normalized to **ALL CAPS**. When it indicates a **motorcycle** or **scooter**
+    (substring, spaces ignored), sets ``seating_capacity`` = 2, ``body_type`` = ``Open``,
+    ``num_cylinders`` = 1.
+
+    **cubic_capacity** is stored as the first numeric token from scrape text (e.g. ``125 CC`` → ``125``).
 
     ``place_of_registeration`` and ``oem_name`` are filled from the latest ``sales_master`` row’s
     ``dealer_ref.rto_name`` and ``oem_ref.oem_name`` when available.
@@ -1191,22 +1205,15 @@ def update_vehicle_master_from_dms(vehicle_id: int, scraped: dict) -> None:
     body_type = (scraped.get("body_type") or "").strip() or None
     vehicle_type = _normalize_vehicle_type_for_db(scraped.get("vehicle_type"))
     num_cylinders = scraped.get("num_cylinders")
-    horse_power = scraped.get("horse_power")
     year_of_mfg = _parse_vehicle_year_int_for_db(scraped.get("year_of_mfg"))
     if year_of_mfg is None:
         year_of_mfg = _parse_vehicle_year_int_for_db(scraped.get("dispatch_year"))
     ex_showroom = scraped.get("vehicle_price")
     if ex_showroom is None:
-        ex_showroom = scraped.get("ex_showroom_price")
-    if ex_showroom is None:
         ex_showroom = scraped.get("vehicle_ex_showroom_cost")
     if ex_showroom is None:
         ex_showroom = scraped.get("total_amount")
-    if cubic_capacity:
-        try:
-            cubic_capacity = float(str(cubic_capacity).replace(",", ""))
-        except (ValueError, TypeError):
-            cubic_capacity = None
+    cubic_capacity = _parse_cubic_cc_numeric_for_db(cubic_capacity)
     if seating_capacity:
         try:
             seating_capacity = int(str(seating_capacity).strip())
@@ -1217,11 +1224,6 @@ def update_vehicle_master_from_dms(vehicle_id: int, scraped: dict) -> None:
             num_cylinders = int(str(num_cylinders).strip())
         except (ValueError, TypeError):
             num_cylinders = None
-    if horse_power:
-        try:
-            horse_power = float(str(horse_power).replace(",", ""))
-        except (ValueError, TypeError):
-            horse_power = None
     if ex_showroom:
         try:
             ex_showroom = float(str(ex_showroom).replace(",", ""))
@@ -1276,7 +1278,6 @@ def update_vehicle_master_from_dms(vehicle_id: int, scraped: dict) -> None:
                     body_type = COALESCE(%s, body_type),
                     vehicle_type = COALESCE(%s, vehicle_type),
                     num_cylinders = COALESCE(%s, num_cylinders),
-                    horse_power = COALESCE(%s, horse_power),
                     year_of_mfg = COALESCE(%s, year_of_mfg),
                     vehicle_ex_showroom_price = COALESCE(%s, vehicle_ex_showroom_price),
                     place_of_registeration = COALESCE(%s, place_of_registeration),
@@ -1295,7 +1296,6 @@ def update_vehicle_master_from_dms(vehicle_id: int, scraped: dict) -> None:
                 body_type,
                 vehicle_type,
                 num_cylinders,
-                horse_power,
                 year_of_mfg,
                 ex_showroom,
                 place_reg,
@@ -1319,7 +1319,6 @@ def update_vehicle_master_from_dms(vehicle_id: int, scraped: dict) -> None:
                     body_type = COALESCE(%s, body_type),
                     vehicle_type = COALESCE(%s, vehicle_type),
                     num_cylinders = COALESCE(%s, num_cylinders),
-                    horse_power = COALESCE(%s, horse_power),
                     year_of_mfg = COALESCE(%s, year_of_mfg),
                     vehicle_ex_showroom_price = COALESCE(%s, vehicle_ex_showroom_price),
                     place_of_registeration = COALESCE(%s, place_of_registeration),
@@ -1339,7 +1338,6 @@ def update_vehicle_master_from_dms(vehicle_id: int, scraped: dict) -> None:
                             body_type,
                             vehicle_type,
                             num_cylinders,
-                            horse_power,
                             year_of_mfg,
                             ex_showroom,
                             place_reg,

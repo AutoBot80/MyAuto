@@ -60,7 +60,7 @@ def _get_vehicle_from_db(vehicle_id: int) -> dict[str, Any]:
                 """
                 SELECT vehicle_id, chassis, engine, key_num, model, colour,
                        year_of_mfg, cubic_capacity, body_type, seating_capacity,
-                       oem_name, vehicle_type, num_cylinders, horse_power, length_mm, fuel_type
+                       oem_name, vehicle_type, num_cylinders, length_mm, fuel_type
                 FROM vehicle_master WHERE vehicle_id = %s
                 """,
                 (vehicle_id,),
@@ -198,8 +198,8 @@ def _build_form20_data(
     # Field 18: No. of cylinders
     data["field_18_num_cylinders"] = _str(v.get("num_cylinders"))
 
-    # Field 19: Horse power
-    data["field_19_horse_power"] = _str(v.get("horse_power"))
+    # Field 19: Horse power (not stored on vehicle_master; leave blank)
+    data["field_19_horse_power"] = ""
 
     # Field 20: Cubic capacity (cc)
     data["field_20_cubic_capacity"] = _str(v.get("cubic_capacity"))
