@@ -6320,8 +6320,10 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                             "[aria-label*='Third Level View Bar' i], [title*='Third Level View Bar' i], [id*='ThirdLevelViewBar' i]"
                         )).filter(vis);
                         for (const bar of bars) {
+                            // jQuery UI tabs: only the **anchor / control** activates the tab; clicking
+                            // the wrapping `<li>` often no-ops while label text still matches (false success).
                             const tabs = Array.from(
-                                bar.querySelectorAll("a, button, span, li, [role='tab']")
+                                bar.querySelectorAll("a, button, [role='tab']")
                             );
                             for (const t of tabs) {
                                 if (!vis(t)) continue;
@@ -6336,6 +6338,8 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                                         matchEq: txt === tabNeedle,
                                         labelLen: String(raw).length,
                                         matchedHead: String(raw).slice(0, 24),
+                                        clickedTag: t.tagName || '',
+                                        clickId: String(t.id || '').slice(0, 48),
                                     };
                                 }
                             }
