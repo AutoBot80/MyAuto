@@ -6208,8 +6208,10 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     """
     Pre-check + PDI applets on the **vehicle serial** detail view (after ``Serial Number`` drilldown).
 
-    Shared by ``prepare_vehicle`` and ``_attach_vehicle_to_bkg``. Uses Hero tenant ids (e.g.
-    ``ui-id-1115``, ``s_3_1_12_0_Ctrl``, ``s_2_2_32_0_icon``).
+    Shared by ``prepare_vehicle`` and ``_attach_vehicle_to_bkg``. Third Level View Bar tabs are
+    clicked by label (with hyphen-insensitive match for **Pre-check** vs **PreCheck**) then by id fallbacks
+    (e.g. ``ui-id-160`` / ``ui-id-158`` on one tenant; legacy ``ui-id-1115`` kept as last resort for Pre-check).
+    Applet controls: ``s_3_1_12_0_Ctrl`` (Pre-check pick), ``s_2_2_32_0_icon`` (PDI pick).
     """
     _tmo = min(int(action_timeout_ms or 3000), 4000)
 
@@ -6254,8 +6256,21 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             return False
 
         # region agent log
-        _rv_roots = _roots()
-        _root_summ: list[dict] = []
+        _raw_roots = _roots()
+        _seen_r: set[int] = set()
+        _rv_roots = []
+        for _pref in (page, page.main_frame):
+            if hasattr(_pref, "evaluate") and id(_pref) not in _seen_r:
+                _seen_r.add(id(_pref))
+                _rv_roots.append(_pref)
+        for _r in _raw_roots:
+            if type(_r).__name__ == "FrameLocator" or id(_r) in _seen_r:
+                continue
+            if hasattr(_r, "evaluate"):
+                _seen_r.add(id(_r))
+                _rv_roots.append(_r)
+
+        _root_summ = []
         for _i_r, _r in enumerate(_rv_roots[:16]):
             _entry = {"i": _i_r, "type": type(_r).__name__}
             try:
@@ -6271,7 +6286,14 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             hyp="A",
             loc="siebel_dms_playwright.py:_click_third_level_view_bar_tab",
             msg="third_level_tab_roots_order",
-            data={"tab": tab_text, "roots_len": len(_rv_roots), "roots_head": _root_summ},
+            data={
+                "tab": tab_text,
+                "roots_len": len(_rv_roots),
+                "roots_head": _root_summ,
+                "frame_locators_skipped": sum(
+                    1 for _x in _raw_roots if type(_x).__name__ == "FrameLocator"
+                ),
+            },
         )
         # endregion agent log
 
@@ -6287,6 +6309,13 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                             return r.width > 0 && r.height > 0;
                         };
                         const norm = (s) => String(s || '').trim().toLowerCase();
+                        const compact = (s) => s.replace(/[-\\s]+/g, '');
+                        const matches = (txt, needle) => {
+                            if (txt === needle || txt.includes(needle)) return true;
+                            const a = compact(txt);
+                            const b = compact(needle);
+                            return a === b || a.includes(b) || b.includes(a);
+                        };
                         const bars = Array.from(document.querySelectorAll(
                             "[aria-label*='Third Level View Bar' i], [title*='Third Level View Bar' i], [id*='ThirdLevelViewBar' i]"
                         )).filter(vis);
@@ -6298,7 +6327,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                                 if (!vis(t)) continue;
                                 const raw = (t.innerText || t.textContent || t.getAttribute('aria-label') || t.getAttribute('title') || '');
                                 const txt = norm(raw);
-                                if (txt === tabNeedle || txt.includes(tabNeedle)) {
+                                if (matches(txt, tabNeedle)) {
                                     try { t.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
                                     try { t.click(); } catch (e) {}
                                     return {
@@ -6306,6 +6335,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                                         barCount: bars.length,
                                         matchEq: txt === tabNeedle,
                                         labelLen: String(raw).length,
+                                        matchedHead: String(raw).slice(0, 24),
                                     };
                                 }
                             }
@@ -6328,6 +6358,20 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 )
                 # endregion agent log
                 if isinstance(_res, dict) and _res.get("ok"):
+                    # region agent log
+                    _dbg_ndj(
+                        hyp="B",
+                        loc="siebel_dms_playwright.py:_click_third_level_view_bar_tab",
+                        msg="third_level_tab_click_success",
+                        data={
+                            "tab": tab_text,
+                            "root_index": _idx,
+                            "root_type": type(root).__name__,
+                            "eval": _res,
+                            "verification_pass": "post-fix",
+                        },
+                    )
+                    # endregion agent log
                     note(f"{log_prefix}: clicked {tab_text} from Third Level View Bar.")
                     _safe_page_wait(page, wait_ms, log_label=f"after_third_level_{tab_norm}_tab")
                     return True
@@ -6536,18 +6580,21 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
 
     _precheck_tab_ok = _click_third_level_view_bar_tab("Pre-check", wait_ms=1500)
     if not _precheck_tab_ok:
-        _precheck_tab_ok = _siebel_click_by_id_anywhere(
-            page,
-            "ui-id-1115",
-            timeout_ms=_tmo,
-            content_frame_selector=content_frame_selector,
-            note=note,
-            label="Pre-check tab",
-            log_prefix=log_prefix,
-            wait_ms=1500,
-        )
+        for _pre_id in ("ui-id-160", "ui-id-1115"):
+            if _siebel_click_by_id_anywhere(
+                page,
+                _pre_id,
+                timeout_ms=_tmo,
+                content_frame_selector=content_frame_selector,
+                note=note,
+                label=f"Pre-check tab ({_pre_id})",
+                log_prefix=log_prefix,
+                wait_ms=1500,
+            ):
+                _precheck_tab_ok = True
+                break
     if not _precheck_tab_ok:
-        return False, "Could not open Pre-check tab (id=ui-id-1115)."
+        return False, "Could not open Pre-check tab (Third Level View Bar or ui-id-160 / ui-id-1115)."
 
     try:
         page.wait_for_load_state("networkidle", timeout=8_000)
@@ -6708,6 +6755,17 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     note(f"{log_prefix}: Pre-check completed.")
 
     _pdi_tab_clicked = _click_third_level_view_bar_tab("PDI", wait_ms=1500)
+    if not _pdi_tab_clicked:
+        _pdi_tab_clicked = _siebel_click_by_id_anywhere(
+            page,
+            "ui-id-158",
+            timeout_ms=_tmo,
+            content_frame_selector=content_frame_selector,
+            note=note,
+            label="PDI tab (ui-id-158)",
+            log_prefix=log_prefix,
+            wait_ms=1500,
+        )
     for root in _roots():
         if _pdi_tab_clicked:
             break
