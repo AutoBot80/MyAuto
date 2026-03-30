@@ -6221,12 +6221,63 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         Prefer clicking tabs from the explicit "Third Level View Bar" container because
         this tenant sometimes renders duplicate tab labels elsewhere in the DOM.
         """
+        # region agent log
+        _dbg_log = Path(__file__).resolve().parents[3] / "debug-0875fe.log"
+
+        def _dbg_ndj(*, hyp: str, loc: str, msg: str, data: dict) -> None:
+            try:
+                import json as _json_dbg
+
+                with open(_dbg_log, "a", encoding="utf-8") as _lf:
+                    _lf.write(
+                        _json_dbg.dumps(
+                            {
+                                "sessionId": "0875fe",
+                                "runId": "pre-fix",
+                                "hypothesisId": hyp,
+                                "location": loc,
+                                "message": msg,
+                                "data": data,
+                                "timestamp": int(time.time() * 1000),
+                            },
+                            ensure_ascii=False,
+                        )
+                        + "\n"
+                    )
+            except Exception:
+                pass
+
+        # endregion agent log
+
         tab_norm = (tab_text or "").strip().lower()
         if not tab_norm:
             return False
-        for root in _roots():
+
+        # region agent log
+        _rv_roots = _roots()
+        _root_summ: list[dict] = []
+        for _i_r, _r in enumerate(_rv_roots[:16]):
+            _entry = {"i": _i_r, "type": type(_r).__name__}
             try:
-                hit = root.evaluate(
+                _u = getattr(_r, "url", None)
+                if callable(_u):
+                    _u = _u()
+                if isinstance(_u, str) and _u:
+                    _entry["url_tail"] = _u[-80:]
+            except Exception:
+                pass
+            _root_summ.append(_entry)
+        _dbg_ndj(
+            hyp="A",
+            loc="siebel_dms_playwright.py:_click_third_level_view_bar_tab",
+            msg="third_level_tab_roots_order",
+            data={"tab": tab_text, "roots_len": len(_rv_roots), "roots_head": _root_summ},
+        )
+        # endregion agent log
+
+        for _idx, root in enumerate(_rv_roots):
+            try:
+                _res = root.evaluate(
                     """(tabNeedle) => {
                         const vis = (el) => {
                             if (!el) return false;
@@ -6245,24 +6296,64 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                             );
                             for (const t of tabs) {
                                 if (!vis(t)) continue;
-                                const txt = norm(t.innerText || t.textContent || t.getAttribute('aria-label') || t.getAttribute('title'));
+                                const raw = (t.innerText || t.textContent || t.getAttribute('aria-label') || t.getAttribute('title') || '');
+                                const txt = norm(raw);
                                 if (txt === tabNeedle || txt.includes(tabNeedle)) {
                                     try { t.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
                                     try { t.click(); } catch (e) {}
-                                    return true;
+                                    return {
+                                        ok: true,
+                                        barCount: bars.length,
+                                        matchEq: txt === tabNeedle,
+                                        labelLen: String(raw).length,
+                                    };
                                 }
                             }
                         }
-                        return false;
+                        return { ok: false, barCount: bars.length, matchEq: false, labelLen: 0 };
                     }""",
                     tab_norm,
                 )
-                if hit:
+                # region agent log
+                _dbg_ndj(
+                    hyp="B",
+                    loc="siebel_dms_playwright.py:_click_third_level_view_bar_tab",
+                    msg="third_level_tab_root_scan",
+                    data={
+                        "tab": tab_text,
+                        "root_index": _idx,
+                        "root_type": type(root).__name__,
+                        "eval": _res if isinstance(_res, dict) else {"raw": str(_res)[:120]},
+                    },
+                )
+                # endregion agent log
+                if isinstance(_res, dict) and _res.get("ok"):
                     note(f"{log_prefix}: clicked {tab_text} from Third Level View Bar.")
                     _safe_page_wait(page, wait_ms, log_label=f"after_third_level_{tab_norm}_tab")
                     return True
-            except Exception:
+            except Exception as _ex_tab:
+                # region agent log
+                _dbg_ndj(
+                    hyp="C",
+                    loc="siebel_dms_playwright.py:_click_third_level_view_bar_tab",
+                    msg="third_level_tab_root_exception",
+                    data={
+                        "tab": tab_text,
+                        "root_index": _idx,
+                        "root_type": type(root).__name__,
+                        "err": str(_ex_tab)[:200],
+                    },
+                )
+                # endregion agent log
                 continue
+        # region agent log
+        _dbg_ndj(
+            hyp="D",
+            loc="siebel_dms_playwright.py:_click_third_level_view_bar_tab",
+            msg="third_level_tab_all_roots_failed",
+            data={"tab": tab_text, "roots_len": len(_rv_roots)},
+        )
+        # endregion agent log
         return False
 
     if do_feature_id_scrape and scraped is not None:
@@ -6283,6 +6374,157 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         note(
             f"{log_prefix}: feature-id scrape cubic_capacity={cc!r}, vehicle_type={vt!r}."
         )
+
+    # region agent log
+    try:
+        import json as _json_ae
+
+        _ae_main = page.main_frame.evaluate(
+            """() => {
+                const e = document.activeElement;
+                if (!e) return {};
+                return {
+                    tag: e.tagName,
+                    id: (e.id || '').slice(0, 48),
+                    name: (e.name || '').slice(0, 32),
+                };
+            }"""
+        )
+        with open(
+            Path(__file__).resolve().parents[3] / "debug-0875fe.log",
+            "a",
+            encoding="utf-8",
+        ) as _lf_ae:
+            _lf_ae.write(
+                _json_ae.dumps(
+                    {
+                        "sessionId": "0875fe",
+                        "runId": "pre-fix",
+                        "hypothesisId": "E",
+                        "location": "siebel_dms_playwright.py:_siebel_run_vehicle_serial_detail_precheck_pdi",
+                        "message": "active_element_main_before_third_level_tabs",
+                        "data": {
+                            "ae_main": _ae_main,
+                            "frames_n": len(page.frames),
+                            "feature_scrape_ran": bool(do_feature_id_scrape and scraped is not None),
+                        },
+                        "timestamp": int(time.time() * 1000),
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+    except Exception:
+        pass
+    # endregion agent log
+
+    # region agent log — discover real ui-id / labels for Pre-check & PDI tabs (hypothesis F)
+    try:
+        import json as _json_inv
+
+        _dbg_inv_path = Path(__file__).resolve().parents[3] / "debug-0875fe.log"
+        _inv_js = """() => {
+            const vis = (el) => {
+                if (!el) return false;
+                const st = window.getComputedStyle(el);
+                if (st.display === 'none' || st.visibility === 'hidden') return false;
+                const r = el.getBoundingClientRect();
+                return r.width > 0 && r.height > 0;
+            };
+            const bars = Array.from(document.querySelectorAll(
+                "[aria-label*='Third Level View Bar' i], [title*='Third Level View Bar' i], [id*='ThirdLevelViewBar' i]"
+            )).filter(vis);
+            const tabSamples = [];
+            for (const bar of bars) {
+                const nodes = Array.from(bar.querySelectorAll("a, button, [role='tab'], li"));
+                for (const t of nodes) {
+                    if (!vis(t)) continue;
+                    const raw = (t.innerText || t.textContent || '').trim();
+                    const id = (t.id || '').trim();
+                    const al = (t.getAttribute('aria-label') || '').trim().slice(0, 80);
+                    const ttl = (t.getAttribute('title') || '').trim().slice(0, 80);
+                    const textHead = raw.slice(0, 48);
+                    if (!id && !textHead && !al && !ttl) continue;
+                    tabSamples.push({
+                        tag: t.tagName,
+                        id: id.slice(0, 80),
+                        textHead: textHead,
+                        ariaHead: al,
+                        titleHead: ttl,
+                    });
+                    if (tabSamples.length >= 36) {
+                        return { barCount: bars.length, tabSamples: tabSamples };
+                    }
+                }
+            }
+            return { barCount: bars.length, tabSamples: tabSamples };
+        }"""
+        _scan_frames = [page.main_frame] + [
+            f for f in _ordered_frames(page) if f != page.main_frame
+        ][:14]
+        _best_inv = None
+        _best_score = -1
+        _best_idx = -1
+        _best_url = ""
+        for _fi, _fr in enumerate(_scan_frames):
+            try:
+                _one = _fr.evaluate(_inv_js)
+            except Exception as _e_one:
+                with open(_dbg_inv_path, "a", encoding="utf-8") as _lf:
+                    _lf.write(
+                        _json_inv.dumps(
+                            {
+                                "sessionId": "0875fe",
+                                "runId": "pre-fix",
+                                "hypothesisId": "F",
+                                "location": "siebel_dms_playwright.py:_third_level_bar_inventory",
+                                "message": "inventory_frame_error",
+                                "data": {"frame_index": _fi, "err": str(_e_one)[:200]},
+                                "timestamp": int(time.time() * 1000),
+                            },
+                            ensure_ascii=False,
+                        )
+                        + "\n"
+                    )
+                continue
+            if not isinstance(_one, dict):
+                continue
+            _bc = int(_one.get("barCount") or 0)
+            _ts = _one.get("tabSamples") or []
+            _sc = _bc * 100 + len(_ts)
+            if _sc > _best_score:
+                _best_score = _sc
+                _best_inv = _one
+                _best_idx = _fi
+                try:
+                    _best_url = ((_fr.url or "")[-90:]) if _fr else ""
+                except Exception:
+                    _best_url = ""
+        with open(_dbg_inv_path, "a", encoding="utf-8") as _lf:
+            _lf.write(
+                _json_inv.dumps(
+                    {
+                        "sessionId": "0875fe",
+                        "runId": "pre-fix",
+                        "hypothesisId": "F",
+                        "location": "siebel_dms_playwright.py:_siebel_run_vehicle_serial_detail_precheck_pdi",
+                        "message": "third_level_bar_tab_inventory",
+                        "data": {
+                            "best_frame_index": _best_idx,
+                            "frame_url_tail": _best_url,
+                            "fallback_precheck_id_in_code": "ui-id-1115",
+                            "inventory": _best_inv,
+                            "note": "PDI tab has no ui-id fallback in code; use tabSamples ids or text.",
+                        },
+                        "timestamp": int(time.time() * 1000),
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+    except Exception:
+        pass
+    # endregion agent log
 
     if callable(form_trace):
         form_trace(
