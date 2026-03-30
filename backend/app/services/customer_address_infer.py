@@ -155,6 +155,21 @@ _TRAILING_STATE_PIN_RE = re.compile(
 )
 
 
+def _remove_stray_pin_before_state(text: str) -> str:
+    """
+    Remove OCR noise where an extra 6-digit PIN appears immediately before a state token,
+    e.g. ``..., 302001 Rajasthan - 321001`` -> ``..., Rajasthan - 321001``.
+    """
+    if not text:
+        return text
+    cleaned = re.sub(
+        rf"(?i)(?<!\d)\d{{6}}(?!\d)\s*(?:[,;:.\-–—]\s*)?(?=\b(?:{_REGION_ALT})\b)",
+        "",
+        text,
+    )
+    return _squish_spaces(cleaned)
+
+
 def _parse_state_pin_comma_dash_heuristic(text: str) -> tuple[str | None, str | None]:
     """
     Infer **state** and **PIN** using comma-separated clauses and a final
@@ -332,6 +347,7 @@ def normalize_address_freeform(address_line: str) -> dict[str, str]:
             have_state = True
 
     work = _strip_care_of_clause(text)
+    work = _remove_stray_pin_before_state(work)
     work = _truncate_after_last_pin(work)
     work = _squish_spaces(work)
     co_full = (out.get("care_of") or "").strip()

@@ -1,6 +1,6 @@
 Playwright DMS — execution log (this run only; UTC timestamps)
 
-started_utc=2026-03-30T12:08:09.314364+00:00
+started_utc=2026-03-30T12:30:09.181619+00:00
 skip_contact_find=False
 dms_contact_path='found'
 mobile_phone='8279246146'
@@ -27,50 +27,24 @@ url_vehicle_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/e
 --- trace ---
 Legend: [STEP]/[NOTE]/[MILESTONE] = operator narrative; [FORM] = siebel_step + Siebel form/screen + action + fields/values being applied on that form.
 
-2026-03-30T12:08:09.314592+00:00 [STEP] Started Hero Connect / Siebel DMS automation (linear SOP).
-2026-03-30T12:08:09.314676+00:00 [STEP] Pre-step: preparing vehicle before contact find (video path).
-2026-03-30T12:08:09.314785+00:00 [FORM] siebel_step=5_vehicle_list | form=Auto Vehicle List (DMS_REAL_URL_VEHICLE) | action=begin_vehicle_flow_navigate_then_search_applet | engine_partial='11204' | frame_partial='43284' | key_partial='1267' | vehicle_url_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+All+Vehicle+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Auto+Vehicle+List+Applet&SWERowId0=1-100-1676'
-2026-03-30T12:08:19.901856+00:00 [FORM] siebel_step=5_vehicle_list | form=Auto Vehicle List — search/query row | action=attempted_fill_on_key_chassis_engine_inputs_then_FindGo | chassis_vin_input_located=False | engine_input_located=False | engine_partial='11204' | frame_partial='43284' | key_input_located=True | key_partial='1267'
-2026-03-30T12:08:21.024867+00:00 [NOTE] Clicked Find/Go on vehicle search.
-2026-03-30T12:08:23.579091+00:00 [NOTE] Scraped vehicle row from Siebel grid.
-2026-03-30T12:08:26.804877+00:00 [NOTE] prepare_vehicle: could not click matching VIN in left Search Results — continuing (detail may already be open).
-2026-03-30T12:08:28.314588+00:00 [NOTE] Vehicle prep: filled Key Number = '1267' on vehicle page.
-2026-03-30T12:08:28.643965+00:00 [NOTE] Vehicle prep: filled Battery No. = '3302419' on vehicle page.
-2026-03-30T12:08:30.278652+00:00 [NOTE] Vehicle prep: saved vehicle record after Key/Battery fill.
-2026-03-30T12:08:30.735756+00:00 [FORM] siebel_step=5_vehicle_detail | form=Auto Vehicle — detail applet | action=scrape_VIN_Model_Year_Manu_SKU_Color_Engine_by_aria_label | color='SKU:'
-2026-03-30T12:08:30.797553+00:00 [NOTE] prepare_vehicle: Inventory Location (aria-label) not readable — in_transit may still come from list grid heuristic.
-2026-03-30T12:08:30.919463+00:00 [NOTE] prepare_vehicle: Serial Number drilldown (name='Serial Number') not found — skipping serial-detail Pre-check/PDI and Features scrape.
-2026-03-30T12:08:30.919518+00:00 [NOTE] Vehicle grid scrape (prepare_vehicle): model='', color='SKU:', frame_num='', engine_num='VIN:', key_num=''.
-2026-03-30T12:08:30.919535+00:00 [NOTE] DECISION: vehicle_in_transit=False (list grid heuristic; no Inventory Location).
-2026-03-30T12:08:30.919562+00:00 [FORM] siebel_step=5_vehicle_list | form=Auto Vehicle List — results grid (scraped row) | action=read_first_matching_row_from_grid | engine_num='VIN:' | in_transit=False
-2026-03-30T12:08:30.919628+00:00 [NOTE] prepare_vehicle: vehicle at dealer (not in-transit) — receipt branch skipped.
-2026-03-30T12:08:30.919650+00:00 [STEP] Vehicle does not appear in transit.
-2026-03-30T12:08:30.919689+00:00 [NOTE] vehicle_master: fields still missing after prepare_vehicle merge — model still empty after merge — need grid row or DMS vehicle_model/model.; year_of_mfg still empty — need grid last column or DMS year_of_mfg.
+2026-03-30T12:30:09.181947+00:00 [STEP] Started Hero Connect / Siebel DMS automation (linear SOP).
+2026-03-30T12:30:09.182102+00:00 [STEP] Pre-step: preparing vehicle before contact find (video path).
+2026-03-30T12:30:09.182251+00:00 [FORM] siebel_step=5_vehicle_list | form=Auto Vehicle List (DMS_REAL_URL_VEHICLE) | action=begin_vehicle_flow_navigate_then_search_applet | engine_partial='11204' | frame_partial='43284' | key_partial='1267' | vehicle_url_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+All+Vehicle+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Auto+Vehicle+List+Applet&SWERowId0=1-100-1676'
+2026-03-30T12:30:13.413167+00:00 [NOTE] prepare_vehicle: Find → Vehicles for list query.
+2026-03-30T12:30:14.220575+00:00 [NOTE] prepare_vehicle: VIN + Engine# submitted in Find→Vehicles applet.
+2026-03-30T12:30:14.220647+00:00 [FORM] siebel_step=5_vehicle_list | form=Auto Vehicle List — search/query row | action=find_vehicles_vin_engine_applet_only | engine_partial='11204' | find_vehicles_vin_engine_ok=True | frame_partial='43284'
+2026-03-30T12:30:16.782329+00:00 [NOTE] Scraped vehicle row from Siebel grid.
+2026-03-30T12:30:17.698678+00:00 [NOTE] prepare_vehicle: opened vehicle from left Search Results (VIN link).
+2026-03-30T12:30:19.253494+00:00 [NOTE] Vehicle prep: filled Key Number = '1267' on vehicle page.
+2026-03-30T12:30:19.575750+00:00 [NOTE] Vehicle prep: filled Battery No. = '3302419' on vehicle page.
+2026-03-30T12:30:21.245674+00:00 [NOTE] Vehicle prep: saved vehicle record after Key/Battery fill.
+2026-03-30T12:30:21.553952+00:00 [NOTE] prepare_vehicle: vehicle detail applet (aria-labels) → ['full_chassis', 'model', 'year_of_mfg', 'variant', 'color', 'full_engine'].
+2026-03-30T12:30:21.554013+00:00 [FORM] siebel_step=5_vehicle_detail | form=Auto Vehicle — detail applet | action=scrape_VIN_Model_Year_Manu_SKU_Color_Engine_by_aria_label | color='RPB' | full_chassis='MBLHAW477T9C43284' | full_engine='HA11F7T9C11204' | model='SPLENDOR +' | variant='HSPLMIRSCFIRPB' | year_of_mfg='2,026'
+2026-03-30T12:30:21.589226+00:00 [NOTE] DECISION: vehicle with dealer per Inventory Location — '11870 DEALER SHOWROOM'; in_transit=False.
+2026-03-30T12:30:21.589294+00:00 [FORM] siebel_step=5_vehicle_inventory_location | form=Auto Vehicle | action=inventory_location_scrape | in_transit=False | inventory_location='11870 DEALER SHOWROOM'
+2026-03-30T12:30:21.799903+00:00 [NOTE] prepare_vehicle: clicked Serial Number drilldown (name='Serial Number').
+2026-03-30T12:30:23.065454+00:00 [NOTE] prepare_vehicle: feature-id scrape cubic_capacity='125 CC', vehicle_type='MOTORCYCLE WITH GEAR'.
+2026-03-30T12:30:23.065720+00:00 [FORM] siebel_step=vehicle_serial_precheck_pdi | form=Vehicle serial detail | action=precheck_tab_open | log_prefix='prepare_vehicle'
+2026-03-30T12:30:23.137247+00:00 [STEP] Stopped: Pre-check / PDI failed on vehicle serial detail.
 
---- vehicle_master (merged for update_vehicle_master_from_dms) ---
-full_chassis='43284'
-full_engine='11204'
-engine_num='VIN:'
-raw_key_num='1267'
-color='SKU:'
-in_transit='False'
-# place_of_registeration / oem_name: applied at DB persist from sales_master→dealer_ref/oem_ref when vehicle_id is set (not scraped in prepare_vehicle).
-critical_gaps:
-  - model still empty after merge — need grid row or DMS vehicle_model/model.
-  - year_of_mfg still empty — need grid last column or DMS year_of_mfg.
-notes:
-  - variant: not on typical Auto Vehicle List grid; set in staging/DMS if required.
-  - cubic_capacity: often absent when the grid row has fewer than 13 cells; may be scraped after Generate Booking via order-line VIN drill (_attach_vehicle_to_bkg).
-  - vehicle_ex_showroom_price: not in merge — grid price column or DMS price fields may be empty.
-
---- vehicle_snapshot (video_pre_find_prepare_vehicle) ---
-color='SKU:'
-engine_num='VIN:'
-full_chassis='43284'
-full_engine='11204'
-in_transit='False'
-raw_key_num='1267'
-2026-03-30T12:08:30.919753+00:00 [STEP] Stopped intentionally before Find-Contact mobile search (temporary gate).
-2026-03-30T12:08:30.919764+00:00 [NOTE] Siebel: temporary forced stop before Find-Contact mobile search is enabled (SIEBEL_DMS_FORCE_FAIL_BEFORE_FIND_CONTACT=True). Vehicle preparation completed; disable this gate to continue full flow.
-
-2026-03-30T12:08:30.919782+00:00 [END] error=Siebel: temporary forced stop before Find-Contact mobile search is enabled (SIEBEL_DMS_FORCE_FAIL_BEFORE_FIND_CONTACT=True). Vehicle preparation completed; disable this gate to continue full flow.
+2026-03-30T12:30:23.137302+00:00 [END] error=Could not open Pre-check tab (id=ui-id-1115).

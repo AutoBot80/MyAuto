@@ -12,11 +12,11 @@ Care of / Father–Husband (Aadhaar QR): S/O Phaguni
 --- Vehicle (from DMS search result) ---
 Key num: —
 Frame / Chassis num: —
-Full chassis (VIN from detail): 43284
-Engine num: VIN:
-Full engine (from detail): 11204
+Full chassis (VIN from detail): —
+Engine num: —
+Full engine (from detail): —
 Model: —
-Color: SKU:
+Color: —
 Cubic capacity: —
 Seating capacity: —
 Body type: —

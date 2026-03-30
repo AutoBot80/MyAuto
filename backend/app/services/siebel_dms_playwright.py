@@ -6216,6 +6216,55 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     def _roots():
         return _siebel_all_search_roots(page, content_frame_selector)
 
+    def _click_third_level_view_bar_tab(tab_text: str, *, wait_ms: int) -> bool:
+        """
+        Prefer clicking tabs from the explicit "Third Level View Bar" container because
+        this tenant sometimes renders duplicate tab labels elsewhere in the DOM.
+        """
+        tab_norm = (tab_text or "").strip().lower()
+        if not tab_norm:
+            return False
+        for root in _roots():
+            try:
+                hit = root.evaluate(
+                    """(tabNeedle) => {
+                        const vis = (el) => {
+                            if (!el) return false;
+                            const st = window.getComputedStyle(el);
+                            if (st.display === 'none' || st.visibility === 'hidden') return false;
+                            const r = el.getBoundingClientRect();
+                            return r.width > 0 && r.height > 0;
+                        };
+                        const norm = (s) => String(s || '').trim().toLowerCase();
+                        const bars = Array.from(document.querySelectorAll(
+                            "[aria-label*='Third Level View Bar' i], [title*='Third Level View Bar' i], [id*='ThirdLevelViewBar' i]"
+                        )).filter(vis);
+                        for (const bar of bars) {
+                            const tabs = Array.from(
+                                bar.querySelectorAll("a, button, span, li, [role='tab']")
+                            );
+                            for (const t of tabs) {
+                                if (!vis(t)) continue;
+                                const txt = norm(t.innerText || t.textContent || t.getAttribute('aria-label') || t.getAttribute('title'));
+                                if (txt === tabNeedle || txt.includes(tabNeedle)) {
+                                    try { t.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
+                                    try { t.click(); } catch (e) {}
+                                    return true;
+                                }
+                            }
+                        }
+                        return false;
+                    }""",
+                    tab_norm,
+                )
+                if hit:
+                    note(f"{log_prefix}: clicked {tab_text} from Third Level View Bar.")
+                    _safe_page_wait(page, wait_ms, log_label=f"after_third_level_{tab_norm}_tab")
+                    return True
+            except Exception:
+                continue
+        return False
+
     if do_feature_id_scrape and scraped is not None:
         cc = _siebel_scrape_text_by_id_anywhere(
             page, "4_s_1_l_HHML_Feature_Value", content_frame_selector=content_frame_selector
@@ -6243,16 +6292,19 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             log_prefix=log_prefix,
         )
 
-    if not _siebel_click_by_id_anywhere(
-        page,
-        "ui-id-1115",
-        timeout_ms=_tmo,
-        content_frame_selector=content_frame_selector,
-        note=note,
-        label="Pre-check tab",
-        log_prefix=log_prefix,
-        wait_ms=1500,
-    ):
+    _precheck_tab_ok = _click_third_level_view_bar_tab("Pre-check", wait_ms=1500)
+    if not _precheck_tab_ok:
+        _precheck_tab_ok = _siebel_click_by_id_anywhere(
+            page,
+            "ui-id-1115",
+            timeout_ms=_tmo,
+            content_frame_selector=content_frame_selector,
+            note=note,
+            label="Pre-check tab",
+            log_prefix=log_prefix,
+            wait_ms=1500,
+        )
+    if not _precheck_tab_ok:
         return False, "Could not open Pre-check tab (id=ui-id-1115)."
 
     try:
@@ -6413,8 +6465,10 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         return False, f"Siebel error after Pre-check Submit: {_submit_err[:200]}"
     note(f"{log_prefix}: Pre-check completed.")
 
-    _pdi_tab_clicked = False
+    _pdi_tab_clicked = _click_third_level_view_bar_tab("PDI", wait_ms=1500)
     for root in _roots():
+        if _pdi_tab_clicked:
+            break
         for _pdi_css in (
             "a:has-text('PDI')",
             "li:has-text('PDI') a",
@@ -9905,6 +9959,7 @@ def _merge_dms_and_grid_for_vehicle_master(dms_values: dict, grid: dict) -> dict
                 out["vehicle_price"] = s
                 out["ex_showroom_price"] = s
                 break
+    _apply_year_of_mfg_yyyy(out)
     return out
 
 
