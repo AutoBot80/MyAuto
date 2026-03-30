@@ -6316,12 +6316,23 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                             const b = compact(needle);
                             return a === b || a.includes(b) || b.includes(a);
                         };
-                        const bars = Array.from(document.querySelectorAll(
+                        // PreCheck / PDI live under Siebel **view control** `#s_vctrl_div` (operator-confirmed).
+                        // "Third Level View Bar" hover/tooltip often refers to this strip; aria-scoped nodes can miss controls.
+                        const containers = [];
+                        const seenC = new Set();
+                        const addC = (el, src) => {
+                            if (!el || !vis(el) || seenC.has(el)) return;
+                            seenC.add(el);
+                            containers.push({ el: el, src: src });
+                        };
+                        addC(document.getElementById('s_vctrl_div'), 's_vctrl_div');
+                        for (const bar of document.querySelectorAll(
                             "[aria-label*='Third Level View Bar' i], [title*='Third Level View Bar' i], [id*='ThirdLevelViewBar' i]"
-                        )).filter(vis);
-                        for (const bar of bars) {
-                            // jQuery UI tabs: only the **anchor / control** activates the tab; clicking
-                            // the wrapping `<li>` often no-ops while label text still matches (false success).
+                        )) {
+                            addC(bar, 'third_level_view_aria');
+                        }
+                        for (const c of containers) {
+                            const bar = c.el;
                             const tabs = Array.from(
                                 bar.querySelectorAll("a, button, [role='tab']")
                             );
@@ -6331,10 +6342,18 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                                 const txt = norm(raw);
                                 if (matches(txt, tabNeedle)) {
                                     try { t.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
+                                    try { t.focus(); } catch (e) {}
                                     try { t.click(); } catch (e) {}
+                                    try {
+                                        const opts = { bubbles: true, cancelable: true, view: window };
+                                        t.dispatchEvent(new MouseEvent('mousedown', opts));
+                                        t.dispatchEvent(new MouseEvent('mouseup', opts));
+                                        t.dispatchEvent(new MouseEvent('click', opts));
+                                    } catch (e2) {}
                                     return {
                                         ok: true,
-                                        barCount: bars.length,
+                                        containerCount: containers.length,
+                                        containerSrc: c.src,
                                         matchEq: txt === tabNeedle,
                                         labelLen: String(raw).length,
                                         matchedHead: String(raw).slice(0, 24),
@@ -6344,7 +6363,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                                 }
                             }
                         }
-                        return { ok: false, barCount: bars.length, matchEq: false, labelLen: 0 };
+                        return { ok: false, containerCount: containers.length, matchEq: false, labelLen: 0 };
                     }""",
                     tab_norm,
                 )
@@ -6376,7 +6395,10 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                         },
                     )
                     # endregion agent log
-                    note(f"{log_prefix}: clicked {tab_text} from Third Level View Bar.")
+                    note(
+                        f"{log_prefix}: clicked {tab_text} from tab strip "
+                        f"(container={(_res.get('containerSrc') or '')!r})."
+                    )
                     _safe_page_wait(page, wait_ms, log_label=f"after_third_level_{tab_norm}_tab")
                     return True
             except Exception as _ex_tab:
@@ -6548,6 +6570,15 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                     _best_url = ((_fr.url or "")[-90:]) if _fr else ""
                 except Exception:
                     _best_url = ""
+        _s_vctrl_main = None
+        try:
+            _s_vctrl_main = bool(
+                page.main_frame.evaluate(
+                    "() => !!document.getElementById('s_vctrl_div')"
+                )
+            )
+        except Exception:
+            pass
         with open(_dbg_inv_path, "a", encoding="utf-8") as _lf:
             _lf.write(
                 _json_inv.dumps(
@@ -6560,9 +6591,10 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                         "data": {
                             "best_frame_index": _best_idx,
                             "frame_url_tail": _best_url,
+                            "s_vctrl_div_in_main_frame": _s_vctrl_main,
                             "fallback_precheck_id_in_code": "ui-id-1115",
                             "inventory": _best_inv,
-                            "note": "PDI tab has no ui-id fallback in code; use tabSamples ids or text.",
+                            "note": "Tabs: prefer #s_vctrl_div; see LLD 6.56.",
                         },
                         "timestamp": int(time.time() * 1000),
                     },
