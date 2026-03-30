@@ -357,6 +357,64 @@ def _normalize_aadhar_back_address_chunk(chunk: str) -> str:
     return chunk
 
 
+def _clean_aadhar_back_cross_column_noise(addr: str) -> str:
+    """
+    Remove common Aadhaar-back OCR bleed where Hindi-side glyph noise gets merged into
+    the English address line as short uppercase/junk comma clauses (e.g. ``49 ERHIGH``, ``HARR``).
+    """
+    if not addr:
+        return addr
+
+    parts = [p.strip(" ,.-") for p in re.split(r"\s*,\s*", addr) if p and p.strip(" ,.-")]
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    seen_pin = False
+
+    for p in parts:
+        pl = p.lower()
+        # Keep care-of relation clauses intact.
+        if re.search(r"(?i)\b(?:c|s|w|d)\s*/\s*o\b", p):
+            key = re.sub(r"\s+", " ", pl).strip()
+            if key and key not in seen:
+                cleaned.append(p)
+                seen.add(key)
+            continue
+
+        # Drop obvious OCR noise/footer fragments.
+        if re.search(r"(?i)www\.|help@|uidai|virtual\s*id|aadhaar", p):
+            continue
+        # 1-5 digits plus junk word is usually bleed, not PIN (PIN is 6 digits).
+        if re.search(r"(?<!\d)\d{1,5}\s+[A-Za-z]{3,}", p) and not re.search(r"(?<!\d)\d{6}(?!\d)", p):
+            continue
+        # Very short all-uppercase word chunks are commonly Hindi-side OCR artifacts.
+        words = re.findall(r"[A-Za-z]+", p)
+        if words and all(w.isupper() for w in words) and max(len(w) for w in words) <= 6:
+            # Preserve meaningful short locality tokens only when mixed-case exists.
+            if not re.search(r"[a-z]", p):
+                continue
+
+        # Deduplicate pin if repeated.
+        if re.fullmatch(r"\d{6}", p):
+            if seen_pin:
+                continue
+            seen_pin = True
+
+        key = re.sub(r"\s+", " ", pl).strip()
+        if key in seen:
+            continue
+        cleaned.append(p)
+        seen.add(key)
+
+    out = ", ".join(cleaned)
+    # Collapse accidental duplicated ``..., State, PIN, State, PIN`` tail.
+    out = re.sub(
+        r"(?i)\b([A-Za-z][A-Za-z ]{2,}),\s*(\d{6})\s*,\s*\1\s*,\s*\2\b",
+        r"\1, \2",
+        out,
+    )
+    return re.sub(r"\s+", " ", out).strip(" ,")
+
+
 def _parse_aadhar_back_address_from_ocr(ocr_text: str) -> dict[str, str]:
     """
     English (and noisy OCR) address on Aadhaar back. UIDAI layout uses ``Address:``;
@@ -423,7 +481,9 @@ def _parse_aadhar_back_address_from_ocr(ocr_text: str) -> dict[str, str]:
     if len(raw) < 15:
         return out
     parsed = normalize_address_freeform(raw)
-    out["address"] = parsed.get("address") or re.sub(r"\s+", " ", raw).strip()
+    out["address"] = _clean_aadhar_back_cross_column_noise(
+        parsed.get("address") or re.sub(r"\s+", " ", raw).strip()
+    )
     if parsed.get("care_of"):
         out["care_of"] = parsed["care_of"]
     if parsed.get("pin_code"):

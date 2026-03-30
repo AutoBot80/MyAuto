@@ -70,5 +70,19 @@ export async function apiFetch<T>(
     }
     throw new Error(msg);
   }
-  return res.json() as Promise<T>;
+  const contentType = (res.headers.get("content-type") || "").toLowerCase();
+  const bodyText = await res.text();
+  const looksLikeHtml = /^\s*<!doctype html|^\s*<html/i.test(bodyText);
+  const likelyJson = contentType.includes("application/json") || (!looksLikeHtml && bodyText.trim().startsWith("{"));
+  if (!likelyJson) {
+    throw new Error(
+      `Expected JSON response for ${path}, but received ${contentType || "unknown content type"} ` +
+        "(often dev-server/proxy fallback HTML). Verify VITE_API_URL/proxy routes to backend on :8000."
+    );
+  }
+  try {
+    return JSON.parse(bodyText) as T;
+  } catch {
+    throw new Error(`Expected valid JSON response for ${path}, but received non-JSON content.`);
+  }
 }
