@@ -7,8 +7,9 @@ drill hit → Contacts → Contact_Enquiry → Enquiry → All Enquiries), then 
 
 Default staged flow (flag False): **Find → mobile → Go**; optional
 **basic enquiry** (name/address/state/PIN) + Save + **mandatory re-find** when created; **always**
-care-of + Save; **Auto Vehicle List** (``prepare_vehicle``: search/scrape, key/battery fill, In Transit receipt /
-Pre Check / PDI); **Generate Booking**
+care-of + Save; **Auto Vehicle List** (``prepare_vehicle``: search/scrape, left-pane VIN, key/battery,
+detail + inventory gate; **Pre-check/PDI only at dealer**; In Transit → receipt URL only, no Pre-check/PDI);
+**Generate Booking**
 **after vehicle for all paths**; allotment (line items) when **not** In Transit;
 ``_attach_vehicle_to_bkg`` runs Apply Campaign + **Create Invoice** at the end.
 
@@ -6080,6 +6081,521 @@ def _add_customer_payment(
     return False
 
 
+def _siebel_all_search_roots(page: Page, content_frame_selector: str | None) -> list:
+    """Deduplicated list of content roots + all frames + ``page`` for applet chrome and popups."""
+    r: list = []
+    try:
+        r.extend(list(_siebel_locator_search_roots(page, content_frame_selector)))
+    except Exception:
+        pass
+    try:
+        r.extend(list(_ordered_frames(page)))
+    except Exception:
+        pass
+    r.append(page)
+    seen: set[int] = set()
+    out: list = []
+    for x in r:
+        k = id(x)
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(x)
+    return out
+
+
+def _siebel_scrape_text_by_id_anywhere(
+    page: Page, element_id: str, *, content_frame_selector: str | None
+) -> str:
+    for root in _siebel_all_search_roots(page, content_frame_selector):
+        try:
+            val = root.evaluate(f"""() => {{
+                const el = document.getElementById("{element_id}");
+                if (!el) return '';
+                return (el.value || el.textContent || el.innerText || '').trim();
+            }}""")
+            if val:
+                return str(val).strip()
+        except Exception:
+            continue
+    return ""
+
+
+def _siebel_click_by_id_anywhere(
+    page: Page,
+    element_id: str,
+    *,
+    timeout_ms: int,
+    content_frame_selector: str | None,
+    note,
+    label: str,
+    log_prefix: str,
+    wait_ms: int = 1000,
+) -> bool:
+    tmo = min(int(timeout_ms or 3000), 4000)
+    for root in _siebel_all_search_roots(page, content_frame_selector):
+        try:
+            loc = root.locator(f"#{element_id}").first
+            if loc.count() > 0 and loc.is_visible(timeout=700):
+                try:
+                    loc.click(timeout=tmo)
+                except Exception:
+                    loc.click(timeout=tmo, force=True)
+                note(f"{log_prefix}: clicked {label} (id={element_id!r}).")
+                _safe_page_wait(page, wait_ms, log_label=f"after_{label.replace(' ', '_').lower()}")
+                return True
+        except Exception:
+            continue
+    for root in _siebel_all_search_roots(page, content_frame_selector):
+        try:
+            hit = root.evaluate(f"""() => {{
+                const el = document.getElementById("{element_id}");
+                if (!el) return false;
+                const st = window.getComputedStyle(el);
+                if (st.display === 'none' || st.visibility === 'hidden') return false;
+                el.scrollIntoView({{ block: 'center' }});
+                el.click();
+                return true;
+            }}""")
+            if hit:
+                note(f"{log_prefix}: JS clicked {label} (id={element_id!r}).")
+                _safe_page_wait(page, wait_ms, log_label=f"after_{label.replace(' ', '_').lower()}_js")
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _siebel_run_vehicle_serial_detail_precheck_pdi(
+    page: Page,
+    *,
+    action_timeout_ms: int,
+    content_frame_selector: str | None,
+    note,
+    form_trace=None,
+    log_prefix: str = "vehicle_serial_detail",
+    scraped: dict | None = None,
+    do_feature_id_scrape: bool = True,
+) -> tuple[bool, str | None]:
+    """
+    Pre-check + PDI applets on the **vehicle serial** detail view (after ``Serial Number`` drilldown).
+
+    Shared by ``prepare_vehicle`` and ``_attach_vehicle_to_bkg``. Uses Hero tenant ids (e.g.
+    ``ui-id-1115``, ``s_3_1_12_0_Ctrl``, ``s_2_2_32_0_icon``).
+    """
+    _tmo = min(int(action_timeout_ms or 3000), 4000)
+
+    def _roots():
+        return _siebel_all_search_roots(page, content_frame_selector)
+
+    if do_feature_id_scrape and scraped is not None:
+        cc = _siebel_scrape_text_by_id_anywhere(
+            page, "4_s_1_l_HHML_Feature_Value", content_frame_selector=content_frame_selector
+        ) or _siebel_scrape_text_by_id_anywhere(
+            page, "4_s_1_l_HHML_Fetaure_Value", content_frame_selector=content_frame_selector
+        )
+        vt = _siebel_scrape_text_by_id_anywhere(
+            page, "5_s_1_l_HHML_Feature_Value", content_frame_selector=content_frame_selector
+        ) or _siebel_scrape_text_by_id_anywhere(
+            page, "5_s_1_l_HHML_Fetaure_Value", content_frame_selector=content_frame_selector
+        )
+        if cc:
+            scraped["cubic_capacity"] = cc
+        if vt:
+            scraped["vehicle_type"] = vt
+        note(
+            f"{log_prefix}: feature-id scrape cubic_capacity={cc!r}, vehicle_type={vt!r}."
+        )
+
+    if callable(form_trace):
+        form_trace(
+            "vehicle_serial_precheck_pdi",
+            "Vehicle serial detail",
+            "precheck_tab_open",
+            log_prefix=log_prefix,
+        )
+
+    if not _siebel_click_by_id_anywhere(
+        page,
+        "ui-id-1115",
+        timeout_ms=_tmo,
+        content_frame_selector=content_frame_selector,
+        note=note,
+        label="Pre-check tab",
+        log_prefix=log_prefix,
+        wait_ms=1500,
+    ):
+        return False, "Could not open Pre-check tab (id=ui-id-1115)."
+
+    try:
+        page.wait_for_load_state("networkidle", timeout=8_000)
+    except Exception:
+        pass
+
+    if not _siebel_click_by_id_anywhere(
+        page,
+        "s_3_1_12_0_Ctrl",
+        timeout_ms=_tmo,
+        content_frame_selector=content_frame_selector,
+        note=note,
+        label="Pre-check icon",
+        log_prefix=log_prefix,
+        wait_ms=1200,
+    ):
+        return False, "Could not click Pre-check icon (id=s_3_1_12_0_Ctrl)."
+
+    _safe_page_wait(page, 800, log_label="after_precheck_icon_settle")
+    _pick_ok = False
+    for root in _roots():
+        try:
+            _pick_result = root.evaluate("""() => {
+                const vis = (el) => {
+                    if (!el) return false;
+                    const st = window.getComputedStyle(el);
+                    if (st.display === 'none' || st.visibility === 'hidden') return false;
+                    const r = el.getBoundingClientRect();
+                    return r.width > 0 && r.height > 0;
+                };
+                const inputs = Array.from(document.querySelectorAll('input'));
+                let searchBtn = null;
+                for (const inp of inputs) {
+                    const al = (inp.getAttribute('aria-label') || '').toLowerCase();
+                    const tt = (inp.getAttribute('title') || '').toLowerCase();
+                    if ((al.includes('search') || al.includes('go') || tt.includes('search') || tt.includes('go'))
+                        && vis(inp) && inp.type !== 'text') {
+                        searchBtn = inp;
+                        break;
+                    }
+                }
+                if (searchBtn) {
+                    searchBtn.click();
+                    return 'search_clicked';
+                }
+                return '';
+            }""")
+            if _pick_result:
+                note(f"{log_prefix}: clicked search in pick applet ({_pick_result!r}).")
+                _safe_page_wait(page, 1200, log_label="after_precheck_search_click")
+                _pick_ok = True
+                break
+        except Exception:
+            continue
+
+    if not _pick_ok:
+        note(f"{log_prefix}: search icon not found in pick applet (trying Go/Enter fallback).")
+        try:
+            page.keyboard.press("Enter")
+            _safe_page_wait(page, 1200, log_label="after_precheck_enter_fallback")
+            _pick_ok = True
+        except Exception:
+            pass
+
+    _safe_page_wait(page, 600, log_label="before_precheck_pick_row")
+    for root in _roots():
+        try:
+            _row_result = root.evaluate("""() => {
+                const vis = (el) => {
+                    if (!el) return false;
+                    const st = window.getComputedStyle(el);
+                    if (st.display === 'none' || st.visibility === 'hidden') return false;
+                    const r = el.getBoundingClientRect();
+                    return r.width > 0 && r.height > 0;
+                };
+                const rows = Array.from(document.querySelectorAll('table tbody tr, table tr'));
+                for (const tr of rows) {
+                    if (!vis(tr)) continue;
+                    const tds = tr.querySelectorAll('td');
+                    if (tds.length < 2) continue;
+                    const cls = (tr.className || '').toLowerCase();
+                    if (cls.includes('jqgfirstrow') || cls.includes('header')) continue;
+                    const txt = (tr.textContent || '').trim();
+                    if (!txt || txt.length < 3) continue;
+                    const clickable = tr.querySelector('a, input[type="radio"], input[type="checkbox"], td');
+                    if (clickable) { clickable.click(); } else { tr.click(); }
+                    return 'row_clicked';
+                }
+                return '';
+            }""")
+            if _row_result:
+                note(f"{log_prefix}: picked first row in Pre-check applet.")
+                _safe_page_wait(page, 600, log_label="after_precheck_row_pick")
+                break
+        except Exception:
+            continue
+
+    _ok_done = False
+    for root in _roots():
+        for ok_css in (
+            "button[aria-label*='OK' i]",
+            "a[aria-label*='OK' i]",
+            "input[type='button'][value='OK' i]",
+            "button:has-text('OK')",
+            "a:has-text('OK')",
+        ):
+            try:
+                ok_loc = root.locator(ok_css).first
+                if ok_loc.count() > 0 and ok_loc.is_visible(timeout=500):
+                    try:
+                        ok_loc.click(timeout=_tmo)
+                    except Exception:
+                        ok_loc.click(timeout=_tmo, force=True)
+                    _ok_done = True
+                    note(f"{log_prefix}: clicked OK on Pre-check pick applet.")
+                    _safe_page_wait(page, 1000, log_label="after_precheck_ok")
+                    break
+            except Exception:
+                continue
+        if _ok_done:
+            break
+    if not _ok_done:
+        note(f"{log_prefix}: OK button not found on Pre-check pick applet (best-effort).")
+
+    _submit_done = False
+    for root in _roots():
+        for sub_css in (
+            "button:has-text('Submit')",
+            "a:has-text('Submit')",
+            "input[type='button'][value='Submit' i]",
+            "button[aria-label*='Submit' i]",
+            "a[aria-label*='Submit' i]",
+            "button[title*='Submit' i]",
+            "a[title*='Submit' i]",
+        ):
+            try:
+                sub_loc = root.locator(sub_css).first
+                if sub_loc.count() > 0 and sub_loc.is_visible(timeout=700):
+                    try:
+                        sub_loc.click(timeout=_tmo)
+                    except Exception:
+                        sub_loc.click(timeout=_tmo, force=True)
+                    _submit_done = True
+                    note(f"{log_prefix}: clicked Submit (Pre-check).")
+                    _safe_page_wait(page, 1500, log_label="after_precheck_submit")
+                    break
+            except Exception:
+                continue
+        if _submit_done:
+            break
+    if not _submit_done:
+        return False, "Could not click Submit button on Pre-check."
+
+    _submit_err = _detect_siebel_error_popup(page, content_frame_selector)
+    if _submit_err:
+        note(f"{log_prefix}: Siebel error after Pre-check Submit → {_submit_err!r:.300}")
+        return False, f"Siebel error after Pre-check Submit: {_submit_err[:200]}"
+    note(f"{log_prefix}: Pre-check completed.")
+
+    _pdi_tab_clicked = False
+    for root in _roots():
+        for _pdi_css in (
+            "a:has-text('PDI')",
+            "li:has-text('PDI') a",
+            "span:has-text('PDI')",
+            "[role='tab']:has-text('PDI')",
+            "button:has-text('PDI')",
+        ):
+            try:
+                loc = root.locator(_pdi_css).first
+                if loc.count() > 0 and loc.is_visible(timeout=700):
+                    try:
+                        loc.click(timeout=_tmo)
+                    except Exception:
+                        loc.click(timeout=_tmo, force=True)
+                    _pdi_tab_clicked = True
+                    break
+            except Exception:
+                continue
+        if _pdi_tab_clicked:
+            break
+    if not _pdi_tab_clicked:
+        for root in _roots():
+            try:
+                hit = root.evaluate("""() => {
+                    const vis = (el) => {
+                        if (!el) return false;
+                        const st = window.getComputedStyle(el);
+                        if (st.display === 'none' || st.visibility === 'hidden') return false;
+                        const r = el.getBoundingClientRect();
+                        return r.width > 0 && r.height > 0;
+                    };
+                    const all = Array.from(document.querySelectorAll('a, li, span, button, [role="tab"]'));
+                    for (const el of all) {
+                        if ((el.innerText || '').trim() === 'PDI' && vis(el)) {
+                            el.click();
+                            return true;
+                        }
+                    }
+                    return false;
+                }""")
+                if hit:
+                    _pdi_tab_clicked = True
+                    break
+            except Exception:
+                continue
+    if not _pdi_tab_clicked:
+        return False, "Could not click PDI tab."
+    note(f"{log_prefix}: clicked PDI tab.")
+    _safe_page_wait(page, 1500, log_label="after_pdi_tab")
+    try:
+        page.wait_for_load_state("networkidle", timeout=8_000)
+    except Exception:
+        pass
+
+    _sr_new_clicked = False
+    _sr_selectors = [
+        "[aria-label='Service Request List:New']",
+        "a[aria-label='Service Request List:New']",
+        "button[aria-label='Service Request List:New']",
+        "[aria-label*='Service Request List' i][aria-label*='New' i]",
+        "[title='Service Request List:New']",
+    ]
+    for root in _roots():
+        if _sr_new_clicked:
+            break
+        for css in _sr_selectors:
+            try:
+                loc = root.locator(css).first
+                if loc.count() > 0 and loc.is_visible(timeout=700):
+                    try:
+                        loc.click(timeout=_tmo)
+                    except Exception:
+                        loc.click(timeout=_tmo, force=True)
+                    _sr_new_clicked = True
+                    break
+            except Exception:
+                continue
+    if not _sr_new_clicked:
+        return False, "Could not click 'Service Request List:New' on PDI tab."
+    note(f"{log_prefix}: clicked Service Request List:New on PDI tab.")
+    _safe_page_wait(page, 1200, log_label="after_sr_list_new")
+
+    if not _siebel_click_by_id_anywhere(
+        page,
+        "s_2_2_32_0_icon",
+        timeout_ms=_tmo,
+        content_frame_selector=content_frame_selector,
+        note=note,
+        label="PDI pick icon",
+        log_prefix=log_prefix,
+        wait_ms=1200,
+    ):
+        if not _siebel_click_by_id_anywhere(
+            page,
+            "s_2_2_32_0",
+            timeout_ms=_tmo,
+            content_frame_selector=content_frame_selector,
+            note=note,
+            label="PDI pick button",
+            log_prefix=log_prefix,
+            wait_ms=1200,
+        ):
+            return False, "Could not click PDI pick icon (id=s_2_2_32_0_icon)."
+
+    _safe_page_wait(page, 800, log_label="after_pdi_pick_icon_settle")
+    for root in _roots():
+        try:
+            _pdi_row_result = root.evaluate("""() => {
+                const vis = (el) => {
+                    if (!el) return false;
+                    const st = window.getComputedStyle(el);
+                    if (st.display === 'none' || st.visibility === 'hidden') return false;
+                    const r = el.getBoundingClientRect();
+                    return r.width > 0 && r.height > 0;
+                };
+                const rows = Array.from(document.querySelectorAll('table tbody tr, table tr'));
+                for (const tr of rows) {
+                    if (!vis(tr)) continue;
+                    const tds = tr.querySelectorAll('td');
+                    if (tds.length < 2) continue;
+                    const cls = (tr.className || '').toLowerCase();
+                    if (cls.includes('jqgfirstrow') || cls.includes('header')) continue;
+                    const txt = (tr.textContent || '').trim();
+                    if (!txt || txt.length < 3) continue;
+                    const clickable = tr.querySelector('a, input[type="radio"], input[type="checkbox"], td');
+                    if (clickable) { clickable.click(); } else { tr.click(); }
+                    return 'row_clicked';
+                }
+                return '';
+            }""")
+            if _pdi_row_result:
+                note(f"{log_prefix}: picked first row in PDI applet.")
+                _safe_page_wait(page, 600, log_label="after_pdi_row_pick")
+                break
+        except Exception:
+            continue
+
+    _pdi_ok_done = False
+    for root in _roots():
+        for ok_css in (
+            "button[aria-label*='OK' i]",
+            "a[aria-label*='OK' i]",
+            "input[type='button'][value='OK' i]",
+            "button:has-text('OK')",
+            "a:has-text('OK')",
+        ):
+            try:
+                ok_loc = root.locator(ok_css).first
+                if ok_loc.count() > 0 and ok_loc.is_visible(timeout=500):
+                    try:
+                        ok_loc.click(timeout=_tmo)
+                    except Exception:
+                        ok_loc.click(timeout=_tmo, force=True)
+                    _pdi_ok_done = True
+                    note(f"{log_prefix}: clicked OK on PDI pick applet.")
+                    _safe_page_wait(page, 1000, log_label="after_pdi_ok")
+                    break
+            except Exception:
+                continue
+        if _pdi_ok_done:
+            break
+    if not _pdi_ok_done:
+        note(f"{log_prefix}: OK button not found on PDI pick applet (best-effort).")
+
+    _pdi_submit_done = False
+    for root in _roots():
+        for sub_css in (
+            "button:has-text('Submit')",
+            "a:has-text('Submit')",
+            "input[type='button'][value='Submit' i]",
+            "button[aria-label*='Submit' i]",
+            "a[aria-label*='Submit' i]",
+            "button[title*='Submit' i]",
+            "a[title*='Submit' i]",
+        ):
+            try:
+                sub_loc = root.locator(sub_css).first
+                if sub_loc.count() > 0 and sub_loc.is_visible(timeout=700):
+                    try:
+                        sub_loc.click(timeout=_tmo)
+                    except Exception:
+                        sub_loc.click(timeout=_tmo, force=True)
+                    _pdi_submit_done = True
+                    note(f"{log_prefix}: clicked Submit on PDI form.")
+                    _safe_page_wait(page, 1500, log_label="after_pdi_submit")
+                    break
+            except Exception:
+                continue
+        if _pdi_submit_done:
+            break
+    if not _pdi_submit_done:
+        return False, "Could not click Submit button on PDI form."
+
+    _pdi_submit_err = _detect_siebel_error_popup(page, content_frame_selector)
+    if _pdi_submit_err:
+        note(f"{log_prefix}: Siebel error after PDI Submit → {_pdi_submit_err!r:.300}")
+        return False, f"Siebel error after PDI Submit: {_pdi_submit_err[:200]}"
+
+    note(f"{log_prefix}: PDI completed successfully.")
+    if callable(form_trace):
+        form_trace(
+            "vehicle_serial_precheck_pdi",
+            "Vehicle serial detail",
+            "pdi_submit_done",
+            log_prefix=log_prefix,
+        )
+    return True, None
+
+
 def _attach_vehicle_to_bkg(
     page: Page,
     *,
@@ -6093,10 +6609,9 @@ def _attach_vehicle_to_bkg(
     After a new sales order is saved:
     1. Click Order Number header link to open order detail.
     2. Click **New** → fill VIN → Price All → Allocate All → scrape Total.
-    3. VIN drilldown → Vehicles tab → scrape cubic_capacity + vehicle_type.
-    4. Pre-check tab → pick first row → Submit.
-    5. PDI tab → Service Request List:New → pick icon → first row → OK → Submit.
-    6. Click ``Order:<order#>`` link → Apply Campaign → Create Invoice.
+    3. Single-click **VIN** drilldown (name=VIN) → **Serial Number** →
+       ``_siebel_run_vehicle_serial_detail_precheck_pdi`` (feature ids + Pre-check + PDI).
+    4. Click ``Order:<order#>`` link → Apply Campaign → Create Invoice.
 
     Returns ``(success, error_detail, scraped_dict)``.
     """
@@ -6469,355 +6984,21 @@ def _attach_vehicle_to_bkg(
     except Exception:
         pass
 
-    # ── Step 9: Scrape cubic_capacity and vehicle_type ──
-    scraped["cubic_capacity"] = _scrape_text_by_id("4_s_1_l_HHML_Fetaure_Value")
-    scraped["vehicle_type"] = _scrape_text_by_id("5_s_1_l_HHML_Fetaure_Value")
-    note(
-        f"attach_vehicle_to_bkg: scraped cubic_capacity={scraped['cubic_capacity']!r}, "
-        f"vehicle_type={scraped['vehicle_type']!r}."
+    # ── Steps 9–11: Feature ids + Pre-check + PDI (``_siebel_run_vehicle_serial_detail_precheck_pdi``) ──
+    _pc_ok, _pc_err = _siebel_run_vehicle_serial_detail_precheck_pdi(
+        page,
+        action_timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+        note=note,
+        form_trace=None,
+        log_prefix="attach_vehicle_to_bkg",
+        scraped=scraped,
+        do_feature_id_scrape=True,
     )
+    if not _pc_ok:
+        return False, _pc_err or "Pre-check / PDI failed after Serial Number drilldown.", scraped
 
-    # ── Step 10: Open Pre-check tab (id="ui-id-1115") ──
-    if not _click_by_id("ui-id-1115", "Pre-check tab", wait_ms=1500):
-        return False, "Could not open Pre-check tab (id=ui-id-1115).", scraped
-    try:
-        page.wait_for_load_state("networkidle", timeout=8_000)
-    except Exception:
-        pass
-
-    # ── Step 11: Click icon (id="s_3_1_12_0_Ctrl") ──
-    if not _click_by_id("s_3_1_12_0_Ctrl", "Pre-check icon", wait_ms=1200):
-        return False, "Could not click Pre-check icon (id=s_3_1_12_0_Ctrl).", scraped
-
-    # ── Step 12: In the applet, find the search/pick input, pick first row, click OK ──
-    _safe_page_wait(page, 800, log_label="after_precheck_icon_settle")
-    _pick_ok = False
-    for root in _all_roots():
-        try:
-            _pick_result = root.evaluate("""() => {
-                const vis = (el) => {
-                    if (!el) return false;
-                    const st = window.getComputedStyle(el);
-                    if (st.display === 'none' || st.visibility === 'hidden') return false;
-                    const r = el.getBoundingClientRect();
-                    return r.width > 0 && r.height > 0;
-                };
-                // Find the search icon (localName='input' near the pick applet)
-                const inputs = Array.from(document.querySelectorAll('input'));
-                let searchBtn = null;
-                for (const inp of inputs) {
-                    const al = (inp.getAttribute('aria-label') || '').toLowerCase();
-                    const tt = (inp.getAttribute('title') || '').toLowerCase();
-                    if ((al.includes('search') || al.includes('go') || tt.includes('search') || tt.includes('go'))
-                        && vis(inp) && inp.type !== 'text') {
-                        searchBtn = inp;
-                        break;
-                    }
-                }
-                if (searchBtn) {
-                    searchBtn.click();
-                    return 'search_clicked';
-                }
-                return '';
-            }""")
-            if _pick_result:
-                note(f"attach_vehicle_to_bkg: clicked search in pick applet ({_pick_result!r}).")
-                _safe_page_wait(page, 1200, log_label="after_precheck_search_click")
-                _pick_ok = True
-                break
-        except Exception:
-            continue
-
-    if not _pick_ok:
-        note("attach_vehicle_to_bkg: search icon not found in pick applet (trying Go/Enter fallback).")
-        try:
-            page.keyboard.press("Enter")
-            _safe_page_wait(page, 1200, log_label="after_precheck_enter_fallback")
-            _pick_ok = True
-        except Exception:
-            pass
-
-    # Pick first row from results
-    _row_picked = False
-    _safe_page_wait(page, 600, log_label="before_precheck_pick_row")
-    for root in _all_roots():
-        try:
-            _row_result = root.evaluate("""() => {
-                const vis = (el) => {
-                    if (!el) return false;
-                    const st = window.getComputedStyle(el);
-                    if (st.display === 'none' || st.visibility === 'hidden') return false;
-                    const r = el.getBoundingClientRect();
-                    return r.width > 0 && r.height > 0;
-                };
-                const rows = Array.from(document.querySelectorAll('table tbody tr, table tr'));
-                for (const tr of rows) {
-                    if (!vis(tr)) continue;
-                    const tds = tr.querySelectorAll('td');
-                    if (tds.length < 2) continue;
-                    const cls = (tr.className || '').toLowerCase();
-                    if (cls.includes('jqgfirstrow') || cls.includes('header')) continue;
-                    const txt = (tr.textContent || '').trim();
-                    if (!txt || txt.length < 3) continue;
-                    const clickable = tr.querySelector('a, input[type="radio"], input[type="checkbox"], td');
-                    if (clickable) { clickable.click(); } else { tr.click(); }
-                    return 'row_clicked';
-                }
-                return '';
-            }""")
-            if _row_result:
-                _row_picked = True
-                note("attach_vehicle_to_bkg: picked first row in Pre-check applet.")
-                _safe_page_wait(page, 600, log_label="after_precheck_row_pick")
-                break
-        except Exception:
-            continue
-
-    # Click OK to close the applet
-    _ok_done = False
-    for root in _all_roots():
-        for ok_css in (
-            "button[aria-label*='OK' i]", "a[aria-label*='OK' i]",
-            "input[type='button'][value='OK' i]", "button:has-text('OK')", "a:has-text('OK')",
-        ):
-            try:
-                ok_loc = root.locator(ok_css).first
-                if ok_loc.count() > 0 and ok_loc.is_visible(timeout=500):
-                    try:
-                        ok_loc.click(timeout=_tmo)
-                    except Exception:
-                        ok_loc.click(timeout=_tmo, force=True)
-                    _ok_done = True
-                    note("attach_vehicle_to_bkg: clicked OK on Pre-check pick applet.")
-                    _safe_page_wait(page, 1000, log_label="after_precheck_ok")
-                    break
-            except Exception:
-                continue
-        if _ok_done:
-            break
-    if not _ok_done:
-        note("attach_vehicle_to_bkg: OK button not found on Pre-check pick applet (best-effort).")
-
-    # ── Step 13: Click Submit button (outerText="Submit") ──
-    _submit_done = False
-    for root in _all_roots():
-        for sub_css in (
-            "button:has-text('Submit')", "a:has-text('Submit')",
-            "input[type='button'][value='Submit' i]",
-            "button[aria-label*='Submit' i]", "a[aria-label*='Submit' i]",
-            "button[title*='Submit' i]", "a[title*='Submit' i]",
-        ):
-            try:
-                sub_loc = root.locator(sub_css).first
-                if sub_loc.count() > 0 and sub_loc.is_visible(timeout=700):
-                    try:
-                        sub_loc.click(timeout=_tmo)
-                    except Exception:
-                        sub_loc.click(timeout=_tmo, force=True)
-                    _submit_done = True
-                    note("attach_vehicle_to_bkg: clicked Submit.")
-                    _safe_page_wait(page, 1500, log_label="after_precheck_submit")
-                    break
-            except Exception:
-                continue
-        if _submit_done:
-            break
-    if not _submit_done:
-        return False, "Could not click Submit button on Pre-check.", scraped
-
-    # Check for Siebel error after Pre-check Submit
-    _submit_err = _detect_siebel_error_popup(page, content_frame_selector)
-    if _submit_err:
-        note(f"attach_vehicle_to_bkg: Siebel error after Pre-check Submit → {_submit_err!r:.300}")
-        return False, f"Siebel error after Pre-check Submit: {_submit_err[:200]}", scraped
-    note("attach_vehicle_to_bkg: Pre-check completed.")
-
-    # ── Step 14: Click PDI tab (innerText="PDI") ──
-    _pdi_tab_clicked = False
-    for root in _all_roots():
-        for _pdi_css in (
-            "a:has-text('PDI')", "li:has-text('PDI') a", "span:has-text('PDI')",
-            "[role='tab']:has-text('PDI')", "button:has-text('PDI')",
-        ):
-            try:
-                loc = root.locator(_pdi_css).first
-                if loc.count() > 0 and loc.is_visible(timeout=700):
-                    try:
-                        loc.click(timeout=_tmo)
-                    except Exception:
-                        loc.click(timeout=_tmo, force=True)
-                    _pdi_tab_clicked = True
-                    break
-            except Exception:
-                continue
-        if _pdi_tab_clicked:
-            break
-    if not _pdi_tab_clicked:
-        # JS fallback: find element with innerText === "PDI"
-        for root in _all_roots():
-            try:
-                hit = root.evaluate("""() => {
-                    const vis = (el) => {
-                        if (!el) return false;
-                        const st = window.getComputedStyle(el);
-                        if (st.display === 'none' || st.visibility === 'hidden') return false;
-                        const r = el.getBoundingClientRect();
-                        return r.width > 0 && r.height > 0;
-                    };
-                    const all = Array.from(document.querySelectorAll('a, li, span, button, [role="tab"]'));
-                    for (const el of all) {
-                        if ((el.innerText || '').trim() === 'PDI' && vis(el)) {
-                            el.click();
-                            return true;
-                        }
-                    }
-                    return false;
-                }""")
-                if hit:
-                    _pdi_tab_clicked = True
-                    break
-            except Exception:
-                continue
-    if not _pdi_tab_clicked:
-        return False, "Could not click PDI tab.", scraped
-    note("attach_vehicle_to_bkg: clicked PDI tab.")
-    _safe_page_wait(page, 1500, log_label="after_pdi_tab")
-    try:
-        page.wait_for_load_state("networkidle", timeout=8_000)
-    except Exception:
-        pass
-
-    # ── Step 15: Click "Service Request List:New" icon ──
-    _sr_new_clicked = False
-    _sr_selectors = [
-        "[aria-label='Service Request List:New']",
-        "a[aria-label='Service Request List:New']",
-        "button[aria-label='Service Request List:New']",
-        "[aria-label*='Service Request List' i][aria-label*='New' i]",
-        "[title='Service Request List:New']",
-    ]
-    for root in _all_roots():
-        if _sr_new_clicked:
-            break
-        for css in _sr_selectors:
-            try:
-                loc = root.locator(css).first
-                if loc.count() > 0 and loc.is_visible(timeout=700):
-                    try:
-                        loc.click(timeout=_tmo)
-                    except Exception:
-                        loc.click(timeout=_tmo, force=True)
-                    _sr_new_clicked = True
-                    break
-            except Exception:
-                continue
-    if not _sr_new_clicked:
-        return False, "Could not click 'Service Request List:New' on PDI tab.", scraped
-    note("attach_vehicle_to_bkg: clicked Service Request List:New on PDI tab.")
-    _safe_page_wait(page, 1200, log_label="after_sr_list_new")
-
-    # ── Step 16: Click icon-pick (id="s_2_2_32_0_icon") to open applet ──
-    if not _click_by_id("s_2_2_32_0_icon", "PDI pick icon", wait_ms=1200):
-        # Fallback: try without _icon suffix
-        if not _click_by_id("s_2_2_32_0", "PDI pick button", wait_ms=1200):
-            return False, "Could not click PDI pick icon (id=s_2_2_32_0_icon).", scraped
-
-    # ── Step 17: Pick first row in the applet and click OK ──
-    _safe_page_wait(page, 800, log_label="after_pdi_pick_icon_settle")
-    _pdi_row_picked = False
-    for root in _all_roots():
-        try:
-            _pdi_row_result = root.evaluate("""() => {
-                const vis = (el) => {
-                    if (!el) return false;
-                    const st = window.getComputedStyle(el);
-                    if (st.display === 'none' || st.visibility === 'hidden') return false;
-                    const r = el.getBoundingClientRect();
-                    return r.width > 0 && r.height > 0;
-                };
-                const rows = Array.from(document.querySelectorAll('table tbody tr, table tr'));
-                for (const tr of rows) {
-                    if (!vis(tr)) continue;
-                    const tds = tr.querySelectorAll('td');
-                    if (tds.length < 2) continue;
-                    const cls = (tr.className || '').toLowerCase();
-                    if (cls.includes('jqgfirstrow') || cls.includes('header')) continue;
-                    const txt = (tr.textContent || '').trim();
-                    if (!txt || txt.length < 3) continue;
-                    const clickable = tr.querySelector('a, input[type="radio"], input[type="checkbox"], td');
-                    if (clickable) { clickable.click(); } else { tr.click(); }
-                    return 'row_clicked';
-                }
-                return '';
-            }""")
-            if _pdi_row_result:
-                _pdi_row_picked = True
-                note("attach_vehicle_to_bkg: picked first row in PDI applet.")
-                _safe_page_wait(page, 600, log_label="after_pdi_row_pick")
-                break
-        except Exception:
-            continue
-
-    _pdi_ok_done = False
-    for root in _all_roots():
-        for ok_css in (
-            "button[aria-label*='OK' i]", "a[aria-label*='OK' i]",
-            "input[type='button'][value='OK' i]", "button:has-text('OK')", "a:has-text('OK')",
-        ):
-            try:
-                ok_loc = root.locator(ok_css).first
-                if ok_loc.count() > 0 and ok_loc.is_visible(timeout=500):
-                    try:
-                        ok_loc.click(timeout=_tmo)
-                    except Exception:
-                        ok_loc.click(timeout=_tmo, force=True)
-                    _pdi_ok_done = True
-                    note("attach_vehicle_to_bkg: clicked OK on PDI pick applet.")
-                    _safe_page_wait(page, 1000, log_label="after_pdi_ok")
-                    break
-            except Exception:
-                continue
-        if _pdi_ok_done:
-            break
-    if not _pdi_ok_done:
-        note("attach_vehicle_to_bkg: OK button not found on PDI pick applet (best-effort).")
-
-    # ── Step 18: Click Submit button (innerHTML="Submit") on the PDI form ──
-    _pdi_submit_done = False
-    for root in _all_roots():
-        for sub_css in (
-            "button:has-text('Submit')", "a:has-text('Submit')",
-            "input[type='button'][value='Submit' i]",
-            "button[aria-label*='Submit' i]", "a[aria-label*='Submit' i]",
-            "button[title*='Submit' i]", "a[title*='Submit' i]",
-        ):
-            try:
-                sub_loc = root.locator(sub_css).first
-                if sub_loc.count() > 0 and sub_loc.is_visible(timeout=700):
-                    try:
-                        sub_loc.click(timeout=_tmo)
-                    except Exception:
-                        sub_loc.click(timeout=_tmo, force=True)
-                    _pdi_submit_done = True
-                    note("attach_vehicle_to_bkg: clicked Submit on PDI form.")
-                    _safe_page_wait(page, 1500, log_label="after_pdi_submit")
-                    break
-            except Exception:
-                continue
-        if _pdi_submit_done:
-            break
-    if not _pdi_submit_done:
-        return False, "Could not click Submit button on PDI form.", scraped
-
-    # Check for Siebel error after PDI Submit
-    _pdi_submit_err = _detect_siebel_error_popup(page, content_frame_selector)
-    if _pdi_submit_err:
-        note(f"attach_vehicle_to_bkg: Siebel error after PDI Submit → {_pdi_submit_err!r:.300}")
-        return False, f"Siebel error after PDI Submit: {_pdi_submit_err[:200]}", scraped
-
-    note("attach_vehicle_to_bkg: PDI completed successfully.")
-
-    # ── Step 19: Click "Order:<order#>" link at top of page ──
+    # ── Step 12: Click "Order:<order#>" link at top of page ──
     _order_link_clicked = False
     _order_num = (order_number or "").strip()
     if _order_num:
@@ -6875,7 +7056,7 @@ def _attach_vehicle_to_bkg(
     except Exception:
         pass
 
-    # ── Step 20: Click "Apply Campaign" button ──
+    # ── Step 13: Click "Apply Campaign" button ──
     _ac_clicked = False
     _ac_selectors = [
         "button:has-text('Apply Campaign')", "a:has-text('Apply Campaign')",
@@ -6932,7 +7113,7 @@ def _attach_vehicle_to_bkg(
         note(f"attach_vehicle_to_bkg: Siebel error after Apply Campaign → {_ac_err!r:.300}")
         return False, f"Siebel error after Apply Campaign: {_ac_err[:200]}", scraped
 
-    # ── Step 21: Click "Create Invoice" button ──
+    # ── Step 14: Click "Create Invoice" button ──
     _ci_clicked = False
     _ci_selectors = [
         "button:has-text('Create Invoice')", "a:has-text('Create Invoice')",
@@ -9425,45 +9606,6 @@ def _try_click_process_receipt(
     )
 
 
-def _try_click_precheck_complete(
-    page: Page, *, timeout_ms: int, content_frame_selector: str | None
-) -> bool:
-    """Hero Connect: complete **Pre Check** / PDI Pre-Check list before main PDI submit."""
-    return _try_click_toolbar_by_name(
-        page,
-        (
-            re.compile(r"complete\s+pre[-\s]?check", re.I),
-            re.compile(r"pre[-\s]?check\s+complete", re.I),
-            re.compile(r"complete\s+precheck", re.I),
-            re.compile(r"^\s*pre[-\s]?check\s*$", re.I),
-            re.compile(r"submit\s+pre[-\s]?check", re.I),
-        ),
-        timeout_ms=timeout_ms,
-        content_frame_selector=content_frame_selector,
-        log_tag="Pre Check",
-    )
-
-
-def _try_click_pdi_submit(
-    page: Page, *, timeout_ms: int, content_frame_selector: str | None
-) -> bool:
-    # Avoid bare "Submit" first — it matches unrelated Siebel applets. Prefer PDI-specific labels.
-    return _try_click_toolbar_by_name(
-        page,
-        (
-            re.compile(r"pdi\s+complete", re.I),
-            re.compile(r"complete\s+pdi", re.I),
-            re.compile(r"submit\s+pdi", re.I),
-            re.compile(r"pdi\s+submit", re.I),
-            re.compile(r"submit\s+record", re.I),
-            re.compile(r"finalize\s+pdi", re.I),
-        ),
-        timeout_ms=timeout_ms,
-        content_frame_selector=content_frame_selector,
-        log_tag="PDI Submit",
-    )
-
-
 def _try_click_price_all(
     page: Page, *, timeout_ms: int, content_frame_selector: str | None
 ) -> bool:
@@ -9720,6 +9862,319 @@ def _siebel_goto_vehicle_list_and_scrape(
     return scraped, None
 
 
+def _siebel_locator_roots_for_vehicle_prep(
+    page: Page, content_frame_selector: str | None
+) -> list:
+    """Frames + page roots to search for vehicle detail links and aria-labelled fields."""
+    roots: list = []
+    try:
+        roots.extend(list(_siebel_locator_search_roots(page, content_frame_selector)))
+    except Exception:
+        pass
+    for fr in _ordered_frames(page):
+        roots.append(fr)
+    roots.append(page)
+    dedup: list = []
+    seen: set[int] = set()
+    for r in roots:
+        k = id(r)
+        if k in seen:
+            continue
+        seen.add(k)
+        dedup.append(r)
+    return dedup
+
+
+def _siebel_read_control_value(loc) -> str:
+    """Visible input/textarea/select text or value (best-effort)."""
+    try:
+        if loc.count() == 0 or not loc.is_visible(timeout=400):
+            return ""
+        tag = (loc.evaluate("el => el.tagName") or "").upper()
+        if tag == "SELECT":
+            try:
+                return (loc.input_value() or "").strip()
+            except Exception:
+                pass
+        if tag in ("INPUT", "TEXTAREA"):
+            try:
+                return (loc.input_value() or "").strip()
+            except Exception:
+                return (loc.inner_text(timeout=500) or "").strip()
+        return (loc.inner_text(timeout=500) or "").strip()
+    except Exception:
+        return ""
+
+
+def _siebel_scrape_vehicle_detail_by_aria_labels(page: Page) -> dict[str, str]:
+    """
+    On the **vehicle** applet, read standard UIDAI-style fields by exact ``aria-label``:
+    VIN → ``full_chassis``, Model, Manufacturing Year → ``year_of_mfg``, SKU → ``variant``,
+    Color, Engine Number → ``full_engine``.
+    """
+    mapping: tuple[tuple[str, tuple[str, ...]], ...] = (
+        ("full_chassis", ("VIN",)),
+        ("model", ("Model",)),
+        ("year_of_mfg", ("Manufacturing Year",)),
+        ("variant", ("SKU",)),
+        ("color", ("Color",)),
+        ("full_engine", ("Engine Number",)),
+    )
+    found: dict[str, str] = {}
+    for key, labels in mapping:
+        if found.get(key):
+            continue
+        for fr in _ordered_frames(page):
+            for lbl in labels:
+                if found.get(key):
+                    break
+                for sel in (
+                    f'input[aria-label="{lbl}"]',
+                    f'textarea[aria-label="{lbl}"]',
+                    f'select[aria-label="{lbl}"]',
+                ):
+                    try:
+                        loc = fr.locator(sel).first
+                        val = _siebel_read_control_value(loc)
+                        if val:
+                            found[key] = val
+                            break
+                    except Exception:
+                        continue
+    if not found.get("variant"):
+        for fr in _ordered_frames(page):
+            try:
+                loc = fr.get_by_label(re.compile(r"^\s*SKU\s*$", re.I)).first
+                if loc.count() > 0 and loc.is_visible(timeout=400):
+                    val = _siebel_read_control_value(loc)
+                    if val:
+                        found["variant"] = val
+                        break
+            except Exception:
+                continue
+    return found
+
+
+def _siebel_click_by_name_anywhere(
+    page: Page,
+    name_val: str,
+    *,
+    timeout_ms: int,
+    content_frame_selector: str | None,
+    note,
+    log_label: str,
+) -> bool:
+    """Click ``a``/``button``/generic element with HTML ``name`` (e.g. Serial Number drilldown)."""
+    for root in _siebel_locator_roots_for_vehicle_prep(page, content_frame_selector):
+        for css in (
+            f"a[name='{name_val}']",
+            f"button[name='{name_val}']",
+            f"[name='{name_val}']",
+        ):
+            try:
+                loc = root.locator(css).first
+                if loc.count() > 0 and loc.is_visible(timeout=550):
+                    try:
+                        loc.click(timeout=timeout_ms)
+                    except Exception:
+                        loc.click(timeout=timeout_ms, force=True)
+                    note(f"prepare_vehicle: clicked {log_label} (name={name_val!r}).")
+                    return True
+            except Exception:
+                continue
+    return False
+
+
+def _siebel_try_click_features_and_image_tab(
+    page: Page, *, action_timeout_ms: int, note
+) -> bool:
+    """Open **Features and Image** (or closest tab label) on vehicle serial drill-in view."""
+    hints = ("Features and Image", "Features & Image", "Features")
+    patts = [re.compile(re.escape(h), re.I) for h in hints]
+    search_roots = list(_ordered_frames(page))
+    search_roots.append(page.main_frame)
+    for sub, rx in zip(hints, patts):
+        for root in search_roots:
+            try:
+                tab = root.get_by_role("tab", name=rx)
+                if tab.count() > 0:
+                    t0 = tab.first
+                    if t0.is_visible(timeout=500):
+                        t0.click(timeout=action_timeout_ms)
+                        note(f"prepare_vehicle: clicked tab matching {sub!r}.")
+                        return True
+            except Exception:
+                pass
+            try:
+                link = root.locator("a, [role='tab'], button").filter(has_text=rx).first
+                if link.count() > 0 and link.is_visible(timeout=450):
+                    link.click(timeout=action_timeout_ms)
+                    note(f"prepare_vehicle: clicked control matching {sub!r}.")
+                    return True
+            except Exception:
+                continue
+    note("prepare_vehicle: Features and Image tab not found (best-effort).")
+    return False
+
+
+def _siebel_scrape_features_cubic_and_vehicle_type(page: Page) -> tuple[str, str]:
+    """
+    On **Features and Image**, read cubic capacity and vehicle type.
+    Tries canonical id ``4_s_1_l_HHML_Feature_Value`` and legacy typo ``Fetaure``; second row ``5_s_1_*``.
+    """
+    cubic = ""
+    vtype = ""
+    for fr in _ordered_frames(page):
+        try:
+            data = fr.evaluate(
+                """() => {
+                  const vis = (el) => {
+                    if (!el) return false;
+                    const st = window.getComputedStyle(el);
+                    if (st.display === 'none' || st.visibility === 'hidden') return false;
+                    const r = el.getBoundingClientRect();
+                    return r.width > 2 && r.height > 2;
+                  };
+                  const read = (id) => {
+                    const el = document.getElementById(id);
+                    if (!el || !vis(el)) return '';
+                    return String(el.value || el.textContent || el.innerText || '').trim();
+                  };
+                  let cubic = read('4_s_1_l_HHML_Feature_Value') || read('4_s_1_l_HHML_Fetaure_Value');
+                  let vtype = read('5_s_1_l_HHML_Feature_Value') || read('5_s_1_l_HHML_Fetaure_Value');
+                  if (!vtype && cubic) {
+                    const row = document.querySelector('[id="4_s_1_l_HHML_Feature_Value"],[id="4_s_1_l_HHML_Fetaure_Value"]');
+                    if (row) {
+                      const tr = row.closest('tr');
+                      if (tr && tr.nextElementSibling) {
+                        const cells = tr.nextElementSibling.querySelectorAll('td');
+                        const last = cells[cells.length - 1];
+                        if (last) vtype = (last.innerText || '').replace(/\\s+/g,' ').trim();
+                      }
+                    }
+                  }
+                  return { cubic, vehicle_type: vtype };
+                }"""
+            )
+            if isinstance(data, dict):
+                cubic = str(data.get("cubic") or "").strip()
+                vtype = str(data.get("vehicle_type") or "").strip()
+                if cubic or vtype:
+                    return cubic, vtype
+        except Exception:
+            continue
+    return cubic, vtype
+
+
+def _prepare_vehicle_merge_detail_from_aria_labels(
+    page: Page,
+    scraped: dict,
+    *,
+    note,
+    form_trace=None,
+) -> None:
+    """Merge **Vehicle Information** fields from aria-labelled inputs into ``scraped``; trace form step."""
+    detail = _siebel_scrape_vehicle_detail_by_aria_labels(page)
+    for k, v in detail.items():
+        if v and str(v).strip():
+            scraped[k] = str(v).strip()
+    if detail:
+        note(f"prepare_vehicle: vehicle detail applet (aria-labels) → {list(detail.keys())!r}.")
+    if callable(form_trace):
+        form_trace(
+            "5_vehicle_detail",
+            "Auto Vehicle — detail applet",
+            "scrape_VIN_Model_Year_Manu_SKU_Color_Engine_by_aria_label",
+            full_chassis=str(scraped.get("full_chassis") or ""),
+            model=str(scraped.get("model") or ""),
+            year_of_mfg=str(scraped.get("year_of_mfg") or ""),
+            variant=str(scraped.get("variant") or ""),
+            color=str(scraped.get("color") or ""),
+            full_engine=str(scraped.get("full_engine") or ""),
+        )
+
+
+def _prepare_vehicle_scrape_serial_precheck_pdi_and_features(
+    page: Page,
+    scraped: dict,
+    *,
+    action_timeout_ms: int,
+    content_frame_selector: str | None,
+    note,
+    form_trace=None,
+) -> str | None:
+    """
+    On the **vehicle** detail view (dealer stock): click **Serial Number**, run tab **Pre-check** + **PDI**
+    (``_siebel_run_vehicle_serial_detail_precheck_pdi``), then **Features and Image** for cubic/type.
+
+    ``prepare_vehicle`` calls this only when ``in_transit`` is false after the inventory gate — not while the
+    unit is treated as in-transit (Siebel rejects Pre-check/PDI there).
+
+    Returns ``None`` on success or when **Serial Number** is missing (best-effort skip); on Pre-check/PDI
+    failure returns an error string.
+    """
+    if not _siebel_click_by_name_anywhere(
+        page,
+        "Serial Number",
+        timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+        note=note,
+        log_label="Serial Number drilldown",
+    ):
+        note(
+            "prepare_vehicle: Serial Number drilldown (name='Serial Number') not found — "
+            "skipping serial-detail Pre-check/PDI and Features scrape."
+        )
+        return None
+
+    try:
+        _safe_page_wait(page, 1200, log_label="after_serial_number_click")
+        page.wait_for_load_state("networkidle", timeout=10_000)
+    except PlaywrightTimeout:
+        note("prepare_vehicle: networkidle after Serial Number timed out; continuing.")
+    except Exception:
+        pass
+
+    _serial_pc_ok, _serial_pc_err = _siebel_run_vehicle_serial_detail_precheck_pdi(
+        page,
+        action_timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+        note=note,
+        form_trace=form_trace,
+        log_prefix="prepare_vehicle",
+        scraped=scraped,
+        do_feature_id_scrape=True,
+    )
+    if not _serial_pc_ok:
+        return _serial_pc_err or "Pre-check / PDI failed after Serial Number drilldown (prepare_vehicle)."
+
+    if not _siebel_try_click_features_and_image_tab(
+        page, action_timeout_ms=action_timeout_ms, note=note
+    ):
+        return None
+    _safe_page_wait(page, 1000, log_label="after_features_tab")
+    try:
+        page.wait_for_load_state("networkidle", timeout=8_000)
+    except Exception:
+        pass
+
+    cc, vt = _siebel_scrape_features_cubic_and_vehicle_type(page)
+    if cc:
+        scraped["cubic_capacity"] = cc
+    if vt:
+        scraped["vehicle_type"] = vt
+    note(f"prepare_vehicle: Features tab → cubic_capacity={cc!r}, vehicle_type={vt!r}.")
+    if callable(form_trace):
+        form_trace(
+            "5_vehicle_features",
+            "Features and Image",
+            "scrape_HHML_Feature_Value_cubic_and_vehicle_type",
+            cubic_capacity=str(cc or ""),
+            vehicle_type=str(vt or ""),
+        )
+    return None
+
+
 def _merge_dms_and_grid_for_vehicle_master(dms_values: dict, grid: dict) -> dict:
     """
     Merge **Auto Vehicle List** grid scrape with DMS / staging fields into one dict suitable for
@@ -9743,6 +10198,8 @@ def _merge_dms_and_grid_for_vehicle_master(dms_values: dict, grid: dict) -> dict
 
     fc = _ds("full_chassis", "chassis")
     if not fc:
+        fc = (out.get("full_chassis") or "").strip()
+    if not fc:
         fc = (out.get("frame_num") or "").strip()
     if not fc:
         fc = _ds("frame_partial")
@@ -9750,6 +10207,8 @@ def _merge_dms_and_grid_for_vehicle_master(dms_values: dict, grid: dict) -> dict
         out["full_chassis"] = fc
 
     fe = _ds("full_engine", "engine")
+    if not fe:
+        fe = (out.get("full_engine") or "").strip()
     if not fe:
         fe = (out.get("engine_num") or "").strip()
     if not fe:
@@ -9773,7 +10232,7 @@ def _merge_dms_and_grid_for_vehicle_master(dms_values: dict, grid: dict) -> dict
         y = _ds("year_of_mfg", "dispatch_year")
         if y:
             out["year_of_mfg"] = y
-    v = _ds("variant", "vehicle_variant")
+    v = (out.get("variant") or "").strip() or _ds("variant", "vehicle_variant")
     if v:
         out["variant"] = v
     if not (out.get("vehicle_price") or "").strip() and not (out.get("ex_showroom_price") or "").strip():
@@ -9881,6 +10340,7 @@ def _write_playwright_vehicle_master_section(
         "vehicle_price",
         "ex_showroom_price",
         "in_transit",
+        "inventory_location",
     )
     try:
         log_fp.write("\n--- vehicle_master (merged for update_vehicle_master_from_dms) ---\n")
@@ -9920,8 +10380,9 @@ def _siebel_fill_key_battery_from_dms_values(
     """
     Best-effort **Key Number** and **Battery No.** fill on the current vehicle form, then Ctrl+S.
 
-    Used from Add Enquiry (after vehicle detail scrape) and from ``prepare_vehicle`` (after Auto Vehicle
-    List grid scrape). Does nothing when both partials are empty.
+    Expects the **vehicle detail** applet (e.g. after left **Search Results** VIN drill-in). Used from
+    Add Enquiry and from ``prepare_vehicle`` after opening that view. Does nothing when both partials are
+    empty.
     """
     key_val = (dms_values.get("key_partial") or "").strip()
     battery_val = (dms_values.get("battery_partial") or "").strip()
@@ -9957,6 +10418,90 @@ def _siebel_fill_key_battery_from_dms_values(
             note(f"{log_prefix}: Ctrl+S after Key/Battery fill raised an exception (best-effort).")
 
 
+_INVENTORY_LOC_IN_TRANSIT_RE = re.compile(r"in\s*transit", re.I)
+_INVENTORY_LOC_DEALER_RE = re.compile(r"dealer", re.I)
+
+_ERROR_INVENTORY_IN_TRANSIT_BEFORE_BOOKING = (
+    "Vehicle is in transit. Create Receiving before Booking."
+)
+
+
+def _siebel_read_inventory_location_field(page: Page) -> str:
+    """Read **Inventory Location** from ``aria-label="Inventory Location"`` (all frames)."""
+    for fr in _ordered_frames(page):
+        for sel in (
+            'input[aria-label="Inventory Location"]',
+            'textarea[aria-label="Inventory Location"]',
+            'select[aria-label="Inventory Location"]',
+        ):
+            try:
+                loc = fr.locator(sel).first
+                val = _siebel_read_control_value(loc)
+                if val:
+                    return str(val).strip()
+            except Exception:
+                continue
+    return ""
+
+
+def _prepare_vehicle_inventory_location_in_transit_gate(
+    scraped: dict,
+    page: Page,
+    *,
+    note,
+    form_trace=None,
+    step=None,
+) -> str | None:
+    """
+    Authoritative **vehicle_in_transit** from Inventory Location when the field is readable.
+
+    - Substring **in transit** (spacing-flexible) → return hard error (caller stops Fill DMS run).
+    - Substring **dealer** → ``scraped['in_transit']=False`` (unit with dealer).
+    - Any other non-empty value → ``in_transit=False`` (overrides list-grid heuristic).
+    - Empty field → leave ``scraped['in_transit']`` from grid scrape unchanged.
+
+    Returns error text for abort, or ``None`` to continue.
+    """
+    raw = _siebel_read_inventory_location_field(page)
+    if not raw:
+        note(
+            "prepare_vehicle: Inventory Location (aria-label) not readable — "
+            "in_transit may still come from list grid heuristic."
+        )
+        return None
+    scraped["inventory_location"] = raw
+    if _INVENTORY_LOC_IN_TRANSIT_RE.search(raw):
+        note(f"DECISION: Inventory Location implies In Transit — {raw!r}.")
+        if callable(form_trace):
+            form_trace(
+                "5_vehicle_inventory_location",
+                "Auto Vehicle",
+                "inventory_location_in_transit_abort_before_booking",
+                inventory_location=raw[:240],
+            )
+        if callable(step):
+            step("Stopped: vehicle is in transit — create receiving before booking.")
+        return _ERROR_INVENTORY_IN_TRANSIT_BEFORE_BOOKING
+    if _INVENTORY_LOC_DEALER_RE.search(raw):
+        scraped["in_transit"] = False
+        note(f"DECISION: vehicle with dealer per Inventory Location — {raw!r}; in_transit=False.")
+    else:
+        scraped["in_transit"] = False
+        note(
+            f"DECISION: Inventory Location present, not In Transit — {raw!r}; "
+            "in_transit=False (overrides grid heuristic)."
+        )
+    if callable(form_trace):
+        form_trace(
+            "5_vehicle_inventory_location",
+            "Auto Vehicle",
+            "inventory_location_scrape",
+            inventory_location=raw[:240],
+            in_transit=bool(scraped.get("in_transit")),
+        )
+    return None
+
+
 def prepare_vehicle(
     page: Page,
     dms_values: dict,
@@ -9972,20 +10517,26 @@ def prepare_vehicle(
 ) -> tuple[bool, str | None, dict, bool, list[str], list[str]]:
     """
     Pre-booking **vehicle preparation** (runs before Generate Booking): navigate to **Auto Vehicle List**,
-    query by key / chassis(VIN) / engine, scrape the grid (model, color, frame/engine numbers, in-transit
-    flag), optionally fill Key Number / Battery from DMS partials, and when **In Transit** — receipt URL,
-    Process Receipt if present, then **Pre Check** and **PDI** via ``_siebel_run_precheck_and_pdi``.
+    query by key / chassis(VIN) / engine, scrape the first grid row, then open **vehicle detail** from the
+    left **Search Results** VIN hit, fill **Key Number** / **Battery** on that form (best-effort), merge
+    **Vehicle Information** from aria-labels (**VIN**, **Model**, **Manufacturing Year**, **SKU**,
+    **Color**, **Engine Number**), evaluate **Inventory Location** (fail if **in transit**), then click
+    **Serial Number**, run tab **Pre-check** + **PDI**
+    (``_siebel_run_vehicle_serial_detail_precheck_pdi``, same as order-line attach), open **Features and
+    Image**, and scrape ``cubic_capacity`` / ``vehicle_type``.
 
-    Before return, merges grid + DMS/staging into a dict aligned with ``update_vehicle_master_from_dms``
-    (``full_chassis`` / ``full_engine`` from grid or staging partials, etc.). Returns
-    ``(ok, error, merged_vehicle_dict, in_transit, critical_gaps, informational_notes)``.
-    **Critical gaps** mean a field required for a coherent master row is still empty — see
-    ``Playwright_DMS.txt`` **vehicle_master** section for the full merged key=value list.
+    **Inventory Location** (``aria-label`` on the detail view): substring **in transit** → hard fail
+    ``Vehicle is in transit. Create Receiving before Booking.``; **dealer** (or other non-empty) →
+    ``in_transit=False``; empty → keep list-grid heuristic for downstream branches.
 
-    **Not** included: order-line VIN drilldown, cubic capacity when the list grid has fewer than 13 cells,
-    or PreCheck/PDI inside ``_attach_vehicle_to_bkg`` — those require a booking/line context and run after
-    **Generate Booking** in the linear SOP. ``place_of_registeration`` / ``oem_name`` are applied at DB
-    persist from ``dealer_ref`` / ``oem_ref``, not scraped here.
+    **Pre-check and PDI** run **only** when the vehicle is treated as **dealer / not in-transit**
+    (``in_transit`` false after the gate). For **in-transit** stock, they are **skipped** (Siebel fails them);
+    the in-transit branch only opens the receipt URL and **Process Receipt** when configured — no second
+    Pre-check/PDI URL flow.
+
+    Before return, merges grid + detail + DMS/staging into a dict aligned with ``update_vehicle_master_from_dms``.
+    Returns ``(ok, error, merged_vehicle_dict, in_transit, critical_gaps, informational_notes)``.
+    ``place_of_registeration`` / ``oem_name`` are applied at DB persist from ``dealer_ref`` / ``oem_ref``, not scraped here.
     """
     key_p = (dms_values.get("key_partial") or "").strip()
     frame_p = (dms_values.get("frame_partial") or "").strip()
@@ -10034,6 +10585,34 @@ def prepare_vehicle(
             step("Stopped during vehicle list search.")
         return False, veh_err, {}, False, [], []
 
+    _chassis_for_left_hit = (frame_p or str(scraped.get("frame_num") or "").strip() or "").strip()
+    if _chassis_for_left_hit:
+        if _siebel_try_click_vin_search_hit_link(
+            page,
+            _chassis_for_left_hit,
+            timeout_ms=action_timeout_ms,
+            content_frame_selector=content_frame_selector,
+        ):
+            note("prepare_vehicle: opened vehicle from left Search Results (VIN link).")
+        else:
+            note(
+                "prepare_vehicle: could not click matching VIN in left Search Results — "
+                "continuing (detail may already be open)."
+            )
+    else:
+        note(
+            "prepare_vehicle: no chassis/VIN for left-pane drill-in (frame_partial and grid frame_num empty) — "
+            "Key/Battery and detail scrape rely on current screen (best-effort)."
+        )
+
+    try:
+        _safe_page_wait(page, 1200, log_label="after_vehicle_left_pane_vin_settle")
+        page.wait_for_load_state("networkidle", timeout=12_000)
+    except PlaywrightTimeout:
+        note("prepare_vehicle: networkidle after VIN drill-in timed out; continuing.")
+    except Exception:
+        pass
+
     _siebel_fill_key_battery_from_dms_values(
         page,
         dms_values,
@@ -10041,6 +10620,51 @@ def prepare_vehicle(
         note=note,
         log_prefix="Vehicle prep",
     )
+
+    _prepare_vehicle_merge_detail_from_aria_labels(
+        page, scraped, note=note, form_trace=form_trace
+    )
+
+    _inv_gate_err = _prepare_vehicle_inventory_location_in_transit_gate(
+        scraped,
+        page,
+        note=note,
+        form_trace=form_trace,
+        step=step,
+    )
+    if _inv_gate_err:
+        merged = _merge_dms_and_grid_for_vehicle_master(dms_values, scraped)
+        vm_crit, vm_info = _vehicle_master_prepare_gaps(merged)
+        return False, _inv_gate_err, merged, True, vm_crit, vm_info
+
+    _detail_pc_err: str | None = None
+    if not bool(scraped.get("in_transit")):
+        _detail_pc_err = _prepare_vehicle_scrape_serial_precheck_pdi_and_features(
+            page,
+            scraped,
+            action_timeout_ms=action_timeout_ms,
+            content_frame_selector=content_frame_selector,
+            note=note,
+            form_trace=form_trace,
+        )
+        if _detail_pc_err:
+            merged = _merge_dms_and_grid_for_vehicle_master(dms_values, scraped)
+            vm_crit, vm_info = _vehicle_master_prepare_gaps(merged)
+            if callable(step):
+                step("Stopped: Pre-check / PDI failed on vehicle serial detail.")
+            return (
+                False,
+                _detail_pc_err,
+                merged,
+                bool(scraped.get("in_transit")),
+                vm_crit,
+                vm_info,
+            )
+    else:
+        note(
+            "prepare_vehicle: vehicle flagged in-transit — skipping Serial / Pre-check / PDI / Features "
+            "(Siebel rejects Pre-check and PDI until received at dealer)."
+        )
 
     note(
         "Vehicle grid scrape (prepare_vehicle): "
@@ -10050,7 +10674,14 @@ def prepare_vehicle(
     )
 
     in_transit_state = bool(scraped.get("in_transit"))
-    note(f"DECISION: vehicle_in_transit={in_transit_state!r} (from scraped grid text).")
+    _inv_txt = (scraped.get("inventory_location") or "").strip()
+    if _inv_txt:
+        note(
+            f"DECISION: vehicle_in_transit={in_transit_state!r} "
+            f"(Inventory Location={_inv_txt!r})."
+        )
+    else:
+        note(f"DECISION: vehicle_in_transit={in_transit_state!r} (list grid heuristic; no Inventory Location).")
     if callable(form_trace):
         form_trace(
             "5_vehicle_list",
@@ -10061,12 +10692,16 @@ def prepare_vehicle(
             engine_num=str(scraped.get("engine_num") or ""),
             model=str(scraped.get("model") or ""),
             in_transit=in_transit_state,
+            inventory_location=str(scraped.get("inventory_location") or "")[:200],
         )
 
     if in_transit_state:
-        note("prepare_vehicle: vehicle grid suggests In Transit — Process Receipt, Pre Check, PDI.")
+        note(
+            "prepare_vehicle: vehicle in-transit — opening receipt view if configured; "
+            "Pre-check/PDI skipped (not run until dealer stock)."
+        )
         if callable(step):
-            step("Vehicle appears in transit (receipt / pre-check / PDI path).")
+            step("Vehicle appears in transit — receipt path only (Pre-check/PDI skipped).")
         recv_u = (urls.vehicles or "").strip()
         if recv_u:
             if callable(form_trace):
@@ -10100,21 +10735,8 @@ def prepare_vehicle(
             )
             if callable(step):
                 step("Receipt URL (DMS_REAL_URL_VEHICLES) is not set — skipped receiving in UI.")
-
-        _siebel_run_precheck_and_pdi(
-            page,
-            precheck_url=urls.precheck,
-            pdi_url=urls.pdi,
-            nav_timeout_ms=nav_timeout_ms,
-            action_timeout_ms=action_timeout_ms,
-            content_frame_selector=content_frame_selector,
-            note=note,
-            ms_done=ms_done,
-            step=step,
-            form_trace=form_trace,
-        )
     else:
-        note("prepare_vehicle: vehicle not In Transit — receipt/PDI branch skipped.")
+        note("prepare_vehicle: vehicle at dealer (not in-transit) — receipt branch skipped.")
         if callable(step):
             step("Vehicle does not appear in transit.")
 
@@ -11229,171 +11851,6 @@ def _add_enquiry_opportunity(
     return True, None, enquiry_no
 
 
-def _siebel_run_precheck_and_pdi(
-    page: Page,
-    *,
-    precheck_url: str,
-    pdi_url: str,
-    nav_timeout_ms: int,
-    action_timeout_ms: int,
-    content_frame_selector: str | None,
-    note,
-    ms_done,
-    step=None,
-    form_trace=None,
-) -> None:
-    """
-    §6.1a In Transit: **Pre Check** must complete before **PDI**.
-
-    - Same URL for both: one ``goto``, Pre Check click, then PDI submit.
-    - Different URLs: ``goto`` precheck view, complete, then ``goto`` PDI, submit.
-    - Only ``pdi`` URL: ``goto`` PDI view, try Pre Check first (combined Hero screen), then PDI submit.
-    """
-    say = step if callable(step) else (lambda _m: None)
-
-    pu = (precheck_url or "").strip()
-    du = (pdi_url or "").strip()
-    if not pu and not du:
-        note("Neither DMS_REAL_URL_PRECHECK nor DMS_REAL_URL_PDI is set; skipping pre-check and PDI.")
-        say("Pre-check and PDI were skipped — PDI / pre-check URLs are not configured.")
-        return
-
-    if callable(form_trace):
-        form_trace(
-            "5b_precheck_pdi",
-            "Pre Check / PDI (In Transit branch)",
-            "start_url_branching",
-            precheck_url_truncated=pu[:180] if pu else "",
-            pdi_url_truncated=du[:180] if du else "",
-            same_url_for_both=(pu == du) if (pu and du) else False,
-        )
-
-    def mark_precheck(clicked: bool, ok_msg: str, fail_msg: str) -> None:
-        if clicked:
-            note(ok_msg)
-            ms_done("Pre check completed")
-        else:
-            note(fail_msg)
-
-    if pu and du and pu == du:
-        _goto(page, du, "pdi_precheck_same_url", nav_timeout_ms=nav_timeout_ms)
-        _siebel_after_goto_wait(page, floor_ms=1000)
-        if callable(form_trace):
-            form_trace(
-                "5b_precheck_pdi",
-                "Combined Pre Check + PDI view",
-                "toolbar_click_PreCheck_Complete_then_PDI_Submit",
-                navigated_url_truncated=du[:180],
-            )
-        pc = _try_click_precheck_complete(
-            page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
-        )
-        mark_precheck(
-            pc,
-            "Clicked Pre Check complete on combined PreCheck/PDI view.",
-            "Pre Check control not found on combined view; operator may complete Pre Check manually.",
-        )
-        if callable(form_trace):
-            form_trace(
-                "5b_precheck_pdi",
-                "Combined Pre Check + PDI view",
-                "after_PreCheck_click",
-                precheck_complete_clicked=pc,
-            )
-        _safe_page_wait(page, 600, log_label="precheck_pdi_gap")
-        pdi_ok = _try_click_pdi_submit(
-            page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
-        )
-        if callable(form_trace):
-            form_trace(
-                "5b_precheck_pdi",
-                "Combined Pre Check + PDI view",
-                "after_PDI_Submit_click",
-                pdi_submit_clicked=pdi_ok,
-            )
-        if pdi_ok:
-            note("Clicked PDI Submit.")
-        else:
-            note("PDI Submit not found; operator may complete PDI manually.")
-        ms_done("Vehicle inspection done")
-        if pc and pdi_ok:
-            say("Pre-check and PDI were completed on the combined screen.")
-        elif pc:
-            say("Pre-check was completed; PDI submit was not found — finish PDI manually if needed.")
-        elif pdi_ok:
-            say("PDI submit was completed (pre-check control was not found).")
-        else:
-            say("Pre-check and PDI controls were not found — complete both manually if required.")
-        return
-
-    if pu:
-        _goto(page, pu, "precheck", nav_timeout_ms=nav_timeout_ms)
-        _siebel_after_goto_wait(page, floor_ms=1000)
-        if callable(form_trace):
-            form_trace(
-                "5b_precheck_pdi",
-                "Dedicated Pre Check view",
-                "toolbar_PreCheck_Complete",
-                navigated_url_truncated=pu[:180],
-            )
-        pc = _try_click_precheck_complete(
-            page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
-        )
-        mark_precheck(
-            pc,
-            "Clicked Pre Check complete.",
-            "Pre Check control not found; operator may complete Pre Check manually.",
-        )
-        if callable(form_trace):
-            form_trace("5b_precheck_pdi", "Dedicated Pre Check view", "after_PreCheck", precheck_complete_clicked=pc)
-        _safe_page_wait(page, 600, log_label="after_precheck_view")
-        if pc:
-            say("Pre-check step was completed on the pre-check view.")
-        else:
-            say("Pre-check view opened; complete control was not found — finish pre-check manually if needed.")
-
-    if du:
-        _goto(page, du, "pdi", nav_timeout_ms=nav_timeout_ms)
-        _siebel_after_goto_wait(page, floor_ms=1000)
-        if callable(form_trace):
-            form_trace(
-                "5b_precheck_pdi",
-                "PDI / Auto Vehicle PDI Assessment view",
-                "navigated_for_PDI_submit_path",
-                navigated_url_truncated=du[:180],
-            )
-        if not pu:
-            pc2 = _try_click_precheck_complete(
-                page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
-            )
-            if pc2:
-                note("Clicked Pre Check complete on PDI view (no separate PRECHECK URL).")
-                ms_done("Pre check completed")
-                say("Pre-check was completed on the PDI screen.")
-            else:
-                note(
-                    "Pre Check control not found before PDI (single PDI URL); "
-                    "operator may complete Pre Check manually if the screen requires it."
-                )
-                say("Pre-check control was not found before PDI — complete manually if the screen requires it.")
-            _safe_page_wait(page, 600, log_label="before_pdi_submit")
-        pdi_ok = _try_click_pdi_submit(
-            page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
-        )
-        if callable(form_trace):
-            form_trace("5b_precheck_pdi", "PDI view", "after_PDI_Submit_attempt", pdi_submit_clicked=pdi_ok)
-        if pdi_ok:
-            note("Clicked PDI Submit.")
-            say("PDI was submitted.")
-        else:
-            note("PDI Submit not found; operator may complete PDI manually.")
-            say("PDI submit was not found — complete PDI manually if required.")
-        ms_done("Vehicle inspection done")
-    elif pu and not du:
-        note("DMS_REAL_URL_PDI is not set; only Pre Check URL was opened — set PDI URL to finish PDI.")
-        say("PDI URL is not set — only pre-check was opened; configure DMS_REAL_URL_PDI to finish PDI.")
-
-
 def _persist_dms_scrape_to_db(
     customer_id: int | None,
     vehicle_id: int | None,
@@ -11450,8 +11907,8 @@ def Playwright_Hero_DMS_fill(
     1. **Find** customer by mobile (Contact view). 2. If not matched (or ``new_enquiry``), **basic
     enquiry** only (name, address, state, PIN — no care-of) + Save. 3. **Mandatory re-find** by
     mobile after a new basic enquiry. 4. **Care-of** (father/relation) + Save — **always** runs.
-    5. **Vehicle** — nested ``stage_5_vehicle_flow()`` (list search/scrape; if **In Transit** →
-    Process Receipt + Pre Check + PDI; unchanged helpers). 6. **Generate Booking** — **always** after
+    5. **Vehicle** — nested ``stage_5_vehicle_flow()`` (list search/scrape; **dealer** stock → tab Pre-check/PDI
+    on serial detail; if **In Transit** → receipt URL / Process Receipt only, no Pre-check/PDI). 6. **Generate Booking** — **always** after
     vehicle processing (in-transit or not). 7.
     **Allotment** (line items, Price All, Allocate) — **non–In Transit only**, after booking. 8.
     **Invoice hook** (message only; no automation).
@@ -12425,10 +12882,10 @@ def Playwright_Hero_DMS_fill(
 
         def stage_5_vehicle_flow() -> bool:
             """
-            Vehicle list search/scrape; if grid suggests In Transit → receipt,
-            Pre Check, PDI. Delegates to ``prepare_vehicle``. Sets ``in_transit_state``
-            and ``out["vehicle"]``. Returns False on configuration or vehicle-search failure
-            (``out["error"]`` set).
+            Vehicle list search/scrape; **dealer** path runs tab Pre-check/PDI on the vehicle form; if grid
+            suggests In Transit → receipt / Process Receipt only (Pre-check/PDI skipped — Siebel rejects until
+            dealer stock). Delegates to ``prepare_vehicle``. Sets ``in_transit_state`` and ``out["vehicle"]``.
+            Returns False on configuration or vehicle-search failure (``out["error"]`` set).
             """
             nonlocal in_transit_state
             note("Stage 5: vehicle list search, scrape, and In-Transit handling.")

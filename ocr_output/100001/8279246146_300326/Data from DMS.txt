@@ -2,7 +2,7 @@ Data from DMS
 
 --- Customer (filled on enquiry) ---
 Name: Shivnarayan
-Address: S/O Phaguni, gaon azdapura, Chak Dharsoni, Jeewad, Bharatpur, 321408 Rajasthan, 321408
+Address: S/O Phaguni, gaon azdapura, Chak Dharsoni, Jeewad, Bharatpur, Rajasthan, 321408
 State: RAJASTHAN
 Pin code: 321408
 Mobile: 8279246146
@@ -12,18 +12,18 @@ Care of / Father–Husband (Aadhaar QR): S/O Phaguni
 --- Vehicle (from DMS search result) ---
 Key num: —
 Frame / Chassis num: —
-Full chassis (VIN from detail): MBLHAW477T9C43284
-Engine num: —
-Full engine (from detail): HA11F7T9C11204
-Model: SPLENDOR +
-Color: RPB
-Cubic capacity: 87112029
-Seating capacity: 11870 DEALER SHOWROOM
+Full chassis (VIN from detail): 43284
+Engine num: VIN:
+Full engine (from detail): 11204
+Model: —
+Color: SKU:
+Cubic capacity: —
+Seating capacity: —
 Body type: —
 Vehicle type: —
 Num cylinders: —
 Horsepower: —
 Ex-showroom Price (Order Value): —
-Year of Mfg: 2026
+Year of Mfg: —
 Order # (DMS): —
 Invoice # (DMS): —
