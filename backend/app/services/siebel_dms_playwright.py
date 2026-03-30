@@ -6674,22 +6674,166 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     except Exception:
         pass
 
-    _precheck_icon_used = ""
-    _precheck_icon_ok = False
-    for _pc_pick_id in ("s_3_2_25_0_icon", "s_3_1_12_0_Ctrl"):
-        if _siebel_click_by_id_anywhere(
-            page,
-            _pc_pick_id,
-            timeout_ms=_tmo,
-            content_frame_selector=content_frame_selector,
-            note=note,
-            label=f"Pre-check technician icon ({_pc_pick_id})",
-            log_prefix=log_prefix,
-            wait_ms=1200,
-        ):
-            _precheck_icon_ok = True
-            _precheck_icon_used = _pc_pick_id
-            break
+    def _click_precheck_pick_icon(stage_label: str) -> tuple[bool, str]:
+        _used = ""
+        _ok = False
+        for _pc_pick_id in ("s_3_2_25_0_icon", "s_3_1_12_0_Ctrl"):
+            if _siebel_click_by_id_anywhere(
+                page,
+                _pc_pick_id,
+                timeout_ms=_tmo,
+                content_frame_selector=content_frame_selector,
+                note=note,
+                label=f"Pre-check pick icon ({_pc_pick_id}) [{stage_label}]",
+                log_prefix=log_prefix,
+                wait_ms=1200,
+            ):
+                _ok = True
+                _used = _pc_pick_id
+                break
+        # region agent log
+        try:
+            import json as _json_pc_icon_stage
+
+            with open(
+                Path(__file__).resolve().parents[3] / "debug-0875fe.log",
+                "a",
+                encoding="utf-8",
+            ) as _lf_pc_icon_stage:
+                _lf_pc_icon_stage.write(
+                    _json_pc_icon_stage.dumps(
+                        {
+                            "sessionId": "0875fe",
+                            "runId": "pre-fix",
+                            "hypothesisId": "G2",
+                            "location": "siebel_dms_playwright.py:_siebel_run_vehicle_serial_detail_precheck_pdi",
+                            "message": "precheck_pick_icon_click_by_stage",
+                            "data": {
+                                "stage": stage_label,
+                                "ok": _ok,
+                                "used_id": _used,
+                                "tried_ids": ["s_3_2_25_0_icon", "s_3_1_12_0_Ctrl"],
+                            },
+                            "timestamp": int(time.time() * 1000),
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n"
+                )
+        except Exception:
+            pass
+        # endregion agent log
+        return _ok, _used
+
+    def _pick_first_row_and_ok(stage_label: str) -> bool:
+        _safe_page_wait(page, 800, log_label=f"after_{stage_label}_icon_settle")
+        _pick_ok = False
+        for root in _roots():
+            try:
+                _pick_result = root.evaluate("""() => {
+                    const vis = (el) => {
+                        if (!el) return false;
+                        const st = window.getComputedStyle(el);
+                        if (st.display === 'none' || st.visibility === 'hidden') return false;
+                        const r = el.getBoundingClientRect();
+                        return r.width > 0 && r.height > 0;
+                    };
+                    const inputs = Array.from(document.querySelectorAll('input'));
+                    let searchBtn = null;
+                    for (const inp of inputs) {
+                        const al = (inp.getAttribute('aria-label') || '').toLowerCase();
+                        const tt = (inp.getAttribute('title') || '').toLowerCase();
+                        if ((al.includes('search') || al.includes('go') || tt.includes('search') || tt.includes('go'))
+                            && vis(inp) && inp.type !== 'text') {
+                            searchBtn = inp;
+                            break;
+                        }
+                    }
+                    if (searchBtn) {
+                        searchBtn.click();
+                        return 'search_clicked';
+                    }
+                    return '';
+                }""")
+                if _pick_result:
+                    note(f"{log_prefix}: clicked search in pick applet ({stage_label}, {_pick_result!r}).")
+                    _safe_page_wait(page, 1200, log_label=f"after_{stage_label}_search_click")
+                    _pick_ok = True
+                    break
+            except Exception:
+                continue
+
+        if not _pick_ok:
+            note(f"{log_prefix}: search icon not found in pick applet ({stage_label}; trying Enter fallback).")
+            try:
+                page.keyboard.press("Enter")
+                _safe_page_wait(page, 1200, log_label=f"after_{stage_label}_enter_fallback")
+                _pick_ok = True
+            except Exception:
+                pass
+
+        _safe_page_wait(page, 600, log_label=f"before_{stage_label}_pick_row")
+        for root in _roots():
+            try:
+                _row_result = root.evaluate("""() => {
+                    const vis = (el) => {
+                        if (!el) return false;
+                        const st = window.getComputedStyle(el);
+                        if (st.display === 'none' || st.visibility === 'hidden') return false;
+                        const r = el.getBoundingClientRect();
+                        return r.width > 0 && r.height > 0;
+                    };
+                    const rows = Array.from(document.querySelectorAll('table tbody tr, table tr'));
+                    for (const tr of rows) {
+                        if (!vis(tr)) continue;
+                        const tds = tr.querySelectorAll('td');
+                        if (tds.length < 2) continue;
+                        const cls = (tr.className || '').toLowerCase();
+                        if (cls.includes('jqgfirstrow') || cls.includes('header')) continue;
+                        const txt = (tr.textContent || '').trim();
+                        if (!txt || txt.length < 3) continue;
+                        const clickable = tr.querySelector('a, input[type="radio"], input[type="checkbox"], td');
+                        if (clickable) { clickable.click(); } else { tr.click(); }
+                        return 'row_clicked';
+                    }
+                    return '';
+                }""")
+                if _row_result:
+                    note(f"{log_prefix}: picked first row in pick applet ({stage_label}).")
+                    _safe_page_wait(page, 600, log_label=f"after_{stage_label}_row_pick")
+                    break
+            except Exception:
+                continue
+
+        _ok_done_local = False
+        for root in _roots():
+            for ok_css in (
+                "button[aria-label*='OK' i]",
+                "a[aria-label*='OK' i]",
+                "input[type='button'][value='OK' i]",
+                "button:has-text('OK')",
+                "a:has-text('OK')",
+            ):
+                try:
+                    ok_loc = root.locator(ok_css).first
+                    if ok_loc.count() > 0 and ok_loc.is_visible(timeout=500):
+                        try:
+                            ok_loc.click(timeout=_tmo)
+                        except Exception:
+                            ok_loc.click(timeout=_tmo, force=True)
+                        _ok_done_local = True
+                        note(f"{log_prefix}: clicked OK on pick applet ({stage_label}).")
+                        _safe_page_wait(page, 1000, log_label=f"after_{stage_label}_ok")
+                        break
+                except Exception:
+                    continue
+            if _ok_done_local:
+                break
+        if not _ok_done_local:
+            note(f"{log_prefix}: OK button not found on pick applet ({stage_label}; best-effort).")
+        return _ok_done_local
+
+    _precheck_icon_ok, _precheck_icon_used = _click_precheck_pick_icon("precheck_open_status")
     # region agent log
     try:
         import json as _json_pc_icon
@@ -6727,111 +6871,50 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             "(tried s_3_2_25_0_icon, s_3_1_12_0_Ctrl)."
         )
 
-    _safe_page_wait(page, 800, log_label="after_precheck_icon_settle")
-    _pick_ok = False
-    for root in _roots():
-        try:
-            _pick_result = root.evaluate("""() => {
-                const vis = (el) => {
-                    if (!el) return false;
-                    const st = window.getComputedStyle(el);
-                    if (st.display === 'none' || st.visibility === 'hidden') return false;
-                    const r = el.getBoundingClientRect();
-                    return r.width > 0 && r.height > 0;
-                };
-                const inputs = Array.from(document.querySelectorAll('input'));
-                let searchBtn = null;
-                for (const inp of inputs) {
-                    const al = (inp.getAttribute('aria-label') || '').toLowerCase();
-                    const tt = (inp.getAttribute('title') || '').toLowerCase();
-                    if ((al.includes('search') || al.includes('go') || tt.includes('search') || tt.includes('go'))
-                        && vis(inp) && inp.type !== 'text') {
-                        searchBtn = inp;
-                        break;
-                    }
-                }
-                if (searchBtn) {
-                    searchBtn.click();
-                    return 'search_clicked';
-                }
-                return '';
-            }""")
-            if _pick_result:
-                note(f"{log_prefix}: clicked search in pick applet ({_pick_result!r}).")
-                _safe_page_wait(page, 1200, log_label="after_precheck_search_click")
-                _pick_ok = True
-                break
-        except Exception:
-            continue
+    _pick_first_row_and_ok("precheck_open_status")
 
-    if not _pick_ok:
-        note(f"{log_prefix}: search icon not found in pick applet (trying Go/Enter fallback).")
+    # Move focus to the next editable cell (Technician) and open its pick applet.
+    _tech_icon_ok = False
+    _tech_icon_used = ""
+    try:
+        page.keyboard.press("Tab")
+        _safe_page_wait(page, 250, log_label="after_precheck_open_tab_to_technician")
+        # region agent log
         try:
-            page.keyboard.press("Enter")
-            _safe_page_wait(page, 1200, log_label="after_precheck_enter_fallback")
-            _pick_ok = True
+            import json as _json_pc_tab
+
+            with open(
+                Path(__file__).resolve().parents[3] / "debug-0875fe.log",
+                "a",
+                encoding="utf-8",
+            ) as _lf_pc_tab:
+                _lf_pc_tab.write(
+                    _json_pc_tab.dumps(
+                        {
+                            "sessionId": "0875fe",
+                            "runId": "pre-fix",
+                            "hypothesisId": "G3",
+                            "location": "siebel_dms_playwright.py:_siebel_run_vehicle_serial_detail_precheck_pdi",
+                            "message": "precheck_tab_to_technician_cell",
+                            "data": {"tab_pressed": True},
+                            "timestamp": int(time.time() * 1000),
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n"
+                )
         except Exception:
             pass
+        # endregion agent log
+    except Exception:
+        pass
 
-    _safe_page_wait(page, 600, log_label="before_precheck_pick_row")
-    for root in _roots():
-        try:
-            _row_result = root.evaluate("""() => {
-                const vis = (el) => {
-                    if (!el) return false;
-                    const st = window.getComputedStyle(el);
-                    if (st.display === 'none' || st.visibility === 'hidden') return false;
-                    const r = el.getBoundingClientRect();
-                    return r.width > 0 && r.height > 0;
-                };
-                const rows = Array.from(document.querySelectorAll('table tbody tr, table tr'));
-                for (const tr of rows) {
-                    if (!vis(tr)) continue;
-                    const tds = tr.querySelectorAll('td');
-                    if (tds.length < 2) continue;
-                    const cls = (tr.className || '').toLowerCase();
-                    if (cls.includes('jqgfirstrow') || cls.includes('header')) continue;
-                    const txt = (tr.textContent || '').trim();
-                    if (!txt || txt.length < 3) continue;
-                    const clickable = tr.querySelector('a, input[type="radio"], input[type="checkbox"], td');
-                    if (clickable) { clickable.click(); } else { tr.click(); }
-                    return 'row_clicked';
-                }
-                return '';
-            }""")
-            if _row_result:
-                note(f"{log_prefix}: picked first row in Pre-check applet.")
-                _safe_page_wait(page, 600, log_label="after_precheck_row_pick")
-                break
-        except Exception:
-            continue
-
-    _ok_done = False
-    for root in _roots():
-        for ok_css in (
-            "button[aria-label*='OK' i]",
-            "a[aria-label*='OK' i]",
-            "input[type='button'][value='OK' i]",
-            "button:has-text('OK')",
-            "a:has-text('OK')",
-        ):
-            try:
-                ok_loc = root.locator(ok_css).first
-                if ok_loc.count() > 0 and ok_loc.is_visible(timeout=500):
-                    try:
-                        ok_loc.click(timeout=_tmo)
-                    except Exception:
-                        ok_loc.click(timeout=_tmo, force=True)
-                    _ok_done = True
-                    note(f"{log_prefix}: clicked OK on Pre-check pick applet.")
-                    _safe_page_wait(page, 1000, log_label="after_precheck_ok")
-                    break
-            except Exception:
-                continue
-        if _ok_done:
-            break
-    if not _ok_done:
-        note(f"{log_prefix}: OK button not found on Pre-check pick applet (best-effort).")
+    _tech_icon_ok, _tech_icon_used = _click_precheck_pick_icon("precheck_technician_after_tab")
+    if _tech_icon_ok:
+        note(f"{log_prefix}: technician pick icon clicked after Tab (id={_tech_icon_used!r}).")
+        _pick_first_row_and_ok("precheck_technician_after_tab")
+    else:
+        note(f"{log_prefix}: technician pick icon not found after Tab (best-effort).")
 
     _submit_done = False
     for root in _roots():
