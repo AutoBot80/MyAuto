@@ -52,10 +52,6 @@ logger = logging.getLogger(__name__)
 # Ctrl+S) then stop; else drill → Contacts → relation fill → Payments ``+``. Set False to restore the full
 # BRD linear SOP inside ``Playwright_Hero_DMS_fill``.
 SIEBEL_DMS_STOP_AFTER_ALL_ENQUIRIES = True
-# Temporary gate: stop immediately before filling **Relation's Name** (after Find-Contact mobile+first
-# has run and optional re-find). Logs how many list rows match mobile+first and how many show an
-# enquiry hint in row text; set False to continue automation.
-SIEBEL_DMS_FORCE_FAIL_BEFORE_FILL_RELATIONS_NAME = True
 
 
 def _normalize_cubic_cc_digits(val: object) -> str:
@@ -3737,150 +3733,56 @@ def _siebel_ui_suggests_contact_match_mobile_first(page: Page, mobile: str, firs
     return False
 
 
+def _contact_list_row_text_hints_enquiry(text: str) -> bool:
+    """Same enquiry-hint heuristics as the Contact Find list JS (not a substitute for subgrid read)."""
+    if not (text or "").strip():
+        return False
+    if re.search(r"senq", text, re.I):
+        return True
+    if re.search(r"enquiry", text, re.I) and re.search(r"\d", text):
+        return True
+    if re.search(r"\b[0-9]{2,5}-[0-9]{1,3}-[A-Z]{2,6}-[A-Z0-9-]{4,}\b", text, re.I):
+        return True
+    return False
+
+
 def _find_contact_mobile_first_grid_counts(
-    page: Page, mobile: str, first_name: str
-) -> tuple[int, int]:
-    """
-    After Find/Go on Contact (mobile + first name): count **data rows** (≥3 ``td``) that contain the
-    mobile needle and pass the same first-name resolution as ``_siebel_ui_suggests_contact_match_mobile_first``.
-
-    Second count: among those rows, how many list-row texts **hint** at an existing enquiry (``SENQ``,
-    ``Enquiry`` + digits, or Siebel-style segmented id). This is **not** a substitute for
-    ``_contact_enquiry_tab_has_rows`` after drilldown.
-    """
-    needle = _mobile_needle_for_contact_grid_match(mobile)
-    target = (first_name or "").strip()
-    if not needle or not target:
-        return 0, 0
-    stats_js = """([needle, target]) => {
-      if (!needle || needle.length < 8 || !target) return { matching: 0, withEnquiryHint: 0 };
-      const compact = (s) => String(s || '').replace(/\\s+/g, '');
-      const norm = (s) => String(s || '').replace(/\\u00a0/g, ' ').trim();
-      const firstNameKeyFromFind = (raw) => {
-        let s = String(raw || '').replace(/\\u00a0/g, ' ').trim().toLowerCase();
-        while (s.endsWith('.')) s = s.slice(0, -1).trim();
-        return s;
-      };
-      const textMatchesFindFirstName = (text, keyBase) => {
-        if (!keyBase || text == null) return false;
-        const c = String(text).replace(/\\u00a0/g, ' ').trim().toLowerCase();
-        if (!c) return false;
-        if (c === keyBase) return true;
-        if (c.startsWith(keyBase + ' ')) return true;
-        const keyHead = keyBase.split(/\\s+/).filter(Boolean)[0] || '';
-        if (keyHead && c === keyHead) return true;
-        const first = c.split(/\\s+/).filter(Boolean)[0] || '';
-        let fs = first;
-        while (fs.endsWith('.')) fs = fs.slice(0, -1).trim();
-        if (fs === keyBase) return true;
-        if (keyHead && fs === keyHead) return true;
-        return false;
-      };
-      const rowContainsFindFirstKey = (tr, keyBase) => {
-        if (!keyBase) return false;
-        const keyHead = keyBase.split(/\\s+/).filter(Boolean)[0] || '';
-        const raw = norm(tr.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase();
-        if (!raw || (!raw.includes(keyBase) && !(keyHead && raw.includes(keyHead)))) return false;
-        if (raw.startsWith(keyBase + ' ')) return true;
-        if (keyHead && raw.startsWith(keyHead + ' ')) return true;
-        const parts = raw.split(/[\\s,;|\\/\\u2013\\u2014-]+/).filter(Boolean);
-        for (const p of parts) {
-          let q = p;
-          while (q.endsWith('.')) q = q.slice(0, -1).trim();
-          if (q === keyBase || (keyHead && q === keyHead)) return true;
-          if (p.startsWith(keyBase + ' ')) return true;
-          if (keyHead && p.startsWith(keyHead + ' ')) return true;
-        }
-        return false;
-      };
-      const keyBase = firstNameKeyFromFind(target);
-      if (!keyBase) return { matching: 0, withEnquiryHint: 0 };
-      const hasM = (s) => compact(s).includes(needle);
-      const rowHasFirst = (tr) => {
-        const tds = tr.querySelectorAll('td');
-        for (const td of tds) {
-          if (textMatchesFindFirstName(td.textContent, keyBase)) return true;
-          if (textMatchesFindFirstName(td.getAttribute('title') || '', keyBase)) return true;
-          if (textMatchesFindFirstName(td.getAttribute('aria-label') || '', keyBase)) return true;
-          for (const inp of td.querySelectorAll('input, textarea')) {
-            if (textMatchesFindFirstName(inp.value, keyBase)) return true;
-          }
-        }
-        return rowContainsFindFirstKey(tr, keyBase);
-      };
-      const rowHintEnquiry = (tr) => {
-        const t = String(tr.innerText || tr.textContent || '');
-        if (/senq/i.test(t)) return true;
-        if (/enquiry/i.test(t) && /\\d/.test(t)) return true;
-        if (/\\b[0-9]{2,5}-[0-9]{1,3}-[A-Z]{2,6}-[A-Z0-9-]{4,}\\b/i.test(t)) return true;
-        return false;
-      };
-      let matching = 0;
-      let withEnquiryHint = 0;
-      for (const tr of document.querySelectorAll('table tr')) {
-        if (tr.closest('thead')) continue;
-        const tds = tr.querySelectorAll('td');
-        if (tds.length < 3) continue;
-        const rowBody = tr.textContent || '';
-        if (!hasM(rowBody)) continue;
-        if (!rowHasFirst(tr)) continue;
-        matching++;
-        if (rowHintEnquiry(tr)) withEnquiryHint++;
-      }
-      return { matching, withEnquiryHint };
-    }"""
-    best_m = 0
-    best_e = 0
-    for frame in _ordered_frames(page):
-        try:
-            res = frame.evaluate(stats_js, [needle, target])
-            if isinstance(res, dict):
-                m = int(res.get("matching") or 0)
-                e = int(res.get("withEnquiryHint") or 0)
-                if m > best_m or (m == best_m and e > best_e):
-                    best_m, best_e = m, e
-        except Exception:
-            continue
-    return best_m, best_e
-
-
-def _maybe_force_fail_before_fill_relations_name(
     page: Page,
     mobile: str,
     first_name: str,
     *,
-    note,
-    step,
-    out: dict,
-    precomputed_counts: tuple[int, int] | None = None,
-    list_count_first_name: str | None = None,
-) -> bool:
+    content_frame_selector: str | None = None,
+) -> tuple[int, int]:
     """
-    If ``SIEBEL_DMS_FORCE_FAIL_BEFORE_FILL_RELATIONS_NAME`` is True: log contact/enquiry stats,
-    set ``out['error']``, and return False. Otherwise return True.
+    After Find/Go on Contact: count **drillable** rows for ``mobile`` — same rules as
+    ``_contact_find_mobile_drilldown_occurrence_count(..., first_name_exact=None)`` / title sweep ordinals.
 
-    ``precomputed_counts`` should be captured **before** drilling away from the Find Contact list (video path).
-    ``list_count_first_name`` documents which first name was used for that list read.
+    ``first_name`` is ignored for these counts (first name is often absent from list row text).
+
+    Second count: among those rows, how many list texts **hint** at an enquiry (``SENQ``, ``Enquiry`` + digits,
+    Siebel-style id). Not a substitute for ``_contact_enquiry_tab_has_rows`` after drilldown.
     """
-    if not SIEBEL_DMS_FORCE_FAIL_BEFORE_FILL_RELATIONS_NAME:
-        return True
-    if precomputed_counts is not None:
-        n_match, n_enq_hint = precomputed_counts
-    else:
-        n_match, n_enq_hint = _find_contact_mobile_first_grid_counts(page, mobile, first_name)
-    _lcfn = (list_count_first_name or first_name or "").strip()
-    msg = (
-        "Forced stop before Relation's Name "
-        f"(SIEBEL_DMS_FORCE_FAIL_BEFORE_FILL_RELATIONS_NAME=True). "
-        f"Find-Contact (mobile + first name): {n_match} list row(s) match "
-        f"(first name used for list count: {_lcfn!r}); "
-        f"of those, {n_enq_hint} row(s) show an enquiry hint in list text "
-        "(SENQ/Enquiry#/id pattern — not a Contact_Enquiry subgrid drilldown)."
+    needle = _mobile_needle_for_contact_grid_match(mobile)
+    if not needle:
+        return 0, 0
+    plans = _contact_mobile_drilldown_plans(
+        page,
+        mobile,
+        content_frame_selector=content_frame_selector,
+        first_name_exact=None,
+        log_first_name_row_debug=False,
     )
-    note(msg)
-    step("Stopped before Relation's Name — see NOTES for contact / enquiry hint counts.")
-    out["error"] = f"Siebel: {msg}"
-    return False
+    n_match = len(plans)
+    n_hint = 0
+    for _dr_root, _row_i, _, _ in plans:
+        try:
+            _row = _dr_root.locator("table tr").nth(_row_i)
+            row_text = (_row.inner_text(timeout=800) or "").strip()
+        except Exception:
+            row_text = ""
+        if _contact_list_row_text_hints_enquiry(row_text):
+            n_hint += 1
+    return n_match, n_hint
 
 
 def _fill_first_name_in_find_roots(
@@ -4381,6 +4283,97 @@ def _siebel_try_activate_find_contact_context(
         _safe_page_wait(page, 900, log_label="after_contacts_list_subtab")
         return
     note("Find Contact / Contacts list tab not found — proceeding to First Name click anyway.")
+
+
+def _siebel_video_branch2_address_postal_and_save(
+    page: Page,
+    *,
+    pin_code: str,
+    action_timeout_ms: int,
+    content_frame_selector: str | None,
+    note,
+) -> bool:
+    """
+    Video branch **(2)** (no Open enquiry): after Relation's Name path, open **Address**, set
+    **Postal Code** ``#1_Postal_Code`` (scoped under ``#s_vctrl_div`` when present), then Save.
+    """
+    pin = (pin_code or "").strip()
+    if not pin:
+        note("Branch (2) Address: pin_code empty — skipping Address tab / Postal Code fill.")
+        return False
+    t = min(int(action_timeout_ms), 6000)
+    if _siebel_try_click_named_in_frames(
+        page,
+        re.compile(r"^\s*Address\s*$", re.I),
+        roles=("tab", "link", "button"),
+        timeout_ms=t,
+        content_frame_selector=content_frame_selector,
+    ):
+        note("Branch (2): clicked Address tab.")
+        _safe_page_wait(page, 700, log_label="after_address_tab_branch2")
+    else:
+        note("Branch (2): Address tab not found via frame scan — trying Postal Code field anyway.")
+
+    def _fill_postal_in_root(root) -> bool:
+        try:
+            vctrl = root.locator("#s_vctrl_div")
+            if vctrl.count() > 0:
+                loc = vctrl.locator('[id="1_Postal_Code"]').first
+                if loc.count() > 0 and loc.is_visible(timeout=500):
+                    loc.click(timeout=min(2000, action_timeout_ms))
+                    loc.fill(pin, timeout=action_timeout_ms)
+                    try:
+                        loc.press("Tab", timeout=1200)
+                    except Exception:
+                        pass
+                    note(f"Branch (2): filled Postal Code in #s_vctrl_div / #1_Postal_Code → {pin!r}.")
+                    return True
+        except Exception:
+            pass
+        try:
+            loc = root.locator('[id="1_Postal_Code"]').first
+            if loc.count() > 0 and loc.is_visible(timeout=500):
+                loc.click(timeout=min(2000, action_timeout_ms))
+                loc.fill(pin, timeout=action_timeout_ms)
+                try:
+                    loc.press("Tab", timeout=1200)
+                except Exception:
+                    pass
+                note(f"Branch (2): filled #1_Postal_Code → {pin!r}.")
+                return True
+        except Exception:
+            pass
+        return False
+
+    _filled = False
+    for fl in _iter_frame_locator_roots(page, content_frame_selector):
+        if _fill_postal_in_root(fl):
+            _filled = True
+            break
+    if not _filled:
+        for frame in _ordered_frames(page):
+            if _fill_postal_in_root(frame):
+                _filled = True
+                break
+    if not _filled and _fill_postal_in_root(page):
+        _filled = True
+    if not _filled:
+        note("Branch (2): could not locate or fill #1_Postal_Code.")
+        return False
+
+    _safe_page_wait(page, 350, log_label="after_postal_fill_branch2")
+    if _try_click_siebel_save(
+        page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
+    ):
+        note("Branch (2): Save clicked after Address / Postal Code.")
+        return True
+    try:
+        page.keyboard.press("Control+S", delay=50)
+        note("Branch (2): pressed Ctrl+S after Address / Postal Code.")
+        return True
+    except Exception:
+        note("Branch (2): Save toolbar and Ctrl+S both failed after Postal Code.")
+        return False
 
 
 def _siebel_video_path_after_find_go_to_all_enquiries(
@@ -5162,7 +5155,10 @@ def _contact_enquiry_tab_has_rows(
     Detection: header ``#jqgh_s_1_l_Enquiry_`` (or **Enquiry#** / **Enquiries** text), then non-empty
     values on ``input`` / ``textarea`` ``name=\"Enquiry_\"``; table cell scrape; Hero **Enquiry#** as
     visible ``<a>`` (e.g. ``11870-01-SENQ-0623-305``) inside **.siebui-applet** when the applet text
-    references enquiries. Frames: **main first**, then Siebel iframes.
+    references enquiries. When **Enquiry Status** fields exist (``id=1_HHML_Enquiry_Status`` or any
+    element whose ``id`` ends with ``HHML_Enquiry_Status``), only rows with status **Open**
+    (case-insensitive) count
+    as existing enquiries. Frames: **main first**, then Siebel iframes.
     """
     _clicked = _siebel_try_click_named_in_frames(
         page,
@@ -5261,6 +5257,73 @@ def _contact_enquiry_tab_has_rows(
         return { cnt, best, scope };
       };
 
+      // When Enquiry Status controls exist (Hero: id 1_HHML_Enquiry_Status or *HHML_Enquiry_Status),
+      // count only rows with status value "Open" (case-insensitive).
+      const enquiryStatusFieldSelector = '[id="1_HHML_Enquiry_Status"], [id$="HHML_Enquiry_Status"]';
+      const hasEnquiryStatusInDom = () => !!document.querySelector(enquiryStatusFieldSelector);
+      const statusValueIsOpen = (el) => {
+        if (!el) return false;
+        let raw = '';
+        const tag = String(el.tagName || '').toLowerCase();
+        if (tag === 'select') {
+          const o = el.selectedOptions && el.selectedOptions[0];
+          raw = o ? String(o.textContent || o.value || '') : String(el.value || '');
+        } else {
+          raw = el.value != null && String(el.value).trim() !== '' ? String(el.value) : String(el.textContent || '');
+        }
+        return norm(raw) === 'open';
+      };
+      const applyOpenEnquiryFilter = (rowCount, enquiryNumber) => {
+        if (!hasEnquiryStatusInDom()) {
+          return { rowCount, enquiryNumber };
+        }
+        let rc = 0;
+        let en = '';
+        for (const inp of document.querySelectorAll('input[name="Enquiry_"], textarea[name="Enquiry_"]')) {
+          const v = (inp.value != null ? String(inp.value) : '').trim();
+          if (isEmptyEnq(v)) continue;
+          const tr = inp.closest('tr');
+          const st = tr && tr.querySelector(enquiryStatusFieldSelector);
+          if (!st || !statusValueIsOpen(st)) continue;
+          rc += 1;
+          if (!en) en = v;
+        }
+        if (rc === 0) {
+          for (const tr of document.querySelectorAll('table tbody tr, tr[role="row"], tr.jqgrow')) {
+            if (tr.closest('thead')) continue;
+            const st = tr.querySelector(enquiryStatusFieldSelector);
+            if (!st || !statusValueIsOpen(st)) continue;
+            let hit = false;
+            let ev = '';
+            for (const inp of tr.querySelectorAll('input[name="Enquiry_"], textarea[name="Enquiry_"]')) {
+              const iv = (inp.value || '').trim();
+              if (!isEmptyEnq(iv)) { hit = true; ev = iv; break; }
+            }
+            if (!hit) {
+              for (const a of tr.querySelectorAll('a')) {
+                const t = (a.textContent || '').trim();
+                if (textLooksLikeHeroEnquiryKey(t)) { hit = true; ev = t; break; }
+              }
+            }
+            if (hit) { rc += 1; if (!en) en = ev; }
+          }
+        }
+        return { rowCount: rc, enquiryNumber: rc > 0 ? en : '' };
+      };
+      const withOpenEnquiryCounts = (payload) => {
+        const f = applyOpenEnquiryFilter(payload.rowCount, payload.enquiryNumber);
+        const baseDiag = payload.diag || {};
+        return {
+          ...payload,
+          rowCount: f.rowCount,
+          enquiryNumber: f.enquiryNumber,
+          diag: {
+            ...baseDiag,
+            openEnquiryStatusFiltered: hasEnquiryStatusInDom(),
+          },
+        };
+      };
+
       let headerFound = !!document.querySelector('#jqgh_s_1_l_Enquiry_');
       let jqghIdHit = '';
       if (headerFound) {
@@ -5298,7 +5361,7 @@ def _contact_enquiry_tab_has_rows(
       if (!headerFound) {
         const _hl = heroLinksInApplet();
         if (_hl.cnt > 0 && _hl.best) {
-          return {
+          return withOpenEnquiryCounts({
             checked: true, rowCount: _hl.cnt, enquiryNumber: _hl.best,
             diag: {
               headerFound: false, jqghIdHit,
@@ -5309,9 +5372,9 @@ def _contact_enquiry_tab_has_rows(
               usedHeroLinkScan: true,
               heroLinkScope: _hl.scope,
             },
-          };
+          });
         }
-        return {
+        return withOpenEnquiryCounts({
           checked: false, rowCount: 0, enquiryNumber: '',
           diag: {
             headerFound: false, jqghIdHit,
@@ -5321,7 +5384,7 @@ def _contact_enquiry_tab_has_rows(
             sampleEnquiryNames,
             heroLinkScope: _hl.scope,
           },
-        };
+        });
       }
 
       let rowCount = 0;
@@ -5337,7 +5400,7 @@ def _contact_enquiry_tab_has_rows(
         if (!enquiryNumber) enquiryNumber = v;
       }
       if (rowCount > 0) {
-        return {
+        return withOpenEnquiryCounts({
           checked: true, rowCount, enquiryNumber,
           diag: {
             headerFound: true, jqghIdHit, usedFuzzyFallback: false,
@@ -5346,7 +5409,7 @@ def _contact_enquiry_tab_has_rows(
             fuzzyNonEmptyValues: fuzzyNonEmpty.length,
             sampleEnquiryNames,
           },
-        };
+        });
       }
 
       const valueLooksLikeEnquiryNo = (v) => {
@@ -5361,7 +5424,7 @@ def _contact_enquiry_tab_has_rows(
         if (numLike.length > 0) {
           rowCount = numLike.length;
           enquiryNumber = String(numLike[0].value != null ? numLike[0].value : '').trim();
-          return {
+          return withOpenEnquiryCounts({
             checked: true, rowCount, enquiryNumber,
             diag: {
               headerFound: true, jqghIdHit, usedFuzzyFallback: true,
@@ -5370,7 +5433,7 @@ def _contact_enquiry_tab_has_rows(
               fuzzyNonEmptyValues: fuzzyNonEmpty.length,
               sampleEnquiryNames: fuzzyNamed.slice(0, 12).map((el) => String(el.getAttribute('name') || '').slice(0, 72)),
             },
-          };
+          });
         }
       }
 
@@ -5465,7 +5528,7 @@ def _contact_enquiry_tab_has_rows(
           heroScopeEnd = _hle.scope;
         }
       }
-      return {
+      return withOpenEnquiryCounts({
         checked: true, rowCount, enquiryNumber,
         diag: {
           headerFound: true, jqghIdHit, usedFuzzyFallback: false,
@@ -5476,7 +5539,7 @@ def _contact_enquiry_tab_has_rows(
           usedHeroLinkScan: usedHeroAtEnd,
           heroLinkScope: heroScopeEnd || undefined,
         },
-      };
+      });
     }"""
 
     # #region agent log
@@ -11101,6 +11164,29 @@ def _write_playwright_vehicle_master_section(
         pass
 
 
+def _write_playwright_contact_scrape_section(
+    log_fp,
+    out: dict,
+    *,
+    had_open_enquiry_from_sweep: bool,
+) -> None:
+    """Append ``contact_id`` and optional enquiry# to ``Playwright_DMS.txt`` (operator-facing)."""
+    if log_fp is None:
+        return
+    try:
+        cid = (out.get("contact_id") or "").strip()
+        enq = str((out.get("vehicle") or {}).get("enquiry_number") or "").strip()
+        log_fp.write("\n--- contact_scrape (after Relation's Name path) ---\n")
+        log_fp.write(f"contact_id={cid!r}\n")
+        if had_open_enquiry_from_sweep and enq:
+            log_fp.write(f"open_enquiry_number={enq!r}\n")
+        elif enq:
+            log_fp.write(f"enquiry_number={enq!r}\n")
+        log_fp.flush()
+    except OSError:
+        pass
+
+
 def _siebel_fill_key_battery_from_dms_values(
     page: Page,
     dms_values: dict,
@@ -12973,7 +13059,8 @@ def Playwright_Hero_DMS_fill(
             video_first_name = first.strip()
             step(
                 "Video SOP (Find Contact Enquiry): Find → Contact → mobile + first name → Go; "
-                "drill / Add Enquiry per match; then All Enquiries path."
+                "branch A when N=0 (Add Enquiry) else title sweep for Open enquiry; branch (2) Address+pin "
+                "when no Open; Relation's Name → Payments → booking path."
             )
             form_trace(
                 "v1_find_contact",
@@ -13003,13 +13090,28 @@ def Playwright_Hero_DMS_fill(
                     "Check Find pane, iframe selectors, and DMS_SIEBEL_* tuning."
                 )
                 return out
-            contact_matched = _siebel_ui_suggests_contact_match_mobile_first(
+            _grid_first_hint = _siebel_ui_suggests_contact_match_mobile_first(
                 page, mobile, video_first_name
             )
-            note(f"DECISION: contact_table_match_mobile_first_after_find={contact_matched!r}")
-            if not contact_matched:
+            note(
+                f"DECISION: contact_table_match_mobile_first_after_find={_grid_first_hint!r} "
+                "(informational; branch A/B uses drilldown row count)."
+            )
+
+            n_drilldown = _contact_find_mobile_drilldown_occurrence_count(
+                page,
+                mobile,
+                content_frame_selector=content_frame_selector,
+                first_name_exact=None,
+            )
+            note(
+                f"Video path: Contact Find drilldown row count N={n_drilldown} "
+                "(mobile-only basis for branch A/B)."
+            )
+
+            if n_drilldown == 0:
                 note(
-                    "No grid row matching mobile + exact first name — Add Enquiry with base first name "
+                    "No contact drilldown rows (branch A) — Add Enquiry with base first name "
                     "(vehicle + Opportunities + Ctrl+S)."
                 )
                 ae_ok, ae_detail, ae_enq_no = _add_enquiry_opportunity(
@@ -13024,9 +13126,9 @@ def Playwright_Hero_DMS_fill(
                     vehicle_merge=out.setdefault("vehicle", {}),
                 )
                 if not ae_ok:
-                    step("Stopped: Add Enquiry branch failed (no mobile+first match).")
+                    step("Stopped: Add Enquiry branch failed (zero drilldown contacts).")
                     out["error"] = (
-                        "Siebel: video SOP — no contact row for mobile+first and Add Enquiry did not complete. "
+                        "Siebel: video SOP — no contact drilldown rows and Add Enquiry did not complete. "
                         f"{ae_detail or 'See Playwright_DMS.txt [NOTE] lines for the failing step.'}"
                     )
                     return out
@@ -13064,37 +13166,54 @@ def Playwright_Hero_DMS_fill(
                     first_name=video_first_name,
                 )
                 if not ok_refind:
-                    step("Stopped: Add Enquiry saved but post-save re-find by mobile + first name failed.")
+                    step("Stopped: Add Enquiry saved but post-save re-find failed.")
                     out["error"] = (
                         "Siebel: Add Enquiry was saved, but the follow-up Find→Contact mobile+first query "
                         "did not complete."
                     )
                     return out
-                contact_matched = _siebel_ui_suggests_contact_match_mobile_first(
-                    page, mobile, video_first_name
+                n_drilldown = _contact_find_mobile_drilldown_occurrence_count(
+                    page,
+                    mobile,
+                    content_frame_selector=content_frame_selector,
+                    first_name_exact=None,
                 )
-                note(f"DECISION: contact_table_match_after_add_enquiry_refind={contact_matched!r}")
-                if not contact_matched:
-                    step("Stopped: Add Enquiry saved but no table row for mobile + first name after re-find.")
+                note(f"Video path: after Add Enquiry, drilldown row count N={n_drilldown}.")
+                if n_drilldown == 0:
+                    step("Stopped: Add Enquiry saved but Find still shows no drilldown contact rows.")
                     out["error"] = (
-                        "Siebel: Add Enquiry was saved, but contact search still returned no matching row "
-                        "after re-find."
+                        "Siebel: Add Enquiry saved but contact search shows no drillable rows after re-find."
                     )
                     return out
+                strict_m = _siebel_ui_suggests_contact_match_mobile_first(
+                    page, mobile, video_first_name
+                )
+                note(f"DECISION: contact_table_match_after_add_enquiry_refind={strict_m!r}")
+                if not strict_m:
+                    note(
+                        "Post Add Enquiry: strict mobile+first not visible on grid — continuing with "
+                        "drilldown rows only."
+                    )
 
             _video_snap_fn = (video_first_name or "").strip()
-            _video_list_counts_for_relation_gate = _find_contact_mobile_first_grid_counts(
-                page, mobile, _video_snap_fn
+            _video_list_snapshot_counts = _find_contact_mobile_first_grid_counts(
+                page, mobile, _video_snap_fn, content_frame_selector=content_frame_selector
+            )
+            _video_strict_first = _contact_find_mobile_drilldown_occurrence_count(
+                page,
+                mobile,
+                content_frame_selector=content_frame_selector,
+                first_name_exact=_video_snap_fn or None,
             )
             note(
                 "Find-Contact list snapshot (before Title/enquiry sweep): "
-                f"{_video_list_counts_for_relation_gate[0]} row(s) match mobile+first "
-                f"(first name {_video_snap_fn!r}); "
-                f"{_video_list_counts_for_relation_gate[1]} with enquiry hint in list text."
+                f"{_video_list_snapshot_counts[0]} row(s) with mobile and drilldown "
+                f"(same basis as title sweep ordinals); "
+                f"{_video_list_snapshot_counts[1]} with enquiry hint in list text; "
+                f"optional strict list row match for first name {_video_snap_fn!r}: {_video_strict_first}."
             )
 
-            # Drill each Title row (exact mobile + first) until Contact_Enquiry subgrid has a data row.
-            _has_enq, _enq_number, _enq_rows, _sweep_err = _contact_find_title_sweep_for_enquiry(
+            sweep_has_open, sweep_enq_no, sweep_enq_rows, _sweep_err = _contact_find_title_sweep_for_enquiry(
                 page,
                 mobile=mobile,
                 first_name=video_first_name,
@@ -13104,161 +13223,76 @@ def Playwright_Hero_DMS_fill(
                 note=note,
                 step=step,
             )
+            contacts_with_open = (
+                1
+                if (
+                    sweep_has_open
+                    and ((sweep_enq_no or "").strip() or int(sweep_enq_rows or 0) > 0)
+                )
+                else 0
+            )
+            note(
+                f"Video path: drilldown_rows_N={n_drilldown}, "
+                f"contacts_with_open_enquiry={contacts_with_open} (Siebel rule: 0 or 1)."
+            )
+
             if _sweep_err:
                 step(f"Stopped: {_sweep_err}")
                 out["error"] = _sweep_err
                 return out
-            if _has_enq and _enq_number:
-                out.setdefault("vehicle", {})["enquiry_number"] = _enq_number
+
+            if sweep_has_open and (sweep_enq_no or "").strip():
+                out.setdefault("vehicle", {})["enquiry_number"] = (sweep_enq_no or "").strip()
                 log_vehicle_snapshot("video_enquiry_found_in_contact_enquiry")
-            if not _has_enq:
+
+            if not sweep_has_open:
                 note(
-                    f"No open enquiry on any row for mobile+first (last Contact_Enquiry rows={_enq_rows}) — "
-                    "creating Add Enquiry with suffixed first name (append dots until re-find + drill succeed)."
+                    "Video branch (2): no open enquiry — re-find and drill first contact "
+                    "before Relation's Name path."
                 )
-                _dotted_ok = False
-                _dms_base = dict(dms_values)
-                for _nd in range(1, 9):
-                    _suffix = "." * _nd
-                    _dotted_fn = first.strip() + _suffix
-                    _dms_try = {**_dms_base, "first_name": _dotted_fn}
-                    note(
-                        f"Add Enquiry (suffixed first): attempt dot_count={_nd} → first_name={_dotted_fn!r} "
-                        f"(poll gate + logs apply)."
-                    )
-                    ae2_ok, ae2_detail, ae2_enq_no = _add_enquiry_opportunity(
-                        page,
-                        _dms_try,
-                        urls,
-                        action_timeout_ms=action_timeout_ms,
-                        nav_timeout_ms=nav_timeout_ms,
-                        content_frame_selector=content_frame_selector,
-                        note=note,
-                        form_trace=form_trace,
-                        vehicle_merge=out.setdefault("vehicle", {}),
-                    )
-                    if not ae2_ok:
-                        _det_l = (ae2_detail or "").lower()
-                        if _nd < 8 and any(
-                            k in _det_l for k in ("duplicate", "already", "exists", "unique")
-                        ):
-                            note(f"Add Enquiry with {_dotted_fn!r} may conflict — trying longer suffix.")
-                            continue
-                        step("Stopped: Add Enquiry with suffixed first name failed.")
-                        out["error"] = (
-                            "Siebel: contacts matched mobile+first but none had an open enquiry; "
-                            f"Add Enquiry with dotted first name failed. {ae2_detail or ''}"
-                        ).strip()
-                        return out
-                    if not (ae2_enq_no or "").strip():
-                        step("Stopped: suffixed Add Enquiry did not return Enquiry#.")
-                        out["error"] = (
-                            "Siebel: suffixed Add Enquiry details were filled but no Enquiry# was scraped."
-                        )
-                        return out
-                    ms_done("Add enquiry saved")
-                    out.setdefault("vehicle", {})["enquiry_number"] = ae2_enq_no
-                    note(f"Add Enquiry saved Enquiry#={ae2_enq_no!r} for suffixed first {_dotted_fn!r}.")
-                    log_vehicle_snapshot("video_add_enquiry_suffixed_saved")
-                    _persist_dms_scrape_to_db(customer_id, vehicle_id, out.get("vehicle") or {}, note)
-
-                    ok_rf_dot = _contact_view_find_by_mobile(
-                        page,
-                        contact_url=contact_url,
-                        mobile=mobile,
-                        nav_timeout_ms=nav_timeout_ms,
-                        action_timeout_ms=action_timeout_ms,
-                        content_frame_selector=content_frame_selector,
-                        mobile_aria_hints=mobile_aria_hints,
-                        note=note,
-                        step=step,
-                        stage_msg="Post suffixed Add Enquiry: re-find by mobile + suffixed first name.",
-                        first_name=_dotted_fn,
-                    )
-                    if not ok_rf_dot:
-                        note("Re-find after suffixed Add Enquiry failed — retrying longer suffix.")
-                        continue
-                    if not _siebel_ui_suggests_contact_match_mobile_first(page, mobile, _dotted_fn):
-                        note(f"No grid row for {_dotted_fn!r} after save — retrying longer suffix.")
-                        continue
-
-                    _dr_dot = _click_nth_mobile_title_drilldown(
+                if not _contact_view_find_by_mobile(
+                    page,
+                    contact_url=contact_url,
+                    mobile=mobile,
+                    nav_timeout_ms=nav_timeout_ms,
+                    action_timeout_ms=action_timeout_ms,
+                    content_frame_selector=content_frame_selector,
+                    mobile_aria_hints=mobile_aria_hints,
+                    note=note,
+                    step=step,
+                    stage_msg="Branch (2): re-find for first drilldown contact.",
+                    first_name=video_first_name,
+                ):
+                    step("Stopped: branch (2) re-find failed.")
+                    out["error"] = "Siebel: video branch (2) could not re-find contact after sweep."
+                    return out
+                fn0 = (video_first_name or "").strip()
+                _dr2 = _click_nth_mobile_title_drilldown(
+                    page,
+                    mobile,
+                    0,
+                    action_timeout_ms=action_timeout_ms,
+                    content_frame_selector=content_frame_selector,
+                    first_name_exact=fn0 if fn0 else None,
+                )
+                if not _dr2:
+                    _dr2 = _siebel_try_click_mobile_search_hit_link(
                         page,
                         mobile,
-                        0,
-                        action_timeout_ms=action_timeout_ms,
+                        timeout_ms=action_timeout_ms,
                         content_frame_selector=content_frame_selector,
-                        first_name_exact=_dotted_fn,
                     )
-                    if not _dr_dot:
-                        _dr_dot = _siebel_try_click_mobile_search_hit_link(
-                            page,
-                            mobile,
-                            timeout_ms=action_timeout_ms,
-                            content_frame_selector=content_frame_selector,
-                        )
-                    if not _dr_dot:
-                        note("Could not drill Title after suffixed re-find — retrying longer suffix.")
-                        continue
-
-                    note(f"Drilled contact for suffixed first {_dotted_fn!r} (title_index=0).")
-                    _safe_page_wait(page, 2000, log_label="after_title_drilldown_suffixed_first")
-                    try:
-                        page.wait_for_load_state("networkidle", timeout=8_000)
-                    except Exception:
-                        pass
-
-                    _eqc = False
-                    _eqr = 0
-                    _eqn = ""
-                    for _eqa in range(3):
-                        _eqc, _eqr, _eqn = _contact_enquiry_tab_has_rows(
-                            page,
-                            action_timeout_ms=action_timeout_ms,
-                            content_frame_selector=content_frame_selector,
-                            note=note,
-                        )
-                        if _eqc and _eqr > 0:
-                            break
-                        note(
-                            f"Suffixed path: Contact_Enquiry attempt {_eqa + 1}/3 — "
-                            f"checked={_eqc!r}, rows={_eqr}, enquiry#={_eqn!r}."
-                        )
-                        _safe_page_wait(page, 1200, log_label=f"suffixed_contact_enquiry_retry_{_eqa}")
-                    if not (_eqc and _eqr > 0):
-                        note(
-                            f"Opened {_dotted_fn!r} but Contact_Enquiry has no populated row — "
-                            "trying longer dot suffix."
-                        )
-                        continue
-
-                    video_first_name = _dotted_fn
-                    _dotted_ok = True
-                    note(
-                        f"Suffixed first path OK: first={video_first_name!r}, Contact_Enquiry rows={_eqr}, "
-                        f"enquiry#={_eqn!r}, title_index=0, dot_suffix_len={_nd}."
-                    )
-                    break
-
-                if not _dotted_ok:
-                    step("Stopped: could not create/open contact with suffixed first and enquiry subgrid.")
+                if not _dr2:
+                    step("Stopped: branch (2) could not drill first contact row.")
                     out["error"] = (
-                        "Siebel: failed after dotted first-name Add Enquiry — re-find, drill, or "
-                        "Contact_Enquiry row population did not succeed."
+                        "Siebel: video branch (2) — no open enquiry; could not open first drilldown contact."
                     )
                     return out
-
-            if not _maybe_force_fail_before_fill_relations_name(
-                page,
-                mobile,
-                video_first_name,
-                note=note,
-                step=step,
-                out=out,
-                precomputed_counts=_video_list_counts_for_relation_gate,
-                list_count_first_name=_video_snap_fn,
-            ):
-                return out
+                _safe_page_wait(page, 2000, log_label="after_title_drilldown_branch2")
+                try:
+                    page.wait_for_load_state("networkidle", timeout=8_000)
+                except Exception:
+                    pass
 
             form_trace(
                 "v2_drill_and_nav",
@@ -13285,6 +13319,20 @@ def Playwright_Hero_DMS_fill(
                     "Confirm right-pane selectors/labels and iframe scope."
                 )
                 return out
+
+            if not sweep_has_open:
+                if not _siebel_video_branch2_address_postal_and_save(
+                    page,
+                    pin_code=pin,
+                    action_timeout_ms=action_timeout_ms,
+                    content_frame_selector=content_frame_selector,
+                    note=note,
+                ):
+                    step("Stopped: video branch (2) Address / Postal Code / Save failed.")
+                    out["error"] = (
+                        "Siebel: no open enquiry path — could not fill Address Postal Code or save."
+                    )
+                    return out
 
             # Scrape Contact ID: detail inputs + Contacts grid **Contact Id** column (e.g. 11870-01-SCON-…).
             _contact_id = ""
@@ -13351,6 +13399,12 @@ def Playwright_Hero_DMS_fill(
                 out["contact_id"] = _contact_id
             else:
                 note("Contact ID not found on contact detail page (best-effort).")
+
+            _write_playwright_contact_scrape_section(
+                log_fp,
+                out,
+                had_open_enquiry_from_sweep=sweep_has_open,
+            )
 
             form_trace(
                 "v3_add_customer_payment",
@@ -13860,16 +13914,6 @@ def Playwright_Hero_DMS_fill(
             else:
                 created_basic = stage_2_create_enquiry_if_needed(matched1)
             if not stage_3_refind_customer(created_basic):
-                return out
-            if not _maybe_force_fail_before_fill_relations_name(
-                page,
-                mobile,
-                first.strip(),
-                note=note,
-                step=step,
-                out=out,
-                list_count_first_name=first.strip(),
-            ):
                 return out
             fill_relation_name_from_care_of(matched1)
         else:
