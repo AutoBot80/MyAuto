@@ -11,7 +11,8 @@ care-of + Save; **Auto Vehicle List** (``prepare_vehicle``: search/scrape, left-
 detail + inventory gate; **Pre-check/PDI only at dealer**; In Transit → receipt URL only, no Pre-check/PDI);
 **Generate Booking**
 **after vehicle for all paths**; allotment (line items) when **not** In Transit;
-``_attach_vehicle_to_bkg`` runs Apply Campaign + **Create Invoice** at the end.
+``_attach_vehicle_to_bkg`` runs **Apply Campaign** at the end (**Create Invoice** is operator-only while
+``_ATTACH_VEHICLE_AUTO_CLICK_CREATE_INVOICE`` is False).
 
 Siebel renders in nested iframes. The **Find** pane and grids use labels like **Mobile Phone**,
 **Mobile Phone #**, or **Mobile Number** — often via ``<label>`` / ``aria-labelledby``, not
@@ -51,9 +52,10 @@ logger = logging.getLogger(__name__)
 # Ctrl+S) then stop; else drill → Contacts → relation fill → Payments ``+``. Set False to restore the full
 # BRD linear SOP inside ``Playwright_Hero_DMS_fill``.
 SIEBEL_DMS_STOP_AFTER_ALL_ENQUIRIES = True
-# Temporary gate: stop after vehicle prep and before Find-Contact mobile search.
-# Set to False once vehicle preparation hardening is complete.
-SIEBEL_DMS_FORCE_FAIL_BEFORE_FIND_CONTACT = True
+# Temporary gate: stop immediately before filling **Relation's Name** (after Find-Contact mobile+first
+# has run and optional re-find). Logs how many list rows match mobile+first and how many show an
+# enquiry hint in row text; set False to continue automation.
+SIEBEL_DMS_FORCE_FAIL_BEFORE_FILL_RELATIONS_NAME = True
 
 
 def _normalize_cubic_cc_digits(val: object) -> str:
@@ -3732,6 +3734,152 @@ def _siebel_ui_suggests_contact_match_mobile_first(page: Page, mobile: str, firs
         except Exception:
             continue
     _dbg_mf("M3", "match_false_all_frames", {"matched": False})
+    return False
+
+
+def _find_contact_mobile_first_grid_counts(
+    page: Page, mobile: str, first_name: str
+) -> tuple[int, int]:
+    """
+    After Find/Go on Contact (mobile + first name): count **data rows** (≥3 ``td``) that contain the
+    mobile needle and pass the same first-name resolution as ``_siebel_ui_suggests_contact_match_mobile_first``.
+
+    Second count: among those rows, how many list-row texts **hint** at an existing enquiry (``SENQ``,
+    ``Enquiry`` + digits, or Siebel-style segmented id). This is **not** a substitute for
+    ``_contact_enquiry_tab_has_rows`` after drilldown.
+    """
+    needle = _mobile_needle_for_contact_grid_match(mobile)
+    target = (first_name or "").strip()
+    if not needle or not target:
+        return 0, 0
+    stats_js = """([needle, target]) => {
+      if (!needle || needle.length < 8 || !target) return { matching: 0, withEnquiryHint: 0 };
+      const compact = (s) => String(s || '').replace(/\\s+/g, '');
+      const norm = (s) => String(s || '').replace(/\\u00a0/g, ' ').trim();
+      const firstNameKeyFromFind = (raw) => {
+        let s = String(raw || '').replace(/\\u00a0/g, ' ').trim().toLowerCase();
+        while (s.endsWith('.')) s = s.slice(0, -1).trim();
+        return s;
+      };
+      const textMatchesFindFirstName = (text, keyBase) => {
+        if (!keyBase || text == null) return false;
+        const c = String(text).replace(/\\u00a0/g, ' ').trim().toLowerCase();
+        if (!c) return false;
+        if (c === keyBase) return true;
+        if (c.startsWith(keyBase + ' ')) return true;
+        const keyHead = keyBase.split(/\\s+/).filter(Boolean)[0] || '';
+        if (keyHead && c === keyHead) return true;
+        const first = c.split(/\\s+/).filter(Boolean)[0] || '';
+        let fs = first;
+        while (fs.endsWith('.')) fs = fs.slice(0, -1).trim();
+        if (fs === keyBase) return true;
+        if (keyHead && fs === keyHead) return true;
+        return false;
+      };
+      const rowContainsFindFirstKey = (tr, keyBase) => {
+        if (!keyBase) return false;
+        const keyHead = keyBase.split(/\\s+/).filter(Boolean)[0] || '';
+        const raw = norm(tr.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+        if (!raw || (!raw.includes(keyBase) && !(keyHead && raw.includes(keyHead)))) return false;
+        if (raw.startsWith(keyBase + ' ')) return true;
+        if (keyHead && raw.startsWith(keyHead + ' ')) return true;
+        const parts = raw.split(/[\\s,;|\\/\\u2013\\u2014-]+/).filter(Boolean);
+        for (const p of parts) {
+          let q = p;
+          while (q.endsWith('.')) q = q.slice(0, -1).trim();
+          if (q === keyBase || (keyHead && q === keyHead)) return true;
+          if (p.startsWith(keyBase + ' ')) return true;
+          if (keyHead && p.startsWith(keyHead + ' ')) return true;
+        }
+        return false;
+      };
+      const keyBase = firstNameKeyFromFind(target);
+      if (!keyBase) return { matching: 0, withEnquiryHint: 0 };
+      const hasM = (s) => compact(s).includes(needle);
+      const rowHasFirst = (tr) => {
+        const tds = tr.querySelectorAll('td');
+        for (const td of tds) {
+          if (textMatchesFindFirstName(td.textContent, keyBase)) return true;
+          if (textMatchesFindFirstName(td.getAttribute('title') || '', keyBase)) return true;
+          if (textMatchesFindFirstName(td.getAttribute('aria-label') || '', keyBase)) return true;
+          for (const inp of td.querySelectorAll('input, textarea')) {
+            if (textMatchesFindFirstName(inp.value, keyBase)) return true;
+          }
+        }
+        return rowContainsFindFirstKey(tr, keyBase);
+      };
+      const rowHintEnquiry = (tr) => {
+        const t = String(tr.innerText || tr.textContent || '');
+        if (/senq/i.test(t)) return true;
+        if (/enquiry/i.test(t) && /\\d/.test(t)) return true;
+        if (/\\b[0-9]{2,5}-[0-9]{1,3}-[A-Z]{2,6}-[A-Z0-9-]{4,}\\b/i.test(t)) return true;
+        return false;
+      };
+      let matching = 0;
+      let withEnquiryHint = 0;
+      for (const tr of document.querySelectorAll('table tr')) {
+        if (tr.closest('thead')) continue;
+        const tds = tr.querySelectorAll('td');
+        if (tds.length < 3) continue;
+        const rowBody = tr.textContent || '';
+        if (!hasM(rowBody)) continue;
+        if (!rowHasFirst(tr)) continue;
+        matching++;
+        if (rowHintEnquiry(tr)) withEnquiryHint++;
+      }
+      return { matching, withEnquiryHint };
+    }"""
+    best_m = 0
+    best_e = 0
+    for frame in _ordered_frames(page):
+        try:
+            res = frame.evaluate(stats_js, [needle, target])
+            if isinstance(res, dict):
+                m = int(res.get("matching") or 0)
+                e = int(res.get("withEnquiryHint") or 0)
+                if m > best_m or (m == best_m and e > best_e):
+                    best_m, best_e = m, e
+        except Exception:
+            continue
+    return best_m, best_e
+
+
+def _maybe_force_fail_before_fill_relations_name(
+    page: Page,
+    mobile: str,
+    first_name: str,
+    *,
+    note,
+    step,
+    out: dict,
+    precomputed_counts: tuple[int, int] | None = None,
+    list_count_first_name: str | None = None,
+) -> bool:
+    """
+    If ``SIEBEL_DMS_FORCE_FAIL_BEFORE_FILL_RELATIONS_NAME`` is True: log contact/enquiry stats,
+    set ``out['error']``, and return False. Otherwise return True.
+
+    ``precomputed_counts`` should be captured **before** drilling away from the Find Contact list (video path).
+    ``list_count_first_name`` documents which first name was used for that list read.
+    """
+    if not SIEBEL_DMS_FORCE_FAIL_BEFORE_FILL_RELATIONS_NAME:
+        return True
+    if precomputed_counts is not None:
+        n_match, n_enq_hint = precomputed_counts
+    else:
+        n_match, n_enq_hint = _find_contact_mobile_first_grid_counts(page, mobile, first_name)
+    _lcfn = (list_count_first_name or first_name or "").strip()
+    msg = (
+        "Forced stop before Relation's Name "
+        f"(SIEBEL_DMS_FORCE_FAIL_BEFORE_FILL_RELATIONS_NAME=True). "
+        f"Find-Contact (mobile + first name): {n_match} list row(s) match "
+        f"(first name used for list count: {_lcfn!r}); "
+        f"of those, {n_enq_hint} row(s) show an enquiry hint in list text "
+        "(SENQ/Enquiry#/id pattern — not a Contact_Enquiry subgrid drilldown)."
+    )
+    note(msg)
+    step("Stopped before Relation's Name — see NOTES for contact / enquiry hint counts.")
+    out["error"] = f"Siebel: {msg}"
     return False
 
 
@@ -7466,6 +7614,11 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     return True, None
 
 
+# Siebel **Create Invoice** after order attach: off by default — enable only when product wants automation
+# to submit the invoice (operator may complete this step manually).
+_ATTACH_VEHICLE_AUTO_CLICK_CREATE_INVOICE = False
+
+
 def _attach_vehicle_to_bkg(
     page: Page,
     *,
@@ -7481,7 +7634,8 @@ def _attach_vehicle_to_bkg(
     2. Click **New** → fill VIN → Price All → Allocate All.
     3. Single-click **VIN** drilldown (name=VIN) → **Serial Number** →
        ``_siebel_run_vehicle_serial_detail_precheck_pdi`` (Pre-check + PDI only; no field scrapes).
-    4. Click ``Order:<order#>`` link → Apply Campaign → Create Invoice.
+    4. Click ``Order:<order#>`` link → **Apply Campaign**. **Create Invoice** is skipped unless
+       ``_ATTACH_VEHICLE_AUTO_CLICK_CREATE_INVOICE`` is set True.
 
     Does **not** read Totals, feature ids, or Invoice# from the DOM — vehicle and ex-showroom values
     come from ``prepare_vehicle`` / grid merge and ``_create_order`` scrapes where applicable.
@@ -7962,66 +8116,77 @@ def _attach_vehicle_to_bkg(
         note(f"attach_vehicle_to_bkg: Siebel error after Apply Campaign → {_ac_err!r:.300}")
         return False, f"Siebel error after Apply Campaign: {_ac_err[:200]}", {}
 
-    # ── Step 12: Click "Create Invoice" button ──
-    _ci_clicked = False
-    _ci_selectors = [
-        "button:has-text('Create Invoice')", "a:has-text('Create Invoice')",
-        "input[type='button'][value='Create Invoice' i]",
-        "[aria-label*='Create Invoice' i]",
-        "[title*='Create Invoice' i]",
-    ]
-    for root in _all_roots():
-        if _ci_clicked:
-            break
-        for css in _ci_selectors:
-            try:
-                loc = root.locator(css).first
-                if loc.count() > 0 and loc.is_visible(timeout=700):
-                    try:
-                        loc.click(timeout=_tmo)
-                    except Exception:
-                        loc.click(timeout=_tmo, force=True)
-                    _ci_clicked = True
-                    break
-            except Exception:
-                continue
-    if not _ci_clicked:
+    # ── Step 12: Create Invoice (optional; off by default — operator completes in Siebel) ──
+    if _ATTACH_VEHICLE_AUTO_CLICK_CREATE_INVOICE:
+        _ci_clicked = False
+        _ci_selectors = [
+            "button:has-text('Create Invoice')", "a:has-text('Create Invoice')",
+            "input[type='button'][value='Create Invoice' i]",
+            "[aria-label*='Create Invoice' i]",
+            "[title*='Create Invoice' i]",
+        ]
         for root in _all_roots():
-            try:
-                hit = root.evaluate("""() => {
-                    const vis = (el) => {
-                        if (!el) return false;
-                        const st = window.getComputedStyle(el);
-                        if (st.display === 'none' || st.visibility === 'hidden') return false;
-                        const r = el.getBoundingClientRect();
-                        return r.width > 0 && r.height > 0;
-                    };
-                    const all = Array.from(document.querySelectorAll('button, a, input[type="button"]'));
-                    for (const el of all) {
-                        const t = (el.innerText || el.value || el.getAttribute('aria-label') || '').trim();
-                        if (/create\\s*invoice/i.test(t) && vis(el)) { el.click(); return true; }
-                    }
-                    return false;
-                }""")
-                if hit:
-                    _ci_clicked = True
-                    break
-            except Exception:
-                continue
-    if not _ci_clicked:
-        return False, "Could not click 'Create Invoice' button.", {}
-    note("attach_vehicle_to_bkg: clicked Create Invoice.")
-    _ci_err = ""
-    for _ci_poll in range(4):
-        _safe_page_wait(page, 800, log_label=f"create_invoice_error_poll_{_ci_poll}")
-        _ci_err = _detect_siebel_error_popup(page, content_frame_selector) or ""
+            if _ci_clicked:
+                break
+            for css in _ci_selectors:
+                try:
+                    loc = root.locator(css).first
+                    if loc.count() > 0 and loc.is_visible(timeout=700):
+                        try:
+                            loc.click(timeout=_tmo)
+                        except Exception:
+                            loc.click(timeout=_tmo, force=True)
+                        _ci_clicked = True
+                        break
+                except Exception:
+                    continue
+        if not _ci_clicked:
+            for root in _all_roots():
+                try:
+                    hit = root.evaluate("""() => {
+                        const vis = (el) => {
+                            if (!el) return false;
+                            const st = window.getComputedStyle(el);
+                            if (st.display === 'none' || st.visibility === 'hidden') return false;
+                            const r = el.getBoundingClientRect();
+                            return r.width > 0 && r.height > 0;
+                        };
+                        const all = Array.from(document.querySelectorAll('button, a, input[type="button"]'));
+                        for (const el of all) {
+                            const t = (el.innerText || el.value || el.getAttribute('aria-label') || '').trim();
+                            if (/create\\s*invoice/i.test(t) && vis(el)) { el.click(); return true; }
+                        }
+                        return false;
+                    }""")
+                    if hit:
+                        _ci_clicked = True
+                        break
+                except Exception:
+                    continue
+        if not _ci_clicked:
+            return False, "Could not click 'Create Invoice' button.", {}
+        note("attach_vehicle_to_bkg: clicked Create Invoice.")
+        _ci_err = ""
+        for _ci_poll in range(4):
+            _safe_page_wait(page, 800, log_label=f"create_invoice_error_poll_{_ci_poll}")
+            _ci_err = _detect_siebel_error_popup(page, content_frame_selector) or ""
+            if _ci_err:
+                break
         if _ci_err:
-            break
-    if _ci_err:
-        note(f"attach_vehicle_to_bkg: Siebel error after Create Invoice → {_ci_err!r:.300}")
-        return False, f"Siebel error after Create Invoice: {_ci_err[:200]}", {}
+            note(f"attach_vehicle_to_bkg: Siebel error after Create Invoice → {_ci_err!r:.300}")
+            return False, f"Siebel error after Create Invoice: {_ci_err[:200]}", {}
+    else:
+        note(
+            "attach_vehicle_to_bkg: Create Invoice not auto-clicked "
+            "(set _ATTACH_VEHICLE_AUTO_CLICK_CREATE_INVOICE=True in siebel_dms_playwright.py to enable)."
+        )
 
-    note("attach_vehicle_to_bkg: all steps completed (Order → VIN → Pre-check → PDI → Apply Campaign → Create Invoice).")
+    note(
+        "attach_vehicle_to_bkg: all steps completed "
+        "(Order → VIN → Pre-check → PDI → Apply Campaign"
+        + (" → Create Invoice" if _ATTACH_VEHICLE_AUTO_CLICK_CREATE_INVOICE else "")
+        + ")."
+    )
     return True, None, {}
 
 
@@ -9984,6 +10149,103 @@ def _grid_cells_suggest_in_transit(texts: list[str]) -> bool:
     return False
 
 
+def _looks_like_ex_showroom_price(s: str) -> bool:
+    """True when ``s`` looks like a numeric ex-showroom / order value (not a model colour name)."""
+    t = (s or "").strip()
+    if not t or len(t) > 24:
+        return False
+    letters = sum(1 for c in t if c.isalpha())
+    digits = sum(1 for c in t if c.isdigit())
+    if digits == 0:
+        return False
+    # Mostly alphabetic phrase (e.g. variant / colour description)
+    if letters >= 8 and letters > digits * 2:
+        return False
+    compact = re.sub(r"[\s,₹RsINRinr]", "", t)
+    if re.fullmatch(r"\d+\.?\d*", compact):
+        return True
+    if digits >= 4 and letters <= max(2, digits // 3):
+        return True
+    return False
+
+
+def _best_chassis_str(*candidates: str | None) -> str:
+    """Prefer full VIN-style token over short DMS partials."""
+    seen: list[str] = []
+    for c in candidates:
+        s = (c or "").strip()
+        if s and s not in seen:
+            seen.append(s)
+    if not seen:
+        return ""
+
+    def score(s: str) -> tuple[int, int]:
+        al = re.sub(r"[^A-Za-z0-9]", "", s)
+        lg = len(al)
+        if 11 <= lg <= 17:
+            return (4, lg)
+        if lg >= 10:
+            return (3, lg)
+        if lg >= 6:
+            return (2, lg)
+        return (1, lg)
+
+    return max(seen, key=score)
+
+
+def _best_engine_str(*candidates: str | None) -> str:
+    """Prefer full engine no. (letters + digits, longer) over short numeric partials."""
+    seen: list[str] = []
+    for c in candidates:
+        s = (c or "").strip()
+        if s and s not in seen:
+            seen.append(s)
+    if not seen:
+        return ""
+
+    def score(s: str) -> tuple[int, int]:
+        al = re.sub(r"[^A-Za-z0-9]", "", s)
+        lg = len(al)
+        has_a = any(c.isalpha() for c in al)
+        has_d = any(c.isdigit() for c in al)
+        if has_a and has_d and lg >= 12:
+            return (5, lg)
+        if has_a and has_d and lg >= 8:
+            return (4, lg)
+        if lg >= 10:
+            return (3, lg)
+        if has_a and has_d:
+            return (2, lg)
+        return (1, lg)
+
+    return max(seen, key=score)
+
+
+def _strip_invalid_grid_small_int_fields(d: dict, *, seating_key: str, cyl_key: str) -> None:
+    """Remove obviously wrong grid values (e.g. colour / registration in wrong column)."""
+    for key, mx in ((seating_key, 30), (cyl_key, 16)):
+        v = str(d.get(key) or "").strip()
+        if not v:
+            continue
+        if not re.fullmatch(r"\d{1,2}", v):
+            d.pop(key, None)
+            continue
+        n = int(v)
+        if n < 0 or n > mx:
+            d.pop(key, None)
+
+
+def _apply_two_wheeler_seating_cylinders_body(out: dict) -> None:
+    """Match ``fill_hero_dms_service`` / BRD: motorcycle & scooter → seating 2, cylinders 1, body Open."""
+    vt = (out.get("vehicle_type") or "").strip().upper().replace(" ", "")
+    if "MOTORCYCLE" not in vt and "SCOOTER" not in vt:
+        return
+    out["seating_capacity"] = "2"
+    out["num_cylinders"] = "1"
+    if not (out.get("body_type") or "").strip():
+        out["body_type"] = "Open"
+
+
 def _try_click_process_receipt(
     page: Page, *, timeout_ms: int, content_frame_selector: str | None
 ) -> bool:
@@ -10132,7 +10394,7 @@ def scrape_siebel_vehicle_row(page: Page, *, content_frame_selector: str | None)
     if len(texts) >= 13:
         ex_show = texts[11].strip()
         _cc = _normalize_cubic_cc_digits(texts[5].strip()) or texts[5].strip()
-        return {
+        row = {
             "key_num": texts[0].strip(),
             "frame_num": texts[1].strip(),
             "engine_num": texts[2].strip(),
@@ -10143,21 +10405,29 @@ def scrape_siebel_vehicle_row(page: Page, *, content_frame_selector: str | None)
             "body_type": texts[7].strip(),
             "vehicle_type": texts[8].strip(),
             "num_cylinders": texts[9].strip(),
-            "vehicle_price": ex_show,
             "year_of_mfg": texts[12].strip(),
             "in_transit": in_tr,
         }
+        if _looks_like_ex_showroom_price(ex_show):
+            row["vehicle_price"] = ex_show
+        _strip_invalid_grid_small_int_fields(
+            row, seating_key="seating_capacity", cyl_key="num_cylinders"
+        )
+        return row
     if len(texts) >= 6:
-        return {
+        ex_short = texts[-2].strip() if len(texts) > 2 else ""
+        row = {
             "key_num": texts[0].strip(),
             "frame_num": texts[1].strip() if len(texts) > 1 else "",
             "engine_num": texts[2].strip() if len(texts) > 2 else "",
             "model": texts[3].strip() if len(texts) > 3 else "",
             "color": texts[4].strip() if len(texts) > 4 else "",
-            "vehicle_price": texts[-2].strip() if len(texts) > 2 else "",
             "year_of_mfg": texts[-1].strip() if len(texts) > 1 else "",
             "in_transit": in_tr,
         }
+        if _looks_like_ex_showroom_price(ex_short):
+            row["vehicle_price"] = ex_short
+        return row
     return {"in_transit": in_tr} if in_tr else {}
 
 
@@ -10635,9 +10905,8 @@ def _merge_dms_and_grid_for_vehicle_master(dms_values: dict, grid: dict) -> dict
     Merge **Auto Vehicle List** grid scrape with DMS / staging fields into one dict suitable for
     ``update_vehicle_master_from_dms`` (same key names as that function).
 
-    Prefer full identifiers from staging when present; use grid ``frame_num`` / ``engine_num`` as
-    ``full_chassis`` / ``full_engine`` when staging has no full VIN/engine; fall back to
-    ``frame_partial`` / ``engine_partial`` for the chassis/engine columns when nothing else exists.
+    Picks the **best** chassis and engine tokens (full VIN / full engine no.) across grid and DMS;
+    drops ``frame_num`` / ``engine_num`` after merge so only ``full_chassis`` / ``full_engine`` remain.
     """
     out: dict = {k: v for k, v in dict(grid).items() if v is not None}
 
@@ -10651,25 +10920,28 @@ def _merge_dms_and_grid_for_vehicle_master(dms_values: dict, grid: dict) -> dict
                 return s
         return ""
 
-    fc = _ds("full_chassis", "chassis")
-    if not fc:
-        fc = (out.get("full_chassis") or "").strip()
-    if not fc:
-        fc = (out.get("frame_num") or "").strip()
-    if not fc:
-        fc = _ds("frame_partial")
+    fc = _best_chassis_str(
+        (out.get("full_chassis") or "").strip(),
+        (out.get("frame_num") or "").strip(),
+        _ds("full_chassis", "chassis"),
+        _ds("frame_partial"),
+    )
+    fe = _best_engine_str(
+        (out.get("full_engine") or "").strip(),
+        (out.get("engine_num") or "").strip(),
+        _ds("full_engine", "engine"),
+        _ds("engine_partial"),
+    )
+    out.pop("frame_num", None)
+    out.pop("engine_num", None)
     if fc:
         out["full_chassis"] = fc
-
-    fe = _ds("full_engine", "engine")
-    if not fe:
-        fe = (out.get("full_engine") or "").strip()
-    if not fe:
-        fe = (out.get("engine_num") or "").strip()
-    if not fe:
-        fe = _ds("engine_partial")
+    else:
+        out.pop("full_chassis", None)
     if fe:
         out["full_engine"] = fe
+    else:
+        out.pop("full_engine", None)
 
     if not (out.get("model") or "").strip():
         m = _ds("vehicle_model", "model")
@@ -10690,13 +10962,23 @@ def _merge_dms_and_grid_for_vehicle_master(dms_values: dict, grid: dict) -> dict
     v = (out.get("variant") or "").strip() or _ds("variant", "vehicle_variant")
     if v:
         out["variant"] = v
+    vp = (out.get("vehicle_price") or "").strip()
+    if vp and not _looks_like_ex_showroom_price(vp):
+        out.pop("vehicle_price", None)
     if not (out.get("vehicle_price") or "").strip():
         for k in ("vehicle_ex_showroom_price", "vehicle_ex_showroom_cost", "total_amount"):
             raw = dms_values.get(k)
-            if raw is not None and str(raw).strip():
-                out["vehicle_price"] = str(raw).strip()
+            if raw is None:
+                continue
+            s = str(raw).strip()
+            if s and _looks_like_ex_showroom_price(s):
+                out["vehicle_price"] = s
                 break
+    _strip_invalid_grid_small_int_fields(
+        out, seating_key="seating_capacity", cyl_key="num_cylinders"
+    )
     _apply_year_of_mfg_yyyy(out)
+    _apply_two_wheeler_seating_cylinders_body(out)
     return out
 
 
@@ -10775,9 +11057,7 @@ def _write_playwright_vehicle_master_section(
         return
     keys = (
         "full_chassis",
-        "frame_num",
         "full_engine",
-        "engine_num",
         "key_num",
         "raw_key_num",
         "model",
@@ -11095,7 +11375,13 @@ def prepare_vehicle(
             step("Stopped during vehicle list search.")
         return False, veh_err, {}, False, [], []
 
-    _chassis_for_left_hit = (frame_p or str(scraped.get("frame_num") or "").strip() or "").strip()
+    _chassis_for_left_hit = (
+        _best_chassis_str(
+            (frame_p or "").strip(),
+            str(scraped.get("frame_num") or "").strip(),
+        )
+        or ""
+    ).strip()
     _vin_click_ok: bool | None = None
     if _chassis_for_left_hit:
         if _siebel_try_click_vin_search_hit_link(
@@ -12479,7 +12765,8 @@ def Playwright_Hero_DMS_fill(
     Siebel fill from ``fill_dms_service`` always passes ``skip_contact_find=False`` (Find runs even if
     ``dms_contact_path`` in DB is ``skip_find``).
 
-    ``_attach_vehicle_to_bkg`` clicks Apply Campaign + Create Invoice. Returns ``vehicle``,
+    ``_attach_vehicle_to_bkg`` clicks **Apply Campaign**; **Create Invoice** only if
+    ``_ATTACH_VEHICLE_AUTO_CLICK_CREATE_INVOICE`` is True. Returns ``vehicle``,
     ``error``, ``dms_siebel_forms_filled``, notes, milestones, and ``dms_step_messages``.
 
     If ``execution_log_path`` is set, overwrites that file with a UTC timestamped trace (values used,
@@ -12665,17 +12952,7 @@ def Playwright_Hero_DMS_fill(
                 return out
             out["vehicle"] = _pv_scraped
             _write_playwright_vehicle_master_section(log_fp, _pv_scraped, _pv_crit, _pv_info)
-            log_vehicle_snapshot("video_pre_find_prepare_vehicle")
             _persist_dms_scrape_to_db(customer_id, vehicle_id, out.get("vehicle") or {}, note)
-            if SIEBEL_DMS_FORCE_FAIL_BEFORE_FIND_CONTACT:
-                step("Stopped intentionally before Find-Contact mobile search (temporary gate).")
-                out["error"] = (
-                    "Siebel: temporary forced stop before Find-Contact mobile search is enabled "
-                    "(SIEBEL_DMS_FORCE_FAIL_BEFORE_FIND_CONTACT=True). "
-                    "Vehicle preparation completed; disable this gate to continue full flow."
-                )
-                note(out["error"])
-                return out
 
             if skip_contact_find:
                 note(
@@ -12804,6 +13081,17 @@ def Playwright_Hero_DMS_fill(
                         "after re-find."
                     )
                     return out
+
+            _video_snap_fn = (video_first_name or "").strip()
+            _video_list_counts_for_relation_gate = _find_contact_mobile_first_grid_counts(
+                page, mobile, _video_snap_fn
+            )
+            note(
+                "Find-Contact list snapshot (before Title/enquiry sweep): "
+                f"{_video_list_counts_for_relation_gate[0]} row(s) match mobile+first "
+                f"(first name {_video_snap_fn!r}); "
+                f"{_video_list_counts_for_relation_gate[1]} with enquiry hint in list text."
+            )
 
             # Drill each Title row (exact mobile + first) until Contact_Enquiry subgrid has a data row.
             _has_enq, _enq_number, _enq_rows, _sweep_err = _contact_find_title_sweep_for_enquiry(
@@ -12959,6 +13247,18 @@ def Playwright_Hero_DMS_fill(
                         "Contact_Enquiry row population did not succeed."
                     )
                     return out
+
+            if not _maybe_force_fail_before_fill_relations_name(
+                page,
+                mobile,
+                video_first_name,
+                note=note,
+                step=step,
+                out=out,
+                precomputed_counts=_video_list_counts_for_relation_gate,
+                list_count_first_name=_video_snap_fn,
+            ):
+                return out
 
             form_trace(
                 "v2_drill_and_nav",
@@ -13444,7 +13744,6 @@ def Playwright_Hero_DMS_fill(
                 return False
             out["vehicle"] = scraped
             _write_playwright_vehicle_master_section(log_fp, scraped, vm_crit, vm_info)
-            log_vehicle_snapshot("stage5_prepare_vehicle_merge")
             out["dms_siebel_forms_filled"] = bool(customer_save_clicked)
             if not customer_save_clicked:
                 note(
@@ -13531,15 +13830,6 @@ def Playwright_Hero_DMS_fill(
             step("Ready for invoice creation.")
 
         if not skip_contact_find:
-            if SIEBEL_DMS_FORCE_FAIL_BEFORE_FIND_CONTACT:
-                step("Stopped intentionally before Find-Contact mobile search (temporary gate).")
-                out["error"] = (
-                    "Siebel: temporary forced stop before Find-Contact mobile search is enabled "
-                    "(SIEBEL_DMS_FORCE_FAIL_BEFORE_FIND_CONTACT=True). "
-                    "Disable this gate to continue linear Find → Enquiry flow."
-                )
-                note(out["error"])
-                return out
             ok1, matched1 = find_customer()
             if not ok1:
                 return out
@@ -13570,6 +13860,16 @@ def Playwright_Hero_DMS_fill(
             else:
                 created_basic = stage_2_create_enquiry_if_needed(matched1)
             if not stage_3_refind_customer(created_basic):
+                return out
+            if not _maybe_force_fail_before_fill_relations_name(
+                page,
+                mobile,
+                first.strip(),
+                note=note,
+                step=step,
+                out=out,
+                list_count_first_name=first.strip(),
+            ):
                 return out
             fill_relation_name_from_care_of(matched1)
         else:

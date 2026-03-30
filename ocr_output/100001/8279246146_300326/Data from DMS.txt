@@ -17,12 +17,11 @@ Engine num: —
 Full engine (from detail): 11204
 Model: SPLENDOR +
 Color: RPB
-Cubic capacity: 125 CC
+Cubic capacity: 125
 Seating capacity: CNDDRKCCRRBK
 Body type: —
 Vehicle type: MOTORCYCLE WITH GEAR
 Num cylinders: RJ05RS4550
-Horsepower: Y
 Ex-showroom Price (Order Value): CD DELUXE DRK CAST BLACK RED STRIPE
 Year of Mfg: 2026
 Order # (DMS): —
