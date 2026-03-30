@@ -712,7 +712,6 @@ def _build_dms_fill_values(
         "frame_partial": _clean_text(row.get("Frame / Chassis num (partial)"))[:12],
         "engine_partial": _clean_text(row.get("Engine num (partial)"))[:12],
         "relation_prefix": relation_prefix,
-        "father_husband_name": father_e,
         "care_of": care_of_e,
         "financier_name": _clean_text(row.get("Financier Name"))[:255],
         "finance_required": finance_required,
@@ -826,7 +825,7 @@ def _write_dms_form_values(
     frame_no: str,
     engine_no: str,
     relation_prefix: str = "",
-    father_husband_name: str = "",
+    care_of: str = "",
     customer_budget: str = "",
     finance_required: str = "",
     financier_name: str = "",
@@ -855,7 +854,7 @@ def _write_dms_form_values(
     effective_frame = _clean_text(frame_no)[:12] or _clean_text(row.get("Frame / Chassis num (partial)"))
     effective_engine = _clean_text(engine_no)[:12] or _clean_text(row.get("Engine num (partial)"))
     effective_relation = _clean_text(relation_prefix) or _clean_text(row.get("Relation (S/O or W/o)"))
-    effective_father = _clean_text(father_husband_name) or _clean_text(row.get("Father or Husband Name"))
+    effective_father = _clean_text(care_of) or _clean_text(row.get("Father or Husband Name"))
     effective_budget = _clean_text(customer_budget)
     effective_fin_req = _clean_text(finance_required) or _clean_text(row.get("Finance Required")) or "N"
     effective_financier = _clean_text(financier_name) or _clean_text(row.get("Financier Name"))
@@ -1465,7 +1464,7 @@ def _run_fill_dms_real_siebel_playwright(
         frame_no=frame_partial,
         engine_no=engine_partial,
         relation_prefix=dms_values.get("relation_prefix") or "",
-        father_husband_name=dms_values.get("father_husband_name") or "",
+        care_of=dms_values.get("care_of") or "",
         customer_budget=DMS_TRACE_DEFAULT_CUSTOMER_BUDGET,
         finance_required=dms_values.get("finance_required") or "",
         financier_name=dms_values.get("financier_name") or "",

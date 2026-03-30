@@ -2858,28 +2858,26 @@ def _fill_siebel_care_of_only(
 def _derive_relation_and_name(
     *,
     relation_prefix: str,
-    father_husband_name: str,
     care_of: str,
     gender: str,
 ) -> tuple[str, str]:
     """
-    Use DB ``care_of`` when present: first marker (S/O, W/O, D/O) picks relation;
+    Use DB ``care_of`` (Father/Husband line): first marker (S/O, W/O, D/O) picks relation;
     remaining text becomes Relation's Name.
     """
     rel = (relation_prefix or "").strip().upper().replace(".", "")
-    name = (father_husband_name or "").strip()
     g = (gender or "").strip().lower()
     default_prefix = "S/o" if g.startswith("m") else "D/o"
-    co = (care_of or "").strip() or name
+    co = (care_of or "").strip()
     if not co:
-        return rel, name
+        return rel, ""
 
     m = re.match(r"^\s*(S\s*/?\s*O|W\s*/?\s*O|D\s*/?\s*O)\s*[:\-]?\s*(.*)\s*$", co, re.I)
     if not m:
-        # Parsed/derived fallback: prefix the name by gender rule.
-        if name and not re.match(r"^\s*[SWD]\s*/?\s*O\b", name, re.I):
-            name = f"{default_prefix} {name}".strip()
-        return rel, name
+        nm = co
+        if nm and not re.match(r"^\s*[SWD]\s*/?\s*O\b", nm, re.I):
+            nm = f"{default_prefix} {nm}".strip()
+        return rel, nm
     marker = re.sub(r"\s+", "", (m.group(1) or "").upper()).replace("/", "")
     rest = (m.group(2) or "").strip()
     if marker == "SO":
@@ -2890,8 +2888,10 @@ def _derive_relation_and_name(
         rel = "D/O"
     if rest:
         name = f"{default_prefix} {rest}".strip()[:255]
-    elif name and not re.match(r"^\s*[SWD]\s*/?\s*O\b", name, re.I):
-        name = f"{default_prefix} {name}".strip()[:255]
+    elif co and not re.match(r"^\s*[SWD]\s*/?\s*O\b", co, re.I):
+        name = f"{default_prefix} {co}".strip()[:255]
+    else:
+        name = co[:255] if co else ""
     return rel, name
 
 
@@ -5617,8 +5617,9 @@ def _contact_enquiry_tab_has_rows(
 
 def _payment_lines_has_existing_row(page: Page, content_frame_selector: str | None) -> bool:
     """
-    True when the Payment Lines list already shows at least one grid data row (jqgrid / list applet).
-    Used to skip ``+`` / new-row entry when a payment line is already present.
+    True when the **Payment Lines** applet in this document already shows at least one jqgrid / list
+    data row **and** the same document exposes Payment Lines chrome (new/save toolbar or transaction
+    fields). Avoids false positives from Contact / enquiry grids on other tabs.
     """
     _js = """() => {
       const vis = (el) => {
@@ -5628,6 +5629,28 @@ def _payment_lines_has_existing_row(page: Page, content_frame_selector: str | No
         const r = el.getBoundingClientRect();
         return r.width >= 2 && r.height >= 2;
       };
+      const payMarkers = [
+        "[aria-label='Payment Lines List:New']",
+        "[title='Payment Lines List:New']",
+        "[aria-label='Payment Lines List:Save']",
+        "[title='Payment Lines List:Save']",
+        "[aria-label='Payment Lines List: Save']",
+        "[title='Payment Lines List: Save']",
+        "input[name='Transaction_Type']",
+        "input[name='Transaction_Type_New']",
+        "select[name='Transaction_Type']",
+        "select[name='Transaction_Type_New']",
+        "[id='1_s_2_1_Transaction_Amount']",
+        "[name='1_s_2_1_Transaction_Amount']",
+      ];
+      let paymentUi = false;
+      for (const s of payMarkers) {
+        if (vis(document.querySelector(s))) {
+          paymentUi = true;
+          break;
+        }
+      }
+      if (!paymentUi) return false;
       const rows = document.querySelectorAll(
         'table.ui-jqgrid-btable tbody tr.jqgrow, div.ui-jqgrid-bdiv table tbody tr.jqgrow, ' +
         'table.siebui-list tbody tr[role="row"], table.siebui-list tbody tr.jqgrow'
@@ -5668,6 +5691,16 @@ def _add_customer_payment(
         note(f"Payment debug: ordered frames count={len(_ordered_frames(page))}.")
     except Exception:
         pass
+
+    if _siebel_try_click_named_in_frames(
+        page,
+        re.compile(r"^Payments?$", re.I),
+        roles=("tab", "link"),
+        timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+    ):
+        note("Payments tab activated before Payment Lines row check / '+' click.")
+        _safe_page_wait(page, 450, log_label="after_payments_tab_activate")
 
     if _payment_lines_has_existing_row(page, content_frame_selector):
         note(
