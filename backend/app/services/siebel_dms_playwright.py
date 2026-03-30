@@ -50,6 +50,9 @@ logger = logging.getLogger(__name__)
 # Ctrl+S) then stop; else drill → Contacts → relation fill → Payments ``+``. Set False to restore the full
 # BRD linear SOP inside ``Playwright_Hero_DMS_fill``.
 SIEBEL_DMS_STOP_AFTER_ALL_ENQUIRIES = True
+# Temporary gate: stop after vehicle prep and before Find-Contact mobile search.
+# Set to False once vehicle preparation hardening is complete.
+SIEBEL_DMS_FORCE_FAIL_BEFORE_FIND_CONTACT = True
 
 
 def _is_browser_disconnected_error(exc: BaseException) -> bool:
@@ -6062,7 +6065,12 @@ def _add_customer_payment(
                         note(f"Payment save: Siebel error popup detected → {_err_msg!r:.300}")
                     else:
                         note("Clicked Save icon after payment entry — no error popup detected.")
-                    return True
+                    # Strict gate: after save we must see at least one Payment Lines row.
+                    if _payment_lines_has_existing_row(page, content_frame_selector):
+                        note("Payments: verified at least one Payment Lines row after save.")
+                        return True
+                    note("Payments: save clicked but no Payment Lines row detected after save.")
+                    return False
                 note("Could not click Save icon after filling payment fields.")
                 return False
         except Exception as e:
@@ -11589,6 +11597,30 @@ def Playwright_Hero_DMS_fill(
         logger.info("siebel_dms: %s", msg)
         _exec_log("NOTE", msg)
 
+    def log_vehicle_snapshot(stage: str) -> None:
+        """
+        Write current ``out['vehicle']`` key-values immediately after each scrape/merge update.
+        Keeps Playwright_DMS.txt aligned with in-memory state evolution.
+        """
+        veh = out.get("vehicle") or {}
+        if not log_fp or not isinstance(veh, dict):
+            return
+        try:
+            log_fp.write(f"\n--- vehicle_snapshot ({stage}) ---\n")
+            for k in sorted(veh.keys()):
+                v = veh.get(k)
+                if v is None:
+                    continue
+                s = str(v).replace("\n", " ").replace("\r", " ").strip()
+                if not s:
+                    continue
+                if len(s) > 2000:
+                    s = s[:1997] + "..."
+                log_fp.write(f"{k}={s!r}\n")
+            log_fp.flush()
+        except OSError:
+            pass
+
     customer_save_clicked = False
 
     def save_customer_record(msg_clicked: str, msg_missing: str) -> None:
@@ -11619,6 +11651,37 @@ def Playwright_Hero_DMS_fill(
         in_transit_state = False
 
         if SIEBEL_DMS_STOP_AFTER_ALL_ENQUIRIES:
+            # User-requested order: run vehicle preparation before Contact Find search.
+            step("Pre-step: preparing vehicle before contact find (video path).")
+            _pv_ok, _pv_err, _pv_scraped, in_transit_state, _pv_crit, _pv_info = prepare_vehicle(
+                page,
+                dms_values,
+                urls,
+                nav_timeout_ms=nav_timeout_ms,
+                action_timeout_ms=action_timeout_ms,
+                content_frame_selector=content_frame_selector,
+                note=note,
+                form_trace=form_trace,
+                ms_done=ms_done,
+                step=step,
+            )
+            if not _pv_ok:
+                out["error"] = _pv_err or "prepare_vehicle failed before contact find."
+                return out
+            out["vehicle"] = _pv_scraped
+            _write_playwright_vehicle_master_section(log_fp, _pv_scraped, _pv_crit, _pv_info)
+            log_vehicle_snapshot("video_pre_find_prepare_vehicle")
+            _persist_dms_scrape_to_db(customer_id, vehicle_id, out.get("vehicle") or {}, note)
+            if SIEBEL_DMS_FORCE_FAIL_BEFORE_FIND_CONTACT:
+                step("Stopped intentionally before Find-Contact mobile search (temporary gate).")
+                out["error"] = (
+                    "Siebel: temporary forced stop before Find-Contact mobile search is enabled "
+                    "(SIEBEL_DMS_FORCE_FAIL_BEFORE_FIND_CONTACT=True). "
+                    "Vehicle preparation completed; disable this gate to continue full flow."
+                )
+                note(out["error"])
+                return out
+
             if skip_contact_find:
                 note(
                     "SIEBEL_DMS_STOP_AFTER_ALL_ENQUIRIES is True — skip_contact_find ignored; "
@@ -11695,9 +11758,17 @@ def Playwright_Hero_DMS_fill(
                         f"{ae_detail or 'See Playwright_DMS.txt [NOTE] lines for the failing step.'}"
                     )
                     return out
+                if not (ae_enq_no or "").strip():
+                    step("Stopped: Add Enquiry did not return Enquiry#.")
+                    out["error"] = (
+                        "Siebel: Add Enquiry details were filled but no Enquiry# was scraped. "
+                        "Treating as failure to avoid silent partial save."
+                    )
+                    return out
                 ms_done("Add enquiry saved")
                 note(f"Add Enquiry saved with Enquiry#={ae_enq_no!r}; re-finding by mobile + first name.")
                 out.setdefault("vehicle", {})["enquiry_number"] = ae_enq_no
+                log_vehicle_snapshot("video_add_enquiry_saved")
                 _persist_dms_scrape_to_db(customer_id, vehicle_id, out.get("vehicle") or {}, note)
                 form_trace(
                     "v1b_refind_after_add_enquiry",
@@ -11756,6 +11827,7 @@ def Playwright_Hero_DMS_fill(
                 return out
             if _has_enq and _enq_number:
                 out.setdefault("vehicle", {})["enquiry_number"] = _enq_number
+                log_vehicle_snapshot("video_enquiry_found_in_contact_enquiry")
             if not _has_enq:
                 note(
                     f"No open enquiry on any row for mobile+first (last Contact_Enquiry rows={_enq_rows}) — "
@@ -11795,9 +11867,16 @@ def Playwright_Hero_DMS_fill(
                             f"Add Enquiry with dotted first name failed. {ae2_detail or ''}"
                         ).strip()
                         return out
+                    if not (ae2_enq_no or "").strip():
+                        step("Stopped: suffixed Add Enquiry did not return Enquiry#.")
+                        out["error"] = (
+                            "Siebel: suffixed Add Enquiry details were filled but no Enquiry# was scraped."
+                        )
+                        return out
                     ms_done("Add enquiry saved")
                     out.setdefault("vehicle", {})["enquiry_number"] = ae2_enq_no
                     note(f"Add Enquiry saved Enquiry#={ae2_enq_no!r} for suffixed first {_dotted_fn!r}.")
+                    log_vehicle_snapshot("video_add_enquiry_suffixed_saved")
                     _persist_dms_scrape_to_db(customer_id, vehicle_id, out.get("vehicle") or {}, note)
 
                     ok_rf_dot = _contact_view_find_by_mobile(
@@ -12000,6 +12079,25 @@ def Playwright_Hero_DMS_fill(
                 or str(dms_values.get("full_chassis") or "").strip()
                 or str(dms_values.get("frame_num") or "").strip()
             )
+            # If there is no open order for this customer, try Generate Booking before Sales Orders.
+            _enq_u = (urls.enquiry or "").strip() or (urls.contact or "").strip()
+            if _enq_u:
+                _goto(page, _enq_u, "enquiry_for_booking_video", nav_timeout_ms=nav_timeout_ms)
+                _siebel_after_goto_wait(page, floor_ms=900)
+            _safe_page_wait(page, 500, log_label="before_generate_booking_video")
+            if _try_click_generate_booking(
+                page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
+            ):
+                note("Video path: clicked Generate Booking before create_order.")
+                ms_done("Booking generated")
+            else:
+                step("Stopped: Generate Booking was not found before create_order (video path).")
+                out["error"] = (
+                    "Siebel: Generate Booking control was not found before create_order. "
+                    "Booking is mandatory when no existing order is present."
+                )
+                return out
+
             form_trace(
                 "v4_create_order",
                 "Vehicle Sales / Sales Orders",
@@ -12068,6 +12166,7 @@ def Playwright_Hero_DMS_fill(
                 if order_scraped.get("vehicle_type"):
                     veh["vehicle_type"] = order_scraped.get("vehicle_type")
                 out["vehicle"] = veh
+                log_vehicle_snapshot("video_create_order_scrape_merge")
                 _persist_dms_scrape_to_db(customer_id, vehicle_id, out.get("vehicle") or {}, note)
 
             step(
@@ -12351,6 +12450,7 @@ def Playwright_Hero_DMS_fill(
                 return False
             out["vehicle"] = scraped
             _write_playwright_vehicle_master_section(log_fp, scraped, vm_crit, vm_info)
+            log_vehicle_snapshot("stage5_prepare_vehicle_merge")
             out["dms_siebel_forms_filled"] = bool(customer_save_clicked)
             if not customer_save_clicked:
                 note(
@@ -12360,7 +12460,7 @@ def Playwright_Hero_DMS_fill(
             step("Stage 5: vehicle list query completed; result row read when present.")
             return True
 
-        def stage_6_generate_booking() -> None:
+        def stage_6_generate_booking() -> bool:
             note("Stage 6: Generate Booking (always after vehicle processing per SOP).")
             step("Generate Booking (stage 6 — always, regardless of In Transit).")
             enq_u = (urls.enquiry or "").strip() or (urls.contact or "").strip()
@@ -12384,9 +12484,15 @@ def Playwright_Hero_DMS_fill(
                 note("Stage 6: clicked Generate Booking.")
                 ms_done("Booking generated")
                 step("Generate Booking was completed (stage 6).")
+                return True
             else:
                 note("Stage 6: Generate Booking control not found or not visible.")
-                step("Generate Booking was not found — complete manually if required (stage 6).")
+                step("Stopped: Generate Booking was not found (stage 6).")
+                out["error"] = (
+                    "Siebel: Generate Booking control was not found. "
+                    "Booking is mandatory when no existing order is present."
+                )
+                return False
 
         def stage_7_allotment_if_applicable() -> None:
             if in_transit_state:
@@ -12431,6 +12537,15 @@ def Playwright_Hero_DMS_fill(
             step("Ready for invoice creation.")
 
         if not skip_contact_find:
+            if SIEBEL_DMS_FORCE_FAIL_BEFORE_FIND_CONTACT:
+                step("Stopped intentionally before Find-Contact mobile search (temporary gate).")
+                out["error"] = (
+                    "Siebel: temporary forced stop before Find-Contact mobile search is enabled "
+                    "(SIEBEL_DMS_FORCE_FAIL_BEFORE_FIND_CONTACT=True). "
+                    "Disable this gate to continue linear Find → Enquiry flow."
+                )
+                note(out["error"])
+                return out
             ok1, matched1 = find_customer()
             if not ok1:
                 return out
@@ -12453,6 +12568,7 @@ def Playwright_Hero_DMS_fill(
                     ms_done("Add enquiry saved")
                     if _ae_enq:
                         out.setdefault("vehicle", {})["enquiry_number"] = _ae_enq
+                    log_vehicle_snapshot("linear_add_enquiry_saved")
                     _persist_dms_scrape_to_db(customer_id, vehicle_id, out.get("vehicle") or {}, note)
                 else:
                     note("Add Enquiry branch failed — falling back to basic enquiry form (stage 2).")
@@ -12588,7 +12704,8 @@ def Playwright_Hero_DMS_fill(
             return out
         _persist_dms_scrape_to_db(customer_id, vehicle_id, out.get("vehicle") or {}, note)
 
-        stage_6_generate_booking()
+        if not stage_6_generate_booking():
+            return out
         stage_7_allotment_if_applicable()
         stage_8_invoice_hook()
 

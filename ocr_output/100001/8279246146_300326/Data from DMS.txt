@@ -1,22 +1,22 @@
 Data from DMS
 
 --- Customer (filled on enquiry) ---
-Name: Lavesh. Kumar
-Address: S/O Navab Singh, Awar, PO: AWAR, DIST: Bharatpur, Rajasthan - 321202
+Name: Shivnarayan
+Address: S/O Phaguni, gaon azdapura, Chak Dharsoni, Jeewad, Bharatpur, 321408 Rajasthan, 321408
 State: RAJASTHAN
-Pin code: 321202
-Mobile: 7740828710
+Pin code: 321408
+Mobile: 8279246146
 Relation (S/O or W/o): S/O
-Care of / Father–Husband (Aadhaar QR): S/O Navab Singh
+Care of / Father–Husband (Aadhaar QR): S/O Phaguni
 
 --- Vehicle (from DMS search result) ---
 Key num: —
 Frame / Chassis num: —
-Full chassis (VIN from detail): MBLHAW479T5C06034
+Full chassis (VIN from detail): MBLHAW477T9C43284
 Engine num: —
-Full engine (from detail): HA11F6T5C03361
+Full engine (from detail): HA11F7T9C11204
 Model: SPLENDOR +
-Color: BLA
+Color: RPB
 Cubic capacity: 87112029
 Seating capacity: 11870 DEALER SHOWROOM
 Body type: —
