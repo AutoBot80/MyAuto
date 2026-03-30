@@ -1,6 +1,6 @@
 Playwright DMS — execution log (this run only; UTC timestamps)
 
-started_utc=2026-03-30T11:18:00.206989+00:00
+started_utc=2026-03-30T12:08:09.314364+00:00
 skip_contact_find=False
 dms_contact_path='found'
 mobile_phone='8279246146'
@@ -27,21 +27,25 @@ url_vehicle_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/e
 --- trace ---
 Legend: [STEP]/[NOTE]/[MILESTONE] = operator narrative; [FORM] = siebel_step + Siebel form/screen + action + fields/values being applied on that form.
 
-2026-03-30T11:18:00.207307+00:00 [STEP] Started Hero Connect / Siebel DMS automation (linear SOP).
-2026-03-30T11:18:00.207392+00:00 [STEP] Pre-step: preparing vehicle before contact find (video path).
-2026-03-30T11:18:00.207452+00:00 [FORM] siebel_step=5_vehicle_list | form=Auto Vehicle List (DMS_REAL_URL_VEHICLE) | action=begin_vehicle_flow_navigate_then_search_applet | engine_partial='11204' | frame_partial='43284' | key_partial='1267' | vehicle_url_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+All+Vehicle+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Auto+Vehicle+List+Applet&SWERowId0=1-100-1676'
-2026-03-30T11:18:10.524592+00:00 [FORM] siebel_step=5_vehicle_list | form=Auto Vehicle List — search/query row | action=attempted_fill_on_key_chassis_engine_inputs_then_FindGo | chassis_vin_input_located=False | engine_input_located=False | engine_partial='11204' | frame_partial='43284' | key_input_located=True | key_partial='1267'
-2026-03-30T11:18:11.864507+00:00 [NOTE] Clicked Find/Go on vehicle search.
-2026-03-30T11:18:14.403931+00:00 [NOTE] Scraped vehicle row from Siebel grid.
-2026-03-30T11:18:14.829486+00:00 [NOTE] Vehicle prep: filled Key Number = '1267' on vehicle page.
-2026-03-30T11:18:15.164237+00:00 [NOTE] Vehicle prep: filled Battery No. = '3302419' on vehicle page.
-2026-03-30T11:18:16.902215+00:00 [NOTE] Vehicle prep: saved vehicle record after Key/Battery fill.
-2026-03-30T11:18:16.902473+00:00 [NOTE] Vehicle grid scrape (prepare_vehicle): model='', color='SKU:', frame_num='', engine_num='VIN:', key_num=''.
-2026-03-30T11:18:16.902595+00:00 [NOTE] DECISION: vehicle_in_transit=False (from scraped grid text).
-2026-03-30T11:18:16.902773+00:00 [FORM] siebel_step=5_vehicle_list | form=Auto Vehicle List — results grid (scraped row) | action=read_first_matching_row_from_grid | engine_num='VIN:' | in_transit=False
-2026-03-30T11:18:16.902888+00:00 [NOTE] prepare_vehicle: vehicle not In Transit — receipt/PDI branch skipped.
-2026-03-30T11:18:16.902958+00:00 [STEP] Vehicle does not appear in transit.
-2026-03-30T11:18:16.903203+00:00 [NOTE] vehicle_master: fields still missing after prepare_vehicle merge — model still empty after merge — need grid row or DMS vehicle_model/model.; year_of_mfg still empty — need grid last column or DMS year_of_mfg.
+2026-03-30T12:08:09.314592+00:00 [STEP] Started Hero Connect / Siebel DMS automation (linear SOP).
+2026-03-30T12:08:09.314676+00:00 [STEP] Pre-step: preparing vehicle before contact find (video path).
+2026-03-30T12:08:09.314785+00:00 [FORM] siebel_step=5_vehicle_list | form=Auto Vehicle List (DMS_REAL_URL_VEHICLE) | action=begin_vehicle_flow_navigate_then_search_applet | engine_partial='11204' | frame_partial='43284' | key_partial='1267' | vehicle_url_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+All+Vehicle+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Auto+Vehicle+List+Applet&SWERowId0=1-100-1676'
+2026-03-30T12:08:19.901856+00:00 [FORM] siebel_step=5_vehicle_list | form=Auto Vehicle List — search/query row | action=attempted_fill_on_key_chassis_engine_inputs_then_FindGo | chassis_vin_input_located=False | engine_input_located=False | engine_partial='11204' | frame_partial='43284' | key_input_located=True | key_partial='1267'
+2026-03-30T12:08:21.024867+00:00 [NOTE] Clicked Find/Go on vehicle search.
+2026-03-30T12:08:23.579091+00:00 [NOTE] Scraped vehicle row from Siebel grid.
+2026-03-30T12:08:26.804877+00:00 [NOTE] prepare_vehicle: could not click matching VIN in left Search Results — continuing (detail may already be open).
+2026-03-30T12:08:28.314588+00:00 [NOTE] Vehicle prep: filled Key Number = '1267' on vehicle page.
+2026-03-30T12:08:28.643965+00:00 [NOTE] Vehicle prep: filled Battery No. = '3302419' on vehicle page.
+2026-03-30T12:08:30.278652+00:00 [NOTE] Vehicle prep: saved vehicle record after Key/Battery fill.
+2026-03-30T12:08:30.735756+00:00 [FORM] siebel_step=5_vehicle_detail | form=Auto Vehicle — detail applet | action=scrape_VIN_Model_Year_Manu_SKU_Color_Engine_by_aria_label | color='SKU:'
+2026-03-30T12:08:30.797553+00:00 [NOTE] prepare_vehicle: Inventory Location (aria-label) not readable — in_transit may still come from list grid heuristic.
+2026-03-30T12:08:30.919463+00:00 [NOTE] prepare_vehicle: Serial Number drilldown (name='Serial Number') not found — skipping serial-detail Pre-check/PDI and Features scrape.
+2026-03-30T12:08:30.919518+00:00 [NOTE] Vehicle grid scrape (prepare_vehicle): model='', color='SKU:', frame_num='', engine_num='VIN:', key_num=''.
+2026-03-30T12:08:30.919535+00:00 [NOTE] DECISION: vehicle_in_transit=False (list grid heuristic; no Inventory Location).
+2026-03-30T12:08:30.919562+00:00 [FORM] siebel_step=5_vehicle_list | form=Auto Vehicle List — results grid (scraped row) | action=read_first_matching_row_from_grid | engine_num='VIN:' | in_transit=False
+2026-03-30T12:08:30.919628+00:00 [NOTE] prepare_vehicle: vehicle at dealer (not in-transit) — receipt branch skipped.
+2026-03-30T12:08:30.919650+00:00 [STEP] Vehicle does not appear in transit.
+2026-03-30T12:08:30.919689+00:00 [NOTE] vehicle_master: fields still missing after prepare_vehicle merge — model still empty after merge — need grid row or DMS vehicle_model/model.; year_of_mfg still empty — need grid last column or DMS year_of_mfg.
 
 --- vehicle_master (merged for update_vehicle_master_from_dms) ---
 full_chassis='43284'
@@ -66,7 +70,7 @@ full_chassis='43284'
 full_engine='11204'
 in_transit='False'
 raw_key_num='1267'
-2026-03-30T11:18:16.903872+00:00 [STEP] Stopped intentionally before Find-Contact mobile search (temporary gate).
-2026-03-30T11:18:16.903945+00:00 [NOTE] Siebel: temporary forced stop before Find-Contact mobile search is enabled (SIEBEL_DMS_FORCE_FAIL_BEFORE_FIND_CONTACT=True). Vehicle preparation completed; disable this gate to continue full flow.
+2026-03-30T12:08:30.919753+00:00 [STEP] Stopped intentionally before Find-Contact mobile search (temporary gate).
+2026-03-30T12:08:30.919764+00:00 [NOTE] Siebel: temporary forced stop before Find-Contact mobile search is enabled (SIEBEL_DMS_FORCE_FAIL_BEFORE_FIND_CONTACT=True). Vehicle preparation completed; disable this gate to continue full flow.
 
-2026-03-30T11:18:16.904044+00:00 [END] error=Siebel: temporary forced stop before Find-Contact mobile search is enabled (SIEBEL_DMS_FORCE_FAIL_BEFORE_FIND_CONTACT=True). Vehicle preparation completed; disable this gate to continue full flow.
+2026-03-30T12:08:30.919782+00:00 [END] error=Siebel: temporary forced stop before Find-Contact mobile search is enabled (SIEBEL_DMS_FORCE_FAIL_BEFORE_FIND_CONTACT=True). Vehicle preparation completed; disable this gate to continue full flow.

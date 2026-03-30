@@ -1369,7 +1369,35 @@ def _try_prepare_find_vehicles_applet(
             pass
         return False
 
+    def open_find_combobox_aria_then_vehicles(page_: Page, root) -> bool:
+        """Hero **Find ComboBox** (``aria-label``) → **Vehicles** (same as operator Find pane)."""
+        for css in ('[aria-label="Find ComboBox" i]', '[aria-label="Find combobox" i]'):
+            try:
+                loc = root.locator(css).first
+                if loc.count() > 0 and loc.is_visible(timeout=700):
+                    loc.click(timeout=timeout_ms)
+                    _safe_page_wait(page_, 450, log_label="find_combobox_aria_labeled")
+                    if click_vehicles_menu(page_, root):
+                        logger.info("siebel_dms: aria-label Find ComboBox → Vehicles")
+                        return True
+            except Exception:
+                continue
+        for name_re in (re.compile(r"^\s*Find\s+ComboBox\s*$", re.I), re.compile(r"Find\s+ComboBox", re.I)):
+            try:
+                cb = root.get_by_role("combobox", name=name_re).first
+                if cb.count() > 0 and cb.is_visible(timeout=700):
+                    cb.click(timeout=timeout_ms)
+                    _safe_page_wait(page_, 450, log_label="find_combobox_role_find_combobox")
+                    if click_vehicles_menu(page_, root):
+                        logger.info("siebel_dms: role combobox Find ComboBox → Vehicles")
+                        return True
+            except Exception:
+                continue
+        return False
+
     def try_on_root(page_: Page, root) -> bool:
+        if open_find_combobox_aria_then_vehicles(page_, root):
+            return True
         changed_global = _select_global_find_vehicles(root)
         if select_vehicles_on_native_selects(root):
             return True
@@ -1464,7 +1492,7 @@ def _try_fill_vin_engine_in_vehicles_find_applet(
         try:
             _ff_probe = root.evaluate(
                 """() => {
-                  const box = document.getElementById('findfieldsbox');
+                  const box = document.getElementById('findfieldsbox') || document.getElementById('findfieldbox');
                   if (!box) {
                     return { has_box: false, vin_id_present: false, engine_id_present: false, vin_editable: false, engine_editable: false };
                   }
@@ -1497,7 +1525,7 @@ def _try_fill_vin_engine_in_vehicles_find_applet(
                 """(args) => {
                   const vinVal = String(args.vin || '').trim();
                   const engVal = String(args.eng || '').trim();
-                  const box = document.getElementById('findfieldsbox');
+                  const box = document.getElementById('findfieldsbox') || document.getElementById('findfieldbox');
                   if (!box) return { ok: false, reason: 'no_findfieldsbox' };
                   const vis = (el) => {
                     if (!el) return false;
@@ -7239,10 +7267,7 @@ def _create_order(
     """
     Vehicle Sales -> Sales Orders New flow:
     - Open Vehicle Sales (first-level view bar)
-    - **Prefer existing order:** Find (``aria-label=Find``) → field type **Mobile Phone#** → mobile → query;
-      if the list shows a matching order row, **skip** **+** and call ``_attach_vehicle_to_bkg`` only (Order Number
-      click stays inside that helper).
-    - Else: Click Sales Orders New:List (+)
+    - Click Sales Orders New:List (+) when **Invoice Selected** is not opened directly
     - Set Booking Order Type
     - When ``battery_partial`` is set (detail sheet **Battery No** from DMS fill payload), fill **Comments**
       with ``Battery is <number>``
@@ -7426,26 +7451,6 @@ def _create_order(
     _siebel_after_goto_wait(page, floor_ms=4500)
     note(f"Create Order: arrived at Vehicle Sales (post-goto wait). URL={page.url[:120]}")
 
-    try:
-        if _try_expand_find_flyin(page, timeout_ms=min(action_timeout_ms, 5000), content_frame_selector=content_frame_selector):
-            note("Create Order: expanded Find fly-in for Vehicle Sales list query.")
-            _safe_page_wait(page, 1000, log_label="after_vs_find_expand")
-    except Exception:
-        pass
-
-    _mobile_selectors = (
-        "input[id='1_Mobile_Phone']",
-        "input[name='Mobile_Phone']",
-        "input[aria-label*='Mobile Phone' i]",
-        "input[title*='Mobile Phone' i]",
-        "input[id='1_Mobile_Number']",
-        "input[name='Mobile_Number']",
-        "input[aria-label*='Mobile Number' i]",
-        "input[title*='Mobile Number' i]",
-        "input[id*='Mobile_Phone' i]",
-        "input[id*='Mobile_Number' i]",
-    )
-
     def _go_to_invoice_selected_direct() -> bool:
         """
         Prefer direct context switch to Invoice Selected (requested by operator),
@@ -7492,36 +7497,6 @@ def _create_order(
                         continue
             except Exception:
                 continue
-        return False
-
-    def _fill_mobile_via_label() -> bool:
-        m = (mobile or "").strip()
-        if not m:
-            return False
-        for root in _roots():
-            for pat in (
-                re.compile(r"mobile\s*phone", re.I),
-                re.compile(r"mobile\s*number", re.I),
-                re.compile(r"cell\s*phone", re.I),
-            ):
-                try:
-                    loc = root.get_by_label(pat).first
-                    if loc.count() > 0 and loc.is_visible(timeout=600):
-                        try:
-                            loc.click(timeout=min(action_timeout_ms, 2000))
-                        except Exception:
-                            loc.click(timeout=min(action_timeout_ms, 2000), force=True)
-                        try:
-                            loc.fill(m, timeout=min(action_timeout_ms, 3000))
-                        except Exception:
-                            try:
-                                loc.press("Control+a", timeout=800)
-                            except Exception:
-                                pass
-                            loc.type(m, delay=25, timeout=min(action_timeout_ms, 4000))
-                        return True
-                except Exception:
-                    continue
         return False
 
     _invoice_selected_ready = _go_to_invoice_selected_direct()
@@ -7690,365 +7665,9 @@ def _create_order(
             return True
         return False
 
-    def _try_vehicle_sales_find_existing_order() -> bool:
-        """
-        Vehicle Sales list: click Find → choose Mobile Phone# in the find field-type dropdown →
-        Tab to value → enter mobile → run query. Returns True if at least one result row looks like
-        an order line (mobile digits present; optional Order# link). Skips **+** when True; Order#
-        drill-down is left to ``_attach_vehicle_to_bkg``.
-        """
-        _mob_digits = re.sub(r"\D", "", (mobile or "").strip())
-        if len(_mob_digits) < 8:
-            return False
-        _needle = _mob_digits[-10:] if len(_mob_digits) >= 10 else _mob_digits
-        _ui_roots = list(_roots()) + list(_ordered_frames(page)) + [page]
-
-        _find_clicked = False
-        for _root in _ui_roots:
-            for _find_sel in (
-                "[aria-label='Find']",
-                "[aria-label=\"Find\"]",
-                "button[aria-label='Find']",
-                "a[aria-label='Find']",
-                "button[aria-label*='Find' i]",
-                "a[aria-label*='Find' i]",
-            ):
-                try:
-                    _fl = _root.locator(_find_sel).first
-                    if _fl.count() > 0 and _fl.is_visible(timeout=500):
-                        try:
-                            _fl.click(timeout=min(action_timeout_ms, 2500))
-                        except Exception:
-                            _fl.click(timeout=min(action_timeout_ms, 2500), force=True)
-                        _find_clicked = True
-                        note("Create Order: VS Find — clicked Find control.")
-                        break
-                except Exception:
-                    continue
-            if _find_clicked:
-                break
-            try:
-                _by_role = _root.get_by_role("button", name=re.compile(r"^\s*find\s*$", re.I)).first
-                if _by_role.count() > 0 and _by_role.is_visible(timeout=400):
-                    _by_role.click(timeout=min(action_timeout_ms, 2500))
-                    _find_clicked = True
-                    note("Create Order: VS Find — clicked Find via role=button.")
-                    break
-            except Exception:
-                continue
-        if not _find_clicked:
-            note("Create Order: VS Find — Find control not found; will use '+' new booking.")
-            return False
-        _safe_page_wait(page, 450, log_label="after_vs_find_button")
-
-        # Field-type dropdown: scope to #findfieldsbox (same as Contact/Vehicles Find) so we do not
-        # hit the wrong global combobox. Prefer native <select>; else type-to-select on criteria cell.
-        _matched_phone_field = False
-        _ff_sel = re.compile(r"mobile\s*phone\s*#?", re.I)
-        for _root in _ui_roots:
-            if _matched_phone_field:
-                break
-            try:
-                _ff = _root.locator("#findfieldsbox").first
-                if _ff.count() <= 0 or not _ff.is_visible(timeout=400):
-                    continue
-                _sel = _ff.locator("select").first
-                if _sel.count() > 0 and _sel.is_visible(timeout=350):
-                    try:
-                        _sel.select_option(label=_ff_sel, timeout=1200)
-                        _matched_phone_field = True
-                        note("Create Order: VS Find — set field type via #findfieldsbox select (Mobile Phone#).")
-                        break
-                    except Exception:
-                        try:
-                            _sel.select_option(
-                                label=re.compile(r"mobile.*phone", re.I), timeout=1200
-                            )
-                            _matched_phone_field = True
-                            note("Create Order: VS Find — set field type via select (mobile+phone label).")
-                            break
-                        except Exception:
-                            pass
-            except Exception:
-                continue
-
-        if not _matched_phone_field:
-            _js_ff_select_mobile = """() => {
-              const box = document.getElementById('findfieldsbox');
-              if (!box) return false;
-              const vis = (el) => {
-                if (!el) return false;
-                const st = window.getComputedStyle(el);
-                if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
-                const r = el.getBoundingClientRect();
-                return r.width >= 2 && r.height >= 2;
-              };
-              for (const sel of box.querySelectorAll('select')) {
-                if (!vis(sel)) continue;
-                for (let i = 0; i < sel.options.length; i++) {
-                  const t = String(sel.options[i].textContent || '').toLowerCase();
-                  if (t.includes('mobile') && t.includes('phone')) {
-                    sel.focus();
-                    sel.selectedIndex = i;
-                    sel.dispatchEvent(new Event('input', { bubbles: true }));
-                    sel.dispatchEvent(new Event('change', { bubbles: true }));
-                    return true;
-                  }
-                }
-              }
-              return false;
-            }"""
-            for _fr in list(_ordered_frames(page)) + [page]:
-                try:
-                    if bool(_fr.evaluate(_js_ff_select_mobile)):
-                        _matched_phone_field = True
-                        note("Create Order: VS Find — set field type via JS native select in findfieldsbox.")
-                        break
-                except Exception:
-                    continue
-
-        if not _matched_phone_field:
-            _js_focus_criteria = """() => {
-              const box = document.getElementById('findfieldsbox');
-              if (!box) return false;
-              const vis = (el) => {
-                if (!el) return false;
-                const st = window.getComputedStyle(el);
-                if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
-                const r = el.getBoundingClientRect();
-                return r.width >= 2 && r.height >= 2;
-              };
-              const rows = box.querySelectorAll('tbody tr, table tr');
-              for (const tr of rows) {
-                if (tr.closest('thead')) continue;
-                const tds = tr.querySelectorAll('td');
-                if (tds.length < 1) continue;
-                const inp = tds[0].querySelector('input:not([type="hidden"])');
-                if (inp && vis(inp) && !inp.readOnly && !inp.disabled) {
-                  try { inp.focus(); inp.click(); } catch (e) {}
-                  try { inp.select(); } catch (e) {}
-                  return true;
-                }
-              }
-              return false;
-            }"""
-            for _fr in list(_ordered_frames(page)) + [page]:
-                try:
-                    if bool(_fr.evaluate(_js_focus_criteria)):
-                        note("Create Order: VS Find — type-to-select Mobile Phone# on find field cell.")
-                        try:
-                            page.keyboard.type("Mobile Phone#", delay=40)
-                        except Exception:
-                            try:
-                                page.keyboard.insert_text("Mobile Phone#")
-                            except Exception:
-                                pass
-                        _safe_page_wait(page, 160, log_label="vs_find_after_type_field")
-                        try:
-                            page.keyboard.press("Enter")
-                        except Exception:
-                            pass
-                        _matched_phone_field = True
-                        _safe_page_wait(page, 200, log_label="after_vs_find_type_confirm")
-                        break
-                except Exception:
-                    continue
-
-        if not _matched_phone_field:
-            # Legacy: Alt+Down + ArrowDown on whatever has focus (may not open findfieldsbox).
-            try:
-                page.keyboard.press("Alt+ArrowDown")
-            except Exception:
-                pass
-            _safe_page_wait(page, 280, log_label="vs_find_dropdown_open")
-            for _nav_i in range(22):
-                try:
-                    _cur = (
-                        page.evaluate(
-                            "() => { const e = document.activeElement; return (e && (e.value != null ? e.value : (e.textContent||''))) || ''; }"
-                        )
-                        or ""
-                    )
-                except Exception:
-                    _cur = ""
-                _low = _cur.lower()
-                if "mobile" in _low and "phone" in _low:
-                    _matched_phone_field = True
-                    try:
-                        page.keyboard.press("Enter")
-                    except Exception:
-                        pass
-                    break
-                try:
-                    page.keyboard.press("ArrowDown")
-                except Exception:
-                    break
-                _safe_page_wait(page, 100, log_label="vs_find_type_nav")
-            if not _matched_phone_field:
-                note(
-                    "Create Order: VS Find — could not confirm Mobile Phone# in dropdown "
-                    "(best-effort; continuing to Tab)."
-                )
-        _safe_page_wait(page, 220, log_label="after_vs_find_type_select")
-
-        try:
-            page.keyboard.press("Tab")
-        except Exception:
-            pass
-        _safe_page_wait(page, 350, log_label="vs_find_tab_to_value")
-
-        _val_ok = False
-        _mob_fill = (mobile or "").strip()
-        try:
-            _h = page.evaluate_handle("() => document.activeElement")
-            _ae = _h.as_element()
-            if _ae:
-                _ae.fill("", timeout=1200)
-                _ae.fill(_mob_fill, timeout=min(action_timeout_ms, 3500))
-                _val_ok = bool((_ae.input_value(timeout=800) or "").strip())
-        except Exception:
-            pass
-        if not _val_ok:
-            for _root in _ui_roots:
-                for _pat in (
-                    re.compile(r"starting\s*with", re.I),
-                    re.compile(r"mobile\s*phone", re.I),
-                ):
-                    try:
-                        _vl = _root.get_by_label(_pat).first
-                        if _vl.count() > 0 and _vl.is_visible(timeout=500):
-                            _vl.fill("", timeout=1000)
-                            _vl.fill(_mob_fill, timeout=min(action_timeout_ms, 3500))
-                            _val_ok = True
-                            note("Create Order: VS Find — filled mobile via get_by_label.")
-                            break
-                    except Exception:
-                        continue
-                if _val_ok:
-                    break
-        if not _val_ok:
-            note("Create Order: VS Find — could not fill mobile query field; will use '+' path.")
-            return False
-
-        _safe_page_wait(page, 250, log_label="before_vs_find_execute")
-        _go = False
-        for _root in _ui_roots:
-            for _gs in (
-                "button[aria-label*='Go' i]",
-                "input[type='submit'][value*='Go' i]",
-                "a[aria-label*='Go' i]",
-                "button:has-text('Go')",
-            ):
-                try:
-                    _gl = _root.locator(_gs).first
-                    if _gl.count() > 0 and _gl.is_visible(timeout=400):
-                        _gl.click(timeout=1500)
-                        _go = True
-                        note(f"Create Order: VS Find — clicked Go ({_gs!r}).")
-                        break
-                except Exception:
-                    continue
-            if _go:
-                break
-        if not _go:
-            try:
-                page.keyboard.press("Enter")
-                note("Create Order: VS Find — pressed Enter to run query.")
-            except Exception:
-                pass
-        _safe_page_wait(page, 1600, log_label="after_vs_find_query")
-
-        _detect_js = """(needle) => {
-          const n = String(needle || '').replace(/\\D/g, '');
-          if (!n || n.length < 8) return false;
-          const vis = (el) => {
-            if (!el) return false;
-            const st = window.getComputedStyle(el);
-            if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity || '1') === 0) return false;
-            const r = el.getBoundingClientRect();
-            return r.width > 2 && r.height > 2;
-          };
-          const rowSels = [
-            'table.ui-jqgrid-btable tbody tr',
-            'div.ui-jqgrid-bdiv table tbody tr',
-            'table.siebui-list tbody tr',
-            'table tbody tr'
-          ];
-          for (const rs of rowSels) {
-            const rows = document.querySelectorAll(rs);
-            for (const tr of rows) {
-              if (tr.closest('thead')) continue;
-              if (!vis(tr)) continue;
-              const tds = tr.querySelectorAll('td');
-              if (tds.length < 2) continue;
-              const blob = (tr.innerText || '').replace(/\\D/g, '');
-              if (!blob.includes(n)) continue;
-              const ord = tr.querySelector("a[name='Order Number'], a[name='Order #']");
-              if (ord && vis(ord)) return true;
-              return true;
-            }
-          }
-          return false;
-        }"""
-        for _fr in list(_ordered_frames(page)) + [page]:
-            try:
-                if _fr.evaluate(_detect_js, _needle):
-                    note("Create Order: VS Find — result row(s) detected for mobile; skipping '+'.")
-                    if callable(form_trace):
-                        form_trace(
-                            "v4_create_order",
-                            "Vehicle Sales — My Orders",
-                            "vs_find_mobile_hit_skip_new_booking",
-                            mobile_phone=_mob_fill[:16],
-                        )
-                    return True
-            except Exception:
-                continue
-        note("Create Order: VS Find — no matching list row after query; will use '+' path.")
-        return False
-
-    _vs_find_hit = False
-    if not _invoice_selected_ready:
-        _vs_find_hit = _try_vehicle_sales_find_existing_order()
-
     _existing_order_opened = bool(_invoice_selected_ready)
     if _existing_order_opened:
         note("Create Order: staying on Invoice Selected page; skipping '+' new booking creation.")
-    elif _vs_find_hit:
-        note(
-            "Create Order: Vehicle Sales Find returned order row(s) for mobile; "
-            "skipping '+' — running attach_vehicle_to_bkg (Order Number click inside helper)."
-        )
-        _att_ok, _att_err, _att_scraped = _attach_vehicle_to_bkg(
-            page,
-            full_chassis=full_chassis,
-            order_number="",
-            action_timeout_ms=action_timeout_ms,
-            content_frame_selector=content_frame_selector,
-            note=note,
-        )
-        scraped["order_drilldown_opened"] = bool(_att_ok)
-        if _att_scraped:
-            scraped.update(_att_scraped)
-        if not _att_ok:
-            return False, (_att_err or "attach_vehicle_to_bkg failed.").strip(), scraped
-        _safe_page_wait(page, 900, log_label="after_vs_find_attach")
-        order_ref = _scrape_order_number_current()
-        if order_ref:
-            scraped["order_number"] = order_ref
-        inv_no = _scrape_invoice_number_current()
-        scraped["invoice_number"] = inv_no or ""
-        if inv_no:
-            note(f"Create Order: scraped Invoice#={inv_no!r} after VS Find attach path.")
-        if callable(form_trace):
-            form_trace(
-                "v4_create_order",
-                "Vehicle Sales — VS Find existing order",
-                "attach_vehicle_to_bkg_after_vs_find",
-                order_number=str(scraped.get("order_number") or ""),
-                invoice_number=str(scraped.get("invoice_number") or ""),
-            )
-        return True, None, scraped
     else:
         # 2) Click + (Sales Orders New:List)
         if not _click_any(
@@ -9767,10 +9386,79 @@ def scrape_siebel_vehicle_row(page: Page, *, content_frame_selector: str | None)
     return {"in_transit": in_tr} if in_tr else {}
 
 
+def _siebel_prepare_vehicle_list_find_vin_engine(
+    page: Page,
+    *,
+    frame_p: str,
+    engine_p: str,
+    action_timeout_ms: int,
+    content_frame_selector: str | None,
+    note,
+) -> bool:
+    """
+    **Auto Vehicle List** / stock search: same **Find → Vehicles** fly-in as Add Enquiry —
+    expand Find, choose **Vehicles**, fill **VIN** / **Engine#** in ``#findfieldsbox`` or ``#findfieldbox``
+    with ``*`` wildcards, then **Find** / **Enter**.
+
+    Does **not** click a Search Results VIN (``prepare_vehicle`` does that after grid scrape).
+    """
+    fp = (frame_p or "").strip()
+    ep = (engine_p or "").strip()
+    if not fp or not ep:
+        return False
+
+    if _try_expand_find_flyin(
+        page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
+    ):
+        note("prepare_vehicle: expanded Find fly-in (if collapsed).")
+
+    if _try_prepare_find_vehicles_applet(
+        page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
+    ):
+        note("prepare_vehicle: Find → Vehicles for list query.")
+    else:
+        note(
+            "prepare_vehicle: Find → Vehicles not confirmed — still attempting VIN/Engine fill in find field box."
+        )
+    _safe_page_wait(page, 600, log_label="prepare_vehicle_after_find_vehicles")
+
+    cw = _siebel_vehicle_find_wildcard_value(fp)
+    ew = _siebel_vehicle_find_wildcard_value(ep)
+    filled = _try_fill_vin_engine_in_vehicles_find_applet(
+        page,
+        chassis_wildcard=cw,
+        engine_wildcard=ew,
+        timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+    )
+    if filled:
+        note("prepare_vehicle: VIN + Engine# submitted in Find→Vehicles applet.")
+        return True
+
+    note("prepare_vehicle: Find→Vehicles VIN/Engine fill failed — one retry (expand Find, Vehicles).")
+    _try_expand_find_flyin(
+        page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
+    )
+    _safe_page_wait(page, 350, log_label="prepare_vehicle_find_retry_expand")
+    _try_prepare_find_vehicles_applet(
+        page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
+    )
+    _safe_page_wait(page, 500, log_label="prepare_vehicle_find_retry_vehicles")
+    filled = _try_fill_vin_engine_in_vehicles_find_applet(
+        page,
+        chassis_wildcard=cw,
+        engine_wildcard=ew,
+        timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+    )
+    if filled:
+        note("prepare_vehicle: VIN + Engine# submitted on retry.")
+    return bool(filled)
+
+
 def _siebel_goto_vehicle_list_and_scrape(
     page: Page,
     vehicle_url: str,
-    key_p: str,
     frame_p: str,
     engine_p: str,
     *,
@@ -9780,66 +9468,40 @@ def _siebel_goto_vehicle_list_and_scrape(
     note,
     form_trace=None,
 ) -> tuple[dict, str | None]:
-    """Navigate to Auto Vehicle List, run key/chassis/engine query, return (scraped, error)."""
+    """Navigate to Auto Vehicle List, run **only** Find→Vehicles ``*``VIN + ``*``Engine partial query, scrape row."""
     _goto(page, vehicle_url, "vehicle_list", nav_timeout_ms=nav_timeout_ms)
     _safe_page_wait(page, 1500, log_label="vehicle_list_open")
 
-    key_ok = _try_fill_field(
+    fp = (frame_p or "").strip()
+    ep = (engine_p or "").strip()
+    if not fp or not ep:
+        return {}, (
+            "Siebel: Auto Vehicle List requires non-empty **frame_partial** (VIN/chassis) and "
+            "**engine_partial**; Find→Vehicles uses *-prefixed partials only (no key/grid search fallback)."
+        )
+
+    query_ok = _siebel_prepare_vehicle_list_find_vin_engine(
         page,
-        [
-            'input[aria-label*="Key" i]:not([aria-label*="Keyboard" i])',
-            'input[title*="Key" i]',
-            'input[name*="Key" i]',
-        ],
-        key_p,
-        timeout_ms=action_timeout_ms,
+        frame_p=fp,
+        engine_p=ep,
+        action_timeout_ms=action_timeout_ms,
         content_frame_selector=content_frame_selector,
-    )
-    frame_ok = _try_fill_field(
-        page,
-        [
-            'input[aria-label*="Chassis" i]',
-            'input[aria-label*="Frame" i]',
-            'input[aria-label*="VIN" i]',
-            'input[title*="Chassis" i]',
-        ],
-        frame_p,
-        timeout_ms=action_timeout_ms,
-        content_frame_selector=content_frame_selector,
-    )
-    engine_ok = _try_fill_field(
-        page,
-        [
-            'input[aria-label*="Engine" i]',
-            'input[title*="Engine" i]',
-        ],
-        engine_p,
-        timeout_ms=action_timeout_ms,
-        content_frame_selector=content_frame_selector,
+        note=note,
     )
     if callable(form_trace):
         form_trace(
             "5_vehicle_list",
             "Auto Vehicle List — search/query row",
-            "attempted_fill_on_key_chassis_engine_inputs_then_FindGo",
-            key_partial=key_p,
-            key_input_located=key_ok,
+            "find_vehicles_vin_engine_applet_only",
             frame_partial=frame_p,
-            chassis_vin_input_located=frame_ok,
             engine_partial=engine_p,
-            engine_input_located=engine_ok,
+            find_vehicles_vin_engine_ok=query_ok,
         )
-    if not (key_ok or frame_ok or engine_ok):
+    if not query_ok:
         return {}, (
-            "Siebel: could not find key/chassis/engine search inputs on the vehicle view. "
-            "Open Auto Vehicle List in the browser, inspect the query fields, and set "
-            "DMS_SIEBEL_CONTENT_FRAME_SELECTOR if they live inside a specific iframe."
+            "Siebel: Find→Vehicles VIN/Engine query failed. Supply **frame_partial** and **engine_partial** "
+            "from DMS; set DMS_SIEBEL_CONTENT_FRAME_SELECTOR if the find applet is inside a specific iframe."
         )
-
-    if _click_find_go_query(page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector):
-        note("Clicked Find/Go on vehicle search.")
-    else:
-        note("Vehicle search: Find/Go not detected; waiting for grid anyway.")
 
     try:
         _safe_page_wait(page, 2500, log_label="vehicle_search_settle")
@@ -10560,7 +10222,7 @@ def prepare_vehicle(
             False,
             (
                 "Siebel: set DMS_REAL_URL_VEHICLE to the Auto Vehicle List (or stock search) "
-                "GotoView URL so key/chassis/engine search can run."
+                "GotoView URL so Find→Vehicles (*VIN/*Engine) search can run."
             ),
             {},
             False,
@@ -10571,7 +10233,6 @@ def prepare_vehicle(
     scraped, veh_err = _siebel_goto_vehicle_list_and_scrape(
         page,
         vehicle_url,
-        key_p,
         frame_p,
         engine_p,
         nav_timeout_ms=nav_timeout_ms,
