@@ -6674,6 +6674,84 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     except Exception:
         pass
 
+    _precheck_existing_rows = 0
+    _precheck_existing_signal = ""
+    for _ri, _root in enumerate(_roots()):
+        try:
+            _probe = _root.evaluate("""() => {
+                const vis = (el) => {
+                    if (!el) return false;
+                    const st = window.getComputedStyle(el);
+                    if (st.display === 'none' || st.visibility === 'hidden') return false;
+                    const r = el.getBoundingClientRect();
+                    return r.width > 0 && r.height > 0;
+                };
+                let maxRows = 0;
+                const tables = Array.from(document.querySelectorAll('table')).filter(vis);
+                for (const tb of tables) {
+                    const rows = Array.from(tb.querySelectorAll('tbody tr, tr')).filter((tr) => {
+                        if (!vis(tr)) return false;
+                        const cls = String(tr.className || '').toLowerCase();
+                        if (cls.includes('jqgfirstrow') || cls.includes('header')) return false;
+                        const tds = tr.querySelectorAll('td');
+                        if (tds.length < 2) return false;
+                        const txt = (tr.textContent || '').trim();
+                        return txt.length >= 2;
+                    });
+                    if (rows.length > maxRows) maxRows = rows.length;
+                }
+                const href = String(window.location.href || '');
+                const hasPrecheckRowId = href.includes('HMCL+PDI+Precheck+List+Applet') && href.includes('SWERowId1=');
+                return { maxRows, hasPrecheckRowId };
+            }""")
+            if isinstance(_probe, dict):
+                _rows = int(_probe.get("maxRows") or 0)
+                if _rows > _precheck_existing_rows:
+                    _precheck_existing_rows = _rows
+                    _precheck_existing_signal = f"root[{_ri}]:maxRows={_rows}"
+                if bool(_probe.get("hasPrecheckRowId")) and not _precheck_existing_signal:
+                    _precheck_existing_signal = f"root[{_ri}]:url_has_precheck_rowid"
+        except Exception:
+            continue
+    # region agent log
+    try:
+        import json as _json_pc_existing
+
+        with open(
+            Path(__file__).resolve().parents[3] / "debug-0875fe.log",
+            "a",
+            encoding="utf-8",
+        ) as _lf_pc_existing:
+            _lf_pc_existing.write(
+                _json_pc_existing.dumps(
+                    {
+                        "sessionId": "0875fe",
+                        "runId": "pre-fix",
+                        "hypothesisId": "G5",
+                        "location": "siebel_dms_playwright.py:_siebel_run_vehicle_serial_detail_precheck_pdi",
+                        "message": "precheck_existing_probe",
+                        "data": {
+                            "existing_rows": _precheck_existing_rows,
+                            "signal": _precheck_existing_signal,
+                        },
+                        "timestamp": int(time.time() * 1000),
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+    except Exception:
+        pass
+    # endregion agent log
+
+    _precheck_already_present = _precheck_existing_rows > 0 or "url_has_precheck_rowid" in _precheck_existing_signal
+    if _precheck_already_present:
+        note(
+            f"{log_prefix}: Pre-check already has row(s) "
+            f"(rows={_precheck_existing_rows}, signal={_precheck_existing_signal or 'n/a'}) — "
+            "skipping Pre-check entry and continuing to PDI."
+        )
+
     def _click_precheck_pick_icon(stage_label: str) -> tuple[bool, str]:
         _used = ""
         _ok = False
@@ -6831,9 +6909,43 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 break
         if not _ok_done_local:
             note(f"{log_prefix}: OK button not found on pick applet ({stage_label}; best-effort).")
+        # region agent log
+        try:
+            import json as _json_pick_out
+
+            with open(
+                Path(__file__).resolve().parents[3] / "debug-0875fe.log",
+                "a",
+                encoding="utf-8",
+            ) as _lf_pick_out:
+                _lf_pick_out.write(
+                    _json_pick_out.dumps(
+                        {
+                            "sessionId": "0875fe",
+                            "runId": "pre-fix",
+                            "hypothesisId": "G4",
+                            "location": "siebel_dms_playwright.py:_siebel_run_vehicle_serial_detail_precheck_pdi",
+                            "message": "precheck_pick_applet_completion",
+                            "data": {
+                                "stage": stage_label,
+                                "ok_clicked": _ok_done_local,
+                                "had_search_or_enter_fallback": _pick_ok,
+                            },
+                            "timestamp": int(time.time() * 1000),
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n"
+                )
+        except Exception:
+            pass
+        # endregion agent log
         return _ok_done_local
 
-    _precheck_icon_ok, _precheck_icon_used = _click_precheck_pick_icon("precheck_open_status")
+    _precheck_icon_ok = True
+    _precheck_icon_used = ""
+    if not _precheck_already_present:
+        _precheck_icon_ok, _precheck_icon_used = _click_precheck_pick_icon("precheck_open_status")
     # region agent log
     try:
         import json as _json_pc_icon
@@ -6867,89 +6979,105 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     # endregion agent log
     if not _precheck_icon_ok:
         return False, (
-            "Could not click Pre-check technician applet icon "
+            "Could not click Pre-check pick icon for Open status "
             "(tried s_3_2_25_0_icon, s_3_1_12_0_Ctrl)."
         )
 
-    _pick_first_row_and_ok("precheck_open_status")
+    if not _precheck_already_present:
+        _open_pick_complete = _pick_first_row_and_ok("precheck_open_status")
+        if not _open_pick_complete:
+            return (
+                False,
+                "Pre-check: Open status pick applet did not complete (row/OK not confirmed). "
+                "Technician step was not run; Pre-check Submit and PDI were skipped.",
+            )
 
-    # Move focus to the next editable cell (Technician) and open its pick applet.
-    _tech_icon_ok = False
-    _tech_icon_used = ""
-    try:
-        page.keyboard.press("Tab")
-        _safe_page_wait(page, 250, log_label="after_precheck_open_tab_to_technician")
-        # region agent log
+        # Move focus to the next editable cell (Technician) and open its pick applet.
+        _tech_icon_ok = False
+        _tech_icon_used = ""
         try:
-            import json as _json_pc_tab
+            page.keyboard.press("Tab")
+            _safe_page_wait(page, 250, log_label="after_precheck_open_tab_to_technician")
+            # region agent log
+            try:
+                import json as _json_pc_tab
 
-            with open(
-                Path(__file__).resolve().parents[3] / "debug-0875fe.log",
-                "a",
-                encoding="utf-8",
-            ) as _lf_pc_tab:
-                _lf_pc_tab.write(
-                    _json_pc_tab.dumps(
-                        {
-                            "sessionId": "0875fe",
-                            "runId": "pre-fix",
-                            "hypothesisId": "G3",
-                            "location": "siebel_dms_playwright.py:_siebel_run_vehicle_serial_detail_precheck_pdi",
-                            "message": "precheck_tab_to_technician_cell",
-                            "data": {"tab_pressed": True},
-                            "timestamp": int(time.time() * 1000),
-                        },
-                        ensure_ascii=False,
+                with open(
+                    Path(__file__).resolve().parents[3] / "debug-0875fe.log",
+                    "a",
+                    encoding="utf-8",
+                ) as _lf_pc_tab:
+                    _lf_pc_tab.write(
+                        _json_pc_tab.dumps(
+                            {
+                                "sessionId": "0875fe",
+                                "runId": "pre-fix",
+                                "hypothesisId": "G3",
+                                "location": "siebel_dms_playwright.py:_siebel_run_vehicle_serial_detail_precheck_pdi",
+                                "message": "precheck_tab_to_technician_cell",
+                                "data": {"tab_pressed": True},
+                                "timestamp": int(time.time() * 1000),
+                            },
+                            ensure_ascii=False,
+                        )
+                        + "\n"
                     )
-                    + "\n"
-                )
+            except Exception:
+                pass
+            # endregion agent log
         except Exception:
             pass
-        # endregion agent log
-    except Exception:
-        pass
 
-    _tech_icon_ok, _tech_icon_used = _click_precheck_pick_icon("precheck_technician_after_tab")
-    if _tech_icon_ok:
+        _tech_icon_ok, _tech_icon_used = _click_precheck_pick_icon("precheck_technician_after_tab")
+        if not _tech_icon_ok:
+            return (
+                False,
+                "Pre-check: Technician pick icon not found after moving focus from Open (Tab). "
+                "Pick applet for Technician did not open; Pre-check Submit and PDI were skipped.",
+            )
         note(f"{log_prefix}: technician pick icon clicked after Tab (id={_tech_icon_used!r}).")
-        _pick_first_row_and_ok("precheck_technician_after_tab")
-    else:
-        note(f"{log_prefix}: technician pick icon not found after Tab (best-effort).")
+        _tech_pick_complete = _pick_first_row_and_ok("precheck_technician_after_tab")
+        if not _tech_pick_complete:
+            return (
+                False,
+                "Pre-check: Technician pick applet did not complete (row/OK not confirmed). "
+                "Pre-check Submit and PDI were skipped.",
+            )
 
-    _submit_done = False
-    for root in _roots():
-        for sub_css in (
-            "button:has-text('Submit')",
-            "a:has-text('Submit')",
-            "input[type='button'][value='Submit' i]",
-            "button[aria-label*='Submit' i]",
-            "a[aria-label*='Submit' i]",
-            "button[title*='Submit' i]",
-            "a[title*='Submit' i]",
-        ):
-            try:
-                sub_loc = root.locator(sub_css).first
-                if sub_loc.count() > 0 and sub_loc.is_visible(timeout=700):
-                    try:
-                        sub_loc.click(timeout=_tmo)
-                    except Exception:
-                        sub_loc.click(timeout=_tmo, force=True)
-                    _submit_done = True
-                    note(f"{log_prefix}: clicked Submit (Pre-check).")
-                    _safe_page_wait(page, 1500, log_label="after_precheck_submit")
-                    break
-            except Exception:
-                continue
-        if _submit_done:
-            break
-    if not _submit_done:
-        return False, "Could not click Submit button on Pre-check."
+        _submit_done = False
+        for root in _roots():
+            for sub_css in (
+                "button:has-text('Submit')",
+                "a:has-text('Submit')",
+                "input[type='button'][value='Submit' i]",
+                "button[aria-label*='Submit' i]",
+                "a[aria-label*='Submit' i]",
+                "button[title*='Submit' i]",
+                "a[title*='Submit' i]",
+            ):
+                try:
+                    sub_loc = root.locator(sub_css).first
+                    if sub_loc.count() > 0 and sub_loc.is_visible(timeout=700):
+                        try:
+                            sub_loc.click(timeout=_tmo)
+                        except Exception:
+                            sub_loc.click(timeout=_tmo, force=True)
+                        _submit_done = True
+                        note(f"{log_prefix}: clicked Submit (Pre-check).")
+                        _safe_page_wait(page, 1500, log_label="after_precheck_submit")
+                        break
+                except Exception:
+                    continue
+            if _submit_done:
+                break
+        if not _submit_done:
+            return False, "Could not click Submit button on Pre-check."
 
-    _submit_err = _detect_siebel_error_popup(page, content_frame_selector)
-    if _submit_err:
-        note(f"{log_prefix}: Siebel error after Pre-check Submit → {_submit_err!r:.300}")
-        return False, f"Siebel error after Pre-check Submit: {_submit_err[:200]}"
-    note(f"{log_prefix}: Pre-check completed.")
+        _submit_err = _detect_siebel_error_popup(page, content_frame_selector)
+        if _submit_err:
+            note(f"{log_prefix}: Siebel error after Pre-check Submit → {_submit_err!r:.300}")
+            return False, f"Siebel error after Pre-check Submit: {_submit_err[:200]}"
+        note(f"{log_prefix}: Pre-check completed.")
 
     _pdi_tab_clicked = _click_third_level_view_bar_tab("PDI", wait_ms=1500)
     for root in _roots():
