@@ -69,6 +69,20 @@
 | Bulk worker | API-integrated loops or `python backend/run_bulk_worker.py` for a standalone worker. |
 | Queue mode | Use local fallback by default, or configure SQS in `backend/.env`. |
 
+### 3.1 External portal URLs (production)
+
+Configure **`backend/.env`** (copy from **`backend/.env.example`**). The API validates **`DMS_BASE_URL`**, **`VAHAN_BASE_URL`**, and **`INSURANCE_BASE_URL`** at startup.
+
+| Variable | Role |
+|----------|------|
+| **`DMS_BASE_URL`** | Hero Connect / Siebel entry URL (same host you open in Edge after login). |
+| **`DMS_MODE`** | Default **`real`** (aliases: `siebel`, `live`, `production`, `hero`). **`dummy`** is rejected. |
+| **`DMS_REAL_URL_CONTACT`** | Full **GotoView** URL for Contact Find (required for Fill DMS). Optional **`DMS_REAL_URL_*`** for other screens — see **LLD §2.4b** / **`.env.example`**. |
+| **`VAHAN_BASE_URL`** | Production VAHAN portal base; automated fill/pay in-repo are stubbed until implemented. |
+| **`INSURANCE_BASE_URL`** | Insurer portal root opened by Playwright (e.g. Hero MISP). |
+
+**`GET /settings/site-urls`** exposes bases and **`dms_mode`** to the client (no secrets).
+
 ---
 
 ## 4. Security (Target)
@@ -123,3 +137,4 @@ When adding or changing features, update the relevant docs:
 | 0.1 | Mar 2025 | — | Initial technical architecture |
 | 0.2 | Mar 2026 | — | Updated queue, worker, local file storage, bulk processing, and automation artifact architecture |
 | 0.3 | Mar 2026 | — | §6 optional **Cursor Bugbot** setup (dashboard/Git integration, not VSIX) |
+| 0.4 | Mar 2026 | — | §3.1 **External portal URLs** — **`backend/.env`** for DMS/Siebel, VAHAN, Insurance; **`DMS_MODE`** default **real** |

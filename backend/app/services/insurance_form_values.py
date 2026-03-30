@@ -1,4 +1,7 @@
-"""Load and normalize insurance/MISP fill values from ``form_insurance_view`` and optional OCR JSON (insurer)."""
+"""Load and normalize insurance/MISP fill values from ``form_insurance_view`` plus ``add_sales_staging.payload_json`` (when ``staging_id`` is used) and OCR JSON (insurer fallback).
+
+Add Sales passes the same ``staging_id`` as Create Invoice (DMS) so the view (committed masters) and staging (full OCR merge) jointly supply the insurance flow — see BR-20.
+"""
 from __future__ import annotations
 
 import json
@@ -29,6 +32,31 @@ def read_insurance_insurer_from_ocr_json(ocr_output_dir: Path | None, subfolder:
         return ""
 
 
+def _apply_staging_insurance_overlay(values: dict, staging_payload: dict | None) -> None:
+    """Fill empty insurer / nominee / nominee_gender from staging ``insurance`` blob."""
+    if not staging_payload or not isinstance(staging_payload, dict):
+        return
+    ins = staging_payload.get("insurance") if isinstance(staging_payload.get("insurance"), dict) else {}
+
+    def take_if_empty(key: str, raw: object) -> None:
+        if values.get(key):
+            return
+        if raw is None:
+            return
+        t = clean_text(raw) if isinstance(raw, str) else clean_text(str(raw))
+        if t:
+            values[key] = t
+
+    take_if_empty("insurer", ins.get("insurer"))
+    take_if_empty("nominee_name", ins.get("nominee_name"))
+    take_if_empty("nominee_relationship", ins.get("nominee_relationship"))
+    if not values.get("nominee_age") and ins.get("nominee_age") is not None:
+        t = clean_text(str(ins.get("nominee_age")).strip())
+        if t:
+            values["nominee_age"] = t
+    take_if_empty("nominee_gender", ins.get("nominee_gender"))
+
+
 def load_latest_insurance_values(customer_id: int, vehicle_id: int) -> dict:
     conn = get_connection()
     try:
@@ -53,9 +81,15 @@ def build_insurance_fill_values(
     vehicle_id: int | None,
     subfolder: str | None = None,
     ocr_output_dir: Path | None = None,
+    *,
+    staging_payload: dict | None = None,
 ) -> dict:
     """
-    Build MISP fill dict from ``form_insurance_view`` (chassis, customer, nominee, insurer, etc.).
+    Build MISP fill dict from ``form_insurance_view`` (chassis, customer, vehicle, dealer context).
+    When ``staging_payload`` is set (``add_sales_staging.payload_json``), fills empty **insurer** / **nominee**
+    fields from the embedded **insurance** object so OCR merge is available before
+    ``insurance_master`` is populated after a **successful** Generate Insurance run (UPSERT). Insurer may still fall back to **OCR_To_be_Used.json** when view
+    and staging lack it.
     Proposal-only controls (email default, add-ons, CPA, payment mode, registration date) are **not**
     sourced here — Playwright uses hardcoded defaults for those until persisted columns exist.
     """
@@ -67,12 +101,10 @@ def build_insurance_fill_values(
             "(requires a matching sales_master row)."
         )
     insurer_db = clean_text(row.get("insurer"))
-    insurer_json = read_insurance_insurer_from_ocr_json(ocr_output_dir, subfolder)
-    insurer_effective = insurer_db or insurer_json
     fn = clean_text(row.get("frame_no"))
     values = {
         "subfolder": clean_text(subfolder),
-        "insurer": insurer_effective,
+        "insurer": insurer_db,
         "mobile_number": clean_text(row.get("mobile_number"))[:10],
         "alt_phone_num": clean_text(row.get("alt_phone_num"))[:16],
         "customer_name": clean_text(row.get("customer_name")),
@@ -99,8 +131,12 @@ def build_insurance_fill_values(
         "nominee_gender": clean_text(row.get("nominee_gender")),
         "financer_name": clean_text(row.get("financer_name")),
     }
+    _apply_staging_insurance_overlay(values, staging_payload)
+    insurer_json = read_insurance_insurer_from_ocr_json(ocr_output_dir, subfolder)
+    if not values.get("insurer"):
+        values["insurer"] = insurer_json
     required = [
-        ("insurance_master.insurer (or OCR details insurer)", values["insurer"]),
+        ("insurance_master.insurer (or staging / OCR details insurer)", values["insurer"]),
         ("customer_master.mobile_number", values["mobile_number"]),
         ("customer_master.name", values["customer_name"]),
         ("vehicle_master.chassis / frame", values["frame_no"]),
@@ -109,9 +145,9 @@ def build_insurance_fill_values(
     missing = [label for label, val in required if not val]
     if missing:
         raise ValueError("Missing required Insurance DB values: " + ", ".join(missing))
-    if insurer_json and not insurer_db:
+    if insurer_json and not insurer_db and values.get("insurer") == insurer_json:
         logger.info(
-            "Insurance: using insurer from OCR JSON (%r); insurance_master had no insurer",
+            "Insurance: using insurer from OCR JSON (%r); view/staging had no insurer",
             insurer_json[:80],
         )
     return values

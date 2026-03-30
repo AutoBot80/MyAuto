@@ -179,7 +179,6 @@ def process_bulk_pdf(
                 "profession": insurance.get("profession"),
                 "financier": insurance.get("financier"),
                 "marital_status": insurance.get("marital_status"),
-                "nominee_gender": insurance.get("nominee_gender"),
             },
             vehicle={
                 "frame_no": vehicle.get("chassis") or vehicle.get("frame_num") or vehicle.get("frame_no"),
@@ -191,6 +190,7 @@ def process_bulk_pdf(
                 "nominee_name": insurance.get("nominee_name"),
                 "nominee_age": insurance.get("nominee_age"),
                 "nominee_relationship": insurance.get("nominee_relationship"),
+                "nominee_gender": insurance.get("nominee_gender"),
                 "insurer": insurance.get("insurer"),
                 "policy_num": insurance.get("policy_num"),
                 "policy_from": insurance.get("policy_from"),

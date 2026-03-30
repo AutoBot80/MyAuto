@@ -2,7 +2,9 @@
 import asyncio
 import logging
 import re
+from copy import deepcopy
 from pathlib import Path
+from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -37,11 +39,10 @@ DMS_NO_VEHICLE_ERROR = (
     "No such vehicle found in DMS. Please edit Vehicle Info and submit form again."
 )
 
-# Shown when DMS_MODE=real: URLs open but Siebel field entry is not implemented yet.
+# Shown when Siebel automation did not complete (no contact/vehicle fill).
 DMS_REAL_MODE_FORMS_NOT_FILLED_WARNING = (
-    "DMS_MODE=real: Siebel automation did not complete (no contact/vehicle fill). "
-    "Check backend logs, set DMS_SIEBEL_CONTENT_FRAME_SELECTOR / DMS_SIEBEL_MOBILE_ARIA_HINTS if needed, "
-    "or set DMS_MODE=dummy for the training site."
+    "Siebel automation did not complete (no contact/vehicle fill). "
+    "Check backend logs and set DMS_SIEBEL_CONTENT_FRAME_SELECTOR / DMS_SIEBEL_MOBILE_ARIA_HINTS if needed."
 )
 
 
@@ -52,7 +53,13 @@ def _normalize_automation_error(raw_error: str | None) -> str | None:
     if not message:
         return None
 
-    if "Missing required DMS DB values:" in message:
+    if "Missing required DMS DB values:" in message or "Missing required DMS fields" in message:
+        if "Missing required DMS fields" in message:
+            tail = message.split("Missing required DMS fields", 1)[-1].lstrip()
+            return (
+                "DMS cannot continue because required fields are missing in the staging payload or database. "
+                + tail
+            )
         fields = [p.strip() for p in message.split(":", 1)[1].split(",") if p.strip()]
         if not fields:
             return "DMS cannot continue because required database fields are missing."
@@ -147,6 +154,10 @@ class FillDmsRequest(BaseModel):
     vahan_base_url: str | None = None
     rto_dealer_id: str | None = None
     dealer_id: int | None = None
+    staging_id: str | None = Field(
+        None,
+        description="add_sales_staging UUID (draft or committed); DMS fill from payload_json when set.",
+    )
     customer_id: int | None = None
     vehicle_id: int | None = None
     customer: FillDmsCustomer = FillDmsCustomer()
@@ -160,7 +171,15 @@ class FillDmsResponse(BaseModel):
     application_id: str | None = None
     rto_fees: float | None = None
     error: str | None = None
-    # When set (e.g. DMS_MODE=real), UI must not claim forms were auto-filled.
+    customer_id: int | None = Field(
+        default=None,
+        description="After staging-path DMS success: committed customer_master id.",
+    )
+    vehicle_id: int | None = Field(
+        default=None,
+        description="After staging-path DMS success: committed vehicle_master id.",
+    )
+    # When set, UI must not claim forms were auto-filled.
     warning: str | None = None
     dms_automation_mode: str | None = None
     # Ordered checklist labels completed during the last DMS run (Add Sales banner).
@@ -198,6 +217,10 @@ class FillInsuranceRequest(BaseModel):
     customer_id: int | None = None
     vehicle_id: int | None = None
     subfolder: str | None = None
+    staging_id: str | None = Field(
+        None,
+        description="Optional add_sales_staging UUID; merges payload_json insurance/customer fields into fill when view omits them.",
+    )
 
 
 class FillInsuranceResponse(BaseModel):
@@ -217,6 +240,10 @@ class FillHeroInsuranceRequest(BaseModel):
     vehicle_id: int | None = None
     subfolder: str | None = None
     dealer_id: int | None = None
+    staging_id: str | None = Field(
+        None,
+        description="Optional add_sales_staging UUID (draft or committed); merges OCR/Submit snapshot into insurer/nominee when form_insurance_view is sparse.",
+    )
 
 
 class FillHeroInsuranceResponse(BaseModel):
@@ -245,6 +272,57 @@ def _safe_subfolder_name(subfolder: str) -> str:
     """Safe directory name for ocr_output."""
     import re
     return re.sub(r"[^\w\-]", "_", (subfolder or "").strip()) or "default"
+
+
+def _fill_dms_staging_or_ids(
+    staging_id: str | None,
+    dealer_id: int,
+    customer_id: int | None,
+    vehicle_id: int | None,
+    customer_dict: dict,
+    vehicle_dict: dict,
+) -> tuple[dict | None, int | None, int | None]:
+    """
+    Returns ``(staging_payload, customer_id, vehicle_id)``.
+    When ``staging_id`` is set, loads ``add_sales_staging`` (``draft`` or ``committed``) and merges request overrides.
+    Otherwise requires both ``customer_id`` and ``vehicle_id`` (legacy master-backed path).
+    """
+    sid = (staging_id or "").strip()
+    if sid:
+        try:
+            UUID(sid)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="staging_id must be a valid UUID") from None
+        from app.repositories.add_sales_staging import fetch_staging_payload
+
+        raw = fetch_staging_payload(sid, dealer_id)
+        if not raw:
+            raise HTTPException(
+                status_code=404,
+                detail="Staging not found, abandoned, or dealer_id does not match.",
+            )
+        payload = deepcopy(raw)
+        if customer_dict:
+            c = {k: v for k, v in customer_dict.items() if v is not None and str(v).strip() != ""}
+            if c:
+                payload.setdefault("customer", {})
+                if not isinstance(payload["customer"], dict):
+                    payload["customer"] = {}
+                payload["customer"].update(c)
+        if vehicle_dict:
+            v = {k: v2 for k, v2 in vehicle_dict.items() if v2 is not None and str(v2).strip() != ""}
+            if v:
+                payload.setdefault("vehicle", {})
+                if not isinstance(payload["vehicle"], dict):
+                    payload["vehicle"] = {}
+                payload["vehicle"].update(v)
+        return payload, None, None
+    if customer_id is None or vehicle_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide staging_id (OCR staging snapshot) or both customer_id and vehicle_id.",
+        )
+    return None, customer_id, vehicle_id
 
 
 def _require_absolute_http_url(url: str, field_name: str) -> str:
@@ -318,10 +396,19 @@ async def fill_dms_only(req: FillDmsRequest) -> FillDmsResponse:
     if req.customer.mobile:
         customer_dict["mobile"] = req.customer.mobile
     vehicle_dict = req.vehicle.model_dump(exclude_none=True)
+    staging_payload, cid, vid = _fill_dms_staging_or_ids(
+        req.staging_id,
+        did,
+        req.customer_id,
+        req.vehicle_id,
+        customer_dict,
+        vehicle_dict,
+    )
+    sid_for_commit = (req.staging_id or "").strip() or None
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(
         None,
-        lambda: run_fill_dms_only(
+        lambda sid=sid_for_commit: run_fill_dms_only(
             dms_base_url=base_url,
             subfolder=req.subfolder,
             customer=customer_dict,
@@ -331,8 +418,10 @@ async def fill_dms_only(req: FillDmsRequest) -> FillDmsResponse:
             uploads_dir=uploads_dir,
             ocr_output_dir=Path(get_ocr_output_dir(did)),
             dealer_id=did,
-            customer_id=req.customer_id,
-            vehicle_id=req.vehicle_id,
+            customer_id=cid,
+            vehicle_id=vid,
+            staging_payload=staging_payload,
+            staging_id=sid,
         ),
     )
     scraped = result.get("vehicle") or {}
@@ -341,13 +430,15 @@ async def fill_dms_only(req: FillDmsRequest) -> FillDmsResponse:
     skip_no_vehicle = result.get("dms_automation_mode") == "real" and not result.get("dms_siebel_forms_filled")
     if result.get("error") is None and not has_vehicle and not skip_no_vehicle:
         result["error"] = DMS_NO_VEHICLE_ERROR
-    if req.vehicle_id and has_vehicle:
+    if vid and has_vehicle:
         try:
-            _update_vehicle_master_from_dms(req.vehicle_id, scraped)
+            _update_vehicle_master_from_dms(vid, scraped)
         except Exception as e:
-            logger.warning("fill_dms: vehicle_master update failed vehicle_id=%s: %s", req.vehicle_id, e)
+            logger.warning("fill_dms: vehicle_master update failed vehicle_id=%s: %s", vid, e)
 
     warn, dms_mode = _dms_response_warning_and_mode(result)
+    cc = result.get("committed_customer_id")
+    vv = result.get("committed_vehicle_id")
     return FillDmsResponse(
         success=result.get("error") is None,
         vehicle=scraped,
@@ -355,6 +446,8 @@ async def fill_dms_only(req: FillDmsRequest) -> FillDmsResponse:
         application_id=None,
         rto_fees=None,
         error=_normalize_automation_error(result.get("error")),
+        customer_id=int(cc) if cc is not None else None,
+        vehicle_id=int(vv) if vv is not None else None,
         warning=warn,
         dms_automation_mode=dms_mode,
         dms_milestones=list(result.get("dms_milestones") or []),
@@ -482,7 +575,8 @@ async def fill_hero_insurance(req: FillHeroInsuranceRequest = FillHeroInsuranceR
     """
     Hero Insurance: ``pre_process`` (Sign In → 2W → New Policy → insurer / OVD / mobile / KYC **Proceed**
     or uploads) then ``main_process`` (VIN/chassis from ``form_insurance_view``, proposal defaults hardcoded).
-    Requires ``customer_id`` and ``vehicle_id`` for the main stage.
+    Requires ``customer_id`` and ``vehicle_id`` for the main stage. Optional ``staging_id`` merges
+    ``add_sales_staging.payload_json`` (OCR merge) for insurer/nominee when the view has no ``insurance_master`` row yet.
     """
     url = (req.insurance_base_url or INSURANCE_BASE_URL or "").strip()
     if url:
@@ -491,6 +585,22 @@ async def fill_hero_insurance(req: FillHeroInsuranceRequest = FillHeroInsuranceR
     ocr_dir = Path(get_ocr_output_dir(did))
     loop = asyncio.get_event_loop()
 
+    staging_payload = None
+    sid = (req.staging_id or "").strip()
+    if sid:
+        try:
+            UUID(sid)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="staging_id must be a valid UUID") from None
+        from app.repositories.add_sales_staging import fetch_staging_payload
+
+        staging_payload = fetch_staging_payload(sid, did)
+        if not staging_payload:
+            raise HTTPException(
+                status_code=404,
+                detail="Staging not found, abandoned, or dealer_id does not match.",
+            )
+
     def _hero_insurance_run() -> dict:
         pre = pre_process(
             insurance_base_url=url if url else None,
@@ -498,6 +608,7 @@ async def fill_hero_insurance(req: FillHeroInsuranceRequest = FillHeroInsuranceR
             vehicle_id=req.vehicle_id,
             subfolder=req.subfolder,
             ocr_output_dir=ocr_dir,
+            staging_payload=staging_payload,
         )
         main = main_process(
             pre_result=pre,
@@ -505,6 +616,7 @@ async def fill_hero_insurance(req: FillHeroInsuranceRequest = FillHeroInsuranceR
             vehicle_id=req.vehicle_id,
             subfolder=req.subfolder,
             ocr_output_dir=ocr_dir,
+            staging_payload=staging_payload,
         )
         return post_process(pre_result=pre, main_result=main)
 
@@ -527,6 +639,23 @@ async def fill_insurance_only(req: FillInsuranceRequest) -> FillInsuranceRespons
     insurance_url = _require_absolute_http_url(insurance_url, "insurance_base_url")
     did = req.dealer_id if req.dealer_id is not None else DEALER_ID
     loop = asyncio.get_event_loop()
+
+    staging_payload = None
+    sid = (req.staging_id or "").strip()
+    if sid:
+        try:
+            UUID(sid)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="staging_id must be a valid UUID") from None
+        from app.repositories.add_sales_staging import fetch_staging_payload
+
+        staging_payload = fetch_staging_payload(sid, did)
+        if not staging_payload:
+            raise HTTPException(
+                status_code=404,
+                detail="Staging not found, abandoned, or dealer_id does not match.",
+            )
+
     result = await loop.run_in_executor(
         None,
         lambda: run_fill_insurance_only(
@@ -535,6 +664,7 @@ async def fill_insurance_only(req: FillInsuranceRequest) -> FillInsuranceRespons
             customer_id=req.customer_id,
             vehicle_id=req.vehicle_id,
             ocr_output_dir=Path(get_ocr_output_dir(did)),
+            staging_payload=staging_payload,
         ),
     )
     return FillInsuranceResponse(
@@ -565,10 +695,19 @@ async def fill_dms(req: FillDmsRequest) -> FillDmsResponse:
     if vahan_url:
         vahan_url = _require_absolute_http_url(vahan_url, "vahan_base_url")
     logger.info("fill_dms: calling run_fill_dms base_url=%s vahan_url=%s", base_url[:60] if base_url else None, (vahan_url[:60] if vahan_url else None))
+    staging_payload, cid, vid = _fill_dms_staging_or_ids(
+        req.staging_id,
+        did,
+        req.customer_id,
+        req.vehicle_id,
+        customer_dict,
+        vehicle_dict,
+    )
+    sid_for_commit = (req.staging_id or "").strip() or None
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(
         None,
-        lambda: run_fill_dms(
+        lambda sid=sid_for_commit: run_fill_dms(
             dms_base_url=base_url,
             subfolder=req.subfolder,
             customer=customer_dict,
@@ -580,8 +719,10 @@ async def fill_dms(req: FillDmsRequest) -> FillDmsResponse:
             vahan_base_url=vahan_url,
             rto_dealer_id=req.rto_dealer_id,
             dealer_id=did,
-            customer_id=req.customer_id,
-            vehicle_id=req.vehicle_id,
+            customer_id=cid,
+            vehicle_id=vid,
+            staging_payload=staging_payload,
+            staging_id=sid,
         ),
     )
     scraped = result.get("vehicle") or {}
@@ -598,13 +739,15 @@ async def fill_dms(req: FillDmsRequest) -> FillDmsResponse:
     if result.get("error") is None and not has_vehicle and not skip_nv:
         result["error"] = DMS_NO_VEHICLE_ERROR
 
-    if req.vehicle_id and has_vehicle:
+    if vid and has_vehicle:
         try:
-            _update_vehicle_master_from_dms(req.vehicle_id, scraped)
+            _update_vehicle_master_from_dms(vid, scraped)
         except Exception as e:
-            logger.warning("fill_dms: vehicle_master update failed vehicle_id=%s: %s", req.vehicle_id, e)
+            logger.warning("fill_dms: vehicle_master update failed vehicle_id=%s: %s", vid, e)
 
     warn, dms_mode = _dms_response_warning_and_mode(result)
+    cc = result.get("committed_customer_id")
+    vv = result.get("committed_vehicle_id")
     return FillDmsResponse(
         success=result.get("error") is None,
         vehicle=scraped,
@@ -612,6 +755,8 @@ async def fill_dms(req: FillDmsRequest) -> FillDmsResponse:
         application_id=result.get("application_id"),
         rto_fees=result.get("rto_fees"),
         error=_normalize_automation_error(result.get("error")),
+        customer_id=int(cc) if cc is not None else None,
+        vehicle_id=int(vv) if vv is not None else None,
         warning=warn,
         dms_automation_mode=dms_mode,
         dms_milestones=list(result.get("dms_milestones") or []),

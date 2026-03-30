@@ -199,7 +199,7 @@ export function ViewCustomerPage({ initialMobile = "", dealerId = DEALER_ID }: V
               </div>
               <div className="view-customer-detail-item">
                 <span className="vc-label">Nominee Gender</span>
-                <span className="vc-value">{cust.nominee_gender ?? "—"}</span>
+                <span className="vc-value">{selectedIns?.nominee_gender ?? "—"}</span>
               </div>
               <div className="view-customer-detail-item">
                 <span className="vc-label">Address</span>

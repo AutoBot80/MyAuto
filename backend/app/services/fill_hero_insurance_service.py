@@ -2,7 +2,7 @@
 Hero Insurance (MISP) Playwright flow: **pre_process** ends after KYC **Proceed** (or upload + Proceed)
 on the VIN page; **main_process** fills VIN from DB (**``full_chassis``** via ``form_insurance_view``),
 **Submit**, **I agree**, then the proposal form. Proposer/vehicle/nominee fields come from the view;
-email, add-ons, CPA, HDFC, and registration date use **hardcoded** defaults. **Proposal Review** last.
+email, add-ons, CPA, HDFC, and registration date use **hardcoded** defaults. **Proposal Review**, then **Issue Policy**; scrape **policy number** and **insurance cost** again and persist via ``update_insurance_master_policy_after_issue``.
 Browser reuse uses ``handle_browser_opening.get_or_open_site_page`` with ``match_base`` from **pre_process**.
 """
 import logging
@@ -10,6 +10,7 @@ import re
 import urllib.parse
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 from playwright.sync_api import TimeoutError as PlaywrightTimeout
 
@@ -18,6 +19,10 @@ from app.config import (
     INSURANCE_BASE_URL,
     INSURANCE_LOGIN_WAIT_MS,
     INSURANCE_POLICY_FILL_TIMEOUT_MS,
+)
+from app.services.add_sales_commit_service import (
+    insert_insurance_master_after_gi,
+    update_insurance_master_policy_after_issue,
 )
 from app.services.handle_browser_opening import get_or_open_site_page
 from app.services.insurance_form_values import (
@@ -538,6 +543,163 @@ def _set_checkbox_matching_text(
         logger.debug("Hero Insurance: checkbox toggle %r: %s", text_pattern[:40], exc)
 
 
+def _normalize_policy_num_for_db(raw: str) -> str | None:
+    t = (raw or "").strip()
+    if not t:
+        return None
+    t = re.sub(r"\s+", " ", t)
+    if len(t) > 24:
+        t = t[:24]
+    return t or None
+
+
+def _parse_currency_amount_text(raw: str) -> float | None:
+    """Parse amounts like '₹ 4,523.00', 'Rs.1523', '1,234.5' to float."""
+    if not raw or not str(raw).strip():
+        return None
+    s = str(raw).strip()
+    s = re.sub(r"^[₹Rs.,\sINR]+", "", s, flags=re.I)
+    s = re.sub(r"[₹Rs.\s]+$", "", s, flags=re.I)
+    s = s.replace(",", "").strip()
+    if not s:
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def scrape_insurance_policy_preview_before_issue(page, *, timeout_ms: int) -> dict[str, Any]:
+    """
+    Read **policy number** and **insurance cost** (total premium) from the proposal/preview or
+    post-**Issue Policy** confirmation — dummy IDs ``#ins-preview-policy-num`` /
+    ``#ins-preview-insurance-cost``, then label/body heuristics for real MISP.
+    """
+    out: dict[str, Any] = {"policy_num": None, "insurance_cost": None}
+    to = max(2_000, min(int(timeout_ms), 25_000))
+
+    try:
+        loc_p = page.locator("#ins-preview-policy-num")
+        if loc_p.count() > 0 and loc_p.first.is_visible(timeout=min(4_000, to)):
+            t = (loc_p.first.inner_text() or "").strip()
+            pn = _normalize_policy_num_for_db(t)
+            if pn:
+                out["policy_num"] = pn
+    except Exception as exc:
+        logger.debug("Insurance preview scrape policy (dummy id): %s", exc)
+
+    try:
+        loc_c = page.locator("#ins-preview-insurance-cost")
+        if loc_c.count() > 0 and loc_c.first.is_visible(timeout=min(4_000, to)):
+            t = (loc_c.first.inner_text() or "").strip()
+            amt = _parse_currency_amount_text(t)
+            if amt is not None:
+                out["insurance_cost"] = amt
+    except Exception as exc:
+        logger.debug("Insurance preview scrape cost (dummy id): %s", exc)
+
+    # Nearby text for MISP-style labels (first matching row / cell)
+    if not out["policy_num"]:
+        for pat in (
+            re.compile(r"Policy\s*(?:Number|No\.?)\s*[:\s#]*\s*([A-Za-z0-9][A-Za-z0-9/\-]{3,31})", re.I),
+            re.compile(r"Proposal\s*(?:Number|No\.?)\s*[:\s#]*\s*([A-Za-z0-9][A-Za-z0-9/\-]{3,31})", re.I),
+        ):
+            try:
+                loc = page.get_by_text(pat)
+                if loc.count() > 0 and loc.first.is_visible(timeout=2_000):
+                    m = pat.search((loc.first.inner_text() or "")[:300])
+                    if m:
+                        cand = _normalize_policy_num_for_db(m.group(1).strip())
+                        if cand:
+                            out["policy_num"] = cand
+                            break
+            except Exception:
+                continue
+
+    body = ""
+    try:
+        body = (page.locator("body").inner_text(timeout=min(12_000, to)) or "")[:150_000]
+    except Exception:
+        body = ""
+
+    if not out["policy_num"] and body:
+        m = re.search(
+            r"(?:Policy|Proposal)\s*(?:Number|No\.?)\s*[:\s#]*\s*([A-Za-z0-9][A-Za-z0-9/\-]{3,31})",
+            body,
+            re.I | re.M,
+        )
+        if m:
+            out["policy_num"] = _normalize_policy_num_for_db(m.group(1))
+
+    if out["insurance_cost"] is None and body:
+        m = re.search(
+            r"(?:Insurance\s*[Cc]ost|Total\s*(?:Policy\s*)?[Pp]remium|Net\s*[Pp]remium|Final\s*[Pp]remium|"
+            r"Premium\s*(?:Amount|Paid|Payable)?|Amount\s*Payable)\s*[:\s]*\s*[₹RsINR.\s]*([\d][\d,]*(?:\.\d{1,2})?)",
+            body,
+            re.I | re.M,
+        )
+        if m:
+            amt = _parse_currency_amount_text(m.group(1))
+            if amt is not None:
+                out["insurance_cost"] = amt
+
+    if out["policy_num"] or out["insurance_cost"] is not None:
+        logger.info(
+            "Insurance policy preview scrape: policy_num=%r insurance_cost=%s",
+            out["policy_num"],
+            out["insurance_cost"],
+        )
+    return out
+
+
+def click_issue_policy_and_scrape_preview(page, *, timeout_ms: int) -> dict[str, Any]:
+    """
+    Click **Issue Policy** (dummy ``#ins-issue-policy`` or MISP button / text), wait for navigation,
+    then scrape ``policy_num`` and ``insurance_cost`` via ``scrape_insurance_policy_preview_before_issue``.
+    """
+    to = max(2_000, int(timeout_ms))
+    clicked = False
+    try:
+        loc = page.locator("#ins-issue-policy")
+        if loc.count() > 0 and loc.first.is_visible(timeout=min(4_000, to)):
+            loc.first.click(timeout=to)
+            clicked = True
+            logger.info("Hero Insurance: clicked Issue Policy (#ins-issue-policy).")
+    except Exception as exc:
+        logger.debug("Hero Insurance: Issue Policy dummy selector: %s", exc)
+    if not clicked:
+        try:
+            btn = page.get_by_role("button", name=re.compile(r"Issue\s*Policy", re.I))
+            if btn.count() > 0 and btn.first.is_visible(timeout=min(4_000, to)):
+                btn.first.click(timeout=to)
+                clicked = True
+                logger.info("Hero Insurance: clicked Issue Policy (role=button).")
+        except Exception as exc:
+            logger.debug("Hero Insurance: Issue Policy role=button: %s", exc)
+    if not clicked:
+        try:
+            link = page.get_by_role("link", name=re.compile(r"Issue\s*Policy", re.I))
+            if link.count() > 0 and link.first.is_visible(timeout=min(4_000, to)):
+                link.first.click(timeout=to)
+                clicked = True
+                logger.info("Hero Insurance: clicked Issue Policy (role=link).")
+        except Exception as exc:
+            logger.debug("Hero Insurance: Issue Policy role=link: %s", exc)
+    if not clicked:
+        try:
+            page.get_by_text(re.compile(r"^Issue\s*Policy", re.I)).first.click(timeout=min(8_000, to))
+            clicked = True
+            logger.info("Hero Insurance: clicked Issue Policy (get_by_text).")
+        except Exception as exc:
+            logger.debug("Hero Insurance: Issue Policy get_by_text: %s", exc)
+    _t(page, 600)
+    try:
+        page.wait_for_load_state("domcontentloaded", timeout=min(25_000, to * 4))
+    except Exception:
+        pass
+    return scrape_insurance_policy_preview_before_issue(page, timeout_ms=to)
+
+
 def _fill_date_of_registration_today(page, *, timeout_ms: int) -> None:
     """Hardcoded proposal default: **today** (local date)."""
     today = date.today()
@@ -567,8 +729,10 @@ def _fill_date_of_registration_today(page, *, timeout_ms: int) -> None:
         pass
 
 
-def _hero_misp_fill_proposal_and_review(page, values: dict, *, timeout_ms: int) -> str | None:
-    """Proposal page after **I agree**: customer/vehicle/nominee/add-ons/payment → **Proposal Review**."""
+def _hero_misp_fill_proposal_and_review(
+    page, values: dict, *, timeout_ms: int
+) -> tuple[str | None, dict[str, Any]]:
+    """Proposal page after **I agree**: … → **Proposal Review** → scrape preview before Issue Policy."""
     pt = max(int(timeout_ms), int(INSURANCE_POLICY_FILL_TIMEOUT_MS))
 
     try:
@@ -692,12 +856,19 @@ def _hero_misp_fill_proposal_and_review(page, values: dict, *, timeout_ms: int) 
         if rev.count() > 0 and rev.first.is_visible(timeout=3_000):
             rev.first.click(timeout=pt)
             logger.info("Hero Insurance: clicked Proposal Review.")
-            return None
-        page.get_by_text(re.compile(r"Proposal\s*Review", re.I)).first.click(timeout=pt)
-        logger.info("Hero Insurance: clicked Proposal Review (text).")
-        return None
+        else:
+            page.get_by_text(re.compile(r"Proposal\s*Review", re.I)).first.click(timeout=pt)
+            logger.info("Hero Insurance: clicked Proposal Review (text).")
     except Exception as exc:
-        return f"Proposal Review click failed: {exc!s}"
+        return f"Proposal Review click failed: {exc!s}", {}
+
+    _t(page, 600)
+    try:
+        page.wait_for_load_state("domcontentloaded", timeout=min(25_000, pt * 5))
+    except Exception:
+        pass
+    preview = scrape_insurance_policy_preview_before_issue(page, timeout_ms=pt)
+    return None, preview
 
 
 def pre_process(
@@ -707,6 +878,7 @@ def pre_process(
     vehicle_id: int | None = None,
     subfolder: str | None = None,
     ocr_output_dir: Path | None = None,
+    staging_payload: dict | None = None,
 ) -> dict:
     """
     Open **``INSURANCE_BASE_URL``** (reuse tab / launch browser like Fill DMS).
@@ -757,7 +929,11 @@ def pre_process(
     if customer_id is not None and vehicle_id is not None:
         try:
             values = build_insurance_fill_values(
-                customer_id, vehicle_id, subfolder, ocr_output_dir=ocr_output_dir
+                customer_id,
+                vehicle_id,
+                subfolder,
+                ocr_output_dir=ocr_output_dir,
+                staging_payload=staging_payload,
             )
         except Exception as exc:
             result["error"] = str(exc)
@@ -833,6 +1009,7 @@ def main_process(
     vehicle_id: int | None = None,
     subfolder: str | None = None,
     ocr_output_dir: Path | None = None,
+    staging_payload: dict | None = None,
 ) -> dict:
     """
     After **pre_process** (KYC **Proceed** → VIN page): fill VIN from DB (**``full_chassis``**),
@@ -864,7 +1041,11 @@ def main_process(
 
     try:
         values = build_insurance_fill_values(
-            customer_id, vehicle_id, subfolder, ocr_output_dir=ocr_output_dir
+            customer_id,
+            vehicle_id,
+            subfolder,
+            ocr_output_dir=ocr_output_dir,
+            staging_payload=staging_payload,
         )
     except Exception as exc:
         out["error"] = str(exc)
@@ -900,17 +1081,51 @@ def main_process(
                 ocr_output_dir, subfolder, "NOTE", f"main_process: VIN/I agree step failed: {err}"
             )
             return out
-        err = _hero_misp_fill_proposal_and_review(page, values, timeout_ms=to)
-        if err:
-            out["error"] = err
+        prop_err, preview = _hero_misp_fill_proposal_and_review(page, values, timeout_ms=to)
+        if prop_err:
+            out["error"] = prop_err
             append_playwright_insurance_line(
-                ocr_output_dir, subfolder, "NOTE", f"main_process: proposal form failed: {err}"
+                ocr_output_dir, subfolder, "NOTE", f"main_process: proposal form failed: {prop_err}"
             )
             return out
+        try:
+            insert_insurance_master_after_gi(
+                int(customer_id),
+                int(vehicle_id),
+                fill_values=values,
+                staging_payload=staging_payload,
+                preview_policy_num=preview.get("policy_num"),
+                preview_insurance_cost=preview.get("insurance_cost"),
+            )
+        except ValueError as persist_exc:
+            out["error"] = str(persist_exc)
+            append_playwright_insurance_line(
+                ocr_output_dir, subfolder, "ERROR", f"main_process: insurance_master insert failed: {persist_exc!s}"
+            )
+            return out
+        except Exception as persist_exc:
+            out["error"] = f"insurance_master insert failed: {persist_exc!s}"
+            append_playwright_insurance_line(
+                ocr_output_dir, subfolder, "ERROR", f"main_process: insurance_master insert failed: {persist_exc!s}"
+            )
+            return out
+        post_issue = click_issue_policy_and_scrape_preview(page, timeout_ms=to)
+        try:
+            update_insurance_master_policy_after_issue(
+                int(customer_id),
+                int(vehicle_id),
+                policy_num=post_issue.get("policy_num"),
+                insurance_cost=post_issue.get("insurance_cost"),
+            )
+        except Exception as upd_exc:
+            logger.warning("main_process: insurance_master post-issue update failed: %s", upd_exc)
         out["success"] = True
         out["error"] = None
         append_playwright_insurance_line(
-            ocr_output_dir, subfolder, "NOTE", "main_process: completed — Proposal Review clicked"
+            ocr_output_dir,
+            subfolder,
+            "NOTE",
+            "main_process: completed — Proposal Review, insurance_master insert, Issue Policy + scrape",
         )
         try:
             out["page_url"] = (page.url or "").strip() or None
@@ -1037,21 +1252,19 @@ def run_fill_insurance_only(
     customer_id: int | None = None,
     vehicle_id: int | None = None,
     ocr_output_dir: Path | None = None,
+    staging_payload: dict | None = None,
 ) -> dict:
     """
-    Fill Insurance screens using DB-backed values only (dummy training site flow).
-    Flow: open **login** (index) → operator signs in → wait for **KYC** → fill mobile → **Verify mobile** →
+    Fill Insurance portal from DB-backed values (``INSURANCE_BASE_URL`` = production MISP or partner login).
+    Flow: open **login** → operator signs in → wait for **KYC** → fill mobile → **Verify mobile** →
     if `need_docs`, attach three files → **Submit** (or legacy Proceed) → kyc-success → DMS entry → policy details.
     If KYC already on file for the mobile, consent + **Proceed** only.
     Uses ``require_login_on_open=False`` so one Fill Insurance run can wait for manual login (see INSURANCE_LOGIN_WAIT_MS).
-    Important behavior:
-    - do not click final submit/issue button on the policy page
-    - keep browser/tab open for operator review
     """
     result: dict = {"success": False, "error": None}
     reset_playwright_insurance_log(ocr_output_dir, subfolder)
     append_playwright_insurance_line(
-        ocr_output_dir, subfolder, "NOTE", "run_fill_insurance_only: starting dummy Fill Insurance flow"
+        ocr_output_dir, subfolder, "NOTE", "run_fill_insurance_only: starting Fill Insurance flow"
     )
     if not insurance_base_url or not insurance_base_url.strip():
         result["error"] = "insurance_base_url required"
@@ -1061,7 +1274,11 @@ def run_fill_insurance_only(
         return result
     try:
         values = build_insurance_fill_values(
-            customer_id, vehicle_id, subfolder, ocr_output_dir=ocr_output_dir
+            customer_id,
+            vehicle_id,
+            subfolder,
+            ocr_output_dir=ocr_output_dir,
+            staging_payload=staging_payload,
         )
         page, open_error = get_or_open_site_page(
             insurance_base_url, "Insurance", require_login_on_open=False
@@ -1073,7 +1290,6 @@ def run_fill_insurance_only(
             )
             return result
 
-        base = insurance_base_url.rstrip("/")
         page.set_default_timeout(INSURANCE_ACTION_TIMEOUT_MS)
         wait_err = _wait_for_insurance_kyc_after_login(page, insurance_base_url)
         if wait_err:
@@ -1082,11 +1298,6 @@ def run_fill_insurance_only(
                 ocr_output_dir, subfolder, "NOTE", f"run_fill_insurance_only: KYC wait failed: {wait_err}"
             )
             return result
-        if "dummy-insurance" in base.lower() and "kyc.html" not in (page.url or "").lower():
-            try:
-                page.goto(f"{base}/kyc.html", wait_until="domcontentloaded", timeout=20000)
-            except Exception:
-                logger.warning("Insurance: could not navigate to dummy kyc.html")
         _insurance_select_fuzzy(page, "#ins-company", values["insurer"] or "")
         page.select_option("#ins-kyc-partner", label="Signzy")
         page.select_option("#ins-ovd-type", label="AADHAAR EXTRACTION")
@@ -1251,7 +1462,9 @@ def run_fill_insurance_only(
             except Exception:
                 pass
 
-        logger.info("run_fill_insurance_only: deliberately not clicking #ins-issue-policy")
+        preview = scrape_insurance_policy_preview_before_issue(
+            page, timeout_ms=INSURANCE_POLICY_FILL_TIMEOUT_MS
+        )
 
         try:
             page.set_default_timeout(15_000)
@@ -1266,10 +1479,53 @@ def run_fill_insurance_only(
                 vehicle_id=vehicle_id,
                 values=values,
             )
+        if customer_id is not None and vehicle_id is not None:
+            try:
+                insert_insurance_master_after_gi(
+                    int(customer_id),
+                    int(vehicle_id),
+                    fill_values=values,
+                    staging_payload=staging_payload,
+                    preview_policy_num=preview.get("policy_num"),
+                    preview_insurance_cost=preview.get("insurance_cost"),
+                )
+            except ValueError as persist_exc:
+                result["error"] = str(persist_exc)
+                append_playwright_insurance_line(
+                    ocr_output_dir,
+                    subfolder,
+                    "ERROR",
+                    f"run_fill_insurance_only: insurance_master insert failed: {persist_exc!s}",
+                )
+                return result
+            except Exception as persist_exc:
+                result["error"] = f"insurance_master insert failed: {persist_exc!s}"
+                append_playwright_insurance_line(
+                    ocr_output_dir,
+                    subfolder,
+                    "ERROR",
+                    f"run_fill_insurance_only: insurance_master insert failed: {persist_exc!s}",
+                )
+                return result
+            post_issue = click_issue_policy_and_scrape_preview(
+                page, timeout_ms=INSURANCE_POLICY_FILL_TIMEOUT_MS
+            )
+            try:
+                update_insurance_master_policy_after_issue(
+                    int(customer_id),
+                    int(vehicle_id),
+                    policy_num=post_issue.get("policy_num"),
+                    insurance_cost=post_issue.get("insurance_cost"),
+                )
+            except Exception as upd_exc:
+                logger.warning("run_fill_insurance_only: insurance_master post-issue update failed: %s", upd_exc)
         result["success"] = True
         result["error"] = None
         append_playwright_insurance_line(
-            ocr_output_dir, subfolder, "NOTE", "run_fill_insurance_only: completed (policy form filled, issue not clicked)"
+            ocr_output_dir,
+            subfolder,
+            "NOTE",
+            "run_fill_insurance_only: completed (preview insert, Issue Policy clicked, post-issue scrape)",
         )
         return result
     except PlaywrightTimeout as e:

@@ -1,6 +1,7 @@
 """
-Fill DMS flow using Playwright: login, fill enquiry, search vehicle, scrape row, save PDFs.
-Optionally fills dummy Vahan registration and returns application_id and rto_fees.
+Fill DMS flow using Playwright: Hero Connect / Siebel (``DMS_MODE=real`` and ``DMS_REAL_URL_*``).
+Vaahan Playwright against static training HTML was removed; ``run_fill_vahan_only`` / batch RTO helpers
+raise until a production VAHAN automation is implemented.
 Uses Chromium (faster launch). Requires: pip install playwright && playwright install chromium.
 Uses headed browser by default (set DMS_PLAYWRIGHT_HEADED=false for headless).
 Writes pulled data to ocr_output/subfolder/Data from DMS.txt for consistency with other OCR outputs.
@@ -20,7 +21,6 @@ import shutil
 import subprocess
 import tempfile
 import time
-import urllib.parse
 from datetime import datetime
 from pathlib import Path
 
@@ -49,6 +49,7 @@ from app.repositories import form_dms as form_dms_repo
 from app.repositories import form_vahan as form_vahan_repo
 from app.db import get_connection
 from app.services.customer_address_infer import enrich_customer_address_from_freeform
+from app.services.add_sales_commit_service import commit_staging_masters_and_finalize_row
 from app.services.handle_browser_opening import get_or_open_site_page
 from app.services.utility_functions import (
     clean_text as _clean_text,
@@ -57,6 +58,18 @@ from app.services.utility_functions import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _dms_scrape_has_vehicle_row(scraped: dict) -> bool:
+    """True when DMS scrape returned at least one key vehicle identifier (mirrors fill_dms router helper)."""
+    key_num = str(scraped.get("key_num") or "").strip()
+    frame_num = str(scraped.get("frame_num") or "").strip()
+    engine_num = str(scraped.get("engine_num") or "").strip()
+    full_chassis = str(scraped.get("full_chassis") or "").strip()
+    full_engine = str(scraped.get("full_engine") or "").strip()
+    return bool(key_num or frame_num or engine_num or full_chassis or full_engine)
+
+
 HERO_SUPPORTED_OEM_ID = "1"
 HERO_OEM_ONLY_ERROR = "Currently only Hero MotoCorp Limited is  configured as OEM"
 
@@ -142,82 +155,21 @@ def _fill_vahan_and_scrape(
     vehicle_price: float,
 ) -> tuple[str | None, float]:
     """
-    Fill dummy Vahan registration flow, move the file to worklist, and return (application_id, rto_fees).
-    rto_fees = 1% of vehicle_price + 200 (same as dummy Vahan formula).
+    Static Vaahan training HTML was removed. Production VAHAN Playwright is not implemented here.
     """
-    base = vahan_base_url.rstrip("/")
-    effective_vehicle_price = float(vehicle_price or 0)
-    if effective_vehicle_price <= 0:
-        raise ValueError("form_vahan_view.vehicle_price must be a positive number")
-    effective_rto_dealer_id = (rto_dealer_id or "").strip()
-    effective_customer_name = (customer_name or "").strip()
-    effective_chassis_no = (chassis_no or "").strip()
-    effective_vehicle_model = (vehicle_model or "").strip()
-    effective_vehicle_colour = (vehicle_colour or "").strip()
-    effective_year_of_mfg = (year_of_mfg or "").strip()
-    effective_fuel_type = (fuel_type or "").strip()
-    required_pairs = [
-        ("form_vahan_view.rto_dealer_id", effective_rto_dealer_id),
-        ("form_vahan_view.Owner Name *", effective_customer_name),
-        ("form_vahan_view.Chassis No *", effective_chassis_no),
-        ("form_vahan_view.vehicle_model", effective_vehicle_model),
-        ("form_vahan_view.vehicle_colour", effective_vehicle_colour),
-        ("form_vahan_view.fuel_type", effective_fuel_type),
-        ("form_vahan_view.year_of_mfg", effective_year_of_mfg),
-    ]
-    missing = [label for label, value in required_pairs if not value]
-    if missing:
-        raise ValueError("Missing required Vahan DB values: " + ", ".join(missing))
-    page.goto(f"{base}/index.html", wait_until="domcontentloaded", timeout=20000)
-    page.locator("#vahan-rto-dealer-id").evaluate("(el, value) => el.value = value", effective_rto_dealer_id)
-    page.locator("#vahan-customer-name").evaluate("(el, value) => el.value = value", effective_customer_name)
-    page.locator("#vahan-chassis-no").evaluate("(el, value) => el.value = value", effective_chassis_no)
-    page.locator("#vahan-vehicle-model").evaluate("(el, value) => el.value = value", effective_vehicle_model)
-    page.locator("#vahan-vehicle-colour").evaluate("(el, value) => el.value = value", effective_vehicle_colour)
-    page.fill("#vahan-chassis-no-visible", effective_chassis_no)
-    engine_tail = effective_chassis_no[-5:]
-    page.fill("#vahan-engine-last5-visible", engine_tail)
-    page.locator("#vahan-fuel-type").evaluate("(el, value) => el.value = value", effective_fuel_type)
-    page.locator("#vahan-year-of-mfg").evaluate("(el, value) => el.value = value", effective_year_of_mfg)
-    page.locator("#vahan-total-cost").evaluate("(el, value) => el.value = value", str(int(effective_vehicle_price)))
-    page.click("#vahan-reg-submit")
-    page.wait_for_url("**/application.html*", timeout=15000)
-    page.click("#vahan-save-movement")
-    page.wait_for_url("**/search.html*", timeout=15000)
-    url = page.url
-    application_id = None
-    if "application_id=" in url:
-        parsed = urllib.parse.urlparse(url)
-        qs = urllib.parse.parse_qs(parsed.query)
-        ids = qs.get("application_id", [])
-        if ids:
-            application_id = ids[0]
-    # Wait for search result to render (auto-submit on load), then scrape rto_fees
-    rto_fees = None
-    try:
-        page.wait_for_selector("#vahan-result-section:visible", timeout=8000)
-        el = page.locator("#vahan-result-rto-fees")
-        if el.count() > 0:
-            val = el.get_attribute("data-rto-fees")
-            if val and val.strip():
-                rto_fees = round(float(val), 2)
-            else:
-                raise ValueError("Vahan result missing data-rto-fees value")
-        else:
-            raise ValueError("Vahan result row not found for rto_fees scrape")
-    except Exception:
-        if rto_fees is None:
-            raise
-    if rto_fees is None:
-        raise ValueError("Vahan rto_fees could not be scraped")
-    return (application_id, rto_fees)
+    del page, vahan_base_url, rto_dealer_id, customer_name, chassis_no
+    del vehicle_model, vehicle_colour, fuel_type, year_of_mfg, vehicle_price
+    raise NotImplementedError(
+        "Vaahan Playwright for the old static training site was removed. "
+        "Point VAHAN_BASE_URL at the production VAHAN portal and add selectors, or complete RTO steps manually."
+    )
 
 
 def _complete_vahan_upload_step(page) -> bool:
-    """Advance the dummy Vahan flow to the files-uploaded / cart checkpoint."""
-    page.click("#vahan-upload-btn")
-    page.wait_for_selector("#vahan-upload-status[data-uploaded='1']", timeout=8000)
-    return True
+    del page
+    raise NotImplementedError(
+        "Vaahan cart/upload automation for the static training site was removed."
+    )
 
 
 def _split_name(full_name: str | None) -> tuple[str, str]:
@@ -255,7 +207,7 @@ def _write_data_from_dms(ocr_output_dir: Path, subfolder: str, customer: dict, v
     rel = customer.get("relation_prefix") or customer.get("dms_relation_prefix")
     if rel:
         lines.append(f"Relation (S/O or W/o): {rel}")
-    fath = customer.get("care_of") or customer.get("father_or_husband_name")
+    fath = customer.get("care_of")
     if fath:
         lines.append(f"Care of / Father–Husband (Aadhaar QR): {fath}")
 
@@ -286,8 +238,8 @@ def _write_data_from_dms(ocr_output_dir: Path, subfolder: str, customer: dict, v
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
-# Dummy DMS booking amount (enquiry customer budget) — must match business test default.
-DMS_DUMMY_ENQUIRY_BUDGET = "89000"
+# Default customer budget written to DMS_Form_Values.txt trace (Siebel fills booking amount in-portal).
+DMS_TRACE_DEFAULT_CUSTOMER_BUDGET = "89000"
 
 # UI checklist order (Add Sales banner). Labels must match exactly for sorting.
 DMS_MILESTONE_ORDER: tuple[str, ...] = (
@@ -315,95 +267,6 @@ def _sort_dms_milestones(result: dict) -> None:
     m = list(result.get("dms_milestones") or [])
     order = {k: i for i, k in enumerate(DMS_MILESTONE_ORDER)}
     result["dms_milestones"] = sorted(m, key=lambda x: order.get(x, 99))
-
-
-def _fill_playwright_enquiry_contact(page, dms_values: dict) -> None:
-    row = dms_values.get("row") or {}
-    mr_ms = _clean_text(row.get("Mr/Ms"))
-    if mr_ms:
-        try:
-            page.select_option("#dms-mr-ms", label=mr_ms)
-        except Exception:
-            try:
-                page.select_option("#dms-mr-ms", value=mr_ms.rstrip("."))
-            except Exception:
-                pass
-    page.fill("#dms-contact-first-name", dms_values["first_name"])
-    page.fill("#dms-contact-last-name", dms_values["last_name"])
-    page.fill("#dms-mobile-phone", dms_values["mobile_phone"])
-    landline = dms_values.get("landline") or ""
-    if landline:
-        page.fill("#dms-landline", landline)
-    addr = dms_values["address_line_1"]
-    if addr:
-        page.fill("#dms-address-line-1", addr)
-    state = dms_values["state"]
-    if state:
-        try:
-            page.select_option("#dms-state", label=state)
-        except Exception:
-            try:
-                page.select_option("#dms-state", value=state)
-            except Exception:
-                pass
-    pin = dms_values["pin_code"]
-    if pin:
-        page.fill("#dms-pin-code", pin)
-
-
-def _apply_playwright_enquiry_relation_finance(page, dms_values: dict) -> None:
-    relation = dms_values.get("relation_prefix") or ""
-    if relation:
-        try:
-            page.select_option("#dms-relation-prefix", value=relation)
-        except Exception:
-            try:
-                page.select_option("#dms-relation-prefix", label=relation)
-            except Exception:
-                logger.warning("fill_dms_service: could not set DMS relation %s", relation)
-    father = dms_values.get("father_husband_name") or ""
-    if father:
-        page.fill("#dms-father-husband-name", father[:255])
-    finance_required = (dms_values.get("finance_required") or "N").strip().upper()
-    if finance_required == "Y":
-        try:
-            page.select_option("#dms-finance-required", value="Y")
-        except Exception:
-            pass
-        fin = dms_values.get("financier_name") or ""
-        if fin:
-            try:
-                page.fill("#dms-financier-name", fin[:255])
-            except Exception:
-                pass
-
-
-def _scrape_dms_vehicle_search_row(page) -> dict:
-    page.wait_for_selector("#dms-vehicle-results:visible", timeout=8000)
-    row = page.locator("#dms-vehicle-results-table tbody tr").first
-    if row.count() == 0:
-        return {}
-    cells = row.locator("td")
-    n = cells.count()
-    if n < 13:
-        return {}
-    ex_show = cells.nth(11).inner_text().strip()
-    return {
-        "key_num": cells.nth(0).inner_text().strip(),
-        "frame_num": cells.nth(1).inner_text().strip(),
-        "engine_num": cells.nth(2).inner_text().strip(),
-        "model": cells.nth(3).inner_text().strip(),
-        "color": cells.nth(4).inner_text().strip(),
-        "cubic_capacity": cells.nth(5).inner_text().strip(),
-        "seating_capacity": cells.nth(6).inner_text().strip(),
-        "body_type": cells.nth(7).inner_text().strip(),
-        "vehicle_type": cells.nth(8).inner_text().strip(),
-        "num_cylinders": cells.nth(9).inner_text().strip(),
-        "horse_power": cells.nth(10).inner_text().strip(),
-        "vehicle_price": ex_show,
-        "ex_showroom_price": ex_show,
-        "year_of_mfg": cells.nth(12).inner_text().strip(),
-    }
 
 
 def _parse_vehicle_price(vehicle: dict) -> float:
@@ -465,6 +328,32 @@ def _coalesce_vehicle_master_engine(engine: str, raw_engine_num: str) -> tuple[s
     return e, "engine"
 
 
+def _vehicle_identity_from_ocr_vehicle(vehicle: dict) -> dict[str, str]:
+    """Full chassis/engine/model/colour from OCR staging ``vehicle`` dict (no ``vehicle_master`` read)."""
+    if not vehicle:
+        return {}
+    ch = _clean_text(vehicle.get("chassis"))
+    rf = _clean_text(vehicle.get("frame_no"))
+    eng = _clean_text(vehicle.get("engine"))
+    re_ = _clean_text(vehicle.get("engine_no"))
+    vin, _ = _coalesce_vehicle_master_vin(ch, rf)
+    eng_m, _ = _coalesce_vehicle_master_engine(eng, re_)
+    return {
+        "chassis": vin,
+        "engine": eng_m,
+        "model": _clean_text(vehicle.get("model")),
+        "colour": _clean_text(vehicle.get("colour") or vehicle.get("color")),
+    }
+
+
+def _aadhar_last4_from_customer(customer: dict) -> str:
+    raw = customer.get("aadhar_id") or ""
+    digits = "".join(c for c in str(raw) if c.isdigit())
+    if len(digits) >= 4:
+        return digits[-4:]
+    return digits
+
+
 def _format_amount(value: object | None) -> str:
     if value is None or str(value).strip() == "":
         return ""
@@ -519,7 +408,7 @@ def _load_form_dms_row(customer_id: int | None, vehicle_id: int | None) -> dict:
         return form_dms_repo.get_by_customer_vehicle(customer_id, vehicle_id) or {}
     except Exception as exc:
         logger.warning(
-            "fill_dms_service: form_dms_view lookup failed customer_id=%s vehicle_id=%s: %s",
+            "fill_dms_service: DMS fill row lookup failed customer_id=%s vehicle_id=%s: %s",
             customer_id,
             vehicle_id,
             exc,
@@ -528,10 +417,12 @@ def _load_form_dms_row(customer_id: int | None, vehicle_id: int | None) -> dict:
 
 
 def _load_required_form_dms_row(customer_id: int | None, vehicle_id: int | None) -> dict:
-    cid, vid = _require_customer_vehicle_ids(customer_id, vehicle_id, "form_dms_view")
+    cid, vid = _require_customer_vehicle_ids(customer_id, vehicle_id, "DMS fill row")
     row = _load_form_dms_row(cid, vid)
     if not row:
-        raise ValueError(f"No form_dms_view row found for customer_id={cid} vehicle_id={vid}")
+        raise ValueError(
+            f"No sales row found for customer_id={cid} vehicle_id={vid} (cannot build DMS fill values)"
+        )
     return row
 
 
@@ -731,6 +622,8 @@ def _normalize_dms_relation_prefix(raw: object | None) -> str:
     s = _clean_text(raw).upper().replace(" ", "")
     if s in ("S/O", "SO"):
         return "S/O"
+    if s in ("D/O", "DO", "D/O."):
+        return "D/o"
     if s in ("W/O", "WO", "W/O."):
         return "W/o"
     if "W" in s and "O" in s:
@@ -740,9 +633,34 @@ def _normalize_dms_relation_prefix(raw: object | None) -> str:
     return _clean_text(raw)
 
 
-def _build_dms_fill_values(customer_id: int | None, vehicle_id: int | None, subfolder: str | None = None) -> dict:
-    row = _load_required_form_dms_row(customer_id, vehicle_id)
-    gender_master = _load_customer_gender_from_master(customer_id)
+def _build_dms_fill_values(
+    customer_id: int | None,
+    vehicle_id: int | None,
+    subfolder: str | None = None,
+    *,
+    staging_payload: dict | None = None,
+) -> dict:
+    """
+    Build Playwright DMS values. **Staging path:** ``staging_payload`` (OCR merge in ``add_sales_staging``)
+    — no reads of ``customer_master`` / ``vehicle_master`` / ``sales_master``. **Legacy path:** master join
+    via ``form_dms_repo.get_by_customer_vehicle``.
+    """
+    if staging_payload is not None:
+        row = form_dms_repo.build_dms_fill_row_from_staging_payload(staging_payload)
+        cust = staging_payload.get("customer") if isinstance(staging_payload.get("customer"), dict) else {}
+        gender_master = _clean_text(cust.get("gender"))
+        dob_src = _clean_text(cust.get("date_of_birth"))
+        aadhar_src = _aadhar_last4_from_customer(cust)
+    else:
+        row = _load_required_form_dms_row(customer_id, vehicle_id)
+        gender_master = _load_customer_gender_from_master(customer_id)
+        try:
+            cid_for_aadhar = int(row.get("customer_id")) if row.get("customer_id") is not None else None
+        except (TypeError, ValueError):
+            cid_for_aadhar = None
+        dob_src = _load_customer_dob_from_master(cid_for_aadhar)
+        aadhar_src = _load_customer_aadhar_last4(cid_for_aadhar)
+
     addr_full = _clean_text(row.get("Address Line 1"))
     pin_raw = _clean_text(row.get("Pin Code"))[:6]
     state_raw = _clean_text(row.get("State"))
@@ -774,10 +692,6 @@ def _build_dms_fill_values(customer_id: int | None, vehicle_id: int | None, subf
         finance_required = "N"
     gender_row = _clean_text(row.get("Gender")) or _clean_text(row.get("gender"))
     gender_effective = gender_master or gender_row or _derive_gender_from_care_of_text(care_of_e)
-    try:
-        cid_for_aadhar = int(row.get("customer_id")) if row.get("customer_id") is not None else None
-    except (TypeError, ValueError):
-        cid_for_aadhar = None
 
     values = {
         "row": row,
@@ -805,8 +719,8 @@ def _build_dms_fill_values(customer_id: int | None, vehicle_id: int | None, subf
         "finance_required": finance_required,
         "dms_contact_path": contact_path,
         "gender": gender_effective,
-        "date_of_birth": _load_customer_dob_from_master(cid_for_aadhar),
-        "aadhar_id": _load_customer_aadhar_last4(cid_for_aadhar),
+        "date_of_birth": dob_src,
+        "aadhar_id": aadhar_src,
         "customer_export": {
             "name": full_name,
             "address": _clean_text(inferred_addr.get("address")) or addr_full,
@@ -816,26 +730,31 @@ def _build_dms_fill_values(customer_id: int | None, vehicle_id: int | None, subf
             "alt_phone_num": _clean_text(row.get("Landline #")),
             "relation_prefix": relation_prefix,
             "care_of": father_e,
-            "father_or_husband_name": father_e,
             "finance_required": finance_required,
             "financier_name": _clean_text(row.get("Financier Name")),
         },
     }
     required_keys = [
-        ("form_dms_view.Contact First Name", values["first_name"]),
-        ("form_dms_view.Mobile Phone #", values["mobile_phone"]),
-        ("form_dms_view.State", values["state"]),
-        ("form_dms_view.Address Line 1", values["address_line_1"]),
-        ("form_dms_view.Pin Code", values["pin_code"]),
-        ("form_dms_view.Key num (partial)", values["key_partial"]),
-        ("form_dms_view.Frame / Chassis num (partial)", values["frame_partial"]),
-        ("form_dms_view.Engine num (partial)", values["engine_partial"]),
+        ("DMS fill.Contact First Name", values["first_name"]),
+        ("DMS fill.Mobile Phone #", values["mobile_phone"]),
+        ("DMS fill.State", values["state"]),
+        ("DMS fill.Address Line 1", values["address_line_1"]),
+        ("DMS fill.Pin Code", values["pin_code"]),
+        ("DMS fill.Key num (partial)", values["key_partial"]),
+        ("DMS fill.Frame / Chassis num (partial)", values["frame_partial"]),
+        ("DMS fill.Engine num (partial)", values["engine_partial"]),
     ]
     missing = [label for label, val in required_keys if not val]
     if missing:
-        raise ValueError("Missing required DMS DB values: " + ", ".join(missing))
+        src = "staging OCR payload" if staging_payload is not None else "database"
+        raise ValueError(f"Missing required DMS fields ({src}): " + ", ".join(missing))
 
-    vm = _load_vehicle_master_identity(vehicle_id)
+    if staging_payload is not None:
+        vm = _vehicle_identity_from_ocr_vehicle(
+            staging_payload.get("vehicle") if isinstance(staging_payload.get("vehicle"), dict) else {}
+        )
+    else:
+        vm = _load_vehicle_master_identity(vehicle_id)
     _ch = (vm.get("chassis") or "").strip()
     _eng = (vm.get("engine") or "").strip()
     _mod = (vm.get("model") or "").strip()
@@ -899,6 +818,7 @@ def _write_dms_form_values(
     customer_id: int | None,
     vehicle_id: int | None,
     *,
+    dms_fill_row: dict | None = None,
     customer_name: str,
     mobile_number: str,
     alt_phone_num: str,
@@ -918,7 +838,7 @@ def _write_dms_form_values(
     if not subfolder or not str(subfolder).strip():
         return
 
-    row = _load_form_dms_row(customer_id, vehicle_id)
+    row = dms_fill_row if dms_fill_row is not None else _load_form_dms_row(customer_id, vehicle_id)
     safe_subfolder = _safe_subfolder_name(subfolder)
     subfolder_path = Path(ocr_output_dir).resolve() / safe_subfolder
     subfolder_path.mkdir(parents=True, exist_ok=True)
@@ -955,7 +875,7 @@ def _write_dms_form_values(
         ("Pin Code", effective_pin),
         ("Relation (S/O or W/o)", effective_relation),
         ("Father or Husband Name", effective_father),
-        ("Customer Budget (dummy enquiry)", effective_budget),
+        ("Customer Budget (trace default)", effective_budget),
         ("Finance Required", effective_fin_req),
         ("Financier Name", effective_financier),
         ("DMS Contact Path", effective_path),
@@ -1222,19 +1142,36 @@ def _parse_vehicle_year_int_for_db(raw) -> int | None:
     return None
 
 
+def _normalize_vehicle_type_for_db(raw: object | None) -> str | None:
+    """Store DMS ``vehicle_type`` in ALL CAPS (Siebel may send mixed case)."""
+    s = (str(raw) if raw is not None else "").strip().upper()
+    return s or None
+
+
+def _is_two_wheeler_vehicle_type(vehicle_type_upper: str | None) -> bool:
+    if not vehicle_type_upper:
+        return False
+    u = vehicle_type_upper.upper()
+    return "MOTORCYCLE" in u or "SCOOTER" in u
+
+
 def update_vehicle_master_from_dms(vehicle_id: int, scraped: dict) -> None:
     """
     Merge DMS / Siebel scrape into ``vehicle_master`` (non-null scraped values win via ``COALESCE``).
 
     Maps scrape keys → columns: **full_chassis** / **frame_num** → ``chassis``; **full_engine** /
     **engine_num** → ``engine``; **key_num** or **raw_key_num** → ``key_num``; **model** → ``model``;
-    **color** / **colour** → ``colour``; **vehicle_price** / **ex_showroom_price** /
-    **vehicle_ex_showroom_cost** → ``vehicle_ex_showroom_price``; **year_of_mfg** (or **dispatch_year**)
-    → ``year_of_mfg``; **sku** → ``dms_sku``.
+    **color** / **colour** → ``colour``; **variant** → ``variant``; **vehicle_price** (after Price All /
+    Allocate All in booking attach) / **ex_showroom_price** / **vehicle_ex_showroom_cost** →
+    ``vehicle_ex_showroom_price``; **year_of_mfg** (or **dispatch_year**) → ``year_of_mfg``.
 
-    Does **not** update ``raw_frame_num`` / ``raw_engine_num`` — those stay as the Sales Detail Sheet /
-    Submit Info values so ``form_dms_view`` partials used for Siebel vehicle search (Add Enquiry) are not
-    overwritten by a noisy or partial DMS grid scrape.
+    ``vehicle_type`` is normalized to **ALL CAPS**. When it contains **MOTORCYCLE** or **SCOOTER**,
+    sets ``seating_capacity`` = 2, ``body_type`` = ``Open``, ``num_cylinders`` = 1.
+
+    ``place_of_registeration`` and ``oem_name`` are filled from the latest ``sales_master`` row’s
+    ``dealer_ref.rto_name`` and ``oem_ref.oem_name`` when available.
+
+    Does **not** update ``raw_frame_num`` / ``raw_engine_num``.
     """
     from app.db import get_connection
 
@@ -1247,11 +1184,12 @@ def update_vehicle_master_from_dms(vehicle_id: int, scraped: dict) -> None:
     key_num = _strip_or_none("key_num") or _strip_or_none("raw_key_num")
     model = _strip_or_none("model")
     colour = _strip_or_none("color") or _strip_or_none("colour")
-    dms_sku = _strip_or_none("sku")
+    variant_raw = _strip_or_none("variant")
+    variant = (variant_raw[:64] if variant_raw else None)
     cubic_capacity = scraped.get("cubic_capacity")
     seating_capacity = scraped.get("seating_capacity")
     body_type = (scraped.get("body_type") or "").strip() or None
-    vehicle_type = (scraped.get("vehicle_type") or "").strip() or None
+    vehicle_type = _normalize_vehicle_type_for_db(scraped.get("vehicle_type"))
     num_cylinders = scraped.get("num_cylinders")
     horse_power = scraped.get("horse_power")
     year_of_mfg = _parse_vehicle_year_int_for_db(scraped.get("year_of_mfg"))
@@ -1290,86 +1228,127 @@ def update_vehicle_master_from_dms(vehicle_id: int, scraped: dict) -> None:
         except (ValueError, TypeError):
             ex_showroom = None
 
-    params_full = (
-        chassis,
-        engine,
-        key_num,
-        model,
-        colour,
-        dms_sku,
-        cubic_capacity,
-        seating_capacity,
-        body_type,
-        vehicle_type,
-        num_cylinders,
-        horse_power,
-        year_of_mfg,
-        ex_showroom,
-        vehicle_id,
-    )
-    params_legacy = (
-        chassis,
-        engine,
-        key_num,
-        model,
-        colour,
-        cubic_capacity,
-        seating_capacity,
-        body_type,
-        vehicle_type,
-        num_cylinders,
-        horse_power,
-        year_of_mfg,
-        ex_showroom,
-        vehicle_id,
-    )
-    sql_with_sku = """
-                UPDATE vehicle_master SET
-                    chassis = COALESCE(%s, chassis),
-                    engine = COALESCE(%s, engine),
-                    key_num = COALESCE(%s, key_num),
-                    model = COALESCE(%s, model),
-                    colour = COALESCE(%s, colour),
-                    dms_sku = COALESCE(%s, dms_sku),
-                    cubic_capacity = COALESCE(%s, cubic_capacity),
-                    seating_capacity = COALESCE(%s, seating_capacity),
-                    body_type = COALESCE(%s, body_type),
-                    vehicle_type = COALESCE(%s, vehicle_type),
-                    num_cylinders = COALESCE(%s, num_cylinders),
-                    horse_power = COALESCE(%s, horse_power),
-                    year_of_mfg = COALESCE(%s, year_of_mfg),
-                    vehicle_ex_showroom_price = COALESCE(%s, vehicle_ex_showroom_price)
-                WHERE vehicle_id = %s
-                """
-    sql_no_sku = """
-                UPDATE vehicle_master SET
-                    chassis = COALESCE(%s, chassis),
-                    engine = COALESCE(%s, engine),
-                    key_num = COALESCE(%s, key_num),
-                    model = COALESCE(%s, model),
-                    colour = COALESCE(%s, colour),
-                    cubic_capacity = COALESCE(%s, cubic_capacity),
-                    seating_capacity = COALESCE(%s, seating_capacity),
-                    body_type = COALESCE(%s, body_type),
-                    vehicle_type = COALESCE(%s, vehicle_type),
-                    num_cylinders = COALESCE(%s, num_cylinders),
-                    horse_power = COALESCE(%s, horse_power),
-                    year_of_mfg = COALESCE(%s, year_of_mfg),
-                    vehicle_ex_showroom_price = COALESCE(%s, vehicle_ex_showroom_price)
-                WHERE vehicle_id = %s
-                """
+    if _is_two_wheeler_vehicle_type(vehicle_type):
+        seating_capacity = 2
+        body_type = "Open"
+        num_cylinders = 1
 
     conn = get_connection()
     try:
         with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT dr.rto_name, o.oem_name
+                FROM sales_master sm
+                JOIN dealer_ref dr ON dr.dealer_id = sm.dealer_id
+                LEFT JOIN oem_ref o ON o.oem_id = dr.oem_id
+                WHERE sm.vehicle_id = %s
+                ORDER BY sm.sales_id DESC NULLS LAST
+                LIMIT 1
+                """,
+                (vehicle_id,),
+            )
+            drow = cur.fetchone()
+            place_reg: str | None = None
+            oem_n: str | None = None
+            if drow:
+                if isinstance(drow, dict):
+                    r = str(drow.get("rto_name") or "").strip()
+                    o = str(drow.get("oem_name") or "").strip()
+                else:
+                    r = str(drow[0] or "").strip()
+                    o = str(drow[1] or "").strip()
+                if r:
+                    place_reg = r[:128]
+                if o:
+                    oem_n = o[:64]
+
+            sql = """
+                UPDATE vehicle_master SET
+                    chassis = COALESCE(%s, chassis),
+                    engine = COALESCE(%s, engine),
+                    key_num = COALESCE(%s, key_num),
+                    model = COALESCE(%s, model),
+                    colour = COALESCE(%s, colour),
+                    variant = COALESCE(%s, variant),
+                    cubic_capacity = COALESCE(%s, cubic_capacity),
+                    seating_capacity = COALESCE(%s, seating_capacity),
+                    body_type = COALESCE(%s, body_type),
+                    vehicle_type = COALESCE(%s, vehicle_type),
+                    num_cylinders = COALESCE(%s, num_cylinders),
+                    horse_power = COALESCE(%s, horse_power),
+                    year_of_mfg = COALESCE(%s, year_of_mfg),
+                    vehicle_ex_showroom_price = COALESCE(%s, vehicle_ex_showroom_price),
+                    place_of_registeration = COALESCE(%s, place_of_registeration),
+                    oem_name = COALESCE(%s, oem_name)
+                WHERE vehicle_id = %s
+                """
+            params = (
+                chassis,
+                engine,
+                key_num,
+                model,
+                colour,
+                variant,
+                cubic_capacity,
+                seating_capacity,
+                body_type,
+                vehicle_type,
+                num_cylinders,
+                horse_power,
+                year_of_mfg,
+                ex_showroom,
+                place_reg,
+                oem_n,
+                vehicle_id,
+            )
             try:
-                cur.execute(sql_with_sku, params_full)
+                cur.execute(sql, params)
             except Exception as exc:
                 msg = str(exc).lower()
-                if "dms_sku" in msg and ("column" in msg or "undefined" in msg):
-                    cur.execute(sql_no_sku, params_legacy)
+                if "variant" in msg and ("column" in msg or "undefined" in msg):
+                    sql_no_var = """
+                UPDATE vehicle_master SET
+                    chassis = COALESCE(%s, chassis),
+                    engine = COALESCE(%s, engine),
+                    key_num = COALESCE(%s, key_num),
+                    model = COALESCE(%s, model),
+                    colour = COALESCE(%s, colour),
+                    cubic_capacity = COALESCE(%s, cubic_capacity),
+                    seating_capacity = COALESCE(%s, seating_capacity),
+                    body_type = COALESCE(%s, body_type),
+                    vehicle_type = COALESCE(%s, vehicle_type),
+                    num_cylinders = COALESCE(%s, num_cylinders),
+                    horse_power = COALESCE(%s, horse_power),
+                    year_of_mfg = COALESCE(%s, year_of_mfg),
+                    vehicle_ex_showroom_price = COALESCE(%s, vehicle_ex_showroom_price),
+                    place_of_registeration = COALESCE(%s, place_of_registeration),
+                    oem_name = COALESCE(%s, oem_name)
+                WHERE vehicle_id = %s
+                """
+                    cur.execute(
+                        sql_no_var,
+                        (
+                            chassis,
+                            engine,
+                            key_num,
+                            model,
+                            colour,
+                            cubic_capacity,
+                            seating_capacity,
+                            body_type,
+                            vehicle_type,
+                            num_cylinders,
+                            horse_power,
+                            year_of_mfg,
+                            ex_showroom,
+                            place_reg,
+                            oem_n,
+                            vehicle_id,
+                        ),
+                    )
                     logger.info(
-                        "fill_dms: vehicle_master update without dms_sku (run DDL/alter/10h_form_dms_view_city_vehicle_dms_sku.sql)"
+                        "fill_dms: vehicle_master update without variant column (run DDL/alter/15a_vehicle_master_variant_vin_unique_drop_dms_sku.sql)"
                     )
                 else:
                     raise
@@ -1382,8 +1361,10 @@ def update_vehicle_master_from_dms(vehicle_id: int, scraped: dict) -> None:
 
 def update_sales_master_from_dms_scrape(customer_id: int, vehicle_id: int, vehicle_dict: dict) -> None:
     """
-    Persist DMS-scraped **Order#**, **Invoice#**, and **Enquiry#** onto ``sales_master``
-    (``COALESCE`` — non-null scraped values overwrite empty DB cells only when provided).
+    Persist DMS-scraped **Order#**, **Invoice#**, and **Enquiry#** onto ``sales_master`` as each
+    becomes available across **different Siebel stages** (enquiry / order / invoice — see **BRD §6.1d**).
+    Uses ``COALESCE`` so non-null scraped values fill empty cells only when provided.
+    Does **not** set ``vahan_application_id`` or ``rto_charges`` (Vahan / RTO queue).
     """
     order_n = (vehicle_dict.get("order_number") or "").strip() or None
     inv_n = (vehicle_dict.get("invoice_number") or "").strip() or None
@@ -1450,10 +1431,9 @@ def _run_fill_dms_real_siebel_playwright(
     first; vehicle list scrape + ``in_transit`` branch (receipt/PDI vs booking/allotment).
 
     ``dms_contact_path=skip_find`` in DB is **ignored** for real Siebel (operators still need Find so the
-    correct contact context is loaded even when the customer already exists). Dummy DMS may still use
-    ``skip_find`` for training HTML.
+    correct contact context is loaded even when the customer already exists).
 
-    Writes ``DMS_Form_Values`` trace; no dummy ``/downloads/*.pdf``.
+    Writes ``DMS_Form_Values`` trace for operators.
     """
     if not (DMS_REAL_URL_CONTACT or "").strip():
         result["error"] = (
@@ -1476,6 +1456,7 @@ def _run_fill_dms_real_siebel_playwright(
         subfolder=effective_subfolder,
         customer_id=customer_id,
         vehicle_id=vehicle_id,
+        dms_fill_row=dms_values.get("row"),
         customer_name=dms_values["customer_name"],
         mobile_number=mobile_phone,
         alt_phone_num=landline,
@@ -1487,7 +1468,7 @@ def _run_fill_dms_real_siebel_playwright(
         engine_no=engine_partial,
         relation_prefix=dms_values.get("relation_prefix") or "",
         father_husband_name=dms_values.get("father_husband_name") or "",
-        customer_budget=DMS_DUMMY_ENQUIRY_BUDGET,
+        customer_budget=DMS_TRACE_DEFAULT_CUSTOMER_BUDGET,
         finance_required=dms_values.get("finance_required") or "",
         financier_name=dms_values.get("financier_name") or "",
         dms_contact_path=dms_values.get("dms_contact_path") or "",
@@ -1560,224 +1541,6 @@ def _run_fill_dms_real_siebel_playwright(
     )
 
 
-def _run_fill_dms_dummy_playwright(
-    page,
-    base: str,
-    dms_values: dict,
-    effective_subfolder: str,
-    subfolder_path: Path,
-    ocr_dir: Path,
-    customer_id: int | None,
-    vehicle_id: int | None,
-    result: dict,
-) -> None:
-    """Repo dummy DMS HTML: enquiry → vehicles → PDI → vehicle scrape → line items → PDFs."""
-    page.set_default_timeout(12_000)
-
-    mobile_phone = dms_values["mobile_phone"]
-    landline = dms_values.get("landline") or ""
-    addr = dms_values["address_line_1"]
-    state = dms_values["state"]
-    pin = dms_values["pin_code"]
-    key_partial = dms_values["key_partial"]
-    frame_partial = dms_values["frame_partial"]
-    engine_partial = dms_values["engine_partial"]
-    contact_path = (dms_values.get("dms_contact_path") or "found").strip().lower()
-
-    def goto(path: str) -> None:
-        page.goto(f"{base}/{path}", wait_until="domcontentloaded", timeout=20000)
-
-    goto("enquiry.html")
-
-    if contact_path != "skip_find":
-        page.fill("#dms-contact-finder-mobile", mobile_phone)
-        if contact_path == "new_enquiry":
-            page.evaluate("() => { sessionStorage.setItem('dummy_dms_expect', 'new'); }")
-        else:
-            page.evaluate("() => { sessionStorage.removeItem('dummy_dms_expect'); }")
-        page.click("#dms-contact-finder-go")
-        page.wait_for_timeout(200)
-        _dms_milestone(result, "Customer found")
-
-        if contact_path == "new_enquiry":
-            _fill_playwright_enquiry_contact(page, dms_values)
-            page.click("#dms-save-enquiry-quiet")
-            page.wait_for_timeout(200)
-            page.fill("#dms-contact-finder-mobile", mobile_phone)
-            page.evaluate("() => { sessionStorage.removeItem('dummy_dms_expect'); }")
-            page.click("#dms-contact-finder-go")
-            page.wait_for_timeout(200)
-
-    _fill_playwright_enquiry_contact(page, dms_values)
-    _apply_playwright_enquiry_relation_finance(page, dms_values)
-    if (_clean_text(dms_values.get("father_husband_name")) or _clean_text(dms_values.get("relation_prefix"))):
-        _dms_milestone(result, "Care of filled")
-    page.fill("#dms-customer-budget", DMS_DUMMY_ENQUIRY_BUDGET)
-    try:
-        page.select_option("#dms-booking-order-type", value="Regular")
-    except Exception:
-        try:
-            page.select_option("#dms-booking-order-type", label="Regular")
-        except Exception:
-            pass
-    page.click("#dms-generate-booking")
-    page.wait_for_timeout(200)
-    _dms_milestone(result, "Enquiry created")
-
-    goto("vehicles.html")
-    transit = page.locator("#dms-in-transit-panel")
-    try:
-        if transit.count() > 0 and transit.first.is_visible():
-            recv = page.locator("#dms-receive-vehicle")
-            if recv.count() > 0 and recv.first.is_visible():
-                recv.first.click()
-                page.wait_for_timeout(200)
-    except Exception:
-        pass
-    try:
-        pre = page.locator("#dms-precheck-complete")
-        if pre.count() > 0 and pre.first.is_visible():
-            pre.first.click()
-            page.wait_for_timeout(200)
-    except Exception:
-        pass
-    _dms_milestone(result, "Vehicle received")
-
-    goto("pdi.html")
-    try:
-        pdi_btn = page.locator("#dms-pdi-complete")
-        if pdi_btn.count() > 0 and pdi_btn.first.is_visible():
-            pdi_btn.first.click()
-            page.wait_for_timeout(200)
-    except Exception:
-        pass
-    _dms_milestone(result, "Vehicle inspection done")
-
-    goto("vehicle.html")
-    _write_dms_form_values(
-        ocr_output_dir=ocr_dir,
-        subfolder=effective_subfolder,
-        customer_id=customer_id,
-        vehicle_id=vehicle_id,
-        customer_name=dms_values["customer_name"],
-        mobile_number=mobile_phone,
-        alt_phone_num=landline,
-        address=addr,
-        state=state,
-        pin_code=pin,
-        key_no=key_partial,
-        frame_no=frame_partial,
-        engine_no=engine_partial,
-        relation_prefix=dms_values.get("relation_prefix") or "",
-        father_husband_name=dms_values.get("father_husband_name") or "",
-        customer_budget=DMS_DUMMY_ENQUIRY_BUDGET,
-        finance_required=dms_values.get("finance_required") or "",
-        financier_name=dms_values.get("financier_name") or "",
-        dms_contact_path=dms_values.get("dms_contact_path") or "",
-    )
-    page.fill("#dms-vehicle-key", key_partial)
-    page.fill("#dms-vehicle-frame", frame_partial)
-    page.fill("#dms-vehicle-engine", engine_partial)
-    page.click("#dms-vehicle-search")
-    page.wait_for_timeout(150)
-
-    try:
-        result["vehicle"] = _scrape_dms_vehicle_search_row(page)
-    except Exception as scrape_exc:
-        logger.warning("fill_dms_service: vehicle table scrape failed: %s", scrape_exc)
-        result["vehicle"] = {}
-
-    logger.info("fill_dms_service: run_fill_dms_only scraped vehicle=%s", result.get("vehicle"))
-    if vehicle_id and result.get("vehicle"):
-        try:
-            update_vehicle_master_from_dms(vehicle_id, result.get("vehicle") or {})
-        except Exception as exc:
-            logger.warning("fill_dms_service: vehicle_master update failed vehicle_id=%s: %s", vehicle_id, exc)
-
-    scraped = result.get("vehicle") or {}
-    order_val = (scraped.get("vehicle_price") or scraped.get("ex_showroom_price") or "").strip()
-
-    goto("enquiry.html")
-    try:
-        if scraped.get("frame_num"):
-            page.evaluate(
-                "(frame) => sessionStorage.setItem('dummy_dms_last_frame', frame)",
-                scraped.get("frame_num") or "",
-            )
-        alloc = page.locator("#dms-allocate-vehicle")
-        if alloc.count() > 0 and alloc.first.is_visible():
-            alloc.first.click()
-            page.wait_for_timeout(200)
-    except Exception:
-        pass
-
-    goto("line-items.html")
-    if order_val:
-        try:
-            page.fill("#dms-order-value", order_val)
-        except Exception:
-            pass
-    fin_req = (dms_values.get("finance_required") or "N").strip().upper()
-    if fin_req == "Y":
-        try:
-            page.select_option("#dms-line-finance-required", value="Y")
-        except Exception:
-            pass
-        fin_name = dms_values.get("financier_name") or ""
-        if fin_name:
-            try:
-                page.fill("#dms-line-financer", fin_name[:255])
-            except Exception:
-                pass
-    try:
-        _hdr = page.evaluate(
-            """() => {
-              const rows = Array.from(document.querySelectorAll('.dms-form-row'));
-              const out = { order: '', invoice: '' };
-              for (const row of rows) {
-                const lab = (row.querySelector('label')?.textContent || '').trim();
-                const inp = row.querySelector('input');
-                const v = (inp && (inp.value || '').trim()) || '';
-                if (!lab) continue;
-                const L = lab.toLowerCase();
-                if (L.startsWith('order') || L === 'order:') out.order = v || out.order;
-                if (L.includes('invoice')) out.invoice = v || out.invoice;
-              }
-              return out;
-            }"""
-        )
-        if isinstance(_hdr, dict):
-            vmerge = dict(result.get("vehicle") or {})
-            if (_hdr.get("order") or "").strip():
-                vmerge["order_number"] = str(_hdr["order"]).strip()
-            if (_hdr.get("invoice") or "").strip():
-                vmerge["invoice_number"] = str(_hdr["invoice"]).strip()
-            result["vehicle"] = vmerge
-    except Exception:
-        pass
-    _dms_milestone(result, "Invoice created")
-
-    goto("reports.html")
-    path21 = subfolder_path / "form21.pdf"
-    path22 = subfolder_path / "form22.pdf"
-    path_invoice = subfolder_path / "invoice_details.pdf"
-    for url_suffix, path, name in [
-        ("form21.pdf", path21, "form21.pdf"),
-        ("form22.pdf", path22, "form22.pdf"),
-        ("invoice_details.pdf", path_invoice, "invoice_details.pdf"),
-    ]:
-        try:
-            r = page.request.get(f"{base}/downloads/{url_suffix}", timeout=15000)
-            if r.ok:
-                path.write_bytes(r.body())
-                result["pdfs_saved"].append(name)
-        except Exception:
-            pass
-
-    result["dms_automation_mode"] = "dummy"
-    _sort_dms_milestones(result)
-
-
 def run_fill_dms_only(
     dms_base_url: str,
     subfolder: str,
@@ -1790,12 +1553,12 @@ def run_fill_dms_only(
     dealer_id: int | None = None,
     customer_id: int | None = None,
     vehicle_id: int | None = None,
+    staging_payload: dict | None = None,
+    staging_id: str | None = None,
 ) -> dict:
     """
-    Run DMS steps: enquiry (contact find or new-enquiry path, S/O or W/o, booking budget),
-    vehicles receive/precheck, PDI, vehicle search + scrape (Order Value / ex-showroom → vehicle_price),
-    enquiry allocate, invoicing line fields (no Create Invoice), then Form 21/22 + invoice sheet PDFs.
-    When ``DMS_MODE=real`` (see ``backend/.env``), navigates configured Siebel absolute URLs instead of dummy HTML.
+    Run DMS steps via Hero Connect / Siebel Open UI (``DMS_MODE`` real/siebel/live/production/hero and
+    ``DMS_REAL_URL_*`` in ``backend/.env``). Static training HTML is not supported.
 
     Separate Playwright session. Returns vehicle, pdfs_saved, error.
     """
@@ -1816,7 +1579,12 @@ def run_fill_dms_only(
         return result
     ocr_dir = Path(ocr_output_dir or OCR_OUTPUT_DIR).resolve()
     try:
-        dms_values = _build_dms_fill_values(customer_id, vehicle_id, subfolder)
+        dms_values = _build_dms_fill_values(
+            customer_id,
+            vehicle_id,
+            subfolder,
+            staging_payload=staging_payload,
+        )
     except Exception as e:
         result["error"] = str(e)
         return result
@@ -1824,9 +1592,15 @@ def run_fill_dms_only(
     subfolder_path = uploads_dir / effective_subfolder
     subfolder_path.mkdir(parents=True, exist_ok=True)
 
+    if not dms_automation_is_real_siebel():
+        result["error"] = (
+            "DMS_MODE must be real, siebel, live, production, or hero (static training DMS was removed). "
+            "Set DMS_MODE=real and DMS_REAL_URL_CONTACT in backend/.env."
+        )
+        return result
+
     try:
-        mode = "real" if dms_automation_is_real_siebel() else "dummy"
-        logger.info("fill_dms_service: run_fill_dms_only starting mode=%s dms=%s", mode, dms_base_url[:50])
+        logger.info("fill_dms_service: run_fill_dms_only starting mode=real dms=%s", dms_base_url[:50])
         page, open_error = get_or_open_site_page(
             dms_base_url,
             "DMS",
@@ -1844,28 +1618,15 @@ def run_fill_dms_only(
             result["error"] = "Please click Create Invoice manually in DMS, then press Fill DMS again."
             return result
 
-        if dms_automation_is_real_siebel():
-            _run_fill_dms_real_siebel_playwright(
-                page,
-                dms_values,
-                effective_subfolder,
-                ocr_dir,
-                customer_id,
-                vehicle_id,
-                result,
-            )
-        else:
-            _run_fill_dms_dummy_playwright(
-                page,
-                dms_base_url.rstrip("/"),
-                dms_values,
-                effective_subfolder,
-                subfolder_path,
-                ocr_dir,
-                customer_id,
-                vehicle_id,
-                result,
-            )
+        _run_fill_dms_real_siebel_playwright(
+            page,
+            dms_values,
+            effective_subfolder,
+            ocr_dir,
+            customer_id,
+            vehicle_id,
+            result,
+        )
     except PlaywrightTimeout as e:
         result["error"] = f"Timeout: {e!s}"
         logger.warning("fill_dms_service: run_fill_dms_only PlaywrightTimeout %s", e)
@@ -1877,6 +1638,30 @@ def run_fill_dms_only(
         _write_data_from_dms(ocr_dir, effective_subfolder, dms_values.get("customer_export") or {}, result.get("vehicle") or {})
     except Exception as e:
         result["error"] = (result.get("error") or "") + f"; DMS file write: {e!s}"
+
+    scraped_final = result.get("vehicle") or {}
+    has_v = _dms_scrape_has_vehicle_row(scraped_final)
+    skip_nv = result.get("dms_automation_mode") == "real" and not result.get("dms_siebel_forms_filled")
+
+    if (
+        staging_payload is not None
+        and (staging_id or "").strip()
+        and not result.get("error")
+        and (has_v or skip_nv)
+    ):
+        try:
+            cid_c, vid_c = commit_staging_masters_and_finalize_row(
+                staging_id=staging_id or "",
+                merged_payload=staging_payload,
+            )
+            update_vehicle_master_from_dms(vid_c, scraped_final)
+            update_sales_master_from_dms_scrape(cid_c, vid_c, scraped_final)
+            result["committed_customer_id"] = cid_c
+            result["committed_vehicle_id"] = vid_c
+        except Exception as commit_exc:
+            logger.warning("fill_dms_service: staging master commit failed: %s", commit_exc)
+            result["error"] = f"Database commit after DMS failed: {commit_exc!s}"
+
     if customer_id and vehicle_id and result.get("vehicle") and not result.get("error"):
         try:
             update_sales_master_from_dms_scrape(customer_id, vehicle_id, result["vehicle"])
@@ -1981,14 +1766,16 @@ def run_fill_dms(
     customer_id: int | None = None,
     vehicle_id: int | None = None,
     headless: bool | None = None,
+    staging_payload: dict | None = None,
+    staging_id: str | None = None,
 ) -> dict:
     """
-    Run Playwright: same extended DMS flow as `run_fill_dms_only` (enquiry → receive/PDI → vehicle scrape →
-    invoicing fields without Create Invoice → Form 21/22 + invoice sheet PDFs), then optional Vahan when
-    `vahan_base_url` is set.
+    Run Playwright: same DMS flow as `run_fill_dms_only` (Siebel). Optional ``vahan_base_url`` triggers
+    ``run_fill_vahan_only``, which is not implemented for production VAHAN (returns ``NotImplementedError``).
     Writes pulled data to ocr_output_dir/subfolder/Data from DMS.txt.
     Returns dict with vehicle details (key_num, frame_num, vehicle_price / ex-showroom, order_number, invoice_number, …),
-    optional application_id, rto_fees, and any error. When customer_id/vehicle_id are set, Order#/Invoice# are written to sales_master.
+    optional application_id, rto_fees, and any error. When ``staging_payload`` is set, DMS fill avoids
+    master reads; scrape persistence to ``vehicle_master`` / ``sales_master`` runs only when IDs are set.
     """
     result = run_fill_dms_only(
         dms_base_url=dms_base_url,
@@ -2002,7 +1789,11 @@ def run_fill_dms(
         dealer_id=dealer_id,
         customer_id=customer_id,
         vehicle_id=vehicle_id,
+        staging_payload=staging_payload,
+        staging_id=staging_id,
     )
+    cid_eff = customer_id if customer_id is not None else result.get("committed_customer_id")
+    vid_eff = vehicle_id if vehicle_id is not None else result.get("committed_vehicle_id")
     dms_mode = result.get("dms_automation_mode")
     siebel_ok = result.get("dms_siebel_forms_filled")
     milestones = list(result.get("dms_milestones") or [])
@@ -2019,6 +1810,8 @@ def run_fill_dms(
             "dms_siebel_forms_filled": siebel_ok,
             "dms_milestones": milestones,
             "dms_step_messages": step_msgs,
+            "committed_customer_id": result.get("committed_customer_id"),
+            "committed_vehicle_id": result.get("committed_vehicle_id"),
         }
 
     if vahan_base_url and vahan_base_url.strip():
@@ -2034,8 +1827,8 @@ def run_fill_dms(
             vehicle_price=_parse_vehicle_price(result.get("vehicle") or {}),
             ocr_output_dir=ocr_output_dir,
             subfolder=subfolder,
-            customer_id=customer_id,
-            vehicle_id=vehicle_id,
+            customer_id=cid_eff,
+            vehicle_id=vid_eff,
         )
         if vahan_result.get("error"):
             return {
@@ -2048,6 +1841,8 @@ def run_fill_dms(
                 "dms_siebel_forms_filled": siebel_ok,
                 "dms_milestones": milestones,
                 "dms_step_messages": step_msgs,
+                "committed_customer_id": result.get("committed_customer_id"),
+                "committed_vehicle_id": result.get("committed_vehicle_id"),
             }
         return {
             "vehicle": result.get("vehicle") or {},
@@ -2059,6 +1854,8 @@ def run_fill_dms(
             "dms_siebel_forms_filled": siebel_ok,
             "dms_milestones": milestones,
             "dms_step_messages": step_msgs,
+            "committed_customer_id": result.get("committed_customer_id"),
+            "committed_vehicle_id": result.get("committed_vehicle_id"),
         }
 
     return {
@@ -2071,4 +1868,6 @@ def run_fill_dms(
         "dms_siebel_forms_filled": siebel_ok,
         "dms_milestones": milestones,
         "dms_step_messages": step_msgs,
+        "committed_customer_id": result.get("committed_customer_id"),
+        "committed_vehicle_id": result.get("committed_vehicle_id"),
     }

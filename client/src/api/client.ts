@@ -59,7 +59,7 @@ export async function apiFetch<T>(
     } else if (gatewayOrTimeout) {
       msg =
         `Service unavailable (${res.status}). The browser or a proxy stopped waiting for the server. ` +
-        `Fill DMS / Playwright can take 1–3 minutes — increase dev-server or reverse-proxy timeouts, ` +
+        `Create Invoice (DMS) / Playwright can take 1–3 minutes — increase dev-server or reverse-proxy timeouts, ` +
         `confirm the Python API on port 8000 is running, then try again.`;
     } else {
       const trimmed = (text || "").trim();

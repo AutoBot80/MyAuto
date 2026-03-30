@@ -1,7 +1,7 @@
 # High Level Design (HLD)
 ## Auto Dealer Management System
 
-**Version:** 1.8  
+**Version:** 1.14  
 **Last Updated:** March 2026
 
 ---
@@ -47,10 +47,10 @@
 |-----------|----------------|
 | **Client (React)** | UI, forms, validation, calls to backend API; Add Sales, Fill Forms, RTO Payments, View Customer, Bulk Loads, and Admin reset actions. |
 | **FastAPI App** | REST API, CRUD, Submit Info, Fill DMS, Form 20, Vahan, RTO payment, customer search, OCR queue, bulk upload monitoring, and admin reset utilities. |
-| **PostgreSQL** | Persistent store for dealers, vehicles, customers, sales, insurance, RTO payments, service reminders. |
+| **PostgreSQL** | Persistent store for dealers, vehicles, customers, sales, insurance, RTO payments, service reminders, and **`add_sales_staging`** rows (OCR merge snapshot; **LLD §2.2a**). **Generate Insurance** uses **`form_insurance_view`** (post–Create Invoice) **and** **`add_sales_staging.payload_json`** via **`staging_id`** as the joint input set (**BR-20**). |
 | **Queue (local or SQS)** | Decouple bulk job creation from execution; current bulk processing uses SQS or a local in-process fallback queue. |
 | **OCR Worker** | Runs OCR/pre-OCR, writes extracted artifacts to `ocr_output`, and supports bulk processing. |
-| **Playwright Worker** | Reads DB-backed form views/records only for runtime values, reuses already open DMS/Vahan tabs when available, can auto-open Edge/Chrome when no detectable tab exists, and writes form trace artifacts. It must not infer, default, remember, or interpret field values outside persisted DB data. |
+| **Playwright Worker** | DMS: fill row from **`form_dms.py`** / staging JSON (**BR-9**); Vahan/insurance: views and persisted records as specified. Reuses already open DMS/Vahan tabs when available, can auto-open Edge/Chrome when no detectable tab exists, and writes form trace artifacts. It must not infer, default, remember, or interpret field values outside approved sources. |
 | **File Storage (local, optional S3 later)** | Uploaded scans, generated PDFs, and OCR/form-value artifacts. |
 
 ---
@@ -93,7 +93,7 @@ My Auto.AI/
 | `routers/ai_reader_queue` | List, process, reprocess OCR queue items. |
 | `routers/fill_dms` | Fill DMS (Playwright), Vahan, Form 20 print. |
 | `routers/bulk_loads` | Bulk hot-table dashboard APIs, retry prep, action-taken tracking, and folder browsing. |
-| `routers/submit_info` | Upsert customer, vehicle, sales, insurance. |
+| `routers/submit_info` | Upsert customer, vehicle, sales, insurance; draft **`add_sales_staging`** row + **`staging_id`** in response. |
 | `routers/rto_payment_details` | List and insert RTO queue rows, start dealer-scoped oldest-7 batch processing, expose batch progress, and optionally update payment later. |
 | `routers/customer_search` | Search customers by mobile/plate and expose the read-only Vahan view row used by View Customer. |
 | `routers/dealers` | Get dealer by ID. |
@@ -107,17 +107,17 @@ My Auto.AI/
 | `services/bulk_watcher_service` | Starts ingest and worker loops inside the API process. |
 | `services/form20_service` | Form 20 generation (Word/PDF/HTML). |
 | `services/handle_browser_opening` | CDP and managed-browser helpers (`get_or_open_site_page`, tab matching, optional auto-login wait) shared by Fill DMS, Vahan, and Insurance. |
-| `services/fill_hero_dms_service` | Playwright DMS and Vahan automation; reads fill values from DB-backed views/records only, reuses open tabs via `handle_browser_opening.get_or_open_site_page`, writes `DMS_Form_Values.txt` / `Vahan_Form_Values.txt`, and returns operator guidance. DMS branch: `DMS_MODE=dummy` (static HTML) vs `DMS_MODE=real` (`siebel_dms_playwright.run_hero_siebel_dms_flow`, **BRD §6.1a**; `DMS_SIEBEL_*` / `DMS_REAL_URL_*` env). |
+| `services/fill_hero_dms_service` | Playwright DMS (Siebel only: `siebel_dms_playwright.run_hero_siebel_dms_flow`, **BRD §6.1a**; `DMS_SIEBEL_*` / `DMS_REAL_URL_*`); DMS fill from **`form_dms.py`** or **`add_sales_staging.payload_json`**; Vaahan helpers stubbed until production automation; reuses open tabs via `handle_browser_opening.get_or_open_site_page`; writes traces under `ocr_output/`. |
 | `services/fill_hero_insurance_service` | Hero MISP: **`pre_process`** / **`main_process`** / **`post_process`** (real portal). Dummy training site: **`run_fill_insurance_only`**. Uses `handle_browser_opening.get_or_open_site_page`; `insurance_form_values` / `insurance_kyc_payloads` / `utility_functions`; writes `Insurance_Form_Values.txt` and `Playwright_insurance.txt`. |
-| `services/submit_info_service` | Submit Info business logic. |
+| `services/submit_info_service` | Submit Info business logic; builds staging **`payload_json`** and calls **`persist_staging_for_submit`**. |
 | `services/rto_payment_service` | Dealer-scoped RTO batch runner, progress state, advisory locking, scrape-back persistence into `rto_queue` / `vehicle_master`, and downstream payment updates. |
-| `repositories/*` | Data access for ai_reader_queue, bulk_loads, dealer_ref, form_dms_view, form_vahan_view, rto_queue, rc_status_sms_queue. |
+| `repositories/*` | Data access for ai_reader_queue, bulk_loads, dealer_ref, **`form_dms`** (DMS fill row SQL, no view), `form_vahan_view`, rto_queue, rc_status_sms_queue. |
 
 ### 3.3 Client Pages
 
 | Page | Purpose |
 |------|---------|
-| `AddSalesPage` | Add Sales flow: Submit Info, then separate operator actions (`Fill DMS`, `Fill Insurance`, `Print Forms`); print step also inserts the RTO queue row. |
+| `AddSalesPage` | Add Sales flow: **Submit Info** persists **draft** **`add_sales_staging`** (`staging_id`); **Create Invoice** (DMS) uses **`staging_id`** then commits masters and returns **IDs**; **Generate Insurance** uses **IDs** + **`staging_id`** with **`form_insurance_view`** (**BR-20**). Eligibility from `GET /add-sales/create-invoice-eligibility` (chassis, engine, mobile — **no** dealer filter). |
 | `SubdealerChallanPage` | POS Saathi — Subdealer Challan: From/To, dealer/sub-dealer field, upload/scanner actions, Create Challans, and five side-by-side chassis entry tables (12 rows each, S.No. 1–60). |
 | `BulkLoadsPage` | View hot bulk processing status, unresolved failures, and retry/corrective actions. |
 | `RtoPaymentsPendingPage` | List queued RTO work items, start the oldest-7 dealer batch, and show live RTO Cart progress. |
@@ -136,16 +136,17 @@ My Auto.AI/
    - **Section 2 (AI extracted information):** Customer, Vehicle, and Insurance subsection headers show **Uploading…** while files are uploading and **Processing…** until extraction for that block is populated; the client polls `getExtractedDetails` until customer, vehicle, and insurance blocks all satisfy the same completion rules (or polling limits apply).
 2. OCR processes queue → extracted text stored.
 3. User reviews/corrects → Submit Info → customer_master, vehicle_master, sales_master, insurance_master.
-4. Fill DMS → Playwright loads DMS field values from `form_dms_view`, reuses an already open DMS tab when detectable (CDP), or opens Edge/Chrome. **Hero Connect / Siebel** (`DMS_MODE=real`): `run_hero_siebel_dms_flow` follows **BRD §6.1a** (Find→mobile→Go; **no contact table match** → **Find→Vehicles** fly-in VIN/Engine# + query, scrape model/year/color, then **Opportunities List:New** add-enquiry path; else care-of vs full form; vehicle **In Transit** branch; booking/allotment; no Create Invoice); **LLD §2.4d** lists heuristics and gaps. **`DMS_MODE=dummy`:** static HTML linear path (no Create Invoice); order differs from §6.1a by design. Writes DMS traces; updates `vehicle_master` from scrape when data is returned.
+4. Fill DMS → Playwright loads DMS field values from **OCR merge in staging** (target) or **`form_dms.py`** inline query over masters (legacy after Submit), reuses an already open DMS tab when detectable (CDP), or opens Edge/Chrome. **Hero Connect / Siebel** (default **`DMS_MODE=real`**): `run_hero_siebel_dms_flow` follows **BRD §6.1a**; **LLD §2.4d** lists heuristics and gaps. Static training DMS HTML was removed. Writes DMS traces; updates `vehicle_master` from scrape when data is returned.
 5. Print Form 20 → `form20_service` fills the Word template, converts to PDF, and saves Form 20.pdf / Gate Pass.pdf in the upload subfolder.
 6. RTO queue insertion → Fill Forms stores Form 20 outputs, estimates the RTO fees, and inserts an `rto_queue` row instead of auto-running the dummy Vahan flow.
 7. RTO Queue → operators review queued rows in `RTO Saathi`, process the oldest 7 rows by reusing already open Vahan tabs (or auto-opened Edge/Chrome tabs when unavailable), and wait for live progress up to the upload/cart checkpoint.
 
 ### 4.2 Service Reminders Flow
 
-1. sales_master upsert (when dealer has auto_sms_reminders = Y).
-2. Trigger `fn_sales_master_sync_service_reminders` runs.
-3. Inserts rows into service_reminders_queue from oem_service_schedule.
+1. `sales_master` INSERT or UPDATE (relevant when `dealer_ref.auto_sms_reminders = Y`).
+2. Trigger `fn_sales_master_sync_service_reminders` runs on the database server.
+3. Trigger deletes prior rows for that `sales_id` and may INSERT into `service_reminders_queue` from `oem_service_schedule` (service_num = 1 path per current function).
+4. **No parallel app path:** the API and workers do not write `service_reminders_queue` directly — **BR-6** / **LLD §2.2a** lock trigger-only maintenance.
 
 ### 4.3 Bulk Upload Flow
 
@@ -162,9 +163,11 @@ My Auto.AI/
 
 This section defines database-to-label mapping contracts for DMS, Insurance, and Vahan forms.
 
-### 5.1 DMS Mapping (`form_dms_view`)
+### 5.1 DMS Mapping (fill row — former `form_dms_view` projection)
 
-| DMS label | View column | DB source expression |
+The SQL view **`form_dms_view`** is **removed**; the same mapping is implemented in **`backend/app/repositories/form_dms.py`** (and will be satisfied from **`add_sales_staging.payload_json`** for the staging-first path).
+
+| DMS label | Result key | DB source expression |
 |-----------|-------------|----------------------|
 | Mr/Ms | `"Mr/Ms"` | Derived from `customer_master.gender` (`Ms.` when female, else `Mr.`) |
 | Contact First Name | `"Contact First Name"` | First token from `customer_master.name` |
@@ -193,7 +196,7 @@ This section defines database-to-label mapping contracts for DMS, Insurance, and
 | Profession (details-sheet/insurance capture context) | `customer_master.profession` |
 | Financier (details-sheet capture context) | `customer_master.financier` |
 | Customer Marital Status (details-sheet capture context) | `customer_master.marital_status` |
-| Nominee Gender (details-sheet capture context) | `customer_master.nominee_gender` |
+| Nominee Gender (details-sheet capture context) | `insurance_master.nominee_gender` (staging in `add_sales_staging.payload_json.insurance` until commit) |
 
 ### 5.2a Insurance Portal Mapping (Video-Aligned Labels)
 
@@ -214,7 +217,7 @@ This section defines database-to-label mapping contracts for DMS, Insurance, and
 | New Policy (`MispPolicy.aspx`) | Ex-Showroom | `vehicle_master.vehicle_ex_showroom_price` (view: `form_vahan_view.vehicle_price`) |
 | New Policy (`MispPolicy.aspx`) | RTO | `dealer_ref.rto_name` |
 | New Policy (`MispPolicy.aspx`) | Nominee Name / Age / Relation | `insurance_master.nominee_name`, `insurance_master.nominee_age`, `insurance_master.nominee_relationship` |
-| New Policy (`MispPolicy.aspx`) | Nominee Gender | `customer_master.nominee_gender` |
+| New Policy (`MispPolicy.aspx`) | Nominee Gender | `insurance_master.nominee_gender` |
 | New Policy (`MispPolicy.aspx`) | Financer Name | `customer_master.financier` |
 
 ### 5.3 Vahan Mapping (`form_vahan_view`)
@@ -243,8 +246,8 @@ This section defines database-to-label mapping contracts for DMS, Insurance, and
 
 ### 5.4 Runtime Automation Rule
 
-- Playwright runtime values for DMS/Vahan must be sourced from DB views/records (`form_dms_view`, `form_vahan_view`, and persisted IDs).
-- Playwright runtime values for Insurance must be sourced from persisted DB records only (`customer_master`, `vehicle_master`, `insurance_master`, `dealer_ref` via sale linkage).
+- Playwright runtime values for DMS must be sourced per **BR-9** (staging OCR JSON or **`form_dms.py`** master join); Vahan from **`form_vahan_view`** and persisted IDs.
+- Playwright runtime values for Insurance must be sourced from **`form_insurance_view`** (sale-linked masters after Create Invoice) **together with** **`add_sales_staging.payload_json`** when Add Sales passes **`staging_id`** — the two sources are the **joint** approved input set (**BR-20**). **`OCR_To_be_Used.json`** is only an insurer fallback when view and staging lack insurer.
 - Automation must not use fallback assumptions/default literals as data-entry substitutes when DB values are missing.
 - Missing required DB values should fail fast with operator-visible validation, then retry after data correction.
 - Insurance automation fills the policy form but must not press final Issue/Submit; the browser session remains open for operator control.
@@ -302,3 +305,8 @@ This section defines database-to-label mapping contracts for DMS, Insurance, and
 | 1.7 | Mar 2026 | — | Add Sales **§4.1** step 4: pointers to **BRD §6.1a** (target Siebel DMS sequence) and **LLD §2.4d** (Playwright parity table) |
 | 1.8 | Mar 2026 | — | **§4.1** step 4: real Siebel implements §6.1a in code; dummy remains linear |
 | 1.9 | Mar 2026 | — | **§4.1** step 4: **no contact match** branch — `_add_enquiry_opportunity` (vehicle + Opportunities row); see **LLD §2.4d** / **BRD §6.1a** step 2a |
+| 1.10 | Mar 2026 | — | PostgreSQL **`add_sales_staging`** for Add Sales validate-then-commit-after-DMS (**LLD §2.2a**) |
+| 1.11 | Mar 2026 | — | DMS fill without **`form_dms_view`** — **`form_dms.py`**, staging JSON; **`13b_drop_form_dms_view.sql`** |
+| 1.12 | Mar 2026 | — | **BR-20**: Insurance fill — **`form_insurance_view`** + **`add_sales_staging.payload_json`** when **`staging_id`** passed |
+| 1.13 | Mar 2026 | — | **§5.4** Insurance runtime rule aligned with **BR-20**; PostgreSQL building-block note for staging + GI |
+| 1.14 | Mar 2026 | — | **BR-20**: view + **`payload_json`** as **joint** complete GI input set; **AddSalesPage** / **§5.4** — **`staging_id`** on Generate Insurance |

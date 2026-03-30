@@ -1,18 +1,17 @@
 """
-RTO Payment flow: navigate to Vahan search, fill Application ID and Chassis No.,
-take screenshot, click Pay, capture TC number, update DB.
+RTO queue batch processing and payment hooks. Static training Vaahan Pay flow was removed;
+``run_rto_pay`` returns an error until production VAHAN payment automation exists.
 """
 import logging
 import re
 import threading
-import urllib.parse
 from datetime import date, datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
-from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
+from playwright.sync_api import TimeoutError as PlaywrightTimeout
 
-from app.config import DMS_PLAYWRIGHT_HEADED, UPLOADS_DIR, get_ocr_output_dir
+from app.config import UPLOADS_DIR, get_ocr_output_dir
 from app.db import get_connection
 from app.repositories import rto_payment_details as repo
 from app.services.fill_hero_dms_service import run_fill_vahan_batch_row
@@ -356,9 +355,8 @@ def run_rto_pay(
     uploads_dir: Path | None = None,
 ) -> dict:
     """
-    Open dummy Vahan worklist, step through payment gateway and bank confirmation,
-    then capture the generated TC number.
-    Returns { success, pay_txn_id, screenshot_path, error }.
+    RTO Pay was implemented against static training Vaahan HTML; that site was removed.
+    Returns { success, pay_txn_id, screenshot_path, error } with a clear error until production VAHAN payment is implemented.
     """
     result: dict = {"success": False, "pay_txn_id": None, "screenshot_path": None, "error": None}
     base = vahan_base_url.rstrip("/")
@@ -366,60 +364,8 @@ def run_rto_pay(
         result["error"] = "vahan_base_url must be absolute (http/https)"
         return result
 
-    safe_sub = _safe_subfolder(subfolder) if subfolder else f"rto_{_safe_subfolder(application_id)}"
-    uploads_path = Path(uploads_dir or UPLOADS_DIR).resolve()
-    subfolder_path = uploads_path / safe_sub
-    subfolder_path.mkdir(parents=True, exist_ok=True)
-    screenshot_path = subfolder_path / "RTO Payment Proof.png"
-
-    params = {"application_id": application_id}
-    if chassis_num and str(chassis_num).strip():
-        params["chassis_no"] = str(chassis_num).strip()
-    if rto_dealer_id:
-        params["rto_dealer_id"] = str(rto_dealer_id).strip()
-    if customer_name and str(customer_name).strip():
-        params["customer_name"] = str(customer_name).strip()[:100]
-    if rto_fees:
-        params["rto_fees"] = str(rto_fees)
-
-    query = urllib.parse.urlencode(params)
-    url = f"{base}/search.html?{query}"
-
-    try:
-        # Never browser.close() / playwright.stop() — leave Edge open for the operator (same policy as Fill DMS).
-        p = sync_playwright().start()
-        browser = p.chromium.launch(
-            channel="msedge",
-            headless=not DMS_PLAYWRIGHT_HEADED,
-        )
-        context = browser.new_context()
-        page = context.new_page()
-        page.set_default_timeout(15_000)
-
-        page.goto(url, wait_until="domcontentloaded", timeout=20000)
-        page.wait_for_selector("#vahan-result-section:not(.hidden)", timeout=8000)
-        page.screenshot(path=str(screenshot_path))
-        result["screenshot_path"] = str(screenshot_path)
-
-        page.click("#vahan-payment-btn")
-        page.wait_for_url("**/payment.html*", timeout=10000)
-        page.check("#vahan-accept-terms")
-        page.click("#vahan-payment-continue")
-        page.wait_for_url("**/bank-login.html*", timeout=10000)
-        page.click("#vahan-bank-login")
-        page.wait_for_url("**/bank-confirm.html*", timeout=10000)
-        page.click("#vahan-confirm-payment")
-        page.wait_for_selector("#vahan-confirm-tc-number:not(.hidden)", timeout=5000)
-        el = page.locator("#vahan-confirm-tc-number")
-        tc = el.get_attribute("data-tc") if el.count() > 0 else None
-        if tc and str(tc).strip():
-            result["pay_txn_id"] = str(tc).strip()
-            result["success"] = True
-        else:
-            result["error"] = "Could not capture TC number after Pay"
-    except PlaywrightTimeout as e:
-        result["error"] = f"Timeout: {e!s}"
-    except Exception as e:
-        result["error"] = str(e)
-
+    result["error"] = (
+        "RTO Pay Playwright targeted static training Vaahan pages; those were removed. "
+        "Record payment manually or extend this service for production VAHAN."
+    )
     return result

@@ -7,5 +7,5 @@ ALTER TABLE customer_master
   ADD COLUMN IF NOT EXISTS dms_contact_path VARCHAR(16) NOT NULL DEFAULT 'found';
 
 COMMENT ON COLUMN customer_master.dms_relation_prefix IS 'DMS enquiry relation label: S/O or W/o (details sheet / operator)';
-COMMENT ON COLUMN customer_master.father_or_husband_name IS 'Legacy; DMS Father/Husband line uses care_of (Aadhaar QR) via form_dms_view';
+COMMENT ON COLUMN customer_master.father_or_husband_name IS 'Legacy; DMS Father/Husband line uses care_of (Aadhaar QR) in DMS fill row (form_dms.py)';
 COMMENT ON COLUMN customer_master.dms_contact_path IS 'Playwright branch: found = contact exists in DMS; new_enquiry = register enquiry then find again';

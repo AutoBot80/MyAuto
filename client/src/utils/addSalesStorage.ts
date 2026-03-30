@@ -13,6 +13,8 @@ export interface AddSalesStored {
   hasSubmittedInfo: boolean;
   lastSubmittedCustomerId: number | null;
   lastSubmittedVehicleId: number | null;
+  /** Draft ``add_sales_staging`` id from last successful Submit Info; passed to Create Invoice. */
+  lastStagingId: string | null;
   extractedVehicle: {
     frame_no?: string;
     engine_no?: string;
@@ -43,6 +45,7 @@ const DEFAULT: AddSalesStored = {
   hasSubmittedInfo: false,
   lastSubmittedCustomerId: null,
   lastSubmittedVehicleId: null,
+  lastStagingId: null,
   extractedVehicle: null,
   extractedCustomer: null,
   extractedInsurance: null,
@@ -55,6 +58,7 @@ const CUSTOMER_KEYS: (keyof ExtractedCustomerDetails)[] = [
   "aadhar_id", "name", "gender", "year_of_birth", "date_of_birth",
   "care_of", "house", "street", "location", "city", "post_office",
   "district", "sub_district", "state", "pin_code", "address",
+  "dms_relation_prefix", "dms_contact_path",
 ];
 
 function normalizeExtractedVehicle(val: unknown): AddSalesStored["extractedVehicle"] {
@@ -104,6 +108,7 @@ export function loadAddSalesForm(): AddSalesStored {
       hasSubmittedInfo: Boolean(parsed.hasSubmittedInfo),
       lastSubmittedCustomerId: typeof parsed.lastSubmittedCustomerId === "number" ? parsed.lastSubmittedCustomerId : null,
       lastSubmittedVehicleId: typeof parsed.lastSubmittedVehicleId === "number" ? parsed.lastSubmittedVehicleId : null,
+      lastStagingId: typeof parsed.lastStagingId === "string" && parsed.lastStagingId.trim() ? parsed.lastStagingId.trim() : null,
       extractedVehicle: normalizeExtractedVehicle(parsed.extractedVehicle),
       extractedCustomer: extractedCustomer && hasAnyCustomerValue(extractedCustomer) ? extractedCustomer : null,
       extractedInsurance:

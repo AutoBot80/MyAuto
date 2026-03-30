@@ -49,6 +49,7 @@ One-off changes (e.g. new columns) go in **`DDL/alter/`**. Run against an existi
 - `02b_customer_master_customer_id_pk.sql` — adds `customer_id` as PK, aadhar last 4 only, unique (aadhar, phone); migrates sales_master to customer_id FK.
 - `02c_customer_master_add_gender_dob.sql` — adds `gender`, `date_of_birth` to customer_master (for QR/Aadhar granular data).
 - `02j_customer_master_add_care_of.sql` — adds `care_of` (Aadhaar QR care-of / father–husband) for DMS and Form 20.
+- `02k_customer_master_add_dms_contact_id.sql` — adds optional **`dms_contact_id`** (Siebel Contact Id) to `customer_master`.
 - `03a_vehicle_master_add_model_colour.sql` — adds `model` and `colour` (VARCHAR 64) to vehicle_master.
 - `03i_vehicle_master_unique_engine_chassis.sql` — vehicle_master: add unique index on (engine, chassis) when both are non-empty.
 - `04b_rename_dealer_master_to_dealer_ref_and_oem.sql` — creates `oem_ref`, renames `dealer_master` to `dealer_ref`, replaces `dealer_of` with `oem_id` (FK to oem_ref).
@@ -74,6 +75,12 @@ One-off changes (e.g. new columns) go in **`DDL/alter/`**. Run against an existi
 - `05f_sales_master_add_rto_scrape_fields.sql` — adds `sales_master.vahan_application_id` and `sales_master.rto_charges` so RTO batch scrapes are retained and overwritten on retry.
 - `05g_drop_vehicle_master_rto_scrape_fields.sql` — drops the deprecated `vehicle_master.vahan_application_id` and `vehicle_master.rto_charges` columns after storage moved to `sales_master`.
 - `10j_form_insurance_view.sql` — creates **`form_insurance_view`** (Hero Insurance: chassis, customer, nominee, insurer from existing master columns per sale).
+- `12i_insurance_master_drop_insurance_automation_completed.sql` — drops **`insurance_automation_completed`** if present (superseded; Add Sales uses **`insurance_master.policy_num`** for Generate Insurance eligibility via `GET /add-sales/create-invoice-eligibility`).
+- `13a_add_sales_staging.sql` — creates **`add_sales_staging`** (UUID **`staging_id`**, **`dealer_id`**, **`payload_json`**, **`status`**). **Draft** rows are written on **`POST /submit-info`** (staging only); masters commit after successful **Create Invoice**; **Create Invoice** uses **`staging_id`** to load **`payload_json`**. Run after **`dealer_ref`** exists.
+- `13b_drop_form_dms_view.sql` — drops **`form_dms_view`**; DMS fill uses **`backend/app/repositories/form_dms.py`** (inline join) and future **`add_sales_staging.payload_json`** (OCR merge).
+- `14a_nominee_gender_insurance_drop_customer_legacy.sql` — **`insurance_master.nominee_gender`**; drops legacy **`customer_master`** nominee / father–husband columns.
+- `14b_insurance_master_add_insurance_cost.sql` — adds **`insurance_cost`** (total premium: preview before **Issue Policy**, then refreshed from post–**Issue Policy** scrape on **Generate Insurance**).
+- `15a_vehicle_master_variant_vin_unique_drop_dms_sku.sql` — **`vehicle_master.variant`**; widen **`place_of_registeration`** to 128; partial unique index on **`chassis`** (VIN); drop **`dms_sku`**.
 
 **New table (run after customer_master exists):**
 - `10_rto_payment_details.sql` — legacy base creation for the RTO table; current schema then applies `12c_rename_rto_payment_details_to_rto_queue.sql` so the active table is `rto_queue`.

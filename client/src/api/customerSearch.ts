@@ -17,8 +17,6 @@ export interface CustomerSearchResult {
     profession: string | null;
     financier: string | null;
     marital_status: string | null;
-    nominee_gender: string | null;
-    file_location: string | null;
     gender: string | null;
   } | null;
   vehicles: Array<{
@@ -37,6 +35,7 @@ export interface CustomerSearchResult {
       policy_num: string | null;
       policy_from: string | null;
       policy_to: string | null;
+      nominee_gender: string | null;
     }
   >;
   message?: string;

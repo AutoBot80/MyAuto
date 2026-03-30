@@ -109,9 +109,10 @@ BULK_JOB_MAX_ATTEMPTS = int(os.getenv("BULK_JOB_MAX_ATTEMPTS", "3"))
 # DMS fill (Playwright): base URL and login. Used when client calls POST /fill-dms.
 # DMS_BASE_URL / VAHAN_BASE_URL / INSURANCE_BASE_URL: required in .env (no in-code defaults); validated at app startup.
 DMS_BASE_URL = (os.getenv("DMS_BASE_URL") or "").strip().rstrip("/")
-# ``dummy`` = repo dummy HTML (enquiry.html, …). ``real`` = Hero Connect / Siebel: Playwright fills contact + vehicle search via Open UI selectors (see ``siebel_dms_playwright``); optional ``DMS_SIEBEL_*`` env for iframes.
-DMS_MODE = (os.getenv("DMS_MODE") or "dummy").strip().lower()
-# Required when DMS_MODE is real: ``DMS_REAL_URL_CONTACT`` for Stage 1 Find (always; ``skip_find`` in DB does not bypass).
+# Default **real** = Hero Connect / Siebel (``siebel_dms_playwright``). Values: ``real``, ``siebel``, ``live``, ``production``, ``hero``.
+# ``dummy`` is no longer supported (static training HTML removed).
+DMS_MODE = (os.getenv("DMS_MODE") or "real").strip().lower()
+# Required for Fill DMS: ``DMS_REAL_URL_CONTACT`` for Stage 1 Find (always; ``skip_find`` in DB does not bypass).
 # Also set ``DMS_REAL_URL_VEHICLE`` and other ``DMS_REAL_URL_*`` as needed (see fill_dms_service / LLD §2.4d).
 DMS_REAL_URL_CONTACT = (os.getenv("DMS_REAL_URL_CONTACT") or "").strip()
 # In Transit branch: e.g. Vehicles Receipt / HMCL In Transit (Process Receipt). See BRD §6.1a / run_hero_siebel_dms_flow.
@@ -123,7 +124,7 @@ DMS_REAL_URL_VEHICLE = (os.getenv("DMS_REAL_URL_VEHICLE") or "").strip()
 DMS_REAL_URL_ENQUIRY = (os.getenv("DMS_REAL_URL_ENQUIRY") or "").strip()
 DMS_REAL_URL_LINE_ITEMS = (os.getenv("DMS_REAL_URL_LINE_ITEMS") or "").strip()
 DMS_REAL_URL_REPORTS = (os.getenv("DMS_REAL_URL_REPORTS") or "").strip()
-# Siebel Open UI automation (used when DMS_MODE=real): optional tuning
+# Siebel Open UI automation: optional tuning
 DMS_SIEBEL_ACTION_TIMEOUT_MS = int(os.getenv("DMS_SIEBEL_ACTION_TIMEOUT_MS", "30000"))
 DMS_SIEBEL_NAV_TIMEOUT_MS = int(os.getenv("DMS_SIEBEL_NAV_TIMEOUT_MS", "90000"))
 DMS_SIEBEL_CONTENT_FRAME_SELECTOR = (os.getenv("DMS_SIEBEL_CONTENT_FRAME_SELECTOR") or "").strip()
@@ -152,10 +153,10 @@ PLAYWRIGHT_MANAGED_REMOTE_DEBUG_PORT: int | None = (
     int(_mdbg_raw) if _mdbg_raw.isdigit() and int(_mdbg_raw) > 0 else None
 )
 
-# Vahan (dummy or real) base URL for Playwright RTO registration step after DMS.
+# VAHAN base URL (production portal). Static training Vaahan automation was removed from the codebase.
 VAHAN_BASE_URL = (os.getenv("VAHAN_BASE_URL") or "").strip().rstrip("/")
 
-# Insurance (dummy or real) base URL for Playwright insurance fill step.
+# Insurance portal base URL for Playwright (e.g. Hero MISP).
 INSURANCE_BASE_URL = (os.getenv("INSURANCE_BASE_URL") or "").strip().rstrip("/")
 # Max time (ms) to wait on the login page for the operator to sign in and reach KYC.
 INSURANCE_LOGIN_WAIT_MS = int(os.getenv("INSURANCE_LOGIN_WAIT_MS", "600000"))
@@ -166,8 +167,10 @@ INSURANCE_POLICY_FILL_TIMEOUT_MS = int(os.getenv("INSURANCE_POLICY_FILL_TIMEOUT_
 
 
 def dms_automation_is_real_siebel() -> bool:
-    """True when Fill DMS should use configured Siebel absolute URLs instead of dummy HTML paths."""
-    m = (DMS_MODE or "dummy").strip().lower()
+    """True when Fill DMS should run Siebel automation (``dummy`` mode is not supported)."""
+    m = (DMS_MODE or "real").strip().lower()
+    if m == "dummy":
+        return False
     return m in ("real", "siebel", "live", "production", "hero")
 
 
@@ -185,5 +188,10 @@ def validate_external_site_urls() -> None:
             "Missing required environment variables (no defaults): "
             + ", ".join(missing)
             + ". Set them in backend/.env — see backend/.env.example."
+        )
+    if (DMS_MODE or "").strip().lower() == "dummy":
+        raise RuntimeError(
+            "DMS_MODE=dummy is no longer supported (static training sites were removed). "
+            "Set DMS_MODE=real (or siebel/live/production/hero) and configure DMS_REAL_URL_CONTACT."
         )
 

@@ -118,12 +118,13 @@ def search_customer(
     try:
         with conn.cursor() as cur:
 
-            # 2) Customer details from customer_master
+            # 2) Customer details from customer_master (file_location per sale on sales_master;
+            # nominee_gender on insurance_master)
             cur.execute(
                 """
                 SELECT customer_id, name, mobile_number, address, pin, city, state,
                        date_of_birth, alt_phone_num, profession, financier, marital_status,
-                       nominee_gender, file_location, gender
+                       gender
                 FROM customer_master
                 WHERE customer_id = %s
                 """,
@@ -174,7 +175,7 @@ def search_customer(
             if vehicle_ids:
                 cur.execute(
                     """
-                    SELECT DISTINCT ON (vehicle_id) vehicle_id, insurer, policy_num, policy_from, policy_to
+                    SELECT DISTINCT ON (vehicle_id) vehicle_id, insurer, policy_num, policy_from, policy_to, nominee_gender
                     FROM insurance_master
                     WHERE customer_id = %s AND vehicle_id = ANY(%s)
                     ORDER BY vehicle_id, insurance_year DESC NULLS LAST

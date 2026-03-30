@@ -1,7 +1,7 @@
 # Business Requirements Document (BRD)
 ## Auto Dealer Management System — Arya Agencies
 
-**Version:** 2.7  
+**Version:** 2.9  
 **Last Updated:** March 2026  
 **Status:** Draft
 
@@ -41,20 +41,21 @@ The system is a server–client application for auto dealers. Dealers run a ligh
 | BR-3 | Date format | Default date format for app and DB is **dd/mm/yyyy** (e.g. 30/05/1980). |
 | BR-4 | Sales uniqueness | One sale per (customer_id, vehicle_id); sales_id is auto-generated PK. |
 | BR-5 | RTO application | One RTO application per sale (sales_id); application_id from Vahan is PK. |
-| BR-6 | Service reminders | When dealer has auto_sms_reminders = Y, sales_master upsert triggers population of service_reminders_queue from oem_service_schedule. |
+| BR-6 | Service reminders | When dealer has auto_sms_reminders = Y, **INSERT or UPDATE** on `sales_master` runs trigger `fn_sales_master_sync_service_reminders` (`DDL/09_trigger_sales_master_sync_service_reminders.sql`), which refreshes `service_reminders_queue` from `dealer_ref` + `oem_service_schedule`. **Single writer:** the queue is **trigger-maintained only** — application code must **not** INSERT or UPDATE `service_reminders_queue` (avoids duplicating trigger logic and drifting behavior). |
 | BR-7 | Form 20 data | Form 20 fields populated from customer_master, vehicle_master, dealer_ref; vehicle data merged from DB when vehicle_id provided. |
 | BR-8 | Bulk failure visibility | Bulk Upload `Error` and `Rejected` records must remain in the hot dashboard until the operator marks `action_taken=true`; older rows are not archived. |
-| BR-9 | Automation source of truth | DMS and Vahan Playwright fills must read site field values from `form_dms_view` and `form_vahan_view` only. |
+| BR-9 | Automation source of truth | **Vahan** Playwright fills must read site field values from `form_vahan_view` only. **DMS (Create Invoice)** must use **`add_sales_staging.payload_json`** (OCR merge) plus values **scraped during the DMS run** — **not** `customer_master`, `vehicle_master`, or `sales_master`. A legacy path with **`customer_id` + `vehicle_id`** may still load the same projection from masters until fully retired. |
 | BR-10 | Automation trace output | DMS and Vahan automation must write `DMS_Form_Values.txt` and `Vahan_Form_Values.txt` into the matching `ocr_output/<dealer>/<subfolder>/` folder. |
 | BR-11 | Admin data reset preservation | Admin-triggered data reset must preserve `oem_ref`, `dealer_ref`, and `oem_service_schedule` while clearing all other public base tables. |
 | BR-12 | Operator-assisted browser session requirement | DMS and Vahan automation should first reuse already open, logged-in site tabs; when no detectable tab is available, the system should open Edge/Chrome for the operator and ask the operator to complete login (first-time) before retrying automation. |
-| BR-13 | Automation value discipline | Playwright must never assume, infer, remember, or default fill values for DMS/Vahan fields. Values sent to site fields must come directly from DB-backed views (`form_dms_view`, `form_vahan_view`) and persisted records only. |
+| BR-13 | Automation value discipline | Playwright must never assume, infer, remember, or default fill values for DMS/Vahan fields. Values sent to site fields must come directly from the approved sources in **BR-9** (DMS: staging JSON or master join in app code; Vahan: `form_vahan_view`) and related persisted columns only. |
 | BR-14 | DMS booking test budget | Dummy / training DMS flow uses a fixed **customer budget / enquiry amount of 89000** for booking generation unless the business replaces this constant in automation. |
 | BR-15 | Ex-showroom vs column name | **Order Value / ex-showroom** from DMS is persisted as `vehicle_master.vehicle_ex_showroom_price` (no separate `vehicle_cost` column). `form_vahan_view` still exposes the value as `vehicle_price`. Labels in exports and dummy UI read **Ex-showroom Price**. |
 | BR-16 | Create Invoice automated | DMS Playwright clicks **Apply Campaign** then **Create Invoice** at the end of `_attach_vehicle_to_bkg`; scrapes **Invoice#** on success. |
 | BR-17 | Aadhaar gender default | When **gender** is not extracted from **AWS Textract** (Aadhaar front/back text) and parsers for a subfolder that includes `Aadhar.jpg` and/or `Aadhar_back.jpg`, the persisted `customer.gender` in `OCR_To_be_Used.json` defaults to **Male** (operators may correct before submit). |
-| BR-18 | Address-derived locality | When **state**, **PIN**, or **care_of** is missing but **address** contains **`C/O:`** (Care of), **`DIST: <District>, <State> - <PIN>`** (including OCR variants like **`<State> - - <PIN>`** or **`<State> -- <PIN>`**), a trailing **`<Indian state> - <PIN>`** when **`DIST:`** is unreadable, and/or a 6-digit PIN, the system infers **`care_of`**, **`city`/district**, **`state`**, **`pin`**; drops text **after the PIN**; strips **C/O** from the stored address line. Applied on Submit Info, OCR JSON, Aadhaar back parsing, and DMS fill when `form_dms_view` fields are sparse. |
+| BR-18 | Address-derived locality | When **state**, **PIN**, or **care_of** is missing but **address** contains **`C/O:`** (Care of), **`DIST: <District>, <State> - <PIN>`** (including OCR variants like **`<State> - - <PIN>`** or **`<State> -- <PIN>`**), a trailing **`<Indian state> - <PIN>`** when **`DIST:`** is unreadable, and/or a 6-digit PIN, the system infers **`care_of`**, **`city`/district**, **`state`**, **`pin`**; drops text **after the PIN**; strips **C/O** from the stored address line. Applied on Submit Info, OCR JSON, Aadhaar back parsing, and DMS fill when address/state/PIN fields are sparse. |
 | BR-19 | Siebel Contact Find and Add Enquiry persistence | On **real** Hero Connect / Siebel (`DMS_MODE=real`), Contact **Find** uses **Mobile** + **Contact First Name**; first name must be present and must not be a placeholder (**§6.1b**). The **First Name** query field is typed **exactly** (no wildcard). **Grid / automation row detection** after Find uses the **legacy** Hero-aligned rules (**§6.1b**): first-token and prefix matching on row text and cells, optional **mobile-only** acceptance when the name is not in the DOM, plus duplicate-row handling — not strict cell-only exact equality. **Open enquiry**, **suffixed first name** when creating a new opportunity for an existing mobile, and the **Enquiry# post-save gate** (timed polls) are specified in **§6.1b**. |
+| BR-20 | Generate Insurance inputs | **Generate Insurance** runs only after **Create Invoice** has persisted **`sales_master`**, **`customer_master`**, and **`vehicle_master`** (commit wave after successful DMS), so **`form_insurance_view`** returns the sale-linked projection. **`add_sales_staging.payload_json`** holds the merged OCR / operator snapshot from Submit. **Together** — view + staging — are the **complete approved input set**. The Add Sales client passes **`customer_id`** and **`vehicle_id`** from the **Create Invoice** response (or legacy flow) and the same **`staging_id`** (**`insurance_form_values.build_insurance_fill_values`**). **`OCR_To_be_Used.json`** is used **only** as a last-resort **insurer** fallback when both view and staging lack insurer. **No** **`insurance_master`** write on Submit; on **successful** Generate Insurance, the backend **INSERT**s **`insurance_master`** for the current calendar **`insurance_year`** (**fails** if **`(customer_id, vehicle_id, insurance_year)`** already exists). Nominee/insurer from fill dict; **policy number** and **`insurance_cost`** from the **policy preview** before **Issue Policy** when scraped; other policy fields from staging when present. Playwright then clicks **Issue Policy** and scrapes **policy number** and **`insurance_cost`** again; **`update_insurance_master_policy_after_issue`** updates those columns on the same row (operators are not expected to pay/issue twice for the same sale/year). |
 
 ---
 
@@ -69,7 +70,7 @@ The system is a server–client application for auto dealers. Dealers run a ligh
 - **FR-5** Allow users to review and correct OCR-extracted data before it is used.
 - **FR-6** Trigger "send to portal" actions that enqueue automation jobs.
 - **FR-7** Basic client-side validation (required fields, formats) with no heavy business logic.
-- **FR-8** Add Sales flow: Submit Info (customer, vehicle, insurance) → operator-triggered actions with separate controls (`Fill DMS`, `Fill Insurance`, `Print Forms`) → RTO Queue insertion during print step.
+- **FR-8** Add Sales flow: Submit Info (customer, vehicle, insurance) → **draft** **`add_sales_staging`** (**`staging_id`**) only → operator-triggered **Create Invoice** (DMS), **Generate Insurance**, **Print Forms and Queue RTO** → RTO Queue insertion during print when IDs exist. **Create Invoice** / **Print Forms** activate after Submit returns **`staging_id`**. **Generate Insurance** additionally requires **`customer_id`** / **`vehicle_id`** returned from a successful **Create Invoice** (post-commit masters). **Create Invoice** and **Generate Insurance** pass **`staging_id`** for **`payload_json`** merge with views (**BR-20**). **Eligibility** (`GET /add-sales/create-invoice-eligibility`): **Create Invoice** allowed when there is **no** matching **`sales_master`** row for the resolved **`vehicle_master`** (**`raw_frame_num`** / **`raw_engine_num`**) + **`customer_master`** (**`mobile_number`**) pair, **or** the row exists with blank **`invoice_number`** (no **`dealer_id`** in the match). **Generate Insurance** when a **sales** row exists, **invoice** is recorded, and no **`insurance_master`** row for that sale has non-empty **`policy_num`**. **Print Forms and Queue RTO** gating unchanged in spirit (**New** / Submit / automation / print interplay per UI). **`customer_master.dms_contact_id`** optional Siebel Contact Id. Masters upsert: **after** successful Create Invoice (**FR-17**, **LLD §2.2a**).
 - **FR-9** RTO Queue page: list queued RTO work items created by Fill Forms and let an operator process the oldest 7 queued rows for their dealer in one browser session.
 - **FR-10** View Customer page: search by mobile/plate, view vehicles and insurance, and inspect the selected vehicle's Vahan field mapping in a single horizontally scrollable row.
 - **FR-10a** Main page: show an `Admin Saathi` tile with a destructive-action button that lets an operator clear all non-reference-table data after explicit confirmation.
@@ -80,12 +81,12 @@ The system is a server–client application for auto dealers. Dealers run a ligh
 - **FR-12** Accept document uploads, store files (local or S3), and create OCR jobs.
 - **FR-13** Process OCR jobs (Tesseract), parse results, and persist structured data.
 - **FR-14** Accept automation requests, enqueue them through SQS or the local in-process fallback queue, and track status.
-- **FR-15** Run Playwright workers that log into external portals and submit data from database-backed views and records.
+- **FR-15** Run Playwright workers that log into external portals and submit data from approved sources (DMS: staging or master-backed fill row in app code; Vahan/insurance: views and records as specified).
 - **FR-16** Persist all business data in PostgreSQL with clear ownership (e.g. dealer_id) for multi-tenant use.
-- **FR-17** Submit Info: upsert customer_master, vehicle_master, sales_master, insurance_master from extracted/entered data.
-- **FR-18** Fill DMS: Playwright reads fill values only from `form_dms_view`. **Target real-DMS step order** is **§6.1a**; **normative Contact Find, grid match, open enquiry, suffixed first name, and Enquiry# save gate:** **§6.1b** (and **BR-19**); implementation parity: **LLD §2.4d** / **LLD** changelog **6.8**. **`"DMS Contact Path"`** may be **`skip_find`** for **dummy** DMS only (skips contact-finder Go, then enquiry form + Generate booking and the rest). **Real Siebel always runs Contact Find first** (`DMS_REAL_URL_CONTACT`, **mobile + Contact First Name** + Go; empty or placeholder first name fails the run — see **§6.1b**) even when `dms_contact_path` is **`skip_find`**, so the existing customer is opened in the correct Siebel context; **`skip_find` is not a bypass** for real automation. **Generate Booking** runs **after** vehicle processing for all paths; allotment when **not** In Transit (see **LLD §2.4d**). **Real Siebel after find:** existing match → care-of only + Save; no match or **`new_enquiry`** → basic enquiry + Save + mandatory re-find + care-of; vehicle scrape with **In Transit** detection; branch receipt → **Pre Check** → **PDI** vs booking/allotment per **§6.1a**. **`DMS_MODE=dummy`:** enquiry (contact find or `new_enquiry`, or `skip_find`) → stock/PDI → vehicle search → allocate → invoicing-line (no Create Invoice) → reports on static HTML under `DMS_BASE_URL`; scrape vehicle row (**ex-showroom** into `vehicle_price`); download Form 21/22 and GST invoice sheet PDF; write traces into `ocr_output`; update `vehicle_master` from scraped data. **`DMS_MODE=real`:** `siebel_dms_playwright.run_hero_siebel_dms_flow`; write `DMS_Form_Values.txt`; tune `DMS_SIEBEL_*` and `DMS_REAL_URL_*`; static training PDF downloads are not used. **Merge rule:** Fill DMS persists scraped **full** chassis/engine and related fields into `vehicle_master` but **does not overwrite** `raw_frame_num` / `raw_engine_num` (those stay Submit Info / Sales Detail Sheet so partial VIN/engine for Siebel vehicle search match operator entry).
+- **FR-17** Submit Info (**`POST /submit-info`**): validate and write or update a **draft** **`add_sales_staging`** row only (merged **`customer`**, **`vehicle`**, **`insurance`**, **`dealer_id`**, **`file_location`**); response **`staging_id`**. **`customer_master`**, **`vehicle_master`**, **`sales_master`**, and **`insurance_master`** are **not** written on Submit; after **successful Create Invoice (DMS)**, **`add_sales_commit_service`** **upserts** **`customer_master`** / **`vehicle_master`** and **inserts** **`sales_master`** (**fails** if **`(customer_id, vehicle_id)`** already exists — **§6.1d**). **`insurance_master`** persists after **Generate Insurance** as elsewhere. **LLD §2.2a**.
+- **FR-18** Fill DMS: Playwright reads DMS fill values from **OCR merge in `add_sales_staging`** (target) or, until staging is wired end-to-end, the **same projection as the former `form_dms_view`** loaded via **`form_dms.py`** (inline `sales_master` + `customer_master` + `vehicle_master` join after Submit Info). **`form_dms_view` is not used.** **Target real-DMS step order** is **§6.1a**; **normative Contact Find, grid match, open enquiry, suffixed first name, and Enquiry# save gate:** **§6.1b** (and **BR-19**); implementation parity: **LLD §2.4d** / **LLD** changelog **6.8**. Static training DMS HTML and **`DMS_MODE=dummy`** were removed; **`DMS_MODE`** defaults to **real** Siebel. **`"DMS Contact Path"`** / **`skip_find`** in persisted data **does not** skip Contact Find on real Siebel — automation **always** runs Find first (`DMS_REAL_URL_CONTACT`, **mobile + Contact First Name** + Go; empty or placeholder first name fails — **§6.1b**); **`skip_find` is not a bypass**. **Generate Booking** runs **after** vehicle processing; allotment when **not** In Transit (see **LLD §2.4d**). **After find:** existing match → care-of only + Save; no match or **`new_enquiry`** → basic enquiry + Save + mandatory re-find + care-of; vehicle scrape with **In Transit** detection; branch receipt → **Pre Check** → **PDI** vs booking/allotment per **§6.1a**. Implementation: **`siebel_dms_playwright.run_hero_siebel_dms_flow`**; **`DMS_Form_Values.txt`** / **`Playwright_DMS.txt`**; tune **`DMS_SIEBEL_*`** and **`DMS_REAL_URL_*`**. **Merge rule:** Fill DMS persists scraped **full** chassis/engine and related fields into `vehicle_master` but **does not overwrite** `raw_frame_num` / `raw_engine_num` (those stay Submit Info / Sales Detail Sheet so partial VIN/engine for Siebel vehicle search match operator entry).
 - **FR-18a** Existing tab reuse with operator fallback: DMS/Vahan steps first reuse already open logged-in tabs; if none are detectable, API opens Edge/Chrome to the target site and returns a user-facing message asking the operator to login (first-time) and retry.
-- **FR-18b** Insurance fill step: Playwright fills Insurance portal fields from persisted DB records only, reuses an already open logged-in insurance tab (or opens browser and asks operator to login first-time), does not click final issue/submit, and keeps the browser open for operator review.
+- **FR-18b** Insurance fill step: Playwright fills Insurance portal fields from **`form_insurance_view`** (after sale rows exist) merged with **`add_sales_staging.payload_json`** for the same **`staging_id`** (**BR-20**). Add Sales always supplies **`staging_id`** with **Generate Insurance** so the OCR snapshot and committed masters are used together. **`OCR_To_be_Used.json`** is only an insurer fallback when view and staging both lack insurer. Reuses an already open logged-in insurance tab (or opens browser and asks operator to login first-time) and keeps the browser open for operator review. After **Proposal Review**, the flow scrapes the **policy preview** (before **Issue Policy**) for **`policy_num`** and **`insurance_cost`**, then **INSERT**s **`insurance_master`** for the current calendar year via **`add_sales_commit_service.insert_insurance_master_after_gi`** (**fails** if **`(customer_id, vehicle_id, insurance_year)`** already exists — **`uq_insurance_customer_vehicle_year`**). Playwright clicks **Issue Policy**; **`click_issue_policy_and_scrape_preview`** scrapes **`policy_num`** and **`insurance_cost`** again; **`add_sales_commit_service.update_insurance_master_policy_after_issue`** updates those columns on the row for the current year.
 - **FR-19** Form 20: Generate Form 20.pdf from Word template (or PDF overlay / HTML fallback); fill placeholders from customer, vehicle, dealer; output combined PDF (front, back, page 3).
 - **FR-19a** Gate Pass: Generate Gate Pass.pdf from Word template; fill placeholders (OEM name, today date, customer name, Aadhar, model, colour, key no., chassis no.); save to upload subfolder.
 - **FR-20** RTO Queueing: after Fill Forms completes DMS/Form 20 work, create an `rto_queue` row with the dealer/customer/vehicle reference, estimated RTO fees, and queued status instead of auto-running the dummy Vahan site.
@@ -121,13 +122,13 @@ This section defines the required operator navigation path and minimum field-ent
 
 ### 6.1a Hero Connect / Siebel eDealer — Target DMS automation sequence (ordered)
 
-This is the **intended** real-DMS order (aligned with the operator screen recording and dealer workflow). Values on every fill step must come only from `form_dms_view` and persisted records (BR-9, BR-13). **Create Invoice** is automated via `_attach_vehicle_to_bkg` (BR-16). Playwright implementation parity is tracked in **LLD §2.4d**.
+This is the **intended** real-DMS order (aligned with the operator screen recording and dealer workflow). Values on every fill step must come only from the DMS sources in **BR-9** / **BR-13** (staging OCR merge or master-backed fill row). **Create Invoice** is automated via `_attach_vehicle_to_bkg` (BR-16). Playwright implementation parity is tracked in **LLD §2.4d**.
 
 | Step | Siebel module / screen (typical labels) | Action |
 |------|----------------------------------------|--------|
 | 0 | **Hero Connect** (session) | Operator is signed in. Automation reuses a logged-in tab when possible (BR-12); otherwise opens browser and waits for operator login before continuing. |
 | 1 | **Contacts** (or Buyer/CoBuyer contact view — `DMS_REAL_URL_CONTACT`) | If **Find** is collapsed, expand it; set **Find** object type to **Contact**; enter **Mobile** and **Contact First Name** (both required on real Siebel — **§6.1b**); run query (**Go** / **Find**). |
-| 2a | **Contact / Enquiry — not found** | **Preferred (real Siebel):** when **Find** returns **no table row matching mobile + first name** (**§6.1b**), vehicle **Find→Vehicles** + VIN/engine query + scrape (model, **YYYY** year, color), then **Enquiry** → **Opportunities List:New** → fill from `form_dms_view` + scrape: **Contact First/Last Name**, **Mobile Phone**, **Landline** (alternate), **UIN Type** Aadhaar, **UIN No.** (last 4), **State**, optional **District** / **Tehsil** / **City** / **Age** / **Gender** when present in DB, **Address Line 1**, **Pin Code**, **Model Interested In** / **Color** from scrape, **Finance Required** Y/N (from **`Finance Required`** column or financier populated), **Booking Order Type** Normal Booking, **Enquiry Source** Walk-In, **Point of Contact** Customer Walk-in, **Actual Enquiry Date** (today **dd/mm/yyyy**); **do not** require **Financier** fields; **Ctrl+S**. **Fallback:** basic enquiry form + **Save** if this path cannot complete. |
+| 2a | **Contact / Enquiry — not found** | **Preferred (real Siebel):** when **Find** returns **no table row matching mobile + first name** (**§6.1b**), vehicle **Find→Vehicles** + VIN/engine query + scrape (model, **YYYY** year, color), then **Enquiry** → **Opportunities List:New** → fill from **DMS fill source** (staging OCR or master join) **+ scrape**: **Contact First/Last Name**, **Mobile Phone**, **Landline** (alternate), **UIN Type** Aadhaar, **UIN No.** (last 4), **State**, optional **District** / **Tehsil** / **City** / **Age** / **Gender** when present in DB, **Address Line 1**, **Pin Code**, **Model Interested In** / **Color** from scrape, **Finance Required** Y/N (from **`Finance Required`** column or financier populated), **Booking Order Type** Normal Booking, **Enquiry Source** Walk-In, **Point of Contact** Customer Walk-in, **Actual Enquiry Date** (today **dd/mm/yyyy**); **do not** require **Financier** fields; **Ctrl+S**. **Fallback:** basic enquiry form + **Save** if this path cannot complete. |
 | 2b | **Contact / Enquiry — found** | When **one or more** rows match **mobile + Contact First Name** (**§6.1b**), use the **first** row (top-to-bottom order) that has an **open enquiry** on tab **Contact_Enquiry** (≥1 populated list row — **§6.1b**). If **no** matching row has an open enquiry, create a **new opportunity** with **suffixed** Contact First Name (`.`, `..`, … — **§6.1b**), then re-find and open that contact. Then update **S/O or W/o** and **Father / Husband / Care of** (and related care-of fields) from DB-backed values only; **Save**. Do not replace the whole customer record unless the product owner explicitly extends this rule. |
 | 3 | **Vehicles → Auto Vehicle List** (`DMS_REAL_URL_VEHICLE`) | Query by **Key / VIN (chassis) / Engine** partials; execute find; open or read the row and determine **stock status** (e.g. **In Transit** vs available for booking/allocation). |
 | 4a | **Branch: In Transit** | **Vehicles Receipt → HMCL – In Transit** (or tenant-equivalent): **Process Receipt** for the VIN. Then complete **Pre Check** / **PDI Pre-Check** (often on the same GotoView as PDI — `DMS_REAL_URL_PRECHECK` optional, else first actions on `DMS_REAL_URL_PDI`) **before** main **Auto Vehicle PDI Assessment** submit (`DMS_REAL_URL_PDI`): complete required **inspection** sub-forms; **Submit** / save as the UI requires. |
@@ -163,39 +164,55 @@ This is the **intended** real-DMS order (aligned with the operator screen record
    - Fill **VIN** using `id="field_textbox_0"` and **Engine#** using `id="field_textbox_2"` in the **same frame**.
    - If those same-frame controls are not available/fillable, stop with failure (do not fall back to looser selector inference).
 
+### 6.1c Vehicle master (reference)
+
+- **`chassis`** / **`engine`**: full VIN and full engine from the Siebel **Vehicles** record scrape (**`full_chassis`**, **`full_engine`**).
+- **`key_num`**: same as **`raw_key_num`** on initial master commit.
+- **`variant`**: scraped from the Vehicles page (`varchar(64)`).
+- **`model`**, **`colour`**, **`year_of_mfg`**, **`cubic_capacity`**: from the Vehicles page / sub-page per automation; **`vehicle_type`** is normalized to **ALL CAPS** for storage.
+- **Two-wheeler:** when normalized **`vehicle_type`** contains **MOTORCYCLE** or **SCOOTER**, set **`seating_capacity`** = **2**, **`body_type`** = **Open**, **`num_cylinders`** = **1**.
+- **`place_of_registeration`**, **`oem_name`**: from **`dealer_ref.rto_name`** and **`oem_ref.oem_name`** for the sale’s dealer (via latest **`sales_master`**), not from the vehicle UI.
+- **`vehicle_ex_showroom_price`**: scraped after **Price All** / **Allocate All** in the booking-attach path (**`_attach_vehicle_to_bkg`**).
+- **Uniqueness:** keep **`uq_vehicle_raw_triple`** on raw columns and enforce a **partial unique index** on populated **`chassis`** (canonical VIN). Column **`dms_sku`** is **dropped**.
+
+### 6.1d `sales_master` (reference)
+
+- **`order_number`**, **`invoice_number`**, and **`enquiry_number`** are **scraped from Siebel at different points** during the DMS run (enquiry / order / invoice stages — not a single screen). Persistence uses **`update_sales_master_from_dms_scrape`** as each value becomes available (`COALESCE` merge on the sale row).
+- **`vahan_application_id`** and **`rto_charges`** are **not** filled during DMS; they are written later by the **Vahan** form-filling / RTO queue processing when application id and fees are scraped from VAHAN.
+- **Post–Create Invoice master commit** (`add_sales_commit_service`): **`sales_master`** insert **fails** if a row already exists for the same **`(customer_id, vehicle_id)`** (no upsert / no silent merge on conflict).
+
 ### 6.2 DMS Fields to Fill (Minimum Contract)
 
 | Page | Field label | Required source |
 |------|-------------|-----------------|
-| Enquiry | Contact First Name | `form_dms_view` (customer identity derived from DB records) |
-| Enquiry | Contact Last Name | `form_dms_view` |
-| Enquiry | Mobile Phone # | `form_dms_view` |
-| Enquiry | Landline # | `form_dms_view` (`customer_master.alt_phone_num`) |
-| Enquiry | State | `form_dms_view` |
-| Enquiry | Address Line 1 | `form_dms_view` |
-| Enquiry | Pin Code | `form_dms_view` |
-| Vehicle Search | Key num (partial) | `form_dms_view` |
-| Vehicle Search | Frame / Chassis num (partial) | `form_dms_view` |
-| Vehicle Search | Engine num (partial) | `form_dms_view` |
-| Enquiry | Relation (S/O or W/o), Father/Husband name | `form_dms_view` — from `customer_master.care_of` (Aadhaar QR), else legacy `father_or_husband_name` |
-| Enquiry | Financier / Finance Required (invoicing line) | `form_dms_view` (`customer_master.financier`) |
-| Enquiry | New vs existing CRM contact | `form_dms_view` (`"DMS Contact Path"`: `found` / `new_enquiry` / **`skip_find`** — dummy: `skip_find` skips finder Go; **real Siebel: always runs Find first**; `skip_find` in DB is ignored for automation order) |
+| Enquiry | Contact First Name | DMS fill: **`add_sales_staging.payload_json`** (OCR merge) or master columns via **`form_dms.py`** join |
+| Enquiry | Contact Last Name | DMS fill (staging or master join) |
+| Enquiry | Mobile Phone # | DMS fill (staging or master join) |
+| Enquiry | Landline # | DMS fill — `customer_master.alt_phone_num` when using master path |
+| Enquiry | State | DMS fill (staging or master join) |
+| Enquiry | Address Line 1 | DMS fill (staging or master join) |
+| Enquiry | Pin Code | DMS fill (staging or master join) |
+| Vehicle Search | Key num (partial) | DMS fill (staging or master join) |
+| Vehicle Search | Frame / Chassis num (partial) | DMS fill (staging or master join) |
+| Vehicle Search | Engine num (partial) | DMS fill (staging or master join) |
+| Enquiry | Relation (S/O or W/o), Father/Husband name | DMS fill — `customer_master.care_of` (Aadhaar QR); relation prefix from first 3 chars of address else `D/o`/`S/o` by customer gender |
+| Enquiry | Financier / Finance Required (invoicing line) | DMS fill — `customer_master.financier` |
+| Enquiry | New vs existing CRM contact | DMS fill — `"DMS Contact Path"`: `found` / `new_enquiry` / **`skip_find`** — dummy: `skip_find` skips finder Go; **real Siebel: always runs Find first**; `skip_find` in DB is ignored for automation order |
 | Invoicing line | Order Value (Ex-showroom) | Scraped from DMS → `vehicle_master.vehicle_ex_showroom_price` |
-| Post-Fill DMS | Enquiry# | Scraped from Contact_Enquiry tab → `sales_master.enquiry_number` |
-| Post-Fill DMS | Order# | Scraped after Ctrl+S in create_order → `sales_master.order_number` |
-| Post-Fill DMS | Invoice# | Scraped after Create Invoice → `sales_master.invoice_number` |
+| Post-Fill DMS | Enquiry# | Scraped during DMS (enquiry stage) → `sales_master.enquiry_number` |
+| Post-Fill DMS | Order# | Scraped during DMS (order stage) → `sales_master.order_number` |
+| Post-Fill DMS | Invoice# | Scraped during DMS (invoice stage) → `sales_master.invoice_number` |
 
 ### 6.3 Vahan Fields to Fill (Minimum Contract)
 
 - All Vahan fields must be read from `form_vahan_view` labels and DB-backed technical columns (no hardcoded assumptions during runtime).
+- **Persist back to `sales_master`:** **`vahan_application_id`** and **`rto_charges`** on the sale row are updated when the Vahan / RTO batch run scrapes them — not during DMS (**§6.1d**).
 - Operator workflow remains: logged-in tab reuse first, fallback to auto-open browser and first-time login prompt, then retry.
 
 ### 6.4 Insurance Fields to Fill (Submit Info Contract)
 
-- Insurance data captured in Submit Info must map to persisted DB columns before any downstream automation:
-  - `insurance_master`: insurer, policy number, policy dates, premium, nominee fields.
-  - `customer_master`: `profession`, `financier`, `marital_status`, `nominee_gender`, `care_of` (Aadhaar QR care-of / father–husband), `dms_relation_prefix`, `dms_contact_path` captured with details-sheet / DMS automation context in Add Sales (`father_or_husband_name` is legacy only).
-- Hero Insurance loads **chassis, customer, nominee, insurer**, etc. from **`form_insurance_view`** (existing columns on `customer_master`, `vehicle_master`, latest `insurance_master` per sale). **Email, add-ons, CPA tenure, payment mode, and registration date** on the proposal page may use **hardcoded** defaults in Playwright until optional columns exist. Insurer may fall back to the details sheet OCR JSON when `insurance_master.insurer` is empty.
+- Insurance and related customer fields from Submit Info are validated and stored in **`add_sales_staging.payload_json`** (`nominee_gender` under **insurance** until **Generate Insurance** commits). **`insurance_master`** is not written on Submit; after **successful Generate Insurance**, the API **INSERT**s **`insurance_master`** for the current **`insurance_year`** (**fails** on duplicate **`(customer_id, vehicle_id, insurance_year)`**), including **`nominee_gender`**; nominee/insurer from the MISP fill dict; initial policy # and **`insurance_cost`** from preview scrape when present; dates, premium, idv, broker from staging when present. After **Issue Policy**, the same row’s **`policy_num`** / **`insurance_cost`** are refreshed from a second scrape (**FR-18b**). On master commit after **Create Invoice**, **`customer_master`** receives profession/financier/marital/care_of/DMS path fields from the staging snapshot (**FR-17**); per-sale **`file_location`** is **`sales_master.file_location`** (mirrored on **`customer_master.file_location`** on commit).
+- Hero Insurance: after **Create Invoice**, **`form_insurance_view`** plus **`add_sales_staging.payload_json`** (same **`staging_id`** as DMS) supply the automation inputs — committed sale/vehicle/customer context from the view and the full OCR/operator merge from staging (**BR-20**). **Email, add-ons, CPA tenure, payment mode, and registration date** on the proposal page may use **hardcoded** defaults in Playwright until optional columns exist. Insurer may fall back to **`OCR_To_be_Used.json`** only when view and staging lack it.
 
 ### 6.5 Insurance Navigation Sequence (Video-Aligned)
 
@@ -205,6 +222,7 @@ This is the **intended** real-DMS order (aligned with the operator screen record
 4. MisDMS policy entry page (`MispDms.aspx`) with VIN input
 5. New policy creation page (`MispPolicy.aspx`) for "New Policy - Two Wheeler"
 6. (Optional reference tab) Hero Connect lookup for invoice/vehicle context, then return to MisDMS policy flow
+7. **Proposal Review** → preview scrape → **`insurance_master` INSERT** (current calendar year; **fails** if that triple already exists) → **Issue Policy** → scrape **`policy_num`** / **`insurance_cost`** again → **UPDATE** the same row (**FR-18b**)
 
 ### 6.6 Insurance Labels to Minimum Data Source Contract
 
@@ -236,7 +254,7 @@ This is the **intended** real-DMS order (aligned with the operator screen record
 | New Policy | Ex-Showroom | Vehicle price | `vehicle_master.vehicle_ex_showroom_price` (via `form_vahan_view.vehicle_price`) |
 | New Policy | RTO | Dealer RTO mapping | `dealer_ref.rto_name` |
 | New Policy | Nominee Name/Age/Relation | Insurance nominee details | `insurance_master.nominee_name`, `insurance_master.nominee_age`, `insurance_master.nominee_relationship` |
-| New Policy | Nominee Gender | Customer-linked nominee capture | `customer_master.nominee_gender` |
+| New Policy | Nominee Gender | Staging until policy commit | `insurance_master.nominee_gender` (`form_insurance_view`) |
 | New Policy | Financer Name | Finance context from details sheet | `customer_master.financier` |
 | New Policy | Email / add-ons / CPA / payment / reg. date (proposal) | Hardcoded Playwright defaults | Not persisted (optional future columns) |
 
@@ -298,7 +316,7 @@ Bulk upload automates the ingestion of scanned documents from a shared folder in
 
 - Dealer can add/view dealer records via the client against the live backend.
 - Document upload creates an OCR job and extracted data is stored and reviewable.
-- Submit Info persists customer, vehicle, sales, insurance.
+- Submit Info persists a **draft** **`add_sales_staging`** row only (**`POST /submit-info`**, **`staging_id`**); **Create Invoice** uses **`payload_json`** via **`staging_id`** then commits masters; **Generate Insurance** uses committed IDs + **`staging_id`** (**FR-17**, **LLD §2.2a**).
 - Fill DMS scrapes vehicle data, downloads Form 21/22, and writes `DMS_Form_Values.txt` under `ocr_output`.
 - Form 20.pdf is generated and saved to upload subfolder.
 - Fill Forms inserts an `rto_queue` row instead of auto-submitting the dummy Vahan site.
@@ -356,6 +374,14 @@ Bulk upload automates the ingestion of scanned documents from a shared folder in
 | 3.10 | Mar 2026 | — | **§6.1b**: duplicate-mobile sweep — **in-place** drills only (**no** Contact Find between rows); on failure, sweep stops; ordinal ≥1 uses **mobile-only** row match (**LLD** **6.12**) |
 | 3.11 | Mar 2026 | — | Insurance automation decoupled from DMS: shared browser/tab logic in **`handle_browser_opening`**; insurance DB/OCR helpers in **`insurance_form_values`** / **`insurance_kyc_payloads`**; **`run_fill_insurance_only`** lives in **`fill_hero_insurance_service`**; **`Playwright_insurance.txt`** trace under `ocr_output/<dealer>/<subfolder>/` |
 | 3.12 | Mar 2026 | — | **§6.1b**: Contact Find **First Name** is **exact** (no **`*`** wildcard); grid match requires **mobile + exact first name** (case-insensitive equality on a cell); superseded fuzzy / starts-with / first-token row rules for Find + primary grid hit (**LLD** **6.18**) |
-| 3.13 | Mar 2026 | — | **Create booking** (Vehicle Sales new order): **Comments** field set to **`Battery is <Battery No>`** when detail sheet / **`form_dms_view`** battery is present (**LLD** **6.19**) |
+| 3.13 | Mar 2026 | — | **Create booking** (Vehicle Sales new order): **Comments** field set to **`Battery is <Battery No>`** when detail sheet / DMS fill battery is present (**LLD** **6.19**) |
 | 3.14 | Mar 2026 | — | Vehicle Sales **Create Order**: before **+**, **Find** → **Mobile Phone#** → mobile query; if a matching order **row** exists, skip new booking and run **`attach_vehicle_to_bkg`** only (**LLD** **6.20**) |
 | 3.15 | Mar 2026 | — | **§6.1b** / **BR-19**: reverted **strict exact** grid + drilldown row matching (**3.12**); **Find** First Name stays **exact** (no `*`); **`_siebel_ui_suggests_contact_match_mobile_first`** and **`_contact_mobile_drilldown_plans`** restored to **fuzzy** first-name + **mobile-only** fallback (**LLD** **6.21**) |
+| 3.16 | Mar 2026 | — | **FR-8** / **FR-17**: target **Add Sales staging** (`add_sales_staging`, **`staging_id`**); commit-after-Create-Invoice; **LLD §2.2a** |
+| 3.17 | Mar 2026 | — | **BR-9**, **BR-13**, **FR-18**, **§6.1a** / **§6.2**: DMS fill without **`form_dms_view`** — OCR staging + **`form_dms.py`** inline join (**`13b_drop_form_dms_view.sql`**) |
+| 3.18 | Mar 2026 | — | **BR-9**: Create Invoice with **`staging_id`** — DMS inputs from **`add_sales_staging.payload_json`** + scrape only; **`POST /fill-dms`**, **`/fill-dms/dms`** |
+| 3.19 | Mar 2026 | — | **BR-20** (superseded by **3.20**): earlier draft referred to a minimal **`insurance_master` seed**; product choice is now view + staging merge |
+| 3.20 | Mar 2026 | — | **BR-20**: Generate Insurance inputs — **`form_insurance_view`** + **`add_sales_staging.payload_json`** via **`staging_id`**; **FR-18b** updated; **§6.2** |
+| 3.21 | Mar 2026 | — | **BR-20** / **FR-8** / **FR-18b** / **§6.2**: **`form_insurance_view`** + staging **`payload_json`** are the **joint** complete input set; Add Sales passes **`staging_id`** for **Generate Insurance** as well as Create Invoice |
+| 3.22 | Mar 2026 | — | **BR-20** / **FR-18b** / **§6.4** / **§6.5**: **`insurance_master`** **INSERT** only for **`(customer_id, vehicle_id, insurance_year)`** (fail on duplicate); **Issue Policy** click + second scrape updates **`policy_num`** / **`insurance_cost`** — **`insert_insurance_master_after_gi`**, **`update_insurance_master_policy_after_issue`** |
+| 3.23 | Mar 2026 | — | **FR-18**: removed static DMS/Vaahan/insurance training sites; **`DMS_MODE`** default **real**; Vaahan/RTO Pay Playwright stubs until production — **LLD §2.4a–c** |

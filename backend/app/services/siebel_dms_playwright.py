@@ -7,7 +7,8 @@ drill hit → Contacts → Contact_Enquiry → Enquiry → All Enquiries), then 
 
 Default staged flow (flag False): **Find → mobile → Go**; optional
 **basic enquiry** (name/address/state/PIN) + Save + **mandatory re-find** when created; **always**
-care-of + Save; **Auto Vehicle List** + **In Transit** (receipt / Pre Check / PDI); **Generate Booking**
+care-of + Save; **Auto Vehicle List** (``prepare_vehicle``: search/scrape, key/battery fill, In Transit receipt /
+Pre Check / PDI); **Generate Booking**
 **after vehicle for all paths**; allotment (line items) when **not** In Transit;
 ``_attach_vehicle_to_bkg`` runs Apply Campaign + **Create Invoice** at the end.
 
@@ -7054,7 +7055,7 @@ def _create_order(
       click stays inside that helper).
     - Else: Click Sales Orders New:List (+)
     - Set Booking Order Type
-    - When ``battery_partial`` is set (detail sheet **Battery No** via ``form_dms_view``), fill **Comments**
+    - When ``battery_partial`` is set (detail sheet **Battery No** from DMS fill payload), fill **Comments**
       with ``Battery is <number>``
     - Pick contact by mobile from pick applet
     - Save, scrape Order#, then ``_attach_vehicle_to_bkg`` (header ``a[name='Order Number'][tabindex='-1']``)
@@ -9567,7 +9568,7 @@ def _js_best_grid_row(frame: Frame) -> dict | None:
 def scrape_siebel_vehicle_row(page: Page, *, content_frame_selector: str | None) -> dict:
     """
     Best-effort scrape of first wide row from Siebel list / grid in any frame.
-    Maps 13+ columns like the dummy DMS table when possible.
+    Maps 13+ columns from the Siebel vehicle grid when possible.
     """
     _ = content_frame_selector  # reserved if we scope evaluate to frame_locator later
     best: dict | None = None
@@ -9709,6 +9710,415 @@ def _siebel_goto_vehicle_list_and_scrape(
     else:
         note("Vehicle grid scrape returned no key/chassis/engine; check list applet or selectors.")
     return scraped, None
+
+
+def _merge_dms_and_grid_for_vehicle_master(dms_values: dict, grid: dict) -> dict:
+    """
+    Merge **Auto Vehicle List** grid scrape with DMS / staging fields into one dict suitable for
+    ``update_vehicle_master_from_dms`` (same key names as that function).
+
+    Prefer full identifiers from staging when present; use grid ``frame_num`` / ``engine_num`` as
+    ``full_chassis`` / ``full_engine`` when staging has no full VIN/engine; fall back to
+    ``frame_partial`` / ``engine_partial`` for the chassis/engine columns when nothing else exists.
+    """
+    out: dict = {k: v for k, v in dict(grid).items() if v is not None}
+
+    def _ds(*keys: str) -> str:
+        for k in keys:
+            v = dms_values.get(k)
+            if v is None:
+                continue
+            s = str(v).strip()
+            if s:
+                return s
+        return ""
+
+    fc = _ds("full_chassis", "chassis")
+    if not fc:
+        fc = (out.get("frame_num") or "").strip()
+    if not fc:
+        fc = _ds("frame_partial")
+    if fc:
+        out["full_chassis"] = fc
+
+    fe = _ds("full_engine", "engine")
+    if not fe:
+        fe = (out.get("engine_num") or "").strip()
+    if not fe:
+        fe = _ds("engine_partial")
+    if fe:
+        out["full_engine"] = fe
+
+    if not (out.get("model") or "").strip():
+        m = _ds("vehicle_model", "model")
+        if m:
+            out["model"] = m
+    if not (out.get("color") or "").strip():
+        c = _ds("vehicle_colour", "color", "colour")
+        if c:
+            out["color"] = c
+    if not (out.get("key_num") or "").strip():
+        k = _ds("key_partial")
+        if k:
+            out["raw_key_num"] = k
+    if not (out.get("year_of_mfg") or "").strip():
+        y = _ds("year_of_mfg", "dispatch_year")
+        if y:
+            out["year_of_mfg"] = y
+    v = _ds("variant", "vehicle_variant")
+    if v:
+        out["variant"] = v
+    if not (out.get("vehicle_price") or "").strip() and not (out.get("ex_showroom_price") or "").strip():
+        for k in ("vehicle_ex_showroom_price", "ex_showroom_price", "vehicle_ex_showroom_cost", "total_amount"):
+            raw = dms_values.get(k)
+            if raw is not None and str(raw).strip():
+                s = str(raw).strip()
+                out["vehicle_price"] = s
+                out["ex_showroom_price"] = s
+                break
+    return out
+
+
+def _vehicle_master_prepare_gaps(merged: dict) -> tuple[list[str], list[str]]:
+    """
+    Returns ``(critical_messages, informational_messages)`` for operators and ``Playwright_DMS.txt``.
+
+    **Critical** = still empty after merge for fields that normally must exist for a coherent
+    ``vehicle_master`` row. **Informational** = optional fields or values filled later in the SOP
+    (e.g. cubic capacity on order-line attach).
+
+    ``place_of_registeration`` and ``oem_name`` are **not** gaps here — they are filled at persist from
+    ``sales_master`` / ``dealer_ref`` when ``vehicle_id`` is set.
+    """
+    critical: list[str] = []
+    info: list[str] = []
+
+    def _chassis_eff() -> str:
+        return (
+            (merged.get("full_chassis") or "").strip()
+            or (merged.get("frame_num") or "").strip()
+            or (merged.get("chassis") or "").strip()
+        )
+
+    def _engine_eff() -> str:
+        return (
+            (merged.get("full_engine") or "").strip()
+            or (merged.get("engine_num") or "").strip()
+            or (merged.get("engine") or "").strip()
+        )
+
+    if not _chassis_eff():
+        critical.append(
+            "chassis still empty after merge — need grid frame_num or DMS full_chassis/frame_partial "
+            "on Auto Vehicle List or in staging."
+        )
+    if not _engine_eff():
+        critical.append(
+            "engine still empty after merge — need grid engine_num or DMS full_engine/engine_partial."
+        )
+    if not (merged.get("model") or "").strip():
+        critical.append("model still empty after merge — need grid row or DMS vehicle_model/model.")
+    if not (merged.get("color") or merged.get("colour") or "").strip():
+        critical.append("colour still empty after merge — need grid or DMS vehicle_colour/color.")
+    if not (merged.get("year_of_mfg") or "").strip():
+        critical.append("year_of_mfg still empty — need grid last column or DMS year_of_mfg.")
+
+    if not (merged.get("key_num") or merged.get("raw_key_num") or "").strip():
+        info.append("key_num: optional; grid and key_partial both empty.")
+
+    if not (merged.get("variant") or "").strip():
+        info.append("variant: not on typical Auto Vehicle List grid; set in staging/DMS if required.")
+
+    if not (merged.get("cubic_capacity") or "").strip():
+        info.append(
+            "cubic_capacity: often absent when the grid row has fewer than 13 cells; "
+            "may be scraped after Generate Booking via order-line VIN drill (_attach_vehicle_to_bkg)."
+        )
+
+    if not (merged.get("vehicle_price") or merged.get("ex_showroom_price") or "").strip():
+        info.append(
+            "vehicle_ex_showroom_price: not in merge — grid price column or DMS price fields may be empty."
+        )
+
+    return critical, info
+
+
+def _write_playwright_vehicle_master_section(
+    log_fp,
+    merged: dict,
+    critical: list[str],
+    informational: list[str],
+) -> None:
+    """Append merged vehicle-master keys and gap notes to ``Playwright_DMS.txt``."""
+    if log_fp is None:
+        return
+    keys = (
+        "full_chassis",
+        "frame_num",
+        "full_engine",
+        "engine_num",
+        "key_num",
+        "raw_key_num",
+        "model",
+        "color",
+        "colour",
+        "variant",
+        "cubic_capacity",
+        "seating_capacity",
+        "body_type",
+        "vehicle_type",
+        "num_cylinders",
+        "horse_power",
+        "year_of_mfg",
+        "vehicle_price",
+        "ex_showroom_price",
+        "in_transit",
+    )
+    try:
+        log_fp.write("\n--- vehicle_master (merged for update_vehicle_master_from_dms) ---\n")
+        for k in keys:
+            v = merged.get(k)
+            if v is None or v == "":
+                continue
+            safe = str(v).replace("\n", " ").replace("\r", " ")
+            if len(safe) > 2000:
+                safe = safe[:1997] + "..."
+            log_fp.write(f"{k}={safe!r}\n")
+        log_fp.write(
+            "# place_of_registeration / oem_name: applied at DB persist from sales_master→dealer_ref/oem_ref "
+            "when vehicle_id is set (not scraped in prepare_vehicle).\n"
+        )
+        if critical:
+            log_fp.write("critical_gaps:\n")
+            for g in critical:
+                log_fp.write(f"  - {g}\n")
+        if informational:
+            log_fp.write("notes:\n")
+            for g in informational:
+                log_fp.write(f"  - {g}\n")
+        log_fp.flush()
+    except OSError:
+        pass
+
+
+def _siebel_fill_key_battery_from_dms_values(
+    page: Page,
+    dms_values: dict,
+    *,
+    action_timeout_ms: int,
+    note,
+    log_prefix: str = "Vehicle prep",
+) -> None:
+    """
+    Best-effort **Key Number** and **Battery No.** fill on the current vehicle form, then Ctrl+S.
+
+    Used from Add Enquiry (after vehicle detail scrape) and from ``prepare_vehicle`` (after Auto Vehicle
+    List grid scrape). Does nothing when both partials are empty.
+    """
+    key_val = (dms_values.get("key_partial") or "").strip()
+    battery_val = (dms_values.get("battery_partial") or "").strip()
+    if not (key_val or battery_val):
+        return
+    _veh_fill_frame = None
+    for _vf in _ordered_frames(page):
+        try:
+            if _vf.locator('input[aria-label="Key Number"]').count() > 0:
+                _veh_fill_frame = _vf
+                break
+        except Exception:
+            continue
+    if _veh_fill_frame is None:
+        _veh_fill_frame = page.main_frame
+    if key_val:
+        if _fill_by_label_on_frame(_veh_fill_frame, "Key Number", key_val, action_timeout_ms=action_timeout_ms):
+            note(f"{log_prefix}: filled Key Number = {key_val!r} on vehicle page.")
+        else:
+            note(f"{log_prefix}: could not fill Key Number = {key_val!r} on vehicle page (best-effort).")
+    if battery_val:
+        if _fill_by_label_on_frame(_veh_fill_frame, "Battery No.", battery_val, action_timeout_ms=action_timeout_ms):
+            note(f"{log_prefix}: filled Battery No. = {battery_val!r} on vehicle page.")
+        else:
+            note(f"{log_prefix}: could not fill Battery No. = {battery_val!r} on vehicle page (best-effort).")
+    if key_val or battery_val:
+        _safe_page_wait(page, 400, log_label="after_vehicle_key_battery_fill")
+        try:
+            page.keyboard.press("Control+s")
+            _safe_page_wait(page, 1200, log_label="after_vehicle_key_battery_save")
+            note(f"{log_prefix}: saved vehicle record after Key/Battery fill.")
+        except Exception:
+            note(f"{log_prefix}: Ctrl+S after Key/Battery fill raised an exception (best-effort).")
+
+
+def prepare_vehicle(
+    page: Page,
+    dms_values: dict,
+    urls: SiebelDmsUrls,
+    *,
+    nav_timeout_ms: int,
+    action_timeout_ms: int,
+    content_frame_selector: str | None,
+    note,
+    form_trace=None,
+    ms_done=None,
+    step=None,
+) -> tuple[bool, str | None, dict, bool, list[str], list[str]]:
+    """
+    Pre-booking **vehicle preparation** (runs before Generate Booking): navigate to **Auto Vehicle List**,
+    query by key / chassis(VIN) / engine, scrape the grid (model, color, frame/engine numbers, in-transit
+    flag), optionally fill Key Number / Battery from DMS partials, and when **In Transit** — receipt URL,
+    Process Receipt if present, then **Pre Check** and **PDI** via ``_siebel_run_precheck_and_pdi``.
+
+    Before return, merges grid + DMS/staging into a dict aligned with ``update_vehicle_master_from_dms``
+    (``full_chassis`` / ``full_engine`` from grid or staging partials, etc.). Returns
+    ``(ok, error, merged_vehicle_dict, in_transit, critical_gaps, informational_notes)``.
+    **Critical gaps** mean a field required for a coherent master row is still empty — see
+    ``Playwright_DMS.txt`` **vehicle_master** section for the full merged key=value list.
+
+    **Not** included: order-line VIN drilldown, cubic capacity when the list grid has fewer than 13 cells,
+    or PreCheck/PDI inside ``_attach_vehicle_to_bkg`` — those require a booking/line context and run after
+    **Generate Booking** in the linear SOP. ``place_of_registeration`` / ``oem_name`` are applied at DB
+    persist from ``dealer_ref`` / ``oem_ref``, not scraped here.
+    """
+    key_p = (dms_values.get("key_partial") or "").strip()
+    frame_p = (dms_values.get("frame_partial") or "").strip()
+    engine_p = (dms_values.get("engine_partial") or "").strip()
+    vehicle_url = (urls.vehicle or "").strip()
+
+    if callable(form_trace):
+        form_trace(
+            "5_vehicle_list",
+            "Auto Vehicle List (DMS_REAL_URL_VEHICLE)",
+            "begin_vehicle_flow_navigate_then_search_applet",
+            vehicle_url_truncated=vehicle_url[:200] if vehicle_url else "",
+            key_partial=key_p,
+            frame_partial=frame_p,
+            engine_partial=engine_p,
+        )
+    if not vehicle_url:
+        if callable(step):
+            step("Stopped: DMS_REAL_URL_VEHICLE is not configured.")
+        return (
+            False,
+            (
+                "Siebel: set DMS_REAL_URL_VEHICLE to the Auto Vehicle List (or stock search) "
+                "GotoView URL so key/chassis/engine search can run."
+            ),
+            {},
+            False,
+            [],
+            [],
+        )
+
+    scraped, veh_err = _siebel_goto_vehicle_list_and_scrape(
+        page,
+        vehicle_url,
+        key_p,
+        frame_p,
+        engine_p,
+        nav_timeout_ms=nav_timeout_ms,
+        action_timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+        note=note,
+        form_trace=form_trace,
+    )
+    if veh_err:
+        if callable(step):
+            step("Stopped during vehicle list search.")
+        return False, veh_err, {}, False, [], []
+
+    _siebel_fill_key_battery_from_dms_values(
+        page,
+        dms_values,
+        action_timeout_ms=action_timeout_ms,
+        note=note,
+        log_prefix="Vehicle prep",
+    )
+
+    note(
+        "Vehicle grid scrape (prepare_vehicle): "
+        f"model={scraped.get('model')!r}, color={scraped.get('color')!r}, "
+        f"frame_num={scraped.get('frame_num')!r}, engine_num={scraped.get('engine_num')!r}, "
+        f"key_num={scraped.get('key_num')!r}."
+    )
+
+    in_transit_state = bool(scraped.get("in_transit"))
+    note(f"DECISION: vehicle_in_transit={in_transit_state!r} (from scraped grid text).")
+    if callable(form_trace):
+        form_trace(
+            "5_vehicle_list",
+            "Auto Vehicle List — results grid (scraped row)",
+            "read_first_matching_row_from_grid",
+            key_num=str(scraped.get("key_num") or ""),
+            frame_num=str(scraped.get("frame_num") or ""),
+            engine_num=str(scraped.get("engine_num") or ""),
+            model=str(scraped.get("model") or ""),
+            in_transit=in_transit_state,
+        )
+
+    if in_transit_state:
+        note("prepare_vehicle: vehicle grid suggests In Transit — Process Receipt, Pre Check, PDI.")
+        if callable(step):
+            step("Vehicle appears in transit (receipt / pre-check / PDI path).")
+        recv_u = (urls.vehicles or "").strip()
+        if recv_u:
+            if callable(form_trace):
+                form_trace(
+                    "5b_in_transit_receipt",
+                    "Vehicles / In Transit — receipt view (DMS_REAL_URL_VEHICLES)",
+                    "goto_receipt_URL_then_Process_Receipt_toolbar_if_present",
+                    receipt_url_truncated=recv_u[:200],
+                )
+            _goto(page, recv_u, "vehicles_receipt", nav_timeout_ms=nav_timeout_ms)
+            _siebel_after_goto_wait(page, floor_ms=1000)
+            if _try_click_process_receipt(
+                page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
+            ):
+                note("Clicked Process Receipt / receive control.")
+                if callable(step):
+                    step("Vehicle received — Process Receipt was completed in DMS.")
+            else:
+                note("Process Receipt control not found; operator may complete receipt manually.")
+                if callable(step):
+                    step(
+                        "Receipt / in-transit screen opened; Process Receipt was not found — "
+                        "complete receiving manually if required."
+                    )
+            if callable(ms_done):
+                ms_done("Vehicle received")
+        else:
+            note(
+                "DMS_REAL_URL_VEHICLES is not set — cannot navigate to receipt/in-transit view; "
+                "set it to HMCL In Transit (or equivalent) GotoView URL."
+            )
+            if callable(step):
+                step("Receipt URL (DMS_REAL_URL_VEHICLES) is not set — skipped receiving in UI.")
+
+        _siebel_run_precheck_and_pdi(
+            page,
+            precheck_url=urls.precheck,
+            pdi_url=urls.pdi,
+            nav_timeout_ms=nav_timeout_ms,
+            action_timeout_ms=action_timeout_ms,
+            content_frame_selector=content_frame_selector,
+            note=note,
+            ms_done=ms_done,
+            step=step,
+            form_trace=form_trace,
+        )
+    else:
+        note("prepare_vehicle: vehicle not In Transit — receipt/PDI branch skipped.")
+        if callable(step):
+            step("Vehicle does not appear in transit.")
+
+    merged = _merge_dms_and_grid_for_vehicle_master(dms_values, scraped)
+    vm_crit, vm_info = _vehicle_master_prepare_gaps(merged)
+    if vm_crit:
+        note(
+            "vehicle_master: fields still missing after prepare_vehicle merge — "
+            + "; ".join(vm_crit)
+        )
+
+    return True, None, merged, in_transit_state, vm_crit, vm_info
 
 
 def _add_enquiry_vehicle_scrape_has_model_year_color(scraped: dict) -> bool:
@@ -10303,37 +10713,13 @@ def _add_enquiry_opportunity(
             full_engine=str(scraped_v.get("full_engine") or ""),
         )
 
-    key_val = (dms_values.get("key_partial") or "").strip()
-    battery_val = (dms_values.get("battery_partial") or "").strip()
-    if key_val or battery_val:
-        _veh_fill_frame = None
-        for _vf in _ordered_frames(page):
-            try:
-                if _vf.locator('input[aria-label="Key Number"]').count() > 0:
-                    _veh_fill_frame = _vf
-                    break
-            except Exception:
-                continue
-        if _veh_fill_frame is None:
-            _veh_fill_frame = page.main_frame
-        if key_val:
-            if _fill_by_label_on_frame(_veh_fill_frame, "Key Number", key_val, action_timeout_ms=action_timeout_ms):
-                note(f"Add Enquiry: filled Key Number = {key_val!r} on vehicle page.")
-            else:
-                note(f"Add Enquiry: could not fill Key Number = {key_val!r} on vehicle page (best-effort).")
-        if battery_val:
-            if _fill_by_label_on_frame(_veh_fill_frame, "Battery No.", battery_val, action_timeout_ms=action_timeout_ms):
-                note(f"Add Enquiry: filled Battery No. = {battery_val!r} on vehicle page.")
-            else:
-                note(f"Add Enquiry: could not fill Battery No. = {battery_val!r} on vehicle page (best-effort).")
-        if key_val or battery_val:
-            _safe_page_wait(page, 400, log_label="after_vehicle_key_battery_fill")
-            try:
-                page.keyboard.press("Control+s")
-                _safe_page_wait(page, 1200, log_label="after_vehicle_key_battery_save")
-                note("Add Enquiry: saved vehicle record after Key/Battery fill.")
-            except Exception:
-                note("Add Enquiry: Ctrl+S after Key/Battery fill raised an exception (best-effort).")
+    _siebel_fill_key_battery_from_dms_values(
+        page,
+        dms_values,
+        action_timeout_ms=action_timeout_ms,
+        note=note,
+        log_prefix="Add Enquiry",
+    )
 
     if not _try_click_enquiry_top_tab(
         page, action_timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
@@ -11144,8 +11530,9 @@ def Playwright_Hero_DMS_fill(
         log_fp.write(f"vehicle_model_from_source={_vm!r}\n")
         log_fp.write(f"vehicle_color_from_source={_vc!r}\n")
         log_fp.write(
-            "# Siebel scrape: full_chassis/full_engine come from Add Enquiry vehicle detail; "
-            "stage 5 Auto Vehicle List grid uses frame_num/engine_num/model/color.\n"
+            "# Siebel: after stage 5, a --- vehicle_master --- block lists merged keys for "
+            "update_vehicle_master_from_dms (grid + DMS/staging). Add Enquiry path can still add "
+            "full_chassis/full_engine from vehicle detail drill before that.\n"
         )
         cu = (urls.contact or "").strip()
         log_fp.write(f"url_contact_truncated={cu[:200]!r}\n")
@@ -11940,125 +12327,37 @@ def Playwright_Hero_DMS_fill(
         def stage_5_vehicle_flow() -> bool:
             """
             Vehicle list search/scrape; if grid suggests In Transit → receipt,
-            Pre Check, PDI.             Sets ``in_transit_state`` and ``out["vehicle"]``.
-            Returns False on configuration or vehicle-search failure (``out["error"]`` set).
+            Pre Check, PDI. Delegates to ``prepare_vehicle``. Sets ``in_transit_state``
+            and ``out["vehicle"]``. Returns False on configuration or vehicle-search failure
+            (``out["error"]`` set).
             """
             nonlocal in_transit_state
             note("Stage 5: vehicle list search, scrape, and In-Transit handling.")
             step("Vehicle flow: key / chassis / engine search (stage 5).")
-            vehicle_url = (urls.vehicle or "").strip()
-            form_trace(
-                "5_vehicle_list",
-                "Auto Vehicle List (DMS_REAL_URL_VEHICLE)",
-                "begin_vehicle_flow_navigate_then_search_applet",
-                vehicle_url_truncated=vehicle_url[:200] if vehicle_url else "",
-                key_partial=key_p,
-                frame_partial=frame_p,
-                engine_partial=engine_p,
-            )
-            if not vehicle_url:
-                step("Stopped: DMS_REAL_URL_VEHICLE is not configured.")
-                out["error"] = (
-                    "Siebel: set DMS_REAL_URL_VEHICLE to the Auto Vehicle List (or stock search) "
-                    "GotoView URL so key/chassis/engine search can run."
-                )
-                return False
-
-            scraped, veh_err = _siebel_goto_vehicle_list_and_scrape(
+            ok, err, scraped, in_transit_state, vm_crit, vm_info = prepare_vehicle(
                 page,
-                vehicle_url,
-                key_p,
-                frame_p,
-                engine_p,
+                dms_values,
+                urls,
                 nav_timeout_ms=nav_timeout_ms,
                 action_timeout_ms=action_timeout_ms,
                 content_frame_selector=content_frame_selector,
                 note=note,
                 form_trace=form_trace,
+                ms_done=ms_done,
+                step=step,
             )
-            if veh_err:
-                step("Stopped during vehicle list search.")
-                out["error"] = veh_err
+            if not ok:
+                out["error"] = err or "prepare_vehicle failed."
                 return False
-
             out["vehicle"] = scraped
+            _write_playwright_vehicle_master_section(log_fp, scraped, vm_crit, vm_info)
             out["dms_siebel_forms_filled"] = bool(customer_save_clicked)
             if not customer_save_clicked:
                 note(
                     "Siebel Save was not detected on the customer/enquiry step — vehicle search still ran; "
                     "verify the contact record in Hero Connect. dms_siebel_forms_filled=false for API consumers."
                 )
-            note(
-                "Vehicle grid scrape (stage 5): "
-                f"model={scraped.get('model')!r}, color={scraped.get('color')!r}, "
-                f"frame_num={scraped.get('frame_num')!r}, engine_num={scraped.get('engine_num')!r}, "
-                f"key_num={scraped.get('key_num')!r}. "
-                "full_chassis/full_engine are filled on the Add Enquiry path from vehicle detail scrape, "
-                "not from this list grid."
-            )
             step("Stage 5: vehicle list query completed; result row read when present.")
-
-            in_transit_state = bool(scraped.get("in_transit"))
-            note(f"DECISION: vehicle_in_transit={in_transit_state!r} (from scraped grid text).")
-            form_trace(
-                "5_vehicle_list",
-                "Auto Vehicle List — results grid (scraped row)",
-                "read_first_matching_row_from_grid",
-                key_num=str(scraped.get("key_num") or ""),
-                frame_num=str(scraped.get("frame_num") or ""),
-                engine_num=str(scraped.get("engine_num") or ""),
-                model=str(scraped.get("model") or ""),
-                in_transit=in_transit_state,
-            )
-
-            if in_transit_state:
-                note("Stage 5b: vehicle grid suggests In Transit — Process Receipt, Pre Check, PDI.")
-                step("Vehicle appears in transit (receipt / pre-check / PDI path).")
-                recv_u = (urls.vehicles or "").strip()
-                if recv_u:
-                    form_trace(
-                        "5b_in_transit_receipt",
-                        "Vehicles / In Transit — receipt view (DMS_REAL_URL_VEHICLES)",
-                        "goto_receipt_URL_then_Process_Receipt_toolbar_if_present",
-                        receipt_url_truncated=recv_u[:200],
-                    )
-                    _goto(page, recv_u, "vehicles_receipt", nav_timeout_ms=nav_timeout_ms)
-                    _siebel_after_goto_wait(page, floor_ms=1000)
-                    if _try_click_process_receipt(
-                        page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
-                    ):
-                        note("Clicked Process Receipt / receive control.")
-                        step("Vehicle received — Process Receipt was completed in DMS.")
-                    else:
-                        note("Process Receipt control not found; operator may complete receipt manually.")
-                        step(
-                            "Receipt / in-transit screen opened; Process Receipt was not found — "
-                            "complete receiving manually if required."
-                        )
-                    ms_done("Vehicle received")
-                else:
-                    note(
-                        "DMS_REAL_URL_VEHICLES is not set — cannot navigate to receipt/in-transit view; "
-                        "set it to HMCL In Transit (or equivalent) GotoView URL."
-                    )
-                    step("Receipt URL (DMS_REAL_URL_VEHICLES) is not set — skipped receiving in UI.")
-
-                _siebel_run_precheck_and_pdi(
-                    page,
-                    precheck_url=urls.precheck,
-                    pdi_url=urls.pdi,
-                    nav_timeout_ms=nav_timeout_ms,
-                    action_timeout_ms=action_timeout_ms,
-                    content_frame_selector=content_frame_selector,
-                    note=note,
-                    ms_done=ms_done,
-                    step=step,
-                    form_trace=form_trace,
-                )
-            else:
-                note("Stage 5b: vehicle not In Transit — receipt/PDI branch skipped.")
-                step("Vehicle does not appear in transit.")
-
             return True
 
         def stage_6_generate_booking() -> None:
@@ -12199,7 +12498,7 @@ def Playwright_Hero_DMS_fill(
             if not form_mobile_ok:
                 out["error"] = (
                     "Siebel skip_find: could not fill mobile on the enquiry/customer form "
-                    "(or Mobile Phone # is missing in form_dms_view). "
+                    "(or Mobile Phone # is missing in DMS fill values). "
                     "Set DMS_SIEBEL_CONTENT_FRAME_SELECTOR (use >> to chain iframes), "
                     "DMS_SIEBEL_AUTO_IFRAME_SELECTORS, DMS_SIEBEL_POST_GOTO_WAIT_MS, "
                     "or DMS_SIEBEL_MOBILE_ARIA_HINTS if needed."

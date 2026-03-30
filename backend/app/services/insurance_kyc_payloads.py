@@ -1,4 +1,4 @@
-"""Minimal PNG payloads for insurance KYC file inputs (dummy / placeholder uploads)."""
+"""Minimal PNG payloads for insurance KYC file inputs when the portal requires document uploads."""
 import base64
 
 _MIN_PNG_BYTES = base64.b64decode(

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import type { ExtractedVehicleDetails, ExtractedCustomerDetails, ExtractedInsuranceDetails } from "../types";
 import { buildDisplayAddress } from "../types";
 import { useUploadScans } from "../hooks/useUploadScans";
@@ -6,6 +6,7 @@ import { UploadScansPanel } from "../components/UploadScansPanel";
 import { getExtractedDetails } from "../api/aiReaderQueue";
 import { submitInfo } from "../api/submitInfo";
 import { fillDmsOnly, fillInsuranceOnly, printForm20, isFillDmsAbortError } from "../api/fillDms";
+import { fetchCreateInvoiceEligibility } from "../api/addSales";
 import { insertRtoPayment } from "../api/rtoPaymentDetails";
 import { loadAddSalesForm, saveAddSalesForm, clearAddSalesForm } from "../utils/addSalesStorage";
 import { markBulkLoadSuccess } from "../api/bulkLoads";
@@ -178,6 +179,12 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError,
   const [isPrintFormsLoading, setIsPrintFormsLoading] = useState(false);
   const [printFormsStatus, setPrintFormsStatus] = useState<string | null>(null);
   const [fillInsuranceStatus, setFillInsuranceStatus] = useState<string | null>(null);
+  /** Create Invoice (DMS) allowed only after Submit Info and when sales_master has no invoice# for this sale. */
+  const [createInvoiceEligibilityLoading, setCreateInvoiceEligibilityLoading] = useState(false);
+  const [createInvoiceEnabled, setCreateInvoiceEnabled] = useState(false);
+  const [createInvoiceEligibilityReason, setCreateInvoiceEligibilityReason] = useState<string | null>(null);
+  const [generateInsuranceEnabled, setGenerateInsuranceEnabled] = useState(false);
+  const [generateInsuranceReason, setGenerateInsuranceReason] = useState<string | null>(null);
   /** DMS-scraped vehicle; shown in Fill Forms > DMS. Only populated when user presses Fill Forms. */
   const [dmsScrapedVehicle, setDmsScrapedVehicle] = useState<ExtractedVehicleDetails | null>(null);
   /** True when Form 21 and Form 22 PDFs have been downloaded from DMS. */
@@ -189,6 +196,7 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError,
   /** From last successful Submit Info; used when inserting the RTO queue row after Fill Forms. */
   const [lastSubmittedCustomerId, setLastSubmittedCustomerId] = useState<number | null>(() => getInitialForm().lastSubmittedCustomerId);
   const [lastSubmittedVehicleId, setLastSubmittedVehicleId] = useState<number | null>(() => getInitialForm().lastSubmittedVehicleId);
+  const [lastStagingId, setLastStagingId] = useState<string | null>(() => getInitialForm().lastStagingId);
   /** Extraction error (e.g. QR code not readable) – stops poll and shows message. */
   const [extractionError, setExtractionError] = useState<string | null>(null);
   /** True once Textract has returned insurance data for this upload (details sheet processed). */
@@ -258,6 +266,11 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError,
   const POLL_MAX = 5;
   const POLL_INTERVAL_MS = 10000;
 
+  /** Submit Info succeeded and server returned a draft staging handle (masters commit after Create Invoice). */
+  const submitInfoActionsComplete = hasSubmittedInfo && lastStagingId != null && lastStagingId.trim() !== "";
+  /** Committed master ids (from Create Invoice response or legacy session). Needed for insurance / RTO queue. */
+  const hasCommittedSaleIds = lastSubmittedCustomerId != null && lastSubmittedVehicleId != null;
+
   // Persist form state so it survives navigation; clear only on "New"
   useEffect(() => {
     saveAddSalesForm({
@@ -269,11 +282,12 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError,
       hasSubmittedInfo,
       lastSubmittedCustomerId,
       lastSubmittedVehicleId,
+      lastStagingId,
       extractedVehicle,
       extractedCustomer,
       extractedInsurance,
     });
-  }, [mobile, savedTo, uploadedFiles, uploadStatus, dmsScrapedVehicle, hasSubmittedInfo, lastSubmittedCustomerId, lastSubmittedVehicleId, extractedVehicle, extractedCustomer, extractedInsurance]);
+  }, [mobile, savedTo, uploadedFiles, uploadStatus, dmsScrapedVehicle, hasSubmittedInfo, lastSubmittedCustomerId, lastSubmittedVehicleId, lastStagingId, extractedVehicle, extractedCustomer, extractedInsurance]);
 
   // DMS and RTO sections populate only when user presses Fill Forms. No auto-fetch from file or DB.
 
@@ -281,7 +295,7 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError,
   useEffect(() => {
     const message = "Customer processing is not complete and the information will be lost.";
     function handleBeforeUnload(e: BeforeUnloadEvent) {
-      if (hasSubmittedInfo && (!dmsPdfsDownloaded || !hasPrintedForms)) {
+      if (submitInfoActionsComplete && (!dmsPdfsDownloaded || !hasPrintedForms)) {
         e.preventDefault();
         e.returnValue = message;
         return message;
@@ -289,7 +303,7 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError,
     }
     window.addEventListener("beforeunload", handleBeforeUnload);
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
-  }, [hasSubmittedInfo, dmsPdfsDownloaded, hasPrintedForms]);
+  }, [submitInfoActionsComplete, dmsPdfsDownloaded, hasPrintedForms]);
 
   const mobileRow = (
     <div className="app-field-row">
@@ -312,6 +326,58 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError,
     </div>
   );
 
+  const refreshCreateInvoiceEligibility = useCallback(async () => {
+    if (!submitInfoActionsComplete) {
+      setCreateInvoiceEligibilityLoading(false);
+      setCreateInvoiceEnabled(false);
+      setCreateInvoiceEligibilityReason(null);
+      setGenerateInsuranceEnabled(false);
+      setGenerateInsuranceReason(null);
+      return;
+    }
+    const veh = normalizeVehicleDetails(extractedVehicle) ?? extractedVehicle;
+    const ch = (veh?.frame_no ?? "").trim();
+    const eng = (veh?.engine_no ?? "").trim();
+    const mob = mobile.trim();
+    if (!ch || !eng || !mob) {
+      setCreateInvoiceEligibilityLoading(false);
+      setCreateInvoiceEnabled(false);
+      setCreateInvoiceEligibilityReason(
+        "Enter mobile, chassis, and engine in Section 2 before Create Invoice."
+      );
+      setGenerateInsuranceEnabled(false);
+      setGenerateInsuranceReason(null);
+      return;
+    }
+    setCreateInvoiceEligibilityLoading(true);
+    try {
+      const res = await fetchCreateInvoiceEligibility({
+        chassisNum: ch,
+        engineNum: eng,
+        mobile: mob,
+      });
+      setCreateInvoiceEnabled(res.create_invoice_enabled);
+      setCreateInvoiceEligibilityReason(res.reason);
+      setGenerateInsuranceEnabled(res.generate_insurance_enabled);
+      setGenerateInsuranceReason(res.generate_insurance_reason);
+    } catch (e) {
+      setCreateInvoiceEnabled(false);
+      setCreateInvoiceEligibilityReason(
+        e instanceof Error ? e.message : "Could not verify invoice status for this sale."
+      );
+      setGenerateInsuranceEnabled(false);
+      setGenerateInsuranceReason(
+        e instanceof Error ? e.message : "Could not verify insurance eligibility for this sale."
+      );
+    } finally {
+      setCreateInvoiceEligibilityLoading(false);
+    }
+  }, [submitInfoActionsComplete, mobile, extractedVehicle]);
+
+  useEffect(() => {
+    void refreshCreateInvoiceEligibility();
+  }, [refreshCreateInvoiceEligibility]);
+
   const handleNew = () => {
     clearAddSalesForm();
     setMobile("");
@@ -333,6 +399,12 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError,
     setHasPrintedForms(false);
     setLastSubmittedCustomerId(null);
     setLastSubmittedVehicleId(null);
+    setLastStagingId(null);
+    setCreateInvoiceEligibilityLoading(false);
+    setCreateInvoiceEnabled(false);
+    setCreateInvoiceEligibilityReason(null);
+    setGenerateInsuranceEnabled(false);
+    setGenerateInsuranceReason(null);
     setFormResetKey((k) => k + 1);
   };
 
@@ -536,6 +608,10 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError,
       setFillDmsStatus("Upload scans first.");
       return;
     }
+    if (!submitInfoActionsComplete) {
+      setFillDmsStatus("Complete Submit Info (Section 2) before Create Invoice.");
+      return;
+    }
     if (!dmsUrl) {
       setFillDmsStatus("DMS URL is not available. Set DMS_BASE_URL in backend/.env, restart the server, and refresh this page.");
       return;
@@ -553,8 +629,13 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError,
         subfolder: savedTo,
         dms_base_url: dmsUrl,
         dealer_id: dealerId,
-        customer_id: lastSubmittedCustomerId ?? undefined,
-        vehicle_id: lastSubmittedVehicleId ?? undefined,
+        staging_id: lastStagingId ?? undefined,
+        ...(lastStagingId
+          ? {}
+          : {
+              customer_id: lastSubmittedCustomerId ?? undefined,
+              vehicle_id: lastSubmittedVehicleId ?? undefined,
+            }),
         customer: {
           name: c?.name ?? undefined,
           care_of: c?.care_of ?? undefined,
@@ -614,6 +695,8 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError,
       const hasForm22 = pdfs.some((f) => /form\s*22|form22/i.test(f));
       const hasInvoiceDetails = pdfs.some((f) => /invoice_details|invoice\s*details/i.test(f));
       if (hasForm21 && hasForm22 && hasInvoiceDetails) setDmsPdfsDownloaded(true);
+      if (dmsRes.customer_id != null) setLastSubmittedCustomerId(dmsRes.customer_id);
+      if (dmsRes.vehicle_id != null) setLastSubmittedVehicleId(dmsRes.vehicle_id);
       const narrative =
         Array.isArray(dmsRes.dms_step_messages) && dmsRes.dms_step_messages.length > 0
           ? dmsRes.dms_step_messages
@@ -622,24 +705,25 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError,
       setDmsBannerIsStepMessages(narrative.length > 0);
       setDmsMilestones(narrative.length > 0 ? narrative : milestones);
       if (!dmsRes.success) {
-        setFillDmsStatus(dmsRes.error ?? "Fill DMS failed.");
+        setFillDmsStatus(dmsRes.error ?? "Create Invoice (DMS) failed.");
         setDmsRunEndedWithError(true);
       } else if (dmsRes.warning) {
         setFillDmsStatus(dmsRes.warning);
         setDmsRunEndedWithError(true);
       } else {
-        setFillDmsStatus("DMS filled successfully.");
+        setFillDmsStatus("DMS / Create Invoice run completed successfully.");
         setDmsRunEndedWithError(false);
       }
     } catch (err) {
       if (isFillDmsAbortError(err)) {
-        setFillDmsStatus("DMS request timed out. Check the upload folder for PDFs.");
+        setFillDmsStatus("Create Invoice request timed out. Check the upload folder for PDFs.");
       } else {
-        setFillDmsStatus(err instanceof Error ? err.message : "Fill DMS failed.");
+        setFillDmsStatus(err instanceof Error ? err.message : "Create Invoice (DMS) failed.");
       }
       setDmsRunEndedWithError(true);
     } finally {
       setIsFillDmsLoading(false);
+      void refreshCreateInvoiceEligibility();
     }
   };
 
@@ -648,12 +732,22 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError,
       setFillInsuranceStatus("Upload scans first.");
       return;
     }
+    if (!submitInfoActionsComplete) {
+      setFillInsuranceStatus("Complete Submit Info (Section 2) before Generate Insurance.");
+      return;
+    }
+    if (!hasCommittedSaleIds) {
+      setFillInsuranceStatus(
+        "Run Create Invoice (DMS) successfully first so customer and vehicle IDs exist for insurance."
+      );
+      return;
+    }
     if (siteUrlsError || siteUrlsLoading) {
       setFillInsuranceStatus("Site URLs are not ready. Check backend/.env (INSURANCE_BASE_URL) and refresh.");
       return;
     }
     if (hasSuppliedInsuranceDoc) {
-      setFillInsuranceStatus("Insurance document supplied. Fill Insurance is disabled.");
+      setFillInsuranceStatus("Insurance document supplied. Generate Insurance is disabled.");
       return;
     }
     setIsFillInsuranceLoading(true);
@@ -664,6 +758,7 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError,
         dealer_id: dealerId,
         customer_id: lastSubmittedCustomerId ?? undefined,
         vehicle_id: lastSubmittedVehicleId ?? undefined,
+        staging_id: lastStagingId ?? undefined,
       });
       if (!insuranceRes.success) {
         setFillInsuranceStatus(insuranceRes.error ?? "Insurance fill failed.");
@@ -678,6 +773,7 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError,
       }
     } finally {
       setIsFillInsuranceLoading(false);
+      void refreshCreateInvoiceEligibility();
     }
   };
 
@@ -781,6 +877,103 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError,
 
   const d = dmsScrapedVehicle;
 
+  const createInvoiceButtonTitle =
+    isSubmitting
+      ? "Wait for Submit Info to finish."
+      : !submitInfoActionsComplete
+        ? "Complete Submit Info (Section 2) — staging must be saved to the server."
+        : dealerId == null || dealerId <= 0
+        ? "Dealer is not configured."
+        : createInvoiceEligibilityLoading
+          ? "Checking whether an invoice is already recorded…"
+          : !createInvoiceEnabled
+            ? createInvoiceEligibilityReason ?? "Create Invoice is not available for this sale."
+            : !dmsUrl || siteUrlsError
+              ? "Configure DMS_BASE_URL in backend/.env"
+              : undefined;
+
+  const generateInsuranceButtonTitle =
+    isSubmitting
+      ? "Wait for Submit Info to finish."
+      : !submitInfoActionsComplete
+        ? "Complete Submit Info (Section 2) — staging must be saved to the server."
+        : !hasCommittedSaleIds
+          ? "Run Create Invoice (DMS) successfully first so master IDs exist for insurance automation."
+          : hasSuppliedInsuranceDoc
+            ? "Insurance document supplied; values come from document extraction"
+            : dealerId == null || dealerId <= 0
+              ? "Dealer is not configured."
+              : createInvoiceEligibilityLoading
+                ? "Checking eligibility…"
+                : !generateInsuranceEnabled
+                  ? generateInsuranceReason ?? "Generate Insurance is not available for this sale."
+                  : siteUrlsError
+                    ? "Configure site URLs in backend/.env"
+                    : undefined;
+
+  /** Same disabled logic as each primary button — used for Print Forms gate. */
+  const newButtonDisabled =
+    isFillDmsLoading ||
+    isFillInsuranceLoading ||
+    isPrintFormsLoading ||
+    isSubmitting ||
+    (submitInfoActionsComplete && !hasPrintedForms);
+
+  const submitInfoPrimaryButtonDisabled =
+    isSubmitting ||
+    !mobile ||
+    !c ||
+    !insuranceReadByTextract ||
+    !hasAllRequiredExtractedFields() ||
+    hasVehicleOrInsuranceValidationErrors ||
+    !!extractionError ||
+    submitInfoActionsComplete;
+
+  const createInvoicePrimaryButtonDisabled =
+    isFillDmsLoading ||
+    isPrintFormsLoading ||
+    isSubmitting ||
+    !submitInfoActionsComplete ||
+    createInvoiceEligibilityLoading ||
+    !createInvoiceEnabled ||
+    siteUrlsLoading ||
+    !!siteUrlsError ||
+    !dmsUrl;
+
+  const generateInsurancePrimaryButtonDisabled =
+    isFillInsuranceLoading ||
+    isPrintFormsLoading ||
+    isSubmitting ||
+    !submitInfoActionsComplete ||
+    !hasCommittedSaleIds ||
+    createInvoiceEligibilityLoading ||
+    !generateInsuranceEnabled ||
+    hasSuppliedInsuranceDoc ||
+    siteUrlsLoading ||
+    !!siteUrlsError;
+
+  /** Print only when the other four actions are inactive; after first print, `hasPrintedForms` allows re-print while New is enabled again. */
+  const printFormsButtonEnabled =
+    submitInfoActionsComplete &&
+    !isSubmitting &&
+    !isPrintFormsLoading &&
+    !createInvoiceEligibilityLoading &&
+    submitInfoPrimaryButtonDisabled &&
+    createInvoicePrimaryButtonDisabled &&
+    generateInsurancePrimaryButtonDisabled &&
+    (newButtonDisabled || hasPrintedForms);
+
+  const printFormsButtonTitle =
+    isSubmitting
+      ? "Wait for Submit Info to finish."
+      : !submitInfoActionsComplete
+        ? "Complete Submit Info (Section 2) first."
+        : createInvoiceEligibilityLoading
+          ? "Wait for eligibility check to finish."
+          : !printFormsButtonEnabled
+            ? "Available only when New, Submit Info, Create Invoice, and Generate Insurance are all inactive for this sale (invoice recorded; insurance step finished)."
+            : undefined;
+
   const panel = (
     <UploadScansPanel
       key={formResetKey}
@@ -821,11 +1014,18 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError,
                 <h2 className="add-sales-v2-box-title">1. Upload Customer Scans</h2>
                 <button
                   type="button"
-className="app-button app-button--primary"
-                    onClick={handleNew}
-                    title="Start a new entry"
-                  >
-                    New
+                  className="app-button app-button--primary"
+                  disabled={newButtonDisabled}
+                  onClick={handleNew}
+                  title={
+                    isFillDmsLoading || isFillInsuranceLoading || isPrintFormsLoading || isSubmitting
+                      ? "Wait for the current action to finish."
+                      : submitInfoActionsComplete && !hasPrintedForms
+                        ? "Use Print Forms and Queue RTO first to unlock New for this sale."
+                        : "Start a new entry"
+                  }
+                >
+                  New
                 </button>
               </div>
               <div className="add-sales-v2-box-body">
@@ -845,15 +1045,7 @@ className="app-button app-button--primary"
                 <button
                     type="button"
                     className="app-button add-sales-v2-submit-btn"
-                    disabled={
-                      isSubmitting ||
-                      !mobile ||
-                      !c ||
-                      !insuranceReadByTextract ||
-                      !hasAllRequiredExtractedFields() ||
-                      hasVehicleOrInsuranceValidationErrors ||
-                      !!extractionError
-                    }
+                    disabled={submitInfoPrimaryButtonDisabled}
                     onClick={async () => {
                       if (!mobile || !c) return;
                       if (!insuranceReadByTextract) {
@@ -879,11 +1071,12 @@ className="app-button app-button--primary"
                           mobile,
                           fileLocation: savedTo,
                           dealerId,
+                          stagingId: lastStagingId,
                         });
                         setSubmitStatus("Saved");
                         setHasSubmittedInfo(true);
-                        if (submitRes?.customer_id != null) setLastSubmittedCustomerId(submitRes.customer_id);
-                        if (submitRes?.vehicle_id != null) setLastSubmittedVehicleId(submitRes.vehicle_id);
+                        if (submitRes?.staging_id != null && String(submitRes.staging_id).trim())
+                          setLastStagingId(String(submitRes.staging_id).trim());
                         const stored = loadAddSalesForm();
                         if (stored.reprocessBulkLoadId != null && savedTo) {
                           try {
@@ -1267,7 +1460,7 @@ className="app-button app-button--primary"
               </div>
           </section>
 
-          <section className={`add-sales-v2-box add-sales-v2-box-fill-forms ${!savedTo || !hasSubmittedInfo ? "add-sales-v2-box--greyed" : ""}`}>
+          <section className={`add-sales-v2-box add-sales-v2-box-fill-forms ${!savedTo || !submitInfoActionsComplete ? "add-sales-v2-box--greyed" : ""}`}>
             <div className="add-sales-v2-box-title-row add-sales-v2-fill-forms-title-row">
               <div className="add-sales-v2-fill-forms-title-block">
                 <h2 className="add-sales-v2-box-title">3. Fill Forms &amp; Print File</h2>
@@ -1291,26 +1484,21 @@ className="app-button app-button--primary"
                   <button
                     type="button"
                     className="app-button app-button--primary"
-                    disabled={
-                      isFillDmsLoading ||
-                      isPrintFormsLoading ||
-                      !hasSubmittedInfo ||
-                      siteUrlsLoading ||
-                      !!siteUrlsError ||
-                      !dmsUrl
-                    }
+                    disabled={createInvoicePrimaryButtonDisabled}
                     onClick={handleFillDms}
-                    title={
-                      !hasSubmittedInfo
-                        ? "Submit Info first (Section 2)"
-                        : !dmsUrl || siteUrlsError
-                          ? "Configure DMS_BASE_URL in backend/.env"
-                          : undefined
-                    }
+                    title={createInvoiceButtonTitle}
                   >
-                    {isFillDmsLoading ? "Processing…" : "Fill DMS"}
+                    {isFillDmsLoading ? "Processing…" : "Create Invoice"}
                   </button>
                 </div>
+                {submitInfoActionsComplete &&
+                  createInvoiceEligibilityReason &&
+                  !createInvoiceEnabled &&
+                  !createInvoiceEligibilityLoading && (
+                    <div className="add-sales-v2-status-row" role="status">
+                      <span className="add-sales-v2-status-text">{createInvoiceEligibilityReason}</span>
+                    </div>
+                  )}
                 {fillDmsStatus && (
                   <StatusMessage message={fillDmsStatus} className="app-panel-status" role="status" />
                 )}
@@ -1389,28 +1577,22 @@ className="app-button app-button--primary"
                   <button
                     type="button"
                     className="app-button app-button--primary"
-                    disabled={
-                      isFillInsuranceLoading ||
-                      isPrintFormsLoading ||
-                      !hasSubmittedInfo ||
-                      hasSuppliedInsuranceDoc ||
-                      siteUrlsLoading ||
-                      !!siteUrlsError
-                    }
+                    disabled={generateInsurancePrimaryButtonDisabled}
                     onClick={handleFillInsurance}
-                    title={
-                      !hasSubmittedInfo
-                        ? "Submit Info first (Section 2)"
-                        : hasSuppliedInsuranceDoc
-                          ? "Insurance document supplied; values come from document extraction"
-                          : siteUrlsError
-                            ? "Configure site URLs in backend/.env"
-                            : undefined
-                    }
+                    title={generateInsuranceButtonTitle}
                   >
-                    {isFillInsuranceLoading ? "Processing…" : "Fill Insurance"}
+                    {isFillInsuranceLoading ? "Processing…" : "Generate Insurance"}
                   </button>
                 </div>
+                {submitInfoActionsComplete &&
+                  !hasSuppliedInsuranceDoc &&
+                  generateInsuranceReason &&
+                  !generateInsuranceEnabled &&
+                  !createInvoiceEligibilityLoading && (
+                    <div className="add-sales-v2-status-row" role="status">
+                      <span className="add-sales-v2-status-text">{generateInsuranceReason}</span>
+                    </div>
+                  )}
                 <div className="add-sales-v2-dms-fields">
                   <div className="add-sales-v2-dms-fields-title">Insurance details (from uploaded document)</div>
                   <dl className="add-sales-v2-dl add-sales-v2-dl--dms">
@@ -1467,9 +1649,9 @@ className="app-button app-button--primary"
                 <button
                   type="button"
                   className="app-button app-button--primary"
-                  disabled={isPrintFormsLoading || !hasSubmittedInfo}
+                  disabled={!printFormsButtonEnabled}
                   onClick={handlePrintForms}
-                  title={!hasSubmittedInfo ? "Submit Info first (Section 2)" : undefined}
+                  title={printFormsButtonTitle}
                 >
                   {isPrintFormsLoading ? "Processing…" : "Print Forms and Queue RTO"}
                 </button>

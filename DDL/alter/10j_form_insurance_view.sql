@@ -1,6 +1,11 @@
 -- Read-only view: one row per sale with customer, vehicle, dealer, latest insurance — for Hero/MISP automation.
--- Uses only existing columns on customer_master, vehicle_master, insurance_master (plus dealer_ref, oem_ref, sales_master).
+-- nominee_gender comes from insurance_master (staging until Generate Insurance commits).
 -- Run after: sales_master, customer_master, vehicle_master, dealer_ref, oem_ref, insurance_master.
+
+ALTER TABLE insurance_master
+    ADD COLUMN IF NOT EXISTS nominee_gender VARCHAR(16);
+
+COMMENT ON COLUMN insurance_master.nominee_gender IS 'Nominee gender; populated from Add Sales staging on Generate Insurance commit';
 
 DROP VIEW IF EXISTS form_insurance_view;
 
@@ -14,6 +19,7 @@ WITH latest_insurance AS (
         nominee_name,
         nominee_age,
         nominee_relationship,
+        nominee_gender,
         policy_to,
         insurance_year
     FROM insurance_master
@@ -47,7 +53,7 @@ SELECT
     COALESCE(vm.year_of_mfg::text, '') AS year_of_mfg,
     COALESCE(vm.vehicle_ex_showroom_price::text, '') AS vehicle_price,
     COALESCE(NULLIF(TRIM(vm.oem_name), ''), oem_dealer.oem_name, '') AS oem_name,
-    COALESCE(cm.nominee_gender, '') AS nominee_gender,
+    COALESCE(li.nominee_gender, '') AS nominee_gender,
     COALESCE(cm.financier, '') AS financer_name,
     COALESCE(dr.rto_name, '') AS rto_name,
     COALESCE(li.insurer, '') AS insurer,
@@ -63,4 +69,4 @@ LEFT JOIN latest_insurance li
     ON li.customer_id = sm.customer_id
    AND li.vehicle_id = sm.vehicle_id;
 
-COMMENT ON VIEW form_insurance_view IS 'Single-row projection per sale: customer_master, vehicle_master, latest insurance_master row (by policy_to/year/id), dealer_ref; for chassis/nominee/KYC fields — proposal UI defaults (email, add-ons, payment) remain hardcoded in Playwright';
+COMMENT ON VIEW form_insurance_view IS 'Single-row projection per sale: customer_master, vehicle_master, latest insurance_master row (by policy_to/year/id), dealer_ref; nominee_gender from insurance_master';

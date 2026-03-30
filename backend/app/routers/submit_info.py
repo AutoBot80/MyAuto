@@ -22,8 +22,9 @@ class CustomerPayload(BaseModel):
     profession: str | None = None
     financier: str | None = None
     marital_status: str | None = None
-    nominee_gender: str | None = None
     care_of: str | None = None  # Aadhaar QR care-of; DMS Father/Husband + Form 20
+    dms_relation_prefix: str | None = None  # Ignored for staging; server derives from address + gender
+    dms_contact_path: str | None = None
     file_location: str | None = None
 
 
@@ -38,6 +39,7 @@ class InsurancePayload(BaseModel):
     nominee_name: str | None = None
     nominee_age: int | str | None = None
     nominee_relationship: str | None = None
+    nominee_gender: str | None = None
     insurer: str | None = None
     policy_num: str | None = None
     policy_from: str | None = None
@@ -51,6 +53,10 @@ class SubmitInfoPayload(BaseModel):
     insurance: InsurancePayload = Field(default_factory=InsurancePayload)
     dealer_id: int | None = None
     file_location: str | None = None
+    staging_id: str | None = Field(
+        default=None,
+        description="When set, updates that draft add_sales_staging row if dealer_id matches; otherwise inserts a new UUID.",
+    )
 
 
 def _to_dict(m: BaseModel) -> dict:
@@ -59,7 +65,7 @@ def _to_dict(m: BaseModel) -> dict:
 
 @router.post("")
 def post_submit_info(payload: SubmitInfoPayload) -> dict:
-    """Upsert customer, vehicle, sales, insurance. Returns customer_id, vehicle_id."""
+    """Validate and persist **draft** ``add_sales_staging`` only. Returns ``ok`` and ``staging_id``."""
     try:
         result = submit_info(
             customer=_to_dict(payload.customer),
@@ -67,6 +73,7 @@ def post_submit_info(payload: SubmitInfoPayload) -> dict:
             insurance=_to_dict(payload.insurance),
             dealer_id=payload.dealer_id,
             file_location=payload.file_location,
+            staging_id=payload.staging_id,
         )
         return result
     except ValueError as e:

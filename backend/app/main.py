@@ -1,10 +1,7 @@
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-
 from app.config import (
     DEALER_ID,
     get_bulk_input_scans_dir,
@@ -31,6 +28,7 @@ from app.routers import (
     documents_router,
     bulk_loads_router,
     admin_router,
+    add_sales_router,
 )
 
 
@@ -62,18 +60,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Dummy sites for Playwright automation (DMS / Vaahan); serve from project root
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-_DUMMY_DMS = _PROJECT_ROOT / "dummy-sites" / "dms"
-_DUMMY_VAHAN = _PROJECT_ROOT / "dummy-sites" / "vaahan"
-_DUMMY_INSURANCE = _PROJECT_ROOT / "dummy-sites" / "insurance"
-if _DUMMY_DMS.is_dir():
-    app.mount("/dummy-dms", StaticFiles(directory=str(_DUMMY_DMS), html=True), name="dummy-dms")
-if _DUMMY_VAHAN.is_dir():
-    app.mount("/dummy-vaahan", StaticFiles(directory=str(_DUMMY_VAHAN), html=True), name="dummy-vaahan")
-if _DUMMY_INSURANCE.is_dir():
-    app.mount("/dummy-insurance", StaticFiles(directory=str(_DUMMY_INSURANCE), html=True), name="dummy-insurance")
-
 app.include_router(health_router)
 app.include_router(settings_router)
 app.include_router(uploads_router)
@@ -89,3 +75,4 @@ app.include_router(customer_search_router)
 app.include_router(documents_router)
 app.include_router(bulk_loads_router)
 app.include_router(admin_router)
+app.include_router(add_sales_router)

@@ -16,9 +16,10 @@ export interface SubmitInfoPayload {
     profession?: string;
     financier?: string;
     marital_status?: string;
-    nominee_gender?: string;
     /** Aadhaar QR care-of (father/husband); stored as customer_master.care_of */
     care_of?: string;
+    dms_relation_prefix?: string;
+    dms_contact_path?: string;
     file_location?: string | null;
   };
   vehicle: {
@@ -31,6 +32,7 @@ export interface SubmitInfoPayload {
     nominee_name?: string;
     nominee_age?: string;
     nominee_relationship?: string;
+    nominee_gender?: string;
     insurer?: string;
     policy_num?: string;
     policy_from?: string;
@@ -39,12 +41,13 @@ export interface SubmitInfoPayload {
   };
   dealer_id: number | null;
   file_location?: string | null;
+  /** Resubmit: update this draft staging row when dealer matches. */
+  staging_id?: string | null;
 }
 
 export interface SubmitInfoResponse {
   ok: boolean;
-  customer_id: number;
-  vehicle_id: number;
+  staging_id: string;
 }
 
 function mapCustomer(
@@ -67,8 +70,9 @@ function mapCustomer(
     profession: insurance?.profession,
     financier: insurance?.financier,
     marital_status: insurance?.marital_status,
-    nominee_gender: insurance?.nominee_gender,
     care_of: c?.care_of,
+    dms_relation_prefix: c?.dms_relation_prefix,
+    dms_contact_path: c?.dms_contact_path,
     file_location: fileLocation ?? undefined,
   };
 }
@@ -87,6 +91,7 @@ function mapInsurance(ins: ExtractedInsuranceDetails | null): SubmitInfoPayload[
     nominee_name: ins?.nominee_name,
     nominee_age: ins?.nominee_age,
     nominee_relationship: ins?.nominee_relationship,
+    nominee_gender: ins?.nominee_gender,
     insurer: ins?.insurer,
     policy_num: ins?.policy_num,
     policy_from: ins?.policy_from,
@@ -103,6 +108,7 @@ export async function submitInfo(
     mobile: string;
     fileLocation: string | null;
     dealerId: number | null;
+    stagingId?: string | null;
   }
 ): Promise<SubmitInfoResponse> {
   const payload: SubmitInfoPayload = {
@@ -111,6 +117,7 @@ export async function submitInfo(
     insurance: mapInsurance(opts.insurance),
     dealer_id: opts.dealerId,
     file_location: opts.fileLocation ?? undefined,
+    staging_id: opts.stagingId ?? undefined,
   };
   return apiFetch<SubmitInfoResponse>("/submit-info", {
     method: "POST",

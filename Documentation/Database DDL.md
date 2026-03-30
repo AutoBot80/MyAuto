@@ -44,12 +44,11 @@ This document lists the current database tables and their columns. **Executable 
 | `profession` | `varchar(16)` | YES |  | Customer profession (e.g. Service, Business) |
 | `financier` | `varchar(255)` | YES |  | Financier name captured from details sheet / insurance context |
 | `marital_status` | `varchar(32)` | YES |  | Customer marital status captured from details sheet |
-| `nominee_gender` | `varchar(16)` | YES |  | Nominee gender captured from details sheet |
-| `care_of` | `varchar(255)` | YES |  | Care of / father–husband from **Aadhaar QR**; DMS Father/Husband line and Form 20 |
-| `dms_relation_prefix` | `varchar(8)` | YES |  | DMS enquiry line: `S/O` or `W/o` (details sheet / operator) |
-| `father_or_husband_name` | `varchar(255)` | YES |  | Legacy only; `form_dms_view` uses `care_of` first for Father/Husband |
+| `care_of` | `varchar(255)` | YES |  | Care of / father–husband from **Aadhaar QR**; sole source for DMS Father/Husband line and Form 20 |
+| `dms_relation_prefix` | `varchar(8)` | YES |  | DMS relation line: app persists **first 3 characters of trimmed address** when length ≥ 3, else **`D/o`** (female) / **`S/o`** (otherwise); see `app/services/dms_relation_prefix.py` |
 | `dms_contact_path` | `varchar(16)` | NO | `'found'` | `found` / `new_enquiry` / `skip_find`: dummy uses `skip_find` to skip finder Go; **real Siebel ignores `skip_find` for ordering** — always Contact Find (`DMS_REAL_URL_CONTACT`) first, then linear SOP per LLD §2.4d |
-| `file_location` | `text` | YES |  | File location / sub-folder name where scans are placed |
+| `dms_contact_id` | `varchar(128)` | YES |  | DMS / Siebel **Contact Id** from automation scrape (`DDL/alter/02k_customer_master_add_dms_contact_id.sql`) |
+| `file_location` | `text` | YES |  | Legacy mirror of per-sale folder; **canonical** folder for a sale is `sales_master.file_location` (kept in sync on master commit) |
 | `gender` | `varchar(8)` | YES |  | Gender from Aadhar QR (e.g. M, F) |
 | `date_of_birth` | `varchar(20)` | YES |  | Date of birth (dd/mm/yyyy); default date format for app and DB |
 
@@ -66,7 +65,7 @@ This document lists the current database tables and their columns. **Executable 
 | Column | Type | Null | Default | Notes |
 |---|---|---:|---|---|
 | `vehicle_id` | `integer` | NO | `nextval('vehicle_master_vehicle_id_seq'::regclass)` | Primary key |
-| `key_num` | `varchar(32)` | YES |  | Key number |
+| `key_num` | `varchar(32)` | YES |  | Key number; on first master commit equals **`raw_key_num`** |
 | `engine` | `varchar(64)` | YES |  | Engine number |
 | `chassis` | `varchar(64)` | YES |  | Chassis number |
 | `battery` | `varchar(64)` | YES |  | Battery number |
@@ -80,20 +79,21 @@ This document lists the current database tables and their columns. **Executable 
 | `cubic_capacity` | `numeric(10,2)` | YES |  | Cubic capacity (cc) |
 | `body_type` | `varchar(16)` | YES |  | Body type (e.g. Sedan, SUV) |
 | `seating_capacity` | `integer` | YES |  | Seating capacity |
-| `place_of_registeration` | `varchar(32)` | YES |  | Place of registration |
-| `oem_name` | `varchar(64)` | YES |  | OEM / Make (e.g. Hero MotoCorp); Form 20 field 16 |
-| `vehicle_type` | `varchar(32)` | YES |  | Type of vehicle (e.g. LMV, 2W) |
+| `place_of_registeration` | `varchar(128)` | YES |  | From **`dealer_ref.rto_name`** for the sale’s dealer (via latest `sales_master`); widened in **`DDL/alter/15a_vehicle_master_variant_vin_unique_drop_dms_sku.sql`** |
+| `oem_name` | `varchar(64)` | YES |  | From **`oem_ref.oem_name`** via sale’s **`dealer_ref.oem_id`**; Form 20 field 16 |
+| `variant` | `varchar(64)` | YES |  | Variant from Siebel Vehicles page scrape |
+| `vehicle_type` | `varchar(32)` | YES |  | Type of vehicle; stored **ALL CAPS** after DMS merge (normalized from mixed-case Siebel) |
 | `num_cylinders` | `integer` | YES |  | Number of cylinders |
 | `horse_power` | `numeric(10,2)` | YES |  | Horse power |
 | `length_mm` | `integer` | YES |  | Length in mm |
 | `fuel_type` | `varchar(16)` | YES |  | Fuel type (e.g. Petrol, Diesel) |
-| `vehicle_ex_showroom_price` | `numeric(12,2)` | YES |  | **Ex-showroom / Order Value** from DMS; `form_vahan_view` exposes it as `vehicle_price` for Vahan |
-| `dms_sku` | `varchar(128)` | YES |  | SKU from Siebel vehicle scrape; added by `DDL/alter/10h_form_dms_view_city_vehicle_dms_sku.sql` |
+| `vehicle_ex_showroom_price` | `numeric(12,2)` | YES |  | **Ex-showroom / Order Value** from DMS (e.g. after **Price All / Allocate All** in booking attach); `form_vahan_view` exposes it as `vehicle_price` for Vahan |
 
 **Primary key:** `vehicle_master_pkey` on (`vehicle_id`)
 
 **Unique:** `uq_vehicle_raw_triple` on (`raw_frame_num`, `raw_engine_num`, `raw_key_num`)
 **Unique:** `uq_vehicle_engine_chassis` on (`engine`, `chassis`) (only when both are non-empty)
+**Unique (partial):** `uq_vehicle_master_chassis_nonempty` on `UPPER(BTRIM(chassis))` where `chassis` is non-null and non-blank — canonical VIN after scrape (`DDL/alter/15a_vehicle_master_variant_vin_unique_drop_dms_sku.sql`). **`dms_sku`** removed by the same script.
 
 ---
 
@@ -108,15 +108,16 @@ This document lists the current database tables and their columns. **Executable 
 | `vehicle_id` | `integer` | NO |  | FK → `vehicle_master(vehicle_id)` |
 | `billing_date` | `timestamptz` | NO | `now()` | System date/time |
 | `dealer_id` | `integer` | YES |  | FK → `dealer_ref(dealer_id)` |
-| `order_number` | `varchar(128)` | YES |  | DMS Order# from Fill DMS scrape (`DDL/alter/05h_sales_master_add_order_invoice_numbers.sql`) |
-| `invoice_number` | `varchar(128)` | YES |  | DMS Invoice# when present (`DDL/alter/05h_sales_master_add_order_invoice_numbers.sql`) |
-| `enquiry_number` | `varchar(128)` | YES |  | DMS Enquiry# from Contact_Enquiry tab (`DDL/alter/05i_sales_master_add_enquiry_number.sql`) |
-| `vahan_application_id` | `varchar(128)` | YES |  | Latest Vahan application id scraped during RTO queue processing |
-| `rto_charges` | `numeric(12,2)` | YES |  | Latest Vahan RTO charges scraped during RTO queue processing |
+| `file_location` | `varchar(128)` | YES |  | Per-sale upload/OCR subfolder (`DDL/alter/05e_sales_master_add_file_location.sql`) |
+| `order_number` | `varchar(128)` | YES |  | DMS **Order#** — scraped during the **order** stage of the DMS run (`update_sales_master_from_dms_scrape`; `DDL/alter/05h_…`) |
+| `invoice_number` | `varchar(128)` | YES |  | DMS **Invoice#** — scraped during the **invoice** stage (`05h_…`) |
+| `enquiry_number` | `varchar(128)` | YES |  | DMS **Enquiry#** — scraped during the **enquiry** stage (`05i_…`) |
+| `vahan_application_id` | `varchar(128)` | YES |  | Filled by **Vahan** / RTO queue processing when the application id is scraped — **not** by DMS (`DDL/alter/05f_…`) |
+| `rto_charges` | `numeric(12,2)` | YES |  | Filled by **Vahan** / RTO queue processing when fees are scraped — **not** by DMS (`05f_…`) |
 
 **Primary key:** `sales_master_pkey` on (`sales_id`)
 
-**Unique:** `uq_sales_customer_vehicle` on (`customer_id`, `vehicle_id`)
+**Unique:** `uq_sales_customer_vehicle` on (`customer_id`, `vehicle_id`) — post–Create Invoice commit **inserts** a new row only; **duplicate pair fails** (no `ON CONFLICT` upsert on `sales_master`).
 
 **Foreign keys:**
 - `fk_sales_customer`: (`customer_id`) → `customer_master(customer_id)`
@@ -207,8 +208,10 @@ This document lists the current database tables and their columns. **Executable 
 | `nominee_name` | `text` | YES |  | Nominee name |
 | `nominee_age` | `integer` | YES |  | Nominee age |
 | `nominee_relationship` | `varchar(64)` | YES |  | Nominee relationship |
+| `nominee_gender` | `varchar(16)` | YES |  | Nominee gender (details sheet / OCR); lives in staging until **Generate Insurance** commits (`DDL/alter/10j_form_insurance_view.sql`, `DDL/alter/14a_nominee_gender_insurance_drop_customer_legacy.sql`) |
 | `policy_broker` | `varchar(255)` | YES |  | Policy broker |
 | `premium` | `numeric(12,2)` | YES |  | Premium amount |
+| `insurance_cost` | `numeric(12,2)` | YES |  | Total premium / payable amount: initial value from **policy preview** before **Issue Policy**, refreshed after **Issue Policy** from a second scrape (**`DDL/alter/14b_insurance_master_add_insurance_cost.sql`**) |
 
 **Primary key:** `insurance_master_pkey` on (`insurance_id`)
 
@@ -224,7 +227,7 @@ This document lists the current database tables and their columns. **Executable 
 
 ## 8) `service_reminders_queue`
 
-**Purpose:** Queue of service reminders per customer/vehicle. Populated by trigger fn_sales_master_sync_service_reminders when sales_master is upserted and dealer has auto_sms_reminders = Y.
+**Purpose:** Queue of service reminders per customer/vehicle. Populated **only** by trigger `fn_sales_master_sync_service_reminders` when `sales_master` is inserted or updated and the dealer has `auto_sms_reminders = Y` (`DDL/09_trigger_sales_master_sync_service_reminders.sql`). **Application code must not** INSERT or UPDATE this table — use `sales_master` changes so the trigger remains the single source of reminder rows.
 
 | Column | Type | Null | Default | Notes |
 |---|---|---:|---|---|
@@ -312,20 +315,16 @@ This document lists the current database tables and their columns. **Executable 
 
 ---
 
-## 9b) `form_dms_view`
+## 9b) DMS fill source (former `form_dms_view`)
 
-**Purpose:** Read-only view that projects one sale into the DMS field labels currently used by Playwright so operators can inspect the DMS inputs without manually joining customer and vehicle tables.
+**Removed:** The PostgreSQL view **`form_dms_view`** is dropped by **`DDL/alter/13b_drop_form_dms_view.sql`**. Historical DDL that created it remains under **`DDL/alter/10f`–`10i_*.sql`** for reference only.
 
-**Primary keys / grain:** One row per submitted `(customer_id, vehicle_id)` sale, sourced from `sales_master` and enriched with `customer_master`, `vehicle_master`, and `dealer_ref`.
+**Current behavior:** Create Invoice (**Fill DMS**) builds the same label-aligned row in application code:
 
-**Important columns:**
-- Technical/source columns: `sales_id`, `customer_id`, `vehicle_id`, `dealer_id`, `subfolder`, `dealer_name`, `oem_name`.
-- Label-aligned columns: `"Mr/Ms"`, `"Contact First Name"`, `"Contact Last Name"`, `"Mobile Phone #"`, `"Landline #"`, `"State"`, `"Address Line 1"`, `"City"` (from `customer_master.city`; recreated in `DDL/alter/10h_form_dms_view_city_vehicle_dms_sku.sql`), `"Pin Code"`, `"Key num (partial)"`, `"Frame / Chassis num (partial)"`, `"Engine num (partial)"`, `"Relation (S/O or W/o)"`, `"Father or Husband Name"`, `"Financier Name"`, `"Finance Required"`, `"DMS Contact Path"`.
+- **Legacy path (after Submit Info):** `backend/app/repositories/form_dms.py` runs an **inline** `SELECT` over `sales_master` + `customer_master` + `vehicle_master` + `dealer_ref` (equivalent to the old view).
+- **Target path:** values come from **`add_sales_staging.payload_json`** — merged OCR extraction and operator corrections — without requiring master rows or a SQL view first (**LLD §2.2a**).
 
-**Operational notes:**
-- The partial key/frame/engine columns match the truncation used by Playwright today (`8/12/12` characters respectively).
-- DMS automation now reads its fill values only from `form_dms_view`.
-- `ocr_output/<subfolder>/DMS_Form_Values.txt` supplements the DB view by recording the exact runtime values that Playwright sent.
+`ocr_output/<subfolder>/DMS_Form_Values.txt` records the runtime values Playwright sent (**BR-10**).
 
 ---
 
@@ -337,7 +336,7 @@ This document lists the current database tables and their columns. **Executable 
 
 **Important columns:** Chassis/frame (`frame_no`, `full_chassis`), engine, model, proposer and address fields, `insurer`, nominee columns, `financer_name`, `rto_name`, etc. — **only** columns that already exist on the base tables. Proposal-only UI defaults (email, add-ons, CPA, payment mode, registration date) remain **hardcoded** in Playwright until optional future columns exist.
 
-**Operational notes:** `_load_latest_insurance_values` uses `SELECT * FROM form_insurance_view WHERE customer_id = ? AND vehicle_id = ?`. Insurer may still be supplemented from OCR details JSON when `insurance_master.insurer` is empty (`_build_insurance_fill_values`).
+**Operational notes:** `load_latest_insurance_values` uses `SELECT * FROM form_insurance_view WHERE customer_id = ? AND vehicle_id = ?`. **`build_insurance_fill_values`** (`insurance_form_values.py`) uses that row **together with** **`add_sales_staging.payload_json`** when Add Sales passes **`staging_id`**: the view reflects committed masters after Create Invoice; **`payload_json`** holds the full OCR/operator merge so the pair is the **complete** insurance input set (**BR-20**). Insurer may still fall back to **`OCR_To_be_Used.json`** when view and staging lack it. Repository: **`fetch_staging_payload`** accepts **draft** or **committed** staging rows.
 
 ---
 
@@ -427,11 +426,34 @@ This document lists the current database tables and their columns. **Executable 
 | `insurance_master` | Submit Info, View Customer |
 | `service_reminders_queue` | Trigger on sales_master |
 | `rto_queue` | RTO Queue page, rc_status_sms_queue |
-| `form_dms_view` | DMS field inspection and `DMS_Form_Values.txt` generation |
+| *(DMS fill row)* | **`form_dms.py`** (inline SQL) + future **`add_sales_staging.payload_json`**; `DMS_Form_Values.txt` under `ocr_output` |
 | `form_vahan_view` | Vahan field inspection and `Vahan_Form_Values.txt` generation |
 | `form_insurance_view` | Hero/MISP insurance fill and `Insurance_Form_Values.txt` generation |
 | `rc_status_sms_queue` | RC status SMS sending |
 | `bulk_loads` | Bulk ingest, queue publish/lease, dashboard, retry prep, action-taken tracking |
+| `add_sales_staging` | Validated Add Sales JSON before master commit; **`staging_id`** for Create Invoice (**LLD §2.2a**); script **`DDL/alter/13a_add_sales_staging.sql`** |
+
+---
+
+## `add_sales_staging`
+
+**Purpose:** Server-side snapshot for Add Sales **Create Invoice (DMS)**. On each successful **`POST /submit-info`**, the API inserts or updates a **draft** row (`payload_json`, `dealer_id`) only and returns **`staging_id`**. Masters upsert after successful **Create Invoice**; the row may then move to **`committed`** (**LLD §2.2a**). **Create Invoice** passes **`staging_id`** so DMS fill reads **`payload_json`**.
+
+| Column | Type | Null | Default | Notes |
+|--------|------|-----:|---------|-------|
+| `staging_id` | `uuid` | NO |  | Primary key; new UUID on insert, or client may send existing **`staging_id`** on **`POST /submit-info`** to update that draft (same **`dealer_id`**) |
+| `dealer_id` | `integer` | NO |  | FK → `dealer_ref.dealer_id` |
+| `payload_json` | `jsonb` | NO |  | Merged payload (same logical shape as **`POST /submit-info`**); after DMS commit may include **`customer_id`** / **`vehicle_id`** |
+| `status` | `varchar(32)` | NO | `'draft'` | `draft` / `committed` / `abandoned` |
+| `created_at` | `timestamptz` | NO | `now()` | |
+| `updated_at` | `timestamptz` | NO | `now()` | |
+| `expires_at` | `timestamptz` | YES |  | Optional TTL for cleanup |
+
+**Primary key:** `staging_id`
+
+**Foreign key:** `dealer_id` → `dealer_ref(dealer_id)`
+
+**Script:** `DDL/alter/13a_add_sales_staging.sql`
 
 ---
 
@@ -458,3 +480,15 @@ This document lists the current database tables and their columns. **Executable 
 | 1.7 | Mar 2026 | `sales_master.enquiry_number` — DMS Enquiry# persistence (`DDL/alter/05i_sales_master_add_enquiry_number.sql`); `vehicle_ex_showroom_cost` now mapped to `vehicle_ex_showroom_price`; `update_sales_master_from_dms_scrape` called for real Siebel path |
 | 1.8 | Mar 2026 | **`update_vehicle_master_from_dms`** no longer updates **`raw_frame_num`** / **`raw_engine_num`** (detail-sheet identity for `form_dms_view` partials / Add Enquiry search) |
 | 1.9 | Mar 2026 | **`form_insurance_view`** (`DDL/alter/10j_form_insurance_view.sql`): stitches existing `customer_master` / `vehicle_master` / latest `insurance_master` per sale; Hero proposal uses hardcoded defaults for email/add-ons/payment/registration date |
+| 2.0 | Mar 2026 | Add Sales **Generate Insurance** eligibility uses existing **`insurance_master.policy_num`** (non-empty) via `GET /add-sales/create-invoice-eligibility`; optional **`DDL/alter/12i_insurance_master_drop_insurance_automation_completed.sql`** removes **`insurance_automation_completed`** if it was added experimentally |
+| 2.1 | Mar 2026 | **`customer_master.dms_contact_id`** (`DDL/alter/02k_customer_master_add_dms_contact_id.sql`) — optional Siebel Contact Id from DMS automation |
+| 2.2 | Mar 2026 | **`add_sales_staging`** — Add Sales deferred commit staging (`DDL/alter/13a_add_sales_staging.sql`); **LLD §2.2a** |
+| 2.3 | Mar 2026 | Dropped **`form_dms_view`** (`DDL/alter/13b_drop_form_dms_view.sql`); DMS fill via **`form_dms.py`** inline query + staging JSON |
+| 2.4 | Mar 2026 | **`POST /submit-info`** inserts/updates **draft** **`add_sales_staging`** (`persist_staging_for_submit`); response **`staging_id`** |
+| 2.5 | Mar 2026 | **`form_insurance_view`** / **BR-20**: operational notes — view + **`payload_json`** merge; **`fetch_staging_payload`** |
+| 2.6 | Mar 2026 | **§9c**: **`form_insurance_view`** + **`payload_json`** as **joint** complete GI inputs (**BR-20**) |
+| 2.7 | Mar 2026 | **`insurance_master.nominee_gender`**; dropped **`customer_master.nominee_gender`** and **`father_or_husband_name`**; **`form_dms_view`** / **`form_dms.py`**: relation prefix from address + gender fallback, Father/Husband from **`care_of` only** — **`DDL/alter/14a_nominee_gender_insurance_drop_customer_legacy.sql`** (and **`10j_form_insurance_view.sql`** add column + view) |
+| 2.8 | Mar 2026 | **`vehicle_master.variant`**; **`place_of_registeration`** → `varchar(128)`; partial unique VIN index on **`chassis`**; dropped **`dms_sku`**; **`update_vehicle_master_from_dms`**: **`vehicle_type`** ALL CAPS; 2W derivations (motorcycle/scooter); RTO/OEM from dealer — **`DDL/alter/15a_vehicle_master_variant_vin_unique_drop_dms_sku.sql`** |
+| 2.9 | Mar 2026 | **`sales_master`**: **`order_number`** / **`invoice_number`** / **`enquiry_number`** documented as scraped at **different DMS stages**; **`vahan_application_id`** / **`rto_charges`** documented as **Vahan/RTO** only — **BRD §6.1d** |
+| 2.10 | Mar 2026 | **`sales_master`**: master commit **fails on duplicate** **`(customer_id, vehicle_id)`** — **`add_sales_commit_service`** plain `INSERT` + **`ValueError`** on **`uq_sales_customer_vehicle`** |
+| 2.11 | Mar 2026 | **`insurance_master`**: app **INSERT** only for **`(customer_id, vehicle_id, insurance_year)`** (**`uq_insurance_customer_vehicle_year`**); post–**Issue Policy** scrape **UPDATE**s **`policy_num`** / **`insurance_cost`** (**`DDL/alter/14b_insurance_master_add_insurance_cost.sql`**) — **FR-18b** / **`add_sales_commit_service`** |

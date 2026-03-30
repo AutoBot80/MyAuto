@@ -116,6 +116,8 @@ export interface ExtractedCustomerDetails {
   pin_code?: string;
   /** Legacy/constructed: from Vision or built from care_of + house + street + location */
   address?: string;
+  dms_relation_prefix?: string;
+  dms_contact_path?: string;
 }
 
 /** Build display address from granular fields (care of, house, street, location, state, pin). Uses existing address if set. */

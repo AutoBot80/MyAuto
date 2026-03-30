@@ -25,7 +25,12 @@ export interface FillDmsRequest {
   rto_dealer_id?: string | null;
   /** Dealer ID for Form 20 field 10 (dealer name & address from dealer_ref). */
   dealer_id?: number | null;
-  /** From Submit Info; used to update vehicle_master with DMS-scraped data. */
+  /**
+   * Draft ``add_sales_staging`` row UUID. When set, DMS fill uses ``payload_json`` only (OCR merge);
+   * omit ``customer_id`` / ``vehicle_id``. Optional request ``customer`` / ``vehicle`` fields merge on top.
+   */
+  staging_id?: string | null;
+  /** From Submit Info; used for legacy master join and to persist DMS scrape when no ``staging_id``. */
   customer_id?: number | null;
   vehicle_id?: number | null;
   customer: FillDmsCustomer;
@@ -34,6 +39,9 @@ export interface FillDmsRequest {
 
 export interface FillDmsResponse {
   success: boolean;
+  /** After staging-path Create Invoice: committed master ids (use for insurance / RTO). */
+  customer_id?: number | null;
+  vehicle_id?: number | null;
   /** Real Siebel mode: navigation only; forms not auto-filled — show instead of "filled successfully". */
   warning?: string | null;
   dms_automation_mode?: string | null;
@@ -97,6 +105,8 @@ export interface FillInsuranceRequest {
   customer_id?: number | null;
   vehicle_id?: number | null;
   subfolder?: string | null;
+  /** Merges ``add_sales_staging.payload_json`` (OCR merge) into fill when view omits insurer/nominee (BR-20). */
+  staging_id?: string | null;
 }
 
 export interface FillInsuranceResponse {

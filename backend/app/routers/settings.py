@@ -19,7 +19,7 @@ def get_site_urls() -> dict:
     """DMS / Vahan / Insurance base URLs from backend/.env — required at server startup."""
     return {
         "dms_base_url": DMS_BASE_URL,
-        "dms_mode": DMS_MODE or "dummy",
+        "dms_mode": DMS_MODE or "real",
         "dms_real_siebel": dms_automation_is_real_siebel(),
         "dms_real_contact_url_configured": bool((DMS_REAL_URL_CONTACT or "").strip()),
         "vahan_base_url": VAHAN_BASE_URL,
