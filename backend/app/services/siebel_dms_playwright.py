@@ -6211,7 +6211,8 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     Shared by ``prepare_vehicle`` and ``_attach_vehicle_to_bkg``. Third Level View Bar tabs are
     clicked by label (with hyphen-insensitive match for **Pre-check** vs **PreCheck**). Tab ``ui-id-*``
     values are dynamic across runs/tenants, so fixed tab ids are not treated as primary selectors.
-    Applet controls: ``s_3_1_12_0_Ctrl`` (Pre-check pick), ``s_2_2_32_0_icon`` (PDI pick).
+    Applet controls: Pre-check **Technician** pick icon ``s_3_2_25_0_icon`` (tenant-current), legacy
+    ``s_3_1_12_0_Ctrl``; PDI pick ``s_2_2_32_0_icon``.
     """
     _tmo = min(int(action_timeout_ms or 3000), 4000)
 
@@ -6641,17 +6642,58 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     except Exception:
         pass
 
-    if not _siebel_click_by_id_anywhere(
-        page,
-        "s_3_1_12_0_Ctrl",
-        timeout_ms=_tmo,
-        content_frame_selector=content_frame_selector,
-        note=note,
-        label="Pre-check icon",
-        log_prefix=log_prefix,
-        wait_ms=1200,
-    ):
-        return False, "Could not click Pre-check icon (id=s_3_1_12_0_Ctrl)."
+    _precheck_icon_used = ""
+    _precheck_icon_ok = False
+    for _pc_pick_id in ("s_3_2_25_0_icon", "s_3_1_12_0_Ctrl"):
+        if _siebel_click_by_id_anywhere(
+            page,
+            _pc_pick_id,
+            timeout_ms=_tmo,
+            content_frame_selector=content_frame_selector,
+            note=note,
+            label=f"Pre-check technician icon ({_pc_pick_id})",
+            log_prefix=log_prefix,
+            wait_ms=1200,
+        ):
+            _precheck_icon_ok = True
+            _precheck_icon_used = _pc_pick_id
+            break
+    # region agent log
+    try:
+        import json as _json_pc_icon
+
+        with open(
+            Path(__file__).resolve().parents[3] / "debug-0875fe.log",
+            "a",
+            encoding="utf-8",
+        ) as _lf_pc_icon:
+            _lf_pc_icon.write(
+                _json_pc_icon.dumps(
+                    {
+                        "sessionId": "0875fe",
+                        "runId": "pre-fix",
+                        "hypothesisId": "G",
+                        "location": "siebel_dms_playwright.py:_siebel_run_vehicle_serial_detail_precheck_pdi",
+                        "message": "precheck_technician_icon_click",
+                        "data": {
+                            "ok": _precheck_icon_ok,
+                            "used_id": _precheck_icon_used,
+                            "tried_ids": ["s_3_2_25_0_icon", "s_3_1_12_0_Ctrl"],
+                        },
+                        "timestamp": int(time.time() * 1000),
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+    except Exception:
+        pass
+    # endregion agent log
+    if not _precheck_icon_ok:
+        return False, (
+            "Could not click Pre-check technician applet icon "
+            "(tried s_3_2_25_0_icon, s_3_1_12_0_Ctrl)."
+        )
 
     _safe_page_wait(page, 800, log_label="after_precheck_icon_settle")
     _pick_ok = False
@@ -10444,6 +10486,40 @@ def _siebel_fill_key_battery_from_dms_values(
             continue
     if _veh_fill_frame is None:
         _veh_fill_frame = page.main_frame
+    # #region agent log
+    try:
+        import json as _j_kb
+
+        _n = getattr(_siebel_fill_key_battery_from_dms_values, "_agent_n", 0) + 1
+        setattr(_siebel_fill_key_battery_from_dms_values, "_agent_n", _n)
+        _fu = ""
+        try:
+            _fu = (_veh_fill_frame.url or "")[:180]
+        except Exception:
+            _fu = ""
+        with open(Path(__file__).resolve().parents[3] / "debug-0875fe.log", "a", encoding="utf-8") as _lf:
+            _lf.write(
+                _j_kb.dumps(
+                    {
+                        "sessionId": "0875fe",
+                        "hypothesisId": "KB-A",
+                        "location": "siebel_dms_playwright.py:_siebel_fill_key_battery_from_dms_values",
+                        "message": "key_battery_fill_invoke",
+                        "data": {
+                            "invoke_seq": _n,
+                            "log_prefix": log_prefix,
+                            "has_key": bool(key_val),
+                            "has_battery": bool(battery_val),
+                            "fill_frame_url": _fu,
+                        },
+                        "timestamp": int(time.time() * 1000),
+                    }
+                )
+                + "\n"
+            )
+    except Exception:
+        pass
+    # #endregion
     if key_val:
         if _fill_by_label_on_frame(_veh_fill_frame, "Key Number", key_val, action_timeout_ms=action_timeout_ms):
             note(f"{log_prefix}: filled Key Number = {key_val!r} on vehicle page.")
@@ -10614,6 +10690,28 @@ def prepare_vehicle(
             [],
         )
 
+    # #region agent log
+    try:
+        import json as _j_pv
+
+        with open(Path(__file__).resolve().parents[3] / "debug-0875fe.log", "a", encoding="utf-8") as _lf:
+            _lf.write(
+                _j_pv.dumps(
+                    {
+                        "sessionId": "0875fe",
+                        "hypothesisId": "KB-D",
+                        "location": "siebel_dms_playwright.py:prepare_vehicle",
+                        "message": "prepare_vehicle_before_grid_scrape",
+                        "data": {"key_partial_present": bool(key_p), "frame_partial_len": len(frame_p)},
+                        "timestamp": int(time.time() * 1000),
+                    }
+                )
+                + "\n"
+            )
+    except Exception:
+        pass
+    # #endregion
+
     scraped, veh_err = _siebel_goto_vehicle_list_and_scrape(
         page,
         vehicle_url,
@@ -10631,6 +10729,7 @@ def prepare_vehicle(
         return False, veh_err, {}, False, [], []
 
     _chassis_for_left_hit = (frame_p or str(scraped.get("frame_num") or "").strip() or "").strip()
+    _vin_click_ok: bool | None = None
     if _chassis_for_left_hit:
         if _siebel_try_click_vin_search_hit_link(
             page,
@@ -10638,17 +10737,45 @@ def prepare_vehicle(
             timeout_ms=action_timeout_ms,
             content_frame_selector=content_frame_selector,
         ):
+            _vin_click_ok = True
             note("prepare_vehicle: opened vehicle from left Search Results (VIN link).")
         else:
+            _vin_click_ok = False
             note(
                 "prepare_vehicle: could not click matching VIN in left Search Results — "
                 "continuing (detail may already be open)."
             )
     else:
+        _vin_click_ok = None
         note(
             "prepare_vehicle: no chassis/VIN for left-pane drill-in (frame_partial and grid frame_num empty) — "
             "Key/Battery and detail scrape rely on current screen (best-effort)."
         )
+
+    # #region agent log
+    try:
+        import json as _j_pv2
+
+        with open(Path(__file__).resolve().parents[3] / "debug-0875fe.log", "a", encoding="utf-8") as _lf:
+            _lf.write(
+                _j_pv2.dumps(
+                    {
+                        "sessionId": "0875fe",
+                        "hypothesisId": "KB-E",
+                        "location": "siebel_dms_playwright.py:prepare_vehicle",
+                        "message": "prepare_vehicle_before_key_battery_fill",
+                        "data": {
+                            "vin_click_ok": _vin_click_ok,
+                            "has_chassis_for_left_hit": bool(_chassis_for_left_hit),
+                        },
+                        "timestamp": int(time.time() * 1000),
+                    }
+                )
+                + "\n"
+            )
+    except Exception:
+        pass
+    # #endregion
 
     try:
         _safe_page_wait(page, 1200, log_label="after_vehicle_left_pane_vin_settle")
@@ -11387,6 +11514,28 @@ def _add_enquiry_opportunity(
             full_chassis=str(scraped_v.get("full_chassis") or ""),
             full_engine=str(scraped_v.get("full_engine") or ""),
         )
+
+    # #region agent log
+    try:
+        import json as _j_ae
+
+        with open(Path(__file__).resolve().parents[3] / "debug-0875fe.log", "a", encoding="utf-8") as _lf:
+            _lf.write(
+                _j_ae.dumps(
+                    {
+                        "sessionId": "0875fe",
+                        "hypothesisId": "KB-B",
+                        "location": "siebel_dms_playwright.py:_add_enquiry_opportunity",
+                        "message": "add_enquiry_before_key_battery_fill",
+                        "data": {"after_vehicle_grid_scrape": True},
+                        "timestamp": int(time.time() * 1000),
+                    }
+                )
+                + "\n"
+            )
+    except Exception:
+        pass
+    # #endregion
 
     _siebel_fill_key_battery_from_dms_values(
         page,
