@@ -30,6 +30,7 @@ export default defineConfig({
       '/health': 'http://127.0.0.1:8000',
       '/settings': 'http://127.0.0.1:8000',
       '/customer-search': 'http://127.0.0.1:8000',
+      '/add-sales': 'http://127.0.0.1:8000',
       '/bulk-loads': 'http://127.0.0.1:8000',
       '/admin': 'http://127.0.0.1:8000',
       '/documents': 'http://127.0.0.1:8000',
