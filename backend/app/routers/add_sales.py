@@ -110,10 +110,7 @@ def get_create_invoice_eligibility(
             "reason": None,
             "invoice_recorded": False,
             "generate_insurance_enabled": False,
-            "generate_insurance_reason": (
-                "Generate Insurance needs a sales row for this chassis, engine, and mobile. "
-                "Run Create Invoice after vehicle and customer records exist."
-            ),
+            "generate_insurance_reason": "Create Invoice before Generating Insurance",
         }
 
     if srow is None:

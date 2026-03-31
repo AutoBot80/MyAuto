@@ -3922,6 +3922,86 @@ def _siebel_try_click_named_in_frames(
     return False
 
 
+def _wait_for_mobile_search_hit_ready(
+    page: Page,
+    mobile: str,
+    *,
+    content_frame_selector: str | None,
+    wait_ms: int,
+) -> bool:
+    """
+    Wait until left Search Results has a visible drilldown candidate for ``mobile``.
+    Pure wait-strategy helper; does not click.
+    """
+    needle = _mobile_needle_for_contact_grid_match(mobile)
+    raw_digits = re.sub(r"\D", "", (mobile or "").strip())
+    if not needle and not raw_digits:
+        return False
+    _js = """(args) => {
+      const needle = String(args.needle || '');
+      const raw = String(args.raw || '');
+      const vis = (el) => {
+        if (!el) return false;
+        const st = window.getComputedStyle(el);
+        if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+        const r = el.getBoundingClientRect();
+        return r.width > 2 && r.height > 2;
+      };
+      const d = (s) => String(s || '').replace(/\\D/g, '');
+      for (const a of document.querySelectorAll("a")) {
+        if (!vis(a)) continue;
+        const txt = (a.innerText || a.textContent || '').trim();
+        if (!txt) continue;
+        const dd = d(txt);
+        if ((needle && dd.includes(needle)) || (raw.length >= 8 && dd.includes(raw))) return true;
+      }
+      for (const tr of document.querySelectorAll("table tbody tr, tr[role='row']")) {
+        if (!vis(tr)) continue;
+        const dd = d(tr.textContent || '');
+        if ((needle && dd.includes(needle)) || (raw.length >= 8 && dd.includes(raw))) return true;
+      }
+      return false;
+    }"""
+    deadline = time.monotonic() + max(0.2, wait_ms / 1000.0)
+    while time.monotonic() < deadline:
+        for root in _siebel_locator_search_roots(page, content_frame_selector):
+            try:
+                if bool(root.evaluate(_js, {"needle": needle, "raw": raw_digits})):
+                    return True
+            except Exception:
+                continue
+        _safe_page_wait(page, 120, log_label="wait_mobile_hit_ready")
+    return False
+
+
+def _wait_for_contact_detail_ready(
+    page: Page,
+    *,
+    content_frame_selector: str | None,
+    wait_ms: int,
+) -> bool:
+    """Wait until right contact detail is rendered (First Name / Relation field visible)."""
+    sels = (
+        'input[aria-label="First Name"]',
+        'textarea[aria-label="First Name"]',
+        "input[name*='First_Name' i]",
+        'input[aria-label="Relation\'s Name"]',
+        'textarea[aria-label="Relation\'s Name"]',
+    )
+    deadline = time.monotonic() + max(0.2, wait_ms / 1000.0)
+    while time.monotonic() < deadline:
+        for root in _siebel_locator_search_roots(page, content_frame_selector):
+            for css in sels:
+                try:
+                    loc = root.locator(css).first
+                    if loc.count() > 0 and loc.is_visible(timeout=250):
+                        return True
+                except Exception:
+                    continue
+        _safe_page_wait(page, 120, log_label="wait_contact_detail_ready")
+    return False
+
+
 def _siebel_try_click_mobile_search_hit_link(
     page: Page,
     mobile: str,
@@ -4430,7 +4510,10 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
     If *skip_search_hit_click* is True, the left-pane drilldown click is skipped (already done by caller).
     """
     if not skip_search_hit_click:
-        _safe_page_wait(page, 2200, log_label="after_find_go_before_drill")
+        if not _wait_for_mobile_search_hit_ready(
+            page, mobile, content_frame_selector=content_frame_selector, wait_ms=2200
+        ):
+            _safe_page_wait(page, 180, log_label="after_find_go_before_drill_fallback")
         if _siebel_try_click_named_in_frames(
             page,
             re.compile(r"Siebel\s*Find", re.I),
@@ -4439,7 +4522,9 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
             content_frame_selector=content_frame_selector,
         ):
             note("Activated Siebel Find tab in search results (video SOP).")
-            _safe_page_wait(page, 700, log_label="after_siebel_find_tab")
+            _wait_for_mobile_search_hit_ready(
+                page, mobile, content_frame_selector=content_frame_selector, wait_ms=700
+            )
 
         if not _siebel_try_click_mobile_search_hit_link(
             page,
@@ -4450,7 +4535,10 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
             note("Could not click a search-result link for the mobile — check left Search Results grid.")
             return False
         note("Opened contact from search hit hyperlink (video SOP).")
-        _safe_page_wait(page, 1200, log_label="after_contact_drill_link")
+        if not _wait_for_contact_detail_ready(
+            page, content_frame_selector=content_frame_selector, wait_ms=1200
+        ):
+            _safe_page_wait(page, 180, log_label="after_contact_drill_link_fallback")
     else:
         note("Skipped search-hit drilldown click (already opened by caller).")
         _siebel_try_activate_find_contact_context(
@@ -4475,7 +4563,10 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
         note("Could not click First Name in Contacts pane (video SOP).")
         return False
 
-    _safe_page_wait(page, 700, log_label="after_first_name_click_before_relation_fill")
+    if not _wait_for_contact_detail_ready(
+        page, content_frame_selector=content_frame_selector, wait_ms=700
+    ):
+        _safe_page_wait(page, 120, log_label="after_first_name_click_before_relation_fill_fallback")
 
     if not care_val:
         note("No care_of from DB — skipping Relation's Name / Address Line 1 fill after First Name drilldown.")
@@ -5666,6 +5757,29 @@ def _siebel_root_evaluate(root, js: str):
     return None
 
 
+def _frame_iframe_title_matches_payment_lines(frame: Frame) -> bool:
+    """True when this frame is an ``iframe`` whose ``title`` indicates the Payment Lines applet."""
+    try:
+        fe = frame.frame_element()
+        t = (fe.get_attribute("title") or "").strip().lower()
+        return "payment line" in t
+    except Exception:
+        return False
+
+
+def _siebel_frame_has_payment_lines_hhml_grid(frame: Frame) -> bool:
+    """True when the document lists Payment Lines grid markers (e.g. **HHML_Transaction_No** column)."""
+    js = """() => {
+      return !!document.querySelector(
+        '[aria-describedby*="HHML_Transaction_No"], th[id*="HHML_Transaction_No"], [id$="_l_HHML_Transaction_No"]'
+      );
+    }"""
+    try:
+        return bool(frame.evaluate(js))
+    except Exception:
+        return False
+
+
 def _siebel_root_has_payment_lines_toolbar(root) -> bool:
     """True when this root's document shows Payment Lines **List:New** / Save toolbar (``+`` context)."""
     js = """() => {
@@ -5698,8 +5812,9 @@ def _siebel_root_has_payment_lines_toolbar(root) -> bool:
 
 def _payment_lines_list_has_populated_transaction_number(root) -> bool:
     """
-    In the **same document** as the Payment Lines ``+`` toolbar, true when a list row has a
-    populated **Transaction #** (or Transaction Number) cell — i.e. a committed payment line.
+    In the Payment Lines document (often iframe **title=\"Payment Lines\"**), true when a grid cell
+    bound to **HHML_Transaction_No** (``aria-describedby`` e.g. ``s_2_l_HHML_Transaction_No``) has a
+    committed value.
     """
     js = """() => {
       const vis = (el) => {
@@ -5726,6 +5841,15 @@ def _payment_lines_list_has_populated_transaction_number(root) -> bool:
         return false;
       };
 
+      // Hero HHML: jqGrid cells use aria-describedby *HHML_Transaction_No* (id prefix may be s_2_l_, etc.)
+      for (const td of document.querySelectorAll('tbody td[aria-describedby]')) {
+        const adb = (td.getAttribute('aria-describedby') || '').toLowerCase();
+        if (!adb.includes('hhml_transaction_no')) continue;
+        if (!vis(td)) continue;
+        const v = normCell(td.innerText || td.textContent || '');
+        if (looksLikeTxnId(v)) return true;
+      }
+
       const tables = document.querySelectorAll(
         'table.ui-jqgrid-btable, div.ui-jqgrid-bdiv table, table.siebui-list, table.siebui-list table'
       );
@@ -5747,7 +5871,8 @@ def _payment_lines_list_has_populated_transaction_number(root) -> bool:
           if (firstData) {
             firstData.querySelectorAll('td').forEach((td, i) => {
               const adb = (td.getAttribute('aria-describedby') || '').toLowerCase();
-              if (adb.includes('transaction') && (adb.includes('num') || adb.includes('seq') || adb.includes('txn')))
+              if (adb.includes('hhml_transaction_no')) txnCol = i;
+              else if (adb.includes('transaction') && (adb.includes('num') || adb.includes('seq') || adb.includes('txn') || adb.includes('transaction_no')))
                 txnCol = i;
             });
           }
@@ -5766,8 +5891,13 @@ def _payment_lines_list_has_populated_transaction_number(root) -> bool:
         if (!vis(tr)) continue;
         for (const td of tr.querySelectorAll('td')) {
           const adb = (td.getAttribute('aria-describedby') || '').toLowerCase();
+          if (adb.includes('hhml_transaction_no')) {
+            const v = normCell(td.innerText || td.textContent || '');
+            if (looksLikeTxnId(v)) return true;
+            continue;
+          }
           if (!adb.includes('transaction')) continue;
-          if (!adb.includes('num') && !adb.includes('seq') && !adb.includes('txn')) continue;
+          if (!adb.includes('num') && !adb.includes('seq') && !adb.includes('txn') && !adb.includes('transaction_no')) continue;
           const v = normCell(td.innerText || td.textContent || '');
           if (looksLikeTxnId(v)) return true;
         }
@@ -5777,8 +5907,28 @@ def _payment_lines_list_has_populated_transaction_number(root) -> bool:
     return bool(_siebel_root_evaluate(root, js))
 
 
+def _payment_line_toolbar_roots_priority(root) -> tuple:
+    """Prefer **Frame** payment contexts: toolbar+grid together, then titled **Payment Lines** iframe."""
+    if not isinstance(root, Frame):
+        return (3, 99)
+    tb = _siebel_root_has_payment_lines_toolbar(root)
+    gr = _siebel_frame_has_payment_lines_hhml_grid(root)
+    ti = _frame_iframe_title_matches_payment_lines(root)
+    if tb and gr:
+        return (0, 0)
+    if ti and gr:
+        return (0, 1)
+    if tb and ti:
+        return (0, 2)
+    if tb:
+        return (1, 0)
+    if ti or gr:
+        return (1, 2)
+    return (2, 0)
+
+
 def _gather_payment_line_toolbar_roots(page: Page, content_frame_selector: str | None) -> list:
-    """Frames / locators where **Payment Lines List:New** (``+``) is visible."""
+    """Frames / locators where **Payment Lines** lives: **List:New** toolbar, HHML grid, or iframe title."""
     out: list = []
     seen: set[int] = set()
 
@@ -5797,7 +5947,11 @@ def _gather_payment_line_toolbar_roots(page: Page, content_frame_selector: str |
             continue
     for frame in _ordered_frames(page):
         try:
-            if _siebel_root_has_payment_lines_toolbar(frame):
+            if (
+                _siebel_root_has_payment_lines_toolbar(frame)
+                or _frame_iframe_title_matches_payment_lines(frame)
+                or _siebel_frame_has_payment_lines_hhml_grid(frame)
+            ):
                 _add(frame)
         except Exception:
             continue
@@ -5842,6 +5996,8 @@ def _add_customer_payment(
         _safe_page_wait(page, 1200, log_label="after_payments_tab_retry_toolbar")
         payment_toolbar_roots = _gather_payment_line_toolbar_roots(page, content_frame_selector)
 
+    payment_toolbar_roots.sort(key=_payment_line_toolbar_roots_priority)
+
     if not payment_toolbar_roots:
         note(
             "Payment debug: Payment Lines toolbar (List:New / Save) not found — "
@@ -5876,58 +6032,21 @@ def _add_customer_payment(
         "a[title*='add' i]",
         "button.siebui-icon-new",
         "a.siebui-icon-new",
-        "button",
-        "a",
-    )
-    plus_patterns = (
-        re.compile(r"^\s*\+\s*$"),
-        re.compile(r"^\s*new\s*$", re.I),
-        re.compile(r"add", re.I),
     )
 
     def _click_plus_in_root(root) -> bool:
-        # Exact selectors first
-        for css in plus_selectors[:-2]:
+        # Avoid ``page`` default timeouts (often 60s+) on buried iframes; cap interaction waits.
+        _plus_to = int(min(12_000, max(2_500, action_timeout_ms // 5)))
+        _vis_ms = int(min(2_000, max(400, _plus_to // 4)))
+        for css in plus_selectors:
             try:
                 c = root.locator(css).first
-                if c.count() > 0 and c.is_visible(timeout=500):
+                if c.count() > 0 and c.is_visible(timeout=_vis_ms):
                     try:
-                        c.click(timeout=action_timeout_ms)
+                        c.click(timeout=_plus_to)
                     except Exception:
-                        c.click(timeout=action_timeout_ms, force=True)
+                        c.click(timeout=_plus_to, force=True)
                     return True
-            except Exception:
-                continue
-        # Text/aria/title fallback across generic clickable nodes
-        for css in plus_selectors[-2:]:
-            try:
-                cands = root.locator(css)
-                n = cands.count()
-                for i in range(min(n, 30)):
-                    c = cands.nth(i)
-                    if not c.is_visible(timeout=350):
-                        continue
-                    try:
-                        txt = (c.inner_text(timeout=250) or "").strip()
-                    except Exception:
-                        txt = ""
-                    try:
-                        title = (c.get_attribute("title") or "").strip()
-                    except Exception:
-                        title = ""
-                    try:
-                        aria = (c.get_attribute("aria-label") or "").strip()
-                    except Exception:
-                        aria = ""
-                    blob = " ".join([txt, title, aria]).strip()
-                    if not blob:
-                        continue
-                    if any(p.search(blob) for p in plus_patterns):
-                        try:
-                            c.click(timeout=action_timeout_ms)
-                        except Exception:
-                            c.click(timeout=action_timeout_ms, force=True)
-                        return True
             except Exception:
                 continue
         return False

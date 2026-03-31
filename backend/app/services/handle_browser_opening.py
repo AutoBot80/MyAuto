@@ -151,8 +151,9 @@ def _launch_managed_browser_for_site(base_url: str):
                 creationflags=creation_flags,
             )
             logger.info("handle_browser_opening: launched %s independently (port %s)", channel, port)
-            for _attempt in range(20):
-                time.sleep(0.5)
+            _cdp_t0 = time.monotonic()
+            _cdp_deadline = _cdp_t0 + 8.0
+            while time.monotonic() < _cdp_deadline:
                 try:
                     browser = pw.chromium.connect_over_cdp(cdp_url)
                     _CDP_BROWSERS_BY_URL[cdp_url] = browser
@@ -183,9 +184,16 @@ def _launch_managed_browser_for_site(base_url: str):
                     except Exception:
                         continue
                 except Exception:
-                    continue
+                    pass
+                _elapsed = time.monotonic() - _cdp_t0
+                if _elapsed < 1.2:
+                    time.sleep(0.06)
+                elif _elapsed < 3.5:
+                    time.sleep(0.14)
+                else:
+                    time.sleep(0.28)
             logger.warning(
-                "handle_browser_opening: launched %s but could not connect via CDP at %s after 10s",
+                "handle_browser_opening: launched %s but could not connect via CDP at %s within ~8s",
                 channel,
                 cdp_url,
             )
@@ -256,14 +264,16 @@ def _playwright_page_url_matches_site_base(page_url: str, site_base_url: str) ->
 
 
 def _try_auto_login_if_prefilled(page) -> bool:
-    try:
-        page.wait_for_load_state("domcontentloaded", timeout=10000)
-    except Exception:
-        pass
-    try:
-        page.wait_for_load_state("load", timeout=8000)
-    except Exception:
-        pass
+    def _is_login_url() -> bool:
+        try:
+            u = (page.url or "").lower()
+            return (
+                ("swecmd=login" in u)
+                or u.rstrip("/").endswith("/login")
+                or ("misp-partner-login" in u)
+            )
+        except Exception:
+            return False
 
     _detect_js = """() => {
       const vis = (el) => {
@@ -386,11 +396,11 @@ def _try_auto_login_if_prefilled(page) -> bool:
             page.wait_for_load_state("domcontentloaded", timeout=15000)
         except Exception:
             pass
-        for _ in range(10):
+        for _ in range(16):
             if not _is_login_url():
                 logger.info("handle_browser_opening: auto-login submitted; page URL now: %s", (page.url or "")[:120])
                 return True
-            time.sleep(0.5)
+            time.sleep(0.25)
         logger.warning(
             "handle_browser_opening: login submit attempted but still on login URL: %s", (page.url or "")[:120]
         )
