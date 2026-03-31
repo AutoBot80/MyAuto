@@ -11802,15 +11802,21 @@ def _siebel_vehicle_features_hhml_applet_visible(page: Page) -> bool:
         const r = el.getBoundingClientRect();
         return r.width > 2 && r.height > 2;
       };
+      const cellTxt = (el) => {
+        if (!el) return '';
+        return String(
+          el.value || el.textContent || el.innerText || el.getAttribute('title') || ''
+        ).trim();
+      };
       for (const id of [
         '4_s_1_l_HHML_Feature_Value', '5_s_1_l_HHML_Feature_Value',
         '4_s_1_l_HHML_Fetaure_Value', '5_s_1_l_HHML_Fetaure_Value'
       ]) {
         const el = document.getElementById(id);
-        if (el && vis(el)) return true;
+        if (el && (vis(el) || cellTxt(el))) return true;
       }
       const any = document.querySelector('[id*="HHML_Feature_Value"],[id*="HHML_Fetaure_Value"]');
-      if (any && vis(any)) return true;
+      if (any && (vis(any) || cellTxt(any))) return true;
       const land = document.querySelector('[aria-label*="Features in Vehicles" i]');
       if (land && vis(land)) return true;
       const featGrid = document.querySelector(
@@ -11832,7 +11838,7 @@ def _siebel_scrape_features_cubic_and_vehicle_type(page: Page) -> tuple[str, str
     On **Features and Image**, read cubic capacity and vehicle type.
 
     1. **HHML** ids ``4_s_1_l_HHML_Feature_Value`` / ``5_s_1_l_HHML_Feature_Value`` (and ``Fetaure`` typo)
-       and visible ``*[id*='HHML_Feature_Value']`` / ``Fetaure`` by row prefix.
+       — reads ``value``, text, and ``title`` (Siebel ``td.edit-cell`` often mirrors the value in ``title``).
     2. **Features grid**: ``table[summary="Features"]`` with columns Feature / Value / … — row **CC Category**
        → cubic text (e.g. ``125 CC``); **Class of Vehicle** → vehicle type.
     """
@@ -11849,10 +11855,16 @@ def _siebel_scrape_features_cubic_and_vehicle_type(page: Page) -> tuple[str, str
                     const r = el.getBoundingClientRect();
                     return r.width > 2 && r.height > 2;
                   };
+                  const cellText = (el) => {
+                    if (!el) return '';
+                    return String(
+                      el.value || el.textContent || el.innerText || el.getAttribute('title') || ''
+                    ).trim();
+                  };
                   const read = (id) => {
                     const el = document.getElementById(id);
-                    if (!el || !vis(el)) return '';
-                    return String(el.value || el.textContent || el.innerText || '').trim();
+                    if (!el) return '';
+                    return cellText(el);
                   };
                   let cubic = read('4_s_1_l_HHML_Feature_Value') || read('4_s_1_l_HHML_Fetaure_Value');
                   let vtype = read('5_s_1_l_HHML_Feature_Value') || read('5_s_1_l_HHML_Fetaure_Value');
@@ -11863,11 +11875,13 @@ def _siebel_scrape_features_cubic_and_vehicle_type(page: Page) -> tuple[str, str
                   if (!cubic || !vtype) {
                     const cand = Array.from(
                       document.querySelectorAll('[id*="HHML_Feature_Value"],[id*="HHML_Fetaure_Value"]')
-                    ).filter(vis);
+                    ).filter((el) => vis(el) || cellText(el));
                     const byRow = { 4: [], 5: [] };
                     for (const el of cand) {
                       const id = el.getAttribute('id') || '';
-                      const t = String(el.value || el.textContent || el.innerText || '').replace(/\\s+/g, ' ').trim();
+                      const t = String(
+                        el.value || el.textContent || el.innerText || el.getAttribute('title') || ''
+                      ).replace(/\\s+/g, ' ').trim();
                       if (!t) continue;
                       const rh = rowHint(id);
                       if (rh === 4) byRow[4].push(t);
@@ -11884,11 +11898,13 @@ def _siebel_scrape_features_cubic_and_vehicle_type(page: Page) -> tuple[str, str
                   if (!vtype || /^\\d{4,5}-[A-Z0-9-]+$/i.test(vtype)) {
                     const cand = Array.from(
                       document.querySelectorAll('[id*="HHML_Feature_Value"],[id*="HHML_Fetaure_Value"]')
-                    ).filter(vis);
+                    ).filter((el) => vis(el) || cellText(el));
                     for (const el of cand) {
                       const id = el.getAttribute('id') || '';
                       if (rowHint(id) !== 5 && id.indexOf('_5_') < 0) continue;
-                      const t = String(el.value || el.textContent || el.innerText || '').replace(/\\s+/g, ' ').trim();
+                      const t = String(
+                        el.value || el.textContent || el.innerText || el.getAttribute('title') || ''
+                      ).replace(/\\s+/g, ' ').trim();
                       if (t && /[a-zA-Z]{2,}/.test(t) && t.length > vtype.length) vtype = t;
                     }
                   }
@@ -11900,7 +11916,9 @@ def _siebel_scrape_features_cubic_and_vehicle_type(page: Page) -> tuple[str, str
                     const valFrom = (cell) => {
                       const v = cell.value;
                       if (v !== undefined && v !== null && String(v).trim() !== '') return String(v).trim();
-                      return String(cell.textContent || cell.innerText || '').replace(/\\s+/g, ' ').trim();
+                      return String(
+                        cell.textContent || cell.innerText || cell.getAttribute('title') || ''
+                      ).replace(/\\s+/g, ' ').trim();
                     };
                     for (const tbl of grids) {
                       const tb = tbl.querySelector('tbody') || tbl;
