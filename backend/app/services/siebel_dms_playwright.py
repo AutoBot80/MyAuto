@@ -11283,21 +11283,89 @@ def _siebel_click_by_name_anywhere(
     note,
     log_label: str,
 ) -> bool:
-    """Click ``a``/``button``/generic element with HTML ``name`` (e.g. Serial Number drilldown)."""
-    for root in _siebel_locator_roots_for_vehicle_prep(page, content_frame_selector):
+    """Click ``a``/``button``/generic element with HTML ``name`` (e.g. Serial Number drilldown).
+
+    Hero **Auto Vehicle** detail often puts the VIN / serial drill-in inside jqGrid
+    ``div#gview_s_1_l`` — try those selectors first, then fall back to document-wide search.
+    """
+    nv_esc = name_val.replace("'", "\\'")
+
+    def _try_click_loc(loc, *, where: str) -> bool:
+        try:
+            if loc.count() == 0:
+                return False
+        except Exception:
+            return False
+        for vis_ms in (900, 1600):
+            try:
+                if not loc.is_visible(timeout=vis_ms):
+                    continue
+            except Exception:
+                continue
+            try:
+                loc.evaluate(
+                    """(el) => {
+                      try { el.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) {}
+                    }"""
+                )
+            except Exception:
+                pass
+            try:
+                loc.click(timeout=timeout_ms)
+                note(f"prepare_vehicle: clicked {log_label} (name={name_val!r}, {where}).")
+                return True
+            except Exception:
+                try:
+                    loc.click(timeout=timeout_ms, force=True)
+                    note(f"prepare_vehicle: clicked {log_label} (name={name_val!r}, force, {where}).")
+                    return True
+                except Exception:
+                    continue
+        return False
+
+    roots = list(_siebel_locator_roots_for_vehicle_prep(page, content_frame_selector))
+    # 1) jqGrid view container (operator: drilldown with name=Serial Number in ``#gview_s_1_l``).
+    gview_prefixes = (
+        "#gview_s_1_l",
+        "[id='gview_s_1_l']",
+        "div#gview_s_1_l",
+    )
+    for root in roots:
+        for gpre in gview_prefixes:
+            for css in (
+                f"{gpre} a[name='{nv_esc}']",
+                f"{gpre} button[name='{nv_esc}']",
+                f"{gpre} a[title='{nv_esc}']",
+                f"{gpre} [name='{nv_esc}']",
+            ):
+                try:
+                    loc = root.locator(css).first
+                    if _try_click_loc(loc, where=f"scoped {gpre!r}"):
+                        return True
+                except Exception:
+                    continue
+            try:
+                box = root.locator(gpre).first
+                if box.count() > 0:
+                    role_ln = box.get_by_role(
+                        "link", name=re.compile(rf"^\s*{re.escape(name_val)}\s*$", re.I)
+                    )
+                    if role_ln.count() > 0 and _try_click_loc(
+                        role_ln.first, where=f"scoped role=link {gpre!r}"
+                    ):
+                        return True
+            except Exception:
+                continue
+    # 2) Document-wide (legacy)
+    for root in roots:
         for css in (
-            f"a[name='{name_val}']",
-            f"button[name='{name_val}']",
-            f"[name='{name_val}']",
+            f"a[name='{nv_esc}']",
+            f"button[name='{nv_esc}']",
+            f"[name='{nv_esc}']",
         ):
             try:
                 loc = root.locator(css).first
-                if loc.count() > 0 and loc.is_visible(timeout=550):
-                    try:
-                        loc.click(timeout=timeout_ms)
-                    except Exception:
-                        loc.click(timeout=timeout_ms, force=True)
-                    note(f"prepare_vehicle: clicked {log_label} (name={name_val!r}).")
+                if _try_click_loc(loc, where="global name match"):
                     return True
             except Exception:
                 continue
