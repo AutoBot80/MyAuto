@@ -5,6 +5,7 @@ import logging
 import re
 import time
 from copy import deepcopy
+from functools import partial
 from pathlib import Path
 from uuid import UUID
 
@@ -426,8 +427,8 @@ async def warm_dms_browser(req: WarmDmsBrowserRequest) -> WarmDmsBrowserResponse
     if not base_url:
         raise HTTPException(status_code=400, detail="dms_base_url required (or set DMS_BASE_URL)")
     base_url = _require_absolute_http_url(base_url, "dms_base_url")
-    loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(None, lambda: warm_dms_browser_session(base_url))
+    # Playwright Sync API must run off the asyncio loop thread (see handle_browser_opening._get_playwright).
+    result = await asyncio.to_thread(warm_dms_browser_session, base_url)
     return WarmDmsBrowserResponse(
         success=bool(result.get("success")),
         error=result.get("error"),
@@ -473,11 +474,10 @@ async def fill_dms_only(req: FillDmsRequest) -> FillDmsResponse:
         vehicle_dict,
     )
     sid_for_commit = (req.staging_id or "").strip() or None
-    loop = asyncio.get_event_loop()
     exec_started = time.monotonic()
-    result = await loop.run_in_executor(
-        None,
-        lambda sid=sid_for_commit: run_fill_dms_only(
+    result = await asyncio.to_thread(
+        partial(
+            run_fill_dms_only,
             dms_base_url=base_url,
             subfolder=req.subfolder,
             customer=customer_dict,
@@ -490,8 +490,8 @@ async def fill_dms_only(req: FillDmsRequest) -> FillDmsResponse:
             customer_id=cid,
             vehicle_id=vid,
             staging_payload=staging_payload,
-            staging_id=sid,
-        ),
+            staging_id=sid_for_commit,
+        )
     )
     # region agent log
     _agent_debug_log(
@@ -625,10 +625,9 @@ async def fill_vahan_only(req: FillVahanRequest) -> FillVahanResponse:
         raise HTTPException(status_code=400, detail="vahan_base_url required")
     vahan_url = _require_absolute_http_url(vahan_url, "vahan_base_url")
     did = req.dealer_id if req.dealer_id is not None else DEALER_ID
-    loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(
-        None,
-        lambda: run_fill_vahan_only(
+    result = await asyncio.to_thread(
+        partial(
+            run_fill_vahan_only,
             vahan_base_url=vahan_url,
             rto_dealer_id=(req.rto_dealer_id or "").strip(),
             customer_name=str(req.customer_name or ""),
@@ -642,7 +641,7 @@ async def fill_vahan_only(req: FillVahanRequest) -> FillVahanResponse:
             subfolder=req.subfolder,
             customer_id=req.customer_id,
             vehicle_id=req.vehicle_id,
-        ),
+        )
     )
     return FillVahanResponse(
         success=result.get("error") is None,
@@ -665,7 +664,6 @@ async def fill_hero_insurance(req: FillHeroInsuranceRequest = FillHeroInsuranceR
         url = _require_absolute_http_url(url, "insurance_base_url")
     did = req.dealer_id if req.dealer_id is not None else DEALER_ID
     ocr_dir = Path(get_ocr_output_dir(did))
-    loop = asyncio.get_event_loop()
 
     staging_payload = None
     sid = (req.staging_id or "").strip()
@@ -702,7 +700,7 @@ async def fill_hero_insurance(req: FillHeroInsuranceRequest = FillHeroInsuranceR
         )
         return post_process(pre_result=pre, main_result=main)
 
-    result = await loop.run_in_executor(None, _hero_insurance_run)
+    result = await asyncio.to_thread(_hero_insurance_run)
     return FillHeroInsuranceResponse(
         success=bool(result.get("success")),
         error=result.get("error"),
@@ -720,7 +718,6 @@ async def fill_insurance_only(req: FillInsuranceRequest) -> FillInsuranceRespons
         raise HTTPException(status_code=400, detail="insurance_base_url required")
     insurance_url = _require_absolute_http_url(insurance_url, "insurance_base_url")
     did = req.dealer_id if req.dealer_id is not None else DEALER_ID
-    loop = asyncio.get_event_loop()
 
     staging_payload = None
     sid = (req.staging_id or "").strip()
@@ -738,16 +735,16 @@ async def fill_insurance_only(req: FillInsuranceRequest) -> FillInsuranceRespons
                 detail="Staging not found, abandoned, or dealer_id does not match.",
             )
 
-    result = await loop.run_in_executor(
-        None,
-        lambda: run_fill_insurance_only(
+    result = await asyncio.to_thread(
+        partial(
+            run_fill_insurance_only,
             insurance_base_url=insurance_url,
             subfolder=req.subfolder,
             customer_id=req.customer_id,
             vehicle_id=req.vehicle_id,
             ocr_output_dir=Path(get_ocr_output_dir(did)),
             staging_payload=staging_payload,
-        ),
+        )
     )
     return FillInsuranceResponse(
         success=result.get("error") is None and bool(result.get("success")),
@@ -786,10 +783,9 @@ async def fill_dms(req: FillDmsRequest) -> FillDmsResponse:
         vehicle_dict,
     )
     sid_for_commit = (req.staging_id or "").strip() or None
-    loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(
-        None,
-        lambda sid=sid_for_commit: run_fill_dms(
+    result = await asyncio.to_thread(
+        partial(
+            run_fill_dms,
             dms_base_url=base_url,
             subfolder=req.subfolder,
             customer=customer_dict,
@@ -804,8 +800,8 @@ async def fill_dms(req: FillDmsRequest) -> FillDmsResponse:
             customer_id=cid,
             vehicle_id=vid,
             staging_payload=staging_payload,
-            staging_id=sid,
-        ),
+            staging_id=sid_for_commit,
+        )
     )
     scraped = result.get("vehicle") or {}
     has_vehicle = _has_scraped_vehicle(scraped)
