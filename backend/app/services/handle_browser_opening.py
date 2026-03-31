@@ -115,7 +115,7 @@ def _find_browser_exe() -> tuple[str | None, str | None]:
     return None, None
 
 
-def _launch_managed_browser_for_site(base_url: str):
+def _launch_managed_browser_for_site(base_url: str, *, launch_background: bool = False):
     pw = _get_playwright()
     headless = not bool(DMS_PLAYWRIGHT_HEADED)
     port = PLAYWRIGHT_MANAGED_REMOTE_DEBUG_PORT or 9333
@@ -144,11 +144,18 @@ def _launch_managed_browser_for_site(base_url: str):
                 creation_flags |= subprocess.CREATE_NEW_PROCESS_GROUP
             if hasattr(subprocess, "DETACHED_PROCESS"):
                 creation_flags |= subprocess.DETACHED_PROCESS
+            startupinfo = None
+            # Warm-browser: start minimized on Windows so the SPA keeps keyboard focus (best-effort).
+            if launch_background and os.name == "nt":
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                startupinfo.wShowWindow = 6  # SW_MINIMIZE
             subprocess.Popen(
                 cmd,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 creationflags=creation_flags,
+                startupinfo=startupinfo,
             )
             logger.info("handle_browser_opening: launched %s independently (port %s)", channel, port)
             _cdp_t0 = time.monotonic()
@@ -408,81 +415,100 @@ def _try_auto_login_if_prefilled(page) -> bool:
     return False
 
 
+def _login_form_visible_eval_js() -> str:
+    return """() => {
+        const vis = (el) => {
+            if (!el) return false;
+            const st = window.getComputedStyle(el);
+            if (st.display === 'none' || st.visibility === 'hidden') return false;
+            const r = el.getBoundingClientRect();
+            return r.width > 2 && r.height > 2;
+        };
+        const u1 = document.querySelector('input[name="SWEUserName"]');
+        const p1 = document.querySelector('input[name="SWEPassword"], input[type="password"]');
+        const u2 = document.querySelector(
+          'input[name="username"], input[placeholder*="User Name" i], input[aria-label*="User Name" i]'
+        );
+        const p2 = document.querySelector('input[type="password"]');
+        const siebel = (u1 && vis(u1)) || (p1 && vis(p1));
+        const generic = (u2 && vis(u2)) && (p2 && vis(p2));
+        return siebel || generic;
+    }"""
+
+
+def _is_ready_after_login_page(pg) -> bool:
+    try:
+        u = (pg.url or "").lower()
+        on_siebel_login = "swecmd=login" in u
+        on_misp_login = "misp-partner-login" in u
+        on_path_login = u.rstrip("/").endswith("/login")
+        if not on_siebel_login and not on_misp_login and not on_path_login:
+            return True
+        return not bool(pg.evaluate(_login_form_visible_eval_js()))
+    except Exception:
+        return False
+
+
+def _wait_login_or_prompt_after_open(page, site_label: str):
+    """
+    After opening or reusing a tab, wait briefly for session/login to clear.
+    Returns ``(page, None)`` when ready, or ``(None, operator_message)`` when login is still required.
+    """
+    for _ in range(5):
+        if _is_ready_after_login_page(page):
+            logger.info("handle_browser_opening: login/session became ready in same request.")
+            return page, None
+        time.sleep(1)
+
+    try:
+        ul = (page.url or "").lower()
+        if (
+            "swecmd=login" not in ul
+            and "misp-partner-login" not in ul
+            and not ul.rstrip("/").endswith("/login")
+        ):
+            logger.info("handle_browser_opening: continuing after login transition (final fallback).")
+            return page, None
+    except Exception:
+        pass
+
+    return None, f"{site_label} Opened. Please login. And then press button again"
+
+
 def get_or_open_site_page(
     base_url: str,
     site_label: str,
     *,
     require_login_on_open: bool = True,
     launch_url: str | None = None,
+    launch_background: bool = False,
 ):
     """
     Try finding an already-open site tab (``base_url`` is used for host/path matching).
     If not found, open a managed browser to ``launch_url`` or ``base_url``, then optional auto-login.
+
+    ``launch_background`` (Windows): start the independently launched edge/chrome **minimized** so the
+    operator SPA is less likely to lose focus (used for DMS warm-browser only).
     """
     page = find_open_site_page(base_url)
     if page is not None:
-        return page, None
+        if not require_login_on_open:
+            return page, None
+        # Reused tab may still be on login (e.g. after warm-browser with no auto-login) — run same gate as new tab.
+        auto_login_ok = _try_auto_login_if_prefilled(page)
+        if auto_login_ok:
+            return page, None
+        return _wait_login_or_prompt_after_open(page, site_label)
 
     open_target = (launch_url or base_url or "").strip()
-    opened_page, channel = _launch_managed_browser_for_site(open_target)
+    opened_page, channel = _launch_managed_browser_for_site(open_target, launch_background=launch_background)
     if opened_page is not None:
         if not require_login_on_open:
             return opened_page, None
         auto_login_ok = _try_auto_login_if_prefilled(opened_page)
         if auto_login_ok:
             return opened_page, None
-
-        def _login_form_visible_js() -> str:
-            return """() => {
-                const vis = (el) => {
-                    if (!el) return false;
-                    const st = window.getComputedStyle(el);
-                    if (st.display === 'none' || st.visibility === 'hidden') return false;
-                    const r = el.getBoundingClientRect();
-                    return r.width > 2 && r.height > 2;
-                };
-                const u1 = document.querySelector('input[name="SWEUserName"]');
-                const p1 = document.querySelector('input[name="SWEPassword"], input[type="password"]');
-                const u2 = document.querySelector(
-                  'input[name="username"], input[placeholder*="User Name" i], input[aria-label*="User Name" i]'
-                );
-                const p2 = document.querySelector('input[type="password"]');
-                const siebel = (u1 && vis(u1)) || (p1 && vis(p1));
-                const generic = (u2 && vis(u2)) && (p2 && vis(p2));
-                return siebel || generic;
-            }"""
-
-        def _is_ready_after_login(pg) -> bool:
-            try:
-                u = (pg.url or "").lower()
-                on_siebel_login = "swecmd=login" in u
-                on_misp_login = "misp-partner-login" in u
-                on_path_login = u.rstrip("/").endswith("/login")
-                if not on_siebel_login and not on_misp_login and not on_path_login:
-                    return True
-                return not bool(pg.evaluate(_login_form_visible_js()))
-            except Exception:
-                return False
-
-        for _ in range(5):
-            if _is_ready_after_login(opened_page):
-                logger.info("handle_browser_opening: login/session became ready in same request.")
-                return opened_page, None
-            time.sleep(1)
-
-        try:
-            ul = (opened_page.url or "").lower()
-            if (
-                "swecmd=login" not in ul
-                and "misp-partner-login" not in ul
-                and not ul.rstrip("/").endswith("/login")
-            ):
-                logger.info("handle_browser_opening: continuing after login transition (final fallback).")
-                return opened_page, None
-        except Exception:
-            pass
-
-        return None, f"{site_label} Opened. Please login. And then press button again"
+        return _wait_login_or_prompt_after_open(opened_page, site_label)
 
     return None, (
         f"{site_label} site not open. Please open {site_label} site and keep it logged in. "

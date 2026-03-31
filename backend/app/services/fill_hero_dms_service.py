@@ -1540,9 +1540,9 @@ def _run_fill_dms_real_siebel_playwright(
 
 def warm_dms_browser_session(dms_base_url: str) -> dict:
     """
-    Pre-open or attach to the DMS browser (same path as Create Invoice: CDP reuse, launch, login wait)
-    without running fill automation. Leaves the tab on the post-open screen so **Create Invoice** can
-    start closer to ready when the operator clicks it later.
+    Pre-open or attach to the DMS browser (CDP reuse or managed launch) without running fill automation.
+    Does **not** wait for login — **Create Invoice** runs prefilled login + session gate on reuse.
+    On Windows, a **new** managed browser starts **minimized** so the web client keeps focus.
     """
     out: dict = {"success": False, "error": None}
     u = (dms_base_url or "").strip()
@@ -1560,6 +1560,7 @@ def warm_dms_browser_session(dms_base_url: str) -> dict:
             u,
             "DMS",
             require_login_on_open=False,
+            launch_background=True,
         )
         if page is None:
             out["error"] = open_error or "Could not open DMS browser"
