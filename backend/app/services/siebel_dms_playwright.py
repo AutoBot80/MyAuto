@@ -30,6 +30,7 @@ Tune with:
 from __future__ import annotations
 
 import logging
+import json
 import re
 import time
 from collections.abc import Callable
@@ -52,6 +53,29 @@ logger = logging.getLogger(__name__)
 # Ctrl+S) then stop; else drill → Contacts → relation fill → Payments ``+``. Set False to restore the full
 # BRD linear SOP inside ``Playwright_Hero_DMS_fill``.
 SIEBEL_DMS_STOP_AFTER_ALL_ENQUIRIES = True
+
+
+# region agent log
+def _agent_debug_log(hypothesis_id: str, location: str, message: str, data: dict) -> None:
+    """Session-scoped NDJSON debug log for runtime hypothesis validation."""
+    try:
+        payload = {
+            "sessionId": "0875fe",
+            "runId": "pre-fix",
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "message": message,
+            "data": data,
+            "timestamp": int(time.time() * 1000),
+        }
+        log_path = Path(__file__).resolve().parents[3] / "debug-0875fe.log"
+        with log_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=True) + "\n")
+    except Exception:
+        pass
+
+
+# endregion
 
 
 def _normalize_cubic_cc_digits(val: object) -> str:
@@ -3962,15 +3986,44 @@ def _wait_for_mobile_search_hit_ready(
       }
       return false;
     }"""
-    deadline = time.monotonic() + max(0.2, wait_ms / 1000.0)
+    start_t = time.monotonic()
+    deadline = start_t + max(0.2, wait_ms / 1000.0)
+    poll_count = 0
     while time.monotonic() < deadline:
+        poll_count += 1
         for root in _siebel_locator_search_roots(page, content_frame_selector):
             try:
                 if bool(root.evaluate(_js, {"needle": needle, "raw": raw_digits})):
+                    # region agent log
+                    _agent_debug_log(
+                        "H4",
+                        "siebel_dms_playwright.py:_wait_for_mobile_search_hit_ready",
+                        "mobile_hit_ready_success",
+                        {
+                            "wait_ms": int(wait_ms),
+                            "elapsed_ms": int((time.monotonic() - start_t) * 1000),
+                            "poll_count": int(poll_count),
+                            "has_selector": bool(content_frame_selector),
+                        },
+                    )
+                    # endregion
                     return True
             except Exception:
                 continue
         _safe_page_wait(page, 120, log_label="wait_mobile_hit_ready")
+    # region agent log
+    _agent_debug_log(
+        "H4",
+        "siebel_dms_playwright.py:_wait_for_mobile_search_hit_ready",
+        "mobile_hit_ready_timeout",
+        {
+            "wait_ms": int(wait_ms),
+            "elapsed_ms": int((time.monotonic() - start_t) * 1000),
+            "poll_count": int(poll_count),
+            "has_selector": bool(content_frame_selector),
+        },
+    )
+    # endregion
     return False
 
 
@@ -3988,17 +4041,47 @@ def _wait_for_contact_detail_ready(
         'input[aria-label="Relation\'s Name"]',
         'textarea[aria-label="Relation\'s Name"]',
     )
-    deadline = time.monotonic() + max(0.2, wait_ms / 1000.0)
+    start_t = time.monotonic()
+    deadline = start_t + max(0.2, wait_ms / 1000.0)
+    poll_count = 0
     while time.monotonic() < deadline:
+        poll_count += 1
         for root in _siebel_locator_search_roots(page, content_frame_selector):
             for css in sels:
                 try:
                     loc = root.locator(css).first
                     if loc.count() > 0 and loc.is_visible(timeout=250):
+                        # region agent log
+                        _agent_debug_log(
+                            "H5",
+                            "siebel_dms_playwright.py:_wait_for_contact_detail_ready",
+                            "contact_detail_ready_success",
+                            {
+                                "wait_ms": int(wait_ms),
+                                "elapsed_ms": int((time.monotonic() - start_t) * 1000),
+                                "poll_count": int(poll_count),
+                                "matched_css": css,
+                                "has_selector": bool(content_frame_selector),
+                            },
+                        )
+                        # endregion
                         return True
                 except Exception:
                     continue
         _safe_page_wait(page, 120, log_label="wait_contact_detail_ready")
+    # region agent log
+    _agent_debug_log(
+        "H5",
+        "siebel_dms_playwright.py:_wait_for_contact_detail_ready",
+        "contact_detail_ready_timeout",
+        {
+            "wait_ms": int(wait_ms),
+            "elapsed_ms": int((time.monotonic() - start_t) * 1000),
+            "poll_count": int(poll_count),
+            "has_selector": bool(content_frame_selector),
+        },
+    )
+    # endregion
     return False
 
 
@@ -5997,17 +6080,45 @@ def _add_customer_payment(
         payment_toolbar_roots = _gather_payment_line_toolbar_roots(page, content_frame_selector)
 
     payment_toolbar_roots.sort(key=_payment_line_toolbar_roots_priority)
+    # region agent log
+    _agent_debug_log(
+        "H1",
+        "siebel_dms_playwright.py:_add_customer_payment",
+        "payment_toolbar_roots_built",
+        {
+            "roots_count": int(len(payment_toolbar_roots)),
+            "has_selector": bool(content_frame_selector),
+            "action_timeout_ms": int(action_timeout_ms),
+        },
+    )
+    # endregion
 
     if not payment_toolbar_roots:
+        # region agent log
+        _agent_debug_log(
+            "H1",
+            "siebel_dms_playwright.py:_add_customer_payment",
+            "payment_toolbar_roots_missing",
+            {"roots_count": 0, "has_selector": bool(content_frame_selector)},
+        )
+        # endregion
         note(
             "Payment debug: Payment Lines toolbar (List:New / Save) not found — "
             "cannot locate '+' frame; ensure the Payments view shows Payment Lines."
         )
         return False
 
-    for pr in payment_toolbar_roots:
+    for idx, pr in enumerate(payment_toolbar_roots):
         try:
             if _payment_lines_list_has_populated_transaction_number(pr):
+                # region agent log
+                _agent_debug_log(
+                    "H2",
+                    "siebel_dms_playwright.py:_add_customer_payment",
+                    "payment_skipped_existing_transaction",
+                    {"root_index": int(idx)},
+                )
+                # endregion
                 note(
                     "Payments: Payment Lines list already has a row with populated Transaction# — "
                     "skipping '+' and new-line entry."
@@ -6107,6 +6218,14 @@ def _add_customer_payment(
                         continue
 
                 if payment_frames:
+                    # region agent log
+                    _agent_debug_log(
+                        "H3",
+                        "siebel_dms_playwright.py:_add_customer_payment",
+                        "payment_frame_locked_strict",
+                        {"frames_count": int(len(payment_frames))},
+                    )
+                    # endregion
                     try:
                         note(f"Payment lines scoped frame locked: url={(payment_frames[0].url or '')[:180]!r}, name={payment_frames[0].name!r}")
                     except Exception:
@@ -6144,11 +6263,27 @@ def _add_customer_payment(
                         except Exception:
                             continue
                     if payment_frames:
+                        # region agent log
+                        _agent_debug_log(
+                            "H3",
+                            "siebel_dms_playwright.py:_add_customer_payment",
+                            "payment_frame_locked_relaxed",
+                            {"frames_count": int(len(payment_frames))},
+                        )
+                        # endregion
                         try:
                             note(f"Payment lines relaxed frame lock: url={(payment_frames[0].url or '')[:180]!r}, name={payment_frames[0].name!r}")
                         except Exception:
                             pass
                     else:
+                        # region agent log
+                        _agent_debug_log(
+                            "H3",
+                            "siebel_dms_playwright.py:_add_customer_payment",
+                            "payment_frame_lock_failed",
+                            {"clicked_plus": True},
+                        )
+                        # endregion
                         note("Payment lines scoped frame not detected; stopping to avoid focus drift.")
                         return False
                 # Prefer the exact frame that contains Transaction_Type fields.

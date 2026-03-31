@@ -262,6 +262,8 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError,
   }, dealerId);
 
   const pollCountRef = useRef(0);
+  /** Subfolder for which DMS warm-browser has already been triggered. */
+  const dmsWarmSubfolderRef = useRef<string | null>(null);
   /** Fewer, slower polls to avoid hammering laptop / backend when OCR is slow. */
   const POLL_MAX = 5;
   const POLL_INTERVAL_MS = 10000;
