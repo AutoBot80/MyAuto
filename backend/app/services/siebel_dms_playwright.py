@@ -11823,201 +11823,6 @@ def _siebel_vehicle_features_hhml_applet_visible(page: Page) -> bool:
     return False
 
 
-def _siebel_try_click_s_vctrl_div_tab(
-    page: Page,
-    tab_needle: str,
-    *,
-    content_frame_selector: str | None,
-    action_timeout_ms: int,
-    note,
-    log_prefix: str = "prepare_vehicle",
-    wait_ms: int = 1000,
-) -> bool:
-    """
-    Click a third-level tab under Siebel ``#s_vctrl_div`` by normalized label (same matching rules as
-    ``_click_third_level_view_bar_tab`` inside ``_siebel_run_vehicle_serial_detail_precheck_pdi``).
-    """
-    tab_norm = (tab_needle or "").strip().lower()
-    if not tab_norm:
-        return False
-    _tmo = min(int(action_timeout_ms or 3000), 4000)
-    _wait = min(max(int(wait_ms or 500), 200), _tmo)
-    _raw_roots = _siebel_all_search_roots(page, content_frame_selector)
-    _seen_r: set[int] = set()
-    _rv_roots: list = []
-    for _pref in (page, page.main_frame):
-        if hasattr(_pref, "evaluate") and id(_pref) not in _seen_r:
-            _seen_r.add(id(_pref))
-            _rv_roots.append(_pref)
-    for _r in _raw_roots:
-        if type(_r).__name__ == "FrameLocator" or id(_r) in _seen_r:
-            continue
-        if hasattr(_r, "evaluate"):
-            _seen_r.add(id(_r))
-            _rv_roots.append(_r)
-
-    for root in _rv_roots[:32]:
-        try:
-            _res = root.evaluate(
-                """(tabNeedle) => {
-                        const vis = (el) => {
-                            if (!el) return false;
-                            const st = window.getComputedStyle(el);
-                            if (st.display === 'none' || st.visibility === 'hidden') return false;
-                            const r = el.getBoundingClientRect();
-                            return r.width > 0 && r.height > 0;
-                        };
-                        const norm = (s) => String(s || '').trim().toLowerCase();
-                        const compact = (s) => s.replace(/[-\\s]+/g, '');
-                        const matches = (txt, needle) => {
-                            if (txt === needle || txt.includes(needle)) return true;
-                            const a = compact(txt);
-                            const b = compact(needle);
-                            return a === b || a.includes(b) || b.includes(a);
-                        };
-                        const containers = [];
-                        const seenC = new Set();
-                        const addC = (el, src) => {
-                            if (!el || !vis(el) || seenC.has(el)) return;
-                            seenC.add(el);
-                            containers.push({ el: el, src: src });
-                        };
-                        addC(document.getElementById('s_vctrl_div'), 's_vctrl_div');
-                        for (const bar of document.querySelectorAll(
-                            "[aria-label*='Third Level View Bar' i], [title*='Third Level View Bar' i], [id*='ThirdLevelViewBar' i]"
-                        )) {
-                            addC(bar, 'third_level_view_aria');
-                        }
-                        const allVisibleTabLabels = [];
-                        for (const c of containers) {
-                            const bar = c.el;
-                            const tabs = Array.from(
-                                bar.querySelectorAll("a, button, [role='tab']")
-                            );
-                            for (const t of tabs) {
-                                if (!vis(t)) continue;
-                                const raw = (t.innerText || t.textContent || t.getAttribute('aria-label') || t.getAttribute('title') || '');
-                                const txt = norm(raw);
-                                if (allVisibleTabLabels.length < 80) {
-                                    allVisibleTabLabels.push(String(raw).trim().slice(0, 48));
-                                }
-                                if (matches(txt, tabNeedle)) {
-                                    let target = t;
-                                    const tTag = (t.tagName || '').toUpperCase();
-                                    if (tTag === 'LI') {
-                                        const li = t;
-                                        const inner = li.querySelector("a, button, [role='tab']");
-                                        if (inner && inner !== li) {
-                                            target = inner;
-                                        } else {
-                                            const sib = li.nextElementSibling;
-                                            const sibTag = (sib && sib.tagName) ? String(sib.tagName).toUpperCase() : '';
-                                            const sibIsAction = !!(sib && (sibTag === 'A' || sibTag === 'BUTTON' || String(sib.getAttribute('role') || '').toLowerCase() === 'tab'));
-                                            if (sibIsAction && vis(sib)) {
-                                                target = sib;
-                                            } else {
-                                                const ctrl = li.getAttribute('aria-controls') || '';
-                                                const linked = ctrl ? bar.querySelector(`[id="${ctrl}"], a[aria-controls="${ctrl}"], [href="#${ctrl}"]`) : null;
-                                                if (linked && linked !== li && vis(linked)) {
-                                                    target = linked;
-                                                } else {
-                                                    continue;
-                                                }
-                                            }
-                                        }
-                                    }
-                                    try { target.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
-                                    try { target.focus(); } catch (e) {}
-                                    try { target.click(); } catch (e) {}
-                                    try {
-                                        const opts = { bubbles: true, cancelable: true, view: window };
-                                        target.dispatchEvent(new MouseEvent('mousedown', opts));
-                                        target.dispatchEvent(new MouseEvent('mouseup', opts));
-                                        target.dispatchEvent(new MouseEvent('click', opts));
-                                    } catch (e2) {}
-                                    return {
-                                        ok: true,
-                                        containerCount: containers.length,
-                                        containerSrc: c.src,
-                                        visibleTabLabels: allVisibleTabLabels,
-                                        matchEq: txt === tabNeedle,
-                                        matchedHead: String(raw).slice(0, 24),
-                                    };
-                                }
-                            }
-                        }
-                        return {
-                            ok: false,
-                            containerCount: containers.length,
-                            visibleTabLabels: allVisibleTabLabels,
-                            matchEq: false,
-                        };
-                    }""",
-                tab_norm,
-            )
-            if isinstance(_res, dict) and _res.get("ok"):
-                note(
-                    f"{log_prefix}: clicked tab matching {tab_needle!r} from #s_vctrl_div "
-                    f"(container={(_res.get('containerSrc') or '')!r})."
-                )
-                _safe_page_wait(page, _wait, log_label="after_s_vctrl_div_tab_click")
-                return True
-        except Exception:
-            continue
-    return False
-
-
-def _siebel_try_click_features_and_image_tab(
-    page: Page,
-    *,
-    action_timeout_ms: int,
-    note,
-    content_frame_selector: str | None = None,
-) -> bool:
-    """Open **Features and Image** (or closest tab label) on vehicle serial drill-in view."""
-    if _siebel_vehicle_features_hhml_applet_visible(page):
-        note(
-            "prepare_vehicle: Features step already active (HHML Feature fields and/or "
-            "Features in Vehicles landmark visible) — skipping tab click."
-        )
-        return True
-    if _siebel_try_click_s_vctrl_div_tab(
-        page,
-        "features",
-        content_frame_selector=content_frame_selector,
-        action_timeout_ms=action_timeout_ms,
-        note=note,
-        log_prefix="prepare_vehicle",
-    ):
-        return True
-    hints = ("Features and Image", "Features & Image", "Features")
-    patts = [re.compile(re.escape(h), re.I) for h in hints]
-    search_roots = list(_ordered_frames(page))
-    search_roots.append(page.main_frame)
-    for sub, rx in zip(hints, patts):
-        for root in search_roots:
-            try:
-                tab = root.get_by_role("tab", name=rx)
-                if tab.count() > 0:
-                    t0 = tab.first
-                    if t0.is_visible(timeout=500):
-                        t0.click(timeout=action_timeout_ms)
-                        note(f"prepare_vehicle: clicked tab matching {sub!r}.")
-                        return True
-            except Exception:
-                pass
-            try:
-                link = root.locator("a, [role='tab'], button").filter(has_text=rx).first
-                if link.count() > 0 and link.is_visible(timeout=450):
-                    link.click(timeout=action_timeout_ms)
-                    note(f"prepare_vehicle: clicked control matching {sub!r}.")
-                    return True
-            except Exception:
-                continue
-    note("prepare_vehicle: Features and Image tab not found (best-effort).")
-    return False
-
-
 def _siebel_scrape_features_cubic_and_vehicle_type(page: Page) -> tuple[str, str]:
     """
     On **Features and Image**, read cubic capacity and vehicle type.
@@ -12197,8 +12002,9 @@ def _prepare_vehicle_scrape_serial_precheck_pdi_and_features(
     form_trace=None,
 ) -> str | None:
     """
-    Dealer-stock path after inventory gate: **Serial Number** drilldown → **Features and Image**
-    (cubic / vehicle type) → **Pre-check** + **PDI** (``_siebel_run_vehicle_serial_detail_precheck_pdi``).
+    Dealer-stock path after inventory gate: **Serial Number** drilldown lands on **Features and Image**
+    — read cubic / vehicle type from HHML, then **Pre-check** + **PDI**
+    (``_siebel_run_vehicle_serial_detail_precheck_pdi``). No Features tab click after serial drill.
 
     ``prepare_vehicle`` calls this only when ``in_transit`` is false after the inventory gate.
 
@@ -12220,33 +12026,26 @@ def _prepare_vehicle_scrape_serial_precheck_pdi_and_features(
         if _drill_err:
             return _drill_err
 
-    # **Features and Image** — HHML applet (authoritative cubic / vehicle type vs list grid).
-    _tab_clicked = _siebel_try_click_features_and_image_tab(
-        page,
-        action_timeout_ms=action_timeout_ms,
-        note=note,
-        content_frame_selector=content_frame_selector,
+    # Serial drill opens the Features & Image view — scrape HHML directly (no tab activation step).
+    note(
+        "prepare_vehicle: reading cubic_capacity / vehicle_type on Features view after serial drill "
+        "(no Features tab click)."
     )
-    if not _tab_clicked and not _siebel_vehicle_features_hhml_applet_visible(page):
-        note(
-            "prepare_vehicle: Features and Image tab not found and HHML fields not visible yet "
-            "(best-effort)."
-        )
-    if _tab_clicked:
-        _safe_page_wait(page, 1000, log_label="after_features_tab")
-        try:
-            page.wait_for_load_state("networkidle", timeout=8_000)
-        except Exception:
-            pass
-
-    if _siebel_vehicle_features_hhml_applet_visible(page):
+    _safe_page_wait(page, 500, log_label="before_features_hhml_scrape")
+    cc, vt = "", ""
+    for _fi in range(10):
         cc, vt = _siebel_scrape_features_cubic_and_vehicle_type(page)
+        if (cc or vt) or _fi >= 9:
+            break
+        _safe_page_wait(page, 400, log_label=f"features_hhml_scrape_retry_{_fi}")
+
+    if cc or vt:
         if cc:
             scraped["cubic_capacity"] = _normalize_cubic_cc_digits(cc) or str(cc).strip()
         if vt:
             scraped["vehicle_type"] = vt
         _feat_cc = scraped.get("cubic_capacity") or cc
-        note(f"prepare_vehicle: Features tab → cubic_capacity={_feat_cc!r}, vehicle_type={vt!r}.")
+        note(f"prepare_vehicle: Features view → cubic_capacity={_feat_cc!r}, vehicle_type={vt!r}.")
         if callable(form_trace):
             form_trace(
                 "5_vehicle_features",
@@ -12257,8 +12056,8 @@ def _prepare_vehicle_scrape_serial_precheck_pdi_and_features(
             )
     else:
         note(
-            "prepare_vehicle: HHML Feature values not visible after drill/tab — "
-            "cubic_capacity / vehicle_type scrape skipped (best-effort)."
+            "prepare_vehicle: cubic_capacity / vehicle_type not read from HHML after serial drill "
+            "(best-effort)."
         )
 
     note("prepare_vehicle: Pre-check + PDI (serial detail view).")

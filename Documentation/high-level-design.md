@@ -314,3 +314,4 @@ The SQL view **`form_dms_view`** is **removed**; the same mapping is implemented
 | 1.16 | Mar 2026 | — | Left-pane VIN drill-in: single-hit **Title** fallback when full VIN visible but only partial in DB — **LLD** **6.74**, **BRD** **3.29** |
 | 1.17 | Mar 2026 | — | **`prepare_vehicle`**: HHML **Features** applet visibility detection — avoid redundant **VIN**/Serial grid clicks — **LLD** **6.75**, **BRD** **3.30** |
 | 1.18 | Mar 2026 | — | **`prepare_vehicle`**: **Features in Vehicles** (**aria-label**) + **`s_vctrl_div`** third-level tab click for **Features** — **LLD** **6.76**, **BRD** **3.31** |
+| 1.19 | Mar 2026 | — | **`prepare_vehicle`**: post–**Serial Number** drill, direct HHML **cubic**/**vehicle_type** scrape (no Features tab step) — **LLD** **6.77**, **BRD** **3.32** |
