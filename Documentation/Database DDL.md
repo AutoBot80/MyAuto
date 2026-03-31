@@ -508,3 +508,6 @@ This document lists the current database tables and their columns. **Executable 
 | 2.26 | Mar 2026 | **No schema change.** Siebel **`_siebel_diag_note`** + video path / **`_add_customer_payment`** diagnostic **`note`** lines (UTC inline + **`Playwright_DMS.txt`** line timestamps) — **LLD** **6.85** |
 | 2.27 | Mar 2026 | **No schema change.** **LLD** **§2.4d.1** — trial field list + example JSON for Payment Lines root hint (future fast path); no DB table. |
 | 2.28 | Mar 2026 | **No schema change.** **`Playwright_DMS.txt`** now appends automated **`payment_lines_root_hint`** JSON after Payment Lines gather — **LLD** **6.87**, **§2.4d.1**. |
+| 2.29 | Mar 2026 | **No schema change.** Optional **`DMS_SIEBEL_PAYMENT_LINES_ROOT_HINT_*`** env fast path for Payment Lines frame — **LLD** **6.88**, **§2.4d.1**. |
+| 2.30 | Mar 2026 | **No schema change.** Built-in **`_hero_default_payment_lines_root_hint`**; env hint optional override — **LLD** **6.89**. |
+| 2.31 | Mar 2026 | **No schema change.** Temporary **`SIEBEL_DMS_HARD_FAIL_BEFORE_BOOKING_AND_ORDER`** gate (video SOP stops after payments) — **LLD** **6.90**. |

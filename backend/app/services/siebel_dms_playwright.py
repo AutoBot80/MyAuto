@@ -51,6 +51,47 @@ from app.config import (
 
 logger = logging.getLogger(__name__)
 
+
+def _hero_default_payment_lines_root_hint() -> dict[str, object]:
+    """
+    Built-in fast-path hint for Hero Connect **Contact → Payments** (Payment Lines applet).
+
+    Uses **stable** URL fragments (no ``SWERowId`` / session tokens). When these stop matching
+    after a Siebel upgrade, update this dict or set ``DMS_SIEBEL_PAYMENT_LINES_ROOT_HINT_*`` to override.
+    See **LLD §2.4d.1**.
+    """
+    _tail = (
+        "HHML+LS+CIM+Contact+Site+Payments+View&SWEApplet0=Contact+Form+Applet"
+        "&SWEApplet1=Payment+List+Applet"
+    )
+    _top = (
+        "SWECmd=GotoView&SWEView=HHML+LS+CIM+Contact+Site+Payments+View"
+        "&SWEApplet1=Payment+List+Applet"
+    )
+    return {
+        "schema_version": 1,
+        "trial_run_id": "hero_builtin_default",
+        "dealer_id": "",
+        "log_subfolder": "",
+        "page_url_top": _top,
+        "payment_lines_root_index_primary": 0,
+        "ordered_frames_count": 0,
+        "content_frame_selector": "",
+        "receipts_field_name": "s_2_1_1_0",
+        "playwright_package_version": "",
+        "roots_sorted": [
+            {
+                "index": 0,
+                "match_reason": "toolbar",
+                "type": "Frame",
+                "frame_url_tail": _tail,
+                "frame_name": "",
+                "iframe_element_title": "",
+            }
+        ],
+    }
+
+
 # Siebel DMS and operator-entered dates/times are **IST** (Asia/Kolkata, UTC+05:30).
 _SIEBEL_TZ = ZoneInfo("Asia/Kolkata")
 
@@ -77,6 +118,9 @@ def _siebel_naive_datetime_as_ist(dt: datetime) -> datetime:
 # Ctrl+S) then stop; else drill → Contacts → relation fill → Payments ``+``. Set False to restore the full
 # BRD linear SOP inside ``Playwright_Hero_DMS_fill``.
 SIEBEL_DMS_STOP_AFTER_ALL_ENQUIRIES = True
+
+# Temporary: video SOP — hard fail before **Generate Booking** / ``_create_order`` (remove or set False to re-enable).
+SIEBEL_DMS_HARD_FAIL_BEFORE_BOOKING_AND_ORDER = True
 
 
 # region agent log
@@ -6400,6 +6444,109 @@ def _write_payment_lines_root_hint_to_log(log_fp: TextIO | None, payload: dict[s
         pass
 
 
+def _load_payment_lines_hint_dict_from_config() -> dict[str, object]:
+    """
+    Payment Lines fast-path hint: optional **env / file** override; else **Hero built-in default**
+    (``_hero_default_payment_lines_root_hint``).
+    """
+    try:
+        from app.config import (
+            DMS_SIEBEL_PAYMENT_LINES_ROOT_HINT_FILE,
+            DMS_SIEBEL_PAYMENT_LINES_ROOT_HINT_JSON,
+        )
+    except ImportError:
+        return dict(_hero_default_payment_lines_root_hint())
+    raw = ""
+    fp = (DMS_SIEBEL_PAYMENT_LINES_ROOT_HINT_FILE or "").strip()
+    if fp:
+        try:
+            p = Path(fp)
+            if p.is_file():
+                raw = p.read_text(encoding="utf-8")
+        except OSError:
+            raw = ""
+    if not raw:
+        raw = (DMS_SIEBEL_PAYMENT_LINES_ROOT_HINT_JSON or "").strip()
+    if raw:
+        try:
+            raw = raw.strip()
+            if raw.startswith("```"):
+                raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.I)
+                raw = re.sub(r"\s*```\s*$", "", raw)
+            d = json.loads(raw)
+            if isinstance(d, dict) and int(d.get("schema_version") or 0) >= 1 and d.get("roots_sorted"):
+                return d
+        except Exception:
+            pass
+    return dict(_hero_default_payment_lines_root_hint())
+
+
+def _frame_url_matches_payment_hint(fu: str, entry: dict[str, object], page_url_top: str) -> bool:
+    """Loose URL match: tail substring and/or stable ``SWEView`` / ``SWEApplet1`` fragments from hint."""
+    fu = fu or ""
+    tail = str(entry.get("frame_url_tail") or "").strip()
+    if tail and len(tail) >= 32:
+        if tail in fu:
+            return True
+    top = page_url_top or ""
+    if top:
+        m = re.search(r"SWEView=([^&]+)", top)
+        if m:
+            frag = m.group(1)
+            if len(frag) > 12 and frag in fu:
+                return True
+        m2 = re.search(r"SWEApplet1=([^&]+)", top)
+        if m2:
+            frag2 = m2.group(1)
+            if len(frag2) > 8 and frag2 in fu:
+                return True
+    return False
+
+
+def _try_payment_line_roots_from_hint(page: Page, hint: dict[str, object]) -> list | None:
+    """
+    Return ``[Frame]`` when a single ``page`` frame matches the hint entry and passes Payment Lines
+    toolbar/title/grid verification; else ``None`` (caller runs full gather).
+    """
+    roots_sorted = hint.get("roots_sorted")
+    if not isinstance(roots_sorted, list) or not roots_sorted:
+        return None
+    idx = int(hint.get("payment_lines_root_index_primary") or 0)
+    if idx < 0 or idx >= len(roots_sorted):
+        idx = 0
+    entry = roots_sorted[idx]
+    if not isinstance(entry, dict):
+        return None
+    page_top = str(hint.get("page_url_top") or "")
+    tit_needle = str(entry.get("iframe_element_title") or "").strip()
+
+    for frame in _ordered_frames(page):
+        try:
+            fu = frame.url or ""
+            if not _frame_url_matches_payment_hint(fu, entry, page_top):
+                continue
+            if tit_needle:
+                try:
+                    fe = frame.frame_element()
+                    t = (fe.get_attribute("title") or "").strip()
+                    if not t:
+                        continue
+                    tl, tn = tit_needle.lower(), t.lower()
+                    if tn not in tl and tl not in tn and tl != tn:
+                        continue
+                except Exception:
+                    continue
+            if (
+                _siebel_root_has_payment_lines_toolbar(frame)
+                or _frame_iframe_title_matches_payment_lines(frame)
+                or _siebel_frame_has_payment_lines_hhml_grid(frame)
+            ):
+                return [frame]
+        except Exception:
+            continue
+    return None
+
+
 def _iter_frame_locator_roots_only(page: Page, content_frame_selector: str | None):
     """Chained ``FrameLocator`` roots only (no ``Frame`` walk) — used after fast frame scan."""
     yield from _iter_frame_locator_roots(page, content_frame_selector)
@@ -6513,7 +6660,29 @@ def _add_customer_payment(
         "Payments: gathering Payment Lines toolbar roots (List:New / Save / HHML grid / iframe title scan).",
         prefix="Payments",
     )
-    payment_toolbar_roots = _gather_payment_line_toolbar_roots(page, content_frame_selector)
+    payment_toolbar_roots: list = []
+    _hint_cfg = _load_payment_lines_hint_dict_from_config()
+    _hinted = _try_payment_line_roots_from_hint(page, _hint_cfg)
+    if _hinted:
+        payment_toolbar_roots = _hinted
+        _is_builtin = (_hint_cfg.get("trial_run_id") == "hero_builtin_default")
+        if _is_builtin:
+            note(
+                "Payments: matched Payment Lines root from built-in Hero hint "
+                "(fast path; full frame scan skipped)."
+            )
+        else:
+            note(
+                "Payments: matched Payment Lines root from DMS_SIEBEL_PAYMENT_LINES_ROOT_HINT_FILE / "
+                "_ROOT_HINT_JSON (fast path; full frame scan skipped)."
+            )
+    else:
+        note(
+            "Payments: payment-lines hint (built-in or env) did not match a verified frame — "
+            "falling back to full gather."
+        )
+    if not payment_toolbar_roots:
+        payment_toolbar_roots = _gather_payment_line_toolbar_roots(page, content_frame_selector)
     if not payment_toolbar_roots:
         note(
             "Payments: no Payment Lines root after primary tab activation; "
@@ -15210,6 +15379,21 @@ def Playwright_Hero_DMS_fill(
                 "Video SOP: add-customer payment step finished successfully (Payments tab / Payment Lines or skip); next: Generate Booking then create_order.",
                 prefix="Video SOP",
             )
+
+            if SIEBEL_DMS_HARD_FAIL_BEFORE_BOOKING_AND_ORDER:
+                step(
+                    "Stopped: temporary hard fail before Generate Booking / create_order "
+                    "(SIEBEL_DMS_HARD_FAIL_BEFORE_BOOKING_AND_ORDER)."
+                )
+                note(
+                    "Siebel: SIEBEL_DMS_HARD_FAIL_BEFORE_BOOKING_AND_ORDER is True — "
+                    "skipping Generate Booking and create_order until disabled in siebel_dms_playwright.py."
+                )
+                out["error"] = (
+                    "Siebel: temporary stop before Generate Booking / create_order "
+                    "(SIEBEL_DMS_HARD_FAIL_BEFORE_BOOKING_AND_ORDER)."
+                )
+                return out
 
             full_chassis = (
                 str((out.get("vehicle") or {}).get("full_chassis") or "").strip()
