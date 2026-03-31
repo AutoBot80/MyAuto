@@ -332,3 +332,5 @@ The SQL view **`form_dms_view`** is **removed**; the same mapping is implemented
 | 1.34 | Mar 2026 | — | Siebel **`[TRACE:FC→FN]`** execution log lines — **LLD** **6.97**, **BRD** **3.46** |
 | 1.35 | Mar 2026 | — | Siebel Contact Find mobile drilldown iframe hint — **LLD** **6.98**, **BRD** **3.47** |
 | 1.36 | Mar 2026 | — | Siebel **`Playwright_DMS.txt`** trial DOM hint lines (Title drilldown / Contact_Enquiry subgrid) — **LLD** **6.99**, **BRD** **3.48** |
+| 1.37 | Mar 2026 | — | Siebel FC→FN contact readiness aligned with Contacts first-name drill probe — **LLD** **6.100**, **BRD** **3.49** |
+| 1.38 | Mar 2026 | — | Siebel built-in Hero frame URL hints (Contact Find + Contact_Enquiry eval) — **LLD** **6.101**, **BRD** **3.50** |

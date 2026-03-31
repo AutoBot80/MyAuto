@@ -520,3 +520,5 @@ This document lists the current database tables and their columns. **Executable 
 | 2.38 | Mar 2026 | **No schema change.** **`[TRACE:FC→FN]`** log lines — **LLD** **6.97**. |
 | 2.39 | Mar 2026 | **No schema change.** Mobile Search Results iframe hint env — **LLD** **6.98**. |
 | 2.40 | Mar 2026 | **No schema change.** Title drilldown / Contact_Enquiry subgrid trial **`note`** JSON — **LLD** **6.99** / **§2.4d.3**. |
+| 2.41 | Mar 2026 | **No schema change.** Contact detail readiness vs Contacts first-name probe — **LLD** **6.100** / **§2.4d.4**. |
+| 2.42 | Mar 2026 | **No schema change.** Built-in Siebel Contact Find / Contact_Enquiry frame hints — **LLD** **6.101**. |

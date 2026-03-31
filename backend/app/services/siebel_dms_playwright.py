@@ -110,6 +110,65 @@ def _hero_default_payment_lines_root_hint() -> dict[str, object]:
     }
 
 
+def _hero_default_mobile_search_hit_root_hint() -> dict[str, object]:
+    """
+    Built-in fast-path for **Contact Find** left **Search Results** mobile drilldown and for
+    :func:`_contact_mobile_drilldown_plans` (same Hero view / grid).
+
+    Stable URL fragments only (no ``SWERowId``). Update when Hero changes the Find Contact view.
+    Optional env still overrides via :func:`_load_mobile_search_hit_hint_dict_from_config`.
+    See **LLD §2.4d.2**.
+    """
+    _tail = (
+        "SWEView=eAuto+Contact+Opportunity+Buyer/CoBuyer+View+(SDW)"
+        "&SWEHo=&SWEBU=1&SWEApplet0=Opportunity+List+Applet"
+    )
+    _top = (
+        "SWECmd=GotoView&SWEView=eAuto+Contact+Opportunity+Buyer/CoBuyer+View+(SDW)"
+        "&SWEApplet0=Opportunity+List+Applet"
+    )
+    return {
+        "schema_version": 1,
+        "hint_source": "builtin",
+        "page_url_top": _top,
+        "mobile_search_hit_root_index_primary": 0,
+        "roots_sorted": [
+            {
+                "frame_url_tail": _tail,
+                "match_reason": "builtin_hero_contact_find_opportunity_list",
+            }
+        ],
+    }
+
+
+def _hero_default_contact_enquiry_subgrid_hint() -> dict[str, object]:
+    """
+    Built-in frame priority for **Contact_Enquiry** jqGrid eval after a contact drilldown
+    (**Visible Contact List for Find Enquiry** view). Stable fragments only.
+    Optional env overrides via :func:`_load_contact_enquiry_subgrid_hint_dict_from_config`.
+    See **LLD §2.4d.4** / **6.101**.
+    """
+    _tail = (
+        "SWEView=Visible+Contact+List+View+Clone+For+Find+Enquiry"
+        "&SWEHo=&SWEBU=1&SWEApplet0=Contact+List+Applet+Clone+For+Find+Enquiry"
+    )
+    _top = (
+        "SWECmd=GotoView&SWEView=Visible+Contact+List+View+Clone+For+Find+Enquiry"
+        "&SWEApplet0=Contact+List+Applet+Clone+For+Find+Enquiry"
+    )
+    return {
+        "schema_version": 1,
+        "hint_source": "builtin",
+        "page_url_top": _top,
+        "roots_sorted": [
+            {
+                "frame_url_tail": _tail,
+                "match_reason": "builtin_hero_contact_enquiry_clone_find",
+            }
+        ],
+    }
+
+
 # Siebel DMS and operator-entered dates/times are **IST** (Asia/Kolkata, UTC+05:30).
 _SIEBEL_TZ = ZoneInfo("Asia/Kolkata")
 
@@ -408,15 +467,37 @@ def _frames_for_enquiry_subgrid_eval(page: Page) -> list[Frame]:
     """
     Frames for **Contact_Enquiry** jqGrid / ``Enquiry_`` scrape after a contact drilldown.
 
-    **Main document first** — Hero Connect often renders the opened contact, tabs, and
-    ``#jqgh_s_1_l_Enquiry_`` / ``input[name=\"Enquiry_\"]`` there. Remaining Siebel iframes follow
-    ``_ordered_frames`` order (excluding main) so duplicate-mobile sweeps still find subgrids that
-    live only inside an iframe.
+    **Main document first** — then frames whose URL matches the builtin (or optional env) enquiry
+    subgrid hint **before** other iframes, then the rest of ``_ordered_frames`` so sweeps still
+    find subgrids only inside an iframe.
     """
     main = page.main_frame
+    hint = _load_contact_enquiry_subgrid_hint_dict_from_config()
+    roots_sorted = hint.get("roots_sorted") if isinstance(hint, dict) else None
+    page_top = str(hint.get("page_url_top") or "") if isinstance(hint, dict) else ""
+    hinted: list[Frame] = []
+    hinted_ids: set[int] = set()
+    if isinstance(roots_sorted, list) and roots_sorted:
+        for entry in roots_sorted:
+            if not isinstance(entry, dict):
+                continue
+            for frame in _ordered_frames(page):
+                fu = frame.url or ""
+                if _frame_url_matches_payment_hint(fu, entry, page_top):
+                    fid = id(frame)
+                    if fid not in hinted_ids:
+                        hinted_ids.add(fid)
+                        hinted.append(frame)
+                    break
     out: list[Frame] = [main]
+    seen: set[int] = {id(main)}
+    for f in hinted:
+        if f != main and id(f) not in seen:
+            seen.add(id(f))
+            out.append(f)
     for f in _ordered_frames(page):
-        if f != main:
+        if f != main and id(f) not in seen:
+            seen.add(id(f))
             out.append(f)
     return out
 
@@ -4297,6 +4378,7 @@ def _after_left_customer_click_wait_bounded(
     *,
     content_frame_selector: str | None,
     note,
+    first_name: str | None = None,
 ) -> None:
     """
     Strategy 1: after left Search Results drill-in click, wait up to **1000 ms** in slices
@@ -4307,7 +4389,10 @@ def _after_left_customer_click_wait_bounded(
     for i, ms in enumerate((200, 400, 400)):
         _safe_page_wait(page, ms, log_label=f"after_left_customer_click_slice_{i + 1}_of_3")
         ready = _wait_for_contact_detail_ready(
-            page, content_frame_selector=content_frame_selector, wait_ms=200
+            page,
+            content_frame_selector=content_frame_selector,
+            wait_ms=200,
+            first_name=first_name,
         )
         utc = datetime.now(timezone.utc).isoformat()
         elapsed = int((time.perf_counter() - t_lc) * 1000)
@@ -4324,13 +4409,54 @@ def _after_left_customer_click_wait_bounded(
     note("Opened customer: post–click bounded wait completed (1000 ms max, strategy 1).")
 
 
+def _contacts_applet_first_name_drill_target_visible(root, first_name: str) -> bool:
+    """
+    Read-only probe aligned with :func:`_siebel_open_found_customer_record` ``try_root``:
+    **Contacts** applet shows the first-name **link** or **cell** the drill will click.
+    """
+    fn = (first_name or "").strip()
+    if not fn:
+        return False
+    fn_pat = re.compile(rf"^\s*{re.escape(fn)}\s*$", re.I)
+    try:
+        apps = root.locator(".siebui-applet").filter(has_text=re.compile(r"Contacts", re.I))
+        n_apps = apps.count()
+        for aidx in range(min(n_apps, 6)):
+            app = apps.nth(aidx)
+            if not (app.count() > 0 and app.is_visible(timeout=500)):
+                continue
+            try:
+                lnk = app.get_by_role("link", name=fn_pat).first
+                if lnk.count() > 0 and lnk.is_visible(timeout=400):
+                    return True
+            except Exception:
+                pass
+            for css in ("table tbody tr td", "table tr td", '[role="gridcell"]', "td"):
+                try:
+                    cands = app.locator(css).filter(has_text=fn_pat)
+                    if cands.count() > 0 and cands.first.is_visible(timeout=400):
+                        return True
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    try:
+        lnk = root.get_by_role("link", name=fn_pat).first
+        if lnk.count() > 0 and lnk.is_visible(timeout=400):
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def _wait_for_contact_detail_ready(
     page: Page,
     *,
     content_frame_selector: str | None,
     wait_ms: int,
+    first_name: str | None = None,
 ) -> bool:
-    """Wait until right contact detail is rendered (First Name / Relation field visible)."""
+    """Wait until contact detail is ready: detail **inputs** and/or Contacts first-name drill targets."""
     sels = (
         'input[aria-label="First Name"]',
         'textarea[aria-label="First Name"]',
@@ -4365,6 +4491,20 @@ def _wait_for_contact_detail_ready(
                         return True
                 except Exception:
                     continue
+            if first_name and _contacts_applet_first_name_drill_target_visible(root, first_name):
+                _agent_debug_log(
+                    "H5",
+                    "siebel_dms_playwright.py:_wait_for_contact_detail_ready",
+                    "contact_detail_ready_success",
+                    {
+                        "wait_ms": int(wait_ms),
+                        "elapsed_ms": int((time.monotonic() - start_t) * 1000),
+                        "poll_count": int(poll_count),
+                        "matched_css": "contacts_applet_first_name_drill_target",
+                        "has_selector": bool(content_frame_selector),
+                    },
+                )
+                return True
         _safe_page_wait(page, 120, log_label="wait_contact_detail_ready")
     # region agent log
     _agent_debug_log(
@@ -5061,7 +5201,10 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
             return False
         note("Opened contact from search hit hyperlink (video SOP).")
         if not _wait_for_contact_detail_ready(
-            page, content_frame_selector=content_frame_selector, wait_ms=1200
+            page,
+            content_frame_selector=content_frame_selector,
+            wait_ms=1200,
+            first_name=first_name,
         ):
             _safe_page_wait(page, 180, log_label="after_contact_drill_link_fallback")
     else:
@@ -5091,7 +5234,10 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
         return False
 
     if not _wait_for_contact_detail_ready(
-        page, content_frame_selector=content_frame_selector, wait_ms=700
+        page,
+        content_frame_selector=content_frame_selector,
+        wait_ms=700,
+        first_name=first_name,
     ):
         _safe_page_wait(page, 120, log_label="after_first_name_click_before_relation_fill_fallback")
 
@@ -5430,9 +5576,18 @@ def _contact_mobile_drilldown_plans(
             pass
 
     best_plans: list[tuple[object, int, str, int]] = []
-    for _dr_root in list(_siebel_locator_search_roots(page, content_frame_selector)) + list(
-        _ordered_frames(page)
-    ) + [page]:
+    # Hint-first root order (builtin Hero URL fragments + optional env), then same wide sweep as before.
+    for _dr_root in (
+        list(
+            _iter_siebel_root_search_order(
+                page,
+                content_frame_selector,
+                _load_mobile_search_hit_hint_dict_from_config(),
+            )
+        )
+        + list(_ordered_frames(page))
+        + [page]
+    ):
         plans_here: list[tuple[object, int, str, int]] = []
         try:
             _rows = _dr_root.locator("table tr")
@@ -6642,9 +6797,9 @@ def _frame_url_matches_payment_hint(fu: str, entry: dict[str, object], page_url_
 
 def _load_mobile_search_hit_hint_dict_from_config() -> dict[str, object]:
     """
-    Optional **Contact Find** hint: which iframe (``frame_url_tail``) contains the left **Search Results**
-    mobile drilldown. Same JSON shape as Payment Lines hint (**``roots_sorted``**, **``page_url_top``**).
-    Env: **DMS_SIEBEL_MOBILE_SEARCH_HIT_ROOT_HINT_FILE** / **DMS_SIEBEL_MOBILE_SEARCH_HIT_ROOT_HINT_JSON**.
+    **Contact Find** Search Results / title-drilldown frame priority: optional **env / file** override;
+    else **Hero built-in** (:func:`_hero_default_mobile_search_hit_root_hint`). Same JSON shape as
+    Payment Lines (**``roots_sorted``**, **``page_url_top``**).
     """
     try:
         from app.config import (
@@ -6652,7 +6807,7 @@ def _load_mobile_search_hit_hint_dict_from_config() -> dict[str, object]:
             DMS_SIEBEL_MOBILE_SEARCH_HIT_ROOT_HINT_JSON,
         )
     except ImportError:
-        return {}
+        return dict(_hero_default_mobile_search_hit_root_hint())
     raw = ""
     fp = (DMS_SIEBEL_MOBILE_SEARCH_HIT_ROOT_HINT_FILE or "").strip()
     if fp:
@@ -6675,16 +6830,57 @@ def _load_mobile_search_hit_hint_dict_from_config() -> dict[str, object]:
                 return d
         except Exception:
             pass
-    return {}
+    return dict(_hero_default_mobile_search_hit_root_hint())
 
 
-def _iter_mobile_search_hit_roots(page: Page, content_frame_selector: str | None):
+def _load_contact_enquiry_subgrid_hint_dict_from_config() -> dict[str, object]:
     """
-    Like :func:`_siebel_locator_search_roots`, but when a mobile-search-hit hint is configured,
-    yields matching :class:`Frame`\\ s from :func:`_ordered_frames` **first** (per **``roots_sorted``**),
-    then the remaining frames. **FrameLocator** roots (explicit iframe selectors) stay **first**, unchanged.
+    **Contact_Enquiry** subgrid eval frame order: optional **env / file** override; else
+    :func:`_hero_default_contact_enquiry_subgrid_hint`. Env keys mirror mobile search:
+    **DMS_SIEBEL_CONTACT_ENQUIRY_SUBGRID_HINT_FILE** / **DMS_SIEBEL_CONTACT_ENQUIRY_SUBGRID_HINT_JSON**
+    (optional; empty → builtin).
     """
-    hint = _load_mobile_search_hit_hint_dict_from_config()
+    try:
+        from app.config import (
+            DMS_SIEBEL_CONTACT_ENQUIRY_SUBGRID_HINT_FILE,
+            DMS_SIEBEL_CONTACT_ENQUIRY_SUBGRID_HINT_JSON,
+        )
+    except ImportError:
+        return dict(_hero_default_contact_enquiry_subgrid_hint())
+    raw = ""
+    fp = (DMS_SIEBEL_CONTACT_ENQUIRY_SUBGRID_HINT_FILE or "").strip()
+    if fp:
+        try:
+            p = Path(fp)
+            if p.is_file():
+                raw = p.read_text(encoding="utf-8")
+        except OSError:
+            raw = ""
+    if not raw:
+        raw = (DMS_SIEBEL_CONTACT_ENQUIRY_SUBGRID_HINT_JSON or "").strip()
+    if raw:
+        try:
+            raw = raw.strip()
+            if raw.startswith("```"):
+                raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.I)
+                raw = re.sub(r"\s*```\s*$", "", raw)
+            d = json.loads(raw)
+            if isinstance(d, dict) and int(d.get("schema_version") or 0) >= 1 and d.get("roots_sorted"):
+                return d
+        except Exception:
+            pass
+    return dict(_hero_default_contact_enquiry_subgrid_hint())
+
+
+def _iter_siebel_root_search_order(
+    page: Page,
+    content_frame_selector: str | None,
+    hint: dict[str, object],
+):
+    """
+    **FrameLocator** roots first, then **Frame**\\ s matching **hint** ``roots_sorted`` (URL tail),
+    then remaining frames. Shared by mobile search hit eval/click and **Contact** title drilldown plans.
+    """
     roots_sorted = hint.get("roots_sorted") if isinstance(hint, dict) else None
     page_top = str(hint.get("page_url_top") or "") if isinstance(hint, dict) else ""
     hinted_ordered: list[Frame] = []
@@ -6712,6 +6908,18 @@ def _iter_mobile_search_hit_roots(page: Page, content_frame_selector: str | None
     else:
         for frame in _ordered_frames(page):
             yield frame
+
+
+def _iter_mobile_search_hit_roots(page: Page, content_frame_selector: str | None):
+    """
+    Like :func:`_siebel_locator_search_roots`, but **Frame**\\ s matching the mobile-search hint
+    (builtin Hero default or optional env override) are yielded **early**. **FrameLocator** roots stay first.
+    """
+    yield from _iter_siebel_root_search_order(
+        page,
+        content_frame_selector,
+        _load_mobile_search_hit_hint_dict_from_config(),
+    )
 
 
 def _trial_dom_url_tail(url: str, *, max_len: int = 220) -> str:
@@ -11671,7 +11879,10 @@ def _siebel_open_found_customer_record(
         if not left_ok:
             return False
         _after_left_customer_click_wait_bounded(
-            page, content_frame_selector=content_frame_selector, note=note
+            page,
+            content_frame_selector=content_frame_selector,
+            note=note,
+            first_name=first_name,
         )
     else:
         _note_trace_fc_to_fn(
@@ -11681,7 +11892,10 @@ def _siebel_open_found_customer_record(
             t0_perf=trace_fc_fn_t0,
         )
         _after_left_customer_click_wait_bounded(
-            page, content_frame_selector=content_frame_selector, note=note
+            page,
+            content_frame_selector=content_frame_selector,
+            note=note,
+            first_name=first_name,
         )
 
     _note_trace_fc_to_fn(
@@ -15279,7 +15493,10 @@ def Playwright_Hero_DMS_fill(
         in_transit_state = False
 
         if SIEBEL_DMS_STOP_AFTER_ALL_ENQUIRIES:
-            # User-requested order: run vehicle preparation before Contact Find search.
+            # Run **prepare_vehicle** before Contact Find so Find→Vehicles / VIN drill / PDI runs while the
+            # session is still on vehicle views. A full ``prepare_vehicle`` after opening a contact record
+            # would navigate away to Auto Vehicle List and break the video SOP. The ``vehicle_master``
+            # block in Playwright_DMS.txt is merged **output** from this scrape, not a separate DB-only prep.
             step("Pre-step: preparing vehicle before contact find (video path).")
             _pv_ok, _pv_err, _pv_scraped, in_transit_state, _pv_crit, _pv_info = prepare_vehicle(
                 page,
