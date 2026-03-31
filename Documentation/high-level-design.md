@@ -329,3 +329,6 @@ The SQL view **`form_dms_view`** is **removed**; the same mapping is implemented
 | 1.31 | Mar 2026 | — | Add Enquiry: optional skip of entire **`_siebel_vehicle_find_chassis_engine_enter`** when merge ready — **LLD** **6.94**, **BRD** **3.43** (**superseded by** **1.32** / **LLD** **6.95** / **BRD** **3.44**). |
 | 1.32 | Mar 2026 | — | Add Enquiry: always vehicle Find + VIN drill; merge-ready path skips duplicate scrape only — **LLD** **6.95**, **BRD** **3.44** |
 | 1.33 | Mar 2026 | — | **`fill_hero_dms_service`** / Siebel: Contact Find strategy 1 (bounded waits) + strategy 2 (mobile-only Find then fallback) — **LLD** **6.96**, **BRD** **3.45** |
+| 1.34 | Mar 2026 | — | Siebel **`[TRACE:FC→FN]`** execution log lines — **LLD** **6.97**, **BRD** **3.46** |
+| 1.35 | Mar 2026 | — | Siebel Contact Find mobile drilldown iframe hint — **LLD** **6.98**, **BRD** **3.47** |
+| 1.36 | Mar 2026 | — | Siebel **`Playwright_DMS.txt`** trial DOM hint lines (Title drilldown / Contact_Enquiry subgrid) — **LLD** **6.99**, **BRD** **3.48** |

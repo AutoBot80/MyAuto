@@ -142,6 +142,9 @@ DMS_SIEBEL_AUTO_IFRAME_SELECTORS = [x.strip() for x in _siebel_if.split(",") if 
 # is used when both are empty). JSON object per LLD §2.4d.1, or path to a ``.json`` file.
 DMS_SIEBEL_PAYMENT_LINES_ROOT_HINT_FILE = (os.getenv("DMS_SIEBEL_PAYMENT_LINES_ROOT_HINT_FILE") or "").strip()
 DMS_SIEBEL_PAYMENT_LINES_ROOT_HINT_JSON = (os.getenv("DMS_SIEBEL_PAYMENT_LINES_ROOT_HINT_JSON") or "").strip()
+# Optional: Contact Find — left Search Results mobile drilldown iframe fast-path (same JSON shape as Payment Lines hint).
+DMS_SIEBEL_MOBILE_SEARCH_HIT_ROOT_HINT_FILE = (os.getenv("DMS_SIEBEL_MOBILE_SEARCH_HIT_ROOT_HINT_FILE") or "").strip()
+DMS_SIEBEL_MOBILE_SEARCH_HIT_ROOT_HINT_JSON = (os.getenv("DMS_SIEBEL_MOBILE_SEARCH_HIT_ROOT_HINT_JSON") or "").strip()
 DMS_LOGIN_USER = os.getenv("DMS_LOGIN_USER", "demo")
 DMS_LOGIN_PASSWORD = os.getenv("DMS_LOGIN_PASSWORD", "demo")
 # Run browser visible (headed) so user sees DMS page and automation. Set to "false" for headless.

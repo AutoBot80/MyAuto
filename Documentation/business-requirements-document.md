@@ -407,3 +407,6 @@ Bulk upload automates the ingestion of scanned documents from a shared folder in
 | 3.43 | Mar 2026 | — | **§6.1a** step **2a**: Add Enquiry skipped **Auto Vehicle List** when merge complete — **LLD** **6.94** (**superseded by** **3.44** / **LLD** **6.95**). |
 | 3.44 | Mar 2026 | — | **§6.1a** step **2a**: Add Enquiry **always** runs Find→Vehicles + VIN drill; when **`prepare_vehicle`** merge is complete, **only** the duplicate post-drill scrape is skipped — **LLD** **6.95** |
 | 3.45 | Mar 2026 | — | **§6.1a** Contact Find: bounded waits after Find/Go and after left-pane drill (strategy 1) + mobile-only Find first with mobile+first fallback (strategy 2) — **LLD** **6.96** |
+| 3.46 | Mar 2026 | — | **§6.1a** **`Playwright_DMS.txt`** **`[TRACE:FC→FN:*]`** timestamps for Find → first-name drill / relation care-of — **LLD** **6.97** |
+| 3.47 | Mar 2026 | — | **§6.1a** optional **Mobile Search Results** iframe hint (**DMS_SIEBEL_MOBILE_SEARCH_HIT_ROOT_HINT_***) — **LLD** **6.98** |
+| 3.48 | Mar 2026 | — | **§6.1a** **`Playwright_DMS.txt`** optional **`title_drilldown_trial_hint_json=`** / **`contact_enquiry_subgrid_trial_hint_json=`** lines after successful runs (for future hardcoding); automation behavior unchanged — **LLD** **6.99** |

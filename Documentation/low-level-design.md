@@ -189,7 +189,16 @@ backend/app/
 
 - **Create order (video SOP path):** After Ctrl+S on a new **Sales Orders** booking, **`_attach_vehicle_to_bkg`** clicks the header drill-down **`a[name='Order Number'][tabindex='-1']`** (fallback: `a[name='Order Number']`). Failure surfaces as **`create_order`** error; **`order_drilldown_opened`** is set on the scrape dict when successful.
 
-- **Contact Find (stage 1, video Find, re-find):** **Strategy 1** — after Find/Go, post-wait uses slices **400 + 800 + 800 ms** (max 2000 ms) and exits early when a mobile Search Results hit is visible (`_eval_mobile_search_hit_ready`); after left-pane mobile drill-in, **200 + 400 + 400 ms** (max 1000 ms) with early exit when contact detail fields are ready (`_wait_for_contact_detail_ready`). **Strategy 2** — **`_contact_view_find_by_mobile_strategy_two`**: **mobile-only** Find/Go first; if **`_siebel_ui_suggests_contact_match_mobile_first`** is still false, a second Find/Go with **mobile + first name** (unchanged fill). Drill/sweep/enquiry helpers are unchanged.
+- **Contact Find (stage 1, video Find, re-find):** **Strategy 1** — after Find/Go, post-wait uses slices **400 + 800 + 800 ms** (max 2000 ms) and exits early when a mobile Search Results hit is visible (`_eval_mobile_search_hit_ready`); after left-pane mobile drill-in, **200 + 400 + 400 ms** (max 1000 ms) with early exit when contact detail fields are ready (`_wait_for_contact_detail_ready`). **Strategy 2** — **`_contact_view_find_by_mobile_strategy_two`**: **mobile-only** Find/Go first; if **`_siebel_ui_suggests_contact_match_mobile_first`** is still false, a second Find/Go with **mobile + first name** (unchanged fill). Drill/sweep/enquiry helpers are unchanged. **`[TRACE:FC→FN:…]`** lines in **`Playwright_DMS.txt`** (via **`note`** / **`_exec_log`**) timestamp stage-1 Find completion → first-name drilldown for relation/care-of (**`+Nms_since_stage1_find_end`** from **`fc_fn_trace_t0`**); subcodes **postgo**/**leftclk**/**ST2**/**S01–S12**/**R01–R05**/**V01** — **LLD** **6.97**.
+
+</think>
+<think>
+I made an error - I duplicated the bullet instead of replacing. Let me read the file and fix
+</think>
+
+
+<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>
+Read
 
 - **Add Enquiry (`_add_enquiry_opportunity`) when no contact rows:** **`_siebel_vehicle_find_chassis_engine_enter`** always runs **Find→Vehicles** and the VIN drill-down so the **Enquiry** tab is available from the **vehicle** view. If **`vehicle_merge`** already has model + YYYY **year_of_mfg** + color (e.g. after **`prepare_vehicle`**), **`_add_enquiry_reuse_vehicle_dict_ready`** is true — **`reuse_vehicle_dict`** is passed in and **list/grid/detail scrape after the VIN drill** is skipped inside **`_siebel_vehicle_find_chassis_engine_enter`**; merged fields are reused. Otherwise the full scrape runs as on the linear SOP.
 
@@ -225,6 +234,19 @@ backend/app/
   ]
 }
 ```
+
+#### 2.4d.2 Mobile Search Results hit root — fast path (hint)
+
+**Contact Find** left **Search Results** mobile drilldown often resolves in a stable nested iframe. **`_iter_mobile_search_hit_roots`** (used by **`_eval_mobile_search_hit_ready`** and **`_siebel_try_click_mobile_search_hit_link`**) keeps **FrameLocator** roots first, then tries **Frame** objects whose **`frame.url`** matches **``roots_sorted``** **``frame_url_tail``** entries (same JSON pattern and **`page_url_top`** matching as §2.4d.1 — reuses **`_frame_url_matches_payment_hint`**). **Override:** **`DMS_SIEBEL_MOBILE_SEARCH_HIT_ROOT_HINT_JSON`** or **`DMS_SIEBEL_MOBILE_SEARCH_HIT_ROOT_HINT_FILE`** (see **`backend/.env.example`**). Trial runs may log **`mobile_search_hit_root_hint_json=`** on **`[NOTE]`** lines for copy-paste into **``.env``** — **LLD** **6.98**.
+
+#### 2.4d.3 Title drilldown & Contact_Enquiry subgrid — trial DOM hints (logging)
+
+Duplicate-mobile **Title** drilldown and **Contact_Enquiry** jqGrid detection still use multi-root scans; **no** fast-path env override is wired yet. On success paths only, **`note`** lines record copy-paste JSON for future hardcoding (same idea as §2.4d.1 / §2.4d.2):
+
+- **`title_drilldown_trial_hint_json=`** — emitted by **`_note_title_drilldown_trial_hint`** after **`_click_nth_mobile_title_drilldown`** succeeds (**`click_ok`** / **`click_ok_force`**). Payload includes **`ordinal`**, **`row_index`**, **`link_selector`**, **`link_index`**, and **`root`** (**`_describe_siebel_root_for_trial`**: **Page** / **Frame** URL tail and optional **`iframe_element_title`**, or **FrameLocator** with a short note).
+- **`contact_enquiry_subgrid_trial_hint_json=`** — emitted by **`_note_contact_enquiry_subgrid_trial_hint`** when **`_contact_enquiry_tab_has_rows`** returns with rows (**`main_first_win`** when the main document wins first; **`best_frame_after_scan`** when the best count came from another frame). Payload includes **`frame_url_tail`**, **`jqgh_id_hit`**, **`row_count`**, **`is_main`**, optional **`iframe_element_title`**.
+
+Sweep order and matchers are unchanged — **LLD** **6.99**.
 
 ### 2.5 Database Access
 
@@ -449,3 +471,6 @@ See **Documentation/Database DDL.md** for full table structures. Summary:
 | 6.94 | Mar 2026 | — | **`_add_enquiry_opportunity`**: when merge ready, skip **`_siebel_vehicle_find_chassis_engine_enter`** entirely — **Contact Find** → **Enquiry** → **Opportunities:New**. **Superseded by 6.95** (always run vehicle find + VIN drill; scrape skip only). |
 | 6.95 | Mar 2026 | — | **`_add_enquiry_opportunity`** always calls **`_siebel_vehicle_find_chassis_engine_enter`**; **`reuse_vehicle_dict`** skips **only** post–VIN-drill list/grid/detail scrape when merge is ready — **Enquiry** tab remains discoverable from **Vehicles**. **`_try_click_enquiry_top_tab`** / **`_add_enquiry_opportunity`** docstrings. **§2.4d** bullet. |
 | 6.96 | Mar 2026 | — | Contact Find **strategy 1** (bounded post–Find/Go and post–left-click waits: 400/800/800 ms and 200/400/400 ms with early exit) + **strategy 2** (**`_contact_view_find_by_mobile_strategy_two`**: mobile-only Find then mobile+first if no grid match). **`_eval_mobile_search_hit_ready`**; **`_siebel_open_found_customer_record`** takes **`note`**. Linear stage 1, video Find/re-find/branch (2), **`_refind_customer_after_enquiry`**. **§2.4d** bullet. |
+| 6.97 | Mar 2026 | — | **`[TRACE:FC→FN:*]`** diagnostic **`note`** lines (UTC + **`+Nms_since_stage1_find_end`**) from stage-1 Find end through first-name drilldown / care-of: **postgo**/**leftclk** slices, **ST2**/**S01–S12**/**R01–R05**, video **V01**; **`_note_trace_fc_to_fn`**. **§2.4d** bullet. |
+| 6.98 | Mar 2026 | — | **`_iter_mobile_search_hit_roots`** + **DMS_SIEBEL_MOBILE_SEARCH_HIT_ROOT_HINT_*** (Contact Find Search Results drilldown iframe fast-path); **`mobile_search_hit_root_hint_json=`** discovery **`note`**. **§2.4d.2**. |
+| 6.99 | Mar 2026 | — | **`title_drilldown_trial_hint_json=`** / **`contact_enquiry_subgrid_trial_hint_json=`** discovery **`note`** lines (**`_note_title_drilldown_trial_hint`**, **`_note_contact_enquiry_subgrid_trial_hint`**, **`_trial_dom_url_tail`**) after successful Title drilldown and when enquiry rows are detected; no change to sweep order. **§2.4d.3**. |

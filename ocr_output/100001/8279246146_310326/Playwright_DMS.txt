@@ -1,6 +1,6 @@
 Playwright DMS — execution log (this run only; UTC timestamps)
 
-started_utc=2026-03-31T14:57:24.455003+00:00
+started_utc=2026-03-31T15:23:31.529175+00:00
 skip_contact_find=False
 dms_contact_path='found'
 mobile_phone='8279246146'
@@ -23,43 +23,43 @@ url_vehicle_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/e
 --- trace ---
 Legend: [STEP]/[NOTE]/[MILESTONE] = operator narrative; [FORM] = siebel_step + Siebel form/screen + action + fields/values being applied on that form.
 
-2026-03-31T14:57:24.456739+00:00 [STEP] Started Hero Connect / Siebel DMS automation (linear SOP).
-2026-03-31T14:57:24.456803+00:00 [STEP] Pre-step: preparing vehicle before contact find (video path).
-2026-03-31T14:57:24.456880+00:00 [FORM] siebel_step=5_vehicle_list | form=Auto Vehicle List (DMS_REAL_URL_VEHICLE) | action=begin_vehicle_flow_navigate_then_search_applet | engine_partial='11204' | frame_partial='43284' | key_partial='1267' | vehicle_url_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+All+Vehicle+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Auto+Vehicle+List+Applet&SWERowId0=1-100-1676'
-2026-03-31T14:57:28.773483+00:00 [NOTE] prepare_vehicle: Find → Vehicles for list query.
-2026-03-31T14:57:29.535587+00:00 [NOTE] prepare_vehicle: VIN + Engine# submitted in Find→Vehicles applet.
-2026-03-31T14:57:29.537293+00:00 [FORM] siebel_step=5_vehicle_list | form=Auto Vehicle List — search/query row | action=find_vehicles_vin_engine_applet_only | engine_partial='11204' | find_vehicles_vin_engine_ok=True | frame_partial='43284'
-2026-03-31T14:57:32.084021+00:00 [NOTE] Scraped vehicle row from Siebel grid.
-2026-03-31T14:57:34.153035+00:00 [NOTE] prepare_vehicle: opened vehicle from left Search Results (VIN Title drilldown).
-2026-03-31T14:57:35.795851+00:00 [NOTE] Vehicle prep: filled Battery No. = '3302419' on vehicle page.
-2026-03-31T14:57:36.184183+00:00 [NOTE] Vehicle prep: filled Key Number = '1267' on vehicle page.
-2026-03-31T14:57:37.855615+00:00 [NOTE] Vehicle prep: saved vehicle record after Key/Battery fill.
-2026-03-31T14:57:38.094050+00:00 [NOTE] prepare_vehicle: vehicle detail applet (aria-labels) → ['full_chassis', 'model', 'year_of_mfg', 'variant', 'color', 'full_engine'].
-2026-03-31T14:57:38.094109+00:00 [FORM] siebel_step=5_vehicle_detail | form=Auto Vehicle — detail applet | action=scrape_VIN_Model_Year_Manu_SKU_Color_Engine_by_aria_label | color='RPB' | full_chassis='MBLHAW477T9C43284' | full_engine='HA11F7T9C11204' | model='SPLENDOR +' | variant='HSPLMIRSCFIRPB' | year_of_mfg='2,026'
-2026-03-31T14:57:38.134432+00:00 [NOTE] DECISION: vehicle with dealer per Inventory Location — '11870 DEALER SHOWROOM'; in_transit=False.
-2026-03-31T14:57:38.134499+00:00 [FORM] siebel_step=5_vehicle_inventory_location | form=Auto Vehicle | action=inventory_location_scrape | in_transit=False | inventory_location='11870 DEALER SHOWROOM'
-2026-03-31T14:57:39.384614+00:00 [NOTE] prepare_vehicle: clicked Serial Number drilldown (name='Serial Number', scoped '#s_1_l').
-2026-03-31T14:57:40.642141+00:00 [NOTE] prepare_vehicle: feature-id scrape cubic_capacity='125', vehicle_type='MOTORCYCLE WITH GEAR'.
-2026-03-31T14:57:40.671893+00:00 [NOTE] prepare_vehicle [frame-focus] {"step": "precheck_pdi_entry_before_precheck_tab", "top_url_tail": "EHo=&SWEBU=1&SWEApplet0=Auto+Vehicle+Entry+Applet&SWERowId0=2-1JPOX8EA&SWEApplet1=SIS+Auto+Product+Features+List+Applet&SWERowId1=2-1COKLTQ9", "content_frame_selector": "", "frames": [{"layer": "main", "url_tail": "ry+Applet&SWERowId0=2-1JPOX8EA&SWEApplet1=SIS+Auto+Product+Features+List+Applet&SWERowId1=2-1COKLTQ9", "snap": {"href": "ehicle+Entry+Applet&SWERowId0=2-1JPOX8EA&SWEApplet1=SIS+Auto+Product+Features+List+Applet&SWERowId1=2-1COKLTQ9", "active": {"tag": "DIV", "id": "s_S_A1_div", "name": "", "role": "region", "cls": "siebui-applet siebui-collapsible-applet siebui-l"}, "hasVctrl": true, "vctrlSelectedHead": "Features and Image", "hasFeatTbl": true, "ids": {"hhml4": true, "hhml5": true}}}]}
-2026-03-31T14:57:40.671944+00:00 [FORM] siebel_step=vehicle_serial_precheck_pdi | form=Vehicle serial detail | action=precheck_tab_open | log_prefix='prepare_vehicle'
-2026-03-31T14:57:40.708699+00:00 [NOTE] prepare_vehicle: clicked Pre-check from tab strip (container='s_vctrl_div').
-2026-03-31T14:57:42.264321+00:00 [NOTE] prepare_vehicle [frame-focus] {"step": "precheck_pdi_after_precheck_tab_networkidle", "top_url_tail": "ERF=1&SWEHo=&SWEBU=1&SWEApplet0=Auto+Vehicle+Entry+Applet&SWERowId0=2-1JPOX8EA&SWEApplet1=HMCL+PDI+Precheck+List+Applet&SWERowId1=2-1JZ10WI7", "content_frame_selector": "", "frames": [{"layer": "main", "url_tail": "icle+Entry+Applet&SWERowId0=2-1JPOX8EA&SWEApplet1=HMCL+PDI+Precheck+List+Applet&SWERowId1=2-1JZ10WI7", "snap": {"href": "0=Auto+Vehicle+Entry+Applet&SWERowId0=2-1JPOX8EA&SWEApplet1=HMCL+PDI+Precheck+List+Applet&SWERowId1=2-1JZ10WI7", "active": {"tag": "DIV", "id": "s_S_A3_div", "name": "", "role": "region", "cls": "siebui-applet siebui-collapsible-applet siebui-l"}, "hasVctrl": true, "vctrlSelectedHead": "PreCheck", "hasFeatTbl": false, "ids": {"hhml4": false, "hhml5": false}}}]}
-2026-03-31T14:57:42.312456+00:00 [NOTE] prepare_vehicle: Pre-check already has row(s) (rows=89, signal=root[6]:maxRows=89) — skipping Pre-check entry and continuing to PDI.
-2026-03-31T14:57:42.344941+00:00 [NOTE] prepare_vehicle: clicked PDI from tab strip (container='s_vctrl_div').
-2026-03-31T14:57:43.899797+00:00 [NOTE] prepare_vehicle: clicked PDI tab.
-2026-03-31T14:57:45.445542+00:00 [NOTE] prepare_vehicle [frame-focus] {"step": "precheck_pdi_after_pdi_tab_networkidle", "top_url_tail": "t+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Auto+Vehicle+Entry+Applet&SWERowId0=2-1JPOX8EA&SWEApplet1=HHML+PDI+List+Applet&SWERowId1=2-1JZ277O3", "content_frame_selector": "", "frames": [{"layer": "main", "url_tail": "=Auto+Vehicle+Entry+Applet&SWERowId0=2-1JPOX8EA&SWEApplet1=HHML+PDI+List+Applet&SWERowId1=2-1JZ277O3", "snap": {"href": "SWEApplet0=Auto+Vehicle+Entry+Applet&SWERowId0=2-1JPOX8EA&SWEApplet1=HHML+PDI+List+Applet&SWERowId1=2-1JZ277O3", "active": {"tag": "DIV", "id": "s_S_A2_div", "name": "", "role": "region", "cls": "siebui-applet siebui-collapsible-applet siebui-l"}, "hasVctrl": true, "vctrlSelectedHead": "PDI", "hasFeatTbl": false, "ids": {"hhml4": false, "hhml5": false}}}]}
-2026-03-31T14:57:45.490956+00:00 [NOTE] prepare_vehicle: PDI list has row(s) with valid expiry (latest PDI Expiry (date)=2026-04-09, grace=15m vs now IST, today=2026-03-31) — skipping Service Request New / pick / Submit.
-2026-03-31T14:57:45.492077+00:00 [NOTE] prepare_vehicle: PDI completed successfully.
-2026-03-31T14:57:45.492156+00:00 [FORM] siebel_step=vehicle_serial_precheck_pdi | form=Vehicle serial detail | action=pdi_valid_existing_skipped_new_row | log_prefix='prepare_vehicle'
-2026-03-31T14:57:45.502579+00:00 [NOTE] prepare_vehicle [frame-focus] {"step": "precheck_pdi_flow_completed", "top_url_tail": "t+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Auto+Vehicle+Entry+Applet&SWERowId0=2-1JPOX8EA&SWEApplet1=HHML+PDI+List+Applet&SWERowId1=2-1JZ277O3", "content_frame_selector": "", "frames": [{"layer": "main", "url_tail": "=Auto+Vehicle+Entry+Applet&SWERowId0=2-1JPOX8EA&SWEApplet1=HHML+PDI+List+Applet&SWERowId1=2-1JZ277O3", "snap": {"href": "SWEApplet0=Auto+Vehicle+Entry+Applet&SWERowId0=2-1JPOX8EA&SWEApplet1=HHML+PDI+List+Applet&SWERowId1=2-1JZ277O3", "active": {"tag": "DIV", "id": "s_S_A2_div", "name": "", "role": "region", "cls": "siebui-applet siebui-collapsible-applet siebui-l"}, "hasVctrl": true, "vctrlSelectedHead": "PDI", "hasFeatTbl": false, "ids": {"hhml4": false, "hhml5": false}}}]}
-2026-03-31T14:57:45.632420+00:00 [NOTE] prepare_vehicle: clicked tab matching 'Features and Image'.
-2026-03-31T14:57:46.656018+00:00 [NOTE] prepare_vehicle: Features tab → cubic_capacity='125', vehicle_type='MOTORCYCLE WITH GEAR'.
-2026-03-31T14:57:46.656092+00:00 [FORM] siebel_step=5_vehicle_features | form=Features and Image | action=scrape_HHML_Feature_Value_cubic_and_vehicle_type | cubic_capacity='125' | vehicle_type='MOTORCYCLE WITH GEAR'
-2026-03-31T14:57:46.656116+00:00 [NOTE] Vehicle grid scrape (prepare_vehicle): model='SPLENDOR +', color='RPB', frame_num='MBLHA11EE99C17537', engine_num='', key_num=''.
-2026-03-31T14:57:46.656134+00:00 [NOTE] DECISION: vehicle_in_transit=False (Inventory Location='11870 DEALER SHOWROOM').
-2026-03-31T14:57:46.656162+00:00 [FORM] siebel_step=5_vehicle_list | form=Auto Vehicle List — results grid (scraped row) | action=read_first_matching_row_from_grid | frame_num='MBLHA11EE99C17537' | in_transit=False | inventory_location='11870 DEALER SHOWROOM' | model='SPLENDOR +'
-2026-03-31T14:57:46.656199+00:00 [NOTE] prepare_vehicle: vehicle at dealer (not in-transit) — receipt branch skipped.
-2026-03-31T14:57:46.656215+00:00 [STEP] Vehicle does not appear in transit.
+2026-03-31T15:23:31.530688+00:00 [STEP] Started Hero Connect / Siebel DMS automation (linear SOP).
+2026-03-31T15:23:31.530755+00:00 [STEP] Pre-step: preparing vehicle before contact find (video path).
+2026-03-31T15:23:31.530834+00:00 [FORM] siebel_step=5_vehicle_list | form=Auto Vehicle List (DMS_REAL_URL_VEHICLE) | action=begin_vehicle_flow_navigate_then_search_applet | engine_partial='11204' | frame_partial='43284' | key_partial='1267' | vehicle_url_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+All+Vehicle+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Auto+Vehicle+List+Applet&SWERowId0=1-100-1676'
+2026-03-31T15:23:36.023223+00:00 [NOTE] prepare_vehicle: Find → Vehicles for list query.
+2026-03-31T15:23:36.808746+00:00 [NOTE] prepare_vehicle: VIN + Engine# submitted in Find→Vehicles applet.
+2026-03-31T15:23:36.810545+00:00 [FORM] siebel_step=5_vehicle_list | form=Auto Vehicle List — search/query row | action=find_vehicles_vin_engine_applet_only | engine_partial='11204' | find_vehicles_vin_engine_ok=True | frame_partial='43284'
+2026-03-31T15:23:39.334786+00:00 [NOTE] Scraped vehicle row from Siebel grid.
+2026-03-31T15:23:41.361959+00:00 [NOTE] prepare_vehicle: opened vehicle from left Search Results (VIN Title drilldown).
+2026-03-31T15:23:42.963007+00:00 [NOTE] Vehicle prep: filled Battery No. = '3302419' on vehicle page.
+2026-03-31T15:23:43.245154+00:00 [NOTE] Vehicle prep: filled Key Number = '1267' on vehicle page.
+2026-03-31T15:23:44.918872+00:00 [NOTE] Vehicle prep: saved vehicle record after Key/Battery fill.
+2026-03-31T15:23:45.184351+00:00 [NOTE] prepare_vehicle: vehicle detail applet (aria-labels) → ['full_chassis', 'model', 'year_of_mfg', 'variant', 'color', 'full_engine'].
+2026-03-31T15:23:45.184436+00:00 [FORM] siebel_step=5_vehicle_detail | form=Auto Vehicle — detail applet | action=scrape_VIN_Model_Year_Manu_SKU_Color_Engine_by_aria_label | color='RPB' | full_chassis='MBLHAW477T9C43284' | full_engine='HA11F7T9C11204' | model='SPLENDOR +' | variant='HSPLMIRSCFIRPB' | year_of_mfg='2,026'
+2026-03-31T15:23:45.220339+00:00 [NOTE] DECISION: vehicle with dealer per Inventory Location — '11870 DEALER SHOWROOM'; in_transit=False.
+2026-03-31T15:23:45.220397+00:00 [FORM] siebel_step=5_vehicle_inventory_location | form=Auto Vehicle | action=inventory_location_scrape | in_transit=False | inventory_location='11870 DEALER SHOWROOM'
+2026-03-31T15:23:46.356260+00:00 [NOTE] prepare_vehicle: clicked Serial Number drilldown (name='Serial Number', scoped '#s_1_l').
+2026-03-31T15:23:47.585143+00:00 [NOTE] prepare_vehicle: feature-id scrape cubic_capacity='125', vehicle_type='MOTORCYCLE WITH GEAR'.
+2026-03-31T15:23:47.619626+00:00 [NOTE] prepare_vehicle [frame-focus] {"step": "precheck_pdi_entry_before_precheck_tab", "top_url_tail": "EHo=&SWEBU=1&SWEApplet0=Auto+Vehicle+Entry+Applet&SWERowId0=2-1JPOX8EA&SWEApplet1=SIS+Auto+Product+Features+List+Applet&SWERowId1=2-1COKLTQ9", "content_frame_selector": "", "frames": [{"layer": "main", "url_tail": "ry+Applet&SWERowId0=2-1JPOX8EA&SWEApplet1=SIS+Auto+Product+Features+List+Applet&SWERowId1=2-1COKLTQ9", "snap": {"href": "ehicle+Entry+Applet&SWERowId0=2-1JPOX8EA&SWEApplet1=SIS+Auto+Product+Features+List+Applet&SWERowId1=2-1COKLTQ9", "active": {"tag": "DIV", "id": "s_S_A1_div", "name": "", "role": "region", "cls": "siebui-applet siebui-collapsible-applet siebui-l"}, "hasVctrl": true, "vctrlSelectedHead": "Features and Image", "hasFeatTbl": true, "ids": {"hhml4": true, "hhml5": true}}}]}
+2026-03-31T15:23:47.619715+00:00 [FORM] siebel_step=vehicle_serial_precheck_pdi | form=Vehicle serial detail | action=precheck_tab_open | log_prefix='prepare_vehicle'
+2026-03-31T15:23:47.669264+00:00 [NOTE] prepare_vehicle: clicked Pre-check from tab strip (container='s_vctrl_div').
+2026-03-31T15:23:49.195120+00:00 [NOTE] prepare_vehicle [frame-focus] {"step": "precheck_pdi_after_precheck_tab_networkidle", "top_url_tail": "ERF=1&SWEHo=&SWEBU=1&SWEApplet0=Auto+Vehicle+Entry+Applet&SWERowId0=2-1JPOX8EA&SWEApplet1=HMCL+PDI+Precheck+List+Applet&SWERowId1=2-1JZ10WI7", "content_frame_selector": "", "frames": [{"layer": "main", "url_tail": "icle+Entry+Applet&SWERowId0=2-1JPOX8EA&SWEApplet1=HMCL+PDI+Precheck+List+Applet&SWERowId1=2-1JZ10WI7", "snap": {"href": "0=Auto+Vehicle+Entry+Applet&SWERowId0=2-1JPOX8EA&SWEApplet1=HMCL+PDI+Precheck+List+Applet&SWERowId1=2-1JZ10WI7", "active": {"tag": "DIV", "id": "s_S_A3_div", "name": "", "role": "region", "cls": "siebui-applet siebui-collapsible-applet siebui-l"}, "hasVctrl": true, "vctrlSelectedHead": "PreCheck", "hasFeatTbl": false, "ids": {"hhml4": false, "hhml5": false}}}]}
+2026-03-31T15:23:49.210646+00:00 [NOTE] prepare_vehicle: Pre-check already has row(s) (rows=89, signal=root[6]:maxRows=89) — skipping Pre-check entry and continuing to PDI.
+2026-03-31T15:23:49.233311+00:00 [NOTE] prepare_vehicle: clicked PDI from tab strip (container='s_vctrl_div').
+2026-03-31T15:23:50.749867+00:00 [NOTE] prepare_vehicle: clicked PDI tab.
+2026-03-31T15:23:52.324477+00:00 [NOTE] prepare_vehicle [frame-focus] {"step": "precheck_pdi_after_pdi_tab_networkidle", "top_url_tail": "t+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Auto+Vehicle+Entry+Applet&SWERowId0=2-1JPOX8EA&SWEApplet1=HHML+PDI+List+Applet&SWERowId1=2-1JZ277O3", "content_frame_selector": "", "frames": [{"layer": "main", "url_tail": "=Auto+Vehicle+Entry+Applet&SWERowId0=2-1JPOX8EA&SWEApplet1=HHML+PDI+List+Applet&SWERowId1=2-1JZ277O3", "snap": {"href": "SWEApplet0=Auto+Vehicle+Entry+Applet&SWERowId0=2-1JPOX8EA&SWEApplet1=HHML+PDI+List+Applet&SWERowId1=2-1JZ277O3", "active": {"tag": "DIV", "id": "s_S_A2_div", "name": "", "role": "region", "cls": "siebui-applet siebui-collapsible-applet siebui-l"}, "hasVctrl": true, "vctrlSelectedHead": "PDI", "hasFeatTbl": false, "ids": {"hhml4": false, "hhml5": false}}}]}
+2026-03-31T15:23:52.396957+00:00 [NOTE] prepare_vehicle: PDI list has row(s) with valid expiry (latest PDI Expiry (date)=2026-04-09, grace=15m vs now IST, today=2026-03-31) — skipping Service Request New / pick / Submit.
+2026-03-31T15:23:52.398156+00:00 [NOTE] prepare_vehicle: PDI completed successfully.
+2026-03-31T15:23:52.398215+00:00 [FORM] siebel_step=vehicle_serial_precheck_pdi | form=Vehicle serial detail | action=pdi_valid_existing_skipped_new_row | log_prefix='prepare_vehicle'
+2026-03-31T15:23:52.405429+00:00 [NOTE] prepare_vehicle [frame-focus] {"step": "precheck_pdi_flow_completed", "top_url_tail": "t+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Auto+Vehicle+Entry+Applet&SWERowId0=2-1JPOX8EA&SWEApplet1=HHML+PDI+List+Applet&SWERowId1=2-1JZ277O3", "content_frame_selector": "", "frames": [{"layer": "main", "url_tail": "=Auto+Vehicle+Entry+Applet&SWERowId0=2-1JPOX8EA&SWEApplet1=HHML+PDI+List+Applet&SWERowId1=2-1JZ277O3", "snap": {"href": "SWEApplet0=Auto+Vehicle+Entry+Applet&SWERowId0=2-1JPOX8EA&SWEApplet1=HHML+PDI+List+Applet&SWERowId1=2-1JZ277O3", "active": {"tag": "DIV", "id": "s_S_A2_div", "name": "", "role": "region", "cls": "siebui-applet siebui-collapsible-applet siebui-l"}, "hasVctrl": true, "vctrlSelectedHead": "PDI", "hasFeatTbl": false, "ids": {"hhml4": false, "hhml5": false}}}]}
+2026-03-31T15:23:52.521179+00:00 [NOTE] prepare_vehicle: clicked tab matching 'Features and Image'.
+2026-03-31T15:23:53.584651+00:00 [NOTE] prepare_vehicle: Features tab → cubic_capacity='125', vehicle_type='MOTORCYCLE WITH GEAR'.
+2026-03-31T15:23:53.584855+00:00 [FORM] siebel_step=5_vehicle_features | form=Features and Image | action=scrape_HHML_Feature_Value_cubic_and_vehicle_type | cubic_capacity='125' | vehicle_type='MOTORCYCLE WITH GEAR'
+2026-03-31T15:23:53.584948+00:00 [NOTE] Vehicle grid scrape (prepare_vehicle): model='SPLENDOR +', color='RPB', frame_num='MBLHA11EE99C17537', engine_num='', key_num=''.
+2026-03-31T15:23:53.585016+00:00 [NOTE] DECISION: vehicle_in_transit=False (Inventory Location='11870 DEALER SHOWROOM').
+2026-03-31T15:23:53.585126+00:00 [FORM] siebel_step=5_vehicle_list | form=Auto Vehicle List — results grid (scraped row) | action=read_first_matching_row_from_grid | frame_num='MBLHA11EE99C17537' | in_transit=False | inventory_location='11870 DEALER SHOWROOM' | model='SPLENDOR +'
+2026-03-31T15:23:53.585209+00:00 [NOTE] prepare_vehicle: vehicle at dealer (not in-transit) — receipt branch skipped.
+2026-03-31T15:23:53.585272+00:00 [STEP] Vehicle does not appear in transit.
 
 --- vehicle_master (merged for update_vehicle_master_from_dms) ---
 full_chassis='MBLHAW477T9C43284'
@@ -79,19 +79,21 @@ inventory_location='11870 DEALER SHOWROOM'
 # place_of_registeration / oem_name: applied at DB persist from sales_master→dealer_ref/oem_ref when vehicle_id is set (not scraped in prepare_vehicle).
 notes:
   - vehicle_ex_showroom_price: not in merge — grid price column or DMS price fields may be empty.
-2026-03-31T14:57:46.656961+00:00 [STEP] Video SOP (Find Contact Enquiry): Find → Contact → mobile + first name → Go; branch A when N=0 (Add Enquiry) else title sweep for Open enquiry; branch (2) Address+pin when no Open; Relation's Name → Payments → booking path.
-2026-03-31T14:57:46.656994+00:00 [FORM] siebel_step=v1_find_contact | form=Global Find → Contact (Mobile + First Name) + Go | action=goto_contact_find_URL_then_prepare_Find_Contact_fill_mobile_first_FindGo | contact_url_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+Contact+Opportunity+Buyer/CoBuyer+View+(SDW)&SWERF=1&SWEHo=&SWEBU=1' | first_name='Shivnarayan' | mobile_phone='8279246146'
-2026-03-31T14:57:53.359106+00:00 [STEP] Video SOP: Find customer by mobile + first name (Contact view).
-2026-03-31T14:57:56.536651+00:00 [NOTE] Find → Contact: object type selected so the mobile field is the Contact search field.
-2026-03-31T14:57:57.335433+00:00 [NOTE] Filled Mobile (title='Mobile Phone') and First Name (id='field_textbox_1' when present) as exact first name (no wildcard) in the same Contact Find frame and clicked Find.
-2026-03-31T14:57:59.387302+00:00 [NOTE] DECISION: contact_table_match_mobile_first_after_find=True (informational; branch A/B uses drilldown row count).
-2026-03-31T14:58:04.452876+00:00 [NOTE] Video path: Contact Find drilldown row count N=2 (mobile-only basis for branch A/B).
-2026-03-31T14:58:14.858482+00:00 [NOTE] Find-Contact list snapshot (before Title/enquiry sweep): 2 row(s) with mobile and drilldown (same basis as title sweep ordinals); 1 with enquiry hint in list text; optional strict list row match for first name 'Shivnarayan': 2.
-2026-03-31T14:58:20.857326+00:00 [NOTE] Contact Find grid: 2 row(s) contain mobile 8279246146 with a drilldown link (sweep uses ordinal 0..1).
-2026-03-31T14:58:27.535331+00:00 [NOTE] Drilldown 1/2 for mobile 8279246146 (match index 0) — opening contact, then Contact_Enquiry for #jqgh_s_1_l_Enquiry_ / name=Enquiry_.
-2026-03-31T14:58:30.675174+00:00 [NOTE] Contact_Enquiry check (Title index 0): checked=True, rows=1, enquiry#='11870-02-SENQ-0326-1400'.
-2026-03-31T14:58:30.675232+00:00 [NOTE] Enquiry exists: Enquiry#='11870-02-SENQ-0326-1400'. Proceeding (Title index 0).
-2026-03-31T14:58:30.675269+00:00 [NOTE] Video path: drilldown_rows_N=2, contacts_with_open_enquiry=1 (Siebel rule: 0 or 1).
+2026-03-31T15:23:53.589232+00:00 [STEP] Video SOP (Find Contact Enquiry): Find → Contact → mobile + first name → Go; branch A when N=0 (Add Enquiry) else title sweep for Open enquiry; branch (2) Address+pin when no Open; Relation's Name → Payments → booking path.
+2026-03-31T15:23:53.589503+00:00 [FORM] siebel_step=v1_find_contact | form=Global Find → Contact (strategy 2: mobile-only first, then mobile + first name if needed) | action=goto_contact_find_URL_then_prepare_Find_Contact_fill_mobile_first_FindGo | contact_url_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+Contact+Opportunity+Buyer/CoBuyer+View+(SDW)&SWERF=1&SWEHo=&SWEBU=1' | first_name='Shivnarayan' | mobile_phone='8279246146'
+2026-03-31T15:24:00.441887+00:00 [STEP] Video SOP: Find customer by mobile only first (Contact view, strategy 2).
+2026-03-31T15:24:02.912588+00:00 [NOTE] Find → Contact: object type selected so the mobile field is the Contact search field.
+2026-03-31T15:24:03.618707+00:00 [NOTE] Filled Mobile (title='Mobile Phone') and First Name (id='field_textbox_1' when present) as exact first name (no wildcard) in the same Contact Find frame and clicked Find.
+2026-03-31T15:24:04.116959+00:00 [NOTE] Contact Find: Search Results mobile hit visible — ending post–Find/Go bounded wait early (strategy 1).
+2026-03-31T15:24:04.147774+00:00 [NOTE] Contact Find (strategy 2): grid match after mobile-only query — skipping second Find with first name.
+2026-03-31T15:24:04.165953+00:00 [NOTE] DECISION: contact_table_match_mobile_first_after_find=True (informational; branch A/B uses drilldown row count).
+2026-03-31T15:24:09.219902+00:00 [NOTE] Video path: Contact Find drilldown row count N=2 (mobile-only basis for branch A/B).
+2026-03-31T15:24:19.805130+00:00 [NOTE] Find-Contact list snapshot (before Title/enquiry sweep): 2 row(s) with mobile and drilldown (same basis as title sweep ordinals); 1 with enquiry hint in list text; optional strict list row match for first name 'Shivnarayan': 2.
+2026-03-31T15:24:24.712906+00:00 [NOTE] Contact Find grid: 2 row(s) contain mobile 8279246146 with a drilldown link (sweep uses ordinal 0..1).
+2026-03-31T15:24:30.595996+00:00 [NOTE] Drilldown 1/2 for mobile 8279246146 (match index 0) — opening contact, then Contact_Enquiry for #jqgh_s_1_l_Enquiry_ / name=Enquiry_.
+2026-03-31T15:24:33.747527+00:00 [NOTE] Contact_Enquiry check (Title index 0): checked=True, rows=1, enquiry#='11870-02-SENQ-0326-1400'.
+2026-03-31T15:24:33.747586+00:00 [NOTE] Enquiry exists: Enquiry#='11870-02-SENQ-0326-1400'. Proceeding (Title index 0).
+2026-03-31T15:24:33.747618+00:00 [NOTE] Video path: drilldown_rows_N=2, contacts_with_open_enquiry=1 (Siebel rule: 0 or 1).
 
 --- vehicle_snapshot (video_enquiry_found_in_contact_enquiry) ---
 body_type='Open'
@@ -109,23 +111,24 @@ seating_capacity='2'
 variant='HSPLMIRSCFIRPB'
 vehicle_type='MOTORCYCLE WITH GEAR'
 year_of_mfg='2026'
-2026-03-31T14:58:30.675388+00:00 [FORM] siebel_step=v2_drill_and_nav | form=Search Results + Contacts detail | action=Siebel_Find_tab_optional_then_link_hit_then_click_first_name_then_fill_Relations_Name_only | care_of='S/O Phaguni' | first_name='Shivnarayan' | mobile_phone='8279246146'
-2026-03-31T14:58:30.675417+00:00 [NOTE] Skipped search-hit drilldown click (already opened by caller).
-2026-03-31T14:58:30.873478+00:00 [NOTE] Activated 'Find Contact' tab/link — switching context for Contacts / First Name.
-2026-03-31T14:58:36.331148+00:00 [NOTE] Address Line 1 filled from DB substring: 'gaon azdapura'
-2026-03-31T14:58:36.331260+00:00 [NOTE] Relation's Name filled; stopping on current field as requested.
-2026-03-31T14:58:36.343019+00:00 [NOTE] Scraped Contact ID='11870-01-SCON-0326-6471' from contact detail page.
+2026-03-31T15:24:33.747754+00:00 [FORM] siebel_step=v2_drill_and_nav | form=Search Results + Contacts detail | action=Siebel_Find_tab_optional_then_link_hit_then_click_first_name_then_fill_Relations_Name_only | care_of='S/O Phaguni' | first_name='Shivnarayan' | mobile_phone='8279246146'
+2026-03-31T15:24:33.747787+00:00 [NOTE] Skipped search-hit drilldown click (already opened by caller).
+2026-03-31T15:24:33.980927+00:00 [NOTE] Activated 'Find Contact' tab/link — switching context for Contacts / First Name.
+2026-03-31T15:24:36.961485+00:00 [NOTE] Opened customer: post–click bounded wait completed (1000 ms max, strategy 1).
+2026-03-31T15:24:39.443938+00:00 [NOTE] Address Line 1 filled from DB substring: 'gaon azdapura'
+2026-03-31T15:24:39.443990+00:00 [NOTE] Relation's Name filled; stopping on current field as requested.
+2026-03-31T15:24:39.448984+00:00 [NOTE] Scraped Contact ID='11870-01-SCON-0326-6471' from contact detail page.
 
 --- contact_scrape (after Relation's Name path) ---
 contact_id='11870-01-SCON-0326-6471'
 open_enquiry_number='11870-02-SENQ-0326-1400'
-2026-03-31T14:58:36.343184+00:00 [FORM] siebel_step=v3_add_customer_payment | form=Payments tab (current frame) | action=click_Payments_tab_then_click_plus_icon
-2026-03-31T14:58:36.343467+00:00 [NOTE] Payment amount rule: vehicle_type='MOTORCYCLE WITH GEAR', cubic_capacity='125', cc_num='125', transaction_amount='90000'.
-2026-03-31T14:58:36.961646+00:00 [NOTE] Payments tab click matched pattern='^Payments?$'.
-2026-03-31T14:58:37.783561+00:00 [NOTE] Payments: matched Payment Lines root from built-in Hero hint (fast path; full frame scan skipped).
-2026-03-31T14:58:37.797759+00:00 [NOTE] Payments: 1 Payment Lines root(s).
-2026-03-31T14:58:40.104522+00:00 [NOTE] Payments: Payment Lines list already has a row with populated Transaction# — skipping '+' and new-line entry (detected_via=ui_jqgri_ftable_row).
-2026-03-31T14:58:40.104573+00:00 [STEP] Stopped: temporary hard fail before Generate Booking / create_order (SIEBEL_DMS_HARD_FAIL_BEFORE_BOOKING_AND_ORDER).
-2026-03-31T14:58:40.104587+00:00 [NOTE] Siebel: SIEBEL_DMS_HARD_FAIL_BEFORE_BOOKING_AND_ORDER is True — skipping Generate Booking and create_order until disabled in siebel_dms_playwright.py (owner request only).
+2026-03-31T15:24:39.449040+00:00 [FORM] siebel_step=v3_add_customer_payment | form=Payments tab (current frame) | action=click_Payments_tab_then_click_plus_icon
+2026-03-31T15:24:39.449138+00:00 [NOTE] Payment amount rule: vehicle_type='MOTORCYCLE WITH GEAR', cubic_capacity='125', cc_num='125', transaction_amount='90000'.
+2026-03-31T15:24:39.879690+00:00 [NOTE] Payments tab click matched pattern='^Payments?$'.
+2026-03-31T15:24:40.719996+00:00 [NOTE] Payments: matched Payment Lines root from built-in Hero hint (fast path; full frame scan skipped).
+2026-03-31T15:24:40.740092+00:00 [NOTE] Payments: 1 Payment Lines root(s).
+2026-03-31T15:24:42.817947+00:00 [NOTE] Payments: Payment Lines list already has a row with populated Transaction# — skipping '+' and new-line entry (detected_via=ui_jqgri_ftable_row).
+2026-03-31T15:24:42.818038+00:00 [STEP] Stopped: temporary hard fail before Generate Booking / create_order (SIEBEL_DMS_HARD_FAIL_BEFORE_BOOKING_AND_ORDER).
+2026-03-31T15:24:42.818072+00:00 [NOTE] Siebel: SIEBEL_DMS_HARD_FAIL_BEFORE_BOOKING_AND_ORDER is True — skipping Generate Booking and create_order until disabled in siebel_dms_playwright.py (owner request only).
 
-2026-03-31T14:58:40.104617+00:00 [END] error=Siebel: temporary stop before Generate Booking / create_order (SIEBEL_DMS_HARD_FAIL_BEFORE_BOOKING_AND_ORDER).
+2026-03-31T15:24:42.818124+00:00 [END] error=Siebel: temporary stop before Generate Booking / create_order (SIEBEL_DMS_HARD_FAIL_BEFORE_BOOKING_AND_ORDER).
