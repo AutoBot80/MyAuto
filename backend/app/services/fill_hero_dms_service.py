@@ -1538,6 +1538,43 @@ def _run_fill_dms_real_siebel_playwright(
     )
 
 
+def warm_dms_browser_session(dms_base_url: str) -> dict:
+    """
+    Pre-open or attach to the DMS browser (same path as Create Invoice: CDP reuse, launch, login wait)
+    without running fill automation. Leaves the tab on the post-open screen so **Create Invoice** can
+    start closer to ready when the operator clicks it later.
+    """
+    out: dict = {"success": False, "error": None}
+    u = (dms_base_url or "").strip()
+    if not u:
+        out["error"] = "DMS_BASE_URL not set"
+        return out
+    if not dms_automation_is_real_siebel():
+        out["error"] = (
+            "DMS_MODE must be real, siebel, live, production, or hero "
+            "(warm-browser applies to Siebel / Hero Connect only)."
+        )
+        return out
+    try:
+        page, open_error = get_or_open_site_page(
+            u,
+            "DMS",
+            require_login_on_open=True,
+        )
+        if page is None:
+            out["error"] = open_error or "Could not open DMS browser"
+            return out
+        _install_playwright_js_dialog_handler(page)
+        out["success"] = True
+    except PlaywrightTimeout as e:
+        out["error"] = f"Timeout: {e!s}"
+        logger.warning("fill_dms_service: warm_dms_browser_session PlaywrightTimeout %s", e)
+    except Exception as e:
+        out["error"] = str(e)
+        logger.warning("fill_dms_service: warm_dms_browser_session %s", e)
+    return out
+
+
 def run_fill_dms_only(
     dms_base_url: str,
     subfolder: str,

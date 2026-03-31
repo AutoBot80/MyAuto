@@ -5,7 +5,7 @@ import { useUploadScans } from "../hooks/useUploadScans";
 import { UploadScansPanel } from "../components/UploadScansPanel";
 import { getExtractedDetails } from "../api/aiReaderQueue";
 import { submitInfo } from "../api/submitInfo";
-import { fillDmsOnly, fillInsuranceOnly, printForm20, isFillDmsAbortError } from "../api/fillDms";
+import { fillDmsOnly, fillInsuranceOnly, printForm20, isFillDmsAbortError, warmDmsBrowser } from "../api/fillDms";
 import { fetchCreateInvoiceEligibility } from "../api/addSales";
 import { insertRtoPayment } from "../api/rtoPaymentDetails";
 import { loadAddSalesForm, saveAddSalesForm, clearAddSalesForm } from "../utils/addSalesStorage";
@@ -288,6 +288,21 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError,
       extractedInsurance,
     });
   }, [mobile, savedTo, uploadedFiles, uploadStatus, dmsScrapedVehicle, hasSubmittedInfo, lastSubmittedCustomerId, lastSubmittedVehicleId, lastStagingId, extractedVehicle, extractedCustomer, extractedInsurance]);
+
+  // After upload path is known, pre-open DMS (reuse/CDP + login wait) so Create Invoice starts closer to ready.
+  useEffect(() => {
+    if (!savedTo) {
+      dmsWarmSubfolderRef.current = null;
+      return;
+    }
+    const url = (dmsUrl ?? "").trim();
+    if (!url || siteUrlsLoading || siteUrlsError) return;
+    if (dmsWarmSubfolderRef.current === savedTo) return;
+    dmsWarmSubfolderRef.current = savedTo;
+    void warmDmsBrowser({ dms_base_url: url }).catch(() => {
+      /* silent; Create Invoice will open DMS if warm failed or timed out */
+    });
+  }, [savedTo, dmsUrl, siteUrlsLoading, siteUrlsError]);
 
   // DMS and RTO sections populate only when user presses Fill Forms. No auto-fetch from file or DB.
 

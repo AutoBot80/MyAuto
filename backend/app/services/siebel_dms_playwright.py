@@ -10812,6 +10812,47 @@ def _siebel_prepare_vehicle_list_find_vin_engine(
     return bool(filled)
 
 
+def _wait_for_vehicle_find_applet_ready(
+    page: Page,
+    *,
+    content_frame_selector: str | None,
+    wait_ms: int = 4500,
+) -> bool:
+    """Wait until Vehicle List find applet controls are visible in any candidate root."""
+    _js = """() => {
+      const vis = (el) => {
+        if (!el) return false;
+        const st = window.getComputedStyle(el);
+        if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+        const r = el.getBoundingClientRect();
+        return r.width > 2 && r.height > 2;
+      };
+      const sels = [
+        "#findfieldsbox",
+        "#findfieldbox",
+        "[aria-label='Find ComboBox']",
+        "[title='Find ComboBox']",
+        "input[aria-label*='VIN' i]",
+        "input[aria-label*='Engine' i]",
+      ];
+      for (const s of sels) {
+        const el = document.querySelector(s);
+        if (vis(el)) return true;
+      }
+      return false;
+    }"""
+    deadline = time.monotonic() + max(0.2, wait_ms / 1000.0)
+    while time.monotonic() < deadline:
+        for root in _siebel_locator_search_roots(page, content_frame_selector):
+            try:
+                if bool(root.evaluate(_js)):
+                    return True
+            except Exception:
+                continue
+        _safe_page_wait(page, 140, log_label="wait_vehicle_find_applet_ready")
+    return False
+
+
 def _siebel_goto_vehicle_list_and_scrape(
     page: Page,
     vehicle_url: str,
@@ -10827,6 +10868,11 @@ def _siebel_goto_vehicle_list_and_scrape(
     """Navigate to Auto Vehicle List, run **only** Find→Vehicles ``*``VIN + ``*``Engine partial query, scrape row."""
     _goto(page, vehicle_url, "vehicle_list", nav_timeout_ms=nav_timeout_ms)
     _safe_page_wait(page, 1500, log_label="vehicle_list_open")
+    _wait_for_vehicle_find_applet_ready(
+        page,
+        content_frame_selector=content_frame_selector,
+        wait_ms=4500,
+    )
 
     fp = (frame_p or "").strip()
     ep = (engine_p or "").strip()
@@ -10854,10 +10900,34 @@ def _siebel_goto_vehicle_list_and_scrape(
             find_vehicles_vin_engine_ok=query_ok,
         )
     if not query_ok:
-        return {}, (
-            "Siebel: Find→Vehicles VIN/Engine query failed. Supply **frame_partial** and **engine_partial** "
-            "from DMS; set DMS_SIEBEL_CONTENT_FRAME_SELECTOR if the find applet is inside a specific iframe."
-        )
+        # One extra settle+retry here for runs where browser/app shell is still rendering.
+        if _wait_for_vehicle_find_applet_ready(
+            page,
+            content_frame_selector=content_frame_selector,
+            wait_ms=3200,
+        ):
+            query_ok = _siebel_prepare_vehicle_list_find_vin_engine(
+                page,
+                frame_p=fp,
+                engine_p=ep,
+                action_timeout_ms=action_timeout_ms,
+                content_frame_selector=content_frame_selector,
+                note=note,
+            )
+        if query_ok:
+            note("prepare_vehicle: Find→Vehicles query succeeded after applet-ready retry.")
+        else:
+            _hint = (
+                "find applet not ready/visible"
+                if not _wait_for_vehicle_find_applet_ready(
+                    page, content_frame_selector=content_frame_selector, wait_ms=900
+                )
+                else "query submit did not complete"
+            )
+            return {}, (
+                "Siebel: Find→Vehicles VIN/Engine query failed even with frame_partial/engine_partial present; "
+                f"likely {_hint}. If applet is in a nested iframe, set DMS_SIEBEL_CONTENT_FRAME_SELECTOR."
+            )
 
     try:
         _safe_page_wait(page, 2500, log_label="vehicle_search_settle")

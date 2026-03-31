@@ -91,7 +91,7 @@ My Auto.AI/
 | `routers/settings` | Exposes automation site base URLs from env (`GET /settings/site-urls`) for the client; DMS/Vahan/Insurance URLs are required in `backend/.env` with no in-code fallbacks. |
 | `routers/uploads` | Document upload; enqueue to ai_reader_queue. |
 | `routers/ai_reader_queue` | List, process, reprocess OCR queue items. |
-| `routers/fill_dms` | Fill DMS (Playwright), Vahan, Form 20 print. |
+| `routers/fill_dms` | Fill DMS (Playwright), optional **`POST /fill-dms/dms/warm-browser`** after Add Sales upload to pre-open DMS, Vahan, Form 20 print. |
 | `routers/bulk_loads` | Bulk hot-table dashboard APIs, retry prep, action-taken tracking, and folder browsing. |
 | `routers/submit_info` | Upsert customer, vehicle, sales, insurance; draft **`add_sales_staging`** row + **`staging_id`** in response. |
 | `routers/rto_payment_details` | List and insert RTO queue rows, start dealer-scoped oldest-7 batch processing, expose batch progress, and optionally update payment later. |

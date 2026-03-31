@@ -24,6 +24,7 @@ from app.services.fill_hero_dms_service import (
     run_fill_dms_only,
     run_fill_vahan_only,
     update_vehicle_master_from_dms as _update_vehicle_master_from_dms,
+    warm_dms_browser_session,
 )
 from app.services.fill_hero_insurance_service import (
     main_process,
@@ -268,6 +269,18 @@ class PrintForm20Response(BaseModel):
     error: str | None = None
 
 
+class WarmDmsBrowserRequest(BaseModel):
+    dms_base_url: str | None = Field(
+        default=None,
+        description="Absolute DMS base URL; defaults to DMS_BASE_URL from backend/.env",
+    )
+
+
+class WarmDmsBrowserResponse(BaseModel):
+    success: bool
+    error: str | None = None
+
+
 def _safe_subfolder_name(subfolder: str) -> str:
     """Safe directory name for ocr_output."""
     import re
@@ -377,6 +390,24 @@ def get_data_from_dms(subfolder: str, dealer_id: int | None = Query(None, descri
                 if val:
                     customer[out_key] = val
     return {"vehicle": vehicle, "customer": customer}
+
+
+@router.post("/dms/warm-browser", response_model=WarmDmsBrowserResponse)
+async def warm_dms_browser(req: WarmDmsBrowserRequest) -> WarmDmsBrowserResponse:
+    """
+    Open or attach to DMS (login wait only); no fill. Add Sales calls this after upload so the browser
+    is closer to **Create Invoice** when the operator clicks it.
+    """
+    base_url = (req.dms_base_url or DMS_BASE_URL or "").strip()
+    if not base_url:
+        raise HTTPException(status_code=400, detail="dms_base_url required (or set DMS_BASE_URL)")
+    base_url = _require_absolute_http_url(base_url, "dms_base_url")
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, lambda: warm_dms_browser_session(base_url))
+    return WarmDmsBrowserResponse(
+        success=bool(result.get("success")),
+        error=result.get("error"),
+    )
 
 
 @router.post("/dms", response_model=FillDmsResponse)
