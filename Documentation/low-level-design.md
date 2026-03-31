@@ -193,6 +193,56 @@ backend/app/
 
 - **Temporary navigation override (real Siebel `create_order`):** `backend/app/services/siebel_dms_playwright.py` currently contains a hardcoded comparison `mobile_number == "8952897358"` to force the alternate **Find → Vehicle Sales** navigation branch during tenant-specific debugging. When this condition matches, automation directly attempts to open `Order#` by double-click; otherwise it takes the `Sales Orders List:New (+)` path first, then opens `Order#`.
 
+#### 2.4d.1 Payment Lines root — trial identifiers (fast path, future)
+
+After a **trial** run where **`_gather_payment_line_toolbar_roots`** succeeds, capture the following so a later code change can **prefer** the same root (e.g. match `page.frames` before scanning all locators) and **fall back** to full gather if the hint misses. **Receipts query** (`s_2_1_1_0`) remains required when implementing add-line; this list is only for **which document** to use.
+
+| Field | Required | Purpose |
+|-------|----------|--------|
+| **`trial_run_id`** | Yes | Correlation: `Playwright_DMS.txt` `started_utc`, or upload subfolder `ocr_output/<dealer_id>/<subfolder>/`. |
+| **`dealer_id` / tenant** | Yes | Hint may be tenant-specific; store which Hero Connect tenant / dealer the capture came from. |
+| **`page_url_top`** | Yes | Last ~200 chars of **`page.url`** after **Payments** tab is active (same view as production). |
+| **`payment_lines_root_index`** | Yes | Index in the **sorted** root list returned by gather (0-based) that was used for Receipts / `+` / save. |
+| **`frame_url_tail`** | Yes | Last **120–200** characters of **`Frame.url`** for that root when `root` is a **`Frame`**. |
+| **`frame_name`** | If present | Playwright **`Frame.name`** (may be empty). |
+| **`iframe_element_title`** | Yes | From **`frame.frame_element()`** → **`getAttribute("title")`** (Siebel often sets **Payment Lines** here). |
+| **`match_reason`** | Yes | Which predicate matched: **`toolbar`** (`_siebel_root_has_payment_lines_toolbar`), **`iframe_title`** (`_frame_iframe_title_matches_payment_lines`), **`hhml_grid`** (`_siebel_frame_has_payment_lines_hhml_grid`), or **`frame_locator`** (if root was only from chained selector). |
+| **`ordered_frames_count`** | Yes | `len(_ordered_frames(page))` at gather time (context for load). |
+| **`content_frame_selector`** | Yes | Value of **`DMS_SIEBEL_CONTENT_FRAME_SELECTOR`** for that run (may be empty). |
+| **`receipts_field_name`** | Yes | Default **`s_2_1_1_0`**; record if tenant differs. |
+| **`playwright_version` / app commit** | Optional | Repro when behaviour changes after upgrade. |
+
+**Runtime capture:** On each successful **`_add_customer_payment`** gather (non-empty sorted roots) when **`execution_log_path`** is set, **`Playwright_DMS.txt`** receives an appended block **`--- payment_lines_root_hint (trial capture; LLD 2.4d.1) ---`** followed by JSON from **`_build_payment_lines_root_hint_dict`** (includes **`roots_sorted`** — one object per root with **`match_reason`**, **`frame_url_tail`**, **`iframe_element_title`**, etc.). **`trial_run_id`** matches the file header **`started_utc`**. **`dealer_id`** / **`log_subfolder`** come from **`dms_values.dealer_id`** and the log path parent folder name when present.
+
+**Suggested persisted shape (file or env):** JSON object **`payment_lines_root_hint`** with the fields above, plus **`schema_version`: 1**. Implementation options (later): env **`DMS_SIEBEL_PAYMENT_LINES_ROOT_HINT_JSON`**, or a path under `ocr_output/` / dealer config; **always** retain full **`_gather_payment_line_toolbar_roots`** when hint is absent or no frame matches.
+
+**Example (illustrative only):**
+
+```json
+{
+  "schema_version": 1,
+  "trial_run_id": "2026-03-31T13:34:30+00:00",
+  "dealer_id": "100001",
+  "log_subfolder": "8279246146_310326",
+  "page_url_top": "...SWEView=eAuto+Contact+Opportunity...",
+  "payment_lines_root_index_primary": 0,
+  "ordered_frames_count": 12,
+  "content_frame_selector": "",
+  "receipts_field_name": "s_2_1_1_0",
+  "playwright_package_version": "1.40.0",
+  "roots_sorted": [
+    {
+      "index": 0,
+      "match_reason": "hhml_grid",
+      "type": "Frame",
+      "frame_url_tail": "...SWEApplet=...Payment+Lines...",
+      "frame_name": "",
+      "iframe_element_title": "Payment Lines"
+    }
+  ]
+}
+```
+
 ### 2.5 Database Access
 
 - **Connection:** `get_connection()` in `db.py` using `DATABASE_URL`.
@@ -405,3 +455,5 @@ See **Documentation/Database DDL.md** for full table structures. Summary:
 | 6.83 | Mar 2026 | — | Payments robustness: make short **Payments tab** activation the primary step before root discovery; if save icon is not clickable after filling fields, use **Ctrl+S** fallback and keep strict post-save verification that **Transaction#** must be populated |
 | 6.84 | Mar 2026 | — | Payments save order update: after filling amount, use **Ctrl+S as primary save action**; only if keyboard save cannot be sent, attempt Save icon selectors as fallback; keep strict success gate that a populated **Transaction#** row must be detected post-save |
 | 6.85 | Mar 2026 | — | **`_siebel_diag_note`**: inline **`[utc=…]`** on selected **`note`** lines for correlation. Video SOP: extra **`Video SOP`** diagnostics from post–Relation's Name / Address Line 1 through Contact ID scrape, **`v3_add_customer_payment`**, and Generate Booking. **`_add_customer_payment`**: **`Payments`** diagnostics after tab activation, before/after **`_gather_payment_line_toolbar_roots`**, and per-root Receipts probe (**`s_2_1_1_0`**) steps — **`Playwright_DMS.txt`** still timestamps each line via **`_exec_log`**. |
+| 6.86 | Mar 2026 | — | **§2.4d.1** — **Payment Lines root trial identifiers** table + example JSON for a future fast path (prefer matching **`Frame`** by URL/title/`match_reason`; fallback full gather); **`_describe_payment_line_root`** / per-root **`note`** lines support capture. |
+| 6.87 | Mar 2026 | — | **`_build_payment_lines_root_hint_dict`** / **`_write_payment_lines_root_hint_to_log`**: append **`payment_lines_root_hint`** JSON to **`Playwright_DMS.txt`** after sorted gather; **`_add_customer_payment`** accepts **`log_fp`**, **`trial_run_id`**, **`dealer_id`**, **`log_subfolder`** from **`Playwright_Hero_DMS_fill`**. **`_match_reason_for_payment_root`**, **`roots_sorted`** array. |

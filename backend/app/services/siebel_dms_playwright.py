@@ -35,6 +35,7 @@ import json
 import re
 import time
 from collections.abc import Callable
+from typing import TextIO
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -6271,8 +6272,146 @@ def _payment_line_toolbar_roots_priority(root) -> tuple:
     return (2, 0)
 
 
+def _describe_payment_line_root(root) -> str:
+    """One-line description for operator logs (Frame vs FrameLocator / other)."""
+    try:
+        if isinstance(root, Frame):
+            u = (root.url or "")[-140:]
+            nm = (getattr(root, "name", None) or "")[:80]
+            tit = ""
+            try:
+                fe = root.frame_element()
+                tit = (fe.get_attribute("title") or "").strip()[:100]
+            except Exception:
+                pass
+            return f"Frame url_tail={u!r} name={nm!r} iframe_title={tit!r}"
+    except Exception:
+        pass
+    try:
+        return f"type={type(root).__name__!r}"
+    except Exception:
+        return "type=?"
+
+
+def _log_payment_line_roots_discovered(note: Callable[..., object], roots: list, *, label: str) -> None:
+    if not callable(note) or not roots:
+        return
+    try:
+        note(f"Payments: {label} — discovered {len(roots)} Payment Lines root(s) (detail per index).")
+        for i, r in enumerate(roots):
+            note(f"Payments: {label} root_index={i} {_describe_payment_line_root(r)}")
+    except Exception:
+        pass
+
+
+def _match_reason_for_payment_root(root) -> str:
+    """Which gather predicate matches this root (order aligned with **§2.4d.1**)."""
+    try:
+        if _siebel_root_has_payment_lines_toolbar(root):
+            return "toolbar"
+    except Exception:
+        pass
+    try:
+        if isinstance(root, Frame) and _frame_iframe_title_matches_payment_lines(root):
+            return "iframe_title"
+    except Exception:
+        pass
+    try:
+        if isinstance(root, Frame) and _siebel_frame_has_payment_lines_hhml_grid(root):
+            return "hhml_grid"
+    except Exception:
+        pass
+    return "unknown"
+
+
+def _payment_lines_root_hint_entry(root, idx: int) -> dict[str, object]:
+    entry: dict[str, object] = {
+        "index": idx,
+        "match_reason": _match_reason_for_payment_root(root),
+        "type": type(root).__name__,
+    }
+    if isinstance(root, Frame):
+        entry["frame_url_tail"] = (root.url or "")[-200:]
+        entry["frame_name"] = (getattr(root, "name", None) or "")[:120]
+        try:
+            fe = root.frame_element()
+            entry["iframe_element_title"] = (fe.get_attribute("title") or "").strip()[:200]
+        except Exception:
+            entry["iframe_element_title"] = ""
+    else:
+        entry["frame_url_tail"] = ""
+        entry["frame_name"] = ""
+        entry["iframe_element_title"] = ""
+    return entry
+
+
+def _build_payment_lines_root_hint_dict(
+    page: Page,
+    content_frame_selector: str | None,
+    payment_toolbar_roots: list,
+    *,
+    trial_run_id: str,
+    dealer_id: str | None,
+    log_subfolder: str | None,
+    receipts_field_name: str = "s_2_1_1_0",
+) -> dict[str, object]:
+    """Structured trial capture for **LLD §2.4d.1** (fast-path hint; full gather remains fallback)."""
+    _pw_ver = ""
+    try:
+        import importlib.metadata
+
+        _pw_ver = importlib.metadata.version("playwright")
+    except Exception:
+        pass
+    _top = ""
+    try:
+        _top = str(page.url or "").strip()[-200:]
+    except Exception:
+        pass
+    try:
+        _ofc = len(_ordered_frames(page))
+    except Exception:
+        _ofc = 0
+    roots_sorted = [_payment_lines_root_hint_entry(r, i) for i, r in enumerate(payment_toolbar_roots)]
+    return {
+        "schema_version": 1,
+        "trial_run_id": trial_run_id,
+        "dealer_id": (dealer_id or "").strip(),
+        "log_subfolder": (log_subfolder or "").strip(),
+        "page_url_top": _top,
+        "payment_lines_root_index_primary": 0,
+        "ordered_frames_count": _ofc,
+        "content_frame_selector": (content_frame_selector or "").strip(),
+        "receipts_field_name": receipts_field_name,
+        "playwright_package_version": _pw_ver,
+        "roots_sorted": roots_sorted,
+    }
+
+
+def _write_payment_lines_root_hint_to_log(log_fp: TextIO | None, payload: dict[str, object]) -> None:
+    if not log_fp:
+        return
+    try:
+        log_fp.write("\n--- payment_lines_root_hint (trial capture; LLD 2.4d.1) ---\n")
+        log_fp.write(json.dumps(payload, ensure_ascii=False, indent=2))
+        log_fp.write("\n")
+        log_fp.flush()
+    except OSError:
+        pass
+
+
+def _iter_frame_locator_roots_only(page: Page, content_frame_selector: str | None):
+    """Chained ``FrameLocator`` roots only (no ``Frame`` walk) — used after fast frame scan."""
+    yield from _iter_frame_locator_roots(page, content_frame_selector)
+
+
 def _gather_payment_line_toolbar_roots(page: Page, content_frame_selector: str | None) -> list:
-    """Frames / locators where **Payment Lines** lives: **List:New** toolbar, HHML grid, or iframe title."""
+    """Frames / locators where **Payment Lines** lives: **List:New** toolbar, HHML grid, or iframe title.
+
+    Scan real ``Frame`` objects first (``frame.evaluate`` is cheap). Only if none match do we probe
+    ``FrameLocator`` chains from ``DMS_SIEBEL_CONTENT_FRAME_SELECTOR`` / auto iframe selectors — those
+    can block on ``body`` resolution when run first.
+    """
     out: list = []
     seen: set[int] = set()
 
@@ -6283,12 +6422,6 @@ def _gather_payment_line_toolbar_roots(page: Page, content_frame_selector: str |
         seen.add(k)
         out.append(r)
 
-    for root in _siebel_locator_search_roots(page, content_frame_selector):
-        try:
-            if _siebel_root_has_payment_lines_toolbar(root):
-                _add(root)
-        except Exception:
-            continue
     for frame in _ordered_frames(page):
         try:
             if (
@@ -6299,6 +6432,15 @@ def _gather_payment_line_toolbar_roots(page: Page, content_frame_selector: str |
                 _add(frame)
         except Exception:
             continue
+
+    if not out:
+        for root in _iter_frame_locator_roots_only(page, content_frame_selector):
+            try:
+                if _siebel_root_has_payment_lines_toolbar(root):
+                    _add(root)
+            except Exception:
+                continue
+
     return out
 
 
@@ -6309,6 +6451,10 @@ def _add_customer_payment(
     content_frame_selector: str | None,
     note,
     vehicle_context: dict | None = None,
+    log_fp: TextIO | None = None,
+    trial_run_id: str | None = None,
+    dealer_id: str | None = None,
+    log_subfolder: str | None = None,
 ) -> bool:
     """
     Open **Payments**, locate the frame(s) where **Payment Lines List:New** (``+``) lives, then **in that
@@ -6381,6 +6527,25 @@ def _add_customer_payment(
         payment_toolbar_roots = _gather_payment_line_toolbar_roots(page, content_frame_selector)
 
     payment_toolbar_roots.sort(key=_payment_line_toolbar_roots_priority)
+    _log_payment_line_roots_discovered(
+        note, payment_toolbar_roots, label="gather_payment_line_toolbar_roots (sorted)"
+    )
+    if payment_toolbar_roots and log_fp:
+        _write_payment_lines_root_hint_to_log(
+            log_fp,
+            _build_payment_lines_root_hint_dict(
+                page,
+                content_frame_selector,
+                payment_toolbar_roots,
+                trial_run_id=(trial_run_id or "").strip() or datetime.now(timezone.utc).isoformat(),
+                dealer_id=dealer_id,
+                log_subfolder=log_subfolder,
+            ),
+        )
+        note(
+            "Payments: appended payment_lines_root_hint JSON block to Playwright_DMS.txt "
+            "(trial capture per LLD 2.4d.1)."
+        )
     _siebel_diag_note(
         note,
         f"Payments: Payment Lines roots ready (count={len(payment_toolbar_roots)}); will check grid / Receipts probe per root.",
@@ -6971,9 +7136,13 @@ def _add_customer_payment(
                 )
                 _safe_page_wait(page, 400, log_label="after_amount_before_save")
 
-                # Re-detect Payment Lines toolbar roots after row creation (same ``+`` frame context).
-                save_action_roots = _gather_payment_line_toolbar_roots(page, content_frame_selector)
-                note(f"Payment debug: save action roots count={len(save_action_roots)}.")
+                # Reuse the same Payment Lines roots as the initial gather (same ``+`` frame context);
+                # full re-gather is slow and can stall on FrameLocator resolution; fall back if needed.
+                save_action_roots = list(payment_toolbar_roots)
+                note(
+                    f"Payment debug: save action roots reuse initial gather (count={len(save_action_roots)}); "
+                    "full re-gather only if Save icon fallback must scan and misses."
+                )
 
                 # Primary save: Ctrl+S. Save icon click remains fallback.
                 save_clicked = False
@@ -14457,13 +14626,15 @@ def Playwright_Hero_DMS_fill(
     aadhar_uin = (dms_values.get("aadhar_id") or "").strip()
     dms_path = (dms_values.get("dms_contact_path") or "found").strip().lower()
 
+    run_started_utc = datetime.now(timezone.utc).isoformat()
     log_fp = None
+    _exec_log_path = Path(execution_log_path) if execution_log_path is not None else None
     if execution_log_path is not None:
         lp = Path(execution_log_path)
         lp.parent.mkdir(parents=True, exist_ok=True)
         log_fp = open(lp, "w", encoding="utf-8")
         log_fp.write("Playwright DMS — execution log (this run only; UTC timestamps)\n\n")
-        log_fp.write(f"started_utc={datetime.now(timezone.utc).isoformat()}\n")
+        log_fp.write(f"started_utc={run_started_utc}\n")
         log_fp.write(f"skip_contact_find={skip_contact_find}\n")
         log_fp.write(f"dms_contact_path={dms_path!r}\n")
         log_fp.write(f"mobile_phone={mobile!r}\n")
@@ -15017,6 +15188,16 @@ def Playwright_Hero_DMS_fill(
                 content_frame_selector=content_frame_selector,
                 note=note,
                 vehicle_context=(out.get("vehicle") or {}),
+                log_fp=log_fp,
+                trial_run_id=run_started_utc,
+                dealer_id=(
+                    str(dms_values.get("dealer_id")).strip()
+                    if dms_values.get("dealer_id") is not None
+                    else None
+                ),
+                log_subfolder=(
+                    _exec_log_path.parent.name if _exec_log_path is not None else None
+                ),
             ):
                 step("Stopped: could not open Payments tab or click '+' icon.")
                 out["error"] = (
