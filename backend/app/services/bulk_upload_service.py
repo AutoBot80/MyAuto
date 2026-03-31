@@ -203,21 +203,26 @@ def process_bulk_pdf(
         customer_id = submit_result.get("customer_id")
         vehicle_id = submit_result.get("vehicle_id")
 
-        # 4. Fill DMS (headless)
+        # 4. Fill DMS — same Playwright thread as POST /fill-dms (sync driver is not thread-safe).
         from app.services.fill_hero_dms_service import run_fill_dms
-        dms_result = run_fill_dms(
-            dms_base_url=DMS_BASE_URL,
-            subfolder=subfolder,
-            customer={"name": customer.get("name"), "address": customer.get("address"), "city": customer.get("city"), "state": customer.get("state"), "pin_code": customer.get("pin_code") or customer.get("pin"), "mobile_number": mobile_val},
-            vehicle={"key_no": vehicle.get("key_num") or vehicle.get("key_no"), "frame_no": vehicle.get("chassis") or vehicle.get("frame_num"), "engine_no": vehicle.get("engine_num") or vehicle.get("engine_no")},
-            login_user=DMS_LOGIN_USER or "demo",
-            login_password=DMS_LOGIN_PASSWORD or "demo",
-            uploads_dir=Path(get_uploads_dir(dealer_id)),
-            ocr_output_dir=Path(get_ocr_output_dir(dealer_id)),
-            vahan_base_url=None,
-            dealer_id=dealer_id,
-            headless=False,
-        )
+        from app.services.playwright_executor import run_playwright_callable_sync
+
+        def _bulk_run_fill_dms():
+            return run_fill_dms(
+                dms_base_url=DMS_BASE_URL,
+                subfolder=subfolder,
+                customer={"name": customer.get("name"), "address": customer.get("address"), "city": customer.get("city"), "state": customer.get("state"), "pin_code": customer.get("pin_code") or customer.get("pin"), "mobile_number": mobile_val},
+                vehicle={"key_no": vehicle.get("key_num") or vehicle.get("key_no"), "frame_no": vehicle.get("chassis") or vehicle.get("frame_num"), "engine_no": vehicle.get("engine_num") or vehicle.get("engine_no")},
+                login_user=DMS_LOGIN_USER or "demo",
+                login_password=DMS_LOGIN_PASSWORD or "demo",
+                uploads_dir=Path(get_uploads_dir(dealer_id)),
+                ocr_output_dir=Path(get_ocr_output_dir(dealer_id)),
+                vahan_base_url=None,
+                dealer_id=dealer_id,
+                headless=False,
+            )
+
+        dms_result = run_playwright_callable_sync(_bulk_run_fill_dms)
         if dms_result.get("vehicle") and vehicle_id:
             from app.services.fill_hero_dms_service import update_vehicle_master_from_dms
             try:

@@ -41,10 +41,11 @@ def _get_playwright():
     """
     Lazily start Playwright **Sync** driver on the **current** thread.
 
-    Callers must run browser automation from a **worker** thread (not the FastAPI/Uvicorn asyncio
-    loop thread), e.g. ``await loop.run_in_executor(_PLAYWRIGHT_POOL, ...)`` — see
-    ``fill_dms`` router. ``playwright.sync_api`` itself errors if ``sync_playwright().start()``
-    runs while ``asyncio.get_running_loop().is_running()`` on the same thread.
+    Callers must run browser automation from the **single** Playwright worker thread:
+    ``await asyncio.get_running_loop().run_in_executor(get_playwright_executor(), ...)`` or
+    ``run_playwright_callable_sync(fn)`` (see ``app.services.playwright_executor``).
+    Using a different thread makes ``sync_playwright().start()`` fail (often reported as
+    "Sync API inside the asyncio loop").
     Siebel (~14k LOC) remains sync ``Page`` APIs; a full ``async_api`` migration would be separate.
     """
     global _PW, _PW_THREAD_ID

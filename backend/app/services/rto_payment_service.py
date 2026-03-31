@@ -15,6 +15,7 @@ from app.config import UPLOADS_DIR, get_ocr_output_dir
 from app.db import get_connection
 from app.repositories import rto_payment_details as repo
 from app.services.fill_hero_dms_service import run_fill_vahan_batch_row
+from app.services.playwright_executor import run_playwright_callable_sync
 
 logger = logging.getLogger(__name__)
 _BATCH_LOCK = threading.Lock()
@@ -219,14 +220,18 @@ def _run_dealer_rto_batch(
                 )
                 try:
                     repo.mark_batch_row_in_progress(current_queue_id or "", session_id, worker_id)
-                    batch_result = run_fill_vahan_batch_row(
-                        context,
-                        vahan_base_url=vahan_base_url,
-                        customer_id=int(row["customer_id"]),
-                        vehicle_id=int(row["vehicle_id"]),
-                        subfolder=row.get("subfolder"),
-                        ocr_output_dir=Path(ocr_output_dir),
-                    )
+
+                    def _batch_vahan_row():
+                        return run_fill_vahan_batch_row(
+                            context,
+                            vahan_base_url=vahan_base_url,
+                            customer_id=int(row["customer_id"]),
+                            vehicle_id=int(row["vehicle_id"]),
+                            subfolder=row.get("subfolder"),
+                            ocr_output_dir=Path(ocr_output_dir),
+                        )
+
+                    batch_result = run_playwright_callable_sync(_batch_vahan_row)
                     vahan_application_id = (batch_result.get("application_id") or "").strip() or None
                     added_to_cart = bool(batch_result.get("added_to_cart"))
                     if not added_to_cart:

@@ -1,11 +1,9 @@
 """POST /fill-dms: run Playwright to fill DMS, scrape vehicle row, download Form 21 & 22 into upload subfolder."""
-import atexit
 import asyncio
 import json
 import logging
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from functools import partial
 from pathlib import Path
@@ -37,27 +35,15 @@ from app.services.fill_hero_insurance_service import (
     pre_process,
     run_fill_insurance_only,
 )
+from app.services.playwright_executor import get_playwright_executor
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/fill-dms", tags=["fill-dms"])
 
-# Dedicated pool for sync Playwright (avoid asyncio.to_thread's contextvars propagation quirks with drivers).
-_PLAYWRIGHT_EXECUTOR = ThreadPoolExecutor(max_workers=8, thread_name_prefix="pw_automation_")
-
-
-def _shutdown_playwright_executor() -> None:
-    try:
-        _PLAYWRIGHT_EXECUTOR.shutdown(wait=False, cancel_futures=True)
-    except TypeError:
-        _PLAYWRIGHT_EXECUTOR.shutdown(wait=False)
-
-
-atexit.register(_shutdown_playwright_executor)
-
 
 async def _run_playwright_work(call):
     """Run sync Playwright-backed work off the Uvicorn asyncio thread."""
-    return await asyncio.get_running_loop().run_in_executor(_PLAYWRIGHT_EXECUTOR, call)
+    return await asyncio.get_running_loop().run_in_executor(get_playwright_executor(), call)
 
 DMS_NO_VEHICLE_ERROR = (
     "No such vehicle found in DMS. Please edit Vehicle Info and submit form again."
