@@ -1,9 +1,11 @@
 """POST /fill-dms: run Playwright to fill DMS, scrape vehicle row, download Form 21 & 22 into upload subfolder."""
+import atexit
 import asyncio
 import json
 import logging
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from functools import partial
 from pathlib import Path
@@ -38,6 +40,24 @@ from app.services.fill_hero_insurance_service import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/fill-dms", tags=["fill-dms"])
+
+# Dedicated pool for sync Playwright (avoid asyncio.to_thread's contextvars propagation quirks with drivers).
+_PLAYWRIGHT_EXECUTOR = ThreadPoolExecutor(max_workers=8, thread_name_prefix="pw_automation_")
+
+
+def _shutdown_playwright_executor() -> None:
+    try:
+        _PLAYWRIGHT_EXECUTOR.shutdown(wait=False, cancel_futures=True)
+    except TypeError:
+        _PLAYWRIGHT_EXECUTOR.shutdown(wait=False)
+
+
+atexit.register(_shutdown_playwright_executor)
+
+
+async def _run_playwright_work(call):
+    """Run sync Playwright-backed work off the Uvicorn asyncio thread."""
+    return await asyncio.get_running_loop().run_in_executor(_PLAYWRIGHT_EXECUTOR, call)
 
 DMS_NO_VEHICLE_ERROR = (
     "No such vehicle found in DMS. Please edit Vehicle Info and submit form again."
@@ -427,8 +447,7 @@ async def warm_dms_browser(req: WarmDmsBrowserRequest) -> WarmDmsBrowserResponse
     if not base_url:
         raise HTTPException(status_code=400, detail="dms_base_url required (or set DMS_BASE_URL)")
     base_url = _require_absolute_http_url(base_url, "dms_base_url")
-    # Playwright Sync API must run off the asyncio loop thread (see handle_browser_opening._get_playwright).
-    result = await asyncio.to_thread(warm_dms_browser_session, base_url)
+    result = await _run_playwright_work(partial(warm_dms_browser_session, base_url))
     return WarmDmsBrowserResponse(
         success=bool(result.get("success")),
         error=result.get("error"),
@@ -475,7 +494,7 @@ async def fill_dms_only(req: FillDmsRequest) -> FillDmsResponse:
     )
     sid_for_commit = (req.staging_id or "").strip() or None
     exec_started = time.monotonic()
-    result = await asyncio.to_thread(
+    result = await _run_playwright_work(
         partial(
             run_fill_dms_only,
             dms_base_url=base_url,
@@ -625,7 +644,7 @@ async def fill_vahan_only(req: FillVahanRequest) -> FillVahanResponse:
         raise HTTPException(status_code=400, detail="vahan_base_url required")
     vahan_url = _require_absolute_http_url(vahan_url, "vahan_base_url")
     did = req.dealer_id if req.dealer_id is not None else DEALER_ID
-    result = await asyncio.to_thread(
+    result = await _run_playwright_work(
         partial(
             run_fill_vahan_only,
             vahan_base_url=vahan_url,
@@ -700,7 +719,7 @@ async def fill_hero_insurance(req: FillHeroInsuranceRequest = FillHeroInsuranceR
         )
         return post_process(pre_result=pre, main_result=main)
 
-    result = await asyncio.to_thread(_hero_insurance_run)
+    result = await _run_playwright_work(_hero_insurance_run)
     return FillHeroInsuranceResponse(
         success=bool(result.get("success")),
         error=result.get("error"),
@@ -735,7 +754,7 @@ async def fill_insurance_only(req: FillInsuranceRequest) -> FillInsuranceRespons
                 detail="Staging not found, abandoned, or dealer_id does not match.",
             )
 
-    result = await asyncio.to_thread(
+    result = await _run_playwright_work(
         partial(
             run_fill_insurance_only,
             insurance_base_url=insurance_url,
@@ -783,7 +802,7 @@ async def fill_dms(req: FillDmsRequest) -> FillDmsResponse:
         vehicle_dict,
     )
     sid_for_commit = (req.staging_id or "").strip() or None
-    result = await asyncio.to_thread(
+    result = await _run_playwright_work(
         partial(
             run_fill_dms,
             dms_base_url=base_url,

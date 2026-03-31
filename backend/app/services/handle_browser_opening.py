@@ -6,7 +6,6 @@ Used by Fill DMS, Vahan, and Insurance — independent of Siebel/DMS business lo
 """
 from __future__ import annotations
 
-import asyncio
 import atexit
 import logging
 import os
@@ -42,11 +41,11 @@ def _get_playwright():
     """
     Lazily start Playwright **Sync** driver on the **current** thread.
 
-    Playwright forbids ``sync_playwright().start()`` on a thread where ``asyncio`` already has a
-    **running** event loop (see ``playwright.sync_api.PlaywrightContextManager``). FastAPI handlers
-    must therefore run all automation that touches this module via ``await asyncio.to_thread(...)``
-    (or ``run_in_executor``), never call sync Playwright directly from an ``async def`` body.
-    Migrating ``siebel_dms_playwright.py`` (~14k LOC) to ``playwright.async_api`` would be a separate project.
+    Callers must run browser automation from a **worker** thread (not the FastAPI/Uvicorn asyncio
+    loop thread), e.g. ``await loop.run_in_executor(_PLAYWRIGHT_POOL, ...)`` — see
+    ``fill_dms`` router. ``playwright.sync_api`` itself errors if ``sync_playwright().start()``
+    runs while ``asyncio.get_running_loop().is_running()`` on the same thread.
+    Siebel (~14k LOC) remains sync ``Page`` APIs; a full ``async_api`` migration would be separate.
     """
     global _PW, _PW_THREAD_ID
     current_thread_id = threading.get_ident()
@@ -55,16 +54,6 @@ def _get_playwright():
         _PW = None
         _PW_THREAD_ID = None
     if _PW is None:
-        try:
-            _loop = asyncio.get_running_loop()
-        except RuntimeError:
-            _loop = None
-        if _loop is not None and _loop.is_running():
-            raise RuntimeError(
-                "Playwright Sync API cannot start on the asyncio event-loop thread. "
-                "Schedule DMS/Vahan/Insurance browser work with await asyncio.to_thread(...) "
-                "from async route handlers (see fill_dms router)."
-            )
         _PW = sync_playwright().start()
         _PW_THREAD_ID = current_thread_id
     return _PW
