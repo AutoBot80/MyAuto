@@ -11786,10 +11786,50 @@ def _siebel_click_by_name_anywhere(
     return False
 
 
+def _siebel_vehicle_features_hhml_applet_visible(page: Page) -> bool:
+    """
+    True when **Features and Image** HHML value cells are already in the DOM and visible (typical row ids
+    ``4_s_1_l_*`` / ``5_s_1_l_*``). Siebel may land on this applet after Serial drilldown without a tab
+    role that Playwright recognizes; use this to skip redundant VIN/grid clicks and to scrape without
+    re-clicking the tab.
+    """
+    _js = """() => {
+      const vis = (el) => {
+        if (!el) return false;
+        const st = window.getComputedStyle(el);
+        if (st.display === 'none' || st.visibility === 'hidden') return false;
+        const r = el.getBoundingClientRect();
+        return r.width > 2 && r.height > 2;
+      };
+      for (const id of [
+        '4_s_1_l_HHML_Feature_Value', '5_s_1_l_HHML_Feature_Value',
+        '4_s_1_l_HHML_Fetaure_Value', '5_s_1_l_HHML_Fetaure_Value'
+      ]) {
+        const el = document.getElementById(id);
+        if (el && vis(el)) return true;
+      }
+      const any = document.querySelector('[id*="HHML_Feature_Value"],[id*="HHML_Fetaure_Value"]');
+      return !!(any && vis(any));
+    }"""
+    for fr in list(_ordered_frames(page)) + [page.main_frame]:
+        try:
+            if bool(fr.evaluate(_js)):
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def _siebel_try_click_features_and_image_tab(
     page: Page, *, action_timeout_ms: int, note
 ) -> bool:
     """Open **Features and Image** (or closest tab label) on vehicle serial drill-in view."""
+    if _siebel_vehicle_features_hhml_applet_visible(page):
+        note(
+            "prepare_vehicle: Features and Image already active (HHML Feature fields visible) — "
+            "skipping tab click."
+        )
+        return True
     hints = ("Features and Image", "Features & Image", "Features")
     patts = [re.compile(re.escape(h), re.I) for h in hints]
     search_roots = list(_ordered_frames(page))
@@ -12004,28 +12044,39 @@ def _prepare_vehicle_scrape_serial_precheck_pdi_and_features(
 
     Returns ``None`` on success; on failure returns an error string.
     """
-    _drill_err = _prepare_vehicle_open_serial_detail_from_vehicle_grid(
-        page,
-        scraped,
-        action_timeout_ms=action_timeout_ms,
-        content_frame_selector=content_frame_selector,
-        note=note,
-    )
-    if _drill_err:
-        return _drill_err
+    if _siebel_vehicle_features_hhml_applet_visible(page):
+        note(
+            "prepare_vehicle: HHML Features applet already visible — skipping top-grid VIN / "
+            "Serial Number drilldown (avoid redundant clicks after navigation)."
+        )
+    else:
+        _drill_err = _prepare_vehicle_open_serial_detail_from_vehicle_grid(
+            page,
+            scraped,
+            action_timeout_ms=action_timeout_ms,
+            content_frame_selector=content_frame_selector,
+            note=note,
+        )
+        if _drill_err:
+            return _drill_err
 
     # **Features and Image** — HHML applet (authoritative cubic / vehicle type vs list grid).
-    if not _siebel_try_click_features_and_image_tab(
+    _tab_clicked = _siebel_try_click_features_and_image_tab(
         page, action_timeout_ms=action_timeout_ms, note=note
-    ):
-        note("prepare_vehicle: Features and Image tab not found after serial drilldown (best-effort).")
-    else:
+    )
+    if not _tab_clicked and not _siebel_vehicle_features_hhml_applet_visible(page):
+        note(
+            "prepare_vehicle: Features and Image tab not found and HHML fields not visible yet "
+            "(best-effort)."
+        )
+    if _tab_clicked:
         _safe_page_wait(page, 1000, log_label="after_features_tab")
         try:
             page.wait_for_load_state("networkidle", timeout=8_000)
         except Exception:
             pass
 
+    if _siebel_vehicle_features_hhml_applet_visible(page):
         cc, vt = _siebel_scrape_features_cubic_and_vehicle_type(page)
         if cc:
             scraped["cubic_capacity"] = _normalize_cubic_cc_digits(cc) or str(cc).strip()
@@ -12041,6 +12092,11 @@ def _prepare_vehicle_scrape_serial_precheck_pdi_and_features(
                 cubic_capacity=str(scraped.get("cubic_capacity") or cc or ""),
                 vehicle_type=str(vt or ""),
             )
+    else:
+        note(
+            "prepare_vehicle: HHML Feature values not visible after drill/tab — "
+            "cubic_capacity / vehicle_type scrape skipped (best-effort)."
+        )
 
     note("prepare_vehicle: Pre-check + PDI (serial detail view).")
     _serial_pc_ok, _serial_pc_err = _siebel_run_vehicle_serial_detail_precheck_pdi(

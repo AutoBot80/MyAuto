@@ -495,3 +495,4 @@ This document lists the current database tables and their columns. **Executable 
 | 2.13 | Mar 2026 | **No schema change.** Siebel **`prepare_vehicle`** navigation order (left Search Results drill-in, key/battery, inventory gate, Serial/Features/Pre-check/PDI) is automation-only — see **LLD** **6.72**, **BRD** **3.28** |
 | 2.14 | Mar 2026 | **No schema change.** Siebel left-pane VIN jqGrid click hardening (**`gview_s_1001_l`** / **`ui-jqgrid-view`**) — **LLD** **6.73** |
 | 2.15 | Mar 2026 | **No schema change.** Siebel single-hit **Title** VIN drilldown fallback when full chassis not yet in scrape — **LLD** **6.74** |
+| 2.16 | Mar 2026 | **No schema change.** Siebel **Features** HHML visibility guard (skip redundant VIN/Serial grid drill) — **LLD** **6.75** |
