@@ -11286,8 +11286,8 @@ def _siebel_click_by_name_anywhere(
 ) -> bool:
     """Click ``a``/``button``/generic element with HTML ``name`` (e.g. Serial Number drilldown).
 
-    Hero **Auto Vehicle** detail often puts the VIN / serial drill-in inside jqGrid
-    ``div#gview_s_1_l`` — try those selectors first, then fall back to document-wide search.
+    Hero **Auto Vehicle** detail puts VIN / serial drill-ins in the jqGrid **table** ``#s_1_l`` and/or
+    the grid chrome ``div#gview_s_1_l`` — try those scopes first, then fall back to document-wide search.
 
     ``visible_text_fallback`` (e.g. full chassis): Siebel often shows the VIN as ``outerText`` while
     keeping ``name="Serial Number"``; the accessible name may match the chassis rather than the label,
@@ -11329,14 +11329,17 @@ def _siebel_click_by_name_anywhere(
         return False
 
     roots = list(_siebel_locator_roots_for_vehicle_prep(page, content_frame_selector))
-    # 1) jqGrid view container (operator: drilldown with name=Serial Number in ``#gview_s_1_l``).
-    gview_prefixes = (
+    # 1) jqGrid table + view chrome (drilldown anchors live under ``table#s_1_l`` in Open UI).
+    grid_scopes = (
+        "#s_1_l",
+        "table#s_1_l",
+        "[id='s_1_l']",
         "#gview_s_1_l",
         "[id='gview_s_1_l']",
         "div#gview_s_1_l",
     )
     for root in roots:
-        for gpre in gview_prefixes:
+        for gpre in grid_scopes:
             for css in (
                 f"{gpre} a[name='{nv_esc}']",
                 f"{gpre} button[name='{nv_esc}']",
@@ -11378,40 +11381,86 @@ def _siebel_click_by_name_anywhere(
     if vtf:
         chassis_sub = re.compile(re.escape(vtf), re.I)
         chassis_exact = re.compile(rf"^\s*{re.escape(vtf)}\s*$", re.I)
+        _in_tbl = ("#s_1_l", "table#s_1_l")
         for root in roots:
-            for css in (
-                f'a[name="{name_val}"]',
-                f'button[name="{name_val}"]',
-                f'[name="{name_val}"]',
-            ):
+            for tbl_scope in (*_in_tbl, None):
+                base = root.locator(tbl_scope) if tbl_scope else root
+                _scope_note = (
+                    " in #s_1_l" if tbl_scope in _in_tbl else ""
+                )
+                for css in (
+                    f'a[name="{name_val}"]',
+                    f'button[name="{name_val}"]',
+                    f'[name="{name_val}"]',
+                ):
+                    try:
+                        loc = base.locator(css).filter(has_text=chassis_sub).first
+                        if _try_click_loc(
+                            loc,
+                            where=f"name+chassis visible text{_scope_note or ' (global)'}",
+                        ):
+                            return True
+                    except Exception:
+                        continue
                 try:
-                    loc = root.locator(css).filter(has_text=chassis_sub).first
-                    if _try_click_loc(loc, where="name+chassis visible text"):
+                    ln_e = base.get_by_role("link", name=chassis_exact)
+                    if ln_e.count() > 0 and _try_click_loc(
+                        ln_e.first,
+                        where=f"role=link exact chassis (a11y name){_scope_note}",
+                    ):
                         return True
                 except Exception:
-                    continue
-            try:
-                ln_e = root.get_by_role("link", name=chassis_exact)
-                if ln_e.count() > 0 and _try_click_loc(
-                    ln_e.first, where="role=link exact chassis (a11y name)"
-                ):
-                    return True
-            except Exception:
-                pass
-            try:
-                ln_s = root.get_by_role("link", name=chassis_sub)
-                if ln_s.count() > 0 and _try_click_loc(
-                    ln_s.first, where="role=link chassis substring"
-                ):
-                    return True
-            except Exception:
-                pass
-            try:
-                bt = root.get_by_role("button", name=chassis_sub)
-                if bt.count() > 0 and _try_click_loc(bt.first, where="role=button chassis"):
-                    return True
-            except Exception:
-                pass
+                    pass
+                try:
+                    ln_s = base.get_by_role("link", name=chassis_sub)
+                    if ln_s.count() > 0 and _try_click_loc(
+                        ln_s.first,
+                        where=f"role=link chassis substring{_scope_note}",
+                    ):
+                        return True
+                except Exception:
+                    pass
+                try:
+                    bt = base.get_by_role("button", name=chassis_sub)
+                    if bt.count() > 0 and _try_click_loc(
+                        bt.first,
+                        where=f"role=button chassis{_scope_note}",
+                    ):
+                        return True
+                except Exception:
+                    pass
+    # 4) DOM click for Siebel drilldowns that exist but fail visibility / Playwright hit-testing.
+    for fr in list(_ordered_frames(page)) + [page.main_frame]:
+        try:
+            clicked = fr.evaluate(
+                """(name) => {
+                  const want = String(name);
+                  const tryClick = (root) => {
+                    const nodes = root.querySelectorAll('[name]');
+                    for (const el of nodes) {
+                      if ((el.getAttribute('name') || '') !== want) continue;
+                      const st = window.getComputedStyle(el);
+                      if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity) === 0) continue;
+                      const r = el.getBoundingClientRect();
+                      if (r.width < 2 && r.height < 2) continue;
+                      try { el.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) {}
+                      try { el.click(); return true; } catch (e) {}
+                    }
+                    return false;
+                  };
+                  const tbl = document.getElementById('s_1_l');
+                  if (tbl && tryClick(tbl)) return true;
+                  return tryClick(document);
+                }""",
+                name_val,
+            )
+            if clicked:
+                note(
+                    f"prepare_vehicle: clicked {log_label!r} (name={name_val!r}, JS querySelector+click in frame)."
+                )
+                return True
+        except Exception:
+            continue
     return False
 
 
@@ -11546,6 +11595,31 @@ def _prepare_vehicle_scrape_serial_precheck_pdi_and_features(
     _chassis_fb = (
         str(scraped.get("full_chassis") or scraped.get("frame_num") or "").strip()
     )
+    # Same sequence as ``_attach_vehicle_to_bkg``: grid **VIN** drilldown (name=VIN) exposes the Vehicles /
+    # serial row; dealer **Auto Vehicle** detail often requires this before **Serial Number** is present.
+    _vin_clicked = _siebel_click_by_name_anywhere(
+        page,
+        "VIN",
+        timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+        note=note,
+        log_label="VIN drilldown (Vehicles grid)",
+        visible_text_fallback=_chassis_fb or None,
+    )
+    if _vin_clicked:
+        try:
+            _safe_page_wait(page, 1200, log_label="after_prepare_vehicle_vin_drilldown")
+            page.wait_for_load_state("networkidle", timeout=10_000)
+        except PlaywrightTimeout:
+            note("prepare_vehicle: networkidle after VIN drilldown timed out; continuing.")
+        except Exception:
+            pass
+    else:
+        note(
+            "prepare_vehicle: VIN drilldown (name='VIN') not found — continuing to Serial Number "
+            "(Vehicles tab may already be active)."
+        )
+
     if not _siebel_click_by_name_anywhere(
         page,
         "Serial Number",
