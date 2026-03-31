@@ -524,3 +524,4 @@ This document lists the current database tables and their columns. **Executable 
 | 2.42 | Mar 2026 | **No schema change.** Built-in Siebel Contact Find / Contact_Enquiry frame hints — **LLD** **6.101**. |
 | 2.43 | Mar 2026 | **No schema change.** Video path drilldown plan cache — **LLD** **6.102**. |
 | 2.44 | Mar 2026 | **No schema change.** Contact Find drilldown direct frame resolution — **LLD** **6.103**. |
+| 2.45 | Mar 2026 | **No schema change.** Removed **`[TRACE:FC→FN]`** / trial hint **`note`** diagnostics from Siebel automation logging — **LLD** **6.104**. |

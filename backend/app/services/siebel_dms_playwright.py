@@ -51,26 +51,6 @@ from app.config import (
 logger = logging.getLogger(__name__)
 
 
-def _note_trace_fc_to_fn(
-    note: Callable[..., object],
-    step_id: str,
-    detail: str,
-    *,
-    t0_perf: float | None,
-) -> None:
-    """
-    Playwright_DMS.txt trace: Contact Find (stage 1) end → first-name drilldown for relation/care-of.
-    ``t0_perf`` is :func:`time.perf_counter` taken when stage-1 Find completed (strategy two done);
-    logs **+N ms** from that anchor when set.
-    """
-    utc = datetime.now(timezone.utc).isoformat()
-    if t0_perf is None:
-        note(f"[TRACE:FC→FN:{step_id}] utc={utc} {detail}")
-    else:
-        ms = int((time.perf_counter() - t0_perf) * 1000)
-        note(f"[TRACE:FC→FN:{step_id}] utc={utc} +{ms}ms_since_stage1_find_end {detail}")
-
-
 def _hero_default_payment_lines_root_hint() -> dict[str, object]:
     """
     Built-in fast-path hint for Hero Connect **Contact → Payments** (Payment Lines applet).
@@ -2873,12 +2853,6 @@ def _contact_view_find_by_mobile_strategy_two(
     """
     fn = (first_name or "").strip()
     if not fn:
-        _note_trace_fc_to_fn(
-            note,
-            "ST2a",
-            "strategy 2: empty first name — single mobile-only Find",
-            t0_perf=None,
-        )
         return _contact_view_find_by_mobile(
             page,
             contact_url=contact_url,
@@ -2894,12 +2868,6 @@ def _contact_view_find_by_mobile_strategy_two(
             wait_after_go_ms=wait_after_go_ms,
         )
 
-    _note_trace_fc_to_fn(
-        note,
-        "ST2b",
-        "strategy 2: starting mobile-only Find (first pass)",
-        t0_perf=None,
-    )
     ok_m = _contact_view_find_by_mobile(
         page,
         contact_url=contact_url,
@@ -2916,24 +2884,12 @@ def _contact_view_find_by_mobile_strategy_two(
     )
     if not ok_m:
         return False
-    _note_trace_fc_to_fn(
-        note,
-        "ST2c",
-        "strategy 2: mobile-only Find/Go finished; evaluating grid match",
-        t0_perf=None,
-    )
     if _siebel_ui_suggests_contact_match_mobile_first(page, mobile, fn):
         note(
             "Contact Find (strategy 2): grid match after mobile-only query — "
             "skipping second Find with first name."
         )
         return True
-    _note_trace_fc_to_fn(
-        note,
-        "ST2d",
-        "strategy 2: no grid match — starting second Find (mobile + first name)",
-        t0_perf=None,
-    )
     note(
         "Contact Find (strategy 2): no grid match after mobile-only query — "
         "running Find with mobile + first name."
@@ -4089,7 +4045,6 @@ def _find_contact_mobile_first_grid_counts(
             mobile,
             content_frame_selector=content_frame_selector,
             first_name_exact=None,
-            log_first_name_row_debug=False,
         )
     n_match = len(plans)
     n_hint = 0
@@ -4246,14 +4201,12 @@ def _eval_mobile_search_hit_ready(
     mobile: str,
     *,
     content_frame_selector: str | None,
-    note: Callable[..., object] | None = None,
 ) -> bool:
     """
     Single-pass check: left pane / grid shows a visible drilldown candidate for ``mobile``.
     Shared by :func:`_wait_for_mobile_search_hit_ready` and bounded post–Find/Go waits.
     Uses :func:`_iter_mobile_search_hit_roots` so **DMS_SIEBEL_MOBILE_SEARCH_HIT_ROOT_HINT_*** can prioritize
-    the iframe that holds Search Results. When ``note`` is set and the first match is a real **Frame**,
-    emits **mobile_search_hit_root_hint_json=** for copy-paste into env (trial run discovery).
+    the iframe that holds Search Results.
     """
     needle = _mobile_needle_for_contact_grid_match(mobile)
     raw_digits = re.sub(r"\D", "", (mobile or "").strip())
@@ -4288,10 +4241,6 @@ def _eval_mobile_search_hit_ready(
         try:
             if not bool(root.evaluate(_js, {"needle": needle, "raw": raw_digits})):
                 continue
-            if isinstance(root, Frame):
-                _note_mobile_search_hit_frame_discovery(
-                    note, page, root, reason="eval_mobile_search_hit_ready"
-                )
             return True
         except Exception:
             continue
@@ -4311,40 +4260,10 @@ def _wait_for_mobile_search_hit_ready(
     """
     start_t = time.monotonic()
     deadline = start_t + max(0.2, wait_ms / 1000.0)
-    poll_count = 0
     while time.monotonic() < deadline:
-        poll_count += 1
-        if _eval_mobile_search_hit_ready(
-            page, mobile, content_frame_selector=content_frame_selector, note=None
-        ):
-            # region agent log
-            _agent_debug_log(
-                "H4",
-                "siebel_dms_playwright.py:_wait_for_mobile_search_hit_ready",
-                "mobile_hit_ready_success",
-                {
-                    "wait_ms": int(wait_ms),
-                    "elapsed_ms": int((time.monotonic() - start_t) * 1000),
-                    "poll_count": int(poll_count),
-                    "has_selector": bool(content_frame_selector),
-                },
-            )
-            # endregion
+        if _eval_mobile_search_hit_ready(page, mobile, content_frame_selector=content_frame_selector):
             return True
         _safe_page_wait(page, 120, log_label="wait_mobile_hit_ready")
-    # region agent log
-    _agent_debug_log(
-        "H4",
-        "siebel_dms_playwright.py:_wait_for_mobile_search_hit_ready",
-        "mobile_hit_ready_timeout",
-        {
-            "wait_ms": int(wait_ms),
-            "elapsed_ms": int((time.monotonic() - start_t) * 1000),
-            "poll_count": int(poll_count),
-            "has_selector": bool(content_frame_selector),
-        },
-    )
-    # endregion
     return False
 
 
@@ -4359,18 +4278,9 @@ def _contact_find_after_go_wait_bounded(
     Strategy 1: after Contact Find/Go, wait up to **2000 ms** in slices **400 + 800 + 800 ms**,
     exiting early when :func:`_eval_mobile_search_hit_ready` is true (replaces a single 2000 ms sleep).
     """
-    t_pg = time.perf_counter()
     for i, ms in enumerate((400, 800, 800)):
         _safe_page_wait(page, ms, log_label=f"after_contact_find_go_slice_{i + 1}_of_3")
-        hit = _eval_mobile_search_hit_ready(
-            page, mobile, content_frame_selector=content_frame_selector, note=note
-        )
-        utc = datetime.now(timezone.utc).isoformat()
-        elapsed = int((time.perf_counter() - t_pg) * 1000)
-        note(
-            f"[TRACE:FC→FN:postgo{i + 1}] utc={utc} +{elapsed}ms_since_postgo_wait_start "
-            f"slice_slept_ms={ms} mobile_hit_ready={hit}"
-        )
+        hit = _eval_mobile_search_hit_ready(page, mobile, content_frame_selector=content_frame_selector)
         if hit:
             note(
                 "Contact Find: Search Results mobile hit visible — "
@@ -4392,7 +4302,6 @@ def _after_left_customer_click_wait_bounded(
     **200 + 400 + 400 ms**, exiting early when contact detail fields are ready
     (replaces a single 1000 ms sleep).
     """
-    t_lc = time.perf_counter()
     for i, ms in enumerate((200, 400, 400)):
         _safe_page_wait(page, ms, log_label=f"after_left_customer_click_slice_{i + 1}_of_3")
         ready = _wait_for_contact_detail_ready(
@@ -4400,12 +4309,6 @@ def _after_left_customer_click_wait_bounded(
             content_frame_selector=content_frame_selector,
             wait_ms=200,
             first_name=first_name,
-        )
-        utc = datetime.now(timezone.utc).isoformat()
-        elapsed = int((time.perf_counter() - t_lc) * 1000)
-        note(
-            f"[TRACE:FC→FN:leftclk{i + 1}] utc={utc} +{elapsed}ms_since_left_click_settle_start "
-            f"slice_slept_ms={ms} contact_detail_ready={ready}"
         )
         if ready:
             note(
@@ -4473,59 +4376,18 @@ def _wait_for_contact_detail_ready(
     )
     start_t = time.monotonic()
     deadline = start_t + max(0.2, wait_ms / 1000.0)
-    poll_count = 0
     while time.monotonic() < deadline:
-        poll_count += 1
         for root in _siebel_locator_search_roots(page, content_frame_selector):
             for css in sels:
                 try:
                     loc = root.locator(css).first
                     if loc.count() > 0 and loc.is_visible(timeout=250):
-                        # region agent log
-                        _agent_debug_log(
-                            "H5",
-                            "siebel_dms_playwright.py:_wait_for_contact_detail_ready",
-                            "contact_detail_ready_success",
-                            {
-                                "wait_ms": int(wait_ms),
-                                "elapsed_ms": int((time.monotonic() - start_t) * 1000),
-                                "poll_count": int(poll_count),
-                                "matched_css": css,
-                                "has_selector": bool(content_frame_selector),
-                            },
-                        )
-                        # endregion
                         return True
                 except Exception:
                     continue
             if first_name and _contacts_applet_first_name_drill_target_visible(root, first_name):
-                _agent_debug_log(
-                    "H5",
-                    "siebel_dms_playwright.py:_wait_for_contact_detail_ready",
-                    "contact_detail_ready_success",
-                    {
-                        "wait_ms": int(wait_ms),
-                        "elapsed_ms": int((time.monotonic() - start_t) * 1000),
-                        "poll_count": int(poll_count),
-                        "matched_css": "contacts_applet_first_name_drill_target",
-                        "has_selector": bool(content_frame_selector),
-                    },
-                )
                 return True
         _safe_page_wait(page, 120, log_label="wait_contact_detail_ready")
-    # region agent log
-    _agent_debug_log(
-        "H5",
-        "siebel_dms_playwright.py:_wait_for_contact_detail_ready",
-        "contact_detail_ready_timeout",
-        {
-            "wait_ms": int(wait_ms),
-            "elapsed_ms": int((time.monotonic() - start_t) * 1000),
-            "poll_count": int(poll_count),
-            "has_selector": bool(content_frame_selector),
-        },
-    )
-    # endregion
     return False
 
 
@@ -4535,15 +4397,13 @@ def _siebel_try_click_mobile_search_hit_link(
     *,
     timeout_ms: int,
     content_frame_selector: str | None,
-    note: Callable[..., object] | None = None,
 ) -> bool:
     """
     After Find/Go, open the contact from the left **Search Results** / **Siebel Find** pane (Title
     column). Hero often uses ``<a href="javascript:void(0);">`` for the blue mobile drill-in — scoped
     to ``.siebui-applet`` when it contains **Search Results**. Tries: accessible-name link, javascript
     anchors + force/double-click, generic ``<a>`` by phone text, table / ``role=row`` scan, row click.
-    Uses :func:`_iter_mobile_search_hit_roots` for iframe order. Optional ``note`` logs discovery JSON
-    when a real **Frame** wins the drilldown click.
+    Uses :func:`_iter_mobile_search_hit_roots` for iframe order.
     """
     needle = _mobile_needle_for_contact_grid_match(mobile)
     raw_compact = re.sub(r"\s+", "", (mobile or "").strip())
@@ -4677,10 +4537,6 @@ def _siebel_try_click_mobile_search_hit_link(
     for root in _iter_mobile_search_hit_roots(page, content_frame_selector):
         try:
             if try_click_in_root(root):
-                if isinstance(root, Frame):
-                    _note_mobile_search_hit_frame_discovery(
-                        note, page, root, reason="click_mobile_search_hit_link"
-                    )
                 return True
         except Exception:
             continue
@@ -5172,7 +5028,6 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
     content_frame_selector: str | None,
     note,
     skip_search_hit_click: bool = False,
-    trace_fc_fn_t0: float | None = None,
 ) -> bool:
     """
     Steps after **Find + Go** from operator recording *Find Contact Enquiry*:
@@ -5202,7 +5057,6 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
             mobile,
             timeout_ms=action_timeout_ms,
             content_frame_selector=content_frame_selector,
-            note=note,
         ):
             note("Could not click a search-result link for the mobile — check left Search Results grid.")
             return False
@@ -5233,7 +5087,6 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
         timeout_ms=action_timeout_ms,
         content_frame_selector=content_frame_selector,
         note=note,
-        trace_fc_fn_t0=trace_fc_fn_t0,
         skip_left_pane_click=True,
     )
     if not opened_customer:
@@ -5461,7 +5314,6 @@ def _contact_mobile_drilldown_plans(
     *,
     content_frame_selector: str | None,
     first_name_exact: str | None = None,
-    log_first_name_row_debug: bool = False,
 ) -> list[tuple[object, int, str, int]]:
     """
     Build ordered drilldown plans: each row that contains the mobile (10-digit / raw digit rules)
@@ -5472,10 +5324,11 @@ def _contact_mobile_drilldown_plans(
     (builtin Hero **SWEView** / **Opportunity+List** URL). If any root yields plans, return immediately
     without scanning every iframe. **Fallback:** full sweep (mirrored grids, hint drift after Siebel upgrade).
     ``len(returned)`` is the number of table rows for sweep ordinals ``0 .. len-1``.
+    ``first_name_exact`` is accepted for call-site parity with sweep/video caching; row selection is mobile-scoped.
     """
+    _ = first_name_exact
     drill_needle = _mobile_needle_for_contact_grid_match(mobile)
     drill_raw = re.sub(r"\D", "", (mobile or "").strip())
-    fn_ex = (first_name_exact or "").strip()
     row_has_mobile_js = """(el, args) => {
       const needle = String(args.needle || '');
       const raw = String(args.raw || '');
@@ -5488,100 +5341,8 @@ def _contact_mobile_drilldown_plans(
       if (raw.length >= 8 && d.includes(raw)) return true;
       return false;
     }"""
-    row_match_js = """(el, args) => {
-      const needle = String(args.needle || '');
-      const raw = String(args.raw || '');
-      const target = String(args.target || '').trim();
-      const tr = el.closest('tr');
-      if (!tr) return false;
-      const tds = tr.querySelectorAll('td');
-      if (tds.length < 3) return false;
-      const compact = (s) => String(s || '').replace(/\\s+/g, '');
-      const rowCompact = compact(tr.textContent || '');
-      let mobileOk = false;
-      if (needle && rowCompact.includes(needle)) mobileOk = true;
-      else if (raw.length >= 8 && rowCompact.includes(raw)) mobileOk = true;
-      if (!mobileOk) return false;
-      if (!target) return true;
-      const norm = (s) => String(s || '').replace(/\\u00a0/g, ' ').trim();
-      const firstNameKeyFromFind = (raw) => {
-        let s = String(raw || '').replace(/\\u00a0/g, ' ').trim().toLowerCase();
-        while (s.endsWith('.')) s = s.slice(0, -1).trim();
-        return s;
-      };
-      const textMatchesFindFirstName = (text, keyBase) => {
-        if (!keyBase || text == null) return false;
-        const c = String(text).replace(/\\u00a0/g, ' ').trim().toLowerCase();
-        if (!c) return false;
-        if (c === keyBase) return true;
-        if (c.startsWith(keyBase + ' ')) return true;
-        const keyHead = keyBase.split(/\\s+/).filter(Boolean)[0] || '';
-        if (keyHead && c === keyHead) return true;
-        const first = c.split(/\\s+/).filter(Boolean)[0] || '';
-        let fs = first;
-        while (fs.endsWith('.')) fs = fs.slice(0, -1).trim();
-        if (fs === keyBase) return true;
-        if (keyHead && fs === keyHead) return true;
-        return false;
-      };
-      const rowContainsFindFirstKey = (trel, keyBase) => {
-        if (!keyBase) return false;
-        const keyHead = keyBase.split(/\\s+/).filter(Boolean)[0] || '';
-        const rraw = norm(trel.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase();
-        if (!rraw || (!rraw.includes(keyBase) && !(keyHead && rraw.includes(keyHead)))) return false;
-        if (rraw.startsWith(keyBase + ' ')) return true;
-        if (keyHead && rraw.startsWith(keyHead + ' ')) return true;
-        const parts = rraw.split(/[\\s,;|\\/\\u2013\\u2014-]+/).filter(Boolean);
-        for (const p of parts) {
-          let q = p;
-          while (q.endsWith('.')) q = q.slice(0, -1).trim();
-          if (q === keyBase || (keyHead && q === keyHead)) return true;
-          if (p.startsWith(keyBase + ' ')) return true;
-          if (keyHead && p.startsWith(keyHead + ' ')) return true;
-        }
-        return false;
-      };
-      const keyBase = firstNameKeyFromFind(target);
-      if (!keyBase) return true;
-      for (const td of tds) {
-        if (textMatchesFindFirstName(td.textContent, keyBase)) return true;
-        if (textMatchesFindFirstName(td.getAttribute('title') || '', keyBase)) return true;
-        if (textMatchesFindFirstName(td.getAttribute('aria-label') || '', keyBase)) return true;
-        for (const inp of td.querySelectorAll('input, textarea')) {
-          if (textMatchesFindFirstName(inp.value, keyBase)) return true;
-        }
-      }
-      return rowContainsFindFirstKey(tr, keyBase);
-    }"""
 
-    args = {"needle": drill_needle, "raw": drill_raw, "target": fn_ex}
-
-    def _dbg_dr(message: str, data: dict, hid: str = "D1") -> None:
-        if not log_first_name_row_debug and hid == "D3":
-            return
-        try:
-            import json as _j_dr
-            import time as _t_dr
-            from pathlib import Path as _p_dr
-
-            _log_path = _p_dr(__file__).resolve().parents[3] / "debug-08e634.log"
-            with open(_log_path, "a", encoding="utf-8") as _lf_dr:
-                _lf_dr.write(
-                    _j_dr.dumps(
-                        {
-                            "sessionId": "08e634",
-                            "runId": "post-fix",
-                            "hypothesisId": hid,
-                            "location": "siebel_dms_playwright.py:_contact_mobile_drilldown_plans",
-                            "message": message,
-                            "data": data,
-                            "timestamp": int(_t_dr.time() * 1000),
-                        }
-                    )
-                    + "\n"
-                )
-        except Exception:
-            pass
+    args = {"needle": drill_needle, "raw": drill_raw}
 
     def _collect_plans_for_root(_dr_root: object) -> list[tuple[object, int, str, int]]:
         plans_here: list[tuple[object, int, str, int]] = []
@@ -5621,20 +5382,6 @@ def _contact_mobile_drilldown_plans(
                             continue
                     except Exception:
                         continue
-                    if fn_ex:
-                        try:
-                            if not bool(_lnk.evaluate(row_match_js, args)):
-                                _dbg_dr(
-                                    "drilldown_first_name_not_visible_on_mobile_row",
-                                    {"row_index": _ri, "needle": drill_needle, "first_name_len": len(fn_ex)},
-                                    hid="D3",
-                                )
-                        except Exception:
-                            _dbg_dr(
-                                "drilldown_first_name_eval_failed_on_mobile_row",
-                                {"row_index": _ri, "needle": drill_needle},
-                                hid="D3",
-                            )
                     _row_link_idx = _li
                     _row_link_sel = _link_sel
                     break
@@ -5694,7 +5441,6 @@ def _contact_find_mobile_drilldown_occurrence_count(
             mobile,
             content_frame_selector=content_frame_selector,
             first_name_exact=first_name_exact,
-            log_first_name_row_debug=False,
         )
     )
 
@@ -5707,7 +5453,6 @@ def _click_nth_mobile_title_drilldown(
     action_timeout_ms: int,
     content_frame_selector: str | None,
     first_name_exact: str | None = None,
-    note: Callable[..., object] | None = None,
     cached_plans: list[tuple[object, int, str, int]] | None = None,
 ) -> bool:
     """
@@ -5720,35 +5465,6 @@ def _click_nth_mobile_title_drilldown(
     """
     if ordinal < 0:
         return False
-    drill_needle = _mobile_needle_for_contact_grid_match(mobile)
-    fn_ex = (first_name_exact or "").strip()
-    # #region agent log
-    def _dbg_dr_click(message: str, data: dict, hid: str = "D1") -> None:
-        try:
-            import json as _j_dr
-            import time as _t_dr
-            from pathlib import Path as _p_dr
-
-            _log_path = _p_dr(__file__).resolve().parents[3] / "debug-08e634.log"
-            with open(_log_path, "a", encoding="utf-8") as _lf_dr:
-                _lf_dr.write(
-                    _j_dr.dumps(
-                        {
-                            "sessionId": "08e634",
-                            "runId": "post-fix",
-                            "hypothesisId": hid,
-                            "location": "siebel_dms_playwright.py:_click_nth_mobile_title_drilldown",
-                            "message": message,
-                            "data": data,
-                            "timestamp": int(_t_dr.time() * 1000),
-                        }
-                    )
-                    + "\n"
-                )
-        except Exception:
-            pass
-
-    # #endregion
     if cached_plans is not None:
         plans = cached_plans
     else:
@@ -5757,18 +5473,6 @@ def _click_nth_mobile_title_drilldown(
             mobile,
             content_frame_selector=content_frame_selector,
             first_name_exact=first_name_exact,
-            log_first_name_row_debug=True,
-        )
-    if not plans:
-        _dbg_dr_click(
-            "drilldown_no_plans",
-            {"needle": drill_needle, "ordinal": ordinal, "has_first": bool(fn_ex)},
-        )
-    else:
-        _dbg_dr_click(
-            "drilldown_plans_built",
-            {"plans_len": len(plans), "ordinal": ordinal, "needle": drill_needle},
-            hid="D2",
         )
     if ordinal >= len(plans):
         return False
@@ -5776,30 +5480,10 @@ def _click_nth_mobile_title_drilldown(
     _dr_el = _dr_root.locator("table tr").nth(_row_i).locator(_link_sel).nth(_link_i)
     try:
         _dr_el.click(timeout=action_timeout_ms)
-        _note_title_drilldown_trial_hint(
-            note,
-            page,
-            _dr_root,
-            ordinal,
-            _row_i,
-            _link_sel,
-            _link_i,
-            reason="click_ok",
-        )
         return True
     except Exception:
         try:
             _dr_el.click(timeout=action_timeout_ms, force=True)
-            _note_title_drilldown_trial_hint(
-                note,
-                page,
-                _dr_root,
-                ordinal,
-                _row_i,
-                _link_sel,
-                _link_i,
-                reason="click_ok_force",
-            )
             return True
         except Exception:
             return False
@@ -5874,64 +5558,13 @@ def _contact_find_title_sweep_for_enquiry(
                 action_timeout_ms=action_timeout_ms,
                 content_frame_selector=content_frame_selector,
                 first_name_exact=None,
-                note=note,
                 cached_plans=cached_plans_dup,
             )
-            # #region agent log
-            try:
-                import json as _j_s3
-                import time as _t_s3
-                from pathlib import Path as _p_s3
-
-                _lf3 = _p_s3(__file__).resolve().parents[3] / "debug-08e634.log"
-                with open(_lf3, "a", encoding="utf-8") as _lf3f:
-                    _lf3f.write(
-                        _j_s3.dumps(
-                            {
-                                "sessionId": "08e634",
-                                "runId": "post-fix",
-                                "hypothesisId": "E3",
-                                "location": "siebel_dms_playwright.py:_contact_find_title_sweep_for_enquiry",
-                                "message": "duplicate_row_in_place_drill",
-                                "data": {"ordinal": ordinal, "drilled": bool(drilled)},
-                                "timestamp": int(_t_s3.time() * 1000),
-                            }
-                        )
-                        + "\n"
-                    )
-            except Exception:
-                pass
-            # #endregion
             if not drilled:
                 note(
                     f"In-place drill for duplicate row {ordinal + 1} failed — stopping sweep "
                     f"(no Contact Find re-run; list should remain visible in split view)."
                 )
-                # #region agent log
-                try:
-                    import json as _j_s3b
-                    import time as _t_s3b
-                    from pathlib import Path as _p_s3b
-
-                    _lf3b = _p_s3b(__file__).resolve().parents[3] / "debug-08e634.log"
-                    with open(_lf3b, "a", encoding="utf-8") as _lf3bf:
-                        _lf3bf.write(
-                            _j_s3b.dumps(
-                                {
-                                    "sessionId": "08e634",
-                                    "runId": "post-fix",
-                                    "hypothesisId": "E3b",
-                                    "location": "siebel_dms_playwright.py:_contact_find_title_sweep_for_enquiry",
-                                    "message": "duplicate_in_place_failed_break_no_second_drill",
-                                    "data": {"ordinal": ordinal},
-                                    "timestamp": int(_t_s3b.time() * 1000),
-                                }
-                            )
-                            + "\n"
-                        )
-                except Exception:
-                    pass
-                # #endregion
                 break
 
         if not drilled:
@@ -5942,7 +5575,6 @@ def _contact_find_title_sweep_for_enquiry(
                 action_timeout_ms=action_timeout_ms,
                 content_frame_selector=content_frame_selector,
                 first_name_exact=(fn if fn else None) if ordinal == 0 else None,
-                note=note,
                 cached_plans=cached_plans_ord0
                 if ordinal == 0
                 else cached_plans_dup,
@@ -5953,7 +5585,6 @@ def _contact_find_title_sweep_for_enquiry(
                 mobile,
                 timeout_ms=action_timeout_ms,
                 content_frame_selector=content_frame_selector,
-                note=note,
             )
             if drilled:
                 used_fallback_link = True
@@ -6050,31 +5681,6 @@ def _contact_enquiry_tab_has_rows(
     )
     if not _clicked:
         note("Contact_Enquiry tab not clickable (could not verify enquiry rows).")
-        # #region agent log
-        try:
-            import json as _j_ec
-            import time as _t_ec
-            from pathlib import Path as _p_ec
-
-            _lpc = _p_ec(__file__).resolve().parents[3] / "debug-08e634.log"
-            with open(_lpc, "a", encoding="utf-8") as _lfc:
-                _lfc.write(
-                    _j_ec.dumps(
-                        {
-                            "sessionId": "08e634",
-                            "runId": "enquiry-detect",
-                            "hypothesisId": "H1",
-                            "location": "siebel_dms_playwright.py:_contact_enquiry_tab_has_rows",
-                            "message": "contact_enquiry_tab_click_failed",
-                            "data": {},
-                            "timestamp": int(_t_ec.time() * 1000),
-                        }
-                    )
-                    + "\n"
-                )
-        except Exception:
-            pass
-        # #endregion
         return False, 0, ""
 
     _safe_page_wait(page, 900, log_label="after_contact_enquiry_tab")
@@ -6423,38 +6029,8 @@ def _contact_enquiry_tab_has_rows(
       });
     }"""
 
-    # #region agent log
-    def _enq_log(message: str, data: dict) -> None:
-        try:
-            import json as _j_e
-            import time as _t_e
-            from pathlib import Path as _p_e
-
-            _lp = _p_e(__file__).resolve().parents[3] / "debug-08e634.log"
-            with open(_lp, "a", encoding="utf-8") as _lf_e:
-                _lf_e.write(
-                    _j_e.dumps(
-                        {
-                            "sessionId": "08e634",
-                            "runId": "post-fix",
-                            "hypothesisId": "E1",
-                            "location": "siebel_dms_playwright.py:_contact_enquiry_tab_has_rows",
-                            "message": message,
-                            "data": data,
-                            "timestamp": int(_t_e.time() * 1000),
-                        }
-                    )
-                    + "\n"
-                )
-        except Exception:
-            pass
-
-    # #endregion
-
     _best_cnt = 0
     _best_no = ""
-    _best_frame: Frame | None = None
-    _best_diag: dict | None = None
     _any_checked = False
     _main = page.main_frame
     for _r in _frames_for_enquiry_subgrid_eval(page):
@@ -6462,59 +6038,20 @@ def _contact_enquiry_tab_has_rows(
             _res = _r.evaluate(_js)
             if not _res:
                 continue
-            try:
-                _u = str(getattr(_r, "url", "") or "")[:120]
-            except Exception:
-                _u = ""
-            _diag = _res.get("diag") or {}
-            if not isinstance(_diag, dict):
-                _diag = {}
-            _enq_log(
-                "enquiry_frame_eval",
-                {
-                    "frame_url": _u,
-                    "is_main": _r == _main,
-                    "checked": bool(_res.get("checked")),
-                    "rowCount": int(_res.get("rowCount") or 0),
-                    "has_number": bool(str(_res.get("enquiryNumber") or "").strip()),
-                    "diag": _diag,
-                },
-            )
             if _res.get("checked"):
                 _any_checked = True
                 _cnt = int(_res.get("rowCount") or 0)
                 _enq_no = str(_res.get("enquiryNumber") or "").strip()
                 if _cnt > 0 and _r == _main:
-                    _note_contact_enquiry_subgrid_trial_hint(
-                        note,
-                        page,
-                        _r,
-                        _diag,
-                        _cnt,
-                        _enq_no,
-                        reason="main_first_win",
-                    )
                     return True, _cnt, _enq_no
                 if _cnt > _best_cnt:
                     _best_cnt = _cnt
                     _best_no = _enq_no
-                    _best_frame = _r
-                    _best_diag = _diag
                 elif _cnt == _best_cnt and _best_cnt > 0 and _enq_no and not _best_no:
                     _best_no = _enq_no
         except Exception:
             continue
     if _best_cnt > 0:
-        if _best_frame is not None:
-            _note_contact_enquiry_subgrid_trial_hint(
-                note,
-                page,
-                _best_frame,
-                _best_diag,
-                _best_cnt,
-                _best_no,
-                reason="best_frame_after_scan",
-            )
         return True, _best_cnt, _best_no
     if _any_checked:
         return True, 0, ""
@@ -7011,163 +6548,6 @@ def _iter_mobile_search_hit_roots(page: Page, content_frame_selector: str | None
         content_frame_selector,
         _load_mobile_search_hit_hint_dict_from_config(),
     )
-
-
-def _trial_dom_url_tail(url: str, *, max_len: int = 220) -> str:
-    """Stable tail of a frame URL for hint JSON (matches payment / mobile-search-hit style)."""
-    u = (url or "").strip()
-    return u[-max_len:] if len(u) > max_len else u
-
-
-def _describe_siebel_root_for_trial(root: object, page: Page) -> dict[str, object]:
-    """Best-effort DOM root description for trial **title_drilldown_trial_hint_json** (no behavior change)."""
-    out: dict[str, object] = {"kind": "unknown"}
-    try:
-        top = (page.url or "")[:480]
-    except Exception:
-        top = ""
-    out["page_url_top"] = top
-    if root is page:
-        out["kind"] = "Page"
-        out["frame_url_tail"] = _trial_dom_url_tail(page.url or "")
-        out["is_main"] = True
-        return out
-    if isinstance(root, Frame):
-        out["kind"] = "Frame"
-        fu = (root.url or "").strip()
-        out["frame_url_tail"] = _trial_dom_url_tail(fu)
-        try:
-            out["is_main"] = root == page.main_frame
-        except Exception:
-            out["is_main"] = False
-        try:
-            fe = root.frame_element()
-            tit = (fe.get_attribute("title") or "").strip()
-            if tit:
-                out["iframe_element_title"] = tit[:200]
-        except Exception:
-            pass
-        return out
-    if getattr(root, "locator", None) is not None:
-        out["kind"] = "FrameLocator"
-        out["note"] = "No stable URL; compare with Frame entries in page.frames after a trial run."
-        return out
-    out["kind"] = type(root).__name__
-    return out
-
-
-def _note_title_drilldown_trial_hint(
-    note: Callable[..., object] | None,
-    page: Page,
-    root: object,
-    ordinal: int,
-    row_i: int,
-    link_sel: str,
-    link_i: int,
-    *,
-    reason: str,
-) -> None:
-    """Emit **title_drilldown_trial_hint_json=** for hardcoding after a trial (see LLD §2.4d.3)."""
-    if note is None:
-        return
-    payload: dict[str, object] = {
-        "schema_version": 1,
-        "hint_source": "discovery",
-        "ordinal": ordinal,
-        "row_index": row_i,
-        "link_selector": (link_sel or "")[:200],
-        "link_index": link_i,
-        "root": _describe_siebel_root_for_trial(root, page),
-        "match_reason": reason,
-    }
-    try:
-        note(
-            "title_drilldown_trial_hint_json="
-            + json.dumps(payload, ensure_ascii=False).replace("\n", " ")
-        )
-    except Exception:
-        pass
-
-
-def _note_contact_enquiry_subgrid_trial_hint(
-    note: Callable[..., object] | None,
-    page: Page,
-    frame: Frame,
-    diag: dict | None,
-    row_count: int,
-    enquiry_number: str,
-    *,
-    reason: str,
-) -> None:
-    """Emit **contact_enquiry_subgrid_trial_hint_json** when enquiry rows are detected (LLD §2.4d.3)."""
-    if note is None:
-        return
-    fu = (frame.url or "").strip()
-    tail = _trial_dom_url_tail(fu)
-    try:
-        top = (page.url or "")[:480]
-    except Exception:
-        top = ""
-    jqgh = ""
-    if isinstance(diag, dict):
-        jqgh = str(diag.get("jqghIdHit") or "")[:120]
-    payload: dict[str, object] = {
-        "schema_version": 1,
-        "hint_source": "discovery",
-        "page_url_top": top,
-        "frame_url_tail": tail,
-        "is_main": frame == page.main_frame,
-        "jqgh_id_hit": jqgh,
-        "row_count": int(row_count or 0),
-        "enquiry_number_sample": (enquiry_number or "")[:80],
-        "match_reason": reason,
-    }
-    try:
-        fe = frame.frame_element()
-        tit = (fe.get_attribute("title") or "").strip()
-        if tit:
-            payload["iframe_element_title"] = tit[:200]
-    except Exception:
-        pass
-    try:
-        note(
-            "contact_enquiry_subgrid_trial_hint_json="
-            + json.dumps(payload, ensure_ascii=False).replace("\n", " ")
-        )
-    except Exception:
-        pass
-
-
-def _note_mobile_search_hit_frame_discovery(
-    note: Callable[..., object] | None,
-    page: Page,
-    frame: Frame,
-    *,
-    reason: str,
-) -> None:
-    """Emit one copy-paste **mobile_search_hit_root_hint_json=** line for ``.env`` / hint file."""
-    if note is None:
-        return
-    fu = (frame.url or "").strip()
-    tail = _trial_dom_url_tail(fu)
-    try:
-        top = (page.url or "")[:480]
-    except Exception:
-        top = ""
-    payload: dict[str, object] = {
-        "schema_version": 1,
-        "hint_source": "discovery",
-        "page_url_top": top,
-        "mobile_search_hit_root_index_primary": 0,
-        "roots_sorted": [{"frame_url_tail": tail, "match_reason": reason}],
-    }
-    try:
-        note(
-            "mobile_search_hit_root_hint_json="
-            + json.dumps(payload, ensure_ascii=False).replace("\n", " ")
-        )
-    except Exception:
-        pass
 
 
 def _try_payment_line_roots_from_hint(page: Page, hint: dict[str, object]) -> list | None:
@@ -11929,7 +11309,6 @@ def _siebel_open_found_customer_record(
     timeout_ms: int,
     content_frame_selector: str | None,
     note,
-    trace_fc_fn_t0: float | None = None,
     skip_left_pane_click: bool = False,
 ) -> bool:
     """
@@ -11937,35 +11316,12 @@ def _siebel_open_found_customer_record(
     1) left Search Results pane click on mobile/customer hit (optional)
     2) right Contacts applet click customer first-name link (e.g., Akash) to open full record.
     """
-    _note_trace_fc_to_fn(
-        note,
-        "R01",
-        "enter _siebel_open_found_customer_record",
-        t0_perf=trace_fc_fn_t0,
-    )
-
-    def _firstname_drill_ok(how: str) -> bool:
-        _note_trace_fc_to_fn(
-            note,
-            "R05",
-            f"first-name drilldown click succeeded ({how})",
-            t0_perf=trace_fc_fn_t0,
-        )
-        return True
-
     if not skip_left_pane_click:
-        _note_trace_fc_to_fn(
-            note,
-            "R02",
-            "before _siebel_try_click_mobile_search_hit_link (left Search Results mobile)",
-            t0_perf=trace_fc_fn_t0,
-        )
         left_ok = _siebel_try_click_mobile_search_hit_link(
             page,
             mobile,
             timeout_ms=timeout_ms,
             content_frame_selector=content_frame_selector,
-            note=note,
         )
         if not left_ok:
             return False
@@ -11976,25 +11332,12 @@ def _siebel_open_found_customer_record(
             first_name=first_name,
         )
     else:
-        _note_trace_fc_to_fn(
-            note,
-            "R02s",
-            "skip_left_pane_click — no mobile link click; bounded settle only",
-            t0_perf=trace_fc_fn_t0,
-        )
         _after_left_customer_click_wait_bounded(
             page,
             content_frame_selector=content_frame_selector,
             note=note,
             first_name=first_name,
         )
-
-    _note_trace_fc_to_fn(
-        note,
-        "R03",
-        "after post–left-click bounded wait (strategy 1)",
-        t0_perf=trace_fc_fn_t0,
-    )
 
     fn = (first_name or "").strip()
     fn_pat = re.compile(rf"^\s*{re.escape(fn)}\s*$", re.I) if fn else None
@@ -12017,13 +11360,6 @@ def _siebel_open_found_customer_record(
             except Exception:
                 continue
         return False
-
-    _note_trace_fc_to_fn(
-        note,
-        "R04",
-        "scanning frames / Contacts applet for first-name drilldown",
-        t0_perf=trace_fc_fn_t0,
-    )
 
     def try_root(root) -> bool:
         # Prefer links inside Contacts applet/grid.
@@ -12108,7 +11444,7 @@ def _siebel_open_found_customer_record(
     for root in _siebel_locator_search_roots(page, content_frame_selector):
         try:
             if try_root(root):
-                return _firstname_drill_ok("try_root")
+                return True
         except Exception:
             continue
 
@@ -12159,7 +11495,7 @@ def _siebel_open_found_customer_record(
     for frame in _ordered_frames(page):
         try:
             if bool(frame.evaluate(js_click_first_name_col, fn)):
-                return _firstname_drill_ok("js_click_first_name_col")
+                return True
         except Exception:
             continue
 
@@ -12197,7 +11533,7 @@ def _siebel_open_found_customer_record(
     for frame in _ordered_frames(page):
         try:
             if bool(frame.evaluate(js_click_first_name_div, fn)):
-                return _firstname_drill_ok("js_click_first_name_div")
+                return True
         except Exception:
             continue
     return False
@@ -15527,9 +14863,6 @@ def Playwright_Hero_DMS_fill(
         logger.info("siebel_dms: %s", msg)
         _exec_log("NOTE", msg)
 
-    # Anchor for [TRACE:FC→FN] lines: perf_counter when stage-1 Find (strategy two) has fully completed.
-    fc_fn_trace_t0: float | None = None
-
     def log_vehicle_snapshot(stage: str) -> None:
         """
         Write current ``out['vehicle']`` key-values immediately after each scrape/merge update.
@@ -15659,13 +14992,6 @@ def Playwright_Hero_DMS_fill(
                     "Check Find pane, iframe selectors, and DMS_SIEBEL_* tuning."
                 )
                 return out
-            fc_fn_trace_t0 = time.perf_counter()
-            _note_trace_fc_to_fn(
-                note,
-                "V01",
-                "video: Contact Find (strategy_two) complete; anchor for FC→FN traces to first-name drill",
-                t0_perf=fc_fn_trace_t0,
-            )
             _grid_first_hint = _siebel_ui_suggests_contact_match_mobile_first(
                 page, mobile, video_first_name
             )
@@ -15679,7 +15005,6 @@ def Playwright_Hero_DMS_fill(
                 mobile,
                 content_frame_selector=content_frame_selector,
                 first_name_exact=None,
-                log_first_name_row_debug=False,
             )
             n_drilldown = len(_video_plans_m)
             note(
@@ -15756,7 +15081,6 @@ def Playwright_Hero_DMS_fill(
                     mobile,
                     content_frame_selector=content_frame_selector,
                     first_name_exact=None,
-                    log_first_name_row_debug=False,
                 )
                 n_drilldown = len(_video_plans_m)
                 note(f"Video path: after Add Enquiry, drilldown row count N={n_drilldown}.")
@@ -15783,7 +15107,6 @@ def Playwright_Hero_DMS_fill(
                     mobile,
                     content_frame_selector=content_frame_selector,
                     first_name_exact=_video_snap_fn or None,
-                    log_first_name_row_debug=False,
                 )
                 if _video_snap_fn
                 else _video_plans_m
@@ -15868,7 +15191,6 @@ def Playwright_Hero_DMS_fill(
                     action_timeout_ms=action_timeout_ms,
                     content_frame_selector=content_frame_selector,
                     first_name_exact=fn0 if fn0 else None,
-                    note=note,
                 )
                 if not _dr2:
                     _dr2 = _siebel_try_click_mobile_search_hit_link(
@@ -15876,7 +15198,6 @@ def Playwright_Hero_DMS_fill(
                         mobile,
                         timeout_ms=action_timeout_ms,
                         content_frame_selector=content_frame_selector,
-                        note=note,
                     )
                 if not _dr2:
                     step("Stopped: branch (2) could not drill first contact row.")
@@ -15908,7 +15229,6 @@ def Playwright_Hero_DMS_fill(
                 content_frame_selector=content_frame_selector,
                 note=note,
                 skip_search_hit_click=True,
-                trace_fc_fn_t0=fc_fn_trace_t0,
             ):
                 step("Stopped: video SOP failed while opening customer record or filling Relation's Name.")
                 out["error"] = (
@@ -16069,30 +15389,6 @@ def Playwright_Hero_DMS_fill(
                 first_name=video_first_name,
                 full_chassis=full_chassis,
             )
-            # #region agent log — create_order call inputs
-            try:
-                _fin_name_raw = (dms_values.get("financier_name") or "").strip()
-                _fin_tok = _fin_name_raw.lower()
-                _fr_raw = (dms_values.get("finance_required") or "").strip().upper()
-                with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-                    import json as _j_co, time as _t_co
-                    _lf.write(_j_co.dumps({
-                        "sessionId": "08e634",
-                        "runId": "pre-fix",
-                        "hypothesisId": "H9",
-                        "location": "siebel_dms_playwright.py:Playwright_Hero_DMS_fill_create_order_inputs",
-                        "message": "Inputs passed to create_order",
-                        "data": {
-                            "finance_required_raw": _fr_raw if _fr_raw in ("Y", "N", "") else "OTHER",
-                            "financier_present": bool(_fin_name_raw),
-                            "financier_len": len(_fin_name_raw),
-                            "financier_token": _fin_tok if _fin_tok in ("", "na", "n/a", "null", "none", "-") else "other",
-                        },
-                        "timestamp": int(_t_co.time() * 1000),
-                    }) + "\n")
-            except Exception:
-                pass
-            # #endregion
             ok_order, order_err, order_scraped = _create_order(
                 page,
                 mobile=mobile,
@@ -16141,13 +15437,6 @@ def Playwright_Hero_DMS_fill(
         # --- Full linear SOP (stages 1–8): runs only when SIEBEL_DMS_STOP_AFTER_ALL_ENQUIRIES is False. ---
 
         def fill_relation_name_from_care_of(customer_was_found: bool = False) -> None:
-            nonlocal fc_fn_trace_t0
-            _note_trace_fc_to_fn(
-                note,
-                "S10",
-                f"enter fill_relation_name_from_care_of (stage 4) customer_was_found={customer_was_found}",
-                t0_perf=fc_fn_trace_t0,
-            )
             if customer_was_found:
                 form_trace(
                     "1_find_contact",
@@ -16156,12 +15445,6 @@ def Playwright_Hero_DMS_fill(
                     mobile_phone=mobile,
                     first_name=first,
                 )
-                _note_trace_fc_to_fn(
-                    note,
-                    "S11",
-                    "before _siebel_open_found_customer_record (left pane mobile + Contacts first-name drill)",
-                    t0_perf=fc_fn_trace_t0,
-                )
                 opened = _siebel_open_found_customer_record(
                     page,
                     mobile=mobile,
@@ -16169,13 +15452,6 @@ def Playwright_Hero_DMS_fill(
                     timeout_ms=action_timeout_ms,
                     content_frame_selector=content_frame_selector,
                     note=note,
-                    trace_fc_fn_t0=fc_fn_trace_t0,
-                )
-                _note_trace_fc_to_fn(
-                    note,
-                    "S12",
-                    f"after _siebel_open_found_customer_record opened={opened!r}",
-                    t0_perf=fc_fn_trace_t0,
                 )
                 if opened:
                     note("Opened existing customer record: left hit clicked, then first-name link clicked.")
@@ -16280,7 +15556,6 @@ def Playwright_Hero_DMS_fill(
             step("Care-of step completed (stage 4).")
 
         def find_customer() -> tuple[bool, bool]:
-            nonlocal fc_fn_trace_t0
             if not contact_url:
                 step("Stopped: DMS_REAL_URL_CONTACT is not configured.")
                 out["error"] = (
@@ -16321,25 +15596,12 @@ def Playwright_Hero_DMS_fill(
                     "or DMS_SIEBEL_MOBILE_ARIA_HINTS (substrings matching the visible field label)."
                 )
                 return False, False
-            fc_fn_trace_t0 = time.perf_counter()
-            _note_trace_fc_to_fn(
-                note,
-                "S01",
-                "stage1: strategy_two finished (all Find/Go + bounded post-waits); anchor set for FC→FN traces",
-                t0_perf=fc_fn_trace_t0,
-            )
             note("Stage 1: Find/Go completed for mobile search.")
             step("Stage 1 complete: customer search ran on the mobile number.")
             if dms_path == "new_enquiry":
                 note("DECISION: dms_contact_path=new_enquiry — treating as not matched; stage 2 will run.")
                 return True, False
             matched = _siebel_ui_suggests_contact_match_mobile_first(page, mobile, first.strip())
-            _note_trace_fc_to_fn(
-                note,
-                "S02",
-                f"stage1: _siebel_ui_suggests_contact_match_mobile_first -> {matched!r}",
-                t0_perf=fc_fn_trace_t0,
-            )
             note(
                 f"DECISION: customer_found_from_contact_grid={matched!r} "
                 f"(mobile + exact first name in table row with ≥3 cells)."

@@ -413,3 +413,4 @@ Bulk upload automates the ingestion of scanned documents from a shared folder in
 | 3.49 | Mar 2026 | — | **§6.1a** post–drill contact readiness may match **Contacts** first-name targets (same family as open-record drill); video path **``prepare_vehicle``** remains before Contact Find (navigation) — **LLD** **6.100** |
 | 3.50 | Mar 2026 | — | **§6.1a** default Siebel iframe priority uses **hard-coded** Hero **SWEView** / applet fragments (Contact Find Search Results, title drilldown, Contact_Enquiry subgrid); optional env override — **LLD** **6.101** |
 | 3.51 | Mar 2026 | — | **§6.1a** Contact Find mobile/title grid: resolve hinted **Frame** directly when URL matches builtin; full iframe sweep only if no rows — **LLD** **6.103** |
+| 3.52 | Mar 2026 | — | **§6.1a** **`Playwright_DMS.txt`**: removed temporary **`[TRACE:FC→FN:*]`** and trial hint **`note`** JSON lines (Contact Find / drill / enquiry paths); SOP behavior unchanged — **LLD** **6.104** |
