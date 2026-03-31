@@ -33,6 +33,24 @@ export async function apiFetch<T>(
   path: string,
   options: RequestInit = {}
 ): Promise<T> {
+  // #region agent log
+  const __dbg_startedAt = Date.now();
+  if (path.includes("/fill-dms")) {
+    fetch("http://127.0.0.1:7384/ingest/843041b7-64c1-4933-bb72-235d36224f70", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "0875fe" },
+      body: JSON.stringify({
+        sessionId: "0875fe",
+        runId: "pre-fix",
+        hypothesisId: "G3",
+        location: "client.ts:apiFetch",
+        message: "fill_dms_fetch_start",
+        data: { path, method: String(options.method || "GET") },
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {});
+  }
+  // #endregion
   let res: Response;
   try {
     res = await fetch(`${baseUrl}${path}`, {
@@ -43,6 +61,27 @@ export async function apiFetch<T>(
     throwMappedFetchError(err);
   }
   if (!res.ok) {
+    // #region agent log
+    if (path.includes("/fill-dms")) {
+      fetch("http://127.0.0.1:7384/ingest/843041b7-64c1-4933-bb72-235d36224f70", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "0875fe" },
+        body: JSON.stringify({
+          sessionId: "0875fe",
+          runId: "pre-fix",
+          hypothesisId: "G4",
+          location: "client.ts:apiFetch",
+          message: "fill_dms_fetch_non_ok",
+          data: {
+            path,
+            status: res.status,
+            elapsed_ms: Date.now() - __dbg_startedAt,
+          },
+          timestamp: Date.now(),
+        }),
+      }).catch(() => {});
+    }
+    // #endregion
     const text = await res.text();
     let detail: string | undefined;
     try {
