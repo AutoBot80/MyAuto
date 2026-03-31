@@ -10895,6 +10895,18 @@ def _siebel_prepare_vehicle_list_find_vin_engine(
     """
     fp = (frame_p or "").strip()
     ep = (engine_p or "").strip()
+    # region agent log
+    _agent_debug_log(
+        "V2",
+        "siebel_dms_playwright.py:_siebel_prepare_vehicle_list_find_vin_engine",
+        "vehicle_find_submit_enter",
+        {
+            "frame_partial_len": int(len(fp)),
+            "engine_partial_len": int(len(ep)),
+            "has_selector": bool(content_frame_selector),
+        },
+    )
+    # endregion
     if not fp or not ep:
         return False
 
@@ -10907,10 +10919,26 @@ def _siebel_prepare_vehicle_list_find_vin_engine(
         page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
     ):
         note("prepare_vehicle: Find → Vehicles for list query.")
+        # region agent log
+        _agent_debug_log(
+            "V3",
+            "siebel_dms_playwright.py:_siebel_prepare_vehicle_list_find_vin_engine",
+            "vehicle_find_applet_prepared",
+            {"prepared": True},
+        )
+        # endregion
     else:
         note(
             "prepare_vehicle: Find → Vehicles not confirmed — still attempting VIN/Engine fill in find field box."
         )
+        # region agent log
+        _agent_debug_log(
+            "V3",
+            "siebel_dms_playwright.py:_siebel_prepare_vehicle_list_find_vin_engine",
+            "vehicle_find_applet_prepared",
+            {"prepared": False},
+        )
+        # endregion
     _safe_page_wait(page, 600, log_label="prepare_vehicle_after_find_vehicles")
 
     cw = _siebel_vehicle_find_wildcard_value(fp)
@@ -10924,6 +10952,14 @@ def _siebel_prepare_vehicle_list_find_vin_engine(
     )
     if filled:
         note("prepare_vehicle: VIN + Engine# submitted in Find→Vehicles applet.")
+        # region agent log
+        _agent_debug_log(
+            "V4",
+            "siebel_dms_playwright.py:_siebel_prepare_vehicle_list_find_vin_engine",
+            "vehicle_find_submit_result",
+            {"filled": True, "attempt": "first"},
+        )
+        # endregion
         return True
 
     note("prepare_vehicle: Find→Vehicles VIN/Engine fill failed — one retry (expand Find, Vehicles).")
@@ -10944,6 +10980,14 @@ def _siebel_prepare_vehicle_list_find_vin_engine(
     )
     if filled:
         note("prepare_vehicle: VIN + Engine# submitted on retry.")
+    # region agent log
+    _agent_debug_log(
+        "V4",
+        "siebel_dms_playwright.py:_siebel_prepare_vehicle_list_find_vin_engine",
+        "vehicle_find_submit_result",
+        {"filled": bool(filled), "attempt": "retry"},
+    )
+    # endregion
     return bool(filled)
 
 
@@ -10976,15 +11020,46 @@ def _wait_for_vehicle_find_applet_ready(
       }
       return false;
     }"""
-    deadline = time.monotonic() + max(0.2, wait_ms / 1000.0)
+    start_t = time.monotonic()
+    deadline = start_t + max(0.2, wait_ms / 1000.0)
+    poll_count = 0
     while time.monotonic() < deadline:
+        poll_count += 1
         for root in _siebel_locator_search_roots(page, content_frame_selector):
             try:
                 if bool(root.evaluate(_js)):
+                    # region agent log
+                    _agent_debug_log(
+                        "V1",
+                        "siebel_dms_playwright.py:_wait_for_vehicle_find_applet_ready",
+                        "vehicle_find_applet_ready",
+                        {
+                            "ready": True,
+                            "elapsed_ms": int((time.monotonic() - start_t) * 1000),
+                            "wait_ms": int(wait_ms),
+                            "poll_count": int(poll_count),
+                            "has_selector": bool(content_frame_selector),
+                        },
+                    )
+                    # endregion
                     return True
             except Exception:
                 continue
         _safe_page_wait(page, 140, log_label="wait_vehicle_find_applet_ready")
+    # region agent log
+    _agent_debug_log(
+        "V1",
+        "siebel_dms_playwright.py:_wait_for_vehicle_find_applet_ready",
+        "vehicle_find_applet_ready",
+        {
+            "ready": False,
+            "elapsed_ms": int((time.monotonic() - start_t) * 1000),
+            "wait_ms": int(wait_ms),
+            "poll_count": int(poll_count),
+            "has_selector": bool(content_frame_selector),
+        },
+    )
+    # endregion
     return False
 
 
@@ -11003,11 +11078,19 @@ def _siebel_goto_vehicle_list_and_scrape(
     """Navigate to Auto Vehicle List, run **only** Find→Vehicles ``*``VIN + ``*``Engine partial query, scrape row."""
     _goto(page, vehicle_url, "vehicle_list", nav_timeout_ms=nav_timeout_ms)
     _safe_page_wait(page, 1500, log_label="vehicle_list_open")
-    _wait_for_vehicle_find_applet_ready(
+    first_ready = _wait_for_vehicle_find_applet_ready(
         page,
         content_frame_selector=content_frame_selector,
         wait_ms=4500,
     )
+    # region agent log
+    _agent_debug_log(
+        "V5",
+        "siebel_dms_playwright.py:_siebel_goto_vehicle_list_and_scrape",
+        "vehicle_find_initial_ready_gate",
+        {"ready": bool(first_ready)},
+    )
+    # endregion
 
     fp = (frame_p or "").strip()
     ep = (engine_p or "").strip()
@@ -11051,14 +11134,27 @@ def _siebel_goto_vehicle_list_and_scrape(
             )
         if query_ok:
             note("prepare_vehicle: Find→Vehicles query succeeded after applet-ready retry.")
-        else:
-            _hint = (
-                "find applet not ready/visible"
-                if not _wait_for_vehicle_find_applet_ready(
-                    page, content_frame_selector=content_frame_selector, wait_ms=900
-                )
-                else "query submit did not complete"
+            # region agent log
+            _agent_debug_log(
+                "V5",
+                "siebel_dms_playwright.py:_siebel_goto_vehicle_list_and_scrape",
+                "vehicle_find_query_after_retry",
+                {"query_ok": True},
             )
+            # endregion
+        else:
+            final_ready = _wait_for_vehicle_find_applet_ready(
+                page, content_frame_selector=content_frame_selector, wait_ms=900
+            )
+            # region agent log
+            _agent_debug_log(
+                "V5",
+                "siebel_dms_playwright.py:_siebel_goto_vehicle_list_and_scrape",
+                "vehicle_find_query_after_retry",
+                {"query_ok": False, "final_ready": bool(final_ready)},
+            )
+            # endregion
+            _hint = "find applet not ready/visible" if not final_ready else "query submit did not complete"
             return {}, (
                 "Siebel: Find→Vehicles VIN/Engine query failed even with frame_partial/engine_partial present; "
                 f"likely {_hint}. If applet is in a nested iframe, set DMS_SIEBEL_CONTENT_FRAME_SELECTOR."
