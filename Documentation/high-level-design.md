@@ -325,3 +325,6 @@ The SQL view **`form_dms_view`** is **removed**; the same mapping is implemented
 | 1.27 | Mar 2026 | — | **`fill_hero_dms_service`** / video SOP: temporary **`SIEBEL_DMS_HARD_FAIL_BEFORE_BOOKING_AND_ORDER`** stopped the run after payments — **LLD** **6.90** (**superseded by** **6.91**). |
 | 1.28 | Mar 2026 | — | Logging cleanup: trial **`payment_lines_root_hint`** file append, UTC-duplicate diag **`note`** lines — **LLD** **6.91**, **BRD** **3.41** |
 | 1.29 | Mar 2026 | — | **`SIEBEL_DMS_HARD_FAIL_BEFORE_BOOKING_AND_ORDER`** restored with owner-only removal policy (**`.cursor/rules/siebel-hard-fail-before-booking.mdc`**) — **LLD** **6.92** |
+| 1.30 | Mar 2026 | — | **`fill_hero_dms_service`** / Add Enquiry: optional skip of second vehicle scrape when **`prepare_vehicle`** already merged — **LLD** **6.93**, **BRD** **3.42** (see **1.32** / **LLD** **6.95** for vehicle find always-on). |
+| 1.31 | Mar 2026 | — | Add Enquiry: optional skip of entire **`_siebel_vehicle_find_chassis_engine_enter`** when merge ready — **LLD** **6.94**, **BRD** **3.43** (**superseded by** **1.32** / **LLD** **6.95** / **BRD** **3.44**). |
+| 1.32 | Mar 2026 | — | Add Enquiry: always vehicle Find + VIN drill; merge-ready path skips duplicate scrape only — **LLD** **6.95**, **BRD** **3.44** |

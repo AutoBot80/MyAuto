@@ -513,3 +513,6 @@ This document lists the current database tables and their columns. **Executable 
 | 2.31 | Mar 2026 | **No schema change.** Temporary **`SIEBEL_DMS_HARD_FAIL_BEFORE_BOOKING_AND_ORDER`** gate (video SOP stops after payments) — **LLD** **6.90** (**superseded:** removed — **LLD** **6.91**). |
 | 2.32 | Mar 2026 | **No schema change.** Siebel **`Playwright_DMS.txt`** logging cleanup (no trial JSON block; diag trim) — **LLD** **6.91**. |
 | 2.33 | Mar 2026 | **No schema change.** Restored **`SIEBEL_DMS_HARD_FAIL_BEFORE_BOOKING_AND_ORDER`** after payments on video SOP — **LLD** **6.92**. |
+| 2.34 | Mar 2026 | **No schema change.** Add Enquiry: skip second vehicle list scrape when **`prepare_vehicle`** merge present — **LLD** **6.93** (**superseded by** **2.35** / **LLD** **6.94**). |
+| 2.35 | Mar 2026 | **No schema change.** Add Enquiry: skip **`_siebel_vehicle_find_chassis_engine_enter`** when merge ready — **LLD** **6.94** (**superseded by** **2.36** / **LLD** **6.95**). |
+| 2.36 | Mar 2026 | **No schema change.** Add Enquiry: always **`_siebel_vehicle_find_chassis_engine_enter`**; **`reuse_vehicle_dict`** skips post-drill scrape only — **LLD** **6.95**. |

@@ -13302,6 +13302,15 @@ def _add_enquiry_vehicle_scrape_has_model_year_color(scraped: dict) -> bool:
     return bool(m and y and c)
 
 
+def _add_enquiry_reuse_vehicle_dict_ready(vm: dict | None) -> bool:
+    """True when ``prepare_vehicle`` (or prior merge) already supplied model / YYYY / color for Add Enquiry."""
+    if not vm:
+        return False
+    t = dict(vm)
+    _apply_year_of_mfg_yyyy(t)
+    return _add_enquiry_vehicle_scrape_has_model_year_color(t)
+
+
 def _merge_add_enquiry_vehicle_scrape(vehicle_merge: dict, scraped: dict) -> None:
     """Copy add-enquiry vehicle scrape into ``out['vehicle']`` (full_chassis / full_engine; no frame_num/engine_num)."""
     for k in (
@@ -13345,12 +13354,18 @@ def _siebel_vehicle_find_chassis_engine_enter(
     action_timeout_ms: int,
     content_frame_selector: str | None,
     note,
+    reuse_vehicle_dict: dict | None = None,
 ) -> tuple[bool, dict]:
     """
     Vehicles view: **Find → Vehicles**, right fly-in **VIN** + **Engine#** with ``*`` wildcards, **Enter**,
     optional Find/Go, click matching **VIN** in left **Search Results**, then scrape grid and **Vehicle
     Information** (model / year / color).
     Returns ``(query_ok, scraped)`` — ``scraped`` may be empty if the grid did not render.
+
+    When ``reuse_vehicle_dict`` is set and passes :func:`_add_enquiry_reuse_vehicle_dict_ready` (e.g. after
+    ``prepare_vehicle``), **after** a successful VIN drill-down the list/grid/detail scrape is skipped and
+    that dict is reused — **Find→Vehicles** and VIN drill remain so the **Enquiry** tab is on the vehicle
+    view.
     """
     vu = (vehicle_url or "").strip()
     fp = (frame_p or "").strip()
@@ -13445,18 +13460,42 @@ def _siebel_vehicle_find_chassis_engine_enter(
         note("Add Enquiry: activated Siebel Find tab before VIN drill-down (if present).")
         _safe_page_wait(page, 500, log_label="after_siebel_find_tab_vehicle")
 
+    vin_drill_ok = False
     if _siebel_try_click_vin_search_hit_link(
         page,
         fp,
         timeout_ms=action_timeout_ms,
         content_frame_selector=content_frame_selector,
     ):
+        vin_drill_ok = True
         note("Add Enquiry: clicked VIN in left Search Results to load vehicle detail.")
         _safe_page_wait(page, 1800, log_label="after_vehicle_search_vin_drilldown")
         try:
             page.wait_for_load_state("networkidle", timeout=10_000)
         except PlaywrightTimeout:
             note("Add Enquiry: networkidle after VIN drill-down timed out; continuing scrape.")
+
+    if (
+        vin_drill_ok
+        and reuse_vehicle_dict is not None
+        and _add_enquiry_reuse_vehicle_dict_ready(reuse_vehicle_dict)
+    ):
+        scraped = dict(reuse_vehicle_dict)
+        _apply_year_of_mfg_yyyy(scraped)
+        note(
+            "Add Enquiry: reusing merged vehicle data from prepare_vehicle — "
+            "skipping duplicate list/grid/detail scrape (Enquiry tab from vehicle view)."
+        )
+        if (scraped.get("full_chassis") or "").strip() or (scraped.get("key_num") or "").strip():
+            note("Add Enquiry: vehicle hit present from reuse (full_chassis or list key).")
+        elif (scraped.get("model") or "").strip():
+            note("Add Enquiry: vehicle detail from reuse has model.")
+        if (scraped.get("full_chassis") or "").strip():
+            note(
+                "Add Enquiry: full VIN scope from reuse — "
+                f"full_chassis={scraped.get('full_chassis')!r}, full_engine={scraped.get('full_engine')!r}."
+            )
+        return True, scraped
 
     scraped = scrape_siebel_vehicle_row(page, content_frame_selector=content_frame_selector)
     scraped = _merge_scrape_vehicle_detail_applet(
@@ -13485,8 +13524,9 @@ def _try_click_enquiry_top_tab(
     page: Page, *, action_timeout_ms: int, content_frame_selector: str | None
 ) -> bool:
     """
-    Main module **Enquiry** tab. Hero Connect often marks the control with ``aria-label="Enquiry Selected"``
-    (even when switching from **Vehicles**); try that before generic **Enquiry** role/name matches.
+    Main module **Enquiry** tab (third-level / view bar). Hero Connect often marks the control with
+    ``aria-label="Enquiry Selected"`` (e.g. from **Vehicles**); try that before generic **Enquiry**
+    role/name matches.
     """
 
     def _click_first_visible(locator) -> bool:
@@ -13802,9 +13842,14 @@ def _add_enquiry_opportunity(
     vehicle_merge: dict | None = None,
 ) -> tuple[bool, str | None, str]:
     """
-    Vehicle find + scrape, **Enquiry** tab, **Opportunity Form:New**,
-    fill opportunity fields from DB + scraped model/color (**Financier** fields are skipped),
-    then **Ctrl+S**.
+    Vehicle find (**Find→Vehicles**, VIN drill) so the **Enquiry** tab is on the vehicle view, then
+    **Opportunity Form:New**, fill opportunity fields from DB + vehicle model/color (**Financier** fields
+    are skipped), then **Ctrl+S**.
+
+    When ``vehicle_merge`` already contains model, YYYY ``year_of_mfg``, and color (e.g. from
+    ``prepare_vehicle`` on the video path), **list/grid/detail scrape** after the VIN drill-down is skipped
+    inside ``_siebel_vehicle_find_chassis_engine_enter``; **Find→Vehicles** and VIN drill remain for the
+    Enquiry tab context.
 
     **Contact First Name** comes from ``dms_values["first_name"]`` (caller passes base or dotted name).
 
@@ -13828,6 +13873,8 @@ def _add_enquiry_opportunity(
         note("Add Enquiry: aadhar_id from DB is empty — cannot fill UIN No.")
         return False, "Missing customer Aadhaar last 4 for UIN No.", ""
 
+    _reuse_vm = vehicle_merge if _add_enquiry_reuse_vehicle_dict_ready(vehicle_merge) else None
+
     if callable(form_trace):
         form_trace(
             "add_enquiry_branch",
@@ -13840,7 +13887,7 @@ def _add_enquiry_opportunity(
             aadhar_id=aadhar,
         )
 
-    vq_ok, scraped_v = _siebel_vehicle_find_chassis_engine_enter(
+    _vq_ok, scraped_v = _siebel_vehicle_find_chassis_engine_enter(
         page,
         (urls.vehicle or "").strip(),
         frame_p,
@@ -13849,35 +13896,42 @@ def _add_enquiry_opportunity(
         action_timeout_ms=action_timeout_ms,
         content_frame_selector=content_frame_selector,
         note=note,
+        reuse_vehicle_dict=_reuse_vm,
     )
-    if not vq_ok:
+    if not _vq_ok:
         return False, "Vehicle find failed (chassis/engine query or VIN fly-in).", ""
 
     _apply_year_of_mfg_yyyy(scraped_v)
 
     if not _add_enquiry_vehicle_scrape_has_model_year_color(scraped_v):
         note(
-            "Add Enquiry: vehicle search did not yield model, year of manufacture, and color in the grid — "
-            "not opening Enquiry / new opportunity (confirm list applet column layout vs scrape)."
+            "Add Enquiry: vehicle data missing model, year of manufacture, and color — "
+            "not opening Enquiry / new opportunity."
         )
         return (
             False,
-            "Vehicle scrape did not yield model, YYYY year of manufacture, and color (see NOTES above).",
+            "Add Enquiry: vehicle data did not yield model, YYYY year of manufacture, and color.",
             "",
         )
 
-    note(
-        "Add Enquiry: scraped from vehicle list — "
-        f"model={scraped_v.get('model')!r}, year_of_mfg={scraped_v.get('year_of_mfg')!r}, "
-        f"color={scraped_v.get('color')!r}."
-    )
+    if _reuse_vm is None:
+        note(
+            "Add Enquiry: scraped from vehicle list — "
+            f"model={scraped_v.get('model')!r}, year_of_mfg={scraped_v.get('year_of_mfg')!r}, "
+            f"color={scraped_v.get('color')!r}."
+        )
+
     if vehicle_merge is not None:
         _merge_add_enquiry_vehicle_scrape(vehicle_merge, scraped_v)
 
     if callable(form_trace):
         form_trace(
             "add_enquiry_vehicle_scrape",
-            "Auto Vehicle List — results grid",
+            (
+                "prepare_vehicle merge (skip duplicate scrape after VIN drill)"
+                if _reuse_vm is not None
+                else "Auto Vehicle List — results grid"
+            ),
             "read_model_year_color_before_Enquiry_Opportunity",
             model=str(scraped_v.get("model") or ""),
             year_of_mfg=str(scraped_v.get("year_of_mfg") or ""),
