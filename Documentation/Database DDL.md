@@ -496,3 +496,4 @@ This document lists the current database tables and their columns. **Executable 
 | 2.14 | Mar 2026 | **No schema change.** Siebel left-pane VIN jqGrid click hardening (**`gview_s_1001_l`** / **`ui-jqgrid-view`**) — **LLD** **6.73** |
 | 2.15 | Mar 2026 | **No schema change.** Siebel single-hit **Title** VIN drilldown fallback when full chassis not yet in scrape — **LLD** **6.74** |
 | 2.16 | Mar 2026 | **No schema change.** Siebel **Features** HHML visibility guard (skip redundant VIN/Serial grid drill) — **LLD** **6.75** |
+| 2.17 | Mar 2026 | **No schema change.** Siebel **Features** step: **Features in Vehicles** landmark + **`#s_vctrl_div`** tab click — **LLD** **6.76**, **BRD** **3.31** |

@@ -313,3 +313,4 @@ The SQL view **`form_dms_view`** is **removed**; the same mapping is implemented
 | 1.15 | Mar 2026 | — | **`fill_hero_dms_service`** / **`prepare_vehicle`**: Siebel vehicle prep sequence documented in **LLD §2.4d** / **6.72** and **BRD §6.1a** / **3.28** (mandatory left Search Results Title drill-in; dealer: Serial → Features → Pre-check/PDI) |
 | 1.16 | Mar 2026 | — | Left-pane VIN drill-in: single-hit **Title** fallback when full VIN visible but only partial in DB — **LLD** **6.74**, **BRD** **3.29** |
 | 1.17 | Mar 2026 | — | **`prepare_vehicle`**: HHML **Features** applet visibility detection — avoid redundant **VIN**/Serial grid clicks — **LLD** **6.75**, **BRD** **3.30** |
+| 1.18 | Mar 2026 | — | **`prepare_vehicle`**: **Features in Vehicles** (**aria-label**) + **`s_vctrl_div`** third-level tab click for **Features** — **LLD** **6.76**, **BRD** **3.31** |
