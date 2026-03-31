@@ -116,13 +116,25 @@ Configure **`backend/.env`** (copy from **`backend/.env.example`**). The API val
 
 ### Documentation Maintenance
 
-When adding or changing features, update the relevant docs:
+**Requirement:** Any substantive code, configuration, or database change must be reflected in **`Documentation/`** in the same delivery (same PR or same session), not left as a follow-up unless the product owner explicitly defers it.
+
+Update as applicable:
+
+- **BRD** (`business-requirements-document.md`) — business rules, §6.1a Siebel target sequence, functional requirements; add **changelog** rows for notable behavior changes
+- **HLD** (`high-level-design.md`) — backend modules, client pages; add **changelog** row when the architecture or module contract changes
+- **LLD** (`low-level-design.md`) — API tables, §2.4d Playwright parity, module notes; add **LLD changelog** (e.g. **6.x**) for non-trivial automation or API changes
+- **Database DDL** (`Database DDL.md`) — any `DDL/` change; if **no** schema change, add a **changelog** line stating that (e.g. automation-only — pointer to LLD/BRD) so releases stay traceable
+- **This file** (§6–§7) — optional changelog row when documentation policy or repo doc layout changes
+
+Quick mapping:
 
 - **New API endpoint** → LLD (API Endpoints table), HLD (backend modules)
 - **New DB table/column** → `DDL/` scripts, `Database DDL.md`
 - **New business rule** → BRD (Business Rules section)
 - **New page or flow** → BRD (FRs), HLD (client pages, data flow)
-- **Queue/storage/runtime behavior changes** → technical architecture, HLD, LLD, and Database DDL as applicable
+- **Queue/storage/runtime behavior changes** → technical architecture (as needed), HLD, LLD, Database DDL as applicable
+
+Cursor rule: `.cursor/rules/documentation-maintenance.mdc` (always applied).
 
 ### Optional: Cursor Bugbot (automated PR review)
 
@@ -138,3 +150,4 @@ When adding or changing features, update the relevant docs:
 | 0.2 | Mar 2026 | — | Updated queue, worker, local file storage, bulk processing, and automation artifact architecture |
 | 0.3 | Mar 2026 | — | §6 optional **Cursor Bugbot** setup (dashboard/Git integration, not VSIX) |
 | 0.4 | Mar 2026 | — | §3.1 **External portal URLs** — **`backend/.env`** for DMS/Siebel, VAHAN, Insurance; **`DMS_MODE`** default **real** |
+| 0.5 | Mar 2026 | — | §6 **Documentation Maintenance** — mandatory alignment of BRD / HLD / LLD / **Database DDL.md** with code and schema changes; **`Database DDL.md`** changelog may record “no schema change”; **`.cursor/rules/documentation-maintenance.mdc`** |

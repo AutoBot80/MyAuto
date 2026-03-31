@@ -5,12 +5,30 @@ alwaysApply: true
 
 # Documentation Maintenance
 
-When making changes to the codebase or database, update the relevant documentation:
+**All substantive code, config, or database changes must be reflected in the project documentation in the same change set** (or immediately after, if the user explicitly splits work). Do not leave behavior, APIs, flows, or schema undocumented.
 
-- **New API endpoint or router** → `Documentation/low-level-design.md` (API Endpoints table), `Documentation/high-level-design.md` (backend modules)
-- **New DB table or column** → Add/update DDL script in `DDL/`, update `Documentation/Database DDL.md`
-- **New business rule or constraint** → `Documentation/business-requirements-document.md` (Business Rules section)
-- **New page, flow, or feature** → BRD (Functional Requirements), HLD (client pages, data flow)
-- **New service or repository** → HLD (backend modules), LLD (module layout)
+## Canonical documents (under `Documentation/`)
+
+| Document | Purpose | When to update |
+|----------|---------|----------------|
+| **`business-requirements-document.md`** (BRD) | Business rules, functional requirements, §6.1a Siebel SOP | Any user-visible or business-meaningful flow/rule change; changelog rows for notable updates |
+| **`high-level-design.md`** (HLD) | Backend modules, client pages, architecture changelog | New/changed modules, pages, or major flow; add **changelog** row when behavior contract shifts |
+| **`low-level-design.md`** (LLD) | APIs, module layout, Playwright/Siebel parity (**§2.4d**), **changelog** (e.g. **6.x**) | Endpoint/service changes; automation sequence or helper semantics; **always** add/update **LLD changelog** for non-trivial Siebel/DMS behavior |
+| **`Database DDL.md`** | Tables, columns, relationships | Any **`DDL/`** script or column change; **if no schema change** but work was user-facing (e.g. automation-only), add a **changelog** line (e.g. “No schema change — see LLD x.x / BRD x.x”) so the doc stays the audit trail |
+| **`technical-architecture.md`** | Repo layout, §6 doc maintenance | Optional: bump §7 changelog when §6 maintenance policy changes |
+
+## Mapping (quick reference)
+
+- **New API endpoint or router** → LLD (API Endpoints table), HLD (backend modules)
+- **New DB table or column** → `DDL/` script, `Database DDL.md`
+- **New business rule or constraint** → BRD (Business Rules / relevant §)
+- **New page, flow, or feature** → BRD (FRs), HLD (client pages, data flow)
+- **New or changed service / repository** → HLD (backend modules), LLD (module layout)
+- **Siebel / Fill DMS / `prepare_vehicle` / Playwright behavior** → BRD §6.1a if SOP meaning changes; LLD §2.4d + **LLD changelog**; HLD `fill_hero_dms_service` row if module contract changes
+- **Pure automation refactor** (no API/DB) → LLD + BRD as applicable; **Database DDL.md** changelog entry “no schema change” when the team expects DDL.md to track all releases
+
+## Agent checklist
+
+Before finishing a task that touched `backend/`, `client/`, `DDL/`, or DMS/Siebel flows: confirm which docs above were updated or explicitly N/A (with DDL changelog “no schema change” if appropriate).
 
 Reference: `Documentation/technical-architecture.md` §6 Documentation Maintenance.

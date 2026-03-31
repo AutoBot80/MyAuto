@@ -7,8 +7,8 @@ drill hit → Contacts → Contact_Enquiry → Enquiry → All Enquiries), then 
 
 Default staged flow (flag False): **Find → mobile → Go**; optional
 **basic enquiry** (name/address/state/PIN) + Save + **mandatory re-find** when created; **always**
-care-of + Save; **Auto Vehicle List** (``prepare_vehicle``: search/scrape, left-pane VIN, merge + inventory,
-Pre-check/PDI/Features on current view then key/battery; **Pre-check/PDI only at dealer**; In Transit → receipt
+care-of + Save; **Auto Vehicle List** (``prepare_vehicle``: Find→Vehicles, list scrape, mandatory left-pane VIN,
+key/battery, merge + inventory, Serial drilldown → Features → Pre-check/PDI at dealer; In Transit → receipt
 URL only, no Pre-check/PDI);
 **Generate Booking**
 **after vehicle for all paths**; allotment (line items) when **not** In Transit;
@@ -4310,6 +4310,8 @@ def _siebel_try_click_vin_search_hit_link(
 ) -> bool:
     """
     After vehicle Find/Enter, open the hit from the left **Search Results** pane (blue VIN hyperlink).
+    Primary: jqGrid **Title** drilldown in ``#gview_s_1001_l`` / ``table#s_1001_l`` (``name="Title"``,
+    e.g. ``id="1_s_100_1_l_Title"``), then broader link/row fallbacks.
     Loads **Vehicle Information** / detail so model, color, and year can be scraped from inputs or rows.
     """
     vin_key = _vin_match_key(chassis)
@@ -4370,6 +4372,33 @@ def _siebel_try_click_vin_search_hit_link(
         scopes.append(root)
 
         for scope in scopes:
+            # Left **Search Results** (jqGrid): ``#gview_s_1001_l`` → ``table#s_1001_l`` →
+            # ``a[name="Title"]`` (e.g. ``id="1_s_100_1_l_Title"``). Prefer before generic link scans.
+            for title_chain in (
+                '#gview_s_1001_l table#s_1001_l a[name="Title"]',
+                '#gview_s_1001_l table[id="s_1001_l"] a[name="Title"]',
+                '#gview_s_1001_l a[name="Title"][id*="_l_Title"]',
+                '#gview_s_1001_l a[id*="_l_Title"]',
+            ):
+                try:
+                    titles = scope.locator(title_chain)
+                    tn = titles.count()
+                    for ti in range(min(tn, 40)):
+                        link = titles.nth(ti)
+                        try:
+                            if not link.is_visible(timeout=350):
+                                continue
+                            t = link.inner_text(timeout=500) or ""
+                            compact = re.sub(r"[^A-Za-z0-9]", "", t)
+                            if not row_contains_vin(compact):
+                                continue
+                            if _try_click_siebel_drilldown(link):
+                                return True
+                        except Exception:
+                            continue
+                except Exception:
+                    continue
+
             # Title column / list: any visible anchor whose text contains the chassis key (VIN link).
             try:
                 alinks = scope.locator("a")
@@ -11785,6 +11814,72 @@ def _prepare_vehicle_merge_detail_from_aria_labels(
         )
 
 
+def _prepare_vehicle_open_serial_detail_from_vehicle_grid(
+    page: Page,
+    scraped: dict,
+    *,
+    action_timeout_ms: int,
+    content_frame_selector: str | None,
+    note,
+) -> str | None:
+    """
+    On **Auto Vehicle** detail, drill in via top jqGrid (``#gview_s_1_l`` / ``#s_1_l``): **VIN** (best-effort)
+    then **Serial Number** (required) so Third Level tabs match Siebel's serial-detail view.
+    """
+    _fb = (
+        _best_chassis_str(
+            str(scraped.get("full_chassis") or "").strip(),
+            str(scraped.get("frame_num") or "").strip(),
+        )
+        or ""
+    ).strip()
+    _tmo = min(int(action_timeout_ms or 3000), 5000)
+    if _siebel_click_by_name_anywhere(
+        page,
+        "VIN",
+        timeout_ms=_tmo,
+        content_frame_selector=content_frame_selector,
+        note=note,
+        log_label="VIN drilldown (vehicle grid gview_s_1_l)",
+        visible_text_fallback=_fb or None,
+    ):
+        _safe_page_wait(page, 900, log_label="after_prepare_vehicle_vin_drilldown")
+        try:
+            page.wait_for_load_state("networkidle", timeout=10_000)
+        except PlaywrightTimeout:
+            note("prepare_vehicle: networkidle after VIN drilldown timed out; continuing.")
+        except Exception:
+            pass
+    else:
+        note(
+            "prepare_vehicle: VIN drilldown (name='VIN') not found on vehicle grid — "
+            "continuing to Serial Number."
+        )
+
+    if not _siebel_click_by_name_anywhere(
+        page,
+        "Serial Number",
+        timeout_ms=_tmo,
+        content_frame_selector=content_frame_selector,
+        note=note,
+        log_label="Serial Number drilldown (gview_s_1_l)",
+        visible_text_fallback=_fb or None,
+    ):
+        return (
+            "Siebel: could not click Serial Number drilldown (name='Serial Number') on the vehicle grid "
+            "(expected under #gview_s_1_l / #s_1_l)."
+        )
+    note("prepare_vehicle: opened vehicle serial detail (Serial Number drilldown).")
+    _safe_page_wait(page, 1200, log_label="after_prepare_vehicle_serial_drilldown")
+    try:
+        page.wait_for_load_state("networkidle", timeout=12_000)
+    except PlaywrightTimeout:
+        note("prepare_vehicle: networkidle after Serial Number drilldown timed out; continuing.")
+    except Exception:
+        pass
+    return None
+
+
 def _prepare_vehicle_scrape_serial_precheck_pdi_and_features(
     page: Page,
     scraped: dict,
@@ -11795,19 +11890,52 @@ def _prepare_vehicle_scrape_serial_precheck_pdi_and_features(
     form_trace=None,
 ) -> str | None:
     """
-    On the **vehicle** detail view (dealer stock): run **Pre-check** + **PDI** tab flows
-    (``_siebel_run_vehicle_serial_detail_precheck_pdi``), then **Features and Image** for cubic/type.
-
-    **Primary path (Hero Auto Vehicle):** After left-pane VIN opens detail, the Third Level tabs
-    (**Pre-check**, **PDI**, **Features and Image**) are often already present — we run them **without**
-    grid **VIN** / **Serial Number** drilldowns.
+    Dealer-stock path after inventory gate: **Serial Number** drilldown → **Features and Image**
+    (cubic / vehicle type) → **Pre-check** + **PDI** (``_siebel_run_vehicle_serial_detail_precheck_pdi``).
 
     ``prepare_vehicle`` calls this only when ``in_transit`` is false after the inventory gate.
 
-    Returns ``None`` on success or when the serial-detail scrape is skipped (best-effort); on Pre-check/PDI
-    failure returns an error string.
+    Returns ``None`` on success; on failure returns an error string.
     """
-    note("prepare_vehicle: Pre-check/PDI block (direct tabs — no grid drilldown).")
+    _drill_err = _prepare_vehicle_open_serial_detail_from_vehicle_grid(
+        page,
+        scraped,
+        action_timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+        note=note,
+    )
+    if _drill_err:
+        return _drill_err
+
+    # **Features and Image** — HHML applet (authoritative cubic / vehicle type vs list grid).
+    if not _siebel_try_click_features_and_image_tab(
+        page, action_timeout_ms=action_timeout_ms, note=note
+    ):
+        note("prepare_vehicle: Features and Image tab not found after serial drilldown (best-effort).")
+    else:
+        _safe_page_wait(page, 1000, log_label="after_features_tab")
+        try:
+            page.wait_for_load_state("networkidle", timeout=8_000)
+        except Exception:
+            pass
+
+        cc, vt = _siebel_scrape_features_cubic_and_vehicle_type(page)
+        if cc:
+            scraped["cubic_capacity"] = _normalize_cubic_cc_digits(cc) or str(cc).strip()
+        if vt:
+            scraped["vehicle_type"] = vt
+        _feat_cc = scraped.get("cubic_capacity") or cc
+        note(f"prepare_vehicle: Features tab → cubic_capacity={_feat_cc!r}, vehicle_type={vt!r}.")
+        if callable(form_trace):
+            form_trace(
+                "5_vehicle_features",
+                "Features and Image",
+                "scrape_HHML_Feature_Value_cubic_and_vehicle_type",
+                cubic_capacity=str(scraped.get("cubic_capacity") or cc or ""),
+                vehicle_type=str(vt or ""),
+            )
+
+    note("prepare_vehicle: Pre-check + PDI (serial detail view).")
     _serial_pc_ok, _serial_pc_err = _siebel_run_vehicle_serial_detail_precheck_pdi(
         page,
         action_timeout_ms=action_timeout_ms,
@@ -11817,39 +11945,10 @@ def _prepare_vehicle_scrape_serial_precheck_pdi_and_features(
         log_prefix="prepare_vehicle",
         scraped=scraped,
     )
-
     if not _serial_pc_ok:
         if _serial_pc_err:
             return _serial_pc_err
         return "Pre-check / PDI failed (prepare_vehicle)."
-
-    # Always open **Features and Image** and scrape HHML applet ids. The vehicle grid often maps
-    # ``vehicle_type`` to the wrong column (e.g. SKU ``63074-X``); authoritative labels are on the tab.
-    if not _siebel_try_click_features_and_image_tab(
-        page, action_timeout_ms=action_timeout_ms, note=note
-    ):
-        return None
-    _safe_page_wait(page, 1000, log_label="after_features_tab")
-    try:
-        page.wait_for_load_state("networkidle", timeout=8_000)
-    except Exception:
-        pass
-
-    cc, vt = _siebel_scrape_features_cubic_and_vehicle_type(page)
-    if cc:
-        scraped["cubic_capacity"] = _normalize_cubic_cc_digits(cc) or str(cc).strip()
-    if vt:
-        scraped["vehicle_type"] = vt
-    _feat_cc = scraped.get("cubic_capacity") or cc
-    note(f"prepare_vehicle: Features tab → cubic_capacity={_feat_cc!r}, vehicle_type={vt!r}.")
-    if callable(form_trace):
-        form_trace(
-            "5_vehicle_features",
-            "Features and Image",
-            "scrape_HHML_Feature_Value_cubic_and_vehicle_type",
-            cubic_capacity=str(scraped.get("cubic_capacity") or cc or ""),
-            vehicle_type=str(vt or ""),
-        )
     return None
 
 
@@ -12262,13 +12361,11 @@ def prepare_vehicle(
 ) -> tuple[bool, str | None, dict, bool, list[str], list[str]]:
     """
     Pre-booking **vehicle preparation** (runs before Generate Booking): navigate to **Auto Vehicle List**,
-    query by key / chassis(VIN) / engine, scrape the first grid row, then open **vehicle detail** from the
-    left **Search Results** VIN hit, merge **Vehicle Information** from aria-labels (**VIN**, **Model**,
-    **Manufacturing Year**, **SKU**, **Color**, **Engine Number**), evaluate **Inventory Location**
-    (fail if **in transit**), then on the **current** detail view run tab **Pre-check** + **PDI**
-    (``_siebel_run_vehicle_serial_detail_precheck_pdi``) and **Features and Image** for ``cubic_capacity`` /
-    ``vehicle_type`` — **without** requiring grid **VIN** / **Serial Number** drilldowns first (optional
-    drilldown retry only if that fails). Finally fill **Battery No.** and **Key Number** (best-effort).
+    Find→Vehicles query, scrape the list grid row, **require** left **Search Results** VIN (Title) drill-in,
+    then **Key Number** / **Battery No.** (save), merge **Vehicle Information** from aria-labels, evaluate
+    **Inventory Location** (fail if **in transit**). For dealer stock: top-grid **VIN** (best-effort) →
+    **Serial Number** drilldown → **Features and Image** (``cubic_capacity`` / ``vehicle_type``) →
+    **Pre-check** + **PDI** (``_siebel_run_vehicle_serial_detail_precheck_pdi``).
 
     **Inventory Location** (``aria-label`` on the detail view): substring **in transit** → hard fail
     ``Vehicle is in transit. Create Receiving before Booking.``; **dealer** (or other non-empty) →
@@ -12358,28 +12455,35 @@ def prepare_vehicle(
         )
         or ""
     ).strip()
-    _vin_click_ok: bool | None = None
-    if _chassis_for_left_hit:
-        if _siebel_try_click_vin_search_hit_link(
-            page,
-            _chassis_for_left_hit,
-            timeout_ms=action_timeout_ms,
-            content_frame_selector=content_frame_selector,
-        ):
-            _vin_click_ok = True
-            note("prepare_vehicle: opened vehicle from left Search Results (VIN link).")
-        else:
-            _vin_click_ok = False
-            note(
-                "prepare_vehicle: could not click matching VIN in left Search Results — "
-                "continuing (detail may already be open)."
-            )
-    else:
-        _vin_click_ok = None
-        note(
-            "prepare_vehicle: no chassis/VIN for left-pane drill-in (frame_partial and grid frame_num empty) — "
-            "Key/Battery and detail scrape rely on current screen (best-effort)."
+    if not _chassis_for_left_hit:
+        merged = _merge_dms_and_grid_for_vehicle_master(dms_values, scraped)
+        vm_crit, vm_info = _vehicle_master_prepare_gaps(merged)
+        return (
+            False,
+            "Siebel: missing chassis/VIN for left Search Results drill-in "
+            "(set frame_partial and/or ensure the list grid returns frame_num after Find→Vehicles).",
+            merged,
+            bool(scraped.get("in_transit")),
+            vm_crit,
+            vm_info,
         )
+    if not _siebel_try_click_vin_search_hit_link(
+        page,
+        _chassis_for_left_hit,
+        timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+    ):
+        merged = _merge_dms_and_grid_for_vehicle_master(dms_values, scraped)
+        vm_crit, vm_info = _vehicle_master_prepare_gaps(merged)
+        return (
+            False,
+            "Siebel: could not open vehicle detail from left Search Results (VIN Title drilldown).",
+            merged,
+            bool(scraped.get("in_transit")),
+            vm_crit,
+            vm_info,
+        )
+    note("prepare_vehicle: opened vehicle from left Search Results (VIN Title drilldown).")
 
     # #region agent log
     try:
@@ -12392,11 +12496,8 @@ def prepare_vehicle(
                         "sessionId": "0875fe",
                         "hypothesisId": "KB-E",
                         "location": "siebel_dms_playwright.py:prepare_vehicle",
-                        "message": "prepare_vehicle_before_key_battery_fill",
-                        "data": {
-                            "vin_click_ok": _vin_click_ok,
-                            "has_chassis_for_left_hit": bool(_chassis_for_left_hit),
-                        },
+                        "message": "prepare_vehicle_after_left_pane_vin_ok",
+                        "data": {"vin_click_ok": True, "has_chassis_for_left_hit": True},
                         "timestamp": int(time.time() * 1000),
                     }
                 )
@@ -12414,8 +12515,14 @@ def prepare_vehicle(
     except Exception:
         pass
 
-    # Merge detail + inventory gate **before** key/battery: Pre-check/PDI/Features tabs are usually
-    # already on this view; run those flows next without requiring grid VIN/Serial drilldown first.
+    _siebel_fill_key_battery_from_dms_values(
+        page,
+        dms_values,
+        action_timeout_ms=action_timeout_ms,
+        note=note,
+        log_prefix="Vehicle prep",
+    )
+
     _prepare_vehicle_merge_detail_from_aria_labels(
         page, scraped, note=note, form_trace=form_trace
     )
@@ -12446,7 +12553,7 @@ def prepare_vehicle(
             merged = _merge_dms_and_grid_for_vehicle_master(dms_values, scraped)
             vm_crit, vm_info = _vehicle_master_prepare_gaps(merged)
             if callable(step):
-                step("Stopped: Pre-check / PDI failed on vehicle serial detail.")
+                step("Stopped: vehicle serial drilldown, Features, Pre-check, or PDI failed.")
             return (
                 False,
                 _detail_pc_err,
@@ -12457,17 +12564,9 @@ def prepare_vehicle(
             )
     else:
         note(
-            "prepare_vehicle: vehicle flagged in-transit — skipping Serial / Pre-check / PDI / Features "
+            "prepare_vehicle: vehicle flagged in-transit — skipping Serial / Features / Pre-check / PDI "
             "(Siebel rejects Pre-check and PDI until received at dealer)."
         )
-
-    _siebel_fill_key_battery_from_dms_values(
-        page,
-        dms_values,
-        action_timeout_ms=action_timeout_ms,
-        note=note,
-        log_prefix="Vehicle prep",
-    )
 
     note(
         "Vehicle grid scrape (prepare_vehicle): "
