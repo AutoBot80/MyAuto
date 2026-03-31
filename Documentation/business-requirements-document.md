@@ -406,3 +406,4 @@ Bulk upload automates the ingestion of scanned documents from a shared folder in
 | 3.42 | Mar 2026 | — | **§6.1a** step **2a** / **no contact match**: **`_add_enquiry_opportunity`** may skip redundant vehicle grid scrape when **`prepare_vehicle`** already merged model/year/color — **LLD** **6.93**; full vehicle find + VIN drill remain — **LLD** **6.95**. |
 | 3.43 | Mar 2026 | — | **§6.1a** step **2a**: Add Enquiry skipped **Auto Vehicle List** when merge complete — **LLD** **6.94** (**superseded by** **3.44** / **LLD** **6.95**). |
 | 3.44 | Mar 2026 | — | **§6.1a** step **2a**: Add Enquiry **always** runs Find→Vehicles + VIN drill; when **`prepare_vehicle`** merge is complete, **only** the duplicate post-drill scrape is skipped — **LLD** **6.95** |
+| 3.45 | Mar 2026 | — | **§6.1a** Contact Find: bounded waits after Find/Go and after left-pane drill (strategy 1) + mobile-only Find first with mobile+first fallback (strategy 2) — **LLD** **6.96** |

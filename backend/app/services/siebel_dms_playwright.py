@@ -2620,6 +2620,10 @@ def _contact_view_find_by_mobile(
     First Name field receives the **exact** string (no ``*`` wildcard).
     When ``first_name`` is omitted, behavior matches legacy **mobile-only** find (re-find after basic
     enquiry, etc.).
+
+    When ``wait_after_go_ms`` is **2000** (default), the post–Find/Go pause uses
+    :func:`_contact_find_after_go_wait_bounded` (400/800/800 ms slices, early exit when the mobile
+    hit is visible) instead of a single 2000 ms sleep. Other values keep a fixed sleep.
     """
     cu = (contact_url or "").strip()
     if not cu:
@@ -2659,7 +2663,12 @@ def _contact_view_find_by_mobile(
             "Filled Mobile (title='Mobile Phone') and First Name (id='field_textbox_1' when present) "
             "as exact first name (no wildcard) in the same Contact Find frame and clicked Find."
         )
-        _safe_page_wait(page, wait_after_go_ms, log_label="after_contact_find_go_scoped")
+        if wait_after_go_ms == 2000:
+            _contact_find_after_go_wait_bounded(
+                page, mobile, content_frame_selector=content_frame_selector, note=note
+            )
+        else:
+            _safe_page_wait(page, wait_after_go_ms, log_label="after_contact_find_go_scoped")
         return True
 
     fn_req = (first_name or "").strip()
@@ -2731,8 +2740,93 @@ def _contact_view_find_by_mobile(
     else:
         note("No Find/Go control clicked on contact view after mobile fill.")
 
-    _safe_page_wait(page, wait_after_go_ms, log_label="after_contact_find_go")
+    if wait_after_go_ms == 2000:
+        _contact_find_after_go_wait_bounded(
+            page, mobile, content_frame_selector=content_frame_selector, note=note
+        )
+    else:
+        _safe_page_wait(page, wait_after_go_ms, log_label="after_contact_find_go")
     return True
+
+
+def _contact_view_find_by_mobile_strategy_two(
+    page: Page,
+    *,
+    contact_url: str,
+    mobile: str,
+    first_name: str | None,
+    nav_timeout_ms: int,
+    action_timeout_ms: int,
+    content_frame_selector: str | None,
+    mobile_aria_hints: list[str],
+    note,
+    step,
+    stage_msg_mobile_only: str,
+    stage_msg_mobile_and_first: str,
+    wait_after_go_ms: int = 2000,
+) -> bool:
+    """
+    Contact Find **strategy 2**: run **mobile-only** Find/Go first; if
+    :func:`_siebel_ui_suggests_contact_match_mobile_first` is still false, run a second Find/Go with
+    **mobile + first name** (unchanged fill semantics). Omits the second pass when ``first_name`` is empty.
+    """
+    fn = (first_name or "").strip()
+    if not fn:
+        return _contact_view_find_by_mobile(
+            page,
+            contact_url=contact_url,
+            mobile=mobile,
+            nav_timeout_ms=nav_timeout_ms,
+            action_timeout_ms=action_timeout_ms,
+            content_frame_selector=content_frame_selector,
+            mobile_aria_hints=mobile_aria_hints,
+            note=note,
+            step=step,
+            stage_msg=stage_msg_mobile_only,
+            first_name=None,
+            wait_after_go_ms=wait_after_go_ms,
+        )
+
+    ok_m = _contact_view_find_by_mobile(
+        page,
+        contact_url=contact_url,
+        mobile=mobile,
+        nav_timeout_ms=nav_timeout_ms,
+        action_timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+        mobile_aria_hints=mobile_aria_hints,
+        note=note,
+        step=step,
+        stage_msg=stage_msg_mobile_only,
+        first_name=None,
+        wait_after_go_ms=wait_after_go_ms,
+    )
+    if not ok_m:
+        return False
+    if _siebel_ui_suggests_contact_match_mobile_first(page, mobile, fn):
+        note(
+            "Contact Find (strategy 2): grid match after mobile-only query — "
+            "skipping second Find with first name."
+        )
+        return True
+    note(
+        "Contact Find (strategy 2): no grid match after mobile-only query — "
+        "running Find with mobile + first name."
+    )
+    return _contact_view_find_by_mobile(
+        page,
+        contact_url=contact_url,
+        mobile=mobile,
+        nav_timeout_ms=nav_timeout_ms,
+        action_timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+        mobile_aria_hints=mobile_aria_hints,
+        note=note,
+        step=step,
+        stage_msg=stage_msg_mobile_and_first,
+        first_name=fn,
+        wait_after_go_ms=wait_after_go_ms,
+    )
 
 
 def _refind_customer_after_enquiry(
@@ -2751,19 +2845,20 @@ def _refind_customer_after_enquiry(
     """SOP: after saving a **basic** enquiry, Find → mobile (+ first name when provided) → Go before care-of."""
     note("Stage 3 (mandatory re-find): searching again after enquiry save (mobile + first name when set).")
     step("Re-finding customer after enquiry creation (mandatory SOP).")
-    return _contact_view_find_by_mobile(
+    return _contact_view_find_by_mobile_strategy_two(
         page,
         contact_url=contact_url,
         mobile=mobile,
+        first_name=first_name,
         nav_timeout_ms=nav_timeout_ms,
         action_timeout_ms=action_timeout_ms,
         content_frame_selector=content_frame_selector,
         mobile_aria_hints=mobile_aria_hints,
         note=note,
         step=step,
-        stage_msg="Contact view: re-find by mobile + first name (post-enquiry).",
+        stage_msg_mobile_only="Contact view: re-find by mobile only first (post-enquiry, strategy 2).",
+        stage_msg_mobile_and_first="Contact view: re-find by mobile + first name (post-enquiry).",
         wait_after_go_ms=2000,
-        first_name=first_name,
     )
 
 
@@ -4014,16 +4109,15 @@ def _siebel_try_click_named_in_frames(
     return False
 
 
-def _wait_for_mobile_search_hit_ready(
+def _eval_mobile_search_hit_ready(
     page: Page,
     mobile: str,
     *,
     content_frame_selector: str | None,
-    wait_ms: int,
 ) -> bool:
     """
-    Wait until left Search Results has a visible drilldown candidate for ``mobile``.
-    Pure wait-strategy helper; does not click.
+    Single-pass check: left pane / grid shows a visible drilldown candidate for ``mobile``.
+    Shared by :func:`_wait_for_mobile_search_hit_ready` and bounded post–Find/Go waits.
     """
     needle = _mobile_needle_for_contact_grid_match(mobile)
     raw_digits = re.sub(r"\D", "", (mobile or "").strip())
@@ -4054,30 +4148,46 @@ def _wait_for_mobile_search_hit_ready(
       }
       return false;
     }"""
+    for root in _siebel_locator_search_roots(page, content_frame_selector):
+        try:
+            if bool(root.evaluate(_js, {"needle": needle, "raw": raw_digits})):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _wait_for_mobile_search_hit_ready(
+    page: Page,
+    mobile: str,
+    *,
+    content_frame_selector: str | None,
+    wait_ms: int,
+) -> bool:
+    """
+    Wait until left Search Results has a visible drilldown candidate for ``mobile``.
+    Pure wait-strategy helper; does not click.
+    """
     start_t = time.monotonic()
     deadline = start_t + max(0.2, wait_ms / 1000.0)
     poll_count = 0
     while time.monotonic() < deadline:
         poll_count += 1
-        for root in _siebel_locator_search_roots(page, content_frame_selector):
-            try:
-                if bool(root.evaluate(_js, {"needle": needle, "raw": raw_digits})):
-                    # region agent log
-                    _agent_debug_log(
-                        "H4",
-                        "siebel_dms_playwright.py:_wait_for_mobile_search_hit_ready",
-                        "mobile_hit_ready_success",
-                        {
-                            "wait_ms": int(wait_ms),
-                            "elapsed_ms": int((time.monotonic() - start_t) * 1000),
-                            "poll_count": int(poll_count),
-                            "has_selector": bool(content_frame_selector),
-                        },
-                    )
-                    # endregion
-                    return True
-            except Exception:
-                continue
+        if _eval_mobile_search_hit_ready(page, mobile, content_frame_selector=content_frame_selector):
+            # region agent log
+            _agent_debug_log(
+                "H4",
+                "siebel_dms_playwright.py:_wait_for_mobile_search_hit_ready",
+                "mobile_hit_ready_success",
+                {
+                    "wait_ms": int(wait_ms),
+                    "elapsed_ms": int((time.monotonic() - start_t) * 1000),
+                    "poll_count": int(poll_count),
+                    "has_selector": bool(content_frame_selector),
+                },
+            )
+            # endregion
+            return True
         _safe_page_wait(page, 120, log_label="wait_mobile_hit_ready")
     # region agent log
     _agent_debug_log(
@@ -4093,6 +4203,52 @@ def _wait_for_mobile_search_hit_ready(
     )
     # endregion
     return False
+
+
+def _contact_find_after_go_wait_bounded(
+    page: Page,
+    mobile: str,
+    *,
+    content_frame_selector: str | None,
+    note,
+) -> None:
+    """
+    Strategy 1: after Contact Find/Go, wait up to **2000 ms** in slices **400 + 800 + 800 ms**,
+    exiting early when :func:`_eval_mobile_search_hit_ready` is true (replaces a single 2000 ms sleep).
+    """
+    for i, ms in enumerate((400, 800, 800)):
+        _safe_page_wait(page, ms, log_label=f"after_contact_find_go_slice_{i + 1}_of_3")
+        if _eval_mobile_search_hit_ready(page, mobile, content_frame_selector=content_frame_selector):
+            note(
+                "Contact Find: Search Results mobile hit visible — "
+                "ending post–Find/Go bounded wait early (strategy 1)."
+            )
+            return
+    note("Contact Find: post–Find/Go bounded wait completed (2000 ms max, strategy 1).")
+
+
+def _after_left_customer_click_wait_bounded(
+    page: Page,
+    *,
+    content_frame_selector: str | None,
+    note,
+) -> None:
+    """
+    Strategy 1: after left Search Results drill-in click, wait up to **1000 ms** in slices
+    **200 + 400 + 400 ms**, exiting early when contact detail fields are ready
+    (replaces a single 1000 ms sleep).
+    """
+    for i, ms in enumerate((200, 400, 400)):
+        _safe_page_wait(page, ms, log_label=f"after_left_customer_click_slice_{i + 1}_of_3")
+        if _wait_for_contact_detail_ready(
+            page, content_frame_selector=content_frame_selector, wait_ms=200
+        ):
+            note(
+                "Opened customer: contact detail fields visible — "
+                "ending post–click bounded wait early (strategy 1)."
+            )
+            return
+    note("Opened customer: post–click bounded wait completed (1000 ms max, strategy 1).")
 
 
 def _wait_for_contact_detail_ready(
@@ -4844,6 +5000,7 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
         first_name=first_name,
         timeout_ms=action_timeout_ms,
         content_frame_selector=content_frame_selector,
+        note=note,
         skip_left_pane_click=True,
     )
     if not opened_customer:
@@ -11109,6 +11266,7 @@ def _siebel_open_found_customer_record(
     first_name: str,
     timeout_ms: int,
     content_frame_selector: str | None,
+    note,
     skip_left_pane_click: bool = False,
 ) -> bool:
     """
@@ -11125,9 +11283,13 @@ def _siebel_open_found_customer_record(
         )
         if not left_ok:
             return False
-        _safe_page_wait(page, 1000, log_label="after_left_customer_click")
+        _after_left_customer_click_wait_bounded(
+            page, content_frame_selector=content_frame_selector, note=note
+        )
     else:
-        _safe_page_wait(page, 1500, log_label="after_left_customer_click_skipped")
+        _after_left_customer_click_wait_bounded(
+            page, content_frame_selector=content_frame_selector, note=note
+        )
 
     fn = (first_name or "").strip()
     fn_pat = re.compile(rf"^\s*{re.escape(fn)}\s*$", re.I) if fn else None
@@ -14752,24 +14914,25 @@ def Playwright_Hero_DMS_fill(
             )
             form_trace(
                 "v1_find_contact",
-                "Global Find → Contact (Mobile + First Name) + Go",
+                "Global Find → Contact (strategy 2: mobile-only first, then mobile + first name if needed)",
                 "goto_contact_find_URL_then_prepare_Find_Contact_fill_mobile_first_FindGo",
                 contact_url_truncated=contact_url[:200],
                 mobile_phone=mobile,
                 first_name=video_first_name,
             )
-            ok_find = _contact_view_find_by_mobile(
+            ok_find = _contact_view_find_by_mobile_strategy_two(
                 page,
                 contact_url=contact_url,
                 mobile=mobile,
+                first_name=video_first_name,
                 nav_timeout_ms=nav_timeout_ms,
                 action_timeout_ms=action_timeout_ms,
                 content_frame_selector=content_frame_selector,
                 mobile_aria_hints=mobile_aria_hints,
                 note=note,
                 step=step,
-                stage_msg="Video SOP: Find customer by mobile + first name (Contact view).",
-                first_name=video_first_name,
+                stage_msg_mobile_only="Video SOP: Find customer by mobile only first (Contact view, strategy 2).",
+                stage_msg_mobile_and_first="Video SOP: Find customer by mobile + first name (Contact view).",
             )
             if not ok_find:
                 step("Stopped: could not complete Find by mobile + first name on contact view.")
@@ -14840,18 +15003,19 @@ def Playwright_Hero_DMS_fill(
                     mobile_phone=mobile,
                     first_name=video_first_name,
                 )
-                ok_refind = _contact_view_find_by_mobile(
+                ok_refind = _contact_view_find_by_mobile_strategy_two(
                     page,
                     contact_url=contact_url,
                     mobile=mobile,
+                    first_name=video_first_name,
                     nav_timeout_ms=nav_timeout_ms,
                     action_timeout_ms=action_timeout_ms,
                     content_frame_selector=content_frame_selector,
                     mobile_aria_hints=mobile_aria_hints,
                     note=note,
                     step=step,
-                    stage_msg="Post Add Enquiry: re-find customer by mobile + first name (Contact view).",
-                    first_name=video_first_name,
+                    stage_msg_mobile_only="Post Add Enquiry: re-find by mobile only first (Contact view, strategy 2).",
+                    stage_msg_mobile_and_first="Post Add Enquiry: re-find customer by mobile + first name (Contact view).",
                 )
                 if not ok_refind:
                     step("Stopped: Add Enquiry saved but post-save re-find failed.")
@@ -14938,18 +15102,19 @@ def Playwright_Hero_DMS_fill(
                     "Video branch (2): no open enquiry — re-find and drill first contact "
                     "before Relation's Name path."
                 )
-                if not _contact_view_find_by_mobile(
+                if not _contact_view_find_by_mobile_strategy_two(
                     page,
                     contact_url=contact_url,
                     mobile=mobile,
+                    first_name=video_first_name,
                     nav_timeout_ms=nav_timeout_ms,
                     action_timeout_ms=action_timeout_ms,
                     content_frame_selector=content_frame_selector,
                     mobile_aria_hints=mobile_aria_hints,
                     note=note,
                     step=step,
-                    stage_msg="Branch (2): re-find for first drilldown contact.",
-                    first_name=video_first_name,
+                    stage_msg_mobile_only="Branch (2): re-find for first drilldown contact — mobile only first (strategy 2).",
+                    stage_msg_mobile_and_first="Branch (2): re-find for first drilldown contact — mobile + first name.",
                 ):
                     step("Stopped: branch (2) re-find failed.")
                     out["error"] = "Siebel: video branch (2) could not re-find contact after sweep."
@@ -15246,6 +15411,7 @@ def Playwright_Hero_DMS_fill(
                     first_name=first,
                     timeout_ms=action_timeout_ms,
                     content_frame_selector=content_frame_selector,
+                    note=note,
                 )
                 if opened:
                     note("Opened existing customer record: left hit clicked, then first-name link clicked.")
@@ -15359,24 +15525,25 @@ def Playwright_Hero_DMS_fill(
                 return False, False
             form_trace(
                 "1_find_contact",
-                "Contact view — Find pane (mobile + first name search)",
+                "Contact view — Find pane (strategy 2: mobile-only first, then mobile + first name if needed)",
                 "goto_DMS_REAL_URL_CONTACT_expand_Find_fill_Mobile_FirstName_click_FindGo",
                 contact_url_truncated=contact_url[:200],
                 mobile_phone=mobile,
                 first_name=first.strip(),
             )
-            ok = _contact_view_find_by_mobile(
+            ok = _contact_view_find_by_mobile_strategy_two(
                 page,
                 contact_url=contact_url,
                 mobile=mobile,
+                first_name=first.strip(),
                 nav_timeout_ms=nav_timeout_ms,
                 action_timeout_ms=action_timeout_ms,
                 content_frame_selector=content_frame_selector,
                 mobile_aria_hints=mobile_aria_hints,
                 note=note,
                 step=step,
-                stage_msg="Stage 1: Find customer by mobile + first name (Contact view).",
-                first_name=first.strip(),
+                stage_msg_mobile_only="Stage 1: Find customer by mobile only first (Contact view, strategy 2).",
+                stage_msg_mobile_and_first="Stage 1: Find customer by mobile + first name (Contact view).",
             )
             if not ok:
                 step("Stopped: mobile field not found on contact view — check Find pane and iframe selectors.")

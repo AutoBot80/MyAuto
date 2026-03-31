@@ -328,3 +328,4 @@ The SQL view **`form_dms_view`** is **removed**; the same mapping is implemented
 | 1.30 | Mar 2026 | — | **`fill_hero_dms_service`** / Add Enquiry: optional skip of second vehicle scrape when **`prepare_vehicle`** already merged — **LLD** **6.93**, **BRD** **3.42** (see **1.32** / **LLD** **6.95** for vehicle find always-on). |
 | 1.31 | Mar 2026 | — | Add Enquiry: optional skip of entire **`_siebel_vehicle_find_chassis_engine_enter`** when merge ready — **LLD** **6.94**, **BRD** **3.43** (**superseded by** **1.32** / **LLD** **6.95** / **BRD** **3.44**). |
 | 1.32 | Mar 2026 | — | Add Enquiry: always vehicle Find + VIN drill; merge-ready path skips duplicate scrape only — **LLD** **6.95**, **BRD** **3.44** |
+| 1.33 | Mar 2026 | — | **`fill_hero_dms_service`** / Siebel: Contact Find strategy 1 (bounded waits) + strategy 2 (mobile-only Find then fallback) — **LLD** **6.96**, **BRD** **3.45** |
