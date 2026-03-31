@@ -17,7 +17,7 @@ Engine num: —
 Full engine (from detail): HA11F7T9C11204
 Model: SPLENDOR +
 Color: RPB
-Cubic capacity: 125 CC
+Cubic capacity: 125
 Seating capacity: 2
 Body type: Open
 Vehicle type: MOTORCYCLE WITH GEAR

@@ -6367,8 +6367,39 @@ def _add_customer_payment(
         )
         return False
 
+    def _try_receipts_query_in_root(root, idx: int) -> bool:
+        """
+        User-directed probe on the same Payment Lines root as ``+``:
+        click ``name='s_2_1_1_0'`` -> Tab -> type ``Receipts`` -> Tab -> Enter.
+        """
+        try:
+            fld = root.locator("input[name='s_2_1_1_0'], textarea[name='s_2_1_1_0']").first
+            if fld.count() == 0 or not fld.is_visible(timeout=700):
+                return False
+            try:
+                fld.click(timeout=min(2500, action_timeout_ms))
+            except Exception:
+                fld.click(timeout=min(2500, action_timeout_ms), force=True)
+            _safe_page_wait(page, 120, log_label=f"payment_receipts_probe_click_{idx}")
+            page.keyboard.press("Tab")
+            _safe_page_wait(page, 100, log_label=f"payment_receipts_probe_tab1_{idx}")
+            page.keyboard.type("Receipts")
+            _safe_page_wait(page, 120, log_label=f"payment_receipts_probe_type_{idx}")
+            page.keyboard.press("Tab")
+            _safe_page_wait(page, 120, log_label=f"payment_receipts_probe_tab2_{idx}")
+            page.keyboard.press("Enter")
+            _safe_page_wait(page, 1200, log_label=f"payment_receipts_probe_enter_{idx}")
+            note(
+                "Payments: ran Receipts query probe on payment root "
+                f"(root_index={idx}, field='s_2_1_1_0')."
+            )
+            return True
+        except Exception:
+            return False
+
     for idx, pr in enumerate(payment_toolbar_roots):
         try:
+            _probe_ran = _try_receipts_query_in_root(pr, idx)
             if _payment_lines_list_has_populated_transaction_number(pr):
                 _det_via = _payment_lines_detection_reason(pr)
                 # region agent log
@@ -6376,7 +6407,11 @@ def _add_customer_payment(
                     "H2",
                     "siebel_dms_playwright.py:_add_customer_payment",
                     "payment_skipped_existing_transaction",
-                    {"root_index": int(idx), "detected_via": _det_via},
+                    {
+                        "root_index": int(idx),
+                        "detected_via": _det_via,
+                        "receipts_probe_ran": bool(_probe_ran),
+                    },
                 )
                 # endregion
                 note(
