@@ -6318,24 +6318,21 @@ def _add_customer_payment(
     except Exception:
         pass
 
+    # Primary path: short Payments-tab activation first, then root discovery.
+    _tab_tmo = int(min(4000, max(1200, action_timeout_ms // 4)))
     if _siebel_try_activate_payments_tab(
         page,
-        action_timeout_ms=action_timeout_ms,
+        action_timeout_ms=_tab_tmo,
         content_frame_selector=content_frame_selector,
         note=note,
     ):
-        _safe_page_wait(page, 1200, log_label="after_payments_tab_activate")
-    else:
-        note("Payments tab: no matching tab/link found (will still look for Payment Lines toolbar).")
-
+        _safe_page_wait(page, 800, log_label="after_payments_tab_activate_primary")
     payment_toolbar_roots = _gather_payment_line_toolbar_roots(page, content_frame_selector)
-    if not payment_toolbar_roots and _siebel_try_activate_payments_tab(
-        page,
-        action_timeout_ms=action_timeout_ms,
-        content_frame_selector=content_frame_selector,
-        note=note,
-    ):
-        _safe_page_wait(page, 1200, log_label="after_payments_tab_retry_toolbar")
+    if not payment_toolbar_roots:
+        note(
+            "Payments: no Payment Lines root after primary tab activation; "
+            "retrying root search without extra tab wait."
+        )
         payment_toolbar_roots = _gather_payment_line_toolbar_roots(page, content_frame_selector)
 
     payment_toolbar_roots.sort(key=_payment_line_toolbar_roots_priority)
@@ -6913,39 +6910,46 @@ def _add_customer_payment(
                 save_action_roots = _gather_payment_line_toolbar_roots(page, content_frame_selector)
                 note(f"Payment debug: save action roots count={len(save_action_roots)}.")
 
-                # Save icon (down-arrow / save) click.
+                # Primary save: Ctrl+S. Save icon click remains fallback.
                 save_clicked = False
-                for sroot in save_action_roots:
-                    for css in (
-                        "a[aria-label='Payment Lines List:Save']",
-                        "button[aria-label='Payment Lines List:Save']",
-                        "a[title='Payment Lines List:Save']",
-                        "button[title='Payment Lines List:Save']",
-                        "a[aria-label='Payment Lines List: Save']",
-                        "button[aria-label='Payment Lines List: Save']",
-                        "a[title='Payment Lines List: Save']",
-                        "button[title='Payment Lines List: Save']",
-                        "a[title*='Save' i]",
-                        "button[title*='Save' i]",
-                        "a[aria-label*='Save' i]",
-                        "button[aria-label*='Save' i]",
-                        "a.siebui-icon-save",
-                        "button.siebui-icon-save",
-                    ):
-                        try:
-                            btn = sroot.locator(css).first
-                            if btn.count() > 0 and btn.is_visible(timeout=500):
-                                try:
-                                    btn.click(timeout=action_timeout_ms)
-                                except Exception:
-                                    btn.click(timeout=action_timeout_ms, force=True)
-                                save_clicked = True
-                                note(f"Payment debug: Save clicked via selector: {css}")
-                                break
-                        except Exception:
-                            continue
-                    if save_clicked:
-                        break
+                try:
+                    page.keyboard.press("Control+s")
+                    save_clicked = True
+                    note("Payment debug: used Ctrl+S as primary save.")
+                except Exception as _save_key_ex:
+                    note(f"Payment debug: Ctrl+S primary save failed: {_save_key_ex}")
+                if not save_clicked:
+                    for sroot in save_action_roots:
+                        for css in (
+                            "a[aria-label='Payment Lines List:Save']",
+                            "button[aria-label='Payment Lines List:Save']",
+                            "a[title='Payment Lines List:Save']",
+                            "button[title='Payment Lines List:Save']",
+                            "a[aria-label='Payment Lines List: Save']",
+                            "button[aria-label='Payment Lines List: Save']",
+                            "a[title='Payment Lines List: Save']",
+                            "button[title='Payment Lines List: Save']",
+                            "a[title*='Save' i]",
+                            "button[title*='Save' i]",
+                            "a[aria-label*='Save' i]",
+                            "button[aria-label*='Save' i]",
+                            "a.siebui-icon-save",
+                            "button.siebui-icon-save",
+                        ):
+                            try:
+                                btn = sroot.locator(css).first
+                                if btn.count() > 0 and btn.is_visible(timeout=500):
+                                    try:
+                                        btn.click(timeout=action_timeout_ms)
+                                    except Exception:
+                                        btn.click(timeout=action_timeout_ms, force=True)
+                                    save_clicked = True
+                                    note(f"Payment debug: Save clicked via selector fallback: {css}")
+                                    break
+                            except Exception:
+                                continue
+                        if save_clicked:
+                            break
                 if save_clicked:
                     _safe_page_wait(page, 3000, log_label="after_payment_save_processing")
                     # Check for Siebel error popup / alert dialog after save.
@@ -6984,7 +6988,7 @@ def _add_customer_payment(
                     if _err_msg:
                         note(f"Payment save: Siebel error popup detected → {_err_msg!r:.300}")
                     else:
-                        note("Clicked Save icon after payment entry — no error popup detected.")
+                        note("Payment save submitted — no error popup detected.")
                     # Strict gate: after save, a row must show a populated Transaction# in the ``+`` frame.
                     _verify_txn = False
                     for _vr in _gather_payment_line_toolbar_roots(page, content_frame_selector):
@@ -7004,7 +7008,7 @@ def _add_customer_payment(
                         return True
                     note("Payments: save clicked but no Payment Lines row with Transaction# detected after save.")
                     return False
-                note("Could not click Save icon after filling payment fields.")
+                note("Could not submit payment save (Ctrl+S primary and Save icon fallback both failed).")
                 return False
         except Exception as e:
             note(f"Add customer payment flow failed after '+' click attempt: {e}")

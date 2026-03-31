@@ -503,3 +503,5 @@ This document lists the current database tables and their columns. **Executable 
 | 2.21 | Mar 2026 | **No schema change.** Siebel **`[frame-focus]`** diagnostic logging (Serial → Features → Pre-check/PDI) — **LLD** **6.80**, **BRD** **3.35** |
 | 2.22 | Mar 2026 | **No schema change.** Restored serial-detail vehicle-prep order from commit **`ab903064`** (Pre-check/PDI helper with feature-id scrape before Features tab scrape) — **LLD** **6.81**, **BRD** **3.36** |
 | 2.23 | Mar 2026 | **No schema change.** **`cubic_capacity`** scrape stores numeric token only — **LLD** **6.82**, **BRD** **3.37** |
+| 2.24 | Mar 2026 | **No schema change.** Payments flow: primary short tab activation and **Ctrl+S** save fallback with Transaction# verification — **LLD** **6.83**, **BRD** **3.38** |
+| 2.25 | Mar 2026 | **No schema change.** Payments save action order updated to **Ctrl+S primary** with Save icon fallback; Transaction# remains mandatory success verification — **LLD** **6.84**, **BRD** **3.39** |

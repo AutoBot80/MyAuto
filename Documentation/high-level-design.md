@@ -320,3 +320,5 @@ The SQL view **`form_dms_view`** is **removed**; the same mapping is implemented
 | 1.22 | Mar 2026 | — | **`prepare_vehicle`** / serial Pre-check-PDI: **`[frame-focus]`** diagnostic **`note`** lines — **LLD** **6.80**, **BRD** **3.35** |
 | 1.23 | Mar 2026 | — | **`prepare_vehicle`** serial-detail rollback to prior working baseline (**commit `ab903064`**): Pre-check/PDI helper first (with feature-id scrape), then Features tab scrape — **LLD** **6.81**, **BRD** **3.36** |
 | 1.24 | Mar 2026 | — | **`cubic_capacity`** normalized to numeric-only at scrape time — **LLD** **6.82**, **BRD** **3.37** |
+| 1.25 | Mar 2026 | — | Payments flow reliability: primary short tab activation + **Ctrl+S** save fallback with Transaction# verification gate — **LLD** **6.83**, **BRD** **3.38** |
+| 1.26 | Mar 2026 | — | Payments save order tuned: **Ctrl+S** primary, icon click fallback, Transaction# verification unchanged — **LLD** **6.84**, **BRD** **3.39** |
