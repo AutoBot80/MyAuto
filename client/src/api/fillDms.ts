@@ -72,8 +72,8 @@ export interface FillDmsResponse {
 }
 
 const FILL_DMS_TIMEOUT_MS = 180000; // 3 min per section
-/** Pre-open DMS browser after upload (login wait only); shorter than full Create Invoice. */
-const DMS_WARM_BROWSER_TIMEOUT_MS = 60000;
+/** Pre-open DMS browser after upload; allow enough time for first managed-browser launch. */
+const DMS_WARM_BROWSER_TIMEOUT_MS = 180000;
 const FILL_VAHAN_TIMEOUT_MS = 60000; // 1 min for Vahan
 const FILL_INSURANCE_TIMEOUT_MS = 120000; // 2 min for Insurance
 

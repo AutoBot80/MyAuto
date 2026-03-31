@@ -1559,7 +1559,7 @@ def warm_dms_browser_session(dms_base_url: str) -> dict:
         page, open_error = get_or_open_site_page(
             u,
             "DMS",
-            require_login_on_open=True,
+            require_login_on_open=False,
         )
         if page is None:
             out["error"] = open_error or "Could not open DMS browser"

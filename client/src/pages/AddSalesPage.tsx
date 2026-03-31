@@ -221,6 +221,21 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError,
   });
   const [formResetKey, setFormResetKey] = useState(0);
 
+  const triggerWarmBrowser = useCallback(
+    (subfolder: string) => {
+      const sf = (subfolder || "").trim();
+      const url = (dmsUrl ?? "").trim();
+      if (!sf || !url || siteUrlsLoading || siteUrlsError) return;
+      if (dmsWarmSubfolderRef.current === sf) return;
+      dmsWarmSubfolderRef.current = sf;
+      void warmDmsBrowser({ dms_base_url: url }).catch((err) => {
+        const msg = err instanceof Error ? err.message : "Could not pre-open DMS browser.";
+        setFillDmsStatus(`DMS warm-up did not finish: ${msg}`);
+      });
+    },
+    [dmsUrl, siteUrlsLoading, siteUrlsError]
+  );
+
   const applyExtractedDetails = (details: { vehicle?: unknown; customer?: unknown; insurance?: unknown }) => {
     const rawVehicle = details?.vehicle ?? details;
     const normalized = normalizeVehicleDetails(rawVehicle);
@@ -251,13 +266,14 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError,
     uploadStatus,
     setUploadStatus,
     onExtractionComplete: applyExtractedDetails,
-    onUploadSuccess: () => {
+    onUploadSuccess: (savedSubfolder?: string) => {
       setFillDmsStatus(null);
       setDmsMilestones([]);
       setDmsBannerIsStepMessages(false);
       setDmsRunEndedWithError(false);
       setDmsScrapedVehicle(null);
       setDmsPdfsDownloaded(false);
+      if (savedSubfolder) triggerWarmBrowser(savedSubfolder);
     },
   }, dealerId);
 
@@ -297,14 +313,8 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError,
       dmsWarmSubfolderRef.current = null;
       return;
     }
-    const url = (dmsUrl ?? "").trim();
-    if (!url || siteUrlsLoading || siteUrlsError) return;
-    if (dmsWarmSubfolderRef.current === savedTo) return;
-    dmsWarmSubfolderRef.current = savedTo;
-    void warmDmsBrowser({ dms_base_url: url }).catch(() => {
-      /* silent; Create Invoice will open DMS if warm failed or timed out */
-    });
-  }, [savedTo, dmsUrl, siteUrlsLoading, siteUrlsError]);
+    triggerWarmBrowser(savedTo);
+  }, [savedTo, triggerWarmBrowser]);
 
   // DMS and RTO sections populate only when user presses Fill Forms. No auto-fetch from file or DB.
 

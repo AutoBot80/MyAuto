@@ -1,6 +1,6 @@
 Playwright DMS — execution log (this run only; UTC timestamps)
 
-started_utc=2026-03-31T06:46:26.591687+00:00
+started_utc=2026-03-31T06:53:48.634127+00:00
 skip_contact_find=False
 dms_contact_path='found'
 mobile_phone='8279246146'
@@ -23,12 +23,10 @@ url_vehicle_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/e
 --- trace ---
 Legend: [STEP]/[NOTE]/[MILESTONE] = operator narrative; [FORM] = siebel_step + Siebel form/screen + action + fields/values being applied on that form.
 
-2026-03-31T06:46:26.591823+00:00 [STEP] Started Hero Connect / Siebel DMS automation (linear SOP).
-2026-03-31T06:46:26.591858+00:00 [STEP] Pre-step: preparing vehicle before contact find (video path).
-2026-03-31T06:46:26.591911+00:00 [FORM] siebel_step=5_vehicle_list | form=Auto Vehicle List (DMS_REAL_URL_VEHICLE) | action=begin_vehicle_flow_navigate_then_search_applet | engine_partial='11204' | frame_partial='43284' | key_partial='1267' | vehicle_url_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+All+Vehicle+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Auto+Vehicle+List+Applet&SWERowId0=1-100-1676'
-2026-03-31T06:46:33.869125+00:00 [NOTE] prepare_vehicle: Find → Vehicles not confirmed — still attempting VIN/Engine fill in find field box.
-2026-03-31T06:46:34.651115+00:00 [NOTE] prepare_vehicle: Find→Vehicles VIN/Engine fill failed — one retry (expand Find, Vehicles).
-2026-03-31T06:46:36.634841+00:00 [FORM] siebel_step=5_vehicle_list | form=Auto Vehicle List — search/query row | action=find_vehicles_vin_engine_applet_only | engine_partial='11204' | find_vehicles_vin_engine_ok=False | frame_partial='43284'
-2026-03-31T06:46:40.817209+00:00 [STEP] Stopped during vehicle list search.
+2026-03-31T06:53:48.634636+00:00 [STEP] Started Hero Connect / Siebel DMS automation (linear SOP).
+2026-03-31T06:53:48.634844+00:00 [STEP] Pre-step: preparing vehicle before contact find (video path).
+2026-03-31T06:53:48.634942+00:00 [FORM] siebel_step=5_vehicle_list | form=Auto Vehicle List (DMS_REAL_URL_VEHICLE) | action=begin_vehicle_flow_navigate_then_search_applet | engine_partial='11204' | frame_partial='43284' | key_partial='1267' | vehicle_url_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+All+Vehicle+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Auto+Vehicle+List+Applet&SWERowId0=1-100-1676'
 
-2026-03-31T06:46:40.817286+00:00 [END] error=Siebel: Find→Vehicles VIN/Engine query failed even with frame_partial/engine_partial present; likely find applet not ready/visible. If applet is in a nested iframe, set DMS_SIEBEL_CONTENT_FRAME_SELECTOR.
+2026-03-31T06:53:48.707134+00:00 [END] error=Siebel automation error: Cannot switch to a different thread
+	Current:  <greenlet.greenlet object at 0x000002ECE008CA40 (otid=0x000002ECDDAFCE70) current active started main>
+	Expected: <greenlet.greenlet object at 0x000002ECDC3D7540 (otid=0x000002ECDFFA3930) suspended active started main>

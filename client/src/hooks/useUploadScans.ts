@@ -11,8 +11,8 @@ export interface UseUploadScansControlled {
   setUploadStatus: (v: string) => void;
   /** Called when upload completes with extraction.details so form can populate immediately */
   onExtractionComplete?: (details: ExtractedDetailsResponse) => void;
-  /** After a successful upload (e.g. clear stale Fill DMS banner from a previous session). */
-  onUploadSuccess?: () => void;
+  /** After a successful upload (e.g. clear stale Fill DMS banner; receives saved_to for V2). */
+  onUploadSuccess?: (savedTo?: string) => void;
 }
 
 export function useUploadScans(
@@ -73,7 +73,7 @@ export function useUploadScans(
       const data = await uploadScansV2(mobileDigits, aadharScan, aadharBackScan, salesDetail, insuranceSheet, dealerId);
       setSavedTo(data.saved_to);
       setUploadStatus(`Uploaded ${data.saved_count} file(s) to ${data.saved_to}.`);
-      controlled?.onUploadSuccess?.();
+      controlled?.onUploadSuccess?.(data.saved_to);
       if (data.saved_files?.length)
         setUploadedFiles((prev) => [...(data.saved_files ?? []), ...prev]);
       const details = data.extraction?.details;
