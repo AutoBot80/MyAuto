@@ -5650,78 +5650,158 @@ def _contact_enquiry_tab_has_rows(
     return False, 0, ""
 
 
-def _payment_lines_has_existing_row(
-    page: Page,
-    content_frame_selector: str | None,
-    *,
-    require_amount_like: bool = False,
-) -> bool:
-    """
-    True when the **Payment Lines** applet in this document already shows at least one jqgrid / list
-    data row **and** the same document exposes Payment Lines chrome (new/save toolbar or transaction
-    fields). Avoids false positives from Contact / enquiry grids on other tabs.
+def _siebel_root_evaluate(root, js: str):
+    """Run ``js`` in a ``Frame`` / ``Page``, or via ``body`` for a ``FrameLocator``."""
+    try:
+        return root.evaluate(js)
+    except Exception:
+        pass
+    loc_m = getattr(root, "locator", None)
+    if loc_m is not None:
+        for sel in ("body", "html"):
+            try:
+                return loc_m(sel).evaluate(js)
+            except Exception:
+                continue
+    return None
 
-    When ``require_amount_like`` is True (skip ``+`` before add), a row counts only if its text
-    contains **4+ digits** (amount / reference), so empty template rows do not skip entry.
-    """
-    _req = "true" if require_amount_like else "false"
-    _js = f"""() => {{
-      const requireAmountLike = {_req};
-      const vis = (el) => {{
+
+def _siebel_root_has_payment_lines_toolbar(root) -> bool:
+    """True when this root's document shows Payment Lines **List:New** / Save toolbar (``+`` context)."""
+    js = """() => {
+      const vis = (el) => {
         if (!el) return false;
         const st = window.getComputedStyle(el);
         if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
         const r = el.getBoundingClientRect();
         return r.width >= 2 && r.height >= 2;
-      }};
-      const payMarkers = [
+      };
+      const sels = [
         "[aria-label='Payment Lines List:New']",
         "[title='Payment Lines List:New']",
-        "[aria-label='Payment Lines List:Save']",
-        "[title='Payment Lines List:Save']",
         "[aria-label='Payment Lines List: Save']",
+        "[aria-label='Payment Lines List:Save']",
         "[title='Payment Lines List: Save']",
-        "input[name='Transaction_Type']",
-        "input[name='Transaction_Type_New']",
-        "select[name='Transaction_Type']",
-        "select[name='Transaction_Type_New']",
-        "[id='1_s_2_1_Transaction_Amount']",
-        "[name='1_s_2_1_Transaction_Amount']",
+        "[title='Payment Lines List:Save']",
+        "a.siebui-icon-new",
+        "button.siebui-icon-new",
+        "a.siebui-icon-save",
+        "button.siebui-icon-save",
       ];
-      let paymentUi = false;
-      for (const s of payMarkers) {{
-        if (vis(document.querySelector(s))) {{
-          paymentUi = true;
-          break;
-        }}
-      }}
-      if (!paymentUi) return false;
-      const rows = document.querySelectorAll(
-        'table.ui-jqgrid-btable tbody tr.jqgrow, div.ui-jqgrid-bdiv table tbody tr.jqgrow, ' +
-        'table.siebui-list tbody tr[role="row"], table.siebui-list tbody tr.jqgrow'
-      );
-      for (const tr of rows) {{
-        if (!vis(tr)) continue;
-        if (tr.closest('thead')) continue;
-        const tds = tr.querySelectorAll('td');
-        if (tds.length === 0) continue;
-        const blob = (tr.innerText || '').replace(/\\s+/g, ' ').trim();
-        if (blob.length < 1) continue;
-        if (requireAmountLike) {{
-          const digits = blob.replace(/\\D/g, '');
-          if (digits.length < 4) continue;
-        }}
-        return true;
-      }}
+      for (const s of sels) {
+        if (vis(document.querySelector(s))) return true;
+      }
       return false;
-    }}"""
-    for root in list(_siebel_locator_search_roots(page, content_frame_selector)) + list(_ordered_frames(page)) + [page]:
+    }"""
+    return bool(_siebel_root_evaluate(root, js))
+
+
+def _payment_lines_list_has_populated_transaction_number(root) -> bool:
+    """
+    In the **same document** as the Payment Lines ``+`` toolbar, true when a list row has a
+    populated **Transaction #** (or Transaction Number) cell — i.e. a committed payment line.
+    """
+    js = """() => {
+      const vis = (el) => {
+        if (!el) return false;
+        const st = window.getComputedStyle(el);
+        if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+        const r = el.getBoundingClientRect();
+        return r.width >= 2 && r.height >= 2;
+      };
+      const normCell = (s) => String(s || '').replace(/\\u00a0/g, ' ').replace(/\\s+/g, ' ').trim();
+      const isPlaceholder = (v) => {
+        const t = v.toLowerCase();
+        if (!v || t === '-' || t === '—' || t === 'n/a' || t === 'na') return true;
+        if (t.includes('click') && t.includes('add')) return true;
+        return false;
+      };
+      const looksLikeTxnId = (v) => {
+        if (isPlaceholder(v)) return false;
+        const core = v.replace(/\\s/g, '');
+        if (core.length < 2) return false;
+        if (/^[A-Z0-9][A-Z0-9\\-_/]{0,48}$/i.test(core)) return true;
+        if (/\\d{4,}/.test(v) && /[A-Za-z]/.test(v)) return true;
+        if (/^\\d{4,}$/.test(v)) return true;
+        return false;
+      };
+
+      const tables = document.querySelectorAll(
+        'table.ui-jqgrid-btable, div.ui-jqgrid-bdiv table, table.siebui-list, table.siebui-list table'
+      );
+      for (const table of tables) {
+        if (!vis(table)) continue;
+        let txnCol = -1;
+        for (const htr of table.querySelectorAll('thead tr')) {
+          const cells = htr.querySelectorAll('th, td');
+          cells.forEach((cell, i) => {
+            const t = normCell(cell.innerText || cell.textContent || '').toLowerCase();
+            if (!t) return;
+            if ((t.includes('transaction') || /^txn\\b/.test(t) || /^trans\\.?\\s*#/.test(t)) &&
+                (t.includes('#') || t.includes('number') || t.includes(' num') || t.includes('no.')))
+              txnCol = i;
+          });
+        }
+        if (txnCol < 0) {
+          const firstData = table.querySelector('tbody tr.jqgrow, tbody tr[role="row"]');
+          if (firstData) {
+            firstData.querySelectorAll('td').forEach((td, i) => {
+              const adb = (td.getAttribute('aria-describedby') || '').toLowerCase();
+              if (adb.includes('transaction') && (adb.includes('num') || adb.includes('seq') || adb.includes('txn')))
+                txnCol = i;
+            });
+          }
+        }
+        if (txnCol >= 0) {
+          for (const tr of table.querySelectorAll('tbody tr.jqgrow, tbody tr[role="row"]')) {
+            if (!vis(tr)) continue;
+            const tds = tr.querySelectorAll('td');
+            if (tds.length <= txnCol) continue;
+            const v = normCell(tds[txnCol].innerText || tds[txnCol].textContent || '');
+            if (looksLikeTxnId(v)) return true;
+          }
+        }
+      }
+      for (const tr of document.querySelectorAll('tbody tr.jqgrow, tbody tr[role="row"]')) {
+        if (!vis(tr)) continue;
+        for (const td of tr.querySelectorAll('td')) {
+          const adb = (td.getAttribute('aria-describedby') || '').toLowerCase();
+          if (!adb.includes('transaction')) continue;
+          if (!adb.includes('num') && !adb.includes('seq') && !adb.includes('txn')) continue;
+          const v = normCell(td.innerText || td.textContent || '');
+          if (looksLikeTxnId(v)) return true;
+        }
+      }
+      return false;
+    }"""
+    return bool(_siebel_root_evaluate(root, js))
+
+
+def _gather_payment_line_toolbar_roots(page: Page, content_frame_selector: str | None) -> list:
+    """Frames / locators where **Payment Lines List:New** (``+``) is visible."""
+    out: list = []
+    seen: set[int] = set()
+
+    def _add(r) -> None:
+        k = id(r)
+        if k in seen:
+            return
+        seen.add(k)
+        out.append(r)
+
+    for root in _siebel_locator_search_roots(page, content_frame_selector):
         try:
-            if bool(root.evaluate(_js)):
-                return True
+            if _siebel_root_has_payment_lines_toolbar(root):
+                _add(root)
         except Exception:
             continue
-    return False
+    for frame in _ordered_frames(page):
+        try:
+            if _siebel_root_has_payment_lines_toolbar(frame):
+                _add(frame)
+        except Exception:
+            continue
+    return out
 
 
 def _add_customer_payment(
@@ -5732,9 +5812,9 @@ def _add_customer_payment(
     note,
 ) -> bool:
     """
-    Payments tab: if Payment Lines already has a row, skip ``+`` and return success.
-
-    Otherwise click ``+`` (new), fill Transaction Type / Mode / Amount (default **120000**), Save.
+    Open **Payments**, locate the frame(s) where **Payment Lines List:New** (``+``) lives, then **in that
+    document** check the grid for a row with a populated **Transaction #**. If present, skip add.
+    Otherwise click ``+``, fill Type / Mode / Amount (**120000**), and Save.
     """
     _safe_page_wait(page, 250, log_label="before_payments_plus_click")
     try:
@@ -5752,14 +5832,33 @@ def _add_customer_payment(
     else:
         note("Payments tab: no matching tab/link found (will still look for Payment Lines toolbar).")
 
-    if _payment_lines_has_existing_row(
-        page, content_frame_selector, require_amount_like=True,
+    payment_toolbar_roots = _gather_payment_line_toolbar_roots(page, content_frame_selector)
+    if not payment_toolbar_roots and _siebel_try_activate_payments_tab(
+        page,
+        action_timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+        note=note,
     ):
+        _safe_page_wait(page, 1200, log_label="after_payments_tab_retry_toolbar")
+        payment_toolbar_roots = _gather_payment_line_toolbar_roots(page, content_frame_selector)
+
+    if not payment_toolbar_roots:
         note(
-            "Payments: existing Payment Lines row with amount-like data — skipping '+' and new-row fill; "
-            "continuing to Vehicle Sales flow."
+            "Payment debug: Payment Lines toolbar (List:New / Save) not found — "
+            "cannot locate '+' frame; ensure the Payments view shows Payment Lines."
         )
-        return True
+        return False
+
+    for pr in payment_toolbar_roots:
+        try:
+            if _payment_lines_list_has_populated_transaction_number(pr):
+                note(
+                    "Payments: Payment Lines list already has a row with populated Transaction# — "
+                    "skipping '+' and new-line entry."
+                )
+                return True
+        except Exception:
+            continue
 
     plus_selectors = (
         "a[aria-label='Payment Lines List:New']",
@@ -5785,42 +5884,6 @@ def _add_customer_payment(
         re.compile(r"^\s*new\s*$", re.I),
         re.compile(r"add", re.I),
     )
-
-    def _is_payment_action_root(root) -> bool:
-        """Toolbar frame/root that hosts Payment Lines New/Save controls."""
-        try:
-            return bool(
-                root.evaluate(
-                    """() => {
-                      const vis = (el) => {
-                        if (!el) return false;
-                        const st = window.getComputedStyle(el);
-                        if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
-                        const r = el.getBoundingClientRect();
-                        return r.width >= 2 && r.height >= 2;
-                      };
-                      const sels = [
-                        "[aria-label='Payment Lines List:New']",
-                        "[title='Payment Lines List:New']",
-                        "[aria-label='Payment Lines List: Save']",
-                        "[aria-label='Payment Lines List:Save']",
-                        "[title='Payment Lines List: Save']",
-                        "[title='Payment Lines List:Save']",
-                        "a.siebui-icon-new",
-                        "button.siebui-icon-new",
-                        "a.siebui-icon-save",
-                        "button.siebui-icon-save",
-                      ];
-                      for (const s of sels) {
-                        const el = document.querySelector(s);
-                        if (vis(el)) return true;
-                      }
-                      return false;
-                    }"""
-                )
-            )
-        except Exception:
-            return False
 
     def _click_plus_in_root(root) -> bool:
         # Exact selectors first
@@ -5869,42 +5932,10 @@ def _add_customer_payment(
                 continue
         return False
 
-    def _gather_payment_action_roots() -> list:
-        ar: list = []
-        for root in _siebel_locator_search_roots(page, content_frame_selector):
-            try:
-                if _is_payment_action_root(root):
-                    ar.append(root)
-            except Exception:
-                continue
-        for frame in _ordered_frames(page):
-            try:
-                if _is_payment_action_root(frame):
-                    ar.append(frame)
-            except Exception:
-                continue
-        return ar
-
-    action_roots = _gather_payment_action_roots()
-    if not action_roots and _siebel_try_activate_payments_tab(
-        page,
-        action_timeout_ms=action_timeout_ms,
-        content_frame_selector=content_frame_selector,
-        note=note,
-    ):
-        _safe_page_wait(page, 1200, log_label="after_payments_tab_retry_toolbar")
-        action_roots = _gather_payment_action_roots()
-
-    root_candidates = action_roots
-    if not root_candidates:
-        note(
-            "Payment debug: Payment Lines toolbar (List:New / Save) not found — "
-            "cannot click '+' safely; ensure the Payments view shows Payment Lines."
-        )
-        return False
+    root_candidates = payment_toolbar_roots
     note(
-        "Payment debug: root candidates prepared "
-        f"(payment_action_roots={len(root_candidates)})."
+        "Payment debug: '+' frame(s) for Payment Lines "
+        f"(payment_toolbar_roots={len(root_candidates)})."
     )
 
     for root in root_candidates:
@@ -6328,22 +6359,8 @@ def _add_customer_payment(
                 )
                 _safe_page_wait(page, 400, log_label="after_amount_before_save")
 
-                # Re-detect action roots after row creation; toolbar can be in a sibling frame.
-                save_action_roots = []
-                for sroot in _siebel_locator_search_roots(page, content_frame_selector):
-                    try:
-                        if _is_payment_action_root(sroot):
-                            save_action_roots.append(sroot)
-                    except Exception:
-                        continue
-                for sframe in _ordered_frames(page):
-                    try:
-                        if _is_payment_action_root(sframe):
-                            save_action_roots.append(sframe)
-                    except Exception:
-                        continue
-                if not save_action_roots:
-                    save_action_roots = list(_siebel_locator_search_roots(page, content_frame_selector))
+                # Re-detect Payment Lines toolbar roots after row creation (same ``+`` frame context).
+                save_action_roots = _gather_payment_line_toolbar_roots(page, content_frame_selector)
                 note(f"Payment debug: save action roots count={len(save_action_roots)}.")
 
                 # Save icon (down-arrow / save) click.
@@ -6418,11 +6435,19 @@ def _add_customer_payment(
                         note(f"Payment save: Siebel error popup detected → {_err_msg!r:.300}")
                     else:
                         note("Clicked Save icon after payment entry — no error popup detected.")
-                    # Strict gate: after save we must see at least one Payment Lines row.
-                    if _payment_lines_has_existing_row(page, content_frame_selector):
-                        note("Payments: verified at least one Payment Lines row after save.")
+                    # Strict gate: after save, a row must show a populated Transaction# in the ``+`` frame.
+                    _verify_txn = False
+                    for _vr in _gather_payment_line_toolbar_roots(page, content_frame_selector):
+                        try:
+                            if _payment_lines_list_has_populated_transaction_number(_vr):
+                                _verify_txn = True
+                                break
+                        except Exception:
+                            continue
+                    if _verify_txn:
+                        note("Payments: verified Payment Lines row with populated Transaction# after save.")
                         return True
-                    note("Payments: save clicked but no Payment Lines row detected after save.")
+                    note("Payments: save clicked but no Payment Lines row with Transaction# detected after save.")
                     return False
                 note("Could not click Save icon after filling payment fields.")
                 return False
