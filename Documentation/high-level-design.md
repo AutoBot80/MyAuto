@@ -311,3 +311,4 @@ The SQL view **`form_dms_view`** is **removed**; the same mapping is implemented
 | 1.13 | Mar 2026 | — | **§5.4** Insurance runtime rule aligned with **BR-20**; PostgreSQL building-block note for staging + GI |
 | 1.14 | Mar 2026 | — | **BR-20**: view + **`payload_json`** as **joint** complete GI input set; **AddSalesPage** / **§5.4** — **`staging_id`** on Generate Insurance |
 | 1.15 | Mar 2026 | — | **`fill_hero_dms_service`** / **`prepare_vehicle`**: Siebel vehicle prep sequence documented in **LLD §2.4d** / **6.72** and **BRD §6.1a** / **3.28** (mandatory left Search Results Title drill-in; dealer: Serial → Features → Pre-check/PDI) |
+| 1.16 | Mar 2026 | — | Left-pane VIN drill-in: single-hit **Title** fallback when full VIN visible but only partial in DB — **LLD** **6.74**, **BRD** **3.29** |

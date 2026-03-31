@@ -4310,14 +4310,20 @@ def _siebel_try_click_vin_search_hit_link(
 ) -> bool:
     """
     After vehicle Find/Enter, open the hit from the left **Search Results** pane (blue VIN hyperlink).
-    Primary: jqGrid **Title** drilldown in ``#gview_s_1001_l`` / ``table#s_1001_l`` (``name="Title"``,
-    e.g. ``id="1_s_100_1_l_Title"``), then broader link/row fallbacks.
+    Primary: jqGrid view ``div#gview_s_1001_l.ui-jqgrid-view`` → ``table#s_1001_l`` / ``.ui-jqgrid-btable``
+    → ``a[name="Title"]`` (e.g. ``id="1_s_100_1_l_Title"``); then JS click inside ``#gview_s_1001_l`` per
+    frame; then broader link/row fallbacks.
     Loads **Vehicle Information** / detail so model, color, and year can be scraped from inputs or rows.
+
+    When **DMS only has a partial** (or scrape has not yet produced ``full_chassis``), the left pane may still
+    show the **full VIN** on a single **Title** drilldown — substring match can fail. In that case we fall
+    back to clicking the **only** visible VIN-like Title link under ``#gview_s_1001_l`` (one hit row).
     """
     vin_key = _vin_match_key(chassis)
-    if not vin_key or len(vin_key) < 5:
-        return False
-    sub_pat = re.compile(".*" + re.escape(vin_key) + ".*", re.I)
+    use_key = bool(vin_key) and len(vin_key) >= 4
+    sub_pat = (
+        re.compile(".*" + re.escape(vin_key) + ".*", re.I) if use_key else None
+    )
 
     def _try_click_siebel_drilldown(loc) -> bool:
         try:
@@ -4338,7 +4344,7 @@ def _siebel_try_click_vin_search_hit_link(
         return False
 
     def row_contains_vin(row_compact: str) -> bool:
-        if not row_compact:
+        if not use_key or not row_compact:
             return False
         rk = row_compact.upper()
         vk = vin_key.upper()
@@ -4353,7 +4359,123 @@ def _siebel_try_click_vin_search_hit_link(
         "tr[role='row']",
     )
 
+    _gview_title_chains = (
+        '#gview_s_1001_l.ui-jqgrid-view table#s_1001_l a[name="Title"]',
+        '#gview_s_1001_l table.ui-jqgrid-btable a[name="Title"]',
+        '#gview_s_1001_l table#s_1001_l a[name="Title"]',
+        '#gview_s_1001_l table[id="s_1001_l"] a[name="Title"]',
+        'div#gview_s_1001_l.ui-jqgrid-view a[name="Title"]',
+        '#gview_s_1001_l a[name="Title"][id*="_l_Title"]',
+        '#gview_s_1001_l a[id*="_l_Title"]',
+        '.ui-jqgrid-view#gview_s_1001_l a[name="Title"]',
+    )
+
+    def _try_gview_unique_single_title(scope) -> bool:
+        """
+        Exactly one visible **Title** link whose text looks like a full VIN (11–19 alnum) — safe when the
+        list has a single search hit and we cannot match on partial ``frame_partial`` yet.
+        """
+        try:
+            g = scope.locator("#gview_s_1001_l").first
+            if g.count() == 0 or not g.is_visible(timeout=600):
+                return False
+            titles = g.locator('a[name="Title"], a[id*="_l_Title"]')
+            n = titles.count()
+            if n != 1:
+                return False
+            link = titles.first
+            if not link.is_visible(timeout=800):
+                return False
+            t = re.sub(r"[^A-Za-z0-9]", "", link.inner_text(timeout=500) or "")
+            if len(t) < 11 or len(t) > 19:
+                return False
+            try:
+                link.scroll_into_view_if_needed(timeout=1500)
+            except Exception:
+                pass
+            return _try_click_siebel_drilldown(link)
+        except Exception:
+            return False
+
+    def _try_gview_1001_title_links(scope) -> bool:
+        """Click **Title** drilldown under jqGrid ``gview_s_1001_l`` (class ``ui-jqgrid-view``)."""
+        if not use_key:
+            return _try_gview_unique_single_title(scope)
+        for title_chain in _gview_title_chains:
+            try:
+                titles = scope.locator(title_chain)
+                tn = titles.count()
+                for ti in range(min(tn, 40)):
+                    link = titles.nth(ti)
+                    try:
+                        if not link.is_visible(timeout=900):
+                            continue
+                        t = link.inner_text(timeout=500) or ""
+                        compact = re.sub(r"[^A-Za-z0-9]", "", t)
+                        if not row_contains_vin(compact):
+                            continue
+                        try:
+                            link.scroll_into_view_if_needed(timeout=1500)
+                        except Exception:
+                            pass
+                        if _try_click_siebel_drilldown(link):
+                            return True
+                    except Exception:
+                        continue
+            except Exception:
+                continue
+        if _try_gview_unique_single_title(scope):
+            return True
+        return False
+
+    def _try_js_click_gview_s_1001_title(frame) -> bool:
+        """DOM click inside ``#gview_s_1001_l`` (``ui-jqgrid-view``) when Playwright hit-testing fails."""
+        try:
+            hit = frame.evaluate(
+                """({ vk, useKey }) => {
+                  const norm = (s) => String(s || '').replace(/[^A-Za-z0-9]/g, '');
+                  const key = norm(vk);
+                  const g = document.getElementById('gview_s_1001_l');
+                  if (!g) return false;
+                  try { g.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) {}
+                  const vis = (el) => {
+                    if (!el) return false;
+                    const st = window.getComputedStyle(el);
+                    if (st.display === 'none' || st.visibility === 'hidden') return false;
+                    const r = el.getBoundingClientRect();
+                    return r.width >= 1 && r.height >= 1;
+                  };
+                  const nodes = Array.from(g.querySelectorAll('a[name="Title"], a[id*="_l_Title"]')).filter(vis);
+                  if (useKey && key && key.length >= 4) {
+                    for (const a of nodes) {
+                      const t = norm(a.innerText || a.textContent || '');
+                      if (!t) continue;
+                      if (t.includes(key) || key.includes(t) || t.endsWith(key) || t.startsWith(key)) {
+                        try { a.scrollIntoView({ block: 'center' }); } catch (e) {}
+                        try { a.click(); return true; } catch (e) {}
+                      }
+                    }
+                    return false;
+                  }
+                  const vinLike = (t) => {
+                    const n = norm(t);
+                    return n.length >= 11 && n.length <= 19;
+                  };
+                  const cand = nodes.filter((a) => vinLike(a.innerText || a.textContent || ''));
+                  if (cand.length !== 1) return false;
+                  try { cand[0].scrollIntoView({ block: 'center' }); } catch (e) {}
+                  try { cand[0].click(); return true; } catch (e) { return false; }
+                }""",
+                {"vk": vin_key, "useKey": use_key},
+            )
+            return bool(hit)
+        except Exception:
+            return False
+
     def try_click_in_root(root) -> bool:
+        if _try_gview_1001_title_links(root):
+            return True
+
         scopes: list = []
         for title_re in (
             re.compile(r"Search\s+Results", re.I),
@@ -4372,77 +4494,56 @@ def _siebel_try_click_vin_search_hit_link(
         scopes.append(root)
 
         for scope in scopes:
-            # Left **Search Results** (jqGrid): ``#gview_s_1001_l`` → ``table#s_1001_l`` →
-            # ``a[name="Title"]`` (e.g. ``id="1_s_100_1_l_Title"``). Prefer before generic link scans.
-            for title_chain in (
-                '#gview_s_1001_l table#s_1001_l a[name="Title"]',
-                '#gview_s_1001_l table[id="s_1001_l"] a[name="Title"]',
-                '#gview_s_1001_l a[name="Title"][id*="_l_Title"]',
-                '#gview_s_1001_l a[id*="_l_Title"]',
-            ):
+            if _try_gview_1001_title_links(scope):
+                return True
+
+        for scope in scopes:
+
+            # Title column / list: any visible anchor whose text contains the chassis key (VIN link).
+            if use_key and sub_pat is not None:
                 try:
-                    titles = scope.locator(title_chain)
-                    tn = titles.count()
-                    for ti in range(min(tn, 40)):
-                        link = titles.nth(ti)
+                    alinks = scope.locator("a")
+                    an = alinks.count()
+                    for i in range(min(an, 45)):
+                        link = alinks.nth(i)
                         try:
                             if not link.is_visible(timeout=350):
                                 continue
                             t = link.inner_text(timeout=500) or ""
                             compact = re.sub(r"[^A-Za-z0-9]", "", t)
-                            if not row_contains_vin(compact):
-                                continue
-                            if _try_click_siebel_drilldown(link):
-                                return True
+                            if (
+                                len(compact) >= min(10, len(vin_key))
+                                and vin_key.upper() in compact.upper()
+                            ):
+                                if _try_click_siebel_drilldown(link):
+                                    return True
                         except Exception:
                             continue
                 except Exception:
-                    continue
-
-            # Title column / list: any visible anchor whose text contains the chassis key (VIN link).
-            try:
-                alinks = scope.locator("a")
-                an = alinks.count()
-                for i in range(min(an, 45)):
-                    link = alinks.nth(i)
+                    pass
+                try:
+                    loc = scope.get_by_role("link", name=sub_pat)
+                    ln = loc.count()
+                    for i in range(min(ln, 28)):
+                        if _try_click_siebel_drilldown(loc.nth(i)):
+                            return True
+                except Exception:
+                    pass
+                for css in (
+                    'a[href^="javascript"]',
+                    'a[href*="void(0)"]',
+                    "a[href*='javascript']",
+                    "a.siebui-ctrl-drilldown",
+                    "a",
+                ):
                     try:
-                        if not link.is_visible(timeout=350):
-                            continue
-                        t = link.inner_text(timeout=500) or ""
-                        compact = re.sub(r"[^A-Za-z0-9]", "", t)
-                        if (
-                            len(compact) >= min(10, len(vin_key))
-                            and vin_key.upper() in compact.upper()
-                        ):
-                            if _try_click_siebel_drilldown(link):
+                        hits = scope.locator(css).filter(has_text=sub_pat)
+                        hn = hits.count()
+                        for i in range(min(hn, 35)):
+                            if _try_click_siebel_drilldown(hits.nth(i)):
                                 return True
                     except Exception:
                         continue
-            except Exception:
-                pass
-            try:
-                loc = scope.get_by_role("link", name=sub_pat)
-                ln = loc.count()
-                for i in range(min(ln, 28)):
-                    if _try_click_siebel_drilldown(loc.nth(i)):
-                        return True
-            except Exception:
-                pass
-            for css in (
-                'a[href^="javascript"]',
-                'a[href*="void(0)"]',
-                "a[href*='javascript']",
-                "a.siebui-ctrl-drilldown",
-                "a",
-            ):
-                try:
-                    hits = scope.locator(css).filter(has_text=sub_pat)
-                    hn = hits.count()
-                    for i in range(min(hn, 35)):
-                        if _try_click_siebel_drilldown(hits.nth(i)):
-                            return True
-                except Exception:
-                    continue
 
         for rsel in row_selectors:
             try:
@@ -4487,6 +4588,12 @@ def _siebel_try_click_vin_search_hit_link(
     for root in _siebel_locator_search_roots(page, content_frame_selector):
         try:
             if try_click_in_root(root):
+                return True
+        except Exception:
+            continue
+    for fr in list(_ordered_frames(page)) + [page.main_frame]:
+        try:
+            if _try_js_click_gview_s_1001_title(fr):
                 return True
         except Exception:
             continue
