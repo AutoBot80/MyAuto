@@ -35,7 +35,6 @@ import json
 import re
 import time
 from collections.abc import Callable
-from typing import TextIO
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -70,9 +69,8 @@ def _hero_default_payment_lines_root_hint() -> dict[str, object]:
     )
     return {
         "schema_version": 1,
-        "trial_run_id": "hero_builtin_default",
+        "hint_source": "builtin",
         "dealer_id": "",
-        "log_subfolder": "",
         "page_url_top": _top,
         "payment_lines_root_index_primary": 0,
         "ordered_frames_count": 0,
@@ -119,7 +117,9 @@ def _siebel_naive_datetime_as_ist(dt: datetime) -> datetime:
 # BRD linear SOP inside ``Playwright_Hero_DMS_fill``.
 SIEBEL_DMS_STOP_AFTER_ALL_ENQUIRIES = True
 
-# Temporary: video SOP — hard fail before **Generate Booking** / ``_create_order`` (remove or set False to re-enable).
+# TEMPORARY (video SOP): hard-stop before Generate Booking / ``_create_order``.
+# Do **not** remove this flag or set it False unless the product owner **explicitly** asks — not during
+# logging cleanups, refactors, or inferred "cleanup" requests.
 SIEBEL_DMS_HARD_FAIL_BEFORE_BOOKING_AND_ORDER = True
 
 
@@ -144,20 +144,6 @@ def _agent_debug_log(hypothesis_id: str, location: str, message: str, data: dict
 
 
 # endregion
-
-
-def _siebel_diag_note(note: Callable[..., object], msg: str, *, prefix: str = "Siebel") -> None:
-    """
-    Append a NOTE with an inline UTC stamp for correlation when log lines are copied without
-    the file-level timestamp. ``Playwright_DMS.txt`` still prefixes each line via ``_exec_log``.
-    """
-    if not callable(note):
-        return
-    try:
-        ts = datetime.now(timezone.utc).isoformat()
-        note(f"{prefix} [utc={ts}] {msg}")
-    except Exception:
-        pass
 
 
 def _normalize_cubic_cc_digits(val: object) -> str:
@@ -4945,20 +4931,10 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
         return False
 
     def _after_relation_fill_nav() -> bool:
-        _siebel_diag_note(
-            note,
-            "Video SOP: Relation's Name is set; next filling Address Line 1 (DB substring) before Contact ID / Payments.",
-            prefix="Video SOP",
-        )
         addr_ok = _fill_address_line_1_if_available()
         if not addr_ok:
             note("Stopping before Add customer payment: Address Line 1 was not filled.")
             return False
-        _siebel_diag_note(
-            note,
-            "Video SOP: Address Line 1 applied; caller will scrape Contact ID, then open Payments (add customer payment).",
-            prefix="Video SOP",
-        )
         note("Relation's Name filled; stopping on current field as requested.")
         return True
 
@@ -6316,134 +6292,6 @@ def _payment_line_toolbar_roots_priority(root) -> tuple:
     return (2, 0)
 
 
-def _describe_payment_line_root(root) -> str:
-    """One-line description for operator logs (Frame vs FrameLocator / other)."""
-    try:
-        if isinstance(root, Frame):
-            u = (root.url or "")[-140:]
-            nm = (getattr(root, "name", None) or "")[:80]
-            tit = ""
-            try:
-                fe = root.frame_element()
-                tit = (fe.get_attribute("title") or "").strip()[:100]
-            except Exception:
-                pass
-            return f"Frame url_tail={u!r} name={nm!r} iframe_title={tit!r}"
-    except Exception:
-        pass
-    try:
-        return f"type={type(root).__name__!r}"
-    except Exception:
-        return "type=?"
-
-
-def _log_payment_line_roots_discovered(note: Callable[..., object], roots: list, *, label: str) -> None:
-    if not callable(note) or not roots:
-        return
-    try:
-        note(f"Payments: {label} — discovered {len(roots)} Payment Lines root(s) (detail per index).")
-        for i, r in enumerate(roots):
-            note(f"Payments: {label} root_index={i} {_describe_payment_line_root(r)}")
-    except Exception:
-        pass
-
-
-def _match_reason_for_payment_root(root) -> str:
-    """Which gather predicate matches this root (order aligned with **§2.4d.1**)."""
-    try:
-        if _siebel_root_has_payment_lines_toolbar(root):
-            return "toolbar"
-    except Exception:
-        pass
-    try:
-        if isinstance(root, Frame) and _frame_iframe_title_matches_payment_lines(root):
-            return "iframe_title"
-    except Exception:
-        pass
-    try:
-        if isinstance(root, Frame) and _siebel_frame_has_payment_lines_hhml_grid(root):
-            return "hhml_grid"
-    except Exception:
-        pass
-    return "unknown"
-
-
-def _payment_lines_root_hint_entry(root, idx: int) -> dict[str, object]:
-    entry: dict[str, object] = {
-        "index": idx,
-        "match_reason": _match_reason_for_payment_root(root),
-        "type": type(root).__name__,
-    }
-    if isinstance(root, Frame):
-        entry["frame_url_tail"] = (root.url or "")[-200:]
-        entry["frame_name"] = (getattr(root, "name", None) or "")[:120]
-        try:
-            fe = root.frame_element()
-            entry["iframe_element_title"] = (fe.get_attribute("title") or "").strip()[:200]
-        except Exception:
-            entry["iframe_element_title"] = ""
-    else:
-        entry["frame_url_tail"] = ""
-        entry["frame_name"] = ""
-        entry["iframe_element_title"] = ""
-    return entry
-
-
-def _build_payment_lines_root_hint_dict(
-    page: Page,
-    content_frame_selector: str | None,
-    payment_toolbar_roots: list,
-    *,
-    trial_run_id: str,
-    dealer_id: str | None,
-    log_subfolder: str | None,
-    receipts_field_name: str = "s_2_1_1_0",
-) -> dict[str, object]:
-    """Structured trial capture for **LLD §2.4d.1** (fast-path hint; full gather remains fallback)."""
-    _pw_ver = ""
-    try:
-        import importlib.metadata
-
-        _pw_ver = importlib.metadata.version("playwright")
-    except Exception:
-        pass
-    _top = ""
-    try:
-        _top = str(page.url or "").strip()[-200:]
-    except Exception:
-        pass
-    try:
-        _ofc = len(_ordered_frames(page))
-    except Exception:
-        _ofc = 0
-    roots_sorted = [_payment_lines_root_hint_entry(r, i) for i, r in enumerate(payment_toolbar_roots)]
-    return {
-        "schema_version": 1,
-        "trial_run_id": trial_run_id,
-        "dealer_id": (dealer_id or "").strip(),
-        "log_subfolder": (log_subfolder or "").strip(),
-        "page_url_top": _top,
-        "payment_lines_root_index_primary": 0,
-        "ordered_frames_count": _ofc,
-        "content_frame_selector": (content_frame_selector or "").strip(),
-        "receipts_field_name": receipts_field_name,
-        "playwright_package_version": _pw_ver,
-        "roots_sorted": roots_sorted,
-    }
-
-
-def _write_payment_lines_root_hint_to_log(log_fp: TextIO | None, payload: dict[str, object]) -> None:
-    if not log_fp:
-        return
-    try:
-        log_fp.write("\n--- payment_lines_root_hint (trial capture; LLD 2.4d.1) ---\n")
-        log_fp.write(json.dumps(payload, ensure_ascii=False, indent=2))
-        log_fp.write("\n")
-        log_fp.flush()
-    except OSError:
-        pass
-
-
 def _load_payment_lines_hint_dict_from_config() -> dict[str, object]:
     """
     Payment Lines fast-path hint: optional **env / file** override; else **Hero built-in default**
@@ -6598,10 +6446,6 @@ def _add_customer_payment(
     content_frame_selector: str | None,
     note,
     vehicle_context: dict | None = None,
-    log_fp: TextIO | None = None,
-    trial_run_id: str | None = None,
-    dealer_id: str | None = None,
-    log_subfolder: str | None = None,
 ) -> bool:
     """
     Open **Payments**, locate the frame(s) where **Payment Lines List:New** (``+``) lives, then **in that
@@ -6630,10 +6474,6 @@ def _add_customer_payment(
     )
 
     _safe_page_wait(page, 250, log_label="before_payments_plus_click")
-    try:
-        note(f"Payment debug: ordered frames count={len(_ordered_frames(page))}.")
-    except Exception:
-        pass
 
     # Primary path: short Payments-tab activation first, then root discovery.
     _tab_tmo = int(min(4000, max(1200, action_timeout_ms // 4)))
@@ -6643,29 +6483,15 @@ def _add_customer_payment(
         content_frame_selector=content_frame_selector,
         note=note,
     ):
-        _siebel_diag_note(
-            note,
-            "Payments: Payments tab activated; waiting 800ms for applet settle before discovering Payment Lines roots.",
-            prefix="Payments",
-        )
         _safe_page_wait(page, 800, log_label="after_payments_tab_activate_primary")
-    else:
-        _siebel_diag_note(
-            note,
-            "Payments: Payments tab pattern did not match a clickable tab/link; still attempting Payment Lines root discovery.",
-            prefix="Payments",
-        )
-    _siebel_diag_note(
-        note,
-        "Payments: gathering Payment Lines toolbar roots (List:New / Save / HHML grid / iframe title scan).",
-        prefix="Payments",
-    )
     payment_toolbar_roots: list = []
     _hint_cfg = _load_payment_lines_hint_dict_from_config()
     _hinted = _try_payment_line_roots_from_hint(page, _hint_cfg)
     if _hinted:
         payment_toolbar_roots = _hinted
-        _is_builtin = (_hint_cfg.get("trial_run_id") == "hero_builtin_default")
+        _is_builtin = (_hint_cfg.get("hint_source") == "builtin") or (
+            str(_hint_cfg.get("trial_run_id") or "").strip() == "hero_builtin_default"
+        )
         if _is_builtin:
             note(
                 "Payments: matched Payment Lines root from built-in Hero hint "
@@ -6688,60 +6514,16 @@ def _add_customer_payment(
             "Payments: no Payment Lines root after primary tab activation; "
             "retrying root search without extra tab wait."
         )
-        _siebel_diag_note(
-            note,
-            "Payments: retrying _gather_payment_line_toolbar_roots once after empty first pass.",
-            prefix="Payments",
-        )
         payment_toolbar_roots = _gather_payment_line_toolbar_roots(page, content_frame_selector)
 
     payment_toolbar_roots.sort(key=_payment_line_toolbar_roots_priority)
-    _log_payment_line_roots_discovered(
-        note, payment_toolbar_roots, label="gather_payment_line_toolbar_roots (sorted)"
-    )
-    if payment_toolbar_roots and log_fp:
-        _write_payment_lines_root_hint_to_log(
-            log_fp,
-            _build_payment_lines_root_hint_dict(
-                page,
-                content_frame_selector,
-                payment_toolbar_roots,
-                trial_run_id=(trial_run_id or "").strip() or datetime.now(timezone.utc).isoformat(),
-                dealer_id=dealer_id,
-                log_subfolder=log_subfolder,
-            ),
-        )
-        note(
-            "Payments: appended payment_lines_root_hint JSON block to Playwright_DMS.txt "
-            "(trial capture per LLD 2.4d.1)."
-        )
-    _siebel_diag_note(
-        note,
-        f"Payments: Payment Lines roots ready (count={len(payment_toolbar_roots)}); will check grid / Receipts probe per root.",
-        prefix="Payments",
-    )
-    # region agent log
-    _agent_debug_log(
-        "H1",
-        "siebel_dms_playwright.py:_add_customer_payment",
-        "payment_toolbar_roots_built",
-        {
-            "roots_count": int(len(payment_toolbar_roots)),
-            "has_selector": bool(content_frame_selector),
-            "action_timeout_ms": int(action_timeout_ms),
-        },
-    )
-    # endregion
+    if payment_toolbar_roots:
+        try:
+            note(f"Payments: {len(payment_toolbar_roots)} Payment Lines root(s).")
+        except Exception:
+            pass
 
     if not payment_toolbar_roots:
-        # region agent log
-        _agent_debug_log(
-            "H1",
-            "siebel_dms_playwright.py:_add_customer_payment",
-            "payment_toolbar_roots_missing",
-            {"roots_count": 0, "has_selector": bool(content_frame_selector)},
-        )
-        # endregion
         note(
             "Payment debug: Payment Lines toolbar (List:New / Save) not found — "
             "cannot locate '+' frame; ensure the Payments view shows Payment Lines."
@@ -6754,24 +6536,9 @@ def _add_customer_payment(
         click ``name='s_2_1_1_0'`` -> Tab -> type ``Receipts`` -> Tab -> Enter.
         """
         try:
-            _siebel_diag_note(
-                note,
-                f"Payments: root_index={idx}: locating Receipts query field name=s_2_1_1_0 (visibility check up to 700ms).",
-                prefix="Payments",
-            )
             fld = root.locator("input[name='s_2_1_1_0'], textarea[name='s_2_1_1_0']").first
             if fld.count() == 0 or not fld.is_visible(timeout=700):
-                _siebel_diag_note(
-                    note,
-                    f"Payments: root_index={idx}: field s_2_1_1_0 missing or not visible — skipping Receipts keystroke probe on this root.",
-                    prefix="Payments",
-                )
                 return False
-            _siebel_diag_note(
-                note,
-                f"Payments: root_index={idx}: field visible — click, Tab, type Receipts, Tab, Enter, then short post-query wait.",
-                prefix="Payments",
-            )
             try:
                 fld.click(timeout=min(2500, action_timeout_ms))
             except Exception:
@@ -6785,31 +6552,15 @@ def _add_customer_payment(
             _safe_page_wait(page, 120, log_label=f"payment_receipts_probe_tab2_{idx}")
             page.keyboard.press("Enter")
             _safe_page_wait(page, 1200, log_label=f"payment_receipts_probe_enter_{idx}")
-            note(
-                "Payments: ran Receipts query probe on payment root "
-                f"(root_index={idx}, field='s_2_1_1_0')."
-            )
             return True
         except Exception:
             return False
 
     for idx, pr in enumerate(payment_toolbar_roots):
         try:
-            _probe_ran = _try_receipts_query_in_root(pr, idx)
+            _try_receipts_query_in_root(pr, idx)
             if _payment_lines_list_has_populated_transaction_number(pr):
                 _det_via = _payment_lines_detection_reason(pr)
-                # region agent log
-                _agent_debug_log(
-                    "H2",
-                    "siebel_dms_playwright.py:_add_customer_payment",
-                    "payment_skipped_existing_transaction",
-                    {
-                        "root_index": int(idx),
-                        "detected_via": _det_via,
-                        "receipts_probe_ran": bool(_probe_ran),
-                    },
-                )
-                # endregion
                 note(
                     "Payments: Payment Lines list already has a row with populated Transaction# — "
                     f"skipping '+' and new-line entry (detected_via={_det_via})."
@@ -6854,10 +6605,6 @@ def _add_customer_payment(
         return False
 
     root_candidates = payment_toolbar_roots
-    note(
-        "Payment debug: '+' frame(s) for Payment Lines "
-        f"(payment_toolbar_roots={len(root_candidates)})."
-    )
 
     for root in root_candidates:
         try:
@@ -6909,14 +6656,6 @@ def _add_customer_payment(
                         continue
 
                 if payment_frames:
-                    # region agent log
-                    _agent_debug_log(
-                        "H3",
-                        "siebel_dms_playwright.py:_add_customer_payment",
-                        "payment_frame_locked_strict",
-                        {"frames_count": int(len(payment_frames))},
-                    )
-                    # endregion
                     try:
                         note(f"Payment lines scoped frame locked: url={(payment_frames[0].url or '')[:180]!r}, name={payment_frames[0].name!r}")
                     except Exception:
@@ -6954,27 +6693,11 @@ def _add_customer_payment(
                         except Exception:
                             continue
                     if payment_frames:
-                        # region agent log
-                        _agent_debug_log(
-                            "H3",
-                            "siebel_dms_playwright.py:_add_customer_payment",
-                            "payment_frame_locked_relaxed",
-                            {"frames_count": int(len(payment_frames))},
-                        )
-                        # endregion
                         try:
                             note(f"Payment lines relaxed frame lock: url={(payment_frames[0].url or '')[:180]!r}, name={payment_frames[0].name!r}")
                         except Exception:
                             pass
                     else:
-                        # region agent log
-                        _agent_debug_log(
-                            "H3",
-                            "siebel_dms_playwright.py:_add_customer_payment",
-                            "payment_frame_lock_failed",
-                            {"clicked_plus": True},
-                        )
-                        # endregion
                         note("Payment lines scoped frame not detected; stopping to avoid focus drift.")
                         return False
                 # Prefer the exact frame that contains Transaction_Type fields.
@@ -7024,7 +6747,6 @@ def _add_customer_payment(
                 else:
                     # Keep focus locked to the first detected Payment Lines frame.
                     scoped_roots = [payment_frames[0]]
-                note(f"Payment debug: transaction roots count={len(scoped_roots)}.")
 
                 # Transaction Amount may appear in a sibling frame; lock it independently.
                 amount_roots = scoped_roots
@@ -7071,7 +6793,6 @@ def _add_customer_payment(
                         note(f"Transaction amount frame locked: url={(amt_frame.url or '')[:180]!r}, name={amt_frame.name!r}")
                     except Exception:
                         pass
-                note(f"Payment debug: amount roots count={len(amount_roots)}.")
 
                 _TXN_TYPE_SELS = (
                     "input[name='Transaction_Type']",
@@ -15233,18 +14954,7 @@ def Playwright_Hero_DMS_fill(
                 )
                 return out
 
-            _siebel_diag_note(
-                note,
-                "Video SOP: customer form path returned after Relation's Name + Address Line 1; next: branch (2) postal/save only if no open enquiry, then Contact ID scrape.",
-                prefix="Video SOP",
-            )
-
             if not sweep_has_open:
-                _siebel_diag_note(
-                    note,
-                    "Video SOP: no open enquiry from sweep — running branch (2) Address / Postal Code / Save before Contact ID.",
-                    prefix="Video SOP",
-                )
                 if not _siebel_video_branch2_address_postal_and_save(
                     page,
                     pin_code=pin,
@@ -15257,19 +14967,8 @@ def Playwright_Hero_DMS_fill(
                         "Siebel: no open enquiry path — could not fill Address Postal Code or save."
                     )
                     return out
-            else:
-                _siebel_diag_note(
-                    note,
-                    "Video SOP: open enquiry already present — skipping branch (2) postal/save; proceeding to Contact ID scrape.",
-                    prefix="Video SOP",
-                )
 
             # Scrape Contact ID: detail inputs + Contacts grid **Contact Id** column (e.g. 11870-01-SCON-…).
-            _siebel_diag_note(
-                note,
-                "Video SOP: scanning frames for Contact Id (detail fields + Contacts grid column) for downstream create_order.",
-                prefix="Video SOP",
-            )
             _contact_id = ""
             _cid_js = """() => {
                 const vis = (el) => {
@@ -15340,11 +15039,6 @@ def Playwright_Hero_DMS_fill(
                 out,
                 had_open_enquiry_from_sweep=sweep_has_open,
             )
-            _siebel_diag_note(
-                note,
-                "Video SOP: contact scrape section written to Playwright_DMS.txt; starting v3 add-customer payment (Payments tab, Payment Lines probe or '+').",
-                prefix="Video SOP",
-            )
 
             form_trace(
                 "v3_add_customer_payment",
@@ -15357,28 +15051,12 @@ def Playwright_Hero_DMS_fill(
                 content_frame_selector=content_frame_selector,
                 note=note,
                 vehicle_context=(out.get("vehicle") or {}),
-                log_fp=log_fp,
-                trial_run_id=run_started_utc,
-                dealer_id=(
-                    str(dms_values.get("dealer_id")).strip()
-                    if dms_values.get("dealer_id") is not None
-                    else None
-                ),
-                log_subfolder=(
-                    _exec_log_path.parent.name if _exec_log_path is not None else None
-                ),
             ):
                 step("Stopped: could not open Payments tab or click '+' icon.")
                 out["error"] = (
                     "Siebel: video SOP — could not click Payments tab and '+' icon for Add customer payment."
                 )
                 return out
-
-            _siebel_diag_note(
-                note,
-                "Video SOP: add-customer payment step finished successfully (Payments tab / Payment Lines or skip); next: Generate Booking then create_order.",
-                prefix="Video SOP",
-            )
 
             if SIEBEL_DMS_HARD_FAIL_BEFORE_BOOKING_AND_ORDER:
                 step(
@@ -15387,7 +15065,8 @@ def Playwright_Hero_DMS_fill(
                 )
                 note(
                     "Siebel: SIEBEL_DMS_HARD_FAIL_BEFORE_BOOKING_AND_ORDER is True — "
-                    "skipping Generate Booking and create_order until disabled in siebel_dms_playwright.py."
+                    "skipping Generate Booking and create_order until disabled in siebel_dms_playwright.py "
+                    "(owner request only)."
                 )
                 out["error"] = (
                     "Siebel: temporary stop before Generate Booking / create_order "
@@ -15403,19 +15082,9 @@ def Playwright_Hero_DMS_fill(
             # If there is no open order for this customer, try Generate Booking before Sales Orders.
             _enq_u = (urls.enquiry or "").strip() or (urls.contact or "").strip()
             if _enq_u:
-                _siebel_diag_note(
-                    note,
-                    f"Video SOP: navigating toward enquiry/contact URL for Generate Booking (truncated target in trace).",
-                    prefix="Video SOP",
-                )
                 _goto(page, _enq_u, "enquiry_for_booking_video", nav_timeout_ms=nav_timeout_ms)
                 _siebel_after_goto_wait(page, floor_ms=900)
             _safe_page_wait(page, 500, log_label="before_generate_booking_video")
-            _siebel_diag_note(
-                note,
-                "Video SOP: attempting Generate Booking control before Vehicle Sales create_order.",
-                prefix="Video SOP",
-            )
             if _try_click_generate_booking(
                 page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
             ):

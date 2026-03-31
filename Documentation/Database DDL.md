@@ -505,9 +505,11 @@ This document lists the current database tables and their columns. **Executable 
 | 2.23 | Mar 2026 | **No schema change.** **`cubic_capacity`** scrape stores numeric token only — **LLD** **6.82**, **BRD** **3.37** |
 | 2.24 | Mar 2026 | **No schema change.** Payments flow: primary short tab activation and **Ctrl+S** save fallback with Transaction# verification — **LLD** **6.83**, **BRD** **3.38** |
 | 2.25 | Mar 2026 | **No schema change.** Payments save action order updated to **Ctrl+S primary** with Save icon fallback; Transaction# remains mandatory success verification — **LLD** **6.84**, **BRD** **3.39** |
-| 2.26 | Mar 2026 | **No schema change.** Siebel **`_siebel_diag_note`** + video path / **`_add_customer_payment`** diagnostic **`note`** lines (UTC inline + **`Playwright_DMS.txt`** line timestamps) — **LLD** **6.85** |
+| 2.26 | Mar 2026 | **No schema change.** Siebel **`_siebel_diag_note`** + video path / **`_add_customer_payment`** diagnostic **`note`** lines (UTC inline + **`Playwright_DMS.txt`** line timestamps) — **LLD** **6.85**. **Superseded in part by 2.32** / **LLD** **6.91**. |
 | 2.27 | Mar 2026 | **No schema change.** **LLD** **§2.4d.1** — trial field list + example JSON for Payment Lines root hint (future fast path); no DB table. |
-| 2.28 | Mar 2026 | **No schema change.** **`Playwright_DMS.txt`** now appends automated **`payment_lines_root_hint`** JSON after Payment Lines gather — **LLD** **6.87**, **§2.4d.1**. |
+| 2.28 | Mar 2026 | **No schema change.** **`Playwright_DMS.txt`** now appends automated **`payment_lines_root_hint`** JSON after Payment Lines gather — **LLD** **6.87**, **§2.4d.1**. **Superseded by 2.32** / **LLD** **6.91** (JSON append removed). |
 | 2.29 | Mar 2026 | **No schema change.** Optional **`DMS_SIEBEL_PAYMENT_LINES_ROOT_HINT_*`** env fast path for Payment Lines frame — **LLD** **6.88**, **§2.4d.1**. |
 | 2.30 | Mar 2026 | **No schema change.** Built-in **`_hero_default_payment_lines_root_hint`**; env hint optional override — **LLD** **6.89**. |
-| 2.31 | Mar 2026 | **No schema change.** Temporary **`SIEBEL_DMS_HARD_FAIL_BEFORE_BOOKING_AND_ORDER`** gate (video SOP stops after payments) — **LLD** **6.90**. |
+| 2.31 | Mar 2026 | **No schema change.** Temporary **`SIEBEL_DMS_HARD_FAIL_BEFORE_BOOKING_AND_ORDER`** gate (video SOP stops after payments) — **LLD** **6.90** (**superseded:** removed — **LLD** **6.91**). |
+| 2.32 | Mar 2026 | **No schema change.** Siebel **`Playwright_DMS.txt`** logging cleanup (no trial JSON block; diag trim) — **LLD** **6.91**. |
+| 2.33 | Mar 2026 | **No schema change.** Restored **`SIEBEL_DMS_HARD_FAIL_BEFORE_BOOKING_AND_ORDER`** after payments on video SOP — **LLD** **6.92**. |

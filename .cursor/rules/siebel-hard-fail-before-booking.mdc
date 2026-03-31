@@ -1,0 +1,14 @@
+---
+description: Never remove SIEBEL_DMS_HARD_FAIL_BEFORE_BOOKING_AND_ORDER unless the owner explicitly asks
+alwaysApply: true
+---
+
+# Siebel video SOP — hard fail before Generate Booking / create order
+
+**Module flag:** `SIEBEL_DMS_HARD_FAIL_BEFORE_BOOKING_AND_ORDER` in `backend/app/services/siebel_dms_playwright.py` (with the early `return` immediately after successful `_add_customer_payment` on the video path).
+
+## Required agent behavior
+
+1. **Do not** remove this flag, set it to `False`, or delete the guard block as part of “cleanup”, “logging”, “refactors”, “restore full SOP”, or inferred user intent — **unless the product owner explicitly requests** that this gate be disabled or removed **by name** (or clearly states they want Generate Booking / `create_order` to run again).
+2. If a user message might imply removing it but does not **explicitly** say so, **stop** and **ask** before changing this gate.
+3. Prefer **only** edits the owner asked for; do not “helpfully” remove temporary controls.

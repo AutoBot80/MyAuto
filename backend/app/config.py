@@ -139,7 +139,7 @@ DMS_SIEBEL_INTER_ACTION_DELAY_MS = int(os.getenv("DMS_SIEBEL_INTER_ACTION_DELAY_
 _siebel_if = (os.getenv("DMS_SIEBEL_AUTO_IFRAME_SELECTORS") or "").strip()
 DMS_SIEBEL_AUTO_IFRAME_SELECTORS = [x.strip() for x in _siebel_if.split(",") if x.strip()]
 # Optional override for Payment Lines frame fast-path (``siebel_dms_playwright._hero_default_payment_lines_root_hint``
-# is used when both are empty). JSON from Playwright_DMS.txt ``payment_lines_root_hint`` or a path to ``.json``.
+# is used when both are empty). JSON object per LLD §2.4d.1, or path to a ``.json`` file.
 DMS_SIEBEL_PAYMENT_LINES_ROOT_HINT_FILE = (os.getenv("DMS_SIEBEL_PAYMENT_LINES_ROOT_HINT_FILE") or "").strip()
 DMS_SIEBEL_PAYMENT_LINES_ROOT_HINT_JSON = (os.getenv("DMS_SIEBEL_PAYMENT_LINES_ROOT_HINT_JSON") or "").strip()
 DMS_LOGIN_USER = os.getenv("DMS_LOGIN_USER", "demo")

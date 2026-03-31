@@ -322,4 +322,6 @@ The SQL view **`form_dms_view`** is **removed**; the same mapping is implemented
 | 1.24 | Mar 2026 | — | **`cubic_capacity`** normalized to numeric-only at scrape time — **LLD** **6.82**, **BRD** **3.37** |
 | 1.25 | Mar 2026 | — | Payments flow reliability: primary short tab activation + **Ctrl+S** save fallback with Transaction# verification gate — **LLD** **6.83**, **BRD** **3.38** |
 | 1.26 | Mar 2026 | — | Payments save order tuned: **Ctrl+S** primary, icon click fallback, Transaction# verification unchanged — **LLD** **6.84**, **BRD** **3.39** |
-| 1.27 | Mar 2026 | — | **`fill_hero_dms_service`** / video SOP: temporary **`SIEBEL_DMS_HARD_FAIL_BEFORE_BOOKING_AND_ORDER`** stops the run after payments (no Generate Booking / create order) — **LLD** **6.90**, **BRD** **3.40** |
+| 1.27 | Mar 2026 | — | **`fill_hero_dms_service`** / video SOP: temporary **`SIEBEL_DMS_HARD_FAIL_BEFORE_BOOKING_AND_ORDER`** stopped the run after payments — **LLD** **6.90** (**superseded by** **6.91**). |
+| 1.28 | Mar 2026 | — | Logging cleanup: trial **`payment_lines_root_hint`** file append, UTC-duplicate diag **`note`** lines — **LLD** **6.91**, **BRD** **3.41** |
+| 1.29 | Mar 2026 | — | **`SIEBEL_DMS_HARD_FAIL_BEFORE_BOOKING_AND_ORDER`** restored with owner-only removal policy (**`.cursor/rules/siebel-hard-fail-before-booking.mdc`**) — **LLD** **6.92** |
