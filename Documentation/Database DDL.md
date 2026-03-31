@@ -522,3 +522,5 @@ This document lists the current database tables and their columns. **Executable 
 | 2.40 | Mar 2026 | **No schema change.** Title drilldown / Contact_Enquiry subgrid trial **`note`** JSON — **LLD** **6.99** / **§2.4d.3**. |
 | 2.41 | Mar 2026 | **No schema change.** Contact detail readiness vs Contacts first-name probe — **LLD** **6.100** / **§2.4d.4**. |
 | 2.42 | Mar 2026 | **No schema change.** Built-in Siebel Contact Find / Contact_Enquiry frame hints — **LLD** **6.101**. |
+| 2.43 | Mar 2026 | **No schema change.** Video path drilldown plan cache — **LLD** **6.102**. |
+| 2.44 | Mar 2026 | **No schema change.** Contact Find drilldown direct frame resolution — **LLD** **6.103**. |

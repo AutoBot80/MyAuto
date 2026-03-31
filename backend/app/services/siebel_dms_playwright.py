@@ -4064,6 +4064,7 @@ def _find_contact_mobile_first_grid_counts(
     first_name: str,
     *,
     content_frame_selector: str | None = None,
+    cached_plans: list[tuple[object, int, str, int]] | None = None,
 ) -> tuple[int, int]:
     """
     After Find/Go on Contact: count **drillable** rows for ``mobile`` — same rules as
@@ -4073,17 +4074,23 @@ def _find_contact_mobile_first_grid_counts(
 
     Second count: among those rows, how many list texts **hint** at an enquiry (``SENQ``, ``Enquiry`` + digits,
     Siebel-style id). Not a substitute for ``_contact_enquiry_tab_has_rows`` after drilldown.
+
+    Pass **cached_plans** from a single ``_contact_mobile_drilldown_plans(..., first_name_exact=None)`` call
+    to avoid rebuilding plans (video path).
     """
     needle = _mobile_needle_for_contact_grid_match(mobile)
     if not needle:
         return 0, 0
-    plans = _contact_mobile_drilldown_plans(
-        page,
-        mobile,
-        content_frame_selector=content_frame_selector,
-        first_name_exact=None,
-        log_first_name_row_debug=False,
-    )
+    if cached_plans is not None:
+        plans = cached_plans
+    else:
+        plans = _contact_mobile_drilldown_plans(
+            page,
+            mobile,
+            content_frame_selector=content_frame_selector,
+            first_name_exact=None,
+            log_first_name_row_debug=False,
+        )
     n_match = len(plans)
     n_hint = 0
     for _dr_root, _row_i, _, _ in plans:
@@ -5458,12 +5465,13 @@ def _contact_mobile_drilldown_plans(
 ) -> list[tuple[object, int, str, int]]:
     """
     Build ordered drilldown plans: each row that contains the mobile (10-digit / raw digit rules)
-    and has a visible row link. **Duplicate-mobile detection:** we scan each search root (chained
-    frame, scored iframes, main page) separately and keep the **single** root's plan list with the
-    **most** hits—so the same physical grid mirrored in parent + iframe is not double-counted.
+    and has a visible row link. **Duplicate-mobile detection:** we scan each search root separately
+    and keep the **single** root's plan list with the **most** hits.
 
-    ``len(returned)`` is therefore **the number of separate table rows** containing the mobile for
-    looping / duplicate sweep (ordinal ``0 .. len-1``).
+    **Fast path:** ``DMS_SIEBEL_CONTENT_FRAME_SELECTOR`` FrameLocators + :func:`_resolve_builtin_contact_find_grid_frame`
+    (builtin Hero **SWEView** / **Opportunity+List** URL). If any root yields plans, return immediately
+    without scanning every iframe. **Fallback:** full sweep (mirrored grids, hint drift after Siebel upgrade).
+    ``len(returned)`` is the number of table rows for sweep ordinals ``0 .. len-1``.
     """
     drill_needle = _mobile_needle_for_contact_grid_match(mobile)
     drill_raw = re.sub(r"\D", "", (mobile or "").strip())
@@ -5575,25 +5583,13 @@ def _contact_mobile_drilldown_plans(
         except Exception:
             pass
 
-    best_plans: list[tuple[object, int, str, int]] = []
-    # Hint-first root order (builtin Hero URL fragments + optional env), then same wide sweep as before.
-    for _dr_root in (
-        list(
-            _iter_siebel_root_search_order(
-                page,
-                content_frame_selector,
-                _load_mobile_search_hit_hint_dict_from_config(),
-            )
-        )
-        + list(_ordered_frames(page))
-        + [page]
-    ):
+    def _collect_plans_for_root(_dr_root: object) -> list[tuple[object, int, str, int]]:
         plans_here: list[tuple[object, int, str, int]] = []
         try:
             _rows = _dr_root.locator("table tr")
             _rn = _rows.count()
         except Exception:
-            continue
+            return plans_here
         for _ri in range(min(_rn, 80)):
             _row = _rows.nth(_ri)
             try:
@@ -5646,8 +5642,38 @@ def _contact_mobile_drilldown_plans(
                     break
             if _row_link_sel is not None and _row_link_idx is not None:
                 plans_here.append((_dr_root, _ri, _row_link_sel, _row_link_idx))
-        if len(plans_here) > len(best_plans):
-            best_plans = plans_here
+        return plans_here
+
+    best_plans: list[tuple[object, int, str, int]] = []
+    # Fast path: explicit FrameLocators + single **Frame** from builtin URL (usually main) — no full scan.
+    _fast_roots: list[object] = []
+    for _fl in _iter_frame_locator_roots(page, content_frame_selector):
+        _fast_roots.append(_fl)
+    _direct_fr = _resolve_builtin_contact_find_grid_frame(page)
+    if _direct_fr is not None:
+        _fast_roots.append(_direct_fr)
+    for _dr_root in _fast_roots:
+        _ph = _collect_plans_for_root(_dr_root)
+        if len(_ph) > len(best_plans):
+            best_plans = _ph
+    if best_plans:
+        return best_plans
+
+    # Fallback: full multi-root sweep (mirrored grids, odd iframes, or hint URL drift).
+    for _dr_root in (
+        list(
+            _iter_siebel_root_search_order(
+                page,
+                content_frame_selector,
+                _load_mobile_search_hit_hint_dict_from_config(),
+            )
+        )
+        + list(_ordered_frames(page))
+        + [page]
+    ):
+        _ph = _collect_plans_for_root(_dr_root)
+        if len(_ph) > len(best_plans):
+            best_plans = _ph
     return best_plans
 
 
@@ -5657,8 +5683,11 @@ def _contact_find_mobile_drilldown_occurrence_count(
     *,
     content_frame_selector: str | None = None,
     first_name_exact: str | None = None,
+    cached_plans: list[tuple[object, int, str, int]] | None = None,
 ) -> int:
     """Return how many result rows contain ``mobile`` and are drillable (same rules as sweep ordinals)."""
+    if cached_plans is not None:
+        return len(cached_plans)
     return len(
         _contact_mobile_drilldown_plans(
             page,
@@ -5679,11 +5708,15 @@ def _click_nth_mobile_title_drilldown(
     content_frame_selector: str | None,
     first_name_exact: str | None = None,
     note: Callable[..., object] | None = None,
+    cached_plans: list[tuple[object, int, str, int]] | None = None,
 ) -> bool:
     """
     After Contact Find/Go, click the ``ordinal``-th (0-based) drilldown row that matches ``mobile``.
     We do **not** depend on the Title anchor text; we anchor to the row that contains the mobile digits
     and click a visible link inside that row.
+
+    **cached_plans**: optional list from ``_contact_mobile_drilldown_plans`` built with the **same**
+    ``first_name_exact`` as this call — avoids a duplicate full grid scan (video path).
     """
     if ordinal < 0:
         return False
@@ -5716,13 +5749,16 @@ def _click_nth_mobile_title_drilldown(
             pass
 
     # #endregion
-    plans = _contact_mobile_drilldown_plans(
-        page,
-        mobile,
-        content_frame_selector=content_frame_selector,
-        first_name_exact=first_name_exact,
-        log_first_name_row_debug=True,
-    )
+    if cached_plans is not None:
+        plans = cached_plans
+    else:
+        plans = _contact_mobile_drilldown_plans(
+            page,
+            mobile,
+            content_frame_selector=content_frame_selector,
+            first_name_exact=first_name_exact,
+            log_first_name_row_debug=True,
+        )
     if not plans:
         _dbg_dr_click(
             "drilldown_no_plans",
@@ -5780,6 +5816,8 @@ def _contact_find_title_sweep_for_enquiry(
     note,
     step,
     max_title_ordinals: int = 12,
+    cached_plans_ord0: list[tuple[object, int, str, int]] | None = None,
+    cached_plans_dup: list[tuple[object, int, str, int]] | None = None,
 ) -> tuple[bool, str, int, str | None]:
     """
     Duplicate-mobile sweep: when the Find list shows **several rows with the same mobile**
@@ -5792,6 +5830,10 @@ def _contact_find_title_sweep_for_enquiry(
     ``first_name`` (when set) restricts **ordinal 0** drill targets (row must match Find key). For
     **ordinal ≥ 1**, drills use **mobile-only** row matching (same mobile in the list).
 
+    **cached_plans_ord0**: plans from ``_contact_mobile_drilldown_plans(..., first_name_exact=first_name)``.
+    **cached_plans_dup**: plans with ``first_name_exact=None`` (duplicate rows). When both set, skips
+    rebuilding plans on each click (video path).
+
     Returns ``(has_existing_enquiry, enquiry_number, row_count, error_message)``.
     ``error_message`` set → caller must stop. If no error and ``has_existing_enquiry`` is False, every
     matching Title was opened and all had zero enquiry rows — caller may create a new enquiry.
@@ -5799,12 +5841,15 @@ def _contact_find_title_sweep_for_enquiry(
     used_fallback_link = False
     ordinal = 0
     fn = (first_name or "").strip()
-    _n_mobile_rows = _contact_find_mobile_drilldown_occurrence_count(
-        page,
-        mobile,
-        content_frame_selector=content_frame_selector,
-        first_name_exact=fn if fn else None,
-    )
+    if cached_plans_ord0 is not None:
+        _n_mobile_rows = len(cached_plans_ord0)
+    else:
+        _n_mobile_rows = _contact_find_mobile_drilldown_occurrence_count(
+            page,
+            mobile,
+            content_frame_selector=content_frame_selector,
+            first_name_exact=fn if fn else None,
+        )
     _ord_max = _n_mobile_rows - 1 if _n_mobile_rows else None
     note(
         f"Contact Find grid: {_n_mobile_rows} row(s) contain mobile {mobile} with a drilldown link"
@@ -5830,6 +5875,7 @@ def _contact_find_title_sweep_for_enquiry(
                 content_frame_selector=content_frame_selector,
                 first_name_exact=None,
                 note=note,
+                cached_plans=cached_plans_dup,
             )
             # #region agent log
             try:
@@ -5897,6 +5943,9 @@ def _contact_find_title_sweep_for_enquiry(
                 content_frame_selector=content_frame_selector,
                 first_name_exact=(fn if fn else None) if ordinal == 0 else None,
                 note=note,
+                cached_plans=cached_plans_ord0
+                if ordinal == 0
+                else cached_plans_dup,
             )
         if not drilled and ordinal == 0 and not used_fallback_link:
             drilled = _siebel_try_click_mobile_search_hit_link(
@@ -6792,7 +6841,49 @@ def _frame_url_matches_payment_hint(fu: str, entry: dict[str, object], page_url_
             frag2 = m2.group(1)
             if len(frag2) > 8 and frag2 in fu:
                 return True
+        m3 = re.search(r"SWEApplet0=([^&]+)", top)
+        if m3:
+            frag3 = m3.group(1)
+            if len(frag3) > 8 and frag3 in fu:
+                return True
     return False
+
+
+def _resolve_builtin_contact_find_grid_frame(page: Page) -> Frame | None:
+    """
+    Single **Frame** for the Contact Find **Search Results** / title grid when the loaded **frame.url**
+    matches the builtin (or env) mobile-search hint — avoids walking every iframe when the grid is here.
+
+    Order: **main_frame** first (common Hero layout), then other ``page.frames`` from ``_ordered_frames``.
+    """
+    hint = _load_mobile_search_hit_hint_dict_from_config()
+    roots_sorted = hint.get("roots_sorted") if isinstance(hint, dict) else None
+    page_top = str(hint.get("page_url_top") or "") if isinstance(hint, dict) else ""
+    if not isinstance(roots_sorted, list) or not roots_sorted:
+        return None
+    main = page.main_frame
+    for entry in roots_sorted:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            fu_m = (main.url or "").strip()
+        except Exception:
+            fu_m = ""
+        if _frame_url_matches_payment_hint(fu_m, entry, page_top):
+            return main
+    for entry in roots_sorted:
+        if not isinstance(entry, dict):
+            continue
+        for frame in _ordered_frames(page):
+            if frame == main:
+                continue
+            try:
+                fu = (frame.url or "").strip()
+            except Exception:
+                fu = ""
+            if _frame_url_matches_payment_hint(fu, entry, page_top):
+                return frame
+    return None
 
 
 def _load_mobile_search_hit_hint_dict_from_config() -> dict[str, object]:
@@ -15583,12 +15674,14 @@ def Playwright_Hero_DMS_fill(
                 "(informational; branch A/B uses drilldown row count)."
             )
 
-            n_drilldown = _contact_find_mobile_drilldown_occurrence_count(
+            _video_plans_m = _contact_mobile_drilldown_plans(
                 page,
                 mobile,
                 content_frame_selector=content_frame_selector,
                 first_name_exact=None,
+                log_first_name_row_debug=False,
             )
+            n_drilldown = len(_video_plans_m)
             note(
                 f"Video path: Contact Find drilldown row count N={n_drilldown} "
                 "(mobile-only basis for branch A/B)."
@@ -15658,12 +15751,14 @@ def Playwright_Hero_DMS_fill(
                         "did not complete."
                     )
                     return out
-                n_drilldown = _contact_find_mobile_drilldown_occurrence_count(
+                _video_plans_m = _contact_mobile_drilldown_plans(
                     page,
                     mobile,
                     content_frame_selector=content_frame_selector,
                     first_name_exact=None,
+                    log_first_name_row_debug=False,
                 )
+                n_drilldown = len(_video_plans_m)
                 note(f"Video path: after Add Enquiry, drilldown row count N={n_drilldown}.")
                 if n_drilldown == 0:
                     step("Stopped: Add Enquiry saved but Find still shows no drilldown contact rows.")
@@ -15682,15 +15777,25 @@ def Playwright_Hero_DMS_fill(
                     )
 
             _video_snap_fn = (video_first_name or "").strip()
-            _video_list_snapshot_counts = _find_contact_mobile_first_grid_counts(
-                page, mobile, _video_snap_fn, content_frame_selector=content_frame_selector
+            _video_plans_fn = (
+                _contact_mobile_drilldown_plans(
+                    page,
+                    mobile,
+                    content_frame_selector=content_frame_selector,
+                    first_name_exact=_video_snap_fn or None,
+                    log_first_name_row_debug=False,
+                )
+                if _video_snap_fn
+                else _video_plans_m
             )
-            _video_strict_first = _contact_find_mobile_drilldown_occurrence_count(
+            _video_list_snapshot_counts = _find_contact_mobile_first_grid_counts(
                 page,
                 mobile,
+                _video_snap_fn,
                 content_frame_selector=content_frame_selector,
-                first_name_exact=_video_snap_fn or None,
+                cached_plans=_video_plans_m,
             )
+            _video_strict_first = len(_video_plans_fn)
             note(
                 "Find-Contact list snapshot (before Title/enquiry sweep): "
                 f"{_video_list_snapshot_counts[0]} row(s) with mobile and drilldown "
@@ -15708,6 +15813,8 @@ def Playwright_Hero_DMS_fill(
                 mobile_aria_hints=mobile_aria_hints,
                 note=note,
                 step=step,
+                cached_plans_ord0=_video_plans_fn,
+                cached_plans_dup=_video_plans_m,
             )
             contacts_with_open = (
                 1
