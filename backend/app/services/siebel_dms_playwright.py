@@ -3850,6 +3850,41 @@ def _mobile_text_patterns_for_grid(mobile: str) -> list[re.Pattern[str]]:
     return out
 
 
+def _siebel_try_activate_payments_tab(
+    page: Page,
+    *,
+    action_timeout_ms: int,
+    content_frame_selector: str | None,
+    note,
+) -> bool:
+    """
+    Open the **Payments** view before Payment Lines automation. Siebel labels vary
+    (**Payments**, **Payment**, **Payment Details**, **Customer Payment**, etc.).
+    """
+    _patterns: tuple[re.Pattern[str], ...] = (
+        re.compile(r"^Payments?$", re.I),
+        re.compile(r"^Payment details$", re.I),
+        re.compile(r"^Customer payments?$", re.I),
+        re.compile(r"^Payment information$", re.I),
+        re.compile(r"^Payment$", re.I),
+        re.compile(r"\bPayment\b", re.I),
+    )
+    for pat in _patterns:
+        if _siebel_try_click_named_in_frames(
+            page,
+            pat,
+            roles=("tab", "link"),
+            timeout_ms=action_timeout_ms,
+            content_frame_selector=content_frame_selector,
+        ):
+            try:
+                note(f"Payments tab click matched pattern={pat.pattern!r}.")
+            except Exception:
+                pass
+            return True
+    return False
+
+
 def _siebel_try_click_named_in_frames(
     page: Page,
     pattern: re.Pattern[str],
@@ -5615,20 +5650,30 @@ def _contact_enquiry_tab_has_rows(
     return False, 0, ""
 
 
-def _payment_lines_has_existing_row(page: Page, content_frame_selector: str | None) -> bool:
+def _payment_lines_has_existing_row(
+    page: Page,
+    content_frame_selector: str | None,
+    *,
+    require_amount_like: bool = False,
+) -> bool:
     """
     True when the **Payment Lines** applet in this document already shows at least one jqgrid / list
     data row **and** the same document exposes Payment Lines chrome (new/save toolbar or transaction
     fields). Avoids false positives from Contact / enquiry grids on other tabs.
+
+    When ``require_amount_like`` is True (skip ``+`` before add), a row counts only if its text
+    contains **4+ digits** (amount / reference), so empty template rows do not skip entry.
     """
-    _js = """() => {
-      const vis = (el) => {
+    _req = "true" if require_amount_like else "false"
+    _js = f"""() => {{
+      const requireAmountLike = {_req};
+      const vis = (el) => {{
         if (!el) return false;
         const st = window.getComputedStyle(el);
         if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
         const r = el.getBoundingClientRect();
         return r.width >= 2 && r.height >= 2;
-      };
+      }};
       const payMarkers = [
         "[aria-label='Payment Lines List:New']",
         "[title='Payment Lines List:New']",
@@ -5644,27 +5689,32 @@ def _payment_lines_has_existing_row(page: Page, content_frame_selector: str | No
         "[name='1_s_2_1_Transaction_Amount']",
       ];
       let paymentUi = false;
-      for (const s of payMarkers) {
-        if (vis(document.querySelector(s))) {
+      for (const s of payMarkers) {{
+        if (vis(document.querySelector(s))) {{
           paymentUi = true;
           break;
-        }
-      }
+        }}
+      }}
       if (!paymentUi) return false;
       const rows = document.querySelectorAll(
         'table.ui-jqgrid-btable tbody tr.jqgrow, div.ui-jqgrid-bdiv table tbody tr.jqgrow, ' +
         'table.siebui-list tbody tr[role="row"], table.siebui-list tbody tr.jqgrow'
       );
-      for (const tr of rows) {
+      for (const tr of rows) {{
         if (!vis(tr)) continue;
         if (tr.closest('thead')) continue;
         const tds = tr.querySelectorAll('td');
         if (tds.length === 0) continue;
         const blob = (tr.innerText || '').replace(/\\s+/g, ' ').trim();
-        if (blob.length >= 1) return true;
-      }
+        if (blob.length < 1) continue;
+        if (requireAmountLike) {{
+          const digits = blob.replace(/\\D/g, '');
+          if (digits.length < 4) continue;
+        }}
+        return true;
+      }}
       return false;
-    }"""
+    }}"""
     for root in list(_siebel_locator_search_roots(page, content_frame_selector)) + list(_ordered_frames(page)) + [page]:
         try:
             if bool(root.evaluate(_js)):
@@ -5692,19 +5742,21 @@ def _add_customer_payment(
     except Exception:
         pass
 
-    if _siebel_try_click_named_in_frames(
+    if _siebel_try_activate_payments_tab(
         page,
-        re.compile(r"^Payments?$", re.I),
-        roles=("tab", "link"),
-        timeout_ms=action_timeout_ms,
+        action_timeout_ms=action_timeout_ms,
         content_frame_selector=content_frame_selector,
+        note=note,
     ):
-        note("Payments tab activated before Payment Lines row check / '+' click.")
-        _safe_page_wait(page, 450, log_label="after_payments_tab_activate")
+        _safe_page_wait(page, 1200, log_label="after_payments_tab_activate")
+    else:
+        note("Payments tab: no matching tab/link found (will still look for Payment Lines toolbar).")
 
-    if _payment_lines_has_existing_row(page, content_frame_selector):
+    if _payment_lines_has_existing_row(
+        page, content_frame_selector, require_amount_like=True,
+    ):
         note(
-            "Payments: existing Payment Lines row detected — skipping '+' and new-row fill; "
+            "Payments: existing Payment Lines row with amount-like data — skipping '+' and new-row fill; "
             "continuing to Vehicle Sales flow."
         )
         return True
@@ -5817,23 +5869,42 @@ def _add_customer_payment(
                 continue
         return False
 
-    action_roots = []
-    for root in _siebel_locator_search_roots(page, content_frame_selector):
-        try:
-            if _is_payment_action_root(root):
-                action_roots.append(root)
-        except Exception:
-            continue
-    for frame in _ordered_frames(page):
-        try:
-            if _is_payment_action_root(frame):
-                action_roots.append(frame)
-        except Exception:
-            continue
-    root_candidates = action_roots if action_roots else list(_siebel_locator_search_roots(page, content_frame_selector))
+    def _gather_payment_action_roots() -> list:
+        ar: list = []
+        for root in _siebel_locator_search_roots(page, content_frame_selector):
+            try:
+                if _is_payment_action_root(root):
+                    ar.append(root)
+            except Exception:
+                continue
+        for frame in _ordered_frames(page):
+            try:
+                if _is_payment_action_root(frame):
+                    ar.append(frame)
+            except Exception:
+                continue
+        return ar
+
+    action_roots = _gather_payment_action_roots()
+    if not action_roots and _siebel_try_activate_payments_tab(
+        page,
+        action_timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+        note=note,
+    ):
+        _safe_page_wait(page, 1200, log_label="after_payments_tab_retry_toolbar")
+        action_roots = _gather_payment_action_roots()
+
+    root_candidates = action_roots
+    if not root_candidates:
+        note(
+            "Payment debug: Payment Lines toolbar (List:New / Save) not found — "
+            "cannot click '+' safely; ensure the Payments view shows Payment Lines."
+        )
+        return False
     note(
         "Payment debug: root candidates prepared "
-        f"(action_roots={len(action_roots)}, total_candidates={len(root_candidates)})."
+        f"(payment_action_roots={len(root_candidates)})."
     )
 
     for root in root_candidates:
