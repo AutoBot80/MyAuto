@@ -11282,11 +11282,16 @@ def _siebel_click_by_name_anywhere(
     content_frame_selector: str | None,
     note,
     log_label: str,
+    visible_text_fallback: str | None = None,
 ) -> bool:
     """Click ``a``/``button``/generic element with HTML ``name`` (e.g. Serial Number drilldown).
 
     Hero **Auto Vehicle** detail often puts the VIN / serial drill-in inside jqGrid
     ``div#gview_s_1_l`` — try those selectors first, then fall back to document-wide search.
+
+    ``visible_text_fallback`` (e.g. full chassis): Siebel often shows the VIN as ``outerText`` while
+    keeping ``name="Serial Number"``; the accessible name may match the chassis rather than the label,
+    so we try ``name`` + text filter and ``role=link`` by chassis on every frame root.
     """
     nv_esc = name_val.replace("'", "\\'")
 
@@ -11369,6 +11374,44 @@ def _siebel_click_by_name_anywhere(
                     return True
             except Exception:
                 continue
+    vtf = (visible_text_fallback or "").strip()
+    if vtf:
+        chassis_sub = re.compile(re.escape(vtf), re.I)
+        chassis_exact = re.compile(rf"^\s*{re.escape(vtf)}\s*$", re.I)
+        for root in roots:
+            for css in (
+                f'a[name="{name_val}"]',
+                f'button[name="{name_val}"]',
+                f'[name="{name_val}"]',
+            ):
+                try:
+                    loc = root.locator(css).filter(has_text=chassis_sub).first
+                    if _try_click_loc(loc, where="name+chassis visible text"):
+                        return True
+                except Exception:
+                    continue
+            try:
+                ln_e = root.get_by_role("link", name=chassis_exact)
+                if ln_e.count() > 0 and _try_click_loc(
+                    ln_e.first, where="role=link exact chassis (a11y name)"
+                ):
+                    return True
+            except Exception:
+                pass
+            try:
+                ln_s = root.get_by_role("link", name=chassis_sub)
+                if ln_s.count() > 0 and _try_click_loc(
+                    ln_s.first, where="role=link chassis substring"
+                ):
+                    return True
+            except Exception:
+                pass
+            try:
+                bt = root.get_by_role("button", name=chassis_sub)
+                if bt.count() > 0 and _try_click_loc(bt.first, where="role=button chassis"):
+                    return True
+            except Exception:
+                pass
     return False
 
 
@@ -11500,6 +11543,9 @@ def _prepare_vehicle_scrape_serial_precheck_pdi_and_features(
     Returns ``None`` on success or when **Serial Number** is missing (best-effort skip); on Pre-check/PDI
     failure returns an error string.
     """
+    _chassis_fb = (
+        str(scraped.get("full_chassis") or scraped.get("frame_num") or "").strip()
+    )
     if not _siebel_click_by_name_anywhere(
         page,
         "Serial Number",
@@ -11507,6 +11553,7 @@ def _prepare_vehicle_scrape_serial_precheck_pdi_and_features(
         content_frame_selector=content_frame_selector,
         note=note,
         log_label="Serial Number drilldown",
+        visible_text_fallback=_chassis_fb or None,
     ):
         note(
             "prepare_vehicle: Serial Number drilldown (name='Serial Number') not found — "
