@@ -17,10 +17,10 @@ Engine num: —
 Full engine (from detail): HA11EA99C36777
 Model: CD DELUXE
 Color: RBK
-Cubic capacity: S
+Cubic capacity: 100
 Seating capacity: —
 Body type: —
-Vehicle type: —
+Vehicle type: 63074-X
 Num cylinders: —
 Ex-showroom Price (Order Value): —
 Year of Mfg: 2009

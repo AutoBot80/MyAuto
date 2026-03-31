@@ -36,8 +36,9 @@ import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from playwright.sync_api import Frame, Page, TimeoutError as PlaywrightTimeout
 
@@ -48,6 +49,27 @@ from app.config import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Siebel DMS and operator-entered dates/times are **IST** (Asia/Kolkata, UTC+05:30).
+_SIEBEL_TZ = ZoneInfo("Asia/Kolkata")
+
+
+def _siebel_ist_now() -> datetime:
+    """Current wall-clock time in Asia/Kolkata (IST)."""
+    return datetime.now(_SIEBEL_TZ)
+
+
+def _siebel_ist_today() -> date:
+    """Calendar *today* in Asia/Kolkata (IST)."""
+    return _siebel_ist_now().date()
+
+
+def _siebel_naive_datetime_as_ist(dt: datetime) -> datetime:
+    """Treat naive parsed datetimes as IST (Siebel shows local IST; no offset in cells)."""
+    if dt.tzinfo is not None:
+        return dt.astimezone(_SIEBEL_TZ)
+    return dt.replace(tzinfo=_SIEBEL_TZ)
+
 
 # Operator video: ``Find Contact Enquiry.mp4`` — Find → Contact → mobile → Go; if **no contact table
 # rows**, **Add Enquiry** (vehicle chassis/VIN + engine, Enquiry tab, **Opportunity Form:New**, DB fields,
@@ -6816,6 +6838,62 @@ def _siebel_parse_grid_date_cell_to_date(text: str) -> date | None:
     return None
 
 
+def _siebel_parse_pdi_expiry_cell_to_datetime(text: str) -> datetime | None:
+    """
+    Parse PDI Expiry cells (date + optional time). Returns timezone-naive ``datetime`` in **IST**
+    wall-clock (same convention as Siebel display) or None.
+    """
+    t = (text or "").strip()
+    if not t:
+        return None
+    t = re.sub(r"[\u00a0\u202f]", " ", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    for fmt in (
+        "%d/%m/%Y %H:%M:%S",
+        "%d/%m/%Y %H:%M",
+        "%d-%m-%Y %H:%M:%S",
+        "%d-%m-%Y %H:%M",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%dT%H:%M",
+        "%d/%m/%Y",
+        "%d-%m-%Y",
+        "%Y-%m-%d",
+        "%m/%d/%Y %H:%M:%S",
+        "%m/%d/%Y",
+    ):
+        try:
+            return datetime.strptime(t[:96].strip(), fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _siebel_pdi_expiry_still_valid(
+    *,
+    expiry_dates: list[date],
+    expiry_datetimes: list[datetime],
+    buffer: timedelta,
+) -> tuple[bool, date | None, datetime | None]:
+    """
+    PDI is still valid if any expiry **datetime** (interpreted as **IST**) is after
+    ``now_ist - buffer`` (grace window for clock skew / scrape delay), or any **date** is on or after
+    **today** in IST (calendar-day expiry).
+    """
+    _today = _siebel_ist_today()
+    _now = _siebel_ist_now()
+    _best_d: date | None = max(expiry_dates) if expiry_dates else None
+    _best_dt: datetime | None = max(expiry_datetimes) if expiry_datetimes else None
+    _best_dt_ist: datetime | None = (
+        _siebel_naive_datetime_as_ist(_best_dt) if _best_dt is not None else None
+    )
+    if _best_dt_ist is not None and _best_dt_ist > _now - buffer:
+        return True, _best_dt_ist.date(), _best_dt_ist
+    if _best_d is not None and _best_d >= _today:
+        return True, _best_d, _best_dt_ist
+    return False, _best_d, _best_dt_ist
+
+
 def _siebel_run_vehicle_serial_detail_precheck_pdi(
     page: Page,
     *,
@@ -6825,7 +6903,6 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     form_trace=None,
     log_prefix: str = "vehicle_serial_detail",
     scraped: dict | None = None,
-    do_feature_id_scrape: bool = True,
 ) -> tuple[bool, str | None]:
     """
     Pre-check + PDI applets on the **vehicle serial** detail view (after ``Serial Number`` drilldown).
@@ -7088,26 +7165,6 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         # endregion agent log
         return False
 
-    if do_feature_id_scrape and scraped is not None:
-        cc = _siebel_scrape_text_by_id_anywhere(
-            page, "4_s_1_l_HHML_Feature_Value", content_frame_selector=content_frame_selector
-        ) or _siebel_scrape_text_by_id_anywhere(
-            page, "4_s_1_l_HHML_Fetaure_Value", content_frame_selector=content_frame_selector
-        )
-        vt = _siebel_scrape_text_by_id_anywhere(
-            page, "5_s_1_l_HHML_Feature_Value", content_frame_selector=content_frame_selector
-        ) or _siebel_scrape_text_by_id_anywhere(
-            page, "5_s_1_l_HHML_Fetaure_Value", content_frame_selector=content_frame_selector
-        )
-        if cc:
-            scraped["cubic_capacity"] = _normalize_cubic_cc_digits(cc) or str(cc).strip()
-        if vt:
-            scraped["vehicle_type"] = vt
-        _cc_log = scraped.get("cubic_capacity") or cc
-        note(
-            f"{log_prefix}: feature-id scrape cubic_capacity={_cc_log!r}, vehicle_type={vt!r}."
-        )
-
     # region agent log
     try:
         import json as _json_ae
@@ -7139,7 +7196,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                         "data": {
                             "ae_main": _ae_main,
                             "frames_n": len(page.frames),
-                            "feature_scrape_ran": bool(do_feature_id_scrape and scraped is not None),
+                            "feature_scrape_ran": False,
                         },
                         "timestamp": int(time.time() * 1000),
                     },
@@ -7760,6 +7817,56 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     except Exception:
         pass
 
+    _pdi_expiry_aria_js = """() => {
+        const vis = (el) => {
+            if (!el) return false;
+            const st = window.getComputedStyle(el);
+            if (st.display === 'none' || st.visibility === 'hidden') return false;
+            const r = el.getBoundingClientRect();
+            return r.width >= 0 && r.height >= 0;
+        };
+        const raw = [];
+        const seen = new Set();
+        const push = (el) => {
+            if (!el || !vis(el)) return;
+            const t = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
+            if (!t || seen.has(t)) return;
+            seen.add(t);
+            raw.push(t.slice(0, 96));
+        };
+        const sel = [
+            '[aria-labelledby*="HMCL_PDI_Expiry_Date"]',
+            '[aria-labelledby*="PDI_Expiry_Date"]',
+            '[aria-labelledby*="s_2_l_altDateTime"]',
+            '[id*="s_2_l_altDateTime"]',
+            '[id*="HMCL_PDI_Expiry"]',
+        ].join(', ');
+        document.querySelectorAll(sel).forEach((el) => {
+            const al = el.getAttribute('aria-labelledby') || '';
+            const id = el.getAttribute('id') || '';
+            if (
+                al.includes('PDI_Expiry') || al.includes('altDateTime') ||
+                id.includes('altDateTime') || id.includes('HMCL_PDI_Expiry')
+            ) {
+                push(el);
+            }
+        });
+        return { expiryRaw: raw, source: 'aria-labelledby' };
+    }"""
+    _pdi_expiry_raw_aria: list[str] = []
+    _pdi_aria_best = -1
+    for _proot in _roots():
+        try:
+            _ar = _proot.evaluate(_pdi_expiry_aria_js)
+            if not isinstance(_ar, dict):
+                continue
+            _er = list(_ar.get("expiryRaw") or [])
+            if len(_er) > _pdi_aria_best:
+                _pdi_aria_best = len(_er)
+                _pdi_expiry_raw_aria = _er
+        except Exception:
+            continue
+
     _pdi_js = """() => {
         const norm = (s) => String(s || '').replace(/\\s+/g, ' ').trim().toLowerCase();
         const vis = (el) => {
@@ -7819,7 +7926,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     }"""
     _pdi_row_count = 0
     _pdi_header_matched = False
-    _pdi_expiry_raw: list[str] = []
+    _pdi_table_expiry_raw: list[str] = []
     _pdi_best_score = -1
     for _pri, _proot in enumerate(_roots()):
         try:
@@ -7834,39 +7941,73 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 _pdi_best_score = _sc
                 _pdi_row_count = _rc
                 _pdi_header_matched = _hm
-                _pdi_expiry_raw = _er
+                _pdi_table_expiry_raw = _er
         except Exception:
             continue
-    _pdi_dates: list[date] = []
+
+    _pdi_expiry_seen: set[str] = set()
+    _pdi_expiry_raw: list[str] = []
+    for _x in list(_pdi_expiry_raw_aria) + list(_pdi_table_expiry_raw):
+        _k = str(_x or "").strip()
+        if not _k or _k in _pdi_expiry_seen:
+            continue
+        _pdi_expiry_seen.add(_k)
+        _pdi_expiry_raw.append(_k)
+    if _pdi_expiry_raw_aria or _pdi_table_expiry_raw:
+        _pdi_header_matched = bool(_pdi_header_matched or _pdi_expiry_raw_aria)
+
+    _pdi_datetimes: list[datetime] = []
+    _pdi_dates_only: list[date] = []
     for _raw in _pdi_expiry_raw:
+        _dt = _siebel_parse_pdi_expiry_cell_to_datetime(_raw)
+        if _dt is not None:
+            _pdi_datetimes.append(_dt)
+            continue
         _d = _siebel_parse_grid_date_cell_to_date(_raw)
         if _d is not None:
-            _pdi_dates.append(_d)
-    _today = date.today()
-    _pdi_max_expiry: date | None = max(_pdi_dates) if _pdi_dates else None
-    _pdi_expired = (
-        _pdi_header_matched
-        and len(_pdi_dates) > 0
-        and _pdi_max_expiry is not None
-        and _pdi_max_expiry < _today
+            _pdi_dates_only.append(_d)
+    _pdi_expiry_dates_combined: list[date] = list(_pdi_dates_only)
+    for _dt in _pdi_datetimes:
+        _pdi_expiry_dates_combined.append(_dt.date())
+    _today = _siebel_ist_today()
+    _pdi_buffer = timedelta(minutes=15)
+    _pdi_valid, _pdi_best_d, _pdi_best_dt = _siebel_pdi_expiry_still_valid(
+        expiry_dates=_pdi_expiry_dates_combined,
+        expiry_datetimes=_pdi_datetimes,
+        buffer=_pdi_buffer,
     )
-    _pdi_need_new_row = _pdi_row_count == 0 or _pdi_expired
-    if _pdi_row_count > 0 and not _pdi_need_new_row:
-        if _pdi_max_expiry is not None:
-            note(
-                f"{log_prefix}: PDI list has row(s) with valid expiry "
-                f"(latest parsed PDI Expiry={_pdi_max_expiry.isoformat()}, today={_today.isoformat()}) — "
-                "skipping Service Request New / pick / Submit."
-            )
-        else:
-            note(
-                f"{log_prefix}: PDI list has row(s) (count≈{_pdi_row_count}) but PDI Expiry could not be parsed "
-                f"(headerMatched={_pdi_header_matched}, samples={_pdi_expiry_raw[:3]!r}) — "
-                "assuming valid PDI; skipping Service Request New / pick / Submit."
-            )
-    elif _pdi_expired and _pdi_max_expiry is not None:
+    _pdi_max_expiry: date | None = _pdi_best_d
+    _parsed_any = bool(_pdi_datetimes or _pdi_dates_only)
+
+    if _pdi_row_count == 0:
+        _pdi_need_new_row = True
+    elif not _pdi_expiry_raw:
+        _pdi_need_new_row = True
+    elif _parsed_any:
+        _pdi_need_new_row = not _pdi_valid
+    else:
+        _pdi_need_new_row = True
+
+    if _pdi_row_count > 0 and _pdi_expiry_raw and not _parsed_any:
         note(
-            f"{log_prefix}: PDI Expiry {_pdi_max_expiry.isoformat()} is before today ({_today.isoformat()}) — "
+            f"{log_prefix}: PDI list has row(s) (count≈{_pdi_row_count}) but PDI Expiry text did not parse "
+            f"(samples={_pdi_expiry_raw[:3]!r}) — will add a new PDI row."
+        )
+
+    if _pdi_row_count > 0 and not _pdi_need_new_row:
+        _exp_note = ""
+        if _pdi_best_dt is not None:
+            _exp_note = f"latest PDI Expiry (datetime)={_pdi_best_dt.isoformat(timespec='seconds')}"
+        elif _pdi_max_expiry is not None:
+            _exp_note = f"latest PDI Expiry (date)={_pdi_max_expiry.isoformat()}"
+        note(
+            f"{log_prefix}: PDI list has row(s) with valid expiry ({_exp_note}, "
+            f"grace={_pdi_buffer.total_seconds() / 60:.0f}m vs now IST, today={_today.isoformat()}) — "
+            "skipping Service Request New / pick / Submit."
+        )
+    elif _pdi_need_new_row and _pdi_row_count > 0 and _parsed_any and not _pdi_valid:
+        note(
+            f"{log_prefix}: PDI Expiry not valid vs now (grace={_pdi_buffer.total_seconds() / 60:.0f}m) — "
             "adding a new PDI row."
         )
     elif _pdi_row_count == 0:
@@ -8443,7 +8584,6 @@ def _attach_vehicle_to_bkg(
         form_trace=None,
         log_prefix="attach_vehicle_to_bkg",
         scraped=None,
-        do_feature_id_scrape=False,
     )
     if not _pc_ok:
         return False, _pc_err or "Pre-check / PDI failed after Serial Number drilldown.", {}
@@ -11522,17 +11662,6 @@ def _siebel_scrape_features_cubic_and_vehicle_type(page: Page) -> tuple[str, str
                   };
                   let cubic = read('4_s_1_l_HHML_Feature_Value') || read('4_s_1_l_HHML_Fetaure_Value');
                   let vtype = read('5_s_1_l_HHML_Feature_Value') || read('5_s_1_l_HHML_Fetaure_Value');
-                  if (!vtype && cubic) {
-                    const row = document.querySelector('[id="4_s_1_l_HHML_Feature_Value"],[id="4_s_1_l_HHML_Fetaure_Value"]');
-                    if (row) {
-                      const tr = row.closest('tr');
-                      if (tr && tr.nextElementSibling) {
-                        const cells = tr.nextElementSibling.querySelectorAll('td');
-                        const last = cells[cells.length - 1];
-                        if (last) vtype = (last.innerText || '').replace(/\\s+/g,' ').trim();
-                      }
-                    }
-                  }
                   return { cubic, vehicle_type: vtype };
                 }"""
             )
@@ -11582,7 +11711,6 @@ def _prepare_vehicle_scrape_serial_precheck_pdi_and_features(
     content_frame_selector: str | None,
     note,
     form_trace=None,
-    try_serial_drilldown_fallback: bool = True,
 ) -> str | None:
     """
     On the **vehicle** detail view (dealer stock): run **Pre-check** + **PDI** tab flows
@@ -11590,84 +11718,23 @@ def _prepare_vehicle_scrape_serial_precheck_pdi_and_features(
 
     **Primary path (Hero Auto Vehicle):** After left-pane VIN opens detail, the Third Level tabs
     (**Pre-check**, **PDI**, **Features and Image**) are often already present — we run them **without**
-    grid **VIN** / **Serial Number** drilldowns (those were unreliable and duplicate navigation).
-
-    **Fallback:** If Pre-check/PDI fails and ``try_serial_drilldown_fallback`` is True, retry once after
-    the same **VIN** → **Serial Number** drilldown sequence used by ``_attach_vehicle_to_bkg``.
+    grid **VIN** / **Serial Number** drilldowns.
 
     ``prepare_vehicle`` calls this only when ``in_transit`` is false after the inventory gate.
 
     Returns ``None`` on success or when the serial-detail scrape is skipped (best-effort); on Pre-check/PDI
     failure returns an error string.
     """
-    _chassis_fb = (
-        str(scraped.get("full_chassis") or scraped.get("frame_num") or "").strip()
+    note("prepare_vehicle: Pre-check/PDI block (direct tabs — no grid drilldown).")
+    _serial_pc_ok, _serial_pc_err = _siebel_run_vehicle_serial_detail_precheck_pdi(
+        page,
+        action_timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+        note=note,
+        form_trace=form_trace,
+        log_prefix="prepare_vehicle",
+        scraped=scraped,
     )
-
-    def _run_precheck_pdi_block(*, phase: str) -> tuple[bool, str | None]:
-        note(f"prepare_vehicle: Pre-check/PDI block ({phase}).")
-        return _siebel_run_vehicle_serial_detail_precheck_pdi(
-            page,
-            action_timeout_ms=action_timeout_ms,
-            content_frame_selector=content_frame_selector,
-            note=note,
-            form_trace=form_trace,
-            log_prefix="prepare_vehicle",
-            scraped=scraped,
-            do_feature_id_scrape=True,
-        )
-
-    _serial_pc_ok, _serial_pc_err = _run_precheck_pdi_block(phase="direct tabs — no grid drilldown")
-
-    if not _serial_pc_ok and try_serial_drilldown_fallback:
-        note(
-            "prepare_vehicle: Pre-check/PDI failed on current view — trying VIN → Serial Number drilldown fallback."
-        )
-        _vin_clicked = _siebel_click_by_name_anywhere(
-            page,
-            "VIN",
-            timeout_ms=action_timeout_ms,
-            content_frame_selector=content_frame_selector,
-            note=note,
-            log_label="VIN drilldown (Vehicles grid)",
-            visible_text_fallback=_chassis_fb or None,
-        )
-        if _vin_clicked:
-            try:
-                _safe_page_wait(page, 1200, log_label="after_prepare_vehicle_vin_drilldown")
-                page.wait_for_load_state("networkidle", timeout=10_000)
-            except PlaywrightTimeout:
-                note("prepare_vehicle: networkidle after VIN drilldown timed out; continuing.")
-            except Exception:
-                pass
-        else:
-            note(
-                "prepare_vehicle: VIN drilldown (name='VIN') not found in fallback — "
-                "continuing to Serial Number."
-            )
-
-        if _siebel_click_by_name_anywhere(
-            page,
-            "Serial Number",
-            timeout_ms=action_timeout_ms,
-            content_frame_selector=content_frame_selector,
-            note=note,
-            log_label="Serial Number drilldown",
-            visible_text_fallback=_chassis_fb or None,
-        ):
-            try:
-                _safe_page_wait(page, 1200, log_label="after_serial_number_click")
-                page.wait_for_load_state("networkidle", timeout=10_000)
-            except PlaywrightTimeout:
-                note("prepare_vehicle: networkidle after Serial Number timed out; continuing.")
-            except Exception:
-                pass
-            _serial_pc_ok, _serial_pc_err = _run_precheck_pdi_block(phase="after Serial drilldown fallback")
-        else:
-            note(
-                "prepare_vehicle: Serial Number drilldown not found in fallback — "
-                "keeping first Pre-check/PDI error."
-            )
 
     if not _serial_pc_ok:
         if _serial_pc_err:
@@ -13155,14 +13222,14 @@ def _add_enquiry_opportunity(
         for fmt in ("%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d", "%d/%m/%y", "%d-%m-%y"):
             try:
                 dob_dt = datetime.strptime(s, fmt).date()
-                t = date.today()
+                t = _siebel_ist_today()
                 return str(max(0, t.year - dob_dt.year - ((t.month, t.day) < (dob_dt.month, dob_dt.day))))
             except Exception:
                 continue
         m = re.search(r"\b(19\d{2}|20\d{2})\b", s)
         if m:
             try:
-                return str(max(0, date.today().year - int(m.group(1))))
+                return str(max(0, _siebel_ist_today().year - int(m.group(1))))
             except Exception:
                 return ""
         return ""
@@ -13391,7 +13458,7 @@ def _add_enquiry_opportunity(
     gender = _normalize_gender_for_form((dms_values.get("gender") or "").strip())
     model_i = (scraped_v.get("model") or "").strip()
     color_i = (scraped_v.get("color") or "").strip()
-    today_str = date.today().strftime("%d/%m/%Y")
+    today_str = _siebel_ist_today().strftime("%d/%m/%Y")
 
     if not try_field(("Contact First Name", "First Name"), first, required=True):
         return False, "Could not set Contact First Name.", ""
