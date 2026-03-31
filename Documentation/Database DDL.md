@@ -505,3 +505,4 @@ This document lists the current database tables and their columns. **Executable 
 | 2.23 | Mar 2026 | **No schema change.** **`cubic_capacity`** scrape stores numeric token only — **LLD** **6.82**, **BRD** **3.37** |
 | 2.24 | Mar 2026 | **No schema change.** Payments flow: primary short tab activation and **Ctrl+S** save fallback with Transaction# verification — **LLD** **6.83**, **BRD** **3.38** |
 | 2.25 | Mar 2026 | **No schema change.** Payments save action order updated to **Ctrl+S primary** with Save icon fallback; Transaction# remains mandatory success verification — **LLD** **6.84**, **BRD** **3.39** |
+| 2.26 | Mar 2026 | **No schema change.** Siebel **`_siebel_diag_note`** + video path / **`_add_customer_payment`** diagnostic **`note`** lines (UTC inline + **`Playwright_DMS.txt`** line timestamps) — **LLD** **6.85** |

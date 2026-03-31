@@ -101,6 +101,20 @@ def _agent_debug_log(hypothesis_id: str, location: str, message: str, data: dict
 # endregion
 
 
+def _siebel_diag_note(note: Callable[..., object], msg: str, *, prefix: str = "Siebel") -> None:
+    """
+    Append a NOTE with an inline UTC stamp for correlation when log lines are copied without
+    the file-level timestamp. ``Playwright_DMS.txt`` still prefixes each line via ``_exec_log``.
+    """
+    if not callable(note):
+        return
+    try:
+        ts = datetime.now(timezone.utc).isoformat()
+        note(f"{prefix} [utc={ts}] {msg}")
+    except Exception:
+        pass
+
+
 def _normalize_cubic_cc_digits(val: object) -> str:
     """Extract numeric cc from Siebel grid/feature text (e.g. ``125 CC`` → ``125``)."""
     s = str(val or "").strip().replace(",", "")
@@ -4886,10 +4900,20 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
         return False
 
     def _after_relation_fill_nav() -> bool:
+        _siebel_diag_note(
+            note,
+            "Video SOP: Relation's Name is set; next filling Address Line 1 (DB substring) before Contact ID / Payments.",
+            prefix="Video SOP",
+        )
         addr_ok = _fill_address_line_1_if_available()
         if not addr_ok:
             note("Stopping before Add customer payment: Address Line 1 was not filled.")
             return False
+        _siebel_diag_note(
+            note,
+            "Video SOP: Address Line 1 applied; caller will scrape Contact ID, then open Payments (add customer payment).",
+            prefix="Video SOP",
+        )
         note("Relation's Name filled; stopping on current field as requested.")
         return True
 
@@ -6326,16 +6350,42 @@ def _add_customer_payment(
         content_frame_selector=content_frame_selector,
         note=note,
     ):
+        _siebel_diag_note(
+            note,
+            "Payments: Payments tab activated; waiting 800ms for applet settle before discovering Payment Lines roots.",
+            prefix="Payments",
+        )
         _safe_page_wait(page, 800, log_label="after_payments_tab_activate_primary")
+    else:
+        _siebel_diag_note(
+            note,
+            "Payments: Payments tab pattern did not match a clickable tab/link; still attempting Payment Lines root discovery.",
+            prefix="Payments",
+        )
+    _siebel_diag_note(
+        note,
+        "Payments: gathering Payment Lines toolbar roots (List:New / Save / HHML grid / iframe title scan).",
+        prefix="Payments",
+    )
     payment_toolbar_roots = _gather_payment_line_toolbar_roots(page, content_frame_selector)
     if not payment_toolbar_roots:
         note(
             "Payments: no Payment Lines root after primary tab activation; "
             "retrying root search without extra tab wait."
         )
+        _siebel_diag_note(
+            note,
+            "Payments: retrying _gather_payment_line_toolbar_roots once after empty first pass.",
+            prefix="Payments",
+        )
         payment_toolbar_roots = _gather_payment_line_toolbar_roots(page, content_frame_selector)
 
     payment_toolbar_roots.sort(key=_payment_line_toolbar_roots_priority)
+    _siebel_diag_note(
+        note,
+        f"Payments: Payment Lines roots ready (count={len(payment_toolbar_roots)}); will check grid / Receipts probe per root.",
+        prefix="Payments",
+    )
     # region agent log
     _agent_debug_log(
         "H1",
@@ -6370,9 +6420,24 @@ def _add_customer_payment(
         click ``name='s_2_1_1_0'`` -> Tab -> type ``Receipts`` -> Tab -> Enter.
         """
         try:
+            _siebel_diag_note(
+                note,
+                f"Payments: root_index={idx}: locating Receipts query field name=s_2_1_1_0 (visibility check up to 700ms).",
+                prefix="Payments",
+            )
             fld = root.locator("input[name='s_2_1_1_0'], textarea[name='s_2_1_1_0']").first
             if fld.count() == 0 or not fld.is_visible(timeout=700):
+                _siebel_diag_note(
+                    note,
+                    f"Payments: root_index={idx}: field s_2_1_1_0 missing or not visible — skipping Receipts keystroke probe on this root.",
+                    prefix="Payments",
+                )
                 return False
+            _siebel_diag_note(
+                note,
+                f"Payments: root_index={idx}: field visible — click, Tab, type Receipts, Tab, Enter, then short post-query wait.",
+                prefix="Payments",
+            )
             try:
                 fld.click(timeout=min(2500, action_timeout_ms))
             except Exception:
@@ -14828,7 +14893,18 @@ def Playwright_Hero_DMS_fill(
                 )
                 return out
 
+            _siebel_diag_note(
+                note,
+                "Video SOP: customer form path returned after Relation's Name + Address Line 1; next: branch (2) postal/save only if no open enquiry, then Contact ID scrape.",
+                prefix="Video SOP",
+            )
+
             if not sweep_has_open:
+                _siebel_diag_note(
+                    note,
+                    "Video SOP: no open enquiry from sweep — running branch (2) Address / Postal Code / Save before Contact ID.",
+                    prefix="Video SOP",
+                )
                 if not _siebel_video_branch2_address_postal_and_save(
                     page,
                     pin_code=pin,
@@ -14841,8 +14917,19 @@ def Playwright_Hero_DMS_fill(
                         "Siebel: no open enquiry path — could not fill Address Postal Code or save."
                     )
                     return out
+            else:
+                _siebel_diag_note(
+                    note,
+                    "Video SOP: open enquiry already present — skipping branch (2) postal/save; proceeding to Contact ID scrape.",
+                    prefix="Video SOP",
+                )
 
             # Scrape Contact ID: detail inputs + Contacts grid **Contact Id** column (e.g. 11870-01-SCON-…).
+            _siebel_diag_note(
+                note,
+                "Video SOP: scanning frames for Contact Id (detail fields + Contacts grid column) for downstream create_order.",
+                prefix="Video SOP",
+            )
             _contact_id = ""
             _cid_js = """() => {
                 const vis = (el) => {
@@ -14913,6 +15000,11 @@ def Playwright_Hero_DMS_fill(
                 out,
                 had_open_enquiry_from_sweep=sweep_has_open,
             )
+            _siebel_diag_note(
+                note,
+                "Video SOP: contact scrape section written to Playwright_DMS.txt; starting v3 add-customer payment (Payments tab, Payment Lines probe or '+').",
+                prefix="Video SOP",
+            )
 
             form_trace(
                 "v3_add_customer_payment",
@@ -14932,6 +15024,12 @@ def Playwright_Hero_DMS_fill(
                 )
                 return out
 
+            _siebel_diag_note(
+                note,
+                "Video SOP: add-customer payment step finished successfully (Payments tab / Payment Lines or skip); next: Generate Booking then create_order.",
+                prefix="Video SOP",
+            )
+
             full_chassis = (
                 str((out.get("vehicle") or {}).get("full_chassis") or "").strip()
                 or str(dms_values.get("full_chassis") or "").strip()
@@ -14940,9 +15038,19 @@ def Playwright_Hero_DMS_fill(
             # If there is no open order for this customer, try Generate Booking before Sales Orders.
             _enq_u = (urls.enquiry or "").strip() or (urls.contact or "").strip()
             if _enq_u:
+                _siebel_diag_note(
+                    note,
+                    f"Video SOP: navigating toward enquiry/contact URL for Generate Booking (truncated target in trace).",
+                    prefix="Video SOP",
+                )
                 _goto(page, _enq_u, "enquiry_for_booking_video", nav_timeout_ms=nav_timeout_ms)
                 _siebel_after_goto_wait(page, floor_ms=900)
             _safe_page_wait(page, 500, log_label="before_generate_booking_video")
+            _siebel_diag_note(
+                note,
+                "Video SOP: attempting Generate Booking control before Vehicle Sales create_order.",
+                prefix="Video SOP",
+            )
             if _try_click_generate_booking(
                 page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
             ):
