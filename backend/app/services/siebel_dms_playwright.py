@@ -6894,6 +6894,98 @@ def _siebel_all_search_roots(page: Page, content_frame_selector: str | None) -> 
     return out
 
 
+def _siebel_note_frame_focus_snapshot(
+    page: Page,
+    note: Callable[..., object],
+    step: str,
+    *,
+    log_prefix: str = "prepare_vehicle",
+    content_frame_selector: str | None = None,
+) -> None:
+    """
+    Log **page URL tail**, **per-frame URL**, **document.activeElement** (tag/id/name/role/class),
+    and Siebel landmarks (**#s_vctrl_div** selected tab head, Features table / HHML id presence).
+    Used to diagnose iframe / focus drift after Serial → Features scrape → Pre-check / PDI.
+    """
+    if not callable(note):
+        return
+    _top = ""
+    try:
+        _top = str(page.url or "").strip()[-140:]
+    except Exception:
+        pass
+    _snap_js = """() => {
+        const ae = document.activeElement;
+        const pick = (e) => {
+            if (!e || e === document.body) return null;
+            return {
+                tag: e.tagName,
+                id: String(e.id || '').slice(0, 56),
+                name: String(e.getAttribute('name') || '').slice(0, 40),
+                role: String(e.getAttribute('role') || '').slice(0, 24),
+                cls: String(e.className || '').slice(0, 48),
+            };
+        };
+        const vctrl = document.getElementById('s_vctrl_div');
+        let vctrlTabHead = '';
+        if (vctrl) {
+            const t = vctrl.querySelector(
+                '[aria-selected="true"], .ui-tabs-active a, .ui-state-active a, .ui-state-active'
+            );
+            if (t) vctrlTabHead = String(t.innerText || t.textContent || '').trim().slice(0, 44);
+        }
+        const c4 = document.getElementById('4_s_1_l_HHML_Feature_Value');
+        const c5 = document.getElementById('5_s_1_l_HHML_Feature_Value');
+        return {
+            href: String(location.href || '').slice(-110),
+            active: pick(ae),
+            hasVctrl: !!vctrl,
+            vctrlSelectedHead: vctrlTabHead,
+            hasFeatTbl: !!document.querySelector(
+                'table[summary="Features"], table[summary*="Features" i]'
+            ),
+            ids: {
+                hhml4: !!c4,
+                hhml5: !!c5,
+            },
+        };
+    }"""
+    _frames_payload: list[dict] = []
+    _main = page.main_frame
+    _seen_ids: set[int] = set()
+    _ordered: list[tuple[str, Frame]] = [("main", _main)]
+    _seen_ids.add(id(_main))
+    for _fr in page.frames:
+        if id(_fr) in _seen_ids:
+            continue
+        _seen_ids.add(id(_fr))
+        _ordered.append(("frame", _fr))
+    for _tag, _fr in _ordered[:28]:
+        _ut = ""
+        try:
+            _ut = str(_fr.url or "").strip()[-100:]
+        except Exception:
+            pass
+        try:
+            _snap = _fr.evaluate(_snap_js)
+        except Exception as _ex_sf:
+            _snap = {"evaluate_error": str(_ex_sf)[:120]}
+        _frames_payload.append({"layer": _tag, "url_tail": _ut, "snap": _snap})
+    try:
+        _blob = {
+            "step": step,
+            "top_url_tail": _top,
+            "content_frame_selector": content_frame_selector or "",
+            "frames": _frames_payload,
+        }
+        _line = json.dumps(_blob, ensure_ascii=False)
+        if len(_line) > 7500:
+            _line = _line[:7500] + "…(truncated)"
+        note(f"{log_prefix} [frame-focus] {_line}")
+    except Exception as _ex_note:
+        note(f"{log_prefix} [frame-focus] step={step!r} failed to serialise: {_ex_note!s}")
+
+
 def _siebel_scrape_text_by_id_anywhere(
     page: Page, element_id: str, *, content_frame_selector: str | None
 ) -> str:
@@ -6902,7 +6994,13 @@ def _siebel_scrape_text_by_id_anywhere(
             val = root.evaluate(f"""() => {{
                 const el = document.getElementById("{element_id}");
                 if (!el) return '';
-                return (el.value || el.textContent || el.innerText || '').trim();
+                return (
+                    el.value ||
+                    el.textContent ||
+                    el.innerText ||
+                    el.getAttribute('title') ||
+                    ''
+                ).trim();
             }}""")
             if val:
                 return str(val).strip()
@@ -7039,6 +7137,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     form_trace=None,
     log_prefix: str = "vehicle_serial_detail",
     scraped: dict | None = None,
+    do_feature_id_scrape: bool = True,
 ) -> tuple[bool, str | None]:
     """
     Pre-check + PDI applets on the **vehicle serial** detail view (after ``Serial Number`` drilldown).
@@ -7301,6 +7400,25 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         # endregion agent log
         return False
 
+    if do_feature_id_scrape and scraped is not None:
+        cc = _siebel_scrape_text_by_id_anywhere(
+            page, "4_s_1_l_HHML_Feature_Value", content_frame_selector=content_frame_selector
+        ) or _siebel_scrape_text_by_id_anywhere(
+            page, "4_s_1_l_HHML_Fetaure_Value", content_frame_selector=content_frame_selector
+        )
+        vt = _siebel_scrape_text_by_id_anywhere(
+            page, "5_s_1_l_HHML_Feature_Value", content_frame_selector=content_frame_selector
+        ) or _siebel_scrape_text_by_id_anywhere(
+            page, "5_s_1_l_HHML_Fetaure_Value", content_frame_selector=content_frame_selector
+        )
+        if cc:
+            scraped["cubic_capacity"] = cc
+        if vt:
+            scraped["vehicle_type"] = vt
+        note(
+            f"{log_prefix}: feature-id scrape cubic_capacity={cc!r}, vehicle_type={vt!r}."
+        )
+
     # region agent log
     try:
         import json as _json_ae
@@ -7332,7 +7450,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                         "data": {
                             "ae_main": _ae_main,
                             "frames_n": len(page.frames),
-                            "feature_scrape_ran": False,
+                            "feature_scrape_ran": bool(do_feature_id_scrape and scraped is not None),
                         },
                         "timestamp": int(time.time() * 1000),
                     },
@@ -7462,6 +7580,13 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         pass
     # endregion agent log
 
+    _siebel_note_frame_focus_snapshot(
+        page,
+        note,
+        "precheck_pdi_entry_before_precheck_tab",
+        log_prefix=log_prefix,
+        content_frame_selector=content_frame_selector,
+    )
     if callable(form_trace):
         form_trace(
             "vehicle_serial_precheck_pdi",
@@ -7489,6 +7614,14 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         page.wait_for_load_state("networkidle", timeout=8_000)
     except Exception:
         pass
+
+    _siebel_note_frame_focus_snapshot(
+        page,
+        note,
+        "precheck_pdi_after_precheck_tab_networkidle",
+        log_prefix=log_prefix,
+        content_frame_selector=content_frame_selector,
+    )
 
     _precheck_existing_rows = 0
     _precheck_existing_signal = ""
@@ -7953,6 +8086,14 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     except Exception:
         pass
 
+    _siebel_note_frame_focus_snapshot(
+        page,
+        note,
+        "precheck_pdi_after_pdi_tab_networkidle",
+        log_prefix=log_prefix,
+        content_frame_selector=content_frame_selector,
+    )
+
     _pdi_expiry_aria_js = """() => {
         const vis = (el) => {
             if (!el) return false;
@@ -8380,6 +8521,13 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             "pdi_submit_done" if _pdi_need_new_row else "pdi_valid_existing_skipped_new_row",
             log_prefix=log_prefix,
         )
+    _siebel_note_frame_focus_snapshot(
+        page,
+        note,
+        "precheck_pdi_flow_completed",
+        log_prefix=log_prefix,
+        content_frame_selector=content_frame_selector,
+    )
     return True, None
 
 
@@ -11833,6 +11981,38 @@ def _siebel_vehicle_features_hhml_applet_visible(page: Page) -> bool:
     return False
 
 
+def _siebel_try_click_features_and_image_tab(
+    page: Page, *, action_timeout_ms: int, note
+) -> bool:
+    """Open **Features and Image** (or closest tab label) on vehicle serial drill-in view."""
+    hints = ("Features and Image", "Features & Image", "Features")
+    patts = [re.compile(re.escape(h), re.I) for h in hints]
+    search_roots = list(_ordered_frames(page))
+    search_roots.append(page.main_frame)
+    for sub, rx in zip(hints, patts):
+        for root in search_roots:
+            try:
+                tab = root.get_by_role("tab", name=rx)
+                if tab.count() > 0:
+                    t0 = tab.first
+                    if t0.is_visible(timeout=500):
+                        t0.click(timeout=action_timeout_ms)
+                        note(f"prepare_vehicle: clicked tab matching {sub!r}.")
+                        return True
+            except Exception:
+                pass
+            try:
+                link = root.locator("a, [role='tab'], button").filter(has_text=rx).first
+                if link.count() > 0 and link.is_visible(timeout=450):
+                    link.click(timeout=action_timeout_ms)
+                    note(f"prepare_vehicle: clicked control matching {sub!r}.")
+                    return True
+            except Exception:
+                continue
+    note("prepare_vehicle: Features and Image tab not found (best-effort).")
+    return False
+
+
 def _siebel_scrape_features_cubic_and_vehicle_type(page: Page) -> tuple[str, str]:
     """
     On **Features and Image**, read cubic capacity and vehicle type.
@@ -12048,6 +12228,13 @@ def _prepare_vehicle_open_serial_detail_from_vehicle_grid(
         note("prepare_vehicle: networkidle after Serial Number drilldown timed out; continuing.")
     except Exception:
         pass
+    _siebel_note_frame_focus_snapshot(
+        page,
+        note,
+        "after_serial_number_drill_settled",
+        log_prefix="prepare_vehicle",
+        content_frame_selector=content_frame_selector,
+    )
     return None
 
 
@@ -12061,65 +12248,37 @@ def _prepare_vehicle_scrape_serial_precheck_pdi_and_features(
     form_trace=None,
 ) -> str | None:
     """
-    Dealer-stock path after inventory gate: **Serial Number** drilldown lands on **Features and Image**
-    — read cubic / vehicle type from HHML, then **Pre-check** + **PDI**
-    (``_siebel_run_vehicle_serial_detail_precheck_pdi``). No Features tab click after serial drill.
+    On the **vehicle** detail view (dealer stock): click **Serial Number**, run tab **Pre-check** + **PDI**
+    (``_siebel_run_vehicle_serial_detail_precheck_pdi``), then **Features and Image** for cubic/type.
 
-    ``prepare_vehicle`` calls this only when ``in_transit`` is false after the inventory gate.
+    ``prepare_vehicle`` calls this only when ``in_transit`` is false after the inventory gate — not while the
+    unit is treated as in-transit (Siebel rejects Pre-check/PDI there).
 
-    Returns ``None`` on success; on failure returns an error string.
+    Returns ``None`` on success or when **Serial Number** is missing (best-effort skip); on Pre-check/PDI
+    failure returns an error string.
     """
-    if _siebel_vehicle_features_hhml_applet_visible(page):
+    if not _siebel_click_by_name_anywhere(
+        page,
+        "Serial Number",
+        timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+        note=note,
+        log_label="Serial Number drilldown",
+    ):
         note(
-            "prepare_vehicle: HHML Features applet already visible — skipping top-grid VIN / "
-            "Serial Number drilldown (avoid redundant clicks after navigation)."
+            "prepare_vehicle: Serial Number drilldown (name='Serial Number') not found — "
+            "skipping serial-detail Pre-check/PDI and Features scrape."
         )
-    else:
-        _drill_err = _prepare_vehicle_open_serial_detail_from_vehicle_grid(
-            page,
-            scraped,
-            action_timeout_ms=action_timeout_ms,
-            content_frame_selector=content_frame_selector,
-            note=note,
-        )
-        if _drill_err:
-            return _drill_err
+        return None
 
-    # Serial drill opens the Features & Image view — scrape HHML directly (no tab activation step).
-    note(
-        "prepare_vehicle: reading cubic_capacity / vehicle_type on Features view after serial drill "
-        "(no Features tab click)."
-    )
-    _safe_page_wait(page, 500, log_label="before_features_hhml_scrape")
-    cc, vt = "", ""
-    for _fi in range(10):
-        cc, vt = _siebel_scrape_features_cubic_and_vehicle_type(page)
-        if (cc or vt) or _fi >= 9:
-            break
-        _safe_page_wait(page, 400, log_label=f"features_hhml_scrape_retry_{_fi}")
+    try:
+        _safe_page_wait(page, 1200, log_label="after_serial_number_click")
+        page.wait_for_load_state("networkidle", timeout=10_000)
+    except PlaywrightTimeout:
+        note("prepare_vehicle: networkidle after Serial Number timed out; continuing.")
+    except Exception:
+        pass
 
-    if cc or vt:
-        if cc:
-            scraped["cubic_capacity"] = _normalize_cubic_cc_digits(cc) or str(cc).strip()
-        if vt:
-            scraped["vehicle_type"] = vt
-        _feat_cc = scraped.get("cubic_capacity") or cc
-        note(f"prepare_vehicle: Features view → cubic_capacity={_feat_cc!r}, vehicle_type={vt!r}.")
-        if callable(form_trace):
-            form_trace(
-                "5_vehicle_features",
-                "Features and Image",
-                "scrape_HHML_Feature_Value_cubic_and_vehicle_type",
-                cubic_capacity=str(scraped.get("cubic_capacity") or cc or ""),
-                vehicle_type=str(vt or ""),
-            )
-    else:
-        note(
-            "prepare_vehicle: cubic_capacity / vehicle_type not read from HHML after serial drill "
-            "(best-effort)."
-        )
-
-    note("prepare_vehicle: Pre-check + PDI (serial detail view).")
     _serial_pc_ok, _serial_pc_err = _siebel_run_vehicle_serial_detail_precheck_pdi(
         page,
         action_timeout_ms=action_timeout_ms,
@@ -12128,11 +12287,35 @@ def _prepare_vehicle_scrape_serial_precheck_pdi_and_features(
         form_trace=form_trace,
         log_prefix="prepare_vehicle",
         scraped=scraped,
+        do_feature_id_scrape=True,
     )
     if not _serial_pc_ok:
-        if _serial_pc_err:
-            return _serial_pc_err
-        return "Pre-check / PDI failed (prepare_vehicle)."
+        return _serial_pc_err or "Pre-check / PDI failed after Serial Number drilldown (prepare_vehicle)."
+
+    if not _siebel_try_click_features_and_image_tab(
+        page, action_timeout_ms=action_timeout_ms, note=note
+    ):
+        return None
+    _safe_page_wait(page, 1000, log_label="after_features_tab")
+    try:
+        page.wait_for_load_state("networkidle", timeout=8_000)
+    except Exception:
+        pass
+
+    cc, vt = _siebel_scrape_features_cubic_and_vehicle_type(page)
+    if cc:
+        scraped["cubic_capacity"] = cc
+    if vt:
+        scraped["vehicle_type"] = vt
+    note(f"prepare_vehicle: Features tab → cubic_capacity={cc!r}, vehicle_type={vt!r}.")
+    if callable(form_trace):
+        form_trace(
+            "5_vehicle_features",
+            "Features and Image",
+            "scrape_HHML_Feature_Value_cubic_and_vehicle_type",
+            cubic_capacity=str(cc or ""),
+            vehicle_type=str(vt or ""),
+        )
     return None
 
 

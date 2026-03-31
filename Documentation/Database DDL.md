@@ -499,3 +499,6 @@ This document lists the current database tables and their columns. **Executable 
 | 2.17 | Mar 2026 | **No schema change.** Siebel **Features** step: **Features in Vehicles** landmark + **`#s_vctrl_div`** tab click — **LLD** **6.76**, **BRD** **3.31** |
 | 2.18 | Mar 2026 | **No schema change.** Siebel **`prepare_vehicle`**: post–**Serial** drill, HHML scrape without Features tab click — **LLD** **6.77**, **BRD** **3.32** |
 | 2.19 | Mar 2026 | **No schema change.** Siebel **Features** **`summary="Features"`** grid scrape — **LLD** **6.78**, **BRD** **3.33** |
+| 2.20 | Mar 2026 | **No schema change.** HHML feature-value fallback now reads cell **`title`** and explicit ids after Serial drill before Pre-check/PDI — **LLD** **6.79**, **BRD** **3.34** |
+| 2.21 | Mar 2026 | **No schema change.** Siebel **`[frame-focus]`** diagnostic logging (Serial → Features → Pre-check/PDI) — **LLD** **6.80**, **BRD** **3.35** |
+| 2.22 | Mar 2026 | **No schema change.** Restored serial-detail vehicle-prep order from commit **`ab903064`** (Pre-check/PDI helper with feature-id scrape before Features tab scrape) — **LLD** **6.81**, **BRD** **3.36** |

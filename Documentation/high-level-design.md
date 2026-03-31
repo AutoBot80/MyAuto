@@ -316,3 +316,6 @@ The SQL view **`form_dms_view`** is **removed**; the same mapping is implemented
 | 1.18 | Mar 2026 | — | **`prepare_vehicle`**: **Features in Vehicles** (**aria-label**) + **`s_vctrl_div`** third-level tab click for **Features** — **LLD** **6.76**, **BRD** **3.31** |
 | 1.19 | Mar 2026 | — | **`prepare_vehicle`**: post–**Serial Number** drill, direct HHML **cubic**/**vehicle_type** scrape (no Features tab step) — **LLD** **6.77**, **BRD** **3.32** |
 | 1.20 | Mar 2026 | — | **`prepare_vehicle`**: **`summary="Features"`** grid rows for **cubic**/**vehicle_type** — **LLD** **6.78**, **BRD** **3.33** |
+| 1.21 | Mar 2026 | — | **`prepare_vehicle`**: explicit HHML id fallback scrape (including cell **`title`**) before Pre-check/PDI transition — **LLD** **6.79**, **BRD** **3.34** |
+| 1.22 | Mar 2026 | — | **`prepare_vehicle`** / serial Pre-check-PDI: **`[frame-focus]`** diagnostic **`note`** lines — **LLD** **6.80**, **BRD** **3.35** |
+| 1.23 | Mar 2026 | — | **`prepare_vehicle`** serial-detail rollback to prior working baseline (**commit `ab903064`**): Pre-check/PDI helper first (with feature-id scrape), then Features tab scrape — **LLD** **6.81**, **BRD** **3.36** |
