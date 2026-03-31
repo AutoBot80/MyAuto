@@ -315,3 +315,4 @@ The SQL view **`form_dms_view`** is **removed**; the same mapping is implemented
 | 1.17 | Mar 2026 | — | **`prepare_vehicle`**: HHML **Features** applet visibility detection — avoid redundant **VIN**/Serial grid clicks — **LLD** **6.75**, **BRD** **3.30** |
 | 1.18 | Mar 2026 | — | **`prepare_vehicle`**: **Features in Vehicles** (**aria-label**) + **`s_vctrl_div`** third-level tab click for **Features** — **LLD** **6.76**, **BRD** **3.31** |
 | 1.19 | Mar 2026 | — | **`prepare_vehicle`**: post–**Serial Number** drill, direct HHML **cubic**/**vehicle_type** scrape (no Features tab step) — **LLD** **6.77**, **BRD** **3.32** |
+| 1.20 | Mar 2026 | — | **`prepare_vehicle`**: **`summary="Features"`** grid rows for **cubic**/**vehicle_type** — **LLD** **6.78**, **BRD** **3.33** |

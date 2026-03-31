@@ -11790,9 +11790,9 @@ def _siebel_vehicle_features_hhml_applet_visible(page: Page) -> bool:
     """
     True when the **Features** step is already showing: HHML value cells visible (typical row ids
     ``4_s_1_l_*`` / ``5_s_1_l_*``), **or** a visible landmark such as ``aria-label`` containing
-    **Features in Vehicles** (tenant UI may not expose HHML cells until later). Siebel may land on
-    this view after Serial drilldown without a tab role Playwright recognizes; use this to skip
-    redundant VIN/grid clicks and to scrape without re-clicking the tab.
+    **Features in Vehicles**, **or** a visible **Features** list grid ``table[summary="Features"]``.
+    Siebel may land on this view after Serial drilldown without HHML ids; use this to skip redundant
+    VIN/grid clicks.
     """
     _js = """() => {
       const vis = (el) => {
@@ -11812,7 +11812,11 @@ def _siebel_vehicle_features_hhml_applet_visible(page: Page) -> bool:
       const any = document.querySelector('[id*="HHML_Feature_Value"],[id*="HHML_Fetaure_Value"]');
       if (any && vis(any)) return true;
       const land = document.querySelector('[aria-label*="Features in Vehicles" i]');
-      return !!(land && vis(land));
+      if (land && vis(land)) return true;
+      const featGrid = document.querySelector(
+        'table[summary="Features"], table[summary*="Features" i]'
+      );
+      return !!(featGrid && vis(featGrid));
     }"""
     for fr in list(_ordered_frames(page)) + [page.main_frame]:
         try:
@@ -11826,8 +11830,11 @@ def _siebel_vehicle_features_hhml_applet_visible(page: Page) -> bool:
 def _siebel_scrape_features_cubic_and_vehicle_type(page: Page) -> tuple[str, str]:
     """
     On **Features and Image**, read cubic capacity and vehicle type.
-    Prefers ids ``4_s_1_l_HHML_Feature_Value`` / ``5_s_1_l_HHML_Feature_Value`` (and ``Fetaure`` typo);
-    falls back to any visible ``*[id*='HHML_Feature_Value']`` / ``Fetaure`` cells by row prefix (``4_`` vs ``5_``).
+
+    1. **HHML** ids ``4_s_1_l_HHML_Feature_Value`` / ``5_s_1_l_HHML_Feature_Value`` (and ``Fetaure`` typo)
+       and visible ``*[id*='HHML_Feature_Value']`` / ``Fetaure`` by row prefix.
+    2. **Features grid**: ``table[summary="Features"]`` with columns Feature / Value / … — row **CC Category**
+       → cubic text (e.g. ``125 CC``); **Class of Vehicle** → vehicle type.
     """
     cubic = ""
     vtype = ""
@@ -11883,6 +11890,40 @@ def _siebel_scrape_features_cubic_and_vehicle_type(page: Page) -> tuple[str, str
                       if (rowHint(id) !== 5 && id.indexOf('_5_') < 0) continue;
                       const t = String(el.value || el.textContent || el.innerText || '').replace(/\\s+/g, ' ').trim();
                       if (t && /[a-zA-Z]{2,}/.test(t) && t.length > vtype.length) vtype = t;
+                    }
+                  }
+                  if (!cubic || !vtype) {
+                    const grids = Array.from(
+                      document.querySelectorAll('table[summary="Features"], table[summary*="Features" i]')
+                    ).filter(vis);
+                    const featKey = (s) => String(s || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+                    const valFrom = (cell) => {
+                      const v = cell.value;
+                      if (v !== undefined && v !== null && String(v).trim() !== '') return String(v).trim();
+                      return String(cell.textContent || cell.innerText || '').replace(/\\s+/g, ' ').trim();
+                    };
+                    for (const tbl of grids) {
+                      const tb = tbl.querySelector('tbody') || tbl;
+                      for (const tr of tb.querySelectorAll('tr')) {
+                        const tds = tr.querySelectorAll('td');
+                        if (tds.length < 2) continue;
+                        const fk = featKey(tds[0].textContent || tds[0].innerText);
+                        if (fk === 'feature' || fk === 'value' || fk === 'description') continue;
+                        const val = valFrom(tds[1]);
+                        if (!val) continue;
+                        if (!cubic && fk.includes('cc category')) {
+                          cubic = val;
+                          continue;
+                        }
+                        if (!cubic && fk.includes('cubic') && fk.includes('capac')) {
+                          cubic = val;
+                          continue;
+                        }
+                        if (!vtype && fk.includes('class of vehicle')) {
+                          vtype = val;
+                        }
+                      }
+                      if (cubic && vtype) break;
                     }
                   }
                   return { cubic, vehicle_type: vtype };
