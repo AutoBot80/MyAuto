@@ -8046,7 +8046,31 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     except Exception:
         pass
 
+    def _eval_pdi_grid_rowcount() -> int:
+        """Same scoring as expiry scan: best table's ``rowCount`` (header match wins ties)."""
+        _best_sc = -1
+        _rc = 0
+        for _proot in _roots():
+            try:
+                _pr = _proot.evaluate(_pdi_js)
+                if not isinstance(_pr, dict):
+                    continue
+                _c = int(_pr.get("rowCount") or 0)
+                _hm = bool(_pr.get("headerMatched"))
+                _sc = _c + (10_000 if _hm else 0)
+                if _sc > _best_sc:
+                    _best_sc = _sc
+                    _rc = _c
+            except Exception:
+                continue
+        return _rc
+
     if _pdi_need_new_row:
+        _pdi_rows_before_new = _eval_pdi_grid_rowcount()
+        note(
+            f"{log_prefix}: PDI new-row flow — Service Request list rowCount≈{_pdi_rows_before_new} "
+            "(before New)."
+        )
         _sr_new_clicked = False
         _sr_selectors = [
             "[aria-label='Service Request List:New']",
@@ -8190,6 +8214,27 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         if _pdi_submit_err:
             note(f"{log_prefix}: Siebel error after PDI Submit → {_pdi_submit_err!r:.300}")
             return False, f"Siebel error after PDI Submit: {_pdi_submit_err[:200]}"
+
+        _safe_page_wait(page, 2000, log_label="pdi_post_submit_row_verify")
+        _pdi_submit_err_late = _detect_siebel_error_popup(page, content_frame_selector)
+        if _pdi_submit_err_late:
+            note(f"{log_prefix}: Siebel error after PDI Submit (delayed) → {_pdi_submit_err_late!r:.300}")
+            return False, f"Siebel error after PDI Submit: {_pdi_submit_err_late[:200]}"
+
+        _pdi_rows_after_submit = _eval_pdi_grid_rowcount()
+        if _pdi_rows_after_submit <= _pdi_rows_before_new:
+            _safe_page_wait(page, 2000, log_label="pdi_rowcount_recheck")
+            _pdi_rows_after_submit = _eval_pdi_grid_rowcount()
+        if _pdi_rows_after_submit <= _pdi_rows_before_new:
+            return (
+                False,
+                "PDI Submit did not increase the Service Request list row count "
+                f"(before={_pdi_rows_before_new}, after={_pdi_rows_after_submit}).",
+            )
+        note(
+            f"{log_prefix}: PDI list row count increased after Submit "
+            f"({_pdi_rows_before_new} → {_pdi_rows_after_submit})."
+        )
 
     note(f"{log_prefix}: PDI completed successfully.")
     if callable(form_trace):
@@ -11640,7 +11685,8 @@ def _siebel_try_click_features_and_image_tab(
 def _siebel_scrape_features_cubic_and_vehicle_type(page: Page) -> tuple[str, str]:
     """
     On **Features and Image**, read cubic capacity and vehicle type.
-    Tries canonical id ``4_s_1_l_HHML_Feature_Value`` and legacy typo ``Fetaure``; second row ``5_s_1_*``.
+    Prefers ids ``4_s_1_l_HHML_Feature_Value`` / ``5_s_1_l_HHML_Feature_Value`` (and ``Fetaure`` typo);
+    falls back to any visible ``*[id*='HHML_Feature_Value']`` / ``Fetaure`` cells by row prefix (``4_`` vs ``5_``).
     """
     cubic = ""
     vtype = ""
@@ -11662,6 +11708,42 @@ def _siebel_scrape_features_cubic_and_vehicle_type(page: Page) -> tuple[str, str
                   };
                   let cubic = read('4_s_1_l_HHML_Feature_Value') || read('4_s_1_l_HHML_Fetaure_Value');
                   let vtype = read('5_s_1_l_HHML_Feature_Value') || read('5_s_1_l_HHML_Fetaure_Value');
+                  const rowHint = (id) => {
+                    const m = /^([0-9]+)_/.exec(id || '');
+                    return m ? parseInt(m[1], 10) : -1;
+                  };
+                  if (!cubic || !vtype) {
+                    const cand = Array.from(
+                      document.querySelectorAll('[id*="HHML_Feature_Value"],[id*="HHML_Fetaure_Value"]')
+                    ).filter(vis);
+                    const byRow = { 4: [], 5: [] };
+                    for (const el of cand) {
+                      const id = el.getAttribute('id') || '';
+                      const t = String(el.value || el.textContent || el.innerText || '').replace(/\\s+/g, ' ').trim();
+                      if (!t) continue;
+                      const rh = rowHint(id);
+                      if (rh === 4) byRow[4].push(t);
+                      else if (rh === 5) byRow[5].push(t);
+                      else if (id.indexOf('_4_') >= 0) byRow[4].push(t);
+                      else if (id.indexOf('_5_') >= 0) byRow[5].push(t);
+                    }
+                    if (!cubic && byRow[4].length) cubic = byRow[4][0];
+                    if (!vtype && byRow[5].length) {
+                      const pick = byRow[5].find((x) => /[a-zA-Z]{2,}/.test(x)) || byRow[5][0];
+                      vtype = pick;
+                    }
+                  }
+                  if (!vtype || /^\\d{4,5}-[A-Z0-9-]+$/i.test(vtype)) {
+                    const cand = Array.from(
+                      document.querySelectorAll('[id*="HHML_Feature_Value"],[id*="HHML_Fetaure_Value"]')
+                    ).filter(vis);
+                    for (const el of cand) {
+                      const id = el.getAttribute('id') || '';
+                      if (rowHint(id) !== 5 && id.indexOf('_5_') < 0) continue;
+                      const t = String(el.value || el.textContent || el.innerText || '').replace(/\\s+/g, ' ').trim();
+                      if (t && /[a-zA-Z]{2,}/.test(t) && t.length > vtype.length) vtype = t;
+                    }
+                  }
                   return { cubic, vehicle_type: vtype };
                 }"""
             )
@@ -11741,23 +11823,8 @@ def _prepare_vehicle_scrape_serial_precheck_pdi_and_features(
             return _serial_pc_err
         return "Pre-check / PDI failed (prepare_vehicle)."
 
-    _cc_prev = str(scraped.get("cubic_capacity") or "").strip()
-    _vt_prev = str(scraped.get("vehicle_type") or "").strip()
-    if _cc_prev and _vt_prev:
-        note(
-            "prepare_vehicle: cubic_capacity and vehicle_type already set after serial Pre-check/PDI "
-            f"({_cc_prev!r}, {_vt_prev!r}) — skipping Features tab rescrape."
-        )
-        if callable(form_trace):
-            form_trace(
-                "5_vehicle_features",
-                "Features and Image",
-                "skip_features_tab_rescrape_already_populated",
-                cubic_capacity=_cc_prev,
-                vehicle_type=_vt_prev,
-            )
-        return None
-
+    # Always open **Features and Image** and scrape HHML applet ids. The vehicle grid often maps
+    # ``vehicle_type`` to the wrong column (e.g. SKU ``63074-X``); authoritative labels are on the tab.
     if not _siebel_try_click_features_and_image_tab(
         page, action_timeout_ms=action_timeout_ms, note=note
     ):
