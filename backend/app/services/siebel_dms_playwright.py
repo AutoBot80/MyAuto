@@ -6013,7 +6013,7 @@ def _siebel_frame_has_payment_lines_hhml_grid(frame: Frame) -> bool:
     """True when the document lists Payment Lines grid markers (e.g. **HHML_Transaction_No** column)."""
     js = """() => {
       return !!document.querySelector(
-        '[aria-describedby*="HHML_Transaction_No"], th[id*="HHML_Transaction_No"], [id$="_l_HHML_Transaction_No"]'
+        '[aria-describedby*="HHML_Transaction_No"], th[id*="HHML_Transaction_No"], [id$="_l_HHML_Transaction_No"], table[name*="ui-jqgri-ftable" i], table[name*="ui-jqgrid-ftable" i], table.ui-jqgri-ftable, table.ui-jqgrid-ftable'
       );
     }"""
     try:
@@ -6093,7 +6093,7 @@ def _payment_lines_list_has_populated_transaction_number(root) -> bool:
       }
 
       const tables = document.querySelectorAll(
-        'table.ui-jqgrid-btable, div.ui-jqgrid-bdiv table, table.siebui-list, table.siebui-list table'
+        'table.ui-jqgrid-btable, div.ui-jqgrid-bdiv table, table.siebui-list, table.siebui-list table, table[name*="ui-jqgri-ftable" i], table[name*="ui-jqgrid-ftable" i], table.ui-jqgri-ftable, table.ui-jqgrid-ftable'
       );
       for (const table of tables) {
         if (!vis(table)) continue;
@@ -6144,9 +6144,87 @@ def _payment_lines_list_has_populated_transaction_number(root) -> bool:
           if (looksLikeTxnId(v)) return true;
         }
       }
+      // Tenant variant: Payment Lines table uses marker name/class `ui-jqgri-ftable` and may not
+      // expose HHML_Transaction_No aria-describedby in row cells. Treat any populated data row as existing.
+      for (const table of document.querySelectorAll(
+        'table[name*="ui-jqgri-ftable" i], table[name*="ui-jqgrid-ftable" i], table.ui-jqgri-ftable, table.ui-jqgrid-ftable'
+      )) {
+        if (!vis(table)) continue;
+        for (const tr of table.querySelectorAll('tbody tr, tr')) {
+          if (!vis(tr)) continue;
+          const cls = String(tr.className || '').toLowerCase();
+          if (cls.includes('jqgfirstrow') || cls.includes('header')) continue;
+          const tds = tr.querySelectorAll('td');
+          if (!tds || tds.length < 2) continue;
+          let hasData = false;
+          for (const td of tds) {
+            const v = normCell(td.innerText || td.textContent || td.getAttribute('title') || '');
+            if (v && !isPlaceholder(v)) {
+              hasData = true;
+              break;
+            }
+          }
+          if (hasData) return true;
+        }
+      }
       return false;
     }"""
     return bool(_siebel_root_evaluate(root, js))
+
+
+def _payment_lines_detection_reason(root) -> str:
+    """
+    Best-effort reason string for Payment Lines row detection.
+
+    Returns one of:
+    - ``hhml_transaction_no``
+    - ``ui_jqgri_ftable_row``
+    - ``none``
+    """
+    js = """() => {
+      const vis = (el) => {
+        if (!el) return false;
+        const st = window.getComputedStyle(el);
+        if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+        const r = el.getBoundingClientRect();
+        return r.width >= 2 && r.height >= 2;
+      };
+      const normCell = (s) => String(s || '').replace(/\\u00a0/g, ' ').replace(/\\s+/g, ' ').trim();
+      const isPlaceholder = (v) => {
+        const t = v.toLowerCase();
+        if (!v || t === '-' || t === '—' || t === 'n/a' || t === 'na') return true;
+        if (t.includes('click') && t.includes('add')) return true;
+        return false;
+      };
+      for (const td of document.querySelectorAll('tbody td[aria-describedby]')) {
+        const adb = (td.getAttribute('aria-describedby') || '').toLowerCase();
+        if (!adb.includes('hhml_transaction_no')) continue;
+        if (!vis(td)) continue;
+        const v = normCell(td.innerText || td.textContent || '');
+        if (v && !isPlaceholder(v)) return 'hhml_transaction_no';
+      }
+      for (const table of document.querySelectorAll(
+        'table[name*="ui-jqgri-ftable" i], table[name*="ui-jqgrid-ftable" i], table.ui-jqgri-ftable, table.ui-jqgrid-ftable'
+      )) {
+        if (!vis(table)) continue;
+        for (const tr of table.querySelectorAll('tbody tr, tr')) {
+          if (!vis(tr)) continue;
+          const cls = String(tr.className || '').toLowerCase();
+          if (cls.includes('jqgfirstrow') || cls.includes('header')) continue;
+          const tds = tr.querySelectorAll('td');
+          if (!tds || tds.length < 2) continue;
+          for (const td of tds) {
+            const v = normCell(td.innerText || td.textContent || td.getAttribute('title') || '');
+            if (v && !isPlaceholder(v)) return 'ui_jqgri_ftable_row';
+          }
+        }
+      }
+      return 'none';
+    }"""
+    try:
+        return str(_siebel_root_evaluate(root, js) or "none").strip()
+    except Exception:
+        return "none"
 
 
 def _payment_line_toolbar_roots_priority(root) -> tuple:
@@ -6206,12 +6284,34 @@ def _add_customer_payment(
     action_timeout_ms: int,
     content_frame_selector: str | None,
     note,
+    vehicle_context: dict | None = None,
 ) -> bool:
     """
     Open **Payments**, locate the frame(s) where **Payment Lines List:New** (``+``) lives, then **in that
     document** check the grid for a row with a populated **Transaction #**. If present, skip add.
-    Otherwise click ``+``, fill Type / Mode / Amount (**120000**), and Save.
+    Otherwise click ``+``, fill Type / Mode / Amount and Save.
+
+    Amount rule:
+    - if vehicle_type starts with ``motorcycle`` (tolerates ``motorcyle`` typo) and cubic_capacity < 130:
+      amount = ``90000``
+    - else amount = ``120000``
     """
+    _vt_raw = str((vehicle_context or {}).get("vehicle_type") or "").strip()
+    _cc_raw = str((vehicle_context or {}).get("cubic_capacity") or "").strip()
+    _cc_num = _normalize_cubic_cc_digits(_cc_raw)
+    try:
+        _cc_val = float(_cc_num) if _cc_num else 0.0
+    except Exception:
+        _cc_val = 0.0
+    _vt_norm = re.sub(r"[^a-z]", "", _vt_raw.lower())
+    _is_motorcycle = _vt_norm.startswith("motorcycle") or _vt_norm.startswith("motorcyle")
+    _txn_amount = "90000" if (_is_motorcycle and _cc_val > 0 and _cc_val < 130) else "120000"
+    note(
+        "Payment amount rule: "
+        f"vehicle_type={_vt_raw!r}, cubic_capacity={_cc_raw!r}, "
+        f"cc_num={_cc_num!r}, transaction_amount={_txn_amount!r}."
+    )
+
     _safe_page_wait(page, 250, log_label="before_payments_plus_click")
     try:
         note(f"Payment debug: ordered frames count={len(_ordered_frames(page))}.")
@@ -6270,17 +6370,18 @@ def _add_customer_payment(
     for idx, pr in enumerate(payment_toolbar_roots):
         try:
             if _payment_lines_list_has_populated_transaction_number(pr):
+                _det_via = _payment_lines_detection_reason(pr)
                 # region agent log
                 _agent_debug_log(
                     "H2",
                     "siebel_dms_playwright.py:_add_customer_payment",
                     "payment_skipped_existing_transaction",
-                    {"root_index": int(idx)},
+                    {"root_index": int(idx), "detected_via": _det_via},
                 )
                 # endregion
                 note(
                     "Payments: Payment Lines list already has a row with populated Transaction# — "
-                    "skipping '+' and new-line entry."
+                    f"skipping '+' and new-line entry (detected_via={_det_via})."
                 )
                 return True
         except Exception:
@@ -6742,12 +6843,12 @@ def _add_customer_payment(
                                 except Exception:
                                     pass
                                 _safe_page_wait(page, 80, log_label="tab_nav_amount_clear")
-                                page.keyboard.type("120000")
+                                page.keyboard.type(_txn_amount)
                                 _safe_page_wait(page, 120, log_label="tab_nav_amount_fill")
                                 page.keyboard.press("Tab")
                                 _tab_filled = True
                                 note(
-                                    f"Payment direct: Transaction_Amount filled with 120000 via Tab navigation "
+                                    f"Payment direct: Transaction_Amount filled with {_txn_amount} via Tab navigation "
                                     f"(tab {_ti}, name={_ae.get('name')!r})."
                                 )
                             else:
@@ -6768,7 +6869,8 @@ def _add_customer_payment(
 
                 note(
                     "Filled payment fields (direct): "
-                    f"Type=Receipt(ok={type_ok!r}), Mode=Cash(ok={mode_ok!r}), Amount=120000(ok={amount_ok!r})."
+                    f"Type=Receipt(ok={type_ok!r}), Mode=Cash(ok={mode_ok!r}), "
+                    f"Amount={_txn_amount}(ok={amount_ok!r})."
                 )
                 _safe_page_wait(page, 400, log_label="after_amount_before_save")
 
@@ -6853,7 +6955,12 @@ def _add_customer_payment(
                     for _vr in _gather_payment_line_toolbar_roots(page, content_frame_selector):
                         try:
                             if _payment_lines_list_has_populated_transaction_number(_vr):
+                                _det_via = _payment_lines_detection_reason(_vr)
                                 _verify_txn = True
+                                note(
+                                    "Payments: post-save row detection matched "
+                                    f"(detected_via={_det_via})."
+                                )
                                 break
                         except Exception:
                             continue
@@ -7411,12 +7518,15 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         ) or _siebel_scrape_text_by_id_anywhere(
             page, "5_s_1_l_HHML_Fetaure_Value", content_frame_selector=content_frame_selector
         )
+        _cc_log = ""
         if cc:
-            scraped["cubic_capacity"] = cc
+            _cc_norm = _normalize_cubic_cc_digits(cc) or str(cc).strip()
+            scraped["cubic_capacity"] = _cc_norm
+            _cc_log = _cc_norm
         if vt:
             scraped["vehicle_type"] = vt
         note(
-            f"{log_prefix}: feature-id scrape cubic_capacity={cc!r}, vehicle_type={vt!r}."
+            f"{log_prefix}: feature-id scrape cubic_capacity={_cc_log!r}, vehicle_type={vt!r}."
         )
 
     # region agent log
@@ -12304,16 +12414,17 @@ def _prepare_vehicle_scrape_serial_precheck_pdi_and_features(
 
     cc, vt = _siebel_scrape_features_cubic_and_vehicle_type(page)
     if cc:
-        scraped["cubic_capacity"] = cc
+        scraped["cubic_capacity"] = _normalize_cubic_cc_digits(cc) or str(cc).strip()
     if vt:
         scraped["vehicle_type"] = vt
-    note(f"prepare_vehicle: Features tab → cubic_capacity={cc!r}, vehicle_type={vt!r}.")
+    _feat_cc = str(scraped.get("cubic_capacity") or "").strip()
+    note(f"prepare_vehicle: Features tab → cubic_capacity={_feat_cc!r}, vehicle_type={vt!r}.")
     if callable(form_trace):
         form_trace(
             "5_vehicle_features",
             "Features and Image",
             "scrape_HHML_Feature_Value_cubic_and_vehicle_type",
-            cubic_capacity=str(cc or ""),
+            cubic_capacity=_feat_cc,
             vehicle_type=str(vt or ""),
         )
     return None
@@ -14774,6 +14885,7 @@ def Playwright_Hero_DMS_fill(
                 action_timeout_ms=action_timeout_ms,
                 content_frame_selector=content_frame_selector,
                 note=note,
+                vehicle_context=(out.get("vehicle") or {}),
             ):
                 step("Stopped: could not open Payments tab or click '+' icon.")
                 out["error"] = (

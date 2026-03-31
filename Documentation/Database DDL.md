@@ -502,3 +502,4 @@ This document lists the current database tables and their columns. **Executable 
 | 2.20 | Mar 2026 | **No schema change.** HHML feature-value fallback now reads cell **`title`** and explicit ids after Serial drill before Pre-check/PDI — **LLD** **6.79**, **BRD** **3.34** |
 | 2.21 | Mar 2026 | **No schema change.** Siebel **`[frame-focus]`** diagnostic logging (Serial → Features → Pre-check/PDI) — **LLD** **6.80**, **BRD** **3.35** |
 | 2.22 | Mar 2026 | **No schema change.** Restored serial-detail vehicle-prep order from commit **`ab903064`** (Pre-check/PDI helper with feature-id scrape before Features tab scrape) — **LLD** **6.81**, **BRD** **3.36** |
+| 2.23 | Mar 2026 | **No schema change.** **`cubic_capacity`** scrape stores numeric token only — **LLD** **6.82**, **BRD** **3.37** |

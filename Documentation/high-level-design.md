@@ -319,3 +319,4 @@ The SQL view **`form_dms_view`** is **removed**; the same mapping is implemented
 | 1.21 | Mar 2026 | — | **`prepare_vehicle`**: explicit HHML id fallback scrape (including cell **`title`**) before Pre-check/PDI transition — **LLD** **6.79**, **BRD** **3.34** |
 | 1.22 | Mar 2026 | — | **`prepare_vehicle`** / serial Pre-check-PDI: **`[frame-focus]`** diagnostic **`note`** lines — **LLD** **6.80**, **BRD** **3.35** |
 | 1.23 | Mar 2026 | — | **`prepare_vehicle`** serial-detail rollback to prior working baseline (**commit `ab903064`**): Pre-check/PDI helper first (with feature-id scrape), then Features tab scrape — **LLD** **6.81**, **BRD** **3.36** |
+| 1.24 | Mar 2026 | — | **`cubic_capacity`** normalized to numeric-only at scrape time — **LLD** **6.82**, **BRD** **3.37** |
