@@ -546,3 +546,5 @@ This document lists the current database tables and their columns. **Executable 
 | 2.64 | Apr 2026 | **No schema change.** MISP login **`button[type="submit"]`** — **LLD** **6.123** / **BRD** **3.69** / **HLD** **1.59**. |
 | 2.65 | Apr 2026 | **No schema change.** **`Playwright_DMS_*.txt`** three-master snapshot after commit — **LLD** **6.124** / **BRD** **3.70** / **HLD** **1.60**. |
 | 2.66 | Apr 2026 | **No schema change.** Hero Insurance **`Playwright_insurance.txt`** **`[DIAG]`** snapshots (visible controls + frames); Sign In attempts on **iframe** contexts — **LLD** **6.125** / **BRD** **3.71** / **HLD** **1.61**. |
+| 2.67 | Apr 2026 | **No schema change.** **`#root`** DIAG + **`Playwright_insurance_diag_fallback.txt`** without **subfolder** — **LLD** **6.126** / **BRD** **3.72** / **HLD** **1.62**. |
+| 2.68 | Apr 2026 | **No schema change.** Hero Insurance **`main_process`** reuses **`pre_process`** browser tab — **LLD** **6.127** / **BRD** **3.73** / **HLD** **1.63**. |

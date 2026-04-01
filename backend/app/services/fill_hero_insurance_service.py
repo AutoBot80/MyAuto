@@ -27,6 +27,7 @@ from app.services.add_sales_commit_service import (
 from app.services.handle_browser_opening import get_or_open_site_page
 from app.services.insurance_form_values import (
     append_playwright_insurance_line,
+    append_playwright_insurance_line_or_dealer_fallback,
     build_insurance_fill_values,
     reset_playwright_insurance_log,
     write_insurance_form_values,
@@ -92,6 +93,54 @@ def _hero_insurance_snapshot_visible_controls(ctx) -> list[dict]:
         return []
 
 
+def _hero_insurance_snapshot_visible_controls_in_root(ctx) -> list[dict]:
+    """Visible buttons/submits/links **inside** ``#root`` (React/Vue mount); empty if no ``#root``."""
+    try:
+        raw = ctx.evaluate(
+            """() => {
+            const root = document.getElementById('root');
+            if (!root) return [];
+            const vis = (el) => {
+                if (!el) return false;
+                const st = window.getComputedStyle(el);
+                if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity) === 0) return false;
+                const r = el.getBoundingClientRect();
+                return r.width > 1 && r.height > 1;
+            };
+            const out = [];
+            const sels = [
+                'button', 'input[type="submit"]', 'input[type="button"]',
+                'a[href]', '[role="button"]', 'input[type="image"]'
+            ];
+            const seen = new Set();
+            for (const sel of sels) {
+                root.querySelectorAll(sel).forEach((el) => {
+                    if (out.length >= 45) return;
+                    if (!vis(el) || seen.has(el)) return;
+                    seen.add(el);
+                    const tag = (el.tagName || '').toLowerCase();
+                    const txt = (el.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 140);
+                    const val = String(el.value || '').trim().slice(0, 100);
+                    out.push({
+                        tag,
+                        type: String(el.type || ''),
+                        text: txt,
+                        value: val,
+                        id: String(el.id || '').slice(0, 80),
+                        name: String(el.name || '').slice(0, 60),
+                        aria: String(el.getAttribute('aria-label') || '').slice(0, 100),
+                        href: String(el.href || '').slice(0, 140),
+                    });
+                });
+            }
+            return out;
+        }"""
+        )
+        return list(raw) if isinstance(raw, list) else []
+    except Exception:
+        return []
+
+
 def _hero_insurance_log_page_diagnostics(
     page,
     *,
@@ -121,26 +170,43 @@ def _hero_insurance_log_page_diagnostics(
         except Exception:
             fu = "(no url)"
         snap = _hero_insurance_snapshot_visible_controls(fr)
+        root_snap = _hero_insurance_snapshot_visible_controls_in_root(fr)
         lines.append(f"--- frame[{idx}] url={fu!r} visible_controls={len(snap)} ---")
         for j, row in enumerate(snap[:35]):
             lines.append(f"  [{j}] {row}")
+        if root_snap:
+            lines.append(f"--- frame[{idx}] #root only: {len(root_snap)} controls ---")
+            for j, row in enumerate(root_snap[:35]):
+                lines.append(f"  root[{j}] {row}")
         logger.info(
-            "Hero Insurance diagnostics %s frame[%s] url=%s controls=%s",
+            "Hero Insurance diagnostics %s frame[%s] url=%s controls=%s #root=%s",
             phase,
             idx,
             fu[:200],
             len(snap),
+            len(root_snap),
         )
     blob = "\n".join(lines)
     if len(blob) > 12000:
         blob = blob[:12000] + "\n…(truncated)"
+    logger.warning(
+        "Hero Insurance DIAG phase=%s (see full snapshot on next logger line or insurance log file)",
+        phase,
+    )
     logger.info("Hero Insurance diagnostics %s full snapshot:\n%s", phase, blob)
-    append_playwright_insurance_line(
+    append_playwright_insurance_line_or_dealer_fallback(
         ocr_output_dir,
         subfolder,
         "DIAG",
         f"login_page_snapshot {phase}: " + blob.replace("\n", " \\n "),
     )
+    if not ocr_output_dir or not subfolder or not str(subfolder).strip():
+        fb = (Path(ocr_output_dir).resolve() / "Playwright_insurance_diag_fallback.txt") if ocr_output_dir else None
+        logger.warning(
+            "Hero Insurance: DIAG also needs subfolder for per-upload Playwright_insurance.txt under ocr_output; "
+            "without subfolder, dealer fallback is %s",
+            str(fb) if fb else "(no ocr_output_dir — DIAG only in backend logs)",
+        )
 
 
 def _iter_page_and_child_frames(page):
@@ -157,8 +223,10 @@ def _iter_page_and_child_frames(page):
         pass
 
 
-def _click_sign_in_on_context(ctx, *, timeout_ms: int) -> bool:
-    """Try login CTA on a single **Page** or **Frame**."""
+def _click_sign_in_on_scope(scope, *, timeout_ms: int, scope_label: str) -> bool:
+    """
+    Try login CTA within a **Page**, **Frame**, or **Locator** (e.g. ``#root`` SPA mount).
+    """
     label_patterns = (
         (re.compile(r"^\s*Sign In\s*$", re.I), "Sign In"),
         (re.compile(r"^\s*Login\s*$", re.I), "Login"),
@@ -168,7 +236,7 @@ def _click_sign_in_on_context(ctx, *, timeout_ms: int) -> bool:
         # Prefer explicit form submit controls (MISP login: ``<button type="submit">Sign In</button>``).
         for text, dbg in (("Sign In", "Sign In"), ("Login", "Login"), ("Log in", "Log in")):
             try:
-                sub = ctx.locator('button[type="submit"]').filter(
+                sub = scope.locator('button[type="submit"]').filter(
                     has_text=re.compile(re.escape(text), re.I)
                 )
                 if sub.count() > 0:
@@ -178,9 +246,9 @@ def _click_sign_in_on_context(ctx, *, timeout_ms: int) -> bool:
                             b.scroll_into_view_if_needed(timeout=3_000)
                             b.click(timeout=timeout_ms)
                             logger.info(
-                                "Hero Insurance: clicked %s (button[type=submit]) ctx=%s.",
+                                "Hero Insurance: clicked %s (button[type=submit]) scope=%s.",
                                 dbg,
-                                type(ctx).__name__,
+                                scope_label,
                             )
                             return True
             except Exception:
@@ -191,7 +259,7 @@ def _click_sign_in_on_context(ctx, *, timeout_ms: int) -> bool:
             ('input[type="submit"][value*="Log in" i]', "Log in"),
         ):
             try:
-                loc = ctx.locator(css)
+                loc = scope.locator(css)
                 if loc.count() > 0:
                     for i in range(min(loc.count(), 6)):
                         el = loc.nth(i)
@@ -199,16 +267,16 @@ def _click_sign_in_on_context(ctx, *, timeout_ms: int) -> bool:
                             el.scroll_into_view_if_needed(timeout=2_000)
                             el.click(timeout=timeout_ms)
                             logger.info(
-                                "Hero Insurance: clicked %s (input[type=submit]) ctx=%s.",
+                                "Hero Insurance: clicked %s (input[type=submit]) scope=%s.",
                                 dbg,
-                                type(ctx).__name__,
+                                scope_label,
                             )
                             return True
             except Exception:
                 continue
 
         for pat, _dbg in label_patterns:
-            loc = ctx.get_by_text(pat)
+            loc = scope.get_by_text(pat)
             n = loc.count()
             if n <= 0:
                 continue
@@ -218,9 +286,9 @@ def _click_sign_in_on_context(ctx, *, timeout_ms: int) -> bool:
                     if el.is_visible(timeout=2_000):
                         el.click(timeout=timeout_ms)
                         logger.info(
-                            "Hero Insurance: clicked login CTA (%s) ctx=%s.",
+                            "Hero Insurance: clicked login CTA (%s) scope=%s.",
                             pat.pattern,
-                            type(ctx).__name__,
+                            scope_label,
                         )
                         return True
                 except Exception:
@@ -229,15 +297,15 @@ def _click_sign_in_on_context(ctx, *, timeout_ms: int) -> bool:
             for pat in (
                 re.compile(r"^\s*(Sign In|Login|Log\s+in)\s*$", re.I),
             ):
-                loc = ctx.get_by_role(role, name=pat)
+                loc = scope.get_by_role(role, name=pat)
                 if loc.count() > 0:
                     try:
                         if loc.first.is_visible(timeout=1_500):
                             loc.first.click(timeout=timeout_ms)
                             logger.info(
-                                "Hero Insurance: clicked login CTA (role=%s) ctx=%s.",
+                                "Hero Insurance: clicked login CTA (role=%s) scope=%s.",
                                 role,
-                                type(ctx).__name__,
+                                scope_label,
                             )
                             return True
                     except Exception:
@@ -245,19 +313,36 @@ def _click_sign_in_on_context(ctx, *, timeout_ms: int) -> bool:
         # Prominent anchor to auth route (SPA)
         for sel in ('a[href*="login" i]', 'a[href*="signin" i]', 'a[href*="sign-in" i]'):
             try:
-                a = ctx.locator(sel).filter(has_text=re.compile(r"login|sign\s*in", re.I))
+                a = scope.locator(sel).filter(has_text=re.compile(r"login|sign\s*in", re.I))
                 if a.count() > 0 and a.first.is_visible(timeout=1_200):
                     a.first.click(timeout=timeout_ms)
                     logger.info(
-                        "Hero Insurance: clicked login link (%s) ctx=%s.",
+                        "Hero Insurance: clicked login link (%s) scope=%s.",
                         sel,
-                        type(ctx).__name__,
+                        scope_label,
                     )
                     return True
             except Exception:
                 continue
     except Exception as exc:
-        logger.debug("Hero Insurance: login CTA click skipped (ctx=%s): %s", type(ctx).__name__, exc)
+        logger.debug("Hero Insurance: login CTA click skipped (scope=%s): %s", scope_label, exc)
+    return False
+
+
+def _click_sign_in_on_context(ctx, *, timeout_ms: int) -> bool:
+    """Try login CTA on a single **Page** or **Frame**; **#root** first (SPA), then full document."""
+    scopes: list[tuple[object, str]] = []
+    try:
+        root = ctx.locator("#root")
+        if root.count() > 0:
+            scopes.append((root, "#root"))
+    except Exception:
+        pass
+    scopes.append((ctx, type(ctx).__name__))
+
+    for scope, label in scopes:
+        if _click_sign_in_on_scope(scope, timeout_ms=timeout_ms, scope_label=label):
+            return True
     return False
 
 
@@ -1274,6 +1359,10 @@ def pre_process(
         )
         return result
 
+    # Same Playwright worker thread as main_process — hand off the Page so we do not call
+    # ``get_or_open_site_page`` again (a second call may fail tab reuse and launch another window).
+    result["_insurance_playwright_page"] = page
+
     to = INSURANCE_ACTION_TIMEOUT_MS
     page.set_default_timeout(to)
     append_playwright_insurance_line(
@@ -1384,18 +1473,38 @@ def main_process(
     )
 
     to = INSURANCE_ACTION_TIMEOUT_MS
-    page, open_err = get_or_open_site_page(
-        match_base,
-        "Insurance",
-        require_login_on_open=False,
-        launch_url=login_url,
-    )
+    page = None
+    pre_page = pre_result.get("_insurance_playwright_page")
+    if pre_page is not None:
+        try:
+            if not pre_page.is_closed():
+                page = pre_page
+                logger.info(
+                    "Hero Insurance main_process: reusing Playwright page from pre_process (avoids second browser/tab open)."
+                )
+                append_playwright_insurance_line(
+                    ocr_output_dir,
+                    subfolder,
+                    "NOTE",
+                    "main_process: attached to same browser tab as pre_process",
+                )
+        except Exception as exc:
+            logger.warning("Hero Insurance main_process: could not reuse pre_process page: %s", exc)
+            page = None
+
     if page is None:
-        out["error"] = open_err or "Insurance site tab not found after pre_process; keep the browser open."
-        append_playwright_insurance_line(
-            ocr_output_dir, subfolder, "NOTE", f"main_process: tab not found: {open_err}"
+        page, open_err = get_or_open_site_page(
+            match_base,
+            "Insurance",
+            require_login_on_open=False,
+            launch_url=login_url,
         )
-        return out
+        if page is None:
+            out["error"] = open_err or "Insurance site tab not found after pre_process; keep the browser open."
+            append_playwright_insurance_line(
+                ocr_output_dir, subfolder, "NOTE", f"main_process: tab not found: {open_err}"
+            )
+            return out
 
     try:
         page.set_default_timeout(to)
@@ -1474,6 +1583,10 @@ def post_process(*, pre_result: dict, main_result: dict) -> dict:
     Finalize the hero-insurance request (logging hooks, response shape for API). Merges pre/main
     into the same contract as the former single-step flow.
     """
+    try:
+        pre_result.pop("_insurance_playwright_page", None)
+    except Exception:
+        pass
     ok = bool(pre_result.get("success")) and bool(main_result.get("success", True))
     err = pre_result.get("error") or main_result.get("error")
     if not ok and not err:

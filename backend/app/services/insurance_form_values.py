@@ -257,3 +257,39 @@ def append_playwright_insurance_line(
             fp.write(f"{_insurance_log_ts_ist()} [{prefix}] {message}\n")
     except OSError as exc:
         logger.warning("Insurance: could not write Playwright_insurance.txt: %s", exc)
+
+
+def append_playwright_insurance_diag_dealer_fallback(
+    ocr_output_dir: Path | None,
+    prefix: str,
+    message: str,
+) -> Path | None:
+    """
+    When **subfolder** is omitted, per-upload ``Playwright_insurance.txt`` is not written — append DIAG/NOTE lines
+    here instead (``<ocr_output_dir>/Playwright_insurance_diag_fallback.txt``) so runs are not silent.
+    """
+    if not ocr_output_dir or not str(ocr_output_dir).strip():
+        return None
+    if not (message or "").strip():
+        return None
+    path = Path(ocr_output_dir).resolve() / "Playwright_insurance_diag_fallback.txt"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as fp:
+            fp.write(f"{_insurance_log_ts_ist()} [{prefix}] {message}\n")
+    except OSError as exc:
+        logger.warning("Insurance: could not write Playwright_insurance_diag_fallback.txt: %s", exc)
+        return None
+    return path
+
+
+def append_playwright_insurance_line_or_dealer_fallback(
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
+    prefix: str,
+    message: str,
+) -> None:
+    """Prefer subfolder ``Playwright_insurance.txt``; if **subfolder** is empty, write dealer-level fallback file."""
+    append_playwright_insurance_line(ocr_output_dir, subfolder, prefix, message)
+    if ocr_output_dir and (not subfolder or not str(subfolder).strip()):
+        append_playwright_insurance_diag_dealer_fallback(ocr_output_dir, prefix, message)
