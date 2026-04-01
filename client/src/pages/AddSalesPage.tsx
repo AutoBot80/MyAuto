@@ -390,6 +390,12 @@ export function AddSalesPage({ dealerId, oemId, dmsUrl, siteUrlsLoading, siteUrl
       setCreateInvoiceEligibilityReason(res.reason);
       setGenerateInsuranceEnabled(res.generate_insurance_enabled);
       setGenerateInsuranceReason(res.generate_insurance_reason);
+      if (res.resolved_customer_id != null) {
+        setLastSubmittedCustomerId(res.resolved_customer_id);
+      }
+      if (res.resolved_vehicle_id != null) {
+        setLastSubmittedVehicleId(res.resolved_vehicle_id);
+      }
     } catch (e) {
       setCreateInvoiceEnabled(false);
       setCreateInvoiceEligibilityReason(

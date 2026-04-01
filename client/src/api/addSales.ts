@@ -8,6 +8,9 @@ export interface CreateInvoiceEligibilityResponse {
   invoice_recorded: boolean;
   generate_insurance_enabled: boolean;
   generate_insurance_reason: string | null;
+  /** When chassis/engine/mobile match DB rows — use for Generate Insurance / RTO after Create Invoice. */
+  resolved_customer_id?: number | null;
+  resolved_vehicle_id?: number | null;
 }
 
 export async function fetchCreateInvoiceEligibility(opts: {

@@ -24,5 +24,5 @@ Vehicle type: MOTORCYCLE WITH GEAR
 Num cylinders: 1
 Ex-showroom Price (Order Value): —
 Year of Mfg: 2026
-Order # (DMS): 11870-02-SVSO-0426-5
-Invoice # (DMS): —
+Order # (DMS): 11870-02-SVSO-0326-3238
+Invoice # (DMS): 11870BD26S5

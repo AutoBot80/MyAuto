@@ -102,6 +102,12 @@ def get_create_invoice_eligibility(
     finally:
         conn.close()
 
+    resolved_cid: int | None = None
+    resolved_vid: int | None = None
+    if vrow and crow:
+        resolved_cid = int(crow["customer_id"])
+        resolved_vid = int(vrow["vehicle_id"])
+
     if not vrow or not crow:
         return {
             "create_invoice_enabled": True,
@@ -111,6 +117,8 @@ def get_create_invoice_eligibility(
             "invoice_recorded": False,
             "generate_insurance_enabled": False,
             "generate_insurance_reason": "Create Invoice before Generating Insurance",
+            "resolved_customer_id": None,
+            "resolved_vehicle_id": None,
         }
 
     if srow is None:
@@ -125,6 +133,8 @@ def get_create_invoice_eligibility(
                 "Record the sale with Create Invoice (DMS) first; Generate Insurance unlocks after a "
                 "sales row and invoice exist."
             ),
+            "resolved_customer_id": resolved_cid,
+            "resolved_vehicle_id": resolved_vid,
         }
 
     inv_raw = srow["invoice_number"]
@@ -150,4 +160,6 @@ def get_create_invoice_eligibility(
         "invoice_recorded": invoice_recorded,
         "generate_insurance_enabled": generate_insurance_enabled,
         "generate_insurance_reason": gen_reason,
+        "resolved_customer_id": resolved_cid,
+        "resolved_vehicle_id": resolved_vid,
     }
