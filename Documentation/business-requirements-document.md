@@ -434,3 +434,4 @@ Bulk upload automates the ingestion of scanned documents from a shared folder in
 | 3.68 | Apr 2026 | — | **FR-18b** **2W** tile **`aid="ctl00_TWO"`** — **LLD** **6.122**, **HLD** **1.58**, **Database DDL** **2.63** |
 | 3.69 | Apr 2026 | — | **FR-18b** MISP login **`button[type="submit"]`** **Sign In** — **LLD** **6.123**, **HLD** **1.59**, **Database DDL** **2.64** |
 | 3.70 | Apr 2026 | — | **FR-17** / **§6.1a** trace: **`Playwright_DMS_*.txt`** appends committed three-master JSON after Create Invoice DB write — **LLD** **6.124**, **HLD** **1.60**, **Database DDL** **2.65** |
+| 3.71 | Apr 2026 | — | **Hero Insurance** **pre_process**: **`Playwright_insurance.txt`** **`[DIAG]`** lines list URL, frames, and visible login-related controls when Sign In is attempted; automation tries **iframe** document trees for the Sign In control — **LLD** **6.125**, **HLD** **1.61**, **Database DDL** **2.66** |

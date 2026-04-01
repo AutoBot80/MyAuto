@@ -356,3 +356,4 @@ The SQL view **`form_dms_view`** is **removed**; the same mapping is implemented
 | 1.58 | Apr 2026 | — | **`fill_hero_insurance_service`**: **2W** **`aid="ctl00_TWO"`** — **LLD** **6.122**, **BRD** **3.68**, **Database DDL** **2.63** |
 | 1.59 | Apr 2026 | — | **`fill_hero_insurance_service`**: login **`type="submit"`** — **LLD** **6.123**, **BRD** **3.69**, **Database DDL** **2.64** |
 | 1.60 | Apr 2026 | — | **`fill_hero_dms_service`**: **`Playwright_DMS`** masters JSON after commit — **LLD** **6.124**, **BRD** **3.70**, **Database DDL** **2.65** |
+| 1.61 | Apr 2026 | — | **`fill_hero_insurance_service`**: **`[DIAG]`** page snapshots + iframe Sign In attempts — **LLD** **6.125**, **BRD** **3.71**, **Database DDL** **2.66** |

@@ -44,12 +44,121 @@ def _t(page, ms: int) -> None:
         pass
 
 
-def _click_sign_in_if_visible(page, *, timeout_ms: int) -> bool:
+def _hero_insurance_snapshot_visible_controls(ctx) -> list[dict]:
     """
-    Click landing-page login CTA (``Sign In``, ``Login``, ``Log in``).
-    Hero MISP login form uses ``<button type="submit">`` with label **Sign In**; landing pages may use **Login** only.
-    Returns True if a click was attempted.
+    Collect visible buttons/links/submits on a **Page** or **Frame** (for iframe login forms).
     """
+    try:
+        raw = ctx.evaluate(
+            """() => {
+            const vis = (el) => {
+                if (!el) return false;
+                const st = window.getComputedStyle(el);
+                if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity) === 0) return false;
+                const r = el.getBoundingClientRect();
+                return r.width > 1 && r.height > 1;
+            };
+            const out = [];
+            const sels = [
+                'button', 'input[type="submit"]', 'input[type="button"]',
+                'a[href]', '[role="button"]', 'input[type="image"]'
+            ];
+            const seen = new Set();
+            for (const sel of sels) {
+                document.querySelectorAll(sel).forEach((el) => {
+                    if (out.length >= 45) return;
+                    if (!vis(el) || seen.has(el)) return;
+                    seen.add(el);
+                    const tag = (el.tagName || '').toLowerCase();
+                    const txt = (el.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 140);
+                    const val = String(el.value || '').trim().slice(0, 100);
+                    out.push({
+                        tag,
+                        type: String(el.type || ''),
+                        text: txt,
+                        value: val,
+                        id: String(el.id || '').slice(0, 80),
+                        name: String(el.name || '').slice(0, 60),
+                        aria: String(el.getAttribute('aria-label') || '').slice(0, 100),
+                        href: String(el.href || '').slice(0, 140),
+                    });
+                });
+            }
+            return out;
+        }"""
+        )
+        return list(raw) if isinstance(raw, list) else []
+    except Exception:
+        return []
+
+
+def _hero_insurance_log_page_diagnostics(
+    page,
+    *,
+    phase: str,
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
+) -> None:
+    """Log URL, frame count, and visible control snapshot to logger and ``Playwright_insurance.txt``."""
+    lines: list[str] = []
+    try:
+        title = page.title()
+    except Exception:
+        title = ""
+    try:
+        url = (page.url or "").strip()
+    except Exception:
+        url = ""
+    lines.append(f"phase={phase!r} url={url[:500]!r} title={title[:200]!r}")
+    try:
+        frames = list(page.frames)
+    except Exception:
+        frames = []
+    lines.append(f"frame_count={len(frames)}")
+    for idx, fr in enumerate(frames):
+        try:
+            fu = (fr.url or "")[:300]
+        except Exception:
+            fu = "(no url)"
+        snap = _hero_insurance_snapshot_visible_controls(fr)
+        lines.append(f"--- frame[{idx}] url={fu!r} visible_controls={len(snap)} ---")
+        for j, row in enumerate(snap[:35]):
+            lines.append(f"  [{j}] {row}")
+        logger.info(
+            "Hero Insurance diagnostics %s frame[%s] url=%s controls=%s",
+            phase,
+            idx,
+            fu[:200],
+            len(snap),
+        )
+    blob = "\n".join(lines)
+    if len(blob) > 12000:
+        blob = blob[:12000] + "\n…(truncated)"
+    logger.info("Hero Insurance diagnostics %s full snapshot:\n%s", phase, blob)
+    append_playwright_insurance_line(
+        ocr_output_dir,
+        subfolder,
+        "DIAG",
+        f"login_page_snapshot {phase}: " + blob.replace("\n", " \\n "),
+    )
+
+
+def _iter_page_and_child_frames(page):
+    """Main page first, then each child frame (login may be in an iframe)."""
+    yield page
+    try:
+        for fr in page.frames:
+            try:
+                if fr != page.main_frame:
+                    yield fr
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+
+def _click_sign_in_on_context(ctx, *, timeout_ms: int) -> bool:
+    """Try login CTA on a single **Page** or **Frame**."""
     label_patterns = (
         (re.compile(r"^\s*Sign In\s*$", re.I), "Sign In"),
         (re.compile(r"^\s*Login\s*$", re.I), "Login"),
@@ -59,14 +168,20 @@ def _click_sign_in_if_visible(page, *, timeout_ms: int) -> bool:
         # Prefer explicit form submit controls (MISP login: ``<button type="submit">Sign In</button>``).
         for text, dbg in (("Sign In", "Sign In"), ("Login", "Login"), ("Log in", "Log in")):
             try:
-                sub = page.locator('button[type="submit"]').filter(has_text=re.compile(re.escape(text), re.I))
+                sub = ctx.locator('button[type="submit"]').filter(
+                    has_text=re.compile(re.escape(text), re.I)
+                )
                 if sub.count() > 0:
                     for i in range(min(sub.count(), 8)):
                         b = sub.nth(i)
                         if b.is_visible(timeout=2_000):
                             b.scroll_into_view_if_needed(timeout=3_000)
                             b.click(timeout=timeout_ms)
-                            logger.info("Hero Insurance: clicked %s (button[type=submit]).", dbg)
+                            logger.info(
+                                "Hero Insurance: clicked %s (button[type=submit]) ctx=%s.",
+                                dbg,
+                                type(ctx).__name__,
+                            )
                             return True
             except Exception:
                 continue
@@ -76,20 +191,24 @@ def _click_sign_in_if_visible(page, *, timeout_ms: int) -> bool:
             ('input[type="submit"][value*="Log in" i]', "Log in"),
         ):
             try:
-                loc = page.locator(css)
+                loc = ctx.locator(css)
                 if loc.count() > 0:
                     for i in range(min(loc.count(), 6)):
                         el = loc.nth(i)
                         if el.is_visible(timeout=1_500):
                             el.scroll_into_view_if_needed(timeout=2_000)
                             el.click(timeout=timeout_ms)
-                            logger.info("Hero Insurance: clicked %s (input[type=submit]).", dbg)
+                            logger.info(
+                                "Hero Insurance: clicked %s (input[type=submit]) ctx=%s.",
+                                dbg,
+                                type(ctx).__name__,
+                            )
                             return True
             except Exception:
                 continue
 
         for pat, _dbg in label_patterns:
-            loc = page.get_by_text(pat)
+            loc = ctx.get_by_text(pat)
             n = loc.count()
             if n <= 0:
                 continue
@@ -98,7 +217,11 @@ def _click_sign_in_if_visible(page, *, timeout_ms: int) -> bool:
                 try:
                     if el.is_visible(timeout=2_000):
                         el.click(timeout=timeout_ms)
-                        logger.info("Hero Insurance: clicked login CTA (%s).", pat.pattern)
+                        logger.info(
+                            "Hero Insurance: clicked login CTA (%s) ctx=%s.",
+                            pat.pattern,
+                            type(ctx).__name__,
+                        )
                         return True
                 except Exception:
                     continue
@@ -106,27 +229,48 @@ def _click_sign_in_if_visible(page, *, timeout_ms: int) -> bool:
             for pat in (
                 re.compile(r"^\s*(Sign In|Login|Log\s+in)\s*$", re.I),
             ):
-                loc = page.get_by_role(role, name=pat)
+                loc = ctx.get_by_role(role, name=pat)
                 if loc.count() > 0:
                     try:
                         if loc.first.is_visible(timeout=1_500):
                             loc.first.click(timeout=timeout_ms)
-                            logger.info("Hero Insurance: clicked login CTA (role=%s).", role)
+                            logger.info(
+                                "Hero Insurance: clicked login CTA (role=%s) ctx=%s.",
+                                role,
+                                type(ctx).__name__,
+                            )
                             return True
                     except Exception:
                         continue
         # Prominent anchor to auth route (SPA)
         for sel in ('a[href*="login" i]', 'a[href*="signin" i]', 'a[href*="sign-in" i]'):
             try:
-                a = page.locator(sel).filter(has_text=re.compile(r"login|sign\s*in", re.I))
+                a = ctx.locator(sel).filter(has_text=re.compile(r"login|sign\s*in", re.I))
                 if a.count() > 0 and a.first.is_visible(timeout=1_200):
                     a.first.click(timeout=timeout_ms)
-                    logger.info("Hero Insurance: clicked login link (%s).", sel)
+                    logger.info(
+                        "Hero Insurance: clicked login link (%s) ctx=%s.",
+                        sel,
+                        type(ctx).__name__,
+                    )
                     return True
             except Exception:
                 continue
     except Exception as exc:
-        logger.debug("Hero Insurance: login CTA click skipped: %s", exc)
+        logger.debug("Hero Insurance: login CTA click skipped (ctx=%s): %s", type(ctx).__name__, exc)
+    return False
+
+
+def _click_sign_in_if_visible(page, *, timeout_ms: int) -> bool:
+    """
+    Click landing-page login CTA (``Sign In``, ``Login``, ``Log in``).
+    Hero MISP login form uses ``<button type="submit">`` with label **Sign In**; landing pages may use **Login** only.
+    Tries the **main document** and each **child frame** (login may render inside an iframe).
+    Returns True if a click was attempted.
+    """
+    for ctx in _iter_page_and_child_frames(page):
+        if _click_sign_in_on_context(ctx, timeout_ms=timeout_ms):
+            return True
     return False
 
 
@@ -501,12 +645,36 @@ def _kyc_proceed_or_upload(page, *, timeout_ms: int) -> str | None:
     return None
 
 
-def _run_hero_misp_portal_after_open(page, values: dict | None, *, timeout_ms: int) -> str | None:
+def _run_hero_misp_portal_after_open(
+    page,
+    values: dict | None,
+    *,
+    timeout_ms: int,
+    ocr_output_dir: Path | None = None,
+    subfolder: str | None = None,
+) -> str | None:
     """
     Login / Sign In → 2W (two-wheeler) → New Policy → (if ``values``) insurer / OVD / mobile / consent → KYC Proceed or upload.
     Returns None on success, else error string.
     """
-    _click_sign_in_if_visible(page, timeout_ms=timeout_ms)
+    _t(page, 500)
+    _hero_insurance_log_page_diagnostics(
+        page,
+        phase="before_sign_in",
+        ocr_output_dir=ocr_output_dir,
+        subfolder=subfolder,
+    )
+    clicked = _click_sign_in_if_visible(page, timeout_ms=timeout_ms)
+    if not clicked:
+        _hero_insurance_log_page_diagnostics(
+            page,
+            phase="sign_in_not_clicked",
+            ocr_output_dir=ocr_output_dir,
+            subfolder=subfolder,
+        )
+        logger.warning(
+            "Hero Insurance: no Sign In / Login control was clicked — diagnostics logged (frames + visible controls)."
+        )
     try:
         page.wait_for_load_state("networkidle", timeout=12_000)
     except Exception:
@@ -1113,7 +1281,13 @@ def pre_process(
     )
 
     try:
-        step_err = _run_hero_misp_portal_after_open(page, values, timeout_ms=to)
+        step_err = _run_hero_misp_portal_after_open(
+            page,
+            values,
+            timeout_ms=to,
+            ocr_output_dir=ocr_output_dir,
+            subfolder=subfolder,
+        )
         if step_err:
             result["error"] = step_err
             result["success"] = False
