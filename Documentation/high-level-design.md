@@ -360,3 +360,4 @@ The SQL view **`form_dms_view`** is **removed**; the same mapping is implemented
 | 1.62 | Apr 2026 | — | **`#root`** DIAG + scoped Sign In; **`Playwright_insurance_diag_fallback.txt`** — **LLD** **6.126**, **BRD** **3.72**, **Database DDL** **2.67** |
 | 1.63 | Apr 2026 | — | **`fill_hero_insurance_service`**: **`pre_process` → `main_process`** Playwright **Page** reuse — **LLD** **6.127**, **BRD** **3.73**, **Database DDL** **2.68** |
 | 1.64 | Apr 2026 | — | **`run_fill_insurance_only`**: Sign In + DIAG before KYC — **LLD** **6.128**, **BRD** **3.74**, **Database DDL** **2.69** |
+| 1.65 | Apr 2026 | — | **`_try_click_sign_in_inside_password_form`** (MISP **Get Price** vs **Sign In**) — **LLD** **6.129**, **BRD** **3.75**, **Database DDL** **2.70** |

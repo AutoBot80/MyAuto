@@ -241,6 +241,66 @@ def _iter_page_and_child_frames(page):
         pass
 
 
+def _try_click_sign_in_inside_password_form(scope, *, timeout_ms: int, scope_label: str) -> bool:
+    """
+    Click **Sign In** / **Login** only inside a ``<form>`` that contains a password field.
+
+    MISP partner landing (e.g. ``/misp-partner-login``) exposes **two** ``button[type="submit"]`` nodes in
+    the same view — **Get Price** (hero) and **Sign In** (login). A naive ``button[type=submit]`` scan can
+    hit the wrong control or rely on order; scoping to the login form matches runtime DIAG snapshots.
+    """
+    try:
+        login_form = scope.locator("form").filter(has=scope.locator('input[type="password"]'))
+        if login_form.count() == 0:
+            return False
+        patterns = (
+            (re.compile(r"^\s*Sign\s*In\s*$", re.I), "Sign In"),
+            (re.compile(r"^\s*Login\s*$", re.I), "Login"),
+            (re.compile(r"^\s*Log\s+in\s*$", re.I), "Log in"),
+        )
+        for pat, dbg in patterns:
+            for sel in ('button[type="submit"]', 'input[type="submit"]'):
+                try:
+                    loc = login_form.locator(sel).filter(has_text=pat)
+                    if loc.count() <= 0:
+                        continue
+                    b = loc.first
+                    if not b.is_visible(timeout=2_500):
+                        continue
+                    b.scroll_into_view_if_needed(timeout=4_000)
+                    try:
+                        b.click(timeout=timeout_ms)
+                    except Exception:
+                        b.click(timeout=timeout_ms, force=True)
+                    logger.info(
+                        "Hero Insurance: clicked %s (%s in password form) scope=%s.",
+                        dbg,
+                        sel,
+                        scope_label,
+                    )
+                    return True
+                except Exception:
+                    continue
+        try:
+            rb = login_form.get_by_role(
+                "button",
+                name=re.compile(r"^\s*(Sign\s*In|Login|Log\s*in)\s*$", re.I),
+            )
+            if rb.count() > 0 and rb.first.is_visible(timeout=2_000):
+                rb.first.scroll_into_view_if_needed(timeout=4_000)
+                rb.first.click(timeout=timeout_ms)
+                logger.info(
+                    "Hero Insurance: clicked login role=button in password form scope=%s.",
+                    scope_label,
+                )
+                return True
+        except Exception:
+            pass
+    except Exception as exc:
+        logger.debug("Hero Insurance: password-form Sign In: %s", exc)
+    return False
+
+
 def _click_sign_in_on_scope(scope, *, timeout_ms: int, scope_label: str) -> bool:
     """
     Try login CTA within a **Page**, **Frame**, or **Locator** (e.g. ``#root`` SPA mount).
@@ -251,6 +311,10 @@ def _click_sign_in_on_scope(scope, *, timeout_ms: int, scope_label: str) -> bool
         (re.compile(r"^\s*Log\s+in\s*$", re.I), "Log in"),
     )
     try:
+        if _try_click_sign_in_inside_password_form(
+            scope, timeout_ms=timeout_ms, scope_label=scope_label
+        ):
+            return True
         # Prefer explicit form submit controls (MISP login: ``<button type="submit">Sign In</button>``).
         for text, dbg in (("Sign In", "Sign In"), ("Login", "Login"), ("Log in", "Log in")):
             try:
