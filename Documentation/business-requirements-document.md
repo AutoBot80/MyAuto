@@ -446,3 +446,4 @@ Bulk upload automates the ingestion of scanned documents from a shared folder in
 | 3.80 | Apr 2026 | — | **Fill Insurance** (**`POST /fill-dms/insurance`**): after login, **2W** + **New Policy** like Hero landing; KYC wait does not force site root if already authenticated — **LLD** **6.134**, **HLD** **1.70**, **Database DDL** **2.75** |
 | 3.81 | Apr 2026 | — | **MISP**: **2W** / **New Policy** may open a **new** tab; automation attaches to that tab before KYC — **LLD** **6.135**, **HLD** **1.71**, **Database DDL** **2.76** |
 | 3.82 | Apr 2026 | — | **FR-18b**: With DMS + Insurance in one browser, automation must not attach to Siebel/DMS tabs for insurance steps — **LLD** **6.136**, **HLD** **1.72**, **Database DDL** **2.77** |
+| 3.83 | Apr 2026 | — | **FR-18b** MISP nav: expand **Policy Issuance** before **New Policy** — **LLD** **6.137**, **HLD** **1.73**, **Database DDL** **2.78** |

@@ -557,3 +557,4 @@ This document lists the current database tables and their columns. **Executable 
 | 2.75 | Apr 2026 | **No schema change.** Fill Insurance **2W**/**New Policy** + KYC wait behavior — **LLD** **6.134** / **BRD** **3.80** / **HLD** **1.70**. |
 | 2.76 | Apr 2026 | **No schema change.** MISP new-tab resolution before KYC — **LLD** **6.135** / **BRD** **3.81** / **HLD** **1.71**. |
 | 2.77 | Apr 2026 | **No schema change.** Insurance vs DMS tab scoping — **LLD** **6.136** / **BRD** **3.82** / **HLD** **1.72**. |
+| 2.78 | Apr 2026 | **No schema change.** MISP **Policy Issuance** collapse before **New Policy** — **LLD** **6.137** / **BRD** **3.83** / **HLD** **1.73**. |

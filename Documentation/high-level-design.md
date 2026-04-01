@@ -368,3 +368,4 @@ The SQL view **`form_dms_view`** is **removed**; the same mapping is implemented
 | 1.70 | Apr 2026 | — | Fill Insurance: **2W** + **New Policy** after Sign In; KYC wait without login bounce — **LLD** **6.134**, **BRD** **3.80**, **Database DDL** **2.75** |
 | 1.71 | Apr 2026 | — | MISP new-tab handoff after **2W** / **New Policy** — **LLD** **6.135**, **BRD** **3.81**, **Database DDL** **2.76** |
 | 1.72 | Apr 2026 | — | Insurance tab selection: ignore Siebel/DMS when both open — **LLD** **6.136**, **BRD** **3.82**, **Database DDL** **2.77** |
+| 1.73 | Apr 2026 | — | MISP **Policy Issuance** nav expand before **New Policy** — **LLD** **6.137**, **BRD** **3.83**, **Database DDL** **2.78** |

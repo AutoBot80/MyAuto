@@ -906,7 +906,75 @@ def _click_2w_icon(page, *, timeout_ms: int) -> None:
     raise TimeoutError("2W (two-wheeler) entry control not found or not clickable.")
 
 
+def _expand_misp_policy_issuance_nav_if_collapsed(page, *, timeout_ms: int) -> None:
+    """
+    MISP vertical nav: **New Policy** sits under **Policy Issuance**, collapsed by default
+    (``#navbarVerticalNav``, ``data-tooltip="Policy Issuance"``, ``aria-expanded="false"``).
+    Expand that section so **New Policy** is visible.
+    """
+    to = min(max(3_000, int(timeout_ms)), 35_000)
+    try:
+        nav = page.locator("#navbarVerticalNav").first
+        if nav.count() == 0:
+            return
+    except Exception:
+        return
+
+    trig = nav.locator('[data-tooltip="Policy Issuance"]').first
+    if trig.count() == 0:
+        trig = nav.locator("[data-tooltip*='Policy Issuance' i]").first
+    if trig.count() == 0:
+        try:
+            alt = nav.get_by_text(re.compile(r"Policy\s*Issuance", re.I)).first
+            if alt.count() > 0:
+                trig = alt
+        except Exception:
+            pass
+
+    try:
+        if trig.count() == 0:
+            logger.debug(
+                "Hero Insurance: Policy Issuance nav trigger not found under #navbarVerticalNav — "
+                "continuing (New Policy may already be visible)."
+            )
+            return
+    except Exception:
+        return
+
+    try:
+        aria = trig.get_attribute("aria-expanded")
+        if aria is None:
+            aria = trig.evaluate(
+                """el => {
+                    const n = el.closest('[aria-expanded]');
+                    return n ? n.getAttribute('aria-expanded') : null;
+                }"""
+            )
+        if (aria or "").strip().lower() == "true":
+            logger.info("Hero Insurance: Policy Issuance nav already expanded.")
+            return
+    except Exception:
+        pass
+
+    try:
+        trig.scroll_into_view_if_needed(timeout=5_000)
+    except Exception:
+        pass
+    try:
+        trig.click(timeout=to)
+        logger.info("Hero Insurance: expanded Policy Issuance (navbarVerticalNav) for New Policy.")
+    except Exception as exc:
+        logger.warning("Hero Insurance: Policy Issuance expand click failed: %s", exc)
+        return
+
+    try:
+        page.wait_for_timeout(450)
+    except Exception:
+        time.sleep(0.45)
+
+
 def _click_new_policy(page, *, timeout_ms: int) -> None:
+    _expand_misp_policy_issuance_nav_if_collapsed(page, timeout_ms=timeout_ms)
     loc = page.get_by_text("New Policy", exact=True)
     loc.first.wait_for(state="visible", timeout=timeout_ms)
     loc.first.click(timeout=timeout_ms)
