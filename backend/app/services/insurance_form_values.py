@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -20,6 +21,36 @@ from app.db import get_connection
 from app.services.utility_functions import clean_text, require_customer_vehicle_ids, safe_subfolder_name
 
 logger = logging.getLogger(__name__)
+
+
+# region agent log
+def agent_debug_ndjson_log(
+    hypothesis_id: str, location: str, message: str, data: dict | None = None
+) -> None:
+    """Append one NDJSON line to workspace ``debug-abb899.log`` (debug mode; no secrets)."""
+    try:
+        log_path = Path(__file__).resolve().parents[3] / "debug-abb899.log"
+        line = (
+            json.dumps(
+                {
+                    "sessionId": "abb899",
+                    "hypothesisId": hypothesis_id,
+                    "location": location,
+                    "message": message,
+                    "data": data or {},
+                    "timestamp": int(time.time() * 1000),
+                },
+                ensure_ascii=True,
+            )
+            + "\n"
+        )
+        with open(log_path, "a", encoding="utf-8") as fp:
+            fp.write(line)
+    except Exception:
+        pass
+
+
+# endregion
 
 
 def read_insurance_insurer_from_ocr_json(ocr_output_dir: Path | None, subfolder: str | None) -> str:
@@ -241,6 +272,18 @@ def append_playwright_insurance_line(
 ) -> None:
     """Append one IST timestamped line to ``ocr_output/<dealer>/<subfolder>/Playwright_insurance.txt``."""
     if not ocr_output_dir or not subfolder or not str(subfolder).strip():
+        # region agent log
+        agent_debug_ndjson_log(
+            "H1",
+            "insurance_form_values.append_playwright_insurance_line",
+            "skipped_missing_ocr_or_subfolder",
+            {
+                "has_ocr_output_dir": bool(ocr_output_dir),
+                "subfolder_repr": repr((subfolder or "")[:120]),
+                "prefix": prefix,
+            },
+        )
+        # endregion
         return
     if not (message or "").strip():
         return
@@ -255,8 +298,24 @@ def append_playwright_insurance_line(
                 fp.write(f"started_ist={_insurance_log_ts_ist()}\n")
                 fp.write(f"subfolder={safe!r}\n\n--- trace ---\n")
             fp.write(f"{_insurance_log_ts_ist()} [{prefix}] {message}\n")
+        # region agent log
+        agent_debug_ndjson_log(
+            "H5",
+            "insurance_form_values.append_playwright_insurance_line",
+            "wrote_playwright_insurance_txt",
+            {"path_suffix": str(Path(safe) / "Playwright_insurance.txt")[-120:]},
+        )
+        # endregion
     except OSError as exc:
         logger.warning("Insurance: could not write Playwright_insurance.txt: %s", exc)
+        # region agent log
+        agent_debug_ndjson_log(
+            "H5",
+            "insurance_form_values.append_playwright_insurance_line",
+            "oserror",
+            {"exc": str(exc)[:200]},
+        )
+        # endregion
 
 
 def append_playwright_insurance_diag_dealer_fallback(
@@ -279,7 +338,23 @@ def append_playwright_insurance_diag_dealer_fallback(
             fp.write(f"{_insurance_log_ts_ist()} [{prefix}] {message}\n")
     except OSError as exc:
         logger.warning("Insurance: could not write Playwright_insurance_diag_fallback.txt: %s", exc)
+        # region agent log
+        agent_debug_ndjson_log(
+            "H5",
+            "insurance_form_values.append_playwright_insurance_diag_dealer_fallback",
+            "oserror",
+            {"exc": str(exc)[:200]},
+        )
+        # endregion
         return None
+    # region agent log
+    agent_debug_ndjson_log(
+        "H1",
+        "insurance_form_values.append_playwright_insurance_diag_dealer_fallback",
+        "wrote_fallback",
+        {"path": str(path)[-160:]},
+    )
+    # endregion
     return path
 
 

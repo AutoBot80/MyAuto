@@ -26,6 +26,7 @@ from app.services.add_sales_commit_service import (
 )
 from app.services.handle_browser_opening import get_or_open_site_page
 from app.services.insurance_form_values import (
+    agent_debug_ndjson_log,
     append_playwright_insurance_line,
     append_playwright_insurance_line_or_dealer_fallback,
     build_insurance_fill_values,
@@ -149,6 +150,23 @@ def _hero_insurance_log_page_diagnostics(
     subfolder: str | None,
 ) -> None:
     """Log URL, frame count, and visible control snapshot to logger and ``Playwright_insurance.txt``."""
+    # region agent log
+    try:
+        _nf = len(page.frames)
+    except Exception:
+        _nf = -1
+    agent_debug_ndjson_log(
+        "H3",
+        "fill_hero_insurance_service._hero_insurance_log_page_diagnostics",
+        "entry",
+        {
+            "phase": phase,
+            "has_ocr_output_dir": bool(ocr_output_dir),
+            "subfolder_repr": repr((subfolder or "")[:80]),
+            "frame_count": _nf,
+        },
+    )
+    # endregion
     lines: list[str] = []
     try:
         title = page.title()
@@ -750,6 +768,20 @@ def _run_hero_misp_portal_after_open(
         subfolder=subfolder,
     )
     clicked = _click_sign_in_if_visible(page, timeout_ms=timeout_ms)
+    # region agent log
+    try:
+        _sign_url = (page.url or "").strip()[:400]
+        _has_root = page.locator("#root").count() > 0
+    except Exception as e:
+        _sign_url = f"(err:{e!s})"
+        _has_root = False
+    agent_debug_ndjson_log(
+        "H4",
+        "fill_hero_insurance_service._run_hero_misp_portal_after_open",
+        "after_sign_in_click_attempt",
+        {"clicked": bool(clicked), "page_url": _sign_url, "locator_root_count_gt0": _has_root},
+    )
+    # endregion
     if not clicked:
         _hero_insurance_log_page_diagnostics(
             page,
@@ -1324,6 +1356,20 @@ def pre_process(
     result["login_url"] = login_url
     result["match_base"] = match_base
 
+    # region agent log
+    agent_debug_ndjson_log(
+        "H1",
+        "fill_hero_insurance_service.pre_process",
+        "after_match_base",
+        {
+            "match_base": (match_base or "")[:160],
+            "has_ocr_output_dir": bool(ocr_output_dir),
+            "ocr_output_dir_suffix": str(ocr_output_dir)[-120:] if ocr_output_dir else None,
+            "subfolder_repr": repr((subfolder or "")[:80]),
+        },
+    )
+    # endregion
+
     reset_playwright_insurance_log(ocr_output_dir, subfolder)
     append_playwright_insurance_line(
         ocr_output_dir, subfolder, "NOTE", "pre_process: starting Hero Insurance (MISP) flow"
@@ -1340,6 +1386,14 @@ def pre_process(
                 staging_payload=staging_payload,
             )
         except Exception as exc:
+            # region agent log
+            agent_debug_ndjson_log(
+                "H2",
+                "fill_hero_insurance_service.pre_process",
+                "build_insurance_fill_values_failed",
+                {"exc": str(exc)[:400]},
+            )
+            # endregion
             result["error"] = str(exc)
             append_playwright_insurance_line(
                 ocr_output_dir, subfolder, "NOTE", f"pre_process: load DB values failed: {exc!s}"
@@ -1353,11 +1407,32 @@ def pre_process(
         launch_url=login_url,
     )
     if page is None:
+        # region agent log
+        agent_debug_ndjson_log(
+            "H2",
+            "fill_hero_insurance_service.pre_process",
+            "get_or_open_site_page_failed",
+            {"open_error": (open_error or "")[:300]},
+        )
+        # endregion
         result["error"] = open_error
         append_playwright_insurance_line(
             ocr_output_dir, subfolder, "NOTE", f"pre_process: could not open Insurance tab: {open_error}"
         )
         return result
+
+    # region agent log
+    try:
+        _pu = (page.url or "").strip()
+    except Exception as e:
+        _pu = f"(url_error:{e!s})"
+    agent_debug_ndjson_log(
+        "H2",
+        "fill_hero_insurance_service.pre_process",
+        "page_opened",
+        {"page_url": _pu[:400]},
+    )
+    # endregion
 
     # Same Playwright worker thread as main_process — hand off the Page so we do not call
     # ``get_or_open_site_page`` again (a second call may fail tab reuse and launch another window).
