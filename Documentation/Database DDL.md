@@ -554,3 +554,5 @@ This document lists the current database tables and their columns. **Executable 
 | 2.72 | Apr 2026 | **No schema change.** Sign In **4** attempts + URL check — **LLD** **6.131** / **BRD** **3.77** / **HLD** **1.67**. |
 | 2.73 | Apr 2026 | **No schema change.** MISP **`requestSubmit`** + post-submit UI debug line — **LLD** **6.132** / **BRD** **3.78** / **HLD** **1.68**. |
 | 2.74 | Apr 2026 | **No schema change.** Insurance/DMS opener: one tab on CLI launch + **`www.`** host normalization — **LLD** **6.133** / **BRD** **3.79** / **HLD** **1.69**. |
+| 2.75 | Apr 2026 | **No schema change.** Fill Insurance **2W**/**New Policy** + KYC wait behavior — **LLD** **6.134** / **BRD** **3.80** / **HLD** **1.70**. |
+| 2.76 | Apr 2026 | **No schema change.** MISP new-tab resolution before KYC — **LLD** **6.135** / **BRD** **3.81** / **HLD** **1.71**. |

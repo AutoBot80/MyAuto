@@ -914,6 +914,79 @@ def _click_new_policy(page, *, timeout_ms: int) -> None:
         pass
 
 
+def _misp_snapshot_context_pages(page) -> list:
+    """Copy of ``context.pages`` for before/after tab detection (MISP opens 2W / flows in new tabs)."""
+    try:
+        return list(page.context.pages)
+    except Exception:
+        return []
+
+
+def _misp_resolve_page_after_possible_new_tab(
+    pages_before: list,
+    fallback_page,
+    *,
+    timeout_ms: int,
+    step_label: str,
+):
+    """
+    Hero MISP often opens the **2W** product path in a **new** tab/window; **New Policy** and **KYC**
+    then run there. Prefer any ``Page`` not in ``pages_before``; otherwise keep ``fallback_page``
+    (same-tab navigation).
+    """
+    ctx = fallback_page.context
+    cap_ms = min(max(5_000, int(timeout_ms)), 45_000)
+    deadline = time.monotonic() + cap_ms / 1000.0
+    before = list(pages_before)
+    while time.monotonic() < deadline:
+        try:
+            for p in ctx.pages:
+                if p in before:
+                    continue
+                try:
+                    if p.is_closed():
+                        continue
+                except Exception:
+                    continue
+                try:
+                    p.wait_for_load_state("domcontentloaded", timeout=min(15_000, cap_ms))
+                except Exception:
+                    pass
+                try:
+                    u = (p.url or "").strip()
+                except Exception:
+                    u = ""
+                logger.info(
+                    "Hero Insurance: using new browser tab after %s — url=%s",
+                    step_label,
+                    u[:200],
+                )
+                return p
+        except Exception:
+            pass
+        try:
+            time.sleep(0.12)
+        except Exception:
+            pass
+    try:
+        if not fallback_page.is_closed():
+            logger.info(
+                "Hero Insurance: no extra tab after %s — continuing on same page (url=%s).",
+                step_label,
+                ((fallback_page.url or "")[:160]),
+            )
+            return fallback_page
+    except Exception:
+        pass
+    try:
+        for p in reversed(list(ctx.pages)):
+            if not p.is_closed():
+                return p
+    except Exception:
+        pass
+    return fallback_page
+
+
 def _select_option_fuzzy_in_select(page, select_locator, query: str, *, timeout_ms: int) -> bool:
     if not (query or "").strip():
         return False
@@ -1222,17 +1295,32 @@ def _run_hero_misp_portal_after_open(
         pass
     _t(page, 1_200)
 
+    pages_before_2w = _misp_snapshot_context_pages(page)
     try:
         _click_2w_icon(page, timeout_ms=timeout_ms)
     except Exception as exc:
         return f"2W Icon: {exc!s}"
 
+    page = _misp_resolve_page_after_possible_new_tab(
+        pages_before_2w,
+        page,
+        timeout_ms=timeout_ms,
+        step_label="2W",
+    )
     _t(page, 600)
 
+    pages_before_np = _misp_snapshot_context_pages(page)
     try:
         _click_new_policy(page, timeout_ms=timeout_ms)
     except Exception as exc:
         return f"New Policy: {exc!s}"
+
+    page = _misp_resolve_page_after_possible_new_tab(
+        pages_before_np,
+        page,
+        timeout_ms=timeout_ms,
+        step_label="New Policy",
+    )
 
     if not values:
         logger.info("Hero Insurance: no DB values — stopping after New Policy.")
@@ -2134,6 +2222,21 @@ def _insurance_kyc_screen_ready_js() -> str:
     }"""
 
 
+def _insurance_url_looks_like_login_page(page) -> bool:
+    """True when still on partner login / generic login — safe to ``goto`` site root to recover."""
+    try:
+        u = (page.url or "").strip().lower()
+        if not u or "about:blank" in u:
+            return True
+        if "misp-partner-login" in u:
+            return True
+        if u.rstrip("/").endswith("/login"):
+            return True
+        return False
+    except Exception:
+        return True
+
+
 def _wait_for_insurance_kyc_after_login(page, insurance_base_url: str) -> str | None:
     """
     Land on the insurance login page if needed, then wait until the operator has signed in
@@ -2152,17 +2255,28 @@ def _wait_for_insurance_kyc_after_login(page, insurance_base_url: str) -> str | 
         pass
 
     logger.info(
-        "Insurance: login page — sign in and submit; waiting up to %s ms for KYC screen",
+        "Insurance: waiting up to %s ms for KYC screen (dummy #ins-mobile-no or MISP KYC URL)",
         INSURANCE_LOGIN_WAIT_MS,
     )
-    try:
-        page.goto(f"{base}/", wait_until="domcontentloaded", timeout=30000)
-    except Exception as exc:
-        logger.warning("Insurance: goto %s/: %s", base, exc)
+    # Do not ``goto`` site root when already past login — that often drops SPA session and returns to login.
+    if _insurance_url_looks_like_login_page(page):
         try:
-            page.goto(base, wait_until="domcontentloaded", timeout=30000)
-        except Exception as exc2:
-            logger.warning("Insurance: goto %s: %s", base, exc2)
+            page.goto(f"{base}/", wait_until="domcontentloaded", timeout=30000)
+        except Exception as exc:
+            logger.warning("Insurance: goto %s/: %s", base, exc)
+            try:
+                page.goto(base, wait_until="domcontentloaded", timeout=30000)
+            except Exception as exc2:
+                logger.warning("Insurance: goto %s: %s", base, exc2)
+    else:
+        try:
+            u_snip = (page.url or "")[:160]
+        except Exception:
+            u_snip = ""
+        logger.info(
+            "Insurance: already past login URL — skipping root navigation (current=%s)",
+            u_snip,
+        )
 
     try:
         page.wait_for_function(_insurance_kyc_screen_ready_js(), timeout=INSURANCE_LOGIN_WAIT_MS)
@@ -2283,6 +2397,68 @@ def run_fill_insurance_only(
                 "NOTE",
                 "run_fill_insurance_only: Sign In not auto-clicked — see DIAG lines; complete login manually if needed.",
             )
+        # Same MISP landing as Hero pre_process: after login, **2W** then **New Policy** before KYC / dummy fields.
+        try:
+            page.wait_for_load_state("networkidle", timeout=12_000)
+        except Exception:
+            pass
+        _t(page, 1_200)
+        pages_before_2w = _misp_snapshot_context_pages(page)
+        try:
+            _click_2w_icon(page, timeout_ms=INSURANCE_ACTION_TIMEOUT_MS)
+            append_playwright_insurance_line(
+                ocr_output_dir, subfolder, "NOTE", "run_fill_insurance_only: clicked 2W (two-wheeler) entry"
+            )
+        except Exception as exc:
+            err_2w = f"2W (two-wheeler) step failed: {exc!s}"
+            logger.warning("Hero Insurance run_fill_insurance_only: %s", err_2w)
+            result["error"] = err_2w
+            append_playwright_insurance_line(ocr_output_dir, subfolder, "ERROR", err_2w)
+            return result
+        page = _misp_resolve_page_after_possible_new_tab(
+            pages_before_2w,
+            page,
+            timeout_ms=INSURANCE_ACTION_TIMEOUT_MS,
+            step_label="2W",
+        )
+        try:
+            append_playwright_insurance_line(
+                ocr_output_dir,
+                subfolder,
+                "NOTE",
+                f"run_fill_insurance_only: active tab after 2W — url={(page.url or '')[:200]}",
+            )
+        except Exception:
+            pass
+        _t(page, 600)
+        pages_before_np = _misp_snapshot_context_pages(page)
+        try:
+            _click_new_policy(page, timeout_ms=INSURANCE_ACTION_TIMEOUT_MS)
+            append_playwright_insurance_line(
+                ocr_output_dir, subfolder, "NOTE", "run_fill_insurance_only: clicked New Policy"
+            )
+        except Exception as exc:
+            err_np = f"New Policy step failed: {exc!s}"
+            logger.warning("Hero Insurance run_fill_insurance_only: %s", err_np)
+            result["error"] = err_np
+            append_playwright_insurance_line(ocr_output_dir, subfolder, "ERROR", err_np)
+            return result
+        page = _misp_resolve_page_after_possible_new_tab(
+            pages_before_np,
+            page,
+            timeout_ms=INSURANCE_ACTION_TIMEOUT_MS,
+            step_label="New Policy",
+        )
+        try:
+            append_playwright_insurance_line(
+                ocr_output_dir,
+                subfolder,
+                "NOTE",
+                f"run_fill_insurance_only: active tab before KYC wait — url={(page.url or '')[:200]}",
+            )
+        except Exception:
+            pass
+
         wait_err = _wait_for_insurance_kyc_after_login(page, insurance_base_url)
         if wait_err:
             result["error"] = wait_err

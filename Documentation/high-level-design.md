@@ -365,3 +365,5 @@ The SQL view **`form_dms_view`** is **removed**; the same mapping is implemented
 | 1.67 | Apr 2026 | — | Sign In **4×** + URL navigation check — **LLD** **6.131**, **BRD** **3.77**, **Database DDL** **2.72** |
 | 1.68 | Apr 2026 | — | MISP partner **`requestSubmit`** + post-submit UI NDJSON when login URL unchanged — **LLD** **6.132**, **BRD** **3.78**, **Database DDL** **2.73** |
 | 1.69 | Apr 2026 | — | Shared **`handle_browser_opening`**: single-tab reuse on independent Edge/Chrome launch; **`www.`** host match — **LLD** **6.133**, **BRD** **3.79**, **Database DDL** **2.74** |
+| 1.70 | Apr 2026 | — | Fill Insurance: **2W** + **New Policy** after Sign In; KYC wait without login bounce — **LLD** **6.134**, **BRD** **3.80**, **Database DDL** **2.75** |
+| 1.71 | Apr 2026 | — | MISP new-tab handoff after **2W** / **New Policy** — **LLD** **6.135**, **BRD** **3.81**, **Database DDL** **2.76** |
