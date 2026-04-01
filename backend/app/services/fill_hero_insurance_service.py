@@ -21,6 +21,13 @@ from app.config import (
     INSURANCE_DIAG_FULL_CONTROL_SNAPSHOT,
     INSURANCE_LOGIN_WAIT_MS,
     INSURANCE_POLICY_FILL_TIMEOUT_MS,
+    KYC_KEYBOARD_INSURER_ARROW_DOWN_MAX,
+    KYC_KEYBOARD_OVD_ARROW_DOWN_MAX,
+    KYC_KEYBOARD_TABS_INSURER_TO_OVD,
+    KYC_KEYBOARD_TABS_MOBILE_TO_CONSENT,
+    KYC_KEYBOARD_TABS_OVD_TO_MOBILE,
+    KYC_KEYBOARD_TABS_TO_INSURANCE_FIELD,
+    KYC_USE_KEYBOARD_EKYC_SOP,
 )
 from app.services.add_sales_commit_service import (
     insert_insurance_master_after_gi,
@@ -1333,10 +1340,187 @@ def _fill_insurance_company_typeahead_fuzzy(page, insurer: str, *, timeout_ms: i
     return False
 
 
+def _kyc_url_looks_like_ekyc_page(page) -> bool:
+    try:
+        u = (page.url or "").lower()
+        return "ekycpage" in u or "/apps/kyc/" in u
+    except Exception:
+        return False
+
+
+def _kyc_read_focused_control_text(page) -> str:
+    try:
+        raw = page.evaluate(
+            """() => {
+          const a = document.activeElement;
+          if (!a) return '';
+          if (a.tagName === 'SELECT' && a.selectedIndex >= 0)
+            return (a.options[a.selectedIndex].textContent || '').trim();
+          return (a.value || a.innerText || '').trim().slice(0, 240);
+        }"""
+        )
+        return (raw or "").strip()
+    except Exception:
+        return ""
+
+
+def _kyc_insurer_display_matches(insurer: str, displayed: str) -> bool:
+    d = (displayed or "").strip()
+    if not d or d.lower().startswith("--select"):
+        return False
+    pick = fuzzy_best_option_label(insurer, [d])
+    if not pick:
+        return False
+    return normalize_for_fuzzy_match(pick) == normalize_for_fuzzy_match(d)
+
+
+def _kyc_press_tab_n(page, n: int, *, pause_ms: int = 90) -> None:
+    for _ in range(max(0, n)):
+        try:
+            page.keyboard.press("Tab")
+        except Exception:
+            pass
+        _t(page, pause_ms)
+
+
+def _fill_kyc_ekyc_keyboard_sop(page, values: dict, *, timeout_ms: int) -> str | None:
+    """
+    Keyboard SOP for ``ekycpage.aspx`` (focus document → Tab to Insurance Company → type to filter →
+    ArrowDown until fuzzy match → Enter → Tab to OVD → ArrowDown to Aadhaar → Tab to mobile → type →
+    Tab to consent → Space). Tab/down counts: ``KYC_KEYBOARD_*`` env vars.
+    """
+    insurer = (values.get("insurer") or "").strip()
+    mobile = (values.get("mobile_number") or "").strip()
+    if not insurer:
+        return "insurer is empty for KYC keyboard SOP."
+    if not mobile:
+        return "customer_master.mobile_number is empty for KYC keyboard SOP."
+
+    cap = min(int(timeout_ms), 120_000)
+    try:
+        page.bring_to_front()
+    except Exception:
+        pass
+    try:
+        page.locator("body").click(timeout=min(cap, 8_000), position={"x": 28, "y": 28})
+    except Exception:
+        try:
+            page.mouse.click(48, 160)
+        except Exception:
+            pass
+    _t(page, 220)
+
+    _kyc_press_tab_n(page, max(0, KYC_KEYBOARD_TABS_TO_INSURANCE_FIELD))
+
+    try:
+        page.keyboard.press("Control+A")
+    except Exception:
+        pass
+    _t(page, 50)
+    try:
+        page.keyboard.press("Backspace")
+    except Exception:
+        pass
+    _t(page, 50)
+    try:
+        page.keyboard.type(insurer[:96], delay=34)
+    except Exception as exc:
+        return f"KYC keyboard SOP: could not type insurer: {exc!s}"
+    _t(page, 480)
+
+    opts = _kyc_collect_dropdown_option_texts(page)
+    pick = fuzzy_best_option_label(insurer, opts) if opts else None
+    shown = _kyc_read_focused_control_text(page)
+    matched = bool(pick) and not (pick or "").strip().lower().startswith("--select") and (
+        _kyc_insurer_display_matches(insurer, shown)
+        or _kyc_insurer_display_matches(insurer, pick or "")
+    )
+    if not matched:
+        for _ in range(max(1, KYC_KEYBOARD_INSURER_ARROW_DOWN_MAX)):
+            try:
+                page.keyboard.press("ArrowDown")
+            except Exception:
+                pass
+            _t(page, 115)
+            shown = _kyc_read_focused_control_text(page)
+            if _kyc_insurer_display_matches(insurer, shown):
+                matched = True
+                logger.info(
+                    "Hero Insurance: KYC keyboard — insurer matched on ArrowDown (%r).",
+                    shown[:90],
+                )
+                break
+            opts2 = _kyc_collect_dropdown_option_texts(page)
+            if opts2:
+                cand = fuzzy_best_option_label(insurer, opts2)
+                if cand and _kyc_insurer_display_matches(insurer, cand):
+                    matched = True
+                    logger.info(
+                        "Hero Insurance: KYC keyboard — insurer matched from list (%r).",
+                        (cand or "")[:90],
+                    )
+                    break
+    if not matched:
+        return (
+            "KYC keyboard SOP: could not match insurer after typing and ArrowDown. "
+            f"insurer={insurer[:48]!r}"
+        )
+
+    try:
+        page.keyboard.press("Enter")
+    except Exception:
+        pass
+    _t(page, 220)
+
+    _kyc_press_tab_n(page, max(0, KYC_KEYBOARD_TABS_INSURER_TO_OVD))
+
+    ovd_ok = False
+    for _ in range(max(1, KYC_KEYBOARD_OVD_ARROW_DOWN_MAX)):
+        shown = _kyc_read_focused_control_text(page)
+        u = (shown or "").upper()
+        if "AADHAAR" in u and "CARD" in u:
+            ovd_ok = True
+            logger.info("Hero Insurance: KYC keyboard — OVD shows AADHAAR CARD.")
+            break
+        try:
+            page.keyboard.press("ArrowDown")
+        except Exception:
+            pass
+        _t(page, 105)
+    if not ovd_ok:
+        return "KYC keyboard SOP: could not reach AADHAAR CARD on OVD with ArrowDown."
+
+    _kyc_press_tab_n(page, max(0, KYC_KEYBOARD_TABS_OVD_TO_MOBILE))
+
+    digits = re.sub(r"\D", "", mobile)[:12]
+    try:
+        page.keyboard.press("Control+A")
+    except Exception:
+        pass
+    _t(page, 45)
+    try:
+        page.keyboard.type(digits, delay=30)
+    except Exception as exc:
+        return f"KYC keyboard SOP: mobile type failed: {exc!s}"
+    _t(page, 220)
+
+    _kyc_press_tab_n(page, max(0, KYC_KEYBOARD_TABS_MOBILE_TO_CONSENT))
+    try:
+        page.keyboard.press("Space")
+    except Exception as exc:
+        return f"KYC keyboard SOP: consent Space failed: {exc!s}"
+    _t(page, 220)
+    logger.info("Hero Insurance: KYC keyboard SOP finished (insurer, OVD, mobile, consent).")
+    return None
+
+
 def _fill_insurance_company_and_ovd_mobile_consent(
     page, values: dict, *, timeout_ms: int
 ) -> str | None:
     """Returns error message or None on success."""
+    if KYC_USE_KEYBOARD_EKYC_SOP and _kyc_url_looks_like_ekyc_page(page):
+        return _fill_kyc_ekyc_keyboard_sop(page, values, timeout_ms=timeout_ms)
+
     insurer = (values.get("insurer") or "").strip()
     mobile = (values.get("mobile_number") or "").strip()
 

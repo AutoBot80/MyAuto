@@ -451,3 +451,4 @@ Bulk upload automates the ingestion of scanned documents from a shared folder in
 | 3.85 | Apr 2026 | — | **FR-18b** Fill Insurance: automation must not attach to or click **Login** on a Siebel/DMS tab when both DMS and MISP share one browser — **LLD** **6.139**, **HLD** **1.75** |
 | 3.86 | Apr 2026 | — | **FR-18b** **`Playwright_insurance.txt`** DIAG: compact control snapshot by default (optional verbose via **`INSURANCE_DIAG_FULL_CONTROL_SNAPSHOT`**) — **LLD** **6.140**, **HLD** **1.76** |
 | 3.87 | Apr 2026 | — | **§6.6** KYC **Insurance Company** on **`ekycpage`**: label + full **`<select>`** scan, **`force`** on hidden native select, broader custom-list matching — **LLD** **6.141**, **HLD** **1.77** |
+| 3.88 | Apr 2026 | — | **§6.6** **`ekycpage`**: optional keyboard SOP (Tab/type/ArrowDown insurer → OVD → mobile → consent) — **LLD** **6.142**, **HLD** **1.78** |

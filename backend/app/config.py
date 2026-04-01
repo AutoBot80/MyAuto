@@ -181,6 +181,24 @@ INSURANCE_POLICY_FILL_TIMEOUT_MS = int(os.getenv("INSURANCE_POLICY_FILL_TIMEOUT_
 _INSURANCE_DIAG_FULL_RAW = (os.getenv("INSURANCE_DIAG_FULL_CONTROL_SNAPSHOT") or "").strip().lower()
 INSURANCE_DIAG_FULL_CONTROL_SNAPSHOT = _INSURANCE_DIAG_FULL_RAW in ("1", "true", "yes", "on")
 
+# Hero ``ekycpage.aspx`` KYC: optional keyboard SOP (click body → Tab → type insurer → …). See ``fill_hero_insurance_service._fill_kyc_ekyc_keyboard_sop``.
+def _int_env(name: str, default: int) -> int:
+    try:
+        return int((os.getenv(name) or str(default)).strip())
+    except ValueError:
+        return default
+
+
+KYC_KEYBOARD_TABS_TO_INSURANCE_FIELD = _int_env("KYC_KEYBOARD_TABS_TO_INSURANCE_FIELD", 1)
+KYC_KEYBOARD_TABS_INSURER_TO_OVD = _int_env("KYC_KEYBOARD_TABS_INSURER_TO_OVD", 3)
+KYC_KEYBOARD_TABS_OVD_TO_MOBILE = _int_env("KYC_KEYBOARD_TABS_OVD_TO_MOBILE", 4)
+KYC_KEYBOARD_TABS_MOBILE_TO_CONSENT = _int_env("KYC_KEYBOARD_TABS_MOBILE_TO_CONSENT", 2)
+KYC_KEYBOARD_INSURER_ARROW_DOWN_MAX = _int_env("KYC_KEYBOARD_INSURER_ARROW_DOWN_MAX", 60)
+KYC_KEYBOARD_OVD_ARROW_DOWN_MAX = _int_env("KYC_KEYBOARD_OVD_ARROW_DOWN_MAX", 28)
+_KYC_KB_SOP_RAW = (os.getenv("KYC_USE_KEYBOARD_EKYC_SOP") or "1").strip().lower()
+# When true (default), ``ekycpage`` KYC uses the keyboard SOP instead of DOM clicks.
+KYC_USE_KEYBOARD_EKYC_SOP = _KYC_KB_SOP_RAW not in ("0", "false", "no", "off")
+
 
 def dms_automation_is_real_siebel() -> bool:
     """True when Fill DMS should run Siebel automation (``dummy`` mode is not supported)."""
