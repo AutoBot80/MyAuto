@@ -8870,8 +8870,8 @@ _JS_MY_ORDERS_JQGRID_ROWS = """() => {
                 const adb = (td.getAttribute('aria-describedby') || '').toLowerCase();
                 const cn = (colNames[i] || '').toLowerCase();
                 const key = (cn + ' ' + adb).toLowerCase();
-                if (key.includes('status')) row.status = txt;
-                else if (key.includes('invoice')) row.invoice = txt;
+                if (key.includes('status') || adb.includes('status')) row.status = txt;
+                else if (key.includes('invoice') || adb.includes('invoice')) row.invoice = txt;
                 else if (key.includes('order') && (key.includes('order_number') || key.includes('order#') || key.includes('order_no') || adb.includes('order_number') || adb.includes('order#'))) {
                     const a = td.querySelector('a[name="Order Number"], a[name="Order #"], a');
                     row.order = ((a && a.textContent) ? a.textContent : txt).trim();
@@ -8888,35 +8888,75 @@ _JS_MY_ORDERS_JQGRID_ROWS = """() => {
 }"""
 
 
+def _my_orders_invoice_meaningful(s: str) -> bool:
+    """Whether jqGrid **invoice** cell text looks like a real Invoice# (not dash/placeholder)."""
+    t = (s or "").strip()
+    if len(t) < 2:
+        return False
+    if re.match(r"^(—|-+|–|pending|n/?a)$", t, re.I):
+        return False
+    return bool(re.search(r"[A-Za-z0-9]", t))
+
+
+def _my_orders_row_text_blob(r: dict) -> str:
+    """
+    Combined visible text for a jqGrid row. Siebel often omits ``status`` in ``row.status`` when
+    column ids (``colNames[i]`` / ``aria-describedby``) do not contain ``status`` — the UI still
+    shows *Allocated* / *Pending* in ``raw`` (row ``innerText``).
+    """
+    parts = [
+        (r.get("status") or "").strip(),
+        (r.get("raw") or "").strip(),
+        (r.get("invoice") or "").strip(),
+    ]
+    return " ".join(p for p in parts if p).lower()
+
+
+def _my_orders_blob_looks_allocated(blob: str) -> bool:
+    if not blob:
+        return False
+    if "not allocated" in blob or "deallocated" in blob:
+        return False
+    if "allocated" in blob or "allotted" in blob or "allotment" in blob:
+        return True
+    # Short status like "Alloc" (word) without matching Pending Allocation heuristics below
+    if re.search(r"\balloc\b", blob):
+        return True
+    return False
+
+
+def _my_orders_blob_looks_pending(blob: str) -> bool:
+    if not blob or "pending" not in blob:
+        return False
+    # e.g. "Pending Allocation" → treat as allocated path, not pending-only
+    if _my_orders_blob_looks_allocated(blob):
+        return False
+    return True
+
+
 def _classify_my_orders_grid_rows(rows: list[dict]) -> tuple[str, str, str]:
     """
     From jqGrid row dicts, pick branching outcome and primary order/invoice.
     Returns ``(outcome, primary_order, primary_invoice)``.
+
+    **Precedence:** **allocated** is checked before **pending** so a grid with both (e.g. older Pending
+    rows plus one **Allocated** row) drills the Allocated **Order#** — matching operator expectation.
     """
     if not rows:
         return "no_rows", "", ""
-    _inv_re = re.compile(r"[A-Za-z0-9]")
-
-    def _invoice_meaningful(s: str) -> bool:
-        t = (s or "").strip()
-        if len(t) < 2:
-            return False
-        if re.match(r"^(—|-+|–|pending|n/?a)$", t, re.I):
-            return False
-        return bool(_inv_re.search(t))
 
     for r in rows:
         inv = (r.get("invoice") or "").strip()
-        if _invoice_meaningful(inv):
+        if _my_orders_invoice_meaningful(inv):
             return "invoiced", (r.get("order") or "").strip(), inv
     for r in rows:
-        st = (r.get("status") or "").strip().lower()
-        if "pending" in st and "allocated" not in st:
-            return "pending", (r.get("order") or "").strip(), ""
-    for r in rows:
-        st = (r.get("status") or "").strip().lower()
-        if "allocated" in st:
+        blob = _my_orders_row_text_blob(r)
+        if _my_orders_blob_looks_allocated(blob):
             return "allocated", (r.get("order") or "").strip(), ""
+    for r in rows:
+        blob = _my_orders_row_text_blob(r)
+        if _my_orders_blob_looks_pending(blob):
+            return "pending", (r.get("order") or "").strip(), ""
     return "unknown_rows", (rows[0].get("order") or "").strip(), ""
 
 
@@ -9784,7 +9824,7 @@ def _create_order(
         ``ready_for_client_create_invoice=True`` (skip ``+`` booking and attach).
       - **pending**: drill Order# on the matching row, then ``_attach_vehicle_to_bkg`` (full path).
       - **allocated**: drill Order#, then ``_attach_vehicle_to_bkg(..., start_at_order_link_before_apply=True)``.
-      - **no_rows** / **unknown_rows** / **error**: fall back to the full **+** new-booking path below.
+      - **unknown_rows** with Order# row(s) and no Invoice# on any row: coerce to **allocated** attach (same drill/skip) instead of **+**; otherwise **no_rows** / **unknown_rows** / **error** fall back to the full **+** new-booking path below.
 
     - **+** path: Sales Orders New:List, Booking Order Type = Normal Booking, optional Comments (battery),
       finance fields, Contact Last Name F2 applet, Ctrl+S, then ``_attach_vehicle_to_bkg`` from the new order.
@@ -9972,6 +10012,33 @@ def _create_order(
     _mo_oc = (_mos.outcome or "").strip()
     _mo_po = (_mos.primary_order or "").strip()
     _mo_pi = (_mos.primary_invoice or "").strip()
+
+    # Grid returned rows but status/invoice columns did not classify (e.g. nonstandard header ids). If we
+    # have Order# links and no meaningful Invoice# on any row, prefer allocated-style attach (Order# drill
+    # then skip to pre–Apply Campaign) instead of creating a duplicate booking via '+'.
+    if _mo_oc == "unknown_rows" and _mos.rows:
+        _rows = _mos.rows
+        _has_order = any((r.get("order") or "").strip() for r in _rows)
+        _any_inv = any(_my_orders_invoice_meaningful((r.get("invoice") or "").strip()) for r in _rows)
+        if _has_order and not _any_inv:
+            _picked = ""
+            for r in _rows:
+                if _my_orders_blob_looks_allocated(_my_orders_row_text_blob(r)):
+                    _picked = (r.get("order") or "").strip()
+                    if _picked:
+                        break
+            if not _picked:
+                for r in _rows:
+                    _picked = (r.get("order") or "").strip()
+                    if _picked:
+                        break
+            if _picked:
+                note(
+                    "Create Order: My Orders grid unknown_rows with Order# row(s) and no Invoice# — "
+                    "using allocated attach path (Order# drill, skip to pre–Apply Campaign)."
+                )
+                _mo_po = _picked
+                _mo_oc = "allocated"
 
     def _finalize_my_orders_attach(branch: str) -> tuple[bool, str | None, dict]:
         """After ``_attach_vehicle_to_bkg`` from a My Orders grid drill-down."""

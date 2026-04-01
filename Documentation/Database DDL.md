@@ -538,3 +538,5 @@ This document lists the current database tables and their columns. **Executable 
 | 2.56 | Apr 2026 | **No schema change.** **`_create_order`** My Orders grid branching; **`out["ready_for_client_create_invoice"]`**; no schema — **LLD** **6.115** / **BRD** **3.47**. |
 | 2.57 | Apr 2026 | **No schema change.** Removed pre-booking hard fail; **`_ATTACH_VEHICLE_AUTO_CLICK_CREATE_INVOICE`**; IST logs — **LLD** **6.116** / **BRD** **3.48**. |
 | 2.58 | Apr 2026 | **No schema change.** Siebel Fill DMS writes **`Playwright_DMS_<ddmmyyyy>_<hhmmss>.txt`** per run (IST) — **LLD** **6.117** / **BRD** **3.63** / **HLD** **1.53**. |
+| 2.59 | Apr 2026 | **No schema change.** **`_create_order`** My Orders grid: **allocated** detection from row **`raw`**; **unknown_rows** + Order# / no Invoice# → **allocated** attach — **LLD** **6.118** / **BRD** **3.64** / **HLD** **1.54**. |
+| 2.60 | Apr 2026 | **No schema change.** **`_classify_my_orders_grid_rows`**: **allocated** before **pending** — **LLD** **6.119** / **BRD** **3.65** / **HLD** **1.55**. |
