@@ -352,20 +352,21 @@ The SQL view **`form_dms_view`** is **removed**; the same mapping is implemented
 | 1.54 | Apr 2026 | — | **`siebel_dms_playwright`**: **My Orders** grid classification + **unknown_rows** → **allocated** attach when Order# / no Invoice# — **LLD** **6.118**, **BRD** **3.64**, **Database DDL** **2.59** |
 | 1.55 | Apr 2026 | — | **`_classify_my_orders_grid_rows`**: **allocated** before **pending** — **LLD** **6.119**, **BRD** **3.65**, **Database DDL** **2.60** |
 | 1.56 | Apr 2026 | — | **`add_sales` router** + **AddSalesPage**: eligibility **`resolved_*`** ids — **LLD** **6.120**, **BRD** **3.66**, **Database DDL** **2.61** |
-| 1.57 | Apr 2026 | — | **`fill_hero_insurance_service`**: MISP **Login** + **2W** clicks — **LLD** **6.121**, **BRD** **3.67**, **Database DDL** **2.62** |
-| 1.58 | Apr 2026 | — | **`fill_hero_insurance_service`**: **2W** **`aid="ctl00_TWO"`** — **LLD** **6.122**, **BRD** **3.68**, **Database DDL** **2.63** |
-| 1.59 | Apr 2026 | — | **`fill_hero_insurance_service`**: login **`type="submit"`** — **LLD** **6.123**, **BRD** **3.69**, **Database DDL** **2.64** |
-| 1.60 | Apr 2026 | — | **`fill_hero_dms_service`**: **`Playwright_DMS`** masters JSON after commit — **LLD** **6.124**, **BRD** **3.70**, **Database DDL** **2.65** |
-| 1.61 | Apr 2026 | — | **`fill_hero_insurance_service`**: **`[DIAG]`** page snapshots + iframe Sign In attempts — **LLD** **6.125**, **BRD** **3.71**, **Database DDL** **2.66** |
-| 1.62 | Apr 2026 | — | **`#root`** DIAG + scoped Sign In; **`Playwright_insurance_diag_fallback.txt`** — **LLD** **6.126**, **BRD** **3.72**, **Database DDL** **2.67** |
-| 1.63 | Apr 2026 | — | **`fill_hero_insurance_service`**: **`pre_process` → `main_process`** Playwright **Page** reuse — **LLD** **6.127**, **BRD** **3.73**, **Database DDL** **2.68** |
-| 1.64 | Apr 2026 | — | **`run_fill_insurance_only`**: Sign In + DIAG before KYC — **LLD** **6.128**, **BRD** **3.74**, **Database DDL** **2.69** |
-| 1.65 | Apr 2026 | — | **`_try_click_sign_in_inside_password_form`** (MISP **Get Price** vs **Sign In**) — **LLD** **6.129**, **BRD** **3.75**, **Database DDL** **2.70** |
-| 1.66 | Apr 2026 | — | **`_wait_for_partner_login_password_filled`** + filled-form **Sign In** — **LLD** **6.130**, **BRD** **3.76**, **Database DDL** **2.71** |
-| 1.67 | Apr 2026 | — | Sign In **4×** + URL navigation check — **LLD** **6.131**, **BRD** **3.77**, **Database DDL** **2.72** |
-| 1.68 | Apr 2026 | — | MISP partner **`requestSubmit`** + post-submit UI NDJSON when login URL unchanged — **LLD** **6.132**, **BRD** **3.78**, **Database DDL** **2.73** |
-| 1.69 | Apr 2026 | — | Shared **`handle_browser_opening`**: single-tab reuse on independent Edge/Chrome launch; **`www.`** host match — **LLD** **6.133**, **BRD** **3.79**, **Database DDL** **2.74** |
-| 1.70 | Apr 2026 | — | Fill Insurance: **2W** + **New Policy** after Sign In; KYC wait without login bounce — **LLD** **6.134**, **BRD** **3.80**, **Database DDL** **2.75** |
-| 1.71 | Apr 2026 | — | MISP new-tab handoff after **2W** / **New Policy** — **LLD** **6.135**, **BRD** **3.81**, **Database DDL** **2.76** |
-| 1.72 | Apr 2026 | — | Insurance tab selection: ignore Siebel/DMS when both open — **LLD** **6.136**, **BRD** **3.82**, **Database DDL** **2.77** |
-| 1.73 | Apr 2026 | — | MISP **Policy Issuance** nav expand before **New Policy** — **LLD** **6.137**, **BRD** **3.83**, **Database DDL** **2.78** |
+| 1.57 | Apr 2026 | — | **`fill_hero_insurance_service`**: MISP **Login** + **2W** clicks — **LLD** **6.121**, **BRD** **3.67** |
+| 1.58 | Apr 2026 | — | **`fill_hero_insurance_service`**: **2W** **`aid="ctl00_TWO"`** — **LLD** **6.122**, **BRD** **3.68** |
+| 1.59 | Apr 2026 | — | **`fill_hero_insurance_service`**: login **`type="submit"`** — **LLD** **6.123**, **BRD** **3.69** |
+| 1.60 | Apr 2026 | — | **`fill_hero_dms_service`**: **`Playwright_DMS`** masters JSON after commit — **LLD** **6.124**, **BRD** **3.70** |
+| 1.61 | Apr 2026 | — | **`fill_hero_insurance_service`**: **`[DIAG]`** page snapshots + iframe Sign In attempts — **LLD** **6.125**, **BRD** **3.71** |
+| 1.62 | Apr 2026 | — | **`#root`** DIAG + scoped Sign In; **`Playwright_insurance_diag_fallback.txt`** — **LLD** **6.126**, **BRD** **3.72** |
+| 1.63 | Apr 2026 | — | **`fill_hero_insurance_service`**: **`pre_process` → `main_process`** Playwright **Page** reuse — **LLD** **6.127**, **BRD** **3.73** |
+| 1.64 | Apr 2026 | — | **`run_fill_insurance_only`**: Sign In + DIAG before KYC — **LLD** **6.128**, **BRD** **3.74** |
+| 1.65 | Apr 2026 | — | **`_try_click_sign_in_inside_password_form`** (MISP **Get Price** vs **Sign In**) — **LLD** **6.129**, **BRD** **3.75** |
+| 1.66 | Apr 2026 | — | **`_wait_for_partner_login_password_filled`** + filled-form **Sign In** — **LLD** **6.130**, **BRD** **3.76** |
+| 1.67 | Apr 2026 | — | Sign In **4×** + URL navigation check — **LLD** **6.131**, **BRD** **3.77** |
+| 1.68 | Apr 2026 | — | MISP partner **`requestSubmit`** + post-submit UI hint logging when login URL unchanged — **LLD** **6.132**, **BRD** **3.78** |
+| 1.69 | Apr 2026 | — | Shared **`handle_browser_opening`**: single-tab reuse on independent Edge/Chrome launch; **`www.`** host match — **LLD** **6.133**, **BRD** **3.79** |
+| 1.70 | Apr 2026 | — | Fill Insurance: **2W** + **New Policy** after Sign In; KYC wait without login bounce — **LLD** **6.134**, **BRD** **3.80** |
+| 1.71 | Apr 2026 | — | MISP new-tab handoff after **2W** / **New Policy** — **LLD** **6.135**, **BRD** **3.81** |
+| 1.72 | Apr 2026 | — | Insurance tab selection: ignore Siebel/DMS when both open — **LLD** **6.136**, **BRD** **3.82** |
+| 1.73 | Apr 2026 | — | MISP **Policy Issuance** nav expand before **New Policy** — **LLD** **6.137**, **BRD** **3.83** |
+| 1.74 | Apr 2026 | — | KYC **Insurance Company** typeahead: fuzzy match on dropdown options — **LLD** **6.138**, **BRD** **3.84** |

@@ -22,38 +22,6 @@ from app.config import DMS_PLAYWRIGHT_HEADED, PLAYWRIGHT_MANAGED_REMOTE_DEBUG_PO
 logger = logging.getLogger(__name__)
 
 
-# region agent log
-def _agent_debug_browser_ndjson(
-    hypothesis_id: str, location: str, message: str, data: dict | None = None
-) -> None:
-    """Append one NDJSON line to workspace debug-abb899.log (no secrets)."""
-    try:
-        import json
-        from pathlib import Path
-        log_path = Path(__file__).resolve().parents[3] / "debug-abb899.log"
-        line = (
-            json.dumps(
-                {
-                    "sessionId": "abb899",
-                    "hypothesisId": hypothesis_id,
-                    "location": location,
-                    "message": message,
-                    "data": data or {},
-                    "timestamp": int(time.time() * 1000),
-                },
-                ensure_ascii=True,
-            )
-            + "\n"
-        )
-        with open(log_path, "a", encoding="utf-8") as fp:
-            fp.write(line)
-    except Exception:
-        pass
-
-
-# endregion
-
-
 def _hostname_for_site_match(url_or_base: str) -> str:
     """Lowercase hostname without leading www., for comparing INSURANCE_BASE_URL to live tabs."""
     try:
@@ -238,12 +206,6 @@ def _launch_managed_browser_for_site(base_url: str, *, launch_background: bool =
                             channel,
                             cdp_url,
                         )
-                        _agent_debug_browser_ndjson(
-                            "H9",
-                            "handle_browser_opening._launch_managed_browser_for_site",
-                            "independent_launch_matched_existing_tab",
-                            {"existing_count": len(existing), "channel": channel},
-                        )
                         return matched, channel
                     # Edge was started with `base_url` on the CLI — often one tab whose URL is still
                     # blank while CDP attaches. Do not open a second tab (previous behavior).
@@ -256,15 +218,6 @@ def _launch_managed_browser_for_site(base_url: str, *, launch_background: bool =
                         logger.info(
                             "handle_browser_opening: reusing single tab from independent %s launch (avoid duplicate insurance/DMS tab).",
                             channel,
-                        )
-                        _agent_debug_browser_ndjson(
-                            "H9",
-                            "handle_browser_opening._launch_managed_browser_for_site",
-                            "independent_launch_reuse_single_tab",
-                            {
-                                "url_snip": ((pg0.url or "")[:160]),
-                                "channel": channel,
-                            },
                         )
                         return pg0, channel
                     if len(existing) > 1:
@@ -288,12 +241,6 @@ def _launch_managed_browser_for_site(base_url: str, *, launch_background: bool =
                                 try:
                                     u = (page.url or "").strip()
                                     if u and _hostname_for_site_match(u) == want_host:
-                                        _agent_debug_browser_ndjson(
-                                            "H10",
-                                            "handle_browser_opening._launch_managed_browser_for_site",
-                                            "independent_launch_reuse_host_match",
-                                            {"existing_count": len(existing)},
-                                        )
                                         return page, channel
                                 except Exception:
                                     continue
@@ -308,12 +255,6 @@ def _launch_managed_browser_for_site(base_url: str, *, launch_background: bool =
                             "handle_browser_opening: opened target URL in independent %s window via CDP at %s",
                             channel,
                             cdp_url,
-                        )
-                        _agent_debug_browser_ndjson(
-                            "H9",
-                            "handle_browser_opening._launch_managed_browser_for_site",
-                            "independent_launch_new_page_fallback",
-                            {"prior_existing_count": len(existing)},
                         )
                         return page, channel
                     except Exception:
@@ -643,16 +584,6 @@ def get_or_open_site_page(
         return _wait_login_or_prompt_after_open(page, site_label)
 
     open_target = (launch_url or base_url or "").strip()
-    _agent_debug_browser_ndjson(
-        "H10",
-        "handle_browser_opening.get_or_open_site_page",
-        "launching_managed_browser",
-        {
-            "site_label": site_label,
-            "open_target_snip": open_target[:180],
-            "require_login_on_open": require_login_on_open,
-        },
-    )
     opened_page, channel = _launch_managed_browser_for_site(open_target, launch_background=launch_background)
     if opened_page is not None:
         if not require_login_on_open:

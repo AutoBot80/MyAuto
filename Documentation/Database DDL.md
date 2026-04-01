@@ -541,20 +541,3 @@ This document lists the current database tables and their columns. **Executable 
 | 2.59 | Apr 2026 | **No schema change.** **`_create_order`** My Orders grid: **allocated** detection from row **`raw`**; **unknown_rows** + Order# / no Invoice# → **allocated** attach — **LLD** **6.118** / **BRD** **3.64** / **HLD** **1.54**. |
 | 2.60 | Apr 2026 | **No schema change.** **`_classify_my_orders_grid_rows`**: **allocated** before **pending** — **LLD** **6.119** / **BRD** **3.65** / **HLD** **1.55**. |
 | 2.61 | Apr 2026 | **No schema change.** **`GET /add-sales/create-invoice-eligibility`** exposes **`resolved_customer_id`** / **`resolved_vehicle_id`** — **LLD** **6.120** / **BRD** **3.66** / **HLD** **1.56**. |
-| 2.62 | Apr 2026 | **No schema change.** Hero MISP insurance automation: **Login** / **2W** selectors — **LLD** **6.121** / **BRD** **3.67** / **HLD** **1.57**. |
-| 2.63 | Apr 2026 | **No schema change.** **2W** tile **`aid="ctl00_TWO"`** — **LLD** **6.122** / **BRD** **3.68** / **HLD** **1.58**. |
-| 2.64 | Apr 2026 | **No schema change.** MISP login **`button[type="submit"]`** — **LLD** **6.123** / **BRD** **3.69** / **HLD** **1.59**. |
-| 2.65 | Apr 2026 | **No schema change.** **`Playwright_DMS_*.txt`** three-master snapshot after commit — **LLD** **6.124** / **BRD** **3.70** / **HLD** **1.60**. |
-| 2.66 | Apr 2026 | **No schema change.** Hero Insurance **`Playwright_insurance.txt`** **`[DIAG]`** snapshots (visible controls + frames); Sign In attempts on **iframe** contexts — **LLD** **6.125** / **BRD** **3.71** / **HLD** **1.61**. |
-| 2.67 | Apr 2026 | **No schema change.** **`#root`** DIAG + **`Playwright_insurance_diag_fallback.txt`** without **subfolder** — **LLD** **6.126** / **BRD** **3.72** / **HLD** **1.62**. |
-| 2.68 | Apr 2026 | **No schema change.** Hero Insurance **`main_process`** reuses **`pre_process`** browser tab — **LLD** **6.127** / **BRD** **3.73** / **HLD** **1.63**. |
-| 2.69 | Apr 2026 | **No schema change.** **`POST /fill-dms/insurance`** Sign In + DIAG before KYC wait — **LLD** **6.128** / **BRD** **3.74** / **HLD** **1.64**. |
-| 2.70 | Apr 2026 | **No schema change.** MISP partner login: Sign In inside password **form** — **LLD** **6.129** / **BRD** **3.75** / **HLD** **1.65**. |
-| 2.71 | Apr 2026 | **No schema change.** MISP Partner Login: **password** non-empty wait + **Sign In** — **LLD** **6.130** / **BRD** **3.76** / **HLD** **1.66**. |
-| 2.72 | Apr 2026 | **No schema change.** Sign In **4** attempts + URL check — **LLD** **6.131** / **BRD** **3.77** / **HLD** **1.67**. |
-| 2.73 | Apr 2026 | **No schema change.** MISP **`requestSubmit`** + post-submit UI debug line — **LLD** **6.132** / **BRD** **3.78** / **HLD** **1.68**. |
-| 2.74 | Apr 2026 | **No schema change.** Insurance/DMS opener: one tab on CLI launch + **`www.`** host normalization — **LLD** **6.133** / **BRD** **3.79** / **HLD** **1.69**. |
-| 2.75 | Apr 2026 | **No schema change.** Fill Insurance **2W**/**New Policy** + KYC wait behavior — **LLD** **6.134** / **BRD** **3.80** / **HLD** **1.70**. |
-| 2.76 | Apr 2026 | **No schema change.** MISP new-tab resolution before KYC — **LLD** **6.135** / **BRD** **3.81** / **HLD** **1.71**. |
-| 2.77 | Apr 2026 | **No schema change.** Insurance vs DMS tab scoping — **LLD** **6.136** / **BRD** **3.82** / **HLD** **1.72**. |
-| 2.78 | Apr 2026 | **No schema change.** MISP **Policy Issuance** collapse before **New Policy** — **LLD** **6.137** / **BRD** **3.83** / **HLD** **1.73**. |

@@ -44,7 +44,8 @@ def fuzzy_best_option_label(query: str, candidates: list[str], *, min_score: flo
             best_score = score
             best_label = c
     if best_score < min_score:
-        return (candidates[0] or "").strip() or None
+        # Do not fall back to the first option — wrong insurer/OEM is worse than no selection.
+        return None
     return best_label
 
 

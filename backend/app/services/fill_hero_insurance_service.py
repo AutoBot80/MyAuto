@@ -30,7 +30,6 @@ from app.services.handle_browser_opening import (
     get_or_open_site_page,
 )
 from app.services.insurance_form_values import (
-    agent_debug_ndjson_log,
     append_playwright_insurance_line,
     append_playwright_insurance_line_or_dealer_fallback,
     build_insurance_fill_values,
@@ -38,7 +37,7 @@ from app.services.insurance_form_values import (
     write_insurance_form_values,
 )
 from app.services.insurance_kyc_payloads import insurance_kyc_png_payloads
-from app.services.utility_functions import fuzzy_best_option_label
+from app.services.utility_functions import fuzzy_best_option_label, normalize_for_fuzzy_match
 
 logger = logging.getLogger(__name__)
 
@@ -202,23 +201,6 @@ def _hero_insurance_log_page_diagnostics(
     subfolder: str | None,
 ) -> None:
     """Log URL, frame count, and visible control snapshot to logger and ``Playwright_insurance.txt``."""
-    # region agent log
-    try:
-        _nf = len(page.frames)
-    except Exception:
-        _nf = -1
-    agent_debug_ndjson_log(
-        "H3",
-        "fill_hero_insurance_service._hero_insurance_log_page_diagnostics",
-        "entry",
-        {
-            "phase": phase,
-            "has_ocr_output_dir": bool(ocr_output_dir),
-            "subfolder_repr": repr((subfolder or "")[:80]),
-            "frame_count": _nf,
-        },
-    )
-    # endregion
     lines: list[str] = []
     try:
         title = page.title()
@@ -344,17 +326,6 @@ def _try_request_submit_partner_password_form(ctx) -> bool:
                 "Hero Insurance: Partner login form native submit (%s).",
                 r.get("method"),
             )
-            # region agent log
-            try:
-                agent_debug_ndjson_log(
-                    "H7",
-                    "fill_hero_insurance_service._try_request_submit_partner_password_form",
-                    "request_submit_invoked",
-                    {"method": str(r.get("method")), "ctx": type(ctx).__name__},
-                )
-            except Exception:
-                pass
-            # endregion
             return True
         if isinstance(r, dict) and r.get("method") == "no_requestSubmit":
             logger.debug(
@@ -674,17 +645,6 @@ def _click_sign_in_if_visible(page, *, timeout_ms: int) -> bool:
     """
     wait_ms = max(int(INSURANCE_LOGIN_WAIT_MS), int(timeout_ms))
     pwd_ready = _wait_for_partner_login_password_filled(page, timeout_ms=wait_ms)
-    # region agent log
-    try:
-        agent_debug_ndjson_log(
-            "H6",
-            "fill_hero_insurance_service._click_sign_in_if_visible",
-            "after_password_wait",
-            {"pwd_ready": pwd_ready, "wait_ms": wait_ms},
-        )
-    except Exception:
-        pass
-    # endregion
     if not pwd_ready:
         return False
 
@@ -696,21 +656,6 @@ def _click_sign_in_if_visible(page, *, timeout_ms: int) -> bool:
             url_snip = (page.url or "")[:160]
         except Exception:
             url_snip = ""
-        # region agent log
-        try:
-            agent_debug_ndjson_log(
-                "H6",
-                "fill_hero_insurance_service._click_sign_in_if_visible",
-                "sign_in_attempt",
-                {
-                    "attempt": attempt,
-                    "click_reported": clicked,
-                    "url_after_click_snip": url_snip,
-                },
-            )
-        except Exception:
-            pass
-        # endregion
         if clicked:
             try:
                 page.wait_for_timeout(pause_ms)
@@ -721,21 +666,6 @@ def _click_sign_in_if_visible(page, *, timeout_ms: int) -> bool:
             except Exception:
                 url_snip2 = ""
             on_misp = _still_on_heroinsurance_misp_partner_login(page)
-            # region agent log
-            try:
-                agent_debug_ndjson_log(
-                    "H6",
-                    "fill_hero_insurance_service._click_sign_in_if_visible",
-                    "post_click_partner_login_check",
-                    {
-                        "attempt": attempt,
-                        "still_on_misp_partner_login": on_misp,
-                        "url_snip": url_snip2,
-                    },
-                )
-            except Exception:
-                pass
-            # endregion
             if not on_misp:
                 logger.info(
                     "Hero Insurance: Sign In succeeded (left misp-partner-login) on attempt %s/%s.",
@@ -749,21 +679,6 @@ def _click_sign_in_if_visible(page, *, timeout_ms: int) -> bool:
                 time.sleep(2.2)
             try:
                 post_ui = _snapshot_partner_login_frames(page)
-                # region agent log
-                try:
-                    agent_debug_ndjson_log(
-                        "H8",
-                        "fill_hero_insurance_service._click_sign_in_if_visible",
-                        "partner_login_ui_after_submit_wait",
-                        {
-                            "attempt": attempt,
-                            "still_on_misp_partner_login": True,
-                            "post_submit_ui": post_ui,
-                        },
-                    )
-                except Exception:
-                    pass
-                # endregion
                 hints = []
                 for fr in (post_ui.get("frames") or []) if isinstance(post_ui, dict) else []:
                     hints.extend(fr.get("hints") or [])
@@ -787,20 +702,6 @@ def _click_sign_in_if_visible(page, *, timeout_ms: int) -> bool:
             except Exception:
                 time.sleep(pause_ms / 1000.0)
 
-    # region agent log
-    try:
-        agent_debug_ndjson_log(
-            "H6",
-            "fill_hero_insurance_service._click_sign_in_if_visible",
-            "sign_in_exhausted_retries",
-            {
-                "max_attempts": max_attempts,
-                "still_on_misp_partner_login": _still_on_heroinsurance_misp_partner_login(page),
-            },
-        )
-    except Exception:
-        pass
-    # endregion
     return False
 
 
@@ -1114,6 +1015,196 @@ def _select_option_fuzzy_in_select(page, select_locator, query: str, *, timeout_
         return False
 
 
+def _insurer_type_query_variants(insurer: str) -> list[str]:
+    """Short search strings for typeahead (portal may filter on prefix; DB name may be longer)."""
+    s = (insurer or "").strip()
+    if not s:
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def add(x: str) -> None:
+        t = x.strip()
+        if len(t) >= 2 and t not in seen:
+            seen.add(t)
+            out.append(t)
+
+    add(s[:80])
+    words = s.split()
+    if len(words) > 3:
+        add(" ".join(words[:3]))
+    if len(words) > 2:
+        add(" ".join(words[:2]))
+    if len(words) > 1:
+        add(words[0])
+    return out
+
+
+def _kyc_collect_dropdown_option_texts(page) -> list[str]:
+    texts: list[str] = []
+    try:
+        page.wait_for_selector(
+            "[role='option'], [role='listbox'] [role='option'], li[role='option'], .ui-menu-item",
+            timeout=2_500,
+        )
+    except Exception:
+        pass
+    for sel in (
+        "[role='listbox'] [role='option']",
+        "[role='option']",
+        "li[role='option']",
+        ".ui-menu-item",
+        "ul[role='listbox'] li",
+    ):
+        try:
+            loc = page.locator(sel)
+            n = min(loc.count(), 250)
+            for i in range(n):
+                try:
+                    el = loc.nth(i)
+                    if not el.is_visible(timeout=400):
+                        continue
+                    t = (el.inner_text() or "").strip()
+                    if t and t not in texts:
+                        texts.append(t)
+                except Exception:
+                    continue
+        except Exception:
+            continue
+    return texts
+
+
+def _click_role_option_matching(page, pick: str, *, timeout_ms: int) -> bool:
+    """Click a visible listbox option whose text matches the fuzzy-picked label."""
+    if not (pick or "").strip():
+        return False
+    want = normalize_for_fuzzy_match(pick)
+    loc = page.locator("[role='option'], li[role='option']")
+    n = min(loc.count(), 250)
+    for i in range(n):
+        try:
+            el = loc.nth(i)
+            if not el.is_visible(timeout=800):
+                continue
+            t = (el.inner_text() or "").strip()
+            if normalize_for_fuzzy_match(t) == want or t.strip() == pick.strip():
+                el.click(timeout=timeout_ms)
+                return True
+        except Exception:
+            continue
+    pl = pick.lower()
+    for i in range(n):
+        try:
+            el = loc.nth(i)
+            if not el.is_visible(timeout=400):
+                continue
+            t = (el.inner_text() or "").strip()
+            tl = t.lower()
+            if pl in tl or tl in pl:
+                el.click(timeout=timeout_ms)
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _locator_insurance_company_text_control(page):
+    """
+    KYC 'Insurance Company' is often the first field; avoid grabbing another combobox
+    (e.g. KYC Partner) by using label / combobox name first.
+    """
+    try:
+        by_label = page.get_by_label(re.compile(r"Insurance\s*Company\s*\*?", re.I))
+        if by_label.count() > 0 and by_label.first.is_visible(timeout=2_000):
+            return by_label.first
+    except Exception:
+        pass
+    try:
+        by_role = page.get_by_role("combobox", name=re.compile(r"Insurance\s*Company", re.I))
+        if by_role.count() > 0 and by_role.first.is_visible(timeout=2_000):
+            return by_role.first
+    except Exception:
+        pass
+    try:
+        lab = page.locator("label").filter(has_text=re.compile(r"Insurance\s*Company", re.I)).first
+        if lab.count() > 0:
+            inp = lab.locator("xpath=following::input[not(@type='hidden')][not(@type='file')][1]")
+            if inp.count() > 0 and inp.first.is_visible(timeout=2_000):
+                return inp.first
+    except Exception:
+        pass
+    try:
+        for narrow in ("tr", ".form-group", ".form-row", "div[class*='field']", "td"):
+            sec = page.locator(narrow).filter(has_text=re.compile(r"Insurance\s*Company", re.I)).first
+            if sec.count() == 0:
+                continue
+            inp = sec.locator(
+                "input:not([type='hidden']):not([type='file']), [role='combobox'] input"
+            ).first
+            if inp.count() > 0 and inp.first.is_visible(timeout=1_500):
+                return inp.first
+    except Exception:
+        pass
+    return None
+
+
+def _fill_insurance_company_typeahead_fuzzy(page, insurer: str, *, timeout_ms: int) -> bool:
+    """
+    Combobox / typeahead: type search variants, then pick the option that best matches
+    the full details-sheet insurer string (same as native <select> fuzzy).
+    """
+    if not (insurer or "").strip():
+        return False
+    ctrl = _locator_insurance_company_text_control(page)
+    if ctrl is None:
+        try:
+            legacy = page.locator(
+                "input[placeholder*='Search' i], input[type='search'], "
+                "[role='combobox'] input, input[aria-autocomplete='list']"
+            ).first
+            if legacy.count() > 0 and legacy.is_visible(timeout=2_000):
+                ctrl = legacy
+        except Exception:
+            pass
+    if ctrl is None:
+        return False
+    try:
+        tag = (ctrl.evaluate("el => (el && el.tagName) ? el.tagName : ''") or "").upper()
+        if tag == "SELECT":
+            return _select_option_fuzzy_in_select(page, ctrl, insurer, timeout_ms=timeout_ms)
+    except Exception:
+        pass
+    try:
+        lab = page.get_by_text(re.compile(r"Insurance\s*Company", re.I)).first
+        if lab.count() > 0:
+            lab.click(timeout=5_000)
+            _t(page, 200)
+    except Exception:
+        pass
+    for q in _insurer_type_query_variants(insurer):
+        try:
+            ctrl.click(timeout=5_000)
+            _t(page, 150)
+            ctrl.fill("", timeout=timeout_ms)
+            ctrl.type(q, delay=25)
+            _t(page, 550)
+            opts = _kyc_collect_dropdown_option_texts(page)
+            if not opts:
+                continue
+            pick = fuzzy_best_option_label(insurer, opts)
+            if pick and _click_role_option_matching(page, pick, timeout_ms=timeout_ms):
+                logger.info(
+                    "Hero Insurance: insurer chosen via typeahead fuzzy (%r → %r).",
+                    insurer[:60],
+                    pick[:80],
+                )
+                return True
+        except Exception as exc:
+            logger.debug("Hero Insurance: insurer typeahead attempt %r: %s", q[:40], exc)
+            continue
+    return False
+
+
 def _fill_insurance_company_and_ovd_mobile_consent(
     page, values: dict, *, timeout_ms: int
 ) -> str | None:
@@ -1138,27 +1229,10 @@ def _fill_insurance_company_and_ovd_mobile_consent(
             except Exception:
                 continue
         if not filled:
-            # Combobox / typeahead: focus field and type query, pick first matching option
+            # Combobox / typeahead: scoped field + fuzzy match on visible options (not substring of typed prefix only)
             try:
-                lab = page.get_by_text(re.compile(r"Insurance\s*Company", re.I)).first
-                if lab.count() > 0:
-                    lab.click(timeout=5_000)
-                    _t(page, 300)
-                inp = page.locator(
-                    "input[placeholder*='Search' i], input[type='search'], "
-                    "[role='combobox'] input, input[aria-autocomplete='list']"
-                ).first
-                if inp.count() > 0 and inp.is_visible(timeout=3_000):
-                    inp.fill("")
-                    inp.type(insurer[:80], delay=25)
-                    _t(page, 500)
-                    opt = page.get_by_role("option", name=re.compile(re.escape(insurer[:24]), re.I))
-                    if opt.count() == 0:
-                        opt = page.locator("[role='option'], li[role='option']").filter(has_text=re.compile(re.escape(insurer[:16]), re.I))
-                    if opt.count() > 0:
-                        opt.first.click(timeout=timeout_ms)
-                        filled = True
-                        logger.info("Hero Insurance: insurer chosen via typeahead.")
+                if _fill_insurance_company_typeahead_fuzzy(page, insurer, timeout_ms=timeout_ms):
+                    filled = True
             except Exception as exc:
                 logger.warning("Hero Insurance: insurer typeahead failed: %s", exc)
         if not filled:
@@ -1366,20 +1440,6 @@ def _run_hero_misp_portal_after_open(
         subfolder=subfolder,
     )
     clicked = _click_sign_in_if_visible(page, timeout_ms=timeout_ms)
-    # region agent log
-    try:
-        _sign_url = (page.url or "").strip()[:400]
-        _has_root = page.locator("#root").count() > 0
-    except Exception as e:
-        _sign_url = f"(err:{e!s})"
-        _has_root = False
-    agent_debug_ndjson_log(
-        "H4",
-        "fill_hero_insurance_service._run_hero_misp_portal_after_open",
-        "after_sign_in_click_attempt",
-        {"clicked": bool(clicked), "page_url": _sign_url, "locator_root_count_gt0": _has_root},
-    )
-    # endregion
     if not clicked:
         _hero_insurance_log_page_diagnostics(
             page,
@@ -1971,19 +2031,6 @@ def pre_process(
     result["login_url"] = login_url
     result["match_base"] = match_base
 
-    # region agent log
-    agent_debug_ndjson_log(
-        "H1",
-        "fill_hero_insurance_service.pre_process",
-        "after_match_base",
-        {
-            "match_base": (match_base or "")[:160],
-            "has_ocr_output_dir": bool(ocr_output_dir),
-            "ocr_output_dir_suffix": str(ocr_output_dir)[-120:] if ocr_output_dir else None,
-            "subfolder_repr": repr((subfolder or "")[:80]),
-        },
-    )
-    # endregion
 
     reset_playwright_insurance_log(ocr_output_dir, subfolder)
     append_playwright_insurance_line(
@@ -2001,14 +2048,6 @@ def pre_process(
                 staging_payload=staging_payload,
             )
         except Exception as exc:
-            # region agent log
-            agent_debug_ndjson_log(
-                "H2",
-                "fill_hero_insurance_service.pre_process",
-                "build_insurance_fill_values_failed",
-                {"exc": str(exc)[:400]},
-            )
-            # endregion
             result["error"] = str(exc)
             append_playwright_insurance_line(
                 ocr_output_dir, subfolder, "NOTE", f"pre_process: load DB values failed: {exc!s}"
@@ -2022,32 +2061,12 @@ def pre_process(
         launch_url=login_url,
     )
     if page is None:
-        # region agent log
-        agent_debug_ndjson_log(
-            "H2",
-            "fill_hero_insurance_service.pre_process",
-            "get_or_open_site_page_failed",
-            {"open_error": (open_error or "")[:300]},
-        )
-        # endregion
         result["error"] = open_error
         append_playwright_insurance_line(
             ocr_output_dir, subfolder, "NOTE", f"pre_process: could not open Insurance tab: {open_error}"
         )
         return result
 
-    # region agent log
-    try:
-        _pu = (page.url or "").strip()
-    except Exception as e:
-        _pu = f"(url_error:{e!s})"
-    agent_debug_ndjson_log(
-        "H2",
-        "fill_hero_insurance_service.pre_process",
-        "page_opened",
-        {"page_url": _pu[:400]},
-    )
-    # endregion
 
     # Same Playwright worker thread as main_process — hand off the Page so we do not call
     # ``get_or_open_site_page`` again (a second call may fail tab reuse and launch another window).
@@ -2179,35 +2198,11 @@ def main_process(
                     "NOTE",
                     "main_process: attached to same browser tab as pre_process",
                 )
-                # region agent log
-                try:
-                    agent_debug_ndjson_log(
-                        "H11",
-                        "fill_hero_insurance_service.main_process",
-                        "reused_pre_process_page",
-                        {
-                            "url_snip": ((page.url or "")[:160]) if page is not None else "",
-                        },
-                    )
-                except Exception:
-                    pass
-                # endregion
         except Exception as exc:
             logger.warning("Hero Insurance main_process: could not reuse pre_process page: %s", exc)
             page = None
 
     if page is None:
-        # region agent log
-        try:
-            agent_debug_ndjson_log(
-                "H11",
-                "fill_hero_insurance_service.main_process",
-                "fallback_get_or_open_site_page",
-                {"had_pre_page_key": pre_result.get("_insurance_playwright_page") is not None},
-            )
-        except Exception:
-            pass
-        # endregion
         page, open_err = get_or_open_site_page(
             match_base,
             "Insurance",
@@ -2480,14 +2475,6 @@ def run_fill_insurance_only(
             subfolder=subfolder,
         )
         _ins_clicked = _click_sign_in_if_visible(page, timeout_ms=INSURANCE_ACTION_TIMEOUT_MS)
-        # region agent log
-        agent_debug_ndjson_log(
-            "H4",
-            "fill_hero_insurance_service.run_fill_insurance_only",
-            "after_sign_in_click_attempt",
-            {"clicked": bool(_ins_clicked)},
-        )
-        # endregion
         if not _ins_clicked:
             _hero_insurance_log_page_diagnostics(
                 page,

@@ -14,7 +14,7 @@ alwaysApply: true
 | **`business-requirements-document.md`** (BRD) | Business rules, functional requirements, §6.1a Siebel SOP | Any user-visible or business-meaningful flow/rule change; changelog rows for notable updates |
 | **`high-level-design.md`** (HLD) | Backend modules, client pages, architecture changelog | New/changed modules, pages, or major flow; add **changelog** row when behavior contract shifts |
 | **`low-level-design.md`** (LLD) | APIs, module layout, Playwright/Siebel parity (**§2.4d**), **changelog** (e.g. **6.x**) | Endpoint/service changes; automation sequence or helper semantics; **always** add/update **LLD changelog** for non-trivial Siebel/DMS behavior |
-| **`Database DDL.md`** | Tables, columns, relationships | Any **`DDL/`** script or column change; **if no schema change** but work was user-facing (e.g. automation-only), add a **changelog** line (e.g. “No schema change — see LLD x.x / BRD x.x”) so the doc stays the audit trail |
+| **`Database DDL.md`** | Tables, columns, relationships | Any **`DDL/`** script or **column/table/schema** change only — update table definitions and changelog; **do not** add changelog rows for automation-only or API-only work with no database change |
 | **`technical-architecture.md`** | Repo layout, §6 doc maintenance | Optional: bump §7 changelog when §6 maintenance policy changes |
 
 ## Mapping (quick reference)
@@ -25,10 +25,10 @@ alwaysApply: true
 - **New page, flow, or feature** → BRD (FRs), HLD (client pages, data flow)
 - **New or changed service / repository** → HLD (backend modules), LLD (module layout)
 - **Siebel / Fill DMS / `prepare_vehicle` / Playwright behavior** → BRD §6.1a if SOP meaning changes; LLD §2.4d + **LLD changelog**; HLD `fill_hero_dms_service` row if module contract changes
-- **Pure automation refactor** (no API/DB) → LLD + BRD as applicable; **Database DDL.md** changelog entry “no schema change” when the team expects DDL.md to track all releases
+- **Pure automation refactor** (no API/DB) → LLD + BRD as applicable; **Database DDL.md** — **N/A** unless `DDL/` or schema docs change
 
 ## Agent checklist
 
-Before finishing a task that touched `backend/`, `client/`, `DDL/`, or DMS/Siebel flows: confirm which docs above were updated or explicitly N/A (with DDL changelog “no schema change” if appropriate).
+Before finishing a task that touched `backend/`, `client/`, `DDL/`, or DMS/Siebel flows: confirm which docs above were updated or explicitly N/A (**Database DDL.md** only when schema/DDL changed).
 
 Reference: `Documentation/technical-architecture.md` §6 Documentation Maintenance.

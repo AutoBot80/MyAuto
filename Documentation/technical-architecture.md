@@ -123,7 +123,7 @@ Update as applicable:
 - **BRD** (`business-requirements-document.md`) — business rules, §6.1a Siebel target sequence, functional requirements; add **changelog** rows for notable behavior changes
 - **HLD** (`high-level-design.md`) — backend modules, client pages; add **changelog** row when the architecture or module contract changes
 - **LLD** (`low-level-design.md`) — API tables, §2.4d Playwright parity, module notes; add **LLD changelog** (e.g. **6.x**) for non-trivial automation or API changes
-- **Database DDL** (`Database DDL.md`) — any `DDL/` change; if **no** schema change, add a **changelog** line stating that (e.g. automation-only — pointer to LLD/BRD) so releases stay traceable
+- **Database DDL** (`Database DDL.md`) — only when **`DDL/`** scripts or **table/column/schema** definitions change; do **not** add changelog rows for automation-only or API-only work with no database change
 - **This file** (§6–§7) — optional changelog row when documentation policy or repo doc layout changes
 
 Quick mapping:
@@ -132,7 +132,7 @@ Quick mapping:
 - **New DB table/column** → `DDL/` scripts, `Database DDL.md`
 - **New business rule** → BRD (Business Rules section)
 - **New page or flow** → BRD (FRs), HLD (client pages, data flow)
-- **Queue/storage/runtime behavior changes** → technical architecture (as needed), HLD, LLD, Database DDL as applicable
+- **Queue/storage/runtime behavior changes** → technical architecture (as needed), HLD, LLD; **Database DDL** only if schema changes
 
 Cursor rule: `.cursor/rules/documentation-maintenance.mdc` (always applied).
 
@@ -152,3 +152,4 @@ Cursor rule: `.cursor/rules/documentation-maintenance.mdc` (always applied).
 | 0.4 | Mar 2026 | — | §3.1 **External portal URLs** — **`backend/.env`** for DMS/Siebel, VAHAN, Insurance; **`DMS_MODE`** default **real** |
 | 0.5 | Mar 2026 | — | §6 **Documentation Maintenance** — mandatory alignment of BRD / HLD / LLD / **Database DDL.md** with code and schema changes; **`Database DDL.md`** changelog may record “no schema change”; **`.cursor/rules/documentation-maintenance.mdc`** |
 | 0.6 | Apr 2026 | — | §5 **Artifacts:** Siebel **`Playwright_DMS_<ddmmyyyy>_<hhmmss>.txt`** per run (IST), not a single overwritten **`Playwright_DMS.txt`** — **LLD** **6.117** |
+| 0.7 | Apr 2026 | — | §6 **`Database DDL.md`** updated **only** for real schema / **`DDL/`** changes (not automation-only); **`.cursor/rules/documentation-maintenance.mdc`** aligned |
