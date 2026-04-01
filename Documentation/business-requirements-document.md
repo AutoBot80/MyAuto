@@ -431,3 +431,6 @@ Bulk upload automates the ingestion of scanned documents from a shared folder in
 | 3.65 | Apr 2026 | — | **§6.1a** **My Orders** multi-row: **allocated** classification before **pending** so **Order#** drill targets **Allocated** row — **LLD** **6.119**, **HLD** **1.55**, **Database DDL** **2.60** |
 | 3.66 | Apr 2026 | — | **FR-8** / Add Sales: **`create-invoice-eligibility`** returns resolved **`customer_id`** / **`vehicle_id`**; client syncs after Create Invoice so **Generate Insurance** enables when invoice is recorded — **LLD** **6.120**, **HLD** **1.56**, **Database DDL** **2.61** |
 | 3.67 | Apr 2026 | — | **FR-18b** Hero MISP **Generate Insurance**: landing **Login** and **2W** entry selectors broadened — **LLD** **6.121**, **HLD** **1.57**, **Database DDL** **2.62** |
+| 3.68 | Apr 2026 | — | **FR-18b** **2W** tile **`aid="ctl00_TWO"`** — **LLD** **6.122**, **HLD** **1.58**, **Database DDL** **2.63** |
+| 3.69 | Apr 2026 | — | **FR-18b** MISP login **`button[type="submit"]`** **Sign In** — **LLD** **6.123**, **HLD** **1.59**, **Database DDL** **2.64** |
+| 3.70 | Apr 2026 | — | **FR-17** / **§6.1a** trace: **`Playwright_DMS_*.txt`** appends committed three-master JSON after Create Invoice DB write — **LLD** **6.124**, **HLD** **1.60**, **Database DDL** **2.65** |

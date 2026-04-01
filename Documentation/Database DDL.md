@@ -542,3 +542,6 @@ This document lists the current database tables and their columns. **Executable 
 | 2.60 | Apr 2026 | **No schema change.** **`_classify_my_orders_grid_rows`**: **allocated** before **pending** — **LLD** **6.119** / **BRD** **3.65** / **HLD** **1.55**. |
 | 2.61 | Apr 2026 | **No schema change.** **`GET /add-sales/create-invoice-eligibility`** exposes **`resolved_customer_id`** / **`resolved_vehicle_id`** — **LLD** **6.120** / **BRD** **3.66** / **HLD** **1.56**. |
 | 2.62 | Apr 2026 | **No schema change.** Hero MISP insurance automation: **Login** / **2W** selectors — **LLD** **6.121** / **BRD** **3.67** / **HLD** **1.57**. |
+| 2.63 | Apr 2026 | **No schema change.** **2W** tile **`aid="ctl00_TWO"`** — **LLD** **6.122** / **BRD** **3.68** / **HLD** **1.58**. |
+| 2.64 | Apr 2026 | **No schema change.** MISP login **`button[type="submit"]`** — **LLD** **6.123** / **BRD** **3.69** / **HLD** **1.59**. |
+| 2.65 | Apr 2026 | **No schema change.** **`Playwright_DMS_*.txt`** three-master snapshot after commit — **LLD** **6.124** / **BRD** **3.70** / **HLD** **1.60**. |

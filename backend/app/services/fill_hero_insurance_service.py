@@ -47,7 +47,7 @@ def _t(page, ms: int) -> None:
 def _click_sign_in_if_visible(page, *, timeout_ms: int) -> bool:
     """
     Click landing-page login CTA (``Sign In``, ``Login``, ``Log in``).
-    Hero MISP builds vary — some portals use **Login** only on the home/landing strip.
+    Hero MISP login form uses ``<button type="submit">`` with label **Sign In**; landing pages may use **Login** only.
     Returns True if a click was attempted.
     """
     label_patterns = (
@@ -56,6 +56,38 @@ def _click_sign_in_if_visible(page, *, timeout_ms: int) -> bool:
         (re.compile(r"^\s*Log\s+in\s*$", re.I), "Log in"),
     )
     try:
+        # Prefer explicit form submit controls (MISP login: ``<button type="submit">Sign In</button>``).
+        for text, dbg in (("Sign In", "Sign In"), ("Login", "Login"), ("Log in", "Log in")):
+            try:
+                sub = page.locator('button[type="submit"]').filter(has_text=re.compile(re.escape(text), re.I))
+                if sub.count() > 0:
+                    for i in range(min(sub.count(), 8)):
+                        b = sub.nth(i)
+                        if b.is_visible(timeout=2_000):
+                            b.scroll_into_view_if_needed(timeout=3_000)
+                            b.click(timeout=timeout_ms)
+                            logger.info("Hero Insurance: clicked %s (button[type=submit]).", dbg)
+                            return True
+            except Exception:
+                continue
+        for css, dbg in (
+            ('input[type="submit"][value*="Sign In" i]', "Sign In"),
+            ('input[type="submit"][value*="Login" i]', "Login"),
+            ('input[type="submit"][value*="Log in" i]', "Log in"),
+        ):
+            try:
+                loc = page.locator(css)
+                if loc.count() > 0:
+                    for i in range(min(loc.count(), 6)):
+                        el = loc.nth(i)
+                        if el.is_visible(timeout=1_500):
+                            el.scroll_into_view_if_needed(timeout=2_000)
+                            el.click(timeout=timeout_ms)
+                            logger.info("Hero Insurance: clicked %s (input[type=submit]).", dbg)
+                            return True
+            except Exception:
+                continue
+
         for pat, _dbg in label_patterns:
             loc = page.get_by_text(pat)
             n = loc.count()
@@ -121,6 +153,9 @@ def _click_2w_icon(page, *, timeout_ms: int) -> None:
             return False
 
     try_order = (
+        # Hero MISP WebForms: stable tile id (operator-confirmed).
+        ('[aid="ctl00_TWO"]', page.locator('[aid="ctl00_TWO"]')),
+        ('#ctl00_TWO', page.locator("#ctl00_TWO")),
         ('img[alt="2W Icon"]', page.locator('img[alt="2W Icon"]')),
         ("img[alt*='2W' i]", page.locator("img[alt*='2W' i]")),
         ("img[title*='2W' i]", page.locator("img[title*='2W' i]")),
@@ -160,6 +195,12 @@ def _click_2w_icon(page, *, timeout_ms: int) -> None:
                 const r = el.getBoundingClientRect();
                 return r.width > 2 && r.height > 2;
             };
+            const byId = document.querySelector('[aid="ctl00_TWO"]') || document.getElementById('ctl00_TWO');
+            if (byId && vis(byId)) {
+                try { byId.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
+                byId.click();
+                return 'aid-ctl00_TWO';
+            }
             const cand = Array.from(
                 document.querySelectorAll('img[alt], [aria-label], button, a, [role="button"]')
             );

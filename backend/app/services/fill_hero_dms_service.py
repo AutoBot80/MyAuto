@@ -24,6 +24,7 @@ import tempfile
 import time
 from datetime import date, datetime
 from pathlib import Path
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from playwright.sync_api import TimeoutError as PlaywrightTimeout
@@ -160,6 +161,75 @@ def _requires_operator_create_invoice(page) -> bool:
 def invoice_number_ready_for_master_commit(vehicle_dict: dict | None) -> bool:
     """True when DMS scrape has an **Invoice#** — policy: persist masters only after Create Invoice in Siebel."""
     return bool(str((vehicle_dict or {}).get("invoice_number") or "").strip())
+
+
+def fetch_three_masters_snapshot_for_log(customer_id: int, vehicle_id: int) -> dict[str, Any]:
+    """
+    Load **customer_master**, **vehicle_master**, and the **sales_master** row for the pair — for
+    appending to ``Playwright_DMS_*.txt`` after a successful master commit.
+    """
+    out: dict[str, Any] = {"customer_master": None, "vehicle_master": None, "sales_master": None}
+    cid = int(customer_id)
+    vid = int(vehicle_id)
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM customer_master WHERE customer_id = %s", (cid,))
+            r = cur.fetchone()
+            if r:
+                out["customer_master"] = dict(r)
+            cur.execute("SELECT * FROM vehicle_master WHERE vehicle_id = %s", (vid,))
+            r = cur.fetchone()
+            if r:
+                out["vehicle_master"] = dict(r)
+            cur.execute(
+                """
+                SELECT * FROM sales_master
+                WHERE customer_id = %s AND vehicle_id = %s
+                ORDER BY sales_id DESC
+                LIMIT 1
+                """,
+                (cid, vid),
+            )
+            r = cur.fetchone()
+            if r:
+                out["sales_master"] = dict(r)
+    return out
+
+
+def append_playwright_dms_masters_committed_log(
+    log_path: Path | str | None,
+    *,
+    customer_id: int,
+    vehicle_id: int,
+) -> None:
+    """Append a JSON snapshot of the three master rows to the per-run Playwright DMS execution log."""
+    if not log_path:
+        return
+    p = Path(str(log_path))
+    if not p.is_file():
+        logger.warning(
+            "fill_dms_service: Playwright DMS log not found for masters snapshot: %s",
+            p,
+        )
+        return
+    try:
+        snap = fetch_three_masters_snapshot_for_log(customer_id, vehicle_id)
+    except Exception as exc:
+        logger.warning(
+            "fill_dms_service: could not load masters for Playwright log snapshot: %s",
+            exc,
+        )
+        return
+    try:
+        with p.open("a", encoding="utf-8") as fp:
+            fp.write(
+                "\n--- masters_committed (customer_master / vehicle_master / sales_master after DB write) ---\n"
+            )
+            fp.write(json.dumps(snap, indent=2, default=str))
+            fp.write("\n")
+            fp.flush()
+    except OSError as exc:
+        logger.warning("fill_dms_service: could not append masters snapshot to %s: %s", p, exc)
 
 
 def _merge_staging_payload_with_scrape_for_commit(staging_payload: dict, scraped: dict) -> dict:
@@ -2021,6 +2091,7 @@ def _run_fill_dms_real_siebel_playwright(
         / _safe_subfolder_name(effective_subfolder)
         / playwright_dms_execution_log_filename()
     )
+    result["playwright_dms_execution_log_path"] = str(playwright_dms_log)
 
     urls = SiebelDmsUrls(
         contact=DMS_REAL_URL_CONTACT,
@@ -2233,6 +2304,11 @@ def run_fill_dms_only(
             )
             result["committed_customer_id"] = cid_c
             result["committed_vehicle_id"] = vid_c
+            append_playwright_dms_masters_committed_log(
+                result.get("playwright_dms_execution_log_path"),
+                customer_id=cid_c,
+                vehicle_id=vid_c,
+            )
         except Exception as commit_exc:
             logger.warning("fill_dms_service: staging master commit failed: %s", commit_exc)
             result["error"] = f"Database commit after DMS failed: {commit_exc!s}"

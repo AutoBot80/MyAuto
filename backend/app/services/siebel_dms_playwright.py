@@ -15363,6 +15363,7 @@ def Playwright_Hero_DMS_fill(
             _vid_out: int | None = None
             _sid_out: int | None = None
             from app.services.fill_hero_dms_service import (
+                append_playwright_dms_masters_committed_log,
                 insert_dms_masters_from_siebel_scrape,
                 invoice_number_ready_for_master_commit,
             )
@@ -15424,6 +15425,15 @@ def Playwright_Hero_DMS_fill(
                 atomic_db_committed=_atomic_ok,
                 atomic_db_error=_atomic_err,
             )
+            if _atomic_ok and _cid_out is not None and _vid_out is not None and log_fp is not None:
+                try:
+                    append_playwright_dms_masters_committed_log(
+                        log_fp.name,
+                        customer_id=int(_cid_out),
+                        vehicle_id=int(_vid_out),
+                    )
+                except Exception as _snap_exc:
+                    logger.warning("siebel_dms: Playwright DMS masters snapshot append failed: %s", _snap_exc)
             if _atomic_err:
                 out["error"] = f"Siebel: database persist failed after create_order: {_atomic_err}"
                 return out
