@@ -177,6 +177,9 @@ INSURANCE_LOGIN_WAIT_MS = int(os.getenv("INSURANCE_LOGIN_WAIT_MS", "600000"))
 INSURANCE_ACTION_TIMEOUT_MS = int(os.getenv("INSURANCE_ACTION_TIMEOUT_MS", "5500"))
 # Tighter timeout while filling the policy / insurance-details form (many sequential fields).
 INSURANCE_POLICY_FILL_TIMEOUT_MS = int(os.getenv("INSURANCE_POLICY_FILL_TIMEOUT_MS", "3200"))
+# DIAG ``login_page_snapshot`` lines: default is a short per-frame summary. Set true for legacy full per-control dict dumps.
+_INSURANCE_DIAG_FULL_RAW = (os.getenv("INSURANCE_DIAG_FULL_CONTROL_SNAPSHOT") or "").strip().lower()
+INSURANCE_DIAG_FULL_CONTROL_SNAPSHOT = _INSURANCE_DIAG_FULL_RAW in ("1", "true", "yes", "on")
 
 
 def dms_automation_is_real_siebel() -> bool:

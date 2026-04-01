@@ -18,6 +18,7 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeout
 from app.config import (
     INSURANCE_ACTION_TIMEOUT_MS,
     INSURANCE_BASE_URL,
+    INSURANCE_DIAG_FULL_CONTROL_SNAPSHOT,
     INSURANCE_LOGIN_WAIT_MS,
     INSURANCE_POLICY_FILL_TIMEOUT_MS,
 )
@@ -193,6 +194,46 @@ def _hero_insurance_snapshot_visible_controls_in_root(ctx) -> list[dict]:
         return []
 
 
+def _hero_insurance_snapshots_equivalent(snap: list[dict], root_snap: list[dict]) -> bool:
+    """True when #root scan matches the full frame (skip duplicate DIAG blocks on SPAs)."""
+    if not root_snap:
+        return True
+    if len(snap) != len(root_snap):
+        return False
+    return snap == root_snap
+
+
+def _hero_insurance_compact_frame_summary(snap: list[dict], *, max_parts: int = 14) -> str:
+    """One-line summary for Playwright_insurance.txt (avoids huge per-control dict dumps)."""
+    parts: list[str] = []
+    for row in snap[:max_parts]:
+        if not isinstance(row, dict):
+            continue
+        tag = (row.get("tag") or "").strip()
+        typ = (row.get("type") or "").strip()
+        text = (row.get("text") or "").strip().replace("\n", " ")[:48]
+        href = (row.get("href") or "").strip()
+        href_tail = ""
+        if href and len(href) < 120:
+            href_tail = href.split("/")[-1][:36]
+        if text:
+            piece = f"{tag}:{text}"
+            if href_tail and href_tail not in text:
+                piece += f"→{href_tail}"
+            parts.append(piece)
+        elif href_tail:
+            parts.append(f"{tag}→{href_tail}")
+        else:
+            parts.append(f"{tag}/{typ or '-'}")
+    extra = len(snap) - max_parts
+    out = " | ".join(parts)
+    if extra > 0:
+        out += f" …+{extra} more"
+    if len(out) > 900:
+        out = out[:897] + "…"
+    return out
+
+
 def _hero_insurance_log_page_diagnostics(
     page,
     *,
@@ -202,6 +243,7 @@ def _hero_insurance_log_page_diagnostics(
 ) -> None:
     """Log URL, frame count, and visible control snapshot to logger and ``Playwright_insurance.txt``."""
     lines: list[str] = []
+    full_controls = INSURANCE_DIAG_FULL_CONTROL_SNAPSHOT
     try:
         title = page.title()
     except Exception:
@@ -224,12 +266,21 @@ def _hero_insurance_log_page_diagnostics(
         snap = _hero_insurance_snapshot_visible_controls(fr)
         root_snap = _hero_insurance_snapshot_visible_controls_in_root(fr)
         lines.append(f"--- frame[{idx}] url={fu!r} visible_controls={len(snap)} ---")
-        for j, row in enumerate(snap[:35]):
-            lines.append(f"  [{j}] {row}")
-        if root_snap:
-            lines.append(f"--- frame[{idx}] #root only: {len(root_snap)} controls ---")
-            for j, row in enumerate(root_snap[:35]):
-                lines.append(f"  root[{j}] {row}")
+        if full_controls:
+            for j, row in enumerate(snap[:35]):
+                lines.append(f"  [{j}] {row}")
+            if root_snap and not _hero_insurance_snapshots_equivalent(snap, root_snap):
+                lines.append(f"--- frame[{idx}] #root only: {len(root_snap)} controls ---")
+                for j, row in enumerate(root_snap[:35]):
+                    lines.append(f"  root[{j}] {row}")
+            elif root_snap and _hero_insurance_snapshots_equivalent(snap, root_snap):
+                lines.append(
+                    f"  (#root same as frame — {len(root_snap)} controls, duplicate list omitted)"
+                )
+        else:
+            lines.append(f"  summary: {_hero_insurance_compact_frame_summary(snap)}")
+            if root_snap and not _hero_insurance_snapshots_equivalent(snap, root_snap):
+                lines.append(f"  #root_summary: {_hero_insurance_compact_frame_summary(root_snap)}")
         logger.info(
             "Hero Insurance diagnostics %s frame[%s] url=%s controls=%s #root=%s",
             phase,
@@ -242,10 +293,16 @@ def _hero_insurance_log_page_diagnostics(
     if len(blob) > 12000:
         blob = blob[:12000] + "\n…(truncated)"
     logger.warning(
-        "Hero Insurance DIAG phase=%s (see full snapshot on next logger line or insurance log file)",
+        "Hero Insurance DIAG phase=%s (see insurance log file%s)",
         phase,
+        " — INSURANCE_DIAG_FULL_CONTROL_SNAPSHOT=1" if full_controls else "",
     )
-    logger.info("Hero Insurance diagnostics %s full snapshot:\n%s", phase, blob)
+    logger.info(
+        "Hero Insurance diagnostics %s %ssnapshot:\n%s",
+        phase,
+        "full " if full_controls else "compact ",
+        blob,
+    )
     append_playwright_insurance_line_or_dealer_fallback(
         ocr_output_dir,
         subfolder,
@@ -1001,7 +1058,7 @@ def _select_option_fuzzy_in_select(page, select_locator, query: str, *, timeout_
         return False
     try:
         sel = select_locator.first
-        if sel.count() == 0 or not sel.first.is_visible(timeout=2_000):
+        if sel.count() == 0:
             return False
         labels: list[str] = []
         try:
@@ -1015,15 +1072,54 @@ def _select_option_fuzzy_in_select(page, select_locator, query: str, *, timeout_
                 t = (sel.locator("option").nth(i).inner_text() or "").strip()
                 if t:
                     labels.append(t)
+        if not labels:
+            return False
         pick = fuzzy_best_option_label(query, labels)
         if not pick:
             return False
-        sel.select_option(label=pick, timeout=timeout_ms)
+        try:
+            visible = sel.is_visible(timeout=1_200)
+        except Exception:
+            visible = False
+        try:
+            if visible:
+                sel.select_option(label=pick, timeout=timeout_ms)
+            else:
+                # ASP.NET / skinned KYC often hides the native <select> while showing a custom face.
+                sel.select_option(label=pick, timeout=timeout_ms, force=True)
+        except Exception:
+            sel.select_option(label=pick, timeout=timeout_ms, force=True)
         logger.info("Hero Insurance: selected option %r (fuzzy from %r)", pick, query[:60])
         return True
     except Exception as exc:
         logger.warning("Hero Insurance: fuzzy select failed: %s", exc)
         return False
+
+
+def _fill_insurance_company_fuzzy_any_visible_select(
+    page, insurer: str, *, timeout_ms: int
+) -> bool:
+    """
+    Try every ``<select>`` on the page whose option list fuzzy-matches the insurer.
+    KYC layouts (e.g. ``ekycpage.aspx``) often break ``select:near(:text(...))``; the Insurance
+    Company control may still be a native ``select`` (possibly hidden).
+    """
+    if not (insurer or "").strip():
+        return False
+    try:
+        selects = page.locator("select")
+        n = min(selects.count(), 40)
+    except Exception:
+        return False
+    for i in range(n):
+        try:
+            loc = selects.nth(i)
+            if _select_option_fuzzy_in_select(page, loc, insurer, timeout_ms=timeout_ms):
+                logger.info("Hero Insurance: insurer set via select index %s (fuzzy scan).", i)
+                return True
+        except Exception:
+            continue
+    return False
 
 
 def _insurer_type_query_variants(insurer: str) -> list[str]:
@@ -1055,8 +1151,9 @@ def _kyc_collect_dropdown_option_texts(page) -> list[str]:
     texts: list[str] = []
     try:
         page.wait_for_selector(
-            "[role='option'], [role='listbox'] [role='option'], li[role='option'], .ui-menu-item",
-            timeout=2_500,
+            "[role='option'], [role='listbox'] [role='option'], li[role='option'], .ui-menu-item, "
+            "ul.dropdown-menu li, div.select2-results__option, .chosen-results li",
+            timeout=2_800,
         )
     except Exception:
         pass
@@ -1066,6 +1163,10 @@ def _kyc_collect_dropdown_option_texts(page) -> list[str]:
         "li[role='option']",
         ".ui-menu-item",
         "ul[role='listbox'] li",
+        "ul.dropdown-menu li",
+        "ul.dropdown-menu a",
+        "div.select2-results__option",
+        ".chosen-results li",
     ):
         try:
             loc = page.locator(sel)
@@ -1089,8 +1190,24 @@ def _click_role_option_matching(page, pick: str, *, timeout_ms: int) -> bool:
     """Click a visible listbox option whose text matches the fuzzy-picked label."""
     if not (pick or "").strip():
         return False
+    try:
+        cand = page.get_by_text(pick, exact=True)
+        n_c = min(cand.count(), 8)
+        for i in range(n_c):
+            try:
+                el = cand.nth(i)
+                if el.is_visible(timeout=1_200):
+                    el.click(timeout=timeout_ms)
+                    return True
+            except Exception:
+                continue
+    except Exception:
+        pass
     want = normalize_for_fuzzy_match(pick)
-    loc = page.locator("[role='option'], li[role='option']")
+    loc = page.locator(
+        "[role='option'], li[role='option'], ul.dropdown-menu li, "
+        "div.select2-results__option, .chosen-results li"
+    )
     n = min(loc.count(), 250)
     for i in range(n):
         try:
@@ -1226,19 +1343,38 @@ def _fill_insurance_company_and_ovd_mobile_consent(
     # --- Insurance Company (dropdown / search; match insurer from details sheet / DB) ---
     if insurer:
         filled = False
+        # Label-associated <select> (ASP.NET table / modal layouts often break ``select:near``).
+        try:
+            loc = page.get_by_label(re.compile(r"Insurance\s*Company\s*\*?", re.I))
+            if loc.count() > 0 and _select_option_fuzzy_in_select(page, loc, insurer, timeout_ms=timeout_ms):
+                filled = True
+        except Exception:
+            pass
         # Native <select> near label text
-        for sel_css in (
-            'select:near(:text("Insurance Company"))',
-            "select[aria-label*='Insurance Company' i]",
-            "select[title*='Insurance Company' i]",
-        ):
+        if not filled:
+            for sel_css in (
+                'select:near(:text("Insurance Company"))',
+                "select[aria-label*='Insurance Company' i]",
+                "select[title*='Insurance Company' i]",
+            ):
+                try:
+                    loc = page.locator(sel_css)
+                    if loc.count() > 0 and _select_option_fuzzy_in_select(
+                        page, loc, insurer, timeout_ms=timeout_ms
+                    ):
+                        filled = True
+                        break
+                except Exception:
+                    continue
+        # Any <select> whose options fuzzy-match (ekycpage hidden/skinny selects).
+        if not filled:
             try:
-                loc = page.locator(sel_css)
-                if loc.count() > 0 and _select_option_fuzzy_in_select(page, loc, insurer, timeout_ms=timeout_ms):
+                if _fill_insurance_company_fuzzy_any_visible_select(
+                    page, insurer, timeout_ms=timeout_ms
+                ):
                     filled = True
-                    break
-            except Exception:
-                continue
+            except Exception as exc:
+                logger.debug("Hero Insurance: insurer fuzzy select scan: %s", exc)
         if not filled:
             # Combobox / typeahead: scoped field + fuzzy match on visible options (not substring of typed prefix only)
             try:

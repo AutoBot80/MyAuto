@@ -371,3 +371,5 @@ The SQL view **`form_dms_view`** is **removed**; the same mapping is implemented
 | 1.73 | Apr 2026 | — | MISP **Policy Issuance** nav expand before **New Policy** — **LLD** **6.137**, **BRD** **3.83** |
 | 1.74 | Apr 2026 | — | KYC **Insurance Company** typeahead: fuzzy match on dropdown options — **LLD** **6.138**, **BRD** **3.84** |
 | 1.75 | Apr 2026 | — | Fill Insurance: CDP tab pick skips DMS; no Sign In on Siebel URL — **LLD** **6.139**, **BRD** **3.85** |
+| 1.76 | Apr 2026 | — | **`Playwright_insurance.txt`** DIAG snapshots compact by default — **LLD** **6.140**, **BRD** **3.86** |
+| 1.77 | Apr 2026 | — | KYC insurer field: **`ekycpage`** / hidden **`<select>`** + list matching — **LLD** **6.141**, **BRD** **3.87** |
