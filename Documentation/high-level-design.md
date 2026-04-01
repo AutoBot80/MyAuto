@@ -363,3 +363,5 @@ The SQL view **`form_dms_view`** is **removed**; the same mapping is implemented
 | 1.65 | Apr 2026 | — | **`_try_click_sign_in_inside_password_form`** (MISP **Get Price** vs **Sign In**) — **LLD** **6.129**, **BRD** **3.75**, **Database DDL** **2.70** |
 | 1.66 | Apr 2026 | — | **`_wait_for_partner_login_password_filled`** + filled-form **Sign In** — **LLD** **6.130**, **BRD** **3.76**, **Database DDL** **2.71** |
 | 1.67 | Apr 2026 | — | Sign In **4×** + URL navigation check — **LLD** **6.131**, **BRD** **3.77**, **Database DDL** **2.72** |
+| 1.68 | Apr 2026 | — | MISP partner **`requestSubmit`** + post-submit UI NDJSON when login URL unchanged — **LLD** **6.132**, **BRD** **3.78**, **Database DDL** **2.73** |
+| 1.69 | Apr 2026 | — | Shared **`handle_browser_opening`**: single-tab reuse on independent Edge/Chrome launch; **`www.`** host match — **LLD** **6.133**, **BRD** **3.79**, **Database DDL** **2.74** |

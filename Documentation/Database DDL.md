@@ -552,3 +552,5 @@ This document lists the current database tables and their columns. **Executable 
 | 2.70 | Apr 2026 | **No schema change.** MISP partner login: Sign In inside password **form** — **LLD** **6.129** / **BRD** **3.75** / **HLD** **1.65**. |
 | 2.71 | Apr 2026 | **No schema change.** MISP Partner Login: **password** non-empty wait + **Sign In** — **LLD** **6.130** / **BRD** **3.76** / **HLD** **1.66**. |
 | 2.72 | Apr 2026 | **No schema change.** Sign In **4** attempts + URL check — **LLD** **6.131** / **BRD** **3.77** / **HLD** **1.67**. |
+| 2.73 | Apr 2026 | **No schema change.** MISP **`requestSubmit`** + post-submit UI debug line — **LLD** **6.132** / **BRD** **3.78** / **HLD** **1.68**. |
+| 2.74 | Apr 2026 | **No schema change.** Insurance/DMS opener: one tab on CLI launch + **`www.`** host normalization — **LLD** **6.133** / **BRD** **3.79** / **HLD** **1.69**. |

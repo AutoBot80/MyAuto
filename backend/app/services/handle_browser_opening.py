@@ -21,6 +21,53 @@ from app.config import DMS_PLAYWRIGHT_HEADED, PLAYWRIGHT_MANAGED_REMOTE_DEBUG_PO
 
 logger = logging.getLogger(__name__)
 
+
+# region agent log
+def _agent_debug_browser_ndjson(
+    hypothesis_id: str, location: str, message: str, data: dict | None = None
+) -> None:
+    """Append one NDJSON line to workspace debug-abb899.log (no secrets)."""
+    try:
+        import json
+        from pathlib import Path
+        log_path = Path(__file__).resolve().parents[3] / "debug-abb899.log"
+        line = (
+            json.dumps(
+                {
+                    "sessionId": "abb899",
+                    "hypothesisId": hypothesis_id,
+                    "location": location,
+                    "message": message,
+                    "data": data or {},
+                    "timestamp": int(time.time() * 1000),
+                },
+                ensure_ascii=True,
+            )
+            + "\n"
+        )
+        with open(log_path, "a", encoding="utf-8") as fp:
+            fp.write(line)
+    except Exception:
+        pass
+
+
+# endregion
+
+
+def _hostname_for_site_match(url_or_base: str) -> str:
+    """Lowercase hostname without leading www., for comparing INSURANCE_BASE_URL to live tabs."""
+    try:
+        raw = (url_or_base or "").strip()
+        if not raw.startswith(("http://", "https://")):
+            raw = "https://" + raw.lstrip("/")
+        p = urllib.parse.urlparse(raw)
+        h = (p.hostname or "").lower()
+        if h.startswith("www."):
+            h = h[4:]
+        return h
+    except Exception:
+        return ""
+
 _PW = None
 _PW_THREAD_ID: int | None = None
 _KEEP_OPEN_BROWSERS: list = []
@@ -174,17 +221,82 @@ def _launch_managed_browser_for_site(base_url: str, *, launch_background: bool =
                 try:
                     browser = pw.chromium.connect_over_cdp(cdp_url)
                     _CDP_BROWSERS_BY_URL[cdp_url] = browser
+                    existing: list = []
                     for ctx in browser.contexts:
                         for page in ctx.pages:
-                            url = (page.url or "").strip()
-                            if url and _playwright_page_url_matches_site_base(url, base_url):
-                                logger.info(
-                                    "handle_browser_opening: connected to %s via CDP at %s "
-                                    "(browser window stays open even on automation errors).",
-                                    channel,
-                                    cdp_url,
+                            existing.append(page)
+                    matched = None
+                    for page in existing:
+                        url = (page.url or "").strip()
+                        if url and _playwright_page_url_matches_site_base(url, base_url):
+                            matched = page
+                            break
+                    if matched is not None:
+                        logger.info(
+                            "handle_browser_opening: connected to %s via CDP at %s "
+                            "(browser window stays open even on automation errors).",
+                            channel,
+                            cdp_url,
+                        )
+                        _agent_debug_browser_ndjson(
+                            "H9",
+                            "handle_browser_opening._launch_managed_browser_for_site",
+                            "independent_launch_matched_existing_tab",
+                            {"existing_count": len(existing), "channel": channel},
+                        )
+                        return matched, channel
+                    # Edge was started with `base_url` on the CLI — often one tab whose URL is still
+                    # blank while CDP attaches. Do not open a second tab (previous behavior).
+                    if len(existing) == 1:
+                        pg0 = existing[0]
+                        try:
+                            pg0.wait_for_load_state("domcontentloaded", timeout=10_000)
+                        except Exception:
+                            pass
+                        logger.info(
+                            "handle_browser_opening: reusing single tab from independent %s launch (avoid duplicate insurance/DMS tab).",
+                            channel,
+                        )
+                        _agent_debug_browser_ndjson(
+                            "H9",
+                            "handle_browser_opening._launch_managed_browser_for_site",
+                            "independent_launch_reuse_single_tab",
+                            {
+                                "url_snip": ((pg0.url or "")[:160]),
+                                "channel": channel,
+                            },
+                        )
+                        return pg0, channel
+                    if len(existing) > 1:
+                        want_host = _hostname_for_site_match(base_url)
+                        for page in existing:
+                            try:
+                                page.wait_for_load_state("domcontentloaded", timeout=3500)
+                            except Exception:
+                                pass
+                            u = (page.url or "").strip()
+                            if u and _playwright_page_url_matches_site_base(u, base_url):
+                                _agent_debug_browser_ndjson(
+                                    "H9",
+                                    "handle_browser_opening._launch_managed_browser_for_site",
+                                    "independent_launch_matched_multi_tab",
+                                    {"existing_count": len(existing)},
                                 )
                                 return page, channel
+                        if want_host:
+                            for page in existing:
+                                try:
+                                    u = (page.url or "").strip()
+                                    if u and _hostname_for_site_match(u) == want_host:
+                                        _agent_debug_browser_ndjson(
+                                            "H10",
+                                            "handle_browser_opening._launch_managed_browser_for_site",
+                                            "independent_launch_reuse_host_match",
+                                            {"existing_count": len(existing)},
+                                        )
+                                        return page, channel
+                                except Exception:
+                                    continue
                     try:
                         if browser.contexts:
                             ctx0 = browser.contexts[0]
@@ -196,6 +308,12 @@ def _launch_managed_browser_for_site(base_url: str, *, launch_background: bool =
                             "handle_browser_opening: opened target URL in independent %s window via CDP at %s",
                             channel,
                             cdp_url,
+                        )
+                        _agent_debug_browser_ndjson(
+                            "H9",
+                            "handle_browser_opening._launch_managed_browser_for_site",
+                            "independent_launch_new_page_fallback",
+                            {"prior_existing_count": len(existing)},
                         )
                         return page, channel
                     except Exception:
@@ -261,7 +379,11 @@ def _playwright_page_url_matches_site_base(page_url: str, site_base_url: str) ->
             bp = urllib.parse.urlparse(f"https:{bu.strip()}")
         if not bp.netloc or not pp.netloc:
             return pu.startswith(bu.rstrip("/")) or bu.rstrip("/") in pu
-        if pp.netloc.lower() != bp.netloc.lower():
+        ph, bh = _hostname_for_site_match(pu), _hostname_for_site_match(bu.strip())
+        if ph and bh:
+            if ph != bh:
+                return False
+        elif pp.netloc.lower() != bp.netloc.lower():
             return False
 
         def norm_path(path: str) -> str:
@@ -502,6 +624,16 @@ def get_or_open_site_page(
     """
     page = find_open_site_page(base_url)
     if page is not None:
+        _agent_debug_browser_ndjson(
+            "H10",
+            "handle_browser_opening.get_or_open_site_page",
+            "reused_existing_tab",
+            {
+                "site_label": site_label,
+                "base_url_snip": (base_url or "")[:160],
+                "require_login_on_open": require_login_on_open,
+            },
+        )
         if not require_login_on_open:
             return page, None
         # Reused tab may still be on login (e.g. after warm-browser with no auto-login) — run same gate as new tab.
@@ -511,6 +643,16 @@ def get_or_open_site_page(
         return _wait_login_or_prompt_after_open(page, site_label)
 
     open_target = (launch_url or base_url or "").strip()
+    _agent_debug_browser_ndjson(
+        "H10",
+        "handle_browser_opening.get_or_open_site_page",
+        "launching_managed_browser",
+        {
+            "site_label": site_label,
+            "open_target_snip": open_target[:180],
+            "require_login_on_open": require_login_on_open,
+        },
+    )
     opened_page, channel = _launch_managed_browser_for_site(open_target, launch_background=launch_background)
     if opened_page is not None:
         if not require_login_on_open:

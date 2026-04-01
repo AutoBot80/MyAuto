@@ -39,6 +39,54 @@ from app.services.utility_functions import fuzzy_best_option_label
 
 logger = logging.getLogger(__name__)
 
+# Native form submit for MISP partner login (in addition to button clicks).
+_REQUEST_SUBMIT_PARTNER_PASSWORD_FORM_JS = """() => {
+    const forms = document.querySelectorAll('form');
+    for (const form of forms) {
+        const pw = form.querySelector(
+            'input[type="password"], input[autocomplete="current-password"]'
+        );
+        if (!pw || !String(pw.value || '').trim()) continue;
+        const btns = form.querySelectorAll('button[type="submit"]');
+        let hasSignIn = false;
+        for (const b of btns) {
+            const t = (b.innerText || '').replace(/\\s+/g, ' ').trim();
+            if (/^sign\\s*in$/i.test(t)) { hasSignIn = true; break; }
+        }
+        if (!hasSignIn) continue;
+        try { form.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
+        if (typeof form.requestSubmit === 'function') {
+            form.requestSubmit();
+            return { ok: true, method: 'requestSubmit' };
+        }
+        return { ok: false, method: 'no_requestSubmit' };
+    }
+    return { ok: false, method: 'no_form' };
+}"""
+
+_PARTNER_LOGIN_POST_SUBMIT_SNAPSHOT_JS = """() => {
+    let btn = '';
+    const forms = document.querySelectorAll('form');
+    for (const form of forms) {
+        const pw = form.querySelector(
+            'input[type="password"], input[autocomplete="current-password"]'
+        );
+        if (!pw || !String(pw.value || '').trim()) continue;
+        for (const b of form.querySelectorAll('button[type="submit"]')) {
+            btn = (b.innerText || '').replace(/\\s+/g, ' ').trim();
+            if (btn) break;
+        }
+        if (btn) break;
+    }
+    const hints = [];
+    const sel = '[role="alert"], .text-danger, .error-message, [class*="invalid"], [class*="error"]';
+    document.querySelectorAll(sel).forEach((el) => {
+        const t = (el.innerText || '').trim().replace(/\\s+/g, ' ');
+        if (t && t.length > 2 && t.length < 320) hints.push(t);
+    });
+    return { btn: btn.slice(0, 120), hints: hints.slice(0, 5) };
+}"""
+
 
 def _t(page, ms: int) -> None:
     try:
@@ -279,6 +327,58 @@ def _wait_for_partner_login_password_filled(page, *, timeout_ms: int) -> bool:
         timeout_ms,
     )
     return False
+
+
+def _try_request_submit_partner_password_form(ctx) -> bool:
+    """
+    Fire ``form.requestSubmit()`` on the partner login form (non-empty password + **Sign In** submit).
+    React/controlled forms often bind the submit handler on the form; this path can behave more like a manual submit than a raw ``.click()`` on the button.
+    """
+    try:
+        r = ctx.evaluate(_REQUEST_SUBMIT_PARTNER_PASSWORD_FORM_JS)
+        if isinstance(r, dict) and r.get("ok"):
+            logger.info(
+                "Hero Insurance: Partner login form native submit (%s).",
+                r.get("method"),
+            )
+            # region agent log
+            try:
+                agent_debug_ndjson_log(
+                    "H7",
+                    "fill_hero_insurance_service._try_request_submit_partner_password_form",
+                    "request_submit_invoked",
+                    {"method": str(r.get("method")), "ctx": type(ctx).__name__},
+                )
+            except Exception:
+                pass
+            # endregion
+            return True
+        if isinstance(r, dict) and r.get("method") == "no_requestSubmit":
+            logger.debug(
+                "Hero Insurance: partner login form has Sign In but no requestSubmit (browser path)."
+            )
+    except Exception as exc:
+        logger.debug("Hero Insurance: requestSubmit evaluate: %s", exc)
+    return False
+
+
+def _snapshot_partner_login_frames(page) -> dict:
+    """Submit button label + alert-like lines (main + child frames); no PII."""
+    samples: list[dict] = []
+    for ctx in _iter_page_and_child_frames(page):
+        try:
+            s = ctx.evaluate(_PARTNER_LOGIN_POST_SUBMIT_SNAPSHOT_JS)
+            if isinstance(s, dict) and (s.get("btn") or s.get("hints")):
+                samples.append(
+                    {
+                        "ctx": type(ctx).__name__,
+                        "btn": s.get("btn"),
+                        "hints": s.get("hints"),
+                    }
+                )
+        except Exception:
+            continue
+    return {"frames": samples}
 
 
 def _try_dom_click_sign_in_submit(page) -> bool:
@@ -542,7 +642,10 @@ def _click_sign_in_on_context(ctx, *, timeout_ms: int) -> bool:
 
 
 def _attempt_sign_in_click_once(page, *, timeout_ms: int) -> bool:
-    """One pass: all frame contexts + DOM fallback."""
+    """One pass: native form submit per frame, then scoped clicks, then main-document DOM click."""
+    for ctx in _iter_page_and_child_frames(page):
+        if _try_request_submit_partner_password_form(ctx):
+            return True
     for ctx in _iter_page_and_child_frames(page):
         if _click_sign_in_on_context(ctx, timeout_ms=timeout_ms):
             return True
@@ -637,6 +740,37 @@ def _click_sign_in_if_visible(page, *, timeout_ms: int) -> bool:
                     max_attempts,
                 )
                 return True
+            try:
+                page.wait_for_timeout(2200)
+            except Exception:
+                time.sleep(2.2)
+            try:
+                post_ui = _snapshot_partner_login_frames(page)
+                # region agent log
+                try:
+                    agent_debug_ndjson_log(
+                        "H8",
+                        "fill_hero_insurance_service._click_sign_in_if_visible",
+                        "partner_login_ui_after_submit_wait",
+                        {
+                            "attempt": attempt,
+                            "still_on_misp_partner_login": True,
+                            "post_submit_ui": post_ui,
+                        },
+                    )
+                except Exception:
+                    pass
+                # endregion
+                hints = []
+                for fr in (post_ui.get("frames") or []) if isinstance(post_ui, dict) else []:
+                    hints.extend(fr.get("hints") or [])
+                if hints:
+                    logger.warning(
+                        "Hero Insurance: still on misp-partner-login after Sign In — UI hints: %s",
+                        "; ".join(hints[:3]),
+                    )
+            except Exception:
+                pass
             logger.warning(
                 "Hero Insurance: Sign In reported a click but still on misp-partner-login "
                 "(attempt %s/%s) — retrying after %s ms.",
@@ -1853,11 +1987,35 @@ def main_process(
                     "NOTE",
                     "main_process: attached to same browser tab as pre_process",
                 )
+                # region agent log
+                try:
+                    agent_debug_ndjson_log(
+                        "H11",
+                        "fill_hero_insurance_service.main_process",
+                        "reused_pre_process_page",
+                        {
+                            "url_snip": ((page.url or "")[:160]) if page is not None else "",
+                        },
+                    )
+                except Exception:
+                    pass
+                # endregion
         except Exception as exc:
             logger.warning("Hero Insurance main_process: could not reuse pre_process page: %s", exc)
             page = None
 
     if page is None:
+        # region agent log
+        try:
+            agent_debug_ndjson_log(
+                "H11",
+                "fill_hero_insurance_service.main_process",
+                "fallback_get_or_open_site_page",
+                {"had_pre_page_key": pre_result.get("_insurance_playwright_page") is not None},
+            )
+        except Exception:
+            pass
+        # endregion
         page, open_err = get_or_open_site_page(
             match_base,
             "Insurance",
