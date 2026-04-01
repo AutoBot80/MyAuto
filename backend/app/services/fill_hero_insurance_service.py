@@ -7,6 +7,7 @@ Browser reuse uses ``handle_browser_opening.get_or_open_site_page`` with ``match
 """
 import logging
 import re
+import time
 import urllib.parse
 from datetime import date
 from pathlib import Path
@@ -241,59 +242,94 @@ def _iter_page_and_child_frames(page):
         pass
 
 
-def _misp_expand_login_as_panel(page) -> bool:
+def _wait_for_partner_login_password_filled(page, *, timeout_ms: int) -> bool:
     """
-    MISP partner (Radix): **Login as** reveals the password field and primary **Sign In** control.
-    Until this opens, ``form:has(password)`` may be empty and **Sign In** may not receive clicks.
+    Wait until a visible ``input[type="password"]`` has a **non-empty** value (autofill / operator).
+
+    The **Partner Login** panel on ``/misp-partner-login`` is separate from the header **Login as** control;
+    do not click **Sign In** until credentials are present.
     """
-    try:
-        btn = page.get_by_role("button", name=re.compile(r"^\s*Login\s+as\s*$", re.I))
-        if btn.count() > 0:
-            try:
-                if btn.first.is_visible(timeout=2_500):
-                    btn.first.scroll_into_view_if_needed(timeout=4_000)
-                    btn.first.click(timeout=10_000)
-                    page.wait_for_timeout(900)
-                    logger.info("Hero Insurance: clicked 'Login as' to expand partner login panel.")
-                    return True
-            except Exception:
+    deadline = time.monotonic() + max(1.0, timeout_ms / 1000.0)
+    while time.monotonic() < deadline:
+        try:
+            loc = page.locator('input[type="password"]')
+            n = min(loc.count(), 8)
+            for i in range(n):
+                pw = loc.nth(i)
                 try:
-                    btn.first.click(timeout=10_000, force=True)
-                    page.wait_for_timeout(900)
-                    logger.info("Hero Insurance: clicked 'Login as' (force) to expand partner login panel.")
-                    return True
+                    if not pw.is_visible(timeout=800):
+                        continue
+                    val = (pw.input_value() or "").strip()
+                    if len(val) > 0:
+                        logger.info(
+                            "Hero Insurance: password field ready (value length=%s) — proceeding to Sign In.",
+                            len(val),
+                        )
+                        return True
                 except Exception:
-                    pass
-    except Exception as exc:
-        logger.debug("Hero Insurance: Login as expand: %s", exc)
+                    continue
+        except Exception:
+            pass
+        try:
+            page.wait_for_timeout(250)
+        except Exception:
+            time.sleep(0.25)
+    logger.warning(
+        "Hero Insurance: no non-empty password field within %s ms — not clicking Sign In.",
+        timeout_ms,
+    )
     return False
 
 
 def _try_dom_click_sign_in_submit(page) -> bool:
-    """Click the **Sign In** (or exact **Login**) ``button[type=submit]`` via DOM (bypasses some overlay issues)."""
+    """Click **Sign In** only inside a ``<form>`` that already has a **non-empty** password value."""
     try:
         ok = page.evaluate(
             """() => {
-            const btns = Array.from(document.querySelectorAll('button[type="submit"]'));
-            for (const b of btns) {
-                const t = (b.innerText || '').replace(/\\s+/g, ' ').trim();
-                if (/^sign\\s*in$/i.test(t)) {
-                    try { b.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
-                    b.click();
-                    return { ok: true, text: t };
+            function clickSignInInForm(form) {
+                const pw = form.querySelector('input[type="password"]');
+                if (!pw || !String(pw.value || '').trim()) return false;
+                const btns = form.querySelectorAll('button[type="submit"]');
+                for (const b of btns) {
+                    const t = (b.innerText || '').replace(/\\s+/g, ' ').trim();
+                    if (/^sign\\s*in$/i.test(t)) {
+                        try { b.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
+                        b.click();
+                        return { ok: true, text: t, via: 'form' };
+                    }
                 }
-                if (/^login$/i.test(t)) {
-                    try { b.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
-                    b.click();
-                    return { ok: true, text: t };
+                return false;
+            }
+            const forms = document.querySelectorAll('form');
+            for (const form of forms) {
+                const r = clickSignInInForm(form);
+                if (r) return r;
+            }
+            const pws = document.querySelectorAll('input[type="password"]');
+            for (const pw of pws) {
+                if (!String(pw.value || '').trim()) continue;
+                let el = pw;
+                for (let d = 0; d < 12 && el; d++) {
+                    el = el.parentElement;
+                    if (!el) break;
+                    const btn = el.querySelector('button[type="submit"]');
+                    if (btn) {
+                        const t = (btn.innerText || '').replace(/\\s+/g, ' ').trim();
+                        if (/^sign\\s*in$/i.test(t)) {
+                            try { btn.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
+                            btn.click();
+                            return { ok: true, text: t, via: 'ancestor' };
+                        }
+                    }
                 }
             }
-            return { ok: false, text: '' };
+            return { ok: false, text: '', via: '' };
         }"""
         )
         if isinstance(ok, dict) and ok.get("ok"):
             logger.info(
-                "Hero Insurance: Sign In submit clicked via DOM evaluate (text=%r).",
+                "Hero Insurance: Sign In via DOM (%s, text=%r).",
+                ok.get("via"),
                 ok.get("text"),
             )
             return True
@@ -311,56 +347,68 @@ def _try_click_sign_in_inside_password_form(scope, *, timeout_ms: int, scope_lab
     hit the wrong control or rely on order; scoping to the login form matches runtime DIAG snapshots.
     """
     try:
-        login_form = scope.locator(
+        login_forms = scope.locator(
             'form:has(input[type="password"]), '
             'form:has(input[autocomplete="current-password"]), '
             'form:has(input[name*="password" i])'
         )
-        if login_form.count() == 0:
+        if login_forms.count() == 0:
             return False
         patterns = (
             (re.compile(r"^\s*Sign\s*In\s*$", re.I), "Sign In"),
             (re.compile(r"^\s*Login\s*$", re.I), "Login"),
             (re.compile(r"^\s*Log\s+in\s*$", re.I), "Log in"),
         )
-        for pat, dbg in patterns:
-            for sel in ('button[type="submit"]', 'input[type="submit"]'):
-                try:
-                    loc = login_form.locator(sel).filter(has_text=pat)
-                    if loc.count() <= 0:
-                        continue
-                    b = loc.first
-                    if not b.is_visible(timeout=2_500):
-                        continue
-                    b.scroll_into_view_if_needed(timeout=4_000)
+        for fi in range(min(login_forms.count(), 12)):
+            frm = login_forms.nth(fi)
+            try:
+                pwin = frm.locator('input[type="password"]').first
+                if pwin.count() == 0:
+                    continue
+                if not (pwin.input_value() or "").strip():
+                    continue
+            except Exception:
+                continue
+            for pat, dbg in patterns:
+                for sel in ('button[type="submit"]', 'input[type="submit"]'):
                     try:
-                        b.click(timeout=timeout_ms)
+                        loc = frm.locator(sel).filter(has_text=pat)
+                        if loc.count() <= 0:
+                            continue
+                        b = loc.first
+                        if not b.is_visible(timeout=2_500):
+                            continue
+                        b.scroll_into_view_if_needed(timeout=4_000)
+                        try:
+                            b.click(timeout=timeout_ms)
+                        except Exception:
+                            b.click(timeout=timeout_ms, force=True)
+                        logger.info(
+                            "Hero Insurance: clicked %s (%s in password form[%s]) scope=%s.",
+                            dbg,
+                            sel,
+                            fi,
+                            scope_label,
+                        )
+                        return True
                     except Exception:
-                        b.click(timeout=timeout_ms, force=True)
+                        continue
+            try:
+                rb = frm.get_by_role(
+                    "button",
+                    name=re.compile(r"^\s*(Sign\s*In|Login|Log\s*in)\s*$", re.I),
+                )
+                if rb.count() > 0 and rb.first.is_visible(timeout=2_000):
+                    rb.first.scroll_into_view_if_needed(timeout=4_000)
+                    rb.first.click(timeout=timeout_ms)
                     logger.info(
-                        "Hero Insurance: clicked %s (%s in password form) scope=%s.",
-                        dbg,
-                        sel,
+                        "Hero Insurance: clicked login role=button in password form[%s] scope=%s.",
+                        fi,
                         scope_label,
                     )
                     return True
-                except Exception:
-                    continue
-        try:
-            rb = login_form.get_by_role(
-                "button",
-                name=re.compile(r"^\s*(Sign\s*In|Login|Log\s*in)\s*$", re.I),
-            )
-            if rb.count() > 0 and rb.first.is_visible(timeout=2_000):
-                rb.first.scroll_into_view_if_needed(timeout=4_000)
-                rb.first.click(timeout=timeout_ms)
-                logger.info(
-                    "Hero Insurance: clicked login role=button in password form scope=%s.",
-                    scope_label,
-                )
-                return True
-        except Exception:
-            pass
+            except Exception:
+                continue
     except Exception as exc:
         logger.debug("Hero Insurance: password-form Sign In: %s", exc)
     return False
@@ -500,18 +548,21 @@ def _click_sign_in_if_visible(page, *, timeout_ms: int) -> bool:
     Tries the **main document** and each **child frame** (login may render inside an iframe).
     Returns True if a click was attempted.
     """
-    expanded = _misp_expand_login_as_panel(page)
+    wait_ms = max(int(INSURANCE_LOGIN_WAIT_MS), int(timeout_ms))
+    pwd_ready = _wait_for_partner_login_password_filled(page, timeout_ms=wait_ms)
     # region agent log
     try:
         agent_debug_ndjson_log(
             "H6",
             "fill_hero_insurance_service._click_sign_in_if_visible",
-            "after_login_as_expand",
-            {"expanded": expanded},
+            "after_password_wait",
+            {"pwd_ready": pwd_ready, "wait_ms": wait_ms},
         )
     except Exception:
         pass
     # endregion
+    if not pwd_ready:
+        return False
     for ctx in _iter_page_and_child_frames(page):
         if _click_sign_in_on_context(ctx, timeout_ms=timeout_ms):
             # region agent log

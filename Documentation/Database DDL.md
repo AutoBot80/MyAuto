@@ -550,4 +550,4 @@ This document lists the current database tables and their columns. **Executable 
 | 2.68 | Apr 2026 | **No schema change.** Hero Insurance **`main_process`** reuses **`pre_process`** browser tab — **LLD** **6.127** / **BRD** **3.73** / **HLD** **1.63**. |
 | 2.69 | Apr 2026 | **No schema change.** **`POST /fill-dms/insurance`** Sign In + DIAG before KYC wait — **LLD** **6.128** / **BRD** **3.74** / **HLD** **1.64**. |
 | 2.70 | Apr 2026 | **No schema change.** MISP partner login: Sign In inside password **form** — **LLD** **6.129** / **BRD** **3.75** / **HLD** **1.65**. |
-| 2.71 | Apr 2026 | **No schema change.** MISP **Login as** + DOM **Sign In** fallback — **LLD** **6.130** / **BRD** **3.76** / **HLD** **1.66**. |
+| 2.71 | Apr 2026 | **No schema change.** MISP Partner Login: **password** non-empty wait + **Sign In** — **LLD** **6.130** / **BRD** **3.76** / **HLD** **1.66**. |
