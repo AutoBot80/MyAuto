@@ -1,5 +1,6 @@
 import { apiFetch } from "./client";
 import type { ExtractedCustomerDetails, ExtractedVehicleDetails, ExtractedInsuranceDetails } from "../types";
+import { financierForStagingPayload } from "../utils/financierStagingRules";
 
 export interface SubmitInfoPayload {
   customer: {
@@ -54,7 +55,8 @@ function mapCustomer(
   c: ExtractedCustomerDetails | null,
   mobile: string,
   insurance?: ExtractedInsuranceDetails | null,
-  fileLocation?: string | null
+  fileLocation?: string | null,
+  oemId?: number | null
 ): SubmitInfoPayload["customer"] {
   return {
     aadhar_id: c?.aadhar_id,
@@ -68,7 +70,7 @@ function mapCustomer(
     mobile_number: mobile,
     alt_phone_num: c?.alt_phone_num,
     profession: insurance?.profession,
-    financier: insurance?.financier,
+    financier: financierForStagingPayload(oemId, insurance?.financier),
     marital_status: insurance?.marital_status,
     care_of: c?.care_of,
     dms_relation_prefix: c?.dms_relation_prefix,
@@ -108,11 +110,13 @@ export async function submitInfo(
     mobile: string;
     fileLocation: string | null;
     dealerId: number | null;
+    /** From GET /dealers/:id — used for Hero/Bajaj→Hinduja staging rule. */
+    oemId?: number | null;
     stagingId?: string | null;
   }
 ): Promise<SubmitInfoResponse> {
   const payload: SubmitInfoPayload = {
-    customer: mapCustomer(opts.customer, opts.mobile, opts.insurance, opts.fileLocation),
+    customer: mapCustomer(opts.customer, opts.mobile, opts.insurance, opts.fileLocation, opts.oemId),
     vehicle: mapVehicle(opts.vehicle),
     insurance: mapInsurance(opts.insurance),
     dealer_id: opts.dealerId,

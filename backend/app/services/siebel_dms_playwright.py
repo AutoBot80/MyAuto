@@ -1,19 +1,10 @@
 """
 Hero Connect / Oracle Siebel Open UI — Playwright helpers for real DMS automation.
 
-**Linear SOP** in ``Playwright_Hero_DMS_fill`` (BRD §6.1a aligned) when ``SIEBEL_DMS_STOP_AFTER_ALL_ENQUIRIES``
-is False. When True, only the operator **Find Contact Enquiry** path runs (Find → Contact → mobile → Go →
-drill hit → Contacts → Contact_Enquiry → Enquiry → All Enquiries), then returns with the browser left open.
-
-Default staged flow (flag False): **Find → mobile → Go**; optional
-**basic enquiry** (name/address/state/PIN) + Save + **mandatory re-find** when created; **always**
-care-of + Save; **Auto Vehicle List** (``prepare_vehicle``: Find→Vehicles, list scrape, mandatory left-pane VIN,
-key/battery, merge + inventory, Serial drilldown → Features → Pre-check/PDI at dealer; In Transit → receipt
-URL only, no Pre-check/PDI);
-**Generate Booking**
-**after vehicle for all paths**; allotment (line items) when **not** In Transit;
-``_attach_vehicle_to_bkg`` runs **Apply Campaign** at the end (**Create Invoice** is operator-only while
-``_ATTACH_VEHICLE_AUTO_CLICK_CREATE_INVOICE`` is False).
+``Playwright_Hero_DMS_fill`` runs the operator **Find Contact Enquiry** path: ``prepare_vehicle`` before
+Contact Find, then Find → Contact → mobile + Go, enquiry sweep / Add Enquiry, Relation's Name, Payments,
+optional hard-stop before booking, then **Generate Booking** and ``_create_order`` when enabled. Browser
+stays open for the operator.
 
 Siebel renders in nested iframes. The **Find** pane and grids use labels like **Mobile Phone**,
 **Mobile Phone #**, or **Mobile Number** — often via ``<label>`` / ``aria-labelledby``, not
@@ -36,13 +27,14 @@ import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from playwright.sync_api import Frame, Page, TimeoutError as PlaywrightTimeout
 
 from app.config import (
+    DEALER_ID,
     DMS_SIEBEL_AUTO_IFRAME_SELECTORS,
     DMS_SIEBEL_INTER_ACTION_DELAY_MS,
     DMS_SIEBEL_POST_GOTO_WAIT_MS,
@@ -158,6 +150,11 @@ def _siebel_ist_now() -> datetime:
     return datetime.now(_SIEBEL_TZ)
 
 
+def _ts_ist_iso() -> str:
+    """ISO-8601 timestamps with +05:30 for Playwright_DMS and in-flow debug JSON (IST)."""
+    return _siebel_ist_now().isoformat(timespec="milliseconds")
+
+
 def _siebel_ist_today() -> date:
     """Calendar *today* in Asia/Kolkata (IST)."""
     return _siebel_ist_now().date()
@@ -168,18 +165,6 @@ def _siebel_naive_datetime_as_ist(dt: datetime) -> datetime:
     if dt.tzinfo is not None:
         return dt.astimezone(_SIEBEL_TZ)
     return dt.replace(tzinfo=_SIEBEL_TZ)
-
-
-# Operator video: ``Find Contact Enquiry.mp4`` — Find → Contact → mobile → Go; if **no contact table
-# rows**, **Add Enquiry** (vehicle chassis/VIN + engine, Enquiry tab, **Opportunity Form:New**, DB fields,
-# Ctrl+S) then stop; else drill → Contacts → relation fill → Payments ``+``. Set False to restore the full
-# BRD linear SOP inside ``Playwright_Hero_DMS_fill``.
-SIEBEL_DMS_STOP_AFTER_ALL_ENQUIRIES = True
-
-# TEMPORARY (video SOP): hard-stop before Generate Booking / ``_create_order``.
-# Do **not** remove this flag or set it False unless the product owner **explicitly** asks — not during
-# logging cleanups, refactors, or inferred "cleanup" requests.
-SIEBEL_DMS_HARD_FAIL_BEFORE_BOOKING_AND_ORDER = True
 
 
 # region agent log
@@ -193,7 +178,7 @@ def _agent_debug_log(hypothesis_id: str, location: str, message: str, data: dict
             "location": location,
             "message": message,
             "data": data,
-            "timestamp": int(time.time() * 1000),
+            "timestamp": _ts_ist_iso(),
         }
         log_path = Path(__file__).resolve().parents[3] / "debug-0875fe.log"
         with log_path.open("a", encoding="utf-8") as f:
@@ -669,7 +654,7 @@ def _try_fill_mobile_and_find_in_contact_applet(
                             "location": "siebel_dms_playwright.py:_try_fill_mobile_and_find_in_contact_applet",
                             "message": message,
                             "data": data,
-                            "timestamp": int(_t_dbg.time() * 1000),
+                            "timestamp": _ts_ist_iso(),
                         }
                     )
                     + "\n"
@@ -1633,7 +1618,7 @@ def _try_fill_vin_engine_in_vehicles_find_applet(
                             "location": "siebel_dms_playwright.py:_try_fill_vin_engine_in_vehicles_find_applet",
                             "message": message,
                             "data": data,
-                            "timestamp": int(_t_dbgv.time() * 1000),
+                            "timestamp": _ts_ist_iso(),
                         }
                     )
                     + "\n"
@@ -2909,220 +2894,6 @@ def _contact_view_find_by_mobile_strategy_two(
         wait_after_go_ms=wait_after_go_ms,
     )
 
-
-def _refind_customer_after_enquiry(
-    page: Page,
-    *,
-    contact_url: str,
-    mobile: str,
-    nav_timeout_ms: int,
-    action_timeout_ms: int,
-    content_frame_selector: str | None,
-    mobile_aria_hints: list[str],
-    note,
-    step,
-    first_name: str | None = None,
-) -> bool:
-    """SOP: after saving a **basic** enquiry, Find → mobile (+ first name when provided) → Go before care-of."""
-    note("Stage 3 (mandatory re-find): searching again after enquiry save (mobile + first name when set).")
-    step("Re-finding customer after enquiry creation (mandatory SOP).")
-    return _contact_view_find_by_mobile_strategy_two(
-        page,
-        contact_url=contact_url,
-        mobile=mobile,
-        first_name=first_name,
-        nav_timeout_ms=nav_timeout_ms,
-        action_timeout_ms=action_timeout_ms,
-        content_frame_selector=content_frame_selector,
-        mobile_aria_hints=mobile_aria_hints,
-        note=note,
-        step=step,
-        stage_msg_mobile_only="Contact view: re-find by mobile only first (post-enquiry, strategy 2).",
-        stage_msg_mobile_and_first="Contact view: re-find by mobile + first name (post-enquiry).",
-        wait_after_go_ms=2000,
-    )
-
-
-def _fill_basic_enquiry_details(
-    page: Page,
-    *,
-    first: str,
-    last: str,
-    addr: str,
-    state: str,
-    pin: str,
-    action_timeout_ms: int,
-    content_frame_selector: str | None,
-) -> None:
-    """
-    New enquiry / customer applet: **name, address, state, PIN only** — no care-of
-    (father/relation) and no landline (strict SOP separation from stage 4).
-    """
-    _siebel_blur_and_settle(page, ms=350)
-    dup = True
-    _try_fill_field(
-        page,
-        [
-            'input[aria-label*="First Name" i]',
-            'input[title*="First Name" i]',
-            'input[name*="FirstName" i]',
-        ],
-        first,
-        timeout_ms=action_timeout_ms,
-        content_frame_selector=content_frame_selector,
-        prefer_second_if_duplicate=dup,
-    )
-    _try_fill_field(
-        page,
-        [
-            'input[aria-label*="Last Name" i]',
-            'input[title*="Last Name" i]',
-            'input[name*="LastName" i]',
-        ],
-        last,
-        timeout_ms=action_timeout_ms,
-        content_frame_selector=content_frame_selector,
-        prefer_second_if_duplicate=dup,
-    )
-    _try_fill_field(
-        page,
-        [
-            'input[aria-label*="Address" i]',
-            'textarea[aria-label*="Address" i]',
-            'input[aria-label*="Street" i]',
-        ],
-        addr[:120],
-        timeout_ms=action_timeout_ms,
-        content_frame_selector=content_frame_selector,
-        prefer_second_if_duplicate=dup,
-    )
-    _try_select_option(
-        page,
-        [
-            'select[aria-label*="State" i]',
-            'select[title*="State" i]',
-            'select[name*="State" i]',
-        ],
-        state,
-        timeout_ms=action_timeout_ms,
-        content_frame_selector=content_frame_selector,
-        prefer_second_if_duplicate=dup,
-    )
-    _try_fill_field(
-        page,
-        [
-            'input[aria-label*="Postal" i]',
-            'input[aria-label*="ZIP" i]',
-            'input[aria-label*="Pin" i]',
-            'input[aria-label*="PIN Code" i]',
-        ],
-        pin,
-        timeout_ms=action_timeout_ms,
-        content_frame_selector=content_frame_selector,
-        prefer_second_if_duplicate=dup,
-    )
-
-
-def _fill_siebel_enquiry_customer_applet(
-    page: Page,
-    *,
-    first: str,
-    last: str,
-    addr: str,
-    state: str,
-    pin: str,
-    landline: str,
-    father: str,
-    relation: str,
-    action_timeout_ms: int,
-    content_frame_selector: str | None,
-) -> None:
-    """
-    Backward-compatible **single call**: basic details + care-of.
-
-    Prefer the staged flow in ``Playwright_Hero_DMS_fill`` (basic save → re-find → care-of).
-    ``landline`` is applied here only for legacy callers (not part of strict staged SOP basic step).
-    """
-    _fill_basic_enquiry_details(
-        page,
-        first=first,
-        last=last,
-        addr=addr,
-        state=state,
-        pin=pin,
-        action_timeout_ms=action_timeout_ms,
-        content_frame_selector=content_frame_selector,
-    )
-    if landline:
-        dup = True
-        _try_fill_field(
-            page,
-            [
-                'input[aria-label*="Work Phone" i]',
-                'input[aria-label*="Alternate" i]',
-                'input[aria-label*="Landline" i]',
-            ],
-            landline,
-            timeout_ms=action_timeout_ms,
-            content_frame_selector=content_frame_selector,
-            prefer_second_if_duplicate=dup,
-        )
-    _fill_siebel_care_of_only(
-        page,
-        father=father,
-        relation=relation,
-        action_timeout_ms=action_timeout_ms,
-        content_frame_selector=content_frame_selector,
-    )
-
-
-def _fill_siebel_care_of_only(
-    page: Page,
-    *,
-    father: str,
-    relation: str,
-    action_timeout_ms: int,
-    content_frame_selector: str | None,
-) -> None:
-    """§6.1a: existing contact — only relation prefix + father/husband from DB (no name/address overwrite)."""
-    _siebel_blur_and_settle(page, ms=350)
-    dup = True
-    if father:
-        _try_fill_field(
-            page,
-            [
-                "input[title*=\"Relation's Name\" i]",
-                "input[aria-label*=\"Relation's Name\" i]",
-                'input[aria-label*="Father" i]',
-                'input[aria-label*="Husband" i]',
-                'input[aria-label*="Parent" i]',
-            ],
-            father[:255],
-            timeout_ms=action_timeout_ms,
-            content_frame_selector=content_frame_selector,
-            prefer_second_if_duplicate=dup,
-        )
-    if relation:
-        _try_select_option(
-            page,
-            [
-                'select[title*="S/O" i]',
-                'select[aria-label*="S/O" i]',
-                'select[title*="W/O" i]',
-                'select[aria-label*="W/O" i]',
-                'select[title*="D/O" i]',
-                'select[aria-label*="D/O" i]',
-                'select[title*="(W/O)" i]',
-                'select[aria-label*="(W/O)" i]',
-                'select[aria-label*="Relation" i]',
-                'select[aria-label*="S/O" i]',
-            ],
-            relation,
-            timeout_ms=action_timeout_ms,
-            content_frame_selector=content_frame_selector,
-            prefer_second_if_duplicate=dup,
-        )
-
 def _derive_relation_and_name(
     *,
     relation_prefix: str,
@@ -3878,7 +3649,7 @@ def _siebel_ui_suggests_contact_match_mobile_first(page: Page, mobile: str, firs
                             "location": "siebel_dms_playwright.py:_siebel_ui_suggests_contact_match_mobile_first",
                             "message": message,
                             "data": data,
-                            "timestamp": int(_t_mf.time() * 1000),
+                            "timestamp": _ts_ist_iso(),
                         }
                     )
                     + "\n"
@@ -5264,7 +5035,7 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
         import json as _j_rn, time as _t_rn
         try:
             with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-                _lf.write(_j_rn.dumps({"sessionId":"08e634","hypothesisId":"RN1","location":"siebel_dms_playwright.py:relation_name_scan","message":"Relation Name scan attempt","data":{"attempt": _outer},"timestamp":int(_t_rn.time()*1000)}) + "\n")
+                _lf.write(_j_rn.dumps({"sessionId":"08e634","hypothesisId":"RN1","location":"siebel_dms_playwright.py:relation_name_scan","message":"Relation Name scan attempt","data":{"attempt": _outer},"timestamp":_ts_ist_iso()}) + "\n")
         except Exception:
             pass
         # #endregion
@@ -7644,7 +7415,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                                 "location": loc,
                                 "message": msg,
                                 "data": data,
-                                "timestamp": int(time.time() * 1000),
+                                "timestamp": _ts_ist_iso(),
                             },
                             ensure_ascii=False,
                         )
@@ -7924,7 +7695,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                             "frames_n": len(page.frames),
                             "feature_scrape_ran": bool(do_feature_id_scrape and scraped is not None),
                         },
-                        "timestamp": int(time.time() * 1000),
+                        "timestamp": _ts_ist_iso(),
                     },
                     ensure_ascii=False,
                 )
@@ -7996,7 +7767,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                                 "location": "siebel_dms_playwright.py:_third_level_bar_inventory",
                                 "message": "inventory_frame_error",
                                 "data": {"frame_index": _fi, "err": str(_e_one)[:200]},
-                                "timestamp": int(time.time() * 1000),
+                                "timestamp": _ts_ist_iso(),
                             },
                             ensure_ascii=False,
                         )
@@ -8042,7 +7813,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                             "inventory": _best_inv,
                             "note": "Tabs: prefer #s_vctrl_div; see LLD 6.56.",
                         },
-                        "timestamp": int(time.time() * 1000),
+                        "timestamp": _ts_ist_iso(),
                     },
                     ensure_ascii=False,
                 )
@@ -8155,7 +7926,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                             "existing_rows": _precheck_existing_rows,
                             "signal": _precheck_existing_signal,
                         },
-                        "timestamp": int(time.time() * 1000),
+                        "timestamp": _ts_ist_iso(),
                     },
                     ensure_ascii=False,
                 )
@@ -8213,7 +7984,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                                 "used_id": _used,
                                 "tried_ids": ["s_3_2_25_0_icon", "s_3_1_12_0_Ctrl"],
                             },
-                            "timestamp": int(time.time() * 1000),
+                            "timestamp": _ts_ist_iso(),
                         },
                         ensure_ascii=False,
                     )
@@ -8352,7 +8123,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                                 "ok_clicked": _ok_done_local,
                                 "had_search_or_enter_fallback": _pick_ok,
                             },
-                            "timestamp": int(time.time() * 1000),
+                            "timestamp": _ts_ist_iso(),
                         },
                         ensure_ascii=False,
                     )
@@ -8389,7 +8160,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                             "used_id": _precheck_icon_used,
                             "tried_ids": ["s_3_2_25_0_icon", "s_3_1_12_0_Ctrl"],
                         },
-                        "timestamp": int(time.time() * 1000),
+                        "timestamp": _ts_ist_iso(),
                     },
                     ensure_ascii=False,
                 )
@@ -8437,7 +8208,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                                 "location": "siebel_dms_playwright.py:_siebel_run_vehicle_serial_detail_precheck_pdi",
                                 "message": "precheck_tab_to_technician_cell",
                                 "data": {"tab_pressed": True},
-                                "timestamp": int(time.time() * 1000),
+                                "timestamp": _ts_ist_iso(),
                             },
                             ensure_ascii=False,
                         )
@@ -8786,7 +8557,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                             "today": _today.isoformat(),
                             "need_new_row": _pdi_need_new_row,
                         },
-                        "timestamp": int(time.time() * 1000),
+                        "timestamp": _ts_ist_iso(),
                     },
                     ensure_ascii=False,
                 )
@@ -9005,7 +8776,382 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
 
 # Siebel **Create Invoice** after order attach: off by default — enable only when product wants automation
 # to submit the invoice (operator may complete this step manually).
-_ATTACH_VEHICLE_AUTO_CLICK_CREATE_INVOICE = False
+_ATTACH_VEHICLE_AUTO_CLICK_CREATE_INVOICE = True
+
+
+def _scrape_total_ex_showroom_after_price_allocate(
+    page: Page,
+    *,
+    content_frame_selector: str | None,
+) -> str:
+    """
+    Best-effort **Total (Ex-showroom)** from order line items after **Price All** + **Allocate All**.
+    Same field family as the legacy ``_create_order`` line-item path.
+    """
+    js = """() => {
+      const q = [
+        "input[aria-label*='Total (Ex-showroom)' i]",
+        "input[title*='Total (Ex-showroom)' i]",
+        "input[aria-label*='Ex-showroom' i]",
+        "input[title*='Ex-showroom' i]",
+        "input[aria-label*='Ex Showroom' i]",
+        "input[id*='Ex_Showroom' i]",
+        "input[name*='Ex_Showroom' i]"
+      ];
+      for (const s of q) {
+        for (const el of document.querySelectorAll(s)) {
+          const val = (el.value || '').trim();
+          if (val) return val;
+        }
+      }
+      return '';
+    }"""
+    roots: list = []
+    try:
+        roots.extend(list(_siebel_locator_search_roots(page, content_frame_selector)))
+    except Exception:
+        pass
+    try:
+        roots.extend(list(_ordered_frames(page)))
+    except Exception:
+        pass
+    roots.append(page)
+    for root in roots:
+        try:
+            v = root.evaluate(js)
+            if (v or "").strip():
+                return str(v).strip()
+        except Exception:
+            continue
+    return ""
+
+
+@dataclass
+class _MyOrdersGridSearchResult:
+    """Outcome of Vehicle Sales My Orders jqGrid search by mobile (``_create_order`` branching)."""
+
+    outcome: str  # invoiced | pending | allocated | no_rows | unknown_rows | error
+    primary_order: str = ""
+    primary_invoice: str = ""
+    rows: list[dict] | None = None
+    error: str | None = None
+
+
+_JS_MY_ORDERS_JQGRID_ROWS = """() => {
+    const out = [];
+    const vis = (el) => {
+        if (!el) return false;
+        const st = window.getComputedStyle(el);
+        if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity) === 0) return false;
+        const r = el.getBoundingClientRect();
+        return r.width > 1 && r.height > 1;
+    };
+    const tables = document.querySelectorAll('table.ui-jqgrid-btable');
+    for (const table of tables) {
+        if (!vis(table)) continue;
+        const headerRow = table.querySelector('thead tr.ui-jqgrid-labels') || table.querySelector('thead tr');
+        const colNames = [];
+        if (headerRow) {
+            headerRow.querySelectorAll('th').forEach((th) => {
+                const id = (th.getAttribute('id') || '');
+                const tail = id.split('_').pop() || '';
+                const txt = (th.textContent || '').trim().toLowerCase();
+                colNames.push((tail || txt || '').toLowerCase());
+            });
+        }
+        const dataRows = table.querySelectorAll('tbody tr.jqgrow, tbody tr[role="row"]');
+        for (const tr of dataRows) {
+            if (tr.classList.contains('jqgfirstrow')) continue;
+            if (!vis(tr)) continue;
+            const row = { status: '', invoice: '', order: '', raw: (tr.innerText || '').trim() };
+            const tds = tr.querySelectorAll('td[role="gridcell"], td');
+            tds.forEach((td, i) => {
+                const txt = (td.textContent || '').trim();
+                const adb = (td.getAttribute('aria-describedby') || '').toLowerCase();
+                const cn = (colNames[i] || '').toLowerCase();
+                const key = (cn + ' ' + adb).toLowerCase();
+                if (key.includes('status')) row.status = txt;
+                else if (key.includes('invoice')) row.invoice = txt;
+                else if (key.includes('order') && (key.includes('order_number') || key.includes('order#') || key.includes('order_no') || adb.includes('order_number') || adb.includes('order#'))) {
+                    const a = td.querySelector('a[name="Order Number"], a[name="Order #"], a');
+                    row.order = ((a && a.textContent) ? a.textContent : txt).trim();
+                }
+            });
+            if (!row.order && !row.status && !row.invoice) {
+                const a = tr.querySelector("a[name='Order Number'], a[name='Order #']");
+                if (a && vis(a)) row.order = (a.textContent || '').trim();
+            }
+            out.push(row);
+        }
+    }
+    return out;
+}"""
+
+
+def _classify_my_orders_grid_rows(rows: list[dict]) -> tuple[str, str, str]:
+    """
+    From jqGrid row dicts, pick branching outcome and primary order/invoice.
+    Returns ``(outcome, primary_order, primary_invoice)``.
+    """
+    if not rows:
+        return "no_rows", "", ""
+    _inv_re = re.compile(r"[A-Za-z0-9]")
+
+    def _invoice_meaningful(s: str) -> bool:
+        t = (s or "").strip()
+        if len(t) < 2:
+            return False
+        if re.match(r"^(—|-+|–|pending|n/?a)$", t, re.I):
+            return False
+        return bool(_inv_re.search(t))
+
+    for r in rows:
+        inv = (r.get("invoice") or "").strip()
+        if _invoice_meaningful(inv):
+            return "invoiced", (r.get("order") or "").strip(), inv
+    for r in rows:
+        st = (r.get("status") or "").strip().lower()
+        if "pending" in st and "allocated" not in st:
+            return "pending", (r.get("order") or "").strip(), ""
+    for r in rows:
+        st = (r.get("status") or "").strip().lower()
+        if "allocated" in st:
+            return "allocated", (r.get("order") or "").strip(), ""
+    return "unknown_rows", (rows[0].get("order") or "").strip(), ""
+
+
+def _find_vehicle_sales_my_orders_search_root(page: Page, content_frame_selector: str | None):
+    """Frame (or page) that contains Find field ``name=s_1_1_1_0`` and Sales Orders New (+)."""
+    roots: list = []
+    try:
+        roots.extend(list(_siebel_locator_search_roots(page, content_frame_selector)))
+    except Exception:
+        pass
+    try:
+        roots.extend(list(_ordered_frames(page)))
+    except Exception:
+        pass
+    roots.append(page)
+    for root in roots:
+        try:
+            dd = root.locator('[name="s_1_1_1_0"]').first
+            if dd.count() <= 0 or not dd.is_visible(timeout=500):
+                continue
+            plus = root.locator(
+                "a[aria-label='Sales Orders List:New'], button[aria-label='Sales Orders List:New'], "
+                "a[aria-label*='Sales Orders List' i][aria-label*='New' i], "
+                "button[aria-label*='Sales Orders List' i][aria-label*='New' i]"
+            ).first
+            if plus.count() > 0 and plus.is_visible(timeout=400):
+                return root
+        except Exception:
+            continue
+    for root in roots:
+        try:
+            dd = root.locator('[name="s_1_1_1_0"]').first
+            if dd.count() > 0 and dd.is_visible(timeout=400):
+                return root
+        except Exception:
+            continue
+    return None
+
+
+def _read_my_orders_jqgrid_rows_anywhere(page: Page, content_frame_selector: str | None) -> list[dict]:
+    roots: list = []
+    try:
+        roots.extend(list(_siebel_locator_search_roots(page, content_frame_selector)))
+    except Exception:
+        pass
+    try:
+        roots.extend(list(_ordered_frames(page)))
+    except Exception:
+        pass
+    roots.append(page)
+    for root in roots:
+        try:
+            raw = root.evaluate(_JS_MY_ORDERS_JQGRID_ROWS)
+            if isinstance(raw, list) and raw:
+                return list(raw)
+        except Exception:
+            continue
+    return []
+
+
+_JS_CLICK_MY_ORDERS_ORDER_LINK = """({ orderNeedle, mobileDigits }) => {
+    const vis = (el) => {
+        if (!el) return false;
+        const st = window.getComputedStyle(el);
+        if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity) === 0) return false;
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+    };
+    const od = String(orderNeedle || '').replace(/\\D/g, '');
+    const md = String(mobileDigits || '').replace(/\\D/g, '');
+    const rows = document.querySelectorAll(
+        'table.ui-jqgrid-btable tbody tr.jqgrow, table.ui-jqgrid-btable tbody tr[role="row"]'
+    );
+    for (const tr of rows) {
+        if (tr.classList.contains('jqgfirstrow')) continue;
+        if (!vis(tr)) continue;
+        const rowText = tr.innerText || '';
+        if (md && !rowText.replace(/\\D/g, '').includes(md)) continue;
+        const a = tr.querySelector("a[name='Order Number'], a[name='Order #']") || tr.querySelector('td a');
+        if (!a || !vis(a)) continue;
+        const ot = (a.textContent || '').trim();
+        const otd = ot.replace(/\\D/g, '');
+        if (od && otd && otd !== od && !otd.includes(od) && !od.includes(otd)) continue;
+        try { a.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
+        try { a.click(); } catch (e) {}
+        return 'ok:' + ot;
+    }
+    return '';
+}"""
+
+
+def _click_my_orders_jqgrid_order_for_mobile_or_order(
+    page: Page,
+    *,
+    mobile: str,
+    order_number: str,
+    content_frame_selector: str | None,
+    note,
+    action_timeout_ms: int,
+) -> bool:
+    """Open the sales order from My Orders jqGrid after mobile search (Pending / Allocated paths)."""
+    nd = re.sub(r"\D", "", (mobile or "").strip())
+    on = (order_number or "").strip()
+    roots: list = []
+    try:
+        roots.extend(list(_siebel_locator_search_roots(page, content_frame_selector)))
+    except Exception:
+        pass
+    try:
+        roots.extend(list(_ordered_frames(page)))
+    except Exception:
+        pass
+    roots.append(page)
+    for root in roots:
+        try:
+            hit = root.evaluate(_JS_CLICK_MY_ORDERS_ORDER_LINK, {"orderNeedle": on, "mobileDigits": nd})
+            if hit:
+                note(f"Create Order: opened order from My Orders grid ({hit!r}).")
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _run_vehicle_sales_my_orders_mobile_search(
+    page: Page,
+    *,
+    mobile: str,
+    action_timeout_ms: int,
+    content_frame_selector: str | None,
+    note,
+) -> _MyOrdersGridSearchResult:
+    """
+    My Orders view: Find dropdown ``s_1_1_1_0`` → Mobile Phone# → value field → Enter → read ``ui-jqgrid-btable``.
+    """
+    _tmo = min(int(action_timeout_ms or 3000), 8000)
+    root = _find_vehicle_sales_my_orders_search_root(page, content_frame_selector)
+    if root is None:
+        note("Create Order: My Orders Find (s_1_1_1_0) not found — treating as unknown_rows.")
+        return _MyOrdersGridSearchResult(outcome="unknown_rows", error="find_root_missing")
+    digits = re.sub(r"\D", "", (mobile or "").strip())
+    if not digits:
+        return _MyOrdersGridSearchResult(outcome="error", error="mobile_empty")
+    try:
+        dd = root.locator('[name="s_1_1_1_0"]').first
+        dd.scroll_into_view_if_needed(timeout=_tmo)
+        try:
+            dd.click(timeout=_tmo)
+        except Exception:
+            dd.click(timeout=_tmo, force=True)
+        _safe_page_wait(page, 200, log_label="after_my_orders_find_click")
+        _picked = False
+        try:
+            tag = (dd.evaluate("el => (el.tagName || '').toLowerCase()") or "").strip()
+            if tag == "select":
+                try:
+                    dd.select_option(label=re.compile(r"mobile\s*phone", re.I))
+                    _picked = True
+                except Exception:
+                    try:
+                        dd.select_option(index=0)
+                    except Exception:
+                        pass
+            else:
+                try:
+                    dd.press("Alt+ArrowDown", timeout=1200)
+                except Exception:
+                    pass
+                _safe_page_wait(page, 250, log_label="my_orders_find_lov_open")
+                for _ in range(24):
+                    try:
+                        dd.press("ArrowDown", timeout=400)
+                    except Exception:
+                        break
+                    try:
+                        tx = (dd.input_value(timeout=200) or dd.evaluate("el => el.value || el.textContent || ''") or "").lower()
+                    except Exception:
+                        tx = ""
+                    if "mobile" in tx and "phone" in tx:
+                        _picked = True
+                        break
+                if not _picked:
+                    try:
+                        dd.type("Mobile Phone", delay=40, timeout=2000)
+                        _picked = True
+                    except Exception:
+                        pass
+        except Exception as _e:
+            note(f"Create Order: My Orders Find dropdown Mobile Phone# selection raised {_e!r} — continuing.")
+        try:
+            dd.press("Tab", timeout=1200)
+        except Exception:
+            page.keyboard.press("Tab")
+        _safe_page_wait(page, 200, log_label="after_my_orders_find_tab_to_value")
+        _filled = False
+        for name in ("s_1_1_1_1", "s_1_1_1_2"):
+            try:
+                loc = root.locator(f'input[name="{name}"], [name="{name}"]').first
+                if loc.count() > 0 and loc.is_visible(timeout=500):
+                    loc.click(timeout=800)
+                    loc.fill("", timeout=500)
+                    loc.type(digits, delay=25, timeout=3000)
+                    _filled = True
+                    note(f"Create Order: filled My Orders Find value field name={name!r}.")
+                    break
+            except Exception:
+                continue
+        if not _filled:
+            try:
+                page.keyboard.type(digits, delay=25)
+                _filled = True
+            except Exception:
+                pass
+        if not _filled:
+            return _MyOrdersGridSearchResult(outcome="error", error="could_not_fill_find_value")
+        try:
+            page.keyboard.press("Tab")
+        except Exception:
+            pass
+        _safe_page_wait(page, 150, log_label="after_my_orders_value_tab")
+        try:
+            page.keyboard.press("Enter")
+        except Exception:
+            pass
+        _safe_page_wait(page, min(2500, _tmo), log_label="after_my_orders_find_enter")
+        rows = _read_my_orders_jqgrid_rows_anywhere(page, content_frame_selector)
+        oc, po, pi = _classify_my_orders_grid_rows(rows)
+        note(
+            f"Create Order: My Orders grid search outcome={oc!r} rows={len(rows)} "
+            f"primary_order={po!r} primary_invoice={pi!r}."
+        )
+        return _MyOrdersGridSearchResult(outcome=oc, primary_order=po, primary_invoice=pi, rows=rows or [])
+    except Exception as _ex:
+        note(f"Create Order: My Orders mobile search failed: {_ex!r}")
+        return _MyOrdersGridSearchResult(outcome="error", error=str(_ex))
 
 
 def _attach_vehicle_to_bkg(
@@ -9016,19 +9162,23 @@ def _attach_vehicle_to_bkg(
     action_timeout_ms: int,
     content_frame_selector: str | None,
     note,
+    start_at_order_link_before_apply: bool = False,
 ) -> tuple[bool, str | None, dict]:
     """
     After a new sales order is saved:
     1. Click Order Number header link to open order detail.
     2. Click **New** → fill VIN → Price All → Allocate All.
-    3. Single-click **VIN** drilldown (name=VIN) → **Serial Number** →
-       ``_siebel_run_vehicle_serial_detail_precheck_pdi`` (Pre-check + PDI only; no field scrapes).
-    4. Click ``Order:<order#>`` link → **Apply Campaign**. **Create Invoice** is skipped unless
-       ``_ATTACH_VEHICLE_AUTO_CLICK_CREATE_INVOICE`` is set True.
+    3. *(Currently disabled via `if False`.)* Single-click **VIN** drilldown → **Serial Number** →
+       ``_siebel_run_vehicle_serial_detail_precheck_pdi`` (Pre-check + PDI through submit).
+    4. Click ``Order:<order#>`` link → **Apply Campaign** → **Create Invoice** when
+       ``_ATTACH_VEHICLE_AUTO_CLICK_CREATE_INVOICE`` is True (default: enabled).
 
-    Does **not** read Totals, feature ids, or Invoice# from the DOM — vehicle and ex-showroom values
-    come from ``prepare_vehicle`` / grid merge and ``_create_order`` scrapes where applicable.
-    Returns ``(success, error_detail, extra_dict)`` with ``extra_dict`` always ``{}`` for API compatibility.
+    After **Allocate All**, best-effort scrape of **Total (Ex-showroom)** into ``extra_dict`` as
+    ``vehicle_price`` / ``vehicle_ex_showroom_cost`` (for ``vehicle_master.vehicle_ex_showroom_price``).
+    When ``start_at_order_link_before_apply`` is True, skips the Order header through **Allocate All**
+    and starts at the top **Order:<order#>** link (Step 10) — used when My Orders already shows
+    **Allocated** stock.
+    Returns ``(success, error_detail, extra_dict)``; ``extra_dict`` may be empty when scrape fails.
     """
     _tmo = min(int(action_timeout_ms or 3000), 4000)
 
@@ -9095,299 +9245,326 @@ def _attach_vehicle_to_bkg(
                     continue
         return False
 
-    # ── Step 1: Click Order Number header link ──
-    _order_clicked = False
-    _order_selectors = (
-        "a[name='Order Number'][tabindex='-1']",
-        "a[name='Order Number']",
-    )
-    for root in _all_roots():
-        for css in _order_selectors:
-            try:
-                loc = root.locator(css).first
-                if loc.count() <= 0 or not loc.is_visible(timeout=900):
-                    continue
+    if start_at_order_link_before_apply:
+        note(
+            "attach_vehicle_to_bkg: start_at_order_link_before_apply=True — "
+            "skipping Order header through Allocate All; continuing at Order:<n> link before Apply Campaign."
+        )
+        _extra = {}
+    else:
+        # ── Step 1: Click Order Number header link ──
+        _order_clicked = False
+        _order_selectors = (
+            "a[name='Order Number'][tabindex='-1']",
+            "a[name='Order Number']",
+        )
+        for root in _all_roots():
+            for css in _order_selectors:
                 try:
-                    loc.scroll_into_view_if_needed(timeout=_tmo)
+                    loc = root.locator(css).first
+                    if loc.count() <= 0 or not loc.is_visible(timeout=900):
+                        continue
+                    try:
+                        loc.scroll_into_view_if_needed(timeout=_tmo)
+                    except Exception:
+                        pass
+                    try:
+                        loc.click(timeout=_tmo)
+                    except Exception:
+                        loc.click(timeout=_tmo, force=True)
+                    note(f"attach_vehicle_to_bkg: clicked Order Number header link via {css!r}.")
+                    _safe_page_wait(page, 1500, log_label="after_attach_vehicle_to_bkg_click")
+                    _order_clicked = True
+                    break
+                except Exception:
+                    continue
+            if _order_clicked:
+                break
+        if not _order_clicked:
+            _js_order = """() => {
+              const vis = (el) => {
+                if (!el) return false;
+                const st = window.getComputedStyle(el);
+                if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity) === 0) return false;
+                const r = el.getBoundingClientRect();
+                return r.width > 0 && r.height > 0;
+              };
+              let el = document.querySelector("a[name='Order Number'][tabindex='-1']");
+              if (!el || !vis(el)) el = document.querySelector("a[name='Order Number']");
+              if (!el || !vis(el)) return '';
+              try { el.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
+              el.click();
+              return 'ok';
+            }"""
+            for frame in _ordered_frames(page):
+                try:
+                    if frame.evaluate(_js_order):
+                        _order_clicked = True
+                        note("attach_vehicle_to_bkg: JS clicked Order Number in frame.")
+                        _safe_page_wait(page, 1500, log_label="after_attach_vehicle_to_bkg_js_frame")
+                        break
+                except Exception:
+                    continue
+            if not _order_clicked:
+                try:
+                    if page.evaluate(_js_order):
+                        _order_clicked = True
+                        note("attach_vehicle_to_bkg: JS clicked Order Number on main page.")
+                        _safe_page_wait(page, 1500, log_label="after_attach_vehicle_to_bkg_js_page")
                 except Exception:
                     pass
-                try:
-                    loc.click(timeout=_tmo)
-                except Exception:
-                    loc.click(timeout=_tmo, force=True)
-                note(f"attach_vehicle_to_bkg: clicked Order Number header link via {css!r}.")
-                _safe_page_wait(page, 1500, log_label="after_attach_vehicle_to_bkg_click")
-                _order_clicked = True
-                break
-            except Exception:
-                continue
-        if _order_clicked:
-            break
-    if not _order_clicked:
-        _js_order = """() => {
-          const vis = (el) => {
-            if (!el) return false;
-            const st = window.getComputedStyle(el);
-            if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity) === 0) return false;
-            const r = el.getBoundingClientRect();
-            return r.width > 0 && r.height > 0;
-          };
-          let el = document.querySelector("a[name='Order Number'][tabindex='-1']");
-          if (!el || !vis(el)) el = document.querySelector("a[name='Order Number']");
-          if (!el || !vis(el)) return '';
-          try { el.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
-          el.click();
-          return 'ok';
-        }"""
-        for frame in _ordered_frames(page):
-            try:
-                if frame.evaluate(_js_order):
-                    _order_clicked = True
-                    note("attach_vehicle_to_bkg: JS clicked Order Number in frame.")
-                    _safe_page_wait(page, 1500, log_label="after_attach_vehicle_to_bkg_js_frame")
-                    break
-            except Exception:
-                continue
         if not _order_clicked:
+            return False, "Could not click Order Number header link.", {}
+    
+        try:
+            page.wait_for_load_state("networkidle", timeout=8_000)
+        except Exception:
+            pass
+    
+        # ── Step 2: Click New button on order line / allocate (Hero: control id ends with _Ctrl) ──
+        _new_clicked = _click_by_id("s_1_1_35_0_Ctrl", "New button", wait_ms=1200)
+        if not _new_clicked:
+            _new_clicked = _click_by_id("s_1_1_35_0", "New button (legacy id)", wait_ms=1200)
+        if not _new_clicked:
+            return False, "Could not click New button (id=s_1_1_35_0_Ctrl) on order line items.", {}
+    
+        # ── Step 3: Line-item VIN — same selector family as Sales Orders ``name=VIN`` path; row id may be
+        # ``1_s_1_l_VIN``, ``2_s_1_l_VIN``, etc. Use **locator.type** (not ``page.keyboard``) so iframe focus works.
+        _ch = (full_chassis or "").strip()
+        if not _ch:
+            return False, "attach_vehicle_to_bkg: full_chassis is empty (line-item VIN).", {}
+    
+        _safe_page_wait(page, 500, log_label="after_new_before_vin_field")
+        _vin_locator_css: tuple[str, ...] = (
+            "#1_s_1_l_VIN",
+            "[id='1_s_1_l_VIN']",
+            "input[id$='_l_VIN']",
+            "input[id*='_l_VIN' i]",
+            "input[name='VIN']",
+            "input[aria-label='VIN']",
+            "input[title='VIN']",
+            "input[title*='VIN' i]",
+        )
+    
+        def _vin_readback_ok(vin_loc) -> bool:
             try:
-                if page.evaluate(_js_order):
-                    _order_clicked = True
-                    note("attach_vehicle_to_bkg: JS clicked Order Number on main page.")
-                    _safe_page_wait(page, 1500, log_label="after_attach_vehicle_to_bkg_js_page")
+                got = (vin_loc.input_value(timeout=900) or "").strip()
+            except Exception:
+                got = ""
+            if not got:
+                return False
+            _digits = lambda s: re.sub(r"\D", "", s)
+            return _ch in got or _digits(_ch) in _digits(got) or len(_digits(got)) >= 8
+    
+        def _js_set_vin_value_on_element(vin_loc) -> None:
+            """Siebel line inputs often ignore Playwright fill/type; set value + InputEvent on the node."""
+            try:
+                import json as _json
+    
+                _v = _json.dumps(_ch)
+                vin_loc.evaluate(
+                    f"""(el) => {{
+                      const v = {_v};
+                      try {{ el.focus(); }} catch (e) {{}}
+                      el.value = '';
+                      el.value = v;
+                      try {{
+                        el.dispatchEvent(new InputEvent('input', {{ bubbles: true, inputType: 'insertFromPaste', data: v }}));
+                      }} catch (e) {{
+                        el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                      }}
+                      el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                    }}"""
+                )
             except Exception:
                 pass
-    if not _order_clicked:
-        return False, "Could not click Order Number header link.", {}
-
-    try:
-        page.wait_for_load_state("networkidle", timeout=8_000)
-    except Exception:
-        pass
-
-    # ── Step 2: Click New button on order line / allocate (Hero: control id ends with _Ctrl) ──
-    _new_clicked = _click_by_id("s_1_1_35_0_Ctrl", "New button", wait_ms=1200)
-    if not _new_clicked:
-        _new_clicked = _click_by_id("s_1_1_35_0", "New button (legacy id)", wait_ms=1200)
-    if not _new_clicked:
-        return False, "Could not click New button (id=s_1_1_35_0_Ctrl) on order line items.", {}
-
-    # ── Step 3: Line-item VIN — same selector family as Sales Orders ``name=VIN`` path; row id may be
-    # ``1_s_1_l_VIN``, ``2_s_1_l_VIN``, etc. Use **locator.type** (not ``page.keyboard``) so iframe focus works.
-    _ch = (full_chassis or "").strip()
-    if not _ch:
-        return False, "attach_vehicle_to_bkg: full_chassis is empty (line-item VIN).", {}
-
-    _safe_page_wait(page, 500, log_label="after_new_before_vin_field")
-    _vin_locator_css: tuple[str, ...] = (
-        "#1_s_1_l_VIN",
-        "[id='1_s_1_l_VIN']",
-        "input[id$='_l_VIN']",
-        "input[id*='_l_VIN' i]",
-        "input[name='VIN']",
-        "input[aria-label='VIN']",
-        "input[title='VIN']",
-        "input[title*='VIN' i]",
-    )
-
-    def _vin_readback_ok(vin_loc) -> bool:
-        try:
-            got = (vin_loc.input_value(timeout=900) or "").strip()
-        except Exception:
-            got = ""
-        if not got:
-            return False
-        _digits = lambda s: re.sub(r"\D", "", s)
-        return _ch in got or _digits(_ch) in _digits(got) or len(_digits(got)) >= 8
-
-    def _js_set_vin_value_on_element(vin_loc) -> None:
-        """Siebel line inputs often ignore Playwright fill/type; set value + InputEvent on the node."""
-        try:
-            import json as _json
-
-            _v = _json.dumps(_ch)
-            vin_loc.evaluate(
-                f"""(el) => {{
-                  const v = {_v};
-                  try {{ el.focus(); }} catch (e) {{}}
-                  el.value = '';
-                  el.value = v;
-                  try {{
-                    el.dispatchEvent(new InputEvent('input', {{ bubbles: true, inputType: 'insertFromPaste', data: v }}));
-                  }} catch (e) {{
-                    el.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                  }}
-                  el.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                }}"""
-            )
-        except Exception:
-            pass
-
-    def _tab_out_vin(vin_loc) -> None:
-        try:
-            vin_loc.press("Tab", timeout=1500)
-        except Exception:
-            pass
-        try:
-            page.keyboard.press("Tab")
-        except Exception:
-            pass
-
-    def _try_fill_vin_locator(vin_loc) -> bool:
-        try:
-            vin_loc.scroll_into_view_if_needed(timeout=_tmo)
-        except Exception:
-            pass
-        vin_loc.click(timeout=_tmo)
-        _safe_page_wait(page, 220, log_label="after_vin_click")
-        try:
-            vin_loc.focus(timeout=1200)
-        except Exception:
-            pass
-        try:
-            vin_loc.press("Control+a", timeout=800)
-        except Exception:
-            pass
-        try:
-            vin_loc.fill("", timeout=1000)
-        except Exception:
-            pass
-        _typed = False
-        try:
-            page.keyboard.type(_ch, delay=28)
-            _typed = True
-        except Exception:
-            pass
-        if not _vin_readback_ok(vin_loc):
+    
+        def _tab_out_vin(vin_loc) -> None:
             try:
-                vin_loc.type(_ch, delay=28, timeout=min(8000, int(action_timeout_ms or 3000)))
+                vin_loc.press("Tab", timeout=1500)
+            except Exception:
+                pass
+            try:
+                page.keyboard.press("Tab")
+            except Exception:
+                pass
+    
+        def _try_fill_vin_locator(vin_loc) -> bool:
+            try:
+                vin_loc.scroll_into_view_if_needed(timeout=_tmo)
+            except Exception:
+                pass
+            vin_loc.click(timeout=_tmo)
+            _safe_page_wait(page, 220, log_label="after_vin_click")
+            try:
+                vin_loc.focus(timeout=1200)
+            except Exception:
+                pass
+            try:
+                vin_loc.press("Control+a", timeout=800)
+            except Exception:
+                pass
+            try:
+                vin_loc.fill("", timeout=1000)
+            except Exception:
+                pass
+            _typed = False
+            try:
+                page.keyboard.type(_ch, delay=28)
                 _typed = True
             except Exception:
                 pass
-        if not _vin_readback_ok(vin_loc):
+            if not _vin_readback_ok(vin_loc):
+                try:
+                    vin_loc.type(_ch, delay=28, timeout=min(8000, int(action_timeout_ms or 3000)))
+                    _typed = True
+                except Exception:
+                    pass
+            if not _vin_readback_ok(vin_loc):
+                try:
+                    vin_loc.fill(_ch, timeout=2000)
+                except Exception:
+                    pass
+            if not _vin_readback_ok(vin_loc):
+                _js_set_vin_value_on_element(vin_loc)
+            if not _vin_readback_ok(vin_loc):
+                return False
+            _tab_out_vin(vin_loc)
+            return True
+    
+        _vin_filled = False
+        for root in _all_roots():
+            for css in _vin_locator_css:
+                try:
+                    vin_loc = root.locator(css).first
+                    if vin_loc.count() <= 0 or not vin_loc.is_visible(timeout=700):
+                        continue
+                    if _try_fill_vin_locator(vin_loc):
+                        _vin_filled = True
+                        note(f"attach_vehicle_to_bkg: VIN filled via {css!r}, chassis={_ch!r}.")
+                        break
+                except Exception:
+                    continue
+            if _vin_filled:
+                break
+    
+        _js_vin_pick = """(chassis) => {
+          const vis = (el) => {
+            if (!el) return false;
+            const st = window.getComputedStyle(el);
+            if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+            const r = el.getBoundingClientRect();
+            return r.width >= 2 && r.height >= 2;
+          };
+          const c = String(chassis || '');
+          let el = document.getElementById('1_s_1_l_VIN');
+          if (!el || !vis(el)) {
+            const cands = Array.from(document.querySelectorAll(
+              "input[id$='_l_VIN'], input[name='VIN'], input[aria-label='VIN'], input[title='VIN']"
+            ));
+            el = cands.find((e) => vis(e)) || null;
+          }
+          if (!el) return false;
+          try { el.scrollIntoView({ block: 'center' }); } catch (e) {}
+          try { el.focus(); } catch (e) {}
+          el.value = '';
+          el.value = c;
+          try {
+            el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertFromPaste', data: c }));
+          } catch (e) {
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+          }
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+          return true;
+        }"""
+    
+        if not _vin_filled:
+            for root in _all_roots():
+                try:
+                    if bool(root.evaluate(_js_vin_pick, _ch)):
+                        _vin_filled = True
+                        note(f"attach_vehicle_to_bkg: JS set VIN field (broad query), chassis={_ch!r}.")
+                        _safe_page_wait(page, 200, log_label="after_vin_js_fill")
+                        try:
+                            page.keyboard.press("Tab")
+                        except Exception:
+                            pass
+                        try:
+                            page.keyboard.press("Tab")
+                        except Exception:
+                            pass
+                        break
+                except Exception:
+                    continue
+    
+        if not _vin_filled:
+            return False, f"Could not fill line-item VIN (selectors id/_l_VIN/name=VIN) with {_ch!r}.", {}
+        _safe_page_wait(page, 2800, log_label="after_vin_tab_settle")
+    
+        # ── Step 4: Click Price All (name="s_1_1_7_0") ──
+        if not _click_by_name("s_1_1_7_0", "Price All", wait_ms=2000):
+            return False, "Could not click Price All (name=s_1_1_7_0).", {}
+        _pa_err = _detect_siebel_error_popup(page, content_frame_selector)
+        if _pa_err:
+            note(f"attach_vehicle_to_bkg: Siebel error after Price All → {_pa_err!r:.300}")
+            return False, f"Siebel error after Price All: {_pa_err[:200]}", {}
+    
+        # ── Step 5: Click Allocate All (id="s_1_1_9_0_Ctrl") ──
+        if not _click_by_id("s_1_1_9_0_Ctrl", "Allocate All", wait_ms=2000):
+            return False, "Could not click Allocate All (id=s_1_1_9_0_Ctrl).", {}
+        _aa_err = _detect_siebel_error_popup(page, content_frame_selector)
+        if _aa_err:
+            note(f"attach_vehicle_to_bkg: Siebel error after Allocate All → {_aa_err!r:.300}")
+            return False, f"Siebel error after Allocate All: {_aa_err[:200]}", {}
+    
+        _extra: dict = {}
+        _safe_page_wait(page, 1200, log_label="after_allocate_all_before_ex_showroom_scrape")
+        _ex_raw = _scrape_total_ex_showroom_after_price_allocate(
+            page, content_frame_selector=content_frame_selector
+        )
+        if _ex_raw and _looks_like_ex_showroom_price(_ex_raw):
+            _extra["vehicle_ex_showroom_cost"] = _ex_raw
+            _extra["vehicle_price"] = _ex_raw
+            note(f"attach_vehicle_to_bkg: scraped Total (Ex-showroom)={_ex_raw!r} after Price All + Allocate All.")
+        else:
+            note(
+                "attach_vehicle_to_bkg: Total (Ex-showroom) not scraped or not numeric after Allocate All "
+                "(best-effort)."
+            )
+    
+        note(
+            "attach_vehicle_to_bkg: skipped VIN drilldown, Serial Number, and Pre-check/PDI through PDI submit (disabled)."
+        )
+        if False:  # restore: re-enable post-Allocate vehicle tab + serial Pre-check/PDI
+            # ── Step 6: Click VIN drilldown (name="VIN") → opens Vehicles tab ──
+            if not _click_by_name("VIN", "VIN drilldown", wait_ms=2000):
+                return False, "Could not click VIN drilldown (name=VIN) to open Vehicles tab.", {}
             try:
-                vin_loc.fill(_ch, timeout=2000)
+                page.wait_for_load_state("networkidle", timeout=8_000)
             except Exception:
                 pass
-        if not _vin_readback_ok(vin_loc):
-            _js_set_vin_value_on_element(vin_loc)
-        if not _vin_readback_ok(vin_loc):
-            return False
-        _tab_out_vin(vin_loc)
-        return True
-
-    _vin_filled = False
-    for root in _all_roots():
-        for css in _vin_locator_css:
+        
+            # ── Step 7: Click Serial Number (name="Serial Number") ──
+            if not _click_by_name("Serial Number", "Serial Number", wait_ms=2000):
+                return False, "Could not click Serial Number (name='Serial Number') on Vehicles tab.", {}
             try:
-                vin_loc = root.locator(css).first
-                if vin_loc.count() <= 0 or not vin_loc.is_visible(timeout=700):
-                    continue
-                if _try_fill_vin_locator(vin_loc):
-                    _vin_filled = True
-                    note(f"attach_vehicle_to_bkg: VIN filled via {css!r}, chassis={_ch!r}.")
-                    break
+                page.wait_for_load_state("networkidle", timeout=8_000)
             except Exception:
-                continue
-        if _vin_filled:
-            break
-
-    _js_vin_pick = """(chassis) => {
-      const vis = (el) => {
-        if (!el) return false;
-        const st = window.getComputedStyle(el);
-        if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
-        const r = el.getBoundingClientRect();
-        return r.width >= 2 && r.height >= 2;
-      };
-      const c = String(chassis || '');
-      let el = document.getElementById('1_s_1_l_VIN');
-      if (!el || !vis(el)) {
-        const cands = Array.from(document.querySelectorAll(
-          "input[id$='_l_VIN'], input[name='VIN'], input[aria-label='VIN'], input[title='VIN']"
-        ));
-        el = cands.find((e) => vis(e)) || null;
-      }
-      if (!el) return false;
-      try { el.scrollIntoView({ block: 'center' }); } catch (e) {}
-      try { el.focus(); } catch (e) {}
-      el.value = '';
-      el.value = c;
-      try {
-        el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertFromPaste', data: c }));
-      } catch (e) {
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-      }
-      el.dispatchEvent(new Event('change', { bubbles: true }));
-      return true;
-    }"""
-
-    if not _vin_filled:
-        for root in _all_roots():
-            try:
-                if bool(root.evaluate(_js_vin_pick, _ch)):
-                    _vin_filled = True
-                    note(f"attach_vehicle_to_bkg: JS set VIN field (broad query), chassis={_ch!r}.")
-                    _safe_page_wait(page, 200, log_label="after_vin_js_fill")
-                    try:
-                        page.keyboard.press("Tab")
-                    except Exception:
-                        pass
-                    try:
-                        page.keyboard.press("Tab")
-                    except Exception:
-                        pass
-                    break
-            except Exception:
-                continue
-
-    if not _vin_filled:
-        return False, f"Could not fill line-item VIN (selectors id/_l_VIN/name=VIN) with {_ch!r}.", {}
-    _safe_page_wait(page, 2800, log_label="after_vin_tab_settle")
-
-    # ── Step 4: Click Price All (name="s_1_1_7_0") ──
-    if not _click_by_name("s_1_1_7_0", "Price All", wait_ms=2000):
-        return False, "Could not click Price All (name=s_1_1_7_0).", {}
-    _pa_err = _detect_siebel_error_popup(page, content_frame_selector)
-    if _pa_err:
-        note(f"attach_vehicle_to_bkg: Siebel error after Price All → {_pa_err!r:.300}")
-        return False, f"Siebel error after Price All: {_pa_err[:200]}", {}
-
-    # ── Step 5: Click Allocate All (id="s_1_1_9_0_Ctrl") ──
-    if not _click_by_id("s_1_1_9_0_Ctrl", "Allocate All", wait_ms=2000):
-        return False, "Could not click Allocate All (id=s_1_1_9_0_Ctrl).", {}
-    _aa_err = _detect_siebel_error_popup(page, content_frame_selector)
-    if _aa_err:
-        note(f"attach_vehicle_to_bkg: Siebel error after Allocate All → {_aa_err!r:.300}")
-        return False, f"Siebel error after Allocate All: {_aa_err[:200]}", {}
-
-    # ── Step 6: Click VIN drilldown (name="VIN") → opens Vehicles tab ──
-    if not _click_by_name("VIN", "VIN drilldown", wait_ms=2000):
-        return False, "Could not click VIN drilldown (name=VIN) to open Vehicles tab.", {}
-    try:
-        page.wait_for_load_state("networkidle", timeout=8_000)
-    except Exception:
-        pass
-
-    # ── Step 7: Click Serial Number (name="Serial Number") ──
-    if not _click_by_name("Serial Number", "Serial Number", wait_ms=2000):
-        return False, "Could not click Serial Number (name='Serial Number') on Vehicles tab.", {}
-    try:
-        page.wait_for_load_state("networkidle", timeout=8_000)
-    except Exception:
-        pass
-
-    # ── Steps 8–9: Pre-check + PDI only (no DOM field scrapes; shared with ``prepare_vehicle`` semantics).
-    _pc_ok, _pc_err = _siebel_run_vehicle_serial_detail_precheck_pdi(
-        page,
-        action_timeout_ms=action_timeout_ms,
-        content_frame_selector=content_frame_selector,
-        note=note,
-        form_trace=None,
-        log_prefix="attach_vehicle_to_bkg",
-        scraped=None,
-    )
-    if not _pc_ok:
-        return False, _pc_err or "Pre-check / PDI failed after Serial Number drilldown.", {}
+                pass
+        
+            # ── Steps 8–9: Pre-check + PDI only (no DOM field scrapes; shared with ``prepare_vehicle`` semantics).
+            _pc_ok, _pc_err = _siebel_run_vehicle_serial_detail_precheck_pdi(
+                page,
+                action_timeout_ms=action_timeout_ms,
+                content_frame_selector=content_frame_selector,
+                note=note,
+                form_trace=None,
+                log_prefix="attach_vehicle_to_bkg",
+                scraped=None,
+            )
+            if not _pc_ok:
+                return False, _pc_err or "Pre-check / PDI failed after Serial Number drilldown.", {}
+    
 
     # ── Step 10: Click "Order:<order#>" link at top of page ──
     _order_link_clicked = False
@@ -9504,7 +9681,11 @@ def _attach_vehicle_to_bkg(
         note(f"attach_vehicle_to_bkg: Siebel error after Apply Campaign → {_ac_err!r:.300}")
         return False, f"Siebel error after Apply Campaign: {_ac_err[:200]}", {}
 
-    # ── Step 12: Create Invoice (optional; off by default — operator completes in Siebel) ──
+    # ── Step 12: Create Invoice (optional; **off by default** — leave auto-click disabled until product asks) ──
+    # When enabled, add a short settle wait after click, then optionally re-run
+    # ``_scrape_order_number_current`` / ``_scrape_invoice_number_current`` if the UI refreshes
+    # Order#/Invoice# for ``sales_master``. The video ``_create_order`` path already scrapes those
+    # after ``_attach_vehicle_to_bkg`` when this flag is False.
     if _ATTACH_VEHICLE_AUTO_CLICK_CREATE_INVOICE:
         _ci_clicked = False
         _ci_selectors = [
@@ -9566,7 +9747,7 @@ def _attach_vehicle_to_bkg(
     else:
         note(
             "attach_vehicle_to_bkg: Create Invoice not auto-clicked "
-            "(set _ATTACH_VEHICLE_AUTO_CLICK_CREATE_INVOICE=True in siebel_dms_playwright.py to enable)."
+            "(set _ATTACH_VEHICLE_AUTO_CLICK_CREATE_INVOICE=False in siebel_dms_playwright.py to disable)."
         )
 
     note(
@@ -9575,7 +9756,8 @@ def _attach_vehicle_to_bkg(
         + (" → Create Invoice" if _ATTACH_VEHICLE_AUTO_CLICK_CREATE_INVOICE else "")
         + ")."
     )
-    return True, None, {}
+    # When Create Invoice is auto-clicked, a follow-up scrape of refreshed Order#/Invoice# can be added here.
+    return True, None, _extra
 
 
 def _create_order(
@@ -9593,19 +9775,19 @@ def _create_order(
     form_trace=None,
 ) -> tuple[bool, str | None, dict]:
     """
-    Vehicle Sales -> Sales Orders New flow:
-    - Open Vehicle Sales (first-level view bar)
-    - Click Sales Orders New:List (+) when **Invoice Selected** is not opened directly
-    - Set Booking Order Type
-    - When ``battery_partial`` is set (detail sheet **Battery No** from DMS fill payload), fill **Comments**
-      with ``Battery is <number>``
-    - Pick contact by mobile from pick applet
-    - Save, scrape Order#, then ``_attach_vehicle_to_bkg`` (header ``a[name='Order Number'][tabindex='-1']``):
-      line-item VIN, Price All, Allocate All, VIN drill → Serial → Pre-check/PDI (clicks only — **no** DOM scrapes in attach).
-    - (Invoice-selected / legacy path only) On order line items: Line Items List:New -> VIN (name=VIN) -> full chassis + Enter;
-      optional pick applet (search by Vin#) -> fill chassis, select row, OK; then scrape inventory
-    - If inventory not In transit: Price all + Allocate all
-    - Legacy path: scrape Total (Ex-showroom). Primary attach path: ex-showroom from ``prepare_vehicle`` grid / DMS merge.
+    Vehicle Sales → Sales Orders flow (same frame as the ``+`` New control):
+
+    - After opening **My Orders**, run ``_run_vehicle_sales_my_orders_mobile_search`` (Find ``s_1_1_1_0`` →
+      Mobile Phone# → mobile → Enter → ``ui-jqgrid-btable``):
+
+      - **invoiced** (meaningful Invoice# on a row): return success with Order#/Invoice# scrape and
+        ``ready_for_client_create_invoice=True`` (skip ``+`` booking and attach).
+      - **pending**: drill Order# on the matching row, then ``_attach_vehicle_to_bkg`` (full path).
+      - **allocated**: drill Order#, then ``_attach_vehicle_to_bkg(..., start_at_order_link_before_apply=True)``.
+      - **no_rows** / **unknown_rows** / **error**: fall back to the full **+** new-booking path below.
+
+    - **+** path: Sales Orders New:List, Booking Order Type = Normal Booking, optional Comments (battery),
+      finance fields, Contact Last Name F2 applet, Ctrl+S, then ``_attach_vehicle_to_bkg`` from the new order.
     """
     scraped: dict = {"inventory_location": "", "vehicle_price": "", "order_number": "", "invoice_number": ""}
 
@@ -9780,59 +9962,97 @@ def _create_order(
     _siebel_after_goto_wait(page, floor_ms=4500)
     note(f"Create Order: arrived at Vehicle Sales (post-goto wait). URL={page.url[:120]}")
 
-    def _go_to_invoice_selected_direct() -> bool:
-        """
-        Prefer direct context switch to Invoice Selected (requested by operator),
-        instead of querying Vehicle Sales list by mobile.
-        """
-        _sels = (
-            "#ui-id-429",
-            "a#ui-id-429",
-            "li#ui-id-429",
-            "[id='ui-id-429']",
-            "a[aria-label='Invoice Selected']",
-            "button[aria-label='Invoice Selected']",
-            "a[aria-label*='Invoice Selected' i]",
-            "button[aria-label*='Invoice Selected' i]",
-        )
-        for root in _roots():
-            try:
-                for role in ("tab", "link", "button"):
-                    try:
-                        by_role = root.get_by_role(role, name=re.compile(r"invoice\s*selected", re.I)).first
-                        if by_role.count() > 0 and by_role.is_visible(timeout=600):
-                            try:
-                                by_role.click(timeout=min(action_timeout_ms, 2500))
-                            except Exception:
-                                by_role.click(timeout=min(action_timeout_ms, 2500), force=True)
-                            _safe_page_wait(page, 1200, log_label="after_invoice_selected_role_click")
-                            note(f"Create Order: switched to Invoice Selected via get_by_role({role}).")
-                            return True
-                    except Exception:
-                        continue
-                for css in _sels:
-                    try:
-                        loc = root.locator(css).first
-                        if loc.count() <= 0 or not loc.is_visible(timeout=600):
-                            continue
-                        try:
-                            loc.click(timeout=min(action_timeout_ms, 2500))
-                        except Exception:
-                            loc.click(timeout=min(action_timeout_ms, 2500), force=True)
-                        _safe_page_wait(page, 1200, log_label="after_invoice_selected_css_click")
-                        note(f"Create Order: switched to Invoice Selected via selector {css!r}.")
-                        return True
-                    except Exception:
-                        continue
-            except Exception:
-                continue
-        return False
+    _mos = _run_vehicle_sales_my_orders_mobile_search(
+        page,
+        mobile=mobile,
+        action_timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+        note=note,
+    )
+    _mo_oc = (_mos.outcome or "").strip()
+    _mo_po = (_mos.primary_order or "").strip()
+    _mo_pi = (_mos.primary_invoice or "").strip()
 
-    _invoice_selected_ready = _go_to_invoice_selected_direct()
-    if _invoice_selected_ready:
-        note("Create Order: Invoice Selected context opened directly; proceeding from selected-order view.")
+    def _finalize_my_orders_attach(branch: str) -> tuple[bool, str | None, dict]:
+        """After ``_attach_vehicle_to_bkg`` from a My Orders grid drill-down."""
+        _att_ok, _att_err, _att_scraped = _attach_vehicle_to_bkg(
+            page,
+            full_chassis=full_chassis,
+            order_number=_mo_po or "",
+            action_timeout_ms=action_timeout_ms,
+            content_frame_selector=content_frame_selector,
+            note=note,
+            start_at_order_link_before_apply=(branch == "allocated"),
+        )
+        scraped["order_drilldown_opened"] = bool(_att_ok)
+        scraped["my_orders_branch"] = branch
+        if _att_scraped:
+            scraped.update(_att_scraped)
+        if not _att_ok:
+            return False, (_att_err or "attach_vehicle_to_bkg failed.").strip(), scraped
+        _safe_page_wait(page, 900, log_label=f"after_my_orders_{branch}_attach")
+        order_ref = _scrape_order_number_current()
+        if order_ref:
+            scraped["order_number"] = order_ref
+        inv_no = _scrape_invoice_number_current()
+        scraped["invoice_number"] = (inv_no or scraped.get("invoice_number") or "")
+        if callable(form_trace):
+            form_trace(
+                "v4_create_order",
+                "Vehicle Sales — My Orders branch",
+                f"attach_vehicle_to_bkg_my_orders_{branch}",
+                order_number=str(scraped.get("order_number") or ""),
+                invoice_number=str(scraped.get("invoice_number") or ""),
+            )
+        return True, None, scraped
+
+    if _mo_oc == "invoiced":
+        scraped["order_number"] = _mo_po
+        scraped["invoice_number"] = _mo_pi
+        scraped["my_orders_branch"] = "invoiced"
+        scraped["ready_for_client_create_invoice"] = True
+        note(
+            "Create Order: My Orders grid shows Invoice# — skipping '+' booking/attach; "
+            "operator may use Create Invoice on the client app."
+        )
+        return True, None, scraped
+
+    if _mo_oc == "pending":
+        if not _click_my_orders_jqgrid_order_for_mobile_or_order(
+            page,
+            mobile=mobile,
+            order_number=_mo_po,
+            content_frame_selector=content_frame_selector,
+            note=note,
+            action_timeout_ms=action_timeout_ms,
+        ):
+            return False, "Create Order: Pending My Orders row but could not open Order# drill-down.", scraped
+        _safe_page_wait(page, 1200, log_label="after_my_orders_pending_drilldown")
+        scraped["order_number"] = _mo_po or scraped.get("order_number") or ""
+        return _finalize_my_orders_attach("pending")
+
+    if _mo_oc == "allocated":
+        if not _click_my_orders_jqgrid_order_for_mobile_or_order(
+            page,
+            mobile=mobile,
+            order_number=_mo_po,
+            content_frame_selector=content_frame_selector,
+            note=note,
+            action_timeout_ms=action_timeout_ms,
+        ):
+            return False, "Create Order: Allocated My Orders row but could not open Order# drill-down.", scraped
+        _safe_page_wait(page, 1200, log_label="after_my_orders_allocated_drilldown")
+        scraped["order_number"] = _mo_po or scraped.get("order_number") or ""
+        return _finalize_my_orders_attach("allocated")
+
+    if _mo_oc == "error":
+        note(f"Create Order: My Orders mobile search error={_mos.error!r} — falling back to '+' new booking.")
+    elif _mo_oc == "unknown_rows":
+        note("Create Order: My Orders grid unknown_rows — falling back to '+' new booking.")
+    elif _mo_oc == "no_rows":
+        note("Create Order: My Orders grid empty for this mobile — full '+' new booking path.")
     else:
-        note("Create Order: Invoice Selected context not found; proceeding directly with '+' new booking flow on current page.")
+        note(f"Create Order: My Orders outcome={_mo_oc!r} — full '+' new booking path.")
 
     # JS snippet run inside each frame to find and click the first Order Number drill-down link.
     # Siebel renders the link as <a name="Order Number">ORDER-VALUE</a> inside a grid td.
@@ -9994,10 +10214,7 @@ def _create_order(
             return True
         return False
 
-    _existing_order_opened = bool(_invoice_selected_ready)
-    if _existing_order_opened:
-        note("Create Order: staying on Invoice Selected page; skipping '+' new booking creation.")
-    else:
+    if True:  # Full '+' new booking; My Orders grid branches above return early when applicable.
         # 2) Click + (Sales Orders New:List)
         if not _click_any(
             (
@@ -10133,7 +10350,7 @@ def _create_order(
                         "financier_token": _fin_token if _fin_token in ("", "na", "n/a", "null", "none", "-") else "other",
                         "finance_required_target": _fin_val,
                     },
-                    "timestamp": int(_t_fin.time() * 1000),
+                    "timestamp": _ts_ist_iso(),
                 }) + "\n")
         except Exception:
             pass
@@ -10177,7 +10394,7 @@ def _create_order(
                         "finance_required_target": _fin_val,
                         "finance_required_set": bool(_fin_ok),
                     },
-                    "timestamp": int(_t_fin.time() * 1000),
+                    "timestamp": _ts_ist_iso(),
                 }) + "\n")
         except Exception:
             pass
@@ -10256,7 +10473,7 @@ def _create_order(
                             "hypothecation_target": _hyp_val,
                             "hypothecation_set": bool(_hyp_ok),
                         },
-                        "timestamp": int(_t_fin.time() * 1000),
+                        "timestamp": _ts_ist_iso(),
                     }) + "\n")
             except Exception:
                 pass
@@ -10284,7 +10501,7 @@ def _create_order(
             _cr_count = len(_contact_roots)
             with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
                 import json as _j_f2, time as _t_f2
-                _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H1_H4","location":"siebel_dms_playwright.py:create_order_f2_start","message":"F2 applet context","data":{"locked_root_type":_lr_type,"locked_root_url":(_lr_url or "")[:150],"contact_roots_count":_cr_count},"timestamp":int(_t_f2.time()*1000)}) + "\n")
+                _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H1_H4","location":"siebel_dms_playwright.py:create_order_f2_start","message":"F2 applet context","data":{"locked_root_type":_lr_type,"locked_root_url":(_lr_url or "")[:150],"contact_roots_count":_cr_count},"timestamp":_ts_ist_iso()}) + "\n")
         except Exception:
             pass
         # #endregion
@@ -10299,7 +10516,7 @@ def _create_order(
                     # #region agent log — CLS not found in root
                     try:
                         with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-                            _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H10","location":"siebel_dms_playwright.py:create_order_cls_miss","message":"CLS field not found via aria-label CSS selector","data":{"root_url":getattr(root,'url','?')[:120]},"timestamp":int(_t_f2.time()*1000)}) + "\n")
+                            _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H10","location":"siebel_dms_playwright.py:create_order_cls_miss","message":"CLS field not found via aria-label CSS selector","data":{"root_url":getattr(root,'url','?')[:120]},"timestamp":_ts_ist_iso()}) + "\n")
                     except Exception:
                         pass
                     # #endregion
@@ -10311,7 +10528,7 @@ def _create_order(
                     _cls_name = fld.evaluate("el => el.getAttribute('name') || ''")
                     _cls_id = fld.evaluate("el => el.getAttribute('id') || ''")
                     with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-                        _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H10","location":"siebel_dms_playwright.py:create_order_cls_found","message":"CLS field found via aria-label CSS","data":{"aria":_cls_aria[:80],"name":_cls_name,"id":_cls_id[:40],"root_url":getattr(root,'url','?')[:120]},"timestamp":int(_t_f2.time()*1000)}) + "\n")
+                        _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H10","location":"siebel_dms_playwright.py:create_order_cls_found","message":"CLS field found via aria-label CSS","data":{"aria":_cls_aria[:80],"name":_cls_name,"id":_cls_id[:40],"root_url":getattr(root,'url','?')[:120]},"timestamp":_ts_ist_iso()}) + "\n")
                 except Exception:
                     pass
                 # #endregion
@@ -10377,7 +10594,7 @@ def _create_order(
                     # #region agent log — icon click result
                     try:
                         with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-                            _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H11","location":"siebel_dms_playwright.py:create_order_icon_handle","message":"F2 icon click via evaluate_handle","data":{"icon_clicked": _icon_clicked},"timestamp":int(_t_f2.time()*1000)}) + "\n")
+                            _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H11","location":"siebel_dms_playwright.py:create_order_icon_handle","message":"F2 icon click via evaluate_handle","data":{"icon_clicked": _icon_clicked},"timestamp":_ts_ist_iso()}) + "\n")
                     except Exception:
                         pass
                     # #endregion
@@ -10409,7 +10626,7 @@ def _create_order(
                         return {tag: el.tagName, name: el.getAttribute('name') || '', aria: (el.getAttribute('aria-label') || '').substring(0,60), val: (el.value || '').substring(0,60)};
                     }""") or {}
                     with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-                        _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H14","location":"siebel_dms_playwright.py:create_order_applet_focus","message":"Focused element after applet open","data":_focus_info,"timestamp":int(_t_f2.time()*1000)}) + "\n")
+                        _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H14","location":"siebel_dms_playwright.py:create_order_applet_focus","message":"Focused element after applet open","data":_focus_info,"timestamp":_ts_ist_iso()}) + "\n")
                 except Exception:
                     pass
                 # #endregion
@@ -10467,7 +10684,7 @@ def _create_order(
                 # #region agent log — focus after Tab to value field
                 try:
                     with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-                        _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H18","location":"siebel_dms_playwright.py:create_order_val_focus","message":"Focus after Tab to value field","data":{**_val_focus, "search_type": _search_type, "search_val": _search_val},"timestamp":int(_t_f2.time()*1000)}) + "\n")
+                        _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H18","location":"siebel_dms_playwright.py:create_order_val_focus","message":"Focus after Tab to value field","data":{**_val_focus, "search_type": _search_type, "search_val": _search_val},"timestamp":_ts_ist_iso()}) + "\n")
                 except Exception:
                     pass
                 # #endregion
@@ -10526,7 +10743,7 @@ def _create_order(
                 # #region agent log — value field fill result
                 try:
                     with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-                        _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H20","location":"siebel_dms_playwright.py:create_order_val_fill","message":"Value field fill result","data":{"typed": _search_val, "readback": _val_readback, "filled": _val_filled, "strategy": _fill_strategy},"timestamp":int(_t_f2.time()*1000)}) + "\n")
+                        _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H20","location":"siebel_dms_playwright.py:create_order_val_fill","message":"Value field fill result","data":{"typed": _search_val, "readback": _val_readback, "filled": _val_filled, "strategy": _fill_strategy},"timestamp":_ts_ist_iso()}) + "\n")
                 except Exception:
                     pass
                 # #endregion
@@ -10586,7 +10803,7 @@ def _create_order(
                         except Exception:
                             continue
                     with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-                        _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H13","location":"siebel_dms_playwright.py:create_order_post_query","message":"Post-query applet state","data":_pq_data,"timestamp":int(_t_f2.time()*1000)}) + "\n")
+                        _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H13","location":"siebel_dms_playwright.py:create_order_post_query","message":"Post-query applet state","data":_pq_data,"timestamp":_ts_ist_iso()}) + "\n")
                 except Exception:
                     pass
                 # #endregion
@@ -10659,7 +10876,7 @@ def _create_order(
                         # #region agent log — row match result
                         try:
                             with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-                                _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H15","location":"siebel_dms_playwright.py:create_order_row_match","message":"Row match result","data":_result or {},"timestamp":int(_t_f2.time()*1000)}) + "\n")
+                                _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H15","location":"siebel_dms_playwright.py:create_order_row_match","message":"Row match result","data":_result or {},"timestamp":_ts_ist_iso()}) + "\n")
                         except Exception:
                             pass
                         # #endregion
@@ -10703,7 +10920,7 @@ def _create_order(
                                 "fresh_roots_count": len(_fresh_roots2),
                                 "row_matched": bool(_row_ok),
                             },
-                            "timestamp": int(_t_f2.time() * 1000),
+                            "timestamp": _ts_ist_iso(),
                         }) + "\n")
                 except Exception:
                     pass
@@ -10784,7 +11001,7 @@ def _create_order(
                                 "ok_button_clicked": bool(_ok_clicked),
                                 "enter_fallback_used": not bool(_ok_clicked),
                             },
-                            "timestamp": int(_t_f2.time() * 1000),
+                            "timestamp": _ts_ist_iso(),
                         }) + "\n")
                 except Exception:
                     pass
@@ -10839,7 +11056,7 @@ def _create_order(
                                 "pincode_non_empty": bool((_pin_rb or "").strip()),
                                 "pincode_len": len((_pin_rb or "").strip()),
                             },
-                            "timestamp": int(_t_f2.time() * 1000),
+                            "timestamp": _ts_ist_iso(),
                         }) + "\n")
                 except Exception:
                     pass
@@ -10861,7 +11078,7 @@ def _create_order(
                                 "applet_done": True,
                                 "pincode_non_empty": bool((_pin_rb or "").strip()),
                             },
-                            "timestamp": int(_t_f2.time() * 1000),
+                            "timestamp": _ts_ist_iso(),
                         }) + "\n")
                 except Exception:
                     pass
@@ -10885,7 +11102,7 @@ def _create_order(
                         "pincode_non_empty": bool(_contact_pin_rb),
                         "pincode_len": len(_contact_pin_rb),
                     },
-                    "timestamp": int(_t_f2.time() * 1000),
+                    "timestamp": _ts_ist_iso(),
                 }) + "\n")
         except Exception:
             pass
@@ -10943,362 +11160,6 @@ def _create_order(
                 invoice_number=str(scraped.get("invoice_number") or ""),
             )
         return True, None, scraped
-    # 9) Click Order# drill-down link
-    if not _existing_order_opened:
-        _order_opened = _open_order_link("step-9-attempt-1")
-        if not _order_opened:
-            _safe_page_wait(page, 1500, log_label="before_order_link_step9_retry")
-            _order_opened = _open_order_link("step-9-attempt-2")
-        if not _order_opened:
-            return False, "Could not click Order# row/link.", scraped
-        _safe_page_wait(page, 1200, log_label="after_open_order_link")
-        note("Create Order: clicked Order# row.")
-    else:
-        _safe_page_wait(page, 1200, log_label="after_open_existing_order_link")
-
-    # 10) Line Items List:New -> click VIN (name=VIN) -> full chassis + Enter; optional Vin# pick applet
-    _tmo_line = min(action_timeout_ms, 4000)
-
-    _JS_LINE_ITEMS_NEW = """() => {
-        const want = 'line items list:new';
-        const vis = (el) => {
-            if (!el) return false;
-            const st = window.getComputedStyle(el);
-            if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity) === 0) return false;
-            const r = el.getBoundingClientRect();
-            return r.width > 1 && r.height > 1;
-        };
-        const fire = (el) => {
-            try { el.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
-            try { el.focus(); } catch (e) {}
-            const opts = { bubbles: true, cancelable: true, view: window };
-            try {
-                el.dispatchEvent(new MouseEvent('mousedown', opts));
-                el.dispatchEvent(new MouseEvent('mouseup', opts));
-                el.dispatchEvent(new MouseEvent('click', opts));
-            } catch (e) {}
-            try { if (typeof el.click === 'function') el.click(); } catch (e) {}
-            return true;
-        };
-        const cand = Array.from(
-            document.querySelectorAll('a,button,[role="button"],div[role="button"],span[role="button"]')
-        ).filter(vis);
-        for (const el of cand) {
-            const al = (el.getAttribute('aria-label') || '').trim().toLowerCase();
-            const ttl = (el.getAttribute('title') || '').trim().toLowerCase();
-            if (al === want || ttl === want || (al.includes('line items list') && al.includes('new'))) {
-                fire(el);
-                return al || ttl || 'line-items-new';
-            }
-        }
-        return '';
-    }"""
-
-    def _click_line_items_new_hardened() -> bool:
-        """
-        Siebel toolbar \"New\" often shows focus without running the applet action.
-        Try: per-frame DOM click + mouse events, then Playwright focus + click + keyboard activate.
-        """
-        for frame in _ordered_frames(page):
-            try:
-                hit = frame.evaluate(_JS_LINE_ITEMS_NEW)
-                if hit:
-                    note(f"Create Order: Line Items List:New — frame JS activation ({hit!r}).")
-                    return True
-            except Exception:
-                continue
-        _new_selectors = (
-            "a[aria-label='Line Items List:New']",
-            "button[aria-label='Line Items List:New']",
-            "a[aria-label*='Line Items List' i][aria-label*='New' i]",
-            "button[aria-label*='Line Items List' i][aria-label*='New' i]",
-        )
-        def _activate_locator(target, *, label: str) -> bool:
-            target.scroll_into_view_if_needed(timeout=_tmo_line)
-            try:
-                target.focus(timeout=800)
-            except Exception:
-                pass
-            try:
-                target.click(timeout=_tmo_line)
-            except Exception:
-                target.click(timeout=_tmo_line, force=True)
-            try:
-                target.evaluate(
-                    """el => {
-                      const o = { bubbles: true, cancelable: true, view: window };
-                      el.dispatchEvent(new MouseEvent('mousedown', o));
-                      el.dispatchEvent(new MouseEvent('mouseup', o));
-                      el.dispatchEvent(new MouseEvent('click', o));
-                      if (typeof el.click === 'function') el.click();
-                    }"""
-                )
-            except Exception:
-                pass
-            for key in ("Enter", " "):
-                try:
-                    target.press(key, timeout=800)
-                    break
-                except Exception:
-                    continue
-            note(f"Create Order: Line Items List:New — {label}.")
-            return True
-
-        for root in _roots():
-            for role in ("button", "link"):
-                try:
-                    by_role = root.get_by_role(role, name=re.compile(r"line\s+items\s+list.*\bnew\b", re.I))
-                    if by_role.count() > 0:
-                        b = by_role.first
-                        if b.is_visible(timeout=600):
-                            return _activate_locator(b, label=f"get_by_role({role}) + keys")
-                except Exception:
-                    pass
-            for css in _new_selectors:
-                try:
-                    loc = root.locator(css).first
-                    if loc.count() <= 0 or not loc.is_visible(timeout=600):
-                        continue
-                    return _activate_locator(loc, label=f"locator {css!r} + keys")
-                except Exception:
-                    continue
-        return False
-
-    if not _click_line_items_new_hardened():
-        return False, "Could not activate Line Items List:New (click/focus/keyboard).", scraped
-    _safe_page_wait(page, 900, log_label="after_line_items_new")
-    note("Create Order: Line Items List:New activation attempted.")
-
-    # Focus/open the VIN control (Siebel uses name="VIN" on the line popup field)
-    _click_any(
-        (
-            "input[name='VIN']",
-            "[name='VIN']",
-        ),
-        timeout=min(action_timeout_ms, 2500),
-    )
-    _safe_page_wait(page, 400, log_label="after_vin_focus_click")
-
-    _vin_selectors = (
-        "input[name='VIN']",
-        "input[aria-label='VIN']",
-        "input[id*='VIN' i]",
-        "input[title='VIN']",
-        "input[title*='VIN' i]",
-    )
-    if not _fill_any(_vin_selectors, full_chassis, timeout=_tmo_line):
-        return False, "Could not fill VIN with full chassis on line item.", scraped
-    try:
-        page.keyboard.press("Enter")
-    except Exception:
-        pass
-    _safe_page_wait(page, 1100, log_label="after_line_item_vin_enter")
-    note(f"Create Order: filled line VIN and pressed Enter. chassis={full_chassis!r}")
-
-    def _vin_pick_applet_query_field_visible() -> bool:
-        """True only when a Vin# *search* field appears (not the line-item name=VIN box)."""
-        for root in _roots():
-            try:
-                loc_lb = root.get_by_label(re.compile(r"vin\s*#", re.I)).first
-                if loc_lb.count() > 0 and loc_lb.is_visible(timeout=450):
-                    return True
-            except Exception:
-                pass
-            for css in (
-                "input[aria-label*='Vin#' i]",
-                "input[aria-label*='VIN#' i]",
-                "input[title*='Vin#' i]",
-                "input[title*='VIN#' i]",
-            ):
-                try:
-                    loc = root.locator(css).first
-                    if loc.count() > 0 and loc.is_visible(timeout=450):
-                        return True
-                except Exception:
-                    continue
-        return False
-
-    _JS_CLICK_FIRST_GRID_ROW = """() => {
-        const vis = (el) => {
-            if (!el) return false;
-            const st = window.getComputedStyle(el);
-            if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity) === 0) return false;
-            const r = el.getBoundingClientRect();
-            return r.width > 2 && r.height > 2;
-        };
-        const tryRows = [
-            "table.ui-jqgrid-btable tbody tr[role='row']",
-            "div.ui-jqgrid-bdiv table tbody tr",
-            "table.siebui-list tbody tr",
-            "table tbody tr"
-        ];
-        for (const sel of tryRows) {
-            const rows = Array.from(document.querySelectorAll(sel)).filter(vis);
-            for (const tr of rows) {
-                if (tr.closest('thead')) continue;
-                if ((tr.innerText || '').toLowerCase().includes('order')) continue;
-                const tds = tr.querySelectorAll('td');
-                if (tds.length === 0) continue;
-                try { tr.click(); return 'clicked:' + sel; } catch (e) {}
-            }
-        }
-        return '';
-    }"""
-
-    def _handle_vin_search_pick_applet() -> bool:
-        """If a Vin# search pick applet is open: Query (optional), fill chassis, Enter, pick row, OK."""
-        if not _vin_pick_applet_query_field_visible():
-            note("Create Order: no Vin# search pick applet detected; continuing.")
-            return True
-        note("Create Order: Vin# search pick applet detected; running query + row + OK.")
-        _click_any(
-            (
-                "a[aria-label*='Vin' i][aria-label*='Query' i]",
-                "button[aria-label*='Vin' i][aria-label*='Query' i]",
-                "a[aria-label*='List' i][aria-label*='Query' i]",
-                "button[aria-label*='List' i][aria-label*='Query' i]",
-                "a[title*='Query' i]",
-                "button[title*='Query' i]",
-            ),
-            timeout=min(action_timeout_ms, 2000),
-        )
-        _safe_page_wait(page, 500, log_label="after_vin_pick_query_click")
-        _pick_fill_selectors = (
-            "input[aria-label*='Vin#' i]",
-            "input[aria-label*='VIN#' i]",
-            "input[title*='Vin#' i]",
-            "input[title*='VIN#' i]",
-            "input[id*='1_VIN' i]",
-            "input[id*='Vin' i]",
-            "input[name*='VIN' i]",
-            "input[name*='Vin' i]",
-        )
-        if not _fill_any(_pick_fill_selectors, full_chassis, timeout=_tmo_line):
-            note("Create Order: Vin# pick applet visible but could not fill query field.")
-            return False
-        try:
-            page.keyboard.press("Enter")
-        except Exception:
-            pass
-        _safe_page_wait(page, 1000, log_label="after_vin_pick_enter")
-        _row_clicked = False
-        for frame in _ordered_frames(page):
-            try:
-                r = frame.evaluate(_JS_CLICK_FIRST_GRID_ROW)
-                if r:
-                    note(f"Create Order: selected row in Vin pick applet. {r!r}")
-                    _row_clicked = True
-                    break
-            except Exception:
-                continue
-        if not _row_clicked:
-            for root in _roots():
-                try:
-                    loc = root.locator("tbody tr").first
-                    if loc.count() > 0 and loc.is_visible(timeout=500):
-                        loc.click(timeout=min(action_timeout_ms, 2500), force=True)
-                        _row_clicked = True
-                        note("Create Order: selected first tbody row in Vin pick applet (Playwright).")
-                        break
-                except Exception:
-                    continue
-        if not _row_clicked:
-            note("Create Order: warning — no grid row clicked in Vin pick applet; still trying OK.")
-        if not _click_any(
-            (
-                "button:has-text('OK')",
-                "a:has-text('OK')",
-                "button[aria-label='OK']",
-                "a[aria-label='OK']",
-            ),
-            timeout=min(action_timeout_ms, 3500),
-        ):
-            return False
-        _safe_page_wait(page, 1000, log_label="after_vin_pick_ok")
-        note("Create Order: closed Vin# pick applet with OK.")
-        return True
-
-    if not _handle_vin_search_pick_applet():
-        return False, "Could not complete Vin# search pick applet (fill row OK).", scraped
-    _safe_page_wait(page, 600, log_label="after_vin_flow")
-    note(f"Create Order: line-item VIN flow complete. chassis={full_chassis!r}.")
-
-    # 11) Scrape Inventory Location
-    inv = ""
-    for frame in _ordered_frames(page):
-        try:
-            got = frame.evaluate(
-                """() => {
-                  const q = [
-                    "input[aria-label*='Inventory Location' i]",
-                    "input[title*='Inventory Location' i]",
-                    "input[name*='Inventory_Location' i]",
-                    "input[id*='Inventory_Location' i]"
-                  ];
-                  for (const s of q) {
-                    const el = document.querySelector(s);
-                    if (el && (el.value || '').trim()) return (el.value || '').trim();
-                  }
-                  return '';
-                }"""
-            )
-            if (got or "").strip():
-                inv = (got or "").strip()
-                break
-        except Exception:
-            continue
-    scraped["inventory_location"] = inv
-    note(f"Create Order: inventory location={inv!r}.")
-
-    if inv.strip().lower() != "in transit":
-        _click_any(("a:has-text('Price all')", "button:has-text('Price all')"), timeout=min(action_timeout_ms, 3000))
-        _safe_page_wait(page, 800, log_label="after_price_all")
-        _click_any(("a:has-text('Allocate all')", "button:has-text('Allocate all')"), timeout=min(action_timeout_ms, 3000))
-        _safe_page_wait(page, 800, log_label="after_allocate_all")
-        note("Create Order: clicked Price all and Allocate all (inventory is not In transit).")
-    else:
-        note("Create Order: inventory is In transit; skipped Price all / Allocate all.")
-
-    # 12) Scrape Total (Ex-showroom)
-    total_ex = ""
-    for frame in _ordered_frames(page):
-        try:
-            got = frame.evaluate(
-                """() => {
-                  const q = [
-                    "input[aria-label*='Total (Ex-showroom)' i]",
-                    "input[title*='Total (Ex-showroom)' i]",
-                    "input[aria-label*='Ex-showroom' i]",
-                    "input[title*='Ex-showroom' i]"
-                  ];
-                  for (const s of q) {
-                    const el = document.querySelector(s);
-                    if (el && (el.value || '').trim()) return (el.value || '').trim();
-                  }
-                  return '';
-                }"""
-            )
-            if (got or "").strip():
-                total_ex = (got or "").strip()
-                break
-        except Exception:
-            continue
-    scraped["vehicle_price"] = total_ex
-    if total_ex:
-        note(f"Create Order: scraped Total (Ex-showroom)={total_ex!r}.")
-    else:
-        note("Create Order: could not scrape Total (Ex-showroom).")
-
-    _ord = _scrape_order_number_current()
-    if _ord:
-        scraped["order_number"] = _ord
-        note(f"Create Order: scraped Order#={_ord!r} (legacy line-item path).")
-    _inv = _scrape_invoice_number_current()
-    scraped["invoice_number"] = (_inv or scraped.get("invoice_number") or "")
-    if _inv:
-        note(f"Create Order: scraped Invoice#={_inv!r} (legacy line-item path).")
-
-    return True, None, scraped
 
 
 def _siebel_open_found_customer_record(
@@ -12887,7 +12748,7 @@ def _merge_dms_and_grid_for_vehicle_master(dms_values: dict, grid: dict) -> dict
 
 def _vehicle_master_prepare_gaps(merged: dict) -> tuple[list[str], list[str]]:
     """
-    Returns ``(critical_messages, informational_messages)`` for operators and ``Playwright_DMS.txt``.
+    Returns ``(critical_messages, informational_messages)`` for operators and the Playwright DMS execution log (caller-supplied path, typically ``Playwright_DMS_<ddmmyyyy>_<hhmmss>.txt``).
 
     **Critical** = still empty after merge for fields that normally must exist for a coherent
     ``vehicle_master`` row. **Informational** = optional fields or values filled later in the SOP
@@ -12955,7 +12816,7 @@ def _write_playwright_vehicle_master_section(
     critical: list[str],
     informational: list[str],
 ) -> None:
-    """Append merged vehicle-master keys and gap notes to ``Playwright_DMS.txt``."""
+    """Append merged vehicle-master keys and gap notes to the Playwright DMS execution log."""
     if log_fp is None:
         return
     keys = (
@@ -13010,7 +12871,7 @@ def _write_playwright_contact_scrape_section(
     *,
     had_open_enquiry_from_sweep: bool,
 ) -> None:
-    """Append ``contact_id`` and optional enquiry# to ``Playwright_DMS.txt`` (operator-facing)."""
+    """Append ``contact_id`` and optional enquiry# to the Playwright DMS execution log (operator-facing)."""
     if log_fp is None:
         return
     try:
@@ -13022,6 +12883,30 @@ def _write_playwright_contact_scrape_section(
             log_fp.write(f"open_enquiry_number={enq!r}\n")
         elif enq:
             log_fp.write(f"enquiry_number={enq!r}\n")
+        log_fp.flush()
+    except OSError:
+        pass
+
+
+def _write_playwright_dms_masters_section(
+    log_fp,
+    *,
+    attach_ex_showroom: str,
+    sales_master_prep: dict,
+    atomic_db_committed: bool,
+    atomic_db_error: str | None = None,
+) -> None:
+    """Append attach ex-showroom scrape, ``sales_master`` prep payload, and atomic DB outcome to the log."""
+    if log_fp is None:
+        return
+    try:
+        log_fp.write("\n--- dms_master_persist (single DB transaction) ---\n")
+        log_fp.write(f"attach_ex_showroom_after_price_allocate={attach_ex_showroom!r}\n")
+        log_fp.write(f"sales_master_prep={sales_master_prep!r}\n")
+        if atomic_db_committed:
+            log_fp.write("atomic_db_transaction=committed\n")
+        else:
+            log_fp.write(f"atomic_db_transaction=failed error={atomic_db_error!r}\n")
         log_fp.flush()
     except OSError:
         pass
@@ -13085,7 +12970,7 @@ def _siebel_fill_key_battery_from_dms_values(
                             "has_battery": bool(battery_val),
                             "fill_frame_url": _fu,
                         },
-                        "timestamp": int(time.time() * 1000),
+                        "timestamp": _ts_ist_iso(),
                     }
                 )
                 + "\n"
@@ -13274,7 +13159,7 @@ def prepare_vehicle(
                         "location": "siebel_dms_playwright.py:prepare_vehicle",
                         "message": "prepare_vehicle_before_grid_scrape",
                         "data": {"key_partial_present": bool(key_p), "frame_partial_len": len(frame_p)},
-                        "timestamp": int(time.time() * 1000),
+                        "timestamp": _ts_ist_iso(),
                     }
                 )
                 + "\n"
@@ -13349,7 +13234,7 @@ def prepare_vehicle(
                         "location": "siebel_dms_playwright.py:prepare_vehicle",
                         "message": "prepare_vehicle_after_left_pane_vin_ok",
                         "data": {"vin_click_ok": True, "has_chassis_for_left_hit": True},
-                        "timestamp": int(time.time() * 1000),
+                        "timestamp": _ts_ist_iso(),
                     }
                 )
                 + "\n"
@@ -14163,7 +14048,7 @@ def _add_enquiry_opportunity(
                         "location": "siebel_dms_playwright.py:_add_enquiry_opportunity",
                         "message": "add_enquiry_before_key_battery_fill",
                         "data": {"after_vehicle_grid_scrape": True},
-                        "timestamp": int(time.time() * 1000),
+                        "timestamp": _ts_ist_iso(),
                     }
                 )
                 + "\n"
@@ -14663,7 +14548,7 @@ def _add_enquiry_opportunity(
         return (
             False,
             "Enquiry# did not change from pre-save after Ctrl+S (polled at 0.5s, 2.5s, 3.5s). "
-            "See Playwright_DMS.txt [NOTE] lines for poll values.",
+            "See the Playwright DMS execution log [NOTE] lines for poll values.",
             "",
         )
 
@@ -14678,38 +14563,6 @@ def _add_enquiry_opportunity(
             poll_readings_repr=str(poll_readings),
         )
     return True, None, enquiry_no
-
-
-def _persist_dms_scrape_to_db(
-    customer_id: int | None,
-    vehicle_id: int | None,
-    vehicle_dict: dict | None,
-    note: Callable[..., object],
-) -> None:
-    """
-    Merge scraped vehicle / order fields into ``vehicle_master`` and ``sales_master`` immediately
-    after a successful scrape step (Add Enquiry vehicle list, stage 5 grid, create_order, etc.).
-    Lazy-imports fill service to avoid circular imports. Safe to call repeatedly (``COALESCE`` updates).
-    """
-    if not vehicle_id or not vehicle_dict:
-        return
-    vd = dict(vehicle_dict)
-    try:
-        from app.services.fill_hero_dms_service import (
-            update_sales_master_from_dms_scrape,
-            update_vehicle_master_from_dms,
-        )
-
-        update_vehicle_master_from_dms(vehicle_id, vd)
-        if customer_id:
-            update_sales_master_from_dms_scrape(customer_id, vehicle_id, vd)
-        note(
-            "Persisted scraped DMS fields to database (vehicle_master"
-            + (" + sales_master" if customer_id else "")
-            + ")."
-        )
-    except Exception as exc:
-        logger.warning("siebel_dms: persist scrape to DB failed vehicle_id=%s: %s", vehicle_id, exc)
 
 
 def Playwright_Hero_DMS_fill(
@@ -14727,32 +14580,25 @@ def Playwright_Hero_DMS_fill(
     vehicle_id: int | None = None,
 ) -> dict:
     """
-    Hero Connect / Siebel automation. If ``SIEBEL_DMS_STOP_AFTER_ALL_ENQUIRIES`` is True (module constant),
-    runs only the **Find Contact Enquiry** video SOP through **All Enquiries**, then returns (browser
-    not closed by this function).
+    Hero Connect / Siebel automation — **Find Contact Enquiry** path: ``prepare_vehicle``, Contact Find,
+    enquiry sweep / Add Enquiry, Relation's Name, Payments,
+    **Generate Booking**, ``_create_order``. Does not run a separate post-contact **Auto Vehicle List** stage
+    after enquiry (vehicle prep is up front). Browser is not closed by this function.
 
-    Otherwise **linear SOP** (stages 1–8 inside the main ``try``):
-
-    1. **Find** customer by mobile (Contact view). 2. If not matched (or ``new_enquiry``), **basic
-    enquiry** only (name, address, state, PIN — no care-of) + Save. 3. **Mandatory re-find** by
-    mobile after a new basic enquiry. 4. **Care-of** (father/relation) + Save — **always** runs.
-    5. **Vehicle** — nested ``stage_5_vehicle_flow()`` (list search/scrape; **dealer** stock → tab Pre-check/PDI
-    on serial detail; if **In Transit** → receipt URL / Process Receipt only, no Pre-check/PDI). 6. **Generate Booking** — **always** after
-    vehicle processing (in-transit or not). 7.
-    **Allotment** (line items, Price All, Allocate) — **non–In Transit only**, after booking. 8.
-    **Invoice hook** (message only; no automation).
-
-    **skip_find** (``skip_contact_find=True``): only for special callers — enquiry view → basic details +
-    Save → mandatory re-find on ``DMS_REAL_URL_CONTACT`` → stage 4 care-of, then stages 5–8. Real
-    Siebel fill from ``fill_dms_service`` always passes ``skip_contact_find=False`` (Find runs even if
-    ``dms_contact_path`` in DB is ``skip_find``).
+    ``skip_contact_find=True`` is ignored: real Fill DMS always runs Find (``fill_dms_service`` passes
+    ``skip_contact_find=False``). ``dms_contact_path=skip_find`` in DB does not bypass Find.
 
     ``_attach_vehicle_to_bkg`` clicks **Apply Campaign**; **Create Invoice** only if
     ``_ATTACH_VEHICLE_AUTO_CLICK_CREATE_INVOICE`` is True. Returns ``vehicle``,
-    ``error``, ``dms_siebel_forms_filled``, notes, milestones, and ``dms_step_messages``.
+    ``error``, ``dms_siebel_forms_filled``, notes, milestones, ``dms_step_messages``, and on the video SOP path
+    after **Add customer payment** ``dms_customer_master_collated``
+    (``fill_hero_dms_service.collate_customer_master_from_dms_siebel_inputs`` — ``fields``, ``notes``, ``mapping_unclear``).
+    After a successful video ``create_order`` scrape: ``dms_sales_master_prep`` (order/invoice/enquiry + ids),
+    ``dms_master_persist_committed`` when **Invoice#** was scraped (**Create Invoice** done) and
+    ``insert_dms_masters_from_siebel_scrape`` ran; otherwise DB is untouched and values are log-only.
 
-    If ``execution_log_path`` is set, overwrites that file with a UTC timestamped trace (values used,
-    STEP / NOTE / MILESTONE lines, and a final END line with ``error`` if any).
+    If ``execution_log_path`` is set, overwrites that file with an IST (Asia/Kolkata) timestamped trace
+    (values used, STEP / NOTE / MILESTONE lines, and a final END line with ``error`` if any).
     """
     out: dict = {
         "vehicle": {},
@@ -14780,15 +14626,15 @@ def Playwright_Hero_DMS_fill(
     aadhar_uin = (dms_values.get("aadhar_id") or "").strip()
     dms_path = (dms_values.get("dms_contact_path") or "found").strip().lower()
 
-    run_started_utc = datetime.now(timezone.utc).isoformat()
+    run_started_ist = _ts_ist_iso()
     log_fp = None
     _exec_log_path = Path(execution_log_path) if execution_log_path is not None else None
     if execution_log_path is not None:
         lp = Path(execution_log_path)
         lp.parent.mkdir(parents=True, exist_ok=True)
         log_fp = open(lp, "w", encoding="utf-8")
-        log_fp.write("Playwright DMS — execution log (this run only; UTC timestamps)\n\n")
-        log_fp.write(f"started_utc={run_started_utc}\n")
+        log_fp.write("Playwright DMS — execution log (this run only; IST / Asia/Kolkata timestamps)\n\n")
+        log_fp.write(f"started_ist={run_started_ist}\n")
         log_fp.write(f"skip_contact_find={skip_contact_find}\n")
         log_fp.write(f"dms_contact_path={dms_path!r}\n")
         log_fp.write(f"mobile_phone={mobile!r}\n")
@@ -14804,9 +14650,8 @@ def Playwright_Hero_DMS_fill(
         log_fp.write(f"engine_partial={engine_p!r}\n")
         log_fp.write(f"aadhar_id={aadhar_uin!r}\n")
         log_fp.write(
-            "# Siebel: after stage 5, a --- vehicle_master --- block lists merged keys for "
-            "update_vehicle_master_from_dms (grid + DMS). Add Enquiry path can still add "
-            "full_chassis/full_engine from vehicle detail drill before that.\n"
+            "# Siebel: after prepare_vehicle / scrapes, a --- vehicle_master --- block lists merged keys for "
+            "traceability (grid + DMS). Masters are persisted only after Invoice# is scraped (Create Invoice).\n"
         )
         cu = (urls.contact or "").strip()
         log_fp.write(f"url_contact_truncated={cu[:200]!r}\n")
@@ -14823,7 +14668,7 @@ def Playwright_Hero_DMS_fill(
         if not log_fp or not (msg or "").strip():
             return
         try:
-            log_fp.write(f"{datetime.now(timezone.utc).isoformat()} [{prefix}] {msg}\n")
+            log_fp.write(f"{_ts_ist_iso()} [{prefix}] {msg}\n")
             log_fp.flush()
         except OSError:
             pass
@@ -14866,7 +14711,7 @@ def Playwright_Hero_DMS_fill(
     def log_vehicle_snapshot(stage: str) -> None:
         """
         Write current ``out['vehicle']`` key-values immediately after each scrape/merge update.
-        Keeps Playwright_DMS.txt aligned with in-memory state evolution.
+        Keeps the Playwright DMS execution log aligned with in-memory state evolution.
         """
         veh = out.get("vehicle") or {}
         if not log_fp or not isinstance(veh, dict):
@@ -14900,7 +14745,7 @@ def Playwright_Hero_DMS_fill(
             note(msg_missing)
 
     try:
-        step("Started Hero Connect / Siebel DMS automation (linear SOP).")
+        step("Started Hero Connect / Siebel DMS automation (Find Contact Enquiry path).")
         _fn_gate_ok, _fn_gate_msg = _validate_contact_find_first_name(first)
         if not _fn_gate_ok:
             step("Stopped: invalid or missing Contact First Name for Siebel automation.")
@@ -14916,62 +14761,142 @@ def Playwright_Hero_DMS_fill(
         contact_url = (urls.contact or "").strip()
         in_transit_state = False
 
-        if SIEBEL_DMS_STOP_AFTER_ALL_ENQUIRIES:
-            # Run **prepare_vehicle** before Contact Find so Find→Vehicles / VIN drill / PDI runs while the
-            # session is still on vehicle views. A full ``prepare_vehicle`` after opening a contact record
-            # would navigate away to Auto Vehicle List and break the video SOP. The ``vehicle_master``
-            # block in Playwright_DMS.txt is merged **output** from this scrape, not a separate DB-only prep.
-            step("Pre-step: preparing vehicle before contact find (video path).")
-            _pv_ok, _pv_err, _pv_scraped, in_transit_state, _pv_crit, _pv_info = prepare_vehicle(
+        # Run **prepare_vehicle** before Contact Find so Find→Vehicles / VIN drill / PDI runs while the
+        # session is still on vehicle views. A full ``prepare_vehicle`` after opening a contact record
+        # would navigate away to Auto Vehicle List and break the video SOP. The ``vehicle_master``
+        # block in the Playwright DMS execution log is merged **output** from this scrape, not a separate DB-only prep.
+        step("Pre-step: preparing vehicle before contact find (video path).")
+        _pv_ok, _pv_err, _pv_scraped, in_transit_state, _pv_crit, _pv_info = prepare_vehicle(
+            page,
+            dms_values,
+            urls,
+            nav_timeout_ms=nav_timeout_ms,
+            action_timeout_ms=action_timeout_ms,
+            content_frame_selector=content_frame_selector,
+            note=note,
+            form_trace=form_trace,
+            ms_done=ms_done,
+            step=step,
+        )
+        if not _pv_ok:
+            out["error"] = _pv_err or "prepare_vehicle failed before contact find."
+            return out
+        out["vehicle"] = _pv_scraped
+        _write_playwright_vehicle_master_section(log_fp, _pv_scraped, _pv_crit, _pv_info)
+
+        if skip_contact_find:
+            note(
+                "skip_contact_find was True — ignored; using Find → Contact → All Enquiries path."
+            )
+        if not mobile:
+            step("Stopped: mobile_phone is required for Find Contact video path.")
+            out["error"] = "Siebel: mobile_phone is empty — cannot run Find by mobile."
+            return out
+        if not contact_url:
+            step("Stopped: DMS_REAL_URL_CONTACT is not configured.")
+            out["error"] = (
+                "Siebel: set DMS_REAL_URL_CONTACT to the Contact / Find (or Visible Contact List for Find) "
+                "GotoView URL so the video SOP can open the Find applet."
+            )
+            return out
+        video_first_name = first.strip()
+        step(
+            "Video SOP (Find Contact Enquiry): Find → Contact → mobile + first name → Go; "
+            "branch A when N=0 (Add Enquiry) else title sweep for Open enquiry; branch (2) Address+pin "
+            "when no Open; Relation's Name → Payments → booking path."
+        )
+        form_trace(
+            "v1_find_contact",
+            "Global Find → Contact (strategy 2: mobile-only first, then mobile + first name if needed)",
+            "goto_contact_find_URL_then_prepare_Find_Contact_fill_mobile_first_FindGo",
+            contact_url_truncated=contact_url[:200],
+            mobile_phone=mobile,
+            first_name=video_first_name,
+        )
+        ok_find = _contact_view_find_by_mobile_strategy_two(
+            page,
+            contact_url=contact_url,
+            mobile=mobile,
+            first_name=video_first_name,
+            nav_timeout_ms=nav_timeout_ms,
+            action_timeout_ms=action_timeout_ms,
+            content_frame_selector=content_frame_selector,
+            mobile_aria_hints=mobile_aria_hints,
+            note=note,
+            step=step,
+            stage_msg_mobile_only="Video SOP: Find customer by mobile only first (Contact view, strategy 2).",
+            stage_msg_mobile_and_first="Video SOP: Find customer by mobile + first name (Contact view).",
+        )
+        if not ok_find:
+            step("Stopped: could not complete Find by mobile + first name on contact view.")
+            out["error"] = (
+                "Siebel: video SOP — could not fill mobile/first name or run Find/Go on the contact view. "
+                "Check Find pane, iframe selectors, and DMS_SIEBEL_* tuning."
+            )
+            return out
+        _grid_first_hint = _siebel_ui_suggests_contact_match_mobile_first(
+            page, mobile, video_first_name
+        )
+        note(
+            f"DECISION: contact_table_match_mobile_first_after_find={_grid_first_hint!r} "
+            "(informational; branch A/B uses drilldown row count)."
+        )
+
+        _video_plans_m = _contact_mobile_drilldown_plans(
+            page,
+            mobile,
+            content_frame_selector=content_frame_selector,
+            first_name_exact=None,
+        )
+        n_drilldown = len(_video_plans_m)
+        note(
+            f"Video path: Contact Find drilldown row count N={n_drilldown} "
+            "(mobile-only basis for branch A/B)."
+        )
+
+        if n_drilldown == 0:
+            note(
+                "No contact drilldown rows (branch A) — Add Enquiry with base first name "
+                "(vehicle + Opportunities + Ctrl+S)."
+            )
+            ae_ok, ae_detail, ae_enq_no = _add_enquiry_opportunity(
                 page,
                 dms_values,
                 urls,
-                nav_timeout_ms=nav_timeout_ms,
                 action_timeout_ms=action_timeout_ms,
+                nav_timeout_ms=nav_timeout_ms,
                 content_frame_selector=content_frame_selector,
                 note=note,
                 form_trace=form_trace,
-                ms_done=ms_done,
-                step=step,
+                vehicle_merge=out.setdefault("vehicle", {}),
             )
-            if not _pv_ok:
-                out["error"] = _pv_err or "prepare_vehicle failed before contact find."
-                return out
-            out["vehicle"] = _pv_scraped
-            _write_playwright_vehicle_master_section(log_fp, _pv_scraped, _pv_crit, _pv_info)
-            _persist_dms_scrape_to_db(customer_id, vehicle_id, out.get("vehicle") or {}, note)
-
-            if skip_contact_find:
-                note(
-                    "SIEBEL_DMS_STOP_AFTER_ALL_ENQUIRIES is True — skip_contact_find ignored; "
-                    "using Find → All Enquiries video path."
-                )
-            if not mobile:
-                step("Stopped: mobile_phone is required for Find Contact video path.")
-                out["error"] = "Siebel: mobile_phone is empty — cannot run Find by mobile."
-                return out
-            if not contact_url:
-                step("Stopped: DMS_REAL_URL_CONTACT is not configured.")
+            if not ae_ok:
+                step("Stopped: Add Enquiry branch failed (zero drilldown contacts).")
                 out["error"] = (
-                    "Siebel: set DMS_REAL_URL_CONTACT to the Contact / Find (or Visible Contact List for Find) "
-                    "GotoView URL so the video SOP can open the Find applet."
+                    "Siebel: video SOP — no contact drilldown rows and Add Enquiry did not complete. "
+                    f"{ae_detail or 'See the Playwright DMS execution log [NOTE] lines for the failing step.'}"
                 )
                 return out
-            video_first_name = first.strip()
-            step(
-                "Video SOP (Find Contact Enquiry): Find → Contact → mobile + first name → Go; "
-                "branch A when N=0 (Add Enquiry) else title sweep for Open enquiry; branch (2) Address+pin "
-                "when no Open; Relation's Name → Payments → booking path."
-            )
+            if not (ae_enq_no or "").strip():
+                step("Stopped: Add Enquiry did not return Enquiry#.")
+                out["error"] = (
+                    "Siebel: Add Enquiry details were filled but no Enquiry# was scraped. "
+                    "Treating as failure to avoid silent partial save."
+                )
+                return out
+            ms_done("Add enquiry saved")
+            note(f"Add Enquiry saved with Enquiry#={ae_enq_no!r}; re-finding by mobile + first name.")
+            out.setdefault("vehicle", {})["enquiry_number"] = ae_enq_no
+            log_vehicle_snapshot("video_add_enquiry_saved")
             form_trace(
-                "v1_find_contact",
-                "Global Find → Contact (strategy 2: mobile-only first, then mobile + first name if needed)",
-                "goto_contact_find_URL_then_prepare_Find_Contact_fill_mobile_first_FindGo",
+                "v1b_refind_after_add_enquiry",
+                "Global Find → Contact (Mobile + First Name) + Go",
+                "rerun_find_mobile_first_after_add_enquiry",
                 contact_url_truncated=contact_url[:200],
                 mobile_phone=mobile,
                 first_name=video_first_name,
             )
-            ok_find = _contact_view_find_by_mobile_strategy_two(
+            ok_refind = _contact_view_find_by_mobile_strategy_two(
                 page,
                 contact_url=contact_url,
                 mobile=mobile,
@@ -14982,24 +14907,16 @@ def Playwright_Hero_DMS_fill(
                 mobile_aria_hints=mobile_aria_hints,
                 note=note,
                 step=step,
-                stage_msg_mobile_only="Video SOP: Find customer by mobile only first (Contact view, strategy 2).",
-                stage_msg_mobile_and_first="Video SOP: Find customer by mobile + first name (Contact view).",
+                stage_msg_mobile_only="Post Add Enquiry: re-find by mobile only first (Contact view, strategy 2).",
+                stage_msg_mobile_and_first="Post Add Enquiry: re-find customer by mobile + first name (Contact view).",
             )
-            if not ok_find:
-                step("Stopped: could not complete Find by mobile + first name on contact view.")
+            if not ok_refind:
+                step("Stopped: Add Enquiry saved but post-save re-find failed.")
                 out["error"] = (
-                    "Siebel: video SOP — could not fill mobile/first name or run Find/Go on the contact view. "
-                    "Check Find pane, iframe selectors, and DMS_SIEBEL_* tuning."
+                    "Siebel: Add Enquiry was saved, but the follow-up Find→Contact mobile+first query "
+                    "did not complete."
                 )
                 return out
-            _grid_first_hint = _siebel_ui_suggests_contact_match_mobile_first(
-                page, mobile, video_first_name
-            )
-            note(
-                f"DECISION: contact_table_match_mobile_first_after_find={_grid_first_hint!r} "
-                "(informational; branch A/B uses drilldown row count)."
-            )
-
             _video_plans_m = _contact_mobile_drilldown_plans(
                 page,
                 mobile,
@@ -15007,957 +14924,451 @@ def Playwright_Hero_DMS_fill(
                 first_name_exact=None,
             )
             n_drilldown = len(_video_plans_m)
-            note(
-                f"Video path: Contact Find drilldown row count N={n_drilldown} "
-                "(mobile-only basis for branch A/B)."
-            )
-
+            note(f"Video path: after Add Enquiry, drilldown row count N={n_drilldown}.")
             if n_drilldown == 0:
-                note(
-                    "No contact drilldown rows (branch A) — Add Enquiry with base first name "
-                    "(vehicle + Opportunities + Ctrl+S)."
+                step("Stopped: Add Enquiry saved but Find still shows no drilldown contact rows.")
+                out["error"] = (
+                    "Siebel: Add Enquiry saved but contact search shows no drillable rows after re-find."
                 )
-                ae_ok, ae_detail, ae_enq_no = _add_enquiry_opportunity(
-                    page,
-                    dms_values,
-                    urls,
-                    action_timeout_ms=action_timeout_ms,
-                    nav_timeout_ms=nav_timeout_ms,
-                    content_frame_selector=content_frame_selector,
-                    note=note,
-                    form_trace=form_trace,
-                    vehicle_merge=out.setdefault("vehicle", {}),
-                )
-                if not ae_ok:
-                    step("Stopped: Add Enquiry branch failed (zero drilldown contacts).")
-                    out["error"] = (
-                        "Siebel: video SOP — no contact drilldown rows and Add Enquiry did not complete. "
-                        f"{ae_detail or 'See Playwright_DMS.txt [NOTE] lines for the failing step.'}"
-                    )
-                    return out
-                if not (ae_enq_no or "").strip():
-                    step("Stopped: Add Enquiry did not return Enquiry#.")
-                    out["error"] = (
-                        "Siebel: Add Enquiry details were filled but no Enquiry# was scraped. "
-                        "Treating as failure to avoid silent partial save."
-                    )
-                    return out
-                ms_done("Add enquiry saved")
-                note(f"Add Enquiry saved with Enquiry#={ae_enq_no!r}; re-finding by mobile + first name.")
-                out.setdefault("vehicle", {})["enquiry_number"] = ae_enq_no
-                log_vehicle_snapshot("video_add_enquiry_saved")
-                _persist_dms_scrape_to_db(customer_id, vehicle_id, out.get("vehicle") or {}, note)
-                form_trace(
-                    "v1b_refind_after_add_enquiry",
-                    "Global Find → Contact (Mobile + First Name) + Go",
-                    "rerun_find_mobile_first_after_add_enquiry",
-                    contact_url_truncated=contact_url[:200],
-                    mobile_phone=mobile,
-                    first_name=video_first_name,
-                )
-                ok_refind = _contact_view_find_by_mobile_strategy_two(
-                    page,
-                    contact_url=contact_url,
-                    mobile=mobile,
-                    first_name=video_first_name,
-                    nav_timeout_ms=nav_timeout_ms,
-                    action_timeout_ms=action_timeout_ms,
-                    content_frame_selector=content_frame_selector,
-                    mobile_aria_hints=mobile_aria_hints,
-                    note=note,
-                    step=step,
-                    stage_msg_mobile_only="Post Add Enquiry: re-find by mobile only first (Contact view, strategy 2).",
-                    stage_msg_mobile_and_first="Post Add Enquiry: re-find customer by mobile + first name (Contact view).",
-                )
-                if not ok_refind:
-                    step("Stopped: Add Enquiry saved but post-save re-find failed.")
-                    out["error"] = (
-                        "Siebel: Add Enquiry was saved, but the follow-up Find→Contact mobile+first query "
-                        "did not complete."
-                    )
-                    return out
-                _video_plans_m = _contact_mobile_drilldown_plans(
-                    page,
-                    mobile,
-                    content_frame_selector=content_frame_selector,
-                    first_name_exact=None,
-                )
-                n_drilldown = len(_video_plans_m)
-                note(f"Video path: after Add Enquiry, drilldown row count N={n_drilldown}.")
-                if n_drilldown == 0:
-                    step("Stopped: Add Enquiry saved but Find still shows no drilldown contact rows.")
-                    out["error"] = (
-                        "Siebel: Add Enquiry saved but contact search shows no drillable rows after re-find."
-                    )
-                    return out
-                strict_m = _siebel_ui_suggests_contact_match_mobile_first(
-                    page, mobile, video_first_name
-                )
-                note(f"DECISION: contact_table_match_after_add_enquiry_refind={strict_m!r}")
-                if not strict_m:
-                    note(
-                        "Post Add Enquiry: strict mobile+first not visible on grid — continuing with "
-                        "drilldown rows only."
-                    )
-
-            _video_snap_fn = (video_first_name or "").strip()
-            _video_plans_fn = (
-                _contact_mobile_drilldown_plans(
-                    page,
-                    mobile,
-                    content_frame_selector=content_frame_selector,
-                    first_name_exact=_video_snap_fn or None,
-                )
-                if _video_snap_fn
-                else _video_plans_m
+                return out
+            strict_m = _siebel_ui_suggests_contact_match_mobile_first(
+                page, mobile, video_first_name
             )
-            _video_list_snapshot_counts = _find_contact_mobile_first_grid_counts(
+            note(f"DECISION: contact_table_match_after_add_enquiry_refind={strict_m!r}")
+            if not strict_m:
+                note(
+                    "Post Add Enquiry: strict mobile+first not visible on grid — continuing with "
+                    "drilldown rows only."
+                )
+
+        _video_snap_fn = (video_first_name or "").strip()
+        _video_plans_fn = (
+            _contact_mobile_drilldown_plans(
                 page,
                 mobile,
-                _video_snap_fn,
                 content_frame_selector=content_frame_selector,
-                cached_plans=_video_plans_m,
+                first_name_exact=_video_snap_fn or None,
             )
-            _video_strict_first = len(_video_plans_fn)
-            note(
-                "Find-Contact list snapshot (before Title/enquiry sweep): "
-                f"{_video_list_snapshot_counts[0]} row(s) with mobile and drilldown "
-                f"(same basis as title sweep ordinals); "
-                f"{_video_list_snapshot_counts[1]} with enquiry hint in list text; "
-                f"optional strict list row match for first name {_video_snap_fn!r}: {_video_strict_first}."
+            if _video_snap_fn
+            else _video_plans_m
+        )
+        _video_list_snapshot_counts = _find_contact_mobile_first_grid_counts(
+            page,
+            mobile,
+            _video_snap_fn,
+            content_frame_selector=content_frame_selector,
+            cached_plans=_video_plans_m,
+        )
+        _video_strict_first = len(_video_plans_fn)
+        note(
+            "Find-Contact list snapshot (before Title/enquiry sweep): "
+            f"{_video_list_snapshot_counts[0]} row(s) with mobile and drilldown "
+            f"(same basis as title sweep ordinals); "
+            f"{_video_list_snapshot_counts[1]} with enquiry hint in list text; "
+            f"optional strict list row match for first name {_video_snap_fn!r}: {_video_strict_first}."
+        )
+
+        sweep_has_open, sweep_enq_no, sweep_enq_rows, _sweep_err = _contact_find_title_sweep_for_enquiry(
+            page,
+            mobile=mobile,
+            first_name=video_first_name,
+            action_timeout_ms=action_timeout_ms,
+            content_frame_selector=content_frame_selector,
+            mobile_aria_hints=mobile_aria_hints,
+            note=note,
+            step=step,
+            cached_plans_ord0=_video_plans_fn,
+            cached_plans_dup=_video_plans_m,
+        )
+        contacts_with_open = (
+            1
+            if (
+                sweep_has_open
+                and ((sweep_enq_no or "").strip() or int(sweep_enq_rows or 0) > 0)
             )
+            else 0
+        )
+        note(
+            f"Video path: drilldown_rows_N={n_drilldown}, "
+            f"contacts_with_open_enquiry={contacts_with_open} (Siebel rule: 0 or 1)."
+        )
 
-            sweep_has_open, sweep_enq_no, sweep_enq_rows, _sweep_err = _contact_find_title_sweep_for_enquiry(
-                page,
-                mobile=mobile,
-                first_name=video_first_name,
-                action_timeout_ms=action_timeout_ms,
-                content_frame_selector=content_frame_selector,
-                mobile_aria_hints=mobile_aria_hints,
-                note=note,
-                step=step,
-                cached_plans_ord0=_video_plans_fn,
-                cached_plans_dup=_video_plans_m,
-            )
-            contacts_with_open = (
-                1
-                if (
-                    sweep_has_open
-                    and ((sweep_enq_no or "").strip() or int(sweep_enq_rows or 0) > 0)
-                )
-                else 0
-            )
-            note(
-                f"Video path: drilldown_rows_N={n_drilldown}, "
-                f"contacts_with_open_enquiry={contacts_with_open} (Siebel rule: 0 or 1)."
-            )
-
-            if _sweep_err:
-                step(f"Stopped: {_sweep_err}")
-                out["error"] = _sweep_err
-                return out
-
-            if sweep_has_open and (sweep_enq_no or "").strip():
-                out.setdefault("vehicle", {})["enquiry_number"] = (sweep_enq_no or "").strip()
-                log_vehicle_snapshot("video_enquiry_found_in_contact_enquiry")
-
-            if not sweep_has_open:
-                note(
-                    "Video branch (2): no open enquiry — re-find and drill first contact "
-                    "before Relation's Name path."
-                )
-                if not _contact_view_find_by_mobile_strategy_two(
-                    page,
-                    contact_url=contact_url,
-                    mobile=mobile,
-                    first_name=video_first_name,
-                    nav_timeout_ms=nav_timeout_ms,
-                    action_timeout_ms=action_timeout_ms,
-                    content_frame_selector=content_frame_selector,
-                    mobile_aria_hints=mobile_aria_hints,
-                    note=note,
-                    step=step,
-                    stage_msg_mobile_only="Branch (2): re-find for first drilldown contact — mobile only first (strategy 2).",
-                    stage_msg_mobile_and_first="Branch (2): re-find for first drilldown contact — mobile + first name.",
-                ):
-                    step("Stopped: branch (2) re-find failed.")
-                    out["error"] = "Siebel: video branch (2) could not re-find contact after sweep."
-                    return out
-                fn0 = (video_first_name or "").strip()
-                _dr2 = _click_nth_mobile_title_drilldown(
-                    page,
-                    mobile,
-                    0,
-                    action_timeout_ms=action_timeout_ms,
-                    content_frame_selector=content_frame_selector,
-                    first_name_exact=fn0 if fn0 else None,
-                )
-                if not _dr2:
-                    _dr2 = _siebel_try_click_mobile_search_hit_link(
-                        page,
-                        mobile,
-                        timeout_ms=action_timeout_ms,
-                        content_frame_selector=content_frame_selector,
-                    )
-                if not _dr2:
-                    step("Stopped: branch (2) could not drill first contact row.")
-                    out["error"] = (
-                        "Siebel: video branch (2) — no open enquiry; could not open first drilldown contact."
-                    )
-                    return out
-                _safe_page_wait(page, 2000, log_label="after_title_drilldown_branch2")
-                try:
-                    page.wait_for_load_state("networkidle", timeout=8_000)
-                except Exception:
-                    pass
-
-            form_trace(
-                "v2_drill_and_nav",
-                "Search Results + Contacts detail",
-                "Siebel_Find_tab_optional_then_link_hit_then_click_first_name_then_fill_Relations_Name_only",
-                mobile_phone=mobile,
-                first_name=video_first_name,
-                care_of=care_of,
-            )
-            if not _siebel_video_path_after_find_go_to_all_enquiries(
-                page,
-                mobile=mobile,
-                first_name=video_first_name,
-                care_of=care_of,
-                address_line_1=addr,
-                action_timeout_ms=action_timeout_ms,
-                content_frame_selector=content_frame_selector,
-                note=note,
-                skip_search_hit_click=True,
-            ):
-                step("Stopped: video SOP failed while opening customer record or filling Relation's Name.")
-                out["error"] = (
-                    "Siebel: video SOP — after Find/Go, could not fill Relation's Name from care_of. "
-                    "Confirm right-pane selectors/labels and iframe scope."
-                )
-                return out
-
-            if not sweep_has_open:
-                if not _siebel_video_branch2_address_postal_and_save(
-                    page,
-                    pin_code=pin,
-                    action_timeout_ms=action_timeout_ms,
-                    content_frame_selector=content_frame_selector,
-                    note=note,
-                ):
-                    step("Stopped: video branch (2) Address / Postal Code / Save failed.")
-                    out["error"] = (
-                        "Siebel: no open enquiry path — could not fill Address Postal Code or save."
-                    )
-                    return out
-
-            # Scrape Contact ID: detail inputs + Contacts grid **Contact Id** column (e.g. 11870-01-SCON-…).
-            _contact_id = ""
-            _cid_js = """() => {
-                const vis = (el) => {
-                  if (!el) return false;
-                  const st = window.getComputedStyle(el);
-                  if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
-                  const r = el.getBoundingClientRect();
-                  return r.width > 2 && r.height > 2;
-                };
-                const norm = (s) => String(s || '').replace(/\\s+/g, ' ').trim().toLowerCase();
-                const sels = [
-                  "input[aria-label='Contact Id']",
-                  "[aria-labelledby='s_1_l_HHML_Contact_Seq_Num']",
-                  "input[aria-label*='Contact Id' i]",
-                  "input[name*='Contact_Id' i]",
-                  "input[name*='HHML_Contact' i]",
-                  "input[id*='Contact_Id' i]",
-                ];
-                for (const sel of sels) {
-                  const el = document.querySelector(sel);
-                  if (!el || !vis(el)) continue;
-                  const v = (el.value != null ? String(el.value) : (el.textContent || '')).trim();
-                  if (v && v.length > 2) return v;
-                }
-                for (const app of document.querySelectorAll('.siebui-applet')) {
-                  if (!vis(app)) continue;
-                  const blob = (app.innerText || '').toLowerCase();
-                  if (!blob.includes('contact')) continue;
-                  const table = app.querySelector('table');
-                  if (!table) continue;
-                  const heads = Array.from(table.querySelectorAll('thead th, thead td, tr th'));
-                  let idx = -1;
-                  heads.forEach((h, i) => {
-                    const ht = norm(h.innerText || '');
-                    if (idx < 0 && (ht === 'contact id' || ht.includes('contact id'))) idx = i;
-                  });
-                  if (idx < 0) continue;
-                  const rows = Array.from(table.querySelectorAll('tbody tr, tr')).filter(vis);
-                  for (const tr of rows) {
-                    if (!vis(tr)) continue;
-                    const cells = tr.querySelectorAll('td');
-                    if (idx >= cells.length) continue;
-                    const cell = cells[idx];
-                    if (!vis(cell)) continue;
-                    const a = cell.querySelector('a');
-                    const raw = ((a && a.textContent) ? a.textContent : (cell.textContent || '')).trim();
-                    if (raw && raw.length > 5 && (/scon/i.test(raw) || /^\\d+-\\d+-/i.test(raw))) return raw;
-                  }
-                }
-                return '';
-            }"""
-            for _cr in _ordered_frames(page):
-                try:
-                    _cid = _cr.evaluate(_cid_js)
-                    if _cid:
-                        _contact_id = str(_cid).strip()
-                        break
-                except Exception:
-                    continue
-            if _contact_id:
-                note(f"Scraped Contact ID={_contact_id!r} from contact detail page.")
-                out["contact_id"] = _contact_id
-            else:
-                note("Contact ID not found on contact detail page (best-effort).")
-
-            _write_playwright_contact_scrape_section(
-                log_fp,
-                out,
-                had_open_enquiry_from_sweep=sweep_has_open,
-            )
-
-            form_trace(
-                "v3_add_customer_payment",
-                "Payments tab (current frame)",
-                "click_Payments_tab_then_click_plus_icon",
-            )
-            if not _add_customer_payment(
-                page,
-                action_timeout_ms=action_timeout_ms,
-                content_frame_selector=content_frame_selector,
-                note=note,
-                vehicle_context=(out.get("vehicle") or {}),
-            ):
-                step("Stopped: could not open Payments tab or click '+' icon.")
-                out["error"] = (
-                    "Siebel: video SOP — could not click Payments tab and '+' icon for Add customer payment."
-                )
-                return out
-
-            if SIEBEL_DMS_HARD_FAIL_BEFORE_BOOKING_AND_ORDER:
-                step(
-                    "Stopped: temporary hard fail before Generate Booking / create_order "
-                    "(SIEBEL_DMS_HARD_FAIL_BEFORE_BOOKING_AND_ORDER)."
-                )
-                note(
-                    "Siebel: SIEBEL_DMS_HARD_FAIL_BEFORE_BOOKING_AND_ORDER is True — "
-                    "skipping Generate Booking and create_order until disabled in siebel_dms_playwright.py "
-                    "(owner request only)."
-                )
-                out["error"] = (
-                    "Siebel: temporary stop before Generate Booking / create_order "
-                    "(SIEBEL_DMS_HARD_FAIL_BEFORE_BOOKING_AND_ORDER)."
-                )
-                return out
-
-            full_chassis = (
-                str((out.get("vehicle") or {}).get("full_chassis") or "").strip()
-                or str(dms_values.get("full_chassis") or "").strip()
-                or str(dms_values.get("frame_num") or "").strip()
-            )
-            # If there is no open order for this customer, try Generate Booking before Sales Orders.
-            _enq_u = (urls.enquiry or "").strip() or (urls.contact or "").strip()
-            if _enq_u:
-                _goto(page, _enq_u, "enquiry_for_booking_video", nav_timeout_ms=nav_timeout_ms)
-                _siebel_after_goto_wait(page, floor_ms=900)
-            _safe_page_wait(page, 500, log_label="before_generate_booking_video")
-            if _try_click_generate_booking(
-                page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
-            ):
-                note("Video path: clicked Generate Booking before create_order.")
-                ms_done("Booking generated")
-            else:
-                step("Stopped: Generate Booking was not found before create_order (video path).")
-                out["error"] = (
-                    "Siebel: Generate Booking control was not found before create_order. "
-                    "Booking is mandatory when no existing order is present."
-                )
-                return out
-
-            form_trace(
-                "v4_create_order",
-                "Vehicle Sales / Sales Orders",
-                "vehicle_sales_new_order_then_pick_contact_then_vin_search_price_allocate",
-                mobile_phone=mobile,
-                first_name=video_first_name,
-                full_chassis=full_chassis,
-            )
-            ok_order, order_err, order_scraped = _create_order(
-                page,
-                mobile=mobile,
-                first_name=video_first_name,
-                full_chassis=full_chassis,
-                financier_name=(dms_values.get("financier_name") or "").strip(),
-                contact_id=out.get("contact_id", ""),
-                battery_partial=(dms_values.get("battery_partial") or "").strip(),
-                action_timeout_ms=action_timeout_ms,
-                content_frame_selector=content_frame_selector,
-                note=note,
-                form_trace=form_trace,
-            )
-            if not ok_order:
-                step("Stopped: create_order flow failed.")
-                out["error"] = f"Siebel: create_order failed. {order_err or ''}".strip()
-                return out
-
-            if order_scraped:
-                veh = dict(out.get("vehicle") or {})
-                if order_scraped.get("inventory_location"):
-                    veh["inventory_location"] = order_scraped.get("inventory_location")
-                if order_scraped.get("vehicle_price"):
-                    veh["vehicle_price"] = order_scraped.get("vehicle_price")
-                if order_scraped.get("order_number"):
-                    veh["order_number"] = order_scraped.get("order_number")
-                if order_scraped.get("invoice_number"):
-                    veh["invoice_number"] = order_scraped.get("invoice_number")
-                if order_scraped.get("vehicle_ex_showroom_cost"):
-                    veh["vehicle_ex_showroom_cost"] = order_scraped.get("vehicle_ex_showroom_cost")
-                if order_scraped.get("cubic_capacity"):
-                    veh["cubic_capacity"] = order_scraped.get("cubic_capacity")
-                if order_scraped.get("vehicle_type"):
-                    veh["vehicle_type"] = order_scraped.get("vehicle_type")
-                out["vehicle"] = veh
-                log_vehicle_snapshot("video_create_order_scrape_merge")
-                _persist_dms_scrape_to_db(customer_id, vehicle_id, out.get("vehicle") or {}, note)
-
-            step(
-                "Video SOP complete: customer record opened, payment added, and create_order flow completed. "
-                "Automation stops here (SIEBEL_DMS_STOP_AFTER_ALL_ENQUIRIES); browser left open."
-            )
-            note("Relation's Name/Address/Pincode, payment entry, and create_order flow completed; automation stops now.")
+        if _sweep_err:
+            step(f"Stopped: {_sweep_err}")
+            out["error"] = _sweep_err
             return out
 
-        # --- Full linear SOP (stages 1–8): runs only when SIEBEL_DMS_STOP_AFTER_ALL_ENQUIRIES is False. ---
+        if sweep_has_open and (sweep_enq_no or "").strip():
+            out.setdefault("vehicle", {})["enquiry_number"] = (sweep_enq_no or "").strip()
+            log_vehicle_snapshot("video_enquiry_found_in_contact_enquiry")
 
-        def fill_relation_name_from_care_of(customer_was_found: bool = False) -> None:
-            if customer_was_found:
-                form_trace(
-                    "1_find_contact",
-                    "Search Results (left) + Contacts applet (right)",
-                    "click_customer_in_left_pane_then_click_first_name_to_open_record",
-                    mobile_phone=mobile,
-                    first_name=first,
-                )
-                opened = _siebel_open_found_customer_record(
+        if not sweep_has_open:
+            note(
+                "Video branch (2): no open enquiry — re-find and drill first contact "
+                "before Relation's Name path."
+            )
+            if not _contact_view_find_by_mobile_strategy_two(
+                page,
+                contact_url=contact_url,
+                mobile=mobile,
+                first_name=video_first_name,
+                nav_timeout_ms=nav_timeout_ms,
+                action_timeout_ms=action_timeout_ms,
+                content_frame_selector=content_frame_selector,
+                mobile_aria_hints=mobile_aria_hints,
+                note=note,
+                step=step,
+                stage_msg_mobile_only="Branch (2): re-find for first drilldown contact — mobile only first (strategy 2).",
+                stage_msg_mobile_and_first="Branch (2): re-find for first drilldown contact — mobile + first name.",
+            ):
+                step("Stopped: branch (2) re-find failed.")
+                out["error"] = "Siebel: video branch (2) could not re-find contact after sweep."
+                return out
+            fn0 = (video_first_name or "").strip()
+            _dr2 = _click_nth_mobile_title_drilldown(
+                page,
+                mobile,
+                0,
+                action_timeout_ms=action_timeout_ms,
+                content_frame_selector=content_frame_selector,
+                first_name_exact=fn0 if fn0 else None,
+            )
+            if not _dr2:
+                _dr2 = _siebel_try_click_mobile_search_hit_link(
                     page,
-                    mobile=mobile,
-                    first_name=first,
+                    mobile,
                     timeout_ms=action_timeout_ms,
                     content_frame_selector=content_frame_selector,
-                    note=note,
                 )
-                if opened:
-                    note("Opened existing customer record: left hit clicked, then first-name link clicked.")
-                else:
-                    note(
-                        "Customer match found but could not open record by left-hit/first-name click; "
-                        "continuing with matched flow."
-                    )
-            note("Stage 4: fill Relation's Name from DB care_of only (no relation type).")
-            step("Adding care-of only (stage 4 — mandatory after find / re-find).")
-            form_trace(
-                "4_care_of",
-                "Contact / Enquiry applet (Father–Husband + Relation line)",
-                "fill_relation_name_from_care_of_only_simple",
-                care_of_source=care_of,
-            )
-            care_val = (care_of or "").strip()
-            filled_rel_name = False
-            if care_val:
-                fill_js = """(value) => {
-                  const vis = (el) => {
-                    if (!el) return false;
-                    const st = window.getComputedStyle(el);
-                    if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
-                    const r = el.getBoundingClientRect();
-                    return r.width >= 2 && r.height >= 2;
-                  };
-                  const norm = (s) => String(s || '').replace(/\\s+/g,' ').trim().toLowerCase();
-                  const lblNorm = (s) => norm(s).replace(/\\s*:\\s*$/, '');
-
-                  const labels = Array.from(document.querySelectorAll('td,th,label,span,div'))
-                    .filter(vis)
-                    .map(el => ({ el, t: lblNorm(el.innerText || el.textContent || '') }));
-
-                  const targetLbl = labels.find(x => x.t === \"relation's name\");
-                  if (!targetLbl) return { ok: false, reason: 'label_not_found' };
-
-                  const row = targetLbl.el.closest('tr') || targetLbl.el.closest('[role=\"row\"]') || null;
-                  const scope = row || document;
-
-                  const controls = Array.from(scope.querySelectorAll('input,textarea'))
-                    .filter(vis)
-                    .filter(el => {
-                      const t = (el.getAttribute('type') || '').toLowerCase();
-                      if (t && ['hidden','submit','button','checkbox','radio','file','image'].includes(t)) return false;
-                      return true;
-                    });
-                  if (!controls.length) return { ok: false, reason: 'control_not_found' };
-
-                  const lr = targetLbl.el.getBoundingClientRect();
-                  let best = null;
-                  let bestScore = 1e18;
-                  for (const c of controls) {
-                    const r = c.getBoundingClientRect();
-                    const dy = Math.abs((r.top + r.height/2) - (lr.top + lr.height/2));
-                    const dx = r.left - lr.right;
-                    if (dy > 28) continue;
-                    if (dx < -10) continue;
-                    const score = dx + dy * 5;
-                    if (score < bestScore) { bestScore = score; best = c; }
-                  }
-                  if (!best) return { ok: false, reason: 'no_candidate' };
-
-                  try {
-                    best.focus();
-                    if ('value' in best) {
-                      best.value = '';
-                      best.value = String(value || '').trim();
-                    }
-                    best.dispatchEvent(new Event('input', { bubbles: true }));
-                    best.dispatchEvent(new Event('change', { bubbles: true }));
-                    best.dispatchEvent(new Event('blur', { bubbles: true }));
-                  } catch (e) {
-                    return { ok: false, reason: 'set_failed' };
-                  }
-
-                  try {
-                    const after = norm(best.value || '');
-                    const want = norm(value || '');
-                    const ok = after && (after.includes(want) || want.includes(after));
-                    return { ok, after, want };
-                  } catch (e) {
-                    return { ok: false, reason: 'verify_failed' };
-                  }
-                }"""
-                for frame in _ordered_frames(page):
-                    try:
-                        res = frame.evaluate(fill_js, care_val)
-                        if isinstance(res, dict) and res.get("ok") is True:
-                            filled_rel_name = True
-                            _safe_page_wait(page, 120, log_label="after_relation_name_care_of_inline_fill")
-                            break
-                    except Exception:
-                        continue
-            if filled_rel_name:
-                ms_done("Care of filled")
-            form_trace("4_care_of", "same applet", "click_Save_or_Commit_toolbar_after_care_of")
-            save_customer_record(
-                "Stage 4: Save after care-of update.",
-                "Stage 4: Save not detected after care-of update.",
-            )
-            step("Care-of step completed (stage 4).")
-
-        def find_customer() -> tuple[bool, bool]:
-            if not contact_url:
-                step("Stopped: DMS_REAL_URL_CONTACT is not configured.")
+            if not _dr2:
+                step("Stopped: branch (2) could not drill first contact row.")
                 out["error"] = (
-                    "Siebel: set DMS_REAL_URL_CONTACT to the Contact / Find view GotoView URL "
-                    "so mobile search can run (stage 1)."
+                    "Siebel: video branch (2) — no open enquiry; could not open first drilldown contact."
                 )
-                return False, False
-            form_trace(
-                "1_find_contact",
-                "Contact view — Find pane (strategy 2: mobile-only first, then mobile + first name if needed)",
-                "goto_DMS_REAL_URL_CONTACT_expand_Find_fill_Mobile_FirstName_click_FindGo",
-                contact_url_truncated=contact_url[:200],
-                mobile_phone=mobile,
-                first_name=first.strip(),
+                return out
+            _safe_page_wait(page, 2000, log_label="after_title_drilldown_branch2")
+            try:
+                page.wait_for_load_state("networkidle", timeout=8_000)
+            except Exception:
+                pass
+
+        form_trace(
+            "v2_drill_and_nav",
+            "Search Results + Contacts detail",
+            "Siebel_Find_tab_optional_then_link_hit_then_click_first_name_then_fill_Relations_Name_only",
+            mobile_phone=mobile,
+            first_name=video_first_name,
+            care_of=care_of,
+        )
+        if not _siebel_video_path_after_find_go_to_all_enquiries(
+            page,
+            mobile=mobile,
+            first_name=video_first_name,
+            care_of=care_of,
+            address_line_1=addr,
+            action_timeout_ms=action_timeout_ms,
+            content_frame_selector=content_frame_selector,
+            note=note,
+            skip_search_hit_click=True,
+        ):
+            step("Stopped: video SOP failed while opening customer record or filling Relation's Name.")
+            out["error"] = (
+                "Siebel: video SOP — after Find/Go, could not fill Relation's Name from care_of. "
+                "Confirm right-pane selectors/labels and iframe scope."
             )
-            ok = _contact_view_find_by_mobile_strategy_two(
+            return out
+
+        if not sweep_has_open:
+            if not _siebel_video_branch2_address_postal_and_save(
                 page,
-                contact_url=contact_url,
-                mobile=mobile,
-                first_name=first.strip(),
-                nav_timeout_ms=nav_timeout_ms,
-                action_timeout_ms=action_timeout_ms,
-                content_frame_selector=content_frame_selector,
-                mobile_aria_hints=mobile_aria_hints,
-                note=note,
-                step=step,
-                stage_msg_mobile_only="Stage 1: Find customer by mobile only first (Contact view, strategy 2).",
-                stage_msg_mobile_and_first="Stage 1: Find customer by mobile + first name (Contact view).",
-            )
-            if not ok:
-                step("Stopped: mobile field not found on contact view — check Find pane and iframe selectors.")
-                out["error"] = (
-                    "Siebel: could not find a mobile/cellular phone input on the contact view. "
-                    "Open the Find pane (right side), set object type to Contact if needed. "
-                    "Tune env: DMS_SIEBEL_CONTENT_FRAME_SELECTOR (chain iframes with >>, outer to inner), "
-                    "DMS_SIEBEL_AUTO_IFRAME_SELECTORS (comma-separated iframe CSS), "
-                    "DMS_SIEBEL_POST_GOTO_WAIT_MS (longer wait after goto), "
-                    "or DMS_SIEBEL_MOBILE_ARIA_HINTS (substrings matching the visible field label)."
-                )
-                return False, False
-            note("Stage 1: Find/Go completed for mobile search.")
-            step("Stage 1 complete: customer search ran on the mobile number.")
-            if dms_path == "new_enquiry":
-                note("DECISION: dms_contact_path=new_enquiry — treating as not matched; stage 2 will run.")
-                return True, False
-            matched = _siebel_ui_suggests_contact_match_mobile_first(page, mobile, first.strip())
-            note(
-                f"DECISION: customer_found_from_contact_grid={matched!r} "
-                f"(mobile + exact first name in table row with ≥3 cells)."
-            )
-            if matched:
-                ms_done("Customer found")
-                note("Stage 1: table/grid suggests an existing contact match.")
-            else:
-                note("Stage 1: no table/grid match — will create basic enquiry (stage 2).")
-            return True, matched
-
-        def stage_2_create_enquiry_if_needed(matched: bool) -> bool:
-            if matched:
-                note("Stage 2: skipped — existing contact found (no new basic enquiry).")
-                step("Stage 2 skipped: contact already exists from first search.")
-                return False
-            note("Stage 2: basic enquiry only (name, address, state, PIN — no care-of on this step).")
-            step("Creating new enquiry with basic details only (stage 2).")
-            form_trace(
-                "2_basic_enquiry",
-                "New enquiry / Contact main form (basic customer fields only)",
-                "fill_FirstName_LastName_Address_State_PIN",
-                first_name=first,
-                last_name=last,
-                address_line_1=(addr[:220] + "…") if len(addr) > 220 else addr,
-                state=state,
                 pin_code=pin,
-            )
-            _fill_basic_enquiry_details(
-                page,
-                first=first,
-                last=last,
-                addr=addr,
-                state=state,
-                pin=pin,
-                action_timeout_ms=action_timeout_ms,
-                content_frame_selector=content_frame_selector,
-            )
-            form_trace("2_basic_enquiry", "same form", "click_Save_or_Commit_toolbar_after_basic_fields")
-            save_customer_record(
-                "Stage 2: Save after basic enquiry details.",
-                "Stage 2: Save not detected after basic enquiry details.",
-            )
-            ms_done("Enquiry created")
-            step("Stage 2 complete: basic enquiry saved.")
-            return True
-
-        def stage_3_refind_customer(enquiry_was_created: bool) -> bool:
-            if not enquiry_was_created:
-                note("Stage 3: skipped — no new enquiry (re-find mandatory only after new basic enquiry).")
-                step("Stage 3 skipped: re-find not required when contact already existed.")
-                return True
-            form_trace(
-                "3_refind_after_new_enquiry",
-                "Contact view — Find pane",
-                "goto_contact_fill_mobile_again_FindGo_to_open_saved_record",
-                contact_url_truncated=contact_url[:200],
-                mobile_phone=mobile,
-            )
-            ok = _refind_customer_after_enquiry(
-                page,
-                contact_url=contact_url,
-                mobile=mobile,
-                nav_timeout_ms=nav_timeout_ms,
-                action_timeout_ms=action_timeout_ms,
-                content_frame_selector=content_frame_selector,
-                mobile_aria_hints=mobile_aria_hints,
-                note=note,
-                step=step,
-                first_name=first.strip(),
-            )
-            if not ok:
-                out["error"] = (
-                    "Siebel: mandatory re-find (stage 3) failed — could not fill mobile on Contact view "
-                    "after saving the basic enquiry. Check Find pane and iframe selectors."
-                )
-                return False
-            note("Stage 3: mandatory re-find by mobile completed.")
-            step("Stage 3 complete: re-found customer after enquiry save.")
-            return True
-
-        def stage_5_vehicle_flow() -> bool:
-            """
-            Vehicle list search/scrape; **dealer** path runs tab Pre-check/PDI on the vehicle form; if grid
-            suggests In Transit → receipt / Process Receipt only (Pre-check/PDI skipped — Siebel rejects until
-            dealer stock). Delegates to ``prepare_vehicle``. Sets ``in_transit_state`` and ``out["vehicle"]``.
-            Returns False on configuration or vehicle-search failure (``out["error"]`` set).
-            """
-            nonlocal in_transit_state
-            note("Stage 5: vehicle list search, scrape, and In-Transit handling.")
-            step("Vehicle flow: key / chassis / engine search (stage 5).")
-            ok, err, scraped, in_transit_state, vm_crit, vm_info = prepare_vehicle(
-                page,
-                dms_values,
-                urls,
-                nav_timeout_ms=nav_timeout_ms,
                 action_timeout_ms=action_timeout_ms,
                 content_frame_selector=content_frame_selector,
                 note=note,
-                form_trace=form_trace,
-                ms_done=ms_done,
-                step=step,
-            )
-            if not ok:
-                out["error"] = err or "prepare_vehicle failed."
-                return False
-            out["vehicle"] = scraped
-            _write_playwright_vehicle_master_section(log_fp, scraped, vm_crit, vm_info)
-            out["dms_siebel_forms_filled"] = bool(customer_save_clicked)
-            if not customer_save_clicked:
-                note(
-                    "Siebel Save was not detected on the customer/enquiry step — vehicle search still ran; "
-                    "verify the contact record in Hero Connect. dms_siebel_forms_filled=false for API consumers."
-                )
-            step("Stage 5: vehicle list query completed; result row read when present.")
-            return True
-
-        def stage_6_generate_booking() -> bool:
-            note("Stage 6: Generate Booking (always after vehicle processing per SOP).")
-            step("Generate Booking (stage 6 — always, regardless of In Transit).")
-            enq_u = (urls.enquiry or "").strip() or (urls.contact or "").strip()
-            form_trace(
-                "6_generate_booking",
-                "Enquiry / My Enquiries (or Contact fallback)",
-                "navigate_if_configured_then_click_Generate_Booking_toolbar",
-                target_url_truncated=enq_u[:200] if enq_u else "",
-            )
-            if enq_u:
-                _goto(page, enq_u, "enquiry_for_booking", nav_timeout_ms=nav_timeout_ms)
-                _siebel_after_goto_wait(page, floor_ms=1200)
-            else:
-                note("Stage 6: no DMS_REAL_URL_ENQUIRY or DMS_REAL_URL_CONTACT — booking may be on current view.")
-
-            _safe_page_wait(page, 800, log_label="before_generate_booking")
-            form_trace("6_generate_booking", "current Siebel view", "click_Generate_Booking_toolbar_pattern_match")
-            if _try_click_generate_booking(
-                page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
             ):
-                note("Stage 6: clicked Generate Booking.")
-                ms_done("Booking generated")
-                step("Generate Booking was completed (stage 6).")
-                return True
-            else:
-                note("Stage 6: Generate Booking control not found or not visible.")
-                step("Stopped: Generate Booking was not found (stage 6).")
+                step("Stopped: video branch (2) Address / Postal Code / Save failed.")
                 out["error"] = (
-                    "Siebel: Generate Booking control was not found. "
-                    "Booking is mandatory when no existing order is present."
+                    "Siebel: no open enquiry path — could not fill Address Postal Code or save."
                 )
-                return False
-
-        def stage_7_allotment_if_applicable() -> None:
-            if in_transit_state:
-                note("Stage 7: Price All / Allocate skipped (In Transit path).")
-                step("Allotment skipped — vehicle was In Transit (stage 7).")
-                return
-            note("Stage 7: order line / allotment (non–In Transit only, after booking).")
-            step("Opening allotment / line items after booking (stage 7).")
-            line_u = (urls.line_items or "").strip()
-            form_trace(
-                "7_allotment",
-                "Order line / Allotment (DMS_REAL_URL_LINE_ITEMS)",
-                "navigate_then_Price_All_and_Allocate_toolbars_if_present",
-                line_items_url_truncated=line_u[:200] if line_u else "",
-            )
-            if line_u:
-                _goto(page, line_u, "line_items_allotment", nav_timeout_ms=nav_timeout_ms)
-                _siebel_after_goto_wait(page, floor_ms=1200)
-                ms_done("Allotment view opened")
-                step("Allotment / order line view opened.")
-                if _try_click_price_all(page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector):
-                    note("Clicked Price All (best-effort).")
-                    step("Price All was clicked.")
-                if _try_click_allocate_line(page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector):
-                    note("Clicked Allocate / Allocate All.")
-                    ms_done("Vehicle allocated")
-                    step("Allocation was completed (Allocate / Allocate All).")
-                else:
-                    note("Allocate / Allocate All not found; operator may allocate manually.")
-                    step("Allocation control was not found — complete allocation manually if required.")
-            else:
-                note("DMS_REAL_URL_LINE_ITEMS not set; skipping allotment view.")
-                step("Line items / allotment URL is not set — skipped allocation in UI.")
-
-        def stage_8_invoice_hook() -> None:
-            form_trace(
-                "8_invoice",
-                "(no Siebel form — operator completes manually)",
-                "automation_hook_only_no_field_updates",
-            )
-            note("Invoice step pending (not automated).")
-            step("Ready for invoice creation.")
-
-        if not skip_contact_find:
-            ok1, matched1 = find_customer()
-            if not ok1:
                 return out
-            created_basic = False
-            if not matched1:
-                note("Stage 1: no contact table match — trying Add Enquiry (vehicle + Opportunities).")
-                _ae_ok, _ae_det, _ae_enq = _add_enquiry_opportunity(
-                    page,
-                    dms_values,
-                    urls,
-                    action_timeout_ms=action_timeout_ms,
-                    nav_timeout_ms=nav_timeout_ms,
-                    content_frame_selector=content_frame_selector,
-                    note=note,
-                    form_trace=form_trace,
-                    vehicle_merge=out.setdefault("vehicle", {}),
-                )
-                if _ae_ok:
-                    created_basic = True
-                    ms_done("Add enquiry saved")
-                    if _ae_enq:
-                        out.setdefault("vehicle", {})["enquiry_number"] = _ae_enq
-                    log_vehicle_snapshot("linear_add_enquiry_saved")
-                    _persist_dms_scrape_to_db(customer_id, vehicle_id, out.get("vehicle") or {}, note)
-                else:
-                    note("Add Enquiry branch failed — falling back to basic enquiry form (stage 2).")
-                    created_basic = stage_2_create_enquiry_if_needed(matched1)
-            else:
-                created_basic = stage_2_create_enquiry_if_needed(matched1)
-            if not stage_3_refind_customer(created_basic):
-                return out
-            fill_relation_name_from_care_of(matched1)
+
+        # Scrape Contact ID: detail inputs + Contacts grid **Contact Id** column (e.g. 11870-01-SCON-…).
+        _contact_id = ""
+        _cid_js = """() => {
+            const vis = (el) => {
+              if (!el) return false;
+              const st = window.getComputedStyle(el);
+              if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+              const r = el.getBoundingClientRect();
+              return r.width > 2 && r.height > 2;
+            };
+            const norm = (s) => String(s || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+            const sels = [
+              "input[aria-label='Contact Id']",
+              "[aria-labelledby='s_1_l_HHML_Contact_Seq_Num']",
+              "input[aria-label*='Contact Id' i]",
+              "input[name*='Contact_Id' i]",
+              "input[name*='HHML_Contact' i]",
+              "input[id*='Contact_Id' i]",
+            ];
+            for (const sel of sels) {
+              const el = document.querySelector(sel);
+              if (!el || !vis(el)) continue;
+              const v = (el.value != null ? String(el.value) : (el.textContent || '')).trim();
+              if (v && v.length > 2) return v;
+            }
+            for (const app of document.querySelectorAll('.siebui-applet')) {
+              if (!vis(app)) continue;
+              const blob = (app.innerText || '').toLowerCase();
+              if (!blob.includes('contact')) continue;
+              const table = app.querySelector('table');
+              if (!table) continue;
+              const heads = Array.from(table.querySelectorAll('thead th, thead td, tr th'));
+              let idx = -1;
+              heads.forEach((h, i) => {
+                const ht = norm(h.innerText || '');
+                if (idx < 0 && (ht === 'contact id' || ht.includes('contact id'))) idx = i;
+              });
+              if (idx < 0) continue;
+              const rows = Array.from(table.querySelectorAll('tbody tr, tr')).filter(vis);
+              for (const tr of rows) {
+                if (!vis(tr)) continue;
+                const cells = tr.querySelectorAll('td');
+                if (idx >= cells.length) continue;
+                const cell = cells[idx];
+                if (!vis(cell)) continue;
+                const a = cell.querySelector('a');
+                const raw = ((a && a.textContent) ? a.textContent : (cell.textContent || '')).trim();
+                if (raw && raw.length > 5 && (/scon/i.test(raw) || /^\\d+-\\d+-/i.test(raw))) return raw;
+              }
+            }
+            return '';
+        }"""
+        for _cr in _ordered_frames(page):
+            try:
+                _cid = _cr.evaluate(_cid_js)
+                if _cid:
+                    _contact_id = str(_cid).strip()
+                    break
+            except Exception:
+                continue
+        if _contact_id:
+            note(f"Scraped Contact ID={_contact_id!r} from contact detail page.")
+            out["contact_id"] = _contact_id
         else:
-            enquiry_url = (urls.enquiry or "").strip() or (urls.contact or "").strip()
-            if not enquiry_url:
-                out["error"] = (
-                    "Siebel skip_find: set DMS_REAL_URL_ENQUIRY or DMS_REAL_URL_CONTACT to the "
-                    "enquiry view (e.g. Buyer/CoBuyer My Enquiries) so the customer can be added "
-                    "before vehicle search."
-                )
-                return out
-            note("skip_find: stage 1 (Find) bypassed — staged basic enquiry → re-find → care-of.")
-            step("skip_find path: enquiry view opened.")
-            form_trace(
-                "skip_find_open_enquiry",
-                "Enquiry / My Enquiries (or Contact fallback)",
-                "goto_enquiry_URL_before_mobile_and_basic_fields",
-                enquiry_url_truncated=enquiry_url[:200],
-            )
-            _goto(page, enquiry_url, "enquiry_or_contact", nav_timeout_ms=nav_timeout_ms)
-            _siebel_after_goto_wait(page, floor_ms=1400)
+            note("Contact ID not found on contact detail page (best-effort).")
 
-            form_trace(
-                "skip_find_mobile_on_enquiry",
-                "Enquiry / customer form (mobile field)",
-                "fill_Mobile_Phone_on_enquiry_applet",
-                mobile_phone=mobile,
-            )
-            form_mobile_ok = _try_fill_mobile_on_enquiry_form(
-                page,
-                mobile,
-                action_timeout_ms=action_timeout_ms,
-                content_frame_selector=content_frame_selector,
-                mobile_aria_hints=mobile_aria_hints,
-            )
-            if not form_mobile_ok:
-                out["error"] = (
-                    "Siebel skip_find: could not fill mobile on the enquiry/customer form "
-                    "(or Mobile Phone # is missing in DMS fill values). "
-                    "Set DMS_SIEBEL_CONTENT_FRAME_SELECTOR (use >> to chain iframes), "
-                    "DMS_SIEBEL_AUTO_IFRAME_SELECTORS, DMS_SIEBEL_POST_GOTO_WAIT_MS, "
-                    "or DMS_SIEBEL_MOBILE_ARIA_HINTS if needed."
-                )
-                return out
+        _write_playwright_contact_scrape_section(
+            log_fp,
+            out,
+            had_open_enquiry_from_sweep=sweep_has_open,
+        )
 
-            note("skip_find stage 2: basic enquiry details only (no care-of).")
-            form_trace(
-                "skip_find_basic_enquiry",
-                "Enquiry / customer form (basic fields)",
-                "fill_FirstName_LastName_Address_State_PIN",
-                first_name=first,
-                last_name=last,
-                address_line_1=(addr[:220] + "…") if len(addr) > 220 else addr,
-                state=state,
-                pin_code=pin,
+        form_trace(
+            "v3_add_customer_payment",
+            "Payments tab (current frame)",
+            "click_Payments_tab_then_click_plus_icon",
+        )
+        if not _add_customer_payment(
+            page,
+            action_timeout_ms=action_timeout_ms,
+            content_frame_selector=content_frame_selector,
+            note=note,
+            vehicle_context=(out.get("vehicle") or {}),
+        ):
+            step("Stopped: could not open Payments tab or click '+' icon.")
+            out["error"] = (
+                "Siebel: video SOP — could not click Payments tab and '+' icon for Add customer payment."
             )
-            _fill_basic_enquiry_details(
-                page,
-                first=first,
-                last=last,
-                addr=addr,
-                state=state,
-                pin=pin,
-                action_timeout_ms=action_timeout_ms,
-                content_frame_selector=content_frame_selector,
+            return out
+
+        try:
+            from app.services.fill_hero_dms_service import collate_customer_master_from_dms_siebel_inputs
+
+            out["dms_customer_master_collated"] = collate_customer_master_from_dms_siebel_inputs(
+                dms_values,
+                contact_id=out.get("contact_id"),
             )
-            if landline:
-                form_trace(
-                    "skip_find_basic_enquiry",
-                    "same form",
-                    "fill_landline_or_alternate_phone_if_configured",
-                    landline=(landline[:80] + "…") if len(landline) > 80 else landline,
-                )
-                dup = True
-                _try_fill_field(
-                    page,
-                    [
-                        'input[aria-label*="Work Phone" i]',
-                        'input[aria-label*="Alternate" i]',
-                        'input[aria-label*="Landline" i]',
-                    ],
-                    landline,
-                    timeout_ms=action_timeout_ms,
-                    content_frame_selector=content_frame_selector,
-                    prefer_second_if_duplicate=dup,
-                )
-            form_trace("skip_find_basic_enquiry", "same form", "click_Save_or_Commit_toolbar_after_basic_fields")
-            save_customer_record(
-                "skip_find: Save after basic enquiry details.",
-                "skip_find: Save not detected after basic enquiry details.",
+            _cm = out["dms_customer_master_collated"] or {}
+            _nf = len((_cm.get("fields") or {}) if isinstance(_cm, dict) else {})
+            _nu = len((_cm.get("mapping_unclear") or []) if isinstance(_cm, dict) else {})
+            _nn = len((_cm.get("notes") or {}) if isinstance(_cm, dict) else {})
+            note(
+                f"Customer master collated for operator/DB review: {_nf} field(s), {_nn} sourcing note(s), {_nu} residual note(s)."
             )
-            ms_done("Enquiry created")
-            _safe_page_wait(page, 800, log_label="after_skip_find_basic_save")
-            if not contact_url:
-                out["error"] = (
-                    "Siebel skip_find: set DMS_REAL_URL_CONTACT for mandatory re-find (stage 3) after enquiry save."
-                )
-                return out
-            form_trace(
-                "skip_find_refind",
-                "Contact view — Find pane",
-                "goto_contact_fill_mobile_FindGo_after_enquiry_save",
-                contact_url_truncated=contact_url[:200],
-                mobile_phone=mobile,
+        except Exception as exc:
+            logger.warning("siebel_dms: customer_master collate failed: %s", exc)
+            out["dms_customer_master_collated"] = {
+                "fields": {},
+                "notes": {},
+                "mapping_unclear": [f"collate failed: {exc!s}"],
+                "collate_error": str(exc),
+            }
+
+        full_chassis = (
+            str((out.get("vehicle") or {}).get("full_chassis") or "").strip()
+            or str(dms_values.get("full_chassis") or "").strip()
+            or str(dms_values.get("frame_num") or "").strip()
+        )
+        # If there is no open order for this customer, try Generate Booking before Sales Orders.
+        _enq_u = (urls.enquiry or "").strip() or (urls.contact or "").strip()
+        if _enq_u:
+            _goto(page, _enq_u, "enquiry_for_booking_video", nav_timeout_ms=nav_timeout_ms)
+            _siebel_after_goto_wait(page, floor_ms=900)
+        _safe_page_wait(page, 500, log_label="before_generate_booking_video")
+        if _try_click_generate_booking(
+            page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
+        ):
+            note("Video path: clicked Generate Booking before create_order.")
+            ms_done("Booking generated")
+        else:
+            step("Stopped: Generate Booking was not found before create_order (video path).")
+            out["error"] = (
+                "Siebel: Generate Booking control was not found before create_order. "
+                "Booking is mandatory when no existing order is present."
             )
-            if not _refind_customer_after_enquiry(
-                page,
-                contact_url=contact_url,
-                mobile=mobile,
-                nav_timeout_ms=nav_timeout_ms,
-                action_timeout_ms=action_timeout_ms,
-                content_frame_selector=content_frame_selector,
-                mobile_aria_hints=mobile_aria_hints,
-                note=note,
-                step=step,
-                first_name=first.strip(),
+            return out
+
+        form_trace(
+            "v4_create_order",
+            "Vehicle Sales / Sales Orders",
+            "vehicle_sales_new_order_then_pick_contact_then_vin_search_price_allocate",
+            mobile_phone=mobile,
+            first_name=video_first_name,
+            full_chassis=full_chassis,
+        )
+        ok_order, order_err, order_scraped = _create_order(
+            page,
+            mobile=mobile,
+            first_name=video_first_name,
+            full_chassis=full_chassis,
+            financier_name=(dms_values.get("financier_name") or "").strip(),
+            contact_id=out.get("contact_id", ""),
+            battery_partial=(dms_values.get("battery_partial") or "").strip(),
+            action_timeout_ms=action_timeout_ms,
+            content_frame_selector=content_frame_selector,
+            note=note,
+            form_trace=form_trace,
+        )
+        if not ok_order:
+            step("Stopped: create_order flow failed.")
+            out["error"] = f"Siebel: create_order failed. {order_err or ''}".strip()
+            return out
+
+        if order_scraped.get("ready_for_client_create_invoice"):
+            out["ready_for_client_create_invoice"] = True
+
+        if order_scraped:
+            veh = dict(out.get("vehicle") or {})
+            if order_scraped.get("inventory_location"):
+                veh["inventory_location"] = order_scraped.get("inventory_location")
+            if order_scraped.get("vehicle_price"):
+                veh["vehicle_price"] = order_scraped.get("vehicle_price")
+            if order_scraped.get("order_number"):
+                veh["order_number"] = order_scraped.get("order_number")
+            if order_scraped.get("invoice_number"):
+                veh["invoice_number"] = order_scraped.get("invoice_number")
+            if order_scraped.get("vehicle_ex_showroom_cost"):
+                veh["vehicle_ex_showroom_cost"] = order_scraped.get("vehicle_ex_showroom_cost")
+            if order_scraped.get("cubic_capacity"):
+                veh["cubic_capacity"] = order_scraped.get("cubic_capacity")
+            if order_scraped.get("vehicle_type"):
+                veh["vehicle_type"] = order_scraped.get("vehicle_type")
+            out["vehicle"] = veh
+            log_vehicle_snapshot("video_create_order_scrape_merge")
+            _collate_fields = None
+            _cm = out.get("dms_customer_master_collated")
+            if isinstance(_cm, dict):
+                _cf = _cm.get("fields")
+                if isinstance(_cf, dict) and len(_cf) > 0:
+                    _collate_fields = _cf
+            out["dms_sales_master_prep"] = {
+                "customer_id": customer_id,
+                "vehicle_id": vehicle_id,
+                "dealer_id": int(DEALER_ID),
+                "order_number": str((out.get("vehicle") or {}).get("order_number") or ""),
+                "invoice_number": str((out.get("vehicle") or {}).get("invoice_number") or ""),
+                "enquiry_number": str((out.get("vehicle") or {}).get("enquiry_number") or ""),
+            }
+            _atomic_ok = False
+            _atomic_err = None
+            _cid_out: int | None = None
+            _vid_out: int | None = None
+            _sid_out: int | None = None
+            from app.services.fill_hero_dms_service import (
+                insert_dms_masters_from_siebel_scrape,
+                invoice_number_ready_for_master_commit,
+            )
+
+            _inv_ready = invoice_number_ready_for_master_commit(out.get("vehicle"))
+            if (
+                _inv_ready
+                and customer_id is None
+                and vehicle_id is None
+                and not order_scraped.get("ready_for_client_create_invoice")
             ):
-                out["error"] = (
-                    "Siebel skip_find: mandatory re-find failed — could not run Find by mobile on Contact view."
+                try:
+                    _cid_out, _vid_out, _sid_out = insert_dms_masters_from_siebel_scrape(
+                        dms_values,
+                        out.get("vehicle") or {},
+                        collated_customer_fields=_collate_fields,
+                        dealer_id=int(DEALER_ID),
+                    )
+                    _atomic_ok = True
+                    if _cid_out is not None:
+                        out["customer_id"] = _cid_out
+                    if _vid_out is not None:
+                        out["vehicle_id"] = _vid_out
+                    if _sid_out is not None:
+                        out["sales_id"] = _sid_out
+                except Exception as _p_exc:
+                    _atomic_err = str(_p_exc)
+                    logger.warning("siebel_dms: master INSERT after Create Invoice failed: %s", _p_exc)
+            elif order_scraped.get("ready_for_client_create_invoice"):
+                note(
+                    "My Orders grid already showed Invoice# — skipping atomic master INSERT from Siebel scrape; "
+                    "client Create Invoice flow applies."
                 )
+            elif _inv_ready and (customer_id is not None or vehicle_id is not None):
+                note(
+                    "Invoice# present but customer_id/vehicle_id already set — skipping DB "
+                    "(policy: no UPDATE during Siebel; refresh ids from DB separately if needed)."
+                )
+            else:
+                note(
+                    "Invoice# not in scrape yet (Create Invoice not completed or not scraped) — "
+                    "master INSERT deferred; values are in memory and the Playwright DMS execution log only."
+                )
+            _prep = dict(out.get("dms_sales_master_prep") or {})
+            _prep["customer_id"] = out.get("customer_id")
+            _prep["vehicle_id"] = out.get("vehicle_id")
+            _prep["sales_id"] = out.get("sales_id")
+            out["dms_sales_master_prep"] = _prep
+            out["dms_master_persist_committed"] = _atomic_ok
+            _attach_ex = str(
+                (out.get("vehicle") or {}).get("vehicle_price")
+                or (out.get("vehicle") or {}).get("vehicle_ex_showroom_cost")
+                or ""
+            )
+            _write_playwright_dms_masters_section(
+                log_fp,
+                attach_ex_showroom=_attach_ex,
+                sales_master_prep=out.get("dms_sales_master_prep") or {},
+                atomic_db_committed=_atomic_ok,
+                atomic_db_error=_atomic_err,
+            )
+            if _atomic_err:
+                out["error"] = f"Siebel: database persist failed after create_order: {_atomic_err}"
                 return out
-            fill_relation_name_from_care_of(False)
-            step("skip_find: stages 2–4 complete (basic → re-find → care-of).")
 
-        if not stage_5_vehicle_flow():
-            return out
-        _persist_dms_scrape_to_db(customer_id, vehicle_id, out.get("vehicle") or {}, note)
+        step(
+            "Video SOP complete: customer record opened, payment added, and create_order flow completed. "
+            "Automation stops here; browser left open."
+        )
+        note("Relation's Name/Address/Pincode, payment entry, and create_order flow completed; automation stops now.")
+        return out
 
-        if not stage_6_generate_booking():
-            return out
-        stage_7_allotment_if_applicable()
-        stage_8_invoice_hook()
+
 
     except PlaywrightTimeout as e:
         out["error"] = f"Siebel automation timeout: {e!s}"
@@ -15974,7 +15385,7 @@ def Playwright_Hero_DMS_fill(
         if log_fp is not None:
             try:
                 log_fp.write(
-                    f"\n{datetime.now(timezone.utc).isoformat()} [END] "
+                    f"\n{_ts_ist_iso()} [END] "
                     f"error={out.get('error')!s}\n"
                 )
             except OSError:

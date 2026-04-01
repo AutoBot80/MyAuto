@@ -659,6 +659,13 @@
   color: #555;
 }
 
+.add-sales-v2-field-note {
+  margin: 4px 0 0 0;
+  font-size: 12px;
+  color: #5a6d7e;
+  line-height: 1.35;
+}
+
 .add-sales-v2-dl-input {
   flex: 1;
   min-width: 0;

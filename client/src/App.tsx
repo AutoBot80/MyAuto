@@ -64,6 +64,7 @@ function App() {
   const [bulkLoadsPendingCount, setBulkLoadsPendingCount] = useState<number>(0);
   const [dealerName, setDealerName] = useState<string>("—");
   const [dealerCity, setDealerCity] = useState<string | null>(null);
+  const [dealerOemId, setDealerOemId] = useState<number | null>(null);
   const [siteUrls, setSiteUrls] = useState<SiteUrls | null>(null);
   const [siteUrlsError, setSiteUrlsError] = useState<string | null>(null);
   const [addSalesAutoNewTrigger, setAddSalesAutoNewTrigger] = useState(0);
@@ -73,6 +74,7 @@ function App() {
       .then((d) => {
         setDealerName(d.dealer_name);
         setDealerCity(d.city ?? null);
+        setDealerOemId(d.oem_id ?? null);
       })
       .catch(() => setDealerName("Dealer"));
   }, []);
@@ -122,6 +124,7 @@ function App() {
         return (
           <AddSalesPage
             dealerId={DEALER_ID}
+            oemId={dealerOemId}
             dmsUrl={dmsUrl}
             siteUrlsError={siteUrlsError}
             siteUrlsLoading={!siteUrls && !siteUrlsError}

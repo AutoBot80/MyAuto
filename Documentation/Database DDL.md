@@ -46,7 +46,7 @@ This document lists the current database tables and their columns. **Executable 
 | `marital_status` | `varchar(32)` | YES |  | Customer marital status captured from details sheet |
 | `care_of` | `varchar(255)` | YES |  | Care of / father–husband from **Aadhaar QR**; sole source for DMS Father/Husband line and Form 20 |
 | `dms_relation_prefix` | `varchar(8)` | YES |  | DMS relation line: app persists **first 3 characters of trimmed address** when length ≥ 3, else **`D/o`** (female) / **`S/o`** (otherwise); see `app/services/dms_relation_prefix.py` |
-| `dms_contact_path` | `varchar(16)` | NO | `'found'` | `found` / `new_enquiry` / `skip_find`: dummy uses `skip_find` to skip finder Go; **real Siebel ignores `skip_find` for ordering** — always Contact Find (`DMS_REAL_URL_CONTACT`) first, then linear SOP per LLD §2.4d |
+| `dms_contact_path` | `varchar(16)` | NO | `'found'` | `found` / `new_enquiry` / `skip_find`: dummy uses `skip_find` to skip finder Go; **real Siebel ignores `skip_find` for ordering** — always Contact Find (`DMS_REAL_URL_CONTACT`) first, then **Find Contact Enquiry** automation per LLD §2.4d |
 | `dms_contact_id` | `varchar(128)` | YES |  | DMS / Siebel **Contact Id** from automation scrape (`DDL/alter/02k_customer_master_add_dms_contact_id.sql`) |
 | `file_location` | `text` | YES |  | Legacy mirror of per-sale folder; **canonical** folder for a sale is `sales_master.file_location` (kept in sync on master commit) |
 | `gender` | `varchar(8)` | YES |  | Gender from Aadhar QR (e.g. M, F) |
@@ -525,3 +525,16 @@ This document lists the current database tables and their columns. **Executable 
 | 2.43 | Mar 2026 | **No schema change.** Video path drilldown plan cache — **LLD** **6.102**. |
 | 2.44 | Mar 2026 | **No schema change.** Contact Find drilldown direct frame resolution — **LLD** **6.103**. |
 | 2.45 | Mar 2026 | **No schema change.** Removed **`[TRACE:FC→FN]`** / trial hint **`note`** diagnostics from Siebel automation logging — **LLD** **6.104**. |
+| 2.46 | Mar 2026 | **No schema change.** **`Playwright_Hero_DMS_fill`**: removed linear SOP / **`SIEBEL_DMS_STOP_AFTER_ALL_ENQUIRIES`**; **`dms_contact_path`** semantics note updated — **LLD** **6.105** / **BRD** **3.53**. |
+| 2.47 | Mar 2026 | **No schema change.** Deleted unused Siebel enquiry helpers — **LLD** **6.106** / **BRD** **3.54**. |
+| 2.48 | Mar 2026 | **No schema change.** **`_attach_vehicle_to_bkg`**: skip post–Allocate All Pre-check/PDI block — **LLD** **6.107** / **BRD** **3.55**. |
+| 2.49 | Mar 2026 | **No schema change.** Siebel video SOP: **`collate_customer_master_from_dms_siebel_inputs`** populates API/trace **`dms_customer_master_collated`** (no **`customer_master` UPDATE**) — **LLD** **6.108** / **BRD** **3.56** / **HLD** **1.44**. |
+| 2.50 | Mar 2026 | **No schema change.** Collate semantics: detail sheet for profession/marital/aadhar; **`customer_id`** PK system-generated; **`dms_relation_prefix`** in collate = first three chars of **Address Line 1** — **LLD** **6.109** / **BRD** **3.57** / **HLD** **1.45**. |
+| 2.51 | Mar 2026 | **No schema change.** Siebel attach path: ex-showroom scrape after **Allocate All**; **`persist_dms_masters_atomic`** updates **`customer_master`** (collate) / **`vehicle_master`** / **`sales_master`** in one transaction — **LLD** **6.110** / **BRD** **3.58** / **HLD** **1.46**. |
+| 2.52 | Mar 2026 | **No schema change.** Video **`create_order`** with no prior **`customer_id`**/**`vehicle_id`**: **`insert_dms_masters_from_siebel_scrape`** INSERTs all three masters in one transaction — **LLD** **6.111** / **BRD** **3.59** / **HLD** **1.47**. |
+| 2.53 | Mar 2026 | **No schema change.** **`sales_master.file_location`** / **`customer_master.file_location`** on Siebel insert path: canonical folder **`ocr_output/{dealer_id}/{mobile}_{ddmmyyyy}`** — **LLD** **6.112** / **BRD** **3.60** / **HLD** **1.48**. |
+| 2.54 | Mar 2026 | **No schema change.** Staging **`upsert_customer_vehicle_sales`**: **`sales_master`** INSERT includes **`order_number`** / **`invoice_number`** / **`enquiry_number`** when committing after **Invoice#**; no mid-Siebel master UPDATEs — **LLD** **6.113** / **BRD** **3.61** / **HLD** **1.49**. |
+| 2.55 | Mar 2026 | **No schema change.** Client Submit Info may send **`customer.financier`** = **Hinduja** when Hero OEM and OCR financier is Bajaj-prefixed — **LLD** **6.114** / **BRD** **3.62** / **HLD** **1.50**. |
+| 2.56 | Apr 2026 | **No schema change.** **`_create_order`** My Orders grid branching; **`out["ready_for_client_create_invoice"]`**; no schema — **LLD** **6.115** / **BRD** **3.47**. |
+| 2.57 | Apr 2026 | **No schema change.** Removed pre-booking hard fail; **`_ATTACH_VEHICLE_AUTO_CLICK_CREATE_INVOICE`**; IST logs — **LLD** **6.116** / **BRD** **3.48**. |
+| 2.58 | Apr 2026 | **No schema change.** Siebel Fill DMS writes **`Playwright_DMS_<ddmmyyyy>_<hhmmss>.txt`** per run (IST) — **LLD** **6.117** / **BRD** **3.63** / **HLD** **1.53**. |

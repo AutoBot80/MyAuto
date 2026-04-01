@@ -6,8 +6,15 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
+
+_IST_TZ = ZoneInfo("Asia/Kolkata")
+
+
+def _insurance_log_ts_ist() -> str:
+    return datetime.now(_IST_TZ).isoformat(timespec="milliseconds")
 
 from app.db import get_connection
 from app.services.utility_functions import clean_text, require_customer_vehicle_ids, safe_subfolder_name
@@ -219,8 +226,8 @@ def reset_playwright_insurance_log(ocr_output_dir: Path | None, subfolder: str |
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w", encoding="utf-8") as fp:
-            fp.write("Playwright Insurance — execution log (UTC timestamps)\n\n")
-            fp.write(f"started_utc={datetime.now(timezone.utc).isoformat()}\n")
+            fp.write("Playwright Insurance — execution log (IST / Asia/Kolkata timestamps)\n\n")
+            fp.write(f"started_ist={_insurance_log_ts_ist()}\n")
             fp.write(f"subfolder={safe!r}\n\n--- trace ---\n")
     except OSError as exc:
         logger.warning("Insurance: could not reset Playwright_insurance.txt: %s", exc)
@@ -232,7 +239,7 @@ def append_playwright_insurance_line(
     prefix: str,
     message: str,
 ) -> None:
-    """Append one UTC timestamped line to ``ocr_output/<dealer>/<subfolder>/Playwright_insurance.txt``."""
+    """Append one IST timestamped line to ``ocr_output/<dealer>/<subfolder>/Playwright_insurance.txt``."""
     if not ocr_output_dir or not subfolder or not str(subfolder).strip():
         return
     if not (message or "").strip():
@@ -244,9 +251,9 @@ def append_playwright_insurance_line(
         is_new = not path.is_file()
         with open(path, "a", encoding="utf-8") as fp:
             if is_new:
-                fp.write("Playwright Insurance — execution log (UTC timestamps)\n\n")
-                fp.write(f"started_utc={datetime.now(timezone.utc).isoformat()}\n")
+                fp.write("Playwright Insurance — execution log (IST / Asia/Kolkata timestamps)\n\n")
+                fp.write(f"started_ist={_insurance_log_ts_ist()}\n")
                 fp.write(f"subfolder={safe!r}\n\n--- trace ---\n")
-            fp.write(f"{datetime.now(timezone.utc).isoformat()} [{prefix}] {message}\n")
+            fp.write(f"{_insurance_log_ts_ist()} [{prefix}] {message}\n")
     except OSError as exc:
         logger.warning("Insurance: could not write Playwright_insurance.txt: %s", exc)

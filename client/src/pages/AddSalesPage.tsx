@@ -10,6 +10,7 @@ import { fetchCreateInvoiceEligibility } from "../api/addSales";
 import { insertRtoPayment } from "../api/rtoPaymentDetails";
 import { loadAddSalesForm, saveAddSalesForm, clearAddSalesForm } from "../utils/addSalesStorage";
 import { markBulkLoadSuccess } from "../api/bulkLoads";
+import { isHeroBajajFinancierForStaging } from "../utils/financierStagingRules";
 import { normalizeVehicleDetails, hasVehicleData } from "../utils/vehicleDetails";
 import { StatusMessage } from "../components/StatusMessage";
 import { usePageVisible } from "../hooks/usePageVisible";
@@ -141,6 +142,8 @@ function computeRtoFees(totalAmount: unknown): number {
 
 interface AddSalesPageProps {
   dealerId: number;
+  /** From GET /dealers/:id — Hero MotoCorp is ``1`` (financier staging remap rules). */
+  oemId: number | null;
   /** DMS base URL from GET /settings/site-urls (backend/.env DMS_BASE_URL). No client fallbacks. */
   dmsUrl?: string;
   /** True while fetching /settings/site-urls. */
@@ -151,7 +154,7 @@ interface AddSalesPageProps {
   autoNewTrigger?: number;
 }
 
-export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError, autoNewTrigger }: AddSalesPageProps) {
+export function AddSalesPage({ dealerId, oemId, dmsUrl, siteUrlsLoading, siteUrlsError, autoNewTrigger }: AddSalesPageProps) {
   const pageVisible = usePageVisible();
   const [mobile, setMobile] = useState(() => getInitialForm().mobile);
   const [savedTo, setSavedTo] = useState<string | null>(() => getInitialForm().savedTo);
@@ -651,8 +654,9 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError,
     setDmsMilestones([]);
     setDmsBannerIsStepMessages(false);
     setDmsRunEndedWithError(false);
+    let dmsRes: Awaited<ReturnType<typeof fillDmsOnly>> | null = null;
     try {
-      const dmsRes = await fillDmsOnly({
+      dmsRes = await fillDmsOnly({
         subfolder: savedTo,
         dms_base_url: dmsUrl,
         dealer_id: dealerId,
@@ -748,7 +752,15 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError,
       setDmsRunEndedWithError(true);
     } finally {
       setIsFillDmsLoading(false);
-      void refreshCreateInvoiceEligibility();
+      void (async () => {
+        await refreshCreateInvoiceEligibility();
+        if (dmsRes?.success && dmsRes.ready_for_client_create_invoice) {
+          setCreateInvoiceEnabled(true);
+          setCreateInvoiceEligibilityReason(
+            "Siebel My Orders already shows an invoice for this mobile — use Create Invoice to commit masters."
+          );
+        }
+      })();
     }
   };
 
@@ -1095,6 +1107,7 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError,
                           mobile,
                           fileLocation: savedTo,
                           dealerId,
+                          oemId,
                           stagingId: lastStagingId,
                         });
                         setSubmitStatus("Saved");
@@ -1373,7 +1386,13 @@ export function AddSalesPage({ dealerId, dmsUrl, siteUrlsLoading, siteUrlsError,
                           value={ins?.financier ?? ""}
                           onChange={(e) => setExtractedInsurance((prev) => ({ ...(prev ?? {}), financier: e.target.value }))}
                           placeholder="—"
+                          autoComplete="off"
                         />
+                        {isHeroBajajFinancierForStaging(oemId, ins?.financier) && (
+                          <p className="add-sales-v2-field-note">
+                            This financier will be logged in systems as Hinduja.
+                          </p>
+                        )}
                       </dd>
                     </div>
                   </dl>

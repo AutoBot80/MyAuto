@@ -86,6 +86,10 @@ def upsert_customer_vehicle_sales(cur, payload: dict[str, Any]) -> tuple[int, in
     key_no = _str_or_none(vehicle.get("key_no"), 32)
     battery_no = _str_or_none(vehicle.get("battery_no"), 64)
 
+    order_n = _str_or_none(vehicle.get("order_number"), 128)
+    inv_n = _str_or_none(vehicle.get("invoice_number"), 128)
+    enq_n = _str_or_none(vehicle.get("enquiry_number"), 128)
+
     raw_f = frame_no or None
     raw_e = engine_no or None
     raw_k = key_no or None
@@ -204,10 +208,13 @@ def upsert_customer_vehicle_sales(cur, payload: dict[str, Any]) -> tuple[int, in
     try:
         cur.execute(
             """
-            INSERT INTO sales_master (customer_id, vehicle_id, dealer_id, file_location)
-            VALUES (%s, %s, %s, %s)
+            INSERT INTO sales_master (
+                customer_id, vehicle_id, dealer_id, file_location,
+                order_number, invoice_number, enquiry_number
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             """,
-            (customer_id, vehicle_id, sale_dealer_id, loc),
+            (customer_id, vehicle_id, sale_dealer_id, loc, order_n, inv_n, enq_n),
         )
     except IntegrityError as exc:
         cname = getattr(getattr(exc, "diag", None), "constraint_name", None) or ""
@@ -227,7 +234,8 @@ def commit_staging_masters_and_finalize_row(
 ) -> tuple[int, int]:
     """
     Single transaction: upsert masters, mark ``add_sales_staging`` committed, patch payload with ids.
-    Caller runs ``update_vehicle_master_from_dms`` / ``update_sales_master_from_dms_scrape`` after commit.
+    Called only after **Create Invoice** (Invoice# present in merged scrape); order/invoice/enquiry are
+    stored on ``sales_master`` in the same INSERT — no follow-up UPDATE.
     """
     from app.db import get_connection
     from app.repositories.add_sales_staging import mark_staging_committed_on_cursor

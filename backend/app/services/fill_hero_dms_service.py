@@ -13,6 +13,7 @@ stale handles are moved to a retain list so GC does not implicitly close windows
 **JS dialogs:** ``run_fill_dms_only`` installs a per-tab ``dialog`` listener so short-lived Siebel
 ``alert``/``confirm`` dialogs do not crash the Playwright Node driver (CDP race *No dialog is showing*).
 """
+import copy
 import json
 import logging
 import os
@@ -21,8 +22,9 @@ import shutil
 import subprocess
 import tempfile
 import time
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from playwright.sync_api import TimeoutError as PlaywrightTimeout
 
@@ -43,12 +45,14 @@ from app.config import (
     DMS_SIEBEL_NAV_TIMEOUT_MS,
     OCR_OUTPUT_DIR,
     dms_automation_is_real_siebel,
+    get_ocr_output_dir,
 )
 from app.services.siebel_dms_playwright import SiebelDmsUrls, Playwright_Hero_DMS_fill
 from app.repositories import form_dms as form_dms_repo
 from app.repositories import form_vahan as form_vahan_repo
 from app.db import get_connection
 from app.services.customer_address_infer import enrich_customer_address_from_freeform
+from app.services.dms_relation_prefix import compute_dms_relation_prefix
 from app.services.add_sales_commit_service import commit_staging_masters_and_finalize_row
 from app.services.handle_browser_opening import get_or_open_site_page
 from app.services.utility_functions import (
@@ -58,6 +62,17 @@ from app.services.utility_functions import (
 )
 
 logger = logging.getLogger(__name__)
+
+_PLAYWRIGHT_DMS_LOG_TZ = ZoneInfo("Asia/Kolkata")
+
+
+def playwright_dms_execution_log_filename() -> str:
+    """
+    Per-run Siebel trace file: ``Playwright_DMS_<ddmmyyyy>_<hhmmss>.txt`` (IST).
+    New file each invocation so retries keep a sequence under the same OCR subfolder.
+    """
+    stamp = datetime.now(_PLAYWRIGHT_DMS_LOG_TZ).strftime("%d%m%Y_%H%M%S")
+    return f"Playwright_DMS_{stamp}.txt"
 
 
 def _dms_scrape_has_vehicle_row(scraped: dict) -> bool:
@@ -142,6 +157,35 @@ def _requires_operator_create_invoice(page) -> bool:
     return False
 
 
+def invoice_number_ready_for_master_commit(vehicle_dict: dict | None) -> bool:
+    """True when DMS scrape has an **Invoice#** — policy: persist masters only after Create Invoice in Siebel."""
+    return bool(str((vehicle_dict or {}).get("invoice_number") or "").strip())
+
+
+def _merge_staging_payload_with_scrape_for_commit(staging_payload: dict, scraped: dict) -> dict:
+    """Deep-merge Fill DMS scrape into staging payload for one post-invoice ``upsert_customer_vehicle_sales`` (no follow-up UPDATE)."""
+    merged = copy.deepcopy(staging_payload)
+    s = dict(scraped or {})
+    veh = merged.setdefault("vehicle", {})
+    fc = (s.get("full_chassis") or s.get("chassis") or s.get("frame_num") or "").strip()
+    if fc:
+        veh["frame_no"] = fc[:64]
+    fe = (s.get("full_engine") or s.get("engine_num") or s.get("engine") or "").strip()
+    if fe:
+        veh["engine_no"] = fe[:64]
+    fk = (s.get("key_num") or s.get("raw_key_num") or "").strip()
+    if fk:
+        veh["key_no"] = fk[:32]
+    fb = (s.get("battery") or "").strip()
+    if fb:
+        veh["battery_no"] = fb[:64]
+    for k in ("order_number", "invoice_number", "enquiry_number"):
+        v = s.get(k)
+        if v is not None and str(v).strip():
+            veh[k] = str(v).strip()
+    return merged
+
+
 def _fill_vahan_and_scrape(
     page,
     vahan_base_url: str,
@@ -182,6 +226,57 @@ def _split_name(full_name: str | None) -> tuple[str, str]:
 def _safe_subfolder_name(subfolder: str) -> str:
     """Safe directory name (one segment) for ocr_output and uploads."""
     return re.sub(r"[^\w\-]", "_", (subfolder or "").strip()) or "default"
+
+
+def _sales_file_location_varchar128(full_posix: str, dealer_id: int, safe_leaf: str) -> str:
+    """``sales_master.file_location`` is varchar(128); shorten with a stable relative form if needed."""
+    if len(full_posix) <= 128:
+        return full_posix
+    rel = (Path("ocr_output") / str(dealer_id) / safe_leaf).as_posix()
+    if len(rel) <= 128:
+        return rel
+    return rel[:128]
+
+
+def resolve_ocr_sale_folder_paths(
+    dealer_id: int,
+    dms_values: dict | None,
+    *,
+    file_location_override: str | None = None,
+) -> tuple[str, str]:
+    """
+    Per-sale OCR folder: ``ocr_output/{dealer_id}/{mobile}_{ddmmyyyy}`` (same layout as Add Sales / pre-OCR).
+
+    Leaf directory: ``dms_values['subfolder']`` when set, else ``{10-digit mobile}_{today as ddmmyyyy}``.
+    Returns ``(customer_master.file_location, sales_master.file_location)`` as posix paths; the latter is ≤128 chars.
+    Optional ``file_location_override`` is a full path, or a single segment treated as the leaf under the dealer OCR dir.
+    """
+    dv = dict(dms_values or {})
+    ov = (file_location_override or "").strip()
+    did = int(dealer_id)
+    if ov:
+        p = Path(ov)
+        if p.is_absolute() or "/" in ov or "\\" in ov:
+            full_path = p.expanduser().resolve().as_posix()
+            safe_leaf = _safe_subfolder_name(p.name or "default")
+        else:
+            safe_leaf = _safe_subfolder_name(ov)
+            full_path = (get_ocr_output_dir(did) / safe_leaf).resolve().as_posix()
+    else:
+        leaf = (dv.get("subfolder") or "").strip()
+        if not leaf:
+            dig = re.sub(r"\D", "", str(dv.get("mobile_phone") or ""))
+            if len(dig) >= 10:
+                mob = dig[-10:]
+            elif dig:
+                mob = dig.zfill(10)[:10]
+            else:
+                mob = "0000000000"
+            leaf = f"{mob}_{date.today().strftime('%d%m%Y')}"
+        safe_leaf = _safe_subfolder_name(leaf)
+        full_path = (get_ocr_output_dir(did) / safe_leaf).resolve().as_posix()
+    sales_loc = _sales_file_location_varchar128(full_path, did, safe_leaf)
+    return full_path, sales_loc
 
 
 def _write_data_from_dms(ocr_output_dir: Path, subfolder: str, customer: dict, vehicle: dict) -> None:
@@ -1165,29 +1260,8 @@ def _parse_cubic_cc_numeric_for_db(raw: object) -> float | None:
         return None
 
 
-def update_vehicle_master_from_dms(vehicle_id: int, scraped: dict) -> None:
-    """
-    Merge DMS / Siebel scrape into ``vehicle_master`` (non-null scraped values win via ``COALESCE``).
-
-    Maps scrape keys → columns: **full_chassis** / **frame_num** → ``chassis``; **full_engine** /
-    **engine_num** → ``engine``; **key_num** or **raw_key_num** → ``key_num``; **model** → ``model``;
-    **color** / **colour** → ``colour``; **variant** → ``variant``; **vehicle_price** (after Price All /
-    Allocate All in booking attach) / **vehicle_ex_showroom_cost** →
-    ``vehicle_ex_showroom_price``; **year_of_mfg** (or **dispatch_year**) → ``year_of_mfg``.
-
-    ``vehicle_type`` is normalized to **ALL CAPS**. When it indicates a **motorcycle** or **scooter**
-    (substring, spaces ignored), sets ``seating_capacity`` = 2, ``body_type`` = ``Open``,
-    ``num_cylinders`` = 1.
-
-    **cubic_capacity** is stored as the first numeric token from scrape text (e.g. ``125 CC`` → ``125``).
-
-    ``place_of_registeration`` and ``oem_name`` are filled from the latest ``sales_master`` row’s
-    ``dealer_ref.rto_name`` and ``oem_ref.oem_name`` when available.
-
-    Does **not** update ``raw_frame_num`` / ``raw_engine_num``.
-    """
-    from app.db import get_connection
-
+def _vehicle_master_update_from_scrape_on_cursor(cur, vehicle_id: int, scraped: dict) -> None:
+    """Run ``vehicle_master`` COALESCE update on an open cursor (no commit)."""
     def _strip_or_none(k: str) -> str | None:
         v = (scraped.get(k) or "").strip()
         return v or None
@@ -1234,20 +1308,362 @@ def update_vehicle_master_from_dms(vehicle_id: int, scraped: dict) -> None:
         body_type = "Open"
         num_cylinders = 1
 
+    cur.execute(
+        """
+        SELECT dr.rto_name, o.oem_name
+        FROM sales_master sm
+        JOIN dealer_ref dr ON dr.dealer_id = sm.dealer_id
+        LEFT JOIN oem_ref o ON o.oem_id = dr.oem_id
+        WHERE sm.vehicle_id = %s
+        ORDER BY sm.sales_id DESC NULLS LAST
+        LIMIT 1
+        """,
+        (vehicle_id,),
+    )
+    drow = cur.fetchone()
+    place_reg: str | None = None
+    oem_n: str | None = None
+    if drow:
+        if isinstance(drow, dict):
+            r = str(drow.get("rto_name") or "").strip()
+            o = str(drow.get("oem_name") or "").strip()
+        else:
+            r = str(drow[0] or "").strip()
+            o = str(drow[1] or "").strip()
+        if r:
+            place_reg = r[:128]
+        if o:
+            oem_n = o[:64]
+
+    sql = """
+        UPDATE vehicle_master SET
+            chassis = COALESCE(%s, chassis),
+            engine = COALESCE(%s, engine),
+            key_num = COALESCE(%s, key_num),
+            model = COALESCE(%s, model),
+            colour = COALESCE(%s, colour),
+            variant = COALESCE(%s, variant),
+            cubic_capacity = COALESCE(%s, cubic_capacity),
+            seating_capacity = COALESCE(%s, seating_capacity),
+            body_type = COALESCE(%s, body_type),
+            vehicle_type = COALESCE(%s, vehicle_type),
+            num_cylinders = COALESCE(%s, num_cylinders),
+            year_of_mfg = COALESCE(%s, year_of_mfg),
+            vehicle_ex_showroom_price = COALESCE(%s, vehicle_ex_showroom_price),
+            place_of_registeration = COALESCE(%s, place_of_registeration),
+            oem_name = COALESCE(%s, oem_name)
+        WHERE vehicle_id = %s
+        """
+    params = (
+        chassis,
+        engine,
+        key_num,
+        model,
+        colour,
+        variant,
+        cubic_capacity,
+        seating_capacity,
+        body_type,
+        vehicle_type,
+        num_cylinders,
+        year_of_mfg,
+        ex_showroom,
+        place_reg,
+        oem_n,
+        vehicle_id,
+    )
+    try:
+        cur.execute(sql, params)
+    except Exception as exc:
+        msg = str(exc).lower()
+        if "variant" in msg and ("column" in msg or "undefined" in msg):
+            sql_no_var = """
+        UPDATE vehicle_master SET
+            chassis = COALESCE(%s, chassis),
+            engine = COALESCE(%s, engine),
+            key_num = COALESCE(%s, key_num),
+            model = COALESCE(%s, model),
+            colour = COALESCE(%s, colour),
+            cubic_capacity = COALESCE(%s, cubic_capacity),
+            seating_capacity = COALESCE(%s, seating_capacity),
+            body_type = COALESCE(%s, body_type),
+            vehicle_type = COALESCE(%s, vehicle_type),
+            num_cylinders = COALESCE(%s, num_cylinders),
+            year_of_mfg = COALESCE(%s, year_of_mfg),
+            vehicle_ex_showroom_price = COALESCE(%s, vehicle_ex_showroom_price),
+            place_of_registeration = COALESCE(%s, place_of_registeration),
+            oem_name = COALESCE(%s, oem_name)
+        WHERE vehicle_id = %s
+        """
+            cur.execute(
+                sql_no_var,
+                (
+                    chassis,
+                    engine,
+                    key_num,
+                    model,
+                    colour,
+                    cubic_capacity,
+                    seating_capacity,
+                    body_type,
+                    vehicle_type,
+                    num_cylinders,
+                    year_of_mfg,
+                    ex_showroom,
+                    place_reg,
+                    oem_n,
+                    vehicle_id,
+                ),
+            )
+            logger.info(
+                "fill_dms: vehicle_master update without variant column (run DDL/alter/15a_vehicle_master_variant_vin_unique_drop_dms_sku.sql)"
+            )
+        else:
+            raise
+
+
+def update_vehicle_master_from_dms(vehicle_id: int, scraped: dict) -> None:
+    """
+    Merge DMS / Siebel scrape into ``vehicle_master`` (non-null scraped values win via ``COALESCE``).
+
+    Maps scrape keys → columns: **full_chassis** / **frame_num** → ``chassis``; **full_engine** /
+    **engine_num** → ``engine``; **key_num** or **raw_key_num** → ``key_num``; **model** → ``model``;
+    **color** / **colour** → ``colour``; **variant** → ``variant``; **vehicle_price** (after Price All /
+    Allocate All in booking attach) / **vehicle_ex_showroom_cost** →
+    ``vehicle_ex_showroom_price``; **year_of_mfg** (or **dispatch_year**) → ``year_of_mfg``.
+
+    ``vehicle_type`` is normalized to **ALL CAPS**. When it indicates a **motorcycle** or **scooter**
+    (substring, spaces ignored), sets ``seating_capacity`` = 2, ``body_type`` = ``Open``,
+    ``num_cylinders`` = 1.
+
+    **cubic_capacity** is stored as the first numeric token from scrape text (e.g. ``125 CC`` → ``125``).
+
+    ``place_of_registeration`` and ``oem_name`` are filled from the latest ``sales_master`` row’s
+    ``dealer_ref.rto_name`` and ``oem_ref.oem_name`` when available.
+
+    Does **not** update ``raw_frame_num`` / ``raw_engine_num``.
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            _vehicle_master_update_from_scrape_on_cursor(cur, vehicle_id, scraped)
+        conn.commit()
+        logger.info("fill_dms: updated vehicle_master vehicle_id=%s with DMS data", vehicle_id)
+    finally:
+        conn.close()
+
+
+def _sales_master_update_from_scrape_on_cursor(
+    cur, customer_id: int, vehicle_id: int, vehicle_dict: dict
+) -> int:
+    """``sales_master`` COALESCE update for order/invoice/enquiry. Returns ``cursor.rowcount``."""
+    order_n = (vehicle_dict.get("order_number") or "").strip() or None
+    inv_n = (vehicle_dict.get("invoice_number") or "").strip() or None
+    enq_n = (vehicle_dict.get("enquiry_number") or "").strip() or None
+    if not order_n and not inv_n and not enq_n:
+        return 0
+
+    sql = """
+        UPDATE sales_master SET
+            order_number = COALESCE(%s, order_number),
+            invoice_number = COALESCE(%s, invoice_number),
+            enquiry_number = COALESCE(%s, enquiry_number)
+        WHERE customer_id = %s AND vehicle_id = %s
+        """
+    sql_no_enq = """
+        UPDATE sales_master SET
+            order_number = COALESCE(%s, order_number),
+            invoice_number = COALESCE(%s, invoice_number)
+        WHERE customer_id = %s AND vehicle_id = %s
+        """
+    try:
+        cur.execute(sql, (order_n, inv_n, enq_n, customer_id, vehicle_id))
+    except Exception as exc:
+        msg = str(exc).lower()
+        if "enquiry_number" in msg and ("column" in msg or "undefined" in msg):
+            cur.execute(sql_no_enq, (order_n, inv_n, customer_id, vehicle_id))
+            logger.info("fill_dms: enquiry_number column missing; saved order/invoice only")
+        else:
+            raise
+    return int(getattr(cur, "rowcount", -1) or 0)
+
+
+def update_sales_master_from_dms_scrape(customer_id: int, vehicle_id: int, vehicle_dict: dict) -> None:
+    """
+    Persist DMS-scraped **Order#**, **Invoice#**, and **Enquiry#** onto ``sales_master`` as each
+    becomes available across **different Siebel stages** (enquiry / order / invoice — see **BRD §6.1d**).
+    Uses ``COALESCE`` so non-null scraped values fill empty cells only when provided.
+    Does **not** set ``vahan_application_id`` or ``rto_charges`` (Vahan / RTO queue).
+    """
+    order_n = (vehicle_dict.get("order_number") or "").strip() or None
+    inv_n = (vehicle_dict.get("invoice_number") or "").strip() or None
+    enq_n = (vehicle_dict.get("enquiry_number") or "").strip() or None
+    if not order_n and not inv_n and not enq_n:
+        return
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            rc = _sales_master_update_from_scrape_on_cursor(cur, customer_id, vehicle_id, vehicle_dict)
+            conn.commit()
+            if rc > 0:
+                logger.info(
+                    "fill_dms: updated sales_master order/invoice/enquiry customer_id=%s vehicle_id=%s",
+                    customer_id,
+                    vehicle_id,
+                )
+            else:
+                logger.warning(
+                    "fill_dms: sales_master row not found for customer_id=%s vehicle_id=%s (order/invoice/enquiry not saved)",
+                    customer_id,
+                    vehicle_id,
+                )
+    finally:
+        conn.close()
+
+
+def insert_dms_masters_from_siebel_scrape(
+    dms_values: dict,
+    vehicle_dict: dict,
+    *,
+    collated_customer_fields: dict | None = None,
+    file_location: str | None = None,
+    dealer_id: int | None = None,
+) -> tuple[int, int, int]:
+    """
+    Single transaction: **INSERT** ``customer_master``, ``vehicle_master``, and ``sales_master`` when
+    no prior rows exist (Siebel-only / staging-less Fill DMS). Call only **after Create Invoice** in DMS
+    (caller gates on scraped **Invoice#** — see ``invoice_number_ready_for_master_commit``).
+
+    Requires name, mobile, and Aadhar last-4 derivable from ``dms_values`` and/or ``collated_customer_fields``.
+
+    ``customer_master.file_location`` / ``sales_master.file_location`` are set to the per-sale OCR folder
+    ``ocr_output/{dealer_id}/{mobile}_{ddmmyyyy}`` (see ``resolve_ocr_sale_folder_paths``), unless
+    ``file_location`` overrides (full path or leaf segment).
+
+    Returns ``(customer_id, vehicle_id, sales_id)``.
+    """
+    from psycopg2 import IntegrityError
+
+    dv = dict(dms_values or {})
+    cf = dict(collated_customer_fields or {})
+    vd = dict(vehicle_dict or {})
+    sale_dealer_id = int(dealer_id) if dealer_id is not None else int(DEALER_ID)
+    loc_full, loc_sales = resolve_ocr_sale_folder_paths(
+        sale_dealer_id,
+        dv,
+        file_location_override=(file_location or "").strip() or None,
+    )
+
+    name = (cf.get("name") or dv.get("customer_name") or "").strip()
+    mob_raw = cf.get("mobile_number")
+    if mob_raw is None:
+        dig_m = re.sub(r"\D", "", str(dv.get("mobile_phone") or ""))
+        mob_raw = int(dig_m[-10:]) if len(dig_m) >= 10 else None
+    else:
+        try:
+            mob_raw = int(str(mob_raw).strip().replace(" ", ""))
+        except (ValueError, TypeError):
+            mob_raw = None
+
+    dig_cf = "".join(c for c in str(cf.get("aadhar") or "") if c.isdigit())
+    dig_dv = "".join(c for c in str(dv.get("aadhar_id") or "") if c.isdigit())
+    _dig = dig_cf if len(dig_cf) >= 4 else dig_dv
+    aad = _dig[-4:] if len(_dig) >= 4 else None
+
+    if not name or mob_raw is None or not aad or len(aad) < 4:
+        raise ValueError(
+            "Cannot INSERT customer_master: need customer name, 10-digit mobile, and Aadhar last 4 "
+            "(from DMS fill values and/or Siebel collate fields)."
+        )
+
+    address = (cf.get("address") or dv.get("address_line_1") or "").strip() or None
+    pin = (cf.get("pin") or dv.get("pin_code") or "").strip()[:6] or None
+    city = (cf.get("city") or dv.get("city") or "").strip() or None
+    state = (cf.get("state") or dv.get("state") or "").strip() or None
+    alt_phone = (cf.get("alt_phone_num") or dv.get("landline") or "").strip()[:16] or None
+    profession = (cf.get("profession") or dv.get("profession") or "").strip()[:16] or None
+    financier = (cf.get("financier") or dv.get("financier_name") or "").strip()[:255] or None
+    marital_status = (cf.get("marital_status") or dv.get("marital_status") or "").strip()[:32] or None
+    care_of = (cf.get("care_of") or dv.get("care_of") or "").strip()[:255] or None
+    gender = (cf.get("gender") or dv.get("gender") or "").strip()[:8] or None
+    dob = (cf.get("date_of_birth") or dv.get("date_of_birth") or "").strip()[:20] or None
+    dcp = (cf.get("dms_contact_path") or dv.get("dms_contact_path") or "found").strip().lower()
+    if dcp not in ("found", "new_enquiry", "skip_find"):
+        dcp = "found"
+    dms_cid = (cf.get("dms_contact_id") or "").strip()[:128] or None
+
+    drp = (cf.get("dms_relation_prefix") or "").strip()[:8] or None
+    if not drp:
+        drp = compute_dms_relation_prefix(address or "", gender)[:8]
+
+    def _strip_or_none(k: str) -> str | None:
+        v = (vd.get(k) or "").strip()
+        return v or None
+
+    chassis = _strip_or_none("full_chassis") or _strip_or_none("frame_num") or _strip_or_none("chassis")
+    engine = _strip_or_none("full_engine") or _strip_or_none("engine_num") or _strip_or_none("engine")
+    key_num = _strip_or_none("key_num") or _strip_or_none("raw_key_num")
+    model = _strip_or_none("model")
+    colour = _strip_or_none("color") or _strip_or_none("colour")
+    variant_raw = _strip_or_none("variant")
+    variant = (variant_raw[:64] if variant_raw else None)
+    cubic_capacity = vd.get("cubic_capacity")
+    seating_capacity = vd.get("seating_capacity")
+    body_type = (vd.get("body_type") or "").strip() or None
+    vehicle_type = _normalize_vehicle_type_for_db(vd.get("vehicle_type"))
+    num_cylinders = vd.get("num_cylinders")
+    year_of_mfg = _parse_vehicle_year_int_for_db(vd.get("year_of_mfg"))
+    if year_of_mfg is None:
+        year_of_mfg = _parse_vehicle_year_int_for_db(vd.get("dispatch_year"))
+    ex_showroom = vd.get("vehicle_price")
+    if ex_showroom is None:
+        ex_showroom = vd.get("vehicle_ex_showroom_cost")
+    if ex_showroom is None:
+        ex_showroom = vd.get("total_amount")
+    cubic_capacity = _parse_cubic_cc_numeric_for_db(cubic_capacity)
+    if seating_capacity:
+        try:
+            seating_capacity = int(str(seating_capacity).strip())
+        except (ValueError, TypeError):
+            seating_capacity = None
+    if num_cylinders:
+        try:
+            num_cylinders = int(str(num_cylinders).strip())
+        except (ValueError, TypeError):
+            num_cylinders = None
+    if ex_showroom:
+        try:
+            ex_showroom = float(str(ex_showroom).replace(",", ""))
+        except (ValueError, TypeError):
+            ex_showroom = None
+
+    if _is_two_wheeler_vehicle_type(vehicle_type):
+        seating_capacity = 2
+        body_type = "Open"
+        num_cylinders = 1
+
+    raw_f = (str(dv.get("frame_partial") or "").strip() or chassis or None)
+    raw_e = (str(dv.get("engine_partial") or "").strip() or engine or None)
+    raw_k = (str(dv.get("key_partial") or "").strip() or key_num or None)
+    battery = _strip_or_none("battery") or (str(dv.get("battery_partial") or "").strip() or None)
+
+    order_n = (vd.get("order_number") or "").strip() or None
+    inv_n = (vd.get("invoice_number") or "").strip() or None
+    enq_n = (vd.get("enquiry_number") or "").strip() or None
+
     conn = get_connection()
     try:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 SELECT dr.rto_name, o.oem_name
-                FROM sales_master sm
-                JOIN dealer_ref dr ON dr.dealer_id = sm.dealer_id
+                FROM dealer_ref dr
                 LEFT JOIN oem_ref o ON o.oem_id = dr.oem_id
-                WHERE sm.vehicle_id = %s
-                ORDER BY sm.sales_id DESC NULLS LAST
+                WHERE dr.dealer_id = %s
                 LIMIT 1
                 """,
-                (vehicle_id,),
+                (sale_dealer_id,),
             )
             drow = cur.fetchone()
             place_reg: str | None = None
@@ -1264,29 +1680,61 @@ def update_vehicle_master_from_dms(vehicle_id: int, scraped: dict) -> None:
                 if o:
                     oem_n = o[:64]
 
-            sql = """
-                UPDATE vehicle_master SET
-                    chassis = COALESCE(%s, chassis),
-                    engine = COALESCE(%s, engine),
-                    key_num = COALESCE(%s, key_num),
-                    model = COALESCE(%s, model),
-                    colour = COALESCE(%s, colour),
-                    variant = COALESCE(%s, variant),
-                    cubic_capacity = COALESCE(%s, cubic_capacity),
-                    seating_capacity = COALESCE(%s, seating_capacity),
-                    body_type = COALESCE(%s, body_type),
-                    vehicle_type = COALESCE(%s, vehicle_type),
-                    num_cylinders = COALESCE(%s, num_cylinders),
-                    year_of_mfg = COALESCE(%s, year_of_mfg),
-                    vehicle_ex_showroom_price = COALESCE(%s, vehicle_ex_showroom_price),
-                    place_of_registeration = COALESCE(%s, place_of_registeration),
-                    oem_name = COALESCE(%s, oem_name)
-                WHERE vehicle_id = %s
+            cur.execute(
                 """
-            params = (
+                INSERT INTO customer_master (
+                    aadhar, name, address, pin, city, state, mobile_number,
+                    alt_phone_num,
+                    profession, financier, marital_status,
+                    dms_relation_prefix, dms_contact_path, care_of,
+                    file_location, gender, date_of_birth, dms_contact_id
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING customer_id
+                """,
+                (
+                    aad,
+                    name,
+                    address,
+                    pin,
+                    city,
+                    state,
+                    mob_raw,
+                    alt_phone,
+                    profession,
+                    financier,
+                    marital_status,
+                    drp,
+                    dcp,
+                    care_of,
+                    loc_full,
+                    gender,
+                    dob,
+                    dms_cid,
+                ),
+            )
+            cid_row = cur.fetchone()
+            customer_id = int(cid_row["customer_id"] if isinstance(cid_row, dict) else cid_row[0])
+
+            sql_v = """
+                INSERT INTO vehicle_master (
+                    chassis, engine, key_num, battery,
+                    raw_frame_num, raw_engine_num, raw_key_num,
+                    model, colour, variant,
+                    cubic_capacity, seating_capacity, body_type, vehicle_type, num_cylinders, year_of_mfg,
+                    vehicle_ex_showroom_price, place_of_registeration, oem_name
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING vehicle_id
+                """
+            params_v = (
                 chassis,
                 engine,
                 key_num,
+                battery,
+                raw_f,
+                raw_e,
+                raw_k,
                 model,
                 colour,
                 variant,
@@ -1299,37 +1747,33 @@ def update_vehicle_master_from_dms(vehicle_id: int, scraped: dict) -> None:
                 ex_showroom,
                 place_reg,
                 oem_n,
-                vehicle_id,
             )
             try:
-                cur.execute(sql, params)
+                cur.execute(sql_v, params_v)
             except Exception as exc:
                 msg = str(exc).lower()
                 if "variant" in msg and ("column" in msg or "undefined" in msg):
-                    sql_no_var = """
-                UPDATE vehicle_master SET
-                    chassis = COALESCE(%s, chassis),
-                    engine = COALESCE(%s, engine),
-                    key_num = COALESCE(%s, key_num),
-                    model = COALESCE(%s, model),
-                    colour = COALESCE(%s, colour),
-                    cubic_capacity = COALESCE(%s, cubic_capacity),
-                    seating_capacity = COALESCE(%s, seating_capacity),
-                    body_type = COALESCE(%s, body_type),
-                    vehicle_type = COALESCE(%s, vehicle_type),
-                    num_cylinders = COALESCE(%s, num_cylinders),
-                    year_of_mfg = COALESCE(%s, year_of_mfg),
-                    vehicle_ex_showroom_price = COALESCE(%s, vehicle_ex_showroom_price),
-                    place_of_registeration = COALESCE(%s, place_of_registeration),
-                    oem_name = COALESCE(%s, oem_name)
-                WHERE vehicle_id = %s
+                    sql_v_nv = """
+                INSERT INTO vehicle_master (
+                    chassis, engine, key_num, battery,
+                    raw_frame_num, raw_engine_num, raw_key_num,
+                    model, colour,
+                    cubic_capacity, seating_capacity, body_type, vehicle_type, num_cylinders, year_of_mfg,
+                    vehicle_ex_showroom_price, place_of_registeration, oem_name
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING vehicle_id
                 """
                     cur.execute(
-                        sql_no_var,
+                        sql_v_nv,
                         (
                             chassis,
                             engine,
                             key_num,
+                            battery,
+                            raw_f,
+                            raw_e,
+                            raw_k,
                             model,
                             colour,
                             cubic_capacity,
@@ -1341,75 +1785,177 @@ def update_vehicle_master_from_dms(vehicle_id: int, scraped: dict) -> None:
                             ex_showroom,
                             place_reg,
                             oem_n,
-                            vehicle_id,
                         ),
                     )
                     logger.info(
-                        "fill_dms: vehicle_master update without variant column (run DDL/alter/15a_vehicle_master_variant_vin_unique_drop_dms_sku.sql)"
+                        "fill_dms: vehicle_master insert without variant column (DDL/alter/15a_vehicle_master_variant_vin_unique_drop_dms_sku.sql)"
                     )
                 else:
                     raise
-            conn.commit()
-            if cur.rowcount > 0:
-                logger.info("fill_dms: updated vehicle_master vehicle_id=%s with DMS data", vehicle_id)
-    finally:
-        conn.close()
+            vid_row = cur.fetchone()
+            vehicle_id = int(vid_row["vehicle_id"] if isinstance(vid_row, dict) else vid_row[0])
 
-
-def update_sales_master_from_dms_scrape(customer_id: int, vehicle_id: int, vehicle_dict: dict) -> None:
-    """
-    Persist DMS-scraped **Order#**, **Invoice#**, and **Enquiry#** onto ``sales_master`` as each
-    becomes available across **different Siebel stages** (enquiry / order / invoice — see **BRD §6.1d**).
-    Uses ``COALESCE`` so non-null scraped values fill empty cells only when provided.
-    Does **not** set ``vahan_application_id`` or ``rto_charges`` (Vahan / RTO queue).
-    """
-    order_n = (vehicle_dict.get("order_number") or "").strip() or None
-    inv_n = (vehicle_dict.get("invoice_number") or "").strip() or None
-    enq_n = (vehicle_dict.get("enquiry_number") or "").strip() or None
-    if not order_n and not inv_n and not enq_n:
-        return
-    from app.db import get_connection
-
-    sql = """
-        UPDATE sales_master SET
-            order_number = COALESCE(%s, order_number),
-            invoice_number = COALESCE(%s, invoice_number),
-            enquiry_number = COALESCE(%s, enquiry_number)
-        WHERE customer_id = %s AND vehicle_id = %s
-        """
-    sql_no_enq = """
-        UPDATE sales_master SET
-            order_number = COALESCE(%s, order_number),
-            invoice_number = COALESCE(%s, invoice_number)
-        WHERE customer_id = %s AND vehicle_id = %s
-        """
-    conn = get_connection()
-    try:
-        with conn.cursor() as cur:
+            sql_s = """
+                INSERT INTO sales_master (
+                    customer_id, vehicle_id, dealer_id, file_location,
+                    order_number, invoice_number, enquiry_number
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                RETURNING sales_id
+                """
             try:
-                cur.execute(sql, (order_n, inv_n, enq_n, customer_id, vehicle_id))
+                cur.execute(
+                    sql_s,
+                    (customer_id, vehicle_id, sale_dealer_id, loc_sales, order_n, inv_n, enq_n),
+                )
             except Exception as exc:
                 msg = str(exc).lower()
                 if "enquiry_number" in msg and ("column" in msg or "undefined" in msg):
-                    cur.execute(sql_no_enq, (order_n, inv_n, customer_id, vehicle_id))
-                    logger.info("fill_dms: enquiry_number column missing; saved order/invoice only")
+                    cur.execute(
+                        """
+                        INSERT INTO sales_master (
+                            customer_id, vehicle_id, dealer_id, file_location,
+                            order_number, invoice_number
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                        RETURNING sales_id
+                        """,
+                        (customer_id, vehicle_id, sale_dealer_id, loc_sales, order_n, inv_n),
+                    )
+                    logger.info("fill_dms: sales_master insert without enquiry_number column")
                 else:
                     raise
-            conn.commit()
-            if cur.rowcount > 0:
-                logger.info(
-                    "fill_dms: updated sales_master order/invoice/enquiry customer_id=%s vehicle_id=%s",
-                    customer_id,
-                    vehicle_id,
-                )
-            else:
-                logger.warning(
-                    "fill_dms: sales_master row not found for customer_id=%s vehicle_id=%s (order/invoice/enquiry not saved)",
-                    customer_id,
-                    vehicle_id,
-                )
+            sid_row = cur.fetchone()
+            sales_id = int(sid_row["sales_id"] if isinstance(sid_row, dict) else sid_row[0])
+
+        conn.commit()
+        logger.info(
+            "fill_dms: inserted customer_id=%s vehicle_id=%s sales_id=%s (Siebel scrape)",
+            customer_id,
+            vehicle_id,
+            sales_id,
+        )
+        return customer_id, vehicle_id, sales_id
+    except IntegrityError as exc:
+        conn.rollback()
+        logger.warning("fill_dms: insert_dms_masters_from_siebel_scrape integrity error: %s", exc)
+        raise ValueError(
+            "Cannot insert masters: duplicate key or constraint violation (customer/vehicle/sales). "
+            f"{exc!s}"
+        ) from exc
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
+
+
+def collate_customer_master_from_dms_siebel_inputs(
+    dms_values: dict | None,
+    *,
+    contact_id: str | None = None,
+) -> dict[str, object]:
+    """
+    Build a ``customer_master``-shaped payload from Fill DMS ``dms_values`` plus optional Siebel-scraped
+    **Contact Id** (video path: after Relation's Name / Contact ID scrape and **Add customer payment**).
+
+    Returns:
+        ``fields``: proposed column → value (only keys with a non-empty value).
+        ``notes``: product sourcing (detail sheet vs Siebel); ``customer_id`` is never set here (system PK).
+        ``mapping_unclear``: optional residual ambiguity (e.g. ``file_location``).
+
+    **``dms_relation_prefix``:** first three characters of trimmed **Address Line 1** when length ≥ 3.
+
+    Does **not** write to the database.
+    """
+    def _digits_only(s: str) -> str:
+        return re.sub(r"\D", "", s or "")
+
+    def _mobile_int_10(mobile: str) -> int | None:
+        d = _digits_only(mobile)
+        if len(d) < 10:
+            return None
+        tail = d[-10:]
+        try:
+            return int(tail)
+        except ValueError:
+            return None
+
+    dv = dms_values or {}
+    fields: dict[str, object] = {}
+    unclear: list[str] = []
+    notes: dict[str, object] = {
+        "customer_id": "System-generated primary key; not supplied by Siebel or this collate.",
+        "profession_marital_aadhar": "Captured from the sales detail sheet (Submit / OCR pipeline), not from Siebel UI.",
+    }
+
+    cn = (dv.get("customer_name") or "").strip()
+    if cn:
+        fields["name"] = cn
+
+    addr = (dv.get("address_line_1") or "").strip()
+    if addr:
+        fields["address"] = addr
+
+    pin_raw = (dv.get("pin_code") or "").strip()[:6]
+    if pin_raw:
+        fields["pin"] = pin_raw
+
+    city = (dv.get("city") or "").strip()
+    if city:
+        fields["city"] = city
+
+    st = (dv.get("state") or "").strip()
+    if st:
+        fields["state"] = st
+
+    mi = _mobile_int_10(str(dv.get("mobile_phone") or ""))
+    if mi is not None:
+        fields["mobile_number"] = mi
+
+    land = (dv.get("landline") or "").strip()[:16]
+    if land:
+        fields["alt_phone_num"] = land
+
+    co = (dv.get("care_of") or "").strip()
+    if co:
+        fields["care_of"] = co
+
+    fn = (dv.get("financier_name") or "").strip()
+    if fn:
+        fields["financier"] = fn
+
+    dcp = (dv.get("dms_contact_path") or "found").strip().lower()
+    if dcp not in ("found", "new_enquiry", "skip_find"):
+        dcp = "found"
+    fields["dms_contact_path"] = dcp
+
+    cid = (str(contact_id).strip() if contact_id is not None else "")
+    if cid:
+        fields["dms_contact_id"] = cid
+
+    g = (dv.get("gender") or "").strip()
+    if g:
+        fields["gender"] = g
+
+    dob = (dv.get("date_of_birth") or "").strip()
+    if dob:
+        fields["date_of_birth"] = dob
+
+    aad = (dv.get("aadhar_id") or "").strip()
+    digits_aad = re.sub(r"\D", "", aad)
+    if len(digits_aad) >= 4:
+        fields["aadhar"] = digits_aad[-4:]
+
+    addr_trim = (addr or "").strip()
+    if len(addr_trim) >= 3:
+        fields["dms_relation_prefix"] = addr_trim[:3]
+
+    unclear.append(
+        "file_location: per-sale folder is canonical on sales_master; not derived from Siebel automation."
+    )
+
+    return {"fields": fields, "notes": notes, "mapping_unclear": unclear}
 
 
 def _run_fill_dms_real_siebel_playwright(
@@ -1422,10 +1968,9 @@ def _run_fill_dms_real_siebel_playwright(
     result: dict,
 ) -> None:
     """
-    Hero Connect / Siebel Open UI: ``Playwright_Hero_DMS_fill``. When
-    ``siebel_dms_playwright.SIEBEL_DMS_STOP_AFTER_ALL_ENQUIRIES`` is True, only the **Find Contact →
-    All Enquiries** path runs, then stops. Otherwise (BRD §6.1a) **always** Contact Find (mobile + Go)
-    first; vehicle list scrape + ``in_transit`` branch (receipt/PDI vs booking/allotment).
+    Hero Connect / Siebel Open UI: ``Playwright_Hero_DMS_fill`` — **Find Contact Enquiry** path
+    (``prepare_vehicle`` before Contact Find, enquiry sweep / Add Enquiry, Relation's Name, Payments,
+    optional hard-stop before booking, **Generate Booking**, ``_create_order``). See **LLD §2.4d**.
 
     ``dms_contact_path=skip_find`` in DB is **ignored** for real Siebel (operators still need Find so the
     correct contact context is loaded even when the customer already exists).
@@ -1471,7 +2016,11 @@ def _run_fill_dms_real_siebel_playwright(
         dms_contact_path=dms_values.get("dms_contact_path") or "",
     )
 
-    playwright_dms_log = Path(ocr_dir).resolve() / _safe_subfolder_name(effective_subfolder) / "Playwright_DMS.txt"
+    playwright_dms_log = (
+        Path(ocr_dir).resolve()
+        / _safe_subfolder_name(effective_subfolder)
+        / playwright_dms_execution_log_filename()
+    )
 
     urls = SiebelDmsUrls(
         contact=DMS_REAL_URL_CONTACT,
@@ -1500,10 +2049,20 @@ def _run_fill_dms_real_siebel_playwright(
 
     result["vehicle"] = frag.get("vehicle") or {}
     result["error"] = frag.get("error")
+    if frag.get("customer_id") is not None:
+        result["customer_id"] = frag.get("customer_id")
+    if frag.get("vehicle_id") is not None:
+        result["vehicle_id"] = frag.get("vehicle_id")
+    if frag.get("sales_id") is not None:
+        result["sales_id"] = frag.get("sales_id")
+    if frag.get("dms_master_persist_committed") is not None:
+        result["dms_master_persist_committed"] = frag.get("dms_master_persist_committed")
     result["dms_siebel_forms_filled"] = bool(frag.get("dms_siebel_forms_filled"))
     result["dms_siebel_notes"] = frag.get("dms_siebel_notes") or []
     result["dms_milestones"] = list(frag.get("dms_milestones") or [])
     result["dms_step_messages"] = list(frag.get("dms_step_messages") or [])
+    if frag.get("ready_for_client_create_invoice") is not None:
+        result["ready_for_client_create_invoice"] = bool(frag.get("ready_for_client_create_invoice"))
     _sort_dms_milestones(result)
     result["dms_automation_mode"] = "real"
     if result.get("error"):
@@ -1511,25 +2070,6 @@ def _run_fill_dms_real_siebel_playwright(
     else:
         notes = "; ".join(result["dms_siebel_notes"]) if result.get("dms_siebel_notes") else ""
         result["dms_real_note"] = notes or "Siebel contact + vehicle automation finished."
-    if vehicle_id and result.get("vehicle"):
-        try:
-            update_vehicle_master_from_dms(vehicle_id, result.get("vehicle") or {})
-        except Exception as exc:
-            logger.warning(
-                "fill_dms_service: vehicle_master update failed (real Siebel) vehicle_id=%s: %s",
-                vehicle_id,
-                exc,
-            )
-    if customer_id and vehicle_id and result.get("vehicle") and not result.get("error"):
-        try:
-            update_sales_master_from_dms_scrape(customer_id, vehicle_id, result["vehicle"])
-        except Exception as exc:
-            logger.warning(
-                "fill_dms_service: sales_master update failed (real Siebel) customer_id=%s vehicle_id=%s: %s",
-                customer_id,
-                vehicle_id,
-                exc,
-            )
     logger.info(
         "fill_dms_service: real Siebel flow done error=%s forms_filled=%s vehicle_keys=%s",
         bool(result.get("error")),
@@ -1683,30 +2223,20 @@ def run_fill_dms_only(
         and (staging_id or "").strip()
         and not result.get("error")
         and (has_v or skip_nv)
+        and invoice_number_ready_for_master_commit(scraped_final)
     ):
         try:
+            merged_pl = _merge_staging_payload_with_scrape_for_commit(staging_payload, scraped_final)
             cid_c, vid_c = commit_staging_masters_and_finalize_row(
                 staging_id=staging_id or "",
-                merged_payload=staging_payload,
+                merged_payload=merged_pl,
             )
-            update_vehicle_master_from_dms(vid_c, scraped_final)
-            update_sales_master_from_dms_scrape(cid_c, vid_c, scraped_final)
             result["committed_customer_id"] = cid_c
             result["committed_vehicle_id"] = vid_c
         except Exception as commit_exc:
             logger.warning("fill_dms_service: staging master commit failed: %s", commit_exc)
             result["error"] = f"Database commit after DMS failed: {commit_exc!s}"
 
-    if customer_id and vehicle_id and result.get("vehicle") and not result.get("error"):
-        try:
-            update_sales_master_from_dms_scrape(customer_id, vehicle_id, result["vehicle"])
-        except Exception as exc:
-            logger.warning(
-                "fill_dms_service: sales_master order/invoice update failed customer_id=%s vehicle_id=%s: %s",
-                customer_id,
-                vehicle_id,
-                exc,
-            )
     return result
 
 

@@ -69,6 +69,8 @@ export interface FillDmsResponse {
   dms_milestones?: string[];
   /** Real Siebel: ordered narrative lines; UI prefers this over milestones when non-empty. */
   dms_step_messages?: string[];
+  /** My Orders grid already had Invoice# — operator can use Create Invoice in the app. */
+  ready_for_client_create_invoice?: boolean | null;
 }
 
 const FILL_DMS_TIMEOUT_MS = 180000; // 3 min per section

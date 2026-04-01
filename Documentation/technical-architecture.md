@@ -98,7 +98,7 @@ Configure **`backend/.env`** (copy from **`backend/.env.example`**). The API val
 
 - **Logging:** Structured logs from FastAPI, bulk workers, OCR, and Playwright steps.
 - **Metrics:** Job success/failure, queue depth, API latency, and automation completion rate.
-- **Artifacts:** `ocr_output/<dealer>/<subfolder>/` stores OCR output plus `DMS_Form_Values.txt` and `Vahan_Form_Values.txt` for operator traceability. Real Siebel fill writes a fresh `Playwright_DMS.txt` execution log (steps, values, decisions) into that subfolder each run.
+- **Artifacts:** `ocr_output/<dealer>/<subfolder>/` stores OCR output plus `DMS_Form_Values.txt` and `Vahan_Form_Values.txt` for operator traceability. Real Siebel fill writes a new **`Playwright_DMS_<ddmmyyyy>_<hhmmss>.txt`** execution log (IST wall clock; steps, values, decisions) into that subfolder on each run so retries keep a sequence of files.
 - **Playwright:** The API does not call `Browser.close()` or `Playwright.stop()` for Fill DMS / CDP reuse / RTO payment flows (process exit and thread switches included); operator Edge/Chrome stays open. Orphaned Playwright drivers may accumulate on thread switches or repeated RTO runs.
 - **Alerts:** DLQ growth, high error rate, DB health, and worker lease/retry anomalies.
 
@@ -151,3 +151,4 @@ Cursor rule: `.cursor/rules/documentation-maintenance.mdc` (always applied).
 | 0.3 | Mar 2026 | — | §6 optional **Cursor Bugbot** setup (dashboard/Git integration, not VSIX) |
 | 0.4 | Mar 2026 | — | §3.1 **External portal URLs** — **`backend/.env`** for DMS/Siebel, VAHAN, Insurance; **`DMS_MODE`** default **real** |
 | 0.5 | Mar 2026 | — | §6 **Documentation Maintenance** — mandatory alignment of BRD / HLD / LLD / **Database DDL.md** with code and schema changes; **`Database DDL.md`** changelog may record “no schema change”; **`.cursor/rules/documentation-maintenance.mdc`** |
+| 0.6 | Apr 2026 | — | §5 **Artifacts:** Siebel **`Playwright_DMS_<ddmmyyyy>_<hhmmss>.txt`** per run (IST), not a single overwritten **`Playwright_DMS.txt`** — **LLD** **6.117** |

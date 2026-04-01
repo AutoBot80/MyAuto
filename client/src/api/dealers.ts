@@ -2,6 +2,8 @@ import { apiFetch } from "./client";
 
 export interface Dealer {
   dealer_id: number;
+  /** FK to ``oem_ref``; Hero MotoCorp is ``1``. */
+  oem_id: number | null;
   dealer_name: string;
   dealer_of: string | null;
   dms_link: string | null;

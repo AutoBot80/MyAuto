@@ -26,7 +26,6 @@ from app.services.fill_hero_dms_service import (
     run_fill_dms,
     run_fill_dms_only,
     run_fill_vahan_only,
-    update_vehicle_master_from_dms as _update_vehicle_master_from_dms,
     warm_dms_browser_session,
 )
 from app.services.fill_hero_insurance_service import (
@@ -218,6 +217,8 @@ class FillDmsResponse(BaseModel):
     dms_milestones: list[str] = Field(default_factory=list)
     # Real Siebel: ordered operator-facing sentences (where the flow got to); preferred over milestones in UI when non-empty.
     dms_step_messages: list[str] = Field(default_factory=list)
+    # Real Siebel: My Orders grid already showed Invoice# — UI may enable Create Invoice without waiting for DB scrape commit.
+    ready_for_client_create_invoice: bool | None = None
 
 
 class FillVahanRequest(BaseModel):
@@ -517,11 +518,6 @@ async def fill_dms_only(req: FillDmsRequest) -> FillDmsResponse:
     skip_no_vehicle = result.get("dms_automation_mode") == "real" and not result.get("dms_siebel_forms_filled")
     if result.get("error") is None and not has_vehicle and not skip_no_vehicle:
         result["error"] = DMS_NO_VEHICLE_ERROR
-    if vid and has_vehicle:
-        try:
-            _update_vehicle_master_from_dms(vid, scraped)
-        except Exception as e:
-            logger.warning("fill_dms: vehicle_master update failed vehicle_id=%s: %s", vid, e)
 
     warn, dms_mode = _dms_response_warning_and_mode(result)
     cc = result.get("committed_customer_id")
@@ -539,6 +535,7 @@ async def fill_dms_only(req: FillDmsRequest) -> FillDmsResponse:
         dms_automation_mode=dms_mode,
         dms_milestones=list(result.get("dms_milestones") or []),
         dms_step_messages=list(result.get("dms_step_messages") or []),
+        ready_for_client_create_invoice=result.get("ready_for_client_create_invoice"),
     )
 
 
@@ -822,12 +819,6 @@ async def fill_dms(req: FillDmsRequest) -> FillDmsResponse:
     if result.get("error") is None and not has_vehicle and not skip_nv:
         result["error"] = DMS_NO_VEHICLE_ERROR
 
-    if vid and has_vehicle:
-        try:
-            _update_vehicle_master_from_dms(vid, scraped)
-        except Exception as e:
-            logger.warning("fill_dms: vehicle_master update failed vehicle_id=%s: %s", vid, e)
-
     warn, dms_mode = _dms_response_warning_and_mode(result)
     cc = result.get("committed_customer_id")
     vv = result.get("committed_vehicle_id")
@@ -844,4 +835,5 @@ async def fill_dms(req: FillDmsRequest) -> FillDmsResponse:
         dms_automation_mode=dms_mode,
         dms_milestones=list(result.get("dms_milestones") or []),
         dms_step_messages=list(result.get("dms_step_messages") or []),
+        ready_for_client_create_invoice=result.get("ready_for_client_create_invoice"),
     )

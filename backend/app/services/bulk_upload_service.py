@@ -223,12 +223,7 @@ def process_bulk_pdf(
             )
 
         dms_result = run_playwright_callable_sync(_bulk_run_fill_dms)
-        if dms_result.get("vehicle") and vehicle_id:
-            from app.services.fill_hero_dms_service import update_vehicle_master_from_dms
-            try:
-                update_vehicle_master_from_dms(vehicle_id, dms_result["vehicle"])
-            except Exception as e:
-                logger.warning("bulk: vehicle_master update failed: %s", e)
+        # Masters commit only after Create Invoice (Invoice# scrape); no mid-flow DB updates — see Fill DMS policy.
 
         # 5. Print forms (Form 20 + Gate Pass)
         from app.services.form20_service import generate_form20_pdfs
