@@ -440,3 +440,4 @@ Bulk upload automates the ingestion of scanned documents from a shared folder in
 | 3.74 | Apr 2026 | — | **Fill Insurance** (**`POST /fill-dms/insurance`**) attempts automated **Sign In** and writes **`[DIAG]`** before the KYC wait (same helpers as Hero landing) — **LLD** **6.128**, **HLD** **1.64**, **Database DDL** **2.69** |
 | 3.75 | Apr 2026 | — | **Hero / MISP partner login**: automated click targets **Sign In** inside the password form (not hero **Get Price** submit) — **LLD** **6.129**, **HLD** **1.65**, **Database DDL** **2.70** |
 | 3.76 | Apr 2026 | — | **MISP partner**: wait for **non-empty password** (Partner Login), then **Sign In**; DOM submit in same **form** — **LLD** **6.130**, **HLD** **1.66**, **Database DDL** **2.71** |
+| 3.77 | Apr 2026 | — | **MISP**: up to **4** Sign In tries (**500 ms**); success when URL leaves **misp-partner-login** — **LLD** **6.131**, **HLD** **1.67**, **Database DDL** **2.72** |

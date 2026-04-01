@@ -541,12 +541,30 @@ def _click_sign_in_on_context(ctx, *, timeout_ms: int) -> bool:
     return False
 
 
+def _attempt_sign_in_click_once(page, *, timeout_ms: int) -> bool:
+    """One pass: all frame contexts + DOM fallback."""
+    for ctx in _iter_page_and_child_frames(page):
+        if _click_sign_in_on_context(ctx, timeout_ms=timeout_ms):
+            return True
+    return bool(_try_dom_click_sign_in_submit(page))
+
+
+def _still_on_heroinsurance_misp_partner_login(page) -> bool:
+    try:
+        return "misp-partner-login" in (page.url or "").lower()
+    except Exception:
+        return False
+
+
 def _click_sign_in_if_visible(page, *, timeout_ms: int) -> bool:
     """
     Click landing-page login CTA (``Sign In``, ``Login``, ``Log in``).
     Hero MISP login form uses ``<button type="submit">`` with label **Sign In**; landing pages may use **Login** only.
     Tries the **main document** and each **child frame** (login may render inside an iframe).
-    Returns True if a click was attempted.
+    Returns True only when navigation off **misp-partner-login** succeeds (or non-MISP URL after click).
+
+    Logs often showed ``clicked: true`` while the user still saw the login screen — up to **4** attempts with
+    **500 ms** between tries, and a post-click URL check on the partner login host.
     """
     wait_ms = max(int(INSURANCE_LOGIN_WAIT_MS), int(timeout_ms))
     pwd_ready = _wait_for_partner_login_password_filled(page, timeout_ms=wait_ms)
@@ -563,40 +581,85 @@ def _click_sign_in_if_visible(page, *, timeout_ms: int) -> bool:
     # endregion
     if not pwd_ready:
         return False
-    for ctx in _iter_page_and_child_frames(page):
-        if _click_sign_in_on_context(ctx, timeout_ms=timeout_ms):
-            # region agent log
-            try:
-                agent_debug_ndjson_log(
-                    "H6",
-                    "fill_hero_insurance_service._click_sign_in_if_visible",
-                    "playwright_context_click_ok",
-                    {"ctx": type(ctx).__name__},
-                )
-            except Exception:
-                pass
-            # endregion
-            return True
-    if _try_dom_click_sign_in_submit(page):
+
+    max_attempts = 4
+    pause_ms = 500
+    for attempt in range(1, max_attempts + 1):
+        clicked = _attempt_sign_in_click_once(page, timeout_ms=timeout_ms)
+        try:
+            url_snip = (page.url or "")[:160]
+        except Exception:
+            url_snip = ""
         # region agent log
         try:
             agent_debug_ndjson_log(
                 "H6",
                 "fill_hero_insurance_service._click_sign_in_if_visible",
-                "dom_eval_click_ok",
-                {"fallback": True},
+                "sign_in_attempt",
+                {
+                    "attempt": attempt,
+                    "click_reported": clicked,
+                    "url_after_click_snip": url_snip,
+                },
             )
         except Exception:
             pass
         # endregion
-        return True
+        if clicked:
+            try:
+                page.wait_for_timeout(pause_ms)
+            except Exception:
+                time.sleep(pause_ms / 1000.0)
+            try:
+                url_snip2 = (page.url or "")[:160]
+            except Exception:
+                url_snip2 = ""
+            on_misp = _still_on_heroinsurance_misp_partner_login(page)
+            # region agent log
+            try:
+                agent_debug_ndjson_log(
+                    "H6",
+                    "fill_hero_insurance_service._click_sign_in_if_visible",
+                    "post_click_partner_login_check",
+                    {
+                        "attempt": attempt,
+                        "still_on_misp_partner_login": on_misp,
+                        "url_snip": url_snip2,
+                    },
+                )
+            except Exception:
+                pass
+            # endregion
+            if not on_misp:
+                logger.info(
+                    "Hero Insurance: Sign In succeeded (left misp-partner-login) on attempt %s/%s.",
+                    attempt,
+                    max_attempts,
+                )
+                return True
+            logger.warning(
+                "Hero Insurance: Sign In reported a click but still on misp-partner-login "
+                "(attempt %s/%s) — retrying after %s ms.",
+                attempt,
+                max_attempts,
+                pause_ms,
+            )
+        if attempt < max_attempts:
+            try:
+                page.wait_for_timeout(pause_ms)
+            except Exception:
+                time.sleep(pause_ms / 1000.0)
+
     # region agent log
     try:
         agent_debug_ndjson_log(
             "H6",
             "fill_hero_insurance_service._click_sign_in_if_visible",
-            "all_sign_in_paths_failed",
-            {},
+            "sign_in_exhausted_retries",
+            {
+                "max_attempts": max_attempts,
+                "still_on_misp_partner_login": _still_on_heroinsurance_misp_partner_login(page),
+            },
         )
     except Exception:
         pass

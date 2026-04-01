@@ -362,3 +362,4 @@ The SQL view **`form_dms_view`** is **removed**; the same mapping is implemented
 | 1.64 | Apr 2026 | — | **`run_fill_insurance_only`**: Sign In + DIAG before KYC — **LLD** **6.128**, **BRD** **3.74**, **Database DDL** **2.69** |
 | 1.65 | Apr 2026 | — | **`_try_click_sign_in_inside_password_form`** (MISP **Get Price** vs **Sign In**) — **LLD** **6.129**, **BRD** **3.75**, **Database DDL** **2.70** |
 | 1.66 | Apr 2026 | — | **`_wait_for_partner_login_password_filled`** + filled-form **Sign In** — **LLD** **6.130**, **BRD** **3.76**, **Database DDL** **2.71** |
+| 1.67 | Apr 2026 | — | Sign In **4×** + URL navigation check — **LLD** **6.131**, **BRD** **3.77**, **Database DDL** **2.72** |

@@ -551,3 +551,4 @@ This document lists the current database tables and their columns. **Executable 
 | 2.69 | Apr 2026 | **No schema change.** **`POST /fill-dms/insurance`** Sign In + DIAG before KYC wait — **LLD** **6.128** / **BRD** **3.74** / **HLD** **1.64**. |
 | 2.70 | Apr 2026 | **No schema change.** MISP partner login: Sign In inside password **form** — **LLD** **6.129** / **BRD** **3.75** / **HLD** **1.65**. |
 | 2.71 | Apr 2026 | **No schema change.** MISP Partner Login: **password** non-empty wait + **Sign In** — **LLD** **6.130** / **BRD** **3.76** / **HLD** **1.66**. |
+| 2.72 | Apr 2026 | **No schema change.** Sign In **4** attempts + URL check — **LLD** **6.131** / **BRD** **3.77** / **HLD** **1.67**. |
