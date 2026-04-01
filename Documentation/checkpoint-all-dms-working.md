@@ -13,7 +13,9 @@ Use this file as the project milestone marker: Siebel / Fill DMS flows, My Order
 
 ## Git
 
-Annotated tag: **`all-dms-working`** (see tag message for the same todo list).
+Annotated tag: **`all-dms-working`** points at the commit that contains this file (run **`git show all-dms-working`**). Tag message lists the same todos.
+
+Uncommitted work in your tree (e.g. DMS/insurance code edits) is **not** part of that commit; add and commit separately, then move the tag if you want the label on a fuller snapshot.
 
 If you have additional uncommitted changes you want included in the same snapshot, commit them and move or recreate the tag:
 
