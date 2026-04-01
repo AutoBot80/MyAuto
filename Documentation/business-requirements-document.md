@@ -448,3 +448,4 @@ Bulk upload automates the ingestion of scanned documents from a shared folder in
 | 3.82 | Apr 2026 | — | **FR-18b**: With DMS + Insurance in one browser, automation must not attach to Siebel/DMS tabs for insurance steps — **LLD** **6.136**, **HLD** **1.72** |
 | 3.83 | Apr 2026 | — | **FR-18b** MISP nav: expand **Policy Issuance** before **New Policy** — **LLD** **6.137**, **HLD** **1.73** |
 | 3.84 | Apr 2026 | — | **§6.6** KYC **Insurance Company**: typeahead uses **`fuzzy_best_option_label`** on visible options (no first-option fallback when the match score is below threshold) — **LLD** **6.138**, **HLD** **1.74** |
+| 3.85 | Apr 2026 | — | **FR-18b** Fill Insurance: automation must not attach to or click **Login** on a Siebel/DMS tab when both DMS and MISP share one browser — **LLD** **6.139**, **HLD** **1.75** |

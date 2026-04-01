@@ -370,3 +370,4 @@ The SQL view **`form_dms_view`** is **removed**; the same mapping is implemented
 | 1.72 | Apr 2026 | — | Insurance tab selection: ignore Siebel/DMS when both open — **LLD** **6.136**, **BRD** **3.82** |
 | 1.73 | Apr 2026 | — | MISP **Policy Issuance** nav expand before **New Policy** — **LLD** **6.137**, **BRD** **3.83** |
 | 1.74 | Apr 2026 | — | KYC **Insurance Company** typeahead: fuzzy match on dropdown options — **LLD** **6.138**, **BRD** **3.84** |
+| 1.75 | Apr 2026 | — | Fill Insurance: CDP tab pick skips DMS; no Sign In on Siebel URL — **LLD** **6.139**, **BRD** **3.85** |

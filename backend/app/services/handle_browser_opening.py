@@ -140,7 +140,21 @@ def _find_browser_exe() -> tuple[str | None, str | None]:
     return None, None
 
 
-def _launch_managed_browser_for_site(base_url: str, *, launch_background: bool = False):
+def _url_looks_like_dms_siebel_tab(url: str) -> bool:
+    """Hero Connect / Siebel — never treat as the Insurance (MISP) tab when both are open in one browser."""
+    u = (url or "").lower()
+    return (
+        "swecmd=" in u
+        or "/siebel/" in u
+        or "connect.heromotocorp.biz" in u
+        or "heroconnect" in u
+        or "edealerhmcl" in u
+    )
+
+
+def _launch_managed_browser_for_site(
+    base_url: str, *, launch_background: bool = False, site_label: str = ""
+):
     pw = _get_playwright()
     headless = not bool(DMS_PLAYWRIGHT_HEADED)
     port = PLAYWRIGHT_MANAGED_REMOTE_DEBUG_PORT or 9333
@@ -196,9 +210,14 @@ def _launch_managed_browser_for_site(base_url: str, *, launch_background: bool =
                     matched = None
                     for page in existing:
                         url = (page.url or "").strip()
-                        if url and _playwright_page_url_matches_site_base(url, base_url):
-                            matched = page
-                            break
+                        if not url or not _playwright_page_url_matches_site_base(url, base_url):
+                            continue
+                        if (site_label or "").strip() == "Insurance" and _url_looks_like_dms_siebel_tab(
+                            url
+                        ):
+                            continue
+                        matched = page
+                        break
                     if matched is not None:
                         logger.info(
                             "handle_browser_opening: connected to %s via CDP at %s "
@@ -215,6 +234,28 @@ def _launch_managed_browser_for_site(base_url: str, *, launch_background: bool =
                             pg0.wait_for_load_state("domcontentloaded", timeout=10_000)
                         except Exception:
                             pass
+                        try:
+                            u0 = (pg0.url or "").strip()
+                        except Exception:
+                            u0 = ""
+                        if (site_label or "").strip() == "Insurance" and _url_looks_like_dms_siebel_tab(
+                            u0
+                        ):
+                            logger.info(
+                                "handle_browser_opening: sole CDP tab is Siebel/DMS — opening a new tab for Insurance instead of reusing DMS (base=%s).",
+                                (base_url or "")[:120],
+                            )
+                            try:
+                                ctx0 = browser.contexts[0] if browser.contexts else browser.new_context()
+                                pg_new = ctx0.new_page()
+                                pg_new.goto(base_url, wait_until="domcontentloaded", timeout=20_000)
+                                return pg_new, channel
+                            except Exception as exc:
+                                logger.warning(
+                                    "handle_browser_opening: could not open Insurance tab while DMS-only tab was present: %s",
+                                    exc,
+                                )
+                                continue
                         logger.info(
                             "handle_browser_opening: reusing single tab from independent %s launch (avoid duplicate insurance/DMS tab).",
                             channel,
@@ -565,16 +606,6 @@ def get_or_open_site_page(
     """
     page = find_open_site_page(base_url, site_label=site_label)
     if page is not None:
-        _agent_debug_browser_ndjson(
-            "H10",
-            "handle_browser_opening.get_or_open_site_page",
-            "reused_existing_tab",
-            {
-                "site_label": site_label,
-                "base_url_snip": (base_url or "")[:160],
-                "require_login_on_open": require_login_on_open,
-            },
-        )
         if not require_login_on_open:
             return page, None
         # Reused tab may still be on login (e.g. after warm-browser with no auto-login) — run same gate as new tab.
@@ -584,7 +615,9 @@ def get_or_open_site_page(
         return _wait_login_or_prompt_after_open(page, site_label)
 
     open_target = (launch_url or base_url or "").strip()
-    opened_page, channel = _launch_managed_browser_for_site(open_target, launch_background=launch_background)
+    opened_page, channel = _launch_managed_browser_for_site(
+        open_target, launch_background=launch_background, site_label=site_label
+    )
     if opened_page is not None:
         if not require_login_on_open:
             return opened_page, None
@@ -597,18 +630,6 @@ def get_or_open_site_page(
         f"{site_label} site not open. Please open {site_label} site and keep it logged in. "
         "Start Edge or Chrome with a remote debugging port (for example 9222), or allow the app "
         "to auto-open one and retry."
-    )
-
-
-def _url_looks_like_dms_siebel_tab(url: str) -> bool:
-    """Hero Connect / Siebel — never treat as the Insurance (MISP) tab when both are open in one browser."""
-    u = (url or "").lower()
-    return (
-        "swecmd=" in u
-        or "/siebel/" in u
-        or "connect.heromotocorp.biz" in u
-        or "heroconnect" in u
-        or "edealerhmcl" in u
     )
 
 

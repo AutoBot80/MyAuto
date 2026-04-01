@@ -643,6 +643,17 @@ def _click_sign_in_if_visible(page, *, timeout_ms: int) -> bool:
     Logs often showed ``clicked: true`` while the user still saw the login screen — up to **4** attempts with
     **500 ms** between tries, and a post-click URL check on the partner login host.
     """
+    try:
+        u0 = (page.url or "").strip()
+        if _tab_url_is_dms_siebel_not_insurance(u0):
+            logger.warning(
+                "Hero Insurance: not clicking login on this tab — URL looks like Siebel/DMS, not the MISP insurance portal (%s). "
+                "Open or switch to the insurance site tab.",
+                u0[:180],
+            )
+            return False
+    except Exception:
+        pass
     wait_ms = max(int(INSURANCE_LOGIN_WAIT_MS), int(timeout_ms))
     pwd_ready = _wait_for_partner_login_password_filled(page, timeout_ms=wait_ms)
     if not pwd_ready:
