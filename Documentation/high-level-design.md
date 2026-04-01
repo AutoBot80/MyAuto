@@ -352,3 +352,4 @@ The SQL view **`form_dms_view`** is **removed**; the same mapping is implemented
 | 1.54 | Apr 2026 | — | **`siebel_dms_playwright`**: **My Orders** grid classification + **unknown_rows** → **allocated** attach when Order# / no Invoice# — **LLD** **6.118**, **BRD** **3.64**, **Database DDL** **2.59** |
 | 1.55 | Apr 2026 | — | **`_classify_my_orders_grid_rows`**: **allocated** before **pending** — **LLD** **6.119**, **BRD** **3.65**, **Database DDL** **2.60** |
 | 1.56 | Apr 2026 | — | **`add_sales` router** + **AddSalesPage**: eligibility **`resolved_*`** ids — **LLD** **6.120**, **BRD** **3.66**, **Database DDL** **2.61** |
+| 1.57 | Apr 2026 | — | **`fill_hero_insurance_service`**: MISP **Login** + **2W** clicks — **LLD** **6.121**, **BRD** **3.67**, **Database DDL** **2.62** |

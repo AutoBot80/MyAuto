@@ -165,7 +165,7 @@ backend/app/
 
 ### 2.4c Insurance (Playwright)
 
-- **`INSURANCE_BASE_URL`** must be the **real** insurer portal (e.g. Hero MISP). Repo static insurance HTML and **`/dummy-insurance`** mounts **were removed**. Automation: **`form_insurance_view`** + optional **`add_sales_staging.payload_json`** (**`build_insurance_fill_values`**, **BR-20**); KYC / policy selectors as implemented in **`fill_hero_insurance_service.py`**; **`insert_insurance_master_after_gi`**, **`click_issue_policy_and_scrape_preview`**, **`update_insurance_master_policy_after_issue`**; writes **`Insurance_Form_Values.txt`**.
+- **`INSURANCE_BASE_URL`** must be the **real** insurer portal (e.g. Hero MISP). Repo static insurance HTML and **`/dummy-insurance`** mounts **were removed**. Automation: **`form_insurance_view`** + optional **`add_sales_staging.payload_json`** (**`build_insurance_fill_values`**, **BR-20**); KYC / policy selectors as implemented in **`fill_hero_insurance_service.py`**; **`insert_insurance_master_after_gi`**, **`click_issue_policy_and_scrape_preview`**, **`update_insurance_master_policy_after_issue`**; writes **`Insurance_Form_Values.txt`**. **pre_process** landing clicks: **`Login`** / **`Log in`** as well as **`Sign In`**; **2W** path tries **`img[alt]`**, **`aria-label`**, role **button**/**link**, tile text, then a bounded DOM scan — **LLD** **6.121**.
 
 ### 2.4d Real Siebel DMS — BRD §6.1a checklist vs Playwright
 
@@ -489,3 +489,4 @@ See **Documentation/Database DDL.md** for full table structures. Summary:
 | 6.118 | Apr 2026 | — | **My Orders** jqGrid: classify **pending** / **allocated** using **`raw`** + **`status`**; **`aria-describedby`** status/invoice mapping; **unknown_rows** + Order# + no Invoice# → **allocated** attach (no spurious **+**) — **§2.4d** bullet; **BRD** **3.64**; **Database DDL** **2.59**; **HLD** **1.54**. |
 | 6.119 | Apr 2026 | — | **`_classify_my_orders_grid_rows`**: **allocated** before **pending** so mixed grids drill **Allocated** **Order#** — **§2.4d** bullet; **BRD** **3.65**; **Database DDL** **2.60**; **HLD** **1.55**. |
 | 6.120 | Apr 2026 | — | **`GET /add-sales/create-invoice-eligibility`**: response adds **`resolved_customer_id`** / **`resolved_vehicle_id`**; **Add Sales** applies them on refresh so **Generate Insurance** is not blocked by missing Fill DMS response IDs — API Endpoints table; **BRD** **3.66**; **Database DDL** **2.61**; **HLD** **1.56**. |
+| 6.121 | Apr 2026 | — | **`fill_hero_insurance_service`**: **`Login`** / **`Log in`** + multi-selector **2W** tile — **§2.4c**; **BRD** **3.67**; **Database DDL** **2.62**; **HLD** **1.57**. |

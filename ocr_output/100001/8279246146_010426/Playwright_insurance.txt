@@ -1,0 +1,8 @@
+Playwright Insurance — execution log (IST / Asia/Kolkata timestamps)
+
+started_ist=2026-04-01T13:56:54.797+05:30
+subfolder='8279246146_010426'
+
+--- trace ---
+2026-04-01T13:56:54.799+05:30 [NOTE] run_fill_insurance_only: starting Fill Insurance flow
+2026-04-01T13:57:43.870+05:30 [ERROR] run_fill_insurance_only: Page.wait_for_function: Target page, context or browser has been closed

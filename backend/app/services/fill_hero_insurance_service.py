@@ -45,40 +45,150 @@ def _t(page, ms: int) -> None:
 
 
 def _click_sign_in_if_visible(page, *, timeout_ms: int) -> bool:
-    """Click control whose inner text is exactly ``Sign In`` (login). Returns True if a click was attempted."""
+    """
+    Click landing-page login CTA (``Sign In``, ``Login``, ``Log in``).
+    Hero MISP builds vary — some portals use **Login** only on the home/landing strip.
+    Returns True if a click was attempted.
+    """
+    label_patterns = (
+        (re.compile(r"^\s*Sign In\s*$", re.I), "Sign In"),
+        (re.compile(r"^\s*Login\s*$", re.I), "Login"),
+        (re.compile(r"^\s*Log\s+in\s*$", re.I), "Log in"),
+    )
     try:
-        by_exact = page.get_by_text("Sign In", exact=True)
-        if by_exact.count() > 0:
-            for i in range(min(by_exact.count(), 8)):
-                loc = by_exact.nth(i)
+        for pat, _dbg in label_patterns:
+            loc = page.get_by_text(pat)
+            n = loc.count()
+            if n <= 0:
+                continue
+            for i in range(min(n, 12)):
+                el = loc.nth(i)
                 try:
-                    if loc.is_visible(timeout=2_000):
-                        loc.click(timeout=timeout_ms)
-                        logger.info("Hero Insurance: clicked Sign In (exact text).")
+                    if el.is_visible(timeout=2_000):
+                        el.click(timeout=timeout_ms)
+                        logger.info("Hero Insurance: clicked login CTA (%s).", pat.pattern)
                         return True
                 except Exception:
                     continue
-        # Buttons/links containing only "Sign In"
         for role in ("button", "link"):
-            loc = page.get_by_role(role, name=re.compile(r"^\s*Sign In\s*$", re.I))
-            if loc.count() > 0 and loc.first.is_visible(timeout=1_500):
-                loc.first.click(timeout=timeout_ms)
-                logger.info("Hero Insurance: clicked Sign In (role+name).")
-                return True
+            for pat in (
+                re.compile(r"^\s*(Sign In|Login|Log\s+in)\s*$", re.I),
+            ):
+                loc = page.get_by_role(role, name=pat)
+                if loc.count() > 0:
+                    try:
+                        if loc.first.is_visible(timeout=1_500):
+                            loc.first.click(timeout=timeout_ms)
+                            logger.info("Hero Insurance: clicked login CTA (role=%s).", role)
+                            return True
+                    except Exception:
+                        continue
+        # Prominent anchor to auth route (SPA)
+        for sel in ('a[href*="login" i]', 'a[href*="signin" i]', 'a[href*="sign-in" i]'):
+            try:
+                a = page.locator(sel).filter(has_text=re.compile(r"login|sign\s*in", re.I))
+                if a.count() > 0 and a.first.is_visible(timeout=1_200):
+                    a.first.click(timeout=timeout_ms)
+                    logger.info("Hero Insurance: clicked login link (%s).", sel)
+                    return True
+            except Exception:
+                continue
     except Exception as exc:
-        logger.debug("Hero Insurance: Sign In click skipped: %s", exc)
+        logger.debug("Hero Insurance: login CTA click skipped: %s", exc)
     return False
 
 
 def _click_2w_icon(page, *, timeout_ms: int) -> None:
-    loc = page.locator('img[alt="2W Icon"]')
-    loc.first.wait_for(state="visible", timeout=timeout_ms)
-    loc.first.click(timeout=timeout_ms)
-    logger.info("Hero Insurance: clicked 2W Icon.")
+    """
+    Open **2W** (two-wheeler) product path. Markup varies: ``img[alt]``, tiles, or icon buttons.
+    """
+    _t(page, 400)
+
+    def _try_click(loc, label: str) -> bool:
+        try:
+            if loc.count() <= 0:
+                return False
+            target = loc.first
+            target.wait_for(state="visible", timeout=min(timeout_ms, 25_000))
+            target.scroll_into_view_if_needed(timeout=5_000)
+            try:
+                target.click(timeout=timeout_ms)
+            except Exception:
+                target.click(timeout=timeout_ms, force=True)
+            logger.info("Hero Insurance: clicked 2W control (%s).", label)
+            return True
+        except Exception:
+            return False
+
+    try_order = (
+        ('img[alt="2W Icon"]', page.locator('img[alt="2W Icon"]')),
+        ("img[alt*='2W' i]", page.locator("img[alt*='2W' i]")),
+        ("img[title*='2W' i]", page.locator("img[title*='2W' i]")),
+        ("[aria-label*='2W' i]", page.locator("[aria-label*='2W' i]")),
+        ("[aria-label*='two wheel' i]", page.locator("[aria-label*='two wheel' i]")),
+        (
+            "role=button 2W",
+            page.get_by_role("button", name=re.compile(r"2\s*W|two\s*wheel", re.I)),
+        ),
+        (
+            "link 2W",
+            page.get_by_role("link", name=re.compile(r"2\s*W|two\s*wheel", re.I)),
+        ),
+        (
+            "tile text",
+            page.locator("a, button, [role='button'], div[role='button']").filter(
+                has_text=re.compile(r"^\s*2\s*W\s*$", re.I)
+            ),
+        ),
+    )
+    for label, loc in try_order:
+        if _try_click(loc, label):
+            try:
+                page.wait_for_load_state("domcontentloaded", timeout=min(20_000, timeout_ms * 2))
+            except Exception:
+                pass
+            return
+
+    # Last resort: scan visible clickable elements for 2W / two-wheeler copy (Angular/React tiles).
     try:
-        page.wait_for_load_state("domcontentloaded", timeout=min(20_000, timeout_ms * 2))
-    except Exception:
-        pass
+        hit = page.evaluate(
+            """() => {
+            const vis = (el) => {
+                if (!el) return false;
+                const st = window.getComputedStyle(el);
+                if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity) === 0) return false;
+                const r = el.getBoundingClientRect();
+                return r.width > 2 && r.height > 2;
+            };
+            const cand = Array.from(
+                document.querySelectorAll('img[alt], [aria-label], button, a, [role="button"]')
+            );
+            for (const el of cand) {
+                if (!vis(el)) continue;
+                const alt = (el.getAttribute('alt') || '').trim();
+                const ar = (el.getAttribute('aria-label') || '').trim();
+                const tx = (el.textContent || '').trim();
+                const blob = (alt + ' ' + ar + ' ' + tx).toLowerCase();
+                if (/\\b2\\s*w\\b/.test(blob) || /two[-\\s]*wheel/i.test(blob)) {
+                    try { el.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
+                    el.click();
+                    return 'ok';
+                }
+            }
+            return '';
+        }"""
+        )
+        if hit:
+            logger.info("Hero Insurance: clicked 2W control (DOM scan).")
+            try:
+                page.wait_for_load_state("domcontentloaded", timeout=min(20_000, timeout_ms * 2))
+            except Exception:
+                pass
+            return
+    except Exception as exc:
+        logger.warning("Hero Insurance: 2W DOM scan failed: %s", exc)
+
+    raise TimeoutError("2W (two-wheeler) entry control not found or not clickable.")
 
 
 def _click_new_policy(page, *, timeout_ms: int) -> None:
@@ -352,7 +462,7 @@ def _kyc_proceed_or_upload(page, *, timeout_ms: int) -> str | None:
 
 def _run_hero_misp_portal_after_open(page, values: dict | None, *, timeout_ms: int) -> str | None:
     """
-    Sign In → 2W Icon → New Policy → (if ``values``) insurer / OVD / mobile / consent → KYC Proceed or upload.
+    Login / Sign In → 2W (two-wheeler) → New Policy → (if ``values``) insurer / OVD / mobile / consent → KYC Proceed or upload.
     Returns None on success, else error string.
     """
     _click_sign_in_if_visible(page, timeout_ms=timeout_ms)
@@ -360,7 +470,7 @@ def _run_hero_misp_portal_after_open(page, values: dict | None, *, timeout_ms: i
         page.wait_for_load_state("networkidle", timeout=12_000)
     except Exception:
         pass
-    _t(page, 800)
+    _t(page, 1_200)
 
     try:
         _click_2w_icon(page, timeout_ms=timeout_ms)
@@ -884,7 +994,7 @@ def pre_process(
     Open **``INSURANCE_BASE_URL``** (reuse tab / launch browser like Fill DMS).
 
     When **customer_id** and **vehicle_id** are set, loads insurer (details sheet / DB via
-    ``_build_insurance_fill_values``) and runs: **Sign In** (if visible) → **2W Icon** → **New Policy** →
+    ``_build_insurance_fill_values``) and runs: **Login / Sign In** (if visible) → **2W** (two-wheeler) → **New Policy** →
     Insurance Company (fuzzy LIKE insurer) → OVD **AADHAAR CARD** → **mobile_number** → consent →
     either **Proceed** if KYC already done, or upload Aadhaar front/back/photo placeholders and **Proceed** /
     Continue. Stops on the **VIN** entry page; **main_process** fills VIN and the rest.
@@ -958,7 +1068,7 @@ def pre_process(
     to = INSURANCE_ACTION_TIMEOUT_MS
     page.set_default_timeout(to)
     append_playwright_insurance_line(
-        ocr_output_dir, subfolder, "NOTE", "pre_process: browser tab ready, running Sign In → New Policy → KYC"
+        ocr_output_dir, subfolder, "NOTE", "pre_process: browser tab ready, running Login/Sign In → 2W → New Policy → KYC"
     )
 
     try:
