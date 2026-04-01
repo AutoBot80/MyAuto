@@ -548,3 +548,4 @@ This document lists the current database tables and their columns. **Executable 
 | 2.66 | Apr 2026 | **No schema change.** Hero Insurance **`Playwright_insurance.txt`** **`[DIAG]`** snapshots (visible controls + frames); Sign In attempts on **iframe** contexts — **LLD** **6.125** / **BRD** **3.71** / **HLD** **1.61**. |
 | 2.67 | Apr 2026 | **No schema change.** **`#root`** DIAG + **`Playwright_insurance_diag_fallback.txt`** without **subfolder** — **LLD** **6.126** / **BRD** **3.72** / **HLD** **1.62**. |
 | 2.68 | Apr 2026 | **No schema change.** Hero Insurance **`main_process`** reuses **`pre_process`** browser tab — **LLD** **6.127** / **BRD** **3.73** / **HLD** **1.63**. |
+| 2.69 | Apr 2026 | **No schema change.** **`POST /fill-dms/insurance`** Sign In + DIAG before KYC wait — **LLD** **6.128** / **BRD** **3.74** / **HLD** **1.64**. |

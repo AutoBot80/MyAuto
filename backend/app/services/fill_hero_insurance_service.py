@@ -1804,6 +1804,37 @@ def run_fill_insurance_only(
             return result
 
         page.set_default_timeout(INSURANCE_ACTION_TIMEOUT_MS)
+        # Real MISP (and similar): same automated Sign In / DIAG as Hero ``pre_process`` — this endpoint
+        # previously only waited for manual login (_wait_for_insurance_kyc_after_login).
+        _t(page, 500)
+        _hero_insurance_log_page_diagnostics(
+            page,
+            phase="fill_insurance_only_before_sign_in",
+            ocr_output_dir=ocr_output_dir,
+            subfolder=subfolder,
+        )
+        _ins_clicked = _click_sign_in_if_visible(page, timeout_ms=INSURANCE_ACTION_TIMEOUT_MS)
+        # region agent log
+        agent_debug_ndjson_log(
+            "H4",
+            "fill_hero_insurance_service.run_fill_insurance_only",
+            "after_sign_in_click_attempt",
+            {"clicked": bool(_ins_clicked)},
+        )
+        # endregion
+        if not _ins_clicked:
+            _hero_insurance_log_page_diagnostics(
+                page,
+                phase="fill_insurance_only_sign_in_not_clicked",
+                ocr_output_dir=ocr_output_dir,
+                subfolder=subfolder,
+            )
+            append_playwright_insurance_line(
+                ocr_output_dir,
+                subfolder,
+                "NOTE",
+                "run_fill_insurance_only: Sign In not auto-clicked — see DIAG lines; complete login manually if needed.",
+            )
         wait_err = _wait_for_insurance_kyc_after_login(page, insurance_base_url)
         if wait_err:
             result["error"] = wait_err
