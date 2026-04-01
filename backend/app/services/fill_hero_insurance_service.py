@@ -25,7 +25,10 @@ from app.services.add_sales_commit_service import (
     insert_insurance_master_after_gi,
     update_insurance_master_policy_after_issue,
 )
-from app.services.handle_browser_opening import get_or_open_site_page
+from app.services.handle_browser_opening import (
+    _playwright_page_url_matches_site_base,
+    get_or_open_site_page,
+)
 from app.services.insurance_form_values import (
     agent_debug_ndjson_log,
     append_playwright_insurance_line,
@@ -922,18 +925,34 @@ def _misp_snapshot_context_pages(page) -> list:
         return []
 
 
+def _tab_url_is_dms_siebel_not_insurance(url: str) -> bool:
+    """When DMS and Insurance share one browser, never follow Siebel / Hero Connect tabs for MISP steps."""
+    u = (url or "").lower()
+    return (
+        "swecmd=" in u
+        or "/siebel/" in u
+        or "connect.heromotocorp.biz" in u
+        or "heroconnect" in u
+        or "edealerhmcl" in u
+    )
+
+
 def _misp_resolve_page_after_possible_new_tab(
     pages_before: list,
     fallback_page,
     *,
+    portal_base_url: str,
     timeout_ms: int,
     step_label: str,
 ):
     """
-    Hero MISP often opens the **2W** product path in a **new** tab/window; **New Policy** and **KYC**
-    then run there. Prefer any ``Page`` not in ``pages_before``; otherwise keep ``fallback_page``
-    (same-tab navigation).
+    Hero MISP often opens the **2W** product path in a **new** tab; **New Policy** and **KYC** follow.
+    Prefer a **new** ``Page`` whose URL matches ``portal_base_url`` (insurance/MISP host). **Never** attach
+    to a Siebel/DMS tab — those can appear in ``context.pages`` when the operator has both sites open.
     """
+    base = (portal_base_url or "").strip()
+    if not base:
+        base = (INSURANCE_BASE_URL or "").strip()
     ctx = fallback_page.context
     cap_ms = min(max(5_000, int(timeout_ms)), 45_000)
     deadline = time.monotonic() + cap_ms / 1000.0
@@ -956,12 +975,23 @@ def _misp_resolve_page_after_possible_new_tab(
                     u = (p.url or "").strip()
                 except Exception:
                     u = ""
-                logger.info(
-                    "Hero Insurance: using new browser tab after %s — url=%s",
-                    step_label,
-                    u[:200],
-                )
-                return p
+                if _tab_url_is_dms_siebel_not_insurance(u):
+                    logger.info(
+                        "Hero Insurance: ignoring Siebel/DMS tab after %s — url=%s",
+                        step_label,
+                        u[:140],
+                    )
+                    continue
+                low = (u or "").lower()
+                if not u or "about:blank" in low:
+                    continue
+                if u and _playwright_page_url_matches_site_base(u, base):
+                    logger.info(
+                        "Hero Insurance: using new insurance/MISP tab after %s — url=%s",
+                        step_label,
+                        u[:200],
+                    )
+                    return p
         except Exception:
             pass
         try:
@@ -970,18 +1000,17 @@ def _misp_resolve_page_after_possible_new_tab(
             pass
     try:
         if not fallback_page.is_closed():
+            fu = ""
+            try:
+                fu = (fallback_page.url or "").strip()
+            except Exception:
+                pass
             logger.info(
-                "Hero Insurance: no extra tab after %s — continuing on same page (url=%s).",
+                "Hero Insurance: no new insurance tab after %s — staying on same page (url=%s).",
                 step_label,
-                ((fallback_page.url or "")[:160]),
+                fu[:180],
             )
             return fallback_page
-    except Exception:
-        pass
-    try:
-        for p in reversed(list(ctx.pages)):
-            if not p.is_closed():
-                return p
     except Exception:
         pass
     return fallback_page
@@ -1249,6 +1278,7 @@ def _run_hero_misp_portal_after_open(
     page,
     values: dict | None,
     *,
+    portal_base_url: str,
     timeout_ms: int,
     ocr_output_dir: Path | None = None,
     subfolder: str | None = None,
@@ -1256,6 +1286,9 @@ def _run_hero_misp_portal_after_open(
     """
     Login / Sign In → 2W (two-wheeler) → New Policy → (if ``values``) insurer / OVD / mobile / consent → KYC Proceed or upload.
     Returns None on success, else error string.
+
+    ``portal_base_url`` is the insurance site origin (e.g. from ``pre_process`` ``match_base``) so new-tab handoff
+    never attaches to a Siebel/DMS tab when both are open.
     """
     _t(page, 500)
     _hero_insurance_log_page_diagnostics(
@@ -1304,6 +1337,7 @@ def _run_hero_misp_portal_after_open(
     page = _misp_resolve_page_after_possible_new_tab(
         pages_before_2w,
         page,
+        portal_base_url=portal_base_url,
         timeout_ms=timeout_ms,
         step_label="2W",
     )
@@ -1318,6 +1352,7 @@ def _run_hero_misp_portal_after_open(
     page = _misp_resolve_page_after_possible_new_tab(
         pages_before_np,
         page,
+        portal_base_url=portal_base_url,
         timeout_ms=timeout_ms,
         step_label="New Policy",
     )
@@ -1960,6 +1995,7 @@ def pre_process(
         step_err = _run_hero_misp_portal_after_open(
             page,
             values,
+            portal_base_url=match_base,
             timeout_ms=to,
             ocr_output_dir=ocr_output_dir,
             subfolder=subfolder,
@@ -2418,6 +2454,7 @@ def run_fill_insurance_only(
         page = _misp_resolve_page_after_possible_new_tab(
             pages_before_2w,
             page,
+            portal_base_url=insurance_base_url.strip(),
             timeout_ms=INSURANCE_ACTION_TIMEOUT_MS,
             step_label="2W",
         )
@@ -2446,6 +2483,7 @@ def run_fill_insurance_only(
         page = _misp_resolve_page_after_possible_new_tab(
             pages_before_np,
             page,
+            portal_base_url=insurance_base_url.strip(),
             timeout_ms=INSURANCE_ACTION_TIMEOUT_MS,
             step_label="New Policy",
         )

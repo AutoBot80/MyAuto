@@ -622,7 +622,7 @@ def get_or_open_site_page(
     ``launch_background`` (Windows): start the independently launched edge/chrome **minimized** so the
     operator SPA is less likely to lose focus (used for DMS warm-browser only).
     """
-    page = find_open_site_page(base_url)
+    page = find_open_site_page(base_url, site_label=site_label)
     if page is not None:
         _agent_debug_browser_ndjson(
             "H10",
@@ -669,7 +669,19 @@ def get_or_open_site_page(
     )
 
 
-def find_open_site_page(base_url: str):
+def _url_looks_like_dms_siebel_tab(url: str) -> bool:
+    """Hero Connect / Siebel — never treat as the Insurance (MISP) tab when both are open in one browser."""
+    u = (url or "").lower()
+    return (
+        "swecmd=" in u
+        or "/siebel/" in u
+        or "connect.heromotocorp.biz" in u
+        or "heroconnect" in u
+        or "edealerhmcl" in u
+    )
+
+
+def find_open_site_page(base_url: str, site_label: str = ""):
     """Find an already-open tab for the given site base URL (CDP or same-process Playwright launch)."""
     if not (base_url or "").strip():
         return None
@@ -697,6 +709,12 @@ def find_open_site_page(base_url: str):
                     if len(sample_urls) < 15 and url:
                         sample_urls.append(url[:160])
                     if _playwright_page_url_matches_site_base(url, base_url):
+                        if (site_label or "").strip() == "Insurance" and _url_looks_like_dms_siebel_tab(url):
+                            logger.info(
+                                "handle_browser_opening: skipping Siebel/DMS tab when matching Insurance — %s",
+                                url[:120],
+                            )
+                            continue
                         logger.info("handle_browser_opening: reusing open tab for base URL: %s", url[:140])
                         return page
         except Exception:
