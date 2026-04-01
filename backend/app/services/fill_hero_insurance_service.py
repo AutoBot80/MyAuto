@@ -241,6 +241,67 @@ def _iter_page_and_child_frames(page):
         pass
 
 
+def _misp_expand_login_as_panel(page) -> bool:
+    """
+    MISP partner (Radix): **Login as** reveals the password field and primary **Sign In** control.
+    Until this opens, ``form:has(password)`` may be empty and **Sign In** may not receive clicks.
+    """
+    try:
+        btn = page.get_by_role("button", name=re.compile(r"^\s*Login\s+as\s*$", re.I))
+        if btn.count() > 0:
+            try:
+                if btn.first.is_visible(timeout=2_500):
+                    btn.first.scroll_into_view_if_needed(timeout=4_000)
+                    btn.first.click(timeout=10_000)
+                    page.wait_for_timeout(900)
+                    logger.info("Hero Insurance: clicked 'Login as' to expand partner login panel.")
+                    return True
+            except Exception:
+                try:
+                    btn.first.click(timeout=10_000, force=True)
+                    page.wait_for_timeout(900)
+                    logger.info("Hero Insurance: clicked 'Login as' (force) to expand partner login panel.")
+                    return True
+                except Exception:
+                    pass
+    except Exception as exc:
+        logger.debug("Hero Insurance: Login as expand: %s", exc)
+    return False
+
+
+def _try_dom_click_sign_in_submit(page) -> bool:
+    """Click the **Sign In** (or exact **Login**) ``button[type=submit]`` via DOM (bypasses some overlay issues)."""
+    try:
+        ok = page.evaluate(
+            """() => {
+            const btns = Array.from(document.querySelectorAll('button[type="submit"]'));
+            for (const b of btns) {
+                const t = (b.innerText || '').replace(/\\s+/g, ' ').trim();
+                if (/^sign\\s*in$/i.test(t)) {
+                    try { b.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
+                    b.click();
+                    return { ok: true, text: t };
+                }
+                if (/^login$/i.test(t)) {
+                    try { b.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
+                    b.click();
+                    return { ok: true, text: t };
+                }
+            }
+            return { ok: false, text: '' };
+        }"""
+        )
+        if isinstance(ok, dict) and ok.get("ok"):
+            logger.info(
+                "Hero Insurance: Sign In submit clicked via DOM evaluate (text=%r).",
+                ok.get("text"),
+            )
+            return True
+    except Exception as exc:
+        logger.debug("Hero Insurance: DOM Sign In evaluate: %s", exc)
+    return False
+
+
 def _try_click_sign_in_inside_password_form(scope, *, timeout_ms: int, scope_label: str) -> bool:
     """
     Click **Sign In** / **Login** only inside a ``<form>`` that contains a password field.
@@ -250,7 +311,11 @@ def _try_click_sign_in_inside_password_form(scope, *, timeout_ms: int, scope_lab
     hit the wrong control or rely on order; scoping to the login form matches runtime DIAG snapshots.
     """
     try:
-        login_form = scope.locator("form").filter(has=scope.locator('input[type="password"]'))
+        login_form = scope.locator(
+            'form:has(input[type="password"]), '
+            'form:has(input[autocomplete="current-password"]), '
+            'form:has(input[name*="password" i])'
+        )
         if login_form.count() == 0:
             return False
         patterns = (
@@ -435,9 +500,56 @@ def _click_sign_in_if_visible(page, *, timeout_ms: int) -> bool:
     Tries the **main document** and each **child frame** (login may render inside an iframe).
     Returns True if a click was attempted.
     """
+    expanded = _misp_expand_login_as_panel(page)
+    # region agent log
+    try:
+        agent_debug_ndjson_log(
+            "H6",
+            "fill_hero_insurance_service._click_sign_in_if_visible",
+            "after_login_as_expand",
+            {"expanded": expanded},
+        )
+    except Exception:
+        pass
+    # endregion
     for ctx in _iter_page_and_child_frames(page):
         if _click_sign_in_on_context(ctx, timeout_ms=timeout_ms):
+            # region agent log
+            try:
+                agent_debug_ndjson_log(
+                    "H6",
+                    "fill_hero_insurance_service._click_sign_in_if_visible",
+                    "playwright_context_click_ok",
+                    {"ctx": type(ctx).__name__},
+                )
+            except Exception:
+                pass
+            # endregion
             return True
+    if _try_dom_click_sign_in_submit(page):
+        # region agent log
+        try:
+            agent_debug_ndjson_log(
+                "H6",
+                "fill_hero_insurance_service._click_sign_in_if_visible",
+                "dom_eval_click_ok",
+                {"fallback": True},
+            )
+        except Exception:
+            pass
+        # endregion
+        return True
+    # region agent log
+    try:
+        agent_debug_ndjson_log(
+            "H6",
+            "fill_hero_insurance_service._click_sign_in_if_visible",
+            "all_sign_in_paths_failed",
+            {},
+        )
+    except Exception:
+        pass
+    # endregion
     return False
 
 
