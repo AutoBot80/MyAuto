@@ -19,6 +19,7 @@ from app.config import (
     INSURANCE_ACTION_TIMEOUT_MS,
     INSURANCE_BASE_URL,
     INSURANCE_DIAG_FULL_CONTROL_SNAPSHOT,
+    INSURANCE_KYC_NAV_SCRAPE,
     INSURANCE_LOGIN_WAIT_MS,
     INSURANCE_POLICY_FILL_TIMEOUT_MS,
     KYC_KEYBOARD_INSURER_ARROW_DOWN_MAX,
@@ -323,6 +324,231 @@ def _hero_insurance_log_page_diagnostics(
             "without subfolder, dealer fallback is %s",
             str(fb) if fb else "(no ocr_output_dir — DIAG only in backend logs)",
         )
+
+
+def _kyc_nav_scrape_in_frame(fr) -> dict[str, Any]:
+    """
+    Collect viewport/document metrics, ``activeElement`` summary, and visible interactive controls
+    (inputs, selects, textareas, buttons, key ARIA roles, links) for KYC navigation tuning.
+    """
+    try:
+        raw = fr.evaluate(
+            """() => {
+          const vis = (el) => {
+            if (!el) return false;
+            const st = window.getComputedStyle(el);
+            if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity) === 0)
+              return false;
+            const r = el.getBoundingClientRect();
+            if (r.width < 1 || r.height < 1) return false;
+            const vw = window.innerWidth || 800;
+            const vh = window.innerHeight || 600;
+            return r.bottom > 0 && r.right > 0 && r.top < vh && r.left < vw;
+          };
+          const labelFor = (el) => {
+            if (!el || !el.id) return '';
+            try {
+              const esc = (typeof CSS !== 'undefined' && CSS.escape) ? CSS.escape : (s) => String(s);
+              const l = document.querySelector('label[for="' + esc(el.id) + '"]');
+              if (l) return (l.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 96);
+            } catch (e) {}
+            return '';
+          };
+          const de = document.documentElement;
+          const pageInfo = {
+            readyState: document.readyState,
+            clientW: de.clientWidth,
+            clientH: de.clientHeight,
+            scrollW: de.scrollWidth,
+            scrollH: de.scrollHeight,
+            innerW: window.innerWidth,
+            innerH: window.innerHeight,
+            url: (location.href || '').slice(0, 500),
+            title: (document.title || '').slice(0, 220),
+            forms: document.querySelectorAll('form').length,
+          };
+          const ae = document.activeElement;
+          const active = ae
+            ? {
+                tag: (ae.tagName || '').toLowerCase(),
+                type: String(ae.type || ''),
+                id: String(ae.id || '').slice(0, 88),
+                name: String(ae.name || '').slice(0, 64),
+                role: String(ae.getAttribute('role') || ''),
+                aria: String(ae.getAttribute('aria-label') || '').slice(0, 120),
+              }
+            : null;
+          const sels = [
+            'input:not([type="hidden"])',
+            'select',
+            'textarea',
+            'button',
+            '[role="button"]',
+            '[role="combobox"]',
+            '[role="listbox"]',
+            '[role="checkbox"]',
+            '[role="radio"]',
+            'a[href]',
+          ];
+          const seen = new Set();
+          const controls = [];
+          for (const sel of sels) {
+            document.querySelectorAll(sel).forEach((el) => {
+              if (controls.length >= 96) return;
+              if (!vis(el) || seen.has(el)) return;
+              seen.add(el);
+              const r = el.getBoundingClientRect();
+              const tag = (el.tagName || '').toLowerCase();
+              const typ = String(el.type || '');
+              let val = String(el.value || '').trim();
+              if (typ === 'password') val = '(password)';
+              controls.push({
+                tag,
+                type: typ,
+                role: String(el.getAttribute('role') || ''),
+                id: String(el.id || '').slice(0, 80),
+                name: String(el.name || '').slice(0, 60),
+                placeholder: String(el.placeholder || '').slice(0, 80),
+                aria: String(el.getAttribute('aria-label') || '').slice(0, 100),
+                label: labelFor(el),
+                text: (el.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 80),
+                val: val.slice(0, 48),
+                box: [
+                  Math.round(r.left),
+                  Math.round(r.top),
+                  Math.round(r.width),
+                  Math.round(r.height),
+                ],
+              });
+            });
+          }
+          return { pageInfo, active, controls };
+        }"""
+        )
+        return raw if isinstance(raw, dict) else {}
+    except Exception:
+        return {}
+
+
+def _hero_insurance_format_kyc_nav_frame_lines(
+    frame_idx: int, frame_url: str, data: dict[str, Any]
+) -> list[str]:
+    lines: list[str] = []
+    fu = (frame_url or "")[:360]
+    lines.append(f"--- kyc_nav frame[{frame_idx}] url={fu!r} ---")
+    pi = data.get("pageInfo") if isinstance(data.get("pageInfo"), dict) else {}
+    if pi:
+        lines.append(
+            "  doc: "
+            f"ready={pi.get('readyState')!r} "
+            f"client={pi.get('clientW')}x{pi.get('clientH')} "
+            f"scroll={pi.get('scrollW')}x{pi.get('scrollH')} "
+            f"inner={pi.get('innerW')}x{pi.get('innerH')} "
+            f"forms={pi.get('forms')}"
+        )
+        if pi.get("title"):
+            lines.append(f"  title: {str(pi.get('title'))[:200]!r}")
+    act = data.get("active")
+    if isinstance(act, dict) and act:
+        lines.append(
+            "  activeElement: "
+            f"{act.get('tag')!r} type={act.get('type')!r} id={act.get('id')!r} "
+            f"name={act.get('name')!r} role={act.get('role')!r} aria={str(act.get('aria') or '')[:100]!r}"
+        )
+    else:
+        lines.append("  activeElement: (none)")
+    ctrls = data.get("controls")
+    if not isinstance(ctrls, list):
+        lines.append("  visible_controls: (error or empty)")
+        return lines
+    lines.append(f"  visible_controls={len(ctrls)}")
+    for j, row in enumerate(ctrls[:96]):
+        if not isinstance(row, dict):
+            continue
+        box = row.get("box") or []
+        box_s = ",".join(str(x) for x in box) if isinstance(box, list) else ""
+        parts = [
+            f"[{j}]",
+            str(row.get("tag") or ""),
+            str(row.get("type") or ""),
+        ]
+        if row.get("role"):
+            parts.append(f"role={row.get('role')}")
+        if row.get("id"):
+            parts.append(f"id={row.get('id')!r}")
+        if row.get("name"):
+            parts.append(f"name={row.get('name')!r}")
+        if row.get("label"):
+            parts.append(f"label={str(row.get('label'))[:72]!r}")
+        if row.get("aria"):
+            parts.append(f"aria={str(row.get('aria'))[:64]!r}")
+        if row.get("placeholder"):
+            parts.append(f"ph={str(row.get('placeholder'))[:48]!r}")
+        if row.get("text") and len(str(row.get("text")).strip()) > 0:
+            parts.append(f"text={str(row.get('text'))[:56]!r}")
+        if row.get("val"):
+            parts.append(f"val={str(row.get('val'))[:32]!r}")
+        if box_s:
+            parts.append(f"box=[{box_s}]")
+        lines.append("  " + " ".join(parts))
+    return lines
+
+
+def _hero_insurance_log_kyc_navigation_scrape(
+    page,
+    *,
+    phase: str,
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
+) -> None:
+    """
+    Log KYC-focused navigation scrape (page metrics + visible controls per frame) to logger and
+    ``Playwright_insurance.txt`` as **DIAG** lines (``kyc_nav_scrape``).
+    """
+    if not INSURANCE_KYC_NAV_SCRAPE:
+        return
+    lines: list[str] = []
+    try:
+        title = page.title()
+    except Exception:
+        title = ""
+    try:
+        url = (page.url or "").strip()
+    except Exception:
+        url = ""
+    lines.append(f"phase={phase!r} page_url={url[:520]!r} page_title={title[:220]!r}")
+    try:
+        frames = list(page.frames)
+    except Exception:
+        frames = []
+    lines.append(f"frame_count={len(frames)}")
+    for idx, fr in enumerate(frames):
+        try:
+            fu = fr.url or ""
+        except Exception:
+            fu = ""
+        try:
+            if fr.is_detached():
+                lines.append(f"--- kyc_nav frame[{idx}] (detached) ---")
+                continue
+        except Exception:
+            pass
+        data = _kyc_nav_scrape_in_frame(fr)
+        lines.extend(_hero_insurance_format_kyc_nav_frame_lines(idx, fu, data))
+    blob = "\n".join(lines)
+    if len(blob) > 14000:
+        blob = blob[:14000] + "\n…(truncated)"
+    logger.info(
+        "Hero Insurance KYC nav scrape %s:\n%s",
+        phase,
+        blob[:4000] + ("…" if len(blob) > 4000 else ""),
+    )
+    append_playwright_insurance_line_or_dealer_fallback(
+        ocr_output_dir,
+        subfolder,
+        "DIAG",
+        f"kyc_nav_scrape {phase}: " + blob.replace("\n", " \\n "),
+    )
 
 
 def _iter_page_and_child_frames(page):
@@ -1420,6 +1646,68 @@ def _kyc_press_tab_n(page, n: int, *, pause_ms: int = 90) -> None:
         _t(page, pause_ms)
 
 
+def _kyc_frame_active_element_is_editable(fr) -> bool:
+    """True when focus is on a control where Ctrl+A selects field text, not the whole page."""
+    try:
+        return bool(
+            fr.evaluate(
+                """() => {
+          const a = document.activeElement;
+          if (!a) return false;
+          const t = a.tagName;
+          if (t === 'INPUT' || t === 'TEXTAREA') return true;
+          if (t === 'SELECT') return true;
+          if (a.isContentEditable) return true;
+          return false;
+        }"""
+            )
+        )
+    except Exception:
+        return False
+
+
+def _kyc_try_click_insurance_company_field(kyc_fr, *, timeout_ms: int) -> bool:
+    """Focus the insurer combobox/input inside the KYC frame (avoids Tab landing on body)."""
+    to = min(int(timeout_ms), 15_000)
+    tries = (
+        lambda: kyc_fr.get_by_label(re.compile(r"Insurance\s*Company", re.I)),
+        lambda: kyc_fr.get_by_role(
+            "combobox", name=re.compile(r"Insurance\s*Company", re.I)
+        ),
+        lambda: kyc_fr.locator("input[aria-label*='Insurance Company' i]"),
+        lambda: kyc_fr.locator('select:near(:text("Insurance Company"))'),
+    )
+    for get_loc in tries:
+        try:
+            loc = get_loc()
+            if loc.count() > 0 and loc.first.is_visible(timeout=2_500):
+                loc.first.click(timeout=to)
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _kyc_try_click_mobile_field(kyc_fr, *, timeout_ms: int) -> bool:
+    """Focus mobile input in the KYC frame before typing."""
+    to = min(int(timeout_ms), 15_000)
+    tries = (
+        lambda: kyc_fr.get_by_label(re.compile(r"^Mobile\s*(Number|No\.?|Phone)?\s*$", re.I)),
+        lambda: kyc_fr.get_by_placeholder(re.compile(r"mobile", re.I)),
+        lambda: kyc_fr.locator('input[type="tel"]'),
+        lambda: kyc_fr.locator("input[name*='mobile' i]"),
+    )
+    for get_loc in tries:
+        try:
+            loc = get_loc()
+            if loc.count() > 0 and loc.first.is_visible(timeout=2_500):
+                loc.first.click(timeout=to)
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def _kyc_ovd_focused_text_is_aadhaar_card(shown: str) -> bool:
     u = (shown or "").strip().upper()
     if not u:
@@ -1604,18 +1892,31 @@ def _fill_kyc_ekyc_keyboard_sop(page, values: dict, *, timeout_ms: int) -> str |
                 pass
     _t(page, 280)
 
-    _kyc_press_tab_n(page, max(0, KYC_KEYBOARD_TABS_TO_INSURANCE_FIELD))
+    # Prefer clicking the labelled insurer control so focus is on INPUT/SELECT. Tab alone often
+    # leaves focus on body; Control+A then selects the entire page (not field text).
+    ic_clicked = _kyc_try_click_insurance_company_field(kyc_fr, timeout_ms=cap)
+    if ic_clicked:
+        logger.info("Hero Insurance: KYC keyboard — focused Insurance Company via click in frame.")
+        _t(page, 200)
+    else:
+        _kyc_press_tab_n(page, max(0, KYC_KEYBOARD_TABS_TO_INSURANCE_FIELD))
 
-    try:
-        page.keyboard.press("Control+A")
-    except Exception:
-        pass
-    _t(page, 50)
-    try:
-        page.keyboard.press("Backspace")
-    except Exception:
-        pass
-    _t(page, 50)
+    if _kyc_frame_active_element_is_editable(kyc_fr):
+        try:
+            page.keyboard.press("Control+A")
+        except Exception:
+            pass
+        _t(page, 50)
+        try:
+            page.keyboard.press("Backspace")
+        except Exception:
+            pass
+        _t(page, 50)
+    else:
+        logger.warning(
+            "Hero Insurance: KYC keyboard — focus not on an editable control before insurer type; "
+            "typing without Select-All (prevents selecting all text on the page)."
+        )
     try:
         page.keyboard.type(insurer[:96], delay=34)
     except Exception as exc:
@@ -1694,15 +1995,43 @@ def _fill_kyc_ekyc_keyboard_sop(page, values: dict, *, timeout_ms: int) -> str |
     _kyc_press_tab_n(page, max(0, KYC_KEYBOARD_TABS_OVD_TO_MOBILE))
 
     digits = re.sub(r"\D", "", mobile)[:12]
-    try:
-        page.keyboard.press("Control+A")
-    except Exception:
-        pass
-    _t(page, 45)
-    try:
-        page.keyboard.type(digits, delay=30)
-    except Exception as exc:
-        return f"KYC keyboard SOP: mobile type failed: {exc!s}"
+    mob_typed = False
+    if not _kyc_frame_active_element_is_editable(kyc_fr):
+        if _kyc_try_click_mobile_field(kyc_fr, timeout_ms=cap):
+            logger.info("Hero Insurance: KYC keyboard — focused mobile field via click in frame.")
+            _t(page, 160)
+    if _kyc_frame_active_element_is_editable(kyc_fr):
+        try:
+            page.keyboard.press("Control+A")
+        except Exception:
+            pass
+        _t(page, 45)
+        try:
+            page.keyboard.type(digits, delay=30)
+            mob_typed = True
+        except Exception as exc:
+            return f"KYC keyboard SOP: mobile type failed: {exc!s}"
+    if not mob_typed:
+        to_fill = min(int(timeout_ms), 60_000)
+        for ph in (
+            kyc_fr.get_by_label(re.compile(r"^Mobile\s*(Number|No\.?|Phone)?\s*$", re.I)),
+            kyc_fr.get_by_placeholder(re.compile(r"mobile", re.I)),
+            kyc_fr.locator('input[type="tel"]'),
+            kyc_fr.locator("input[name*='mobile' i]"),
+        ):
+            try:
+                if ph.count() > 0 and ph.first.is_visible(timeout=2_500):
+                    ph.first.fill(digits, timeout=to_fill)
+                    mob_typed = True
+                    logger.info("Hero Insurance: KYC keyboard — mobile set via fill() (keyboard path).")
+                    break
+            except Exception:
+                continue
+        if not mob_typed:
+            return (
+                "KYC keyboard SOP: mobile field not focused and fill() failed after OVD "
+                "(focus may still be on document — check Mobile selectors)."
+            )
     _t(page, 220)
 
     _kyc_press_tab_n(page, max(0, KYC_KEYBOARD_TABS_MOBILE_TO_CONSENT))
@@ -2042,6 +2371,12 @@ def _run_hero_misp_portal_after_open(
         return None
 
     _t(page, 900)
+    _hero_insurance_log_kyc_navigation_scrape(
+        page,
+        phase="hero_misp_before_kyc_fill",
+        ocr_output_dir=ocr_output_dir,
+        subfolder=subfolder,
+    )
     err = _fill_insurance_company_and_ovd_mobile_consent(page, values, timeout_ms=timeout_ms)
     if err:
         return err
@@ -3116,6 +3451,12 @@ def run_fill_insurance_only(
 
         # Real MISP ``ekycpage`` has no training-only ``#ins-company`` / ``#ins-mobile-no`` markup.
         if not _insurance_page_has_dummy_kyc_training_html(page):
+            _hero_insurance_log_kyc_navigation_scrape(
+                page,
+                phase="fill_insurance_only_before_kyc_fill",
+                ocr_output_dir=ocr_output_dir,
+                subfolder=subfolder,
+            )
             append_playwright_insurance_line(
                 ocr_output_dir,
                 subfolder,

@@ -454,3 +454,5 @@ Bulk upload automates the ingestion of scanned documents from a shared folder in
 | 3.88 | Apr 2026 | — | **§6.6** **`ekycpage`**: optional keyboard SOP (Tab/type/ArrowDown insurer → OVD → mobile → consent) — **LLD** **6.142**, **HLD** **1.78** |
 | 3.89 | Apr 2026 | — | **§6.6** MISP KYC keyboard SOP applies on the same URL patterns as the KYC wait (**`kycpage.aspx`**, **`/ekyc`**, etc.); framed KYC clicks the **iframe** before the Tab chain — **LLD** **6.143**, **HLD** **1.79** |
 | 3.90 | Apr 2026 | — | **§6.6** KYC: if keyboard cannot focus OVD after insurer, OVD/mobile/consent are filled in the **KYC frame** via DOM — **LLD** **6.144**, **HLD** **1.80** |
+| 3.91 | Apr 2026 | — | **§6.6** KYC keyboard: insurer/mobile clicks + **`Control+A`** only when the focused element is editable (avoids selecting all page text) — **LLD** **6.145**, **HLD** **1.81** |
+| 3.92 | Apr 2026 | — | **§6.6** Optional **`kyc_nav_scrape`** **`[DIAG]`** on KYC (visible controls + page metrics per frame) before automation — **LLD** **6.146**, **HLD** **1.82** |

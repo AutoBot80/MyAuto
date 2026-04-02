@@ -181,6 +181,11 @@ INSURANCE_POLICY_FILL_TIMEOUT_MS = int(os.getenv("INSURANCE_POLICY_FILL_TIMEOUT_
 _INSURANCE_DIAG_FULL_RAW = (os.getenv("INSURANCE_DIAG_FULL_CONTROL_SNAPSHOT") or "").strip().lower()
 INSURANCE_DIAG_FULL_CONTROL_SNAPSHOT = _INSURANCE_DIAG_FULL_RAW in ("1", "true", "yes", "on")
 
+# When true (default), before automating MISP KYC, append a **kyc_nav_scrape** DIAG block: page metrics,
+# activeElement, and visible inputs/selects/buttons/links per frame (see ``fill_hero_insurance_service``).
+_KYC_NAV_SCRAPE_RAW = (os.getenv("INSURANCE_KYC_NAV_SCRAPE") or "1").strip().lower()
+INSURANCE_KYC_NAV_SCRAPE = _KYC_NAV_SCRAPE_RAW not in ("0", "false", "no", "off")
+
 # Hero MISP KYC (``ekycpage`` / ``kycpage.aspx`` / ``/ekyc`` / ``/apps/kyc/``): optional keyboard SOP
 # (click iframe/body → Tab → type insurer → …). See ``fill_hero_insurance_service._fill_kyc_ekyc_keyboard_sop``.
 def _int_env(name: str, default: int) -> int:
