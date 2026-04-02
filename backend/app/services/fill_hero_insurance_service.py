@@ -34,6 +34,7 @@ from app.config import (
     KYC_INSURER_DISPLAY_SEQUENCE_MIN,
     KYC_INSURER_FUZZY_MIN_SCORE,
     KYC_USE_KEYBOARD_EKYC_SOP,
+    KYC_DEFAULT_KYC_PARTNER_LABEL,
 )
 from app.services.add_sales_commit_service import (
     insert_insurance_master_after_gi,
@@ -2112,6 +2113,117 @@ def _kyc_try_click_insurance_company_field(kyc_fr, *, timeout_ms: int) -> bool:
     return False
 
 
+def _kyc_set_ovd_aadhaar_card_in_frame(kyc_fr, *, timeout_ms: int) -> bool:
+    """
+    Set Officially Valid Document (OVD) to **AADHAAR CARD** via native ``<select>`` in the KYC frame.
+
+    Prefer this over Tab+ArrowDown: ArrowDown was moving the **KYC Partner** ``<select>`` (e.g. to
+    Hyperverge) when focus landed there instead of on OVD.
+    """
+    to = min(int(timeout_ms), 60_000)
+    ovd_ok = False
+    for sel_css in (
+        'select:near(:text("Officially Valid"))',
+        'select:near(:text("OVD"))',
+        "select[aria-label*='OVD' i]",
+        "select[aria-label*='Officially Valid' i]",
+    ):
+        try:
+            loc = kyc_fr.locator(sel_css)
+            if loc.count() == 0:
+                continue
+            opts = loc.first.locator("option")
+            n = opts.count()
+            for i in range(min(n, 200)):
+                t = (opts.nth(i).inner_text() or "").strip().upper()
+                if "AADHAAR" in t and "CARD" in t:
+                    val = opts.nth(i).get_attribute("value")
+                    if val:
+                        loc.first.select_option(value=val, timeout=to, force=True)
+                    else:
+                        loc.first.select_option(label=t, timeout=to, force=True)
+                    ovd_ok = True
+                    logger.info("Hero Insurance: KYC keyboard path — OVD set to AADHAAR CARD (DOM select).")
+                    break
+            if ovd_ok:
+                break
+        except Exception:
+            continue
+    if not ovd_ok:
+        try:
+            kyc_fr.get_by_label(re.compile(r"Officially\s*Valid|OVD", re.I)).locator(
+                "xpath=following::select[1]"
+            ).first.select_option(
+                label=re.compile(r"AADHAAR\s*CARD", re.I), timeout=to, force=True
+            )
+            ovd_ok = True
+            logger.info("Hero Insurance: KYC keyboard path — OVD via label+following select.")
+        except Exception:
+            try:
+                ok_js = kyc_fr.evaluate(
+                    """() => {
+                      const sels = Array.from(document.querySelectorAll('select'));
+                      for (const s of sels) {
+                        for (const o of s.options) {
+                          const t = (o.textContent || '').trim();
+                          if (/AADHAAR/i.test(t) && /CARD/i.test(t)) {
+                            s.value = o.value;
+                            s.dispatchEvent(new Event('input', { bubbles: true }));
+                            s.dispatchEvent(new Event('change', { bubbles: true }));
+                            return true;
+                          }
+                        }
+                      }
+                      return false;
+                    }"""
+                )
+                if ok_js:
+                    ovd_ok = True
+                    logger.info("Hero Insurance: KYC keyboard path — OVD set via JS select scan.")
+            except Exception:
+                pass
+    return ovd_ok
+
+
+def _kyc_restore_kyc_partner_to_default_label(kyc_fr, page, *, timeout_ms: int) -> None:
+    """
+    If the **KYC Partner** ``<select>`` no longer shows the default (e.g. Signzy), set it back.
+
+    Tab/ArrowDown or portal postback can change this control; operators expect the portal default.
+    """
+    label = (KYC_DEFAULT_KYC_PARTNER_LABEL or "Signzy").strip()
+    if not label:
+        return
+    to = min(int(timeout_ms), 15_000)
+    try:
+        loc = kyc_fr.locator("#ContentPlaceHolder1_ddlkycPartner")
+        if loc.count() == 0:
+            loc = kyc_fr.locator("select[id*='ddlkycPartner' i]")
+        if loc.count() == 0:
+            return
+        cur = (
+            loc.first.evaluate(
+                """el => {
+              const i = el.selectedIndex;
+              if (i < 0) return '';
+              const o = el.options[i];
+              return o ? (o.textContent || '').trim() : '';
+            }"""
+            )
+            or ""
+        ).strip()
+        if not cur or normalize_for_fuzzy_match(cur) == normalize_for_fuzzy_match(label):
+            return
+        if _select_option_fuzzy_in_select(page, loc, label, timeout_ms=to, fuzzy_min_score=0.22):
+            logger.info(
+                "Hero Insurance: restored KYC Partner to %r (was %r).",
+                label,
+                cur[:100],
+            )
+    except Exception as exc:
+        logger.debug("Hero Insurance: KYC Partner restore: %s", exc)
+
+
 def _kyc_try_click_mobile_field(kyc_fr, *, timeout_ms: int) -> bool:
     """Focus mobile input in the KYC frame before typing."""
     to = min(int(timeout_ms), 15_000)
@@ -2223,6 +2335,8 @@ def _kyc_dom_fill_ovd_mobile_consent_in_frame(kyc_fr, mobile: str, *, timeout_ms
             "KYC keyboard SOP: could not set OVD to AADHAAR CARD (keyboard and DOM in KYC frame). "
             "Try KYC_KEYBOARD_TABS_INSURER_TO_OVD or inspect the Officially Valid control."
         )
+
+    _kyc_restore_kyc_partner_to_default_label(kyc_fr, pg, timeout_ms=to)
 
     # Mobile often appears or enables only after OVD is set.
     try:
@@ -2385,8 +2499,12 @@ def _fill_kyc_ekyc_keyboard_sop(
         page.keyboard.press("Enter")
     except Exception:
         pass
-    # Let the insurer dropdown close / DOM settle before Tab to OVD (avoids wrong focus).
-    _t(page, 420)
+    # Close insurer listbox / commit focus — without this, Tab may not leave the combobox (manual Tab fixed it).
+    try:
+        page.keyboard.press("Escape")
+    except Exception:
+        pass
+    _t(page, 280)
     # Proposer/OVD are often not in the DOM until insurer is chosen (see kyc_nav_scrape before fill).
     # Tab out + re-scrape captures new <select> ids and partner options after commit.
     _hero_insurance_kyc_nav_after_insurer_commit(
@@ -2396,31 +2514,33 @@ def _fill_kyc_ekyc_keyboard_sop(
     _hero_insurance_kyc_nav_after_kyc_partner_commit(
         page, ocr_output_dir=ocr_output_dir, subfolder=subfolder
     )
-    # One Tab was used to blur insurer; keep total insurer→OVD tab count aligned with env.
-    _kyc_press_tab_n(page, max(0, KYC_KEYBOARD_TABS_INSURER_TO_OVD - 1))
 
-
-    ovd_ok = False
+    ovd_ok = _kyc_set_ovd_aadhaar_card_in_frame(kyc_fr, timeout_ms=cap)
     last_shown = ""
-    for _ in range(max(1, KYC_KEYBOARD_OVD_ARROW_DOWN_MAX)):
-        shown = _kyc_read_focused_control_text(page)
-        last_shown = shown or last_shown
-        if _kyc_ovd_focused_text_is_aadhaar_card(shown):
-            ovd_ok = True
-            logger.info("Hero Insurance: KYC keyboard — OVD shows AADHAAR CARD.")
-            break
-        try:
-            page.keyboard.press("ArrowDown")
-        except Exception:
-            pass
-        _t(page, 105)
+    if not ovd_ok:
+        # Legacy: Tab to OVD then ArrowDown — risky if focus lands on KYC Partner <select> first.
+        _kyc_press_tab_n(page, max(0, KYC_KEYBOARD_TABS_INSURER_TO_OVD - 1))
+        for _ in range(max(1, KYC_KEYBOARD_OVD_ARROW_DOWN_MAX)):
+            shown = _kyc_read_focused_control_text(page)
+            last_shown = shown or last_shown
+            if _kyc_ovd_focused_text_is_aadhaar_card(shown):
+                ovd_ok = True
+                logger.info("Hero Insurance: KYC keyboard — OVD shows AADHAAR CARD (ArrowDown).")
+                break
+            try:
+                page.keyboard.press("ArrowDown")
+            except Exception:
+                pass
+            _t(page, 105)
     if not ovd_ok:
         logger.warning(
-            "Hero Insurance: KYC keyboard — OVD did not reach AADHAAR CARD (last focus text=%r); "
-            "using DOM fills inside KYC frame for OVD, mobile, consent.",
+            "Hero Insurance: KYC keyboard — OVD not set via DOM or ArrowDown (last focus text=%r); "
+            "using DOM fills inside KYC frame.",
             (last_shown or "")[:160],
         )
         return _kyc_dom_fill_ovd_mobile_consent_in_frame(kyc_fr, mobile, timeout_ms=timeout_ms)
+
+    _kyc_restore_kyc_partner_to_default_label(kyc_fr, page, timeout_ms=cap)
 
     _kyc_press_tab_n(page, max(0, KYC_KEYBOARD_TABS_OVD_TO_MOBILE))
 

@@ -387,3 +387,4 @@ The SQL view **`form_dms_view`** is **removed**; the same mapping is implemented
 | 1.89 | Apr 2026 | — | **`fill_hero_insurance_service`** KYC: consent before primary CTA; already-verified banner branch; **Proceed** on **KYC Verification** button list — **LLD** **6.153**, **BRD** **3.99** |
 | 1.90 | Apr 2026 | — | **`fill_hero_insurance_service`** KYC: banner copy match vs three-file upload path — **LLD** **6.154**, **BRD** **3.100** |
 | 1.91 | Apr 2026 | — | **`fill_hero_insurance_service`** KYC: post-mobile branch (**Proceed** after mobile) — **LLD** **6.155**, **BRD** **3.101** |
+| 1.92 | Apr 2026 | — | **`fill_hero_insurance_service`** MISP KYC keyboard: insurer **`Escape`**, DOM **OVD**, **`_kyc_restore_kyc_partner_to_default_label`** — **LLD** **6.156**, **BRD** **3.102** |
