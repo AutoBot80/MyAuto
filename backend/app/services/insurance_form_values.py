@@ -151,6 +151,10 @@ def build_insurance_fill_values(
         values["insurer"] = insurer_json
     prefer = clean_text(row.get("prefer_insurer"))
     merged_insurer = clean_text(values.get("insurer"))
+    # Preserved for MISP KYC: Playwright can type ``prefer_insurer`` (keyboard) instead of DOM-selecting
+    # when the same ≥20% rule matches — see ``_kyc_insurer_label_for_misp``.
+    values["insurer_merged_before_prefer"] = merged_insurer
+    values["prefer_insurer"] = prefer
     if prefer and merged_insurer and insurer_prefer_matches(merged_insurer, prefer, min_ratio=0.20):
         values["insurer"] = prefer
         logger.info(

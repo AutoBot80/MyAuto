@@ -45,12 +45,18 @@ from app.services.handle_browser_opening import (
 )
 from app.services.insurance_form_values import (
     append_playwright_insurance_line,
+    append_playwright_insurance_line_or_dealer_fallback,
     build_insurance_fill_values,
     reset_playwright_insurance_log,
     write_insurance_form_values,
 )
 from app.services.insurance_kyc_payloads import insurance_kyc_png_payloads
-from app.services.utility_functions import fuzzy_best_option_label, normalize_for_fuzzy_match
+from app.services.utility_functions import (
+    clean_text,
+    fuzzy_best_option_label,
+    insurer_prefer_matches,
+    normalize_for_fuzzy_match,
+)
 
 # MISP navigation tuning — edit in source (not .env). Optional iframe CSS after trial runs.
 # Logs show Hero MISP hub under ``/prod/apps/v1/2w/`` — prefer matching iframes before full frame sweeps.
@@ -2281,6 +2287,19 @@ def _kyc_dom_fill_ovd_mobile_consent_in_frame(kyc_fr, mobile: str, *, timeout_ms
     return _kyc_post_mobile_entry_branch(kyc_fr.page, kyc_fr, timeout_ms=to)
 
 
+def _kyc_insurer_label_for_misp(values: dict) -> str:
+    """
+    Portal label for Insurance Company: dealer ``prefer_insurer`` when it fuzzy-matches the merged
+    details-sheet insurer (≥20% ``SequenceMatcher``), else ``insurer`` from ``build_insurance_fill_values``.
+    """
+    prefer = clean_text(values.get("prefer_insurer"))
+    merged = clean_text(values.get("insurer_merged_before_prefer") or values.get("insurer"))
+    current = clean_text(values.get("insurer"))
+    if prefer and merged and insurer_prefer_matches(merged, prefer, min_ratio=0.20):
+        return prefer
+    return current
+
+
 def _fill_kyc_ekyc_keyboard_sop(
     page,
     values: dict,
@@ -2293,17 +2312,37 @@ def _fill_kyc_ekyc_keyboard_sop(
     Keyboard SOP for ``ekycpage.aspx`` (focus document → Tab to Insurance Company → type to filter →
     ArrowDown until fuzzy match → Enter → Tab to OVD → ArrowDown to Aadhaar → Tab to mobile → type →
     Tab to consent → Space). Tab/down counts: ``KYC_KEYBOARD_*`` env vars.
+    When ``prefer_insurer`` matches merged details insurer (≥20%), skip DOM ``select_option`` and type
+    the short dealer label (often better than fuzzy-select on long legal names).
     """
-    insurer = (values.get("insurer") or "").strip()
+    insurer_label = _kyc_insurer_label_for_misp(values)
     mobile = (values.get("mobile_number") or "").strip()
-    if not insurer:
+    if not insurer_label:
         return "insurer is empty for KYC keyboard SOP."
     if not mobile:
         return "customer_master.mobile_number is empty for KYC keyboard SOP."
 
+    prefer_v = clean_text(values.get("prefer_insurer"))
+    merged_v = clean_text(values.get("insurer_merged_before_prefer") or values.get("insurer"))
+    type_prefer_skip_dom = bool(
+        prefer_v
+        and merged_v
+        and insurer_prefer_matches(merged_v, prefer_v, min_ratio=0.20)
+    )
+
     cap = min(int(timeout_ms), 120_000)
     kyc_fr = _kyc_preferred_kyc_frame(page)
-    dom_ok = _kyc_try_set_insurer_via_dom_in_frame(kyc_fr, insurer, timeout_ms=min(cap, 8_000))
+    if type_prefer_skip_dom:
+        logger.info(
+            "Hero Insurance: KYC — prefer_insurer matches merged insurer (≥20%%); "
+            "skipping DOM select, typing portal label %r.",
+            (insurer_label[:80] + "…") if len(insurer_label) > 80 else insurer_label,
+        )
+        dom_ok = False
+    else:
+        dom_ok = _kyc_try_set_insurer_via_dom_in_frame(
+            kyc_fr, insurer_label, timeout_ms=min(cap, 8_000)
+        )
     # #region agent log
     _dbg_kyc_insurer_tab_ndjson(
         "H1",
@@ -2311,6 +2350,7 @@ def _fill_kyc_ekyc_keyboard_sop(
         "dom_ok and focus snapshot",
         {
             "dom_ok": bool(dom_ok),
+            "type_prefer_skip_dom": bool(type_prefer_skip_dom),
             "will_skip_keyboard_and_maybe_tab_out": bool(dom_ok),
             **_dbg_kyc_focus_snapshot(kyc_fr, page),
         },
@@ -2371,21 +2411,21 @@ def _fill_kyc_ekyc_keyboard_sop(
                 "typing without Select-All (prevents selecting all text on the page)."
             )
         try:
-            page.keyboard.type(insurer[:96], delay=10)
+            page.keyboard.type(insurer_label[:96], delay=10)
         except Exception as exc:
             return f"KYC keyboard SOP: could not type insurer: {exc!s}"
         _t(page, 100)
 
         opts = _kyc_collect_dropdown_option_texts(kyc_fr)
         pick = (
-            fuzzy_best_option_label(insurer, opts, min_score=KYC_INSURER_FUZZY_MIN_SCORE)
+            fuzzy_best_option_label(insurer_label, opts, min_score=KYC_INSURER_FUZZY_MIN_SCORE)
             if opts
             else None
         )
         shown = _kyc_read_focused_control_text(page)
         matched = bool(pick) and not (pick or "").strip().lower().startswith("--select") and (
-            _kyc_insurer_display_matches(insurer, shown)
-            or _kyc_insurer_display_matches(insurer, pick or "")
+            _kyc_insurer_display_matches(insurer_label, shown)
+            or _kyc_insurer_display_matches(insurer_label, pick or "")
         )
         if not matched:
             for _ in range(max(1, KYC_KEYBOARD_INSURER_ARROW_DOWN_MAX)):
@@ -2395,7 +2435,7 @@ def _fill_kyc_ekyc_keyboard_sop(
                     pass
                 _t(page, 80)
                 shown = _kyc_read_focused_control_text(page)
-                if _kyc_insurer_display_matches(insurer, shown):
+                if _kyc_insurer_display_matches(insurer_label, shown):
                     matched = True
                     logger.info(
                         "Hero Insurance: KYC keyboard — insurer matched on ArrowDown (%r).",
@@ -2405,9 +2445,9 @@ def _fill_kyc_ekyc_keyboard_sop(
                 opts2 = _kyc_collect_dropdown_option_texts(kyc_fr)
                 if opts2:
                     cand = fuzzy_best_option_label(
-                        insurer, opts2, min_score=KYC_INSURER_FUZZY_MIN_SCORE
+                        insurer_label, opts2, min_score=KYC_INSURER_FUZZY_MIN_SCORE
                     )
-                    if cand and _kyc_insurer_display_matches(insurer, cand):
+                    if cand and _kyc_insurer_display_matches(insurer_label, cand):
                         matched = True
                         logger.info(
                             "Hero Insurance: KYC keyboard — insurer matched from list (%r).",
@@ -2417,7 +2457,7 @@ def _fill_kyc_ekyc_keyboard_sop(
         if not matched:
             return (
                 "KYC keyboard SOP: could not match insurer after typing and ArrowDown. "
-                f"insurer={insurer[:48]!r}"
+                f"insurer={insurer_label[:48]!r}"
             )
 
         # Commit highlighted insurer: MISP/ASP.NET combobox often needs Enter twice, then Tab off, then Escape.
@@ -2553,6 +2593,13 @@ def _fill_insurance_company_and_ovd_mobile_consent(
     subfolder: str | None = None,
 ) -> str | None:
     """Returns error message or None on success."""
+    kyc_insurer_resolved = _kyc_insurer_label_for_misp(values)
+    append_playwright_insurance_line_or_dealer_fallback(
+        ocr_output_dir,
+        subfolder,
+        "NOTE",
+        f"KYC Insurance Company value to use: {kyc_insurer_resolved!r}",
+    )
     if KYC_USE_KEYBOARD_EKYC_SOP and _kyc_url_looks_like_ekyc_page(page):
         return _fill_kyc_ekyc_keyboard_sop(
             page,
@@ -2562,7 +2609,7 @@ def _fill_insurance_company_and_ovd_mobile_consent(
             subfolder=subfolder,
         )
 
-    insurer = (values.get("insurer") or "").strip()
+    insurer = _kyc_insurer_label_for_misp(values)
     mobile = (values.get("mobile_number") or "").strip()
 
     # --- Insurance Company (dropdown / search; match insurer from details sheet / DB) ---
