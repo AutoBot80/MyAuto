@@ -383,3 +383,7 @@ The SQL view **`form_dms_view`** is **removed**; the same mapping is implemented
 | 1.85 | Apr 2026 | — | KYC insurer fuzzy + sequence fallback — **LLD** **6.149**, **BRD** **3.95** |
 | 1.86 | Apr 2026 | — | KYC DIAG **networkidle** + partner scrape — **LLD** **6.150**, **BRD** **3.96** |
 | 1.87 | Apr 2026 | — | **`dealer_ref.prefer_insurer`** + **`build_insurance_fill_values`** canonical insurer for KYC when merged details insurer fuzzy-matches (≥20%) — **LLD** **6.151**, **BRD** **3.97**, **Database DDL** **2.62** |
+| 1.88 | Apr 2026 | — | **`fill_hero_insurance_service`** KYC: post-insurer **Tab** always; **KYC Partner** not changed (portal default) — **LLD** **6.152**, **BRD** **3.98** |
+| 1.89 | Apr 2026 | — | **`fill_hero_insurance_service`** KYC: consent before primary CTA; already-verified banner branch; **Proceed** on **KYC Verification** button list — **LLD** **6.153**, **BRD** **3.99** |
+| 1.90 | Apr 2026 | — | **`fill_hero_insurance_service`** KYC: banner copy match vs three-file upload path — **LLD** **6.154**, **BRD** **3.100** |
+| 1.91 | Apr 2026 | — | **`fill_hero_insurance_service`** KYC: post-mobile branch (**Proceed** after mobile) — **LLD** **6.155**, **BRD** **3.101** |

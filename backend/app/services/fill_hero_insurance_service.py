@@ -25,7 +25,6 @@ from app.config import (
     INSURANCE_KYC_POST_KYC_PARTNER_NETWORKIDLE_MS,
     INSURANCE_LOGIN_WAIT_MS,
     INSURANCE_POLICY_FILL_TIMEOUT_MS,
-    KYC_DEFAULT_KYC_PARTNER_LABEL,
     KYC_KEYBOARD_INSURER_ARROW_DOWN_MAX,
     KYC_KEYBOARD_OVD_ARROW_DOWN_MAX,
     KYC_KEYBOARD_TABS_INSURER_TO_OVD,
@@ -644,17 +643,13 @@ def _hero_insurance_kyc_nav_after_insurer_commit(
     subfolder: str | None,
 ) -> None:
     """
-    After insurer is committed (keyboard Enter or DOM ``select_option``), **Tab** off the field,
-    then DIAG: (1) ``kyc_nav_scrape_after_insurer`` after ``domcontentloaded``,
-    (2) optional ``networkidle`` wait, (3) ``kyc_nav_scrape_after_insurer_networkidle`` when Proposer/OVD
-    may appear after server round-trips.
+    After insurer is committed (keyboard Enter or DOM ``select_option``), **Tab** off the field
+    so the portal commits the value (ASP.NET / postback). This **always** runs — not only when
+    DIAG logging is enabled (previously Tab was gated and runs without ``subfolder`` never blurred).
 
-    Requires ``ocr_output_dir`` + ``subfolder`` and ``INSURANCE_KYC_NAV_SCRAPE`` (same as other KYC DIAG).
+    When ``INSURANCE_KYC_NAV_SCRAPE`` is on and ``ocr_output_dir`` + ``subfolder`` are set, append
+    ``kyc_nav_scrape_after_insurer`` / optional ``networkidle`` / ``kyc_nav_scrape_after_insurer_networkidle``.
     """
-    if not INSURANCE_KYC_NAV_SCRAPE:
-        return
-    if not ocr_output_dir or not str(subfolder or "").strip():
-        return
     try:
         page.keyboard.press("Tab")
     except Exception:
@@ -665,6 +660,9 @@ def _hero_insurance_kyc_nav_after_insurer_commit(
     except Exception:
         pass
     _t(page, 200)
+
+    if not INSURANCE_KYC_NAV_SCRAPE or not ocr_output_dir or not str(subfolder or "").strip():
+        return
     _hero_insurance_log_kyc_navigation_scrape(
         page,
         phase="kyc_nav_scrape_after_insurer",
@@ -689,42 +687,213 @@ def _hero_insurance_kyc_nav_after_insurer_commit(
     )
 
 
-def _kyc_resolve_kyc_partner_label(values: dict) -> str:
-    v = (values.get("kyc_partner") or "").strip()
-    return v if v else (KYC_DEFAULT_KYC_PARTNER_LABEL or "").strip()
+def _kyc_body_text_lower(root) -> str:
+    try:
+        return (root.locator("body").inner_text(timeout=3_000) or "").lower()
+    except Exception:
+        return ""
+
+
+def _kyc_text_is_verified_aadhaar_proceed_policy_issuance_banner(text: str) -> bool:
+    """
+    Portal copy (MISP): ``KYC already verified against AADHAAR CARD No. <digits> , please proceed
+    for policy issuance.`` — checkbox + **Proceed**; no document uploads on this branch.
+    """
+    s = (text or "").lower()
+    if "kyc already verified" not in s:
+        return False
+    if "aadhaar" not in s:
+        return False
+    # Optional card number token (spacing/punctuation varies)
+    if "aadhaar card" not in s and not re.search(r"aadhaar\s+card\s*no", s):
+        return False
+    if "please proceed" not in s or "policy issuance" not in s:
+        # Rare variants
+        if not re.search(r"proceed\s+for\s+policy\s+issuance", s):
+            return False
+    return True
+
+
+def _kyc_banner_already_verified_aadhaar_visible(page) -> bool:
+    """
+    True when the verified-banner copy is present. On MISP this text appears **after** mobile number
+    is entered (and the primary button label changes from **KYC Verification** to **Proceed**).
+
+    If **not** present, the portal typically shows three **file** inputs (Aadhaar front, back, photo)
+    — handled by ``_kyc_proceed_or_upload`` (upload then **Proceed**).
+    """
+    kyc_fr = _kyc_preferred_kyc_frame(page)
+    t = _kyc_body_text_lower(kyc_fr)
+    if _kyc_text_is_verified_aadhaar_proceed_policy_issuance_banner(t):
+        return True
+    try:
+        pt = (page.locator("body").inner_text(timeout=2_000) or "").lower()
+    except Exception:
+        pt = ""
+    return _kyc_text_is_verified_aadhaar_proceed_policy_issuance_banner(pt)
+
+
+def _kyc_click_proceed_after_already_verified_banner(
+    page,
+    kyc_fr,
+    *,
+    timeout_ms: int,
+) -> str | None:
+    """
+    Verified-banner path: consent checkbox, then **Proceed** (or equivalent CTA).
+    Does not upload documents — uploads run only when this banner is absent (see ``_kyc_proceed_or_upload``).
+    """
+    _kyc_ensure_consent_checked_before_kyc_cta(page)
+    to = min(int(timeout_ms), 45_000)
+    # After mobile, portal shows **Proceed** (not **KYC Verification**). Prefer Proceed / policy issuance.
+    name_patterns = (
+        re.compile(r"^\s*Proceed\s*$", re.I),
+        re.compile(r"policy\s*issuance", re.I),
+        re.compile(r"^\s*Continue\s*$", re.I),
+        re.compile(r"^\s*Submit\s*$", re.I),
+    )
+    for root in (kyc_fr, page):
+        for pat in name_patterns:
+            try:
+                b = root.get_by_role("button", name=pat)
+                if b.count() > 0 and b.first.is_visible(timeout=2_000):
+                    b.first.click(timeout=to)
+                    logger.info(
+                        "Hero Insurance: already-verified branch — clicked button (%s).",
+                        pat.pattern[:80],
+                    )
+                    try:
+                        page.wait_for_load_state("domcontentloaded", timeout=min(25_000, to))
+                    except Exception:
+                        pass
+                    _t(page, 400)
+                    return None
+            except Exception:
+                continue
+            try:
+                ln = root.get_by_role("link", name=pat)
+                if ln.count() > 0 and ln.first.is_visible(timeout=1_500):
+                    ln.first.click(timeout=to)
+                    logger.info(
+                        "Hero Insurance: already-verified branch — clicked link (%s).",
+                        pat.pattern[:80],
+                    )
+                    try:
+                        page.wait_for_load_state("domcontentloaded", timeout=min(25_000, to))
+                    except Exception:
+                        pass
+                    _t(page, 400)
+                    return None
+            except Exception:
+                continue
+    try:
+        inp = kyc_fr.locator(
+            'input[type="submit"][value*="Proceed" i], input[type="button"][value*="Proceed" i]'
+        )
+        if inp.count() > 0 and inp.first.is_visible(timeout=1_500):
+            inp.first.click(timeout=to)
+            logger.info("Hero Insurance: already-verified branch — clicked input Proceed.")
+            return None
+    except Exception:
+        pass
+    return (
+        "KYC already verified (AADHAAR) banner visible but no Proceed / policy issuance / "
+        "Continue / Submit control found."
+    )
+
+
+def _kyc_post_mobile_entry_branch(
+    page,
+    kyc_fr,
+    *,
+    timeout_ms: int,
+) -> str | None:
+    """
+    Run **after** mobile is filled: blur field / wait for postback so the verified statement can appear
+    and the CTA can switch to **Proceed**. Then either **consent + Proceed** (banner path) or
+    **upload three files + consent + Proceed** (``_kyc_proceed_or_upload``).
+    """
+    to = min(int(timeout_ms), 120_000)
+    try:
+        page.keyboard.press("Tab")
+    except Exception:
+        pass
+    _t(page, 500)
+    try:
+        page.wait_for_load_state("networkidle", timeout=min(12_000, to))
+    except Exception:
+        pass
+    _t(page, 600)
+    # Banner may render slightly after network idle; re-check once.
+    if not _kyc_banner_already_verified_aadhaar_visible(page):
+        _t(page, 900)
+    if _kyc_banner_already_verified_aadhaar_visible(page):
+        logger.info(
+            "Hero Insurance: post-mobile — verified AADHAAR / policy issuance banner; "
+            "consent then Proceed (CTA should read Proceed after mobile)."
+        )
+        return _kyc_click_proceed_after_already_verified_banner(page, kyc_fr, timeout_ms=to)
+
+    logger.info(
+        "Hero Insurance: post-mobile — no verified banner yet; three document uploads then Proceed."
+    )
+    return _kyc_proceed_or_upload(page, timeout_ms=to)
 
 
 def _kyc_select_kyc_partner_if_available(
-    page, kyc_fr, values: dict, *, timeout_ms: int
+    page, kyc_fr, _values: dict, *, timeout_ms: int
 ) -> None:
     """
-    Set **KYC Partner** native ``<select>`` when the dropdown has more than a placeholder option
-    (MISP often populates partner list only after insurer postback).
+    **KYC Partner** is never changed by automation — the portal default (e.g. Signzy) stays selected.
+    (Programmatic ``select_option`` caused extra postbacks / wrong next screen on some builds.)
     """
-    label = _kyc_resolve_kyc_partner_label(values)
-    if not label:
-        return
-    to = min(int(timeout_ms), 60_000)
-    try:
-        loc = kyc_fr.locator("#ContentPlaceHolder1_ddlkycPartner")
-        if loc.count() == 0:
-            loc = kyc_fr.locator("select[id*='ddlkycPartner' i]")
-        if loc.count() == 0:
-            logger.info("Hero Insurance: KYC Partner select not found in KYC frame.")
-            return
-        nopt = loc.first.locator("option").count()
-        if nopt <= 1:
-            logger.info(
-                "Hero Insurance: KYC Partner dropdown has %s option(s); skip select (portal may populate later).",
-                nopt,
+    logger.info(
+        "Hero Insurance: KYC Partner left as portal default (automation does not change ddlkycPartner)."
+    )
+
+
+def _kyc_ensure_consent_checked_before_kyc_cta(page) -> None:
+    """Ensure a consent / declaration checkbox is checked before **Proceed** (post-mobile KYC CTA)."""
+    for root in (_kyc_preferred_kyc_frame(page), page):
+        try:
+            cbs = root.get_by_role("checkbox").filter(
+                has_text=re.compile(
+                    r"consent|agree|confirm|i\s*confirm|declare|accept|terms",
+                    re.I,
+                )
             )
-            return
-        if _select_option_fuzzy_in_select(
-            page, loc, label, timeout_ms=to, fuzzy_min_score=0.35
-        ):
-            logger.info("Hero Insurance: set KYC Partner (fuzzy) for %r.", label[:80])
-    except Exception as exc:
-        logger.warning("Hero Insurance: KYC Partner select: %s", exc)
+            n = min(cbs.count(), 20)
+            for i in range(n):
+                cb = cbs.nth(i)
+                try:
+                    if cb.is_visible(timeout=900) and not cb.is_checked():
+                        cb.check(timeout=6_000)
+                        logger.info("Hero Insurance: checked consent checkbox before KYC primary CTA.")
+                        return
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        try:
+            loc = root.locator('input[type="checkbox"]:visible')
+            n2 = min(loc.count(), 24)
+            for i in range(n2):
+                cb = loc.nth(i)
+                try:
+                    if not cb.is_visible(timeout=400):
+                        continue
+                    if cb.is_checked():
+                        continue
+                    cb.check(timeout=6_000)
+                    logger.info(
+                        "Hero Insurance: checked visible checkbox index %s before KYC primary CTA.",
+                        i,
+                    )
+                    return
+                except Exception:
+                    continue
+        except Exception:
+            pass
 
 
 def _hero_insurance_kyc_nav_after_kyc_partner_commit(
@@ -2082,25 +2251,8 @@ def _kyc_dom_fill_ovd_mobile_consent_in_frame(kyc_fr, mobile: str, *, timeout_ms
     if not mob_filled:
         return "KYC keyboard SOP: could not fill mobile in KYC frame after OVD (DOM fallback)."
 
-    try:
-        cbs = kyc_fr.get_by_role("checkbox").filter(
-            has_text=re.compile(r"consent|agree|i\s+confirm", re.I)
-        )
-        if cbs.count() == 0:
-            cbs = kyc_fr.locator('input[type="checkbox"]')
-        for i in range(min(cbs.count(), 12)):
-            cb = cbs.nth(i)
-            if cb.is_visible(timeout=1_200) and not cb.is_checked():
-                cb.check(timeout=to)
-                logger.info("Hero Insurance: KYC DOM (frame) — checked consent.")
-                break
-    except Exception as exc:
-        logger.warning("Hero Insurance: KYC DOM (frame) consent: %s", exc)
-
-    logger.info(
-        "Hero Insurance: KYC keyboard SOP finished (insurer via keyboard; OVD/mobile/consent via DOM in frame)."
-    )
-    return None
+    _t(pg, 220)
+    return _kyc_post_mobile_entry_branch(kyc_fr.page, kyc_fr, timeout_ms=to)
 
 
 def _fill_kyc_ekyc_keyboard_sop(
@@ -2311,35 +2463,10 @@ def _fill_kyc_ekyc_keyboard_sop(
                 "(focus may still be on document — check Mobile selectors)."
             )
     _t(page, 220)
-
-    _kyc_press_tab_n(page, max(0, KYC_KEYBOARD_TABS_MOBILE_TO_CONSENT))
-    try:
-        page.keyboard.press("Space")
-    except Exception as exc:
-        return f"KYC keyboard SOP: consent Space failed: {exc!s}"
-    _t(page, 220)
-    logger.info("Hero Insurance: KYC keyboard SOP finished (insurer, OVD, mobile, consent).")
-    return None
-
-
-def _kyc_click_kyc_verification_button(page, *, timeout_ms: int) -> None:
-    """Primary CTA on real ``ekycpage`` after form fill (label varies by build)."""
-    to = min(int(timeout_ms), 30_000)
-    for pat in (
-        r"^\s*KYC\s+Verification\s*$",
-        r"^\s*Verify\s+mobile\s*$",
-        r"^\s*Submit\s*$",
-        r"^\s*Continue\s*$",
-    ):
-        try:
-            b = page.get_by_role("button", name=re.compile(pat, re.I))
-            if b.count() > 0 and b.first.is_visible(timeout=2_500):
-                b.first.click(timeout=to)
-                logger.info("Hero Insurance: clicked KYC CTA matching %s.", pat)
-                return
-        except Exception:
-            continue
-    logger.debug("Hero Insurance: KYC primary button not found or not visible (optional).")
+    logger.info(
+        "Hero Insurance: KYC keyboard — mobile entered; blurring then post-mobile banner / Proceed vs upload."
+    )
+    return _kyc_post_mobile_entry_branch(page, kyc_fr, timeout_ms=cap)
 
 
 def _fill_insurance_company_and_ovd_mobile_consent(
@@ -2515,27 +2642,24 @@ def _fill_insurance_company_and_ovd_mobile_consent(
     if not mob_filled:
         return "Could not fill mobile number field."
 
-    # --- Consent checkbox ---
     try:
-        cbs = page.get_by_role("checkbox").filter(
-            has_text=re.compile(r"consent|agree|i\s+confirm", re.I)
-        )
-        if cbs.count() == 0:
-            cbs = page.locator('input[type="checkbox"]')
-        for i in range(min(cbs.count(), 12)):
-            cb = cbs.nth(i)
-            if cb.is_visible(timeout=1_000) and not cb.is_checked():
-                cb.check(timeout=timeout_ms)
-                logger.info("Hero Insurance: checked consent.")
-                break
-    except Exception as exc:
-        logger.warning("Hero Insurance: consent checkbox: %s", exc)
-
-    return None
+        page.keyboard.press("Tab")
+    except Exception:
+        pass
+    _t(page, 400)
+    return _kyc_post_mobile_entry_branch(
+        page, _kyc_preferred_kyc_frame(page), timeout_ms=timeout_ms
+    )
 
 
 def _kyc_proceed_or_upload(page, *, timeout_ms: int) -> str | None:
-    """If KYC already done, click Proceed; else upload Aadhaar front/back and photo placeholders."""
+    """
+    Invoked from ``_kyc_post_mobile_entry_branch`` when the verified-banner text is **not** shown
+    after mobile entry (same page step where three ``input[type=file]`` typically appear).
+
+    - If legacy "already done" body text matches, consent + **Proceed**.
+    - Else attach three placeholder files, consent, then **Proceed** / Submit / Continue.
+    """
     try:
         body = page.evaluate("() => (document.body && document.body.innerText) ? document.body.innerText : ''")
         txt = (body or "").lower()
@@ -2543,6 +2667,7 @@ def _kyc_proceed_or_upload(page, *, timeout_ms: int) -> str | None:
         txt = ""
 
     if re.search(r"kyc\s+is\s+already|already\s+done|kyc\s+already\s+complete", txt):
+        _kyc_ensure_consent_checked_before_kyc_cta(page)
         try:
             page.get_by_role("button", name=re.compile(r"^\s*Proceed\s*$", re.I)).first.click(
                 timeout=timeout_ms
@@ -2589,6 +2714,7 @@ def _kyc_proceed_or_upload(page, *, timeout_ms: int) -> str | None:
     except Exception as exc:
         return f"KYC file upload failed: {exc!s}"
     _t(page, 500)
+    _kyc_ensure_consent_checked_before_kyc_cta(page)
     try:
         for name_pat in (r"^\s*Proceed\s*$", r"^\s*Submit\s*$", r"^\s*Continue\s*$"):
             btn = page.get_by_role("button", name=re.compile(name_pat, re.I))
@@ -2616,7 +2742,8 @@ def _run_hero_misp_portal_after_open(
     subfolder: str | None = None,
 ) -> str | None:
     """
-    Login / Sign In → 2W (two-wheeler) → New Policy → (if ``values``) insurer / OVD / mobile / consent → KYC Proceed or upload.
+    Login / Sign In → 2W (two-wheeler) → New Policy → (if ``values``) insurer / OVD / mobile →
+    post-mobile: verified banner → consent + **Proceed**, else three uploads + **Proceed** (see ``_kyc_post_mobile_entry_branch``).
     Returns None on success, else error string.
 
     ``portal_base_url`` is the insurance site origin (e.g. from ``pre_process`` ``match_base``) so new-tab handoff
@@ -2697,9 +2824,6 @@ def _run_hero_misp_portal_after_open(
         return err
 
     _t(page, 500)
-    err = _kyc_proceed_or_upload(page, timeout_ms=timeout_ms)
-    if err:
-        return err
     try:
         page.wait_for_load_state("domcontentloaded", timeout=min(25_000, timeout_ms * 4))
     except Exception:
@@ -3197,10 +3321,10 @@ def pre_process(
     Open **``INSURANCE_BASE_URL``** (reuse tab / launch browser like Fill DMS).
 
     When **customer_id** and **vehicle_id** are set, loads insurer (details sheet / DB via
-    ``_build_insurance_fill_values``) and runs: **Login / Sign In** (if visible) → **2W** (two-wheeler) → **New Policy** →
-    Insurance Company (fuzzy LIKE insurer) → OVD **AADHAAR CARD** → **mobile_number** → consent →
-    either **Proceed** if KYC already done, or upload Aadhaar front/back/photo placeholders and **Proceed** /
-    Continue. Stops on the **VIN** entry page; **main_process** fills VIN and the rest.
+    ``build_insurance_fill_values``) and runs: **Login / Sign In** (if visible) → **2W** (two-wheeler) → **New Policy** →
+    Insurance Company (fuzzy LIKE insurer) → OVD **AADHAAR CARD** → **mobile_number** →
+    **after mobile**, verified-banner path (consent + **Proceed**) or three file uploads + **Proceed**
+    (``_kyc_post_mobile_entry_branch``). Stops on the **VIN** entry page; **main_process** fills VIN and the rest.
     """
     def _login_url_and_match_base(config_url: str) -> tuple[str, str]:
         u = (config_url or "").strip()
@@ -3792,7 +3916,6 @@ def run_fill_insurance_only(
                     ocr_output_dir, subfolder, "ERROR", f"run_fill_insurance_only: {kyc_fill_err}"
                 )
                 return result
-            _kyc_click_kyc_verification_button(page, timeout_ms=INSURANCE_ACTION_TIMEOUT_MS)
             try:
                 page.wait_for_load_state("domcontentloaded", timeout=25_000)
             except Exception:
@@ -3802,7 +3925,7 @@ def run_fill_insurance_only(
                 ocr_output_dir,
                 subfolder,
                 "NOTE",
-                "run_fill_insurance_only: real MISP KYC step done; skipped training-only #ins-* / policy.html flow",
+                "run_fill_insurance_only: real MISP KYC (post-mobile banner branch + Proceed or uploads) complete",
             )
             result["success"] = True
             result["error"] = None

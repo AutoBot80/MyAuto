@@ -461,3 +461,7 @@ Bulk upload automates the ingestion of scanned documents from a shared folder in
 | 3.95 | Apr 2026 | — | **§6.6** KYC insurer fuzzy matching (typos vs portal labels) — **LLD** **6.149**, **HLD** **1.85** |
 | 3.96 | Apr 2026 | — | **§6.6** KYC DIAG after **`networkidle`** + after **KYC Partner** select — **LLD** **6.150**, **HLD** **1.86** |
 | 3.97 | Apr 2026 | — | **`dealer_ref.prefer_insurer`**, **`form_insurance_view.prefer_insurer`**, **`build_insurance_fill_values`** replaces merged insurer with **`prefer_insurer`** when fuzzy similarity ≥20% — **LLD** **6.151**, **HLD** **1.87**, **Database DDL** **2.62** |
+| 3.98 | Apr 2026 | — | **§6.6** MISP KYC: blur insurer (**Tab**) after commit even without DIAG **`subfolder`**; **KYC Partner** not changed by automation (portal default) — **LLD** **6.152**, **HLD** **1.88** |
+| 3.99 | Apr 2026 | — | **§6.6** MISP KYC: consent checkbox before **Proceed** / **KYC Verification**; already-verified AADHAAR banner → skip fill and click **Proceed** / policy issuance — **LLD** **6.153**, **HLD** **1.89** |
+| 3.100 | Apr 2026 | — | **§6.6** MISP KYC: two branches — verified AADHAAR + policy issuance **banner** (match full portal copy → consent + **Proceed**); **no** banner → three document **file** inputs then consent + **Proceed** (`_kyc_proceed_or_upload`) — **LLD** **6.154**, **HLD** **1.90** |
+| 3.101 | Apr 2026 | — | **§6.6** MISP KYC: verified statement and **Proceed** after **mobile** entry (not before); **`_kyc_post_mobile_entry_branch`** — **LLD** **6.155**, **HLD** **1.91** |

@@ -206,7 +206,8 @@ KYC_KEYBOARD_OVD_ARROW_DOWN_MAX = _int_env("KYC_KEYBOARD_OVD_ARROW_DOWN_MAX", 28
 INSURANCE_KYC_POST_INSURER_NETWORKIDLE_MS = _int_env("INSURANCE_KYC_POST_INSURER_NETWORKIDLE_MS", 20_000)
 # After KYC Partner select (KYC DIAG): max wait (ms) for ``networkidle`` before ``kyc_nav_scrape_after_kyc_partner``. 0 = skip.
 INSURANCE_KYC_POST_KYC_PARTNER_NETWORKIDLE_MS = _int_env("INSURANCE_KYC_POST_KYC_PARTNER_NETWORKIDLE_MS", 15_000)
-# Default portal label for MISP **KYC Partner** when ``values['kyc_partner']`` is unset (DOM select on ``ddlkycPartner``).
+# Default portal label for MISP **KYC Partner** when ``values['kyc_partner']`` is unset (documentation only;
+# automation does not change ``ddlkycPartner`` — portal default e.g. Signzy remains).
 KYC_DEFAULT_KYC_PARTNER_LABEL = (os.getenv("KYC_DEFAULT_KYC_PARTNER_LABEL") or "Signzy").strip() or "Signzy"
 
 
