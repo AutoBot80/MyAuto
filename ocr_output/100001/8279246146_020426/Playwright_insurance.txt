@@ -1,18 +1,18 @@
 Playwright Insurance — execution log (IST / Asia/Kolkata timestamps)
 
-started_ist=2026-04-02T19:33:01.032+05:30
+started_ist=2026-04-02T19:48:34.787+05:30
 subfolder='8279246146_020426'
 
 --- trace ---
-2026-04-02T19:33:01.035+05:30 [NOTE] run_fill_insurance_only: starting Fill Insurance flow
-2026-04-02T19:33:13.081+05:30 [NOTE] run_fill_insurance_only: Sign In not auto-clicked — complete login manually if needed.
-2026-04-02T19:33:15.322+05:30 [NOTE] run_fill_insurance_only: clicked 2W (two-wheeler) entry
-2026-04-02T19:33:20.872+05:30 [NOTE] run_fill_insurance_only: active tab after 2W
-2026-04-02T19:33:21.734+05:30 [NOTE] run_fill_insurance_only: clicked New Policy
-2026-04-02T19:33:27.236+05:30 [NOTE] run_fill_insurance_only: active tab before KYC wait
-2026-04-02T19:33:27.403+05:30 [NOTE] run_fill_insurance_only: real MISP KYC — _fill_insurance_company_and_ovd_mobile_consent (keyboard SOP on ekycpage when enabled)
-2026-04-02T19:34:45.818+05:30 [NOTE] run_fill_insurance_only: real MISP KYC (post-mobile banner branch + Proceed or uploads) complete
-2026-04-02T19:34:45.828+05:30 [NOTE] run_fill_insurance_only: VIN fill + Submit (pre_process), timeout_ms=82500
-2026-04-02T19:34:59.389+05:30 [NOTE] main_process: I agree → proposal form (VIN+Submit done in pre_process)
-2026-04-02T19:34:59.391+05:30 [NOTE] main_process: attached to same browser tab as pre_process
-2026-04-02T19:35:06.350+05:30 [ERROR] main_process: insurance_master insert failed: Insurance already recorded for this customer, vehicle, and calendar year; duplicate insurance_master row is not allowed.
+2026-04-02T19:48:34.790+05:30 [NOTE] run_fill_insurance_only: starting Fill Insurance flow
+2026-04-02T19:48:44.644+05:30 [NOTE] run_fill_insurance_only: Sign In not auto-clicked — complete login manually if needed.
+2026-04-02T19:48:46.218+05:30 [NOTE] run_fill_insurance_only: clicked 2W (two-wheeler) entry
+2026-04-02T19:48:51.339+05:30 [NOTE] run_fill_insurance_only: active tab after 2W
+2026-04-02T19:48:52.235+05:30 [NOTE] run_fill_insurance_only: clicked New Policy
+2026-04-02T19:48:57.335+05:30 [NOTE] run_fill_insurance_only: active tab before KYC wait
+2026-04-02T19:48:57.503+05:30 [NOTE] run_fill_insurance_only: real MISP KYC — _fill_insurance_company_and_ovd_mobile_consent (keyboard SOP on ekycpage when enabled)
+2026-04-02T19:49:35.002+05:30 [NOTE] run_fill_insurance_only: real MISP KYC (post-mobile banner branch + Proceed or uploads) complete
+2026-04-02T19:49:35.008+05:30 [NOTE] run_fill_insurance_only: VIN fill + Submit (pre_process), timeout_ms=60000
+2026-04-02T19:49:49.046+05:30 [NOTE] main_process: I agree → proposal form (VIN+Submit done in pre_process)
+2026-04-02T19:49:49.048+05:30 [NOTE] main_process: attached to same browser tab as pre_process
+2026-04-02T19:49:57.442+05:30 [ERROR] main_process: insurance_master insert failed: Insurance already recorded for this customer, vehicle, and calendar year; duplicate insurance_master row is not allowed.

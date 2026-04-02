@@ -1859,6 +1859,60 @@ def _kyc_blur_insurer_product_select_in_frame(kyc_fr) -> None:
         pass
 
 
+def _kyc_aspnet_signal_insurer_committed(kyc_fr, page) -> None:
+    """
+    WebForms / skinned insurer controls often finalize only after a *real* page/window blur (operators
+    report alt-tab fixes stuck state). Dispatch ``change``/``input``/``blur`` on ``ddlproduct`` and a
+    lightweight window blur so postbacks/listeners run before the Tab chain — debug session **H6**.
+    """
+    try:
+        kyc_fr.evaluate(
+            """() => {
+          const el = document.getElementById('ContentPlaceHolder1_ddlproduct')
+            || document.querySelector('select[name*="ddlproduct" i]');
+          if (el) {
+            try {
+              el.dispatchEvent(new Event('input', { bubbles: true }));
+              el.dispatchEvent(new Event('change', { bubbles: true }));
+            } catch (e) {}
+            try {
+              if (el.blur) el.blur();
+            } catch (e) {}
+          }
+          const a = document.activeElement;
+          if (a && a !== document.body && a !== document.documentElement) {
+            const id = (a.id || '').toLowerCase();
+            const nm = (String(a.name || '')).toLowerCase();
+            if (id.includes('ddlproduct') || nm.includes('ddlproduct')) {
+              try {
+                a.dispatchEvent(new Event('change', { bubbles: true }));
+                if (a.blur) a.blur();
+              } catch (e) {}
+            }
+          }
+        }"""
+        )
+    except Exception:
+        pass
+    try:
+        page.evaluate(
+            """() => {
+          try { window.dispatchEvent(new Event('blur')); } catch (e) {}
+          try { document.dispatchEvent(new Event('blur')); } catch (e) {}
+        }"""
+        )
+    except Exception:
+        pass
+    # #region agent log
+    _dbg_kyc_insurer_tab_ndjson(
+        "H6",
+        "_kyc_aspnet_signal_insurer_committed:after",
+        "post change/blur/window blur",
+        _dbg_kyc_focus_snapshot(kyc_fr, page),
+    )
+    # #endregion
+
+
 def _kyc_tab_out_of_insurer_after_escape(page, kyc_fr) -> None:
     """
     After Enter/Escape on Insurance Company, focus often stays in the combobox until the user Tabs.
@@ -2373,6 +2427,7 @@ def _fill_kyc_ekyc_keyboard_sop(
             pass
         _t(page, 180)
         _kyc_force_blur_insurance_company_dropdown(kyc_fr)
+        _kyc_aspnet_signal_insurer_committed(kyc_fr, page)
         _kyc_tab_out_of_insurer_after_escape(page, kyc_fr)
         _kyc_blur_if_insurer_product_select_focused(kyc_fr)
         _kyc_blur_insurer_product_select_in_frame(kyc_fr)
@@ -2380,6 +2435,7 @@ def _fill_kyc_ekyc_keyboard_sop(
     if dom_ok:
         _kyc_force_blur_insurance_company_dropdown(kyc_fr)
         _t(page, 80)
+        _kyc_aspnet_signal_insurer_committed(kyc_fr, page)
     # #region agent log
     _dbg_kyc_insurer_tab_ndjson(
         "H1",
