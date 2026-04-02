@@ -1186,7 +1186,7 @@ export function AddSalesPage({ dealerId, oemId, dmsUrl, siteUrlsLoading, siteUrl
                         <dt>Date of birth</dt>
                         <dd>
                           <input
-                            className="add-sales-v2-dl-input"
+                            className="add-sales-v2-dl-input add-sales-v2-dl-input--dob"
                             value={c?.date_of_birth ?? ""}
                             onChange={(e) => setExtractedCustomer((prev) => ({ ...(prev ?? {}), date_of_birth: e.target.value }))}
                             placeholder="—"

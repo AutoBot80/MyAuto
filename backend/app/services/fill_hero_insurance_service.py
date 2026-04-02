@@ -54,6 +54,12 @@ from app.services.insurance_form_values import (
 from app.services.insurance_kyc_payloads import insurance_kyc_png_payloads
 from app.services.utility_functions import fuzzy_best_option_label, normalize_for_fuzzy_match
 
+# MISP navigation tuning — edit in source (not .env). Optional iframe CSS after trial runs.
+INSURANCE_CLICK_SETTLE_MS = 100
+INSURANCE_KYC_IFRAME_SELECTOR = ""
+INSURANCE_VIN_IFRAME_SELECTOR = ""
+INSURANCE_NAV_IFRAME_SELECTOR = ""
+
 logger = logging.getLogger(__name__)
 
 # Native form submit for MISP partner login (in addition to button clicks).
@@ -110,6 +116,23 @@ def _t(page, ms: int) -> None:
         page.wait_for_timeout(min(ms, 15_000))
     except Exception:
         pass
+
+
+def _insurance_click_settle(page) -> None:
+    """Fixed pause for MISP navigation (Sign In → 2W → New Policy …). ``INSURANCE_CLICK_SETTLE_MS`` (default 100)."""
+    _t(page, min(INSURANCE_CLICK_SETTLE_MS, 15_000))
+
+
+def _hero_misp_after_sign_in_settle(page) -> None:
+    """
+    After Sign In, wait for the landing UI. Prefer **domcontentloaded** over **networkidle** — MISP often
+    never reaches network idle (analytics / long polling), which added multi-second delays before 2W.
+    """
+    try:
+        page.wait_for_load_state("domcontentloaded", timeout=8_000)
+    except Exception:
+        pass
+    _insurance_click_settle(page)
 
 
 def _hero_insurance_snapshot_visible_controls(ctx) -> list[dict]:
@@ -1389,8 +1412,9 @@ def _click_sign_in_if_visible(page, *, timeout_ms: int) -> bool:
 def _click_2w_icon(page, *, timeout_ms: int) -> None:
     """
     Open **2W** (two-wheeler) product path. Markup varies: ``img[alt]``, tiles, or icon buttons.
+    When ``INSURANCE_NAV_IFRAME_SELECTOR`` is set, try 2W locators inside that iframe first.
     """
-    _t(page, 400)
+    _insurance_click_settle(page)
 
     def _try_click(loc, label: str) -> bool:
         try:
@@ -1407,6 +1431,24 @@ def _click_2w_icon(page, *, timeout_ms: int) -> None:
             return True
         except Exception:
             return False
+
+    if INSURANCE_NAV_IFRAME_SELECTOR:
+        try:
+            fl = page.frame_locator(INSURANCE_NAV_IFRAME_SELECTOR)
+            nav_try = (
+                ('nav iframe [aid="ctl00_TWO"]', fl.locator('[aid="ctl00_TWO"]')),
+                ("nav iframe #ctl00_TWO", fl.locator("#ctl00_TWO")),
+                ('nav iframe img[alt="2W Icon"]', fl.locator('img[alt="2W Icon"]')),
+            )
+            for label, loc in nav_try:
+                if _try_click(loc, label):
+                    try:
+                        page.wait_for_load_state("domcontentloaded", timeout=min(20_000, timeout_ms * 2))
+                    except Exception:
+                        pass
+                    return
+        except Exception as exc:
+            logger.debug("Hero Insurance: 2W INSURANCE_NAV_IFRAME_SELECTOR: %s", exc)
 
     try_order = (
         # Hero MISP WebForms: stable tile id (operator-confirmed).
@@ -1549,10 +1591,7 @@ def _expand_misp_policy_issuance_nav_if_collapsed(page, *, timeout_ms: int) -> N
         logger.warning("Hero Insurance: Policy Issuance expand click failed: %s", exc)
         return
 
-    try:
-        page.wait_for_timeout(450)
-    except Exception:
-        time.sleep(0.45)
+    _insurance_click_settle(page)
 
 
 def _click_new_policy(page, *, timeout_ms: int) -> None:
@@ -1997,8 +2036,42 @@ def _insurance_page_has_dummy_kyc_training_html(page) -> bool:
         return False
 
 
+def _insurance_frame_from_iframe_selector(page, css: str):
+    """Resolve a Playwright ``Frame`` from host-page iframe CSS (``INSURANCE_KYC_IFRAME_SELECTOR`` in this module)."""
+    if not (css or "").strip():
+        return None
+    try:
+        loc = page.locator(css).first
+        loc.wait_for(state="attached", timeout=8_000)
+        handle = loc.element_handle(timeout=5_000)
+        if not handle:
+            return None
+        fr = handle.content_frame()
+        return fr
+    except Exception:
+        return None
+
+
 def _kyc_preferred_kyc_frame(page):
-    """Frame whose document contains the Insurance Company label (KYC may render inside an iframe)."""
+    """
+    Frame whose document contains the Insurance Company label (KYC may render inside an iframe).
+
+    If ``INSURANCE_KYC_IFRAME_SELECTOR`` is set (module constant / trial run), use that iframe first — avoids scanning
+    every frame for **Insurance Company** text.
+    """
+    sel = INSURANCE_KYC_IFRAME_SELECTOR
+    if sel:
+        fr = _insurance_frame_from_iframe_selector(page, sel)
+        if fr:
+            try:
+                if not fr.is_detached():
+                    logger.info(
+                        "Hero Insurance: KYC frame from INSURANCE_KYC_IFRAME_SELECTOR (%s).",
+                        sel[:100],
+                    )
+                    return fr
+            except Exception:
+                pass
     for fr in page.frames:
         try:
             if fr.is_detached():
@@ -2967,7 +3040,7 @@ def _run_hero_misp_portal_after_open(
     ``portal_base_url`` is the insurance site origin (e.g. from ``pre_process`` ``match_base``) so new-tab handoff
     never attaches to a Siebel/DMS tab when both are open.
     """
-    _t(page, 500)
+    _insurance_click_settle(page)
     _hero_insurance_log_page_diagnostics(
         page,
         phase="before_sign_in",
@@ -2985,11 +3058,7 @@ def _run_hero_misp_portal_after_open(
         logger.warning(
             "Hero Insurance: no Sign In / Login control was clicked — diagnostics logged (frames + visible controls)."
         )
-    try:
-        page.wait_for_load_state("networkidle", timeout=12_000)
-    except Exception:
-        pass
-    _t(page, 1_200)
+    _hero_misp_after_sign_in_settle(page)
 
     pages_before_2w = _misp_snapshot_context_pages(page)
     try:
@@ -3004,7 +3073,7 @@ def _run_hero_misp_portal_after_open(
         timeout_ms=timeout_ms,
         step_label="2W",
     )
-    _t(page, 600)
+    _insurance_click_settle(page)
 
     pages_before_np = _misp_snapshot_context_pages(page)
     try:
@@ -3024,7 +3093,7 @@ def _run_hero_misp_portal_after_open(
         logger.info("Hero Insurance: no DB values — stopping after New Policy.")
         return None
 
-    _t(page, 900)
+    _insurance_click_settle(page)
     _hero_insurance_log_kyc_navigation_scrape(
         page,
         phase="hero_misp_before_kyc_fill",
@@ -3041,12 +3110,12 @@ def _run_hero_misp_portal_after_open(
     if err:
         return err
 
-    _t(page, 500)
+    _insurance_click_settle(page)
     try:
         page.wait_for_load_state("domcontentloaded", timeout=min(25_000, timeout_ms * 4))
     except Exception:
         pass
-    _t(page, 400)
+    _insurance_click_settle(page)
     return None
 
 
@@ -3086,9 +3155,26 @@ def _fill_input_by_label_patterns(
     return False
 
 
-def _hero_misp_page_and_frame_roots(page):
-    """Main document plus child frames (MISP may host the VIN step in an iframe)."""
-    roots: list = [page]
+def _hero_misp_page_and_frame_roots(page, *, purpose: str = "generic") -> list:
+    """
+    Locator roots for MISP UI: optional ``FrameLocator`` from module constants (trial direct path), then ``page``, then
+    every ``Frame`` (legacy sweep). See ``INSURANCE_VIN_IFRAME_SELECTOR``, ``INSURANCE_KYC_IFRAME_SELECTOR``,
+    ``INSURANCE_NAV_IFRAME_SELECTOR`` at top of this module.
+    """
+    roots: list = []
+    sel = ""
+    if purpose == "vin":
+        sel = INSURANCE_VIN_IFRAME_SELECTOR
+    elif purpose == "kyc":
+        sel = INSURANCE_KYC_IFRAME_SELECTOR
+    elif purpose == "nav":
+        sel = INSURANCE_NAV_IFRAME_SELECTOR
+    if sel:
+        try:
+            roots.append(page.frame_locator(sel))
+        except Exception:
+            pass
+    roots.append(page)
     try:
         roots.extend([f for f in page.frames if not f.is_detached()])
     except Exception:
@@ -3096,23 +3182,52 @@ def _hero_misp_page_and_frame_roots(page):
     return roots
 
 
-def _hero_misp_wait_vin_shell_ready(page, *, timeout_ms: int) -> None:
+# Same ordering as ``_hero_misp_fill_vin_txt_frame_no`` — used to poll until the real VIN step is in the DOM
+# (MISP may show a brief intermediate page after KYC **Proceed** before ``txtFrameNo`` appears).
+_HERO_MISP_VIN_TXT_FRAME_NO_SELECTORS: tuple[str, ...] = (
+    "#divtxtFrameNo input[name*='txtFrameNo' i]",
+    "#divtxtFrameNo input.txtBox",
+    "#divtxtFrameNo input[type='text']",
+    'input#ctl00_ContentPlaceHolder1_txtFrameNo',
+    '#ctl00_ContentPlaceHolder1_upnlAddStateMaster input[name="ctl00$ContentPlaceHolder1$txtFrameNo"]',
+    '#mainContainer input[name="ctl00$ContentPlaceHolder1$txtFrameNo"]',
+    '#ctl00_ContentPlaceHolder1_upnlAddStateMaster input[name*="txtFrameNo" i]',
+    '#mainContainer input[name*="txtFrameNo" i]',
+    '#ctl00_ContentPlaceHolder1_upnlAddStateMaster #ContentPlaceHolder1_txtFrameNo',
+    '#mainContainer #ContentPlaceHolder1_txtFrameNo',
+    'input[name="ctl00$ContentPlaceHolder1$txtFrameNo"]',
+    "#ContentPlaceHolder1_txtFrameNo",
+    'input[id="ctl00_ContentPlaceHolder1_txtFrameNo"]',
+    'input[name*="txtFrameNo" i]',
+    'input[id*="txtFrameNo" i]',
+)
+
+
+def _hero_misp_wait_for_vin_txt_frame_no_attached(page, *, timeout_ms: int) -> bool:
     """
-    VIN step often loads inside ASP.NET UpdatePanel ``#ctl00_ContentPlaceHolder1_upnlAddStateMaster``
-    and ``#mainContainer`` (possibly inside a child frame). Wait for DOM attachment before filling.
+    Poll until the VIN/Chassis control is attached in ``page`` or a frame. MISP sometimes renders a short
+    no-action screen after KYC **Proceed**; waiting on generic shells (e.g. ``mainContainer``) alone can fire
+    too early — this waits for the same inputs we fill.
     """
-    to = min(int(timeout_ms), 18_000)
-    for shell in (
-        "#ctl00_ContentPlaceHolder1_upnlAddStateMaster",
-        "#mainContainer",
-    ):
-        for root in _hero_misp_page_and_frame_roots(page):
-            try:
-                root.locator(shell).first.wait_for(state="attached", timeout=to)
-                logger.debug("Hero Insurance: VIN shell attached (%s).", shell[:52])
-                return
-            except Exception:
-                continue
+    deadline = time.monotonic() + min(int(timeout_ms), 90_000) / 1000.0
+    poll_ms = max(100, min(500, int(INSURANCE_CLICK_SETTLE_MS) * 2))
+    selectors = _HERO_MISP_VIN_TXT_FRAME_NO_SELECTORS
+    while time.monotonic() < deadline:
+        for sel in selectors:
+            for root in _hero_misp_page_and_frame_roots(page, purpose="vin"):
+                try:
+                    loc = root.locator(sel)
+                    if loc.count() == 0:
+                        continue
+                    remain_ms = max(50, int((deadline - time.monotonic()) * 1000))
+                    loc.first.wait_for(state="attached", timeout=min(8_000, remain_ms))
+                    logger.info("Hero Insurance: VIN field attached after KYC transition (%s).", sel[:72])
+                    return True
+                except Exception:
+                    continue
+        _t(page, poll_ms)
+    logger.warning("Hero Insurance: timed out waiting for VIN/Chassis input after KYC transition.")
+    return False
 
 
 def _hero_misp_fill_vin_txt_frame_no(page, vin: str, *, timeout_ms: int) -> bool:
@@ -3124,29 +3239,14 @@ def _hero_misp_fill_vin_txt_frame_no(page, vin: str, *, timeout_ms: int) -> bool
     if not v:
         return False
     to = min(int(timeout_ms), 90_000)
-    _hero_misp_wait_vin_shell_ready(page, timeout_ms=to)
+    if not _hero_misp_wait_for_vin_txt_frame_no_attached(page, timeout_ms=to):
+        return False
 
     # MISP markup: ``div#divtxtFrameNo.input-container`` + ``input#ctl00_ContentPlaceHolder1_txtFrameNo``,
     # label text **VIN Number** (``label for="txtFrameNo"`` vs full client id — use label + container).
-    selectors = (
-        "#divtxtFrameNo input[name*='txtFrameNo' i]",
-        "#divtxtFrameNo input.txtBox",
-        "#divtxtFrameNo input[type='text']",
-        'input#ctl00_ContentPlaceHolder1_txtFrameNo',
-        '#ctl00_ContentPlaceHolder1_upnlAddStateMaster input[name="ctl00$ContentPlaceHolder1$txtFrameNo"]',
-        '#mainContainer input[name="ctl00$ContentPlaceHolder1$txtFrameNo"]',
-        '#ctl00_ContentPlaceHolder1_upnlAddStateMaster input[name*="txtFrameNo" i]',
-        '#mainContainer input[name*="txtFrameNo" i]',
-        '#ctl00_ContentPlaceHolder1_upnlAddStateMaster #ContentPlaceHolder1_txtFrameNo',
-        '#mainContainer #ContentPlaceHolder1_txtFrameNo',
-        'input[name="ctl00$ContentPlaceHolder1$txtFrameNo"]',
-        "#ContentPlaceHolder1_txtFrameNo",
-        'input[id="ctl00_ContentPlaceHolder1_txtFrameNo"]',
-        'input[name*="txtFrameNo" i]',
-        'input[id*="txtFrameNo" i]',
-    )
+    selectors = _HERO_MISP_VIN_TXT_FRAME_NO_SELECTORS
     for sel in selectors:
-        for root in _hero_misp_page_and_frame_roots(page):
+        for root in _hero_misp_page_and_frame_roots(page, purpose="vin"):
             try:
                 loc = root.locator(sel)
                 if loc.count() == 0:
@@ -3181,7 +3281,7 @@ def _hero_misp_fill_vin_fallback_all_frames(page, vin: str, *, timeout_ms: int) 
         lambda r: r.get_by_placeholder(re.compile(r"chassis|vin|frame", re.I)),
     )
     for fac in factories:
-        for root in _hero_misp_page_and_frame_roots(page):
+        for root in _hero_misp_page_and_frame_roots(page, purpose="vin"):
             try:
                 loc = fac(root)
                 if loc.count() == 0:
@@ -3213,7 +3313,7 @@ def _hero_misp_click_vin_page_submit(page, *, timeout_ms: int) -> bool:
         'input[name="ctl00$ContentPlaceHolder1$btnSubmit"]',
     )
     for sel in selectors:
-        for root in _hero_misp_page_and_frame_roots(page):
+        for root in _hero_misp_page_and_frame_roots(page, purpose="vin"):
             try:
                 loc = root.locator(sel)
                 if loc.count() == 0:
@@ -3242,7 +3342,7 @@ def _hero_misp_vin_submit_i_agree(page, values: dict, *, timeout_ms: int) -> str
         page.wait_for_load_state("domcontentloaded", timeout=min(25_000, timeout_ms * 4))
     except Exception:
         pass
-    _t(page, 600)
+    _insurance_click_settle(page)
 
     filled = _hero_misp_fill_vin_txt_frame_no(page, vin, timeout_ms=timeout_ms)
     if not filled:
@@ -4145,7 +4245,7 @@ def run_fill_insurance_only(
         page.set_default_timeout(INSURANCE_ACTION_TIMEOUT_MS)
         # Real MISP (and similar): same automated Sign In / DIAG as Hero ``pre_process`` — this endpoint
         # previously only waited for manual login (_wait_for_insurance_kyc_after_login).
-        _t(page, 500)
+        _insurance_click_settle(page)
         _hero_insurance_log_page_diagnostics(
             page,
             phase="fill_insurance_only_before_sign_in",
@@ -4167,11 +4267,7 @@ def run_fill_insurance_only(
                 "run_fill_insurance_only: Sign In not auto-clicked — see DIAG lines; complete login manually if needed.",
             )
         # Same MISP landing as Hero pre_process: after login, **2W** then **New Policy** before KYC / dummy fields.
-        try:
-            page.wait_for_load_state("networkidle", timeout=12_000)
-        except Exception:
-            pass
-        _t(page, 1_200)
+        _hero_misp_after_sign_in_settle(page)
         pages_before_2w = _misp_snapshot_context_pages(page)
         try:
             _click_2w_icon(page, timeout_ms=INSURANCE_ACTION_TIMEOUT_MS)
@@ -4200,7 +4296,7 @@ def run_fill_insurance_only(
             )
         except Exception:
             pass
-        _t(page, 600)
+        _insurance_click_settle(page)
         pages_before_np = _misp_snapshot_context_pages(page)
         try:
             _click_new_policy(page, timeout_ms=INSURANCE_ACTION_TIMEOUT_MS)

@@ -683,6 +683,11 @@
   border-color: #1e5a9e;
 }
 
+/* DOB is short (YYYY-MM-DD); keep the row compact vs other full-width dl inputs */
+.add-sales-v2-dl-input--dob {
+  max-width: 120px;
+}
+
 .add-sales-v2-half {
   max-width: 50%;
 }

@@ -470,3 +470,4 @@ Bulk upload automates the ingestion of scanned documents from a shared folder in
 | 3.104 | Apr 2026 | — | **§6.6** / **FR-18b**: after KYC **Proceed**, VIN/Chassis in **`txtFrameNo`** and **Submit** via **`btnSubmit`**; KYC insurer **Escape** then **`_kyc_tab_out_of_insurer_after_escape`** (**2× Tab**) — **LLD** **6.158**–**6.159**, **HLD** **1.94** |
 | 3.105 | Apr 2026 | — | **§6.6** / **FR-18b**: VIN fields under **`upnlAddStateMaster`** / **`mainContainer`** (frames + **`force`** fill) — **LLD** **6.160**, **HLD** **1.95** |
 | 3.106 | Apr 2026 | — | **§6.6**: **`txtFrameNo`** is VIN only (**`divtxtFrameNo`**); KYC mobile wait must not use it — **LLD** **6.161**, **HLD** **1.96** |
+| 3.107 | Apr 2026 | — | **§6.6** / **FR-18b**: after KYC **Proceed**, automation waits until the real VIN/Chassis control is present (brief no-action intermediate page is tolerated) — **LLD** **6.165**, **HLD** **1.99** |

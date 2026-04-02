@@ -392,3 +392,6 @@ The SQL view **`form_dms_view`** is **removed**; the same mapping is implemented
 | 1.94 | Apr 2026 | — | **`fill_hero_insurance_service`** **`main_process`**: **`_hero_misp_fill_vin_txt_frame_no`**, **`_hero_misp_click_vin_page_submit`** — **LLD** **6.159**, **BRD** **3.104** |
 | 1.95 | Apr 2026 | — | **`fill_hero_insurance_service`** VIN step: **`_hero_misp_wait_vin_shell_ready`**, framed **`txtFrameNo`**, **`_hero_misp_fill_vin_fallback_all_frames`** — **LLD** **6.160**, **BRD** **3.105** |
 | 1.96 | Apr 2026 | — | **`fill_hero_insurance_service`**: KYC mobile wait vs **`divtxtFrameNo`** VIN — **LLD** **6.161**, **BRD** **3.106** |
+| 1.97 | Apr 2026 | — | **Add Sales** (`AddSalesPage`): DOB input **`add-sales-v2-dl-input--dob`**; MISP **`_hero_misp_after_sign_in_settle`** — **LLD** **6.162** |
+| 1.98 | Apr 2026 | — | **Insurance** **`.env`**: action/policy timeouts and DIAG/KYC flags — **LLD** **§2.5** |
+| 1.99 | Apr 2026 | — | **`fill_hero_insurance_service`**: MISP **`INSURANCE_CLICK_SETTLE_MS`** + **`INSURANCE_*_IFRAME_SELECTOR`** as **module constants** (not **`.env`**); **`_hero_misp_wait_for_vin_txt_frame_no_attached`** after KYC **Proceed** (intermediate page) — **LLD** **6.165** |
