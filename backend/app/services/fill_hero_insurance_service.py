@@ -1420,6 +1420,146 @@ def _kyc_press_tab_n(page, n: int, *, pause_ms: int = 90) -> None:
         _t(page, pause_ms)
 
 
+def _kyc_ovd_focused_text_is_aadhaar_card(shown: str) -> bool:
+    u = (shown or "").strip().upper()
+    if not u:
+        return False
+    if "AADHAAR" in u and "CARD" in u:
+        return True
+    if u == "AADHAAR CARD" or "आधार" in (shown or ""):
+        return True
+    return bool(re.search(r"AADHAAR\s*CARD", (shown or ""), re.I))
+
+
+def _kyc_dom_fill_ovd_mobile_consent_in_frame(kyc_fr, mobile: str, *, timeout_ms: int) -> str | None:
+    """
+    Select OVD = AADHAAR CARD, fill mobile, check consent — all scoped to the KYC **Frame**
+    (same document as the insurer field). Used when Tab/ArrowDown cannot reach the OVD control
+    because focus/tab order differs or the control is not a plain ``<select>`` read via
+    ``activeElement``.
+    """
+    pg = kyc_fr.page
+    to = min(int(timeout_ms), 60_000)
+    mobile = (mobile or "").strip()
+    if not mobile:
+        return "customer_master.mobile_number is empty for KYC DOM fallback."
+    digits = re.sub(r"\D", "", mobile)[:12]
+
+    ovd_ok = False
+    for sel_css in (
+        'select:near(:text("Officially Valid"))',
+        'select:near(:text("OVD"))',
+        "select[aria-label*='OVD' i]",
+        "select[aria-label*='Officially Valid' i]",
+    ):
+        try:
+            loc = kyc_fr.locator(sel_css)
+            if loc.count() == 0:
+                continue
+            opts = loc.first.locator("option")
+            n = opts.count()
+            for i in range(min(n, 200)):
+                t = (opts.nth(i).inner_text() or "").strip().upper()
+                if "AADHAAR" in t and "CARD" in t:
+                    val = opts.nth(i).get_attribute("value")
+                    if val:
+                        loc.first.select_option(value=val, timeout=to, force=True)
+                    else:
+                        loc.first.select_option(label=t, timeout=to, force=True)
+                    ovd_ok = True
+                    logger.info("Hero Insurance: KYC DOM (frame) — OVD set to AADHAAR CARD.")
+                    break
+            if ovd_ok:
+                break
+        except Exception:
+            continue
+    if not ovd_ok:
+        try:
+            kyc_fr.get_by_label(re.compile(r"Officially\s*Valid|OVD", re.I)).locator(
+                "xpath=following::select[1]"
+            ).first.select_option(
+                label=re.compile(r"AADHAAR\s*CARD", re.I), timeout=to, force=True
+            )
+            ovd_ok = True
+            logger.info("Hero Insurance: KYC DOM (frame) — OVD via label+following select.")
+        except Exception:
+            try:
+                ok_js = kyc_fr.evaluate(
+                    """() => {
+                      const sels = Array.from(document.querySelectorAll('select'));
+                      for (const s of sels) {
+                        for (const o of s.options) {
+                          const t = (o.textContent || '').trim();
+                          if (/AADHAAR/i.test(t) && /CARD/i.test(t)) {
+                            s.value = o.value;
+                            s.dispatchEvent(new Event('input', { bubbles: true }));
+                            s.dispatchEvent(new Event('change', { bubbles: true }));
+                            return true;
+                          }
+                        }
+                      }
+                      return false;
+                    }"""
+                )
+                if ok_js:
+                    ovd_ok = True
+                    logger.info("Hero Insurance: KYC DOM (frame) — OVD set via JS select scan.")
+            except Exception:
+                pass
+    if not ovd_ok:
+        return (
+            "KYC keyboard SOP: could not set OVD to AADHAAR CARD (keyboard and DOM in KYC frame). "
+            "Try KYC_KEYBOARD_TABS_INSURER_TO_OVD or inspect the Officially Valid control."
+        )
+
+    # Mobile often appears or enables only after OVD is set.
+    try:
+        kyc_fr.locator(
+            'input[type="tel"], input[name*="mobile" i], input[id*="mobile" i]'
+        ).first.wait_for(state="visible", timeout=min(12_000, to))
+    except Exception:
+        _t(pg, 450)
+
+    mob_filled = False
+    for ph in (
+        kyc_fr.get_by_label(re.compile(r"^Mobile\s*(Number|No\.?|Phone)?\s*$", re.I)),
+        kyc_fr.get_by_placeholder(re.compile(r"mobile", re.I)),
+        kyc_fr.locator('input[type="tel"]'),
+        kyc_fr.locator("input[name*='mobile' i]"),
+    ):
+        try:
+            if ph.count() > 0 and ph.first.is_visible(timeout=2_500):
+                ph.first.fill("", timeout=to)
+                ph.first.fill(digits, timeout=to)
+                mob_filled = True
+                logger.info("Hero Insurance: KYC DOM (frame) — filled mobile.")
+                break
+        except Exception:
+            continue
+    if not mob_filled:
+        return "KYC keyboard SOP: could not fill mobile in KYC frame after OVD (DOM fallback)."
+
+    try:
+        cbs = kyc_fr.get_by_role("checkbox").filter(
+            has_text=re.compile(r"consent|agree|i\s+confirm", re.I)
+        )
+        if cbs.count() == 0:
+            cbs = kyc_fr.locator('input[type="checkbox"]')
+        for i in range(min(cbs.count(), 12)):
+            cb = cbs.nth(i)
+            if cb.is_visible(timeout=1_200) and not cb.is_checked():
+                cb.check(timeout=to)
+                logger.info("Hero Insurance: KYC DOM (frame) — checked consent.")
+                break
+    except Exception as exc:
+        logger.warning("Hero Insurance: KYC DOM (frame) consent: %s", exc)
+
+    logger.info(
+        "Hero Insurance: KYC keyboard SOP finished (insurer via keyboard; OVD/mobile/consent via DOM in frame)."
+    )
+    return None
+
+
 def _fill_kyc_ekyc_keyboard_sop(page, values: dict, *, timeout_ms: int) -> str | None:
     """
     Keyboard SOP for ``ekycpage.aspx`` (focus document → Tab to Insurance Company → type to filter →
@@ -1524,15 +1664,17 @@ def _fill_kyc_ekyc_keyboard_sop(page, values: dict, *, timeout_ms: int) -> str |
         page.keyboard.press("Enter")
     except Exception:
         pass
-    _t(page, 220)
+    # Let the insurer dropdown close / DOM settle before Tab to OVD (avoids wrong focus).
+    _t(page, 420)
 
     _kyc_press_tab_n(page, max(0, KYC_KEYBOARD_TABS_INSURER_TO_OVD))
 
     ovd_ok = False
+    last_shown = ""
     for _ in range(max(1, KYC_KEYBOARD_OVD_ARROW_DOWN_MAX)):
         shown = _kyc_read_focused_control_text(page)
-        u = (shown or "").upper()
-        if "AADHAAR" in u and "CARD" in u:
+        last_shown = shown or last_shown
+        if _kyc_ovd_focused_text_is_aadhaar_card(shown):
             ovd_ok = True
             logger.info("Hero Insurance: KYC keyboard — OVD shows AADHAAR CARD.")
             break
@@ -1542,7 +1684,12 @@ def _fill_kyc_ekyc_keyboard_sop(page, values: dict, *, timeout_ms: int) -> str |
             pass
         _t(page, 105)
     if not ovd_ok:
-        return "KYC keyboard SOP: could not reach AADHAAR CARD on OVD with ArrowDown."
+        logger.warning(
+            "Hero Insurance: KYC keyboard — OVD did not reach AADHAAR CARD (last focus text=%r); "
+            "using DOM fills inside KYC frame for OVD, mobile, consent.",
+            (last_shown or "")[:160],
+        )
+        return _kyc_dom_fill_ovd_mobile_consent_in_frame(kyc_fr, mobile, timeout_ms=timeout_ms)
 
     _kyc_press_tab_n(page, max(0, KYC_KEYBOARD_TABS_OVD_TO_MOBILE))
 
