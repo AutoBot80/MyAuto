@@ -253,6 +253,34 @@ def reset_playwright_insurance_log(ocr_output_dir: Path | None, subfolder: str |
         logger.warning("Insurance: could not reset Playwright_insurance.txt: %s", exc)
 
 
+def write_playwright_insurance_auxiliary_text(
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
+    filename: str,
+    body: str,
+) -> Path | None:
+    """
+    Write a multi-line auxiliary debug file next to ``Playwright_insurance.txt`` (same subfolder), e.g.
+    ``Playwright_insurance_main_process_frames.txt``. Returns the path or None if skipped.
+    """
+    if not ocr_output_dir or not subfolder or not str(subfolder).strip():
+        return None
+    if not (filename or "").strip() or not (body or "").strip():
+        return None
+    safe = safe_subfolder_name(subfolder)
+    fn = Path(filename).name.strip()
+    if not fn or ".." in fn:
+        return None
+    path = Path(ocr_output_dir).resolve() / safe / fn
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body, encoding="utf-8")
+        return path
+    except OSError as exc:
+        logger.warning("Insurance: could not write auxiliary file %s: %s", path, exc)
+        return None
+
+
 def append_playwright_insurance_line(
     ocr_output_dir: Path | None,
     subfolder: str | None,

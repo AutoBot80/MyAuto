@@ -20,6 +20,7 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeout
 from app.config import (
     INSURANCE_ACTION_TIMEOUT_MS,
     INSURANCE_BASE_URL,
+    INSURANCE_MAIN_PROCESS_FRAME_SCRAPE,
     INSURANCE_KYC_POST_INSURER_NETWORKIDLE_MS,
     INSURANCE_KYC_POST_KYC_PARTNER_NETWORKIDLE_MS,
     INSURANCE_LOGIN_WAIT_MS,
@@ -49,6 +50,7 @@ from app.services.insurance_form_values import (
     build_insurance_fill_values,
     reset_playwright_insurance_log,
     write_insurance_form_values,
+    write_playwright_insurance_auxiliary_text,
 )
 from app.services.insurance_kyc_payloads import insurance_kyc_png_payloads
 from app.services.utility_functions import (
@@ -4183,6 +4185,126 @@ def click_issue_policy_and_scrape_preview(page, *, timeout_ms: int) -> dict[str,
     return scrape_insurance_policy_preview_before_issue(page, timeout_ms=to)
 
 
+_MAIN_PROCESS_FRAME_SCRAPE_JS = r"""() => {
+  function vis(el) {
+    if (!el || el.nodeType !== 1) return false;
+    const r = el.getBoundingClientRect();
+    if (r.width < 0.5 || r.height < 0.5) return false;
+    const st = window.getComputedStyle(el);
+    if (st.visibility === "hidden" || st.display === "none" || parseFloat(st.opacity) === 0) return false;
+    return true;
+  }
+  function labText(el) {
+    try {
+      if (el.labels && el.labels[0]) {
+        return (el.labels[0].textContent || "").replace(/\s+/g, " ").trim().slice(0, 140);
+      }
+    } catch (e) {}
+    return "";
+  }
+  const sel = 'input, select, textarea, button, a[href], [role="combobox"], [role="textbox"], [role="radio"], [role="checkbox"]';
+  const out = [];
+  let n = 0;
+  const max = 220;
+  document.querySelectorAll(sel).forEach((el) => {
+    if (n >= max) return;
+    if (!vis(el)) return;
+    n++;
+    const tag = (el.tagName || "").toLowerCase();
+    const rec = {
+      tag: tag,
+      id: el.id || "",
+      name: el.name || "",
+      type: (el.type || "").toLowerCase(),
+      placeholder: String(el.placeholder || "").slice(0, 100),
+      ariaLabel: String(el.getAttribute("aria-label") || "").slice(0, 100),
+      role: String(el.getAttribute("role") || "").slice(0, 40),
+      className: String(el.className || "").replace(/\s+/g, " ").trim().slice(0, 100),
+      labelText: labText(el),
+      textSnippet: (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim().slice(0, 90),
+    };
+    if (tag === "input" || tag === "textarea") rec.valueLen = String(el.value || "").length;
+    if (tag === "select") {
+      rec.selectedText =
+        el.selectedIndex >= 0 ? String(el.options[el.selectedIndex].text || "").trim().slice(0, 90) : "";
+      rec.optionCount = el.options.length;
+    }
+    out.push(rec);
+  });
+  return {
+    documentURL: location.href,
+    title: document.title || "",
+    visibleInteractiveCount: n,
+    elements: out,
+  };
+}"""
+
+
+def _hero_misp_diag_scrape_main_process_frames(
+    page,
+    *,
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
+) -> None:
+    """
+    Before proposal field fills: dump visible interactive controls from **every** frame (main + iframes)
+    to ``Playwright_insurance_main_process_frames.txt`` so operators can anchor selectors when the form
+    lives outside ``page`` main document.
+    """
+    if not INSURANCE_MAIN_PROCESS_FRAME_SCRAPE:
+        return
+    if not ocr_output_dir or not subfolder or not str(subfolder).strip():
+        return
+    lines: list[str] = []
+    try:
+        pu = (page.url or "").strip()
+    except Exception:
+        pu = ""
+    lines.append("main_process frame scrape — visible inputs, selects, textareas, buttons, links, ARIA roles")
+    lines.append(f"page.url (top)={pu!r}")
+    lines.append("")
+    frames = list(page.frames)
+    lines.append(f"frame_count={len(frames)}")
+    lines.append("")
+    for idx, fr in enumerate(frames):
+        name = ""
+        try:
+            name = (fr.name or "").strip()
+        except Exception:
+            name = ""
+        fu = ""
+        try:
+            fu = (fr.url or "").strip()
+        except Exception:
+            fu = ""
+        lines.append(f"--- frame_index={idx} name={name!r} url={fu!r} ---")
+        try:
+            data = fr.evaluate(_MAIN_PROCESS_FRAME_SCRAPE_JS)
+            lines.append(json.dumps(data, ensure_ascii=False, indent=2))
+        except Exception as exc:
+            lines.append(json.dumps({"evaluateError": str(exc)[:500]}, ensure_ascii=False, indent=2))
+        lines.append("")
+    body = "\n".join(lines) + "\n"
+    out_path = write_playwright_insurance_auxiliary_text(
+        ocr_output_dir,
+        subfolder,
+        "Playwright_insurance_main_process_frames.txt",
+        body,
+    )
+    if out_path:
+        append_playwright_insurance_line(
+            ocr_output_dir,
+            subfolder,
+            "NOTE",
+            f"main_process: per-frame visible control scrape → {out_path.name} (same folder as Playwright_insurance.txt)",
+        )
+        logger.info(
+            "Hero Insurance: main_process frame scrape written to %s (%s frames).",
+            out_path,
+            len(frames),
+        )
+
+
 def _fill_date_of_registration_today(page, *, timeout_ms: int) -> None:
     """Hardcoded proposal default: **today** (local date)."""
     today = date.today()
@@ -4513,6 +4635,9 @@ def main_process(
                 ocr_output_dir, subfolder, "NOTE", f"main_process: I agree step failed: {err}"
             )
             return out
+        _hero_misp_diag_scrape_main_process_frames(
+            page, ocr_output_dir=ocr_output_dir, subfolder=subfolder
+        )
         prop_err, preview = _hero_misp_fill_proposal_and_review(page, values, timeout_ms=to)
         if prop_err:
             out["error"] = prop_err
