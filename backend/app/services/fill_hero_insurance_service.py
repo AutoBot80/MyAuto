@@ -209,6 +209,20 @@ def _t(page, ms: int) -> None:
         pass
 
 
+def _insurance_kyc_trace(
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
+    phase: str,
+    detail: str,
+) -> None:
+    """Append ``Playwright_insurance.txt`` NOTE + ``logger.info`` so operators can see KYC phase timing."""
+    msg = f"KYC trace [{phase}] {detail}"
+    append_playwright_insurance_line_or_dealer_fallback(
+        ocr_output_dir, subfolder, "NOTE", msg
+    )
+    logger.info("Hero Insurance: %s", msg[:900])
+
+
 def _insurance_click_settle(page) -> None:
     """Fixed pause for MISP navigation (Sign In → 2W → New Policy …). ``INSURANCE_CLICK_SETTLE_MS`` (default 35)."""
     _t(page, min(INSURANCE_CLICK_SETTLE_MS, 15_000))
@@ -261,6 +275,69 @@ def _hero_insurance_log_page_diagnostics(
     )
 
 
+def _kyc_simulate_tab_away_and_back(
+    page,
+    *,
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
+) -> None:
+    """
+    Operators report MISP KYC only advances after leaving the page and returning; synthetic ``blur``
+    events are not always enough. Briefly focus another browser tab so the KYC document gets a real
+    ``visibilityState`` hidden/visible transition (WebForms / UpdatePanel).
+    """
+    try:
+        ctx = page.context
+    except Exception:
+        return
+    blank = None
+    try:
+        blank = ctx.new_page()
+        blank.goto("about:blank", timeout=8_000)
+        blank.bring_to_front()
+    except Exception as exc:
+        logger.debug("Hero Insurance: KYC tab-away simulation (new page): %s", exc)
+        try:
+            if blank:
+                blank.close()
+        except Exception:
+            pass
+        return
+    try:
+        _t(page, 220)
+    except Exception:
+        pass
+    try:
+        page.bring_to_front()
+    except Exception:
+        pass
+    try:
+        blank.close()
+    except Exception:
+        pass
+    try:
+        _t(page, 120)
+    except Exception:
+        pass
+    logger.info(
+        "Hero Insurance: KYC — simulated tab away/back (about:blank) for insurer visibility transition."
+    )
+    append_playwright_insurance_line_or_dealer_fallback(
+        ocr_output_dir,
+        subfolder,
+        "NOTE",
+        "KYC: simulated tab away/back (temporary about:blank tab) to finalize insurer visibility for MISP.",
+    )
+    # #region agent log
+    _dbg_kyc_insurer_tab_ndjson(
+        "H8",
+        "_kyc_simulate_tab_away_and_back:after",
+        "restored KYC tab after temp tab",
+        _dbg_kyc_focus_snapshot(_kyc_preferred_kyc_frame(page), page),
+    )
+    # #endregion
+
+
 def _hero_insurance_kyc_nav_after_insurer_commit(
     page,
     *,
@@ -271,8 +348,9 @@ def _hero_insurance_kyc_nav_after_insurer_commit(
     After insurer is committed (keyboard Enter or DOM ``select_option``), **Tab** off the field
     so the portal commits the value (ASP.NET / postback). Optional **networkidle**
     (``INSURANCE_KYC_POST_INSURER_NETWORKIDLE_MS``) so the KYC pane can settle.
+    Then **tab away/back** so the page gets a real visibility transition when operators only unstick
+    by navigating away (see ``_kyc_simulate_tab_away_and_back``).
     """
-    _ = (ocr_output_dir, subfolder)
     try:
         page.keyboard.press("Enter")
     except Exception:
@@ -299,6 +377,9 @@ def _hero_insurance_kyc_nav_after_insurer_commit(
                 cap,
             )
     _t(page, 80)
+    _kyc_simulate_tab_away_and_back(
+        page, ocr_output_dir=ocr_output_dir, subfolder=subfolder
+    )
 
 
 def _kyc_body_text_lower(root) -> str:
@@ -1348,7 +1429,12 @@ def _select_option_fuzzy_in_select(
 
 
 def _fill_insurance_company_fuzzy_any_visible_select(
-    page, insurer: str, *, timeout_ms: int
+    page,
+    insurer: str,
+    *,
+    timeout_ms: int,
+    ocr_output_dir: Path | None = None,
+    subfolder: str | None = None,
 ) -> bool:
     """
     Try every ``<select>`` on the page whose option list fuzzy-matches the insurer.
@@ -1362,7 +1448,20 @@ def _fill_insurance_company_fuzzy_any_visible_select(
         n = min(selects.count(), 40)
     except Exception:
         return False
+    _insurance_kyc_trace(
+        ocr_output_dir,
+        subfolder,
+        "dom_fuzzy_select_scan",
+        f"start n_select_elements={n} (fuzzy match per select)",
+    )
     for i in range(n):
+        if i > 0 and i % 5 == 0:
+            _insurance_kyc_trace(
+                ocr_output_dir,
+                subfolder,
+                "dom_fuzzy_select_scan",
+                f"still scanning select index {i}/{n}",
+            )
         try:
             loc = selects.nth(i)
             if _select_option_fuzzy_in_select(
@@ -1372,14 +1471,33 @@ def _fill_insurance_company_fuzzy_any_visible_select(
                 timeout_ms=timeout_ms,
                 fuzzy_min_score=KYC_INSURER_FUZZY_MIN_SCORE,
             ):
+                _insurance_kyc_trace(
+                    ocr_output_dir,
+                    subfolder,
+                    "dom_fuzzy_select_scan",
+                    f"matched at select index {i}",
+                )
                 logger.info("Hero Insurance: insurer set via select index %s (fuzzy scan).", i)
                 return True
         except Exception:
             continue
+    _insurance_kyc_trace(
+        ocr_output_dir,
+        subfolder,
+        "dom_fuzzy_select_scan",
+        "finished no select matched",
+    )
     return False
 
 
-def _kyc_try_set_insurer_via_dom_in_frame(kyc_fr, insurer: str, *, timeout_ms: int) -> bool:
+def _kyc_try_set_insurer_via_dom_in_frame(
+    kyc_fr,
+    insurer: str,
+    *,
+    timeout_ms: int,
+    ocr_output_dir: Path | None = None,
+    subfolder: str | None = None,
+) -> bool:
     """
     Prefer native ``<select>`` + fuzzy option match inside the KYC frame — avoids slow keyboard typing
     and flaky Tab-out of custom combobox faces when the portal exposes a real ``<select>``.
@@ -1387,6 +1505,12 @@ def _kyc_try_set_insurer_via_dom_in_frame(kyc_fr, insurer: str, *, timeout_ms: i
     if not (insurer or "").strip():
         return False
     to = min(int(timeout_ms), 12_000)
+    _insurance_kyc_trace(
+        ocr_output_dir,
+        subfolder,
+        "dom_insurer",
+        "start labelled-select then fuzzy scan of all <select> in KYC frame",
+    )
     try:
         lab = kyc_fr.get_by_label(re.compile(r"Insurance\s*Company\s*\*?", re.I))
         if lab.count() > 0:
@@ -1397,6 +1521,12 @@ def _kyc_try_set_insurer_via_dom_in_frame(kyc_fr, insurer: str, *, timeout_ms: i
             except Exception:
                 tag = ""
             if tag == "select":
+                _insurance_kyc_trace(
+                    ocr_output_dir,
+                    subfolder,
+                    "dom_insurer",
+                    "Insurance Company label is <select> — fuzzy match options via fuzzy_best_option_label",
+                )
                 if _select_option_fuzzy_in_select(
                     kyc_fr,
                     lab,
@@ -1404,11 +1534,23 @@ def _kyc_try_set_insurer_via_dom_in_frame(kyc_fr, insurer: str, *, timeout_ms: i
                     timeout_ms=to,
                     fuzzy_min_score=KYC_INSURER_FUZZY_MIN_SCORE,
                 ):
+                    _insurance_kyc_trace(
+                        ocr_output_dir,
+                        subfolder,
+                        "dom_insurer",
+                        "success via labelled <select>",
+                    )
                     logger.info("Hero Insurance: KYC — Insurance Company set via labelled <select> in frame.")
                     return True
     except Exception:
         pass
-    return _fill_insurance_company_fuzzy_any_visible_select(kyc_fr, insurer, timeout_ms=to)
+    return _fill_insurance_company_fuzzy_any_visible_select(
+        kyc_fr,
+        insurer,
+        timeout_ms=to,
+        ocr_output_dir=ocr_output_dir,
+        subfolder=subfolder,
+    )
 
 
 def _kyc_force_blur_insurance_company_dropdown(kyc_fr) -> None:
@@ -1453,8 +1595,19 @@ def _insurer_type_query_variants(insurer: str) -> list[str]:
     return out
 
 
-def _kyc_collect_dropdown_option_texts(root) -> list[str]:
-    """Collect visible option strings; ``root`` is a **Page** or **Frame** (KYC list may be in an iframe)."""
+def _kyc_collect_dropdown_option_texts(
+    root,
+    *,
+    ocr_output_dir: Path | None = None,
+    subfolder: str | None = None,
+    trace_note: str = "",
+) -> list[str]:
+    """
+    Collect visible option strings; ``root`` is a **Page** or **Frame** (KYC list may be in an iframe).
+    When ``trace_note`` is set, logs elapsed ms and option count to ``Playwright_insurance.txt`` (list scan
+    + per-option visibility can be slow).
+    """
+    t0 = time.perf_counter()
     texts: list[str] = []
     try:
         root.wait_for_selector(
@@ -1490,6 +1643,14 @@ def _kyc_collect_dropdown_option_texts(root) -> list[str]:
                     continue
         except Exception:
             continue
+    if trace_note:
+        elapsed_ms = int((time.perf_counter() - t0) * 1000)
+        _insurance_kyc_trace(
+            ocr_output_dir,
+            subfolder,
+            "dropdown_options",
+            f"{trace_note} count={len(texts)} elapsed_ms={elapsed_ms}",
+        )
     return texts
 
 
@@ -2332,6 +2493,14 @@ def _fill_kyc_ekyc_keyboard_sop(
 
     cap = min(int(timeout_ms), 120_000)
     kyc_fr = _kyc_preferred_kyc_frame(page)
+    ad_max = max(1, KYC_KEYBOARD_INSURER_ARROW_DOWN_MAX)
+    _insurance_kyc_trace(
+        ocr_output_dir,
+        subfolder,
+        "keyboard_sop",
+        f"start label_len={len(insurer_label)} arrow_down_max={ad_max} "
+        f"type_prefer_skip_dom={type_prefer_skip_dom}",
+    )
     if type_prefer_skip_dom:
         logger.info(
             "Hero Insurance: KYC — prefer_insurer matches merged insurer (≥20%%); "
@@ -2341,7 +2510,11 @@ def _fill_kyc_ekyc_keyboard_sop(
         dom_ok = False
     else:
         dom_ok = _kyc_try_set_insurer_via_dom_in_frame(
-            kyc_fr, insurer_label, timeout_ms=min(cap, 8_000)
+            kyc_fr,
+            insurer_label,
+            timeout_ms=min(cap, 8_000),
+            ocr_output_dir=ocr_output_dir,
+            subfolder=subfolder,
         )
     # #region agent log
     _dbg_kyc_insurer_tab_ndjson(
@@ -2357,7 +2530,25 @@ def _fill_kyc_ekyc_keyboard_sop(
     )
     # #endregion
     if dom_ok:
+        _insurance_kyc_trace(
+            ocr_output_dir,
+            subfolder,
+            "kyc_path",
+            "insurer=DOM (native <select> fuzzy match in frame) — keyboard typing + ArrowDown loop skipped",
+        )
         logger.info("Hero Insurance: KYC — insurer set via DOM in frame (skipped keyboard typing).")
+    else:
+        kb_reason = (
+            "prefer_insurer_rule_skipped_dom"
+            if type_prefer_skip_dom
+            else "dom_fuzzy_select_failed_try_keyboard"
+        )
+        _insurance_kyc_trace(
+            ocr_output_dir,
+            subfolder,
+            "kyc_path",
+            f"insurer=KEYBOARD ({kb_reason}) — will type label, fuzzy-match list, then ArrowDown if needed",
+        )
     if not dom_ok:
         logger.debug("Hero Insurance: KYC keyboard SOP — starting (focus chain).")
         try:
@@ -2416,11 +2607,28 @@ def _fill_kyc_ekyc_keyboard_sop(
             return f"KYC keyboard SOP: could not type insurer: {exc!s}"
         _t(page, 100)
 
-        opts = _kyc_collect_dropdown_option_texts(kyc_fr)
+        _insurance_kyc_trace(
+            ocr_output_dir,
+            subfolder,
+            "keyboard_sop",
+            "typed insurer text — collecting visible dropdown options for fuzzy_best_option_label",
+        )
+        opts = _kyc_collect_dropdown_option_texts(
+            kyc_fr,
+            ocr_output_dir=ocr_output_dir,
+            subfolder=subfolder,
+            trace_note="first_collect_after_type",
+        )
         pick = (
             fuzzy_best_option_label(insurer_label, opts, min_score=KYC_INSURER_FUZZY_MIN_SCORE)
             if opts
             else None
+        )
+        _insurance_kyc_trace(
+            ocr_output_dir,
+            subfolder,
+            "keyboard_sop",
+            f"fuzzy_best_option_label on list: n_options={len(opts)} pick={pick!r}",
         )
         shown = _kyc_read_focused_control_text(page)
         matched = bool(pick) and not (pick or "").strip().lower().startswith("--select") and (
@@ -2428,7 +2636,20 @@ def _fill_kyc_ekyc_keyboard_sop(
             or _kyc_insurer_display_matches(insurer_label, pick or "")
         )
         if not matched:
-            for _ in range(max(1, KYC_KEYBOARD_INSURER_ARROW_DOWN_MAX)):
+            _insurance_kyc_trace(
+                ocr_output_dir,
+                subfolder,
+                "keyboard_sop",
+                f"initial fuzzy/display match failed — ArrowDown loop max={ad_max} "
+                f"(each step re-collects options + fuzzy match; can be slow)",
+            )
+            for ad_i in range(ad_max):
+                _insurance_kyc_trace(
+                    ocr_output_dir,
+                    subfolder,
+                    "keyboard_sop",
+                    f"ArrowDown step {ad_i + 1}/{ad_max} (press ArrowDown; then dropdown_options trace arrow_loop_{ad_i})",
+                )
                 try:
                     page.keyboard.press("ArrowDown")
                 except Exception:
@@ -2437,18 +2658,35 @@ def _fill_kyc_ekyc_keyboard_sop(
                 shown = _kyc_read_focused_control_text(page)
                 if _kyc_insurer_display_matches(insurer_label, shown):
                     matched = True
+                    _insurance_kyc_trace(
+                        ocr_output_dir,
+                        subfolder,
+                        "keyboard_sop",
+                        f"matched on ArrowDown at iteration {ad_i} shown={shown[:80]!r}",
+                    )
                     logger.info(
                         "Hero Insurance: KYC keyboard — insurer matched on ArrowDown (%r).",
                         shown[:90],
                     )
                     break
-                opts2 = _kyc_collect_dropdown_option_texts(kyc_fr)
+                opts2 = _kyc_collect_dropdown_option_texts(
+                    kyc_fr,
+                    ocr_output_dir=ocr_output_dir,
+                    subfolder=subfolder,
+                    trace_note=f"arrow_loop_{ad_i}",
+                )
                 if opts2:
                     cand = fuzzy_best_option_label(
                         insurer_label, opts2, min_score=KYC_INSURER_FUZZY_MIN_SCORE
                     )
                     if cand and _kyc_insurer_display_matches(insurer_label, cand):
                         matched = True
+                        _insurance_kyc_trace(
+                            ocr_output_dir,
+                            subfolder,
+                            "keyboard_sop",
+                            f"matched from list at iteration {ad_i} cand={cand[:80]!r}",
+                        )
                         logger.info(
                             "Hero Insurance: KYC keyboard — insurer matched from list (%r).",
                             (cand or "")[:90],
@@ -2460,6 +2698,12 @@ def _fill_kyc_ekyc_keyboard_sop(
                 f"insurer={insurer_label[:48]!r}"
             )
 
+        _insurance_kyc_trace(
+            ocr_output_dir,
+            subfolder,
+            "keyboard_sop",
+            "insurer row matched — commit keys (Enter/Escape) then aspnet/tab-out sequence",
+        )
         # Commit highlighted insurer: MISP/ASP.NET combobox often needs Enter twice, then Tab off, then Escape.
         try:
             page.keyboard.press("Enter")
