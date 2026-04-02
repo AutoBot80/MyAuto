@@ -2339,8 +2339,6 @@ def _kyc_try_click_mobile_field(kyc_fr, *, timeout_ms: int) -> bool:
     """Focus mobile input in the KYC frame before typing."""
     to = min(int(timeout_ms), 15_000)
     tries = (
-        lambda: kyc_fr.locator("#ContentPlaceHolder1_txtFrameNo"),
-        lambda: kyc_fr.locator("input[name*='txtFrameNo' i]"),
         lambda: kyc_fr.get_by_label(re.compile(r"^Mobile\s*(Number|No\.?|Phone)?\s*$", re.I)),
         lambda: kyc_fr.get_by_placeholder(re.compile(r"mobile", re.I)),
         lambda: kyc_fr.locator('input[type="tel"]'),
@@ -2451,11 +2449,12 @@ def _kyc_dom_fill_ovd_mobile_consent_in_frame(kyc_fr, mobile: str, *, timeout_ms
 
     _kyc_restore_kyc_partner_to_default_label(kyc_fr, pg, timeout_ms=to)
 
-    # Mobile often appears or enables only after OVD is set.
+    # Mobile often appears or enables only after OVD is set. Do **not** wait on ``txtFrameNo`` — that is
+    # the VIN/Chassis control on a **later** page (``divtxtFrameNo`` / ``ctl00_ContentPlaceHolder1_txtFrameNo``).
     try:
         kyc_fr.locator(
-            '#ContentPlaceHolder1_txtFrameNo, input[name*="txtFrameNo" i], '
-            'input[type="tel"], input[name*="mobile" i], input[id*="mobile" i]'
+            'input[type="tel"], input[name*="mobile" i], input[id*="mobile" i], '
+            'input[id*="Mobile" i], input[name*="MobileNo" i]'
         ).first.wait_for(state="visible", timeout=min(12_000, to))
     except Exception:
         _t(pg, 450)
@@ -3097,27 +3096,105 @@ def _hero_misp_page_and_frame_roots(page):
     return roots
 
 
+def _hero_misp_wait_vin_shell_ready(page, *, timeout_ms: int) -> None:
+    """
+    VIN step often loads inside ASP.NET UpdatePanel ``#ctl00_ContentPlaceHolder1_upnlAddStateMaster``
+    and ``#mainContainer`` (possibly inside a child frame). Wait for DOM attachment before filling.
+    """
+    to = min(int(timeout_ms), 18_000)
+    for shell in (
+        "#ctl00_ContentPlaceHolder1_upnlAddStateMaster",
+        "#mainContainer",
+    ):
+        for root in _hero_misp_page_and_frame_roots(page):
+            try:
+                root.locator(shell).first.wait_for(state="attached", timeout=to)
+                logger.debug("Hero Insurance: VIN shell attached (%s).", shell[:52])
+                return
+            except Exception:
+                continue
+
+
 def _hero_misp_fill_vin_txt_frame_no(page, vin: str, *, timeout_ms: int) -> bool:
-    """Real MISP VIN step: ``ctl00$ContentPlaceHolder1$txtFrameNo``."""
+    """
+    Real MISP VIN step: ``ctl00$ContentPlaceHolder1$txtFrameNo`` — often under ``upnlAddStateMaster`` /
+    ``mainContainer`` in a **frame**; visibility checks alone can skip inputs that need ``force`` / scroll.
+    """
     v = (vin or "").strip()[:64]
     if not v:
         return False
-    for sel in (
+    to = min(int(timeout_ms), 90_000)
+    _hero_misp_wait_vin_shell_ready(page, timeout_ms=to)
+
+    # MISP markup: ``div#divtxtFrameNo.input-container`` + ``input#ctl00_ContentPlaceHolder1_txtFrameNo``,
+    # label text **VIN Number** (``label for="txtFrameNo"`` vs full client id — use label + container).
+    selectors = (
+        "#divtxtFrameNo input[name*='txtFrameNo' i]",
+        "#divtxtFrameNo input.txtBox",
+        "#divtxtFrameNo input[type='text']",
+        'input#ctl00_ContentPlaceHolder1_txtFrameNo',
+        '#ctl00_ContentPlaceHolder1_upnlAddStateMaster input[name="ctl00$ContentPlaceHolder1$txtFrameNo"]',
+        '#mainContainer input[name="ctl00$ContentPlaceHolder1$txtFrameNo"]',
+        '#ctl00_ContentPlaceHolder1_upnlAddStateMaster input[name*="txtFrameNo" i]',
+        '#mainContainer input[name*="txtFrameNo" i]',
+        '#ctl00_ContentPlaceHolder1_upnlAddStateMaster #ContentPlaceHolder1_txtFrameNo',
+        '#mainContainer #ContentPlaceHolder1_txtFrameNo',
         'input[name="ctl00$ContentPlaceHolder1$txtFrameNo"]',
         "#ContentPlaceHolder1_txtFrameNo",
+        'input[id="ctl00_ContentPlaceHolder1_txtFrameNo"]',
         'input[name*="txtFrameNo" i]',
-    ):
+        'input[id*="txtFrameNo" i]',
+    )
+    for sel in selectors:
         for root in _hero_misp_page_and_frame_roots(page):
             try:
                 loc = root.locator(sel)
                 if loc.count() == 0:
                     continue
                 el = loc.first
-                if not el.is_visible(timeout=3_000):
+                el.wait_for(state="attached", timeout=min(12_000, to))
+                try:
+                    el.scroll_into_view_if_needed(timeout=3_000)
+                except Exception:
+                    pass
+                el.fill("", timeout=to)
+                el.fill(v, timeout=to, force=True)
+                logger.info("Hero Insurance: filled VIN/Chassis (%s).", sel[:72])
+                return True
+            except Exception:
+                continue
+    return False
+
+
+def _hero_misp_fill_vin_fallback_all_frames(page, vin: str, *, timeout_ms: int) -> bool:
+    """Label / fuzzy locators scoped to main page and every frame (not only top document)."""
+    v = (vin or "").strip()[:64]
+    if not v:
+        return False
+    to = min(int(timeout_ms), 60_000)
+    factories = (
+        lambda r: r.get_by_label(re.compile(r"VIN\s*Number|VIN|Chassis|Vehicle\s*Identification|Frame\s*No", re.I)),
+        lambda r: r.locator("#divtxtFrameNo input.txtBox"),
+        lambda r: r.locator('input[name*="vin" i]'),
+        lambda r: r.locator('input[id*="vin" i]'),
+        lambda r: r.locator('input[placeholder*="VIN" i]'),
+        lambda r: r.get_by_placeholder(re.compile(r"chassis|vin|frame", re.I)),
+    )
+    for fac in factories:
+        for root in _hero_misp_page_and_frame_roots(page):
+            try:
+                loc = fac(root)
+                if loc.count() == 0:
                     continue
-                el.fill("", timeout=timeout_ms)
-                el.fill(v, timeout=timeout_ms, force=True)
-                logger.info("Hero Insurance: filled VIN/Chassis (%s).", sel[:56])
+                el = loc.first
+                el.wait_for(state="attached", timeout=min(8_000, to))
+                try:
+                    el.scroll_into_view_if_needed(timeout=3_000)
+                except Exception:
+                    pass
+                el.fill("", timeout=to)
+                el.fill(v, timeout=to, force=True)
+                logger.info("Hero Insurance: filled VIN/Chassis (fallback in frame).")
                 return True
             except Exception:
                 continue
@@ -3125,21 +3202,30 @@ def _hero_misp_fill_vin_txt_frame_no(page, vin: str, *, timeout_ms: int) -> bool
 
 
 def _hero_misp_click_vin_page_submit(page, *, timeout_ms: int) -> bool:
-    """Real MISP: ``ctl00$ContentPlaceHolder1$btnSubmit``."""
-    for sel in (
+    """Real MISP: ``ctl00$ContentPlaceHolder1$btnSubmit`` (often next to VIN inside UpdatePanel)."""
+    to = min(int(timeout_ms), 60_000)
+    selectors = (
+        '#ctl00_ContentPlaceHolder1_upnlAddStateMaster input[type="submit"][name="ctl00$ContentPlaceHolder1$btnSubmit"]',
+        '#mainContainer input[type="submit"][name="ctl00$ContentPlaceHolder1$btnSubmit"]',
+        '#ctl00_ContentPlaceHolder1_upnlAddStateMaster input[name="ctl00$ContentPlaceHolder1$btnSubmit"]',
+        '#mainContainer input[name="ctl00$ContentPlaceHolder1$btnSubmit"]',
         'input[type="submit"][name="ctl00$ContentPlaceHolder1$btnSubmit"]',
         'input[name="ctl00$ContentPlaceHolder1$btnSubmit"]',
-    ):
+    )
+    for sel in selectors:
         for root in _hero_misp_page_and_frame_roots(page):
             try:
                 loc = root.locator(sel)
                 if loc.count() == 0:
                     continue
                 el = loc.first
-                if not el.is_visible(timeout=2_000):
-                    continue
-                el.click(timeout=timeout_ms)
-                logger.info("Hero Insurance: clicked VIN Submit (%s).", sel[:56])
+                el.wait_for(state="attached", timeout=min(10_000, to))
+                try:
+                    el.scroll_into_view_if_needed(timeout=3_000)
+                except Exception:
+                    pass
+                el.click(timeout=to, force=True)
+                logger.info("Hero Insurance: clicked VIN Submit (%s).", sel[:72])
                 return True
             except Exception:
                 continue
@@ -3160,22 +3246,7 @@ def _hero_misp_vin_submit_i_agree(page, values: dict, *, timeout_ms: int) -> str
 
     filled = _hero_misp_fill_vin_txt_frame_no(page, vin, timeout_ms=timeout_ms)
     if not filled:
-        for loc in (
-            page.get_by_label(re.compile(r"VIN|Chassis|Vehicle\s*Identification", re.I)),
-            page.locator('input[name*="vin" i]'),
-            page.locator('input[id*="vin" i]'),
-            page.locator('input[placeholder*="VIN" i]'),
-            page.get_by_placeholder(re.compile(r"chassis|vin|frame", re.I)),
-        ):
-            try:
-                if loc.count() > 0 and loc.first.is_visible(timeout=3_000):
-                    loc.first.fill("", timeout=timeout_ms)
-                    loc.first.fill(vin[:64], timeout=timeout_ms)
-                    filled = True
-                    logger.info("Hero Insurance: filled VIN/Chassis field.")
-                    break
-            except Exception:
-                continue
+        filled = _hero_misp_fill_vin_fallback_all_frames(page, vin, timeout_ms=timeout_ms)
     if not filled:
         return "Could not find VIN/Chassis input after KYC Proceed (expected redirect to VIN page)."
 
