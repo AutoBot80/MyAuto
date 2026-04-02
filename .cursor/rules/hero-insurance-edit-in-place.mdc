@@ -1,0 +1,13 @@
+---
+description: Hero MISP insurance — extend existing flows; no parallel dead code without owner ask
+globs: backend/app/services/fill_hero_insurance_service.py
+alwaysApply: false
+---
+
+# Hero Insurance (`fill_hero_insurance_service.py`)
+
+When changing **proposal**, **Proposal Review**, **Issue Policy**, **main_process**, or related KYC/VIN steps:
+
+1. **Edit the existing functions** (e.g. `_hero_misp_fill_proposal_and_review`, `click_issue_policy_and_scrape_preview`, `main_process`, `_hero_misp_i_agree_after_vin_submit`) and the **module-level toggles** already in this file.
+2. **Do not** add parallel code paths, duplicate flows, or new top-level orchestration **unless the project owner explicitly asks** for that structure.
+3. Preserve Siebel/contact fragile rules from the separate workspace rule; this file is **Hero MISP insurance only**.

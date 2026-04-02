@@ -177,15 +177,6 @@ INSURANCE_LOGIN_WAIT_MS = int(os.getenv("INSURANCE_LOGIN_WAIT_MS", "600000"))
 INSURANCE_ACTION_TIMEOUT_MS = int(os.getenv("INSURANCE_ACTION_TIMEOUT_MS", "5500"))
 # Tighter timeout while filling the policy / insurance-details form (many sequential fields).
 INSURANCE_POLICY_FILL_TIMEOUT_MS = int(os.getenv("INSURANCE_POLICY_FILL_TIMEOUT_MS", "3200"))
-# DIAG ``login_page_snapshot`` lines: default is a short per-frame summary. Set true for legacy full per-control dict dumps.
-_INSURANCE_DIAG_FULL_RAW = (os.getenv("INSURANCE_DIAG_FULL_CONTROL_SNAPSHOT") or "").strip().lower()
-INSURANCE_DIAG_FULL_CONTROL_SNAPSHOT = _INSURANCE_DIAG_FULL_RAW in ("1", "true", "yes", "on")
-
-# When true (default), before automating MISP KYC, append a **kyc_nav_scrape** DIAG block: page metrics,
-# activeElement, and visible inputs/selects/buttons/links per frame (see ``fill_hero_insurance_service``).
-_KYC_NAV_SCRAPE_RAW = (os.getenv("INSURANCE_KYC_NAV_SCRAPE") or "1").strip().lower()
-INSURANCE_KYC_NAV_SCRAPE = _KYC_NAV_SCRAPE_RAW not in ("0", "false", "no", "off")
-
 # Hero MISP KYC (``ekycpage`` / ``kycpage.aspx`` / ``/ekyc`` / ``/apps/kyc/``): optional keyboard SOP
 # (click iframe/body → Tab → type insurer → …). See ``fill_hero_insurance_service._fill_kyc_ekyc_keyboard_sop``.
 def _int_env(name: str, default: int) -> int:
@@ -202,9 +193,9 @@ KYC_KEYBOARD_TABS_MOBILE_TO_CONSENT = _int_env("KYC_KEYBOARD_TABS_MOBILE_TO_CONS
 KYC_KEYBOARD_INSURER_ARROW_DOWN_MAX = _int_env("KYC_KEYBOARD_INSURER_ARROW_DOWN_MAX", 60)
 KYC_KEYBOARD_OVD_ARROW_DOWN_MAX = _int_env("KYC_KEYBOARD_OVD_ARROW_DOWN_MAX", 28)
 
-# After insurer commit (KYC DIAG): max wait (ms) for ``networkidle`` before ``kyc_nav_scrape_after_insurer_networkidle``. 0 = skip.
+# After insurer commit: max wait (ms) for ``networkidle`` so KYC can settle. 0 = skip.
 INSURANCE_KYC_POST_INSURER_NETWORKIDLE_MS = _int_env("INSURANCE_KYC_POST_INSURER_NETWORKIDLE_MS", 20_000)
-# After KYC Partner select (KYC DIAG): max wait (ms) for ``networkidle`` before ``kyc_nav_scrape_after_kyc_partner``. 0 = skip.
+# After KYC Partner select: max wait (ms) for ``networkidle``. 0 = skip.
 INSURANCE_KYC_POST_KYC_PARTNER_NETWORKIDLE_MS = _int_env("INSURANCE_KYC_POST_KYC_PARTNER_NETWORKIDLE_MS", 15_000)
 # Default portal label for MISP **KYC Partner** when ``values['kyc_partner']`` is unset (documentation only;
 # automation does not change ``ddlkycPartner`` — portal default e.g. Signzy remains).
