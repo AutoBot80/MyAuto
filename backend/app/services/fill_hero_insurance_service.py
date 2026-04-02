@@ -343,24 +343,33 @@ def _hero_insurance_kyc_nav_after_insurer_commit(
     *,
     ocr_output_dir: Path | None,
     subfolder: str | None,
+    light: bool = False,
 ) -> None:
     """
-    After insurer is committed (keyboard Enter or DOM ``select_option``), **Tab** off the field
+    After insurer is committed (keyboard Enter or DOM ``select_option``), optionally **Enter** + **Tab**
     so the portal commits the value (ASP.NET / postback). Optional **networkidle**
     (``INSURANCE_KYC_POST_INSURER_NETWORKIDLE_MS``) so the KYC pane can settle.
     Then **tab away/back** so the page gets a real visibility transition when operators only unstick
     by navigating away (see ``_kyc_simulate_tab_away_and_back``).
+
+    When ``light`` is True (eKYC keyboard SOP after DOM ``select_option`` or after the full keyboard
+    Enter/Tab/Escape chain): skip the extra **Enter**, **Tab**, and tab-away simulation. Those were
+    duplicating commits already sent in the keyboard block or moving focus to **KYC Partner** after
+    a successful native ``select_option``.
     """
-    try:
-        page.keyboard.press("Enter")
-    except Exception:
-        pass
-    _t(page, 60)
-    try:
-        page.keyboard.press("Tab")
-    except Exception:
-        pass
-    _t(page, 80)
+    if not light:
+        try:
+            page.keyboard.press("Enter")
+        except Exception:
+            pass
+        _t(page, 60)
+        try:
+            page.keyboard.press("Tab")
+        except Exception:
+            pass
+        _t(page, 80)
+    else:
+        _t(page, 80)
     try:
         page.wait_for_load_state("domcontentloaded", timeout=3_000)
     except Exception:
@@ -377,9 +386,10 @@ def _hero_insurance_kyc_nav_after_insurer_commit(
                 cap,
             )
     _t(page, 80)
-    _kyc_simulate_tab_away_and_back(
-        page, ocr_output_dir=ocr_output_dir, subfolder=subfolder
-    )
+    if not light:
+        _kyc_simulate_tab_away_and_back(
+            page, ocr_output_dir=ocr_output_dir, subfolder=subfolder
+        )
 
 
 def _kyc_body_text_lower(root) -> str:
@@ -2631,6 +2641,7 @@ def _fill_kyc_ekyc_keyboard_sop(
             f"in-code fuzzy; ArrowDown only if still unmatched",
         )
     if not dom_ok:
+        keyboard_native_select_committed = False
         logger.debug("Hero Insurance: KYC keyboard SOP — starting (focus chain).")
         try:
             page.bring_to_front()
@@ -2737,6 +2748,7 @@ def _fill_kyc_ekyc_keyboard_sop(
                         label=pick, timeout=min(cap, 8_000), force=True
                     )
                     matched = True
+                    keyboard_native_select_committed = True
                     _insurance_kyc_trace(
                         ocr_output_dir,
                         subfolder,
@@ -2823,39 +2835,50 @@ def _fill_kyc_ekyc_keyboard_sop(
                 f"insurer={insurer_label[:48]!r}"
             )
 
-        _insurance_kyc_trace(
-            ocr_output_dir,
-            subfolder,
-            "keyboard_sop",
-            "insurer row matched — commit keys (Enter/Escape) then aspnet/tab-out sequence",
-        )
-        # Commit highlighted insurer: MISP/ASP.NET combobox often needs Enter twice, then Tab off, then Escape.
-        try:
-            page.keyboard.press("Enter")
-        except Exception:
-            pass
-        _t(page, 100)
-        try:
-            page.keyboard.press("Enter")
-        except Exception:
-            pass
-        _t(page, 120)
-        try:
-            page.keyboard.press("Tab")
-        except Exception:
-            pass
-        _t(page, 100)
-        try:
-            page.keyboard.press("Escape")
-        except Exception:
-            pass
-        _t(page, 180)
-        _kyc_aspnet_signal_insurer_committed(kyc_fr, page)
-        _kyc_force_blur_insurance_company_dropdown(kyc_fr)
-        _kyc_tab_out_of_insurer_after_escape(page, kyc_fr)
-        _kyc_blur_if_insurer_product_select_focused(kyc_fr)
-        _kyc_blur_insurer_product_select_in_frame(kyc_fr)
-        _t(page, 120)
+        if keyboard_native_select_committed:
+            _insurance_kyc_trace(
+                ocr_output_dir,
+                subfolder,
+                "keyboard_sop",
+                "insurer set via native select_option — skip Enter/Tab/Escape/tab-out (already committed)",
+            )
+            _kyc_aspnet_signal_insurer_committed(kyc_fr, page)
+            _kyc_force_blur_insurance_company_dropdown(kyc_fr)
+            _t(page, 80)
+        else:
+            _insurance_kyc_trace(
+                ocr_output_dir,
+                subfolder,
+                "keyboard_sop",
+                "insurer row matched — commit keys (Enter/Escape) then aspnet/tab-out sequence",
+            )
+            # Commit highlighted insurer: MISP/ASP.NET combobox often needs Enter twice, then Tab off, then Escape.
+            try:
+                page.keyboard.press("Enter")
+            except Exception:
+                pass
+            _t(page, 100)
+            try:
+                page.keyboard.press("Enter")
+            except Exception:
+                pass
+            _t(page, 120)
+            try:
+                page.keyboard.press("Tab")
+            except Exception:
+                pass
+            _t(page, 100)
+            try:
+                page.keyboard.press("Escape")
+            except Exception:
+                pass
+            _t(page, 180)
+            _kyc_aspnet_signal_insurer_committed(kyc_fr, page)
+            _kyc_force_blur_insurance_company_dropdown(kyc_fr)
+            _kyc_tab_out_of_insurer_after_escape(page, kyc_fr)
+            _kyc_blur_if_insurer_product_select_focused(kyc_fr)
+            _kyc_blur_insurer_product_select_in_frame(kyc_fr)
+            _t(page, 120)
     if dom_ok:
         _kyc_aspnet_signal_insurer_committed(kyc_fr, page)
         _kyc_force_blur_insurance_company_dropdown(kyc_fr)
@@ -2873,9 +2896,13 @@ def _fill_kyc_ekyc_keyboard_sop(
     )
     # #endregion
     # Proposer/OVD are often not in the DOM until insurer is chosen.
-    # Tab out + re-scrape captures new <select> ids and partner options after commit.
+    # eKYC keyboard SOP: use light nav — insurer path already sent Enter/Tab/Escape or DOM select_option;
+    # extra Enter+Tab+tab-away duplicated commits and moved focus to KYC Partner.
     _hero_insurance_kyc_nav_after_insurer_commit(
-        page, ocr_output_dir=ocr_output_dir, subfolder=subfolder
+        page,
+        ocr_output_dir=ocr_output_dir,
+        subfolder=subfolder,
+        light=True,
     )
     _kyc_select_kyc_partner_if_available(page, kyc_fr, values, timeout_ms=cap)
     _hero_insurance_kyc_nav_after_kyc_partner_commit(
