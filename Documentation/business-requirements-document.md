@@ -457,3 +457,5 @@ Bulk upload automates the ingestion of scanned documents from a shared folder in
 | 3.91 | Apr 2026 | — | **§6.6** KYC keyboard: insurer/mobile clicks + **`Control+A`** only when the focused element is editable (avoids selecting all page text) — **LLD** **6.145**, **HLD** **1.81** |
 | 3.92 | Apr 2026 | — | **§6.6** Optional **`kyc_nav_scrape`** **`[DIAG]`** on KYC (visible controls + page metrics per frame) before automation — **LLD** **6.146**, **HLD** **1.82** |
 | 3.93 | Apr 2026 | — | **§6.6** **`kyc_nav_scrape`** includes **`all_selects`** (every **`<select>`**, including hidden) for **ContentPlaceHolder1** / OVD mapping — **LLD** **6.147**, **HLD** **1.83** |
+| 3.94 | Apr 2026 | — | **§6.6** **`kyc_nav_scrape_after_insurer`** after insurer commit (Tab blur + scrape) — **LLD** **6.148**, **HLD** **1.84** |
+| 3.95 | Apr 2026 | — | **§6.6** KYC insurer fuzzy matching (typos vs portal labels) — **LLD** **6.149**, **HLD** **1.85** |

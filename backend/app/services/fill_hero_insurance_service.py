@@ -5,6 +5,7 @@ on the VIN page; **main_process** fills VIN from DB (**``full_chassis``** via ``
 email, add-ons, CPA, HDFC, and registration date use **hardcoded** defaults. **Proposal Review**, then **Issue Policy**; scrape **policy number** and **insurance cost** again and persist via ``update_insurance_master_policy_after_issue``.
 Browser reuse uses ``handle_browser_opening.get_or_open_site_page`` with ``match_base`` from **pre_process**.
 """
+import difflib
 import logging
 import re
 import time
@@ -28,6 +29,8 @@ from app.config import (
     KYC_KEYBOARD_TABS_MOBILE_TO_CONSENT,
     KYC_KEYBOARD_TABS_OVD_TO_MOBILE,
     KYC_KEYBOARD_TABS_TO_INSURANCE_FIELD,
+    KYC_INSURER_DISPLAY_SEQUENCE_MIN,
+    KYC_INSURER_FUZZY_MIN_SCORE,
     KYC_USE_KEYBOARD_EKYC_SOP,
 )
 from app.services.add_sales_commit_service import (
@@ -628,6 +631,41 @@ def _hero_insurance_log_kyc_navigation_scrape(
         subfolder,
         "DIAG",
         f"kyc_nav_scrape {phase}: " + blob.replace("\n", " \\n "),
+    )
+
+
+def _hero_insurance_kyc_nav_after_insurer_commit(
+    page,
+    *,
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
+) -> None:
+    """
+    After insurer is committed (keyboard Enter or DOM ``select_option``), **Tab** off the field,
+    wait for DOM/postback, then append **kyc_nav_scrape** with phase ``kyc_nav_scrape_after_insurer``
+    so logs show Proposer/OVD ``<select>`` s when the portal injects them.
+
+    Requires ``ocr_output_dir`` + ``subfolder`` and ``INSURANCE_KYC_NAV_SCRAPE`` (same as other KYC DIAG).
+    """
+    if not INSURANCE_KYC_NAV_SCRAPE:
+        return
+    if not ocr_output_dir or not str(subfolder or "").strip():
+        return
+    try:
+        page.keyboard.press("Tab")
+    except Exception:
+        pass
+    _t(page, 450)
+    try:
+        page.wait_for_load_state("domcontentloaded", timeout=6_000)
+    except Exception:
+        pass
+    _t(page, 300)
+    _hero_insurance_log_kyc_navigation_scrape(
+        page,
+        phase="kyc_nav_scrape_after_insurer",
+        ocr_output_dir=ocr_output_dir,
+        subfolder=subfolder,
     )
 
 
@@ -1366,7 +1404,14 @@ def _misp_resolve_page_after_possible_new_tab(
     return fallback_page
 
 
-def _select_option_fuzzy_in_select(page, select_locator, query: str, *, timeout_ms: int) -> bool:
+def _select_option_fuzzy_in_select(
+    page,
+    select_locator,
+    query: str,
+    *,
+    timeout_ms: int,
+    fuzzy_min_score: float = 0.42,
+) -> bool:
     if not (query or "").strip():
         return False
     try:
@@ -1387,7 +1432,7 @@ def _select_option_fuzzy_in_select(page, select_locator, query: str, *, timeout_
                     labels.append(t)
         if not labels:
             return False
-        pick = fuzzy_best_option_label(query, labels)
+        pick = fuzzy_best_option_label(query, labels, min_score=fuzzy_min_score)
         if not pick:
             return False
         try:
@@ -1427,7 +1472,13 @@ def _fill_insurance_company_fuzzy_any_visible_select(
     for i in range(n):
         try:
             loc = selects.nth(i)
-            if _select_option_fuzzy_in_select(page, loc, insurer, timeout_ms=timeout_ms):
+            if _select_option_fuzzy_in_select(
+                page,
+                loc,
+                insurer,
+                timeout_ms=timeout_ms,
+                fuzzy_min_score=KYC_INSURER_FUZZY_MIN_SCORE,
+            ):
                 logger.info("Hero Insurance: insurer set via select index %s (fuzzy scan).", i)
                 return True
         except Exception:
@@ -1613,7 +1664,13 @@ def _fill_insurance_company_typeahead_fuzzy(page, insurer: str, *, timeout_ms: i
     try:
         tag = (ctrl.evaluate("el => (el && el.tagName) ? el.tagName : ''") or "").upper()
         if tag == "SELECT":
-            return _select_option_fuzzy_in_select(page, ctrl, insurer, timeout_ms=timeout_ms)
+            return _select_option_fuzzy_in_select(
+                page,
+                ctrl,
+                insurer,
+                timeout_ms=timeout_ms,
+                fuzzy_min_score=KYC_INSURER_FUZZY_MIN_SCORE,
+            )
     except Exception:
         pass
     try:
@@ -1633,7 +1690,9 @@ def _fill_insurance_company_typeahead_fuzzy(page, insurer: str, *, timeout_ms: i
             opts = _kyc_collect_dropdown_option_texts(page)
             if not opts:
                 continue
-            pick = fuzzy_best_option_label(insurer, opts)
+            pick = fuzzy_best_option_label(
+                insurer, opts, min_score=KYC_INSURER_FUZZY_MIN_SCORE
+            )
             if pick and _click_role_option_matching(page, pick, timeout_ms=timeout_ms):
                 logger.info(
                     "Hero Insurance: insurer chosen via typeahead fuzzy (%r → %r).",
@@ -1708,13 +1767,37 @@ def _kyc_read_focused_control_text(page) -> str:
 
 
 def _kyc_insurer_display_matches(insurer: str, displayed: str) -> bool:
+    """
+    True when details-sheet ``insurer`` matches portal display text (keyboard SOP / focused control).
+
+    Uses a **lower** ``min_score`` than generic dropdown matching (see ``KYC_INSURER_FUZZY_MIN_SCORE``)
+    plus a **SequenceMatcher** fallback for DB typos vs full insurer legal names on MISP.
+    """
     d = (displayed or "").strip()
     if not d or d.lower().startswith("--select"):
         return False
-    pick = fuzzy_best_option_label(insurer, [d])
-    if not pick:
+    pick = fuzzy_best_option_label(
+        insurer, [d], min_score=KYC_INSURER_FUZZY_MIN_SCORE
+    )
+    if pick:
+        return True
+    qi = normalize_for_fuzzy_match(insurer)
+    di = normalize_for_fuzzy_match(d)
+    if not qi or not di:
         return False
-    return normalize_for_fuzzy_match(pick) == normalize_for_fuzzy_match(d)
+    if difflib.SequenceMatcher(None, qi, di).ratio() >= KYC_INSURER_DISPLAY_SEQUENCE_MIN:
+        return True
+    # Short query vs long portal string (concatenated options / legal name): slide a window of ~len(qi).
+    if len(qi) >= 6 and len(di) > len(qi):
+        wl = min(len(qi) + 24, len(di), 64)
+        best = 0.0
+        step = max(1, wl // 6)
+        for start in range(0, max(1, len(di) - wl + 1), step):
+            window = di[start : start + wl]
+            best = max(best, difflib.SequenceMatcher(None, qi, window).ratio())
+        if best >= KYC_INSURER_DISPLAY_SEQUENCE_MIN:
+            return True
+    return False
 
 
 def _kyc_press_tab_n(page, n: int, *, pause_ms: int = 90) -> None:
@@ -1928,7 +2011,14 @@ def _kyc_dom_fill_ovd_mobile_consent_in_frame(kyc_fr, mobile: str, *, timeout_ms
     return None
 
 
-def _fill_kyc_ekyc_keyboard_sop(page, values: dict, *, timeout_ms: int) -> str | None:
+def _fill_kyc_ekyc_keyboard_sop(
+    page,
+    values: dict,
+    *,
+    timeout_ms: int,
+    ocr_output_dir: Path | None = None,
+    subfolder: str | None = None,
+) -> str | None:
     """
     Keyboard SOP for ``ekycpage.aspx`` (focus document → Tab to Insurance Company → type to filter →
     ArrowDown until fuzzy match → Enter → Tab to OVD → ArrowDown to Aadhaar → Tab to mobile → type →
@@ -2004,7 +2094,11 @@ def _fill_kyc_ekyc_keyboard_sop(page, values: dict, *, timeout_ms: int) -> str |
     _t(page, 480)
 
     opts = _kyc_collect_dropdown_option_texts(kyc_fr)
-    pick = fuzzy_best_option_label(insurer, opts) if opts else None
+    pick = (
+        fuzzy_best_option_label(insurer, opts, min_score=KYC_INSURER_FUZZY_MIN_SCORE)
+        if opts
+        else None
+    )
     shown = _kyc_read_focused_control_text(page)
     matched = bool(pick) and not (pick or "").strip().lower().startswith("--select") and (
         _kyc_insurer_display_matches(insurer, shown)
@@ -2027,7 +2121,9 @@ def _fill_kyc_ekyc_keyboard_sop(page, values: dict, *, timeout_ms: int) -> str |
                 break
             opts2 = _kyc_collect_dropdown_option_texts(kyc_fr)
             if opts2:
-                cand = fuzzy_best_option_label(insurer, opts2)
+                cand = fuzzy_best_option_label(
+                    insurer, opts2, min_score=KYC_INSURER_FUZZY_MIN_SCORE
+                )
                 if cand and _kyc_insurer_display_matches(insurer, cand):
                     matched = True
                     logger.info(
@@ -2047,8 +2143,14 @@ def _fill_kyc_ekyc_keyboard_sop(page, values: dict, *, timeout_ms: int) -> str |
         pass
     # Let the insurer dropdown close / DOM settle before Tab to OVD (avoids wrong focus).
     _t(page, 420)
+    # Proposer/OVD are often not in the DOM until insurer is chosen (see kyc_nav_scrape before fill).
+    # Tab out + re-scrape captures new <select> ids and partner options after commit.
+    _hero_insurance_kyc_nav_after_insurer_commit(
+        page, ocr_output_dir=ocr_output_dir, subfolder=subfolder
+    )
+    # One Tab was used to blur insurer; keep total insurer→OVD tab count aligned with env.
+    _kyc_press_tab_n(page, max(0, KYC_KEYBOARD_TABS_INSURER_TO_OVD - 1))
 
-    _kyc_press_tab_n(page, max(0, KYC_KEYBOARD_TABS_INSURER_TO_OVD))
 
     ovd_ok = False
     last_shown = ""
@@ -2145,11 +2247,22 @@ def _kyc_click_kyc_verification_button(page, *, timeout_ms: int) -> None:
 
 
 def _fill_insurance_company_and_ovd_mobile_consent(
-    page, values: dict, *, timeout_ms: int
+    page,
+    values: dict,
+    *,
+    timeout_ms: int,
+    ocr_output_dir: Path | None = None,
+    subfolder: str | None = None,
 ) -> str | None:
     """Returns error message or None on success."""
     if KYC_USE_KEYBOARD_EKYC_SOP and _kyc_url_looks_like_ekyc_page(page):
-        return _fill_kyc_ekyc_keyboard_sop(page, values, timeout_ms=timeout_ms)
+        return _fill_kyc_ekyc_keyboard_sop(
+            page,
+            values,
+            timeout_ms=timeout_ms,
+            ocr_output_dir=ocr_output_dir,
+            subfolder=subfolder,
+        )
 
     insurer = (values.get("insurer") or "").strip()
     mobile = (values.get("mobile_number") or "").strip()
@@ -2160,7 +2273,13 @@ def _fill_insurance_company_and_ovd_mobile_consent(
         # Label-associated <select> (ASP.NET table / modal layouts often break ``select:near``).
         try:
             loc = page.get_by_label(re.compile(r"Insurance\s*Company\s*\*?", re.I))
-            if loc.count() > 0 and _select_option_fuzzy_in_select(page, loc, insurer, timeout_ms=timeout_ms):
+            if loc.count() > 0 and _select_option_fuzzy_in_select(
+                page,
+                loc,
+                insurer,
+                timeout_ms=timeout_ms,
+                fuzzy_min_score=KYC_INSURER_FUZZY_MIN_SCORE,
+            ):
                 filled = True
         except Exception:
             pass
@@ -2174,7 +2293,11 @@ def _fill_insurance_company_and_ovd_mobile_consent(
                 try:
                     loc = page.locator(sel_css)
                     if loc.count() > 0 and _select_option_fuzzy_in_select(
-                        page, loc, insurer, timeout_ms=timeout_ms
+                        page,
+                        loc,
+                        insurer,
+                        timeout_ms=timeout_ms,
+                        fuzzy_min_score=KYC_INSURER_FUZZY_MIN_SCORE,
                     ):
                         filled = True
                         break
@@ -2201,6 +2324,9 @@ def _fill_insurance_company_and_ovd_mobile_consent(
                 "Could not set Insurance Company from details-sheet insurer "
                 f"({insurer[:40]!r}). Adjust selectors for this portal build."
             )
+        _hero_insurance_kyc_nav_after_insurer_commit(
+            page, ocr_output_dir=ocr_output_dir, subfolder=subfolder
+        )
 
     # --- OVD Type: AADHAAR CARD ---
     ovd_ok = False
@@ -2457,7 +2583,13 @@ def _run_hero_misp_portal_after_open(
         ocr_output_dir=ocr_output_dir,
         subfolder=subfolder,
     )
-    err = _fill_insurance_company_and_ovd_mobile_consent(page, values, timeout_ms=timeout_ms)
+    err = _fill_insurance_company_and_ovd_mobile_consent(
+        page,
+        values,
+        timeout_ms=timeout_ms,
+        ocr_output_dir=ocr_output_dir,
+        subfolder=subfolder,
+    )
     if err:
         return err
 
@@ -3545,7 +3677,11 @@ def run_fill_insurance_only(
                 "(keyboard SOP on ekycpage when enabled)",
             )
             kyc_fill_err = _fill_insurance_company_and_ovd_mobile_consent(
-                page, values, timeout_ms=INSURANCE_ACTION_TIMEOUT_MS
+                page,
+                values,
+                timeout_ms=INSURANCE_ACTION_TIMEOUT_MS,
+                ocr_output_dir=ocr_output_dir,
+                subfolder=subfolder,
             )
             if kyc_fill_err:
                 result["error"] = kyc_fill_err

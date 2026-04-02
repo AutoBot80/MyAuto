@@ -201,6 +201,20 @@ KYC_KEYBOARD_TABS_OVD_TO_MOBILE = _int_env("KYC_KEYBOARD_TABS_OVD_TO_MOBILE", 4)
 KYC_KEYBOARD_TABS_MOBILE_TO_CONSENT = _int_env("KYC_KEYBOARD_TABS_MOBILE_TO_CONSENT", 2)
 KYC_KEYBOARD_INSURER_ARROW_DOWN_MAX = _int_env("KYC_KEYBOARD_INSURER_ARROW_DOWN_MAX", 60)
 KYC_KEYBOARD_OVD_ARROW_DOWN_MAX = _int_env("KYC_KEYBOARD_OVD_ARROW_DOWN_MAX", 28)
+
+
+def _float_env(name: str, default: float) -> float:
+    try:
+        return float((os.getenv(name) or str(default)).strip())
+    except ValueError:
+        return default
+
+
+# KYC insurer match: ``fuzzy_best_option_label`` min score (global default 0.42 is often too strict for typos).
+KYC_INSURER_FUZZY_MIN_SCORE = _float_env("KYC_INSURER_FUZZY_MIN_SCORE", 0.28)
+# Fallback when fuzzy returns None: ``difflib.SequenceMatcher`` on normalized insurer vs focused/display text.
+KYC_INSURER_DISPLAY_SEQUENCE_MIN = _float_env("KYC_INSURER_DISPLAY_SEQUENCE_MIN", 0.48)
+
 _KYC_KB_SOP_RAW = (os.getenv("KYC_USE_KEYBOARD_EKYC_SOP") or "1").strip().lower()
 # When true (default), ``ekycpage`` KYC uses the keyboard SOP instead of DOM clicks.
 KYC_USE_KEYBOARD_EKYC_SOP = _KYC_KB_SOP_RAW not in ("0", "false", "no", "off")
