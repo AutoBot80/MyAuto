@@ -1,14 +1,35 @@
 ---
-description: Every git checkpoint must be registered in Documentation/checkpoints.md so none are lost
+description: Full checkpoint workflow when user sets a checkpoint; registry + tag + playback of all checkpoints
 alwaysApply: true
 ---
 
-# Checkpoints registry (mandatory)
+# Checkpoints — canonical process (mandatory)
 
-When creating or recording a **named checkpoint** (milestone snapshot: tag, `Checkpoint: …` commit, or `Documentation/checkpoint-*.md` milestone):
+When the user asks to **set / create / record a checkpoint** (any phrasing: “checkpoint here”, milestone snapshot, named git tag, etc.), treat it as **one workflow**. Do **not** stop after only a narrative file or only a tag.
 
-1. **Append one row** to the **Checkpoints** table in **`Documentation/checkpoints.md`** in the same delivery (same PR or session): name, tag, full commit hash, created time (IST), TODOs. A standalone `checkpoint-*.md` file or tag **alone** is not sufficient.
-2. Prefer annotated tag format **`checkpoint/<slug>`**; legacy tag names are allowed but must still appear in the table.
-3. Do not consider the checkpoint work complete until the registry row exists.
+## Triggers
 
-Reference: **`Documentation/checkpoints.md`** (“How Checkpoints Work”, “Mandatory: nothing is a checkpoint until it is in this table”).
+Phrases include: “set a checkpoint”, “create a checkpoint”, “checkpoint here”, “record a checkpoint”, “add a checkpoint”, “new checkpoint”.
+
+## Steps (complete all before finishing)
+
+1. **Read** **`Documentation/checkpoints.md`** (“How Checkpoints Work” + **Checkpoints** table) so the process matches the repo.
+2. **Snapshot commit** — Prefer a dedicated commit that includes the registry update and optional `Documentation/checkpoint-<slug>.md`. If the user wants the tag on existing `HEAD`, use that commit’s full hash.
+3. **Registry row** — Append **one row** to the **Checkpoints** table: **Name**, **Tag**, **Commit** (full hash), **Created (IST)** (use tag creation time or commit time in `+05:30` form, consistent with existing rows), **TODOs** (numbered or lettered; mirror tag/commit message if used).
+4. **Annotated tag** — `git tag -a checkpoint/<slug> <commit> -m "..."` (or legacy name if required); tag must appear in the table.
+5. **Optional narrative** — `Documentation/checkpoint-<slug>.md` may supplement the row; it **must** state that the checkpoint is listed in **`checkpoints.md`** and repeat tag + commit + IST (see existing examples).
+6. **Commit** — Stage and commit `Documentation/checkpoints.md` and any new/updated `checkpoint-*.md` (follow-up registry-only commit is allowed if the snapshot commit already landed without the row—see **`checkpoints.md`**).
+
+**Forbidden as “done” alone:** only `Documentation/checkpoint-*.md`, or only a git tag, or only Cursor todos, without a **Checkpoints** table row.
+
+## After setting the checkpoint (playback — mandatory)
+
+Before ending the reply, **read** the **Checkpoints** table from **`Documentation/checkpoints.md`** (after your edits) and **print the full list** for the user:
+
+- For **each** row: **name**, **Created (IST)** date/time, and **TODOs** (the whole cell).
+
+Format as a clear markdown list or table so the user can scan every checkpoint in one place. This confirms registration and avoids “invisible” checkpoints.
+
+## Reference
+
+**`Documentation/checkpoints.md`**, **`Documentation/technical-architecture.md`** (checkpoints note), **`.cursor/rules/checkpoints-registry.mdc`** (this file).
