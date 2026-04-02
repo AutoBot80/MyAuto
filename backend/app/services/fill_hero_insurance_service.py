@@ -968,7 +968,7 @@ def _hero_insurance_kyc_nav_after_kyc_partner_commit(
         phase="kyc_nav_scrape_after_kyc_partner",
         ocr_output_dir=ocr_output_dir,
         subfolder=subfolder,
-    )
+        )
 
 
 def _iter_page_and_child_frames(page):
@@ -2636,19 +2636,19 @@ def _fill_kyc_ekyc_keyboard_sop(
         logger.info("Hero Insurance: KYC keyboard — focused Insurance Company via click in frame.")
         _t(page, 200)
     else:
-        _kyc_press_tab_n(page, max(0, KYC_KEYBOARD_TABS_TO_INSURANCE_FIELD))
+    _kyc_press_tab_n(page, max(0, KYC_KEYBOARD_TABS_TO_INSURANCE_FIELD))
 
     if _kyc_frame_active_element_is_editable(kyc_fr):
-        try:
-            page.keyboard.press("Control+A")
-        except Exception:
-            pass
-        _t(page, 50)
-        try:
-            page.keyboard.press("Backspace")
-        except Exception:
-            pass
-        _t(page, 50)
+    try:
+        page.keyboard.press("Control+A")
+    except Exception:
+        pass
+    _t(page, 50)
+    try:
+        page.keyboard.press("Backspace")
+    except Exception:
+        pass
+    _t(page, 50)
     else:
         logger.warning(
             "Hero Insurance: KYC keyboard — focus not on an editable control before insurer type; "
@@ -2733,18 +2733,18 @@ def _fill_kyc_ekyc_keyboard_sop(
     if not ovd_ok:
         # Legacy: Tab to OVD then ArrowDown — risky if focus lands on KYC Partner <select> first.
         _kyc_press_tab_n(page, max(0, KYC_KEYBOARD_TABS_INSURER_TO_OVD - 1))
-        for _ in range(max(1, KYC_KEYBOARD_OVD_ARROW_DOWN_MAX)):
-            shown = _kyc_read_focused_control_text(page)
+    for _ in range(max(1, KYC_KEYBOARD_OVD_ARROW_DOWN_MAX)):
+        shown = _kyc_read_focused_control_text(page)
             last_shown = shown or last_shown
             if _kyc_ovd_focused_text_is_aadhaar_card(shown):
-                ovd_ok = True
+            ovd_ok = True
                 logger.info("Hero Insurance: KYC keyboard — OVD shows AADHAAR CARD (ArrowDown).")
-                break
-            try:
-                page.keyboard.press("ArrowDown")
-            except Exception:
-                pass
-            _t(page, 105)
+            break
+        try:
+            page.keyboard.press("ArrowDown")
+        except Exception:
+            pass
+        _t(page, 105)
     if not ovd_ok:
         logger.warning(
             "Hero Insurance: KYC keyboard — OVD not set via DOM or ArrowDown (last focus text=%r); "
@@ -2772,16 +2772,16 @@ def _fill_kyc_ekyc_keyboard_sop(
         _kyc_press_tab_n(page, max(0, KYC_KEYBOARD_TABS_OVD_TO_MOBILE))
         mob_typed = _kyc_fill_mobile_digits_in_frame(kyc_fr, digits, timeout_ms=to_fill)
     if not mob_typed and _kyc_frame_active_element_accepts_mobile_digits(kyc_fr):
-        try:
-            page.keyboard.press("Control+A")
-        except Exception:
-            pass
-        _t(page, 45)
-        try:
-            page.keyboard.type(digits, delay=30)
+    try:
+        page.keyboard.press("Control+A")
+    except Exception:
+        pass
+    _t(page, 45)
+    try:
+        page.keyboard.type(digits, delay=30)
             mob_typed = True
-        except Exception as exc:
-            return f"KYC keyboard SOP: mobile type failed: {exc!s}"
+    except Exception as exc:
+        return f"KYC keyboard SOP: mobile type failed: {exc!s}"
     if not mob_typed:
         if _kyc_try_click_mobile_field(kyc_fr, timeout_ms=cap):
             logger.info("Hero Insurance: KYC keyboard — focused mobile field via click in frame.")
@@ -2886,7 +2886,7 @@ def _fill_insurance_company_and_ovd_mobile_consent(
         )
         _hero_insurance_kyc_nav_after_kyc_partner_commit(
             page, ocr_output_dir=ocr_output_dir, subfolder=subfolder
-        )
+            )
 
     # --- OVD Type: AADHAAR CARD ---
     ovd_ok = False
@@ -3214,8 +3214,8 @@ def _hero_misp_page_and_frame_roots(page, *, purpose: str = "generic") -> list:
     if sel:
         try:
             roots.append(page.frame_locator(sel))
-        except Exception:
-            pass
+    except Exception:
+        pass
     roots.append(page)
     try:
         frs = [f for f in page.frames if not f.is_detached()]
@@ -3508,8 +3508,8 @@ def _hero_misp_wait_for_vin_txt_frame_no_attached(
                     classification=_hero_misp_classify_vin_transition_url(page.url or ""),
                 )
                 return True
-            except Exception:
-                continue
+        except Exception:
+            continue
 
     logger.warning("Hero Insurance: timed out waiting for VIN/Chassis input after URL/DOM wait.")
     _hero_misp_log_vin_transition_line(
@@ -3674,15 +3674,15 @@ def _hero_misp_vin_submit_i_agree(
 
     clicked = _hero_misp_click_vin_page_submit(page, timeout_ms=timeout_ms)
     if not clicked:
-        try:
-            sub = page.get_by_role("button", name=re.compile(r"^\s*Submit\s*$", re.I))
-            if sub.count() > 0 and sub.first.is_visible(timeout=2_000):
-                sub.first.click(timeout=timeout_ms)
-            else:
-                page.get_by_text(re.compile(r"^\s*Submit\s*$", re.I)).first.click(timeout=timeout_ms)
-            logger.info("Hero Insurance: clicked Submit on VIN page.")
-        except Exception as exc:
-            return f"VIN Submit click failed: {exc!s}"
+    try:
+        sub = page.get_by_role("button", name=re.compile(r"^\s*Submit\s*$", re.I))
+        if sub.count() > 0 and sub.first.is_visible(timeout=2_000):
+            sub.first.click(timeout=timeout_ms)
+        else:
+            page.get_by_text(re.compile(r"^\s*Submit\s*$", re.I)).first.click(timeout=timeout_ms)
+        logger.info("Hero Insurance: clicked Submit on VIN page.")
+    except Exception as exc:
+        return f"VIN Submit click failed: {exc!s}"
 
     _t(page, 800)
     agreed = False
