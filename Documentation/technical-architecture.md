@@ -1,8 +1,8 @@
 # Technical Architecture
 ## Auto Dealer Management System
 
-**Version:** 0.2  
-**Last Updated:** March 2026
+**Version:** 0.8  
+**Last Updated:** April 2026
 
 ---
 
@@ -113,6 +113,7 @@ Configure **`backend/.env`** (copy from **`backend/.env.example`**). The API val
   - `low-level-design.md` — LLD, API endpoints, modules
   - `Database DDL.md` — all tables, columns, constraints, usage
   - `technical-architecture.md` (this file)
+  - `checkpoints.md` — **canonical registry** of named git checkpoints (tags, commits, IST dates, TODOs). Optional per-checkpoint narrative: `checkpoint-*.md`. Creating a checkpoint without updating this registry is disallowed—see §6 and **`.cursor/rules/checkpoints-registry.mdc`**.
 
 ### Documentation Maintenance
 
@@ -153,3 +154,4 @@ Cursor rule: `.cursor/rules/documentation-maintenance.mdc` (always applied).
 | 0.5 | Mar 2026 | — | §6 **Documentation Maintenance** — mandatory alignment of BRD / HLD / LLD / **Database DDL.md** with code and schema changes; **`Database DDL.md`** changelog may record “no schema change”; **`.cursor/rules/documentation-maintenance.mdc`** |
 | 0.6 | Apr 2026 | — | §5 **Artifacts:** Siebel **`Playwright_DMS_<ddmmyyyy>_<hhmmss>.txt`** per run (IST), not a single overwritten **`Playwright_DMS.txt`** — **LLD** **6.117** |
 | 0.7 | Apr 2026 | — | §6 **`Database DDL.md`** updated **only** for real schema / **`DDL/`** changes (not automation-only); **`.cursor/rules/documentation-maintenance.mdc`** aligned |
+| 0.8 | Apr 2026 | — | §6 **`checkpoints.md`** as canonical checkpoint registry; mandatory registration + **`.cursor/rules/checkpoints-registry.mdc`** |

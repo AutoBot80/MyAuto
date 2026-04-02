@@ -3,6 +3,8 @@
 **Recorded:** 2026-04-01  
 **Label:** All DMS Working  
 
+**Registry:** This milestone is listed in **`Documentation/checkpoints.md`** (canonical index) under tag **`all-dms-working`**.
+
 Use this file as the project milestone marker: Siebel / Fill DMS flows, My Orders branching, Playwright log naming, master commit logging, eligibility + Generate Insurance wiring, and MISP login / 2W hardening are in a working state as of the git tag **`all-dms-working`**.
 
 ## Follow-up todos

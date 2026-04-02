@@ -1,0 +1,14 @@
+---
+description: Every git checkpoint must be registered in Documentation/checkpoints.md so none are lost
+alwaysApply: true
+---
+
+# Checkpoints registry (mandatory)
+
+When creating or recording a **named checkpoint** (milestone snapshot: tag, `Checkpoint: …` commit, or `Documentation/checkpoint-*.md` milestone):
+
+1. **Append one row** to the **Checkpoints** table in **`Documentation/checkpoints.md`** in the same delivery (same PR or session): name, tag, full commit hash, created time (IST), TODOs. A standalone `checkpoint-*.md` file or tag **alone** is not sufficient.
+2. Prefer annotated tag format **`checkpoint/<slug>`**; legacy tag names are allowed but must still appear in the table.
+3. Do not consider the checkpoint work complete until the registry row exists.
+
+Reference: **`Documentation/checkpoints.md`** (“How Checkpoints Work”, “Mandatory: nothing is a checkpoint until it is in this table”).
