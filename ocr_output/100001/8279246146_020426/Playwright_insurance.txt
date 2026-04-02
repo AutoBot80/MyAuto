@@ -1,19 +1,125 @@
 Playwright Insurance — execution log (IST / Asia/Kolkata timestamps)
 
-started_ist=2026-04-02T20:16:10.402+05:30
+started_ist=2026-04-02T20:26:57.747+05:30
 subfolder='8279246146_020426'
 
 --- trace ---
-2026-04-02T20:16:10.405+05:30 [NOTE] run_fill_insurance_only: starting Fill Insurance flow
-2026-04-02T20:16:21.596+05:30 [NOTE] run_fill_insurance_only: Sign In not auto-clicked — complete login manually if needed.
-2026-04-02T20:16:23.269+05:30 [NOTE] run_fill_insurance_only: clicked 2W (two-wheeler) entry
-2026-04-02T20:16:28.287+05:30 [NOTE] run_fill_insurance_only: active tab after 2W
-2026-04-02T20:16:29.556+05:30 [NOTE] run_fill_insurance_only: clicked New Policy
-2026-04-02T20:16:34.659+05:30 [NOTE] run_fill_insurance_only: active tab before KYC wait
-2026-04-02T20:16:34.848+05:30 [NOTE] run_fill_insurance_only: real MISP KYC — _fill_insurance_company_and_ovd_mobile_consent (keyboard SOP on ekycpage when enabled)
-2026-04-02T20:16:34.850+05:30 [NOTE] KYC Insurance Company value to use: 'Universal Sompo General Insurance'
-2026-04-02T20:17:03.199+05:30 [NOTE] run_fill_insurance_only: real MISP KYC (post-mobile banner branch + Proceed or uploads) complete
-2026-04-02T20:17:03.209+05:30 [NOTE] run_fill_insurance_only: VIN fill + Submit (pre_process), timeout_ms=60000
-2026-04-02T20:17:16.712+05:30 [NOTE] main_process: I agree → proposal form (VIN+Submit done in pre_process)
-2026-04-02T20:17:16.713+05:30 [NOTE] main_process: attached to same browser tab as pre_process
-2026-04-02T20:17:23.575+05:30 [ERROR] main_process: insurance_master insert failed: Insurance already recorded for this customer, vehicle, and calendar year; duplicate insurance_master row is not allowed.
+2026-04-02T20:26:57.751+05:30 [NOTE] run_fill_insurance_only: starting Fill Insurance flow
+2026-04-02T20:27:09.997+05:30 [NOTE] run_fill_insurance_only: Sign In not auto-clicked — complete login manually if needed.
+2026-04-02T20:27:11.724+05:30 [NOTE] run_fill_insurance_only: clicked 2W (two-wheeler) entry
+2026-04-02T20:27:16.816+05:30 [NOTE] run_fill_insurance_only: active tab after 2W
+2026-04-02T20:27:17.700+05:30 [NOTE] run_fill_insurance_only: clicked New Policy
+2026-04-02T20:27:22.776+05:30 [NOTE] run_fill_insurance_only: active tab before KYC wait
+2026-04-02T20:27:22.948+05:30 [NOTE] run_fill_insurance_only: real MISP KYC — _fill_insurance_company_and_ovd_mobile_consent (keyboard SOP on ekycpage when enabled)
+2026-04-02T20:27:22.950+05:30 [NOTE] KYC Insurance Company value to use: 'Universal Sompo General Insurance'
+2026-04-02T20:27:22.959+05:30 [NOTE] KYC trace [keyboard_sop] start label_len=33 arrow_down_max=60 type_prefer_skip_dom=True
+2026-04-02T20:27:22.972+05:30 [NOTE] KYC trace [kyc_path] insurer=KEYBOARD (prefer_insurer_rule_skipped_dom) — will type label, fuzzy-match list, then ArrowDown if needed
+2026-04-02T20:27:24.547+05:30 [NOTE] KYC trace [keyboard_sop] typed insurer text — collecting visible dropdown options for fuzzy_best_option_label
+2026-04-02T20:27:25.452+05:30 [NOTE] KYC trace [dropdown_options] first_collect_after_type count=0 elapsed_ms=902
+2026-04-02T20:27:25.454+05:30 [NOTE] KYC trace [keyboard_sop] fuzzy_best_option_label on list: n_options=0 pick=None
+2026-04-02T20:27:25.467+05:30 [NOTE] KYC trace [keyboard_sop] initial fuzzy/display match failed — ArrowDown loop max=60 (each step re-collects options + fuzzy match; can be slow)
+2026-04-02T20:27:25.469+05:30 [NOTE] KYC trace [keyboard_sop] ArrowDown step 1/60 (press ArrowDown; then dropdown_options trace arrow_loop_0)
+2026-04-02T20:27:26.422+05:30 [NOTE] KYC trace [dropdown_options] arrow_loop_0 count=0 elapsed_ms=848
+2026-04-02T20:27:26.423+05:30 [NOTE] KYC trace [keyboard_sop] ArrowDown step 2/60 (press ArrowDown; then dropdown_options trace arrow_loop_1)
+2026-04-02T20:27:27.418+05:30 [NOTE] KYC trace [dropdown_options] arrow_loop_1 count=0 elapsed_ms=888
+2026-04-02T20:27:27.420+05:30 [NOTE] KYC trace [keyboard_sop] ArrowDown step 3/60 (press ArrowDown; then dropdown_options trace arrow_loop_2)
+2026-04-02T20:27:28.387+05:30 [NOTE] KYC trace [dropdown_options] arrow_loop_2 count=0 elapsed_ms=859
+2026-04-02T20:27:28.389+05:30 [NOTE] KYC trace [keyboard_sop] ArrowDown step 4/60 (press ArrowDown; then dropdown_options trace arrow_loop_3)
+2026-04-02T20:27:29.390+05:30 [NOTE] KYC trace [dropdown_options] arrow_loop_3 count=0 elapsed_ms=890
+2026-04-02T20:27:29.392+05:30 [NOTE] KYC trace [keyboard_sop] ArrowDown step 5/60 (press ArrowDown; then dropdown_options trace arrow_loop_4)
+2026-04-02T20:27:30.520+05:30 [NOTE] KYC trace [dropdown_options] arrow_loop_4 count=0 elapsed_ms=919
+2026-04-02T20:27:30.522+05:30 [NOTE] KYC trace [keyboard_sop] ArrowDown step 6/60 (press ArrowDown; then dropdown_options trace arrow_loop_5)
+2026-04-02T20:27:31.510+05:30 [NOTE] KYC trace [dropdown_options] arrow_loop_5 count=0 elapsed_ms=879
+2026-04-02T20:27:31.512+05:30 [NOTE] KYC trace [keyboard_sop] ArrowDown step 7/60 (press ArrowDown; then dropdown_options trace arrow_loop_6)
+2026-04-02T20:27:32.481+05:30 [NOTE] KYC trace [dropdown_options] arrow_loop_6 count=0 elapsed_ms=861
+2026-04-02T20:27:32.483+05:30 [NOTE] KYC trace [keyboard_sop] ArrowDown step 8/60 (press ArrowDown; then dropdown_options trace arrow_loop_7)
+2026-04-02T20:27:33.456+05:30 [NOTE] KYC trace [dropdown_options] arrow_loop_7 count=0 elapsed_ms=863
+2026-04-02T20:27:33.457+05:30 [NOTE] KYC trace [keyboard_sop] ArrowDown step 9/60 (press ArrowDown; then dropdown_options trace arrow_loop_8)
+2026-04-02T20:27:34.461+05:30 [NOTE] KYC trace [dropdown_options] arrow_loop_8 count=0 elapsed_ms=897
+2026-04-02T20:27:34.464+05:30 [NOTE] KYC trace [keyboard_sop] ArrowDown step 10/60 (press ArrowDown; then dropdown_options trace arrow_loop_9)
+2026-04-02T20:27:35.450+05:30 [NOTE] KYC trace [dropdown_options] arrow_loop_9 count=0 elapsed_ms=844
+2026-04-02T20:27:35.452+05:30 [NOTE] KYC trace [keyboard_sop] ArrowDown step 11/60 (press ArrowDown; then dropdown_options trace arrow_loop_10)
+2026-04-02T20:27:36.422+05:30 [NOTE] KYC trace [dropdown_options] arrow_loop_10 count=0 elapsed_ms=859
+2026-04-02T20:27:36.424+05:30 [NOTE] KYC trace [keyboard_sop] ArrowDown step 12/60 (press ArrowDown; then dropdown_options trace arrow_loop_11)
+2026-04-02T20:27:37.404+05:30 [NOTE] KYC trace [dropdown_options] arrow_loop_11 count=0 elapsed_ms=870
+2026-04-02T20:27:37.405+05:30 [NOTE] KYC trace [keyboard_sop] ArrowDown step 13/60 (press ArrowDown; then dropdown_options trace arrow_loop_12)
+2026-04-02T20:27:38.407+05:30 [NOTE] KYC trace [dropdown_options] arrow_loop_12 count=0 elapsed_ms=891
+2026-04-02T20:27:38.409+05:30 [NOTE] KYC trace [keyboard_sop] ArrowDown step 14/60 (press ArrowDown; then dropdown_options trace arrow_loop_13)
+2026-04-02T20:27:39.402+05:30 [NOTE] KYC trace [dropdown_options] arrow_loop_13 count=0 elapsed_ms=874
+2026-04-02T20:27:39.404+05:30 [NOTE] KYC trace [keyboard_sop] ArrowDown step 15/60 (press ArrowDown; then dropdown_options trace arrow_loop_14)
+2026-04-02T20:27:40.374+05:30 [NOTE] KYC trace [dropdown_options] arrow_loop_14 count=0 elapsed_ms=865
+2026-04-02T20:27:40.376+05:30 [NOTE] KYC trace [keyboard_sop] ArrowDown step 16/60 (press ArrowDown; then dropdown_options trace arrow_loop_15)
+2026-04-02T20:27:41.538+05:30 [NOTE] KYC trace [dropdown_options] arrow_loop_15 count=0 elapsed_ms=908
+2026-04-02T20:27:41.540+05:30 [NOTE] KYC trace [keyboard_sop] ArrowDown step 17/60 (press ArrowDown; then dropdown_options trace arrow_loop_16)
+2026-04-02T20:27:42.496+05:30 [NOTE] KYC trace [dropdown_options] arrow_loop_16 count=0 elapsed_ms=841
+2026-04-02T20:27:42.497+05:30 [NOTE] KYC trace [keyboard_sop] ArrowDown step 18/60 (press ArrowDown; then dropdown_options trace arrow_loop_17)
+2026-04-02T20:27:43.465+05:30 [NOTE] KYC trace [dropdown_options] arrow_loop_17 count=0 elapsed_ms=859
+2026-04-02T20:27:43.467+05:30 [NOTE] KYC trace [keyboard_sop] ArrowDown step 19/60 (press ArrowDown; then dropdown_options trace arrow_loop_18)
+2026-04-02T20:27:44.435+05:30 [NOTE] KYC trace [dropdown_options] arrow_loop_18 count=0 elapsed_ms=861
+2026-04-02T20:27:44.437+05:30 [NOTE] KYC trace [keyboard_sop] ArrowDown step 20/60 (press ArrowDown; then dropdown_options trace arrow_loop_19)
+2026-04-02T20:27:45.420+05:30 [NOTE] KYC trace [dropdown_options] arrow_loop_19 count=0 elapsed_ms=874
+2026-04-02T20:27:45.421+05:30 [NOTE] KYC trace [keyboard_sop] ArrowDown step 21/60 (press ArrowDown; then dropdown_options trace arrow_loop_20)
+2026-04-02T20:27:46.398+05:30 [NOTE] KYC trace [dropdown_options] arrow_loop_20 count=0 elapsed_ms=863
+2026-04-02T20:27:46.400+05:30 [NOTE] KYC trace [keyboard_sop] ArrowDown step 22/60 (press ArrowDown; then dropdown_options trace arrow_loop_21)
+2026-04-02T20:27:47.376+05:30 [NOTE] KYC trace [dropdown_options] arrow_loop_21 count=0 elapsed_ms=869
+2026-04-02T20:27:47.378+05:30 [NOTE] KYC trace [keyboard_sop] ArrowDown step 23/60 (press ArrowDown; then dropdown_options trace arrow_loop_22)
+2026-04-02T20:27:48.338+05:30 [NOTE] KYC trace [dropdown_options] arrow_loop_22 count=0 elapsed_ms=843
+2026-04-02T20:27:48.339+05:30 [NOTE] KYC trace [keyboard_sop] ArrowDown step 24/60 (press ArrowDown; then dropdown_options trace arrow_loop_23)
+2026-04-02T20:27:49.374+05:30 [NOTE] KYC trace [dropdown_options] arrow_loop_23 count=0 elapsed_ms=921
+2026-04-02T20:27:49.376+05:30 [NOTE] KYC trace [keyboard_sop] ArrowDown step 25/60 (press ArrowDown; then dropdown_options trace arrow_loop_24)
+2026-04-02T20:27:50.343+05:30 [NOTE] KYC trace [dropdown_options] arrow_loop_24 count=0 elapsed_ms=863
+2026-04-02T20:27:50.345+05:30 [NOTE] KYC trace [keyboard_sop] ArrowDown step 26/60 (press ArrowDown; then dropdown_options trace arrow_loop_25)
+2026-04-02T20:27:51.374+05:30 [NOTE] KYC trace [dropdown_options] arrow_loop_25 count=0 elapsed_ms=921
+2026-04-02T20:27:51.377+05:30 [NOTE] KYC trace [keyboard_sop] ArrowDown step 27/60 (press ArrowDown; then dropdown_options trace arrow_loop_26)
+2026-04-02T20:27:52.342+05:30 [NOTE] KYC trace [dropdown_options] arrow_loop_26 count=0 elapsed_ms=858
+2026-04-02T20:27:52.344+05:30 [NOTE] KYC trace [keyboard_sop] ArrowDown step 28/60 (press ArrowDown; then dropdown_options trace arrow_loop_27)
+2026-04-02T20:27:53.382+05:30 [NOTE] KYC trace [dropdown_options] arrow_loop_27 count=0 elapsed_ms=851
+2026-04-02T20:27:53.384+05:30 [NOTE] KYC trace [keyboard_sop] ArrowDown step 29/60 (press ArrowDown; then dropdown_options trace arrow_loop_28)
+2026-04-02T20:27:54.423+05:30 [NOTE] KYC trace [dropdown_options] arrow_loop_28 count=0 elapsed_ms=908
+2026-04-02T20:27:54.425+05:30 [NOTE] KYC trace [keyboard_sop] ArrowDown step 30/60 (press ArrowDown; then dropdown_options trace arrow_loop_29)
+2026-04-02T20:27:55.403+05:30 [NOTE] KYC trace [dropdown_options] arrow_loop_29 count=0 elapsed_ms=867
+2026-04-02T20:27:55.404+05:30 [NOTE] KYC trace [keyboard_sop] ArrowDown step 31/60 (press ArrowDown; then dropdown_options trace arrow_loop_30)
+2026-04-02T20:27:56.429+05:30 [NOTE] KYC trace [dropdown_options] arrow_loop_30 count=0 elapsed_ms=887
+2026-04-02T20:27:56.430+05:30 [NOTE] KYC trace [keyboard_sop] ArrowDown step 32/60 (press ArrowDown; then dropdown_options trace arrow_loop_31)
+2026-04-02T20:27:57.380+05:30 [NOTE] KYC trace [dropdown_options] arrow_loop_31 count=0 elapsed_ms=845
+2026-04-02T20:27:57.382+05:30 [NOTE] KYC trace [keyboard_sop] ArrowDown step 33/60 (press ArrowDown; then dropdown_options trace arrow_loop_32)
+2026-04-02T20:27:58.348+05:30 [NOTE] KYC trace [dropdown_options] arrow_loop_32 count=0 elapsed_ms=858
+2026-04-02T20:27:58.349+05:30 [NOTE] KYC trace [keyboard_sop] ArrowDown step 34/60 (press ArrowDown; then dropdown_options trace arrow_loop_33)
+2026-04-02T20:27:59.440+05:30 [NOTE] KYC trace [dropdown_options] arrow_loop_33 count=0 elapsed_ms=926
+2026-04-02T20:27:59.442+05:30 [NOTE] KYC trace [keyboard_sop] ArrowDown step 35/60 (press ArrowDown; then dropdown_options trace arrow_loop_34)
+2026-04-02T20:28:00.432+05:30 [NOTE] KYC trace [dropdown_options] arrow_loop_34 count=0 elapsed_ms=879
+2026-04-02T20:28:00.434+05:30 [NOTE] KYC trace [keyboard_sop] ArrowDown step 36/60 (press ArrowDown; then dropdown_options trace arrow_loop_35)
+2026-04-02T20:28:01.412+05:30 [NOTE] KYC trace [dropdown_options] arrow_loop_35 count=0 elapsed_ms=866
+2026-04-02T20:28:01.414+05:30 [NOTE] KYC trace [keyboard_sop] ArrowDown step 37/60 (press ArrowDown; then dropdown_options trace arrow_loop_36)
+2026-04-02T20:28:02.359+05:30 [NOTE] KYC trace [dropdown_options] arrow_loop_36 count=0 elapsed_ms=844
+2026-04-02T20:28:02.361+05:30 [NOTE] KYC trace [keyboard_sop] ArrowDown step 38/60 (press ArrowDown; then dropdown_options trace arrow_loop_37)
+2026-04-02T20:28:03.392+05:30 [NOTE] KYC trace [dropdown_options] arrow_loop_37 count=0 elapsed_ms=918
+2026-04-02T20:28:03.393+05:30 [NOTE] KYC trace [keyboard_sop] ArrowDown step 39/60 (press ArrowDown; then dropdown_options trace arrow_loop_38)
+2026-04-02T20:28:04.380+05:30 [NOTE] KYC trace [dropdown_options] arrow_loop_38 count=0 elapsed_ms=877
+2026-04-02T20:28:04.381+05:30 [NOTE] KYC trace [keyboard_sop] ArrowDown step 40/60 (press ArrowDown; then dropdown_options trace arrow_loop_39)
+2026-04-02T20:28:05.328+05:30 [NOTE] KYC trace [dropdown_options] arrow_loop_39 count=0 elapsed_ms=840
+2026-04-02T20:28:05.330+05:30 [NOTE] KYC trace [keyboard_sop] ArrowDown step 41/60 (press ArrowDown; then dropdown_options trace arrow_loop_40)
+2026-04-02T20:28:06.301+05:30 [NOTE] KYC trace [dropdown_options] arrow_loop_40 count=0 elapsed_ms=858
+2026-04-02T20:28:06.303+05:30 [NOTE] KYC trace [keyboard_sop] ArrowDown step 42/60 (press ArrowDown; then dropdown_options trace arrow_loop_41)
+2026-04-02T20:28:07.322+05:30 [NOTE] KYC trace [dropdown_options] arrow_loop_41 count=0 elapsed_ms=903
+2026-04-02T20:28:07.325+05:30 [NOTE] KYC trace [keyboard_sop] ArrowDown step 43/60 (press ArrowDown; then dropdown_options trace arrow_loop_42)
+2026-04-02T20:28:08.289+05:30 [NOTE] KYC trace [dropdown_options] arrow_loop_42 count=0 elapsed_ms=853
+2026-04-02T20:28:08.291+05:30 [NOTE] KYC trace [keyboard_sop] ArrowDown step 44/60 (press ArrowDown; then dropdown_options trace arrow_loop_43)
+2026-04-02T20:28:09.273+05:30 [NOTE] KYC trace [dropdown_options] arrow_loop_43 count=0 elapsed_ms=868
+2026-04-02T20:28:09.275+05:30 [NOTE] KYC trace [keyboard_sop] ArrowDown step 45/60 (press ArrowDown; then dropdown_options trace arrow_loop_44)
+2026-04-02T20:28:10.216+05:30 [NOTE] KYC trace [dropdown_options] arrow_loop_44 count=0 elapsed_ms=840
+2026-04-02T20:28:10.218+05:30 [NOTE] KYC trace [keyboard_sop] ArrowDown step 46/60 (press ArrowDown; then dropdown_options trace arrow_loop_45)
+2026-04-02T20:28:11.248+05:30 [NOTE] KYC trace [dropdown_options] arrow_loop_45 count=0 elapsed_ms=918
+2026-04-02T20:28:11.250+05:30 [NOTE] KYC trace [keyboard_sop] ArrowDown step 47/60 (press ArrowDown; then dropdown_options trace arrow_loop_46)
+2026-04-02T20:28:12.224+05:30 [NOTE] KYC trace [dropdown_options] arrow_loop_46 count=0 elapsed_ms=864
+2026-04-02T20:28:12.225+05:30 [NOTE] KYC trace [keyboard_sop] ArrowDown step 48/60 (press ArrowDown; then dropdown_options trace arrow_loop_47)
+2026-04-02T20:28:13.175+05:30 [NOTE] KYC trace [dropdown_options] arrow_loop_47 count=0 elapsed_ms=840
+2026-04-02T20:28:13.177+05:30 [NOTE] KYC trace [keyboard_sop] ArrowDown step 49/60 (press ArrowDown; then dropdown_options trace arrow_loop_48)
+2026-04-02T20:28:14.173+05:30 [NOTE] KYC trace [dropdown_options] arrow_loop_48 count=0 elapsed_ms=891
+2026-04-02T20:28:14.175+05:30 [NOTE] KYC trace [keyboard_sop] ArrowDown step 50/60 (press ArrowDown; then dropdown_options trace arrow_loop_49)
+2026-04-02T20:28:15.215+05:30 [NOTE] KYC trace [dropdown_options] arrow_loop_49 count=0 elapsed_ms=922
+2026-04-02T20:28:15.218+05:30 [NOTE] KYC trace [keyboard_sop] ArrowDown step 51/60 (press ArrowDown; then dropdown_options trace arrow_loop_50)
+2026-04-02T20:28:15.698+05:30 [NOTE] KYC trace [keyboard_sop] matched on ArrowDown at iteration 50 shown='Insurance Company\n--Select--\nBAJAJ GENERAL INSURANCE LIMITED\nCholamandalam Gener'
+2026-04-02T20:28:15.701+05:30 [NOTE] KYC trace [keyboard_sop] insurer row matched — commit keys (Enter/Escape) then aspnet/tab-out sequence
+2026-04-02T20:28:19.427+05:30 [NOTE] KYC: simulated tab away/back (temporary about:blank tab) to finalize insurer visibility for MISP.
+2026-04-02T20:28:26.650+05:30 [ERROR] run_fill_insurance_only: Locator.count: Target page, context or browser has been closed

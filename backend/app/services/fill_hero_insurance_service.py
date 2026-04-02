@@ -1428,6 +1428,100 @@ def _select_option_fuzzy_in_select(
         return False
 
 
+def _kyc_find_insurance_company_select_locator(kyc_fr):
+    """
+    Resolve the Insurance Company native ``<select>`` in the KYC frame (MISP: ``ddlproduct``).
+    Label association may point at a non-select wrapper; prefer known ids.
+    """
+    for css in (
+        "#ContentPlaceHolder1_ddlproduct",
+        "select#ContentPlaceHolder1_ddlproduct",
+        'select[name*="ddlproduct" i]',
+        'select[id*="ddlproduct" i]',
+    ):
+        try:
+            loc = kyc_fr.locator(css)
+            if loc.count() > 0:
+                return loc.first
+        except Exception:
+            continue
+    try:
+        lab = kyc_fr.get_by_label(re.compile(r"Insurance\s*Company\s*\*?", re.I))
+        if lab.count() > 0:
+            tag = (
+                lab.first.evaluate("el => (el && el.tagName) ? el.tagName.toLowerCase() : ''") or ""
+            )
+            if tag == "select":
+                return lab.first
+    except Exception:
+        pass
+    return None
+
+
+def _kyc_collect_insurer_native_select_option_labels(kyc_fr) -> list[str]:
+    """Text of each ``<option>`` under the Insurance Company ``<select>`` (for in-code fuzzy)."""
+    sel = _kyc_find_insurance_company_select_locator(kyc_fr)
+    if sel is None:
+        return []
+    texts: list[str] = []
+    try:
+        raw = sel.locator("option").evaluate_all(
+            "els => els.map(e => (e.textContent || '').trim()).filter(Boolean)"
+        )
+        for x in raw or []:
+            t = str(x).strip()
+            if t and not t.lower().startswith("--select"):
+                texts.append(t)
+    except Exception:
+        try:
+            n = sel.locator("option").count()
+            for i in range(min(n, 400)):
+                t = (sel.locator("option").nth(i).inner_text() or "").strip()
+                if t and not t.lower().startswith("--select"):
+                    texts.append(t)
+        except Exception:
+            pass
+    return texts
+
+
+def _kyc_try_select_insurer_fuzzy_on_insurance_company_select(
+    kyc_fr,
+    insurer: str,
+    *,
+    timeout_ms: int,
+    ocr_output_dir: Path | None = None,
+    subfolder: str | None = None,
+) -> bool:
+    """
+    ``fuzzy_best_option_label`` + ``select_option`` on the resolved Insurance Company ``<select>``
+    (reads ``<option>`` labels inside ``_select_option_fuzzy_in_select``). Prefer this before
+    listbox-only scrapers and long ArrowDown loops.
+    """
+    if not (insurer or "").strip():
+        return False
+    to = min(int(timeout_ms), 12_000)
+    sel = _kyc_find_insurance_company_select_locator(kyc_fr)
+    if sel is None:
+        return False
+    try:
+        nopt = sel.locator("option").count()
+    except Exception:
+        nopt = 0
+    _insurance_kyc_trace(
+        ocr_output_dir,
+        subfolder,
+        "native_select_options",
+        f"Insurance Company <select> n_option_nodes={nopt} (fuzzy_best_option_label + select_option)",
+    )
+    return _select_option_fuzzy_in_select(
+        kyc_fr,
+        sel,
+        insurer,
+        timeout_ms=to,
+        fuzzy_min_score=KYC_INSURER_FUZZY_MIN_SCORE,
+    )
+
+
 def _fill_insurance_company_fuzzy_any_visible_select(
     page,
     insurer: str,
@@ -1509,41 +1603,25 @@ def _kyc_try_set_insurer_via_dom_in_frame(
         ocr_output_dir,
         subfolder,
         "dom_insurer",
-        "start labelled-select then fuzzy scan of all <select> in KYC frame",
+        "start native <select> (ddlproduct/label) then fuzzy scan of all <select> in KYC frame",
     )
-    try:
-        lab = kyc_fr.get_by_label(re.compile(r"Insurance\s*Company\s*\*?", re.I))
-        if lab.count() > 0:
-            try:
-                tag = (
-                    lab.first.evaluate("el => (el && el.tagName) ? el.tagName.toLowerCase() : ''") or ""
-                )
-            except Exception:
-                tag = ""
-            if tag == "select":
-                _insurance_kyc_trace(
-                    ocr_output_dir,
-                    subfolder,
-                    "dom_insurer",
-                    "Insurance Company label is <select> — fuzzy match options via fuzzy_best_option_label",
-                )
-                if _select_option_fuzzy_in_select(
-                    kyc_fr,
-                    lab,
-                    insurer,
-                    timeout_ms=to,
-                    fuzzy_min_score=KYC_INSURER_FUZZY_MIN_SCORE,
-                ):
-                    _insurance_kyc_trace(
-                        ocr_output_dir,
-                        subfolder,
-                        "dom_insurer",
-                        "success via labelled <select>",
-                    )
-                    logger.info("Hero Insurance: KYC — Insurance Company set via labelled <select> in frame.")
-                    return True
-    except Exception:
-        pass
+    if _kyc_try_select_insurer_fuzzy_on_insurance_company_select(
+        kyc_fr,
+        insurer,
+        timeout_ms=to,
+        ocr_output_dir=ocr_output_dir,
+        subfolder=subfolder,
+    ):
+        _insurance_kyc_trace(
+            ocr_output_dir,
+            subfolder,
+            "dom_insurer",
+            "success via Insurance Company native <select> (in-code fuzzy on <option> labels)",
+        )
+        logger.info(
+            "Hero Insurance: KYC — Insurance Company set via native <select> fuzzy match in frame."
+        )
+        return True
     return _fill_insurance_company_fuzzy_any_visible_select(
         kyc_fr,
         insurer,
@@ -1912,6 +1990,9 @@ def _kyc_insurer_display_matches(insurer: str, displayed: str) -> bool:
     """
     d = (displayed or "").strip()
     if not d or d.lower().startswith("--select"):
+        return False
+    # Focus on MISP can return a multi-line blob (label + every option). Do not treat as a single match.
+    if d.count("\n") >= 3 and len(d) > 180:
         return False
     pick = fuzzy_best_option_label(
         insurer, [d], min_score=KYC_INSURER_FUZZY_MIN_SCORE
@@ -2473,8 +2554,9 @@ def _fill_kyc_ekyc_keyboard_sop(
     Keyboard SOP for ``ekycpage.aspx`` (focus document → Tab to Insurance Company → type to filter →
     ArrowDown until fuzzy match → Enter → Tab to OVD → ArrowDown to Aadhaar → Tab to mobile → type →
     Tab to consent → Space). Tab/down counts: ``KYC_KEYBOARD_*`` env vars.
-    When ``prefer_insurer`` matches merged details insurer (≥20%), skip DOM ``select_option`` and type
-    the short dealer label (often better than fuzzy-select on long legal names).
+    When ``prefer_insurer`` matches merged details insurer (≥20%), the portal label is the short
+    dealer string; DOM ``select_option`` on the native **Insurance Company** ``<select>`` is still
+    tried first (fuzzy on ``<option>`` labels), then keyboard typing only if DOM fails.
     """
     insurer_label = _kyc_insurer_label_for_misp(values)
     mobile = (values.get("mobile_number") or "").strip()
@@ -2499,23 +2581,21 @@ def _fill_kyc_ekyc_keyboard_sop(
         subfolder,
         "keyboard_sop",
         f"start label_len={len(insurer_label)} arrow_down_max={ad_max} "
-        f"type_prefer_skip_dom={type_prefer_skip_dom}",
+        f"prefer_insurer_active={type_prefer_skip_dom} (DOM native <select> tried first)",
     )
     if type_prefer_skip_dom:
         logger.info(
-            "Hero Insurance: KYC — prefer_insurer matches merged insurer (≥20%%); "
-            "skipping DOM select, typing portal label %r.",
+            "Hero Insurance: KYC — prefer_insurer matches merged (≥20%%); "
+            "portal label %r — trying DOM native <select> before keyboard.",
             (insurer_label[:80] + "…") if len(insurer_label) > 80 else insurer_label,
         )
-        dom_ok = False
-    else:
-        dom_ok = _kyc_try_set_insurer_via_dom_in_frame(
-            kyc_fr,
-            insurer_label,
-            timeout_ms=min(cap, 8_000),
-            ocr_output_dir=ocr_output_dir,
-            subfolder=subfolder,
-        )
+    dom_ok = _kyc_try_set_insurer_via_dom_in_frame(
+        kyc_fr,
+        insurer_label,
+        timeout_ms=min(cap, 8_000),
+        ocr_output_dir=ocr_output_dir,
+        subfolder=subfolder,
+    )
     # #region agent log
     _dbg_kyc_insurer_tab_ndjson(
         "H1",
@@ -2539,7 +2619,7 @@ def _fill_kyc_ekyc_keyboard_sop(
         logger.info("Hero Insurance: KYC — insurer set via DOM in frame (skipped keyboard typing).")
     else:
         kb_reason = (
-            "prefer_insurer_rule_skipped_dom"
+            "dom_failed_after_prefer_label"
             if type_prefer_skip_dom
             else "dom_fuzzy_select_failed_try_keyboard"
         )
@@ -2547,7 +2627,8 @@ def _fill_kyc_ekyc_keyboard_sop(
             ocr_output_dir,
             subfolder,
             "kyc_path",
-            f"insurer=KEYBOARD ({kb_reason}) — will type label, fuzzy-match list, then ArrowDown if needed",
+            f"insurer=KEYBOARD ({kb_reason}) — type label, merge native <option> + listbox texts, "
+            f"in-code fuzzy; ArrowDown only if still unmatched",
         )
     if not dom_ok:
         logger.debug("Hero Insurance: KYC keyboard SOP — starting (focus chain).")
@@ -2611,13 +2692,27 @@ def _fill_kyc_ekyc_keyboard_sop(
             ocr_output_dir,
             subfolder,
             "keyboard_sop",
-            "typed insurer text — collecting visible dropdown options for fuzzy_best_option_label",
+            "typed insurer text — merge native <select><option> labels + listbox rows for in-code fuzzy",
         )
-        opts = _kyc_collect_dropdown_option_texts(
+        native_opts = _kyc_collect_insurer_native_select_option_labels(kyc_fr)
+        listbox_opts = _kyc_collect_dropdown_option_texts(
             kyc_fr,
             ocr_output_dir=ocr_output_dir,
             subfolder=subfolder,
-            trace_note="first_collect_after_type",
+            trace_note="first_collect_after_type_listbox_only",
+        )
+        seen_m: set[str] = set()
+        opts: list[str] = []
+        for o in native_opts + listbox_opts:
+            if o and o not in seen_m:
+                seen_m.add(o)
+                opts.append(o)
+        _insurance_kyc_trace(
+            ocr_output_dir,
+            subfolder,
+            "keyboard_sop",
+            f"merged options native_n={len(native_opts)} listbox_n={len(listbox_opts)} "
+            f"combined_n={len(opts)}",
         )
         pick = (
             fuzzy_best_option_label(insurer_label, opts, min_score=KYC_INSURER_FUZZY_MIN_SCORE)
@@ -2628,13 +2723,37 @@ def _fill_kyc_ekyc_keyboard_sop(
             ocr_output_dir,
             subfolder,
             "keyboard_sop",
-            f"fuzzy_best_option_label on list: n_options={len(opts)} pick={pick!r}",
+            f"fuzzy_best_option_label on merged list: n_options={len(opts)} pick={pick!r}",
         )
-        shown = _kyc_read_focused_control_text(page)
-        matched = bool(pick) and not (pick or "").strip().lower().startswith("--select") and (
-            _kyc_insurer_display_matches(insurer_label, shown)
-            or _kyc_insurer_display_matches(insurer_label, pick or "")
-        )
+        matched = False
+        if (
+            pick
+            and not (pick or "").strip().lower().startswith("--select")
+        ):
+            try:
+                sel_apply = _kyc_find_insurance_company_select_locator(kyc_fr)
+                if sel_apply is not None:
+                    sel_apply.select_option(
+                        label=pick, timeout=min(cap, 8_000), force=True
+                    )
+                    matched = True
+                    _insurance_kyc_trace(
+                        ocr_output_dir,
+                        subfolder,
+                        "keyboard_sop",
+                        f"applied native select_option(label) from in-code fuzzy pick={pick!r}",
+                    )
+            except Exception as exc:
+                logger.debug(
+                    "Hero Insurance: KYC select_option by fuzzy pick failed (will use display/ArrowDown): %s",
+                    exc,
+                )
+        if not matched:
+            shown = _kyc_read_focused_control_text(page)
+            matched = bool(pick) and not (pick or "").strip().lower().startswith("--select") and (
+                _kyc_insurer_display_matches(insurer_label, shown)
+                or _kyc_insurer_display_matches(insurer_label, pick or "")
+            )
         if not matched:
             _insurance_kyc_trace(
                 ocr_output_dir,
@@ -2669,12 +2788,18 @@ def _fill_kyc_ekyc_keyboard_sop(
                         shown[:90],
                     )
                     break
-                opts2 = _kyc_collect_dropdown_option_texts(
+                opts2_lb = _kyc_collect_dropdown_option_texts(
                     kyc_fr,
                     ocr_output_dir=ocr_output_dir,
                     subfolder=subfolder,
                     trace_note=f"arrow_loop_{ad_i}",
                 )
+                seen2: set[str] = set()
+                opts2: list[str] = []
+                for o in native_opts + opts2_lb:
+                    if o and o not in seen2:
+                        seen2.add(o)
+                        opts2.append(o)
                 if opts2:
                     cand = fuzzy_best_option_label(
                         insurer_label, opts2, min_score=KYC_INSURER_FUZZY_MIN_SCORE
