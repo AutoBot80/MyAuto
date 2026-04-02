@@ -396,5 +396,7 @@ The SQL view **`form_dms_view`** is **removed**; the same mapping is implemented
 | 1.98 | Apr 2026 | — | **Insurance** **`.env`**: action/policy timeouts and DIAG/KYC flags — **LLD** **§2.5** |
 | 1.99 | Apr 2026 | — | **`fill_hero_insurance_service`**: MISP **`INSURANCE_CLICK_SETTLE_MS`** + **`INSURANCE_*_IFRAME_SELECTOR`** as **module constants** (not **`.env`**); **`_hero_misp_wait_for_vin_txt_frame_no_attached`** after KYC **Proceed** (intermediate page) — **LLD** **6.165** |
 | 1.100 | Apr 2026 | — | **`fill_hero_insurance_service`**: insurer **`Enter`**+blur+**`Tab`**; faster **Policy Issuance** expand; VIN frame ordering + default **`iframe[src*="2w" i]`** — **LLD** **6.166** |
-| 1.101 | Apr 2026 | — | **Add Sales** (`AddSalesPage`): **Date of birth** input fixed width (**`flex`** override) — **LLD** **6.166** |
+| 1.101 | Apr 2026 | — | **Add Sales** (`AddSalesPage`): **Date of birth** — **`dd.add-sales-v2-dl-dd--dob`** fixes column width (overrides **`dd { flex: 1 }`** half-row stretch); input **`width: 100%`** inside capped **`dd`** — **LLD** **6.168** |
 | 1.102 | Apr 2026 | — | **`fill_hero_insurance_service`**: **`vin_transition`** **DIAG** (KYC→VIN URL path + frame list; query length only) — **LLD** **6.167**, **BRD** **3.110** |
+| 1.104 | Apr 2026 | — | **`main_process`**: **`_hero_misp_vin_step_timeout_ms`**, **`kyc_please_wait_overlay_visible`** — **LLD** **6.169**, **BRD** **3.111** |
+| 1.105 | Apr 2026 | — | VIN: **`_hero_misp_wait_for_mispdms_vin_url_event`** (`wait_for_url`) + field **`wait_for`** — **LLD** **6.170** |

@@ -61,6 +61,16 @@ INSURANCE_KYC_IFRAME_SELECTOR = ""
 INSURANCE_VIN_IFRAME_SELECTOR = 'iframe[src*="2w" i]'
 INSURANCE_NAV_IFRAME_SELECTOR = 'iframe[src*="2w" i]'
 
+
+def _hero_misp_vin_step_timeout_ms(base_action_ms: int | None = None) -> int:
+    """
+    Budget for KYC **Proceed** → **MispDms.aspx** + ``txtFrameNo`` attach. ``INSURANCE_ACTION_TIMEOUT_MS`` is for
+    single actions (~5.5s); postback + redirect + loading overlay on **same** ``ekycpage.aspx`` URL needs longer.
+    """
+    b = int(base_action_ms if base_action_ms is not None else INSURANCE_ACTION_TIMEOUT_MS)
+    return min(120_000, max(60_000, b * 15))
+
+
 logger = logging.getLogger(__name__)
 
 # Native form submit for MISP partner login (in addition to button clicks).
@@ -3312,6 +3322,63 @@ def _hero_misp_frame_urls_diag_line(page) -> str:
     return " ".join(parts)[:1900]
 
 
+def _hero_misp_kyc_please_wait_overlay_visible(page) -> bool:
+    """True when MISP shows the **Please wait** / loading row on ``ekycpage`` (same URL before redirect to VIN)."""
+    try:
+        loc = page.get_by_text(re.compile(r"please\s*wait", re.I))
+        if loc.count() == 0:
+            return False
+        return loc.first.is_visible(timeout=500)
+    except Exception:
+        return False
+
+
+def _hero_misp_wait_for_mispdms_vin_url_event(
+    page,
+    *,
+    timeout_ms: int,
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
+) -> bool:
+    """
+    Event-driven: ``page.wait_for_url`` until top-level URL contains **MispDms.aspx** (VIN policy step).
+    Returns **True** when already on or navigated to that URL; **False** on timeout (caller may still poll ``txtFrameNo``
+    if the portal uses a different path). No fixed sleep — Playwright waits on navigation / URL change.
+    """
+    to = min(max(3_000, int(timeout_ms)), 90_000)
+    try:
+        u0 = (page.url or "").lower()
+        if "mispdms.aspx" in u0:
+            _hero_misp_log_vin_transition_line(
+                page,
+                phase="already_on_mispdms_url",
+                ocr_output_dir=ocr_output_dir,
+                subfolder=subfolder,
+                classification=_hero_misp_classify_vin_transition_url(page.url or ""),
+            )
+            return True
+        page.wait_for_url(re.compile(r"mispdms\.aspx", re.I), timeout=to)
+        logger.info("Hero Insurance: URL event — navigated to MispDms.aspx (VIN policy step).")
+        _hero_misp_log_vin_transition_line(
+            page,
+            phase="navigated_to_mispdms_url",
+            ocr_output_dir=ocr_output_dir,
+            subfolder=subfolder,
+            classification=_hero_misp_classify_vin_transition_url(page.url or ""),
+        )
+        return True
+    except Exception as exc:
+        logger.debug("Hero Insurance: wait_for_url MispDms.aspx timed out or skipped: %s", exc)
+        _hero_misp_log_vin_transition_line(
+            page,
+            phase="wait_mispdms_url_timeout_continue_txtframe_poll",
+            ocr_output_dir=ocr_output_dir,
+            subfolder=subfolder,
+            classification=_hero_misp_classify_vin_transition_url(page.url or ""),
+        )
+        return False
+
+
 def _hero_misp_log_vin_transition_line(
     page,
     *,
@@ -3370,66 +3437,81 @@ def _hero_misp_wait_for_vin_txt_frame_no_attached(
     subfolder: str | None = None,
 ) -> bool:
     """
-    Poll until the VIN/Chassis control is attached in ``page`` or a frame. MISP sometimes renders a short
-    no-action screen after KYC **Proceed**; waiting on generic shells (e.g. ``mainContainer``) alone can fire
-    too early — this waits for the same inputs we fill.
+    **URL first (event-driven):** ``wait_for_url`` **MispDms.aspx** — no fixed-duration “wait then fill”.
 
-    Logs **DIAG** ``vin_transition`` lines when the top-level **host+path** changes (stable) or when the VIN
-    field is found — **query strings are not logged** (only ``?[query_len=N]``).
+    **Field second:** Playwright ``locator(...).first.wait_for(state='attached')`` per selector/root — auto-waits
+    on DOM updates, not a tight poll/sleep loop. MISP may show **Please wait** on **ekycpage** same-URL before
+    navigation; the URL wait resolves when the browser actually navigates.
     """
-    deadline = time.monotonic() + min(int(timeout_ms), 90_000) / 1000.0
-    poll_ms = max(100, min(500, int(INSURANCE_CLICK_SETTLE_MS) * 2))
+    budget_ms = min(int(timeout_ms), 90_000)
+    deadline = time.monotonic() + budget_ms / 1000.0
     selectors = _HERO_MISP_VIN_TXT_FRAME_NO_SELECTORS
-    last_nav_sig: str | None = None
     _hero_misp_log_vin_transition_line(
         page,
         phase="waiting_txtFrameNo_start",
         ocr_output_dir=ocr_output_dir,
         subfolder=subfolder,
     )
-    while time.monotonic() < deadline:
-        try:
-            raw_u = page.url or ""
-            sig = _hero_misp_url_path_signature(raw_u)
-            cls = _hero_misp_classify_vin_transition_url(raw_u)
-            combo = f"{cls}|{sig}"
-            if combo != last_nav_sig:
-                last_nav_sig = combo
-                logger.info(
-                    "Hero Insurance: VIN transition navigation — classification=%s url=%s",
-                    cls,
-                    _hero_misp_safe_url_for_insurance_log(raw_u)[:220],
-                )
+    try:
+        raw_u = page.url or ""
+        logger.info(
+            "Hero Insurance: VIN step — url classification=%s safe=%s",
+            _hero_misp_classify_vin_transition_url(raw_u),
+            _hero_misp_safe_url_for_insurance_log(raw_u)[:200],
+        )
+        _hero_misp_log_vin_transition_line(
+            page,
+            phase="waiting_txtFrameNo_nav_snapshot",
+            ocr_output_dir=ocr_output_dir,
+            subfolder=subfolder,
+            classification=_hero_misp_classify_vin_transition_url(raw_u),
+        )
+    except Exception:
+        pass
+    if _hero_misp_kyc_please_wait_overlay_visible(page):
+        _hero_misp_log_vin_transition_line(
+            page,
+            phase="kyc_please_wait_overlay_visible",
+            ocr_output_dir=ocr_output_dir,
+            subfolder=subfolder,
+            classification="kyc",
+        )
+
+    url_remain_ms = max(0, int((deadline - time.monotonic()) * 1000))
+    _hero_misp_wait_for_mispdms_vin_url_event(
+        page,
+        timeout_ms=max(3_000, url_remain_ms),
+        ocr_output_dir=ocr_output_dir,
+        subfolder=subfolder,
+    )
+
+    try:
+        page.wait_for_load_state("domcontentloaded", timeout=min(8_000, max(0, int((deadline - time.monotonic()) * 1000))))
+    except Exception:
+        pass
+
+    for sel in selectors:
+        for root in _hero_misp_page_and_frame_roots(page, purpose="vin"):
+            remain_ms = max(0, int((deadline - time.monotonic()) * 1000))
+            if remain_ms <= 0:
+                break
+            try:
+                el = root.locator(sel).first
+                # Cap each attempt so wrong selector/frame does not consume the whole budget (still event-driven).
+                el.wait_for(state="attached", timeout=min(8_000, remain_ms))
+                logger.info("Hero Insurance: VIN field attached (%s).", sel[:72])
                 _hero_misp_log_vin_transition_line(
                     page,
-                    phase="waiting_txtFrameNo_nav_changed",
+                    phase="vin_field_attached",
                     ocr_output_dir=ocr_output_dir,
                     subfolder=subfolder,
-                    classification=cls,
+                    classification=_hero_misp_classify_vin_transition_url(page.url or ""),
                 )
-        except Exception:
-            pass
-        for sel in selectors:
-            for root in _hero_misp_page_and_frame_roots(page, purpose="vin"):
-                try:
-                    loc = root.locator(sel)
-                    if loc.count() == 0:
-                        continue
-                    remain_ms = max(50, int((deadline - time.monotonic()) * 1000))
-                    loc.first.wait_for(state="attached", timeout=min(8_000, remain_ms))
-                    logger.info("Hero Insurance: VIN field attached after KYC transition (%s).", sel[:72])
-                    _hero_misp_log_vin_transition_line(
-                        page,
-                        phase="vin_field_attached",
-                        ocr_output_dir=ocr_output_dir,
-                        subfolder=subfolder,
-                        classification=_hero_misp_classify_vin_transition_url(page.url or ""),
-                    )
-                    return True
-                except Exception:
-                    continue
-        _t(page, poll_ms)
-    logger.warning("Hero Insurance: timed out waiting for VIN/Chassis input after KYC transition.")
+                return True
+            except Exception:
+                continue
+
+    logger.warning("Hero Insurance: timed out waiting for VIN/Chassis input after URL/DOM wait.")
     _hero_misp_log_vin_transition_line(
         page,
         phase="waiting_txtFrameNo_timeout",
@@ -3577,7 +3659,6 @@ def _hero_misp_vin_submit_i_agree(
         page.wait_for_load_state("domcontentloaded", timeout=min(25_000, timeout_ms * 4))
     except Exception:
         pass
-    _insurance_click_settle(page)
 
     filled = _hero_misp_fill_vin_txt_frame_no(
         page,
@@ -4202,6 +4283,13 @@ def main_process(
     )
 
     to = INSURANCE_ACTION_TIMEOUT_MS
+    vin_to = _hero_misp_vin_step_timeout_ms(to)
+    append_playwright_insurance_line(
+        ocr_output_dir,
+        subfolder,
+        "NOTE",
+        f"main_process: VIN transition timeout_ms={vin_to} (KYC→MispDms postback; action default was {to})",
+    )
     page = None
     pre_page = pre_result.get("_insurance_playwright_page")
     if pre_page is not None:
@@ -4240,7 +4328,7 @@ def main_process(
         err = _hero_misp_vin_submit_i_agree(
             page,
             values,
-            timeout_ms=to,
+            timeout_ms=vin_to,
             ocr_output_dir=ocr_output_dir,
             subfolder=subfolder,
         )

@@ -654,6 +654,15 @@
   padding-left: 6px; /* shift extracted values slightly right while keeping labels fixed */
 }
 
+/* DOB: dd had flex:1 — column stretched to half the row-group; cap the cell + input together */
+.add-sales-v2-dl--customer .add-sales-v2-dl-row dd.add-sales-v2-dl-dd--dob {
+  flex: 0 0 auto;
+  /* Compact YYYY-MM-DD; 10% wider than 5.85rem */
+  width: 6.435rem;
+  max-width: 6.435rem;
+  min-width: 0;
+}
+
 .add-sales-v2-inline-label {
   font-weight: 500;
   color: #555;
@@ -683,11 +692,12 @@
   border-color: #1e5a9e;
 }
 
-/* DOB is short (YYYY-MM-DD); override base flex:1 so the control stays narrow inside flex dd */
-.add-sales-v2-dl-input--dob {
-  flex: 0 0 auto;
-  width: 11.5rem;
-  max-width: 11.5rem;
+/* DOB — short date; fill the capped dd (see .add-sales-v2-dl-dd--dob) */
+.add-sales-v2-dl-input.add-sales-v2-dl-input--dob {
+  display: block;
+  flex: none;
+  width: 100%;
+  max-width: none;
   min-width: 0;
   box-sizing: border-box;
 }

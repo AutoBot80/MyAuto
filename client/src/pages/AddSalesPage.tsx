@@ -1184,12 +1184,15 @@ export function AddSalesPage({ dealerId, oemId, dmsUrl, siteUrlsLoading, siteUrl
                     <div className="add-sales-v2-dl-row-group">
                       <div className="add-sales-v2-dl-row">
                         <dt>Date of birth</dt>
-                        <dd>
+                        <dd className="add-sales-v2-dl-dd--dob">
                           <input
                             className="add-sales-v2-dl-input add-sales-v2-dl-input--dob"
+                            type="text"
+                            inputMode="numeric"
+                            autoComplete="bday"
                             value={c?.date_of_birth ?? ""}
                             onChange={(e) => setExtractedCustomer((prev) => ({ ...(prev ?? {}), date_of_birth: e.target.value }))}
-                            placeholder="—"
+                            placeholder="YYYY-MM-DD"
                           />
                         </dd>
                       </div>
