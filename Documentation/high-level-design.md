@@ -91,7 +91,7 @@ My Auto.AI/
 | `routers/settings` | Exposes automation site base URLs from env (`GET /settings/site-urls`) for the client; DMS/Vahan/Insurance URLs are required in `backend/.env` with no in-code fallbacks. |
 | `routers/uploads` | Document upload; enqueue to ai_reader_queue. |
 | `routers/ai_reader_queue` | List, process, reprocess OCR queue items. |
-| `routers/fill_dms` | Fill DMS (Playwright), optional **`POST /fill-dms/dms/warm-browser`** after Add Sales upload to pre-open DMS, Vahan, Form 20 print. |
+| `routers/fill_forms_router` | Fill Forms (Playwright): DMS, Vahan, Form 20, Hero Insurance; optional **`POST /fill-forms/dms/warm-browser`** after Add Sales upload to pre-open DMS. |
 | `routers/bulk_loads` | Bulk hot-table dashboard APIs, retry prep, action-taken tracking, and folder browsing. |
 | `routers/submit_info` | Upsert customer, vehicle, sales, insurance; draft **`add_sales_staging`** row + **`staging_id`** in response. |
 | `routers/rto_payment_details` | List and insert RTO queue rows, start dealer-scoped oldest-7 batch processing, expose batch progress, and optionally update payment later. |
@@ -108,7 +108,7 @@ My Auto.AI/
 | `services/form20_service` | Form 20 generation (Word/PDF/HTML). |
 | `services/handle_browser_opening` | CDP and managed-browser helpers (`get_or_open_site_page`, tab matching, optional auto-login wait) shared by Fill DMS, Vahan, and Insurance. |
 | `services/fill_hero_dms_service` | Playwright DMS (Siebel only: `siebel_dms_playwright.Playwright_Hero_DMS_fill` / `run_hero_siebel_dms_flow` — **Find Contact Enquiry** path; **LLD §2.4d** / **6.105**). **`prepare_vehicle`** runs before Contact Find; `DMS_SIEBEL_*` / `DMS_REAL_URL_*`. DMS fill from **`form_dms.py`** or **`add_sales_staging.payload_json`**; **`collate_customer_master_from_dms_siebel_inputs`** builds **`out["dms_customer_master_collated"]`** after payments (video SOP, **LLD** **6.108**, **6.109**). Vaahan helpers stubbed until production automation; reuses open tabs via `handle_browser_opening.get_or_open_site_page`; writes traces under `ocr_output/`. |
-| `services/fill_hero_insurance_service` | Hero MISP: **`pre_process`** / **`main_process`** / **`post_process`** (real portal). Dummy training site: **`run_fill_insurance_only`**. Uses `handle_browser_opening.get_or_open_site_page`; `insurance_form_values` / `insurance_kyc_payloads` / `utility_functions`; writes `Insurance_Form_Values.txt` and `Playwright_insurance.txt`. |
+| `services/fill_hero_insurance_service` | Hero MISP: **`pre_process`** delegates to **`run_fill_insurance_only`**; **`main_process`** / **`post_process`** complete Hero GI. Uses `handle_browser_opening.get_or_open_site_page`; `insurance_form_values` / `insurance_kyc_payloads` / `utility_functions`; writes `Insurance_Form_Values.txt` and `Playwright_insurance.txt`. Public API: **`POST /fill-forms/insurance/hero`** only (no separate bare insurance route). |
 | `services/submit_info_service` | Submit Info business logic; builds staging **`payload_json`** and calls **`persist_staging_for_submit`**. |
 | `services/rto_payment_service` | Dealer-scoped RTO batch runner, progress state, advisory locking, scrape-back persistence into `rto_queue` / `vehicle_master`, and downstream payment updates. |
 | `repositories/*` | Data access for ai_reader_queue, bulk_loads, dealer_ref, **`form_dms`** (DMS fill row SQL, no view), `form_vahan_view`, rto_queue, rc_status_sms_queue. |
@@ -400,3 +400,4 @@ The SQL view **`form_dms_view`** is **removed**; the same mapping is implemented
 | 1.102 | Apr 2026 | — | **`fill_hero_insurance_service`**: **`vin_transition`** **DIAG** (KYC→VIN URL path + frame list; query length only) — **LLD** **6.167**, **BRD** **3.110** |
 | 1.104 | Apr 2026 | — | **`main_process`**: **`_hero_misp_vin_step_timeout_ms`**, **`kyc_please_wait_overlay_visible`** — **LLD** **6.169**, **BRD** **3.111** |
 | 1.105 | Apr 2026 | — | VIN: **`_hero_misp_wait_for_mispdms_vin_url_event`** (`wait_for_url`) + field **`wait_for`** — **LLD** **6.170** |
+| 1.106 | Apr 2026 | — | **`fill_forms_router`** + **`/fill-forms`** API prefix; **`pre_process`** = **`run_fill_insurance_only`**; client **`fillForms.ts`** — **LLD** **6.171**, **BRD** **3.112** |

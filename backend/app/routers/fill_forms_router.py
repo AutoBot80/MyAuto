@@ -1,4 +1,4 @@
-"""POST /fill-dms: run Playwright to fill DMS, scrape vehicle row, download Form 21 & 22 into upload subfolder."""
+"""POST /fill-forms: Playwright fill for DMS, Vahan, insurance (hero), Form 21/22, etc."""
 import asyncio
 import json
 import logging
@@ -32,12 +32,11 @@ from app.services.fill_hero_insurance_service import (
     main_process,
     post_process,
     pre_process,
-    run_fill_insurance_only,
 )
 from app.services.playwright_executor import get_playwright_executor
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/fill-dms", tags=["fill-dms"])
+router = APIRouter(prefix="/fill-forms", tags=["fill-forms"])
 
 
 async def _run_playwright_work(call):
@@ -244,23 +243,6 @@ class FillVahanResponse(BaseModel):
     error: str | None = None
 
 
-class FillInsuranceRequest(BaseModel):
-    insurance_base_url: str | None = None
-    dealer_id: int | None = None
-    customer_id: int | None = None
-    vehicle_id: int | None = None
-    subfolder: str | None = None
-    staging_id: str | None = Field(
-        None,
-        description="Optional add_sales_staging UUID; merges payload_json insurance/customer fields into fill when view omits them.",
-    )
-
-
-class FillInsuranceResponse(BaseModel):
-    success: bool
-    error: str | None = None
-
-
 class FillHeroInsuranceRequest(BaseModel):
     """
     ``insurance_base_url`` overrides ``INSURANCE_BASE_URL`` from ``.env``.
@@ -447,7 +429,7 @@ async def fill_dms_only(req: FillDmsRequest) -> FillDmsResponse:
     # region agent log
     _agent_debug_log(
         "G1",
-        "fill_dms.py:fill_dms_only",
+        "fill_forms_router.py:fill_dms_only",
         "fill_dms_route_enter",
         {
             "has_staging_id": bool((req.staging_id or "").strip()),
@@ -502,7 +484,7 @@ async def fill_dms_only(req: FillDmsRequest) -> FillDmsResponse:
     # region agent log
     _agent_debug_log(
         "G2",
-        "fill_dms.py:fill_dms_only",
+        "fill_forms_router.py:fill_dms_only",
         "fill_dms_route_executor_return",
         {
             "elapsed_ms": int((time.monotonic() - exec_started) * 1000),
@@ -709,48 +691,6 @@ async def fill_hero_insurance(req: FillHeroInsuranceRequest = FillHeroInsuranceR
         page_url=result.get("page_url"),
         login_url=result.get("login_url"),
         match_base=result.get("match_base"),
-    )
-
-
-@router.post("/insurance", response_model=FillInsuranceResponse)
-async def fill_insurance_only(req: FillInsuranceRequest) -> FillInsuranceResponse:
-    """Run Insurance flow only. Fills fields but does not submit/issue policy."""
-    insurance_url = (req.insurance_base_url or INSURANCE_BASE_URL or "").strip()
-    if not insurance_url:
-        raise HTTPException(status_code=400, detail="insurance_base_url required")
-    insurance_url = _require_absolute_http_url(insurance_url, "insurance_base_url")
-    did = req.dealer_id if req.dealer_id is not None else DEALER_ID
-
-    staging_payload = None
-    sid = (req.staging_id or "").strip()
-    if sid:
-        try:
-            UUID(sid)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="staging_id must be a valid UUID") from None
-        from app.repositories.add_sales_staging import fetch_staging_payload
-
-        staging_payload = fetch_staging_payload(sid, did)
-        if not staging_payload:
-            raise HTTPException(
-                status_code=404,
-                detail="Staging not found, abandoned, or dealer_id does not match.",
-            )
-
-    result = await _run_playwright_work(
-        partial(
-            run_fill_insurance_only,
-            insurance_base_url=insurance_url,
-            subfolder=req.subfolder,
-            customer_id=req.customer_id,
-            vehicle_id=req.vehicle_id,
-            ocr_output_dir=Path(get_ocr_output_dir(did)),
-            staging_payload=staging_payload,
-        )
-    )
-    return FillInsuranceResponse(
-        success=result.get("error") is None and bool(result.get("success")),
-        error=_normalize_automation_error(result.get("error")),
     )
 
 

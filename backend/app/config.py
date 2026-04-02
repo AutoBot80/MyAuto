@@ -106,7 +106,7 @@ BULK_WORKER_ENABLED = os.getenv("BULK_WORKER_ENABLED", "true").lower() in ("1", 
 BULK_INGEST_ENABLED = os.getenv("BULK_INGEST_ENABLED", "true").lower() in ("1", "true", "yes")
 BULK_JOB_MAX_ATTEMPTS = int(os.getenv("BULK_JOB_MAX_ATTEMPTS", "3"))
 
-# DMS fill (Playwright): base URL and login. Used when client calls POST /fill-dms.
+# DMS fill (Playwright): base URL and login. Used when client calls POST /fill-forms.
 # DMS_BASE_URL / VAHAN_BASE_URL / INSURANCE_BASE_URL: required in .env (no in-code defaults); validated at app startup.
 DMS_BASE_URL = (os.getenv("DMS_BASE_URL") or "").strip().rstrip("/")
 # Default **real** = Hero Connect / Siebel (``siebel_dms_playwright``). Values: ``real``, ``siebel``, ``live``, ``production``, ``hero``.

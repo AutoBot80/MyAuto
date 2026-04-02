@@ -2636,19 +2636,19 @@ def _fill_kyc_ekyc_keyboard_sop(
         logger.info("Hero Insurance: KYC keyboard — focused Insurance Company via click in frame.")
         _t(page, 200)
     else:
-    _kyc_press_tab_n(page, max(0, KYC_KEYBOARD_TABS_TO_INSURANCE_FIELD))
+        _kyc_press_tab_n(page, max(0, KYC_KEYBOARD_TABS_TO_INSURANCE_FIELD))
 
     if _kyc_frame_active_element_is_editable(kyc_fr):
-    try:
-        page.keyboard.press("Control+A")
-    except Exception:
-        pass
-    _t(page, 50)
-    try:
-        page.keyboard.press("Backspace")
-    except Exception:
-        pass
-    _t(page, 50)
+        try:
+            page.keyboard.press("Control+A")
+        except Exception:
+            pass
+        _t(page, 50)
+        try:
+            page.keyboard.press("Backspace")
+        except Exception:
+            pass
+        _t(page, 50)
     else:
         logger.warning(
             "Hero Insurance: KYC keyboard — focus not on an editable control before insurer type; "
@@ -2735,10 +2735,10 @@ def _fill_kyc_ekyc_keyboard_sop(
         _kyc_press_tab_n(page, max(0, KYC_KEYBOARD_TABS_INSURER_TO_OVD - 1))
     for _ in range(max(1, KYC_KEYBOARD_OVD_ARROW_DOWN_MAX)):
         shown = _kyc_read_focused_control_text(page)
-            last_shown = shown or last_shown
-            if _kyc_ovd_focused_text_is_aadhaar_card(shown):
+        last_shown = shown or last_shown
+        if _kyc_ovd_focused_text_is_aadhaar_card(shown):
             ovd_ok = True
-                logger.info("Hero Insurance: KYC keyboard — OVD shows AADHAAR CARD (ArrowDown).")
+            logger.info("Hero Insurance: KYC keyboard — OVD shows AADHAAR CARD (ArrowDown).")
             break
         try:
             page.keyboard.press("ArrowDown")
@@ -2772,16 +2772,16 @@ def _fill_kyc_ekyc_keyboard_sop(
         _kyc_press_tab_n(page, max(0, KYC_KEYBOARD_TABS_OVD_TO_MOBILE))
         mob_typed = _kyc_fill_mobile_digits_in_frame(kyc_fr, digits, timeout_ms=to_fill)
     if not mob_typed and _kyc_frame_active_element_accepts_mobile_digits(kyc_fr):
-    try:
-        page.keyboard.press("Control+A")
-    except Exception:
-        pass
-    _t(page, 45)
-    try:
-        page.keyboard.type(digits, delay=30)
+        try:
+            page.keyboard.press("Control+A")
+        except Exception:
+            pass
+        _t(page, 45)
+        try:
+            page.keyboard.type(digits, delay=30)
             mob_typed = True
-    except Exception as exc:
-        return f"KYC keyboard SOP: mobile type failed: {exc!s}"
+        except Exception as exc:
+            return f"KYC keyboard SOP: mobile type failed: {exc!s}"
     if not mob_typed:
         if _kyc_try_click_mobile_field(kyc_fr, timeout_ms=cap):
             logger.info("Hero Insurance: KYC keyboard — focused mobile field via click in frame.")
@@ -3214,8 +3214,8 @@ def _hero_misp_page_and_frame_roots(page, *, purpose: str = "generic") -> list:
     if sel:
         try:
             roots.append(page.frame_locator(sel))
-    except Exception:
-        pass
+        except Exception:
+            pass
     roots.append(page)
     try:
         frs = [f for f in page.frames if not f.is_detached()]
@@ -3508,8 +3508,8 @@ def _hero_misp_wait_for_vin_txt_frame_no_attached(
                     classification=_hero_misp_classify_vin_transition_url(page.url or ""),
                 )
                 return True
-        except Exception:
-            continue
+            except Exception:
+                continue
 
     logger.warning("Hero Insurance: timed out waiting for VIN/Chassis input after URL/DOM wait.")
     _hero_misp_log_vin_transition_line(
@@ -3674,15 +3674,15 @@ def _hero_misp_vin_submit_i_agree(
 
     clicked = _hero_misp_click_vin_page_submit(page, timeout_ms=timeout_ms)
     if not clicked:
-    try:
-        sub = page.get_by_role("button", name=re.compile(r"^\s*Submit\s*$", re.I))
-        if sub.count() > 0 and sub.first.is_visible(timeout=2_000):
-            sub.first.click(timeout=timeout_ms)
-        else:
-            page.get_by_text(re.compile(r"^\s*Submit\s*$", re.I)).first.click(timeout=timeout_ms)
-        logger.info("Hero Insurance: clicked Submit on VIN page.")
-    except Exception as exc:
-        return f"VIN Submit click failed: {exc!s}"
+        try:
+            sub = page.get_by_role("button", name=re.compile(r"^\s*Submit\s*$", re.I))
+            if sub.count() > 0 and sub.first.is_visible(timeout=2_000):
+                sub.first.click(timeout=timeout_ms)
+            else:
+                page.get_by_text(re.compile(r"^\s*Submit\s*$", re.I)).first.click(timeout=timeout_ms)
+            logger.info("Hero Insurance: clicked Submit on VIN page.")
+        except Exception as exc:
+            return f"VIN Submit click failed: {exc!s}"
 
     _t(page, 800)
     agreed = False
@@ -4082,6 +4082,19 @@ def _hero_misp_fill_proposal_and_review(
     return None, preview
 
 
+def _insurance_match_base_from_config(insurance_base_url: str) -> tuple[str, str]:
+    """Return ``(match_base`` origin, ``login_url`` full) for ``main_process`` tab reuse."""
+    u = (insurance_base_url or "").strip()
+    if not u.startswith("http"):
+        u = "https://" + u.lstrip("/")
+    p = urllib.parse.urlparse(u)
+    if not p.netloc:
+        raise ValueError("INSURANCE_BASE_URL must be a valid URL with a host")
+    origin = f"{p.scheme}://{p.netloc}".rstrip("/")
+    login_full = u.rstrip("/")
+    return origin, login_full
+
+
 def pre_process(
     *,
     insurance_base_url: str | None = None,
@@ -4092,138 +4105,27 @@ def pre_process(
     staging_payload: dict | None = None,
 ) -> dict:
     """
-    Open **``INSURANCE_BASE_URL``** (reuse tab / launch browser like Fill DMS).
-
-    When **customer_id** and **vehicle_id** are set, loads insurer (details sheet / DB via
-    ``build_insurance_fill_values``) and runs: **Login / Sign In** (if visible) → **2W** (two-wheeler) → **New Policy** →
-    Insurance Company (fuzzy LIKE insurer) → OVD **AADHAAR CARD** → **mobile_number** →
-    **after mobile**, verified-banner path (consent + **Proceed**) or three file uploads + **Proceed**
-    (``_kyc_post_mobile_entry_branch``). Stops on the **VIN** entry page; **main_process** fills VIN and the rest.
+    Hero insurance **pre** stage: same behavior as ``run_fill_insurance_only`` (former standalone
+    ``POST .../insurance``). Hands off ``match_base`` / ``_insurance_playwright_page`` to ``main_process``
+    on real MISP; dummy training HTML may finish the full flow (``main_process`` skips).
     """
-    def _login_url_and_match_base(config_url: str) -> tuple[str, str]:
-        u = (config_url or "").strip()
-        if not u.startswith("http"):
-            u = "https://" + u.lstrip("/")
-        p = urllib.parse.urlparse(u)
-        if not p.netloc:
-            raise ValueError("INSURANCE_BASE_URL must be a valid URL with a host")
-        origin = f"{p.scheme}://{p.netloc}".rstrip("/")
-        login_full = u.rstrip("/")
-        return origin, login_full
-
-    result: dict = {
-        "success": False,
-        "error": None,
-        "page_url": None,
-        "login_url": None,
-        "match_base": None,
-    }
     raw = (insurance_base_url or INSURANCE_BASE_URL or "").strip()
     if not raw:
-        result["error"] = "Set INSURANCE_BASE_URL in backend/.env (or pass insurance_base_url)."
-        return result
-    try:
-        match_base, login_url = _login_url_and_match_base(raw)
-    except ValueError as e:
-        result["error"] = str(e)
-        return result
-
-    result["login_url"] = login_url
-    result["match_base"] = match_base
-
-
-    reset_playwright_insurance_log(ocr_output_dir, subfolder)
-    append_playwright_insurance_line(
-        ocr_output_dir, subfolder, "NOTE", "pre_process: starting Hero Insurance (MISP) flow"
+        return {
+            "success": False,
+            "error": "Set INSURANCE_BASE_URL in backend/.env (or pass insurance_base_url).",
+            "page_url": None,
+            "login_url": None,
+            "match_base": None,
+        }
+    return run_fill_insurance_only(
+        raw,
+        subfolder=subfolder,
+        customer_id=customer_id,
+        vehicle_id=vehicle_id,
+        ocr_output_dir=ocr_output_dir,
+        staging_payload=staging_payload,
     )
-
-    values: dict | None = None
-    if customer_id is not None and vehicle_id is not None:
-        try:
-            values = build_insurance_fill_values(
-                customer_id,
-                vehicle_id,
-                subfolder,
-                ocr_output_dir=ocr_output_dir,
-                staging_payload=staging_payload,
-            )
-        except Exception as exc:
-            result["error"] = str(exc)
-            append_playwright_insurance_line(
-                ocr_output_dir, subfolder, "NOTE", f"pre_process: load DB values failed: {exc!s}"
-            )
-            return result
-
-    page, open_error = get_or_open_site_page(
-        match_base,
-        "Insurance",
-        require_login_on_open=True,
-        launch_url=login_url,
-    )
-    if page is None:
-        result["error"] = open_error
-        append_playwright_insurance_line(
-            ocr_output_dir, subfolder, "NOTE", f"pre_process: could not open Insurance tab: {open_error}"
-        )
-        return result
-
-
-    # Same Playwright worker thread as main_process — hand off the Page so we do not call
-    # ``get_or_open_site_page`` again (a second call may fail tab reuse and launch another window).
-    result["_insurance_playwright_page"] = page
-
-    to = INSURANCE_ACTION_TIMEOUT_MS
-    page.set_default_timeout(to)
-    append_playwright_insurance_line(
-        ocr_output_dir, subfolder, "NOTE", "pre_process: browser tab ready, running Login/Sign In → 2W → New Policy → KYC"
-    )
-
-    try:
-        step_err = _run_hero_misp_portal_after_open(
-            page,
-            values,
-            portal_base_url=match_base,
-            timeout_ms=to,
-            ocr_output_dir=ocr_output_dir,
-            subfolder=subfolder,
-        )
-        if step_err:
-            result["error"] = step_err
-            result["success"] = False
-            append_playwright_insurance_line(
-                ocr_output_dir, subfolder, "NOTE", f"pre_process: stopped with error: {step_err}"
-            )
-        else:
-            result["success"] = True
-            result["error"] = None
-            append_playwright_insurance_line(
-                ocr_output_dir, subfolder, "NOTE", "pre_process: completed — on VIN page (or equivalent)"
-            )
-    except PlaywrightTimeout as exc:
-        result["success"] = False
-        result["error"] = f"Timeout: {exc!s}"
-    except Exception as exc:
-        result["success"] = False
-        result["error"] = str(exc)
-    finally:
-        try:
-            page.set_default_timeout(15_000)
-        except Exception:
-            pass
-
-    try:
-        result["page_url"] = (page.url or "").strip() or None
-    except Exception:
-        result["page_url"] = None
-
-    logger.info(
-        "pre_process: match_base=%s login_url=%s success=%s url=%s",
-        match_base,
-        login_url,
-        result.get("success"),
-        (result.get("page_url") or "")[:160],
-    )
-    return result
 
 
 def main_process(
@@ -4251,6 +4153,13 @@ def main_process(
     if not pre_result.get("success"):
         out["skipped"] = True
         out["error"] = pre_result.get("error")
+        return out
+
+    if pre_result.get("hero_pre_completed_full_dummy_flow"):
+        out["success"] = True
+        out["skipped"] = True
+        out["error"] = None
+        out["page_url"] = pre_result.get("page_url")
         return out
 
     match_base = (pre_result.get("match_base") or "").strip()
@@ -4410,7 +4319,10 @@ def post_process(*, pre_result: dict, main_result: dict) -> dict:
         pre_result.pop("_insurance_playwright_page", None)
     except Exception:
         pass
-    ok = bool(pre_result.get("success")) and bool(main_result.get("success", True))
+    main_ok = bool(main_result.get("success")) or (
+        bool(main_result.get("skipped")) and main_result.get("error") in (None, "")
+    )
+    ok = bool(pre_result.get("success")) and main_ok
     err = pre_result.get("error") or main_result.get("error")
     if not ok and not err:
         err = main_result.get("error")
@@ -4712,6 +4624,19 @@ def run_fill_insurance_only(
             )
             result["success"] = True
             result["error"] = None
+            try:
+                mb, lu = _insurance_match_base_from_config(insurance_base_url)
+                result["match_base"] = mb
+                result["login_url"] = lu
+            except ValueError as _mb_err:
+                result["error"] = str(_mb_err)
+                result["success"] = False
+                return result
+            result["_insurance_playwright_page"] = page
+            try:
+                result["page_url"] = (page.url or "").strip() or None
+            except Exception:
+                result["page_url"] = None
             return result
 
         _insurance_select_fuzzy(page, "#ins-company", values["insurer"] or "")
@@ -4937,6 +4862,17 @@ def run_fill_insurance_only(
                 logger.warning("run_fill_insurance_only: insurance_master post-issue update failed: %s", upd_exc)
         result["success"] = True
         result["error"] = None
+        result["hero_pre_completed_full_dummy_flow"] = True
+        try:
+            mb_d, lu_d = _insurance_match_base_from_config(insurance_base_url)
+            result["match_base"] = mb_d
+            result["login_url"] = lu_d
+        except Exception:
+            pass
+        try:
+            result["page_url"] = (page.url or "").strip() or None
+        except Exception:
+            result["page_url"] = None
         append_playwright_insurance_line(
             ocr_output_dir,
             subfolder,

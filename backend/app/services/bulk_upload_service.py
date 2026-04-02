@@ -203,7 +203,7 @@ def process_bulk_pdf(
         customer_id = submit_result.get("customer_id")
         vehicle_id = submit_result.get("vehicle_id")
 
-        # 4. Fill DMS — same Playwright thread as POST /fill-dms (sync driver is not thread-safe).
+        # 4. Fill DMS — same Playwright thread as POST /fill-forms (sync driver is not thread-safe).
         from app.services.fill_hero_dms_service import run_fill_dms
         from app.services.playwright_executor import run_playwright_callable_sync
 

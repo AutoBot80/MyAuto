@@ -73,11 +73,11 @@ export interface FillDmsResponse {
   ready_for_client_create_invoice?: boolean | null;
 }
 
-const FILL_DMS_TIMEOUT_MS = 180000; // 3 min per section
+const FILL_FORMS_TIMEOUT_MS = 180000; // 3 min per section
 /** Pre-open DMS browser after upload; allow enough time for first managed-browser launch. */
 const DMS_WARM_BROWSER_TIMEOUT_MS = 180000;
 const FILL_VAHAN_TIMEOUT_MS = 60000; // 1 min for Vahan
-const FILL_INSURANCE_TIMEOUT_MS = 120000; // 2 min for Insurance
+const FILL_HERO_INSURANCE_TIMEOUT_MS = 180000; // pre + main + post
 
 export interface WarmDmsBrowserRequest {
   dms_base_url?: string | null;
@@ -93,7 +93,7 @@ export async function warmDmsBrowser(req: WarmDmsBrowserRequest): Promise<WarmDm
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), DMS_WARM_BROWSER_TIMEOUT_MS);
   try {
-    return await apiFetch<WarmDmsBrowserResponse>("/fill-dms/dms/warm-browser", {
+    return await apiFetch<WarmDmsBrowserResponse>("/fill-forms/dms/warm-browser", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(req),
@@ -127,27 +127,29 @@ export interface FillVahanResponse {
   error?: string | null;
 }
 
-export interface FillInsuranceRequest {
+export interface FillHeroInsuranceRequest {
   insurance_base_url?: string | null;
-  dealer_id?: number | null;
   customer_id?: number | null;
   vehicle_id?: number | null;
   subfolder?: string | null;
-  /** Merges ``add_sales_staging.payload_json`` (OCR merge) into fill when view omits insurer/nominee (BR-20). */
+  dealer_id?: number | null;
   staging_id?: string | null;
 }
 
-export interface FillInsuranceResponse {
+export interface FillHeroInsuranceResponse {
   success: boolean;
   error?: string | null;
+  page_url?: string | null;
+  login_url?: string | null;
+  match_base?: string | null;
 }
 
 /** Run only DMS section (login, enquiry, vehicle search, scrape, PDFs). Independent process. */
 export async function fillDmsOnly(req: FillDmsRequest): Promise<FillDmsResponse> {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), FILL_DMS_TIMEOUT_MS);
+  const timeoutId = setTimeout(() => controller.abort(), FILL_FORMS_TIMEOUT_MS);
   try {
-    const res = await apiFetch<FillDmsResponse>("/fill-dms/dms", {
+    const res = await apiFetch<FillDmsResponse>("/fill-forms/dms", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(req),
@@ -164,7 +166,7 @@ export async function fillVahanOnly(req: FillVahanRequest): Promise<FillVahanRes
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), FILL_VAHAN_TIMEOUT_MS);
   try {
-    const res = await apiFetch<FillVahanResponse>("/fill-dms/vahan", {
+    const res = await apiFetch<FillVahanResponse>("/fill-forms/vahan", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(req),
@@ -178,9 +180,9 @@ export async function fillVahanOnly(req: FillVahanRequest): Promise<FillVahanRes
 
 export async function fillDms(req: FillDmsRequest): Promise<FillDmsResponse> {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), FILL_DMS_TIMEOUT_MS);
+  const timeoutId = setTimeout(() => controller.abort(), FILL_FORMS_TIMEOUT_MS);
   try {
-    const res = await apiFetch<FillDmsResponse>("/fill-dms", {
+    const res = await apiFetch<FillDmsResponse>("/fill-forms", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(req),
@@ -192,18 +194,20 @@ export async function fillDms(req: FillDmsRequest): Promise<FillDmsResponse> {
   }
 }
 
-/** Run only Insurance flow. Fills data but does not submit policy. */
-export async function fillInsuranceOnly(req: FillInsuranceRequest): Promise<FillInsuranceResponse> {
+/**
+ * Hero Insurance: pre_process (same automation as former standalone insurance fill) + main_process + post_process.
+ * Single GI entry for Add Sales Generate Insurance.
+ */
+export async function fillHeroInsurance(req: FillHeroInsuranceRequest): Promise<FillHeroInsuranceResponse> {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), FILL_INSURANCE_TIMEOUT_MS);
+  const timeoutId = setTimeout(() => controller.abort(), FILL_HERO_INSURANCE_TIMEOUT_MS);
   try {
-    const res = await apiFetch<FillInsuranceResponse>("/fill-dms/insurance", {
+    return await apiFetch<FillHeroInsuranceResponse>("/fill-forms/insurance/hero", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(req),
       signal: controller.signal,
     });
-    return res;
   } finally {
     clearTimeout(timeoutId);
   }
@@ -225,7 +229,7 @@ export interface PrintForm20Response {
 
 /** Generate Form 20 (all pages) and save to Uploaded scans. Called from Print forms button. */
 export async function printForm20(req: PrintForm20Request): Promise<PrintForm20Response> {
-  return apiFetch<PrintForm20Response>("/fill-dms/print-form20", {
+  return apiFetch<PrintForm20Response>("/fill-forms/print-form20", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(req),
@@ -238,7 +242,7 @@ export async function getDataFromDms(subfolder: string, dealerId?: number): Prom
   params.set("subfolder", subfolder);
   if (dealerId != null) params.set("dealer_id", String(dealerId));
   return apiFetch<{ vehicle: Record<string, string>; customer: Record<string, string> }>(
-    `/fill-dms/data-from-dms?${params.toString()}`
+    `/fill-forms/data-from-dms?${params.toString()}`
   );
 }
 

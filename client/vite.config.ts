@@ -7,8 +7,8 @@ export default defineConfig({
   server: {
     proxy: {
       '/rto-queue': 'http://127.0.0.1:8000',
-      // Fill DMS runs Playwright (often 1–3+ min); default proxy timeout causes 502 Bad Gateway.
-      '/fill-dms': {
+      // Fill Forms (DMS / insurance / etc.) runs Playwright (often 1–3+ min); default proxy timeout causes 502 Bad Gateway.
+      '/fill-forms': {
         target: 'http://127.0.0.1:8000',
         changeOrigin: true,
         timeout: 200_000,

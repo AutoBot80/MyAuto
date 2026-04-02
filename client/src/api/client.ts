@@ -35,7 +35,7 @@ export async function apiFetch<T>(
 ): Promise<T> {
   // #region agent log
   const __dbg_startedAt = Date.now();
-  if (path.includes("/fill-dms")) {
+  if (path.includes("/fill-forms") || path.includes("/fill-dms")) {
     fetch("http://127.0.0.1:7384/ingest/843041b7-64c1-4933-bb72-235d36224f70", {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "0875fe" },
@@ -62,7 +62,7 @@ export async function apiFetch<T>(
   }
   if (!res.ok) {
     // #region agent log
-    if (path.includes("/fill-dms")) {
+    if (path.includes("/fill-forms") || path.includes("/fill-dms")) {
       fetch("http://127.0.0.1:7384/ingest/843041b7-64c1-4933-bb72-235d36224f70", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "0875fe" },

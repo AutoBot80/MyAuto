@@ -5,7 +5,7 @@ import { useUploadScans } from "../hooks/useUploadScans";
 import { UploadScansPanel } from "../components/UploadScansPanel";
 import { getExtractedDetails } from "../api/aiReaderQueue";
 import { submitInfo } from "../api/submitInfo";
-import { fillDmsOnly, fillInsuranceOnly, printForm20, isFillDmsAbortError, warmDmsBrowser } from "../api/fillDms";
+import { fillDmsOnly, fillHeroInsurance, printForm20, isFillDmsAbortError, warmDmsBrowser } from "../api/fillForms";
 import { fetchCreateInvoiceEligibility } from "../api/addSales";
 import { insertRtoPayment } from "../api/rtoPaymentDetails";
 import { loadAddSalesForm, saveAddSalesForm, clearAddSalesForm } from "../utils/addSalesStorage";
@@ -796,7 +796,7 @@ export function AddSalesPage({ dealerId, oemId, dmsUrl, siteUrlsLoading, siteUrl
     setIsFillInsuranceLoading(true);
     setFillInsuranceStatus(null);
     try {
-      const insuranceRes = await fillInsuranceOnly({
+      const insuranceRes = await fillHeroInsurance({
         subfolder: savedTo,
         dealer_id: dealerId,
         customer_id: lastSubmittedCustomerId ?? undefined,
@@ -804,9 +804,9 @@ export function AddSalesPage({ dealerId, oemId, dmsUrl, siteUrlsLoading, siteUrl
         staging_id: lastStagingId ?? undefined,
       });
       if (!insuranceRes.success) {
-        setFillInsuranceStatus(insuranceRes.error ?? "Insurance fill failed.");
+        setFillInsuranceStatus(insuranceRes.error ?? "Generate Insurance (Hero) failed.");
       } else {
-        setFillInsuranceStatus("Insurance fields filled. Submit is not clicked and browser remains open for operator.");
+        setFillInsuranceStatus("Hero Insurance run completed (pre + main + post). Browser may remain open for operator.");
       }
     } catch (insuranceErr) {
       if (isFillDmsAbortError(insuranceErr)) {
