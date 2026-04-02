@@ -71,6 +71,11 @@ INSURANCE_NAV_IFRAME_SELECTOR = 'iframe[src*="2w" i]'
 # until operators finish reviewing automated form filling. Set False to re-enable issuance.
 HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY = True
 
+# Optional: regex on checkbox **label/row text** (see ``Playwright_insurance_main_process_frames.txt``) for a **new**
+# proposal checkbox MISP added — force **unchecked** when a matching visible checkbox exists. If **empty**, this
+# step is skipped (no error). Does **not** replace **CPA Tenure** (that is still the text/select field filled with ``0``).
+HERO_MISP_PROPOSAL_OPTIONAL_UNCHECK_CHECKBOX_REGEX = ""
+
 
 def _hero_misp_vin_step_timeout_ms(base_action_ms: int | None = None) -> int:
     """
@@ -3627,6 +3632,78 @@ def _proposal_step_checkbox(
     return f"{step_id}: checkbox not found for pattern {text_pattern!r}{suf}"
 
 
+def _proposal_step_checkbox_uncheck_if_present(
+    page,
+    text_pattern: str,
+    step_id: str,
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
+    *,
+    timeout_ms: int,
+) -> str | None:
+    """
+    If a visible checkbox matches ``text_pattern``, ensure it is **unchecked** and verify.
+    If **no** such checkbox exists, log skip — **not** an error (portal builds vary).
+    """
+    if not (text_pattern or "").strip():
+        return None
+    rx = re.compile(text_pattern, re.I)
+    last_exc = ""
+    for root in _hero_misp_page_and_frame_roots(page, purpose="nav"):
+        try:
+            cbs = root.locator('input[type="checkbox"]')
+            n = cbs.count()
+        except Exception:
+            continue
+        for i in range(min(n, 160)):
+            cb = cbs.nth(i)
+            try:
+                if not cb.is_visible(timeout=400):
+                    continue
+                t = ""
+                cid = cb.get_attribute("id") or ""
+                if cid:
+                    try:
+                        lab = root.locator(f'label[for="{cid}"]')
+                        if lab.count() > 0:
+                            t = (lab.first.inner_text() or "")[:400]
+                    except Exception:
+                        pass
+                if not t.strip():
+                    t = (
+                        cb.evaluate(
+                            "e => (e.closest('label, tr, div') && e.closest('label, tr, div').innerText) || ''"
+                        )
+                        or ""
+                    )[:500]
+                if not rx.search(t):
+                    continue
+                if cb.is_checked():
+                    cb.uncheck(timeout=timeout_ms)
+                if cb.is_checked():
+                    return (
+                        f"{step_id}: optional checkbox could not be left unchecked "
+                        f"pattern={text_pattern!r}"
+                    )
+                _proposal_log(
+                    ocr_output_dir,
+                    subfolder,
+                    step_id,
+                    f"checkbox optional uncheck ok pattern={text_pattern[:56]!r} readback=unchecked",
+                )
+                return None
+            except Exception as exc:
+                last_exc = str(exc)
+                continue
+    _proposal_log(
+        ocr_output_dir,
+        subfolder,
+        step_id,
+        f"skip optional_uncheck (no checkbox matched pattern={text_pattern[:56]!r}){(' ' + last_exc) if last_exc else ''}",
+    )
+    return None
+
+
 def _proposal_step_email_hardcoded(
     page,
     email_fixed: str,
@@ -4914,6 +4991,19 @@ def _hero_misp_fill_proposal_and_review(
     ):
         err = _proposal_step_checkbox(
             page, pat, want, sid, ocr_output_dir, subfolder, timeout_ms=pt
+        )
+        if err:
+            return _fail(err)
+
+    _opt_uncheck = (HERO_MISP_PROPOSAL_OPTIONAL_UNCHECK_CHECKBOX_REGEX or "").strip()
+    if _opt_uncheck:
+        err = _proposal_step_checkbox_uncheck_if_present(
+            page,
+            _opt_uncheck,
+            "addon_optional_uncheck",
+            ocr_output_dir,
+            subfolder,
+            timeout_ms=pt,
         )
         if err:
             return _fail(err)
