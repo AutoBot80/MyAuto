@@ -28,6 +28,7 @@ Agents and humans: if you create only a tag, or only a standalone markdown file,
 | Working vehicle and enquiry code | `checkpoint/working-vehicle-and-enquiry-code` | `d3e6a17e396e181701453bc3feb3c69205c40298` | 2026-03-31T22:20:00+05:30 | 1) Fixed extra call for vehicle. Speeded up contact page; 2) Hard coded failure remains before bookings; 3) Need to fix add_vehicle code to remove redundant vehicle steps; 4) Need to put condition to stop the code from creating multiple bookings; 5) Then Create Invoice can be enabled |
 | All DMS Working | `all-dms-working` | `6079ea47742aa669e33f499893a49aeb8ead9c0b` | 2026-04-01T17:47:52+05:30 | 1) Testing and bug fixes — exercise Create Invoice, master commit, eligibility, Generate Insurance, insurance fill end-to-end; 2) Edge cases — challans and firm; 3) Proceed with insurance fill (`pre_process` / `main_process` after login / 2W) — see **`Documentation/checkpoint-all-dms-working.md`** |
 | In Insurance, filled KYC page | `checkpoint/in-insurance-filled-kyc-page` | `8646fd4dffd56668394f89ddfcc3abe66aebffda` | 2026-04-02T15:30:26+05:30 | 1) The structure has created dirty branching and interactions with fill_dms need to clean that up |
+| Reached Main Insurance Page | `checkpoint/reached-main-insurance-page` | `eb0617ae0713375e8c332c430b7362a0b2335b95` | 2026-04-02T21:03:12+05:30 | 1) Fill main page elements; 2) Navigation is still slow in a few places — see **`Documentation/checkpoint-reached-main-insurance-page.md`** |
 
 ## Rollback / Restore
 
