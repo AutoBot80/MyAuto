@@ -1,23 +1,7 @@
 Playwright Insurance — execution log (IST / Asia/Kolkata timestamps)
 
-started_ist=2026-04-02T18:39:49.599+05:30
+started_ist=2026-04-02T19:01:38.834+05:30
 subfolder='8279246146_020426'
 
 --- trace ---
-2026-04-02T18:39:49.601+05:30 [NOTE] run_fill_insurance_only: starting Fill Insurance flow
-2026-04-02T18:39:59.639+05:30 [NOTE] run_fill_insurance_only: Sign In not auto-clicked — complete login manually if needed.
-2026-04-02T18:40:01.530+05:30 [NOTE] run_fill_insurance_only: clicked 2W (two-wheeler) entry
-2026-04-02T18:40:07.157+05:30 [NOTE] run_fill_insurance_only: active tab after 2W — url=https://misp.heroinsurance.com/prod/apps/V1/2W/welcome/Default.aspx
-2026-04-02T18:40:08.128+05:30 [NOTE] run_fill_insurance_only: clicked New Policy
-2026-04-02T18:40:13.673+05:30 [NOTE] run_fill_insurance_only: active tab before KYC wait — url=https://misp.heroinsurance.com/prod/apps/kyc/ekycpage.aspx?Source=SnYafzI2fA96Rj7pW0nWaw==&Source_url=Lv8tJ2LuZnx7my1t5RWhVf/FX8JborxFEQh90HK6y7dm0y1v+6md/CbxYSLduLhXDK0jtxMeNGzb0DQV3jHdboVe1fWBiZU3y5
-2026-04-02T18:40:13.928+05:30 [NOTE] run_fill_insurance_only: real MISP KYC — _fill_insurance_company_and_ovd_mobile_consent (keyboard SOP on ekycpage when enabled)
-2026-04-02T18:40:31.615+05:30 [NOTE] run_fill_insurance_only: real MISP KYC (post-mobile banner branch + Proceed or uploads) complete
-2026-04-02T18:40:31.625+05:30 [NOTE] run_fill_insurance_only: VIN fill + Submit (pre_process), timeout_ms=82500
-2026-04-02T18:40:31.658+05:30 [DIAG] vin_transition phase=pre_process_vin_fill_submit_start classification=kyc url=https://misp.heroinsurance.com/prod/apps/kyc/ekycpage.aspx?[query_len=487] title='E KYC' f0=https://misp.heroinsurance.com/prod/apps/kyc/ekycpage.aspx?[query_len=487] f1=
-2026-04-02T18:40:31.675+05:30 [DIAG] vin_transition phase=waiting_txtFrameNo_start classification=kyc url=https://misp.heroinsurance.com/prod/apps/kyc/ekycpage.aspx?[query_len=487] title='E KYC' f0=https://misp.heroinsurance.com/prod/apps/kyc/ekycpage.aspx?[query_len=487] f1=
-2026-04-02T18:40:31.681+05:30 [DIAG] vin_transition phase=waiting_txtFrameNo_nav_snapshot classification=kyc url=https://misp.heroinsurance.com/prod/apps/kyc/ekycpage.aspx?[query_len=487] title='E KYC' f0=https://misp.heroinsurance.com/prod/apps/kyc/ekycpage.aspx?[query_len=487] f1=
-2026-04-02T18:40:36.384+05:30 [DIAG] vin_transition phase=navigated_to_mispdms_url classification=mispdms_policy_vin url=https://misp.heroinsurance.com/prod/apps/V1/2W/Policy/MispDms.aspx?[query_len=539] title='HIBIPL - MisDMS Entry' f0=https://misp.heroinsurance.com/prod/apps/V1/2W/Policy/MispDms.aspx?[query_len=539] f1= f2=https://misp.heroinsurance.com/prod/apps/V1/2W/App_Themes/CorCalendar.htm
-2026-04-02T18:40:44.496+05:30 [DIAG] vin_transition phase=vin_field_attached classification=mispdms_policy_vin url=https://misp.heroinsurance.com/prod/apps/V1/2W/Policy/MispDms.aspx?[query_len=539] title='HIBIPL - MisDMS Entry' f0=https://misp.heroinsurance.com/prod/apps/V1/2W/Policy/MispDms.aspx?[query_len=539] f1= f2=https://misp.heroinsurance.com/prod/apps/V1/2W/App_Themes/CorCalendar.htm
-2026-04-02T18:40:45.643+05:30 [NOTE] main_process: I agree → proposal form (VIN+Submit done in pre_process)
-2026-04-02T18:40:45.645+05:30 [NOTE] main_process: attached to same browser tab as pre_process
-2026-04-02T18:40:54.928+05:30 [NOTE] main_process: completed — Proposal Review, insurance_master insert, Issue Policy + scrape
+2026-04-02T19:01:38.836+05:30 [NOTE] run_fill_insurance_only: starting Fill Insurance flow
