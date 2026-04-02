@@ -1038,7 +1038,7 @@ def _expand_misp_policy_issuance_nav_if_collapsed(page, *, timeout_ms: int) -> N
     (``#navbarVerticalNav``, ``data-tooltip="Policy Issuance"``, ``aria-expanded="false"``).
     Expand that section so **New Policy** is visible.
     """
-    to = min(max(1_200, int(timeout_ms)), 12_000)
+    to = min(max(100, int(timeout_ms)), 6_000)
     try:
         nav = page.locator("#navbarVerticalNav").first
         if nav.count() == 0:
@@ -1083,7 +1083,7 @@ def _expand_misp_policy_issuance_nav_if_collapsed(page, *, timeout_ms: int) -> N
         pass
 
     try:
-        trig.scroll_into_view_if_needed(timeout=5_000)
+        trig.scroll_into_view_if_needed(timeout=200)
     except Exception:
         pass
     try:
@@ -1093,7 +1093,7 @@ def _expand_misp_policy_issuance_nav_if_collapsed(page, *, timeout_ms: int) -> N
         logger.warning("Hero Insurance: Policy Issuance expand click failed: %s", exc)
         return
 
-    _t(page, min(80, INSURANCE_CLICK_SETTLE_MS + 20))
+    _t(page, min(50, INSURANCE_CLICK_SETTLE_MS + 15))
 
 
 def _click_new_policy(page, *, timeout_ms: int) -> None:
@@ -1103,7 +1103,7 @@ def _click_new_policy(page, *, timeout_ms: int) -> None:
     loc.first.click(timeout=timeout_ms)
     logger.info("Hero Insurance: clicked New Policy.")
     try:
-        page.wait_for_load_state("domcontentloaded", timeout=min(25_000, timeout_ms * 2))
+        page.wait_for_load_state("domcontentloaded", timeout=min(12_000, max(4_000, timeout_ms * 2)))
     except Exception:
         pass
 
@@ -1734,12 +1734,12 @@ def _kyc_tab_out_of_insurer_after_escape(page, kyc_fr) -> None:
     try:
         if kyc_fr != page.main_frame:
             try:
-                kyc_fr.frame_element().click(timeout=5_000)
+                kyc_fr.frame_element().click(timeout=200)
             except Exception:
                 pass
-            _t(page, 120)
+            _t(page, 90)
         try:
-            kyc_fr.locator("body").click(timeout=5_000, position={"x": 140, "y": 200})
+            kyc_fr.locator("body").click(timeout=200, position={"x": 140, "y": 200})
         except Exception:
             pass
         _t(page, 120)
@@ -2085,10 +2085,7 @@ def _fill_kyc_ekyc_keyboard_sop(
 
     cap = min(int(timeout_ms), 120_000)
     kyc_fr = _kyc_preferred_kyc_frame(page)
-    logger.info(
-        "Hero Insurance: KYC keyboard SOP — focusing document (url=%s).",
-        (page.url or "")[:220],
-    )
+    logger.debug("Hero Insurance: KYC keyboard SOP — starting (focus chain).")
     try:
         page.bring_to_front()
     except Exception:
@@ -2097,29 +2094,29 @@ def _fill_kyc_ekyc_keyboard_sop(
     # before body click + Tab chain (main-page Tab order otherwise skips embedded controls).
     if kyc_fr != page.main_frame:
         try:
-            kyc_fr.frame_element().click(timeout=min(cap, 8_000))
-            _t(page, 160)
+            kyc_fr.frame_element().click(timeout=200)
+            _t(page, 100)
         except Exception as exc:
             logger.debug("Hero Insurance: KYC iframe host click: %s", exc)
     # Focus the KYC document (often inside an iframe). Main-frame body click does not move focus there.
     try:
-        kyc_fr.locator("body").click(timeout=min(cap, 8_000), position={"x": 160, "y": 220})
+        kyc_fr.locator("body").click(timeout=200, position={"x": 160, "y": 220})
     except Exception:
         try:
-            page.locator("body").click(timeout=min(cap, 8_000), position={"x": 40, "y": 40})
+            page.locator("body").click(timeout=200, position={"x": 40, "y": 40})
         except Exception:
             try:
                 page.mouse.click(80, 200)
             except Exception:
                 pass
-    _t(page, 280)
+    _t(page, 100)
 
     # Prefer clicking the labelled insurer control so focus is on INPUT/SELECT. Tab alone often
     # leaves focus on body; Control+A then selects the entire page (not field text).
     ic_clicked = _kyc_try_click_insurance_company_field(kyc_fr, timeout_ms=cap)
     if ic_clicked:
         logger.info("Hero Insurance: KYC keyboard — focused Insurance Company via click in frame.")
-        _t(page, 200)
+        _t(page, 100)
     else:
         _kyc_press_tab_n(page, max(0, KYC_KEYBOARD_TABS_TO_INSURANCE_FIELD))
 
@@ -2140,10 +2137,10 @@ def _fill_kyc_ekyc_keyboard_sop(
             "typing without Select-All (prevents selecting all text on the page)."
         )
     try:
-        page.keyboard.type(insurer[:96], delay=34)
+        page.keyboard.type(insurer[:96], delay=10)
     except Exception as exc:
         return f"KYC keyboard SOP: could not type insurer: {exc!s}"
-    _t(page, 480)
+    _t(page, 100)
 
     opts = _kyc_collect_dropdown_option_texts(kyc_fr)
     pick = (
@@ -2162,7 +2159,7 @@ def _fill_kyc_ekyc_keyboard_sop(
                 page.keyboard.press("ArrowDown")
             except Exception:
                 pass
-            _t(page, 115)
+            _t(page, 80)
             shown = _kyc_read_focused_control_text(page)
             if _kyc_insurer_display_matches(insurer, shown):
                 matched = True
@@ -2189,16 +2186,27 @@ def _fill_kyc_ekyc_keyboard_sop(
             f"insurer={insurer[:48]!r}"
         )
 
+    # Commit highlighted insurer: MISP/ASP.NET combobox often needs Enter twice, then Tab off, then Escape.
     try:
         page.keyboard.press("Enter")
     except Exception:
         pass
-    # Close insurer listbox / commit focus — without this, Tab may not leave the combobox (manual Tab fixed it).
+    _t(page, 100)
+    try:
+        page.keyboard.press("Enter")
+    except Exception:
+        pass
+    _t(page, 120)
+    try:
+        page.keyboard.press("Tab")
+    except Exception:
+        pass
+    _t(page, 100)
     try:
         page.keyboard.press("Escape")
     except Exception:
         pass
-    _t(page, 280)
+    _t(page, 180)
     _kyc_tab_out_of_insurer_after_escape(page, kyc_fr)
     _kyc_blur_if_insurer_product_select_focused(kyc_fr)
     _kyc_blur_insurer_product_select_in_frame(kyc_fr)
@@ -2785,22 +2793,6 @@ def _hero_misp_classify_vin_transition_url(url: str) -> str:
     return "other"
 
 
-def _hero_misp_frame_urls_diag_line(page) -> str:
-    parts: list[str] = []
-    try:
-        for i, fr in enumerate(page.frames[:16]):
-            try:
-                if fr.is_detached():
-                    continue
-                su = _hero_misp_safe_url_for_insurance_log(fr.url or "", max_len=120)
-                parts.append(f"f{i}={su}")
-            except Exception:
-                continue
-    except Exception:
-        pass
-    return " ".join(parts)[:1900]
-
-
 def _hero_misp_kyc_please_wait_overlay_visible(page) -> bool:
     """True when MISP shows the **Please wait** / loading row on ``ekycpage`` (same URL before redirect to VIN)."""
     try:
@@ -2866,20 +2858,21 @@ def _hero_misp_log_vin_transition_line(
     subfolder: str | None,
     classification: str | None = None,
 ) -> None:
-    """Structured **DIAG** line for ``Playwright_insurance.txt`` — KYC→VIN navigation (no raw query tokens)."""
-    if not ocr_output_dir or not str(subfolder or "").strip():
-        return
+    """
+    KYC→VIN navigation breadcrumb. Full URL/frame detail goes to **debug logs only** — not
+    ``Playwright_insurance.txt`` (avoid URL dumps in operator traces).
+    """
+    del ocr_output_dir, subfolder
     try:
         raw = page.url or ""
-        safe = _hero_misp_safe_url_for_insurance_log(raw)
         cls = classification if classification is not None else _hero_misp_classify_vin_transition_url(raw)
-        try:
-            title = (page.title() or "").strip()[:140]
-        except Exception:
-            title = ""
-        frames = _hero_misp_frame_urls_diag_line(page)
-        msg = f"vin_transition phase={phase} classification={cls} url={safe} title={title!r} {frames}"
-        append_playwright_insurance_line(ocr_output_dir, subfolder, "DIAG", msg)
+        safe = _hero_misp_safe_url_for_insurance_log(raw)
+        logger.debug(
+            "Hero Insurance vin_transition phase=%s classification=%s url=%s",
+            phase,
+            cls,
+            safe,
+        )
     except Exception:
         pass
 
@@ -4112,15 +4105,12 @@ def run_fill_insurance_only(
             timeout_ms=INSURANCE_ACTION_TIMEOUT_MS,
             step_label="2W",
         )
-        try:
-            append_playwright_insurance_line(
-                ocr_output_dir,
-                subfolder,
-                "NOTE",
-                f"run_fill_insurance_only: active tab after 2W — url={(page.url or '')[:200]}",
-            )
-        except Exception:
-            pass
+        append_playwright_insurance_line(
+            ocr_output_dir,
+            subfolder,
+            "NOTE",
+            "run_fill_insurance_only: active tab after 2W",
+        )
         _insurance_click_settle(page)
         pages_before_np = _misp_snapshot_context_pages(page)
         try:
@@ -4141,15 +4131,12 @@ def run_fill_insurance_only(
             timeout_ms=INSURANCE_ACTION_TIMEOUT_MS,
             step_label="New Policy",
         )
-        try:
-            append_playwright_insurance_line(
-                ocr_output_dir,
-                subfolder,
-                "NOTE",
-                f"run_fill_insurance_only: active tab before KYC wait — url={(page.url or '')[:200]}",
-            )
-        except Exception:
-            pass
+        append_playwright_insurance_line(
+            ocr_output_dir,
+            subfolder,
+            "NOTE",
+            "run_fill_insurance_only: active tab before KYC wait",
+        )
 
         wait_err = _wait_for_insurance_kyc_after_login(page, insurance_base_url)
         if wait_err:
