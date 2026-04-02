@@ -80,6 +80,49 @@ HERO_MISP_PROPOSAL_OPTIONAL_UNCHECK_CHECKBOX_REGEX = ""
 HERO_MISP_CPH1 = "ctl00_ContentPlaceHolder1"
 
 
+def _proposal_map_marital_for_misp(raw: str) -> str:
+    """Normalize DB / staging text to MISP ``ddlMaritalStatus`` option labels."""
+    s = (raw or "").strip()
+    if not s:
+        return ""
+    sl = re.sub(r"\s+", " ", s.lower())
+    if sl in ("married", "marrid", "maried", "m.") or sl.startswith("married "):
+        return "Married"
+    if sl in ("single", "unmarried", "un-married"):
+        return "Single"
+    if "widow" in sl:
+        return "Widow"
+    if "divorc" in sl:
+        return "Divorced"
+    return s
+
+
+def _proposal_map_occupation_for_misp(raw: str) -> str:
+    """
+    Map profession text to MISP ``ddlOccupatnType`` labels. **Private** (e.g. vehicle class wording) → **Employed**.
+    Empty → **Employed** (portal default expectation).
+    """
+    s = (raw or "").strip()
+    if not s:
+        return "Employed"
+    sl = re.sub(r"\s+", " ", s.lower())
+    if sl in ("private", "pvt", "pvt.") or "private" in sl:
+        return "Employed"
+    if sl in ("government job", "govt", "govt job", "government"):
+        return "Government Job"
+    if "self" in sl and "employ" in sl:
+        return "Self Employed"
+    if "student" in sl:
+        return "Student"
+    if "agricultur" in sl or "farmer" in sl or "farm" in sl:
+        return "Farmer/Farm Related"
+    if "business" in sl:
+        return "Business"
+    if sl in ("employed", "employment", "salaried", "job"):
+        return "Employed"
+    return s
+
+
 def _hero_misp_vin_step_timeout_ms(base_action_ms: int | None = None) -> int:
     """
     Budget for KYC **Proceed** → **MispDms.aspx** + ``txtFrameNo`` attach. ``INSURANCE_ACTION_TIMEOUT_MS`` is for
@@ -3487,6 +3530,144 @@ def _proposal_scroll_visible(el, *, timeout_ms: int) -> None:
         pass
 
 
+def _proposal_normalize_dob_for_misp(dob_raw: str) -> str:
+    """``customer_master.dob`` is usually dd/mm/yyyy; accept ISO and reformat."""
+    v = (dob_raw or "").strip()
+    if not v:
+        return ""
+    m = re.match(r"^(\d{4})-(\d{2})-(\d{2})$", v)
+    if m:
+        y, mo, d = m.group(1), m.group(2), m.group(3)
+        return f"{d}/{mo}/{y}"
+    return v
+
+
+def _proposal_step_fill_dob(
+    page,
+    dob_raw: str,
+    step_id: str,
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
+    *,
+    timeout_ms: int,
+) -> str | None:
+    """Proposer **Date of Birth** — ``txtDOB`` (dd/mm/yyyy)."""
+    v = _proposal_normalize_dob_for_misp(dob_raw)
+    if not v:
+        return None
+    last = "dob not filled"
+    for root in _hero_misp_page_and_frame_roots(page, purpose="nav"):
+        try:
+            loc = _proposal_cph1_locator(root, "txtDOB")
+            if loc.count() == 0:
+                continue
+            el = loc.first
+            if not el.is_visible(timeout=800):
+                _proposal_scroll_visible(el, timeout_ms=timeout_ms)
+            if not el.is_visible(timeout=1_800):
+                continue
+            el.fill("", timeout=timeout_ms)
+            el.fill(v, timeout=timeout_ms)
+            got = (el.input_value() or "").strip()
+            if not got:
+                return f"{step_id}: DOB readback empty after fill"
+            if normalize_for_fuzzy_match(got) != normalize_for_fuzzy_match(v) and v not in got and got not in v:
+                if not any(
+                    x in got.replace("-", "/") for x in (v, v.replace("/", "-"))
+                ):
+                    return f"{step_id}: DOB readback mismatch want={v!r} got={got!r}"
+            _proposal_log(
+                ocr_output_dir,
+                subfolder,
+                step_id,
+                f"fill ok id_suffix=txtDOB readback={got!r}",
+            )
+            return None
+        except Exception as exc:
+            last = str(exc)
+            continue
+    err = _proposal_step_fill_input(
+        page,
+        (r"Date\s*of\s*Birth", r"DOB", r"Birth\s*Date"),
+        v,
+        step_id,
+        ocr_output_dir,
+        subfolder,
+        timeout_ms=timeout_ms,
+    )
+    if err:
+        return f"{step_id}: {err} ({last})"
+    return None
+
+
+def _proposal_step_checkbox_cph1_then_pattern(
+    page,
+    cph1_id_suffix: str,
+    want_checked: bool,
+    text_pattern: str,
+    step_id: str,
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
+    *,
+    timeout_ms: int,
+) -> str | None:
+    """Prefer stable CPH1 checkbox id; fall back to row-text scan (``_proposal_step_checkbox``)."""
+    for root in _hero_misp_page_and_frame_roots(page, purpose="nav"):
+        try:
+            loc = _proposal_cph1_locator(root, cph1_id_suffix)
+            if loc.count() == 0:
+                continue
+            cb = loc.first
+            if (cb.get_attribute("type") or "").lower() != "checkbox":
+                continue
+            if not cb.is_visible(timeout=600):
+                _proposal_scroll_visible(cb, timeout_ms=timeout_ms)
+            if not cb.is_visible(timeout=2_000):
+                continue
+            if want_checked and not cb.is_checked():
+                cb.check(timeout=timeout_ms)
+            elif not want_checked and cb.is_checked():
+                cb.uncheck(timeout=timeout_ms)
+            if cb.is_checked() != want_checked:
+                return (
+                    f"{step_id}: checkbox id={cph1_id_suffix!r} want_checked={want_checked} "
+                    f"got={cb.is_checked()}"
+                )
+            _proposal_log(
+                ocr_output_dir,
+                subfolder,
+                step_id,
+                f"checkbox {'checked' if want_checked else 'unchecked'} ok id_suffix={cph1_id_suffix!r}",
+            )
+            return None
+        except Exception:
+            continue
+    return _proposal_step_checkbox(
+        page, text_pattern, want_checked, step_id, ocr_output_dir, subfolder, timeout_ms=timeout_ms
+    )
+
+
+def _proposal_hdfc_radio_any_checked(page) -> bool:
+    for root in _hero_misp_page_and_frame_roots(page, purpose="nav"):
+        try:
+            loc = _proposal_cph1_locator(root, "rdoHdfcCCType")
+            if loc.count() > 0 and loc.first.is_checked():
+                return True
+        except Exception:
+            pass
+        try:
+            hdfc = root.get_by_role("radio", name=re.compile(r"HDFC", re.I))
+            for i in range(min(hdfc.count(), 12)):
+                try:
+                    if hdfc.nth(i).is_checked():
+                        return True
+                except Exception:
+                    continue
+        except Exception:
+            continue
+    return False
+
+
 def _proposal_step_select_fuzzy(
     page,
     label_patterns: tuple[str, ...],
@@ -4041,6 +4222,25 @@ def _proposal_step_hdfc_payment(
 ) -> str | None:
     for root in _hero_misp_page_and_frame_roots(page, purpose="nav"):
         try:
+            loc = _proposal_cph1_locator(root, "rdoHdfcCCType")
+            if loc.count() > 0:
+                r = loc.first
+                if not r.is_visible(timeout=800):
+                    _proposal_scroll_visible(r, timeout_ms=timeout_ms)
+                if r.is_visible(timeout=1_500):
+                    r.check(timeout=timeout_ms)
+                    if r.is_checked():
+                        _proposal_log(
+                            ocr_output_dir,
+                            subfolder,
+                            step_id,
+                            "radio HDFC (rdoHdfcCCType) checked ok readback=checked",
+                        )
+                        return None
+        except Exception:
+            continue
+    for root in _hero_misp_page_and_frame_roots(page, purpose="nav"):
+        try:
             hdfc = root.get_by_role("radio", name=re.compile(r"HDFC", re.I))
             if hdfc.count() == 0:
                 continue
@@ -4066,11 +4266,17 @@ def _proposal_step_hdfc_payment(
             if lab.count() == 0 or not lab.is_visible(timeout=1_200):
                 continue
             lab.click(timeout=timeout_ms)
+            _t(page, 200)
+            if not _proposal_hdfc_radio_any_checked(page):
+                return (
+                    f"{step_id}: HDFC label clicked but no HDFC payment radio is checked "
+                    "(verify Preferred CC / payment panel)"
+                )
             _proposal_log(
                 ocr_output_dir,
                 subfolder,
                 step_id,
-                "click HDFC label (readback not verified for custom UI)",
+                "click HDFC label ok readback=checked",
             )
             return None
     except Exception as exc:
@@ -5034,7 +5240,7 @@ def _hero_misp_fill_proposal_and_review(
         )
         return msg, {}
 
-    ms = (values.get("marital_status") or "").strip()
+    ms = _proposal_map_marital_for_misp((values.get("marital_status") or "").strip())
     if ms:
         err = _proposal_step_select_fuzzy(
             page,
@@ -5049,17 +5255,29 @@ def _hero_misp_fill_proposal_and_review(
         if err:
             return _fail(err)
 
-    prof = (values.get("profession") or "").strip()
-    if prof:
-        err = _proposal_step_select_fuzzy(
+    prof = _proposal_map_occupation_for_misp((values.get("profession") or "").strip())
+    err = _proposal_step_select_fuzzy(
+        page,
+        (r"Occupation\s*Type", r"Occupation"),
+        prof,
+        "occupation",
+        ocr_output_dir,
+        subfolder,
+        timeout_ms=pt,
+        cph1_id_suffix="ddlOccupatnType",
+    )
+    if err:
+        return _fail(err)
+
+    dob_val = (values.get("dob") or "").strip()
+    if dob_val:
+        err = _proposal_step_fill_dob(
             page,
-            (r"Occupation\s*Type", r"Occupation"),
-            prof,
-            "occupation",
+            dob_val,
+            "date_of_birth",
             ocr_output_dir,
             subfolder,
             timeout_ms=pt,
-            cph1_id_suffix="ddlOccupatnType",
         )
         if err:
             return _fail(err)
@@ -5074,6 +5292,27 @@ def _hero_misp_fill_proposal_and_review(
     )
     if err:
         return _fail(err)
+
+    alt_raw = (values.get("alt_phone_num") or "").strip()
+    if alt_raw:
+        alt_digits = re.sub(r"\D", "", alt_raw)[:10]
+        if len(alt_digits) == 10:
+            err = _proposal_step_fill_input(
+                page,
+                (
+                    r"Alternate\s*Mobile",
+                    r"Alternate\s*Mobile\s*No",
+                    r"Alt\.?\s*Mobile",
+                ),
+                alt_digits,
+                "alternate_mobile",
+                ocr_output_dir,
+                subfolder,
+                timeout_ms=pt,
+                cph1_id_suffix="txtMobile2",
+            )
+            if err:
+                return _fail(err)
 
     city = (values.get("city") or "").strip()
     rto_query = city if city else "City"
@@ -5199,7 +5438,7 @@ def _hero_misp_fill_proposal_and_review(
             return _fail(err)
 
     branch_city = city
-    if branch_city:
+    if branch_city and fin:
         err = _proposal_step_fill_input(
             page,
             (
@@ -5219,9 +5458,24 @@ def _hero_misp_fill_proposal_and_review(
             return _fail(err)
 
     _t(page, 400)
+    err = _proposal_step_checkbox(
+        page, r"ND\s*Cover", True, "addon_nd_cover", ocr_output_dir, subfolder, timeout_ms=pt
+    )
+    if err:
+        return _fail(err)
+    err = _proposal_step_checkbox_cph1_then_pattern(
+        page,
+        "chkroicover",
+        True,
+        r"RTI\s*cover|RTI\s*Cover|RTI",
+        "addon_rti",
+        ocr_output_dir,
+        subfolder,
+        timeout_ms=pt,
+    )
+    if err:
+        return _fail(err)
     for pat, want, sid in (
-        (r"ND\s*Cover", True, "addon_nd_cover"),
-        (r"RTI\s*cover|RTI\s*Cover", True, "addon_rti"),
         (r"^RSA$|RSA\s*cover|Road\s*Side", False, "addon_rsa"),
         (r"Emergency\s*Medical|Expenses", False, "addon_emergency_medical"),
     ):

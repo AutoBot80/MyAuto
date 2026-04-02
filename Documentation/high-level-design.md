@@ -409,3 +409,4 @@ The SQL view **`form_dms_view`** is **removed**; the same mapping is implemented
 | 1.112 | Apr 2026 | — | **`main_process`**: **`Playwright_insurance_main_process_frames.txt`** (all frames, visible controls) before proposal fill — **LLD** **6.190** |
 | 1.113 | Apr 2026 | — | **`main_process` proposal**: per-step readback + **`Playwright_insurance.txt`** lines; fail-fast on first bad step — **LLD** **6.191** |
 | 1.114 | Apr 2026 | — | **`fill_hero_insurance_service`**: MISP proposal **`HERO_MISP_CPH1`** id-suffix locators; **Email ID** / **txtRegistrationDate** / nominee radios / **ddlFinancerName** / **ddlCPATenure** / **USGI** uncheck / **Proposal Preview** — **LLD** **6.193** |
+| 1.115 | Apr 2026 | — | **`fill_hero_insurance_service`**: marital/occupation maps; DOB + alternate mobile; conditional finance branch; RTI id-first; HDFC strict — **LLD** **6.194** |
