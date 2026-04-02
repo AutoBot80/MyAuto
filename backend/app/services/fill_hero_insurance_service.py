@@ -2091,6 +2091,89 @@ def _kyc_frame_active_element_is_editable(fr) -> bool:
         return False
 
 
+def _kyc_frame_active_element_accepts_mobile_digits(fr) -> bool:
+    """True when focus is on a text-like input — not ``<select>``, radio, or checkbox (avoid typing mobile into insurer ddl)."""
+    try:
+        return bool(
+            fr.evaluate(
+                """() => {
+          const a = document.activeElement;
+          if (!a) return false;
+          const t = a.tagName;
+          if (t === 'TEXTAREA') return true;
+          if (t === 'INPUT') {
+            const ty = (a.getAttribute('type') || 'text').toLowerCase();
+            if (ty === 'radio' || ty === 'checkbox' || ty === 'submit' || ty === 'button' || ty === 'hidden' || ty === 'file')
+              return false;
+            return true;
+          }
+          if (a.isContentEditable) return true;
+          return false;
+        }"""
+            )
+        )
+    except Exception:
+        return False
+
+
+def _kyc_blur_if_insurer_product_select_focused(kyc_fr) -> None:
+    """
+    MISP often leaves focus on ``#ContentPlaceHolder1_ddlproduct`` after insurer pick; Tab chain then
+    fails and ``keyboard.type`` can target the wrong ``<select>``. Blur so downstream DOM steps see a sane focus.
+    """
+    try:
+        kyc_fr.evaluate(
+            """() => {
+          const a = document.activeElement;
+          if (!a || a.tagName !== 'SELECT') return;
+          const id = (a.id || '').toLowerCase();
+          const nm = (a.name || '').toLowerCase();
+          if (id.includes('ddlproduct') || nm.includes('ddlproduct')) {
+            if (a.blur) a.blur();
+          }
+        }"""
+        )
+    except Exception:
+        pass
+
+
+def _kyc_fill_mobile_digits_in_frame(kyc_fr, digits: str, *, timeout_ms: int) -> bool:
+    """
+    Fill mobile via locators in the KYC frame (does not rely on focus). Covers ASP.NET ids like
+    ``*txt*Mobile*`` when label/placeholder matchers miss after a partial postback.
+    """
+    to = min(int(timeout_ms), 60_000)
+    d = (digits or "").strip()
+    if not d:
+        return False
+    tries = (
+        lambda: kyc_fr.get_by_label(re.compile(r"^Mobile\s*(Number|No\.?|Phone)?\s*$", re.I)),
+        lambda: kyc_fr.get_by_placeholder(
+            re.compile(r"mobile|phone|contact\s*no|mob\.?\s*no", re.I)
+        ),
+        lambda: kyc_fr.locator('input[type="tel"]'),
+        lambda: kyc_fr.locator("input[name*='mobile' i]"),
+        lambda: kyc_fr.locator("input[id*='mobile' i]"),
+        lambda: kyc_fr.locator("input[id*='Mobile' i]"),
+        lambda: kyc_fr.locator("input[id*='txt' i][id*='mob' i]"),
+    )
+    for get_loc in tries:
+        try:
+            loc = get_loc()
+            if loc.count() == 0:
+                continue
+            el = loc.first
+            if not el.is_visible(timeout=2_000):
+                continue
+            el.fill("", timeout=to)
+            el.fill(d, timeout=to, force=True)
+            logger.info("Hero Insurance: KYC — mobile filled via locator in frame.")
+            return True
+        except Exception:
+            continue
+    return False
+
+
 def _kyc_try_click_insurance_company_field(kyc_fr, *, timeout_ms: int) -> bool:
     """Focus the insurer combobox/input inside the KYC frame (avoids Tab landing on body)."""
     to = min(int(timeout_ms), 15_000)
@@ -2346,22 +2429,7 @@ def _kyc_dom_fill_ovd_mobile_consent_in_frame(kyc_fr, mobile: str, *, timeout_ms
     except Exception:
         _t(pg, 450)
 
-    mob_filled = False
-    for ph in (
-        kyc_fr.get_by_label(re.compile(r"^Mobile\s*(Number|No\.?|Phone)?\s*$", re.I)),
-        kyc_fr.get_by_placeholder(re.compile(r"mobile", re.I)),
-        kyc_fr.locator('input[type="tel"]'),
-        kyc_fr.locator("input[name*='mobile' i]"),
-    ):
-        try:
-            if ph.count() > 0 and ph.first.is_visible(timeout=2_500):
-                ph.first.fill("", timeout=to)
-                ph.first.fill(digits, timeout=to)
-                mob_filled = True
-                logger.info("Hero Insurance: KYC DOM (frame) — filled mobile.")
-                break
-        except Exception:
-            continue
+    mob_filled = _kyc_fill_mobile_digits_in_frame(kyc_fr, digits, timeout_ms=to)
     if not mob_filled:
         return "KYC keyboard SOP: could not fill mobile in KYC frame after OVD (DOM fallback)."
 
@@ -2505,6 +2573,8 @@ def _fill_kyc_ekyc_keyboard_sop(
     except Exception:
         pass
     _t(page, 280)
+    _kyc_blur_if_insurer_product_select_focused(kyc_fr)
+    _t(page, 120)
     # Proposer/OVD are often not in the DOM until insurer is chosen (see kyc_nav_scrape before fill).
     # Tab out + re-scrape captures new <select> ids and partner options after commit.
     _hero_insurance_kyc_nav_after_insurer_commit(
@@ -2542,15 +2612,23 @@ def _fill_kyc_ekyc_keyboard_sop(
 
     _kyc_restore_kyc_partner_to_default_label(kyc_fr, page, timeout_ms=cap)
 
-    _kyc_press_tab_n(page, max(0, KYC_KEYBOARD_TABS_OVD_TO_MOBILE))
+    _kyc_blur_if_insurer_product_select_focused(kyc_fr)
+    _t(page, 280)
 
     digits = re.sub(r"\D", "", mobile)[:12]
     mob_typed = False
-    if not _kyc_frame_active_element_is_editable(kyc_fr):
-        if _kyc_try_click_mobile_field(kyc_fr, timeout_ms=cap):
-            logger.info("Hero Insurance: KYC keyboard — focused mobile field via click in frame.")
-            _t(page, 160)
-    if _kyc_frame_active_element_is_editable(kyc_fr):
+    to_fill = min(int(timeout_ms), 60_000)
+    # Prefer locator fill before Tab: portal may already focus mobile after OVD; default
+    # KYC_KEYBOARD_TABS_OVD_TO_MOBILE Tabs would move past it (log: activeElement stuck on ddlproduct).
+    for attempt in range(4):
+        if _kyc_fill_mobile_digits_in_frame(kyc_fr, digits, timeout_ms=to_fill):
+            mob_typed = True
+            break
+        _t(page, 380)
+    if not mob_typed:
+        _kyc_press_tab_n(page, max(0, KYC_KEYBOARD_TABS_OVD_TO_MOBILE))
+        mob_typed = _kyc_fill_mobile_digits_in_frame(kyc_fr, digits, timeout_ms=to_fill)
+    if not mob_typed and _kyc_frame_active_element_accepts_mobile_digits(kyc_fr):
         try:
             page.keyboard.press("Control+A")
         except Exception:
@@ -2562,26 +2640,15 @@ def _fill_kyc_ekyc_keyboard_sop(
         except Exception as exc:
             return f"KYC keyboard SOP: mobile type failed: {exc!s}"
     if not mob_typed:
-        to_fill = min(int(timeout_ms), 60_000)
-        for ph in (
-            kyc_fr.get_by_label(re.compile(r"^Mobile\s*(Number|No\.?|Phone)?\s*$", re.I)),
-            kyc_fr.get_by_placeholder(re.compile(r"mobile", re.I)),
-            kyc_fr.locator('input[type="tel"]'),
-            kyc_fr.locator("input[name*='mobile' i]"),
-        ):
-            try:
-                if ph.count() > 0 and ph.first.is_visible(timeout=2_500):
-                    ph.first.fill(digits, timeout=to_fill)
-                    mob_typed = True
-                    logger.info("Hero Insurance: KYC keyboard — mobile set via fill() (keyboard path).")
-                    break
-            except Exception:
-                continue
-        if not mob_typed:
-            return (
-                "KYC keyboard SOP: mobile field not focused and fill() failed after OVD "
-                "(focus may still be on document — check Mobile selectors)."
-            )
+        if _kyc_try_click_mobile_field(kyc_fr, timeout_ms=cap):
+            logger.info("Hero Insurance: KYC keyboard — focused mobile field via click in frame.")
+            _t(page, 160)
+            mob_typed = _kyc_fill_mobile_digits_in_frame(kyc_fr, digits, timeout_ms=to_fill)
+    if not mob_typed:
+        return (
+            "KYC keyboard SOP: could not fill mobile after OVD "
+            "(portal may use a new control id — check Mobile selectors)."
+        )
     _t(page, 220)
     logger.info(
         "Hero Insurance: KYC keyboard — mobile entered; blurring then post-mobile banner / Proceed vs upload."
