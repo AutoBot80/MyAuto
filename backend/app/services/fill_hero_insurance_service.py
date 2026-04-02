@@ -2137,10 +2137,38 @@ def _kyc_blur_if_insurer_product_select_focused(kyc_fr) -> None:
         pass
 
 
+def _kyc_tab_out_of_insurer_after_escape(page, kyc_fr) -> None:
+    """
+    After Enter/Escape on Insurance Company, focus often stays in the combobox until the user Tabs.
+    Re-focus the KYC document (iframe click when needed) then send Tab — not configurable via .env.
+    """
+    try:
+        if kyc_fr != page.main_frame:
+            try:
+                kyc_fr.frame_element().click(timeout=5_000)
+            except Exception:
+                pass
+            _t(page, 120)
+        try:
+            kyc_fr.locator("body").click(timeout=5_000, position={"x": 140, "y": 200})
+        except Exception:
+            pass
+        _t(page, 120)
+    except Exception:
+        pass
+    for _ in range(2):
+        try:
+            page.keyboard.press("Tab")
+        except Exception:
+            pass
+        _t(page, 160)
+
+
 def _kyc_fill_mobile_digits_in_frame(kyc_fr, digits: str, *, timeout_ms: int) -> bool:
     """
-    Fill mobile via locators in the KYC frame (does not rely on focus). Covers ASP.NET ids like
-    ``*txt*Mobile*`` when label/placeholder matchers miss after a partial postback.
+    Fill mobile via locators in the KYC frame (does not rely on focus). Covers ASP.NET ids when
+    label/placeholder matchers miss after a partial postback. Do not use ``txtFrameNo`` here — that
+    control is VIN/Chassis on the post–KYC page, not mobile.
     """
     to = min(int(timeout_ms), 60_000)
     d = (digits or "").strip()
@@ -2311,6 +2339,8 @@ def _kyc_try_click_mobile_field(kyc_fr, *, timeout_ms: int) -> bool:
     """Focus mobile input in the KYC frame before typing."""
     to = min(int(timeout_ms), 15_000)
     tries = (
+        lambda: kyc_fr.locator("#ContentPlaceHolder1_txtFrameNo"),
+        lambda: kyc_fr.locator("input[name*='txtFrameNo' i]"),
         lambda: kyc_fr.get_by_label(re.compile(r"^Mobile\s*(Number|No\.?|Phone)?\s*$", re.I)),
         lambda: kyc_fr.get_by_placeholder(re.compile(r"mobile", re.I)),
         lambda: kyc_fr.locator('input[type="tel"]'),
@@ -2424,6 +2454,7 @@ def _kyc_dom_fill_ovd_mobile_consent_in_frame(kyc_fr, mobile: str, *, timeout_ms
     # Mobile often appears or enables only after OVD is set.
     try:
         kyc_fr.locator(
+            '#ContentPlaceHolder1_txtFrameNo, input[name*="txtFrameNo" i], '
             'input[type="tel"], input[name*="mobile" i], input[id*="mobile" i]'
         ).first.wait_for(state="visible", timeout=min(12_000, to))
     except Exception:
@@ -2573,6 +2604,7 @@ def _fill_kyc_ekyc_keyboard_sop(
     except Exception:
         pass
     _t(page, 280)
+    _kyc_tab_out_of_insurer_after_escape(page, kyc_fr)
     _kyc_blur_if_insurer_product_select_focused(kyc_fr)
     _t(page, 120)
     # Proposer/OVD are often not in the DOM until insurer is chosen (see kyc_nav_scrape before fill).
@@ -3055,6 +3087,65 @@ def _fill_input_by_label_patterns(
     return False
 
 
+def _hero_misp_page_and_frame_roots(page):
+    """Main document plus child frames (MISP may host the VIN step in an iframe)."""
+    roots: list = [page]
+    try:
+        roots.extend([f for f in page.frames if not f.is_detached()])
+    except Exception:
+        pass
+    return roots
+
+
+def _hero_misp_fill_vin_txt_frame_no(page, vin: str, *, timeout_ms: int) -> bool:
+    """Real MISP VIN step: ``ctl00$ContentPlaceHolder1$txtFrameNo``."""
+    v = (vin or "").strip()[:64]
+    if not v:
+        return False
+    for sel in (
+        'input[name="ctl00$ContentPlaceHolder1$txtFrameNo"]',
+        "#ContentPlaceHolder1_txtFrameNo",
+        'input[name*="txtFrameNo" i]',
+    ):
+        for root in _hero_misp_page_and_frame_roots(page):
+            try:
+                loc = root.locator(sel)
+                if loc.count() == 0:
+                    continue
+                el = loc.first
+                if not el.is_visible(timeout=3_000):
+                    continue
+                el.fill("", timeout=timeout_ms)
+                el.fill(v, timeout=timeout_ms, force=True)
+                logger.info("Hero Insurance: filled VIN/Chassis (%s).", sel[:56])
+                return True
+            except Exception:
+                continue
+    return False
+
+
+def _hero_misp_click_vin_page_submit(page, *, timeout_ms: int) -> bool:
+    """Real MISP: ``ctl00$ContentPlaceHolder1$btnSubmit``."""
+    for sel in (
+        'input[type="submit"][name="ctl00$ContentPlaceHolder1$btnSubmit"]',
+        'input[name="ctl00$ContentPlaceHolder1$btnSubmit"]',
+    ):
+        for root in _hero_misp_page_and_frame_roots(page):
+            try:
+                loc = root.locator(sel)
+                if loc.count() == 0:
+                    continue
+                el = loc.first
+                if not el.is_visible(timeout=2_000):
+                    continue
+                el.click(timeout=timeout_ms)
+                logger.info("Hero Insurance: clicked VIN Submit (%s).", sel[:56])
+                return True
+            except Exception:
+                continue
+    return False
+
+
 def _hero_misp_vin_submit_i_agree(page, values: dict, *, timeout_ms: int) -> str | None:
     """After KYC **Proceed**: VIN page — fill ``full_chassis``, Submit, **I agree** popup."""
     vin = (values.get("full_chassis") or values.get("frame_no") or "").strip()
@@ -3067,35 +3158,38 @@ def _hero_misp_vin_submit_i_agree(page, values: dict, *, timeout_ms: int) -> str
         pass
     _t(page, 600)
 
-    filled = False
-    for loc in (
-        page.get_by_label(re.compile(r"VIN|Chassis|Vehicle\s*Identification", re.I)),
-        page.locator('input[name*="vin" i]'),
-        page.locator('input[id*="vin" i]'),
-        page.locator('input[placeholder*="VIN" i]'),
-        page.get_by_placeholder(re.compile(r"chassis|vin|frame", re.I)),
-    ):
-        try:
-            if loc.count() > 0 and loc.first.is_visible(timeout=3_000):
-                loc.first.fill("", timeout=timeout_ms)
-                loc.first.fill(vin[:64], timeout=timeout_ms)
-                filled = True
-                logger.info("Hero Insurance: filled VIN/Chassis field.")
-                break
-        except Exception:
-            continue
+    filled = _hero_misp_fill_vin_txt_frame_no(page, vin, timeout_ms=timeout_ms)
+    if not filled:
+        for loc in (
+            page.get_by_label(re.compile(r"VIN|Chassis|Vehicle\s*Identification", re.I)),
+            page.locator('input[name*="vin" i]'),
+            page.locator('input[id*="vin" i]'),
+            page.locator('input[placeholder*="VIN" i]'),
+            page.get_by_placeholder(re.compile(r"chassis|vin|frame", re.I)),
+        ):
+            try:
+                if loc.count() > 0 and loc.first.is_visible(timeout=3_000):
+                    loc.first.fill("", timeout=timeout_ms)
+                    loc.first.fill(vin[:64], timeout=timeout_ms)
+                    filled = True
+                    logger.info("Hero Insurance: filled VIN/Chassis field.")
+                    break
+            except Exception:
+                continue
     if not filled:
         return "Could not find VIN/Chassis input after KYC Proceed (expected redirect to VIN page)."
 
-    try:
-        sub = page.get_by_role("button", name=re.compile(r"^\s*Submit\s*$", re.I))
-        if sub.count() > 0 and sub.first.is_visible(timeout=2_000):
-            sub.first.click(timeout=timeout_ms)
-        else:
-            page.get_by_text(re.compile(r"^\s*Submit\s*$", re.I)).first.click(timeout=timeout_ms)
-        logger.info("Hero Insurance: clicked Submit on VIN page.")
-    except Exception as exc:
-        return f"VIN Submit click failed: {exc!s}"
+    clicked = _hero_misp_click_vin_page_submit(page, timeout_ms=timeout_ms)
+    if not clicked:
+        try:
+            sub = page.get_by_role("button", name=re.compile(r"^\s*Submit\s*$", re.I))
+            if sub.count() > 0 and sub.first.is_visible(timeout=2_000):
+                sub.first.click(timeout=timeout_ms)
+            else:
+                page.get_by_text(re.compile(r"^\s*Submit\s*$", re.I)).first.click(timeout=timeout_ms)
+            logger.info("Hero Insurance: clicked Submit on VIN page.")
+        except Exception as exc:
+            return f"VIN Submit click failed: {exc!s}"
 
     _t(page, 800)
     agreed = False

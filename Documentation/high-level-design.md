@@ -389,3 +389,4 @@ The SQL view **`form_dms_view`** is **removed**; the same mapping is implemented
 | 1.91 | Apr 2026 | — | **`fill_hero_insurance_service`** KYC: post-mobile branch (**Proceed** after mobile) — **LLD** **6.155**, **BRD** **3.101** |
 | 1.92 | Apr 2026 | — | **`fill_hero_insurance_service`** MISP KYC keyboard: insurer **`Escape`**, DOM **OVD**, **`_kyc_restore_kyc_partner_to_default_label`** — **LLD** **6.156**, **BRD** **3.102** |
 | 1.93 | Apr 2026 | — | **`fill_hero_insurance_service`** MISP KYC: **`_kyc_blur_if_insurer_product_select_focused`**, **`_kyc_fill_mobile_digits_in_frame`**, **`_kyc_frame_active_element_accepts_mobile_digits`** — **LLD** **6.157**, **BRD** **3.103** |
+| 1.94 | Apr 2026 | — | **`fill_hero_insurance_service`** **`main_process`**: **`_hero_misp_fill_vin_txt_frame_no`**, **`_hero_misp_click_vin_page_submit`** — **LLD** **6.159**, **BRD** **3.104** |
