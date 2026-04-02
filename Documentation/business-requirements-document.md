@@ -456,3 +456,4 @@ Bulk upload automates the ingestion of scanned documents from a shared folder in
 | 3.90 | Apr 2026 | — | **§6.6** KYC: if keyboard cannot focus OVD after insurer, OVD/mobile/consent are filled in the **KYC frame** via DOM — **LLD** **6.144**, **HLD** **1.80** |
 | 3.91 | Apr 2026 | — | **§6.6** KYC keyboard: insurer/mobile clicks + **`Control+A`** only when the focused element is editable (avoids selecting all page text) — **LLD** **6.145**, **HLD** **1.81** |
 | 3.92 | Apr 2026 | — | **§6.6** Optional **`kyc_nav_scrape`** **`[DIAG]`** on KYC (visible controls + page metrics per frame) before automation — **LLD** **6.146**, **HLD** **1.82** |
+| 3.93 | Apr 2026 | — | **§6.6** **`kyc_nav_scrape`** includes **`all_selects`** (every **`<select>`**, including hidden) for **ContentPlaceHolder1** / OVD mapping — **LLD** **6.147**, **HLD** **1.83** |

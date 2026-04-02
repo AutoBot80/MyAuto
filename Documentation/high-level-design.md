@@ -378,3 +378,4 @@ The SQL view **`form_dms_view`** is **removed**; the same mapping is implemented
 | 1.80 | Apr 2026 | — | KYC OVD/mobile/consent DOM fallback in frame after insurer keyboard — **LLD** **6.144**, **BRD** **3.90** |
 | 1.81 | Apr 2026 | — | KYC keyboard: focus insurer/mobile before type; guarded Select-All — **LLD** **6.145**, **BRD** **3.91** |
 | 1.82 | Apr 2026 | — | KYC **`kyc_nav_scrape`** DIAG (visible controls + metrics) — **LLD** **6.146**, **BRD** **3.92** |
+| 1.83 | Apr 2026 | — | KYC DIAG **`all_selects`** full **`<select>`** inventory — **LLD** **6.147**, **BRD** **3.93** |

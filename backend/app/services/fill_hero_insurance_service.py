@@ -328,8 +328,9 @@ def _hero_insurance_log_page_diagnostics(
 
 def _kyc_nav_scrape_in_frame(fr) -> dict[str, Any]:
     """
-    Collect viewport/document metrics, ``activeElement`` summary, and visible interactive controls
-    (inputs, selects, textareas, buttons, key ARIA roles, links) for KYC navigation tuning.
+    Collect viewport/document metrics, ``activeElement`` summary, visible interactive controls,
+    and **all** native ``<select>`` elements (including hidden / off-screen) with computed style
+    and option samples — for mapping OVD, Proposer, insurer ``ddl`` ids on MISP ``ekycpage``.
     """
     try:
         raw = fr.evaluate(
@@ -422,7 +423,44 @@ def _kyc_nav_scrape_in_frame(fr) -> dict[str, Any]:
               });
             });
           }
-          return { pageInfo, active, controls };
+          const allSelects = [];
+          document.querySelectorAll('select').forEach((el, idx) => {
+            if (allSelects.length >= 48) return;
+            const st = window.getComputedStyle(el);
+            const r = el.getBoundingClientRect();
+            const opts = el.querySelectorAll('option');
+            const optLabels = [];
+            for (let j = 0; j < Math.min(opts.length, 4); j++) {
+              optLabels.push((opts[j].textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 56));
+            }
+            let formId = '';
+            try {
+              if (el.form && el.form.id) formId = String(el.form.id).slice(0, 72);
+            } catch (e) {}
+            allSelects.push({
+              domIdx: idx,
+              id: String(el.id || '').slice(0, 88),
+              name: String(el.name || '').slice(0, 72),
+              options: opts.length,
+              display: String(st.display || ''),
+              visibility: String(st.visibility || ''),
+              opacity: String(st.opacity || ''),
+              pos: String(st.position || ''),
+              zIndex: String(st.zIndex || ''),
+              box: [
+                Math.round(r.left),
+                Math.round(r.top),
+                Math.round(r.width),
+                Math.round(r.height),
+              ],
+              label: labelFor(el),
+              aria: String(el.getAttribute('aria-label') || '').slice(0, 100),
+              selectedValue: String(el.value || '').slice(0, 56),
+              optionSample: optLabels.join(' | ').slice(0, 220),
+              formId,
+            });
+          });
+          return { pageInfo, active, controls, allSelects };
         }"""
         )
         return raw if isinstance(raw, dict) else {}
@@ -460,37 +498,79 @@ def _hero_insurance_format_kyc_nav_frame_lines(
     ctrls = data.get("controls")
     if not isinstance(ctrls, list):
         lines.append("  visible_controls: (error or empty)")
-        return lines
-    lines.append(f"  visible_controls={len(ctrls)}")
-    for j, row in enumerate(ctrls[:96]):
-        if not isinstance(row, dict):
-            continue
-        box = row.get("box") or []
-        box_s = ",".join(str(x) for x in box) if isinstance(box, list) else ""
-        parts = [
-            f"[{j}]",
-            str(row.get("tag") or ""),
-            str(row.get("type") or ""),
-        ]
-        if row.get("role"):
-            parts.append(f"role={row.get('role')}")
-        if row.get("id"):
-            parts.append(f"id={row.get('id')!r}")
-        if row.get("name"):
-            parts.append(f"name={row.get('name')!r}")
-        if row.get("label"):
-            parts.append(f"label={str(row.get('label'))[:72]!r}")
-        if row.get("aria"):
-            parts.append(f"aria={str(row.get('aria'))[:64]!r}")
-        if row.get("placeholder"):
-            parts.append(f"ph={str(row.get('placeholder'))[:48]!r}")
-        if row.get("text") and len(str(row.get("text")).strip()) > 0:
-            parts.append(f"text={str(row.get('text'))[:56]!r}")
-        if row.get("val"):
-            parts.append(f"val={str(row.get('val'))[:32]!r}")
-        if box_s:
-            parts.append(f"box=[{box_s}]")
-        lines.append("  " + " ".join(parts))
+    else:
+        lines.append(f"  visible_controls={len(ctrls)}")
+        for j, row in enumerate(ctrls[:96]):
+            if not isinstance(row, dict):
+                continue
+            box = row.get("box") or []
+            box_s = ",".join(str(x) for x in box) if isinstance(box, list) else ""
+            parts = [
+                f"[{j}]",
+                str(row.get("tag") or ""),
+                str(row.get("type") or ""),
+            ]
+            if row.get("role"):
+                parts.append(f"role={row.get('role')}")
+            if row.get("id"):
+                parts.append(f"id={row.get('id')!r}")
+            if row.get("name"):
+                parts.append(f"name={row.get('name')!r}")
+            if row.get("label"):
+                parts.append(f"label={str(row.get('label'))[:72]!r}")
+            if row.get("aria"):
+                parts.append(f"aria={str(row.get('aria'))[:64]!r}")
+            if row.get("placeholder"):
+                parts.append(f"ph={str(row.get('placeholder'))[:48]!r}")
+            if row.get("text") and len(str(row.get("text")).strip()) > 0:
+                parts.append(f"text={str(row.get('text'))[:56]!r}")
+            if row.get("val"):
+                parts.append(f"val={str(row.get('val'))[:32]!r}")
+            if box_s:
+                parts.append(f"box=[{box_s}]")
+            lines.append("  " + " ".join(parts))
+
+    all_sel = data.get("allSelects")
+    if isinstance(all_sel, list):
+        if not all_sel:
+            lines.append("  all_selects=0 (no <select> elements in document)")
+        else:
+            lines.append(
+                f"  all_selects={len(all_sel)} "
+                "(every native <select>; includes hidden/styled — map OVD/Proposer/Mobile)"
+            )
+            for j, row in enumerate(all_sel[:48]):
+                if not isinstance(row, dict):
+                    continue
+                box = row.get("box") or []
+                box_s = ",".join(str(x) for x in box) if isinstance(box, list) else ""
+                parts = [
+                    f"  sel[{j}]",
+                    f"options={row.get('options')}",
+                    f"display={row.get('display')!r}",
+                    f"vis={row.get('visibility')!r}",
+                    f"opac={row.get('opacity')!r}",
+                    f"pos={row.get('pos')!r}",
+                ]
+                if row.get("id"):
+                    parts.append(f"id={row.get('id')!r}")
+                if row.get("name"):
+                    parts.append(f"name={row.get('name')!r}")
+                if row.get("formId"):
+                    parts.append(f"formId={row.get('formId')!r}")
+                if row.get("label"):
+                    parts.append(f"label={str(row.get('label'))[:80]!r}")
+                if row.get("aria"):
+                    parts.append(f"aria={str(row.get('aria'))[:72]!r}")
+                if row.get("selectedValue"):
+                    parts.append(f"value={str(row.get('selectedValue'))[:40]!r}")
+                if box_s:
+                    parts.append(f"box=[{box_s}]")
+                sample = row.get("optionSample")
+                if sample:
+                    parts.append(f"opt_sample={str(sample)[:180]!r}")
+                lines.append(" ".join(parts))
+
     return lines
 
 
@@ -536,8 +616,8 @@ def _hero_insurance_log_kyc_navigation_scrape(
         data = _kyc_nav_scrape_in_frame(fr)
         lines.extend(_hero_insurance_format_kyc_nav_frame_lines(idx, fu, data))
     blob = "\n".join(lines)
-    if len(blob) > 14000:
-        blob = blob[:14000] + "\n…(truncated)"
+    if len(blob) > 22000:
+        blob = blob[:22000] + "\n…(truncated)"
     logger.info(
         "Hero Insurance KYC nav scrape %s:\n%s",
         phase,
