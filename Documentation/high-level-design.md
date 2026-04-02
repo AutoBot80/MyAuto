@@ -395,3 +395,6 @@ The SQL view **`form_dms_view`** is **removed**; the same mapping is implemented
 | 1.97 | Apr 2026 | — | **Add Sales** (`AddSalesPage`): DOB input **`add-sales-v2-dl-input--dob`**; MISP **`_hero_misp_after_sign_in_settle`** — **LLD** **6.162** |
 | 1.98 | Apr 2026 | — | **Insurance** **`.env`**: action/policy timeouts and DIAG/KYC flags — **LLD** **§2.5** |
 | 1.99 | Apr 2026 | — | **`fill_hero_insurance_service`**: MISP **`INSURANCE_CLICK_SETTLE_MS`** + **`INSURANCE_*_IFRAME_SELECTOR`** as **module constants** (not **`.env`**); **`_hero_misp_wait_for_vin_txt_frame_no_attached`** after KYC **Proceed** (intermediate page) — **LLD** **6.165** |
+| 1.100 | Apr 2026 | — | **`fill_hero_insurance_service`**: insurer **`Enter`**+blur+**`Tab`**; faster **Policy Issuance** expand; VIN frame ordering + default **`iframe[src*="2w" i]`** — **LLD** **6.166** |
+| 1.101 | Apr 2026 | — | **Add Sales** (`AddSalesPage`): **Date of birth** input fixed width (**`flex`** override) — **LLD** **6.166** |
+| 1.102 | Apr 2026 | — | **`fill_hero_insurance_service`**: **`vin_transition`** **DIAG** (KYC→VIN URL path + frame list; query length only) — **LLD** **6.167**, **BRD** **3.110** |

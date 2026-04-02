@@ -683,9 +683,13 @@
   border-color: #1e5a9e;
 }
 
-/* DOB is short (YYYY-MM-DD); keep the row compact vs other full-width dl inputs */
+/* DOB is short (YYYY-MM-DD); override base flex:1 so the control stays narrow inside flex dd */
 .add-sales-v2-dl-input--dob {
-  max-width: 120px;
+  flex: 0 0 auto;
+  width: 11.5rem;
+  max-width: 11.5rem;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .add-sales-v2-half {

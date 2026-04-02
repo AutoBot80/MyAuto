@@ -55,10 +55,11 @@ from app.services.insurance_kyc_payloads import insurance_kyc_png_payloads
 from app.services.utility_functions import fuzzy_best_option_label, normalize_for_fuzzy_match
 
 # MISP navigation tuning — edit in source (not .env). Optional iframe CSS after trial runs.
+# Logs show Hero MISP hub under ``/prod/apps/v1/2w/`` — prefer matching iframes before full frame sweeps.
 INSURANCE_CLICK_SETTLE_MS = 100
 INSURANCE_KYC_IFRAME_SELECTOR = ""
-INSURANCE_VIN_IFRAME_SELECTOR = ""
-INSURANCE_NAV_IFRAME_SELECTOR = ""
+INSURANCE_VIN_IFRAME_SELECTOR = 'iframe[src*="2w" i]'
+INSURANCE_NAV_IFRAME_SELECTOR = 'iframe[src*="2w" i]'
 
 logger = logging.getLogger(__name__)
 
@@ -674,16 +675,22 @@ def _hero_insurance_kyc_nav_after_insurer_commit(
     When ``INSURANCE_KYC_NAV_SCRAPE`` is on and ``ocr_output_dir`` + ``subfolder`` are set, append
     ``kyc_nav_scrape_after_insurer`` / optional ``networkidle`` / ``kyc_nav_scrape_after_insurer_networkidle``.
     """
+    # Native insurer <select>: Tab alone sometimes leaves focus inside the dropdown; Enter commits/blurs like the operator.
+    try:
+        page.keyboard.press("Enter")
+    except Exception:
+        pass
+    _t(page, 90)
     try:
         page.keyboard.press("Tab")
     except Exception:
         pass
-    _t(page, 450)
+    _t(page, 280)
     try:
         page.wait_for_load_state("domcontentloaded", timeout=6_000)
     except Exception:
         pass
-    _t(page, 200)
+    _t(page, 120)
 
     if not INSURANCE_KYC_NAV_SCRAPE or not ocr_output_dir or not str(subfolder or "").strip():
         return
@@ -1536,7 +1543,7 @@ def _expand_misp_policy_issuance_nav_if_collapsed(page, *, timeout_ms: int) -> N
     (``#navbarVerticalNav``, ``data-tooltip="Policy Issuance"``, ``aria-expanded="false"``).
     Expand that section so **New Policy** is visible.
     """
-    to = min(max(3_000, int(timeout_ms)), 35_000)
+    to = min(max(1_200, int(timeout_ms)), 12_000)
     try:
         nav = page.locator("#navbarVerticalNav").first
         if nav.count() == 0:
@@ -1591,7 +1598,7 @@ def _expand_misp_policy_issuance_nav_if_collapsed(page, *, timeout_ms: int) -> N
         logger.warning("Hero Insurance: Policy Issuance expand click failed: %s", exc)
         return
 
-    _insurance_click_settle(page)
+    _t(page, min(80, INSURANCE_CLICK_SETTLE_MS + 20))
 
 
 def _click_new_policy(page, *, timeout_ms: int) -> None:
@@ -2210,6 +2217,20 @@ def _kyc_blur_if_insurer_product_select_focused(kyc_fr) -> None:
         pass
 
 
+def _kyc_blur_insurer_product_select_in_frame(kyc_fr) -> None:
+    """Always blur the Insurance Company ``<select>`` by id/name — activeElement can lie after Enter/Tab."""
+    try:
+        kyc_fr.evaluate(
+            """() => {
+          const el = document.getElementById('ContentPlaceHolder1_ddlproduct')
+            || document.querySelector('select[name="ctl00$ContentPlaceHolder1$ddlproduct"]');
+          if (el && el.blur) el.blur();
+        }"""
+        )
+    except Exception:
+        pass
+
+
 def _kyc_tab_out_of_insurer_after_escape(page, kyc_fr) -> None:
     """
     After Enter/Escape on Insurance Company, focus often stays in the combobox until the user Tabs.
@@ -2229,12 +2250,19 @@ def _kyc_tab_out_of_insurer_after_escape(page, kyc_fr) -> None:
         _t(page, 120)
     except Exception:
         pass
+    try:
+        page.keyboard.press("Enter")
+    except Exception:
+        pass
+    _t(page, 140)
+    _kyc_blur_insurer_product_select_in_frame(kyc_fr)
+    _t(page, 80)
     for _ in range(2):
         try:
             page.keyboard.press("Tab")
         except Exception:
             pass
-        _t(page, 160)
+        _t(page, 120)
 
 
 def _kyc_fill_mobile_digits_in_frame(kyc_fr, digits: str, *, timeout_ms: int) -> bool:
@@ -2678,6 +2706,7 @@ def _fill_kyc_ekyc_keyboard_sop(
     _t(page, 280)
     _kyc_tab_out_of_insurer_after_escape(page, kyc_fr)
     _kyc_blur_if_insurer_product_select_focused(kyc_fr)
+    _kyc_blur_insurer_product_select_in_frame(kyc_fr)
     _t(page, 120)
     # Proposer/OVD are often not in the DOM until insurer is chosen (see kyc_nav_scrape before fill).
     # Tab out + re-scrape captures new <select> ids and partner options after commit.
@@ -3160,6 +3189,9 @@ def _hero_misp_page_and_frame_roots(page, *, purpose: str = "generic") -> list:
     Locator roots for MISP UI: optional ``FrameLocator`` from module constants (trial direct path), then ``page``, then
     every ``Frame`` (legacy sweep). See ``INSURANCE_VIN_IFRAME_SELECTOR``, ``INSURANCE_KYC_IFRAME_SELECTOR``,
     ``INSURANCE_NAV_IFRAME_SELECTOR`` at top of this module.
+
+    For ``purpose="vin"``, child frames are ordered so **2W / welcome / main app** URLs are tried before stale **KYC**
+    frames (logs: ``txtFrameNo`` can live in the post–KYC app frame while an **ekycpage** iframe remains attached).
     """
     roots: list = []
     sel = ""
@@ -3176,10 +3208,134 @@ def _hero_misp_page_and_frame_roots(page, *, purpose: str = "generic") -> list:
             pass
     roots.append(page)
     try:
-        roots.extend([f for f in page.frames if not f.is_detached()])
+        frs = [f for f in page.frames if not f.is_detached()]
+        if purpose == "vin":
+
+            def _vin_frame_order_key(fr) -> int:
+                try:
+                    u = (fr.url or "").lower()
+                except Exception:
+                    return -999
+                if not u or u in ("about:blank",):
+                    return -50
+                if any(
+                    p in u
+                    for p in (
+                        "ekycpage",
+                        "/apps/kyc/",
+                        "/kyc/",
+                        "ekyc",
+                    )
+                ):
+                    return -30
+                if any(
+                    p in u
+                    for p in (
+                        "2w",
+                        "mainindex",
+                        "welcome",
+                        "default.aspx",
+                        "hibipl",
+                        "addstate",
+                        "policy",
+                    )
+                ):
+                    return 20
+                return 0
+
+            frs.sort(key=_vin_frame_order_key, reverse=True)
+        roots.extend(frs)
     except Exception:
         pass
     return roots
+
+
+def _hero_misp_safe_url_for_insurance_log(url: str, *, max_len: int = 280) -> str:
+    """Host + path for logs; query string omitted — only ``?[query_len=N]`` (``enckycdata`` etc. stay private)."""
+    s = (url or "").strip()
+    if not s:
+        return ""
+    try:
+        p = urllib.parse.urlparse(s)
+        q = p.query or ""
+        q_note = f"?[query_len={len(q)}]" if q else ""
+        out = f"{p.scheme}://{p.netloc}{p.path}{q_note}"
+        return out[:max_len]
+    except Exception:
+        return s[:max_len]
+
+
+def _hero_misp_url_path_signature(url: str) -> str:
+    """Stable key for navigation: host + path (ignore dynamic query)."""
+    try:
+        p = urllib.parse.urlparse(url or "")
+        return f"{(p.netloc or '').lower()}{(p.path or '').lower()}"
+    except Exception:
+        return (url or "")[:240].lower()
+
+
+def _hero_misp_classify_vin_transition_url(url: str) -> str:
+    """
+    Classify the **top** document during KYC→VIN polling. Paths are stable; query tokens (e.g. ``enckycdata``) are not.
+
+    Real VIN step: ``…/2W/Policy/MispDms.aspx`` (see Hero MISP). Intermediate screens vary (welcome, loading, etc.).
+    """
+    u = (url or "").strip().lower()
+    if not u:
+        return "unknown"
+    try:
+        path = urllib.parse.urlparse(url).path.lower()
+    except Exception:
+        path = ""
+    if "ekycpage" in u or "/apps/kyc/" in u or "ekycpage" in path:
+        return "kyc"
+    if "mispdms.aspx" in path or "mispdms.aspx" in u:
+        return "mispdms_policy_vin"
+    if "heroinsurance.com" in u or "misp.heroinsurance" in u:
+        return "transient_intermediate"
+    return "other"
+
+
+def _hero_misp_frame_urls_diag_line(page) -> str:
+    parts: list[str] = []
+    try:
+        for i, fr in enumerate(page.frames[:16]):
+            try:
+                if fr.is_detached():
+                    continue
+                su = _hero_misp_safe_url_for_insurance_log(fr.url or "", max_len=120)
+                parts.append(f"f{i}={su}")
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return " ".join(parts)[:1900]
+
+
+def _hero_misp_log_vin_transition_line(
+    page,
+    *,
+    phase: str,
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
+    classification: str | None = None,
+) -> None:
+    """Structured **DIAG** line for ``Playwright_insurance.txt`` — KYC→VIN navigation (no raw query tokens)."""
+    if not ocr_output_dir or not str(subfolder or "").strip():
+        return
+    try:
+        raw = page.url or ""
+        safe = _hero_misp_safe_url_for_insurance_log(raw)
+        cls = classification if classification is not None else _hero_misp_classify_vin_transition_url(raw)
+        try:
+            title = (page.title() or "").strip()[:140]
+        except Exception:
+            title = ""
+        frames = _hero_misp_frame_urls_diag_line(page)
+        msg = f"vin_transition phase={phase} classification={cls} url={safe} title={title!r} {frames}"
+        append_playwright_insurance_line(ocr_output_dir, subfolder, "DIAG", msg)
+    except Exception:
+        pass
 
 
 # Same ordering as ``_hero_misp_fill_vin_txt_frame_no`` — used to poll until the real VIN step is in the DOM
@@ -3188,6 +3344,9 @@ _HERO_MISP_VIN_TXT_FRAME_NO_SELECTORS: tuple[str, ...] = (
     "#divtxtFrameNo input[name*='txtFrameNo' i]",
     "#divtxtFrameNo input.txtBox",
     "#divtxtFrameNo input[type='text']",
+    'input[placeholder*="VIN" i]',
+    'input[placeholder*="Chassis" i]',
+    'input[placeholder*="Frame" i]',
     'input#ctl00_ContentPlaceHolder1_txtFrameNo',
     '#ctl00_ContentPlaceHolder1_upnlAddStateMaster input[name="ctl00$ContentPlaceHolder1$txtFrameNo"]',
     '#mainContainer input[name="ctl00$ContentPlaceHolder1$txtFrameNo"]',
@@ -3203,16 +3362,53 @@ _HERO_MISP_VIN_TXT_FRAME_NO_SELECTORS: tuple[str, ...] = (
 )
 
 
-def _hero_misp_wait_for_vin_txt_frame_no_attached(page, *, timeout_ms: int) -> bool:
+def _hero_misp_wait_for_vin_txt_frame_no_attached(
+    page,
+    *,
+    timeout_ms: int,
+    ocr_output_dir: Path | None = None,
+    subfolder: str | None = None,
+) -> bool:
     """
     Poll until the VIN/Chassis control is attached in ``page`` or a frame. MISP sometimes renders a short
     no-action screen after KYC **Proceed**; waiting on generic shells (e.g. ``mainContainer``) alone can fire
     too early — this waits for the same inputs we fill.
+
+    Logs **DIAG** ``vin_transition`` lines when the top-level **host+path** changes (stable) or when the VIN
+    field is found — **query strings are not logged** (only ``?[query_len=N]``).
     """
     deadline = time.monotonic() + min(int(timeout_ms), 90_000) / 1000.0
     poll_ms = max(100, min(500, int(INSURANCE_CLICK_SETTLE_MS) * 2))
     selectors = _HERO_MISP_VIN_TXT_FRAME_NO_SELECTORS
+    last_nav_sig: str | None = None
+    _hero_misp_log_vin_transition_line(
+        page,
+        phase="waiting_txtFrameNo_start",
+        ocr_output_dir=ocr_output_dir,
+        subfolder=subfolder,
+    )
     while time.monotonic() < deadline:
+        try:
+            raw_u = page.url or ""
+            sig = _hero_misp_url_path_signature(raw_u)
+            cls = _hero_misp_classify_vin_transition_url(raw_u)
+            combo = f"{cls}|{sig}"
+            if combo != last_nav_sig:
+                last_nav_sig = combo
+                logger.info(
+                    "Hero Insurance: VIN transition navigation — classification=%s url=%s",
+                    cls,
+                    _hero_misp_safe_url_for_insurance_log(raw_u)[:220],
+                )
+                _hero_misp_log_vin_transition_line(
+                    page,
+                    phase="waiting_txtFrameNo_nav_changed",
+                    ocr_output_dir=ocr_output_dir,
+                    subfolder=subfolder,
+                    classification=cls,
+                )
+        except Exception:
+            pass
         for sel in selectors:
             for root in _hero_misp_page_and_frame_roots(page, purpose="vin"):
                 try:
@@ -3222,15 +3418,35 @@ def _hero_misp_wait_for_vin_txt_frame_no_attached(page, *, timeout_ms: int) -> b
                     remain_ms = max(50, int((deadline - time.monotonic()) * 1000))
                     loc.first.wait_for(state="attached", timeout=min(8_000, remain_ms))
                     logger.info("Hero Insurance: VIN field attached after KYC transition (%s).", sel[:72])
+                    _hero_misp_log_vin_transition_line(
+                        page,
+                        phase="vin_field_attached",
+                        ocr_output_dir=ocr_output_dir,
+                        subfolder=subfolder,
+                        classification=_hero_misp_classify_vin_transition_url(page.url or ""),
+                    )
                     return True
                 except Exception:
                     continue
         _t(page, poll_ms)
     logger.warning("Hero Insurance: timed out waiting for VIN/Chassis input after KYC transition.")
+    _hero_misp_log_vin_transition_line(
+        page,
+        phase="waiting_txtFrameNo_timeout",
+        ocr_output_dir=ocr_output_dir,
+        subfolder=subfolder,
+    )
     return False
 
 
-def _hero_misp_fill_vin_txt_frame_no(page, vin: str, *, timeout_ms: int) -> bool:
+def _hero_misp_fill_vin_txt_frame_no(
+    page,
+    vin: str,
+    *,
+    timeout_ms: int,
+    ocr_output_dir: Path | None = None,
+    subfolder: str | None = None,
+) -> bool:
     """
     Real MISP VIN step: ``ctl00$ContentPlaceHolder1$txtFrameNo`` — often under ``upnlAddStateMaster`` /
     ``mainContainer`` in a **frame**; visibility checks alone can skip inputs that need ``force`` / scroll.
@@ -3239,7 +3455,12 @@ def _hero_misp_fill_vin_txt_frame_no(page, vin: str, *, timeout_ms: int) -> bool
     if not v:
         return False
     to = min(int(timeout_ms), 90_000)
-    if not _hero_misp_wait_for_vin_txt_frame_no_attached(page, timeout_ms=to):
+    if not _hero_misp_wait_for_vin_txt_frame_no_attached(
+        page,
+        timeout_ms=to,
+        ocr_output_dir=ocr_output_dir,
+        subfolder=subfolder,
+    ):
         return False
 
     # MISP markup: ``div#divtxtFrameNo.input-container`` + ``input#ctl00_ContentPlaceHolder1_txtFrameNo``,
@@ -3332,11 +3553,25 @@ def _hero_misp_click_vin_page_submit(page, *, timeout_ms: int) -> bool:
     return False
 
 
-def _hero_misp_vin_submit_i_agree(page, values: dict, *, timeout_ms: int) -> str | None:
+def _hero_misp_vin_submit_i_agree(
+    page,
+    values: dict,
+    *,
+    timeout_ms: int,
+    ocr_output_dir: Path | None = None,
+    subfolder: str | None = None,
+) -> str | None:
     """After KYC **Proceed**: VIN page — fill ``full_chassis``, Submit, **I agree** popup."""
     vin = (values.get("full_chassis") or values.get("frame_no") or "").strip()
     if not vin:
         return "vehicle_master full_chassis/frame (VIN) is empty in DB values."
+
+    _hero_misp_log_vin_transition_line(
+        page,
+        phase="main_process_vin_step_start",
+        ocr_output_dir=ocr_output_dir,
+        subfolder=subfolder,
+    )
 
     try:
         page.wait_for_load_state("domcontentloaded", timeout=min(25_000, timeout_ms * 4))
@@ -3344,7 +3579,13 @@ def _hero_misp_vin_submit_i_agree(page, values: dict, *, timeout_ms: int) -> str
         pass
     _insurance_click_settle(page)
 
-    filled = _hero_misp_fill_vin_txt_frame_no(page, vin, timeout_ms=timeout_ms)
+    filled = _hero_misp_fill_vin_txt_frame_no(
+        page,
+        vin,
+        timeout_ms=timeout_ms,
+        ocr_output_dir=ocr_output_dir,
+        subfolder=subfolder,
+    )
     if not filled:
         filled = _hero_misp_fill_vin_fallback_all_frames(page, vin, timeout_ms=timeout_ms)
     if not filled:
@@ -3996,7 +4237,13 @@ def main_process(
 
     try:
         page.set_default_timeout(to)
-        err = _hero_misp_vin_submit_i_agree(page, values, timeout_ms=to)
+        err = _hero_misp_vin_submit_i_agree(
+            page,
+            values,
+            timeout_ms=to,
+            ocr_output_dir=ocr_output_dir,
+            subfolder=subfolder,
+        )
         if err:
             out["error"] = err
             append_playwright_insurance_line(
