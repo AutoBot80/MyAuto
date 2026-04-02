@@ -1,6 +1,7 @@
 """Load and normalize insurance/MISP fill values from ``form_insurance_view`` plus ``add_sales_staging.payload_json`` (when ``staging_id`` is used) and OCR JSON (insurer fallback).
 
 Add Sales passes the same ``staging_id`` as Create Invoice (DMS) so the view (committed masters) and staging (full OCR merge) jointly supply the insurance flow — see BR-20.
+When ``dealer_ref.prefer_insurer`` is present on the view row and the merged details insurer fuzzy-matches it (≥20% ``SequenceMatcher`` on normalized strings), the fill dict uses ``prefer_insurer`` for KYC/proposal insurer typing.
 """
 from __future__ import annotations
 
@@ -17,7 +18,12 @@ def _insurance_log_ts_ist() -> str:
     return datetime.now(_IST_TZ).isoformat(timespec="milliseconds")
 
 from app.db import get_connection
-from app.services.utility_functions import clean_text, require_customer_vehicle_ids, safe_subfolder_name
+from app.services.utility_functions import (
+    clean_text,
+    insurer_prefer_matches,
+    require_customer_vehicle_ids,
+    safe_subfolder_name,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +103,7 @@ def build_insurance_fill_values(
     fields from the embedded **insurance** object so OCR merge is available before
     ``insurance_master`` is populated after a **successful** Generate Insurance run (UPSERT). Insurer may still fall back to **OCR_To_be_Used.json** when view
     and staging lack it.
+    If ``prefer_insurer`` is non-empty and the merged insurer matches it at ≥20% fuzzy ratio, ``insurer`` is set to ``prefer_insurer``.
     Proposal-only controls (email default, add-ons, CPA, payment mode, registration date) are **not**
     sourced here — Playwright uses hardcoded defaults for those until persisted columns exist.
     """
@@ -142,6 +149,15 @@ def build_insurance_fill_values(
     insurer_json = read_insurance_insurer_from_ocr_json(ocr_output_dir, subfolder)
     if not values.get("insurer"):
         values["insurer"] = insurer_json
+    prefer = clean_text(row.get("prefer_insurer"))
+    merged_insurer = clean_text(values.get("insurer"))
+    if prefer and merged_insurer and insurer_prefer_matches(merged_insurer, prefer, min_ratio=0.20):
+        values["insurer"] = prefer
+        logger.info(
+            "Insurance: using dealer prefer_insurer %r (merged details insurer %r matched >= 20%% fuzzy).",
+            prefer[:120],
+            merged_insurer[:120],
+        )
     required = [
         ("insurance_master.insurer (or staging / OCR details insurer)", values["insurer"]),
         ("customer_master.mobile_number", values["mobile_number"]),

@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS dealer_ref (
     parent_id INTEGER,
     phone VARCHAR(16),
     auto_sms_reminders CHAR(1),
+    prefer_insurer VARCHAR(255),
     CONSTRAINT fk_dealer_ref_oem FOREIGN KEY (oem_id) REFERENCES oem_ref(oem_id),
     CONSTRAINT chk_dealer_ref_auto_sms_reminders CHECK (auto_sms_reminders IN ('Y', 'N'))
 );
@@ -21,3 +22,4 @@ COMMENT ON TABLE dealer_ref IS 'Dealer reference; parent_id for hierarchy';
 COMMENT ON COLUMN dealer_ref.oem_id IS 'FK to oem_ref (OEM/brand); supplied on insert, not auto-generated';
 COMMENT ON COLUMN dealer_ref.rto_name IS 'Dealer-mapped RTO office name (e.g. RTO-Bharatpur)';
 COMMENT ON COLUMN dealer_ref.auto_sms_reminders IS 'Y or N; when Y, trigger adds rows to service_reminders_queue on sales_master upsert';
+COMMENT ON COLUMN dealer_ref.prefer_insurer IS 'Optional canonical MISP insurer label; when set, merged details-sheet insurer fuzzy-matches to this (>=20%) it replaces insurer for KYC — see insurance_form_values.build_insurance_fill_values';

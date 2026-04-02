@@ -1,8 +1,8 @@
 # High Level Design (HLD)
 ## Auto Dealer Management System
 
-**Version:** 1.14  
-**Last Updated:** March 2026
+**Version:** 1.15  
+**Last Updated:** April 2026
 
 ---
 
@@ -381,3 +381,5 @@ The SQL view **`form_dms_view`** is **removed**; the same mapping is implemented
 | 1.83 | Apr 2026 | — | KYC DIAG **`all_selects`** full **`<select>`** inventory — **LLD** **6.147**, **BRD** **3.93** |
 | 1.84 | Apr 2026 | — | KYC **`kyc_nav_scrape_after_insurer`** DIAG — **LLD** **6.148**, **BRD** **3.94** |
 | 1.85 | Apr 2026 | — | KYC insurer fuzzy + sequence fallback — **LLD** **6.149**, **BRD** **3.95** |
+| 1.86 | Apr 2026 | — | KYC DIAG **networkidle** + partner scrape — **LLD** **6.150**, **BRD** **3.96** |
+| 1.87 | Apr 2026 | — | **`dealer_ref.prefer_insurer`** + **`build_insurance_fill_values`** canonical insurer for KYC when merged details insurer fuzzy-matches (≥20%) — **LLD** **6.151**, **BRD** **3.97**, **Database DDL** **2.62** |

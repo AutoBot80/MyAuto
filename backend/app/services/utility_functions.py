@@ -9,6 +9,23 @@ def normalize_for_fuzzy_match(s: str) -> str:
     return re.sub(r"\s+", " ", (s or "").lower().strip())
 
 
+def insurer_prefer_matches(
+    details_insurer: str,
+    prefer_insurer: str,
+    *,
+    min_ratio: float = 0.20,
+) -> bool:
+    """
+    True when normalized ``SequenceMatcher`` ratio between details-sheet insurer and dealer
+    ``prefer_insurer`` is at least ``min_ratio`` (default 0.20).
+    """
+    a = normalize_for_fuzzy_match(details_insurer)
+    b = normalize_for_fuzzy_match(prefer_insurer)
+    if not a or not b:
+        return False
+    return difflib.SequenceMatcher(None, a, b).ratio() >= min_ratio
+
+
 def fuzzy_best_option_label(query: str, candidates: list[str], *, min_score: float = 0.42) -> str | None:
     """
     Pick dropdown option label best matching query (insurer from details sheet / OEM name).

@@ -21,8 +21,11 @@ from app.config import (
     INSURANCE_BASE_URL,
     INSURANCE_DIAG_FULL_CONTROL_SNAPSHOT,
     INSURANCE_KYC_NAV_SCRAPE,
+    INSURANCE_KYC_POST_INSURER_NETWORKIDLE_MS,
+    INSURANCE_KYC_POST_KYC_PARTNER_NETWORKIDLE_MS,
     INSURANCE_LOGIN_WAIT_MS,
     INSURANCE_POLICY_FILL_TIMEOUT_MS,
+    KYC_DEFAULT_KYC_PARTNER_LABEL,
     KYC_KEYBOARD_INSURER_ARROW_DOWN_MAX,
     KYC_KEYBOARD_OVD_ARROW_DOWN_MAX,
     KYC_KEYBOARD_TABS_INSURER_TO_OVD,
@@ -642,8 +645,9 @@ def _hero_insurance_kyc_nav_after_insurer_commit(
 ) -> None:
     """
     After insurer is committed (keyboard Enter or DOM ``select_option``), **Tab** off the field,
-    wait for DOM/postback, then append **kyc_nav_scrape** with phase ``kyc_nav_scrape_after_insurer``
-    so logs show Proposer/OVD ``<select>`` s when the portal injects them.
+    then DIAG: (1) ``kyc_nav_scrape_after_insurer`` after ``domcontentloaded``,
+    (2) optional ``networkidle`` wait, (3) ``kyc_nav_scrape_after_insurer_networkidle`` when Proposer/OVD
+    may appear after server round-trips.
 
     Requires ``ocr_output_dir`` + ``subfolder`` and ``INSURANCE_KYC_NAV_SCRAPE`` (same as other KYC DIAG).
     """
@@ -660,10 +664,98 @@ def _hero_insurance_kyc_nav_after_insurer_commit(
         page.wait_for_load_state("domcontentloaded", timeout=6_000)
     except Exception:
         pass
-    _t(page, 300)
+    _t(page, 200)
     _hero_insurance_log_kyc_navigation_scrape(
         page,
         phase="kyc_nav_scrape_after_insurer",
+        ocr_output_dir=ocr_output_dir,
+        subfolder=subfolder,
+    )
+    cap = max(0, int(INSURANCE_KYC_POST_INSURER_NETWORKIDLE_MS))
+    if cap > 0:
+        try:
+            page.wait_for_load_state("networkidle", timeout=cap)
+        except Exception:
+            logger.debug(
+                "Hero Insurance: networkidle after insurer (timeout=%s ms) — continuing to DIAG scrape.",
+                cap,
+            )
+    _t(page, 300)
+    _hero_insurance_log_kyc_navigation_scrape(
+        page,
+        phase="kyc_nav_scrape_after_insurer_networkidle",
+        ocr_output_dir=ocr_output_dir,
+        subfolder=subfolder,
+    )
+
+
+def _kyc_resolve_kyc_partner_label(values: dict) -> str:
+    v = (values.get("kyc_partner") or "").strip()
+    return v if v else (KYC_DEFAULT_KYC_PARTNER_LABEL or "").strip()
+
+
+def _kyc_select_kyc_partner_if_available(
+    page, kyc_fr, values: dict, *, timeout_ms: int
+) -> None:
+    """
+    Set **KYC Partner** native ``<select>`` when the dropdown has more than a placeholder option
+    (MISP often populates partner list only after insurer postback).
+    """
+    label = _kyc_resolve_kyc_partner_label(values)
+    if not label:
+        return
+    to = min(int(timeout_ms), 60_000)
+    try:
+        loc = kyc_fr.locator("#ContentPlaceHolder1_ddlkycPartner")
+        if loc.count() == 0:
+            loc = kyc_fr.locator("select[id*='ddlkycPartner' i]")
+        if loc.count() == 0:
+            logger.info("Hero Insurance: KYC Partner select not found in KYC frame.")
+            return
+        nopt = loc.first.locator("option").count()
+        if nopt <= 1:
+            logger.info(
+                "Hero Insurance: KYC Partner dropdown has %s option(s); skip select (portal may populate later).",
+                nopt,
+            )
+            return
+        if _select_option_fuzzy_in_select(
+            page, loc, label, timeout_ms=to, fuzzy_min_score=0.35
+        ):
+            logger.info("Hero Insurance: set KYC Partner (fuzzy) for %r.", label[:80])
+    except Exception as exc:
+        logger.warning("Hero Insurance: KYC Partner select: %s", exc)
+
+
+def _hero_insurance_kyc_nav_after_kyc_partner_commit(
+    page,
+    *,
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
+) -> None:
+    """After KYC Partner ``select_option``, wait and append ``kyc_nav_scrape_after_kyc_partner`` DIAG."""
+    if not INSURANCE_KYC_NAV_SCRAPE:
+        return
+    if not ocr_output_dir or not str(subfolder or "").strip():
+        return
+    _t(page, 280)
+    try:
+        page.wait_for_load_state("domcontentloaded", timeout=8_000)
+    except Exception:
+        pass
+    cap = max(0, int(INSURANCE_KYC_POST_KYC_PARTNER_NETWORKIDLE_MS))
+    if cap > 0:
+        try:
+            page.wait_for_load_state("networkidle", timeout=cap)
+        except Exception:
+            logger.debug(
+                "Hero Insurance: networkidle after KYC partner (timeout=%s ms) — continuing to DIAG scrape.",
+                cap,
+            )
+    _t(page, 250)
+    _hero_insurance_log_kyc_navigation_scrape(
+        page,
+        phase="kyc_nav_scrape_after_kyc_partner",
         ocr_output_dir=ocr_output_dir,
         subfolder=subfolder,
     )
@@ -2148,6 +2240,10 @@ def _fill_kyc_ekyc_keyboard_sop(
     _hero_insurance_kyc_nav_after_insurer_commit(
         page, ocr_output_dir=ocr_output_dir, subfolder=subfolder
     )
+    _kyc_select_kyc_partner_if_available(page, kyc_fr, values, timeout_ms=cap)
+    _hero_insurance_kyc_nav_after_kyc_partner_commit(
+        page, ocr_output_dir=ocr_output_dir, subfolder=subfolder
+    )
     # One Tab was used to blur insurer; keep total insurer→OVD tab count aligned with env.
     _kyc_press_tab_n(page, max(0, KYC_KEYBOARD_TABS_INSURER_TO_OVD - 1))
 
@@ -2325,6 +2421,13 @@ def _fill_insurance_company_and_ovd_mobile_consent(
                 f"({insurer[:40]!r}). Adjust selectors for this portal build."
             )
         _hero_insurance_kyc_nav_after_insurer_commit(
+            page, ocr_output_dir=ocr_output_dir, subfolder=subfolder
+        )
+        kyc_fr_dom = _kyc_preferred_kyc_frame(page)
+        _kyc_select_kyc_partner_if_available(
+            page, kyc_fr_dom, values, timeout_ms=timeout_ms
+        )
+        _hero_insurance_kyc_nav_after_kyc_partner_commit(
             page, ocr_output_dir=ocr_output_dir, subfolder=subfolder
         )
 

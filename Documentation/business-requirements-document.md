@@ -228,7 +228,7 @@ This is the **intended** real-DMS order (aligned with the operator screen record
 
 | Insurance page | Label | Required source (DB-backed) | Persisted DB column |
 |----------------|-------|------------------------------|---------------------|
-| KYC | Insurance Company | Details-sheet / policy **insurance provider** name (fuzzy-matched to portal options) | `insurance_master.insurer` |
+| KYC | Insurance Company | Merged details insurer (view + staging + OCR fallback), then if **`dealer_ref.prefer_insurer`** is set and the merged string has **≥20%** fuzzy similarity to it, use **`prefer_insurer`** as the portal label; otherwise fuzzy-match merged text to portal options | `insurance_master.insurer` (staging/view); **`prefer_insurer`** on **`dealer_ref`** via **`form_insurance_view`** |
 | KYC | KYC Partner | Dealer-configured onboarding value | Reference/config (runtime choice, not persisted in current schema) |
 | KYC | Proposer Type | Portal default | Dummy/default **Individual**; Playwright does not change tenure/proposer selects |
 | KYC | OVD Type | Document type from scan set | derived from uploaded docs metadata |
@@ -236,7 +236,7 @@ This is the **intended** real-DMS order (aligned with the operator screen record
 | KYC | AADHAAR Front/Rear Image | Uploaded scan artifacts | `uploads/<dealer>/<subfolder>/` files |
 | KYC | Customer Photo | Uploaded scan artifacts | `uploads/<dealer>/<subfolder>/` files |
 | MisDMS Entry | VIN Number | Vehicle chassis/frame | `vehicle_master.chassis` (or raw frame column) |
-| New Policy | Insurance Company* | Same as KYC: fuzzy-match to details insurer | `insurance_master.insurer` |
+| New Policy | Insurance Company* | Same merged insurer string and **`prefer_insurer`** override rule as KYC | `insurance_master.insurer`; dealer **`prefer_insurer`** |
 | New Policy | Policy Tenure | Portal default | Dummy option only; Playwright does not set |
 | New Policy | Manufacturer* | OEM / make (fuzzy-matched to portal options) | `vehicle_master.oem_name`, else dealer `oem_ref.oem_name` |
 | New Policy | Proposer Type* | Portal default | Dummy **Individual**; Playwright does not set |
@@ -459,3 +459,5 @@ Bulk upload automates the ingestion of scanned documents from a shared folder in
 | 3.93 | Apr 2026 | — | **§6.6** **`kyc_nav_scrape`** includes **`all_selects`** (every **`<select>`**, including hidden) for **ContentPlaceHolder1** / OVD mapping — **LLD** **6.147**, **HLD** **1.83** |
 | 3.94 | Apr 2026 | — | **§6.6** **`kyc_nav_scrape_after_insurer`** after insurer commit (Tab blur + scrape) — **LLD** **6.148**, **HLD** **1.84** |
 | 3.95 | Apr 2026 | — | **§6.6** KYC insurer fuzzy matching (typos vs portal labels) — **LLD** **6.149**, **HLD** **1.85** |
+| 3.96 | Apr 2026 | — | **§6.6** KYC DIAG after **`networkidle`** + after **KYC Partner** select — **LLD** **6.150**, **HLD** **1.86** |
+| 3.97 | Apr 2026 | — | **`dealer_ref.prefer_insurer`**, **`form_insurance_view.prefer_insurer`**, **`build_insurance_fill_values`** replaces merged insurer with **`prefer_insurer`** when fuzzy similarity ≥20% — **LLD** **6.151**, **HLD** **1.87**, **Database DDL** **2.62** |

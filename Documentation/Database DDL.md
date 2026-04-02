@@ -179,6 +179,7 @@ This document lists the current database tables and their columns. **Executable 
 | `parent_id` | `integer` | YES |  | Parent dealer id (hierarchy) |
 | `phone` | `varchar(16)` | YES |  | Phone (up to 16 digits) |
 | `auto_sms_reminders` | `char(1)` | YES |  | Y or N; when Y, trigger populates service_reminders_queue on sales_master upsert |
+| `prefer_insurer` | `varchar(255)` | YES |  | Optional canonical MISP insurer label; when merged details-sheet insurer fuzzy-matches (≥20%) to this string, **`build_insurance_fill_values`** uses **`prefer_insurer`** for KYC (**`DDL/alter/16a_dealer_ref_prefer_insurer_form_insurance_view.sql`**) |
 
 **Primary key:** `dealer_ref_pkey` on (`dealer_id`)
 
@@ -331,11 +332,11 @@ This document lists the current database tables and their columns. **Executable 
 
 **Purpose:** Read-only view for Hero/MISP automation: one row per sale (`sales_master`) with `customer_master`, `vehicle_master`, `dealer_ref` / `oem_ref`, and the **latest** `insurance_master` row per `(customer_id, vehicle_id)` (order: `policy_to`, `insurance_year`, `insurance_id`).
 
-**Script:** `DDL/alter/10j_form_insurance_view.sql`.
+**Scripts:** `DDL/alter/10j_form_insurance_view.sql` (initial); **`DDL/alter/16a_dealer_ref_prefer_insurer_form_insurance_view.sql`** adds **`prefer_insurer`** from **`dealer_ref`** and recreates the view.
 
-**Important columns:** Chassis/frame (`frame_no`, `full_chassis`), engine, model, proposer and address fields, `insurer`, nominee columns, `financer_name`, `rto_name`, etc. — **only** columns that already exist on the base tables. Proposal-only UI defaults (email, add-ons, CPA, payment mode, registration date) remain **hardcoded** in Playwright until optional future columns exist.
+**Important columns:** Chassis/frame (`frame_no`, `full_chassis`), engine, model, proposer and address fields, `insurer`, **`prefer_insurer`** (dealer preferred portal label for KYC when details insurer fuzzy-matches), nominee columns, `financer_name`, `rto_name`, etc. — **only** columns that already exist on the base tables. Proposal-only UI defaults (email, add-ons, CPA, payment mode, registration date) remain **hardcoded** in Playwright until optional future columns exist.
 
-**Operational notes:** `load_latest_insurance_values` uses `SELECT * FROM form_insurance_view WHERE customer_id = ? AND vehicle_id = ?`. **`build_insurance_fill_values`** (`insurance_form_values.py`) uses that row **together with** **`add_sales_staging.payload_json`** when Add Sales passes **`staging_id`**: the view reflects committed masters after Create Invoice; **`payload_json`** holds the full OCR/operator merge so the pair is the **complete** insurance input set (**BR-20**). Insurer may still fall back to **`OCR_To_be_Used.json`** when view and staging lack it. Repository: **`fetch_staging_payload`** accepts **draft** or **committed** staging rows.
+**Operational notes:** `load_latest_insurance_values` uses `SELECT * FROM form_insurance_view WHERE customer_id = ? AND vehicle_id = ?`. **`build_insurance_fill_values`** (`insurance_form_values.py`) uses that row **together with** **`add_sales_staging.payload_json`** when Add Sales passes **`staging_id`**: the view reflects committed masters after Create Invoice; **`payload_json`** holds the full OCR/operator merge so the pair is the **complete** insurance input set (**BR-20**). Insurer may still fall back to **`OCR_To_be_Used.json`** when view and staging lack it. After merge, if **`prefer_insurer`** is set and the merged insurer string has **≥20%** **`SequenceMatcher`** similarity to it, the fill dict’s **`insurer`** is replaced with **`prefer_insurer`** for MISP/KYC. Repository: **`fetch_staging_payload`** accepts **draft** or **committed** staging rows.
 
 ---
 
@@ -541,3 +542,4 @@ This document lists the current database tables and their columns. **Executable 
 | 2.59 | Apr 2026 | **No schema change.** **`_create_order`** My Orders grid: **allocated** detection from row **`raw`**; **unknown_rows** + Order# / no Invoice# → **allocated** attach — **LLD** **6.118** / **BRD** **3.64** / **HLD** **1.54**. |
 | 2.60 | Apr 2026 | **No schema change.** **`_classify_my_orders_grid_rows`**: **allocated** before **pending** — **LLD** **6.119** / **BRD** **3.65** / **HLD** **1.55**. |
 | 2.61 | Apr 2026 | **No schema change.** **`GET /add-sales/create-invoice-eligibility`** exposes **`resolved_customer_id`** / **`resolved_vehicle_id`** — **LLD** **6.120** / **BRD** **3.66** / **HLD** **1.56**. |
+| 2.62 | Apr 2026 | **`dealer_ref.prefer_insurer`**; **`form_insurance_view`** exposes **`prefer_insurer`**; seed **`100001`** — **Universal Sompo General Insurance** — **`DDL/04b_dealer_ref.sql`**, **`DDL/seed_dealer_arya.sql`**, **`DDL/alter/16a_dealer_ref_prefer_insurer_form_insurance_view.sql`**; **`insurance_form_values.build_insurance_fill_values`** — **LLD** **6.151** / **BRD** **3.97** / **HLD** **1.87** |
