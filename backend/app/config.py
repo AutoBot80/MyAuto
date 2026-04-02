@@ -181,7 +181,8 @@ INSURANCE_POLICY_FILL_TIMEOUT_MS = int(os.getenv("INSURANCE_POLICY_FILL_TIMEOUT_
 _INSURANCE_DIAG_FULL_RAW = (os.getenv("INSURANCE_DIAG_FULL_CONTROL_SNAPSHOT") or "").strip().lower()
 INSURANCE_DIAG_FULL_CONTROL_SNAPSHOT = _INSURANCE_DIAG_FULL_RAW in ("1", "true", "yes", "on")
 
-# Hero ``ekycpage.aspx`` KYC: optional keyboard SOP (click body → Tab → type insurer → …). See ``fill_hero_insurance_service._fill_kyc_ekyc_keyboard_sop``.
+# Hero MISP KYC (``ekycpage`` / ``kycpage.aspx`` / ``/ekyc`` / ``/apps/kyc/``): optional keyboard SOP
+# (click iframe/body → Tab → type insurer → …). See ``fill_hero_insurance_service._fill_kyc_ekyc_keyboard_sop``.
 def _int_env(name: str, default: int) -> int:
     try:
         return int((os.getenv(name) or str(default)).strip())

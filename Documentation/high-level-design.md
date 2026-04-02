@@ -374,3 +374,4 @@ The SQL view **`form_dms_view`** is **removed**; the same mapping is implemented
 | 1.76 | Apr 2026 | — | **`Playwright_insurance.txt`** DIAG snapshots compact by default — **LLD** **6.140**, **BRD** **3.86** |
 | 1.77 | Apr 2026 | — | KYC insurer field: **`ekycpage`** / hidden **`<select>`** + list matching — **LLD** **6.141**, **BRD** **3.87** |
 | 1.78 | Apr 2026 | — | **`ekycpage`** KYC keyboard SOP (Tab/type/ArrowDown) — **LLD** **6.142**, **BRD** **3.88** |
+| 1.79 | Apr 2026 | — | MISP KYC keyboard SOP URL gate + iframe focus before Tab chain — **LLD** **6.143**, **BRD** **3.89** |

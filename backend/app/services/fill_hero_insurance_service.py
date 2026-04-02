@@ -1154,10 +1154,11 @@ def _insurer_type_query_variants(insurer: str) -> list[str]:
     return out
 
 
-def _kyc_collect_dropdown_option_texts(page) -> list[str]:
+def _kyc_collect_dropdown_option_texts(root) -> list[str]:
+    """Collect visible option strings; ``root`` is a **Page** or **Frame** (KYC list may be in an iframe)."""
     texts: list[str] = []
     try:
-        page.wait_for_selector(
+        root.wait_for_selector(
             "[role='option'], [role='listbox'] [role='option'], li[role='option'], .ui-menu-item, "
             "ul.dropdown-menu li, div.select2-results__option, .chosen-results li",
             timeout=2_800,
@@ -1176,7 +1177,7 @@ def _kyc_collect_dropdown_option_texts(page) -> list[str]:
         ".chosen-results li",
     ):
         try:
-            loc = page.locator(sel)
+            loc = root.locator(sel)
             n = min(loc.count(), 250)
             for i in range(n):
                 try:
@@ -1341,16 +1342,52 @@ def _fill_insurance_company_typeahead_fuzzy(page, insurer: str, *, timeout_ms: i
 
 
 def _kyc_url_looks_like_ekyc_page(page) -> bool:
+    """
+    True when the real MISP KYC step should use the keyboard SOP (click → Tab chain).
+    Keep in sync with ``_insurance_kyc_screen_ready_js`` URL hints so we do not wait for
+    ``kycpage.aspx`` / ``/ekyc`` and then fill via DOM-only paths.
+    """
     try:
         u = (page.url or "").lower()
-        return "ekycpage" in u or "/apps/kyc/" in u
+        if "policy.html" in u or "misppolicy" in u:
+            return False
+        return (
+            "kyc.html" in u
+            or "ekycpage" in u
+            or "kycpage.aspx" in u
+            or "/ekyc" in u
+            or "/apps/kyc/" in u
+        )
     except Exception:
         return False
 
 
-def _kyc_read_focused_control_text(page) -> str:
+def _insurance_page_has_dummy_kyc_training_html(page) -> bool:
+    """Training-only markup (``#ins-company``). Real MISP ``ekycpage`` does not expose these ids."""
     try:
-        raw = page.evaluate(
+        return page.locator("#ins-company").count() > 0
+    except Exception:
+        return False
+
+
+def _kyc_preferred_kyc_frame(page):
+    """Frame whose document contains the Insurance Company label (KYC may render inside an iframe)."""
+    for fr in page.frames:
+        try:
+            if fr.is_detached():
+                continue
+            if fr.get_by_text(re.compile(r"Insurance\s*Company", re.I)).count() > 0:
+                return fr
+        except Exception:
+            continue
+    return page.main_frame
+
+
+def _kyc_read_focused_control_text(page) -> str:
+    """``activeElement`` text in the KYC form frame (main-only ``evaluate`` misses iframe focus)."""
+    fr = _kyc_preferred_kyc_frame(page)
+    try:
+        raw = fr.evaluate(
             """() => {
           const a = document.activeElement;
           if (!a) return '';
@@ -1397,18 +1434,35 @@ def _fill_kyc_ekyc_keyboard_sop(page, values: dict, *, timeout_ms: int) -> str |
         return "customer_master.mobile_number is empty for KYC keyboard SOP."
 
     cap = min(int(timeout_ms), 120_000)
+    kyc_fr = _kyc_preferred_kyc_frame(page)
+    logger.info(
+        "Hero Insurance: KYC keyboard SOP — focusing document (url=%s).",
+        (page.url or "")[:220],
+    )
     try:
         page.bring_to_front()
     except Exception:
         pass
+    # When KYC is in a child frame, click the hosting <iframe> first so focus enters the frame
+    # before body click + Tab chain (main-page Tab order otherwise skips embedded controls).
+    if kyc_fr != page.main_frame:
+        try:
+            kyc_fr.frame_element().click(timeout=min(cap, 8_000))
+            _t(page, 160)
+        except Exception as exc:
+            logger.debug("Hero Insurance: KYC iframe host click: %s", exc)
+    # Focus the KYC document (often inside an iframe). Main-frame body click does not move focus there.
     try:
-        page.locator("body").click(timeout=min(cap, 8_000), position={"x": 28, "y": 28})
+        kyc_fr.locator("body").click(timeout=min(cap, 8_000), position={"x": 160, "y": 220})
     except Exception:
         try:
-            page.mouse.click(48, 160)
+            page.locator("body").click(timeout=min(cap, 8_000), position={"x": 40, "y": 40})
         except Exception:
-            pass
-    _t(page, 220)
+            try:
+                page.mouse.click(80, 200)
+            except Exception:
+                pass
+    _t(page, 280)
 
     _kyc_press_tab_n(page, max(0, KYC_KEYBOARD_TABS_TO_INSURANCE_FIELD))
 
@@ -1428,7 +1482,7 @@ def _fill_kyc_ekyc_keyboard_sop(page, values: dict, *, timeout_ms: int) -> str |
         return f"KYC keyboard SOP: could not type insurer: {exc!s}"
     _t(page, 480)
 
-    opts = _kyc_collect_dropdown_option_texts(page)
+    opts = _kyc_collect_dropdown_option_texts(kyc_fr)
     pick = fuzzy_best_option_label(insurer, opts) if opts else None
     shown = _kyc_read_focused_control_text(page)
     matched = bool(pick) and not (pick or "").strip().lower().startswith("--select") and (
@@ -1450,7 +1504,7 @@ def _fill_kyc_ekyc_keyboard_sop(page, values: dict, *, timeout_ms: int) -> str |
                     shown[:90],
                 )
                 break
-            opts2 = _kyc_collect_dropdown_option_texts(page)
+            opts2 = _kyc_collect_dropdown_option_texts(kyc_fr)
             if opts2:
                 cand = fuzzy_best_option_label(insurer, opts2)
                 if cand and _kyc_insurer_display_matches(insurer, cand):
@@ -1512,6 +1566,26 @@ def _fill_kyc_ekyc_keyboard_sop(page, values: dict, *, timeout_ms: int) -> str |
     _t(page, 220)
     logger.info("Hero Insurance: KYC keyboard SOP finished (insurer, OVD, mobile, consent).")
     return None
+
+
+def _kyc_click_kyc_verification_button(page, *, timeout_ms: int) -> None:
+    """Primary CTA on real ``ekycpage`` after form fill (label varies by build)."""
+    to = min(int(timeout_ms), 30_000)
+    for pat in (
+        r"^\s*KYC\s+Verification\s*$",
+        r"^\s*Verify\s+mobile\s*$",
+        r"^\s*Submit\s*$",
+        r"^\s*Continue\s*$",
+    ):
+        try:
+            b = page.get_by_role("button", name=re.compile(pat, re.I))
+            if b.count() > 0 and b.first.is_visible(timeout=2_500):
+                b.first.click(timeout=to)
+                logger.info("Hero Insurance: clicked KYC CTA matching %s.", pat)
+                return
+        except Exception:
+            continue
+    logger.debug("Hero Insurance: KYC primary button not found or not visible (optional).")
 
 
 def _fill_insurance_company_and_ovd_mobile_consent(
@@ -2890,6 +2964,43 @@ def run_fill_insurance_only(
                 ocr_output_dir, subfolder, "NOTE", f"run_fill_insurance_only: KYC wait failed: {wait_err}"
             )
             return result
+
+        base = (insurance_base_url or "").strip().rstrip("/")
+
+        # Real MISP ``ekycpage`` has no training-only ``#ins-company`` / ``#ins-mobile-no`` markup.
+        if not _insurance_page_has_dummy_kyc_training_html(page):
+            append_playwright_insurance_line(
+                ocr_output_dir,
+                subfolder,
+                "NOTE",
+                "run_fill_insurance_only: real MISP KYC — _fill_insurance_company_and_ovd_mobile_consent "
+                "(keyboard SOP on ekycpage when enabled)",
+            )
+            kyc_fill_err = _fill_insurance_company_and_ovd_mobile_consent(
+                page, values, timeout_ms=INSURANCE_ACTION_TIMEOUT_MS
+            )
+            if kyc_fill_err:
+                result["error"] = kyc_fill_err
+                append_playwright_insurance_line(
+                    ocr_output_dir, subfolder, "ERROR", f"run_fill_insurance_only: {kyc_fill_err}"
+                )
+                return result
+            _kyc_click_kyc_verification_button(page, timeout_ms=INSURANCE_ACTION_TIMEOUT_MS)
+            try:
+                page.wait_for_load_state("domcontentloaded", timeout=25_000)
+            except Exception:
+                pass
+            _t(page, 800)
+            append_playwright_insurance_line(
+                ocr_output_dir,
+                subfolder,
+                "NOTE",
+                "run_fill_insurance_only: real MISP KYC step done; skipped training-only #ins-* / policy.html flow",
+            )
+            result["success"] = True
+            result["error"] = None
+            return result
+
         _insurance_select_fuzzy(page, "#ins-company", values["insurer"] or "")
         page.select_option("#ins-kyc-partner", label="Signzy")
         page.select_option("#ins-ovd-type", label="AADHAAR EXTRACTION")
