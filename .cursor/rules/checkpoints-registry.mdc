@@ -26,7 +26,7 @@ Phrases include: “set a checkpoint”, “create a checkpoint”, “checkpoin
 
 Before ending the reply, **read** the **Checkpoints** table from **`Documentation/checkpoints.md`** (after your edits) and **print the full list** for the user:
 
-- For **each** row: **name**, **Created (IST)** date/time, and **TODOs** (the whole cell).
+- For **each** row: **name**, **Commit** (full git object id from the **Commit** column), **Created (IST)** date/time, and **TODOs** (the whole cell).
 
 Format as a clear markdown list or table so the user can scan every checkpoint in one place. This confirms registration and avoids “invisible” checkpoints.
 

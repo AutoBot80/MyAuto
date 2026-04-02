@@ -21,7 +21,7 @@ Agents and humans: if you create only a tag, or only a standalone markdown file,
 
 ### Agent process when the user sets a checkpoint
 
-Cursor agents follow **`.cursor/rules/checkpoints-registry.mdc`**: full workflow (registry row + annotated tag + optional narrative + commit), **never** a standalone `checkpoint-*.md` or tag alone. After the checkpoint is recorded, the agent **must** read this **Checkpoints** table and **playback** the complete list (name, Created (IST), TODOs) for every row so the user sees the full registry in one place.
+Cursor agents follow **`.cursor/rules/checkpoints-registry.mdc`**: full workflow (registry row + annotated tag + optional narrative + commit), **never** a standalone `checkpoint-*.md` or tag alone. After the checkpoint is recorded, the agent **must** read this **Checkpoints** table and **playback** the complete list (name, **Commit** hash, Created (IST), TODOs) for every row so the user sees the full registry in one place.
 
 ## Checkpoints
 

@@ -113,7 +113,7 @@ Configure **`backend/.env`** (copy from **`backend/.env.example`**). The API val
   - `low-level-design.md` — LLD, API endpoints, modules
   - `Database DDL.md` — all tables, columns, constraints, usage
   - `technical-architecture.md` (this file)
-  - `checkpoints.md` — **canonical registry** of named git checkpoints (tags, commits, IST dates, TODOs). Optional per-checkpoint narrative: `checkpoint-*.md`. Creating a checkpoint without updating this registry is disallowed—see §6 and **`.cursor/rules/checkpoints-registry.mdc`**. After recording a checkpoint, agents **playback** the full table (name, date, TODOs) per that rule.
+  - `checkpoints.md` — **canonical registry** of named git checkpoints (tags, commits, IST dates, TODOs). Optional per-checkpoint narrative: `checkpoint-*.md`. Creating a checkpoint without updating this registry is disallowed—see §6 and **`.cursor/rules/checkpoints-registry.mdc`**. After recording a checkpoint, agents **playback** the full table (name, **commit** hash, date, TODOs) per that rule.
 
 ### Documentation Maintenance
 
@@ -156,3 +156,4 @@ Cursor rule: `.cursor/rules/documentation-maintenance.mdc` (always applied).
 | 0.7 | Apr 2026 | — | §6 **`Database DDL.md`** updated **only** for real schema / **`DDL/`** changes (not automation-only); **`.cursor/rules/documentation-maintenance.mdc`** aligned |
 | 0.8 | Apr 2026 | — | §6 **`checkpoints.md`** as canonical checkpoint registry; mandatory registration + **`.cursor/rules/checkpoints-registry.mdc`** |
 | 0.9 | Apr 2026 | — | §6 Checkpoint workflow: **`.cursor/rules/checkpoints-registry.mdc`** expanded (triggers, step order, forbid narrative-only); **`checkpoints.md`** “Agent process”; mandatory **playback** of full checkpoint list after setting one |
+| 0.10 | Apr 2026 | — | §6 Checkpoint **playback** includes **git commit** (full hash) per row, not only name/date/TODOs |
