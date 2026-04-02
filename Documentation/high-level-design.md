@@ -407,3 +407,4 @@ The SQL view **`form_dms_view`** is **removed**; the same mapping is implemented
 | 1.110 | Apr 2026 | — | Insurance **`Playwright_insurance.txt`**: verbose DIAG DOM scrapes removed — **LLD** **6.177**, **BRD** **3.116** |
 | 1.111 | Apr 2026 | — | Hero GI: **Proposal Review** / **Issue Policy** clicks pausable — **LLD** **6.178**, **BRD** **3.117** |
 | 1.112 | Apr 2026 | — | **`main_process`**: **`Playwright_insurance_main_process_frames.txt`** (all frames, visible controls) before proposal fill — **LLD** **6.190** |
+| 1.113 | Apr 2026 | — | **`main_process` proposal**: per-step readback + **`Playwright_insurance.txt`** lines; fail-fast on first bad step — **LLD** **6.191** |

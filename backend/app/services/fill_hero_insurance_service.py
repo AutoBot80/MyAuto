@@ -3378,6 +3378,401 @@ def _fill_input_by_label_patterns(
     return False
 
 
+def _proposal_log(
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
+    step_id: str,
+    detail: str,
+) -> None:
+    msg = f"proposal step={step_id} {detail}"
+    logger.info("Hero Insurance: %s", msg)
+    append_playwright_insurance_line(ocr_output_dir, subfolder, "NOTE", msg)
+
+
+def _read_locator_value_snapshot(locator) -> dict[str, Any]:
+    """Read back value/checked/selected text for proposal verification (single-element locator)."""
+    try:
+        tag = (
+            locator.evaluate("el => el && el.tagName ? el.tagName.toLowerCase() : ''") or ""
+        ).lower()
+    except Exception:
+        return {"kind": "unknown", "error": "evaluate_failed"}
+    if tag == "select":
+        try:
+            t = locator.evaluate(
+                """el => {
+                const i = el.selectedIndex;
+                if (i < 0) return '';
+                const o = el.options[i];
+                return o ? (o.textContent || '').trim() : '';
+              }"""
+            )
+            return {"kind": "select", "selected_text": (t or "").strip()}
+        except Exception:
+            return {"kind": "select", "selected_text": ""}
+    if tag == "input":
+        typ = (locator.get_attribute("type") or "").lower()
+        if typ in ("checkbox", "radio"):
+            try:
+                return {"kind": typ, "checked": locator.is_checked()}
+            except Exception:
+                return {"kind": typ, "checked": None}
+        try:
+            return {"kind": "input", "value": (locator.input_value() or "").strip()}
+        except Exception:
+            return {"kind": "input", "value": ""}
+    if tag == "textarea":
+        try:
+            return {"kind": "textarea", "value": (locator.input_value() or "").strip()}
+        except Exception:
+            return {"kind": "textarea", "value": ""}
+    return {"kind": tag, "raw": ""}
+
+
+def _proposal_expected_matches_readback(expected: str, readback: str) -> bool:
+    e = normalize_for_fuzzy_match(expected)
+    r = normalize_for_fuzzy_match(readback)
+    if not e or not r:
+        return False
+    if e == r:
+        return True
+    if e in r or r in e:
+        return True
+    pick = fuzzy_best_option_label(
+        expected, [readback], min_score=KYC_INSURER_FUZZY_MIN_SCORE
+    )
+    return bool(pick)
+
+
+def _proposal_first_label_control_locator(page, label_pattern: str):
+    """First visible control matching ``get_by_label`` across main page + nav iframe + child frames."""
+    rx = re.compile(label_pattern, re.I)
+    for root in _hero_misp_page_and_frame_roots(page, purpose="nav"):
+        try:
+            loc = root.get_by_label(rx)
+            if loc.count() == 0:
+                continue
+            first = loc.first
+            try:
+                if first.is_visible(timeout=1_800):
+                    return first
+            except Exception:
+                return first
+        except Exception:
+            continue
+    return None
+
+
+def _proposal_step_select_fuzzy(
+    page,
+    label_patterns: tuple[str, ...],
+    query: str,
+    step_id: str,
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
+    *,
+    timeout_ms: int,
+) -> str | None:
+    """Set ``<select>`` by label + fuzzy option; read back selected text. Returns error string or None."""
+    q = (query or "").strip()
+    if not q:
+        return None
+    last = "no select control matched labels"
+    for lp in label_patterns:
+        el = _proposal_first_label_control_locator(page, lp)
+        if el is None:
+            continue
+        try:
+            tag = (el.evaluate("e => e && e.tagName ? e.tagName.toUpperCase() : ''") or "").upper()
+            if tag != "SELECT":
+                last = f"label {lp!r} resolved to {tag}, not SELECT"
+                continue
+        except Exception:
+            continue
+        loc = el
+        if not _select_option_fuzzy_in_select(
+            page,
+            loc,
+            q,
+            timeout_ms=timeout_ms,
+            fuzzy_min_score=KYC_INSURER_FUZZY_MIN_SCORE,
+        ):
+            last = f"fuzzy select failed for label pattern {lp!r}"
+            continue
+        snap = _read_locator_value_snapshot(loc)
+        st = (snap.get("selected_text") or "").strip()
+        if not _proposal_expected_matches_readback(q, st):
+            return (
+                f"{step_id}: readback mismatch expected={q!r} selected_text={st!r} "
+                f"(after label pattern {lp!r})"
+            )
+        _proposal_log(
+            ocr_output_dir,
+            subfolder,
+            step_id,
+            f"select ok label_pattern={lp[:48]!r} readback={st!r}",
+        )
+        return None
+    return f"{step_id}: {last}"
+
+
+def _proposal_step_fill_input(
+    page,
+    label_patterns: tuple[str, ...],
+    value: str,
+    step_id: str,
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
+    *,
+    timeout_ms: int,
+) -> str | None:
+    v = (value or "").strip()
+    if not v:
+        return None
+    last = "no input matched labels"
+    for lp in label_patterns:
+        el = _proposal_first_label_control_locator(page, lp)
+        if el is None:
+            continue
+        try:
+            tag = (el.evaluate("e => e && e.tagName ? e.tagName.toUpperCase() : ''") or "").upper()
+            if tag == "SELECT":
+                last = f"label {lp!r} is SELECT; use proposal_step_select"
+                continue
+        except Exception:
+            continue
+        try:
+            el.fill("", timeout=timeout_ms)
+            el.fill(v, timeout=timeout_ms)
+        except Exception as exc:
+            last = f"fill failed {lp!r}: {exc!s}"
+            continue
+        snap = _read_locator_value_snapshot(el)
+        got = (snap.get("value") or "").strip()
+        if got != v and normalize_for_fuzzy_match(got) != normalize_for_fuzzy_match(v):
+            if not _proposal_expected_matches_readback(v, got):
+                return f"{step_id}: readback mismatch expected={v!r} got={got!r}"
+        _proposal_log(
+            ocr_output_dir,
+            subfolder,
+            step_id,
+            f"fill ok label_pattern={lp[:48]!r} readback={got!r}",
+        )
+        return None
+    return f"{step_id}: {last}"
+
+
+def _proposal_step_checkbox(
+    page,
+    text_pattern: str,
+    want_checked: bool,
+    step_id: str,
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
+    *,
+    timeout_ms: int,
+) -> str | None:
+    """Find checkbox by label/row text, set checked state, verify. Fails if control not found."""
+    rx = re.compile(text_pattern, re.I)
+    last_exc = ""
+    for root in _hero_misp_page_and_frame_roots(page, purpose="nav"):
+        try:
+            cbs = root.locator('input[type="checkbox"]')
+            n = cbs.count()
+        except Exception:
+            continue
+        for i in range(min(n, 160)):
+            cb = cbs.nth(i)
+            try:
+                if not cb.is_visible(timeout=400):
+                    continue
+                t = ""
+                cid = cb.get_attribute("id") or ""
+                if cid:
+                    try:
+                        lab = root.locator(f'label[for="{cid}"]')
+                        if lab.count() > 0:
+                            t = (lab.first.inner_text() or "")[:400]
+                    except Exception:
+                        pass
+                if not t.strip():
+                    t = (
+                        cb.evaluate(
+                            "e => (e.closest('label, tr, div') && e.closest('label, tr, div').innerText) || ''"
+                        )
+                        or ""
+                    )[:500]
+                if not rx.search(t):
+                    continue
+                if want_checked and not cb.is_checked():
+                    cb.check(timeout=timeout_ms)
+                elif not want_checked and cb.is_checked():
+                    cb.uncheck(timeout=timeout_ms)
+                if cb.is_checked() != want_checked:
+                    return (
+                        f"{step_id}: checkbox readback want_checked={want_checked} "
+                        f"got={cb.is_checked()} pattern={text_pattern!r}"
+                    )
+                _proposal_log(
+                    ocr_output_dir,
+                    subfolder,
+                    step_id,
+                    f"checkbox {'checked' if want_checked else 'unchecked'} ok pattern={text_pattern[:56]!r}",
+                )
+                return None
+            except Exception as exc:
+                last_exc = str(exc)
+                continue
+    suf = f" ({last_exc})" if last_exc else ""
+    return f"{step_id}: checkbox not found for pattern {text_pattern!r}{suf}"
+
+
+def _proposal_step_email_hardcoded(
+    page,
+    email_fixed: str,
+    step_id: str,
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
+    *,
+    timeout_ms: int,
+) -> str | None:
+    last_err = ""
+    for root in _hero_misp_page_and_frame_roots(page, purpose="nav"):
+        for factory in (
+            lambda r: r.get_by_label(re.compile(r"E-?mail", re.I)),
+            lambda r: r.locator('input[type="email"]'),
+            lambda r: r.locator('input[name*="email" i]'),
+        ):
+            try:
+                loc = factory(root)
+                if loc.count() == 0 or not loc.first.is_visible(timeout=1_500):
+                    continue
+                el = loc.first
+                el.fill("", timeout=timeout_ms)
+                el.fill(email_fixed, timeout=timeout_ms)
+                got = (el.input_value() or "").strip()
+                if got != email_fixed and normalize_for_fuzzy_match(got) != normalize_for_fuzzy_match(
+                    email_fixed
+                ):
+                    return f"{step_id}: email readback mismatch want={email_fixed!r} got={got!r}"
+                _proposal_log(
+                    ocr_output_dir,
+                    subfolder,
+                    step_id,
+                    f"fill ok readback={got!r}",
+                )
+                return None
+            except Exception as exc:
+                last_err = str(exc)
+                continue
+    return f"{step_id}: email input not found or not fillable ({last_err or 'no candidate'})"
+
+
+def _proposal_step_date_of_registration_today(
+    page,
+    step_id: str,
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
+    *,
+    timeout_ms: int,
+) -> str | None:
+    today = date.today()
+    iso_d = today.isoformat()
+    slash_d = today.strftime("%d/%m/%Y")
+    # By label
+    el = _proposal_first_label_control_locator(page, r"Date\s*of\s*Regist")
+    if el is not None:
+        try:
+            tag = (el.evaluate("e => e && e.tagName ? e.tagName.toUpperCase() : ''") or "").upper()
+            if tag == "INPUT":
+                inp_type = (el.get_attribute("type") or "").lower()
+                if inp_type == "date":
+                    el.fill(iso_d, timeout=timeout_ms)
+                else:
+                    el.fill(slash_d, timeout=timeout_ms)
+                snap = _read_locator_value_snapshot(el)
+                got = (snap.get("value") or "").strip()
+                if not got:
+                    return f"{step_id}: date readback empty after fill"
+                if iso_d not in got and slash_d not in got and got.replace("-", "/") != slash_d:
+                    if not any(
+                        x in got for x in (iso_d, today.strftime("%d-%m-%Y"), slash_d)
+                    ):
+                        return f"{step_id}: date readback mismatch want ~{iso_d!r} got={got!r}"
+                _proposal_log(
+                    ocr_output_dir,
+                    subfolder,
+                    step_id,
+                    f"fill ok readback={got!r}",
+                )
+                return None
+        except Exception as exc:
+            return f"{step_id}: date fill by label failed: {exc!s}"
+    # First date input
+    for root in _hero_misp_page_and_frame_roots(page, purpose="nav"):
+        try:
+            loc = root.locator('input[type="date"]')
+            if loc.count() == 0 or not loc.first.is_visible(timeout=1_200):
+                continue
+            el = loc.first
+            el.fill(iso_d, timeout=timeout_ms)
+            got = (el.input_value() or "").strip()
+            if got != iso_d:
+                return f"{step_id}: date readback mismatch want={iso_d!r} got={got!r}"
+            _proposal_log(ocr_output_dir, subfolder, step_id, f"fill ok (generic date input) readback={got!r}")
+            return None
+        except Exception as exc:
+            continue
+    return f"{step_id}: Date of registration control not found"
+
+
+def _proposal_step_hdfc_payment(
+    page,
+    step_id: str,
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
+    *,
+    timeout_ms: int,
+) -> str | None:
+    for root in _hero_misp_page_and_frame_roots(page, purpose="nav"):
+        try:
+            hdfc = root.get_by_role("radio", name=re.compile(r"HDFC", re.I))
+            if hdfc.count() == 0:
+                continue
+            for i in range(min(hdfc.count(), 8)):
+                r = hdfc.nth(i)
+                if not r.is_visible(timeout=1_000):
+                    continue
+                r.check(timeout=timeout_ms)
+                if not r.is_checked():
+                    return f"{step_id}: HDFC radio still not checked after check()"
+                _proposal_log(
+                    ocr_output_dir,
+                    subfolder,
+                    step_id,
+                    "radio HDFC checked ok readback=checked",
+                )
+                return None
+        except Exception:
+            continue
+    try:
+        for root in _hero_misp_page_and_frame_roots(page, purpose="nav"):
+            lab = root.locator("label, span, div").filter(has_text=re.compile(r"HDFC", re.I)).first
+            if lab.count() == 0 or not lab.is_visible(timeout=1_200):
+                continue
+            lab.click(timeout=timeout_ms)
+            _proposal_log(
+                ocr_output_dir,
+                subfolder,
+                step_id,
+                "click HDFC label (readback not verified for custom UI)",
+            )
+            return None
+    except Exception as exc:
+        return f"{step_id}: HDFC payment option not found: {exc!s}"
+    return f"{step_id}: HDFC payment option not found"
+
+
 def _hero_misp_page_and_frame_roots(page, *, purpose: str = "generic") -> list:
     """
     Locator roots for MISP UI: optional ``FrameLocator`` from module constants (trial direct path), then ``page``, then
@@ -4305,39 +4700,18 @@ def _hero_misp_diag_scrape_main_process_frames(
         )
 
 
-def _fill_date_of_registration_today(page, *, timeout_ms: int) -> None:
-    """Hardcoded proposal default: **today** (local date)."""
-    today = date.today()
-    filled = False
-    try:
-        loc = page.get_by_label(re.compile(r"Date\s*of\s*Regist", re.I))
-        if loc.count() > 0 and loc.first.is_visible(timeout=2_000):
-            tag = (loc.first.evaluate("el => (el && el.tagName) ? el.tagName : ''") or "").upper()
-            if tag == "INPUT":
-                inp_type = (loc.first.get_attribute("type") or "").lower()
-                if inp_type == "date":
-                    loc.first.fill(today.isoformat(), timeout=timeout_ms)
-                else:
-                    loc.first.fill(today.strftime("%d/%m/%Y"), timeout=timeout_ms)
-                filled = True
-                logger.info("Hero Insurance: filled Date of registration (today, hardcoded).")
-    except Exception:
-        pass
-    if filled:
-        return
-    try:
-        generic = page.locator('input[type="date"]')
-        if generic.count() > 0 and generic.first.is_visible(timeout=1_500):
-            generic.first.fill(today.isoformat(), timeout=timeout_ms)
-            logger.info("Hero Insurance: filled first date input with today.")
-    except Exception:
-        pass
-
-
 def _hero_misp_fill_proposal_and_review(
-    page, values: dict, *, timeout_ms: int
+    page,
+    values: dict,
+    *,
+    timeout_ms: int,
+    ocr_output_dir: Path | None = None,
+    subfolder: str | None = None,
 ) -> tuple[str | None, dict[str, Any]]:
-    """Proposal page after **I agree**: field fills → optional **Proposal Review** → scrape preview before Issue Policy."""
+    """
+    Proposal page after **I agree**: each fill is read back and logged (``Playwright_insurance.txt``);
+    first failed step returns an error message. Then optional **Proposal Review** → scrape preview.
+    """
     pt = max(int(timeout_ms), int(INSURANCE_POLICY_FILL_TIMEOUT_MS))
 
     try:
@@ -4346,74 +4720,175 @@ def _hero_misp_fill_proposal_and_review(
         pass
     _t(page, 500)
 
+    def _fail(msg: str) -> tuple[str | None, dict[str, Any]]:
+        append_playwright_insurance_line(
+            ocr_output_dir,
+            subfolder,
+            "ERROR",
+            f"main_process proposal form: {msg}",
+        )
+        return msg, {}
+
     ms = (values.get("marital_status") or "").strip()
     if ms:
-        if not _select_by_label_fuzzy(page, r"Marital\s*Status", ms, timeout_ms=pt):
-            _select_by_label_fuzzy(page, r"Marital", ms, timeout_ms=pt)
+        err = _proposal_step_select_fuzzy(
+            page,
+            (r"Marital\s*Status", r"Marital"),
+            ms,
+            "marital_status",
+            ocr_output_dir,
+            subfolder,
+            timeout_ms=pt,
+        )
+        if err:
+            return _fail(err)
 
     prof = (values.get("profession") or "").strip()
     if prof:
-        if not _select_by_label_fuzzy(page, r"Occupation\s*Type", prof, timeout_ms=pt):
-            _select_by_label_fuzzy(page, r"Occupation", prof, timeout_ms=pt)
+        err = _proposal_step_select_fuzzy(
+            page,
+            (r"Occupation\s*Type", r"Occupation"),
+            prof,
+            "occupation",
+            ocr_output_dir,
+            subfolder,
+            timeout_ms=pt,
+        )
+        if err:
+            return _fail(err)
 
-    email_fixed = "na@gmail.com"
-    try:
-        for loc in (
-            page.get_by_label(re.compile(r"E-?mail", re.I)),
-            page.locator('input[type="email"]'),
-            page.locator('input[name*="email" i]'),
-        ):
-            if loc.count() > 0 and loc.first.is_visible(timeout=1_500):
-                loc.first.fill("", timeout=pt)
-                loc.first.fill(email_fixed, timeout=pt)
-                logger.info("Hero Insurance: filled email (hardcoded fallback).")
-                break
-    except Exception as exc:
-        logger.warning("Hero Insurance: email fill: %s", exc)
+    err = _proposal_step_email_hardcoded(
+        page,
+        "na@gmail.com",
+        "email",
+        ocr_output_dir,
+        subfolder,
+        timeout_ms=pt,
+    )
+    if err:
+        return _fail(err)
 
     city = (values.get("city") or "").strip()
     rto_query = city if city else "City"
-    if not _select_by_label_fuzzy(page, r"RTO", rto_query, timeout_ms=pt):
-        _select_by_label_fuzzy(page, r"Registering\s*Authority|R\.?T\.?O", rto_query, timeout_ms=pt)
+    err = _proposal_step_select_fuzzy(
+        page,
+        (r"RTO", r"Registering\s*Authority|R\.?T\.?O"),
+        rto_query,
+        "rto",
+        ocr_output_dir,
+        subfolder,
+        timeout_ms=pt,
+    )
+    if err:
+        return _fail(err)
 
     mname = (values.get("model_name") or "").strip()
     if mname:
-        if not _select_by_label_fuzzy(page, r"Model\s*Name", mname, timeout_ms=pt):
-            _select_by_label_fuzzy(page, r"Model", mname, timeout_ms=pt)
+        err = _proposal_step_select_fuzzy(
+            page,
+            (r"Model\s*Name", r"Model"),
+            mname,
+            "model_name",
+            ocr_output_dir,
+            subfolder,
+            timeout_ms=pt,
+        )
+        if err:
+            return _fail(err)
 
-    _fill_date_of_registration_today(page, timeout_ms=pt)
+    err = _proposal_step_date_of_registration_today(
+        page,
+        "date_of_registration",
+        ocr_output_dir,
+        subfolder,
+        timeout_ms=pt,
+    )
+    if err:
+        return _fail(err)
 
     nn = (values.get("nominee_name") or "").strip()
     if nn:
-        _fill_input_by_label_patterns(
-            page, (r"Nominee\s*Name", r"Name\s*of\s*Nominee"), nn, timeout_ms=pt
+        err = _proposal_step_fill_input(
+            page,
+            (r"Nominee\s*Name", r"Name\s*of\s*Nominee"),
+            nn,
+            "nominee_name",
+            ocr_output_dir,
+            subfolder,
+            timeout_ms=pt,
         )
+        if err:
+            return _fail(err)
+
     na = (values.get("nominee_age") or "").strip()
     if na:
-        _fill_input_by_label_patterns(page, (r"Nominee\s*Age", r"Age\s*of\s*Nominee"), na, timeout_ms=pt)
+        err = _proposal_step_fill_input(
+            page,
+            (r"Nominee\s*Age", r"Age\s*of\s*Nominee"),
+            na,
+            "nominee_age",
+            ocr_output_dir,
+            subfolder,
+            timeout_ms=pt,
+        )
+        if err:
+            return _fail(err)
 
     ng = (values.get("nominee_gender") or "").strip()
     if ng:
-        if not _select_by_label_fuzzy(page, r"Nominee.*Gender|Gender.*Nominee", ng, timeout_ms=pt):
-            _select_by_label_fuzzy(page, r"Gender\s*\(?\s*Nominee", ng, timeout_ms=pt)
+        err = _proposal_step_select_fuzzy(
+            page,
+            (r"Nominee.*Gender|Gender.*Nominee", r"Gender\s*\(?\s*Nominee"),
+            ng,
+            "nominee_gender",
+            ocr_output_dir,
+            subfolder,
+            timeout_ms=pt,
+        )
+        if err:
+            return _fail(err)
 
     rel = (values.get("nominee_relationship") or "").strip()
     if rel:
-        if not _select_by_label_fuzzy(page, r"Relation", rel, timeout_ms=pt):
-            _fill_input_by_label_patterns(page, (r"Relation\s*with|Nominee\s*Relation",), rel, timeout_ms=pt)
+        err = _proposal_step_select_fuzzy(
+            page,
+            (r"Relation",),
+            rel,
+            "nominee_relationship",
+            ocr_output_dir,
+            subfolder,
+            timeout_ms=pt,
+        )
+        if err:
+            err = _proposal_step_fill_input(
+                page,
+                (r"Relation\s*with|Nominee\s*Relation",),
+                rel,
+                "nominee_relationship",
+                ocr_output_dir,
+                subfolder,
+                timeout_ms=pt,
+            )
+        if err:
+            return _fail(err)
 
     fin = (values.get("financer_name") or "").strip()
     if fin:
-        _fill_input_by_label_patterns(
+        err = _proposal_step_fill_input(
             page,
             (r"Financier\s*Name", r"Financer\s*Name", r"Name\s*of\s*Financier"),
             fin,
+            "financer_name",
+            ocr_output_dir,
+            subfolder,
             timeout_ms=pt,
         )
+        if err:
+            return _fail(err)
 
     branch_city = city
     if branch_city:
-        _fill_input_by_label_patterns(
+        err = _proposal_step_fill_input(
             page,
             (
                 r"Finance\s*Company\s*Branch",
@@ -4422,55 +4897,87 @@ def _hero_misp_fill_proposal_and_review(
                 r"Finance\s*Branch",
             ),
             branch_city,
+            "finance_branch",
+            ocr_output_dir,
+            subfolder,
             timeout_ms=pt,
         )
+        if err:
+            return _fail(err)
 
     _t(page, 400)
-    _set_checkbox_matching_text(page, r"ND\s*Cover", True, timeout_ms=pt)
-    _set_checkbox_matching_text(page, r"RTI\s*cover|RTI\s*Cover", True, timeout_ms=pt)
-    _set_checkbox_matching_text(page, r"^RSA$|RSA\s*cover|Road\s*Side", False, timeout_ms=pt)
-    _set_checkbox_matching_text(page, r"Emergency\s*Medical", False, timeout_ms=pt)
+    for pat, want, sid in (
+        (r"ND\s*Cover", True, "addon_nd_cover"),
+        (r"RTI\s*cover|RTI\s*Cover", True, "addon_rti"),
+        (r"^RSA$|RSA\s*cover|Road\s*Side", False, "addon_rsa"),
+        (r"Emergency\s*Medical", False, "addon_emergency_medical"),
+    ):
+        err = _proposal_step_checkbox(
+            page, pat, want, sid, ocr_output_dir, subfolder, timeout_ms=pt
+        )
+        if err:
+            return _fail(err)
 
-    _fill_input_by_label_patterns(page, (r"CPA\s*Tenure", r"CPA"), "0", timeout_ms=pt)
+    err = _proposal_step_fill_input(
+        page,
+        (r"CPA\s*Tenure", r"CPA"),
+        "0",
+        "cpa_tenure",
+        ocr_output_dir,
+        subfolder,
+        timeout_ms=pt,
+    )
+    if err:
+        return _fail(err)
 
     _t(page, 400)
-    hdfc_ok = False
-    try:
-        hdfc = page.get_by_role("radio", name=re.compile(r"HDFC", re.I))
-        if hdfc.count() > 0:
-            for i in range(min(hdfc.count(), 6)):
-                if hdfc.nth(i).is_visible(timeout=1_000):
-                    hdfc.nth(i).check(timeout=pt)
-                    hdfc_ok = True
-                    logger.info("Hero Insurance: selected HDFC payment mode (hardcoded).")
-                    break
-    except Exception:
-        pass
-    if not hdfc_ok:
-        try:
-            lab = page.locator("label, span, div").filter(has_text=re.compile(r"HDFC", re.I)).first
-            if lab.count() > 0 and lab.is_visible(timeout=1_500):
-                lab.click(timeout=pt)
-                logger.info("Hero Insurance: clicked HDFC payment option (label).")
-        except Exception as exc:
-            logger.warning("Hero Insurance: HDFC payment selection: %s", exc)
+    err = _proposal_step_hdfc_payment(
+        page, "payment_hdfc", ocr_output_dir, subfolder, timeout_ms=pt
+    )
+    if err:
+        return _fail(err)
 
     _t(page, 500)
     if HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY:
+        _proposal_log(
+            ocr_output_dir,
+            subfolder,
+            "proposal_review",
+            "skip click (HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY=True)",
+        )
         logger.info(
             "Hero Insurance: Proposal Review click skipped (HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY=True)."
         )
     else:
         try:
-            rev = page.get_by_role("button", name=re.compile(r"Proposal\s*Review", re.I))
-            if rev.count() > 0 and rev.first.is_visible(timeout=3_000):
-                rev.first.click(timeout=pt)
-                logger.info("Hero Insurance: clicked Proposal Review.")
-            else:
-                page.get_by_text(re.compile(r"Proposal\s*Review", re.I)).first.click(timeout=pt)
-                logger.info("Hero Insurance: clicked Proposal Review (text).")
+            clicked = False
+            for root in _hero_misp_page_and_frame_roots(page, purpose="nav"):
+                rev = root.get_by_role("button", name=re.compile(r"Proposal\s*Review", re.I))
+                if rev.count() > 0 and rev.first.is_visible(timeout=3_000):
+                    rev.first.click(timeout=pt)
+                    clicked = True
+                    break
+            if not clicked:
+                for root in _hero_misp_page_and_frame_roots(page, purpose="nav"):
+                    try:
+                        root.get_by_text(re.compile(r"Proposal\s*Review", re.I)).first.click(
+                            timeout=pt
+                        )
+                        clicked = True
+                        break
+                    except Exception:
+                        continue
+            if not clicked:
+                return _fail("proposal_review: could not find or click Proposal Review")
+            _proposal_log(
+                ocr_output_dir,
+                subfolder,
+                "proposal_review",
+                "clicked ok",
+            )
+            logger.info("Hero Insurance: clicked Proposal Review.")
         except Exception as exc:
-            return f"Proposal Review click failed: {exc!s}", {}
+            return _fail(f"proposal_review: {exc!s}")
 
     _t(page, 600)
     try:
@@ -4638,7 +5145,13 @@ def main_process(
         _hero_misp_diag_scrape_main_process_frames(
             page, ocr_output_dir=ocr_output_dir, subfolder=subfolder
         )
-        prop_err, preview = _hero_misp_fill_proposal_and_review(page, values, timeout_ms=to)
+        prop_err, preview = _hero_misp_fill_proposal_and_review(
+            page,
+            values,
+            timeout_ms=to,
+            ocr_output_dir=ocr_output_dir,
+            subfolder=subfolder,
+        )
         if prop_err:
             out["error"] = prop_err
             append_playwright_insurance_line(
