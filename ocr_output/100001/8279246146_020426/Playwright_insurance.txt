@@ -1,18 +1,14 @@
 Playwright Insurance — execution log (IST / Asia/Kolkata timestamps)
 
-started_ist=2026-04-02T19:48:34.787+05:30
+started_ist=2026-04-02T19:55:15.602+05:30
 subfolder='8279246146_020426'
 
 --- trace ---
-2026-04-02T19:48:34.790+05:30 [NOTE] run_fill_insurance_only: starting Fill Insurance flow
-2026-04-02T19:48:44.644+05:30 [NOTE] run_fill_insurance_only: Sign In not auto-clicked — complete login manually if needed.
-2026-04-02T19:48:46.218+05:30 [NOTE] run_fill_insurance_only: clicked 2W (two-wheeler) entry
-2026-04-02T19:48:51.339+05:30 [NOTE] run_fill_insurance_only: active tab after 2W
-2026-04-02T19:48:52.235+05:30 [NOTE] run_fill_insurance_only: clicked New Policy
-2026-04-02T19:48:57.335+05:30 [NOTE] run_fill_insurance_only: active tab before KYC wait
-2026-04-02T19:48:57.503+05:30 [NOTE] run_fill_insurance_only: real MISP KYC — _fill_insurance_company_and_ovd_mobile_consent (keyboard SOP on ekycpage when enabled)
-2026-04-02T19:49:35.002+05:30 [NOTE] run_fill_insurance_only: real MISP KYC (post-mobile banner branch + Proceed or uploads) complete
-2026-04-02T19:49:35.008+05:30 [NOTE] run_fill_insurance_only: VIN fill + Submit (pre_process), timeout_ms=60000
-2026-04-02T19:49:49.046+05:30 [NOTE] main_process: I agree → proposal form (VIN+Submit done in pre_process)
-2026-04-02T19:49:49.048+05:30 [NOTE] main_process: attached to same browser tab as pre_process
-2026-04-02T19:49:57.442+05:30 [ERROR] main_process: insurance_master insert failed: Insurance already recorded for this customer, vehicle, and calendar year; duplicate insurance_master row is not allowed.
+2026-04-02T19:55:15.604+05:30 [NOTE] run_fill_insurance_only: starting Fill Insurance flow
+2026-04-02T19:55:24.458+05:30 [NOTE] run_fill_insurance_only: Sign In not auto-clicked — complete login manually if needed.
+2026-04-02T19:55:26.145+05:30 [NOTE] run_fill_insurance_only: clicked 2W (two-wheeler) entry
+2026-04-02T19:55:31.203+05:30 [NOTE] run_fill_insurance_only: active tab after 2W
+2026-04-02T19:55:32.024+05:30 [NOTE] run_fill_insurance_only: clicked New Policy
+2026-04-02T19:55:37.042+05:30 [NOTE] run_fill_insurance_only: active tab before KYC wait
+2026-04-02T19:55:37.220+05:30 [NOTE] run_fill_insurance_only: real MISP KYC — _fill_insurance_company_and_ovd_mobile_consent (keyboard SOP on ekycpage when enabled)
+2026-04-02T19:56:45.366+05:30 [ERROR] run_fill_insurance_only: KYC keyboard SOP: could not match insurer after typing and ArrowDown. insurer='Universal Sompo General Insurance'
