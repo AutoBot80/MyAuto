@@ -174,7 +174,7 @@ INSURANCE_BASE_URL = (os.getenv("INSURANCE_BASE_URL") or "").strip().rstrip("/")
 # Max time (ms) to wait on the login page for the operator to sign in and reach KYC.
 INSURANCE_LOGIN_WAIT_MS = int(os.getenv("INSURANCE_LOGIN_WAIT_MS", "600000"))
 # Default Playwright timeout (ms) per action during Insurance automation (KYC + navigation). Lower = snappier.
-INSURANCE_ACTION_TIMEOUT_MS = int(os.getenv("INSURANCE_ACTION_TIMEOUT_MS", "5500"))
+INSURANCE_ACTION_TIMEOUT_MS = int(os.getenv("INSURANCE_ACTION_TIMEOUT_MS", "3500"))
 # Tighter timeout while filling the policy / insurance-details form (many sequential fields).
 INSURANCE_POLICY_FILL_TIMEOUT_MS = int(os.getenv("INSURANCE_POLICY_FILL_TIMEOUT_MS", "3200"))
 # Hero MISP KYC (``ekycpage`` / ``kycpage.aspx`` / ``/ekyc`` / ``/apps/kyc/``): optional keyboard SOP
@@ -193,10 +193,9 @@ KYC_KEYBOARD_TABS_MOBILE_TO_CONSENT = _int_env("KYC_KEYBOARD_TABS_MOBILE_TO_CONS
 KYC_KEYBOARD_INSURER_ARROW_DOWN_MAX = _int_env("KYC_KEYBOARD_INSURER_ARROW_DOWN_MAX", 60)
 KYC_KEYBOARD_OVD_ARROW_DOWN_MAX = _int_env("KYC_KEYBOARD_OVD_ARROW_DOWN_MAX", 28)
 
-# After insurer commit: max wait (ms) for ``networkidle`` so KYC can settle. 0 = skip.
-INSURANCE_KYC_POST_INSURER_NETWORKIDLE_MS = _int_env("INSURANCE_KYC_POST_INSURER_NETWORKIDLE_MS", 200)
-# After KYC Partner select: max wait (ms) for ``networkidle``. 0 = skip.
-INSURANCE_KYC_POST_KYC_PARTNER_NETWORKIDLE_MS = _int_env("INSURANCE_KYC_POST_KYC_PARTNER_NETWORKIDLE_MS", 200)
+# After insurer / KYC Partner: optional ``networkidle`` (ms). **0** = skip (default; no .env required).
+INSURANCE_KYC_POST_INSURER_NETWORKIDLE_MS = _int_env("INSURANCE_KYC_POST_INSURER_NETWORKIDLE_MS", 0)
+INSURANCE_KYC_POST_KYC_PARTNER_NETWORKIDLE_MS = _int_env("INSURANCE_KYC_POST_KYC_PARTNER_NETWORKIDLE_MS", 0)
 # Default portal label for MISP **KYC Partner** when ``values['kyc_partner']`` is unset (documentation only;
 # automation does not change ``ddlkycPartner`` — portal default e.g. Signzy remains).
 KYC_DEFAULT_KYC_PARTNER_LABEL = (os.getenv("KYC_DEFAULT_KYC_PARTNER_LABEL") or "Signzy").strip() or "Signzy"

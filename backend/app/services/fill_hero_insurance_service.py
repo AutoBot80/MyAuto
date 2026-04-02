@@ -6,6 +6,7 @@ email, add-ons, CPA, HDFC, and registration date use **hardcoded** defaults. **P
 Browser reuse uses ``handle_browser_opening.get_or_open_site_page`` with ``match_base`` from **pre_process**.
 """
 import difflib
+import json
 import logging
 import re
 import time
@@ -53,7 +54,7 @@ from app.services.utility_functions import fuzzy_best_option_label, normalize_fo
 
 # MISP navigation tuning — edit in source (not .env). Optional iframe CSS after trial runs.
 # Logs show Hero MISP hub under ``/prod/apps/v1/2w/`` — prefer matching iframes before full frame sweeps.
-INSURANCE_CLICK_SETTLE_MS = 100
+INSURANCE_CLICK_SETTLE_MS = 35
 INSURANCE_KYC_IFRAME_SELECTOR = ""
 INSURANCE_VIN_IFRAME_SELECTOR = 'iframe[src*="2w" i]'
 INSURANCE_NAV_IFRAME_SELECTOR = 'iframe[src*="2w" i]'
@@ -73,6 +74,78 @@ def _hero_misp_vin_step_timeout_ms(base_action_ms: int | None = None) -> int:
 
 
 logger = logging.getLogger(__name__)
+
+# #region agent log
+_DEBUG_INSURER_TAB_NDJSON = Path(__file__).resolve().parents[3] / "debug-d1a375.log"
+
+
+def _dbg_kyc_insurer_tab_ndjson(
+    hypothesis_id: str, location: str, message: str, data: dict[str, Any]
+) -> None:
+    try:
+        payload: dict[str, Any] = {
+            "sessionId": "d1a375",
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "message": message,
+            "data": data,
+            "timestamp": int(time.time() * 1000),
+        }
+        with open(_DEBUG_INSURER_TAB_NDJSON, "a", encoding="utf-8") as _df:
+            _df.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
+def _dbg_kyc_focus_snapshot(kyc_fr, page) -> dict[str, Any]:
+    snap: dict[str, Any] = {}
+    try:
+        snap["kyc_is_child"] = kyc_fr != page.main_frame
+    except Exception:
+        snap["kyc_is_child"] = None
+    try:
+        snap["in_kyc_frame"] = kyc_fr.evaluate(
+            """() => {
+              const vis = document.visibilityState;
+              const hf = document.hasFocus();
+              const a = document.activeElement;
+              let active = null;
+              if (a) {
+                active = {
+                  tag: (a.tagName || '').toLowerCase(),
+                  id: (a.id || '').slice(0, 96),
+                  nm: (a.name || '').slice(0, 96),
+                  role: String((a.getAttribute && a.getAttribute('role')) || '').slice(0, 48)
+                };
+              }
+              return { doc_visibilityState: vis, doc_hasFocus: hf, active: active };
+            }"""
+        )
+    except Exception as exc:
+        snap["in_kyc_frame_err"] = str(exc)[:120]
+    try:
+        snap["in_main_frame"] = page.main_frame.evaluate(
+            """() => {
+              const vis = document.visibilityState;
+              const hf = document.hasFocus();
+              const a = document.activeElement;
+              let active = null;
+              if (a) {
+                active = {
+                  tag: (a.tagName || '').toLowerCase(),
+                  id: (a.id || '').slice(0, 96),
+                  nm: (a.name || '').slice(0, 96)
+                };
+              }
+              return { doc_visibilityState: vis, doc_hasFocus: hf, active: active };
+            }"""
+        )
+    except Exception as exc:
+        snap["in_main_err"] = str(exc)[:120]
+    return snap
+
+
+# #endregion
 
 # Native form submit for MISP partner login (in addition to button clicks).
 _REQUEST_SUBMIT_PARTNER_PASSWORD_FORM_JS = """() => {
@@ -131,7 +204,7 @@ def _t(page, ms: int) -> None:
 
 
 def _insurance_click_settle(page) -> None:
-    """Fixed pause for MISP navigation (Sign In → 2W → New Policy …). ``INSURANCE_CLICK_SETTLE_MS`` (default 100)."""
+    """Fixed pause for MISP navigation (Sign In → 2W → New Policy …). ``INSURANCE_CLICK_SETTLE_MS`` (default 35)."""
     _t(page, min(INSURANCE_CLICK_SETTLE_MS, 15_000))
 
 
@@ -141,7 +214,7 @@ def _hero_misp_after_sign_in_settle(page) -> None:
     never reaches network idle (analytics / long polling), which added multi-second delays before 2W.
     """
     try:
-        page.wait_for_load_state("domcontentloaded", timeout=8_000)
+        page.wait_for_load_state("domcontentloaded", timeout=3_000)
     except Exception:
         pass
     _insurance_click_settle(page)
@@ -198,17 +271,17 @@ def _hero_insurance_kyc_nav_after_insurer_commit(
         page.keyboard.press("Enter")
     except Exception:
         pass
-    _t(page, 90)
+    _t(page, 60)
     try:
         page.keyboard.press("Tab")
     except Exception:
         pass
-    _t(page, 280)
+    _t(page, 80)
     try:
-        page.wait_for_load_state("domcontentloaded", timeout=6_000)
+        page.wait_for_load_state("domcontentloaded", timeout=3_000)
     except Exception:
         pass
-    _t(page, 120)
+    _t(page, 60)
 
     cap = max(0, int(INSURANCE_KYC_POST_INSURER_NETWORKIDLE_MS))
     if cap > 0:
@@ -219,7 +292,7 @@ def _hero_insurance_kyc_nav_after_insurer_commit(
                 "Hero Insurance: networkidle after insurer (timeout=%s ms) timed out — continuing.",
                 cap,
             )
-    _t(page, 300)
+    _t(page, 80)
 
 
 def _kyc_body_text_lower(root) -> str:
@@ -923,8 +996,11 @@ def _click_2w_icon(page, *, timeout_ms: int) -> None:
             if loc.count() <= 0:
                 return False
             target = loc.first
-            target.wait_for(state="visible", timeout=min(timeout_ms, 25_000))
-            target.scroll_into_view_if_needed(timeout=5_000)
+            target.wait_for(state="visible", timeout=min(timeout_ms, 8_000))
+            try:
+                target.scroll_into_view_if_needed(timeout=400)
+            except Exception:
+                pass
             try:
                 target.click(timeout=timeout_ms)
             except Exception:
@@ -945,7 +1021,9 @@ def _click_2w_icon(page, *, timeout_ms: int) -> None:
             for label, loc in nav_try:
                 if _try_click(loc, label):
                     try:
-                        page.wait_for_load_state("domcontentloaded", timeout=min(20_000, timeout_ms * 2))
+                        page.wait_for_load_state(
+                            "domcontentloaded", timeout=min(6_000, max(2_000, int(timeout_ms) * 2))
+                        )
                     except Exception:
                         pass
                     return
@@ -979,7 +1057,9 @@ def _click_2w_icon(page, *, timeout_ms: int) -> None:
     for label, loc in try_order:
         if _try_click(loc, label):
             try:
-                page.wait_for_load_state("domcontentloaded", timeout=min(20_000, timeout_ms * 2))
+                page.wait_for_load_state(
+                    "domcontentloaded", timeout=min(6_000, max(2_000, int(timeout_ms) * 2))
+                )
             except Exception:
                 pass
             return
@@ -1022,7 +1102,9 @@ def _click_2w_icon(page, *, timeout_ms: int) -> None:
         if hit:
             logger.info("Hero Insurance: clicked 2W control (DOM scan).")
             try:
-                page.wait_for_load_state("domcontentloaded", timeout=min(20_000, timeout_ms * 2))
+                page.wait_for_load_state(
+                    "domcontentloaded", timeout=min(6_000, max(2_000, int(timeout_ms) * 2))
+                )
             except Exception:
                 pass
             return
@@ -1103,7 +1185,9 @@ def _click_new_policy(page, *, timeout_ms: int) -> None:
     loc.first.click(timeout=timeout_ms)
     logger.info("Hero Insurance: clicked New Policy.")
     try:
-        page.wait_for_load_state("domcontentloaded", timeout=min(12_000, max(4_000, timeout_ms * 2)))
+        page.wait_for_load_state(
+            "domcontentloaded", timeout=min(6_000, max(2_000, int(timeout_ms) * 2))
+        )
     except Exception:
         pass
 
@@ -1289,6 +1373,55 @@ def _fill_insurance_company_fuzzy_any_visible_select(
     return False
 
 
+def _kyc_try_set_insurer_via_dom_in_frame(kyc_fr, insurer: str, *, timeout_ms: int) -> bool:
+    """
+    Prefer native ``<select>`` + fuzzy option match inside the KYC frame — avoids slow keyboard typing
+    and flaky Tab-out of custom combobox faces when the portal exposes a real ``<select>``.
+    """
+    if not (insurer or "").strip():
+        return False
+    to = min(int(timeout_ms), 12_000)
+    try:
+        lab = kyc_fr.get_by_label(re.compile(r"Insurance\s*Company\s*\*?", re.I))
+        if lab.count() > 0:
+            try:
+                tag = (
+                    lab.first.evaluate("el => (el && el.tagName) ? el.tagName.toLowerCase() : ''") or ""
+                )
+            except Exception:
+                tag = ""
+            if tag == "select":
+                if _select_option_fuzzy_in_select(
+                    kyc_fr,
+                    lab,
+                    insurer,
+                    timeout_ms=to,
+                    fuzzy_min_score=KYC_INSURER_FUZZY_MIN_SCORE,
+                ):
+                    logger.info("Hero Insurance: KYC — Insurance Company set via labelled <select> in frame.")
+                    return True
+    except Exception:
+        pass
+    return _fill_insurance_company_fuzzy_any_visible_select(kyc_fr, insurer, timeout_ms=to)
+
+
+def _kyc_force_blur_insurance_company_dropdown(kyc_fr) -> None:
+    """Blur active element and click a frame corner so ASP.NET combobox/listbox closes and commits."""
+    try:
+        kyc_fr.evaluate(
+            """() => {
+              const a = document.activeElement;
+              if (a && typeof a.blur === 'function') a.blur();
+            }"""
+        )
+    except Exception:
+        pass
+    try:
+        kyc_fr.locator("body").click(timeout=300, position={"x": 8, "y": 8})
+    except Exception:
+        pass
+
+
 def _insurer_type_query_variants(insurer: str) -> list[str]:
     """Short search strings for typeahead (portal may filter on prefix; DB name may be longer)."""
     s = (insurer or "").strip()
@@ -1321,7 +1454,7 @@ def _kyc_collect_dropdown_option_texts(root) -> list[str]:
         root.wait_for_selector(
             "[role='option'], [role='listbox'] [role='option'], li[role='option'], .ui-menu-item, "
             "ul.dropdown-menu li, div.select2-results__option, .chosen-results li",
-            timeout=2_800,
+            timeout=800,
         )
     except Exception:
         pass
@@ -1731,6 +1864,14 @@ def _kyc_tab_out_of_insurer_after_escape(page, kyc_fr) -> None:
     After Enter/Escape on Insurance Company, focus often stays in the combobox until the user Tabs.
     Re-focus the KYC document (iframe click when needed) then send Tab — not configurable via .env.
     """
+    # #region agent log
+    _dbg_kyc_insurer_tab_ndjson(
+        "H3",
+        "_kyc_tab_out_of_insurer_after_escape:entry",
+        "before iframe/body click and Tab",
+        _dbg_kyc_focus_snapshot(kyc_fr, page),
+    )
+    # #endregion
     try:
         if kyc_fr != page.main_frame:
             try:
@@ -1758,6 +1899,14 @@ def _kyc_tab_out_of_insurer_after_escape(page, kyc_fr) -> None:
         except Exception:
             pass
         _t(page, 120)
+    # #region agent log
+    _dbg_kyc_insurer_tab_ndjson(
+        "H5",
+        "_kyc_tab_out_of_insurer_after_escape:exit",
+        "after Enter blur and 2x Tab",
+        _dbg_kyc_focus_snapshot(kyc_fr, page),
+    )
+    # #endregion
 
 
 def _kyc_fill_mobile_digits_in_frame(kyc_fr, digits: str, *, timeout_ms: int) -> bool:
@@ -2085,132 +2234,164 @@ def _fill_kyc_ekyc_keyboard_sop(
 
     cap = min(int(timeout_ms), 120_000)
     kyc_fr = _kyc_preferred_kyc_frame(page)
-    logger.debug("Hero Insurance: KYC keyboard SOP — starting (focus chain).")
-    try:
-        page.bring_to_front()
-    except Exception:
-        pass
-    # When KYC is in a child frame, click the hosting <iframe> first so focus enters the frame
-    # before body click + Tab chain (main-page Tab order otherwise skips embedded controls).
-    if kyc_fr != page.main_frame:
+    dom_ok = _kyc_try_set_insurer_via_dom_in_frame(kyc_fr, insurer, timeout_ms=min(cap, 8_000))
+    # #region agent log
+    _dbg_kyc_insurer_tab_ndjson(
+        "H1",
+        "fill_kyc_ekyc_keyboard_sop:after_dom_try",
+        "dom_ok and focus snapshot",
+        {
+            "dom_ok": bool(dom_ok),
+            "will_skip_keyboard_and_maybe_tab_out": bool(dom_ok),
+            **_dbg_kyc_focus_snapshot(kyc_fr, page),
+        },
+    )
+    # #endregion
+    if dom_ok:
+        logger.info("Hero Insurance: KYC — insurer set via DOM in frame (skipped keyboard typing).")
+    if not dom_ok:
+        logger.debug("Hero Insurance: KYC keyboard SOP — starting (focus chain).")
         try:
-            kyc_fr.frame_element().click(timeout=200)
-            _t(page, 100)
-        except Exception as exc:
-            logger.debug("Hero Insurance: KYC iframe host click: %s", exc)
-    # Focus the KYC document (often inside an iframe). Main-frame body click does not move focus there.
-    try:
-        kyc_fr.locator("body").click(timeout=200, position={"x": 160, "y": 220})
-    except Exception:
+            page.bring_to_front()
+        except Exception:
+            pass
+        # When KYC is in a child frame, click the hosting <iframe> first so focus enters the frame
+        # before body click + Tab chain (main-page Tab order otherwise skips embedded controls).
+        if kyc_fr != page.main_frame:
+            try:
+                kyc_fr.frame_element().click(timeout=200)
+                _t(page, 100)
+            except Exception as exc:
+                logger.debug("Hero Insurance: KYC iframe host click: %s", exc)
+        # Focus the KYC document (often inside an iframe). Main-frame body click does not move focus there.
         try:
-            page.locator("body").click(timeout=200, position={"x": 40, "y": 40})
+            kyc_fr.locator("body").click(timeout=200, position={"x": 160, "y": 220})
         except Exception:
             try:
-                page.mouse.click(80, 200)
+                page.locator("body").click(timeout=200, position={"x": 40, "y": 40})
             except Exception:
-                pass
-    _t(page, 100)
-
-    # Prefer clicking the labelled insurer control so focus is on INPUT/SELECT. Tab alone often
-    # leaves focus on body; Control+A then selects the entire page (not field text).
-    ic_clicked = _kyc_try_click_insurance_company_field(kyc_fr, timeout_ms=cap)
-    if ic_clicked:
-        logger.info("Hero Insurance: KYC keyboard — focused Insurance Company via click in frame.")
+                try:
+                    page.mouse.click(80, 200)
+                except Exception:
+                    pass
         _t(page, 100)
-    else:
-        _kyc_press_tab_n(page, max(0, KYC_KEYBOARD_TABS_TO_INSURANCE_FIELD))
 
-    if _kyc_frame_active_element_is_editable(kyc_fr):
-        try:
-            page.keyboard.press("Control+A")
-        except Exception:
-            pass
-        _t(page, 50)
-        try:
-            page.keyboard.press("Backspace")
-        except Exception:
-            pass
-        _t(page, 50)
-    else:
-        logger.warning(
-            "Hero Insurance: KYC keyboard — focus not on an editable control before insurer type; "
-            "typing without Select-All (prevents selecting all text on the page)."
-        )
-    try:
-        page.keyboard.type(insurer[:96], delay=10)
-    except Exception as exc:
-        return f"KYC keyboard SOP: could not type insurer: {exc!s}"
-    _t(page, 100)
+        # Prefer clicking the labelled insurer control so focus is on INPUT/SELECT. Tab alone often
+        # leaves focus on body; Control+A then selects the entire page (not field text).
+        ic_clicked = _kyc_try_click_insurance_company_field(kyc_fr, timeout_ms=cap)
+        if ic_clicked:
+            logger.info("Hero Insurance: KYC keyboard — focused Insurance Company via click in frame.")
+            _t(page, 100)
+        else:
+            _kyc_press_tab_n(page, max(0, KYC_KEYBOARD_TABS_TO_INSURANCE_FIELD))
 
-    opts = _kyc_collect_dropdown_option_texts(kyc_fr)
-    pick = (
-        fuzzy_best_option_label(insurer, opts, min_score=KYC_INSURER_FUZZY_MIN_SCORE)
-        if opts
-        else None
-    )
-    shown = _kyc_read_focused_control_text(page)
-    matched = bool(pick) and not (pick or "").strip().lower().startswith("--select") and (
-        _kyc_insurer_display_matches(insurer, shown)
-        or _kyc_insurer_display_matches(insurer, pick or "")
-    )
-    if not matched:
-        for _ in range(max(1, KYC_KEYBOARD_INSURER_ARROW_DOWN_MAX)):
+        if _kyc_frame_active_element_is_editable(kyc_fr):
             try:
-                page.keyboard.press("ArrowDown")
+                page.keyboard.press("Control+A")
             except Exception:
                 pass
-            _t(page, 80)
-            shown = _kyc_read_focused_control_text(page)
-            if _kyc_insurer_display_matches(insurer, shown):
-                matched = True
-                logger.info(
-                    "Hero Insurance: KYC keyboard — insurer matched on ArrowDown (%r).",
-                    shown[:90],
-                )
-                break
-            opts2 = _kyc_collect_dropdown_option_texts(kyc_fr)
-            if opts2:
-                cand = fuzzy_best_option_label(
-                    insurer, opts2, min_score=KYC_INSURER_FUZZY_MIN_SCORE
-                )
-                if cand and _kyc_insurer_display_matches(insurer, cand):
+            _t(page, 50)
+            try:
+                page.keyboard.press("Backspace")
+            except Exception:
+                pass
+            _t(page, 50)
+        else:
+            logger.warning(
+                "Hero Insurance: KYC keyboard — focus not on an editable control before insurer type; "
+                "typing without Select-All (prevents selecting all text on the page)."
+            )
+        try:
+            page.keyboard.type(insurer[:96], delay=10)
+        except Exception as exc:
+            return f"KYC keyboard SOP: could not type insurer: {exc!s}"
+        _t(page, 100)
+
+        opts = _kyc_collect_dropdown_option_texts(kyc_fr)
+        pick = (
+            fuzzy_best_option_label(insurer, opts, min_score=KYC_INSURER_FUZZY_MIN_SCORE)
+            if opts
+            else None
+        )
+        shown = _kyc_read_focused_control_text(page)
+        matched = bool(pick) and not (pick or "").strip().lower().startswith("--select") and (
+            _kyc_insurer_display_matches(insurer, shown)
+            or _kyc_insurer_display_matches(insurer, pick or "")
+        )
+        if not matched:
+            for _ in range(max(1, KYC_KEYBOARD_INSURER_ARROW_DOWN_MAX)):
+                try:
+                    page.keyboard.press("ArrowDown")
+                except Exception:
+                    pass
+                _t(page, 80)
+                shown = _kyc_read_focused_control_text(page)
+                if _kyc_insurer_display_matches(insurer, shown):
                     matched = True
                     logger.info(
-                        "Hero Insurance: KYC keyboard — insurer matched from list (%r).",
-                        (cand or "")[:90],
+                        "Hero Insurance: KYC keyboard — insurer matched on ArrowDown (%r).",
+                        shown[:90],
                     )
                     break
-    if not matched:
-        return (
-            "KYC keyboard SOP: could not match insurer after typing and ArrowDown. "
-            f"insurer={insurer[:48]!r}"
-        )
+                opts2 = _kyc_collect_dropdown_option_texts(kyc_fr)
+                if opts2:
+                    cand = fuzzy_best_option_label(
+                        insurer, opts2, min_score=KYC_INSURER_FUZZY_MIN_SCORE
+                    )
+                    if cand and _kyc_insurer_display_matches(insurer, cand):
+                        matched = True
+                        logger.info(
+                            "Hero Insurance: KYC keyboard — insurer matched from list (%r).",
+                            (cand or "")[:90],
+                        )
+                        break
+        if not matched:
+            return (
+                "KYC keyboard SOP: could not match insurer after typing and ArrowDown. "
+                f"insurer={insurer[:48]!r}"
+            )
 
-    # Commit highlighted insurer: MISP/ASP.NET combobox often needs Enter twice, then Tab off, then Escape.
-    try:
-        page.keyboard.press("Enter")
-    except Exception:
-        pass
-    _t(page, 100)
-    try:
-        page.keyboard.press("Enter")
-    except Exception:
-        pass
-    _t(page, 120)
-    try:
-        page.keyboard.press("Tab")
-    except Exception:
-        pass
-    _t(page, 100)
-    try:
-        page.keyboard.press("Escape")
-    except Exception:
-        pass
-    _t(page, 180)
-    _kyc_tab_out_of_insurer_after_escape(page, kyc_fr)
-    _kyc_blur_if_insurer_product_select_focused(kyc_fr)
-    _kyc_blur_insurer_product_select_in_frame(kyc_fr)
-    _t(page, 120)
+        # Commit highlighted insurer: MISP/ASP.NET combobox often needs Enter twice, then Tab off, then Escape.
+        try:
+            page.keyboard.press("Enter")
+        except Exception:
+            pass
+        _t(page, 100)
+        try:
+            page.keyboard.press("Enter")
+        except Exception:
+            pass
+        _t(page, 120)
+        try:
+            page.keyboard.press("Tab")
+        except Exception:
+            pass
+        _t(page, 100)
+        try:
+            page.keyboard.press("Escape")
+        except Exception:
+            pass
+        _t(page, 180)
+        _kyc_force_blur_insurance_company_dropdown(kyc_fr)
+        _kyc_tab_out_of_insurer_after_escape(page, kyc_fr)
+        _kyc_blur_if_insurer_product_select_focused(kyc_fr)
+        _kyc_blur_insurer_product_select_in_frame(kyc_fr)
+        _t(page, 120)
+    if dom_ok:
+        _kyc_force_blur_insurance_company_dropdown(kyc_fr)
+        _t(page, 80)
+    # #region agent log
+    _dbg_kyc_insurer_tab_ndjson(
+        "H1",
+        "fill_kyc_ekyc_keyboard_sop:before_nav_after_insurer",
+        "pre _hero_insurance_kyc_nav_after_insurer_commit",
+        {
+            "dom_ok": bool(dom_ok),
+            "keyboard_tab_out_ran": not bool(dom_ok),
+            **_dbg_kyc_focus_snapshot(kyc_fr, page),
+        },
+    )
+    # #endregion
     # Proposer/OVD are often not in the DOM until insurer is chosen.
     # Tab out + re-scrape captures new <select> ids and partner options after commit.
     _hero_insurance_kyc_nav_after_insurer_commit(
