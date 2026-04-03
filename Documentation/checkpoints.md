@@ -33,6 +33,7 @@ Cursor agents follow **`.cursor/rules/checkpoints-registry.mdc`**: full workflow
 | All DMS Working | `all-dms-working` | `6079ea47742aa669e33f499893a49aeb8ead9c0b` | 2026-04-01T17:47:52+05:30 | 1) Testing and bug fixes — exercise Create Invoice, master commit, eligibility, Generate Insurance, insurance fill end-to-end; 2) Edge cases — challans and firm; 3) Proceed with insurance fill (`pre_process` / `main_process` after login / 2W) — see **`Documentation/checkpoint-all-dms-working.md`** |
 | In Insurance, filled KYC page | `checkpoint/in-insurance-filled-kyc-page` | `8646fd4dffd56668394f89ddfcc3abe66aebffda` | 2026-04-02T15:30:26+05:30 | 1) The structure has created dirty branching and interactions with fill_dms need to clean that up |
 | Reached Main Insurance Page | `checkpoint/reached-main-insurance-page` | `eb0617ae0713375e8c332c430b7362a0b2335b95` | 2026-04-02T21:03:12+05:30 | 1) Fill main page elements; 2) Navigation is still slow in a few places — see **`Documentation/checkpoint-reached-main-insurance-page.md`** |
+| Insurance Main filled | `checkpoint/insurance-main-filled` | `69d2cff5dec65d4b458bddf697c0ba9faf108d2d` | 2026-04-03T17:45:04+05:30 | 1) Download policy preview; 2) Check master to be inserted; 3) Ongoing testing and bug fixes — see **`Documentation/checkpoint-insurance-main-filled.md`** |
 
 ## Rollback / Restore
 
