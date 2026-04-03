@@ -7143,87 +7143,12 @@ def _siebel_note_frame_focus_snapshot(
     content_frame_selector: str | None = None,
 ) -> None:
     """
-    Log **page URL tail**, **per-frame URL**, **document.activeElement** (tag/id/name/role/class),
-    and Siebel landmarks (**#s_vctrl_div** selected tab head, Features table / HHML id presence).
-    Used to diagnose iframe / focus drift after Serial → Features scrape → Pre-check / PDI.
+    Historical hook for per-frame focus / URL JSON (``[frame-focus]``) after Serial → Features →
+    Pre-check / PDI. **No longer written** to ``Playwright_DMS*.txt`` — it was verbose and rarely
+    used by operators. Call sites remain for a possible future opt-in (e.g. env flag) or debugger.
     """
-    if not callable(note):
-        return
-    _top = ""
-    try:
-        _top = str(page.url or "").strip()[-140:]
-    except Exception:
-        pass
-    _snap_js = """() => {
-        const ae = document.activeElement;
-        const pick = (e) => {
-            if (!e || e === document.body) return null;
-            return {
-                tag: e.tagName,
-                id: String(e.id || '').slice(0, 56),
-                name: String(e.getAttribute('name') || '').slice(0, 40),
-                role: String(e.getAttribute('role') || '').slice(0, 24),
-                cls: String(e.className || '').slice(0, 48),
-            };
-        };
-        const vctrl = document.getElementById('s_vctrl_div');
-        let vctrlTabHead = '';
-        if (vctrl) {
-            const t = vctrl.querySelector(
-                '[aria-selected="true"], .ui-tabs-active a, .ui-state-active a, .ui-state-active'
-            );
-            if (t) vctrlTabHead = String(t.innerText || t.textContent || '').trim().slice(0, 44);
-        }
-        const c4 = document.getElementById('4_s_1_l_HHML_Feature_Value');
-        const c5 = document.getElementById('5_s_1_l_HHML_Feature_Value');
-        return {
-            href: String(location.href || '').slice(-110),
-            active: pick(ae),
-            hasVctrl: !!vctrl,
-            vctrlSelectedHead: vctrlTabHead,
-            hasFeatTbl: !!document.querySelector(
-                'table[summary="Features"], table[summary*="Features" i]'
-            ),
-            ids: {
-                hhml4: !!c4,
-                hhml5: !!c5,
-            },
-        };
-    }"""
-    _frames_payload: list[dict] = []
-    _main = page.main_frame
-    _seen_ids: set[int] = set()
-    _ordered: list[tuple[str, Frame]] = [("main", _main)]
-    _seen_ids.add(id(_main))
-    for _fr in page.frames:
-        if id(_fr) in _seen_ids:
-            continue
-        _seen_ids.add(id(_fr))
-        _ordered.append(("frame", _fr))
-    for _tag, _fr in _ordered[:28]:
-        _ut = ""
-        try:
-            _ut = str(_fr.url or "").strip()[-100:]
-        except Exception:
-            pass
-        try:
-            _snap = _fr.evaluate(_snap_js)
-        except Exception as _ex_sf:
-            _snap = {"evaluate_error": str(_ex_sf)[:120]}
-        _frames_payload.append({"layer": _tag, "url_tail": _ut, "snap": _snap})
-    try:
-        _blob = {
-            "step": step,
-            "top_url_tail": _top,
-            "content_frame_selector": content_frame_selector or "",
-            "frames": _frames_payload,
-        }
-        _line = json.dumps(_blob, ensure_ascii=False)
-        if len(_line) > 7500:
-            _line = _line[:7500] + "…(truncated)"
-        note(f"{log_prefix} [frame-focus] {_line}")
-    except Exception as _ex_note:
-        note(f"{log_prefix} [frame-focus] step={step!r} failed to serialise: {_ex_note!s}")
+    _ = (page, note, step, log_prefix, content_frame_selector)
+    return
 
 
 def _siebel_scrape_text_by_id_anywhere(
@@ -7386,7 +7311,13 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     clicked by label (with hyphen-insensitive match for **Pre-check** vs **PreCheck**). Tab ``ui-id-*``
     values are dynamic across runs/tenants, so fixed tab ids are not treated as primary selectors.
     Applet controls: Pre-check **Technician** pick icon ``s_3_2_25_0_icon`` (tenant-current), legacy
-    ``s_3_1_12_0_Ctrl``; PDI pick ``s_2_2_32_0_icon``.
+    ``s_3_1_12_0_Ctrl``; PDI **Service Request List:New** (``title`` / ``aria-label`` — the ``+`` on many
+    tenants). Legacy ids ``s_2_2_32_0_icon`` / ``s_2_2_32_0`` are optional follow-ups when a second
+    chrome control exists after **New**.
+
+    **Pre-check existing rows:** Before creating a row, the flow probes for an existing Pre-check list row.
+    The probe counts only ``table.ui-jqgrid-btable`` grids under a **Precheck** / **Pre-check** applet
+    ancestor (not every ``<table>`` on the page or iframe), so unrelated large grids do not skip entry.
     """
     _tmo = min(int(action_timeout_ms or 3000), 4000)
 
@@ -7878,13 +7809,36 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                     const r = el.getBoundingClientRect();
                     return r.width > 0 && r.height > 0;
                 };
+                // Only jqGrid list tables under a Pre-check / Precheck List applet. Counting every
+                // visible <table> on the page (or max across iframes) picked unrelated grids (e.g. 89 rows)
+                // and skipped Pre-check entry when the Pre-check list was actually empty.
+                const isPrecheckScoped = (el) => {
+                    let n = el;
+                    for (let d = 0; d < 24 && n; d++) {
+                        const id = String(n.id || '');
+                        const nm = String(n.getAttribute('name') || '');
+                        const tit = String(n.getAttribute('title') || '');
+                        const hay = (id + ' ' + nm + ' ' + tit).toLowerCase();
+                        if (hay.includes('precheck') || hay.includes('pre-check') || hay.includes('pre_check')) {
+                            return true;
+                        }
+                        n = n.parentElement;
+                    }
+                    return false;
+                };
                 let maxRows = 0;
-                const tables = Array.from(document.querySelectorAll('table')).filter(vis);
+                const tables = Array.from(document.querySelectorAll('table.ui-jqgrid-btable')).filter(
+                    (tb) => vis(tb) && isPrecheckScoped(tb)
+                );
                 for (const tb of tables) {
-                    const rows = Array.from(tb.querySelectorAll('tbody tr, tr')).filter((tr) => {
+                    const rows = Array.from(
+                        tb.querySelectorAll('tbody tr.jqgrow, tbody tr[role="row"]')
+                    ).filter((tr) => {
                         if (!vis(tr)) return false;
                         const cls = String(tr.className || '').toLowerCase();
-                        if (cls.includes('jqgfirstrow') || cls.includes('header')) return false;
+                        if (cls.includes('jqgfirstrow') || cls.includes('ui-jqgrid-labels') || cls.includes('jqg-empty')) {
+                            return false;
+                        }
                         const tds = tr.querySelectorAll('td');
                         if (tds.length < 2) return false;
                         const txt = (tr.textContent || '').trim();
@@ -8598,6 +8552,9 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             "button[aria-label='Service Request List:New']",
             "[aria-label*='Service Request List' i][aria-label*='New' i]",
             "[title='Service Request List:New']",
+            "a[title='Service Request List:New']",
+            "img[title='Service Request List:New']",
+            "[title*='Service Request List:New' i]",
         ]
         for root in _roots():
             if _sr_new_clicked:
@@ -8619,27 +8576,34 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         note(f"{log_prefix}: clicked Service Request List:New on PDI tab.")
         _safe_page_wait(page, 1200, log_label="after_sr_list_new")
 
-        if not _siebel_click_by_id_anywhere(
+        # The "+" is often only title/aria "Service Request List:New" (clicked above). Some builds add a
+        # separate Siebel pick id — try it, but do not fail the flow if absent (tenant has no s_2_2_32_0_icon).
+        _pdi_legacy_pick = _siebel_click_by_id_anywhere(
             page,
             "s_2_2_32_0_icon",
             timeout_ms=_tmo,
             content_frame_selector=content_frame_selector,
             note=note,
-            label="PDI pick icon",
+            label="PDI pick icon (legacy s_2_2_32_0_icon)",
             log_prefix=log_prefix,
             wait_ms=1200,
-        ):
-            if not _siebel_click_by_id_anywhere(
+        )
+        if not _pdi_legacy_pick:
+            _pdi_legacy_pick = _siebel_click_by_id_anywhere(
                 page,
                 "s_2_2_32_0",
                 timeout_ms=_tmo,
                 content_frame_selector=content_frame_selector,
                 note=note,
-                label="PDI pick button",
+                label="PDI pick button (legacy s_2_2_32_0)",
                 log_prefix=log_prefix,
                 wait_ms=1200,
-            ):
-                return False, "Could not click PDI pick icon (id=s_2_2_32_0_icon)."
+            )
+        if not _pdi_legacy_pick:
+            note(
+                f"{log_prefix}: PDI legacy pick ids (s_2_2_32_0_icon / s_2_2_32_0) not found — "
+                "continuing after Service Request List:New only."
+            )
 
         _safe_page_wait(page, 800, log_label="after_pdi_pick_icon_settle")
         for root in _roots():

@@ -511,3 +511,6 @@ Bulk upload automates the ingestion of scanned documents from a shared folder in
 | 3.144 | Apr 2026 | — | **FR-5** / **FR-23**: Profession must not remain **Marital Status: Unmaried** (incl. OCR **Martial**, full-width colon, whole-line bleed) — **`_sanitize_details_profession_value`**, **`submit_info_service`**, **`build_insurance_fill_values`** — **LLD** **6.225**, **§2.3** |
 | 3.145 | Apr 2026 | — | **FR-5** / **FR-18b**: Blank profession after sanitization defaults to **Employed** (**`default_profession_if_empty`**) — **LLD** **6.226**, **§2.3** / **§6.6** |
 | 3.146 | Apr 2026 | — | **FR-23** / **FR-18b**: Insurer must not be the printed SMS/consent line (title case, punctuation); sanitize on Submit/GI commit + Add Sales OCR merge — **LLD** **6.227**, **§2.3** / **§6.6** |
+| 3.147 | Apr 2026 | — | **FR-16** / dealer **Pre-check**: Existing-row detection must not count unrelated tables — **`_siebel_run_vehicle_serial_detail_precheck_pdi`** jqGrid + Precheck scope — **LLD** **6.228**, **§2.4d** / **§6.1a** |
+| 3.148 | Apr 2026 | — | **§6.1a** / operator log: **`Playwright_DMS*.txt`** no longer includes **`[frame-focus]`** lines — **`_siebel_note_frame_focus_snapshot`** no-op — **LLD** **6.229** |
+| 3.149 | Apr 2026 | — | **§6.1a** / **PDI**: New-row **+** is **`Service Request List:New`** (not mandatory **`s_2_2_32_0_icon`**) — **LLD** **6.230** |
