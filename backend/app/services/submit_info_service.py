@@ -16,6 +16,7 @@ from app.services.ocr_service import _sanitize_details_profession_value
 from app.services.utility_functions import (
     default_profession_if_empty,
     normalize_nominee_relationship_value,
+    sanitize_details_sheet_insurer_value,
 )
 
 
@@ -110,7 +111,8 @@ def submit_info(
         normalize_nominee_relationship_value(insurance.get("nominee_relationship")), 64
     )
     nominee_gender = _str_or_none(insurance.get("nominee_gender"), 16)
-    insurer = _str_or_none(insurance.get("insurer"), 255)
+    _ins = sanitize_details_sheet_insurer_value(insurance.get("insurer"))
+    insurer = _str_or_none(_ins, 255) if _ins else None
     policy_num = _str_or_none(insurance.get("policy_num"), 24)
     policy_from_str = _str_or_none(insurance.get("policy_from"), 20)
     policy_to_str = _str_or_none(insurance.get("policy_to"), 20)

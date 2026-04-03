@@ -44,6 +44,18 @@ function mapApiCustomerToExtracted(cust: Record<string, unknown>): ExtractedCust
   };
 }
 
+/** Reject consent/SMS line OCR places under blank "Insurer Name (if needed)" (must match backend ``sanitize_details_sheet_insurer_value``). */
+function normalizeInsurerOcrValue(value: unknown): string | undefined {
+  const v = String(value ?? "").trim();
+  if (!v) return undefined;
+  const low = v.toLowerCase();
+  if (low.includes("i agree") && (low.includes("sms") || low.includes("periodic") || low.includes("receiving"))) return undefined;
+  if (low.includes("periodic sms") || low.includes("registration and service")) return undefined;
+  if (low.includes("updates about registration")) return undefined;
+  if (low.includes("i agree") && low.includes("registration") && (low.includes("service") || low.includes("status"))) return undefined;
+  return v;
+}
+
 function normalizeFinancierInput(value: unknown): string | undefined {
   const v = String(value ?? "").trim();
   if (!v) return undefined;
@@ -119,7 +131,7 @@ function mergeInsuranceFromOcrPayload(
       current.nominee_age
     ),
     nominee_relationship: preferNonEmptyOcr(fromServer.nominee_relationship, current.nominee_relationship),
-    insurer: preferNonEmptyOcr(fromServer.insurer, current.insurer),
+    insurer: preferNonEmptyOcr(normalizeInsurerOcrValue(fromServer.insurer), normalizeInsurerOcrValue(current.insurer)),
     policy_num: preferNonEmptyOcr(fromServer.policy_num, current.policy_num),
     policy_from: preferNonEmptyOcr(fromServer.policy_from, current.policy_from),
     policy_to: preferNonEmptyOcr(fromServer.policy_to, current.policy_to),

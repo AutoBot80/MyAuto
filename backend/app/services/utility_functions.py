@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import difflib
 import re
+import unicodedata
 
 
 def normalize_for_fuzzy_match(s: str) -> str:
@@ -62,16 +63,21 @@ def sanitize_details_sheet_insurer_value(val: str | None) -> str | None:
     if not val or not str(val).strip():
         return None
     s = " ".join(str(val).split())
+    s = unicodedata.normalize("NFKC", s)
+    s = s.rstrip(".。．").strip()
     low = s.lower()
     if re.search(r"(?i)i\s+agree\s+to\s+receiving", low):
         return None
     if re.search(r"(?i)periodic\s+sms", low):
         return None
-    if re.search(r"(?i)registration\s+and\s+service\s+status", low):
+    if re.search(r"(?i)registration\s+and\s+service", low):
         return None
     if re.search(r"(?i)updates\s+about\s+registration", low):
         return None
     if "i agree" in low and ("sms" in low or "periodic" in low):
+        return None
+    # Whole consent sentence variants (title case, trailing punctuation, odd spaces)
+    if "i agree" in low and "registration" in low and ("service" in low or "status" in low):
         return None
     if len(s.split()) > 14:
         return None

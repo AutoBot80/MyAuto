@@ -1758,7 +1758,7 @@ def _apply_initcap_on_read(data: dict[str, Any]) -> None:
                 insurance["marital_status"] = _initcap_words(ms)
             else:
                 insurance.pop("marital_status", None)
-        if insurance.get("insurer"):
+        if "insurer" in insurance:
             ins = sanitize_details_sheet_insurer_value(insurance.get("insurer"))
             if ins:
                 insurance["insurer"] = _initcap_words(ins)
@@ -2258,8 +2258,8 @@ def _map_key_value_pairs_to_insurance(pairs: list[dict]) -> dict[str, str]:
             out["marital_status"] = ms
         else:
             out.pop("marital_status", None)
-    if out.get("insurer"):
-        ins = sanitize_details_sheet_insurer_value(out["insurer"])
+    if "insurer" in out:
+        ins = sanitize_details_sheet_insurer_value(out.get("insurer"))
         if ins:
             out["insurer"] = ins
         else:

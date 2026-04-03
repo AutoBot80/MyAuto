@@ -18,6 +18,7 @@ from psycopg2 import IntegrityError
 
 from app.config import DEALER_ID
 from app.services.dms_relation_prefix import compute_dms_relation_prefix
+from app.services.utility_functions import sanitize_details_sheet_insurer_value
 
 logger = logging.getLogger(__name__)
 
@@ -310,8 +311,17 @@ def compute_insurance_master_insert_snapshot(
 
     field_sources: dict[str, str] = {}
 
-    fv_ins = _str_or_none(fill_values.get("insurer"), 255)
-    st_ins = _str_or_none(ins_staging.get("insurer"), 255)
+    def _insurer_from_payload(raw: Any) -> str | None:
+        if raw is None:
+            return None
+        t = str(raw).strip()
+        if not t:
+            return None
+        ok = sanitize_details_sheet_insurer_value(t)
+        return _str_or_none(ok, 255) if ok else None
+
+    fv_ins = _insurer_from_payload(fill_values.get("insurer"))
+    st_ins = _insurer_from_payload(ins_staging.get("insurer"))
     insurer = fv_ins or st_ins
     if fv_ins:
         field_sources["insurer"] = "fill_values (MISP merge / view)"
