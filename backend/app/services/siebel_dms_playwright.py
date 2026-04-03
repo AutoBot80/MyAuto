@@ -7378,6 +7378,141 @@ def _siebel_lov_pick_first_row_ok_pdi_style(
     return _row_hit, _ok_done
 
 
+def _siebel_click_service_request_list_new_record(
+    page: Page,
+    *,
+    roots: Callable[[], list],
+    action_timeout_ms: int,
+    note,
+    log_prefix: str,
+    context: str,
+) -> bool:
+    """
+    Click **Service Request List:New** (toolbar ``+`` / ``siebui-icon-newrecord``).
+
+    Shared by **Pre-check** and **PDI** tabs: JS on ``s_3_1_12_0_Ctrl`` / ``s_2_2_32_0``, ``get_by_role`` (exact),
+    then CSS (skip **Service Request List: Menu**). See **LLD** **6.240**.
+    """
+    _tmo = min(int(action_timeout_ms or 3000), 4000)
+
+    def _label_is_list_new_not_menu(el) -> bool:
+        try:
+            al = (el.get_attribute("aria-label") or "").strip()
+            tt = (el.get_attribute("title") or "").strip()
+        except Exception:
+            return False
+        lab = f"{al} {tt}".lower()
+        if "menu" in lab and "new" not in lab:
+            return False
+        if ":new" in lab or "list:new" in lab.replace(" ", ""):
+            return True
+        if al.endswith(":New") or tt.endswith(":New"):
+            return True
+        return False
+
+    _sr_new_selectors = (
+        "button#s_3_1_12_0_Ctrl.siebui-icon-newrecord",
+        "button.siebui-icon-newrecord[aria-label='Service Request List:New']",
+        "button.siebui-icon-newrecord[title='Service Request List:New']",
+        "button[data-display='New'][aria-label='Service Request List:New']",
+        "[aria-label='Service Request List:New']",
+        "a[aria-label='Service Request List:New']",
+        "button[aria-label='Service Request List:New']",
+        "[aria-label*='Service Request List' i][aria-label*='New' i]",
+        "[title='Service Request List:New']",
+        "a[title='Service Request List:New']",
+        "img[title='Service Request List:New']",
+        "[title*='Service Request List:New' i]",
+        "[aria-label='Precheck List:New']",
+        "[aria-label='Pre-check List:New']",
+        "a[aria-label='Precheck List:New']",
+        "a[aria-label='Pre-check List:New']",
+        "button[aria-label='Precheck List:New']",
+        "button[aria-label='Pre-check List:New']",
+        "[aria-label*='Precheck' i][aria-label*='New' i]",
+        "[aria-label*='Pre-check' i][aria-label*='New' i]",
+        "[title='Precheck List:New']",
+        "[title='Pre-check List:New']",
+        "a[title='Precheck List:New']",
+        "img[title='Precheck List:New']",
+        "[title*='Precheck List:New' i]",
+        "[title*='Pre-check List:New' i]",
+    )
+
+    _js_plus = """() => {
+        const tryClick = (hid) => {
+            const el = document.getElementById(hid);
+            if (!el || String(el.tagName).toLowerCase() !== 'button') return false;
+            if (!el.classList.contains('siebui-icon-newrecord')) return false;
+            const al = (el.getAttribute('aria-label') || '').toLowerCase();
+            const tt = (el.getAttribute('title') || '').toLowerCase();
+            const dd = (el.getAttribute('data-display') || '').trim();
+            if (!al.includes('service request list:new') && !tt.includes('service request list:new')
+                && dd !== 'New') {
+                return false;
+            }
+            const st = window.getComputedStyle(el);
+            if (st.display === 'none' || st.visibility === 'hidden') return false;
+            const r = el.getBoundingClientRect();
+            if (r.width < 2 || r.height < 2) return false;
+            try { el.scrollIntoView({ block: 'center' }); } catch (e) {}
+            el.click();
+            return true;
+        };
+        return tryClick('s_3_1_12_0_Ctrl') || tryClick('s_2_2_32_0');
+    }"""
+
+    for _root in roots():
+        try:
+            if bool(_root.evaluate(_js_plus)):
+                note(
+                    f"{log_prefix}: clicked {context} + (JS: siebui-icon-newrecord, "
+                    "s_3_1_12_0_Ctrl or s_2_2_32_0, Service Request List:New)."
+                )
+                return True
+        except Exception:
+            continue
+
+    for _root in roots():
+        for _role in ("link", "button"):
+            try:
+                _rl = _root.get_by_role(_role, name="Service Request List:New", exact=True)
+                if _rl.count() > 0 and _rl.first.is_visible(timeout=600):
+                    try:
+                        _rl.first.click(timeout=_tmo)
+                    except Exception:
+                        _rl.first.click(timeout=_tmo, force=True)
+                    note(
+                        f"{log_prefix}: clicked {context} + via role={_role!r} "
+                        "name=Service Request List:New."
+                    )
+                    return True
+            except Exception:
+                continue
+
+    for _root in roots():
+        for _css in _sr_new_selectors:
+            try:
+                _grp = _root.locator(_css)
+                _n = _grp.count()
+                for _ii in range(min(_n, 12)):
+                    _loc = _grp.nth(_ii)
+                    if not _loc.is_visible(timeout=500):
+                        continue
+                    if not _label_is_list_new_not_menu(_loc):
+                        continue
+                    try:
+                        _loc.click(timeout=_tmo)
+                    except Exception:
+                        _loc.click(timeout=_tmo, force=True)
+                    note(f"{log_prefix}: clicked {context} + ({_css!r} nth={_ii}).")
+                    return True
+            except Exception:
+                continue
+
+    return False
+
+
 def _siebel_run_vehicle_serial_detail_precheck_pdi(
     page: Page,
     *,
@@ -8339,132 +8474,19 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 continue
 
     if not _precheck_already_present:
-        _pc_new_clicked = False
-        # **+** is often ``button#s_3_1_12_0_Ctrl.siebui-icon-newrecord`` (``title``/``aria-label`` = Service Request List:New)
-        # in the **Service Request** applet header — same ``id`` may exist in another frame as a different control, so
-        # require ``siebui-icon-newrecord`` (do not use bare ``#s_3_1_12_0`` for +).
-        # Pre-check tab often exposes the same **Service Request List:New** chrome as PDI (not "Precheck List:New").
-        # **Service Request List: Menu** is a different control — never treat it as '+'.
-        _pc_new_selectors = [
-            "button#s_3_1_12_0_Ctrl.siebui-icon-newrecord",
-            "button.siebui-icon-newrecord[aria-label='Service Request List:New']",
-            "button.siebui-icon-newrecord[title='Service Request List:New']",
-            "button[data-display='New'][aria-label='Service Request List:New']",
-            "[aria-label='Service Request List:New']",
-            "a[aria-label='Service Request List:New']",
-            "button[aria-label='Service Request List:New']",
-            "[aria-label*='Service Request List' i][aria-label*='New' i]",
-            "[title='Service Request List:New']",
-            "a[title='Service Request List:New']",
-            "img[title='Service Request List:New']",
-            "[title*='Service Request List:New' i]",
-            "[aria-label='Precheck List:New']",
-            "[aria-label='Pre-check List:New']",
-            "a[aria-label='Precheck List:New']",
-            "a[aria-label='Pre-check List:New']",
-            "button[aria-label='Precheck List:New']",
-            "button[aria-label='Pre-check List:New']",
-            "[aria-label*='Precheck' i][aria-label*='New' i]",
-            "[aria-label*='Pre-check' i][aria-label*='New' i]",
-            "[title='Precheck List:New']",
-            "[title='Pre-check List:New']",
-            "a[title='Precheck List:New']",
-            "img[title='Precheck List:New']",
-            "[title*='Precheck List:New' i]",
-            "[title*='Pre-check List:New' i]",
-        ]
-
-        def _pc_label_is_list_new_not_menu(el) -> bool:
-            try:
-                al = (el.get_attribute("aria-label") or "").strip()
-                tt = (el.get_attribute("title") or "").strip()
-            except Exception:
-                return False
-            lab = f"{al} {tt}".lower()
-            if "menu" in lab and "new" not in lab:
-                return False
-            if ":new" in lab or "list:new" in lab.replace(" ", ""):
-                return True
-            if al.endswith(":New") or tt.endswith(":New"):
-                return True
-            return False
-
-        for root in _roots():
-            try:
-                _pc_js_new = root.evaluate("""() => {
-                    const el = document.getElementById("s_3_1_12_0_Ctrl");
-                    if (!el || String(el.tagName).toLowerCase() !== 'button') return false;
-                    if (!el.classList.contains('siebui-icon-newrecord')) return false;
-                    const al = (el.getAttribute('aria-label') || '').toLowerCase();
-                    const tt = (el.getAttribute('title') || '').toLowerCase();
-                    const dd = (el.getAttribute('data-display') || '').trim();
-                    if (!al.includes('service request list:new') && !tt.includes('service request list:new')
-                        && dd !== 'New') {
-                        return false;
-                    }
-                    const st = window.getComputedStyle(el);
-                    if (st.display === 'none' || st.visibility === 'hidden') return false;
-                    const r = el.getBoundingClientRect();
-                    if (r.width < 2 || r.height < 2) return false;
-                    try { el.scrollIntoView({ block: 'center' }); } catch (e) {}
-                    el.click();
-                    return true;
-                }""")
-                if _pc_js_new:
-                    _pc_new_clicked = True
-                    note(
-                        f"{log_prefix}: clicked Pre-check + (JS: "
-                        "button#s_3_1_12_0_Ctrl.siebui-icon-newrecord, Service Request List:New)."
-                    )
-                    break
-            except Exception:
-                continue
-
-        for root in _roots():
-            if _pc_new_clicked:
-                break
-            for _role in ("link", "button"):
-                try:
-                    _rl = root.get_by_role(_role, name="Service Request List:New", exact=True)
-                    if _rl.count() > 0 and _rl.first.is_visible(timeout=600):
-                        try:
-                            _rl.first.click(timeout=_tmo)
-                        except Exception:
-                            _rl.first.click(timeout=_tmo, force=True)
-                        _pc_new_clicked = True
-                        note(f"{log_prefix}: clicked Pre-check + via role={_role!r} name=Service Request List:New.")
-                        break
-                except Exception:
-                    continue
-            if _pc_new_clicked:
-                break
-            for css in _pc_new_selectors:
-                try:
-                    _grp = root.locator(css)
-                    _n = _grp.count()
-                    for _ii in range(min(_n, 12)):
-                        loc = _grp.nth(_ii)
-                        if not loc.is_visible(timeout=500):
-                            continue
-                        if not _pc_label_is_list_new_not_menu(loc):
-                            continue
-                        try:
-                            loc.click(timeout=_tmo)
-                        except Exception:
-                            loc.click(timeout=_tmo, force=True)
-                        _pc_new_clicked = True
-                        note(f"{log_prefix}: clicked Pre-check + ({css!r} nth={_ii}).")
-                        break
-                    if _pc_new_clicked:
-                        break
-                except Exception:
-                    continue
-        if not _pc_new_clicked:
+        if not _siebel_click_service_request_list_new_record(
+            page,
+            roots=_roots,
+            action_timeout_ms=action_timeout_ms,
+            note=note,
+            log_prefix=log_prefix,
+            context="Pre-check",
+        ):
             return (
                 False,
                 "Could not click Pre-check list '+' "
-                "(tried button#s_3_1_12_0_Ctrl.siebui-icon-newrecord, Service Request List:New, Precheck List:New; "
-                "skipped Service Request List: Menu).",
+                "(tried button#s_3_1_12_0_Ctrl / s_2_2_32_0 siebui-icon-newrecord, Service Request List:New, "
+                "Precheck List:New; skipped Service Request List: Menu).",
             )
         note(f"{log_prefix}: clicked Pre-check list New (+).")
         _safe_page_wait(page, 1200, log_label="after_precheck_list_new")
@@ -8991,34 +9013,20 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             f"{log_prefix}: PDI new-row flow — Service Request list rowCount≈{_pdi_rows_before_new} "
             "(before New)."
         )
-        _sr_new_clicked = False
-        _sr_selectors = [
-            "[aria-label='Service Request List:New']",
-            "a[aria-label='Service Request List:New']",
-            "button[aria-label='Service Request List:New']",
-            "[aria-label*='Service Request List' i][aria-label*='New' i]",
-            "[title='Service Request List:New']",
-            "a[title='Service Request List:New']",
-            "img[title='Service Request List:New']",
-            "[title*='Service Request List:New' i]",
-        ]
-        for root in _roots():
-            if _sr_new_clicked:
-                break
-            for css in _sr_selectors:
-                try:
-                    loc = root.locator(css).first
-                    if loc.count() > 0 and loc.is_visible(timeout=700):
-                        try:
-                            loc.click(timeout=_tmo)
-                        except Exception:
-                            loc.click(timeout=_tmo, force=True)
-                        _sr_new_clicked = True
-                        break
-                except Exception:
-                    continue
-        if not _sr_new_clicked:
-            return False, "Could not click 'Service Request List:New' on PDI tab."
+        _safe_page_wait(page, 600, log_label="before_pdi_service_request_list_new")
+        if not _siebel_click_service_request_list_new_record(
+            page,
+            roots=_roots,
+            action_timeout_ms=action_timeout_ms,
+            note=note,
+            log_prefix=log_prefix,
+            context="PDI",
+        ):
+            return (
+                False,
+                "Could not click 'Service Request List:New' on PDI tab "
+                "(same paths as Pre-check +; see _siebel_click_service_request_list_new_record).",
+            )
         note(f"{log_prefix}: clicked Service Request List:New on PDI tab.")
         _safe_page_wait(page, 1200, log_label="after_sr_list_new")
 

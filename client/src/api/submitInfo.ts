@@ -1,6 +1,10 @@
 import { apiFetch } from "./client";
 import type { ExtractedCustomerDetails, ExtractedVehicleDetails, ExtractedInsuranceDetails } from "../types";
 import { financierForStagingPayload } from "../utils/financierStagingRules";
+import {
+  sanitizeNomineeAgeInput,
+  sanitizeOptionalFormField,
+} from "../utils/formFieldSanitize";
 
 export interface SubmitInfoPayload {
   customer: {
@@ -59,46 +63,49 @@ function mapCustomer(
   oemId?: number | null
 ): SubmitInfoPayload["customer"] {
   return {
-    aadhar_id: c?.aadhar_id,
-    name: c?.name,
-    gender: c?.gender,
-    date_of_birth: c?.date_of_birth,
-    address: c?.address,
-    pin: c?.pin_code,
-    city: c?.city,
-    state: c?.state,
-    mobile_number: mobile,
-    alt_phone_num: c?.alt_phone_num,
-    profession: insurance?.profession,
-    financier: financierForStagingPayload(oemId, insurance?.financier),
-    marital_status: insurance?.marital_status,
-    care_of: c?.care_of,
-    dms_relation_prefix: c?.dms_relation_prefix,
-    dms_contact_path: c?.dms_contact_path,
+    aadhar_id: sanitizeOptionalFormField(c?.aadhar_id),
+    name: sanitizeOptionalFormField(c?.name),
+    gender: sanitizeOptionalFormField(c?.gender),
+    date_of_birth: sanitizeOptionalFormField(c?.date_of_birth),
+    address: sanitizeOptionalFormField(c?.address),
+    pin: sanitizeOptionalFormField(c?.pin_code),
+    city: sanitizeOptionalFormField(c?.city),
+    state: sanitizeOptionalFormField(c?.state),
+    mobile_number: String(mobile ?? "").replace(/\D/g, "").slice(0, 10),
+    alt_phone_num: sanitizeOptionalFormField(c?.alt_phone_num),
+    profession: sanitizeOptionalFormField(insurance?.profession),
+    financier: financierForStagingPayload(oemId, sanitizeOptionalFormField(insurance?.financier)),
+    marital_status: sanitizeOptionalFormField(insurance?.marital_status),
+    care_of: sanitizeOptionalFormField(c?.care_of),
+    dms_relation_prefix: sanitizeOptionalFormField(c?.dms_relation_prefix),
+    dms_contact_path: sanitizeOptionalFormField(c?.dms_contact_path),
     file_location: fileLocation ?? undefined,
   };
 }
 
 function mapVehicle(v: ExtractedVehicleDetails | null): SubmitInfoPayload["vehicle"] {
   return {
-    frame_no: v?.frame_no,
-    engine_no: v?.engine_no,
-    key_no: v?.key_no,
-    battery_no: v?.battery_no,
+    frame_no: sanitizeOptionalFormField(v?.frame_no),
+    engine_no: sanitizeOptionalFormField(v?.engine_no),
+    key_no: sanitizeOptionalFormField(v?.key_no),
+    battery_no: sanitizeOptionalFormField(v?.battery_no),
   };
 }
 
 function mapInsurance(ins: ExtractedInsuranceDetails | null): SubmitInfoPayload["insurance"] {
   return {
-    nominee_name: ins?.nominee_name,
-    nominee_age: ins?.nominee_age,
-    nominee_relationship: ins?.nominee_relationship,
-    nominee_gender: ins?.nominee_gender,
-    insurer: ins?.insurer,
-    policy_num: ins?.policy_num,
-    policy_from: ins?.policy_from,
-    policy_to: ins?.policy_to,
-    premium: ins?.premium,
+    nominee_name: sanitizeOptionalFormField(ins?.nominee_name),
+    nominee_age:
+      ins?.nominee_age != null && String(ins.nominee_age).trim() !== ""
+        ? sanitizeNomineeAgeInput(String(ins.nominee_age))
+        : undefined,
+    nominee_relationship: sanitizeOptionalFormField(ins?.nominee_relationship),
+    nominee_gender: sanitizeOptionalFormField(ins?.nominee_gender),
+    insurer: sanitizeOptionalFormField(ins?.insurer),
+    policy_num: sanitizeOptionalFormField(ins?.policy_num),
+    policy_from: sanitizeOptionalFormField(ins?.policy_from),
+    policy_to: sanitizeOptionalFormField(ins?.policy_to),
+    premium: sanitizeOptionalFormField(ins?.premium),
   };
 }
 

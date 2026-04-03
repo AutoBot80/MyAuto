@@ -25,6 +25,9 @@ export interface AddSalesStored {
   extractedCustomer: import("../types").ExtractedCustomerDetails | null;
   extractedInsurance: {
     profession?: string;
+    financier?: string;
+    marital_status?: string;
+    nominee_gender?: string;
     nominee_name?: string;
     nominee_age?: string;
     nominee_relationship?: string;
@@ -53,6 +56,7 @@ const DEFAULT: AddSalesStored = {
 
 import type { ExtractedCustomerDetails } from "../types";
 import { normalizeVehicleDetails } from "./vehicleDetails";
+import { sanitizeNomineeAgeInput, sanitizeOptionalFormField } from "./formFieldSanitize";
 
 const CUSTOMER_KEYS: (keyof ExtractedCustomerDetails)[] = [
   "aadhar_id", "name", "gender", "year_of_birth", "date_of_birth",
@@ -71,9 +75,15 @@ function normalizeExtractedCustomer(val: unknown): ExtractedCustomerDetails | nu
   const out: ExtractedCustomerDetails = {};
   for (const k of CUSTOMER_KEYS) {
     const v = o[k];
-    if (v != null && typeof v === "string" && v.trim() !== "") out[k] = v.trim();
+    if (v != null && typeof v === "string" && v.trim() !== "") {
+      const s = sanitizeOptionalFormField(v.trim());
+      if (s) out[k] = s;
+    }
   }
-  if (!out.pin_code && o.pin != null && String(o.pin).trim() !== "") out.pin_code = String(o.pin).trim();
+  if (!out.pin_code && o.pin != null && String(o.pin).trim() !== "") {
+    const p = sanitizeOptionalFormField(String(o.pin).trim());
+    if (p) out.pin_code = p;
+  }
   return Object.keys(out).length > 0 ? out : null;
 }
 
@@ -111,16 +121,48 @@ export function loadAddSalesForm(): AddSalesStored {
       lastStagingId: typeof parsed.lastStagingId === "string" && parsed.lastStagingId.trim() ? parsed.lastStagingId.trim() : null,
       extractedVehicle: normalizeExtractedVehicle(parsed.extractedVehicle),
       extractedCustomer: extractedCustomer && hasAnyCustomerValue(extractedCustomer) ? extractedCustomer : null,
-      extractedInsurance:
-        parsed.extractedInsurance != null && typeof parsed.extractedInsurance === "object" && !Array.isArray(parsed.extractedInsurance)
-          ? ({
-              ...(parsed.extractedInsurance as AddSalesStored["extractedInsurance"]),
-              // Back-compat: older storage used top-level "profession"
-              profession:
-                (parsed.extractedInsurance as any)?.profession ??
-                (typeof (parsed as any).profession === "string" ? (parsed as any).profession : undefined),
-            } as AddSalesStored["extractedInsurance"])
-          : null,
+      extractedInsurance: (() => {
+        if (
+          parsed.extractedInsurance == null ||
+          typeof parsed.extractedInsurance !== "object" ||
+          Array.isArray(parsed.extractedInsurance)
+        ) {
+          return null;
+        }
+        const ins = {
+          ...(parsed.extractedInsurance as AddSalesStored["extractedInsurance"]),
+          profession:
+            (parsed.extractedInsurance as any)?.profession ??
+            (typeof (parsed as any).profession === "string" ? (parsed as any).profession : undefined),
+        } as Record<string, unknown>;
+        for (const key of [
+          "profession",
+          "nominee_name",
+          "nominee_relationship",
+          "nominee_gender",
+          "insurer",
+          "policy_num",
+          "policy_from",
+          "policy_to",
+          "premium",
+          "marital_status",
+          "financier",
+        ] as const) {
+          const v = ins[key];
+          if (v != null && typeof v === "string" && String(v).trim() !== "") {
+            const s = sanitizeOptionalFormField(v);
+            if (s) ins[key] = s;
+            else delete ins[key];
+          }
+        }
+        const na = ins.nominee_age;
+        if (na != null && String(na).trim() !== "") {
+          const s = sanitizeNomineeAgeInput(String(na));
+          if (s) ins.nominee_age = s;
+          else delete ins.nominee_age;
+        }
+        return ins as AddSalesStored["extractedInsurance"];
+      })(),
     };
   } catch {
     return { ...DEFAULT };

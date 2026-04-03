@@ -1,6 +1,7 @@
 /** Normalize vehicle details from API or storage so the UI can display them. */
 
 import type { ExtractedVehicleDetails } from "../types";
+import { sanitizeFormFieldValue } from "./formFieldSanitize";
 
 const FIELDS = [
   "frame_no",
@@ -70,6 +71,13 @@ export function normalizeVehicleDetails(raw: unknown): ExtractedVehicleDetails |
     if (field && !out[field]) {
       const s = getString(o[key]);
       if (s) out[field] = s;
+    }
+  }
+
+  for (const key of Object.keys(out) as (keyof ExtractedVehicleDetails)[]) {
+    const val = out[key];
+    if (typeof val === "string" && val.length > 0) {
+      out[key] = sanitizeFormFieldValue(val);
     }
   }
 
