@@ -464,9 +464,19 @@ def _hero_misp_after_sign_in_settle(page) -> None:
     """
     After Sign In, wait for the landing UI. Prefer **domcontentloaded** over **networkidle** — MISP often
     never reaches network idle (analytics / long polling), which added multi-second delays before 2W.
+
+    The hub SPA may paint **2W** after ``domcontentloaded``; wait for the same tile selectors ``_click_2w_icon``
+    tries first (visibility), capped by ``HERO_MISP_LANDING_WAIT_MS``, so the 2W step does not run on a half-ready DOM.
     """
     try:
-        page.wait_for_load_state("domcontentloaded", timeout=3_000)
+        page.wait_for_load_state("domcontentloaded", timeout=8_000)
+    except Exception:
+        pass
+    cap = min(10_000, max(800, int(HERO_MISP_LANDING_WAIT_MS)))
+    try:
+        page.locator('[aid="ctl00_TWO"], #ctl00_TWO, img[alt="2W Icon"]').first.wait_for(
+            state="visible", timeout=cap
+        )
     except Exception:
         pass
     _insurance_click_settle(page)
