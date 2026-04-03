@@ -7395,8 +7395,8 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     Shared by ``prepare_vehicle`` and ``_attach_vehicle_to_bkg``. Third Level View Bar tabs are
     clicked by label (with hyphen-insensitive match for **Pre-check** vs **PreCheck**). Tab ``ui-id-*``
     values are dynamic across runs/tenants, so fixed tab ids are not treated as primary selectors.
-    **Pre-check list ``+``:** Same idea as PDI — ``Precheck List:New`` / ``Pre-check List:New`` (``aria-label`` /
-    ``title``) before the **Open** pick; then **Technician** pick must target the **second** pick icon when
+    **Pre-check list ``+``:** Prefer **Service Request List:New** (same chrome as **PDI**); alternate
+    ``Precheck List:New`` / ``Pre-check List:New``. Skip **Service Request List: Menu**. Then **Technician** pick must target the **second** pick icon when
     generic ``siebui-icon-picklist`` CSS is used (``.first`` would re-click **Open**). PDI: **Service Request List:New**
     then optional legacy ``s_2_2_32_0_icon`` / ``s_2_2_32_0``. After the **Technician** pick icon, **Open** still uses
     ``_pick_first_row_and_ok``; **Technician** uses ``_siebel_lov_pick_first_row_ok_pdi_style`` (same settle / first row /
@@ -8274,7 +8274,17 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
 
     if not _precheck_already_present:
         _pc_new_clicked = False
+        # Pre-check tab often exposes the same **Service Request List:New** chrome as PDI (not "Precheck List:New").
+        # **Service Request List: Menu** is a different control — never treat it as '+'.
         _pc_new_selectors = [
+            "[aria-label='Service Request List:New']",
+            "a[aria-label='Service Request List:New']",
+            "button[aria-label='Service Request List:New']",
+            "[aria-label*='Service Request List' i][aria-label*='New' i]",
+            "[title='Service Request List:New']",
+            "a[title='Service Request List:New']",
+            "img[title='Service Request List:New']",
+            "[title*='Service Request List:New' i]",
             "[aria-label='Precheck List:New']",
             "[aria-label='Pre-check List:New']",
             "a[aria-label='Precheck List:New']",
@@ -8290,25 +8300,66 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             "[title*='Precheck List:New' i]",
             "[title*='Pre-check List:New' i]",
         ]
+
+        def _pc_label_is_list_new_not_menu(el) -> bool:
+            try:
+                al = (el.get_attribute("aria-label") or "").strip()
+                tt = (el.get_attribute("title") or "").strip()
+            except Exception:
+                return False
+            lab = f"{al} {tt}".lower()
+            if "menu" in lab and "new" not in lab:
+                return False
+            if ":new" in lab or "list:new" in lab.replace(" ", ""):
+                return True
+            if al.endswith(":New") or tt.endswith(":New"):
+                return True
+            return False
+
         for root in _roots():
+            if _pc_new_clicked:
+                break
+            for _role in ("link", "button"):
+                try:
+                    _rl = root.get_by_role(_role, name="Service Request List:New", exact=True)
+                    if _rl.count() > 0 and _rl.first.is_visible(timeout=600):
+                        try:
+                            _rl.first.click(timeout=_tmo)
+                        except Exception:
+                            _rl.first.click(timeout=_tmo, force=True)
+                        _pc_new_clicked = True
+                        note(f"{log_prefix}: clicked Pre-check + via role={_role!r} name=Service Request List:New.")
+                        break
+                except Exception:
+                    continue
             if _pc_new_clicked:
                 break
             for css in _pc_new_selectors:
                 try:
-                    loc = root.locator(css).first
-                    if loc.count() > 0 and loc.is_visible(timeout=700):
+                    _grp = root.locator(css)
+                    _n = _grp.count()
+                    for _ii in range(min(_n, 12)):
+                        loc = _grp.nth(_ii)
+                        if not loc.is_visible(timeout=500):
+                            continue
+                        if not _pc_label_is_list_new_not_menu(loc):
+                            continue
                         try:
                             loc.click(timeout=_tmo)
                         except Exception:
                             loc.click(timeout=_tmo, force=True)
                         _pc_new_clicked = True
+                        note(f"{log_prefix}: clicked Pre-check + ({css!r} nth={_ii}).")
+                        break
+                    if _pc_new_clicked:
                         break
                 except Exception:
                     continue
         if not _pc_new_clicked:
             return (
                 False,
-                "Could not click Pre-check list '+' (Precheck List:New / Pre-check List:New not found).",
+                "Could not click Pre-check list '+' "
+                "(tried Service Request List:New / Precheck List:New; skipped Service Request List: Menu).",
             )
         note(f"{log_prefix}: clicked Pre-check list New (+).")
         _safe_page_wait(page, 1200, log_label="after_precheck_list_new")
