@@ -7401,8 +7401,9 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     generic ``siebui-icon-picklist`` CSS is used (``.first`` would re-click **Open**). PDI: **Service Request List:New**
     then optional legacy ``s_2_2_32_0_icon`` / ``s_2_2_32_0``. After the **Technician** pick icon, **Open** still uses
     ``_pick_first_row_and_ok``; **Technician** uses ``_siebel_lov_pick_first_row_ok_pdi_style`` (same settle / first row /
-    **OK** / settle as the PDI pick applet). Pre-check **Technician** ids: ``s_3_2_25_0_icon``, ``s_3_1_12_0_Ctrl``,
-    alternates for the Technician column.
+    **OK** / settle as the PDI pick applet). LOV pick icons use ``*_icon`` ids — **never** ``s_3_1_12_0_Ctrl`` (that id is the
+    header **+** / ``siebui-icon-newrecord``, not a picklist). **Technician** tries ``s_3_2_26_0_icon`` / ``s_3_2_24_0_icon``
+    / … before ``s_3_2_25_0_icon`` (often **Open**).
 
     **Pre-check existing rows:** Before creating a row, the flow probes for an existing Pre-check list row.
     The probe counts only ``table.ui-jqgrid-btable`` grids under a **Precheck** / **Pre-check** applet
@@ -7990,11 +7991,17 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     def _click_precheck_pick_icon(stage_label: str) -> tuple[bool, str]:
         _used = ""
         _ok = False
-        _pick_ids = ["s_3_2_25_0_icon", "s_3_1_12_0_Ctrl"]
+        # ``s_3_1_12_0_Ctrl`` is the **Service Request List:New** header button (``siebui-icon-newrecord``), not a LOV pick.
         if "technician" in (stage_label or "").lower():
-            _pick_ids.extend(
-                ("s_3_2_26_0_icon", "s_3_2_24_0_icon", "s_3_3_25_0_icon", "s_3_3_26_0_icon")
-            )
+            _pick_ids = [
+                "s_3_2_26_0_icon",
+                "s_3_2_24_0_icon",
+                "s_3_3_25_0_icon",
+                "s_3_3_26_0_icon",
+                "s_3_2_25_0_icon",
+            ]
+        else:
+            _pick_ids = ["s_3_2_25_0_icon"]
         for _pc_pick_id in _pick_ids:
             if _siebel_click_by_id_anywhere(
                 page,
@@ -8428,7 +8435,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                         "data": {
                             "ok": _precheck_icon_ok,
                             "used_id": _precheck_icon_used,
-                            "tried_ids": ["s_3_2_25_0_icon", "s_3_1_12_0_Ctrl"],
+                            "tried_ids": ["s_3_2_25_0_icon"],
                         },
                         "timestamp": _ts_ist_iso(),
                     },
@@ -8442,7 +8449,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     if not _precheck_icon_ok:
         return False, (
             "Could not click Pre-check pick icon for Open status "
-            "(tried s_3_2_25_0_icon, s_3_1_12_0_Ctrl)."
+            "(tried s_3_2_25_0_icon; s_3_1_12_0_Ctrl is the header + only, not LOV)."
         )
 
     if not _precheck_already_present:
