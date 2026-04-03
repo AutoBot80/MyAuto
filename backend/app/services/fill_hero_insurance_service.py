@@ -5476,7 +5476,7 @@ def _hero_misp_wait_for_mispdms_vin_url_event(
     Returns **True** when already on or navigated to that URL; **False** on timeout (caller may still poll ``txtFrameNo``
     if the portal uses a different path). No fixed sleep — Playwright waits on navigation / URL change.
     """
-    to = min(max(2_000, int(timeout_ms)), 90_000)
+    to = min(max(3_000, int(timeout_ms)), 90_000)
     try:
         u0 = (page.url or "").lower()
         if "mispdms.aspx" in u0:
@@ -5617,7 +5617,7 @@ def _hero_misp_wait_for_vin_txt_frame_no_attached(
     url_remain_ms = max(0, int((deadline - time.monotonic()) * 1000))
     url_ok = _hero_misp_wait_for_mispdms_vin_url_event(
         page,
-        timeout_ms=max(2_000, url_remain_ms),
+        timeout_ms=max(3_000, url_remain_ms),
         ocr_output_dir=ocr_output_dir,
         subfolder=subfolder,
     )
@@ -5643,9 +5643,8 @@ def _hero_misp_wait_for_vin_txt_frame_no_attached(
         ocr_output_dir, subfolder, t0_vin, "post_url_domcontentloaded_done"
     )
 
-    roots = _hero_misp_page_and_frame_roots(page, purpose="vin")
-    for root in roots:
-        for sel in selectors:
+    for sel in selectors:
+        for root in _hero_misp_page_and_frame_roots(page, purpose="vin"):
             remain_ms = max(0, int((deadline - time.monotonic()) * 1000))
             if remain_ms <= 0:
                 break
@@ -5653,7 +5652,7 @@ def _hero_misp_wait_for_vin_txt_frame_no_attached(
             try:
                 el = root.locator(sel).first
                 # Cap each attempt so wrong selector/frame does not consume the whole budget (still event-driven).
-                el.wait_for(state="attached", timeout=min(3_000, remain_ms))
+                el.wait_for(state="attached", timeout=min(8_000, remain_ms))
                 logger.info("Hero Insurance: VIN field attached (%s).", sel[:72])
                 _insurance_vin_phase_note(
                     ocr_output_dir,
@@ -5719,9 +5718,8 @@ def _hero_misp_fill_vin_txt_frame_no(
     # MISP markup: ``div#divtxtFrameNo.input-container`` + ``input#ctl00_ContentPlaceHolder1_txtFrameNo``,
     # label text **VIN Number** (``label for="txtFrameNo"`` vs full client id — use label + container).
     selectors = _HERO_MISP_VIN_TXT_FRAME_NO_SELECTORS
-    roots = _hero_misp_page_and_frame_roots(page, purpose="vin")
-    for root in roots:
-        for sel in selectors:
+    for sel in selectors:
+        for root in _hero_misp_page_and_frame_roots(page, purpose="vin"):
             try:
                 loc = root.locator(sel)
                 if loc.count() == 0:

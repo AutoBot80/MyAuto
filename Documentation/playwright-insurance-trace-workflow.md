@@ -30,9 +30,9 @@ They are **not** mandatory before every fix. **One** run with clear `NOTE` lines
 3. Prioritize using **existing** lines (no new log types unless a phase is blind):
    - **`tab_resolve`** … **`resolver_ms`** vs **`elapsed_ms`** — large **`resolver_ms`** with **`branch=stayed_on_fallback`** points at **`_misp_resolve_page_after_possible_new_tab`** in `fill_hero_insurance_service.py` (staged `wait_for_event`, same-tab fast path).
    - **`kyc_elapsed`** (e.g. **`after_ovd_ready`** → **`before_mobile_fill`**) — tune OVD / keyboard settles (`KYC_KEYBOARD_OVD_ARROW_DOWN_SETTLE_MS`, etc.) or related `_t` pauses in `_fill_kyc_ekyc_keyboard_sop`.
-   - **VIN** — **`wait_for_url_mispdms`**, **`txtFrameNo_attached`**, **`attach_attempts`** — tune **`_hero_misp_wait_for_mispdms_vin_url_event`** floor, **`_hero_misp_wait_for_vin_txt_frame_no_attached`** (root×selector order, per-attempt cap), and **`INSURANCE_VIN_*`** / **`_hero_misp_vin_step_timeout_ms`** as documented in **LLD** §2.4c.
+   - **VIN** — **`wait_for_url_mispdms`**, **`txtFrameNo_attached`**, **`attach_attempts`** — tune **`_hero_misp_wait_for_mispdms_vin_url_event`** floor, **`_hero_misp_wait_for_vin_txt_frame_no_attached`** (selector×frame order, per-attempt cap), and **`INSURANCE_VIN_*`** / **`_hero_misp_vin_step_timeout_ms`** as documented in **LLD** §2.4c (see **LLD** **6.214** for current defaults).
 4. Avoid **NOTE** spam unless something remains unmeasurable.
 
 ## Where this is implemented
 
-Behavior and defaults are documented in **`Documentation/low-level-design.md`** §2.4c and **LLD changelog** (e.g. **6.213**). **BRD** / **HLD** changelog rows cross-reference the same delivery.
+Behavior and defaults are documented in **`Documentation/low-level-design.md`** §2.4c and **LLD changelog** (e.g. **6.213**, **6.214**). **BRD** / **HLD** changelog rows cross-reference the same delivery.
