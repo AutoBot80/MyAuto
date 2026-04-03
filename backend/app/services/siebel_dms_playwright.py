@@ -7544,8 +7544,9 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     / … before ``s_3_2_25_0_icon`` (often **Open**).
 
     **Pre-check existing rows:** Before creating a row, the flow probes for an existing Pre-check list row.
-    The probe counts only ``table.ui-jqgrid-btable`` grids under a **Precheck** / **Pre-check** applet
-    ancestor (not every ``<table>`` on the page or iframe), so unrelated large grids do not skip entry.
+    The probe counts ``table.ui-jqgrid-btable`` grids scoped by **Precheck** / **Pre-check** text,
+    **Service Request List** / **applet** labels, or **gview_s_3** / **s_3_*_l** jqGrid ids, excluding
+    **gview_s_2** / **s_2_l** (PDI list). Unrelated large grids are still avoided (not every ``<table>``).
     """
     _tmo = min(int(action_timeout_ms or 3000), 4000)
 
@@ -8041,13 +8042,35 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 // visible <table> on the page (or max across iframes) picked unrelated grids (e.g. 89 rows)
                 // and skipped Pre-check entry when the Pre-check list was actually empty.
                 const isPrecheckScoped = (el) => {
+                    const isPdiGrid = (node) => {
+                        let x = node;
+                        for (let d = 0; d < 22 && x; d++) {
+                            const pid = String(x.id || '').toLowerCase();
+                            if (pid.includes('gview_s_2') || pid.includes('s_2_l')) return true;
+                            x = x.parentElement;
+                        }
+                        return false;
+                    };
+                    if (isPdiGrid(el)) return false;
                     let n = el;
-                    for (let d = 0; d < 24 && n; d++) {
+                    for (let d = 0; d < 28 && n; d++) {
                         const id = String(n.id || '');
                         const nm = String(n.getAttribute('name') || '');
                         const tit = String(n.getAttribute('title') || '');
                         const hay = (id + ' ' + nm + ' ' + tit).toLowerCase();
                         if (hay.includes('precheck') || hay.includes('pre-check') || hay.includes('pre_check')) {
+                            return true;
+                        }
+                        if ((hay.includes('service request') && (hay.includes('list') || hay.includes('applet'))) ||
+                            hay.includes('service request list')) {
+                            return true;
+                        }
+                        n = n.parentElement;
+                    }
+                    n = el;
+                    for (let d = 0; d < 12 && n; d++) {
+                        const pid = String(n.id || '').toLowerCase();
+                        if (pid.includes('gview_s_3') || (pid.includes('s_3_') && pid.includes('_l') && !pid.includes('s_2'))) {
                             return true;
                         }
                         n = n.parentElement;
@@ -8434,13 +8457,35 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 return r.width > 0 && r.height > 0;
             };
             const isPrecheckScoped = (el) => {
+                const isPdiGrid = (node) => {
+                    let x = node;
+                    for (let d = 0; d < 22 && x; d++) {
+                        const pid = String(x.id || '').toLowerCase();
+                        if (pid.includes('gview_s_2') || pid.includes('s_2_l')) return true;
+                        x = x.parentElement;
+                    }
+                    return false;
+                };
+                if (isPdiGrid(el)) return false;
                 let n = el;
-                for (let d = 0; d < 24 && n; d++) {
+                for (let d = 0; d < 28 && n; d++) {
                     const id = String(n.id || '');
                     const nm = String(n.getAttribute('name') || '');
                     const tit = String(n.getAttribute('title') || '');
                     const hay = (id + ' ' + nm + ' ' + tit).toLowerCase();
                     if (hay.includes('precheck') || hay.includes('pre-check') || hay.includes('pre_check')) {
+                        return true;
+                    }
+                    if ((hay.includes('service request') && (hay.includes('list') || hay.includes('applet'))) ||
+                        hay.includes('service request list')) {
+                        return true;
+                    }
+                    n = n.parentElement;
+                }
+                n = el;
+                for (let d = 0; d < 12 && n; d++) {
+                    const pid = String(n.id || '').toLowerCase();
+                    if (pid.includes('gview_s_3') || (pid.includes('s_3_') && pid.includes('_l') && !pid.includes('s_2'))) {
                         return true;
                     }
                     n = n.parentElement;

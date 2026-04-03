@@ -2,7 +2,7 @@ Data from DMS
 
 --- Customer (filled on enquiry) ---
 Name: Nishant Kumar
-Address: S/O Brij Gopal, ward no 43, basant vihar Bharatpur, PO: Bharatpur, DIST: Bharatpur, Rajasthan - 321001
+Address: S/O Brij Gopal, ward no 43, basant vihar Bharatpur, PO
 State: RAJASTHAN
 Pin code: 321001
 Mobile: 7877144532
