@@ -418,3 +418,4 @@ The SQL view **`form_dms_view`** is **removed**; the same mapping is implemented
 | 1.120 | Apr 2026 | — | **`add_sales_commit_service`**: **`insurance_master`** insert snapshot JSON to **`Playwright_insurance.txt`** — **LLD** **6.199** |
 | 1.121 | Apr 2026 | — | Preview scrape fields + drop **`insurance_cost`**; **`update_insurance_master_policy_after_issue`**(**`scrape`**) — **LLD** **6.200** |
 | 1.123 | Apr 2026 | — | Hero GI **pre_process**: shorter KYC post-mobile + landing + VIN preamble waits + **`elapsed_ms`** **`NOTE`** lines — **LLD** **6.202**; **BRD** **3.121** |
+| 1.124 | Apr 2026 | — | **`main_process`** MISP proposal: id-based add-on / USGI checkboxes + DOB nominee hardening — **LLD** **6.203**; **BRD** **3.122** |

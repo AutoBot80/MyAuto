@@ -88,6 +88,9 @@ HERO_MISP_PROPOSAL_OPTIONAL_UNCHECK_CHECKBOX_REGEX = ""
 
 # ASP.NET ``ContentPlaceHolder1`` client-id prefix on ``MispPolicy.aspx`` proposal controls (frame scrape).
 HERO_MISP_CPH1 = "ctl00_ContentPlaceHolder1"
+
+# Return from ``_proposal_step_checkbox_by_cph1_id`` when no control matched (caller may use label/regex fallback).
+PROPOSAL_CHECKBOX_ID_NOT_FOUND = "__proposal_checkbox_id_not_found__"
 # After native ``<select>`` insurer commit (non-keyboard DOM path), use ``light`` nav (skip tab-away) — same as keyboard SOP.
 HERO_MISP_LIGHT_NAV_AFTER_DOM_INSURER = True
 
@@ -3855,11 +3858,35 @@ def _proposal_step_fill_dob(
                     x in got.replace("-", "/") for x in (v, v.replace("/", "-"))
                 ):
                     return f"{step_id}: DOB readback mismatch want={v!r} got={got!r}"
+            # Flatpickr / WebForms: commit value (avoid revert when focus moves to Marital/RTO/etc.).
+            try:
+                el.press("Tab")
+            except Exception:
+                try:
+                    page.keyboard.press("Tab")
+                except Exception:
+                    pass
+            _t(page, 180)
+            got2 = (el.input_value() or "").strip()
+            if not got2 or (
+                normalize_for_fuzzy_match(got2) != normalize_for_fuzzy_match(v)
+                and v not in got2
+                and got2 not in v
+                and not any(x in got2.replace("-", "/") for x in (v, v.replace("/", "-")))
+            ):
+                try:
+                    el.click(timeout=timeout_ms)
+                    el.fill("", timeout=timeout_ms)
+                    el.fill(v, timeout=timeout_ms)
+                    el.press("Tab")
+                except Exception:
+                    pass
+                _t(page, 150)
             _proposal_log(
                 ocr_output_dir,
                 subfolder,
                 step_id,
-                f"fill ok id_suffix=txtDOB readback={got!r}",
+                f"fill ok id_suffix=txtDOB readback={(el.input_value() or got)!r}",
             )
             return None
         except Exception as exc:
@@ -4039,22 +4066,29 @@ def _proposal_step_fill_input(
         return None
     last = "no input matched labels"
     if cph1_id_suffix:
+        _nominee = cph1_id_suffix in ("txtNomineeName", "txtNomineeAge")
+        _vis_a = 1_200 if _nominee else 800
+        _vis_b = 3_000 if _nominee else 1_500
         for root in _hero_misp_page_and_frame_roots(page, purpose="nav"):
             try:
                 loc = _proposal_cph1_locator(root, cph1_id_suffix)
                 if loc.count() == 0:
                     continue
                 el = loc.first
-                if not el.is_visible(timeout=800):
+                if not el.is_visible(timeout=_vis_a):
                     _proposal_scroll_visible(el, timeout_ms=timeout_ms)
-                if not el.is_visible(timeout=1_500):
+                if not el.is_visible(timeout=_vis_b):
                     continue
                 tag = (el.evaluate("e => e && e.tagName ? e.tagName.toUpperCase() : ''") or "").upper()
                 if tag == "SELECT":
                     last = f"id {cph1_id_suffix!r} is SELECT; use proposal_step_select"
                     continue
-                el.fill("", timeout=timeout_ms)
-                el.fill(v, timeout=timeout_ms)
+                if _nominee:
+                    el.fill("", timeout=timeout_ms, force=True)
+                    el.fill(v, timeout=timeout_ms, force=True)
+                else:
+                    el.fill("", timeout=timeout_ms)
+                    el.fill(v, timeout=timeout_ms)
                 snap = _read_locator_value_snapshot(el)
                 got = (snap.get("value") or "").strip()
                 if got != v and normalize_for_fuzzy_match(got) != normalize_for_fuzzy_match(v):
@@ -4247,6 +4281,119 @@ def _proposal_step_checkbox_uncheck_if_present(
     return None
 
 
+def _proposal_step_checkbox_by_cph1_id(
+    page,
+    id_suffix: str,
+    want_checked: bool,
+    step_id: str,
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
+    *,
+    timeout_ms: int,
+) -> str | None:
+    """
+    Set ``#ctl00_ContentPlaceHolder1_<id_suffix>`` checkbox when present (see
+    ``Playwright_insurance_main_process_frames.txt`` — e.g. ``chkroicover``, ``chkRSA``, ``chkEME``,
+    ``chkNilDepreciation``, ``gridGMc_ctl02_chlGMC``).
+
+    Returns ``None`` on success, ``PROPOSAL_CHECKBOX_ID_NOT_FOUND`` if no control matched in any nav
+    root (caller may fall back to label/regex), else an error string.
+    """
+    last_err = ""
+    seen = False
+    for root in _hero_misp_page_and_frame_roots(page, purpose="nav"):
+        try:
+            loc = _proposal_cph1_locator(root, id_suffix)
+            if loc.count() == 0:
+                continue
+            seen = True
+            cb = loc.first
+            typ = (cb.get_attribute("type") or "").lower()
+            if typ != "checkbox":
+                return f"{step_id}: {id_suffix!r} is not type=checkbox"
+            if not cb.is_visible(timeout=500):
+                _proposal_scroll_visible(cb, timeout_ms=timeout_ms)
+            if not cb.is_visible(timeout=min(4_000, timeout_ms)):
+                last_err = f"{id_suffix} not visible"
+                continue
+            if want_checked and not cb.is_checked():
+                try:
+                    cb.check(timeout=timeout_ms, force=True)
+                except Exception:
+                    cb.check(timeout=timeout_ms)
+            elif not want_checked and cb.is_checked():
+                try:
+                    cb.uncheck(timeout=timeout_ms, force=True)
+                except Exception:
+                    cb.uncheck(timeout=timeout_ms)
+            if cb.is_checked() != want_checked:
+                try:
+                    cb.evaluate(
+                        """(e, want) => {
+                          e.checked = want;
+                          e.dispatchEvent(new Event('change', { bubbles: true }));
+                          e.dispatchEvent(new Event('click', { bubbles: true }));
+                        }""",
+                        want_checked,
+                    )
+                except Exception:
+                    pass
+            if cb.is_checked() != want_checked:
+                return (
+                    f"{step_id}: checkbox id={id_suffix!r} want_checked={want_checked} "
+                    f"got={cb.is_checked()}"
+                )
+            _proposal_log(
+                ocr_output_dir,
+                subfolder,
+                step_id,
+                f"checkbox id_suffix={id_suffix[:56]!r} {'checked' if want_checked else 'unchecked'} ok",
+            )
+            return None
+        except Exception as exc:
+            last_err = str(exc)
+            continue
+    if not seen:
+        return PROPOSAL_CHECKBOX_ID_NOT_FOUND
+    return f"{step_id}: checkbox id={id_suffix!r} failed ({last_err or 'not visible'})"
+
+
+def _proposal_addon_checkbox_id_or_label(
+    page,
+    id_suffix: str,
+    want_checked: bool,
+    step_id: str,
+    label_pattern: str,
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
+    *,
+    timeout_ms: int,
+) -> str | None:
+    """Prefer stable CPH1 id from MispPolicy scrape; fall back to row/label regex."""
+    r = _proposal_step_checkbox_by_cph1_id(
+        page,
+        id_suffix,
+        want_checked,
+        step_id,
+        ocr_output_dir,
+        subfolder,
+        timeout_ms=timeout_ms,
+    )
+    if r is None:
+        return None
+    if r == PROPOSAL_CHECKBOX_ID_NOT_FOUND:
+        return _proposal_step_checkbox(
+            page,
+            label_pattern,
+            want_checked,
+            step_id,
+            ocr_output_dir,
+            subfolder,
+            timeout_ms=timeout_ms,
+        )
+    return r
+
+
 def _proposal_step_nominee_gender_radio(
     page,
     gender_raw: str,
@@ -4305,7 +4452,20 @@ def _proposal_step_usgi_uncheck(
     *,
     timeout_ms: int,
 ) -> str | None:
-    """CPA **USGI** checkbox (grid ``chlGMC``); force **unchecked** per SOP."""
+    """CPA **USGI** checkbox (grid ``chlGMC`` ``ctl02``); force **unchecked** per SOP."""
+    rid = _proposal_step_checkbox_by_cph1_id(
+        page,
+        "gridGMc_ctl02_chlGMC",
+        False,
+        step_id,
+        ocr_output_dir,
+        subfolder,
+        timeout_ms=timeout_ms,
+    )
+    if rid is None:
+        return None
+    if rid != PROPOSAL_CHECKBOX_ID_NOT_FOUND:
+        return rid
     last_err = ""
     for root in _hero_misp_page_and_frame_roots(page, purpose="nav"):
         try:
@@ -5875,42 +6035,69 @@ def _hero_misp_fill_proposal_and_review(
         if err:
             return _fail(err)
 
+    if dob_val:
+        err = _proposal_step_fill_dob(
+            page,
+            dob_val,
+            "date_of_birth_reassert",
+            ocr_output_dir,
+            subfolder,
+            timeout_ms=pt,
+        )
+        if err:
+            return _fail(err)
+
     _t(page, 400)
-    err = _proposal_step_checkbox(
-        page, r"ND\s*Cover", True, "addon_nd_cover", ocr_output_dir, subfolder, timeout_ms=pt
-    )
-    if err:
-        return _fail(err)
-    err = _proposal_step_checkbox(
+    err = _proposal_addon_checkbox_id_or_label(
         page,
-        r"RTI\s*Cover|RTI\s*&?\s*Cover|R\.?T\.?I\.?\s*Cover|Return\s+to\s+Invoice|"
-        r"Return\s*to\s*Invoice\s*\(?\s*RTI|Invoice\s*Cover|Cover\s*[-–]?\s*RTI",
+        "chkNilDepreciation",
         True,
-        "addon_rti",
+        "addon_nd_cover",
+        r"ND\s*Cover|Nil\s*Depreciation",
         ocr_output_dir,
         subfolder,
         timeout_ms=pt,
     )
     if err:
         return _fail(err)
-    for pat, want, sid in (
-        (
-            r"^RSA$|RSA\s*cover|RSA\s*Cover|Road\s*Side\s*Assist|Roadside\s*Assist",
-            False,
-            "addon_rsa",
-        ),
-        (
-            r"Emergency\s*Medical|Medical\s*Emergency|Emerg\.?\s*Medical|Expenses|"
-            r"Emergency\s*Medical\s*Expenses",
-            False,
-            "addon_emergency_medical",
-        ),
-    ):
-        err = _proposal_step_checkbox(
-            page, pat, want, sid, ocr_output_dir, subfolder, timeout_ms=pt
-        )
-        if err:
-            return _fail(err)
+    err = _proposal_addon_checkbox_id_or_label(
+        page,
+        "chkroicover",
+        True,
+        "addon_rti",
+        r"RTI\s*Cover|RTI\s*&?\s*Cover|R\.?T\.?I\.?\s*Cover|Return\s+to\s+Invoice|"
+        r"Return\s*to\s*Invoice\s*\(?\s*RTI|Invoice\s*Cover|Cover\s*[-–]?\s*RTI|ROI",
+        ocr_output_dir,
+        subfolder,
+        timeout_ms=pt,
+    )
+    if err:
+        return _fail(err)
+    err = _proposal_addon_checkbox_id_or_label(
+        page,
+        "chkRSA",
+        False,
+        "addon_rsa",
+        r"^RSA$|RSA\s*cover|RSA\s*Cover|Road\s*Side\s*Assist|Roadside\s*Assist",
+        ocr_output_dir,
+        subfolder,
+        timeout_ms=pt,
+    )
+    if err:
+        return _fail(err)
+    err = _proposal_addon_checkbox_id_or_label(
+        page,
+        "chkEME",
+        False,
+        "addon_emergency_medical",
+        r"Emergency\s*Medical|Medical\s*Emergency|Emerg\.?\s*Medical|Expenses|"
+        r"Emergency\s*Medical\s*Expenses",
+        ocr_output_dir,
+        subfolder,
+        timeout_ms=pt,
+    )
+    if err:
+        return _fail(err)
 
     _opt_uncheck = (HERO_MISP_PROPOSAL_OPTIONAL_UNCHECK_CHECKBOX_REGEX or "").strip()
     if _opt_uncheck:
