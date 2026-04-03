@@ -414,5 +414,7 @@ The SQL view **`form_dms_view`** is **removed**; the same mapping is implemented
 | 1.117 | Apr 2026 | — | **`dealer_ref.hero_cpi`** / **`form_insurance_view.hero_cpi`**: CPA NIC/CPI add-on check/uncheck — **LLD** **6.196**; **Database DDL** **2.63** |
 | 1.118 | Apr 2026 | — | Hero GI **pre_process**: faster 2W/New Policy/KYC readiness + new-tab **`wait_for_event`**; DOM insurer **`light`** nav; env-tunable KYC keyboard delays — **LLD** **6.197** |
 | 1.119 | Apr 2026 | — | **`fill_hero_insurance_service`**: **`HERO_MISP_UI_SETTLE_MS`**; insurer resolution order (native **`<select>`** only → keyboard → full **`select`** scan); **`_select_option_fuzzy_in_select`** index/value/label — **LLD** **6.198** |
+| 1.120 | Apr 2026 | — | **`main_process` MISP proposal**: DOB normalization + staging merge; CPA tenure **0**; USGI/HDFC/add-on targeting — **LLD** **6.201**; **BRD** **3.120** |
 | 1.120 | Apr 2026 | — | **`add_sales_commit_service`**: **`insurance_master`** insert snapshot JSON to **`Playwright_insurance.txt`** — **LLD** **6.199** |
 | 1.121 | Apr 2026 | — | Preview scrape fields + drop **`insurance_cost`**; **`update_insurance_master_policy_after_issue`**(**`scrape`**) — **LLD** **6.200** |
+| 1.123 | Apr 2026 | — | Hero GI **pre_process**: shorter KYC post-mobile + landing + VIN preamble waits + **`elapsed_ms`** **`NOTE`** lines — **LLD** **6.202**; **BRD** **3.121** |

@@ -18,14 +18,17 @@ from typing import Any
 from playwright.sync_api import TimeoutError as PlaywrightTimeout
 
 from app.config import (
+    HERO_MISP_LANDING_WAIT_MS,
     HERO_MISP_UI_SETTLE_MS,
     INSURANCE_ACTION_TIMEOUT_MS,
     INSURANCE_BASE_URL,
-    INSURANCE_MAIN_PROCESS_FRAME_SCRAPE,
+    INSURANCE_KYC_POST_MOBILE_DOM_MS,
     INSURANCE_KYC_POST_INSURER_NETWORKIDLE_MS,
     INSURANCE_KYC_POST_KYC_PARTNER_NETWORKIDLE_MS,
     INSURANCE_LOGIN_WAIT_MS,
+    INSURANCE_MAIN_PROCESS_FRAME_SCRAPE,
     INSURANCE_POLICY_FILL_TIMEOUT_MS,
+    INSURANCE_VIN_PRE_DOMCONTENTLOADED_MS,
     KYC_KEYBOARD_INSURER_ARROW_DOWN_MAX,
     KYC_KEYBOARD_INSURER_ARROW_DOWN_STEP_MS,
     KYC_KEYBOARD_INSURER_TYPE_DELAY_MS,
@@ -63,6 +66,7 @@ from app.services.utility_functions import (
     clean_text,
     fuzzy_best_option_label,
     insurer_prefer_matches,
+    normalize_dob_for_misp,
     normalize_for_fuzzy_match,
 )
 
@@ -268,6 +272,27 @@ def _t(page, ms: int) -> None:
         page.wait_for_timeout(min(ms, 15_000))
     except Exception:
         pass
+
+
+def _insurance_pre_elapsed_note(
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
+    t0: float | None,
+    phase: str,
+) -> None:
+    """Milestone elapsed time since ``run_fill_insurance_only`` start (``Playwright_insurance.txt``)."""
+    if t0 is None:
+        return
+    try:
+        ms = int((time.monotonic() - t0) * 1000)
+    except Exception:
+        return
+    append_playwright_insurance_line_or_dealer_fallback(
+        ocr_output_dir,
+        subfolder,
+        "NOTE",
+        f"run_fill_insurance_only: phase={phase} elapsed_ms={ms}",
+    )
 
 
 def _insurance_kyc_trace(
@@ -575,9 +600,10 @@ def _kyc_post_mobile_entry_branch(
     timeout_ms: int,
 ) -> str | None:
     """
-    Run **after** mobile is filled: blur field / wait for postback so the verified statement can appear
-    and the CTA can switch to **Proceed**. Then either **consent + Proceed** (banner path) or
-    **upload three files + consent + Proceed** (``_kyc_proceed_or_upload``).
+    Run **after** mobile is filled: blur field / short ``domcontentloaded`` so postback can run; then either
+    **consent + Proceed** (banner path) or **upload three files + consent + Proceed**
+    (``_kyc_proceed_or_upload``). Uses ``INSURANCE_KYC_POST_MOBILE_DOM_MS`` (default **2000** ms) — not
+    ``networkidle`` (previously up to 12s).
     """
     to = min(int(timeout_ms), 120_000)
     try:
@@ -586,7 +612,8 @@ def _kyc_post_mobile_entry_branch(
         pass
     _t(page, HERO_MISP_UI_SETTLE_MS)
     try:
-        page.wait_for_load_state("networkidle", timeout=min(12_000, to))
+        cap_dom = max(200, min(int(INSURANCE_KYC_POST_MOBILE_DOM_MS), 30_000))
+        page.wait_for_load_state("domcontentloaded", timeout=min(cap_dom, to))
     except Exception:
         pass
     _t(page, HERO_MISP_UI_SETTLE_MS)
@@ -1147,8 +1174,9 @@ def _misp_wait_landing_after_product_nav(page, *, step: str, timeout_ms: int) ->
     After **2W** or **New Policy** click: short ``domcontentloaded`` + **UI readiness** instead of a long
     load-state wait (SPAs often do not refire full load).
     ``step``: ``after_2w`` | ``after_new_policy``.
+    Max UI readiness wait per step: ``HERO_MISP_LANDING_WAIT_MS`` (default **3500** ms).
     """
-    cap = min(max(800, int(timeout_ms)), 5_000)
+    cap = min(max(800, int(timeout_ms)), int(HERO_MISP_LANDING_WAIT_MS))
     short_dom = min(1_500, cap)
     try:
         page.wait_for_load_state("domcontentloaded", timeout=short_dom)
@@ -1584,20 +1612,49 @@ def _select_option_fuzzy_in_select(
         ]
         if not candidates:
             return False
-        pick = fuzzy_best_option_label(query, candidates, min_score=fuzzy_min_score)
+        q_strip = (query or "").strip()
+        chosen_early: dict[str, Any] | None = None
+        if q_strip in ("0", "00"):
+            for r in rows:
+                t = (r.get("text") or "").strip()
+                v = (r.get("value") or "").strip()
+                if not t or t.lower().startswith("--select"):
+                    continue
+                if v in ("0", "00"):
+                    chosen_early = r
+                    break
+            if chosen_early is None:
+                for r in rows:
+                    t = (r.get("text") or "").strip()
+                    if not t or t.lower().startswith("--select"):
+                        continue
+                    if t == "0" or re.match(r"^0(\s|$)", t) or re.match(
+                        r"^0\s*(month|year|yr|mo)s?\b", t, re.I
+                    ):
+                        chosen_early = r
+                        break
+        pick: str | None
+        if chosen_early is not None:
+            pick = (chosen_early.get("text") or "").strip() or None
+            if not pick:
+                pick = fuzzy_best_option_label(query, candidates, min_score=fuzzy_min_score)
+        else:
+            pick = fuzzy_best_option_label(query, candidates, min_score=fuzzy_min_score)
         if not pick:
             return False
         pick_n = _norm_option_label(pick)
-        chosen: dict[str, Any] | None = None
-        for r in rows:
-            if r["text"] == pick or _norm_option_label(r["text"]) == pick_n:
-                chosen = r
-                break
-        if chosen is None:
+        chosen: dict[str, Any] | None = chosen_early
+        if chosen is None or _norm_option_label((chosen.get("text") or "")) != pick_n:
+            chosen = None
             for r in rows:
-                if _norm_option_label(r["text"]) == pick_n:
+                if r["text"] == pick or _norm_option_label(r["text"]) == pick_n:
                     chosen = r
                     break
+            if chosen is None:
+                for r in rows:
+                    if _norm_option_label(r["text"]) == pick_n:
+                        chosen = r
+                        break
         if chosen is None:
             return False
         to = min(int(timeout_ms), 12_000)
@@ -3751,18 +3808,6 @@ def _proposal_checkbox_context_text(cb) -> str:
         return ""
 
 
-def _proposal_normalize_dob_for_misp(dob_raw: str) -> str:
-    """``customer_master.dob`` is usually dd/mm/yyyy; accept ISO and reformat."""
-    v = (dob_raw or "").strip()
-    if not v:
-        return ""
-    m = re.match(r"^(\d{4})-(\d{2})-(\d{2})$", v)
-    if m:
-        y, mo, d = m.group(1), m.group(2), m.group(3)
-        return f"{d}/{mo}/{y}"
-    return v
-
-
 def _proposal_step_fill_dob(
     page,
     dob_raw: str,
@@ -3773,7 +3818,7 @@ def _proposal_step_fill_dob(
     timeout_ms: int,
 ) -> str | None:
     """Proposer **Date of Birth** — ``txtDOB`` (dd/mm/yyyy)."""
-    v = _proposal_normalize_dob_for_misp(dob_raw)
+    v = normalize_dob_for_misp(dob_raw)
     if not v:
         return None
     last = "dob not filled"
@@ -3790,6 +3835,19 @@ def _proposal_step_fill_dob(
             el.fill("", timeout=timeout_ms)
             el.fill(v, timeout=timeout_ms)
             got = (el.input_value() or "").strip()
+            if not got:
+                try:
+                    el.evaluate(
+                        """(node, val) => {
+                          node.value = val;
+                          ['input','change','blur'].forEach(k =>
+                            node.dispatchEvent(new Event(k, { bubbles: true })));
+                        }""",
+                        v,
+                    )
+                    got = (el.input_value() or "").strip()
+                except Exception:
+                    got = ""
             if not got:
                 return f"{step_id}: DOB readback empty after fill"
             if normalize_for_fuzzy_match(got) != normalize_for_fuzzy_match(v) and v not in got and got not in v:
@@ -4088,9 +4146,15 @@ def _proposal_step_checkbox(
                 if not rx.search(t):
                     continue
                 if want_checked and not cb.is_checked():
-                    cb.check(timeout=timeout_ms)
+                    try:
+                        cb.check(timeout=timeout_ms, force=True)
+                    except Exception:
+                        cb.check(timeout=timeout_ms)
                 elif not want_checked and cb.is_checked():
-                    cb.uncheck(timeout=timeout_ms)
+                    try:
+                        cb.uncheck(timeout=timeout_ms, force=True)
+                    except Exception:
+                        cb.uncheck(timeout=timeout_ms)
                 if cb.is_checked() != want_checked:
                     return (
                         f"{step_id}: checkbox readback want_checked={want_checked} "
@@ -4244,21 +4308,33 @@ def _proposal_step_usgi_uncheck(
     """CPA **USGI** checkbox (grid ``chlGMC``); force **unchecked** per SOP."""
     last_err = ""
     for root in _hero_misp_page_and_frame_roots(page, purpose="nav"):
-        for sel in (f"#{HERO_MISP_CPH1}_gridGMc_ctl02_chlGMC", "[id*='chlGMC']"):
+        try:
+            locs = root.locator("[id*='chlGMC']")
+            n = locs.count()
+        except Exception:
+            continue
+        for i in range(min(n, 48)):
             try:
-                loc = root.locator(sel)
-                if loc.count() == 0:
-                    continue
-                cb = loc.first
+                cb = locs.nth(i)
                 typ = (cb.get_attribute("type") or "").lower()
                 if typ != "checkbox":
+                    continue
+                ctx = _proposal_checkbox_context_text(cb)
+                if not re.search(r"\bUSGI\b", ctx, re.I):
                     continue
                 if not cb.is_visible(timeout=600):
                     _proposal_scroll_visible(cb, timeout_ms=timeout_ms)
                 if not cb.is_visible(timeout=2_000):
                     continue
                 if cb.is_checked():
-                    cb.uncheck(timeout=timeout_ms)
+                    cb.uncheck(timeout=timeout_ms, force=True)
+                if cb.is_checked():
+                    try:
+                        cb.evaluate(
+                            "e => { e.checked = false; e.dispatchEvent(new Event('change', { bubbles: true })); }"
+                        )
+                    except Exception:
+                        pass
                 if cb.is_checked():
                     return f"{step_id}: USGI checkbox still checked after uncheck"
                 _proposal_log(
@@ -4279,7 +4355,8 @@ def _proposal_step_usgi_uncheck(
 
 # CPA bottom add-on: portal label varies (NIC / CPI / Hero CPI / …); match by row text; state from ``form_insurance_view.hero_cpi``.
 HERO_MISP_HERO_CPI_ADDON_CHECKBOX_PATTERN = (
-    r"(?m)^\s*(NIC|CPI)\s*$|(?i)\b(NIC|CPI)\b|Hero\s*CPI|Consumer\s*Protection"
+    r"(?m)^\s*(NIC|CPI)\s*$|(?i)\b(NIC|CPI)\b|NIC\s*/\s*CPI|CPI\s*/\s*NIC|"
+    r"Hero\s*CPI|Consumer\s*Protection|Protection\s*Insurance|NIC\s*Cover|CPI\s*Cover"
 )
 
 
@@ -4461,11 +4538,26 @@ def _proposal_step_hdfc_payment(
         try:
             loc = _proposal_cph1_locator(root, "rdoHdfcCCType")
             if loc.count() > 0:
-                r = loc.first
-                if not r.is_visible(timeout=800):
-                    _proposal_scroll_visible(r, timeout_ms=timeout_ms)
-                if r.is_visible(timeout=1_500):
-                    r.check(timeout=timeout_ms)
+                for j in range(min(loc.count(), 6)):
+                    r = loc.nth(j)
+                    if not r.is_visible(timeout=800):
+                        _proposal_scroll_visible(r, timeout_ms=timeout_ms)
+                    if not r.is_visible(timeout=1_500):
+                        continue
+                    try:
+                        r.check(timeout=timeout_ms, force=True)
+                    except Exception:
+                        try:
+                            r.click(timeout=timeout_ms, force=True)
+                        except Exception:
+                            pass
+                    if not r.is_checked():
+                        try:
+                            r.evaluate(
+                                "e => { e.checked = true; e.dispatchEvent(new Event('click', { bubbles: true })); e.dispatchEvent(new Event('change', { bubbles: true })); }"
+                            )
+                        except Exception:
+                            pass
                     if r.is_checked():
                         _proposal_log(
                             ocr_output_dir,
@@ -4485,7 +4577,20 @@ def _proposal_step_hdfc_payment(
                 r = hdfc.nth(i)
                 if not r.is_visible(timeout=1_000):
                     continue
-                r.check(timeout=timeout_ms)
+                try:
+                    r.check(timeout=timeout_ms, force=True)
+                except Exception:
+                    try:
+                        r.click(timeout=timeout_ms, force=True)
+                    except Exception:
+                        pass
+                if not r.is_checked():
+                    try:
+                        r.evaluate(
+                            "e => { e.checked = true; e.dispatchEvent(new Event('click', { bubbles: true })); e.dispatchEvent(new Event('change', { bubbles: true })); }"
+                        )
+                    except Exception:
+                        pass
                 if not r.is_checked():
                     return f"{step_id}: HDFC radio still not checked after check()"
                 _proposal_log(
@@ -4940,7 +5045,8 @@ def _hero_misp_fill_vin_and_click_submit(
     )
 
     try:
-        page.wait_for_load_state("domcontentloaded", timeout=min(25_000, timeout_ms * 4))
+        pre_cap = max(500, min(int(INSURANCE_VIN_PRE_DOMCONTENTLOADED_MS), 60_000))
+        page.wait_for_load_state("domcontentloaded", timeout=pre_cap)
     except Exception:
         pass
 
@@ -5777,7 +5883,8 @@ def _hero_misp_fill_proposal_and_review(
         return _fail(err)
     err = _proposal_step_checkbox(
         page,
-        r"RTI\s*Cover|RTI\s*&?\s*Cover|Return\s+to\s+Invoice|Cover\s*[-–]?\s*RTI",
+        r"RTI\s*Cover|RTI\s*&?\s*Cover|R\.?T\.?I\.?\s*Cover|Return\s+to\s+Invoice|"
+        r"Return\s*to\s*Invoice\s*\(?\s*RTI|Invoice\s*Cover|Cover\s*[-–]?\s*RTI",
         True,
         "addon_rti",
         ocr_output_dir,
@@ -5787,8 +5894,17 @@ def _hero_misp_fill_proposal_and_review(
     if err:
         return _fail(err)
     for pat, want, sid in (
-        (r"^RSA$|RSA\s*cover|Road\s*Side", False, "addon_rsa"),
-        (r"Emergency\s*Medical|Expenses", False, "addon_emergency_medical"),
+        (
+            r"^RSA$|RSA\s*cover|RSA\s*Cover|Road\s*Side\s*Assist|Roadside\s*Assist",
+            False,
+            "addon_rsa",
+        ),
+        (
+            r"Emergency\s*Medical|Medical\s*Emergency|Emerg\.?\s*Medical|Expenses|"
+            r"Emergency\s*Medical\s*Expenses",
+            False,
+            "addon_emergency_medical",
+        ),
     ):
         err = _proposal_step_checkbox(
             page, pat, want, sid, ocr_output_dir, subfolder, timeout_ms=pt
@@ -6306,6 +6422,8 @@ def run_fill_insurance_only(
             return result
 
         page.set_default_timeout(INSURANCE_ACTION_TIMEOUT_MS)
+        t0_flow = time.monotonic()
+        _insurance_pre_elapsed_note(ocr_output_dir, subfolder, t0_flow, "page_open")
         # Real MISP (and similar): same automated Sign In as Hero ``pre_process`` — this endpoint
         # previously only waited for manual login (_wait_for_insurance_kyc_after_login).
         _insurance_click_settle(page)
@@ -6331,6 +6449,7 @@ def run_fill_insurance_only(
             )
         # Same MISP landing as Hero pre_process: after login, **2W** then **New Policy** before KYC / dummy fields.
         _hero_misp_after_sign_in_settle(page)
+        _insurance_pre_elapsed_note(ocr_output_dir, subfolder, t0_flow, "after_sign_in_settle")
         pages_before_2w = _misp_snapshot_context_pages(page)
         try:
             _click_2w_icon(page, timeout_ms=INSURANCE_ACTION_TIMEOUT_MS)
@@ -6356,6 +6475,7 @@ def run_fill_insurance_only(
             "NOTE",
             "run_fill_insurance_only: active tab after 2W",
         )
+        _insurance_pre_elapsed_note(ocr_output_dir, subfolder, t0_flow, "after_2w")
         _insurance_click_settle(page)
         pages_before_np = _misp_snapshot_context_pages(page)
         try:
@@ -6382,6 +6502,7 @@ def run_fill_insurance_only(
             "NOTE",
             "run_fill_insurance_only: active tab before KYC wait",
         )
+        _insurance_pre_elapsed_note(ocr_output_dir, subfolder, t0_flow, "after_new_policy")
 
         wait_err = _wait_for_insurance_kyc_after_login(page, insurance_base_url)
         if wait_err:
@@ -6391,6 +6512,7 @@ def run_fill_insurance_only(
             )
             return result
 
+        _insurance_pre_elapsed_note(ocr_output_dir, subfolder, t0_flow, "after_kyc_screen_ready")
         base = (insurance_base_url or "").strip().rstrip("/")
 
         # Real MISP ``ekycpage`` has no training-only ``#ins-company`` / ``#ins-mobile-no`` markup.
@@ -6416,7 +6538,10 @@ def run_fill_insurance_only(
                 )
                 return result
             try:
-                page.wait_for_load_state("domcontentloaded", timeout=25_000)
+                page.wait_for_load_state(
+                    "domcontentloaded",
+                    timeout=max(500, min(int(INSURANCE_VIN_PRE_DOMCONTENTLOADED_MS), 60_000)),
+                )
             except Exception:
                 pass
             _t(page, HERO_MISP_UI_SETTLE_MS)
@@ -6426,6 +6551,7 @@ def run_fill_insurance_only(
                 "NOTE",
                 "run_fill_insurance_only: real MISP KYC (post-mobile banner branch + Proceed or uploads) complete",
             )
+            _insurance_pre_elapsed_note(ocr_output_dir, subfolder, t0_flow, "after_kyc_fill")
             vin_to = _hero_misp_vin_step_timeout_ms(INSURANCE_ACTION_TIMEOUT_MS)
             append_playwright_insurance_line(
                 ocr_output_dir,
@@ -6447,6 +6573,7 @@ def run_fill_insurance_only(
                     ocr_output_dir, subfolder, "ERROR", f"run_fill_insurance_only: {vin_err}"
                 )
                 return result
+            _insurance_pre_elapsed_note(ocr_output_dir, subfolder, t0_flow, "after_vin_submit")
             result["success"] = True
             result["error"] = None
             try:

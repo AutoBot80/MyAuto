@@ -30,6 +30,7 @@ from app.db import get_connection
 from app.services.utility_functions import (
     clean_text,
     insurer_prefer_matches,
+    normalize_dob_for_misp,
     require_customer_vehicle_ids,
     safe_subfolder_name,
 )
@@ -55,7 +56,7 @@ def read_insurance_insurer_from_ocr_json(ocr_output_dir: Path | None, subfolder:
 
 
 def _apply_staging_insurance_overlay(values: dict, staging_payload: dict | None) -> None:
-    """Fill empty insurer / nominee / nominee_gender from staging ``insurance`` blob; merge **marital_status** from staging when set."""
+    """Fill empty insurer / DOB / nominee / nominee_gender from staging ``insurance`` / ``customer`` blobs; merge **marital_status** from staging when set."""
     if not staging_payload or not isinstance(staging_payload, dict):
         return
     ins = staging_payload.get("insurance") if isinstance(staging_payload.get("insurance"), dict) else {}
@@ -75,7 +76,8 @@ def _apply_staging_insurance_overlay(values: dict, staging_payload: dict | None)
             values[key] = t
 
     take_if_empty("insurer", ins.get("insurer"))
-    take_if_empty("nominee_name", ins.get("nominee_name"))
+    take_if_empty("dob", cust.get("date_of_birth") or cust.get("dob") or ins.get("dob"))
+    take_if_empty("nominee_name", ins.get("nominee_name") or cust.get("nominee_name"))
     take_if_empty("nominee_relationship", ins.get("nominee_relationship"))
     if not values.get("nominee_age") and ins.get("nominee_age") is not None:
         t = clean_text(str(ins.get("nominee_age")).strip())
@@ -118,8 +120,8 @@ def build_insurance_fill_values(
 ) -> dict:
     """
     Build MISP fill dict from ``form_insurance_view`` (chassis, customer, vehicle, dealer context).
-    When ``staging_payload`` is set (``add_sales_staging.payload_json``), fills empty **insurer** / **nominee**
-    fields from the embedded **insurance** object; **marital_status** is set from staging **customer** or **insurance**
+    When ``staging_payload`` is set (``add_sales_staging.payload_json``), fills empty **insurer** / **dob** / **nominee**
+    fields from the embedded **insurance** / **customer** objects; **marital_status** is set from staging **customer** or **insurance**
     when non-empty (overrides view-only values so MISP proposal matches Add Sales / OCR merge). OCR merge is available before
     ``insurance_master`` is populated after a **successful** Generate Insurance run (UPSERT). Insurer may still fall back to **OCR_To_be_Used.json** when view
     and staging lack it.
@@ -184,6 +186,8 @@ def build_insurance_fill_values(
             prefer[:120],
             merged_insurer[:120],
         )
+    dob_merged = clean_text(values.get("dob"))
+    values["dob"] = normalize_dob_for_misp(dob_merged) if dob_merged else ""
     required = [
         ("insurance_master.insurer (or staging / OCR details insurer)", values["insurer"]),
         ("customer_master.mobile_number", values["mobile_number"]),

@@ -9,6 +9,32 @@ def normalize_for_fuzzy_match(s: str) -> str:
     return re.sub(r"\s+", " ", (s or "").lower().strip())
 
 
+def normalize_dob_for_misp(dd_raw: str) -> str:
+    """
+    Normalize ``customer_master`` / view / staging date-of-birth strings to **dd/mm/yyyy** for MISP ``txtDOB``.
+    Accepts ISO ``yyyy-mm-dd`` (optional time / timezone suffix), ``dd/mm/yyyy``, ``dd-mm-yyyy``, ``dd.mm.yyyy``
+    with 1- or 2-digit day/month; passes through already-normalized slash forms when unambiguous.
+    """
+    v = (dd_raw or "").strip()
+    if not v:
+        return ""
+    if "T" in v:
+        v = v.split("T", 1)[0].strip()
+    else:
+        v = re.sub(r"\s+\d{1,2}:\d{2}.*$", "", v)
+        v = re.sub(r"\s+[+-]\d{2}:?\d{2}.*$", "", v)
+    v = v.strip()
+    m = re.match(r"^(\d{4})-(\d{1,2})-(\d{1,2})$", v)
+    if m:
+        y, mo, d = m.group(1), int(m.group(2)), int(m.group(3))
+        return f"{d:02d}/{mo:02d}/{y}"
+    m = re.match(r"^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})$", v)
+    if m:
+        d, mo, y = int(m.group(1)), int(m.group(2)), m.group(3)
+        return f"{d:02d}/{mo:02d}/{y}"
+    return v
+
+
 def insurer_prefer_matches(
     details_insurer: str,
     prefer_insurer: str,
