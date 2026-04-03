@@ -436,3 +436,4 @@ The SQL view **`form_dms_view`** is **removed**; the same mapping is implemented
 | 1.138 | Apr 2026 | — | **`insurance_form_values`**: consent-line insurer sanitization; **`prefer_insurer`** when merged insurer empty — **LLD** **6.223**; **BRD** **3.142**; **Database DDL** **2.64** |
 | 1.139 | Apr 2026 | — | **`AddSalesPage`**: **`normalizeInsurerOcrValue`** (consent SMS bleed); backend **`submit_info`** / **`add_sales_commit_service`** insurer sanitize — **LLD** **6.227**; **BRD** **3.146** |
 | 1.140 | Apr 2026 | — | **Add Sales** (**`formFieldSanitize`**): strip OCR/parenthetical junk from editable fields (leading allowed charset); **`submitInfo`** payload aligned — **LLD** **6.241** |
+| 1.141 | Apr 2026 | — | **`GET /dealers/{id}`** exposes **`prefer_insurer`**; Add Sales Insurance Provider + **`submitInfo`** default insurer when OCR empty — **LLD** **6.244** |

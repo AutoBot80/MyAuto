@@ -12,6 +12,7 @@ class DealerRefRepository:
             cur.execute(
                 """
                 SELECT d.dealer_id, d.dealer_name, d.oem_id, d.address, d.pin, d.city, d.state, d.parent_id, d.phone,
+                       d.prefer_insurer,
                        o.oem_name, o.dms_link
                 FROM dealer_ref d
                 LEFT JOIN oem_ref o ON o.oem_id = d.oem_id

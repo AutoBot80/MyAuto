@@ -193,6 +193,8 @@ interface AddSalesPageProps {
   dealerId: number;
   /** From GET /dealers/:id — Hero MotoCorp is ``1`` (financier staging remap rules). */
   oemId: number | null;
+  /** ``dealer_ref.prefer_insurer`` — shown and submitted when extracted ``insurer`` is empty. */
+  preferInsurer?: string | null;
   /** DMS base URL from GET /settings/site-urls (backend/.env DMS_BASE_URL). No client fallbacks. */
   dmsUrl?: string;
   /** True while fetching /settings/site-urls. */
@@ -203,7 +205,15 @@ interface AddSalesPageProps {
   autoNewTrigger?: number;
 }
 
-export function AddSalesPage({ dealerId, oemId, dmsUrl, siteUrlsLoading, siteUrlsError, autoNewTrigger }: AddSalesPageProps) {
+export function AddSalesPage({
+  dealerId,
+  oemId,
+  preferInsurer = null,
+  dmsUrl,
+  siteUrlsLoading,
+  siteUrlsError,
+  autoNewTrigger,
+}: AddSalesPageProps) {
   const pageVisible = usePageVisible();
   const [mobile, setMobile] = useState(() => getInitialForm().mobile);
   const [savedTo, setSavedTo] = useState<string | null>(() => getInitialForm().savedTo);
@@ -596,7 +606,7 @@ export function AddSalesPage({ dealerId, oemId, dmsUrl, siteUrlsLoading, siteUrl
           i.nominee_name,
           i.nominee_age,
           i.nominee_relationship,
-          i.insurer,
+          i.insurer ?? preferInsurer,
           i.policy_from,
           i.policy_to,
           i.premium,
@@ -1166,6 +1176,7 @@ export function AddSalesPage({ dealerId, oemId, dmsUrl, siteUrlsLoading, siteUrl
                           dealerId,
                           oemId,
                           stagingId: lastStagingId,
+                          preferInsurer,
                         });
                         setSubmitStatus("Saved");
                         setHasSubmittedInfo(true);
@@ -1798,7 +1809,7 @@ export function AddSalesPage({ dealerId, oemId, dmsUrl, siteUrlsLoading, siteUrl
                           <input
                             type="text"
                             className="add-sales-v2-dl-input"
-                            value={ins?.insurer ?? ""}
+                            value={ins?.insurer ?? preferInsurer ?? ""}
                             onChange={(e) =>
                             setExtractedInsurance((prev) => ({
                               ...(prev ?? {}),

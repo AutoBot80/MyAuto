@@ -92,7 +92,12 @@ function mapVehicle(v: ExtractedVehicleDetails | null): SubmitInfoPayload["vehic
   };
 }
 
-function mapInsurance(ins: ExtractedInsuranceDetails | null): SubmitInfoPayload["insurance"] {
+function mapInsurance(
+  ins: ExtractedInsuranceDetails | null,
+  preferInsurer?: string | null
+): SubmitInfoPayload["insurance"] {
+  const insurerFromDetails = sanitizeOptionalFormField(ins?.insurer);
+  const insurerFromDealer = sanitizeOptionalFormField(preferInsurer ?? undefined);
   return {
     nominee_name: sanitizeOptionalFormField(ins?.nominee_name),
     nominee_age:
@@ -101,7 +106,7 @@ function mapInsurance(ins: ExtractedInsuranceDetails | null): SubmitInfoPayload[
         : undefined,
     nominee_relationship: sanitizeOptionalFormField(ins?.nominee_relationship),
     nominee_gender: sanitizeOptionalFormField(ins?.nominee_gender),
-    insurer: sanitizeOptionalFormField(ins?.insurer),
+    insurer: insurerFromDetails ?? insurerFromDealer,
     policy_num: sanitizeOptionalFormField(ins?.policy_num),
     policy_from: sanitizeOptionalFormField(ins?.policy_from),
     policy_to: sanitizeOptionalFormField(ins?.policy_to),
@@ -120,12 +125,14 @@ export async function submitInfo(
     /** From GET /dealers/:id — used for Hero/Bajaj→Hinduja staging rule. */
     oemId?: number | null;
     stagingId?: string | null;
+    /** ``dealer_ref.prefer_insurer`` when details ``insurer`` is empty. */
+    preferInsurer?: string | null;
   }
 ): Promise<SubmitInfoResponse> {
   const payload: SubmitInfoPayload = {
     customer: mapCustomer(opts.customer, opts.mobile, opts.insurance, opts.fileLocation, opts.oemId),
     vehicle: mapVehicle(opts.vehicle),
-    insurance: mapInsurance(opts.insurance),
+    insurance: mapInsurance(opts.insurance, opts.preferInsurer),
     dealer_id: opts.dealerId,
     file_location: opts.fileLocation ?? undefined,
     staging_id: opts.stagingId ?? undefined,

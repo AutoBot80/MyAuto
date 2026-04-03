@@ -7390,8 +7390,10 @@ def _siebel_click_service_request_list_new_record(
     """
     Click **Service Request List:New** (toolbar ``+`` / ``siebui-icon-newrecord``).
 
-    Shared by **Pre-check** and **PDI** tabs: JS on ``s_3_1_12_0_Ctrl`` / ``s_2_2_32_0``, ``get_by_role`` (exact),
-    then CSS (skip **Service Request List: Menu**). See **LLD** **6.240**.
+    Shared by **Pre-check** and **PDI** tabs: JS tries known ids (``s_3_1_12_0_Ctrl``, several ``s_2_*``), then
+    scans visible ``siebui-icon-newrecord`` for **Service Request** / **PDI List** / **Precheck** ``List:New``
+    labels; ``get_by_role`` for those names; CSS (skip **Menu**). PDI often uses **PDI List:New** or ``s_2_*``
+    ids, not only **Service Request List:New**. See **LLD** **6.240**, **6.243**.
     """
     _tmo = min(int(action_timeout_ms or 3000), 4000)
 
@@ -7412,6 +7414,8 @@ def _siebel_click_service_request_list_new_record(
 
     _sr_new_selectors = (
         "button#s_3_1_12_0_Ctrl.siebui-icon-newrecord",
+        "button#s_2_1_12_0_Ctrl.siebui-icon-newrecord",
+        "button#s_2_2_31_0_Ctrl.siebui-icon-newrecord",
         "button.siebui-icon-newrecord[aria-label='Service Request List:New']",
         "button.siebui-icon-newrecord[title='Service Request List:New']",
         "button[data-display='New'][aria-label='Service Request List:New']",
@@ -7423,6 +7427,13 @@ def _siebel_click_service_request_list_new_record(
         "a[title='Service Request List:New']",
         "img[title='Service Request List:New']",
         "[title*='Service Request List:New' i]",
+        "[aria-label='PDI List:New']",
+        "[aria-label='Pdi List:New']",
+        "button[aria-label='PDI List:New']",
+        "a[aria-label='PDI List:New']",
+        "[aria-label*='PDI' i][aria-label*='List' i][aria-label*='New' i]",
+        "[title='PDI List:New']",
+        "[title*='PDI List:New' i]",
         "[aria-label='Precheck List:New']",
         "[aria-label='Pre-check List:New']",
         "a[aria-label='Precheck List:New']",
@@ -7439,56 +7450,95 @@ def _siebel_click_service_request_list_new_record(
         "[title*='Pre-check List:New' i]",
     )
 
+    # Pre-check tab usually exposes ``s_3_1_12_0_Ctrl``; PDI tab often uses ``s_2_*`` applets — try several
+    # ids, then scan all visible ``siebui-icon-newrecord`` buttons (same idea as Pre-check when labels match).
     _js_plus = """() => {
-        const tryClick = (hid) => {
-            const el = document.getElementById(hid);
-            if (!el || String(el.tagName).toLowerCase() !== 'button') return false;
-            if (!el.classList.contains('siebui-icon-newrecord')) return false;
+        const vis = (el) => {
+            if (!el) return false;
+            const st = window.getComputedStyle(el);
+            if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+            const r = el.getBoundingClientRect();
+            return r.width >= 2 && r.height >= 2;
+        };
+        const isListNewNotMenu = (el) => {
             const al = (el.getAttribute('aria-label') || '').toLowerCase();
             const tt = (el.getAttribute('title') || '').toLowerCase();
             const dd = (el.getAttribute('data-display') || '').trim();
-            if (!al.includes('service request list:new') && !tt.includes('service request list:new')
-                && dd !== 'New') {
-                return false;
-            }
-            const st = window.getComputedStyle(el);
-            if (st.display === 'none' || st.visibility === 'hidden') return false;
-            const r = el.getBoundingClientRect();
-            if (r.width < 2 || r.height < 2) return false;
+            const lab = al + ' ' + tt;
+            if (lab.includes('service request list: menu')) return false;
+            if (lab.includes('menu') && !lab.includes('list:new') && !lab.includes('list: new')) return false;
+            if (al.includes('service request list:new') || tt.includes('service request list:new')) return true;
+            if (al.includes('pdi list:new') || tt.includes('pdi list:new')) return true;
+            if (al.includes('precheck list:new') || al.includes('pre-check list:new')) return true;
+            if (tt.includes('precheck list:new') || tt.includes('pre-check list:new')) return true;
+            if (dd === 'New' && (lab.includes('list') || lab.includes('applet'))) return true;
+            if (lab.includes('list:new') || lab.includes('list : new')) return true;
+            return false;
+        };
+        const tryClickId = (hid) => {
+            const el = document.getElementById(hid);
+            if (!el || String(el.tagName).toLowerCase() !== 'button') return false;
+            if (!el.classList.contains('siebui-icon-newrecord')) return false;
+            const dd = (el.getAttribute('data-display') || '').trim();
+            const idOk =
+                isListNewNotMenu(el)
+                || (dd === 'New' && (hid.indexOf('s_2_') === 0 || hid.indexOf('s_3_1_12') === 0));
+            if (!idOk) return false;
+            if (!vis(el)) return false;
             try { el.scrollIntoView({ block: 'center' }); } catch (e) {}
             el.click();
             return true;
         };
-        return tryClick('s_3_1_12_0_Ctrl') || tryClick('s_2_2_32_0');
+        const ids = [
+            's_3_1_12_0_Ctrl', 's_2_2_32_0', 's_2_1_12_0_Ctrl', 's_2_2_31_0_Ctrl', 's_2_2_33_0_Ctrl',
+            's_2_1_11_0_Ctrl', 's_2_2_30_0_Ctrl',
+        ];
+        for (const hid of ids) {
+            if (tryClickId(hid)) return true;
+        }
+        const btns = Array.from(document.querySelectorAll('button.siebui-icon-newrecord'));
+        for (const el of btns) {
+            if (!vis(el) || !isListNewNotMenu(el)) continue;
+            try { el.scrollIntoView({ block: 'center' }); } catch (e) {}
+            el.click();
+            return true;
+        }
+        return false;
     }"""
 
     for _root in roots():
         try:
             if bool(_root.evaluate(_js_plus)):
                 note(
-                    f"{log_prefix}: clicked {context} + (JS: siebui-icon-newrecord, "
-                    "s_3_1_12_0_Ctrl or s_2_2_32_0, Service Request List:New)."
+                    f"{log_prefix}: clicked {context} + (JS: siebui-icon-newrecord — "
+                    "ids s_3_1_12_0_Ctrl / s_2_* or scan matching Service Request / PDI / Precheck List:New)."
                 )
                 return True
         except Exception:
             continue
 
-    for _root in roots():
-        for _role in ("link", "button"):
-            try:
-                _rl = _root.get_by_role(_role, name="Service Request List:New", exact=True)
-                if _rl.count() > 0 and _rl.first.is_visible(timeout=600):
-                    try:
-                        _rl.first.click(timeout=_tmo)
-                    except Exception:
-                        _rl.first.click(timeout=_tmo, force=True)
-                    note(
-                        f"{log_prefix}: clicked {context} + via role={_role!r} "
-                        "name=Service Request List:New."
-                    )
-                    return True
-            except Exception:
-                continue
+    for _sr_role_name in (
+        "Service Request List:New",
+        "PDI List:New",
+        "Precheck List:New",
+        "Pre-check List:New",
+    ):
+        for _root in roots():
+            for _role in ("link", "button"):
+                try:
+                    _rl = _root.get_by_role(_role, name=_sr_role_name, exact=True)
+                    if _rl.count() > 0 and _rl.first.is_visible(timeout=600):
+                        try:
+                            _rl.first.click(timeout=_tmo)
+                        except Exception:
+                            _rl.first.click(timeout=_tmo, force=True)
+                        note(
+                            f"{log_prefix}: clicked {context} + via role={_role!r} "
+                            f"name={_sr_role_name!r}."
+                        )
+                        return True
+                except Exception:
+                    continue
 
     for _root in roots():
         for _css in _sr_new_selectors:
@@ -9058,7 +9108,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             f"{log_prefix}: PDI new-row flow — Service Request list rowCount≈{_pdi_rows_before_new} "
             "(before New)."
         )
-        _safe_page_wait(page, 600, log_label="before_pdi_service_request_list_new")
+        _safe_page_wait(page, 1200, log_label="before_pdi_service_request_list_new")
         if not _siebel_click_service_request_list_new_record(
             page,
             roots=_roots,

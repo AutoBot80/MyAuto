@@ -97,7 +97,7 @@ backend/app/
 | POST | `/rto-queue/{application_id}/pay` | Optional downstream payment update. |
 | GET | `/customer-search/search` | Search by mobile or plate. |
 | GET | `/customer-search/form-vahan` | Get the `form_vahan_view` row for one customer/vehicle pair. |
-| GET | `/dealers/{dealer_id}` | Get dealer by ID. |
+| GET | `/dealers/{dealer_id}` | Get dealer by ID (includes **`prefer_insurer`** from **`dealer_ref`** for Add Sales insurer default). |
 | POST | `/admin/reset-all-data` | Truncate all public base tables except `oem_ref`, `dealer_ref`, and `oem_service_schedule`. |
 | GET | `/documents/{subfolder}/list` | List documents in subfolder. |
 | GET | `/documents/{subfolder}/{filename}` | Download document. |
@@ -630,3 +630,5 @@ See **Documentation/Database DDL.md** for full table structures. Summary:
 | 6.240 | Apr 2026 | — | **`_siebel_click_service_request_list_new_record`**: shared **Pre-check** + **PDI** **Service Request List:New** (JS **`s_3_1_12_0_Ctrl`** / **`s_2_2_32_0`**, role, CSS, Menu guard) — **§2.4d** |
 | 6.241 | Apr 2026 | — | **Add Sales client**: **`formFieldSanitize`** — free-text fields keep only the leading run of allowed characters (same charset as **`ALLOWED_CHAR_REGEX`** on **`AddSalesPage`**); **`sanitizeOptionalFormField`** on OCR merge, session load, **`submitInfo`** maps, **`normalizeVehicleDetails`**; nominee age digits-only — **§2.2a** / client |
 | 6.242 | Apr 2026 | — | **Pre-check existing-row probe:** **`isPrecheckScoped`** also matches **Service Request List** / **applet** text and **`gview_s_3`** / **`s_3_*_l`** jqGrid ids; **`isPdiGrid`** excludes **`gview_s_2`** / **`s_2_l`** so PDI grids are not counted — restores skip-to-PDI when Precheck rows exist but DOM omits “Precheck” in ancestors — **§2.4d** (extends **6.228** / **6.237**) |
+| 6.243 | Apr 2026 | — | **`_siebel_click_service_request_list_new_record`**: PDI parity — JS **`isListNewNotMenu`** accepts **PDI List:New** / **Precheck** list labels; extra **`s_2_*_Ctrl`** ids; fallback scan of **`siebui-icon-newrecord`**; **get_by_role** **PDI List:New** (and Precheck); CSS **PDI List:New**; **`before_pdi_service_request_list_new`** **1200** ms — **§2.4d** |
+| 6.244 | Apr 2026 | — | **Add Sales client:** **`GET /dealers/{id}`** includes **`prefer_insurer`**; **`submitInfo`** / Insurance Provider field use **`dealer_ref.prefer_insurer`** when extracted **`insurer`** is empty — **API** table; **`DealerRefRepository.get_by_id`** |

@@ -13,6 +13,8 @@ export interface Dealer {
   state: string | null;
   parent_id: number | null;
   phone: string | null;
+  /** Optional canonical MISP insurer label from ``dealer_ref``; used when details insurer is empty. */
+  prefer_insurer?: string | null;
 }
 
 export async function getDealer(dealerId: number): Promise<Dealer> {

@@ -65,6 +65,7 @@ function App() {
   const [dealerName, setDealerName] = useState<string>("—");
   const [dealerCity, setDealerCity] = useState<string | null>(null);
   const [dealerOemId, setDealerOemId] = useState<number | null>(null);
+  const [dealerPreferInsurer, setDealerPreferInsurer] = useState<string | null>(null);
   const [siteUrls, setSiteUrls] = useState<SiteUrls | null>(null);
   const [siteUrlsError, setSiteUrlsError] = useState<string | null>(null);
   const [addSalesAutoNewTrigger, setAddSalesAutoNewTrigger] = useState(0);
@@ -75,6 +76,7 @@ function App() {
         setDealerName(d.dealer_name);
         setDealerCity(d.city ?? null);
         setDealerOemId(d.oem_id ?? null);
+        setDealerPreferInsurer(d.prefer_insurer ?? null);
       })
       .catch(() => setDealerName("Dealer"));
   }, []);
@@ -125,6 +127,7 @@ function App() {
           <AddSalesPage
             dealerId={DEALER_ID}
             oemId={dealerOemId}
+            preferInsurer={dealerPreferInsurer}
             dmsUrl={dmsUrl}
             siteUrlsError={siteUrlsError}
             siteUrlsLoading={!siteUrls && !siteUrlsError}
