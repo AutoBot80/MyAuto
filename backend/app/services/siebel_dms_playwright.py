@@ -7293,6 +7293,91 @@ def _siebel_pdi_expiry_still_valid(
     return False, _best_d, _best_dt_ist
 
 
+def _siebel_lov_pick_first_row_ok_pdi_style(
+    page: Page,
+    *,
+    roots: Callable[[], list],
+    action_timeout_ms: int,
+    note,
+    log_prefix: str,
+    stage_label: str,
+) -> tuple[bool, bool]:
+    """
+    PDI **Service Request** pick-applet pattern (shared with Pre-check **Technician** LOV).
+
+    Sequence matches the inline PDI block: **800ms** settle → click first plausible table data row
+    (``table tbody tr`` / ``table tr``) → **600ms** → click **OK** (five selectors, **500ms** visibility) →
+    **1000ms** → **400ms** after-dialog settle.
+
+    Returns ``(row_clicked, ok_clicked)``. Caller may require both before **Submit** / **Ctrl+S**.
+    """
+    _tmo = min(int(action_timeout_ms or 3000), 4000)
+    _safe_page_wait(page, 800, log_label=f"after_{stage_label}_lov_pdi_style_settle")
+    _row_hit = False
+    for root in roots():
+        try:
+            _row_result = root.evaluate("""() => {
+                const vis = (el) => {
+                    if (!el) return false;
+                    const st = window.getComputedStyle(el);
+                    if (st.display === 'none' || st.visibility === 'hidden') return false;
+                    const r = el.getBoundingClientRect();
+                    return r.width > 0 && r.height > 0;
+                };
+                const rows = Array.from(document.querySelectorAll('table tbody tr, table tr'));
+                for (const tr of rows) {
+                    if (!vis(tr)) continue;
+                    const tds = tr.querySelectorAll('td');
+                    if (tds.length < 2) continue;
+                    const cls = (tr.className || '').toLowerCase();
+                    if (cls.includes('jqgfirstrow') || cls.includes('header')) continue;
+                    const txt = (tr.textContent || '').trim();
+                    if (!txt || txt.length < 3) continue;
+                    const clickable = tr.querySelector('a, input[type="radio"], input[type="checkbox"], td');
+                    if (clickable) { clickable.click(); } else { tr.click(); }
+                    return 'row_clicked';
+                }
+                return '';
+            }""")
+            if _row_result:
+                _row_hit = True
+                note(f"{log_prefix}: picked first row in pick applet ({stage_label}).")
+                _safe_page_wait(page, 600, log_label=f"after_{stage_label}_row_pick")
+                break
+        except Exception:
+            continue
+
+    _ok_done = False
+    for root in roots():
+        for ok_css in (
+            "button[aria-label*='OK' i]",
+            "a[aria-label*='OK' i]",
+            "input[type='button'][value='OK' i]",
+            "button:has-text('OK')",
+            "a:has-text('OK')",
+        ):
+            try:
+                ok_loc = root.locator(ok_css).first
+                if ok_loc.count() > 0 and ok_loc.is_visible(timeout=500):
+                    try:
+                        ok_loc.click(timeout=_tmo)
+                    except Exception:
+                        ok_loc.click(timeout=_tmo, force=True)
+                    _ok_done = True
+                    note(f"{log_prefix}: clicked OK on pick applet ({stage_label}).")
+                    _safe_page_wait(page, 1000, log_label=f"after_{stage_label}_ok")
+                    break
+            except Exception:
+                continue
+        if _ok_done:
+            break
+    if not _ok_done:
+        note(f"{log_prefix}: OK button not found on pick applet ({stage_label}) (best-effort).")
+
+    _safe_page_wait(page, 400, log_label=f"after_{stage_label}_lov_close_settle")
+    return _row_hit, _ok_done
+
+
 def _siebel_run_vehicle_serial_detail_precheck_pdi(
     page: Page,
     *,
@@ -7310,10 +7395,13 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     Shared by ``prepare_vehicle`` and ``_attach_vehicle_to_bkg``. Third Level View Bar tabs are
     clicked by label (with hyphen-insensitive match for **Pre-check** vs **PreCheck**). Tab ``ui-id-*``
     values are dynamic across runs/tenants, so fixed tab ids are not treated as primary selectors.
-    Applet controls: Pre-check **Technician** pick icon ``s_3_2_25_0_icon`` (tenant-current), legacy
-    ``s_3_1_12_0_Ctrl``; PDI **Service Request List:New** (``title`` / ``aria-label`` — the ``+`` on many
-    tenants). Legacy ids ``s_2_2_32_0_icon`` / ``s_2_2_32_0`` are optional follow-ups when a second
-    chrome control exists after **New**.
+    **Pre-check list ``+``:** Same idea as PDI — ``Precheck List:New`` / ``Pre-check List:New`` (``aria-label`` /
+    ``title``) before the **Open** pick; then **Technician** pick must target the **second** pick icon when
+    generic ``siebui-icon-picklist`` CSS is used (``.first`` would re-click **Open**). PDI: **Service Request List:New**
+    then optional legacy ``s_2_2_32_0_icon`` / ``s_2_2_32_0``. After the **Technician** pick icon, **Open** still uses
+    ``_pick_first_row_and_ok``; **Technician** uses ``_siebel_lov_pick_first_row_ok_pdi_style`` (same settle / first row /
+    **OK** / settle as the PDI pick applet). Pre-check **Technician** ids: ``s_3_2_25_0_icon``, ``s_3_1_12_0_Ctrl``,
+    alternates for the Technician column.
 
     **Pre-check existing rows:** Before creating a row, the flow probes for an existing Pre-check list row.
     The probe counts only ``table.ui-jqgrid-btable`` grids under a **Precheck** / **Pre-check** applet
@@ -7901,7 +7989,12 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     def _click_precheck_pick_icon(stage_label: str) -> tuple[bool, str]:
         _used = ""
         _ok = False
-        for _pc_pick_id in ("s_3_2_25_0_icon", "s_3_1_12_0_Ctrl"):
+        _pick_ids = ["s_3_2_25_0_icon", "s_3_1_12_0_Ctrl"]
+        if "technician" in (stage_label or "").lower():
+            _pick_ids.extend(
+                ("s_3_2_26_0_icon", "s_3_2_24_0_icon", "s_3_3_25_0_icon", "s_3_3_26_0_icon")
+            )
+        for _pc_pick_id in _pick_ids:
             if _siebel_click_by_id_anywhere(
                 page,
                 _pc_pick_id,
@@ -7915,6 +8008,50 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 _ok = True
                 _used = _pc_pick_id
                 break
+        if not _ok:
+            _css_fb = (
+                "a.siebui-icon-picklist",
+                "img.siebui-icon-picklist",
+                "[class*='siebui-icon-picklist' i]",
+                "a[title*='Pick' i]",
+                "img[title*='Pick' i]",
+            )
+            _is_tech = "technician" in (stage_label or "").lower()
+            # Technician column: .first matches the Open column's pick again — prefer 2nd/3rd match.
+            _nth_try = (1, 0, 2, 3) if _is_tech else (0,)
+            for _css in _css_fb:
+                for _root in _roots():
+                    try:
+                        _grp = _root.locator(_css)
+                        _nmax = _grp.count()
+                        if _nmax < 1:
+                            continue
+                        for _ni in _nth_try:
+                            if _ni >= _nmax:
+                                continue
+                            _loc = _grp.nth(_ni)
+                            if not _loc.is_visible(timeout=700):
+                                continue
+                            try:
+                                _loc.scroll_into_view_if_needed(timeout=800)
+                            except Exception:
+                                pass
+                            try:
+                                _loc.click(timeout=_tmo)
+                            except Exception:
+                                _loc.click(timeout=_tmo, force=True)
+                            _ok, _used = True, f"{_css}@nth={_ni}"
+                            note(
+                                f"{log_prefix}: Pre-check pick via CSS {_css!r} nth={_ni} [{stage_label}] "
+                                "(fallback after id misses)."
+                            )
+                            break
+                        if _ok:
+                            break
+                    except Exception:
+                        continue
+                if _ok:
+                    break
         # region agent log
         try:
             import json as _json_pc_icon_stage
@@ -7936,7 +8073,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                                 "stage": stage_label,
                                 "ok": _ok,
                                 "used_id": _used,
-                                "tried_ids": ["s_3_2_25_0_icon", "s_3_1_12_0_Ctrl"],
+                                "tried_ids": list(_pick_ids) + ["CSS fallbacks if ids miss"],
                             },
                             "timestamp": _ts_ist_iso(),
                         },
@@ -7997,6 +8134,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 pass
 
         _safe_page_wait(page, 600, log_label=f"before_{stage_label}_pick_row")
+        _row_clicked = False
         for root in _roots():
             try:
                 _row_result = root.evaluate("""() => {
@@ -8007,13 +8145,27 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                         const r = el.getBoundingClientRect();
                         return r.width > 0 && r.height > 0;
                     };
-                    const rows = Array.from(document.querySelectorAll('table tbody tr, table tr'));
+                    const selectors = [
+                        'table.ui-jqgrid-btable tbody tr.jqgrow',
+                        'table tbody tr.jqgrow',
+                        'table tbody tr[role="row"]',
+                        'table tbody tr',
+                        'table tr',
+                    ];
+                    let rows = [];
+                    for (const sel of selectors) {
+                        rows = Array.from(document.querySelectorAll(sel)).filter(vis);
+                        if (rows.length) break;
+                    }
                     for (const tr of rows) {
                         if (!vis(tr)) continue;
                         const tds = tr.querySelectorAll('td');
                         if (tds.length < 2) continue;
                         const cls = (tr.className || '').toLowerCase();
-                        if (cls.includes('jqgfirstrow') || cls.includes('header')) continue;
+                        if (cls.includes('jqgfirstrow') || cls.includes('ui-jqgrid-labels') || cls.includes('jqg-empty')) {
+                            continue;
+                        }
+                        if (cls.includes('header')) continue;
                         const txt = (tr.textContent || '').trim();
                         if (!txt || txt.length < 3) continue;
                         const clickable = tr.querySelector('a, input[type="radio"], input[type="checkbox"], td');
@@ -8023,36 +8175,59 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                     return '';
                 }""")
                 if _row_result:
+                    _row_clicked = True
                     note(f"{log_prefix}: picked first row in pick applet ({stage_label}).")
                     _safe_page_wait(page, 600, log_label=f"after_{stage_label}_row_pick")
                     break
             except Exception:
                 continue
 
-        _ok_done_local = False
-        for root in _roots():
-            for ok_css in (
-                "button[aria-label*='OK' i]",
-                "a[aria-label*='OK' i]",
-                "input[type='button'][value='OK' i]",
-                "button:has-text('OK')",
-                "a:has-text('OK')",
-            ):
-                try:
-                    ok_loc = root.locator(ok_css).first
-                    if ok_loc.count() > 0 and ok_loc.is_visible(timeout=500):
-                        try:
-                            ok_loc.click(timeout=_tmo)
-                        except Exception:
-                            ok_loc.click(timeout=_tmo, force=True)
-                        _ok_done_local = True
-                        note(f"{log_prefix}: clicked OK on pick applet ({stage_label}).")
-                        _safe_page_wait(page, 1000, log_label=f"after_{stage_label}_ok")
-                        break
-                except Exception:
-                    continue
-            if _ok_done_local:
-                break
+        if _row_clicked:
+            try:
+                page.keyboard.press("Enter")
+                _safe_page_wait(page, 450, log_label=f"after_{stage_label}_row_enter_commit")
+            except Exception:
+                pass
+
+        _ok_selectors = (
+            "button[aria-label*='OK' i]",
+            "a[aria-label*='OK' i]",
+            "input[type='button'][value='OK' i]",
+            "input[type='submit'][value*='OK' i]",
+            "input[type='button'][value*='OK' i]",
+            "button:has-text('OK')",
+            "a:has-text('OK')",
+            "[role='button'][aria-label*='OK' i]",
+            "button.siebui-btn-primary:has-text('OK')",
+            "input[type='submit'][value='OK' i]",
+        )
+
+        def _scan_ok() -> bool:
+            for root in _roots():
+                for ok_css in _ok_selectors:
+                    try:
+                        ok_loc = root.locator(ok_css).first
+                        if ok_loc.count() > 0 and ok_loc.is_visible(timeout=600):
+                            try:
+                                ok_loc.click(timeout=_tmo)
+                            except Exception:
+                                ok_loc.click(timeout=_tmo, force=True)
+                            note(f"{log_prefix}: clicked OK on pick applet ({stage_label}).")
+                            _safe_page_wait(page, 1000, log_label=f"after_{stage_label}_ok")
+                            return True
+                    except Exception:
+                        continue
+            return False
+
+        _ok_done_local = _scan_ok()
+        if not _ok_done_local and _row_clicked:
+            try:
+                page.keyboard.press("Enter")
+                _safe_page_wait(page, 500, log_label=f"after_{stage_label}_second_enter_for_ok")
+            except Exception:
+                pass
+            _ok_done_local = _scan_ok()
+
         if not _ok_done_local:
             note(f"{log_prefix}: OK button not found on pick applet ({stage_label}; best-effort).")
         # region agent log
@@ -8075,6 +8250,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                             "data": {
                                 "stage": stage_label,
                                 "ok_clicked": _ok_done_local,
+                                "row_clicked": _row_clicked,
                                 "had_search_or_enter_fallback": _pick_ok,
                             },
                             "timestamp": _ts_ist_iso(),
@@ -8086,7 +8262,56 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         except Exception:
             pass
         # endregion agent log
-        return _ok_done_local
+        if _ok_done_local:
+            return True
+        if _row_clicked:
+            note(
+                f"{log_prefix}: pick applet ({stage_label}): row selected; OK control not found — "
+                "treating step as complete (Siebel often commits on row/Enter)."
+            )
+            return True
+        return False
+
+    if not _precheck_already_present:
+        _pc_new_clicked = False
+        _pc_new_selectors = [
+            "[aria-label='Precheck List:New']",
+            "[aria-label='Pre-check List:New']",
+            "a[aria-label='Precheck List:New']",
+            "a[aria-label='Pre-check List:New']",
+            "button[aria-label='Precheck List:New']",
+            "button[aria-label='Pre-check List:New']",
+            "[aria-label*='Precheck' i][aria-label*='New' i]",
+            "[aria-label*='Pre-check' i][aria-label*='New' i]",
+            "[title='Precheck List:New']",
+            "[title='Pre-check List:New']",
+            "a[title='Precheck List:New']",
+            "img[title='Precheck List:New']",
+            "[title*='Precheck List:New' i]",
+            "[title*='Pre-check List:New' i]",
+        ]
+        for root in _roots():
+            if _pc_new_clicked:
+                break
+            for css in _pc_new_selectors:
+                try:
+                    loc = root.locator(css).first
+                    if loc.count() > 0 and loc.is_visible(timeout=700):
+                        try:
+                            loc.click(timeout=_tmo)
+                        except Exception:
+                            loc.click(timeout=_tmo, force=True)
+                        _pc_new_clicked = True
+                        break
+                except Exception:
+                    continue
+        if not _pc_new_clicked:
+            return (
+                False,
+                "Could not click Pre-check list '+' (Precheck List:New / Pre-check List:New not found).",
+            )
+        note(f"{log_prefix}: clicked Pre-check list New (+).")
+        _safe_page_wait(page, 1200, log_label="after_precheck_list_new")
 
     _precheck_icon_ok = True
     _precheck_icon_used = ""
@@ -8182,11 +8407,24 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 "Pick applet for Technician did not open; Pre-check Submit and PDI were skipped.",
             )
         note(f"{log_prefix}: technician pick icon clicked after Tab (id={_tech_icon_used!r}).")
-        _tech_pick_complete = _pick_first_row_and_ok("precheck_technician_after_tab")
-        if not _tech_pick_complete:
+        _tech_row_ok, _tech_ok_done = _siebel_lov_pick_first_row_ok_pdi_style(
+            page,
+            roots=_roots,
+            action_timeout_ms=action_timeout_ms,
+            note=note,
+            log_prefix=log_prefix,
+            stage_label="Pre-check Technician",
+        )
+        if not _tech_row_ok:
             return (
                 False,
-                "Pre-check: Technician pick applet did not complete (row/OK not confirmed). "
+                "Pre-check: Technician pick applet did not select a row (same sequence as PDI pick). "
+                "Pre-check Submit and PDI were skipped.",
+            )
+        if not _tech_ok_done:
+            return (
+                False,
+                "Pre-check: Technician pick applet OK was not clicked. "
                 "Pre-check Submit and PDI were skipped.",
             )
 
@@ -8217,7 +8455,15 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             if _submit_done:
                 break
         if not _submit_done:
-            return False, "Could not click Submit button on Pre-check."
+            try:
+                page.keyboard.press("Control+s")
+                _safe_page_wait(page, 1200, log_label="after_precheck_ctrl_s_save")
+                _submit_done = True
+                note(f"{log_prefix}: Pre-check record save via Ctrl+S (no Submit control matched).")
+            except Exception:
+                pass
+        if not _submit_done:
+            return False, "Could not click Submit on Pre-check or save with Ctrl+S."
 
         _submit_err = _detect_siebel_error_popup(page, content_frame_selector)
         if _submit_err:
@@ -8605,65 +8851,14 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 "continuing after Service Request List:New only."
             )
 
-        _safe_page_wait(page, 800, log_label="after_pdi_pick_icon_settle")
-        for root in _roots():
-            try:
-                _pdi_row_result = root.evaluate("""() => {
-                    const vis = (el) => {
-                        if (!el) return false;
-                        const st = window.getComputedStyle(el);
-                        if (st.display === 'none' || st.visibility === 'hidden') return false;
-                        const r = el.getBoundingClientRect();
-                        return r.width > 0 && r.height > 0;
-                    };
-                    const rows = Array.from(document.querySelectorAll('table tbody tr, table tr'));
-                    for (const tr of rows) {
-                        if (!vis(tr)) continue;
-                        const tds = tr.querySelectorAll('td');
-                        if (tds.length < 2) continue;
-                        const cls = (tr.className || '').toLowerCase();
-                        if (cls.includes('jqgfirstrow') || cls.includes('header')) continue;
-                        const txt = (tr.textContent || '').trim();
-                        if (!txt || txt.length < 3) continue;
-                        const clickable = tr.querySelector('a, input[type="radio"], input[type="checkbox"], td');
-                        if (clickable) { clickable.click(); } else { tr.click(); }
-                        return 'row_clicked';
-                    }
-                    return '';
-                }""")
-                if _pdi_row_result:
-                    note(f"{log_prefix}: picked first row in PDI applet.")
-                    _safe_page_wait(page, 600, log_label="after_pdi_row_pick")
-                    break
-            except Exception:
-                continue
-
-        _pdi_ok_done = False
-        for root in _roots():
-            for ok_css in (
-                "button[aria-label*='OK' i]",
-                "a[aria-label*='OK' i]",
-                "input[type='button'][value='OK' i]",
-                "button:has-text('OK')",
-                "a:has-text('OK')",
-            ):
-                try:
-                    ok_loc = root.locator(ok_css).first
-                    if ok_loc.count() > 0 and ok_loc.is_visible(timeout=500):
-                        try:
-                            ok_loc.click(timeout=_tmo)
-                        except Exception:
-                            ok_loc.click(timeout=_tmo, force=True)
-                        _pdi_ok_done = True
-                        note(f"{log_prefix}: clicked OK on PDI pick applet.")
-                        _safe_page_wait(page, 1000, log_label="after_pdi_ok")
-                        break
-                except Exception:
-                    continue
-            if _pdi_ok_done:
-                break
-        if not _pdi_ok_done:
-            note(f"{log_prefix}: OK button not found on PDI pick applet (best-effort).")
+        _siebel_lov_pick_first_row_ok_pdi_style(
+            page,
+            roots=_roots,
+            action_timeout_ms=action_timeout_ms,
+            note=note,
+            log_prefix=log_prefix,
+            stage_label="PDI",
+        )
 
         _pdi_submit_done = False
         for root in _roots():
