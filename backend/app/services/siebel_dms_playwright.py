@@ -7395,8 +7395,9 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     Shared by ``prepare_vehicle`` and ``_attach_vehicle_to_bkg``. Third Level View Bar tabs are
     clicked by label (with hyphen-insensitive match for **Pre-check** vs **PreCheck**). Tab ``ui-id-*``
     values are dynamic across runs/tenants, so fixed tab ids are not treated as primary selectors.
-    **Pre-check list ``+``:** Prefer **Service Request List:New** (same chrome as **PDI**); alternate
-    ``Precheck List:New`` / ``Pre-check List:New``. Skip **Service Request List: Menu**. Then **Technician** pick must target the **second** pick icon when
+    **Pre-check list ``+``:** **Service Request** applet header — ``button#s_3_1_12_0_Ctrl`` with class
+    ``siebui-icon-newrecord`` (``title``/``aria-label`` = **Service Request List:New**); also **Service Request List:New**
+    / ``Precheck List:New`` by role or CSS. Skip **Service Request List: Menu**. Then **Technician** pick must target the **second** pick icon when
     generic ``siebui-icon-picklist`` CSS is used (``.first`` would re-click **Open**). PDI: **Service Request List:New**
     then optional legacy ``s_2_2_32_0_icon`` / ``s_2_2_32_0``. After the **Technician** pick icon, **Open** still uses
     ``_pick_first_row_and_ok``; **Technician** uses ``_siebel_lov_pick_first_row_ok_pdi_style`` (same settle / first row /
@@ -8274,9 +8275,16 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
 
     if not _precheck_already_present:
         _pc_new_clicked = False
+        # **+** is often ``button#s_3_1_12_0_Ctrl.siebui-icon-newrecord`` (``title``/``aria-label`` = Service Request List:New)
+        # in the **Service Request** applet header — same ``id`` may exist in another frame as a different control, so
+        # require ``siebui-icon-newrecord`` (do not use bare ``#s_3_1_12_0`` for +).
         # Pre-check tab often exposes the same **Service Request List:New** chrome as PDI (not "Precheck List:New").
         # **Service Request List: Menu** is a different control — never treat it as '+'.
         _pc_new_selectors = [
+            "button#s_3_1_12_0_Ctrl.siebui-icon-newrecord",
+            "button.siebui-icon-newrecord[aria-label='Service Request List:New']",
+            "button.siebui-icon-newrecord[title='Service Request List:New']",
+            "button[data-display='New'][aria-label='Service Request List:New']",
             "[aria-label='Service Request List:New']",
             "a[aria-label='Service Request List:New']",
             "button[aria-label='Service Request List:New']",
@@ -8315,6 +8323,37 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             if al.endswith(":New") or tt.endswith(":New"):
                 return True
             return False
+
+        for root in _roots():
+            try:
+                _pc_js_new = root.evaluate("""() => {
+                    const el = document.getElementById("s_3_1_12_0_Ctrl");
+                    if (!el || String(el.tagName).toLowerCase() !== 'button') return false;
+                    if (!el.classList.contains('siebui-icon-newrecord')) return false;
+                    const al = (el.getAttribute('aria-label') || '').toLowerCase();
+                    const tt = (el.getAttribute('title') || '').toLowerCase();
+                    const dd = (el.getAttribute('data-display') || '').trim();
+                    if (!al.includes('service request list:new') && !tt.includes('service request list:new')
+                        && dd !== 'New') {
+                        return false;
+                    }
+                    const st = window.getComputedStyle(el);
+                    if (st.display === 'none' || st.visibility === 'hidden') return false;
+                    const r = el.getBoundingClientRect();
+                    if (r.width < 2 || r.height < 2) return false;
+                    try { el.scrollIntoView({ block: 'center' }); } catch (e) {}
+                    el.click();
+                    return true;
+                }""")
+                if _pc_js_new:
+                    _pc_new_clicked = True
+                    note(
+                        f"{log_prefix}: clicked Pre-check + (JS: "
+                        "button#s_3_1_12_0_Ctrl.siebui-icon-newrecord, Service Request List:New)."
+                    )
+                    break
+            except Exception:
+                continue
 
         for root in _roots():
             if _pc_new_clicked:
@@ -8359,7 +8398,8 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             return (
                 False,
                 "Could not click Pre-check list '+' "
-                "(tried Service Request List:New / Precheck List:New; skipped Service Request List: Menu).",
+                "(tried button#s_3_1_12_0_Ctrl.siebui-icon-newrecord, Service Request List:New, Precheck List:New; "
+                "skipped Service Request List: Menu).",
             )
         note(f"{log_prefix}: clicked Pre-check list New (+).")
         _safe_page_wait(page, 1200, log_label="after_precheck_list_new")
