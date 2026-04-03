@@ -737,6 +737,60 @@ def _parse_aadhar_front_textract_fallback(text: str) -> dict[str, str]:
     return out
 
 
+_AADHAR_TEXTRACT_NAME_TITLE_WORD = re.compile(r"^[A-Z][a-z]+(?:['-][A-Z][a-z]+)?$")
+
+
+def _aadhaar_name_line_score_for_textract(line: str, *, skip: re.Pattern[str], noise: re.Pattern[str]) -> int:
+    """
+    Score a single OCR line as a likely holder name. Higher is better; -1 = reject.
+    Favors two (or more) Latin title-case words (e.g. "Nishant Kumar") over one
+    all-lowercase garbage token (e.g. misread "amit") or mixed OCR ("Prints gHR").
+    """
+    line = line.strip()
+    if len(line) < 2 or len(line) > 80:
+        return -1
+    if skip.search(line) or noise.search(line):
+        return -1
+    if re.search(r"\d", line):
+        return -1
+    if not re.match(r"^[A-Za-z][A-Za-z\s.'-]{1,70}$", line):
+        return -1
+    words = [w for w in line.split() if w.strip()]
+    if not words or len(words) > 6:
+        return -1
+    tc = sum(1 for w in words if _AADHAR_TEXTRACT_NAME_TITLE_WORD.match(w))
+    if tc >= 2:
+        return 100 + tc
+    if tc == 1 and len(words) >= 2:
+        return 25
+    if tc == 1 and len(words) == 1:
+        return 30
+    if all(w.islower() for w in words):
+        return 2
+    return 10
+
+
+def _pick_best_aadhaar_name_from_textract_lines(
+    lines_slice: list[str],
+    *,
+    skip: re.Pattern[str],
+    noise: re.Pattern[str],
+    min_score: int = 30,
+) -> str | None:
+    best_line: str | None = None
+    best_sc = -1
+    for line in lines_slice:
+        sc = _aadhaar_name_line_score_for_textract(line, skip=skip, noise=noise)
+        if sc < 0:
+            continue
+        if sc > best_sc:
+            best_sc = sc
+            best_line = line.strip()
+    if best_line is not None and best_sc >= min_score:
+        return best_line
+    return None
+
+
 def _parse_aadhar_name_from_aadhaar_textract(text: str) -> dict[str, str]:
     """
     Heuristic name line on Aadhaar **front** when Textract text has no clear name field.
@@ -754,41 +808,48 @@ def _parse_aadhar_name_from_aadhaar_textract(text: str) -> dict[str, str]:
     gov_line = re.compile(r"(?i)government\s+of\s+india")
     noise = re.compile(r"(?i)\b(famoy|family|service|assess|authority|unique)\b")
     candidates: list[str] = []
-
-    # Aadhaar letter: name is the first English title-case line after "Aadhaar no. issued:"
     issued_re = re.compile(r"(?i)aadhaar\s+no\.?\s*\.?\s*issued")
+
+    gov_idx = next((i for i, line in enumerate(lines[:30]) if gov_line.search(line)), -1)
+    issued_idx = next((i for i, line in enumerate(lines[:30]) if issued_re.search(line)), -1)
+
+    # Letter layout: holder name sits between "Government of India" and "Aadhaar no. issued:".
+    # Do not take the *first* alphabetic line after Gov (OCR often inserts garbage like "amitt").
+    if gov_idx >= 0 and issued_idx > gov_idx:
+        picked = _pick_best_aadhaar_name_from_textract_lines(
+            lines[gov_idx + 1 : issued_idx],
+            skip=skip,
+            noise=noise,
+            min_score=30,
+        )
+        if picked:
+            out["name"] = picked
+            return out
+
+    # Name sometimes appears on the first clean line after "Aadhaar no. issued" (alternate layouts).
     for i, line in enumerate(lines[:25]):
         if issued_re.search(line):
-            for next_line in lines[i + 1 : i + 5]:
-                if skip.search(next_line) or noise.search(next_line):
-                    continue
-                if re.search(r"\d", next_line):
-                    continue
-                if re.match(r"^[A-Za-z][A-Za-z\s.'-]{1,70}$", next_line):
-                    words = [w for w in next_line.split() if w.strip()]
-                    if 1 <= len(words) <= 6:
-                        out["name"] = next_line.strip()
-                        return out
+            picked = _pick_best_aadhaar_name_from_textract_lines(
+                lines[i + 1 : i + 6],
+                skip=skip,
+                noise=noise,
+                min_score=30,
+            )
+            if picked:
+                out["name"] = picked
+                return out
             break
 
-    gov_idx = -1
-    for i, line in enumerate(lines[:25]):
-        if gov_line.search(line):
-            gov_idx = i
-            break
     if gov_idx >= 0:
-        for line in lines[gov_idx + 1 : min(gov_idx + 5, len(lines))]:
-            if len(line) < 2 or len(line) > 80:
-                continue
-            if skip.search(line) or noise.search(line):
-                continue
-            if re.search(r"\d", line):
-                continue
-            if re.match(r"^[A-Za-z][A-Za-z\s.'-]{1,70}$", line):
-                words = [w for w in line.split() if w.strip()]
-                if 1 <= len(words) <= 5:
-                    out["name"] = line.strip()
-                    return out
+        picked = _pick_best_aadhaar_name_from_textract_lines(
+            lines[gov_idx + 1 : min(gov_idx + 12, len(lines))],
+            skip=skip,
+            noise=noise,
+            min_score=30,
+        )
+        if picked:
+            out["name"] = picked
+            return out
 
     for line in lines[:22]:
         if len(line) < 4 or len(line) > 90:
@@ -1125,6 +1186,19 @@ def _apply_aadhar_textract_fallbacks_from_parts(
         customer["aadhar_id"] = _aadhar_last4(customer["aadhar_id"]) or ""
     _default_gender_male_if_unread(customer)
     customer = enrich_customer_address_from_freeform(customer)
+
+    aadhar_parts = [
+        (fn, tx)
+        for fn, tx in parts
+        if "aadhar" in (fn or "").strip().replace("\\", "/").split("/")[-1].lower()
+    ]
+    blob = _concat_aadhar_scan_ocr_text(aadhar_parts)
+    dn = data.get("details_customer_name")
+    if dn and blob.strip():
+        reconciled = _reconcile_customer_name_aadhar_details(customer.get("name"), str(dn), blob)
+        if reconciled:
+            customer["name"] = reconciled
+
     data["customer"] = customer
     try:
         json_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
@@ -1486,6 +1560,159 @@ def _normalize_name_for_match(name: str | None) -> str:
     return " ".join(str(name).lower().strip().split())
 
 
+# Details vs Aadhaar OCR name reconciliation (upload merge + Raw_OCR fallbacks).
+NAME_RECONCILE_MIN_RATIO = 0.5
+
+
+def _details_name_core_for_match(s: str) -> str:
+    """Strip trailing ``S/o`` / ``W/o`` / ``D/o`` parentage tails from Details ``Full Name``."""
+    t = (s or "").strip()
+    if not t:
+        return ""
+    t = re.sub(r"(?i)\s+[SWD]/[Oo]\s+.+$", "", t).strip()
+    t = re.sub(r"(?i)\s+c/o\s+.+$", "", t).strip()
+    return t
+
+
+def _name_fuzzy_ratio(a: str | None, b: str | None) -> float:
+    n1 = _normalize_name_for_match(a)
+    n2 = _normalize_name_for_match(b)
+    if not n1 or not n2:
+        return 0.0
+    return float(SequenceMatcher(None, n1, n2).ratio())
+
+
+def _max_fuzzy_vs_details(candidate: str, details_name: str) -> float:
+    core = _details_name_core_for_match(details_name)
+    return max(
+        _name_fuzzy_ratio(candidate, details_name),
+        _name_fuzzy_ratio(candidate, core) if core else 0.0,
+    )
+
+
+def _concat_aadhar_scan_ocr_text(raw_parts: list[tuple[str, str]] | None) -> str:
+    """Join Textract blobs for Aadhaar front/back only (excludes Details / Insurance sections)."""
+    if not raw_parts:
+        return ""
+    chunks: list[str] = []
+    for fn, text in raw_parts:
+        fl = (fn or "").strip().replace("\\", "/").split("/")[-1].lower()
+        if "aadhar" in fl:
+            chunks.append(text or "")
+    return "\n".join(chunks)
+
+
+def _aadhar_blob_line_looks_like_name_line(line: str) -> bool:
+    line = line.strip()
+    if len(line) < 3 or len(line) > 90:
+        return False
+    if re.search(r"\d{4}\s+\d{4}\s+\d{4}", line):
+        return False
+    if re.match(r"^[\d\s/:\-.]+$", line):
+        return False
+    noise = re.compile(
+        r"(?i)aadhaar|aadhar|government|india|identification|male|female|transgender|"
+        r"enrol|address|dob|date\s*of\s*birth|vid|virtual|uidai|unique|pin\s*code"
+    )
+    if noise.search(line):
+        return False
+    if not re.match(r"^[A-Za-z][A-Za-z\s.'-]{2,88}$", line):
+        return False
+    words = [w for w in line.split() if w.strip()]
+    return 2 <= len(words) <= 8
+
+
+def _collect_aadhar_name_candidates(blob: str) -> list[str]:
+    """Phrases from Aadhaar OCR that might be the holder name (for fuzzy match to Details core name)."""
+    if not blob or not str(blob).strip():
+        return []
+    seen: set[str] = set()
+    out: list[str] = []
+
+    def add(s: str) -> None:
+        s = " ".join(s.split())
+        if len(s) < 3 or len(s) > 90:
+            return
+        key = s.lower()
+        if key in seen:
+            return
+        seen.add(key)
+        out.append(s)
+
+    for ln in blob.replace("\r\n", "\n").split("\n"):
+        t = ln.strip()
+        if _aadhar_blob_line_looks_like_name_line(t):
+            add(t)
+
+    words = re.findall(r"[A-Za-z][A-Za-z.'-]*", blob)[:400]
+    max_w = len(words)
+    for wlen in range(2, 7):
+        for i in range(0, max(0, max_w - wlen + 1)):
+            phrase = " ".join(words[i : i + wlen])
+            if _aadhar_blob_line_looks_like_name_line(phrase):
+                add(phrase)
+        if len(out) > 500:
+            break
+    return out
+
+
+def _best_aadhar_scan_name_for_details(
+    details_name: str,
+    aadhar_blob: str,
+    *,
+    min_ratio: float,
+) -> str | None:
+    """
+    Match Aadhaar OCR phrases against the Details **core** name only (``S/o`` / ``D/o`` / ``W/o``
+    tails removed). Does not score against the full Details line including parentage.
+    """
+    dn = (details_name or "").strip()
+    if not dn or not (aadhar_blob or "").strip():
+        return None
+    query = (_details_name_core_for_match(dn) or dn).strip()
+    if not query:
+        return None
+    ranked: list[tuple[float, int, str]] = []
+    for cand in _collect_aadhar_name_candidates(aadhar_blob):
+        sc = _name_fuzzy_ratio(cand, query)
+        if sc > min_ratio:
+            ranked.append((sc, len(cand), cand))
+    if not ranked:
+        return None
+    ranked.sort(key=lambda x: (-x[0], -x[1]))
+    return ranked[0][2]
+
+
+def _reconcile_customer_name_aadhar_details(
+    aadhar_name: str | None,
+    details_name: str | None,
+    aadhar_blob: str,
+    *,
+    min_ratio: float = NAME_RECONCILE_MIN_RATIO,
+) -> str | None:
+    """
+    1) If parsed Aadhaar ``name`` fuzzy-matches Details ``Full Name`` (above ``min_ratio``), keep it.
+    2) Else search Aadhaar OCR for a phrase that fuzzy-matches the Details **core** name (no ``S/o`` /
+       ``D/o`` / ``W/o``) above ``min_ratio``; use that substring from the Aadhaar scan.
+    3) Else keep the parsed Aadhaar name, or Details name if Aadhaar name was empty.
+    """
+    dn = (details_name or "").strip()
+    an = (aadhar_name or "").strip()
+    blob = aadhar_blob or ""
+    if not dn:
+        return an or None
+    if not blob.strip():
+        return an or dn or None
+    if an and _max_fuzzy_vs_details(an, dn) > min_ratio:
+        return an
+    best = _best_aadhar_scan_name_for_details(dn, blob, min_ratio=min_ratio)
+    if best:
+        return best
+    if an:
+        return an
+    return dn or None
+
+
 def _initcap_words(value: str | None) -> str:
     """Normalize spacing and convert words to InitCap."""
     s = " ".join(str(value or "").strip().split())
@@ -1646,6 +1873,30 @@ def _clean_sales_sheet_scalar(value: str) -> str:
     if re.match(r"^[\s_.,-]+$", s):
         return ""
     return s.strip()
+
+
+def _sanitize_details_profession_value(val: str | None) -> str | None:
+    """
+    Sales detail sheets often place **Profession** and **Marital Status** on one row. When
+    Profession is left blank, Textract may merge the rest of the row (e.g. ``Marital Status:
+    Unmarried``) into the Profession value. Strip that bleed so profession is empty unless
+    a real token appears before ``Marital Status``.
+    """
+    if val is None or not str(val).strip():
+        return None
+    s = str(val).strip()
+    m = re.search(r"(?i)\bmarital\s*status\b", s)
+    if m:
+        s = s[: m.start()].strip(" \t:._-")
+    s = _clean_sales_sheet_scalar(s)
+    if not s:
+        return None
+    if re.match(
+        r"(?i)^\s*marital\s*status\s*[:\s]*\s*(unmarried|married|single|divorced|widowed)\s*$",
+        s,
+    ):
+        return None
+    return s[:200]
 
 
 def _parse_vehicle_from_full_text(full_text: str) -> dict[str, str]:
@@ -1911,6 +2162,12 @@ def _map_key_value_pairs_to_insurance(pairs: list[dict]) -> dict[str, str]:
             if got:
                 out["financier"] = got
                 break
+    if out.get("profession"):
+        sp = _sanitize_details_profession_value(out["profession"])
+        if sp:
+            out["profession"] = sp
+        else:
+            out.pop("profession", None)
     return out
 
 
@@ -1953,6 +2210,12 @@ def _map_key_value_pairs_to_details_customer(pairs: list[dict]) -> dict[str, str
         out["aadhar_id"] = _aadhar_last4(out.get("aadhar_id")) or ""
     if out.get("nominee_age"):
         out["nominee_age"] = _sanitize_nominee_age(out["nominee_age"]) or ""
+    if out.get("profession"):
+        sp = _sanitize_details_profession_value(out["profession"])
+        if sp:
+            out["profession"] = sp
+        else:
+            out.pop("profession", None)
     return out
 
 
@@ -2009,8 +2272,13 @@ def _parse_insurance_from_full_text(full_text: str) -> dict[str, str]:
         m = pat.search(text)
         if m:
             val = m.group(1).strip()
-            if val and len(val) < 200:
-                out[key] = val
+            if key == "profession":
+                val = _sanitize_details_profession_value(val)
+                if not val:
+                    continue
+            elif not val or len(val) >= 200:
+                continue
+            out[key] = val
 
     # Word / table layouts: label alone on one line, value on the next (e.g. "Profession" then "Farmer")
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
@@ -2020,7 +2288,9 @@ def _parse_insurance_from_full_text(full_text: str) -> dict[str, str]:
         if not nxt or len(nxt) > 180:
             continue
         if "profession" not in out and low in ("profession", "occupation", "customer profession", "employment"):
-            out["profession"] = nxt
+            cand = _sanitize_details_profession_value(nxt)
+            if cand:
+                out["profession"] = cand
         if "financier" not in out and low in (
             "financier",
             "financing bank",
@@ -2044,7 +2314,9 @@ def _parse_insurance_from_full_text(full_text: str) -> dict[str, str]:
             out["nominee_relationship"] = nxt
         same = re.match(r"(?i)^(profession|occupation|customer profession)\s+(.{1,120})$", ln)
         if same and "profession" not in out:
-            out["profession"] = same.group(2).strip()
+            cand = _sanitize_details_profession_value(same.group(2).strip())
+            if cand:
+                out["profession"] = cand
         same_f = re.match(
             r"(?i)^(financier|financing bank|name of financier)\s+(.{1,160})$",
             ln,
@@ -2359,6 +2631,17 @@ class OcrService:
                     and v
                 },
             }
+
+            if details_customer_name and frag_a and frag_a.get("raw_parts"):
+                blob = _concat_aadhar_scan_ocr_text(frag_a["raw_parts"])
+                if blob.strip():
+                    reconciled = _reconcile_customer_name_aadhar_details(
+                        customer.get("name"),
+                        details_customer_name,
+                        blob,
+                    )
+                    if reconciled:
+                        customer["name"] = reconciled
 
         customer = enrich_customer_address_from_freeform(customer)
 
