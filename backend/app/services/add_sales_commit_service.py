@@ -2,8 +2,8 @@
 Commit customer_master, vehicle_master, sales_master from Add Sales staging payload
 after successful Create Invoice (DMS). ``insert_insurance_master_after_gi`` runs after
 successful Generate Insurance (plain INSERT; duplicate ``(customer_id, vehicle_id, insurance_year)``
-fails). ``update_insurance_master_policy_after_issue`` refreshes ``policy_num`` / ``insurance_cost``
-after **Issue Policy** is clicked and values are scraped.
+fails). ``update_insurance_master_policy_after_issue`` refreshes policy fields from the post–**Issue Policy**
+preview scrape (same shape as pre-insert scrape).
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import date, datetime
+from pathlib import Path
 from typing import Any
 
 from psycopg2 import IntegrityError
@@ -271,65 +272,284 @@ def _parse_date_loose(s: str | None) -> date | None:
     return None
 
 
+def _float_or_none(val: Any) -> float | None:
+    if val is None:
+        return None
+    if isinstance(val, (int, float)) and not isinstance(val, bool):
+        try:
+            return float(val)
+        except (TypeError, ValueError):
+            return None
+    try:
+        return float(str(val).replace(",", "").strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def compute_insurance_master_insert_snapshot(
+    customer_id: int,
+    vehicle_id: int,
+    *,
+    fill_values: dict[str, Any],
+    staging_payload: dict[str, Any] | None = None,
+    preview_scrape: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """
+    All column values and derivation notes for the ``INSERT INTO insurance_master`` performed by
+    ``insert_insurance_master_after_gi`` (same rules as the insert).
+
+    ``preview_scrape`` is the dict from ``scrape_insurance_policy_preview_before_issue`` (policy_num,
+    policy_from, policy_to, premium, idv). Those fields fall back to ``staging_payload['insurance']``
+    when missing from preview.
+    """
+    ins_staging: dict[str, Any] = {}
+    if staging_payload and isinstance(staging_payload.get("insurance"), dict):
+        ins_staging = dict(staging_payload["insurance"])
+
+    pv = preview_scrape or {}
+
+    field_sources: dict[str, str] = {}
+
+    fv_ins = _str_or_none(fill_values.get("insurer"), 255)
+    st_ins = _str_or_none(ins_staging.get("insurer"), 255)
+    insurer = fv_ins or st_ins
+    if fv_ins:
+        field_sources["insurer"] = "fill_values (MISP merge / view)"
+    elif st_ins:
+        field_sources["insurer"] = "staging_payload.insurance (OCR merge / staging only)"
+    else:
+        field_sources["insurer"] = "none"
+
+    fn, sn = _str_or_none(fill_values.get("nominee_name")), _str_or_none(ins_staging.get("nominee_name"))
+    nominee_name = fn or sn
+    if fn:
+        field_sources["nominee_name"] = "fill_values"
+    elif sn:
+        field_sources["nominee_name"] = "staging_payload.insurance"
+    else:
+        field_sources["nominee_name"] = "none"
+
+    fr, sr = _str_or_none(fill_values.get("nominee_relationship"), 64), _str_or_none(
+        ins_staging.get("nominee_relationship"), 64
+    )
+    nominee_relationship = fr or sr
+    if fr:
+        field_sources["nominee_relationship"] = "fill_values"
+    elif sr:
+        field_sources["nominee_relationship"] = "staging_payload.insurance"
+    else:
+        field_sources["nominee_relationship"] = "none"
+
+    nominee_raw = fill_values.get("nominee_age")
+    if nominee_raw is None or (isinstance(nominee_raw, str) and not str(nominee_raw).strip()):
+        nominee_raw = ins_staging.get("nominee_age")
+        field_sources["nominee_age"] = "staging_payload.insurance (fill_values missing or blank)"
+    else:
+        field_sources["nominee_age"] = "fill_values"
+    nominee_age = _int_or_none(nominee_raw)
+
+    fg, sg = _str_or_none(fill_values.get("nominee_gender"), 16), _str_or_none(
+        ins_staging.get("nominee_gender"), 16
+    )
+    nominee_gender = fg or sg
+    if fg:
+        field_sources["nominee_gender"] = "fill_values"
+    elif sg:
+        field_sources["nominee_gender"] = "staging_payload.insurance"
+    else:
+        field_sources["nominee_gender"] = "none"
+
+    pnum = _str_or_none(pv.get("policy_num"), 24) or _str_or_none(ins_staging.get("policy_num"), 24)
+    if _str_or_none(pv.get("policy_num"), 24):
+        field_sources["policy_num"] = "proposal preview scrape (pre–Issue Policy)"
+    elif _str_or_none(ins_staging.get("policy_num"), 24):
+        field_sources["policy_num"] = "staging_payload.insurance"
+    else:
+        field_sources["policy_num"] = "none"
+
+    pf_pv = _parse_date_loose(_str_or_none(pv.get("policy_from"), 80))
+    pt_pv = _parse_date_loose(_str_or_none(pv.get("policy_to"), 80))
+    pf_st = _parse_date_loose(_str_or_none(ins_staging.get("policy_from"), 20))
+    pt_st = _parse_date_loose(_str_or_none(ins_staging.get("policy_to"), 20))
+    policy_from_d = pf_pv or pf_st
+    policy_to_d = pt_pv or pt_st
+    field_sources["policy_from"] = (
+        "proposal preview scrape (pre–Issue Policy)"
+        if pf_pv
+        else ("staging_payload.insurance (parsed)" if pf_st else "none")
+    )
+    field_sources["policy_to"] = (
+        "proposal preview scrape (pre–Issue Policy)"
+        if pt_pv
+        else ("staging_payload.insurance (parsed)" if pt_st else "none")
+    )
+
+    prem_pv = _float_or_none(pv.get("premium"))
+    premium = prem_pv
+    if premium is None and ins_staging.get("premium") is not None:
+        try:
+            premium = float(str(ins_staging.get("premium")).replace(",", "").strip())
+        except (TypeError, ValueError):
+            premium = None
+    field_sources["premium"] = (
+        "proposal preview scrape (pre–Issue Policy)"
+        if prem_pv is not None
+        else ("staging_payload.insurance (numeric parse)" if premium is not None else "none")
+    )
+
+    idv_pv = _float_or_none(pv.get("idv"))
+    idv_f = idv_pv
+    if idv_f is None and ins_staging.get("idv") is not None:
+        try:
+            idv_f = float(str(ins_staging.get("idv")).replace(",", "").strip())
+        except (TypeError, ValueError):
+            idv_f = None
+    field_sources["idv"] = (
+        "proposal preview scrape (pre–Issue Policy)"
+        if idv_pv is not None
+        else ("staging_payload.insurance (numeric parse)" if idv_f is not None else "none")
+    )
+
+    policy_broker = _str_or_none(ins_staging.get("policy_broker"), 255)
+    field_sources["policy_broker"] = (
+        "staging_payload.insurance" if policy_broker else "none (not in staging)"
+    )
+
+    insurance_year = date.today().year
+    field_sources["insurance_year"] = "derived: date.today().year (server calendar year)"
+    field_sources["customer_id"] = "request parameter"
+    field_sources["vehicle_id"] = "request parameter"
+
+    uncertainties: list[str] = [
+        "insurance_id: not in INSERT; DB default nextval(insurance_master_insurance_id_seq).",
+        "insurance_year uses server calendar year, not policy period from preview unless aligned manually.",
+        "policy_broker: INSERT uses staging_payload['insurance'] only (not on preview screen scrape).",
+        "Preview scrape uses regex/heuristics; verify against MISP layout for your insurer.",
+        "policy_num, policy_from, policy_to, premium, idv may be refreshed by update_insurance_master_policy_after_issue after Issue Policy.",
+        "String fields may be truncated to column max length (_str_or_none); verify against DDL varchar limits.",
+    ]
+
+    insert_row = {
+        "customer_id": int(customer_id),
+        "vehicle_id": int(vehicle_id),
+        "insurance_year": insurance_year,
+        "nominee_name": nominee_name,
+        "nominee_age": nominee_age,
+        "nominee_relationship": nominee_relationship,
+        "nominee_gender": nominee_gender,
+        "insurer": insurer,
+        "policy_num": pnum,
+        "policy_from": policy_from_d.isoformat() if policy_from_d else None,
+        "policy_to": policy_to_d.isoformat() if policy_to_d else None,
+        "premium": premium,
+        "idv": idv_f,
+        "policy_broker": policy_broker,
+    }
+
+    return {
+        "insert_row": insert_row,
+        "field_sources": field_sources,
+        "uncertainties": uncertainties,
+        "inputs_echo": {
+            "preview_scrape_raw": {k: pv.get(k) for k in ("policy_num", "policy_from", "policy_to", "premium", "idv")},
+            "staging_insurance_keys": sorted(ins_staging.keys()),
+            "fill_values_keys": sorted(k for k in fill_values.keys() if k != "subfolder")[:120],
+        },
+    }
+
+
+def append_insurance_master_insert_snapshot_playwright(
+    ocr_output_dir: Path | str | None,
+    subfolder: str | None,
+    snapshot: dict[str, Any],
+) -> None:
+    """Writes compact JSON ``NOTE`` to ``Playwright_insurance.txt`` before DB insert; optional pretty JSON."""
+    if not ocr_output_dir or not subfolder or not str(subfolder).strip():
+        return
+    from app.services.insurance_form_values import append_playwright_insurance_line
+
+    payload = {
+        "insurance_master_insert_snapshot": True,
+        "insert_row": snapshot.get("insert_row"),
+        "field_sources": snapshot.get("field_sources"),
+        "uncertainties": snapshot.get("uncertainties"),
+        "inputs_echo": snapshot.get("inputs_echo"),
+    }
+    line = json.dumps(payload, default=str, ensure_ascii=False, separators=(",", ":"))
+    max_len = 24_000
+    if len(line) > max_len:
+        line = line[:max_len] + "…(truncated)"
+    append_playwright_insurance_line(
+        Path(ocr_output_dir),
+        subfolder,
+        "NOTE",
+        f"insurance_master INSERT (before DB commit): {line}",
+    )
+    pretty_threshold = 8000
+    if len(line) >= pretty_threshold:
+        pretty = json.dumps(payload, indent=2, default=str, ensure_ascii=False)
+        append_playwright_insurance_line(
+            Path(ocr_output_dir),
+            subfolder,
+            "NOTE",
+            "insurance_master INSERT snapshot (pretty JSON):\n" + pretty,
+        )
+
+
 def insert_insurance_master_after_gi(
     customer_id: int,
     vehicle_id: int,
     *,
     fill_values: dict[str, Any],
     staging_payload: dict[str, Any] | None = None,
-    preview_policy_num: str | None = None,
-    preview_insurance_cost: float | None = None,
+    preview_scrape: dict[str, Any] | None = None,
+    ocr_output_dir: Path | str | None = None,
+    subfolder: str | None = None,
 ) -> None:
     """
     INSERT ``insurance_master`` for the current calendar ``insurance_year`` after proposal review.
-    Insurer / nominee fields prefer the MISP fill dict; policy # and ``insurance_cost`` prefer
-    preview scrape (before Issue Policy); remaining policy fields from staging ``insurance`` when
-    present. Raises ``ValueError`` if a row already exists for the same customer, vehicle, and year
+    Insurer / nominee fields prefer the MISP fill dict; ``policy_num``, ``policy_from``, ``policy_to``,
+    ``premium``, and ``idv`` prefer the preview scrape dict; ``policy_broker`` from staging when present.
+    Raises ``ValueError`` if a row already exists for the same customer, vehicle, and year
     (``uq_insurance_customer_vehicle_year``). After **Issue Policy**, call
-    ``update_insurance_master_policy_after_issue`` with scraped values.
+    ``update_insurance_master_policy_after_issue`` with the post-issue preview scrape dict.
+
+    When ``ocr_output_dir`` and ``subfolder`` are set, logs the full derived row and sources to
+    ``Playwright_insurance.txt`` immediately before the INSERT.
     """
-    ins_staging: dict[str, Any] = {}
-    if staging_payload and isinstance(staging_payload.get("insurance"), dict):
-        ins_staging = dict(staging_payload["insurance"])
-
-    insurer = _str_or_none(fill_values.get("insurer"), 255) or _str_or_none(ins_staging.get("insurer"), 255)
-    nominee_name = _str_or_none(fill_values.get("nominee_name")) or _str_or_none(ins_staging.get("nominee_name"))
-    nominee_relationship = _str_or_none(fill_values.get("nominee_relationship"), 64) or _str_or_none(
-        ins_staging.get("nominee_relationship"), 64
+    snap = compute_insurance_master_insert_snapshot(
+        customer_id,
+        vehicle_id,
+        fill_values=fill_values,
+        staging_payload=staging_payload,
+        preview_scrape=preview_scrape,
     )
-    nominee_raw = fill_values.get("nominee_age")
-    if nominee_raw is None or (isinstance(nominee_raw, str) and not str(nominee_raw).strip()):
-        nominee_raw = ins_staging.get("nominee_age")
-    nominee_age = _int_or_none(nominee_raw)
-    nominee_gender = _str_or_none(fill_values.get("nominee_gender"), 16) or _str_or_none(
-        ins_staging.get("nominee_gender"), 16
-    )
+    append_insurance_master_insert_snapshot_playwright(ocr_output_dir, subfolder, snap)
 
-    policy_num = _str_or_none(preview_policy_num, 24) or _str_or_none(ins_staging.get("policy_num"), 24)
-    policy_from_d = _parse_date_loose(_str_or_none(ins_staging.get("policy_from"), 20))
-    policy_to_d = _parse_date_loose(_str_or_none(ins_staging.get("policy_to"), 20))
-    premium = None
-    if ins_staging.get("premium") is not None:
+    ir = snap["insert_row"]
+    insurance_year = int(ir["insurance_year"])
+    nominee_name = ir["nominee_name"]
+    nominee_age = ir.get("nominee_age")
+    nominee_relationship = ir["nominee_relationship"]
+    nominee_gender = ir["nominee_gender"]
+    insurer = ir["insurer"]
+    policy_num = ir["policy_num"]
+    policy_from_d: date | None = None
+    policy_to_d: date | None = None
+    if ir.get("policy_from"):
         try:
-            premium = float(str(ins_staging.get("premium")).replace(",", "").strip())
-        except (TypeError, ValueError):
-            premium = None
-    idv_f = None
-    if ins_staging.get("idv") is not None:
+            policy_from_d = date.fromisoformat(str(ir["policy_from"]))
+        except ValueError:
+            policy_from_d = None
+    if ir.get("policy_to"):
         try:
-            idv_f = float(str(ins_staging.get("idv")).replace(",", "").strip())
-        except (TypeError, ValueError):
-            idv_f = None
-    policy_broker = _str_or_none(ins_staging.get("policy_broker"), 255)
+            policy_to_d = date.fromisoformat(str(ir["policy_to"]))
+        except ValueError:
+            policy_to_d = None
 
-    insurance_cost_f: float | None = preview_insurance_cost
-    if insurance_cost_f is None and ins_staging.get("insurance_cost") is not None:
-        try:
-            insurance_cost_f = float(str(ins_staging.get("insurance_cost")).replace(",", "").strip())
-        except (TypeError, ValueError):
-            insurance_cost_f = None
-
-    insurance_year = date.today().year
+    premium = ir.get("premium")
+    idv_f = ir.get("idv")
+    policy_broker = ir["policy_broker"]
 
     from app.db import get_connection
 
@@ -342,9 +562,9 @@ def insert_insurance_master_after_gi(
                         customer_id, vehicle_id, insurance_year,
                         nominee_name, nominee_age, nominee_relationship, nominee_gender,
                         insurer, policy_num, policy_from, policy_to, premium,
-                        idv, policy_broker, insurance_cost
+                        idv, policy_broker
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         int(customer_id),
@@ -361,7 +581,6 @@ def insert_insurance_master_after_gi(
                         premium,
                         idv_f,
                         policy_broker,
-                        insurance_cost_f,
                     ),
                 )
             except IntegrityError as exc:
@@ -376,12 +595,12 @@ def insert_insurance_master_after_gi(
                 raise
         conn.commit()
     logger.info(
-        "insurance_master insert after GI: customer_id=%s vehicle_id=%s year=%s policy_num=%r insurance_cost=%s",
+        "insurance_master insert after GI: customer_id=%s vehicle_id=%s year=%s policy_num=%r premium=%s",
         customer_id,
         vehicle_id,
         insurance_year,
         policy_num,
-        insurance_cost_f,
+        premium,
     )
 
 
@@ -389,22 +608,41 @@ def update_insurance_master_policy_after_issue(
     customer_id: int,
     vehicle_id: int,
     *,
-    policy_num: str | None,
-    insurance_cost: float | None,
+    scrape: dict[str, Any] | None = None,
 ) -> None:
-    """UPDATE ``policy_num`` / ``insurance_cost`` for the current ``insurance_year`` after Issue Policy."""
-    if policy_num is None and insurance_cost is None:
+    """UPDATE policy fields for the current ``insurance_year`` from post–Issue Policy preview scrape."""
+    if not scrape:
         return
     insurance_year = date.today().year
     sets: list[str] = []
     params: list[Any] = []
-    pn = _str_or_none(policy_num, 24) if policy_num is not None else None
-    if pn is not None:
-        sets.append("policy_num = %s")
-        params.append(pn)
-    if insurance_cost is not None:
-        sets.append("insurance_cost = %s")
-        params.append(float(insurance_cost))
+
+    if scrape.get("policy_num") is not None:
+        pn = _str_or_none(scrape.get("policy_num"), 24)
+        if pn is not None:
+            sets.append("policy_num = %s")
+            params.append(pn)
+
+    pf = _parse_date_loose(_str_or_none(scrape.get("policy_from"), 80))
+    if pf is not None:
+        sets.append("policy_from = %s")
+        params.append(pf)
+
+    pt = _parse_date_loose(_str_or_none(scrape.get("policy_to"), 80))
+    if pt is not None:
+        sets.append("policy_to = %s")
+        params.append(pt)
+
+    pr = _float_or_none(scrape.get("premium"))
+    if pr is not None:
+        sets.append("premium = %s")
+        params.append(pr)
+
+    idv_u = _float_or_none(scrape.get("idv"))
+    if idv_u is not None:
+        sets.append("idv = %s")
+        params.append(idv_u)
+
     if not sets:
         return
     params.extend([int(customer_id), int(vehicle_id), insurance_year])
@@ -427,10 +665,9 @@ def update_insurance_master_policy_after_issue(
                 )
         conn.commit()
     logger.info(
-        "insurance_master update after Issue Policy: customer_id=%s vehicle_id=%s year=%s policy_num=%r insurance_cost=%s",
+        "insurance_master update after Issue Policy: customer_id=%s vehicle_id=%s year=%s sets=%s",
         customer_id,
         vehicle_id,
         insurance_year,
-        policy_num,
-        insurance_cost,
+        sets,
     )

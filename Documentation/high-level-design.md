@@ -410,3 +410,9 @@ The SQL view **`form_dms_view`** is **removed**; the same mapping is implemented
 | 1.113 | Apr 2026 | — | **`main_process` proposal**: per-step readback + **`Playwright_insurance.txt`** lines; fail-fast on first bad step — **LLD** **6.191** |
 | 1.114 | Apr 2026 | — | **`fill_hero_insurance_service`**: MISP proposal **`HERO_MISP_CPH1`** id-suffix locators; **Email ID** / **txtRegistrationDate** / nominee radios / **ddlFinancerName** / **ddlCPATenure** / **USGI** uncheck / **Proposal Preview** — **LLD** **6.193** |
 | 1.115 | Apr 2026 | — | **`fill_hero_insurance_service`**: marital/occupation maps; DOB + alternate mobile; conditional finance branch; RTI id-first; HDFC strict — **LLD** **6.194** |
+| 1.116 | Apr 2026 | — | **MISP proposal**: marital **`SIngle`** fallback; RTI by label (insurer-row shift); NIC uncheck after USGI — **LLD** **6.195** |
+| 1.117 | Apr 2026 | — | **`dealer_ref.hero_cpi`** / **`form_insurance_view.hero_cpi`**: CPA NIC/CPI add-on check/uncheck — **LLD** **6.196**; **Database DDL** **2.63** |
+| 1.118 | Apr 2026 | — | Hero GI **pre_process**: faster 2W/New Policy/KYC readiness + new-tab **`wait_for_event`**; DOM insurer **`light`** nav; env-tunable KYC keyboard delays — **LLD** **6.197** |
+| 1.119 | Apr 2026 | — | **`fill_hero_insurance_service`**: **`HERO_MISP_UI_SETTLE_MS`**; insurer resolution order (native **`<select>`** only → keyboard → full **`select`** scan); **`_select_option_fuzzy_in_select`** index/value/label — **LLD** **6.198** |
+| 1.120 | Apr 2026 | — | **`add_sales_commit_service`**: **`insurance_master`** insert snapshot JSON to **`Playwright_insurance.txt`** — **LLD** **6.199** |
+| 1.121 | Apr 2026 | — | Preview scrape fields + drop **`insurance_cost`**; **`update_insurance_master_policy_after_issue`**(**`scrape`**) — **LLD** **6.200** |

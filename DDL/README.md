@@ -80,7 +80,10 @@ One-off changes (e.g. new columns) go in **`DDL/alter/`**. Run against an existi
 - `13b_drop_form_dms_view.sql` — drops **`form_dms_view`**; DMS fill uses **`backend/app/repositories/form_dms.py`** (inline join) and future **`add_sales_staging.payload_json`** (OCR merge).
 - `14a_nominee_gender_insurance_drop_customer_legacy.sql` — **`insurance_master.nominee_gender`**; drops legacy **`customer_master`** nominee / father–husband columns.
 - `14b_insurance_master_add_insurance_cost.sql` — adds **`insurance_cost`** (total premium: preview before **Issue Policy**, then refreshed from post–**Issue Policy** scrape on **Generate Insurance**).
+- `14c_insurance_master_drop_insurance_cost.sql` — drops **`insurance_cost`**; use **`premium`** only (preview scrape for **policy_num**, **policy_from**, **policy_to**, **premium**, **idv**).
 - `15a_vehicle_master_variant_vin_unique_drop_dms_sku.sql` — **`vehicle_master.variant`**; widen **`place_of_registeration`** to 128; partial unique index on **`chassis`** (VIN); drop **`dms_sku`**.
+- `16a_dealer_ref_prefer_insurer_form_insurance_view.sql` — **`dealer_ref.prefer_insurer`**; recreates **`form_insurance_view`**.
+- `17a_dealer_ref_hero_cpi_form_insurance_view.sql` — **`dealer_ref.hero_cpi`** (**Y**/**N**, default **N**); recreates **`form_insurance_view`** with **`hero_cpi`**.
 
 **New table (run after customer_master exists):**
 - `10_rto_payment_details.sql` — legacy base creation for the RTO table; current schema then applies `12c_rename_rto_payment_details_to_rto_queue.sql` so the active table is `rto_queue`.

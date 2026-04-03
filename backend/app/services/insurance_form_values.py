@@ -2,6 +2,7 @@
 
 Add Sales passes the same ``staging_id`` as Create Invoice (DMS) so the view (committed masters) and staging (full OCR merge) jointly supply the insurance flow — see BR-20.
 When ``dealer_ref.prefer_insurer`` is present on the view row and the merged details insurer fuzzy-matches it (≥20% ``SequenceMatcher`` on normalized strings), the fill dict uses ``prefer_insurer`` for KYC/proposal insurer typing.
+``dealer_ref.hero_cpi`` (exposed as ``form_insurance_view.hero_cpi``) is **Y**/**N** and drives the MISP CPA add-on row whose label varies (NIC/CPI/etc.).
 """
 from __future__ import annotations
 
@@ -16,6 +17,14 @@ _IST_TZ = ZoneInfo("Asia/Kolkata")
 
 def _insurance_log_ts_ist() -> str:
     return datetime.now(_IST_TZ).isoformat(timespec="milliseconds")
+
+
+def normalize_hero_cpi_flag(raw: object | None) -> str:
+    """Normalize ``dealer_ref.hero_cpi`` / ``form_insurance_view.hero_cpi`` to ``Y`` or ``N``."""
+    t = clean_text(raw) if raw is not None else ""
+    if not t:
+        return "N"
+    return "Y" if t.strip().upper() == "Y" else "N"
 
 from app.db import get_connection
 from app.services.utility_functions import (
@@ -46,10 +55,15 @@ def read_insurance_insurer_from_ocr_json(ocr_output_dir: Path | None, subfolder:
 
 
 def _apply_staging_insurance_overlay(values: dict, staging_payload: dict | None) -> None:
-    """Fill empty insurer / nominee / nominee_gender from staging ``insurance`` blob."""
+    """Fill empty insurer / nominee / nominee_gender from staging ``insurance`` blob; merge **marital_status** from staging when set."""
     if not staging_payload or not isinstance(staging_payload, dict):
         return
     ins = staging_payload.get("insurance") if isinstance(staging_payload.get("insurance"), dict) else {}
+    cust = (
+        staging_payload.get("customer")
+        if isinstance(staging_payload.get("customer"), dict)
+        else {}
+    )
 
     def take_if_empty(key: str, raw: object) -> None:
         if values.get(key):
@@ -68,6 +82,11 @@ def _apply_staging_insurance_overlay(values: dict, staging_payload: dict | None)
         if t:
             values["nominee_age"] = t
     take_if_empty("nominee_gender", ins.get("nominee_gender"))
+
+    # Marital status: **staging wins** when non-empty (``customer`` / ``insurance`` in ``payload_json`` — Add Sales / Submit Info).
+    t_mar = clean_text(ins.get("marital_status") or cust.get("marital_status") or "")
+    if t_mar:
+        values["marital_status"] = t_mar
 
 
 def load_latest_insurance_values(customer_id: int, vehicle_id: int) -> dict:
@@ -100,12 +119,14 @@ def build_insurance_fill_values(
     """
     Build MISP fill dict from ``form_insurance_view`` (chassis, customer, vehicle, dealer context).
     When ``staging_payload`` is set (``add_sales_staging.payload_json``), fills empty **insurer** / **nominee**
-    fields from the embedded **insurance** object so OCR merge is available before
+    fields from the embedded **insurance** object; **marital_status** is set from staging **customer** or **insurance**
+    when non-empty (overrides view-only values so MISP proposal matches Add Sales / OCR merge). OCR merge is available before
     ``insurance_master`` is populated after a **successful** Generate Insurance run (UPSERT). Insurer may still fall back to **OCR_To_be_Used.json** when view
     and staging lack it.
     If ``prefer_insurer`` is non-empty and the merged insurer matches it at ≥20% fuzzy ratio, ``insurer`` is set to ``prefer_insurer``.
-    Proposal-only controls (email default, add-ons, CPA, payment mode, registration date) are **not**
-    sourced here — Playwright uses hardcoded defaults for those until persisted columns exist.
+    **Hero CPI** (**``dealer_ref.hero_cpi``** via **``form_insurance_view``**) is normalized to **Y**/**N** and drives the MISP
+    CPA add-on row (label varies by insurer). Other proposal-only controls (email default, some add-ons, CPA tenure,
+    payment mode, registration date) may remain hardcoded in Playwright where noted.
     """
     cid, vid = require_customer_vehicle_ids(customer_id, vehicle_id, "form_insurance_view")
     row = load_latest_insurance_values(cid, vid)
@@ -144,6 +165,7 @@ def build_insurance_fill_values(
         "nominee_relationship": clean_text(row.get("nominee_relationship")),
         "nominee_gender": clean_text(row.get("nominee_gender")),
         "financer_name": clean_text(row.get("financer_name")),
+        "hero_cpi": normalize_hero_cpi_flag(row.get("hero_cpi")),
     }
     _apply_staging_insurance_overlay(values, staging_payload)
     insurer_json = read_insurance_insurer_from_ocr_json(ocr_output_dir, subfolder)
@@ -220,6 +242,7 @@ def write_insurance_form_values(
         ("Relation", clean_text(values.get("nominee_relationship"))),
         ("Nominee Gender", clean_text(values.get("nominee_gender"))),
         ("Financer Name", clean_text(values.get("financer_name"))),
+        ("Hero CPI add-on (dealer_ref.hero_cpi)", clean_text(values.get("hero_cpi")) or "N"),
     ]
     lines = ["Insurance Form Values", "", "--- Values sent to Insurance labels ---"]
     for label, value in label_values:

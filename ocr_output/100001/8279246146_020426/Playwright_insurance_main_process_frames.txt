@@ -1,13 +1,13 @@
 main_process frame scrape — visible inputs, selects, textareas, buttons, links, ARIA roles
-page.url (top)='https://misp.heroinsurance.com/prod/apps/V1/2W/Policy/MispPolicy.aspx?enckycdata=pIW%20nUlvKTVPBA0GRJ6j8EPIkvG7vgYDHVt3muVkbzBbqJGGGc/HArr6pTs3MmeZZsWCjFUjQAP4ry7MH9GFGRMC0jXintHGIeO5VU0Q8rBx53JlyMZ1Y13lQ81L9DfDzwibw0BUkIiB/RTJFZ%20CLMI2KRot2joGiMQyknqg6eU%20YqpmRewcFXlLWzS7kjluGuqMxlluzlFTRiieVxMJ%20tz4uyAimxem1lGtjNL0g1kD/ngYL%20W4RdR4wtdEW7%20NMUtijiwvCGDuer4R2RbzoAHpcDdJXCKuPrv8k6nWGDqySPXW96gy1D%20kh0IC4NXJXh6afVu7tGINCS1sbVuf3/F/Zdu0aOsiYsVo8eQTAmUnPd/b317M4vURv9EC4MAbMJmjh8u5PNlcFK2Kp7W5V5UJSOTTryXgyCJ6qG4LmqwFaoGJ2WdiZ0rY2wcMUUJhvcO%2086ksw4eMwdnodwwmDdSodiDGiKlJkJwznA0FlL5zRH4lHxcbKQYM0TljlqrD'
+page.url (top)='https://misp.heroinsurance.com/prod/apps/V1/2W/Policy/MispPolicy.aspx?enckycdata=pIW%20nUlvKTVPBA0GRJ6j8EPIkvG7vgYDHVt3muVkbzBbqJGGGc/HArr6pTs3MmeZZsWCjFUjQAP4ry7MH9GFGRMC0jXintHGIeO5VU0Q8rBx53JlyMZ1Y13lQ81L9DfDzwibw0BUkIiB/RTJFZ%20CLMI2KRot2joGiMQyknqg6eU%20YqpmRewcFXlLWzS7kjluGuqMxlluzlFTRiieVxMJ%20tz4uyAimxem1lGtjNL0g1kD/ngYL%20W4RdR4wtdEW7%20NqiTvJ/Uw1AalbeaUR0mBXHEfadcowI2p%20UBuxynCAZn52XIxu0kMo97%20/RtjV5llusFHy6JjZAOz/2baeskV66gUo4V0o4XAKIeVuGDce5nXJj7sPaL2cG0VAaQk6rSnMZqMq0/wDHjowSoGwu9JMymf2XPl9XLN%20KVm3HVgqpQjSebRskKTrA%20vNkttC96u0U0Xpcmy9aeB9qd2oKIe8ds2/JKyf5LITkOKRNJvSk2Wid3FsgKUsopEBWkVVnFP'
 
 frame_count=3
 
---- frame_index=0 name='' url='https://misp.heroinsurance.com/prod/apps/V1/2W/Policy/MispPolicy.aspx?enckycdata=pIW%20nUlvKTVPBA0GRJ6j8EPIkvG7vgYDHVt3muVkbzBbqJGGGc/HArr6pTs3MmeZZsWCjFUjQAP4ry7MH9GFGRMC0jXintHGIeO5VU0Q8rBx53JlyMZ1Y13lQ81L9DfDzwibw0BUkIiB/RTJFZ%20CLMI2KRot2joGiMQyknqg6eU%20YqpmRewcFXlLWzS7kjluGuqMxlluzlFTRiieVxMJ%20tz4uyAimxem1lGtjNL0g1kD/ngYL%20W4RdR4wtdEW7%20NMUtijiwvCGDuer4R2RbzoAHpcDdJXCKuPrv8k6nWGDqySPXW96gy1D%20kh0IC4NXJXh6afVu7tGINCS1sbVuf3/F/Zdu0aOsiYsVo8eQTAmUnPd/b317M4vURv9EC4MAbMJmjh8u5PNlcFK2Kp7W5V5UJSOTTryXgyCJ6qG4LmqwFaoGJ2WdiZ0rY2wcMUUJhvcO%2086ksw4eMwdnodwwmDdSodiDGiKlJkJwznA0FlL5zRH4lHxcbKQYM0TljlqrD' ---
+--- frame_index=0 name='' url='https://misp.heroinsurance.com/prod/apps/V1/2W/Policy/MispPolicy.aspx?enckycdata=pIW%20nUlvKTVPBA0GRJ6j8EPIkvG7vgYDHVt3muVkbzBbqJGGGc/HArr6pTs3MmeZZsWCjFUjQAP4ry7MH9GFGRMC0jXintHGIeO5VU0Q8rBx53JlyMZ1Y13lQ81L9DfDzwibw0BUkIiB/RTJFZ%20CLMI2KRot2joGiMQyknqg6eU%20YqpmRewcFXlLWzS7kjluGuqMxlluzlFTRiieVxMJ%20tz4uyAimxem1lGtjNL0g1kD/ngYL%20W4RdR4wtdEW7%20NqiTvJ/Uw1AalbeaUR0mBXHEfadcowI2p%20UBuxynCAZn52XIxu0kMo97%20/RtjV5llusFHy6JjZAOz/2baeskV66gUo4V0o4XAKIeVuGDce5nXJj7sPaL2cG0VAaQk6rSnMZqMq0/wDHjowSoGwu9JMymf2XPl9XLN%20KVm3HVgqpQjSebRskKTrA%20vNkttC96u0U0Xpcmy9aeB9qd2oKIe8ds2/JKyf5LITkOKRNJvSk2Wid3FsgKUsopEBWkVVnFP' ---
 {
-  "documentURL": "https://misp.heroinsurance.com/prod/apps/V1/2W/Policy/MispPolicy.aspx?enckycdata=pIW%20nUlvKTVPBA0GRJ6j8EPIkvG7vgYDHVt3muVkbzBbqJGGGc/HArr6pTs3MmeZZsWCjFUjQAP4ry7MH9GFGRMC0jXintHGIeO5VU0Q8rBx53JlyMZ1Y13lQ81L9DfDzwibw0BUkIiB/RTJFZ%20CLMI2KRot2joGiMQyknqg6eU%20YqpmRewcFXlLWzS7kjluGuqMxlluzlFTRiieVxMJ%20tz4uyAimxem1lGtjNL0g1kD/ngYL%20W4RdR4wtdEW7%20NMUtijiwvCGDuer4R2RbzoAHpcDdJXCKuPrv8k6nWGDqySPXW96gy1D%20kh0IC4NXJXh6afVu7tGINCS1sbVuf3/F/Zdu0aOsiYsVo8eQTAmUnPd/b317M4vURv9EC4MAbMJmjh8u5PNlcFK2Kp7W5V5UJSOTTryXgyCJ6qG4LmqwFaoGJ2WdiZ0rY2wcMUUJhvcO%2086ksw4eMwdnodwwmDdSodiDGiKlJkJwznA0FlL5zRH4lHxcbKQYM0TljlqrD",
+  "documentURL": "https://misp.heroinsurance.com/prod/apps/V1/2W/Policy/MispPolicy.aspx?enckycdata=pIW%20nUlvKTVPBA0GRJ6j8EPIkvG7vgYDHVt3muVkbzBbqJGGGc/HArr6pTs3MmeZZsWCjFUjQAP4ry7MH9GFGRMC0jXintHGIeO5VU0Q8rBx53JlyMZ1Y13lQ81L9DfDzwibw0BUkIiB/RTJFZ%20CLMI2KRot2joGiMQyknqg6eU%20YqpmRewcFXlLWzS7kjluGuqMxlluzlFTRiieVxMJ%20tz4uyAimxem1lGtjNL0g1kD/ngYL%20W4RdR4wtdEW7%20NqiTvJ/Uw1AalbeaUR0mBXHEfadcowI2p%20UBuxynCAZn52XIxu0kMo97%20/RtjV5llusFHy6JjZAOz/2baeskV66gUo4V0o4XAKIeVuGDce5nXJj7sPaL2cG0VAaQk6rSnMZqMq0/wDHjowSoGwu9JMymf2XPl9XLN%20KVm3HVgqpQjSebRskKTrA%20vNkttC96u0U0Xpcmy9aeB9qd2oKIe8ds2/JKyf5LITkOKRNJvSk2Wid3FsgKUsopEBWkVVnFP",
   "title": "HIBIPL - New Policy Creation",
-  "visibleInteractiveCount": 81,
+  "visibleInteractiveCount": 82,
   "elements": [
     {
       "tag": "input",
@@ -165,7 +165,7 @@ frame_count=3
       "className": "form-select",
       "labelText": "",
       "textSnippet": "--Select-- National Insurance Company ICICI Lombard General Ins TATA AIG General Insurance",
-      "selectedText": "Universal Sompo general insurance",
+      "selectedText": "National Insurance Company",
       "optionCount": 9
     },
     {
@@ -512,9 +512,9 @@ frame_count=3
       "role": "",
       "className": "form-select",
       "labelText": "",
-      "textSnippet": "--Select-- Private",
+      "textSnippet": "--Select-- Commercial Private",
       "selectedText": "Private",
-      "optionCount": 2
+      "optionCount": 3
     },
     {
       "tag": "select",
@@ -659,8 +659,8 @@ frame_count=3
       "role": "",
       "className": "form-select",
       "labelText": "",
-      "textSnippet": "--Select-- 20",
-      "selectedText": "20",
+      "textSnippet": "--Select-- 50",
+      "selectedText": "50",
       "optionCount": 2
     },
     {
@@ -878,6 +878,19 @@ frame_count=3
     },
     {
       "tag": "input",
+      "id": "ctl00_ContentPlaceHolder1_chkNilDepreciationPlus",
+      "name": "ctl00$ContentPlaceHolder1$chkNilDepreciationPlus",
+      "type": "checkbox",
+      "placeholder": "",
+      "ariaLabel": "",
+      "role": "",
+      "className": "",
+      "labelText": "",
+      "textSnippet": "",
+      "valueLen": 2
+    },
+    {
+      "tag": "input",
       "id": "ctl00_ContentPlaceHolder1_chkroicover",
       "name": "ctl00$ContentPlaceHolder1$chkroicover",
       "type": "checkbox",
@@ -891,8 +904,8 @@ frame_count=3
     },
     {
       "tag": "input",
-      "id": "ctl00_ContentPlaceHolder1_chkRSA",
-      "name": "ctl00$ContentPlaceHolder1$chkRSA",
+      "id": "ctl00_ContentPlaceHolder1_chkEG",
+      "name": "ctl00$ContentPlaceHolder1$chkEG",
       "type": "checkbox",
       "placeholder": "",
       "ariaLabel": "",
@@ -904,8 +917,8 @@ frame_count=3
     },
     {
       "tag": "input",
-      "id": "ctl00_ContentPlaceHolder1_chkTRG",
-      "name": "ctl00$ContentPlaceHolder1$chkTRG",
+      "id": "ctl00_ContentPlaceHolder1_chkEMI",
+      "name": "ctl00$ContentPlaceHolder1$chkEMI",
       "type": "checkbox",
       "placeholder": "",
       "ariaLabel": "",
@@ -917,16 +930,16 @@ frame_count=3
     },
     {
       "tag": "input",
-      "id": "ctl00_ContentPlaceHolder1_chkEME",
-      "name": "ctl00$ContentPlaceHolder1$chkEME",
-      "type": "checkbox",
+      "id": "ctl00_ContentPlaceHolder1_txtEMISIAMount",
+      "name": "ctl00$ContentPlaceHolder1$txtEMISIAMount",
+      "type": "text",
       "placeholder": "",
       "ariaLabel": "",
       "role": "",
-      "className": "",
+      "className": "form-control",
       "labelText": "",
       "textSnippet": "",
-      "valueLen": 2
+      "valueLen": 0
     },
     {
       "tag": "select",
@@ -978,9 +991,9 @@ frame_count=3
       "role": "",
       "className": "form-select",
       "labelText": "",
-      "textSnippet": "--Select-- 10000 20000 30000 40000 50000 60000 70000 80000 90000 100000 110000 120000 1300",
+      "textSnippet": "--Select-- 10000 20000 30000 40000 50000 60000 70000 80000 90000 100000",
       "selectedText": "--Select--",
-      "optionCount": 21
+      "optionCount": 11
     },
     {
       "tag": "input",

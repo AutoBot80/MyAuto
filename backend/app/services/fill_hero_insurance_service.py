@@ -2,7 +2,7 @@
 Hero Insurance (MISP) Playwright flow: **pre_process** (``run_fill_insurance_only`` on real MISP) runs through KYC,
 then fills **VIN** from DB (**``full_chassis``**) and clicks the VIN page **Submit**. **main_process** continues with
 **I agree** (if shown), then the proposal form. Proposer/vehicle/nominee fields come from the view;
-email, add-ons, CPA, HDFC, and registration date use **hardcoded** defaults. Proposal fields resolve **ContentPlaceHolder1** ids (**``HERO_MISP_CPH1``**) where applicable, then labels. **Proposal Preview** / **Review**, then **Issue Policy**; scrape **policy number** and **insurance cost** again and persist via ``update_insurance_master_policy_after_issue``.
+email, most add-ons, CPA tenure, HDFC, and registration date use **hardcoded** defaults; **Hero CPI** (NIC/CPI row) follows **``form_insurance_view.hero_cpi``** (**``dealer_ref.hero_cpi``**). Proposal fields resolve **ContentPlaceHolder1** ids (**``HERO_MISP_CPH1``**) where applicable, then labels. **Proposal Preview** / **Review**, then **Issue Policy**; scrape **policy_num**, **policy_from**, **policy_to**, **premium**, **idv** from preview and persist via ``update_insurance_master_policy_after_issue``.
 Browser reuse uses ``handle_browser_opening.get_or_open_site_page`` with ``match_base`` from **pre_process**.
 """
 import difflib
@@ -18,6 +18,7 @@ from typing import Any
 from playwright.sync_api import TimeoutError as PlaywrightTimeout
 
 from app.config import (
+    HERO_MISP_UI_SETTLE_MS,
     INSURANCE_ACTION_TIMEOUT_MS,
     INSURANCE_BASE_URL,
     INSURANCE_MAIN_PROCESS_FRAME_SCRAPE,
@@ -26,7 +27,11 @@ from app.config import (
     INSURANCE_LOGIN_WAIT_MS,
     INSURANCE_POLICY_FILL_TIMEOUT_MS,
     KYC_KEYBOARD_INSURER_ARROW_DOWN_MAX,
+    KYC_KEYBOARD_INSURER_ARROW_DOWN_STEP_MS,
+    KYC_KEYBOARD_INSURER_TYPE_DELAY_MS,
+    KYC_KEYBOARD_MOBILE_TYPE_DELAY_MS,
     KYC_KEYBOARD_OVD_ARROW_DOWN_MAX,
+    KYC_KEYBOARD_OVD_ARROW_DOWN_SETTLE_MS,
     KYC_KEYBOARD_TABS_INSURER_TO_OVD,
     KYC_KEYBOARD_TABS_MOBILE_TO_CONSENT,
     KYC_KEYBOARD_TABS_OVD_TO_MOBILE,
@@ -48,6 +53,7 @@ from app.services.insurance_form_values import (
     append_playwright_insurance_line,
     append_playwright_insurance_line_or_dealer_fallback,
     build_insurance_fill_values,
+    normalize_hero_cpi_flag,
     reset_playwright_insurance_log,
     write_insurance_form_values,
     write_playwright_insurance_auxiliary_text,
@@ -78,6 +84,8 @@ HERO_MISP_PROPOSAL_OPTIONAL_UNCHECK_CHECKBOX_REGEX = ""
 
 # ASP.NET ``ContentPlaceHolder1`` client-id prefix on ``MispPolicy.aspx`` proposal controls (frame scrape).
 HERO_MISP_CPH1 = "ctl00_ContentPlaceHolder1"
+# After native ``<select>`` insurer commit (non-keyboard DOM path), use ``light`` nav (skip tab-away) — same as keyboard SOP.
+HERO_MISP_LIGHT_NAV_AFTER_DOM_INSURER = True
 
 
 def _proposal_map_marital_for_misp(raw: str) -> str:
@@ -576,15 +584,15 @@ def _kyc_post_mobile_entry_branch(
         page.keyboard.press("Tab")
     except Exception:
         pass
-    _t(page, 500)
+    _t(page, HERO_MISP_UI_SETTLE_MS)
     try:
         page.wait_for_load_state("networkidle", timeout=min(12_000, to))
     except Exception:
         pass
-    _t(page, 600)
+    _t(page, HERO_MISP_UI_SETTLE_MS)
     # Banner may render slightly after network idle; re-check once.
     if not _kyc_banner_already_verified_aadhaar_visible(page):
-        _t(page, 900)
+        _t(page, HERO_MISP_UI_SETTLE_MS)
     if _kyc_banner_already_verified_aadhaar_visible(page):
         logger.info(
             "Hero Insurance: post-mobile — verified AADHAAR / policy issuance banner; "
@@ -1134,6 +1142,54 @@ def _click_sign_in_if_visible(page, *, timeout_ms: int) -> bool:
     return False
 
 
+def _misp_wait_landing_after_product_nav(page, *, step: str, timeout_ms: int) -> None:
+    """
+    After **2W** or **New Policy** click: short ``domcontentloaded`` + **UI readiness** instead of a long
+    load-state wait (SPAs often do not refire full load).
+    ``step``: ``after_2w`` | ``after_new_policy``.
+    """
+    cap = min(max(800, int(timeout_ms)), 5_000)
+    short_dom = min(1_500, cap)
+    try:
+        page.wait_for_load_state("domcontentloaded", timeout=short_dom)
+    except Exception:
+        pass
+    if step == "after_2w":
+        try:
+            page.locator("#navbarVerticalNav").first.wait_for(state="visible", timeout=cap)
+            logger.debug("Hero Insurance: post-2W readiness: #navbarVerticalNav visible")
+            return
+        except Exception:
+            pass
+        try:
+            page.get_by_text("New Policy", exact=True).first.wait_for(state="visible", timeout=cap)
+            logger.debug("Hero Insurance: post-2W readiness: New Policy visible")
+            return
+        except Exception:
+            pass
+    elif step == "after_new_policy":
+        try:
+            page.wait_for_function(
+                """() => {
+                  const h = (location.href || '').toLowerCase();
+                  if (h.includes('ekycpage') || h.includes('kycpage.aspx') || h.includes('/ekyc') || h.includes('kyc.html')) return true;
+                  const el = document.querySelector('#ins-mobile-no');
+                  if (el && el.offsetParent !== null) return true;
+                  const ifr = document.querySelector('iframe[src*="kyc" i], iframe[src*="2w" i]');
+                  return !!(ifr && ifr.offsetParent !== null);
+                }""",
+                timeout=min(cap, 4_500),
+            )
+            logger.debug("Hero Insurance: post-New Policy readiness: KYC URL/DOM hint")
+            return
+        except Exception:
+            pass
+    try:
+        page.wait_for_load_state("domcontentloaded", timeout=min(2_000, cap))
+    except Exception:
+        pass
+
+
 def _click_2w_icon(page, *, timeout_ms: int) -> None:
     """
     Open **2W** (two-wheeler) product path. Markup varies: ``img[alt]``, tiles, or icon buttons.
@@ -1170,12 +1226,7 @@ def _click_2w_icon(page, *, timeout_ms: int) -> None:
             )
             for label, loc in nav_try:
                 if _try_click(loc, label):
-                    try:
-                        page.wait_for_load_state(
-                            "domcontentloaded", timeout=min(6_000, max(2_000, int(timeout_ms) * 2))
-                        )
-                    except Exception:
-                        pass
+                    _misp_wait_landing_after_product_nav(page, step="after_2w", timeout_ms=timeout_ms)
                     return
         except Exception as exc:
             logger.debug("Hero Insurance: 2W INSURANCE_NAV_IFRAME_SELECTOR: %s", exc)
@@ -1206,12 +1257,7 @@ def _click_2w_icon(page, *, timeout_ms: int) -> None:
     )
     for label, loc in try_order:
         if _try_click(loc, label):
-            try:
-                page.wait_for_load_state(
-                    "domcontentloaded", timeout=min(6_000, max(2_000, int(timeout_ms) * 2))
-                )
-            except Exception:
-                pass
+            _misp_wait_landing_after_product_nav(page, step="after_2w", timeout_ms=timeout_ms)
             return
 
     # Last resort: scan visible clickable elements for 2W / two-wheeler copy (Angular/React tiles).
@@ -1251,12 +1297,7 @@ def _click_2w_icon(page, *, timeout_ms: int) -> None:
         )
         if hit:
             logger.info("Hero Insurance: clicked 2W control (DOM scan).")
-            try:
-                page.wait_for_load_state(
-                    "domcontentloaded", timeout=min(6_000, max(2_000, int(timeout_ms) * 2))
-                )
-            except Exception:
-                pass
+            _misp_wait_landing_after_product_nav(page, step="after_2w", timeout_ms=timeout_ms)
             return
     except Exception as exc:
         logger.warning("Hero Insurance: 2W DOM scan failed: %s", exc)
@@ -1334,12 +1375,7 @@ def _click_new_policy(page, *, timeout_ms: int) -> None:
     loc.first.wait_for(state="visible", timeout=timeout_ms)
     loc.first.click(timeout=timeout_ms)
     logger.info("Hero Insurance: clicked New Policy.")
-    try:
-        page.wait_for_load_state(
-            "domcontentloaded", timeout=min(6_000, max(2_000, int(timeout_ms) * 2))
-        )
-    except Exception:
-        pass
+    _misp_wait_landing_after_product_nav(page, step="after_new_policy", timeout_ms=timeout_ms)
 
 
 def _misp_snapshot_context_pages(page) -> list:
@@ -1362,6 +1398,52 @@ def _tab_url_is_dms_siebel_not_insurance(url: str) -> bool:
     )
 
 
+def _misp_try_use_insurance_tab_page(
+    p,
+    before: list,
+    base: str,
+    cap_ms: int,
+    step_label: str,
+):
+    """
+    If ``p`` is not in ``before``, loaded enough to read URL, and matches insurance ``base``, return ``p``.
+    Otherwise return ``None`` (Siebel/DMS/blank URLs are rejected).
+    """
+    if p in before:
+        return None
+    try:
+        if p.is_closed():
+            return None
+    except Exception:
+        return None
+    try:
+        p.wait_for_load_state("domcontentloaded", timeout=min(15_000, cap_ms))
+    except Exception:
+        pass
+    try:
+        u = (p.url or "").strip()
+    except Exception:
+        u = ""
+    if _tab_url_is_dms_siebel_not_insurance(u):
+        logger.info(
+            "Hero Insurance: ignoring Siebel/DMS tab after %s — url=%s",
+            step_label,
+            u[:140],
+        )
+        return None
+    low = (u or "").lower()
+    if not u or "about:blank" in low:
+        return None
+    if u and _playwright_page_url_matches_site_base(u, base):
+        logger.info(
+            "Hero Insurance: using new insurance/MISP tab after %s — url=%s",
+            step_label,
+            u[:200],
+        )
+        return p
+    return None
+
+
 def _misp_resolve_page_after_possible_new_tab(
     pages_before: list,
     fallback_page,
@@ -1374,49 +1456,51 @@ def _misp_resolve_page_after_possible_new_tab(
     Hero MISP often opens the **2W** product path in a **new** tab; **New Policy** and **KYC** follow.
     Prefer a **new** ``Page`` whose URL matches ``portal_base_url`` (insurance/MISP host). **Never** attach
     to a Siebel/DMS tab — those can appear in ``context.pages`` when the operator has both sites open.
+
+    Order: immediate scan of ``context.pages``; then ``wait_for_event('page')`` for a late-opening tab;
+    then legacy polling (120ms) until deadline.
     """
     base = (portal_base_url or "").strip()
     if not base:
         base = (INSURANCE_BASE_URL or "").strip()
     ctx = fallback_page.context
     cap_ms = min(max(5_000, int(timeout_ms)), 45_000)
-    deadline = time.monotonic() + cap_ms / 1000.0
     before = list(pages_before)
+
+    def _try(p):
+        return _misp_try_use_insurance_tab_page(p, before, base, cap_ms, step_label)
+
+    try:
+        for p in ctx.pages:
+            got = _try(p)
+            if got is not None:
+                return got
+    except Exception:
+        pass
+
+    event_ms = float(min(3_000, cap_ms))
+    try:
+        new_p = ctx.wait_for_event(
+            "page",
+            predicate=lambda p: _try(p) is not None,
+            timeout=event_ms,
+        )
+        if new_p is not None:
+            got = _try(new_p)
+            if got is not None:
+                return got
+    except PlaywrightTimeout:
+        pass
+    except Exception as exc:
+        logger.debug("Hero Insurance: wait_for_event(page) after %s: %s", step_label, exc)
+
+    deadline = time.monotonic() + cap_ms / 1000.0
     while time.monotonic() < deadline:
         try:
             for p in ctx.pages:
-                if p in before:
-                    continue
-                try:
-                    if p.is_closed():
-                        continue
-                except Exception:
-                    continue
-                try:
-                    p.wait_for_load_state("domcontentloaded", timeout=min(15_000, cap_ms))
-                except Exception:
-                    pass
-                try:
-                    u = (p.url or "").strip()
-                except Exception:
-                    u = ""
-                if _tab_url_is_dms_siebel_not_insurance(u):
-                    logger.info(
-                        "Hero Insurance: ignoring Siebel/DMS tab after %s — url=%s",
-                        step_label,
-                        u[:140],
-                    )
-                    continue
-                low = (u or "").lower()
-                if not u or "about:blank" in low:
-                    continue
-                if u and _playwright_page_url_matches_site_base(u, base):
-                    logger.info(
-                        "Hero Insurance: using new insurance/MISP tab after %s — url=%s",
-                        step_label,
-                        u[:200],
-                    )
-                    return p
+                got = _try(p)
+                if got is not None:
+                    return got
         except Exception:
             pass
         try:
@@ -1441,6 +1525,11 @@ def _misp_resolve_page_after_possible_new_tab(
     return fallback_page
 
 
+def _norm_option_label(s: str) -> str:
+    """Collapse internal whitespace for matching Playwright label vs fuzzy pick."""
+    return re.sub(r"\s+", " ", (s or "").strip())
+
+
 def _select_option_fuzzy_in_select(
     page,
     select_locator,
@@ -1455,37 +1544,104 @@ def _select_option_fuzzy_in_select(
         sel = select_locator.first
         if sel.count() == 0:
             return False
-        labels: list[str] = []
+        rows: list[dict[str, Any]] = []
         try:
             raw = sel.locator("option").evaluate_all(
-                "els => els.map(e => (e.textContent || '').trim()).filter(Boolean)"
+                """els => els.map((e, i) => ({
+                    text: (e.textContent || '').trim(),
+                    value: (e.value != null ? String(e.value) : ''),
+                    index: i
+                }))"""
             )
-            labels = [str(x).strip() for x in (raw or []) if str(x).strip()]
+            for x in raw or []:
+                if not isinstance(x, dict):
+                    continue
+                t = str(x.get("text") or "").strip()
+                if not t:
+                    continue
+                rows.append(
+                    {
+                        "text": t,
+                        "value": str(x.get("value") or ""),
+                        "index": int(x.get("index", 0)),
+                    }
+                )
         except Exception:
             n = sel.locator("option").count()
             for i in range(min(n, 400)):
                 t = (sel.locator("option").nth(i).inner_text() or "").strip()
-                if t:
-                    labels.append(t)
-        if not labels:
+                if not t:
+                    continue
+                try:
+                    v = sel.locator("option").nth(i).evaluate("e => String(e.value || '')")
+                except Exception:
+                    v = ""
+                rows.append({"text": t, "value": str(v), "index": i})
+        candidates = [
+            r["text"]
+            for r in rows
+            if r["text"] and not r["text"].lower().startswith("--select")
+        ]
+        if not candidates:
             return False
-        pick = fuzzy_best_option_label(query, labels, min_score=fuzzy_min_score)
+        pick = fuzzy_best_option_label(query, candidates, min_score=fuzzy_min_score)
         if not pick:
             return False
+        pick_n = _norm_option_label(pick)
+        chosen: dict[str, Any] | None = None
+        for r in rows:
+            if r["text"] == pick or _norm_option_label(r["text"]) == pick_n:
+                chosen = r
+                break
+        if chosen is None:
+            for r in rows:
+                if _norm_option_label(r["text"]) == pick_n:
+                    chosen = r
+                    break
+        if chosen is None:
+            return False
+        to = min(int(timeout_ms), 12_000)
+        short = min(to, 4_000)
+        idx = int(chosen["index"])
+        val = (chosen.get("value") or "").strip()
+        attempts: list[tuple[str, dict[str, Any]]] = [
+            ("index", {"index": idx, "timeout": short, "force": True}),
+        ]
+        if val:
+            attempts.append(("value", {"value": val, "timeout": short, "force": True}))
+        attempts.append(("label_pick", {"label": chosen["text"], "timeout": short, "force": True}))
+        if pick != chosen["text"]:
+            attempts.append(("label_fuzzy", {"label": pick, "timeout": short, "force": True}))
+        attempts.append(("label_norm", {"label": pick_n, "timeout": to, "force": True}))
+        last_exc: Exception | None = None
+        for strat_name, kwargs in attempts:
+            try:
+                sel.select_option(**kwargs)
+                logger.info(
+                    "Hero Insurance: selected option %r (fuzzy from %r, strategy=%s)",
+                    chosen["text"],
+                    query[:60],
+                    strat_name,
+                )
+                return True
+            except Exception as exc:
+                last_exc = exc
+                continue
         try:
-            visible = sel.is_visible(timeout=1_200)
+            visible = sel.is_visible(timeout=800)
         except Exception:
             visible = False
         try:
             if visible:
-                sel.select_option(label=pick, timeout=timeout_ms)
+                sel.select_option(label=chosen["text"], timeout=to)
             else:
-                # ASP.NET / skinned KYC often hides the native <select> while showing a custom face.
-                sel.select_option(label=pick, timeout=timeout_ms, force=True)
-        except Exception:
-            sel.select_option(label=pick, timeout=timeout_ms, force=True)
-        logger.info("Hero Insurance: selected option %r (fuzzy from %r)", pick, query[:60])
-        return True
+                sel.select_option(label=chosen["text"], timeout=to, force=True)
+            logger.info("Hero Insurance: selected option %r (fuzzy from %r)", chosen["text"], query[:60])
+            return True
+        except Exception as exc_final:
+            last_exc = exc_final
+        logger.warning("Hero Insurance: fuzzy select failed after retries: %s", last_exc)
+        return False
     except Exception as exc:
         logger.warning("Hero Insurance: fuzzy select failed: %s", exc)
         return False
@@ -1656,8 +1812,11 @@ def _kyc_try_set_insurer_via_dom_in_frame(
     subfolder: str | None = None,
 ) -> bool:
     """
-    Prefer native ``<select>`` + fuzzy option match inside the KYC frame — avoids slow keyboard typing
-    and flaky Tab-out of custom combobox faces when the portal exposes a real ``<select>``.
+    Prefer native ``<select>`` + fuzzy option match on the dedicated Insurance Company control
+    (``ddlproduct`` / label-resolved ``<select>``) inside the KYC frame.
+
+    Full-frame ``<select>`` scan and keyboard typing are handled in ``_fill_kyc_ekyc_keyboard_sop``
+    (order: native → keyboard → last-resort scan).
     """
     if not (insurer or "").strip():
         return False
@@ -1666,7 +1825,7 @@ def _kyc_try_set_insurer_via_dom_in_frame(
         ocr_output_dir,
         subfolder,
         "dom_insurer",
-        "start native <select> (ddlproduct/label) then fuzzy scan of all <select> in KYC frame",
+        "start native <select> Insurance Company only (ddlproduct/label); no full-frame scan here",
     )
     if _kyc_try_select_insurer_fuzzy_on_insurance_company_select(
         kyc_fr,
@@ -1685,13 +1844,13 @@ def _kyc_try_set_insurer_via_dom_in_frame(
             "Hero Insurance: KYC — Insurance Company set via native <select> fuzzy match in frame."
         )
         return True
-    return _fill_insurance_company_fuzzy_any_visible_select(
-        kyc_fr,
-        insurer,
-        timeout_ms=to,
-        ocr_output_dir=ocr_output_dir,
-        subfolder=subfolder,
+    _insurance_kyc_trace(
+        ocr_output_dir,
+        subfolder,
+        "dom_insurer",
+        "dedicated native <select> did not commit — keyboard path runs next (scan last resort)",
     )
+    return False
 
 
 def _kyc_force_blur_insurance_company_dropdown(kyc_fr) -> None:
@@ -2619,7 +2778,9 @@ def _fill_kyc_ekyc_keyboard_sop(
     Tab to consent → Space). Tab/down counts: ``KYC_KEYBOARD_*`` env vars.
     When ``prefer_insurer`` matches merged details insurer (≥20%), the portal label is the short
     dealer string; DOM ``select_option`` on the native **Insurance Company** ``<select>`` is still
-    tried first (fuzzy on ``<option>`` labels), then keyboard typing only if DOM fails.
+    tried first (fuzzy on ``<option>`` labels — dedicated ``ddlproduct`` / label ``<select>`` only).
+    If that fails, keyboard typing and ``ArrowDown`` run; ``_fill_insurance_company_fuzzy_any_visible_select``
+    runs only as a last resort if still unmatched.
     """
     insurer_label = _kyc_insurer_label_for_misp(values)
     mobile = (values.get("mobile_number") or "").strip()
@@ -2684,7 +2845,7 @@ def _fill_kyc_ekyc_keyboard_sop(
         kb_reason = (
             "dom_failed_after_prefer_label"
             if type_prefer_skip_dom
-            else "dom_fuzzy_select_failed_try_keyboard"
+            else "dom_native_failed_try_keyboard"
         )
         _insurance_kyc_trace(
             ocr_output_dir,
@@ -2747,7 +2908,10 @@ def _fill_kyc_ekyc_keyboard_sop(
                 "typing without Select-All (prevents selecting all text on the page)."
             )
         try:
-            page.keyboard.type(insurer_label[:96], delay=10)
+            page.keyboard.type(
+                insurer_label[:96],
+                delay=max(1, int(KYC_KEYBOARD_INSURER_TYPE_DELAY_MS)),
+            )
         except Exception as exc:
             return f"KYC keyboard SOP: could not type insurer: {exc!s}"
         _t(page, 100)
@@ -2838,7 +3002,7 @@ def _fill_kyc_ekyc_keyboard_sop(
                     page.keyboard.press("ArrowDown")
                 except Exception:
                     pass
-                _t(page, 80)
+                _t(page, max(30, int(KYC_KEYBOARD_INSURER_ARROW_DOWN_STEP_MS)))
                 shown = _kyc_read_focused_control_text(page)
                 if _kyc_insurer_display_matches(insurer_label, shown):
                     matched = True
@@ -2882,6 +3046,26 @@ def _fill_kyc_ekyc_keyboard_sop(
                             (cand or "")[:90],
                         )
                         break
+        if not matched:
+            scan_ok = _fill_insurance_company_fuzzy_any_visible_select(
+                kyc_fr,
+                insurer_label,
+                timeout_ms=min(cap, 8_000),
+                ocr_output_dir=ocr_output_dir,
+                subfolder=subfolder,
+            )
+            if scan_ok:
+                matched = True
+                keyboard_native_select_committed = True
+                _insurance_kyc_trace(
+                    ocr_output_dir,
+                    subfolder,
+                    "keyboard_sop",
+                    "insurer set via dom_fuzzy_select_scan (last resort after keyboard)",
+                )
+                logger.info(
+                    "Hero Insurance: KYC — insurer set via full-frame select scan (last resort)."
+                )
         if not matched:
             return (
                 "KYC keyboard SOP: could not match insurer after typing and ArrowDown. "
@@ -2978,7 +3162,7 @@ def _fill_kyc_ekyc_keyboard_sop(
             page.keyboard.press("ArrowDown")
         except Exception:
             pass
-        _t(page, 105)
+        _t(page, max(40, int(KYC_KEYBOARD_OVD_ARROW_DOWN_SETTLE_MS)))
     if not ovd_ok:
         logger.warning(
             "Hero Insurance: KYC keyboard — OVD not set via DOM or ArrowDown (last focus text=%r); "
@@ -3012,7 +3196,10 @@ def _fill_kyc_ekyc_keyboard_sop(
             pass
         _t(page, 45)
         try:
-            page.keyboard.type(digits, delay=30)
+            page.keyboard.type(
+                digits,
+                delay=max(1, int(KYC_KEYBOARD_MOBILE_TYPE_DELAY_MS)),
+            )
             mob_typed = True
         except Exception as exc:
             return f"KYC keyboard SOP: mobile type failed: {exc!s}"
@@ -3064,6 +3251,7 @@ def _fill_insurance_company_and_ovd_mobile_consent(
     # --- Insurance Company (dropdown / search; match insurer from details sheet / DB) ---
     if insurer:
         filled = False
+        insurer_via_native_select = False
         # Label-associated <select> (ASP.NET table / modal layouts often break ``select:near``).
         try:
             loc = page.get_by_label(re.compile(r"Insurance\s*Company\s*\*?", re.I))
@@ -3075,6 +3263,7 @@ def _fill_insurance_company_and_ovd_mobile_consent(
                 fuzzy_min_score=KYC_INSURER_FUZZY_MIN_SCORE,
             ):
                 filled = True
+                insurer_via_native_select = True
         except Exception:
             pass
         # Native <select> near label text
@@ -3094,6 +3283,7 @@ def _fill_insurance_company_and_ovd_mobile_consent(
                         fuzzy_min_score=KYC_INSURER_FUZZY_MIN_SCORE,
                     ):
                         filled = True
+                        insurer_via_native_select = True
                         break
                 except Exception:
                     continue
@@ -3104,6 +3294,7 @@ def _fill_insurance_company_and_ovd_mobile_consent(
                     page, insurer, timeout_ms=timeout_ms
                 ):
                     filled = True
+                    insurer_via_native_select = True
             except Exception as exc:
                 logger.debug("Hero Insurance: insurer fuzzy select scan: %s", exc)
         if not filled:
@@ -3119,7 +3310,12 @@ def _fill_insurance_company_and_ovd_mobile_consent(
                 f"({insurer[:40]!r}). Adjust selectors for this portal build."
             )
         _hero_insurance_kyc_nav_after_insurer_commit(
-            page, ocr_output_dir=ocr_output_dir, subfolder=subfolder
+            page,
+            ocr_output_dir=ocr_output_dir,
+            subfolder=subfolder,
+            light=bool(
+                HERO_MISP_LIGHT_NAV_AFTER_DOM_INSURER and insurer_via_native_select
+            ),
         )
         kyc_fr_dom = _kyc_preferred_kyc_frame(page)
         _kyc_select_kyc_partner_if_available(
@@ -3530,6 +3726,31 @@ def _proposal_scroll_visible(el, *, timeout_ms: int) -> None:
         pass
 
 
+def _proposal_checkbox_context_text(cb) -> str:
+    """
+    Walk up from the checkbox through parents so **RTI Cover** / **NIC** match even when grid row index
+    (``ctl02`` vs ``ctl03``) or insurer changes layout.
+    """
+    try:
+        return (
+            cb.evaluate(
+                """e => {
+                  const parts = [];
+                  let n = e;
+                  for (let i = 0; i < 14 && n; i++) {
+                    const t = (n.innerText || '').trim();
+                    if (t) parts.push(t.slice(0, 500));
+                    n = n.parentElement;
+                  }
+                  return parts.join('\\n');
+                }"""
+            )
+            or ""
+        )[:3000]
+    except Exception:
+        return ""
+
+
 def _proposal_normalize_dob_for_misp(dob_raw: str) -> str:
     """``customer_master.dob`` is usually dd/mm/yyyy; accept ISO and reformat."""
     v = (dob_raw or "").strip()
@@ -3600,53 +3821,6 @@ def _proposal_step_fill_dob(
     return None
 
 
-def _proposal_step_checkbox_cph1_then_pattern(
-    page,
-    cph1_id_suffix: str,
-    want_checked: bool,
-    text_pattern: str,
-    step_id: str,
-    ocr_output_dir: Path | None,
-    subfolder: str | None,
-    *,
-    timeout_ms: int,
-) -> str | None:
-    """Prefer stable CPH1 checkbox id; fall back to row-text scan (``_proposal_step_checkbox``)."""
-    for root in _hero_misp_page_and_frame_roots(page, purpose="nav"):
-        try:
-            loc = _proposal_cph1_locator(root, cph1_id_suffix)
-            if loc.count() == 0:
-                continue
-            cb = loc.first
-            if (cb.get_attribute("type") or "").lower() != "checkbox":
-                continue
-            if not cb.is_visible(timeout=600):
-                _proposal_scroll_visible(cb, timeout_ms=timeout_ms)
-            if not cb.is_visible(timeout=2_000):
-                continue
-            if want_checked and not cb.is_checked():
-                cb.check(timeout=timeout_ms)
-            elif not want_checked and cb.is_checked():
-                cb.uncheck(timeout=timeout_ms)
-            if cb.is_checked() != want_checked:
-                return (
-                    f"{step_id}: checkbox id={cph1_id_suffix!r} want_checked={want_checked} "
-                    f"got={cb.is_checked()}"
-                )
-            _proposal_log(
-                ocr_output_dir,
-                subfolder,
-                step_id,
-                f"checkbox {'checked' if want_checked else 'unchecked'} ok id_suffix={cph1_id_suffix!r}",
-            )
-            return None
-        except Exception:
-            continue
-    return _proposal_step_checkbox(
-        page, text_pattern, want_checked, step_id, ocr_output_dir, subfolder, timeout_ms=timeout_ms
-    )
-
-
 def _proposal_hdfc_radio_any_checked(page) -> bool:
     for root in _hero_misp_page_and_frame_roots(page, purpose="nav"):
         try:
@@ -3699,6 +3873,34 @@ def _proposal_step_select_fuzzy(
                 if tag != "SELECT":
                     last = f"id {cph1_id_suffix!r} is {tag}, not SELECT"
                     continue
+                # MISP **Marital Status** — try canonical labels; portal may spell **Single** as **SIngle**.
+                if cph1_id_suffix == "ddlMaritalStatus" and q in (
+                    "Married",
+                    "Single",
+                    "Divorced",
+                    "Widow",
+                ):
+                    marital_labels = {
+                        "Married": ("Married",),
+                        "Single": ("Single", "SIngle"),
+                        "Divorced": ("Divorced",),
+                        "Widow": ("Widow",),
+                    }[q]
+                    for lbl in marital_labels:
+                        try:
+                            loc.select_option(label=lbl, timeout=timeout_ms, force=True)
+                            snap = _read_locator_value_snapshot(loc)
+                            st = (snap.get("selected_text") or "").strip()
+                            if _proposal_expected_matches_readback(q, st):
+                                _proposal_log(
+                                    ocr_output_dir,
+                                    subfolder,
+                                    step_id,
+                                    f"select ok id_suffix=ddlMaritalStatus label={lbl!r} readback={st!r}",
+                                )
+                                return None
+                        except Exception:
+                            pass
                 if not _select_option_fuzzy_in_select(
                     page,
                     loc,
@@ -3866,15 +4068,16 @@ def _proposal_step_checkbox(
             try:
                 if not cb.is_visible(timeout=400):
                     continue
-                t = ""
-                cid = cb.get_attribute("id") or ""
-                if cid:
-                    try:
-                        lab = root.locator(f'label[for="{cid}"]')
-                        if lab.count() > 0:
-                            t = (lab.first.inner_text() or "")[:400]
-                    except Exception:
-                        pass
+                t = _proposal_checkbox_context_text(cb)
+                if not t.strip():
+                    cid = cb.get_attribute("id") or ""
+                    if cid:
+                        try:
+                            lab = root.locator(f'label[for="{cid}"]')
+                            if lab.count() > 0:
+                                t = (lab.first.inner_text() or "")[:400]
+                        except Exception:
+                            pass
                 if not t.strip():
                     t = (
                         cb.evaluate(
@@ -3935,15 +4138,16 @@ def _proposal_step_checkbox_uncheck_if_present(
             try:
                 if not cb.is_visible(timeout=400):
                     continue
-                t = ""
-                cid = cb.get_attribute("id") or ""
-                if cid:
-                    try:
-                        lab = root.locator(f'label[for="{cid}"]')
-                        if lab.count() > 0:
-                            t = (lab.first.inner_text() or "")[:400]
-                    except Exception:
-                        pass
+                t = _proposal_checkbox_context_text(cb)
+                if not t.strip():
+                    cid = cb.get_attribute("id") or ""
+                    if cid:
+                        try:
+                            lab = root.locator(f'label[for="{cid}"]')
+                            if lab.count() > 0:
+                                t = (lab.first.inner_text() or "")[:400]
+                        except Exception:
+                            pass
                 if not t.strip():
                     t = (
                         cb.evaluate(
@@ -4071,6 +4275,39 @@ def _proposal_step_usgi_uncheck(
     if err is None:
         return None
     return f"{step_id}: USGI checkbox not found ({last_err or err})"
+
+
+# CPA bottom add-on: portal label varies (NIC / CPI / Hero CPI / …); match by row text; state from ``form_insurance_view.hero_cpi``.
+HERO_MISP_HERO_CPI_ADDON_CHECKBOX_PATTERN = (
+    r"(?m)^\s*(NIC|CPI)\s*$|(?i)\b(NIC|CPI)\b|Hero\s*CPI|Consumer\s*Protection"
+)
+
+
+def _proposal_step_hero_cpi_addon_by_dealer_flag(
+    page,
+    values: dict[str, Any],
+    step_id: str,
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
+    *,
+    timeout_ms: int,
+) -> str | None:
+    """``hero_cpi`` **Y** = check matching add-on row; **N** = uncheck if present."""
+    flag = normalize_hero_cpi_flag(values.get("hero_cpi"))
+    _proposal_log(
+        ocr_output_dir,
+        subfolder,
+        step_id,
+        f"dealer hero_cpi={flag!r} (Y=check NIC/CPI row, N=uncheck)",
+    )
+    pat = HERO_MISP_HERO_CPI_ADDON_CHECKBOX_PATTERN
+    if flag == "Y":
+        return _proposal_step_checkbox(
+            page, pat, True, step_id, ocr_output_dir, subfolder, timeout_ms=timeout_ms
+        )
+    return _proposal_step_checkbox_uncheck_if_present(
+        page, pat, step_id, ocr_output_dir, subfolder, timeout_ms=timeout_ms
+    )
 
 
 def _proposal_step_email_hardcoded(
@@ -4731,7 +4968,7 @@ def _hero_misp_fill_vin_and_click_submit(
         except Exception as exc:
             return f"VIN Submit click failed: {exc!s}"
 
-    _t(page, 800)
+    _t(page, HERO_MISP_UI_SETTLE_MS)
     return None
 
 
@@ -4951,11 +5188,18 @@ def _parse_currency_amount_text(raw: str) -> float | None:
 
 def scrape_insurance_policy_preview_before_issue(page, *, timeout_ms: int) -> dict[str, Any]:
     """
-    Read **policy number** and **insurance cost** (total premium) from the proposal/preview or
-    post-**Issue Policy** confirmation — dummy IDs ``#ins-preview-policy-num`` /
-    ``#ins-preview-insurance-cost``, then label/body heuristics for real MISP.
+    Read **policy number**, **policy period** (from/to), **premium**, and **IDV** from the proposal
+    preview or post-**Issue Policy** screen — dummy IDs ``#ins-preview-*``, then label/body heuristics
+    for real MISP. ``premium`` holds the total premium / payable amount (formerly a separate
+    ``insurance_cost`` field in DB).
     """
-    out: dict[str, Any] = {"policy_num": None, "insurance_cost": None}
+    out: dict[str, Any] = {
+        "policy_num": None,
+        "policy_from": None,
+        "policy_to": None,
+        "premium": None,
+        "idv": None,
+    }
     to = max(2_000, min(int(timeout_ms), 25_000))
 
     try:
@@ -4968,15 +5212,33 @@ def scrape_insurance_policy_preview_before_issue(page, *, timeout_ms: int) -> di
     except Exception as exc:
         logger.debug("Insurance preview scrape policy (dummy id): %s", exc)
 
-    try:
-        loc_c = page.locator("#ins-preview-insurance-cost")
-        if loc_c.count() > 0 and loc_c.first.is_visible(timeout=min(4_000, to)):
-            t = (loc_c.first.inner_text() or "").strip()
-            amt = _parse_currency_amount_text(t)
-            if amt is not None:
-                out["insurance_cost"] = amt
-    except Exception as exc:
-        logger.debug("Insurance preview scrape cost (dummy id): %s", exc)
+    for dummy_id, key in (
+        ("#ins-preview-policy-from", "policy_from"),
+        ("#ins-preview-policy-to", "policy_to"),
+    ):
+        try:
+            loc_d = page.locator(dummy_id)
+            if loc_d.count() > 0 and loc_d.first.is_visible(timeout=min(3_000, to)):
+                t = (loc_d.first.inner_text() or "").strip()
+                if t:
+                    out[key] = t
+        except Exception as exc:
+            logger.debug("Insurance preview scrape %s (dummy id): %s", key, exc)
+
+    for dummy_id, key in (
+        ("#ins-preview-premium", "premium"),
+        ("#ins-preview-insurance-cost", "premium"),
+        ("#ins-preview-idv", "idv"),
+    ):
+        try:
+            loc_d = page.locator(dummy_id)
+            if loc_d.count() > 0 and loc_d.first.is_visible(timeout=min(4_000, to)):
+                t = (loc_d.first.inner_text() or "").strip()
+                amt = _parse_currency_amount_text(t)
+                if amt is not None and out[key] is None:
+                    out[key] = amt
+        except Exception as exc:
+            logger.debug("Insurance preview scrape %s (dummy id): %s", key, exc)
 
     # Nearby text for MISP-style labels (first matching row / cell)
     if not out["policy_num"]:
@@ -5011,23 +5273,64 @@ def scrape_insurance_policy_preview_before_issue(page, *, timeout_ms: int) -> di
         if m:
             out["policy_num"] = _normalize_policy_num_for_db(m.group(1))
 
-    if out["insurance_cost"] is None and body:
+    if (not out.get("policy_from") or not out.get("policy_to")) and body:
+        for m in re.finditer(
+            r"(\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4})\s*[-–—to]+\s*(\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4})",
+            body[:80_000],
+            re.I,
+        ):
+            if not out.get("policy_from"):
+                out["policy_from"] = m.group(1).strip()
+            if not out.get("policy_to"):
+                out["policy_to"] = m.group(2).strip()
+            if out.get("policy_from") and out.get("policy_to"):
+                break
+        if not out.get("policy_from") or not out.get("policy_to"):
+            m2 = re.search(
+                r"(?:Policy\s*)?(?:Period|From)\s*[:\s]*(\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}).*?"
+                r"(?:To|End)\s*[:\s]*(\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4})",
+                body[:80_000],
+                re.I | re.S,
+            )
+            if m2:
+                if not out.get("policy_from"):
+                    out["policy_from"] = m2.group(1).strip()
+                if not out.get("policy_to"):
+                    out["policy_to"] = m2.group(2).strip()
+
+    if out.get("premium") is None and body:
         m = re.search(
             r"(?:Insurance\s*[Cc]ost|Total\s*(?:Policy\s*)?[Pp]remium|Net\s*[Pp]remium|Final\s*[Pp]remium|"
-            r"Premium\s*(?:Amount|Paid|Payable)?|Amount\s*Payable)\s*[:\s]*\s*[₹RsINR.\s]*([\d][\d,]*(?:\.\d{1,2})?)",
+            r"Gross\s*[Pp]remium|Premium\s*(?:Amount|Paid|Payable)?|Amount\s*Payable)\s*[:\s]*\s*[₹RsINR.\s]*"
+            r"([\d][\d,]*(?:\.\d{1,2})?)",
             body,
             re.I | re.M,
         )
         if m:
             amt = _parse_currency_amount_text(m.group(1))
             if amt is not None:
-                out["insurance_cost"] = amt
+                out["premium"] = amt
 
-    if out["policy_num"] or out["insurance_cost"] is not None:
+    if out.get("idv") is None and body:
+        for pat in (
+            r"(?:IDV|Insured\s*Declared\s*Value)\s*[:\s₹RsINR.]*\s*([\d][\d,]*(?:\.\d{1,2})?)",
+            r"IDV\s*[:\s]*\s*([\d][\d,]*(?:\.\d{1,2})?)",
+        ):
+            m = re.search(pat, body[:80_000], re.I | re.M)
+            if m:
+                amt = _parse_currency_amount_text(m.group(1))
+                if amt is not None:
+                    out["idv"] = amt
+                    break
+
+    if any(v is not None for v in out.values()):
         logger.info(
-            "Insurance policy preview scrape: policy_num=%r insurance_cost=%s",
-            out["policy_num"],
-            out["insurance_cost"],
+            "Insurance policy preview scrape: policy_num=%r policy_from=%r policy_to=%r premium=%s idv=%s",
+            out.get("policy_num"),
+            out.get("policy_from"),
+            out.get("policy_to"),
+            out.get("premium"),
+            out.get("idv"),
         )
     return out
 
@@ -5035,7 +5338,8 @@ def scrape_insurance_policy_preview_before_issue(page, *, timeout_ms: int) -> di
 def click_issue_policy_and_scrape_preview(page, *, timeout_ms: int) -> dict[str, Any]:
     """
     Click **Issue Policy** (dummy ``#ins-issue-policy`` or MISP button / text), wait for navigation,
-    then scrape ``policy_num`` and ``insurance_cost`` via ``scrape_insurance_policy_preview_before_issue``.
+    then scrape ``policy_num``, ``policy_from``, ``policy_to``, ``premium``, ``idv`` via
+    ``scrape_insurance_policy_preview_before_issue``.
     When ``HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY`` is True, skips the click and only scrapes.
     """
     to = max(2_000, int(timeout_ms))
@@ -5240,7 +5544,15 @@ def _hero_misp_fill_proposal_and_review(
         )
         return msg, {}
 
-    ms = _proposal_map_marital_for_misp((values.get("marital_status") or "").strip())
+    raw_marital = (values.get("marital_status") or "").strip()
+    ms = _proposal_map_marital_for_misp(raw_marital)
+    if raw_marital:
+        _proposal_log(
+            ocr_output_dir,
+            subfolder,
+            "marital_status",
+            f"raw={raw_marital!r} mapped={ms!r}",
+        )
     if ms:
         err = _proposal_step_select_fuzzy(
             page,
@@ -5463,11 +5775,10 @@ def _hero_misp_fill_proposal_and_review(
     )
     if err:
         return _fail(err)
-    err = _proposal_step_checkbox_cph1_then_pattern(
+    err = _proposal_step_checkbox(
         page,
-        "chkroicover",
+        r"RTI\s*Cover|RTI\s*&?\s*Cover|Return\s+to\s+Invoice|Cover\s*[-–]?\s*RTI",
         True,
-        r"RTI\s*cover|RTI\s*Cover|RTI",
         "addon_rti",
         ocr_output_dir,
         subfolder,
@@ -5514,6 +5825,17 @@ def _hero_misp_fill_proposal_and_review(
     err = _proposal_step_usgi_uncheck(
         page,
         "cpa_usgi_uncheck",
+        ocr_output_dir,
+        subfolder,
+        timeout_ms=pt,
+    )
+    if err:
+        return _fail(err)
+
+    err = _proposal_step_hero_cpi_addon_by_dealer_flag(
+        page,
+        values,
+        "addon_hero_cpi",
         ocr_output_dir,
         subfolder,
         timeout_ms=pt,
@@ -5754,8 +6076,9 @@ def main_process(
                 int(vehicle_id),
                 fill_values=values,
                 staging_payload=staging_payload,
-                preview_policy_num=preview.get("policy_num"),
-                preview_insurance_cost=preview.get("insurance_cost"),
+                preview_scrape=preview,
+                ocr_output_dir=ocr_output_dir,
+                subfolder=subfolder,
             )
         except ValueError as persist_exc:
             out["error"] = str(persist_exc)
@@ -5774,8 +6097,7 @@ def main_process(
             update_insurance_master_policy_after_issue(
                 int(customer_id),
                 int(vehicle_id),
-                policy_num=post_issue.get("policy_num"),
-                insurance_cost=post_issue.get("insurance_cost"),
+                scrape=post_issue,
             )
         except Exception as upd_exc:
             logger.warning("main_process: insurance_master post-issue update failed: %s", upd_exc)
@@ -6097,7 +6419,7 @@ def run_fill_insurance_only(
                 page.wait_for_load_state("domcontentloaded", timeout=25_000)
             except Exception:
                 pass
-            _t(page, 800)
+            _t(page, HERO_MISP_UI_SETTLE_MS)
             append_playwright_insurance_line(
                 ocr_output_dir,
                 subfolder,
@@ -6349,8 +6671,9 @@ def run_fill_insurance_only(
                         int(vehicle_id),
                         fill_values=values,
                         staging_payload=staging_payload,
-                        preview_policy_num=preview.get("policy_num"),
-                        preview_insurance_cost=preview.get("insurance_cost"),
+                        preview_scrape=preview,
+                        ocr_output_dir=ocr_output_dir,
+                        subfolder=values.get("subfolder") or subfolder,
                     )
                 except ValueError as persist_exc:
                     result["error"] = str(persist_exc)
@@ -6377,8 +6700,7 @@ def run_fill_insurance_only(
                     update_insurance_master_policy_after_issue(
                         int(customer_id),
                         int(vehicle_id),
-                        policy_num=post_issue.get("policy_num"),
-                        insurance_cost=post_issue.get("insurance_cost"),
+                        scrape=post_issue,
                     )
                 except Exception as upd_exc:
                     logger.warning("run_fill_insurance_only: insurance_master post-issue update failed: %s", upd_exc)

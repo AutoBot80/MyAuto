@@ -195,10 +195,17 @@ KYC_KEYBOARD_TABS_OVD_TO_MOBILE = _int_env("KYC_KEYBOARD_TABS_OVD_TO_MOBILE", 4)
 KYC_KEYBOARD_TABS_MOBILE_TO_CONSENT = _int_env("KYC_KEYBOARD_TABS_MOBILE_TO_CONSENT", 2)
 KYC_KEYBOARD_INSURER_ARROW_DOWN_MAX = _int_env("KYC_KEYBOARD_INSURER_ARROW_DOWN_MAX", 60)
 KYC_KEYBOARD_OVD_ARROW_DOWN_MAX = _int_env("KYC_KEYBOARD_OVD_ARROW_DOWN_MAX", 28)
+# Keyboard SOP inter-key delays (ms). Lower = faster; increase on slow portals if flaky.
+KYC_KEYBOARD_INSURER_TYPE_DELAY_MS = _int_env("KYC_KEYBOARD_INSURER_TYPE_DELAY_MS", 7)
+KYC_KEYBOARD_MOBILE_TYPE_DELAY_MS = _int_env("KYC_KEYBOARD_MOBILE_TYPE_DELAY_MS", 18)
+KYC_KEYBOARD_OVD_ARROW_DOWN_SETTLE_MS = _int_env("KYC_KEYBOARD_OVD_ARROW_DOWN_SETTLE_MS", 72)
+KYC_KEYBOARD_INSURER_ARROW_DOWN_STEP_MS = _int_env("KYC_KEYBOARD_INSURER_ARROW_DOWN_STEP_MS", 65)
 
 # After insurer / KYC Partner: optional ``networkidle`` (ms). **0** = skip (default; no .env required).
 INSURANCE_KYC_POST_INSURER_NETWORKIDLE_MS = _int_env("INSURANCE_KYC_POST_INSURER_NETWORKIDLE_MS", 0)
 INSURANCE_KYC_POST_KYC_PARTNER_NETWORKIDLE_MS = _int_env("INSURANCE_KYC_POST_KYC_PARTNER_NETWORKIDLE_MS", 0)
+# Short UI settle after KYC / VIN submit / post-mobile micro-pauses (ms). Override via HERO_MISP_UI_SETTLE_MS.
+HERO_MISP_UI_SETTLE_MS = _int_env("HERO_MISP_UI_SETTLE_MS", 200)
 # Default portal label for MISP **KYC Partner** when ``values['kyc_partner']`` is unset (documentation only;
 # automation does not change ``ddlkycPartner`` — portal default e.g. Signzy remains).
 KYC_DEFAULT_KYC_PARTNER_LABEL = (os.getenv("KYC_DEFAULT_KYC_PARTNER_LABEL") or "Signzy").strip() or "Signzy"
