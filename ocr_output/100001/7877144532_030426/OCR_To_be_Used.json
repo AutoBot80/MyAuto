@@ -23,12 +23,11 @@
   },
   "insurance": {
     "financier": "Shri Ram",
-    "insurer": "I agree to receiving periodic SMS updates about registration and service status.",
-    "marital_status": "unmaried",
+    "marital_status": "Single",
     "nominee_gender": "Female",
     "nominee_name": "Priya (Mother)",
     "nominee_age": "35",
-    "nominee_relationship": "Mother."
+    "nominee_relationship": "Mother"
   },
-  "details_customer_name": "Nishaut Kumar s/o Brij GoPal"
+  "details_customer_name": "Nishaut Kumar S/O Brij Gopal"
 }

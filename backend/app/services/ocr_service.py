@@ -14,6 +14,7 @@ from typing import Any
 from app.db import get_connection
 from app.repositories.ai_reader_queue import AiReaderQueueRepository
 from app.services.utility_functions import (
+    default_profession_if_empty,
     normalize_nominee_relationship_value,
     sanitize_details_sheet_insurer_value,
 )
@@ -1732,12 +1733,9 @@ def _apply_initcap_on_read(data: dict[str, Any]) -> None:
     """
     customer = data.get("customer") or {}
     if isinstance(customer, dict):
-        if customer.get("profession"):
+        if "profession" in customer:
             sp = _sanitize_details_profession_value(customer.get("profession"))
-            if sp:
-                customer["profession"] = _initcap_words(sp)
-            else:
-                customer.pop("profession", None)
+            customer["profession"] = _initcap_words(sp) if sp else default_profession_if_empty("")
         if customer.get("marital_status"):
             ms = _normalize_details_marital_status_value(customer.get("marital_status"))
             if ms:
@@ -1751,12 +1749,9 @@ def _apply_initcap_on_read(data: dict[str, Any]) -> None:
 
     insurance = data.get("insurance") or {}
     if isinstance(insurance, dict):
-        if insurance.get("profession"):
+        if "profession" in insurance:
             sp = _sanitize_details_profession_value(insurance.get("profession"))
-            if sp:
-                insurance["profession"] = _initcap_words(sp)
-            else:
-                insurance.pop("profession", None)
+            insurance["profession"] = _initcap_words(sp) if sp else default_profession_if_empty("")
         if insurance.get("marital_status"):
             ms = _normalize_details_marital_status_value(insurance.get("marital_status"))
             if ms:
@@ -1927,10 +1922,22 @@ def _sanitize_details_profession_value(val: str | None) -> str | None:
     s = str(val).strip()
     # Normalize unicode dashes and spaces OCR often mixes with "- Marital Status: …"
     s = s.replace("\u2013", "-").replace("\u2014", "-").replace("\u2012", "-").replace("\xa0", " ")
+    # Full-width / compatibility colons (printed forms, OCR)
+    s = s.replace("\uff1a", ":").replace("\ufe55", ":")
+
+    # Entire value is only a marital-status label + outcome (incl. OCR "Martial" for "Marital",
+    # "Marrital", glued "MaritalStatus:", full-width colon).
+    if re.match(
+        r"(?i)^[\s\-–—:._]*(?:marital|martial|marrital)\s*status\s*[:：]?\s*(?:unmaried|un-maried|unmarried|single|married|divorced|widowed)?\s*$",
+        s,
+    ):
+        return None
 
     # Cut before the earliest OCR variant of "marital status" (including glued "maritalstatus").
     _marital_field_pat = (
         r"(?i)\bmarital\s*status\b",
+        r"(?i)\bmartial\s*status\b",  # common OCR misread of "Marital"
+        r"(?i)\bmarrital\s*status\b",
         r"(?i)marital\s*statu?s\b",
         r"(?i)mari\s*ta?l\s*status\b",
         r"(?i)maritalstatus\b",
@@ -1958,7 +1965,7 @@ def _sanitize_details_profession_value(val: str | None) -> str | None:
         return None
 
     # Remainder still starts like a marital-status line (no real profession token)
-    if re.match(r"(?i)^(marital|maritalstatus|mari\s*ta?l)\b", s):
+    if re.match(r"(?i)^(marital|martial|marrital|maritalstatus|mari\s*ta?l)\b", s):
         return None
 
     return s[:200]
@@ -2242,12 +2249,9 @@ def _map_key_value_pairs_to_insurance(pairs: list[dict]) -> dict[str, str]:
             if got:
                 out["financier"] = got
                 break
-    if out.get("profession"):
-        sp = _sanitize_details_profession_value(out["profession"])
-        if sp:
-            out["profession"] = sp
-        else:
-            out.pop("profession", None)
+    if "profession" in out:
+        sp = _sanitize_details_profession_value(out.get("profession"))
+        out["profession"] = sp if sp else default_profession_if_empty("")
     if out.get("marital_status"):
         ms = _normalize_details_marital_status_value(out["marital_status"])
         if ms:
@@ -2304,12 +2308,9 @@ def _map_key_value_pairs_to_details_customer(pairs: list[dict]) -> dict[str, str
         out["aadhar_id"] = _aadhar_last4(out.get("aadhar_id")) or ""
     if out.get("nominee_age"):
         out["nominee_age"] = _sanitize_nominee_age(out["nominee_age"]) or ""
-    if out.get("profession"):
-        sp = _sanitize_details_profession_value(out["profession"])
-        if sp:
-            out["profession"] = sp
-        else:
-            out.pop("profession", None)
+    if "profession" in out:
+        sp = _sanitize_details_profession_value(out.get("profession"))
+        out["profession"] = sp if sp else default_profession_if_empty("")
     if out.get("marital_status"):
         ms = _normalize_details_marital_status_value(out["marital_status"])
         if ms:
@@ -2747,6 +2748,9 @@ class OcrService:
                     and v
                 },
             }
+            if "profession" in insurance_merged:
+                sp_im = _sanitize_details_profession_value(insurance_merged.get("profession"))
+                insurance_merged["profession"] = sp_im if sp_im else default_profession_if_empty("")
 
             if details_customer_name and frag_a and frag_a.get("raw_parts"):
                 blob = _concat_aadhar_scan_ocr_text(frag_a["raw_parts"])
@@ -3109,6 +3113,9 @@ class OcrService:
                     and v
                 },
             }
+            if "profession" in insurance_merged:
+                sp_im = _sanitize_details_profession_value(insurance_merged.get("profession"))
+                insurance_merged["profession"] = sp_im if sp_im else default_profession_if_empty("")
             customer_merged = enrich_customer_address_from_freeform(customer_merged)
             details_json = {"vehicle": vehicle, "customer": customer_merged, "insurance": insurance_merged}
             if details_customer_name:

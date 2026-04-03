@@ -27,8 +27,10 @@ def normalize_hero_cpi_flag(raw: object | None) -> str:
     return "Y" if t.strip().upper() == "Y" else "N"
 
 from app.db import get_connection
+from app.services.ocr_service import _sanitize_details_profession_value
 from app.services.utility_functions import (
     clean_text,
+    default_profession_if_empty,
     insurer_prefer_matches,
     normalize_dob_for_misp,
     normalize_nominee_relationship_value,
@@ -202,6 +204,8 @@ def build_insurance_fill_values(
     dob_merged = clean_text(values.get("dob"))
     values["dob"] = normalize_dob_for_misp(dob_merged) if dob_merged else ""
     values["nominee_relationship"] = normalize_nominee_relationship_value(values.get("nominee_relationship"))
+    prof_clean = _sanitize_details_profession_value(values.get("profession"))
+    values["profession"] = default_profession_if_empty(prof_clean)
     required = [
         ("insurance_master.insurer (or staging / OCR details insurer)", values["insurer"]),
         ("customer_master.mobile_number", values["mobile_number"]),

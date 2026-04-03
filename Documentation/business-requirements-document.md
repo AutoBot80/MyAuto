@@ -244,7 +244,7 @@ This is the **intended** real-DMS order (aligned with the operator screen record
 | New Policy | Gender | Customer gender | `customer_master.gender` |
 | New Policy | Date of Birth | Customer DOB | `customer_master.date_of_birth` |
 | New Policy | Marital Status | Customer marital status | `customer_master.marital_status` |
-| New Policy | Occupation Type / Profession | Customer profession | `customer_master.profession` |
+| New Policy | Occupation Type / Profession | Customer profession; when blank after Details sanitization, **Employed** (**`default_profession_if_empty`**) | `customer_master.profession` |
 | New Policy | Proposer State/City/Pin/Address | Customer address fields | `customer_master.state`, `customer_master.city`, `customer_master.pin`, `customer_master.address` |
 | New Policy | Frame No. | Vehicle frame/chassis | `vehicle_master.chassis` |
 | New Policy | Engine No. | Vehicle engine | `vehicle_master.engine` |
@@ -508,3 +508,5 @@ Bulk upload automates the ingestion of scanned documents from a shared folder in
 | 3.141 | Apr 2026 | — | **FR-5** / **FR-18b**: Marital status OCR typo **Unmaried** → stored/display **Single**; MISP proposal mapping aligned — **LLD** **6.222**, **§2.3** |
 | 3.142 | Apr 2026 | — | **FR-23** / **FR-18b**: Blank **Insurer Name** must not take the next printed consent/SMS line; **`sanitize_details_sheet_insurer_value`**; when insurer still empty, **`build_insurance_fill_values`** uses **`dealer_ref.prefer_insurer`** — **LLD** **6.223**, **§2.3** / **§6.6** |
 | 3.143 | Apr 2026 | — | **FR-23**: Nominee **Relation** must not retain a trailing period from the form (e.g. **Mother.** → **Mother**) — **`normalize_nominee_relationship_value`** — **LLD** **6.224**, **§2.3** |
+| 3.144 | Apr 2026 | — | **FR-5** / **FR-23**: Profession must not remain **Marital Status: Unmaried** (incl. OCR **Martial**, full-width colon, whole-line bleed) — **`_sanitize_details_profession_value`**, **`submit_info_service`**, **`build_insurance_fill_values`** — **LLD** **6.225**, **§2.3** |
+| 3.145 | Apr 2026 | — | **FR-5** / **FR-18b**: Blank profession after sanitization defaults to **Employed** (**`default_profession_if_empty`**) — **LLD** **6.226**, **§2.3** / **§6.6** |

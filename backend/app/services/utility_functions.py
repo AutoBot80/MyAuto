@@ -136,6 +136,16 @@ def clean_text(value: object | None) -> str:
     return str(value).strip()
 
 
+# When Details-sheet profession is blank or sanitized away (e.g. marital-status bleed), MISP/DMS use this.
+DEFAULT_SALES_DETAIL_PROFESSION = "Employed"
+
+
+def default_profession_if_empty(val: str | None) -> str:
+    """Return trimmed ``val``, or ``DEFAULT_SALES_DETAIL_PROFESSION`` when empty."""
+    t = clean_text(val)
+    return t if t else DEFAULT_SALES_DETAIL_PROFESSION
+
+
 def safe_subfolder_name(subfolder: str) -> str:
     """Safe directory name (one segment) for ocr_output and uploads."""
     return re.sub(r"[^\w\-]", "_", (subfolder or "").strip()) or "default"

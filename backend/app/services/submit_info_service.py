@@ -12,7 +12,11 @@ from app.db import get_connection
 from app.repositories.add_sales_staging import persist_staging_for_submit
 from app.services.customer_address_infer import enrich_customer_address_from_freeform
 from app.services.dms_relation_prefix import compute_dms_relation_prefix
-from app.services.utility_functions import normalize_nominee_relationship_value
+from app.services.ocr_service import _sanitize_details_profession_value
+from app.services.utility_functions import (
+    default_profession_if_empty,
+    normalize_nominee_relationship_value,
+)
 
 
 def _int_or_none(val: Any) -> int | None:
@@ -79,7 +83,8 @@ def submit_info(
     state = _str_or_none(customer.get("state"))
     gender = _str_or_none(customer.get("gender"), 8)
     date_of_birth = _str_or_none(customer.get("date_of_birth"), 20)
-    profession = _str_or_none(customer.get("profession"), 16)
+    _prof = _sanitize_details_profession_value(customer.get("profession"))
+    profession = _str_or_none(default_profession_if_empty(_prof), 16)
     financier = _str_or_none(customer.get("financier"), 255)
     marital_status = _str_or_none(customer.get("marital_status"), 32)
     rel_computed = compute_dms_relation_prefix(address or "", gender)
