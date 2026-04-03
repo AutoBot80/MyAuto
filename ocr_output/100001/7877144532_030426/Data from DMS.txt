@@ -1,0 +1,28 @@
+Data from DMS
+
+--- Customer (filled on enquiry) ---
+Name: Nishant Kumar
+Address: S/O Brij Gopal, ward no 43, basant vihar Bharatpur, PO: Bharatpur, DIST: Bharatpur, Rajasthan - 321001
+State: RAJASTHAN
+Pin code: 321001
+Mobile: 7877144532
+Relation (S/O or W/o): S/O
+Care of / Father–Husband (Aadhaar QR): S/O Brij Gopal
+
+--- Vehicle (from DMS search result) ---
+Key num: —
+Frame / Chassis num: —
+Full chassis (VIN from detail): MBLHA11EE99C17537
+Engine num: —
+Full engine (from detail): HA11EA99C36777
+Model: CD DELUXE
+Color: RBK
+Cubic capacity: S
+Seating capacity: —
+Body type: —
+Vehicle type: —
+Num cylinders: —
+Ex-showroom Price (Order Value): —
+Year of Mfg: 2009
+Order # (DMS): —
+Invoice # (DMS): —

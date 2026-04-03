@@ -22,6 +22,7 @@
     "aadhar_id": "0981"
   },
   "insurance": {
+    "profession": "Employed",
     "financier": "Shri Ram",
     "marital_status": "Single",
     "nominee_gender": "Female",
