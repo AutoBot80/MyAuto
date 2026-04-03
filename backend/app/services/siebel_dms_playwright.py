@@ -7400,7 +7400,8 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     / ``Precheck List:New`` by role or CSS. Skip **Service Request List: Menu**. Then **Technician** pick must target the **second** pick icon when
     generic ``siebui-icon-picklist`` CSS is used (``.first`` would re-click **Open**).
     **Open** / **Technician**: click first
-    **jqgrow** row, then **Tab**-retry loops so pick icons match Siebel focus (Technician often after Tab from **Open**). PDI: **Service Request List:New**
+    **jqgrow** row, then **Tab**-retry loops for **Open** pick only. **Submit** / **Ctrl+S** runs **right after** the **Open** LOV
+    closes when save succeeds; **Technician** LOV runs only when Submit did not persist or validation remains. PDI: **Service Request List:New**
     then optional legacy ``s_2_2_32_0_icon`` / ``s_2_2_32_0``. After the **Open** pick icon, ``_pick_first_row_and_ok``; after the
     **Technician** pick icon, ``_siebel_lov_pick_first_row_ok_pdi_style`` (same settle / first row /
     **OK** / settle as the PDI pick applet). LOV pick icons use ``*_icon`` ids — **never** ``s_3_1_12_0_Ctrl`` (that id is the
@@ -8537,85 +8538,101 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 "Technician step was not run; Pre-check Submit and PDI were skipped.",
             )
 
-        # Move focus to Technician (often only after Tab out of Open); try Tab + pick repeatedly.
-        _tech_icon_ok = False
-        _tech_icon_used = ""
-        for _ti in range(6):
-            try:
-                page.keyboard.press("Tab")
-                _safe_page_wait(page, 220, log_label=f"precheck_tab_toward_technician_{_ti}")
-            except Exception:
-                pass
-            _tech_icon_ok, _tech_icon_used = _click_precheck_pick_icon("precheck_technician_after_tab")
-            if _tech_icon_ok:
-                note(
-                    f"{log_prefix}: Technician pick icon clicked after {_ti + 1} Tab(s) from Open "
-                    f"(id={_tech_icon_used!r})."
-                )
-                break
-        if not _tech_icon_ok:
-            return (
-                False,
-                "Pre-check: Technician pick icon not found after Tab from Open (tried up to 6 Tabs + pick ids/CSS). "
-                "Pre-check Submit and PDI were skipped.",
-            )
-        _tech_row_ok, _tech_ok_done = _siebel_lov_pick_first_row_ok_pdi_style(
-            page,
-            roots=_roots,
-            action_timeout_ms=action_timeout_ms,
-            note=note,
-            log_prefix=log_prefix,
-            stage_label="Pre-check Technician",
-        )
-        if not _tech_row_ok:
-            return (
-                False,
-                "Pre-check: Technician pick applet did not select a row (same sequence as PDI pick). "
-                "Pre-check Submit and PDI were skipped.",
-            )
-        if not _tech_ok_done:
-            return (
-                False,
-                "Pre-check: Technician pick applet OK was not clicked. "
-                "Pre-check Submit and PDI were skipped.",
-            )
-
-        _submit_done = False
-        for root in _roots():
-            for sub_css in (
-                "button:has-text('Submit')",
-                "a:has-text('Submit')",
-                "input[type='button'][value='Submit' i]",
-                "button[aria-label*='Submit' i]",
-                "a[aria-label*='Submit' i]",
-                "button[title*='Submit' i]",
-                "a[title*='Submit' i]",
-            ):
+        def _precheck_try_submit() -> bool:
+            _done = False
+            for root in _roots():
+                for sub_css in (
+                    "button:has-text('Submit')",
+                    "a:has-text('Submit')",
+                    "input[type='button'][value='Submit' i]",
+                    "button[aria-label*='Submit' i]",
+                    "a[aria-label*='Submit' i]",
+                    "button[title*='Submit' i]",
+                    "a[title*='Submit' i]",
+                ):
+                    try:
+                        sub_loc = root.locator(sub_css).first
+                        if sub_loc.count() > 0 and sub_loc.is_visible(timeout=700):
+                            try:
+                                sub_loc.click(timeout=_tmo)
+                            except Exception:
+                                sub_loc.click(timeout=_tmo, force=True)
+                            _done = True
+                            note(f"{log_prefix}: clicked Submit (Pre-check).")
+                            _safe_page_wait(page, 1500, log_label="after_precheck_submit")
+                            break
+                    except Exception:
+                        continue
+                if _done:
+                    break
+            if not _done:
                 try:
-                    sub_loc = root.locator(sub_css).first
-                    if sub_loc.count() > 0 and sub_loc.is_visible(timeout=700):
-                        try:
-                            sub_loc.click(timeout=_tmo)
-                        except Exception:
-                            sub_loc.click(timeout=_tmo, force=True)
-                        _submit_done = True
-                        note(f"{log_prefix}: clicked Submit (Pre-check).")
-                        _safe_page_wait(page, 1500, log_label="after_precheck_submit")
-                        break
+                    page.keyboard.press("Control+s")
+                    _safe_page_wait(page, 1200, log_label="after_precheck_ctrl_s_save")
+                    _done = True
+                    note(f"{log_prefix}: Pre-check record save via Ctrl+S (no Submit control matched).")
                 except Exception:
-                    continue
-            if _submit_done:
-                break
-        if not _submit_done:
-            try:
-                page.keyboard.press("Control+s")
-                _safe_page_wait(page, 1200, log_label="after_precheck_ctrl_s_save")
-                _submit_done = True
-                note(f"{log_prefix}: Pre-check record save via Ctrl+S (no Submit control matched).")
-            except Exception:
-                pass
-        if not _submit_done:
-            return False, "Could not click Submit on Pre-check or save with Ctrl+S."
+                    pass
+            return _done
+
+        # Many tenants: pick **Open** (and operator) in one LOV → **Submit** here. Extra **Tab**s before Technician
+        # break focus and never reach Submit — try save first, then optional Technician only if needed.
+        _submit_done = _precheck_try_submit()
+        _err_after_submit = _detect_siebel_error_popup(page, content_frame_selector)
+        if _submit_done and not _err_after_submit:
+            note(f"{log_prefix}: Pre-check saved after Open LOV (Submit/Ctrl+S; Technician step skipped).")
+        else:
+            if _submit_done and _err_after_submit:
+                note(
+                    f"{log_prefix}: Pre-check Submit after Open returned validation/error — "
+                    "trying Technician LOV if pick icon is available."
+                )
+            elif not _submit_done:
+                note(
+                    f"{log_prefix}: Pre-check Submit not completed after Open — "
+                    "trying Technician pick (0 Tab first, then Tab + pick)."
+                )
+
+            _tech_icon_ok = False
+            _tech_icon_used = ""
+            for _ti in range(5):
+                if _ti > 0:
+                    try:
+                        page.keyboard.press("Tab")
+                        _safe_page_wait(page, 220, log_label=f"precheck_tab_toward_technician_{_ti}")
+                    except Exception:
+                        pass
+                _tech_icon_ok, _tech_icon_used = _click_precheck_pick_icon("precheck_technician_after_tab")
+                if _tech_icon_ok:
+                    note(
+                        f"{log_prefix}: Technician pick icon clicked after {_ti} extra Tab(s) "
+                        f"(id={_tech_icon_used!r})."
+                    )
+                    break
+            if _tech_icon_ok:
+                _tech_row_ok, _tech_ok_done = _siebel_lov_pick_first_row_ok_pdi_style(
+                    page,
+                    roots=_roots,
+                    action_timeout_ms=action_timeout_ms,
+                    note=note,
+                    log_prefix=log_prefix,
+                    stage_label="Pre-check Technician",
+                )
+                if not (_tech_row_ok and _tech_ok_done):
+                    note(
+                        f"{log_prefix}: Technician LOV did not fully complete (row={_tech_row_ok}, ok={_tech_ok_done}) — "
+                        "attempting Submit anyway."
+                    )
+            else:
+                note(
+                    f"{log_prefix}: Technician pick icon not found — attempting Submit anyway "
+                    "(Open-only / operator-in-Open workflows)."
+                )
+
+            if not (_submit_done and not _err_after_submit):
+                _submit_done = _precheck_try_submit()
+            if not _submit_done:
+                return False, "Could not click Submit on Pre-check or save with Ctrl+S."
 
         _submit_err = _detect_siebel_error_popup(page, content_frame_selector)
         if _submit_err:
