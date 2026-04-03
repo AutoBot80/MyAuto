@@ -458,44 +458,6 @@ def compute_insurance_master_insert_snapshot(
     }
 
 
-def append_insurance_master_insert_snapshot_playwright(
-    ocr_output_dir: Path | str | None,
-    subfolder: str | None,
-    snapshot: dict[str, Any],
-) -> None:
-    """Writes compact JSON ``NOTE`` to ``Playwright_insurance.txt`` before DB insert; optional pretty JSON."""
-    if not ocr_output_dir or not subfolder or not str(subfolder).strip():
-        return
-    from app.services.insurance_form_values import append_playwright_insurance_line
-
-    payload = {
-        "insurance_master_insert_snapshot": True,
-        "insert_row": snapshot.get("insert_row"),
-        "field_sources": snapshot.get("field_sources"),
-        "uncertainties": snapshot.get("uncertainties"),
-        "inputs_echo": snapshot.get("inputs_echo"),
-    }
-    line = json.dumps(payload, default=str, ensure_ascii=False, separators=(",", ":"))
-    max_len = 24_000
-    if len(line) > max_len:
-        line = line[:max_len] + "…(truncated)"
-    append_playwright_insurance_line(
-        Path(ocr_output_dir),
-        subfolder,
-        "NOTE",
-        f"insurance_master INSERT (before DB commit): {line}",
-    )
-    pretty_threshold = 8000
-    if len(line) >= pretty_threshold:
-        pretty = json.dumps(payload, indent=2, default=str, ensure_ascii=False)
-        append_playwright_insurance_line(
-            Path(ocr_output_dir),
-            subfolder,
-            "NOTE",
-            "insurance_master INSERT snapshot (pretty JSON):\n" + pretty,
-        )
-
-
 def insert_insurance_master_after_gi(
     customer_id: int,
     vehicle_id: int,
@@ -513,9 +475,7 @@ def insert_insurance_master_after_gi(
     Raises ``ValueError`` if a row already exists for the same customer, vehicle, and year
     (``uq_insurance_customer_vehicle_year``). After **Issue Policy**, call
     ``update_insurance_master_policy_after_issue`` with the post-issue preview scrape dict.
-
-    When ``ocr_output_dir`` and ``subfolder`` are set, logs the full derived row and sources to
-    ``Playwright_insurance.txt`` immediately before the INSERT.
+    Does not write pre-commit INSERT snapshot lines to ``Playwright_insurance.txt`` (see **LLD** **6.215**).
     """
     snap = compute_insurance_master_insert_snapshot(
         customer_id,
@@ -524,7 +484,6 @@ def insert_insurance_master_after_gi(
         staging_payload=staging_payload,
         preview_scrape=preview_scrape,
     )
-    append_insurance_master_insert_snapshot_playwright(ocr_output_dir, subfolder, snap)
 
     ir = snap["insert_row"]
     insurance_year = int(ir["insurance_year"])

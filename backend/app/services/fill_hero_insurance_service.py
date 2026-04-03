@@ -4593,6 +4593,75 @@ def _proposal_step_fill_input(
     return f"{step_id}: {last}"
 
 
+def _proposal_cph1_checkbox_readback_pair(cb) -> tuple[bool | None, bool | None]:
+    """DOM ``.checked`` and Playwright ``is_checked()`` (None if a read fails)."""
+    dom_v: bool | None = None
+    try:
+        dom_v = bool(cb.evaluate("e => !!(e && e.checked)"))
+    except Exception:
+        pass
+    pw_v: bool | None = None
+    try:
+        pw_v = bool(cb.is_checked())
+    except Exception:
+        pass
+    return dom_v, pw_v
+
+
+def _proposal_wait_cph1_checkbox_stable(
+    page,
+    cb,
+    want_checked: bool,
+    *,
+    max_rounds: int = 8,
+) -> tuple[bool, bool | None, bool | None]:
+    """
+    After toggling, ASP.NET can revert on the next tick — require **two consecutive** agreeing
+    readbacks (DOM + PW when both available) with short settles between polls.
+    """
+    consecutive = 0
+    last_dom: bool | None = None
+    last_pw: bool | None = None
+    for _ in range(max(3, max_rounds)):
+        _t(page, _MISP_UI_SETTLE_CAP_MS)
+        last_dom, last_pw = _proposal_cph1_checkbox_readback_pair(cb)
+        ok = False
+        if last_dom is not None and last_pw is not None:
+            ok = last_dom == want_checked and last_pw == want_checked
+        elif last_pw is not None:
+            ok = last_pw == want_checked
+        elif last_dom is not None:
+            ok = last_dom == want_checked
+        if ok:
+            consecutive += 1
+            if consecutive >= 2:
+                return True, last_dom, last_pw
+        else:
+            consecutive = 0
+    return False, last_dom, last_pw
+
+
+def _proposal_first_visible_locator_nth(loc, *, max_n: int = 6, vis_timeout_ms: int = 600):
+    """Prefer a **visible** match when the same id appears in multiple roots / duplicate nodes."""
+    try:
+        n = loc.count()
+    except Exception:
+        return None
+    for i in range(min(n, max_n)):
+        el = loc.nth(i)
+        try:
+            if el.is_visible(timeout=vis_timeout_ms):
+                return el
+        except Exception:
+            continue
+    try:
+        if loc.count() > 0:
+            return loc.first
+    except Exception:
+        pass
+    return None
+
+
 def _proposal_step_checkbox(
     page,
     text_pattern: str,
@@ -4767,7 +4836,10 @@ def _proposal_step_checkbox_by_cph1_id(
             if loc.count() == 0:
                 continue
             seen = True
-            cb = loc.first
+            cb = _proposal_first_visible_locator_nth(loc, max_n=6, vis_timeout_ms=600)
+            if cb is None:
+                last_err = f"{id_suffix} no visible locator"
+                continue
             typ = (cb.get_attribute("type") or "").lower()
             if typ != "checkbox":
                 return f"{step_id}: {id_suffix!r} is not type=checkbox"
@@ -4798,16 +4870,23 @@ def _proposal_step_checkbox_by_cph1_id(
                     )
                 except Exception:
                     pass
-            if cb.is_checked() != want_checked:
+            ok, d_r, p_r = _proposal_wait_cph1_checkbox_stable(
+                page,
+                cb,
+                want_checked,
+                max_rounds=min(12, max(8, timeout_ms // 2_000)),
+            )
+            if not ok:
                 return (
                     f"{step_id}: checkbox id={id_suffix!r} want_checked={want_checked} "
-                    f"got={cb.is_checked()}"
+                    f"unstable after settle readback_dom={d_r!r} readback_pw={p_r!r}"
                 )
             _proposal_log(
                 ocr_output_dir,
                 subfolder,
                 step_id,
-                f"checkbox id_suffix={id_suffix[:56]!r} {'checked' if want_checked else 'unchecked'} ok",
+                f"checkbox id_suffix={id_suffix[:56]!r} {'checked' if want_checked else 'unchecked'} ok "
+                f"readback_dom={d_r!r} readback_pw={p_r!r} stable=2",
             )
             return None
         except Exception as exc:

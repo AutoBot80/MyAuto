@@ -430,3 +430,5 @@ The SQL view **`form_dms_view`** is **removed**; the same mapping is implemented
 | 1.133 | Apr 2026 | — | **`main_process`** MISP proposal: CPI regex, **EME**/HDFC/payment-mode hardening — **LLD** **6.212**; **BRD** **3.131** |
 | 1.134 | Apr 2026 | — | **`playwright-insurance-trace-workflow.md`**; **`fill_hero_insurance_service`** tab resolver + OVD default — **LLD** **6.213**; **BRD** **3.132** |
 | 1.135 | Apr 2026 | — | **`fill_hero_insurance_service`** VIN URL/attach pacing restored — **LLD** **6.214**; **BRD** **3.133** |
+| 1.136 | Apr 2026 | — | **`add_sales_commit_service`**: drop **`Playwright_insurance.txt`** pre-**INSERT** snapshot lines — **LLD** **6.215**; **BRD** **3.134** |
+| 1.137 | Apr 2026 | — | **`fill_hero_insurance_service`**: CPH1 add-on checkbox stable readback + logging — **LLD** **6.216**; **BRD** **3.135** |
