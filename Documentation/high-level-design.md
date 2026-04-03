@@ -427,3 +427,6 @@ The SQL view **`form_dms_view`** is **removed**; the same mapping is implemented
 | 1.130 | Apr 2026 | — | **`fill_hero_insurance_service`**: **`_hero_misp_after_sign_in_settle`** hub **2W** readiness — **LLD** **6.209**; **BRD** **3.128** |
 | 1.131 | Apr 2026 | — | **`main_process`** MISP proposal: **`txtNomineeName`** + **HDFC** label-first payment — **LLD** **6.210**; **BRD** **3.129** |
 | 1.132 | Apr 2026 | — | **`fill_hero_insurance_service`**: **`tab_resolve resolver_ms`** + KYC **`after_ovd_ready`** — **LLD** **6.211**; **BRD** **3.130** |
+| 1.133 | Apr 2026 | — | **`main_process`** MISP proposal: CPI regex, **EME**/HDFC/payment-mode hardening — **LLD** **6.212**; **BRD** **3.131** |
+| 1.134 | Apr 2026 | — | **`playwright-insurance-trace-workflow.md`** + **`fill_hero_insurance_service`** **pre_process** timing (resolver / VIN / OVD default) — **LLD** **6.213**; **BRD** **3.132** |
+| 1.134 | Apr 2026 | — | **`fill_hero_insurance_service`** **pre_process** speed: tab resolver staged waits + same-tab skip; VIN URL/attach pacing; **`KYC_KEYBOARD_OVD_ARROW_DOWN_SETTLE_MS`** default — **LLD** **6.213**; **BRD** **3.132** |

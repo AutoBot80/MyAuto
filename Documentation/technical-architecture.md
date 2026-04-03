@@ -98,7 +98,7 @@ Configure **`backend/.env`** (copy from **`backend/.env.example`**). The API val
 
 - **Logging:** Structured logs from FastAPI, bulk workers, OCR, and Playwright steps.
 - **Metrics:** Job success/failure, queue depth, API latency, and automation completion rate.
-- **Artifacts:** `ocr_output/<dealer>/<subfolder>/` stores OCR output plus `DMS_Form_Values.txt` and `Vahan_Form_Values.txt` for operator traceability. Real Siebel fill writes a new **`Playwright_DMS_<ddmmyyyy>_<hhmmss>.txt`** execution log (IST wall clock; steps, values, decisions) into that subfolder on each run so retries keep a sequence of files.
+- **Artifacts:** `ocr_output/<dealer>/<subfolder>/` stores OCR output plus `DMS_Form_Values.txt` and `Vahan_Form_Values.txt` for operator traceability. Real Siebel fill writes a new **`Playwright_DMS_<ddmmyyyy>_<hhmmss>.txt`** execution log (IST wall clock; steps, values, decisions) into that subfolder on each run so retries keep a sequence of files. Hero Insurance **`Playwright_insurance.txt`** in the same folder follows a similar idea; how to read it and drive fixes (without adding log noise) is summarized in **`Documentation/playwright-insurance-trace-workflow.md`**.
 - **Playwright:** The API does not call `Browser.close()` or `Playwright.stop()` for Fill DMS / CDP reuse / RTO payment flows (process exit and thread switches included); operator Edge/Chrome stays open. Orphaned Playwright drivers may accumulate on thread switches or repeated RTO runs.
 - **Alerts:** DLQ growth, high error rate, DB health, and worker lease/retry anomalies.
 
@@ -157,3 +157,4 @@ Cursor rule: `.cursor/rules/documentation-maintenance.mdc` (always applied).
 | 0.8 | Apr 2026 | — | §6 **`checkpoints.md`** as canonical checkpoint registry; mandatory registration + **`.cursor/rules/checkpoints-registry.mdc`** |
 | 0.9 | Apr 2026 | — | §6 Checkpoint workflow: **`.cursor/rules/checkpoints-registry.mdc`** expanded (triggers, step order, forbid narrative-only); **`checkpoints.md`** “Agent process”; mandatory **playback** of full checkpoint list after setting one |
 | 0.10 | Apr 2026 | — | §6 Checkpoint **playback** includes **git commit** (full hash) per row, not only name/date/TODOs |
+| 0.11 | Apr 2026 | — | §5 **Artifacts** — link **`playwright-insurance-trace-workflow.md`** for **`Playwright_insurance.txt`** read/fix workflow |

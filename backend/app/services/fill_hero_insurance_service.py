@@ -1645,8 +1645,9 @@ def _misp_resolve_page_after_possible_new_tab(
     Prefer a **new** ``Page`` whose URL matches ``portal_base_url`` (insurance/MISP host). **Never** attach
     to a Siebel/DMS tab — those can appear in ``context.pages`` when the operator has both sites open.
 
-    Order: immediate scan of ``context.pages``; then ``wait_for_event('page')`` for a late-opening tab;
-    then legacy polling (120ms) until deadline.
+    Order: immediate scan of ``context.pages``; then staged ``wait_for_event('page')`` (**400** + **800** + **800** ms,
+    total ≤**2** s, capped by ``timeout_ms``); if **no** new ``Page`` object joined the context, return
+    ``stayed_on_fallback`` immediately (skip long poll); else legacy polling (120ms) until deadline.
 
     Returns ``(page, resolution_branch)`` where **branch** is ``immediate_scan`` | ``wait_for_page_event`` |
     ``polling`` | ``stayed_on_fallback`` (no matching new insurance tab in time).
@@ -1672,21 +1673,55 @@ def _misp_resolve_page_after_possible_new_tab(
     except Exception:
         pass
 
-    event_ms = float(min(3_000, cap_ms))
-    try:
-        new_p = ctx.wait_for_event(
-            "page",
-            predicate=lambda p: _try(p) is not None,
-            timeout=event_ms,
+    event_budget_ms = min(2_000, cap_ms)
+    event_t0 = time.monotonic()
+    for chunk_ms in (400, 800, 800):
+        elapsed_ms = (time.monotonic() - event_t0) * 1000
+        if elapsed_ms >= event_budget_ms:
+            break
+        this_chunk = min(
+            float(chunk_ms),
+            float(event_budget_ms - elapsed_ms),
         )
-        if new_p is not None:
-            got = _try(new_p)
-            if got is not None:
-                return (got, "wait_for_page_event")
-    except PlaywrightTimeout:
+        if this_chunk < 1.0:
+            break
+        try:
+            new_p = ctx.wait_for_event(
+                "page",
+                predicate=lambda p: _try(p) is not None,
+                timeout=this_chunk,
+            )
+            if new_p is not None:
+                got = _try(new_p)
+                if got is not None:
+                    return (got, "wait_for_page_event")
+        except PlaywrightTimeout:
+            pass
+        except Exception as exc:
+            logger.debug("Hero Insurance: wait_for_event(page) after %s: %s", step_label, exc)
+
+    try:
+        before_ids = {id(p) for p in before}
+        current_ids = {id(p) for p in ctx.pages}
+        if current_ids == before_ids:
+            try:
+                if not fallback_page.is_closed():
+                    fu = ""
+                    try:
+                        fu = (fallback_page.url or "").strip()
+                    except Exception:
+                        pass
+                    logger.info(
+                        "Hero Insurance: no new insurance tab after %s — staying on same page (url=%s).",
+                        step_label,
+                        fu[:180],
+                    )
+                    return (fallback_page, "stayed_on_fallback")
+            except Exception:
+                pass
+            return (fallback_page, "stayed_on_fallback")
+    except Exception:
         pass
-    except Exception as exc:
-        logger.debug("Hero Insurance: wait_for_event(page) after %s: %s", step_label, exc)
 
     deadline = time.monotonic() + cap_ms / 1000.0
     while time.monotonic() < deadline:
@@ -4569,7 +4604,7 @@ def _proposal_step_checkbox(
     timeout_ms: int,
 ) -> str | None:
     """Find checkbox by label/row text, set checked state, verify. Fails if control not found."""
-    rx = re.compile(text_pattern, re.I)
+    rx = re.compile(text_pattern, re.I | re.M)
     last_exc = ""
     for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
         try:
@@ -4645,7 +4680,7 @@ def _proposal_step_checkbox_uncheck_if_present(
     """
     if not (text_pattern or "").strip():
         return None
-    rx = re.compile(text_pattern, re.I)
+    rx = re.compile(text_pattern, re.I | re.M)
     last_exc = ""
     for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
         try:
@@ -4678,7 +4713,10 @@ def _proposal_step_checkbox_uncheck_if_present(
                 if not rx.search(t):
                     continue
                 if cb.is_checked():
-                    cb.uncheck(timeout=timeout_ms)
+                    try:
+                        cb.uncheck(timeout=timeout_ms, force=True)
+                    except Exception:
+                        cb.uncheck(timeout=timeout_ms)
                 if cb.is_checked():
                     return (
                         f"{step_id}: optional checkbox could not be left unchecked "
@@ -4939,8 +4977,9 @@ def _proposal_step_usgi_uncheck(
 
 
 # CPA bottom add-on: portal label varies (NIC / CPI / Hero CPI / …); match by row text; state from ``form_insurance_view.hero_cpi``.
+# Inline ``(?i)``/``(?m)`` mid-pattern breaks ``re.compile(..., re.I)`` — use flags on ``compile`` only (**LLD** **6.212**).
 HERO_MISP_HERO_CPI_ADDON_CHECKBOX_PATTERN = (
-    r"(?m)^\s*(NIC|CPI)\s*$|(?i)\b(NIC|CPI)\b|NIC\s*/\s*CPI|CPI\s*/\s*NIC|"
+    r"^\s*(NIC|CPI)\s*$|\b(NIC|CPI)\b|NIC\s*/\s*CPI|CPI\s*/\s*NIC|"
     r"Hero\s*CPI|Consumer\s*Protection|Protection\s*Insurance|NIC\s*Cover|CPI\s*Cover"
 )
 
@@ -5111,6 +5150,36 @@ def _proposal_step_date_of_registration_today(
     return f"{step_id}: Date of registration control not found"
 
 
+def _proposal_step_payment_mode_cc_if_present(
+    page,
+    *,
+    timeout_ms: int,
+) -> None:
+    """``ddlPaymentMode`` must often be **CC** before **HDFC** radio is enabled (MispPolicy scrape). Best-effort."""
+    for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
+        try:
+            loc = _proposal_cph1_locator(root, "ddlPaymentMode")
+            if loc.count() == 0:
+                continue
+            el = loc.first
+            tag = (el.evaluate("e => e && e.tagName ? e.tagName.toUpperCase() : ''") or "").upper()
+            if tag != "SELECT":
+                continue
+            if not el.is_visible(timeout=600):
+                _proposal_scroll_visible(el, timeout_ms=timeout_ms)
+            if not el.is_visible(timeout=1_500):
+                continue
+            for pat in (r"^CC\b", r"^\s*CC\s*$", r"Credit\s*Card", r"C\.?\s*C\.?"):
+                try:
+                    el.select_option(label=re.compile(pat, re.I), timeout=timeout_ms)
+                    return
+                except Exception:
+                    continue
+            return
+        except Exception:
+            continue
+
+
 def _proposal_step_hdfc_payment(
     page,
     step_id: str,
@@ -5119,6 +5188,8 @@ def _proposal_step_hdfc_payment(
     *,
     timeout_ms: int,
 ) -> str | None:
+    _proposal_step_payment_mode_cc_if_present(page, timeout_ms=timeout_ms)
+    _t(page, 200)
     hdfc_rid = f"{HERO_MISP_CPH1}_rdoHdfcCCType"
     # Prefer **label[for=…]** (matches MispPolicy scrape: radio id + labelText **HDFC**); then direct radio.
     for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
@@ -5197,7 +5268,9 @@ def _proposal_step_hdfc_payment(
                 continue
             for i in range(min(hdfc.count(), 8)):
                 r = hdfc.nth(i)
-                if not r.is_visible(timeout=1_000):
+                if not r.is_visible(timeout=800):
+                    _proposal_scroll_visible(r, timeout_ms=timeout_ms)
+                if not r.is_visible(timeout=1_500):
                     continue
                 try:
                     r.check(timeout=timeout_ms, force=True)
@@ -5229,7 +5302,10 @@ def _proposal_step_hdfc_payment(
             lab = root.locator("label, span, div").filter(has_text=re.compile(r"HDFC", re.I)).first
             if lab.count() == 0 or not lab.is_visible(timeout=1_200):
                 continue
-            lab.click(timeout=timeout_ms)
+            try:
+                lab.click(timeout=timeout_ms, force=True)
+            except Exception:
+                lab.click(timeout=timeout_ms)
             _t(page, 200)
             if not _proposal_hdfc_radio_any_checked(page):
                 return (
@@ -5400,7 +5476,7 @@ def _hero_misp_wait_for_mispdms_vin_url_event(
     Returns **True** when already on or navigated to that URL; **False** on timeout (caller may still poll ``txtFrameNo``
     if the portal uses a different path). No fixed sleep — Playwright waits on navigation / URL change.
     """
-    to = min(max(3_000, int(timeout_ms)), 90_000)
+    to = min(max(2_000, int(timeout_ms)), 90_000)
     try:
         u0 = (page.url or "").lower()
         if "mispdms.aspx" in u0:
@@ -5541,7 +5617,7 @@ def _hero_misp_wait_for_vin_txt_frame_no_attached(
     url_remain_ms = max(0, int((deadline - time.monotonic()) * 1000))
     url_ok = _hero_misp_wait_for_mispdms_vin_url_event(
         page,
-        timeout_ms=max(3_000, url_remain_ms),
+        timeout_ms=max(2_000, url_remain_ms),
         ocr_output_dir=ocr_output_dir,
         subfolder=subfolder,
     )
@@ -5567,8 +5643,9 @@ def _hero_misp_wait_for_vin_txt_frame_no_attached(
         ocr_output_dir, subfolder, t0_vin, "post_url_domcontentloaded_done"
     )
 
-    for sel in selectors:
-        for root in _hero_misp_page_and_frame_roots(page, purpose="vin"):
+    roots = _hero_misp_page_and_frame_roots(page, purpose="vin")
+    for root in roots:
+        for sel in selectors:
             remain_ms = max(0, int((deadline - time.monotonic()) * 1000))
             if remain_ms <= 0:
                 break
@@ -5576,7 +5653,7 @@ def _hero_misp_wait_for_vin_txt_frame_no_attached(
             try:
                 el = root.locator(sel).first
                 # Cap each attempt so wrong selector/frame does not consume the whole budget (still event-driven).
-                el.wait_for(state="attached", timeout=min(8_000, remain_ms))
+                el.wait_for(state="attached", timeout=min(3_000, remain_ms))
                 logger.info("Hero Insurance: VIN field attached (%s).", sel[:72])
                 _insurance_vin_phase_note(
                     ocr_output_dir,
@@ -5642,8 +5719,9 @@ def _hero_misp_fill_vin_txt_frame_no(
     # MISP markup: ``div#divtxtFrameNo.input-container`` + ``input#ctl00_ContentPlaceHolder1_txtFrameNo``,
     # label text **VIN Number** (``label for="txtFrameNo"`` vs full client id — use label + container).
     selectors = _HERO_MISP_VIN_TXT_FRAME_NO_SELECTORS
-    for sel in selectors:
-        for root in _hero_misp_page_and_frame_roots(page, purpose="vin"):
+    roots = _hero_misp_page_and_frame_roots(page, purpose="vin")
+    for root in roots:
+        for sel in selectors:
             try:
                 loc = root.locator(sel)
                 if loc.count() == 0:
@@ -6660,8 +6738,8 @@ def _hero_misp_fill_proposal_and_review(
         "chkEME",
         False,
         "addon_emergency_medical",
-        r"Emergency\s*Medical|Medical\s*Emergency|Emerg\.?\s*Medical|Expenses|"
-        r"Emergency\s*Medical\s*Expenses",
+        r"Emergency\s*Medical\s*Expenses?|Emergency\s*Medical|Medical\s*Emergency|"
+        r"Emerg(?:ency)?\.?\s*Medical|Medical\s*Expenses?\s*\(?\s*Emerg|EME\b",
         ocr_output_dir,
         subfolder,
         timeout_ms=pt,
