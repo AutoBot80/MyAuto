@@ -4694,7 +4694,93 @@ def _siebel_try_activate_find_contact_context(
         note("Activated Contacts sub-tab (list) — leaving Contact_Enquiry for First Name column.")
         _safe_page_wait(page, 900, log_label="after_contacts_list_subtab")
         return
-    note("Find Contact / Contacts list tab not found — proceeding to First Name click anyway.")
+        note("Find Contact / Contacts list tab not found — proceeding to First Name click anyway.")
+
+
+def _branch2_try_fill_contact_input(
+    page: Page,
+    *,
+    selectors: tuple[str, ...],
+    value: str,
+    action_timeout_ms: int,
+    content_frame_selector: str | None,
+    note,
+    log_label: str,
+) -> bool:
+    """Fill one contact applet input (Home Phone # / Email) by trying selectors across Siebel roots."""
+    v = (value or "").strip()
+    if not v:
+        return False
+    t = min(int(action_timeout_ms), 6000)
+    for root in _siebel_all_search_roots(page, content_frame_selector):
+        for css in selectors:
+            try:
+                loc = root.locator(css).first
+                if loc.count() == 0:
+                    continue
+                if not loc.is_visible(timeout=450):
+                    continue
+                loc.click(timeout=min(2000, t))
+                loc.fill(v, timeout=t)
+                note(f"Branch (2): filled {log_label} → {v[:48]!r}.")
+                return True
+            except Exception:
+                continue
+    return False
+
+
+def _branch2_click_address_tab_under_s_vctrl(
+    page: Page,
+    *,
+    action_timeout_ms: int,
+    content_frame_selector: str | None,
+    note,
+) -> bool:
+    """
+    Click the **Address** tab inside ``#s_vctrl_div`` (Hero contact detail — tabScreen6 / ui-tabs-anchor).
+    """
+    t = min(int(action_timeout_ms), 6000)
+    addr_pat = re.compile(r"^\s*Address\s*$", re.I)
+    for root in _siebel_all_search_roots(page, content_frame_selector):
+        try:
+            vwrap = root.locator("#s_vctrl_div")
+            if vwrap.count() == 0:
+                continue
+            vctrl = vwrap.first
+            if not vctrl.is_visible(timeout=300):
+                continue
+            for css in (
+                'a[data-tabindex="tabScreen6"].ui-tabs-anchor',
+                'a.ui-tabs-anchor[href*="tabScreen_noop"]:has-text("Address")',
+                'a.ui-tabs-anchor:has-text("Address")',
+            ):
+                try:
+                    loc = vctrl.locator(css).first
+                    if loc.count() > 0 and loc.is_visible(timeout=550):
+                        loc.click(timeout=t)
+                        note("Branch (2): clicked Address tab under #s_vctrl_div (CSS).")
+                        return True
+                except Exception:
+                    continue
+            try:
+                loc = vctrl.get_by_role("tab", name=addr_pat).first
+                if loc.count() > 0 and loc.is_visible(timeout=550):
+                    loc.click(timeout=t)
+                    note("Branch (2): clicked Address tab under #s_vctrl_div (role=tab).")
+                    return True
+            except Exception:
+                pass
+            try:
+                loc = vctrl.locator("a.ui-tabs-anchor").filter(has_text=addr_pat).first
+                if loc.count() > 0 and loc.is_visible(timeout=550):
+                    loc.click(timeout=t)
+                    note("Branch (2): clicked Address tab under #s_vctrl_div (anchor filter).")
+                    return True
+            except Exception:
+                pass
+        except Exception:
+            continue
+    return False
 
 
 def _siebel_video_branch2_address_postal_and_save(
@@ -4704,27 +4790,74 @@ def _siebel_video_branch2_address_postal_and_save(
     action_timeout_ms: int,
     content_frame_selector: str | None,
     note,
+    home_phone: str | None = None,
+    contact_email: str | None = None,
 ) -> bool:
     """
-    Video branch **(2)** (no Open enquiry): after Relation's Name path, open **Address**, set
-    **Postal Code** ``#1_Postal_Code`` (scoped under ``#s_vctrl_div`` when present), then Save.
+    Video branch **(2)** (no Open enquiry): after Relation's Name path, fill **Home Phone #** and **Email**,
+    open **Address** under ``#s_vctrl_div``, set **Postal Code** ``#1_Postal_Code`` (scoped under
+    ``#s_vctrl_div`` when present), then Save.
+
+    ``home_phone`` defaults from DMS landline / alternate phone at the caller; ``contact_email`` defaults
+    to ``na@gmail.com`` when the caller passes None.
     """
     pin = (pin_code or "").strip()
     if not pin:
         note("Branch (2) Address: pin_code empty — skipping Address tab / Postal Code fill.")
         return False
     t = min(int(action_timeout_ms), 6000)
-    if _siebel_try_click_named_in_frames(
+    hp = (home_phone or "").strip()
+    em = (contact_email if contact_email is not None else "na@gmail.com").strip()
+    if not em:
+        em = "na@gmail.com"
+
+    _branch2_try_fill_contact_input(
+        page,
+        selectors=(
+            'input[name="s_4_1_159_0"]',
+            '[aria-label="Home Phone #"]',
+            'input[aria-label*="Home Phone" i]',
+        ),
+        value=hp,
+        action_timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+        note=note,
+        log_label="Home Phone #",
+    )
+    _safe_page_wait(page, 280, log_label="after_branch2_home_phone")
+    _branch2_try_fill_contact_input(
+        page,
+        selectors=(
+            'input[name="s_4_1_225_0"]',
+            'input[aria-label="Email" i]',
+            '[aria-label="Email"]',
+        ),
+        value=em,
+        action_timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+        note=note,
+        log_label="Email",
+    )
+    _safe_page_wait(page, 280, log_label="after_branch2_email")
+
+    if _branch2_click_address_tab_under_s_vctrl(
+        page,
+        action_timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+        note=note,
+    ):
+        _safe_page_wait(page, 700, log_label="after_address_tab_branch2")
+    elif _siebel_try_click_named_in_frames(
         page,
         re.compile(r"^\s*Address\s*$", re.I),
         roles=("tab", "link", "button"),
         timeout_ms=t,
         content_frame_selector=content_frame_selector,
     ):
-        note("Branch (2): clicked Address tab.")
+        note("Branch (2): clicked Address tab (frame scan fallback).")
         _safe_page_wait(page, 700, log_label="after_address_tab_branch2")
     else:
-        note("Branch (2): Address tab not found via frame scan — trying Postal Code field anyway.")
+        note("Branch (2): Address tab not found — trying Postal Code field anyway.")
 
     def _fill_postal_in_root(root) -> bool:
         try:
@@ -5438,10 +5571,10 @@ def _contact_enquiry_tab_has_rows(
     Detection: header ``#jqgh_s_1_l_Enquiry_`` (or **Enquiry#** / **Enquiries** text), then non-empty
     values on ``input`` / ``textarea`` ``name=\"Enquiry_\"``; table cell scrape; Hero **Enquiry#** as
     visible ``<a>`` (e.g. ``11870-01-SENQ-0623-305``) inside **.siebui-applet** when the applet text
-    references enquiries. When **Enquiry Status** fields exist (``id=1_HHML_Enquiry_Status`` or any
+    references enquiries.     When **Enquiry Status** fields exist (``id=1_HHML_Enquiry_Status`` or any
     element whose ``id`` ends with ``HHML_Enquiry_Status``), only rows with status **Open**
-    (case-insensitive) count
-    as existing enquiries. Frames: **main first**, then Siebel iframes.
+    (case-insensitive) count as an **open** enquiry for sweep skip. **Closed** enquiries do not
+    count — caller takes branch **(2)** (Address / postal). Frames: **main first**, then Siebel iframes.
     """
     _clicked = _siebel_try_click_named_in_frames(
         page,
@@ -15608,12 +15741,19 @@ def Playwright_Hero_DMS_fill(
             return out
 
         if not sweep_has_open:
+            _b2_home = (
+                (dms_values.get("landline") or dms_values.get("alt_phone_num") or "").strip()
+                or mobile
+            )
+            _b2_email = (dms_values.get("branch2_contact_email") or "na@gmail.com").strip()
             if not _siebel_video_branch2_address_postal_and_save(
                 page,
                 pin_code=pin,
                 action_timeout_ms=action_timeout_ms,
                 content_frame_selector=content_frame_selector,
                 note=note,
+                home_phone=_b2_home,
+                contact_email=_b2_email,
             ):
                 step("Stopped: video branch (2) Address / Postal Code / Save failed.")
                 out["error"] = (
