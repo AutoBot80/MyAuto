@@ -7945,8 +7945,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 if _rows > _precheck_existing_rows:
                     _precheck_existing_rows = _rows
                     _precheck_existing_signal = f"root[{_ri}]:maxRows={_rows}"
-                if bool(_probe.get("hasPrecheckRowId")) and not _precheck_existing_signal:
-                    _precheck_existing_signal = f"root[{_ri}]:url_has_precheck_rowid"
+                # Stale ``SWERowId1=`` in the URL is common; **do not** skip Pre-check when scoped jqGrid count is 0 (**LLD** **6.237**).
         except Exception:
             continue
     # region agent log
@@ -7980,7 +7979,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         pass
     # endregion agent log
 
-    _precheck_already_present = _precheck_existing_rows > 0 or "url_has_precheck_rowid" in _precheck_existing_signal
+    _precheck_already_present = _precheck_existing_rows > 0
     if _precheck_already_present:
         note(
             f"{log_prefix}: Pre-check already has row(s) "
@@ -8698,7 +8697,38 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             const c = norm(txt);
             return (c.includes('pdi') && c.includes('expir')) || c === 'pdi expiry date' || c.includes('pdi expiry');
         };
-        const tables = Array.from(document.querySelectorAll('table')).filter(vis);
+        const isPdiListScoped = (el) => {
+            let n = el;
+            for (let d = 0; d < 28 && n; d++) {
+                const id = String(n.id || '');
+                const nm = String(n.getAttribute('name') || '');
+                const tit = String(n.getAttribute('title') || '');
+                const hay = (id + ' ' + nm + ' ' + tit).toLowerCase();
+                if (hay.includes('precheck') || hay.includes('pre-check') || hay.includes('pre_check')) {
+                    return false;
+                }
+                n = n.parentElement;
+            }
+            n = el;
+            for (let d = 0; d < 28 && n; d++) {
+                const id = String(n.id || '').toLowerCase();
+                const nm = String(n.getAttribute('name') || '').toLowerCase();
+                const tit = String(n.getAttribute('title') || '').toLowerCase();
+                const hay = id + ' ' + nm + ' ' + tit;
+                if (id.includes('s_2_l') || id.includes('gview_s_2') || hay.includes('hmcl+pdi')) {
+                    return true;
+                }
+                if (hay.includes('pdi') && (hay.includes('list') || hay.includes('applet') || hay.includes('service'))) {
+                    return true;
+                }
+                n = n.parentElement;
+            }
+            return false;
+        };
+        let tables = Array.from(document.querySelectorAll('table.ui-jqgrid-btable')).filter((tb) => vis(tb) && isPdiListScoped(tb));
+        if (tables.length === 0) {
+            tables = Array.from(document.querySelectorAll('table')).filter((tb) => vis(tb) && isPdiListScoped(tb));
+        }
         let best = { rowCount: 0, headerMatched: false, colIdx: -1, expiryRaw: [] };
         for (const tb of tables) {
             const rows = Array.from(tb.querySelectorAll('tr')).filter(vis);
