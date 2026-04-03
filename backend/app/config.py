@@ -205,11 +205,16 @@ KYC_KEYBOARD_INSURER_ARROW_DOWN_STEP_MS = _int_env("KYC_KEYBOARD_INSURER_ARROW_D
 INSURANCE_KYC_POST_INSURER_NETWORKIDLE_MS = _int_env("INSURANCE_KYC_POST_INSURER_NETWORKIDLE_MS", 0)
 INSURANCE_KYC_POST_KYC_PARTNER_NETWORKIDLE_MS = _int_env("INSURANCE_KYC_POST_KYC_PARTNER_NETWORKIDLE_MS", 0)
 # Short UI settle after KYC / VIN submit / post-mobile micro-pauses (ms). Override via HERO_MISP_UI_SETTLE_MS.
+# ``fill_hero_insurance_service._t`` clamps each wait to **200** ms max (``_MISP_UI_SETTLE_CAP_MS``); values above 200 have no extra effect there.
 HERO_MISP_UI_SETTLE_MS = _int_env("HERO_MISP_UI_SETTLE_MS", 200)
 # Pre-Proceed (after mobile fill on KYC): ``domcontentloaded`` cap — **not** ``networkidle`` (was up to 12s).
 INSURANCE_KYC_POST_MOBILE_DOM_MS = _int_env("INSURANCE_KYC_POST_MOBILE_DOM_MS", 2000)
 # Max wait for #navbarVerticalNav / New Policy / KYC hints after **2W** or **New Policy** click (was 5000).
 HERO_MISP_LANDING_WAIT_MS = _int_env("HERO_MISP_LANDING_WAIT_MS", 2500)
+# When 1: after insurer commit (non-light KYC nav), open a temporary ``about:blank`` tab so the KYC document
+# gets a real visibility transition. Default **off** — DOM insurer + light keyboard nav usually do not need it.
+_HERO_KYC_TAB_AWAY_RAW = (os.getenv("HERO_MISP_KYC_TAB_AWAY_SIMULATION") or "0").strip().lower()
+HERO_MISP_KYC_TAB_AWAY_SIMULATION = _HERO_KYC_TAB_AWAY_RAW in ("1", "true", "yes", "on")
 # Opening ``domcontentloaded`` before VIN attach poll (decoupled from ``_hero_misp_vin_step_timeout_ms``).
 INSURANCE_VIN_PRE_DOMCONTENTLOADED_MS = _int_env("INSURANCE_VIN_PRE_DOMCONTENTLOADED_MS", 1000)
 # After ``wait_for_url`` to MispDms.aspx: second ``domcontentloaded`` cap (lower than legacy 8000 ms).

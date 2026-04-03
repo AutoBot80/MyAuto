@@ -18,6 +18,7 @@ from typing import Any
 from playwright.sync_api import TimeoutError as PlaywrightTimeout
 
 from app.config import (
+    HERO_MISP_KYC_TAB_AWAY_SIMULATION,
     HERO_MISP_LANDING_WAIT_MS,
     HERO_MISP_UI_SETTLE_MS,
     INSURANCE_ACTION_TIMEOUT_MS,
@@ -344,10 +345,13 @@ _PARTNER_LOGIN_POST_SUBMIT_SNAPSHOT_JS = """() => {
     return { btn: btn.slice(0, 120), hints: hints.slice(0, 5) };
 }"""
 
+# Maximum duration for `_t` UI micro-settles (single `wait_for_timeout` per call).
+_MISP_UI_SETTLE_CAP_MS = 200
+
 
 def _t(page, ms: int) -> None:
     try:
-        page.wait_for_timeout(min(ms, 15_000))
+        page.wait_for_timeout(min(int(ms), _MISP_UI_SETTLE_CAP_MS))
     except Exception:
         pass
 
@@ -392,6 +396,48 @@ def _insurance_vin_phase_note(
         msg = f"VIN step: {phase} elapsed_ms={ms}{extra}"
     append_playwright_insurance_line_or_dealer_fallback(
         ocr_output_dir, subfolder, "NOTE", msg
+    )
+
+
+def _insurance_kyc_flow_elapsed_note(
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
+    t0_flow: float | None,
+    phase: str,
+) -> None:
+    """KYC sub-phase wall time since ``run_fill_insurance_only`` / Hero portal flow start."""
+    if t0_flow is None:
+        return
+    try:
+        ms = int((time.monotonic() - t0_flow) * 1000)
+    except Exception:
+        return
+    append_playwright_insurance_line_or_dealer_fallback(
+        ocr_output_dir,
+        subfolder,
+        "NOTE",
+        f"run_fill_insurance_only: kyc_elapsed phase={phase} elapsed_ms={ms}",
+    )
+
+
+def _insurance_tab_resolve_note(
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
+    t0_flow: float | None,
+    step_label: str,
+    branch: str,
+) -> None:
+    if t0_flow is None:
+        return
+    try:
+        ms = int((time.monotonic() - t0_flow) * 1000)
+    except Exception:
+        return
+    append_playwright_insurance_line_or_dealer_fallback(
+        ocr_output_dir,
+        subfolder,
+        "NOTE",
+        f"run_fill_insurance_only: tab_resolve step={step_label} branch={branch} elapsed_ms={ms}",
     )
 
 
@@ -535,8 +581,9 @@ def _hero_insurance_kyc_nav_after_insurer_commit(
     After insurer is committed (keyboard Enter or DOM ``select_option``), optionally **Enter** + **Tab**
     so the portal commits the value (ASP.NET / postback). Optional **networkidle**
     (``INSURANCE_KYC_POST_INSURER_NETWORKIDLE_MS``) so the KYC pane can settle.
-    Then **tab away/back** so the page gets a real visibility transition when operators only unstick
-    by navigating away (see ``_kyc_simulate_tab_away_and_back``).
+    Then optionally **tab away/back** when ``HERO_MISP_KYC_TAB_AWAY_SIMULATION`` is enabled (default off)
+    so the page gets a real visibility transition when operators only unstick by navigating away
+    (see ``_kyc_simulate_tab_away_and_back``).
 
     When ``light`` is True (eKYC keyboard SOP after DOM ``select_option`` or after the full keyboard
     Enter/Tab/Escape chain): skip the extra **Enter**, **Tab**, and tab-away simulation. Those were
@@ -572,7 +619,7 @@ def _hero_insurance_kyc_nav_after_insurer_commit(
                 cap,
             )
     _t(page, 80)
-    if not light:
+    if not light and HERO_MISP_KYC_TAB_AWAY_SIMULATION:
         _kyc_simulate_tab_away_and_back(
             page, ocr_output_dir=ocr_output_dir, subfolder=subfolder
         )
@@ -1213,7 +1260,7 @@ def _click_sign_in_if_visible(page, *, timeout_ms: int) -> bool:
         return False
 
     max_attempts = 4
-    pause_ms = 500
+    pause_ms = _MISP_UI_SETTLE_CAP_MS
     for attempt in range(1, max_attempts + 1):
         clicked = _attempt_sign_in_click_once(page, timeout_ms=timeout_ms)
         try:
@@ -1238,9 +1285,9 @@ def _click_sign_in_if_visible(page, *, timeout_ms: int) -> bool:
                 )
                 return True
             try:
-                page.wait_for_timeout(2200)
+                page.wait_for_timeout(_MISP_UI_SETTLE_CAP_MS)
             except Exception:
-                time.sleep(2.2)
+                time.sleep(_MISP_UI_SETTLE_CAP_MS / 1000.0)
             try:
                 post_ui = _snapshot_partner_login_frames(page)
                 hints = []
@@ -1579,7 +1626,7 @@ def _misp_resolve_page_after_possible_new_tab(
     portal_base_url: str,
     timeout_ms: int,
     step_label: str,
-):
+) -> tuple[Any, str]:
     """
     Hero MISP often opens the **2W** product path in a **new** tab; **New Policy** and **KYC** follow.
     Prefer a **new** ``Page`` whose URL matches ``portal_base_url`` (insurance/MISP host). **Never** attach
@@ -1587,6 +1634,9 @@ def _misp_resolve_page_after_possible_new_tab(
 
     Order: immediate scan of ``context.pages``; then ``wait_for_event('page')`` for a late-opening tab;
     then legacy polling (120ms) until deadline.
+
+    Returns ``(page, resolution_branch)`` where **branch** is ``immediate_scan`` | ``wait_for_page_event`` |
+    ``polling`` | ``stayed_on_fallback`` (no matching new insurance tab in time).
     """
     base = (portal_base_url or "").strip()
     if not base:
@@ -1602,7 +1652,7 @@ def _misp_resolve_page_after_possible_new_tab(
         for p in ctx.pages:
             got = _try(p)
             if got is not None:
-                return got
+                return (got, "immediate_scan")
     except Exception:
         pass
 
@@ -1616,7 +1666,7 @@ def _misp_resolve_page_after_possible_new_tab(
         if new_p is not None:
             got = _try(new_p)
             if got is not None:
-                return got
+                return (got, "wait_for_page_event")
     except PlaywrightTimeout:
         pass
     except Exception as exc:
@@ -1628,7 +1678,7 @@ def _misp_resolve_page_after_possible_new_tab(
             for p in ctx.pages:
                 got = _try(p)
                 if got is not None:
-                    return got
+                    return (got, "polling")
         except Exception:
             pass
         try:
@@ -1647,10 +1697,10 @@ def _misp_resolve_page_after_possible_new_tab(
                 step_label,
                 fu[:180],
             )
-            return fallback_page
+            return (fallback_page, "stayed_on_fallback")
     except Exception:
         pass
-    return fallback_page
+    return (fallback_page, "stayed_on_fallback")
 
 
 def _norm_option_label(s: str) -> str:
@@ -3127,11 +3177,14 @@ def _fill_kyc_ekyc_keyboard_sop(
     timeout_ms: int,
     ocr_output_dir: Path | None = None,
     subfolder: str | None = None,
+    t0_flow: float | None = None,
 ) -> str | None:
     """
     Keyboard SOP for ``ekycpage.aspx`` (focus document → Tab to Insurance Company → type to filter →
     ArrowDown until fuzzy match → Enter → Tab to OVD → ArrowDown to Aadhaar → Tab to mobile → type →
     Tab to consent → Space). Tab/down counts: ``KYC_KEYBOARD_*`` env vars.
+
+    When ``t0_flow`` is set, appends ``kyc_elapsed`` ``NOTE`` lines at insurer/KYC-partner/OVD/mobile boundaries.
 
     **Insurer strategies** (see ``_kyc_insurer_attempt_order``): per-portal cache file prefers the last
     successful strategy (**dom_native**, **keyboard_chain**, or **fuzzy_scan**). Full-frame
@@ -3347,9 +3400,18 @@ def _fill_kyc_ekyc_keyboard_sop(
         subfolder=subfolder,
         light=True,
     )
+    _insurance_kyc_flow_elapsed_note(
+        ocr_output_dir, subfolder, t0_flow, "after_insurer_nav"
+    )
     _kyc_select_kyc_partner_if_available(page, kyc_fr, values, timeout_ms=cap)
+    _insurance_kyc_flow_elapsed_note(
+        ocr_output_dir, subfolder, t0_flow, "after_kyc_partner_select"
+    )
     _hero_insurance_kyc_nav_after_kyc_partner_commit(
         page, ocr_output_dir=ocr_output_dir, subfolder=subfolder
+    )
+    _insurance_kyc_flow_elapsed_note(
+        ocr_output_dir, subfolder, t0_flow, "after_kyc_partner_nav"
     )
 
     ovd_ok = _kyc_set_ovd_aadhaar_card_in_frame(kyc_fr, timeout_ms=cap)
@@ -3381,6 +3443,9 @@ def _fill_kyc_ekyc_keyboard_sop(
 
     _kyc_blur_if_insurer_product_select_focused(kyc_fr)
     _t(page, 280)
+    _insurance_kyc_flow_elapsed_note(
+        ocr_output_dir, subfolder, t0_flow, "before_mobile_fill"
+    )
 
     digits = re.sub(r"\D", "", mobile)[:12]
     mob_typed = False
@@ -3423,6 +3488,9 @@ def _fill_kyc_ekyc_keyboard_sop(
     logger.info(
         "Hero Insurance: KYC keyboard — mobile entered; blurring then post-mobile banner / Proceed vs upload."
     )
+    _insurance_kyc_flow_elapsed_note(
+        ocr_output_dir, subfolder, t0_flow, "before_post_mobile_branch"
+    )
     return _kyc_post_mobile_entry_branch(page, kyc_fr, timeout_ms=cap)
 
 
@@ -3433,6 +3501,7 @@ def _fill_insurance_company_and_ovd_mobile_consent(
     timeout_ms: int,
     ocr_output_dir: Path | None = None,
     subfolder: str | None = None,
+    t0_flow: float | None = None,
 ) -> str | None:
     """Returns error message or None on success."""
     kyc_insurer_resolved = _kyc_insurer_label_for_misp(values)
@@ -3449,6 +3518,7 @@ def _fill_insurance_company_and_ovd_mobile_consent(
             timeout_ms=timeout_ms,
             ocr_output_dir=ocr_output_dir,
             subfolder=subfolder,
+            t0_flow=t0_flow,
         )
 
     insurer = _kyc_insurer_label_for_misp(values)
@@ -3523,13 +3593,22 @@ def _fill_insurance_company_and_ovd_mobile_consent(
                 HERO_MISP_LIGHT_NAV_AFTER_DOM_INSURER and insurer_via_native_select
             ),
         )
+        _insurance_kyc_flow_elapsed_note(
+            ocr_output_dir, subfolder, t0_flow, "after_insurer_nav"
+        )
         kyc_fr_dom = _kyc_preferred_kyc_frame(page)
         _kyc_select_kyc_partner_if_available(
             page, kyc_fr_dom, values, timeout_ms=timeout_ms
         )
+        _insurance_kyc_flow_elapsed_note(
+            ocr_output_dir, subfolder, t0_flow, "after_kyc_partner_select"
+        )
         _hero_insurance_kyc_nav_after_kyc_partner_commit(
             page, ocr_output_dir=ocr_output_dir, subfolder=subfolder
-            )
+        )
+        _insurance_kyc_flow_elapsed_note(
+            ocr_output_dir, subfolder, t0_flow, "after_kyc_partner_nav"
+        )
 
     # --- OVD Type: AADHAAR CARD ---
     ovd_ok = False
@@ -3593,6 +3672,10 @@ def _fill_insurance_company_and_ovd_mobile_consent(
     if not ovd_ok:
         return "Could not select Officially Valid Document (OVD) Type = AADHAAR CARD."
 
+    _insurance_kyc_flow_elapsed_note(
+        ocr_output_dir, subfolder, t0_flow, "after_ovd_ready"
+    )
+
     # --- Mobile (customer_master.mobile_number) ---
     if not mobile:
         return "customer_master.mobile_number is empty in DB values."
@@ -3620,6 +3703,9 @@ def _fill_insurance_company_and_ovd_mobile_consent(
     except Exception:
         pass
     _t(page, 400)
+    _insurance_kyc_flow_elapsed_note(
+        ocr_output_dir, subfolder, t0_flow, "before_post_mobile_branch"
+    )
     return _kyc_post_mobile_entry_branch(
         page, _kyc_preferred_kyc_frame(page), timeout_ms=timeout_ms
     )
@@ -3722,6 +3808,7 @@ def _run_hero_misp_portal_after_open(
     ``portal_base_url`` is the insurance site origin (e.g. from ``pre_process`` ``match_base``) so new-tab handoff
     never attaches to a Siebel/DMS tab when both are open.
     """
+    t0_flow = time.monotonic()
     _insurance_click_settle(page)
     _hero_insurance_log_page_diagnostics(
         page,
@@ -3740,6 +3827,21 @@ def _run_hero_misp_portal_after_open(
         logger.warning(
             "Hero Insurance: no Sign In / Login control was clicked — see debug logs for page context."
         )
+        if not _still_on_heroinsurance_misp_partner_login(page):
+            append_playwright_insurance_line_or_dealer_fallback(
+                ocr_output_dir,
+                subfolder,
+                "NOTE",
+                "run_fill_insurance_only: past partner login URL — Sign In automation skipped",
+            )
+        else:
+            append_playwright_insurance_line_or_dealer_fallback(
+                ocr_output_dir,
+                subfolder,
+                "NOTE",
+                "run_fill_insurance_only: Sign In not auto-clicked — password field not ready or "
+                "Sign In did not leave partner login; complete login manually if needed.",
+            )
     _hero_misp_after_sign_in_settle(page)
 
     pages_before_2w = _misp_snapshot_context_pages(page)
@@ -3748,12 +3850,15 @@ def _run_hero_misp_portal_after_open(
     except Exception as exc:
         return f"2W Icon: {exc!s}"
 
-    page = _misp_resolve_page_after_possible_new_tab(
+    page, tab_branch_2w = _misp_resolve_page_after_possible_new_tab(
         pages_before_2w,
         page,
         portal_base_url=portal_base_url,
         timeout_ms=timeout_ms,
         step_label="2W",
+    )
+    _insurance_tab_resolve_note(
+        ocr_output_dir, subfolder, t0_flow, "2W", tab_branch_2w
     )
     _insurance_click_settle(page)
 
@@ -3763,12 +3868,15 @@ def _run_hero_misp_portal_after_open(
     except Exception as exc:
         return f"New Policy: {exc!s}"
 
-    page = _misp_resolve_page_after_possible_new_tab(
+    page, tab_branch_np = _misp_resolve_page_after_possible_new_tab(
         pages_before_np,
         page,
         portal_base_url=portal_base_url,
         timeout_ms=timeout_ms,
         step_label="New Policy",
+    )
+    _insurance_tab_resolve_note(
+        ocr_output_dir, subfolder, t0_flow, "New Policy", tab_branch_np
     )
 
     if not values:
@@ -3782,6 +3890,7 @@ def _run_hero_misp_portal_after_open(
         timeout_ms=timeout_ms,
         ocr_output_dir=ocr_output_dir,
         subfolder=subfolder,
+        t0_flow=t0_flow,
     )
     if err:
         return err
@@ -3880,6 +3989,20 @@ def _read_locator_value_snapshot(locator) -> dict[str, Any]:
         except Exception:
             return {"kind": "textarea", "value": ""}
     return {"kind": tag, "raw": ""}
+
+
+def _proposal_read_input_value_best_effort(el) -> str:
+    """``input_value()`` then DOM ``.value`` (some MISP fields stay empty on Playwright read until events)."""
+    try:
+        s = (el.input_value() or "").strip()
+        if s:
+            return s
+    except Exception:
+        pass
+    try:
+        return (el.evaluate("e => (e && e.value != null) ? String(e.value).trim() : ''") or "").strip()
+    except Exception:
+        return ""
 
 
 def _proposal_expected_matches_readback(expected: str, readback: str) -> bool:
@@ -4259,7 +4382,33 @@ def _proposal_step_fill_input(
                 if tag == "SELECT":
                     last = f"id {cph1_id_suffix!r} is SELECT; use proposal_step_select"
                     continue
-                if _nominee:
+                if cph1_id_suffix == "txtNomineeAge":
+                    try:
+                        el.click(timeout=timeout_ms, force=True)
+                    except Exception:
+                        pass
+                    el.fill("", timeout=timeout_ms, force=True)
+                    try:
+                        el.press_sequentially(v, delay=40, timeout=timeout_ms)
+                    except Exception:
+                        el.fill(v, timeout=timeout_ms, force=True)
+                    _t(page, min(400, max(220, timeout_ms // 15)))
+                    try:
+                        el.evaluate(
+                            """(node, val) => {
+                              if (!node) return;
+                              if (!(node.value || '').trim()) {
+                                node.value = val;
+                              }
+                              ['input','change','blur'].forEach(k =>
+                                node.dispatchEvent(new Event(k, { bubbles: true })));
+                            }""",
+                            v,
+                        )
+                    except Exception:
+                        pass
+                    _t(page, 180)
+                elif _nominee:
                     el.fill("", timeout=timeout_ms, force=True)
                     el.fill(v, timeout=timeout_ms, force=True)
                 else:
@@ -4267,6 +4416,32 @@ def _proposal_step_fill_input(
                     el.fill(v, timeout=timeout_ms)
                 snap = _read_locator_value_snapshot(el)
                 got = (snap.get("value") or "").strip()
+                if not got:
+                    got = _proposal_read_input_value_best_effort(el)
+                if cph1_id_suffix == "txtNomineeAge" and (
+                    not got
+                    or (
+                        got != v
+                        and normalize_for_fuzzy_match(got) != normalize_for_fuzzy_match(v)
+                        and not _proposal_expected_matches_readback(v, got)
+                    )
+                ):
+                    try:
+                        el.evaluate(
+                            """(node, val) => {
+                              if (!node) return;
+                              node.value = val;
+                              ['input','change','blur'].forEach(k =>
+                                node.dispatchEvent(new Event(k, { bubbles: true })));
+                            }""",
+                            v,
+                        )
+                    except Exception:
+                        pass
+                    _t(page, 200)
+                    got = _proposal_read_input_value_best_effort(el)
+                    if not got:
+                        got = (_read_locator_value_snapshot(el).get("value") or "").strip()
                 if got != v and normalize_for_fuzzy_match(got) != normalize_for_fuzzy_match(v):
                     if not _proposal_expected_matches_readback(v, got):
                         return f"{step_id}: readback mismatch expected={v!r} got={got!r}"
@@ -5220,6 +5395,7 @@ def _hero_misp_wait_for_vin_txt_frame_no_attached(
     budget_ms = min(int(timeout_ms), 90_000)
     deadline = time.monotonic() + budget_ms / 1000.0
     selectors = _HERO_MISP_VIN_TXT_FRAME_NO_SELECTORS
+    attach_attempts = 0
     _insurance_vin_phase_note(
         ocr_output_dir, subfolder, t0_vin, "vin_attach_poll_start", "(txtFrameNo)"
     )
@@ -5288,6 +5464,7 @@ def _hero_misp_wait_for_vin_txt_frame_no_attached(
             remain_ms = max(0, int((deadline - time.monotonic()) * 1000))
             if remain_ms <= 0:
                 break
+            attach_attempts += 1
             try:
                 el = root.locator(sel).first
                 # Cap each attempt so wrong selector/frame does not consume the whole budget (still event-driven).
@@ -5298,7 +5475,7 @@ def _hero_misp_wait_for_vin_txt_frame_no_attached(
                     subfolder,
                     t0_vin,
                     "txtFrameNo_attached",
-                    f"selector={sel[:56]!r}",
+                    f"selector={sel[:56]!r} attach_attempts={attach_attempts}",
                 )
                 _hero_misp_log_vin_transition_line(
                     page,
@@ -5313,7 +5490,11 @@ def _hero_misp_wait_for_vin_txt_frame_no_attached(
 
     logger.warning("Hero Insurance: timed out waiting for VIN/Chassis input after URL/DOM wait.")
     _insurance_vin_phase_note(
-        ocr_output_dir, subfolder, t0_vin, "txtFrameNo_attach_timeout"
+        ocr_output_dir,
+        subfolder,
+        t0_vin,
+        "txtFrameNo_attach_timeout",
+        f"attach_attempts={attach_attempts}",
     )
     _hero_misp_log_vin_transition_line(
         page,
@@ -6222,6 +6403,7 @@ def _hero_misp_fill_proposal_and_review(
         )
         if err:
             return _fail(err)
+        _t(page, 350)
 
     na = (values.get("nominee_age") or "").strip()
     if na:
@@ -6908,12 +7090,21 @@ def run_fill_insurance_only(
                 ocr_output_dir=ocr_output_dir,
                 subfolder=subfolder,
             )
-            append_playwright_insurance_line(
-                ocr_output_dir,
-                subfolder,
-                "NOTE",
-                "run_fill_insurance_only: Sign In not auto-clicked — complete login manually if needed.",
-            )
+            if not _still_on_heroinsurance_misp_partner_login(page):
+                append_playwright_insurance_line(
+                    ocr_output_dir,
+                    subfolder,
+                    "NOTE",
+                    "run_fill_insurance_only: past partner login URL — Sign In automation skipped",
+                )
+            else:
+                append_playwright_insurance_line(
+                    ocr_output_dir,
+                    subfolder,
+                    "NOTE",
+                    "run_fill_insurance_only: Sign In not auto-clicked — password field not ready or "
+                    "Sign In did not leave partner login; complete login manually if needed.",
+                )
         # Same MISP landing as Hero pre_process: after login, **2W** then **New Policy** before KYC / dummy fields.
         _hero_misp_after_sign_in_settle(page)
         _insurance_pre_elapsed_note(ocr_output_dir, subfolder, t0_flow, "after_sign_in_settle")
@@ -6929,12 +7120,15 @@ def run_fill_insurance_only(
             result["error"] = err_2w
             append_playwright_insurance_line(ocr_output_dir, subfolder, "ERROR", err_2w)
             return result
-        page = _misp_resolve_page_after_possible_new_tab(
+        page, tab_branch_2w = _misp_resolve_page_after_possible_new_tab(
             pages_before_2w,
             page,
             portal_base_url=insurance_base_url.strip(),
             timeout_ms=INSURANCE_ACTION_TIMEOUT_MS,
             step_label="2W",
+        )
+        _insurance_tab_resolve_note(
+            ocr_output_dir, subfolder, t0_flow, "2W", tab_branch_2w
         )
         append_playwright_insurance_line(
             ocr_output_dir,
@@ -6956,12 +7150,15 @@ def run_fill_insurance_only(
             result["error"] = err_np
             append_playwright_insurance_line(ocr_output_dir, subfolder, "ERROR", err_np)
             return result
-        page = _misp_resolve_page_after_possible_new_tab(
+        page, tab_branch_np = _misp_resolve_page_after_possible_new_tab(
             pages_before_np,
             page,
             portal_base_url=insurance_base_url.strip(),
             timeout_ms=INSURANCE_ACTION_TIMEOUT_MS,
             step_label="New Policy",
+        )
+        _insurance_tab_resolve_note(
+            ocr_output_dir, subfolder, t0_flow, "New Policy", tab_branch_np
         )
         append_playwright_insurance_line(
             ocr_output_dir,
@@ -6997,6 +7194,7 @@ def run_fill_insurance_only(
                 timeout_ms=INSURANCE_ACTION_TIMEOUT_MS,
                 ocr_output_dir=ocr_output_dir,
                 subfolder=subfolder,
+                t0_flow=t0_flow,
             )
             if kyc_fill_err:
                 result["error"] = kyc_fill_err

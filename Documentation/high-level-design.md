@@ -421,3 +421,6 @@ The SQL view **`form_dms_view`** is **removed**; the same mapping is implemented
 | 1.124 | Apr 2026 | — | **`main_process`** MISP proposal: id-based add-on / USGI checkboxes + DOB nominee hardening — **LLD** **6.203**; **BRD** **3.122** |
 | 1.125 | Apr 2026 | — | **`main_process`** MISP proposal: **page-first** locator roots + conditional DOB reassert + nominee gender force-check — **LLD** **6.204**; **BRD** **3.123** |
 | 1.126 | Apr 2026 | — | **`fill_hero_insurance_service`**: KYC insurer strategy cache + **VIN** trace **`NOTE`** lines + tuned **`app.config`** defaults — **LLD** **6.205**; **BRD** **3.124** |
+| 1.127 | Apr 2026 | — | **`main_process`** MISP proposal: **`txtNomineeAge`** fill/readback robustness — **LLD** **6.206**; **BRD** **3.125** |
+| 1.128 | Apr 2026 | — | **`fill_hero_insurance_service`**: **`_MISP_UI_SETTLE_CAP_MS`** (**200** ms) for **`_t`** and aligned login pauses — **LLD** **6.207**; **BRD** **3.126** |
+| 1.129 | Apr 2026 | — | **`fill_hero_insurance_service`**: **`HERO_MISP_KYC_TAB_AWAY_SIMULATION`**; **`tab_resolve`** / **`kyc_elapsed`** / Sign In / VIN attach **`NOTE`** lines — **LLD** **6.208**; **BRD** **3.127** |
