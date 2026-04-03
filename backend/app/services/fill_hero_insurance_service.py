@@ -426,6 +426,8 @@ def _insurance_tab_resolve_note(
     t0_flow: float | None,
     step_label: str,
     branch: str,
+    *,
+    resolver_ms: int | None = None,
 ) -> None:
     if t0_flow is None:
         return
@@ -433,11 +435,12 @@ def _insurance_tab_resolve_note(
         ms = int((time.monotonic() - t0_flow) * 1000)
     except Exception:
         return
+    extra = f" resolver_ms={resolver_ms}" if resolver_ms is not None else ""
     append_playwright_insurance_line_or_dealer_fallback(
         ocr_output_dir,
         subfolder,
         "NOTE",
-        f"run_fill_insurance_only: tab_resolve step={step_label} branch={branch} elapsed_ms={ms}",
+        f"run_fill_insurance_only: tab_resolve step={step_label} branch={branch} elapsed_ms={ms}{extra}",
     )
 
 
@@ -1647,6 +1650,9 @@ def _misp_resolve_page_after_possible_new_tab(
 
     Returns ``(page, resolution_branch)`` where **branch** is ``immediate_scan`` | ``wait_for_page_event`` |
     ``polling`` | ``stayed_on_fallback`` (no matching new insurance tab in time).
+
+    Callers log **resolver-only** duration to ``Playwright_insurance.txt`` as ``resolver_ms`` on the
+    ``tab_resolve`` line (wall time since flow start is separate).
     """
     base = (portal_base_url or "").strip()
     if not base:
@@ -3449,6 +3455,10 @@ def _fill_kyc_ekyc_keyboard_sop(
         )
         return _kyc_dom_fill_ovd_mobile_consent_in_frame(kyc_fr, mobile, timeout_ms=timeout_ms)
 
+    _insurance_kyc_flow_elapsed_note(
+        ocr_output_dir, subfolder, t0_flow, "after_ovd_ready"
+    )
+
     _kyc_restore_kyc_partner_to_default_label(kyc_fr, page, timeout_ms=cap)
 
     _kyc_blur_if_insurer_product_select_focused(kyc_fr)
@@ -3860,6 +3870,7 @@ def _run_hero_misp_portal_after_open(
     except Exception as exc:
         return f"2W Icon: {exc!s}"
 
+    t0_res_2w = time.monotonic()
     page, tab_branch_2w = _misp_resolve_page_after_possible_new_tab(
         pages_before_2w,
         page,
@@ -3867,8 +3878,14 @@ def _run_hero_misp_portal_after_open(
         timeout_ms=timeout_ms,
         step_label="2W",
     )
+    res_ms_2w = int((time.monotonic() - t0_res_2w) * 1000)
     _insurance_tab_resolve_note(
-        ocr_output_dir, subfolder, t0_flow, "2W", tab_branch_2w
+        ocr_output_dir,
+        subfolder,
+        t0_flow,
+        "2W",
+        tab_branch_2w,
+        resolver_ms=res_ms_2w,
     )
     _insurance_click_settle(page)
 
@@ -3878,6 +3895,7 @@ def _run_hero_misp_portal_after_open(
     except Exception as exc:
         return f"New Policy: {exc!s}"
 
+    t0_res_np = time.monotonic()
     page, tab_branch_np = _misp_resolve_page_after_possible_new_tab(
         pages_before_np,
         page,
@@ -3885,8 +3903,14 @@ def _run_hero_misp_portal_after_open(
         timeout_ms=timeout_ms,
         step_label="New Policy",
     )
+    res_ms_np = int((time.monotonic() - t0_res_np) * 1000)
     _insurance_tab_resolve_note(
-        ocr_output_dir, subfolder, t0_flow, "New Policy", tab_branch_np
+        ocr_output_dir,
+        subfolder,
+        t0_flow,
+        "New Policy",
+        tab_branch_np,
+        resolver_ms=res_ms_np,
     )
 
     if not values:
@@ -4219,8 +4243,19 @@ def _proposal_hdfc_radio_any_checked(page) -> bool:
     for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
         try:
             loc = _proposal_cph1_locator(root, "rdoHdfcCCType")
-            if loc.count() > 0 and loc.first.is_checked():
-                return True
+            n = loc.count()
+            for j in range(min(n, 8)):
+                try:
+                    r = loc.nth(j)
+                    if r.is_checked():
+                        return True
+                    try:
+                        if r.evaluate("e => !!(e && e.checked)"):
+                            return True
+                    except Exception:
+                        pass
+                except Exception:
+                    continue
         except Exception:
             pass
         try:
@@ -4402,7 +4437,7 @@ def _proposal_step_fill_input(
                         el.press_sequentially(v, delay=40, timeout=timeout_ms)
                     except Exception:
                         el.fill(v, timeout=timeout_ms, force=True)
-                    _t(page, min(400, max(220, timeout_ms // 15)))
+                    _t(page, 200)
                     try:
                         el.evaluate(
                             """(node, val) => {
@@ -4417,7 +4452,33 @@ def _proposal_step_fill_input(
                         )
                     except Exception:
                         pass
-                    _t(page, 180)
+                    _t(page, 200)
+                elif cph1_id_suffix == "txtNomineeName":
+                    try:
+                        el.click(timeout=timeout_ms, force=True)
+                    except Exception:
+                        pass
+                    el.fill("", timeout=timeout_ms, force=True)
+                    try:
+                        el.press_sequentially(v, delay=30, timeout=timeout_ms)
+                    except Exception:
+                        el.fill(v, timeout=timeout_ms, force=True)
+                    _t(page, 200)
+                    try:
+                        el.evaluate(
+                            """(node, val) => {
+                              if (!node) return;
+                              if (!(node.value || '').trim()) {
+                                node.value = val;
+                              }
+                              ['input','change','blur'].forEach(k =>
+                                node.dispatchEvent(new Event(k, { bubbles: true })));
+                            }""",
+                            v,
+                        )
+                    except Exception:
+                        pass
+                    _t(page, 200)
                 elif _nominee:
                     el.fill("", timeout=timeout_ms, force=True)
                     el.fill(v, timeout=timeout_ms, force=True)
@@ -4428,7 +4489,7 @@ def _proposal_step_fill_input(
                 got = (snap.get("value") or "").strip()
                 if not got:
                     got = _proposal_read_input_value_best_effort(el)
-                if cph1_id_suffix == "txtNomineeAge" and (
+                if cph1_id_suffix in ("txtNomineeName", "txtNomineeAge") and (
                     not got
                     or (
                         got != v
@@ -5058,6 +5119,38 @@ def _proposal_step_hdfc_payment(
     *,
     timeout_ms: int,
 ) -> str | None:
+    hdfc_rid = f"{HERO_MISP_CPH1}_rdoHdfcCCType"
+    # Prefer **label[for=…]** (matches MispPolicy scrape: radio id + labelText **HDFC**); then direct radio.
+    for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
+        try:
+            for lab_sel in (
+                f'label[for="{hdfc_rid}"]',
+                'label[for*="_rdoHdfcCCType"]',
+            ):
+                labs = root.locator(lab_sel)
+                if labs.count() == 0:
+                    continue
+                for j in range(min(labs.count(), 4)):
+                    lab = labs.nth(j)
+                    if not lab.is_visible(timeout=600):
+                        _proposal_scroll_visible(lab, timeout_ms=timeout_ms)
+                    if not lab.is_visible(timeout=2_000):
+                        continue
+                    try:
+                        lab.click(timeout=timeout_ms, force=True)
+                    except Exception:
+                        pass
+                    _t(page, 200)
+                    if _proposal_hdfc_radio_any_checked(page):
+                        _proposal_log(
+                            ocr_output_dir,
+                            subfolder,
+                            step_id,
+                            "HDFC label click ok (rdoHdfcCCType)",
+                        )
+                        return None
+        except Exception:
+            continue
     for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
         try:
             loc = _proposal_cph1_locator(root, "rdoHdfcCCType")
@@ -5066,8 +5159,13 @@ def _proposal_step_hdfc_payment(
                     r = loc.nth(j)
                     if not r.is_visible(timeout=800):
                         _proposal_scroll_visible(r, timeout_ms=timeout_ms)
-                    if not r.is_visible(timeout=1_500):
+                    if not r.is_visible(timeout=2_000):
                         continue
+                    try:
+                        r.click(timeout=timeout_ms, force=True)
+                    except Exception:
+                        pass
+                    _t(page, 200)
                     try:
                         r.check(timeout=timeout_ms, force=True)
                     except Exception:
@@ -6890,8 +6988,22 @@ def main_process(
             out["page_url"] = None
     except PlaywrightTimeout as exc:
         out["error"] = f"Timeout: {exc!s}"
+        logger.error("Hero Insurance main_process: %s", out["error"])
+        append_playwright_insurance_line(
+            ocr_output_dir,
+            subfolder,
+            "ERROR",
+            f"main_process: {out['error']}",
+        )
     except Exception as exc:
         out["error"] = str(exc)
+        logger.exception("Hero Insurance main_process failed")
+        append_playwright_insurance_line(
+            ocr_output_dir,
+            subfolder,
+            "ERROR",
+            f"main_process: {out['error']}",
+        )
     finally:
         try:
             page.set_default_timeout(15_000)
@@ -7130,6 +7242,7 @@ def run_fill_insurance_only(
             result["error"] = err_2w
             append_playwright_insurance_line(ocr_output_dir, subfolder, "ERROR", err_2w)
             return result
+        t0_res_2w = time.monotonic()
         page, tab_branch_2w = _misp_resolve_page_after_possible_new_tab(
             pages_before_2w,
             page,
@@ -7137,8 +7250,14 @@ def run_fill_insurance_only(
             timeout_ms=INSURANCE_ACTION_TIMEOUT_MS,
             step_label="2W",
         )
+        res_ms_2w = int((time.monotonic() - t0_res_2w) * 1000)
         _insurance_tab_resolve_note(
-            ocr_output_dir, subfolder, t0_flow, "2W", tab_branch_2w
+            ocr_output_dir,
+            subfolder,
+            t0_flow,
+            "2W",
+            tab_branch_2w,
+            resolver_ms=res_ms_2w,
         )
         append_playwright_insurance_line(
             ocr_output_dir,
@@ -7160,6 +7279,7 @@ def run_fill_insurance_only(
             result["error"] = err_np
             append_playwright_insurance_line(ocr_output_dir, subfolder, "ERROR", err_np)
             return result
+        t0_res_np = time.monotonic()
         page, tab_branch_np = _misp_resolve_page_after_possible_new_tab(
             pages_before_np,
             page,
@@ -7167,8 +7287,14 @@ def run_fill_insurance_only(
             timeout_ms=INSURANCE_ACTION_TIMEOUT_MS,
             step_label="New Policy",
         )
+        res_ms_np = int((time.monotonic() - t0_res_np) * 1000)
         _insurance_tab_resolve_note(
-            ocr_output_dir, subfolder, t0_flow, "New Policy", tab_branch_np
+            ocr_output_dir,
+            subfolder,
+            t0_flow,
+            "New Policy",
+            tab_branch_np,
+            resolver_ms=res_ms_np,
         )
         append_playwright_insurance_line(
             ocr_output_dir,

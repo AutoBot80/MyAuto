@@ -425,3 +425,5 @@ The SQL view **`form_dms_view`** is **removed**; the same mapping is implemented
 | 1.128 | Apr 2026 | — | **`fill_hero_insurance_service`**: **`_MISP_UI_SETTLE_CAP_MS`** (**200** ms) for **`_t`** and aligned login pauses — **LLD** **6.207**; **BRD** **3.126** |
 | 1.129 | Apr 2026 | — | **`fill_hero_insurance_service`**: **`HERO_MISP_KYC_TAB_AWAY_SIMULATION`**; **`tab_resolve`** / **`kyc_elapsed`** / Sign In / VIN attach **`NOTE`** lines — **LLD** **6.208**; **BRD** **3.127** |
 | 1.130 | Apr 2026 | — | **`fill_hero_insurance_service`**: **`_hero_misp_after_sign_in_settle`** hub **2W** readiness — **LLD** **6.209**; **BRD** **3.128** |
+| 1.131 | Apr 2026 | — | **`main_process`** MISP proposal: **`txtNomineeName`** + **HDFC** label-first payment — **LLD** **6.210**; **BRD** **3.129** |
+| 1.132 | Apr 2026 | — | **`fill_hero_insurance_service`**: **`tab_resolve resolver_ms`** + KYC **`after_ovd_ready`** — **LLD** **6.211**; **BRD** **3.130** |
