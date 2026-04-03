@@ -7398,9 +7398,11 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     **Pre-check list ``+``:** **Service Request** applet header — ``button#s_3_1_12_0_Ctrl`` with class
     ``siebui-icon-newrecord`` (``title``/``aria-label`` = **Service Request List:New**); also **Service Request List:New**
     / ``Precheck List:New`` by role or CSS. Skip **Service Request List: Menu**. Then **Technician** pick must target the **second** pick icon when
-    generic ``siebui-icon-picklist`` CSS is used (``.first`` would re-click **Open**). PDI: **Service Request List:New**
-    then optional legacy ``s_2_2_32_0_icon`` / ``s_2_2_32_0``. After the **Technician** pick icon, **Open** still uses
-    ``_pick_first_row_and_ok``; **Technician** uses ``_siebel_lov_pick_first_row_ok_pdi_style`` (same settle / first row /
+    generic ``siebui-icon-picklist`` CSS is used (``.first`` would re-click **Open**).
+    **Open** / **Technician**: click first
+    **jqgrow** row, then **Tab**-retry loops so pick icons match Siebel focus (Technician often after Tab from **Open**). PDI: **Service Request List:New**
+    then optional legacy ``s_2_2_32_0_icon`` / ``s_2_2_32_0``. After the **Open** pick icon, ``_pick_first_row_and_ok``; after the
+    **Technician** pick icon, ``_siebel_lov_pick_first_row_ok_pdi_style`` (same settle / first row /
     **OK** / settle as the PDI pick applet). LOV pick icons use ``*_icon`` ids — **never** ``s_3_1_12_0_Ctrl`` (that id is the
     header **+** / ``siebui-icon-newrecord``, not a picklist). **Technician** tries ``s_3_2_26_0_icon`` / ``s_3_2_24_0_icon``
     / … before ``s_3_2_25_0_icon`` (often **Open**).
@@ -8000,7 +8002,13 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 "s_3_2_25_0_icon",
             ]
         else:
-            _pick_ids = ["s_3_2_25_0_icon"]
+            _pick_ids = [
+                "s_3_2_25_0_icon",
+                "s_3_2_24_0_icon",
+                "s_3_2_26_0_icon",
+                "s_3_3_25_0_icon",
+                "s_3_3_26_0_icon",
+            ]
         for _pc_pick_id in _pick_ids:
             if _siebel_click_by_id_anywhere(
                 page,
@@ -8279,6 +8287,56 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             return True
         return False
 
+    def _precheck_focus_first_precheck_jqgrow() -> None:
+        """Click first **jqgrow** row in a Precheck-scoped jqGrid so LOV pick icons are bound to the line item."""
+        _jq_js = """() => {
+            const vis = (el) => {
+                if (!el) return false;
+                const st = window.getComputedStyle(el);
+                if (st.display === 'none' || st.visibility === 'hidden') return false;
+                const r = el.getBoundingClientRect();
+                return r.width > 0 && r.height > 0;
+            };
+            const isPrecheckScoped = (el) => {
+                let n = el;
+                for (let d = 0; d < 24 && n; d++) {
+                    const id = String(n.id || '');
+                    const nm = String(n.getAttribute('name') || '');
+                    const tit = String(n.getAttribute('title') || '');
+                    const hay = (id + ' ' + nm + ' ' + tit).toLowerCase();
+                    if (hay.includes('precheck') || hay.includes('pre-check') || hay.includes('pre_check')) {
+                        return true;
+                    }
+                    n = n.parentElement;
+                }
+                return false;
+            };
+            const tables = Array.from(document.querySelectorAll('table.ui-jqgrid-btable')).filter(
+                (tb) => vis(tb) && isPrecheckScoped(tb)
+            );
+            for (const tb of tables) {
+                const tr = tb.querySelector('tbody tr.jqgrow');
+                if (!tr || !vis(tr)) continue;
+                try { tr.scrollIntoView({ block: 'center' }); } catch (e) {}
+                const tds = tr.querySelectorAll('td');
+                if (tds.length && vis(tds[0])) {
+                    tds[0].click();
+                    return true;
+                }
+                tr.click();
+                return true;
+            }
+            return false;
+        }"""
+        for _root in _roots():
+            try:
+                if bool(_root.evaluate(_jq_js)):
+                    note(f"{log_prefix}: focused Pre-check list first data row (jqgrow) before Open pick.")
+                    _safe_page_wait(page, 450, log_label="after_precheck_jqgrow_focus")
+                    return
+            except Exception:
+                continue
+
     if not _precheck_already_present:
         _pc_new_clicked = False
         # **+** is often ``button#s_3_1_12_0_Ctrl.siebui-icon-newrecord`` (``title``/``aria-label`` = Service Request List:New)
@@ -8413,7 +8471,20 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     _precheck_icon_ok = True
     _precheck_icon_used = ""
     if not _precheck_already_present:
-        _precheck_icon_ok, _precheck_icon_used = _click_precheck_pick_icon("precheck_open_status")
+        _precheck_focus_first_precheck_jqgrow()
+        _precheck_icon_ok, _precheck_icon_used = False, ""
+        for _open_try in range(6):
+            if _open_try > 0:
+                try:
+                    page.keyboard.press("Tab")
+                    _safe_page_wait(page, 180, log_label=f"precheck_tab_before_open_pick_try_{_open_try}")
+                except Exception:
+                    pass
+            _precheck_icon_ok, _precheck_icon_used = _click_precheck_pick_icon("precheck_open_status")
+            if _precheck_icon_ok:
+                if _open_try > 0:
+                    note(f"{log_prefix}: Open pick icon succeeded after {_open_try} extra Tab(s) (focus on Open column).")
+                break
     # region agent log
     try:
         import json as _json_pc_icon
@@ -8434,7 +8505,13 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                         "data": {
                             "ok": _precheck_icon_ok,
                             "used_id": _precheck_icon_used,
-                            "tried_ids": ["s_3_2_25_0_icon"],
+                            "tried_ids": [
+                                "s_3_2_25_0_icon",
+                                "s_3_2_24_0_icon",
+                                "s_3_2_26_0_icon",
+                                "s_3_3_25_0_icon",
+                                "s_3_3_26_0_icon",
+                            ],
                         },
                         "timestamp": _ts_ist_iso(),
                     },
@@ -8448,7 +8525,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     if not _precheck_icon_ok:
         return False, (
             "Could not click Pre-check pick icon for Open status "
-            "(tried s_3_2_25_0_icon; s_3_1_12_0_Ctrl is the header + only, not LOV)."
+            "(tried icon ids + CSS; jqgrow focus + up to 6 Tab steps; s_3_1_12_0_Ctrl is header + only, not LOV)."
         )
 
     if not _precheck_already_present:
@@ -8460,50 +8537,28 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 "Technician step was not run; Pre-check Submit and PDI were skipped.",
             )
 
-        # Move focus to the next editable cell (Technician) and open its pick applet.
+        # Move focus to Technician (often only after Tab out of Open); try Tab + pick repeatedly.
         _tech_icon_ok = False
         _tech_icon_used = ""
-        try:
-            page.keyboard.press("Tab")
-            _safe_page_wait(page, 250, log_label="after_precheck_open_tab_to_technician")
-            # region agent log
+        for _ti in range(6):
             try:
-                import json as _json_pc_tab
-
-                with open(
-                    Path(__file__).resolve().parents[3] / "debug-0875fe.log",
-                    "a",
-                    encoding="utf-8",
-                ) as _lf_pc_tab:
-                    _lf_pc_tab.write(
-                        _json_pc_tab.dumps(
-                            {
-                                "sessionId": "0875fe",
-                                "runId": "pre-fix",
-                                "hypothesisId": "G3",
-                                "location": "siebel_dms_playwright.py:_siebel_run_vehicle_serial_detail_precheck_pdi",
-                                "message": "precheck_tab_to_technician_cell",
-                                "data": {"tab_pressed": True},
-                                "timestamp": _ts_ist_iso(),
-                            },
-                            ensure_ascii=False,
-                        )
-                        + "\n"
-                    )
+                page.keyboard.press("Tab")
+                _safe_page_wait(page, 220, log_label=f"precheck_tab_toward_technician_{_ti}")
             except Exception:
                 pass
-            # endregion agent log
-        except Exception:
-            pass
-
-        _tech_icon_ok, _tech_icon_used = _click_precheck_pick_icon("precheck_technician_after_tab")
+            _tech_icon_ok, _tech_icon_used = _click_precheck_pick_icon("precheck_technician_after_tab")
+            if _tech_icon_ok:
+                note(
+                    f"{log_prefix}: Technician pick icon clicked after {_ti + 1} Tab(s) from Open "
+                    f"(id={_tech_icon_used!r})."
+                )
+                break
         if not _tech_icon_ok:
             return (
                 False,
-                "Pre-check: Technician pick icon not found after moving focus from Open (Tab). "
-                "Pick applet for Technician did not open; Pre-check Submit and PDI were skipped.",
+                "Pre-check: Technician pick icon not found after Tab from Open (tried up to 6 Tabs + pick ids/CSS). "
+                "Pre-check Submit and PDI were skipped.",
             )
-        note(f"{log_prefix}: technician pick icon clicked after Tab (id={_tech_icon_used!r}).")
         _tech_row_ok, _tech_ok_done = _siebel_lov_pick_first_row_ok_pdi_style(
             page,
             roots=_roots,
