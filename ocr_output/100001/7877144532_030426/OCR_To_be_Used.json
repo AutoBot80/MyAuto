@@ -9,7 +9,7 @@
   "customer": {
     "year_of_birth": "2005",
     "date_of_birth": "09/05/2005",
-    "name": "amitt",
+    "name": "Nishant Kumar",
     "care_of": "S/O Brij Gopal",
     "city": "Bharatpur",
     "district": "Bharatpur",
@@ -22,7 +22,6 @@
     "aadhar_id": "0981"
   },
   "insurance": {
-    "profession": "Marital Status: unmaried",
     "financier": "Shri Ram",
     "insurer": "I agree to receiving periodic SMS updates about registration and service status.",
     "marital_status": "unmaried",

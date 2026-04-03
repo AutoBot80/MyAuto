@@ -228,7 +228,7 @@ This is the **intended** real-DMS order (aligned with the operator screen record
 
 | Insurance page | Label | Required source (DB-backed) | Persisted DB column |
 |----------------|-------|------------------------------|---------------------|
-| KYC | Insurance Company | Merged details insurer (view + staging + OCR fallback), then if **`dealer_ref.prefer_insurer`** is set and the merged string has **≥20%** fuzzy similarity to it, use **`prefer_insurer`** as the portal label; otherwise fuzzy-match merged text to portal options | `insurance_master.insurer` (staging/view); **`prefer_insurer`** on **`dealer_ref`** via **`form_insurance_view`** |
+| KYC | Insurance Company | Merged details insurer (view + staging + OCR fallback); consent/SMS boilerplate misread as insurer is cleared; if merged insurer is empty and **`dealer_ref.prefer_insurer`** is set, use **`prefer_insurer`**; else if **`prefer_insurer`** is set and the merged string has **≥20%** fuzzy similarity to it, use **`prefer_insurer`** as the portal label; otherwise fuzzy-match merged text to portal options | `insurance_master.insurer` (staging/view); **`prefer_insurer`** on **`dealer_ref`** via **`form_insurance_view`** |
 | KYC | KYC Partner | Dealer-configured onboarding value | Reference/config (runtime choice, not persisted in current schema) |
 | KYC | Proposer Type | Portal default | Dummy/default **Individual**; Playwright does not change tenure/proposer selects |
 | KYC | OVD Type | Document type from scan set | derived from uploaded docs metadata |
@@ -236,7 +236,7 @@ This is the **intended** real-DMS order (aligned with the operator screen record
 | KYC | AADHAAR Front/Rear Image | Uploaded scan artifacts | `uploads/<dealer>/<subfolder>/` files |
 | KYC | Customer Photo | Uploaded scan artifacts | `uploads/<dealer>/<subfolder>/` files |
 | MisDMS Entry | VIN Number | Vehicle chassis/frame | `vehicle_master.chassis` (or raw frame column) |
-| New Policy | Insurance Company* | Same merged insurer string and **`prefer_insurer`** override rule as KYC | `insurance_master.insurer`; dealer **`prefer_insurer`** |
+| New Policy | Insurance Company* | Same merged insurer string, consent-line sanitization, empty-insurer **`prefer_insurer`** fallback, and fuzzy **`prefer_insurer`** override rule as KYC | `insurance_master.insurer`; dealer **`prefer_insurer`** |
 | New Policy | Policy Tenure | Portal default | Dummy option only; Playwright does not set |
 | New Policy | Manufacturer* | OEM / make (fuzzy-matched to portal options) | `vehicle_master.oem_name`, else dealer `oem_ref.oem_name` |
 | New Policy | Proposer Type* | Portal default | Dummy **Individual**; Playwright does not set |
@@ -504,3 +504,7 @@ Bulk upload automates the ingestion of scanned documents from a shared folder in
 | 3.137 | Apr 2026 | — | **FR-23** / **FR-5** Sales Detail sheet: when **Profession** is blank but **Marital Status** is on the same row, OCR must not store marital text as **profession** — **`_sanitize_details_profession_value`** — **LLD** **6.218**, **§2.3** |
 | 3.138 | Apr 2026 | — | **FR-5** / **FR-23**: **customer.name** — reconcile Aadhaar parse with Details **Full Name** (fuzzy **>0.5**); if not, pick best-matching name phrase from Aadhaar scan text vs Details — **`_reconcile_customer_name_aadhar_details`** — **LLD** **6.219**, **§2.3** |
 | 3.139 | Apr 2026 | — | **FR-5**: Rule 2 — fuzzy scan of Aadhaar OCR uses Details **core** name (**S/o**/**D/o**/**W/o** stripped), not the full line — **LLD** **6.220**, **§2.3** |
+| 3.140 | Apr 2026 | — | **FR-5** / **FR-23**: Profession must not take **Marital Status** bleed (incl. **`- Marital Status: Unmaried`** / glued **maritalstatus**); **`_apply_initcap_on_read`** sanitizes **customer**/**insurance** profession — **LLD** **6.221**, **§2.3** |
+| 3.141 | Apr 2026 | — | **FR-5** / **FR-18b**: Marital status OCR typo **Unmaried** → stored/display **Single**; MISP proposal mapping aligned — **LLD** **6.222**, **§2.3** |
+| 3.142 | Apr 2026 | — | **FR-23** / **FR-18b**: Blank **Insurer Name** must not take the next printed consent/SMS line; **`sanitize_details_sheet_insurer_value`**; when insurer still empty, **`build_insurance_fill_values`** uses **`dealer_ref.prefer_insurer`** — **LLD** **6.223**, **§2.3** / **§6.6** |
+| 3.143 | Apr 2026 | — | **FR-23**: Nominee **Relation** must not retain a trailing period from the form (e.g. **Mother.** → **Mother**) — **`normalize_nominee_relationship_value`** — **LLD** **6.224**, **§2.3** |

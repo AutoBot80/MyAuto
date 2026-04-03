@@ -52,6 +52,44 @@ def insurer_prefer_matches(
     return difflib.SequenceMatcher(None, a, b).ratio() >= min_ratio
 
 
+def sanitize_details_sheet_insurer_value(val: str | None) -> str | None:
+    """
+    Reject OCR bleed when **Insurer Name (if needed)** is blank but the next line is printed
+    consent/SMS boilerplate (e.g. "I agree to receiving periodic SMS updates about registration
+    and service status"). Returns ``None`` so the field is treated as blank and
+    ``dealer_ref.prefer_insurer`` can apply in ``build_insurance_fill_values``.
+    """
+    if not val or not str(val).strip():
+        return None
+    s = " ".join(str(val).split())
+    low = s.lower()
+    if re.search(r"(?i)i\s+agree\s+to\s+receiving", low):
+        return None
+    if re.search(r"(?i)periodic\s+sms", low):
+        return None
+    if re.search(r"(?i)registration\s+and\s+service\s+status", low):
+        return None
+    if re.search(r"(?i)updates\s+about\s+registration", low):
+        return None
+    if "i agree" in low and ("sms" in low or "periodic" in low):
+        return None
+    if len(s.split()) > 14:
+        return None
+    if len(s) > 120:
+        return None
+    return s
+
+
+def normalize_nominee_relationship_value(val: str | None) -> str:
+    """
+    Strip trailing period OCR often attaches to relation labels (e.g. **Mother.** printed next to **Relation**).
+    """
+    s = " ".join(clean_text(val).split())
+    if not s:
+        return ""
+    return s.rstrip(".").strip()
+
+
 def fuzzy_best_option_label(query: str, candidates: list[str], *, min_score: float = 0.42) -> str | None:
     """
     Pick dropdown option label best matching query (insurer from details sheet / OEM name).

@@ -432,3 +432,4 @@ The SQL view **`form_dms_view`** is **removed**; the same mapping is implemented
 | 1.135 | Apr 2026 | — | **`fill_hero_insurance_service`** VIN URL/attach pacing restored — **LLD** **6.214**; **BRD** **3.133** |
 | 1.136 | Apr 2026 | — | **`add_sales_commit_service`**: drop **`Playwright_insurance.txt`** pre-**INSERT** snapshot lines — **LLD** **6.215**; **BRD** **3.134** |
 | 1.137 | Apr 2026 | — | **`fill_hero_insurance_service`**: CPH1 add-on checkbox stable readback + logging — **LLD** **6.216**; **BRD** **3.135** |
+| 1.138 | Apr 2026 | — | **`insurance_form_values`**: consent-line insurer sanitization; **`prefer_insurer`** when merged insurer empty — **LLD** **6.223**; **BRD** **3.142**; **Database DDL** **2.64** |

@@ -12,6 +12,7 @@ from app.db import get_connection
 from app.repositories.add_sales_staging import persist_staging_for_submit
 from app.services.customer_address_infer import enrich_customer_address_from_freeform
 from app.services.dms_relation_prefix import compute_dms_relation_prefix
+from app.services.utility_functions import normalize_nominee_relationship_value
 
 
 def _int_or_none(val: Any) -> int | None:
@@ -100,7 +101,9 @@ def submit_info(
         raise ValueError("Nominee Age must be a number (1–150)")
     if nominee_age is not None and (nominee_age < 1 or nominee_age > 150):
         raise ValueError("Nominee Age must be between 1 and 150")
-    nominee_relationship = _str_or_none(insurance.get("nominee_relationship"), 64)
+    nominee_relationship = _str_or_none(
+        normalize_nominee_relationship_value(insurance.get("nominee_relationship")), 64
+    )
     nominee_gender = _str_or_none(insurance.get("nominee_gender"), 16)
     insurer = _str_or_none(insurance.get("insurer"), 255)
     policy_num = _str_or_none(insurance.get("policy_num"), 24)

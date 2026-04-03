@@ -1,7 +1,7 @@
 """Load and normalize insurance/MISP fill values from ``form_insurance_view`` plus ``add_sales_staging.payload_json`` (when ``staging_id`` is used) and OCR JSON (insurer fallback).
 
 Add Sales passes the same ``staging_id`` as Create Invoice (DMS) so the view (committed masters) and staging (full OCR merge) jointly supply the insurance flow — see BR-20.
-When ``dealer_ref.prefer_insurer`` is present on the view row and the merged details insurer fuzzy-matches it (≥20% ``SequenceMatcher`` on normalized strings), the fill dict uses ``prefer_insurer`` for KYC/proposal insurer typing.
+When ``dealer_ref.prefer_insurer`` is present on the view row and the merged details insurer fuzzy-matches it (≥20% ``SequenceMatcher`` on normalized strings), the fill dict uses ``prefer_insurer`` for KYC/proposal insurer typing. When the merged insurer is empty (including after rejecting consent-line OCR bleed), the fill dict uses ``prefer_insurer`` if set.
 ``dealer_ref.hero_cpi`` (exposed as ``form_insurance_view.hero_cpi``) is **Y**/**N** and drives the MISP CPA add-on row whose label varies (NIC/CPI/etc.).
 """
 from __future__ import annotations
@@ -31,8 +31,10 @@ from app.services.utility_functions import (
     clean_text,
     insurer_prefer_matches,
     normalize_dob_for_misp,
+    normalize_nominee_relationship_value,
     require_customer_vehicle_ids,
     safe_subfolder_name,
+    sanitize_details_sheet_insurer_value,
 )
 
 logger = logging.getLogger(__name__)
@@ -49,7 +51,9 @@ def read_insurance_insurer_from_ocr_json(ocr_output_dir: Path | None, subfolder:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         ins = data.get("insurance") if isinstance(data.get("insurance"), dict) else {}
-        return clean_text((ins or {}).get("insurer"))
+        raw = clean_text((ins or {}).get("insurer"))
+        ok = sanitize_details_sheet_insurer_value(raw)
+        return ok or ""
     except Exception as exc:
         logger.debug("Insurance: could not read insurer from %s: %s", path, exc)
         return ""
@@ -126,6 +130,7 @@ def build_insurance_fill_values(
     ``insurance_master`` is populated after a **successful** Generate Insurance run (UPSERT). Insurer may still fall back to **OCR_To_be_Used.json** when view
     and staging lack it.
     If ``prefer_insurer`` is non-empty and the merged insurer matches it at ≥20% fuzzy ratio, ``insurer`` is set to ``prefer_insurer``.
+    When merged insurer is empty after stripping consent-line OCR bleed, ``insurer`` is set from ``prefer_insurer`` if set (blank Details insurer field).
     **Hero CPI** (**``dealer_ref.hero_cpi``** via **``form_insurance_view``**) is normalized to **Y**/**N** and drives the MISP
     CPA add-on row (label varies by insurer). Other proposal-only controls (email default, some add-ons, CPA tenure,
     payment mode, registration date) may remain hardcoded in Playwright where noted.
@@ -173,6 +178,8 @@ def build_insurance_fill_values(
     insurer_json = read_insurance_insurer_from_ocr_json(ocr_output_dir, subfolder)
     if not values.get("insurer"):
         values["insurer"] = insurer_json
+    ins_clean = sanitize_details_sheet_insurer_value(values.get("insurer"))
+    values["insurer"] = ins_clean or ""
     prefer = clean_text(row.get("prefer_insurer"))
     merged_insurer = clean_text(values.get("insurer"))
     # Preserved for MISP KYC: Playwright can type ``prefer_insurer`` (keyboard) instead of DOM-selecting
@@ -186,8 +193,15 @@ def build_insurance_fill_values(
             prefer[:120],
             merged_insurer[:120],
         )
+    elif prefer and not merged_insurer:
+        values["insurer"] = prefer
+        logger.info(
+            "Insurance: using dealer prefer_insurer %r (no details/staging/OCR insurer after sanitization).",
+            prefer[:120],
+        )
     dob_merged = clean_text(values.get("dob"))
     values["dob"] = normalize_dob_for_misp(dob_merged) if dob_merged else ""
+    values["nominee_relationship"] = normalize_nominee_relationship_value(values.get("nominee_relationship"))
     required = [
         ("insurance_master.insurer (or staging / OCR details insurer)", values["insurer"]),
         ("customer_master.mobile_number", values["mobile_number"]),

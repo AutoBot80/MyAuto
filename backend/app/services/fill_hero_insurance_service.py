@@ -179,7 +179,7 @@ def _proposal_map_marital_for_misp(raw: str) -> str:
     sl = re.sub(r"\s+", " ", s.lower())
     if sl in ("married", "marrid", "maried", "m.") or sl.startswith("married "):
         return "Married"
-    if sl in ("single", "unmarried", "un-married"):
+    if sl in ("single", "unmarried", "un-married", "unmaried", "un-maried"):
         return "Single"
     if "widow" in sl:
         return "Widow"

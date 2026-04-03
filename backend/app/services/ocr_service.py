@@ -13,6 +13,10 @@ from typing import Any
 
 from app.db import get_connection
 from app.repositories.ai_reader_queue import AiReaderQueueRepository
+from app.services.utility_functions import (
+    normalize_nominee_relationship_value,
+    sanitize_details_sheet_insurer_value,
+)
 from app.services.customer_address_infer import (
     enrich_customer_address_from_freeform,
     normalize_address_freeform,
@@ -1728,6 +1732,18 @@ def _apply_initcap_on_read(data: dict[str, Any]) -> None:
     """
     customer = data.get("customer") or {}
     if isinstance(customer, dict):
+        if customer.get("profession"):
+            sp = _sanitize_details_profession_value(customer.get("profession"))
+            if sp:
+                customer["profession"] = _initcap_words(sp)
+            else:
+                customer.pop("profession", None)
+        if customer.get("marital_status"):
+            ms = _normalize_details_marital_status_value(customer.get("marital_status"))
+            if ms:
+                customer["marital_status"] = _initcap_words(ms)
+            else:
+                customer.pop("marital_status", None)
         for k in ("name", "care_of", "city", "district", "sub_district", "post_office", "state"):
             if customer.get(k):
                 customer[k] = _initcap_words(customer.get(k))
@@ -1735,7 +1751,31 @@ def _apply_initcap_on_read(data: dict[str, Any]) -> None:
 
     insurance = data.get("insurance") or {}
     if isinstance(insurance, dict):
-        for k in ("nominee_name", "nominee_relationship", "profession", "financier", "insurer", "policy_holder_name"):
+        if insurance.get("profession"):
+            sp = _sanitize_details_profession_value(insurance.get("profession"))
+            if sp:
+                insurance["profession"] = _initcap_words(sp)
+            else:
+                insurance.pop("profession", None)
+        if insurance.get("marital_status"):
+            ms = _normalize_details_marital_status_value(insurance.get("marital_status"))
+            if ms:
+                insurance["marital_status"] = _initcap_words(ms)
+            else:
+                insurance.pop("marital_status", None)
+        if insurance.get("insurer"):
+            ins = sanitize_details_sheet_insurer_value(insurance.get("insurer"))
+            if ins:
+                insurance["insurer"] = _initcap_words(ins)
+            else:
+                insurance.pop("insurer", None)
+        if insurance.get("nominee_relationship"):
+            nr = normalize_nominee_relationship_value(insurance.get("nominee_relationship"))
+            if nr:
+                insurance["nominee_relationship"] = _initcap_words(nr)
+            else:
+                insurance.pop("nominee_relationship", None)
+        for k in ("nominee_name", "financier", "policy_holder_name"):
             if insurance.get(k):
                 insurance[k] = _initcap_words(insurance.get(k))
         data["insurance"] = insurance
@@ -1879,23 +1919,63 @@ def _sanitize_details_profession_value(val: str | None) -> str | None:
     """
     Sales detail sheets often place **Profession** and **Marital Status** on one row. When
     Profession is left blank, Textract may merge the rest of the row (e.g. ``Marital Status:
-    Unmarried``) into the Profession value. Strip that bleed so profession is empty unless
-    a real token appears before ``Marital Status``.
+    Unmarried`` / ``- Marital Status: Unmaried``) into the Profession value. Strip that bleed
+    so profession is empty unless a real token appears before the marital-status field.
     """
     if val is None or not str(val).strip():
         return None
     s = str(val).strip()
-    m = re.search(r"(?i)\bmarital\s*status\b", s)
-    if m:
-        s = s[: m.start()].strip(" \t:._-")
+    # Normalize unicode dashes and spaces OCR often mixes with "- Marital Status: …"
+    s = s.replace("\u2013", "-").replace("\u2014", "-").replace("\u2012", "-").replace("\xa0", " ")
+
+    # Cut before the earliest OCR variant of "marital status" (including glued "maritalstatus").
+    _marital_field_pat = (
+        r"(?i)\bmarital\s*status\b",
+        r"(?i)marital\s*statu?s\b",
+        r"(?i)mari\s*ta?l\s*status\b",
+        r"(?i)maritalstatus\b",
+        r"(?i)\bmarital\s*stat\b",  # truncated "stat"
+    )
+    cut_at: int | None = None
+    for pat in _marital_field_pat:
+        m = re.search(pat, s)
+        if m:
+            if cut_at is None or m.start() < cut_at:
+                cut_at = m.start()
+    if cut_at is not None:
+        s = s[:cut_at]
+
+    s = s.strip(" \t:._-–—")
     s = _clean_sales_sheet_scalar(s)
     if not s:
         return None
+
+    # Whole value is only marital outcome (incl. OCR "Unmaried")
     if re.match(
-        r"(?i)^\s*marital\s*status\s*[:\s]*\s*(unmarried|married|single|divorced|widowed)\s*$",
+        r"(?i)^(unmarried|unmaried|married|single|divorced|widowed)\s*$",
         s,
     ):
         return None
+
+    # Remainder still starts like a marital-status line (no real profession token)
+    if re.match(r"(?i)^(marital|maritalstatus|mari\s*ta?l)\b", s):
+        return None
+
+    return s[:200]
+
+
+def _normalize_details_marital_status_value(val: str | None) -> str | None:
+    """
+    OCR often misreads **Unmarried** as **Unmaried**. Normalize to portal-friendly **Single**
+    (aligned with MISP ``ddlMaritalStatus`` and ``_proposal_map_marital_for_misp``).
+    """
+    if val is None or not str(val).strip():
+        return None
+    s = str(val).strip()
+    s = s.replace("\u2013", "-").replace("\u2014", "-").lstrip("-–—").strip()
+    sl = re.sub(r"\s+", " ", s.lower())
+    if sl in ("unmaried", "un-maried"):
+        return "Single"
     return s[:200]
 
 
@@ -2168,6 +2248,20 @@ def _map_key_value_pairs_to_insurance(pairs: list[dict]) -> dict[str, str]:
             out["profession"] = sp
         else:
             out.pop("profession", None)
+    if out.get("marital_status"):
+        ms = _normalize_details_marital_status_value(out["marital_status"])
+        if ms:
+            out["marital_status"] = ms
+        else:
+            out.pop("marital_status", None)
+    if out.get("insurer"):
+        ins = sanitize_details_sheet_insurer_value(out["insurer"])
+        if ins:
+            out["insurer"] = ins
+        else:
+            out.pop("insurer", None)
+    if out.get("nominee_relationship"):
+        out["nominee_relationship"] = normalize_nominee_relationship_value(out["nominee_relationship"])
     return out
 
 
@@ -2216,6 +2310,12 @@ def _map_key_value_pairs_to_details_customer(pairs: list[dict]) -> dict[str, str
             out["profession"] = sp
         else:
             out.pop("profession", None)
+    if out.get("marital_status"):
+        ms = _normalize_details_marital_status_value(out["marital_status"])
+        if ms:
+            out["marital_status"] = ms
+        else:
+            out.pop("marital_status", None)
     return out
 
 
@@ -2276,6 +2376,18 @@ def _parse_insurance_from_full_text(full_text: str) -> dict[str, str]:
                 val = _sanitize_details_profession_value(val)
                 if not val:
                     continue
+            elif key == "marital_status":
+                val = _normalize_details_marital_status_value(val)
+                if not val:
+                    continue
+            elif key == "insurer":
+                val = sanitize_details_sheet_insurer_value(val)
+                if not val:
+                    continue
+            elif key == "nominee_relationship":
+                val = normalize_nominee_relationship_value(val)
+                if not val:
+                    continue
             elif not val or len(val) >= 200:
                 continue
             out[key] = val
@@ -2311,7 +2423,9 @@ def _parse_insurance_from_full_text(full_text: str) -> dict[str, str]:
             "relation with proposer",
             "relation to insured",
         ):
-            out["nominee_relationship"] = nxt
+            nr = normalize_nominee_relationship_value(nxt)
+            if nr:
+                out["nominee_relationship"] = nr
         same = re.match(r"(?i)^(profession|occupation|customer profession)\s+(.{1,120})$", ln)
         if same and "profession" not in out:
             cand = _sanitize_details_profession_value(same.group(2).strip())
@@ -2325,7 +2439,9 @@ def _parse_insurance_from_full_text(full_text: str) -> dict[str, str]:
             out["financier"] = same_f.group(2).strip()
         if "insurer" not in out and "insurer" in low and "name" in low and "nominee" not in low:
             if nxt and len(nxt) < 120 and not re.match(r"^[:\s_]+$", nxt):
-                out["insurer"] = nxt.strip()
+                cand = sanitize_details_sheet_insurer_value(nxt.strip())
+                if cand:
+                    out["insurer"] = cand
 
     return out
 
@@ -3287,6 +3403,11 @@ class OcrService:
         if name_err:
             data["name_mismatch_error"] = name_err
         _apply_initcap_on_read(data)
+        try:
+            json_path.parent.mkdir(parents=True, exist_ok=True)
+            json_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        except Exception:
+            pass
         return data
 
     def list_extractions(self, limit: int = 200) -> list[dict]:
