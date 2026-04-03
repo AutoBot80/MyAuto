@@ -28,6 +28,7 @@ from app.config import (
     INSURANCE_LOGIN_WAIT_MS,
     INSURANCE_MAIN_PROCESS_FRAME_SCRAPE,
     INSURANCE_POLICY_FILL_TIMEOUT_MS,
+    INSURANCE_VIN_POST_URL_DOMCONTENTLOADED_MS,
     INSURANCE_VIN_PRE_DOMCONTENTLOADED_MS,
     KYC_KEYBOARD_INSURER_ARROW_DOWN_MAX,
     KYC_KEYBOARD_INSURER_ARROW_DOWN_STEP_MS,
@@ -93,6 +94,80 @@ HERO_MISP_CPH1 = "ctl00_ContentPlaceHolder1"
 PROPOSAL_CHECKBOX_ID_NOT_FOUND = "__proposal_checkbox_id_not_found__"
 # After native ``<select>`` insurer commit (non-keyboard DOM path), use ``light`` nav (skip tab-away) — same as keyboard SOP.
 HERO_MISP_LIGHT_NAV_AFTER_DOM_INSURER = True
+
+# Persisted KYC insurer automation strategy (see ``_kyc_insurer_strategy_cache_*``).
+KYC_INSURER_STRATEGY_DOM_NATIVE = "dom_native"
+KYC_INSURER_STRATEGY_KEYBOARD_CHAIN = "keyboard_chain"
+KYC_INSURER_STRATEGY_FUZZY_SCAN = "fuzzy_scan"
+
+
+def _kyc_insurer_strategy_cache_host_key() -> str:
+    u = (INSURANCE_BASE_URL or "").strip()
+    if not u:
+        return "default"
+    try:
+        net = urllib.parse.urlparse(u).netloc.lower()
+        return net or "default"
+    except Exception:
+        return "default"
+
+
+def _kyc_insurer_strategy_cache_path() -> Path:
+    return Path(__file__).resolve().parent.parent / "data" / "kyc_insurer_strategy_cache.json"
+
+
+def _kyc_insurer_strategy_cache_read() -> str | None:
+    path = _kyc_insurer_strategy_cache_path()
+    try:
+        if not path.is_file():
+            return None
+        raw = path.read_text(encoding="utf-8")
+        data = json.loads(raw) if raw.strip() else {}
+        v = data.get(_kyc_insurer_strategy_cache_host_key())
+        if v in (
+            KYC_INSURER_STRATEGY_DOM_NATIVE,
+            KYC_INSURER_STRATEGY_KEYBOARD_CHAIN,
+            KYC_INSURER_STRATEGY_FUZZY_SCAN,
+        ):
+            return str(v)
+    except Exception as exc:
+        logger.debug("Hero Insurance: KYC insurer strategy cache read: %s", exc)
+    return None
+
+
+def _kyc_insurer_strategy_cache_write(strategy: str) -> None:
+    if strategy not in (
+        KYC_INSURER_STRATEGY_DOM_NATIVE,
+        KYC_INSURER_STRATEGY_KEYBOARD_CHAIN,
+        KYC_INSURER_STRATEGY_FUZZY_SCAN,
+    ):
+        return
+    path = _kyc_insurer_strategy_cache_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        data: dict = {}
+        if path.is_file():
+            data = json.loads(path.read_text(encoding="utf-8") or "{}")
+        if not isinstance(data, dict):
+            data = {}
+        data[_kyc_insurer_strategy_cache_host_key()] = strategy
+        path.write_text(json.dumps(data, indent=0, sort_keys=True) + "\n", encoding="utf-8")
+    except Exception as exc:
+        logger.debug("Hero Insurance: KYC insurer strategy cache write: %s", exc)
+
+
+def _kyc_insurer_attempt_order(cached: str | None) -> list[str]:
+    """Non-fuzzy strategies permuted with **cached first**; ``fuzzy_scan`` is always last."""
+    d, k, f = (
+        KYC_INSURER_STRATEGY_DOM_NATIVE,
+        KYC_INSURER_STRATEGY_KEYBOARD_CHAIN,
+        KYC_INSURER_STRATEGY_FUZZY_SCAN,
+    )
+    valid = {d, k, f}
+    if not cached or cached not in valid or cached == f:
+        return [d, k, f]
+    others = [x for x in (d, k) if x != cached]
+    return [cached] + others + [f]
 
 
 def _proposal_map_marital_for_misp(raw: str) -> str:
@@ -295,6 +370,28 @@ def _insurance_pre_elapsed_note(
         subfolder,
         "NOTE",
         f"run_fill_insurance_only: phase={phase} elapsed_ms={ms}",
+    )
+
+
+def _insurance_vin_phase_note(
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
+    t0_vin: float | None,
+    phase: str,
+    detail: str = "",
+) -> None:
+    """Operator-visible milestones for KYC→VIN (``Playwright_insurance.txt``)."""
+    extra = f" {detail}" if detail else ""
+    if t0_vin is None:
+        msg = f"VIN step: {phase}{extra}"
+    else:
+        try:
+            ms = int((time.monotonic() - t0_vin) * 1000)
+        except Exception:
+            ms = 0
+        msg = f"VIN step: {phase} elapsed_ms={ms}{extra}"
+    append_playwright_insurance_line_or_dealer_fallback(
+        ocr_output_dir, subfolder, "NOTE", msg
     )
 
 
@@ -1177,7 +1274,7 @@ def _misp_wait_landing_after_product_nav(page, *, step: str, timeout_ms: int) ->
     After **2W** or **New Policy** click: short ``domcontentloaded`` + **UI readiness** instead of a long
     load-state wait (SPAs often do not refire full load).
     ``step``: ``after_2w`` | ``after_new_policy``.
-    Max UI readiness wait per step: ``HERO_MISP_LANDING_WAIT_MS`` (default **3500** ms).
+    Max UI readiness wait per step: ``HERO_MISP_LANDING_WAIT_MS`` (default **2500** ms).
     """
     cap = min(max(800, int(timeout_ms)), int(HERO_MISP_LANDING_WAIT_MS))
     short_dom = min(1_500, cap)
@@ -1448,7 +1545,7 @@ def _misp_try_use_insurance_tab_page(
     except Exception:
         return None
     try:
-        p.wait_for_load_state("domcontentloaded", timeout=min(15_000, cap_ms))
+        p.wait_for_load_state("domcontentloaded", timeout=min(8_000, cap_ms))
     except Exception:
         pass
     try:
@@ -1875,8 +1972,8 @@ def _kyc_try_set_insurer_via_dom_in_frame(
     Prefer native ``<select>`` + fuzzy option match on the dedicated Insurance Company control
     (``ddlproduct`` / label-resolved ``<select>``) inside the KYC frame.
 
-    Full-frame ``<select>`` scan and keyboard typing are handled in ``_fill_kyc_ekyc_keyboard_sop``
-    (order: native → keyboard → last-resort scan).
+    Full-frame ``<select>`` scan and keyboard typing are orchestrated by ``_fill_kyc_ekyc_keyboard_sop``
+    via ``_kyc_insurer_attempt_order`` (fuzzy scan last).
     """
     if not (insurer or "").strip():
         return False
@@ -2824,6 +2921,205 @@ def _kyc_insurer_label_for_misp(values: dict) -> str:
     return current
 
 
+def _kyc_run_insurer_keyboard_match_attempt(
+    page,
+    kyc_fr,
+    insurer_label: str,
+    cap: int,
+    ad_max: int,
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
+) -> tuple[str | None, bool, bool]:
+    """
+    Keyboard focus chain + type + ArrowDown insurer match. Does **not** run full-frame fuzzy select
+    (that is a separate strategy step). Returns ``(error_msg_or_none, matched, keyboard_native_select_committed)``.
+    """
+    keyboard_native_select_committed = False
+    matched = False
+    logger.debug("Hero Insurance: KYC keyboard SOP — starting (focus chain).")
+    try:
+        page.bring_to_front()
+    except Exception:
+        pass
+    if kyc_fr != page.main_frame:
+        try:
+            kyc_fr.frame_element().click(timeout=200)
+            _t(page, 100)
+        except Exception as exc:
+            logger.debug("Hero Insurance: KYC iframe host click: %s", exc)
+    try:
+        kyc_fr.locator("body").click(timeout=200, position={"x": 160, "y": 220})
+    except Exception:
+        try:
+            page.locator("body").click(timeout=200, position={"x": 40, "y": 40})
+        except Exception:
+            try:
+                page.mouse.click(80, 200)
+            except Exception:
+                pass
+    _t(page, 100)
+
+    ic_clicked = _kyc_try_click_insurance_company_field(kyc_fr, timeout_ms=cap)
+    if ic_clicked:
+        logger.info("Hero Insurance: KYC keyboard — focused Insurance Company via click in frame.")
+        _t(page, 100)
+    else:
+        _kyc_press_tab_n(page, max(0, KYC_KEYBOARD_TABS_TO_INSURANCE_FIELD))
+
+    if _kyc_frame_active_element_is_editable(kyc_fr):
+        try:
+            page.keyboard.press("Control+A")
+        except Exception:
+            pass
+        _t(page, 50)
+        try:
+            page.keyboard.press("Backspace")
+        except Exception:
+            pass
+        _t(page, 50)
+    else:
+        logger.warning(
+            "Hero Insurance: KYC keyboard — focus not on an editable control before insurer type; "
+            "typing without Select-All (prevents selecting all text on the page)."
+        )
+    try:
+        page.keyboard.type(
+            insurer_label[:96],
+            delay=max(1, int(KYC_KEYBOARD_INSURER_TYPE_DELAY_MS)),
+        )
+    except Exception as exc:
+        return (f"KYC keyboard SOP: could not type insurer: {exc!s}", False, False)
+    _t(page, 100)
+
+    _insurance_kyc_trace(
+        ocr_output_dir,
+        subfolder,
+        "keyboard_sop",
+        "typed insurer text — merge native <select><option> labels + listbox rows for in-code fuzzy",
+    )
+    native_opts = _kyc_collect_insurer_native_select_option_labels(kyc_fr)
+    listbox_opts = _kyc_collect_dropdown_option_texts(
+        kyc_fr,
+        ocr_output_dir=ocr_output_dir,
+        subfolder=subfolder,
+        trace_note="first_collect_after_type_listbox_only",
+    )
+    seen_m: set[str] = set()
+    opts: list[str] = []
+    for o in native_opts + listbox_opts:
+        if o and o not in seen_m:
+            seen_m.add(o)
+            opts.append(o)
+    _insurance_kyc_trace(
+        ocr_output_dir,
+        subfolder,
+        "keyboard_sop",
+        f"merged options native_n={len(native_opts)} listbox_n={len(listbox_opts)} "
+        f"combined_n={len(opts)}",
+    )
+    pick = (
+        fuzzy_best_option_label(insurer_label, opts, min_score=KYC_INSURER_FUZZY_MIN_SCORE)
+        if opts
+        else None
+    )
+    _insurance_kyc_trace(
+        ocr_output_dir,
+        subfolder,
+        "keyboard_sop",
+        f"fuzzy_best_option_label on merged list: n_options={len(opts)} pick={pick!r}",
+    )
+    if pick and not (pick or "").strip().lower().startswith("--select"):
+        try:
+            sel_apply = _kyc_find_insurance_company_select_locator(kyc_fr)
+            if sel_apply is not None:
+                sel_apply.select_option(
+                    label=pick, timeout=min(cap, 8_000), force=True
+                )
+                matched = True
+                keyboard_native_select_committed = True
+                _insurance_kyc_trace(
+                    ocr_output_dir,
+                    subfolder,
+                    "keyboard_sop",
+                    f"applied native select_option(label) from in-code fuzzy pick={pick!r}",
+                )
+        except Exception as exc:
+            logger.debug(
+                "Hero Insurance: KYC select_option by fuzzy pick failed (will use display/ArrowDown): %s",
+                exc,
+            )
+    if not matched:
+        shown = _kyc_read_focused_control_text(page)
+        matched = bool(pick) and not (pick or "").strip().lower().startswith("--select") and (
+            _kyc_insurer_display_matches(insurer_label, shown)
+            or _kyc_insurer_display_matches(insurer_label, pick or "")
+        )
+    if not matched:
+        _insurance_kyc_trace(
+            ocr_output_dir,
+            subfolder,
+            "keyboard_sop",
+            f"initial fuzzy/display match failed — ArrowDown loop max={ad_max} "
+            f"(each step re-collects options + fuzzy match; can be slow)",
+        )
+        for ad_i in range(ad_max):
+            _insurance_kyc_trace(
+                ocr_output_dir,
+                subfolder,
+                "keyboard_sop",
+                f"ArrowDown step {ad_i + 1}/{ad_max} (press ArrowDown; then dropdown_options trace arrow_loop_{ad_i})",
+            )
+            try:
+                page.keyboard.press("ArrowDown")
+            except Exception:
+                pass
+            _t(page, max(30, int(KYC_KEYBOARD_INSURER_ARROW_DOWN_STEP_MS)))
+            shown = _kyc_read_focused_control_text(page)
+            if _kyc_insurer_display_matches(insurer_label, shown):
+                matched = True
+                _insurance_kyc_trace(
+                    ocr_output_dir,
+                    subfolder,
+                    "keyboard_sop",
+                    f"matched on ArrowDown at iteration {ad_i} shown={shown[:80]!r}",
+                )
+                logger.info(
+                    "Hero Insurance: KYC keyboard — insurer matched on ArrowDown (%r).",
+                    shown[:90],
+                )
+                break
+            opts2_lb = _kyc_collect_dropdown_option_texts(
+                kyc_fr,
+                ocr_output_dir=ocr_output_dir,
+                subfolder=subfolder,
+                trace_note=f"arrow_loop_{ad_i}",
+            )
+            seen2: set[str] = set()
+            opts2: list[str] = []
+            for o in native_opts + opts2_lb:
+                if o and o not in seen2:
+                    seen2.add(o)
+                    opts2.append(o)
+            if opts2:
+                cand = fuzzy_best_option_label(
+                    insurer_label, opts2, min_score=KYC_INSURER_FUZZY_MIN_SCORE
+                )
+                if cand and _kyc_insurer_display_matches(insurer_label, cand):
+                    matched = True
+                    _insurance_kyc_trace(
+                        ocr_output_dir,
+                        subfolder,
+                        "keyboard_sop",
+                        f"matched from list at iteration {ad_i} cand={cand[:80]!r}",
+                    )
+                    logger.info(
+                        "Hero Insurance: KYC keyboard — insurer matched from list (%r).",
+                        (cand or "")[:90],
+                    )
+                    break
+    return (None, matched, keyboard_native_select_committed)
+
+
 def _fill_kyc_ekyc_keyboard_sop(
     page,
     values: dict,
@@ -2836,11 +3132,10 @@ def _fill_kyc_ekyc_keyboard_sop(
     Keyboard SOP for ``ekycpage.aspx`` (focus document → Tab to Insurance Company → type to filter →
     ArrowDown until fuzzy match → Enter → Tab to OVD → ArrowDown to Aadhaar → Tab to mobile → type →
     Tab to consent → Space). Tab/down counts: ``KYC_KEYBOARD_*`` env vars.
-    When ``prefer_insurer`` matches merged details insurer (≥20%), the portal label is the short
-    dealer string; DOM ``select_option`` on the native **Insurance Company** ``<select>`` is still
-    tried first (fuzzy on ``<option>`` labels — dedicated ``ddlproduct`` / label ``<select>`` only).
-    If that fails, keyboard typing and ``ArrowDown`` run; ``_fill_insurance_company_fuzzy_any_visible_select``
-    runs only as a last resort if still unmatched.
+
+    **Insurer strategies** (see ``_kyc_insurer_attempt_order``): per-portal cache file prefers the last
+    successful strategy (**dom_native**, **keyboard_chain**, or **fuzzy_scan**). Full-frame
+    ``_fill_insurance_company_fuzzy_any_visible_select`` is **always** the last step when earlier steps fail.
     """
     insurer_label = _kyc_insurer_label_for_misp(values)
     mobile = (values.get("mobile_number") or "").strip()
@@ -2865,7 +3160,7 @@ def _fill_kyc_ekyc_keyboard_sop(
         subfolder,
         "keyboard_sop",
         f"start label_len={len(insurer_label)} arrow_down_max={ad_max} "
-        f"prefer_insurer_active={type_prefer_skip_dom} (DOM native <select> tried first)",
+        f"prefer_insurer_active={type_prefer_skip_dom} (insurer strategies: see insurer_attempt_order line)",
     )
     if type_prefer_skip_dom:
         logger.info(
@@ -2873,240 +3168,69 @@ def _fill_kyc_ekyc_keyboard_sop(
             "portal label %r — trying DOM native <select> before keyboard.",
             (insurer_label[:80] + "…") if len(insurer_label) > 80 else insurer_label,
         )
-    dom_ok = _kyc_try_set_insurer_via_dom_in_frame(
-        kyc_fr,
-        insurer_label,
-        timeout_ms=min(cap, 8_000),
-        ocr_output_dir=ocr_output_dir,
-        subfolder=subfolder,
+    cached = _kyc_insurer_strategy_cache_read()
+    attempt_order = _kyc_insurer_attempt_order(cached)
+    _insurance_kyc_trace(
+        ocr_output_dir,
+        subfolder,
+        "keyboard_sop",
+        f"insurer_attempt_order={','.join(attempt_order)} strategy_cache={cached!r}",
     )
-    # #region agent log
-    _dbg_kyc_insurer_tab_ndjson(
-        "H1",
-        "fill_kyc_ekyc_keyboard_sop:after_dom_try",
-        "dom_ok and focus snapshot",
-        {
-            "dom_ok": bool(dom_ok),
-            "type_prefer_skip_dom": bool(type_prefer_skip_dom),
-            "will_skip_keyboard_and_maybe_tab_out": bool(dom_ok),
-            **_dbg_kyc_focus_snapshot(kyc_fr, page),
-        },
-    )
-    # #endregion
-    if dom_ok:
-        _insurance_kyc_trace(
-            ocr_output_dir,
-            subfolder,
-            "kyc_path",
-            "insurer=DOM (native <select> fuzzy match in frame) — keyboard typing + ArrowDown loop skipped",
-        )
-        logger.info("Hero Insurance: KYC — insurer set via DOM in frame (skipped keyboard typing).")
-    else:
-        kb_reason = (
-            "dom_failed_after_prefer_label"
-            if type_prefer_skip_dom
-            else "dom_native_failed_try_keyboard"
-        )
-        _insurance_kyc_trace(
-            ocr_output_dir,
-            subfolder,
-            "kyc_path",
-            f"insurer=KEYBOARD ({kb_reason}) — type label, merge native <option> + listbox texts, "
-            f"in-code fuzzy; ArrowDown only if still unmatched",
-        )
-    if not dom_ok:
-        keyboard_native_select_committed = False
-        logger.debug("Hero Insurance: KYC keyboard SOP — starting (focus chain).")
-        try:
-            page.bring_to_front()
-        except Exception:
-            pass
-        # When KYC is in a child frame, click the hosting <iframe> first so focus enters the frame
-        # before body click + Tab chain (main-page Tab order otherwise skips embedded controls).
-        if kyc_fr != page.main_frame:
-            try:
-                kyc_fr.frame_element().click(timeout=200)
-                _t(page, 100)
-            except Exception as exc:
-                logger.debug("Hero Insurance: KYC iframe host click: %s", exc)
-        # Focus the KYC document (often inside an iframe). Main-frame body click does not move focus there.
-        try:
-            kyc_fr.locator("body").click(timeout=200, position={"x": 160, "y": 220})
-        except Exception:
-            try:
-                page.locator("body").click(timeout=200, position={"x": 40, "y": 40})
-            except Exception:
-                try:
-                    page.mouse.click(80, 200)
-                except Exception:
-                    pass
-        _t(page, 100)
 
-        # Prefer clicking the labelled insurer control so focus is on INPUT/SELECT. Tab alone often
-        # leaves focus on body; Control+A then selects the entire page (not field text).
-        ic_clicked = _kyc_try_click_insurance_company_field(kyc_fr, timeout_ms=cap)
-        if ic_clicked:
-            logger.info("Hero Insurance: KYC keyboard — focused Insurance Company via click in frame.")
-            _t(page, 100)
-        else:
-            _kyc_press_tab_n(page, max(0, KYC_KEYBOARD_TABS_TO_INSURANCE_FIELD))
+    dom_ok = False
+    matched = False
+    keyboard_native_select_committed = False
+    winning: str | None = None
 
-        if _kyc_frame_active_element_is_editable(kyc_fr):
-            try:
-                page.keyboard.press("Control+A")
-            except Exception:
-                pass
-            _t(page, 50)
-            try:
-                page.keyboard.press("Backspace")
-            except Exception:
-                pass
-            _t(page, 50)
-        else:
-            logger.warning(
-                "Hero Insurance: KYC keyboard — focus not on an editable control before insurer type; "
-                "typing without Select-All (prevents selecting all text on the page)."
+    for strat in attempt_order:
+        if strat == KYC_INSURER_STRATEGY_DOM_NATIVE:
+            dom_ok = _kyc_try_set_insurer_via_dom_in_frame(
+                kyc_fr,
+                insurer_label,
+                timeout_ms=min(cap, 8_000),
+                ocr_output_dir=ocr_output_dir,
+                subfolder=subfolder,
             )
-        try:
-            page.keyboard.type(
-                insurer_label[:96],
-                delay=max(1, int(KYC_KEYBOARD_INSURER_TYPE_DELAY_MS)),
-            )
-        except Exception as exc:
-            return f"KYC keyboard SOP: could not type insurer: {exc!s}"
-        _t(page, 100)
-
-        _insurance_kyc_trace(
-            ocr_output_dir,
-            subfolder,
-            "keyboard_sop",
-            "typed insurer text — merge native <select><option> labels + listbox rows for in-code fuzzy",
-        )
-        native_opts = _kyc_collect_insurer_native_select_option_labels(kyc_fr)
-        listbox_opts = _kyc_collect_dropdown_option_texts(
-            kyc_fr,
-            ocr_output_dir=ocr_output_dir,
-            subfolder=subfolder,
-            trace_note="first_collect_after_type_listbox_only",
-        )
-        seen_m: set[str] = set()
-        opts: list[str] = []
-        for o in native_opts + listbox_opts:
-            if o and o not in seen_m:
-                seen_m.add(o)
-                opts.append(o)
-        _insurance_kyc_trace(
-            ocr_output_dir,
-            subfolder,
-            "keyboard_sop",
-            f"merged options native_n={len(native_opts)} listbox_n={len(listbox_opts)} "
-            f"combined_n={len(opts)}",
-        )
-        pick = (
-            fuzzy_best_option_label(insurer_label, opts, min_score=KYC_INSURER_FUZZY_MIN_SCORE)
-            if opts
-            else None
-        )
-        _insurance_kyc_trace(
-            ocr_output_dir,
-            subfolder,
-            "keyboard_sop",
-            f"fuzzy_best_option_label on merged list: n_options={len(opts)} pick={pick!r}",
-        )
-        matched = False
-        if (
-            pick
-            and not (pick or "").strip().lower().startswith("--select")
-        ):
-            try:
-                sel_apply = _kyc_find_insurance_company_select_locator(kyc_fr)
-                if sel_apply is not None:
-                    sel_apply.select_option(
-                        label=pick, timeout=min(cap, 8_000), force=True
-                    )
-                    matched = True
-                    keyboard_native_select_committed = True
-                    _insurance_kyc_trace(
-                        ocr_output_dir,
-                        subfolder,
-                        "keyboard_sop",
-                        f"applied native select_option(label) from in-code fuzzy pick={pick!r}",
-                    )
-            except Exception as exc:
-                logger.debug(
-                    "Hero Insurance: KYC select_option by fuzzy pick failed (will use display/ArrowDown): %s",
-                    exc,
-                )
-        if not matched:
-            shown = _kyc_read_focused_control_text(page)
-            matched = bool(pick) and not (pick or "").strip().lower().startswith("--select") and (
-                _kyc_insurer_display_matches(insurer_label, shown)
-                or _kyc_insurer_display_matches(insurer_label, pick or "")
-            )
-        if not matched:
-            _insurance_kyc_trace(
-                ocr_output_dir,
-                subfolder,
-                "keyboard_sop",
-                f"initial fuzzy/display match failed — ArrowDown loop max={ad_max} "
-                f"(each step re-collects options + fuzzy match; can be slow)",
-            )
-            for ad_i in range(ad_max):
+            if dom_ok:
                 _insurance_kyc_trace(
                     ocr_output_dir,
                     subfolder,
-                    "keyboard_sop",
-                    f"ArrowDown step {ad_i + 1}/{ad_max} (press ArrowDown; then dropdown_options trace arrow_loop_{ad_i})",
+                    "kyc_path",
+                    "insurer=DOM (native <select> fuzzy match in frame) — keyboard typing + ArrowDown loop skipped",
                 )
-                try:
-                    page.keyboard.press("ArrowDown")
-                except Exception:
-                    pass
-                _t(page, max(30, int(KYC_KEYBOARD_INSURER_ARROW_DOWN_STEP_MS)))
-                shown = _kyc_read_focused_control_text(page)
-                if _kyc_insurer_display_matches(insurer_label, shown):
-                    matched = True
-                    _insurance_kyc_trace(
-                        ocr_output_dir,
-                        subfolder,
-                        "keyboard_sop",
-                        f"matched on ArrowDown at iteration {ad_i} shown={shown[:80]!r}",
-                    )
-                    logger.info(
-                        "Hero Insurance: KYC keyboard — insurer matched on ArrowDown (%r).",
-                        shown[:90],
-                    )
-                    break
-                opts2_lb = _kyc_collect_dropdown_option_texts(
-                    kyc_fr,
-                    ocr_output_dir=ocr_output_dir,
-                    subfolder=subfolder,
-                    trace_note=f"arrow_loop_{ad_i}",
+                logger.info(
+                    "Hero Insurance: KYC — insurer set via DOM in frame (skipped keyboard typing)."
                 )
-                seen2: set[str] = set()
-                opts2: list[str] = []
-                for o in native_opts + opts2_lb:
-                    if o and o not in seen2:
-                        seen2.add(o)
-                        opts2.append(o)
-                if opts2:
-                    cand = fuzzy_best_option_label(
-                        insurer_label, opts2, min_score=KYC_INSURER_FUZZY_MIN_SCORE
-                    )
-                    if cand and _kyc_insurer_display_matches(insurer_label, cand):
-                        matched = True
-                        _insurance_kyc_trace(
-                            ocr_output_dir,
-                            subfolder,
-                            "keyboard_sop",
-                            f"matched from list at iteration {ad_i} cand={cand[:80]!r}",
-                        )
-                        logger.info(
-                            "Hero Insurance: KYC keyboard — insurer matched from list (%r).",
-                            (cand or "")[:90],
-                        )
-                        break
-        if not matched:
+                winning = strat
+                break
+        elif strat == KYC_INSURER_STRATEGY_KEYBOARD_CHAIN:
+            kb_err, matched, keyboard_native_select_committed = _kyc_run_insurer_keyboard_match_attempt(
+                page,
+                kyc_fr,
+                insurer_label,
+                cap,
+                ad_max,
+                ocr_output_dir,
+                subfolder,
+            )
+            if kb_err:
+                return kb_err
+            if matched:
+                kb_reason = (
+                    "dom_failed_after_prefer_label"
+                    if type_prefer_skip_dom
+                    else "keyboard_chain"
+                )
+                _insurance_kyc_trace(
+                    ocr_output_dir,
+                    subfolder,
+                    "kyc_path",
+                    f"insurer=KEYBOARD ({kb_reason}) — type label, merge native <option> + listbox texts, "
+                    f"in-code fuzzy; ArrowDown only if still unmatched",
+                )
+                winning = strat
+                break
+        elif strat == KYC_INSURER_STRATEGY_FUZZY_SCAN:
             scan_ok = _fill_insurance_company_fuzzy_any_visible_select(
                 kyc_fr,
                 insurer_label,
@@ -3121,17 +3245,40 @@ def _fill_kyc_ekyc_keyboard_sop(
                     ocr_output_dir,
                     subfolder,
                     "keyboard_sop",
-                    "insurer set via dom_fuzzy_select_scan (last resort after keyboard)",
+                    "insurer set via dom_fuzzy_select_scan (strategy step; full-frame select last)",
                 )
                 logger.info(
-                    "Hero Insurance: KYC — insurer set via full-frame select scan (last resort)."
+                    "Hero Insurance: KYC — insurer set via full-frame select scan (ordered last)."
                 )
-        if not matched:
-            return (
-                "KYC keyboard SOP: could not match insurer after typing and ArrowDown. "
-                f"insurer={insurer_label[:48]!r}"
-            )
+                winning = strat
+                break
 
+    # #region agent log
+    _dbg_kyc_insurer_tab_ndjson(
+        "H1",
+        "fill_kyc_ekyc_keyboard_sop:after_insurer_strategies",
+        "dom_ok matched winning",
+        {
+            "dom_ok": bool(dom_ok),
+            "matched": bool(matched),
+            "winning": winning,
+            "type_prefer_skip_dom": bool(type_prefer_skip_dom),
+            "will_skip_keyboard_and_maybe_tab_out": bool(dom_ok),
+            **_dbg_kyc_focus_snapshot(kyc_fr, page),
+        },
+    )
+    # #endregion
+
+    if not dom_ok and not matched:
+        return (
+            "KYC keyboard SOP: could not match insurer after typing and ArrowDown. "
+            f"insurer={insurer_label[:48]!r}"
+        )
+
+    if winning:
+        _kyc_insurer_strategy_cache_write(winning)
+
+    if not dom_ok and matched:
         if keyboard_native_select_committed:
             _insurance_kyc_trace(
                 ocr_output_dir,
@@ -3149,7 +3296,6 @@ def _fill_kyc_ekyc_keyboard_sop(
                 "keyboard_sop",
                 "insurer row matched — commit keys (Enter/Escape) then aspnet/tab-out sequence",
             )
-            # Commit highlighted insurer: MISP/ASP.NET combobox often needs Enter twice, then Tab off, then Escape.
             try:
                 page.keyboard.press("Enter")
             except Exception:
@@ -3176,7 +3322,7 @@ def _fill_kyc_ekyc_keyboard_sop(
             _kyc_blur_if_insurer_product_select_focused(kyc_fr)
             _kyc_blur_insurer_product_select_in_frame(kyc_fr)
             _t(page, 120)
-    if dom_ok:
+    elif dom_ok:
         _kyc_aspnet_signal_insurer_committed(kyc_fr, page)
         _kyc_force_blur_insurance_company_dropdown(kyc_fr)
         _t(page, 80)
@@ -3752,9 +3898,9 @@ def _proposal_expected_matches_readback(expected: str, readback: str) -> bool:
 
 
 def _proposal_first_label_control_locator(page, label_pattern: str):
-    """First visible control matching ``get_by_label`` across main page + nav iframe + child frames."""
+    """First visible control matching ``get_by_label`` across proposal roots (page + nav iframe + frames)."""
     rx = re.compile(label_pattern, re.I)
-    for root in _hero_misp_page_and_frame_roots(page, purpose="nav"):
+    for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
         try:
             loc = root.get_by_label(rx)
             if loc.count() == 0:
@@ -3811,6 +3957,36 @@ def _proposal_checkbox_context_text(cb) -> str:
         return ""
 
 
+def _proposal_dob_readback_matches_expected(want_norm: str, got: str) -> bool:
+    """``txtDOB`` readback vs expected **dd/mm/yyyy** (same spirit as ``_proposal_step_fill_dob``)."""
+    if not want_norm or not got:
+        return False
+    if normalize_for_fuzzy_match(got) == normalize_for_fuzzy_match(want_norm):
+        return True
+    if want_norm in got or got in want_norm:
+        return True
+    g = got.replace("-", "/")
+    return any(x in g for x in (want_norm, want_norm.replace("/", "-")))
+
+
+def _proposal_read_dob_txt(page) -> str | None:
+    """Best-effort current value of ``txtDOB`` across proposal roots."""
+    for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
+        try:
+            loc = _proposal_cph1_locator(root, "txtDOB")
+            if loc.count() == 0:
+                continue
+            el = loc.first
+            if not el.is_visible(timeout=400):
+                continue
+            got = (el.input_value() or "").strip()
+            if got:
+                return got
+        except Exception:
+            continue
+    return None
+
+
 def _proposal_step_fill_dob(
     page,
     dob_raw: str,
@@ -3825,7 +4001,7 @@ def _proposal_step_fill_dob(
     if not v:
         return None
     last = "dob not filled"
-    for root in _hero_misp_page_and_frame_roots(page, purpose="nav"):
+    for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
         try:
             loc = _proposal_cph1_locator(root, "txtDOB")
             if loc.count() == 0:
@@ -3907,7 +4083,7 @@ def _proposal_step_fill_dob(
 
 
 def _proposal_hdfc_radio_any_checked(page) -> bool:
-    for root in _hero_misp_page_and_frame_roots(page, purpose="nav"):
+    for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
         try:
             loc = _proposal_cph1_locator(root, "rdoHdfcCCType")
             if loc.count() > 0 and loc.first.is_checked():
@@ -3944,7 +4120,7 @@ def _proposal_step_select_fuzzy(
         return None
     last = "no select control matched labels"
     if cph1_id_suffix:
-        for root in _hero_misp_page_and_frame_roots(page, purpose="nav"):
+        for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
             try:
                 loc = _proposal_cph1_locator(root, cph1_id_suffix)
                 if loc.count() == 0:
@@ -4069,7 +4245,7 @@ def _proposal_step_fill_input(
         _nominee = cph1_id_suffix in ("txtNomineeName", "txtNomineeAge")
         _vis_a = 1_200 if _nominee else 800
         _vis_b = 3_000 if _nominee else 1_500
-        for root in _hero_misp_page_and_frame_roots(page, purpose="nav"):
+        for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
             try:
                 loc = _proposal_cph1_locator(root, cph1_id_suffix)
                 if loc.count() == 0:
@@ -4149,7 +4325,7 @@ def _proposal_step_checkbox(
     """Find checkbox by label/row text, set checked state, verify. Fails if control not found."""
     rx = re.compile(text_pattern, re.I)
     last_exc = ""
-    for root in _hero_misp_page_and_frame_roots(page, purpose="nav"):
+    for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
         try:
             cbs = root.locator('input[type="checkbox"]')
             n = cbs.count()
@@ -4225,7 +4401,7 @@ def _proposal_step_checkbox_uncheck_if_present(
         return None
     rx = re.compile(text_pattern, re.I)
     last_exc = ""
-    for root in _hero_misp_page_and_frame_roots(page, purpose="nav"):
+    for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
         try:
             cbs = root.locator('input[type="checkbox"]')
             n = cbs.count()
@@ -4296,12 +4472,12 @@ def _proposal_step_checkbox_by_cph1_id(
     ``Playwright_insurance_main_process_frames.txt`` — e.g. ``chkroicover``, ``chkRSA``, ``chkEME``,
     ``chkNilDepreciation``, ``gridGMc_ctl02_chlGMC``).
 
-    Returns ``None`` on success, ``PROPOSAL_CHECKBOX_ID_NOT_FOUND`` if no control matched in any nav
+    Returns ``None`` on success, ``PROPOSAL_CHECKBOX_ID_NOT_FOUND`` if no control matched in any proposal
     root (caller may fall back to label/regex), else an error string.
     """
     last_err = ""
     seen = False
-    for root in _hero_misp_page_and_frame_roots(page, purpose="nav"):
+    for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
         try:
             loc = _proposal_cph1_locator(root, id_suffix)
             if loc.count() == 0:
@@ -4418,7 +4594,7 @@ def _proposal_step_nominee_gender_radio(
         return f"{step_id}: could not interpret nominee gender from {gender_raw!r}"
     id_suffix = "rdbtnMale" if want_male else "rdbtnFemale"
     last_err = ""
-    for root in _hero_misp_page_and_frame_roots(page, purpose="nav"):
+    for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
         try:
             loc = _proposal_cph1_locator(root, id_suffix)
             if loc.count() == 0:
@@ -4428,7 +4604,10 @@ def _proposal_step_nominee_gender_radio(
                 _proposal_scroll_visible(el, timeout_ms=timeout_ms)
             if not el.is_visible(timeout=1_800):
                 continue
-            el.check(timeout=timeout_ms)
+            try:
+                el.check(timeout=timeout_ms, force=True)
+            except Exception:
+                el.check(timeout=timeout_ms)
             if not el.is_checked():
                 return f"{step_id}: nominee gender radio still not checked after check() ({id_suffix})"
             _proposal_log(
@@ -4467,7 +4646,7 @@ def _proposal_step_usgi_uncheck(
     if rid != PROPOSAL_CHECKBOX_ID_NOT_FOUND:
         return rid
     last_err = ""
-    for root in _hero_misp_page_and_frame_roots(page, purpose="nav"):
+    for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
         try:
             locs = root.locator("[id*='chlGMC']")
             n = locs.count()
@@ -4558,7 +4737,7 @@ def _proposal_step_email_hardcoded(
 ) -> str | None:
     """Hero MISP uses ``type=text`` for **Email ID**; prefer CPH1 ``txtEmail`` then **Email ID** label."""
     last_err = ""
-    for root in _hero_misp_page_and_frame_roots(page, purpose="nav"):
+    for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
         for factory in (
             lambda r: _proposal_cph1_locator(r, "txtEmail"),
             lambda r: r.get_by_label(re.compile(r"Email\s*ID", re.I)),
@@ -4608,7 +4787,7 @@ def _proposal_step_date_of_registration_today(
     iso_d = today.isoformat()
     slash_d = today.strftime("%d/%m/%Y")
     # Stable CPH1 id (flatpickr ``MispCal`` text input, not ``type=date``)
-    for root in _hero_misp_page_and_frame_roots(page, purpose="nav"):
+    for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
         try:
             loc = _proposal_cph1_locator(root, "txtRegistrationDate")
             if loc.count() == 0:
@@ -4669,7 +4848,7 @@ def _proposal_step_date_of_registration_today(
         except Exception as exc:
             return f"{step_id}: date fill by label failed: {exc!s}"
     # First date input
-    for root in _hero_misp_page_and_frame_roots(page, purpose="nav"):
+    for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
         try:
             loc = root.locator('input[type="date"]')
             if loc.count() == 0 or not loc.first.is_visible(timeout=1_200):
@@ -4694,7 +4873,7 @@ def _proposal_step_hdfc_payment(
     *,
     timeout_ms: int,
 ) -> str | None:
-    for root in _hero_misp_page_and_frame_roots(page, purpose="nav"):
+    for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
         try:
             loc = _proposal_cph1_locator(root, "rdoHdfcCCType")
             if loc.count() > 0:
@@ -4728,7 +4907,7 @@ def _proposal_step_hdfc_payment(
                         return None
         except Exception:
             continue
-    for root in _hero_misp_page_and_frame_roots(page, purpose="nav"):
+    for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
         try:
             hdfc = root.get_by_role("radio", name=re.compile(r"HDFC", re.I))
             if hdfc.count() == 0:
@@ -4763,7 +4942,7 @@ def _proposal_step_hdfc_payment(
         except Exception:
             continue
     try:
-        for root in _hero_misp_page_and_frame_roots(page, purpose="nav"):
+        for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
             lab = root.locator("label, span, div").filter(has_text=re.compile(r"HDFC", re.I)).first
             if lab.count() == 0 or not lab.is_visible(timeout=1_200):
                 continue
@@ -4788,12 +4967,15 @@ def _proposal_step_hdfc_payment(
 
 def _hero_misp_page_and_frame_roots(page, *, purpose: str = "generic") -> list:
     """
-    Locator roots for MISP UI: optional ``FrameLocator`` from module constants (trial direct path), then ``page``, then
-    every ``Frame`` (legacy sweep). See ``INSURANCE_VIN_IFRAME_SELECTOR``, ``INSURANCE_KYC_IFRAME_SELECTOR``,
-    ``INSURANCE_NAV_IFRAME_SELECTOR`` at top of this module.
+    Locator roots for MISP UI: optional ``FrameLocator`` from module constants, then ``page`` (order depends on
+    ``purpose``), then every ``Frame`` (legacy sweep). See ``INSURANCE_VIN_IFRAME_SELECTOR``,
+    ``INSURANCE_KYC_IFRAME_SELECTOR``, ``INSURANCE_NAV_IFRAME_SELECTOR`` at top of this module.
 
     For ``purpose="vin"``, child frames are ordered so **2W / welcome / main app** URLs are tried before stale **KYC**
     frames (logs: ``txtFrameNo`` can live in the post–KYC app frame while an **ekycpage** iframe remains attached).
+
+    For ``purpose="proposal"``, **main document first**, then the nav iframe locator, then frames — matches MispPolicy
+    scrape where **CPH1** fields sit on the top document.
     """
     roots: list = []
     sel = ""
@@ -4803,12 +4985,26 @@ def _hero_misp_page_and_frame_roots(page, *, purpose: str = "generic") -> list:
         sel = INSURANCE_KYC_IFRAME_SELECTOR
     elif purpose == "nav":
         sel = INSURANCE_NAV_IFRAME_SELECTOR
+    elif purpose == "proposal":
+        sel = INSURANCE_NAV_IFRAME_SELECTOR
+
+    fl = None
     if sel:
         try:
-            roots.append(page.frame_locator(sel))
+            fl = page.frame_locator(sel)
         except Exception:
-            pass
-    roots.append(page)
+            fl = None
+
+    # MispPolicy.aspx: ContentPlaceHolder1 controls often live on the top document; iframe-first
+    # order (nav) caused stale/wrong hits and duplicate operator perception on proposal steps.
+    if purpose == "proposal":
+        roots.append(page)
+        if fl is not None:
+            roots.append(fl)
+    else:
+        if fl is not None:
+            roots.append(fl)
+        roots.append(page)
     try:
         frs = [f for f in page.frames if not f.is_detached()]
         if purpose == "vin":
@@ -5012,6 +5208,7 @@ def _hero_misp_wait_for_vin_txt_frame_no_attached(
     timeout_ms: int,
     ocr_output_dir: Path | None = None,
     subfolder: str | None = None,
+    t0_vin: float | None = None,
 ) -> bool:
     """
     **URL first (event-driven):** ``wait_for_url`` **MispDms.aspx** — no fixed-duration “wait then fill”.
@@ -5023,6 +5220,9 @@ def _hero_misp_wait_for_vin_txt_frame_no_attached(
     budget_ms = min(int(timeout_ms), 90_000)
     deadline = time.monotonic() + budget_ms / 1000.0
     selectors = _HERO_MISP_VIN_TXT_FRAME_NO_SELECTORS
+    _insurance_vin_phase_note(
+        ocr_output_dir, subfolder, t0_vin, "vin_attach_poll_start", "(txtFrameNo)"
+    )
     _hero_misp_log_vin_transition_line(
         page,
         phase="waiting_txtFrameNo_start",
@@ -5055,17 +5255,33 @@ def _hero_misp_wait_for_vin_txt_frame_no_attached(
         )
 
     url_remain_ms = max(0, int((deadline - time.monotonic()) * 1000))
-    _hero_misp_wait_for_mispdms_vin_url_event(
+    url_ok = _hero_misp_wait_for_mispdms_vin_url_event(
         page,
         timeout_ms=max(3_000, url_remain_ms),
         ocr_output_dir=ocr_output_dir,
         subfolder=subfolder,
     )
+    _insurance_vin_phase_note(
+        ocr_output_dir,
+        subfolder,
+        t0_vin,
+        "wait_for_url_mispdms",
+        f"ok={bool(url_ok)}",
+    )
 
+    post_cap_ms = min(
+        int(INSURANCE_VIN_POST_URL_DOMCONTENTLOADED_MS),
+        8_000,
+        max(0, int((deadline - time.monotonic()) * 1000)),
+    )
     try:
-        page.wait_for_load_state("domcontentloaded", timeout=min(8_000, max(0, int((deadline - time.monotonic()) * 1000))))
+        if post_cap_ms > 0:
+            page.wait_for_load_state("domcontentloaded", timeout=post_cap_ms)
     except Exception:
         pass
+    _insurance_vin_phase_note(
+        ocr_output_dir, subfolder, t0_vin, "post_url_domcontentloaded_done"
+    )
 
     for sel in selectors:
         for root in _hero_misp_page_and_frame_roots(page, purpose="vin"):
@@ -5077,6 +5293,13 @@ def _hero_misp_wait_for_vin_txt_frame_no_attached(
                 # Cap each attempt so wrong selector/frame does not consume the whole budget (still event-driven).
                 el.wait_for(state="attached", timeout=min(8_000, remain_ms))
                 logger.info("Hero Insurance: VIN field attached (%s).", sel[:72])
+                _insurance_vin_phase_note(
+                    ocr_output_dir,
+                    subfolder,
+                    t0_vin,
+                    "txtFrameNo_attached",
+                    f"selector={sel[:56]!r}",
+                )
                 _hero_misp_log_vin_transition_line(
                     page,
                     phase="vin_field_attached",
@@ -5089,6 +5312,9 @@ def _hero_misp_wait_for_vin_txt_frame_no_attached(
                 continue
 
     logger.warning("Hero Insurance: timed out waiting for VIN/Chassis input after URL/DOM wait.")
+    _insurance_vin_phase_note(
+        ocr_output_dir, subfolder, t0_vin, "txtFrameNo_attach_timeout"
+    )
     _hero_misp_log_vin_transition_line(
         page,
         phase="waiting_txtFrameNo_timeout",
@@ -5105,6 +5331,7 @@ def _hero_misp_fill_vin_txt_frame_no(
     timeout_ms: int,
     ocr_output_dir: Path | None = None,
     subfolder: str | None = None,
+    t0_vin: float | None = None,
 ) -> bool:
     """
     Real MISP VIN step: ``ctl00$ContentPlaceHolder1$txtFrameNo`` — often under ``upnlAddStateMaster`` /
@@ -5119,6 +5346,7 @@ def _hero_misp_fill_vin_txt_frame_no(
         timeout_ms=to,
         ocr_output_dir=ocr_output_dir,
         subfolder=subfolder,
+        t0_vin=t0_vin,
     ):
         return False
 
@@ -5140,6 +5368,13 @@ def _hero_misp_fill_vin_txt_frame_no(
                 el.fill("", timeout=to)
                 el.fill(v, timeout=to, force=True)
                 logger.info("Hero Insurance: filled VIN/Chassis (%s).", sel[:72])
+                _insurance_vin_phase_note(
+                    ocr_output_dir,
+                    subfolder,
+                    t0_vin,
+                    "vin_chassis_filled",
+                    f"selector={sel[:56]!r}",
+                )
                 return True
             except Exception:
                 continue
@@ -5204,11 +5439,37 @@ def _hero_misp_fill_vin_and_click_submit(
         subfolder=subfolder,
     )
 
+    t0_vin = time.monotonic()
+    _insurance_vin_phase_note(
+        ocr_output_dir, subfolder, t0_vin, "vin_fill_submit_start"
+    )
+
+    skip_pre_dom = False
     try:
-        pre_cap = max(500, min(int(INSURANCE_VIN_PRE_DOMCONTENTLOADED_MS), 60_000))
-        page.wait_for_load_state("domcontentloaded", timeout=pre_cap)
+        u0 = (page.url or "").lower()
+        if "mispdms.aspx" in u0:
+            rs = page.evaluate("() => document.readyState")
+            if rs == "complete":
+                skip_pre_dom = True
+                _insurance_vin_phase_note(
+                    ocr_output_dir,
+                    subfolder,
+                    t0_vin,
+                    "pre_domcontentloaded_skipped",
+                    "mispdms.aspx readyState=complete",
+                )
     except Exception:
         pass
+
+    if not skip_pre_dom:
+        try:
+            pre_cap = max(500, min(int(INSURANCE_VIN_PRE_DOMCONTENTLOADED_MS), 60_000))
+            page.wait_for_load_state("domcontentloaded", timeout=pre_cap)
+        except Exception:
+            pass
+        _insurance_vin_phase_note(
+            ocr_output_dir, subfolder, t0_vin, "pre_domcontentloaded_done"
+        )
 
     filled = _hero_misp_fill_vin_txt_frame_no(
         page,
@@ -5216,9 +5477,18 @@ def _hero_misp_fill_vin_and_click_submit(
         timeout_ms=timeout_ms,
         ocr_output_dir=ocr_output_dir,
         subfolder=subfolder,
+        t0_vin=t0_vin,
     )
     if not filled:
         filled = _hero_misp_fill_vin_fallback_all_frames(page, vin, timeout_ms=timeout_ms)
+        if filled:
+            _insurance_vin_phase_note(
+                ocr_output_dir,
+                subfolder,
+                t0_vin,
+                "vin_chassis_filled",
+                "fallback_all_frames",
+            )
     if not filled:
         return "Could not find VIN/Chassis input after KYC Proceed (expected redirect to VIN page)."
 
@@ -5234,7 +5504,13 @@ def _hero_misp_fill_vin_and_click_submit(
         except Exception as exc:
             return f"VIN Submit click failed: {exc!s}"
 
+    _insurance_vin_phase_note(
+        ocr_output_dir, subfolder, t0_vin, "vin_page_submit_clicked_or_fallback"
+    )
     _t(page, HERO_MISP_UI_SETTLE_MS)
+    _insurance_vin_phase_note(
+        ocr_output_dir, subfolder, t0_vin, "vin_fill_submit_complete"
+    )
     return None
 
 
@@ -6036,16 +6312,20 @@ def _hero_misp_fill_proposal_and_review(
             return _fail(err)
 
     if dob_val:
-        err = _proposal_step_fill_dob(
-            page,
-            dob_val,
-            "date_of_birth_reassert",
-            ocr_output_dir,
-            subfolder,
-            timeout_ms=pt,
-        )
-        if err:
-            return _fail(err)
+        v_norm = normalize_dob_for_misp(dob_val)
+        if v_norm:
+            got_dob = _proposal_read_dob_txt(page)
+            if not got_dob or not _proposal_dob_readback_matches_expected(v_norm, got_dob):
+                err = _proposal_step_fill_dob(
+                    page,
+                    dob_val,
+                    "date_of_birth_reassert",
+                    ocr_output_dir,
+                    subfolder,
+                    timeout_ms=pt,
+                )
+                if err:
+                    return _fail(err)
 
     _t(page, 400)
     err = _proposal_addon_checkbox_id_or_label(
@@ -6168,14 +6448,14 @@ def _hero_misp_fill_proposal_and_review(
         try:
             _proposal_preview_rx = re.compile(r"Proposal\s*(Preview|Review)", re.I)
             clicked = False
-            for root in _hero_misp_page_and_frame_roots(page, purpose="nav"):
+            for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
                 rev = root.get_by_role("button", name=_proposal_preview_rx)
                 if rev.count() > 0 and rev.first.is_visible(timeout=3_000):
                     rev.first.click(timeout=pt)
                     clicked = True
                     break
             if not clicked:
-                for root in _hero_misp_page_and_frame_roots(page, purpose="nav"):
+                for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
                     try:
                         root.get_by_text(_proposal_preview_rx).first.click(timeout=pt)
                         clicked = True

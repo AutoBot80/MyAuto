@@ -209,9 +209,13 @@ HERO_MISP_UI_SETTLE_MS = _int_env("HERO_MISP_UI_SETTLE_MS", 200)
 # Pre-Proceed (after mobile fill on KYC): ``domcontentloaded`` cap — **not** ``networkidle`` (was up to 12s).
 INSURANCE_KYC_POST_MOBILE_DOM_MS = _int_env("INSURANCE_KYC_POST_MOBILE_DOM_MS", 2000)
 # Max wait for #navbarVerticalNav / New Policy / KYC hints after **2W** or **New Policy** click (was 5000).
-HERO_MISP_LANDING_WAIT_MS = _int_env("HERO_MISP_LANDING_WAIT_MS", 3500)
+HERO_MISP_LANDING_WAIT_MS = _int_env("HERO_MISP_LANDING_WAIT_MS", 2500)
 # Opening ``domcontentloaded`` before VIN attach poll (decoupled from ``_hero_misp_vin_step_timeout_ms``).
-INSURANCE_VIN_PRE_DOMCONTENTLOADED_MS = _int_env("INSURANCE_VIN_PRE_DOMCONTENTLOADED_MS", 3000)
+INSURANCE_VIN_PRE_DOMCONTENTLOADED_MS = _int_env("INSURANCE_VIN_PRE_DOMCONTENTLOADED_MS", 1000)
+# After ``wait_for_url`` to MispDms.aspx: second ``domcontentloaded`` cap (lower than legacy 8000 ms).
+INSURANCE_VIN_POST_URL_DOMCONTENTLOADED_MS = _int_env(
+    "INSURANCE_VIN_POST_URL_DOMCONTENTLOADED_MS", 2500
+)
 # Default portal label for MISP **KYC Partner** when ``values['kyc_partner']`` is unset (documentation only;
 # automation does not change ``ddlkycPartner`` — portal default e.g. Signzy remains).
 KYC_DEFAULT_KYC_PARTNER_LABEL = (os.getenv("KYC_DEFAULT_KYC_PARTNER_LABEL") or "Signzy").strip() or "Signzy"

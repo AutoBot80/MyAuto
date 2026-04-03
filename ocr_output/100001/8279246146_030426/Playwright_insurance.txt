@@ -1,48 +1,52 @@
 Playwright Insurance — execution log (IST / Asia/Kolkata timestamps)
 
-started_ist=2026-04-03T12:02:29.636+05:30
+started_ist=2026-04-03T12:15:12.427+05:30
 subfolder='8279246146_030426'
 
 --- trace ---
-2026-04-03T12:02:29.638+05:30 [NOTE] run_fill_insurance_only: starting Fill Insurance flow
-2026-04-03T12:02:32.026+05:30 [NOTE] run_fill_insurance_only: phase=page_open elapsed_ms=0
-2026-04-03T12:02:39.704+05:30 [NOTE] run_fill_insurance_only: Sign In not auto-clicked — complete login manually if needed.
-2026-04-03T12:02:39.767+05:30 [NOTE] run_fill_insurance_only: phase=after_sign_in_settle elapsed_ms=7742
-2026-04-03T12:02:42.793+05:30 [NOTE] run_fill_insurance_only: clicked 2W (two-wheeler) entry
-2026-04-03T12:02:50.838+05:30 [NOTE] run_fill_insurance_only: active tab after 2W
-2026-04-03T12:02:50.841+05:30 [NOTE] run_fill_insurance_only: phase=after_2w elapsed_ms=18815
-2026-04-03T12:02:51.786+05:30 [NOTE] run_fill_insurance_only: clicked New Policy
-2026-04-03T12:02:59.872+05:30 [NOTE] run_fill_insurance_only: active tab before KYC wait
-2026-04-03T12:02:59.877+05:30 [NOTE] run_fill_insurance_only: phase=after_new_policy elapsed_ms=27850
-2026-04-03T12:03:00.018+05:30 [NOTE] run_fill_insurance_only: phase=after_kyc_screen_ready elapsed_ms=27993
-2026-04-03T12:03:00.054+05:30 [NOTE] run_fill_insurance_only: real MISP KYC — _fill_insurance_company_and_ovd_mobile_consent (keyboard SOP on ekycpage when enabled)
-2026-04-03T12:03:00.056+05:30 [NOTE] KYC Insurance Company value to use: 'Universal Sompo General Insurance'
-2026-04-03T12:03:00.065+05:30 [NOTE] KYC trace [keyboard_sop] start label_len=33 arrow_down_max=60 prefer_insurer_active=True (DOM native <select> tried first)
-2026-04-03T12:03:00.067+05:30 [NOTE] KYC trace [dom_insurer] start native <select> Insurance Company only (ddlproduct/label); no full-frame scan here
-2026-04-03T12:03:00.080+05:30 [NOTE] KYC trace [native_select_options] Insurance Company <select> n_option_nodes=11 (fuzzy_best_option_label + select_option)
-2026-04-03T12:03:00.112+05:30 [NOTE] KYC trace [dom_insurer] success via Insurance Company native <select> (in-code fuzzy on <option> labels)
-2026-04-03T12:03:00.143+05:30 [NOTE] KYC trace [kyc_path] insurer=DOM (native <select> fuzzy match in frame) — keyboard typing + ArrowDown loop skipped
-2026-04-03T12:03:07.438+05:30 [NOTE] run_fill_insurance_only: real MISP KYC (post-mobile banner branch + Proceed or uploads) complete
-2026-04-03T12:03:07.445+05:30 [NOTE] run_fill_insurance_only: phase=after_kyc_fill elapsed_ms=35416
-2026-04-03T12:03:07.450+05:30 [NOTE] run_fill_insurance_only: VIN fill + Submit (pre_process), timeout_ms=60000
-2026-04-03T12:03:21.026+05:30 [NOTE] run_fill_insurance_only: phase=after_vin_submit elapsed_ms=49000
-2026-04-03T12:03:21.186+05:30 [NOTE] main_process: I agree → proposal form (VIN+Submit done in pre_process)
-2026-04-03T12:03:21.189+05:30 [NOTE] main_process: attached to same browser tab as pre_process
-2026-04-03T12:03:25.182+05:30 [NOTE] main_process: per-frame visible control scrape → Playwright_insurance_main_process_frames.txt (same folder as Playwright_insurance.txt)
-2026-04-03T12:03:25.712+05:30 [NOTE] proposal step=marital_status raw='Married' mapped='Married'
-2026-04-03T12:03:25.884+05:30 [NOTE] proposal step=marital_status select ok id_suffix=ddlMaritalStatus label='Married' readback='Married'
-2026-04-03T12:03:26.072+05:30 [NOTE] proposal step=occupation select ok id_suffix='ddlOccupatnType' readback='Employed'
-2026-04-03T12:03:26.300+05:30 [NOTE] proposal step=date_of_birth fill ok id_suffix=txtDOB readback='01/01/1975'
-2026-04-03T12:03:26.563+05:30 [NOTE] proposal step=email fill ok readback='na@gmail.com'
-2026-04-03T12:03:26.992+05:30 [NOTE] proposal step=alternate_mobile fill ok id_suffix='txtMobile2' readback='9929182056'
-2026-04-03T12:03:27.167+05:30 [NOTE] proposal step=rto select ok id_suffix='ddlRTO' readback='Bharatpur'
-2026-04-03T12:03:27.328+05:30 [NOTE] proposal step=model_name select ok id_suffix='ddlModelName' readback='SPLENDOR PLUS I3S OBD2'
-2026-04-03T12:03:27.551+05:30 [NOTE] proposal step=date_of_registration fill ok id_suffix=txtRegistrationDate readback='03/04/2026'
-2026-04-03T12:03:28.081+05:30 [NOTE] proposal step=nominee_name fill ok id_suffix='txtNomineeName' readback='AJAY'
-2026-04-03T12:03:28.416+05:30 [NOTE] proposal step=nominee_age fill ok id_suffix='txtNomineeAge' readback='21'
-2026-04-03T12:03:28.495+05:30 [NOTE] proposal step=nominee_gender radio rdbtnMale checked ok readback=checked
-2026-04-03T12:03:28.661+05:30 [NOTE] proposal step=nominee_relationship select ok id_suffix='ddlNomineeRelation' readback='Son'
-2026-04-03T12:03:29.343+05:30 [NOTE] proposal step=addon_nd_cover checkbox checked ok pattern='ND\\s*Cover'
-2026-04-03T12:03:29.463+05:30 [NOTE] proposal step=addon_rti checkbox checked ok pattern='RTI\\s*Cover|RTI\\s*&?\\s*Cover|R\\.?T\\.?I\\.?\\s*Cover|Return'
-2026-04-03T12:03:30.843+05:30 [ERROR] main_process proposal form: addon_rsa: checkbox not found for pattern '^RSA$|RSA\\s*cover|RSA\\s*Cover|Road\\s*Side\\s*Assist|Roadside\\s*Assist'
-2026-04-03T12:03:30.844+05:30 [NOTE] main_process: proposal form failed: addon_rsa: checkbox not found for pattern '^RSA$|RSA\\s*cover|RSA\\s*Cover|Road\\s*Side\\s*Assist|Roadside\\s*Assist'
+2026-04-03T12:15:12.430+05:30 [NOTE] run_fill_insurance_only: starting Fill Insurance flow
+2026-04-03T12:15:13.904+05:30 [NOTE] run_fill_insurance_only: phase=page_open elapsed_ms=0
+2026-04-03T12:15:21.835+05:30 [NOTE] run_fill_insurance_only: Sign In not auto-clicked — complete login manually if needed.
+2026-04-03T12:15:21.890+05:30 [NOTE] run_fill_insurance_only: phase=after_sign_in_settle elapsed_ms=7991
+2026-04-03T12:15:24.418+05:30 [NOTE] run_fill_insurance_only: clicked 2W (two-wheeler) entry
+2026-04-03T12:15:32.540+05:30 [NOTE] run_fill_insurance_only: active tab after 2W
+2026-04-03T12:15:32.550+05:30 [NOTE] run_fill_insurance_only: phase=after_2w elapsed_ms=18646
+2026-04-03T12:15:33.535+05:30 [NOTE] run_fill_insurance_only: clicked New Policy
+2026-04-03T12:15:41.633+05:30 [NOTE] run_fill_insurance_only: active tab before KYC wait
+2026-04-03T12:15:41.648+05:30 [NOTE] run_fill_insurance_only: phase=after_new_policy elapsed_ms=27738
+2026-04-03T12:15:41.783+05:30 [NOTE] run_fill_insurance_only: phase=after_kyc_screen_ready elapsed_ms=27885
+2026-04-03T12:15:41.815+05:30 [NOTE] run_fill_insurance_only: real MISP KYC — _fill_insurance_company_and_ovd_mobile_consent (keyboard SOP on ekycpage when enabled)
+2026-04-03T12:15:41.817+05:30 [NOTE] KYC Insurance Company value to use: 'Universal Sompo General Insurance'
+2026-04-03T12:15:41.827+05:30 [NOTE] KYC trace [keyboard_sop] start label_len=33 arrow_down_max=60 prefer_insurer_active=True (DOM native <select> tried first)
+2026-04-03T12:15:41.829+05:30 [NOTE] KYC trace [dom_insurer] start native <select> Insurance Company only (ddlproduct/label); no full-frame scan here
+2026-04-03T12:15:41.841+05:30 [NOTE] KYC trace [native_select_options] Insurance Company <select> n_option_nodes=11 (fuzzy_best_option_label + select_option)
+2026-04-03T12:15:41.874+05:30 [NOTE] KYC trace [dom_insurer] success via Insurance Company native <select> (in-code fuzzy on <option> labels)
+2026-04-03T12:15:41.901+05:30 [NOTE] KYC trace [kyc_path] insurer=DOM (native <select> fuzzy match in frame) — keyboard typing + ArrowDown loop skipped
+2026-04-03T12:15:49.125+05:30 [NOTE] run_fill_insurance_only: real MISP KYC (post-mobile banner branch + Proceed or uploads) complete
+2026-04-03T12:15:49.135+05:30 [NOTE] run_fill_insurance_only: phase=after_kyc_fill elapsed_ms=35230
+2026-04-03T12:15:49.143+05:30 [NOTE] run_fill_insurance_only: VIN fill + Submit (pre_process), timeout_ms=60000
+2026-04-03T12:16:02.682+05:30 [NOTE] run_fill_insurance_only: phase=after_vin_submit elapsed_ms=48784
+2026-04-03T12:16:02.815+05:30 [NOTE] main_process: I agree → proposal form (VIN+Submit done in pre_process)
+2026-04-03T12:16:02.816+05:30 [NOTE] main_process: attached to same browser tab as pre_process
+2026-04-03T12:16:07.250+05:30 [NOTE] main_process: per-frame visible control scrape → Playwright_insurance_main_process_frames.txt (same folder as Playwright_insurance.txt)
+2026-04-03T12:16:07.778+05:30 [NOTE] proposal step=marital_status raw='Married' mapped='Married'
+2026-04-03T12:16:07.947+05:30 [NOTE] proposal step=marital_status select ok id_suffix=ddlMaritalStatus label='Married' readback='Married'
+2026-04-03T12:16:08.099+05:30 [NOTE] proposal step=occupation select ok id_suffix='ddlOccupatnType' readback='Employed'
+2026-04-03T12:16:09.177+05:30 [NOTE] proposal step=date_of_birth fill ok id_suffix=txtDOB readback='01/01/1975'
+2026-04-03T12:16:09.416+05:30 [NOTE] proposal step=email fill ok readback='na@gmail.com'
+2026-04-03T12:16:09.669+05:30 [NOTE] proposal step=alternate_mobile fill ok id_suffix='txtMobile2' readback='9929182056'
+2026-04-03T12:16:09.850+05:30 [NOTE] proposal step=rto select ok id_suffix='ddlRTO' readback='Bharatpur'
+2026-04-03T12:16:09.998+05:30 [NOTE] proposal step=model_name select ok id_suffix='ddlModelName' readback='SPLENDOR PLUS I3S OBD2'
+2026-04-03T12:16:10.330+05:30 [NOTE] proposal step=date_of_registration fill ok id_suffix=txtRegistrationDate readback='03/04/2026'
+2026-04-03T12:16:10.966+05:30 [NOTE] proposal step=nominee_name fill ok id_suffix='txtNomineeName' readback='AJAY'
+2026-04-03T12:16:11.289+05:30 [NOTE] proposal step=nominee_age fill ok id_suffix='txtNomineeAge' readback='21'
+2026-04-03T12:16:11.580+05:30 [NOTE] proposal step=nominee_gender radio rdbtnMale checked ok readback=checked
+2026-04-03T12:16:11.900+05:30 [NOTE] proposal step=nominee_relationship select ok id_suffix='ddlNomineeRelation' readback='Son'
+2026-04-03T12:16:12.619+05:30 [NOTE] proposal step=date_of_birth_reassert fill ok id_suffix=txtDOB readback='01/01/1975'
+2026-04-03T12:16:13.256+05:30 [NOTE] proposal step=addon_nd_cover checkbox id_suffix='chkNilDepreciation' checked ok
+2026-04-03T12:16:13.427+05:30 [NOTE] proposal step=addon_rti checkbox id_suffix='chkroicover' checked ok
+2026-04-03T12:16:13.589+05:30 [NOTE] proposal step=addon_rsa checkbox id_suffix='chkRSA' unchecked ok
+2026-04-03T12:16:14.097+05:30 [NOTE] proposal step=addon_emergency_medical checkbox id_suffix='chkEME' unchecked ok
+2026-04-03T12:16:14.317+05:30 [NOTE] proposal step=cpa_tenure select ok id_suffix='ddlCPATenure' readback='0'
+2026-04-03T12:16:14.588+05:30 [NOTE] proposal step=cpa_usgi_uncheck checkbox id_suffix='gridGMc_ctl02_chlGMC' unchecked ok
+2026-04-03T12:16:14.590+05:30 [NOTE] proposal step=addon_hero_cpi dealer hero_cpi='Y' (Y=check NIC/CPI row, N=uncheck)

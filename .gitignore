@@ -51,3 +51,6 @@ htmlcov/
 
 # Scanner / local assets (not versioned)
 Scanner/
+
+# Hero MISP: persisted KYC insurer strategy (per portal host)
+backend/app/data/kyc_insurer_strategy_cache.json
