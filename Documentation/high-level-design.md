@@ -439,3 +439,4 @@ The SQL view **`form_dms_view`** is **removed**; the same mapping is implemented
 | 1.141 | Apr 2026 | — | **`GET /dealers/{id}`** exposes **`prefer_insurer`**; Add Sales Insurance Provider + **`submitInfo`** default insurer when OCR empty — **LLD** **6.244** |
 | 1.142 | Apr 2026 | — | **`Playwright_Hero_DMS_fill`** branch **(2)**: **`_siebel_video_branch2_address_postal_and_save`** — Home Phone / Email / **`#s_vctrl_div`** Address before postal — **LLD** **6.246**; **BRD** **BR-19** |
 | 1.143 | Apr 2026 | — | **`siebel_dms_playwright`**: branch **(2)** **`select#j_s_vctrl_div_tabScreen`** (**Third Level View Bar**, **`tabScreen6`**) before **Address** anchors — **LLD** **6.247**; **BRD** **BR-19** |
+| 1.144 | Apr 2026 | — | **`siebel_dms_playwright`**: branch **(2)** City / Postal in **`#gview_s_1_l`**; **Ctrl+S** — **LLD** **6.248**; **BRD** **BR-19** |

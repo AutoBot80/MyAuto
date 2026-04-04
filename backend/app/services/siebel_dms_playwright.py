@@ -4694,7 +4694,48 @@ def _siebel_try_activate_find_contact_context(
         note("Activated Contacts sub-tab (list) — leaving Contact_Enquiry for First Name column.")
         _safe_page_wait(page, 900, log_label="after_contacts_list_subtab")
         return
-        note("Find Contact / Contacts list tab not found — proceeding to First Name click anyway.")
+    note("Find Contact / Contacts list tab not found — proceeding to First Name click anyway.")
+
+
+def _branch2_fill_scoped_in_root(
+    root,
+    *,
+    scopes: tuple[str, ...],
+    selectors: tuple[str, ...],
+    value: str,
+    action_timeout_ms: int,
+    note,
+    log_label: str,
+) -> bool:
+    """Fill the first visible control matching *selectors* under *scopes* (empty scope = root)."""
+    v = (value or "").strip()
+    if not v:
+        return False
+    t = min(int(action_timeout_ms), 6000)
+    for scope in scopes:
+        for css in selectors:
+            try:
+                if scope:
+                    container = root.locator(scope).first
+                    if container.count() == 0:
+                        continue
+                    if not container.is_visible(timeout=220):
+                        continue
+                    loc = container.locator(css).first
+                else:
+                    loc = root.locator(css).first
+                if loc.count() == 0:
+                    continue
+                if not loc.is_visible(timeout=500):
+                    continue
+                loc.click(timeout=min(2000, t))
+                loc.fill(v, timeout=t)
+                sc = scope or "(root)"
+                note(f"Branch (2): filled {log_label} in {sc} via {css!r} → {v[:48]!r}.")
+                return True
+            except Exception:
+                continue
+    return False
 
 
 def _branch2_try_fill_contact_input(
@@ -4849,14 +4890,15 @@ def _siebel_video_branch2_address_postal_and_save(
     note,
     home_phone: str | None = None,
     contact_email: str | None = None,
+    city: str | None = None,
 ) -> bool:
     """
     Video branch **(2)** (no Open enquiry): after Relation's Name path, fill **Home Phone #** and **Email**,
-    open **Address** under ``#s_vctrl_div``, set **Postal Code** ``#1_Postal_Code`` (scoped under
-    ``#s_vctrl_div`` when present), then Save.
+    open **Address**, set **City** (``1_City``) then **Postal Code** (``name=Postal_Code`` / ``1_Postal_Code``),
+    preferring **#gview_s_1_l** then **#s_vctrl_div**, then **Ctrl+S** (Save toolbar fallback).
 
     ``home_phone`` defaults from DMS landline / alternate phone at the caller; ``contact_email`` defaults
-    to ``na@gmail.com`` when the caller passes None.
+    to ``na@gmail.com`` when the caller passes None. ``city`` from DMS (e.g. city or district).
     """
     pin = (pin_code or "").strip()
     if not pin:
@@ -4916,65 +4958,79 @@ def _siebel_video_branch2_address_postal_and_save(
     else:
         note("Branch (2): Address tab not found — trying Postal Code field anyway.")
 
-    def _fill_postal_in_root(root) -> bool:
-        try:
-            vctrl = root.locator("#s_vctrl_div")
-            if vctrl.count() > 0:
-                loc = vctrl.locator('[id="1_Postal_Code"]').first
-                if loc.count() > 0 and loc.is_visible(timeout=500):
-                    loc.click(timeout=min(2000, action_timeout_ms))
-                    loc.fill(pin, timeout=action_timeout_ms)
-                    try:
-                        loc.press("Tab", timeout=1200)
-                    except Exception:
-                        pass
-                    note(f"Branch (2): filled Postal Code in #s_vctrl_div / #1_Postal_Code → {pin!r}.")
-                    return True
-        except Exception:
-            pass
-        try:
-            loc = root.locator('[id="1_Postal_Code"]').first
-            if loc.count() > 0 and loc.is_visible(timeout=500):
-                loc.click(timeout=min(2000, action_timeout_ms))
-                loc.fill(pin, timeout=action_timeout_ms)
-                try:
-                    loc.press("Tab", timeout=1200)
-                except Exception:
-                    pass
-                note(f"Branch (2): filled #1_Postal_Code → {pin!r}.")
-                return True
-        except Exception:
-            pass
-        return False
+    city_val = (city or "").strip()
+    _scopes = ("#gview_s_1_l", "#s_vctrl_div", "")
+    _city_sels = ('[id="1_City"]', 'input#1_City', 'input[id="1_City"]')
+    _postal_sels = (
+        'input[name="Postal_Code"]',
+        '[id="1_Postal_Code"]',
+        'input[id="1_Postal_Code"]',
+        'input[name*="Postal" i]',
+    )
+
+    def _fill_city_and_postal_in_root(root) -> bool:
+        if city_val:
+            _branch2_fill_scoped_in_root(
+                root,
+                scopes=_scopes,
+                selectors=_city_sels,
+                value=city_val,
+                action_timeout_ms=action_timeout_ms,
+                note=note,
+                log_label="City (1_City)",
+            )
+        return _branch2_fill_scoped_in_root(
+            root,
+            scopes=_scopes,
+            selectors=_postal_sels,
+            value=pin,
+            action_timeout_ms=action_timeout_ms,
+            note=note,
+            log_label="Postal Code",
+        )
 
     _filled = False
     for fl in _iter_frame_locator_roots(page, content_frame_selector):
-        if _fill_postal_in_root(fl):
+        if _fill_city_and_postal_in_root(fl):
             _filled = True
             break
     if not _filled:
         for frame in _ordered_frames(page):
-            if _fill_postal_in_root(frame):
+            if _fill_city_and_postal_in_root(frame):
                 _filled = True
                 break
-    if not _filled and _fill_postal_in_root(page):
+    if not _filled and _fill_city_and_postal_in_root(page):
         _filled = True
     if not _filled:
-        note("Branch (2): could not locate or fill #1_Postal_Code.")
+        for root in _siebel_all_search_roots(page, content_frame_selector):
+            if _fill_city_and_postal_in_root(root):
+                _filled = True
+                break
+    if not _filled:
+        note(
+            "Branch (2): could not locate or fill Postal Code "
+            "(tried #gview_s_1_l / #s_vctrl_div: name=Postal_Code, id 1_Postal_Code)."
+        )
         return False
 
-    _safe_page_wait(page, 350, log_label="after_postal_fill_branch2")
+    _safe_page_wait(page, 350, log_label="after_city_postal_fill_branch2")
+    try:
+        page.keyboard.press("Control+S", delay=50)
+        note("Branch (2): pressed Ctrl+S after City / Postal Code.")
+        return True
+    except Exception:
+        note("Branch (2): Ctrl+S failed — trying Save control.")
     if _try_click_siebel_save(
         page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
     ):
-        note("Branch (2): Save clicked after Address / Postal Code.")
+        note("Branch (2): Save clicked after City / Postal Code.")
         return True
     try:
         page.keyboard.press("Control+S", delay=50)
-        note("Branch (2): pressed Ctrl+S after Address / Postal Code.")
+        note("Branch (2): pressed Ctrl+S (retry) after City / Postal Code.")
         return True
     except Exception:
-        note("Branch (2): Save toolbar and Ctrl+S both failed after Postal Code.")
+        note("Branch (2): Save toolbar and Ctrl+S both failed after City / Postal Code.")
         return False
 
 
@@ -15803,6 +15859,7 @@ def Playwright_Hero_DMS_fill(
                 or mobile
             )
             _b2_email = (dms_values.get("branch2_contact_email") or "na@gmail.com").strip()
+            _b2_city = (dms_values.get("city") or dms_values.get("district") or "").strip()
             if not _siebel_video_branch2_address_postal_and_save(
                 page,
                 pin_code=pin,
@@ -15811,6 +15868,7 @@ def Playwright_Hero_DMS_fill(
                 note=note,
                 home_phone=_b2_home,
                 contact_email=_b2_email,
+                city=_b2_city,
             ):
                 step("Stopped: video branch (2) Address / Postal Code / Save failed.")
                 out["error"] = (
