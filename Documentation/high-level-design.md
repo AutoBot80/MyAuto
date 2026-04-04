@@ -442,3 +442,4 @@ The SQL view **`form_dms_view`** is **removed**; the same mapping is implemented
 | 1.144 | Apr 2026 | — | **`siebel_dms_playwright`**: branch **(2)** City / Postal in **`#gview_s_1_l`**; **Ctrl+S** — **LLD** **6.248**; **BRD** **BR-19** |
 | 1.145 | Apr 2026 | — | **`siebel_dms_playwright`**: branch **(2)** **`iframe#S_A1`** before grid postal search — **LLD** **6.249**; **BRD** **BR-19** |
 | 1.146 | Apr 2026 | — | **`siebel_dms_playwright`**: **`S_A1`** non-iframe **`[id="S_A1"]`**; **200 ms** after PDI tab — **LLD** **6.249**–**6.250** |
+| 1.147 | Apr 2026 | — | **`siebel_dms_playwright`**: branch **(2)** **`#SWEApplet1 #gview_s_1_l`** scope order — **LLD** **6.251**; **BRD** **BR-19** |

@@ -4949,7 +4949,7 @@ def _siebel_video_branch2_address_postal_and_save(
     """
     Video branch **(2)** (no Open enquiry): after Relation's Name path, fill **Home Phone #** and **Email**,
     open **Address**, set **City** (``1_City``) then **Postal Code** (``name=Postal_Code`` / ``1_Postal_Code``),
-    preferring **iframe#S_A1** then **#gview_s_1_l** / **#s_vctrl_div**, then **Ctrl+S** (Save toolbar fallback).
+    preferring **iframe#S_A1** then **#SWEApplet1 #gview_s_1_l** (grid inside applet), then **#SWEApplet1**, then **Ctrl+S** (Save toolbar fallback).
 
     ``home_phone`` defaults from DMS landline / alternate phone at the caller; ``contact_email`` defaults
     to ``na@gmail.com`` when the caller passes None. ``city`` from DMS (e.g. city or district).
@@ -5013,7 +5013,8 @@ def _siebel_video_branch2_address_postal_and_save(
         note("Branch (2): Address tab not found — trying Postal Code field anyway.")
 
     city_val = (city or "").strip()
-    _scopes = ("#gview_s_1_l", "#s_vctrl_div", "")
+    # ``#gview_s_1_l`` jqGrid is nested under ``#SWEApplet1`` on Address — search that path first.
+    _scopes = ("#SWEApplet1 #gview_s_1_l", "#SWEApplet1", "#gview_s_1_l", "")
     _city_sels = ('[id="1_City"]', 'input#1_City', 'input[id="1_City"]')
     _postal_sels = (
         'input[name="Postal_Code"]',
@@ -5069,7 +5070,8 @@ def _siebel_video_branch2_address_postal_and_save(
     if not _filled:
         note(
             "Branch (2): could not locate or fill Postal Code "
-            "(tried iframe#S_A1 → #gview_s_1_l / #s_vctrl_div: name=Postal_Code, id 1_Postal_Code)."
+            "(tried iframe#S_A1 → #SWEApplet1 #gview_s_1_l / #SWEApplet1 / #gview_s_1_l: "
+            "name=Postal_Code, id 1_Postal_Code)."
         )
         return False
 
