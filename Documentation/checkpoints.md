@@ -36,6 +36,7 @@ Cursor agents follow **`.cursor/rules/checkpoints-registry.mdc`**: full workflow
 | Insurance Main filled | `checkpoint/insurance-main-filled` | `69d2cff5dec65d4b458bddf697c0ba9faf108d2d` | 2026-04-03T17:45:04+05:30 | 1) Download policy preview; 2) Check master to be inserted; 3) Ongoing testing and bug fixes — see **`Documentation/checkpoint-insurance-main-filled.md`** |
 | Corrected Precheck and PDI | `checkpoint/corrected-precheck-and-pdi` | `70c9af892e3143c210aea6a4e1776a0441b7628f` | 2026-04-03T21:40:32+05:30 | 1) Add enquiry for existing contact still needs fixing |
 | Temp Checkpoint 1 | `checkpoint/temp-checkpoint-1` | `a9f0bee6afa9d66b3f823668dd6806d56a1a066c` | 2026-04-04T18:21:23+05:30 | — |
+| Fixed Financer. Create order error | `checkpoint/fixed-financer-create-order-error` | `f9df1cfdcbeefa3714960d4a84cf24ff3374c568` | 2026-04-04T21:51:50+05:30 | — |
 
 ## Rollback / Restore
 
