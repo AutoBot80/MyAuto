@@ -450,3 +450,4 @@ The SQL view **`form_dms_view`** is **removed**; the same mapping is implemented
 | 1.152 | Apr 2026 | — | **`_siebel_try_activate_payments_tab`**: Third Level View Bar search roots prefer documents whose combo includes **Payments** (nested iframe duplicates last) — **LLD** **6.257** |
 | 1.153 | Apr 2026 | — | **`_siebel_try_activate_payments_tab`**: JS Third Level match before **`select_option`**; capped **`select_option`** timeouts — **LLD** **6.258** |
 | 1.154 | Apr 2026 | — | **`_siebel_frames_branch2_shell_for_third_level_bar`**: **S_A1** lineage → parent shell for Payments Third Level — **LLD** **6.259** |
+| 1.155 | Apr 2026 | — | **`_siebel_try_click_payments_tab_under_s_vctrl`**: **`s_vctrl_div.siebui-subview-navs`** + JS fallback — **LLD** **6.260** |

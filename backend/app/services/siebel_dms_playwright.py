@@ -4135,6 +4135,16 @@ def _siebel_js_select_third_level_option_matching(
     return False
 
 
+_SIEBEL_S_VCTRL_SUBVIEW_NAV_SELECTORS = (
+    # Operator-confirmed: Payments lives under subview nav (same strip as Third Level tabs).
+    "div#s_vctrl_div.siebui-nav-tab.siebui-subview-navs",
+    "div#s_vctrl_div.siebui-subview-navs",
+    "#s_vctrl_div.siebui-subview-navs",
+    "#s_vctrl_div.siebui-nav-tab",
+    "#s_vctrl_div",
+)
+
+
 def _siebel_try_click_payments_tab_under_s_vctrl(
     page: Page,
     *,
@@ -4142,48 +4152,146 @@ def _siebel_try_click_payments_tab_under_s_vctrl(
     content_frame_selector: str | None,
     note,
 ) -> bool:
-    """Click **Payments** ``ui-tabs-anchor`` / tab under ``#s_vctrl_div`` (parallel to Address fallbacks)."""
+    """
+    Click **Payments** under the Siebel view-control strip: prefer
+    ``div#s_vctrl_div.siebui-nav-tab.siebui-subview-navs`` (and variants), not only bare ``#s_vctrl_div`` —
+    multiple ``#s_vctrl_div`` nodes may exist; ``.first`` can target a hidden clone.
+    """
     t = min(int(action_timeout_ms), 6000)
     pay_pat = re.compile(r"^\s*Payments?\s*$", re.I)
-    for root in _siebel_search_roots_payments_third_level_first(page, content_frame_selector):
+    pay_loose = re.compile(r"^\s*Payments?\s*$|Customer\s+payments?|Payment\s+details", re.I)
+
+    def _try_in_vctrl_box(vbox, *, log_tag: str) -> bool:
+        if vbox.count() == 0:
+            return False
+        vc = vbox.first
         try:
-            vwrap = root.locator("#s_vctrl_div")
-            if vwrap.count() == 0:
-                continue
-            vctrl = vwrap.first
-            if not vctrl.is_visible(timeout=300):
-                continue
-            for css in (
-                'a.ui-tabs-anchor[href*="tabScreen_noop"]:has-text("Payments")',
-                'a.ui-tabs-anchor:has-text("Payments")',
-                'a.ui-tabs-anchor:has-text("Payment")',
-            ):
-                try:
-                    loc = vctrl.locator(css).first
-                    if loc.count() > 0 and loc.is_visible(timeout=550):
-                        loc.click(timeout=t)
-                        note("Payments: clicked Payments tab under #s_vctrl_div (CSS).")
-                        return True
-                except Exception:
-                    continue
-            try:
-                loc = vctrl.get_by_role("tab", name=pay_pat).first
-                if loc.count() > 0 and loc.is_visible(timeout=550):
-                    loc.click(timeout=t)
-                    note("Payments: clicked Payments tab under #s_vctrl_div (role=tab).")
-                    return True
-            except Exception:
-                pass
-            try:
-                loc = vctrl.locator("a.ui-tabs-anchor").filter(has_text=pay_pat).first
-                if loc.count() > 0 and loc.is_visible(timeout=550):
-                    loc.click(timeout=t)
-                    note("Payments: clicked Payments tab under #s_vctrl_div (anchor filter).")
-                    return True
-            except Exception:
-                pass
+            if not vc.is_visible(timeout=400):
+                return False
         except Exception:
-            continue
+            return False
+        for css in (
+            'a.ui-tabs-anchor[href*="tabScreen_noop"]:has-text("Payments")',
+            'a.ui-tabs-anchor:has-text("Payments")',
+            'a.ui-tabs-anchor:has-text("Payment")',
+            'a[href*="tabScreen_noop"]:has-text("Payments")',
+            'a[href*="tabScreen"]:has-text("Payments")',
+            'a:has-text("Payments")',
+            'a:has-text("Payment")',
+        ):
+            try:
+                loc = vc.locator(css).first
+                if loc.count() > 0 and loc.is_visible(timeout=550):
+                    try:
+                        loc.click(timeout=t)
+                    except Exception:
+                        loc.click(timeout=t, force=True)
+                    note(f"Payments: clicked Payments tab ({log_tag}, css={css[:56]!r}).")
+                    return True
+            except Exception:
+                continue
+        for role in ("tab", "link", "button"):
+            try:
+                loc = vc.get_by_role(role, name=pay_pat).first
+                if loc.count() > 0 and loc.is_visible(timeout=550):
+                    try:
+                        loc.click(timeout=t)
+                    except Exception:
+                        loc.click(timeout=t, force=True)
+                    note(f"Payments: clicked Payments tab ({log_tag}, role={role}).")
+                    return True
+            except Exception:
+                continue
+        try:
+            loc = vc.locator("a.ui-tabs-anchor").filter(has_text=pay_pat).first
+            if loc.count() > 0 and loc.is_visible(timeout=550):
+                try:
+                    loc.click(timeout=t)
+                except Exception:
+                    loc.click(timeout=t, force=True)
+                note(f"Payments: clicked Payments tab ({log_tag}, ui-tabs-anchor filter).")
+                return True
+        except Exception:
+            pass
+        try:
+            loc = vc.get_by_text(re.compile(r"^\s*Payments\s*$", re.I)).first
+            if loc.count() > 0 and loc.is_visible(timeout=500):
+                try:
+                    loc.click(timeout=t)
+                except Exception:
+                    loc.click(timeout=t, force=True)
+                note(f"Payments: clicked Payments tab ({log_tag}, get_by_text).")
+                return True
+        except Exception:
+            pass
+        try:
+            loc = vc.locator("a, span, li, [role='tab']").filter(has_text=pay_loose).first
+            if loc.count() > 0 and loc.is_visible(timeout=500):
+                try:
+                    loc.click(timeout=t)
+                except Exception:
+                    loc.click(timeout=t, force=True)
+                note(f"Payments: clicked Payments tab ({log_tag}, broad text filter).")
+                return True
+        except Exception:
+            pass
+        return False
+
+    _js_click_payments_in_subview = """() => {
+      const vis = (el) => {
+        if (!el) return false;
+        const st = window.getComputedStyle(el);
+        if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+        const r = el.getBoundingClientRect();
+        return r.width >= 2 && r.height >= 2;
+      };
+      const boxes = [];
+      for (const sel of [
+        'div#s_vctrl_div.siebui-nav-tab.siebui-subview-navs',
+        'div#s_vctrl_div.siebui-subview-navs',
+        '#s_vctrl_div.siebui-subview-navs',
+        '#s_vctrl_div'
+      ]) {
+        document.querySelectorAll(sel).forEach((n) => boxes.push(n));
+      }
+      const seen = new Set();
+      const payRe = /^\\s*Payments?\\s*$/i;
+      const custRe = /^\\s*Customer\\s+payments?\\s*$/i;
+      for (const box of boxes) {
+        if (seen.has(box)) continue;
+        seen.add(box);
+        if (!vis(box)) continue;
+        const cand = box.querySelectorAll('a, [role="tab"], button, .siebui-btn-text, span');
+        for (const el of cand) {
+          if (!vis(el)) continue;
+          const tx = (el.innerText || el.textContent || '').trim();
+          if (payRe.test(tx) || custRe.test(tx) || /^Payment\\s+details$/i.test(tx)) {
+            try { el.click(); return true; } catch (e) {}
+          }
+        }
+      }
+      return false;
+    }"""
+
+    for root in _siebel_search_roots_payments_third_level_first(page, content_frame_selector):
+        for vsel in _SIEBEL_S_VCTRL_SUBVIEW_NAV_SELECTORS:
+            try:
+                vwrap = root.locator(vsel)
+                n = vwrap.count()
+                if n == 0:
+                    continue
+                _lim = min(n, 8)
+                for j in range(_lim):
+                    if _try_in_vctrl_box(vwrap.nth(j), log_tag=f"{vsel}@[{j}]"):
+                        return True
+            except Exception:
+                continue
+        try:
+            if bool(_siebel_root_evaluate(root, _js_click_payments_in_subview)):
+                note("Payments: clicked Payments tab (JS fallback in subview #s_vctrl_div).")
+                return True
+        except Exception:
+            pass
     return False
 
 
