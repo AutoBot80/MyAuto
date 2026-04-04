@@ -4738,6 +4738,60 @@ def _branch2_fill_scoped_in_root(
     return False
 
 
+def _iter_branch2_s_a1_frame_roots(page: Page, content_frame_selector: str | None):
+    """
+    Yield search roots for Siebel **S_A1**: **iframe** ``iframe#S_A1`` first, then any element
+    ``[id="S_A1"]`` (some builds use a **div**/section instead of ``<iframe>``).
+
+    Hero often hosts the Address **jqGrid** (e.g. ``gview_s_1_l``) and **Postal_Code** inputs here —
+    try **before** unscoped grid scans.
+    """
+    for sel in ("iframe#S_A1", 'iframe[id="S_A1"]'):
+        try:
+            yield page.frame_locator(sel)
+        except Exception:
+            continue
+    try:
+        for parent in _iter_frame_locator_roots(page, content_frame_selector):
+            for sel in ("iframe#S_A1", 'iframe[id="S_A1"]'):
+                try:
+                    yield parent.frame_locator(sel)
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    try:
+        for frame in _ordered_frames(page):
+            for sel in ("iframe#S_A1", 'iframe[id="S_A1"]'):
+                try:
+                    yield frame.frame_locator(sel)
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    # Non-iframe container (same id on a block element)
+    try:
+        yield page.locator('[id="S_A1"]').first
+    except Exception:
+        pass
+    try:
+        for parent in _iter_frame_locator_roots(page, content_frame_selector):
+            try:
+                yield parent.locator('[id="S_A1"]').first
+            except Exception:
+                continue
+    except Exception:
+        pass
+    try:
+        for frame in _ordered_frames(page):
+            try:
+                yield frame.locator('[id="S_A1"]').first
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+
 def _branch2_try_fill_contact_input(
     page: Page,
     *,
@@ -4895,7 +4949,7 @@ def _siebel_video_branch2_address_postal_and_save(
     """
     Video branch **(2)** (no Open enquiry): after Relation's Name path, fill **Home Phone #** and **Email**,
     open **Address**, set **City** (``1_City``) then **Postal Code** (``name=Postal_Code`` / ``1_Postal_Code``),
-    preferring **#gview_s_1_l** then **#s_vctrl_div**, then **Ctrl+S** (Save toolbar fallback).
+    preferring **iframe#S_A1** then **#gview_s_1_l** / **#s_vctrl_div**, then **Ctrl+S** (Save toolbar fallback).
 
     ``home_phone`` defaults from DMS landline / alternate phone at the caller; ``contact_email`` defaults
     to ``na@gmail.com`` when the caller passes None. ``city`` from DMS (e.g. city or district).
@@ -4990,10 +5044,16 @@ def _siebel_video_branch2_address_postal_and_save(
         )
 
     _filled = False
-    for fl in _iter_frame_locator_roots(page, content_frame_selector):
-        if _fill_city_and_postal_in_root(fl):
+    for s_a1_root in _iter_branch2_s_a1_frame_roots(page, content_frame_selector):
+        if _fill_city_and_postal_in_root(s_a1_root):
+            note("Branch (2): City / Postal Code filled inside S_A1 scope (iframe or id=S_A1).")
             _filled = True
             break
+    if not _filled:
+        for fl in _iter_frame_locator_roots(page, content_frame_selector):
+            if _fill_city_and_postal_in_root(fl):
+                _filled = True
+                break
     if not _filled:
         for frame in _ordered_frames(page):
             if _fill_city_and_postal_in_root(frame):
@@ -5009,7 +5069,7 @@ def _siebel_video_branch2_address_postal_and_save(
     if not _filled:
         note(
             "Branch (2): could not locate or fill Postal Code "
-            "(tried #gview_s_1_l / #s_vctrl_div: name=Postal_Code, id 1_Postal_Code)."
+            "(tried iframe#S_A1 → #gview_s_1_l / #s_vctrl_div: name=Postal_Code, id 1_Postal_Code)."
         )
         return False
 
@@ -9055,6 +9115,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     if not _pdi_tab_clicked:
         return False, "Could not click PDI tab."
     note(f"{log_prefix}: clicked PDI tab.")
+    _safe_page_wait(page, 200, log_label="after_pdi_tab_click_refresh")
     _safe_page_wait(page, 1500, log_label="after_pdi_tab")
     try:
         page.wait_for_load_state("networkidle", timeout=8_000)
