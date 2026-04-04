@@ -16216,14 +16216,13 @@ def _fill_create_order_financier_field_on_frame(
     **Tab** out. That **Tab** opens a small tablet/dialog with focus in the first field.
 
     Then: **Tab** to the second field, clear it, type the same **ALL CAPS** financier name, **Tab**, **Enter**
-    (not Enter immediately after typing). Waits for the **Financial Consultant** / result grid: if it has
-    at least one data row, selects the first row and **Enter**; otherwise returns
-    ``(False, "Financer name could not be matched")``.
+    (not Enter immediately after typing). Siebel may resolve the account and replace the main Financer text
+    (e.g. canonical company name) without a detectable **Financial Consultant** jqGrid row count — so this
+    path does **not** validate or select rows in that grid; it waits for the tablet to settle / close.
 
     Does **not** use the MVG pick-icon / Pick Financers popup flow.
 
-    Returns ``(True, None)`` on success; ``(False, None)`` if the main field could not be resolved or filled;
-    ``(False, "Financer name could not be matched")`` when the search grid has no matching rows.
+    Returns ``(True, None)`` on success; ``(False, None)`` if the main field could not be resolved or filled.
     """
     _caps = (financier_display or "").strip().upper()
     if not _caps:
@@ -16438,40 +16437,12 @@ def _fill_create_order_financier_field_on_frame(
     except Exception:
         pass
     _safe_page_wait(page, 700, log_label="financier_tablet_after_tab_enter_search")
-    _n_rows = _financier_mvg_financial_consultant_data_row_count(page, content_frame_selector)
-    if _n_rows <= 0:
-        _safe_page_wait(page, 1000, log_label="financier_tablet_grid_retry_wait")
-        _n_rows = _financier_mvg_financial_consultant_data_row_count(page, content_frame_selector)
-    if _n_rows <= 0:
-        if callable(note):
-            try:
-                note(
-                    "Create Order: Financer tablet search returned no Financial Consultant grid rows — "
-                    f"Financer name could not be matched. typed={_caps!r}."
-                )
-            except Exception:
-                pass
-        return False, "Financer name could not be matched"
-    if not _financier_mvg_click_first_result_row(page, content_frame_selector):
-        if callable(note):
-            try:
-                note(
-                    "Create Order: Financer result grid had rows but first row could not be selected — "
-                    f"typed={_caps!r}."
-                )
-            except Exception:
-                pass
-        return False, "Financer name could not be matched"
-    _safe_page_wait(page, 350, log_label="financier_tablet_after_first_row_click")
-    try:
-        page.keyboard.press("Enter")
-    except Exception:
-        pass
-    _safe_page_wait(page, 400, log_label="financier_tablet_after_result_enter")
+    _safe_page_wait(page, 600, log_label="financier_tablet_settle_no_grid_check")
     if callable(note):
         try:
             note(
-                "Create Order: Financer tablet field2 ALL CAPS + Tab + Enter → grid row(s) → first row + Enter. "
+                "Create Order: Financer tablet field2 ALL CAPS + Tab + Enter; "
+                "no Financial Consultant grid row check (Siebel may resolve canonical name on main field). "
                 f"source={financier_display!r} typed={_caps!r}."
             )
         except Exception:
