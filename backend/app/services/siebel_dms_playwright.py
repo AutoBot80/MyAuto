@@ -12083,16 +12083,23 @@ def _create_order(
         if _is_financed:
             _fin_caps = _fin_name.upper()
             _fin_name_ok = False
+            _fin_hard_err: str | None = None
             for root in _roots():
                 try:
-                    if _fill_create_order_financier_field_on_frame(
+                    ok_fin, fin_msg = _fill_create_order_financier_field_on_frame(
+                        page,
                         root,
                         _fin_name,
                         action_timeout_ms=action_timeout_ms,
-                        page=page,
-                    ):
+                        content_frame_selector=content_frame_selector,
+                        note=note,
+                    )
+                    if ok_fin:
                         _fin_name_ok = True
                         _locked_root = root
+                        break
+                    if fin_msg:
+                        _fin_hard_err = fin_msg
                         break
                     for _lbl in ("Financer", "Financier", "Financer Name", "Financier Name"):
                         if _select_dropdown_by_label_on_frame(
@@ -12108,6 +12115,13 @@ def _create_order(
                         break
                 except Exception:
                     continue
+            if _fin_hard_err:
+                _fin_err = _detect_siebel_error_popup(page, content_frame_selector)
+                if _fin_err:
+                    return False, f"Siebel error while setting Financier/Financer: {_fin_err[:200]}", scraped
+                if _fin_hard_err == "Financer name not matched":
+                    return False, "Financer name not matched", scraped
+                return False, _fin_hard_err, scraped
             if not _fin_name_ok:
                 _fin_err = _detect_siebel_error_popup(page, content_frame_selector)
                 if _fin_err:
@@ -12119,7 +12133,8 @@ def _create_order(
                 )
             _safe_page_wait(page, 500, log_label="after_financier_fill")
             note(
-                "Create Order: Financier/Financer set via ALL CAPS entry + Tab blur (no pick icon); "
+                "Create Order: Financier/Financer set (MVG: Account Name + ALL CAPS + grid row + Enter when "
+                "popup opens; otherwise legacy ALL CAPS + Tab on main field). "
                 f"source={_fin_name!r} typed={_fin_caps!r}."
             )
             _fin_post_err = _detect_siebel_error_popup(page, content_frame_selector)
@@ -15593,38 +15608,306 @@ def _fill_by_label_on_frame(
     return False
 
 
+def _financier_mvg_wait_popup_indicator(
+    page: Page, content_frame_selector: str | None, *, max_wait_ms: int
+) -> bool:
+    """True when the financier MVG applet exposes Account Name criteria or the Financial Consultant grid."""
+    deadline = max(0, int(max_wait_ms))
+    step = 220
+    elapsed = 0
+    while elapsed <= deadline:
+        for root in _siebel_all_search_roots(page, content_frame_selector):
+            try:
+                hit = root.evaluate(
+                    """() => {
+                      const vis = (el) => {
+                        if (!el) return false;
+                        const st = window.getComputedStyle(el);
+                        if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity) === 0) return false;
+                        const r = el.getBoundingClientRect();
+                        return r.width > 2 && r.height > 2;
+                      };
+                      for (const sel of document.querySelectorAll('select')) {
+                        if (!vis(sel)) continue;
+                        const opts = Array.from(sel.options || []);
+                        if (opts.some(o => /account\\s*name/i.test((o.textContent || '').trim()))) return true;
+                      }
+                      const tds = document.querySelectorAll(
+                        'td[role="gridcell"][title="Financial Consultant"], td[id*="HHML_Type"], td[id$="_l_HHML_Type"]'
+                      );
+                      for (const td of tds) { if (vis(td)) return true; }
+                      return false;
+                    }"""
+                )
+                if hit:
+                    return True
+            except Exception:
+                continue
+        if elapsed < deadline:
+            _safe_page_wait(page, step, log_label="financier_mvg_popup_poll")
+        elapsed += step
+    return False
+
+
+def _financier_mvg_find_account_name_select(page: Page, content_frame_selector: str | None):
+    acc_re = re.compile(r"account\s*name", re.I)
+    for root in _siebel_all_search_roots(page, content_frame_selector):
+        try:
+            n = root.locator("select").count()
+            for i in range(min(n, 48)):
+                sel = root.locator("select").nth(i)
+                try:
+                    if sel.count() <= 0 or not sel.is_visible(timeout=450):
+                        continue
+                except Exception:
+                    continue
+                try:
+                    oc = sel.locator("option").count()
+                    for j in range(min(oc, 96)):
+                        txt = (sel.locator("option").nth(j).inner_text(timeout=250) or "").strip()
+                        if acc_re.search(txt):
+                            return sel
+                except Exception:
+                    continue
+        except Exception:
+            continue
+    return None
+
+
+def _financier_mvg_financial_consultant_data_row_count(
+    page: Page, content_frame_selector: str | None,
+) -> int:
+    """
+    Count jqGrid **data** rows under the Financial Consultant / ``HHML_Type`` column.
+    Returns **-1** if that grid is not present in any root.
+    """
+    for root in _siebel_all_search_roots(page, content_frame_selector):
+        try:
+            v = root.evaluate(
+                """() => {
+                  const vis = (el) => {
+                    if (!el) return false;
+                    const st = window.getComputedStyle(el);
+                    if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity) === 0) return false;
+                    const r = el.getBoundingClientRect();
+                    return r.width > 2 && r.height > 2;
+                  };
+                  const cells = Array.from(document.querySelectorAll(
+                    'td[role="gridcell"][title="Financial Consultant"], td[id*="HHML_Type"], td[id$="_l_HHML_Type"]'
+                  ));
+                  const marker = cells.find(vis);
+                  if (!marker) return -1;
+                  const tbl = marker.closest('table');
+                  if (!tbl) return -1;
+                  const rows = Array.from(tbl.querySelectorAll('tbody tr.jqgrow')).filter(vis);
+                  let n = 0;
+                  for (const tr of rows) {
+                    const t = (tr.textContent || '').replace(/\\s+/g, ' ').trim();
+                    if (t.length < 2) continue;
+                    if (/^(no records|no rows|no data|0\\s*-?\\s*0)/i.test(t)) continue;
+                    n++;
+                  }
+                  return n;
+                }"""
+            )
+            if isinstance(v, int) and v >= 0:
+                return v
+        except Exception:
+            continue
+    return -1
+
+
+def _financier_mvg_click_first_result_row(page: Page, content_frame_selector: str | None) -> bool:
+    for root in _siebel_all_search_roots(page, content_frame_selector):
+        try:
+            clicked = root.evaluate(
+                """() => {
+                  const vis = (el) => {
+                    if (!el) return false;
+                    const st = window.getComputedStyle(el);
+                    if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity) === 0) return false;
+                    const r = el.getBoundingClientRect();
+                    return r.width > 2 && r.height > 2;
+                  };
+                  const cells = Array.from(document.querySelectorAll(
+                    'td[role="gridcell"][title="Financial Consultant"], td[id*="HHML_Type"], td[id$="_l_HHML_Type"]'
+                  ));
+                  const marker = cells.find(vis);
+                  if (!marker) return false;
+                  const tbl = marker.closest('table');
+                  if (!tbl) return false;
+                  const rows = Array.from(tbl.querySelectorAll('tbody tr.jqgrow')).filter(vis);
+                  for (const tr of rows) {
+                    const t = (tr.textContent || '').replace(/\\s+/g, ' ').trim();
+                    if (t.length < 2) continue;
+                    if (/^(no records|no rows|no data|0\\s*-?\\s*0)/i.test(t)) continue;
+                    const td = tr.querySelector('td[role="gridcell"]') || tr.querySelector('a') || tr;
+                    try { td.click(); return true; } catch (e) {}
+                    try { tr.click(); return true; } catch (e) {}
+                  }
+                  return false;
+                }"""
+            )
+            if clicked:
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _financier_mvg_account_name_search_and_pick(
+    page: Page,
+    content_frame_selector: str | None,
+    caps: str,
+    *,
+    action_timeout_ms: int,
+) -> str | None:
+    """
+    In the open financier MVG applet: **Account Name** → Tab → ALL CAPS name → Tab → Enter;
+    require at least one Financial Consultant grid row, then first row + Enter.
+
+    Returns ``None`` on success, or a short error token / user-facing message.
+    """
+    _tmo = min(int(action_timeout_ms), 8000)
+    acc_sel = _financier_mvg_find_account_name_select(page, content_frame_selector)
+    if acc_sel is None:
+        return "Financer MVG: Account Name criteria not found in popup."
+    try:
+        acc_sel.click(timeout=_tmo)
+    except Exception:
+        try:
+            acc_sel.click(timeout=_tmo, force=True)
+        except Exception:
+            return "Financer MVG: could not focus Account Name field."
+    try:
+        acc_sel.select_option(label=re.compile(r"account\s*name", re.I), timeout=_tmo)
+    except Exception:
+        try:
+            ok_js = acc_sel.evaluate(
+                """(el) => {
+                  const opts = Array.from(el.options || []);
+                  const hit = opts.find(o => /account\\s*name/i.test((o.textContent || '').trim()));
+                  if (!hit) return false;
+                  el.focus();
+                  el.value = hit.value;
+                  el.dispatchEvent(new Event('input', { bubbles: true }));
+                  el.dispatchEvent(new Event('change', { bubbles: true }));
+                  return true;
+                }"""
+            )
+            if not ok_js:
+                return "Financer MVG: could not pick Account Name in criteria."
+        except Exception:
+            return "Financer MVG: could not pick Account Name in criteria."
+    _safe_page_wait(page, 180, log_label="financier_mvg_after_account_name")
+    try:
+        acc_sel.press("Tab", timeout=1200)
+    except Exception:
+        try:
+            page.keyboard.press("Tab")
+        except Exception:
+            pass
+    _safe_page_wait(page, 120, log_label="financier_mvg_before_name_type")
+    try:
+        page.keyboard.press("Control+a")
+    except Exception:
+        pass
+    try:
+        page.keyboard.type(caps, delay=22)
+    except Exception:
+        return "Financer MVG: could not type financier name."
+    _safe_page_wait(page, 160, log_label="financier_mvg_after_caps_type")
+    try:
+        page.keyboard.press("Tab")
+    except Exception:
+        pass
+    _safe_page_wait(page, 120, log_label="financier_mvg_before_search_enter")
+    try:
+        page.keyboard.press("Enter")
+    except Exception:
+        return "Financer MVG: Enter after search fields failed."
+    _safe_page_wait(page, 700, log_label="financier_mvg_after_search_enter")
+    n = _financier_mvg_financial_consultant_data_row_count(page, content_frame_selector)
+    if n < 0:
+        _safe_page_wait(page, 1000, log_label="financier_mvg_grid_retry_wait")
+        n = _financier_mvg_financial_consultant_data_row_count(page, content_frame_selector)
+    if n < 0:
+        return "Financer MVG: Financial Consultant result grid did not appear."
+    if n == 0:
+        return "Financer name not matched"
+    if not _financier_mvg_click_first_result_row(page, content_frame_selector):
+        return "Financer MVG: could not select first search result row."
+    _safe_page_wait(page, 350, log_label="financier_mvg_after_first_row_click")
+    try:
+        page.keyboard.press("Enter")
+    except Exception:
+        pass
+    _safe_page_wait(page, 400, log_label="financier_mvg_after_result_enter")
+    return None
+
+
 def _fill_create_order_financier_field_on_frame(
+    page: Page,
     frame,
     financier_display: str,
     *,
     action_timeout_ms: int,
-    page: Page,
-) -> bool:
+    content_frame_selector: str | None,
+    note=None,
+) -> tuple[bool, str | None]:
     """
-    **Vehicle Sales booking — Financier / Financer** MVG-style field:
+    **Vehicle Sales — Financer / Financier** on create order:
 
-    - Types **ALL CAPS** so partial names align with Siebel LOV / typeahead.
-    - **Tab** blurs the field so Open UI can pick the best canonical match.
-    - Uses **focus** or a **left-biased click** on the control — does **not** open the pick/LOV icon
-      (no F2 / ``Press F2 for Selection Field`` / icon click).
+    1. Open the MVG applet (click main financer control).
+    2. In the popup: pick **Account Name**, **Tab**, type **ALL CAPS** name, **Tab**, **Enter**.
+    3. Require at least one row in the **Financial Consultant** / ``HHML_Type`` grid; otherwise
+       return ``(False, "Financer name not matched")``.
+    4. Select the first data row and **Enter** to apply.
+
+    If no MVG popup appears (tenant variance), fall back to ALL CAPS + **Tab** on the main field only.
     """
     _caps = (financier_display or "").strip().upper()
     if not _caps:
-        return False
+        return False, None
     _tmo = min(int(action_timeout_ms), 8000)
 
-    def _try_loc(loc) -> bool:
-        try:
-            if loc.count() <= 0 or not loc.is_visible(timeout=700):
-                return False
-        except Exception:
-            return False
-        try:
-            ro = loc.evaluate("el => el.readOnly === true || el.disabled === true")
-        except Exception:
-            ro = False
-        if ro:
-            return False
+    def _find_main_financier_loc():
+        for _lbl in ("Financer", "Financier", "Financer Name", "Financier Name"):
+            pats = (
+                re.compile(rf"^\s*{re.escape(_lbl)}\s*$", re.I),
+                re.compile(re.escape(_lbl), re.I),
+            )
+            for pat in pats:
+                try:
+                    loc = frame.get_by_label(pat).first
+                    if loc.count() > 0 and loc.is_visible(timeout=650):
+                        try:
+                            ro = loc.evaluate("el => el.readOnly === true || el.disabled === true")
+                        except Exception:
+                            ro = False
+                        if not ro:
+                            return loc
+                except Exception:
+                    continue
+            esc = _lbl.replace("'", "\\'")
+            for css in (
+                f"input[aria-label*='{esc}' i]",
+                f"textarea[aria-label*='{esc}' i]",
+            ):
+                try:
+                    loc = frame.locator(css).first
+                    if loc.count() > 0 and loc.is_visible(timeout=650):
+                        try:
+                            ro = loc.evaluate("el => el.readOnly === true || el.disabled === true")
+                        except Exception:
+                            ro = False
+                        if not ro:
+                            return loc
+                except Exception:
+                    continue
+        return None
+
+    def _legacy_caps_and_tab(loc) -> bool:
         try:
             loc.focus(timeout=_tmo)
         except Exception:
@@ -15651,7 +15934,7 @@ def _fill_create_order_financier_field_on_frame(
             except Exception:
                 pass
             loc.type(_caps, delay=25, timeout=_tmo)
-        _safe_page_wait(page, 220, log_label="after_financier_caps_fill")
+        _safe_page_wait(page, 220, log_label="after_financier_caps_fill_legacy")
         try:
             loc.press("Tab", timeout=1200)
         except Exception:
@@ -15662,30 +15945,54 @@ def _fill_create_order_financier_field_on_frame(
         _safe_page_wait(page, 550, log_label="after_financier_tab_blur_lov")
         return True
 
-    for _lbl in ("Financer", "Financier", "Financer Name", "Financier Name"):
-        pats = (
-            re.compile(rf"^\s*{re.escape(_lbl)}\s*$", re.I),
-            re.compile(re.escape(_lbl), re.I),
+    loc_main = _find_main_financier_loc()
+    if loc_main is None:
+        return False, None
+
+    try:
+        loc_main.click(timeout=_tmo, position={"x": 6, "y": 12})
+    except Exception:
+        try:
+            loc_main.focus(timeout=_tmo)
+        except Exception:
+            try:
+                loc_main.click(timeout=_tmo, force=True)
+            except Exception:
+                return False, None
+    _safe_page_wait(page, 400, log_label="financier_mvg_after_main_click")
+
+    if not _financier_mvg_wait_popup_indicator(page, content_frame_selector, max_wait_ms=900):
+        try:
+            loc_main.press("F2", timeout=800)
+        except Exception:
+            pass
+        _safe_page_wait(page, 350, log_label="financier_mvg_after_f2_open")
+
+    if _financier_mvg_wait_popup_indicator(page, content_frame_selector, max_wait_ms=2800):
+        mvg_err = _financier_mvg_account_name_search_and_pick(
+            page,
+            content_frame_selector,
+            _caps,
+            action_timeout_ms=action_timeout_ms,
         )
-        for pat in pats:
+        if mvg_err is None:
+            return True, None
+        if mvg_err == "Financer name not matched":
+            return False, mvg_err
+        if callable(note):
             try:
-                loc = frame.get_by_label(pat).first
-                if _try_loc(loc):
-                    return True
+                note(
+                    f"Create Order: {mvg_err} Trying legacy financier ALL CAPS + Tab on main field."
+                )
             except Exception:
-                continue
-        esc = _lbl.replace("'", "\\'")
-        for css in (
-            f"input[aria-label*='{esc}' i]",
-            f"textarea[aria-label*='{esc}' i]",
-        ):
-            try:
-                loc = frame.locator(css).first
-                if _try_loc(loc):
-                    return True
-            except Exception:
-                continue
-    return False
+                pass
+        if _legacy_caps_and_tab(loc_main):
+            return True, None
+        return False, mvg_err
+
+    if _legacy_caps_and_tab(loc_main):
+        return True, None
+    return False, None
 
 
 def _select_dropdown_by_label_on_frame(
