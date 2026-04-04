@@ -4136,6 +4136,76 @@ def _siebel_js_select_third_level_option_matching(
     return False
 
 
+_SIEBEL_JS_PAYMENTS_SUBVIEW_ALREADY_ACTIVE = """() => {
+  try {
+    let href = String(location.href || '');
+    try { href = decodeURIComponent(href); } catch (e1) {}
+    if (/Contact(?:\\+|%2[bB])Site(?:\\+|%2[bB])Payments(?:\\+|%2[bB])View/i.test(href)) {
+      return true;
+    }
+  } catch (e) {}
+  const box = document.querySelector('#s_vctrl_div');
+  if (!box) return false;
+  const st = window.getComputedStyle(box);
+  if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+  const r = box.getBoundingClientRect();
+  if (r.width < 2 || r.height < 2) return false;
+  if (box.querySelector('li[aria-label*="Payments Selected" i]')) return true;
+  const act = box.querySelector('li.ui-tabs-active, li.siebui-active-navtab');
+  if (act) {
+    const t = (act.innerText || act.textContent || '').replace(/\\s+/g, ' ').trim();
+    if (/^Payments?$/i.test(t)) return true;
+  }
+  const anchors = box.querySelectorAll('a.ui-tabs-anchor[href*="tabScreen_noop"]');
+  for (let i = 0; i < anchors.length; i++) {
+    const a = anchors[i];
+    if (String(a.getAttribute('aria-selected') || '').toLowerCase() !== 'true') continue;
+    const t = (a.innerText || a.textContent || '').replace(/\\s+/g, ' ').trim();
+    if (/^Payments?$/i.test(t) || /^Customer\\s+payments?$/i.test(t)) return true;
+  }
+  return false;
+}"""
+
+
+def _siebel_payments_click_fast_frame_order(page: Page) -> list[Frame]:
+    """Main frame first, then a few Siebel-priority iframes (see :func:`_ordered_frames`)."""
+    seen: set[int] = set()
+    out: list[Frame] = []
+    main = page.main_frame
+    seen.add(id(main))
+    out.append(main)
+    try:
+        for f in _ordered_frames(page):
+            if id(f) in seen:
+                continue
+            seen.add(id(f))
+            out.append(f)
+            if len(out) >= 6:
+                break
+    except Exception:
+        pass
+    return out
+
+
+def _siebel_payments_subview_already_active(
+    page: Page, *, content_frame_selector: str | None
+) -> bool:
+    """
+    True when ``location`` already shows **Contact Site Payments** and/or **Payments** is selected under
+    visible ``#s_vctrl_div``. Tries main frame then the same small iframe list as
+    :func:`_siebel_payments_click_fast_frame_order`. ``content_frame_selector`` is accepted for parity
+    with callers; explicit chained roots are still handled by the full Payments click / select sweep.
+    """
+    _ = content_frame_selector
+    for frame in _siebel_payments_click_fast_frame_order(page):
+        try:
+            if bool(frame.evaluate(_SIEBEL_JS_PAYMENTS_SUBVIEW_ALREADY_ACTIVE)):
+                return True
+        except Exception:
+            continue
+    return False
+
+
 _SIEBEL_S_VCTRL_SUBVIEW_NAV_SELECTORS = (
     # Operator-confirmed: Payments lives under subview nav (same strip as Third Level tabs).
     "div#s_vctrl_div.siebui-nav-tab.siebui-subview-navs",
@@ -4172,6 +4242,7 @@ def _siebel_try_click_payments_tab_under_s_vctrl(
         except Exception:
             return False
         for css in (
+            'a.ui-tabs-anchor[href*="s_vctrl_div_tabScreen_noop"]:has-text("Payments")',
             'a.ui-tabs-anchor[href*="tabScreen_noop"]:has-text("Payments")',
             'a.ui-tabs-anchor:has-text("Payments")',
             'a.ui-tabs-anchor:has-text("Payment")',
@@ -4274,7 +4345,7 @@ def _siebel_try_click_payments_tab_under_s_vctrl(
       return false;
     }"""
 
-    for root in _siebel_search_roots_payments_third_level_first(page, content_frame_selector):
+    def _scan_root_for_payments_vctrl(root, *, sweep_tag: str) -> bool:
         for vsel in _SIEBEL_S_VCTRL_SUBVIEW_NAV_SELECTORS:
             try:
                 vwrap = root.locator(vsel)
@@ -4289,10 +4360,26 @@ def _siebel_try_click_payments_tab_under_s_vctrl(
                 continue
         try:
             if bool(_siebel_root_evaluate(root, _js_click_payments_in_subview)):
-                note("Payments: clicked Payments tab (JS fallback in subview #s_vctrl_div).")
+                note(
+                    "Payments: clicked Payments tab (JS fallback in subview #s_vctrl_div"
+                    f", {sweep_tag})."
+                )
                 return True
         except Exception:
             pass
+        return False
+
+    _fast_frames = _siebel_payments_click_fast_frame_order(page)
+    _fast_frame_ids = {id(f) for f in _fast_frames}
+    for root in _fast_frames:
+        if _scan_root_for_payments_vctrl(root, sweep_tag="fast-main-then-iframes"):
+            return True
+
+    for root in _siebel_search_roots_payments_third_level_first(page, content_frame_selector):
+        if isinstance(root, Frame) and id(root) in _fast_frame_ids:
+            continue
+        if _scan_root_for_payments_vctrl(root, sweep_tag="full-sweep"):
+            return True
     return False
 
 
@@ -4309,7 +4396,20 @@ def _siebel_try_activate_payments_tab(
     Order (latency-tuned): **JS** ``select`` option match in page/frames first (cheap ``evaluate``), then
     Playwright ``select_option`` on the Third Level bar (capped per-label timeout), then **#s_vctrl_div**
     **Payments** anchors, then frame-wide tab/link name patterns.
+
+    When the **Contact Site Payments** view is already active (URL and/or selected **Payments** under
+    ``#s_vctrl_div``), skips **select** churn and redundant tab clicks.
     """
+    if _siebel_payments_subview_already_active(
+        page, content_frame_selector=content_frame_selector
+    ):
+        try:
+            note(
+                "Payments: subview already active (URL or #s_vctrl_div) — skipping tab activation."
+            )
+        except Exception:
+            pass
+        return True
     try:
         note("Payments: activating tab — trying JS Third Level View Bar match (fast), then select_option.")
     except Exception:
