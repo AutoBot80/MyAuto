@@ -4729,6 +4729,55 @@ def _branch2_try_fill_contact_input(
     return False
 
 
+def _branch2_select_address_via_third_level_view_bar(
+    page: Page,
+    *,
+    action_timeout_ms: int,
+    content_frame_selector: str | None,
+    note,
+) -> bool:
+    """
+    Hero contact detail exposes **Third Level View Bar** as ``<select id="j_s_vctrl_div_tabScreen">``
+    (``aria-label="Third Level View Bar"``). **Address** is ``value="tabScreen6"``. This must run before
+    relying on **Address** ``ui-tabs-anchor`` clicks (tabs may not be exposed as links until selected).
+    """
+    t = min(int(action_timeout_ms), 6000)
+    select_sels = (
+        'select#j_s_vctrl_div_tabScreen',
+        '[id="j_s_vctrl_div_tabScreen"]',
+        '#s_vctrl_div select#j_s_vctrl_div_tabScreen',
+        'select[aria-label="Third Level View Bar"]',
+    )
+    for root in _siebel_all_search_roots(page, content_frame_selector):
+        for css in select_sels:
+            try:
+                loc = root.locator(css).first
+                if loc.count() == 0:
+                    continue
+                if not loc.is_visible(timeout=450):
+                    continue
+                try:
+                    loc.select_option(value="tabScreen6", timeout=t)
+                    note(
+                        "Branch (2): Third Level View Bar — selected Address (tabScreen6) via "
+                        f"{css!r}."
+                    )
+                    return True
+                except Exception:
+                    try:
+                        loc.select_option(label="Address", timeout=t)
+                        note(
+                            "Branch (2): Third Level View Bar — selected Address by label via "
+                            f"{css!r}."
+                        )
+                        return True
+                    except Exception:
+                        continue
+            except Exception:
+                continue
+    return False
+
+
 def _branch2_click_address_tab_under_s_vctrl(
     page: Page,
     *,
@@ -4737,8 +4786,16 @@ def _branch2_click_address_tab_under_s_vctrl(
     note,
 ) -> bool:
     """
-    Click the **Address** tab inside ``#s_vctrl_div`` (Hero contact detail — tabScreen6 / ui-tabs-anchor).
+    Open the **Address** third-level view: prefer **Third Level View Bar** ``select#j_s_vctrl_div_tabScreen``
+    (``tabScreen6``), then ``#s_vctrl_div`` **Address** ``ui-tabs-anchor`` / tab role fallbacks.
     """
+    if _branch2_select_address_via_third_level_view_bar(
+        page,
+        action_timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+        note=note,
+    ):
+        return True
     t = min(int(action_timeout_ms), 6000)
     addr_pat = re.compile(r"^\s*Address\s*$", re.I)
     for root in _siebel_all_search_roots(page, content_frame_selector):
