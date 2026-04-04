@@ -4706,12 +4706,46 @@ def _branch2_fill_scoped_in_root(
     action_timeout_ms: int,
     note,
     log_label: str,
+    allow_fill_fallback: bool = False,
 ) -> bool:
-    """Fill the first visible control matching *selectors* under *scopes* (empty scope = root)."""
+    """Fill the first visible control matching *selectors* under *scopes* (empty scope = root).
+
+    When *allow_fill_fallback* is True, a failed ``fill()`` (jqGrid **td**, Siebel LOV / popup input)
+    triggers inner ``input``/``textarea`` or ``press_sequentially``.
+    """
     v = (value or "").strip()
     if not v:
         return False
     t = min(int(action_timeout_ms), 6000)
+
+    def _fill_locator(loc, sc: str, css: str) -> bool:
+        try:
+            if loc.count() == 0:
+                return False
+            if not loc.is_visible(timeout=500):
+                return False
+            loc.click(timeout=min(2000, t))
+            try:
+                loc.fill(v, timeout=t)
+            except Exception:
+                if not allow_fill_fallback:
+                    raise
+                try:
+                    inner = loc.locator("input, textarea").first
+                    if inner.count() > 0 and inner.is_visible(timeout=650):
+                        inner.fill(v, timeout=t)
+                    else:
+                        loc.press_sequentially(v, delay=12)
+                except Exception:
+                    try:
+                        loc.press_sequentially(v, delay=12)
+                    except Exception:
+                        return False
+            note(f"Branch (2): filled {log_label} in {sc} via {css!r} → {v[:48]!r}.")
+            return True
+        except Exception:
+            return False
+
     for scope in scopes:
         for css in selectors:
             try:
@@ -4724,15 +4758,9 @@ def _branch2_fill_scoped_in_root(
                     loc = container.locator(css).first
                 else:
                     loc = root.locator(css).first
-                if loc.count() == 0:
-                    continue
-                if not loc.is_visible(timeout=500):
-                    continue
-                loc.click(timeout=min(2000, t))
-                loc.fill(v, timeout=t)
                 sc = scope or "(root)"
-                note(f"Branch (2): filled {log_label} in {sc} via {css!r} → {v[:48]!r}.")
-                return True
+                if _fill_locator(loc, sc, css):
+                    return True
             except Exception:
                 continue
     return False
@@ -4948,8 +4976,9 @@ def _siebel_video_branch2_address_postal_and_save(
 ) -> bool:
     """
     Video branch **(2)** (no Open enquiry): after Relation's Name path, fill **Home Phone #** and **Email**,
-    open **Address**, set **City** (``1_City``) then **Postal Code** (``name=Postal_Code`` / ``1_Postal_Code``),
-    preferring **iframe#S_A1** then **#SWEApplet1 #gview_s_1_l** (grid inside applet), then **#SWEApplet1**, then **Ctrl+S** (Save toolbar fallback).
+    open **Address**, set **City** (``name=City``, ``id=1_City``, Sieb LOV classes) then **Postal Code**
+    (jqGrid ``1_s_1_l_Postal_Code`` / ``name=Postal_Code`` / ``1_Postal_Code``),
+    preferring **iframe#S_A1** then **#SWEApplet1** / **form SWE_Form1_0** / **div#S_A1**, then **Ctrl+S** (Save toolbar fallback).
 
     ``home_phone`` defaults from DMS landline / alternate phone at the caller; ``contact_email`` defaults
     to ``na@gmail.com`` when the caller passes None. ``city`` from DMS (e.g. city or district).
@@ -5013,10 +5042,33 @@ def _siebel_video_branch2_address_postal_and_save(
         note("Branch (2): Address tab not found — trying Postal Code field anyway.")
 
     city_val = (city or "").strip()
-    # ``#gview_s_1_l`` jqGrid is nested under ``#SWEApplet1`` on Address — search that path first.
-    _scopes = ("#SWEApplet1 #gview_s_1_l", "#SWEApplet1", "#gview_s_1_l", "")
-    _city_sels = ('[id="1_City"]', 'input#1_City', 'input[id="1_City"]')
+    # jqGrid **gview** may be class ``gview_1_l`` or ``gview_s_1_l``; cell id ``1_s_1_l_Postal_Code`` (td).
+    _scopes = (
+        "#SWEApplet1 #gview_s_1_l",
+        "#SWEApplet1 .gview_1_l",
+        "#SWEApplet1 .gview_s_1_l",
+        'form[name="SWE_Form1_0"]',
+        "#SWEApplet1",
+        "div#S_A1",
+        "#S_A1",
+        "#gview_s_1_l",
+        ".gview_1_l",
+        "",
+    )
+    _city_sels = (
+        'input#1_City',
+        '[id="1_City"]',
+        'input[id="1_City"]',
+        'input[name="City"]',
+        'input.siebui-input-popup[id="1_City"]',
+        'input[role="textbox"][name="City"]',
+        'input[aria-labelledby*="s_1_l_City" i]',
+    )
     _postal_sels = (
+        "td#1_s_1_l_Postal_Code",
+        '[id="1_s_1_l_Postal_Code"]',
+        "td#1_s_1_l_Postal_Code input",
+        '[id="1_s_1_l_Postal_Code"] input',
         'input[name="Postal_Code"]',
         '[id="1_Postal_Code"]',
         'input[id="1_Postal_Code"]',
@@ -5033,6 +5085,7 @@ def _siebel_video_branch2_address_postal_and_save(
                 action_timeout_ms=action_timeout_ms,
                 note=note,
                 log_label="City (1_City)",
+                allow_fill_fallback=True,
             )
         return _branch2_fill_scoped_in_root(
             root,
@@ -5042,6 +5095,7 @@ def _siebel_video_branch2_address_postal_and_save(
             action_timeout_ms=action_timeout_ms,
             note=note,
             log_label="Postal Code",
+            allow_fill_fallback=True,
         )
 
     _filled = False
@@ -5070,8 +5124,8 @@ def _siebel_video_branch2_address_postal_and_save(
     if not _filled:
         note(
             "Branch (2): could not locate or fill Postal Code "
-            "(tried iframe#S_A1 → #SWEApplet1 #gview_s_1_l / #SWEApplet1 / #gview_s_1_l: "
-            "name=Postal_Code, id 1_Postal_Code)."
+            "(tried iframe#S_A1 → SWEApplet1 / form SWE_Form1_0 / div#S_A1 / "
+            "td#1_s_1_l_Postal_Code, inputs name=Postal_Code / id 1_Postal_Code)."
         )
         return False
 
