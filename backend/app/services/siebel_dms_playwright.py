@@ -274,8 +274,22 @@ def _detect_siebel_error_popup(page: Page, content_frame_selector: str | None) -
         if tl.startswith("applet") and "viewrn" in tl:
             return False
         # Real errors contain keywords
-        _err_kw = ("error", "required", "sbl-", "invalid", "cannot", "failed",
-                    "mandatory", "not valid", "missing", "exception", "unable")
+        _err_kw = (
+            "error",
+            "required",
+            "sbl-",
+            "invalid",
+            "cannot",
+            "failed",
+            "mandatory",
+            "not valid",
+            "missing",
+            "exception",
+            "unable",
+            "must",
+            "empty",
+            "financier",
+        )
         for kw in _err_kw:
             if kw in tl:
                 return True
@@ -353,6 +367,130 @@ def _detect_siebel_error_popup(page: Page, content_frame_selector: str | None) -
             return alert_txt
     except Exception:
         pass
+    return None
+
+
+_SIEBEL_JS_DISMISS_TOP_ERROR_DIALOG = """() => {
+  const vis = (el) => {
+    if (!el) return false;
+    const st = window.getComputedStyle(el);
+    if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity) === 0) return false;
+    const r = el.getBoundingClientRect();
+    return r.width > 2 && r.height > 2;
+  };
+  const label = (el) =>
+    (el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('title') || '').trim().toLowerCase();
+  const isOkish = (t) =>
+    /^(ok|close|yes|dismiss|got\\s*it|continue)$/i.test(t) || t === 'ok' || t.startsWith('ok ');
+  const clickIf = (btn) => {
+    if (!btn || !vis(btn)) return false;
+    if (!isOkish(label(btn))) return false;
+    try {
+      btn.click();
+      return true;
+    } catch (e) {}
+    return false;
+  };
+  const shells = document.querySelectorAll(
+    "[role='alertdialog'], [role='alert'], [role='dialog'], .ui-dialog, " +
+    ".siebui-popup, .siebui-msg-popup, .siebui-popup-error, [id*='ErrorPopup' i], [id*='_swe_alert' i]"
+  );
+  for (const shell of shells) {
+    if (!vis(shell)) continue;
+    const cand = shell.querySelectorAll(
+      'button, input[type="button"], input[type="submit"], a[role="button"], ' +
+      '.ui-dialog-buttonpane button, .siebui-btn-ctrl, .siebui-popup-btn-ok, .siebui-btn-primary'
+    );
+    for (const b of cand) {
+      if (clickIf(b)) return 'shell-btn';
+    }
+  }
+  for (const b of document.querySelectorAll('.ui-dialog-buttonpane button, button.siebui-btn-primary')) {
+    if (clickIf(b)) return 'global-btn';
+  }
+  return '';
+}"""
+
+
+def _try_dismiss_siebel_error_dialog(page: Page, content_frame_selector: str | None) -> bool:
+    """
+    Best-effort dismiss of the top Siebel / jQuery UI error or alert dialog (OK / Close / Yes).
+    Tries each search root and main ordered frames; then Escape + Enter on the page.
+    """
+    roots: list = []
+    try:
+        roots.extend(list(_siebel_locator_search_roots(page, content_frame_selector)))
+    except Exception:
+        pass
+    try:
+        roots.extend(list(_ordered_frames(page)))
+    except Exception:
+        pass
+    roots.append(page)
+    seen: set[int] = set()
+    for root in roots:
+        k = id(root)
+        if k in seen:
+            continue
+        seen.add(k)
+        try:
+            hit = root.evaluate(_SIEBEL_JS_DISMISS_TOP_ERROR_DIALOG)
+            if hit:
+                return True
+        except Exception:
+            continue
+    try:
+        page.keyboard.press("Escape")
+        _safe_page_wait(page, 120, log_label="after_siebel_error_escape")
+    except Exception:
+        pass
+    try:
+        page.keyboard.press("Enter")
+        _safe_page_wait(page, 120, log_label="after_siebel_error_enter")
+    except Exception:
+        pass
+    return False
+
+
+def _poll_and_handle_siebel_error_popup(
+    page: Page,
+    content_frame_selector: str | None,
+    note: Callable[..., object],
+    *,
+    context: str,
+    total_ms: int = 1100,
+    step_ms: int = 280,
+) -> str | None:
+    """
+    After an action that may trigger Siebel validation errors, poll for a visible error/alert dialog.
+
+    If found: log via ``note``, attempt to dismiss (OK/Close), return the message text so the caller
+    can fail with a clear ``out["error"]``. Returns ``None`` if no popup was detected within the budget.
+    """
+    cap = max(200, min(int(total_ms), 8000))
+    step = max(120, min(int(step_ms), 1200))
+    deadline = time.monotonic() + cap / 1000.0
+    last: str | None = None
+    while time.monotonic() < deadline:
+        try:
+            last = _detect_siebel_error_popup(page, content_frame_selector)
+        except Exception:
+            last = None
+        if last:
+            try:
+                note(f"{context}: Siebel error popup → {last!r:.420}")
+            except Exception:
+                pass
+            for _ in range(3):
+                _try_dismiss_siebel_error_dialog(page, content_frame_selector)
+                _safe_page_wait(page, 200, log_label="after_siebel_error_dismiss_try")
+                try:
+                    if not _detect_siebel_error_popup(page, content_frame_selector):
+                        break
+                except Exception:
+                    break
+            return last
+        _safe_page_wait(page, step, log_label="poll_siebel_error_popup")
     return None
 
 
@@ -5681,134 +5819,6 @@ def _siebel_video_branch2_address_postal_and_save(
         return False
 
 
-def _siebel_diagnostic_write_frame_element_scrape_after_address_line1(
-    page: Page,
-    log_fp: TextIO,
-    note: Callable[..., object],
-    *,
-    content_frame_selector: str | None,
-    max_elements_sample_per_frame: int = 1500,
-) -> None:
-    """
-    **One run** after Address Line 1 is filled: append a structured scrape of **all frames** (main + iframes)
-    and, per document, a **sample** of elements (tag, id, class, name, aria-label, href, role, visibility, text)
-    plus **payHits**: nodes whose id/class/aria/text matches **payment / s_vctrl / tabScreen / subview / Third Level**.
-
-    Written to the Playwright DMS execution log so operators can pick exact locators (e.g. **Payments** tab).
-    """
-    _js = """(maxSample) => {
-      const vis = (el) => {
-        if (!el) return false;
-        const st = window.getComputedStyle(el);
-        if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
-        const r = el.getBoundingClientRect();
-        return r.width >= 1 && r.height >= 1;
-      };
-      const total = document.querySelectorAll('*').length;
-      const sampled = [];
-      let n = 0;
-      for (const el of document.querySelectorAll('*')) {
-        if (n >= maxSample) break;
-        const tag = el.tagName;
-        if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT') continue;
-        const id = el.id || '';
-        const cls = (el.className && String(el.className).slice(0, 220)) || '';
-        const nm = el.getAttribute('name') || '';
-        const al = el.getAttribute('aria-label') || '';
-        const href = el.getAttribute('href') || '';
-        const role = el.getAttribute('role') || '';
-        const typ = el.getAttribute('type') || '';
-        let txt = '';
-        try {
-          txt = (el.innerText || el.textContent || '').trim().replace(/\\s+/g, ' ').slice(0, 140);
-        } catch (e) {}
-        sampled.push({ tag, id, cls, nm, al, href, role, typ, vis: vis(el), txt });
-        n++;
-      }
-      const payHits = [];
-      document.querySelectorAll('*').forEach((el) => {
-        if (!vis(el)) return;
-        const blob = (
-          (el.id || '') + ' ' + (el.className || '') + ' ' +
-          (el.getAttribute('aria-label') || '') + ' ' +
-          (el.innerText || '').slice(0, 240)
-        ).toLowerCase();
-        if (!/payment|s_vctrl|tabscreen|subview|third\\s*level|j_s_vctrl|siebui-nav-tab/i.test(blob)) return;
-        payHits.push({
-          tag: el.tagName,
-          id: el.id || '',
-          cls: String(el.className || '').slice(0, 220),
-          nm: el.getAttribute('name') || '',
-          al: el.getAttribute('aria-label') || '',
-          href: el.getAttribute('href') || '',
-          role: el.getAttribute('role') || '',
-          txt: (el.innerText || el.textContent || '').trim().replace(/\\s+/g, ' ').slice(0, 200)
-        });
-      });
-      return {
-        href: location.href,
-        title: document.title,
-        elementCount: total,
-        sampledCount: sampled.length,
-        sampled,
-        payHits
-      };
-    }"""
-
-    try:
-        log_fp.write(
-            "\n--- diagnostic: all frames / elements (after Address Line 1; one run) ---\n"
-        )
-        log_fp.write(f"diagnostic_ist={_ts_ist_iso()}\n")
-        log_fp.write(
-            f"max_elements_sample_per_frame={max_elements_sample_per_frame} "
-            "(full document elementCount always reported; sampled is first N nodes in DOM order)\n"
-        )
-        log_fp.write(f"DMS_SIEBEL_CONTENT_FRAME_SELECTOR={content_frame_selector!r}\n")
-        frames: list[Frame] = []
-        _seen_f: set[int] = set()
-        _main = page.main_frame
-        for _f in [_main, *_ordered_frames(page)]:
-            _k = id(_f)
-            if _k in _seen_f:
-                continue
-            _seen_f.add(_k)
-            frames.append(_f)
-
-        for idx, fr in enumerate(frames):
-            _fe_t = ""
-            try:
-                _fe = fr.frame_element()
-                _fe_t = (_fe.get_attribute("title") or "").strip()[:220]
-            except Exception:
-                pass
-            try:
-                _url = (fr.url or "").strip()[:500]
-            except Exception:
-                _url = ""
-            try:
-                _nm = (fr.name or "").strip()[:120]
-            except Exception:
-                _nm = ""
-            log_fp.write(f"\n--- frame_index={idx} name={_nm!r} url={_url!r} iframe_title={_fe_t!r} ---\n")
-            try:
-                payload = fr.evaluate(_js, max_elements_sample_per_frame)
-                log_fp.write(json.dumps(payload, ensure_ascii=False, indent=2))
-                log_fp.write("\n")
-            except Exception as _ex:
-                log_fp.write(f"frame_evaluate_failed={_ex!r}\n")
-        log_fp.flush()
-        note(
-            "Diagnostic: wrote frame/element scrape to this log (section "
-            "'--- diagnostic: all frames / elements (after Address Line 1; one run) ---')."
-        )
-    except Exception as _diag_ex:
-        try:
-            note(f"Diagnostic: frame scrape failed: {_diag_ex!r}")
-        except Exception:
-            pass
-
-
 def _siebel_video_path_after_find_go_to_all_enquiries(
     page: Page,
     *,
@@ -5820,16 +5830,12 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
     content_frame_selector: str | None,
     note,
     skip_search_hit_click: bool = False,
-    log_fp: TextIO | None = None,
 ) -> bool:
     """
     Steps after **Find + Go** from operator recording *Find Contact Enquiry*:
     optional **Siebel Find** tab → click the **Search Results** mobile drill-in → **Contacts** →
     **Contact_Enquiry** (Contacts + Enquiries tables, Enquiry# link) → **Enquiry** → **All Enquiries**.
     If *skip_search_hit_click* is True, the left-pane drilldown click is skipped (already done by caller).
-
-    When *log_fp* is set and Address Line 1 was filled from a non-empty DB substring, a **one-run**
-    diagnostic block is appended (see :func:`_siebel_diagnostic_write_frame_element_scrape_after_address_line1`).
     """
     if not skip_search_hit_click:
         if not _wait_for_mobile_search_hit_ready(
@@ -5981,17 +5987,6 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
             "Relation's Name filled; optional Address Line 1 substring applied when available. "
             "Continuing video SOP (branch (2) contact fields / Payments next)."
         )
-        if (addr_line1_value or "").strip() and log_fp is not None:
-            _siebel_diagnostic_write_frame_element_scrape_after_address_line1(
-                page,
-                log_fp,
-                note,
-                content_frame_selector=content_frame_selector,
-            )
-        elif (addr_line1_value or "").strip() and log_fp is None:
-            note(
-                "Diagnostic: frame/element scrape not written (no Playwright DMS log file handle)."
-            )
         return True
 
     def _read_first_name_probe() -> None:
@@ -11278,6 +11273,16 @@ def _attach_vehicle_to_bkg(
         page.wait_for_load_state("networkidle", timeout=8_000)
     except Exception:
         pass
+    _err_after_order = _poll_and_handle_siebel_error_popup(
+        page,
+        content_frame_selector,
+        note,
+        context="attach_vehicle_to_bkg after Order# header link",
+        total_ms=1400,
+        step_ms=300,
+    )
+    if _err_after_order:
+        return False, f"Siebel error after Order# link: {_err_after_order[:200]}", {}
 
     # ── Step 11: Click "Apply Campaign" button ──
     _ac_clicked = False
@@ -11709,6 +11714,20 @@ def _create_order(
             action_timeout_ms=action_timeout_ms,
         ):
             return False, "Create Order: Pending My Orders row but could not open Order# drill-down.", scraped
+        _err_mo_p = _poll_and_handle_siebel_error_popup(
+            page,
+            content_frame_selector,
+            note,
+            context="Create Order after My Orders Order# click (pending)",
+            total_ms=1400,
+            step_ms=300,
+        )
+        if _err_mo_p:
+            return (
+                False,
+                f"Create Order: Siebel error after My Orders Order# click (pending): {_err_mo_p[:220]}",
+                scraped,
+            )
         _safe_page_wait(page, 1200, log_label="after_my_orders_pending_drilldown")
         scraped["order_number"] = _mo_po or scraped.get("order_number") or ""
         return _finalize_my_orders_attach("pending")
@@ -11723,6 +11742,20 @@ def _create_order(
             action_timeout_ms=action_timeout_ms,
         ):
             return False, "Create Order: Allocated My Orders row but could not open Order# drill-down.", scraped
+        _err_mo_a = _poll_and_handle_siebel_error_popup(
+            page,
+            content_frame_selector,
+            note,
+            context="Create Order after My Orders Order# click (allocated)",
+            total_ms=1400,
+            step_ms=300,
+        )
+        if _err_mo_a:
+            return (
+                False,
+                f"Create Order: Siebel error after My Orders Order# click (allocated): {_err_mo_a[:220]}",
+                scraped,
+            )
         _safe_page_wait(page, 1200, log_label="after_my_orders_allocated_drilldown")
         scraped["order_number"] = _mo_po or scraped.get("order_number") or ""
         return _finalize_my_orders_attach("allocated")
@@ -12083,18 +12116,24 @@ def _create_order(
         # #endregion
 
         if _is_financed:
+            _fin_caps = _fin_name.upper()
             _fin_name_ok = False
             for root in _roots():
                 try:
+                    if _fill_create_order_financier_field_on_frame(
+                        root,
+                        _fin_name,
+                        action_timeout_ms=action_timeout_ms,
+                        page=page,
+                    ):
+                        _fin_name_ok = True
+                        _locked_root = root
+                        break
                     for _lbl in ("Financer", "Financier", "Financer Name", "Financier Name"):
-                        if _fill_by_label_on_frame(root, _lbl, _fin_name, action_timeout_ms=action_timeout_ms):
-                            _fin_name_ok = True
-                            _locked_root = root
-                            break
                         if _select_dropdown_by_label_on_frame(
                             root,
                             label=_lbl,
-                            value=_fin_name,
+                            value=_fin_caps,
                             action_timeout_ms=min(action_timeout_ms, 8000),
                         ):
                             _fin_name_ok = True
@@ -12108,9 +12147,16 @@ def _create_order(
                 _fin_err = _detect_siebel_error_popup(page, content_frame_selector)
                 if _fin_err:
                     return False, f"Siebel error while setting Financier/Financer: {_fin_err[:200]}", scraped
-                return False, f"Could not set Financier/Financer with value {_fin_name!r}.", scraped
+                return (
+                    False,
+                    f"Could not set Financier/Financer (ALL CAPS + Tab path) from {_fin_name!r} (typed {_fin_caps!r}).",
+                    scraped,
+                )
             _safe_page_wait(page, 500, log_label="after_financier_fill")
-            note(f"Create Order: set Financier/Financer using input {_fin_name!r}.")
+            note(
+                "Create Order: Financier/Financer set via ALL CAPS entry + Tab blur (no pick icon); "
+                f"source={_fin_name!r} typed={_fin_caps!r}."
+            )
             _fin_post_err = _detect_siebel_error_popup(page, content_frame_selector)
             if _fin_post_err:
                 return False, f"Siebel error after Financier/Financer input: {_fin_post_err[:200]}", scraped
@@ -12802,12 +12848,38 @@ def _create_order(
                 return False, "Could not press Ctrl+S on Sales Order form.", scraped
         _safe_page_wait(page, 1500, log_label="after_create_order_save")
         note("Create Order: pressed Ctrl+S on Sales Order form.")
+        _err_co_save = _poll_and_handle_siebel_error_popup(
+            page,
+            content_frame_selector,
+            note,
+            context="Create Order after Ctrl+S save (Sales Order form)",
+            total_ms=1600,
+            step_ms=320,
+        )
+        if _err_co_save:
+            return (
+                False,
+                f"Create Order: Siebel error after Ctrl+S save: {_err_co_save[:220]}",
+                scraped,
+            )
         order_no = _scrape_order_number_current()
         scraped["order_number"] = order_no
         if order_no:
             note(f"Create Order: scraped Order#={order_no!r} after save.")
         else:
             note("Create Order: Order# not readable after save (best-effort).")
+        _on_norm = (order_no or "").strip()
+        if _on_norm and _on_norm.upper().startswith("TXN"):
+            note(
+                "Create Order: Order# still looks like an unsaved transaction id (TXN…) after Ctrl+S — "
+                f"treating save as failed ({_on_norm!r})."
+            )
+            return (
+                False,
+                "Create Order: Sales order did not persist after Ctrl+S — Order# is still a TXN transaction "
+                f"placeholder ({_on_norm[:80]}). Fix validation errors (e.g. required fields) and retry.",
+                scraped,
+            )
         _att_ok, _att_err, _att_scraped = _attach_vehicle_to_bkg(
             page,
             full_chassis=full_chassis,
@@ -15556,6 +15628,101 @@ def _fill_by_label_on_frame(
     return False
 
 
+def _fill_create_order_financier_field_on_frame(
+    frame,
+    financier_display: str,
+    *,
+    action_timeout_ms: int,
+    page: Page,
+) -> bool:
+    """
+    **Vehicle Sales booking — Financier / Financer** MVG-style field:
+
+    - Types **ALL CAPS** so partial names align with Siebel LOV / typeahead.
+    - **Tab** blurs the field so Open UI can pick the best canonical match.
+    - Uses **focus** or a **left-biased click** on the control — does **not** open the pick/LOV icon
+      (no F2 / ``Press F2 for Selection Field`` / icon click).
+    """
+    _caps = (financier_display or "").strip().upper()
+    if not _caps:
+        return False
+    _tmo = min(int(action_timeout_ms), 8000)
+
+    def _try_loc(loc) -> bool:
+        try:
+            if loc.count() <= 0 or not loc.is_visible(timeout=700):
+                return False
+        except Exception:
+            return False
+        try:
+            ro = loc.evaluate("el => el.readOnly === true || el.disabled === true")
+        except Exception:
+            ro = False
+        if ro:
+            return False
+        try:
+            loc.focus(timeout=_tmo)
+        except Exception:
+            try:
+                loc.click(timeout=_tmo, position={"x": 6, "y": 12})
+            except Exception:
+                try:
+                    loc.click(timeout=_tmo, force=True)
+                except Exception:
+                    return False
+        try:
+            loc.fill("", timeout=_tmo)
+        except Exception:
+            pass
+        try:
+            loc.press("Control+a", timeout=800)
+        except Exception:
+            pass
+        try:
+            loc.fill(_caps, timeout=_tmo)
+        except Exception:
+            try:
+                loc.press("Control+a", timeout=800)
+            except Exception:
+                pass
+            loc.type(_caps, delay=25, timeout=_tmo)
+        _safe_page_wait(page, 220, log_label="after_financier_caps_fill")
+        try:
+            loc.press("Tab", timeout=1200)
+        except Exception:
+            try:
+                page.keyboard.press("Tab")
+            except Exception:
+                pass
+        _safe_page_wait(page, 550, log_label="after_financier_tab_blur_lov")
+        return True
+
+    for _lbl in ("Financer", "Financier", "Financer Name", "Financier Name"):
+        pats = (
+            re.compile(rf"^\s*{re.escape(_lbl)}\s*$", re.I),
+            re.compile(re.escape(_lbl), re.I),
+        )
+        for pat in pats:
+            try:
+                loc = frame.get_by_label(pat).first
+                if _try_loc(loc):
+                    return True
+            except Exception:
+                continue
+        esc = _lbl.replace("'", "\\'")
+        for css in (
+            f"input[aria-label*='{esc}' i]",
+            f"textarea[aria-label*='{esc}' i]",
+        ):
+            try:
+                loc = frame.locator(css).first
+                if _try_loc(loc):
+                    return True
+            except Exception:
+                continue
+    return False
+
+
 def _select_dropdown_by_label_on_frame(
     frame: Frame,
     *,
@@ -16752,7 +16919,6 @@ def Playwright_Hero_DMS_fill(
             content_frame_selector=content_frame_selector,
             note=note,
             skip_search_hit_click=True,
-            log_fp=log_fp,
         ):
             step("Stopped: video SOP failed while opening customer record or filling Relation's Name.")
             out["error"] = (

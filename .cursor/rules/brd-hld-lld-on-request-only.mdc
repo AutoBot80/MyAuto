@@ -1,0 +1,18 @@
+---
+description: Do not edit BRD, HLD, or LLD unless the user explicitly asks to update them
+alwaysApply: true
+---
+
+# BRD, HLD, LLD — documentation on request only
+
+**Owner preference:** Do **not** edit these files during normal implementation or as a default “finish the task” step:
+
+- `Documentation/business-requirements-document.md` (BRD)
+- `Documentation/high-level-design.md` (HLD)
+- `Documentation/low-level-design.md` (LLD)
+
+**Do** edit them when the user **explicitly** asks to update, refresh, or sync BRD, HLD, and/or LLD (by filename or clear intent, e.g. “update the LLD changelog”).
+
+**Precedence:** For the three paths above, this rule **overrides** `documentation-maintenance.mdc` and any checklist that would require BRD/HLD/LLD changes on every substantive code edit. Other docs (e.g. `Database DDL.md` when schema/DDL changes, `Documentation/checkpoints.md` when creating a checkpoint) still follow their dedicated rules.
+
+**After coding:** You may **one line** in the reply that BRD/HLD/LLD were left unchanged and can be updated when requested — do **not** open or patch those three files unless asked.

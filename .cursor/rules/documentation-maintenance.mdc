@@ -5,7 +5,9 @@ alwaysApply: true
 
 # Documentation Maintenance
 
-**All substantive code, config, or database changes must be reflected in the project documentation in the same change set** (or immediately after, if the user explicitly splits work). Do not leave behavior, APIs, flows, or schema undocumented.
+**BRD / HLD / LLD:** See **`.cursor/rules/brd-hld-lld-on-request-only.mdc`** — those three files are **not** updated on every iteration; only when the user asks.
+
+**All other substantive code, config, or database changes** (per the table below) should still be reflected in the relevant documentation in the same change set (or immediately after, if the user explicitly splits work). Do not leave behavior, APIs, flows, or schema undocumented where this rule still applies.
 
 ## Canonical documents (under `Documentation/`)
 
@@ -30,7 +32,7 @@ alwaysApply: true
 
 ## Agent checklist
 
-Before finishing a task that touched `backend/`, `client/`, `DDL/`, or DMS/Siebel flows: confirm which docs above were updated or explicitly N/A (**Database DDL.md** only when schema/DDL changed).
+Before finishing a task that touched `backend/`, `client/`, `DDL/`, or DMS/Siebel flows: confirm which docs above were updated or explicitly N/A (**Database DDL.md** only when schema/DDL changed). **BRD / HLD / LLD:** N/A by default unless the user requested an update to those files.
 
 **If the task created or named a git checkpoint / milestone tag:** confirm **`Documentation/checkpoints.md`** was updated or explicitly N/A (N/A only when no checkpoint was created).
 
