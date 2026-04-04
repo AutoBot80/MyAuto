@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import json
+from typing import TextIO
 import re
 import time
 from collections.abc import Callable
@@ -5580,6 +5581,134 @@ def _siebel_video_branch2_address_postal_and_save(
         return False
 
 
+def _siebel_diagnostic_write_frame_element_scrape_after_address_line1(
+    page: Page,
+    log_fp: TextIO,
+    note: Callable[..., object],
+    *,
+    content_frame_selector: str | None,
+    max_elements_sample_per_frame: int = 1500,
+) -> None:
+    """
+    **One run** after Address Line 1 is filled: append a structured scrape of **all frames** (main + iframes)
+    and, per document, a **sample** of elements (tag, id, class, name, aria-label, href, role, visibility, text)
+    plus **payHits**: nodes whose id/class/aria/text matches **payment / s_vctrl / tabScreen / subview / Third Level**.
+
+    Written to the Playwright DMS execution log so operators can pick exact locators (e.g. **Payments** tab).
+    """
+    _js = """(maxSample) => {
+      const vis = (el) => {
+        if (!el) return false;
+        const st = window.getComputedStyle(el);
+        if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+        const r = el.getBoundingClientRect();
+        return r.width >= 1 && r.height >= 1;
+      };
+      const total = document.querySelectorAll('*').length;
+      const sampled = [];
+      let n = 0;
+      for (const el of document.querySelectorAll('*')) {
+        if (n >= maxSample) break;
+        const tag = el.tagName;
+        if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT') continue;
+        const id = el.id || '';
+        const cls = (el.className && String(el.className).slice(0, 220)) || '';
+        const nm = el.getAttribute('name') || '';
+        const al = el.getAttribute('aria-label') || '';
+        const href = el.getAttribute('href') || '';
+        const role = el.getAttribute('role') || '';
+        const typ = el.getAttribute('type') || '';
+        let txt = '';
+        try {
+          txt = (el.innerText || el.textContent || '').trim().replace(/\\s+/g, ' ').slice(0, 140);
+        } catch (e) {}
+        sampled.push({ tag, id, cls, nm, al, href, role, typ, vis: vis(el), txt });
+        n++;
+      }
+      const payHits = [];
+      document.querySelectorAll('*').forEach((el) => {
+        if (!vis(el)) return;
+        const blob = (
+          (el.id || '') + ' ' + (el.className || '') + ' ' +
+          (el.getAttribute('aria-label') || '') + ' ' +
+          (el.innerText || '').slice(0, 240)
+        ).toLowerCase();
+        if (!/payment|s_vctrl|tabscreen|subview|third\\s*level|j_s_vctrl|siebui-nav-tab/i.test(blob)) return;
+        payHits.push({
+          tag: el.tagName,
+          id: el.id || '',
+          cls: String(el.className || '').slice(0, 220),
+          nm: el.getAttribute('name') || '',
+          al: el.getAttribute('aria-label') || '',
+          href: el.getAttribute('href') || '',
+          role: el.getAttribute('role') || '',
+          txt: (el.innerText || el.textContent || '').trim().replace(/\\s+/g, ' ').slice(0, 200)
+        });
+      });
+      return {
+        href: location.href,
+        title: document.title,
+        elementCount: total,
+        sampledCount: sampled.length,
+        sampled,
+        payHits
+      };
+    }"""
+
+    try:
+        log_fp.write(
+            "\n--- diagnostic: all frames / elements (after Address Line 1; one run) ---\n"
+        )
+        log_fp.write(f"diagnostic_ist={_ts_ist_iso()}\n")
+        log_fp.write(
+            f"max_elements_sample_per_frame={max_elements_sample_per_frame} "
+            "(full document elementCount always reported; sampled is first N nodes in DOM order)\n"
+        )
+        log_fp.write(f"DMS_SIEBEL_CONTENT_FRAME_SELECTOR={content_frame_selector!r}\n")
+        frames: list[Frame] = []
+        _seen_f: set[int] = set()
+        _main = page.main_frame
+        for _f in [_main, *_ordered_frames(page)]:
+            _k = id(_f)
+            if _k in _seen_f:
+                continue
+            _seen_f.add(_k)
+            frames.append(_f)
+
+        for idx, fr in enumerate(frames):
+            _fe_t = ""
+            try:
+                _fe = fr.frame_element()
+                _fe_t = (_fe.get_attribute("title") or "").strip()[:220]
+            except Exception:
+                pass
+            try:
+                _url = (fr.url or "").strip()[:500]
+            except Exception:
+                _url = ""
+            try:
+                _nm = (fr.name or "").strip()[:120]
+            except Exception:
+                _nm = ""
+            log_fp.write(f"\n--- frame_index={idx} name={_nm!r} url={_url!r} iframe_title={_fe_t!r} ---\n")
+            try:
+                payload = fr.evaluate(_js, max_elements_sample_per_frame)
+                log_fp.write(json.dumps(payload, ensure_ascii=False, indent=2))
+                log_fp.write("\n")
+            except Exception as _ex:
+                log_fp.write(f"frame_evaluate_failed={_ex!r}\n")
+        log_fp.flush()
+        note(
+            "Diagnostic: wrote frame/element scrape to this log (section "
+            "'--- diagnostic: all frames / elements (after Address Line 1; one run) ---')."
+        )
+    except Exception as _diag_ex:
+        try:
+            note(f"Diagnostic: frame scrape failed: {_diag_ex!r}")
+        except Exception:
+            pass
+
+
 def _siebel_video_path_after_find_go_to_all_enquiries(
     page: Page,
     *,
@@ -5591,12 +5720,16 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
     content_frame_selector: str | None,
     note,
     skip_search_hit_click: bool = False,
+    log_fp: TextIO | None = None,
 ) -> bool:
     """
     Steps after **Find + Go** from operator recording *Find Contact Enquiry*:
     optional **Siebel Find** tab → click the **Search Results** mobile drill-in → **Contacts** →
     **Contact_Enquiry** (Contacts + Enquiries tables, Enquiry# link) → **Enquiry** → **All Enquiries**.
     If *skip_search_hit_click* is True, the left-pane drilldown click is skipped (already done by caller).
+
+    When *log_fp* is set and Address Line 1 was filled from a non-empty DB substring, a **one-run**
+    diagnostic block is appended (see :func:`_siebel_diagnostic_write_frame_element_scrape_after_address_line1`).
     """
     if not skip_search_hit_click:
         if not _wait_for_mobile_search_hit_ready(
@@ -5748,6 +5881,17 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
             "Relation's Name filled; optional Address Line 1 substring applied when available. "
             "Continuing video SOP (branch (2) contact fields / Payments next)."
         )
+        if (addr_line1_value or "").strip() and log_fp is not None:
+            _siebel_diagnostic_write_frame_element_scrape_after_address_line1(
+                page,
+                log_fp,
+                note,
+                content_frame_selector=content_frame_selector,
+            )
+        elif (addr_line1_value or "").strip() and log_fp is None:
+            note(
+                "Diagnostic: frame/element scrape not written (no Playwright DMS log file handle)."
+            )
         return True
 
     def _read_first_name_probe() -> None:
@@ -16508,6 +16652,7 @@ def Playwright_Hero_DMS_fill(
             content_frame_selector=content_frame_selector,
             note=note,
             skip_search_hit_click=True,
+            log_fp=log_fp,
         ):
             step("Stopped: video SOP failed while opening customer record or filling Relation's Name.")
             out["error"] = (

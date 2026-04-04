@@ -519,3 +519,4 @@ Bulk upload automates the ingestion of scanned documents from a shared folder in
 | 3.152 | Apr 2026 | — | **§6.1a** / **Contacts → Payments**: tab activation avoids long Playwright stalls (JS match first; capped **`select_option`**) — **LLD** **6.258** |
 | 3.153 | Apr 2026 | — | **§6.1a** / **Payments**: prefer Third Level shell found from **S_A1** / **parent_frame** (same lineage as Address postal) — **LLD** **6.259** |
 | 3.154 | Apr 2026 | — | **§6.1a** / **Payments** tab: **`#s_vctrl_div.siebui-subview-navs`** strip + anchor/JS fallbacks — **LLD** **6.260** |
+| 3.155 | Apr 2026 | — | **§6.1a** / operator diagnostics: after Address Line 1 fill, **Playwright_DMS** log may include per-frame element sample + **payHits** — **LLD** **6.261** |
