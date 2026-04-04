@@ -15648,6 +15648,13 @@ def _financier_mvg_wait_popup_indicator(
                         'td[role="gridcell"][title="Financial Consultant"], td[id*="HHML_Type"], td[id$="_l_HHML_Type"]'
                       );
                       for (const td of tds) { if (vis(td)) return true; }
+                      const dlg = Array.from(document.querySelectorAll(
+                        '.siebui-popup, .ui-dialog, .ui-dialog-content, [role="dialog"]'
+                      )).find(d => vis(d) && /pick\\s*financers/i.test(d.textContent || ''));
+                      if (dlg) {
+                        const s = dlg.querySelector('select');
+                        if (s && vis(s)) return true;
+                      }
                       return false;
                     }"""
                 )
@@ -15659,6 +15666,133 @@ def _financier_mvg_wait_popup_indicator(
             _safe_page_wait(page, step, log_label="financier_mvg_popup_poll")
         elapsed += step
     return False
+
+
+def _financier_mvg_find_pick_financers_dialog_toolbar(
+    page: Page, content_frame_selector: str | None,
+) -> tuple[object | None, object | None]:
+    """
+    **Pick Financers** MVG (Hero): toolbar row is **[search icon] | field-type ``<select>`` (Account ID) |
+    value ``<input>`` | Go** — not always a 2-column criteria table. Return ``(select, value_input)``.
+    """
+    _dlg_title = re.compile(r"Pick\s*Financers", re.I)
+    for root in _siebel_all_search_roots(page, content_frame_selector):
+        try:
+            dlg = (
+                root.locator(
+                    ".siebui-popup, .ui-dialog, .ui-dialog-content, [role=\"dialog\"]"
+                )
+                .filter(has_text=_dlg_title)
+                .first
+            )
+            if dlg.count() <= 0 or not dlg.is_visible(timeout=800):
+                continue
+            dd = dlg.locator("select").first
+            if dd.count() <= 0 or not dd.is_visible(timeout=700):
+                continue
+            val = None
+            try:
+                row = dlg.locator("tr:has(select)").first
+                if row.count() > 0 and row.is_visible(timeout=400):
+                    vt = row.locator('input[type="text"]').first
+                    if vt.count() > 0 and vt.is_visible(timeout=500):
+                        val = vt
+            except Exception:
+                pass
+            if val is None:
+                try:
+                    n = dlg.locator("input").count()
+                    for ii in range(min(n, 24)):
+                        cand = dlg.locator("input").nth(ii)
+                        if cand.count() <= 0 or not cand.is_visible(timeout=300):
+                            continue
+                        try:
+                            in_grid = cand.evaluate(
+                                """el => !!el.closest(
+                                  'table.ui-jqgrid-btable, table.ui-jqgrid-btable, .ui-jqgrid-btable, .ui-jqgrid'
+                                )"""
+                            )
+                        except Exception:
+                            in_grid = False
+                        if in_grid:
+                            continue
+                        typ = (
+                            cand.evaluate("el => String(el.type || '').toLowerCase()") or ""
+                        ).strip()
+                        if typ in ("hidden", "button", "submit", "image", "checkbox", "radio"):
+                            continue
+                        if typ in ("text", "search", ""):
+                            val = cand
+                            break
+                except Exception:
+                    pass
+            if val is None:
+                try:
+                    nx = dd.locator(
+                        "xpath=ancestor::td[1]/following-sibling::td[1]//input"
+                    ).first
+                    if nx.count() > 0 and nx.is_visible(timeout=500):
+                        val = nx
+                except Exception:
+                    pass
+            return dd, val
+        except Exception:
+            continue
+    return None, None
+
+
+def _financier_mvg_select_option_account_name(loc, *, action_timeout_ms: int) -> bool:
+    """Set a native ``<select>`` to **Account Name** (not Account ID)."""
+    _tmo = min(int(action_timeout_ms), 8000)
+    for lbl in (
+        re.compile(r"^\s*Account\s*Name\s*$", re.I),
+        re.compile(r"Account\s*Name", re.I),
+    ):
+        try:
+            loc.select_option(label=lbl, timeout=_tmo)
+            if _financier_mvg_criteria_shows_account_name(loc):
+                return True
+        except Exception:
+            continue
+    try:
+        idx = loc.evaluate(
+            """el => {
+              const opts = Array.from(el.options || []);
+              const i = opts.findIndex(o => {
+                const t = String(o.textContent || '').trim();
+                if (!/^account\\s*name$/i.test(t)) return false;
+                if (/account\\s*id/i.test(t)) return false;
+                return true;
+              });
+              return i;
+            }"""
+        )
+        if isinstance(idx, int) and idx >= 0:
+            loc.select_option(index=idx, timeout=_tmo)
+            if _financier_mvg_criteria_shows_account_name(loc):
+                return True
+    except Exception:
+        pass
+    try:
+        ok = loc.evaluate(
+            """(el) => {
+              const opts = Array.from(el.options || []);
+              const hit = opts.find(o => {
+                const t = String(o.textContent || '').trim();
+                return /^account\\s*name$/i.test(t) && !/account\\s*id/i.test(t);
+              });
+              if (!hit) return false;
+              el.focus();
+              el.value = hit.value;
+              el.dispatchEvent(new Event('input', { bubbles: true }));
+              el.dispatchEvent(new Event('change', { bubbles: true }));
+              el.dispatchEvent(new Event('blur', { bubbles: true }));
+              return true;
+            }"""
+        )
+        return bool(ok) and _financier_mvg_criteria_shows_account_name(loc)
+    except Exception:
+        return False
 
 
 def _financier_mvg_find_criteria_type_locator(page: Page, content_frame_selector: str | None):
@@ -15815,11 +15949,25 @@ def _financier_mvg_click_account_name_in_open_lov(
 
 def _financier_mvg_criteria_shows_account_name(loc) -> bool:
     try:
-        tx = (
-            loc.input_value(timeout=350)
-            or loc.evaluate("el => (el.value != null ? String(el.value) : (el.textContent || ''))")
-            or ""
-        ).lower()
+        tag = (loc.evaluate("el => (el.tagName || '').toLowerCase()") or "").strip()
+        if tag == "select":
+            tx = (
+                loc.evaluate(
+                    """el => {
+                  const o = el.options[el.selectedIndex];
+                  return o ? String(o.textContent || o.label || '').trim() : '';
+                }"""
+                )
+                or ""
+            ).lower()
+        else:
+            tx = (
+                loc.input_value(timeout=350)
+                or loc.evaluate("el => (el.value != null ? String(el.value) : (el.textContent || ''))")
+                or ""
+            ).lower()
+        if re.search(r"\baccount\s*id\b", tx) and not re.search(r"\baccount\s*name\b", tx):
+            return False
         if "account" in tx and "name" in tx:
             return True
         if "acct" in tx and "name" in tx:
@@ -15855,27 +16003,7 @@ def _financier_mvg_pick_account_name_on_criteria_control(
             return False
     _safe_page_wait(page, 200, log_label="financier_mvg_criteria_click")
     if tag == "select":
-        try:
-            loc.select_option(label=re.compile(r"account\s*name", re.I), timeout=_tmo)
-            return True
-        except Exception:
-            try:
-                if loc.evaluate(
-                    """(el) => {
-                  const opts = Array.from(el.options || []);
-                  const hit = opts.find(o => /account\\s*name/i.test((o.textContent || '').trim()));
-                  if (!hit) return false;
-                  el.focus();
-                  el.value = hit.value;
-                  el.dispatchEvent(new Event('input', { bubbles: true }));
-                  el.dispatchEvent(new Event('change', { bubbles: true }));
-                  return true;
-                }"""
-                ):
-                    return True
-            except Exception:
-                pass
-            return False
+        return _financier_mvg_select_option_account_name(loc, action_timeout_ms=_tmo)
 
     def _press_key(key: str) -> None:
         try:
@@ -16046,7 +16174,12 @@ def _financier_mvg_account_name_search_and_pick(
     Returns ``None`` on success, or a short error token / user-facing message.
     """
     _tmo = min(int(action_timeout_ms), 8000)
-    criteria_loc, value_loc = _financier_mvg_find_search_row_pair(page, content_frame_selector)
+    criteria_loc, value_loc = None, None
+    _pf_dd, _pf_val = _financier_mvg_find_pick_financers_dialog_toolbar(page, content_frame_selector)
+    if _pf_dd is not None:
+        criteria_loc, value_loc = _pf_dd, _pf_val
+    if criteria_loc is None:
+        criteria_loc, value_loc = _financier_mvg_find_search_row_pair(page, content_frame_selector)
     if criteria_loc is None:
         criteria_loc = _financier_mvg_find_criteria_type_locator(page, content_frame_selector)
     if criteria_loc is None:
