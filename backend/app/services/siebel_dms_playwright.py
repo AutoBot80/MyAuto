@@ -15632,6 +15632,18 @@ def _financier_mvg_wait_popup_indicator(
                         const opts = Array.from(sel.options || []);
                         if (opts.some(o => /account\\s*name/i.test((o.textContent || '').trim()))) return true;
                       }
+                      const pop = document.querySelector('.siebui-popup, .ui-dialog, [role="dialog"], [class*="siebui-applet" i]');
+                      if (pop && vis(pop)) {
+                        const tr0 = pop.querySelector('table tbody tr');
+                        if (tr0) {
+                          const tds = tr0.querySelectorAll('td');
+                          if (tds.length >= 2) {
+                            const c0 = tds[0];
+                            const ctl = c0 && (c0.querySelector('select') || c0.querySelector('input:not([type="hidden"]):not([type="button"])'));
+                            if (ctl && vis(ctl)) return true;
+                          }
+                        }
+                      }
                       const tds = document.querySelectorAll(
                         'td[role="gridcell"][title="Financial Consultant"], td[id*="HHML_Type"], td[id$="_l_HHML_Type"]'
                       );
@@ -15649,8 +15661,45 @@ def _financier_mvg_wait_popup_indicator(
     return False
 
 
-def _financier_mvg_find_account_name_select(page: Page, content_frame_selector: str | None):
+def _financier_mvg_find_criteria_type_locator(page: Page, content_frame_selector: str | None):
+    """
+    MVG search applet: first column is often a **Siebel combo** (looks like a text field) for the
+    criterion type (pick **Account Name**), second column is the value. Prefer popup-scoped first-row
+    cells; fall back to any native ``select`` that lists Account Name.
+    """
     acc_re = re.compile(r"account\s*name", re.I)
+    _popup_first_cell = (
+        ".siebui-popup table tbody tr:first-child td:nth-child(1) select",
+        ".siebui-popup table tbody tr:first-child td:nth-child(1) input",
+        ".ui-dialog table tbody tr:first-child td:nth-child(1) select",
+        ".ui-dialog table tbody tr:first-child td:nth-child(1) input",
+        ".ui-dialog-content table tbody tr:first-child td:nth-child(1) select",
+        ".ui-dialog-content table tbody tr:first-child td:nth-child(1) input",
+        "[role=\"dialog\"] table tbody tr:first-child td:nth-child(1) select",
+        "[role=\"dialog\"] table tbody tr:first-child td:nth-child(1) input",
+        ".siebui-applet table tbody tr:first-child td:nth-child(1) select",
+        ".siebui-applet table tbody tr:first-child td:nth-child(1) input",
+    )
+    for root in _siebel_all_search_roots(page, content_frame_selector):
+        for css in _popup_first_cell:
+            try:
+                loc = root.locator(css).first
+                if loc.count() <= 0 or not loc.is_visible(timeout=500):
+                    continue
+                try:
+                    row2 = root.locator(
+                        ".siebui-popup table tbody tr:first-child td:nth-child(2) input, "
+                        ".ui-dialog table tbody tr:first-child td:nth-child(2) input, "
+                        "[role=\"dialog\"] table tbody tr:first-child td:nth-child(2) input, "
+                        ".siebui-applet table tbody tr:first-child td:nth-child(2) input"
+                    ).first
+                    if row2.count() > 0 and row2.is_visible(timeout=350):
+                        return loc
+                except Exception:
+                    pass
+                return loc
+            except Exception:
+                continue
     for root in _siebel_all_search_roots(page, content_frame_selector):
         try:
             n = root.locator("select").count()
@@ -15672,6 +15721,85 @@ def _financier_mvg_find_account_name_select(page: Page, content_frame_selector: 
         except Exception:
             continue
     return None
+
+
+def _financier_mvg_pick_account_name_on_criteria_control(loc, page: Page, *, action_timeout_ms: int) -> bool:
+    """
+    Native ``select``: ``select_option`` / JS. Siebel **combo** (input): same pattern as My Orders
+    Find — ``Alt+ArrowDown``, arrow until value hints **Account Name**, else type ``Account Name``.
+    """
+    _tmo = min(int(action_timeout_ms), 8000)
+    try:
+        tag = (loc.evaluate("el => (el.tagName || '').toLowerCase()") or "").strip()
+    except Exception:
+        tag = ""
+    try:
+        loc.scroll_into_view_if_needed(timeout=_tmo)
+    except Exception:
+        pass
+    try:
+        loc.click(timeout=_tmo)
+    except Exception:
+        try:
+            loc.click(timeout=_tmo, force=True)
+        except Exception:
+            return False
+    _safe_page_wait(page, 200, log_label="financier_mvg_criteria_click")
+    if tag == "select":
+        try:
+            loc.select_option(label=re.compile(r"account\s*name", re.I), timeout=_tmo)
+            return True
+        except Exception:
+            try:
+                return bool(
+                    loc.evaluate(
+                        """(el) => {
+                  const opts = Array.from(el.options || []);
+                  const hit = opts.find(o => /account\\s*name/i.test((o.textContent || '').trim()));
+                  if (!hit) return false;
+                  el.focus();
+                  el.value = hit.value;
+                  el.dispatchEvent(new Event('input', { bubbles: true }));
+                  el.dispatchEvent(new Event('change', { bubbles: true }));
+                  return true;
+                }"""
+                    )
+                )
+            except Exception:
+                return False
+    try:
+        loc.press("Alt+ArrowDown", timeout=1200)
+    except Exception:
+        pass
+    _safe_page_wait(page, 280, log_label="financier_mvg_criteria_lov_open")
+    _picked = False
+    for _ in range(40):
+        try:
+            loc.press("ArrowDown", timeout=450)
+        except Exception:
+            break
+        try:
+            tx = (
+                loc.input_value(timeout=220)
+                or loc.evaluate("el => (el.value != null ? String(el.value) : (el.textContent || ''))")
+                or ""
+            ).lower()
+        except Exception:
+            tx = ""
+        if "account" in tx and "name" in tx:
+            _picked = True
+            break
+    if not _picked:
+        try:
+            loc.press("Control+a", timeout=500)
+        except Exception:
+            pass
+        try:
+            loc.type("Account Name", delay=38, timeout=2800)
+            _picked = True
+        except Exception:
+            pass
+    return _picked
 
 
 def _financier_mvg_financial_consultant_data_row_count(
@@ -15769,39 +15897,16 @@ def _financier_mvg_account_name_search_and_pick(
     Returns ``None`` on success, or a short error token / user-facing message.
     """
     _tmo = min(int(action_timeout_ms), 8000)
-    acc_sel = _financier_mvg_find_account_name_select(page, content_frame_selector)
-    if acc_sel is None:
+    criteria_loc = _financier_mvg_find_criteria_type_locator(page, content_frame_selector)
+    if criteria_loc is None:
         return "Financer MVG: Account Name criteria not found in popup."
-    try:
-        acc_sel.click(timeout=_tmo)
-    except Exception:
-        try:
-            acc_sel.click(timeout=_tmo, force=True)
-        except Exception:
-            return "Financer MVG: could not focus Account Name field."
-    try:
-        acc_sel.select_option(label=re.compile(r"account\s*name", re.I), timeout=_tmo)
-    except Exception:
-        try:
-            ok_js = acc_sel.evaluate(
-                """(el) => {
-                  const opts = Array.from(el.options || []);
-                  const hit = opts.find(o => /account\\s*name/i.test((o.textContent || '').trim()));
-                  if (!hit) return false;
-                  el.focus();
-                  el.value = hit.value;
-                  el.dispatchEvent(new Event('input', { bubbles: true }));
-                  el.dispatchEvent(new Event('change', { bubbles: true }));
-                  return true;
-                }"""
-            )
-            if not ok_js:
-                return "Financer MVG: could not pick Account Name in criteria."
-        except Exception:
-            return "Financer MVG: could not pick Account Name in criteria."
+    if not _financier_mvg_pick_account_name_on_criteria_control(
+        criteria_loc, page, action_timeout_ms=action_timeout_ms
+    ):
+        return "Financer MVG: could not pick Account Name in criteria dropdown."
     _safe_page_wait(page, 180, log_label="financier_mvg_after_account_name")
     try:
-        acc_sel.press("Tab", timeout=1200)
+        criteria_loc.press("Tab", timeout=1200)
     except Exception:
         try:
             page.keyboard.press("Tab")
