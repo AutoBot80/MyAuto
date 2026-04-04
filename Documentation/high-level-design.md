@@ -445,3 +445,5 @@ The SQL view **`form_dms_view`** is **removed**; the same mapping is implemented
 | 1.147 | Apr 2026 | — | **`siebel_dms_playwright`**: branch **(2)** **`#SWEApplet1 #gview_s_1_l`** scope order — **LLD** **6.251**; **BRD** **BR-19** |
 | 1.148 | Apr 2026 | — | **`siebel_dms_playwright`**: branch **(2)** jqGrid **`1_s_1_l_Postal_Code`** + **`allow_fill_fallback`** — **LLD** **6.252**; **BRD** **BR-19** |
 | 1.149 | Apr 2026 | — | **`siebel_dms_playwright`**: branch **(2)** City LOV **`name=City`** / **`1_City`** — **LLD** **6.253**; **BRD** **BR-19** |
+| 1.150 | Apr 2026 | — | **`_siebel_try_activate_payments_tab`**: Third Level View Bar + **`#s_vctrl_div`** **Payments** — **LLD** **6.254** |
+| 1.151 | Apr 2026 | — | **`Playwright_Hero_DMS_fill` / `_add_customer_payment`**: Save icon before **Ctrl+S**, post-save **Transaction#** poll + alternate save; distinct **`step`/`error`** by failure code — **LLD** **6.255** |

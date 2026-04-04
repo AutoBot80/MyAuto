@@ -3895,6 +3895,152 @@ def _mobile_text_patterns_for_grid(mobile: str) -> list[re.Pattern[str]]:
     return out
 
 
+_SIEBEL_THIRD_LEVEL_VIEW_BAR_SELECTORS = (
+    "select#j_s_vctrl_div_tabScreen",
+    '[id="j_s_vctrl_div_tabScreen"]',
+    "#s_vctrl_div select#j_s_vctrl_div_tabScreen",
+    'select[aria-label="Third Level View Bar"]',
+)
+
+
+def _siebel_try_select_payments_third_level_view_bar(
+    page: Page,
+    *,
+    action_timeout_ms: int,
+    content_frame_selector: str | None,
+    note,
+) -> bool:
+    """
+    Same control as branch **(2)** Address: ``<select id="j_s_vctrl_div_tabScreen">`` (Third Level View Bar
+    combo behind the chevron). On Hero Connect the **Payments** third-level view uses the ``<option>`` whose
+    visible label is exactly **Payments** — that string is tried first via ``select_option(label=…)``.
+    """
+    t = min(int(action_timeout_ms), 6000)
+    _labels = (
+        "Payments",  # canonical operator-visible label
+        "Payment",
+        "Customer payments",
+        "Customer Payments",
+        "Payment details",
+        "Payment Details",
+        "Payment information",
+    )
+    for root in _siebel_all_search_roots(page, content_frame_selector):
+        for css in _SIEBEL_THIRD_LEVEL_VIEW_BAR_SELECTORS:
+            try:
+                loc = root.locator(css).first
+                if loc.count() == 0:
+                    continue
+                if not loc.is_visible(timeout=450):
+                    continue
+                for lbl in _labels:
+                    try:
+                        loc.select_option(label=lbl, timeout=t)
+                        note(
+                            f"Payments: Third Level View Bar — selected {lbl!r} via {css!r} "
+                            "(same control as Address tabScreen6 path)."
+                        )
+                        return True
+                    except Exception:
+                        continue
+            except Exception:
+                continue
+    return False
+
+
+def _siebel_js_select_third_level_option_matching(
+    page: Page,
+    *,
+    label_regex: str,
+    content_frame_selector: str | None,
+) -> bool:
+    """``evaluate`` in main + iframes: pick first ``<option>`` whose text matches ``label_regex``."""
+    js = """(needle) => {
+      let re;
+      try { re = new RegExp(needle, 'i'); } catch (e) { return false; }
+      const sels = ['select#j_s_vctrl_div_tabScreen', '[id="j_s_vctrl_div_tabScreen"]'];
+      for (const sel of sels) {
+        const s = document.querySelector(sel);
+        if (!s || String(s.tagName).toLowerCase() !== 'select') continue;
+        for (let i = 0; i < s.options.length; i++) {
+          const o = s.options[i];
+          const t = String(o.textContent || o.label || o.value || '').trim();
+          if (re.test(t)) {
+            s.selectedIndex = i;
+            s.dispatchEvent(new Event('input', { bubbles: true }));
+            s.dispatchEvent(new Event('change', { bubbles: true }));
+            return true;
+          }
+        }
+      }
+      return false;
+    }"""
+    targets: list = [page]
+    try:
+        targets.extend(list(_ordered_frames(page)))
+    except Exception:
+        pass
+    for ctx in targets:
+        try:
+            if hasattr(ctx, "evaluate") and ctx.evaluate(js, label_regex):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _siebel_try_click_payments_tab_under_s_vctrl(
+    page: Page,
+    *,
+    action_timeout_ms: int,
+    content_frame_selector: str | None,
+    note,
+) -> bool:
+    """Click **Payments** ``ui-tabs-anchor`` / tab under ``#s_vctrl_div`` (parallel to Address fallbacks)."""
+    t = min(int(action_timeout_ms), 6000)
+    pay_pat = re.compile(r"^\s*Payments?\s*$", re.I)
+    for root in _siebel_all_search_roots(page, content_frame_selector):
+        try:
+            vwrap = root.locator("#s_vctrl_div")
+            if vwrap.count() == 0:
+                continue
+            vctrl = vwrap.first
+            if not vctrl.is_visible(timeout=300):
+                continue
+            for css in (
+                'a.ui-tabs-anchor[href*="tabScreen_noop"]:has-text("Payments")',
+                'a.ui-tabs-anchor:has-text("Payments")',
+                'a.ui-tabs-anchor:has-text("Payment")',
+            ):
+                try:
+                    loc = vctrl.locator(css).first
+                    if loc.count() > 0 and loc.is_visible(timeout=550):
+                        loc.click(timeout=t)
+                        note("Payments: clicked Payments tab under #s_vctrl_div (CSS).")
+                        return True
+                except Exception:
+                    continue
+            try:
+                loc = vctrl.get_by_role("tab", name=pay_pat).first
+                if loc.count() > 0 and loc.is_visible(timeout=550):
+                    loc.click(timeout=t)
+                    note("Payments: clicked Payments tab under #s_vctrl_div (role=tab).")
+                    return True
+            except Exception:
+                pass
+            try:
+                loc = vctrl.locator("a.ui-tabs-anchor").filter(has_text=pay_pat).first
+                if loc.count() > 0 and loc.is_visible(timeout=550):
+                    loc.click(timeout=t)
+                    note("Payments: clicked Payments tab under #s_vctrl_div (anchor filter).")
+                    return True
+            except Exception:
+                pass
+        except Exception:
+            continue
+    return False
+
+
 def _siebel_try_activate_payments_tab(
     page: Page,
     *,
@@ -3903,9 +4049,39 @@ def _siebel_try_activate_payments_tab(
     note,
 ) -> bool:
     """
-    Open the **Payments** view before Payment Lines automation. Siebel labels vary
-    (**Payments**, **Payment**, **Payment Details**, **Customer Payment**, etc.).
+    Open the **Payments** view before Payment Lines automation. Prefer the **Third Level View Bar**
+    ``select#j_s_vctrl_div_tabScreen`` (same as **Address** ``tabScreen6`` path) with ``<option>`` label
+    **Payments**, then **#s_vctrl_div** **Payments** anchors, then frame-wide tab/link name patterns.
     """
+    if _siebel_try_select_payments_third_level_view_bar(
+        page,
+        action_timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+        note=note,
+    ):
+        _safe_page_wait(page, 500, log_label="after_payments_third_level_select")
+        return True
+    if _siebel_js_select_third_level_option_matching(
+        page,
+        label_regex=r"^Payments$|^Payment$|Customer\s+payments?|Payment\s+details",
+        content_frame_selector=content_frame_selector,
+    ):
+        try:
+            note(
+                "Payments: Third Level View Bar — selected Payments option via JS option-text match."
+            )
+        except Exception:
+            pass
+        _safe_page_wait(page, 500, log_label="after_payments_third_level_js")
+        return True
+    if _siebel_try_click_payments_tab_under_s_vctrl(
+        page,
+        action_timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+        note=note,
+    ):
+        _safe_page_wait(page, 500, log_label="after_payments_s_vctrl_anchor")
+        return True
     _patterns: tuple[re.Pattern[str], ...] = (
         re.compile(r"^Payments?$", re.I),
         re.compile(r"^Payment details$", re.I),
@@ -4865,14 +5041,8 @@ def _branch2_select_address_via_third_level_view_bar(
     relying on **Address** ``ui-tabs-anchor`` clicks (tabs may not be exposed as links until selected).
     """
     t = min(int(action_timeout_ms), 6000)
-    select_sels = (
-        'select#j_s_vctrl_div_tabScreen',
-        '[id="j_s_vctrl_div_tabScreen"]',
-        '#s_vctrl_div select#j_s_vctrl_div_tabScreen',
-        'select[aria-label="Third Level View Bar"]',
-    )
     for root in _siebel_all_search_roots(page, content_frame_selector):
-        for css in select_sels:
+        for css in _SIEBEL_THIRD_LEVEL_VIEW_BAR_SELECTORS:
             try:
                 loc = root.locator(css).first
                 if loc.count() == 0:
@@ -6771,6 +6941,100 @@ def _gather_payment_line_toolbar_roots(page: Page, content_frame_selector: str |
     return out
 
 
+_PAYMENT_LINES_SAVE_ICON_SELECTORS = (
+    "a[aria-label='Payment Lines List:Save']",
+    "button[aria-label='Payment Lines List:Save']",
+    "a[title='Payment Lines List:Save']",
+    "button[title='Payment Lines List:Save']",
+    "a[aria-label='Payment Lines List: Save']",
+    "button[aria-label='Payment Lines List: Save']",
+    "a[title='Payment Lines List: Save']",
+    "button[title='Payment Lines List: Save']",
+    "a[title*='Save' i]",
+    "button[title*='Save' i]",
+    "a[aria-label*='Save' i]",
+    "button[aria-label*='Save' i]",
+    "a.siebui-icon-save",
+    "button.siebui-icon-save",
+)
+
+
+def _merge_payment_lines_toolbar_roots_for_save(
+    page: Page,
+    content_frame_selector: str | None,
+    initial_roots: list,
+) -> list:
+    """Initial ``+`` roots first, then a fresh gather so the Save control's frame is included after edits."""
+    out: list = []
+    seen: set[int] = set()
+    for r in list(initial_roots) + list(_gather_payment_line_toolbar_roots(page, content_frame_selector) or []):
+        k = id(r)
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(r)
+    return out if out else list(initial_roots)
+
+
+def _try_click_payment_lines_save_icon(
+    roots: list,
+    *,
+    action_timeout_ms: int,
+) -> tuple[bool, str | None]:
+    """Returns (clicked, selector_that_worked_or_none)."""
+    for sroot in roots:
+        for css in _PAYMENT_LINES_SAVE_ICON_SELECTORS:
+            try:
+                btn = sroot.locator(css).first
+                if btn.count() > 0 and btn.is_visible(timeout=500):
+                    try:
+                        btn.click(timeout=action_timeout_ms)
+                    except Exception:
+                        btn.click(timeout=action_timeout_ms, force=True)
+                    return True, css
+            except Exception:
+                continue
+    return False, None
+
+
+def _poll_payment_lines_transaction_verified(
+    page: Page,
+    content_frame_selector: str | None,
+    *,
+    note: Callable[..., object],
+    total_ms: int = 9000,
+    step_ms: int = 450,
+) -> bool:
+    """Poll grid roots until Transaction# (or tenant row heuristic) appears or timeout."""
+    t0 = time.monotonic()
+    attempt = 0
+    while True:
+        elapsed_ms = (time.monotonic() - t0) * 1000.0
+        if elapsed_ms >= total_ms:
+            break
+        attempt += 1
+        for _vr in _gather_payment_line_toolbar_roots(page, content_frame_selector):
+            try:
+                if _payment_lines_list_has_populated_transaction_number(_vr):
+                    _det_via = _payment_lines_detection_reason(_vr)
+                    note(
+                        "Payments: post-save row detection matched "
+                        f"(detected_via={_det_via}, poll_attempt={attempt})."
+                    )
+                    return True
+            except Exception:
+                continue
+        remaining_ms = total_ms - (time.monotonic() - t0) * 1000.0
+        if remaining_ms <= 0:
+            break
+        _safe_page_wait(
+            page,
+            int(min(step_ms, max(80, remaining_ms))),
+            log_label=f"payment_txn_poll_{attempt}",
+        )
+    return False
+
+
 def _add_customer_payment(
     page: Page,
     *,
@@ -6778,7 +7042,7 @@ def _add_customer_payment(
     content_frame_selector: str | None,
     note,
     vehicle_context: dict | None = None,
-) -> bool:
+) -> tuple[bool, str]:
     """
     Open **Payments**, locate the frame(s) where **Payment Lines List:New** (``+``) lives, then **in that
     document** check the grid for a row with a populated **Transaction #**. If present, skip add.
@@ -6788,6 +7052,13 @@ def _add_customer_payment(
     - if vehicle_type starts with ``motorcycle`` (tolerates ``motorcyle`` typo) and cubic_capacity < 130:
       amount = ``90000``
     - else amount = ``120000``
+
+    Returns ``(True, "")`` on success. On failure, ``(False, code)`` where ``code`` is one of:
+    ``no_payment_lines_root``, ``payment_lines_frame``, ``payment_plus``, ``payment_save``,
+    ``payment_verify``, ``payment_exception`` — used for operator ``step`` / ``out["error"]`` text.
+
+    Save: **Payment Lines** Save icon first (merged toolbar roots), **Ctrl+S** if no icon; post-save
+    **Transaction#** detection is polled; on miss, the **alternate** save (icon vs Ctrl+S) is tried once.
     """
     _vt_raw = str((vehicle_context or {}).get("vehicle_type") or "").strip()
     _cc_raw = str((vehicle_context or {}).get("cubic_capacity") or "").strip()
@@ -6860,7 +7131,7 @@ def _add_customer_payment(
             "Payment debug: Payment Lines toolbar (List:New / Save) not found — "
             "cannot locate '+' frame; ensure the Payments view shows Payment Lines."
         )
-        return False
+        return False, "no_payment_lines_root"
 
     def _try_receipts_query_in_root(root, idx: int) -> bool:
         """
@@ -6897,7 +7168,7 @@ def _add_customer_payment(
                     "Payments: Payment Lines list already has a row with populated Transaction# — "
                     f"skipping '+' and new-line entry (detected_via={_det_via})."
                 )
-                return True
+                return True, ""
         except Exception:
             continue
 
@@ -7031,7 +7302,7 @@ def _add_customer_payment(
                             pass
                     else:
                         note("Payment lines scoped frame not detected; stopping to avoid focus drift.")
-                        return False
+                        return False, "payment_lines_frame"
                 # Prefer the exact frame that contains Transaction_Type fields.
                 tx_frame = None
                 for frame in _ordered_frames(page):
@@ -7358,59 +7629,19 @@ def _add_customer_payment(
                 )
                 _safe_page_wait(page, 400, log_label="after_amount_before_save")
 
-                # Reuse the same Payment Lines roots as the initial gather (same ``+`` frame context);
-                # full re-gather is slow and can stall on FrameLocator resolution; fall back if needed.
-                save_action_roots = list(payment_toolbar_roots)
+                save_action_roots = _merge_payment_lines_toolbar_roots_for_save(
+                    page, content_frame_selector, payment_toolbar_roots
+                )
                 note(
-                    f"Payment debug: save action roots reuse initial gather (count={len(save_action_roots)}); "
-                    "full re-gather only if Save icon fallback must scan and misses."
+                    f"Payment debug: save action roots merged initial + fresh gather (count={len(save_action_roots)}). "
+                    "Primary save: Payment Lines Save icon; fallback: Ctrl+S."
                 )
 
-                # Primary save: Ctrl+S. Save icon click remains fallback.
-                save_clicked = False
-                try:
-                    page.keyboard.press("Control+s")
-                    save_clicked = True
-                    note("Payment debug: used Ctrl+S as primary save.")
-                except Exception as _save_key_ex:
-                    note(f"Payment debug: Ctrl+S primary save failed: {_save_key_ex}")
-                if not save_clicked:
-                    for sroot in save_action_roots:
-                        for css in (
-                            "a[aria-label='Payment Lines List:Save']",
-                            "button[aria-label='Payment Lines List:Save']",
-                            "a[title='Payment Lines List:Save']",
-                            "button[title='Payment Lines List:Save']",
-                            "a[aria-label='Payment Lines List: Save']",
-                            "button[aria-label='Payment Lines List: Save']",
-                            "a[title='Payment Lines List: Save']",
-                            "button[title='Payment Lines List: Save']",
-                            "a[title*='Save' i]",
-                            "button[title*='Save' i]",
-                            "a[aria-label*='Save' i]",
-                            "button[aria-label*='Save' i]",
-                            "a.siebui-icon-save",
-                            "button.siebui-icon-save",
-                        ):
-                            try:
-                                btn = sroot.locator(css).first
-                                if btn.count() > 0 and btn.is_visible(timeout=500):
-                                    try:
-                                        btn.click(timeout=action_timeout_ms)
-                                    except Exception:
-                                        btn.click(timeout=action_timeout_ms, force=True)
-                                    save_clicked = True
-                                    note(f"Payment debug: Save clicked via selector fallback: {css}")
-                                    break
-                            except Exception:
-                                continue
-                        if save_clicked:
-                            break
-                if save_clicked:
-                    _safe_page_wait(page, 3000, log_label="after_payment_save_processing")
-                    # Check for Siebel error popup / alert dialog after save.
+                def _payment_save_error_popup_text() -> str | None:
                     _err_msg = None
-                    for _chk_root in list(_siebel_locator_search_roots(page, content_frame_selector)) + list(_ordered_frames(page)):
+                    for _chk_root in list(_siebel_locator_search_roots(page, content_frame_selector)) + list(
+                        _ordered_frames(page)
+                    ):
                         try:
                             _err_msg = _chk_root.evaluate(
                                 """() => {
@@ -7421,7 +7652,6 @@ def _add_customer_payment(
                                     const r = el.getBoundingClientRect();
                                     return r.width > 5 && r.height > 5;
                                   };
-                                  // Siebel inline error / modal popup
                                   for (const s of [
                                     "[role='alertdialog']", "[role='alert']",
                                     ".siebui-popup-error", ".siebui-alert",
@@ -7441,36 +7671,97 @@ def _add_customer_payment(
                                 break
                         except Exception:
                             continue
+                    return _err_msg
+
+                def _run_one_save_attempt(method: str) -> bool:
+                    if method == "icon":
+                        _ok, _css = _try_click_payment_lines_save_icon(
+                            save_action_roots,
+                            action_timeout_ms=action_timeout_ms,
+                        )
+                        if _ok:
+                            note(f"Payment debug: clicked Payment Lines Save icon (primary) — {_css!r}.")
+                            return True
+                        return False
+                    try:
+                        page.keyboard.press("Control+s")
+                        note("Payment debug: used Ctrl+S (Save icon not clicked this attempt).")
+                        return True
+                    except Exception as _save_key_ex:
+                        note(f"Payment debug: Ctrl+S failed: {_save_key_ex}")
+                        return False
+
+                save_clicked = _run_one_save_attempt("icon")
+                save_method_first = "icon" if save_clicked else None
+                if not save_clicked:
+                    save_clicked = _run_one_save_attempt("ctrl_s")
+                    save_method_first = "ctrl_s" if save_clicked else None
+
+                if save_clicked:
+                    _safe_page_wait(page, 1800, log_label="after_payment_save_processing")
+                    _err_msg = _payment_save_error_popup_text()
                     if _err_msg:
                         note(f"Payment save: Siebel error popup detected → {_err_msg!r:.300}")
                     else:
                         note("Payment save submitted — no error popup detected.")
-                    # Strict gate: after save, a row must show a populated Transaction# in the ``+`` frame.
-                    _verify_txn = False
-                    for _vr in _gather_payment_line_toolbar_roots(page, content_frame_selector):
-                        try:
-                            if _payment_lines_list_has_populated_transaction_number(_vr):
-                                _det_via = _payment_lines_detection_reason(_vr)
-                                _verify_txn = True
-                                note(
-                                    "Payments: post-save row detection matched "
-                                    f"(detected_via={_det_via})."
-                                )
-                                break
-                        except Exception:
-                            continue
+                    _verify_txn = _poll_payment_lines_transaction_verified(
+                        page,
+                        content_frame_selector,
+                        note=note,
+                        total_ms=9000,
+                        step_ms=450,
+                    )
                     if _verify_txn:
                         note("Payments: verified Payment Lines row with populated Transaction# after save.")
-                        return True
-                    note("Payments: save clicked but no Payment Lines row with Transaction# detected after save.")
-                    return False
-                note("Could not submit payment save (Ctrl+S primary and Save icon fallback both failed).")
-                return False
+                        return True, ""
+                    note(
+                        "Payments: post-save poll did not find Transaction# yet — "
+                        "retrying alternate save (Save icon vs Ctrl+S)."
+                    )
+                    if save_method_first == "icon":
+                        if _run_one_save_attempt("ctrl_s"):
+                            _safe_page_wait(page, 1800, log_label="after_payment_alt_ctrl_s")
+                            _err2 = _payment_save_error_popup_text()
+                            if _err2:
+                                note(f"Payment save (alt Ctrl+S): Siebel error popup → {_err2!r:.300}")
+                            _verify_txn = _poll_payment_lines_transaction_verified(
+                                page,
+                                content_frame_selector,
+                                note=note,
+                                total_ms=7000,
+                                step_ms=400,
+                            )
+                            if _verify_txn:
+                                note("Payments: verified Payment Lines row after alternate Ctrl+S.")
+                                return True, ""
+                    elif save_method_first == "ctrl_s":
+                        if _run_one_save_attempt("icon"):
+                            _safe_page_wait(page, 1800, log_label="after_payment_alt_save_icon")
+                            _err2 = _payment_save_error_popup_text()
+                            if _err2:
+                                note(f"Payment save (alt icon): Siebel error popup → {_err2!r:.300}")
+                            _verify_txn = _poll_payment_lines_transaction_verified(
+                                page,
+                                content_frame_selector,
+                                note=note,
+                                total_ms=7000,
+                                step_ms=400,
+                            )
+                            if _verify_txn:
+                                note("Payments: verified Payment Lines row after alternate Save icon.")
+                                return True, ""
+                    note(
+                        "Payments: save was attempted but no Payment Lines row with Transaction# "
+                        "was detected after save and retries (see earlier Payment debug lines)."
+                    )
+                    return False, "payment_verify"
+                note("Could not submit payment save (Save icon and Ctrl+S both failed for this attempt).")
+                return False, "payment_save"
         except Exception as e:
             note(f"Add customer payment flow failed after '+' click attempt: {e}")
-            return False
+            return False, "payment_exception"
     note("Could not click '+' icon on Payments tab (Payment Lines List:New not visible).")
-    return False
+    return False, "payment_plus"
 
 
 def _siebel_all_search_roots(page: Page, content_frame_selector: str | None) -> list:
@@ -16070,17 +16361,49 @@ def Playwright_Hero_DMS_fill(
             "Payments tab (current frame)",
             "click_Payments_tab_then_click_plus_icon",
         )
-        if not _add_customer_payment(
+        _pay_ok, _pay_fail = _add_customer_payment(
             page,
             action_timeout_ms=action_timeout_ms,
             content_frame_selector=content_frame_selector,
             note=note,
             vehicle_context=(out.get("vehicle") or {}),
-        ):
-            step("Stopped: could not open Payments tab or click '+' icon.")
-            out["error"] = (
-                "Siebel: video SOP — could not click Payments tab and '+' icon for Add customer payment."
+        )
+        if not _pay_ok:
+            _pay_err_map: dict[str, tuple[str, str]] = {
+                "no_payment_lines_root": (
+                    "Stopped: Payment Lines toolbar not found (cannot scope '+' / Save).",
+                    "Siebel: video SOP — Add customer payment: Payment Lines toolbar not found.",
+                ),
+                "payment_lines_frame": (
+                    "Stopped: could not lock Payment Lines edit frame after '+'.",
+                    "Siebel: video SOP — Add customer payment: Payment Lines edit frame not detected.",
+                ),
+                "payment_plus": (
+                    "Stopped: could not click '+' on Payment Lines (List:New).",
+                    "Siebel: video SOP — could not click Payment Lines '+' for Add customer payment.",
+                ),
+                "payment_save": (
+                    "Stopped: could not submit payment (Save icon and Ctrl+S both failed).",
+                    "Siebel: video SOP — Add customer payment: save not submitted (Save icon and Ctrl+S).",
+                ),
+                "payment_verify": (
+                    "Stopped: payment save ran but Transaction# did not appear in Payment Lines (verification).",
+                    "Siebel: video SOP — Add customer payment: post-save verification failed (no Transaction# in grid).",
+                ),
+                "payment_exception": (
+                    "Stopped: Add customer payment raised an exception (see Playwright_DMS notes).",
+                    "Siebel: video SOP — Add customer payment failed with an exception.",
+                ),
+            }
+            _step_msg, _err_msg = _pay_err_map.get(
+                (_pay_fail or "").strip(),
+                (
+                    "Stopped: Add customer payment did not complete (see Playwright_DMS notes).",
+                    "Siebel: video SOP — Add customer payment did not complete.",
+                ),
             )
+            step(_step_msg)
+            out["error"] = _err_msg
             return out
 
         try:

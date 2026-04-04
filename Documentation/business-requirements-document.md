@@ -514,3 +514,4 @@ Bulk upload automates the ingestion of scanned documents from a shared folder in
 | 3.147 | Apr 2026 | — | **FR-16** / dealer **Pre-check**: Existing-row detection must not count unrelated tables — **`_siebel_run_vehicle_serial_detail_precheck_pdi`** jqGrid + Precheck scope — **LLD** **6.228**, **§2.4d** / **§6.1a** |
 | 3.148 | Apr 2026 | — | **§6.1a** / operator log: **`Playwright_DMS*.txt`** no longer includes **`[frame-focus]`** lines — **`_siebel_note_frame_focus_snapshot`** no-op — **LLD** **6.229** |
 | 3.149 | Apr 2026 | — | **§6.1a** / **PDI**: New-row **+** is **`Service Request List:New`** (not mandatory **`s_2_2_32_0_icon`**) — **LLD** **6.230** |
+| 3.150 | Apr 2026 | — | **§6.1a** / **Contacts → Payments**: automation prefers **Payment Lines Save**, then **Ctrl+S**; verifies **Transaction#** with polling; operator **`Playwright_DMS*.txt`** errors distinguish save vs grid verification — **LLD** **6.255** |
