@@ -15668,6 +15668,95 @@ def _financier_mvg_wait_popup_indicator(
     return False
 
 
+# Pick Financers MVG: Siebel field-type combobox (must never receive the financier search string).
+_FINANCER_PICK_ACCOUNT_ID_COMBO_NAME = "s_5_1_312_0"
+
+
+def _financier_mvg_find_pick_financers_search_value_input(
+    page: Page, content_frame_selector: str | None,
+) -> object | None:
+    """
+    The **search value** textbox to the right of the Account ID / Account Name criterion —
+    **not** ``s_5_1_312_0`` (that is only for the criterion combobox).
+    """
+    _dlg_title = re.compile(r"Pick\s*Financer", re.I)
+    _combo_css = f'input[type="text"][name="{_FINANCER_PICK_ACCOUNT_ID_COMBO_NAME}"]'
+    _try_names = (
+        "s_5_1_312_1",
+        "s_5_1_313_0",
+        "s_5_1_312_2",
+    )
+    for root in _siebel_all_search_roots(page, content_frame_selector):
+        try:
+            dlg = (
+                root.locator(
+                    ".siebui-popup, .ui-dialog, .ui-dialog-content, [role=\"dialog\"]"
+                )
+                .filter(has_text=_dlg_title)
+                .first
+            )
+            if dlg.count() <= 0 or not dlg.is_visible(timeout=700):
+                continue
+            for nm in _try_names:
+                loc = dlg.locator(f'input[type="text"][name="{nm}"]').first
+                if loc.count() > 0 and loc.is_visible(timeout=600):
+                    return loc
+            try:
+                xpv = (
+                    f"xpath=.//input[@name='{_FINANCER_PICK_ACCOUNT_ID_COMBO_NAME}']"
+                    "/ancestor::td[1]/following-sibling::td[1]//input"
+                )
+                loc = dlg.locator(xpv).first
+                if loc.count() > 0 and loc.is_visible(timeout=600):
+                    return loc
+            except Exception:
+                pass
+            try:
+                combo = dlg.locator(_combo_css).first
+                if combo.count() > 0 and combo.is_visible(timeout=400):
+                    loc = combo.locator(
+                        "xpath=ancestor::td[1]/following-sibling::td[1]//input"
+                    ).first
+                    if loc.count() > 0 and loc.is_visible(timeout=600):
+                        return loc
+            except Exception:
+                pass
+            try:
+                n = dlg.locator("input").count()
+                for ii in range(min(n, 32)):
+                    cand = dlg.locator("input").nth(ii)
+                    if cand.count() <= 0 or not cand.is_visible(timeout=250):
+                        continue
+                    try:
+                        in_grid = cand.evaluate(
+                            """el => !!el.closest(
+                              'table.ui-jqgrid-btable, table.ui-jqgrid-btable, .ui-jqgrid-btable, .ui-jqgrid'
+                            )"""
+                        )
+                    except Exception:
+                        in_grid = False
+                    if in_grid:
+                        continue
+                    try:
+                        nm = cand.evaluate("el => String(el.getAttribute('name')||'')").strip()
+                    except Exception:
+                        nm = ""
+                    if nm == _FINANCER_PICK_ACCOUNT_ID_COMBO_NAME:
+                        continue
+                    typ = (
+                        cand.evaluate("el => String(el.type || '').toLowerCase()") or ""
+                    ).strip()
+                    if typ in ("hidden", "button", "submit", "image", "checkbox", "radio"):
+                        continue
+                    if typ in ("text", "search", ""):
+                        return cand
+            except Exception:
+                pass
+        except Exception:
+            continue
+    return None
+
+
 def _financier_mvg_find_pick_financers_dialog_toolbar(
     page: Page, content_frame_selector: str | None,
 ) -> tuple[object | None, object | None]:
@@ -15735,6 +15824,15 @@ def _financier_mvg_find_pick_financers_dialog_toolbar(
                         val = nx
                 except Exception:
                     pass
+            try:
+                if val is not None and val.count() > 0:
+                    nm = (
+                        val.evaluate("el => String(el.getAttribute('name') || '')").strip()
+                    )
+                    if nm == _FINANCER_PICK_ACCOUNT_ID_COMBO_NAME:
+                        val = None
+            except Exception:
+                pass
             return dd, val
         except Exception:
             continue
@@ -15853,11 +15951,11 @@ def _financier_mvg_pick_account_name_on_criteria_control(
     """
     **Pick Financers** applet (Hero): after the applet opens, drive the Account ID combobox
     (Siebel Open UI: ``input`` ``name="s_5_1_312_0"``, ``role="combobox"``, …): **click**, then
-    **ArrowDown** twice. Always returns ``False`` (caller treats as “not verified Account Name yet”;
-    extend here when ready to assert selection).
+    **ArrowDown** twice. Returns ``True`` when the combo was found and keys were sent; ``False`` if
+    the control was not found.
     """
     _tmo = min(int(action_timeout_ms), 8000)
-    _acct_id_combo = 'input[type="text"][name="s_5_1_312_0"]'
+    _acct_id_combo = f'input[type="text"][name="{_FINANCER_PICK_ACCOUNT_ID_COMBO_NAME}"]'
     acct: object | None = None
     for root in _siebel_all_search_roots(page, content_frame_selector):
         try:
@@ -15901,7 +15999,7 @@ def _financier_mvg_pick_account_name_on_criteria_control(
             280 if i == 0 else 300,
             log_label=f"financier_mvg_account_id_arrow_down_{i + 1}",
         )
-    return False
+    return True
 
 
 def _financier_mvg_financial_consultant_data_row_count(
@@ -16015,62 +16113,55 @@ def _financier_mvg_account_name_search_and_pick(
         content_frame_selector,
         action_timeout_ms=action_timeout_ms,
     ):
-        return "Financer MVG: could not pick Account Name in criteria dropdown."
+        return "Financer MVG: could not focus Account ID criterion field (Pick Financers)."
     _safe_page_wait(page, 220, log_label="financier_mvg_after_account_name")
+    _val_resolved = _financier_mvg_find_pick_financers_search_value_input(
+        page, content_frame_selector
+    )
+    if _val_resolved is not None:
+        value_loc = _val_resolved
     if value_loc is not None:
         try:
-            value_loc.scroll_into_view_if_needed(timeout=_tmo)
+            _vn = value_loc.evaluate("el => String(el.getAttribute('name')||'')").strip()
+            if _vn == _FINANCER_PICK_ACCOUNT_ID_COMBO_NAME:
+                value_loc = _financier_mvg_find_pick_financers_search_value_input(
+                    page, content_frame_selector
+                )
         except Exception:
             pass
+    if value_loc is None:
+        return "Financer MVG: could not locate financier search value field (not the Account ID combo)."
+    try:
+        value_loc.scroll_into_view_if_needed(timeout=_tmo)
+    except Exception:
+        pass
+    try:
+        value_loc.click(timeout=_tmo)
+    except Exception:
         try:
-            value_loc.click(timeout=_tmo)
+            value_loc.click(timeout=_tmo, force=True)
         except Exception:
-            try:
-                value_loc.click(timeout=_tmo, force=True)
-            except Exception:
-                return "Financer MVG: could not focus financier value field."
-        _safe_page_wait(page, 180, log_label="financier_mvg_value_field_focus")
+            return "Financer MVG: could not focus financier value field."
+    _safe_page_wait(page, 180, log_label="financier_mvg_value_field_focus")
+    try:
+        value_loc.fill("", timeout=_tmo)
+    except Exception:
+        pass
+    try:
+        value_loc.press("Control+a", timeout=700)
+    except Exception:
+        pass
+    try:
+        value_loc.fill(caps, timeout=_tmo)
+    except Exception:
         try:
-            value_loc.fill("", timeout=_tmo)
-        except Exception:
-            pass
-        try:
-            value_loc.press("Control+a", timeout=700)
-        except Exception:
-            pass
-        try:
-            value_loc.fill(caps, timeout=_tmo)
-        except Exception:
-            try:
-                value_loc.type(caps, delay=22, timeout=_tmo)
-            except Exception:
-                return "Financer MVG: could not type financier name."
-        _safe_page_wait(page, 200, log_label="financier_mvg_after_caps_in_value_cell")
-        try:
-            value_loc.press("Tab", timeout=1200)
-        except Exception:
-            try:
-                page.keyboard.press("Tab")
-            except Exception:
-                pass
-    else:
-        try:
-            criteria_loc.press("Tab", timeout=1200)
-        except Exception:
-            try:
-                page.keyboard.press("Tab")
-            except Exception:
-                pass
-        _safe_page_wait(page, 150, log_label="financier_mvg_before_name_type_fallback")
-        try:
-            page.keyboard.press("Control+a")
-        except Exception:
-            pass
-        try:
-            page.keyboard.type(caps, delay=22)
+            value_loc.type(caps, delay=22, timeout=_tmo)
         except Exception:
             return "Financer MVG: could not type financier name."
-        _safe_page_wait(page, 160, log_label="financier_mvg_after_caps_type_fallback")
+    _safe_page_wait(page, 200, log_label="financier_mvg_after_caps_in_value_cell")
+    try:
+        value_loc.press("Tab", timeout=1200)
+    except Exception:
         try:
             page.keyboard.press("Tab")
         except Exception:
@@ -16240,6 +16331,12 @@ def _fill_create_order_financier_field_on_frame(
                 )
             except Exception:
                 pass
+        for _esc_i in range(2):
+            try:
+                page.keyboard.press("Escape")
+            except Exception:
+                pass
+            _safe_page_wait(page, 400, log_label=f"financier_mvg_dismiss_popup_before_legacy_{_esc_i}")
         if _legacy_caps_and_tab(loc_main):
             return True, None
         return False, mvg_err
