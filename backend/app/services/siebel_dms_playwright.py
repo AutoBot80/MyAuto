@@ -12142,6 +12142,13 @@ def _create_order(
             _fin_post_err = _detect_siebel_error_popup(page, content_frame_selector)
             if _fin_post_err:
                 return False, f"Siebel error after Financier/Financer input: {_fin_post_err[:200]}", scraped
+            # Applet closed — focus is often still on Financer; Tab out before Hypothecation / remaining fields.
+            try:
+                page.keyboard.press("Tab")
+            except Exception:
+                pass
+            _safe_page_wait(page, 400, log_label="after_financier_tab_out_before_hypothecation")
+            note("Create Order: Tab out from Financer field; proceeding to Hypothecation and next fields.")
 
         if _is_financed:
             _hyp_val = "Y"
