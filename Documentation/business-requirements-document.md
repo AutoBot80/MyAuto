@@ -515,3 +515,4 @@ Bulk upload automates the ingestion of scanned documents from a shared folder in
 | 3.148 | Apr 2026 | — | **§6.1a** / operator log: **`Playwright_DMS*.txt`** no longer includes **`[frame-focus]`** lines — **`_siebel_note_frame_focus_snapshot`** no-op — **LLD** **6.229** |
 | 3.149 | Apr 2026 | — | **§6.1a** / **PDI**: New-row **+** is **`Service Request List:New`** (not mandatory **`s_2_2_32_0_icon`**) — **LLD** **6.230** |
 | 3.150 | Apr 2026 | — | **§6.1a** / **Contacts → Payments**: automation prefers **Payment Lines Save**, then **Ctrl+S**; verifies **Transaction#** with polling; operator **`Playwright_DMS*.txt`** errors distinguish save vs grid verification — **LLD** **6.255** |
+| 3.151 | Apr 2026 | — | **§6.1a** / **Payments** tab: Third Level View Bar activation tries the shell document where **Payments** appears in the combo before nested **select** duplicates — **LLD** **6.257** |

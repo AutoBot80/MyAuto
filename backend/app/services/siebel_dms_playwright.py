@@ -3902,6 +3902,62 @@ _SIEBEL_THIRD_LEVEL_VIEW_BAR_SELECTORS = (
     'select[aria-label="Third Level View Bar"]',
 )
 
+# True when this document's Third Level View Bar <select> lists Payments (contact shell), vs a nested
+# duplicate ``select#j_s_vctrl_div_tabScreen`` that only exposes Profile/Address subsets.
+_SIEBEL_JS_THIRD_LEVEL_BAR_INCLUDES_PAYMENTS_OPTION = """() => {
+  const pick = (s) => {
+    if (!s || String(s.tagName).toLowerCase() !== 'select') return false;
+    for (let i = 0; i < s.options.length; i++) {
+      const t = String(s.options[i].textContent || s.options[i].label || '').trim();
+      if (/^payments?$/i.test(t)) return true;
+      if (/customer\\s+payments?/i.test(t)) return true;
+      if (/^payment\\s*details$/i.test(t)) return true;
+    }
+    return false;
+  };
+  const a = document.querySelector('#s_vctrl_div select#j_s_vctrl_div_tabScreen');
+  if (pick(a)) return true;
+  const b = document.querySelector('select#j_s_vctrl_div_tabScreen');
+  if (pick(b)) return true;
+  const c = document.querySelector('select[aria-label="Third Level View Bar"]');
+  return pick(c);
+}"""
+
+
+def _siebel_root_third_level_bar_includes_payments_option(root) -> bool:
+    """Prefer the shell document where **Payments** exists in the Third Level combo (not a sub-applet only)."""
+    try:
+        return bool(_siebel_root_evaluate(root, _SIEBEL_JS_THIRD_LEVEL_BAR_INCLUDES_PAYMENTS_OPTION))
+    except Exception:
+        return False
+
+
+def _siebel_ctx_third_level_bar_includes_payments_option(ctx) -> bool:
+    """Same as :func:`_siebel_root_third_level_bar_includes_payments_option` for **Page** / **Frame** only."""
+    try:
+        return bool(ctx.evaluate(_SIEBEL_JS_THIRD_LEVEL_BAR_INCLUDES_PAYMENTS_OPTION))
+    except Exception:
+        return False
+
+
+def _siebel_search_roots_payments_third_level_first(
+    page: Page, content_frame_selector: str | None
+) -> list:
+    """
+    :func:`_siebel_all_search_roots` order, but roots whose Third Level bar includes **Payments** first.
+
+    After Relation's Name (focus in a nested contact applet), automation can otherwise match a nested
+    ``select#j_s_vctrl_div_tabScreen`` that does not list **Payments** — the real combo lives in the
+    same shell as branch **(2)** Address (**tabScreen6**).
+    """
+    base = list(_siebel_all_search_roots(page, content_frame_selector))
+    scored = [
+        (0 if _siebel_root_third_level_bar_includes_payments_option(r) else 1, i, r)
+        for i, r in enumerate(base)
+    ]
+    scored.sort(key=lambda t: (t[0], t[1]))
+    return [t[2] for t in scored]
+
 
 def _siebel_try_select_payments_third_level_view_bar(
     page: Page,
@@ -3925,7 +3981,7 @@ def _siebel_try_select_payments_third_level_view_bar(
         "Payment Details",
         "Payment information",
     )
-    for root in _siebel_all_search_roots(page, content_frame_selector):
+    for root in _siebel_search_roots_payments_third_level_first(page, content_frame_selector):
         for css in _SIEBEL_THIRD_LEVEL_VIEW_BAR_SELECTORS:
             try:
                 loc = root.locator(css).first
@@ -3975,12 +4031,17 @@ def _siebel_js_select_third_level_option_matching(
       }
       return false;
     }"""
-    targets: list = [page]
+    raw: list = [page]
     try:
-        targets.extend(list(_ordered_frames(page)))
+        raw.extend(list(_ordered_frames(page)))
     except Exception:
         pass
-    for ctx in targets:
+    order = sorted(
+        range(len(raw)),
+        key=lambda i: (0 if _siebel_ctx_third_level_bar_includes_payments_option(raw[i]) else 1, i),
+    )
+    for i in order:
+        ctx = raw[i]
         try:
             if hasattr(ctx, "evaluate") and ctx.evaluate(js, label_regex):
                 return True
@@ -3999,7 +4060,7 @@ def _siebel_try_click_payments_tab_under_s_vctrl(
     """Click **Payments** ``ui-tabs-anchor`` / tab under ``#s_vctrl_div`` (parallel to Address fallbacks)."""
     t = min(int(action_timeout_ms), 6000)
     pay_pat = re.compile(r"^\s*Payments?\s*$", re.I)
-    for root in _siebel_all_search_roots(page, content_frame_selector):
+    for root in _siebel_search_roots_payments_third_level_first(page, content_frame_selector):
         try:
             vwrap = root.locator("#s_vctrl_div")
             if vwrap.count() == 0:
@@ -5484,7 +5545,10 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
         if not addr_ok:
             note("Stopping before Add customer payment: Address Line 1 was not filled.")
             return False
-        note("Relation's Name filled; stopping on current field as requested.")
+        note(
+            "Relation's Name filled; optional Address Line 1 substring applied when available. "
+            "Continuing video SOP (branch (2) contact fields / Payments next)."
+        )
         return True
 
     def _read_first_name_probe() -> None:
@@ -5562,15 +5626,6 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
     # Outer retry: when Siebel is slow the detail form may not be rendered yet.
     for _outer in range(4):
         _read_first_name_probe()
-
-        # #region agent log — relation name scan attempt
-        import json as _j_rn, time as _t_rn
-        try:
-            with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-                _lf.write(_j_rn.dumps({"sessionId":"08e634","hypothesisId":"RN1","location":"siebel_dms_playwright.py:relation_name_scan","message":"Relation Name scan attempt","data":{"attempt": _outer},"timestamp":_ts_ist_iso()}) + "\n")
-        except Exception:
-            pass
-        # #endregion
 
         for fl in _iter_frame_locator_roots(page, content_frame_selector):
             for css in exact_selectors:
