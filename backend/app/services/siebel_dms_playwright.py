@@ -15667,6 +15667,9 @@ def _financier_mvg_find_criteria_type_locator(page: Page, content_frame_selector
     criterion type (pick **Account Name**), second column is the value. Prefer popup-scoped first-row
     cells; fall back to any native ``select`` that lists Account Name.
     """
+    c1, _c2 = _financier_mvg_find_search_row_pair(page, content_frame_selector)
+    if c1 is not None:
+        return c1
     acc_re = re.compile(r"account\s*name", re.I)
     _popup_first_cell = (
         ".siebui-popup table tbody tr:first-child td:nth-child(1) select",
@@ -15723,10 +15726,116 @@ def _financier_mvg_find_criteria_type_locator(page: Page, content_frame_selector
     return None
 
 
-def _financier_mvg_pick_account_name_on_criteria_control(loc, page: Page, *, action_timeout_ms: int) -> bool:
+def _financier_mvg_find_search_row_pair(
+    page: Page, content_frame_selector: str | None,
+) -> tuple[object | None, object | None]:
     """
-    Native ``select``: ``select_option`` / JS. Siebel **combo** (input): same pattern as My Orders
-    Find — ``Alt+ArrowDown``, arrow until value hints **Account Name**, else type ``Account Name``.
+    First MVG search row: **criterion type** control (col 1) and **value** field (col 2).
+    Locators are from the same ``tr`` so Tab order is not relied on for typing the financier name.
+    """
+    scopes = (
+        ".siebui-popup",
+        ".ui-dialog",
+        ".ui-dialog-content",
+        "[role=\"dialog\"]",
+        ".siebui-applet",
+    )
+    cell_sel = "input:not([type='hidden']):not([type='button']):not([type='submit']), select, textarea"
+    for root in _siebel_all_search_roots(page, content_frame_selector):
+        for sc in scopes:
+            for ri in (0, 1):
+                try:
+                    row = root.locator(f"{sc} table tbody tr").nth(ri)
+                    if row.count() <= 0 or not row.is_visible(timeout=450):
+                        continue
+                    ntd = row.locator("td").count()
+                    if ntd < 2:
+                        continue
+                    c1 = row.locator("td").nth(0).locator(cell_sel).first
+                    c2 = row.locator("td").nth(1).locator(cell_sel).first
+                    if c1.count() <= 0 or not c1.is_visible(timeout=550):
+                        continue
+                    if c2.count() <= 0 or not c2.is_visible(timeout=550):
+                        continue
+                    return c1, c2
+                except Exception:
+                    continue
+    return None, None
+
+
+def _financier_mvg_click_account_name_in_open_lov(
+    page: Page, content_frame_selector: str | None, *, action_timeout_ms: int,
+) -> bool:
+    """Click **Account Name** in a visible LOV / autocomplete / listbox (any frame)."""
+    _tmo = min(int(action_timeout_ms), 8000)
+    name_exact = re.compile(r"^\s*Account\s*Name\s*$", re.I)
+    name_loose = re.compile(r"Account\s*Name", re.I)
+    targets: list = [page]
+    try:
+        targets.extend(list(_ordered_frames(page)))
+    except Exception:
+        pass
+    for tgt in targets:
+        try:
+            for role in ("option", "menuitem"):
+                try:
+                    loc = tgt.get_by_role(role, name=name_exact).first
+                    if loc.count() > 0 and loc.is_visible(timeout=400):
+                        loc.click(timeout=_tmo)
+                        return True
+                except Exception:
+                    continue
+            try:
+                loc = tgt.get_by_role(role, name=name_loose).first
+                if loc.count() > 0 and loc.is_visible(timeout=350):
+                    loc.click(timeout=_tmo)
+                    return True
+            except Exception:
+                pass
+            for css in (
+                "ul.ui-autocomplete li.ui-menu-item",
+                "ul.ui-menu li.ui-menu-item",
+                ".ui-menu .ui-menu-item",
+                "div.siebui-list-popup li",
+                "div.siebui-list-scroll li",
+                "table.picklist tbody td",
+                "table tbody tr.jqgrow td",
+            ):
+                try:
+                    it = tgt.locator(css).filter(has_text=name_loose).first
+                    if it.count() > 0 and it.is_visible(timeout=400):
+                        it.click(timeout=_tmo)
+                        return True
+                except Exception:
+                    continue
+        except Exception:
+            continue
+    return False
+
+
+def _financier_mvg_criteria_shows_account_name(loc) -> bool:
+    try:
+        tx = (
+            loc.input_value(timeout=350)
+            or loc.evaluate("el => (el.value != null ? String(el.value) : (el.textContent || ''))")
+            or ""
+        ).lower()
+        if "account" in tx and "name" in tx:
+            return True
+        if "acct" in tx and "name" in tx:
+            return True
+        return bool(re.search(r"account\s*name", tx, re.I))
+    except Exception:
+        return False
+
+
+def _financier_mvg_pick_account_name_on_criteria_control(
+    loc, page: Page, content_frame_selector: str | None, *, action_timeout_ms: int,
+) -> bool:
+    """
+    Native ``select``: ``select_option`` / JS. Siebel **combo**: open LOV (``F4`` / ``F2`` /
+    ``Alt+ArrowDown``), click **Account Name** in the list if visible, else arrow keys / type
+    ``Account Name`` + **Enter** until the criterion field reads like Account Name.
     """
     _tmo = min(int(action_timeout_ms), 8000)
     try:
@@ -15751,9 +15860,8 @@ def _financier_mvg_pick_account_name_on_criteria_control(loc, page: Page, *, act
             return True
         except Exception:
             try:
-                return bool(
-                    loc.evaluate(
-                        """(el) => {
+                if loc.evaluate(
+                    """(el) => {
                   const opts = Array.from(el.options || []);
                   const hit = opts.find(o => /account\\s*name/i.test((o.textContent || '').trim()));
                   if (!hit) return false;
@@ -15763,43 +15871,84 @@ def _financier_mvg_pick_account_name_on_criteria_control(loc, page: Page, *, act
                   el.dispatchEvent(new Event('change', { bubbles: true }));
                   return true;
                 }"""
-                    )
-                )
+                ):
+                    return True
             except Exception:
-                return False
-    try:
-        loc.press("Alt+ArrowDown", timeout=1200)
-    except Exception:
-        pass
-    _safe_page_wait(page, 280, log_label="financier_mvg_criteria_lov_open")
-    _picked = False
-    for _ in range(40):
+                pass
+            return False
+
+    def _press_key(key: str) -> None:
         try:
-            loc.press("ArrowDown", timeout=450)
+            loc.press(key, timeout=900)
         except Exception:
-            break
-        try:
-            tx = (
-                loc.input_value(timeout=220)
-                or loc.evaluate("el => (el.value != null ? String(el.value) : (el.textContent || ''))")
-                or ""
-            ).lower()
-        except Exception:
-            tx = ""
-        if "account" in tx and "name" in tx:
-            _picked = True
-            break
-    if not _picked:
+            try:
+                page.keyboard.press(key)
+            except Exception:
+                pass
+
+    def _try_click_list_account_name() -> bool:
+        return _financier_mvg_click_account_name_in_open_lov(
+            page, content_frame_selector, action_timeout_ms=_tmo
+        )
+
+    def _pass_open_pick_and_commit() -> bool:
+        for key in ("F4", "F2", "Alt+ArrowDown"):
+            _press_key(key)
+            _safe_page_wait(page, 380, log_label=f"financier_mvg_lov_after_{key.replace('+', '_')}")
+            if _try_click_list_account_name():
+                _safe_page_wait(page, 280, log_label="financier_mvg_after_list_click")
+                _press_key("Enter")
+                _safe_page_wait(page, 200, log_label="financier_mvg_after_list_enter")
+                if _financier_mvg_criteria_shows_account_name(loc):
+                    return True
+            if _financier_mvg_criteria_shows_account_name(loc):
+                return True
+        for _ in range(48):
+            try:
+                loc.press("ArrowDown", timeout=420)
+            except Exception:
+                break
+            if _financier_mvg_criteria_shows_account_name(loc):
+                _press_key("Enter")
+                _safe_page_wait(page, 200, log_label="financier_mvg_arrow_enter")
+                return True
         try:
             loc.press("Control+a", timeout=500)
         except Exception:
             pass
         try:
-            loc.type("Account Name", delay=38, timeout=2800)
-            _picked = True
+            loc.fill("", timeout=_tmo)
         except Exception:
             pass
-    return _picked
+        try:
+            loc.type("Account Name", delay=45, timeout=3500)
+        except Exception:
+            return False
+        _safe_page_wait(page, 280, log_label="financier_mvg_after_type_account_name")
+        if _try_click_list_account_name():
+            _safe_page_wait(page, 220, log_label="financier_mvg_type_then_list_click")
+        _press_key("Enter")
+        _safe_page_wait(page, 240, log_label="financier_mvg_type_then_enter")
+        return _financier_mvg_criteria_shows_account_name(loc)
+
+    for attempt in range(2):
+        if _pass_open_pick_and_commit():
+            return True
+        try:
+            loc.press("Escape", timeout=450)
+        except Exception:
+            pass
+        _safe_page_wait(page, 200, log_label="financier_mvg_pick_retry_escape")
+        try:
+            loc.click(timeout=_tmo)
+        except Exception:
+            try:
+                loc.click(timeout=_tmo, force=True)
+            except Exception:
+                pass
+        _safe_page_wait(page, 180, log_label="financier_mvg_pick_retry_refocus")
+
+    return _financier_mvg_criteria_shows_account_name(loc)
 
 
 def _financier_mvg_financial_consultant_data_row_count(
@@ -15897,35 +16046,77 @@ def _financier_mvg_account_name_search_and_pick(
     Returns ``None`` on success, or a short error token / user-facing message.
     """
     _tmo = min(int(action_timeout_ms), 8000)
-    criteria_loc = _financier_mvg_find_criteria_type_locator(page, content_frame_selector)
+    criteria_loc, value_loc = _financier_mvg_find_search_row_pair(page, content_frame_selector)
+    if criteria_loc is None:
+        criteria_loc = _financier_mvg_find_criteria_type_locator(page, content_frame_selector)
     if criteria_loc is None:
         return "Financer MVG: Account Name criteria not found in popup."
     if not _financier_mvg_pick_account_name_on_criteria_control(
-        criteria_loc, page, action_timeout_ms=action_timeout_ms
+        criteria_loc,
+        page,
+        content_frame_selector,
+        action_timeout_ms=action_timeout_ms,
     ):
         return "Financer MVG: could not pick Account Name in criteria dropdown."
-    _safe_page_wait(page, 180, log_label="financier_mvg_after_account_name")
-    try:
-        criteria_loc.press("Tab", timeout=1200)
-    except Exception:
+    _safe_page_wait(page, 220, log_label="financier_mvg_after_account_name")
+    if value_loc is not None:
+        try:
+            value_loc.scroll_into_view_if_needed(timeout=_tmo)
+        except Exception:
+            pass
+        try:
+            value_loc.click(timeout=_tmo)
+        except Exception:
+            try:
+                value_loc.click(timeout=_tmo, force=True)
+            except Exception:
+                return "Financer MVG: could not focus financier value field."
+        _safe_page_wait(page, 180, log_label="financier_mvg_value_field_focus")
+        try:
+            value_loc.fill("", timeout=_tmo)
+        except Exception:
+            pass
+        try:
+            value_loc.press("Control+a", timeout=700)
+        except Exception:
+            pass
+        try:
+            value_loc.fill(caps, timeout=_tmo)
+        except Exception:
+            try:
+                value_loc.type(caps, delay=22, timeout=_tmo)
+            except Exception:
+                return "Financer MVG: could not type financier name."
+        _safe_page_wait(page, 200, log_label="financier_mvg_after_caps_in_value_cell")
+        try:
+            value_loc.press("Tab", timeout=1200)
+        except Exception:
+            try:
+                page.keyboard.press("Tab")
+            except Exception:
+                pass
+    else:
+        try:
+            criteria_loc.press("Tab", timeout=1200)
+        except Exception:
+            try:
+                page.keyboard.press("Tab")
+            except Exception:
+                pass
+        _safe_page_wait(page, 150, log_label="financier_mvg_before_name_type_fallback")
+        try:
+            page.keyboard.press("Control+a")
+        except Exception:
+            pass
+        try:
+            page.keyboard.type(caps, delay=22)
+        except Exception:
+            return "Financer MVG: could not type financier name."
+        _safe_page_wait(page, 160, log_label="financier_mvg_after_caps_type_fallback")
         try:
             page.keyboard.press("Tab")
         except Exception:
             pass
-    _safe_page_wait(page, 120, log_label="financier_mvg_before_name_type")
-    try:
-        page.keyboard.press("Control+a")
-    except Exception:
-        pass
-    try:
-        page.keyboard.type(caps, delay=22)
-    except Exception:
-        return "Financer MVG: could not type financier name."
-    _safe_page_wait(page, 160, log_label="financier_mvg_after_caps_type")
-    try:
-        page.keyboard.press("Tab")
-    except Exception:
-        pass
     _safe_page_wait(page, 120, log_label="financier_mvg_before_search_enter")
     try:
         page.keyboard.press("Enter")
