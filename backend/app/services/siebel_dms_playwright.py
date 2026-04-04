@@ -3998,7 +3998,7 @@ def _siebel_search_roots_payments_third_level_first(
 
     Within the merged list, roots whose Third Level bar includes **Payments** sort first (stable).
     """
-    b2_shell = _siebel_frames_branch2_shell_for_third_level(page)
+    b2_shell = _siebel_frames_branch2_shell_for_third_level_bar(page)
     base = list(_siebel_all_search_roots(page, content_frame_selector))
     merged: list = []
     seen: set[int] = set()
@@ -4105,7 +4105,7 @@ def _siebel_js_select_third_level_option_matching(
     }"""
     raw: list = []
     _seen_raw: set[int] = set()
-    for _f in _siebel_frames_branch2_shell_for_third_level(page):
+    for _f in _siebel_frames_branch2_shell_for_third_level_bar(page):
         _k = id(_f)
         if _k not in _seen_raw:
             _seen_raw.add(_k)
