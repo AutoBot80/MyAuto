@@ -35,6 +35,7 @@ Cursor agents follow **`.cursor/rules/checkpoints-registry.mdc`**: full workflow
 | Reached Main Insurance Page | `checkpoint/reached-main-insurance-page` | `eb0617ae0713375e8c332c430b7362a0b2335b95` | 2026-04-02T21:03:12+05:30 | 1) Fill main page elements; 2) Navigation is still slow in a few places — see **`Documentation/checkpoint-reached-main-insurance-page.md`** |
 | Insurance Main filled | `checkpoint/insurance-main-filled` | `69d2cff5dec65d4b458bddf697c0ba9faf108d2d` | 2026-04-03T17:45:04+05:30 | 1) Download policy preview; 2) Check master to be inserted; 3) Ongoing testing and bug fixes — see **`Documentation/checkpoint-insurance-main-filled.md`** |
 | Corrected Precheck and PDI | `checkpoint/corrected-precheck-and-pdi` | `70c9af892e3143c210aea6a4e1776a0441b7628f` | 2026-04-03T21:40:32+05:30 | 1) Add enquiry for existing contact still needs fixing |
+| Temp Checkpoint 1 | `checkpoint/temp-checkpoint-1` | `__TEMP_CHECKPOINT_1_HASH__` | 2026-04-04T18:21:23+05:30 | — |
 
 ## Rollback / Restore
 
