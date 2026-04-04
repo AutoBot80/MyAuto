@@ -2,7 +2,7 @@
 Hero Connect / Oracle Siebel Open UI — Playwright helpers for real DMS automation.
 
 ``Playwright_Hero_DMS_fill`` runs the operator **Find Contact Enquiry** path: ``prepare_vehicle`` before
-Contact Find, then Find → Contact → mobile + Go, enquiry sweep / Add Enquiry, Relation's Name, Payments,
+Contact Find, then Find → Contact → mobile and optional exact first name + Go, enquiry sweep / Add Enquiry, Relation's Name, Payments,
 optional hard-stop before booking, then **Generate Booking** and ``_create_order`` when enabled. Browser
 stays open for the operator.
 
@@ -2971,53 +2971,18 @@ def _contact_view_find_by_mobile_strategy_two(
     wait_after_go_ms: int = 2000,
 ) -> bool:
     """
-    Contact Find **strategy 2**: run **mobile-only** Find/Go first; if
-    :func:`_siebel_ui_suggests_contact_match_mobile_first` is still false, run a second Find/Go with
-    **mobile + first name** (unchanged fill semantics). Omits the second pass when ``first_name`` is empty.
+    Video / stage-1 Contact Find: **one** navigation + Find/Go.
+
+    - When ``first_name`` is non-empty after strip: fill **mobile + exact first name**, then Go
+      (narrower Search Results at the server/UI).
+    - When ``first_name`` is empty: **mobile-only** Find (legacy).
+
+    Left-pane drilldown still uses mobile-scoped row/plan logic only; this helper does not change that.
+    Kept name ``*_strategy_two`` for stable call sites; the old two-step mobile-then-first Find path
+    was removed.
     """
     fn = (first_name or "").strip()
-    if not fn:
-        return _contact_view_find_by_mobile(
-            page,
-            contact_url=contact_url,
-            mobile=mobile,
-            nav_timeout_ms=nav_timeout_ms,
-            action_timeout_ms=action_timeout_ms,
-            content_frame_selector=content_frame_selector,
-            mobile_aria_hints=mobile_aria_hints,
-            note=note,
-            step=step,
-            stage_msg=stage_msg_mobile_only,
-            first_name=None,
-            wait_after_go_ms=wait_after_go_ms,
-        )
-
-    ok_m = _contact_view_find_by_mobile(
-        page,
-        contact_url=contact_url,
-        mobile=mobile,
-        nav_timeout_ms=nav_timeout_ms,
-        action_timeout_ms=action_timeout_ms,
-        content_frame_selector=content_frame_selector,
-        mobile_aria_hints=mobile_aria_hints,
-        note=note,
-        step=step,
-        stage_msg=stage_msg_mobile_only,
-        first_name=None,
-        wait_after_go_ms=wait_after_go_ms,
-    )
-    if not ok_m:
-        return False
-    if _siebel_ui_suggests_contact_match_mobile_first(page, mobile, fn):
-        note(
-            "Contact Find (strategy 2): grid match after mobile-only query — "
-            "skipping second Find with first name."
-        )
-        return True
-    note(
-        "Contact Find (strategy 2): no grid match after mobile-only query — "
-        "running Find with mobile + first name."
-    )
+    stage = stage_msg_mobile_and_first if fn else stage_msg_mobile_only
     return _contact_view_find_by_mobile(
         page,
         contact_url=contact_url,
@@ -3028,8 +2993,8 @@ def _contact_view_find_by_mobile_strategy_two(
         mobile_aria_hints=mobile_aria_hints,
         note=note,
         step=step,
-        stage_msg=stage_msg_mobile_and_first,
-        first_name=fn,
+        stage_msg=stage,
+        first_name=fn if fn else None,
         wait_after_go_ms=wait_after_go_ms,
     )
 
@@ -16656,8 +16621,8 @@ def Playwright_Hero_DMS_fill(
         )
         form_trace(
             "v1_find_contact",
-            "Global Find → Contact (strategy 2: mobile-only first, then mobile + first name if needed)",
-            "goto_contact_find_URL_then_prepare_Find_Contact_fill_mobile_first_FindGo",
+            "Global Find → Contact (mobile + exact first name when present, else mobile-only) + Go",
+            "goto_contact_find_URL_then_prepare_Find_Contact_fill_mobile_optional_first_FindGo",
             contact_url_truncated=contact_url[:200],
             mobile_phone=mobile,
             first_name=video_first_name,
@@ -16673,7 +16638,7 @@ def Playwright_Hero_DMS_fill(
             mobile_aria_hints=mobile_aria_hints,
             note=note,
             step=step,
-            stage_msg_mobile_only="Video SOP: Find customer by mobile only first (Contact view, strategy 2).",
+            stage_msg_mobile_only="Video SOP: Find customer by mobile (Contact view; first name blank).",
             stage_msg_mobile_and_first="Video SOP: Find customer by mobile + first name (Contact view).",
         )
         if not ok_find:
@@ -16739,8 +16704,8 @@ def Playwright_Hero_DMS_fill(
             log_vehicle_snapshot("video_add_enquiry_saved")
             form_trace(
                 "v1b_refind_after_add_enquiry",
-                "Global Find → Contact (Mobile + First Name) + Go",
-                "rerun_find_mobile_first_after_add_enquiry",
+                "Global Find → Contact (mobile + exact first name when present, else mobile-only) + Go",
+                "rerun_find_mobile_optional_first_after_add_enquiry",
                 contact_url_truncated=contact_url[:200],
                 mobile_phone=mobile,
                 first_name=video_first_name,
@@ -16756,7 +16721,7 @@ def Playwright_Hero_DMS_fill(
                 mobile_aria_hints=mobile_aria_hints,
                 note=note,
                 step=step,
-                stage_msg_mobile_only="Post Add Enquiry: re-find by mobile only first (Contact view, strategy 2).",
+                stage_msg_mobile_only="Post Add Enquiry: re-find by mobile (Contact view; first name blank).",
                 stage_msg_mobile_and_first="Post Add Enquiry: re-find customer by mobile + first name (Contact view).",
             )
             if not ok_refind:
@@ -16867,7 +16832,7 @@ def Playwright_Hero_DMS_fill(
                 mobile_aria_hints=mobile_aria_hints,
                 note=note,
                 step=step,
-                stage_msg_mobile_only="Branch (2): re-find for first drilldown contact — mobile only first (strategy 2).",
+                stage_msg_mobile_only="Branch (2): re-find for first drilldown contact — mobile (first name blank).",
                 stage_msg_mobile_and_first="Branch (2): re-find for first drilldown contact — mobile + first name.",
             ):
                 step("Stopped: branch (2) re-find failed.")
