@@ -15981,9 +15981,10 @@ def _financier_mvg_pick_account_name_on_criteria_control(
     loc, page: Page, content_frame_selector: str | None, *, action_timeout_ms: int,
 ) -> bool:
     """
-    Native ``select``: ``select_option`` / JS. Siebel **combo**: open LOV (``F4`` / ``F2`` /
-    ``Alt+ArrowDown``), click **Account Name** in the list if visible, else arrow keys / type
-    ``Account Name`` + **Enter** until the criterion field reads like Account Name.
+    **Primary (Hero Pick Financers):** after the criterion control is focused, **ArrowDown** twice —
+    first brings the field/applet into the right focus, second selects **Account Name**. Then
+    native ``select`` uses ``select_option`` / JS; combos use LOV keys (``F4`` / ``F2`` /
+    ``Alt+ArrowDown``), list click, longer arrow walk, or typing ``Account Name``.
     """
     _tmo = min(int(action_timeout_ms), 8000)
     try:
@@ -16002,8 +16003,6 @@ def _financier_mvg_pick_account_name_on_criteria_control(
         except Exception:
             return False
     _safe_page_wait(page, 200, log_label="financier_mvg_criteria_click")
-    if tag == "select":
-        return _financier_mvg_select_option_account_name(loc, action_timeout_ms=_tmo)
 
     def _press_key(key: str) -> None:
         try:
@@ -16013,6 +16012,17 @@ def _financier_mvg_pick_account_name_on_criteria_control(
                 page.keyboard.press(key)
             except Exception:
                 pass
+
+    _safe_page_wait(page, 220, log_label="financier_mvg_before_primary_double_arrow")
+    _press_key("ArrowDown")
+    _safe_page_wait(page, 280, log_label="financier_mvg_primary_arrow_down_1")
+    _press_key("ArrowDown")
+    _safe_page_wait(page, 300, log_label="financier_mvg_primary_arrow_down_2")
+    if _financier_mvg_criteria_shows_account_name(loc):
+        return True
+
+    if tag == "select":
+        return _financier_mvg_select_option_account_name(loc, action_timeout_ms=_tmo)
 
     def _try_click_list_account_name() -> bool:
         return _financier_mvg_click_account_name_in_open_lov(
@@ -16060,21 +16070,28 @@ def _financier_mvg_pick_account_name_on_criteria_control(
         return _financier_mvg_criteria_shows_account_name(loc)
 
     for attempt in range(2):
-        if _pass_open_pick_and_commit():
-            return True
-        try:
-            loc.press("Escape", timeout=450)
-        except Exception:
-            pass
-        _safe_page_wait(page, 200, log_label="financier_mvg_pick_retry_escape")
-        try:
-            loc.click(timeout=_tmo)
-        except Exception:
+        if attempt == 1:
             try:
-                loc.click(timeout=_tmo, force=True)
+                loc.press("Escape", timeout=450)
             except Exception:
                 pass
-        _safe_page_wait(page, 180, log_label="financier_mvg_pick_retry_refocus")
+            _safe_page_wait(page, 200, log_label="financier_mvg_pick_retry_escape")
+            try:
+                loc.click(timeout=_tmo)
+            except Exception:
+                try:
+                    loc.click(timeout=_tmo, force=True)
+                except Exception:
+                    pass
+            _safe_page_wait(page, 200, log_label="financier_mvg_pick_retry_refocus")
+            _press_key("ArrowDown")
+            _safe_page_wait(page, 280, log_label="financier_mvg_retry_primary_arrow_1")
+            _press_key("ArrowDown")
+            _safe_page_wait(page, 300, log_label="financier_mvg_retry_primary_arrow_2")
+            if _financier_mvg_criteria_shows_account_name(loc):
+                return True
+        if _pass_open_pick_and_commit():
+            return True
 
     return _financier_mvg_criteria_shows_account_name(loc)
 
