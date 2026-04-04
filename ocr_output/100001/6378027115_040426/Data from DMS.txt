@@ -12,17 +12,17 @@ Care of / Father–Husband (Aadhaar QR): S/O Brij Gopal
 --- Vehicle (from DMS search result) ---
 Key num: —
 Frame / Chassis num: —
-Full chassis (VIN from detail): MBLHAW479T9C43285
+Full chassis (VIN from detail): —
 Engine num: —
-Full engine (from detail): HA11F7T9C11046
-Model: SPLENDOR +
-Color: RPB
-Cubic capacity: 125
-Seating capacity: 2
-Body type: Open
-Vehicle type: MOTORCYCLE WITH GEAR
-Num cylinders: 1
+Full engine (from detail): —
+Model: —
+Color: —
+Cubic capacity: —
+Seating capacity: —
+Body type: —
+Vehicle type: —
+Num cylinders: —
 Ex-showroom Price (Order Value): —
-Year of Mfg: 2026
+Year of Mfg: —
 Order # (DMS): —
 Invoice # (DMS): —

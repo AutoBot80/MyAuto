@@ -3940,20 +3940,83 @@ def _siebel_ctx_third_level_bar_includes_payments_option(ctx) -> bool:
         return False
 
 
+def _siebel_frames_branch2_shell_for_third_level_bar(page: Page) -> list[Frame]:
+    """
+    **Branch (2)** / Address lineage: from any document that contains ``iframe#S_A1`` or ``[id="S_A1"]``
+    (where City / Postal jqGrid is filled), walk :py:attr:`Frame.parent_frame` until a document exposes
+    the Third Level View Bar (``#s_vctrl_div select#j_s_vctrl_div_tabScreen`` or bare ``select#j_s_vctrl_div_tabScreen``).
+
+    The tab strip lives **above** the S_A1 grid; this matches the same **frame shift** as postal entry
+    (scoped under S_A1) vs chrome (parent shell). Those shells are tried **first** for **Payments** activation.
+    """
+    _has_sa1 = """() => !!(document.querySelector('iframe#S_A1') || document.querySelector('[id="S_A1"]'))"""
+    _has_bar = """() => !!(document.querySelector('#s_vctrl_div select#j_s_vctrl_div_tabScreen')
+      || document.querySelector('select#j_s_vctrl_div_tabScreen')
+      || document.querySelector('select[aria-label="Third Level View Bar"]'))"""
+    out: list[Frame] = []
+    seen: set[int] = set()
+    main = page.main_frame
+    to_scan: list[Frame] = [main]
+    try:
+        for f in _ordered_frames(page):
+            if f != main:
+                to_scan.append(f)
+    except Exception:
+        pass
+    for frame in to_scan:
+        try:
+            if not bool(frame.evaluate(_has_sa1)):
+                continue
+        except Exception:
+            continue
+        f: Frame | None = frame
+        for _ in range(14):
+            if f is None:
+                break
+            try:
+                if bool(f.evaluate(_has_bar)):
+                    k = id(f)
+                    if k not in seen:
+                        seen.add(k)
+                        out.append(f)
+                    break
+            except Exception:
+                pass
+            try:
+                f = f.parent_frame
+            except Exception:
+                break
+    return out
+
+
 def _siebel_search_roots_payments_third_level_first(
     page: Page, content_frame_selector: str | None
 ) -> list:
     """
-    :func:`_siebel_all_search_roots` order, but roots whose Third Level bar includes **Payments** first.
+    **Prepend** :func:`_siebel_frames_branch2_shell_for_third_level_bar` (**Frame**\\ s aligned with
+    **S_A1** / Address postal scope), then :func:`_siebel_all_search_roots`, deduped by object id.
 
-    After Relation's Name (focus in a nested contact applet), automation can otherwise match a nested
-    ``select#j_s_vctrl_div_tabScreen`` that does not list **Payments** — the real combo lives in the
-    same shell as branch **(2)** Address (**tabScreen6**).
+    Within the merged list, roots whose Third Level bar includes **Payments** sort first (stable).
     """
+    b2_shell = _siebel_frames_branch2_shell_for_third_level(page)
     base = list(_siebel_all_search_roots(page, content_frame_selector))
+    merged: list = []
+    seen: set[int] = set()
+    for r in b2_shell:
+        k = id(r)
+        if k in seen:
+            continue
+        seen.add(k)
+        merged.append(r)
+    for r in base:
+        k = id(r)
+        if k in seen:
+            continue
+        seen.add(k)
+        merged.append(r)
     scored = [
         (0 if _siebel_root_third_level_bar_includes_payments_option(r) else 1, i, r)
-        for i, r in enumerate(base)
+        for i, r in enumerate(merged)
     ]
     scored.sort(key=lambda t: (t[0], t[1]))
     return [t[2] for t in scored]
@@ -3970,8 +4033,12 @@ def _siebel_try_select_payments_third_level_view_bar(
     Same control as branch **(2)** Address: ``<select id="j_s_vctrl_div_tabScreen">`` (Third Level View Bar
     combo behind the chevron). On Hero Connect the **Payments** third-level view uses the ``<option>`` whose
     visible label is exactly **Payments** — that string is tried first via ``select_option(label=…)``.
+
+    **Per-label timeout is capped** (``_opt_t``): uncapped waits on many roots × labels could stall for minutes
+    when an option is missing. Callers should run :func:`_siebel_js_select_third_level_option_matching` first.
     """
-    t = min(int(action_timeout_ms), 6000)
+    _cap = min(int(action_timeout_ms), 6000)
+    _opt_t = min(1200, max(400, _cap // 3))
     _labels = (
         "Payments",  # canonical operator-visible label
         "Payment",
@@ -3991,7 +4058,7 @@ def _siebel_try_select_payments_third_level_view_bar(
                     continue
                 for lbl in _labels:
                     try:
-                        loc.select_option(label=lbl, timeout=t)
+                        loc.select_option(label=lbl, timeout=_opt_t)
                         note(
                             f"Payments: Third Level View Bar — selected {lbl!r} via {css!r} "
                             "(same control as Address tabScreen6 path)."
@@ -4010,7 +4077,12 @@ def _siebel_js_select_third_level_option_matching(
     label_regex: str,
     content_frame_selector: str | None,
 ) -> bool:
-    """``evaluate`` in main + iframes: pick first ``<option>`` whose text matches ``label_regex``."""
+    """
+    ``evaluate`` in **Frame**\\ s: pick first ``<option>`` whose text matches ``label_regex``.
+
+    Tries :func:`_siebel_frames_branch2_shell_for_third_level_bar` first (same shell as **S_A1** / Address),
+    then **page** + :func:`_ordered_frames` (deduped).
+    """
     js = """(needle) => {
       let re;
       try { re = new RegExp(needle, 'i'); } catch (e) { return false; }
@@ -4031,9 +4103,22 @@ def _siebel_js_select_third_level_option_matching(
       }
       return false;
     }"""
-    raw: list = [page]
+    raw: list = []
+    _seen_raw: set[int] = set()
+    for _f in _siebel_frames_branch2_shell_for_third_level(page):
+        _k = id(_f)
+        if _k not in _seen_raw:
+            _seen_raw.add(_k)
+            raw.append(_f)
+    if id(page) not in _seen_raw:
+        _seen_raw.add(id(page))
+        raw.append(page)
     try:
-        raw.extend(list(_ordered_frames(page)))
+        for _fr in _ordered_frames(page):
+            _k = id(_fr)
+            if _k not in _seen_raw:
+                _seen_raw.add(_k)
+                raw.append(_fr)
     except Exception:
         pass
     order = sorted(
@@ -4110,18 +4195,16 @@ def _siebel_try_activate_payments_tab(
     note,
 ) -> bool:
     """
-    Open the **Payments** view before Payment Lines automation. Prefer the **Third Level View Bar**
-    ``select#j_s_vctrl_div_tabScreen`` (same as **Address** ``tabScreen6`` path) with ``<option>`` label
-    **Payments**, then **#s_vctrl_div** **Payments** anchors, then frame-wide tab/link name patterns.
+    Open the **Payments** view before Payment Lines automation.
+
+    Order (latency-tuned): **JS** ``select`` option match in page/frames first (cheap ``evaluate``), then
+    Playwright ``select_option`` on the Third Level bar (capped per-label timeout), then **#s_vctrl_div**
+    **Payments** anchors, then frame-wide tab/link name patterns.
     """
-    if _siebel_try_select_payments_third_level_view_bar(
-        page,
-        action_timeout_ms=action_timeout_ms,
-        content_frame_selector=content_frame_selector,
-        note=note,
-    ):
-        _safe_page_wait(page, 500, log_label="after_payments_third_level_select")
-        return True
+    try:
+        note("Payments: activating tab — trying JS Third Level View Bar match (fast), then select_option.")
+    except Exception:
+        pass
     if _siebel_js_select_third_level_option_matching(
         page,
         label_regex=r"^Payments$|^Payment$|Customer\s+payments?|Payment\s+details",
@@ -4134,6 +4217,14 @@ def _siebel_try_activate_payments_tab(
         except Exception:
             pass
         _safe_page_wait(page, 500, log_label="after_payments_third_level_js")
+        return True
+    if _siebel_try_select_payments_third_level_view_bar(
+        page,
+        action_timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+        note=note,
+    ):
+        _safe_page_wait(page, 500, log_label="after_payments_third_level_select")
         return True
     if _siebel_try_click_payments_tab_under_s_vctrl(
         page,
@@ -7130,6 +7221,7 @@ def _add_customer_payment(
         f"vehicle_type={_vt_raw!r}, cubic_capacity={_cc_raw!r}, "
         f"cc_num={_cc_num!r}, transaction_amount={_txn_amount!r}."
     )
+    note("Payments: starting Add customer payment (tab activation, then Payment Lines roots / '+').")
 
     _safe_page_wait(page, 250, log_label="before_payments_plus_click")
 
