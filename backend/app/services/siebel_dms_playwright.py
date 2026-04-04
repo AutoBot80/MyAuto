@@ -12119,8 +12119,11 @@ def _create_order(
                 _fin_err = _detect_siebel_error_popup(page, content_frame_selector)
                 if _fin_err:
                     return False, f"Siebel error while setting Financier/Financer: {_fin_err[:200]}", scraped
-                if _fin_hard_err == "Financer name not matched":
-                    return False, "Financer name not matched", scraped
+                if _fin_hard_err in (
+                    "Financer name not matched",
+                    "Financer name could not be matched",
+                ):
+                    return False, _fin_hard_err, scraped
                 return False, _fin_hard_err, scraped
             if not _fin_name_ok:
                 _fin_err = _detect_siebel_error_popup(page, content_frame_selector)
@@ -16205,11 +16208,15 @@ def _fill_create_order_financier_field_on_frame(
     Click the **Financer text input** (not the pick/magnifier control), type the name in **ALL CAPS**,
     **Tab** out. That **Tab** opens a small tablet/dialog with focus in the first field.
 
-    Then: **Tab** to the second field, clear it, type the same **ALL CAPS** financier name, **Enter**.
+    Then: **Tab** to the second field, clear it, type the same **ALL CAPS** financier name, **Tab**, **Enter**
+    (not Enter immediately after typing). Waits for the **Financial Consultant** / result grid: if it has
+    at least one data row, selects the first row and **Enter**; otherwise returns
+    ``(False, "Financer name could not be matched")``.
+
     Does **not** use the MVG pick-icon / Pick Financers popup flow.
 
-    Returns ``(True, None)`` when the main field and tablet field 2 were filled; ``(False, None)`` if the
-    main field could not be resolved or filled.
+    Returns ``(True, None)`` on success; ``(False, None)`` if the main field could not be resolved or filled;
+    ``(False, "Financer name could not be matched")`` when the search grid has no matching rows.
     """
     _caps = (financier_display or "").strip().upper()
     if not _caps:
@@ -16381,7 +16388,7 @@ def _fill_create_order_financier_field_on_frame(
         return None
 
     _f2 = _focused_fillable_input_element()
-    _tablet_ok = False
+    _typed = False
     if _f2 is not None:
         try:
             try:
@@ -16392,7 +16399,6 @@ def _fill_create_order_financier_field_on_frame(
                 _f2.press("Control+a", timeout=800)
             except Exception:
                 pass
-            _typed = False
             try:
                 _f2.fill(_caps, timeout=_tmo)
                 _typed = True
@@ -16402,36 +16408,64 @@ def _fill_create_order_financier_field_on_frame(
                     _typed = True
                 except Exception:
                     _typed = False
-            if _typed:
-                try:
-                    _f2.press("Enter", timeout=1200)
-                except Exception:
-                    try:
-                        page.keyboard.press("Enter")
-                    except Exception:
-                        pass
-                _tablet_ok = True
         except Exception:
-            _tablet_ok = False
-    if not _tablet_ok:
+            _typed = False
+    if not _typed:
         try:
             page.keyboard.press("Control+a")
         except Exception:
             pass
         try:
             page.keyboard.type(_caps, delay=20)
+            _typed = True
         except Exception:
-            pass
-        try:
-            page.keyboard.press("Enter")
-        except Exception:
-            pass
-    _safe_page_wait(page, 400, log_label="financier_tablet_after_enter")
+            return False, None
+    # After value in field 2: Tab (not Enter), then Enter — runs search and loads the grid below.
+    try:
+        page.keyboard.press("Tab")
+    except Exception:
+        pass
+    _safe_page_wait(page, 220, log_label="financier_tablet_field2_after_tab")
+    try:
+        page.keyboard.press("Enter")
+    except Exception:
+        pass
+    _safe_page_wait(page, 700, log_label="financier_tablet_after_tab_enter_search")
+    _n_rows = _financier_mvg_financial_consultant_data_row_count(page, content_frame_selector)
+    if _n_rows <= 0:
+        _safe_page_wait(page, 1000, log_label="financier_tablet_grid_retry_wait")
+        _n_rows = _financier_mvg_financial_consultant_data_row_count(page, content_frame_selector)
+    if _n_rows <= 0:
+        if callable(note):
+            try:
+                note(
+                    "Create Order: Financer tablet search returned no Financial Consultant grid rows — "
+                    f"Financer name could not be matched. typed={_caps!r}."
+                )
+            except Exception:
+                pass
+        return False, "Financer name could not be matched"
+    if not _financier_mvg_click_first_result_row(page, content_frame_selector):
+        if callable(note):
+            try:
+                note(
+                    "Create Order: Financer result grid had rows but first row could not be selected — "
+                    f"typed={_caps!r}."
+                )
+            except Exception:
+                pass
+        return False, "Financer name could not be matched"
+    _safe_page_wait(page, 350, log_label="financier_tablet_after_first_row_click")
+    try:
+        page.keyboard.press("Enter")
+    except Exception:
+        pass
+    _safe_page_wait(page, 400, log_label="financier_tablet_after_result_enter")
     if callable(note):
         try:
             note(
-                "Create Order: Financer main field ALL CAPS + Tab → tablet field1; Tab to field2; "
-                f"clear + ALL CAPS + Enter. source={financier_display!r} typed={_caps!r}."
+                "Create Order: Financer tablet field2 ALL CAPS + Tab + Enter → grid row(s) → first row + Enter. "
+                f"source={financier_display!r} typed={_caps!r}."
             )
         except Exception:
             pass
