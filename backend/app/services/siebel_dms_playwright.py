@@ -12133,7 +12133,7 @@ def _create_order(
                 )
             _safe_page_wait(page, 500, log_label="after_financier_fill")
             note(
-                "Create Order: Financier/Financer set on main form (text field + ALL CAPS + Tab; no pick icon / "
+                "Create Order: Financier/Financer main field + tablet field2 (ALL CAPS + Enter; no pick icon / "
                 f"no MVG). source={_fin_name!r} typed={_fin_caps!r}."
             )
             _fin_post_err = _detect_siebel_error_popup(page, content_frame_selector)
@@ -16203,10 +16203,13 @@ def _fill_create_order_financier_field_on_frame(
     **Vehicle Sales — Financer** on create order (main form only):
 
     Click the **Financer text input** (not the pick/magnifier control), type the name in **ALL CAPS**,
-    **Tab** out. Does **not** open the MVG / Pick Financers popup.
+    **Tab** out. That **Tab** opens a small tablet/dialog with focus in the first field.
 
-    Returns ``(True, None)`` when the text field was filled and Tab sent; ``(False, None)`` if the field
-    could not be resolved or filled. This is **not** an MVG success signal (no popup / grid).
+    Then: **Tab** to the second field, clear it, type the same **ALL CAPS** financier name, **Enter**.
+    Does **not** use the MVG pick-icon / Pick Financers popup flow.
+
+    Returns ``(True, None)`` when the main field and tablet field 2 were filled; ``(False, None)`` if the
+    main field could not be resolved or filled.
     """
     _caps = (financier_display or "").strip().upper()
     if not _caps:
@@ -16333,12 +16336,102 @@ def _fill_create_order_financier_field_on_frame(
             page.keyboard.press("Tab")
         except Exception:
             pass
-    _safe_page_wait(page, 400, log_label="financier_main_after_tab")
+    _safe_page_wait(page, 600, log_label="financier_main_after_tab_tablet_open")
+    # Tablet opens with focus in field 1 — Tab to field 2, clear, fill financier ALL CAPS, Enter.
+    try:
+        page.keyboard.press("Tab")
+    except Exception:
+        pass
+    _safe_page_wait(page, 280, log_label="financier_tablet_tab_to_field2")
+
+    def _frames_fin_tablet_scan_order():
+        seen: set[int] = set()
+        out = []
+        for f in (frame, page.main_frame, *_ordered_frames(page)):
+            try:
+                fid = id(f)
+                if fid in seen:
+                    continue
+                seen.add(fid)
+                out.append(f)
+            except Exception:
+                continue
+        return out
+
+    def _focused_fillable_input_element():
+        for fr in _frames_fin_tablet_scan_order():
+            try:
+                h = fr.evaluate_handle(
+                    """() => {
+                        const e = document.activeElement;
+                        if (!e) return null;
+                        const t = e.tagName.toLowerCase();
+                        if (t !== 'input' && t !== 'textarea') return null;
+                        if (e.disabled || e.readOnly) return null;
+                        const ty = (e.getAttribute('type') || 'text').toLowerCase();
+                        if (ty === 'hidden' || ty === 'button' || ty === 'submit') return null;
+                        return e;
+                    }"""
+                )
+                el = h.as_element()
+                if el is not None:
+                    return el
+            except Exception:
+                continue
+        return None
+
+    _f2 = _focused_fillable_input_element()
+    _tablet_ok = False
+    if _f2 is not None:
+        try:
+            try:
+                _f2.fill("", timeout=_tmo)
+            except Exception:
+                pass
+            try:
+                _f2.press("Control+a", timeout=800)
+            except Exception:
+                pass
+            _typed = False
+            try:
+                _f2.fill(_caps, timeout=_tmo)
+                _typed = True
+            except Exception:
+                try:
+                    _f2.type(_caps, delay=20, timeout=_tmo)
+                    _typed = True
+                except Exception:
+                    _typed = False
+            if _typed:
+                try:
+                    _f2.press("Enter", timeout=1200)
+                except Exception:
+                    try:
+                        page.keyboard.press("Enter")
+                    except Exception:
+                        pass
+                _tablet_ok = True
+        except Exception:
+            _tablet_ok = False
+    if not _tablet_ok:
+        try:
+            page.keyboard.press("Control+a")
+        except Exception:
+            pass
+        try:
+            page.keyboard.type(_caps, delay=20)
+        except Exception:
+            pass
+        try:
+            page.keyboard.press("Enter")
+        except Exception:
+            pass
+    _safe_page_wait(page, 400, log_label="financier_tablet_after_enter")
     if callable(note):
         try:
             note(
-                "Create Order: Financer main text field (no pick icon): ALL CAPS + Tab "
-                f"(main form only, not MVG). source={financier_display!r} typed={_caps!r}."
+                "Create Order: Financer main field ALL CAPS + Tab → tablet field1; Tab to field2; "
+                f"clear + ALL CAPS + Enter. source={financier_display!r} typed={_caps!r}."
             )
         except Exception:
             pass
