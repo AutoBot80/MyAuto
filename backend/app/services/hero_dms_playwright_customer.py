@@ -4121,11 +4121,25 @@ def _contact_find_title_sweep_for_enquiry(
         _enq_rows = 0
         _enq_number = ""
         for _enq_attempt in range(3):
+            # After the first activation, reprobe the subgrid without re-clicking the tab first —
+            # Siebel sometimes paints the jqGrid after our first pass; a redundant click can also
+            # confuse focus/order on duplicate-mobile drilldowns.
+            if _enq_attempt > 0:
+                _enq_checked, _enq_rows, _enq_number = _contact_enquiry_tab_has_rows(
+                    page,
+                    action_timeout_ms=action_timeout_ms,
+                    content_frame_selector=content_frame_selector,
+                    note=note,
+                    activate_tab=False,
+                )
+                if _enq_checked:
+                    break
             _enq_checked, _enq_rows, _enq_number = _contact_enquiry_tab_has_rows(
                 page,
                 action_timeout_ms=action_timeout_ms,
                 content_frame_selector=content_frame_selector,
                 note=note,
+                activate_tab=True,
             )
             if _enq_checked:
                 break
@@ -4170,30 +4184,37 @@ def _contact_enquiry_tab_has_rows(
     action_timeout_ms: int,
     content_frame_selector: str | None,
     note,
+    activate_tab: bool = True,
 ) -> tuple[bool, int, str]:
     """
     Open Contact_Enquiry tab and check whether Enquiry grid has data rows **on the opened contact**.
 
-    Detection: header ``#jqgh_s_1_l_Enquiry_`` (or **Enquiry#** / **Enquiries** text), then non-empty
-    values on ``input`` / ``textarea`` ``name=\"Enquiry_\"``; table cell scrape; Hero **Enquiry#** as
+    When ``activate_tab`` is False, only waits and re-evaluates frames (tab already activated).
+
+    Detection: header ``#jqgh_s_1_l_Enquiry_`` (or **Enquiry#** / **Enquiries** / **Enquiry list** text),
+    ``aria-describedby`` / ``th`` hints, then non-empty values on ``input`` / ``textarea``
+    ``name=\"Enquiry_\"``; table cell scrape; Hero **Enquiry#** as
     visible ``<a>`` (e.g. ``11870-01-SENQ-0623-305``) inside **.siebui-applet** when the applet text
     references enquiries.     When **Enquiry Status** fields exist (``id=1_HHML_Enquiry_Status`` or any
     element whose ``id`` ends with ``HHML_Enquiry_Status``), only rows with status **Open**
     (case-insensitive) count as an **open** enquiry for sweep skip. **Closed** enquiries do not
     count — caller takes branch **(2)** (Address / postal). Frames: **main first**, then Siebel iframes.
     """
-    _clicked = _siebel_try_click_named_in_frames(
-        page,
-        re.compile(r"Contact[_\s]*Enquiry", re.I),
-        roles=("tab", "link", "button"),
-        timeout_ms=min(action_timeout_ms, 3500),
-        content_frame_selector=content_frame_selector,
-    )
-    if not _clicked:
-        note("Contact_Enquiry tab not clickable (could not verify enquiry rows).")
-        return False, 0, ""
+    if activate_tab:
+        _clicked = _siebel_try_click_named_in_frames(
+            page,
+            re.compile(r"Contact[_\s]*Enquiry", re.I),
+            roles=("tab", "link", "button"),
+            timeout_ms=min(action_timeout_ms, 3500),
+            content_frame_selector=content_frame_selector,
+        )
+        if not _clicked:
+            note("Contact_Enquiry tab not clickable (could not verify enquiry rows).")
+            return False, 0, ""
 
-    _safe_page_wait(page, 900, log_label="after_contact_enquiry_tab")
+        _safe_page_wait(page, 1400, log_label="after_contact_enquiry_tab")
+    else:
+        _safe_page_wait(page, 550, log_label="contact_enquiry_subgrid_reprobe_no_tab_click")
 
     _js = """() => {
       const vis = (el) => {
@@ -4243,7 +4264,8 @@ def _contact_enquiry_tab_has_rows(
         const applets = Array.from(document.querySelectorAll('.siebui-applet')).filter(vis);
         for (const ap of applets) {
           const snip = norm(ap.innerText || '').slice(0, 1200);
-          if (!snip.includes('enquiries') && !snip.includes('enquiry#') && !snip.includes('enquiry #')) continue;
+          if (!snip.includes('enquiries') && !snip.includes('enquiry#') && !snip.includes('enquiry #')
+              && !snip.includes('enquiry list') && !snip.includes('open enquiries')) continue;
           tryAp(ap);
           if (cnt > 0) scope = 'applet';
         }
@@ -4321,7 +4343,9 @@ def _contact_enquiry_tab_has_rows(
         };
       };
 
-      let headerFound = !!document.querySelector('#jqgh_s_1_l_Enquiry_');
+      let headerFound = !!document.querySelector(
+        '#jqgh_s_1_l_Enquiry_, [aria-describedby*="Enquiry_"], th[id*="Enquiry_"], th[name="Enquiry_"]'
+      );
       let jqghIdHit = '';
       if (headerFound) {
         const _jid = document.querySelector('#jqgh_s_1_l_Enquiry_');
@@ -4343,7 +4367,7 @@ def _contact_enquiry_tab_has_rows(
         for (const n of hdrNodes) {
           const t = norm(n.textContent || '');
           if (t === 'enquiry#' || t === 'enquiry #' || t === 'enquiry no' || t === 'enquiry no.'
-              || t === 'enquiries'
+              || t === 'enquiries' || t === 'enquiry list'
               || (t.includes('enquiry') && (t.includes('#') || t.includes('no')))) {
             headerFound = true;
             break;
@@ -4454,7 +4478,7 @@ def _contact_enquiry_tab_has_rows(
       for (const tbl of tables) {
         const ttxt = norm(tbl.innerText || '');
         if (!ttxt.includes('enquiry#') && !ttxt.includes('enquiry #')
-            && !ttxt.includes('enquiries')
+            && !ttxt.includes('enquiries') && !ttxt.includes('enquiry list')
             && !ttxt.includes('enquiry no') && !(ttxt.includes('enquiry') && ttxt.includes('no'))) continue;
 
         let enqColIdx = -1;

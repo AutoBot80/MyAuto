@@ -70,6 +70,27 @@ from app.services.hero_dms_shared_utilities import (
 
 logger = logging.getLogger(__name__)
 
+
+# ---------------------------------------------------------------------------
+# Branch-coverage tracker — logs which Siebel UI fallback strategy actually
+# succeeds during a run.  Accumulated in-memory; dumped by ``prepare_vehicle``
+# and ``_siebel_vehicle_find_chassis_engine_enter`` at the end of their flows.
+# ---------------------------------------------------------------------------
+_BRANCH_HITS: dict[str, int] = {}
+
+
+def _branch_hit(func: str, branch: str) -> None:
+    key = f"{func}::{branch}"
+    _BRANCH_HITS[key] = _BRANCH_HITS.get(key, 0) + 1
+
+
+def _dump_branch_hits(note) -> None:
+    if not _BRANCH_HITS:
+        return
+    note(f"BRANCH_HITS ({len(_BRANCH_HITS)} entries): {dict(_BRANCH_HITS)}")
+    logger.info("branch_hits: %s", _BRANCH_HITS)
+
+
 def _siebel_vehicle_find_wildcard_value(raw: str) -> str:
     """Hero Connect vehicle Find uses ``*`` prefix on VIN/Engine for partial match (see operator screenshots)."""
     s = (raw or "").strip()
@@ -204,6 +225,7 @@ def _try_prepare_find_vehicles_applet(
             except Exception:
                 continue
         if _force_open_vehicles_find_via_dom():
+            _branch_hit("_select_global_find_vehicles", "dom_force")
             return True
         return False
 
@@ -294,12 +316,17 @@ def _try_prepare_find_vehicles_applet(
 
     def try_on_root(page_: Page, root) -> bool:
         if open_find_combobox_aria_then_vehicles(page_, root):
+            _branch_hit("_try_prepare_find_vehicles_applet", "aria_combobox")
             return True
         changed_global = _select_global_find_vehicles(root)
         if select_vehicles_on_native_selects(root):
+            _branch_hit("_try_prepare_find_vehicles_applet", "native_select")
             return True
         if open_find_dropdown_then_vehicles(page_, root):
+            _branch_hit("_try_prepare_find_vehicles_applet", "dropdown_regex")
             return True
+        if changed_global:
+            _branch_hit("_try_prepare_find_vehicles_applet", "global_find")
         return changed_global
 
     for fl in _iter_frame_locator_roots(page, content_frame_selector):
@@ -334,36 +361,7 @@ def _try_fill_vin_engine_in_vehicles_find_applet(
     if not cw or not ew:
         return False
 
-    # #region agent log - vehicle find same-frame diagnostics
-    def _dbgv(hypothesis_id: str, message: str, data: dict) -> None:
-        try:
-            import json as _j_dbgv, time as _t_dbgv
-            from pathlib import Path as _P_dbgv
-            _log_path = _P_dbgv(__file__).resolve().parents[3] / "debug-08e634.log"
-            with open(_log_path, "a", encoding="utf-8") as _lf_dbgv:
-                _lf_dbgv.write(
-                    _j_dbgv.dumps(
-                        {
-                            "sessionId": "08e634",
-                            "runId": "pre-fix",
-                            "hypothesisId": hypothesis_id,
-                            "location": "hero_dms_playwright_vehicle.py:_try_fill_vin_engine_in_vehicles_find_applet",
-                            "message": message,
-                            "data": data,
-                            "timestamp": _ts_ist_iso(),
-                        }
-                    )
-                    + "\n"
-                )
-        except Exception:
-            pass
-
-    _dbgv(
-        "V1",
-        "vehicle_find_entry",
-        {"has_vin": bool(cw), "has_engine": bool(ew), "vin_len": len(cw), "engine_len": len(ew)},
-    )
-    # #endregion
+    logger.debug("vehicle_find_entry: has_vin=%s has_engine=%s", bool(cw), bool(ew))
 
     vin_css = (
         'input#field_textbox_0',
@@ -385,37 +383,6 @@ def _try_fill_vin_engine_in_vehicles_find_applet(
     )
 
     def try_root(root) -> bool:
-        # #region agent log - vehicle findfieldsbox probe on this root
-        try:
-            _ff_probe = root.evaluate(
-                """() => {
-                  const box = document.getElementById('findfieldsbox') || document.getElementById('findfieldbox');
-                  if (!box) {
-                    return { has_box: false, vin_id_present: false, engine_id_present: false, vin_editable: false, engine_editable: false };
-                  }
-                  const vis = (el) => {
-                    if (!el) return false;
-                    const st = window.getComputedStyle(el);
-                    if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
-                    const r = el.getBoundingClientRect();
-                    return r.width >= 2 && r.height >= 2;
-                  };
-                  const vin = box.querySelector('input#field_textbox_0');
-                  const eng = box.querySelector('input#field_textbox_2');
-                  const editable = (el) => !!(el && vis(el) && !el.readOnly && !el.disabled);
-                  return {
-                    has_box: true,
-                    vin_id_present: !!vin,
-                    engine_id_present: !!eng,
-                    vin_editable: editable(vin),
-                    engine_editable: editable(eng),
-                  };
-                }"""
-            )
-            _dbgv("V2", "vehicle_findfieldsbox_probe", _ff_probe or {})
-        except Exception:
-            _dbgv("V2", "vehicle_findfieldsbox_probe_eval_failed", {})
-
         # Strict path: fill inside same-frame #findfieldsbox using required IDs.
         try:
             _strict_out = root.evaluate(
@@ -474,12 +441,11 @@ def _try_fill_vin_engine_in_vehicles_find_applet(
                 }""",
                 {"vin": cw, "eng": ew},
             )
-            _dbgv("V6", "vehicle_findfieldsbox_strict_fill_attempt", _strict_out or {})
             if _strict_out and _strict_out.get("ok"):
+                _branch_hit("_try_fill_vin_engine", "findfieldsbox_js_strict")
                 return True
         except Exception:
-            _dbgv("V6", "vehicle_findfieldsbox_strict_fill_eval_failed", {})
-        # #endregion
+            pass
         applets: list = []
         try:
             cand = root.locator(".siebui-applet").filter(has_text=re.compile(r"VIN|Engine", re.I))
@@ -511,32 +477,6 @@ def _try_fill_vin_engine_in_vehicles_find_applet(
                 pass
 
         for applet in applets:
-            # #region agent log - vehicle applet candidate quality
-            try:
-                _applet_diag = applet.evaluate(
-                    """(el) => {
-                      const vis = (n) => {
-                        if (!n) return false;
-                        const st = window.getComputedStyle(n);
-                        if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
-                        const r = n.getBoundingClientRect();
-                        return r.width >= 2 && r.height >= 2;
-                      };
-                      const vin = el.querySelector('input#field_textbox_0');
-                      const eng = el.querySelector('input#field_textbox_2');
-                      return {
-                        has_vin_id: !!vin,
-                        has_engine_id: !!eng,
-                        vin_editable: !!(vin && vis(vin) && !vin.readOnly && !vin.disabled),
-                        engine_editable: !!(eng && vis(eng) && !eng.readOnly && !eng.disabled),
-                        text_sample: String(el.innerText || '').slice(0, 220),
-                      };
-                    }"""
-                )
-                _dbgv("V3", "vehicle_applet_candidate_probe", _applet_diag or {})
-            except Exception:
-                _dbgv("V3", "vehicle_applet_candidate_probe_eval_failed", {})
-            # #endregion
             try:
                 vin_loc = applet.locator('input#field_textbox_0, input[id="field_textbox_0"]').first
                 eng_loc = applet.locator('input#field_textbox_2, input[id="field_textbox_2"]').first
@@ -564,7 +504,7 @@ def _try_fill_vin_engine_in_vehicles_find_applet(
                 eng_loc.fill(ew, timeout=timeout_ms)
                 eng_loc.press("Enter", timeout=min(8000, timeout_ms))
                 logger.info("siebel_dms: filled VIN + Engine# in Vehicles Find applet and pressed Enter")
-                _dbgv("V4", "vehicle_find_fill_success_same_applet", {"used_ids": True})
+                _branch_hit("_try_fill_vin_engine", "applet_scan_ids")
                 return True
             except Exception:
                 continue
@@ -582,7 +522,7 @@ def _try_fill_vin_engine_in_vehicles_find_applet(
                 return True
         except Exception:
             continue
-    _dbgv("V5", "vehicle_find_failed_all_roots", {"reason": "strict_ids_not_found_or_not_editable"})
+    logger.debug("vehicle_find: all roots exhausted, strict ids not found or not editable")
     return False
 
 
@@ -1027,6 +967,7 @@ def _siebel_try_click_vin_search_hit_link(
 
     def try_click_in_root(root) -> bool:
         if _try_gview_1001_title_links(root):
+            _branch_hit("_siebel_try_click_vin", "gview_1001_titles")
             return True
 
         scopes: list = []
@@ -1048,6 +989,7 @@ def _siebel_try_click_vin_search_hit_link(
 
         for scope in scopes:
             if _try_gview_1001_title_links(scope):
+                _branch_hit("_siebel_try_click_vin", "gview_1001_scoped_applet")
                 return True
 
         for scope in scopes:
@@ -1069,6 +1011,7 @@ def _siebel_try_click_vin_search_hit_link(
                                 and vin_key.upper() in compact.upper()
                             ):
                                 if _try_click_siebel_drilldown(link):
+                                    _branch_hit("_siebel_try_click_vin", "anchor_text_scan")
                                     return True
                         except Exception:
                             continue
@@ -1079,6 +1022,7 @@ def _siebel_try_click_vin_search_hit_link(
                     ln = loc.count()
                     for i in range(min(ln, 28)):
                         if _try_click_siebel_drilldown(loc.nth(i)):
+                            _branch_hit("_siebel_try_click_vin", "role_link_sub_pat")
                             return True
                 except Exception:
                     pass
@@ -1094,6 +1038,7 @@ def _siebel_try_click_vin_search_hit_link(
                         hn = hits.count()
                         for i in range(min(hn, 35)):
                             if _try_click_siebel_drilldown(hits.nth(i)):
+                                _branch_hit("_siebel_try_click_vin", f"css_filter_{css[:30]}")
                                 return True
                     except Exception:
                         continue
@@ -1128,11 +1073,13 @@ def _siebel_try_click_vin_search_hit_link(
                         link = inner.first
                         if link.is_visible(timeout=500):
                             if _try_click_siebel_drilldown(link):
+                                _branch_hit("_siebel_try_click_vin", "row_inner_link")
                                 return True
                     except Exception:
                         continue
                 try:
                     row.click(timeout=timeout_ms)
+                    _branch_hit("_siebel_try_click_vin", "row_direct_click")
                     return True
                 except Exception:
                     continue
@@ -1147,6 +1094,7 @@ def _siebel_try_click_vin_search_hit_link(
     for fr in list(_ordered_frames(page)) + [page.main_frame]:
         try:
             if _try_js_click_gview_s_1001_title(fr):
+                _branch_hit("_siebel_try_click_vin", "js_click_gview_s_1001")
                 return True
         except Exception:
             continue
@@ -1443,6 +1391,7 @@ def _siebel_click_service_request_list_new_record(
     for _root in roots():
         try:
             if bool(_root.evaluate(_js_plus)):
+                _branch_hit("_click_sr_list_new", f"js_newrecord_{context}")
                 note(
                     f"{log_prefix}: clicked {context} + (JS: siebui-icon-newrecord — "
                     "ids s_3_1_12_0_Ctrl / s_2_* or scan matching Service Request / PDI / Precheck List:New)."
@@ -1466,6 +1415,7 @@ def _siebel_click_service_request_list_new_record(
                             _rl.first.click(timeout=_tmo)
                         except Exception:
                             _rl.first.click(timeout=_tmo, force=True)
+                        _branch_hit("_click_sr_list_new", f"role_{_role}_{context}")
                         note(
                             f"{log_prefix}: clicked {context} + via role={_role!r} "
                             f"name={_sr_role_name!r}."
@@ -1489,11 +1439,164 @@ def _siebel_click_service_request_list_new_record(
                         _loc.click(timeout=_tmo)
                     except Exception:
                         _loc.click(timeout=_tmo, force=True)
+                    _branch_hit("_click_sr_list_new", f"css_{_css[:30]}_{context}")
                     note(f"{log_prefix}: clicked {context} + ({_css!r} nth={_ii}).")
                     return True
             except Exception:
                 continue
 
+    return False
+
+
+def _click_third_level_view_bar_tab(
+    page: Page,
+    tab_text: str,
+    *,
+    wait_ms: int,
+    content_frame_selector: str | None,
+    note,
+    log_prefix: str,
+) -> bool:
+    """
+    Click a tab in Siebel's Third Level View Bar (``#s_vctrl_div`` or aria-labelled bar).
+
+    Used for **Pre-check** and **PDI** tabs. The JS evaluator tries ``#s_vctrl_div`` first
+    (operator-confirmed), then ``[aria-label*='Third Level View Bar']`` containers, matching
+    by hyphen-insensitive text (e.g. "Pre-check" matches "PreCheck").
+    """
+    tab_norm = (tab_text or "").strip().lower()
+    if not tab_norm:
+        return False
+
+    roots = _siebel_all_search_roots(page, content_frame_selector)
+    _seen_r: set[int] = set()
+    _rv_roots = []
+    for _pref in (page, page.main_frame):
+        if hasattr(_pref, "evaluate") and id(_pref) not in _seen_r:
+            _seen_r.add(id(_pref))
+            _rv_roots.append(_pref)
+    for _r in roots:
+        if type(_r).__name__ == "FrameLocator" or id(_r) in _seen_r:
+            continue
+        if hasattr(_r, "evaluate"):
+            _seen_r.add(id(_r))
+            _rv_roots.append(_r)
+
+    _TAB_JS = """(tabNeedle) => {
+        const vis = (el) => {
+            if (!el) return false;
+            const st = window.getComputedStyle(el);
+            if (st.display === 'none' || st.visibility === 'hidden') return false;
+            const r = el.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+        };
+        const norm = (s) => String(s || '').trim().toLowerCase();
+        const compact = (s) => s.replace(/[-\\s]+/g, '');
+        const matches = (txt, needle) => {
+            if (txt === needle || txt.includes(needle)) return true;
+            const a = compact(txt);
+            const b = compact(needle);
+            return a === b || a.includes(b) || b.includes(a);
+        };
+        const containers = [];
+        const seenC = new Set();
+        const addC = (el, src) => {
+            if (!el || !vis(el) || seenC.has(el)) return;
+            seenC.add(el);
+            containers.push({ el: el, src: src });
+        };
+        addC(document.getElementById('s_vctrl_div'), 's_vctrl_div');
+        for (const bar of document.querySelectorAll(
+            "[aria-label*='Third Level View Bar' i], [title*='Third Level View Bar' i], [id*='ThirdLevelViewBar' i]"
+        )) {
+            addC(bar, 'third_level_view_aria');
+        }
+        const allVisibleTabLabels = [];
+        for (const c of containers) {
+            const bar = c.el;
+            const tabs = Array.from(
+                bar.querySelectorAll("a, button, [role='tab']")
+            );
+            for (const t of tabs) {
+                if (!vis(t)) continue;
+                const raw = (t.innerText || t.textContent || t.getAttribute('aria-label') || t.getAttribute('title') || '');
+                const txt = norm(raw);
+                if (allVisibleTabLabels.length < 80) {
+                    allVisibleTabLabels.push(String(raw).trim().slice(0, 48));
+                }
+                if (matches(txt, tabNeedle)) {
+                    let target = t;
+                    const tTag = (t.tagName || '').toUpperCase();
+                    if (tTag === 'LI') {
+                        const li = t;
+                        const inner = li.querySelector("a, button, [role='tab']");
+                        if (inner && inner !== li) {
+                            target = inner;
+                        } else {
+                            const sib = li.nextElementSibling;
+                            const sibTag = (sib && sib.tagName) ? String(sib.tagName).toUpperCase() : '';
+                            const sibIsAction = !!(sib && (sibTag === 'A' || sibTag === 'BUTTON' || String(sib.getAttribute('role') || '').toLowerCase() === 'tab'));
+                            if (sibIsAction && vis(sib)) {
+                                target = sib;
+                            } else {
+                                const ctrl = li.getAttribute('aria-controls') || '';
+                                const linked = ctrl ? bar.querySelector(`[id="${ctrl}"], a[aria-controls="${ctrl}"], [href="#${ctrl}"]`) : null;
+                                if (linked && linked !== li && vis(linked)) {
+                                    target = linked;
+                                } else {
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                    try { target.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
+                    try { target.focus(); } catch (e) {}
+                    try { target.click(); } catch (e) {}
+                    try {
+                        const opts = { bubbles: true, cancelable: true, view: window };
+                        target.dispatchEvent(new MouseEvent('mousedown', opts));
+                        target.dispatchEvent(new MouseEvent('mouseup', opts));
+                        target.dispatchEvent(new MouseEvent('click', opts));
+                    } catch (e2) {}
+                    return {
+                        ok: true,
+                        containerCount: containers.length,
+                        containerSrc: c.src,
+                        visibleTabLabels: allVisibleTabLabels,
+                        matchEq: txt === tabNeedle,
+                        labelLen: String(raw).length,
+                        matchedHead: String(raw).slice(0, 24),
+                        matchedTag: t.tagName || '',
+                        matchedId: String(t.id || '').slice(0, 48),
+                        clickedTag: target.tagName || '',
+                        clickId: String(target.id || '').slice(0, 48),
+                    };
+                }
+            }
+        }
+        return {
+            ok: false,
+            containerCount: containers.length,
+            visibleTabLabels: allVisibleTabLabels,
+            matchEq: false,
+            labelLen: 0,
+        };
+    }"""
+
+    for _idx, root in enumerate(_rv_roots):
+        try:
+            _res = root.evaluate(_TAB_JS, tab_norm)
+            if isinstance(_res, dict) and _res.get("ok"):
+                _branch_hit("_click_third_level_tab", f"{tab_text}_container_{(_res.get('containerSrc') or 'unknown')}")
+                note(
+                    f"{log_prefix}: clicked {tab_text} from tab strip "
+                    f"(container={(_res.get('containerSrc') or '')!r})."
+                )
+                _safe_page_wait(page, wait_ms, log_label=f"after_third_level_{tab_norm}_tab")
+                return True
+        except Exception:
+            continue
+    logger.debug("third_level_tab: all roots failed for tab=%r", tab_text)
     return False
 
 
@@ -1537,253 +1640,6 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     def _roots():
         return _siebel_all_search_roots(page, content_frame_selector)
 
-    def _click_third_level_view_bar_tab(tab_text: str, *, wait_ms: int) -> bool:
-        """
-        Prefer clicking tabs from the explicit "Third Level View Bar" container because
-        this tenant sometimes renders duplicate tab labels elsewhere in the DOM.
-        """
-        # region agent log
-        _dbg_log = Path(__file__).resolve().parents[3] / "debug-0875fe.log"
-
-        def _dbg_ndj(*, hyp: str, loc: str, msg: str, data: dict) -> None:
-            try:
-                import json as _json_dbg
-
-                with open(_dbg_log, "a", encoding="utf-8") as _lf:
-                    _lf.write(
-                        _json_dbg.dumps(
-                            {
-                                "sessionId": "0875fe",
-                                "runId": "pre-fix",
-                                "hypothesisId": hyp,
-                                "location": loc,
-                                "message": msg,
-                                "data": data,
-                                "timestamp": _ts_ist_iso(),
-                            },
-                            ensure_ascii=False,
-                        )
-                        + "\n"
-                    )
-            except Exception:
-                pass
-
-        # endregion agent log
-
-        tab_norm = (tab_text or "").strip().lower()
-        if not tab_norm:
-            return False
-
-        # region agent log
-        _raw_roots = _roots()
-        _seen_r: set[int] = set()
-        _rv_roots = []
-        for _pref in (page, page.main_frame):
-            if hasattr(_pref, "evaluate") and id(_pref) not in _seen_r:
-                _seen_r.add(id(_pref))
-                _rv_roots.append(_pref)
-        for _r in _raw_roots:
-            if type(_r).__name__ == "FrameLocator" or id(_r) in _seen_r:
-                continue
-            if hasattr(_r, "evaluate"):
-                _seen_r.add(id(_r))
-                _rv_roots.append(_r)
-
-        _root_summ = []
-        for _i_r, _r in enumerate(_rv_roots[:16]):
-            _entry = {"i": _i_r, "type": type(_r).__name__}
-            try:
-                _u = getattr(_r, "url", None)
-                if callable(_u):
-                    _u = _u()
-                if isinstance(_u, str) and _u:
-                    _entry["url_tail"] = _u[-80:]
-            except Exception:
-                pass
-            _root_summ.append(_entry)
-        _dbg_ndj(
-            hyp="A",
-            loc="hero_dms_playwright_vehicle.py:_click_third_level_view_bar_tab",
-            msg="third_level_tab_roots_order",
-            data={
-                "tab": tab_text,
-                "roots_len": len(_rv_roots),
-                "roots_head": _root_summ,
-                "frame_locators_skipped": sum(
-                    1 for _x in _raw_roots if type(_x).__name__ == "FrameLocator"
-                ),
-            },
-        )
-        # endregion agent log
-
-        for _idx, root in enumerate(_rv_roots):
-            try:
-                _res = root.evaluate(
-                    """(tabNeedle) => {
-                        const vis = (el) => {
-                            if (!el) return false;
-                            const st = window.getComputedStyle(el);
-                            if (st.display === 'none' || st.visibility === 'hidden') return false;
-                            const r = el.getBoundingClientRect();
-                            return r.width > 0 && r.height > 0;
-                        };
-                        const norm = (s) => String(s || '').trim().toLowerCase();
-                        const compact = (s) => s.replace(/[-\\s]+/g, '');
-                        const matches = (txt, needle) => {
-                            if (txt === needle || txt.includes(needle)) return true;
-                            const a = compact(txt);
-                            const b = compact(needle);
-                            return a === b || a.includes(b) || b.includes(a);
-                        };
-                        // PreCheck / PDI live under Siebel **view control** `#s_vctrl_div` (operator-confirmed).
-                        // "Third Level View Bar" hover/tooltip often refers to this strip; aria-scoped nodes can miss controls.
-                        const containers = [];
-                        const seenC = new Set();
-                        const addC = (el, src) => {
-                            if (!el || !vis(el) || seenC.has(el)) return;
-                            seenC.add(el);
-                            containers.push({ el: el, src: src });
-                        };
-                        addC(document.getElementById('s_vctrl_div'), 's_vctrl_div');
-                        for (const bar of document.querySelectorAll(
-                            "[aria-label*='Third Level View Bar' i], [title*='Third Level View Bar' i], [id*='ThirdLevelViewBar' i]"
-                        )) {
-                            addC(bar, 'third_level_view_aria');
-                        }
-                        const allVisibleTabLabels = [];
-                        for (const c of containers) {
-                            const bar = c.el;
-                            const tabs = Array.from(
-                                bar.querySelectorAll("a, button, [role='tab']")
-                            );
-                            for (const t of tabs) {
-                                if (!vis(t)) continue;
-                                const raw = (t.innerText || t.textContent || t.getAttribute('aria-label') || t.getAttribute('title') || '');
-                                const txt = norm(raw);
-                                if (allVisibleTabLabels.length < 80) {
-                                    allVisibleTabLabels.push(String(raw).trim().slice(0, 48));
-                                }
-                                if (matches(txt, tabNeedle)) {
-                                    let target = t;
-                                    const tTag = (t.tagName || '').toUpperCase();
-                                    if (tTag === 'LI') {
-                                        // Never click LI wrapper directly; resolve to actionable tab control.
-                                        const li = t;
-                                        const inner = li.querySelector("a, button, [role='tab']");
-                                        if (inner && inner !== li) {
-                                            target = inner;
-                                        } else {
-                                            const sib = li.nextElementSibling;
-                                            const sibTag = (sib && sib.tagName) ? String(sib.tagName).toUpperCase() : '';
-                                            const sibIsAction = !!(sib && (sibTag === 'A' || sibTag === 'BUTTON' || String(sib.getAttribute('role') || '').toLowerCase() === 'tab'));
-                                            if (sibIsAction && vis(sib)) {
-                                                target = sib;
-                                            } else {
-                                                const ctrl = li.getAttribute('aria-controls') || '';
-                                                const linked = ctrl ? bar.querySelector(`[id="${ctrl}"], a[aria-controls="${ctrl}"], [href="#${ctrl}"]`) : null;
-                                                if (linked && linked !== li && vis(linked)) {
-                                                    target = linked;
-                                                } else {
-                                                    // No actionable element found; skip this match candidate.
-                                                    continue;
-                                                }
-                                            }
-                                        }
-                                    }
-                                    try { target.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
-                                    try { target.focus(); } catch (e) {}
-                                    try { target.click(); } catch (e) {}
-                                    try {
-                                        const opts = { bubbles: true, cancelable: true, view: window };
-                                        target.dispatchEvent(new MouseEvent('mousedown', opts));
-                                        target.dispatchEvent(new MouseEvent('mouseup', opts));
-                                        target.dispatchEvent(new MouseEvent('click', opts));
-                                    } catch (e2) {}
-                                    return {
-                                        ok: true,
-                                        containerCount: containers.length,
-                                        containerSrc: c.src,
-                                        visibleTabLabels: allVisibleTabLabels,
-                                        matchEq: txt === tabNeedle,
-                                        labelLen: String(raw).length,
-                                        matchedHead: String(raw).slice(0, 24),
-                                        matchedTag: t.tagName || '',
-                                        matchedId: String(t.id || '').slice(0, 48),
-                                        clickedTag: target.tagName || '',
-                                        clickId: String(target.id || '').slice(0, 48),
-                                    };
-                                }
-                            }
-                        }
-                        return {
-                            ok: false,
-                            containerCount: containers.length,
-                            visibleTabLabels: allVisibleTabLabels,
-                            matchEq: false,
-                            labelLen: 0,
-                        };
-                    }""",
-                    tab_norm,
-                )
-                # region agent log
-                _dbg_ndj(
-                    hyp="B",
-                    loc="hero_dms_playwright_vehicle.py:_click_third_level_view_bar_tab",
-                    msg="third_level_tab_root_scan",
-                    data={
-                        "tab": tab_text,
-                        "root_index": _idx,
-                        "root_type": type(root).__name__,
-                        "eval": _res if isinstance(_res, dict) else {"raw": str(_res)[:120]},
-                    },
-                )
-                # endregion agent log
-                if isinstance(_res, dict) and _res.get("ok"):
-                    # region agent log
-                    _dbg_ndj(
-                        hyp="B",
-                        loc="hero_dms_playwright_vehicle.py:_click_third_level_view_bar_tab",
-                        msg="third_level_tab_click_success",
-                        data={
-                            "tab": tab_text,
-                            "root_index": _idx,
-                            "root_type": type(root).__name__,
-                            "eval": _res,
-                            "verification_pass": "post-fix",
-                        },
-                    )
-                    # endregion agent log
-                    note(
-                        f"{log_prefix}: clicked {tab_text} from tab strip "
-                        f"(container={(_res.get('containerSrc') or '')!r})."
-                    )
-                    _safe_page_wait(page, wait_ms, log_label=f"after_third_level_{tab_norm}_tab")
-                    return True
-            except Exception as _ex_tab:
-                # region agent log
-                _dbg_ndj(
-                    hyp="C",
-                    loc="hero_dms_playwright_vehicle.py:_click_third_level_view_bar_tab",
-                    msg="third_level_tab_root_exception",
-                    data={
-                        "tab": tab_text,
-                        "root_index": _idx,
-                        "root_type": type(root).__name__,
-                        "err": str(_ex_tab)[:200],
-                    },
-                )
-                # endregion agent log
-                continue
-        # region agent log
-        _dbg_ndj(
-            hyp="D",
-            loc="hero_dms_playwright_vehicle.py:_click_third_level_view_bar_tab",
-            msg="third_level_tab_all_roots_failed",
-            data={"tab": tab_text, "roots_len": len(_rv_roots)},
-        )
-        # endregion agent log
-        return False
-
     if do_feature_id_scrape and scraped is not None:
         cc = _siebel_scrape_text_by_id_anywhere(
             page, "4_s_1_l_HHML_Feature_Value", content_frame_selector=content_frame_selector
@@ -1805,167 +1661,6 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         note(
             f"{log_prefix}: feature-id scrape cubic_capacity={_cc_log!r}, vehicle_type={vt!r}."
         )
-
-    # region agent log
-    try:
-        import json as _json_ae
-
-        _ae_main = page.main_frame.evaluate(
-            """() => {
-                const e = document.activeElement;
-                if (!e) return {};
-                return {
-                    tag: e.tagName,
-                    id: (e.id || '').slice(0, 48),
-                    name: (e.name || '').slice(0, 32),
-                };
-            }"""
-        )
-        with open(
-            Path(__file__).resolve().parents[3] / "debug-0875fe.log",
-            "a",
-            encoding="utf-8",
-        ) as _lf_ae:
-            _lf_ae.write(
-                _json_ae.dumps(
-                    {
-                        "sessionId": "0875fe",
-                        "runId": "pre-fix",
-                        "hypothesisId": "E",
-                        "location": "hero_dms_playwright_vehicle.py:_siebel_run_vehicle_serial_detail_precheck_pdi",
-                        "message": "active_element_main_before_third_level_tabs",
-                        "data": {
-                            "ae_main": _ae_main,
-                            "frames_n": len(page.frames),
-                            "feature_scrape_ran": bool(do_feature_id_scrape and scraped is not None),
-                        },
-                        "timestamp": _ts_ist_iso(),
-                    },
-                    ensure_ascii=False,
-                )
-                + "\n"
-            )
-    except Exception:
-        pass
-    # endregion agent log
-
-    # region agent log — discover real ui-id / labels for Pre-check & PDI tabs (hypothesis F)
-    try:
-        import json as _json_inv
-
-        _dbg_inv_path = Path(__file__).resolve().parents[3] / "debug-0875fe.log"
-        _inv_js = """() => {
-            const vis = (el) => {
-                if (!el) return false;
-                const st = window.getComputedStyle(el);
-                if (st.display === 'none' || st.visibility === 'hidden') return false;
-                const r = el.getBoundingClientRect();
-                return r.width > 0 && r.height > 0;
-            };
-            const bars = Array.from(document.querySelectorAll(
-                "[aria-label*='Third Level View Bar' i], [title*='Third Level View Bar' i], [id*='ThirdLevelViewBar' i]"
-            )).filter(vis);
-            const tabSamples = [];
-            for (const bar of bars) {
-                const nodes = Array.from(bar.querySelectorAll("a, button, [role='tab'], li"));
-                for (const t of nodes) {
-                    if (!vis(t)) continue;
-                    const raw = (t.innerText || t.textContent || '').trim();
-                    const id = (t.id || '').trim();
-                    const al = (t.getAttribute('aria-label') || '').trim().slice(0, 80);
-                    const ttl = (t.getAttribute('title') || '').trim().slice(0, 80);
-                    const textHead = raw.slice(0, 48);
-                    if (!id && !textHead && !al && !ttl) continue;
-                    tabSamples.push({
-                        tag: t.tagName,
-                        id: id.slice(0, 80),
-                        textHead: textHead,
-                        ariaHead: al,
-                        titleHead: ttl,
-                    });
-                    if (tabSamples.length >= 36) {
-                        return { barCount: bars.length, tabSamples: tabSamples };
-                    }
-                }
-            }
-            return { barCount: bars.length, tabSamples: tabSamples };
-        }"""
-        _scan_frames = [page.main_frame] + [
-            f for f in _ordered_frames(page) if f != page.main_frame
-        ][:14]
-        _best_inv = None
-        _best_score = -1
-        _best_idx = -1
-        _best_url = ""
-        for _fi, _fr in enumerate(_scan_frames):
-            try:
-                _one = _fr.evaluate(_inv_js)
-            except Exception as _e_one:
-                with open(_dbg_inv_path, "a", encoding="utf-8") as _lf:
-                    _lf.write(
-                        _json_inv.dumps(
-                            {
-                                "sessionId": "0875fe",
-                                "runId": "pre-fix",
-                                "hypothesisId": "F",
-                                "location": "hero_dms_playwright_vehicle.py:_third_level_bar_inventory",
-                                "message": "inventory_frame_error",
-                                "data": {"frame_index": _fi, "err": str(_e_one)[:200]},
-                                "timestamp": _ts_ist_iso(),
-                            },
-                            ensure_ascii=False,
-                        )
-                        + "\n"
-                    )
-                continue
-            if not isinstance(_one, dict):
-                continue
-            _bc = int(_one.get("barCount") or 0)
-            _ts = _one.get("tabSamples") or []
-            _sc = _bc * 100 + len(_ts)
-            if _sc > _best_score:
-                _best_score = _sc
-                _best_inv = _one
-                _best_idx = _fi
-                try:
-                    _best_url = ((_fr.url or "")[-90:]) if _fr else ""
-                except Exception:
-                    _best_url = ""
-        _s_vctrl_main = None
-        try:
-            _s_vctrl_main = bool(
-                page.main_frame.evaluate(
-                    "() => !!document.getElementById('s_vctrl_div')"
-                )
-            )
-        except Exception:
-            pass
-        with open(_dbg_inv_path, "a", encoding="utf-8") as _lf:
-            _lf.write(
-                _json_inv.dumps(
-                    {
-                        "sessionId": "0875fe",
-                        "runId": "pre-fix",
-                        "hypothesisId": "F",
-                        "location": "hero_dms_playwright_vehicle.py:_siebel_run_vehicle_serial_detail_precheck_pdi",
-                        "message": "third_level_bar_tab_inventory",
-                        "data": {
-                            "best_frame_index": _best_idx,
-                            "frame_url_tail": _best_url,
-                            "s_vctrl_div_in_main_frame": _s_vctrl_main,
-                            "fallback_precheck_id_in_code": "ui-id-1115",
-                            "inventory": _best_inv,
-                            "note": "Tabs: prefer #s_vctrl_div; see LLD 6.56.",
-                        },
-                        "timestamp": _ts_ist_iso(),
-                    },
-                    ensure_ascii=False,
-                )
-                + "\n"
-            )
-    except Exception:
-        pass
-    # endregion agent log
 
     _siebel_note_frame_focus_snapshot(
         page,
@@ -2093,36 +1788,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 # Stale ``SWERowId1=`` in the URL is common; **do not** skip Pre-check when scoped jqGrid count is 0 (**LLD** **6.237**).
         except Exception:
             continue
-    # region agent log
-    try:
-        import json as _json_pc_existing
-
-        with open(
-            Path(__file__).resolve().parents[3] / "debug-0875fe.log",
-            "a",
-            encoding="utf-8",
-        ) as _lf_pc_existing:
-            _lf_pc_existing.write(
-                _json_pc_existing.dumps(
-                    {
-                        "sessionId": "0875fe",
-                        "runId": "pre-fix",
-                        "hypothesisId": "G5",
-                        "location": "hero_dms_playwright_vehicle.py:_siebel_run_vehicle_serial_detail_precheck_pdi",
-                        "message": "precheck_existing_probe",
-                        "data": {
-                            "existing_rows": _precheck_existing_rows,
-                            "signal": _precheck_existing_signal,
-                        },
-                        "timestamp": _ts_ist_iso(),
-                    },
-                    ensure_ascii=False,
-                )
-                + "\n"
-            )
-    except Exception:
-        pass
-    # endregion agent log
+    logger.debug("precheck_existing: rows=%d signal=%s", _precheck_existing_rows, _precheck_existing_signal)
 
     _precheck_already_present = _precheck_existing_rows > 0
     if _precheck_already_present:
@@ -2165,6 +1831,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             ):
                 _ok = True
                 _used = _pc_pick_id
+                _branch_hit("_click_precheck_pick_icon", f"id_{_pc_pick_id}_{stage_label}")
                 break
         if not _ok:
             _css_fb = (
@@ -2199,6 +1866,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                             except Exception:
                                 _loc.click(timeout=_tmo, force=True)
                             _ok, _used = True, f"{_css}@nth={_ni}"
+                            _branch_hit("_click_precheck_pick_icon", f"css_{_css[:30]}_{stage_label}")
                             note(
                                 f"{log_prefix}: Pre-check pick via CSS {_css!r} nth={_ni} [{stage_label}] "
                                 "(fallback after id misses)."
@@ -2210,38 +1878,6 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                         continue
                 if _ok:
                     break
-        # region agent log
-        try:
-            import json as _json_pc_icon_stage
-
-            with open(
-                Path(__file__).resolve().parents[3] / "debug-0875fe.log",
-                "a",
-                encoding="utf-8",
-            ) as _lf_pc_icon_stage:
-                _lf_pc_icon_stage.write(
-                    _json_pc_icon_stage.dumps(
-                        {
-                            "sessionId": "0875fe",
-                            "runId": "pre-fix",
-                            "hypothesisId": "G2",
-                            "location": "hero_dms_playwright_vehicle.py:_siebel_run_vehicle_serial_detail_precheck_pdi",
-                            "message": "precheck_pick_icon_click_by_stage",
-                            "data": {
-                                "stage": stage_label,
-                                "ok": _ok,
-                                "used_id": _used,
-                                "tried_ids": list(_pick_ids) + ["CSS fallbacks if ids miss"],
-                            },
-                            "timestamp": _ts_ist_iso(),
-                        },
-                        ensure_ascii=False,
-                    )
-                    + "\n"
-                )
-        except Exception:
-            pass
-        # endregion agent log
         return _ok, _used
 
     def _pick_first_row_and_ok(stage_label: str) -> bool:
@@ -2370,6 +2006,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                                 ok_loc.click(timeout=_tmo)
                             except Exception:
                                 ok_loc.click(timeout=_tmo, force=True)
+                            _branch_hit("_pick_first_row_and_ok", f"ok_{ok_css[:30]}_{stage_label}")
                             note(f"{log_prefix}: clicked OK on pick applet ({stage_label}).")
                             _safe_page_wait(page, 1000, log_label=f"after_{stage_label}_ok")
                             return True
@@ -2388,38 +2025,6 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
 
         if not _ok_done_local:
             note(f"{log_prefix}: OK button not found on pick applet ({stage_label}; best-effort).")
-        # region agent log
-        try:
-            import json as _json_pick_out
-
-            with open(
-                Path(__file__).resolve().parents[3] / "debug-0875fe.log",
-                "a",
-                encoding="utf-8",
-            ) as _lf_pick_out:
-                _lf_pick_out.write(
-                    _json_pick_out.dumps(
-                        {
-                            "sessionId": "0875fe",
-                            "runId": "pre-fix",
-                            "hypothesisId": "G4",
-                            "location": "hero_dms_playwright_vehicle.py:_siebel_run_vehicle_serial_detail_precheck_pdi",
-                            "message": "precheck_pick_applet_completion",
-                            "data": {
-                                "stage": stage_label,
-                                "ok_clicked": _ok_done_local,
-                                "row_clicked": _row_clicked,
-                                "had_search_or_enter_fallback": _pick_ok,
-                            },
-                            "timestamp": _ts_ist_iso(),
-                        },
-                        ensure_ascii=False,
-                    )
-                    + "\n"
-                )
-        except Exception:
-            pass
-        # endregion agent log
         if _ok_done_local:
             return True
         if _row_clicked:
@@ -2537,43 +2142,6 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 if _open_try > 0:
                     note(f"{log_prefix}: Open pick icon succeeded after {_open_try} extra Tab(s) (focus on Open column).")
                 break
-    # region agent log
-    try:
-        import json as _json_pc_icon
-
-        with open(
-            Path(__file__).resolve().parents[3] / "debug-0875fe.log",
-            "a",
-            encoding="utf-8",
-        ) as _lf_pc_icon:
-            _lf_pc_icon.write(
-                _json_pc_icon.dumps(
-                    {
-                        "sessionId": "0875fe",
-                        "runId": "pre-fix",
-                        "hypothesisId": "G",
-                        "location": "hero_dms_playwright_vehicle.py:_siebel_run_vehicle_serial_detail_precheck_pdi",
-                        "message": "precheck_technician_icon_click",
-                        "data": {
-                            "ok": _precheck_icon_ok,
-                            "used_id": _precheck_icon_used,
-                            "tried_ids": [
-                                "s_3_2_25_0_icon",
-                                "s_3_2_24_0_icon",
-                                "s_3_2_26_0_icon",
-                                "s_3_3_25_0_icon",
-                                "s_3_3_26_0_icon",
-                            ],
-                        },
-                        "timestamp": _ts_ist_iso(),
-                    },
-                    ensure_ascii=False,
-                )
-                + "\n"
-            )
-    except Exception:
-        pass
-    # endregion agent log
     if not _precheck_icon_ok:
         return False, (
             "Could not click Pre-check pick icon for Open status "
@@ -2985,38 +2553,11 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     elif _pdi_row_count == 0:
         note(f"{log_prefix}: PDI list has no data rows — adding new PDI row.")
 
-    try:
-        import json as _json_pdi_probe
-
-        with open(
-            Path(__file__).resolve().parents[3] / "debug-0875fe.log",
-            "a",
-            encoding="utf-8",
-        ) as _lf_pdi_probe:
-            _lf_pdi_probe.write(
-                _json_pdi_probe.dumps(
-                    {
-                        "sessionId": "0875fe",
-                        "runId": "pre-fix",
-                        "hypothesisId": "G6",
-                        "location": "hero_dms_playwright_vehicle.py:_siebel_run_vehicle_serial_detail_precheck_pdi",
-                        "message": "pdi_existing_probe",
-                        "data": {
-                            "row_count": _pdi_row_count,
-                            "header_matched": _pdi_header_matched,
-                            "expiry_samples": _pdi_expiry_raw[:8],
-                            "parsed_max_expiry": _pdi_max_expiry.isoformat() if _pdi_max_expiry else "",
-                            "today": _today.isoformat(),
-                            "need_new_row": _pdi_need_new_row,
-                        },
-                        "timestamp": _ts_ist_iso(),
-                    },
-                    ensure_ascii=False,
-                )
-                + "\n"
-            )
-    except Exception:
-        pass
+    logger.debug(
+        "pdi_existing: rows=%d header=%s need_new=%s expiry=%s",
+        _pdi_row_count, _pdi_header_matched, _pdi_need_new_row,
+        _pdi_max_expiry.isoformat() if _pdi_max_expiry else "",
+    )
 
     def _eval_pdi_grid_rowcount() -> int:
         """Same scoring as expiry scan: best table's ``rowCount`` (header match wins ties)."""
@@ -3480,18 +3021,6 @@ def _siebel_prepare_vehicle_list_find_vin_engine(
     """
     fp = (frame_p or "").strip()
     ep = (engine_p or "").strip()
-    # region agent log
-    _agent_debug_log(
-        "V2",
-        "hero_dms_playwright_vehicle.py:_siebel_prepare_vehicle_list_find_vin_engine",
-        "vehicle_find_submit_enter",
-        {
-            "frame_partial_len": int(len(fp)),
-            "engine_partial_len": int(len(ep)),
-            "has_selector": bool(content_frame_selector),
-        },
-    )
-    # endregion
     if not fp or not ep:
         return False
 
@@ -3504,26 +3033,10 @@ def _siebel_prepare_vehicle_list_find_vin_engine(
         page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
     ):
         note("prepare_vehicle: Find → Vehicles for list query.")
-        # region agent log
-        _agent_debug_log(
-            "V3",
-            "hero_dms_playwright_vehicle.py:_siebel_prepare_vehicle_list_find_vin_engine",
-            "vehicle_find_applet_prepared",
-            {"prepared": True},
-        )
-        # endregion
     else:
         note(
             "prepare_vehicle: Find → Vehicles not confirmed — still attempting VIN/Engine fill in find field box."
         )
-        # region agent log
-        _agent_debug_log(
-            "V3",
-            "hero_dms_playwright_vehicle.py:_siebel_prepare_vehicle_list_find_vin_engine",
-            "vehicle_find_applet_prepared",
-            {"prepared": False},
-        )
-        # endregion
     _safe_page_wait(page, 600, log_label="prepare_vehicle_after_find_vehicles")
 
     cw = _siebel_vehicle_find_wildcard_value(fp)
@@ -3537,14 +3050,6 @@ def _siebel_prepare_vehicle_list_find_vin_engine(
     )
     if filled:
         note("prepare_vehicle: VIN + Engine# submitted in Find→Vehicles applet.")
-        # region agent log
-        _agent_debug_log(
-            "V4",
-            "hero_dms_playwright_vehicle.py:_siebel_prepare_vehicle_list_find_vin_engine",
-            "vehicle_find_submit_result",
-            {"filled": True, "attempt": "first"},
-        )
-        # endregion
         return True
 
     note("prepare_vehicle: Find→Vehicles VIN/Engine fill failed — one retry (expand Find, Vehicles).")
@@ -3565,14 +3070,6 @@ def _siebel_prepare_vehicle_list_find_vin_engine(
     )
     if filled:
         note("prepare_vehicle: VIN + Engine# submitted on retry.")
-    # region agent log
-    _agent_debug_log(
-        "V4",
-        "hero_dms_playwright_vehicle.py:_siebel_prepare_vehicle_list_find_vin_engine",
-        "vehicle_find_submit_result",
-        {"filled": bool(filled), "attempt": "retry"},
-    )
-    # endregion
     return bool(filled)
 
 
@@ -3613,38 +3110,10 @@ def _wait_for_vehicle_find_applet_ready(
         for root in _siebel_locator_search_roots(page, content_frame_selector):
             try:
                 if bool(root.evaluate(_js)):
-                    # region agent log
-                    _agent_debug_log(
-                        "V1",
-                        "hero_dms_playwright_vehicle.py:_wait_for_vehicle_find_applet_ready",
-                        "vehicle_find_applet_ready",
-                        {
-                            "ready": True,
-                            "elapsed_ms": int((time.monotonic() - start_t) * 1000),
-                            "wait_ms": int(wait_ms),
-                            "poll_count": int(poll_count),
-                            "has_selector": bool(content_frame_selector),
-                        },
-                    )
-                    # endregion
                     return True
             except Exception:
                 continue
         _safe_page_wait(page, 140, log_label="wait_vehicle_find_applet_ready")
-    # region agent log
-    _agent_debug_log(
-        "V1",
-        "hero_dms_playwright_vehicle.py:_wait_for_vehicle_find_applet_ready",
-        "vehicle_find_applet_ready",
-        {
-            "ready": False,
-            "elapsed_ms": int((time.monotonic() - start_t) * 1000),
-            "wait_ms": int(wait_ms),
-            "poll_count": int(poll_count),
-            "has_selector": bool(content_frame_selector),
-        },
-    )
-    # endregion
     return False
 
 
@@ -3668,14 +3137,6 @@ def _siebel_goto_vehicle_list_and_scrape(
         content_frame_selector=content_frame_selector,
         wait_ms=4500,
     )
-    # region agent log
-    _agent_debug_log(
-        "V5",
-        "hero_dms_playwright_vehicle.py:_siebel_goto_vehicle_list_and_scrape",
-        "vehicle_find_initial_ready_gate",
-        {"ready": bool(first_ready)},
-    )
-    # endregion
 
     fp = (frame_p or "").strip()
     ep = (engine_p or "").strip()
@@ -3719,26 +3180,10 @@ def _siebel_goto_vehicle_list_and_scrape(
             )
         if query_ok:
             note("prepare_vehicle: Find→Vehicles query succeeded after applet-ready retry.")
-            # region agent log
-            _agent_debug_log(
-                "V5",
-                "hero_dms_playwright_vehicle.py:_siebel_goto_vehicle_list_and_scrape",
-                "vehicle_find_query_after_retry",
-                {"query_ok": True},
-            )
-            # endregion
         else:
             final_ready = _wait_for_vehicle_find_applet_ready(
                 page, content_frame_selector=content_frame_selector, wait_ms=900
             )
-            # region agent log
-            _agent_debug_log(
-                "V5",
-                "hero_dms_playwright_vehicle.py:_siebel_goto_vehicle_list_and_scrape",
-                "vehicle_find_query_after_retry",
-                {"query_ok": False, "final_ready": bool(final_ready)},
-            )
-            # endregion
             _hint = "find applet not ready/visible" if not final_ready else "query submit did not complete"
             return {}, (
                 "Siebel: Find→Vehicles VIN/Engine query failed even with frame_partial/engine_partial present; "
@@ -3934,6 +3379,7 @@ def _siebel_click_by_name_anywhere(
                 try:
                     loc = root.locator(css).first
                     if _try_click_loc(loc, where=f"scoped {gpre!r}"):
+                        _branch_hit("_click_by_name", f"grid_scope_{gpre}")
                         return True
                 except Exception:
                     continue
@@ -3946,6 +3392,7 @@ def _siebel_click_by_name_anywhere(
                     if role_ln.count() > 0 and _try_click_loc(
                         role_ln.first, where=f"scoped role=link {gpre!r}"
                     ):
+                        _branch_hit("_click_by_name", f"grid_role_link_{gpre}")
                         return True
             except Exception:
                 continue
@@ -3959,6 +3406,7 @@ def _siebel_click_by_name_anywhere(
             try:
                 loc = root.locator(css).first
                 if _try_click_loc(loc, where="global name match"):
+                    _branch_hit("_click_by_name", "global_name")
                     return True
             except Exception:
                 continue
@@ -4040,6 +3488,7 @@ def _siebel_click_by_name_anywhere(
                 name_val,
             )
             if clicked:
+                _branch_hit("_click_by_name", "js_click_frame")
                 note(
                     f"prepare_vehicle: clicked {log_label!r} (name={name_val!r}, JS querySelector+click in frame)."
                 )
@@ -4608,40 +4057,6 @@ def _siebel_fill_key_battery_from_dms_values(
             continue
     if _veh_fill_frame is None:
         _veh_fill_frame = page.main_frame
-    # #region agent log
-    try:
-        import json as _j_kb
-
-        _n = getattr(_siebel_fill_key_battery_from_dms_values, "_agent_n", 0) + 1
-        setattr(_siebel_fill_key_battery_from_dms_values, "_agent_n", _n)
-        _fu = ""
-        try:
-            _fu = (_veh_fill_frame.url or "")[:180]
-        except Exception:
-            _fu = ""
-        with open(Path(__file__).resolve().parents[3] / "debug-0875fe.log", "a", encoding="utf-8") as _lf:
-            _lf.write(
-                _j_kb.dumps(
-                    {
-                        "sessionId": "0875fe",
-                        "hypothesisId": "KB-A",
-                        "location": "hero_dms_playwright_vehicle.py:_siebel_fill_key_battery_from_dms_values",
-                        "message": "key_battery_fill_invoke",
-                        "data": {
-                            "invoke_seq": _n,
-                            "log_prefix": log_prefix,
-                            "has_key": bool(key_val),
-                            "has_battery": bool(battery_val),
-                            "fill_frame_url": _fu,
-                        },
-                        "timestamp": _ts_ist_iso(),
-                    }
-                )
-                + "\n"
-            )
-    except Exception:
-        pass
-    # #endregion
     if battery_val:
         if _fill_by_label_on_frame(_veh_fill_frame, "Battery No.", battery_val, action_timeout_ms=action_timeout_ms):
             note(f"{log_prefix}: filled Battery No. = {battery_val!r} on vehicle page.")
@@ -4810,28 +4225,6 @@ def prepare_vehicle(
             [],
         )
 
-    # #region agent log
-    try:
-        import json as _j_pv
-
-        with open(Path(__file__).resolve().parents[3] / "debug-0875fe.log", "a", encoding="utf-8") as _lf:
-            _lf.write(
-                _j_pv.dumps(
-                    {
-                        "sessionId": "0875fe",
-                        "hypothesisId": "KB-D",
-                        "location": "hero_dms_playwright_vehicle.py:prepare_vehicle",
-                        "message": "prepare_vehicle_before_grid_scrape",
-                        "data": {"key_partial_present": bool(key_p), "frame_partial_len": len(frame_p)},
-                        "timestamp": _ts_ist_iso(),
-                    }
-                )
-                + "\n"
-            )
-    except Exception:
-        pass
-    # #endregion
-
     scraped, veh_err = _siebel_goto_vehicle_list_and_scrape(
         page,
         vehicle_url,
@@ -4884,28 +4277,6 @@ def prepare_vehicle(
             vm_info,
         )
     note("prepare_vehicle: opened vehicle from left Search Results (VIN Title drilldown).")
-
-    # #region agent log
-    try:
-        import json as _j_pv2
-
-        with open(Path(__file__).resolve().parents[3] / "debug-0875fe.log", "a", encoding="utf-8") as _lf:
-            _lf.write(
-                _j_pv2.dumps(
-                    {
-                        "sessionId": "0875fe",
-                        "hypothesisId": "KB-E",
-                        "location": "hero_dms_playwright_vehicle.py:prepare_vehicle",
-                        "message": "prepare_vehicle_after_left_pane_vin_ok",
-                        "data": {"vin_click_ok": True, "has_chassis_for_left_hit": True},
-                        "timestamp": _ts_ist_iso(),
-                    }
-                )
-                + "\n"
-            )
-    except Exception:
-        pass
-    # #endregion
 
     try:
         _safe_page_wait(page, 1200, log_label="after_vehicle_left_pane_vin_settle")
@@ -5050,6 +4421,7 @@ def prepare_vehicle(
             + "; ".join(vm_crit)
         )
 
+    _dump_branch_hits(note)
     return True, None, merged, in_transit_state, vm_crit, vm_info
 
 
@@ -5276,4 +4648,5 @@ def _siebel_vehicle_find_chassis_engine_enter(
             "Add Enquiry: scraped full VIN scope — "
             f"full_chassis={scraped.get('full_chassis')!r}, full_engine={scraped.get('full_engine')!r}."
         )
+    _dump_branch_hits(note)
     return True, scraped
