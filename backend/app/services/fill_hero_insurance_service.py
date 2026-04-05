@@ -2,7 +2,7 @@
 Hero Insurance (MISP) Playwright flow: **pre_process** (``run_fill_insurance_only`` on real MISP) runs through KYC,
 then fills **VIN** from DB (**``full_chassis``**) and clicks the VIN page **Submit**. **main_process** continues with
 **I agree** (if shown), then the proposal form. Proposer/vehicle/nominee fields come from the view;
-email, most add-ons, CPA tenure, HDFC, and registration date use **hardcoded** defaults; **Hero CPI** (NIC/CPI row) follows **``form_insurance_view.hero_cpi``** (**``dealer_ref.hero_cpi``**). Proposal fields resolve **ContentPlaceHolder1** ids (**``HERO_MISP_CPH1``**) where applicable, then labels. **Proposal Preview** / **Review**, then **Issue Policy**; scrape **policy_num**, **policy_from**, **policy_to**, **premium**, **idv** from preview and persist via ``update_insurance_master_policy_after_issue``.
+email, most add-ons, CPA tenure, HDFC, and registration date use **hardcoded** defaults; **Hero CPI** (NIC/CPI row) follows **``form_insurance_view.hero_cpi``** (**``dealer_ref.hero_cpi``**). Proposal fields resolve **ContentPlaceHolder1** ids (**``HERO_MISP_CPH1``**) where applicable, then labels. **Proposal Preview** / **Review** (always); **Issue Policy** optional via ``HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY``; scrape **policy_num**, **policy_from**, **policy_to**, **premium**, **idv** from preview and persist via ``update_insurance_master_policy_after_issue``.
 Browser reuse uses ``handle_browser_opening.get_or_open_site_page`` with ``match_base`` from **pre_process**.
 """
 import difflib
@@ -82,8 +82,8 @@ INSURANCE_KYC_IFRAME_SELECTOR = ""
 INSURANCE_VIN_IFRAME_SELECTOR = 'iframe[src*="2w" i]'
 INSURANCE_NAV_IFRAME_SELECTOR = 'iframe[src*="2w" i]'
 
-# When True: skip clicking **Proposal Review** (after proposal fields) and **Issue Policy** (after DB insert)
-# until operators finish reviewing automated form filling. Set False to re-enable issuance.
+# When True: skip clicking **Issue Policy** only (after ``insurance_master`` insert); still scrapes preview fields.
+# **Proposal Preview** / **Proposal Review** is always clicked after proposal fill (not gated by this flag).
 HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY = True
 
 # Optional: regex on checkbox **label/row text** (see ``Playwright_insurance_main_process_frames.txt``) for a **new**
@@ -99,6 +99,13 @@ HERO_MISP_NOMINEE_RELATION_CPH1_SUFFIXES = (
     "ddlNomineeRelation",
     "ddlNomineeRelationship",
     "ddlRelationWithNominee",
+)
+
+# **Agreement Type with Financer** (e.g. **HPA**) — id may vary by MISP build.
+HERO_MISP_AGREEMENT_TYPE_FINANCER_CPH1_SUFFIXES = (
+    "ddlAgreementTypeWithFinancer",
+    "ddlAgreementWithFinancer",
+    "ddlAgreementTypeFinancer",
 )
 
 # Return from ``_proposal_step_checkbox_by_cph1_id`` when no control matched (caller may use label/regex fallback).
@@ -4992,6 +4999,8 @@ def _proposal_step_select_fuzzy(
         _suffixes: tuple[str, ...] = (cph1_id_suffix,)
         if cph1_id_suffix == "ddlNomineeRelation":
             _suffixes = HERO_MISP_NOMINEE_RELATION_CPH1_SUFFIXES
+        elif cph1_id_suffix == "ddlAgreementTypeWithFinancer":
+            _suffixes = HERO_MISP_AGREEMENT_TYPE_FINANCER_CPH1_SUFFIXES
         for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
             for _suf in _suffixes:
                 try:
@@ -5031,6 +5040,43 @@ def _proposal_step_select_fuzzy(
                                         subfolder,
                                         step_id,
                                         f"select ok id_suffix=ddlMaritalStatus label={lbl!r} readback={st!r}",
+                                    )
+                                    return None
+                            except Exception:
+                                pass
+                    # **Agreement Type with Financer** — product choice **HPA** (short option text; try exact labels).
+                    if cph1_id_suffix == "ddlAgreementTypeWithFinancer" and q:
+                        qn_at = normalize_for_fuzzy_match(q)
+                        if qn_at == "hpa":
+                            for lbl in ("HPA", "Hpa"):
+                                try:
+                                    loc.select_option(label=lbl, timeout=timeout_ms, force=True)
+                                    snap = _read_locator_value_snapshot(loc)
+                                    st = (snap.get("selected_text") or "").strip()
+                                    if _proposal_expected_matches_readback(q, st):
+                                        _proposal_log(
+                                            ocr_output_dir,
+                                            subfolder,
+                                            step_id,
+                                            f"select ok id_suffix={_suf!r} agreement_type label={lbl!r} readback={st!r}",
+                                        )
+                                        return None
+                                except Exception:
+                                    pass
+                            try:
+                                loc.select_option(
+                                    label=re.compile(r"^\s*HPA\s*$", re.I),
+                                    timeout=timeout_ms,
+                                    force=True,
+                                )
+                                snap = _read_locator_value_snapshot(loc)
+                                st = (snap.get("selected_text") or "").strip()
+                                if _proposal_expected_matches_readback(q, st):
+                                    _proposal_log(
+                                        ocr_output_dir,
+                                        subfolder,
+                                        step_id,
+                                        f"select ok id_suffix={_suf!r} agreement_type label=regex_HPA readback={st!r}",
                                     )
                                     return None
                             except Exception:
@@ -7159,7 +7205,7 @@ def click_issue_policy_and_scrape_preview(page, *, timeout_ms: int) -> dict[str,
     Click **Issue Policy** (dummy ``#ins-issue-policy`` or MISP button / text), wait for navigation,
     then scrape ``policy_num``, ``policy_from``, ``policy_to``, ``premium``, ``idv`` via
     ``scrape_insurance_policy_preview_before_issue``.
-    When ``HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY`` is True, skips the click and only scrapes.
+    When ``HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY`` is True, skips the **Issue Policy** click and only scrapes.
     """
     to = max(2_000, int(timeout_ms))
     if HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY:
@@ -7580,6 +7626,23 @@ def _hero_misp_fill_proposal_and_review(
         if err:
             return _fail(err)
 
+        err = _proposal_step_select_fuzzy(
+            page,
+            (
+                r"Agreement\s*Type\s*with\s*Financer",
+                r"Agreement\s*Type\s*with\s*Financier",
+                r"Agreement\s*Type\s*\(?\s*Financer",
+            ),
+            "HPA",
+            "agreement_type_with_financer",
+            ocr_output_dir,
+            subfolder,
+            timeout_ms=pt,
+            cph1_id_suffix="ddlAgreementTypeWithFinancer",
+        )
+        if err:
+            return _fail(err)
+
     branch_city = city
     if branch_city and fin:
         err = _proposal_step_fill_input(
@@ -7723,45 +7786,34 @@ def _hero_misp_fill_proposal_and_review(
         return _fail(err)
 
     _t(page, 500)
-    if HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY:
+    try:
+        _proposal_preview_rx = re.compile(r"Proposal\s*(Preview|Review)", re.I)
+        clicked = False
+        for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
+            rev = root.get_by_role("button", name=_proposal_preview_rx)
+            if rev.count() > 0 and rev.first.is_visible(timeout=3_000):
+                rev.first.click(timeout=pt)
+                clicked = True
+                break
+        if not clicked:
+            for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
+                try:
+                    root.get_by_text(_proposal_preview_rx).first.click(timeout=pt)
+                    clicked = True
+                    break
+                except Exception:
+                    continue
+        if not clicked:
+            return _fail("proposal_review: could not find or click Proposal Preview / Proposal Review")
         _proposal_log(
             ocr_output_dir,
             subfolder,
             "proposal_review",
-            "skip click (HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY=True)",
+            "clicked ok",
         )
-        logger.info(
-            "Hero Insurance: Proposal Preview click skipped (HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY=True)."
-        )
-    else:
-        try:
-            _proposal_preview_rx = re.compile(r"Proposal\s*(Preview|Review)", re.I)
-            clicked = False
-            for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
-                rev = root.get_by_role("button", name=_proposal_preview_rx)
-                if rev.count() > 0 and rev.first.is_visible(timeout=3_000):
-                    rev.first.click(timeout=pt)
-                    clicked = True
-                    break
-            if not clicked:
-                for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
-                    try:
-                        root.get_by_text(_proposal_preview_rx).first.click(timeout=pt)
-                        clicked = True
-                        break
-                    except Exception:
-                        continue
-            if not clicked:
-                return _fail("proposal_review: could not find or click Proposal Preview / Proposal Review")
-            _proposal_log(
-                ocr_output_dir,
-                subfolder,
-                "proposal_review",
-                "clicked ok",
-            )
-            logger.info("Hero Insurance: clicked Proposal Preview (or Proposal Review).")
-        except Exception as exc:
-            return _fail(f"proposal_review: {exc!s}")
+        logger.info("Hero Insurance: clicked Proposal Preview (or Proposal Review).")
+    except Exception as exc:
+        return _fail(f"proposal_review: {exc!s}")
 
     _t(page, 600)
     try:
@@ -7834,8 +7886,8 @@ def main_process(
     After **pre_process** (KYC → **VIN fill** → **Submit** on real MISP): **I agree** (if shown) → proposal form.
     **Customer/vehicle/nominee/financer** fields come from
     ``form_insurance_view`` / ``_build_insurance_fill_values``; **email, add-ons, CPA tenure, payment (HDFC),
-    and registration date** use hardcoded defaults for now. **Proposal Review** / **Issue Policy** clicks
-    are gated by ``HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY`` (see module constant).
+    and registration date** use hardcoded defaults for now. **Issue Policy** click (after DB insert) may be
+    skipped when ``HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY`` is True; **Proposal Review** is always attempted.
     Reuses the open Insurance tab via ``match_base`` from ``pre_result``.
     """
     out: dict = {
@@ -7986,7 +8038,8 @@ def main_process(
             ocr_output_dir,
             subfolder,
             "NOTE",
-            "main_process: completed — Proposal Review, insurance_master insert, Issue Policy + scrape",
+            "main_process: completed — Proposal Review, insurance_master insert, preview scrape + post-issue update "
+            f"(Issue Policy click skipped={HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY})",
         )
         try:
             out["page_url"] = (page.url or "").strip() or None
