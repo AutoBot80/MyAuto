@@ -113,7 +113,7 @@ Configure **`backend/.env`** (copy from **`backend/.env.example`**). The API val
   - `low-level-design.md` — LLD, API endpoints, modules
   - `Database DDL.md` — all tables, columns, constraints, usage
   - `technical-architecture.md` (this file)
-  - `checkpoints.md` — **canonical registry** of named git checkpoints (tags, commits, IST dates, TODOs). Optional per-checkpoint narrative: `checkpoint-*.md`. Creating a checkpoint without updating this registry is disallowed—see §6 and **`.cursor/rules/checkpoints-registry.mdc`**. After recording a checkpoint, agents **playback** the full table (name, **commit** hash, date, TODOs) per that rule.
+  - `checkpoints.md` — **canonical registry** of named git checkpoints (serial no., tags, commits, IST dates, TODOs). Optional per-checkpoint narrative: `checkpoint-*.md`. Creating a checkpoint without updating this registry is disallowed—see §6 and **`.cursor/rules/checkpoints-registry.mdc`**. After recording a checkpoint, agents **playback** the full table (serial no., name, **commit** hash, date, TODOs) per that rule.
 
 ### Documentation Maintenance
 

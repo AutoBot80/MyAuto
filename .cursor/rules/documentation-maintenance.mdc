@@ -18,7 +18,7 @@ alwaysApply: true
 | **`low-level-design.md`** (LLD) | APIs, module layout, Playwright/Siebel parity (**§2.4d**), **changelog** (e.g. **6.x**) | Endpoint/service changes; automation sequence or helper semantics; **always** add/update **LLD changelog** for non-trivial Siebel/DMS behavior |
 | **`Database DDL.md`** | Tables, columns, relationships | Any **`DDL/`** script or **column/table/schema** change only — update table definitions and changelog; **do not** add changelog rows for automation-only or API-only work with no database change |
 | **`technical-architecture.md`** | Repo layout, §6 doc maintenance | Optional: bump §7 changelog when §6 maintenance policy changes |
-| **`checkpoints.md`** | Canonical index of named git checkpoints (name, tag, commit, IST date, TODOs) | **Whenever a checkpoint is created** — append a table row in the same session; see **`.cursor/rules/checkpoints-registry.mdc`** |
+| **`checkpoints.md`** | Canonical index of named git checkpoints (serial no., name, tag, commit, IST date, TODOs) | **Whenever a checkpoint is created** — append a table row in the same session; see **`.cursor/rules/checkpoints-registry.mdc`** |
 
 ## Mapping (quick reference)
 

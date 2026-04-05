@@ -15,7 +15,7 @@ Phrases include: “set a checkpoint”, “create a checkpoint”, “checkpoin
 
 1. **Read** **`Documentation/checkpoints.md`** (“How Checkpoints Work” + **Checkpoints** table) so the process matches the repo.
 2. **Snapshot commit** — Prefer a dedicated commit that includes the registry update and optional `Documentation/checkpoint-<slug>.md`. If the user wants the tag on existing `HEAD`, use that commit’s full hash.
-3. **Registry row** — Append **one row** to the **Checkpoints** table: **Name**, **Tag**, **Commit** (full hash), **Created (IST)** (use tag creation time or commit time in `+05:30` form, consistent with existing rows), **TODOs** (numbered or lettered; mirror tag/commit message if used).
+3. **Registry row** — Append **one row** to the **Checkpoints** table: **Serial No.** (next integer after the highest existing number), **Name**, **Tag**, **Commit** (full hash), **Created (IST)** (use tag creation time or commit time in `+05:30` form, consistent with existing rows), **TODOs** (numbered or lettered; mirror tag/commit message if used).
 4. **Annotated tag** — `git tag -a checkpoint/<slug> <commit> -m "..."` (or legacy name if required); tag must appear in the table.
 5. **Optional narrative** — `Documentation/checkpoint-<slug>.md` may supplement the row; it **must** state that the checkpoint is listed in **`checkpoints.md`** and repeat tag + commit + IST (see existing examples).
 6. **Commit** — Stage and commit `Documentation/checkpoints.md` and any new/updated `checkpoint-*.md` (follow-up registry-only commit is allowed if the snapshot commit already landed without the row—see **`checkpoints.md`**).
@@ -26,7 +26,7 @@ Phrases include: “set a checkpoint”, “create a checkpoint”, “checkpoin
 
 Before ending the reply, **read** the **Checkpoints** table from **`Documentation/checkpoints.md`** (after your edits) and **print the full list** for the user:
 
-- For **each** row: **name**, **Commit** (full git object id from the **Commit** column), **Created (IST)** date/time, and **TODOs** (the whole cell).
+- For **each** row: **Serial No.**, **name**, **Commit** (full git object id from the **Commit** column), **Created (IST)** date/time, and **TODOs** (the whole cell).
 
 Format as a clear markdown list or table so the user can scan every checkpoint in one place. This confirms registration and avoids “invisible” checkpoints.
 
