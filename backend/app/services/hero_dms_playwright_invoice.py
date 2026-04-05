@@ -507,7 +507,8 @@ def _attach_vehicle_to_bkg(
 ) -> tuple[bool, str | None, dict]:
     """
     After a new sales order is saved:
-    1. Click Order Number header link to open order detail.
+    1. Click Order Number / Order # header link to open order detail — **skipped** when line-item **New** or **VIN**
+       is already visible (e.g. My Orders Order# drill-down).
     2. Click **New** → fill VIN → Price All → Allocate All.
     3. *(Currently disabled via `if False`.)* Single-click **VIN** drilldown → **Serial Number** →
        ``_siebel_run_vehicle_serial_detail_precheck_pdi`` (Pre-check + PDI through submit).
@@ -586,6 +587,39 @@ def _attach_vehicle_to_bkg(
                     continue
         return False
 
+    def _order_detail_already_open_for_line_items() -> bool:
+        """My Orders Order# drill-down often lands on line items without a separate Order Number header link."""
+        for sel in (
+            "#s_1_1_35_0_Ctrl",
+            "#s_1_1_35_0",
+            "[id$='_35_0_Ctrl']",
+            "input[id$='_l_VIN']",
+            "input[name='VIN']",
+        ):
+            for root in _all_roots():
+                try:
+                    loc = root.locator(sel).first
+                    if loc.count() > 0 and loc.is_visible(timeout=450):
+                        return True
+                except Exception:
+                    continue
+        return False
+
+    def _click_first_visible(root, selector: str, label: str, wait_ms: int) -> bool:
+        try:
+            loc = root.locator(selector).first
+            if loc.count() > 0 and loc.is_visible(timeout=700):
+                try:
+                    loc.click(timeout=_tmo)
+                except Exception:
+                    loc.click(timeout=_tmo, force=True)
+                note(f"attach_vehicle_to_bkg: clicked {label} (selector={selector!r}).")
+                _safe_page_wait(page, wait_ms, log_label=f"after_{label.replace(' ', '_').lower()}")
+                return True
+        except Exception:
+            pass
+        return False
+
     if start_at_order_link_before_apply:
         note(
             "attach_vehicle_to_bkg: start_at_order_link_before_apply=True — "
@@ -593,11 +627,13 @@ def _attach_vehicle_to_bkg(
         )
         _extra = {}
     else:
-        # ── Step 1: Click Order Number header link ──
+        # ── Step 1: Click Order Number header link (skip if line items already visible — e.g. My Orders drill-down)
         _order_clicked = False
         _order_selectors = (
             "a[name='Order Number'][tabindex='-1']",
             "a[name='Order Number']",
+            "a[name='Order #'][tabindex='-1']",
+            "a[name='Order #']",
         )
         for root in _all_roots():
             for css in _order_selectors:
@@ -613,7 +649,7 @@ def _attach_vehicle_to_bkg(
                         loc.click(timeout=_tmo)
                     except Exception:
                         loc.click(timeout=_tmo, force=True)
-                    note(f"attach_vehicle_to_bkg: clicked Order Number header link via {css!r}.")
+                    note(f"attach_vehicle_to_bkg: clicked Order header drill-down via {css!r}.")
                     _safe_page_wait(page, 1500, log_label="after_attach_vehicle_to_bkg_click")
                     _order_clicked = True
                     break
@@ -632,6 +668,8 @@ def _attach_vehicle_to_bkg(
               };
               let el = document.querySelector("a[name='Order Number'][tabindex='-1']");
               if (!el || !vis(el)) el = document.querySelector("a[name='Order Number']");
+              if (!el || !vis(el)) el = document.querySelector("a[name='Order #'][tabindex='-1']");
+              if (!el || !vis(el)) el = document.querySelector("a[name='Order #']");
               if (!el || !vis(el)) return '';
               try { el.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
               el.click();
@@ -641,7 +679,7 @@ def _attach_vehicle_to_bkg(
                 try:
                     if frame.evaluate(_js_order):
                         _order_clicked = True
-                        note("attach_vehicle_to_bkg: JS clicked Order Number in frame.")
+                        note("attach_vehicle_to_bkg: JS clicked Order header drill-down in frame.")
                         _safe_page_wait(page, 1500, log_label="after_attach_vehicle_to_bkg_js_frame")
                         break
                 except Exception:
@@ -650,24 +688,35 @@ def _attach_vehicle_to_bkg(
                 try:
                     if page.evaluate(_js_order):
                         _order_clicked = True
-                        note("attach_vehicle_to_bkg: JS clicked Order Number on main page.")
+                        note("attach_vehicle_to_bkg: JS clicked Order header drill-down on main page.")
                         _safe_page_wait(page, 1500, log_label="after_attach_vehicle_to_bkg_js_page")
                 except Exception:
                     pass
+        if not _order_clicked and _order_detail_already_open_for_line_items():
+            _order_clicked = True
+            note(
+                "attach_vehicle_to_bkg: skipped Order header drill-down — line items New/VIN already visible "
+                "(e.g. after My Orders Order# open)."
+            )
         if not _order_clicked:
-            return False, "Could not click Order Number header link.", {}
-    
+            return False, "Could not click Order Number / Order # header link and order line items are not visible yet.", {}
+
         try:
             page.wait_for_load_state("networkidle", timeout=8_000)
         except Exception:
             pass
-    
+
         # ── Step 2: Click New button on order line / allocate (Hero: control id ends with _Ctrl) ──
         _new_clicked = _click_by_id("s_1_1_35_0_Ctrl", "New button", wait_ms=1200)
         if not _new_clicked:
             _new_clicked = _click_by_id("s_1_1_35_0", "New button (legacy id)", wait_ms=1200)
         if not _new_clicked:
-            return False, "Could not click New button (id=s_1_1_35_0_Ctrl) on order line items.", {}
+            for root in _all_roots():
+                if _click_first_visible(root, "[id$='_35_0_Ctrl']", "New button (id suffix _35_0_Ctrl)", wait_ms=1200):
+                    _new_clicked = True
+                    break
+        if not _new_clicked:
+            return False, "Could not click New button (id=s_1_1_35_0_Ctrl or id suffix _35_0_Ctrl) on order line items.", {}
     
         # ── Step 3: Line-item VIN — same selector family as Sales Orders ``name=VIN`` path; row id may be
         # ``1_s_1_l_VIN``, ``2_s_1_l_VIN``, etc. Use **locator.type** (not ``page.keyboard``) so iframe focus works.
