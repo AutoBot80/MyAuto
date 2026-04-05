@@ -28,7 +28,6 @@ from app.config import (
     INSURANCE_KYC_POST_INSURER_NETWORKIDLE_MS,
     INSURANCE_KYC_POST_KYC_PARTNER_NETWORKIDLE_MS,
     INSURANCE_LOGIN_WAIT_MS,
-    INSURANCE_MAIN_PROCESS_FRAME_SCRAPE,
     INSURANCE_POLICY_FILL_TIMEOUT_MS,
     INSURANCE_VIN_POST_URL_DOMCONTENTLOADED_MS,
     INSURANCE_VIN_PRE_DOMCONTENTLOADED_MS,
@@ -63,7 +62,6 @@ from app.services.insurance_form_values import (
     normalize_hero_cpi_flag,
     reset_playwright_insurance_log,
     write_insurance_form_values,
-    write_playwright_insurance_auxiliary_text,
 )
 from app.services.insurance_kyc_payloads import insurance_kyc_png_payloads
 from app.services.utility_functions import (
@@ -86,7 +84,7 @@ INSURANCE_NAV_IFRAME_SELECTOR = 'iframe[src*="2w" i]'
 # **Proposal Preview** / **Proposal Review** is always clicked after proposal fill (not gated by this flag).
 HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY = True
 
-# Optional: regex on checkbox **label/row text** (see ``Playwright_insurance_main_process_frames.txt``) for a **new**
+# Optional: regex on checkbox **label/row text** (MispPolicy proposal grid) for a **new**
 # proposal checkbox MISP added — force **unchecked** when a matching visible checkbox exists. If **empty**, this
 # step is skipped (no error). **CPA Tenure** is native ``<select>`` ``ddlCPATenure`` (fuzzy option ``0``), not this hook.
 HERO_MISP_PROPOSAL_OPTIONAL_UNCHECK_CHECKBOX_REGEX = ""
@@ -101,8 +99,10 @@ HERO_MISP_NOMINEE_RELATION_CPH1_SUFFIXES = (
     "ddlRelationWithNominee",
 )
 
-# **Agreement Type with Financer** (e.g. **HPA**) — id may vary by MISP build.
+# **Agreement Type with Financer** (e.g. **HPA**). Real MISP uses **ddlAggwidFinancer**
+# (``name="ctl00$ContentPlaceHolder1$ddlAggwidFinancer"``); older guesses kept as fallbacks.
 HERO_MISP_AGREEMENT_TYPE_FINANCER_CPH1_SUFFIXES = (
+    "ddlAggwidFinancer",
     "ddlAgreementTypeWithFinancer",
     "ddlAgreementWithFinancer",
     "ddlAgreementTypeFinancer",
@@ -5081,6 +5081,20 @@ def _proposal_step_select_fuzzy(
                                     return None
                             except Exception:
                                 pass
+                            try:
+                                loc.select_option(value="1", timeout=timeout_ms, force=True)
+                                snap = _read_locator_value_snapshot(loc)
+                                st = (snap.get("selected_text") or "").strip()
+                                if _proposal_expected_matches_readback(q, st):
+                                    _proposal_log(
+                                        ocr_output_dir,
+                                        subfolder,
+                                        step_id,
+                                        f"select ok id_suffix={_suf!r} agreement_type value=1 readback={st!r}",
+                                    )
+                                    return None
+                            except Exception:
+                                pass
                     # Nominee **Relation** — staging often sends **Mother** / **Father**; MISP option text may differ
                     # in case or wording; try explicit labels before generic fuzzy (same idea as marital).
                     if cph1_id_suffix == "ddlNomineeRelation" and q:
@@ -5592,7 +5606,7 @@ def _proposal_step_checkbox_by_cph1_id(
 ) -> str | None:
     """
     Set ``#ctl00_ContentPlaceHolder1_<id_suffix>`` checkbox when present (see
-    ``Playwright_insurance_main_process_frames.txt`` — e.g. ``chkroicover``, ``chkRSA``, ``chkEME``,
+    proposal markup — e.g. ``chkroicover``, ``chkRSA``, ``chkEME``,
     ``chkNilDepreciation``, ``gridGMc_ctl02_chlGMC``).
 
     Returns ``None`` on success, ``PROPOSAL_CHECKBOX_ID_NOT_FOUND`` if no control matched in any proposal
@@ -7260,126 +7274,6 @@ def click_issue_policy_and_scrape_preview(page, *, timeout_ms: int) -> dict[str,
     return scrape_insurance_policy_preview_before_issue(page, timeout_ms=to)
 
 
-_MAIN_PROCESS_FRAME_SCRAPE_JS = r"""() => {
-  function vis(el) {
-    if (!el || el.nodeType !== 1) return false;
-    const r = el.getBoundingClientRect();
-    if (r.width < 0.5 || r.height < 0.5) return false;
-    const st = window.getComputedStyle(el);
-    if (st.visibility === "hidden" || st.display === "none" || parseFloat(st.opacity) === 0) return false;
-    return true;
-  }
-  function labText(el) {
-    try {
-      if (el.labels && el.labels[0]) {
-        return (el.labels[0].textContent || "").replace(/\s+/g, " ").trim().slice(0, 140);
-      }
-    } catch (e) {}
-    return "";
-  }
-  const sel = 'input, select, textarea, button, a[href], [role="combobox"], [role="textbox"], [role="radio"], [role="checkbox"]';
-  const out = [];
-  let n = 0;
-  const max = 220;
-  document.querySelectorAll(sel).forEach((el) => {
-    if (n >= max) return;
-    if (!vis(el)) return;
-    n++;
-    const tag = (el.tagName || "").toLowerCase();
-    const rec = {
-      tag: tag,
-      id: el.id || "",
-      name: el.name || "",
-      type: (el.type || "").toLowerCase(),
-      placeholder: String(el.placeholder || "").slice(0, 100),
-      ariaLabel: String(el.getAttribute("aria-label") || "").slice(0, 100),
-      role: String(el.getAttribute("role") || "").slice(0, 40),
-      className: String(el.className || "").replace(/\s+/g, " ").trim().slice(0, 100),
-      labelText: labText(el),
-      textSnippet: (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim().slice(0, 90),
-    };
-    if (tag === "input" || tag === "textarea") rec.valueLen = String(el.value || "").length;
-    if (tag === "select") {
-      rec.selectedText =
-        el.selectedIndex >= 0 ? String(el.options[el.selectedIndex].text || "").trim().slice(0, 90) : "";
-      rec.optionCount = el.options.length;
-    }
-    out.push(rec);
-  });
-  return {
-    documentURL: location.href,
-    title: document.title || "",
-    visibleInteractiveCount: n,
-    elements: out,
-  };
-}"""
-
-
-def _hero_misp_diag_scrape_main_process_frames(
-    page,
-    *,
-    ocr_output_dir: Path | None,
-    subfolder: str | None,
-) -> None:
-    """
-    Before proposal field fills: dump visible interactive controls from **every** frame (main + iframes)
-    to ``Playwright_insurance_main_process_frames.txt`` so operators can anchor selectors when the form
-    lives outside ``page`` main document.
-    """
-    if not INSURANCE_MAIN_PROCESS_FRAME_SCRAPE:
-        return
-    if not ocr_output_dir or not subfolder or not str(subfolder).strip():
-        return
-    lines: list[str] = []
-    try:
-        pu = (page.url or "").strip()
-    except Exception:
-        pu = ""
-    lines.append("main_process frame scrape — visible inputs, selects, textareas, buttons, links, ARIA roles")
-    lines.append(f"page.url (top)={pu!r}")
-    lines.append("")
-    frames = list(page.frames)
-    lines.append(f"frame_count={len(frames)}")
-    lines.append("")
-    for idx, fr in enumerate(frames):
-        name = ""
-        try:
-            name = (fr.name or "").strip()
-        except Exception:
-            name = ""
-        fu = ""
-        try:
-            fu = (fr.url or "").strip()
-        except Exception:
-            fu = ""
-        lines.append(f"--- frame_index={idx} name={name!r} url={fu!r} ---")
-        try:
-            data = fr.evaluate(_MAIN_PROCESS_FRAME_SCRAPE_JS)
-            lines.append(json.dumps(data, ensure_ascii=False, indent=2))
-        except Exception as exc:
-            lines.append(json.dumps({"evaluateError": str(exc)[:500]}, ensure_ascii=False, indent=2))
-        lines.append("")
-    body = "\n".join(lines) + "\n"
-    out_path = write_playwright_insurance_auxiliary_text(
-        ocr_output_dir,
-        subfolder,
-        "Playwright_insurance_main_process_frames.txt",
-        body,
-    )
-    if out_path:
-        append_playwright_insurance_line(
-            ocr_output_dir,
-            subfolder,
-            "NOTE",
-            f"main_process: per-frame visible control scrape → {out_path.name} (same folder as Playwright_insurance.txt)",
-        )
-        logger.info(
-            "Hero Insurance: main_process frame scrape written to %s (%s frames).",
-            out_path,
-            len(frames),
-        )
-
-
 def _hero_misp_fill_proposal_and_review(
     page,
     values: dict,
@@ -7631,6 +7525,7 @@ def _hero_misp_fill_proposal_and_review(
             (
                 r"Agreement\s*Type\s*with\s*Financer",
                 r"Agreement\s*Type\s*with\s*Financier",
+                r"Aggwid\s*Financer",
                 r"Agreement\s*Type\s*\(?\s*Financer",
             ),
             "HPA",
@@ -7985,9 +7880,6 @@ def main_process(
                 ocr_output_dir, subfolder, "NOTE", f"main_process: I agree step failed: {err}"
             )
             return out
-        _hero_misp_diag_scrape_main_process_frames(
-            page, ocr_output_dir=ocr_output_dir, subfolder=subfolder
-        )
         prop_err, preview = _hero_misp_fill_proposal_and_review(
             page,
             values,

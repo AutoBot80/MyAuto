@@ -177,9 +177,6 @@ INSURANCE_LOGIN_WAIT_MS = int(os.getenv("INSURANCE_LOGIN_WAIT_MS", "600000"))
 INSURANCE_ACTION_TIMEOUT_MS = int(os.getenv("INSURANCE_ACTION_TIMEOUT_MS", "3500"))
 # Tighter timeout while filling the policy / insurance-details form (many sequential fields).
 INSURANCE_POLICY_FILL_TIMEOUT_MS = int(os.getenv("INSURANCE_POLICY_FILL_TIMEOUT_MS", "3200"))
-# main_process: before proposal fill, write per-frame visible control scrape to ocr_output (see fill_hero_insurance_service).
-_INSURANCE_MPS_SCRAPE = (os.getenv("INSURANCE_MAIN_PROCESS_FRAME_SCRAPE") or "true").strip().lower()
-INSURANCE_MAIN_PROCESS_FRAME_SCRAPE = _INSURANCE_MPS_SCRAPE not in ("0", "false", "no", "off")
 # Hero MISP KYC (``ekycpage`` / ``kycpage.aspx`` / ``/ekyc`` / ``/apps/kyc/``): optional keyboard SOP
 # (click iframe/body → Tab → type insurer → …). See ``fill_hero_insurance_service._fill_kyc_ekyc_keyboard_sop``.
 def _int_env(name: str, default: int) -> int:

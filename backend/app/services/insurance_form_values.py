@@ -310,8 +310,8 @@ def write_playwright_insurance_auxiliary_text(
     body: str,
 ) -> Path | None:
     """
-    Write a multi-line auxiliary debug file next to ``Playwright_insurance.txt`` (same subfolder), e.g.
-    ``Playwright_insurance_main_process_frames.txt``. Returns the path or None if skipped.
+    Write a multi-line auxiliary debug file next to ``Playwright_insurance.txt`` (same subfolder).
+    Returns the path or None if skipped.
     """
     if not ocr_output_dir or not subfolder or not str(subfolder).strip():
         return None
