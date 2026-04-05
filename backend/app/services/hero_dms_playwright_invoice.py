@@ -29,6 +29,7 @@ from app.services.hero_dms_shared_utilities import (
     _agent_debug_log,
     _click_find_go_query,
     _detect_siebel_error_popup,
+    _fill_by_label_on_frame,
     _goto,
     _is_browser_disconnected_error,
     _iter_frame_locator_roots,
@@ -62,7 +63,6 @@ from app.services.hero_dms_playwright_vehicle import (
     scrape_siebel_vehicle_row,
 )
 from app.services.hero_dms_playwright_customer import (
-    _fill_by_label_on_frame,
     _fill_create_order_financier_field_on_frame,
     _select_dropdown_by_label_on_frame,
 )

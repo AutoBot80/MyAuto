@@ -58,6 +58,7 @@ from app.services.hero_dms_shared_utilities import (
     _try_dismiss_siebel_error_dialog,
     _try_expand_find_flyin,
     _ts_ist_iso,
+    _fill_by_label_on_frame,
     _fill_in_frame,
     _fill_with_frame_locator,
     _try_fill_field,

@@ -31,6 +31,7 @@ from app.services.hero_dms_shared_utilities import (
     _agent_debug_log,
     _click_find_go_query,
     _detect_siebel_error_popup,
+    _fill_by_label_on_frame,
     _frame_url_matches_payment_hint,
     _frames_for_enquiry_subgrid_eval,
     _goto,
@@ -6211,65 +6212,6 @@ def _frame_containing_enquiry_type(page: Page, preferred: Frame | None = None) -
         except Exception:
             continue
     return None
-
-
-def _fill_by_label_on_frame(
-    frame: Frame,
-    label: str,
-    value: str,
-    *,
-    action_timeout_ms: int,
-) -> bool:
-    if not (value or "").strip():
-        return False
-
-    def _do_fill(loc) -> bool:
-        try:
-            loc.click(timeout=action_timeout_ms)
-        except Exception:
-            loc.click(timeout=action_timeout_ms, force=True)
-        loc.fill("", timeout=action_timeout_ms)
-        loc.fill(value.strip(), timeout=action_timeout_ms)
-        try:
-            loc.press("Tab", timeout=1200)
-        except Exception:
-            pass
-        return True
-
-    pats = (
-        re.compile(rf"^\s*{re.escape(label)}\s*$", re.I),
-        re.compile(re.escape(label), re.I),
-    )
-    for pat in pats:
-        try:
-            loc = frame.get_by_label(pat).first
-            if loc.count() <= 0 or not loc.is_visible(timeout=700):
-                continue
-            return _do_fill(loc)
-        except Exception:
-            continue
-    # Fallback: match raw aria-label attribute directly (bypasses aria-labelledby override).
-    esc = label.replace("'", "\\'")
-    for css in (
-        f"input[aria-label*='{esc}' i]",
-        f"textarea[aria-label*='{esc}' i]",
-        f"select[aria-label*='{esc}' i]",
-    ):
-        try:
-            loc = frame.locator(css).first
-            if loc.count() <= 0 or not loc.is_visible(timeout=700):
-                continue
-            ro = False
-            try:
-                ro = loc.evaluate("el => el.readOnly === true")
-            except Exception:
-                pass
-            if ro:
-                continue
-            return _do_fill(loc)
-        except Exception:
-            continue
-    return False
 
 
 def _financier_mvg_wait_popup_indicator(
