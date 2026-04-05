@@ -7413,6 +7413,13 @@ def _hero_misp_fill_proposal_and_review(
 
     _wait_load_optional(page, min(30_000, pt * 6))
     _t(page, 500)
+    try:
+        page.wait_for_timeout(300)
+    except Exception:
+        try:
+            time.sleep(0.3)
+        except Exception:
+            pass
 
     raw_marital = (values.get("marital_status") or "").strip()
     ms = _proposal_map_marital_for_misp(raw_marital)
