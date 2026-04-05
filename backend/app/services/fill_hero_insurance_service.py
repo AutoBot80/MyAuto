@@ -7065,97 +7065,42 @@ def _parse_currency_amount_text(raw: str) -> float | None:
         return None
 
 
-def scrape_insurance_policy_preview_before_issue(page, *, timeout_ms: int) -> dict[str, Any]:
-    """
-    Read **policy number**, **policy period** (from/to), **premium**, and **IDV** from the proposal
-    preview or post-**Issue Policy** screen — dummy IDs ``#ins-preview-*``, then label/body heuristics
-    for real MISP. ``premium`` holds the total premium / payable amount (formerly a separate
-    ``insurance_cost`` field in DB).
-    """
-    out: dict[str, Any] = {
-        "policy_num": None,
-        "policy_from": None,
-        "policy_to": None,
-        "premium": None,
-        "idv": None,
-    }
-    to = max(2_000, min(int(timeout_ms), 25_000))
+def _insurance_preview_apply_body_text_heuristics(body: str, out: dict[str, Any]) -> None:
+    """Fill missing ``out`` keys from free-form page text (Proposal Review / preview / post-issue)."""
+    if not body:
+        return
+    chunk = body[:150_000]
 
-    try:
-        loc_p = page.locator("#ins-preview-policy-num")
-        if loc_p.count() > 0 and loc_p.first.is_visible(timeout=min(4_000, to)):
-            t = (loc_p.first.inner_text() or "").strip()
-            pn = _normalize_policy_num_for_db(t)
-            if pn:
-                out["policy_num"] = pn
-    except Exception as exc:
-        logger.debug("Insurance preview scrape policy (dummy id): %s", exc)
-
-    for dummy_id, key in (
-        ("#ins-preview-policy-from", "policy_from"),
-        ("#ins-preview-policy-to", "policy_to"),
-    ):
-        try:
-            loc_d = page.locator(dummy_id)
-            if loc_d.count() > 0 and loc_d.first.is_visible(timeout=min(3_000, to)):
-                t = (loc_d.first.inner_text() or "").strip()
-                if t:
-                    out[key] = t
-        except Exception as exc:
-            logger.debug("Insurance preview scrape %s (dummy id): %s", key, exc)
-
-    for dummy_id, key in (
-        ("#ins-preview-premium", "premium"),
-        ("#ins-preview-insurance-cost", "premium"),
-        ("#ins-preview-idv", "idv"),
-    ):
-        try:
-            loc_d = page.locator(dummy_id)
-            if loc_d.count() > 0 and loc_d.first.is_visible(timeout=min(4_000, to)):
-                t = (loc_d.first.inner_text() or "").strip()
-                amt = _parse_currency_amount_text(t)
-                if amt is not None and out[key] is None:
-                    out[key] = amt
-        except Exception as exc:
-            logger.debug("Insurance preview scrape %s (dummy id): %s", key, exc)
-
-    # Nearby text for MISP-style labels (first matching row / cell)
-    if not out["policy_num"]:
-        for pat in (
-            re.compile(r"Policy\s*(?:Number|No\.?)\s*[:\s#]*\s*([A-Za-z0-9][A-Za-z0-9/\-]{3,31})", re.I),
-            re.compile(r"Proposal\s*(?:Number|No\.?)\s*[:\s#]*\s*([A-Za-z0-9][A-Za-z0-9/\-]{3,31})", re.I),
-        ):
-            try:
-                loc = page.get_by_text(pat)
-                if loc.count() > 0 and loc.first.is_visible(timeout=2_000):
-                    m = pat.search((loc.first.inner_text() or "")[:300])
-                    if m:
-                        cand = _normalize_policy_num_for_db(m.group(1).strip())
-                        if cand:
-                            out["policy_num"] = cand
-                            break
-            except Exception:
-                continue
-
-    body = ""
-    try:
-        body = (page.locator("body").inner_text(timeout=min(12_000, to)) or "")[:150_000]
-    except Exception:
-        body = ""
-
-    if not out["policy_num"] and body:
+    if not out.get("policy_num"):
         m = re.search(
             r"(?:Policy|Proposal)\s*(?:Number|No\.?)\s*[:\s#]*\s*([A-Za-z0-9][A-Za-z0-9/\-]{3,31})",
-            body,
+            chunk,
             re.I | re.M,
         )
         if m:
             out["policy_num"] = _normalize_policy_num_for_db(m.group(1))
 
-    if (not out.get("policy_from") or not out.get("policy_to")) and body:
+    if not out.get("policy_from"):
+        m = re.search(
+            r"Valid\s*From\s*[:\s]*(\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4})",
+            chunk,
+            re.I | re.M,
+        )
+        if m:
+            out["policy_from"] = m.group(1).strip()
+    if not out.get("policy_to"):
+        m = re.search(
+            r"Valid\s*To\s*[:\s]*(\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4})",
+            chunk,
+            re.I | re.M,
+        )
+        if m:
+            out["policy_to"] = m.group(1).strip()
+
+    if (not out.get("policy_from") or not out.get("policy_to")) and chunk:
         for m in re.finditer(
             r"(\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4})\s*[-–—to]+\s*(\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4})",
-            body[:80_000],
+            chunk[:80_000],
             re.I,
         ):
             if not out.get("policy_from"):
@@ -7168,7 +7113,7 @@ def scrape_insurance_policy_preview_before_issue(page, *, timeout_ms: int) -> di
             m2 = re.search(
                 r"(?:Policy\s*)?(?:Period|From)\s*[:\s]*(\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}).*?"
                 r"(?:To|End)\s*[:\s]*(\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4})",
-                body[:80_000],
+                chunk[:80_000],
                 re.I | re.S,
             )
             if m2:
@@ -7177,12 +7122,12 @@ def scrape_insurance_policy_preview_before_issue(page, *, timeout_ms: int) -> di
                 if not out.get("policy_to"):
                     out["policy_to"] = m2.group(2).strip()
 
-    if out.get("premium") is None and body:
+    if out.get("premium") is None:
         m = re.search(
             r"(?:Insurance\s*[Cc]ost|Total\s*(?:Policy\s*)?[Pp]remium|Net\s*[Pp]remium|Final\s*[Pp]remium|"
             r"Gross\s*[Pp]remium|Premium\s*(?:Amount|Paid|Payable)?|Amount\s*Payable)\s*[:\s]*\s*[₹RsINR.\s]*"
             r"([\d][\d,]*(?:\.\d{1,2})?)",
-            body,
+            chunk,
             re.I | re.M,
         )
         if m:
@@ -7190,17 +7135,117 @@ def scrape_insurance_policy_preview_before_issue(page, *, timeout_ms: int) -> di
             if amt is not None:
                 out["premium"] = amt
 
-    if out.get("idv") is None and body:
+    if out.get("idv") is None:
+        m = re.search(
+            r"Total\s*IDV\s*[:\s₹RsINR.]*\s*([\d][\d,]*(?:\.\d{1,2})?)",
+            chunk,
+            re.I | re.M,
+        )
+        if m:
+            amt = _parse_currency_amount_text(m.group(1))
+            if amt is not None:
+                out["idv"] = amt
+    if out.get("idv") is None:
         for pat in (
             r"(?:IDV|Insured\s*Declared\s*Value)\s*[:\s₹RsINR.]*\s*([\d][\d,]*(?:\.\d{1,2})?)",
             r"IDV\s*[:\s]*\s*([\d][\d,]*(?:\.\d{1,2})?)",
         ):
-            m = re.search(pat, body[:80_000], re.I | re.M)
+            m = re.search(pat, chunk[:80_000], re.I | re.M)
             if m:
                 amt = _parse_currency_amount_text(m.group(1))
                 if amt is not None:
                     out["idv"] = amt
                     break
+
+
+def scrape_insurance_policy_preview_before_issue(page, *, timeout_ms: int) -> dict[str, Any]:
+    """
+    Read **policy number** (Proposal No.), **Valid From** / **Valid To**, **premium**, and **Total IDV**
+    from the proposal preview / **Proposal Review** page / post-**Issue Policy** screen — training
+    dummy IDs ``#ins-preview-*``, then label/body heuristics across **main document + proposal iframes**
+    (``_hero_misp_page_and_frame_roots(..., purpose="proposal")``). ``premium`` maps to DB total premium.
+    """
+    out: dict[str, Any] = {
+        "policy_num": None,
+        "policy_from": None,
+        "policy_to": None,
+        "premium": None,
+        "idv": None,
+    }
+    to = max(2_000, min(int(timeout_ms), 25_000))
+    roots = _hero_misp_page_and_frame_roots(page, purpose="proposal")
+    if not roots:
+        roots = [page]
+
+    for root in roots:
+        try:
+            loc_p = root.locator("#ins-preview-policy-num")
+            if loc_p.count() > 0 and loc_p.first.is_visible(timeout=min(2_500, to)):
+                t = (loc_p.first.inner_text() or "").strip()
+                pn = _normalize_policy_num_for_db(t)
+                if pn and not out["policy_num"]:
+                    out["policy_num"] = pn
+        except Exception as exc:
+            logger.debug("Insurance preview scrape policy (dummy id): %s", exc)
+
+        for dummy_id, key in (
+            ("#ins-preview-policy-from", "policy_from"),
+            ("#ins-preview-policy-to", "policy_to"),
+        ):
+            try:
+                if out.get(key):
+                    continue
+                loc_d = root.locator(dummy_id)
+                if loc_d.count() > 0 and loc_d.first.is_visible(timeout=min(2_000, to)):
+                    t = (loc_d.first.inner_text() or "").strip()
+                    if t:
+                        out[key] = t
+            except Exception as exc:
+                logger.debug("Insurance preview scrape %s (dummy id): %s", key, exc)
+
+        for dummy_id, key in (
+            ("#ins-preview-premium", "premium"),
+            ("#ins-preview-insurance-cost", "premium"),
+            ("#ins-preview-idv", "idv"),
+        ):
+            try:
+                if out.get(key) is not None:
+                    continue
+                loc_d = root.locator(dummy_id)
+                if loc_d.count() > 0 and loc_d.first.is_visible(timeout=min(2_500, to)):
+                    t = (loc_d.first.inner_text() or "").strip()
+                    amt = _parse_currency_amount_text(t)
+                    if amt is not None:
+                        out[key] = amt
+            except Exception as exc:
+                logger.debug("Insurance preview scrape %s (dummy id): %s", key, exc)
+
+    if not out["policy_num"]:
+        for pat in (
+            re.compile(r"Policy\s*(?:Number|No\.?)\s*[:\s#]*\s*([A-Za-z0-9][A-Za-z0-9/\-]{3,31})", re.I),
+            re.compile(r"Proposal\s*(?:Number|No\.?)\s*[:\s#]*\s*([A-Za-z0-9][A-Za-z0-9/\-]{3,31})", re.I),
+        ):
+            for root in roots:
+                try:
+                    loc = root.get_by_text(pat)
+                    if loc.count() > 0 and loc.first.is_visible(timeout=2_000):
+                        m = pat.search((loc.first.inner_text() or "")[:300])
+                        if m:
+                            cand = _normalize_policy_num_for_db(m.group(1).strip())
+                            if cand:
+                                out["policy_num"] = cand
+                                break
+                except Exception:
+                    continue
+            if out["policy_num"]:
+                break
+
+    for root in roots:
+        try:
+            body = (root.locator("body").inner_text(timeout=min(12_000, to)) or "")[:150_000]
+        except Exception:
+            body = ""
+        _insurance_preview_apply_body_text_heuristics(body, out)
 
     if any(v is not None for v in out.values()):
         logger.info(
@@ -7212,6 +7257,153 @@ def scrape_insurance_policy_preview_before_issue(page, *, timeout_ms: int) -> di
             out.get("idv"),
         )
     return out
+
+
+def _hero_misp_note_proposal_review_scrape_for_insurance_master(
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
+    preview: dict[str, Any],
+) -> None:
+    """Human-readable line in ``Playwright_insurance.txt`` for operator verification vs MISP."""
+    append_playwright_insurance_line(
+        ocr_output_dir,
+        subfolder,
+        "NOTE",
+        "proposal_review_page (insurance_master fields): "
+        f"Proposal No.={preview.get('policy_num')!r}; "
+        f"Valid From={preview.get('policy_from')!r}; "
+        f"Valid To={preview.get('policy_to')!r}; "
+        f"Total IDV={preview.get('idv')!r}; "
+        f"Premium={preview.get('premium')!r}",
+    )
+
+
+def _hero_misp_proposal_review_print_proposal_and_consent(
+    page,
+    *,
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
+    timeout_ms: int,
+) -> str | None:
+    """
+    On **Proposal Review**: click **Print Proposal** (``Submit3``), then check **chkAgree** and
+    **chkconsentagree**. Print click is best-effort (browser print dialog); consent checkboxes are required.
+    """
+    to = min(int(timeout_ms), 60_000)
+    roots = _hero_misp_page_and_frame_roots(page, purpose="proposal")
+    if not roots:
+        roots = [page]
+
+    printed = False
+    for root in roots:
+        for sel in (
+            'input[type="button"][name="Submit3"][value="Print Proposal"]',
+            'input.btn-success[name="Submit3"]',
+            'input[type="button"][value="Print Proposal"]',
+        ):
+            try:
+                loc = root.locator(sel)
+                if loc.count() == 0:
+                    continue
+                el = loc.first
+                if not el.is_visible(timeout=min(3_000, to)):
+                    _proposal_scroll_visible(el, timeout_ms=to)
+                if not el.is_visible(timeout=min(3_500, to)):
+                    continue
+                el.click(timeout=to, force=True)
+                printed = True
+                append_playwright_insurance_line(
+                    ocr_output_dir,
+                    subfolder,
+                    "NOTE",
+                    "proposal_review: clicked Print Proposal (input name=Submit3)",
+                )
+                logger.info("Hero Insurance: clicked Print Proposal (Submit3).")
+                break
+            except Exception as exc:
+                logger.debug("Hero Insurance: Print Proposal selector %r: %s", sel[:56], exc)
+                continue
+        if printed:
+            break
+
+    if not printed:
+        for root in roots:
+            try:
+                pr = root.get_by_role("button", name=re.compile(r"Print\s*Proposal", re.I))
+                if pr.count() > 0 and pr.first.is_visible(timeout=min(3_000, to)):
+                    pr.first.click(timeout=to, force=True)
+                    printed = True
+                    append_playwright_insurance_line(
+                        ocr_output_dir,
+                        subfolder,
+                        "NOTE",
+                        "proposal_review: clicked Print Proposal (role=button)",
+                    )
+                    logger.info("Hero Insurance: clicked Print Proposal (role=button).")
+                    break
+            except Exception as exc:
+                logger.debug("Hero Insurance: Print Proposal role=button: %s", exc)
+
+    if not printed:
+        append_playwright_insurance_line(
+            ocr_output_dir,
+            subfolder,
+            "NOTE",
+            "proposal_review: Print Proposal control not found — skipped (check MISP layout)",
+        )
+        logger.warning("Hero Insurance: Print Proposal control not found; continuing to consent checkboxes.")
+
+    _t(page, 450)
+
+    for cid in ("chkAgree", "chkconsentagree"):
+        checked_ok = False
+        last_err = ""
+        for root in roots:
+            try:
+                loc = _proposal_cph1_locator(root, cid)
+                if loc.count() == 0:
+                    continue
+                cb = loc.first
+                if not cb.is_visible(timeout=min(2_000, to)):
+                    _proposal_scroll_visible(cb, timeout_ms=to)
+                if not cb.is_visible(timeout=min(3_000, to)):
+                    continue
+                if not cb.is_checked():
+                    try:
+                        cb.check(timeout=to, force=True)
+                    except Exception:
+                        try:
+                            cb.click(timeout=to, force=True)
+                        except Exception:
+                            pass
+                if not cb.is_checked():
+                    try:
+                        cb.evaluate(
+                            """e => {
+                              e.checked = true;
+                              e.dispatchEvent(new Event('click', { bubbles: true }));
+                              e.dispatchEvent(new Event('change', { bubbles: true }));
+                            }"""
+                        )
+                    except Exception:
+                        pass
+                if cb.is_checked():
+                    checked_ok = True
+                    _proposal_log(
+                        ocr_output_dir,
+                        subfolder,
+                        f"proposal_review_{cid}",
+                        "checkbox checked ok",
+                    )
+                    break
+                last_err = "is_checked() false after check"
+            except Exception as exc:
+                last_err = str(exc)
+                continue
+        if not checked_ok:
+            return f"proposal_review: could not check {cid} ({last_err})"
+
+    return None
 
 
 def click_issue_policy_and_scrape_preview(page, *, timeout_ms: int) -> dict[str, Any]:
@@ -7716,6 +7908,17 @@ def _hero_misp_fill_proposal_and_review(
     except Exception:
         pass
     preview = scrape_insurance_policy_preview_before_issue(page, timeout_ms=pt)
+    _hero_misp_note_proposal_review_scrape_for_insurance_master(
+        ocr_output_dir, subfolder, preview
+    )
+    err_pr = _hero_misp_proposal_review_print_proposal_and_consent(
+        page,
+        ocr_output_dir=ocr_output_dir,
+        subfolder=subfolder,
+        timeout_ms=pt,
+    )
+    if err_pr:
+        return _fail(err_pr)
     return None, preview
 
 
