@@ -9,7 +9,7 @@ alwaysApply: true
 
 ## Required agent behavior
 
-1. **Do not** refactor, “improve”, tighten, or relax matchers, fallbacks, or sweep order in `siebel_dms_playwright.py` (and callers) for these flows **without** the user naming the exact behavior to change.
+1. **Do not** refactor, “improve”, tighten, or relax matchers, fallbacks, or sweep order in `hero_dms_playwright_customer.py` (and callers) for these flows **without** the user naming the exact behavior to change.
 2. If the user asks for a change that **might** touch this area (e.g. first-name matching, Find field, grid hooks), **stop** and:
    - Summarize **which** functions/paths would be edited and **what** would change for duplicate-mobile / enquiry logic.
    - Ask **explicit confirmation** before applying any edit that affects those paths.

@@ -109,7 +109,7 @@ BULK_JOB_MAX_ATTEMPTS = int(os.getenv("BULK_JOB_MAX_ATTEMPTS", "3"))
 # DMS fill (Playwright): base URL and login. Used when client calls POST /fill-forms.
 # DMS_BASE_URL / VAHAN_BASE_URL / INSURANCE_BASE_URL: required in .env (no in-code defaults); validated at app startup.
 DMS_BASE_URL = (os.getenv("DMS_BASE_URL") or "").strip().rstrip("/")
-# Default **real** = Hero Connect / Siebel (``siebel_dms_playwright``). Values: ``real``, ``siebel``, ``live``, ``production``, ``hero``.
+# Default **real** = Hero Connect / Siebel (``hero_dms_*`` modules). Values: ``real``, ``siebel``, ``live``, ``production``, ``hero``.
 # ``dummy`` is no longer supported (static training HTML removed).
 DMS_MODE = (os.getenv("DMS_MODE") or "real").strip().lower()
 # Required for Fill DMS: ``DMS_REAL_URL_CONTACT`` for Stage 1 Find (always; ``skip_find`` in DB does not bypass).
@@ -138,11 +138,11 @@ DMS_SIEBEL_INTER_ACTION_DELAY_MS = int(os.getenv("DMS_SIEBEL_INTER_ACTION_DELAY_
 # Optional extra iframe CSS selectors (comma-separated) tried before built-in Siebel patterns.
 _siebel_if = (os.getenv("DMS_SIEBEL_AUTO_IFRAME_SELECTORS") or "").strip()
 DMS_SIEBEL_AUTO_IFRAME_SELECTORS = [x.strip() for x in _siebel_if.split(",") if x.strip()]
-# Optional override for Payment Lines frame fast-path (``siebel_dms_playwright._hero_default_payment_lines_root_hint``
+# Optional override for Payment Lines frame fast-path (``hero_dms_shared_utilities._hero_default_payment_lines_root_hint``
 # is used when both are empty). JSON object per LLD §2.4d.1, or path to a ``.json`` file.
 DMS_SIEBEL_PAYMENT_LINES_ROOT_HINT_FILE = (os.getenv("DMS_SIEBEL_PAYMENT_LINES_ROOT_HINT_FILE") or "").strip()
 DMS_SIEBEL_PAYMENT_LINES_ROOT_HINT_JSON = (os.getenv("DMS_SIEBEL_PAYMENT_LINES_ROOT_HINT_JSON") or "").strip()
-# Optional overrides only — built-in Hero defaults live in ``siebel_dms_playwright`` (same pattern as Payment Lines).
+# Optional overrides only — built-in Hero defaults live in ``hero_dms_shared_utilities`` (same pattern as Payment Lines).
 DMS_SIEBEL_MOBILE_SEARCH_HIT_ROOT_HINT_FILE = (os.getenv("DMS_SIEBEL_MOBILE_SEARCH_HIT_ROOT_HINT_FILE") or "").strip()
 DMS_SIEBEL_MOBILE_SEARCH_HIT_ROOT_HINT_JSON = (os.getenv("DMS_SIEBEL_MOBILE_SEARCH_HIT_ROOT_HINT_JSON") or "").strip()
 DMS_SIEBEL_CONTACT_ENQUIRY_SUBGRID_HINT_FILE = (
