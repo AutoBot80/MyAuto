@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { validateAadharScanFile } from "../utils/aadharScanFileValidation";
 
 interface UploadScansPanelProps {
   isUploading: boolean;
@@ -31,6 +32,8 @@ export function UploadScansPanel({
   isMobileValid,
   onUploadV2,
 }: UploadScansPanelProps) {
+  void onUpload;
+  void mobile;
   const isPreUploaded = Boolean(savedTo && uploadedFiles.length > 0);
   const aadharInputRef = useRef<HTMLInputElement | null>(null);
   const aadharBackInputRef = useRef<HTMLInputElement | null>(null);
@@ -41,6 +44,7 @@ export function UploadScansPanel({
   const [selectedDetailsFile, setSelectedDetailsFile] = useState<File | null>(null);
   const [selectedInsuranceFile, setSelectedInsuranceFile] = useState<File | null>(null);
   const [hasInsurance, setHasInsurance] = useState(false);
+  const [aadharFileError, setAadharFileError] = useState<string | null>(null);
 
   const refs = [aadharInputRef, aadharBackInputRef, salesInputRef] as const;
   const selectedFiles = [selectedAadharFile, selectedAadharBackFile, selectedDetailsFile] as const;
@@ -73,6 +77,14 @@ export function UploadScansPanel({
         </div>
       ) : (
       <>
+      <p className="app-panel-hint-aadhar" role="note">
+        Aadhaar files should be only jpg, jpeg, png, img files. Max size 512 KB allowed.
+      </p>
+      {aadharFileError ? (
+        <p className="app-panel-file-error" role="alert">
+          {aadharFileError}
+        </p>
+      ) : null}
       {SCAN_LABELS.map((label, index) => (
         <div key={label} className="app-panel-row app-panel-scan-row">
           <label className="app-panel-scan-label" htmlFor={`upload-scan-${index}`}>{label}</label>
@@ -80,11 +92,28 @@ export function UploadScansPanel({
             id={`upload-scan-${index}`}
             ref={refs[index]}
             type="file"
-            accept=".jpg,.jpeg,.png,.pdf,image/jpeg,image/png,application/pdf"
+            accept={
+              index < 2
+                ? ".jpg,.jpeg,.png,.img,image/jpeg,image/png"
+                : ".jpg,.jpeg,.png,.pdf,image/jpeg,image/png,application/pdf"
+            }
             style={{ display: "none" }}
             onChange={(e) => {
               const file = e.target.files?.[0];
-              if (file) setSelectedFiles[index](file);
+              if (!file) {
+                e.target.value = "";
+                return;
+              }
+              if (index < 2) {
+                const err = validateAadharScanFile(file);
+                if (err) {
+                  setAadharFileError(err);
+                  e.target.value = "";
+                  return;
+                }
+                setAadharFileError(null);
+              }
+              setSelectedFiles[index](file);
               e.target.value = "";
             }}
           />

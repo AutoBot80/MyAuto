@@ -18,6 +18,7 @@ from typing import Any
 from playwright.sync_api import TimeoutError as PlaywrightTimeout
 
 from app.config import (
+    DEALER_ID,
     HERO_MISP_KYC_TAB_AWAY_SIMULATION,
     HERO_MISP_LANDING_WAIT_MS,
     HERO_MISP_UI_SETTLE_MS,
@@ -45,6 +46,7 @@ from app.config import (
     KYC_INSURER_FUZZY_MIN_SCORE,
     KYC_USE_KEYBOARD_EKYC_SOP,
     KYC_DEFAULT_KYC_PARTNER_LABEL,
+    get_uploads_dir,
 )
 from app.services.add_sales_commit_service import (
     insert_insurance_master_after_gi,
@@ -70,6 +72,7 @@ from app.services.utility_functions import (
     insurer_prefer_matches,
     normalize_dob_for_misp,
     normalize_for_fuzzy_match,
+    safe_subfolder_name,
 )
 
 # MISP navigation tuning — edit in source (not .env). Optional iframe CSS after trial runs.
@@ -224,6 +227,54 @@ def _hero_misp_vin_step_timeout_ms(base_action_ms: int | None = None) -> int:
 
 
 logger = logging.getLogger(__name__)
+
+
+def _kyc_local_scan_paths_from_uploaded_scans(
+    dealer_id: int | None,
+    subfolder: str | None,
+) -> list[str] | None:
+    """
+    Resolve KYC upload files from the client **Uploaded scans** tree (``get_uploads_dir``), same layout as
+    ``UploadService.save_and_queue_v2``: ``Aadhar.jpg`` (front), ``Aadhar_back.jpg`` (rear). The portal’s
+    third slot (customer photo) reuses the front image.
+
+    Returns three absolute file paths, or ``None`` if the folder or required scans are missing.
+    """
+    if not subfolder or not str(subfolder).strip():
+        return None
+    did = int(dealer_id) if dealer_id is not None else int(DEALER_ID)
+    base = get_uploads_dir(did) / safe_subfolder_name(subfolder)
+    front = base / "Aadhar.jpg"
+    back = base / "Aadhar_back.jpg"
+    if not front.is_file():
+        logger.info(
+            "Hero Insurance: KYC — no %s under Uploaded scans (expected client upload).",
+            front,
+        )
+        return None
+    if not back.is_file():
+        logger.info(
+            "Hero Insurance: KYC — no %s under Uploaded scans; cannot attach rear scan.",
+            back,
+        )
+        return None
+    # Third field: customer photo — same as front (per operator SOP when no separate photo).
+    return [
+        str(front.resolve()),
+        str(back.resolve()),
+        str(front.resolve()),
+    ]
+
+
+def _kyc_local_scan_paths_from_values(values: dict | None) -> list[str] | None:
+    """``values['kyc_local_scan_paths']`` set in ``run_fill_insurance_only`` from Uploaded scans."""
+    if not values:
+        return None
+    raw = values.get("kyc_local_scan_paths")
+    if not isinstance(raw, list) or len(raw) < 3:
+        return None
+    return [str(x) for x in raw[:3]]
+
 
 # #region agent log
 _DEBUG_INSURER_TAB_NDJSON = Path(__file__).resolve().parents[3] / "debug-d1a375.log"
@@ -758,12 +809,19 @@ def _kyc_post_mobile_entry_branch(
     kyc_fr,
     *,
     timeout_ms: int,
+    post_mobile_recovery_digits: str | None = None,
+    kyc_local_scan_paths: list[str] | None = None,
 ) -> str | None:
     """
-    Run **after** mobile is filled: blur field / short ``domcontentloaded`` so postback can run; then either
-    **consent + Proceed** (banner path) or **upload three files + consent + Proceed**
-    (``_kyc_proceed_or_upload``). Uses ``INSURANCE_KYC_POST_MOBILE_DOM_MS`` (default **2000** ms) — not
-    ``networkidle`` (previously up to 12s).
+    Run **after** the **first** KYC attempt (OVD = **AADHAAR CARD** only — set upstream), mobile filled,
+    blur / short ``domcontentloaded`` so postback can run.
+
+    - If the **verified Aadhaar / policy issuance** banner appears → **consent + Proceed** (no uploads).
+    - If that message **does not** appear → optional ``post_mobile_recovery_digits`` runs the **second**
+      branch: switch OVD to **AADHAAR EXTRACTION**, re-fill mobile, wait for uploads, then merge with the
+      common tail: ``_kyc_proceed_or_upload`` (**three files + consent + Proceed**).
+
+    Uses ``INSURANCE_KYC_POST_MOBILE_DOM_MS`` (default **2000** ms) — not ``networkidle``.
     """
     to = min(int(timeout_ms), 120_000)
     try:
@@ -788,9 +846,36 @@ def _kyc_post_mobile_entry_branch(
         return _kyc_click_proceed_after_already_verified_banner(page, kyc_fr, timeout_ms=to)
 
     logger.info(
-        "Hero Insurance: post-mobile — no verified banner yet; three document uploads then Proceed."
+        "Hero Insurance: post-mobile — first pass (AADHAAR CARD) did not show verified message; "
+        "EXTRACTION branch then shared consent + Proceed."
     )
-    return _kyc_proceed_or_upload(page, timeout_ms=to)
+    kyc_fr_live = _kyc_preferred_kyc_frame(page)
+    rec_digits = re.sub(r"\D", "", (post_mobile_recovery_digits or "").strip())[:12]
+    if rec_digits:
+        logger.info(
+            "Hero Insurance: post-mobile — switching OVD to AADHAAR EXTRACTION, re-filling mobile, "
+            "then three uploads; merges with consent + Proceed."
+        )
+        if _kyc_try_aadhaar_extraction_upload_recovery(
+            page, kyc_fr_live, rec_digits, timeout_ms=to
+        ):
+            logger.info(
+                "Hero Insurance: AADHAAR EXTRACTION branch — upload inputs ready (or present); "
+                "continuing to attach files + CTA."
+            )
+        else:
+            logger.warning(
+                "Hero Insurance: AADHAAR EXTRACTION branch did not confirm file inputs after OVD/mobile; "
+                "still attempting upload + Proceed."
+            )
+    else:
+        logger.warning(
+            "Hero Insurance: post-mobile — no recovery digits for EXTRACTION branch; "
+            "upload step may fail."
+        )
+    return _kyc_proceed_or_upload(
+        page, timeout_ms=to, kyc_local_scan_paths=kyc_local_scan_paths
+    )
 
 
 def _kyc_select_kyc_partner_if_available(
@@ -2838,6 +2923,152 @@ def _kyc_set_ovd_aadhaar_card_in_frame(kyc_fr, *, timeout_ms: int) -> bool:
     return ovd_ok
 
 
+def _kyc_file_input_count(root) -> int:
+    try:
+        n = root.locator('input[type="file"]').count()
+        return max(0, int(n))
+    except Exception:
+        return 0
+
+
+def _kyc_locator_file_inputs_best(page):
+    """
+    Prefer ``input[type=file]`` inside the KYC frame; MISP ``ekycpage`` often hosts the form in an iframe
+    while ``page.locator`` only sees the main document.
+    """
+    kyc_fr = _kyc_preferred_kyc_frame(page)
+    try:
+        loc_fr = kyc_fr.locator('input[type="file"]')
+        if loc_fr.count() > 0:
+            return loc_fr
+    except Exception:
+        pass
+    return page.locator('input[type="file"]')
+
+
+def _kyc_set_ovd_aadhaar_extraction_in_frame(kyc_fr, *, timeout_ms: int) -> bool:
+    """
+    Set OVD to **AADHAAR EXTRACTION** in the KYC frame.
+
+    Used only **after** the first pass (**AADHAAR CARD** + mobile) when the verified message did not
+    appear — not for the initial OVD selection (initial pass remains **AADHAAR CARD** only).
+    """
+    to = min(int(timeout_ms), 60_000)
+    ovd_ok = False
+    for sel_css in (
+        'select:near(:text("Officially Valid"))',
+        'select:near(:text("OVD"))',
+        "select[aria-label*='OVD' i]",
+        "select[aria-label*='Officially Valid' i]",
+    ):
+        try:
+            loc = kyc_fr.locator(sel_css)
+            if loc.count() == 0:
+                continue
+            opts = loc.first.locator("option")
+            n = opts.count()
+            for i in range(min(n, 200)):
+                t = (opts.nth(i).inner_text() or "").strip().upper()
+                if "AADHAAR" in t and "EXTRACTION" in t:
+                    val = opts.nth(i).get_attribute("value")
+                    if val:
+                        loc.first.select_option(value=val, timeout=to, force=True)
+                    else:
+                        loc.first.select_option(label=t, timeout=to, force=True)
+                    ovd_ok = True
+                    logger.info(
+                        "Hero Insurance: KYC — OVD set to AADHAAR EXTRACTION (DOM select in frame)."
+                    )
+                    break
+            if ovd_ok:
+                break
+        except Exception:
+            continue
+    if not ovd_ok:
+        try:
+            kyc_fr.get_by_label(re.compile(r"Officially\s*Valid|OVD", re.I)).locator(
+                "xpath=following::select[1]"
+            ).first.select_option(
+                label=re.compile(r"AADHAAR\s*EXTRACTION", re.I), timeout=to, force=True
+            )
+            ovd_ok = True
+            logger.info("Hero Insurance: KYC — OVD AADHAAR EXTRACTION via label+following select.")
+        except Exception:
+            try:
+                ok_js = kyc_fr.evaluate(
+                    """() => {
+                      const sels = Array.from(document.querySelectorAll('select'));
+                      for (const s of sels) {
+                        for (const o of s.options) {
+                          const t = (o.textContent || '').trim();
+                          if (/AADHAAR/i.test(t) && /EXTRACTION/i.test(t)) {
+                            s.value = o.value;
+                            s.dispatchEvent(new Event('input', { bubbles: true }));
+                            s.dispatchEvent(new Event('change', { bubbles: true }));
+                            return true;
+                          }
+                        }
+                      }
+                      return false;
+                    }"""
+                )
+                if ok_js:
+                    ovd_ok = True
+                    logger.info("Hero Insurance: KYC — OVD AADHAAR EXTRACTION via JS select scan.")
+            except Exception:
+                pass
+    return ovd_ok
+
+
+def _kyc_try_aadhaar_extraction_upload_recovery(
+    page,
+    kyc_fr,
+    digits: str,
+    *,
+    timeout_ms: int,
+) -> bool:
+    """
+    Second KYC branch only: after **AADHAAR CARD** + mobile did **not** show the verified banner,
+    switch OVD to **AADHAAR EXTRACTION**, re-enter mobile, and wait for the upload section.
+
+    Returns True when at least one ``input[type=file]`` appears (KYC frame or main page) after the switch.
+    """
+    to = min(int(timeout_ms), 60_000)
+    d = re.sub(r"\D", "", (digits or "").strip())[:12]
+    if not d:
+        return False
+    if not _kyc_set_ovd_aadhaar_extraction_in_frame(kyc_fr, timeout_ms=to):
+        return False
+    _kyc_restore_kyc_partner_to_default_label(kyc_fr, page, timeout_ms=to)
+    try:
+        kyc_fr.locator(
+            'input[type="tel"], input[name*="mobile" i], input[id*="mobile" i], '
+            'input[id*="Mobile" i], input[name*="MobileNo" i]'
+        ).first.wait_for(state="visible", timeout=min(8_000, to))
+    except Exception:
+        _t(page, 400)
+    _kyc_fill_mobile_digits_in_frame(kyc_fr, d, timeout_ms=to)
+    try:
+        page.keyboard.press("Tab")
+    except Exception:
+        pass
+    _t(page, HERO_MISP_UI_SETTLE_MS)
+    try:
+        cap_dom = max(200, min(int(INSURANCE_KYC_POST_MOBILE_DOM_MS), 30_000))
+        page.wait_for_load_state("domcontentloaded", timeout=min(cap_dom, to))
+    except Exception:
+        pass
+    _t(page, HERO_MISP_UI_SETTLE_MS)
+    poll_deadline = time.monotonic() + min(12.0, to / 1000.0)
+    while time.monotonic() < poll_deadline:
+        fr = _kyc_preferred_kyc_frame(page)
+        if _kyc_file_input_count(fr) > 0 or _kyc_file_input_count(page) > 0:
+            return True
+        _t(page, 450)
+    fr = _kyc_preferred_kyc_frame(page)
+    return _kyc_file_input_count(fr) > 0 or _kyc_file_input_count(page) > 0
+
+
 def _kyc_restore_kyc_partner_to_default_label(kyc_fr, page, *, timeout_ms: int) -> None:
     """
     If the **KYC Partner** ``<select>`` no longer shows the default (e.g. Signzy), set it back.
@@ -2908,7 +3139,13 @@ def _kyc_ovd_focused_text_is_aadhaar_card(shown: str) -> bool:
     return bool(re.search(r"AADHAAR\s*CARD", (shown or ""), re.I))
 
 
-def _kyc_dom_fill_ovd_mobile_consent_in_frame(kyc_fr, mobile: str, *, timeout_ms: int) -> str | None:
+def _kyc_dom_fill_ovd_mobile_consent_in_frame(
+    kyc_fr,
+    mobile: str,
+    *,
+    timeout_ms: int,
+    kyc_local_scan_paths: list[str] | None = None,
+) -> str | None:
     """
     Select OVD = AADHAAR CARD, fill mobile, check consent — all scoped to the KYC **Frame**
     (same document as the insurer field). Used when Tab/ArrowDown cannot reach the OVD control
@@ -3006,7 +3243,13 @@ def _kyc_dom_fill_ovd_mobile_consent_in_frame(kyc_fr, mobile: str, *, timeout_ms
         return "KYC keyboard SOP: could not fill mobile in KYC frame after OVD (DOM fallback)."
 
     _t(pg, 220)
-    return _kyc_post_mobile_entry_branch(kyc_fr.page, kyc_fr, timeout_ms=to)
+    return _kyc_post_mobile_entry_branch(
+        kyc_fr.page,
+        kyc_fr,
+        timeout_ms=to,
+        post_mobile_recovery_digits=digits,
+        kyc_local_scan_paths=kyc_local_scan_paths,
+    )
 
 
 def _kyc_insurer_label_for_misp(values: dict) -> str:
@@ -3229,6 +3472,7 @@ def _fill_kyc_ekyc_keyboard_sop(
     ocr_output_dir: Path | None = None,
     subfolder: str | None = None,
     t0_flow: float | None = None,
+    kyc_local_scan_paths: list[str] | None = None,
 ) -> str | None:
     """
     Keyboard SOP for ``ekycpage.aspx`` (focus document → Tab to Insurance Company → type to filter →
@@ -3488,7 +3732,12 @@ def _fill_kyc_ekyc_keyboard_sop(
             "using DOM fills inside KYC frame.",
             (last_shown or "")[:160],
         )
-        return _kyc_dom_fill_ovd_mobile_consent_in_frame(kyc_fr, mobile, timeout_ms=timeout_ms)
+        return _kyc_dom_fill_ovd_mobile_consent_in_frame(
+            kyc_fr,
+            mobile,
+            timeout_ms=timeout_ms,
+            kyc_local_scan_paths=kyc_local_scan_paths,
+        )
 
     _insurance_kyc_flow_elapsed_note(
         ocr_output_dir, subfolder, t0_flow, "after_ovd_ready"
@@ -3546,7 +3795,13 @@ def _fill_kyc_ekyc_keyboard_sop(
     _insurance_kyc_flow_elapsed_note(
         ocr_output_dir, subfolder, t0_flow, "before_post_mobile_branch"
     )
-    return _kyc_post_mobile_entry_branch(page, kyc_fr, timeout_ms=cap)
+    return _kyc_post_mobile_entry_branch(
+        page,
+        kyc_fr,
+        timeout_ms=cap,
+        post_mobile_recovery_digits=digits,
+        kyc_local_scan_paths=kyc_local_scan_paths,
+    )
 
 
 def _fill_insurance_company_and_ovd_mobile_consent(
@@ -3559,6 +3814,7 @@ def _fill_insurance_company_and_ovd_mobile_consent(
     t0_flow: float | None = None,
 ) -> str | None:
     """Returns error message or None on success."""
+    kyc_local_scan_paths = _kyc_local_scan_paths_from_values(values)
     kyc_insurer_resolved = _kyc_insurer_label_for_misp(values)
     append_playwright_insurance_line_or_dealer_fallback(
         ocr_output_dir,
@@ -3574,6 +3830,7 @@ def _fill_insurance_company_and_ovd_mobile_consent(
             ocr_output_dir=ocr_output_dir,
             subfolder=subfolder,
             t0_flow=t0_flow,
+            kyc_local_scan_paths=kyc_local_scan_paths,
         )
 
     insurer = _kyc_insurer_label_for_misp(values)
@@ -3761,18 +4018,29 @@ def _fill_insurance_company_and_ovd_mobile_consent(
     _insurance_kyc_flow_elapsed_note(
         ocr_output_dir, subfolder, t0_flow, "before_post_mobile_branch"
     )
+    mob_digits = re.sub(r"\D", "", mobile)[:12]
     return _kyc_post_mobile_entry_branch(
-        page, _kyc_preferred_kyc_frame(page), timeout_ms=timeout_ms
+        page,
+        _kyc_preferred_kyc_frame(page),
+        timeout_ms=timeout_ms,
+        post_mobile_recovery_digits=mob_digits,
+        kyc_local_scan_paths=kyc_local_scan_paths,
     )
 
 
-def _kyc_proceed_or_upload(page, *, timeout_ms: int) -> str | None:
+def _kyc_proceed_or_upload(
+    page,
+    *,
+    timeout_ms: int,
+    kyc_local_scan_paths: list[str] | None = None,
+) -> str | None:
     """
     Invoked from ``_kyc_post_mobile_entry_branch`` when the verified-banner text is **not** shown
     after mobile entry (same page step where three ``input[type=file]`` typically appear).
 
     - If legacy "already done" body text matches, consent + **Proceed**.
-    - Else attach three placeholder files, consent, then **Proceed** / Submit / Continue.
+    - Else attach three files: prefer paths from **Uploaded scans** (``kyc_local_scan_paths``: front, rear,
+      front again for customer photo), else minimal placeholder PNGs; then consent + **Proceed** / Submit / Continue.
     """
     try:
         body = page.evaluate("() => (document.body && document.body.innerText) ? document.body.innerText : ''")
@@ -3805,26 +4073,42 @@ def _kyc_proceed_or_upload(page, *, timeout_ms: int) -> str | None:
             except Exception as exc:
                 return f"KYC already done but Proceed click failed: {exc!s}"
 
-    # Upload paths: Aadhaar front, back, phone (front again) — use minimal PNG payloads like dummy flow
     payloads = insurance_kyc_png_payloads()
-    files = page.locator('input[type="file"]')
+    files = _kyc_locator_file_inputs_best(page)
     n = files.count()
     if n <= 0:
         return (
             "KYC upload expected (no 'already done' message) but no file inputs found. "
             "Complete KYC manually or adjust selectors."
         )
-    try:
-        for i in range(min(n, len(payloads))):
-            files.nth(i).set_input_files(
-                {
-                    "name": payloads[i]["name"],
-                    "mimeType": payloads[i]["mimeType"],
-                    "buffer": payloads[i]["buffer"],
-                },
-                timeout=timeout_ms,
+    use_local = False
+    if kyc_local_scan_paths and len(kyc_local_scan_paths) >= 3:
+        use_local = all(Path(p).is_file() for p in kyc_local_scan_paths[:3])
+        if not use_local:
+            logger.warning(
+                "Hero Insurance: kyc_local_scan_paths set but not all files exist; using placeholder PNGs."
             )
-        logger.info("Hero Insurance: attached %s KYC file input(s).", min(n, len(payloads)))
+    try:
+        n_attach = min(n, 3)
+        for i in range(n_attach):
+            if use_local:
+                files.nth(i).set_input_files(
+                    kyc_local_scan_paths[i], timeout=timeout_ms
+                )
+            else:
+                files.nth(i).set_input_files(
+                    {
+                        "name": payloads[i]["name"],
+                        "mimeType": payloads[i]["mimeType"],
+                        "buffer": payloads[i]["buffer"],
+                    },
+                    timeout=timeout_ms,
+                )
+        logger.info(
+            "Hero Insurance: attached %s KYC file input(s) (%s).",
+            n_attach,
+            "Uploaded scans" if use_local else "placeholder PNGs",
+        )
     except Exception as exc:
         return f"KYC file upload failed: {exc!s}"
     _t(page, 500)
@@ -6949,6 +7233,7 @@ def pre_process(
     subfolder: str | None = None,
     ocr_output_dir: Path | None = None,
     staging_payload: dict | None = None,
+    dealer_id: int | None = None,
 ) -> dict:
     """
     Hero insurance **pre** stage: same behavior as ``run_fill_insurance_only`` (former standalone
@@ -6972,6 +7257,7 @@ def pre_process(
         vehicle_id=vehicle_id,
         ocr_output_dir=ocr_output_dir,
         staging_payload=staging_payload,
+        dealer_id=dealer_id,
     )
 
 
@@ -7310,6 +7596,7 @@ def run_fill_insurance_only(
     vehicle_id: int | None = None,
     ocr_output_dir: Path | None = None,
     staging_payload: dict | None = None,
+    dealer_id: int | None = None,
 ) -> dict:
     """
     Fill Insurance portal from DB-backed values (``INSURANCE_BASE_URL`` = production MISP or partner login).
@@ -7337,6 +7624,15 @@ def run_fill_insurance_only(
             ocr_output_dir=ocr_output_dir,
             staging_payload=staging_payload,
         )
+        kyc_scan_paths = _kyc_local_scan_paths_from_uploaded_scans(dealer_id, subfolder)
+        if kyc_scan_paths:
+            values["kyc_local_scan_paths"] = kyc_scan_paths
+            append_playwright_insurance_line(
+                ocr_output_dir,
+                subfolder,
+                "NOTE",
+                "KYC uploads: using Uploaded scans (Aadhar.jpg, Aadhar_back.jpg; third slot reuses front).",
+            )
         page, open_error = get_or_open_site_page(
             insurance_base_url, "Insurance", require_login_on_open=False
         )

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { uploadScans, uploadScansV2 } from "../api/uploads";
+import { validateAadharScanFile } from "../utils/aadharScanFileValidation";
 import type { ExtractedDetailsResponse } from "../types";
 
 export interface UseUploadScansControlled {
@@ -65,6 +66,16 @@ export function useUploadScans(
   async function uploadV2(aadharScan: File, aadharBackScan: File, salesDetail: File, insuranceSheet?: File) {
     if (!isMobileValid) {
       setUploadStatus("Enter 10-digit Customer Mobile first.");
+      return;
+    }
+    const errFront = validateAadharScanFile(aadharScan);
+    if (errFront) {
+      setUploadStatus(errFront);
+      return;
+    }
+    const errBack = validateAadharScanFile(aadharBackScan);
+    if (errBack) {
+      setUploadStatus(errBack);
       return;
     }
     setIsUploading(true);

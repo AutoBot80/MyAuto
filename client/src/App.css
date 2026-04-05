@@ -1837,6 +1837,19 @@
   margin: 0 0 16px;
 }
 
+.app-panel-hint-aadhar {
+  font-size: 13px;
+  color: #b91c1c;
+  margin: 0 0 12px;
+  line-height: 1.45;
+}
+
+.app-panel-file-error {
+  font-size: 13px;
+  color: #b91c1c;
+  margin: 0 0 12px;
+}
+
 .app-panel-scan-row {
   display: flex;
   align-items: center;

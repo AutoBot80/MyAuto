@@ -1,0 +1,34 @@
+Playwright Insurance — execution log (IST / Asia/Kolkata timestamps)
+
+started_ist=2026-04-05T12:14:08.406+05:30
+subfolder='6378027115_050426'
+
+--- trace ---
+2026-04-05T12:14:08.408+05:30 [NOTE] run_fill_insurance_only: starting Fill Insurance flow
+2026-04-05T12:14:10.656+05:30 [NOTE] run_fill_insurance_only: phase=page_open elapsed_ms=0
+2026-04-05T12:14:16.032+05:30 [NOTE] run_fill_insurance_only: past partner login URL — Sign In automation skipped
+2026-04-05T12:14:18.601+05:30 [NOTE] run_fill_insurance_only: phase=after_sign_in_settle elapsed_ms=7945
+2026-04-05T12:14:21.228+05:30 [NOTE] run_fill_insurance_only: clicked 2W (two-wheeler) entry
+2026-04-05T12:14:23.240+05:30 [NOTE] run_fill_insurance_only: tab_resolve step=2W branch=stayed_on_fallback elapsed_ms=12584 resolver_ms=2009
+2026-04-05T12:14:23.291+05:30 [NOTE] run_fill_insurance_only: active tab after 2W
+2026-04-05T12:14:23.294+05:30 [NOTE] run_fill_insurance_only: phase=after_2w elapsed_ms=12636
+2026-04-05T12:14:24.293+05:30 [NOTE] run_fill_insurance_only: clicked New Policy
+2026-04-05T12:14:26.317+05:30 [NOTE] run_fill_insurance_only: tab_resolve step=New Policy branch=stayed_on_fallback elapsed_ms=15658 resolver_ms=2019
+2026-04-05T12:14:26.320+05:30 [NOTE] run_fill_insurance_only: active tab before KYC wait
+2026-04-05T12:14:26.326+05:30 [NOTE] run_fill_insurance_only: phase=after_new_policy elapsed_ms=15666
+2026-04-05T12:14:26.471+05:30 [NOTE] run_fill_insurance_only: phase=after_kyc_screen_ready elapsed_ms=15816
+2026-04-05T12:14:26.505+05:30 [NOTE] run_fill_insurance_only: real MISP KYC — _fill_insurance_company_and_ovd_mobile_consent (keyboard SOP on ekycpage when enabled)
+2026-04-05T12:14:26.506+05:30 [NOTE] KYC Insurance Company value to use: 'Universal Sompo General Insurance'
+2026-04-05T12:14:26.517+05:30 [NOTE] KYC trace [keyboard_sop] start label_len=33 arrow_down_max=60 prefer_insurer_active=True (insurer strategies: see insurer_attempt_order line)
+2026-04-05T12:14:26.522+05:30 [NOTE] KYC trace [keyboard_sop] insurer_attempt_order=dom_native,keyboard_chain,fuzzy_scan strategy_cache='dom_native'
+2026-04-05T12:14:26.523+05:30 [NOTE] KYC trace [dom_insurer] start native <select> Insurance Company only (ddlproduct/label); no full-frame scan here
+2026-04-05T12:14:26.538+05:30 [NOTE] KYC trace [native_select_options] Insurance Company <select> n_option_nodes=11 (fuzzy_best_option_label + select_option)
+2026-04-05T12:14:26.576+05:30 [NOTE] KYC trace [dom_insurer] success via Insurance Company native <select> (in-code fuzzy on <option> labels)
+2026-04-05T12:14:26.577+05:30 [NOTE] KYC trace [kyc_path] insurer=DOM (native <select> fuzzy match in frame) — keyboard typing + ArrowDown loop skipped
+2026-04-05T12:14:27.070+05:30 [NOTE] run_fill_insurance_only: kyc_elapsed phase=after_insurer_nav elapsed_ms=16414
+2026-04-05T12:14:27.072+05:30 [NOTE] run_fill_insurance_only: kyc_elapsed phase=after_kyc_partner_select elapsed_ms=16416
+2026-04-05T12:14:27.508+05:30 [NOTE] run_fill_insurance_only: kyc_elapsed phase=after_kyc_partner_nav elapsed_ms=16852
+2026-04-05T12:14:30.638+05:30 [NOTE] run_fill_insurance_only: kyc_elapsed phase=after_ovd_ready elapsed_ms=19981
+2026-04-05T12:14:30.910+05:30 [NOTE] run_fill_insurance_only: kyc_elapsed phase=before_mobile_fill elapsed_ms=20254
+2026-04-05T12:14:31.247+05:30 [NOTE] run_fill_insurance_only: kyc_elapsed phase=before_post_mobile_branch elapsed_ms=20588
+2026-04-05T12:14:31.970+05:30 [ERROR] run_fill_insurance_only: KYC upload expected (no 'already done' message) but no file inputs found. Complete KYC manually or adjust selectors.

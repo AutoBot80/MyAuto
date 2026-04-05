@@ -673,6 +673,7 @@ async def fill_hero_insurance(req: FillHeroInsuranceRequest = FillHeroInsuranceR
             subfolder=req.subfolder,
             ocr_output_dir=ocr_dir,
             staging_payload=staging_payload,
+            dealer_id=did,
         )
         main = main_process(
             pre_result=pre,
