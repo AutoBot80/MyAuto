@@ -1,6 +1,6 @@
 """
 Local test wrapper: open Hero DMS (same login path as Fill DMS), then run ``print_hero_dms_forms``
-(Form22 download via My Orders → Report(s)).
+(My Orders → Report(s) → Run Report downloads).
 
 Configure ``backend/.env`` (``DMS_BASE_URL``, ``DMS_MODE``, ``DMS_LOGIN_*``, etc.) like staging / Fill DMS.
 
@@ -25,11 +25,14 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger("test_DMS_form_downloads")
 
 # Same field family as staging ``payload_json`` → ``build_dms_fill_row`` → ``mobile_phone`` (10-digit).
-mobile_num = "7062237798"
+mobile_num = "8875164884"
 
 
 def main() -> int:
+    from datetime import date
+
     from app.config import (
+        DEALER_ID,
         DMS_BASE_URL,
         DMS_SIEBEL_ACTION_TIMEOUT_MS,
         DMS_SIEBEL_CONTENT_FRAME_SELECTOR,
@@ -37,7 +40,10 @@ def main() -> int:
     )
     from app.services.fill_hero_dms_service import _install_playwright_js_dialog_handler
     from app.services.handle_browser_opening import get_or_open_site_page
-    from app.services.hero_dms_playwright_invoice import print_hero_dms_forms
+    from app.services.hero_dms_playwright_invoice import (
+        DEFAULT_HERO_DMS_RUN_REPORT_NAMES,
+        print_hero_dms_forms,
+    )
 
     if not (DMS_BASE_URL or "").strip():
         logger.error("DMS_BASE_URL is not set — add it to backend/.env (same as Fill DMS).")
@@ -60,21 +66,59 @@ def main() -> int:
 
     _install_playwright_js_dialog_handler(page)
 
+    _leaf = f"{mobile_num}_{date.today().strftime('%d%m%Y')}"
+    logger.info(
+        "Saving under ocr_output/%s/%s/ as {mobile}_{Report_Name}.pdf (default when downloads_dir omitted).",
+        DEALER_ID,
+        _leaf,
+    )
+    logger.info(
+        "Report order (same as Fill DMS default): %s",
+        list(DEFAULT_HERO_DMS_RUN_REPORT_NAMES),
+    )
+
     frame_sel = (DMS_SIEBEL_CONTENT_FRAME_SELECTOR or "").strip() or None
-    ok, err = print_hero_dms_forms(
+    ok, err, paths, details = print_hero_dms_forms(
         page,
         mobile=mobile_num,
         order_number=order_number,
         action_timeout_ms=DMS_SIEBEL_ACTION_TIMEOUT_MS,
         content_frame_selector=frame_sel,
+        report_names=DEFAULT_HERO_DMS_RUN_REPORT_NAMES,
         note=lambda m: logger.info("%s", m),
     )
-    if not ok:
-        logger.error("print_hero_dms_forms failed: %s", err)
-        return 1
 
-    logger.info("Form22 download finished (check Downloads folder or log path above).")
-    return 0
+    logger.info("--- Run Report batch summary ---")
+    _ok_reports: list[str] = []
+    _fail_reports: list[str] = []
+    for row in details:
+        name = row.get("report", "?")
+        if row.get("ok"):
+            _ok_reports.append(name)
+            logger.info("  OK   %s  ->  %s", name, row.get("path") or "(no path)")
+        else:
+            _fail_reports.append(name)
+            logger.error("  FAIL %s  :  %s", name, row.get("error") or "unknown error")
+
+    logger.info(
+        "Succeeded (%d): %s",
+        len(_ok_reports),
+        ", ".join(_ok_reports) if _ok_reports else "(none)",
+    )
+    logger.info(
+        "Failed (%d): %s",
+        len(_fail_reports),
+        ", ".join(_fail_reports) if _fail_reports else "(none)",
+    )
+
+    if paths:
+        logger.info("All saved paths: %s", paths)
+
+    if not ok and err:
+        logger.error("Overall: %s", err)
+
+    # Exit 0 only if every report succeeded.
+    return 0 if ok and not _fail_reports else 1
 
 
 if __name__ == "__main__":

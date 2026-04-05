@@ -11,6 +11,7 @@ import json
 import re
 import time
 from collections.abc import Callable
+from typing import Any
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -23,6 +24,7 @@ from app.config import (
     DMS_SIEBEL_AUTO_IFRAME_SELECTORS,
     DMS_SIEBEL_INTER_ACTION_DELAY_MS,
     DMS_SIEBEL_POST_GOTO_WAIT_MS,
+    get_ocr_output_dir,
 )
 from app.services.hero_dms_shared_utilities import (
     SiebelDmsUrls,
@@ -2802,6 +2804,357 @@ def _create_order(
         return True, None, scraped
 
 
+def _select_run_report_name(
+    page: Page,
+    *,
+    report_name: str,
+    content_frame_selector: str | None,
+    action_timeout_ms: int,
+    note: Callable[..., None],
+) -> bool:
+    """
+    Set **Report Name** on the Run Report applet. Siebel often hides the real ``<select>`` and shows a
+    combobox — ``select_option`` alone may not open the list; we use JS (selectedIndex + events), then
+    ``force=True``, then visible input / dropdown icon + option pick.
+    """
+    want = (report_name or "").strip()
+    if not want:
+        return False
+    _tmo = min(int(action_timeout_ms or 3000), 8000)
+    val_pat = re.compile(rf"^\s*{re.escape(want)}\s*$", re.I)
+
+    js_verify_selected = """(want) => {
+      const w = String(want || '').trim();
+      const norm = (s) => String(s || '').replace(/\\s+/g, '').toLowerCase();
+      const wn = norm(w);
+      const s = document.querySelector('select[name="s_reportNameField"]');
+      if (!s || s.selectedIndex < 0) return false;
+      const o = s.options[s.selectedIndex];
+      const t = (o.text || '').trim();
+      const v = (o.value || '').trim();
+      return v === w || t === w || norm(v) === wn || norm(t) === wn ||
+        t.indexOf(w) >= 0 || v.indexOf(w) >= 0 || norm(t).indexOf(wn) >= 0;
+    }"""
+
+    for root in _siebel_all_search_roots(page, content_frame_selector):
+        try:
+            pane = root.locator("#s_ReportPane")
+            if pane.count() > 0:
+                pane.first.wait_for(state="attached", timeout=15_000)
+                try:
+                    pane.first.wait_for(state="visible", timeout=10_000)
+                except Exception:
+                    pass
+                note("print_hero_dms_forms: Run Report pane (#s_ReportPane) ready.")
+                break
+        except Exception:
+            continue
+    _safe_page_wait(page, 200, log_label="after_report_pane_visible_before_name_field")
+
+    # Options sometimes populate after the pane paints — brief poll.
+    for _wait_i in range(24):
+        max_opts = 0
+        for root in _siebel_all_search_roots(page, content_frame_selector):
+            try:
+                n = root.evaluate(
+                    """() => {
+                        const s = document.querySelector('select[name="s_reportNameField"]');
+                        return s ? s.options.length : 0;
+                    }"""
+                )
+                max_opts = max(max_opts, int(n or 0))
+            except Exception:
+                continue
+        if max_opts > 0:
+            break
+        _safe_page_wait(page, 400, log_label="run_report_options_poll")
+
+    js_pick = """(want) => {
+      const w = String(want || '').trim();
+      const norm = (s) => String(s || '').replace(/\\s+/g, '').toLowerCase();
+      const wn = norm(w);
+      const nodes = document.querySelectorAll('select[name="s_reportNameField"]');
+      for (const sel of nodes) {
+        for (let i = 0; i < sel.options.length; i++) {
+          const opt = sel.options[i];
+          const v = (opt.value || '').trim();
+          const t = (opt.text || '').trim();
+          if (
+            v === w || t === w ||
+            norm(v) === wn || norm(t) === wn ||
+            t.indexOf(w) >= 0 || v.indexOf(w) >= 0 ||
+            norm(t).indexOf(wn) >= 0
+          ) {
+            try { sel.focus(); } catch (e) {}
+            sel.selectedIndex = i;
+            ['input','change','blur'].forEach(function(ev) {
+              try { sel.dispatchEvent(new Event(ev, { bubbles: true })); } catch(e) {}
+            });
+            if (window.$ && window.$(sel).trigger) {
+              try { window.$(sel).trigger('change'); } catch(e) {}
+            }
+            return 'js:' + v;
+          }
+        }
+      }
+      // Fuzzy: "Form22" / "Form 22" / labels with extra suffix (Siebel LOV text)
+      const wn2 = norm(w);
+      if (wn2.length >= 4 && wn2.indexOf('form') >= 0 && wn2.indexOf('22') >= 0) {
+        for (const sel of nodes) {
+          for (let i = 0; i < sel.options.length; i++) {
+            const opt = sel.options[i];
+            const t = norm(opt.text || '');
+            const v = norm(opt.value || '');
+            if ((t.indexOf('form') >= 0 && t.indexOf('22') >= 0) ||
+                (v.indexOf('form') >= 0 && v.indexOf('22') >= 0) ||
+                t.indexOf('form22') >= 0 || v.indexOf('form22') >= 0) {
+              try { sel.focus(); } catch (e) {}
+              sel.selectedIndex = i;
+              ['input','change','blur'].forEach(function(ev) {
+                try { sel.dispatchEvent(new Event(ev, { bubbles: true })); } catch(e) {}
+              });
+              if (window.$ && window.$(sel).trigger) {
+                try { window.$(sel).trigger('change'); } catch(e) {}
+              }
+              return 'js-fuzzy:' + (opt.value || '').trim();
+            }
+          }
+        }
+      }
+      return '';
+    }"""
+
+    for root in _siebel_all_search_roots(page, content_frame_selector):
+        try:
+            hit = root.evaluate(js_pick, want)
+            if (hit or "").strip():
+                note(f"print_hero_dms_forms: Report Name set via DOM ({hit!r}).")
+                _safe_page_wait(page, 450, log_label="after_report_name_js")
+                return True
+        except Exception:
+            continue
+
+    for root in _siebel_all_search_roots(page, content_frame_selector):
+        sel = root.locator('select[name="s_reportNameField"]').first
+        try:
+            if sel.count() <= 0:
+                continue
+            sel.scroll_into_view_if_needed(timeout=_tmo)
+            for kwargs in (
+                {"value": want, "timeout": _tmo, "force": True},
+                {"label": want, "timeout": _tmo, "force": True},
+            ):
+                try:
+                    sel.select_option(**kwargs)
+                    note("print_hero_dms_forms: Report Name select_option(force).")
+                    _safe_page_wait(page, 350, log_label="after_report_name_select_option")
+                    return True
+                except Exception:
+                    continue
+        except Exception:
+            continue
+
+    # Siebel combobox: click visible input (or open-list control), type / pick from popup.
+    for root in _siebel_all_search_roots(page, content_frame_selector):
+        try:
+            inp = root.locator(
+                '#s_ReportPane input[aria-labelledby*="Report_Name" i], '
+                '#s_ReportPane input[id*="Report_Name" i], '
+                'input[aria-labelledby="Report_Name_Label_1"]'
+            ).first
+            if inp.count() <= 0 or not inp.is_visible(timeout=1200):
+                continue
+            try:
+                inp.click(timeout=_tmo)
+            except Exception:
+                inp.click(timeout=_tmo, force=True)
+            _safe_page_wait(page, 300, log_label="after_report_name_input_click")
+            try:
+                page.keyboard.press("Control+a")
+            except Exception:
+                pass
+            try:
+                page.keyboard.type(want, delay=40)
+            except Exception:
+                pass
+            _safe_page_wait(page, 350, log_label="after_report_name_type")
+            for opener in (
+                ("Alt+ArrowDown", None),
+                ("F4", None),
+                ("ArrowDown", None),
+            ):
+                try:
+                    if opener[0] == "Alt+ArrowDown":
+                        page.keyboard.down("Alt")
+                        page.keyboard.press("ArrowDown")
+                        page.keyboard.up("Alt")
+                    else:
+                        page.keyboard.press(opener[0])
+                    _safe_page_wait(page, 200, log_label=f"report_name_key_{opener[0]}")
+                except Exception:
+                    pass
+            for opt_root in (page, root):
+                try:
+                    o = opt_root.get_by_role("option", name=val_pat).first
+                    if o.count() > 0 and o.is_visible(timeout=700):
+                        o.click(timeout=_tmo)
+                        note("print_hero_dms_forms: Report Name picked (role=option).")
+                        return True
+                except Exception:
+                    pass
+                try:
+                    o = opt_root.locator(
+                        "li.ui-menu-item, .ui-menu-item, div[role='option'], li[role='option']"
+                    ).filter(has_text=re.compile(re.escape(want), re.I)).first
+                    if o.count() > 0 and o.is_visible(timeout=700):
+                        o.click(timeout=_tmo)
+                        note("print_hero_dms_forms: Report Name picked (menu item).")
+                        return True
+                except Exception:
+                    pass
+            try:
+                page.keyboard.press("Enter")
+            except Exception:
+                pass
+            _safe_page_wait(page, 400, log_label="after_report_name_enter")
+            for vr in _siebel_all_search_roots(page, content_frame_selector):
+                try:
+                    if vr.evaluate(js_verify_selected, want):
+                        note("print_hero_dms_forms: Report Name set via combobox (verified).")
+                        return True
+                except Exception:
+                    continue
+        except Exception:
+            continue
+
+    for root in _siebel_all_search_roots(page, content_frame_selector):
+        try:
+            pane = root.locator("#s_ReportPane")
+            if pane.count() <= 0:
+                continue
+            for btn_sel in (
+                'a.siebui-btn-icon[title*="Report Name" i]',
+                "#s_ReportPane .siebui-icon-dropdown",
+                "#s_ReportPane span.siebui-icon-dropdown",
+                "#s_ReportPane a.siebui-icon-dropdown",
+            ):
+                btn = pane.locator(btn_sel).first
+                if btn.count() <= 0 or not btn.is_visible(timeout=500):
+                    continue
+                try:
+                    btn.click(timeout=_tmo)
+                except Exception:
+                    btn.click(timeout=_tmo, force=True)
+                _safe_page_wait(page, 450, log_label="after_report_name_dropdown_icon")
+                for opt_root in (page, root):
+                    try:
+                        o = opt_root.get_by_role("option", name=val_pat).first
+                        if o.count() > 0 and o.is_visible(timeout=900):
+                            o.click(timeout=_tmo)
+                            note("print_hero_dms_forms: Report Name via icon + option.")
+                            return True
+                    except Exception:
+                        pass
+                    try:
+                        o = opt_root.locator("li, div").filter(has_text=val_pat).first
+                        if o.count() > 0 and o.is_visible(timeout=600):
+                            o.click(timeout=_tmo)
+                            note("print_hero_dms_forms: Report Name via icon + list row.")
+                            return True
+                    except Exception:
+                        pass
+        except Exception:
+            continue
+
+    return False
+
+
+def _looks_like_uuid_filename(name: str) -> bool:
+    """True when the file stem looks like a bare GUID (Siebel temp / stray download)."""
+    stem = Path(name).stem
+    return bool(
+        re.match(
+            r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            stem,
+            re.I,
+        )
+    )
+
+
+def _sanitize_report_basename(report_name: str) -> str:
+    s = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", (report_name or "").strip())
+    s = re.sub(r"\s+", " ", s).strip()
+    return s or "report"
+
+
+def _mobile_digits_10(mobile: str) -> str:
+    dig = re.sub(r"\D", "", (mobile or "").strip())
+    if len(dig) >= 10:
+        return dig[-10:]
+    if dig:
+        return dig.zfill(10)[:10]
+    return "0000000000"
+
+
+def _default_run_report_downloads_dir(mobile: str, *, dealer_id: int | None = None) -> Path:
+    """``ocr_output/{dealer_id}/{mobile10}_{ddmmYYYY}/`` — same leaf pattern as Add Sales / Fill DMS."""
+    from datetime import date
+
+    did = int(dealer_id) if dealer_id is not None else int(DEALER_ID)
+    mob = _mobile_digits_10(mobile)
+    leaf = f"{mob}_{date.today().strftime('%d%m%Y')}"
+    return get_ocr_output_dir(did) / leaf
+
+
+def _mobile_report_pdf_filename(mobile: str, report_name: str) -> str:
+    """``{Mobile}_{Report Name}.pdf`` with a filesystem-safe report stem (spaces → underscores)."""
+    mob = _mobile_digits_10(mobile)
+    stem = _sanitize_report_basename(report_name).replace(" ", "_")
+    return f"{mob}_{stem}.pdf"
+
+
+def _score_run_report_download(dl, report_name: str) -> int:
+    """
+    Prefer real ``*.pdf`` names and titles that match the report; deprioritize UUID / no-extension
+    names (Siebel sometimes fires a spurious download before the PDF).
+    """
+    fn = (getattr(dl, "suggested_filename", None) or "").strip()
+    if not fn:
+        return 0
+    lower = fn.lower()
+    score = 0
+    if lower.endswith(".pdf"):
+        score += 100
+    if _looks_like_uuid_filename(fn):
+        score -= 85
+    if not Path(fn).suffix:
+        score -= 45
+    rn = (report_name or "").lower().replace(" ", "")
+    stem = Path(fn).stem.lower().replace(" ", "")
+    if rn and rn in stem:
+        score += 35
+    return score
+
+
+def _pick_best_run_report_download(downloads: list, report_name: str):
+    if not downloads:
+        return None
+    best_i = max(
+        range(len(downloads)),
+        key=lambda i: (_score_run_report_download(downloads[i], report_name), i),
+    )
+    return downloads[best_i]
+
+
+# Default Run Report batch after staging commit: order matters (GST Retail Invoice first).
+DEFAULT_HERO_DMS_RUN_REPORT_NAMES: tuple[str, ...] = (
+    "GST Retail Invoice",
+    "GST Booking Receipt",
+    "Form22",
+    "Sale Certificate",
+)
+
+
 def print_hero_dms_forms(
     page: Page,
     *,
@@ -2811,11 +3164,28 @@ def print_hero_dms_forms(
     content_frame_selector: str | None,
     note: Callable[..., None] | None = None,
     downloads_dir: Path | None = None,
-    report_name: str = "Form22",
-) -> tuple[bool, str | None]:
+    downloads_dealer_id: int | None = None,
+    report_names: str | list[str] | tuple[str, ...] = DEFAULT_HERO_DMS_RUN_REPORT_NAMES,
+    between_reports_wait_ms: int = 500,
+    continue_on_report_error: bool = True,
+) -> tuple[bool, str | None, list[str], list[dict[str, Any]]]:
     """
     Vehicle Sales → **My Orders** (mobile search + Order# drill-down, same as ``_create_order`` pending path),
-    then **Report(s)** → Run Report applet → **Form22** → Submit (saves download under ``downloads_dir``).
+    then **Report(s)** → Run Report applet. For each name in ``report_names``: select **Report Name**,
+    **Submit**, save download.
+
+    Default batch is ``DEFAULT_HERO_DMS_RUN_REPORT_NAMES`` (**GST Retail Invoice** first). Override
+    ``report_names`` to run a different set or order.
+
+    When ``downloads_dir`` is omitted, files go under
+    ``ocr_output/{dealer_id}/{mobile}_{ddmmYYYY}/`` (see ``get_ocr_output_dir`` and ``downloads_dealer_id``).
+    Each file is saved as ``{mobile}_{Report Name}.pdf`` (spaces in the report title become underscores).
+
+    By default ``continue_on_report_error`` is True: failures for one report do not stop the rest; the fourth
+    return value lists each report with ``ok``, ``error``, and ``path``. Set False to stop on first failure.
+
+    Stray Siebel downloads (e.g. UUID filenames) are **cancelled** when a better PDF candidate exists; the
+    browser tray may still briefly list them depending on timing.
     """
     _note: Callable[..., None] = note if callable(note) else (lambda m: logger.info("%s", m))
     _tmo = min(int(action_timeout_ms or 3000), 8000)
@@ -2830,9 +3200,16 @@ def print_hero_dms_forms(
                 return alt
         return path
 
+    if isinstance(report_names, str):
+        _names = [report_names.strip()] if (report_names or "").strip() else []
+    else:
+        _names = [str(x).strip() for x in (report_names or []) if str(x).strip()]
+    if not _names:
+        return False, "print_hero_dms_forms: report_names is empty.", [], []
+
     digits = re.sub(r"\D", "", (mobile or "").strip())
     if not digits:
-        return False, "print_hero_dms_forms: mobile_phone is empty."
+        return False, "print_hero_dms_forms: mobile_phone is empty.", [], []
 
     # ── Navigate to Vehicle Sales / My Orders (same URL + post-goto wait as ``_create_order``).
     try:
@@ -2864,7 +3241,7 @@ def print_hero_dms_forms(
     _mo_po = (_mos.primary_order or "").strip()
     _on = (order_number or "").strip() or _mo_po
     if not _on:
-        return False, "print_hero_dms_forms: need Order# (from argument or My Orders grid)."
+        return False, "print_hero_dms_forms: need Order# (from argument or My Orders grid).", [], []
 
     if not _click_my_orders_jqgrid_order_for_mobile_or_order(
         page,
@@ -2874,7 +3251,7 @@ def print_hero_dms_forms(
         note=_note,
         action_timeout_ms=action_timeout_ms,
     ):
-        return False, "Create Order: Pending My Orders row but could not open Order# drill-down."
+        return False, "Create Order: Pending My Orders row but could not open Order# drill-down.", [], []
     try:
         page.wait_for_load_state("networkidle", timeout=8_000)
     except Exception:
@@ -2891,8 +3268,11 @@ def print_hero_dms_forms(
         return (
             False,
             f"Create Order: Siebel error after My Orders Order# click (pending): {_err_mo[:220]}",
+            [],
+            [],
         )
     _safe_page_wait(page, 1800, log_label="after_my_orders_pending_drilldown")
+    _safe_page_wait(page, 200, log_label="before_reports_tb_14_click")
 
     # ── Report(s) toolbar → Run Report pane → Form22 → Submit (download).
     _clicked_reports = False
@@ -2913,66 +3293,143 @@ def print_hero_dms_forms(
         except Exception:
             continue
     if not _clicked_reports:
-        return False, "print_hero_dms_forms: Report(s) toolbar control (tb_14) not found or not clickable."
+        return (
+            False,
+            "print_hero_dms_forms: Report(s) toolbar control (tb_14) not found or not clickable.",
+            [],
+            [],
+        )
 
-    sel_loc = None
-    for root in _siebel_all_search_roots(page, content_frame_selector):
-        try:
-            cand = root.locator('select[name="s_reportNameField"]').first
-            if cand.count() > 0 and cand.is_visible(timeout=1500):
-                sel_loc = cand
-                break
-        except Exception:
-            continue
-    if sel_loc is None:
-        return False, "print_hero_dms_forms: Run Report select s_reportNameField not visible."
-
-    _picked = False
-    try:
-        sel_loc.select_option(value=report_name, timeout=_tmo)
-        _picked = True
-    except Exception:
-        try:
-            sel_loc.select_option(label=report_name, timeout=_tmo)
-            _picked = True
-        except Exception:
-            _picked = False
-    if not _picked:
-        return False, f"print_hero_dms_forms: could not select report {report_name!r}."
-
-    sub = None
-    for root in _siebel_all_search_roots(page, content_frame_selector):
-        try:
-            b = root.locator('button[title="Run Report:Submit"].appletButton').first
-            if b.count() <= 0 or not b.is_visible(timeout=400):
-                b = root.locator('button[title="Run Report:Submit"]').first
-            if b.count() > 0 and b.is_visible(timeout=800):
-                sub = b
-                break
-        except Exception:
-            continue
-    if sub is None:
-        return False, "print_hero_dms_forms: Run Report Submit button not found."
-
-    dest_root = downloads_dir if downloads_dir is not None else Path.home() / "Downloads"
+    if downloads_dir is not None:
+        dest_root = Path(downloads_dir).expanduser().resolve()
+    else:
+        dest_root = _default_run_report_downloads_dir(mobile, dealer_id=downloads_dealer_id).resolve()
     try:
         dest_root.mkdir(parents=True, exist_ok=True)
     except Exception:
         pass
 
-    try:
-        with page.expect_download(timeout=min(180_000, max(60_000, _tmo * 40))) as dl_info:
+    def _download_one_run_report(current_report_name: str) -> tuple[bool, str | None, Path | None]:
+        """Select ``current_report_name`` in Run Report applet, Submit, save file to ``dest_root``."""
+        if not _select_run_report_name(
+            page,
+            report_name=current_report_name,
+            content_frame_selector=content_frame_selector,
+            action_timeout_ms=action_timeout_ms,
+            note=_note,
+        ):
+            return (
+                False,
+                f"could not set Report Name to {current_report_name!r} (DOM / combobox).",
+                None,
+            )
+        sub_btn = None
+        for root in _siebel_all_search_roots(page, content_frame_selector):
             try:
-                sub.click(timeout=_tmo)
+                b = root.locator('button[title="Run Report:Submit"].appletButton').first
+                if b.count() <= 0 or not b.is_visible(timeout=400):
+                    b = root.locator('button[title="Run Report:Submit"]').first
+                if b.count() > 0 and b.is_visible(timeout=800):
+                    sub_btn = b
+                    break
             except Exception:
-                sub.click(timeout=_tmo, force=True)
-        dl = dl_info.value
-        suggested = (dl.suggested_filename or "").strip() or f"{report_name}.pdf"
-        final_path = _unique_dest(dest_root / suggested)
-        dl.save_as(str(final_path))
-        _note(f"print_hero_dms_forms: saved download to {final_path!r}.")
-        return True, None
-    except PlaywrightTimeout:
-        return False, "print_hero_dms_forms: timed out waiting for report download after Submit."
-    except Exception as _ex:
-        return False, f"print_hero_dms_forms: download/save failed: {_ex!s}"
+                continue
+        if sub_btn is None:
+            return False, "Run Report Submit button not found.", None
+        # Siebel may emit two download events: a stray UUID/no-extension blob, then the real PDF.
+        # ``expect_download`` only sees the first — collect all and pick the best candidate.
+        _collected: list = []
+
+        def _on_download(_d) -> None:
+            _collected.append(_d)
+
+        page.on("download", _on_download)
+        try:
+            try:
+                sub_btn.click(timeout=_tmo)
+            except Exception:
+                sub_btn.click(timeout=_tmo, force=True)
+            _deadline = time.time() + min(180.0, max(45.0, _tmo / 1000.0 * 6))
+            while time.time() < _deadline:
+                page.wait_for_timeout(120)
+                if len(_collected) >= 1:
+                    page.wait_for_timeout(850)
+                    break
+            else:
+                if not _collected:
+                    page.wait_for_timeout(2500)
+        finally:
+            try:
+                page.remove_listener("download", _on_download)
+            except Exception:
+                pass
+
+        if not _collected:
+            return False, "no download event after Submit (timed out).", None
+        if len(_collected) > 1:
+            _note(
+                f"print_hero_dms_forms: {len(_collected)} download event(s) for "
+                f"{current_report_name!r} — using best PDF candidate."
+            )
+
+        try:
+            best = _pick_best_run_report_download(_collected, current_report_name)
+            if best is None:
+                best = _collected[-1]
+            for d in _collected:
+                if d is best:
+                    continue
+                try:
+                    d.cancel()
+                except Exception:
+                    pass
+            out_fn = _mobile_report_pdf_filename(mobile, current_report_name)
+            final_path = _unique_dest(dest_root / out_fn)
+            best.save_as(str(final_path))
+            _note(
+                f"print_hero_dms_forms: report {current_report_name!r} saved to {final_path!r}."
+            )
+            return True, None, final_path
+        except PlaywrightTimeout:
+            return False, "timed out while saving report download.", None
+        except Exception as _ex:
+            return False, f"download/save failed: {_ex!s}", None
+
+    saved_paths: list[str] = []
+    report_details: list[dict[str, Any]] = []
+    for _i, _rn in enumerate(_names):
+        if _i > 0:
+            _safe_page_wait(
+                page,
+                max(0, int(between_reports_wait_ms)),
+                log_label=f"between_run_reports_{_i}",
+            )
+        ok_one, err_one, path_one = _download_one_run_report(_rn)
+        report_details.append(
+            {
+                "report": _rn,
+                "ok": ok_one,
+                "error": err_one,
+                "path": str(path_one) if path_one is not None else None,
+            }
+        )
+        if ok_one and path_one is not None:
+            saved_paths.append(str(path_one))
+        if not ok_one:
+            if not continue_on_report_error:
+                return (
+                    False,
+                    f"print_hero_dms_forms: {err_one or 'download failed'} (report: {_rn!r})",
+                    saved_paths,
+                    report_details,
+                )
+    _all_ok = all(r.get("ok") for r in report_details)
+    _summary: str | None = None
+    if not _all_ok:
+        _parts = [
+            f"{r['report']}: {r.get('error') or 'failed'}"
+            for r in report_details
+            if not r.get("ok")
+        ]
+        _summary = "; ".join(_parts) if _parts else "one or more reports failed."
+    return _all_ok, _summary, saved_paths, report_details

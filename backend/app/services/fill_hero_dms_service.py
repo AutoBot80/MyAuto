@@ -2376,15 +2376,25 @@ def run_fill_dms_only(
             if page is not None:
                 try:
                     _frame_sel = (DMS_SIEBEL_CONTENT_FRAME_SELECTOR or "").strip() or None
-                    _ok_pf, _err_pf = print_hero_dms_forms(
+                    _dl_dir = (
+                        get_ocr_output_dir(int(DEALER_ID))
+                        / _safe_subfolder_name(effective_subfolder)
+                    ).resolve()
+                    _ok_pf, _err_pf, _paths_pf, _reports_pf = print_hero_dms_forms(
                         page,
                         mobile=(dms_values.get("mobile_phone") or "").strip(),
                         order_number=(scraped_final.get("order_number") or "").strip(),
                         action_timeout_ms=DMS_SIEBEL_ACTION_TIMEOUT_MS,
                         content_frame_selector=_frame_sel,
                         note=lambda m: logger.info("%s", m),
+                        downloads_dir=_dl_dir,
                     )
-                    result["hero_dms_form22_print"] = {"ok": _ok_pf, "error": _err_pf}
+                    result["hero_dms_form22_print"] = {
+                        "ok": _ok_pf,
+                        "error": _err_pf,
+                        "paths": _paths_pf,
+                        "reports": _reports_pf,
+                    }
                 except Exception as _pf_exc:
                     logger.warning("fill_dms_service: print_hero_dms_forms exception: %s", _pf_exc)
                     result["hero_dms_form22_print"] = {"ok": False, "error": str(_pf_exc)}
