@@ -38,7 +38,7 @@ Cursor agents follow **`.cursor/rules/checkpoints-registry.mdc`**: full workflow
 | Temp Checkpoint 1 | `checkpoint/temp-checkpoint-1` | `a9f0bee6afa9d66b3f823668dd6806d56a1a066c` | 2026-04-04T18:21:23+05:30 | — |
 | Fixed Financer. Create order error | `checkpoint/fixed-financer-create-order-error` | `f9df1cfdcbeefa3714960d4a84cf24ff3374c568` | 2026-04-04T21:51:50+05:30 | — |
 | Refactored into vehcile/ customer/ invoice. Clean run | `checkpoint/refactored-vehicle-customer-invoice-clean-run` | `39d1bd4a5dc8d6a07ce7e5d4ebc2ce198c49f189` | 2026-04-05T12:11:51+05:30 | 1) Creat eneuiry to be fully tested; 2) Create order POS guys doing something; 3) Occupation etc filled - need testing |
-| Insurance Fully Done | `checkpoint/insurance-fully-done` | `64a0bbc50760e24db04b40cd6e69bc052b673338` | 2026-04-05T17:40:14+05:30 | 1) KYC with adhaar pending 2) Download forms |
+| Insurance Fully Done | `checkpoint/insurance-fully-done` | `64a0bbc50760e24db04b40cd6e69bc052b673338` | 2026-04-05T17:42:55+05:30 | 1) KYC with adhaar pending 2) Download forms |
 
 ## Rollback / Restore
 
