@@ -1136,6 +1136,155 @@ def _derive_relation_and_name(
     return rel, name
 
 
+def _relation_type_from_care_of(care_of: str) -> str:
+    """S/O, W/O, or D/O from leading marker in ``care_of`` (case-insensitive)."""
+    co = (care_of or "").strip()
+    if not co:
+        return ""
+    m = re.match(r"^\s*(S\s*/?\s*O|W\s*/?\s*O|D\s*/?\s*O)\b", co, re.I)
+    if not m:
+        return ""
+    marker = re.sub(r"\s+", "", (m.group(1) or "").upper()).replace("/", "")
+    if marker == "SO":
+        return "S/O"
+    if marker == "WO":
+        return "W/O"
+    if marker == "DO":
+        return "D/O"
+    return ""
+
+
+def _relation_display_name_from_care_of(care_of: str) -> str:
+    """
+    Relation's Name only: text after S/O, W/O, or D/O (strip marker/punctuation);
+    if there is no marker, use full ``care_of`` (trimmed).
+    """
+    co = (care_of or "").strip()
+    if not co:
+        return ""
+    m = re.match(r"^\s*(S\s*/?\s*O|W\s*/?\s*O|D\s*/?\s*O)\s*[:\-]?\s*(.*)\s*$", co, re.I)
+    if m:
+        rest = (m.group(2) or "").strip()
+        return rest[:255] if rest else ""
+    return co[:255]
+
+
+def _occupation_siebel_label_from_staging_profession(profession: str | None) -> str:
+    """Hero contact Occupation LOV: farmer-related staging → Farmer/ Farm Related, else Private Sector."""
+    p = (profession or "").strip().lower()
+    if not p:
+        return "Private Sector"
+    if "farmer" in p or "farming" in p or re.search(r"\bfarm\b", p):
+        return "Farmer/ Farm Related"
+    return "Private Sector"
+
+
+def _pick_occupation_siebel_lov(
+    page: Page,
+    *,
+    occupation_label: str,
+    timeout_ms: int,
+    content_frame_selector: str | None,
+    note,
+) -> bool:
+    """
+    Open Occupation (``name=s_4_1_120_0``, ``aria-label=Occupation``) and pick a dropdown option.
+    ``occupation_label`` is the visible list text, e.g. ``Farmer/ Farm Related`` or ``Private Sector``.
+    """
+    target = (occupation_label or "").strip()
+    if not target:
+        return False
+    occ_selectors = [
+        'input[name="s_4_1_120_0"]',
+        'input[aria-label="Occupation"]',
+        'input[aria-label*="Occupation" i]',
+    ]
+    option_patterns = [re.compile(r"^\s*" + re.escape(target) + r"\s*$", re.I)]
+    if "farmer" in target.lower():
+        option_patterns.extend(
+            [
+                re.compile(r"Farmer\s*/\s*Farm\s*Related", re.I),
+                re.compile(r"Farmer.*Farm\s*Related", re.I),
+            ]
+        )
+    if "private" in target.lower():
+        option_patterns.append(re.compile(r"Private\s+Sector", re.I))
+
+    def try_root(root) -> bool:
+        opened = False
+        control = None
+        for css in occ_selectors:
+            try:
+                c = root.locator(css).first
+                if c.count() > 0 and c.is_visible(timeout=700):
+                    try:
+                        c.click(timeout=timeout_ms)
+                    except Exception:
+                        c.click(timeout=timeout_ms, force=True)
+                    opened = True
+                    control = c
+                    break
+            except Exception:
+                continue
+        if not opened:
+            return False
+        _safe_page_wait(page, 220, log_label="after_occupation_click")
+
+        if control is not None:
+            try:
+                tag = (control.evaluate("el => (el.tagName || '').toLowerCase()") or "").strip()
+                if tag == "select":
+                    for pat in option_patterns:
+                        try:
+                            control.select_option(label=pat, timeout=timeout_ms)
+                            return True
+                        except Exception:
+                            continue
+            except Exception:
+                pass
+
+        for pat in option_patterns:
+            for role in ("option", "menuitem", "listitem", "link"):
+                try:
+                    loc = root.get_by_role(role, name=pat)
+                    n = loc.count()
+                    for i in range(min(n, 12)):
+                        o = loc.nth(i)
+                        if o.is_visible(timeout=500):
+                            try:
+                                o.click(timeout=timeout_ms)
+                            except Exception:
+                                o.click(timeout=timeout_ms, force=True)
+                            return True
+                except Exception:
+                    continue
+            for css in ("li", "a", "div", "span", "td"):
+                try:
+                    opts = root.locator(css).filter(has_text=pat)
+                    n = opts.count()
+                    for i in range(min(n, 20)):
+                        o = opts.nth(i)
+                        if o.is_visible(timeout=500):
+                            try:
+                                o.click(timeout=timeout_ms)
+                            except Exception:
+                                o.click(timeout=timeout_ms, force=True)
+                            return True
+                except Exception:
+                    continue
+        return False
+
+    for r in _siebel_locator_search_roots(page, content_frame_selector):
+        try:
+            if try_root(r):
+                note(f"Occupation LOV: selected {target!r}.")
+                return True
+        except Exception:
+            continue
+    note(f"Occupation LOV: could not select {target!r}.")
+    return False
+
+
 def _pick_relation_type_from_dropdown(
     page: Page,
     *,
@@ -1159,6 +1308,8 @@ def _pick_relation_type_from_dropdown(
         return False
 
     type_selectors = [
+        'input[name="s_4_1_86_0"]',
+        'input[aria-label="S/O\\W/O\\D/O" i]',
         'select[title*="S/O\\W/O\\D/O" i]',
         'select[aria-label*="S/O\\W/O\\D/O" i]',
         'input[title*="S/O\\W/O\\D/O" i]',
@@ -3364,7 +3515,7 @@ def _siebel_video_branch2_address_postal_and_save(
     preferring **iframe#S_A1** then **#SWEApplet1** / **form SWE_Form1_0** / **div#S_A1**, then **Ctrl+S** (Save toolbar fallback).
 
     ``home_phone`` defaults from DMS landline / alternate phone at the caller; ``contact_email`` defaults
-    to ``na@gmail.com`` when the caller passes None. ``city`` from DMS (e.g. city or district).
+    to ``NA`` when the caller passes None. ``city`` from DMS (e.g. city or district).
     """
     pin = (pin_code or "").strip()
     if not pin:
@@ -3372,9 +3523,9 @@ def _siebel_video_branch2_address_postal_and_save(
         return False
     t = min(int(action_timeout_ms), 6000)
     hp = (home_phone or "").strip()
-    em = (contact_email if contact_email is not None else "na@gmail.com").strip()
+    em = (contact_email if contact_email is not None else "NA").strip()
     if not em:
-        em = "na@gmail.com"
+        em = "NA"
 
     _branch2_try_fill_contact_input(
         page,
@@ -3393,6 +3544,7 @@ def _siebel_video_branch2_address_postal_and_save(
     _branch2_try_fill_contact_input(
         page,
         selectors=(
+            'input[name="s_4_1_225_0"][aria-labelledby="EmailAddress_Label_4"]',
             'input[name="s_4_1_225_0"]',
             'input[aria-label="Email" i]',
             '[aria-label="Email"]',
@@ -3544,6 +3696,7 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
     content_frame_selector: str | None,
     note,
     skip_search_hit_click: bool = False,
+    customer_profession: str | None = None,
 ) -> bool:
     """
     Steps after **Find + Go** from operator recording *Find Contact Enquiry*:
@@ -3620,6 +3773,47 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
     if not care_val:
         note("No care_of from DB — skipping Relation's Name / Address Line 1 fill after First Name drilldown.")
         return True
+
+    rel_type = _relation_type_from_care_of(care_val)
+    rel_name = _relation_display_name_from_care_of(care_val)
+    occ_label = _occupation_siebel_label_from_staging_profession(customer_profession)
+
+    _branch2_try_fill_contact_input(
+        page,
+        selectors=(
+            'input[name="s_4_1_225_0"][aria-labelledby="EmailAddress_Label_4"]',
+            'input[name="s_4_1_225_0"]',
+        ),
+        value="NA",
+        action_timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+        note=note,
+        log_label="Email (NA, relation path)",
+    )
+    _safe_page_wait(page, 200, log_label="after_relation_path_email_na")
+    _pick_occupation_siebel_lov(
+        page,
+        occupation_label=occ_label,
+        timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+        note=note,
+    )
+    _safe_page_wait(page, 200, log_label="after_relation_path_occupation")
+    if rel_type:
+        _pick_relation_type_from_dropdown(
+            page,
+            relation=rel_type,
+            timeout_ms=action_timeout_ms,
+            content_frame_selector=content_frame_selector,
+        )
+        _safe_page_wait(page, 220, log_label="after_relation_path_relation_type")
+
+    if not (rel_name or "").strip():
+        note(
+            "Relation's Name empty after stripping S/O · W/O · D/O prefix from care_of — "
+            "skipping Relation's Name field; continuing Address Line 1 path."
+        )
+        return _after_relation_fill_nav()
 
     # DB rule: Address Line 1 should be the substring between first and second comma.
     addr_raw = (address_line_1 or "").strip()
@@ -3783,7 +3977,7 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
             for css in exact_selectors:
                 try:
                     loc = fl.locator(css).first
-                    if _fill_with_retry(loc, care_val, attempts=3, visible_ms=900, _lbl=f"fl:{css[:40]}"):
+                    if _fill_with_retry(loc, rel_name, attempts=3, visible_ms=900, _lbl=f"fl:{css[:40]}"):
                         return _after_relation_fill_nav()
                 except Exception:
                     continue
@@ -3791,7 +3985,7 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
             for css in exact_selectors:
                 try:
                     loc = frame.locator(css).first
-                    if _fill_with_retry(loc, care_val, attempts=3, visible_ms=900, _lbl=f"fr:{css[:40]}"):
+                    if _fill_with_retry(loc, rel_name, attempts=3, visible_ms=900, _lbl=f"fr:{css[:40]}"):
                         return _after_relation_fill_nav()
                 except Exception:
                     continue
@@ -3799,14 +3993,14 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
         for fl in _iter_frame_locator_roots(page, content_frame_selector):
             try:
                 loc = fl.get_by_label("Relation's Name", exact=True).first
-                if _fill_with_retry(loc, care_val, attempts=3, visible_ms=700, _lbl="lbl_fl"):
+                if _fill_with_retry(loc, rel_name, attempts=3, visible_ms=700, _lbl="lbl_fl"):
                     return _after_relation_fill_nav()
             except Exception:
                 continue
         for frame in _ordered_frames(page):
             try:
                 loc = frame.get_by_label("Relation's Name", exact=True).first
-                if _fill_with_retry(loc, care_val, attempts=3, visible_ms=700, _lbl="lbl_fr"):
+                if _fill_with_retry(loc, rel_name, attempts=3, visible_ms=700, _lbl="lbl_fr"):
                     return _after_relation_fill_nav()
             except Exception:
                 continue

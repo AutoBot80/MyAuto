@@ -1186,7 +1186,8 @@ def _create_order(
       - **allocated**: drill Order#, then ``_attach_vehicle_to_bkg(..., start_at_order_link_before_apply=True)``.
       - **unknown_rows** with Order# row(s) and no Invoice# on any row: coerce to **allocated** attach (same drill/skip) instead of **+**; otherwise **no_rows** / **unknown_rows** / **error** fall back to the full **+** new-booking path below.
 
-    - **+** path: Sales Orders New:List, Booking Order Type = Normal Booking, optional Comments (battery),
+    - **+** path: Sales Orders New:List, Booking Order Type = Normal Booking, optional Comments
+      (``Battery no. is …`` when ``battery_partial`` is set),
       finance fields, Contact Last Name F2 applet, Ctrl+S, then ``_attach_vehicle_to_bkg`` from the new order.
     """
     scraped: dict = {"inventory_location": "", "vehicle_price": "", "order_number": "", "invoice_number": ""}
@@ -1758,22 +1759,51 @@ def _create_order(
 
         _bp = (battery_partial or "").strip()
         if _bp:
-            _comments_text = f"Battery is {_bp}"
+            _comments_text = f"Battery no. is {_bp}"
             _filled_comments = False
-            for root in _roots():
-                try:
-                    if _fill_by_label_on_frame(
-                        root, "Comments", _comments_text, action_timeout_ms=action_timeout_ms
-                    ):
+            _tmo_c = min(int(action_timeout_ms or 3000), 4000)
+            _comment_css = (
+                'textarea[name="s_2_1_202_0"]',
+                'textarea[aria-label="Comments"]',
+                'textarea[aria-label*="Comments" i]',
+            )
+            for root in _all_ui_roots():
+                if _filled_comments:
+                    break
+                for css in _comment_css:
+                    try:
+                        loc = root.locator(css).first
+                        if loc.count() <= 0 or not loc.is_visible(timeout=700):
+                            continue
+                        try:
+                            loc.click(timeout=_tmo_c)
+                        except Exception:
+                            loc.click(timeout=_tmo_c, force=True)
+                        loc.fill("", timeout=_tmo_c)
+                        loc.fill(_comments_text, timeout=_tmo_c)
+                        try:
+                            loc.press("Tab", timeout=1200)
+                        except Exception:
+                            pass
                         _filled_comments = True
                         break
-                    if _fill_by_label_on_frame(
-                        root, "Comment", _comments_text, action_timeout_ms=action_timeout_ms
-                    ):
-                        _filled_comments = True
-                        break
-                except Exception:
-                    continue
+                    except Exception:
+                        continue
+            if not _filled_comments:
+                for root in _all_ui_roots():
+                    try:
+                        if _fill_by_label_on_frame(
+                            root, "Comments", _comments_text, action_timeout_ms=action_timeout_ms
+                        ):
+                            _filled_comments = True
+                            break
+                        if _fill_by_label_on_frame(
+                            root, "Comment", _comments_text, action_timeout_ms=action_timeout_ms
+                        ):
+                            _filled_comments = True
+                            break
+                    except Exception:
+                        continue
             if _filled_comments:
                 note(f"Create Order: filled Comments → {_comments_text!r}.")
                 if callable(form_trace):

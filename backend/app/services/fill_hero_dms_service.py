@@ -3048,6 +3048,7 @@ def Playwright_Hero_DMS_fill(
             content_frame_selector=content_frame_selector,
             note=note,
             skip_search_hit_click=True,
+            customer_profession=(dms_values.get("profession") or "").strip() or None,
         ):
             step("Stopped: video SOP failed while opening customer record or filling Relation's Name.")
             out["error"] = (
@@ -3061,7 +3062,7 @@ def Playwright_Hero_DMS_fill(
                 (dms_values.get("landline") or dms_values.get("alt_phone_num") or "").strip()
                 or mobile
             )
-            _b2_email = (dms_values.get("branch2_contact_email") or "na@gmail.com").strip()
+            _b2_email = (dms_values.get("branch2_contact_email") or "NA").strip()
             _b2_city = (dms_values.get("city") or dms_values.get("district") or "").strip()
             if not _siebel_video_branch2_address_postal_and_save(
                 page,
