@@ -11,7 +11,8 @@ import logging
 import re
 import time
 import urllib.parse
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any
 
@@ -131,12 +132,35 @@ def _mark_hit(fn_name: str) -> None:
     _NAV_HIT_COUNTERS[fn_name] = _NAV_HIT_COUNTERS.get(fn_name, 0) + 1
 
 
-def _log_nav_hit_counters() -> None:
+def _log_nav_hit_counters(
+    ocr_output_dir: Path | None = None,
+    subfolder: str | None = None,
+) -> None:
     if not _NAV_HIT_COUNTERS:
         logger.info("Hero Insurance _NAV_HIT_COUNTERS: (empty — no functions were called)")
         return
     called = {k: v for k, v in sorted(_NAV_HIT_COUNTERS.items()) if v > 0}
+    not_called = sorted(k for k, v in _NAV_HIT_COUNTERS.items() if v == 0)
     logger.info("Hero Insurance _NAV_HIT_COUNTERS (called): %s", json.dumps(called, indent=2))
+    if not ocr_output_dir or not subfolder or not str(subfolder).strip():
+        return
+    try:
+        safe = safe_subfolder_name(subfolder)
+        path = Path(ocr_output_dir).resolve() / safe / "Marker_Audit.txt"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now(ZoneInfo("Asia/Kolkata")).isoformat(timespec="milliseconds")
+        lines: list[str] = [f"{ts} [MARKER_AUDIT] === NAV HIT COUNTERS ===\n"]
+        lines.append(f"CALLED ({len(called)} functions):\n")
+        for fn, cnt in sorted(called.items()):
+            lines.append(f"  {fn}: {cnt}\n")
+        lines.append(f"NOT CALLED ({len(not_called)} functions):\n")
+        for fn in not_called:
+            lines.append(f"  {fn}\n")
+        lines.append("\n")
+        with open(path, "a", encoding="utf-8") as fp:
+            fp.writelines(lines)
+    except OSError as exc:
+        logger.warning("Could not write Marker_Audit.txt: %s", exc)
 
 
 def _kyc_insurer_strategy_cache_host_key() -> str:
@@ -7187,6 +7211,14 @@ def _insurance_preview_apply_body_text_heuristics(body: str, out: dict[str, Any]
         )
         if m:
             out["policy_num"] = _normalize_policy_num_for_db(m.group(1))
+    if not out.get("policy_num"):
+        m = re.search(
+            r"Proposal\s*No\.?\s*[:\s#]*\s*([A-Z]\d{5,20})\b",
+            chunk,
+            re.I | re.M,
+        )
+        if m:
+            out["policy_num"] = _normalize_policy_num_for_db(m.group(1))
 
     if not out.get("policy_from"):
         m = re.search(
@@ -7204,6 +7236,14 @@ def _insurance_preview_apply_body_text_heuristics(body: str, out: dict[str, Any]
         )
         if m:
             out["policy_to"] = m.group(1).strip()
+    if not out.get("policy_from"):
+        m = re.search(
+            r"Proposal\s*Date\s*[:\s]*(\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4})",
+            chunk,
+            re.I | re.M,
+        )
+        if m:
+            out["policy_from"] = m.group(1).strip()
 
     if (not out.get("policy_from") or not out.get("policy_to")) and chunk:
         for m in re.finditer(
@@ -7233,7 +7273,8 @@ def _insurance_preview_apply_body_text_heuristics(body: str, out: dict[str, Any]
     if out.get("premium") is None:
         m = re.search(
             r"(?:Insurance\s*[Cc]ost|Total\s*(?:Policy\s*)?[Pp]remium|Net\s*[Pp]remium|Final\s*[Pp]remium|"
-            r"Gross\s*[Pp]remium|Premium\s*(?:Amount|Paid|Payable)?|Amount\s*Payable)\s*[:\s]*\s*[₹RsINR.\s]*"
+            r"Gross\s*[Pp]remium|Premium\s*(?:Amount|Paid|Payable)?|Amount\s*Payable)"
+            r"\s*(?:\([^)]{0,48}\))?\s*[:\s]*\s*[₹RsINR.\s]*"
             r"([\d][\d,]*(?:\.\d{1,2})?)",
             chunk,
             re.I | re.M,
@@ -7245,7 +7286,7 @@ def _insurance_preview_apply_body_text_heuristics(body: str, out: dict[str, Any]
 
     if out.get("idv") is None:
         m = re.search(
-            r"Total\s*IDV\s*[:\s₹RsINR.]*\s*([\d][\d,]*(?:\.\d{1,2})?)",
+            r"Total\s*IDV\s*(?:\([^)]{0,48}\))?\s*[:\s₹RsINR.]*\s*([\d][\d,]*(?:\.\d{1,2})?)",
             chunk,
             re.I | re.M,
         )
@@ -7285,6 +7326,15 @@ def scrape_insurance_policy_preview_before_issue(page, *, timeout_ms: int) -> di
     roots = _hero_misp_page_and_frame_roots(page, purpose="proposal")
     if not roots:
         roots = [page]
+
+    body_chunks: list[str] = []
+    for root in roots:
+        try:
+            btxt = (root.locator("body").first.inner_text(timeout=min(12_000, to)) or "").strip()
+            if btxt:
+                body_chunks.append(btxt[:150_000])
+        except Exception:
+            pass
 
     for root in roots:
         try:
@@ -7351,10 +7401,20 @@ def scrape_insurance_policy_preview_before_issue(page, *, timeout_ms: int) -> di
 
     for root in roots:
         try:
-            body = (root.locator("body").inner_text(timeout=min(12_000, to)) or "")[:150_000]
+            body = (root.locator("body").first.inner_text(timeout=min(12_000, to)) or "")[:150_000]
         except Exception:
             body = ""
         _insurance_preview_apply_body_text_heuristics(body, out)
+
+    if (
+        not out.get("policy_num")
+        or not out.get("policy_from")
+        or not out.get("policy_to")
+        or out.get("premium") is None
+        or out.get("idv") is None
+    ) and body_chunks:
+        merged = "\n\n".join(body_chunks)
+        _insurance_preview_apply_body_text_heuristics(merged[:200_000], out)
 
     if any(v is not None for v in out.values()):
         logger.info(
@@ -7388,6 +7448,17 @@ def _hero_misp_note_proposal_review_scrape_for_insurance_master(
     )
 
 
+def _proposal_scroll_root_to_bottom(root) -> None:
+    """Scroll a **Page**, **Frame**, or **FrameLocator** root so footer checkboxes / actions are visible."""
+    _mark_hit("_proposal_scroll_root_to_bottom")
+    try:
+        root.locator("body").first.evaluate(
+            "e => { try { e.scrollTop = e.scrollHeight; } catch (x) {} }"
+        )
+    except Exception:
+        pass
+
+
 def _hero_misp_proposal_review_print_proposal_and_consent(
     page,
     *,
@@ -7405,8 +7476,32 @@ def _hero_misp_proposal_review_print_proposal_and_consent(
     if not roots:
         roots = [page]
 
+    for r in roots:
+        _proposal_scroll_root_to_bottom(r)
+    _t(page, 300)
+
     printed = False
     for root in roots:
+        if printed:
+            break
+        try:
+            pb = root.locator("button").filter(has_text=re.compile(r"Print\s*Proposal", re.I))
+            if pb.count() > 0:
+                el = pb.first
+                if not el.is_visible(timeout=min(2_000, to)):
+                    _proposal_scroll_visible(el, timeout_ms=to)
+                el.click(timeout=to, force=True)
+                printed = True
+                append_playwright_insurance_line(
+                    ocr_output_dir,
+                    subfolder,
+                    "NOTE",
+                    "proposal_review: clicked Print Proposal (button element)",
+                )
+                logger.info("Hero Insurance: clicked Print Proposal (button).")
+        except Exception as exc:
+            logger.debug("Hero Insurance: Print Proposal button: %s", exc)
+
         for sel in (
             'input[type="button"][name="Submit3"][value="Print Proposal"]',
             'input.btn-success[name="Submit3"]',
@@ -7439,10 +7534,15 @@ def _hero_misp_proposal_review_print_proposal_and_consent(
 
     if not printed:
         for root in roots:
+            if printed:
+                break
             try:
                 pr = root.get_by_role("button", name=re.compile(r"Print\s*Proposal", re.I))
-                if pr.count() > 0 and pr.first.is_visible(timeout=min(3_000, to)):
-                    pr.first.click(timeout=to, force=True)
+                if pr.count() > 0:
+                    el = pr.first
+                    if not el.is_visible(timeout=min(2_000, to)):
+                        _proposal_scroll_visible(el, timeout_ms=to)
+                    el.click(timeout=to, force=True)
                     printed = True
                     append_playwright_insurance_line(
                         ocr_output_dir,
@@ -7454,6 +7554,24 @@ def _hero_misp_proposal_review_print_proposal_and_consent(
                     break
             except Exception as exc:
                 logger.debug("Hero Insurance: Print Proposal role=button: %s", exc)
+
+    if not printed:
+        for root in roots:
+            try:
+                lk = root.locator("a").filter(has_text=re.compile(r"Print\s*Proposal", re.I))
+                if lk.count() > 0:
+                    lk.first.click(timeout=to, force=True)
+                    printed = True
+                    append_playwright_insurance_line(
+                        ocr_output_dir,
+                        subfolder,
+                        "NOTE",
+                        "proposal_review: clicked Print Proposal (link)",
+                    )
+                    logger.info("Hero Insurance: clicked Print Proposal (link).")
+                    break
+            except Exception as exc:
+                logger.debug("Hero Insurance: Print Proposal link: %s", exc)
 
     if not printed:
         append_playwright_insurance_line(
@@ -7471,7 +7589,17 @@ def _hero_misp_proposal_review_print_proposal_and_consent(
         last_err = ""
         for root in roots:
             try:
+                _proposal_scroll_root_to_bottom(root)
+                _t(page, 150)
                 loc = _proposal_cph1_locator(root, cid)
+                if loc.count() == 0:
+                    loc = root.locator(f'input[type="checkbox"][id*="{cid}" i]')
+                if loc.count() == 0 and cid == "chkAgree":
+                    loc = root.locator('input[type="checkbox"][id*="chkAgree" i]')
+                if loc.count() == 0 and cid == "chkAgree":
+                    loc = root.locator('input[type="checkbox"][name*="chkAgree" i]')
+                if loc.count() == 0 and cid == "chkconsentagree":
+                    loc = root.locator('input[type="checkbox"][id*="consent" i]')
                 if loc.count() == 0:
                     continue
                 cb = loc.first
@@ -7999,6 +8127,15 @@ def _hero_misp_fill_proposal_and_review(
 
     _t(page, 600)
     _wait_load_optional(page, min(25_000, pt * 5))
+    for _pr_root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
+        try:
+            _pr_root.get_by_text(
+                re.compile(r"Print\s*Proposal|Proposal\s*No\.?", re.I)
+            ).first.wait_for(state="visible", timeout=min(15_000, pt * 3))
+            break
+        except Exception:
+            continue
+    _t(page, 400)
     preview = scrape_insurance_policy_preview_before_issue(page, timeout_ms=pt)
     _hero_misp_note_proposal_review_scrape_for_insurance_master(
         ocr_output_dir, subfolder, preview
@@ -8258,7 +8395,7 @@ def main_process(
             page.set_default_timeout(15_000)
         except Exception:
             pass
-        _log_nav_hit_counters()
+        _log_nav_hit_counters(ocr_output_dir, subfolder)
 
     return out
 
@@ -8628,7 +8765,7 @@ def run_fill_insurance_only(
         append_playwright_insurance_line(
             ocr_output_dir, subfolder, "ERROR", f"run_fill_insurance_only: Timeout: {e!s}"
         )
-        _log_nav_hit_counters()
+        _log_nav_hit_counters(ocr_output_dir, subfolder)
         return result
     except Exception as e:
         _p = locals().get("page")
@@ -8641,5 +8778,5 @@ def run_fill_insurance_only(
         append_playwright_insurance_line(
             ocr_output_dir, subfolder, "ERROR", f"run_fill_insurance_only: {e!s}"
         )
-        _log_nav_hit_counters()
+        _log_nav_hit_counters(ocr_output_dir, subfolder)
         return result
