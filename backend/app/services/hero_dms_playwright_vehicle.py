@@ -9,15 +9,10 @@ from the customer module.
 from __future__ import annotations
 
 import logging
-import json
 import re
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from pathlib import Path
-from zoneinfo import ZoneInfo
-
 from playwright.sync_api import Frame, Page, TimeoutError as PlaywrightTimeout
 
 from app.config import (
@@ -28,44 +23,26 @@ from app.config import (
 )
 from app.services.hero_dms_shared_utilities import (
     SiebelDmsUrls,
-    _SIEBEL_TZ,
-    _agent_debug_log,
-    _click_find_go_query,
     _detect_siebel_error_popup,
-    _frame_url_matches_payment_hint,
     _goto,
     _is_browser_disconnected_error,
     _iter_frame_locator_roots,
-    _iter_siebel_root_search_order,
-    _load_payment_lines_hint_dict_from_config,
     _normalize_cubic_cc_digits,
     _ordered_frames,
-    _poll_and_handle_siebel_error_popup,
     _safe_page_wait,
     _siebel_after_goto_wait,
     _siebel_all_search_roots,
     _siebel_click_by_id_anywhere,
-    _siebel_inter_action_pause,
     _siebel_ist_now,
     _siebel_ist_today,
     _siebel_locator_search_roots,
     _siebel_naive_datetime_as_ist,
     _siebel_note_frame_focus_snapshot,
     _siebel_scrape_text_by_id_anywhere,
-    _sort_milestone_labels,
-    _try_click_siebel_save,
     _try_click_toolbar_by_name,
-    _try_dismiss_siebel_error_dialog,
     _try_expand_find_flyin,
-    _ts_ist_iso,
     _fill_by_label_on_frame,
-    _fill_in_frame,
-    _fill_with_frame_locator,
     _try_fill_field,
-    select_siebel_dropdown_value,
-    _try_select_option,
-    _locator_for_duplicate_fields,
-    _try_click_generate_booking,
 )
 
 logger = logging.getLogger(__name__)
@@ -353,176 +330,71 @@ def _try_fill_vin_engine_in_vehicles_find_applet(
     content_frame_selector: str | None,
 ) -> bool:
     """
-    Fill **VIN** and **Engine#** inside the Find→Vehicles right fly-in, then **Enter** on the engine field.
-    Values should already include Siebel ``*`` wildcards when required.
+    Fill **VIN** and **Engine#** inside the Find→Vehicles right fly-in, then submit.
+
+    Production-observed winning path: ``#findfieldsbox`` JS strict (``input#field_textbox_0``
+    / ``input#field_textbox_2``) with Find button or Enter key.
     """
     cw = (chassis_wildcard or "").strip()
     ew = (engine_wildcard or "").strip()
     if not cw or not ew:
         return False
 
-    logger.debug("vehicle_find_entry: has_vin=%s has_engine=%s", bool(cw), bool(ew))
-
-    vin_css = (
-        'input#field_textbox_0',
-        'input[id="field_textbox_0"]',
-        'input[title*="VIN" i]',
-        'input[aria-label*="VIN" i]',
-        'input[title*="Chassis" i]',
-        'input[aria-label*="Chassis" i]',
-    )
-    eng_css = (
-        'input#field_textbox_2',
-        'input[id="field_textbox_2"]',
-        'input[title*="Engine#" i]',
-        'input[title*="Engine #" i]',
-        'input[aria-label*="Engine#" i]',
-        'input[aria-label*="Engine #" i]',
-        'input[title^="Engine" i]',
-        'input[aria-label*="Engine" i]',
-    )
-
-    def try_root(root) -> bool:
-        # Strict path: fill inside same-frame #findfieldsbox using required IDs.
-        try:
-            _strict_out = root.evaluate(
-                """(args) => {
-                  const vinVal = String(args.vin || '').trim();
-                  const engVal = String(args.eng || '').trim();
-                  const box = document.getElementById('findfieldsbox') || document.getElementById('findfieldbox');
-                  if (!box) return { ok: false, reason: 'no_findfieldsbox' };
-                  const vis = (el) => {
-                    if (!el) return false;
-                    const st = window.getComputedStyle(el);
-                    if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
-                    const r = el.getBoundingClientRect();
-                    return r.width >= 2 && r.height >= 2;
-                  };
-                  const editable = (el) => !!(el && vis(el) && !el.readOnly && !el.disabled);
-
-                  const vin = box.querySelector('input#field_textbox_0');
-                  const eng = box.querySelector('input#field_textbox_2');
-                  if (!editable(vin)) return { ok: false, reason: 'vin_not_editable_or_missing' };
-                  if (!editable(eng)) return { ok: false, reason: 'engine_not_editable_or_missing' };
-
-                  vin.focus();
-                  vin.value = '';
-                  vin.value = vinVal;
-                  vin.dispatchEvent(new Event('input', { bubbles: true }));
-                  vin.dispatchEvent(new Event('change', { bubbles: true }));
-
-                  eng.focus();
-                  eng.value = '';
-                  eng.value = engVal;
-                  eng.dispatchEvent(new Event('input', { bubbles: true }));
-                  eng.dispatchEvent(new Event('change', { bubbles: true }));
-
-                  const findSel = [
-                    'input[type="submit"][value*="Find" i]',
-                    'input[type="button"][value*="Find" i]',
-                    'button[title="Find" i]',
-                    'button[aria-label="Find" i]',
-                    '[role="button"][title="Find" i]',
-                    '[role="button"][aria-label="Find" i]'
-                  ];
-                  for (const s of findSel) {
-                    const b = box.querySelector(s);
-                    if (b && vis(b)) {
-                      try { b.click(); return { ok: true, mode: 'find_button_in_box' }; } catch (e) {}
-                    }
-                  }
-                  try {
-                    eng.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
-                    eng.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
-                    return { ok: true, mode: 'enter_fallback_in_box' };
-                  } catch (e) {
-                    return { ok: false, reason: 'find_click_and_enter_failed' };
-                  }
-                }""",
-                {"vin": cw, "eng": ew},
-            )
-            if _strict_out and _strict_out.get("ok"):
-                _branch_hit("_try_fill_vin_engine", "findfieldsbox_js_strict")
-                return True
-        except Exception:
-            pass
-        applets: list = []
-        try:
-            cand = root.locator(".siebui-applet").filter(has_text=re.compile(r"VIN|Engine", re.I))
-            n = cand.count()
-            for i in range(min(n, 14)):
-                a = cand.nth(i)
-                try:
-                    if not a.is_visible(timeout=500):
-                        continue
-                    txt = (a.inner_text(timeout=900) or "").lower()
-                    if "vin" in txt and "engine" in txt:
-                        applets.append(a)
-                except Exception:
-                    continue
-        except Exception:
-            pass
-        if not applets:
-            try:
-                cand = root.locator(".siebui-applet").filter(has_text=re.compile(r"Engine", re.I))
-                n = cand.count()
-                for i in range(min(n, 10)):
-                    a = cand.nth(i)
-                    try:
-                        if a.is_visible(timeout=450):
-                            applets.append(a)
-                    except Exception:
-                        continue
-            except Exception:
-                pass
-
-        for applet in applets:
-            try:
-                vin_loc = applet.locator('input#field_textbox_0, input[id="field_textbox_0"]').first
-                eng_loc = applet.locator('input#field_textbox_2, input[id="field_textbox_2"]').first
-                if (
-                    vin_loc.count() <= 0
-                    or eng_loc.count() <= 0
-                    or not vin_loc.is_visible(timeout=700)
-                    or not eng_loc.is_visible(timeout=700)
-                ):
-                    continue
-            except Exception:
-                continue
-            try:
-                try:
-                    vin_loc.click(timeout=min(3000, timeout_ms))
-                except Exception:
-                    vin_loc.click(timeout=min(3000, timeout_ms), force=True)
-                vin_loc.fill("", timeout=min(3000, timeout_ms))
-                vin_loc.fill(cw, timeout=timeout_ms)
-                try:
-                    eng_loc.click(timeout=min(3000, timeout_ms))
-                except Exception:
-                    eng_loc.click(timeout=min(3000, timeout_ms), force=True)
-                eng_loc.fill("", timeout=min(3000, timeout_ms))
-                eng_loc.fill(ew, timeout=timeout_ms)
-                eng_loc.press("Enter", timeout=min(8000, timeout_ms))
-                logger.info("siebel_dms: filled VIN + Engine# in Vehicles Find applet and pressed Enter")
-                _branch_hit("_try_fill_vin_engine", "applet_scan_ids")
-                return True
-            except Exception:
-                continue
-        return False
+    _FINDFIELDSBOX_JS = """(args) => {
+      const vinVal = String(args.vin || '').trim();
+      const engVal = String(args.eng || '').trim();
+      const box = document.getElementById('findfieldsbox') || document.getElementById('findfieldbox');
+      if (!box) return { ok: false, reason: 'no_findfieldsbox' };
+      const vis = (el) => {
+        if (!el) return false;
+        const st = window.getComputedStyle(el);
+        if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+        const r = el.getBoundingClientRect();
+        return r.width >= 2 && r.height >= 2;
+      };
+      const editable = (el) => !!(el && vis(el) && !el.readOnly && !el.disabled);
+      const vin = box.querySelector('input#field_textbox_0');
+      const eng = box.querySelector('input#field_textbox_2');
+      if (!editable(vin)) return { ok: false, reason: 'vin_not_editable_or_missing' };
+      if (!editable(eng)) return { ok: false, reason: 'engine_not_editable_or_missing' };
+      vin.focus(); vin.value = ''; vin.value = vinVal;
+      vin.dispatchEvent(new Event('input', { bubbles: true }));
+      vin.dispatchEvent(new Event('change', { bubbles: true }));
+      eng.focus(); eng.value = ''; eng.value = engVal;
+      eng.dispatchEvent(new Event('input', { bubbles: true }));
+      eng.dispatchEvent(new Event('change', { bubbles: true }));
+      for (const s of [
+        'input[type="submit"][value*="Find" i]', 'input[type="button"][value*="Find" i]',
+        'button[title="Find" i]', 'button[aria-label="Find" i]',
+        '[role="button"][title="Find" i]', '[role="button"][aria-label="Find" i]'
+      ]) {
+        const b = box.querySelector(s);
+        if (b && vis(b)) { try { b.click(); return { ok: true, mode: 'find_button' }; } catch (e) {} }
+      }
+      try {
+        eng.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
+        eng.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
+        return { ok: true, mode: 'enter_key' };
+      } catch (e) { return { ok: false, reason: 'submit_failed' }; }
+    }"""
 
     for fl in _iter_frame_locator_roots(page, content_frame_selector):
         try:
-            if try_root(fl):
+            out = fl.evaluate(_FINDFIELDSBOX_JS, {"vin": cw, "eng": ew})
+            if out and out.get("ok"):
+                _branch_hit("_try_fill_vin_engine", "findfieldsbox_js_strict")
                 return True
         except Exception:
             continue
     for frame in _ordered_frames(page):
         try:
-            if try_root(frame):
+            out = frame.evaluate(_FINDFIELDSBOX_JS, {"vin": cw, "eng": ew})
+            if out and out.get("ok"):
+                _branch_hit("_try_fill_vin_engine", "findfieldsbox_js_strict")
                 return True
         except Exception:
             continue
-    logger.debug("vehicle_find: all roots exhausted, strict ids not found or not editable")
+    logger.debug("vehicle_find: findfieldsbox not found or not editable in any root")
     return False
 
 
@@ -845,13 +717,6 @@ def _siebel_try_click_vin_search_hit_link(
             return True
         return rk.endswith(vk) or rk.startswith(vk)
 
-    row_selectors = (
-        "table tbody tr",
-        "table tr",
-        '[role="row"]',
-        "tr[role='row']",
-    )
-
     _gview_title_chains = (
         '#gview_s_1001_l.ui-jqgrid-view table#s_1001_l a[name="Title"]',
         '#gview_s_1001_l table.ui-jqgrid-btable a[name="Title"]',
@@ -969,120 +834,6 @@ def _siebel_try_click_vin_search_hit_link(
         if _try_gview_1001_title_links(root):
             _branch_hit("_siebel_try_click_vin", "gview_1001_titles")
             return True
-
-        scopes: list = []
-        for title_re in (
-            re.compile(r"Search\s+Results", re.I),
-            re.compile(r"Siebel\s+Find", re.I),
-        ):
-            try:
-                panel = root.locator(".siebui-applet").filter(has_text=title_re).first
-                if panel.count() > 0:
-                    try:
-                        if panel.is_visible(timeout=450):
-                            scopes.append(panel)
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-        scopes.append(root)
-
-        for scope in scopes:
-            if _try_gview_1001_title_links(scope):
-                _branch_hit("_siebel_try_click_vin", "gview_1001_scoped_applet")
-                return True
-
-        for scope in scopes:
-
-            # Title column / list: any visible anchor whose text contains the chassis key (VIN link).
-            if use_key and sub_pat is not None:
-                try:
-                    alinks = scope.locator("a")
-                    an = alinks.count()
-                    for i in range(min(an, 45)):
-                        link = alinks.nth(i)
-                        try:
-                            if not link.is_visible(timeout=350):
-                                continue
-                            t = link.inner_text(timeout=500) or ""
-                            compact = re.sub(r"[^A-Za-z0-9]", "", t)
-                            if (
-                                len(compact) >= min(10, len(vin_key))
-                                and vin_key.upper() in compact.upper()
-                            ):
-                                if _try_click_siebel_drilldown(link):
-                                    _branch_hit("_siebel_try_click_vin", "anchor_text_scan")
-                                    return True
-                        except Exception:
-                            continue
-                except Exception:
-                    pass
-                try:
-                    loc = scope.get_by_role("link", name=sub_pat)
-                    ln = loc.count()
-                    for i in range(min(ln, 28)):
-                        if _try_click_siebel_drilldown(loc.nth(i)):
-                            _branch_hit("_siebel_try_click_vin", "role_link_sub_pat")
-                            return True
-                except Exception:
-                    pass
-                for css in (
-                    'a[href^="javascript"]',
-                    'a[href*="void(0)"]',
-                    "a[href*='javascript']",
-                    "a.siebui-ctrl-drilldown",
-                    "a",
-                ):
-                    try:
-                        hits = scope.locator(css).filter(has_text=sub_pat)
-                        hn = hits.count()
-                        for i in range(min(hn, 35)):
-                            if _try_click_siebel_drilldown(hits.nth(i)):
-                                _branch_hit("_siebel_try_click_vin", f"css_filter_{css[:30]}")
-                                return True
-                    except Exception:
-                        continue
-
-        for rsel in row_selectors:
-            try:
-                rows = root.locator(rsel)
-                n = rows.count()
-            except Exception:
-                continue
-            for i in range(min(n, 120)):
-                row = rows.nth(i)
-                try:
-                    if not row.is_visible(timeout=250):
-                        continue
-                except Exception:
-                    continue
-                try:
-                    row_compact = re.sub(r"[^A-Za-z0-9]", "", row.inner_text(timeout=800) or "")
-                except Exception:
-                    continue
-                if not row_contains_vin(row_compact):
-                    continue
-                for inner in (
-                    row.locator("a[href]"),
-                    row.locator("a"),
-                    row.get_by_role("link"),
-                ):
-                    try:
-                        if inner.count() <= 0:
-                            continue
-                        link = inner.first
-                        if link.is_visible(timeout=500):
-                            if _try_click_siebel_drilldown(link):
-                                _branch_hit("_siebel_try_click_vin", "row_inner_link")
-                                return True
-                    except Exception:
-                        continue
-                try:
-                    row.click(timeout=timeout_ms)
-                    _branch_hit("_siebel_try_click_vin", "row_direct_click")
-                    return True
-                except Exception:
-                    continue
         return False
 
     for root in _siebel_locator_search_roots(page, content_frame_selector):
@@ -1091,6 +842,7 @@ def _siebel_try_click_vin_search_hit_link(
                 return True
         except Exception:
             continue
+    # Thin JS fallback when Playwright hit-testing fails on gview_s_1001_l
     for fr in list(_ordered_frames(page)) + [page.main_frame]:
         try:
             if _try_js_click_gview_s_1001_title(fr):
@@ -1458,29 +1210,14 @@ def _click_third_level_view_bar_tab(
     log_prefix: str,
 ) -> bool:
     """
-    Click a tab in Siebel's Third Level View Bar (``#s_vctrl_div`` or aria-labelled bar).
+    Click a tab in Siebel's Third Level View Bar (``#s_vctrl_div``).
 
-    Used for **Pre-check** and **PDI** tabs. The JS evaluator tries ``#s_vctrl_div`` first
-    (operator-confirmed), then ``[aria-label*='Third Level View Bar']`` containers, matching
-    by hyphen-insensitive text (e.g. "Pre-check" matches "PreCheck").
+    Used for **Pre-check** and **PDI** tabs. Production-observed: ``s_vctrl_div`` is the
+    consistent container; hyphen-insensitive match (e.g. "Pre-check" ↔ "PreCheck").
     """
     tab_norm = (tab_text or "").strip().lower()
     if not tab_norm:
         return False
-
-    roots = _siebel_all_search_roots(page, content_frame_selector)
-    _seen_r: set[int] = set()
-    _rv_roots = []
-    for _pref in (page, page.main_frame):
-        if hasattr(_pref, "evaluate") and id(_pref) not in _seen_r:
-            _seen_r.add(id(_pref))
-            _rv_roots.append(_pref)
-    for _r in roots:
-        if type(_r).__name__ == "FrameLocator" or id(_r) in _seen_r:
-            continue
-        if hasattr(_r, "evaluate"):
-            _seen_r.add(id(_r))
-            _rv_roots.append(_r)
 
     _TAB_JS = """(tabNeedle) => {
         const vis = (el) => {
@@ -1494,109 +1231,49 @@ def _click_third_level_view_bar_tab(
         const compact = (s) => s.replace(/[-\\s]+/g, '');
         const matches = (txt, needle) => {
             if (txt === needle || txt.includes(needle)) return true;
-            const a = compact(txt);
-            const b = compact(needle);
+            const a = compact(txt); const b = compact(needle);
             return a === b || a.includes(b) || b.includes(a);
         };
-        const containers = [];
-        const seenC = new Set();
-        const addC = (el, src) => {
-            if (!el || !vis(el) || seenC.has(el)) return;
-            seenC.add(el);
-            containers.push({ el: el, src: src });
-        };
-        addC(document.getElementById('s_vctrl_div'), 's_vctrl_div');
-        for (const bar of document.querySelectorAll(
-            "[aria-label*='Third Level View Bar' i], [title*='Third Level View Bar' i], [id*='ThirdLevelViewBar' i]"
-        )) {
-            addC(bar, 'third_level_view_aria');
-        }
-        const allVisibleTabLabels = [];
-        for (const c of containers) {
-            const bar = c.el;
-            const tabs = Array.from(
-                bar.querySelectorAll("a, button, [role='tab']")
-            );
-            for (const t of tabs) {
-                if (!vis(t)) continue;
-                const raw = (t.innerText || t.textContent || t.getAttribute('aria-label') || t.getAttribute('title') || '');
-                const txt = norm(raw);
-                if (allVisibleTabLabels.length < 80) {
-                    allVisibleTabLabels.push(String(raw).trim().slice(0, 48));
-                }
-                if (matches(txt, tabNeedle)) {
-                    let target = t;
-                    const tTag = (t.tagName || '').toUpperCase();
-                    if (tTag === 'LI') {
-                        const li = t;
-                        const inner = li.querySelector("a, button, [role='tab']");
-                        if (inner && inner !== li) {
-                            target = inner;
-                        } else {
-                            const sib = li.nextElementSibling;
-                            const sibTag = (sib && sib.tagName) ? String(sib.tagName).toUpperCase() : '';
-                            const sibIsAction = !!(sib && (sibTag === 'A' || sibTag === 'BUTTON' || String(sib.getAttribute('role') || '').toLowerCase() === 'tab'));
-                            if (sibIsAction && vis(sib)) {
-                                target = sib;
-                            } else {
-                                const ctrl = li.getAttribute('aria-controls') || '';
-                                const linked = ctrl ? bar.querySelector(`[id="${ctrl}"], a[aria-controls="${ctrl}"], [href="#${ctrl}"]`) : null;
-                                if (linked && linked !== li && vis(linked)) {
-                                    target = linked;
-                                } else {
-                                    continue;
-                                }
-                            }
-                        }
-                    }
-                    try { target.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
-                    try { target.focus(); } catch (e) {}
-                    try { target.click(); } catch (e) {}
-                    try {
-                        const opts = { bubbles: true, cancelable: true, view: window };
-                        target.dispatchEvent(new MouseEvent('mousedown', opts));
-                        target.dispatchEvent(new MouseEvent('mouseup', opts));
-                        target.dispatchEvent(new MouseEvent('click', opts));
-                    } catch (e2) {}
-                    return {
-                        ok: true,
-                        containerCount: containers.length,
-                        containerSrc: c.src,
-                        visibleTabLabels: allVisibleTabLabels,
-                        matchEq: txt === tabNeedle,
-                        labelLen: String(raw).length,
-                        matchedHead: String(raw).slice(0, 24),
-                        matchedTag: t.tagName || '',
-                        matchedId: String(t.id || '').slice(0, 48),
-                        clickedTag: target.tagName || '',
-                        clickId: String(target.id || '').slice(0, 48),
-                    };
-                }
+        const bar = document.getElementById('s_vctrl_div');
+        if (!bar || !vis(bar)) return { ok: false };
+        const tabs = Array.from(bar.querySelectorAll("a, button, [role='tab']"));
+        for (const t of tabs) {
+            if (!vis(t)) continue;
+            const raw = (t.innerText || t.textContent || t.getAttribute('aria-label') || t.getAttribute('title') || '');
+            const txt = norm(raw);
+            if (!matches(txt, tabNeedle)) continue;
+            let target = t;
+            if ((t.tagName || '').toUpperCase() === 'LI') {
+                const inner = t.querySelector("a, button, [role='tab']");
+                if (inner && inner !== t) { target = inner; }
+                else { continue; }
             }
+            try { target.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
+            try { target.focus(); } catch (e) {}
+            try { target.click(); } catch (e) {}
+            try {
+                const opts = { bubbles: true, cancelable: true, view: window };
+                target.dispatchEvent(new MouseEvent('mousedown', opts));
+                target.dispatchEvent(new MouseEvent('mouseup', opts));
+                target.dispatchEvent(new MouseEvent('click', opts));
+            } catch (e2) {}
+            return { ok: true };
         }
-        return {
-            ok: false,
-            containerCount: containers.length,
-            visibleTabLabels: allVisibleTabLabels,
-            matchEq: false,
-            labelLen: 0,
-        };
+        return { ok: false };
     }"""
 
-    for _idx, root in enumerate(_rv_roots):
+    _ = content_frame_selector
+    for root in list(_ordered_frames(page)) + [page.main_frame]:
         try:
             _res = root.evaluate(_TAB_JS, tab_norm)
             if isinstance(_res, dict) and _res.get("ok"):
-                _branch_hit("_click_third_level_tab", f"{tab_text}_container_{(_res.get('containerSrc') or 'unknown')}")
-                note(
-                    f"{log_prefix}: clicked {tab_text} from tab strip "
-                    f"(container={(_res.get('containerSrc') or '')!r})."
-                )
+                _branch_hit("_click_third_level_tab", f"{tab_text}_s_vctrl_div")
+                note(f"{log_prefix}: clicked {tab_text} from #s_vctrl_div tab strip.")
                 _safe_page_wait(page, wait_ms, log_label=f"after_third_level_{tab_norm}_tab")
                 return True
         except Exception:
             continue
-    logger.debug("third_level_tab: all roots failed for tab=%r", tab_text)
+    logger.debug("third_level_tab: s_vctrl_div not found for tab=%r", tab_text)
     return False
 
 
@@ -1677,7 +1354,10 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             log_prefix=log_prefix,
         )
 
-    _precheck_tab_ok = _click_third_level_view_bar_tab("Pre-check", wait_ms=1500)
+    _precheck_tab_ok = _click_third_level_view_bar_tab(
+        page, "Pre-check", wait_ms=1500,
+        content_frame_selector=content_frame_selector, note=note, log_prefix=log_prefix,
+    )
     if not _precheck_tab_ok:
         _precheck_tab_ok = _siebel_click_by_id_anywhere(
             page,
@@ -2259,7 +1939,10 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             return False, f"Siebel error after Pre-check Submit: {_submit_err[:200]}"
         note(f"{log_prefix}: Pre-check completed.")
 
-    _pdi_tab_clicked = _click_third_level_view_bar_tab("PDI", wait_ms=1500)
+    _pdi_tab_clicked = _click_third_level_view_bar_tab(
+        page, "PDI", wait_ms=1500,
+        content_frame_selector=content_frame_selector, note=note, log_prefix=log_prefix,
+    )
     for root in _roots():
         if _pdi_tab_clicked:
             break
@@ -2882,6 +2565,13 @@ def _try_fill_mobile_on_enquiry_form(
     mobile_aria_hints: list[str],
 ) -> bool:
     """Customer Information mobile (2nd match when Find also has Mobile Phone)."""
+    from app.services.hero_dms_playwright_customer import (
+        _mobile_selectors,
+        _siebel_blur_and_settle,
+        _try_fill_mobile_dom_scan,
+        _try_fill_mobile_semantic,
+    )
+
     if not (mobile or "").strip():
         return False
     if _try_fill_field(
@@ -3316,12 +3006,8 @@ def _siebel_click_by_name_anywhere(
 ) -> bool:
     """Click ``a``/``button``/generic element with HTML ``name`` (e.g. Serial Number drilldown).
 
-    Hero **Auto Vehicle** detail puts VIN / serial drill-ins in the jqGrid **table** ``#s_1_l`` and/or
-    the grid chrome ``div#gview_s_1_l`` — try those scopes first, then fall back to document-wide search.
-
-    ``visible_text_fallback`` (e.g. full chassis): Siebel often shows the VIN as ``outerText`` while
-    keeping ``name="Serial Number"``; the accessible name may match the chassis rather than the label,
-    so we try ``name`` + text filter and ``role=link`` by chassis on every frame root.
+    Production-observed: drilldown anchors always live under ``#s_1_l`` (jqGrid table).
+    Thin JS fallback covers Playwright hit-test edge cases.
     """
     nv_esc = name_val.replace("'", "\\'")
 
@@ -3331,138 +3017,45 @@ def _siebel_click_by_name_anywhere(
                 return False
         except Exception:
             return False
-        for vis_ms in (900, 1600):
+        try:
+            if not loc.is_visible(timeout=1200):
+                return False
+        except Exception:
+            return False
+        try:
+            loc.evaluate("(el) => { try { el.scrollIntoView({ block: 'center' }); } catch (e) {} }")
+        except Exception:
+            pass
+        try:
+            loc.click(timeout=timeout_ms)
+            note(f"prepare_vehicle: clicked {log_label} (name={name_val!r}, {where}).")
+            return True
+        except Exception:
             try:
-                if not loc.is_visible(timeout=vis_ms):
-                    continue
-            except Exception:
-                continue
-            try:
-                loc.evaluate(
-                    """(el) => {
-                      try { el.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) {}
-                    }"""
-                )
-            except Exception:
-                pass
-            try:
-                loc.click(timeout=timeout_ms)
-                note(f"prepare_vehicle: clicked {log_label} (name={name_val!r}, {where}).")
+                loc.click(timeout=timeout_ms, force=True)
+                note(f"prepare_vehicle: clicked {log_label} (name={name_val!r}, force, {where}).")
                 return True
             except Exception:
-                try:
-                    loc.click(timeout=timeout_ms, force=True)
-                    note(f"prepare_vehicle: clicked {log_label} (name={name_val!r}, force, {where}).")
-                    return True
-                except Exception:
-                    continue
-        return False
+                return False
 
     roots = list(_siebel_locator_roots_for_vehicle_prep(page, content_frame_selector))
-    # 1) jqGrid table + view chrome (drilldown anchors live under ``table#s_1_l`` in Open UI).
-    grid_scopes = (
-        "#s_1_l",
-        "table#s_1_l",
-        "[id='s_1_l']",
-        "#gview_s_1_l",
-        "[id='gview_s_1_l']",
-        "div#gview_s_1_l",
-    )
-    for root in roots:
-        for gpre in grid_scopes:
-            for css in (
-                f"{gpre} a[name='{nv_esc}']",
-                f"{gpre} button[name='{nv_esc}']",
-                f"{gpre} a[title='{nv_esc}']",
-                f"{gpre} [name='{nv_esc}']",
-            ):
-                try:
-                    loc = root.locator(css).first
-                    if _try_click_loc(loc, where=f"scoped {gpre!r}"):
-                        _branch_hit("_click_by_name", f"grid_scope_{gpre}")
-                        return True
-                except Exception:
-                    continue
-            try:
-                box = root.locator(gpre).first
-                if box.count() > 0:
-                    role_ln = box.get_by_role(
-                        "link", name=re.compile(rf"^\s*{re.escape(name_val)}\s*$", re.I)
-                    )
-                    if role_ln.count() > 0 and _try_click_loc(
-                        role_ln.first, where=f"scoped role=link {gpre!r}"
-                    ):
-                        _branch_hit("_click_by_name", f"grid_role_link_{gpre}")
-                        return True
-            except Exception:
-                continue
-    # 2) Document-wide (legacy)
+
+    # Primary: #s_1_l scoped (always wins in production)
     for root in roots:
         for css in (
-            f"a[name='{nv_esc}']",
-            f"button[name='{nv_esc}']",
-            f"[name='{nv_esc}']",
+            f"#s_1_l a[name='{nv_esc}']",
+            f"#s_1_l button[name='{nv_esc}']",
+            f"#s_1_l [name='{nv_esc}']",
         ):
             try:
                 loc = root.locator(css).first
-                if _try_click_loc(loc, where="global name match"):
-                    _branch_hit("_click_by_name", "global_name")
+                if _try_click_loc(loc, where="scoped #s_1_l"):
+                    _branch_hit("_click_by_name", "grid_scope_#s_1_l")
                     return True
             except Exception:
                 continue
-    vtf = (visible_text_fallback or "").strip()
-    if vtf:
-        chassis_sub = re.compile(re.escape(vtf), re.I)
-        chassis_exact = re.compile(rf"^\s*{re.escape(vtf)}\s*$", re.I)
-        _in_tbl = ("#s_1_l", "table#s_1_l")
-        for root in roots:
-            for tbl_scope in (*_in_tbl, None):
-                base = root.locator(tbl_scope) if tbl_scope else root
-                _scope_note = (
-                    " in #s_1_l" if tbl_scope in _in_tbl else ""
-                )
-                for css in (
-                    f'a[name="{name_val}"]',
-                    f'button[name="{name_val}"]',
-                    f'[name="{name_val}"]',
-                ):
-                    try:
-                        loc = base.locator(css).filter(has_text=chassis_sub).first
-                        if _try_click_loc(
-                            loc,
-                            where=f"name+chassis visible text{_scope_note or ' (global)'}",
-                        ):
-                            return True
-                    except Exception:
-                        continue
-                try:
-                    ln_e = base.get_by_role("link", name=chassis_exact)
-                    if ln_e.count() > 0 and _try_click_loc(
-                        ln_e.first,
-                        where=f"role=link exact chassis (a11y name){_scope_note}",
-                    ):
-                        return True
-                except Exception:
-                    pass
-                try:
-                    ln_s = base.get_by_role("link", name=chassis_sub)
-                    if ln_s.count() > 0 and _try_click_loc(
-                        ln_s.first,
-                        where=f"role=link chassis substring{_scope_note}",
-                    ):
-                        return True
-                except Exception:
-                    pass
-                try:
-                    bt = base.get_by_role("button", name=chassis_sub)
-                    if bt.count() > 0 and _try_click_loc(
-                        bt.first,
-                        where=f"role=button chassis{_scope_note}",
-                    ):
-                        return True
-                except Exception:
-                    pass
-    # 4) DOM click for Siebel drilldowns that exist but fail visibility / Playwright hit-testing.
+
+    # Thin JS fallback — tries #s_1_l first, then document-wide
     for fr in list(_ordered_frames(page)) + [page.main_frame]:
         try:
             clicked = fr.evaluate(
@@ -3489,9 +3082,7 @@ def _siebel_click_by_name_anywhere(
             )
             if clicked:
                 _branch_hit("_click_by_name", "js_click_frame")
-                note(
-                    f"prepare_vehicle: clicked {log_label!r} (name={name_val!r}, JS querySelector+click in frame)."
-                )
+                note(f"prepare_vehicle: clicked {log_label!r} (name={name_val!r}, JS click in frame).")
                 return True
         except Exception:
             continue
@@ -4488,7 +4079,7 @@ def _siebel_vehicle_find_chassis_engine_enter(
     reuse_vehicle_dict: dict | None = None,
 ) -> tuple[bool, dict]:
     """
-    Vehicles view: **Find → Vehicles**, right fly-in **VIN** + **Engine#** with ``*`` wildcards, **Enter**,
+    Vehicles view: **Find -> Vehicles**, right fly-in **VIN** + **Engine#** with ``*`` wildcards, **Enter**,
     optional Find/Go, click matching **VIN** in left **Search Results**, then scrape grid and **Vehicle
     Information** (model / year / color).
     Returns ``(query_ok, scraped)`` — ``scraped`` may be empty if the grid did not render.
@@ -4580,6 +4171,8 @@ def _siebel_vehicle_find_chassis_engine_enter(
                 "Siebel: browser disconnected while waiting for vehicle grid (Add Enquiry path)."
             ) from e
         raise
+
+    from app.services.hero_dms_playwright_customer import _siebel_try_click_named_in_frames
 
     if _siebel_try_click_named_in_frames(
         page,
