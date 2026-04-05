@@ -68,6 +68,22 @@ def _dump_branch_hits(note) -> None:
     logger.info("branch_hits: %s", _BRANCH_HITS)
 
 
+# Left **Search Results** jqGrid roots: HMCL builds differ — Title anchors may use ``s_100_1_l`` while
+# another skin keeps ``gview_s_1001_l``; cover both plus a generic fallback (skipping main list ``gview_s_1_l``).
+_SIEBEL_VEHICLE_LEFT_SEARCH_GVIEW_IDS: tuple[str, ...] = (
+    "gview_s_1001_l",
+    "gview_s_100_1_l",
+)
+
+
+def _siebel_left_search_gview_table_id(gview_id: str) -> str:
+    """``gview_s_1001_l`` → ``s_1001_l`` (Siebel table id parallel to the gview wrapper)."""
+    s = (gview_id or "").strip()
+    if s.startswith("gview_"):
+        return s[len("gview_") :]
+    return s
+
+
 def _siebel_vehicle_find_wildcard_value(raw: str) -> str:
     """Hero Connect vehicle Find uses ``*`` prefix on VIN/Engine for partial match (see operator screenshots)."""
     s = (raw or "").strip()
@@ -675,20 +691,15 @@ def _siebel_try_click_vin_search_hit_link(
 ) -> bool:
     """
     After vehicle Find/Enter, open the hit from the left **Search Results** pane (blue VIN hyperlink).
-    Primary: jqGrid view ``div#gview_s_1001_l.ui-jqgrid-view`` → ``table#s_1001_l`` / ``.ui-jqgrid-btable``
-    → ``a[name="Title"]`` (e.g. ``id="1_s_100_1_l_Title"``); then JS click inside ``#gview_s_1001_l`` per
-    frame; then broader link/row fallbacks.
-    Loads **Vehicle Information** / detail so model, color, and year can be scraped from inputs or rows.
+    Primary: jqGrid ``div#gview_s_1001_l`` or ``#gview_s_100_1_l`` (HMCL id variants) → ``a[name="Title"]``
+    / ``a[id*="_l_Title"]``; Playwright click with JS fallback across frames. Skips the main list grid
+    ``gview_s_1_l`` when probing unknown jqGrid roots.
 
-    When **DMS only has a partial** (or scrape has not yet produced ``full_chassis``), the left pane may still
-    show the **full VIN** on a single **Title** drilldown — substring match can fail. In that case we fall
-    back to clicking the **only** visible VIN-like Title link under ``#gview_s_1001_l`` (one hit row).
+    When **DMS only has a partial**, match on visible text plus **title** / **aria-label**; fall back to the
+    **only** VIN-like Title link (11–19 alnum) when a single hit row is shown.
     """
     vin_key = _vin_match_key(chassis)
     use_key = bool(vin_key) and len(vin_key) >= 4
-    sub_pat = (
-        re.compile(".*" + re.escape(vin_key) + ".*", re.I) if use_key else None
-    )
 
     def _try_click_siebel_drilldown(loc) -> bool:
         try:
@@ -708,6 +719,21 @@ def _siebel_try_click_vin_search_hit_link(
                 continue
         return False
 
+    def _title_link_vin_compact(link) -> str:
+        parts: list[str] = []
+        try:
+            parts.append(link.inner_text(timeout=500) or "")
+        except Exception:
+            pass
+        for attr in ("title", "aria-label"):
+            try:
+                v = link.get_attribute(attr)
+                if v:
+                    parts.append(v)
+            except Exception:
+                pass
+        return re.sub(r"[^A-Za-z0-9]", "", " ".join(parts))
+
     def row_contains_vin(row_compact: str) -> bool:
         if not use_key or not row_compact:
             return False
@@ -715,26 +741,33 @@ def _siebel_try_click_vin_search_hit_link(
         vk = vin_key.upper()
         if vk in rk:
             return True
-        return rk.endswith(vk) or rk.startswith(vk)
+        if len(rk) >= 4 and rk in vk:
+            return True
+        if rk.endswith(vk) or rk.startswith(vk):
+            return True
+        if len(rk) >= 4 and len(vk) >= 4 and (vk.startswith(rk) or rk.startswith(vk)):
+            return True
+        return False
 
-    _gview_title_chains = (
-        '#gview_s_1001_l.ui-jqgrid-view table#s_1001_l a[name="Title"]',
-        '#gview_s_1001_l table.ui-jqgrid-btable a[name="Title"]',
-        '#gview_s_1001_l table#s_1001_l a[name="Title"]',
-        '#gview_s_1001_l table[id="s_1001_l"] a[name="Title"]',
-        'div#gview_s_1001_l.ui-jqgrid-view a[name="Title"]',
-        '#gview_s_1001_l a[name="Title"][id*="_l_Title"]',
-        '#gview_s_1001_l a[id*="_l_Title"]',
-        '.ui-jqgrid-view#gview_s_1001_l a[name="Title"]',
-    )
+    def _gview_title_chains_for(gview_id: str) -> tuple[str, ...]:
+        tid = _siebel_left_search_gview_table_id(gview_id)
+        return (
+            f"#{gview_id}.ui-jqgrid-view table#{tid} a[name='Title']",
+            f"#{gview_id} table.ui-jqgrid-btable a[name='Title']",
+            f"#{gview_id} table#{tid} a[name='Title']",
+            f'#{gview_id} table[id="{tid}"] a[name="Title"]',
+            f"div#{gview_id}.ui-jqgrid-view a[name='Title']",
+            f'#{gview_id} a[name="Title"][id*="_l_Title"]',
+            f'#{gview_id} a[id*="_l_Title"]',
+            f".ui-jqgrid-view#{gview_id} a[name='Title']",
+        )
 
-    def _try_gview_unique_single_title(scope) -> bool:
+    def _try_gview_unique_single_title(scope, gview_id: str) -> bool:
         """
-        Exactly one visible **Title** link whose text looks like a full VIN (11–19 alnum) — safe when the
-        list has a single search hit and we cannot match on partial ``frame_partial`` yet.
+        Exactly one visible **Title** link whose text looks like a full VIN (11–19 alnum).
         """
         try:
-            g = scope.locator("#gview_s_1001_l").first
+            g = scope.locator(f"#{gview_id}").first
             if g.count() == 0 or not g.is_visible(timeout=600):
                 return False
             titles = g.locator('a[name="Title"], a[id*="_l_Title"]')
@@ -744,7 +777,7 @@ def _siebel_try_click_vin_search_hit_link(
             link = titles.first
             if not link.is_visible(timeout=800):
                 return False
-            t = re.sub(r"[^A-Za-z0-9]", "", link.inner_text(timeout=500) or "")
+            t = _title_link_vin_compact(link)
             if len(t) < 11 or len(t) > 19:
                 return False
             try:
@@ -755,11 +788,11 @@ def _siebel_try_click_vin_search_hit_link(
         except Exception:
             return False
 
-    def _try_gview_1001_title_links(scope) -> bool:
-        """Click **Title** drilldown under jqGrid ``gview_s_1001_l`` (class ``ui-jqgrid-view``)."""
+    def _try_gview_title_links_for_id(scope, gview_id: str) -> bool:
+        """Click **Title** drilldown under one left-search jqGrid root."""
         if not use_key:
-            return _try_gview_unique_single_title(scope)
-        for title_chain in _gview_title_chains:
+            return _try_gview_unique_single_title(scope, gview_id)
+        for title_chain in _gview_title_chains_for(gview_id):
             try:
                 titles = scope.locator(title_chain)
                 tn = titles.count()
@@ -768,8 +801,7 @@ def _siebel_try_click_vin_search_hit_link(
                     try:
                         if not link.is_visible(timeout=900):
                             continue
-                        t = link.inner_text(timeout=500) or ""
-                        compact = re.sub(r"[^A-Za-z0-9]", "", t)
+                        compact = _title_link_vin_compact(link)
                         if not row_contains_vin(compact):
                             continue
                         try:
@@ -782,20 +814,28 @@ def _siebel_try_click_vin_search_hit_link(
                         continue
             except Exception:
                 continue
-        if _try_gview_unique_single_title(scope):
+        if _try_gview_unique_single_title(scope, gview_id):
             return True
         return False
 
-    def _try_js_click_gview_s_1001_title(frame) -> bool:
-        """DOM click inside ``#gview_s_1001_l`` (``ui-jqgrid-view``) when Playwright hit-testing fails."""
+    def _try_left_search_gviews_in_root(scope) -> bool:
+        if not use_key:
+            for gid in _SIEBEL_VEHICLE_LEFT_SEARCH_GVIEW_IDS:
+                if _try_gview_unique_single_title(scope, gid):
+                    return True
+            return False
+        for gid in _SIEBEL_VEHICLE_LEFT_SEARCH_GVIEW_IDS:
+            if _try_gview_title_links_for_id(scope, gid):
+                return True
+        return False
+
+    def _try_js_click_left_search_titles(frame) -> bool:
+        """DOM click in known + discovered left jqGrids when Playwright hit-testing fails."""
         try:
             hit = frame.evaluate(
-                """({ vk, useKey }) => {
+                """({ vk, useKey, knownIds }) => {
                   const norm = (s) => String(s || '').replace(/[^A-Za-z0-9]/g, '');
                   const key = norm(vk);
-                  const g = document.getElementById('gview_s_1001_l');
-                  if (!g) return false;
-                  try { g.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) {}
                   const vis = (el) => {
                     if (!el) return false;
                     const st = window.getComputedStyle(el);
@@ -803,53 +843,107 @@ def _siebel_try_click_vin_search_hit_link(
                     const r = el.getBoundingClientRect();
                     return r.width >= 1 && r.height >= 1;
                   };
-                  const nodes = Array.from(g.querySelectorAll('a[name="Title"], a[id*="_l_Title"]')).filter(vis);
-                  if (useKey && key && key.length >= 4) {
-                    for (const a of nodes) {
-                      const t = norm(a.innerText || a.textContent || '');
-                      if (!t) continue;
-                      if (t.includes(key) || key.includes(t) || t.endsWith(key) || t.startsWith(key)) {
-                        try { a.scrollIntoView({ block: 'center' }); } catch (e) {}
-                        try { a.click(); return true; } catch (e) {}
-                      }
-                    }
-                    return false;
-                  }
-                  const vinLike = (t) => {
-                    const n = norm(t);
-                    return n.length >= 11 && n.length <= 19;
+                  const linkCompact = (a) => {
+                    const t = norm(a.innerText || a.textContent || '');
+                    const title = norm(a.getAttribute('title') || '');
+                    const al = norm(a.getAttribute('aria-label') || '');
+                    return t + title + al;
                   };
-                  const cand = nodes.filter((a) => vinLike(a.innerText || a.textContent || ''));
-                  if (cand.length !== 1) return false;
-                  try { cand[0].scrollIntoView({ block: 'center' }); } catch (e) {}
-                  try { cand[0].click(); return true; } catch (e) { return false; }
+                  const clickMatching = (nodes) => {
+                    if (useKey && key && key.length >= 4) {
+                      for (const a of nodes) {
+                        const raw = linkCompact(a);
+                        if (!raw) continue;
+                        const T = raw.toUpperCase();
+                        const K = key.toUpperCase();
+                        if (T.includes(K) || K.includes(T) || T.endsWith(K) || T.startsWith(K)) {
+                          try { a.scrollIntoView({ block: 'center' }); } catch (e) {}
+                          try { a.click(); return true; } catch (e) {}
+                          continue;
+                        }
+                        if (K.length >= 4 && T.length >= 4 && (K.startsWith(T) || T.startsWith(K))) {
+                          try { a.scrollIntoView({ block: 'center' }); } catch (e) {}
+                          try { a.click(); return true; } catch (e) {}
+                        }
+                      }
+                      return false;
+                    }
+                    const vinLike = (a) => {
+                      const n = linkCompact(a);
+                      return n.length >= 11 && n.length <= 19;
+                    };
+                    const cand = nodes.filter(vinLike);
+                    if (cand.length !== 1) return false;
+                    try { cand[0].scrollIntoView({ block: 'center' }); } catch (e) {}
+                    try { cand[0].click(); return true; } catch (e) { return false; }
+                  };
+                  const clickFirstMatchInGrid = (g) => {
+                    if (!g) return false;
+                    try { g.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) {}
+                    const nodes = Array.from(
+                      g.querySelectorAll('a[name="Title"], a[id*="_l_Title"]')
+                    ).filter(vis);
+                    return clickMatching(nodes);
+                  };
+                  for (const id of knownIds) {
+                    const g = document.getElementById(id);
+                    if (g && clickFirstMatchInGrid(g)) return true;
+                  }
+                  const skip = new Set(['gview_s_1_l']);
+                  const seen = new Set(knownIds);
+                  const extras = [];
+                  for (const g of document.querySelectorAll('div.ui-jqgrid-view[id^="gview_s_"]')) {
+                    const id = g.id || '';
+                    if (!id || skip.has(id) || seen.has(id)) continue;
+                    const nodes = Array.from(
+                      g.querySelectorAll('a[name="Title"], a[id*="_l_Title"]')
+                    ).filter(vis);
+                    if (!nodes.length) continue;
+                    extras.push({ g, n: nodes.length });
+                  }
+                  extras.sort((a, b) => a.n - b.n);
+                  for (const { g } of extras) {
+                    if (clickFirstMatchInGrid(g)) return true;
+                  }
+                  return false;
                 }""",
-                {"vk": vin_key, "useKey": use_key},
+                {
+                    "vk": vin_key,
+                    "useKey": use_key,
+                    "knownIds": list(_SIEBEL_VEHICLE_LEFT_SEARCH_GVIEW_IDS),
+                },
             )
             return bool(hit)
         except Exception:
             return False
 
-    def try_click_in_root(root) -> bool:
-        if _try_gview_1001_title_links(root):
-            _branch_hit("_siebel_try_click_vin", "gview_1001_titles")
-            return True
+    def _one_attempt() -> bool:
+        def try_click_in_root(root) -> bool:
+            if _try_left_search_gviews_in_root(root):
+                _branch_hit("_siebel_try_click_vin", "pw_gview_title")
+                return True
+            return False
+
+        for root in _siebel_locator_search_roots(page, content_frame_selector):
+            try:
+                if try_click_in_root(root):
+                    return True
+            except Exception:
+                continue
+        for fr in list(_ordered_frames(page)) + [page.main_frame]:
+            try:
+                if _try_js_click_left_search_titles(fr):
+                    _branch_hit("_siebel_try_click_vin", "js_left_search_title")
+                    return True
+            except Exception:
+                continue
         return False
 
-    for root in _siebel_locator_search_roots(page, content_frame_selector):
-        try:
-            if try_click_in_root(root):
-                return True
-        except Exception:
-            continue
-    # Thin JS fallback when Playwright hit-testing fails on gview_s_1001_l
-    for fr in list(_ordered_frames(page)) + [page.main_frame]:
-        try:
-            if _try_js_click_gview_s_1001_title(fr):
-                _branch_hit("_siebel_try_click_vin", "js_click_gview_s_1001")
-                return True
-        except Exception:
-            continue
+    for attempt in range(3):
+        if attempt:
+            _safe_page_wait(page, 600, log_label="vin_left_search_drill_retry")
+        if _one_attempt():
+            return True
     return False
 
 

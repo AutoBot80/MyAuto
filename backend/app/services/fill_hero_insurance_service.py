@@ -118,8 +118,29 @@ KYC_INSURER_STRATEGY_DOM_NATIVE = "dom_native"
 KYC_INSURER_STRATEGY_KEYBOARD_CHAIN = "keyboard_chain"
 KYC_INSURER_STRATEGY_FUZZY_SCAN = "fuzzy_scan"
 
+_LOGIN_LABEL_PATTERNS = (
+    (re.compile(r"^\s*Sign\s*In\s*$", re.I), "Sign In"),
+    (re.compile(r"^\s*Login\s*$", re.I), "Login"),
+    (re.compile(r"^\s*Log\s+in\s*$", re.I), "Log in"),
+)
+
+_NAV_HIT_COUNTERS: dict[str, int] = {}
+
+
+def _mark_hit(fn_name: str) -> None:
+    _NAV_HIT_COUNTERS[fn_name] = _NAV_HIT_COUNTERS.get(fn_name, 0) + 1
+
+
+def _log_nav_hit_counters() -> None:
+    if not _NAV_HIT_COUNTERS:
+        logger.info("Hero Insurance _NAV_HIT_COUNTERS: (empty — no functions were called)")
+        return
+    called = {k: v for k, v in sorted(_NAV_HIT_COUNTERS.items()) if v > 0}
+    logger.info("Hero Insurance _NAV_HIT_COUNTERS (called): %s", json.dumps(called, indent=2))
+
 
 def _kyc_insurer_strategy_cache_host_key() -> str:
+    _mark_hit("_kyc_insurer_strategy_cache_host_key")
     u = (INSURANCE_BASE_URL or "").strip()
     if not u:
         return "default"
@@ -131,10 +152,12 @@ def _kyc_insurer_strategy_cache_host_key() -> str:
 
 
 def _kyc_insurer_strategy_cache_path() -> Path:
+    _mark_hit("_kyc_insurer_strategy_cache_path")
     return Path(__file__).resolve().parent.parent / "data" / "kyc_insurer_strategy_cache.json"
 
 
 def _kyc_insurer_strategy_cache_read() -> str | None:
+    _mark_hit("_kyc_insurer_strategy_cache_read")
     path = _kyc_insurer_strategy_cache_path()
     try:
         if not path.is_file():
@@ -154,6 +177,7 @@ def _kyc_insurer_strategy_cache_read() -> str | None:
 
 
 def _kyc_insurer_strategy_cache_write(strategy: str) -> None:
+    _mark_hit("_kyc_insurer_strategy_cache_write")
     if strategy not in (
         KYC_INSURER_STRATEGY_DOM_NATIVE,
         KYC_INSURER_STRATEGY_KEYBOARD_CHAIN,
@@ -176,6 +200,7 @@ def _kyc_insurer_strategy_cache_write(strategy: str) -> None:
 
 def _kyc_insurer_attempt_order(cached: str | None) -> list[str]:
     """Non-fuzzy strategies permuted with **cached first**; ``fuzzy_scan`` is always last."""
+    _mark_hit("_kyc_insurer_attempt_order")
     d, k, f = (
         KYC_INSURER_STRATEGY_DOM_NATIVE,
         KYC_INSURER_STRATEGY_KEYBOARD_CHAIN,
@@ -190,6 +215,7 @@ def _kyc_insurer_attempt_order(cached: str | None) -> list[str]:
 
 def _proposal_map_marital_for_misp(raw: str) -> str:
     """Normalize DB / staging text to MISP ``ddlMaritalStatus`` option labels."""
+    _mark_hit("_proposal_map_marital_for_misp")
     s = (raw or "").strip()
     if not s:
         return ""
@@ -210,6 +236,7 @@ def _proposal_map_occupation_for_misp(raw: str) -> str:
     Map profession text to MISP ``ddlOccupatnType`` labels. **Private** (e.g. vehicle class wording) → **Employed**.
     Empty → **Employed** (portal default expectation).
     """
+    _mark_hit("_proposal_map_occupation_for_misp")
     s = (raw or "").strip()
     if not s:
         return "Employed"
@@ -236,6 +263,7 @@ def _hero_misp_vin_step_timeout_ms(base_action_ms: int | None = None) -> int:
     Budget for KYC **Proceed** → **MispDms.aspx** + ``txtFrameNo`` attach. ``INSURANCE_ACTION_TIMEOUT_MS`` is for
     single actions (~5.5s); postback + redirect + loading overlay on **same** ``ekycpage.aspx`` URL needs longer.
     """
+    _mark_hit("_hero_misp_vin_step_timeout_ms")
     b = int(base_action_ms if base_action_ms is not None else INSURANCE_ACTION_TIMEOUT_MS)
     return min(120_000, max(60_000, b * 15))
 
@@ -254,6 +282,7 @@ def _kyc_local_scan_paths_from_uploaded_scans(
 
     Returns three absolute file paths, or ``None`` if the folder or required scans are missing.
     """
+    _mark_hit("_kyc_local_scan_paths_from_uploaded_scans")
     if not subfolder or not str(subfolder).strip():
         return None
     did = int(dealer_id) if dealer_id is not None else int(DEALER_ID)
@@ -282,6 +311,7 @@ def _kyc_local_scan_paths_from_uploaded_scans(
 
 def _kyc_local_scan_paths_from_values(values: dict | None) -> list[str] | None:
     """``values['kyc_local_scan_paths']`` set in ``run_fill_insurance_only`` from Uploaded scans."""
+    _mark_hit("_kyc_local_scan_paths_from_values")
     if not values:
         return None
     raw = values.get("kyc_local_scan_paths")
@@ -297,6 +327,7 @@ _DEBUG_INSURER_TAB_NDJSON = Path(__file__).resolve().parents[3] / "debug-d1a375.
 def _dbg_kyc_insurer_tab_ndjson(
     hypothesis_id: str, location: str, message: str, data: dict[str, Any]
 ) -> None:
+    _mark_hit("_dbg_kyc_insurer_tab_ndjson")
     try:
         payload: dict[str, Any] = {
             "sessionId": "d1a375",
@@ -313,6 +344,7 @@ def _dbg_kyc_insurer_tab_ndjson(
 
 
 def _dbg_kyc_focus_snapshot(kyc_fr, page) -> dict[str, Any]:
+    _mark_hit("_dbg_kyc_focus_snapshot")
     snap: dict[str, Any] = {}
     try:
         snap["kyc_is_child"] = kyc_fr != page.main_frame
@@ -415,10 +447,59 @@ _MISP_UI_SETTLE_CAP_MS = 200
 
 
 def _t(page, ms: int) -> None:
+    _mark_hit("_t")
     try:
         page.wait_for_timeout(min(int(ms), _MISP_UI_SETTLE_CAP_MS))
     except Exception:
+        try:
+            time.sleep(min(int(ms), _MISP_UI_SETTLE_CAP_MS) / 1000.0)
+        except Exception:
+            pass
+
+
+def _wait_load_optional(page, timeout: int = 8_000, *, state: str = "domcontentloaded") -> None:
+    try:
+        page.wait_for_load_state(state, timeout=timeout)
+    except Exception:
         pass
+
+
+def _proposal_fail(
+    ocr_output_dir, subfolder, msg: str,
+) -> tuple[str | None, dict[str, Any]]:
+    append_playwright_insurance_line(
+        ocr_output_dir, subfolder, "ERROR", f"main_process proposal form: {msg}",
+    )
+    return msg, {}
+
+
+def _collect_select_option_labels(sel, *, skip_select_prefix: bool = False, max_n: int = 400) -> list[str]:
+    """Read ``<option>`` text labels from a ``<select>`` locator (evaluate_all, fallback to nth loop)."""
+    labels: list[str] = []
+    try:
+        raw = sel.locator("option").evaluate_all(
+            "els => els.map(e => (e.textContent || '').trim()).filter(Boolean)"
+        )
+        for x in raw or []:
+            t = str(x).strip()
+            if not t:
+                continue
+            if skip_select_prefix and t.lower().startswith("--select"):
+                continue
+            labels.append(t)
+    except Exception:
+        try:
+            n = sel.locator("option").count()
+            for i in range(min(n, max_n)):
+                t = (sel.locator("option").nth(i).inner_text() or "").strip()
+                if not t:
+                    continue
+                if skip_select_prefix and t.lower().startswith("--select"):
+                    continue
+                labels.append(t)
+        except Exception:
+            pass
+    return labels
 
 
 def _insurance_pre_elapsed_note(
@@ -428,6 +509,7 @@ def _insurance_pre_elapsed_note(
     phase: str,
 ) -> None:
     """Milestone elapsed time since ``run_fill_insurance_only`` start (``Playwright_insurance.txt``)."""
+    _mark_hit("_insurance_pre_elapsed_note")
     if t0 is None:
         return
     try:
@@ -450,6 +532,7 @@ def _insurance_vin_phase_note(
     detail: str = "",
 ) -> None:
     """Operator-visible milestones for KYC→VIN (``Playwright_insurance.txt``)."""
+    _mark_hit("_insurance_vin_phase_note")
     extra = f" {detail}" if detail else ""
     if t0_vin is None:
         msg = f"VIN step: {phase}{extra}"
@@ -471,6 +554,7 @@ def _insurance_kyc_flow_elapsed_note(
     phase: str,
 ) -> None:
     """KYC sub-phase wall time since ``run_fill_insurance_only`` / Hero portal flow start."""
+    _mark_hit("_insurance_kyc_flow_elapsed_note")
     if t0_flow is None:
         return
     try:
@@ -494,6 +578,7 @@ def _insurance_tab_resolve_note(
     *,
     resolver_ms: int | None = None,
 ) -> None:
+    _mark_hit("_insurance_tab_resolve_note")
     if t0_flow is None:
         return
     try:
@@ -516,6 +601,7 @@ def _insurance_kyc_trace(
     detail: str,
 ) -> None:
     """Append ``Playwright_insurance.txt`` NOTE + ``logger.info`` so operators can see KYC phase timing."""
+    _mark_hit("_insurance_kyc_trace")
     msg = f"KYC trace [{phase}] {detail}"
     append_playwright_insurance_line_or_dealer_fallback(
         ocr_output_dir, subfolder, "NOTE", msg
@@ -525,7 +611,40 @@ def _insurance_kyc_trace(
 
 def _insurance_click_settle(page) -> None:
     """Fixed pause for MISP navigation (Sign In → 2W → New Policy …). ``INSURANCE_CLICK_SETTLE_MS`` (default 35)."""
+    _mark_hit("_insurance_click_settle")
     _t(page, min(INSURANCE_CLICK_SETTLE_MS, 15_000))
+
+
+def _misp_click_nav_step(
+    page,
+    click_fn,
+    step_label: str,
+    *,
+    portal_base_url: str,
+    timeout_ms: int,
+    ocr_output_dir=None,
+    subfolder: str | None = None,
+    t0_flow: float | None = None,
+):
+    """Snapshot pages → click → resolve tab → trace note. Returns ``(page, error_or_None)``."""
+    pages_before = _misp_snapshot_context_pages(page)
+    try:
+        click_fn(page, timeout_ms=timeout_ms)
+    except Exception as exc:
+        return page, f"{step_label}: {exc!s}"
+    t0_res = time.monotonic()
+    page, tab_branch = _misp_resolve_page_after_possible_new_tab(
+        pages_before,
+        page,
+        portal_base_url=portal_base_url,
+        timeout_ms=timeout_ms,
+        step_label=step_label,
+    )
+    res_ms = int((time.monotonic() - t0_res) * 1000)
+    _insurance_tab_resolve_note(
+        ocr_output_dir, subfolder, t0_flow, step_label, tab_branch, resolver_ms=res_ms,
+    )
+    return page, None
 
 
 def _hero_misp_after_sign_in_settle(page) -> None:
@@ -536,10 +655,8 @@ def _hero_misp_after_sign_in_settle(page) -> None:
     The hub SPA may paint **2W** after ``domcontentloaded``; wait for the same tile selectors ``_click_2w_icon``
     tries first (visibility), capped by ``HERO_MISP_LANDING_WAIT_MS``, so the 2W step does not run on a half-ready DOM.
     """
-    try:
-        page.wait_for_load_state("domcontentloaded", timeout=8_000)
-    except Exception:
-        pass
+    _mark_hit("_hero_misp_after_sign_in_settle")
+    _wait_load_optional(page, 8_000)
     cap = min(10_000, max(800, int(HERO_MISP_LANDING_WAIT_MS)))
     try:
         page.locator('[aid="ctl00_TWO"], #ctl00_TWO, img[alt="2W Icon"]').first.wait_for(
@@ -563,6 +680,7 @@ def _hero_insurance_log_page_diagnostics(
     Former **login_page_snapshot** / **kyc_nav_scrape** blocks that evaluated every visible control
     and wrote multi‑kilobyte **[DIAG]** lines to ``Playwright_insurance.txt`` were removed.
     """
+    _mark_hit("_hero_insurance_log_page_diagnostics")
     _ = (ocr_output_dir, subfolder)
     try:
         url = (page.url or "").strip()[:500]
@@ -596,6 +714,7 @@ def _kyc_simulate_tab_away_and_back(
     events are not always enough. Briefly focus another browser tab so the KYC document gets a real
     ``visibilityState`` hidden/visible transition (WebForms / UpdatePanel).
     """
+    _mark_hit("_kyc_simulate_tab_away_and_back")
     try:
         ctx = page.context
     except Exception:
@@ -668,6 +787,7 @@ def _hero_insurance_kyc_nav_after_insurer_commit(
     duplicating commits already sent in the keyboard block or moving focus to **KYC Partner** after
     a successful native ``select_option``.
     """
+    _mark_hit("_hero_insurance_kyc_nav_after_insurer_commit")
     if not light:
         try:
             page.keyboard.press("Enter")
@@ -681,10 +801,7 @@ def _hero_insurance_kyc_nav_after_insurer_commit(
         _t(page, 80)
     else:
         _t(page, 80)
-    try:
-        page.wait_for_load_state("domcontentloaded", timeout=3_000)
-    except Exception:
-        pass
+    _wait_load_optional(page, 3_000)
     _t(page, 60)
 
     cap = max(0, int(INSURANCE_KYC_POST_INSURER_NETWORKIDLE_MS))
@@ -704,6 +821,7 @@ def _hero_insurance_kyc_nav_after_insurer_commit(
 
 
 def _kyc_body_text_lower(root) -> str:
+    _mark_hit("_kyc_body_text_lower")
     try:
         return (root.locator("body").inner_text(timeout=3_000) or "").lower()
     except Exception:
@@ -715,6 +833,7 @@ def _kyc_text_is_verified_aadhaar_proceed_policy_issuance_banner(text: str) -> b
     Portal copy (MISP): ``KYC already verified against AADHAAR CARD No. <digits> , please proceed
     for policy issuance.`` — checkbox + **Proceed**; no document uploads on this branch.
     """
+    _mark_hit("_kyc_text_is_verified_aadhaar_proceed_policy_issuance_banner")
     s = (text or "").lower()
     if "kyc already verified" not in s:
         return False
@@ -738,6 +857,7 @@ def _kyc_banner_already_verified_aadhaar_visible(page) -> bool:
     If **not** present, the portal typically shows three **file** inputs (Aadhaar front, back, photo)
     — handled by ``_kyc_proceed_or_upload`` (upload then **Proceed**).
     """
+    _mark_hit("_kyc_banner_already_verified_aadhaar_visible")
     kyc_fr = _kyc_preferred_kyc_frame(page)
     t = _kyc_body_text_lower(kyc_fr)
     if _kyc_text_is_verified_aadhaar_proceed_policy_issuance_banner(t):
@@ -759,6 +879,7 @@ def _kyc_click_proceed_after_already_verified_banner(
     Verified-banner path: consent checkbox, then **Proceed** (or equivalent CTA).
     Does not upload documents — uploads run only when this banner is absent (see ``_kyc_proceed_or_upload``).
     """
+    _mark_hit("_kyc_click_proceed_after_already_verified_banner")
     _kyc_ensure_consent_checked_before_kyc_cta(page)
     to = min(int(timeout_ms), 45_000)
     # After mobile, portal shows **Proceed** (not **KYC Verification**). Prefer Proceed / policy issuance.
@@ -778,10 +899,7 @@ def _kyc_click_proceed_after_already_verified_banner(
                         "Hero Insurance: already-verified branch — clicked button (%s).",
                         pat.pattern[:80],
                     )
-                    try:
-                        page.wait_for_load_state("domcontentloaded", timeout=min(25_000, to))
-                    except Exception:
-                        pass
+                    _wait_load_optional(page, min(25_000, to))
                     _t(page, 400)
                     return None
             except Exception:
@@ -794,10 +912,7 @@ def _kyc_click_proceed_after_already_verified_banner(
                         "Hero Insurance: already-verified branch — clicked link (%s).",
                         pat.pattern[:80],
                     )
-                    try:
-                        page.wait_for_load_state("domcontentloaded", timeout=min(25_000, to))
-                    except Exception:
-                        pass
+                    _wait_load_optional(page, min(25_000, to))
                     _t(page, 400)
                     return None
             except Exception:
@@ -839,19 +954,16 @@ def _kyc_post_mobile_entry_branch(
 
     Uses ``INSURANCE_KYC_POST_MOBILE_DOM_MS`` (default **2000** ms) — not ``networkidle``.
     """
+    _mark_hit("_kyc_post_mobile_entry_branch")
     to = min(int(timeout_ms), 120_000)
     try:
         page.keyboard.press("Tab")
     except Exception:
         pass
     _t(page, HERO_MISP_UI_SETTLE_MS)
-    try:
-        cap_dom = max(200, min(int(INSURANCE_KYC_POST_MOBILE_DOM_MS), 30_000))
-        page.wait_for_load_state("domcontentloaded", timeout=min(cap_dom, to))
-    except Exception:
-        pass
+    cap_dom = max(200, min(int(INSURANCE_KYC_POST_MOBILE_DOM_MS), 30_000))
+    _wait_load_optional(page, min(cap_dom, to))
     _t(page, HERO_MISP_UI_SETTLE_MS)
-    # Banner may render slightly after network idle; re-check once.
     if not _kyc_banner_already_verified_aadhaar_visible(page):
         _t(page, HERO_MISP_UI_SETTLE_MS)
     if _kyc_banner_already_verified_aadhaar_visible(page):
@@ -905,6 +1017,7 @@ def _kyc_select_kyc_partner_if_available(
     **KYC Partner** is never changed by automation — the portal default (e.g. Signzy) stays selected.
     (Programmatic ``select_option`` caused extra postbacks / wrong next screen on some builds.)
     """
+    _mark_hit("_kyc_select_kyc_partner_if_available")
     logger.info(
         "Hero Insurance: KYC Partner left as portal default (automation does not change ddlkycPartner)."
     )
@@ -912,6 +1025,7 @@ def _kyc_select_kyc_partner_if_available(
 
 def _kyc_ensure_consent_checked_before_kyc_cta(page) -> None:
     """Ensure a consent / declaration checkbox is checked before **Proceed** (post-mobile KYC CTA)."""
+    _mark_hit("_kyc_ensure_consent_checked_before_kyc_cta")
     for root in (_kyc_preferred_kyc_frame(page), page):
         try:
             cbs = root.get_by_role("checkbox").filter(
@@ -961,12 +1075,10 @@ def _hero_insurance_kyc_nav_after_kyc_partner_commit(
     subfolder: str | None,
 ) -> None:
     """After KYC Partner ``select_option``: short settle + optional networkidle (no file scrape)."""
+    _mark_hit("_hero_insurance_kyc_nav_after_kyc_partner_commit")
     _ = (ocr_output_dir, subfolder)
     _t(page, 280)
-    try:
-        page.wait_for_load_state("domcontentloaded", timeout=8_000)
-    except Exception:
-        pass
+    _wait_load_optional(page, 8_000)
     cap = max(0, int(INSURANCE_KYC_POST_KYC_PARTNER_NETWORKIDLE_MS))
     if cap > 0:
         try:
@@ -981,6 +1093,7 @@ def _hero_insurance_kyc_nav_after_kyc_partner_commit(
 
 def _iter_page_and_child_frames(page):
     """Main page first, then each child frame (login may be in an iframe)."""
+    _mark_hit("_iter_page_and_child_frames")
     yield page
     try:
         for fr in page.frames:
@@ -1000,6 +1113,7 @@ def _wait_for_partner_login_password_filled(page, *, timeout_ms: int) -> bool:
     The **Partner Login** panel on ``/misp-partner-login`` is separate from the header **Login as** control;
     do not click **Sign In** until credentials are present.
     """
+    _mark_hit("_wait_for_partner_login_password_filled")
     deadline = time.monotonic() + max(1.0, timeout_ms / 1000.0)
     while time.monotonic() < deadline:
         try:
@@ -1037,6 +1151,7 @@ def _try_request_submit_partner_password_form(ctx) -> bool:
     Fire ``form.requestSubmit()`` on the partner login form (non-empty password + **Sign In** submit).
     React/controlled forms often bind the submit handler on the form; this path can behave more like a manual submit than a raw ``.click()`` on the button.
     """
+    _mark_hit("_try_request_submit_partner_password_form")
     try:
         r = ctx.evaluate(_REQUEST_SUBMIT_PARTNER_PASSWORD_FORM_JS)
         if isinstance(r, dict) and r.get("ok"):
@@ -1056,6 +1171,7 @@ def _try_request_submit_partner_password_form(ctx) -> bool:
 
 def _snapshot_partner_login_frames(page) -> dict:
     """Submit button label + alert-like lines (main + child frames); no PII."""
+    _mark_hit("_snapshot_partner_login_frames")
     samples: list[dict] = []
     for ctx in _iter_page_and_child_frames(page):
         try:
@@ -1075,6 +1191,7 @@ def _snapshot_partner_login_frames(page) -> dict:
 
 def _try_dom_click_sign_in_submit(page) -> bool:
     """Click **Sign In** only inside a ``<form>`` that already has a **non-empty** password value."""
+    _mark_hit("_try_dom_click_sign_in_submit")
     try:
         ok = page.evaluate(
             """() => {
@@ -1138,6 +1255,7 @@ def _try_click_sign_in_inside_password_form(scope, *, timeout_ms: int, scope_lab
     the same view — **Get Price** (hero) and **Sign In** (login). A naive ``button[type=submit]`` scan can
     hit the wrong control or rely on order; scoping to the login form matches typical MISP layout.
     """
+    _mark_hit("_try_click_sign_in_inside_password_form")
     try:
         login_forms = scope.locator(
             'form:has(input[type="password"]), '
@@ -1146,11 +1264,6 @@ def _try_click_sign_in_inside_password_form(scope, *, timeout_ms: int, scope_lab
         )
         if login_forms.count() == 0:
             return False
-        patterns = (
-            (re.compile(r"^\s*Sign\s*In\s*$", re.I), "Sign In"),
-            (re.compile(r"^\s*Login\s*$", re.I), "Login"),
-            (re.compile(r"^\s*Log\s+in\s*$", re.I), "Log in"),
-        )
         for fi in range(min(login_forms.count(), 12)):
             frm = login_forms.nth(fi)
             try:
@@ -1161,7 +1274,7 @@ def _try_click_sign_in_inside_password_form(scope, *, timeout_ms: int, scope_lab
                     continue
             except Exception:
                 continue
-            for pat, dbg in patterns:
+            for pat, dbg in _LOGIN_LABEL_PATTERNS:
                 for sel in ('button[type="submit"]', 'input[type="submit"]'):
                     try:
                         loc = frm.locator(sel).filter(has_text=pat)
@@ -1210,11 +1323,7 @@ def _click_sign_in_on_scope(scope, *, timeout_ms: int, scope_label: str) -> bool
     """
     Try login CTA within a **Page**, **Frame**, or **Locator** (e.g. ``#root`` SPA mount).
     """
-    label_patterns = (
-        (re.compile(r"^\s*Sign In\s*$", re.I), "Sign In"),
-        (re.compile(r"^\s*Login\s*$", re.I), "Login"),
-        (re.compile(r"^\s*Log\s+in\s*$", re.I), "Log in"),
-    )
+    _mark_hit("_click_sign_in_on_scope")
     try:
         if _try_click_sign_in_inside_password_form(
             scope, timeout_ms=timeout_ms, scope_label=scope_label
@@ -1262,7 +1371,7 @@ def _click_sign_in_on_scope(scope, *, timeout_ms: int, scope_label: str) -> bool
             except Exception:
                 continue
 
-        for pat, _dbg in label_patterns:
+        for pat, _dbg in _LOGIN_LABEL_PATTERNS:
             loc = scope.get_by_text(pat)
             n = loc.count()
             if n <= 0:
@@ -1318,6 +1427,7 @@ def _click_sign_in_on_scope(scope, *, timeout_ms: int, scope_label: str) -> bool
 
 def _click_sign_in_on_context(ctx, *, timeout_ms: int) -> bool:
     """Try login CTA on a single **Page** or **Frame**; **#root** first (SPA), then full document."""
+    _mark_hit("_click_sign_in_on_context")
     scopes: list[tuple[object, str]] = []
     try:
         root = ctx.locator("#root")
@@ -1335,6 +1445,7 @@ def _click_sign_in_on_context(ctx, *, timeout_ms: int) -> bool:
 
 def _attempt_sign_in_click_once(page, *, timeout_ms: int) -> bool:
     """One pass: native form submit per frame, then scoped clicks, then main-document DOM click."""
+    _mark_hit("_attempt_sign_in_click_once")
     for ctx in _iter_page_and_child_frames(page):
         if _try_request_submit_partner_password_form(ctx):
             return True
@@ -1345,6 +1456,7 @@ def _attempt_sign_in_click_once(page, *, timeout_ms: int) -> bool:
 
 
 def _still_on_heroinsurance_misp_partner_login(page) -> bool:
+    _mark_hit("_still_on_heroinsurance_misp_partner_login")
     try:
         return "misp-partner-login" in (page.url or "").lower()
     except Exception:
@@ -1361,6 +1473,7 @@ def _click_sign_in_if_visible(page, *, timeout_ms: int) -> bool:
     Logs often showed ``clicked: true`` while the user still saw the login screen — up to **4** attempts with
     **500 ms** between tries, and a post-click URL check on the partner login host.
     """
+    _mark_hit("_click_sign_in_if_visible")
     try:
         u0 = (page.url or "").strip()
         if _tab_url_is_dms_siebel_not_insurance(u0):
@@ -1386,10 +1499,7 @@ def _click_sign_in_if_visible(page, *, timeout_ms: int) -> bool:
         except Exception:
             url_snip = ""
         if clicked:
-            try:
-                page.wait_for_timeout(pause_ms)
-            except Exception:
-                time.sleep(pause_ms / 1000.0)
+            _t(page, pause_ms)
             try:
                 url_snip2 = (page.url or "")[:160]
             except Exception:
@@ -1402,10 +1512,7 @@ def _click_sign_in_if_visible(page, *, timeout_ms: int) -> bool:
                     max_attempts,
                 )
                 return True
-            try:
-                page.wait_for_timeout(_MISP_UI_SETTLE_CAP_MS)
-            except Exception:
-                time.sleep(_MISP_UI_SETTLE_CAP_MS / 1000.0)
+            _t(page, _MISP_UI_SETTLE_CAP_MS)
             try:
                 post_ui = _snapshot_partner_login_frames(page)
                 hints = []
@@ -1426,10 +1533,7 @@ def _click_sign_in_if_visible(page, *, timeout_ms: int) -> bool:
                 pause_ms,
             )
         if attempt < max_attempts:
-            try:
-                page.wait_for_timeout(pause_ms)
-            except Exception:
-                time.sleep(pause_ms / 1000.0)
+            _t(page, pause_ms)
 
     return False
 
@@ -1441,12 +1545,10 @@ def _misp_wait_landing_after_product_nav(page, *, step: str, timeout_ms: int) ->
     ``step``: ``after_2w`` | ``after_new_policy``.
     Max UI readiness wait per step: ``HERO_MISP_LANDING_WAIT_MS`` (default **2500** ms).
     """
+    _mark_hit("_misp_wait_landing_after_product_nav")
     cap = min(max(800, int(timeout_ms)), int(HERO_MISP_LANDING_WAIT_MS))
     short_dom = min(1_500, cap)
-    try:
-        page.wait_for_load_state("domcontentloaded", timeout=short_dom)
-    except Exception:
-        pass
+    _wait_load_optional(page, short_dom)
     if step == "after_2w":
         try:
             page.locator("#navbarVerticalNav").first.wait_for(state="visible", timeout=cap)
@@ -1477,10 +1579,7 @@ def _misp_wait_landing_after_product_nav(page, *, step: str, timeout_ms: int) ->
             return
         except Exception:
             pass
-    try:
-        page.wait_for_load_state("domcontentloaded", timeout=min(2_000, cap))
-    except Exception:
-        pass
+    _wait_load_optional(page, min(2_000, cap))
 
 
 def _click_2w_icon(page, *, timeout_ms: int) -> None:
@@ -1488,6 +1587,7 @@ def _click_2w_icon(page, *, timeout_ms: int) -> None:
     Open **2W** (two-wheeler) product path. Markup varies: ``img[alt]``, tiles, or icon buttons.
     When ``INSURANCE_NAV_IFRAME_SELECTOR`` is set, try 2W locators inside that iframe first.
     """
+    _mark_hit("_click_2w_icon")
     _insurance_click_settle(page)
 
     def _try_click(loc, label: str) -> bool:
@@ -1604,6 +1704,7 @@ def _expand_misp_policy_issuance_nav_if_collapsed(page, *, timeout_ms: int) -> N
     (``#navbarVerticalNav``, ``data-tooltip="Policy Issuance"``, ``aria-expanded="false"``).
     Expand that section so **New Policy** is visible.
     """
+    _mark_hit("_expand_misp_policy_issuance_nav_if_collapsed")
     to = min(max(100, int(timeout_ms)), 6_000)
     try:
         nav = page.locator("#navbarVerticalNav").first
@@ -1663,6 +1764,7 @@ def _expand_misp_policy_issuance_nav_if_collapsed(page, *, timeout_ms: int) -> N
 
 
 def _click_new_policy(page, *, timeout_ms: int) -> None:
+    _mark_hit("_click_new_policy")
     _expand_misp_policy_issuance_nav_if_collapsed(page, timeout_ms=timeout_ms)
     loc = page.get_by_text("New Policy", exact=True)
     loc.first.wait_for(state="visible", timeout=timeout_ms)
@@ -1673,6 +1775,7 @@ def _click_new_policy(page, *, timeout_ms: int) -> None:
 
 def _misp_snapshot_context_pages(page) -> list:
     """Copy of ``context.pages`` for before/after tab detection (MISP opens 2W / flows in new tabs)."""
+    _mark_hit("_misp_snapshot_context_pages")
     try:
         return list(page.context.pages)
     except Exception:
@@ -1681,6 +1784,7 @@ def _misp_snapshot_context_pages(page) -> list:
 
 def _tab_url_is_dms_siebel_not_insurance(url: str) -> bool:
     """When DMS and Insurance share one browser, never follow Siebel / Hero Connect tabs for MISP steps."""
+    _mark_hit("_tab_url_is_dms_siebel_not_insurance")
     u = (url or "").lower()
     return (
         "swecmd=" in u
@@ -1702,6 +1806,7 @@ def _misp_try_use_insurance_tab_page(
     If ``p`` is not in ``before``, loaded enough to read URL, and matches insurance ``base``, return ``p``.
     Otherwise return ``None`` (Siebel/DMS/blank URLs are rejected).
     """
+    _mark_hit("_misp_try_use_insurance_tab_page")
     if p in before:
         return None
     try:
@@ -1709,10 +1814,7 @@ def _misp_try_use_insurance_tab_page(
             return None
     except Exception:
         return None
-    try:
-        p.wait_for_load_state("domcontentloaded", timeout=min(8_000, cap_ms))
-    except Exception:
-        pass
+    _wait_load_optional(p, min(8_000, cap_ms))
     try:
         u = (p.url or "").strip()
     except Exception:
@@ -1760,6 +1862,7 @@ def _misp_resolve_page_after_possible_new_tab(
     Callers log **resolver-only** duration to ``Playwright_insurance.txt`` as ``resolver_ms`` on the
     ``tab_resolve`` line (wall time since flow start is separate).
     """
+    _mark_hit("_misp_resolve_page_after_possible_new_tab")
     base = (portal_base_url or "").strip()
     if not base:
         base = (INSURANCE_BASE_URL or "").strip()
@@ -1861,6 +1964,7 @@ def _misp_resolve_page_after_possible_new_tab(
 
 def _norm_option_label(s: str) -> str:
     """Collapse internal whitespace for matching Playwright label vs fuzzy pick."""
+    _mark_hit("_norm_option_label")
     return re.sub(r"\s+", " ", (s or "").strip())
 
 
@@ -1872,6 +1976,7 @@ def _select_option_fuzzy_in_select(
     timeout_ms: int,
     fuzzy_min_score: float = 0.42,
 ) -> bool:
+    _mark_hit("_select_option_fuzzy_in_select")
     if not (query or "").strip():
         return False
     try:
@@ -2015,6 +2120,7 @@ def _kyc_find_insurance_company_select_locator(kyc_fr):
     Resolve the Insurance Company native ``<select>`` in the KYC frame (MISP: ``ddlproduct``).
     Label association may point at a non-select wrapper; prefer known ids.
     """
+    _mark_hit("_kyc_find_insurance_company_select_locator")
     for css in (
         "#ContentPlaceHolder1_ddlproduct",
         "select#ContentPlaceHolder1_ddlproduct",
@@ -2042,28 +2148,11 @@ def _kyc_find_insurance_company_select_locator(kyc_fr):
 
 def _kyc_collect_insurer_native_select_option_labels(kyc_fr) -> list[str]:
     """Text of each ``<option>`` under the Insurance Company ``<select>`` (for in-code fuzzy)."""
+    _mark_hit("_kyc_collect_insurer_native_select_option_labels")
     sel = _kyc_find_insurance_company_select_locator(kyc_fr)
     if sel is None:
         return []
-    texts: list[str] = []
-    try:
-        raw = sel.locator("option").evaluate_all(
-            "els => els.map(e => (e.textContent || '').trim()).filter(Boolean)"
-        )
-        for x in raw or []:
-            t = str(x).strip()
-            if t and not t.lower().startswith("--select"):
-                texts.append(t)
-    except Exception:
-        try:
-            n = sel.locator("option").count()
-            for i in range(min(n, 400)):
-                t = (sel.locator("option").nth(i).inner_text() or "").strip()
-                if t and not t.lower().startswith("--select"):
-                    texts.append(t)
-        except Exception:
-            pass
-    return texts
+    return _collect_select_option_labels(sel, skip_select_prefix=True)
 
 
 def _kyc_try_select_insurer_fuzzy_on_insurance_company_select(
@@ -2079,6 +2168,7 @@ def _kyc_try_select_insurer_fuzzy_on_insurance_company_select(
     (reads ``<option>`` labels inside ``_select_option_fuzzy_in_select``). Prefer this before
     listbox-only scrapers and long ArrowDown loops.
     """
+    _mark_hit("_kyc_try_select_insurer_fuzzy_on_insurance_company_select")
     if not (insurer or "").strip():
         return False
     to = min(int(timeout_ms), 12_000)
@@ -2117,6 +2207,7 @@ def _fill_insurance_company_fuzzy_any_visible_select(
     KYC layouts (e.g. ``ekycpage.aspx``) often break ``select:near(:text(...))``; the Insurance
     Company control may still be a native ``select`` (possibly hidden).
     """
+    _mark_hit("_fill_insurance_company_fuzzy_any_visible_select")
     if not (insurer or "").strip():
         return False
     try:
@@ -2181,6 +2272,7 @@ def _kyc_try_set_insurer_via_dom_in_frame(
     Full-frame ``<select>`` scan and keyboard typing are orchestrated by ``_fill_kyc_ekyc_keyboard_sop``
     via ``_kyc_insurer_attempt_order`` (fuzzy scan last).
     """
+    _mark_hit("_kyc_try_set_insurer_via_dom_in_frame")
     if not (insurer or "").strip():
         return False
     to = min(int(timeout_ms), 12_000)
@@ -2218,6 +2310,7 @@ def _kyc_try_set_insurer_via_dom_in_frame(
 
 def _kyc_force_blur_insurance_company_dropdown(kyc_fr) -> None:
     """Blur active element and click a frame corner so ASP.NET combobox/listbox closes and commits."""
+    _mark_hit("_kyc_force_blur_insurance_company_dropdown")
     try:
         kyc_fr.evaluate(
             """() => {
@@ -2235,6 +2328,7 @@ def _kyc_force_blur_insurance_company_dropdown(kyc_fr) -> None:
 
 def _insurer_type_query_variants(insurer: str) -> list[str]:
     """Short search strings for typeahead (portal may filter on prefix; DB name may be longer)."""
+    _mark_hit("_insurer_type_query_variants")
     s = (insurer or "").strip()
     if not s:
         return []
@@ -2270,6 +2364,7 @@ def _kyc_collect_dropdown_option_texts(
     When ``trace_note`` is set, logs elapsed ms and option count to ``Playwright_insurance.txt`` (list scan
     + per-option visibility can be slow).
     """
+    _mark_hit("_kyc_collect_dropdown_option_texts")
     t0 = time.perf_counter()
     texts: list[str] = []
     try:
@@ -2319,6 +2414,7 @@ def _kyc_collect_dropdown_option_texts(
 
 def _click_role_option_matching(page, pick: str, *, timeout_ms: int) -> bool:
     """Click a visible listbox option whose text matches the fuzzy-picked label."""
+    _mark_hit("_click_role_option_matching")
     if not (pick or "").strip():
         return False
     try:
@@ -2372,6 +2468,7 @@ def _locator_insurance_company_text_control(page):
     KYC 'Insurance Company' is often the first field; avoid grabbing another combobox
     (e.g. KYC Partner) by using label / combobox name first.
     """
+    _mark_hit("_locator_insurance_company_text_control")
     try:
         by_label = page.get_by_label(re.compile(r"Insurance\s*Company\s*\*?", re.I))
         if by_label.count() > 0 and by_label.first.is_visible(timeout=2_000):
@@ -2412,6 +2509,7 @@ def _fill_insurance_company_typeahead_fuzzy(page, insurer: str, *, timeout_ms: i
     Combobox / typeahead: type search variants, then pick the option that best matches
     the full details-sheet insurer string (same as native <select> fuzzy).
     """
+    _mark_hit("_fill_insurance_company_typeahead_fuzzy")
     if not (insurer or "").strip():
         return False
     ctrl = _locator_insurance_company_text_control(page)
@@ -2478,6 +2576,7 @@ def _kyc_url_looks_like_ekyc_page(page) -> bool:
     Keep in sync with ``_insurance_kyc_screen_ready_js`` URL hints so we do not wait for
     ``kycpage.aspx`` / ``/ekyc`` and then fill via DOM-only paths.
     """
+    _mark_hit("_kyc_url_looks_like_ekyc_page")
     try:
         u = (page.url or "").lower()
         if "policy.html" in u or "misppolicy" in u:
@@ -2495,6 +2594,7 @@ def _kyc_url_looks_like_ekyc_page(page) -> bool:
 
 def _insurance_page_has_dummy_kyc_training_html(page) -> bool:
     """Training-only markup (``#ins-company``). Real MISP ``ekycpage`` does not expose these ids."""
+    _mark_hit("_insurance_page_has_dummy_kyc_training_html")
     try:
         return page.locator("#ins-company").count() > 0
     except Exception:
@@ -2503,6 +2603,7 @@ def _insurance_page_has_dummy_kyc_training_html(page) -> bool:
 
 def _insurance_frame_from_iframe_selector(page, css: str):
     """Resolve a Playwright ``Frame`` from host-page iframe CSS (``INSURANCE_KYC_IFRAME_SELECTOR`` in this module)."""
+    _mark_hit("_insurance_frame_from_iframe_selector")
     if not (css or "").strip():
         return None
     try:
@@ -2524,6 +2625,7 @@ def _kyc_preferred_kyc_frame(page):
     If ``INSURANCE_KYC_IFRAME_SELECTOR`` is set (module constant / trial run), use that iframe first — avoids scanning
     every frame for **Insurance Company** text.
     """
+    _mark_hit("_kyc_preferred_kyc_frame")
     sel = INSURANCE_KYC_IFRAME_SELECTOR
     if sel:
         fr = _insurance_frame_from_iframe_selector(page, sel)
@@ -2550,6 +2652,7 @@ def _kyc_preferred_kyc_frame(page):
 
 def _kyc_read_focused_control_text(page) -> str:
     """``activeElement`` text in the KYC form frame (main-only ``evaluate`` misses iframe focus)."""
+    _mark_hit("_kyc_read_focused_control_text")
     fr = _kyc_preferred_kyc_frame(page)
     try:
         raw = fr.evaluate(
@@ -2573,6 +2676,7 @@ def _kyc_insurer_display_matches(insurer: str, displayed: str) -> bool:
     Uses a **lower** ``min_score`` than generic dropdown matching (see ``KYC_INSURER_FUZZY_MIN_SCORE``)
     plus a **SequenceMatcher** fallback for DB typos vs full insurer legal names on MISP.
     """
+    _mark_hit("_kyc_insurer_display_matches")
     d = (displayed or "").strip()
     if not d or d.lower().startswith("--select"):
         return False
@@ -2604,6 +2708,7 @@ def _kyc_insurer_display_matches(insurer: str, displayed: str) -> bool:
 
 
 def _kyc_press_tab_n(page, n: int, *, pause_ms: int = 90) -> None:
+    _mark_hit("_kyc_press_tab_n")
     for _ in range(max(0, n)):
         try:
             page.keyboard.press("Tab")
@@ -2614,6 +2719,7 @@ def _kyc_press_tab_n(page, n: int, *, pause_ms: int = 90) -> None:
 
 def _kyc_frame_active_element_is_editable(fr) -> bool:
     """True when focus is on a control where Ctrl+A selects field text, not the whole page."""
+    _mark_hit("_kyc_frame_active_element_is_editable")
     try:
         return bool(
             fr.evaluate(
@@ -2634,6 +2740,7 @@ def _kyc_frame_active_element_is_editable(fr) -> bool:
 
 def _kyc_frame_active_element_accepts_mobile_digits(fr) -> bool:
     """True when focus is on a text-like input — not ``<select>``, radio, or checkbox (avoid typing mobile into insurer ddl)."""
+    _mark_hit("_kyc_frame_active_element_accepts_mobile_digits")
     try:
         return bool(
             fr.evaluate(
@@ -2662,6 +2769,7 @@ def _kyc_blur_if_insurer_product_select_focused(kyc_fr) -> None:
     MISP often leaves focus on ``#ContentPlaceHolder1_ddlproduct`` after insurer pick; Tab chain then
     fails and ``keyboard.type`` can target the wrong ``<select>``. Blur so downstream DOM steps see a sane focus.
     """
+    _mark_hit("_kyc_blur_if_insurer_product_select_focused")
     try:
         kyc_fr.evaluate(
             """() => {
@@ -2680,6 +2788,7 @@ def _kyc_blur_if_insurer_product_select_focused(kyc_fr) -> None:
 
 def _kyc_blur_insurer_product_select_in_frame(kyc_fr) -> None:
     """Always blur the Insurance Company ``<select>`` by id/name — activeElement can lie after Enter/Tab."""
+    _mark_hit("_kyc_blur_insurer_product_select_in_frame")
     try:
         kyc_fr.evaluate(
             """() => {
@@ -2701,6 +2810,7 @@ def _kyc_aspnet_signal_insurer_committed(kyc_fr, page) -> None:
     Order: (1) ``input``/``change`` on ``document.activeElement`` if INPUT/TEXTAREA/SELECT, (2) same on
     ``#ContentPlaceHolder1_ddlproduct``, (3) light window ``blur`` events.
     """
+    _mark_hit("_kyc_aspnet_signal_insurer_committed")
     commit_report: dict[str, Any] = {}
     try:
         commit_report["frame"] = kyc_fr.evaluate(
@@ -2766,6 +2876,7 @@ def _kyc_tab_out_of_insurer_after_escape(page, kyc_fr) -> None:
     After Enter/Escape on Insurance Company, focus often stays in the combobox until the user Tabs.
     Re-focus the KYC document (iframe click when needed) then send Tab — not configurable via .env.
     """
+    _mark_hit("_kyc_tab_out_of_insurer_after_escape")
     # #region agent log
     _dbg_kyc_insurer_tab_ndjson(
         "H3",
@@ -2817,6 +2928,7 @@ def _kyc_fill_mobile_digits_in_frame(kyc_fr, digits: str, *, timeout_ms: int) ->
     label/placeholder matchers miss after a partial postback. Do not use ``txtFrameNo`` here — that
     control is VIN/Chassis on the post–KYC page, not mobile.
     """
+    _mark_hit("_kyc_fill_mobile_digits_in_frame")
     to = min(int(timeout_ms), 60_000)
     d = (digits or "").strip()
     if not d:
@@ -2851,6 +2963,7 @@ def _kyc_fill_mobile_digits_in_frame(kyc_fr, digits: str, *, timeout_ms: int) ->
 
 def _kyc_try_click_insurance_company_field(kyc_fr, *, timeout_ms: int) -> bool:
     """Focus the insurer combobox/input inside the KYC frame (avoids Tab landing on body)."""
+    _mark_hit("_kyc_try_click_insurance_company_field")
     to = min(int(timeout_ms), 15_000)
     tries = (
         lambda: kyc_fr.get_by_label(re.compile(r"Insurance\s*Company", re.I)),
@@ -2878,6 +2991,7 @@ def _kyc_set_ovd_aadhaar_card_in_frame(kyc_fr, *, timeout_ms: int) -> bool:
     Prefer this over Tab+ArrowDown: ArrowDown was moving the **KYC Partner** ``<select>`` (e.g. to
     Hyperverge) when focus landed there instead of on OVD.
     """
+    _mark_hit("_kyc_set_ovd_aadhaar_card_in_frame")
     to = min(int(timeout_ms), 60_000)
     ovd_ok = False
     for sel_css in (
@@ -2944,6 +3058,7 @@ def _kyc_set_ovd_aadhaar_card_in_frame(kyc_fr, *, timeout_ms: int) -> bool:
 
 
 def _kyc_file_input_count(root) -> int:
+    _mark_hit("_kyc_file_input_count")
     try:
         n = root.locator('input[type="file"]').count()
         return max(0, int(n))
@@ -2956,6 +3071,7 @@ def _kyc_locator_file_inputs_best(page):
     Prefer ``input[type=file]`` inside the KYC frame; MISP ``ekycpage`` often hosts the form in an iframe
     while ``page.locator`` only sees the main document.
     """
+    _mark_hit("_kyc_locator_file_inputs_best")
     kyc_fr = _kyc_preferred_kyc_frame(page)
     try:
         loc_fr = kyc_fr.locator('input[type="file"]')
@@ -3001,6 +3117,7 @@ _KYC_FILE_INPUTS_SCRAPE_JS = r"""() => {
 
 def _kyc_scrape_file_inputs_metadata(kyc_fr) -> list[dict[str, Any]]:
     """Snapshot each ``input[type=file]`` in the KYC frame (id, name, inferred label text)."""
+    _mark_hit("_kyc_scrape_file_inputs_metadata")
     try:
         raw = kyc_fr.evaluate(_KYC_FILE_INPUTS_SCRAPE_JS)
         if isinstance(raw, list):
@@ -3011,6 +3128,7 @@ def _kyc_scrape_file_inputs_metadata(kyc_fr) -> list[dict[str, Any]]:
 
 
 def _kyc_meta_match_blob(m: dict[str, Any]) -> str:
+    _mark_hit("_kyc_meta_match_blob")
     parts = [
         str(m.get("id") or ""),
         str(m.get("name") or ""),
@@ -3027,6 +3145,7 @@ def _kyc_resolve_upload_nth_order(meta: list[dict[str, Any]]) -> tuple[list[int]
 
     Uses label/id/name text from :func:`_kyc_scrape_file_inputs_metadata`. Falls back to ``[0,1,2]``.
     """
+    _mark_hit("_kyc_resolve_upload_nth_order")
     n = len(meta)
     if n == 0:
         return [], "empty"
@@ -3076,6 +3195,7 @@ def _kyc_note_file_inputs_scrape(
     strategy: str,
 ) -> None:
     """Append compact JSON to ``Playwright_insurance.txt`` for operator selector work."""
+    _mark_hit("_kyc_note_file_inputs_scrape")
     if not ocr_output_dir or not subfolder or not str(subfolder).strip():
         return
     try:
@@ -3097,6 +3217,7 @@ def _kyc_note_file_inputs_scrape(
 
 def _kyc_dispatch_file_input_dom_events(file_input) -> None:
     """Fire ``input``/``change`` on the file control so ASP.NET / client validators see the new ``FileList``."""
+    _mark_hit("_kyc_dispatch_file_input_dom_events")
     try:
         file_input.evaluate(
             """el => {
@@ -3111,6 +3232,7 @@ def _kyc_dispatch_file_input_dom_events(file_input) -> None:
 
 def _kyc_file_input_has_files(file_input) -> bool | None:
     """``True`` / ``False`` if readable; ``None`` if evaluation failed."""
+    _mark_hit("_kyc_file_input_has_files")
     try:
         v = file_input.evaluate("el => !!(el && el.files && el.files.length > 0)")
         return bool(v)
@@ -3132,6 +3254,7 @@ def _kyc_set_one_file_input_chooser_then_direct(
     fails or leaves the portal showing *Files could not be loaded*. We **set files first**, dispatch
     ``input``/``change``, verify ``files.length``, then optionally retry via **file chooser** if needed.
     """
+    _mark_hit("_kyc_set_one_file_input_chooser_then_direct")
     to = min(int(timeout_ms), 60_000)
 
     def _attach_direct() -> str | None:
@@ -3203,6 +3326,7 @@ def _kyc_js_click_primary_cta_in_document(root) -> bool:
     Last-resort: click the first visible submit/button/link whose label/value looks like KYC CTA.
     MISP often uses **KYC Verification** before redirect and **Proceed** after; values live on ``<input>``.
     """
+    _mark_hit("_kyc_js_click_primary_cta_in_document")
     try:
         return bool(
             root.evaluate(
@@ -3248,6 +3372,7 @@ def _kyc_click_proceed_submit_after_kyc_upload(
     Click KYC primary CTA after uploads (KYC frame first, then host page). MISP labels vary:
     **Proceed**, **KYC Verification**, **Submit**, **Continue**, **Verify**; also ``<input>`` ``value=``.
     """
+    _mark_hit("_kyc_click_proceed_submit_after_kyc_upload")
     to = min(int(timeout_ms), 45_000)
     name_patterns = (
         re.compile(r"^\s*Proceed\s*$", re.I),
@@ -3309,6 +3434,7 @@ def _kyc_set_ovd_aadhaar_extraction_in_frame(kyc_fr, *, timeout_ms: int) -> bool
     Used only **after** the first pass (**AADHAAR CARD** + mobile) when the verified message did not
     appear — not for the initial OVD selection (initial pass remains **AADHAAR CARD** only).
     """
+    _mark_hit("_kyc_set_ovd_aadhaar_extraction_in_frame")
     to = min(int(timeout_ms), 60_000)
     ovd_ok = False
     for sel_css in (
@@ -3389,6 +3515,7 @@ def _kyc_try_aadhaar_extraction_upload_recovery(
 
     Returns True when at least one ``input[type=file]`` appears (KYC frame or main page) after the switch.
     """
+    _mark_hit("_kyc_try_aadhaar_extraction_upload_recovery")
     to = min(int(timeout_ms), 60_000)
     d = re.sub(r"\D", "", (digits or "").strip())[:12]
     if not d:
@@ -3409,11 +3536,8 @@ def _kyc_try_aadhaar_extraction_upload_recovery(
     except Exception:
         pass
     _t(page, HERO_MISP_UI_SETTLE_MS)
-    try:
-        cap_dom = max(200, min(int(INSURANCE_KYC_POST_MOBILE_DOM_MS), 30_000))
-        page.wait_for_load_state("domcontentloaded", timeout=min(cap_dom, to))
-    except Exception:
-        pass
+    cap_dom = max(200, min(int(INSURANCE_KYC_POST_MOBILE_DOM_MS), 30_000))
+    _wait_load_optional(page, min(cap_dom, to))
     _t(page, HERO_MISP_UI_SETTLE_MS)
     poll_deadline = time.monotonic() + min(12.0, to / 1000.0)
     while time.monotonic() < poll_deadline:
@@ -3431,6 +3555,7 @@ def _kyc_restore_kyc_partner_to_default_label(kyc_fr, page, *, timeout_ms: int) 
 
     Tab/ArrowDown or portal postback can change this control; operators expect the portal default.
     """
+    _mark_hit("_kyc_restore_kyc_partner_to_default_label")
     label = (KYC_DEFAULT_KYC_PARTNER_LABEL or "Signzy").strip()
     if not label:
         return
@@ -3466,6 +3591,7 @@ def _kyc_restore_kyc_partner_to_default_label(kyc_fr, page, *, timeout_ms: int) 
 
 def _kyc_try_click_mobile_field(kyc_fr, *, timeout_ms: int) -> bool:
     """Focus mobile input in the KYC frame before typing."""
+    _mark_hit("_kyc_try_click_mobile_field")
     to = min(int(timeout_ms), 15_000)
     tries = (
         lambda: kyc_fr.get_by_label(re.compile(r"^Mobile\s*(Number|No\.?|Phone)?\s*$", re.I)),
@@ -3485,6 +3611,7 @@ def _kyc_try_click_mobile_field(kyc_fr, *, timeout_ms: int) -> bool:
 
 
 def _kyc_ovd_focused_text_is_aadhaar_card(shown: str) -> bool:
+    _mark_hit("_kyc_ovd_focused_text_is_aadhaar_card")
     u = (shown or "").strip().upper()
     if not u:
         return False
@@ -3510,6 +3637,7 @@ def _kyc_dom_fill_ovd_mobile_consent_in_frame(
     because focus/tab order differs or the control is not a plain ``<select>`` read via
     ``activeElement``.
     """
+    _mark_hit("_kyc_dom_fill_ovd_mobile_consent_in_frame")
     pg = kyc_fr.page
     to = min(int(timeout_ms), 60_000)
     mobile = (mobile or "").strip()
@@ -3617,6 +3745,7 @@ def _kyc_insurer_label_for_misp(values: dict) -> str:
     Portal label for Insurance Company: dealer ``prefer_insurer`` when it fuzzy-matches the merged
     details-sheet insurer (≥20% ``SequenceMatcher``), else ``insurer`` from ``build_insurance_fill_values``.
     """
+    _mark_hit("_kyc_insurer_label_for_misp")
     prefer = clean_text(values.get("prefer_insurer"))
     merged = clean_text(values.get("insurer_merged_before_prefer") or values.get("insurer"))
     current = clean_text(values.get("insurer"))
@@ -3638,6 +3767,7 @@ def _kyc_run_insurer_keyboard_match_attempt(
     Keyboard focus chain + type + ArrowDown insurer match. Does **not** run full-frame fuzzy select
     (that is a separate strategy step). Returns ``(error_msg_or_none, matched, keyboard_native_select_committed)``.
     """
+    _mark_hit("_kyc_run_insurer_keyboard_match_attempt")
     keyboard_native_select_committed = False
     matched = False
     logger.debug("Hero Insurance: KYC keyboard SOP — starting (focus chain).")
@@ -3845,6 +3975,7 @@ def _fill_kyc_ekyc_keyboard_sop(
     successful strategy (**dom_native**, **keyboard_chain**, or **fuzzy_scan**). Full-frame
     ``_fill_insurance_company_fuzzy_any_visible_select`` is **always** the last step when earlier steps fail.
     """
+    _mark_hit("_fill_kyc_ekyc_keyboard_sop")
     insurer_label = _kyc_insurer_label_for_misp(values)
     mobile = (values.get("mobile_number") or "").strip()
     if not insurer_label:
@@ -4178,6 +4309,7 @@ def _fill_insurance_company_and_ovd_mobile_consent(
     t0_flow: float | None = None,
 ) -> str | None:
     """Returns error message or None on success."""
+    _mark_hit("_fill_insurance_company_and_ovd_mobile_consent")
     kyc_local_scan_paths = _kyc_local_scan_paths_from_values(values)
     kyc_insurer_resolved = _kyc_insurer_label_for_misp(values)
     append_playwright_insurance_line_or_dealer_fallback(
@@ -4414,6 +4546,7 @@ def _kyc_proceed_or_upload(
     (see ``_kyc_scrape_file_inputs_metadata`` / ``_kyc_resolve_upload_nth_order``); order is logged to
     ``Playwright_insurance.txt`` when ``ocr_output_dir`` / ``subfolder`` are set.
     """
+    _mark_hit("_kyc_proceed_or_upload")
     try:
         body = page.evaluate("() => (document.body && document.body.innerText) ? document.body.innerText : ''")
         txt = (body or "").lower()
@@ -4427,19 +4560,13 @@ def _kyc_proceed_or_upload(
                 timeout=timeout_ms
             )
             logger.info("Hero Insurance: KYC already done — clicked Proceed.")
-            try:
-                page.wait_for_load_state("domcontentloaded", timeout=min(25_000, timeout_ms * 4))
-            except Exception:
-                pass
+            _wait_load_optional(page, min(25_000, timeout_ms * 4))
             _t(page, 500)
             return None
         except Exception:
             try:
                 page.get_by_text(re.compile(r"^\s*Proceed\s*$", re.I)).first.click(timeout=timeout_ms)
-                try:
-                    page.wait_for_load_state("domcontentloaded", timeout=min(25_000, timeout_ms * 4))
-                except Exception:
-                    pass
+                _wait_load_optional(page, min(25_000, timeout_ms * 4))
                 _t(page, 500)
                 return None
             except Exception as exc:
@@ -4511,10 +4638,7 @@ def _kyc_proceed_or_upload(
     )
     if proceed_err:
         return proceed_err
-    try:
-        page.wait_for_load_state("domcontentloaded", timeout=min(25_000, timeout_ms * 4))
-    except Exception:
-        pass
+    _wait_load_optional(page, min(25_000, timeout_ms * 4))
     _t(page, 400)
     return None
 
@@ -4536,6 +4660,7 @@ def _run_hero_misp_portal_after_open(
     ``portal_base_url`` is the insurance site origin (e.g. from ``pre_process`` ``match_base``) so new-tab handoff
     never attaches to a Siebel/DMS tab when both are open.
     """
+    _mark_hit("_run_hero_misp_portal_after_open")
     t0_flow = time.monotonic()
     _insurance_click_settle(page)
     _hero_insurance_log_page_diagnostics(
@@ -4572,54 +4697,22 @@ def _run_hero_misp_portal_after_open(
             )
     _hero_misp_after_sign_in_settle(page)
 
-    pages_before_2w = _misp_snapshot_context_pages(page)
-    try:
-        _click_2w_icon(page, timeout_ms=timeout_ms)
-    except Exception as exc:
-        return f"2W Icon: {exc!s}"
-
-    t0_res_2w = time.monotonic()
-    page, tab_branch_2w = _misp_resolve_page_after_possible_new_tab(
-        pages_before_2w,
-        page,
-        portal_base_url=portal_base_url,
-        timeout_ms=timeout_ms,
-        step_label="2W",
+    page, err_2w = _misp_click_nav_step(
+        page, _click_2w_icon, "2W Icon",
+        portal_base_url=portal_base_url, timeout_ms=timeout_ms,
+        ocr_output_dir=ocr_output_dir, subfolder=subfolder, t0_flow=t0_flow,
     )
-    res_ms_2w = int((time.monotonic() - t0_res_2w) * 1000)
-    _insurance_tab_resolve_note(
-        ocr_output_dir,
-        subfolder,
-        t0_flow,
-        "2W",
-        tab_branch_2w,
-        resolver_ms=res_ms_2w,
-    )
+    if err_2w:
+        return err_2w
     _insurance_click_settle(page)
 
-    pages_before_np = _misp_snapshot_context_pages(page)
-    try:
-        _click_new_policy(page, timeout_ms=timeout_ms)
-    except Exception as exc:
-        return f"New Policy: {exc!s}"
-
-    t0_res_np = time.monotonic()
-    page, tab_branch_np = _misp_resolve_page_after_possible_new_tab(
-        pages_before_np,
-        page,
-        portal_base_url=portal_base_url,
-        timeout_ms=timeout_ms,
-        step_label="New Policy",
+    page, err_np = _misp_click_nav_step(
+        page, _click_new_policy, "New Policy",
+        portal_base_url=portal_base_url, timeout_ms=timeout_ms,
+        ocr_output_dir=ocr_output_dir, subfolder=subfolder, t0_flow=t0_flow,
     )
-    res_ms_np = int((time.monotonic() - t0_res_np) * 1000)
-    _insurance_tab_resolve_note(
-        ocr_output_dir,
-        subfolder,
-        t0_flow,
-        "New Policy",
-        tab_branch_np,
-        resolver_ms=res_ms_np,
-    )
+    if err_np:
+        return err_np
 
     if not values:
         logger.info("Hero Insurance: no DB values — stopping after New Policy.")
@@ -4638,10 +4731,7 @@ def _run_hero_misp_portal_after_open(
         return err
 
     _insurance_click_settle(page)
-    try:
-        page.wait_for_load_state("domcontentloaded", timeout=min(25_000, timeout_ms * 4))
-    except Exception:
-        pass
+    _wait_load_optional(page, min(25_000, timeout_ms * 4))
     _insurance_click_settle(page)
     return None
 
@@ -4649,6 +4739,7 @@ def _run_hero_misp_portal_after_open(
 def _select_by_label_fuzzy(
     page, label_pattern: str, query: str, *, timeout_ms: int
 ) -> bool:
+    _mark_hit("_select_by_label_fuzzy")
     if not (query or "").strip():
         return False
     try:
@@ -4667,6 +4758,7 @@ def _select_by_label_fuzzy(
 def _fill_input_by_label_patterns(
     page, label_patterns: tuple[str, ...], value: str, *, timeout_ms: int
 ) -> bool:
+    _mark_hit("_fill_input_by_label_patterns")
     if not (value or "").strip():
         return False
     for lp in label_patterns:
@@ -4688,6 +4780,7 @@ def _proposal_log(
     step_id: str,
     detail: str,
 ) -> None:
+    _mark_hit("_proposal_log")
     msg = f"proposal step={step_id} {detail}"
     logger.info("Hero Insurance: %s", msg)
     append_playwright_insurance_line(ocr_output_dir, subfolder, "NOTE", msg)
@@ -4695,6 +4788,7 @@ def _proposal_log(
 
 def _read_locator_value_snapshot(locator) -> dict[str, Any]:
     """Read back value/checked/selected text for proposal verification (single-element locator)."""
+    _mark_hit("_read_locator_value_snapshot")
     try:
         tag = (
             locator.evaluate("el => el && el.tagName ? el.tagName.toLowerCase() : ''") or ""
@@ -4735,6 +4829,7 @@ def _read_locator_value_snapshot(locator) -> dict[str, Any]:
 
 def _proposal_read_input_value_best_effort(el) -> str:
     """``input_value()`` then DOM ``.value`` (some MISP fields stay empty on Playwright read until events)."""
+    _mark_hit("_proposal_read_input_value_best_effort")
     try:
         s = (el.input_value() or "").strip()
         if s:
@@ -4748,6 +4843,7 @@ def _proposal_read_input_value_best_effort(el) -> str:
 
 
 def _proposal_expected_matches_readback(expected: str, readback: str) -> bool:
+    _mark_hit("_proposal_expected_matches_readback")
     e = normalize_for_fuzzy_match(expected)
     r = normalize_for_fuzzy_match(readback)
     if not e or not r:
@@ -4764,6 +4860,7 @@ def _proposal_expected_matches_readback(expected: str, readback: str) -> bool:
 
 def _proposal_first_label_control_locator(page, label_pattern: str):
     """First visible control matching ``get_by_label`` across proposal roots (page + nav iframe + frames)."""
+    _mark_hit("_proposal_first_label_control_locator")
     rx = re.compile(label_pattern, re.I)
     for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
         try:
@@ -4783,6 +4880,7 @@ def _proposal_first_label_control_locator(page, label_pattern: str):
 
 def _proposal_cph1_locator(root, id_suffix: str):
     """Stable ``#ctl00_ContentPlaceHolder1_<id_suffix>`` or ``[id$=_<suffix>]`` fallback."""
+    _mark_hit("_proposal_cph1_locator")
     fid = f"{HERO_MISP_CPH1}_{id_suffix}"
     loc = root.locator(f"#{fid}")
     if loc.count() > 0:
@@ -4791,6 +4889,7 @@ def _proposal_cph1_locator(root, id_suffix: str):
 
 
 def _proposal_scroll_visible(el, *, timeout_ms: int) -> None:
+    _mark_hit("_proposal_scroll_visible")
     try:
         el.scroll_into_view_if_needed(timeout=min(3_000, timeout_ms))
     except Exception:
@@ -4802,6 +4901,7 @@ def _proposal_checkbox_context_text(cb) -> str:
     Walk up from the checkbox through parents so **RTI Cover** / **NIC** match even when grid row index
     (``ctl02`` vs ``ctl03``) or insurer changes layout.
     """
+    _mark_hit("_proposal_checkbox_context_text")
     try:
         return (
             cb.evaluate(
@@ -4824,6 +4924,7 @@ def _proposal_checkbox_context_text(cb) -> str:
 
 def _proposal_dob_readback_matches_expected(want_norm: str, got: str) -> bool:
     """``txtDOB`` readback vs expected **dd/mm/yyyy** (same spirit as ``_proposal_step_fill_dob``)."""
+    _mark_hit("_proposal_dob_readback_matches_expected")
     if not want_norm or not got:
         return False
     if normalize_for_fuzzy_match(got) == normalize_for_fuzzy_match(want_norm):
@@ -4836,6 +4937,7 @@ def _proposal_dob_readback_matches_expected(want_norm: str, got: str) -> bool:
 
 def _proposal_read_dob_txt(page) -> str | None:
     """Best-effort current value of ``txtDOB`` across proposal roots."""
+    _mark_hit("_proposal_read_dob_txt")
     for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
         try:
             loc = _proposal_cph1_locator(root, "txtDOB")
@@ -4862,6 +4964,7 @@ def _proposal_step_fill_dob(
     timeout_ms: int,
 ) -> str | None:
     """Proposer **Date of Birth** — ``txtDOB`` (dd/mm/yyyy)."""
+    _mark_hit("_proposal_step_fill_dob")
     v = normalize_dob_for_misp(dob_raw)
     if not v:
         return None
@@ -4948,6 +5051,7 @@ def _proposal_step_fill_dob(
 
 
 def _proposal_hdfc_radio_any_checked(page) -> bool:
+    _mark_hit("_proposal_hdfc_radio_any_checked")
     for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
         try:
             loc = _proposal_cph1_locator(root, "rdoHdfcCCType")
@@ -4991,6 +5095,7 @@ def _proposal_step_select_fuzzy(
     cph1_id_suffix: str | None = None,
 ) -> str | None:
     """Set ``<select>`` by optional CPH1 id, then label + fuzzy option; read back selected text."""
+    _mark_hit("_proposal_step_select_fuzzy")
     q = (query or "").strip()
     if not q:
         return None
@@ -5224,6 +5329,7 @@ def _proposal_step_fill_input(
     timeout_ms: int,
     cph1_id_suffix: str | None = None,
 ) -> str | None:
+    _mark_hit("_proposal_step_fill_input")
     v = (value or "").strip()
     if not v:
         return None
@@ -5379,6 +5485,7 @@ def _proposal_step_fill_input(
 
 def _proposal_cph1_checkbox_readback_pair(cb) -> tuple[bool | None, bool | None]:
     """DOM ``.checked`` and Playwright ``is_checked()`` (None if a read fails)."""
+    _mark_hit("_proposal_cph1_checkbox_readback_pair")
     dom_v: bool | None = None
     try:
         dom_v = bool(cb.evaluate("e => !!(e && e.checked)"))
@@ -5403,6 +5510,7 @@ def _proposal_wait_cph1_checkbox_stable(
     After toggling, ASP.NET can revert on the next tick — require **two consecutive** agreeing
     readbacks (DOM + PW when both available) with short settles between polls.
     """
+    _mark_hit("_proposal_wait_cph1_checkbox_stable")
     consecutive = 0
     last_dom: bool | None = None
     last_pw: bool | None = None
@@ -5427,6 +5535,7 @@ def _proposal_wait_cph1_checkbox_stable(
 
 def _proposal_first_visible_locator_nth(loc, *, max_n: int = 6, vis_timeout_ms: int = 600):
     """Prefer a **visible** match when the same id appears in multiple roots / duplicate nodes."""
+    _mark_hit("_proposal_first_visible_locator_nth")
     try:
         n = loc.count()
     except Exception:
@@ -5457,6 +5566,7 @@ def _proposal_step_checkbox(
     timeout_ms: int,
 ) -> str | None:
     """Find checkbox by label/row text, set checked state, verify. Fails if control not found."""
+    _mark_hit("_proposal_step_checkbox")
     rx = re.compile(text_pattern, re.I | re.M)
     last_exc = ""
     for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
@@ -5531,6 +5641,7 @@ def _proposal_step_checkbox_uncheck_if_present(
     If a visible checkbox matches ``text_pattern``, ensure it is **unchecked** and verify.
     If **no** such checkbox exists, log skip — **not** an error (portal builds vary).
     """
+    _mark_hit("_proposal_step_checkbox_uncheck_if_present")
     if not (text_pattern or "").strip():
         return None
     rx = re.compile(text_pattern, re.I | re.M)
@@ -5612,6 +5723,7 @@ def _proposal_step_checkbox_by_cph1_id(
     Returns ``None`` on success, ``PROPOSAL_CHECKBOX_ID_NOT_FOUND`` if no control matched in any proposal
     root (caller may fall back to label/regex), else an error string.
     """
+    _mark_hit("_proposal_step_checkbox_by_cph1_id")
     last_err = ""
     seen = False
     for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
@@ -5693,6 +5805,7 @@ def _proposal_addon_checkbox_id_or_label(
     timeout_ms: int,
 ) -> str | None:
     """Prefer stable CPH1 id from MispPolicy scrape; fall back to row/label regex."""
+    _mark_hit("_proposal_addon_checkbox_id_or_label")
     r = _proposal_step_checkbox_by_cph1_id(
         page,
         id_suffix,
@@ -5727,6 +5840,7 @@ def _proposal_step_nominee_gender_radio(
     timeout_ms: int,
 ) -> str | None:
     """Nominee **Gender** is radio pair ``rdbtnMale`` / ``rdbtnFemale`` (not a ``<select>``)."""
+    _mark_hit("_proposal_step_nominee_gender_radio")
     g = normalize_for_fuzzy_match((gender_raw or "").strip())
     if not g:
         return None
@@ -5779,6 +5893,7 @@ def _proposal_step_usgi_uncheck(
     timeout_ms: int,
 ) -> str | None:
     """CPA **USGI** checkbox (grid ``chlGMC`` ``ctl02``); force **unchecked** per SOP."""
+    _mark_hit("_proposal_step_usgi_uncheck")
     rid = _proposal_step_checkbox_by_cph1_id(
         page,
         "gridGMc_ctl02_chlGMC",
@@ -5857,6 +5972,7 @@ def _proposal_step_hero_cpi_addon_by_dealer_flag(
     timeout_ms: int,
 ) -> str | None:
     """``hero_cpi`` **Y** = check matching add-on row; **N** = uncheck if present."""
+    _mark_hit("_proposal_step_hero_cpi_addon_by_dealer_flag")
     flag = normalize_hero_cpi_flag(values.get("hero_cpi"))
     _proposal_log(
         ocr_output_dir,
@@ -5884,6 +6000,7 @@ def _proposal_step_email_hardcoded(
     timeout_ms: int,
 ) -> str | None:
     """Hero MISP uses ``type=text`` for **Email ID**; prefer CPH1 ``txtEmail`` then **Email ID** label."""
+    _mark_hit("_proposal_step_email_hardcoded")
     last_err = ""
     for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
         for factory in (
@@ -5931,6 +6048,7 @@ def _proposal_step_date_of_registration_today(
     *,
     timeout_ms: int,
 ) -> str | None:
+    _mark_hit("_proposal_step_date_of_registration_today")
     today = date.today()
     iso_d = today.isoformat()
     slash_d = today.strftime("%d/%m/%Y")
@@ -6019,6 +6137,7 @@ def _proposal_step_payment_mode_cc_if_present(
     timeout_ms: int,
 ) -> None:
     """``ddlPaymentMode`` must often be **CC** before **HDFC** radio is enabled (MispPolicy scrape). Best-effort."""
+    _mark_hit("_proposal_step_payment_mode_cc_if_present")
     for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
         try:
             loc = _proposal_cph1_locator(root, "ddlPaymentMode")
@@ -6051,6 +6170,7 @@ def _proposal_step_hdfc_payment(
     *,
     timeout_ms: int,
 ) -> str | None:
+    _mark_hit("_proposal_step_hdfc_payment")
     _proposal_step_payment_mode_cc_if_present(page, timeout_ms=timeout_ms)
     _t(page, 200)
     hdfc_rid = f"{HERO_MISP_CPH1}_rdoHdfcCCType"
@@ -6199,6 +6319,7 @@ def _hero_misp_page_and_frame_roots(page, *, purpose: str = "generic") -> list:
     For ``purpose="proposal"``, **main document first**, then the nav iframe locator, then frames — matches MispPolicy
     scrape where **CPH1** fields sit on the top document.
     """
+    _mark_hit("_hero_misp_page_and_frame_roots")
     roots: list = []
     sel = ""
     if purpose == "vin":
@@ -6272,6 +6393,7 @@ def _hero_misp_page_and_frame_roots(page, *, purpose: str = "generic") -> list:
 
 def _hero_misp_safe_url_for_insurance_log(url: str, *, max_len: int = 280) -> str:
     """Host + path for logs; query string omitted — only ``?[query_len=N]`` (``enckycdata`` etc. stay private)."""
+    _mark_hit("_hero_misp_safe_url_for_insurance_log")
     s = (url or "").strip()
     if not s:
         return ""
@@ -6287,6 +6409,7 @@ def _hero_misp_safe_url_for_insurance_log(url: str, *, max_len: int = 280) -> st
 
 def _hero_misp_url_path_signature(url: str) -> str:
     """Stable key for navigation: host + path (ignore dynamic query)."""
+    _mark_hit("_hero_misp_url_path_signature")
     try:
         p = urllib.parse.urlparse(url or "")
         return f"{(p.netloc or '').lower()}{(p.path or '').lower()}"
@@ -6300,6 +6423,7 @@ def _hero_misp_classify_vin_transition_url(url: str) -> str:
 
     Real VIN step: ``…/2W/Policy/MispDms.aspx`` (see Hero MISP). Intermediate screens vary (welcome, loading, etc.).
     """
+    _mark_hit("_hero_misp_classify_vin_transition_url")
     u = (url or "").strip().lower()
     if not u:
         return "unknown"
@@ -6318,6 +6442,7 @@ def _hero_misp_classify_vin_transition_url(url: str) -> str:
 
 def _hero_misp_kyc_please_wait_overlay_visible(page) -> bool:
     """True when MISP shows the **Please wait** / loading row on ``ekycpage`` (same URL before redirect to VIN)."""
+    _mark_hit("_hero_misp_kyc_please_wait_overlay_visible")
     try:
         loc = page.get_by_text(re.compile(r"please\s*wait", re.I))
         if loc.count() == 0:
@@ -6339,6 +6464,7 @@ def _hero_misp_wait_for_mispdms_vin_url_event(
     Returns **True** when already on or navigated to that URL; **False** on timeout (caller may still poll ``txtFrameNo``
     if the portal uses a different path). No fixed sleep — Playwright waits on navigation / URL change.
     """
+    _mark_hit("_hero_misp_wait_for_mispdms_vin_url_event")
     to = min(max(3_000, int(timeout_ms)), 90_000)
     try:
         u0 = (page.url or "").lower()
@@ -6385,6 +6511,7 @@ def _hero_misp_log_vin_transition_line(
     KYC→VIN navigation breadcrumb. Full URL/frame detail goes to **debug logs only** — not
     ``Playwright_insurance.txt`` (avoid URL dumps in operator traces).
     """
+    _mark_hit("_hero_misp_log_vin_transition_line")
     del ocr_output_dir, subfolder
     try:
         raw = page.url or ""
@@ -6439,6 +6566,7 @@ def _hero_misp_wait_for_vin_txt_frame_no_attached(
     on DOM updates, not a tight poll/sleep loop. MISP may show **Please wait** on **ekycpage** same-URL before
     navigation; the URL wait resolves when the browser actually navigates.
     """
+    _mark_hit("_hero_misp_wait_for_vin_txt_frame_no_attached")
     budget_ms = min(int(timeout_ms), 90_000)
     deadline = time.monotonic() + budget_ms / 1000.0
     selectors = _HERO_MISP_VIN_TXT_FRAME_NO_SELECTORS
@@ -6499,7 +6627,7 @@ def _hero_misp_wait_for_vin_txt_frame_no_attached(
     )
     try:
         if post_cap_ms > 0:
-            page.wait_for_load_state("domcontentloaded", timeout=post_cap_ms)
+            _wait_load_optional(page, post_cap_ms)
     except Exception:
         pass
     _insurance_vin_phase_note(
@@ -6565,6 +6693,7 @@ def _hero_misp_fill_vin_txt_frame_no(
     Real MISP VIN step: ``ctl00$ContentPlaceHolder1$txtFrameNo`` — often under ``upnlAddStateMaster`` /
     ``mainContainer`` in a **frame**; visibility checks alone can skip inputs that need ``force`` / scroll.
     """
+    _mark_hit("_hero_misp_fill_vin_txt_frame_no")
     v = (vin or "").strip()[:64]
     if not v:
         return False
@@ -6611,6 +6740,7 @@ def _hero_misp_fill_vin_txt_frame_no(
 
 def _hero_misp_fill_vin_fallback_all_frames(page, vin: str, *, timeout_ms: int) -> bool:
     """Label / fuzzy locators scoped to main page and every frame (not only top document)."""
+    _mark_hit("_hero_misp_fill_vin_fallback_all_frames")
     v = (vin or "").strip()[:64]
     if not v:
         return False
@@ -6656,6 +6786,7 @@ def _hero_misp_fill_vin_and_click_submit(
     After KYC **Proceed**: on the VIN step, fill ``full_chassis`` / ``frame_no`` and click **Submit**.
     Does not handle **I agree** — that is **main_process**. Returns **None** on success, else an error message.
     """
+    _mark_hit("_hero_misp_fill_vin_and_click_submit")
     vin = (values.get("full_chassis") or values.get("frame_no") or "").strip()
     if not vin:
         return "vehicle_master full_chassis/frame (VIN) is empty in DB values."
@@ -6690,11 +6821,8 @@ def _hero_misp_fill_vin_and_click_submit(
         pass
 
     if not skip_pre_dom:
-        try:
-            pre_cap = max(500, min(int(INSURANCE_VIN_PRE_DOMCONTENTLOADED_MS), 60_000))
-            page.wait_for_load_state("domcontentloaded", timeout=pre_cap)
-        except Exception:
-            pass
+        pre_cap = max(500, min(int(INSURANCE_VIN_PRE_DOMCONTENTLOADED_MS), 60_000))
+        _wait_load_optional(page, pre_cap)
         _insurance_vin_phase_note(
             ocr_output_dir, subfolder, t0_vin, "pre_domcontentloaded_done"
         )
@@ -6744,6 +6872,7 @@ def _hero_misp_fill_vin_and_click_submit(
 
 def _hero_misp_click_vin_page_submit(page, *, timeout_ms: int) -> bool:
     """Real MISP: ``ctl00$ContentPlaceHolder1$btnSubmit`` (often next to VIN inside UpdatePanel)."""
+    _mark_hit("_hero_misp_click_vin_page_submit")
     to = min(int(timeout_ms), 60_000)
     selectors = (
         '#ctl00_ContentPlaceHolder1_upnlAddStateMaster input[type="submit"][name="ctl00$ContentPlaceHolder1$btnSubmit"]',
@@ -6778,6 +6907,7 @@ def _hero_misp_post_vin_i_agree_modal_visible(page, *, timeout_ms: int = 1_500) 
     True when the Bootstrap post–VIN **I Agree** modal (``#btnOK``) is actually visible.
     Scans main document and a capped list of frames.
     """
+    _mark_hit("_hero_misp_post_vin_i_agree_modal_visible")
     vt = min(max(300, int(timeout_ms)), 5_000)
     selectors = (
         "div.modal.show button#btnOK",
@@ -6809,6 +6939,7 @@ def _hero_misp_proposal_form_markers_visible(page, *, timeout_ms: int = 2_000) -
     already past VIN Submit + **I agree** (common when KYC / modal steps were completed manually).
     Checks top document first, then ``INSURANCE_NAV_IFRAME_SELECTOR`` (same order as proposal fills).
     """
+    _mark_hit("_hero_misp_proposal_form_markers_visible")
     to = min(max(400, int(timeout_ms)), 8_000)
     for root in (page,):
         for suffix in ("ddlOccupatnType", "ddlRTO", "ddlMaritalStatus"):
@@ -6847,6 +6978,7 @@ def _hero_misp_click_vin_post_submit_modal_i_agree(
     After VIN **Submit**, MISP opens a Bootstrap modal (``div.modal-content``) with **I Agree** on
     ``button#btnOK`` (``HideModal()``). Tries main document and each non-detached frame.
     """
+    _mark_hit("_hero_misp_click_vin_post_submit_modal_i_agree")
     to = min(int(timeout_ms), 60_000)
     vt = min(int(visible_timeout_ms), 30_000)
     selectors = (
@@ -6899,6 +7031,7 @@ def _hero_misp_i_agree_after_vin_submit(
     visible — e.g. operator finished KYC / modal manually — this step is skipped so automation does not
     spin on missing **I agree** controls.
     """
+    _mark_hit("_hero_misp_i_agree_after_vin_submit")
     append_playwright_insurance_line(
         ocr_output_dir,
         subfolder,
@@ -6919,12 +7052,7 @@ def _hero_misp_i_agree_after_vin_submit(
             logger.info(
                 "Hero Insurance: main_process — skipped post-VIN I agree; proposal shell already visible."
             )
-            try:
-                page.wait_for_load_state(
-                    "domcontentloaded", timeout=min(15_000, max(to, 5_000) * 4)
-                )
-            except Exception:
-                pass
+            _wait_load_optional(page, min(15_000, max(to, 5_000) * 4))
             _t(page, 400)
             return None
     except Exception as exc:
@@ -6964,10 +7092,7 @@ def _hero_misp_i_agree_after_vin_submit(
     if not agreed:
         return 'Could not find or click "I agree" after VIN Submit (popup/dialog).'
 
-    try:
-        page.wait_for_load_state("domcontentloaded", timeout=min(30_000, timeout_ms * 5))
-    except Exception:
-        pass
+    _wait_load_optional(page, min(30_000, timeout_ms * 5))
     _t(page, 600)
     return None
 
@@ -6984,6 +7109,7 @@ def _hero_misp_vin_submit_i_agree(
     Single-call path: VIN fill + Submit + **I agree** (used when **main_process** still owns the full VIN step).
     Normal Hero GI path runs VIN+Submit in **pre_process** and **I agree** via ``_hero_misp_i_agree_after_vin_submit`` only.
     """
+    _mark_hit("_hero_misp_vin_submit_i_agree")
     err = _hero_misp_fill_vin_and_click_submit(
         page,
         values,
@@ -7005,6 +7131,7 @@ def _set_checkbox_matching_text(
     page, text_pattern: str, want_checked: bool, *, timeout_ms: int
 ) -> None:
     """Toggle a checkbox whose label/row text matches ``text_pattern``."""
+    _mark_hit("_set_checkbox_matching_text")
     try:
         cbs = page.locator('input[type="checkbox"]')
         n = cbs.count()
@@ -7040,6 +7167,7 @@ def _set_checkbox_matching_text(
 
 
 def _normalize_policy_num_for_db(raw: str) -> str | None:
+    _mark_hit("_normalize_policy_num_for_db")
     t = (raw or "").strip()
     if not t:
         return None
@@ -7051,6 +7179,7 @@ def _normalize_policy_num_for_db(raw: str) -> str | None:
 
 def _parse_currency_amount_text(raw: str) -> float | None:
     """Parse amounts like '₹ 4,523.00', 'Rs.1523', '1,234.5' to float."""
+    _mark_hit("_parse_currency_amount_text")
     if not raw or not str(raw).strip():
         return None
     s = str(raw).strip()
@@ -7067,6 +7196,7 @@ def _parse_currency_amount_text(raw: str) -> float | None:
 
 def _insurance_preview_apply_body_text_heuristics(body: str, out: dict[str, Any]) -> None:
     """Fill missing ``out`` keys from free-form page text (Proposal Review / preview / post-issue)."""
+    _mark_hit("_insurance_preview_apply_body_text_heuristics")
     if not body:
         return
     chunk = body[:150_000]
@@ -7165,6 +7295,7 @@ def scrape_insurance_policy_preview_before_issue(page, *, timeout_ms: int) -> di
     dummy IDs ``#ins-preview-*``, then label/body heuristics across **main document + proposal iframes**
     (``_hero_misp_page_and_frame_roots(..., purpose="proposal")``). ``premium`` maps to DB total premium.
     """
+    _mark_hit("scrape_insurance_policy_preview_before_issue")
     out: dict[str, Any] = {
         "policy_num": None,
         "policy_from": None,
@@ -7265,6 +7396,7 @@ def _hero_misp_note_proposal_review_scrape_for_insurance_master(
     preview: dict[str, Any],
 ) -> None:
     """Human-readable line in ``Playwright_insurance.txt`` for operator verification vs MISP."""
+    _mark_hit("_hero_misp_note_proposal_review_scrape_for_insurance_master")
     append_playwright_insurance_line(
         ocr_output_dir,
         subfolder,
@@ -7289,6 +7421,7 @@ def _hero_misp_proposal_review_print_proposal_and_consent(
     On **Proposal Review**: click **Print Proposal** (``Submit3``), then check **chkAgree** and
     **chkconsentagree**. Print click is best-effort (browser print dialog); consent checkboxes are required.
     """
+    _mark_hit("_hero_misp_proposal_review_print_proposal_and_consent")
     to = min(int(timeout_ms), 60_000)
     roots = _hero_misp_page_and_frame_roots(page, purpose="proposal")
     if not roots:
@@ -7413,16 +7546,14 @@ def click_issue_policy_and_scrape_preview(page, *, timeout_ms: int) -> dict[str,
     ``scrape_insurance_policy_preview_before_issue``.
     When ``HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY`` is True, skips the **Issue Policy** click and only scrapes.
     """
+    _mark_hit("click_issue_policy_and_scrape_preview")
     to = max(2_000, int(timeout_ms))
     if HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY:
         logger.info(
             "Hero Insurance: Issue Policy click skipped (HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY=True)."
         )
         _t(page, 600)
-        try:
-            page.wait_for_load_state("domcontentloaded", timeout=min(25_000, to * 4))
-        except Exception:
-            pass
+        _wait_load_optional(page, min(25_000, to * 4))
         return scrape_insurance_policy_preview_before_issue(page, timeout_ms=to)
     clicked = False
     try:
@@ -7459,10 +7590,7 @@ def click_issue_policy_and_scrape_preview(page, *, timeout_ms: int) -> dict[str,
         except Exception as exc:
             logger.debug("Hero Insurance: Issue Policy get_by_text: %s", exc)
     _t(page, 600)
-    try:
-        page.wait_for_load_state("domcontentloaded", timeout=min(25_000, to * 4))
-    except Exception:
-        pass
+    _wait_load_optional(page, min(25_000, to * 4))
     return scrape_insurance_policy_preview_before_issue(page, timeout_ms=to)
 
 
@@ -7478,6 +7606,7 @@ def _hero_misp_fill_proposal_and_review(
     Proposal page after **I agree**: each fill is read back and logged (``Playwright_insurance.txt``);
     first failed step returns an error message. Then optional **Proposal Preview** (portal label) → scrape preview.
     """
+    _mark_hit("_hero_misp_fill_proposal_and_review")
     append_playwright_insurance_line(
         ocr_output_dir,
         subfolder,
@@ -7486,20 +7615,8 @@ def _hero_misp_fill_proposal_and_review(
     )
     pt = max(int(timeout_ms), int(INSURANCE_POLICY_FILL_TIMEOUT_MS))
 
-    try:
-        page.wait_for_load_state("domcontentloaded", timeout=min(30_000, pt * 6))
-    except Exception:
-        pass
+    _wait_load_optional(page, min(30_000, pt * 6))
     _t(page, 500)
-
-    def _fail(msg: str) -> tuple[str | None, dict[str, Any]]:
-        append_playwright_insurance_line(
-            ocr_output_dir,
-            subfolder,
-            "ERROR",
-            f"main_process proposal form: {msg}",
-        )
-        return msg, {}
 
     raw_marital = (values.get("marital_status") or "").strip()
     ms = _proposal_map_marital_for_misp(raw_marital)
@@ -7522,7 +7639,7 @@ def _hero_misp_fill_proposal_and_review(
             cph1_id_suffix="ddlMaritalStatus",
         )
         if err:
-            return _fail(err)
+            return _proposal_fail(ocr_output_dir, subfolder, err)
 
     prof = _proposal_map_occupation_for_misp((values.get("profession") or "").strip())
     err = _proposal_step_select_fuzzy(
@@ -7536,7 +7653,7 @@ def _hero_misp_fill_proposal_and_review(
         cph1_id_suffix="ddlOccupatnType",
     )
     if err:
-        return _fail(err)
+        return _proposal_fail(ocr_output_dir, subfolder, err)
 
     dob_val = (values.get("dob") or "").strip()
     if dob_val:
@@ -7549,7 +7666,7 @@ def _hero_misp_fill_proposal_and_review(
             timeout_ms=pt,
         )
         if err:
-            return _fail(err)
+            return _proposal_fail(ocr_output_dir, subfolder, err)
 
     err = _proposal_step_email_hardcoded(
         page,
@@ -7560,7 +7677,7 @@ def _hero_misp_fill_proposal_and_review(
         timeout_ms=pt,
     )
     if err:
-        return _fail(err)
+        return _proposal_fail(ocr_output_dir, subfolder, err)
 
     alt_raw = (values.get("alt_phone_num") or "").strip()
     if alt_raw:
@@ -7581,7 +7698,7 @@ def _hero_misp_fill_proposal_and_review(
                 cph1_id_suffix="txtMobile2",
             )
             if err:
-                return _fail(err)
+                return _proposal_fail(ocr_output_dir, subfolder, err)
 
     city = (values.get("city") or "").strip()
     rto_query = city if city else "City"
@@ -7596,7 +7713,7 @@ def _hero_misp_fill_proposal_and_review(
         cph1_id_suffix="ddlRTO",
     )
     if err:
-        return _fail(err)
+        return _proposal_fail(ocr_output_dir, subfolder, err)
 
     mname = (values.get("model_name") or "").strip()
     if mname:
@@ -7611,7 +7728,7 @@ def _hero_misp_fill_proposal_and_review(
             cph1_id_suffix="ddlModelName",
         )
         if err:
-            return _fail(err)
+            return _proposal_fail(ocr_output_dir, subfolder, err)
 
     err = _proposal_step_date_of_registration_today(
         page,
@@ -7621,7 +7738,7 @@ def _hero_misp_fill_proposal_and_review(
         timeout_ms=pt,
     )
     if err:
-        return _fail(err)
+        return _proposal_fail(ocr_output_dir, subfolder, err)
 
     nn = (values.get("nominee_name") or "").strip()
     if nn:
@@ -7636,7 +7753,7 @@ def _hero_misp_fill_proposal_and_review(
             cph1_id_suffix="txtNomineeName",
         )
         if err:
-            return _fail(err)
+            return _proposal_fail(ocr_output_dir, subfolder, err)
         _t(page, 350)
 
     na = (values.get("nominee_age") or "").strip()
@@ -7652,7 +7769,7 @@ def _hero_misp_fill_proposal_and_review(
             cph1_id_suffix="txtNomineeAge",
         )
         if err:
-            return _fail(err)
+            return _proposal_fail(ocr_output_dir, subfolder, err)
 
     ng = (values.get("nominee_gender") or "").strip()
     if ng:
@@ -7665,7 +7782,7 @@ def _hero_misp_fill_proposal_and_review(
             timeout_ms=pt,
         )
         if err:
-            return _fail(err)
+            return _proposal_fail(ocr_output_dir, subfolder, err)
 
     rel = (values.get("nominee_relationship") or "").strip()
     if rel:
@@ -7695,7 +7812,7 @@ def _hero_misp_fill_proposal_and_review(
                 timeout_ms=pt,
             )
         if err:
-            return _fail(err)
+            return _proposal_fail(ocr_output_dir, subfolder, err)
 
     fin = (values.get("financer_name") or "").strip()
     if fin:
@@ -7710,7 +7827,7 @@ def _hero_misp_fill_proposal_and_review(
             cph1_id_suffix="ddlFinancerName",
         )
         if err:
-            return _fail(err)
+            return _proposal_fail(ocr_output_dir, subfolder, err)
 
         err = _proposal_step_select_fuzzy(
             page,
@@ -7728,7 +7845,7 @@ def _hero_misp_fill_proposal_and_review(
             cph1_id_suffix="ddlAgreementTypeWithFinancer",
         )
         if err:
-            return _fail(err)
+            return _proposal_fail(ocr_output_dir, subfolder, err)
 
     branch_city = city
     if branch_city and fin:
@@ -7748,7 +7865,7 @@ def _hero_misp_fill_proposal_and_review(
             cph1_id_suffix="txtFinComBranch",
         )
         if err:
-            return _fail(err)
+            return _proposal_fail(ocr_output_dir, subfolder, err)
 
     if dob_val:
         v_norm = normalize_dob_for_misp(dob_val)
@@ -7764,7 +7881,7 @@ def _hero_misp_fill_proposal_and_review(
                     timeout_ms=pt,
                 )
                 if err:
-                    return _fail(err)
+                    return _proposal_fail(ocr_output_dir, subfolder, err)
 
     _t(page, 400)
     err = _proposal_addon_checkbox_id_or_label(
@@ -7778,7 +7895,7 @@ def _hero_misp_fill_proposal_and_review(
         timeout_ms=pt,
     )
     if err:
-        return _fail(err)
+        return _proposal_fail(ocr_output_dir, subfolder, err)
     err = _proposal_addon_checkbox_id_or_label(
         page,
         "chkroicover",
@@ -7791,7 +7908,7 @@ def _hero_misp_fill_proposal_and_review(
         timeout_ms=pt,
     )
     if err:
-        return _fail(err)
+        return _proposal_fail(ocr_output_dir, subfolder, err)
     err = _proposal_addon_checkbox_id_or_label(
         page,
         "chkRSA",
@@ -7803,7 +7920,7 @@ def _hero_misp_fill_proposal_and_review(
         timeout_ms=pt,
     )
     if err:
-        return _fail(err)
+        return _proposal_fail(ocr_output_dir, subfolder, err)
     err = _proposal_addon_checkbox_id_or_label(
         page,
         "chkEME",
@@ -7816,7 +7933,7 @@ def _hero_misp_fill_proposal_and_review(
         timeout_ms=pt,
     )
     if err:
-        return _fail(err)
+        return _proposal_fail(ocr_output_dir, subfolder, err)
 
     _opt_uncheck = (HERO_MISP_PROPOSAL_OPTIONAL_UNCHECK_CHECKBOX_REGEX or "").strip()
     if _opt_uncheck:
@@ -7829,7 +7946,7 @@ def _hero_misp_fill_proposal_and_review(
             timeout_ms=pt,
         )
         if err:
-            return _fail(err)
+            return _proposal_fail(ocr_output_dir, subfolder, err)
 
     err = _proposal_step_select_fuzzy(
         page,
@@ -7842,7 +7959,7 @@ def _hero_misp_fill_proposal_and_review(
         cph1_id_suffix="ddlCPATenure",
     )
     if err:
-        return _fail(err)
+        return _proposal_fail(ocr_output_dir, subfolder, err)
 
     err = _proposal_step_usgi_uncheck(
         page,
@@ -7852,7 +7969,7 @@ def _hero_misp_fill_proposal_and_review(
         timeout_ms=pt,
     )
     if err:
-        return _fail(err)
+        return _proposal_fail(ocr_output_dir, subfolder, err)
 
     err = _proposal_step_hero_cpi_addon_by_dealer_flag(
         page,
@@ -7863,14 +7980,14 @@ def _hero_misp_fill_proposal_and_review(
         timeout_ms=pt,
     )
     if err:
-        return _fail(err)
+        return _proposal_fail(ocr_output_dir, subfolder, err)
 
     _t(page, 400)
     err = _proposal_step_hdfc_payment(
         page, "payment_hdfc", ocr_output_dir, subfolder, timeout_ms=pt
     )
     if err:
-        return _fail(err)
+        return _proposal_fail(ocr_output_dir, subfolder, err)
 
     _t(page, 500)
     try:
@@ -7891,7 +8008,7 @@ def _hero_misp_fill_proposal_and_review(
                 except Exception:
                     continue
         if not clicked:
-            return _fail("proposal_review: could not find or click Proposal Preview / Proposal Review")
+            return _proposal_fail(ocr_output_dir, subfolder, "proposal_review: could not find or click Proposal Preview / Proposal Review")
         _proposal_log(
             ocr_output_dir,
             subfolder,
@@ -7900,13 +8017,10 @@ def _hero_misp_fill_proposal_and_review(
         )
         logger.info("Hero Insurance: clicked Proposal Preview (or Proposal Review).")
     except Exception as exc:
-        return _fail(f"proposal_review: {exc!s}")
+        return _proposal_fail(ocr_output_dir, subfolder, f"proposal_review: {exc!s}")
 
     _t(page, 600)
-    try:
-        page.wait_for_load_state("domcontentloaded", timeout=min(25_000, pt * 5))
-    except Exception:
-        pass
+    _wait_load_optional(page, min(25_000, pt * 5))
     preview = scrape_insurance_policy_preview_before_issue(page, timeout_ms=pt)
     _hero_misp_note_proposal_review_scrape_for_insurance_master(
         ocr_output_dir, subfolder, preview
@@ -7918,12 +8032,13 @@ def _hero_misp_fill_proposal_and_review(
         timeout_ms=pt,
     )
     if err_pr:
-        return _fail(err_pr)
+        return _proposal_fail(ocr_output_dir, subfolder, err_pr)
     return None, preview
 
 
 def _insurance_match_base_from_config(insurance_base_url: str) -> tuple[str, str]:
     """Return ``(match_base`` origin, ``login_url`` full) for ``main_process`` tab reuse."""
+    _mark_hit("_insurance_match_base_from_config")
     u = (insurance_base_url or "").strip()
     if not u.startswith("http"):
         u = "https://" + u.lstrip("/")
@@ -7951,6 +8066,7 @@ def pre_process(
     ``match_base`` / ``_insurance_playwright_page`` to ``main_process``; dummy training HTML may finish
     the full flow (``main_process`` skips).
     """
+    _mark_hit("pre_process")
     raw = (insurance_base_url or INSURANCE_BASE_URL or "").strip()
     if not raw:
         return {
@@ -7988,6 +8104,7 @@ def main_process(
     skipped when ``HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY`` is True; **Proposal Review** is always attempted.
     Reuses the open Insurance tab via ``match_base`` from ``pre_result``.
     """
+    _mark_hit("main_process")
     out: dict = {
         "success": False,
         "skipped": False,
@@ -8163,6 +8280,7 @@ def main_process(
             page.set_default_timeout(15_000)
         except Exception:
             pass
+        _log_nav_hit_counters()
 
     return out
 
@@ -8172,6 +8290,7 @@ def post_process(*, pre_result: dict, main_result: dict) -> dict:
     Finalize the hero-insurance request (logging hooks, response shape for API). Merges pre/main
     into the same contract as the former single-step flow.
     """
+    _mark_hit("post_process")
     try:
         pre_result.pop("_insurance_playwright_page", None)
     except Exception:
@@ -8194,6 +8313,7 @@ def post_process(*, pre_result: dict, main_result: dict) -> dict:
 
 def _insurance_kyc_screen_ready_js() -> str:
     """Predicate run in the browser: true when KYC step is shown (dummy or typical MISP URLs)."""
+    _mark_hit("_insurance_kyc_screen_ready_js")
     return """() => {
       const u = (window.location.href || '').toLowerCase();
       if (u.includes('policy.html') || u.includes('misppolicy')) return false;
@@ -8205,6 +8325,7 @@ def _insurance_kyc_screen_ready_js() -> str:
 
 def _insurance_url_looks_like_login_page(page) -> bool:
     """True when still on partner login / generic login — safe to ``goto`` site root to recover."""
+    _mark_hit("_insurance_url_looks_like_login_page")
     try:
         u = (page.url or "").strip().lower()
         if not u or "about:blank" in u:
@@ -8224,6 +8345,7 @@ def _wait_for_insurance_kyc_after_login(page, insurance_base_url: str) -> str | 
     and the portal shows the KYC step (URL or #ins-mobile-no on dummy).
     Returns an error message, or None on success.
     """
+    _mark_hit("_wait_for_insurance_kyc_after_login")
     base = (insurance_base_url or "").rstrip("/")
     if not base:
         return "insurance_base_url required"
@@ -8278,23 +8400,13 @@ def _insurance_select_fuzzy(
     timeout_ms: int | None = None,
 ) -> None:
     """Fuzzy-match ``query`` to a ``<select>`` option label (dummy insurer / OEM fields)."""
+    _mark_hit("_insurance_select_fuzzy")
     if not (query or "").strip():
         return
     to = timeout_ms if timeout_ms is not None else INSURANCE_ACTION_TIMEOUT_MS
     sel = page.locator(selector).first
     sel.wait_for(state="attached", timeout=to)
-    labels: list[str] = []
-    try:
-        raw = sel.locator("option").evaluate_all(
-            "els => els.map(e => (e.textContent || '').trim()).filter(Boolean)"
-        )
-        labels = [str(x).strip() for x in (raw or []) if str(x).strip()]
-    except Exception:
-        n = sel.locator("option").count()
-        for i in range(min(n, 400)):
-            t = (sel.locator("option").nth(i).inner_text() or "").strip()
-            if t:
-                labels.append(t)
+    labels = _collect_select_option_labels(sel)
     pick = fuzzy_best_option_label(query, labels)
     if not pick:
         return
@@ -8318,6 +8430,7 @@ def run_fill_insurance_only(
     **disabled** (error); legacy flow preserved under ``if False`` for removal after owner confirmation.
     Uses ``require_login_on_open=False`` so one Fill Insurance run can wait for manual login (see INSURANCE_LOGIN_WAIT_MS).
     """
+    _mark_hit("run_fill_insurance_only")
     result: dict = {"success": False, "error": None}
     reset_playwright_insurance_log(ocr_output_dir, subfolder)
     append_playwright_insurance_line(
@@ -8394,77 +8507,33 @@ def run_fill_insurance_only(
         # Same MISP landing as Hero pre_process: after login, **2W** then **New Policy** before KYC / dummy fields.
         _hero_misp_after_sign_in_settle(page)
         _insurance_pre_elapsed_note(ocr_output_dir, subfolder, t0_flow, "after_sign_in_settle")
-        pages_before_2w = _misp_snapshot_context_pages(page)
-        try:
-            _click_2w_icon(page, timeout_ms=INSURANCE_ACTION_TIMEOUT_MS)
-            append_playwright_insurance_line(
-                ocr_output_dir, subfolder, "NOTE", "run_fill_insurance_only: clicked 2W (two-wheeler) entry"
-            )
-        except Exception as exc:
-            err_2w = f"2W (two-wheeler) step failed: {exc!s}"
+        page, err_2w = _misp_click_nav_step(
+            page, _click_2w_icon, "2W (two-wheeler)",
+            portal_base_url=insurance_base_url.strip(), timeout_ms=INSURANCE_ACTION_TIMEOUT_MS,
+            ocr_output_dir=ocr_output_dir, subfolder=subfolder, t0_flow=t0_flow,
+        )
+        if err_2w:
             logger.warning("Hero Insurance run_fill_insurance_only: %s", err_2w)
             result["error"] = err_2w
             append_playwright_insurance_line(ocr_output_dir, subfolder, "ERROR", err_2w)
             return result
-        t0_res_2w = time.monotonic()
-        page, tab_branch_2w = _misp_resolve_page_after_possible_new_tab(
-            pages_before_2w,
-            page,
-            portal_base_url=insurance_base_url.strip(),
-            timeout_ms=INSURANCE_ACTION_TIMEOUT_MS,
-            step_label="2W",
-        )
-        res_ms_2w = int((time.monotonic() - t0_res_2w) * 1000)
-        _insurance_tab_resolve_note(
-            ocr_output_dir,
-            subfolder,
-            t0_flow,
-            "2W",
-            tab_branch_2w,
-            resolver_ms=res_ms_2w,
-        )
         append_playwright_insurance_line(
-            ocr_output_dir,
-            subfolder,
-            "NOTE",
-            "run_fill_insurance_only: active tab after 2W",
+            ocr_output_dir, subfolder, "NOTE", "run_fill_insurance_only: active tab after 2W"
         )
         _insurance_pre_elapsed_note(ocr_output_dir, subfolder, t0_flow, "after_2w")
         _insurance_click_settle(page)
-        pages_before_np = _misp_snapshot_context_pages(page)
-        try:
-            _click_new_policy(page, timeout_ms=INSURANCE_ACTION_TIMEOUT_MS)
-            append_playwright_insurance_line(
-                ocr_output_dir, subfolder, "NOTE", "run_fill_insurance_only: clicked New Policy"
-            )
-        except Exception as exc:
-            err_np = f"New Policy step failed: {exc!s}"
+        page, err_np = _misp_click_nav_step(
+            page, _click_new_policy, "New Policy",
+            portal_base_url=insurance_base_url.strip(), timeout_ms=INSURANCE_ACTION_TIMEOUT_MS,
+            ocr_output_dir=ocr_output_dir, subfolder=subfolder, t0_flow=t0_flow,
+        )
+        if err_np:
             logger.warning("Hero Insurance run_fill_insurance_only: %s", err_np)
             result["error"] = err_np
             append_playwright_insurance_line(ocr_output_dir, subfolder, "ERROR", err_np)
             return result
-        t0_res_np = time.monotonic()
-        page, tab_branch_np = _misp_resolve_page_after_possible_new_tab(
-            pages_before_np,
-            page,
-            portal_base_url=insurance_base_url.strip(),
-            timeout_ms=INSURANCE_ACTION_TIMEOUT_MS,
-            step_label="New Policy",
-        )
-        res_ms_np = int((time.monotonic() - t0_res_np) * 1000)
-        _insurance_tab_resolve_note(
-            ocr_output_dir,
-            subfolder,
-            t0_flow,
-            "New Policy",
-            tab_branch_np,
-            resolver_ms=res_ms_np,
-        )
         append_playwright_insurance_line(
-            ocr_output_dir,
-            subfolder,
-            "NOTE",
-            "run_fill_insurance_only: active tab before KYC wait",
+            ocr_output_dir, subfolder, "NOTE", "run_fill_insurance_only: active tab before KYC wait"
         )
         _insurance_pre_elapsed_note(ocr_output_dir, subfolder, t0_flow, "after_new_policy")
 
@@ -8570,252 +8639,6 @@ def run_fill_insurance_only(
             )
             return result
 
-        # --- LEGACY training-HTML dummy flow (DISABLED; unreachable after training-HTML early return above). ---
-        # Do not remove this block until Hero insurance "scraping of information" (Issue Policy / preview scrape /
-        # insurance_master updates in main_process) is verified end-to-end on real MISP. Then ask the project owner
-        # for explicit written confirmation before deleting the `if False` body.
-        if False:
-            _insurance_select_fuzzy(page, "#ins-company", values["insurer"] or "")
-            page.select_option("#ins-kyc-partner", label="Signzy")
-            page.select_option("#ins-ovd-type", label="AADHAAR EXTRACTION")
-            page.fill("#ins-mobile-no", values["mobile_number"] or "")
-            if values.get("alt_phone_num"):
-                try:
-                    page.fill("#ins-alt-phone", values["alt_phone_num"])
-                except Exception:
-                    pass
-            page.click("#ins-check-mobile")
-            page.wait_for_function(
-                "() => window.__insKycState === 'found' || window.__insKycState === 'need_docs'",
-                timeout=15000,
-            )
-            kyc_state = page.evaluate("() => window.__insKycState")
-            if kyc_state == "need_docs":
-                payloads = insurance_kyc_png_payloads()
-                page.locator("#ins-aadhar-front").set_input_files(payloads[0])
-                page.locator("#ins-aadhar-rear").set_input_files(payloads[1])
-                page.locator("#ins-customer-photo").set_input_files(payloads[2])
-            if page.locator("#ins-consent").count() > 0 and not page.is_checked("#ins-consent"):
-                page.check("#ins-consent")
-            if kyc_state == "need_docs":
-                try:
-                    page.evaluate(
-                        "() => { if (typeof window.__syncInsuranceKycSubmitState === 'function') window.__syncInsuranceKycSubmitState(); }"
-                    )
-                except Exception:
-                    pass
-                page.wait_for_timeout(80)
-                submit_loc = page.locator("#ins-kyc-submit")
-                if submit_loc.count() > 0:
-                    submit_loc.wait_for(state="attached", timeout=10000)
-                    try:
-                        page.wait_for_function(
-                            """() => {
-                              const b = document.querySelector('#ins-kyc-submit');
-                              if (!b) return false;
-                              if (b.hidden) return false;
-                              return !b.disabled;
-                            }""",
-                            timeout=25000,
-                        )
-                    except PlaywrightTimeout:
-                        page.evaluate(
-                            "() => { if (typeof window.__syncInsuranceKycSubmitState === 'function') window.__syncInsuranceKycSubmitState(); }"
-                        )
-                        page.wait_for_timeout(80)
-                        page.wait_for_function(
-                            """() => {
-                              const b = document.querySelector('#ins-kyc-submit');
-                              return b && !b.hidden && !b.disabled;
-                            }""",
-                            timeout=15000,
-                        )
-                    submit_loc.click()
-                else:
-                    page.locator("#ins-proceed").wait_for(state="visible", timeout=5000)
-                    page.locator("#ins-proceed").wait_for(state="enabled", timeout=15000)
-                    page.click("#ins-proceed")
-            else:
-                page.locator("#ins-proceed").wait_for(state="visible", timeout=10000)
-                page.locator("#ins-proceed").wait_for(state="enabled", timeout=10000)
-                page.click("#ins-proceed")
-            page.wait_for_url("**/kyc-success.html*", timeout=10000)
-            page.wait_for_timeout(60)
-            page.goto(f"{base}/dms-entry.html", wait_until="domcontentloaded", timeout=15000)
-            page.fill("#ins-vin", values["frame_no"], timeout=INSURANCE_ACTION_TIMEOUT_MS)
-            page.click("a.btn[href='policy.html']", timeout=INSURANCE_ACTION_TIMEOUT_MS)
-            page.wait_for_url("**/policy.html*", timeout=10000)
-            page.set_default_timeout(INSURANCE_POLICY_FILL_TIMEOUT_MS)
-
-            _insurance_select_fuzzy(
-                page,
-                "#ins-sel-policy-company",
-                values["insurer"] or "",
-                timeout_ms=INSURANCE_POLICY_FILL_TIMEOUT_MS,
-            )
-            if values.get("oem_name"):
-                _insurance_select_fuzzy(
-                    page,
-                    "#ins-sel-manufacturer",
-                    values["oem_name"],
-                    timeout_ms=INSURANCE_POLICY_FILL_TIMEOUT_MS,
-                )
-
-            pt = INSURANCE_POLICY_FILL_TIMEOUT_MS
-            page.fill("#ins-proposer-name", values["customer_name"], timeout=pt)
-            selects = page.locator(".main select")
-            if values["gender"]:
-                try:
-                    selects.nth(4).select_option(label=values["gender"].capitalize(), timeout=pt)
-                except Exception:
-                    pass
-            if values["dob"]:
-                page.fill("#ins-proposer-dob", values["dob"], timeout=pt)
-            if values["marital_status"]:
-                try:
-                    selects.nth(5).select_option(label=values["marital_status"], timeout=pt)
-                except Exception:
-                    pass
-            if values["profession"]:
-                try:
-                    selects.nth(6).select_option(label=values["profession"], timeout=pt)
-                except Exception:
-                    pass
-            page.fill("#ins-policy-mobile", values["mobile_number"], timeout=pt)
-            if values.get("alt_phone_num"):
-                try:
-                    page.fill("#ins-alt-phone", values["alt_phone_num"])
-                except Exception:
-                    pass
-            if values["state"]:
-                try:
-                    selects.nth(7).select_option(label=values["state"], timeout=pt)
-                except Exception:
-                    pass
-            if values["city"]:
-                try:
-                    selects.nth(8).select_option(label=values["city"], timeout=pt)
-                except Exception:
-                    pass
-            if values["pin_code"]:
-                page.fill("#ins-proposer-pin", values["pin_code"], timeout=pt)
-            if values["address"]:
-                page.fill("#ins-proposer-address", values["address"], timeout=pt)
-            page.fill("#ins-chassis", values["frame_no"], timeout=pt)
-            page.fill("#ins-engine", values["engine_no"], timeout=pt)
-            if values["model_name"]:
-                page.fill("#ins-model-name", values["model_name"], timeout=pt)
-            ex_show = (values.get("vehicle_price") or "").replace(",", "").strip()
-            page.fill("#ins-ex-showroom", ex_show, timeout=pt)
-            if values["year_of_mfg"]:
-                page.fill("#ins-yom", values["year_of_mfg"], timeout=pt)
-            if values["fuel_type"]:
-                try:
-                    selects.nth(12).select_option(label=values["fuel_type"], timeout=pt)
-                except Exception:
-                    pass
-            if values["nominee_name"]:
-                page.fill("#ins-nominee-name", values["nominee_name"], timeout=pt)
-            if values["nominee_age"]:
-                page.fill("#ins-nominee-age", values["nominee_age"], timeout=pt)
-            if values["nominee_gender"]:
-                try:
-                    selects.nth(13).select_option(label=values["nominee_gender"].capitalize(), timeout=pt)
-                except Exception:
-                    pass
-            if values["nominee_relationship"]:
-                try:
-                    selects.nth(14).select_option(label=values["nominee_relationship"], timeout=pt)
-                except Exception:
-                    pass
-            if values["financer_name"]:
-                try:
-                    page.fill("#ins-financer", values["financer_name"], timeout=pt)
-                except Exception:
-                    pass
-            if values.get("rto_name"):
-                try:
-                    selects.nth(11).select_option(label=values["rto_name"], timeout=pt)
-                except Exception:
-                    pass
-
-            preview = scrape_insurance_policy_preview_before_issue(
-                page, timeout_ms=INSURANCE_POLICY_FILL_TIMEOUT_MS
-            )
-
-            try:
-                page.set_default_timeout(15_000)
-            except Exception:
-                pass
-
-            if ocr_output_dir is not None:
-                write_insurance_form_values(
-                    ocr_output_dir=Path(ocr_output_dir),
-                    subfolder=values.get("subfolder") or subfolder,
-                    customer_id=customer_id,
-                    vehicle_id=vehicle_id,
-                    values=values,
-                )
-            if customer_id is not None and vehicle_id is not None:
-                try:
-                    insert_insurance_master_after_gi(
-                        int(customer_id),
-                        int(vehicle_id),
-                        fill_values=values,
-                        staging_payload=staging_payload,
-                        preview_scrape=preview,
-                        ocr_output_dir=ocr_output_dir,
-                        subfolder=values.get("subfolder") or subfolder,
-                    )
-                except ValueError as persist_exc:
-                    result["error"] = str(persist_exc)
-                    append_playwright_insurance_line(
-                        ocr_output_dir,
-                        subfolder,
-                        "ERROR",
-                        f"run_fill_insurance_only: insurance_master insert failed: {persist_exc!s}",
-                    )
-                    return result
-                except Exception as persist_exc:
-                    result["error"] = f"insurance_master insert failed: {persist_exc!s}"
-                    append_playwright_insurance_line(
-                        ocr_output_dir,
-                        subfolder,
-                        "ERROR",
-                        f"run_fill_insurance_only: insurance_master insert failed: {persist_exc!s}",
-                    )
-                    return result
-                post_issue = click_issue_policy_and_scrape_preview(
-                    page, timeout_ms=INSURANCE_POLICY_FILL_TIMEOUT_MS
-                )
-                try:
-                    update_insurance_master_policy_after_issue(
-                        int(customer_id),
-                        int(vehicle_id),
-                        scrape=post_issue,
-                    )
-                except Exception as upd_exc:
-                    logger.warning("run_fill_insurance_only: insurance_master post-issue update failed: %s", upd_exc)
-            result["success"] = True
-            result["error"] = None
-            result["hero_pre_completed_full_dummy_flow"] = True
-            try:
-                mb_d, lu_d = _insurance_match_base_from_config(insurance_base_url)
-                result["match_base"] = mb_d
-                result["login_url"] = lu_d
-            except Exception:
-                pass
-            try:
-                result["page_url"] = (page.url or "").strip() or None
-            except Exception:
-                result["page_url"] = None
-            append_playwright_insurance_line(
-                ocr_output_dir,
-                subfolder,
-                "NOTE",
-                "run_fill_insurance_only: completed (preview insert, Issue Policy clicked, post-issue scrape)",
-            )
-            return result
     except PlaywrightTimeout as e:
         _p = locals().get("page")
         if _p is not None:
@@ -8827,6 +8650,7 @@ def run_fill_insurance_only(
         append_playwright_insurance_line(
             ocr_output_dir, subfolder, "ERROR", f"run_fill_insurance_only: Timeout: {e!s}"
         )
+        _log_nav_hit_counters()
         return result
     except Exception as e:
         _p = locals().get("page")
@@ -8839,4 +8663,5 @@ def run_fill_insurance_only(
         append_playwright_insurance_line(
             ocr_output_dir, subfolder, "ERROR", f"run_fill_insurance_only: {e!s}"
         )
+        _log_nav_hit_counters()
         return result
