@@ -2,7 +2,7 @@
 Hero Insurance (MISP) Playwright flow: **pre_process** (``run_fill_insurance_only`` on real MISP) runs through KYC,
 then fills **VIN** from DB (**``full_chassis``**) and clicks the VIN page **Submit**. **main_process** continues with
 **I agree** (if shown), then the proposal form. Proposer/vehicle/nominee fields come from the view;
-email, most add-ons, CPA tenure, HDFC, and registration date use **hardcoded** defaults; **Hero CPI** (NIC/CPI row) follows **``form_insurance_view.hero_cpi``** (**``dealer_ref.hero_cpi``**). Proposal fields resolve **ContentPlaceHolder1** ids (**``HERO_MISP_CPH1``**) where applicable, then labels. **Proposal Preview** / **Review** (always); **Issue Policy** optional via ``HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY``; scrape **policy_num**, **policy_from**, **policy_to**, **premium**, **idv** from preview and persist via ``update_insurance_master_policy_after_issue``.
+email, most add-ons, CPA tenure, HDFC, and registration date use **hardcoded** defaults; **Hero CPI** (NIC/CPI row) follows **``form_insurance_view.hero_cpi``** (**``dealer_ref.hero_cpi``**). Proposal fields resolve **ContentPlaceHolder1** ids (**``HERO_MISP_CPH1``**) where applicable, then labels. **insurance_master** INSERT runs after proposal fill (readbacks) and **before** **Proposal Preview** / **Review**; **Proposal Preview** / **Review** (always); **Issue Policy** optional via ``HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY``; scrape **policy_num**, **policy_from**, **policy_to**, **premium**, **idv** from preview and merge via ``update_insurance_master_policy_after_issue`` (preview scrape and post–Issue Policy scrape).
 Browser reuse uses ``handle_browser_opening.get_or_open_site_page`` with ``match_base`` from **pre_process**.
 """
 import difflib
@@ -80,8 +80,8 @@ INSURANCE_KYC_IFRAME_SELECTOR = ""
 INSURANCE_VIN_IFRAME_SELECTOR = 'iframe[src*="2w" i]'
 INSURANCE_NAV_IFRAME_SELECTOR = 'iframe[src*="2w" i]'
 
-# When True: skip clicking **Issue Policy** only (after ``insurance_master`` insert); still scrapes preview fields.
-# **Proposal Preview** / **Proposal Review** is always clicked after proposal fill (not gated by this flag).
+# When True: skip clicking **Issue Policy** only (after proposal review steps); still scrapes preview fields.
+# **insurance_master** INSERT is before **Proposal Preview**; **Proposal Preview** / **Proposal Review** is always clicked after proposal fill (not gated by this flag).
 HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY = True
 
 # Optional: regex on checkbox **label/row text** (MispPolicy proposal grid) for a **new**
@@ -7393,10 +7393,15 @@ def _hero_misp_fill_proposal_and_review(
     timeout_ms: int,
     ocr_output_dir: Path | None = None,
     subfolder: str | None = None,
+    customer_id: int | None = None,
+    vehicle_id: int | None = None,
+    staging_payload: dict | None = None,
 ) -> tuple[str | None, dict[str, Any]]:
     """
     Proposal page after **I agree**: each fill is read back and logged (``Playwright_insurance.txt``);
-    first failed step returns an error message. Then optional **Proposal Preview** (portal label) → scrape preview.
+    first failed step returns an error message. When ``customer_id`` / ``vehicle_id`` are set,
+    ``insert_insurance_master_after_gi`` runs (staging / fill values; no preview scrape yet), then
+    **Proposal Preview** (portal label) → scrape preview → ``update_insurance_master_policy_after_issue`` with that scrape.
     """
     append_playwright_insurance_line(
         ocr_output_dir,
@@ -7781,6 +7786,40 @@ def _hero_misp_fill_proposal_and_review(
         return _proposal_fail(ocr_output_dir, subfolder, err)
 
     _t(page, 500)
+    if customer_id is not None and vehicle_id is not None:
+        append_playwright_insurance_line(
+            ocr_output_dir,
+            subfolder,
+            "NOTE",
+            "main_process: insurance_master INSERT (post-proposal fill, before Proposal Preview)",
+        )
+        try:
+            insert_insurance_master_after_gi(
+                int(customer_id),
+                int(vehicle_id),
+                fill_values=values,
+                staging_payload=staging_payload,
+                preview_scrape=None,
+                ocr_output_dir=ocr_output_dir,
+                subfolder=subfolder,
+            )
+        except ValueError as persist_exc:
+            append_playwright_insurance_line(
+                ocr_output_dir,
+                subfolder,
+                "ERROR",
+                f"main_process: insurance_master insert failed: {persist_exc!s}",
+            )
+            return str(persist_exc), {}
+        except Exception as persist_exc:
+            append_playwright_insurance_line(
+                ocr_output_dir,
+                subfolder,
+                "ERROR",
+                f"main_process: insurance_master insert failed: {persist_exc!s}",
+            )
+            return f"insurance_master insert failed: {persist_exc!s}", {}
+
     try:
         _proposal_preview_rx = re.compile(r"Proposal\s*(Preview|Review)", re.I)
         clicked = False
@@ -7825,6 +7864,19 @@ def _hero_misp_fill_proposal_and_review(
     _hero_misp_note_proposal_review_scrape_for_insurance_master(
         ocr_output_dir, subfolder, preview
     )
+    if customer_id is not None and vehicle_id is not None:
+        try:
+            update_insurance_master_policy_after_issue(
+                int(customer_id),
+                int(vehicle_id),
+                scrape=preview,
+            )
+        except Exception as upd_exc:
+            logger.warning(
+                "Hero Insurance: insurance_master update from proposal preview scrape failed: %s",
+                upd_exc,
+            )
+
     err_pr = _hero_misp_proposal_review_print_proposal_and_consent(
         page,
         ocr_output_dir=ocr_output_dir,
@@ -7898,8 +7950,10 @@ def main_process(
     After **pre_process** (KYC → **VIN fill** → **Submit** on real MISP): **I agree** (if shown) → proposal form.
     **Customer/vehicle/nominee/financer** fields come from
     ``form_insurance_view`` / ``_build_insurance_fill_values``; **email, add-ons, CPA tenure, payment (HDFC),
-    and registration date** use hardcoded defaults for now. **Issue Policy** click (after DB insert) may be
-    skipped when ``HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY`` is True; **Proposal Review** is always attempted.
+    and registration date** use hardcoded defaults for now. **insurance_master** INSERT runs inside proposal fill,
+    before **Proposal Preview**; preview fields are updated after the preview scrape and again after **Issue Policy**
+    when applicable. **Issue Policy** click may be skipped when ``HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY``
+    is True; **Proposal Review** is always attempted.
     Reuses the open Insurance tab via ``match_base`` from ``pre_result``.
     """
     out: dict = {
@@ -8003,33 +8057,14 @@ def main_process(
             timeout_ms=to,
             ocr_output_dir=ocr_output_dir,
             subfolder=subfolder,
+            customer_id=int(customer_id),
+            vehicle_id=int(vehicle_id),
+            staging_payload=staging_payload,
         )
         if prop_err:
             out["error"] = prop_err
             append_playwright_insurance_line(
                 ocr_output_dir, subfolder, "NOTE", f"main_process: proposal form failed: {prop_err}"
-            )
-            return out
-        try:
-            insert_insurance_master_after_gi(
-                int(customer_id),
-                int(vehicle_id),
-                fill_values=values,
-                staging_payload=staging_payload,
-                preview_scrape=preview,
-                ocr_output_dir=ocr_output_dir,
-                subfolder=subfolder,
-            )
-        except ValueError as persist_exc:
-            out["error"] = str(persist_exc)
-            append_playwright_insurance_line(
-                ocr_output_dir, subfolder, "ERROR", f"main_process: insurance_master insert failed: {persist_exc!s}"
-            )
-            return out
-        except Exception as persist_exc:
-            out["error"] = f"insurance_master insert failed: {persist_exc!s}"
-            append_playwright_insurance_line(
-                ocr_output_dir, subfolder, "ERROR", f"main_process: insurance_master insert failed: {persist_exc!s}"
             )
             return out
         post_issue = click_issue_policy_and_scrape_preview(page, timeout_ms=to)
@@ -8047,8 +8082,8 @@ def main_process(
             ocr_output_dir,
             subfolder,
             "NOTE",
-            "main_process: completed — Proposal Review, insurance_master insert, preview scrape + post-issue update "
-            f"(Issue Policy click skipped={HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY})",
+            "main_process: completed — insurance_master insert (pre-preview), Proposal Review, preview + post-issue "
+            f"updates (Issue Policy click skipped={HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY})",
         )
         try:
             out["page_url"] = (page.url or "").strip() or None

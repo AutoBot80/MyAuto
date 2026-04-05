@@ -479,9 +479,10 @@ def insert_insurance_master_after_gi(
     subfolder: str | None = None,
 ) -> None:
     """
-    INSERT ``insurance_master`` for the current calendar ``insurance_year`` after proposal review.
-    Insurer / nominee fields prefer the MISP fill dict; ``policy_num``, ``policy_from``, ``policy_to``,
-    ``premium``, and ``idv`` prefer the preview scrape dict; ``policy_broker`` from staging when present.
+    INSERT ``insurance_master`` for the current calendar ``insurance_year`` after proposal form fill on MISP,
+    before navigating to **Proposal Preview** / **Proposal Review** (Hero flow). Insurer / nominee fields
+    prefer the MISP fill dict; ``policy_num``, ``policy_from``, ``policy_to``, ``premium``, and ``idv``
+    use ``preview_scrape`` when provided, else staging; ``policy_broker`` from staging when present.
     Raises ``ValueError`` if a row already exists for the same customer, vehicle, and year
     (``uq_insurance_customer_vehicle_year``). After **Issue Policy**, call
     ``update_insurance_master_policy_after_issue`` with the post-issue preview scrape dict.
