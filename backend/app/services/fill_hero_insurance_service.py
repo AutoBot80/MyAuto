@@ -6648,6 +6648,70 @@ def _hero_misp_click_vin_page_submit(page, *, timeout_ms: int) -> bool:
     return False
 
 
+def _hero_misp_post_vin_i_agree_modal_visible(page, *, timeout_ms: int = 1_500) -> bool:
+    """
+    True when the Bootstrap post–VIN **I Agree** modal (``#btnOK``) is actually visible.
+    Scans main document and a capped list of frames.
+    """
+    vt = min(max(300, int(timeout_ms)), 5_000)
+    selectors = (
+        "div.modal.show button#btnOK",
+        "div.modal.in button#btnOK",
+        "div.modal.fade.in button#btnOK",
+        "div.modal-content button#btnOK",
+    )
+    roots: list = [page]
+    try:
+        roots.extend([f for f in page.frames if not f.is_detached()][:16])
+    except Exception:
+        pass
+    for root in roots:
+        for sel in selectors:
+            try:
+                loc = root.locator(sel)
+                if loc.count() == 0:
+                    continue
+                if loc.first.is_visible(timeout=vt):
+                    return True
+            except Exception:
+                continue
+    return False
+
+
+def _hero_misp_proposal_form_markers_visible(page, *, timeout_ms: int = 2_000) -> bool:
+    """
+    True when main **MispPolicy** proposal ``ContentPlaceHolder1`` controls are visible — i.e. user is
+    already past VIN Submit + **I agree** (common when KYC / modal steps were completed manually).
+    Checks top document first, then ``INSURANCE_NAV_IFRAME_SELECTOR`` (same order as proposal fills).
+    """
+    to = min(max(400, int(timeout_ms)), 8_000)
+    for root in (page,):
+        for suffix in ("ddlOccupatnType", "ddlRTO", "ddlMaritalStatus"):
+            try:
+                loc = _proposal_cph1_locator(root, suffix)
+                if loc.count() == 0:
+                    continue
+                if loc.first.is_visible(timeout=min(1_500, to)):
+                    return True
+            except Exception:
+                continue
+    if INSURANCE_NAV_IFRAME_SELECTOR:
+        try:
+            fl = page.frame_locator(INSURANCE_NAV_IFRAME_SELECTOR)
+            for suffix in ("ddlOccupatnType", "ddlRTO", "ddlMaritalStatus"):
+                try:
+                    loc = _proposal_cph1_locator(fl, suffix)
+                    if loc.count() == 0:
+                        continue
+                    if loc.first.is_visible(timeout=min(1_200, to)):
+                        return True
+                except Exception:
+                    continue
+        except Exception:
+            pass
+    return False
+
+
 def _hero_misp_click_vin_post_submit_modal_i_agree(
     page,
     *,
@@ -6695,12 +6759,52 @@ def _hero_misp_click_vin_post_submit_modal_i_agree(
     return False
 
 
-def _hero_misp_i_agree_after_vin_submit(page, *, timeout_ms: int) -> str | None:
+def _hero_misp_i_agree_after_vin_submit(
+    page,
+    *,
+    timeout_ms: int,
+    ocr_output_dir: Path | None = None,
+    subfolder: str | None = None,
+) -> str | None:
     """
     After **pre_process** has filled VIN and clicked **Submit**: **main_process** dismisses the
     modal (``#btnOK`` **I Agree**) then continues on the main insurance form.
+
+    If the portal already shows the proposal form (CPH1 dropdowns) and the post–VIN modal is **not**
+    visible — e.g. operator finished KYC / modal manually — this step is skipped so automation does not
+    spin on missing **I agree** controls.
     """
+    append_playwright_insurance_line(
+        ocr_output_dir,
+        subfolder,
+        "NOTE",
+        "main_process: I agree step — scanning for post-VIN modal vs proposal form",
+    )
     to = min(int(timeout_ms), 60_000)
+    try:
+        prop_here = _hero_misp_proposal_form_markers_visible(page, timeout_ms=min(2_500, to))
+        modal_here = _hero_misp_post_vin_i_agree_modal_visible(page, timeout_ms=min(1_800, to))
+        if prop_here and not modal_here:
+            append_playwright_insurance_line(
+                ocr_output_dir,
+                subfolder,
+                "NOTE",
+                "main_process: skipped I agree — proposal markers visible, post-VIN modal not shown",
+            )
+            logger.info(
+                "Hero Insurance: main_process — skipped post-VIN I agree; proposal shell already visible."
+            )
+            try:
+                page.wait_for_load_state(
+                    "domcontentloaded", timeout=min(15_000, max(to, 5_000) * 4)
+                )
+            except Exception:
+                pass
+            _t(page, 400)
+            return None
+    except Exception as exc:
+        logger.debug("Hero Insurance: proposal/modal probe before I agree: %s", exc)
+
     agreed = False
     # First: wait up to ~20s for modal after navigation (VIN submit → main form + popup).
     if _hero_misp_click_vin_post_submit_modal_i_agree(
@@ -6764,7 +6868,12 @@ def _hero_misp_vin_submit_i_agree(
     )
     if err:
         return err
-    return _hero_misp_i_agree_after_vin_submit(page, timeout_ms=timeout_ms)
+    return _hero_misp_i_agree_after_vin_submit(
+        page,
+        timeout_ms=timeout_ms,
+        ocr_output_dir=ocr_output_dir,
+        subfolder=subfolder,
+    )
 
 
 def _set_checkbox_matching_text(
@@ -7172,6 +7281,12 @@ def _hero_misp_fill_proposal_and_review(
     Proposal page after **I agree**: each fill is read back and logged (``Playwright_insurance.txt``);
     first failed step returns an error message. Then optional **Proposal Preview** (portal label) → scrape preview.
     """
+    append_playwright_insurance_line(
+        ocr_output_dir,
+        subfolder,
+        "NOTE",
+        "main_process: proposal form fill starting (marital, occupation, RTO, email, …)",
+    )
     pt = max(int(timeout_ms), int(INSURANCE_POLICY_FILL_TIMEOUT_MS))
 
     try:
@@ -7736,7 +7851,12 @@ def main_process(
 
     try:
         page.set_default_timeout(to)
-        err = _hero_misp_i_agree_after_vin_submit(page, timeout_ms=to)
+        err = _hero_misp_i_agree_after_vin_submit(
+            page,
+            timeout_ms=to,
+            ocr_output_dir=ocr_output_dir,
+            subfolder=subfolder,
+        )
         if err:
             out["error"] = err
             append_playwright_insurance_line(
