@@ -2946,6 +2946,106 @@ def _kyc_locator_file_inputs_best(page):
     return page.locator('input[type="file"]')
 
 
+def _kyc_set_one_file_input_chooser_then_direct(
+    page,
+    file_input,
+    *,
+    path_str: str | None,
+    payload: dict | None,
+    timeout_ms: int,
+) -> tuple[bool, str | None]:
+    """
+    Attach one file like a user: prefer **file chooser** (click the ``input[type=file]`` so the portal
+    sees a real pick); fall back to ``set_input_files``. Verifies ``files.length`` when possible.
+    """
+    to = min(int(timeout_ms), 60_000)
+    if path_str:
+        try:
+            with page.expect_file_chooser(timeout=min(12_000, to)) as fc_info:
+                file_input.click(timeout=to, force=True)
+            fc_info.value.set_files(path_str)
+        except Exception as exc:
+            logger.info(
+                "Hero Insurance: KYC file chooser path failed (%s); trying set_input_files for same input.",
+                exc,
+            )
+            try:
+                file_input.set_input_files(path_str, timeout=to)
+            except Exception as exc2:
+                return False, str(exc2)
+        _t(page, 120)
+        try:
+            ok = file_input.evaluate("el => !!(el && el.files && el.files.length > 0)")
+            if ok is False:
+                return (
+                    False,
+                    "portal file input shows no file after attach (try Uploaded scans jpg/png/img ≤512 KB).",
+                )
+        except Exception:
+            pass
+        return True, None
+    if payload:
+        try:
+            file_input.set_input_files(
+                {
+                    "name": payload["name"],
+                    "mimeType": payload["mimeType"],
+                    "buffer": payload["buffer"],
+                },
+                timeout=to,
+            )
+        except Exception as exc:
+            return False, str(exc)
+        _t(page, 80)
+        return True, None
+    return False, "internal: no path or payload for KYC file input"
+
+
+def _kyc_click_proceed_submit_after_kyc_upload(
+    page,
+    kyc_fr,
+    *,
+    timeout_ms: int,
+) -> str | None:
+    """
+    Click **Proceed** / **Submit** / **Continue** after uploads (search KYC frame first, then page).
+    Returns an error string if no visible CTA matched.
+    """
+    to = min(int(timeout_ms), 45_000)
+    name_patterns = (
+        re.compile(r"^\s*Proceed\s*$", re.I),
+        re.compile(r"^\s*Submit\s*$", re.I),
+        re.compile(r"^\s*Continue\s*$", re.I),
+    )
+    for root in (kyc_fr, page):
+        for pat in name_patterns:
+            try:
+                b = root.get_by_role("button", name=pat)
+                if b.count() > 0 and b.first.is_visible(timeout=2_000):
+                    b.first.click(timeout=to)
+                    logger.info(
+                        "Hero Insurance: post-KYC-upload clicked button (%s).",
+                        pat.pattern[:60],
+                    )
+                    return None
+            except Exception:
+                continue
+    try:
+        inp = kyc_fr.locator(
+            'input[type="submit"][value*="Proceed" i], input[type="button"][value*="Proceed" i]'
+        )
+        if inp.count() > 0 and inp.first.is_visible(timeout=1_500):
+            inp.first.click(timeout=to)
+            logger.info("Hero Insurance: post-KYC-upload clicked input Proceed.")
+            return None
+    except Exception:
+        pass
+    return (
+        "KYC uploads done but no Proceed / Submit / Continue control was clicked — "
+        "complete KYC manually or check CTA visibility."
+    )
+
+
 def _kyc_set_ovd_aadhaar_extraction_in_frame(kyc_fr, *, timeout_ms: int) -> bool:
     """
     Set OVD to **AADHAAR EXTRACTION** in the KYC frame.
@@ -4074,6 +4174,7 @@ def _kyc_proceed_or_upload(
                 return f"KYC already done but Proceed click failed: {exc!s}"
 
     payloads = insurance_kyc_png_payloads()
+    kyc_fr = _kyc_preferred_kyc_frame(page)
     files = _kyc_locator_file_inputs_best(page)
     n = files.count()
     if n <= 0:
@@ -4081,47 +4182,48 @@ def _kyc_proceed_or_upload(
             "KYC upload expected (no 'already done' message) but no file inputs found. "
             "Complete KYC manually or adjust selectors."
         )
+    if n < 3:
+        return (
+            f"KYC AADHAAR EXTRACTION upload section expected 3 file inputs; found {n}. "
+            "Complete KYC manually."
+        )
+
     use_local = False
     if kyc_local_scan_paths and len(kyc_local_scan_paths) >= 3:
-        use_local = all(Path(p).is_file() for p in kyc_local_scan_paths[:3])
-        if not use_local:
-            logger.warning(
-                "Hero Insurance: kyc_local_scan_paths set but not all files exist; using placeholder PNGs."
+        missing = [p for p in kyc_local_scan_paths[:3] if not Path(p).is_file()]
+        if missing:
+            return (
+                "KYC upload requires Aadhar.jpg and Aadhar_back.jpg under Uploaded scans for this subfolder; "
+                f"missing or not readable: {', '.join(missing[:3])}"
             )
-    try:
-        n_attach = min(n, 3)
-        for i in range(n_attach):
-            if use_local:
-                files.nth(i).set_input_files(
-                    kyc_local_scan_paths[i], timeout=timeout_ms
-                )
-            else:
-                files.nth(i).set_input_files(
-                    {
-                        "name": payloads[i]["name"],
-                        "mimeType": payloads[i]["mimeType"],
-                        "buffer": payloads[i]["buffer"],
-                    },
-                    timeout=timeout_ms,
-                )
-        logger.info(
-            "Hero Insurance: attached %s KYC file input(s) (%s).",
-            n_attach,
-            "Uploaded scans" if use_local else "placeholder PNGs",
+        use_local = True
+
+    n_attach = min(n, 3)
+    for i in range(n_attach):
+        path_str = kyc_local_scan_paths[i] if use_local else None
+        payload = None if use_local else payloads[i]
+        ok, err_msg = _kyc_set_one_file_input_chooser_then_direct(
+            page,
+            files.nth(i),
+            path_str=path_str,
+            payload=payload,
+            timeout_ms=timeout_ms,
         )
-    except Exception as exc:
-        return f"KYC file upload failed: {exc!s}"
-    _t(page, 500)
+        if not ok:
+            return f"KYC file upload failed (input {i + 1}): {err_msg}"
+        logger.info(
+            "Hero Insurance: KYC file input %s attached (%s).",
+            i + 1,
+            "Uploaded scans" if use_local else "placeholder PNG",
+        )
+
+    _t(page, 400)
     _kyc_ensure_consent_checked_before_kyc_cta(page)
-    try:
-        for name_pat in (r"^\s*Proceed\s*$", r"^\s*Submit\s*$", r"^\s*Continue\s*$"):
-            btn = page.get_by_role("button", name=re.compile(name_pat, re.I))
-            if btn.count() > 0 and btn.first.is_visible(timeout=2_500):
-                btn.first.click(timeout=timeout_ms)
-                logger.info("Hero Insurance: clicked %s after KYC upload.", name_pat.strip("^$"))
-                break
-    except Exception as exc:
-        logger.debug("Hero Insurance: post-KYC-upload navigation click: %s", exc)
+    proceed_err = _kyc_click_proceed_submit_after_kyc_upload(
+        page, kyc_fr, timeout_ms=timeout_ms
+    )
+    if proceed_err:
+        return proceed_err
     try:
         page.wait_for_load_state("domcontentloaded", timeout=min(25_000, timeout_ms * 4))
     except Exception:
