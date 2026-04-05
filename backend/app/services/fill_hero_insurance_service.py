@@ -1135,10 +1135,7 @@ def _wait_for_partner_login_password_filled(page, *, timeout_ms: int) -> bool:
                     continue
         except Exception:
             pass
-        try:
-            page.wait_for_timeout(250)
-        except Exception:
-            time.sleep(0.25)
+        _t(page, 200)
     logger.warning(
         "Hero Insurance: no non-empty password field within %s ms — not clicking Sign In.",
         timeout_ms,
@@ -5318,6 +5315,35 @@ def _proposal_step_select_fuzzy(
     return f"{step_id}: {last}"
 
 
+_NOMINEE_DOM_DISPATCH_JS = """(node, val) => {
+  if (!node) return;
+  if (!(node.value || '').trim()) {
+    node.value = val;
+  }
+  ['input','change','blur'].forEach(k =>
+    node.dispatchEvent(new Event(k, { bubbles: true })));
+}"""
+
+
+def _proposal_fill_nominee_field(page, el, v: str, *, timeout_ms: int, key_delay: int = 40) -> None:
+    """Click → clear → press_sequentially (fallback fill) → DOM dispatch for nominee Name/Age inputs."""
+    try:
+        el.click(timeout=timeout_ms, force=True)
+    except Exception:
+        pass
+    el.fill("", timeout=timeout_ms, force=True)
+    try:
+        el.press_sequentially(v, delay=key_delay, timeout=timeout_ms)
+    except Exception:
+        el.fill(v, timeout=timeout_ms, force=True)
+    _t(page, 200)
+    try:
+        el.evaluate(_NOMINEE_DOM_DISPATCH_JS, v)
+    except Exception:
+        pass
+    _t(page, 200)
+
+
 def _proposal_step_fill_input(
     page,
     label_patterns: tuple[str, ...],
@@ -5353,57 +5379,9 @@ def _proposal_step_fill_input(
                     last = f"id {cph1_id_suffix!r} is SELECT; use proposal_step_select"
                     continue
                 if cph1_id_suffix == "txtNomineeAge":
-                    try:
-                        el.click(timeout=timeout_ms, force=True)
-                    except Exception:
-                        pass
-                    el.fill("", timeout=timeout_ms, force=True)
-                    try:
-                        el.press_sequentially(v, delay=40, timeout=timeout_ms)
-                    except Exception:
-                        el.fill(v, timeout=timeout_ms, force=True)
-                    _t(page, 200)
-                    try:
-                        el.evaluate(
-                            """(node, val) => {
-                              if (!node) return;
-                              if (!(node.value || '').trim()) {
-                                node.value = val;
-                              }
-                              ['input','change','blur'].forEach(k =>
-                                node.dispatchEvent(new Event(k, { bubbles: true })));
-                            }""",
-                            v,
-                        )
-                    except Exception:
-                        pass
-                    _t(page, 200)
+                    _proposal_fill_nominee_field(page, el, v, timeout_ms=timeout_ms, key_delay=40)
                 elif cph1_id_suffix == "txtNomineeName":
-                    try:
-                        el.click(timeout=timeout_ms, force=True)
-                    except Exception:
-                        pass
-                    el.fill("", timeout=timeout_ms, force=True)
-                    try:
-                        el.press_sequentially(v, delay=30, timeout=timeout_ms)
-                    except Exception:
-                        el.fill(v, timeout=timeout_ms, force=True)
-                    _t(page, 200)
-                    try:
-                        el.evaluate(
-                            """(node, val) => {
-                              if (!node) return;
-                              if (!(node.value || '').trim()) {
-                                node.value = val;
-                              }
-                              ['input','change','blur'].forEach(k =>
-                                node.dispatchEvent(new Event(k, { bubbles: true })));
-                            }""",
-                            v,
-                        )
-                    except Exception:
-                        pass
-                    _t(page, 200)
+                    _proposal_fill_nominee_field(page, el, v, timeout_ms=timeout_ms, key_delay=30)
                 elif _nominee:
                     el.fill("", timeout=timeout_ms, force=True)
                     el.fill(v, timeout=timeout_ms, force=True)
