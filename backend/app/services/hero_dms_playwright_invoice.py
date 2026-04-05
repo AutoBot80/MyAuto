@@ -122,6 +122,80 @@ def _scrape_total_ex_showroom_after_price_allocate(
     return ""
 
 
+def _scrape_create_order_financier_display_value(
+    page: Page,
+    *,
+    content_frame_selector: str | None,
+) -> str:
+    """
+    After Financer fill, read the main Financer/Financier text field — Siebel may replace typed text with
+    the canonical account name. Used to overwrite staging-sourced ``financier_name`` for DB/staging merge.
+    """
+
+    def _try_read_from_frame(frame) -> str:
+        for _lbl in ("Financer", "Financier", "Financer Name", "Financier Name"):
+            esc = _lbl.replace("'", "\\'")
+            for css in (
+                f"input.siebui-ctrl-input[aria-label*='{esc}' i]",
+                f"input[type='text'][aria-label*='{esc}' i]",
+                f"input[role='combobox'][aria-label*='{esc}' i]",
+                f"input[aria-label*='{esc}' i]",
+            ):
+                try:
+                    loc = frame.locator(css).first
+                    if loc.count() <= 0 or not loc.is_visible(timeout=400):
+                        continue
+                    v = (loc.input_value(timeout=700) or "").strip()
+                    if v:
+                        return v
+                except Exception:
+                    continue
+            pats = (
+                re.compile(rf"^\s*{re.escape(_lbl)}\s*$", re.I),
+                re.compile(re.escape(_lbl), re.I),
+            )
+            for pat in pats:
+                try:
+                    loc = frame.get_by_label(pat).first
+                    if loc.count() <= 0 or not loc.is_visible(timeout=400):
+                        continue
+                    tag = loc.evaluate("el => el.tagName.toLowerCase()")
+                    if tag == "input":
+                        v = (loc.input_value(timeout=700) or "").strip()
+                        if v:
+                            return v
+                    inner = loc.locator(
+                        "input.siebui-ctrl-input, input[type='text'], "
+                        "input[role='combobox'], input:not([type='hidden'])"
+                    ).first
+                    if inner.count() > 0 and inner.is_visible(timeout=400):
+                        v = (inner.input_value(timeout=700) or "").strip()
+                        if v:
+                            return v
+                except Exception:
+                    continue
+        return ""
+
+    roots: list = []
+    try:
+        roots.extend(list(_siebel_locator_search_roots(page, content_frame_selector)))
+    except Exception:
+        pass
+    try:
+        roots.extend(list(_ordered_frames(page)))
+    except Exception:
+        pass
+    roots.append(page)
+    for root in roots:
+        try:
+            v = _try_read_from_frame(root)
+            if v:
+                return v
+        except Exception:
+            continue
+    return ""
+
+
 @dataclass
 class _MyOrdersGridSearchResult:
     """Outcome of Vehicle Sales My Orders jqGrid search by mobile (``_create_order`` branching)."""
@@ -1948,9 +2022,19 @@ def _create_order(
                     scraped,
                 )
             _safe_page_wait(page, 500, log_label="after_financier_fill")
+            _fin_resolved = _scrape_create_order_financier_display_value(
+                page, content_frame_selector=content_frame_selector
+            ).strip()
+            if _fin_resolved:
+                scraped["financier_name"] = _fin_resolved
             note(
                 "Create Order: Financier/Financer main field + tablet field2 (ALL CAPS + Enter; no pick icon / "
-                f"no MVG). source={_fin_name!r} typed={_fin_caps!r}."
+                f"no MVG). staging={_fin_name!r} typed={_fin_caps!r}"
+                + (
+                    f" siebel_display={scraped.get('financier_name')!r}."
+                    if scraped.get("financier_name")
+                    else "."
+                )
             )
             _fin_post_err = _detect_siebel_error_popup(page, content_frame_selector)
             if _fin_post_err:
@@ -2716,3 +2800,179 @@ def _create_order(
                 invoice_number=str(scraped.get("invoice_number") or ""),
             )
         return True, None, scraped
+
+
+def print_hero_dms_forms(
+    page: Page,
+    *,
+    mobile: str,
+    order_number: str = "",
+    action_timeout_ms: int,
+    content_frame_selector: str | None,
+    note: Callable[..., None] | None = None,
+    downloads_dir: Path | None = None,
+    report_name: str = "Form22",
+) -> tuple[bool, str | None]:
+    """
+    Vehicle Sales → **My Orders** (mobile search + Order# drill-down, same as ``_create_order`` pending path),
+    then **Report(s)** → Run Report applet → **Form22** → Submit (saves download under ``downloads_dir``).
+    """
+    _note: Callable[..., None] = note if callable(note) else (lambda m: logger.info("%s", m))
+    _tmo = min(int(action_timeout_ms or 3000), 8000)
+
+    def _unique_dest(path: Path) -> Path:
+        if not path.exists():
+            return path
+        stem, suf = path.stem, path.suffix
+        for i in range(1, 1000):
+            alt = path.with_name(f"{stem}_{i}{suf}")
+            if not alt.exists():
+                return alt
+        return path
+
+    digits = re.sub(r"\D", "", (mobile or "").strip())
+    if not digits:
+        return False, "print_hero_dms_forms: mobile_phone is empty."
+
+    # ── Navigate to Vehicle Sales / My Orders (same URL + post-goto wait as ``_create_order``).
+    try:
+        from urllib.parse import urlparse as _up
+
+        _purl = _up(page.url)
+        _base_url = f"{_purl.scheme}://{_purl.netloc}{_purl.path}"
+    except Exception:
+        _base_url = "https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/"
+    _vs_url = f"{_base_url}?SWECmd=GotoView&SWEView=Order+Entry+-+My+Orders+View+(Sales)&SWERF=1&SWEHo=&SWEBU=1"
+    _note(f"Create Order: navigating to Vehicle Sales URL. base={_base_url[:60]}")
+    try:
+        page.goto(_vs_url, timeout=min(_tmo * 3, 45000), wait_until="load")
+    except Exception:
+        try:
+            page.goto(_vs_url, timeout=min(_tmo * 3, 45000), wait_until="domcontentloaded")
+        except Exception as _e:
+            _note(f"Create Order: goto Vehicle Sales URL raised {_e!r} — continuing.")
+    _siebel_after_goto_wait(page, floor_ms=4500)
+    _note(f"Create Order: arrived at Vehicle Sales (post-goto wait). URL={page.url[:120]}")
+
+    _mos = _run_vehicle_sales_my_orders_mobile_search(
+        page,
+        mobile=mobile,
+        action_timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+        note=_note,
+    )
+    _mo_po = (_mos.primary_order or "").strip()
+    _on = (order_number or "").strip() or _mo_po
+    if not _on:
+        return False, "print_hero_dms_forms: need Order# (from argument or My Orders grid)."
+
+    if not _click_my_orders_jqgrid_order_for_mobile_or_order(
+        page,
+        mobile=mobile,
+        order_number=_on,
+        content_frame_selector=content_frame_selector,
+        note=_note,
+        action_timeout_ms=action_timeout_ms,
+    ):
+        return False, "Create Order: Pending My Orders row but could not open Order# drill-down."
+    try:
+        page.wait_for_load_state("networkidle", timeout=8_000)
+    except Exception:
+        pass
+    _err_mo = _poll_and_handle_siebel_error_popup(
+        page,
+        content_frame_selector,
+        _note,
+        context="Create Order after My Orders Order# click (pending)",
+        total_ms=1400,
+        step_ms=300,
+    )
+    if _err_mo:
+        return (
+            False,
+            f"Create Order: Siebel error after My Orders Order# click (pending): {_err_mo[:220]}",
+        )
+    _safe_page_wait(page, 1800, log_label="after_my_orders_pending_drilldown")
+
+    # ── Report(s) toolbar → Run Report pane → Form22 → Submit (download).
+    _clicked_reports = False
+    for root in _siebel_all_search_roots(page, content_frame_selector):
+        try:
+            rep = root.locator('div#_sweviewbar li#tb_14[role="menuitem"]').first
+            if rep.count() <= 0 or not rep.is_visible(timeout=600):
+                rep = root.locator("div#_sweviewbar li#tb_14").first
+            if rep.count() > 0 and rep.is_visible(timeout=600):
+                try:
+                    rep.click(timeout=_tmo)
+                except Exception:
+                    rep.click(timeout=_tmo, force=True)
+                _clicked_reports = True
+                _note("print_hero_dms_forms: clicked Report(s) (tb_14).")
+                _safe_page_wait(page, 1200, log_label="after_reports_toolbar_click")
+                break
+        except Exception:
+            continue
+    if not _clicked_reports:
+        return False, "print_hero_dms_forms: Report(s) toolbar control (tb_14) not found or not clickable."
+
+    sel_loc = None
+    for root in _siebel_all_search_roots(page, content_frame_selector):
+        try:
+            cand = root.locator('select[name="s_reportNameField"]').first
+            if cand.count() > 0 and cand.is_visible(timeout=1500):
+                sel_loc = cand
+                break
+        except Exception:
+            continue
+    if sel_loc is None:
+        return False, "print_hero_dms_forms: Run Report select s_reportNameField not visible."
+
+    _picked = False
+    try:
+        sel_loc.select_option(value=report_name, timeout=_tmo)
+        _picked = True
+    except Exception:
+        try:
+            sel_loc.select_option(label=report_name, timeout=_tmo)
+            _picked = True
+        except Exception:
+            _picked = False
+    if not _picked:
+        return False, f"print_hero_dms_forms: could not select report {report_name!r}."
+
+    sub = None
+    for root in _siebel_all_search_roots(page, content_frame_selector):
+        try:
+            b = root.locator('button[title="Run Report:Submit"].appletButton').first
+            if b.count() <= 0 or not b.is_visible(timeout=400):
+                b = root.locator('button[title="Run Report:Submit"]').first
+            if b.count() > 0 and b.is_visible(timeout=800):
+                sub = b
+                break
+        except Exception:
+            continue
+    if sub is None:
+        return False, "print_hero_dms_forms: Run Report Submit button not found."
+
+    dest_root = downloads_dir if downloads_dir is not None else Path.home() / "Downloads"
+    try:
+        dest_root.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+
+    try:
+        with page.expect_download(timeout=min(180_000, max(60_000, _tmo * 40))) as dl_info:
+            try:
+                sub.click(timeout=_tmo)
+            except Exception:
+                sub.click(timeout=_tmo, force=True)
+        dl = dl_info.value
+        suggested = (dl.suggested_filename or "").strip() or f"{report_name}.pdf"
+        final_path = _unique_dest(dest_root / suggested)
+        dl.save_as(str(final_path))
+        _note(f"print_hero_dms_forms: saved download to {final_path!r}.")
+        return True, None
+    except PlaywrightTimeout:
+        return False, "print_hero_dms_forms: timed out waiting for report download after Submit."
+    except Exception as _ex:
+        return False, f"print_hero_dms_forms: download/save failed: {_ex!s}"

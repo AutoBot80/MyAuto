@@ -111,7 +111,7 @@ def persist_staging_for_submit(
 
 
 def mark_staging_committed_on_cursor(cur, staging_id: str, dealer_id: int, *, patch_json_fragment: str) -> None:
-    """Set status to committed and merge ``patch_json_fragment`` into ``payload_json`` (e.g. ``customer_id`` / ``vehicle_id``)."""
+    """Set status to committed and merge ``patch_json_fragment`` into ``payload_json`` (ids, optional ``customer.financier``)."""
     sid = (staging_id or "").strip()
     cur.execute(
         """

@@ -235,7 +235,8 @@ def commit_staging_masters_and_finalize_row(
     merged_payload: dict[str, Any],
 ) -> tuple[int, int]:
     """
-    Single transaction: upsert masters, mark ``add_sales_staging`` committed, patch payload with ids.
+    Single transaction: upsert masters, mark ``add_sales_staging`` committed, patch payload with ids
+    and (when present) Siebel-resolved ``customer.financier`` so ``payload_json`` matches masters.
     Called only after **Create Invoice** (Invoice# present in merged scrape); order/invoice/enquiry are
     stored on ``sales_master`` in the same INSERT — no follow-up UPDATE.
     """
@@ -255,7 +256,12 @@ def commit_staging_masters_and_finalize_row(
     with get_connection() as conn:
         with conn.cursor() as cur:
             cid, vid = upsert_customer_vehicle_sales(cur, merged_payload)
-            patch = json.dumps({"customer_id": cid, "vehicle_id": vid}, default=str)
+            patch_obj: dict[str, Any] = {"customer_id": cid, "vehicle_id": vid}
+            cust_m = merged_payload.get("customer") if isinstance(merged_payload.get("customer"), dict) else {}
+            fn = (cust_m.get("financier") or "").strip()
+            if fn:
+                patch_obj["customer"] = {"financier": fn[:255]}
+            patch = json.dumps(patch_obj, default=str)
             mark_staging_committed_on_cursor(cur, sid, dealer_id, patch_json_fragment=patch)
         conn.commit()
     return cid, vid

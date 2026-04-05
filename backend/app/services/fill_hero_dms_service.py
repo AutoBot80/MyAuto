@@ -81,6 +81,7 @@ from app.services.hero_dms_playwright_customer import (
 )
 from app.services.hero_dms_playwright_invoice import (
     _create_order,
+    print_hero_dms_forms,
 )
 from app.repositories import form_dms as form_dms_repo
 from app.repositories import form_vahan as form_vahan_repo
@@ -286,6 +287,11 @@ def _merge_staging_payload_with_scrape_for_commit(staging_payload: dict, scraped
         v = s.get(k)
         if v is not None and str(v).strip():
             veh[k] = str(v).strip()
+    fn = (s.get("financier_name") or "").strip()
+    if fn:
+        cust = merged.setdefault("customer", {})
+        if isinstance(cust, dict):
+            cust["financier"] = fn[:255]
     return merged
 
 
@@ -428,6 +434,7 @@ def _write_data_from_dms(ocr_output_dir: Path, subfolder: str, customer: dict, v
         ("Year of Mfg", "year_of_mfg"),
         ("Order # (DMS)", "order_number"),
         ("Invoice # (DMS)", "invoice_number"),
+        ("Financier (DMS display)", "financier_name"),
     ]:
         val = vehicle.get(key)
         lines.append(f"{label}: {(val or '').strip() or '—'}")
@@ -2167,6 +2174,29 @@ def _run_fill_dms_real_siebel_playwright(
     result["dms_step_messages"] = list(frag.get("dms_step_messages") or [])
     if frag.get("ready_for_client_create_invoice") is not None:
         result["ready_for_client_create_invoice"] = bool(frag.get("ready_for_client_create_invoice"))
+    if (result.get("vehicle") or {}).get("financier_name"):
+        _write_dms_form_values(
+            ocr_output_dir=ocr_dir,
+            subfolder=effective_subfolder,
+            customer_id=customer_id,
+            vehicle_id=vehicle_id,
+            dms_fill_row=dms_values.get("row"),
+            customer_name=dms_values["customer_name"],
+            mobile_number=mobile_phone,
+            alt_phone_num=landline,
+            address=addr,
+            state=state,
+            pin_code=pin,
+            key_no=key_partial,
+            frame_no=frame_partial,
+            engine_no=engine_partial,
+            relation_prefix=dms_values.get("relation_prefix") or "",
+            care_of=dms_values.get("care_of") or "",
+            customer_budget=DMS_TRACE_DEFAULT_CUSTOMER_BUDGET,
+            finance_required=dms_values.get("finance_required") or "",
+            financier_name=dms_values.get("financier_name") or "",
+            dms_contact_path=dms_values.get("dms_contact_path") or "",
+        )
     _sort_dms_milestones(result)
     result["dms_automation_mode"] = "real"
     if result.get("error"):
@@ -2278,6 +2308,7 @@ def run_fill_dms_only(
         )
         return result
 
+    page = None
     try:
         logger.info("fill_dms_service: run_fill_dms_only starting mode=real dms=%s", dms_base_url[:50])
         page, open_error = get_or_open_site_page(
@@ -2342,6 +2373,21 @@ def run_fill_dms_only(
                 customer_id=cid_c,
                 vehicle_id=vid_c,
             )
+            if page is not None:
+                try:
+                    _frame_sel = (DMS_SIEBEL_CONTENT_FRAME_SELECTOR or "").strip() or None
+                    _ok_pf, _err_pf = print_hero_dms_forms(
+                        page,
+                        mobile=(dms_values.get("mobile_phone") or "").strip(),
+                        order_number=(scraped_final.get("order_number") or "").strip(),
+                        action_timeout_ms=DMS_SIEBEL_ACTION_TIMEOUT_MS,
+                        content_frame_selector=_frame_sel,
+                        note=lambda m: logger.info("%s", m),
+                    )
+                    result["hero_dms_form22_print"] = {"ok": _ok_pf, "error": _err_pf}
+                except Exception as _pf_exc:
+                    logger.warning("fill_dms_service: print_hero_dms_forms exception: %s", _pf_exc)
+                    result["hero_dms_form22_print"] = {"ok": False, "error": str(_pf_exc)}
         except Exception as commit_exc:
             logger.warning("fill_dms_service: staging master commit failed: %s", commit_exc)
             result["error"] = f"Database commit after DMS failed: {commit_exc!s}"
@@ -3292,6 +3338,15 @@ def Playwright_Hero_DMS_fill(
                 veh["cubic_capacity"] = order_scraped.get("cubic_capacity")
             if order_scraped.get("vehicle_type"):
                 veh["vehicle_type"] = order_scraped.get("vehicle_type")
+            _fn_sc = (order_scraped.get("financier_name") or "").strip()
+            if _fn_sc:
+                veh["financier_name"] = _fn_sc
+                dms_values["financier_name"] = _fn_sc
+                _cm_up = out.get("dms_customer_master_collated")
+                if isinstance(_cm_up, dict):
+                    _cf_up = _cm_up.get("fields")
+                    if isinstance(_cf_up, dict):
+                        _cf_up["financier"] = _fn_sc
             out["vehicle"] = veh
             log_vehicle_snapshot("video_create_order_scrape_merge")
             _collate_fields = None
