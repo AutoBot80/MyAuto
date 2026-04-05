@@ -4573,6 +4573,8 @@ def _vehicle_master_prepare_gaps(merged: dict) -> tuple[list[str], list[str]]:
             "use Serial/Features in prepare_vehicle or DMS/staging."
         )
 
+    return critical, info
+
 
 def _siebel_fill_key_battery_from_dms_values(
     page: Page,
