@@ -32,6 +32,7 @@ from app.services.utility_functions import (
     clean_text,
     default_profession_if_empty,
     insurer_prefer_matches,
+    normalize_address_dedupe_repetition,
     normalize_dob_for_misp,
     normalize_nominee_relationship_value,
     require_customer_vehicle_ids,
@@ -84,7 +85,10 @@ def _apply_staging_insurance_overlay(values: dict, staging_payload: dict | None)
     take_if_empty("insurer", ins.get("insurer"))
     take_if_empty("dob", cust.get("date_of_birth") or cust.get("dob") or ins.get("dob"))
     take_if_empty("nominee_name", ins.get("nominee_name") or cust.get("nominee_name"))
-    take_if_empty("nominee_relationship", ins.get("nominee_relationship"))
+    take_if_empty(
+        "nominee_relationship",
+        ins.get("nominee_relationship") or ins.get("nominee_relation"),
+    )
     if not values.get("nominee_age") and ins.get("nominee_age") is not None:
         t = clean_text(str(ins.get("nominee_age")).strip())
         if t:
@@ -221,6 +225,7 @@ def build_insurance_fill_values(
             "Insurance: using insurer from OCR JSON (%r); view/staging had no insurer",
             insurer_json[:80],
         )
+    values["address"] = normalize_address_dedupe_repetition(values.get("address"))
     return values
 
 

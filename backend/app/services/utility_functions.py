@@ -142,6 +142,27 @@ def clean_text(value: object | None) -> str:
     return str(value).strip()
 
 
+def normalize_address_dedupe_repetition(raw: str | None) -> str:
+    """
+    Remove common OCR/merge duplicates in a single address line, e.g.
+    ``S/O S/O Brij Gopal`` → ``S/O Brij Gopal``. Collapses consecutive identical
+    **C/O**, **S/O**, **W/O**, **D/O** markers (case- and punctuation-insensitive).
+    """
+    t = clean_text(raw)
+    if not t:
+        return ""
+    t = re.sub(r"\s+", " ", t).strip()
+    # Same relation marker twice in a row (slash and dots optional, as on Aadhaar / forms).
+    marker = r"(?:C\.?\s*/\s*O\.?|S\.?\s*/\s*O\.?|W\.?\s*/\s*O\.?|D\.?\s*/\s*O\.?)"
+    pat = re.compile(rf"(?i)\b({marker})\s+\1\b")
+    for _ in range(16):
+        n = pat.sub(r"\1", t)
+        if n == t:
+            break
+        t = n
+    return t
+
+
 # When Details-sheet profession is blank or sanitized away (e.g. marital-status bleed), MISP/DMS use this.
 DEFAULT_SALES_DETAIL_PROFESSION = "Employed"
 

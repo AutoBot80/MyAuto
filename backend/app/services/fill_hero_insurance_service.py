@@ -94,6 +94,13 @@ HERO_MISP_PROPOSAL_OPTIONAL_UNCHECK_CHECKBOX_REGEX = ""
 # ASP.NET ``ContentPlaceHolder1`` client-id prefix on ``MispPolicy.aspx`` proposal controls (frame scrape).
 HERO_MISP_CPH1 = "ctl00_ContentPlaceHolder1"
 
+# Nominee **Relation** ``<select>`` — portal builds vary (try in order per frame root).
+HERO_MISP_NOMINEE_RELATION_CPH1_SUFFIXES = (
+    "ddlNomineeRelation",
+    "ddlNomineeRelationship",
+    "ddlRelationWithNominee",
+)
+
 # Return from ``_proposal_step_checkbox_by_cph1_id`` when no control matched (caller may use label/regex fallback).
 PROPOSAL_CHECKBOX_ID_NOT_FOUND = "__proposal_checkbox_id_not_found__"
 # After native ``<select>`` insurer commit (non-keyboard DOM path), use ``light`` nav (skip tab-away) — same as keyboard SOP.
@@ -4982,74 +4989,132 @@ def _proposal_step_select_fuzzy(
         return None
     last = "no select control matched labels"
     if cph1_id_suffix:
+        _suffixes: tuple[str, ...] = (cph1_id_suffix,)
+        if cph1_id_suffix == "ddlNomineeRelation":
+            _suffixes = HERO_MISP_NOMINEE_RELATION_CPH1_SUFFIXES
         for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
-            try:
-                loc = _proposal_cph1_locator(root, cph1_id_suffix)
-                if loc.count() == 0:
-                    continue
-                el = loc.first
-                if not el.is_visible(timeout=800):
-                    _proposal_scroll_visible(el, timeout_ms=timeout_ms)
-                if not el.is_visible(timeout=1_500):
-                    continue
-                tag = (el.evaluate("e => e && e.tagName ? e.tagName.toUpperCase() : ''") or "").upper()
-                if tag != "SELECT":
-                    last = f"id {cph1_id_suffix!r} is {tag}, not SELECT"
-                    continue
-                # MISP **Marital Status** — try canonical labels; portal may spell **Single** as **SIngle**.
-                if cph1_id_suffix == "ddlMaritalStatus" and q in (
-                    "Married",
-                    "Single",
-                    "Divorced",
-                    "Widow",
-                ):
-                    marital_labels = {
-                        "Married": ("Married",),
-                        "Single": ("Single", "SIngle"),
-                        "Divorced": ("Divorced",),
-                        "Widow": ("Widow",),
-                    }[q]
-                    for lbl in marital_labels:
-                        try:
-                            loc.select_option(label=lbl, timeout=timeout_ms, force=True)
-                            snap = _read_locator_value_snapshot(loc)
-                            st = (snap.get("selected_text") or "").strip()
-                            if _proposal_expected_matches_readback(q, st):
-                                _proposal_log(
-                                    ocr_output_dir,
-                                    subfolder,
-                                    step_id,
-                                    f"select ok id_suffix=ddlMaritalStatus label={lbl!r} readback={st!r}",
-                                )
-                                return None
-                        except Exception:
-                            pass
-                if not _select_option_fuzzy_in_select(
-                    page,
-                    loc,
-                    q,
-                    timeout_ms=timeout_ms,
-                    fuzzy_min_score=KYC_INSURER_FUZZY_MIN_SCORE,
-                ):
-                    last = f"fuzzy select failed for id suffix {cph1_id_suffix!r}"
-                    continue
-                snap = _read_locator_value_snapshot(loc)
-                st = (snap.get("selected_text") or "").strip()
-                if not _proposal_expected_matches_readback(q, st):
-                    return (
-                        f"{step_id}: readback mismatch expected={q!r} selected_text={st!r} "
-                        f"(id_suffix={cph1_id_suffix!r})"
+            for _suf in _suffixes:
+                try:
+                    loc = _proposal_cph1_locator(root, _suf)
+                    if loc.count() == 0:
+                        continue
+                    el = loc.first
+                    if not el.is_visible(timeout=800):
+                        _proposal_scroll_visible(el, timeout_ms=timeout_ms)
+                    if not el.is_visible(timeout=1_500):
+                        continue
+                    tag = (el.evaluate("e => e && e.tagName ? e.tagName.toUpperCase() : ''") or "").upper()
+                    if tag != "SELECT":
+                        last = f"id {_suf!r} is {tag}, not SELECT"
+                        continue
+                    # MISP **Marital Status** — try canonical labels; portal may spell **Single** as **SIngle**.
+                    if cph1_id_suffix == "ddlMaritalStatus" and q in (
+                        "Married",
+                        "Single",
+                        "Divorced",
+                        "Widow",
+                    ):
+                        marital_labels = {
+                            "Married": ("Married",),
+                            "Single": ("Single", "SIngle"),
+                            "Divorced": ("Divorced",),
+                            "Widow": ("Widow",),
+                        }[q]
+                        for lbl in marital_labels:
+                            try:
+                                loc.select_option(label=lbl, timeout=timeout_ms, force=True)
+                                snap = _read_locator_value_snapshot(loc)
+                                st = (snap.get("selected_text") or "").strip()
+                                if _proposal_expected_matches_readback(q, st):
+                                    _proposal_log(
+                                        ocr_output_dir,
+                                        subfolder,
+                                        step_id,
+                                        f"select ok id_suffix=ddlMaritalStatus label={lbl!r} readback={st!r}",
+                                    )
+                                    return None
+                            except Exception:
+                                pass
+                    # Nominee **Relation** — staging often sends **Mother** / **Father**; MISP option text may differ
+                    # in case or wording; try explicit labels before generic fuzzy (same idea as marital).
+                    if cph1_id_suffix == "ddlNomineeRelation" and q:
+                        qn = normalize_for_fuzzy_match(q)
+                        rel_try: tuple[tuple[str, tuple[str, ...]], ...] = (
+                            ("mother", ("Mother", "MOTHER")),
+                            ("father", ("Father", "FATHER")),
+                            ("wife", ("Wife", "WIFE")),
+                            ("husband", ("Husband", "HUSBAND")),
+                            ("spouse", ("Spouse", "SPOUSE")),
+                            ("son", ("Son", "SON")),
+                            ("daughter", ("Daughter", "DAUGHTER")),
+                            ("brother", ("Brother", "BROTHER")),
+                            ("sister", ("Sister", "SISTER")),
+                            ("other", ("Other", "OTHER")),
+                        )
+                        for key, labels in rel_try:
+                            if qn != key and key not in qn and qn not in key:
+                                continue
+                            for lbl in labels:
+                                try:
+                                    loc.select_option(label=lbl, timeout=timeout_ms, force=True)
+                                    snap = _read_locator_value_snapshot(loc)
+                                    st = (snap.get("selected_text") or "").strip()
+                                    if _proposal_expected_matches_readback(q, st):
+                                        _proposal_log(
+                                            ocr_output_dir,
+                                            subfolder,
+                                            step_id,
+                                            f"select ok id_suffix={_suf!r} label={lbl!r} readback={st!r}",
+                                        )
+                                        return None
+                                except Exception:
+                                    pass
+                            if key == "mother":
+                                try:
+                                    loc.select_option(
+                                        label=re.compile(r"^\s*mother\s*$", re.I),
+                                        timeout=timeout_ms,
+                                        force=True,
+                                    )
+                                    snap = _read_locator_value_snapshot(loc)
+                                    st = (snap.get("selected_text") or "").strip()
+                                    if _proposal_expected_matches_readback(q, st):
+                                        _proposal_log(
+                                            ocr_output_dir,
+                                            subfolder,
+                                            step_id,
+                                            f"select ok id_suffix={_suf!r} label=regex_mother readback={st!r}",
+                                        )
+                                        return None
+                                except Exception:
+                                    pass
+                            break
+                    if not _select_option_fuzzy_in_select(
+                        page,
+                        loc,
+                        q,
+                        timeout_ms=timeout_ms,
+                        fuzzy_min_score=KYC_INSURER_FUZZY_MIN_SCORE,
+                    ):
+                        last = f"fuzzy select failed for id suffix {_suf!r}"
+                        continue
+                    snap = _read_locator_value_snapshot(loc)
+                    st = (snap.get("selected_text") or "").strip()
+                    if not _proposal_expected_matches_readback(q, st):
+                        return (
+                            f"{step_id}: readback mismatch expected={q!r} selected_text={st!r} "
+                            f"(id_suffix={_suf!r})"
+                        )
+                    _proposal_log(
+                        ocr_output_dir,
+                        subfolder,
+                        step_id,
+                        f"select ok id_suffix={_suf!r} readback={st!r}",
                     )
-                _proposal_log(
-                    ocr_output_dir,
-                    subfolder,
-                    step_id,
-                    f"select ok id_suffix={cph1_id_suffix!r} readback={st!r}",
-                )
-                return None
-            except Exception as exc:
-                last = str(exc)
-                continue
+                    return None
+                except Exception as exc:
+                    last = str(exc)
+                    continue
     for lp in label_patterns:
         el = _proposal_first_label_control_locator(page, lp)
         if el is None:
@@ -7474,7 +7539,12 @@ def _hero_misp_fill_proposal_and_review(
     if rel:
         err = _proposal_step_select_fuzzy(
             page,
-            (r"Relation",),
+            (
+                r"Nominee\s*Relation",
+                r"Relation\s*with\s*Nominee",
+                r"Relation\s*with\s*Proposer",
+                r"Relation\s*with",
+            ),
             rel,
             "nominee_relationship",
             ocr_output_dir,

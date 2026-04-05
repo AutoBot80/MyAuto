@@ -10,6 +10,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from app.services.utility_functions import normalize_address_dedupe_repetition
+
 # Longest names first for alternation (word-boundary match).
 _INDIA_REGIONS: tuple[str, ...] = (
     "Dadra and Nagar Haveli and Daman and Diu",
@@ -307,7 +309,7 @@ def normalize_address_freeform(address_line: str) -> dict[str, str]:
     out: dict[str, str] = {}
     if not address_line or not str(address_line).strip():
         return out
-    text = str(address_line).strip()
+    text = normalize_address_dedupe_repetition(str(address_line).strip())
 
     co = _extract_care_of_from_text(text)
     if co:
