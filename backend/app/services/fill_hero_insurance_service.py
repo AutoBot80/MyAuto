@@ -5392,7 +5392,7 @@ def _proposal_step_fill_input(
                 got = (snap.get("value") or "").strip()
                 if not got:
                     got = _proposal_read_input_value_best_effort(el)
-                if cph1_id_suffix in ("txtNomineeName", "txtNomineeAge") and (
+                if (
                     not got
                     or (
                         got != v
