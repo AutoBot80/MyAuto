@@ -811,6 +811,8 @@ def _kyc_post_mobile_entry_branch(
     timeout_ms: int,
     post_mobile_recovery_digits: str | None = None,
     kyc_local_scan_paths: list[str] | None = None,
+    ocr_output_dir: Path | None = None,
+    subfolder: str | None = None,
 ) -> str | None:
     """
     Run **after** the **first** KYC attempt (OVD = **AADHAAR CARD** only — set upstream), mobile filled,
@@ -874,7 +876,11 @@ def _kyc_post_mobile_entry_branch(
             "upload step may fail."
         )
     return _kyc_proceed_or_upload(
-        page, timeout_ms=to, kyc_local_scan_paths=kyc_local_scan_paths
+        page,
+        timeout_ms=to,
+        kyc_local_scan_paths=kyc_local_scan_paths,
+        ocr_output_dir=ocr_output_dir,
+        subfolder=subfolder,
     )
 
 
@@ -2946,6 +2952,158 @@ def _kyc_locator_file_inputs_best(page):
     return page.locator('input[type="file"]')
 
 
+# Run inside the KYC **Frame** document after **AADHAAR EXTRACTION** exposes upload rows.
+_KYC_FILE_INPUTS_SCRAPE_JS = r"""() => {
+  const inputs = Array.from(document.querySelectorAll('input[type="file"]'));
+  return inputs.map((el, index) => {
+    let bestLabel = '';
+    try {
+      if (el.labels && el.labels.length) {
+        bestLabel = Array.from(el.labels)
+          .map((l) => (l.textContent || '').trim())
+          .filter(Boolean)
+          .join(' ');
+      }
+    } catch (e) {}
+    if (!bestLabel.trim()) {
+      let p = el.parentElement;
+      for (let d = 0; d < 8 && p; d++, p = p.parentElement) {
+        const t = (p.innerText || '').replace(/\s+/g, ' ').trim();
+        if (t.length > bestLabel.length && t.length < 500) bestLabel = t;
+      }
+    }
+    return {
+      index: index,
+      id: el.id || '',
+      name: el.name || '',
+      className: String(el.className || '').replace(/\s+/g, ' ').trim().slice(0, 120),
+      ariaLabel: el.getAttribute('aria-label') || '',
+      title: el.getAttribute('title') || '',
+      bestLabel: bestLabel.slice(0, 280),
+    };
+  });
+}"""
+
+
+def _kyc_scrape_file_inputs_metadata(kyc_fr) -> list[dict[str, Any]]:
+    """Snapshot each ``input[type=file]`` in the KYC frame (id, name, inferred label text)."""
+    try:
+        raw = kyc_fr.evaluate(_KYC_FILE_INPUTS_SCRAPE_JS)
+        if isinstance(raw, list):
+            return [dict(x) for x in raw if isinstance(x, dict)]
+    except Exception as exc:
+        logger.debug("Hero Insurance: KYC file input scrape evaluate failed: %s", exc)
+    return []
+
+
+def _kyc_meta_match_blob(m: dict[str, Any]) -> str:
+    parts = [
+        str(m.get("id") or ""),
+        str(m.get("name") or ""),
+        str(m.get("ariaLabel") or ""),
+        str(m.get("title") or ""),
+        str(m.get("bestLabel") or ""),
+    ]
+    return " ".join(p for p in parts if p).lower()
+
+
+def _kyc_resolve_upload_nth_order(meta: list[dict[str, Any]]) -> tuple[list[int], str]:
+    """
+    Map upload slots **front → rear → customer photo** to ``Locator.nth`` indices in document order.
+
+    Uses label/id/name text from :func:`_kyc_scrape_file_inputs_metadata`. Falls back to ``[0,1,2]``.
+    """
+    n = len(meta)
+    if n == 0:
+        return [], "empty"
+    if n < 3:
+        return [int(meta[i].get("index", i)) for i in range(n)], "dom_order_partial"
+
+    re_front = re.compile(
+        r"aadhaar\s*front|front\s*image|aadhar\s*front|आधार.*front|front\s*side",
+        re.I,
+    )
+    re_rear = re.compile(
+        r"aadhaar\s*rear|rear\s*image|aadhar\s*rear|aadhar\s*back|back\s*image|आधार.*rear",
+        re.I,
+    )
+    re_photo = re.compile(
+        r"customer\s*photo|photograph|customer\s*picture|customer\s*pic|photo\s*image",
+        re.I,
+    )
+
+    def find_idx(pat: re.Pattern) -> int | None:
+        for m in meta:
+            if pat.search(_kyc_meta_match_blob(m)):
+                return int(m.get("index", 0))
+        return None
+
+    fi = find_idx(re_front)
+    ri = find_idx(re_rear)
+    pi = find_idx(re_photo)
+    if fi is not None and ri is not None and pi is not None and len({fi, ri, pi}) == 3:
+        return [fi, ri, pi], "label_three_distinct"
+
+    all_idx = [int(m.get("index", i)) for i, m in enumerate(meta)]
+    if fi is not None and ri is not None:
+        used = {fi, ri}
+        rest = [i for i in all_idx if i not in used]
+        if len(rest) == 1:
+            return [fi, ri, rest[0]], "label_front_rear_infer_photo"
+
+    return [0, 1, 2], "dom_order_fallback"
+
+
+def _kyc_note_file_inputs_scrape(
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
+    meta: list[dict[str, Any]],
+    order: list[int],
+    strategy: str,
+) -> None:
+    """Append compact JSON to ``Playwright_insurance.txt`` for operator selector work."""
+    if not ocr_output_dir or not subfolder or not str(subfolder).strip():
+        return
+    try:
+        payload = {
+            "kyc_file_inputs": meta,
+            "upload_nth_order_front_rear_photo": order,
+            "upload_order_strategy": strategy,
+        }
+        line = "kyc_file_inputs_scrape: " + json.dumps(payload, ensure_ascii=False)[:14_000]
+        append_playwright_insurance_line_or_dealer_fallback(
+            ocr_output_dir,
+            subfolder,
+            "NOTE",
+            line,
+        )
+    except Exception as exc:
+        logger.debug("Hero Insurance: kyc file input scrape NOTE: %s", exc)
+
+
+def _kyc_dispatch_file_input_dom_events(file_input) -> None:
+    """Fire ``input``/``change`` on the file control so ASP.NET / client validators see the new ``FileList``."""
+    try:
+        file_input.evaluate(
+            """el => {
+              if (!el || el.tagName !== 'INPUT' || el.type !== 'file') return;
+              el.dispatchEvent(new Event('input', { bubbles: true }));
+              el.dispatchEvent(new Event('change', { bubbles: true }));
+            }"""
+        )
+    except Exception:
+        pass
+
+
+def _kyc_file_input_has_files(file_input) -> bool | None:
+    """``True`` / ``False`` if readable; ``None`` if evaluation failed."""
+    try:
+        v = file_input.evaluate("el => !!(el && el.files && el.files.length > 0)")
+        return bool(v)
+    except Exception:
+        return None
+
+
 def _kyc_set_one_file_input_chooser_then_direct(
     page,
     file_input,
@@ -2955,50 +3113,115 @@ def _kyc_set_one_file_input_chooser_then_direct(
     timeout_ms: int,
 ) -> tuple[bool, str | None]:
     """
-    Attach one file like a user: prefer **file chooser** (click the ``input[type=file]`` so the portal
-    sees a real pick); fall back to ``set_input_files``. Verifies ``files.length`` when possible.
+    Attach one KYC upload file. **Playwright** is most reliable with ``set_input_files`` on the
+    ``<input type=file>`` (including hidden ASP.NET controls); iframe + ``expect_file_chooser`` often
+    fails or leaves the portal showing *Files could not be loaded*. We **set files first**, dispatch
+    ``input``/``change``, verify ``files.length``, then optionally retry via **file chooser** if needed.
     """
     to = min(int(timeout_ms), 60_000)
-    if path_str:
+
+    def _attach_direct() -> str | None:
         try:
-            with page.expect_file_chooser(timeout=min(12_000, to)) as fc_info:
-                file_input.click(timeout=to, force=True)
-            fc_info.value.set_files(path_str)
+            if path_str:
+                file_input.set_input_files(path_str, timeout=to)
+            elif payload:
+                file_input.set_input_files(
+                    {
+                        "name": payload["name"],
+                        "mimeType": payload["mimeType"],
+                        "buffer": payload["buffer"],
+                    },
+                    timeout=to,
+                )
+            else:
+                return "internal: no path or payload for KYC file input"
         except Exception as exc:
+            return str(exc)
+        return None
+
+    if not path_str and not payload:
+        return False, "internal: no path or payload for KYC file input"
+
+    err = _attach_direct()
+    if err:
+        return False, err
+    _kyc_dispatch_file_input_dom_events(file_input)
+    _t(page, 220)
+    has = _kyc_file_input_has_files(file_input)
+    if has is True:
+        return True, None
+
+    # ``files.length`` can read as 0 in some builds even after a good CDP attach; ``None`` = skip chooser.
+    if has is False:
+        if path_str:
             logger.info(
-                "Hero Insurance: KYC file chooser path failed (%s); trying set_input_files for same input.",
-                exc,
+                "Hero Insurance: KYC file input reports empty after direct attach; "
+                "retrying via file chooser + set_files."
             )
             try:
-                file_input.set_input_files(path_str, timeout=to)
-            except Exception as exc2:
-                return False, str(exc2)
-        _t(page, 120)
-        try:
-            ok = file_input.evaluate("el => !!(el && el.files && el.files.length > 0)")
-            if ok is False:
+                with page.expect_file_chooser(timeout=min(12_000, to)) as fc_info:
+                    file_input.click(timeout=to, force=True)
+                fc_info.value.set_files(path_str)
+            except Exception as exc:
                 return (
                     False,
-                    "portal file input shows no file after attach (try Uploaded scans jpg/png/img ≤512 KB).",
+                    f"file input empty after attach and file chooser failed: {exc!s}",
                 )
-        except Exception:
-            pass
-        return True, None
-    if payload:
-        try:
-            file_input.set_input_files(
-                {
-                    "name": payload["name"],
-                    "mimeType": payload["mimeType"],
-                    "buffer": payload["buffer"],
-                },
-                timeout=to,
+            _kyc_dispatch_file_input_dom_events(file_input)
+            _t(page, 220)
+            has2 = _kyc_file_input_has_files(file_input)
+            if has2 is False:
+                return (
+                    False,
+                    "portal still shows no file after chooser (use jpg/jpeg/png/img ≤512 KB per MISP).",
+                )
+        else:
+            return (
+                False,
+                "portal file input shows no file after attach (placeholder may be rejected by MISP).",
             )
-        except Exception as exc:
-            return False, str(exc)
-        _t(page, 80)
-        return True, None
-    return False, "internal: no path or payload for KYC file input"
+
+    return True, None
+
+
+def _kyc_js_click_primary_cta_in_document(root) -> bool:
+    """
+    Last-resort: click the first visible submit/button/link whose label/value looks like KYC CTA.
+    MISP often uses **KYC Verification** before redirect and **Proceed** after; values live on ``<input>``.
+    """
+    try:
+        return bool(
+            root.evaluate(
+                """() => {
+                  const re = /^(\\s*)(Proceed|Submit|Continue|Verify|KYC\\s*Verification)(\\s*)$/i;
+                  const valRe = /Proceed|Verification|Submit|Continue|Verify|KYC/i;
+                  const nodes = Array.from(
+                    document.querySelectorAll(
+                      'input[type="submit"], input[type="button"], button, a[href], [role="button"]'
+                    )
+                  );
+                  for (const el of nodes) {
+                    if (el.disabled) continue;
+                    const r = el.getBoundingClientRect();
+                    if (r.width < 2 || r.height < 2) continue;
+                    const st = window.getComputedStyle(el);
+                    if (st.visibility === 'hidden' || st.display === 'none' || Number(st.opacity) === 0)
+                      continue;
+                    const v = (el.value != null && el.value !== '')
+                      ? String(el.value).trim()
+                      : (el.textContent || '').trim();
+                    if (!v) continue;
+                    if (re.test(v) || (el.tagName === 'INPUT' && valRe.test(v))) {
+                      el.click();
+                      return true;
+                    }
+                  }
+                  return false;
+                }"""
+            )
+        )
+    except Exception:
+        return False
 
 
 def _kyc_click_proceed_submit_after_kyc_upload(
@@ -3008,14 +3231,16 @@ def _kyc_click_proceed_submit_after_kyc_upload(
     timeout_ms: int,
 ) -> str | None:
     """
-    Click **Proceed** / **Submit** / **Continue** after uploads (search KYC frame first, then page).
-    Returns an error string if no visible CTA matched.
+    Click KYC primary CTA after uploads (KYC frame first, then host page). MISP labels vary:
+    **Proceed**, **KYC Verification**, **Submit**, **Continue**, **Verify**; also ``<input>`` ``value=``.
     """
     to = min(int(timeout_ms), 45_000)
     name_patterns = (
         re.compile(r"^\s*Proceed\s*$", re.I),
+        re.compile(r"^\s*KYC\s*Verification\s*$", re.I),
         re.compile(r"^\s*Submit\s*$", re.I),
         re.compile(r"^\s*Continue\s*$", re.I),
+        re.compile(r"^\s*Verify\s*$", re.I),
     )
     for root in (kyc_fr, page):
         for pat in name_patterns:
@@ -3030,18 +3255,35 @@ def _kyc_click_proceed_submit_after_kyc_upload(
                     return None
             except Exception:
                 continue
-    try:
-        inp = kyc_fr.locator(
-            'input[type="submit"][value*="Proceed" i], input[type="button"][value*="Proceed" i]'
-        )
-        if inp.count() > 0 and inp.first.is_visible(timeout=1_500):
-            inp.first.click(timeout=to)
-            logger.info("Hero Insurance: post-KYC-upload clicked input Proceed.")
+        try:
+            ln = root.get_by_role("link", name=re.compile(r"Proceed|Verification|Submit|Continue", re.I))
+            if ln.count() > 0 and ln.first.is_visible(timeout=1_500):
+                ln.first.click(timeout=to)
+                logger.info("Hero Insurance: post-KYC-upload clicked link CTA.")
+                return None
+        except Exception:
+            pass
+        try:
+            inp = root.locator(
+                'input[type="submit"][value*="Proceed" i], input[type="button"][value*="Proceed" i], '
+                'input[type="submit"][value*="Verification" i], input[type="button"][value*="Verification" i], '
+                'input[type="submit"][value*="KYC" i], input[type="button"][value*="KYC" i], '
+                'input[type="submit"][value*="Submit" i], input[type="button"][value*="Submit" i], '
+                'input[type="submit"][value*="Continue" i], input[type="button"][value*="Continue" i], '
+                'input[type="submit"][value*="Verify" i], input[type="button"][value*="Verify" i]'
+            )
+            if inp.count() > 0 and inp.first.is_visible(timeout=2_000):
+                inp.first.click(timeout=to)
+                logger.info("Hero Insurance: post-KYC-upload clicked input[type=submit|button] CTA.")
+                return None
+        except Exception:
+            pass
+    for root in (kyc_fr, page):
+        if _kyc_js_click_primary_cta_in_document(root):
+            logger.info("Hero Insurance: post-KYC-upload clicked CTA via JS scan.")
             return None
-    except Exception:
-        pass
     return (
-        "KYC uploads done but no Proceed / Submit / Continue control was clicked — "
+        "KYC uploads done but no Proceed / Submit / Continue / KYC Verification control was clicked — "
         "complete KYC manually or check CTA visibility."
     )
 
@@ -3245,6 +3487,8 @@ def _kyc_dom_fill_ovd_mobile_consent_in_frame(
     *,
     timeout_ms: int,
     kyc_local_scan_paths: list[str] | None = None,
+    ocr_output_dir: Path | None = None,
+    subfolder: str | None = None,
 ) -> str | None:
     """
     Select OVD = AADHAAR CARD, fill mobile, check consent — all scoped to the KYC **Frame**
@@ -3349,6 +3593,8 @@ def _kyc_dom_fill_ovd_mobile_consent_in_frame(
         timeout_ms=to,
         post_mobile_recovery_digits=digits,
         kyc_local_scan_paths=kyc_local_scan_paths,
+        ocr_output_dir=ocr_output_dir,
+        subfolder=subfolder,
     )
 
 
@@ -3837,6 +4083,8 @@ def _fill_kyc_ekyc_keyboard_sop(
             mobile,
             timeout_ms=timeout_ms,
             kyc_local_scan_paths=kyc_local_scan_paths,
+            ocr_output_dir=ocr_output_dir,
+            subfolder=subfolder,
         )
 
     _insurance_kyc_flow_elapsed_note(
@@ -3901,6 +4149,8 @@ def _fill_kyc_ekyc_keyboard_sop(
         timeout_ms=cap,
         post_mobile_recovery_digits=digits,
         kyc_local_scan_paths=kyc_local_scan_paths,
+        ocr_output_dir=ocr_output_dir,
+        subfolder=subfolder,
     )
 
 
@@ -4125,6 +4375,8 @@ def _fill_insurance_company_and_ovd_mobile_consent(
         timeout_ms=timeout_ms,
         post_mobile_recovery_digits=mob_digits,
         kyc_local_scan_paths=kyc_local_scan_paths,
+        ocr_output_dir=ocr_output_dir,
+        subfolder=subfolder,
     )
 
 
@@ -4133,6 +4385,8 @@ def _kyc_proceed_or_upload(
     *,
     timeout_ms: int,
     kyc_local_scan_paths: list[str] | None = None,
+    ocr_output_dir: Path | None = None,
+    subfolder: str | None = None,
 ) -> str | None:
     """
     Invoked from ``_kyc_post_mobile_entry_branch`` when the verified-banner text is **not** shown
@@ -4141,6 +4395,10 @@ def _kyc_proceed_or_upload(
     - If legacy "already done" body text matches, consent + **Proceed**.
     - Else attach three files: prefer paths from **Uploaded scans** (``kyc_local_scan_paths``: front, rear,
       front again for customer photo), else minimal placeholder PNGs; then consent + **Proceed** / Submit / Continue.
+
+    File inputs are resolved by scraping **id** / **name** / label text in the KYC frame after **AADHAAR EXTRACTION**
+    (see ``_kyc_scrape_file_inputs_metadata`` / ``_kyc_resolve_upload_nth_order``); order is logged to
+    ``Playwright_insurance.txt`` when ``ocr_output_dir`` / ``subfolder`` are set.
     """
     try:
         body = page.evaluate("() => (document.body && document.body.innerText) ? document.body.innerText : ''")
@@ -4188,6 +4446,17 @@ def _kyc_proceed_or_upload(
             "Complete KYC manually."
         )
 
+    meta = _kyc_scrape_file_inputs_metadata(kyc_fr)
+    nth_order, order_strategy = _kyc_resolve_upload_nth_order(meta)
+    _kyc_note_file_inputs_scrape(
+        ocr_output_dir, subfolder, meta, nth_order, order_strategy
+    )
+    if len(nth_order) < 3:
+        return (
+            f"KYC file input mapping failed (need 3 slots; got {nth_order!r}). "
+            "Check NOTE kyc_file_inputs_scrape in Playwright_insurance.txt."
+        )
+
     use_local = False
     if kyc_local_scan_paths and len(kyc_local_scan_paths) >= 3:
         missing = [p for p in kyc_local_scan_paths[:3] if not Path(p).is_file()]
@@ -4198,22 +4467,26 @@ def _kyc_proceed_or_upload(
             )
         use_local = True
 
-    n_attach = min(n, 3)
-    for i in range(n_attach):
-        path_str = kyc_local_scan_paths[i] if use_local else None
-        payload = None if use_local else payloads[i]
+    slot_names = ("front (Aadhaar)", "rear (Aadhaar)", "customer photo")
+    for slot_i, nth_i in enumerate(nth_order[:3]):
+        path_str = kyc_local_scan_paths[slot_i] if use_local else None
+        payload = None if use_local else payloads[slot_i]
         ok, err_msg = _kyc_set_one_file_input_chooser_then_direct(
             page,
-            files.nth(i),
+            files.nth(nth_i),
             path_str=path_str,
             payload=payload,
             timeout_ms=timeout_ms,
         )
         if not ok:
-            return f"KYC file upload failed (input {i + 1}): {err_msg}"
+            return (
+                f"KYC file upload failed ({slot_names[slot_i]}, nth={nth_i}): {err_msg}"
+            )
         logger.info(
-            "Hero Insurance: KYC file input %s attached (%s).",
-            i + 1,
+            "Hero Insurance: KYC file slot %s (%s) attached via nth=%s (%s).",
+            slot_i + 1,
+            slot_names[slot_i],
+            nth_i,
             "Uploaded scans" if use_local else "placeholder PNG",
         )
 
