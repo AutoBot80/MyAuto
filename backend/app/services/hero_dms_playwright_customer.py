@@ -39,6 +39,7 @@ from app.services.hero_dms_shared_utilities import (
     _hero_default_payment_lines_root_hint,
     _is_browser_disconnected_error,
     _iter_frame_locator_roots,
+    _iter_mobile_search_hit_roots,
     _iter_siebel_root_search_order,
     _load_contact_enquiry_subgrid_hint_dict_from_config,
     _load_mobile_search_hit_hint_dict_from_config,

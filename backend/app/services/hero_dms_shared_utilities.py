@@ -1416,6 +1416,18 @@ def _iter_siebel_root_search_order(
             yield frame
 
 
+def _iter_mobile_search_hit_roots(page: Page, content_frame_selector: str | None):
+    """
+    Like :func:`_siebel_locator_search_roots`, but **Frame**\\ s matching the mobile-search hint
+    (builtin Hero default or optional env override) are yielded **early**. **FrameLocator** roots stay first.
+    """
+    yield from _iter_siebel_root_search_order(
+        page,
+        content_frame_selector,
+        _load_mobile_search_hit_hint_dict_from_config(),
+    )
+
+
 def _siebel_all_search_roots(page: Page, content_frame_selector: str | None) -> list:
     """Deduplicated list of content roots + all frames + ``page`` for applet chrome and popups."""
     r: list = []
