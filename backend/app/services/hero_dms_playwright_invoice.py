@@ -371,6 +371,11 @@ def _click_my_orders_jqgrid_order_for_mobile_or_order(
             hit = root.evaluate(_JS_CLICK_MY_ORDERS_ORDER_LINK, {"orderNeedle": on, "mobileDigits": nd})
             if hit:
                 note(f"Create Order: opened order from My Orders grid ({hit!r}).")
+                _safe_page_wait(page, 1500, log_label="after_my_orders_jqgrid_order_click")
+                try:
+                    page.wait_for_load_state("networkidle", timeout=10_000)
+                except Exception:
+                    pass
                 return True
         except Exception:
             continue
@@ -1400,6 +1405,10 @@ def _create_order(
             action_timeout_ms=action_timeout_ms,
         ):
             return False, "Create Order: Pending My Orders row but could not open Order# drill-down.", scraped
+        try:
+            page.wait_for_load_state("networkidle", timeout=8_000)
+        except Exception:
+            pass
         _err_mo_p = _poll_and_handle_siebel_error_popup(
             page,
             content_frame_selector,
@@ -1414,7 +1423,7 @@ def _create_order(
                 f"Create Order: Siebel error after My Orders Order# click (pending): {_err_mo_p[:220]}",
                 scraped,
             )
-        _safe_page_wait(page, 1200, log_label="after_my_orders_pending_drilldown")
+        _safe_page_wait(page, 1800, log_label="after_my_orders_pending_drilldown")
         scraped["order_number"] = _mo_po or scraped.get("order_number") or ""
         return _finalize_my_orders_attach("pending")
 
@@ -1428,6 +1437,10 @@ def _create_order(
             action_timeout_ms=action_timeout_ms,
         ):
             return False, "Create Order: Allocated My Orders row but could not open Order# drill-down.", scraped
+        try:
+            page.wait_for_load_state("networkidle", timeout=8_000)
+        except Exception:
+            pass
         _err_mo_a = _poll_and_handle_siebel_error_popup(
             page,
             content_frame_selector,
@@ -1442,7 +1455,7 @@ def _create_order(
                 f"Create Order: Siebel error after My Orders Order# click (allocated): {_err_mo_a[:220]}",
                 scraped,
             )
-        _safe_page_wait(page, 1200, log_label="after_my_orders_allocated_drilldown")
+        _safe_page_wait(page, 1800, log_label="after_my_orders_allocated_drilldown")
         scraped["order_number"] = _mo_po or scraped.get("order_number") or ""
         return _finalize_my_orders_attach("allocated")
 
