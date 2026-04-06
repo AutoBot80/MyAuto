@@ -1,0 +1,52 @@
+Playwright DMS — execution log (this run only; IST / Asia/Kolkata timestamps)
+
+started_ist=2026-04-06T19:17:41.330+05:30
+skip_contact_find=False
+dms_contact_path='found'
+mobile_phone='6378027115'
+first_name='Nishant'
+last_name='Kumar'
+address_line_1='S/O Brij Gopal, ward no 43, basant vihar Bharatpur, PO'
+state='RAJASTHAN'
+pin_code='321001'
+landline='7877144532'
+care_of='S/O Brij Gopal'
+key_partial='1969'
+frame_partial='43285'
+engine_partial='11046'
+aadhar_id='0981'
+# Siebel: after prepare_vehicle / scrapes, a --- vehicle_master --- block lists merged keys for traceability (grid + DMS). Masters are persisted only after Invoice# is scraped (Create Invoice).
+url_contact_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+Contact+Opportunity+Buyer/CoBuyer+View+(SDW)&SWERF=1&SWEHo=&SWEBU=1'
+url_enquiry_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+Contact+Opportunity+Buyer/CoBuyer+View+(SDW)&SWERF=1&SWEHo=&SWEBU=1'
+url_vehicle_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+All+Vehicle+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Auto+Vehicle+List+Applet&SWERowId0=1-100-1676'
+
+--- trace ---
+Legend: [STEP]/[NOTE]/[MILESTONE] = operator narrative; [FORM] = siebel_step + Siebel form/screen + action + fields/values being applied on that form.
+
+2026-04-06T19:17:41.331+05:30 [STEP] Started Hero Connect / Siebel DMS automation (Find Contact Enquiry path).
+2026-04-06T19:17:41.332+05:30 [STEP] Pre-step: preparing vehicle before contact find (video path).
+2026-04-06T19:17:41.332+05:30 [FORM] siebel_step=5_vehicle_list | form=Auto Vehicle List (DMS_REAL_URL_VEHICLE) | action=begin_vehicle_flow_navigate_then_search_applet | engine_partial='11046' | frame_partial='43285' | key_partial='1969' | vehicle_url_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+All+Vehicle+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Auto+Vehicle+List+Applet&SWERowId0=1-100-1676'
+2026-04-06T19:17:48.676+05:30 [NOTE] prepare_vehicle: Find → Vehicles for list query.
+2026-04-06T19:17:49.334+05:30 [NOTE] prepare_vehicle: VIN + Engine# submitted in Find→Vehicles applet.
+2026-04-06T19:17:49.334+05:30 [FORM] siebel_step=5_vehicle_list | form=Auto Vehicle List — search/query row | action=find_vehicles_vin_engine_applet_only | engine_partial='11046' | find_vehicles_vin_engine_ok=True | frame_partial='43285'
+2026-04-06T19:17:51.902+05:30 [NOTE] Scraped vehicle row from Siebel grid.
+2026-04-06T19:17:53.558+05:30 [NOTE] prepare_vehicle: opened vehicle from left Search Results (VIN Title drilldown).
+2026-04-06T19:17:56.613+05:30 [NOTE] Vehicle prep: filled Battery No. = '3302405' on vehicle page.
+2026-04-06T19:17:56.901+05:30 [NOTE] Vehicle prep: filled Key Number = '1969' on vehicle page.
+2026-04-06T19:17:58.673+05:30 [NOTE] Vehicle prep: saved vehicle record after Key/Battery fill.
+2026-04-06T19:17:59.316+05:30 [NOTE] prepare_vehicle: vehicle detail applet (aria-labels) → ['full_chassis', 'model', 'year_of_mfg', 'variant', 'color', 'full_engine'].
+2026-04-06T19:17:59.316+05:30 [FORM] siebel_step=5_vehicle_detail | form=Auto Vehicle — detail applet | action=scrape_VIN_Model_Year_Manu_SKU_Color_Engine_by_aria_label | color='RPB' | full_chassis='MBLHAW479T9C43285' | full_engine='HA11F7T9C11046' | model='SPLENDOR +' | variant='HSPLMIRSCFIRPB' | year_of_mfg='2,026'
+2026-04-06T19:17:59.423+05:30 [NOTE] DECISION: Inventory Location present, not In Transit — 'External Location'; in_transit=False (overrides grid heuristic).
+2026-04-06T19:17:59.423+05:30 [FORM] siebel_step=5_vehicle_inventory_location | form=Auto Vehicle | action=inventory_location_scrape | in_transit=False | inventory_location='External Location'
+2026-04-06T19:17:59.848+05:30 [NOTE] prepare_vehicle: clicked Serial Number drilldown (name='Serial Number', scoped #s_1_l).
+2026-04-06T19:18:02.381+05:30 [NOTE] prepare_vehicle: feature-id scrape cubic_capacity='125', vehicle_type='MOTORCYCLE WITH GEAR'.
+2026-04-06T19:18:02.381+05:30 [FORM] siebel_step=vehicle_serial_precheck_pdi | form=Vehicle serial detail | action=precheck_tab_open | log_prefix='prepare_vehicle'
+2026-04-06T19:18:02.445+05:30 [NOTE] prepare_vehicle: clicked Pre-check from #s_vctrl_div tab strip.
+2026-04-06T19:18:04.349+05:30 [NOTE] prepare_vehicle: Pre-check already has row(s) (rows=1, signal=root[6]:maxRows=1) — skipping Pre-check entry and continuing to PDI.
+2026-04-06T19:18:04.428+05:30 [NOTE] prepare_vehicle: clicked PDI from #s_vctrl_div tab strip.
+2026-04-06T19:18:05.947+05:30 [NOTE] prepare_vehicle: clicked PDI tab.
+2026-04-06T19:18:07.853+05:30 [NOTE] prepare_vehicle: PDI list has no data rows — adding new PDI row.
+2026-04-06T19:18:07.903+05:30 [NOTE] prepare_vehicle: PDI new-row flow — Service Request list rowCount≈0 (before New).
+2026-04-06T19:18:12.155+05:30 [STEP] Stopped: vehicle serial drilldown, Features, Pre-check, or PDI failed.
+
+2026-04-06T19:18:12.155+05:30 [END] error=Could not click 'Service Request List:New' on PDI tab (same paths as Pre-check +; see _siebel_click_service_request_list_new_record).

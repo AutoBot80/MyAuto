@@ -2335,6 +2335,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         _pdi_row_count, _pdi_header_matched, _pdi_need_new_row,
         _pdi_max_expiry.isoformat() if _pdi_max_expiry else "",
     )
+    _safe_page_wait(page, 300, log_label="after_pdi_check")
 
     def _eval_pdi_grid_rowcount() -> int:
         """Same scoring as expiry scan: best table's ``rowCount`` (header match wins ties)."""
