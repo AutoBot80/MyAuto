@@ -218,6 +218,8 @@ class FillDmsResponse(BaseModel):
     dms_step_messages: list[str] = Field(default_factory=list)
     # Real Siebel: My Orders grid already showed Invoice# — UI may enable Create Invoice without waiting for DB scrape commit.
     ready_for_client_create_invoice: bool | None = None
+    # After staging commit: Run Report PDF batch status (GST Retail Invoice, GST Booking Receipt); see BR-21 / LLD 6.276.
+    hero_dms_form22_print: dict | None = None
 
 
 class FillVahanRequest(BaseModel):
@@ -518,6 +520,7 @@ async def fill_dms_only(req: FillDmsRequest) -> FillDmsResponse:
         dms_milestones=list(result.get("dms_milestones") or []),
         dms_step_messages=list(result.get("dms_step_messages") or []),
         ready_for_client_create_invoice=result.get("ready_for_client_create_invoice"),
+        hero_dms_form22_print=result.get("hero_dms_form22_print"),
     )
 
 
@@ -777,4 +780,5 @@ async def fill_dms(req: FillDmsRequest) -> FillDmsResponse:
         dms_milestones=list(result.get("dms_milestones") or []),
         dms_step_messages=list(result.get("dms_step_messages") or []),
         ready_for_client_create_invoice=result.get("ready_for_client_create_invoice"),
+        hero_dms_form22_print=result.get("hero_dms_form22_print"),
     )

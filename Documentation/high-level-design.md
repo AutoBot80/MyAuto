@@ -1,7 +1,7 @@
 # High Level Design (HLD)
 ## Auto Dealer Management System
 
-**Version:** 1.15  
+**Version:** 1.16  
 **Last Updated:** April 2026
 
 ---
@@ -107,7 +107,7 @@ My Auto.AI/
 | `services/bulk_watcher_service` | Starts ingest and worker loops inside the API process. |
 | `services/form20_service` | Form 20 generation (Word/PDF/HTML). |
 | `services/handle_browser_opening` | CDP and managed-browser helpers (`get_or_open_site_page`, tab matching, optional auto-login wait) shared by Fill DMS, Vahan, and Insurance. |
-| `services/fill_hero_dms_service` | Playwright DMS (Siebel only: `siebel_dms_playwright.Playwright_Hero_DMS_fill` / `run_hero_siebel_dms_flow` — **Find Contact Enquiry** path; **LLD §2.4d** / **6.105**). **`prepare_vehicle`** runs before Contact Find; `DMS_SIEBEL_*` / `DMS_REAL_URL_*`. DMS fill from **`form_dms.py`** or **`add_sales_staging.payload_json`**; **`collate_customer_master_from_dms_siebel_inputs`** builds **`out["dms_customer_master_collated"]`** after payments (video SOP, **LLD** **6.108**, **6.109**). Vaahan helpers stubbed until production automation; reuses open tabs via `handle_browser_opening.get_or_open_site_page`; writes traces under `ocr_output/`. |
+| `services/fill_hero_dms_service` | Playwright DMS (Siebel only: `siebel_dms_playwright.Playwright_Hero_DMS_fill` / `run_hero_siebel_dms_flow` — **Find Contact Enquiry** path; **LLD §2.4d** / **6.105**). **`prepare_vehicle`** runs before Contact Find; `DMS_SIEBEL_*` / `DMS_REAL_URL_*`. DMS fill from **`form_dms.py`** or **`add_sales_staging.payload_json`**; **`collate_customer_master_from_dms_siebel_inputs`** builds **`out["dms_customer_master_collated"]`** after payments (video SOP, **LLD** **6.108**, **6.109**). After successful staging commit (scraped **Invoice#**), **`hero_dms_playwright_invoice.print_hero_dms_forms`** may download default **Run Report** PDFs (**GST Retail Invoice**, **GST Booking Receipt**) into the sale **`ocr_output`** folder (**BR-21**, **LLD** **6.276**). Vaahan helpers stubbed until production automation; reuses open tabs via `handle_browser_opening.get_or_open_site_page`; writes traces under `ocr_output/`. |
 | `services/fill_hero_insurance_service` | Hero MISP: **`pre_process`** delegates to **`run_fill_insurance_only`** (real MISP: KYC then **`_hero_misp_fill_vin_and_click_submit`**); **`main_process`** runs **`_hero_misp_i_agree_after_vin_submit`**, then proposal / DB / Issue Policy. Uses `handle_browser_opening.get_or_open_site_page`; `insurance_form_values` / `insurance_kyc_payloads` / `utility_functions`; writes `Insurance_Form_Values.txt` and `Playwright_insurance.txt`. Public API: **`POST /fill-forms/insurance/hero`** only (no separate bare insurance route). |
 | `services/submit_info_service` | Submit Info business logic; builds staging **`payload_json`** and calls **`persist_staging_for_submit`**. |
 | `services/rto_payment_service` | Dealer-scoped RTO batch runner, progress state, advisory locking, scrape-back persistence into `rto_queue` / `vehicle_master`, and downstream payment updates. |
@@ -136,7 +136,7 @@ My Auto.AI/
    - **Section 2 (AI extracted information):** Customer, Vehicle, and Insurance subsection headers show **Uploading…** while files are uploading and **Processing…** until extraction for that block is populated; the client polls `getExtractedDetails` until customer, vehicle, and insurance blocks all satisfy the same completion rules (or polling limits apply).
 2. OCR processes queue → extracted text stored.
 3. User reviews/corrects → Submit Info → customer_master, vehicle_master, sales_master, insurance_master.
-4. Fill DMS → Playwright loads DMS field values from **OCR merge in staging** (target) or **`form_dms.py`** inline query over masters (legacy after Submit), reuses an already open DMS tab when detectable (CDP), or opens Edge/Chrome. **Hero Connect / Siebel** (default **`DMS_MODE=real`**): `run_hero_siebel_dms_flow` follows **BRD §6.1a**; **LLD §2.4d** lists heuristics and gaps. Static training DMS HTML was removed. Writes DMS traces; updates `vehicle_master` from scrape when data is returned.
+4. Fill DMS → Playwright loads DMS field values from **OCR merge in staging** (target) or **`form_dms.py`** inline query over masters (legacy after Submit), reuses an already open DMS tab when detectable (CDP), or opens Edge/Chrome. **Hero Connect / Siebel** (default **`DMS_MODE=real`**): `run_hero_siebel_dms_flow` follows **BRD §6.1a**; **LLD §2.4d** lists heuristics and gaps. Static training DMS HTML was removed. Writes DMS traces; updates `vehicle_master` from scrape when data is returned. After **Create Invoice** / **Invoice#** scrape and staging master commit, **`print_hero_dms_forms`** may save default **Run Report** GST PDFs to the sale folder (**BR-21**).
 5. Print Form 20 → `form20_service` fills the Word template, converts to PDF, and saves Form 20.pdf / Gate Pass.pdf in the upload subfolder.
 6. RTO queue insertion → Fill Forms stores Form 20 outputs, estimates the RTO fees, and inserts an `rto_queue` row instead of auto-running the dummy Vahan flow.
 7. RTO Queue → operators review queued rows in `RTO Saathi`, process the oldest 7 rows by reusing already open Vahan tabs (or auto-opened Edge/Chrome tabs when unavailable), and wait for live progress up to the upload/cart checkpoint.
@@ -452,3 +452,4 @@ The SQL view **`form_dms_view`** is **removed**; the same mapping is implemented
 | 1.154 | Apr 2026 | — | **`_siebel_frames_branch2_shell_for_third_level_bar`**: **S_A1** lineage → parent shell for Payments Third Level — **LLD** **6.259** |
 | 1.155 | Apr 2026 | — | **`_siebel_try_click_payments_tab_under_s_vctrl`**: **`s_vctrl_div.siebui-subview-navs`** + JS fallback — **LLD** **6.260** |
 | 1.156 | Apr 2026 | — | **`Playwright_Hero_DMS_fill`**: optional **`log_fp`** → post–Address Line 1 **frame/element** diagnostic in **`Playwright_DMS*.txt`** — **LLD** **6.261** |
+| 1.157 | Apr 2026 | — | **`fill_hero_dms_service`** / **`hero_dms_playwright_invoice.print_hero_dms_forms`**: after staging commit, **Report(s)** → **Run Report** — default **GST Retail Invoice** + **GST Booking Receipt**; **`{mobile}_{Report_Name}.pdf`** under **`ocr_output`**; API **`hero_dms_form22_print`** — **BRD** **BR-21**, **LLD** **6.276**, **Database DDL** **2.66** |

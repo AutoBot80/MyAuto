@@ -1,8 +1,8 @@
 # Business Requirements Document (BRD)
 ## Auto Dealer Management System — Arya Agencies
 
-**Version:** 2.9  
-**Last Updated:** March 2026  
+**Version:** 3.0  
+**Last Updated:** April 2026  
 **Status:** Draft
 
 ---
@@ -56,6 +56,7 @@ The system is a server–client application for auto dealers. Dealers run a ligh
 | BR-18 | Address-derived locality | When **state**, **PIN**, or **care_of** is missing but **address** contains **`C/O:`** (Care of), **`DIST: <District>, <State> - <PIN>`** (including OCR variants like **`<State> - - <PIN>`** or **`<State> -- <PIN>`**), a trailing **`<Indian state> - <PIN>`** when **`DIST:`** is unreadable, and/or a 6-digit PIN, the system infers **`care_of`**, **`city`/district**, **`state`**, **`pin`**; drops text **after the PIN**; strips **C/O** from the stored address line. Applied on Submit Info, OCR JSON, Aadhaar back parsing, and DMS fill when address/state/PIN fields are sparse. |
 | BR-19 | Siebel Contact Find and Add Enquiry persistence | On **real** Hero Connect / Siebel (`DMS_MODE=real`), Contact **Find** uses **Mobile** + **Contact First Name**; first name must be present and must not be a placeholder (**§6.1b**). The **First Name** query field is typed **exactly** (no wildcard). **Grid / automation row detection** after Find uses the **legacy** Hero-aligned rules (**§6.1b**): first-token and prefix matching on row text and cells, optional **mobile-only** acceptance when the name is not in the DOM, plus duplicate-row handling — not strict cell-only exact equality. **Open enquiry** (incl. **Enquiry Status** = Open when HHML fields exist), the **Enquiry# post-save gate** (timed polls) on **Add Enquiry**, and **video SOP orchestration** (**LLD 6.67**): **N=0** mobile drilldown rows → **Add Enquiry**; else title sweep for **Open**; if **no Open**, branch **(2)** fills **Home Phone #**, **Email** (default **`na@gmail.com`** when not overridden in DMS values), selects **Address** on the **Third Level View Bar** (**`select#j_s_vctrl_div_tabScreen`**, **`tabScreen6`**) when present, then **Address** under **`#s_vctrl_div`** / fallback, then **City** (**`input[name="City"]`** / **`id=1_City`**, Siebel LOV) and **Postal Code** (jqGrid **`1_s_1_l_Postal_Code`**, **`SWE_Form1_0`**, **`#SWEApplet1`** / **`div#S_A1`**; **`iframe#S_A1`** first when used), then **Ctrl+S** + Save fallback (**LLD 6.246**–**6.253**); **dotted suffixed first name** is **not** used on the **video** path. Further normative detail in **§6.1b**. |
 | BR-20 | Generate Insurance inputs | **Generate Insurance** runs only after **Create Invoice** has persisted **`sales_master`**, **`customer_master`**, and **`vehicle_master`** (commit wave after successful DMS), so **`form_insurance_view`** returns the sale-linked projection. **`add_sales_staging.payload_json`** holds the merged OCR / operator snapshot from Submit. **Together** — view + staging — are the **complete approved input set**. The Add Sales client passes **`customer_id`** and **`vehicle_id`** from the **Create Invoice** response (or legacy flow) and the same **`staging_id`** (**`insurance_form_values.build_insurance_fill_values`**). **`OCR_To_be_Used.json`** is used **only** as a last-resort **insurer** fallback when both view and staging lack insurer. **No** **`insurance_master`** write on Submit; on **successful** Generate Insurance, the backend **INSERT**s **`insurance_master`** for the current calendar **`insurance_year`** (**fails** if **`(customer_id, vehicle_id, insurance_year)`** already exists). Nominee/insurer from fill dict; **policy number** and **`insurance_cost`** from the **policy preview** before **Issue Policy** when scraped; other policy fields from staging when present. Playwright then clicks **Issue Policy** and scrapes **policy number** and **`insurance_cost`** again; **`update_insurance_master_policy_after_issue`** updates those columns on the same row (operators are not expected to pay/issue twice for the same sale/year). |
+| BR-21 | DMS Run Report PDFs (post–Create Invoice) | After a successful **staging-path** DMS run with a scraped **Invoice#** and master commit, automation may run Siebel **Report(s)** → **Run Report** and download a **default** batch of reports (**GST Retail Invoice** first, then **GST Booking Receipt**) into **`ocr_output/<dealer_id>/<subfolder>/`**, each file named **`{mobile}_{Report_Name}.pdf`** (report title sanitized; spaces → underscores). Spurious Siebel download events (e.g. UUID filenames) are deprioritized in favor of real **`.pdf`** candidates. One report failing does not necessarily stop the rest (**`continue_on_report_error`**). **`POST /fill-forms`** and **`POST /fill-forms/dms`** return structured status under **`hero_dms_form22_print`** when present (paths, per-report **`ok`** / **`error`**). |
 
 ---
 
@@ -134,7 +135,7 @@ This is the **intended** real-DMS order (aligned with the operator screen record
 | 4a | **Branch: In Transit** | **Vehicles Receipt → HMCL – In Transit** (or tenant-equivalent): **Process Receipt** for the VIN when automation finds the control. **Playwright `prepare_vehicle`** stops there for in-transit stock — it **does not** drive **`DMS_REAL_URL_PRECHECK`** / **`DMS_REAL_URL_PDI`** (Siebel rejects Pre-check/PDI until the unit is at **dealer** stock). Operator completes inspection after receipt or once inventory shows dealer. **Dealer** stock uses **one** tab Pre-check/PDI path on the vehicle form (serial-detail); see **LLD** changelog **6.48**. |
 | 4b | **Branch: not In Transit (booking path)** | **Enquiry → My Enquiries** (or current enquiry): **Generate Booking** when creating/linking the sales order. **Vehicle Sales → My Orders:** before **Sales Orders List:New (+)**, query by customer **mobile** on the My Orders Find (**`s_1_1_1_0`** → **Mobile Phone#** → Enter) and branch on **jqGrid** rows (meaningful **Invoice#** → stop for client **Create Invoice**; **Pending** / **Allocated** → open **Order#** and continue attach per **LLD** **6.115**; empty grid → full **+** booking). Then **Allotment** / line items — **Price All** / **Allocate** as required. |
 | 5 | **Tenant-dependent gates (if shown)** | Handle or stop for operator: **Vehicle Digitization** (e.g. OTP), **Document Upload**, **Sanction Details**, **Validate GL Voucher**, **WOT Details** (if exchange), **Contacts → Payments**, finance/hypothecation dialogs. No invented clicks — follow persisted flags and visible prompts. |
-| 6 | **End of automation** | **Do not** click **Create Invoice**. Leave the **browser window open** for operator review (same session discipline as insurance automation). **Run Report** / GST PDF downloads are out of scope unless added under a separate FR. |
+| 6 | **Invoice + reports** | **Create Invoice** is driven in the booking-attach path per **BR-16** (**Apply Campaign** → **Create Invoice** when automation is enabled). After **`sales_master`** / masters commit from a scraped **Invoice#**, automation may run **Report(s)** → **Run Report** and download the default GST PDF batch per **BR-21**. Leave the **browser window open** for operator review (same session discipline as insurance automation). |
 
 ### 6.1b Real Siebel Contact Find & Add Enquiry Rules (Normative)
 
@@ -261,10 +262,7 @@ This is the **intended** real-DMS order (aligned with the operator screen record
 
 ### 6.7 Download/Save Outputs
 
-- DMS Reports must save:
-  - `form21.pdf`
-  - `form22.pdf`
-  - `invoice_details.pdf`
+- **DMS Run Report PDFs (real Siebel, post–master commit):** default batch **GST Retail Invoice**, **GST Booking Receipt** — saved under the sale **`ocr_output/<dealer_id>/<subfolder>/`** as **`{mobile}_{Report_Name}.pdf`** (**BR-21**). Older placeholder names (`form21.pdf`, `form22.pdf`, `invoice_details.pdf`) are **not** the current automation contract.
 - Automation trace files must save:
   - `ocr_output/<dealer>/<subfolder>/DMS_Form_Values.txt`
   - `ocr_output/<dealer>/<subfolder>/Vahan_Form_Values.txt`
@@ -318,7 +316,7 @@ Bulk upload automates the ingestion of scanned documents from a shared folder in
 - Dealer can add/view dealer records via the client against the live backend.
 - Document upload creates an OCR job and extracted data is stored and reviewable.
 - Submit Info persists a **draft** **`add_sales_staging`** row only (**`POST /submit-info`**, **`staging_id`**); **Create Invoice** uses **`payload_json`** via **`staging_id`** then commits masters; **Generate Insurance** uses committed IDs + **`staging_id`** (**FR-17**, **LLD §2.2a**).
-- Fill DMS scrapes vehicle data, downloads Form 21/22, and writes `DMS_Form_Values.txt` under `ocr_output`.
+- Fill DMS scrapes vehicle data; after **Invoice#** and master commit, may download default **Run Report** GST PDFs (**BR-21**); always writes `DMS_Form_Values.txt` (and per-run `Playwright_DMS_*.txt` where configured) under `ocr_output`.
 - Form 20.pdf is generated and saved to upload subfolder.
 - Fill Forms inserts an `rto_queue` row instead of auto-submitting the dummy Vahan site.
 - RTO Queue page lists the queued RTO work items for follow-up processing and can process the oldest 7 rows in one dealer-scoped browser session.
@@ -520,3 +518,4 @@ Bulk upload automates the ingestion of scanned documents from a shared folder in
 | 3.153 | Apr 2026 | — | **§6.1a** / **Payments**: prefer Third Level shell found from **S_A1** / **parent_frame** (same lineage as Address postal) — **LLD** **6.259** |
 | 3.154 | Apr 2026 | — | **§6.1a** / **Payments** tab: **`#s_vctrl_div.siebui-subview-navs`** strip + anchor/JS fallbacks — **LLD** **6.260** |
 | 3.155 | Apr 2026 | — | **§6.1a** / operator diagnostics: after Address Line 1 fill, **Playwright_DMS** log may include per-frame element sample + **payHits** — **LLD** **6.261** |
+| 3.156 | Apr 2026 | — | **BR-21** / **§6.1a** step 6 / **§6.7** / **§9**: Siebel **Run Report** batch (**GST Retail Invoice**, **GST Booking Receipt**) after staging commit; **`hero_dms_form22_print`**; PDF naming **`{mobile}_{Report_Name}.pdf`** — **LLD** **6.276**, **HLD** **1.157**, **Database DDL** **2.66** |

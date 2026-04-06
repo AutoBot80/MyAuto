@@ -2542,6 +2542,7 @@ def run_fill_dms(
             "dms_step_messages": step_msgs,
             "committed_customer_id": result.get("committed_customer_id"),
             "committed_vehicle_id": result.get("committed_vehicle_id"),
+            "hero_dms_form22_print": result.get("hero_dms_form22_print"),
         }
 
     if vahan_base_url and vahan_base_url.strip():
@@ -2573,6 +2574,7 @@ def run_fill_dms(
                 "dms_step_messages": step_msgs,
                 "committed_customer_id": result.get("committed_customer_id"),
                 "committed_vehicle_id": result.get("committed_vehicle_id"),
+                "hero_dms_form22_print": result.get("hero_dms_form22_print"),
             }
         return {
             "vehicle": result.get("vehicle") or {},
@@ -2586,6 +2588,7 @@ def run_fill_dms(
             "dms_step_messages": step_msgs,
             "committed_customer_id": result.get("committed_customer_id"),
             "committed_vehicle_id": result.get("committed_vehicle_id"),
+            "hero_dms_form22_print": result.get("hero_dms_form22_print"),
         }
 
     return {
@@ -2600,6 +2603,7 @@ def run_fill_dms(
         "dms_step_messages": step_msgs,
         "committed_customer_id": result.get("committed_customer_id"),
         "committed_vehicle_id": result.get("committed_vehicle_id"),
+        "hero_dms_form22_print": result.get("hero_dms_form22_print"),
     }
 
 

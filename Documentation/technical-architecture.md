@@ -1,7 +1,7 @@
 # Technical Architecture
 ## Auto Dealer Management System
 
-**Version:** 0.8  
+**Version:** 0.12  
 **Last Updated:** April 2026
 
 ---
@@ -113,6 +113,7 @@ Configure **`backend/.env`** (copy from **`backend/.env.example`**). The API val
   - `low-level-design.md` — LLD, API endpoints, modules
   - `Database DDL.md` — all tables, columns, constraints, usage
   - `technical-architecture.md` (this file)
+  - `docs_changelog.md` — **optional** staging backlog for upcoming BRD/HLD/LLD/DDL edits; truncate after canonical docs are updated (see file header)
   - `checkpoints.md` — **canonical registry** of named git checkpoints (serial no., tags, commits, IST dates, TODOs). Optional per-checkpoint narrative: `checkpoint-*.md`. Creating a checkpoint without updating this registry is disallowed—see §6 and **`.cursor/rules/checkpoints-registry.mdc`**. After recording a checkpoint, agents **playback** the full table (serial no., name, **commit** hash, date, TODOs) per that rule.
 
 ### Documentation Maintenance
@@ -137,6 +138,8 @@ Quick mapping:
 
 Cursor rule: `.cursor/rules/documentation-maintenance.mdc` (always applied).
 
+**Staging backlog (optional, token-friendly):** `docs_changelog.md` — short **pending** notes before BRD/HLD/LLD/DDL are updated; **truncate** after canonical docs and their changelogs are brought in sync. See that file for workflow.
+
 ### Optional: Cursor Bugbot (automated PR review)
 
 **Bugbot** is not installed as a classic editor extension from the VS Marketplace. Enable it from the **[Cursor dashboard](https://cursor.com/dashboard)** → **Integrations**: connect **GitHub** or **GitLab**, then turn on Bugbot for the repositories you want. It can comment on pull requests with findings; see the **[Cursor Bugbot documentation](https://cursor.com/docs/bugbot)** (and [Bugbot product page](https://cursor.com/bugbot) for overview).
@@ -158,3 +161,4 @@ Cursor rule: `.cursor/rules/documentation-maintenance.mdc` (always applied).
 | 0.9 | Apr 2026 | — | §6 Checkpoint workflow: **`.cursor/rules/checkpoints-registry.mdc`** expanded (triggers, step order, forbid narrative-only); **`checkpoints.md`** “Agent process”; mandatory **playback** of full checkpoint list after setting one |
 | 0.10 | Apr 2026 | — | §6 Checkpoint **playback** includes **git commit** (full hash) per row, not only name/date/TODOs |
 | 0.11 | Apr 2026 | — | §5 **Artifacts** — link **`playwright-insurance-trace-workflow.md`** for **`Playwright_insurance.txt`** read/fix workflow |
+| 0.12 | Apr 2026 | — | §6 **`docs_changelog.md`** — optional staging backlog for doc edits; truncate after sync with BRD/HLD/LLD/**Database DDL.md** |
