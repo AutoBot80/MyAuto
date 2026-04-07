@@ -117,7 +117,7 @@ class UploadService:
         extraction_result: dict = {}
         try:
             from app.config import get_ocr_output_dir
-            from app.services.ocr_service import OcrService
+            from app.services.sales_ocr_service import OcrService
 
             ocr = OcrService(
                 uploads_dir=uploads_dir,

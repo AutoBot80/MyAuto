@@ -12,7 +12,7 @@ from app.db import get_connection
 from app.repositories.add_sales_staging import persist_staging_for_submit
 from app.services.customer_address_infer import enrich_customer_address_from_freeform
 from app.services.dms_relation_prefix import compute_dms_relation_prefix
-from app.services.ocr_service import _sanitize_details_profession_value
+from app.services.sales_ocr_service import _sanitize_details_profession_value
 from app.services.utility_functions import (
     default_profession_if_empty,
     normalize_nominee_relationship_value,
@@ -69,7 +69,7 @@ def submit_info(
     loc = _str_or_none(file_location) or _str_or_none(customer.get("file_location"))
     if loc:
         from app.config import get_ocr_output_dir
-        from app.services.ocr_service import validate_name_match_for_subfolder
+        from app.services.sales_ocr_service import validate_name_match_for_subfolder
 
         ocr_dir = get_ocr_output_dir(dealer_id if dealer_id is not None else DEALER_ID)
         name_err = validate_name_match_for_subfolder(Path(ocr_dir).resolve(), loc)

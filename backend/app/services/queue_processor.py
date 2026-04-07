@@ -3,7 +3,7 @@
 import threading
 from typing import Literal
 
-from app.services.ocr_service import OcrService
+from app.services.sales_ocr_service import OcrService
 
 ProcessStatus = Literal["waiting", "running", "sleeping"]
 

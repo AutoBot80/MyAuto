@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import (
+    CHALLANS_DIR,
     DEALER_ID,
     get_bulk_input_scans_dir,
     get_bulk_processing_dir,
@@ -29,6 +30,7 @@ from app.routers import (
     bulk_loads_router,
     admin_router,
     add_sales_router,
+    subdealer_challan_router,
 )
 
 
@@ -49,6 +51,7 @@ get_bulk_processing_dir(DEALER_ID).mkdir(parents=True, exist_ok=True)
 (get_bulk_upload_dir(DEALER_ID) / "Success").mkdir(parents=True, exist_ok=True)
 (get_bulk_upload_dir(DEALER_ID) / "Error").mkdir(parents=True, exist_ok=True)
 (get_bulk_upload_dir(DEALER_ID) / "Rejected scans").mkdir(parents=True, exist_ok=True)
+CHALLANS_DIR.mkdir(parents=True, exist_ok=True)
 
 app.add_middleware(
     CORSMiddleware,
@@ -76,3 +79,4 @@ app.include_router(documents_router)
 app.include_router(bulk_loads_router)
 app.include_router(admin_router)
 app.include_router(add_sales_router)
+app.include_router(subdealer_challan_router)

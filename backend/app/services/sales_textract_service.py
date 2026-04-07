@@ -53,6 +53,106 @@ def _parse_key_value_pairs(blocks: list[dict]) -> list[dict[str, str]]:
     return pairs
 
 
+def _parse_tables_from_blocks(blocks: list[dict]) -> list[list[list[str]]]:
+    """
+    Reconstruct tables from Textract AnalyzeDocument TABLE/CELL blocks.
+    Returns list of tables; each table is a list of rows; each row is a list of cell strings.
+    """
+    block_map = {b["Id"]: b for b in blocks if b.get("Id")}
+    tables_out: list[list[list[str]]] = []
+    for block in blocks:
+        if block.get("BlockType") != "TABLE":
+            continue
+        cells: dict[tuple[int, int], str] = {}
+        max_r, max_c = 0, 0
+        for rel in block.get("Relationships") or []:
+            if rel.get("Type") != "CHILD":
+                continue
+            for cid in rel.get("Ids") or []:
+                cell = block_map.get(cid)
+                if not cell or cell.get("BlockType") != "CELL":
+                    continue
+                r = int(cell.get("RowIndex") or 1)
+                c = int(cell.get("ColumnIndex") or 1)
+                max_r = max(max_r, r)
+                max_c = max(max_c, c)
+                text = _get_text_from_block(cell, block_map)
+                cells[(r, c)] = text.strip()
+        if max_r == 0 or max_c == 0:
+            continue
+        grid: list[list[str]] = []
+        for ri in range(1, max_r + 1):
+            row: list[str] = []
+            for ci in range(1, max_c + 1):
+                row.append(cells.get((ri, ci), ""))
+            grid.append(row)
+        tables_out.append(grid)
+    return tables_out
+
+
+def analyze_document_forms_and_tables(document_bytes: bytes) -> dict[str, Any]:
+    """
+    Single AWS Textract AnalyzeDocument call with FORMS + TABLES.
+    Returns:
+      - full_text, key_value_pairs, tables (list of row grids), raw_response, error
+    """
+    try:
+        import boto3
+    except ImportError:
+        return {
+            "full_text": "",
+            "key_value_pairs": [],
+            "tables": [],
+            "raw_response": None,
+            "error": "boto3 not installed. pip install boto3",
+        }
+
+    if not document_bytes or len(document_bytes) > 5 * 1024 * 1024:
+        return {
+            "full_text": "",
+            "key_value_pairs": [],
+            "tables": [],
+            "raw_response": None,
+            "error": "Document empty or larger than 5 MB.",
+        }
+
+    try:
+        client = boto3.client("textract", region_name=AWS_REGION)
+        response = client.analyze_document(
+            Document={"Bytes": document_bytes},
+            FeatureTypes=["FORMS", "TABLES"],
+        )
+    except Exception as e:
+        return {
+            "full_text": "",
+            "key_value_pairs": [],
+            "tables": [],
+            "raw_response": None,
+            "error": str(e),
+        }
+
+    blocks = response.get("Blocks") or []
+    lines = [
+        b.get("Text", "").strip()
+        for b in blocks
+        if b.get("BlockType") == "LINE" and b.get("Text")
+    ]
+    full_text = "\n".join(lines)
+    key_value_pairs = _parse_key_value_pairs(blocks)
+    tables = _parse_tables_from_blocks(blocks)
+
+    return {
+        "full_text": full_text,
+        "key_value_pairs": key_value_pairs,
+        "tables": tables,
+        "raw_response": {
+            "BlockCount": len(blocks),
+            "DocumentMetadata": response.get("DocumentMetadata"),
+        },
+        "error": None,
+    }
+
+
 def extract_text_from_bytes(document_bytes: bytes) -> dict[str, Any]:
     """
     Call AWS Textract DetectDocumentText on raw document bytes (JPEG/PNG).
@@ -126,57 +226,25 @@ def extract_forms_from_bytes(document_bytes: bytes) -> dict[str, Any]:
     Returns dict with:
       - full_text: str (all LINE text)
       - key_value_pairs: list of {key, value}
+      - tables: list of tables (each table = list of rows of cell strings); same AnalyzeDocument call
       - raw_response: summary
       - error: if any
     """
-    try:
-        import boto3
-    except ImportError:
+    result = analyze_document_forms_and_tables(document_bytes)
+    err = result.get("error")
+    if err:
         return {
             "full_text": "",
             "key_value_pairs": [],
-            "raw_response": None,
-            "error": "boto3 not installed. pip install boto3",
+            "tables": [],
+            "raw_response": result.get("raw_response"),
+            "error": err,
         }
-
-    if not document_bytes or len(document_bytes) > 5 * 1024 * 1024:
-        return {
-            "full_text": "",
-            "key_value_pairs": [],
-            "raw_response": None,
-            "error": "Document empty or larger than 5 MB.",
-        }
-
-    try:
-        client = boto3.client("textract", region_name=AWS_REGION)
-        response = client.analyze_document(
-            Document={"Bytes": document_bytes},
-            FeatureTypes=["FORMS", "TABLES"],
-        )
-    except Exception as e:
-        return {
-            "full_text": "",
-            "key_value_pairs": [],
-            "raw_response": None,
-            "error": str(e),
-        }
-
-    blocks = response.get("Blocks") or []
-    lines = [
-        b.get("Text", "").strip()
-        for b in blocks
-        if b.get("BlockType") == "LINE" and b.get("Text")
-    ]
-    full_text = "\n".join(lines)
-    key_value_pairs = _parse_key_value_pairs(blocks)
-
     return {
-        "full_text": full_text,
-        "key_value_pairs": key_value_pairs,
-        "raw_response": {
-            "BlockCount": len(blocks),
-            "DocumentMetadata": response.get("DocumentMetadata"),
-        },
+        "full_text": result.get("full_text") or "",
+        "key_value_pairs": result.get("key_value_pairs") or [],
+        "tables": result.get("tables") or [],
+        "raw_response": result.get("raw_response"),
         "error": None,
     }
 

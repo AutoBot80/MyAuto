@@ -101,7 +101,9 @@ My Auto.AI/
 | `routers/admin` | Clear all non-reference-table data while preserving `oem_ref`, `dealer_ref`, and `oem_service_schedule`. |
 | `routers/qr_decode` | Decode Aadhar QR. |
 | `routers/vision` | Vision API (Aadhar analyze). |
-| `routers/textract_router` | AWS Textract extraction. |
+| `routers/textract_router` | AWS Textract extraction (`services/sales_textract_service`). |
+| `services/sales_ocr_service` | Add Sales / queue OCR: **`OcrService`** — Aadhaar + Sales Detail sheet extraction and merge to per-subfolder JSON; uses **`sales_textract_service`** for AWS Textract. |
+| `services/sales_textract_service` | AWS Textract wrappers: **`extract_text_from_bytes`** (DetectDocumentText), **`extract_forms_from_bytes`** (AnalyzeDocument FORMS+TABLES). |
 | `services/bulk_job_service` | Bulk ingest, queue publish, job lease, pre-OCR, and terminal status updates. |
 | `services/bulk_queue_service` | Bulk queue abstraction with SQS or local in-process fallback. |
 | `services/bulk_watcher_service` | Starts ingest and worker loops inside the API process. |
@@ -135,7 +137,7 @@ My Auto.AI/
 
 ### 4.1 Add Sales Flow
 
-1. User uploads scans → `uploads/scans` → ai_reader_queue (legacy) **or** Add Sales v2 → `uploads/scans-v2` → `OcrService.process_uploaded_subfolder` in the same request (optional AWS Textract prefetch; Aadhaar uses **Textract text only** — no UIDAI QR in this path; parallel Aadhaar assembly + Details sheet compile; merged JSON; optional `extraction.section_timings_ms` on the response; upload status line shows timings).
+1. User uploads scans → `uploads/scans` → ai_reader_queue (legacy) **or** Add Sales v2 → `uploads/scans-v2` → `OcrService.process_uploaded_subfolder` in **`sales_ocr_service`** in the same request (optional AWS Textract prefetch; Aadhaar uses **Textract text only** — no UIDAI QR in this path; parallel Aadhaar assembly + Details sheet compile; merged JSON; optional `extraction.section_timings_ms` on the response; upload status line shows timings).
    - **Section 2 (AI extracted information):** Customer, Vehicle, and Insurance subsection headers show **Uploading…** while files are uploading and **Processing…** until extraction for that block is populated; the client polls `getExtractedDetails` until customer, vehicle, and insurance blocks all satisfy the same completion rules (or polling limits apply).
 2. OCR processes queue → extracted text stored.
 3. User reviews/corrects → Submit Info → customer_master, vehicle_master, sales_master, insurance_master.
@@ -458,3 +460,4 @@ The SQL view **`form_dms_view`** is **removed**; the same mapping is implemented
 | 1.157 | Apr 2026 | — | **`fill_hero_dms_service`** / **`hero_dms_playwright_invoice.print_hero_dms_forms`**: after staging commit, **Report(s)** → **Run Report** — default **GST Retail Invoice** + **GST Booking Receipt**; **`{mobile}_{Report_Name}.pdf`** under **`ocr_output`**; API **`hero_dms_form22_print`** — **BRD** **BR-21**, **LLD** **6.276**, **Database DDL** **2.66** |
 | 1.158 | Apr 2026 | — | **`fill_hero_dms_service`**: **`prepare_vehicle`** → **`prepare_customer`** → **`prepare_order`** → **`hero_dms_db_service`**; staging **`run_fill_dms_only`** uses **`persist_staging_masters_after_invoice`** + **`run_hero_dms_reports`** — **BRD** **3.157**, **LLD** **6.277** |
 | 1.159 | Apr 2026 | — | **`hero_dms_playwright_invoice`**: multi-line **`_attach_vehicle_to_bkg`** (**`order_line_vehicles`** / **`attach_vehicles`**, **`order_line_ex_showroom`** scrape) — **BRD** **3.158**, **LLD** **6.278** |
+| 1.160 | Apr 2026 | — | **`sales_ocr_service`** / **`sales_textract_service`**: renamed from **`ocr_service`** / **`textract_service`**; **`OcrService`** class unchanged — **BRD** **3.159**, **LLD** **6.279** |

@@ -13,6 +13,9 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 APP_ROOT = Path(__file__).resolve().parents[1]
 UPLOADS_DIR = APP_ROOT.parent / "Uploaded scans"
 OCR_OUTPUT_DIR = APP_ROOT.parent / "ocr_output"
+# Subdealer challan OCR artifacts: Raw_OCR.txt, OCR_To_be_Used.json per challan folder
+_CHALLANS_DIR = os.getenv("CHALLANS_DIR", "").strip()
+CHALLANS_DIR = Path(_CHALLANS_DIR) if _CHALLANS_DIR else APP_ROOT.parent / "Challans"
 BULK_UPLOAD_DIR = APP_ROOT.parent / "Bulk Upload"
 
 # Dealer ID for app (JWT later). Used by bulk watcher and when client omits dealer_id.

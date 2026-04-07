@@ -912,7 +912,7 @@ def _pipeline_merge_aadhar_customer(
     """
     **AWS Textract only** on front/back (no Tesseract, no UIDAI QR in this pipeline).
     """
-    from app.services.textract_service import extract_text_from_bytes
+    from app.services.sales_textract_service import extract_text_from_bytes
 
     timings: dict[str, int] = {
         "aadhar_textract_front_ms": 0,
@@ -1052,7 +1052,7 @@ def _compile_details_sheet_fragment(
             )
         result = {"error": None, "full_text": docx_full, "key_value_pairs": key_value_pairs}
     elif fmt in ("jpeg", "png", "pdf"):
-        from app.services.textract_service import extract_forms_from_bytes
+        from app.services.sales_textract_service import extract_forms_from_bytes
 
         if textract_forms_prefetch is not None:
             result = textract_forms_prefetch
@@ -1408,7 +1408,7 @@ def _parallel_textract_prefetch_upload_subfolder(subdir: Path) -> tuple[dict[str
     from concurrent.futures import ThreadPoolExecutor
 
     from app.config import OCR_UPLOAD_TEXTRACT_TIMEOUT_SEC
-    from app.services.textract_service import extract_forms_from_bytes, extract_text_from_bytes
+    from app.services.sales_textract_service import extract_forms_from_bytes, extract_text_from_bytes
 
     jobs: list[tuple[str, bytes, str]] = []
     ap = subdir / "Aadhar.jpg"
@@ -2944,7 +2944,7 @@ class OcrService:
             extra_path = subdir / extra_file
             if extra_path.exists():
                 try:
-                    from app.services.textract_service import extract_text_from_bytes
+                    from app.services.sales_textract_service import extract_text_from_bytes
 
                     if prefetch_key in prefetch:
                         result = prefetch[prefetch_key]
@@ -3009,7 +3009,7 @@ class OcrService:
                     "key_value_pairs": key_value_pairs,
                 }
             elif fmt in ("jpeg", "png", "pdf"):
-                from app.services.textract_service import extract_forms_from_bytes
+                from app.services.sales_textract_service import extract_forms_from_bytes
 
                 if textract_forms_prefetch is not None:
                     result = textract_forms_prefetch
@@ -3178,7 +3178,7 @@ class OcrService:
             if ft is None:
                 t_ft = time.perf_counter()
                 try:
-                    from app.services.textract_service import extract_text_from_bytes
+                    from app.services.sales_textract_service import extract_text_from_bytes
 
                     ft = extract_text_from_bytes(raw_bytes)
                 except Exception:
@@ -3290,7 +3290,7 @@ class OcrService:
         textract_prefetch: dict | None = None,
     ) -> None:
         """Run Textract on Insurance.jpg (TEXT mode); extract insurer, policy from/to, premium via regex on full_text."""
-        from app.services.textract_service import extract_text_from_bytes
+        from app.services.sales_textract_service import extract_text_from_bytes
 
         if textract_prefetch is not None:
             result = textract_prefetch

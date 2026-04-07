@@ -137,7 +137,7 @@ def process_bulk_pdf(
             }
 
         # 2. Run OCR extraction
-        from app.services.ocr_service import OcrService
+        from app.services.sales_ocr_service import OcrService
         ocr = OcrService(
             uploads_dir=get_uploads_dir(dealer_id),
             ocr_output_dir=get_ocr_output_dir(dealer_id),

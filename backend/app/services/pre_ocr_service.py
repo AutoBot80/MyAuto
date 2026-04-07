@@ -86,7 +86,7 @@ def _tesseract_ocr(image_bytes: bytes) -> str:
 
 def _textract_ocr(image_bytes: bytes) -> str:
     """Run AWS Textract on image bytes. Returns full text."""
-    from app.services.textract_service import extract_text_from_bytes
+    from app.services.sales_textract_service import extract_text_from_bytes
     result = extract_text_from_bytes(image_bytes)
     if result.get("error"):
         raise RuntimeError(result["error"])

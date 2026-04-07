@@ -3,7 +3,7 @@
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 
 from app.config import DEALER_ID, get_uploads_dir
-from app.services.textract_service import (
+from app.services.sales_textract_service import (
     extract_text_from_bytes,
     extract_text_from_path,
     extract_forms_from_bytes,

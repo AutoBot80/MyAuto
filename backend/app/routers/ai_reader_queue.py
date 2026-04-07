@@ -2,7 +2,7 @@
 from fastapi import APIRouter, HTTPException, Query
 
 from app.config import DEALER_ID, get_ocr_output_dir, get_uploads_dir
-from app.services.ocr_service import OcrService
+from app.services.sales_ocr_service import OcrService
 
 router = APIRouter(prefix="/ai-reader-queue", tags=["ai-reader-queue"])
 

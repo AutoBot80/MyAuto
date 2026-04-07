@@ -1,0 +1,56 @@
+"""Unit tests for subdealer challan OCR helpers (no AWS calls)."""
+
+import unittest
+
+from app.services.subdealer_challan_ocr_service import (
+    _find_engine_chassis_table,
+    _rows_from_table,
+    parse_challan_date_to_iso,
+)
+
+
+class TestChallanDate(unittest.TestCase):
+    def test_dd_mm_yy(self) -> None:
+        iso, ddmmyyyy = parse_challan_date_to_iso("03/04/26")
+        self.assertEqual(iso, "2026-04-03")
+        self.assertEqual(ddmmyyyy, "03042026")
+
+    def test_dd_mm_yyyy(self) -> None:
+        iso, ddmmyyyy = parse_challan_date_to_iso("15/12/2025")
+        self.assertEqual(iso, "2025-12-15")
+        self.assertEqual(ddmmyyyy, "15122025")
+
+    def test_invalid(self) -> None:
+        self.assertEqual(parse_challan_date_to_iso("not-a-date"), (None, None))
+
+
+class TestEngineChassisTable(unittest.TestCase):
+    def test_find_table(self) -> None:
+        tables = [
+            [["x", "y"]],
+            [
+                ["S. No.", "Engine No.", "Chassis No.", "Key"],
+                ["1", "E1", "C1", ""],
+            ],
+        ]
+        found = _find_engine_chassis_table(tables)
+        self.assertIsNotNone(found)
+        grid, hi = found
+        self.assertEqual(hi, 0)
+        self.assertEqual(len(_rows_from_table(grid, hi)), 1)
+
+    def test_rows_pair(self) -> None:
+        grid = [
+            ["S.No", "Engine No.", "Chassis No."],
+            ["1", "111", "222"],
+            ["2", "333", "444"],
+        ]
+        rows = _rows_from_table(grid, 0)
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0]["engine_no"], "111")
+        self.assertEqual(rows[0]["chassis_no"], "222")
+        self.assertEqual(rows[0]["status"], "queued")
+
+
+if __name__ == "__main__":
+    unittest.main()

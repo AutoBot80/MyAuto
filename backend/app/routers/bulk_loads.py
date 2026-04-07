@@ -282,7 +282,7 @@ def prepare_reprocess(
 
     def run_ocr_background() -> None:
         try:
-            from app.services.ocr_service import OcrService
+            from app.services.sales_ocr_service import OcrService
             OcrService(
                 uploads_dir=get_uploads_dir(did),
                 ocr_output_dir=get_ocr_output_dir(did),

@@ -27,7 +27,7 @@ def normalize_hero_cpi_flag(raw: object | None) -> str:
     return "Y" if t.strip().upper() == "Y" else "N"
 
 from app.db import get_connection
-from app.services.ocr_service import _sanitize_details_profession_value
+from app.services.sales_ocr_service import _sanitize_details_profession_value
 from app.services.utility_functions import (
     clean_text,
     default_profession_if_empty,
