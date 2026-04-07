@@ -74,7 +74,7 @@ logger = logging.getLogger(__name__)
 
 # Siebel **Create Invoice** after order attach: off by default — enable only when product wants automation
 # to submit the invoice (operator may complete this step manually).
-_ATTACH_VEHICLE_AUTO_CLICK_CREATE_INVOICE = True
+_ATTACH_VEHICLE_AUTO_CLICK_CREATE_INVOICE = False  # temporarily: skip auto-click (set True to re-enable)
 
 
 def _scrape_total_ex_showroom_after_price_allocate(
@@ -1622,7 +1622,7 @@ def _attach_vehicle_to_bkg(
     else:
         note(
             "attach_vehicle_to_bkg: Create Invoice not auto-clicked "
-            "(set _ATTACH_VEHICLE_AUTO_CLICK_CREATE_INVOICE=False in hero_dms_playwright_invoice.py to disable)."
+            "(set _ATTACH_VEHICLE_AUTO_CLICK_CREATE_INVOICE=True in hero_dms_playwright_invoice.py to enable)."
         )
 
     note(
