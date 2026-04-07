@@ -40,6 +40,7 @@ Cursor agents follow **`.cursor/rules/checkpoints-registry.mdc`**: full workflow
 | 11 | Refactored into vehcile/ customer/ invoice. Clean run | `checkpoint/refactored-vehicle-customer-invoice-clean-run` | `39d1bd4a5dc8d6a07ce7e5d4ebc2ce198c49f189` | 2026-04-05T12:11:51+05:30 | 1) Creat eneuiry to be fully tested; 2) Create order POS guys doing something; 3) Occupation etc filled - need testing |
 | 12 | Insurance Fully Done | `checkpoint/insurance-fully-done` | `64a0bbc50760e24db04b40cd6e69bc052b673338` | 2026-04-05T17:42:55+05:30 | 1) KYC with adhaar pending 2) Download forms |
 | 13 | DMS Reports Downloaded | `checkpoint/dms-reports-downloaded` | `2bd01d4d3d54170aaab4a83bc37db80b2ff720d9` | 2026-04-05T19:37:23+05:30 | — |
+| 14 | Enabled Add Vehicle Looping | `checkpoint/enabled-add-vehicle-looping` | `33b2c9b2ca5a370e61b8cf1cba823114f5ce5a2e` | 2026-04-07T20:15:20+05:30 | 1) Create subdealer challan wrapper; 2) Test single sale; 3) Test Challan creation |
 
 ## Rollback / Restore
 
