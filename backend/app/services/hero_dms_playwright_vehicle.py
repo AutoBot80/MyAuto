@@ -2335,7 +2335,6 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         _pdi_row_count, _pdi_header_matched, _pdi_need_new_row,
         _pdi_max_expiry.isoformat() if _pdi_max_expiry else "",
     )
-    _safe_page_wait(page, 300, log_label="after_pdi_check")
 
     def _eval_pdi_grid_rowcount() -> int:
         """Same scoring as expiry scan: best table's ``rowCount`` (header match wins ties)."""
@@ -3711,6 +3710,43 @@ def _vehicle_master_prepare_gaps(merged: dict) -> tuple[list[str], list[str]]:
     return critical, info
 
 
+def _dms_optional_str_for_key_battery(v: object) -> str:
+    """
+    Normalize DMS/staging values for **Key Number** / **Battery No.** form fill.
+
+    Returns ``""`` when the value is null, empty, or a placeholder — those fields are **not** updated
+    on the Siebel form. Accepts non-string payloads (e.g. numeric key codes) via ``str()`` without
+    calling ``.strip()`` on non-strings in the caller.
+    """
+    if v is None:
+        return ""
+    s = v.strip() if isinstance(v, str) else str(v).strip()
+    if not s:
+        return ""
+    low = s.lower()
+    if low in ("null", "none", "n/a", "na", "-", "nil"):
+        return ""
+    return s
+
+
+def _dms_key_battery_strings_from_values(dms_values: dict) -> tuple[str, str]:
+    """
+    Resolve key and battery strings for the vehicle detail form.
+
+    ``key_partial`` / ``key_num`` (first non-empty) and ``battery_partial`` / ``battery_num`` /
+    ``battery`` (first non-empty). Null or placeholder values are treated as missing.
+    """
+    key_val = _dms_optional_str_for_key_battery(dms_values.get("key_partial"))
+    if not key_val:
+        key_val = _dms_optional_str_for_key_battery(dms_values.get("key_num"))
+    battery_val = _dms_optional_str_for_key_battery(dms_values.get("battery_partial"))
+    if not battery_val:
+        battery_val = _dms_optional_str_for_key_battery(dms_values.get("battery_num"))
+    if not battery_val:
+        battery_val = _dms_optional_str_for_key_battery(dms_values.get("battery"))
+    return key_val, battery_val
+
+
 def _siebel_fill_key_battery_from_dms_values(
     page: Page,
     dms_values: dict,
@@ -3723,11 +3759,12 @@ def _siebel_fill_key_battery_from_dms_values(
     Best-effort **Battery No.** then **Key Number** fill on the current vehicle form, then Ctrl+S.
 
     Expects the **vehicle detail** applet (e.g. after left **Search Results** VIN drill-in). Used from
-    Add Enquiry and from ``prepare_vehicle`` after opening that view. Does nothing when both partials are
-    empty. Battery is filled before Key to match Siebel tab order / operator SOP on the vehicle page.
+    Add Enquiry and from ``prepare_vehicle`` after opening that view. Does nothing when both resolved
+    values are empty (including null/placeholder ``key_partial`` / ``key_num`` / ``battery_partial`` /
+    ``battery_num`` / ``battery``). Battery is filled before Key to match Siebel tab order / operator SOP
+    on the vehicle page.
     """
-    key_val = (dms_values.get("key_partial") or "").strip()
-    battery_val = (dms_values.get("battery_partial") or "").strip()
+    key_val, battery_val = _dms_key_battery_strings_from_values(dms_values)
     if not (key_val or battery_val):
         return
     _veh_fill_frame = None
@@ -3881,7 +3918,7 @@ def prepare_vehicle(
     Returns ``(ok, error, merged_vehicle_dict, in_transit, critical_gaps, informational_notes)``.
     ``place_of_registeration`` / ``oem_name`` are applied at DB persist from ``dealer_ref`` / ``oem_ref``, not scraped here.
     """
-    key_p = (dms_values.get("key_partial") or "").strip()
+    key_p, _ = _dms_key_battery_strings_from_values(dms_values)
     frame_p = (dms_values.get("frame_partial") or "").strip()
     engine_p = (dms_values.get("engine_partial") or "").strip()
     vehicle_url = (urls.vehicle or "").strip()

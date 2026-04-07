@@ -15,6 +15,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from playwright.sync_api import Frame, Page, TimeoutError as PlaywrightTimeout
@@ -7955,3 +7956,10 @@ def _add_enquiry_opportunity(
             poll_readings_repr=str(poll_readings),
         )
     return True, None, enquiry_no
+
+
+def prepare_customer(*args: Any, **kwargs: Any) -> bool:
+    """Siebel Find Contact → payment + collate (delegates to ``hero_dms_prepare_customer.prepare_customer``)."""
+    from app.services.hero_dms_prepare_customer import prepare_customer as _prepare_customer_impl
+
+    return _prepare_customer_impl(*args, **kwargs)
