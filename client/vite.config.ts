@@ -22,6 +22,13 @@ export default defineConfig({
         timeout: 600_000,
         proxyTimeout: 600_000,
       },
+      // Subdealer challan OCR (Textract in same request — same timeout idea as uploads)
+      '/subdealer-challan': {
+        target: 'http://127.0.0.1:8000',
+        changeOrigin: true,
+        timeout: 600_000,
+        proxyTimeout: 600_000,
+      },
       '/ai-reader-queue': 'http://127.0.0.1:8000',
       '/vision': 'http://127.0.0.1:8000',
       '/dealers': 'http://127.0.0.1:8000',
