@@ -124,6 +124,145 @@ def _scrape_total_ex_showroom_after_price_allocate(
     return ""
 
 
+_ATTACH_LINE_ITEMS_MAX = 100
+
+
+def _normalize_attach_line_items(
+    *,
+    full_chassis: str,
+    line_item_discount: str,
+    attach_line_items: list[dict] | None,
+) -> tuple[list[dict[str, str]], str | None]:
+    """
+    Build a list of ``{full_chassis, line_item_discount}`` for order line attach.
+
+    If ``attach_line_items`` is non-empty, each dict may use ``full_chassis``, ``vin``, or ``frame_num``
+    and optional ``line_item_discount`` / ``discount``. Otherwise a single line is built from
+    ``full_chassis`` + ``line_item_discount``.
+    """
+    if attach_line_items is not None and len(attach_line_items) > 0:
+        if len(attach_line_items) > _ATTACH_LINE_ITEMS_MAX:
+            return [], f"attach_line_items exceeds maximum ({_ATTACH_LINE_ITEMS_MAX})."
+        out: list[dict[str, str]] = []
+        for raw in attach_line_items:
+            if not isinstance(raw, dict):
+                continue
+            ch = str(
+                raw.get("full_chassis")
+                or raw.get("vin")
+                or raw.get("frame_num")
+                or ""
+            ).strip()
+            disc = str(raw.get("line_item_discount") or raw.get("discount") or "").strip()
+            if ch:
+                out.append({"full_chassis": ch, "line_item_discount": disc})
+        if not out:
+            return [], "attach_line_items was empty or had no chassis values."
+        return out, None
+    ch = (full_chassis or "").strip()
+    if not ch:
+        return [], "attach_vehicle_to_bkg: full_chassis is empty (line-item VIN)."
+    return (
+        [{"full_chassis": ch, "line_item_discount": (line_item_discount or "").strip()}],
+        None,
+    )
+
+
+def _read_vin_from_order_line_row(
+    page: Page,
+    *,
+    row_n: int,
+    content_frame_selector: str | None,
+) -> str:
+    """Best-effort read of the VIN input for Siebel order line row ``row_n`` (1-based)."""
+    roots: list = []
+    try:
+        roots.extend(list(_siebel_locator_search_roots(page, content_frame_selector)))
+    except Exception:
+        pass
+    try:
+        roots.extend(list(_ordered_frames(page)))
+    except Exception:
+        pass
+    roots.append(page)
+    _rid = f"{int(row_n)}_s_1_l_VIN"
+    for root in roots:
+        for css in (f"#{_rid}", f"[id='{_rid}']"):
+            try:
+                loc = root.locator(css).first
+                if loc.count() > 0 and loc.is_visible(timeout=500):
+                    v = (loc.input_value(timeout=900) or "").strip()
+                    if v:
+                        return v
+            except Exception:
+                continue
+    return ""
+
+
+def _scrape_ex_showroom_for_order_line_row(
+    page: Page,
+    *,
+    row_n: int,
+    content_frame_selector: str | None,
+) -> str:
+    """
+    Best-effort **Total (Ex-showroom)** for a single order line row (1-based index) after **Price All** + **Allocate All**.
+    """
+    n = int(row_n)
+    js = """(rowNum) => {
+      const n = Number(rowNum) || 1;
+      const vis = (el) => {
+        if (!el) return false;
+        const st = window.getComputedStyle(el);
+        if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+        const r = el.getBoundingClientRect();
+        return r.width >= 2 && r.height >= 2;
+      };
+      const tryId = (id) => {
+        const el = document.getElementById(id);
+        if (!el || !vis(el)) return '';
+        return String(el.value || '').trim();
+      };
+      const suffixTry = ['Total_Ex_Showroom', 'Ex_Showroom', 'Total_Ex_Show_Room', 'ExShowroom'];
+      for (const suf of suffixTry) {
+        const v = tryId(`${n}_s_1_l_${suf}`);
+        if (v) return v;
+      }
+      const inputs = Array.from(document.querySelectorAll('input'));
+      const prefix = `${n}_s_1_l_`;
+      for (const el of inputs) {
+        const id = String(el.getAttribute('id') || '');
+        if (!id.startsWith(prefix)) continue;
+        const al = String(el.getAttribute('aria-label') || '').toLowerCase();
+        const tt = String(el.getAttribute('title') || '').toLowerCase();
+        const nm = String(el.getAttribute('name') || '').toLowerCase();
+        const blob = (al + ' ' + tt + ' ' + nm);
+        if (!blob.includes('ex-showroom') && !blob.includes('ex showroom') && !blob.includes('ex_showroom')) continue;
+        const val = String(el.value || '').trim();
+        if (val) return val;
+      }
+      return '';
+    }"""
+    roots: list = []
+    try:
+        roots.extend(list(_siebel_locator_search_roots(page, content_frame_selector)))
+    except Exception:
+        pass
+    try:
+        roots.extend(list(_ordered_frames(page)))
+    except Exception:
+        pass
+    roots.append(page)
+    for root in roots:
+        try:
+            v = root.evaluate(js, n)
+            if (v or "").strip():
+                return str(v).strip()
+        except Exception:
+            continue
+    return ""
+
+
 def _scrape_create_order_financier_display_value(
     page: Page,
     *,
@@ -580,12 +719,14 @@ def _attach_vehicle_to_bkg(
     content_frame_selector: str | None,
     note,
     start_at_order_link_before_apply: bool = False,
+    line_item_discount: str = "",
+    attach_line_items: list[dict] | None = None,
 ) -> tuple[bool, str | None, dict]:
     """
     After a new sales order is saved:
     1. Click Order Number / Order # header link to open order detail — **skipped** when line-item **New** or **VIN**
        is already visible (e.g. My Orders Order# drill-down).
-    2. Click **New** → fill VIN → Price All → Allocate All.
+    2. For each line: **New** → fill VIN (row ``n``) → optional **Discount** → repeat; then **Price All** → **Allocate All** once.
     3. *(Currently disabled via `if False`.)* Single-click **VIN** drilldown → **Serial Number** →
        ``_siebel_run_vehicle_serial_detail_precheck_pdi`` (Pre-check + PDI through submit).
     4. Click ``Order:<order#>`` link → **Apply Campaign** → **Create Invoice** when
@@ -593,6 +734,13 @@ def _attach_vehicle_to_bkg(
 
     After **Allocate All**, best-effort scrape of **Total (Ex-showroom)** into ``extra_dict`` as
     ``vehicle_price`` / ``vehicle_ex_showroom_cost`` (for ``vehicle_master.vehicle_ex_showroom_price``).
+    Multiple lines: also ``order_line_ex_showroom`` (list of per-row chassis + price). Ex-showroom is read
+    only after **Price All** + **Allocate All** (not during the add-line loop).
+
+    ``attach_line_items`` (optional): list of dicts with ``full_chassis`` / ``vin`` / ``frame_num`` and optional
+    ``line_item_discount`` / ``discount``. If omitted, a single line is built from ``full_chassis`` +
+    ``line_item_discount``.
+
     When ``start_at_order_link_before_apply`` is True, skips the Order header through **Allocate All**
     and starts at the top **Order:<order#>** link (Step 10) — used when My Orders already shows
     **Allocated** stock.
@@ -782,54 +930,61 @@ def _attach_vehicle_to_bkg(
         except Exception:
             pass
 
-        # ── Step 2: Click New button on order line / allocate (Hero: control id ends with _Ctrl) ──
-        _new_clicked = _click_by_id("s_1_1_35_0_Ctrl", "New button", wait_ms=1200)
-        if not _new_clicked:
-            _new_clicked = _click_by_id("s_1_1_35_0", "New button (legacy id)", wait_ms=1200)
-        if not _new_clicked:
-            for root in _all_roots():
-                if _click_first_visible(root, "[id$='_35_0_Ctrl']", "New button (id suffix _35_0_Ctrl)", wait_ms=1200):
-                    _new_clicked = True
-                    break
-        if not _new_clicked:
-            return False, "Could not click New button (id=s_1_1_35_0_Ctrl or id suffix _35_0_Ctrl) on order line items.", {}
-    
-        # ── Step 3: Line-item VIN — same selector family as Sales Orders ``name=VIN`` path; row id may be
-        # ``1_s_1_l_VIN``, ``2_s_1_l_VIN``, etc. Use **locator.type** (not ``page.keyboard``) so iframe focus works.
-        _ch = (full_chassis or "").strip()
-        if not _ch:
-            return False, "attach_vehicle_to_bkg: full_chassis is empty (line-item VIN).", {}
-    
-        _safe_page_wait(page, 500, log_label="after_new_before_vin_field")
-        _vin_locator_css: tuple[str, ...] = (
-            "#1_s_1_l_VIN",
-            "[id='1_s_1_l_VIN']",
-            "input[id$='_l_VIN']",
-            "input[id*='_l_VIN' i]",
-            "input[name='VIN']",
-            "input[aria-label='VIN']",
-            "input[title='VIN']",
-            "input[title*='VIN' i]",
+        _line_items, _li_err = _normalize_attach_line_items(
+            full_chassis=full_chassis,
+            line_item_discount=line_item_discount,
+            attach_line_items=attach_line_items,
         )
-    
-        def _vin_readback_ok(vin_loc) -> bool:
-            try:
-                got = (vin_loc.input_value(timeout=900) or "").strip()
-            except Exception:
-                got = ""
-            if not got:
+        if _li_err:
+            return False, _li_err, {}
+
+        def _click_new_line_item() -> bool:
+            _nw = _click_by_id("s_1_1_35_0_Ctrl", "New button", wait_ms=1200)
+            if not _nw:
+                _nw = _click_by_id("s_1_1_35_0", "New button (legacy id)", wait_ms=1200)
+            if not _nw:
+                for root in _all_roots():
+                    if _click_first_visible(root, "[id$='_35_0_Ctrl']", "New button (id suffix _35_0_Ctrl)", wait_ms=1200):
+                        _nw = True
+                        break
+            return bool(_nw)
+
+        def _fill_vin_for_row(row_n: int, ch: str) -> bool:
+            _ch = (ch or "").strip()
+            if not _ch:
                 return False
-            _digits = lambda s: re.sub(r"\D", "", s)
-            return _ch in got or _digits(_ch) in _digits(got) or len(_digits(got)) >= 8
-    
-        def _js_set_vin_value_on_element(vin_loc) -> None:
-            """Siebel line inputs often ignore Playwright fill/type; set value + InputEvent on the node."""
-            try:
-                import json as _json
-    
-                _v = _json.dumps(_ch)
-                vin_loc.evaluate(
-                    f"""(el) => {{
+            _ns = str(int(row_n))
+            _vin_locator_css: tuple[str, ...] = (
+                f"#{_ns}_s_1_l_VIN",
+                f"[id='{_ns}_s_1_l_VIN']",
+            )
+            if row_n == 1:
+                _vin_locator_css = _vin_locator_css + (
+                    "input[id$='_l_VIN']",
+                    "input[id*='_l_VIN' i]",
+                    "input[name='VIN']",
+                    "input[aria-label='VIN']",
+                    "input[title='VIN']",
+                    "input[title*='VIN' i]",
+                )
+
+            def _vin_readback_ok(vin_loc) -> bool:
+                try:
+                    got = (vin_loc.input_value(timeout=900) or "").strip()
+                except Exception:
+                    got = ""
+                if not got:
+                    return False
+                _digits = lambda s: re.sub(r"\D", "", s)
+                return _ch in got or _digits(_ch) in _digits(got) or len(_digits(got)) >= 8
+
+            def _js_set_vin_value_on_element(vin_loc) -> None:
+                try:
+                    import json as _json
+
+                    _v = _json.dumps(_ch)
+                    vin_loc.evaluate(
+                        f"""(el) => {{
                       const v = {_v};
                       try {{ el.focus(); }} catch (e) {{}}
                       el.value = '';
@@ -841,80 +996,77 @@ def _attach_vehicle_to_bkg(
                       }}
                       el.dispatchEvent(new Event('change', {{ bubbles: true }}));
                     }}"""
-                )
-            except Exception:
-                pass
-    
-        def _tab_out_vin(vin_loc) -> None:
-            try:
-                vin_loc.press("Tab", timeout=1500)
-            except Exception:
-                pass
-            try:
-                page.keyboard.press("Tab")
-            except Exception:
-                pass
-    
-        def _try_fill_vin_locator(vin_loc) -> bool:
-            try:
-                vin_loc.scroll_into_view_if_needed(timeout=_tmo)
-            except Exception:
-                pass
-            vin_loc.click(timeout=_tmo)
-            _safe_page_wait(page, 220, log_label="after_vin_click")
-            try:
-                vin_loc.focus(timeout=1200)
-            except Exception:
-                pass
-            try:
-                vin_loc.press("Control+a", timeout=800)
-            except Exception:
-                pass
-            try:
-                vin_loc.fill("", timeout=1000)
-            except Exception:
-                pass
-            _typed = False
-            try:
-                page.keyboard.type(_ch, delay=28)
-                _typed = True
-            except Exception:
-                pass
-            if not _vin_readback_ok(vin_loc):
-                try:
-                    vin_loc.type(_ch, delay=28, timeout=min(8000, int(action_timeout_ms or 3000)))
-                    _typed = True
+                    )
                 except Exception:
                     pass
-            if not _vin_readback_ok(vin_loc):
+
+            def _tab_out_vin(vin_loc) -> None:
                 try:
-                    vin_loc.fill(_ch, timeout=2000)
+                    vin_loc.press("Tab", timeout=1500)
                 except Exception:
                     pass
-            if not _vin_readback_ok(vin_loc):
-                _js_set_vin_value_on_element(vin_loc)
-            if not _vin_readback_ok(vin_loc):
-                return False
-            _tab_out_vin(vin_loc)
-            return True
-    
-        _vin_filled = False
-        for root in _all_roots():
-            for css in _vin_locator_css:
                 try:
-                    vin_loc = root.locator(css).first
-                    if vin_loc.count() <= 0 or not vin_loc.is_visible(timeout=700):
+                    page.keyboard.press("Tab")
+                except Exception:
+                    pass
+
+            def _try_fill_vin_locator(vin_loc) -> bool:
+                try:
+                    vin_loc.scroll_into_view_if_needed(timeout=_tmo)
+                except Exception:
+                    pass
+                vin_loc.click(timeout=_tmo)
+                _safe_page_wait(page, 220, log_label="after_vin_click")
+                try:
+                    vin_loc.focus(timeout=1200)
+                except Exception:
+                    pass
+                try:
+                    vin_loc.press("Control+a", timeout=800)
+                except Exception:
+                    pass
+                try:
+                    vin_loc.fill("", timeout=1000)
+                except Exception:
+                    pass
+                try:
+                    page.keyboard.type(_ch, delay=28)
+                except Exception:
+                    pass
+                if not _vin_readback_ok(vin_loc):
+                    try:
+                        vin_loc.type(_ch, delay=28, timeout=min(8000, int(action_timeout_ms or 3000)))
+                    except Exception:
+                        pass
+                if not _vin_readback_ok(vin_loc):
+                    try:
+                        vin_loc.fill(_ch, timeout=2000)
+                    except Exception:
+                        pass
+                if not _vin_readback_ok(vin_loc):
+                    _js_set_vin_value_on_element(vin_loc)
+                if not _vin_readback_ok(vin_loc):
+                    return False
+                _tab_out_vin(vin_loc)
+                return True
+
+            _vin_filled = False
+            for root in _all_roots():
+                for css in _vin_locator_css:
+                    try:
+                        vin_loc = root.locator(css).first
+                        if vin_loc.count() <= 0 or not vin_loc.is_visible(timeout=700):
+                            continue
+                        if _try_fill_vin_locator(vin_loc):
+                            _vin_filled = True
+                            note(f"attach_vehicle_to_bkg: VIN filled via {css!r}, row={row_n}, chassis={_ch!r}.")
+                            break
+                    except Exception:
                         continue
-                    if _try_fill_vin_locator(vin_loc):
-                        _vin_filled = True
-                        note(f"attach_vehicle_to_bkg: VIN filled via {css!r}, chassis={_ch!r}.")
-                        break
-                except Exception:
-                    continue
-            if _vin_filled:
-                break
-    
-        _js_vin_pick = """(chassis) => {
+                if _vin_filled:
+                    break
+
+            _js_vin_pick = """(payload) => {
           const vis = (el) => {
             if (!el) return false;
             const st = window.getComputedStyle(el);
@@ -922,9 +1074,11 @@ def _attach_vehicle_to_bkg(
             const r = el.getBoundingClientRect();
             return r.width >= 2 && r.height >= 2;
           };
-          const c = String(chassis || '');
-          let el = document.getElementById('1_s_1_l_VIN');
+          const c = String((payload && payload.chassis) || '');
+          const n = Number(payload && payload.n) || 1;
+          let el = document.getElementById(n + '_s_1_l_VIN');
           if (!el || !vis(el)) {
+            if (n !== 1) return false;
             const cands = Array.from(document.querySelectorAll(
               "input[id$='_l_VIN'], input[name='VIN'], input[aria-label='VIN'], input[title='VIN']"
             ));
@@ -943,30 +1097,224 @@ def _attach_vehicle_to_bkg(
           el.dispatchEvent(new Event('change', { bubbles: true }));
           return true;
         }"""
-    
-        if not _vin_filled:
-            for root in _all_roots():
+
+            if not _vin_filled:
+                _pay = {"chassis": _ch, "n": int(row_n)}
+                for root in _all_roots():
+                    try:
+                        if bool(root.evaluate(_js_vin_pick, _pay)):
+                            _vin_filled = True
+                            note(f"attach_vehicle_to_bkg: JS set VIN field (broad query), row={row_n}, chassis={_ch!r}.")
+                            _safe_page_wait(page, 200, log_label="after_vin_js_fill")
+                            try:
+                                page.keyboard.press("Tab")
+                            except Exception:
+                                pass
+                            try:
+                                page.keyboard.press("Tab")
+                            except Exception:
+                                pass
+                            break
+                    except Exception:
+                        continue
+
+            return bool(_vin_filled)
+
+        def _fill_discount_for_row(row_n: int, disc_raw: str) -> bool:
+            _disc_raw = (disc_raw or "").strip()
+            if not _disc_raw:
+                return True
+            _ns = str(int(row_n))
+            _disc_locator_css: tuple[str, ...] = (
+                f"#{_ns}_s_1_l_Discount",
+                f"[id='{_ns}_s_1_l_Discount']",
+            )
+            if row_n == 1:
+                _disc_locator_css = _disc_locator_css + (
+                    "input[id$='_l_Discount']",
+                    "input[id*='_l_Discount' i]",
+                    "input[name='Discount']",
+                    "input[aria-label='Discount']",
+                    "input[title='Discount']",
+                    "input[title*='Discount' i]",
+                )
+
+            def _norm_disc_txt(s: str) -> str:
+                return re.sub(r"[\s,]", "", (s or "").strip())
+
+            def _disc_readback_ok(dloc) -> bool:
                 try:
-                    if bool(root.evaluate(_js_vin_pick, _ch)):
-                        _vin_filled = True
-                        note(f"attach_vehicle_to_bkg: JS set VIN field (broad query), chassis={_ch!r}.")
-                        _safe_page_wait(page, 200, log_label="after_vin_js_fill")
-                        try:
-                            page.keyboard.press("Tab")
-                        except Exception:
-                            pass
-                        try:
-                            page.keyboard.press("Tab")
-                        except Exception:
-                            pass
-                        break
+                    got = (dloc.input_value(timeout=900) or "").strip()
                 except Exception:
-                    continue
-    
-        if not _vin_filled:
-            return False, f"Could not fill line-item VIN (selectors id/_l_VIN/name=VIN) with {_ch!r}.", {}
-        _safe_page_wait(page, 2800, log_label="after_vin_tab_settle")
-    
+                    got = ""
+                if not got:
+                    return False
+                return _norm_disc_txt(_disc_raw) == _norm_disc_txt(got) or _disc_raw in got or got in _disc_raw
+
+            def _js_set_discount_on_element(dloc) -> None:
+                try:
+                    _v = json.dumps(_disc_raw)
+                    dloc.evaluate(
+                        f"""(el) => {{
+                          const v = {_v};
+                          try {{ el.focus(); }} catch (e) {{}}
+                          el.value = '';
+                          el.value = v;
+                          try {{
+                            el.dispatchEvent(new InputEvent('input', {{ bubbles: true, inputType: 'insertFromPaste', data: v }}));
+                          }} catch (e) {{
+                            el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                          }}
+                          el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                        }}"""
+                    )
+                except Exception:
+                    pass
+
+            def _tab_out_discount(dloc) -> None:
+                try:
+                    dloc.press("Tab", timeout=1500)
+                except Exception:
+                    pass
+                try:
+                    page.keyboard.press("Tab")
+                except Exception:
+                    pass
+
+            def _try_fill_discount_locator(dloc) -> bool:
+                try:
+                    dloc.scroll_into_view_if_needed(timeout=_tmo)
+                except Exception:
+                    pass
+                dloc.click(timeout=_tmo)
+                _safe_page_wait(page, 220, log_label="after_discount_click")
+                try:
+                    dloc.focus(timeout=1200)
+                except Exception:
+                    pass
+                try:
+                    dloc.press("Control+a", timeout=800)
+                except Exception:
+                    pass
+                try:
+                    dloc.fill("", timeout=1000)
+                except Exception:
+                    pass
+                try:
+                    page.keyboard.type(_disc_raw, delay=22)
+                except Exception:
+                    pass
+                if not _disc_readback_ok(dloc):
+                    try:
+                        dloc.type(_disc_raw, delay=22, timeout=min(8000, int(action_timeout_ms or 3000)))
+                    except Exception:
+                        pass
+                if not _disc_readback_ok(dloc):
+                    try:
+                        dloc.fill(_disc_raw, timeout=2000)
+                    except Exception:
+                        pass
+                if not _disc_readback_ok(dloc):
+                    _js_set_discount_on_element(dloc)
+                if not _disc_readback_ok(dloc):
+                    return False
+                _tab_out_discount(dloc)
+                return True
+
+            _disc_filled = False
+            for root in _all_roots():
+                for css in _disc_locator_css:
+                    try:
+                        dloc = root.locator(css).first
+                        if dloc.count() <= 0 or not dloc.is_visible(timeout=700):
+                            continue
+                        if _try_fill_discount_locator(dloc):
+                            _disc_filled = True
+                            note(f"attach_vehicle_to_bkg: Discount filled via {css!r}, row={row_n}, value={_disc_raw!r}.")
+                            break
+                    except Exception:
+                        continue
+                if _disc_filled:
+                    break
+
+            _js_disc_pick = """(payload) => {
+              const vis = (el) => {
+                if (!el) return false;
+                const st = window.getComputedStyle(el);
+                if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+                const r = el.getBoundingClientRect();
+                return r.width >= 2 && r.height >= 2;
+              };
+              const c = String((payload && payload.val) || '');
+              const n = Number(payload && payload.n) || 1;
+              let el = document.getElementById(n + '_s_1_l_Discount');
+              if (!el || !vis(el)) {
+                if (n !== 1) return false;
+                const cands = Array.from(document.querySelectorAll(
+                  "input[id$='_l_Discount'], input[name='Discount'], input[aria-label='Discount'], input[title='Discount']"
+                ));
+                el = cands.find((e) => vis(e)) || null;
+              }
+              if (!el) return false;
+              try { el.scrollIntoView({ block: 'center' }); } catch (e) {}
+              try { el.focus(); } catch (e) {}
+              el.value = '';
+              el.value = c;
+              try {
+                el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertFromPaste', data: c }));
+              } catch (e) {
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+              }
+              el.dispatchEvent(new Event('change', { bubbles: true }));
+              return true;
+            }"""
+
+            if not _disc_filled:
+                _dp = {"val": _disc_raw, "n": int(row_n)}
+                for root in _all_roots():
+                    try:
+                        if bool(root.evaluate(_js_disc_pick, _dp)):
+                            _disc_filled = True
+                            note(f"attach_vehicle_to_bkg: JS set Discount field (broad query), row={row_n}, value={_disc_raw!r}.")
+                            _safe_page_wait(page, 200, log_label="after_discount_js_fill")
+                            try:
+                                page.keyboard.press("Tab")
+                            except Exception:
+                                pass
+                            break
+                    except Exception:
+                        continue
+
+            return bool(_disc_filled)
+
+        # ── Step 2–3: For each line — New → VIN → optional Discount (row ``n`` = 1..N)
+        _n_tot = len(_line_items)
+        for _ix, _it in enumerate(_line_items):
+            n = _ix + 1
+            _ch = (_it.get("full_chassis") or "").strip()
+            _disc_raw = (_it.get("line_item_discount") or "").strip()
+            if not _click_new_line_item():
+                return False, "Could not click New button (id=s_1_1_35_0_Ctrl or id suffix _35_0_Ctrl) on order line items.", {}
+            _safe_page_wait(page, 500, log_label="after_new_before_vin_field")
+            if not _fill_vin_for_row(n, _ch):
+                return False, f"Could not fill line-item VIN for row {n} (selectors id/_l_VIN/name=VIN) with {_ch!r}.", {}
+            _is_last = _ix == _n_tot - 1
+            if _is_last:
+                _safe_page_wait(page, 2800, log_label="after_vin_tab_settle")
+            else:
+                _safe_page_wait(page, 800, log_label=f"after_vin_tab_settle_row_{n}")
+
+            if _disc_raw:
+                if not _fill_discount_for_row(n, _disc_raw):
+                    return (
+                        False,
+                        f"Could not fill line-item Discount for row {n} (id/_l_Discount/name=Discount) with {_disc_raw!r}.",
+                        {},
+                    )
+                _safe_page_wait(page, 500, log_label="after_discount_tab_settle")
+
+        _safe_page_wait(page, 400, log_label="after_all_line_items_before_price_all")
+
         # ── Step 4: Click Price All (name="s_1_1_7_0") ──
         if not _click_by_name("s_1_1_7_0", "Price All", wait_ms=2000):
             return False, "Could not click Price All (name=s_1_1_7_0).", {}
@@ -985,18 +1333,69 @@ def _attach_vehicle_to_bkg(
     
         _extra: dict = {}
         _safe_page_wait(page, 1200, log_label="after_allocate_all_before_ex_showroom_scrape")
-        _ex_raw = _scrape_total_ex_showroom_after_price_allocate(
-            page, content_frame_selector=content_frame_selector
-        )
-        if _ex_raw and _looks_like_ex_showroom_price(_ex_raw):
-            _extra["vehicle_ex_showroom_cost"] = _ex_raw
-            _extra["vehicle_price"] = _ex_raw
-            note(f"attach_vehicle_to_bkg: scraped Total (Ex-showroom)={_ex_raw!r} after Price All + Allocate All.")
+        _n_lines = len(_line_items)
+        if _n_lines > 1:
+            _rows_out: list[dict[str, str]] = []
+            for _rn in range(1, _n_lines + 1):
+                _vin_rb = _read_vin_from_order_line_row(
+                    page, row_n=_rn, content_frame_selector=content_frame_selector
+                )
+                _ex_r = _scrape_ex_showroom_for_order_line_row(
+                    page, row_n=_rn, content_frame_selector=content_frame_selector
+                )
+                _exp_ch = (_line_items[_rn - 1].get("full_chassis") or "").strip()
+                _rows_out.append(
+                    {
+                        "full_chassis": (_vin_rb.strip() or _exp_ch),
+                        "vehicle_ex_showroom_cost": (_ex_r or "").strip(),
+                    }
+                )
+                if _ex_r and _looks_like_ex_showroom_price(_ex_r):
+                    note(
+                        f"attach_vehicle_to_bkg: row {_rn} Ex-showroom={_ex_r!r}, VIN readback={_vin_rb!r}."
+                    )
+                else:
+                    note(
+                        f"attach_vehicle_to_bkg: row {_rn} Ex-showroom missing or not numeric ({_ex_r!r}); "
+                        f"VIN readback={_vin_rb!r}."
+                    )
+            _extra["order_line_ex_showroom"] = _rows_out
+            _first_price = ""
+            for _r in _rows_out:
+                _p = (_r.get("vehicle_ex_showroom_cost") or "").strip()
+                if _p and _looks_like_ex_showroom_price(_p):
+                    _first_price = _p
+                    break
+            if _first_price:
+                _extra["vehicle_ex_showroom_cost"] = _first_price
+                _extra["vehicle_price"] = _first_price
+                note(
+                    f"attach_vehicle_to_bkg: primary Total (Ex-showroom) from first valid line={_first_price!r}."
+                )
+            else:
+                note(
+                    "attach_vehicle_to_bkg: no per-row Ex-showroom passed validation after multi-line scrape "
+                    "(best-effort)."
+                )
         else:
-            note(
-                "attach_vehicle_to_bkg: Total (Ex-showroom) not scraped or not numeric after Allocate All "
-                "(best-effort)."
+            _ex_raw = _scrape_total_ex_showroom_after_price_allocate(
+                page, content_frame_selector=content_frame_selector
             )
+            if _ex_raw and _looks_like_ex_showroom_price(_ex_raw):
+                _extra["vehicle_ex_showroom_cost"] = _ex_raw
+                _extra["vehicle_price"] = _ex_raw
+                _extra["order_line_ex_showroom"] = [
+                    {
+                        "full_chassis": (_line_items[0].get("full_chassis") or "").strip(),
+                        "vehicle_ex_showroom_cost": _ex_raw,
+                    }
+                ]
+                note(f"attach_vehicle_to_bkg: scraped Total (Ex-showroom)={_ex_raw!r} after Price All + Allocate All.")
+            else:
+                note(
+                    "attach_vehicle_to_bkg: Total (Ex-showroom) not scraped or not numeric after Allocate All "
+                    "(best-effort)."
+                )
     
         note(
             "attach_vehicle_to_bkg: skipped VIN drilldown, Serial Number, and Pre-check/PDI through PDI submit (disabled)."
@@ -1243,11 +1642,13 @@ def _create_order(
     first_name: str,
     full_chassis: str,
     financier_name: str,
-    contact_id: str = "",
-    battery_partial: str = "",
     action_timeout_ms: int,
     content_frame_selector: str | None,
     note,
+    contact_id: str = "",
+    battery_partial: str = "",
+    line_item_discount: str = "",
+    attach_line_items: list[dict] | None = None,
     form_trace=None,
 ) -> tuple[bool, str | None, dict]:
     """
@@ -1264,7 +1665,12 @@ def _create_order(
 
     - **+** path: Sales Orders New:List, Booking Order Type = Normal Booking, optional Comments
       (``Battery no. is …`` when ``battery_partial`` is set),
-      finance fields, Contact Last Name F2 applet, Ctrl+S, then ``_attach_vehicle_to_bkg`` from the new order.
+      finance fields, Contact Last Name F2 applet, Ctrl+S, then ``_attach_vehicle_to_bkg`` from the new order
+      (optional ``line_item_discount`` on the same line-item row as VIN, or ``attach_line_items`` for multiple lines).
+
+    ``attach_line_items``: optional list of dicts (``order_line_vehicles`` / ``attach_vehicles`` from DMS); each row
+    ``full_chassis`` / ``vin`` / ``frame_num`` and optional per-line discount. When set, overrides single-line
+    ``full_chassis`` + ``line_item_discount`` for attach.
     """
     scraped: dict = {"inventory_location": "", "vehicle_price": "", "order_number": "", "invoice_number": ""}
 
@@ -1487,6 +1893,8 @@ def _create_order(
             content_frame_selector=content_frame_selector,
             note=note,
             start_at_order_link_before_apply=(branch == "allocated"),
+            line_item_discount=line_item_discount,
+            attach_line_items=attach_line_items,
         )
         scraped["order_drilldown_opened"] = bool(_att_ok)
         scraped["my_orders_branch"] = branch
@@ -2775,6 +3183,8 @@ def _create_order(
             action_timeout_ms=action_timeout_ms,
             content_frame_selector=content_frame_selector,
             note=note,
+            line_item_discount=line_item_discount,
+            attach_line_items=attach_line_items,
         )
         scraped["order_drilldown_opened"] = bool(_att_ok)
         if _att_scraped:
@@ -3433,3 +3843,118 @@ def print_hero_dms_forms(
         ]
         _summary = "; ".join(_parts) if _parts else "one or more reports failed."
     return _all_ok, _summary, saved_paths, report_details
+
+
+def prepare_order(
+    page: Page,
+    dms_values: dict,
+    urls: SiebelDmsUrls,
+    out: dict,
+    *,
+    mobile: str,
+    video_first_name: str,
+    action_timeout_ms: int,
+    nav_timeout_ms: int,
+    content_frame_selector: str | None,
+    note: Callable[..., None],
+    step: Callable[..., None],
+    form_trace: Callable[..., None] | None,
+    ms_done: Callable[[str], None] | None,
+    log_vehicle_snapshot: Callable[[str], None],
+) -> dict:
+    """
+    Generate Booking + ``_create_order`` + merge scrape into ``out[\"vehicle\"]``.
+    Returns ``order_scraped`` from ``_create_order`` (may be empty). On failure sets ``out[\"error\"]``.
+    """
+    full_chassis = (
+        str((out.get("vehicle") or {}).get("full_chassis") or "").strip()
+        or str(dms_values.get("full_chassis") or "").strip()
+        or str(dms_values.get("frame_num") or "").strip()
+    )
+    _enq_u = (urls.enquiry or "").strip() or (urls.contact or "").strip()
+    if _enq_u:
+        _goto(page, _enq_u, "enquiry_for_booking_video", nav_timeout_ms=nav_timeout_ms)
+        _siebel_after_goto_wait(page, floor_ms=900)
+    _safe_page_wait(page, 500, log_label="before_generate_booking_video")
+    if _try_click_generate_booking(
+        page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
+    ):
+        note("Video path: clicked Generate Booking before create_order.")
+        if callable(ms_done):
+            ms_done("Booking generated")
+    else:
+        step("Stopped: Generate Booking was not found before create_order (video path).")
+        out["error"] = (
+            "Siebel: Generate Booking control was not found before create_order. "
+            "Booking is mandatory when no existing order is present."
+        )
+        return {}
+
+    if callable(form_trace):
+        form_trace(
+            "v4_create_order",
+            "Vehicle Sales / Sales Orders",
+            "vehicle_sales_new_order_then_pick_contact_then_vin_search_price_allocate",
+            mobile_phone=mobile,
+            first_name=video_first_name,
+            full_chassis=full_chassis,
+        )
+    _line_disc = (
+        str(dms_values.get("line_item_discount") or dms_values.get("discount") or "").strip()
+    )
+    _raw_olv = dms_values.get("order_line_vehicles") or dms_values.get("attach_vehicles")
+    _attach_li = _raw_olv if isinstance(_raw_olv, list) and len(_raw_olv) > 0 else None
+    ok_order, order_err, order_scraped = _create_order(
+        page,
+        mobile=mobile,
+        first_name=video_first_name,
+        full_chassis=full_chassis,
+        financier_name=(dms_values.get("financier_name") or "").strip(),
+        action_timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+        note=note,
+        contact_id=out.get("contact_id", ""),
+        battery_partial=(dms_values.get("battery_partial") or "").strip(),
+        line_item_discount=_line_disc,
+        attach_line_items=_attach_li,
+        form_trace=form_trace,
+    )
+    if not ok_order:
+        step("Stopped: create_order flow failed.")
+        out["error"] = f"Siebel: create_order failed. {order_err or ''}".strip()
+        return {}
+
+    if order_scraped.get("ready_for_client_create_invoice"):
+        out["ready_for_client_create_invoice"] = True
+
+    if order_scraped:
+        veh = dict(out.get("vehicle") or {})
+        if order_scraped.get("inventory_location"):
+            veh["inventory_location"] = order_scraped.get("inventory_location")
+        if order_scraped.get("vehicle_price"):
+            veh["vehicle_price"] = order_scraped.get("vehicle_price")
+        if order_scraped.get("order_number"):
+            veh["order_number"] = order_scraped.get("order_number")
+        if order_scraped.get("invoice_number"):
+            veh["invoice_number"] = order_scraped.get("invoice_number")
+        if order_scraped.get("vehicle_ex_showroom_cost"):
+            veh["vehicle_ex_showroom_cost"] = order_scraped.get("vehicle_ex_showroom_cost")
+        if order_scraped.get("order_line_ex_showroom"):
+            veh["order_line_ex_showroom"] = order_scraped.get("order_line_ex_showroom")
+        if order_scraped.get("cubic_capacity"):
+            veh["cubic_capacity"] = order_scraped.get("cubic_capacity")
+        if order_scraped.get("vehicle_type"):
+            veh["vehicle_type"] = order_scraped.get("vehicle_type")
+        _fn_sc = (order_scraped.get("financier_name") or "").strip()
+        if _fn_sc:
+            veh["financier_name"] = _fn_sc
+            dms_values["financier_name"] = _fn_sc
+            _cm_up = out.get("dms_customer_master_collated")
+            if isinstance(_cm_up, dict):
+                _cf_up = _cm_up.get("fields")
+                if isinstance(_cf_up, dict):
+                    _cf_up["financier"] = _fn_sc
+        out["vehicle"] = veh
+        log_vehicle_snapshot("video_create_order_scrape_merge")
+
+    return dict(order_scraped or {})
