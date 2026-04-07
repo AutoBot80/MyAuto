@@ -3,8 +3,8 @@
 This milestone is registered in **`Documentation/checkpoints.md`** as **Serial No. 14**.
 
 - **Tag:** `checkpoint/enabled-add-vehicle-looping`
-- **Commit:** `33b2c9b2ca5a370e61b8cf1cba823114f5ce5a2e`
-- **Created (IST):** `2026-04-07T20:15:20+05:30`
+- **Commit:** `3df79152f68720501aec83643572f9ee7778763a`
+- **Created (IST):** `2026-04-07T20:16:46+05:30`
 
 ## Scope (this snapshot)
 
