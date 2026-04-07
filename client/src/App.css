@@ -2174,11 +2174,6 @@
   margin-right: 6px;
 }
 
-.subdealer-challan-extract-iso {
-  color: #666;
-  font-size: 13px;
-}
-
 .subdealer-challan-error {
   margin-top: 6px;
   padding: 8px 10px;
@@ -2318,6 +2313,18 @@
   line-height: 1.25;
 }
 
+/* Scroll region so bottom table rows stay reachable (explicit user request) */
+.subdealer-challan-tables-scroll {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  margin-top: 3px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  box-sizing: border-box;
+}
+
 /* Two tables side by side (13 rows each = 26 per page) */
 .subdealer-challan-tables {
   display: grid;
@@ -2325,11 +2332,8 @@
   gap: 8px 12px;
   align-items: start;
   justify-items: stretch;
-  min-height: 0;
-  flex: 1;
   width: 100%;
   box-sizing: border-box;
-  margin-top: 3px;
 }
 
 .subdealer-challan-table-wrap {
@@ -2454,7 +2458,7 @@
     margin-left: 0;
   }
 
-  .subdealer-challan-tables {
+  .subdealer-challan-tables-scroll .subdealer-challan-tables {
     grid-template-columns: 1fr;
     justify-items: stretch;
   }

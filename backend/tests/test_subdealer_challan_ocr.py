@@ -6,6 +6,7 @@ from app.services.subdealer_challan_ocr_service import (
     _find_engine_chassis_table,
     _rows_from_table,
     parse_challan_date_to_iso,
+    sanitize_challan_line_field,
 )
 
 
@@ -22,6 +23,13 @@ class TestChallanDate(unittest.TestCase):
 
     def test_invalid(self) -> None:
         self.assertEqual(parse_challan_date_to_iso("not-a-date"), (None, None))
+
+
+class TestSanitizeLineField(unittest.TestCase):
+    def test_strips_edges_and_middle_junk(self) -> None:
+        self.assertEqual(sanitize_challan_line_field("03432|"), "03432")
+        self.assertEqual(sanitize_challan_line_field("|53768•"), "53768")
+        self.assertEqual(sanitize_challan_line_field("12/34"), "1234")
 
 
 class TestEngineChassisTable(unittest.TestCase):

@@ -6,8 +6,8 @@ const TABLE_COUNT = 2;
 const PAGE_SIZE = ROWS_PER_TABLE * TABLE_COUNT;
 
 export type ChallanRow = {
-  chassisNo: string;
   engineNo: string;
+  chassisNo: string;
   status: string;
 };
 
@@ -60,8 +60,8 @@ export function SubdealerChallanPage() {
       setChallanDateIso(res.challan_date_iso);
       setWarnings(res.warnings || []);
       const mapped: ChallanRow[] = (res.lines || []).map((line: SubdealerChallanLine) => ({
-        chassisNo: (line.chassis_no || "").toUpperCase(),
         engineNo: (line.engine_no || "").toUpperCase(),
+        chassisNo: (line.chassis_no || "").toUpperCase(),
         status: line.status || "queued",
       }));
       setRows(mapped);
@@ -138,9 +138,6 @@ export function SubdealerChallanPage() {
             <span className="subdealer-challan-extract-item">
               <span className="subdealer-challan-extract-label">Date</span>{" "}
               {challanDateRaw || challanDateIso}
-              {challanDateRaw && challanDateIso && challanDateRaw !== challanDateIso && (
-                <span className="subdealer-challan-extract-iso"> ({challanDateIso})</span>
-              )}
             </span>
           )}
         </div>
@@ -183,7 +180,8 @@ export function SubdealerChallanPage() {
         </div>
       )}
 
-      <div className="subdealer-challan-tables" role="group" aria-label="Chassis and engine numbers">
+      <div className="subdealer-challan-tables-scroll" role="region" aria-label="Challan line items">
+        <div className="subdealer-challan-tables" role="group" aria-label="Engine and chassis numbers">
         {Array.from({ length: TABLE_COUNT }, (_, tableIdx) => {
           const offset = tableIdx * ROWS_PER_TABLE;
           return (
@@ -191,8 +189,8 @@ export function SubdealerChallanPage() {
               <table className="subdealer-challan-table">
                 <colgroup>
                   <col className="subdealer-challan-col-sno" />
-                  <col className="subdealer-challan-col-chassis" />
                   <col className="subdealer-challan-col-engine" />
+                  <col className="subdealer-challan-col-chassis" />
                   <col className="subdealer-challan-col-status" />
                 </colgroup>
                 <thead>
@@ -200,8 +198,8 @@ export function SubdealerChallanPage() {
                     <th scope="col" className="subdealer-challan-th-sno">
                       S.No.
                     </th>
-                    <th scope="col">Chassis No.</th>
                     <th scope="col">Engine No.</th>
+                    <th scope="col">Chassis No.</th>
                     <th scope="col">Status</th>
                   </tr>
                 </thead>
@@ -214,6 +212,18 @@ export function SubdealerChallanPage() {
                     return (
                       <tr key={`${safePage}-${tableIdx}-${r}`}>
                         <td className="subdealer-challan-sno">{sno}.</td>
+                        <td className="subdealer-challan-engine-cell">
+                          <input
+                            type="text"
+                            className="subdealer-challan-cell-input"
+                            value={row?.engineNo ?? ""}
+                            onChange={(e) =>
+                              setRowAt(globalIdx, "engineNo", e.target.value.toUpperCase())
+                            }
+                            maxLength={32}
+                            aria-label={`Engine No. row ${sno}`}
+                          />
+                        </td>
                         <td className="subdealer-challan-chassis-cell">
                           <input
                             type="text"
@@ -227,18 +237,6 @@ export function SubdealerChallanPage() {
                             autoCapitalize="characters"
                             spellCheck={false}
                             aria-label={`Chassis No. row ${sno}`}
-                          />
-                        </td>
-                        <td className="subdealer-challan-engine-cell">
-                          <input
-                            type="text"
-                            className="subdealer-challan-cell-input"
-                            value={row?.engineNo ?? ""}
-                            onChange={(e) =>
-                              setRowAt(globalIdx, "engineNo", e.target.value.toUpperCase())
-                            }
-                            maxLength={32}
-                            aria-label={`Engine No. row ${sno}`}
                           />
                         </td>
                         <td className="subdealer-challan-status-cell">
@@ -259,6 +257,7 @@ export function SubdealerChallanPage() {
             </div>
           );
         })}
+        </div>
       </div>
     </div>
   );

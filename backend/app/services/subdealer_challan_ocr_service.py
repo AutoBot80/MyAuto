@@ -20,6 +20,16 @@ logger = logging.getLogger(__name__)
 OCR_JSON_STEM = "OCR_To_be_Used"
 
 
+def sanitize_challan_line_field(value: str | None) -> str:
+    """
+    Drop OCR noise: leading/trailing/middle punctuation and non-ID characters.
+    Keeps only ASCII letters and digits (strips | . / etc. before, after, or between).
+    """
+    if not value or not str(value).strip():
+        return ""
+    return re.sub(r"[^A-Za-z0-9]", "", str(value).strip())
+
+
 def _safe_folder_segment(s: str) -> str:
     bad = '<>:"/\\|?*'
     out = "".join(c for c in (s or "") if c not in bad).strip()
@@ -40,7 +50,7 @@ def parse_challan_date_to_iso(raw: str | None) -> tuple[str | None, str | None]:
     """
     if not raw or not str(raw).strip():
         return None, None
-    t = raw.strip()
+    t = raw.strip().strip(".,;:|'\"•·")
     m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{2}|\d{4})$", t)
     if not m:
         return None, None
@@ -64,7 +74,7 @@ def _extract_date_raw_from_text(text: str) -> str | None:
     if not text:
         return None
     for m in re.finditer(r"\b(\d{1,2}/\d{1,2}/\d{2,4})\b", text):
-        candidate = m.group(1)
+        candidate = m.group(1).strip().strip(".,;:|'\"•·")
         iso, _ = parse_challan_date_to_iso(candidate)
         if iso:
             return candidate
@@ -80,14 +90,14 @@ def _extract_challan_no(full_text: str, key_value_pairs: list[dict[str, str]]) -
         if "challan" in k and re.search(r"\d", v):
             m = re.search(r"(\d{2,6})", v)
             if m:
-                return m.group(1).strip()
+                return sanitize_challan_line_field(m.group(1)) or m.group(1).strip()
     for pat in (
         r"(?i)challan\s*#?\s*[:\s.-]*\s*(\d{2,6})",
         r"(?i)challan\s+no\.?\s*[:\s.-]*\s*(\d{2,6})",
     ):
         m = re.search(pat, full_text)
         if m:
-            return m.group(1).strip()
+            return sanitize_challan_line_field(m.group(1)) or m.group(1).strip()
     # Top-of-page standalone 3–4 digit line (common on handwritten forms)
     for line in full_text.splitlines()[:12]:
         line = line.strip()
@@ -135,8 +145,8 @@ def _rows_from_table(table: list[list[str]], header_row_index: int) -> list[dict
     for row in table[header_row_index + 1 :]:
         if ei >= len(row) or ci >= len(row):
             continue
-        eng = (row[ei] or "").strip()
-        cha = (row[ci] or "").strip()
+        eng = sanitize_challan_line_field(row[ei] or "")
+        cha = sanitize_challan_line_field(row[ci] or "")
         if not eng and not cha:
             continue
         out.append({"engine_no": eng, "chassis_no": cha, "status": "queued"})
