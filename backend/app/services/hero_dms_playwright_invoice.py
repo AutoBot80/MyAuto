@@ -1048,14 +1048,8 @@ def _attach_vehicle_to_bkg(
                     pass
 
             def _try_fill_vin_locator(vin_loc) -> bool:
-                # Same as challan Institution field: do not click the composite control (pick/MVG icon on the right).
-                for _esc_i in range(3):
-                    try:
-                        page.keyboard.press("Escape")
-                    except Exception:
-                        pass
-                    _safe_page_wait(page, 120, log_label=f"attach_vin_dismiss_applet_esc{_esc_i}")
-
+                # Do not use a full-area click (pick/MVG icon on the right). Do not send Escape here: after **New**,
+                # Escape can cancel the new line or collapse the line-items applet so the VIN cell never fills.
                 try:
                     vin_loc.scroll_into_view_if_needed(timeout=_tmo)
                 except Exception:
@@ -1117,6 +1111,24 @@ def _attach_vehicle_to_bkg(
                 _tab_out_vin(vin_loc)
                 return True
 
+            # After **New**, the jqGrid row / VIN input can appear slightly later than the New click wait.
+            for _wait_i in range(24):
+                _row_ready = False
+                for root in _all_roots():
+                    for css in _vin_locator_css:
+                        try:
+                            _wl = root.locator(css).first
+                            if _wl.count() > 0 and _wl.is_visible(timeout=450):
+                                _row_ready = True
+                                break
+                        except Exception:
+                            continue
+                    if _row_ready:
+                        break
+                if _row_ready:
+                    break
+                _safe_page_wait(page, 200, log_label=f"attach_vin_row_ready_poll_{row_n}_{_wait_i}")
+
             _vin_filled = False
             for root in _all_roots():
                 for css in _vin_locator_css:
@@ -1166,12 +1178,6 @@ def _attach_vehicle_to_bkg(
         }"""
 
             if not _vin_filled:
-                for _esc_i in range(2):
-                    try:
-                        page.keyboard.press("Escape")
-                    except Exception:
-                        pass
-                    _safe_page_wait(page, 100, log_label=f"attach_vin_before_js_fallback_esc{_esc_i}")
                 _pay = {"chassis": _ch, "n": int(row_n)}
                 for root in _all_roots():
                     try:
@@ -1368,7 +1374,7 @@ def _attach_vehicle_to_bkg(
             _disc_raw = (_it.get("line_item_discount") or "").strip()
             if not _click_new_line_item():
                 return False, "Could not click New button (id=s_1_1_35_0_Ctrl or id suffix _35_0_Ctrl) on order line items.", {}
-            _safe_page_wait(page, 500, log_label="after_new_before_vin_field")
+            _safe_page_wait(page, 900, log_label="after_new_before_vin_field")
             if not _fill_vin_for_row(n, _ch):
                 return False, f"Could not fill line-item VIN for row {n} (selectors id/_l_VIN/name=VIN) with {_ch!r}.", {}
             _is_last = _ix == _n_tot - 1
