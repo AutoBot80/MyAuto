@@ -68,11 +68,13 @@ def _dump_branch_hits(note) -> None:
     logger.info("branch_hits: %s", _BRANCH_HITS)
 
 
-# Left **Search Results** jqGrid roots: HMCL builds differ — Title anchors may use ``s_100_1_l`` while
-# another skin keeps ``gview_s_1001_l``; cover both plus a generic fallback (skipping main list ``gview_s_1_l``).
+# Left **Search Results** jqGrid roots: HMCL builds differ — Title anchors may use ``s_100_1_l``,
+# ``gview_s_1001_l``, ``gview_s_1003_l``, etc.; cover known ids plus a generic fallback (skipping main list
+# ``gview_s_1_l``).
 _SIEBEL_VEHICLE_LEFT_SEARCH_GVIEW_IDS: tuple[str, ...] = (
     "gview_s_1001_l",
     "gview_s_100_1_l",
+    "gview_s_1003_l",
 )
 
 # Left Search Results stale-pane poll: bounded rounds (no long deadline loop).
@@ -246,6 +248,8 @@ def _siebel_poll_until_left_search_title_matches_current_vin(
 
 
 # Center (main) vehicle list jqGrid — updates **after** left Search Results Title click in production.
+# HMCL often shows the full VIN in a cell whose id contains ``Serial_Number`` with ``a[name="Serial Number"]``;
+# we match any ``td`` text under ``#s_1_l`` / ``#gview_s_1_l``.
 _CENTER_LIST_PROBE_FN = """function probeCenterListVin(doc, arg) {
   const norm = (s) => String(s || '').replace(/[^A-Za-z0-9]/g, '');
   const key = norm(arg.vk);
@@ -976,7 +980,7 @@ def _siebel_try_click_vin_search_hit_link(
 ) -> bool:
     """
     After vehicle Find/Enter, open the hit from the left **Search Results** pane (blue VIN hyperlink).
-    Primary: jqGrid ``div#gview_s_1001_l`` or ``#gview_s_100_1_l`` (HMCL id variants) → ``a[name="Title"]``
+    Primary: jqGrid ``div#gview_s_1001_l``, ``#gview_s_100_1_l``, or ``#gview_s_1003_l`` (HMCL id variants) → ``a[name="Title"]``
     / ``a[id*="_l_Title"]``; Playwright click with JS fallback across frames. Skips the main list grid
     ``gview_s_1_l`` when probing unknown jqGrid roots.
 
