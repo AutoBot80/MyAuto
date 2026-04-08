@@ -2383,6 +2383,10 @@
   word-break: break-word;
 }
 
+.challans-processed-failed-table tr.challans-proc-detail-row--failed td {
+  background: rgba(198, 40, 40, 0.07);
+}
+
 .challans-proc-master-row {
   cursor: pointer;
 }

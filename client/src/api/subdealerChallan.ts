@@ -88,7 +88,7 @@ export async function processChallanBatch(
   });
 }
 
-/** One failed line under a batch (from GET /staging/recent ``failed_lines``). */
+/** One staging line under a batch (from GET /staging/recent ``detail_lines`` / ``failed_lines``). */
 export type ChallanFailedDetailLine = {
   challan_detail_staging_id: number;
   raw_chassis: string | null;
@@ -117,7 +117,10 @@ export type ChallanMasterProcessedRow = {
   last_run_at?: string | null;
   ready_line_count: number;
   failed_line_count: number;
+  /** Failed-only subset (legacy). Prefer ``detail_lines`` when present. */
   failed_lines: ChallanFailedDetailLine[];
+  /** All vehicle lines: Queued / Failed / Ready / Committed. */
+  detail_lines?: ChallanFailedDetailLine[];
 };
 
 export type ListRecentChallanStagingOptions = {

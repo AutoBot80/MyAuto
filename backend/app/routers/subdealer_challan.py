@@ -174,9 +174,10 @@ def list_recent_staging(
         description="Trimmed challan book number; when set, matches challan_book_num for this dealer (any age); ignores failed-only and days window",
     ),
 ) -> list[dict]:
-    """``challan_master_staging`` rows with ``failed_lines`` for the Processed tab.
+    """``challan_master_staging`` rows with ``failed_lines`` and ``detail_lines`` for the Processed tab.
 
-    Default: batches from the last *days* with at least one Failed detail line **or** master invoice failed.
+    ``detail_lines``: every vehicle line (Queued / Failed / Ready / Committed). ``failed_lines``: Failed only.
+    Default: batches from the last *days* matching the attention filter (see ``list_masters_recent``).
     With ``challan_book_num``: batches matching that book number (``challan_book_num`` column), no date limit.
     """
     did = int(dealer_id) if dealer_id is not None else int(DEALER_ID)
@@ -193,9 +194,11 @@ def list_recent_staging(
             bid = uuid.UUID(str(row["challan_batch_id"]))
         except ValueError:
             row["failed_lines"] = []
+            row["detail_lines"] = []
             out.append(row)
             continue
         row["failed_lines"] = detail_repo.fetch_failed_details_for_batch(bid)
+        row["detail_lines"] = detail_repo.fetch_all_detail_lines_for_batch(bid)
         out.append(row)
     return out
 

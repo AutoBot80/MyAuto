@@ -1396,6 +1396,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     log_prefix: str = "vehicle_serial_detail",
     scraped: dict | None = None,
     do_feature_id_scrape: bool = True,
+    pdi_span_start_out: list[float] | None = None,
 ) -> tuple[bool, str | None]:
     """
     Pre-check + PDI applets on the **vehicle serial** detail view (after ``Serial Number`` drilldown).
@@ -1422,6 +1423,8 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     **gview_s_2** / **s_2_l** (PDI list). Unrelated large grids are still avoided (not every ``<table>``).
     """
     _tmo = min(int(action_timeout_ms or 3000), 4000)
+    _t_precheck_span = time.perf_counter()
+    _pv_timing(note, "precheck_checkpoint checkpoint=precheck_span_start elapsed_ms=0")
 
     def _roots():
         return _siebel_all_search_roots(page, content_frame_selector)
@@ -1586,6 +1589,17 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             f"{log_prefix}: Pre-check already has row(s) "
             f"(rows={_precheck_existing_rows}, signal={_precheck_existing_signal or 'n/a'}) — "
             "skipping Pre-check entry and continuing to PDI."
+        )
+        _elapsed_skip = (time.perf_counter() - _t_precheck_span) * 1000.0
+        _pv_timing(
+            note,
+            f"precheck_checkpoint checkpoint=precheck_after_open_lov elapsed_ms={_elapsed_skip:.0f} "
+            "skipped=true reason=precheck_already_has_rows",
+        )
+        _pv_timing(
+            note,
+            f"precheck_checkpoint checkpoint=precheck_before_technician_or_submit_done elapsed_ms={_elapsed_skip:.0f} "
+            "skipped=true reason=precheck_already_has_rows",
         )
 
     def _click_precheck_pick_icon(stage_label: str) -> tuple[bool, str]:
@@ -1946,6 +1960,11 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 "Pre-check: Open status pick applet did not complete (row/OK not confirmed). "
                 "Technician step was not run; Pre-check Submit and PDI were skipped.",
             )
+        _pv_timing(
+            note,
+            "precheck_checkpoint checkpoint=precheck_after_open_lov elapsed_ms=%.0f ok=true"
+            % ((time.perf_counter() - _t_precheck_span) * 1000.0),
+        )
 
         def _precheck_try_submit() -> bool:
             _done = False
@@ -1988,6 +2007,18 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         # break focus and never reach Submit — try save first, then optional Technician only if needed.
         _submit_done = _precheck_try_submit()
         _err_after_submit = _detect_siebel_error_popup(page, content_frame_selector)
+        _will_try_technician = not (_submit_done and not _err_after_submit)
+        _pv_timing(
+            note,
+            "precheck_checkpoint checkpoint=precheck_before_technician_or_submit_done elapsed_ms=%.0f "
+            "submit_done=%s err_after_submit=%s will_try_technician=%s"
+            % (
+                (time.perf_counter() - _t_precheck_span) * 1000.0,
+                _submit_done,
+                bool(_err_after_submit),
+                _will_try_technician,
+            ),
+        )
         if _submit_done and not _err_after_submit:
             note(f"{log_prefix}: Pre-check saved after Open LOV (Submit/Ctrl+S; Technician step skipped).")
         else:
@@ -2049,6 +2080,11 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             return False, f"Siebel error after Pre-check Submit: {_submit_err[:200]}"
         note(f"{log_prefix}: Pre-check completed.")
 
+    _pv_timing(
+        note,
+        "precheck_checkpoint checkpoint=precheck_complete_before_pdi_tab elapsed_ms=%.0f"
+        % ((time.perf_counter() - _t_precheck_span) * 1000.0),
+    )
     _pdi_tab_clicked = _click_third_level_view_bar_tab(
         page, "PDI", wait_ms=1500,
         content_frame_selector=content_frame_selector, note=note, log_prefix=log_prefix,
@@ -2111,6 +2147,10 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     except Exception as e:
         if _is_browser_disconnected_error(e):
             raise
+    _t_pdi_span = time.perf_counter()
+    if pdi_span_start_out is not None:
+        pdi_span_start_out.append(_t_pdi_span)
+    _pv_timing(note, "pdi_checkpoint checkpoint=pdi_span_start elapsed_ms=0")
 
     _siebel_note_frame_focus_snapshot(
         page,
@@ -2838,7 +2878,7 @@ def _siebel_prepare_vehicle_list_find_vin_engine(
         note(
             "prepare_vehicle: Find → Vehicles not confirmed — still attempting VIN/Engine fill in find field box."
         )
-    _safe_page_wait(page, 600, log_label="prepare_vehicle_after_find_vehicles")
+    _safe_page_wait(page, 500, log_label="prepare_vehicle_after_find_vehicles")
 
     cw = _siebel_vehicle_find_wildcard_value(fp)
     ew = _siebel_vehicle_find_wildcard_value(ep)
@@ -2964,7 +3004,7 @@ def _siebel_goto_vehicle_list_and_search(
         return error_msg if em else None
 
     _goto(page, vehicle_url, "vehicle_list", nav_timeout_ms=nav_timeout_ms)
-    _safe_page_wait(page, 1500, log_label="vehicle_list_open")
+    _safe_page_wait(page, 500, log_label="vehicle_list_open")
     _wait_for_vehicle_find_applet_ready(
         page,
         content_frame_selector=content_frame_selector,
@@ -3027,7 +3067,7 @@ def _siebel_goto_vehicle_list_and_search(
                 f"likely {_hint}. If applet is in a nested iframe, set DMS_SIEBEL_CONTENT_FRAME_SELECTOR."
             )
 
-    _safe_page_wait(page, 2500, log_label="vehicle_search_settle")
+    _safe_page_wait(page, 500, log_label="vehicle_search_settle")
     try:
         _pv_networkidle(note, page, 12_000, "vehicle_search_after_find_settle")
     except Exception as e:
@@ -3571,6 +3611,7 @@ def _prepare_vehicle_scrape_serial_precheck_pdi_and_features(
         if _is_browser_disconnected_error(e):
             raise
 
+    _pdi_span_t0: list[float] = []
     _serial_pc_ok, _serial_pc_err = _siebel_run_vehicle_serial_detail_precheck_pdi(
         page,
         action_timeout_ms=action_timeout_ms,
@@ -3580,9 +3621,17 @@ def _prepare_vehicle_scrape_serial_precheck_pdi_and_features(
         log_prefix="prepare_vehicle",
         scraped=scraped,
         do_feature_id_scrape=True,
+        pdi_span_start_out=_pdi_span_t0,
     )
     if not _serial_pc_ok:
         return _serial_pc_err or "Pre-check / PDI failed after Serial Number drilldown (prepare_vehicle)."
+
+    if _pdi_span_t0:
+        _pv_timing(
+            note,
+            "pdi_checkpoint checkpoint=pdi_before_features_tab elapsed_ms=%.0f"
+            % ((time.perf_counter() - _pdi_span_t0[0]) * 1000.0),
+        )
 
     if not _siebel_try_click_features_and_image_tab(
         page, action_timeout_ms=action_timeout_ms, note=note
@@ -4064,7 +4113,7 @@ def prepare_vehicle(
         else:
             note("prepare_vehicle: center grid scrape returned no key/chassis/engine; continuing.")
 
-        _safe_page_wait(page, 1200, log_label="after_vehicle_left_pane_vin_settle")
+        _safe_page_wait(page, 500, log_label="after_vehicle_left_pane_vin_settle")
         try:
             _pv_networkidle(note, page, 12_000, "after_center_scrape_vin_drill_in")
         except Exception as e:

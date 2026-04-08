@@ -186,6 +186,25 @@ def fetch_failed_details_for_batch(challan_batch_id: uuid.UUID) -> list[dict[str
         conn.close()
 
 
+def fetch_all_detail_lines_for_batch(challan_batch_id: uuid.UUID) -> list[dict[str, Any]]:
+    """All detail rows for Processed tab (Queued / Failed / Ready / Committed)."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT challan_detail_staging_id, raw_chassis, raw_engine, last_error, status
+                FROM challan_details_staging
+                WHERE challan_batch_id = %s::uuid
+                ORDER BY challan_detail_staging_id
+                """,
+                (str(challan_batch_id),),
+            )
+            return [_row_jsonable(dict(r)) for r in (cur.fetchall() or [])]
+    finally:
+        conn.close()
+
+
 def reset_failed_detail_for_retry(challan_detail_staging_id: int) -> bool:
     conn = get_connection()
     try:

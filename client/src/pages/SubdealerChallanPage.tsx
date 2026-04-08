@@ -184,6 +184,17 @@ function showRetryOrderOnly(r: ChallanMasterProcessedRow): boolean {
   return inv === "failed" && failed === 0;
 }
 
+/** Full DMS retry (prepare + order): failed lines, or vehicles still not Ready/Committed (e.g. all Queued after a retry). */
+function showRetryFullBatch(r: ChallanMasterProcessedRow): boolean {
+  if (r.invoice_complete) return false;
+  if (showRetryOrderOnly(r)) return false;
+  const failed = r.failed_line_count ?? 0;
+  if (failed > 0) return true;
+  const n = r.num_vehicles ?? 0;
+  const prep = r.num_vehicles_prepared ?? 0;
+  return n > 0 && prep < n;
+}
+
 /** Last row must be blank (both engine and chassis empty) so user can add more. */
 function ensureTrailingBlankRow(rows: ChallanRow[]): ChallanRow[] {
   if (rows.length === 0) return [newEmptyRow()];
@@ -235,7 +246,7 @@ export function SubdealerChallanPage({
   const [processedChallanSearchApplied, setProcessedChallanSearchApplied] = useState("");
   const [retryingProcessBatchId, setRetryingProcessBatchId] = useState<string | null>(null);
   const [retryingOrderBatchId, setRetryingOrderBatchId] = useState<string | null>(null);
-  /** Master row selection drives the lower **Failed vehicles** sub-table. */
+  /** Master row selection drives the lower vehicle lines sub-table. */
   const [selectedProcessedBatchId, setSelectedProcessedBatchId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -245,6 +256,14 @@ export function SubdealerChallanPage({
     () => processedRows.find((r) => r.challan_batch_id === selectedProcessedBatchId) ?? null,
     [processedRows, selectedProcessedBatchId],
   );
+
+  const selectedBatchVehicleLines = useMemo(() => {
+    if (!selectedProcessedRow) return [];
+    if (selectedProcessedRow.detail_lines !== undefined) {
+      return selectedProcessedRow.detail_lines;
+    }
+    return selectedProcessedRow.failed_lines ?? [];
+  }, [selectedProcessedRow]);
 
   const showSummaryBar =
     Boolean(challanNo || challanDateRaw || challanDateIso) || vehicleCount > 0;
@@ -821,7 +840,7 @@ export function SubdealerChallanPage({
           <div className="challans-processed-split">
             <div className="challans-processed-master">
               <p className="challans-processed-hint" id="challans-processed-master-hint">
-                Select a row to view failed vehicles below.
+                Select a row to view vehicle lines below.
               </p>
               <div
                 className="challans-processed-table-wrap"
@@ -848,6 +867,7 @@ export function SubdealerChallanPage({
                       const bid = r.challan_batch_id;
                       const failedN = r.failed_line_count ?? 0;
                       const orderRetry = showRetryOrderOnly(r);
+                      const fullRetry = showRetryFullBatch(r);
                       const sel = selectedProcessedBatchId === bid;
                       return (
                         <tr
@@ -891,18 +911,27 @@ export function SubdealerChallanPage({
                                 >
                                   {retryingOrderBatchId === bid ? "Retrying…" : "Retry"}
                                 </button>
-                              ) : failedN > 0 ? (
+                              ) : fullRetry ? (
                                 <>
-                                  <span className="challans-proc-failed-badge" title="Details in Failed vehicles below">
-                                    {failedN} failed
-                                  </span>
+                                  {failedN > 0 ? (
+                                    <span
+                                      className="challans-proc-failed-badge"
+                                      title="Details in Failed vehicles below"
+                                    >
+                                      {failedN} failed
+                                    </span>
+                                  ) : null}
                                   <button
                                     type="button"
                                     className="app-button app-button--primary challans-proc-retry-btn"
                                     disabled={
                                       retryingProcessBatchId !== null || retryingOrderBatchId !== null
                                     }
-                                    title="Re-run DMS for all failed vehicles (Find→Vehicles, prepare, then order)"
+                                    title={
+                                      failedN > 0
+                                        ? "Re-run DMS for all failed vehicles (Find→Vehicles, prepare, then order)"
+                                        : "Continue DMS run for vehicles not yet prepared (Queued), then order"
+                                    }
                                     onClick={(e) => {
                                       e.stopPropagation();
                                       void onRetryFailedBatch(bid);
@@ -929,16 +958,16 @@ export function SubdealerChallanPage({
               aria-labelledby="challans-processed-failed-heading"
             >
               <h3 className="challans-processed-failed-heading" id="challans-processed-failed-heading">
-                Failed vehicles
+                Vehicles in this batch
               </h3>
               <div className="challans-processed-failed-table-wrap">
                 {selectedProcessedRow === null ? (
                   <p className="app-table-empty challans-processed-failed-placeholder">
                     Select a challan batch in the table above.
                   </p>
-                ) : (selectedProcessedRow.failed_lines?.length ?? 0) === 0 ? (
+                ) : selectedBatchVehicleLines.length === 0 ? (
                   <p className="app-table-empty challans-processed-failed-placeholder">
-                    No failed vehicles in this batch.
+                    No vehicle lines in this batch.
                   </p>
                 ) : (
                   <table className="app-table challans-processed-failed-table">
@@ -952,15 +981,24 @@ export function SubdealerChallanPage({
                       </tr>
                     </thead>
                     <tbody>
-                      {(selectedProcessedRow.failed_lines ?? []).map((fl) => (
-                        <tr key={fl.challan_detail_staging_id}>
-                          <td>{fl.challan_detail_staging_id}</td>
-                          <td>{(fl.raw_chassis || "").trim() || "—"}</td>
-                          <td>{(fl.raw_engine || "").trim() || "—"}</td>
-                          <td>{(fl.status || "").trim() || "Failed"}</td>
-                          <td className="challans-proc-err">{fl.last_error?.trim() || "—"}</td>
-                        </tr>
-                      ))}
+                      {selectedBatchVehicleLines.map((fl) => {
+                        const st = (fl.status || "").trim().toLowerCase();
+                        const isFailed = st === "failed";
+                        return (
+                          <tr
+                            key={fl.challan_detail_staging_id}
+                            className={isFailed ? "challans-proc-detail-row--failed" : undefined}
+                          >
+                            <td>{fl.challan_detail_staging_id}</td>
+                            <td>{(fl.raw_chassis || "").trim() || "—"}</td>
+                            <td>{(fl.raw_engine || "").trim() || "—"}</td>
+                            <td>{(fl.status || "").trim() || "—"}</td>
+                            <td className={isFailed ? "challans-proc-err" : undefined}>
+                              {fl.last_error?.trim() || "—"}
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 )}
