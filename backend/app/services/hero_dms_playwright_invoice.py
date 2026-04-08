@@ -1048,16 +1048,46 @@ def _attach_vehicle_to_bkg(
                     pass
 
             def _try_fill_vin_locator(vin_loc) -> bool:
+                # Same as challan Institution field: do not click the composite control (pick/MVG icon on the right).
+                for _esc_i in range(3):
+                    try:
+                        page.keyboard.press("Escape")
+                    except Exception:
+                        pass
+                    _safe_page_wait(page, 120, log_label=f"attach_vin_dismiss_applet_esc{_esc_i}")
+
                 try:
                     vin_loc.scroll_into_view_if_needed(timeout=_tmo)
                 except Exception:
                     pass
-                vin_loc.click(timeout=_tmo)
-                _safe_page_wait(page, 220, log_label="after_vin_click")
+
+                _focus_ok = False
                 try:
-                    vin_loc.focus(timeout=1200)
+                    vin_loc.focus(timeout=min(_tmo, 4000))
+                    _focus_ok = True
                 except Exception:
                     pass
+                if not _focus_ok:
+                    try:
+                        vin_loc.evaluate("el => { try { el.focus(); } catch (e) {} }")
+                        _focus_ok = True
+                    except Exception:
+                        pass
+                if not _focus_ok:
+                    try:
+                        box = vin_loc.bounding_box()
+                        if box and float(box.get("width") or 0) > 12:
+                            w = float(box["width"])
+                            h = float(box.get("height") or 20)
+                            x_left = min(14.0, max(6.0, w * 0.07))
+                            vin_loc.click(position={"x": x_left, "y": h / 2.0}, timeout=_tmo)
+                        else:
+                            vin_loc.click(position={"x": 6, "y": 12}, timeout=_tmo)
+                    except Exception:
+                        return False
+
+                _safe_page_wait(page, 120, log_label="attach_vin_after_focus")
+
                 try:
                     vin_loc.press("Control+a", timeout=800)
                 except Exception:
@@ -1136,6 +1166,12 @@ def _attach_vehicle_to_bkg(
         }"""
 
             if not _vin_filled:
+                for _esc_i in range(2):
+                    try:
+                        page.keyboard.press("Escape")
+                    except Exception:
+                        pass
+                    _safe_page_wait(page, 100, log_label=f"attach_vin_before_js_fallback_esc{_esc_i}")
                 _pay = {"chassis": _ch, "n": int(row_n)}
                 for root in _all_roots():
                     try:
