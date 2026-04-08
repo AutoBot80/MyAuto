@@ -8,14 +8,12 @@ from the customer module.
 """
 from __future__ import annotations
 
-import json
 import logging
 import re
 import time
-from pathlib import Path
 from collections.abc import Callable
 from datetime import date, datetime, timedelta
-from playwright.sync_api import Frame, FrameLocator, Page, TimeoutError as PlaywrightTimeout
+from playwright.sync_api import Frame, Page, TimeoutError as PlaywrightTimeout
 
 from app.config import (
     DEALER_ID,
@@ -71,308 +69,119 @@ def _dump_branch_hits(note) -> None:
     logger.info("branch_hits: %s", _BRANCH_HITS)
 
 
-# Left **Search Results** jqGrid roots: HMCL builds differ — Title anchors may use ``s_100_1_l``,
-# ``gview_s_1001_l``, ``gview_s_1003_l``, etc.; cover known ids plus a generic fallback (skipping main list
-# ``gview_s_1_l``).
-_SIEBEL_VEHICLE_LEFT_SEARCH_GVIEW_IDS: tuple[str, ...] = (
-    "gview_s_1001_l",
-    "gview_s_100_1_l",
-    "gview_s_1003_l",
-)
+# Left **Search Results** pane: ``div#gview_s_1001_l`` > ``table#s_1001_l`` > ``a.drilldown[name="Title"]``.
+# Center **Vehicle List** pane: ``div#gview_s_1_l`` > ``table#s_1_l`` with VIN in first data-row ``td``.
+# Confirmed from DOM dump (2026-04-08): single main document, no iframes.
+_LEFT_SEARCH_TITLE_SELECTOR = '#gview_s_1001_l a.drilldown[name="Title"]'
+_CENTER_LIST_TABLE_ID = "s_1_l"
 
-# Left Search Results stale-pane poll: bounded rounds (no long deadline loop).
-_LEFT_SEARCH_STALE_PANE_POLL_MS = 300
-_LEFT_SEARCH_STALE_PANE_MAX_POLLS = 10
-
-# After left Title drill-in, Siebel may update the **center** list (#s_1_l) asynchronously.
-_CENTER_LIST_AFTER_LEFT_POLL_MS = 300
-_CENTER_LIST_AFTER_LEFT_MAX_POLLS = 15
+_LEFT_SEARCH_POLL_MS = 300
+_LEFT_SEARCH_MAX_POLLS = 10
+_CENTER_LIST_POLL_MS = 300
+_CENTER_LIST_MAX_POLLS = 15
 
 
-def _siebel_left_search_gview_table_id(gview_id: str) -> str:
-    """``gview_s_1001_l`` → ``s_1001_l`` (Siebel table id parallel to the gview wrapper)."""
-    s = (gview_id or "").strip()
-    if s.startswith("gview_"):
-        return s[len("gview_") :]
-    return s
-
-
-# Dry-run probe: same Title/VIN matching as ``_siebel_try_click_vin_search_hit_link`` / JS click fallback.
-# Uses explicit ``doc`` so we can run in **Frame.evaluate** (document) and **FrameLocator** (iframe html's
-# ownerDocument) — must match :func:`_siebel_locator_search_roots` order used by the click path.
-_LEFT_SEARCH_PROBE_FN = """function probeLeftSearchVinTitle(doc, arg) {
-  const norm = (s) => String(s || '').replace(/[^A-Za-z0-9]/g, '');
-  const key = norm(arg.vk);
-  const useKey = arg.useKey;
-  const knownIds = arg.knownIds || [];
-  const vis = (el) => {
-    if (!el) return false;
-    const st = window.getComputedStyle(el);
-    if (st.display === 'none' || st.visibility === 'hidden') return false;
-    const r = el.getBoundingClientRect();
-    return r.width >= 1 && r.height >= 1;
-  };
-  const linkCompact = (a) => {
-    const t = norm(a.innerText || a.textContent || '');
-    const title = norm(a.getAttribute('title') || '');
-    const al = norm(a.getAttribute('aria-label') || '');
-    return t + title + al;
-  };
-  const rowContainsVin = (rowCompact) => {
-    if (!useKey || !rowCompact) return false;
-    if (!key || key.length < 4) return false;
-    const rk = rowCompact.toUpperCase();
-    const vk = key.toUpperCase();
-    if (rk.includes(vk)) return true;
-    if (rk.length >= 4 && vk.includes(rk)) return true;
-    if (rk.endsWith(vk) || rk.startsWith(vk)) return true;
-    if (rk.length >= 4 && vk.length >= 4 && (vk.startsWith(rk) || rk.startsWith(vk))) return true;
-    return false;
-  };
-  const scanNodes = (nodes) => {
-    if (useKey && key && key.length >= 4) {
-      for (const a of nodes) {
-        if (rowContainsVin(linkCompact(a))) return true;
-      }
-      return false;
-    }
-    const vinLike = nodes.filter((a) => {
-      const n = linkCompact(a);
-      return n.length >= 11 && n.length <= 19;
-    });
-    return vinLike.length === 1;
-  };
-  const scanGrid = (g) => {
-    if (!g) return false;
-    const nodes = Array.from(
-      g.querySelectorAll('a[name="Title"], a[id*="_l_Title"]')
-    ).filter(vis);
-    return scanNodes(nodes);
-  };
-  for (const id of knownIds) {
-    const g = doc.getElementById(id);
-    if (g && scanGrid(g)) return true;
-  }
-  const skip = new Set(['gview_s_1_l']);
-  const seen = new Set(knownIds);
-  for (const g of doc.querySelectorAll('div.ui-jqgrid-view[id^="gview_s_"]')) {
-    const id = g.id || '';
-    if (!id || skip.has(id) || seen.has(id)) continue;
-    if (scanGrid(g)) return true;
-  }
-  return false;
-}"""
-
-
-def _siebel_probe_left_search_vin_match_in_root(root: Frame | FrameLocator, arg: dict) -> bool:
-    """True if this root's document has a matching left Search Results Title (same roots as drilldown)."""
-    try:
-        if isinstance(root, FrameLocator):
-            loc = root.locator("html").first
-            if loc.count() == 0:
-                return False
-            return bool(
-                loc.evaluate(
-                    f"""\
-(el, arg) => {{
-  {_LEFT_SEARCH_PROBE_FN}
-  const doc = el && el.ownerDocument ? el.ownerDocument : document;
-  return probeLeftSearchVinTitle(doc, arg);
-}}""",
-                    arg,
-                )
-            )
-        return bool(
-            root.evaluate(
-                f"""\
-(arg) => {{
-  {_LEFT_SEARCH_PROBE_FN}
-  return probeLeftSearchVinTitle(document, arg);
-}}""",
-                arg,
-            )
-        )
-    except Exception:
-        return False
-
-
-def _siebel_poll_until_left_search_title_matches_current_vin(
+def _siebel_poll_left_search_title_matches(
     page: Page,
     chassis: str,
     *,
-    content_frame_selector: str | None,
-    poll_ms: int = _LEFT_SEARCH_STALE_PANE_POLL_MS,
-    max_polls: int = _LEFT_SEARCH_STALE_PANE_MAX_POLLS,
+    poll_ms: int = _LEFT_SEARCH_POLL_MS,
+    max_polls: int = _LEFT_SEARCH_MAX_POLLS,
 ) -> bool:
     """
-    After Find→Vehicles, the **main** list can update before the left **Search Results** jqGrid —
-    especially on the 2nd+ vehicle in one browser session — so drilldown would find no matching Title.
-
-    Uses the **same** roots as :func:`_siebel_locator_search_roots` (explicit iframe chain + auto iframes +
-    ordered frames). The previous implementation only scanned ``_ordered_frames`` + main, so it could miss
-    the pane that ``_try_left_search_gviews_in_root`` uses on the first vehicle — causing long polls and
-    failed drilldowns on subsequent searches.
-
-    Polls at ``poll_ms`` intervals for at most ``max_polls`` full scans (default **300 ms × 10**).
+    Poll the left **Search Results** pane (``#gview_s_1001_l a.drilldown[name="Title"]``) until
+    a visible Title link's text contains the VIN partial. Runs directly on ``page`` — single
+    document, no frame cycling needed (confirmed from DOM dump).
     """
     vin_key = _vin_match_key(chassis)
-    use_key = bool(vin_key) and len(vin_key) >= 4
-    arg = {
-        "vk": vin_key,
-        "useKey": use_key,
-        "knownIds": list(_SIEBEL_VEHICLE_LEFT_SEARCH_GVIEW_IDS),
-    }
-    stale_logged = False
+    if not vin_key or len(vin_key) < 4:
+        return False
+    vk_upper = vin_key.upper()
     polls = max(1, int(max_polls))
     interval = max(50, int(poll_ms))
+    stale_logged = False
+
+    js = """(vk) => {
+      const norm = s => String(s || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+      const sel = '#gview_s_1001_l a.drilldown[name="Title"]';
+      for (const a of document.querySelectorAll(sel)) {
+        const r = a.getBoundingClientRect();
+        if (r.width < 1 || r.height < 1) continue;
+        const t = norm(a.innerText || a.textContent) + norm(a.getAttribute('title'));
+        if (t.includes(vk) || vk.includes(t.slice(-vk.length))) return true;
+      }
+      return false;
+    }"""
+
     for round_i in range(polls):
-        for root in _siebel_locator_search_roots(page, content_frame_selector):
-            try:
-                if _siebel_probe_left_search_vin_match_in_root(root, arg):
-                    _safe_page_wait(
-                        page, interval, log_label="vin_left_search_stale_pane_match_settle"
-                    )
-                    return True
-            except Exception:
-                continue
+        try:
+            if page.evaluate(js, vk_upper):
+                _safe_page_wait(page, interval, log_label="left_search_match_settle")
+                return True
+        except Exception:
+            pass
         if not stale_logged and round_i == 2:
             stale_logged = True
             logger.info(
-                "siebel: left Search Results pane still syncing (possible stale row from prior vehicle); "
-                "polling up to %d rounds × %sms (same iframe roots as drilldown)",
-                polls,
-                interval,
+                "siebel: left Search Results pane still syncing; polling up to %d × %dms",
+                polls, interval,
             )
         if round_i < polls - 1:
-            _safe_page_wait(
-                page, interval, log_label="vin_left_search_stale_pane_poll"
-            )
+            _safe_page_wait(page, interval, log_label="left_search_stale_poll")
     return False
 
 
-# Center (main) vehicle list jqGrid — updates **after** left Search Results Title click in production.
-# HMCL often shows the full VIN in a cell whose id contains ``Serial_Number`` with ``a[name="Serial Number"]``;
-# we match any ``td`` text under ``#s_1_l`` / ``#gview_s_1_l``.
-_CENTER_LIST_PROBE_FN = """function probeCenterListVin(doc, arg) {
-  const norm = (s) => String(s || '').replace(/[^A-Za-z0-9]/g, '');
-  const key = norm(arg.vk);
-  const useKey = arg.useKey;
-  const vis = (el) => {
-    if (!el) return false;
-    const st = window.getComputedStyle(el);
-    if (st.display === 'none' || st.visibility === 'hidden') return false;
-    const r = el.getBoundingClientRect();
-    return r.width >= 1 && r.height >= 1;
-  };
-  const rowContainsVin = (rowCompact) => {
-    if (!useKey || !rowCompact) return false;
-    if (!key || key.length < 4) return false;
-    const rk = rowCompact.toUpperCase();
-    const vk = key.toUpperCase();
-    if (rk.includes(vk)) return true;
-    if (rk.length >= 4 && vk.includes(rk)) return true;
-    if (rk.endsWith(vk) || rk.startsWith(vk)) return true;
-    if (rk.length >= 4 && vk.length >= 4 && (vk.startsWith(rk) || rk.startsWith(vk))) return true;
-    return false;
-  };
-  const scanTable = (tbl) => {
-    if (!tbl || !vis(tbl)) return false;
-    const rows = tbl.querySelectorAll('tbody tr');
-    for (const tr of rows) {
-      if (!vis(tr)) continue;
-      const cls = (tr.className || '').toLowerCase();
-      if (cls.includes('jqgfirstrow')) continue;
-      const tds = tr.querySelectorAll('td');
-      for (const td of tds) {
-        const raw = norm(td.innerText || td.textContent || '');
-        if (rowContainsVin(raw)) return true;
-      }
-    }
-    return false;
-  };
-  const main = doc.getElementById('s_1_l');
-  if (main && scanTable(main)) return true;
-  const gv = doc.getElementById('gview_s_1_l');
-  if (gv) {
-    const inner = gv.querySelector('table.ui-jqgrid-btable, table[id$="_l"]');
-    if (inner && scanTable(inner)) return true;
-  }
-  return false;
-}"""
-
-
-def _siebel_probe_center_list_vin_match_in_root(root: Frame | FrameLocator, arg: dict) -> bool:
-    """True if the main Auto Vehicle list grid shows a cell matching the expected VIN/chassis key."""
-    try:
-        if isinstance(root, FrameLocator):
-            loc = root.locator("html").first
-            if loc.count() == 0:
-                return False
-            return bool(
-                loc.evaluate(
-                    f"""\
-(el, arg) => {{
-  {_CENTER_LIST_PROBE_FN}
-  const doc = el && el.ownerDocument ? el.ownerDocument : document;
-  return probeCenterListVin(doc, arg);
-}}""",
-                    arg,
-                )
-            )
-        return bool(
-            root.evaluate(
-                f"""\
-(arg) => {{
-  {_CENTER_LIST_PROBE_FN}
-  return probeCenterListVin(document, arg);
-}}""",
-                arg,
-            )
-        )
-    except Exception:
-        return False
-
-
-def _siebel_poll_until_center_list_matches_chassis_after_left_drill(
+def _siebel_poll_center_list_matches(
     page: Page,
     chassis: str,
     *,
-    content_frame_selector: str | None,
-    poll_ms: int = _CENTER_LIST_AFTER_LEFT_POLL_MS,
-    max_polls: int = _CENTER_LIST_AFTER_LEFT_MAX_POLLS,
+    poll_ms: int = _CENTER_LIST_POLL_MS,
+    max_polls: int = _CENTER_LIST_MAX_POLLS,
 ) -> bool:
     """
-    After clicking the left **Search Results** VIN Title, Siebel updates the **center** vehicle list
-    on its own schedule. Poll until ``#s_1_l`` (main list) shows a cell that matches the chassis key.
+    After the left Title click, poll ``#s_1_l`` (center list) until a visible row cell
+    contains the VIN partial. Direct ``page.evaluate`` — no frame cycling.
     """
     vin_key = _vin_match_key(chassis)
-    use_key = bool(vin_key) and len(vin_key) >= 4
-    if not use_key:
+    if not vin_key or len(vin_key) < 4:
         return True
-    arg = {"vk": vin_key, "useKey": use_key}
+    vk_upper = vin_key.upper()
     polls = max(1, int(max_polls))
     interval = max(50, int(poll_ms))
     sync_logged = False
+
+    js = """(vk) => {
+      const norm = s => String(s || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+      const tbl = document.getElementById('s_1_l');
+      if (!tbl) return false;
+      for (const tr of tbl.querySelectorAll('tbody tr')) {
+        if ((tr.className || '').toLowerCase().includes('jqgfirstrow')) continue;
+        const r = tr.getBoundingClientRect();
+        if (r.width < 1 || r.height < 1) continue;
+        for (const td of tr.querySelectorAll('td')) {
+          const t = norm(td.innerText || td.textContent);
+          if (t.includes(vk)) return true;
+        }
+      }
+      return false;
+    }"""
+
     for round_i in range(polls):
-        for root in _siebel_locator_search_roots(page, content_frame_selector):
-            try:
-                if _siebel_probe_center_list_vin_match_in_root(root, arg):
-                    _safe_page_wait(
-                        page, interval, log_label="vin_center_list_sync_match_settle"
-                    )
-                    return True
-            except Exception:
-                continue
+        try:
+            if page.evaluate(js, vk_upper):
+                _safe_page_wait(page, interval, log_label="center_list_match_settle")
+                return True
+        except Exception:
+            pass
         if not sync_logged and round_i == 2:
             sync_logged = True
             logger.info(
-                "siebel: waiting for center vehicle list (#s_1_l) to show VIN after left drill-in; "
-                "up to %d rounds × %sms",
-                polls,
-                interval,
+                "siebel: center vehicle list (#s_1_l) still updating after left drill; "
+                "polling up to %d × %dms",
+                polls, interval,
             )
         if round_i < polls - 1:
-            _safe_page_wait(page, interval, log_label="vin_center_list_after_left_poll")
+            _safe_page_wait(page, interval, log_label="center_list_poll")
     return False
 
 
@@ -979,279 +788,72 @@ def _siebel_try_click_vin_search_hit_link(
     chassis: str,
     *,
     timeout_ms: int,
-    content_frame_selector: str | None,
 ) -> bool:
     """
-    After vehicle Find/Enter, open the hit from the left **Search Results** pane (blue VIN hyperlink).
-    Primary: jqGrid ``div#gview_s_1001_l``, ``#gview_s_100_1_l``, or ``#gview_s_1003_l`` (HMCL id variants) → ``a[name="Title"]``
-    / ``a[id*="_l_Title"]``; Playwright click with JS fallback across frames. Skips the main list grid
-    ``gview_s_1_l`` when probing unknown jqGrid roots.
+    Click the matching VIN Title drilldown in the left **Search Results** pane
+    (``#gview_s_1001_l a.drilldown[name="Title"]``).
 
-    When **DMS only has a partial**, match on visible text plus **title** / **aria-label**; fall back to the
-    **only** VIN-like Title link (11–19 alnum) when a single hit row is shown.
+    At this point ``_siebel_poll_left_search_title_matches`` has already confirmed the
+    link is visible — so we just need to find and click it. Tries Playwright click first
+    with a JS ``element.click()`` fallback.
     """
     vin_key = _vin_match_key(chassis)
-    use_key = bool(vin_key) and len(vin_key) >= 4
+    if not vin_key or len(vin_key) < 4:
+        return False
+    vk_upper = vin_key.upper()
 
-    # Main list often updates before the left Search Results jqGrid; after a prior vehicle the pane can
-    # still show the previous hit until Siebel refreshes — poll until this chassis matches a Title.
-    _safe_page_wait(page, 400, log_label="vin_left_search_before_stale_pane_poll")
-    _siebel_poll_until_left_search_title_matches_current_vin(
-        page,
-        chassis,
-        content_frame_selector=content_frame_selector,
+    titles = page.locator(_LEFT_SEARCH_TITLE_SELECTOR)
+    try:
+        count = titles.count()
+    except Exception:
+        count = 0
+    for i in range(min(count, 20)):
+        link = titles.nth(i)
+        try:
+            if not link.is_visible(timeout=1200):
+                continue
+            compact = re.sub(r"[^A-Za-z0-9]", "", (link.inner_text(timeout=600) or "")).upper()
+            title_attr = re.sub(
+                r"[^A-Za-z0-9]", "", (link.get_attribute("title") or "")
+            ).upper()
+            text = compact + title_attr
+            if vk_upper not in text and text not in vk_upper:
+                continue
+            try:
+                link.scroll_into_view_if_needed(timeout=1200)
+            except Exception:
+                pass
+            try:
+                link.click(timeout=timeout_ms)
+                return True
+            except Exception:
+                pass
+            try:
+                link.click(timeout=timeout_ms, force=True)
+                return True
+            except Exception:
+                pass
+        except Exception:
+            continue
+
+    js_hit = page.evaluate(
+        """(vk) => {
+          const norm = s => String(s || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+          const sel = '#gview_s_1001_l a.drilldown[name="Title"]';
+          for (const a of document.querySelectorAll(sel)) {
+            const r = a.getBoundingClientRect();
+            if (r.width < 1 || r.height < 1) continue;
+            const t = norm(a.innerText || a.textContent) + norm(a.getAttribute('title'));
+            if (t.includes(vk) || vk.includes(t.slice(-vk.length))) {
+              try { a.scrollIntoView({ block: 'center' }); } catch(e) {}
+              try { a.click(); return true; } catch(e) {}
+            }
+          }
+          return false;
+        }""",
+        vk_upper,
     )
-    _safe_page_wait(page, 600, log_label="vin_left_search_after_stale_pane_poll")
-
-    def _try_click_siebel_drilldown(loc) -> bool:
-        try:
-            if not loc.is_visible(timeout=1400):
-                return False
-        except Exception:
-            return False
-        for click_try in (
-            lambda: loc.click(timeout=timeout_ms),
-            lambda: loc.click(timeout=timeout_ms, force=True),
-            lambda: loc.dblclick(timeout=timeout_ms),
-        ):
-            try:
-                click_try()
-                return True
-            except Exception:
-                continue
-        return False
-
-    def _title_link_vin_compact(link) -> str:
-        parts: list[str] = []
-        try:
-            parts.append(link.inner_text(timeout=800) or "")
-        except Exception:
-            pass
-        for attr in ("title", "aria-label"):
-            try:
-                v = link.get_attribute(attr)
-                if v:
-                    parts.append(v)
-            except Exception:
-                pass
-        return re.sub(r"[^A-Za-z0-9]", "", " ".join(parts))
-
-    def row_contains_vin(row_compact: str) -> bool:
-        if not use_key or not row_compact:
-            return False
-        rk = row_compact.upper()
-        vk = vin_key.upper()
-        if vk in rk:
-            return True
-        if len(rk) >= 4 and rk in vk:
-            return True
-        if rk.endswith(vk) or rk.startswith(vk):
-            return True
-        if len(rk) >= 4 and len(vk) >= 4 and (vk.startswith(rk) or rk.startswith(vk)):
-            return True
-        return False
-
-    def _gview_title_chains_for(gview_id: str) -> tuple[str, ...]:
-        tid = _siebel_left_search_gview_table_id(gview_id)
-        return (
-            f"#{gview_id}.ui-jqgrid-view table#{tid} a[name='Title']",
-            f"#{gview_id} table.ui-jqgrid-btable a[name='Title']",
-            f"#{gview_id} table#{tid} a[name='Title']",
-            f'#{gview_id} table[id="{tid}"] a[name="Title"]',
-            f"div#{gview_id}.ui-jqgrid-view a[name='Title']",
-            f'#{gview_id} a[name="Title"][id*="_l_Title"]',
-            f'#{gview_id} a[id*="_l_Title"]',
-            f".ui-jqgrid-view#{gview_id} a[name='Title']",
-        )
-
-    def _try_gview_unique_single_title(scope, gview_id: str) -> bool:
-        """
-        Exactly one visible **Title** link whose text looks like a full VIN (11–19 alnum).
-        """
-        try:
-            g = scope.locator(f"#{gview_id}").first
-            if g.count() == 0 or not g.is_visible(timeout=1200):
-                return False
-            titles = g.locator('a[name="Title"], a[id*="_l_Title"]')
-            n = titles.count()
-            if n != 1:
-                return False
-            link = titles.first
-            if not link.is_visible(timeout=1500):
-                return False
-            t = _title_link_vin_compact(link)
-            if len(t) < 11 or len(t) > 19:
-                return False
-            try:
-                link.scroll_into_view_if_needed(timeout=1500)
-            except Exception:
-                pass
-            return _try_click_siebel_drilldown(link)
-        except Exception:
-            return False
-
-    def _try_gview_title_links_for_id(scope, gview_id: str) -> bool:
-        """Click **Title** drilldown under one left-search jqGrid root."""
-        if not use_key:
-            return _try_gview_unique_single_title(scope, gview_id)
-        for title_chain in _gview_title_chains_for(gview_id):
-            try:
-                titles = scope.locator(title_chain)
-                tn = titles.count()
-                for ti in range(min(tn, 40)):
-                    link = titles.nth(ti)
-                    try:
-                        if not link.is_visible(timeout=1600):
-                            continue
-                        compact = _title_link_vin_compact(link)
-                        if not row_contains_vin(compact):
-                            continue
-                        try:
-                            link.scroll_into_view_if_needed(timeout=1500)
-                        except Exception:
-                            pass
-                        if _try_click_siebel_drilldown(link):
-                            return True
-                    except Exception:
-                        continue
-            except Exception:
-                continue
-        if _try_gview_unique_single_title(scope, gview_id):
-            return True
-        return False
-
-    def _try_left_search_gviews_in_root(scope) -> bool:
-        if not use_key:
-            for gid in _SIEBEL_VEHICLE_LEFT_SEARCH_GVIEW_IDS:
-                if _try_gview_unique_single_title(scope, gid):
-                    return True
-            return False
-        for gid in _SIEBEL_VEHICLE_LEFT_SEARCH_GVIEW_IDS:
-            if _try_gview_title_links_for_id(scope, gid):
-                return True
-        return False
-
-    def _try_js_click_left_search_titles(frame) -> bool:
-        """DOM click in known + discovered left jqGrids when Playwright hit-testing fails."""
-        try:
-            hit = frame.evaluate(
-                """({ vk, useKey, knownIds }) => {
-                  const norm = (s) => String(s || '').replace(/[^A-Za-z0-9]/g, '');
-                  const key = norm(vk);
-                  const vis = (el) => {
-                    if (!el) return false;
-                    const st = window.getComputedStyle(el);
-                    if (st.display === 'none' || st.visibility === 'hidden') return false;
-                    const r = el.getBoundingClientRect();
-                    return r.width >= 1 && r.height >= 1;
-                  };
-                  const linkCompact = (a) => {
-                    const t = norm(a.innerText || a.textContent || '');
-                    const title = norm(a.getAttribute('title') || '');
-                    const al = norm(a.getAttribute('aria-label') || '');
-                    return t + title + al;
-                  };
-                  const clickMatching = (nodes) => {
-                    if (useKey && key && key.length >= 4) {
-                      for (const a of nodes) {
-                        const raw = linkCompact(a);
-                        if (!raw) continue;
-                        const T = raw.toUpperCase();
-                        const K = key.toUpperCase();
-                        if (T.includes(K) || K.includes(T) || T.endsWith(K) || T.startsWith(K)) {
-                          try { a.scrollIntoView({ block: 'center' }); } catch (e) {}
-                          try { a.click(); return true; } catch (e) {}
-                          continue;
-                        }
-                        if (K.length >= 4 && T.length >= 4 && (K.startsWith(T) || T.startsWith(K))) {
-                          try { a.scrollIntoView({ block: 'center' }); } catch (e) {}
-                          try { a.click(); return true; } catch (e) {}
-                        }
-                      }
-                      return false;
-                    }
-                    const vinLike = (a) => {
-                      const n = linkCompact(a);
-                      return n.length >= 11 && n.length <= 19;
-                    };
-                    const cand = nodes.filter(vinLike);
-                    if (cand.length !== 1) return false;
-                    try { cand[0].scrollIntoView({ block: 'center' }); } catch (e) {}
-                    try { cand[0].click(); return true; } catch (e) { return false; }
-                  };
-                  const clickFirstMatchInGrid = (g) => {
-                    if (!g) return false;
-                    try { g.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) {}
-                    const nodes = Array.from(
-                      g.querySelectorAll('a[name="Title"], a[id*="_l_Title"]')
-                    ).filter(vis);
-                    return clickMatching(nodes);
-                  };
-                  for (const id of knownIds) {
-                    const g = document.getElementById(id);
-                    if (g && clickFirstMatchInGrid(g)) return true;
-                  }
-                  const skip = new Set(['gview_s_1_l']);
-                  const seen = new Set(knownIds);
-                  const extras = [];
-                  for (const g of document.querySelectorAll('div.ui-jqgrid-view[id^="gview_s_"]')) {
-                    const id = g.id || '';
-                    if (!id || skip.has(id) || seen.has(id)) continue;
-                    const nodes = Array.from(
-                      g.querySelectorAll('a[name="Title"], a[id*="_l_Title"]')
-                    ).filter(vis);
-                    if (!nodes.length) continue;
-                    extras.push({ g, n: nodes.length });
-                  }
-                  extras.sort((a, b) => a.n - b.n);
-                  for (const { g } of extras) {
-                    if (clickFirstMatchInGrid(g)) return true;
-                  }
-                  return false;
-                }""",
-                {
-                    "vk": vin_key,
-                    "useKey": use_key,
-                    "knownIds": list(_SIEBEL_VEHICLE_LEFT_SEARCH_GVIEW_IDS),
-                },
-            )
-            return bool(hit)
-        except Exception:
-            return False
-
-    def _one_attempt() -> bool:
-        def try_click_in_root(root) -> bool:
-            if _try_left_search_gviews_in_root(root):
-                _branch_hit("_siebel_try_click_vin", "pw_gview_title")
-                return True
-            return False
-
-        for root in _siebel_locator_search_roots(page, content_frame_selector):
-            try:
-                if try_click_in_root(root):
-                    return True
-            except Exception:
-                continue
-        for fr in list(_ordered_frames(page)) + [page.main_frame]:
-            try:
-                if _try_js_click_left_search_titles(fr):
-                    _branch_hit("_siebel_try_click_vin", "js_left_search_title")
-                    return True
-            except Exception:
-                continue
-        return False
-
-    _vin_drill_retry_ms = (800, 1100, 1400, 1700)
-    for attempt in range(1 + len(_vin_drill_retry_ms)):
-        if attempt:
-            _safe_page_wait(
-                page,
-                _vin_drill_retry_ms[attempt - 1],
-                log_label=f"vin_left_search_drill_retry_{attempt}",
-            )
-        if _one_attempt():
-            return True
-    return False
+    return bool(js_hit)
 
 
 def _siebel_parse_grid_date_cell_to_date(text: str) -> date | None:
@@ -3208,121 +2810,7 @@ def _wait_for_vehicle_find_applet_ready(
     return False
 
 
-_FIND_VEHICLE_DOM_DUMP_JS = """() => {
-  const vis = (el) => {
-    if (!el) return false;
-    const st = window.getComputedStyle(el);
-    if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
-    const r = el.getBoundingClientRect();
-    return r.width >= 1 && r.height >= 1;
-  };
-  const pick = (el) => ({
-    tag: (el.tagName || '').toLowerCase(),
-    id: el.id || '',
-    className: String(el.className || '').slice(0, 160),
-    name: el.getAttribute('name') || '',
-    role: el.getAttribute('role') || '',
-    ariaLabel: (el.getAttribute('aria-label') || '').slice(0, 200),
-    title: (el.getAttribute('title') || '').slice(0, 200),
-    text: String(el.innerText || el.textContent || '').trim().replace(/\\s+/g, ' ').slice(0, 160),
-    outerHtml: (el.outerHTML || '').slice(0, 600),
-  });
-  const landmarks = [];
-  const landmarkSelectors = [
-    '[id^="gview_s_"]',
-    '#s_1_l',
-    '#gview_s_1_l',
-    '#gview_s_1003_l',
-    'a.drilldown[name="Title"]',
-    'a.drilldown[name="Serial Number"]',
-    'table.ui-jqgrid-btable',
-    '#findfieldsbox',
-    '#findfieldbox',
-  ];
-  for (const sel of landmarkSelectors) {
-    let k = 0;
-    try {
-      document.querySelectorAll(sel).forEach((el) => {
-        if (k >= 30) return;
-        if (vis(el)) {
-          landmarks.push({ selector: sel, ...pick(el) });
-          k++;
-        }
-      });
-    } catch (e) {}
-  }
-  const visibleElements = [];
-  let n = 0;
-  const maxEl = 4000;
-  try {
-    const all = document.querySelectorAll('*');
-    for (let i = 0; i < all.length && n < maxEl; i++) {
-      const el = all[i];
-      if (!vis(el)) continue;
-      const tag = (el.tagName || '').toLowerCase();
-      if (['script', 'style', 'noscript', 'meta', 'link', 'path'].includes(tag)) continue;
-      visibleElements.push(pick(el));
-      n++;
-    }
-  } catch (e) {}
-  return {
-    href: String(location.href || ''),
-    title: String(document.title || ''),
-    landmarks,
-    visibleElements,
-    landmarkCount: landmarks.length,
-    visibleElementCount: visibleElements.length,
-  };
-}"""
-
-
-def _siebel_collect_find_vehicle_dom_dump_payload(page: Page) -> dict:
-    """TEMP: full frame list + visible elements per document (for selector tuning)."""
-    frames_out: list[dict] = []
-    for idx, fr in enumerate(page.frames):
-        entry: dict = {
-            "index": idx,
-            "name": fr.name,
-            "url": (fr.url or "")[:2000],
-        }
-        try:
-            entry["document"] = fr.evaluate(_FIND_VEHICLE_DOM_DUMP_JS)
-        except Exception as ex:
-            entry["document_error"] = str(ex)[:500]
-        frames_out.append(entry)
-    return {
-        "kind": "find_vehicle_dom_dump",
-        "created_ist": _ts_ist_iso(),
-        "frame_count": len(page.frames),
-        "frames": frames_out,
-    }
-
-
-def _maybe_write_find_vehicle_dom_dump_once(
-    page: Page,
-    dump_path: Path | str | None,
-    dump_state: dict | None,
-    *,
-    note: Callable[[str], None] | None,
-) -> None:
-    """Write ``playwright_find_vehicle_dom_dump.json`` once per batch when requested."""
-    if dump_path is None or not dump_state or dump_state.get("done"):
-        return
-    try:
-        p = Path(dump_path)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        payload = _siebel_collect_find_vehicle_dom_dump_payload(page)
-        p.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        dump_state["done"] = True
-        msg = f"TEMP: wrote Find→Vehicles DOM dump once to {p}"
-        logger.info("siebel: %s", msg)
-        if callable(note):
-            note(msg)
-    except Exception as ex:
-        logger.warning("siebel: find_vehicle DOM dump failed: %s", ex)
-
-
-def _siebel_goto_vehicle_list_and_scrape(
+def _siebel_goto_vehicle_list_and_search(
     page: Page,
     vehicle_url: str,
     frame_p: str,
@@ -3333,10 +2821,11 @@ def _siebel_goto_vehicle_list_and_scrape(
     content_frame_selector: str | None,
     note,
     form_trace=None,
-    find_vehicle_dom_dump_path: Path | str | None = None,
-    find_vehicle_dom_dump_state: dict | None = None,
-) -> tuple[dict, str | None]:
-    """Navigate to Auto Vehicle List, run **only** Find→Vehicles ``*``VIN + ``*``Engine partial query, scrape row."""
+) -> str | None:
+    """Navigate to Auto Vehicle List and run Find→Vehicles ``*``VIN + ``*``Engine partial query.
+
+    Returns an error string on failure, or ``None`` on success. Does **not** scrape the grid — the
+    caller polls the left pane, clicks, polls center pane, and only *then* scrapes."""
     _goto(page, vehicle_url, "vehicle_list", nav_timeout_ms=nav_timeout_ms)
     _safe_page_wait(page, 1500, log_label="vehicle_list_open")
     first_ready = _wait_for_vehicle_find_applet_ready(
@@ -3348,7 +2837,7 @@ def _siebel_goto_vehicle_list_and_scrape(
     fp = (frame_p or "").strip()
     ep = (engine_p or "").strip()
     if not fp or not ep:
-        return {}, (
+        return (
             "Siebel: Auto Vehicle List requires non-empty **frame_partial** (VIN/chassis) and "
             "**engine_partial**; Find→Vehicles uses *-prefixed partials only (no key/grid search fallback)."
         )
@@ -3371,7 +2860,6 @@ def _siebel_goto_vehicle_list_and_scrape(
             find_vehicles_vin_engine_ok=query_ok,
         )
     if not query_ok:
-        # One extra settle+retry here for runs where browser/app shell is still rendering.
         if _wait_for_vehicle_find_applet_ready(
             page,
             content_frame_selector=content_frame_selector,
@@ -3392,7 +2880,7 @@ def _siebel_goto_vehicle_list_and_scrape(
                 page, content_frame_selector=content_frame_selector, wait_ms=900
             )
             _hint = "find applet not ready/visible" if not final_ready else "query submit did not complete"
-            return {}, (
+            return (
                 "Siebel: Find→Vehicles VIN/Engine query failed even with frame_partial/engine_partial present; "
                 f"likely {_hint}. If applet is in a nested iframe, set DMS_SIEBEL_CONTENT_FRAME_SELECTOR."
             )
@@ -3401,7 +2889,7 @@ def _siebel_goto_vehicle_list_and_scrape(
         _safe_page_wait(page, 2500, log_label="vehicle_search_settle")
         page.wait_for_load_state("networkidle", timeout=12_000)
     except PlaywrightTimeout:
-        note("networkidle wait timed out; continuing scrape.")
+        note("networkidle wait timed out; continuing.")
     except Exception as e:
         if _is_browser_disconnected_error(e):
             raise RuntimeError(
@@ -3410,19 +2898,7 @@ def _siebel_goto_vehicle_list_and_scrape(
             ) from e
         raise
 
-    _maybe_write_find_vehicle_dom_dump_once(
-        page,
-        find_vehicle_dom_dump_path,
-        find_vehicle_dom_dump_state,
-        note=note,
-    )
-
-    scraped = scrape_siebel_vehicle_row(page, content_frame_selector=content_frame_selector)
-    if scraped.get("key_num") or scraped.get("frame_num") or scraped.get("engine_num"):
-        note("Scraped vehicle row from Siebel grid.")
-    else:
-        note("Vehicle grid scrape returned no key/chassis/engine; check list applet or selectors.")
-    return scraped, None
+    return None
 
 
 def _siebel_locator_roots_for_vehicle_prep(
@@ -4326,30 +3802,19 @@ def prepare_vehicle(
     form_trace=None,
     ms_done=None,
     step=None,
-    find_vehicle_dom_dump_path: Path | str | None = None,
-    find_vehicle_dom_dump_state: dict | None = None,
 ) -> tuple[bool, str | None, dict, bool, list[str], list[str]]:
     """
-    Pre-booking **vehicle preparation** (runs before Generate Booking): navigate to **Auto Vehicle List**,
-    Find→Vehicles query, scrape the list grid row, **require** left **Search Results** VIN (Title) drill-in,
-    then **wait until the center vehicle list** (``#s_1_l``) shows the selected VIN (Siebel updates it after
-    the left click), refresh the list scrape, then **Key Number** / **Battery No.** (save), merge **Vehicle Information** from aria-labels, evaluate
-    **Inventory Location** (fail if **in transit**). For dealer stock: top-grid **VIN** (best-effort) →
-    **Serial Number** drilldown → **Features and Image** (``cubic_capacity`` / ``vehicle_type``) →
-    **Pre-check** + **PDI** (``_siebel_run_vehicle_serial_detail_precheck_pdi``).
+    Pre-booking **vehicle preparation** — ordered flow:
 
-    **Inventory Location** (``aria-label`` on the detail view): substring **in transit** → hard fail
-    ``Vehicle is in transit. Create Receiving before Booking.``; **dealer** (or other non-empty) →
-    ``in_transit=False``; empty → keep list-grid heuristic for downstream branches.
+    1. Navigate → Auto Vehicle List, run Find→Vehicles ``*``VIN + ``*``Engine.
+    2. **Poll left pane** (``#gview_s_1001_l a.drilldown[name="Title"]``) until the VIN appears.
+    3. **Click** the left pane Title link.
+    4. **Poll center pane** (``#s_1_l``) until the center list shows the clicked VIN.
+    5. **Scrape** the center grid row (only now — avoids stale data from a prior vehicle).
+    6. Key Number / Battery No. save, Vehicle Information aria-labels, Inventory Location gate.
+    7. For dealer stock: Serial Number drilldown → Features → Pre-check + PDI.
 
-    **Pre-check and PDI** run **only** when the vehicle is treated as **dealer / not in-transit**
-    (``in_transit`` false after the gate). For **in-transit** stock, they are **skipped** (Siebel fails them);
-    the in-transit branch only opens the receipt URL and **Process Receipt** when configured — no second
-    Pre-check/PDI URL flow.
-
-    Before return, merges grid + detail + DMS/staging into a dict aligned with ``update_vehicle_master_from_dms``.
     Returns ``(ok, error, merged_vehicle_dict, in_transit, critical_gaps, informational_notes)``.
-    ``place_of_registeration`` / ``oem_name`` are applied at DB persist from ``dealer_ref`` / ``oem_ref``, not scraped here.
     """
     key_p, _ = _dms_key_battery_strings_from_values(dms_values)
     frame_p = (dms_values.get("frame_partial") or "").strip()
@@ -4381,7 +3846,8 @@ def prepare_vehicle(
             [],
         )
 
-    scraped, veh_err = _siebel_goto_vehicle_list_and_scrape(
+    # --- Step 1: Navigate + Find→Vehicles search ---
+    veh_err = _siebel_goto_vehicle_list_and_search(
         page,
         vehicle_url,
         frame_p,
@@ -4391,79 +3857,72 @@ def prepare_vehicle(
         content_frame_selector=content_frame_selector,
         note=note,
         form_trace=form_trace,
-        find_vehicle_dom_dump_path=find_vehicle_dom_dump_path,
-        find_vehicle_dom_dump_state=find_vehicle_dom_dump_state,
     )
     if veh_err:
         if callable(step):
             step("Stopped during vehicle list search.")
         return False, veh_err, {}, False, [], []
 
-    _chassis_for_left_hit = (
-        _best_chassis_str(
-            (frame_p or "").strip(),
-            str(scraped.get("frame_num") or "").strip(),
-        )
-        or ""
-    ).strip()
-    if not _chassis_for_left_hit:
-        merged = _merge_dms_and_grid_for_vehicle_master(dms_values, scraped)
-        vm_crit, vm_info = _vehicle_master_prepare_gaps(merged)
+    if not frame_p:
         return (
             False,
-            "Siebel: missing chassis/VIN for left Search Results drill-in "
-            "(set frame_partial and/or ensure the list grid returns frame_num after Find→Vehicles).",
-            merged,
-            bool(scraped.get("in_transit")),
-            vm_crit,
-            vm_info,
+            "Siebel: missing frame_partial (VIN/chassis) for left Search Results drill-in.",
+            {},
+            False,
+            [],
+            [],
         )
+
+    # --- Step 2: Poll left pane until our VIN appears ---
+    _safe_page_wait(page, 400, log_label="pre_left_pane_poll")
+    if not _siebel_poll_left_search_title_matches(page, frame_p):
+        return (
+            False,
+            "Siebel: left Search Results pane did not show the expected VIN after Find→Vehicles "
+            f"(polled #gview_s_1001_l Title links for '{frame_p}').",
+            {},
+            False,
+            [],
+            [],
+        )
+    note("prepare_vehicle: left Search Results pane shows the VIN.")
+
+    # --- Step 3: Click the left pane Title link ---
     if not _siebel_try_click_vin_search_hit_link(
         page,
-        _chassis_for_left_hit,
+        frame_p,
         timeout_ms=action_timeout_ms,
-        content_frame_selector=content_frame_selector,
     ):
-        merged = _merge_dms_and_grid_for_vehicle_master(dms_values, scraped)
-        vm_crit, vm_info = _vehicle_master_prepare_gaps(merged)
         return (
             False,
             "Siebel: could not open vehicle detail from left Search Results (VIN Title drilldown).",
-            merged,
-            bool(scraped.get("in_transit")),
-            vm_crit,
-            vm_info,
+            {},
+            False,
+            [],
+            [],
         )
     note("prepare_vehicle: opened vehicle from left Search Results (VIN Title drilldown).")
 
+    # --- Step 4: Poll center pane until the clicked VIN appears ---
     _safe_page_wait(page, 300, log_label="after_left_title_click_tick")
-    if not _siebel_poll_until_center_list_matches_chassis_after_left_drill(
-        page,
-        _chassis_for_left_hit,
-        content_frame_selector=content_frame_selector,
-    ):
-        merged = _merge_dms_and_grid_for_vehicle_master(dms_values, scraped)
-        vm_crit, vm_info = _vehicle_master_prepare_gaps(merged)
+    if not _siebel_poll_center_list_matches(page, frame_p):
         return (
             False,
             "Siebel: center vehicle list did not update to show the selected VIN after left Search Results "
             "drill-in (wait for #s_1_l row to match).",
-            merged,
-            bool(scraped.get("in_transit")),
-            vm_crit,
-            vm_info,
+            {},
+            False,
+            [],
+            [],
         )
-    note(
-        "prepare_vehicle: center vehicle list shows selected VIN (synced after left Search Results drill-in)."
-    )
-    refreshed = scrape_siebel_vehicle_row(
-        page, content_frame_selector=content_frame_selector
-    )
-    if refreshed:
-        for _k, _v in refreshed.items():
-            if _v is not None and str(_v).strip():
-                scraped[_k] = _v
-        note("prepare_vehicle: refreshed vehicle list scrape after center pane synced.")
+    note("prepare_vehicle: center vehicle list shows selected VIN.")
+
+    # --- Step 5: Scrape the center grid (now showing the correct vehicle) ---
+    scraped = scrape_siebel_vehicle_row(page, content_frame_selector=content_frame_selector)
+    if scraped.get("key_num") or scraped.get("frame_num") or scraped.get("engine_num"):
+        note("prepare_vehicle: scraped vehicle row from center grid.")
+    else:
+        note("prepare_vehicle: center grid scrape returned no key/chassis/engine; continuing.")
 
     try:
         _safe_page_wait(page, 1200, log_label="after_vehicle_left_pane_vin_settle")

@@ -73,9 +73,8 @@ def run_subdealer_challan_batch(
     Run full challan pipeline for all rows in ``challan_batch_id``.
     Writes a human-readable trace to ``CHALLANS_DIR/<challan>_<ddmmyyyy>/playwright_challan.txt``
     (same folder convention as OCR upload). The file is **truncated** at the start of each run so prior
-    runs do not accumulate. **TEMP:** on the first successful Find→Vehicles search in the batch, writes
-    ``playwright_find_vehicle_dom_dump.json`` beside that log (once) for DOM/selector debugging.
-    Returns ``ok``, ``error``, ``challan_id``, ``dms_step_messages``, ``vehicle``, ``find_vehicle_dom_dump_path``.
+    runs do not accumulate.
+    Returns ``ok``, ``error``, ``challan_id``, ``dms_step_messages``, ``vehicle``.
     """
     steps: list[str] = []
     out: dict[str, object] = {
@@ -85,7 +84,6 @@ def run_subdealer_challan_batch(
         "dms_step_messages": steps,
         "vehicle": {},
         "challan_log_path": None,
-        "find_vehicle_dom_dump_path": None,
     }
 
     rows = challan_staging_repo.fetch_batch_rows(challan_batch_id)
@@ -105,9 +103,6 @@ def run_subdealer_challan_batch(
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_path.write_text("", encoding="utf-8")
     out["challan_log_path"] = str(log_path)
-    find_vehicle_dom_dump_path = (log_path.parent / "playwright_find_vehicle_dom_dump.json").resolve()
-    find_vehicle_dom_dump_state: dict = {"done": False}
-    out["find_vehicle_dom_dump_path"] = str(find_vehicle_dom_dump_path)
 
     def logln(msg: str) -> None:
         with log_path.open("a", encoding="utf-8") as lf:
@@ -119,10 +114,6 @@ def run_subdealer_challan_batch(
     logln(f"dealer_id(session)={dealer_id} from_dealer_id={from_dealer_id} to_dealer_id={to_dealer_id}")
     logln(f"challan_book_num={challan_book!r} challan_date={challan_date!r} artifact_folder={leaf}")
     logln(f"staging_row_count={len(rows)}")
-    logln(
-        f"TEMP: one-shot Find→Vehicles DOM dump (first successful search only) → {find_vehicle_dom_dump_path}"
-    )
-
     if not dms_automation_is_real_siebel():
         logln("ERROR: DMS_MODE must be real/siebel for subdealer challan automation.")
         out["error"] = "DMS_MODE must be real/siebel for subdealer challan automation."
@@ -209,8 +200,6 @@ def run_subdealer_challan_batch(
                     form_trace=form_trace,
                     ms_done=ms_done,
                     step=step_msg,
-                    find_vehicle_dom_dump_path=find_vehicle_dom_dump_path,
-                    find_vehicle_dom_dump_state=find_vehicle_dom_dump_state,
                 )
                 if not ok:
                     err_s = (err or "prepare_vehicle failed")[:2000]
