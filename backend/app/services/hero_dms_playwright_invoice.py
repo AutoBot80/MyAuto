@@ -1016,7 +1016,6 @@ def _attach_vehicle_to_bkg(
                 return _ch in got or _digits(_ch) in _digits(got) or len(_digits(got)) >= 8
 
             def _js_set_vin_value_on_element(vin_loc) -> None:
-                """Siebel/jqGrid: value + events; some builds ignore Playwright fill/type until DOM gets input/beforeinput."""
                 try:
                     import json as _json
 
@@ -1024,14 +1023,9 @@ def _attach_vehicle_to_bkg(
                     vin_loc.evaluate(
                         f"""(el) => {{
                       const v = {_v};
-                      try {{ el.removeAttribute('readonly'); }} catch (e) {{}}
-                      try {{ el.removeAttribute('disabled'); }} catch (e) {{}}
                       try {{ el.focus(); }} catch (e) {{}}
                       el.value = '';
                       el.value = v;
-                      try {{
-                        el.dispatchEvent(new InputEvent('beforeinput', {{ bubbles: true, inputType: 'insertFromPaste', data: v }}));
-                      }} catch (e) {{}}
                       try {{
                         el.dispatchEvent(new InputEvent('input', {{ bubbles: true, inputType: 'insertFromPaste', data: v }}));
                       }} catch (e) {{
@@ -1044,7 +1038,7 @@ def _attach_vehicle_to_bkg(
                     pass
 
             def _tab_out_vin(vin_loc) -> None:
-                # One Tab only — double Tab was skipping past the VIN without a reliable commit.
+                # Single Tab only. (Historically a second Tab here was suspected of focusing the pick/MVG and opening an applet.)
                 try:
                     vin_loc.press("Tab", timeout=1500)
                 except Exception:
@@ -1054,36 +1048,23 @@ def _attach_vehicle_to_bkg(
                         pass
 
             def _try_fill_vin_locator(vin_loc) -> bool:
-                # jqGrid line items: a **left** cell click often switches the cell to edit mode; focus() alone may not.
-                # Do not full-area click (pick/MVG on the right). No Escape after New (cancels row).
+                # Restored flow: full click enters jqGrid edit mode; then page.keyboard.type (same as before applet issues).
                 try:
                     vin_loc.scroll_into_view_if_needed(timeout=_tmo)
                 except Exception:
                     pass
-
                 try:
-                    box = vin_loc.bounding_box()
-                    if box and float(box.get("width") or 0) > 12:
-                        w = float(box["width"])
-                        h = float(box.get("height") or 20)
-                        x_left = min(14.0, max(6.0, w * 0.07))
-                        vin_loc.click(position={"x": x_left, "y": h / 2.0}, timeout=_tmo)
-                    else:
-                        vin_loc.click(position={"x": 6, "y": 12}, timeout=_tmo)
+                    vin_loc.click(timeout=_tmo)
                 except Exception:
-                    return False
-
-                _safe_page_wait(page, 220, log_label="attach_vin_after_cell_activate_click")
-
+                    try:
+                        vin_loc.click(timeout=_tmo, force=True)
+                    except Exception:
+                        return False
+                _safe_page_wait(page, 220, log_label="after_vin_click")
                 try:
-                    vin_loc.focus(timeout=min(_tmo, 4000))
+                    vin_loc.focus(timeout=1200)
                 except Exception:
                     pass
-                try:
-                    vin_loc.evaluate("el => { try { el.focus(); } catch (e) {} }")
-                except Exception:
-                    pass
-
                 try:
                     vin_loc.press("Control+a", timeout=800)
                 except Exception:
@@ -1092,49 +1073,22 @@ def _attach_vehicle_to_bkg(
                     vin_loc.fill("", timeout=1000)
                 except Exception:
                     pass
-
-                _type_to = min(15000, max(8000, int(action_timeout_ms or 3000) * 3))
-
                 try:
-                    vin_loc.fill(_ch, timeout=3500, force=True)
+                    page.keyboard.type(_ch, delay=28)
                 except Exception:
                     pass
-                if _vin_readback_ok(vin_loc):
-                    _tab_out_vin(vin_loc)
-                    return True
-
-                if hasattr(vin_loc, "press_sequentially"):
+                if not _vin_readback_ok(vin_loc):
                     try:
-                        vin_loc.press_sequentially(_ch, delay=22, timeout=_type_to)
+                        vin_loc.type(_ch, delay=28, timeout=min(8000, int(action_timeout_ms or 3000)))
                     except Exception:
                         pass
-                    if _vin_readback_ok(vin_loc):
-                        _tab_out_vin(vin_loc)
-                        return True
-
-                try:
-                    vin_loc.type(_ch, delay=28, timeout=_type_to)
-                except Exception:
-                    pass
-                if _vin_readback_ok(vin_loc):
-                    _tab_out_vin(vin_loc)
-                    return True
-
-                try:
-                    vin_loc.focus(timeout=1200)
-                except Exception:
-                    pass
-                try:
-                    kb = page.keyboard
-                    if hasattr(kb, "insert_text"):
-                        kb.insert_text(_ch)
-                except Exception:
-                    pass
-                if _vin_readback_ok(vin_loc):
-                    _tab_out_vin(vin_loc)
-                    return True
-
-                _js_set_vin_value_on_element(vin_loc)
+                if not _vin_readback_ok(vin_loc):
+                    try:
+                        vin_loc.fill(_ch, timeout=2000)
+                    except Exception:
+                        pass
+                if not _vin_readback_ok(vin_loc):
+                    _js_set_vin_value_on_element(vin_loc)
                 if not _vin_readback_ok(vin_loc):
                     return False
                 _tab_out_vin(vin_loc)
