@@ -87,7 +87,18 @@ export function AppLayoutV2({
                 onClick={() => onNavigate(p)}
               >
                 {PAGE_LABELS[p]}
-                {badge != null && badge > 0 ? ` (${badge})` : ""}
+                {badge != null && badge > 0 ? (
+                  <span
+                    className={
+                      p === "subdealer-challan"
+                        ? "app-tab-badge app-tab-badge--danger"
+                        : "app-tab-badge"
+                    }
+                  >
+                    {" "}
+                    ({badge})
+                  </span>
+                ) : null}
               </button>
             );
           })}

@@ -205,6 +205,19 @@
   background: rgba(30, 90, 158, 0.06);
 }
 
+/* Tab label counts (POS nav + Subdealer Processed sub-tab); --danger = failed / attention */
+.app-tab-badge {
+  font-weight: 600;
+}
+
+.app-tab-badge--danger {
+  color: #c62828;
+}
+
+.app-tab-v2.active .app-tab-badge--danger {
+  color: #c62828;
+}
+
 .app-main-v2 {
   flex: 1;
   min-height: 0;
@@ -2248,6 +2261,11 @@
 .challans-subtab.active {
   color: #1e5a9e;
   border-bottom-color: #1e5a9e;
+}
+
+.challans-subtab .app-tab-badge--danger,
+.challans-subtab.active .app-tab-badge--danger {
+  color: #c62828;
 }
 
 .challans-processed-panel {

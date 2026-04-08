@@ -509,7 +509,12 @@ export function SubdealerChallanPage({
           onClick={() => setChallanSubTab("processed")}
         >
           Processed
-          {challanFailedCount > 0 ? ` (${challanFailedCount})` : ""}
+          {challanFailedCount > 0 ? (
+            <span className="app-tab-badge app-tab-badge--danger">
+              {" "}
+              ({challanFailedCount})
+            </span>
+          ) : null}
         </button>
       </nav>
 
@@ -841,8 +846,8 @@ export function SubdealerChallanPage({
                       <th scope="col">To dealer</th>
                       <th scope="col">Challan date</th>
                       <th scope="col">Challan number</th>
-                      <th scope="col" title="Prepared vs total vehicles in this batch">
-                        Prepared / total
+                      <th scope="col" title="Vehicles prepared vs total in this batch">
+                        Vehicles Prepared
                       </th>
                       <th scope="col">Invoice</th>
                       <th scope="col">Latest run</th>
