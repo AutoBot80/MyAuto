@@ -84,6 +84,128 @@ def _siebel_left_search_gview_table_id(gview_id: str) -> str:
     return s
 
 
+# Dry-run probe: same Title/VIN matching rules as ``_siebel_try_click_vin_search_hit_link`` (incl. JS click
+# fallback) — used to wait out a **stale** left pane after a prior vehicle (pane still shows old VIN row).
+_LEFT_SEARCH_VIN_TITLE_PRESENT_JS = """({ vk, useKey, knownIds }) => {
+  const norm = (s) => String(s || '').replace(/[^A-Za-z0-9]/g, '');
+  const key = norm(vk);
+  const vis = (el) => {
+    if (!el) return false;
+    const st = window.getComputedStyle(el);
+    if (st.display === 'none' || st.visibility === 'hidden') return false;
+    const r = el.getBoundingClientRect();
+    return r.width >= 1 && r.height >= 1;
+  };
+  const linkCompact = (a) => {
+    const t = norm(a.innerText || a.textContent || '');
+    const title = norm(a.getAttribute('title') || '');
+    const al = norm(a.getAttribute('aria-label') || '');
+    return t + title + al;
+  };
+  const rowContainsVin = (rowCompact) => {
+    if (!useKey || !rowCompact) return false;
+    if (!key || key.length < 4) return false;
+    const rk = rowCompact.toUpperCase();
+    const vk = key.toUpperCase();
+    if (rk.includes(vk)) return true;
+    if (rk.length >= 4 && vk.includes(rk)) return true;
+    if (rk.endsWith(vk) || rk.startsWith(vk)) return true;
+    if (rk.length >= 4 && vk.length >= 4 && (vk.startsWith(rk) || rk.startsWith(vk))) return true;
+    return false;
+  };
+  const scanNodes = (nodes) => {
+    if (useKey && key && key.length >= 4) {
+      for (const a of nodes) {
+        if (rowContainsVin(linkCompact(a))) return true;
+      }
+      return false;
+    }
+    const vinLike = nodes.filter((a) => {
+      const n = linkCompact(a);
+      return n.length >= 11 && n.length <= 19;
+    });
+    return vinLike.length === 1;
+  };
+  const scanGrid = (g) => {
+    if (!g) return false;
+    const nodes = Array.from(
+      g.querySelectorAll('a[name="Title"], a[id*="_l_Title"]')
+    ).filter(vis);
+    return scanNodes(nodes);
+  };
+  for (const id of knownIds) {
+    const g = document.getElementById(id);
+    if (g && scanGrid(g)) return true;
+  }
+  const skip = new Set(['gview_s_1_l']);
+  const seen = new Set(knownIds);
+  for (const g of document.querySelectorAll('div.ui-jqgrid-view[id^="gview_s_"]')) {
+    const id = g.id || '';
+    if (!id || skip.has(id) || seen.has(id)) continue;
+    if (scanGrid(g)) return true;
+  }
+  return false;
+}"""
+
+
+def _siebel_frame_has_left_search_vin_title_match(
+    frame: Frame, vk: str, use_key: bool
+) -> bool:
+    try:
+        return bool(
+            frame.evaluate(
+                _LEFT_SEARCH_VIN_TITLE_PRESENT_JS,
+                {
+                    "vk": vk,
+                    "useKey": use_key,
+                    "knownIds": list(_SIEBEL_VEHICLE_LEFT_SEARCH_GVIEW_IDS),
+                },
+            )
+        )
+    except Exception:
+        return False
+
+
+def _siebel_poll_until_left_search_title_matches_current_vin(
+    page: Page,
+    chassis: str,
+    *,
+    content_frame_selector: str | None,
+    max_wait_ms: int = 14000,
+    poll_ms: int = 450,
+) -> bool:
+    """
+    After Find→Vehicles, the **main** list can update before the left **Search Results** jqGrid —
+    especially on the 2nd+ vehicle in one browser session — so drilldown would find no matching Title.
+    Poll until a visible Title matches this chassis (same rules as the click path) or timeout.
+    """
+    _ = content_frame_selector
+    vin_key = _vin_match_key(chassis)
+    use_key = bool(vin_key) and len(vin_key) >= 4
+    start = time.monotonic()
+    deadline = start + max(0.5, max_wait_ms / 1000.0)
+    stale_logged = False
+    while time.monotonic() < deadline:
+        for fr in list(_ordered_frames(page)) + [page.main_frame]:
+            try:
+                if _siebel_frame_has_left_search_vin_title_match(fr, vin_key, use_key):
+                    _safe_page_wait(
+                        page, 400, log_label="vin_left_search_stale_pane_match_settle"
+                    )
+                    return True
+            except Exception:
+                continue
+        if not stale_logged and (time.monotonic() - start) >= 2.5:
+            stale_logged = True
+            logger.info(
+                "siebel: left Search Results pane still syncing (possible stale row from prior vehicle); "
+                "polling up to %sms for current VIN Title",
+                max_wait_ms,
+            )
+        _safe_page_wait(page, poll_ms, log_label="vin_left_search_stale_pane_poll")
+    return False
+
+
 def _siebel_vehicle_find_wildcard_value(raw: str) -> str:
     """Hero Connect vehicle Find uses ``*`` prefix on VIN/Engine for partial match (see operator screenshots)."""
     s = (raw or "").strip()
@@ -701,8 +823,17 @@ def _siebel_try_click_vin_search_hit_link(
     vin_key = _vin_match_key(chassis)
     use_key = bool(vin_key) and len(vin_key) >= 4
 
-    # Left Search Results jqGrid often paints after the main list — give the Title row time to appear.
-    _safe_page_wait(page, 1500, log_label="vin_left_search_pre_drill_settle")
+    # Main list often updates before the left Search Results jqGrid; after a prior vehicle the pane can
+    # still show the previous hit until Siebel refreshes — poll until this chassis matches a Title.
+    _safe_page_wait(page, 400, log_label="vin_left_search_before_stale_pane_poll")
+    _siebel_poll_until_left_search_title_matches_current_vin(
+        page,
+        chassis,
+        content_frame_selector=content_frame_selector,
+        max_wait_ms=14000,
+        poll_ms=450,
+    )
+    _safe_page_wait(page, 600, log_label="vin_left_search_after_stale_pane_poll")
 
     def _try_click_siebel_drilldown(loc) -> bool:
         try:
