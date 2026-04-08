@@ -41,6 +41,7 @@ Cursor agents follow **`.cursor/rules/checkpoints-registry.mdc`**: full workflow
 | 12 | Insurance Fully Done | `checkpoint/insurance-fully-done` | `64a0bbc50760e24db04b40cd6e69bc052b673338` | 2026-04-05T17:42:55+05:30 | 1) KYC with adhaar pending 2) Download forms |
 | 13 | DMS Reports Downloaded | `checkpoint/dms-reports-downloaded` | `2bd01d4d3d54170aaab4a83bc37db80b2ff720d9` | 2026-04-05T19:37:23+05:30 | — |
 | 14 | Enabled Add Vehicle Looping | `checkpoint/enabled-add-vehicle-looping` | `3df79152f68720501aec83643572f9ee7778763a` | 2026-04-07T20:16:46+05:30 | 1) Create subdealer challan wrapper; 2) Test single sale; 3) Test Challan creation |
+| 15 | Added Subdealer Challan module | `checkpoint/added-subdealer-challan-module` | `2f0b91c5a54367ead502b8d0469f54b627bb3c40` | 2026-04-08T20:46:48+05:30 | 1) Need to speed up prepare_vehicle |
 
 ## Rollback / Restore
 
