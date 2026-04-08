@@ -1672,6 +1672,167 @@ def _attach_vehicle_to_bkg(
     return True, None, _extra
 
 
+def _challan_read_pin_code_field(
+    roots: list,
+    *,
+    action_timeout_ms: int,
+) -> str:
+    """Best-effort Pin Code / Pincode on booking form (same family as contact applet readback)."""
+    _tmo = min(int(action_timeout_ms or 3000), 2500)
+    for root in roots:
+        for _pin_sel in (
+            "input[aria-label*='Pin Code' i]",
+            "input[aria-label*='Pincode' i]",
+            "input[title*='Pin Code' i]",
+            "input[title*='Pincode' i]",
+            "input[name*='Pin' i]",
+        ):
+            try:
+                pl = root.locator(_pin_sel).first
+                if pl.count() > 0 and pl.is_visible(timeout=500):
+                    v = (pl.input_value(timeout=_tmo) or "").strip()
+                    if v:
+                        return v
+            except Exception:
+                continue
+    return ""
+
+
+def _fill_challan_account_institution_name_verify_pin(
+    page: Page,
+    *,
+    institution_name: str,
+    expected_pin: str,
+    action_timeout_ms: int,
+    content_frame_selector: str | None,
+    note: Callable[..., None],
+) -> tuple[bool, str]:
+    """
+    Subdealer challan: Account/Institution Name must be focused on the **input** (not the pick icon),
+    then typed + Tab. Success when Pin Code field shows a value (Siebel autopopulate after institution match).
+    """
+    nm = (institution_name or "").strip()
+    if not nm:
+        return False, "Account/Institution Name value is empty."
+
+    roots: list = []
+    try:
+        roots.extend(list(_siebel_locator_search_roots(page, content_frame_selector)))
+    except Exception:
+        pass
+    try:
+        roots.extend(list(_ordered_frames(page)))
+    except Exception:
+        pass
+    roots.append(page)
+
+    _tmo = min(int(action_timeout_ms or 3000), 4000)
+
+    inst_loc = None
+    for root in roots:
+        for css in (
+            "input[aria-label='Account/Institution Name']",
+            "input[aria-label*='Account/Institution Name' i]",
+            "input[aria-label*='Account Institution Name' i]",
+            "input[aria-label*='Institution Name' i]",
+        ):
+            try:
+                loc = root.locator(css).first
+                if loc.count() <= 0 or not loc.is_visible(timeout=600):
+                    continue
+                try:
+                    ro = loc.evaluate("el => el.readOnly === true || el.disabled === true")
+                except Exception:
+                    ro = False
+                if ro:
+                    continue
+                inst_loc = loc
+                break
+            except Exception:
+                continue
+        if inst_loc is not None:
+            break
+
+    if inst_loc is None:
+        return False, "Could not find Account/Institution Name input (challan)."
+
+    try:
+        inst_loc.scroll_into_view_if_needed(timeout=_tmo)
+    except Exception:
+        pass
+    # Click inside the text field (left area) so we do not hit the pick/MVG icon on the right.
+    try:
+        box = inst_loc.bounding_box()
+        if box and box.get("width", 0) > 40:
+            inst_loc.click(
+                position={"x": min(24, max(8, box["width"] * 0.25)), "y": box["height"] / 2},
+                timeout=_tmo,
+            )
+        else:
+            inst_loc.click(timeout=_tmo)
+    except Exception:
+        try:
+            inst_loc.click(timeout=_tmo, force=True)
+        except Exception as e:
+            return False, f"Account/Institution Name: could not focus input ({e!s})."
+
+    try:
+        inst_loc.press("Control+a", timeout=1200)
+    except Exception:
+        pass
+    try:
+        inst_loc.fill("", timeout=_tmo)
+    except Exception:
+        pass
+    try:
+        inst_loc.type(nm, delay=35, timeout=min(_tmo * 2, 12000))
+    except Exception:
+        try:
+            inst_loc.fill(nm, timeout=_tmo)
+        except Exception as e:
+            return False, f"Account/Institution Name: could not type ({e!s})."
+
+    try:
+        inst_loc.press("Tab", timeout=1200)
+    except Exception:
+        try:
+            page.keyboard.press("Tab")
+        except Exception:
+            pass
+
+    note("Create Order: Account/Institution Name typed + Tab (challan); waiting for Pin Code autopopulate.")
+
+    exp_digits = re.sub(r"\D", "", (expected_pin or "").strip())
+    for _poll in range(24):
+        _safe_page_wait(page, 250, log_label="challan_institution_pin_poll")
+        roots2: list = []
+        try:
+            roots2.extend(list(_siebel_locator_search_roots(page, content_frame_selector)))
+        except Exception:
+            pass
+        try:
+            roots2.extend(list(_ordered_frames(page)))
+        except Exception:
+            pass
+        roots2.append(page)
+        pin_now = _challan_read_pin_code_field(roots2, action_timeout_ms=_tmo)
+        got = re.sub(r"\D", "", pin_now or "")
+        if len(got) >= 4:
+            if exp_digits and got != exp_digits:
+                note(
+                    f"Create Order: Pin Code autopopulated → {pin_now!r} "
+                    f"(expected {expected_pin!r} — continuing)."
+                )
+            else:
+                note(f"Create Order: Pin Code autopopulated after Institution → {pin_now!r}.")
+            return True, ""
+
+    return (
+        False,
+        "Account/Institution Name: Pin Code did not autopopulate after Tab (challan).",
+    )
+
+
 def _create_order(
     page: Page,
     *,
@@ -2311,17 +2472,16 @@ def _create_order(
                 except Exception:
                     continue
             if _ndn:
-                for root in _roots():
-                    try:
-                        for _acct_lbl in ("Account/Institution Name", "Account Institution Name", "Institution Name"):
-                            if _fill_by_label_on_frame(root, _acct_lbl, _ndn, action_timeout_ms=action_timeout_ms):
-                                note(f"Create Order: filled {_acct_lbl} (challan).")
-                                break
-                        else:
-                            continue
-                        break
-                    except Exception:
-                        continue
+                _inst_ok, _inst_err = _fill_challan_account_institution_name_verify_pin(
+                    page,
+                    institution_name=_ndn,
+                    expected_pin=(challan_network_pin or "").strip(),
+                    action_timeout_ms=action_timeout_ms,
+                    content_frame_selector=content_frame_selector,
+                    note=note,
+                )
+                if not _inst_ok:
+                    return False, _inst_err, scraped
             _safe_page_wait(page, 400, log_label="after_challan_network_fields")
 
         _bp = (battery_partial or "").strip()

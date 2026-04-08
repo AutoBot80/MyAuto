@@ -25,7 +25,7 @@ def prepare_customer_for_challan(
     Load ``dealer_ref`` for ``to_dealer_id`` and set Siebel-facing keys on ``dms_values`` in place.
 
     Sets ``hero_dms_flow``, dummy ``mobile_phone``, name/address/pin from dealer, Network fields,
-    and challan Comments text when ``from_dealer_id`` is set.
+    and challan Comments text (``From {name}. Helmet credited`` using **from** dealer's name) when ``from_dealer_id`` is set.
     """
     tid = int(to_dealer_id)
     with get_connection() as conn:
@@ -58,6 +58,17 @@ def prepare_customer_for_challan(
     dms_values["financier_name"] = ""
 
     if from_dealer_id is not None:
-        dms_values["challan_comments_text"] = f"From {int(from_dealer_id)}. Helmet credited"
+        from_label = ""
+        try:
+            with get_connection() as conn:
+                fr = DealerRefRepository.get_by_id(conn, int(from_dealer_id))
+            if fr:
+                from_label = (fr.get("dealer_name") or "").strip()
+        except Exception:
+            from_label = ""
+        if from_label:
+            dms_values["challan_comments_text"] = f"From {from_label}. Helmet credited"
+        else:
+            dms_values["challan_comments_text"] = "Helmet credited"
     else:
         dms_values["challan_comments_text"] = "Helmet credited"
