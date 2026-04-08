@@ -234,7 +234,7 @@ export function SubdealerChallanPage({
   const [processedError, setProcessedError] = useState<string | null>(null);
   /** Draft input; **Search** copies trimmed value to ``processedChallanSearchApplied`` for the API. */
   const [processedChallanSearchDraft, setProcessedChallanSearchDraft] = useState("");
-  /** When empty: API lists failed batches in the last 15 days. When set: match ``challan_book_num`` (any age). */
+  /** When empty: API lists batches needing attention (failed lines or failed invoice) in the last 15 days. */
   const [processedChallanSearchApplied, setProcessedChallanSearchApplied] = useState("");
   const [retryingProcessBatchId, setRetryingProcessBatchId] = useState<string | null>(null);
   const [retryingOrderBatchId, setRetryingOrderBatchId] = useState<string | null>(null);
@@ -811,7 +811,7 @@ export function SubdealerChallanPage({
         <p className="challans-processed-list-hint">
           {processedChallanSearchApplied.trim()
             ? "Showing this challan by book number (any date)."
-            : "Showing batches with at least one failed vehicle from the last 15 days."}
+            : "Showing batches from the last 15 days that need attention: failed vehicle line(s), or failed invoice."}
         </p>
         {processedLoading ? (
           <p className="app-table-empty challans-processed-loading-msg">
@@ -821,7 +821,7 @@ export function SubdealerChallanPage({
           <p className="app-table-empty challans-processed-loading-msg">
             {processedChallanSearchApplied.trim()
               ? "No challan found for this Challan No."
-              : "No failed challan batches in the last 15 days."}
+              : "No matching batches in the last 15 days (failed vehicles or failed invoice)."}
           </p>
         ) : (
           <div className="challans-processed-split">

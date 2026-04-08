@@ -1695,7 +1695,10 @@ def _create_order(
     """
     Vehicle Sales → Sales Orders flow (same frame as the ``+`` New control):
 
-    - After opening **My Orders**, run ``_run_vehicle_sales_my_orders_mobile_search`` (Find ``s_1_1_1_0`` →
+    - When ``hero_dms_flow=add_subdealer_challan``, skip **My Orders** mobile search and go straight to
+      **Sales Orders List:New (+)** after loading the Vehicle Sales URL (avoids dummy-mobile grid loops).
+
+    - Otherwise, after opening **My Orders**, run ``_run_vehicle_sales_my_orders_mobile_search`` (Find ``s_1_1_1_0`` →
       Mobile Phone# → mobile → Enter → ``ui-jqgrid-btable``):
 
       - **invoiced** (meaningful Invoice# on a row): return success with Order#/Invoice# scrape and
@@ -1885,323 +1888,330 @@ def _create_order(
             note(f"Create Order: goto Vehicle Sales URL raised {_e!r} — continuing.")
     _siebel_after_goto_wait(page, floor_ms=4500)
     note(f"Create Order: arrived at Vehicle Sales (post-goto wait). URL={page.url[:120]}")
-
-    _mos = _run_vehicle_sales_my_orders_mobile_search(
-        page,
-        mobile=mobile,
-        action_timeout_ms=action_timeout_ms,
-        content_frame_selector=content_frame_selector,
-        note=note,
-    )
-    _mo_oc = (_mos.outcome or "").strip()
-    _mo_po = (_mos.primary_order or "").strip()
-    _mo_pi = (_mos.primary_invoice or "").strip()
-
-    # Grid returned rows but status/invoice columns did not classify (e.g. nonstandard header ids). If we
-    # have Order# links and no meaningful Invoice# on any row, prefer allocated-style attach (Order# drill
-    # then skip to pre–Apply Campaign) instead of creating a duplicate booking via '+'.
-    if _mo_oc == "unknown_rows" and _mos.rows:
-        _rows = _mos.rows
-        _has_order = any((r.get("order") or "").strip() for r in _rows)
-        _any_inv = any(_my_orders_invoice_meaningful((r.get("invoice") or "").strip()) for r in _rows)
-        if _has_order and not _any_inv:
-            _picked = ""
-            for r in _rows:
-                if _my_orders_blob_looks_allocated(_my_orders_row_text_blob(r)):
-                    _picked = (r.get("order") or "").strip()
-                    if _picked:
-                        break
-            if not _picked:
-                for r in _rows:
-                    _picked = (r.get("order") or "").strip()
-                    if _picked:
-                        break
-            if _picked:
-                note(
-                    "Create Order: My Orders grid unknown_rows with Order# row(s) and no Invoice# — "
-                    "using allocated attach path (Order# drill, skip to pre–Apply Campaign)."
-                )
-                _mo_po = _picked
-                _mo_oc = "allocated"
-
-    def _finalize_my_orders_attach(branch: str) -> tuple[bool, str | None, dict]:
-        """After ``_attach_vehicle_to_bkg`` from a My Orders grid drill-down."""
-        _att_ok, _att_err, _att_scraped = _attach_vehicle_to_bkg(
-            page,
-            full_chassis=full_chassis,
-            order_number=_mo_po or "",
-            action_timeout_ms=action_timeout_ms,
-            content_frame_selector=content_frame_selector,
-            note=note,
-            start_at_order_link_before_apply=(branch == "allocated"),
-            line_item_discount=line_item_discount,
-            attach_line_items=attach_line_items,
-        )
-        scraped["order_drilldown_opened"] = bool(_att_ok)
-        scraped["my_orders_branch"] = branch
-        if _att_scraped:
-            scraped.update(_att_scraped)
-        if not _att_ok:
-            return False, (_att_err or "attach_vehicle_to_bkg failed.").strip(), scraped
-        _safe_page_wait(page, 900, log_label=f"after_my_orders_{branch}_attach")
-        order_ref = _scrape_order_number_current()
-        if order_ref:
-            scraped["order_number"] = order_ref
-        inv_no = _scrape_invoice_number_current()
-        scraped["invoice_number"] = (inv_no or scraped.get("invoice_number") or "")
-        if callable(form_trace):
-            form_trace(
-                "v4_create_order",
-                "Vehicle Sales — My Orders branch",
-                f"attach_vehicle_to_bkg_my_orders_{branch}",
-                order_number=str(scraped.get("order_number") or ""),
-                invoice_number=str(scraped.get("invoice_number") or ""),
-            )
-        return True, None, scraped
-
-    if _mo_oc == "invoiced":
-        scraped["order_number"] = _mo_po
-        scraped["invoice_number"] = _mo_pi
-        scraped["my_orders_branch"] = "invoiced"
-        scraped["ready_for_client_create_invoice"] = True
+    _challan_skip_my_orders = (hero_dms_flow or "add_sales").strip() == "add_subdealer_challan"
+    if _challan_skip_my_orders:
         note(
-            "Create Order: My Orders grid shows Invoice# — skipping '+' booking/attach; "
-            "operator may use Create Invoice on the client app."
+            "Create Order: add_subdealer_challan — skipping My Orders mobile search; "
+            "opening new booking via Sales Orders List:New (+)."
         )
-        return True, None, scraped
-
-    if _mo_oc == "pending":
-        if not _click_my_orders_jqgrid_order_for_mobile_or_order(
-            page,
-            mobile=mobile,
-            order_number=_mo_po,
-            content_frame_selector=content_frame_selector,
-            note=note,
-            action_timeout_ms=action_timeout_ms,
-        ):
-            return False, "Create Order: Pending My Orders row but could not open Order# drill-down.", scraped
-        try:
-            page.wait_for_load_state("networkidle", timeout=8_000)
-        except Exception:
-            pass
-        _err_mo_p = _poll_and_handle_siebel_error_popup(
-            page,
-            content_frame_selector,
-            note,
-            context="Create Order after My Orders Order# click (pending)",
-            total_ms=1400,
-            step_ms=300,
-        )
-        if _err_mo_p:
-            return (
-                False,
-                f"Create Order: Siebel error after My Orders Order# click (pending): {_err_mo_p[:220]}",
-                scraped,
-            )
-        _safe_page_wait(page, 1800, log_label="after_my_orders_pending_drilldown")
-        scraped["order_number"] = _mo_po or scraped.get("order_number") or ""
-        return _finalize_my_orders_attach("pending")
-
-    if _mo_oc == "allocated":
-        if not _click_my_orders_jqgrid_order_for_mobile_or_order(
-            page,
-            mobile=mobile,
-            order_number=_mo_po,
-            content_frame_selector=content_frame_selector,
-            note=note,
-            action_timeout_ms=action_timeout_ms,
-        ):
-            return False, "Create Order: Allocated My Orders row but could not open Order# drill-down.", scraped
-        try:
-            page.wait_for_load_state("networkidle", timeout=8_000)
-        except Exception:
-            pass
-        _err_mo_a = _poll_and_handle_siebel_error_popup(
-            page,
-            content_frame_selector,
-            note,
-            context="Create Order after My Orders Order# click (allocated)",
-            total_ms=1400,
-            step_ms=300,
-        )
-        if _err_mo_a:
-            return (
-                False,
-                f"Create Order: Siebel error after My Orders Order# click (allocated): {_err_mo_a[:220]}",
-                scraped,
-            )
-        _safe_page_wait(page, 1800, log_label="after_my_orders_allocated_drilldown")
-        scraped["order_number"] = _mo_po or scraped.get("order_number") or ""
-        return _finalize_my_orders_attach("allocated")
-
-    if _mo_oc == "error":
-        note(f"Create Order: My Orders mobile search error={_mos.error!r} — falling back to '+' new booking.")
-    elif _mo_oc == "unknown_rows":
-        note("Create Order: My Orders grid unknown_rows — falling back to '+' new booking.")
-    elif _mo_oc == "no_rows":
-        note("Create Order: My Orders grid empty for this mobile — full '+' new booking path.")
     else:
-        note(f"Create Order: My Orders outcome={_mo_oc!r} — full '+' new booking path.")
 
-    # JS snippet run inside each frame to find and click the first Order Number drill-down link.
-    # Siebel renders the link as <a name="Order Number">ORDER-VALUE</a> inside a grid td.
-    _JS_CLICK_ORDER_LINK = """() => {
-        const selectors = [
-            "a[name='Order Number']",
-            "a[name='Order #']",
-            "td[aria-describedby*='Order_Number'] a",
-            "td[aria-describedby*='Order#'] a",
-            "td[headers*='Order_Number'] a",
-            "a[aria-label*='Order Number']",
-            "a[aria-label*='Order #']",
-            "a[title*='Order Number']",
-            "a[title*='Order #']"
-        ];
-        const vis = (el) => {
-            if (!el) return false;
-            const st = window.getComputedStyle(el);
-            if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity) === 0) return false;
-            const r = el.getBoundingClientRect();
-            return r.width > 0 && r.height > 0;
-        };
-        for (const sel of selectors) {
-            const el = document.querySelector(sel);
-            if (el && vis(el)) {
-                el.click();
-                return 'clicked:' + sel;
-            }
-        }
-        // Fallback: first <a> inside any cell whose column header contains 'order'
-        const headers = Array.from(document.querySelectorAll('th, thead td'));
-        let orderColIdx = -1;
-        for (const h of headers) {
-            if ((h.innerText || '').toLowerCase().includes('order')) {
-                // find its column index
-                const tr = h.closest('tr');
-                if (tr) {
-                    const ths = Array.from(tr.querySelectorAll('th, td'));
-                    orderColIdx = ths.indexOf(h);
-                    break;
+        _mos = _run_vehicle_sales_my_orders_mobile_search(
+            page,
+            mobile=mobile,
+            action_timeout_ms=action_timeout_ms,
+            content_frame_selector=content_frame_selector,
+            note=note,
+        )
+        _mo_oc = (_mos.outcome or "").strip()
+        _mo_po = (_mos.primary_order or "").strip()
+        _mo_pi = (_mos.primary_invoice or "").strip()
+
+        # Grid returned rows but status/invoice columns did not classify (e.g. nonstandard header ids). If we
+        # have Order# links and no meaningful Invoice# on any row, prefer allocated-style attach (Order# drill
+        # then skip to pre–Apply Campaign) instead of creating a duplicate booking via '+'.
+        if _mo_oc == "unknown_rows" and _mos.rows:
+            _rows = _mos.rows
+            _has_order = any((r.get("order") or "").strip() for r in _rows)
+            _any_inv = any(_my_orders_invoice_meaningful((r.get("invoice") or "").strip()) for r in _rows)
+            if _has_order and not _any_inv:
+                _picked = ""
+                for r in _rows:
+                    if _my_orders_blob_looks_allocated(_my_orders_row_text_blob(r)):
+                        _picked = (r.get("order") or "").strip()
+                        if _picked:
+                            break
+                if not _picked:
+                    for r in _rows:
+                        _picked = (r.get("order") or "").strip()
+                        if _picked:
+                            break
+                if _picked:
+                    note(
+                        "Create Order: My Orders grid unknown_rows with Order# row(s) and no Invoice# — "
+                        "using allocated attach path (Order# drill, skip to pre–Apply Campaign)."
+                    )
+                    _mo_po = _picked
+                    _mo_oc = "allocated"
+
+        def _finalize_my_orders_attach(branch: str) -> tuple[bool, str | None, dict]:
+            """After ``_attach_vehicle_to_bkg`` from a My Orders grid drill-down."""
+            _att_ok, _att_err, _att_scraped = _attach_vehicle_to_bkg(
+                page,
+                full_chassis=full_chassis,
+                order_number=_mo_po or "",
+                action_timeout_ms=action_timeout_ms,
+                content_frame_selector=content_frame_selector,
+                note=note,
+                start_at_order_link_before_apply=(branch == "allocated"),
+                line_item_discount=line_item_discount,
+                attach_line_items=attach_line_items,
+            )
+            scraped["order_drilldown_opened"] = bool(_att_ok)
+            scraped["my_orders_branch"] = branch
+            if _att_scraped:
+                scraped.update(_att_scraped)
+            if not _att_ok:
+                return False, (_att_err or "attach_vehicle_to_bkg failed.").strip(), scraped
+            _safe_page_wait(page, 900, log_label=f"after_my_orders_{branch}_attach")
+            order_ref = _scrape_order_number_current()
+            if order_ref:
+                scraped["order_number"] = order_ref
+            inv_no = _scrape_invoice_number_current()
+            scraped["invoice_number"] = (inv_no or scraped.get("invoice_number") or "")
+            if callable(form_trace):
+                form_trace(
+                    "v4_create_order",
+                    "Vehicle Sales — My Orders branch",
+                    f"attach_vehicle_to_bkg_my_orders_{branch}",
+                    order_number=str(scraped.get("order_number") or ""),
+                    invoice_number=str(scraped.get("invoice_number") or ""),
+                )
+            return True, None, scraped
+
+        if _mo_oc == "invoiced":
+            scraped["order_number"] = _mo_po
+            scraped["invoice_number"] = _mo_pi
+            scraped["my_orders_branch"] = "invoiced"
+            scraped["ready_for_client_create_invoice"] = True
+            note(
+                "Create Order: My Orders grid shows Invoice# — skipping '+' booking/attach; "
+                "operator may use Create Invoice on the client app."
+            )
+            return True, None, scraped
+
+        if _mo_oc == "pending":
+            if not _click_my_orders_jqgrid_order_for_mobile_or_order(
+                page,
+                mobile=mobile,
+                order_number=_mo_po,
+                content_frame_selector=content_frame_selector,
+                note=note,
+                action_timeout_ms=action_timeout_ms,
+            ):
+                return False, "Create Order: Pending My Orders row but could not open Order# drill-down.", scraped
+            try:
+                page.wait_for_load_state("networkidle", timeout=8_000)
+            except Exception:
+                pass
+            _err_mo_p = _poll_and_handle_siebel_error_popup(
+                page,
+                content_frame_selector,
+                note,
+                context="Create Order after My Orders Order# click (pending)",
+                total_ms=1400,
+                step_ms=300,
+            )
+            if _err_mo_p:
+                return (
+                    False,
+                    f"Create Order: Siebel error after My Orders Order# click (pending): {_err_mo_p[:220]}",
+                    scraped,
+                )
+            _safe_page_wait(page, 1800, log_label="after_my_orders_pending_drilldown")
+            scraped["order_number"] = _mo_po or scraped.get("order_number") or ""
+            return _finalize_my_orders_attach("pending")
+
+        if _mo_oc == "allocated":
+            if not _click_my_orders_jqgrid_order_for_mobile_or_order(
+                page,
+                mobile=mobile,
+                order_number=_mo_po,
+                content_frame_selector=content_frame_selector,
+                note=note,
+                action_timeout_ms=action_timeout_ms,
+            ):
+                return False, "Create Order: Allocated My Orders row but could not open Order# drill-down.", scraped
+            try:
+                page.wait_for_load_state("networkidle", timeout=8_000)
+            except Exception:
+                pass
+            _err_mo_a = _poll_and_handle_siebel_error_popup(
+                page,
+                content_frame_selector,
+                note,
+                context="Create Order after My Orders Order# click (allocated)",
+                total_ms=1400,
+                step_ms=300,
+            )
+            if _err_mo_a:
+                return (
+                    False,
+                    f"Create Order: Siebel error after My Orders Order# click (allocated): {_err_mo_a[:220]}",
+                    scraped,
+                )
+            _safe_page_wait(page, 1800, log_label="after_my_orders_allocated_drilldown")
+            scraped["order_number"] = _mo_po or scraped.get("order_number") or ""
+            return _finalize_my_orders_attach("allocated")
+
+        if _mo_oc == "error":
+            note(f"Create Order: My Orders mobile search error={_mos.error!r} — falling back to '+' new booking.")
+        elif _mo_oc == "unknown_rows":
+            note("Create Order: My Orders grid unknown_rows — falling back to '+' new booking.")
+        elif _mo_oc == "no_rows":
+            note("Create Order: My Orders grid empty for this mobile — full '+' new booking path.")
+        else:
+            note(f"Create Order: My Orders outcome={_mo_oc!r} — full '+' new booking path.")
+
+        # JS snippet run inside each frame to find and click the first Order Number drill-down link.
+        # Siebel renders the link as <a name="Order Number">ORDER-VALUE</a> inside a grid td.
+        _JS_CLICK_ORDER_LINK = """() => {
+            const selectors = [
+                "a[name='Order Number']",
+                "a[name='Order #']",
+                "td[aria-describedby*='Order_Number'] a",
+                "td[aria-describedby*='Order#'] a",
+                "td[headers*='Order_Number'] a",
+                "a[aria-label*='Order Number']",
+                "a[aria-label*='Order #']",
+                "a[title*='Order Number']",
+                "a[title*='Order #']"
+            ];
+            const vis = (el) => {
+                if (!el) return false;
+                const st = window.getComputedStyle(el);
+                if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity) === 0) return false;
+                const r = el.getBoundingClientRect();
+                return r.width > 0 && r.height > 0;
+            };
+            for (const sel of selectors) {
+                const el = document.querySelector(sel);
+                if (el && vis(el)) {
+                    el.click();
+                    return 'clicked:' + sel;
                 }
             }
-        }
-        if (orderColIdx >= 0) {
-            const tbody = document.querySelector('table tbody') || document.querySelector('table');
-            if (tbody) {
-                const rows = tbody.querySelectorAll('tr');
-                for (const row of rows) {
-                    const cells = row.querySelectorAll('td');
-                    if (cells.length > orderColIdx) {
-                        const a = cells[orderColIdx].querySelector('a');
-                        if (a && vis(a)) { a.click(); return 'clicked:col-hdr-idx=' + orderColIdx; }
+            // Fallback: first <a> inside any cell whose column header contains 'order'
+            const headers = Array.from(document.querySelectorAll('th, thead td'));
+            let orderColIdx = -1;
+            for (const h of headers) {
+                if ((h.innerText || '').toLowerCase().includes('order')) {
+                    // find its column index
+                    const tr = h.closest('tr');
+                    if (tr) {
+                        const ths = Array.from(tr.querySelectorAll('th, td'));
+                        orderColIdx = ths.indexOf(h);
+                        break;
                     }
                 }
             }
-        }
-        return '';
-    }"""
-
-    _JS_CLICK_ORDER_LINK_MATCH_MOBILE = """(needle) => {
-        const n = String(needle || '').replace(/\\D/g, '');
-        if (!n) return '';
-        const vis = (el) => {
-            if (!el) return false;
-            const st = window.getComputedStyle(el);
-            if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity) === 0) return false;
-            const r = el.getBoundingClientRect();
-            return r.width > 0 && r.height > 0;
-        };
-        const rowSels = [
-            'table.ui-jqgrid-btable tbody tr',
-            'div.ui-jqgrid-bdiv table tbody tr',
-            'table.siebui-list tbody tr',
-            'table tbody tr',
-            '[role="row"]'
-        ];
-        for (const rs of rowSels) {
-            const rows = document.querySelectorAll(rs);
-            for (const tr of rows) {
-                if (tr.closest('thead')) continue;
-                if (!vis(tr)) continue;
-                const digits = (tr.innerText || '').replace(/\\D/g, '');
-                if (!digits.includes(n)) continue;
-                const a = tr.querySelector(
-                    "a[name='Order Number'], a[name='Order #'], td[aria-describedby*='Order_Number'] a, td[aria-describedby*='Order#'] a"
-                ) || tr.querySelector('td a');
-                if (a && vis(a)) {
-                    try { a.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
-                    a.click();
-                    return 'mobile-match:' + rs;
+            if (orderColIdx >= 0) {
+                const tbody = document.querySelector('table tbody') || document.querySelector('table');
+                if (tbody) {
+                    const rows = tbody.querySelectorAll('tr');
+                    for (const row of rows) {
+                        const cells = row.querySelectorAll('td');
+                        if (cells.length > orderColIdx) {
+                            const a = cells[orderColIdx].querySelector('a');
+                            if (a && vis(a)) { a.click(); return 'clicked:col-hdr-idx=' + orderColIdx; }
+                        }
+                    }
                 }
             }
-        }
-        return '';
-    }"""
+            return '';
+        }"""
 
-    def _click_order_link_via_js() -> bool:
-        """Try JS evaluate on every frame to click the Order Number drill-down link."""
-        for frame in _ordered_frames(page):
-            try:
-                result = frame.evaluate(_JS_CLICK_ORDER_LINK)
-                if result:
-                    note(f"Create Order: JS clicked Order link in frame. result={result!r}")
-                    return True
-            except Exception:
-                continue
-        return False
+        _JS_CLICK_ORDER_LINK_MATCH_MOBILE = """(needle) => {
+            const n = String(needle || '').replace(/\\D/g, '');
+            if (!n) return '';
+            const vis = (el) => {
+                if (!el) return false;
+                const st = window.getComputedStyle(el);
+                if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity) === 0) return false;
+                const r = el.getBoundingClientRect();
+                return r.width > 0 && r.height > 0;
+            };
+            const rowSels = [
+                'table.ui-jqgrid-btable tbody tr',
+                'div.ui-jqgrid-bdiv table tbody tr',
+                'table.siebui-list tbody tr',
+                'table tbody tr',
+                '[role="row"]'
+            ];
+            for (const rs of rowSels) {
+                const rows = document.querySelectorAll(rs);
+                for (const tr of rows) {
+                    if (tr.closest('thead')) continue;
+                    if (!vis(tr)) continue;
+                    const digits = (tr.innerText || '').replace(/\\D/g, '');
+                    if (!digits.includes(n)) continue;
+                    const a = tr.querySelector(
+                        "a[name='Order Number'], a[name='Order #'], td[aria-describedby*='Order_Number'] a, td[aria-describedby*='Order#'] a"
+                    ) || tr.querySelector('td a');
+                    if (a && vis(a)) {
+                        try { a.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
+                        a.click();
+                        return 'mobile-match:' + rs;
+                    }
+                }
+            }
+            return '';
+        }"""
 
-    def _click_order_link_js_row_matching_mobile() -> bool:
-        """Prefer Order# link on the grid row that contains the customer's mobile digits."""
-        nd = re.sub(r"\D", "", (mobile or "").strip())
-        if not nd:
-            return False
-        for frame in _ordered_frames(page):
-            try:
-                result = frame.evaluate(_JS_CLICK_ORDER_LINK_MATCH_MOBILE, nd)
-                if result:
-                    note(f"Create Order: JS clicked Order# on mobile-matched row. result={result!r}")
-                    return True
-            except Exception:
-                continue
-        return False
-
-    def _click_order_link_via_playwright() -> bool:
-        """Try Playwright locators across all roots to click the Order Number link."""
-        for root in _roots():
-            for css in (
-                "a[name='Order Number']",
-                "a[name='Order #']",
-                "td[aria-describedby*='Order_Number' i] a",
-                "td[aria-describedby*='Order#' i] a",
-                "a[aria-label*='Order Number' i]",
-                "a[aria-label*='Order #' i]",
-                "a[title*='Order Number' i]",
-                "a[title*='Order #' i]",
-            ):
+        def _click_order_link_via_js() -> bool:
+            """Try JS evaluate on every frame to click the Order Number drill-down link."""
+            for frame in _ordered_frames(page):
                 try:
-                    loc = root.locator(css).first
-                    if loc.count() <= 0 or not loc.is_visible(timeout=600):
-                        continue
-                    try:
-                        loc.click(timeout=min(action_timeout_ms, 3000))
-                    except Exception:
-                        loc.click(timeout=min(action_timeout_ms, 3000), force=True)
-                    note(f"Create Order: Playwright clicked Order link css={css!r}")
-                    return True
+                    result = frame.evaluate(_JS_CLICK_ORDER_LINK)
+                    if result:
+                        note(f"Create Order: JS clicked Order link in frame. result={result!r}")
+                        return True
                 except Exception:
                     continue
-        return False
+            return False
 
-    def _open_order_link(attempt_label: str) -> bool:
-        """Mobile-matched row first, then first visible Order# (JS / Playwright)."""
-        note(f"Create Order: attempting Order# click ({attempt_label}).")
-        if _click_order_link_js_row_matching_mobile():
-            return True
-        if _click_order_link_via_js():
-            return True
-        if _click_order_link_via_playwright():
-            return True
-        return False
+        def _click_order_link_js_row_matching_mobile() -> bool:
+            """Prefer Order# link on the grid row that contains the customer's mobile digits."""
+            nd = re.sub(r"\D", "", (mobile or "").strip())
+            if not nd:
+                return False
+            for frame in _ordered_frames(page):
+                try:
+                    result = frame.evaluate(_JS_CLICK_ORDER_LINK_MATCH_MOBILE, nd)
+                    if result:
+                        note(f"Create Order: JS clicked Order# on mobile-matched row. result={result!r}")
+                        return True
+                except Exception:
+                    continue
+            return False
+
+        def _click_order_link_via_playwright() -> bool:
+            """Try Playwright locators across all roots to click the Order Number link."""
+            for root in _roots():
+                for css in (
+                    "a[name='Order Number']",
+                    "a[name='Order #']",
+                    "td[aria-describedby*='Order_Number' i] a",
+                    "td[aria-describedby*='Order#' i] a",
+                    "a[aria-label*='Order Number' i]",
+                    "a[aria-label*='Order #' i]",
+                    "a[title*='Order Number' i]",
+                    "a[title*='Order #' i]",
+                ):
+                    try:
+                        loc = root.locator(css).first
+                        if loc.count() <= 0 or not loc.is_visible(timeout=600):
+                            continue
+                        try:
+                            loc.click(timeout=min(action_timeout_ms, 3000))
+                        except Exception:
+                            loc.click(timeout=min(action_timeout_ms, 3000), force=True)
+                        note(f"Create Order: Playwright clicked Order link css={css!r}")
+                        return True
+                    except Exception:
+                        continue
+            return False
+
+        def _open_order_link(attempt_label: str) -> bool:
+            """Mobile-matched row first, then first visible Order# (JS / Playwright)."""
+            note(f"Create Order: attempting Order# click ({attempt_label}).")
+            if _click_order_link_js_row_matching_mobile():
+                return True
+            if _click_order_link_via_js():
+                return True
+            if _click_order_link_via_playwright():
+                return True
+            return False
 
     if True:  # Full '+' new booking; My Orders grid branches above return early when applicable.
         # 2) Click + (Sales Orders New:List)

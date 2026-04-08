@@ -217,7 +217,8 @@ def list_masters_recent(
     """
     Processed tab list.
 
-    * No ``challan_book_num``: masters from the last *days* that have **at least one** Failed detail line.
+    * No ``challan_book_num``: masters from the last *days* that need attention: **at least one** Failed
+      detail line **or** master ``invoice_status`` = Failed (e.g. all lines Ready but order/invoice failed).
     * With non-empty ``challan_book_num`` (trimmed): masters for this dealer whose ``challan_book_num`` matches
       (case-insensitive, trimmed); **no** date window — used to open older challans by book number.
     """
@@ -241,10 +242,13 @@ def list_masters_recent(
                     + """
                 WHERE m.from_dealer_id = %s
                   AND m.created_at >= CURRENT_TIMESTAMP - (%s::integer * INTERVAL '1 day')
-                  AND EXISTS (
-                    SELECT 1 FROM challan_details_staging d
-                    WHERE d.challan_batch_id = m.challan_batch_id
-                      AND LOWER(TRIM(COALESCE(d.status, ''))) = 'failed'
+                  AND (
+                    EXISTS (
+                        SELECT 1 FROM challan_details_staging d
+                        WHERE d.challan_batch_id = m.challan_batch_id
+                          AND LOWER(TRIM(COALESCE(d.status, ''))) = 'failed'
+                    )
+                    OR LOWER(TRIM(COALESCE(m.invoice_status, ''))) = 'failed'
                   )
                 ORDER BY m.created_at DESC, m.challan_batch_id DESC
                 """,

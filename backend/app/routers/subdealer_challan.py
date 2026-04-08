@@ -123,7 +123,12 @@ def process_batch(
 @router.get("/staging/recent")
 def list_recent_staging(
     dealer_id: int | None = Query(None, description="from_dealer_id; defaults to server DEALER_ID"),
-    days: int = Query(15, ge=1, le=365, description="With default list: masters in the last N days (failed lines only)"),
+    days: int = Query(
+        15,
+        ge=1,
+        le=365,
+        description="Default list: last N days, batches with failed detail lines or failed invoice_status",
+    ),
     challan_book_num: str | None = Query(
         None,
         description="Trimmed challan book number; when set, matches challan_book_num for this dealer (any age); ignores failed-only and days window",
@@ -131,7 +136,7 @@ def list_recent_staging(
 ) -> list[dict]:
     """``challan_master_staging`` rows with ``failed_lines`` for the Processed tab.
 
-    Default: batches from the last *days* that have at least one Failed detail line.
+    Default: batches from the last *days* with at least one Failed detail line **or** master invoice failed.
     With ``challan_book_num``: batches matching that book number (``challan_book_num`` column), no date limit.
     """
     did = int(dealer_id) if dealer_id is not None else int(DEALER_ID)
