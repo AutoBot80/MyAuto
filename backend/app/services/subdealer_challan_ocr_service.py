@@ -153,6 +153,36 @@ def _rows_from_table(table: list[list[str]], header_row_index: int) -> list[dict
     return out
 
 
+def normalize_challan_vehicle_key(raw_engine: str | None, raw_chassis: str | None) -> tuple[str, str]:
+    """Same normalisation as dedupe_challan_lines: strip + upper for engine/chassis pair."""
+    e = (raw_engine or "").strip().upper()
+    c = (raw_chassis or "").strip().upper()
+    return (e, c)
+
+
+def dedupe_raw_challan_lines(
+    lines: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int]:
+    """
+    Drop duplicate (raw_engine, raw_chassis) pairs within one request (first wins).
+    ``lines`` entries use keys ``raw_engine`` / ``raw_chassis`` (API staging shape).
+    Returns (deduped, duplicate_count_dropped).
+    """
+    seen: set[tuple[str, str]] = set()
+    out: list[dict[str, Any]] = []
+    dropped = 0
+    for ln in lines:
+        key = normalize_challan_vehicle_key(ln.get("raw_engine"), ln.get("raw_chassis"))
+        if not key[0] and not key[1]:
+            continue
+        if key in seen:
+            dropped += 1
+            continue
+        seen.add(key)
+        out.append(ln)
+    return out, dropped
+
+
 def dedupe_challan_lines(lines: list[dict[str, str]]) -> tuple[list[dict[str, str]], int]:
     """
     Drop duplicate (engine_no, chassis_no) pairs after normalisation (strip, upper).

@@ -48,6 +48,10 @@ export type CreateChallanStagingBody = {
 export type CreateChallanStagingResponse = {
   challan_batch_id: string;
   ok: boolean;
+  /** Vehicles dropped because the same engine/chassis already exists on a challan for this book+date (any status). */
+  dropped_existing_same_book_date?: number;
+  /** Duplicate engine/chassis rows removed within this submission (first kept). */
+  dropped_duplicate_in_request?: number;
 };
 
 export async function createChallanStaging(

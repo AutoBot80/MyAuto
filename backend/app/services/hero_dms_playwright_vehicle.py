@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+from contextlib import contextmanager
 from collections.abc import Callable
 from datetime import date, datetime, timedelta
 from playwright.sync_api import Frame, Page, TimeoutError as PlaywrightTimeout
@@ -23,7 +24,9 @@ from app.config import (
 )
 from app.services.hero_dms_shared_utilities import (
     SiebelDmsUrls,
+    begin_sleep_stats_tracking,
     _detect_siebel_error_popup,
+    end_sleep_stats_tracking,
     _goto,
     _is_browser_disconnected_error,
     _iter_frame_locator_roots,
@@ -69,6 +72,56 @@ def _dump_branch_hits(note) -> None:
     logger.info("branch_hits: %s", _BRANCH_HITS)
 
 
+def _pv_timing(note, msg: str) -> None:
+    """Emit one structured timing line for ``prepare_vehicle`` (``TIMING:`` prefix — Subdealer forwards to log file)."""
+    if callable(note):
+        note(f"TIMING: {msg}")
+
+
+def _pv_networkidle(note, page: Page, timeout_ms: int, label: str) -> bool:
+    """
+    ``wait_for_load_state(networkidle)`` with elapsed ms + ok logged. Does not raise on timeout (matches existing flow).
+    Returns True if network idle was reached.
+    """
+    t0 = time.perf_counter()
+    ok = True
+    try:
+        page.wait_for_load_state("networkidle", timeout=timeout_ms)
+    except PlaywrightTimeout:
+        ok = False
+    except Exception as e:
+        if _is_browser_disconnected_error(e):
+            raise
+        ok = False
+    elapsed_ms = (time.perf_counter() - t0) * 1000.0
+    _pv_timing(
+        note,
+        f"networkidle label={label} timeout_ms={timeout_ms} elapsed_ms={elapsed_ms:.0f} ok={'true' if ok else 'false'}",
+    )
+    return ok
+
+
+@contextmanager
+def _prepare_vehicle_timing_scope(note):
+    """Aggregate ``_safe_page_wait`` by label and log total wall time for ``prepare_vehicle`` body."""
+    tok = begin_sleep_stats_tracking()
+    t0 = time.perf_counter()
+    try:
+        yield
+    finally:
+        stats = end_sleep_stats_tracking(tok)
+        if stats and callable(note):
+            parts: list[str] = []
+            for k in sorted(stats.keys()):
+                c = stats[k]
+                parts.append(f"{k}={int(c['count'])}×{int(c['total_ms'])}ms")
+            _pv_timing(note, "sleep_summary " + "; ".join(parts))
+        _pv_timing(
+            note,
+            "phase=prepare_vehicle_total elapsed_ms=%.0f" % ((time.perf_counter() - t0) * 1000.0),
+        )
+
+
 # Left **Search Results** pane: usually ``div#gview_s_1001_l`` but Siebel may reassign the gview id
 # after re-navigation (seen: ``gview_s_1003_l``). We scan every ``div.ui-jqgrid-view[id^="gview_s_"]``
 # **except** the center list (``gview_s_1_l``) for ``a.drilldown[name="Title"]``.
@@ -88,6 +141,7 @@ def _siebel_poll_left_search_title_matches(
     *,
     poll_ms: int = _LEFT_SEARCH_POLL_MS,
     max_polls: int = _LEFT_SEARCH_MAX_POLLS,
+    note=None,
 ) -> bool:
     """
     Poll left **Search Results** pane until a visible Title drilldown link contains the VIN
@@ -101,6 +155,7 @@ def _siebel_poll_left_search_title_matches(
     polls = max(1, int(max_polls))
     interval = max(50, int(poll_ms))
     stale_logged = False
+    start_t = time.perf_counter()
 
     js = """(vk) => {
       const norm = s => String(s || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
@@ -121,6 +176,11 @@ def _siebel_poll_left_search_title_matches(
         try:
             if page.evaluate(js, vk_upper):
                 _safe_page_wait(page, interval, log_label="left_search_match_settle")
+                _pv_timing(
+                    note,
+                    "poll_left_search_title_matches ok=true round=%d max_polls=%d interval_ms=%d elapsed_ms=%.0f"
+                    % (round_i + 1, polls, interval, (time.perf_counter() - start_t) * 1000.0),
+                )
                 return True
         except Exception:
             pass
@@ -133,6 +193,11 @@ def _siebel_poll_left_search_title_matches(
         if round_i < polls - 1:
             _safe_page_wait(page, interval, log_label="left_search_stale_poll")
 
+    _pv_timing(
+        note,
+        "poll_left_search_title_matches ok=false max_polls=%d interval_ms=%d elapsed_ms=%.0f"
+        % (polls, interval, (time.perf_counter() - start_t) * 1000.0),
+    )
     try:
         diag = page.evaluate("""() => {
           const gvs = [];
@@ -158,6 +223,7 @@ def _siebel_poll_center_list_matches(
     *,
     poll_ms: int = _CENTER_LIST_POLL_MS,
     max_polls: int = _CENTER_LIST_MAX_POLLS,
+    note=None,
 ) -> bool:
     """
     After the left Title click, poll ``#s_1_l`` (center list) until a visible row cell
@@ -170,6 +236,7 @@ def _siebel_poll_center_list_matches(
     polls = max(1, int(max_polls))
     interval = max(50, int(poll_ms))
     sync_logged = False
+    start_t = time.perf_counter()
 
     js = """(vk) => {
       const norm = s => String(s || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
@@ -191,6 +258,11 @@ def _siebel_poll_center_list_matches(
         try:
             if page.evaluate(js, vk_upper):
                 _safe_page_wait(page, interval, log_label="center_list_match_settle")
+                _pv_timing(
+                    note,
+                    "poll_center_list_matches ok=true round=%d max_polls=%d interval_ms=%d elapsed_ms=%.0f"
+                    % (round_i + 1, polls, interval, (time.perf_counter() - start_t) * 1000.0),
+                )
                 return True
         except Exception:
             pass
@@ -203,6 +275,11 @@ def _siebel_poll_center_list_matches(
             )
         if round_i < polls - 1:
             _safe_page_wait(page, interval, log_label="center_list_poll")
+    _pv_timing(
+        note,
+        "poll_center_list_matches ok=false max_polls=%d interval_ms=%d elapsed_ms=%.0f"
+        % (polls, interval, (time.perf_counter() - start_t) * 1000.0),
+    )
     return False
 
 
@@ -1405,9 +1482,10 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         return False, "Could not open Pre-check tab (Third Level View Bar text match failed)."
 
     try:
-        page.wait_for_load_state("networkidle", timeout=8_000)
-    except Exception:
-        pass
+        _pv_networkidle(note, page, 8_000, f"{log_prefix}_after_precheck_tab")
+    except Exception as e:
+        if _is_browser_disconnected_error(e):
+            raise
 
     _siebel_note_frame_focus_snapshot(
         page,
@@ -2029,9 +2107,10 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     _safe_page_wait(page, 200, log_label="after_pdi_tab_click_refresh")
     _safe_page_wait(page, 1500, log_label="after_pdi_tab")
     try:
-        page.wait_for_load_state("networkidle", timeout=8_000)
-    except Exception:
-        pass
+        _pv_networkidle(note, page, 8_000, f"{log_prefix}_after_pdi_tab")
+    except Exception as e:
+        if _is_browser_disconnected_error(e):
+            raise
 
     _siebel_note_frame_focus_snapshot(
         page,
@@ -2800,6 +2879,7 @@ def _wait_for_vehicle_find_applet_ready(
     *,
     content_frame_selector: str | None,
     wait_ms: int = 4500,
+    note=None,
 ) -> bool:
     """Wait until Vehicle List find applet controls are visible in any candidate root."""
     _js = """() => {
@@ -2832,10 +2912,24 @@ def _wait_for_vehicle_find_applet_ready(
         for root in _siebel_locator_search_roots(page, content_frame_selector):
             try:
                 if bool(root.evaluate(_js)):
+                    _pv_timing(
+                        note,
+                        "wait_vehicle_find_applet_ready ok=true wait_ms=%d polls=%d elapsed_ms=%.0f"
+                        % (
+                            wait_ms,
+                            poll_count,
+                            (time.monotonic() - start_t) * 1000.0,
+                        ),
+                    )
                     return True
             except Exception:
                 continue
         _safe_page_wait(page, 140, log_label="wait_vehicle_find_applet_ready")
+    _pv_timing(
+        note,
+        "wait_vehicle_find_applet_ready ok=false wait_ms=%d polls=%d elapsed_ms=%.0f"
+        % (wait_ms, poll_count, (time.monotonic() - start_t) * 1000.0),
+    )
     return False
 
 
@@ -2855,18 +2949,33 @@ def _siebel_goto_vehicle_list_and_search(
 
     Returns an error string on failure, or ``None`` on success. Does **not** scrape the grid — the
     caller polls the left pane, clicks, polls center pane, and only *then* scrapes."""
+    t_phase = time.perf_counter()
+
+    def _log_phase_outcome(error_msg: str | None) -> str | None:
+        em = (error_msg or "").strip()
+        _pv_timing(
+            note,
+            "phase=goto_vehicle_list_and_search elapsed_ms=%.0f %s"
+            % (
+                (time.perf_counter() - t_phase) * 1000.0,
+                ("error=" + em[:240]) if em else "ok=true",
+            ),
+        )
+        return error_msg if em else None
+
     _goto(page, vehicle_url, "vehicle_list", nav_timeout_ms=nav_timeout_ms)
     _safe_page_wait(page, 1500, log_label="vehicle_list_open")
-    first_ready = _wait_for_vehicle_find_applet_ready(
+    _wait_for_vehicle_find_applet_ready(
         page,
         content_frame_selector=content_frame_selector,
         wait_ms=4500,
+        note=note,
     )
 
     fp = (frame_p or "").strip()
     ep = (engine_p or "").strip()
     if not fp or not ep:
-        return (
+        return _log_phase_outcome(
             "Siebel: Auto Vehicle List requires non-empty **frame_partial** (VIN/chassis) and "
             "**engine_partial**; Find→Vehicles uses *-prefixed partials only (no key/grid search fallback)."
         )
@@ -2893,6 +3002,7 @@ def _siebel_goto_vehicle_list_and_search(
             page,
             content_frame_selector=content_frame_selector,
             wait_ms=3200,
+            note=note,
         ):
             query_ok = _siebel_prepare_vehicle_list_find_vin_engine(
                 page,
@@ -2906,19 +3016,20 @@ def _siebel_goto_vehicle_list_and_search(
             note("prepare_vehicle: Find→Vehicles query succeeded after applet-ready retry.")
         else:
             final_ready = _wait_for_vehicle_find_applet_ready(
-                page, content_frame_selector=content_frame_selector, wait_ms=900
+                page,
+                content_frame_selector=content_frame_selector,
+                wait_ms=900,
+                note=note,
             )
             _hint = "find applet not ready/visible" if not final_ready else "query submit did not complete"
-            return (
+            return _log_phase_outcome(
                 "Siebel: Find→Vehicles VIN/Engine query failed even with frame_partial/engine_partial present; "
                 f"likely {_hint}. If applet is in a nested iframe, set DMS_SIEBEL_CONTENT_FRAME_SELECTOR."
             )
 
+    _safe_page_wait(page, 2500, log_label="vehicle_search_settle")
     try:
-        _safe_page_wait(page, 2500, log_label="vehicle_search_settle")
-        page.wait_for_load_state("networkidle", timeout=12_000)
-    except PlaywrightTimeout:
-        note("networkidle wait timed out; continuing.")
+        _pv_networkidle(note, page, 12_000, "vehicle_search_after_find_settle")
     except Exception as e:
         if _is_browser_disconnected_error(e):
             raise RuntimeError(
@@ -2927,7 +3038,7 @@ def _siebel_goto_vehicle_list_and_search(
             ) from e
         raise
 
-    return None
+    return _log_phase_outcome(None)
 
 
 def _siebel_locator_roots_for_vehicle_prep(
@@ -3380,11 +3491,10 @@ def _prepare_vehicle_open_serial_detail_from_vehicle_grid(
     ):
         _safe_page_wait(page, 900, log_label="after_prepare_vehicle_vin_drilldown")
         try:
-            page.wait_for_load_state("networkidle", timeout=10_000)
-        except PlaywrightTimeout:
-            note("prepare_vehicle: networkidle after VIN drilldown timed out; continuing.")
-        except Exception:
-            pass
+            _pv_networkidle(note, page, 10_000, "prepare_vehicle_open_serial_after_vin_drilldown")
+        except Exception as e:
+            if _is_browser_disconnected_error(e):
+                raise
     else:
         note(
             "prepare_vehicle: VIN drilldown (name='VIN') not found on vehicle grid — "
@@ -3407,11 +3517,10 @@ def _prepare_vehicle_open_serial_detail_from_vehicle_grid(
     note("prepare_vehicle: opened vehicle serial detail (Serial Number drilldown).")
     _safe_page_wait(page, 1200, log_label="after_prepare_vehicle_serial_drilldown")
     try:
-        page.wait_for_load_state("networkidle", timeout=12_000)
-    except PlaywrightTimeout:
-        note("prepare_vehicle: networkidle after Serial Number drilldown timed out; continuing.")
-    except Exception:
-        pass
+        _pv_networkidle(note, page, 12_000, "prepare_vehicle_open_serial_after_serial_drilldown")
+    except Exception as e:
+        if _is_browser_disconnected_error(e):
+            raise
     _siebel_note_frame_focus_snapshot(
         page,
         note,
@@ -3455,13 +3564,12 @@ def _prepare_vehicle_scrape_serial_precheck_pdi_and_features(
         )
         return None
 
+    _safe_page_wait(page, 1200, log_label="after_serial_number_click")
     try:
-        _safe_page_wait(page, 1200, log_label="after_serial_number_click")
-        page.wait_for_load_state("networkidle", timeout=10_000)
-    except PlaywrightTimeout:
-        note("prepare_vehicle: networkidle after Serial Number timed out; continuing.")
-    except Exception:
-        pass
+        _pv_networkidle(note, page, 10_000, "prepare_vehicle_scrape_after_serial_number_click")
+    except Exception as e:
+        if _is_browser_disconnected_error(e):
+            raise
 
     _serial_pc_ok, _serial_pc_err = _siebel_run_vehicle_serial_detail_precheck_pdi(
         page,
@@ -3482,9 +3590,10 @@ def _prepare_vehicle_scrape_serial_precheck_pdi_and_features(
         return None
     _safe_page_wait(page, 1000, log_label="after_features_tab")
     try:
-        page.wait_for_load_state("networkidle", timeout=8_000)
-    except Exception:
-        pass
+        _pv_networkidle(note, page, 8_000, "prepare_vehicle_after_features_tab")
+    except Exception as e:
+        if _is_browser_disconnected_error(e):
+            raise
 
     cc, vt = _siebel_scrape_features_cubic_and_vehicle_type(page)
     if cc:
@@ -3875,229 +3984,250 @@ def prepare_vehicle(
             [],
         )
 
-    # --- Step 1: Navigate + Find→Vehicles search ---
-    veh_err = _siebel_goto_vehicle_list_and_search(
-        page,
-        vehicle_url,
-        frame_p,
-        engine_p,
-        nav_timeout_ms=nav_timeout_ms,
-        action_timeout_ms=action_timeout_ms,
-        content_frame_selector=content_frame_selector,
-        note=note,
-        form_trace=form_trace,
-    )
-    if veh_err:
-        if callable(step):
-            step("Stopped during vehicle list search.")
-        return False, veh_err, {}, False, [], []
-
-    if not frame_p:
-        return (
-            False,
-            "Siebel: missing frame_partial (VIN/chassis) for left Search Results drill-in.",
-            {},
-            False,
-            [],
-            [],
-        )
-
-    # --- Step 2: Poll left pane until our VIN appears ---
-    _safe_page_wait(page, 400, log_label="pre_left_pane_poll")
-    if not _siebel_poll_left_search_title_matches(page, frame_p):
-        return (
-            False,
-            "Siebel: left Search Results pane did not show the expected VIN after Find→Vehicles "
-            f"(polled left-pane gview Title links for '{frame_p}').",
-            {},
-            False,
-            [],
-            [],
-        )
-    note("prepare_vehicle: left Search Results pane shows the VIN.")
-
-    # --- Step 3: Click the left pane Title link ---
-    if not _siebel_try_click_vin_search_hit_link(
-        page,
-        frame_p,
-        timeout_ms=action_timeout_ms,
-    ):
-        return (
-            False,
-            "Siebel: could not open vehicle detail from left Search Results (VIN Title drilldown).",
-            {},
-            False,
-            [],
-            [],
-        )
-    note("prepare_vehicle: opened vehicle from left Search Results (VIN Title drilldown).")
-
-    # --- Step 4: Poll center pane until the clicked VIN appears ---
-    _safe_page_wait(page, 300, log_label="after_left_title_click_tick")
-    if not _siebel_poll_center_list_matches(page, frame_p):
-        return (
-            False,
-            "Siebel: center vehicle list did not update to show the selected VIN after left Search Results "
-            "drill-in (wait for #s_1_l row to match).",
-            {},
-            False,
-            [],
-            [],
-        )
-    note("prepare_vehicle: center vehicle list shows selected VIN.")
-
-    # --- Step 5: Scrape the center grid (now showing the correct vehicle) ---
-    scraped = scrape_siebel_vehicle_row(page, content_frame_selector=content_frame_selector)
-    if scraped.get("key_num") or scraped.get("frame_num") or scraped.get("engine_num"):
-        note("prepare_vehicle: scraped vehicle row from center grid.")
-    else:
-        note("prepare_vehicle: center grid scrape returned no key/chassis/engine; continuing.")
-
-    try:
-        _safe_page_wait(page, 1200, log_label="after_vehicle_left_pane_vin_settle")
-        page.wait_for_load_state("networkidle", timeout=12_000)
-    except PlaywrightTimeout:
-        note("prepare_vehicle: networkidle after VIN drill-in timed out; continuing.")
-    except Exception:
-        pass
-
-    _siebel_fill_key_battery_from_dms_values(
-        page,
-        dms_values,
-        action_timeout_ms=action_timeout_ms,
-        note=note,
-        log_prefix="Vehicle prep",
-    )
-
-    _prepare_vehicle_merge_detail_from_aria_labels(
-        page, scraped, note=note, form_trace=form_trace
-    )
-
-    _inv_gate_err = _prepare_vehicle_inventory_location_in_transit_gate(
-        scraped,
-        page,
-        note=note,
-        form_trace=form_trace,
-        step=step,
-    )
-    if _inv_gate_err:
-        merged = _merge_dms_and_grid_for_vehicle_master(dms_values, scraped)
-        vm_crit, vm_info = _vehicle_master_prepare_gaps(merged)
-        return False, _inv_gate_err, merged, True, vm_crit, vm_info
-
-    _detail_pc_err: str | None = None
-    if not bool(scraped.get("in_transit")):
-        _detail_pc_err = _prepare_vehicle_scrape_serial_precheck_pdi_and_features(
+    with _prepare_vehicle_timing_scope(note):
+        # --- Step 1: Navigate + Find→Vehicles search ---
+        veh_err = _siebel_goto_vehicle_list_and_search(
             page,
-            scraped,
+            vehicle_url,
+            frame_p,
+            engine_p,
+            nav_timeout_ms=nav_timeout_ms,
             action_timeout_ms=action_timeout_ms,
             content_frame_selector=content_frame_selector,
             note=note,
             form_trace=form_trace,
         )
-        if _detail_pc_err:
-            merged = _merge_dms_and_grid_for_vehicle_master(dms_values, scraped)
-            vm_crit, vm_info = _vehicle_master_prepare_gaps(merged)
+        if veh_err:
             if callable(step):
-                step("Stopped: vehicle serial drilldown, Features, Pre-check, or PDI failed.")
+                step("Stopped during vehicle list search.")
+            return False, veh_err, {}, False, [], []
+    
+        if not frame_p:
             return (
                 False,
-                _detail_pc_err,
-                merged,
-                bool(scraped.get("in_transit")),
-                vm_crit,
-                vm_info,
+                "Siebel: missing frame_partial (VIN/chassis) for left Search Results drill-in.",
+                {},
+                False,
+                [],
+                [],
             )
-    else:
-        note(
-            "prepare_vehicle: vehicle flagged in-transit — skipping Serial / Features / Pre-check / PDI "
-            "(Siebel rejects Pre-check and PDI until received at dealer)."
+
+        t_list_grid = time.perf_counter()
+        # --- Step 2: Poll left pane until our VIN appears ---
+        _safe_page_wait(page, 400, log_label="pre_left_pane_poll")
+        if not _siebel_poll_left_search_title_matches(page, frame_p, note=note):
+            return (
+                False,
+                "Siebel: left Search Results pane did not show the expected VIN after Find→Vehicles "
+                f"(polled left-pane gview Title links for '{frame_p}').",
+                {},
+                False,
+                [],
+                [],
+            )
+        note("prepare_vehicle: left Search Results pane shows the VIN.")
+    
+        # --- Step 3: Click the left pane Title link ---
+        if not _siebel_try_click_vin_search_hit_link(
+            page,
+            frame_p,
+            timeout_ms=action_timeout_ms,
+        ):
+            return (
+                False,
+                "Siebel: could not open vehicle detail from left Search Results (VIN Title drilldown).",
+                {},
+                False,
+                [],
+                [],
+            )
+        note("prepare_vehicle: opened vehicle from left Search Results (VIN Title drilldown).")
+    
+        # --- Step 4: Poll center pane until the clicked VIN appears ---
+        _safe_page_wait(page, 300, log_label="after_left_title_click_tick")
+        if not _siebel_poll_center_list_matches(page, frame_p, note=note):
+            return (
+                False,
+                "Siebel: center vehicle list did not update to show the selected VIN after left Search Results "
+                "drill-in (wait for #s_1_l row to match).",
+                {},
+                False,
+                [],
+                [],
+            )
+        note("prepare_vehicle: center vehicle list shows selected VIN.")
+    
+        # --- Step 5: Scrape the center grid (now showing the correct vehicle) ---
+        scraped = scrape_siebel_vehicle_row(page, content_frame_selector=content_frame_selector)
+        if scraped.get("key_num") or scraped.get("frame_num") or scraped.get("engine_num"):
+            note("prepare_vehicle: scraped vehicle row from center grid.")
+        else:
+            note("prepare_vehicle: center grid scrape returned no key/chassis/engine; continuing.")
+
+        _safe_page_wait(page, 1200, log_label="after_vehicle_left_pane_vin_settle")
+        try:
+            _pv_networkidle(note, page, 12_000, "after_center_scrape_vin_drill_in")
+        except Exception as e:
+            if _is_browser_disconnected_error(e):
+                raise
+        _pv_timing(
+            note,
+            "phase=list_grid_through_post_scrape elapsed_ms=%.0f frame_partial=%r"
+            % ((time.perf_counter() - t_list_grid) * 1000.0, frame_p[:32] if frame_p else ""),
         )
 
-    note(
-        "Vehicle grid scrape (prepare_vehicle): "
-        f"model={scraped.get('model')!r}, color={scraped.get('color')!r}, "
-        f"frame_num={scraped.get('frame_num')!r}, engine_num={scraped.get('engine_num')!r}, "
-        f"key_num={scraped.get('key_num')!r}."
-    )
+        t_detail = time.perf_counter()
+        _siebel_fill_key_battery_from_dms_values(
+            page,
+            dms_values,
+            action_timeout_ms=action_timeout_ms,
+            note=note,
+            log_prefix="Vehicle prep",
+        )
+    
+        _prepare_vehicle_merge_detail_from_aria_labels(
+            page, scraped, note=note, form_trace=form_trace
+        )
+    
+        _inv_gate_err = _prepare_vehicle_inventory_location_in_transit_gate(
+            scraped,
+            page,
+            note=note,
+            form_trace=form_trace,
+            step=step,
+        )
+        if _inv_gate_err:
+            merged = _merge_dms_and_grid_for_vehicle_master(dms_values, scraped)
+            vm_crit, vm_info = _vehicle_master_prepare_gaps(merged)
+            return False, _inv_gate_err, merged, True, vm_crit, vm_info
 
-    in_transit_state = bool(scraped.get("in_transit"))
-    _inv_txt = (scraped.get("inventory_location") or "").strip()
-    if _inv_txt:
-        note(
-            f"DECISION: vehicle_in_transit={in_transit_state!r} "
-            f"(Inventory Location={_inv_txt!r})."
+        _pv_timing(
+            note,
+            "phase=key_battery_aria_inventory_gate elapsed_ms=%.0f"
+            % ((time.perf_counter() - t_detail) * 1000.0),
         )
-    else:
-        note(f"DECISION: vehicle_in_transit={in_transit_state!r} (list grid heuristic; no Inventory Location).")
-    if callable(form_trace):
-        form_trace(
-            "5_vehicle_list",
-            "Auto Vehicle List — results grid (scraped row)",
-            "read_first_matching_row_from_grid",
-            key_num=str(scraped.get("key_num") or ""),
-            frame_num=str(scraped.get("frame_num") or ""),
-            engine_num=str(scraped.get("engine_num") or ""),
-            model=str(scraped.get("model") or ""),
-            in_transit=in_transit_state,
-            inventory_location=str(scraped.get("inventory_location") or "")[:200],
-        )
-
-    if in_transit_state:
-        note(
-            "prepare_vehicle: vehicle in-transit — opening receipt view if configured; "
-            "Pre-check/PDI skipped (not run until dealer stock)."
-        )
-        if callable(step):
-            step("Vehicle appears in transit — receipt path only (Pre-check/PDI skipped).")
-        recv_u = (urls.vehicles or "").strip()
-        if recv_u:
-            if callable(form_trace):
-                form_trace(
-                    "5b_in_transit_receipt",
-                    "Vehicles / In Transit — receipt view (DMS_REAL_URL_VEHICLES)",
-                    "goto_receipt_URL_then_Process_Receipt_toolbar_if_present",
-                    receipt_url_truncated=recv_u[:200],
+        t_serial = time.perf_counter()
+        _detail_pc_err: str | None = None
+        if not bool(scraped.get("in_transit")):
+            _detail_pc_err = _prepare_vehicle_scrape_serial_precheck_pdi_and_features(
+                page,
+                scraped,
+                action_timeout_ms=action_timeout_ms,
+                content_frame_selector=content_frame_selector,
+                note=note,
+                form_trace=form_trace,
+            )
+            if _detail_pc_err:
+                merged = _merge_dms_and_grid_for_vehicle_master(dms_values, scraped)
+                vm_crit, vm_info = _vehicle_master_prepare_gaps(merged)
+                if callable(step):
+                    step("Stopped: vehicle serial drilldown, Features, Pre-check, or PDI failed.")
+                return (
+                    False,
+                    _detail_pc_err,
+                    merged,
+                    bool(scraped.get("in_transit")),
+                    vm_crit,
+                    vm_info,
                 )
-            _goto(page, recv_u, "vehicles_receipt", nav_timeout_ms=nav_timeout_ms)
-            _siebel_after_goto_wait(page, floor_ms=1000)
-            if _try_click_process_receipt(
-                page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
-            ):
-                note("Clicked Process Receipt / receive control.")
-                if callable(step):
-                    step("Vehicle received — Process Receipt was completed in DMS.")
-            else:
-                note("Process Receipt control not found; operator may complete receipt manually.")
-                if callable(step):
-                    step(
-                        "Receipt / in-transit screen opened; Process Receipt was not found — "
-                        "complete receiving manually if required."
-                    )
-            if callable(ms_done):
-                ms_done("Vehicle received")
         else:
             note(
-                "DMS_REAL_URL_VEHICLES is not set — cannot navigate to receipt/in-transit view; "
-                "set it to HMCL In Transit (or equivalent) GotoView URL."
+                "prepare_vehicle: vehicle flagged in-transit — skipping Serial / Features / Pre-check / PDI "
+                "(Siebel rejects Pre-check and PDI until received at dealer)."
             )
-            if callable(step):
-                step("Receipt URL (DMS_REAL_URL_VEHICLES) is not set — skipped receiving in UI.")
-    else:
-        note("prepare_vehicle: vehicle at dealer (not in-transit) — receipt branch skipped.")
-        if callable(step):
-            step("Vehicle does not appear in transit.")
-
-    merged = _merge_dms_and_grid_for_vehicle_master(dms_values, scraped)
-    vm_crit, vm_info = _vehicle_master_prepare_gaps(merged)
-    if vm_crit:
-        note(
-            "vehicle_master: fields still missing after prepare_vehicle merge — "
-            + "; ".join(vm_crit)
+        _pv_timing(
+            note,
+            "phase=serial_precheck_features_branch elapsed_ms=%.0f skipped_in_transit=%s"
+            % (
+                (time.perf_counter() - t_serial) * 1000.0,
+                "true" if bool(scraped.get("in_transit")) else "false",
+            ),
         )
 
-    _dump_branch_hits(note)
-    return True, None, merged, in_transit_state, vm_crit, vm_info
+        note(
+            "Vehicle grid scrape (prepare_vehicle): "
+            f"model={scraped.get('model')!r}, color={scraped.get('color')!r}, "
+            f"frame_num={scraped.get('frame_num')!r}, engine_num={scraped.get('engine_num')!r}, "
+            f"key_num={scraped.get('key_num')!r}."
+        )
+    
+        in_transit_state = bool(scraped.get("in_transit"))
+        _inv_txt = (scraped.get("inventory_location") or "").strip()
+        if _inv_txt:
+            note(
+                f"DECISION: vehicle_in_transit={in_transit_state!r} "
+                f"(Inventory Location={_inv_txt!r})."
+            )
+        else:
+            note(f"DECISION: vehicle_in_transit={in_transit_state!r} (list grid heuristic; no Inventory Location).")
+        if callable(form_trace):
+            form_trace(
+                "5_vehicle_list",
+                "Auto Vehicle List — results grid (scraped row)",
+                "read_first_matching_row_from_grid",
+                key_num=str(scraped.get("key_num") or ""),
+                frame_num=str(scraped.get("frame_num") or ""),
+                engine_num=str(scraped.get("engine_num") or ""),
+                model=str(scraped.get("model") or ""),
+                in_transit=in_transit_state,
+                inventory_location=str(scraped.get("inventory_location") or "")[:200],
+            )
+    
+        if in_transit_state:
+            note(
+                "prepare_vehicle: vehicle in-transit — opening receipt view if configured; "
+                "Pre-check/PDI skipped (not run until dealer stock)."
+            )
+            if callable(step):
+                step("Vehicle appears in transit — receipt path only (Pre-check/PDI skipped).")
+            recv_u = (urls.vehicles or "").strip()
+            if recv_u:
+                if callable(form_trace):
+                    form_trace(
+                        "5b_in_transit_receipt",
+                        "Vehicles / In Transit — receipt view (DMS_REAL_URL_VEHICLES)",
+                        "goto_receipt_URL_then_Process_Receipt_toolbar_if_present",
+                        receipt_url_truncated=recv_u[:200],
+                    )
+                _goto(page, recv_u, "vehicles_receipt", nav_timeout_ms=nav_timeout_ms)
+                _siebel_after_goto_wait(page, floor_ms=1000)
+                if _try_click_process_receipt(
+                    page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
+                ):
+                    note("Clicked Process Receipt / receive control.")
+                    if callable(step):
+                        step("Vehicle received — Process Receipt was completed in DMS.")
+                else:
+                    note("Process Receipt control not found; operator may complete receipt manually.")
+                    if callable(step):
+                        step(
+                            "Receipt / in-transit screen opened; Process Receipt was not found — "
+                            "complete receiving manually if required."
+                        )
+                if callable(ms_done):
+                    ms_done("Vehicle received")
+            else:
+                note(
+                    "DMS_REAL_URL_VEHICLES is not set — cannot navigate to receipt/in-transit view; "
+                    "set it to HMCL In Transit (or equivalent) GotoView URL."
+                )
+                if callable(step):
+                    step("Receipt URL (DMS_REAL_URL_VEHICLES) is not set — skipped receiving in UI.")
+        else:
+            note("prepare_vehicle: vehicle at dealer (not in-transit) — receipt branch skipped.")
+            if callable(step):
+                step("Vehicle does not appear in transit.")
+    
+        merged = _merge_dms_and_grid_for_vehicle_master(dms_values, scraped)
+        vm_crit, vm_info = _vehicle_master_prepare_gaps(merged)
+        if vm_crit:
+            note(
+                "vehicle_master: fields still missing after prepare_vehicle merge — "
+                + "; ".join(vm_crit)
+            )
+    
+        _dump_branch_hits(note)
+        return True, None, merged, in_transit_state, vm_crit, vm_info
 
 
 def _add_enquiry_vehicle_scrape_has_model_year_color(scraped: dict) -> bool:

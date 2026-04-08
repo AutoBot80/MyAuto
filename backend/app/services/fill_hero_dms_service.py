@@ -1624,7 +1624,9 @@ def insert_dms_masters_from_siebel_scrape(
 ) -> tuple[int, int, int]:
     """
     Single transaction: **INSERT** ``customer_master``, ``vehicle_master``, and ``sales_master`` when
-    no prior rows exist (Siebel-only / staging-less Fill DMS). Call only **after Create Invoice** in DMS
+    no prior rows exist (Siebel-only / staging-less Fill DMS). Before commit, **UPDATE**
+    ``vehicle_inventory_master.sold_date`` to today (dd/mm/yyyy) when trimmed chassis/engine match
+    full scraped frame/engine (not ``raw_*``). Call only **after Create Invoice** in DMS
     (caller gates on scraped **Invoice#** — see ``invoice_number_ready_for_master_commit``).
 
     Requires name, mobile, and Aadhar last-4 derivable from ``dms_values`` and/or ``collated_customer_fields``.
@@ -1636,6 +1638,11 @@ def insert_dms_masters_from_siebel_scrape(
     Returns ``(customer_id, vehicle_id, sales_id)``.
     """
     from psycopg2 import IntegrityError
+
+    from app.repositories.vehicle_inventory import (
+        today_dd_mm_yyyy,
+        update_sold_date_by_chassis_engine_on_cursor,
+    )
 
     dv = dict(dms_values or {})
     cf = dict(collated_customer_fields or {})
@@ -1919,6 +1926,20 @@ def insert_dms_masters_from_siebel_scrape(
                     raise
             sid_row = cur.fetchone()
             sales_id = int(sid_row["sales_id"] if isinstance(sid_row, dict) else sid_row[0])
+
+            _sold_today = today_dd_mm_yyyy()
+            _inv_rc = update_sold_date_by_chassis_engine_on_cursor(
+                cur,
+                chassis=chassis or "",
+                engine=engine or "",
+                sold_date=_sold_today,
+            )
+            if _inv_rc:
+                logger.info(
+                    "fill_dms: vehicle_inventory_master sold_date=%s for chassis/engine match (rows=%s)",
+                    _sold_today,
+                    _inv_rc,
+                )
 
         conn.commit()
         logger.info(
@@ -2734,7 +2755,10 @@ def Playwright_Hero_DMS_fill(
     def note(msg: str) -> None:
         out["dms_siebel_notes"].append(msg)
         logger.info("siebel_dms: %s", msg)
-        _exec_log("NOTE", msg)
+        if (msg or "").startswith("TIMING:"):
+            _exec_log("TIMING", (msg or "").strip())
+        else:
+            _exec_log("NOTE", msg)
 
     def log_vehicle_snapshot(stage: str) -> None:
         """
@@ -2993,7 +3017,10 @@ def Playwright_Hero_DMS_fill_subdealer_challan_order_only(
     def note(msg: str) -> None:
         out["dms_siebel_notes"].append(msg)
         logger.info("siebel_dms_challan: %s", msg)
-        _exec_log("NOTE", msg)
+        if (msg or "").startswith("TIMING:"):
+            _exec_log("TIMING", (msg or "").strip())
+        else:
+            _exec_log("NOTE", msg)
 
     def log_vehicle_snapshot(stage: str) -> None:
         veh = out.get("vehicle") or {}

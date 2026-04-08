@@ -83,6 +83,8 @@ def _run_prepare_vehicle_loop(
 
         def note(msg: str) -> None:
             _note(steps, msg)
+            if (msg or "").startswith("TIMING:"):
+                logln(msg)
 
         def ms_done(_label: str) -> None:
             pass

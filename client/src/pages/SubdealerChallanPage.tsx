@@ -1,5 +1,4 @@
 import { type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ApiHttpError } from "../api/client";
 import { listDealersByParent, type DealerByParentRow } from "../api/dealers";
 import {
   CHALLAN_STAGING_RECENT_DAYS,
@@ -226,8 +225,6 @@ export function SubdealerChallanPage({
   const [loading, setLoading] = useState(false);
   const [processingChallan, setProcessingChallan] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  /** Set when POST /staging returns 409 (duplicate book+date); show Processed tab hint. */
-  const [duplicateChallanGuide, setDuplicateChallanGuide] = useState(false);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [processedRows, setProcessedRows] = useState<ChallanMasterProcessedRow[]>([]);
   const [processedLoading, setProcessedLoading] = useState(false);
@@ -403,7 +400,6 @@ export function SubdealerChallanPage({
     if (!file) return;
     setLoading(true);
     setError(null);
-    setDuplicateChallanGuide(false);
     setWarnings([]);
     try {
       const res = await parseSubdealerChallanScan(file);
@@ -444,7 +440,6 @@ export function SubdealerChallanPage({
       return;
     }
     setError(null);
-    setDuplicateChallanGuide(false);
     setProcessingChallan(true);
     try {
       const lines = dataRows.map((r) => ({
@@ -458,6 +453,20 @@ export function SubdealerChallanPage({
         challan_book_num: challanNo,
         lines,
       });
+      const stagingNotes: string[] = [];
+      const ex = st.dropped_existing_same_book_date ?? 0;
+      const dup = st.dropped_duplicate_in_request ?? 0;
+      if (ex > 0) {
+        stagingNotes.push(
+          `Skipped ${ex} vehicle line(s) already listed for this challan book number and date (any prior batch, including queued or failed).`,
+        );
+      }
+      if (dup > 0) {
+        stagingNotes.push(`Removed ${dup} duplicate engine/chassis row(s) in this list (first occurrence kept).`);
+      }
+      if (stagingNotes.length > 0) {
+        setWarnings((prev) => [...stagingNotes, ...prev]);
+      }
       setRows((prev) =>
         prev.map((r) => (rowHasVehicleData(r) ? { ...r, status: "Queued" } : r)),
       );
@@ -473,13 +482,7 @@ export function SubdealerChallanPage({
         prev.map((r) => (rowHasVehicleData(r) ? { ...r, status: "Committed" } : r)),
       );
     } catch (err) {
-      if (err instanceof ApiHttpError && err.status === 409) {
-        setDuplicateChallanGuide(true);
-        setError(err.message);
-      } else {
-        setDuplicateChallanGuide(false);
-        setError(err instanceof Error ? err.message : String(err));
-      }
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setProcessingChallan(false);
       onChallanCountsRefresh();
@@ -623,21 +626,6 @@ export function SubdealerChallanPage({
       {error && (
         <div className="subdealer-challan-error" role="alert">
           <p className="subdealer-challan-error-text">{error}</p>
-          {duplicateChallanGuide ? (
-            <div className="subdealer-challan-error-actions">
-              <button
-                type="button"
-                className="app-button app-button--primary"
-                onClick={() => {
-                  setError(null);
-                  setDuplicateChallanGuide(false);
-                  setChallanSubTab("processed");
-                }}
-              >
-                Open Processed tab
-              </button>
-            </div>
-          ) : null}
         </div>
       )}
       {warnings.length > 0 && (

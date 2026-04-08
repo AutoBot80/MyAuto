@@ -1,7 +1,9 @@
 """
 Hero DMS: persist ``customer_master`` / ``vehicle_master`` / ``sales_master`` after Siebel Fill DMS.
 
-Single-transaction semantics: one commit for the three masters on the Siebel-only insert path;
+Single-transaction semantics: one commit for the three masters on the Siebel-only insert path
+(``insert_dms_masters_from_siebel_scrape`` also sets ``vehicle_inventory_master.sold_date`` when
+chassis/engine match full scraped values, before the same commit);
 staging path uses ``commit_staging_masters_and_finalize_row`` (masters + staging row in one txn).
 
 ``insert_dms_masters_from_siebel_scrape`` is implemented in ``fill_hero_dms_service``; this module

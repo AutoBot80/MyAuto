@@ -12,6 +12,36 @@ def today_dd_mm_yyyy() -> str:
     return datetime.now().strftime("%d/%m/%Y")
 
 
+def update_sold_date_by_chassis_engine_on_cursor(
+    cur: Any,
+    *,
+    chassis: str,
+    engine: str,
+    sold_date: str | None = None,
+) -> int:
+    """
+    Set ``sold_date`` (dd/mm/yyyy) on ``vehicle_inventory_master`` rows that match trimmed
+    ``chassis_no`` and ``engine_no`` (same matching as ``upsert_from_prepare_vehicle_scrape``).
+
+    Skips when chassis or engine is empty after strip. Returns cursor rowcount.
+    """
+    c = (chassis or "").strip()
+    e = (engine or "").strip()
+    if not c or not e:
+        return 0
+    sd = sold_date if sold_date is not None else today_dd_mm_yyyy()
+    cur.execute(
+        """
+        UPDATE vehicle_inventory_master
+        SET sold_date = %s
+        WHERE TRIM(COALESCE(chassis_no, '')) = %s
+          AND TRIM(COALESCE(engine_no, '')) = %s
+        """,
+        (sd, c, e),
+    )
+    return int(getattr(cur, "rowcount", -1) or 0)
+
+
 def upsert_from_prepare_vehicle_scrape(
     *,
     to_dealer_id: int,

@@ -16,7 +16,7 @@ from app.services.add_subdealer_challan_service import (
     retry_order_only_batch,
     run_subdealer_challan_batch,
 )
-from app.services.subdealer_challan_ocr_service import parse_subdealer_challan
+from app.services.subdealer_challan_ocr_service import dedupe_raw_challan_lines, parse_subdealer_challan
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +46,17 @@ class CreateChallanStagingRequest(BaseModel):
 class CreateChallanStagingResponse(BaseModel):
     challan_batch_id: str
     ok: bool = True
+    dropped_existing_same_book_date: int = Field(
+        0,
+        description=(
+            "Lines removed because the same engine/chassis already exists on a challan for this book+date "
+            "(any status: Queued, Failed, Ready, Committed)."
+        ),
+    )
+    dropped_duplicate_in_request: int = Field(
+        0,
+        description="Extra duplicate engine/chassis rows removed within this submission (first kept).",
+    )
 
 
 class ProcessChallanRequest(BaseModel):
@@ -57,6 +68,11 @@ class ProcessChallanRequest(BaseModel):
 def create_staging(req: CreateChallanStagingRequest) -> CreateChallanStagingResponse:
     """
     Insert ``challan_master_staging`` + ``challan_details_staging`` rows (details **Queued**) for each non-empty line.
+
+    Same ``challan_book_num`` + ``challan_date`` as a previous upload is allowed: a **new** batch is created so DMS can
+    receive a new order/invoice. Lines matching vehicles **already present** on any prior batch for that book+date
+    (Queued / Failed / Ready / Committed) are dropped to avoid duplicate detail rows; duplicate rows within the
+    request are deduped. If nothing remains, HTTP 400.
     """
     lines_in = [ln.model_dump() for ln in req.lines]
     lines = [
@@ -67,22 +83,42 @@ def create_staging(req: CreateChallanStagingRequest) -> CreateChallanStagingResp
     if not lines:
         raise HTTPException(status_code=400, detail="At least one line with engine or chassis is required.")
 
+    lines, dropped_dup_req = dedupe_raw_challan_lines(lines)
+
     book = (str(req.challan_book_num).strip() if req.challan_book_num is not None else "") or None
     date = (str(req.challan_date).strip() if req.challan_date is not None else "") or None
+
+    dropped_existing = 0
     if book and date:
-        existing = master_repo.find_existing_batch_for_dealer_book_date(
-            from_dealer_id=int(req.from_dealer_id),
-            challan_book_num=book,
-            challan_date=date,
+        existing_keys = detail_repo.fetch_existing_vehicle_keys_for_dealer_book_date(
+            int(req.from_dealer_id),
+            book,
+            date,
         )
-        if existing is not None:
+        if existing_keys:
+            kept: list[dict] = []
+            for x in lines:
+                ek = ((x.get("raw_engine") or "").strip().upper(), (x.get("raw_chassis") or "").strip().upper())
+                if ek in existing_keys:
+                    dropped_existing += 1
+                    continue
+                kept.append(x)
+            lines = kept
+
+    if not lines:
+        if dropped_existing > 0:
             raise HTTPException(
-                status_code=409,
+                status_code=400,
                 detail=(
-                    "This challan (same book number and date) was already created for your dealer. "
-                    "Use the Processed tab to view status, failed vehicles, or retry."
+                    "All vehicles in this submission already appear on a challan for this book number and date "
+                    "(including queued or failed lines). Add only vehicles that are not already listed, or open the "
+                    "Processed tab to continue or retry the existing batch."
                 ),
             )
+        raise HTTPException(
+            status_code=400,
+            detail="No vehicle lines left after removing duplicates. Add at least one distinct engine/chassis line.",
+        )
 
     try:
         bid = create_challan_staging_batch(
@@ -95,7 +131,11 @@ def create_staging(req: CreateChallanStagingRequest) -> CreateChallanStagingResp
     except pg_errors.UndefinedTable as e:
         logger.warning("subdealer_challan: missing schema: %s", e)
         raise HTTPException(status_code=503, detail=CHALLAN_STAGING_SCHEMA_HINT) from e
-    return CreateChallanStagingResponse(challan_batch_id=str(bid))
+    return CreateChallanStagingResponse(
+        challan_batch_id=str(bid),
+        dropped_existing_same_book_date=dropped_existing,
+        dropped_duplicate_in_request=dropped_dup_req,
+    )
 
 
 @router.post("/process/{challan_batch_id}")

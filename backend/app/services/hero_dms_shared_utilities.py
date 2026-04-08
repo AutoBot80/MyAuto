@@ -8,6 +8,7 @@ and invoice domain modules.
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import json
 from typing import TextIO
@@ -29,6 +30,23 @@ from app.config import (
 )
 
 logger = logging.getLogger(__name__)
+
+# When set to a dict, ``_safe_page_wait`` accumulates count + total ms per ``log_label`` (prepare_vehicle profiling).
+_sleep_stats_accumulator: contextvars.ContextVar[dict[str, dict[str, int]] | None] = contextvars.ContextVar(
+    "_sleep_stats_accumulator", default=None
+)
+
+
+def begin_sleep_stats_tracking() -> contextvars.Token[dict[str, dict[str, int]] | None]:
+    """Start aggregating ``_safe_page_wait`` calls by ``log_label`` until :func:`end_sleep_stats_tracking`."""
+    return _sleep_stats_accumulator.set({})
+
+
+def end_sleep_stats_tracking(token: contextvars.Token[dict[str, dict[str, int]] | None]) -> dict[str, dict[str, int]] | None:
+    """Stop sleep aggregation and return the collected dict (or None)."""
+    stats = _sleep_stats_accumulator.get()
+    _sleep_stats_accumulator.reset(token)
+    return stats
 
 
 def _hero_default_payment_lines_root_hint() -> dict[str, object]:
@@ -235,6 +253,13 @@ def _safe_page_wait(target, ms: int, *, log_label: str = "") -> None:
                 "open Hero Connect again and retry Fill DMS."
             ) from e
         raise
+    acc = _sleep_stats_accumulator.get()
+    if acc is not None and ms > 0:
+        key = log_label if (log_label or "").strip() else "<unlabeled>"
+        cur = acc.get(key) or {"count": 0, "total_ms": 0}
+        cur["count"] = int(cur["count"]) + 1
+        cur["total_ms"] = int(cur["total_ms"]) + int(ms)
+        acc[key] = cur
 
 
 def _siebel_inter_action_pause(page: Page) -> None:

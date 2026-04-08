@@ -9,6 +9,50 @@ from typing import Any
 from app.db import get_connection
 
 
+def _norm_vehicle_key(raw_engine: str | None, raw_chassis: str | None) -> tuple[str, str]:
+    return ((raw_engine or "").strip().upper(), (raw_chassis or "").strip().upper())
+
+
+def fetch_existing_vehicle_keys_for_dealer_book_date(
+    from_dealer_id: int,
+    challan_book_num: str,
+    challan_date: str,
+) -> set[tuple[str, str]]:
+    """
+    Normalised (engine, chassis) pairs for **every** detail line on any staging batch with the same
+    dealer, book number, and challan date — **any** status (Queued, Failed, Ready, Committed).
+    Used to avoid duplicate ``challan_details_staging`` rows for the same vehicle when re-uploading.
+    """
+    conn = get_connection()
+    out: set[tuple[str, str]] = set()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT d.raw_engine, d.raw_chassis
+                FROM challan_details_staging d
+                INNER JOIN challan_master_staging m ON m.challan_batch_id = d.challan_batch_id
+                WHERE m.from_dealer_id = %s
+                  AND TRIM(COALESCE(m.challan_book_num, '')) = %s
+                  AND TRIM(COALESCE(m.challan_date, '')) = %s
+                """,
+                (int(from_dealer_id), challan_book_num.strip(), challan_date.strip()),
+            )
+            for r in cur.fetchall() or []:
+                dct = dict(r) if not isinstance(r, dict) else r
+                re_ = dct.get("raw_engine")
+                rc = dct.get("raw_chassis")
+                key = _norm_vehicle_key(
+                    str(re_) if re_ is not None else None,
+                    str(rc) if rc is not None else None,
+                )
+                if key[0] or key[1]:
+                    out.add(key)
+    finally:
+        conn.close()
+    return out
+
+
 def _row_jsonable(r: dict[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for k, v in r.items():

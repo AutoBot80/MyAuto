@@ -6,6 +6,7 @@ from app.services.subdealer_challan_ocr_service import (
     _find_engine_chassis_table,
     _rows_from_table,
     dedupe_challan_lines,
+    dedupe_raw_challan_lines,
     parse_challan_date_to_iso,
     sanitize_challan_line_field,
 )
@@ -54,6 +55,18 @@ class TestDedupeChallanLines(unittest.TestCase):
         out, n = dedupe_challan_lines(lines)
         self.assertEqual(n, 1)
         self.assertEqual(len(out), 1)
+
+
+class TestDedupeRawChallanLines(unittest.TestCase):
+    def test_drops_duplicate_raw_pairs(self) -> None:
+        lines = [
+            {"raw_engine": "E1", "raw_chassis": "C1"},
+            {"raw_engine": "e1", "raw_chassis": "c1"},
+            {"raw_engine": "E2", "raw_chassis": "C2"},
+        ]
+        out, n = dedupe_raw_challan_lines(lines)
+        self.assertEqual(n, 1)
+        self.assertEqual(len(out), 2)
 
 
 class TestEngineChassisTable(unittest.TestCase):
