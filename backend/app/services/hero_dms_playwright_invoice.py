@@ -1037,10 +1037,10 @@ def _attach_vehicle_to_bkg(
                 except Exception:
                     pass
 
-            def _tab_out_vin(vin_loc) -> None:
-                # Single Tab only. (Historically a second Tab here was suspected of focusing the pick/MVG and opening an applet.)
+            def _tab_out_vin_like_institution(vin_loc) -> None:
+                """Same as Account/Institution Name after typing (`_fill_challan_account_institution_name_verify_pin`): Tab out."""
                 try:
-                    vin_loc.press("Tab", timeout=1500)
+                    vin_loc.press("Tab", timeout=1200)
                 except Exception:
                     try:
                         page.keyboard.press("Tab")
@@ -1091,7 +1091,7 @@ def _attach_vehicle_to_bkg(
                     _js_set_vin_value_on_element(vin_loc)
                 if not _vin_readback_ok(vin_loc):
                     return False
-                _tab_out_vin(vin_loc)
+                _tab_out_vin_like_institution(vin_loc)
                 return True
 
             # After **New**, the jqGrid row / VIN input can appear slightly later than the New click wait.
@@ -1168,10 +1168,21 @@ def _attach_vehicle_to_bkg(
                             _vin_filled = True
                             note(f"attach_vehicle_to_bkg: JS set VIN field (broad query), row={row_n}, chassis={_ch!r}.")
                             _safe_page_wait(page, 200, log_label="after_vin_js_fill")
+                            _id = f"#{int(row_n)}_s_1_l_VIN"
                             try:
-                                page.keyboard.press("Tab")
+                                _vl = root.locator(_id).first
+                                if _vl.count() > 0 and _vl.is_visible(timeout=600):
+                                    _tab_out_vin_like_institution(_vl)
+                                else:
+                                    try:
+                                        page.keyboard.press("Tab")
+                                    except Exception:
+                                        pass
                             except Exception:
-                                pass
+                                try:
+                                    page.keyboard.press("Tab")
+                                except Exception:
+                                    pass
                             break
                     except Exception:
                         continue
