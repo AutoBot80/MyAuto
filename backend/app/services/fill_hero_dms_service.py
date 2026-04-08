@@ -2931,6 +2931,9 @@ def Playwright_Hero_DMS_fill_subdealer_challan_order_only(
 
     Does **not** run ``prepare_vehicle`` or retail ``prepare_customer``. Caller must set ``dms_values`` via
     ``prepare_customer_for_challan`` and ``_challan_last_vehicle`` (last scrape) before calling.
+
+    When ``execution_log_path`` is set (typically the same ``playwright_challan.txt`` as the prepare
+    phase), STEP/NOTE lines are **appended** to that file — not a new ``Playwright_DMS_*.txt``.
     """
     out: dict = {
         "vehicle": dict(dms_values.get("_challan_last_vehicle") or {}),
@@ -2946,8 +2949,10 @@ def Playwright_Hero_DMS_fill_subdealer_challan_order_only(
     if execution_log_path is not None:
         lp = Path(execution_log_path)
         lp.parent.mkdir(parents=True, exist_ok=True)
-        log_fp = open(lp, "w", encoding="utf-8")
-        log_fp.write("Playwright DMS — subdealer challan order phase\n\n")
+        # Append to the same human trace as prepare_vehicle (e.g. playwright_challan.txt); do not
+        # open a separate per-phase Playwright_DMS_*.txt file.
+        log_fp = open(lp, "a", encoding="utf-8")
+        log_fp.write("\n\n--- subdealer challan order phase (structured STEP/NOTE trace) ---\n")
         log_fp.write(f"started_ist={_ts_ist_iso()}\n")
         log_fp.flush()
 

@@ -1,0 +1,15 @@
+Playwright DMS — subdealer challan order phase
+
+started_ist=2026-04-08T14:45:17.472+05:30
+2026-04-08T14:45:17.472+05:30 [STEP] Subdealer challan: Sales Orders / create order (Network, multi-VIN).
+2026-04-08T14:45:27.906+05:30 [NOTE] Video path: clicked Generate Booking before create_order.
+2026-04-08T14:45:27.906+05:30 [MILESTONE] Booking generated
+2026-04-08T14:45:27.906+05:30 [FORM] siebel_step=v4_create_order | form=Vehicle Sales / Sales Orders | action=vehicle_sales_new_order_then_pick_contact_then_vin_search_price_allocate | first_name='SHRI' | full_chassis='MBLHAW500T5C14931' | mobile_phone='0000000000'
+2026-04-08T14:45:27.906+05:30 [FORM] siebel_step=v4_create_order | form=Vehicle Sales / Sales Orders | action=open_vehicle_sales_then_create_order | full_chassis='MBLHAW500T5C14931' | mobile_phone='0000000000'
+2026-04-08T14:45:27.907+05:30 [NOTE] Create Order: navigating to Vehicle Sales URL. base=https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/
+2026-04-08T14:45:33.321+05:30 [NOTE] Create Order: arrived at Vehicle Sales (post-goto wait). URL=https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=Order+Entry+-+My+Orders+View+(Sales
+2026-04-08T14:45:38.348+05:30 [NOTE] Create Order: My Orders grid search outcome='unknown_rows' rows=5 primary_order='11870-02-SVSO-0426-71' primary_invoice=''.
+2026-04-08T14:45:38.348+05:30 [NOTE] Create Order: My Orders grid unknown_rows with Order# row(s) and no Invoice# — using allocated attach path (Order# drill, skip to pre–Apply Campaign).
+2026-04-08T14:45:38.363+05:30 [STEP] Stopped: create_order flow failed.
+
+2026-04-08T14:45:38.363+05:30 [END] error=Siebel: create_order failed. Create Order: Allocated My Orders row but could not open Order# drill-down.

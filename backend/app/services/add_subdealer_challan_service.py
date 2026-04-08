@@ -26,7 +26,6 @@ from app.config import (
     DMS_SIEBEL_CONTENT_FRAME_SELECTOR,
     DMS_SIEBEL_NAV_TIMEOUT_MS,
     dms_automation_is_real_siebel,
-    get_ocr_output_dir,
 )
 from app.repositories import challan_staging as challan_staging_repo
 from app.repositories.vehicle_inventory import (
@@ -43,14 +42,12 @@ from app.services.add_subdealer_challan_commit_service import (
 from app.services.fill_hero_dms_service import (
     Playwright_Hero_DMS_fill_subdealer_challan_order_only,
     _install_playwright_js_dialog_handler,
-    playwright_dms_execution_log_filename,
 )
 from app.services.handle_browser_opening import get_or_open_site_page
 from app.services.hero_dms_playwright_customer_challan import prepare_customer_for_challan
 from app.services.hero_dms_playwright_vehicle import prepare_vehicle
 from app.services.hero_dms_shared_utilities import SiebelDmsUrls, _ts_ist_iso
 from app.services.subdealer_challan_ocr_service import challan_artifact_leaf_name
-from app.services.utility_functions import safe_subfolder_name
 
 logger = logging.getLogger(__name__)
 
@@ -126,10 +123,6 @@ def run_subdealer_challan_batch(
         return out
 
     logln(f"dms_base_url={base_url[:120]!r}")
-
-    ocr_dir = Path(get_ocr_output_dir(dealer_id)).resolve()
-    subfolder = safe_subfolder_name(f"challan_{str(challan_batch_id)[:8]}")
-    exec_log = ocr_dir / subfolder / playwright_dms_execution_log_filename()
 
     urls = SiebelDmsUrls(
         contact=DMS_REAL_URL_CONTACT,
@@ -296,7 +289,10 @@ def run_subdealer_challan_batch(
             out["error"] = "No order lines to attach (missing chassis on inventory)."
             return out
 
-        logln(f"Order phase: {len(order_lines)} line(s); Playwright DMS execution log: {exec_log}")
+        logln(
+            f"Order phase: {len(order_lines)} line(s); "
+            f"appending STEP/NOTE trace to challan log: {log_path}"
+        )
         dms_values: dict = {}
         prepare_customer_for_challan(
             dms_values,
@@ -313,7 +309,7 @@ def run_subdealer_challan_batch(
             action_timeout_ms=DMS_SIEBEL_ACTION_TIMEOUT_MS,
             nav_timeout_ms=DMS_SIEBEL_NAV_TIMEOUT_MS,
             content_frame_selector=frame_sel,
-            execution_log_path=exec_log,
+            execution_log_path=log_path,
         )
         out["vehicle"] = frag.get("vehicle") or {}
         out["dms_step_messages"] = list(frag.get("dms_step_messages") or steps)

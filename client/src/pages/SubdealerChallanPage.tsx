@@ -73,6 +73,8 @@ function dedupeRowsByVehicleIdentity(rows: ChallanRow[]): ChallanRow[] {
   return out;
 }
 
+type ChallanSubTab = "new" | "processed";
+
 /** Last row must be blank (both engine and chassis empty) so user can add more. */
 function ensureTrailingBlankRow(rows: ChallanRow[]): ChallanRow[] {
   if (rows.length === 0) return [newEmptyRow()];
@@ -92,6 +94,7 @@ export type SubdealerChallanPageProps = {
 };
 
 export function SubdealerChallanPage({ dealerId, dmsUrl }: SubdealerChallanPageProps) {
+  const [challanSubTab, setChallanSubTab] = useState<ChallanSubTab>("new");
   const [toDealerId, setToDealerId] = useState("");
   const [challanNo, setChallanNo] = useState<string | null>(null);
   const [challanDateRaw, setChallanDateRaw] = useState<string | null>(null);
@@ -228,17 +231,57 @@ export function SubdealerChallanPage({ dealerId, dmsUrl }: SubdealerChallanPageP
 
   return (
     <div className="subdealer-challan">
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept="image/jpeg,image/png,image/webp,application/pdf"
-        className="subdealer-challan-file-input"
-        aria-hidden
-        tabIndex={-1}
-        onChange={onFileSelected}
+      <nav className="challans-subtabs" role="tablist" aria-label="Challans">
+        <button
+          type="button"
+          role="tab"
+          id="challans-tab-new"
+          aria-controls="challans-panel-new"
+          aria-selected={challanSubTab === "new"}
+          className={`challans-subtab ${challanSubTab === "new" ? "active" : ""}`}
+          onClick={() => setChallanSubTab("new")}
+        >
+          New Challan
+        </button>
+        <button
+          type="button"
+          role="tab"
+          id="challans-tab-processed"
+          aria-controls="challans-panel-processed"
+          aria-selected={challanSubTab === "processed"}
+          className={`challans-subtab ${challanSubTab === "processed" ? "active" : ""}`}
+          onClick={() => setChallanSubTab("processed")}
+        >
+          Processed
+        </button>
+      </nav>
+
+      <div
+        id="challans-panel-processed"
+        role="tabpanel"
+        aria-labelledby="challans-tab-processed"
+        hidden={challanSubTab !== "processed"}
+        className="challans-processed-panel"
       />
 
-      <div className="subdealer-challan-top-grid">
+      <div
+        id="challans-panel-new"
+        role="tabpanel"
+        aria-labelledby="challans-tab-new"
+        hidden={challanSubTab !== "new"}
+        className="challans-new-panel"
+      >
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/jpeg,image/png,image/webp,application/pdf"
+          className="subdealer-challan-file-input"
+          aria-hidden
+          tabIndex={-1}
+          onChange={onFileSelected}
+        />
+
+        <div className="subdealer-challan-top-grid">
         <label htmlFor="sdc-dealer" className="subdealer-challan-label subdealer-challan-l-dealer">
           To Dealer ID (Subdealer):
         </label>
@@ -428,6 +471,7 @@ export function SubdealerChallanPage({ dealerId, dmsUrl }: SubdealerChallanPageP
             );
           })}
         </div>
+      </div>
       </div>
     </div>
   );

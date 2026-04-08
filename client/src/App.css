@@ -2209,6 +2209,53 @@
   color: #444;
 }
 
+/* Challans page: sub-tabs under main "Challans" tab */
+.challans-subtabs {
+  display: flex;
+  gap: 0;
+  flex-shrink: 0;
+  margin: 0 -4px 4px;
+  padding: 0 0 0 2px;
+  border-bottom: 1px solid #c5d9ed;
+}
+
+.challans-subtab {
+  padding: 5px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #333;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+}
+
+.challans-subtab:hover {
+  background: rgba(30, 90, 158, 0.06);
+  color: #1e5a9e;
+}
+
+.challans-subtab.active {
+  color: #1e5a9e;
+  border-bottom-color: #1e5a9e;
+}
+
+.challans-processed-panel {
+  flex: 1;
+  min-height: 0;
+  border-radius: 4px;
+  background: #fff;
+}
+
+.challans-new-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+  flex: 1;
+}
+
 .subdealer-challan {
   display: flex;
   flex-direction: column;

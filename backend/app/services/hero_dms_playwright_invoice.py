@@ -471,6 +471,35 @@ def _classify_my_orders_grid_rows(rows: list[dict]) -> tuple[str, str, str]:
     return "unknown_rows", (rows[0].get("order") or "").strip(), ""
 
 
+def _filter_my_orders_rows_by_mobile_digits(rows: list[dict] | None, mobile: str) -> list[dict]:
+    """
+    Keep only jqGrid rows whose visible text contains the digits of ``mobile``.
+
+    ``_read_my_orders_jqgrid_rows_anywhere`` can merge **all** ``table.ui-jqgrid-btable`` rows on the
+    view (multiple applets). After Find→Mobile Phone# + Enter, only rows for that search should
+    include the mobile; unrelated grids would otherwise be mis-classified as pending/allocated.
+    """
+    if not rows:
+        return []
+    digits = re.sub(r"\D", "", (mobile or "").strip())
+    if not digits:
+        return list(rows)
+    out: list[dict] = []
+    for r in rows:
+        blob = " ".join(
+            [
+                (r.get("raw") or ""),
+                (r.get("status") or ""),
+                (r.get("invoice") or ""),
+                (r.get("order") or ""),
+            ]
+        )
+        row_digits = re.sub(r"\D", "", blob)
+        if digits in row_digits:
+            out.append(r)
+    return out
+
+
 def _find_vehicle_sales_my_orders_search_root(page: Page, content_frame_selector: str | None):
     """Frame (or page) that contains Find field ``name=s_1_1_1_0`` and Sales Orders New (+)."""
     roots: list = []
@@ -699,6 +728,14 @@ def _run_vehicle_sales_my_orders_mobile_search(
             pass
         _safe_page_wait(page, min(2500, _tmo), log_label="after_my_orders_find_enter")
         rows = _read_my_orders_jqgrid_rows_anywhere(page, content_frame_selector)
+        _n_before = len(rows or [])
+        rows = _filter_my_orders_rows_by_mobile_digits(rows or [], mobile)
+        if _n_before and len(rows) < _n_before:
+            note(
+                "Create Order: My Orders jqGrid read "
+                f"{_n_before} row(s) across applet(s); kept {len(rows)} row(s) whose text contains "
+                "the searched mobile digits (excludes unrelated grids)."
+            )
         oc, po, pi = _classify_my_orders_grid_rows(rows)
         note(
             f"Create Order: My Orders grid search outcome={oc!r} rows={len(rows)} "
