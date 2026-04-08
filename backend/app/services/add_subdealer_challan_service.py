@@ -47,7 +47,8 @@ from app.services.fill_hero_dms_service import (
 from app.services.handle_browser_opening import get_or_open_site_page
 from app.services.hero_dms_playwright_customer_challan import prepare_customer_for_challan
 from app.services.hero_dms_playwright_vehicle import prepare_vehicle
-from app.services.hero_dms_shared_utilities import SiebelDmsUrls, _safe_subfolder_name
+from app.services.hero_dms_shared_utilities import SiebelDmsUrls
+from app.services.utility_functions import safe_subfolder_name
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +100,7 @@ def run_subdealer_challan_batch(
     challan_book = rows[0].get("challan_book_num")
 
     ocr_dir = Path(get_ocr_output_dir(dealer_id)).resolve()
-    subfolder = _safe_subfolder_name(f"challan_{str(challan_batch_id)[:8]}")
+    subfolder = safe_subfolder_name(f"challan_{str(challan_batch_id)[:8]}")
     exec_log = ocr_dir / subfolder / playwright_dms_execution_log_filename()
 
     urls = SiebelDmsUrls(
