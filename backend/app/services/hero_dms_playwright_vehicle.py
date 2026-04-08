@@ -69,10 +69,11 @@ def _dump_branch_hits(note) -> None:
     logger.info("branch_hits: %s", _BRANCH_HITS)
 
 
-# Left **Search Results** pane: ``div#gview_s_1001_l`` > ``table#s_1001_l`` > ``a.drilldown[name="Title"]``.
+# Left **Search Results** pane: usually ``div#gview_s_1001_l`` but Siebel may reassign the gview id
+# after re-navigation (seen: ``gview_s_1003_l``). We scan every ``div.ui-jqgrid-view[id^="gview_s_"]``
+# **except** the center list (``gview_s_1_l``) for ``a.drilldown[name="Title"]``.
 # Center **Vehicle List** pane: ``div#gview_s_1_l`` > ``table#s_1_l`` with VIN in first data-row ``td``.
-# Confirmed from DOM dump (2026-04-08): single main document, no iframes.
-_LEFT_SEARCH_TITLE_SELECTOR = '#gview_s_1001_l a.drilldown[name="Title"]'
+_CENTER_GVIEW_ID = "gview_s_1_l"
 _CENTER_LIST_TABLE_ID = "s_1_l"
 
 _LEFT_SEARCH_POLL_MS = 300
@@ -89,9 +90,9 @@ def _siebel_poll_left_search_title_matches(
     max_polls: int = _LEFT_SEARCH_MAX_POLLS,
 ) -> bool:
     """
-    Poll the left **Search Results** pane (``#gview_s_1001_l a.drilldown[name="Title"]``) until
-    a visible Title link's text contains the VIN partial. Runs directly on ``page`` — single
-    document, no frame cycling needed (confirmed from DOM dump).
+    Poll left **Search Results** pane until a visible Title drilldown link contains the VIN
+    partial.  Scans every ``div.ui-jqgrid-view[id^="gview_s_"]`` **except** the center list
+    (``gview_s_1_l``) — Siebel may reassign the left-pane gview id between navigations.
     """
     vin_key = _vin_match_key(chassis)
     if not vin_key or len(vin_key) < 4:
@@ -103,12 +104,15 @@ def _siebel_poll_left_search_title_matches(
 
     js = """(vk) => {
       const norm = s => String(s || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
-      const sel = '#gview_s_1001_l a.drilldown[name="Title"]';
-      for (const a of document.querySelectorAll(sel)) {
-        const r = a.getBoundingClientRect();
-        if (r.width < 1 || r.height < 1) continue;
-        const t = norm(a.innerText || a.textContent) + norm(a.getAttribute('title'));
-        if (t.includes(vk) || vk.includes(t.slice(-vk.length))) return true;
+      const skip = 'gview_s_1_l';
+      for (const gv of document.querySelectorAll('div.ui-jqgrid-view[id^="gview_s_"]')) {
+        if (gv.id === skip) continue;
+        for (const a of gv.querySelectorAll('a.drilldown[name="Title"]')) {
+          const r = a.getBoundingClientRect();
+          if (r.width < 1 || r.height < 1) continue;
+          const t = norm(a.innerText || a.textContent) + norm(a.getAttribute('title'));
+          if (t.includes(vk) || vk.includes(t.slice(-vk.length))) return true;
+        }
       }
       return false;
     }"""
@@ -128,6 +132,23 @@ def _siebel_poll_left_search_title_matches(
             )
         if round_i < polls - 1:
             _safe_page_wait(page, interval, log_label="left_search_stale_poll")
+
+    try:
+        diag = page.evaluate("""() => {
+          const gvs = [];
+          for (const gv of document.querySelectorAll('div.ui-jqgrid-view[id^="gview_s_"]')) {
+            const links = gv.querySelectorAll('a.drilldown[name="Title"]');
+            const vis = Array.from(links).filter(a => {
+              const r = a.getBoundingClientRect(); return r.width >= 1 && r.height >= 1;
+            });
+            gvs.push(gv.id + ':titles=' + links.length + '/vis=' + vis.length
+              + (vis.length ? ' text=' + (vis[0].innerText || '').slice(0, 40) : ''));
+          }
+          return gvs.join(' | ') || '(no gview_s_ divs found)';
+        }""")
+        logger.warning("siebel: left-pane poll exhausted — gview snapshot: %s", diag)
+    except Exception:
+        pass
     return False
 
 
@@ -790,11 +811,12 @@ def _siebel_try_click_vin_search_hit_link(
     timeout_ms: int,
 ) -> bool:
     """
-    Click the matching VIN Title drilldown in the left **Search Results** pane
-    (``#gview_s_1001_l a.drilldown[name="Title"]``).
+    Click the matching VIN Title drilldown in the left **Search Results** pane.
 
-    At this point ``_siebel_poll_left_search_title_matches`` has already confirmed the
-    link is visible — so we just need to find and click it. Tries Playwright click first
+    Scans every ``div.ui-jqgrid-view[id^="gview_s_"]`` except the center list
+    (``gview_s_1_l``) for ``a.drilldown[name="Title"]``.  At this point
+    ``_siebel_poll_left_search_title_matches`` has already confirmed the link is
+    visible — so we just need to find and click it.  Tries Playwright click first
     with a JS ``element.click()`` fallback.
     """
     vin_key = _vin_match_key(chassis)
@@ -802,7 +824,11 @@ def _siebel_try_click_vin_search_hit_link(
         return False
     vk_upper = vin_key.upper()
 
-    titles = page.locator(_LEFT_SEARCH_TITLE_SELECTOR)
+    left_sel = (
+        f'div.ui-jqgrid-view[id^="gview_s_"]:not(#{_CENTER_GVIEW_ID}) '
+        f'a.drilldown[name="Title"]'
+    )
+    titles = page.locator(left_sel)
     try:
         count = titles.count()
     except Exception:
@@ -839,14 +865,17 @@ def _siebel_try_click_vin_search_hit_link(
     js_hit = page.evaluate(
         """(vk) => {
           const norm = s => String(s || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
-          const sel = '#gview_s_1001_l a.drilldown[name="Title"]';
-          for (const a of document.querySelectorAll(sel)) {
-            const r = a.getBoundingClientRect();
-            if (r.width < 1 || r.height < 1) continue;
-            const t = norm(a.innerText || a.textContent) + norm(a.getAttribute('title'));
-            if (t.includes(vk) || vk.includes(t.slice(-vk.length))) {
-              try { a.scrollIntoView({ block: 'center' }); } catch(e) {}
-              try { a.click(); return true; } catch(e) {}
+          const skip = 'gview_s_1_l';
+          for (const gv of document.querySelectorAll('div.ui-jqgrid-view[id^="gview_s_"]')) {
+            if (gv.id === skip) continue;
+            for (const a of gv.querySelectorAll('a.drilldown[name="Title"]')) {
+              const r = a.getBoundingClientRect();
+              if (r.width < 1 || r.height < 1) continue;
+              const t = norm(a.innerText || a.textContent) + norm(a.getAttribute('title'));
+              if (t.includes(vk) || vk.includes(t.slice(-vk.length))) {
+                try { a.scrollIntoView({ block: 'center' }); } catch(e) {}
+                try { a.click(); return true; } catch(e) {}
+              }
             }
           }
           return false;
@@ -3879,7 +3908,7 @@ def prepare_vehicle(
         return (
             False,
             "Siebel: left Search Results pane did not show the expected VIN after Find→Vehicles "
-            f"(polled #gview_s_1001_l Title links for '{frame_p}').",
+            f"(polled left-pane gview Title links for '{frame_p}').",
             {},
             False,
             [],
