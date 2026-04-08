@@ -45,7 +45,7 @@ def insert_staging_rows(
                         rc,
                         re_,
                         "Queued",
-                        challan_batch_id,
+                        str(challan_batch_id),
                     ),
                 )
                 row = cur.fetchone()
