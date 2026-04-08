@@ -462,10 +462,11 @@ This document lists the current database tables and their columns. **Executable 
 | `invoice_complete` | `boolean` | NO | `FALSE` | Set when invoice number is captured |
 | `invoice_status` | `varchar(32)` | NO | `'Pending'` | **Pending** \| **Failed** \| **Completed** |
 | `created_at` | `timestamptz` | NO | `CURRENT_TIMESTAMP` | Processed tab / window filters |
+| `last_run_at` | `timestamptz` | YES |  | Set when a process/retry DMS run completes (**Latest run** in UI); nullable until first run |
 
 **Primary key:** `challan_batch_id`
 
-**Scripts:** `DDL/23_challan_master_staging.sql`
+**Scripts:** `DDL/23_challan_master_staging.sql`; existing DBs: `DDL/alter/23a_challan_master_staging_last_run_at.sql`
 
 ### `challan_details_staging`
 
@@ -709,3 +710,4 @@ Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.
 | 2.70 | Apr 2026 | **`challan_staging`**: **`challan_batch_id`**, **`last_error`**, **`inventory_line_id`** — **`DDL/alter/19a_challan_staging_batch_status.sql`** |
 | 2.71 | Apr 2026 | **`challan_staging.created_at`** — **`DDL/alter/19b_challan_staging_created_at.sql`** (Processed tab list / failed-count window) |
 | 2.72 | Apr 2026 | **`challan_master_staging`**, **`challan_details_staging`** — subdealer challan staging split (header + lines); greenfield prefers **`DDL/23_…sql`**, **`DDL/24_…sql`** over legacy **`challan_staging`** |
+| 2.73 | Apr 2026 | **`challan_master_staging.last_run_at`** — **`DDL/alter/23a_challan_master_staging_last_run_at.sql`**; greenfield: **`DDL/23_challan_master_staging.sql`** — Processed tab **Latest run** |

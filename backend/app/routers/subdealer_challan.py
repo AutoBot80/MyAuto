@@ -123,12 +123,21 @@ def process_batch(
 @router.get("/staging/recent")
 def list_recent_staging(
     dealer_id: int | None = Query(None, description="from_dealer_id; defaults to server DEALER_ID"),
-    days: int = Query(15, ge=1, le=365, description="Masters with created_at in the last N days"),
+    days: int = Query(15, ge=1, le=365, description="With default list: masters in the last N days (failed lines only)"),
+    challan_book_num: str | None = Query(
+        None,
+        description="Trimmed challan book number; when set, matches challan_book_num for this dealer (any age); ignores failed-only and days window",
+    ),
 ) -> list[dict]:
-    """Recent ``challan_master_staging`` rows with ``failed_lines`` (detail rows in Failed) for the Processed tab."""
+    """``challan_master_staging`` rows with ``failed_lines`` for the Processed tab.
+
+    Default: batches from the last *days* that have at least one Failed detail line.
+    With ``challan_book_num``: batches matching that book number (``challan_book_num`` column), no date limit.
+    """
     did = int(dealer_id) if dealer_id is not None else int(DEALER_ID)
+    book = (challan_book_num or "").strip() or None
     try:
-        masters = master_repo.list_masters_recent(did, days=days)
+        masters = master_repo.list_masters_recent(did, days=days, challan_book_num=book)
     except pg_errors.UndefinedTable as e:
         logger.warning("subdealer_challan: missing schema: %s", e)
         raise HTTPException(status_code=503, detail=CHALLAN_STAGING_SCHEMA_HINT) from e

@@ -2258,6 +2258,136 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  gap: 6px;
+}
+
+.challans-processed-search {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+}
+
+.challans-processed-search-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1e5a9e;
+}
+
+.challans-processed-search-input {
+  min-width: 12rem;
+  max-width: 22rem;
+  flex: 1 1 12rem;
+  padding: 6px 10px;
+  border: 1px solid #c5d9ed;
+  border-radius: 6px;
+  font-size: 14px;
+}
+
+.challans-processed-search-input:focus {
+  outline: 2px solid #1e5a9e;
+  outline-offset: 1px;
+}
+
+.challans-processed-search-btn,
+.challans-processed-search-clear {
+  flex-shrink: 0;
+}
+
+.challans-processed-list-hint {
+  margin: 0;
+  font-size: 12px;
+  color: #5a6b7a;
+}
+
+.challans-processed-loading-msg {
+  padding: 1rem;
+  margin: 0;
+}
+
+.challans-processed-split {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.challans-processed-master {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.challans-processed-hint {
+  margin: 0;
+  font-size: 12px;
+  color: #5a6b7a;
+}
+
+.challans-processed-failed-section {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 1px solid #c5d9ed;
+  border-radius: 10px;
+  padding: 8px 10px 10px;
+  background: #f8fafc;
+}
+
+.challans-processed-failed-heading {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: #1e5a9e;
+}
+
+.challans-processed-failed-table-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  border-radius: 6px;
+  background: #fff;
+  border: 1px solid #e2eaf2;
+}
+
+.challans-processed-failed-placeholder {
+  padding: 1rem;
+  margin: 0;
+}
+
+.challans-processed-failed-table .challans-proc-err {
+  white-space: normal;
+  max-width: min(420px, 40vw);
+  word-break: break-word;
+}
+
+.challans-proc-master-row {
+  cursor: pointer;
+}
+
+.challans-proc-master-row:hover {
+  background: #f0f7fc;
+}
+
+.challans-proc-master-row--selected {
+  background: #e8f2fb;
+}
+
+.challans-proc-master-row:focus-visible {
+  outline: 2px solid #1e5a9e;
+  outline-offset: -2px;
+}
+
+.challans-proc-failed-badge {
+  font-size: 13px;
+  color: #b45309;
+  font-weight: 500;
+  white-space: nowrap;
 }
 
 .challans-processed-table-wrap {
@@ -2279,6 +2409,57 @@
 .challans-proc-retry-btn {
   font-size: 13px;
   padding: 4px 10px;
+}
+
+.challans-proc-actions-cell {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.challans-proc-failed-toggle {
+  white-space: nowrap;
+}
+
+.challans-proc-failed-row > td {
+  padding: 0 10px 8px;
+  background: #f8fafc;
+  vertical-align: top;
+}
+
+.challans-proc-failed-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px 12px;
+  padding: 4px;
+}
+
+.challans-proc-failed-line--sep {
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid #e2eaf2;
+}
+
+.challans-proc-failed-meta {
+  flex: 1 1 12rem;
+  min-width: 0;
+  font-size: 13px;
+}
+
+.challans-proc-failed-status {
+  flex: 0 0 auto;
+  font-size: 12px;
+  color: #5a6b7a;
+}
+
+.challans-proc-failed-err {
+  flex: 1 1 14rem;
+  min-width: 0;
+  font-size: 12px;
+  white-space: normal;
+  word-break: break-word;
 }
 
 /* New tab only: fills space below sub-tabs (Processed tab is a separate mounted panel). */

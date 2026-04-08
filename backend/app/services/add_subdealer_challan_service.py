@@ -446,6 +446,8 @@ def run_subdealer_challan_batch(
         out["error"] = str(e)
         logger.warning("subdealer_challan: %s", e, exc_info=True)
         return out
+    finally:
+        master_repo.touch_last_run_at(challan_batch_id)
 
     out["error"] = "Invalid phase"
     return out

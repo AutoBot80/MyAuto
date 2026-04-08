@@ -100,6 +100,8 @@ export type ChallanMasterProcessedRow = {
   challan_batch_id: string;
   from_dealer_id: number;
   to_dealer_id: number;
+  from_dealer_name?: string | null;
+  to_dealer_name?: string | null;
   challan_date: string | null;
   challan_book_num: string | null;
   num_vehicles: number;
@@ -107,18 +109,28 @@ export type ChallanMasterProcessedRow = {
   invoice_complete: boolean;
   invoice_status: string | null;
   created_at: string | null;
+  /** Set when process/retry DMS batch completes (ISO timestamp). */
+  last_run_at?: string | null;
   ready_line_count: number;
   failed_line_count: number;
   failed_lines: ChallanFailedDetailLine[];
 };
 
+export type ListRecentChallanStagingOptions = {
+  /** Maps to ``challan_book_num``; when set, API returns that challan regardless of age (no 15-day window). */
+  challanBookNum?: string | null;
+};
+
 export async function listRecentChallanStaging(
   dealerId?: number,
-  days: number = CHALLAN_STAGING_RECENT_DAYS
+  days: number = CHALLAN_STAGING_RECENT_DAYS,
+  options?: ListRecentChallanStagingOptions
 ): Promise<ChallanMasterProcessedRow[]> {
   const search = new URLSearchParams();
   search.set("dealer_id", String(dealerId ?? DEALER_ID));
   search.set("days", String(days));
+  const book = (options?.challanBookNum ?? "").trim();
+  if (book) search.set("challan_book_num", book);
   return apiFetch<ChallanMasterProcessedRow[]>(`/subdealer-challan/staging/recent?${search.toString()}`);
 }
 

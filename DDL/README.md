@@ -102,6 +102,7 @@ One-off changes (e.g. new columns) go in **`DDL/alter/`**. Run against an existi
 - `18b_vehicle_inventory_master_add_discount.sql` — **`vehicle_inventory_master`**: **`discount`**.
 - `19a_challan_staging_batch_status.sql` — legacy **`challan_staging`**: **`challan_batch_id`**, **`last_error`**, **`inventory_line_id`**.
 - `19b_challan_staging_created_at.sql` — legacy **`challan_staging.created_at`** (Processed tab / failed-count window).
+- `23a_challan_master_staging_last_run_at.sql` — **`challan_master_staging.last_run_at`** (Processed tab **Latest run**).
 
 **New table (run after customer_master exists):**
 - `10_rto_payment_details.sql` — legacy base creation for the RTO table; current schema then applies `12c_rename_rto_payment_details_to_rto_queue.sql` so the active table is `rto_queue`.

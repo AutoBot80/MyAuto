@@ -1,4 +1,4 @@
-import { Fragment, type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiHttpError } from "../api/client";
 import { listDealersByParent, type DealerByParentRow } from "../api/dealers";
 import {
@@ -82,17 +82,9 @@ function dedupeRowsByVehicleIdentity(rows: ChallanRow[]): ChallanRow[] {
 
 type ChallanSubTab = "new" | "processed";
 
-function formatStagingCreatedAt(iso: string | null): string {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" });
-}
-
-function shortBatchId(batchId: string): string {
-  const s = batchId.replace(/-/g, "");
-  if (s.length <= 8) return batchId;
-  return `…${s.slice(-8)}`;
+function formatDealerDisplay(name: string | null | undefined, dealerId: number): string {
+  const n = (name || "").trim();
+  return n || `Dealer ${dealerId}`;
 }
 
 function formatPreparedOverTotal(r: ChallanMasterProcessedRow): string {
@@ -100,6 +92,92 @@ function formatPreparedOverTotal(r: ChallanMasterProcessedRow): string {
   const t = r.num_vehicles ?? 0;
   if (t <= 0) return "—";
   return `${p}/${t}`;
+}
+
+function pad2(n: number): string {
+  return n < 10 ? `0${n}` : String(n);
+}
+
+/** Normalize stored/API challan date to dd/mm/yyyy. */
+function formatChallanDateDisplay(s: string | null | undefined): string {
+  const t = (s || "").trim();
+  if (!t) return "—";
+  const iso = t.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) {
+    const [, y, m, d] = iso;
+    return `${d}/${m}/${y}`;
+  }
+  const slash = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (slash) {
+    const d = parseInt(slash[1], 10);
+    const m = parseInt(slash[2], 10);
+    const y = slash[3];
+    if (d >= 1 && d <= 31 && m >= 1 && m <= 12) {
+      return `${pad2(d)}/${pad2(m)}/${y}`;
+    }
+  }
+  const dash = t.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
+  if (dash) {
+    const d = parseInt(dash[1], 10);
+    const m = parseInt(dash[2], 10);
+    const y = dash[3];
+    if (d >= 1 && d <= 31 && m >= 1 && m <= 12) {
+      return `${pad2(d)}/${pad2(m)}/${y}`;
+    }
+  }
+  const dot = t.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+  if (dot) {
+    const d = parseInt(dot[1], 10);
+    const m = parseInt(dot[2], 10);
+    const y = dot[3];
+    if (d >= 1 && d <= 31 && m >= 1 && m <= 12) {
+      return `${pad2(d)}/${pad2(m)}/${y}`;
+    }
+  }
+  const digitsOnly = t.replace(/\D/g, "");
+  if (digitsOnly.length === 8 && digitsOnly !== t) {
+    return formatChallanDateDisplay(digitsOnly);
+  }
+  // Eight digits without separators: ddmmyyyy (e.g. "08042026") or yyyymmdd (e.g. "20260408")
+  if (/^\d{8}$/.test(t)) {
+    const dd = t.slice(0, 2);
+    const mm = t.slice(2, 4);
+    const yyyy = t.slice(4, 8);
+    const d = parseInt(dd, 10);
+    const m = parseInt(mm, 10);
+    if (d >= 1 && d <= 31 && m >= 1 && m <= 12) {
+      return `${dd}/${mm}/${yyyy}`;
+    }
+    const yIso = t.slice(0, 4);
+    const mmIso = t.slice(4, 6);
+    const ddIso = t.slice(6, 8);
+    const mi = parseInt(mmIso, 10);
+    const di = parseInt(ddIso, 10);
+    if (mi >= 1 && mi <= 12 && di >= 1 && di <= 31) {
+      return `${ddIso}/${mmIso}/${yIso}`;
+    }
+  }
+  return t;
+}
+
+const LATEST_RUN_TZ = "Asia/Kolkata";
+
+/** Batch last DMS run: dd/mm/yyyy hh:mm (IST). */
+function formatLatestRunDisplay(iso: string | null | undefined): string {
+  const t = (iso || "").trim();
+  if (!t) return "—";
+  const d = new Date(t);
+  if (Number.isNaN(d.getTime())) return "—";
+  const fmt = new Intl.DateTimeFormat("en-GB", {
+    timeZone: LATEST_RUN_TZ,
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+  return fmt.format(d).replace(",", "").replace(/\s+/g, " ").trim();
 }
 
 function showRetryOrderOnly(r: ChallanMasterProcessedRow): boolean {
@@ -155,12 +233,22 @@ export function SubdealerChallanPage({
   const [processedRows, setProcessedRows] = useState<ChallanMasterProcessedRow[]>([]);
   const [processedLoading, setProcessedLoading] = useState(false);
   const [processedError, setProcessedError] = useState<string | null>(null);
+  /** Draft input; **Search** copies trimmed value to ``processedChallanSearchApplied`` for the API. */
+  const [processedChallanSearchDraft, setProcessedChallanSearchDraft] = useState("");
+  /** When empty: API lists failed batches in the last 15 days. When set: match ``challan_book_num`` (any age). */
+  const [processedChallanSearchApplied, setProcessedChallanSearchApplied] = useState("");
   const [retryingId, setRetryingId] = useState<number | null>(null);
   const [retryingOrderBatchId, setRetryingOrderBatchId] = useState<string | null>(null);
-  const [expandedBatchId, setExpandedBatchId] = useState<string | null>(null);
+  /** Master row selection drives the lower **Failed vehicles** sub-table. */
+  const [selectedProcessedBatchId, setSelectedProcessedBatchId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const vehicleCount = useMemo(() => uniqueVehicleCount(rows), [rows]);
+
+  const selectedProcessedRow = useMemo(
+    () => processedRows.find((r) => r.challan_batch_id === selectedProcessedBatchId) ?? null,
+    [processedRows, selectedProcessedBatchId],
+  );
 
   const showSummaryBar =
     Boolean(challanNo || challanDateRaw || challanDateIso) || vehicleCount > 0;
@@ -233,14 +321,25 @@ export function SubdealerChallanPage({
     setProcessedLoading(true);
     setProcessedError(null);
     try {
-      const rows = await listRecentChallanStaging(dealerId, CHALLAN_STAGING_RECENT_DAYS);
+      const rows = await listRecentChallanStaging(dealerId, CHALLAN_STAGING_RECENT_DAYS, {
+        challanBookNum: processedChallanSearchApplied.trim() || null,
+      });
       setProcessedRows(rows);
     } catch (err) {
       setProcessedError(err instanceof Error ? err.message : String(err));
     } finally {
       setProcessedLoading(false);
     }
-  }, [dealerId]);
+  }, [dealerId, processedChallanSearchApplied]);
+
+  const applyProcessedChallanSearch = useCallback(() => {
+    setProcessedChallanSearchApplied(processedChallanSearchDraft.trim());
+  }, [processedChallanSearchDraft]);
+
+  const clearProcessedChallanSearch = useCallback(() => {
+    setProcessedChallanSearchDraft("");
+    setProcessedChallanSearchApplied("");
+  }, []);
 
   useEffect(() => {
     if (challanSubTab === "processed") {
@@ -249,8 +348,18 @@ export function SubdealerChallanPage({
       setProcessedRows([]);
       setProcessedError(null);
       setProcessedLoading(false);
+      setSelectedProcessedBatchId(null);
+      setProcessedChallanSearchDraft("");
+      setProcessedChallanSearchApplied("");
     }
   }, [challanSubTab, loadProcessed]);
+
+  useEffect(() => {
+    if (challanSubTab !== "processed") return;
+    if (selectedProcessedBatchId === null) return;
+    const exists = processedRows.some((r) => r.challan_batch_id === selectedProcessedBatchId);
+    if (!exists) setSelectedProcessedBatchId(null);
+  }, [challanSubTab, processedRows, selectedProcessedBatchId]);
 
   const onRetryStagingRow = async (challanDetailStagingId: number) => {
     setRetryingId(challanDetailStagingId);
@@ -563,7 +672,7 @@ export function SubdealerChallanPage({
       )}
 
       <div className="subdealer-challan-tables-scroll" role="region" aria-label="Challan line items">
-        <div className="subdealer-challan-tables" role="group" aria-label="Engine and chassis numbers">
+        <div className="subdealer-challan-tables" role="group" aria-label="Chassis and engine numbers">
           {Array.from({ length: TABLE_COUNT }, (_, tableIdx) => {
             const offset = tableIdx * ROWS_PER_TABLE;
             return (
@@ -571,8 +680,8 @@ export function SubdealerChallanPage({
                 <table className="subdealer-challan-table">
                   <colgroup>
                     <col className="subdealer-challan-col-sno" />
-                    <col className="subdealer-challan-col-engine" />
                     <col className="subdealer-challan-col-chassis" />
+                    <col className="subdealer-challan-col-engine" />
                     <col className="subdealer-challan-col-status" />
                     <col className="subdealer-challan-col-delete" />
                   </colgroup>
@@ -581,8 +690,8 @@ export function SubdealerChallanPage({
                       <th scope="col" className="subdealer-challan-th-sno">
                         S.No.
                       </th>
-                      <th scope="col">Engine No.</th>
                       <th scope="col">Chassis No.</th>
+                      <th scope="col">Engine No.</th>
                       <th scope="col">Status</th>
                       <th scope="col" className="subdealer-challan-th-delete" aria-label="Remove row" />
                     </tr>
@@ -599,18 +708,6 @@ export function SubdealerChallanPage({
                       return (
                         <tr key={rowKey}>
                           <td className="subdealer-challan-sno">{sno}.</td>
-                          <td className="subdealer-challan-engine-cell">
-                            <input
-                              type="text"
-                              className="subdealer-challan-cell-input"
-                              value={row?.engineNo ?? ""}
-                              onChange={(e) =>
-                                updateRowField(globalIdx, "engineNo", e.target.value.toUpperCase())
-                              }
-                              maxLength={32}
-                              aria-label={`Engine No. row ${sno}`}
-                            />
-                          </td>
                           <td className="subdealer-challan-chassis-cell">
                             <input
                               type="text"
@@ -624,6 +721,18 @@ export function SubdealerChallanPage({
                               autoCapitalize="characters"
                               spellCheck={false}
                               aria-label={`Chassis No. row ${sno}`}
+                            />
+                          </td>
+                          <td className="subdealer-challan-engine-cell">
+                            <input
+                              type="text"
+                              className="subdealer-challan-cell-input"
+                              value={row?.engineNo ?? ""}
+                              onChange={(e) =>
+                                updateRowField(globalIdx, "engineNo", e.target.value.toUpperCase())
+                              }
+                              maxLength={32}
+                              aria-label={`Engine No. row ${sno}`}
                             />
                           </td>
                           <td className="subdealer-challan-status-cell">
@@ -677,114 +786,211 @@ export function SubdealerChallanPage({
             {processedError}
           </div>
         )}
-        <div className="challans-processed-table-wrap">
-          {processedLoading ? (
-            <p className="app-table-empty" style={{ padding: "1rem" }}>
-              Loading…
-            </p>
-          ) : processedRows.length === 0 ? (
-            <p className="app-table-empty" style={{ padding: "1rem" }}>
-              No challan batches in this period.
-            </p>
-          ) : (
-            <table className="app-table">
-              <thead>
-                <tr>
-                  <th scope="col">Batch</th>
-                  <th scope="col">Created</th>
-                  <th scope="col">To dealer</th>
-                  <th scope="col">Book / date</th>
-                  <th scope="col" title="Prepared vs total vehicles in this batch">
-                    Prep / total
-                  </th>
-                  <th scope="col">Invoice</th>
-                  <th scope="col" title="Detail lines still in Failed (prepare or inventory)">
-                    Failed lines
-                  </th>
-                  <th scope="col">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {processedRows.map((r) => {
-                  const bid = r.challan_batch_id;
-                  const expanded = expandedBatchId === bid;
-                  const failedN = r.failed_line_count ?? 0;
-                  const canExpand = failedN > 0;
-                  const orderRetry = showRetryOrderOnly(r);
-                  return (
-                    <Fragment key={bid}>
-                      <tr>
-                        <td title={bid}>{shortBatchId(bid)}</td>
-                        <td>{formatStagingCreatedAt(r.created_at)}</td>
-                        <td>{r.to_dealer_id}</td>
-                        <td>
-                          {(r.challan_book_num || "—") + " / " + (r.challan_date || "—")}
-                        </td>
-                        <td>{formatPreparedOverTotal(r)}</td>
-                        <td>
-                          {(r.invoice_status || "—").trim()}
-                          {r.invoice_complete ? " ✓" : ""}
-                        </td>
-                        <td>
-                          {failedN > 0 ? (
-                            <button
-                              type="button"
-                              className="app-button app-button--small"
-                              aria-expanded={expanded}
-                              onClick={() => setExpandedBatchId(expanded ? null : bid)}
-                            >
-                              {failedN} {expanded ? "▾" : "▸"}
-                            </button>
-                          ) : (
-                            "0"
-                          )}
-                        </td>
-                        <td>
-                          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem" }}>
-                            {orderRetry ? (
-                              <button
-                                type="button"
-                                className="app-button app-button--primary challans-proc-retry-btn"
-                                disabled={retryingOrderBatchId !== null || retryingId !== null}
-                                onClick={() => void onRetryOrderOnly(bid)}
-                              >
-                                {retryingOrderBatchId === bid ? "Retrying order…" : "Retry order"}
-                              </button>
-                            ) : null}
-                          </div>
-                        </td>
-                      </tr>
-                      {canExpand && expanded
-                        ? r.failed_lines.map((fl) => (
-                            <tr key={`${bid}-${fl.challan_detail_staging_id}`} className="challans-proc-failed-row">
-                              <td colSpan={2}>Line {fl.challan_detail_staging_id}</td>
-                              <td colSpan={2}>
-                                {(fl.raw_engine || "—") + " / " + (fl.raw_chassis || "—")}
-                              </td>
-                              <td colSpan={1}>{(fl.status || "").trim() || "Failed"}</td>
-                              <td colSpan={2} className="challans-proc-err">
-                                {fl.last_error || "—"}
-                              </td>
-                              <td colSpan={1}>
+        <div className="challans-processed-search" role="search">
+          <label className="challans-processed-search-label" htmlFor="challans-processed-challan-no">
+            Challan No.
+          </label>
+          <input
+            id="challans-processed-challan-no"
+            type="search"
+            className="challans-processed-search-input"
+            placeholder="Search by book number…"
+            autoComplete="off"
+            value={processedChallanSearchDraft}
+            onChange={(e) => setProcessedChallanSearchDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                applyProcessedChallanSearch();
+              }
+            }}
+          />
+          <button
+            type="button"
+            className="app-button app-button--small challans-processed-search-btn"
+            onClick={() => applyProcessedChallanSearch()}
+          >
+            Search
+          </button>
+          {processedChallanSearchDraft.trim() || processedChallanSearchApplied ? (
+            <button
+              type="button"
+              className="app-button app-button--small challans-processed-search-clear"
+              onClick={() => clearProcessedChallanSearch()}
+            >
+              Clear
+            </button>
+          ) : null}
+        </div>
+        <p className="challans-processed-list-hint">
+          {processedChallanSearchApplied.trim()
+            ? "Showing this challan by book number (any date)."
+            : "Showing batches with at least one failed vehicle from the last 15 days."}
+        </p>
+        {processedLoading ? (
+          <p className="app-table-empty challans-processed-loading-msg">
+            Loading…
+          </p>
+        ) : processedRows.length === 0 ? (
+          <p className="app-table-empty challans-processed-loading-msg">
+            {processedChallanSearchApplied.trim()
+              ? "No challan found for this Challan No."
+              : "No failed challan batches in the last 15 days."}
+          </p>
+        ) : (
+          <div className="challans-processed-split">
+            <div className="challans-processed-master">
+              <p className="challans-processed-hint" id="challans-processed-master-hint">
+                Select a row to view failed vehicles below.
+              </p>
+              <div
+                className="challans-processed-table-wrap"
+                role="region"
+                aria-labelledby="challans-processed-master-hint"
+              >
+                <table className="app-table">
+                  <thead>
+                    <tr>
+                      <th scope="col">From dealer</th>
+                      <th scope="col">To dealer</th>
+                      <th scope="col">Challan date</th>
+                      <th scope="col">Challan number</th>
+                      <th scope="col" title="Prepared vs total vehicles in this batch">
+                        Prepared / total
+                      </th>
+                      <th scope="col">Invoice</th>
+                      <th scope="col">Latest run</th>
+                      <th scope="col">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {processedRows.map((r) => {
+                      const bid = r.challan_batch_id;
+                      const failedN = r.failed_line_count ?? 0;
+                      const orderRetry = showRetryOrderOnly(r);
+                      const firstFailedId = r.failed_lines?.[0]?.challan_detail_staging_id;
+                      const sel = selectedProcessedBatchId === bid;
+                      return (
+                        <tr
+                          key={bid}
+                          className={
+                            "challans-proc-master-row" + (sel ? " challans-proc-master-row--selected" : "")
+                          }
+                          aria-selected={sel}
+                          tabIndex={0}
+                          onClick={() => setSelectedProcessedBatchId(bid)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              setSelectedProcessedBatchId(bid);
+                            }
+                          }}
+                        >
+                          <td>{formatDealerDisplay(r.from_dealer_name, r.from_dealer_id)}</td>
+                          <td>{formatDealerDisplay(r.to_dealer_name, r.to_dealer_id)}</td>
+                          <td>{formatChallanDateDisplay(r.challan_date)}</td>
+                          <td>{(r.challan_book_num || "").trim() || "—"}</td>
+                          <td>{formatPreparedOverTotal(r)}</td>
+                          <td>
+                            {(r.invoice_status || "—").trim()}
+                            {r.invoice_complete ? " ✓" : ""}
+                          </td>
+                          <td>{formatLatestRunDisplay(r.last_run_at)}</td>
+                          <td>
+                            <div className="challans-proc-actions-cell">
+                              {orderRetry ? (
                                 <button
                                   type="button"
                                   className="app-button app-button--primary challans-proc-retry-btn"
-                                  disabled={retryingId !== null || retryingOrderBatchId !== null}
-                                  onClick={() => void onRetryStagingRow(fl.challan_detail_staging_id)}
+                                  disabled={retryingOrderBatchId !== null || retryingId !== null}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    void onRetryOrderOnly(bid);
+                                  }}
                                 >
-                                  {retryingId === fl.challan_detail_staging_id ? "Retrying…" : "Retry line"}
+                                  {retryingOrderBatchId === bid ? "Retrying…" : "Retry"}
                                 </button>
-                              </td>
-                            </tr>
-                          ))
-                        : null}
-                    </Fragment>
-                  );
-                })}
-              </tbody>
-            </table>
-          )}
-        </div>
+                              ) : failedN > 0 ? (
+                                <>
+                                  <span className="challans-proc-failed-badge" title="Details in Failed vehicles below">
+                                    {failedN} failed
+                                  </span>
+                                  {firstFailedId != null ? (
+                                    <button
+                                      type="button"
+                                      className="app-button app-button--primary challans-proc-retry-btn"
+                                      disabled={retryingId !== null || retryingOrderBatchId !== null}
+                                      title={
+                                        failedN > 1
+                                          ? "Retry first failed vehicle (use Failed vehicles below for others)"
+                                          : "Retry this failed vehicle"
+                                      }
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        void onRetryStagingRow(firstFailedId);
+                                      }}
+                                    >
+                                      {retryingId === firstFailedId ? "Retrying…" : "Retry"}
+                                    </button>
+                                  ) : null}
+                                </>
+                              ) : (
+                                "—"
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div
+              className="challans-processed-failed-section"
+              role="region"
+              aria-labelledby="challans-processed-failed-heading"
+            >
+              <h3 className="challans-processed-failed-heading" id="challans-processed-failed-heading">
+                Failed vehicles
+              </h3>
+              <div className="challans-processed-failed-table-wrap">
+                {selectedProcessedRow === null ? (
+                  <p className="app-table-empty challans-processed-failed-placeholder">
+                    Select a challan batch in the table above.
+                  </p>
+                ) : (selectedProcessedRow.failed_lines?.length ?? 0) === 0 ? (
+                  <p className="app-table-empty challans-processed-failed-placeholder">
+                    No failed vehicles in this batch.
+                  </p>
+                ) : (
+                  <table className="app-table challans-processed-failed-table">
+                    <thead>
+                      <tr>
+                        <th scope="col">Line</th>
+                        <th scope="col">Chassis No.</th>
+                        <th scope="col">Engine No.</th>
+                        <th scope="col">Status</th>
+                        <th scope="col">Reason</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(selectedProcessedRow.failed_lines ?? []).map((fl) => (
+                        <tr key={fl.challan_detail_staging_id}>
+                          <td>{fl.challan_detail_staging_id}</td>
+                          <td>{(fl.raw_chassis || "").trim() || "—"}</td>
+                          <td>{(fl.raw_engine || "").trim() || "—"}</td>
+                          <td>{(fl.status || "").trim() || "Failed"}</td>
+                          <td className="challans-proc-err">{fl.last_error?.trim() || "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
       ) : null}
     </div>

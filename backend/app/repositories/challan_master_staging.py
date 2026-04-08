@@ -99,7 +99,8 @@ def fetch_master(challan_batch_id: uuid.UUID) -> dict[str, Any] | None:
             cur.execute(
                 """
                 SELECT challan_batch_id, from_dealer_id, to_dealer_id, challan_date, challan_book_num,
-                       num_vehicles, num_vehicles_prepared, invoice_complete, invoice_status, created_at
+                       num_vehicles, num_vehicles_prepared, invoice_complete, invoice_status, created_at,
+                       last_run_at
                 FROM challan_master_staging
                 WHERE challan_batch_id = %s::uuid
                 """,
@@ -126,6 +127,24 @@ def refresh_prepared_count(challan_batch_id: uuid.UUID) -> None:
                       AND LOWER(TRIM(COALESCE(d.status, ''))) IN ('ready', 'committed')
                 ), 0)
                 WHERE m.challan_batch_id = %s::uuid
+                """,
+                (str(challan_batch_id),),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def touch_last_run_at(challan_batch_id: uuid.UUID) -> None:
+    """Record that a process/retry attempt finished (UI **Latest run**)."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE challan_master_staging
+                SET last_run_at = CURRENT_TIMESTAMP
+                WHERE challan_batch_id = %s::uuid
                 """,
                 (str(challan_batch_id),),
             )
@@ -167,15 +186,12 @@ def set_invoice_state(
         conn.close()
 
 
-def list_masters_recent(from_dealer_id: int, *, days: int = 15) -> list[dict[str, Any]]:
-    """Recent master rows for Processed tab."""
-    conn = get_connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
+_MASTER_LIST_SELECT = """
                 SELECT m.challan_batch_id, m.from_dealer_id, m.to_dealer_id, m.challan_date, m.challan_book_num,
                        m.num_vehicles, m.num_vehicles_prepared, m.invoice_complete, m.invoice_status, m.created_at,
+                       m.last_run_at,
+                       df.dealer_name AS from_dealer_name,
+                       dt.dealer_name AS to_dealer_name,
                        COALESCE((
                            SELECT COUNT(*)::integer FROM challan_details_staging d
                            WHERE d.challan_batch_id = m.challan_batch_id
@@ -187,12 +203,53 @@ def list_masters_recent(from_dealer_id: int, *, days: int = 15) -> list[dict[str
                              AND LOWER(TRIM(COALESCE(d.status, ''))) = 'failed'
                        ), 0) AS failed_line_count
                 FROM challan_master_staging m
+                LEFT JOIN dealer_ref df ON df.dealer_id = m.from_dealer_id
+                LEFT JOIN dealer_ref dt ON dt.dealer_id = m.to_dealer_id
+"""
+
+
+def list_masters_recent(
+    from_dealer_id: int,
+    *,
+    days: int = 15,
+    challan_book_num: str | None = None,
+) -> list[dict[str, Any]]:
+    """
+    Processed tab list.
+
+    * No ``challan_book_num``: masters from the last *days* that have **at least one** Failed detail line.
+    * With non-empty ``challan_book_num`` (trimmed): masters for this dealer whose ``challan_book_num`` matches
+      (case-insensitive, trimmed); **no** date window — used to open older challans by book number.
+    """
+    book = (challan_book_num or "").strip()
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            if book:
+                cur.execute(
+                    _MASTER_LIST_SELECT
+                    + """
                 WHERE m.from_dealer_id = %s
-                  AND m.created_at >= CURRENT_TIMESTAMP - (%s::integer * INTERVAL '1 day')
+                  AND LOWER(TRIM(COALESCE(m.challan_book_num, ''))) = LOWER(%s)
                 ORDER BY m.created_at DESC, m.challan_batch_id DESC
                 """,
-                (int(from_dealer_id), int(days)),
-            )
+                    (int(from_dealer_id), book),
+                )
+            else:
+                cur.execute(
+                    _MASTER_LIST_SELECT
+                    + """
+                WHERE m.from_dealer_id = %s
+                  AND m.created_at >= CURRENT_TIMESTAMP - (%s::integer * INTERVAL '1 day')
+                  AND EXISTS (
+                    SELECT 1 FROM challan_details_staging d
+                    WHERE d.challan_batch_id = m.challan_batch_id
+                      AND LOWER(TRIM(COALESCE(d.status, ''))) = 'failed'
+                  )
+                ORDER BY m.created_at DESC, m.challan_batch_id DESC
+                """,
+                    (int(from_dealer_id), int(days)),
+                )
             return [_row_jsonable(dict(r)) for r in (cur.fetchall() or [])]
     finally:
         conn.close()
