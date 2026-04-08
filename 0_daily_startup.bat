@@ -1,6 +1,7 @@
 @echo off
 REM Daily startup: Git update, then start backend (uvicorn) and client (npm run dev).
-REM Place this file in the project root. To create daily_startup.exe, use a Bat-to-EXE converter.
+REM Requires Python venv at "%ROOT%venv" (see Documentation\git-daily-workflow.md).
+REM If Vite shows ECONNREFUSED :8000, open "MyAuto Backend" and read the error (venv path, import, port in use).
 
 set "ROOT=%~dp0"
 cd /d "%ROOT%"
@@ -32,7 +33,8 @@ start "MyAuto Backend" cmd /k "title MyAuto Backend && cd /d "%ROOT%backend" && 
 echo === Starting Watcher in new window ===
 start "MyAuto Watcher" cmd /k "title MyAuto Watcher && cd /d "%ROOT%backend" && call ..\venv\Scripts\activate.bat && python run_watcher.py && pause"
 
-timeout /t 2 /nobreak >nul
+echo === Waiting for API on port 8000 (avoids Vite proxy ECONNREFUSED while uvicorn starts) ===
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%scripts\wait-for-api.ps1"
 
 echo === Starting Client (npm run dev) in new window ===
 start "MyAuto Client" cmd /k "title MyAuto Client && cd /d "%ROOT%client" && npm run dev"
