@@ -2915,6 +2915,168 @@ def Playwright_Hero_DMS_fill(
     return out
 
 
+def Playwright_Hero_DMS_fill_subdealer_challan_order_only(
+    page: Page,
+    dms_values: dict,
+    urls: SiebelDmsUrls,
+    *,
+    action_timeout_ms: int,
+    nav_timeout_ms: int,
+    content_frame_selector: str | None,
+    execution_log_path: Path | None = None,
+) -> dict:
+    """
+    After per-vehicle ``prepare_vehicle`` (and DB upserts), run **only** ``prepare_order`` for the challan batch:
+    Network customer, dummy mobile, multi-line ``order_line_vehicles`` / ``attach_line_items``.
+
+    Does **not** run ``prepare_vehicle`` or retail ``prepare_customer``. Caller must set ``dms_values`` via
+    ``prepare_customer_for_challan`` and ``_challan_last_vehicle`` (last scrape) before calling.
+    """
+    out: dict = {
+        "vehicle": dict(dms_values.get("_challan_last_vehicle") or {}),
+        "error": None,
+        "dms_siebel_forms_filled": False,
+        "dms_siebel_notes": [],
+        "dms_milestones": [],
+        "dms_step_messages": [],
+    }
+    page.set_default_timeout(action_timeout_ms)
+    log_fp = None
+    _exec_log_path = Path(execution_log_path) if execution_log_path is not None else None
+    if execution_log_path is not None:
+        lp = Path(execution_log_path)
+        lp.parent.mkdir(parents=True, exist_ok=True)
+        log_fp = open(lp, "w", encoding="utf-8")
+        log_fp.write("Playwright DMS — subdealer challan order phase\n\n")
+        log_fp.write(f"started_ist={_ts_ist_iso()}\n")
+        log_fp.flush()
+
+    def _exec_log(prefix: str, msg: str) -> None:
+        if not log_fp or not (msg or "").strip():
+            return
+        try:
+            log_fp.write(f"{_ts_ist_iso()} [{prefix}] {msg}\n")
+            log_fp.flush()
+        except OSError:
+            pass
+
+    def form_trace(siebel_step: str, form_name: str, action: str, **fields: object) -> None:
+        segments = [f"siebel_step={siebel_step}", f"form={form_name}", f"action={action}"]
+        for key in sorted(fields.keys()):
+            val = fields[key]
+            if val is None:
+                continue
+            v = str(val).replace("\n", " ").strip()
+            if v == "":
+                continue
+            if len(v) > 500:
+                v = v[:497] + "..."
+            segments.append(f"{key}={v!r}")
+        _exec_log("FORM", " | ".join(segments))
+
+    def ms_done(label: str) -> None:
+        m = out["dms_milestones"]
+        if label not in m:
+            m.append(label)
+            _exec_log("MILESTONE", label)
+
+    def step(msg: str) -> None:
+        if msg and (not out["dms_step_messages"] or out["dms_step_messages"][-1] != msg):
+            out["dms_step_messages"].append(msg)
+        _exec_log("STEP", msg)
+
+    def note(msg: str) -> None:
+        out["dms_siebel_notes"].append(msg)
+        logger.info("siebel_dms_challan: %s", msg)
+        _exec_log("NOTE", msg)
+
+    def log_vehicle_snapshot(stage: str) -> None:
+        veh = out.get("vehicle") or {}
+        if not log_fp or not isinstance(veh, dict):
+            return
+        try:
+            log_fp.write(f"\n--- vehicle_snapshot ({stage}) ---\n")
+            for k in sorted(veh.keys()):
+                v = veh.get(k)
+                if v is None:
+                    continue
+                s = str(v).replace("\n", " ").replace("\r", " ").strip()
+                if not s:
+                    continue
+                if len(s) > 2000:
+                    s = s[:1997] + "..."
+                log_fp.write(f"{k}={s!r}\n")
+            log_fp.flush()
+        except OSError:
+            pass
+
+    try:
+        step("Subdealer challan: Sales Orders / create order (Network, multi-VIN).")
+        _flow = str(dms_values.get("hero_dms_flow") or "").strip()
+        if _flow != "add_subdealer_challan":
+            _fn_ok, _fn_msg = _validate_contact_find_first_name((dms_values.get("first_name") or "").strip())
+            if not _fn_ok:
+                out["error"] = _fn_msg
+                return out
+        mobile = (dms_values.get("mobile_phone") or "").strip()
+        if not mobile:
+            out["error"] = "Siebel: mobile_phone is empty — cannot run Sales Orders mobile search."
+            return out
+        video_first_name = (dms_values.get("first_name") or "").strip()
+        order_scraped = prepare_order(
+            page,
+            dms_values,
+            urls,
+            out,
+            mobile=mobile,
+            video_first_name=video_first_name or "Subdealer",
+            action_timeout_ms=action_timeout_ms,
+            nav_timeout_ms=nav_timeout_ms,
+            content_frame_selector=content_frame_selector,
+            note=note,
+            step=step,
+            form_trace=form_trace,
+            ms_done=ms_done,
+            log_vehicle_snapshot=log_vehicle_snapshot,
+        )
+        if out.get("error"):
+            return out
+        out["vehicle"] = dict(out.get("vehicle") or {})
+        if order_scraped:
+            veh = dict(out.get("vehicle") or {})
+            if order_scraped.get("vehicle_price"):
+                veh["vehicle_price"] = order_scraped.get("vehicle_price")
+            if order_scraped.get("order_number"):
+                veh["order_number"] = order_scraped.get("order_number")
+            if order_scraped.get("invoice_number"):
+                veh["invoice_number"] = order_scraped.get("invoice_number")
+            if order_scraped.get("order_line_ex_showroom"):
+                veh["order_line_ex_showroom"] = order_scraped.get("order_line_ex_showroom")
+            out["vehicle"] = veh
+            log_vehicle_snapshot("challan_prepare_order_merge")
+        out["dms_siebel_forms_filled"] = True
+        step("Subdealer challan: prepare_order completed.")
+        return out
+    except PlaywrightTimeout as e:
+        out["error"] = f"Siebel automation timeout: {e!s}"
+        logger.warning("siebel_dms_challan: PlaywrightTimeout %s", e)
+    except Exception as e:
+        out["error"] = f"Siebel automation error: {e!s}"
+        logger.warning("siebel_dms_challan: %s", e, exc_info=True)
+    finally:
+        out["dms_milestones"] = _sort_milestone_labels(list(out.get("dms_milestones") or []))
+        if log_fp is not None:
+            try:
+                log_fp.write(f"\n{_ts_ist_iso()} [END] error={out.get('error')!s}\n")
+            except OSError:
+                pass
+            try:
+                log_fp.close()
+            except OSError:
+                pass
+    return out
+
+
 def run_hero_siebel_dms_flow(
     page: Page,
     dms_values: dict,

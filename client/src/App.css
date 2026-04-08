@@ -2220,10 +2220,10 @@
   box-sizing: border-box;
 }
 
-/* Row 1 = labels; row 2 = select, dealer input, scan buttons, Create Challans — same vertical band */
+/* Row 1 = dealer label; row 2 = dealer input, scan buttons, Create Challans */
 .subdealer-challan-top-grid {
   display: grid;
-  grid-template-columns: auto minmax(140px, 320px) auto auto;
+  grid-template-columns: minmax(160px, 360px) auto auto;
   grid-template-rows: auto auto;
   column-gap: 10px;
   row-gap: 2px;
@@ -2232,36 +2232,25 @@
   box-sizing: border-box;
 }
 
-.subdealer-challan-l-from {
-  grid-column: 1;
-  grid-row: 1;
-  align-self: end;
-}
-
 .subdealer-challan-l-dealer {
-  grid-column: 2;
+  grid-column: 1;
   grid-row: 1;
   align-self: end;
-}
-
-.subdealer-challan-top-grid .subdealer-challan-select {
-  grid-column: 1;
-  grid-row: 2;
 }
 
 .subdealer-challan-top-grid .subdealer-challan-input {
-  grid-column: 2;
+  grid-column: 1;
   grid-row: 2;
 }
 
 .subdealer-challan-top-grid .subdealer-challan-scan-btns {
-  grid-column: 3;
+  grid-column: 2;
   grid-row: 2;
   align-self: center;
 }
 
 .subdealer-challan-top-grid .subdealer-challan-add-btn {
-  grid-column: 4;
+  grid-column: 3;
   grid-row: 2;
   align-self: center;
   justify-self: end;
@@ -2368,8 +2357,59 @@
 }
 
 .subdealer-challan-col-status {
-  width: 8rem;
-  min-width: 6rem;
+  width: 4.5rem;
+  min-width: 3.5rem;
+  max-width: 5rem;
+}
+
+.subdealer-challan-col-delete {
+  width: 2rem;
+  min-width: 2rem;
+  max-width: 2.25rem;
+}
+
+.subdealer-challan-th-delete {
+  padding: 4px 2px !important;
+}
+
+.subdealer-challan-delete-cell {
+  padding: 2px 4px;
+  text-align: center;
+  vertical-align: middle;
+}
+
+.subdealer-challan-row-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.65rem;
+  height: 1.65rem;
+  padding: 0;
+  margin: 0;
+  border: 1px solid #c5d9ed;
+  border-radius: 4px;
+  background: #fff;
+  color: #8b2942;
+  font-size: 1.1rem;
+  line-height: 1;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.subdealer-challan-row-delete:hover {
+  background: #fff0f2;
+  border-color: #d48a9a;
+}
+
+.subdealer-challan-row-delete:focus-visible {
+  outline: 2px solid #1e5a9e;
+  outline-offset: 1px;
+}
+
+.subdealer-challan-delete-placeholder {
+  display: inline-block;
+  width: 1.65rem;
+  height: 1.65rem;
 }
 
 .subdealer-challan-table thead th {
@@ -2425,9 +2465,16 @@
   padding-right: 6px;
 }
 
-.subdealer-challan-status-input {
-  text-transform: none;
+.subdealer-challan-status-readonly {
+  display: block;
+  box-sizing: border-box;
   font-family: inherit;
+  font-size: 12px;
+  padding: 3px 5px;
+  min-height: 1.75rem;
+  line-height: 1.35;
+  color: #3d4f5f;
+  user-select: none;
 }
 
 .subdealer-challan-cell-input {

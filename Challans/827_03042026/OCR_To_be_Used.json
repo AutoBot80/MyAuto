@@ -40,7 +40,7 @@
     },
     {
       "engine_no": "27001",
-      "chassis_no": "17798 \\",
+      "chassis_no": "17798",
       "status": "queued"
     },
     {
@@ -65,7 +65,7 @@
     },
     {
       "engine_no": "09115",
-      "chassis_no": "58801 )",
+      "chassis_no": "58801",
       "status": "queued"
     },
     {
@@ -75,7 +75,7 @@
     },
     {
       "engine_no": "27156",
-      "chassis_no": "18229 >",
+      "chassis_no": "18229",
       "status": "queued"
     },
     {
@@ -85,17 +85,17 @@
     },
     {
       "engine_no": "27540",
-      "chassis_no": "17774 )",
+      "chassis_no": "17774",
       "status": "queued"
     },
     {
       "engine_no": "27981",
-      "chassis_no": "18129 )",
+      "chassis_no": "18129",
       "status": "queued"
     },
     {
       "engine_no": "67635",
-      "chassis_no": "44692 )",
+      "chassis_no": "44692",
       "status": "queued"
     },
     {
@@ -110,11 +110,11 @@
     },
     {
       "engine_no": "27552",
-      "chassis_no": "17789 \\",
+      "chassis_no": "17789",
       "status": "queued"
     },
     {
-      "engine_no": "1.0721",
+      "engine_no": "10721",
       "chassis_no": "40765",
       "status": "queued"
     },

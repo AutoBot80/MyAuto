@@ -1650,6 +1650,10 @@ def _create_order(
     line_item_discount: str = "",
     attach_line_items: list[dict] | None = None,
     form_trace=None,
+    hero_dms_flow: str = "add_sales",
+    challan_comments_text: str = "",
+    network_dealer_name: str = "",
+    challan_network_pin: str = "",
 ) -> tuple[bool, str | None, dict]:
     """
     Vehicle Sales → Sales Orders flow (same frame as the ``+`` New control):
@@ -2241,8 +2245,97 @@ def _create_order(
         _safe_page_wait(page, 600, log_label="after_booking_order_type")
         note("Create Order: set Booking Order Type = Normal Booking.")
 
+        _flow = (hero_dms_flow or "add_sales").strip()
+        if _flow == "add_subdealer_challan":
+            _ndn = (network_dealer_name or "").strip()
+            for root in _roots():
+                try:
+                    if _fill_by_label_on_frame(root, "Customer Type", "Network", action_timeout_ms=action_timeout_ms):
+                        note("Create Order: set Customer Type = Network (challan).")
+                        break
+                    if _select_dropdown_by_label_on_frame(
+                        root,
+                        label="Customer Type",
+                        value="Network",
+                        action_timeout_ms=min(action_timeout_ms, 8000),
+                    ):
+                        note("Create Order: set Customer Type = Network via dropdown (challan).")
+                        break
+                except Exception:
+                    continue
+            if _ndn:
+                for root in _roots():
+                    try:
+                        for _acct_lbl in ("Account/Institution Name", "Account Institution Name", "Institution Name"):
+                            if _fill_by_label_on_frame(root, _acct_lbl, _ndn, action_timeout_ms=action_timeout_ms):
+                                note(f"Create Order: filled {_acct_lbl} (challan).")
+                                break
+                        else:
+                            continue
+                        break
+                    except Exception:
+                        continue
+            _safe_page_wait(page, 400, log_label="after_challan_network_fields")
+
         _bp = (battery_partial or "").strip()
-        if _bp:
+        _challan_ct = (challan_comments_text or "").strip()
+        if _flow == "add_subdealer_challan" and _challan_ct:
+            _comments_text = _challan_ct
+            _filled_comments = False
+            _tmo_c = min(int(action_timeout_ms or 3000), 4000)
+            _comment_css = (
+                'textarea[name="s_2_1_202_0"]',
+                'textarea[aria-label="Comments"]',
+                'textarea[aria-label*="Comments" i]',
+            )
+            for root in _all_ui_roots():
+                if _filled_comments:
+                    break
+                for css in _comment_css:
+                    try:
+                        loc = root.locator(css).first
+                        if loc.count() <= 0 or not loc.is_visible(timeout=700):
+                            continue
+                        try:
+                            loc.click(timeout=_tmo_c)
+                        except Exception:
+                            loc.click(timeout=_tmo_c, force=True)
+                        loc.fill("", timeout=_tmo_c)
+                        loc.fill(_comments_text, timeout=_tmo_c)
+                        try:
+                            loc.press("Tab", timeout=1200)
+                        except Exception:
+                            pass
+                        _filled_comments = True
+                        break
+                    except Exception:
+                        continue
+            if not _filled_comments:
+                for root in _all_ui_roots():
+                    try:
+                        if _fill_by_label_on_frame(
+                            root, "Comments", _comments_text, action_timeout_ms=action_timeout_ms
+                        ):
+                            _filled_comments = True
+                            break
+                        if _fill_by_label_on_frame(
+                            root, "Comment", _comments_text, action_timeout_ms=action_timeout_ms
+                        ):
+                            _filled_comments = True
+                            break
+                    except Exception:
+                        continue
+            if _filled_comments:
+                note(f"Create Order: filled Comments (challan) → {_comments_text!r}.")
+                if callable(form_trace):
+                    form_trace(
+                        "v4_create_order_comments",
+                        "Sales order / create booking",
+                        "fill_Comments_challan_helmet",
+                        comments=_comments_text,
+                    )
+                _safe_page_wait(page, 350, log_label="after_booking_comments_challan")
+        elif _bp:
             _comments_text = f"Battery no. is {_bp}"
             _filled_comments = False
             _tmo_c = min(int(action_timeout_ms or 3000), 4000)
@@ -2511,607 +2604,613 @@ def _create_order(
                 note("Create Order: locked booking form context for Contact Last Name/F2.")
 
         # 4) Contact Last Name → F2 pick applet flow (operator-provided deterministic path)
-        _mob_digits = re.sub(r"\D", "", (mobile or "").strip())
-        _first_need = (first_name or "").strip().lower()
-        _applet_done = False
-        _applet_err = ""
-        _contact_pin_rb = ""
-        _contact_roots = [_locked_root] if _locked_root is not None else list(_roots())
+        if _flow == "add_subdealer_challan":
+            _applet_done = True
+            _contact_pin_rb = (challan_network_pin or "").strip() or "000000"
+            _applet_err = ""
+            note("Create Order: subdealer challan — skipped Contact Last Name F2 applet.")
+        else:
+            _mob_digits = re.sub(r"\D", "", (mobile or "").strip())
+            _first_need = (first_name or "").strip().lower()
+            _applet_done = False
+            _applet_err = ""
+            _contact_pin_rb = ""
+            _contact_roots = [_locked_root] if _locked_root is not None else list(_roots())
 
-        # #region agent log — F2 applet context
-        try:
-            _lr_url = getattr(_locked_root, 'url', None) if _locked_root else None
-            _lr_type = type(_locked_root).__name__ if _locked_root else "None"
-            _cr_count = len(_contact_roots)
-            with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-                import json as _j_f2, time as _t_f2
-                _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H1_H4","location":"hero_dms_playwright_invoice.py:create_order_f2_start","message":"F2 applet context","data":{"locked_root_type":_lr_type,"locked_root_url":(_lr_url or "")[:150],"contact_roots_count":_cr_count},"timestamp":_ts_ist_iso()}) + "\n")
-        except Exception:
-            pass
-        # #endregion
-
-        for root in _contact_roots:
+            # #region agent log — F2 applet context
             try:
-                # Use CSS selector with exact aria-label (not get_by_label which can match via label associations)
-                fld = root.locator("input[aria-label*='Contact Last Name' i]").first
-                if fld.count() <= 0 or not fld.is_visible(timeout=700):
-                    fld = root.locator("input[aria-label='Contact Last Name']").first
-                if fld.count() <= 0 or not fld.is_visible(timeout=700):
-                    # #region agent log — CLS not found in root
-                    try:
-                        with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-                            _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H10","location":"hero_dms_playwright_invoice.py:create_order_cls_miss","message":"CLS field not found via aria-label CSS selector","data":{"root_url":getattr(root,'url','?')[:120]},"timestamp":_ts_ist_iso()}) + "\n")
-                    except Exception:
-                        pass
-                    # #endregion
-                    continue
+                _lr_url = getattr(_locked_root, 'url', None) if _locked_root else None
+                _lr_type = type(_locked_root).__name__ if _locked_root else "None"
+                _cr_count = len(_contact_roots)
+                with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
+                    import json as _j_f2, time as _t_f2
+                    _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H1_H4","location":"hero_dms_playwright_invoice.py:create_order_f2_start","message":"F2 applet context","data":{"locked_root_type":_lr_type,"locked_root_url":(_lr_url or "")[:150],"contact_roots_count":_cr_count},"timestamp":_ts_ist_iso()}) + "\n")
+            except Exception:
+                pass
+            # #endregion
 
-                # #region agent log — CLS found, about to click + F2
+            for root in _contact_roots:
                 try:
-                    _cls_aria = fld.evaluate("el => el.getAttribute('aria-label') || ''")
-                    _cls_name = fld.evaluate("el => el.getAttribute('name') || ''")
-                    _cls_id = fld.evaluate("el => el.getAttribute('id') || ''")
-                    with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-                        _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H10","location":"hero_dms_playwright_invoice.py:create_order_cls_found","message":"CLS field found via aria-label CSS","data":{"aria":_cls_aria[:80],"name":_cls_name,"id":_cls_id[:40],"root_url":getattr(root,'url','?')[:120]},"timestamp":_ts_ist_iso()}) + "\n")
-                except Exception:
-                    pass
-                # #endregion
-
-                try:
-                    fld.click(timeout=min(action_timeout_ms, 2500))
-                except Exception:
-                    fld.click(timeout=min(action_timeout_ms, 2500), force=True)
-                _safe_page_wait(page, 300, log_label="after_cls_click_before_f2")
-                try:
-                    fld.press("F2", timeout=1200)
-                except Exception:
-                    pass
-                _safe_page_wait(page, 1200, log_label="after_contact_lastname_f2")
-
-                _all_roots_for_applet = list(_ordered_frames(page)) + [page]
-
-                # Check if F2 keyboard press opened the applet (field names are dynamic, use suffix pattern)
-                _applet_opened_by_f2 = False
-                for _chk in _all_roots_for_applet:
-                    try:
-                        if _chk.locator("input[name$='_312_0']").first.is_visible(timeout=400):
-                            _applet_opened_by_f2 = True
-                            break
-                    except Exception:
-                        continue
-
-                if not _applet_opened_by_f2:
-                    note("Create Order: F2 key did not open applet — trying icon click near CLS field.")
-                    try:
-                        fld.click(timeout=1500)
-                    except Exception:
-                        pass
-                    _safe_page_wait(page, 300, log_label="refocus_cls_before_icon")
-                    _icon_clicked = False
-                    try:
-                        _icon_handle = fld.evaluate_handle("""(el) => {
-                            const sel = "[aria-label='Press F2 for Selection Field']";
-                            let p = el.parentElement;
-                            for (let depth = 0; p && depth < 8; depth++, p = p.parentElement) {
-                                const icon = p.querySelector(sel);
-                                if (icon) {
-                                    const st = window.getComputedStyle(icon);
-                                    if (st.display !== 'none' && st.visibility !== 'hidden') return icon;
-                                }
-                                if (['TABLE', 'FORM', 'BODY'].includes(p.tagName)) break;
-                            }
-                            let sib = el.nextElementSibling;
-                            for (let i = 0; sib && i < 5; i++, sib = sib.nextElementSibling) {
-                                if (sib.matches && sib.matches(sel)) return sib;
-                                const inner = sib.querySelector && sib.querySelector(sel);
-                                if (inner) return inner;
-                            }
-                            return null;
-                        }""")
-                        _icon_el = _icon_handle.as_element()
-                        if _icon_el:
-                            _icon_el.click(timeout=2000)
-                            _icon_clicked = True
-                    except Exception:
-                        _icon_clicked = False
-
-                    # #region agent log — icon click result
-                    try:
-                        with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-                            _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H11","location":"hero_dms_playwright_invoice.py:create_order_icon_handle","message":"F2 icon click via evaluate_handle","data":{"icon_clicked": _icon_clicked},"timestamp":_ts_ist_iso()}) + "\n")
-                    except Exception:
-                        pass
-                    # #endregion
-
-                    if _icon_clicked:
-                        _safe_page_wait(page, 1500, log_label="after_f2_icon_click")
-                        note("Create Order: clicked F2 icon near Contact Last Name field.")
-                    else:
-                        note("Create Order: F2 icon not found near Contact Last Name field.")
-
-                # Applet should now be open with focus on the first field.
-                # Verify by checking the focused element reads "Contact Id" (or similar).
-                _safe_page_wait(page, 500, log_label="applet_settle")
-                _focused_val = ""
-                try:
-                    _focused_val = page.evaluate("""() => {
-                        const el = document.activeElement;
-                        if (!el) return '';
-                        return (el.value || el.textContent || '').trim();
-                    }""") or ""
-                except Exception:
-                    pass
-
-                # #region agent log — focused element after applet open
-                try:
-                    _focus_info = page.evaluate("""() => {
-                        const el = document.activeElement;
-                        if (!el) return {tag: 'none'};
-                        return {tag: el.tagName, name: el.getAttribute('name') || '', aria: (el.getAttribute('aria-label') || '').substring(0,60), val: (el.value || '').substring(0,60)};
-                    }""") or {}
-                    with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-                        _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H14","location":"hero_dms_playwright_invoice.py:create_order_applet_focus","message":"Focused element after applet open","data":_focus_info,"timestamp":_ts_ist_iso()}) + "\n")
-                except Exception:
-                    pass
-                # #endregion
-
-                # Determine search value: use Contact ID if available (keeps default "Contact Id" dropdown),
-                # otherwise fall back to mobile with dropdown change attempt.
-                _search_val = ""
-                _search_type = ""
-                if contact_id:
-                    _search_val = contact_id
-                    _search_type = "Contact Id"
-                    note(f"Create Order: using scraped Contact ID={contact_id!r} for applet search.")
-                else:
-                    _search_val = _mob_digits or mobile
-                    _search_type = "Mobile Phone"
-                    note("Create Order: no Contact ID — will try Mobile Phone search.")
-
-                if _search_type == "Contact Id" and "contact id" in _focused_val.lower():
-                    # Dropdown already shows "Contact Id" — just Tab to the value field
-                    page.keyboard.press("Tab")
-                    _safe_page_wait(page, 400, log_label="cls_tab_to_value")
-                else:
-                    # Need to change the Find dropdown to "Mobile Phone"
-                    _find_changed = False
-                    try:
-                        page.keyboard.press("Alt+ArrowDown")
-                        _safe_page_wait(page, 400, log_label="find_dropdown_open")
-                        for _nav in range(12):
-                            _cur = page.evaluate("() => (document.activeElement || {}).value || ''") or ""
-                            if "mobile" in _cur.lower():
-                                _find_changed = True
-                                break
-                            page.keyboard.press("ArrowDown")
-                            _safe_page_wait(page, 150, log_label="find_dropdown_nav")
-                        if _find_changed:
-                            page.keyboard.press("Enter")
-                            _safe_page_wait(page, 200, log_label="find_dropdown_select")
-                    except Exception:
-                        pass
-                    note(f"Create Order: Find dropdown change to 'Mobile Phone' = {_find_changed}.")
-                    page.keyboard.press("Tab")
-                    _safe_page_wait(page, 400, log_label="cls_tab_to_value")
-
-                # Verify focus landed on the value field after Tab
-                _val_focus = {}
-                try:
-                    _val_focus = page.evaluate("""() => {
-                        const el = document.activeElement;
-                        if (!el) return {tag: 'none'};
-                        return {tag: el.tagName, name: el.getAttribute('name') || '', aria: (el.getAttribute('aria-label') || '').substring(0,60), val: (el.value || '').substring(0,60), type: el.getAttribute('type') || ''};
-                    }""") or {}
-                except Exception:
-                    pass
-
-                # #region agent log — focus after Tab to value field
-                try:
-                    with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-                        _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H18","location":"hero_dms_playwright_invoice.py:create_order_val_focus","message":"Focus after Tab to value field","data":{**_val_focus, "search_type": _search_type, "search_val": _search_val},"timestamp":_ts_ist_iso()}) + "\n")
-                except Exception:
-                    pass
-                # #endregion
-
-                # Value field: fill via Playwright locator (page.keyboard.type doesn't work on this Siebel field).
-                _val_filled = False
-                _val_readback = ""
-                _fill_strategy = ""
-
-                # Strategy A: fill the focused element directly (fastest — no frame scanning)
-                try:
-                    _active = page.evaluate_handle("() => document.activeElement")
-                    _el = _active.as_element()
-                    if _el:
-                        _el.fill(_search_val)
-                        _val_readback = (_el.input_value() or "").strip()
-                        if _val_readback:
-                            _val_filled = True
-                            _fill_strategy = "focused_element"
-                except Exception:
-                    pass
-
-                # Strategy B: find by aria-label — try page first (applet renders in main page), then frames
-                if not _val_filled:
-                    _all_fill_roots = [page] + list(_ordered_frames(page))
-                    for _fr in _all_fill_roots:
-                        try:
-                            _vf = _fr.locator("input[aria-label='Starting with' i]").first
-                            if _vf.count() > 0 and _vf.is_visible(timeout=800):
-                                _vf.click(timeout=1500)
-                                _vf.fill(_search_val, timeout=2000)
-                                _val_readback = (_vf.input_value(timeout=1000) or "").strip()
-                                if _val_readback:
-                                    _val_filled = True
-                                    _fill_strategy = "aria_label"
-                                    break
-                        except Exception:
-                            continue
-
-                # Strategy C: find by dynamic name suffix _313_0
-                if not _val_filled:
-                    for _fr in _all_fill_roots:
-                        try:
-                            _vf = _fr.locator("input[name$='_313_0']").first
-                            if _vf.count() > 0 and _vf.is_visible(timeout=800):
-                                _vf.click(timeout=1500)
-                                _vf.fill(_search_val, timeout=2000)
-                                _val_readback = (_vf.input_value(timeout=1000) or "").strip()
-                                if _val_readback:
-                                    _val_filled = True
-                                    _fill_strategy = "name_suffix"
-                                    break
-                        except Exception:
-                            continue
-
-                # #region agent log — value field fill result
-                try:
-                    with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-                        _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H20","location":"hero_dms_playwright_invoice.py:create_order_val_fill","message":"Value field fill result","data":{"typed": _search_val, "readback": _val_readback, "filled": _val_filled, "strategy": _fill_strategy},"timestamp":_ts_ist_iso()}) + "\n")
-                except Exception:
-                    pass
-                # #endregion
-
-                note(f"Create Order: applet value field fill={_val_filled}, readback='{_val_readback}'.")
-
-                # Trigger query — try Go/Query button across all fresh roots, fallback Enter
-                _safe_page_wait(page, 300, log_label="before_query_btn")
-                _fresh_roots = list(_ordered_frames(page)) + [page]
-                _qry_clicked = False
-                _qry_selectors = [
-                    "button[aria-label='Pick Contact List:Go']",
-                    "button[name$='_314_0'], a[name$='_314_0'], input[name$='_314_0']",
-                    "button[aria-label*='Go' i]",
-                    "button[aria-label*='Query' i]",
-                    "a[aria-label*='Go' i]",
-                ]
-                for _qsel in _qry_selectors:
-                    if _qry_clicked:
-                        break
-                    for r2 in _fresh_roots:
-                        try:
-                            t = r2.locator(_qsel).first
-                            if t.count() > 0 and t.is_visible(timeout=400):
-                                t.click(timeout=1500)
-                                _qry_clicked = True
-                                break
-                        except Exception:
-                            continue
-                if not _qry_clicked:
-                    page.keyboard.press("Enter")
-                _safe_page_wait(page, 1200, log_label="after_contact_pick_query")
-                note(f"Create Order: applet query triggered (button={_qry_clicked}).")
-
-                # #region agent log — post-query applet state
-                try:
-                    _pq_data = {}
-                    for _sr in _fresh_roots:
-                        try:
-                            _pq_data = _sr.evaluate("""() => {
-                                const rows = Array.from(document.querySelectorAll("tr")).slice(0, 20);
-                                const cells = [];
-                                for (const tr of rows) {
-                                    for (const c of tr.querySelectorAll("td, th, a, span")) {
-                                        const t = (c.textContent || '').trim();
-                                        if (t && t.length <= 50 && t.length > 1) cells.push(t);
-                                        if (cells.length >= 20) break;
-                                    }
-                                    if (cells.length >= 20) break;
-                                }
-                                const ok = document.querySelector("button[name$='_315_0'], a[name$='_315_0']");
-                                return {row_sample: cells.join(' | ').substring(0, 300), ok_visible: ok ? window.getComputedStyle(ok).display !== 'none' : null};
-                            }""")
-                            if _pq_data.get("row_sample"):
-                                _pq_data["frame_url"] = getattr(_sr, 'url', '?')[:120]
-                                break
-                        except Exception:
-                            continue
-                    with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-                        _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H13","location":"hero_dms_playwright_invoice.py:create_order_post_query","message":"Post-query applet state","data":_pq_data,"timestamp":_ts_ist_iso()}) + "\n")
-                except Exception:
-                    pass
-                # #endregion
-
-                # Match row by first name: find "Contact First Name" column index from header, then match data rows.
-                _row_ok = False
-                _row_diag = ""
-                _fresh_roots2 = list(_ordered_frames(page)) + [page]
-                for _rr in _fresh_roots2:
-                    try:
-                        _result = _rr.evaluate(
-                            """(firstNeed) => {
-                                const norm = (s) => String(s || '').trim().toLowerCase();
-                                const fn = norm(firstNeed);
-                                if (!fn) return {clicked: false, err: 'empty first name'};
-                                const tables = document.querySelectorAll("table");
-                                for (const tbl of tables) {
-                                    const allRows = Array.from(tbl.querySelectorAll("tr"));
-                                    if (allRows.length < 2) continue;
-                                    // Find header row and "Contact First Name" column index
-                                    let fnColIdx = -1;
-                                    let headerRowIdx = -1;
-                                    for (let ri = 0; ri < Math.min(allRows.length, 5); ri++) {
-                                        const hCells = allRows[ri].querySelectorAll("th, td");
-                                        for (let ci = 0; ci < hCells.length; ci++) {
-                                            const ht = norm(hCells[ci].textContent || '');
-                                            if (ht === 'contact first name' || ht === 'first name') {
-                                                fnColIdx = ci;
-                                                headerRowIdx = ri;
-                                                break;
-                                            }
-                                        }
-                                        if (fnColIdx >= 0) break;
-                                    }
-                                    // Scan data rows
-                                    const dataStart = headerRowIdx >= 0 ? headerRowIdx + 1 : 1;
-                                    const seenNames = [];
-                                    for (let ri = dataStart; ri < allRows.length; ri++) {
-                                        const cells = allRows[ri].querySelectorAll("td");
-                                        if (cells.length < 2) continue;
-                                        const cellTexts = Array.from(cells).map(c => (c.textContent || '').trim());
-                                        // Skip header-like rows
-                                        const joined = cellTexts.join('|').toLowerCase();
-                                        if (joined.includes('contact first name') || joined.includes('search results')) continue;
-                                        // Check name match
-                                        let nameInRow = '';
-                                        if (fnColIdx >= 0 && fnColIdx < cells.length) {
-                                            nameInRow = norm(cells[fnColIdx].textContent || '');
-                                        }
-                                        if (!nameInRow) {
-                                            // Fallback: check all cells for the name
-                                            nameInRow = cellTexts.find(t => norm(t) === fn) ? fn : '';
-                                        }
-                                        if (nameInRow) seenNames.push(nameInRow);
-                                        if (nameInRow === fn) {
-                                            const clickable = allRows[ri].querySelector("a, input[type='radio'], input[type='checkbox'], td");
-                                            if (clickable) { clickable.click(); } else { allRows[ri].click(); }
-                                            return {clicked: true, preview: cellTexts.slice(0, 8).join(' | ').substring(0, 200), fnColIdx: fnColIdx};
-                                        }
-                                    }
-                                    if (seenNames.length > 0) {
-                                        return {clicked: false, err: 'name not matched', seen: seenNames.slice(0, 10).join(', '), fnColIdx: fnColIdx};
-                                    }
-                                }
-                                return {clicked: false, err: 'no data rows found'};
-                            }""",
-                            _first_need,
-                        )
-
-                        # #region agent log — row match result
+                    # Use CSS selector with exact aria-label (not get_by_label which can match via label associations)
+                    fld = root.locator("input[aria-label*='Contact Last Name' i]").first
+                    if fld.count() <= 0 or not fld.is_visible(timeout=700):
+                        fld = root.locator("input[aria-label='Contact Last Name']").first
+                    if fld.count() <= 0 or not fld.is_visible(timeout=700):
+                        # #region agent log — CLS not found in root
                         try:
                             with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-                                _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H15","location":"hero_dms_playwright_invoice.py:create_order_row_match","message":"Row match result","data":_result or {},"timestamp":_ts_ist_iso()}) + "\n")
+                                _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H10","location":"hero_dms_playwright_invoice.py:create_order_cls_miss","message":"CLS field not found via aria-label CSS selector","data":{"root_url":getattr(root,'url','?')[:120]},"timestamp":_ts_ist_iso()}) + "\n")
                         except Exception:
                             pass
                         # #endregion
-
-                        if _result and _result.get("clicked"):
-                            _row_ok = True
-                            note(f"Create Order: matched row by first name. Preview: {(_result.get('preview',''))[:80]}")
-                            break
-                        elif _result:
-                            _row_diag = _result.get("err", "") + "; seen=" + _result.get("seen", "")
-                    except Exception:
                         continue
-                if not _row_ok:
-                    _applet_err = f"no first-name match for {first_name!r} in applet. {_row_diag[:180]}"
-                    if _search_type == "Contact Id" and _row_diag and "no data rows found" in _row_diag:
-                        note(
-                            f"Create Order: applet query by Contact ID={_search_val!r} returned zero rows — "
-                            "no enquiry exists for this contact. Stopping applet flow."
-                        )
-                        _applet_err = (
-                            f"Applet query by Contact ID ({_search_val}) returned no results. "
-                            "No enquiry/contact record found in Siebel for this ID."
-                        )
-                        break
-                    continue
-                _safe_page_wait(page, 400, log_label="after_row_select")
-                note("Create Order: matched contact row in applet.")
-
-                # OK button — search fresh roots, fallback Enter
-                _ok_clicked = False
-                # #region agent log — applet ok precheck
-                try:
-                    with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-                        _lf.write(_j_f2.dumps({
-                            "sessionId": "08e634",
-                            "runId": "pre-fix",
-                            "hypothesisId": "H4_H5",
-                            "location": "hero_dms_playwright_invoice.py:create_order_applet_ok_precheck",
-                            "message": "Preparing to click applet OK",
-                            "data": {
-                                "fresh_roots_count": len(_fresh_roots2),
-                                "row_matched": bool(_row_ok),
-                            },
-                            "timestamp": _ts_ist_iso(),
-                        }) + "\n")
-                except Exception:
-                    pass
-                # #endregion
-                for r2 in _fresh_roots2:
+    
+                    # #region agent log — CLS found, about to click + F2
                     try:
-                        for _ok_sel in (
-                            "button[aria-label='Pick Contact List:OK']",
-                            "a[aria-label='Pick Contact List:OK']",
-                            "input[aria-label='Pick Contact List:OK']",
-                            "button[name$='_315_0'], a[name$='_315_0'], input[name$='_315_0']",
-                            "button[aria-label*='OK' i]",
-                            "a[aria-label*='OK' i]",
-                            "input[aria-label*='OK' i]",
-                            "button:has-text('OK')",
-                            "a:has-text('OK')",
-                        ):
-                            t = r2.locator(_ok_sel).first
-                            if t.count() > 0 and t.is_visible(timeout=500):
-                                try:
-                                    t.click(timeout=2000)
-                                except Exception:
-                                    t.click(timeout=2000, force=True)
-                                _ok_clicked = True
-                                break
-                        if _ok_clicked:
-                            break
+                        _cls_aria = fld.evaluate("el => el.getAttribute('aria-label') || ''")
+                        _cls_name = fld.evaluate("el => el.getAttribute('name') || ''")
+                        _cls_id = fld.evaluate("el => el.getAttribute('id') || ''")
+                        with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
+                            _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H10","location":"hero_dms_playwright_invoice.py:create_order_cls_found","message":"CLS field found via aria-label CSS","data":{"aria":_cls_aria[:80],"name":_cls_name,"id":_cls_id[:40],"root_url":getattr(root,'url','?')[:120]},"timestamp":_ts_ist_iso()}) + "\n")
                     except Exception:
-                        continue
-                if not _ok_clicked:
-                    for r2 in _fresh_roots2:
+                        pass
+                    # #endregion
+    
+                    try:
+                        fld.click(timeout=min(action_timeout_ms, 2500))
+                    except Exception:
+                        fld.click(timeout=min(action_timeout_ms, 2500), force=True)
+                    _safe_page_wait(page, 300, log_label="after_cls_click_before_f2")
+                    try:
+                        fld.press("F2", timeout=1200)
+                    except Exception:
+                        pass
+                    _safe_page_wait(page, 1200, log_label="after_contact_lastname_f2")
+    
+                    _all_roots_for_applet = list(_ordered_frames(page)) + [page]
+    
+                    # Check if F2 keyboard press opened the applet (field names are dynamic, use suffix pattern)
+                    _applet_opened_by_f2 = False
+                    for _chk in _all_roots_for_applet:
                         try:
-                            _js_ok = r2.evaluate(
-                                """() => {
-                                    const vis = (el) => {
-                                      if (!el) return false;
-                                      const st = window.getComputedStyle(el);
-                                      if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity || '1') === 0) return false;
-                                      const rc = el.getBoundingClientRect();
-                                      return rc.width > 0 && rc.height > 0;
-                                    };
-                                    const sels = [
-                                      "button[aria-label='Pick Contact List:OK']",
-                                      "a[aria-label='Pick Contact List:OK']",
-                                      "input[aria-label='Pick Contact List:OK']",
-                                      "button[name$='_315_0']",
-                                      "a[name$='_315_0']",
-                                      "input[name$='_315_0']",
-                                    ];
-                                    for (const s of sels) {
-                                      const el = document.querySelector(s);
-                                      if (vis(el)) {
-                                        try { el.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
-                                        el.click();
-                                        return s;
-                                      }
-                                    }
-                                    return "";
-                                }"""
-                            )
-                            if _js_ok:
-                                _ok_clicked = True
+                            if _chk.locator("input[name$='_312_0']").first.is_visible(timeout=400):
+                                _applet_opened_by_f2 = True
                                 break
                         except Exception:
                             continue
-                if not _ok_clicked:
-                    page.keyboard.press("Enter")
-                # #region agent log — applet ok click outcome
-                try:
-                    with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-                        _lf.write(_j_f2.dumps({
-                            "sessionId": "08e634",
-                            "runId": "pre-fix",
-                            "hypothesisId": "H4",
-                            "location": "hero_dms_playwright_invoice.py:create_order_applet_ok_outcome",
-                            "message": "Applet OK click outcome",
-                            "data": {
-                                "ok_button_clicked": bool(_ok_clicked),
-                                "enter_fallback_used": not bool(_ok_clicked),
-                            },
-                            "timestamp": _ts_ist_iso(),
-                        }) + "\n")
-                except Exception:
-                    pass
-                # #endregion
-
-                # Poll for Siebel error popup after OK — applet closes, focus
-                # shifts to main form, and error may render with a delay.
-                _ok_had_error = False
-                for _ok_poll in range(4):
-                    _safe_page_wait(page, 800, log_label=f"after_contact_pick_ok_poll_{_ok_poll}")
-                    _ok_poll_err = _detect_siebel_error_popup(page, content_frame_selector)
-                    if _ok_poll_err:
-                        _applet_err = f"contact pick applet OK Siebel error: {_ok_poll_err[:220]}"
-                        _ok_had_error = True
-                        break
-                if _ok_had_error:
-                    continue
-                note(f"Create Order: confirmed OK on applet (button={_ok_clicked}).")
-
-                # Best-effort readback of Pincode after contact selection
-                _pin_rb = ""
-                _fresh_roots3 = list(_ordered_frames(page)) + [page] + _contact_roots
-                for r3 in _fresh_roots3:
+    
+                    if not _applet_opened_by_f2:
+                        note("Create Order: F2 key did not open applet — trying icon click near CLS field.")
+                        try:
+                            fld.click(timeout=1500)
+                        except Exception:
+                            pass
+                        _safe_page_wait(page, 300, log_label="refocus_cls_before_icon")
+                        _icon_clicked = False
+                        try:
+                            _icon_handle = fld.evaluate_handle("""(el) => {
+                                const sel = "[aria-label='Press F2 for Selection Field']";
+                                let p = el.parentElement;
+                                for (let depth = 0; p && depth < 8; depth++, p = p.parentElement) {
+                                    const icon = p.querySelector(sel);
+                                    if (icon) {
+                                        const st = window.getComputedStyle(icon);
+                                        if (st.display !== 'none' && st.visibility !== 'hidden') return icon;
+                                    }
+                                    if (['TABLE', 'FORM', 'BODY'].includes(p.tagName)) break;
+                                }
+                                let sib = el.nextElementSibling;
+                                for (let i = 0; sib && i < 5; i++, sib = sib.nextElementSibling) {
+                                    if (sib.matches && sib.matches(sel)) return sib;
+                                    const inner = sib.querySelector && sib.querySelector(sel);
+                                    if (inner) return inner;
+                                }
+                                return null;
+                            }""")
+                            _icon_el = _icon_handle.as_element()
+                            if _icon_el:
+                                _icon_el.click(timeout=2000)
+                                _icon_clicked = True
+                        except Exception:
+                            _icon_clicked = False
+    
+                        # #region agent log — icon click result
+                        try:
+                            with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
+                                _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H11","location":"hero_dms_playwright_invoice.py:create_order_icon_handle","message":"F2 icon click via evaluate_handle","data":{"icon_clicked": _icon_clicked},"timestamp":_ts_ist_iso()}) + "\n")
+                        except Exception:
+                            pass
+                        # #endregion
+    
+                        if _icon_clicked:
+                            _safe_page_wait(page, 1500, log_label="after_f2_icon_click")
+                            note("Create Order: clicked F2 icon near Contact Last Name field.")
+                        else:
+                            note("Create Order: F2 icon not found near Contact Last Name field.")
+    
+                    # Applet should now be open with focus on the first field.
+                    # Verify by checking the focused element reads "Contact Id" (or similar).
+                    _safe_page_wait(page, 500, log_label="applet_settle")
+                    _focused_val = ""
                     try:
-                        for _pin_sel in (
-                            "input[aria-label*='Pin Code' i]",
-                            "input[aria-label*='Pincode' i]",
-                            "input[title*='Pin Code' i]",
-                            "input[name*='Pin' i]",
-                        ):
-                            _pl = r3.locator(_pin_sel).first
-                            if _pl.count() > 0 and _pl.is_visible(timeout=500):
-                                _pin_rb = (_pl.input_value(timeout=700) or "").strip()
-                                if _pin_rb:
-                                    break
-                        if _pin_rb:
-                            break
+                        _focused_val = page.evaluate("""() => {
+                            const el = document.activeElement;
+                            if (!el) return '';
+                            return (el.value || el.textContent || '').trim();
+                        }""") or ""
                     except Exception:
+                        pass
+    
+                    # #region agent log — focused element after applet open
+                    try:
+                        _focus_info = page.evaluate("""() => {
+                            const el = document.activeElement;
+                            if (!el) return {tag: 'none'};
+                            return {tag: el.tagName, name: el.getAttribute('name') || '', aria: (el.getAttribute('aria-label') || '').substring(0,60), val: (el.value || '').substring(0,60)};
+                        }""") or {}
+                        with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
+                            _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H14","location":"hero_dms_playwright_invoice.py:create_order_applet_focus","message":"Focused element after applet open","data":_focus_info,"timestamp":_ts_ist_iso()}) + "\n")
+                    except Exception:
+                        pass
+                    # #endregion
+    
+                    # Determine search value: use Contact ID if available (keeps default "Contact Id" dropdown),
+                    # otherwise fall back to mobile with dropdown change attempt.
+                    _search_val = ""
+                    _search_type = ""
+                    if contact_id:
+                        _search_val = contact_id
+                        _search_type = "Contact Id"
+                        note(f"Create Order: using scraped Contact ID={contact_id!r} for applet search.")
+                    else:
+                        _search_val = _mob_digits or mobile
+                        _search_type = "Mobile Phone"
+                        note("Create Order: no Contact ID — will try Mobile Phone search.")
+    
+                    if _search_type == "Contact Id" and "contact id" in _focused_val.lower():
+                        # Dropdown already shows "Contact Id" — just Tab to the value field
+                        page.keyboard.press("Tab")
+                        _safe_page_wait(page, 400, log_label="cls_tab_to_value")
+                    else:
+                        # Need to change the Find dropdown to "Mobile Phone"
+                        _find_changed = False
+                        try:
+                            page.keyboard.press("Alt+ArrowDown")
+                            _safe_page_wait(page, 400, log_label="find_dropdown_open")
+                            for _nav in range(12):
+                                _cur = page.evaluate("() => (document.activeElement || {}).value || ''") or ""
+                                if "mobile" in _cur.lower():
+                                    _find_changed = True
+                                    break
+                                page.keyboard.press("ArrowDown")
+                                _safe_page_wait(page, 150, log_label="find_dropdown_nav")
+                            if _find_changed:
+                                page.keyboard.press("Enter")
+                                _safe_page_wait(page, 200, log_label="find_dropdown_select")
+                        except Exception:
+                            pass
+                        note(f"Create Order: Find dropdown change to 'Mobile Phone' = {_find_changed}.")
+                        page.keyboard.press("Tab")
+                        _safe_page_wait(page, 400, log_label="cls_tab_to_value")
+    
+                    # Verify focus landed on the value field after Tab
+                    _val_focus = {}
+                    try:
+                        _val_focus = page.evaluate("""() => {
+                            const el = document.activeElement;
+                            if (!el) return {tag: 'none'};
+                            return {tag: el.tagName, name: el.getAttribute('name') || '', aria: (el.getAttribute('aria-label') || '').substring(0,60), val: (el.value || '').substring(0,60), type: el.getAttribute('type') || ''};
+                        }""") or {}
+                    except Exception:
+                        pass
+    
+                    # #region agent log — focus after Tab to value field
+                    try:
+                        with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
+                            _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H18","location":"hero_dms_playwright_invoice.py:create_order_val_focus","message":"Focus after Tab to value field","data":{**_val_focus, "search_type": _search_type, "search_val": _search_val},"timestamp":_ts_ist_iso()}) + "\n")
+                    except Exception:
+                        pass
+                    # #endregion
+    
+                    # Value field: fill via Playwright locator (page.keyboard.type doesn't work on this Siebel field).
+                    _val_filled = False
+                    _val_readback = ""
+                    _fill_strategy = ""
+    
+                    # Strategy A: fill the focused element directly (fastest — no frame scanning)
+                    try:
+                        _active = page.evaluate_handle("() => document.activeElement")
+                        _el = _active.as_element()
+                        if _el:
+                            _el.fill(_search_val)
+                            _val_readback = (_el.input_value() or "").strip()
+                            if _val_readback:
+                                _val_filled = True
+                                _fill_strategy = "focused_element"
+                    except Exception:
+                        pass
+    
+                    # Strategy B: find by aria-label — try page first (applet renders in main page), then frames
+                    if not _val_filled:
+                        _all_fill_roots = [page] + list(_ordered_frames(page))
+                        for _fr in _all_fill_roots:
+                            try:
+                                _vf = _fr.locator("input[aria-label='Starting with' i]").first
+                                if _vf.count() > 0 and _vf.is_visible(timeout=800):
+                                    _vf.click(timeout=1500)
+                                    _vf.fill(_search_val, timeout=2000)
+                                    _val_readback = (_vf.input_value(timeout=1000) or "").strip()
+                                    if _val_readback:
+                                        _val_filled = True
+                                        _fill_strategy = "aria_label"
+                                        break
+                            except Exception:
+                                continue
+    
+                    # Strategy C: find by dynamic name suffix _313_0
+                    if not _val_filled:
+                        for _fr in _all_fill_roots:
+                            try:
+                                _vf = _fr.locator("input[name$='_313_0']").first
+                                if _vf.count() > 0 and _vf.is_visible(timeout=800):
+                                    _vf.click(timeout=1500)
+                                    _vf.fill(_search_val, timeout=2000)
+                                    _val_readback = (_vf.input_value(timeout=1000) or "").strip()
+                                    if _val_readback:
+                                        _val_filled = True
+                                        _fill_strategy = "name_suffix"
+                                        break
+                            except Exception:
+                                continue
+    
+                    # #region agent log — value field fill result
+                    try:
+                        with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
+                            _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H20","location":"hero_dms_playwright_invoice.py:create_order_val_fill","message":"Value field fill result","data":{"typed": _search_val, "readback": _val_readback, "filled": _val_filled, "strategy": _fill_strategy},"timestamp":_ts_ist_iso()}) + "\n")
+                    except Exception:
+                        pass
+                    # #endregion
+    
+                    note(f"Create Order: applet value field fill={_val_filled}, readback='{_val_readback}'.")
+    
+                    # Trigger query — try Go/Query button across all fresh roots, fallback Enter
+                    _safe_page_wait(page, 300, log_label="before_query_btn")
+                    _fresh_roots = list(_ordered_frames(page)) + [page]
+                    _qry_clicked = False
+                    _qry_selectors = [
+                        "button[aria-label='Pick Contact List:Go']",
+                        "button[name$='_314_0'], a[name$='_314_0'], input[name$='_314_0']",
+                        "button[aria-label*='Go' i]",
+                        "button[aria-label*='Query' i]",
+                        "a[aria-label*='Go' i]",
+                    ]
+                    for _qsel in _qry_selectors:
+                        if _qry_clicked:
+                            break
+                        for r2 in _fresh_roots:
+                            try:
+                                t = r2.locator(_qsel).first
+                                if t.count() > 0 and t.is_visible(timeout=400):
+                                    t.click(timeout=1500)
+                                    _qry_clicked = True
+                                    break
+                            except Exception:
+                                continue
+                    if not _qry_clicked:
+                        page.keyboard.press("Enter")
+                    _safe_page_wait(page, 1200, log_label="after_contact_pick_query")
+                    note(f"Create Order: applet query triggered (button={_qry_clicked}).")
+    
+                    # #region agent log — post-query applet state
+                    try:
+                        _pq_data = {}
+                        for _sr in _fresh_roots:
+                            try:
+                                _pq_data = _sr.evaluate("""() => {
+                                    const rows = Array.from(document.querySelectorAll("tr")).slice(0, 20);
+                                    const cells = [];
+                                    for (const tr of rows) {
+                                        for (const c of tr.querySelectorAll("td, th, a, span")) {
+                                            const t = (c.textContent || '').trim();
+                                            if (t && t.length <= 50 && t.length > 1) cells.push(t);
+                                            if (cells.length >= 20) break;
+                                        }
+                                        if (cells.length >= 20) break;
+                                    }
+                                    const ok = document.querySelector("button[name$='_315_0'], a[name$='_315_0']");
+                                    return {row_sample: cells.join(' | ').substring(0, 300), ok_visible: ok ? window.getComputedStyle(ok).display !== 'none' : null};
+                                }""")
+                                if _pq_data.get("row_sample"):
+                                    _pq_data["frame_url"] = getattr(_sr, 'url', '?')[:120]
+                                    break
+                            except Exception:
+                                continue
+                        with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
+                            _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H13","location":"hero_dms_playwright_invoice.py:create_order_post_query","message":"Post-query applet state","data":_pq_data,"timestamp":_ts_ist_iso()}) + "\n")
+                    except Exception:
+                        pass
+                    # #endregion
+    
+                    # Match row by first name: find "Contact First Name" column index from header, then match data rows.
+                    _row_ok = False
+                    _row_diag = ""
+                    _fresh_roots2 = list(_ordered_frames(page)) + [page]
+                    for _rr in _fresh_roots2:
+                        try:
+                            _result = _rr.evaluate(
+                                """(firstNeed) => {
+                                    const norm = (s) => String(s || '').trim().toLowerCase();
+                                    const fn = norm(firstNeed);
+                                    if (!fn) return {clicked: false, err: 'empty first name'};
+                                    const tables = document.querySelectorAll("table");
+                                    for (const tbl of tables) {
+                                        const allRows = Array.from(tbl.querySelectorAll("tr"));
+                                        if (allRows.length < 2) continue;
+                                        // Find header row and "Contact First Name" column index
+                                        let fnColIdx = -1;
+                                        let headerRowIdx = -1;
+                                        for (let ri = 0; ri < Math.min(allRows.length, 5); ri++) {
+                                            const hCells = allRows[ri].querySelectorAll("th, td");
+                                            for (let ci = 0; ci < hCells.length; ci++) {
+                                                const ht = norm(hCells[ci].textContent || '');
+                                                if (ht === 'contact first name' || ht === 'first name') {
+                                                    fnColIdx = ci;
+                                                    headerRowIdx = ri;
+                                                    break;
+                                                }
+                                            }
+                                            if (fnColIdx >= 0) break;
+                                        }
+                                        // Scan data rows
+                                        const dataStart = headerRowIdx >= 0 ? headerRowIdx + 1 : 1;
+                                        const seenNames = [];
+                                        for (let ri = dataStart; ri < allRows.length; ri++) {
+                                            const cells = allRows[ri].querySelectorAll("td");
+                                            if (cells.length < 2) continue;
+                                            const cellTexts = Array.from(cells).map(c => (c.textContent || '').trim());
+                                            // Skip header-like rows
+                                            const joined = cellTexts.join('|').toLowerCase();
+                                            if (joined.includes('contact first name') || joined.includes('search results')) continue;
+                                            // Check name match
+                                            let nameInRow = '';
+                                            if (fnColIdx >= 0 && fnColIdx < cells.length) {
+                                                nameInRow = norm(cells[fnColIdx].textContent || '');
+                                            }
+                                            if (!nameInRow) {
+                                                // Fallback: check all cells for the name
+                                                nameInRow = cellTexts.find(t => norm(t) === fn) ? fn : '';
+                                            }
+                                            if (nameInRow) seenNames.push(nameInRow);
+                                            if (nameInRow === fn) {
+                                                const clickable = allRows[ri].querySelector("a, input[type='radio'], input[type='checkbox'], td");
+                                                if (clickable) { clickable.click(); } else { allRows[ri].click(); }
+                                                return {clicked: true, preview: cellTexts.slice(0, 8).join(' | ').substring(0, 200), fnColIdx: fnColIdx};
+                                            }
+                                        }
+                                        if (seenNames.length > 0) {
+                                            return {clicked: false, err: 'name not matched', seen: seenNames.slice(0, 10).join(', '), fnColIdx: fnColIdx};
+                                        }
+                                    }
+                                    return {clicked: false, err: 'no data rows found'};
+                                }""",
+                                _first_need,
+                            )
+    
+                            # #region agent log — row match result
+                            try:
+                                with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
+                                    _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H15","location":"hero_dms_playwright_invoice.py:create_order_row_match","message":"Row match result","data":_result or {},"timestamp":_ts_ist_iso()}) + "\n")
+                            except Exception:
+                                pass
+                            # #endregion
+    
+                            if _result and _result.get("clicked"):
+                                _row_ok = True
+                                note(f"Create Order: matched row by first name. Preview: {(_result.get('preview',''))[:80]}")
+                                break
+                            elif _result:
+                                _row_diag = _result.get("err", "") + "; seen=" + _result.get("seen", "")
+                        except Exception:
+                            continue
+                    if not _row_ok:
+                        _applet_err = f"no first-name match for {first_name!r} in applet. {_row_diag[:180]}"
+                        if _search_type == "Contact Id" and _row_diag and "no data rows found" in _row_diag:
+                            note(
+                                f"Create Order: applet query by Contact ID={_search_val!r} returned zero rows — "
+                                "no enquiry exists for this contact. Stopping applet flow."
+                            )
+                            _applet_err = (
+                                f"Applet query by Contact ID ({_search_val}) returned no results. "
+                                "No enquiry/contact record found in Siebel for this ID."
+                            )
+                            break
                         continue
-                note(f"Create Order: post-contact applet readback — Pincode={_pin_rb!r}.")
-                _contact_pin_rb = (_pin_rb or "").strip()
-                # #region agent log — pincode readback outcome
-                try:
-                    with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-                        _lf.write(_j_f2.dumps({
-                            "sessionId": "08e634",
-                            "runId": "pre-fix",
-                            "hypothesisId": "H6_H7",
-                            "location": "hero_dms_playwright_invoice.py:create_order_pincode_readback",
-                            "message": "Pincode readback after contact applet",
-                            "data": {
-                                "pincode_non_empty": bool((_pin_rb or "").strip()),
-                                "pincode_len": len((_pin_rb or "").strip()),
-                            },
-                            "timestamp": _ts_ist_iso(),
-                        }) + "\n")
+                    _safe_page_wait(page, 400, log_label="after_row_select")
+                    note("Create Order: matched contact row in applet.")
+    
+                    # OK button — search fresh roots, fallback Enter
+                    _ok_clicked = False
+                    # #region agent log — applet ok precheck
+                    try:
+                        with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
+                            _lf.write(_j_f2.dumps({
+                                "sessionId": "08e634",
+                                "runId": "pre-fix",
+                                "hypothesisId": "H4_H5",
+                                "location": "hero_dms_playwright_invoice.py:create_order_applet_ok_precheck",
+                                "message": "Preparing to click applet OK",
+                                "data": {
+                                    "fresh_roots_count": len(_fresh_roots2),
+                                    "row_matched": bool(_row_ok),
+                                },
+                                "timestamp": _ts_ist_iso(),
+                            }) + "\n")
+                    except Exception:
+                        pass
+                    # #endregion
+                    for r2 in _fresh_roots2:
+                        try:
+                            for _ok_sel in (
+                                "button[aria-label='Pick Contact List:OK']",
+                                "a[aria-label='Pick Contact List:OK']",
+                                "input[aria-label='Pick Contact List:OK']",
+                                "button[name$='_315_0'], a[name$='_315_0'], input[name$='_315_0']",
+                                "button[aria-label*='OK' i]",
+                                "a[aria-label*='OK' i]",
+                                "input[aria-label*='OK' i]",
+                                "button:has-text('OK')",
+                                "a:has-text('OK')",
+                            ):
+                                t = r2.locator(_ok_sel).first
+                                if t.count() > 0 and t.is_visible(timeout=500):
+                                    try:
+                                        t.click(timeout=2000)
+                                    except Exception:
+                                        t.click(timeout=2000, force=True)
+                                    _ok_clicked = True
+                                    break
+                            if _ok_clicked:
+                                break
+                        except Exception:
+                            continue
+                    if not _ok_clicked:
+                        for r2 in _fresh_roots2:
+                            try:
+                                _js_ok = r2.evaluate(
+                                    """() => {
+                                        const vis = (el) => {
+                                          if (!el) return false;
+                                          const st = window.getComputedStyle(el);
+                                          if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity || '1') === 0) return false;
+                                          const rc = el.getBoundingClientRect();
+                                          return rc.width > 0 && rc.height > 0;
+                                        };
+                                        const sels = [
+                                          "button[aria-label='Pick Contact List:OK']",
+                                          "a[aria-label='Pick Contact List:OK']",
+                                          "input[aria-label='Pick Contact List:OK']",
+                                          "button[name$='_315_0']",
+                                          "a[name$='_315_0']",
+                                          "input[name$='_315_0']",
+                                        ];
+                                        for (const s of sels) {
+                                          const el = document.querySelector(s);
+                                          if (vis(el)) {
+                                            try { el.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
+                                            el.click();
+                                            return s;
+                                          }
+                                        }
+                                        return "";
+                                    }"""
+                                )
+                                if _js_ok:
+                                    _ok_clicked = True
+                                    break
+                            except Exception:
+                                continue
+                    if not _ok_clicked:
+                        page.keyboard.press("Enter")
+                    # #region agent log — applet ok click outcome
+                    try:
+                        with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
+                            _lf.write(_j_f2.dumps({
+                                "sessionId": "08e634",
+                                "runId": "pre-fix",
+                                "hypothesisId": "H4",
+                                "location": "hero_dms_playwright_invoice.py:create_order_applet_ok_outcome",
+                                "message": "Applet OK click outcome",
+                                "data": {
+                                    "ok_button_clicked": bool(_ok_clicked),
+                                    "enter_fallback_used": not bool(_ok_clicked),
+                                },
+                                "timestamp": _ts_ist_iso(),
+                            }) + "\n")
+                    except Exception:
+                        pass
+                    # #endregion
+    
+                    # Poll for Siebel error popup after OK — applet closes, focus
+                    # shifts to main form, and error may render with a delay.
+                    _ok_had_error = False
+                    for _ok_poll in range(4):
+                        _safe_page_wait(page, 800, log_label=f"after_contact_pick_ok_poll_{_ok_poll}")
+                        _ok_poll_err = _detect_siebel_error_popup(page, content_frame_selector)
+                        if _ok_poll_err:
+                            _applet_err = f"contact pick applet OK Siebel error: {_ok_poll_err[:220]}"
+                            _ok_had_error = True
+                            break
+                    if _ok_had_error:
+                        continue
+                    note(f"Create Order: confirmed OK on applet (button={_ok_clicked}).")
+    
+                    # Best-effort readback of Pincode after contact selection
+                    _pin_rb = ""
+                    _fresh_roots3 = list(_ordered_frames(page)) + [page] + _contact_roots
+                    for r3 in _fresh_roots3:
+                        try:
+                            for _pin_sel in (
+                                "input[aria-label*='Pin Code' i]",
+                                "input[aria-label*='Pincode' i]",
+                                "input[title*='Pin Code' i]",
+                                "input[name*='Pin' i]",
+                            ):
+                                _pl = r3.locator(_pin_sel).first
+                                if _pl.count() > 0 and _pl.is_visible(timeout=500):
+                                    _pin_rb = (_pl.input_value(timeout=700) or "").strip()
+                                    if _pin_rb:
+                                        break
+                            if _pin_rb:
+                                break
+                        except Exception:
+                            continue
+                    note(f"Create Order: post-contact applet readback — Pincode={_pin_rb!r}.")
+                    _contact_pin_rb = (_pin_rb or "").strip()
+                    # #region agent log — pincode readback outcome
+                    try:
+                        with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
+                            _lf.write(_j_f2.dumps({
+                                "sessionId": "08e634",
+                                "runId": "pre-fix",
+                                "hypothesisId": "H6_H7",
+                                "location": "hero_dms_playwright_invoice.py:create_order_pincode_readback",
+                                "message": "Pincode readback after contact applet",
+                                "data": {
+                                    "pincode_non_empty": bool((_pin_rb or "").strip()),
+                                    "pincode_len": len((_pin_rb or "").strip()),
+                                },
+                                "timestamp": _ts_ist_iso(),
+                            }) + "\n")
+                    except Exception:
+                        pass
+                    # #endregion
+                    if not _contact_pin_rb:
+                        _applet_err = "Contact applet completed but Pincode stayed empty after selection."
+                        continue
+                    _applet_done = True
+                    # #region agent log — applet completion flag
+                    try:
+                        with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
+                            _lf.write(_j_f2.dumps({
+                                "sessionId": "08e634",
+                                "runId": "pre-fix",
+                                "hypothesisId": "H7",
+                                "location": "hero_dms_playwright_invoice.py:create_order_applet_done_flag",
+                                "message": "Applet flow completion flag set",
+                                "data": {
+                                    "applet_done": True,
+                                    "pincode_non_empty": bool((_pin_rb or "").strip()),
+                                },
+                                "timestamp": _ts_ist_iso(),
+                            }) + "\n")
+                    except Exception:
+                        pass
+                    # #endregion
+                    break
                 except Exception:
-                    pass
-                # #endregion
-                if not _contact_pin_rb:
-                    _applet_err = "Contact applet completed but Pincode stayed empty after selection."
                     continue
-                _applet_done = True
-                # #region agent log — applet completion flag
-                try:
-                    with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-                        _lf.write(_j_f2.dumps({
-                            "sessionId": "08e634",
-                            "runId": "pre-fix",
-                            "hypothesisId": "H7",
-                            "location": "hero_dms_playwright_invoice.py:create_order_applet_done_flag",
-                            "message": "Applet flow completion flag set",
-                            "data": {
-                                "applet_done": True,
-                                "pincode_non_empty": bool((_pin_rb or "").strip()),
-                            },
-                            "timestamp": _ts_ist_iso(),
-                        }) + "\n")
-                except Exception:
-                    pass
-                # #endregion
-                break
-            except Exception:
-                continue
-        if not _applet_done:
-            return False, f"Could not complete Contact Last Name F2 applet flow. {_applet_err}".strip(), scraped
+            if not _applet_done:
+                return False, f"Could not complete Contact Last Name F2 applet flow. {_applet_err}".strip(), scraped
 
         # #region agent log — pre-save pincode guard
         try:
@@ -3904,6 +4003,7 @@ def prepare_order(
     )
     _raw_olv = dms_values.get("order_line_vehicles") or dms_values.get("attach_vehicles")
     _attach_li = _raw_olv if isinstance(_raw_olv, list) and len(_raw_olv) > 0 else None
+    _flow_pv = str(dms_values.get("hero_dms_flow") or "add_sales").strip()
     ok_order, order_err, order_scraped = _create_order(
         page,
         mobile=mobile,
@@ -3918,6 +4018,14 @@ def prepare_order(
         line_item_discount=_line_disc,
         attach_line_items=_attach_li,
         form_trace=form_trace,
+        hero_dms_flow=_flow_pv,
+        challan_comments_text=str(dms_values.get("challan_comments_text") or "").strip(),
+        network_dealer_name=str(
+            dms_values.get("network_dealer_name") or dms_values.get("to_dealer_name") or ""
+        ).strip(),
+        challan_network_pin=str(
+            dms_values.get("network_pin_code") or dms_values.get("pin_code") or ""
+        ).strip(),
     )
     if not ok_order:
         step("Stopped: create_order flow failed.")

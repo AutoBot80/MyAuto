@@ -5,6 +5,7 @@ import unittest
 from app.services.subdealer_challan_ocr_service import (
     _find_engine_chassis_table,
     _rows_from_table,
+    dedupe_challan_lines,
     parse_challan_date_to_iso,
     sanitize_challan_line_field,
 )
@@ -30,6 +31,29 @@ class TestSanitizeLineField(unittest.TestCase):
         self.assertEqual(sanitize_challan_line_field("03432|"), "03432")
         self.assertEqual(sanitize_challan_line_field("|53768•"), "53768")
         self.assertEqual(sanitize_challan_line_field("12/34"), "1234")
+
+
+class TestDedupeChallanLines(unittest.TestCase):
+    def test_drops_duplicate_pairs(self) -> None:
+        lines = [
+            {"engine_no": "1", "chassis_no": "2", "status": "queued"},
+            {"engine_no": "1", "chassis_no": "2", "status": "queued"},
+            {"engine_no": "3", "chassis_no": "4", "status": "queued"},
+        ]
+        out, n = dedupe_challan_lines(lines)
+        self.assertEqual(n, 1)
+        self.assertEqual(len(out), 2)
+        self.assertEqual(out[0]["engine_no"], "1")
+        self.assertEqual(out[1]["engine_no"], "3")
+
+    def test_case_insensitive(self) -> None:
+        lines = [
+            {"engine_no": "ab", "chassis_no": "cd", "status": "q"},
+            {"engine_no": "AB", "chassis_no": "CD", "status": "q"},
+        ]
+        out, n = dedupe_challan_lines(lines)
+        self.assertEqual(n, 1)
+        self.assertEqual(len(out), 1)
 
 
 class TestEngineChassisTable(unittest.TestCase):

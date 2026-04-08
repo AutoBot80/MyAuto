@@ -15,6 +15,11 @@ All Postgres DDL for the **auto_ai** database. Run in order when creating a fres
 9. `09_trigger_sales_master_sync_service_reminders.sql` — trigger on sales_master  
 10. `10_rto_payment_details.sql` — requires sales_master; current deployments then run `DDL/alter/12c_rename_rto_payment_details_to_rto_queue.sql`
 11. `11_rc_status_sms_queue.sql` — requires current `rto_queue` schema  
+12. `18_vehicle_inventory_master.sql` — requires `dealer_ref`  
+13. `19_challan_staging.sql` — requires `dealer_ref`  
+14. `20_challan_master.sql` — requires `dealer_ref`  
+15. `21_challan_details.sql` — requires `challan_master` and `vehicle_inventory_master`  
+16. `22_subdealer_discount_master.sql` — requires `dealer_ref`  
 
 ## Run (examples)
 
@@ -32,6 +37,11 @@ psql -h localhost -U postgres -d auto_ai -f DDL/09_trigger_sales_master_sync_ser
 psql -h localhost -U postgres -d auto_ai -f DDL/10_rto_payment_details.sql
 psql -h localhost -U postgres -d auto_ai -f DDL/alter/12c_rename_rto_payment_details_to_rto_queue.sql
 psql -h localhost -U postgres -d auto_ai -f DDL/11_rc_status_sms_queue.sql
+psql -h localhost -U postgres -d auto_ai -f DDL/18_vehicle_inventory_master.sql
+psql -h localhost -U postgres -d auto_ai -f DDL/19_challan_staging.sql
+psql -h localhost -U postgres -d auto_ai -f DDL/20_challan_master.sql
+psql -h localhost -U postgres -d auto_ai -f DDL/21_challan_details.sql
+psql -h localhost -U postgres -d auto_ai -f DDL/22_subdealer_discount_master.sql
 ```
 
 Or run all in order (Unix):
@@ -84,6 +94,8 @@ One-off changes (e.g. new columns) go in **`DDL/alter/`**. Run against an existi
 - `15a_vehicle_master_variant_vin_unique_drop_dms_sku.sql` — **`vehicle_master.variant`**; widen **`place_of_registeration`** to 128; partial unique index on **`chassis`** (VIN); drop **`dms_sku`**.
 - `16a_dealer_ref_prefer_insurer_form_insurance_view.sql` — **`dealer_ref.prefer_insurer`**; recreates **`form_insurance_view`**.
 - `17a_dealer_ref_hero_cpi_form_insurance_view.sql` — **`dealer_ref.hero_cpi`** (**Y**/**N**, default **N**); recreates **`form_insurance_view`** with **`hero_cpi`**.
+- `18a_challan_master_add_order_invoice_totals.sql` — **`challan_master`**: **`order_number`**, **`invoice_number`**, **`total_ex_showroom_price`**, **`total_discount`**.
+- `18b_vehicle_inventory_master_add_discount.sql` — **`vehicle_inventory_master`**: **`discount`**.
 
 **New table (run after customer_master exists):**
 - `10_rto_payment_details.sql` — legacy base creation for the RTO table; current schema then applies `12c_rename_rto_payment_details_to_rto_queue.sql` so the active table is `rto_queue`.

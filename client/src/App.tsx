@@ -135,7 +135,7 @@ function App() {
           />
         );
       case "subdealer-challan":
-        return <SubdealerChallanPage />;
+        return <SubdealerChallanPage dealerId={DEALER_ID} dmsUrl={dmsUrl} />;
       case "bulk-loads":
         return <BulkLoadsPage dealerId={DEALER_ID} onNavigateToAddSales={() => setPage("add-sales")} />;
       case "customer-details":

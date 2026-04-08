@@ -412,6 +412,137 @@ This document lists the current database tables and their columns. **Executable 
 
 ---
 
+## 12) `vehicle_inventory_master`
+
+**Purpose:** Stock / inventory lines (yard, chassis, engine, pricing) for subdealer challan and related flows.
+
+| Column | Type | Null | Default | Notes |
+|---|---|---:|---|---|
+| `inventory_line_id` | `integer` | NO | `nextval('vehicle_inventory_master_inventory_line_id_seq'::regclass)` | Primary key (auto-generated) |
+| `from_company_date` | `varchar(20)` | YES |  | dd/mm/yyyy |
+| `sold_date` | `varchar(20)` | YES |  | dd/mm/yyyy |
+| `dealer_id` | `integer` | NO |  | FK → `dealer_ref(dealer_id)` |
+| `yard_id` | `varchar(64)` | YES |  | Yard or location code (no reference table yet) |
+| `chassis_no` | `varchar(64)` | YES |  | |
+| `engine_no` | `varchar(64)` | YES |  | |
+| `battery` | `varchar(64)` | YES |  | |
+| `key` | `varchar(64)` | YES |  | Quoted identifier in DDL; physical key id |
+| `model` | `varchar(64)` | YES |  | |
+| `variant` | `varchar(64)` | YES |  | |
+| `color` | `varchar(64)` | YES |  | |
+| `cubic_capacity` | `numeric(10,2)` | YES |  | |
+| `vehicle_type` | `varchar(32)` | YES |  | |
+| `ex_showroom_price` | `numeric(12,2)` | YES |  | |
+| `discount` | `numeric(12,2)` | YES |  | Per-line discount |
+
+**Primary key:** `vehicle_inventory_master_pkey` on (`inventory_line_id`)
+
+**Foreign keys:**
+- `fk_vehicle_inventory_master_dealer`: (`dealer_id`) → `dealer_ref(dealer_id)`
+
+**Scripts:** `DDL/18_vehicle_inventory_master.sql`; existing DBs: `DDL/alter/18b_vehicle_inventory_master_add_discount.sql`
+
+---
+
+## 13) `challan_staging`
+
+**Purpose:** Staging rows for subdealer challan OCR/import before promotion to `challan_master` / `vehicle_inventory_master`.
+
+| Column | Type | Null | Default | Notes |
+|---|---|---:|---|---|
+| `challan_staging_id` | `integer` | NO | `nextval('challan_staging_challan_staging_id_seq'::regclass)` | Primary key |
+| `challan_date` | `varchar(20)` | YES |  | dd/mm/yyyy |
+| `challan_book_num` | `varchar(64)` | YES |  | |
+| `from_dealer_id` | `integer` | NO |  | FK → `dealer_ref(dealer_id)` |
+| `to_dealer_id` | `integer` | NO |  | FK → `dealer_ref(dealer_id)` |
+| `raw_chassis` | `varchar(128)` | YES |  | |
+| `raw_engine` | `varchar(128)` | YES |  | |
+| `status` | `varchar(64)` | YES |  | Workflow status (e.g. Queued, Ready, Failed, Committed) |
+| `challan_batch_id` | `uuid` | YES |  | Groups rows from one Create Challans action |
+| `last_error` | `text` | YES |  | Last DMS/DB error for the line |
+| `inventory_line_id` | `integer` | YES |  | FK → `vehicle_inventory_master` after `prepare_vehicle` |
+
+**Primary key:** `challan_staging_pkey` on (`challan_staging_id`)
+
+**Foreign keys:**
+- `fk_challan_staging_from_dealer`: (`from_dealer_id`) → `dealer_ref(dealer_id)`
+- `fk_challan_staging_to_dealer`: (`to_dealer_id`) → `dealer_ref(dealer_id)`
+- `fk_challan_staging_inventory_line`: (`inventory_line_id`) → `vehicle_inventory_master(inventory_line_id)` (optional; existing DBs via alter)
+
+**Scripts:** `DDL/19_challan_staging.sql`; existing DBs: `DDL/alter/19a_challan_staging_batch_status.sql`
+
+---
+
+## 14) `challan_master`
+
+**Purpose:** Challan header after validation (book number, dealers, vehicle count).
+
+| Column | Type | Null | Default | Notes |
+|---|---|---:|---|---|
+| `challan_id` | `integer` | NO | `nextval('challan_master_challan_id_seq'::regclass)` | Primary key (auto-generated) |
+| `challan_date` | `varchar(20)` | YES |  | dd/mm/yyyy |
+| `challan_book_num` | `varchar(64)` | YES |  | |
+| `dealer_from` | `integer` | NO |  | FK → `dealer_ref(dealer_id)` |
+| `dealer_to` | `integer` | NO |  | FK → `dealer_ref(dealer_id)` |
+| `num_vehicles` | `integer` | YES |  | |
+| `order_number` | `varchar(128)` | YES |  | DMS or book order reference |
+| `invoice_number` | `varchar(128)` | YES |  | Invoice reference when applicable |
+| `total_ex_showroom_price` | `numeric(12,2)` | YES |  | Sum of ex-showroom across lines |
+| `total_discount` | `numeric(12,2)` | YES |  | Total discount for the challan |
+
+**Primary key:** `challan_master_pkey` on (`challan_id`)
+
+**Foreign keys:**
+- `fk_challan_master_dealer_from`: (`dealer_from`) → `dealer_ref(dealer_id)`
+- `fk_challan_master_dealer_to`: (`dealer_to`) → `dealer_ref(dealer_id)`
+
+**Scripts:** `DDL/20_challan_master.sql`; existing DBs: `DDL/alter/18a_challan_master_add_order_invoice_totals.sql`
+
+---
+
+## 15) `challan_details`
+
+**Purpose:** Line items linking a challan to inventory rows. `inventory_line_id` references **`vehicle_inventory_master`** (there is no separate `vehicle_inventory` table).
+
+| Column | Type | Null | Default | Notes |
+|---|---|---:|---|---|
+| `challan_id` | `integer` | NO |  | FK → `challan_master(challan_id)` |
+| `inventory_line_id` | `integer` | NO |  | FK → `vehicle_inventory_master(inventory_line_id)` |
+
+**Primary key:** `pk_challan_details` on (`challan_id`, `inventory_line_id`)
+
+**Foreign keys:**
+- `fk_challan_details_challan`: (`challan_id`) → `challan_master(challan_id)` ON DELETE CASCADE
+- `fk_challan_details_inventory`: (`inventory_line_id`) → `vehicle_inventory_master(inventory_line_id)`
+
+**Script:** `DDL/21_challan_details.sql`
+
+---
+
+## 16) `subdealer_discount_master`
+
+**Purpose:** Subdealer discount amounts keyed by dealer and vehicle model.
+
+| Column | Type | Null | Default | Notes |
+|---|---|---:|---|---|
+| `subdealer_discount_id` | `integer` | NO | `nextval('subdealer_discount_master_subdealer_discount_id_seq'::regclass)` | Primary key (auto-generated) |
+| `dealer_id` | `integer` | NO |  | FK → `dealer_ref(dealer_id)` |
+| `model` | `varchar(64)` | NO |  | Vehicle model |
+| `discount` | `numeric(12,2)` | YES |  | |
+| `create_date` | `varchar(20)` | YES |  | dd/mm/yyyy |
+| `valid_flag` | `char(1)` | NO | `'Y'` | **Y** or **N** |
+
+**Primary key:** `subdealer_discount_master_pkey` on (`subdealer_discount_id`)
+
+**Checks:** `chk_subdealer_discount_valid_flag` — `valid_flag` IN ('Y', 'N')
+
+**Foreign keys:**
+- `fk_subdealer_discount_dealer`: (`dealer_id`) → `dealer_ref(dealer_id)`
+
+**Script:** `DDL/22_subdealer_discount_master.sql`
+
+---
+
 ## Table Usage Summary
 
 | Table | Used by |
@@ -432,6 +563,11 @@ This document lists the current database tables and their columns. **Executable 
 | `rc_status_sms_queue` | RC status SMS sending |
 | `bulk_loads` | Bulk ingest, queue publish/lease, dashboard, retry prep, action-taken tracking |
 | `add_sales_staging` | Validated Add Sales JSON before master commit; **`staging_id`** for Create Invoice (**LLD §2.2a**); script **`DDL/alter/13a_add_sales_staging.sql`** |
+| `vehicle_inventory_master` | Subdealer challan / stock lines; **`DDL/18_vehicle_inventory_master.sql`** |
+| `challan_staging` | Challan OCR/import staging; **`DDL/19_challan_staging.sql`** |
+| `challan_master` | Challan headers; **`DDL/20_challan_master.sql`** |
+| `challan_details` | Challan ↔ inventory lines; **`DDL/21_challan_details.sql`** |
+| `subdealer_discount_master` | Dealer + model discount rules; **`DDL/22_subdealer_discount_master.sql`** |
 
 ---
 
@@ -548,3 +684,7 @@ This document lists the current database tables and their columns. **Executable 
 | 2.63 | Apr 2026 | **`dealer_ref.hero_cpi`** (**Y**/**N**, default **N**); **`form_insurance_view.hero_cpi`**; **`DDL/alter/17a_dealer_ref_hero_cpi_form_insurance_view.sql`**; **`DDL/04b_dealer_ref.sql`** greenfield; MISP proposal CPA add-on — **LLD** **6.196** / **HLD** **1.117** |
 | 2.64 | Apr 2026 | **No schema change.** **`form_insurance_view`** operational notes: details-sheet insurer OCR sanitization; empty merged insurer → **`prefer_insurer`** — **LLD** **6.223** / **BRD** **3.142** / **HLD** **1.138** |
 | 2.66 | Apr 2026 | **No schema change.** DMS **Run Report** PDF downloads (**GST Retail Invoice**, **GST Booking Receipt**) after successful staging commit; files under **`ocr_output`** only — **`hero_dms_playwright_invoice.print_hero_dms_forms`** — **LLD** **6.276** / **BRD** **BR-21** / **3.156** / **HLD** **1.157** |
+| 2.67 | Apr 2026 | **`vehicle_inventory_master`**, **`challan_staging`**, **`challan_master`**, **`challan_details`** — subdealer challan inventory and staging (**`DDL/18_…sql`** … **`DDL/21_…sql`**) |
+| 2.68 | Apr 2026 | **`challan_master`**: **`order_number`**, **`invoice_number`**, **`total_ex_showroom_price`**, **`total_discount`** — **`DDL/alter/18a_…sql`**; **`vehicle_inventory_master`**: **`discount`** — **`DDL/alter/18b_…sql`** (greenfield: **`DDL/20_challan_master.sql`**, **`DDL/18_vehicle_inventory_master.sql`**) |
+| 2.69 | Apr 2026 | **`subdealer_discount_master`** — **`DDL/22_subdealer_discount_master.sql`** |
+| 2.70 | Apr 2026 | **`challan_staging`**: **`challan_batch_id`**, **`last_error`**, **`inventory_line_id`** — **`DDL/alter/19a_challan_staging_batch_status.sql`** |

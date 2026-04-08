@@ -153,6 +153,29 @@ def _rows_from_table(table: list[list[str]], header_row_index: int) -> list[dict
     return out
 
 
+def dedupe_challan_lines(lines: list[dict[str, str]]) -> tuple[list[dict[str, str]], int]:
+    """
+    Drop duplicate (engine_no, chassis_no) pairs after normalisation (strip, upper).
+    First occurrence wins. Rows with both fields empty are skipped.
+    Returns (deduped_lines, duplicate_count_dropped).
+    """
+    seen: set[tuple[str, str]] = set()
+    out: list[dict[str, str]] = []
+    dropped = 0
+    for ln in lines:
+        e = (ln.get("engine_no") or "").strip().upper()
+        c = (ln.get("chassis_no") or "").strip().upper()
+        if not e and not c:
+            continue
+        key = (e, c)
+        if key in seen:
+            dropped += 1
+            continue
+        seen.add(key)
+        out.append(ln)
+    return out, dropped
+
+
 def _build_raw_ocr_text(
     full_text: str,
     key_value_pairs: list[dict[str, str]],
@@ -224,6 +247,11 @@ def parse_subdealer_challan(
     if found:
         grid, hi = found
         lines = _rows_from_table(grid, hi)
+        lines, dup_n = dedupe_challan_lines(lines)
+        if dup_n:
+            out["warnings"].append(
+                f"Removed {dup_n} duplicate row(s) with the same engine and chassis numbers."
+            )
     else:
         out["warnings"].append("No table with Engine and Chassis headers found; lines empty.")
 
