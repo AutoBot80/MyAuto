@@ -2,12 +2,16 @@
 
 import uuid
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 
 from app.config import DMS_BASE_URL, DEALER_ID
+from app.repositories import challan_details_staging as detail_repo
+from app.repositories import challan_master_staging as master_repo
 from app.services.add_subdealer_challan_service import (
     create_challan_staging_batch,
+    retry_failed_staging_row,
+    retry_order_only_batch,
     run_subdealer_challan_batch,
 )
 from app.services.subdealer_challan_ocr_service import parse_subdealer_challan
@@ -41,7 +45,7 @@ class ProcessChallanRequest(BaseModel):
 @router.post("/staging", response_model=CreateChallanStagingResponse)
 def create_staging(req: CreateChallanStagingRequest) -> CreateChallanStagingResponse:
     """
-    Insert ``challan_staging`` rows (status **Queued**) for each non-empty line.
+    Insert ``challan_master_staging`` + ``challan_details_staging`` rows (details **Queued**) for each non-empty line.
     """
     lines_in = [ln.model_dump() for ln in req.lines]
     lines = [
@@ -81,6 +85,72 @@ def process_batch(
         raise HTTPException(status_code=400, detail="dms_base_url required (or set DMS_BASE_URL)")
     result = run_subdealer_challan_batch(challan_batch_id=bid, dms_base_url=base, dealer_id=did)
     return result
+
+
+@router.get("/staging/recent")
+def list_recent_staging(
+    dealer_id: int | None = Query(None, description="from_dealer_id; defaults to server DEALER_ID"),
+    days: int = Query(15, ge=1, le=365, description="Masters with created_at in the last N days"),
+) -> list[dict]:
+    """Recent ``challan_master_staging`` rows with ``failed_lines`` (detail rows in Failed) for the Processed tab."""
+    did = int(dealer_id) if dealer_id is not None else int(DEALER_ID)
+    masters = master_repo.list_masters_recent(did, days=days)
+    out: list[dict] = []
+    for m in masters:
+        row = dict(m)
+        try:
+            bid = uuid.UUID(str(row["challan_batch_id"]))
+        except ValueError:
+            row["failed_lines"] = []
+            out.append(row)
+            continue
+        row["failed_lines"] = detail_repo.fetch_failed_details_for_batch(bid)
+        out.append(row)
+    return out
+
+
+@router.get("/staging/failed-count")
+def staging_failed_count(
+    dealer_id: int | None = Query(None),
+    days: int = Query(15, ge=1, le=365),
+) -> dict[str, int]:
+    """Count of Failed **detail** lines in the window (badges)."""
+    did = int(dealer_id) if dealer_id is not None else int(DEALER_ID)
+    return {"failed": master_repo.count_failed_detail_lines_recent(did, days=days)}
+
+
+@router.post("/staging/{challan_detail_staging_id}/retry")
+def retry_staging_row_endpoint(
+    challan_detail_staging_id: int,
+    req: ProcessChallanRequest = ProcessChallanRequest(),
+) -> dict:
+    """Re-queue one Failed detail line and run prepare + order for the batch (long-running)."""
+    did = int(req.dealer_id) if req.dealer_id is not None else int(DEALER_ID)
+    base = (req.dms_base_url or DMS_BASE_URL or "").strip()
+    if not base:
+        raise HTTPException(status_code=400, detail="dms_base_url required (or set DMS_BASE_URL)")
+    return retry_failed_staging_row(
+        challan_staging_id=challan_detail_staging_id,
+        dms_base_url=base,
+        dealer_id=did,
+    )
+
+
+@router.post("/batch/{challan_batch_id}/retry-order")
+def retry_order_endpoint(
+    challan_batch_id: str,
+    req: ProcessChallanRequest = ProcessChallanRequest(),
+) -> dict:
+    """Run create order / invoice phase only (all detail lines must be Ready)."""
+    try:
+        bid = uuid.UUID(challan_batch_id.strip())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail="Invalid challan_batch_id") from e
+    did = int(req.dealer_id) if req.dealer_id is not None else int(DEALER_ID)
+    base = (req.dms_base_url or DMS_BASE_URL or "").strip()
+    if not base:
+        raise HTTPException(status_code=400, detail="dms_base_url required (or set DMS_BASE_URL)")
+    return retry_order_only_batch(challan_batch_id=bid, dms_base_url=base, dealer_id=did)
 
 
 @router.post("/parse-scan")

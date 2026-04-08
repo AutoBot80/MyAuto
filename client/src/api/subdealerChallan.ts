@@ -1,4 +1,8 @@
 import { apiFetch } from "./client";
+import { DEALER_ID } from "./dealerId";
+
+/** Matches server default for Processed list and failed badge window. */
+export const CHALLAN_STAGING_RECENT_DAYS = 15;
 
 export type SubdealerChallanLine = {
   engine_no: string;
@@ -78,4 +82,84 @@ export async function processChallanBatch(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
+}
+
+/** One failed line under a batch (from GET /staging/recent ``failed_lines``). */
+export type ChallanFailedDetailLine = {
+  challan_detail_staging_id: number;
+  raw_chassis: string | null;
+  raw_engine: string | null;
+  last_error: string | null;
+  status: string | null;
+};
+
+/**
+ * GET /subdealer-challan/staging/recent — one row per batch (master) for the Processed tab.
+ */
+export type ChallanMasterProcessedRow = {
+  challan_batch_id: string;
+  from_dealer_id: number;
+  to_dealer_id: number;
+  challan_date: string | null;
+  challan_book_num: string | null;
+  num_vehicles: number;
+  num_vehicles_prepared: number;
+  invoice_complete: boolean;
+  invoice_status: string | null;
+  created_at: string | null;
+  ready_line_count: number;
+  failed_line_count: number;
+  failed_lines: ChallanFailedDetailLine[];
+};
+
+export async function listRecentChallanStaging(
+  dealerId?: number,
+  days: number = CHALLAN_STAGING_RECENT_DAYS
+): Promise<ChallanMasterProcessedRow[]> {
+  const search = new URLSearchParams();
+  search.set("dealer_id", String(dealerId ?? DEALER_ID));
+  search.set("days", String(days));
+  return apiFetch<ChallanMasterProcessedRow[]>(`/subdealer-challan/staging/recent?${search.toString()}`);
+}
+
+/** GET /subdealer-challan/staging/failed-count — badge for failed detail lines in the window. */
+export async function getChallanStagingFailedCount(
+  dealerId?: number,
+  days: number = CHALLAN_STAGING_RECENT_DAYS
+): Promise<number> {
+  const search = new URLSearchParams();
+  search.set("dealer_id", String(dealerId ?? DEALER_ID));
+  search.set("days", String(days));
+  const res = await apiFetch<{ failed: number }>(`/subdealer-challan/staging/failed-count?${search.toString()}`);
+  return res.failed ?? 0;
+}
+
+/** POST /subdealer-challan/staging/{challan_detail_staging_id}/retry — prepare + order for the batch (long-running). */
+export async function retryChallanStagingRow(
+  challanDetailStagingId: number,
+  body: ProcessChallanBody = {}
+): Promise<ProcessChallanResponse> {
+  return apiFetch<ProcessChallanResponse>(
+    `/subdealer-challan/staging/${encodeURIComponent(String(challanDetailStagingId))}/retry`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }
+  );
+}
+
+/** POST /subdealer-challan/batch/{challan_batch_id}/retry-order — order/invoice only (all lines Ready). */
+export async function retryChallanOrderOnly(
+  challanBatchId: string,
+  body: ProcessChallanBody = {}
+): Promise<ProcessChallanResponse> {
+  return apiFetch<ProcessChallanResponse>(
+    `/subdealer-challan/batch/${encodeURIComponent(challanBatchId)}/retry-order`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }
+  );
 }

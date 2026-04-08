@@ -1,4 +1,4 @@
-import { useState, useEffect, Component, type ReactNode } from "react";
+import { useState, useEffect, useCallback, Component, type ReactNode } from "react";
 import "./App.css";
 import type { Page } from "./types";
 import { useToday } from "./hooks/useToday";
@@ -13,6 +13,7 @@ import { BulkLoadsPage } from "./pages/BulkLoadsPage";
 import { SubdealerChallanPage } from "./pages/SubdealerChallanPage";
 import { getDealer } from "./api/dealers";
 import { getBulkLoadPendingCount } from "./api/bulkLoads";
+import { getChallanStagingFailedCount } from "./api/subdealerChallan";
 import { getSiteUrls, type SiteUrls } from "./api/siteUrls";
 import { usePageVisible } from "./hooks/usePageVisible";
 
@@ -62,6 +63,7 @@ function App() {
   const [mode, setMode] = useState<AppMode>("home");
   const [page, setPage] = useState<Page>("add-sales");
   const [bulkLoadsPendingCount, setBulkLoadsPendingCount] = useState<number>(0);
+  const [challanFailedCount, setChallanFailedCount] = useState<number>(0);
   const [dealerName, setDealerName] = useState<string>("—");
   const [dealerCity, setDealerCity] = useState<string | null>(null);
   const [dealerOemId, setDealerOemId] = useState<number | null>(null);
@@ -95,6 +97,12 @@ function App() {
     }
   };
 
+  const refreshChallanFailedCount = useCallback(() => {
+    getChallanStagingFailedCount(DEALER_ID)
+      .then(setChallanFailedCount)
+      .catch(() => setChallanFailedCount(0));
+  }, []);
+
   // Bulk-loads badge only: not tied to Add Sales OCR (upload runs extraction synchronously on the server).
   useEffect(() => {
     if (mode !== "pos") {
@@ -108,6 +116,20 @@ function App() {
     const interval = setInterval(refreshBulkLoadsPendingCount, 60000);
     return () => clearInterval(interval);
   }, [mode, pageVisible]);
+
+  // Subdealer Challans: failed staging rows in the last 15 days (main tab + Processed sub-tab badges).
+  useEffect(() => {
+    if (mode !== "pos") {
+      setChallanFailedCount(0);
+      return;
+    }
+    if (!pageVisible) {
+      return;
+    }
+    refreshChallanFailedCount();
+    const interval = setInterval(refreshChallanFailedCount, 60000);
+    return () => clearInterval(interval);
+  }, [mode, pageVisible, refreshChallanFailedCount]);
 
   // When switching mode, ensure page is in the current tab list (avoid blank screen). Must run on every render (before any early return).
   useEffect(() => {
@@ -135,7 +157,14 @@ function App() {
           />
         );
       case "subdealer-challan":
-        return <SubdealerChallanPage dealerId={DEALER_ID} dmsUrl={dmsUrl} />;
+        return (
+          <SubdealerChallanPage
+            dealerId={DEALER_ID}
+            dmsUrl={dmsUrl}
+            challanFailedCount={challanFailedCount}
+            onChallanCountsRefresh={refreshChallanFailedCount}
+          />
+        );
       case "bulk-loads":
         return <BulkLoadsPage dealerId={DEALER_ID} onNavigateToAddSales={() => setPage("add-sales")} />;
       case "customer-details":
@@ -229,7 +258,11 @@ function App() {
         onNavigate={(p) => setPage(p)}
         visiblePages={visiblePages}
         onGoHome={() => setMode("home")}
-        tabBadges={mode === "pos" ? { "bulk-loads": bulkLoadsPendingCount } : undefined}
+        tabBadges={
+          mode === "pos"
+            ? { "bulk-loads": bulkLoadsPendingCount, "subdealer-challan": challanFailedCount }
+            : undefined
+        }
       >
         <PageErrorBoundary>{content}</PageErrorBoundary>
       </AppLayoutV2>

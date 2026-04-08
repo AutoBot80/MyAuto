@@ -2209,7 +2209,7 @@
   color: #444;
 }
 
-/* Challans page: sub-tabs under main "Challans" tab */
+/* Subdealer Challans page: sub-tabs under main tab */
 .challans-subtabs {
   display: flex;
   gap: 0;
@@ -2246,8 +2246,33 @@
   min-height: 0;
   border-radius: 4px;
   background: #fff;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
+.challans-processed-table-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow-x: auto;
+  overflow-y: auto;
+  border: 1px solid #c5d9ed;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.challans-processed-table-wrap .app-table tbody td.challans-proc-err {
+  white-space: normal;
+  max-width: 320px;
+  word-break: break-word;
+}
+
+.challans-proc-retry-btn {
+  font-size: 13px;
+  padding: 4px 10px;
+}
+
+/* New tab only: fills space below sub-tabs (Processed tab is a separate mounted panel). */
 .challans-new-panel {
   display: flex;
   flex-direction: column;

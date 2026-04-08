@@ -444,32 +444,49 @@ This document lists the current database tables and their columns. **Executable 
 
 ---
 
-## 13) `challan_staging`
+## 13) `challan_master_staging` and `challan_details_staging`
 
-**Purpose:** Staging rows for subdealer challan OCR/import before promotion to `challan_master` / `vehicle_inventory_master`.
+**Purpose:** Subdealer challan **before** commit to `challan_master` / `challan_details`: one **header** row per batch (`challan_master_staging`) and **per-vehicle** lines (`challan_details_staging`), joined by `challan_batch_id` (UUID). Replaces the older single-table `challan_staging` model for new installs (**`DDL/23_challan_master_staging.sql`**, **`DDL/24_challan_details_staging.sql`**).
+
+### `challan_master_staging`
 
 | Column | Type | Null | Default | Notes |
 |---|---|---:|---|---|
-| `challan_staging_id` | `integer` | NO | `nextval('challan_staging_challan_staging_id_seq'::regclass)` | Primary key |
-| `challan_date` | `varchar(20)` | YES |  | dd/mm/yyyy |
-| `challan_book_num` | `varchar(64)` | YES |  | |
+| `challan_batch_id` | `uuid` | NO |  | Primary key; one batch per Create Challans action |
 | `from_dealer_id` | `integer` | NO |  | FK → `dealer_ref(dealer_id)` |
 | `to_dealer_id` | `integer` | NO |  | FK → `dealer_ref(dealer_id)` |
+| `challan_date` | `varchar(20)` | YES |  | dd/mm/yyyy |
+| `challan_book_num` | `varchar(64)` | YES |  | |
+| `num_vehicles` | `integer` | NO |  | Line count at Create Challans |
+| `num_vehicles_prepared` | `integer` | NO | `0` | Lines in Ready or Committed (derived) |
+| `invoice_complete` | `boolean` | NO | `FALSE` | Set when invoice number is captured |
+| `invoice_status` | `varchar(32)` | NO | `'Pending'` | **Pending** \| **Failed** \| **Completed** |
+| `created_at` | `timestamptz` | NO | `CURRENT_TIMESTAMP` | Processed tab / window filters |
+
+**Primary key:** `challan_batch_id`
+
+**Scripts:** `DDL/23_challan_master_staging.sql`
+
+### `challan_details_staging`
+
+| Column | Type | Null | Default | Notes |
+|---|---|---:|---|---|
+| `challan_detail_staging_id` | `integer` | NO | serial | Primary key |
+| `challan_batch_id` | `uuid` | NO |  | FK → `challan_master_staging(challan_batch_id)` ON DELETE CASCADE |
 | `raw_chassis` | `varchar(128)` | YES |  | |
 | `raw_engine` | `varchar(128)` | YES |  | |
-| `status` | `varchar(64)` | YES |  | Workflow status (e.g. Queued, Ready, Failed, Committed) |
-| `challan_batch_id` | `uuid` | YES |  | Groups rows from one Create Challans action |
-| `last_error` | `text` | YES |  | Last DMS/DB error for the line |
-| `inventory_line_id` | `integer` | YES |  | FK → `vehicle_inventory_master` after `prepare_vehicle` |
+| `status` | `varchar(64)` | YES |  | Queued, Ready, Failed, Committed |
+| `last_error` | `text` | YES |  | Last prepare/inventory error |
+| `inventory_line_id` | `integer` | YES |  | FK → `vehicle_inventory_master(inventory_line_id)` |
+| `created_at` | `timestamptz` | NO | `CURRENT_TIMESTAMP` | |
 
-**Primary key:** `challan_staging_pkey` on (`challan_staging_id`)
+**Primary key:** `challan_detail_staging_id`
 
-**Foreign keys:**
-- `fk_challan_staging_from_dealer`: (`from_dealer_id`) → `dealer_ref(dealer_id)`
-- `fk_challan_staging_to_dealer`: (`to_dealer_id`) → `dealer_ref(dealer_id)`
-- `fk_challan_staging_inventory_line`: (`inventory_line_id`) → `vehicle_inventory_master(inventory_line_id)` (optional; existing DBs via alter)
+**Scripts:** `DDL/24_challan_details_staging.sql` (run after `challan_master_staging` and `vehicle_inventory_master`)
 
-**Scripts:** `DDL/19_challan_staging.sql`; existing DBs: `DDL/alter/19a_challan_staging_batch_status.sql`
+### Legacy: `challan_staging`
+
+Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.sql`** plus **`DDL/alter/19a_…sql`**, **`19b_…sql`**). Greenfield schemas should use **`challan_master_staging`** / **`challan_details_staging`** instead; migrating legacy data is not part of the base scripts.
 
 ---
 
@@ -564,7 +581,9 @@ This document lists the current database tables and their columns. **Executable 
 | `bulk_loads` | Bulk ingest, queue publish/lease, dashboard, retry prep, action-taken tracking |
 | `add_sales_staging` | Validated Add Sales JSON before master commit; **`staging_id`** for Create Invoice (**LLD §2.2a**); script **`DDL/alter/13a_add_sales_staging.sql`** |
 | `vehicle_inventory_master` | Subdealer challan / stock lines; **`DDL/18_vehicle_inventory_master.sql`** |
-| `challan_staging` | Challan OCR/import staging; **`DDL/19_challan_staging.sql`** |
+| `challan_master_staging` | Subdealer challan batch header (staging); **`DDL/23_challan_master_staging.sql`** |
+| `challan_details_staging` | Per-line subdealer challan staging; **`DDL/24_challan_details_staging.sql`** |
+| `challan_staging` | Legacy single-table staging (optional; **`DDL/19_challan_staging.sql`**) |
 | `challan_master` | Challan headers; **`DDL/20_challan_master.sql`** |
 | `challan_details` | Challan ↔ inventory lines; **`DDL/21_challan_details.sql`** |
 | `subdealer_discount_master` | Dealer + model discount rules; **`DDL/22_subdealer_discount_master.sql`** |
@@ -688,3 +707,5 @@ This document lists the current database tables and their columns. **Executable 
 | 2.68 | Apr 2026 | **`challan_master`**: **`order_number`**, **`invoice_number`**, **`total_ex_showroom_price`**, **`total_discount`** — **`DDL/alter/18a_…sql`**; **`vehicle_inventory_master`**: **`discount`** — **`DDL/alter/18b_…sql`** (greenfield: **`DDL/20_challan_master.sql`**, **`DDL/18_vehicle_inventory_master.sql`**) |
 | 2.69 | Apr 2026 | **`subdealer_discount_master`** — **`DDL/22_subdealer_discount_master.sql`** |
 | 2.70 | Apr 2026 | **`challan_staging`**: **`challan_batch_id`**, **`last_error`**, **`inventory_line_id`** — **`DDL/alter/19a_challan_staging_batch_status.sql`** |
+| 2.71 | Apr 2026 | **`challan_staging.created_at`** — **`DDL/alter/19b_challan_staging_created_at.sql`** (Processed tab list / failed-count window) |
+| 2.72 | Apr 2026 | **`challan_master_staging`**, **`challan_details_staging`** — subdealer challan staging split (header + lines); greenfield prefers **`DDL/23_…sql`**, **`DDL/24_…sql`** over legacy **`challan_staging`** |

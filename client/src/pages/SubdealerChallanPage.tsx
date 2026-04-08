@@ -1,8 +1,13 @@
-import { type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  CHALLAN_STAGING_RECENT_DAYS,
   createChallanStaging,
+  listRecentChallanStaging,
   parseSubdealerChallanScan,
   processChallanBatch,
+  retryChallanOrderOnly,
+  retryChallanStagingRow,
+  type ChallanMasterProcessedRow,
   type SubdealerChallanLine,
 } from "../api/subdealerChallan";
 
@@ -75,6 +80,32 @@ function dedupeRowsByVehicleIdentity(rows: ChallanRow[]): ChallanRow[] {
 
 type ChallanSubTab = "new" | "processed";
 
+function formatStagingCreatedAt(iso: string | null): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" });
+}
+
+function shortBatchId(batchId: string): string {
+  const s = batchId.replace(/-/g, "");
+  if (s.length <= 8) return batchId;
+  return `…${s.slice(-8)}`;
+}
+
+function formatPreparedOverTotal(r: ChallanMasterProcessedRow): string {
+  const p = r.num_vehicles_prepared ?? 0;
+  const t = r.num_vehicles ?? 0;
+  if (t <= 0) return "—";
+  return `${p}/${t}`;
+}
+
+function showRetryOrderOnly(r: ChallanMasterProcessedRow): boolean {
+  const inv = (r.invoice_status || "").trim().toLowerCase();
+  const failed = r.failed_line_count ?? 0;
+  return inv === "failed" && failed === 0;
+}
+
 /** Last row must be blank (both engine and chassis empty) so user can add more. */
 function ensureTrailingBlankRow(rows: ChallanRow[]): ChallanRow[] {
   if (rows.length === 0) return [newEmptyRow()];
@@ -91,9 +122,16 @@ function ensureTrailingBlankRow(rows: ChallanRow[]): ChallanRow[] {
 export type SubdealerChallanPageProps = {
   dealerId: number;
   dmsUrl: string;
+  challanFailedCount: number;
+  onChallanCountsRefresh: () => void;
 };
 
-export function SubdealerChallanPage({ dealerId, dmsUrl }: SubdealerChallanPageProps) {
+export function SubdealerChallanPage({
+  dealerId,
+  dmsUrl,
+  challanFailedCount,
+  onChallanCountsRefresh,
+}: SubdealerChallanPageProps) {
   const [challanSubTab, setChallanSubTab] = useState<ChallanSubTab>("new");
   const [toDealerId, setToDealerId] = useState("");
   const [challanNo, setChallanNo] = useState<string | null>(null);
@@ -106,6 +144,12 @@ export function SubdealerChallanPage({ dealerId, dmsUrl }: SubdealerChallanPageP
   const [processingChallan, setProcessingChallan] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
+  const [processedRows, setProcessedRows] = useState<ChallanMasterProcessedRow[]>([]);
+  const [processedLoading, setProcessedLoading] = useState(false);
+  const [processedError, setProcessedError] = useState<string | null>(null);
+  const [retryingId, setRetryingId] = useState<number | null>(null);
+  const [retryingOrderBatchId, setRetryingOrderBatchId] = useState<string | null>(null);
+  const [expandedBatchId, setExpandedBatchId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const vehicleCount = useMemo(() => uniqueVehicleCount(rows), [rows]);
@@ -148,6 +192,69 @@ export function SubdealerChallanPage({ dealerId, dmsUrl }: SubdealerChallanPageP
       );
     });
   }, []);
+
+  const loadProcessed = useCallback(async () => {
+    setProcessedLoading(true);
+    setProcessedError(null);
+    try {
+      const rows = await listRecentChallanStaging(dealerId, CHALLAN_STAGING_RECENT_DAYS);
+      setProcessedRows(rows);
+    } catch (err) {
+      setProcessedError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setProcessedLoading(false);
+    }
+  }, [dealerId]);
+
+  useEffect(() => {
+    if (challanSubTab === "processed") {
+      void loadProcessed();
+    } else {
+      setProcessedRows([]);
+      setProcessedError(null);
+      setProcessedLoading(false);
+    }
+  }, [challanSubTab, loadProcessed]);
+
+  const onRetryStagingRow = async (challanDetailStagingId: number) => {
+    setRetryingId(challanDetailStagingId);
+    setProcessedError(null);
+    try {
+      const pr = await retryChallanStagingRow(challanDetailStagingId, {
+        dms_base_url: dmsUrl || null,
+        dealer_id: dealerId,
+      });
+      if (pr.error || pr.ok === false) {
+        setProcessedError(pr.error || "Retry failed.");
+      }
+      await loadProcessed();
+      onChallanCountsRefresh();
+    } catch (err) {
+      setProcessedError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRetryingId(null);
+    }
+  };
+
+  const onRetryOrderOnly = async (challanBatchId: string) => {
+    setRetryingOrderBatchId(challanBatchId);
+    setProcessedError(null);
+    try {
+      const pr = await retryChallanOrderOnly(challanBatchId, {
+        dms_base_url: dmsUrl || null,
+        dealer_id: dealerId,
+      });
+      if (pr.error || pr.ok === false) {
+        setProcessedError(pr.error || "Retry order failed.");
+      }
+      await loadProcessed();
+      onChallanCountsRefresh();
+    } catch (err) {
+      setProcessedError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRetryingOrderBatchId(null);
+    }
+  };
 
   const onFileSelected = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -226,12 +333,13 @@ export function SubdealerChallanPage({ dealerId, dmsUrl }: SubdealerChallanPageP
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setProcessingChallan(false);
+      onChallanCountsRefresh();
     }
   };
 
   return (
     <div className="subdealer-challan">
-      <nav className="challans-subtabs" role="tablist" aria-label="Challans">
+      <nav className="challans-subtabs" role="tablist" aria-label="Subdealer Challans">
         <button
           type="button"
           role="tab"
@@ -253,22 +361,15 @@ export function SubdealerChallanPage({ dealerId, dmsUrl }: SubdealerChallanPageP
           onClick={() => setChallanSubTab("processed")}
         >
           Processed
+          {challanFailedCount > 0 ? ` (${challanFailedCount})` : ""}
         </button>
       </nav>
 
-      <div
-        id="challans-panel-processed"
-        role="tabpanel"
-        aria-labelledby="challans-tab-processed"
-        hidden={challanSubTab !== "processed"}
-        className="challans-processed-panel"
-      />
-
+      {challanSubTab === "new" ? (
       <div
         id="challans-panel-new"
         role="tabpanel"
         aria-labelledby="challans-tab-new"
-        hidden={challanSubTab !== "new"}
         className="challans-new-panel"
       >
         <input
@@ -473,6 +574,130 @@ export function SubdealerChallanPage({ dealerId, dmsUrl }: SubdealerChallanPageP
         </div>
       </div>
       </div>
+      ) : null}
+
+      {challanSubTab === "processed" ? (
+      <div
+        id="challans-panel-processed"
+        role="tabpanel"
+        aria-labelledby="challans-tab-processed"
+        className="challans-processed-panel"
+      >
+        {processedError && (
+          <div className="subdealer-challan-error" role="alert">
+            {processedError}
+          </div>
+        )}
+        <div className="challans-processed-table-wrap">
+          {processedLoading ? (
+            <p className="app-table-empty" style={{ padding: "1rem" }}>
+              Loading…
+            </p>
+          ) : processedRows.length === 0 ? (
+            <p className="app-table-empty" style={{ padding: "1rem" }}>
+              No challan batches in this period.
+            </p>
+          ) : (
+            <table className="app-table">
+              <thead>
+                <tr>
+                  <th scope="col">Batch</th>
+                  <th scope="col">Created</th>
+                  <th scope="col">To dealer</th>
+                  <th scope="col">Book / date</th>
+                  <th scope="col" title="Prepared vs total vehicles in this batch">
+                    Prep / total
+                  </th>
+                  <th scope="col">Invoice</th>
+                  <th scope="col" title="Detail lines still in Failed (prepare or inventory)">
+                    Failed lines
+                  </th>
+                  <th scope="col">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {processedRows.map((r) => {
+                  const bid = r.challan_batch_id;
+                  const expanded = expandedBatchId === bid;
+                  const failedN = r.failed_line_count ?? 0;
+                  const canExpand = failedN > 0;
+                  const orderRetry = showRetryOrderOnly(r);
+                  return (
+                    <Fragment key={bid}>
+                      <tr>
+                        <td title={bid}>{shortBatchId(bid)}</td>
+                        <td>{formatStagingCreatedAt(r.created_at)}</td>
+                        <td>{r.to_dealer_id}</td>
+                        <td>
+                          {(r.challan_book_num || "—") + " / " + (r.challan_date || "—")}
+                        </td>
+                        <td>{formatPreparedOverTotal(r)}</td>
+                        <td>
+                          {(r.invoice_status || "—").trim()}
+                          {r.invoice_complete ? " ✓" : ""}
+                        </td>
+                        <td>
+                          {failedN > 0 ? (
+                            <button
+                              type="button"
+                              className="app-button app-button--small"
+                              aria-expanded={expanded}
+                              onClick={() => setExpandedBatchId(expanded ? null : bid)}
+                            >
+                              {failedN} {expanded ? "▾" : "▸"}
+                            </button>
+                          ) : (
+                            "0"
+                          )}
+                        </td>
+                        <td>
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem" }}>
+                            {orderRetry ? (
+                              <button
+                                type="button"
+                                className="app-button app-button--primary challans-proc-retry-btn"
+                                disabled={retryingOrderBatchId !== null || retryingId !== null}
+                                onClick={() => void onRetryOrderOnly(bid)}
+                              >
+                                {retryingOrderBatchId === bid ? "Retrying order…" : "Retry order"}
+                              </button>
+                            ) : null}
+                          </div>
+                        </td>
+                      </tr>
+                      {canExpand && expanded
+                        ? r.failed_lines.map((fl) => (
+                            <tr key={`${bid}-${fl.challan_detail_staging_id}`} className="challans-proc-failed-row">
+                              <td colSpan={2}>Line {fl.challan_detail_staging_id}</td>
+                              <td colSpan={2}>
+                                {(fl.raw_engine || "—") + " / " + (fl.raw_chassis || "—")}
+                              </td>
+                              <td colSpan={1}>{(fl.status || "").trim() || "Failed"}</td>
+                              <td colSpan={2} className="challans-proc-err">
+                                {fl.last_error || "—"}
+                              </td>
+                              <td colSpan={1}>
+                                <button
+                                  type="button"
+                                  className="app-button app-button--primary challans-proc-retry-btn"
+                                  disabled={retryingId !== null || retryingOrderBatchId !== null}
+                                  onClick={() => void onRetryStagingRow(fl.challan_detail_staging_id)}
+                                >
+                                  {retryingId === fl.challan_detail_staging_id ? "Retrying…" : "Retry line"}
+                                </button>
+                              </td>
+                            </tr>
+                          ))
+                        : null}
+                    </Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+      ) : null}
     </div>
   );
 }
