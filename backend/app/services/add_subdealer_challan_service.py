@@ -72,7 +72,8 @@ def run_subdealer_challan_batch(
     """
     Run full challan pipeline for all rows in ``challan_batch_id``.
     Writes a human-readable trace to ``CHALLANS_DIR/<challan>_<ddmmyyyy>/playwright_challan.txt``
-    (same folder convention as OCR upload). Returns ``ok``, ``error``, ``challan_id``, ``dms_step_messages``, ``vehicle``.
+    (same folder convention as OCR upload). The file is **truncated** at the start of each run so prior
+    runs do not accumulate. Returns ``ok``, ``error``, ``challan_id``, ``dms_step_messages``, ``vehicle``.
     """
     steps: list[str] = []
     out: dict[str, object] = {
@@ -99,6 +100,7 @@ def run_subdealer_challan_batch(
     leaf = challan_artifact_leaf_name(cb, cd)
     log_path = (CHALLANS_DIR / leaf / "playwright_challan.txt").resolve()
     log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("", encoding="utf-8")
     out["challan_log_path"] = str(log_path)
 
     def logln(msg: str) -> None:
