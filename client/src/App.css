@@ -2289,8 +2289,7 @@
   outline-offset: 1px;
 }
 
-.challans-processed-search-btn,
-.challans-processed-search-clear {
+.challans-processed-search-btn {
   flex-shrink: 0;
 }
 

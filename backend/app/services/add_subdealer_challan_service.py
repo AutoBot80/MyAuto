@@ -300,10 +300,16 @@ def run_subdealer_challan_batch(
     dms_base_url: str,
     dealer_id: int,
     phase: Literal["full", "prepare_only", "order_only"] = "full",
+    requeue_all_failed: bool = True,
 ) -> dict[str, object]:
     """
     Run prepare and/or order phase for ``challan_batch_id``.
     ``order_only``: all detail lines must be Ready (order not yet done).
+
+    ``requeue_all_failed``: when True (default), before ``prepare_vehicle``, every **Failed** detail
+    line in the batch is set to **Queued** so Find→Vehicles runs again. Required for
+    ``POST /process/...`` after a partial failure (otherwise only ``Queued`` lines are prepared).
+    Set False when a single line was already reset (e.g. ``retry_failed_staging_row``).
     """
     steps: list[str] = []
     out: dict[str, object] = {
@@ -387,6 +393,14 @@ def run_subdealer_challan_batch(
 
         last_vehicle_scrape: dict = {}
         if phase in ("full", "prepare_only"):
+            if requeue_all_failed:
+                n_rq = detail_repo.reset_all_failed_details_for_batch(challan_batch_id)
+                if n_rq:
+                    logln(
+                        f"Re-queued {n_rq} Failed detail row(s) for prepare_vehicle "
+                        f"(Find→Vehicles will run for each)."
+                    )
+                master_repo.refresh_prepared_count(challan_batch_id)
             prep_err, last_vehicle_scrape = _run_prepare_vehicle_loop(
                 page=page,
                 challan_batch_id=challan_batch_id,
@@ -478,7 +492,13 @@ def retry_failed_staging_row(
     except ValueError:
         return {"ok": False, "error": "Invalid challan_batch_id."}
     master_repo.set_invoice_state(bu, invoice_status="Pending", invoice_complete=False)
-    return run_subdealer_challan_batch(challan_batch_id=bu, dms_base_url=dms_base_url, dealer_id=dealer_id, phase="full")
+    return run_subdealer_challan_batch(
+        challan_batch_id=bu,
+        dms_base_url=dms_base_url,
+        dealer_id=dealer_id,
+        phase="full",
+        requeue_all_failed=False,
+    )
 
 
 def retry_order_only_batch(

@@ -8,7 +8,6 @@ import {
   parseSubdealerChallanScan,
   processChallanBatch,
   retryChallanOrderOnly,
-  retryChallanStagingRow,
   type ChallanMasterProcessedRow,
   type SubdealerChallanLine,
 } from "../api/subdealerChallan";
@@ -237,7 +236,7 @@ export function SubdealerChallanPage({
   const [processedChallanSearchDraft, setProcessedChallanSearchDraft] = useState("");
   /** When empty: API lists failed batches in the last 15 days. When set: match ``challan_book_num`` (any age). */
   const [processedChallanSearchApplied, setProcessedChallanSearchApplied] = useState("");
-  const [retryingId, setRetryingId] = useState<number | null>(null);
+  const [retryingProcessBatchId, setRetryingProcessBatchId] = useState<string | null>(null);
   const [retryingOrderBatchId, setRetryingOrderBatchId] = useState<string | null>(null);
   /** Master row selection drives the lower **Failed vehicles** sub-table. */
   const [selectedProcessedBatchId, setSelectedProcessedBatchId] = useState<string | null>(null);
@@ -336,11 +335,6 @@ export function SubdealerChallanPage({
     setProcessedChallanSearchApplied(processedChallanSearchDraft.trim());
   }, [processedChallanSearchDraft]);
 
-  const clearProcessedChallanSearch = useCallback(() => {
-    setProcessedChallanSearchDraft("");
-    setProcessedChallanSearchApplied("");
-  }, []);
-
   useEffect(() => {
     if (challanSubTab === "processed") {
       void loadProcessed();
@@ -361,23 +355,24 @@ export function SubdealerChallanPage({
     if (!exists) setSelectedProcessedBatchId(null);
   }, [challanSubTab, processedRows, selectedProcessedBatchId]);
 
-  const onRetryStagingRow = async (challanDetailStagingId: number) => {
-    setRetryingId(challanDetailStagingId);
+  /** Re-run full batch (re-queues all Failed lines server-side, then prepare_vehicle + order). */
+  const onRetryFailedBatch = async (challanBatchId: string) => {
+    setRetryingProcessBatchId(challanBatchId);
     setProcessedError(null);
     try {
-      const pr = await retryChallanStagingRow(challanDetailStagingId, {
+      const pr = await processChallanBatch(challanBatchId, {
         dms_base_url: dmsUrl || null,
         dealer_id: dealerId,
       });
       if (pr.error || pr.ok === false) {
-        setProcessedError(pr.error || "Retry failed.");
+        setProcessedError(pr.error || "Batch retry failed.");
       }
       await loadProcessed();
       onChallanCountsRefresh();
     } catch (err) {
       setProcessedError(err instanceof Error ? err.message : String(err));
     } finally {
-      setRetryingId(null);
+      setRetryingProcessBatchId(null);
     }
   };
 
@@ -812,15 +807,6 @@ export function SubdealerChallanPage({
           >
             Search
           </button>
-          {processedChallanSearchDraft.trim() || processedChallanSearchApplied ? (
-            <button
-              type="button"
-              className="app-button app-button--small challans-processed-search-clear"
-              onClick={() => clearProcessedChallanSearch()}
-            >
-              Clear
-            </button>
-          ) : null}
         </div>
         <p className="challans-processed-list-hint">
           {processedChallanSearchApplied.trim()
@@ -868,7 +854,6 @@ export function SubdealerChallanPage({
                       const bid = r.challan_batch_id;
                       const failedN = r.failed_line_count ?? 0;
                       const orderRetry = showRetryOrderOnly(r);
-                      const firstFailedId = r.failed_lines?.[0]?.challan_detail_staging_id;
                       const sel = selectedProcessedBatchId === bid;
                       return (
                         <tr
@@ -902,7 +887,9 @@ export function SubdealerChallanPage({
                                 <button
                                   type="button"
                                   className="app-button app-button--primary challans-proc-retry-btn"
-                                  disabled={retryingOrderBatchId !== null || retryingId !== null}
+                                  disabled={
+                                    retryingOrderBatchId !== null || retryingProcessBatchId !== null
+                                  }
                                   onClick={(e) => {
                                     e.stopPropagation();
                                     void onRetryOrderOnly(bid);
@@ -915,24 +902,20 @@ export function SubdealerChallanPage({
                                   <span className="challans-proc-failed-badge" title="Details in Failed vehicles below">
                                     {failedN} failed
                                   </span>
-                                  {firstFailedId != null ? (
-                                    <button
-                                      type="button"
-                                      className="app-button app-button--primary challans-proc-retry-btn"
-                                      disabled={retryingId !== null || retryingOrderBatchId !== null}
-                                      title={
-                                        failedN > 1
-                                          ? "Retry first failed vehicle (use Failed vehicles below for others)"
-                                          : "Retry this failed vehicle"
-                                      }
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        void onRetryStagingRow(firstFailedId);
-                                      }}
-                                    >
-                                      {retryingId === firstFailedId ? "Retrying…" : "Retry"}
-                                    </button>
-                                  ) : null}
+                                  <button
+                                    type="button"
+                                    className="app-button app-button--primary challans-proc-retry-btn"
+                                    disabled={
+                                      retryingProcessBatchId !== null || retryingOrderBatchId !== null
+                                    }
+                                    title="Re-run DMS for all failed vehicles (Find→Vehicles, prepare, then order)"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      void onRetryFailedBatch(bid);
+                                    }}
+                                  >
+                                    {retryingProcessBatchId === bid ? "Retrying…" : "Retry"}
+                                  </button>
                                 </>
                               ) : (
                                 "—"

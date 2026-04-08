@@ -163,6 +163,33 @@ def reset_failed_detail_for_retry(challan_detail_staging_id: int) -> bool:
         conn.close()
 
 
+def reset_all_failed_details_for_batch(challan_batch_id: uuid.UUID) -> int:
+    """
+    Set every **Failed** line in the batch to **Queued** and clear error / inventory link so
+    ``prepare_vehicle`` will run again (Find→Vehicles, etc.). Used when re-processing a batch
+    from ``POST /process/...`` while lines are still Failed.
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE challan_details_staging
+                SET status = 'Queued',
+                    last_error = NULL,
+                    inventory_line_id = NULL
+                WHERE challan_batch_id = %s::uuid
+                  AND LOWER(TRIM(COALESCE(status, ''))) = 'failed'
+                """,
+                (str(challan_batch_id),),
+            )
+            n = int(cur.rowcount or 0)
+        conn.commit()
+        return n
+    finally:
+        conn.close()
+
+
 def batch_all_ready_for_order(challan_batch_id: uuid.UUID) -> bool:
     """True if at least one line and every line is Ready (prepare done, order not yet committed)."""
     conn = get_connection()
