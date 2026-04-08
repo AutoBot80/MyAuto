@@ -7,12 +7,12 @@ export default defineConfig({
   server: {
     proxy: {
       '/rto-queue': 'http://127.0.0.1:8000',
-      // Fill Forms (DMS / insurance / etc.) runs Playwright (often 1–3+ min); default proxy timeout causes 502 Bad Gateway.
+      // Fill Forms (DMS / insurance / etc.) runs Playwright (often several minutes); default proxy timeout causes 502 Bad Gateway.
       '/fill-forms': {
         target: 'http://127.0.0.1:8000',
         changeOrigin: true,
-        timeout: 200_000,
-        proxyTimeout: 200_000,
+        timeout: 600_000,
+        proxyTimeout: 600_000,
       },
       '/submit-info': 'http://127.0.0.1:8000',
       // Upload endpoints run OCR in the same request; default proxy timeout → browser "Failed to fetch".

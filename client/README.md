@@ -2,7 +2,7 @@
 
 ## Local dev (with this repo’s API)
 
-The Vite dev server **proxies** `/settings`, `/dealers`, `/fill-forms`, etc. to **`http://127.0.0.1:8000`**. If the backend is not running, the terminal shows `http proxy error` / **`ECONNREFUSED 127.0.0.1:8000`**.
+The Vite dev server **proxies** `/settings`, `/dealers`, `/fill-forms`, etc. to **`http://127.0.0.1:8000`**. **`/fill-forms`** and **`/uploads`** use extended **`proxyTimeout`** values (see `vite.config.ts`) so Create Invoice (DMS) / Playwright does not get **502** from the dev proxy. If the backend is not running, the terminal shows `http proxy error` / **`ECONNREFUSED 127.0.0.1:8000`**.
 
 1. In one terminal, from the **`backend`** folder (with venv activated):  
    `python -m uvicorn app.main:app --reload --port 8000`

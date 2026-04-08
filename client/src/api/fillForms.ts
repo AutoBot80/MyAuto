@@ -73,11 +73,12 @@ export interface FillDmsResponse {
   ready_for_client_create_invoice?: boolean | null;
 }
 
-const FILL_FORMS_TIMEOUT_MS = 180000; // 3 min per section
+/** DMS full flow / Create Invoice often exceeds 3 min; keep in sync with Vite `proxyTimeout` for `/fill-forms`. */
+const FILL_FORMS_TIMEOUT_MS = 600_000; // 10 min
 /** Pre-open DMS browser after upload; allow enough time for first managed-browser launch. */
-const DMS_WARM_BROWSER_TIMEOUT_MS = 180000;
+const DMS_WARM_BROWSER_TIMEOUT_MS = 300_000; // 5 min
 const FILL_VAHAN_TIMEOUT_MS = 60000; // 1 min for Vahan
-const FILL_HERO_INSURANCE_TIMEOUT_MS = 180000; // pre + main + post
+const FILL_HERO_INSURANCE_TIMEOUT_MS = 600_000; // pre + main + post (Playwright)
 
 export interface WarmDmsBrowserRequest {
   dms_base_url?: string | null;
