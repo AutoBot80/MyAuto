@@ -8,9 +8,11 @@ from the customer module.
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
 import time
+from pathlib import Path
 from collections.abc import Callable
 from datetime import date, datetime, timedelta
 from playwright.sync_api import Frame, FrameLocator, Page, TimeoutError as PlaywrightTimeout
@@ -43,6 +45,7 @@ from app.services.hero_dms_shared_utilities import (
     _try_expand_find_flyin,
     _fill_by_label_on_frame,
     _try_fill_field,
+    _ts_ist_iso,
 )
 
 logger = logging.getLogger(__name__)
@@ -3205,6 +3208,120 @@ def _wait_for_vehicle_find_applet_ready(
     return False
 
 
+_FIND_VEHICLE_DOM_DUMP_JS = """() => {
+  const vis = (el) => {
+    if (!el) return false;
+    const st = window.getComputedStyle(el);
+    if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+    const r = el.getBoundingClientRect();
+    return r.width >= 1 && r.height >= 1;
+  };
+  const pick = (el) => ({
+    tag: (el.tagName || '').toLowerCase(),
+    id: el.id || '',
+    className: String(el.className || '').slice(0, 160),
+    name: el.getAttribute('name') || '',
+    role: el.getAttribute('role') || '',
+    ariaLabel: (el.getAttribute('aria-label') || '').slice(0, 200),
+    title: (el.getAttribute('title') || '').slice(0, 200),
+    text: String(el.innerText || el.textContent || '').trim().replace(/\\s+/g, ' ').slice(0, 160),
+    outerHtml: (el.outerHTML || '').slice(0, 600),
+  });
+  const landmarks = [];
+  const landmarkSelectors = [
+    '[id^="gview_s_"]',
+    '#s_1_l',
+    '#gview_s_1_l',
+    '#gview_s_1003_l',
+    'a.drilldown[name="Title"]',
+    'a.drilldown[name="Serial Number"]',
+    'table.ui-jqgrid-btable',
+    '#findfieldsbox',
+    '#findfieldbox',
+  ];
+  for (const sel of landmarkSelectors) {
+    let k = 0;
+    try {
+      document.querySelectorAll(sel).forEach((el) => {
+        if (k >= 30) return;
+        if (vis(el)) {
+          landmarks.push({ selector: sel, ...pick(el) });
+          k++;
+        }
+      });
+    } catch (e) {}
+  }
+  const visibleElements = [];
+  let n = 0;
+  const maxEl = 4000;
+  try {
+    const all = document.querySelectorAll('*');
+    for (let i = 0; i < all.length && n < maxEl; i++) {
+      const el = all[i];
+      if (!vis(el)) continue;
+      const tag = (el.tagName || '').toLowerCase();
+      if (['script', 'style', 'noscript', 'meta', 'link', 'path'].includes(tag)) continue;
+      visibleElements.push(pick(el));
+      n++;
+    }
+  } catch (e) {}
+  return {
+    href: String(location.href || ''),
+    title: String(document.title || ''),
+    landmarks,
+    visibleElements,
+    landmarkCount: landmarks.length,
+    visibleElementCount: visibleElements.length,
+  };
+}"""
+
+
+def _siebel_collect_find_vehicle_dom_dump_payload(page: Page) -> dict:
+    """TEMP: full frame list + visible elements per document (for selector tuning)."""
+    frames_out: list[dict] = []
+    for idx, fr in enumerate(page.frames):
+        entry: dict = {
+            "index": idx,
+            "name": fr.name,
+            "url": (fr.url or "")[:2000],
+        }
+        try:
+            entry["document"] = fr.evaluate(_FIND_VEHICLE_DOM_DUMP_JS)
+        except Exception as ex:
+            entry["document_error"] = str(ex)[:500]
+        frames_out.append(entry)
+    return {
+        "kind": "find_vehicle_dom_dump",
+        "created_ist": _ts_ist_iso(),
+        "frame_count": len(page.frames),
+        "frames": frames_out,
+    }
+
+
+def _maybe_write_find_vehicle_dom_dump_once(
+    page: Page,
+    dump_path: Path | str | None,
+    dump_state: dict | None,
+    *,
+    note: Callable[[str], None] | None,
+) -> None:
+    """Write ``playwright_find_vehicle_dom_dump.json`` once per batch when requested."""
+    if dump_path is None or not dump_state or dump_state.get("done"):
+        return
+    try:
+        p = Path(dump_path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        payload = _siebel_collect_find_vehicle_dom_dump_payload(page)
+        p.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        dump_state["done"] = True
+        msg = f"TEMP: wrote Find→Vehicles DOM dump once to {p}"
+        logger.info("siebel: %s", msg)
+        if callable(note):
+            note(msg)
+    except Exception as ex:
+        logger.warning("siebel: find_vehicle DOM dump failed: %s", ex)
+
+
 def _siebel_goto_vehicle_list_and_scrape(
     page: Page,
     vehicle_url: str,
@@ -3216,6 +3333,8 @@ def _siebel_goto_vehicle_list_and_scrape(
     content_frame_selector: str | None,
     note,
     form_trace=None,
+    find_vehicle_dom_dump_path: Path | str | None = None,
+    find_vehicle_dom_dump_state: dict | None = None,
 ) -> tuple[dict, str | None]:
     """Navigate to Auto Vehicle List, run **only** Find→Vehicles ``*``VIN + ``*``Engine partial query, scrape row."""
     _goto(page, vehicle_url, "vehicle_list", nav_timeout_ms=nav_timeout_ms)
@@ -3290,6 +3409,13 @@ def _siebel_goto_vehicle_list_and_scrape(
                 "Keep Hero Connect open; see earlier Fill DMS guidance."
             ) from e
         raise
+
+    _maybe_write_find_vehicle_dom_dump_once(
+        page,
+        find_vehicle_dom_dump_path,
+        find_vehicle_dom_dump_state,
+        note=note,
+    )
 
     scraped = scrape_siebel_vehicle_row(page, content_frame_selector=content_frame_selector)
     if scraped.get("key_num") or scraped.get("frame_num") or scraped.get("engine_num"):
@@ -4200,6 +4326,8 @@ def prepare_vehicle(
     form_trace=None,
     ms_done=None,
     step=None,
+    find_vehicle_dom_dump_path: Path | str | None = None,
+    find_vehicle_dom_dump_state: dict | None = None,
 ) -> tuple[bool, str | None, dict, bool, list[str], list[str]]:
     """
     Pre-booking **vehicle preparation** (runs before Generate Booking): navigate to **Auto Vehicle List**,
@@ -4263,6 +4391,8 @@ def prepare_vehicle(
         content_frame_selector=content_frame_selector,
         note=note,
         form_trace=form_trace,
+        find_vehicle_dom_dump_path=find_vehicle_dom_dump_path,
+        find_vehicle_dom_dump_state=find_vehicle_dom_dump_state,
     )
     if veh_err:
         if callable(step):

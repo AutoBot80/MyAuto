@@ -1,18 +1,21 @@
-2026-04-08T13:51:01.443+05:30  === subdealer challan run start ===
-2026-04-08T13:51:01.444+05:30  challan_batch_id=b507f948-b037-47e6-83c2-742001fe25cd log_file=C:\Users\arya_\OneDrive\Desktop\My Auto.AI\Challans\827_03042026\playwright_challan.txt
-2026-04-08T13:51:01.445+05:30  dealer_id(session)=100001 from_dealer_id=100001 to_dealer_id=100002
-2026-04-08T13:51:01.445+05:30  challan_book_num='827' challan_date='03042026' artifact_folder=827_03042026
-2026-04-08T13:51:01.446+05:30  staging_row_count=3
-2026-04-08T13:51:01.446+05:30  dms_base_url='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=Login&SWECM=S&SWEHo=connect.heromotocorp.biz'
-2026-04-08T13:51:16.115+05:30  DMS tab opened (get_or_open_site_page OK)
-2026-04-08T13:51:16.225+05:30  prepare_vehicle round 1/3: 3 Queued row(s)
-2026-04-08T13:51:16.226+05:30    sid=43 raw_chassis='53768' raw_engine='03432' → prepare_vehicle
-2026-04-08T13:51:34.993+05:30    sid=43 prepare_vehicle FAILED: 'Siebel: center vehicle list did not update to show the selected VIN after left Search Results drill-in (wait for #s_1_l row to match).'
-2026-04-08T13:51:35.062+05:30    sid=44 raw_chassis='14904' raw_engine='14459' → prepare_vehicle
-2026-04-08T13:51:55.539+05:30    sid=44 prepare_vehicle FAILED: 'Siebel: could not open vehicle detail from left Search Results (VIN Title drilldown).'
-2026-04-08T13:51:55.701+05:30    sid=45 raw_chassis='14931' raw_engine='14488' → prepare_vehicle
-2026-04-08T13:52:16.141+05:30    sid=45 prepare_vehicle FAILED: 'Siebel: could not open vehicle detail from left Search Results (VIN Title drilldown).'
-2026-04-08T13:52:16.677+05:30  FINAL prepare_vehicle check: 3 row(s) not Ready (need Ready for order phase)
-2026-04-08T13:52:16.678+05:30    challan_staging_id=43 status='Failed' last_error='Siebel: center vehicle list did not update to show the selected VIN after left Search Results drill-in (wait for #s_1_l row to match).'
-2026-04-08T13:52:16.678+05:30    challan_staging_id=44 status='Failed' last_error='Siebel: could not open vehicle detail from left Search Results (VIN Title drilldown).'
-2026-04-08T13:52:16.679+05:30    challan_staging_id=45 status='Failed' last_error='Siebel: could not open vehicle detail from left Search Results (VIN Title drilldown).'
+2026-04-08T14:02:27.581+05:30  === subdealer challan run start ===
+2026-04-08T14:02:27.582+05:30  challan_batch_id=70d3bd37-30c6-4066-a288-d4b71a0d1720 log_file=C:\Users\arya_\OneDrive\Desktop\My Auto.AI\Challans\827_03042026\playwright_challan.txt
+2026-04-08T14:02:27.582+05:30  dealer_id(session)=100001 from_dealer_id=100001 to_dealer_id=100002
+2026-04-08T14:02:27.583+05:30  challan_book_num='827' challan_date='03042026' artifact_folder=827_03042026
+2026-04-08T14:02:27.584+05:30  staging_row_count=4
+2026-04-08T14:02:27.584+05:30  dms_base_url='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=Login&SWECM=S&SWEHo=connect.heromotocorp.biz'
+2026-04-08T14:02:40.758+05:30  DMS tab opened (get_or_open_site_page OK)
+2026-04-08T14:02:40.880+05:30  prepare_vehicle round 1/3: 4 Queued row(s)
+2026-04-08T14:02:40.881+05:30    sid=46 raw_chassis='53768' raw_engine='03432' → prepare_vehicle
+2026-04-08T14:02:59.557+05:30    sid=46 prepare_vehicle FAILED: 'Siebel: center vehicle list did not update to show the selected VIN after left Search Results drill-in (wait for #s_1_l row to match).'
+2026-04-08T14:02:59.632+05:30    sid=47 raw_chassis='14904' raw_engine='14459' → prepare_vehicle
+2026-04-08T14:03:21.412+05:30    sid=47 prepare_vehicle FAILED: 'Siebel: could not open vehicle detail from left Search Results (VIN Title drilldown).'
+2026-04-08T14:03:21.486+05:30    sid=48 raw_chassis='14931' raw_engine='14488' → prepare_vehicle
+2026-04-08T14:03:40.232+05:30    sid=48 prepare_vehicle FAILED: 'Siebel: center vehicle list did not update to show the selected VIN after left Search Results drill-in (wait for #s_1_l row to match).'
+2026-04-08T14:03:40.305+05:30    sid=49 raw_chassis='53921' raw_engine='03512' → prepare_vehicle
+2026-04-08T14:04:02.040+05:30    sid=49 prepare_vehicle FAILED: 'Siebel: could not open vehicle detail from left Search Results (VIN Title drilldown).'
+2026-04-08T14:04:02.331+05:30  FINAL prepare_vehicle check: 4 row(s) not Ready (need Ready for order phase)
+2026-04-08T14:04:02.332+05:30    challan_staging_id=46 status='Failed' last_error='Siebel: center vehicle list did not update to show the selected VIN after left Search Results drill-in (wait for #s_1_l row to match).'
+2026-04-08T14:04:02.332+05:30    challan_staging_id=47 status='Failed' last_error='Siebel: could not open vehicle detail from left Search Results (VIN Title drilldown).'
+2026-04-08T14:04:02.333+05:30    challan_staging_id=48 status='Failed' last_error='Siebel: center vehicle list did not update to show the selected VIN after left Search Results drill-in (wait for #s_1_l row to match).'
+2026-04-08T14:04:02.334+05:30    challan_staging_id=49 status='Failed' last_error='Siebel: could not open vehicle detail from left Search Results (VIN Title drilldown).'
