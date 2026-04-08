@@ -10,6 +10,7 @@ from pathlib import Path
 from playwright.sync_api import TimeoutError as PlaywrightTimeout
 
 from app.config import (
+    CHALLANS_DIR,
     DMS_BASE_URL,
     DMS_LOGIN_PASSWORD,
     DMS_LOGIN_USER,
@@ -47,7 +48,8 @@ from app.services.fill_hero_dms_service import (
 from app.services.handle_browser_opening import get_or_open_site_page
 from app.services.hero_dms_playwright_customer_challan import prepare_customer_for_challan
 from app.services.hero_dms_playwright_vehicle import prepare_vehicle
-from app.services.hero_dms_shared_utilities import SiebelDmsUrls
+from app.services.hero_dms_shared_utilities import SiebelDmsUrls, _ts_ist_iso
+from app.services.subdealer_challan_ocr_service import challan_artifact_leaf_name
 from app.services.utility_functions import safe_subfolder_name
 
 logger = logging.getLogger(__name__)
@@ -69,7 +71,8 @@ def run_subdealer_challan_batch(
 ) -> dict[str, object]:
     """
     Run full challan pipeline for all rows in ``challan_batch_id``.
-    Returns ``ok``, ``error``, ``challan_id``, ``dms_step_messages``, ``vehicle`` (order scrape).
+    Writes a human-readable trace to ``CHALLANS_DIR/<challan>_<ddmmyyyy>/playwright_challan.txt``
+    (same folder convention as OCR upload). Returns ``ok``, ``error``, ``challan_id``, ``dms_step_messages``, ``vehicle``.
     """
     steps: list[str] = []
     out: dict[str, object] = {
@@ -78,16 +81,8 @@ def run_subdealer_challan_batch(
         "challan_id": None,
         "dms_step_messages": steps,
         "vehicle": {},
+        "challan_log_path": None,
     }
-
-    if not dms_automation_is_real_siebel():
-        out["error"] = "DMS_MODE must be real/siebel for subdealer challan automation."
-        return out
-
-    base_url = (dms_base_url or DMS_BASE_URL or "").strip()
-    if not base_url:
-        out["error"] = "dms_base_url required"
-        return out
 
     rows = challan_staging_repo.fetch_batch_rows(challan_batch_id)
     if not rows:
@@ -98,6 +93,37 @@ def run_subdealer_challan_batch(
     to_dealer_id = int(rows[0]["to_dealer_id"])
     challan_date = rows[0].get("challan_date")
     challan_book = rows[0].get("challan_book_num")
+    cb = None if challan_book is None else str(challan_book).strip() or None
+    cd = None if challan_date is None else str(challan_date).strip() or None
+
+    leaf = challan_artifact_leaf_name(cb, cd)
+    log_path = (CHALLANS_DIR / leaf / "playwright_challan.txt").resolve()
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    out["challan_log_path"] = str(log_path)
+
+    def logln(msg: str) -> None:
+        with log_path.open("a", encoding="utf-8") as lf:
+            lf.write(f"{_ts_ist_iso()}  {msg}\n")
+            lf.flush()
+
+    logln("=== subdealer challan run start ===")
+    logln(f"challan_batch_id={challan_batch_id} log_file={log_path}")
+    logln(f"dealer_id(session)={dealer_id} from_dealer_id={from_dealer_id} to_dealer_id={to_dealer_id}")
+    logln(f"challan_book_num={challan_book!r} challan_date={challan_date!r} artifact_folder={leaf}")
+    logln(f"staging_row_count={len(rows)}")
+
+    if not dms_automation_is_real_siebel():
+        logln("ERROR: DMS_MODE must be real/siebel for subdealer challan automation.")
+        out["error"] = "DMS_MODE must be real/siebel for subdealer challan automation."
+        return out
+
+    base_url = (dms_base_url or DMS_BASE_URL or "").strip()
+    if not base_url:
+        logln("ERROR: dms_base_url required")
+        out["error"] = "dms_base_url required"
+        return out
+
+    logln(f"dms_base_url={base_url[:120]!r}")
 
     ocr_dir = Path(get_ocr_output_dir(dealer_id)).resolve()
     subfolder = safe_subfolder_name(f"challan_{str(challan_batch_id)[:8]}")
@@ -125,8 +151,10 @@ def run_subdealer_challan_batch(
             require_login_on_open=True,
         )
         if page is None:
+            logln(f"ERROR: could not open DMS: {open_error!r}")
             out["error"] = open_error or "Could not open DMS"
             return out
+        logln("DMS tab opened (get_or_open_site_page OK)")
         _install_playwright_js_dialog_handler(page)
 
         def note(msg: str) -> None:
@@ -145,15 +173,20 @@ def run_subdealer_challan_batch(
             batch_rows = challan_staging_repo.fetch_batch_rows(challan_batch_id)
             pending = [r for r in batch_rows if (r.get("status") or "").strip() == "Queued"]
             if not pending:
+                logln(f"prepare_vehicle round {round_n + 1}: no Queued rows left")
                 break
+            logln(f"prepare_vehicle round {round_n + 1}/{MAX_PREP_ROUNDS}: {len(pending)} Queued row(s)")
             for row in pending:
                 sid = int(row["challan_staging_id"])
+                rc = (row.get("raw_chassis") or "").strip()
+                re_ = (row.get("raw_engine") or "").strip()
                 dv = {
-                    "frame_partial": (row.get("raw_chassis") or "").strip(),
-                    "engine_partial": (row.get("raw_engine") or "").strip(),
+                    "frame_partial": rc,
+                    "engine_partial": re_,
                     "key_partial": "",
                     "battery_partial": "",
                 }
+                logln(f"  sid={sid} raw_chassis={rc!r} raw_engine={re_!r} → prepare_vehicle")
                 ok, err, scraped, _in_tr, _crit, _info = prepare_vehicle(
                     page,
                     dv,
@@ -167,11 +200,14 @@ def run_subdealer_challan_batch(
                     step=step_msg,
                 )
                 if not ok:
-                    challan_staging_repo.update_staging_status(
-                        sid, status="Failed", last_error=(err or "prepare_vehicle failed")[:2000]
-                    )
+                    err_s = (err or "prepare_vehicle failed")[:2000]
+                    logln(f"  sid={sid} prepare_vehicle FAILED: {err_s!r}")
+                    challan_staging_repo.update_staging_status(sid, status="Failed", last_error=err_s)
                     continue
-                last_vehicle_scrape = dict(scraped or {})
+                sc = dict(scraped or {})
+                last_vehicle_scrape = sc
+                fc = (sc.get("full_chassis") or sc.get("frame_num") or "")[:32]
+                logln(f"  sid={sid} prepare_vehicle OK full_chassis={fc!r} model={sc.get('model')!r}")
                 try:
                     iid = upsert_from_prepare_vehicle_scrape(
                         to_dealer_id=int(row["to_dealer_id"]),
@@ -183,11 +219,12 @@ def run_subdealer_challan_batch(
                         last_error=None,
                         inventory_line_id=iid,
                     )
+                    logln(f"  sid={sid} inventory upsert OK inventory_line_id={iid}")
                 except Exception as exc:
                     logger.warning("subdealer_challan: inventory upsert failed: %s", exc)
-                    challan_staging_repo.update_staging_status(
-                        sid, status="Failed", last_error=str(exc)[:2000]
-                    )
+                    es = str(exc)[:2000]
+                    logln(f"  sid={sid} inventory upsert FAILED: {es!r}")
+                    challan_staging_repo.update_staging_status(sid, status="Failed", last_error=es)
 
             still_queued = [
                 r
@@ -197,18 +234,36 @@ def run_subdealer_challan_batch(
             if not still_queued:
                 break
             if round_n < MAX_PREP_ROUNDS - 1:
-                _note(steps, f"Waiting {RETRY_WAIT_SEC}s before retry for {len(still_queued)} queued row(s).")
+                wmsg = f"Waiting {RETRY_WAIT_SEC}s before retry for {len(still_queued)} queued row(s)."
+                logln(wmsg)
+                _note(steps, wmsg)
                 time.sleep(RETRY_WAIT_SEC)
 
         final_rows = challan_staging_repo.fetch_batch_rows(challan_batch_id)
         not_ready = [r for r in final_rows if (r.get("status") or "").strip() not in ("Ready",)]
         if not_ready:
+            logln(f"FINAL prepare_vehicle check: {len(not_ready)} row(s) not Ready (need Ready for order phase)")
+            for r in not_ready:
+                logln(
+                    f"  challan_staging_id={r.get('challan_staging_id')} status={r.get('status')!r} "
+                    f"last_error={r.get('last_error')!r}"
+                )
+            ids_s = ", ".join(str(r.get("challan_staging_id")) for r in not_ready[:20])
+            hints: list[str] = []
+            for r in not_ready[:8]:
+                le = (r.get("last_error") or "").strip()
+                if le:
+                    hints.append(f"id {r.get('challan_staging_id')}: {le[:180]}")
+            hint_txt = (" " + " | ".join(hints)) if hints else ""
             out["error"] = (
                 "One or more vehicles did not reach Ready: "
-                + ", ".join(str(r.get("challan_staging_id")) for r in not_ready[:10])
+                + ids_s
+                + hint_txt
+                + f" — see full trace: {log_path}"
             )
             return out
 
+        logln("All staging rows Ready — applying discounts and building order lines")
         inv_ids = [int(r["inventory_line_id"]) for r in final_rows if r.get("inventory_line_id")]
         for r in final_rows:
             iid = r.get("inventory_line_id")
@@ -235,9 +290,11 @@ def run_subdealer_challan_batch(
             order_lines.append({"full_chassis": ch, "line_item_discount": disc_s})
 
         if not order_lines:
+            logln("ERROR: No order lines (missing chassis on inventory)")
             out["error"] = "No order lines to attach (missing chassis on inventory)."
             return out
 
+        logln(f"Order phase: {len(order_lines)} line(s); Playwright DMS execution log: {exec_log}")
         dms_values: dict = {}
         prepare_customer_for_challan(
             dms_values,
@@ -259,7 +316,8 @@ def run_subdealer_challan_batch(
         out["vehicle"] = frag.get("vehicle") or {}
         out["dms_step_messages"] = list(frag.get("dms_step_messages") or steps)
         if frag.get("error"):
-            out["error"] = frag.get("error")
+            logln(f"ERROR order phase: {frag.get('error')!r}")
+            out["error"] = str(frag.get("error"))
             return out
 
         veh_out = dict(frag.get("vehicle") or {})
@@ -286,14 +344,17 @@ def run_subdealer_challan_batch(
                     last_error=None,
                 )
 
+        logln(f"SUCCESS challan_master_id={cid} order={oid!r} invoice={iid!r}")
         out["ok"] = True
         return out
 
     except PlaywrightTimeout as e:
+        logln(f"EXCEPTION PlaywrightTimeout: {e!s}")
         out["error"] = f"Siebel timeout: {e!s}"
         logger.warning("subdealer_challan: %s", e)
         return out
     except Exception as e:
+        logln(f"EXCEPTION: {e!s}")
         out["error"] = str(e)
         logger.warning("subdealer_challan: %s", e, exc_info=True)
         return out

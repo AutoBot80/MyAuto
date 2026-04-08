@@ -200,6 +200,23 @@ def _challan_folder_name(challan_no: str | None, ddmmyyyy: str | None) -> str:
     return f"{cn}_{ddmmyyyy}"
 
 
+def challan_artifact_leaf_name(challan_book_num: str | None, challan_date_stored: str | None) -> str:
+    """
+    Folder under ``CHALLANS_DIR``, matching OCR artifacts: ``{challan_no}_{ddmmyyyy}``.
+    ``challan_date_stored`` may be ``DD/MM/YYYY`` or 8-digit ``ddmmyyyy`` (as from the client).
+    """
+    raw = (challan_date_stored or "").strip()
+    ddmmyyyy: str | None = None
+    if len(raw) == 8 and raw.isdigit():
+        ddmmyyyy = raw
+    else:
+        _, ddmmyyyy = parse_challan_date_to_iso(raw if raw else None)
+    if not ddmmyyyy:
+        d = datetime.now(timezone.utc)
+        ddmmyyyy = f"{d.day:02d}{d.month:02d}{d.year}"
+    return _challan_folder_name(challan_book_num, ddmmyyyy)
+
+
 def parse_subdealer_challan(
     document_bytes: bytes,
     *,
