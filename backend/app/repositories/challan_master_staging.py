@@ -207,6 +207,27 @@ _MASTER_LIST_SELECT = """
                 LEFT JOIN dealer_ref dt ON dt.dealer_id = m.to_dealer_id
 """
 
+# Default Processed list (15-day window): include batches where Retry re-queued Failed→Queued — otherwise the
+# batch had no Failed rows temporarily and disappeared from the UI until prepare_vehicle failed again.
+_DEFAULT_PROCESSED_ATTENTION_SQL = """
+(
+  EXISTS (
+    SELECT 1 FROM challan_details_staging d
+    WHERE d.challan_batch_id = m.challan_batch_id
+      AND LOWER(TRIM(COALESCE(d.status, ''))) = 'failed'
+  )
+  OR LOWER(TRIM(COALESCE(m.invoice_status, ''))) = 'failed'
+  OR (
+    m.last_run_at IS NOT NULL
+    AND EXISTS (
+      SELECT 1 FROM challan_details_staging d2
+      WHERE d2.challan_batch_id = m.challan_batch_id
+        AND LOWER(TRIM(COALESCE(d2.status, ''))) = 'queued'
+    )
+  )
+)
+"""
+
 
 def list_masters_recent(
     from_dealer_id: int,
@@ -217,8 +238,8 @@ def list_masters_recent(
     """
     Processed tab list.
 
-    * No ``challan_book_num``: masters from the last *days* that need attention: **at least one** Failed
-      detail line **or** master ``invoice_status`` = Failed (e.g. all lines Ready but order/invoice failed).
+    * No ``challan_book_num``: masters from the last *days* that need attention: Failed line(s), failed invoice,
+      **or** (``last_run_at`` set and at least one **Queued** line — e.g. after Retry before prepare finishes).
     * With non-empty ``challan_book_num`` (trimmed): masters for this dealer whose ``challan_book_num`` matches
       (case-insensitive, trimmed); **no** date window — used to open older challans by book number.
     """
@@ -242,14 +263,7 @@ def list_masters_recent(
                     + """
                 WHERE m.from_dealer_id = %s
                   AND m.created_at >= CURRENT_TIMESTAMP - (%s::integer * INTERVAL '1 day')
-                  AND (
-                    EXISTS (
-                        SELECT 1 FROM challan_details_staging d
-                        WHERE d.challan_batch_id = m.challan_batch_id
-                          AND LOWER(TRIM(COALESCE(d.status, ''))) = 'failed'
-                    )
-                    OR LOWER(TRIM(COALESCE(m.invoice_status, ''))) = 'failed'
-                  )
+                  AND """ + _DEFAULT_PROCESSED_ATTENTION_SQL + """
                 ORDER BY m.created_at DESC, m.challan_batch_id DESC
                 """,
                     (int(from_dealer_id), int(days)),
@@ -270,14 +284,7 @@ def count_masters_needing_attention_recent(from_dealer_id: int, *, days: int = 1
                 FROM challan_master_staging m
                 WHERE m.from_dealer_id = %s
                   AND m.created_at >= CURRENT_TIMESTAMP - (%s::integer * INTERVAL '1 day')
-                  AND (
-                    EXISTS (
-                        SELECT 1 FROM challan_details_staging d
-                        WHERE d.challan_batch_id = m.challan_batch_id
-                          AND LOWER(TRIM(COALESCE(d.status, ''))) = 'failed'
-                    )
-                    OR LOWER(TRIM(COALESCE(m.invoice_status, ''))) = 'failed'
-                  )
+                  AND """ + _DEFAULT_PROCESSED_ATTENTION_SQL + """
                 """,
                 (int(from_dealer_id), int(days)),
             )
