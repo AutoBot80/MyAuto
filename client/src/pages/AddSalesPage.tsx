@@ -283,6 +283,20 @@ export function AddSalesPage({
   });
   const [formResetKey, setFormResetKey] = useState(0);
 
+  /** Warm-browser runs on upload and when `savedTo` is restored from sessionStorage — not user-initiated Create Invoice. */
+  const formatWarmBrowserFailure = useCallback((err: unknown): string => {
+    const raw = err instanceof Error ? err.message : String(err);
+    const unreachable =
+      /502|503|504|Service unavailable|ECONNREFUSED|Failed to fetch|Load failed|Cannot connect|network error/i.test(
+        raw
+      );
+    if (unreachable) {
+      console.warn("[Add Sales] DMS warm-browser:", raw);
+      return "DMS pre-open did not run (API or proxy unreachable — start backend on :8000, use Vite dev with VITE_API_URL unset, then refresh). You can still press Create Invoice when the API is up.";
+    }
+    return raw.length > 280 ? `${raw.slice(0, 280)}…` : raw;
+  }, []);
+
   const triggerWarmBrowser = useCallback(
     (subfolder: string) => {
       const sf = (subfolder || "").trim();
@@ -291,11 +305,10 @@ export function AddSalesPage({
       if (dmsWarmSubfolderRef.current === sf) return;
       dmsWarmSubfolderRef.current = sf;
       void warmDmsBrowser({ dms_base_url: url }).catch((err) => {
-        const msg = err instanceof Error ? err.message : "Could not pre-open DMS browser.";
-        setFillDmsStatus(`DMS warm-up did not finish: ${msg}`);
+        setFillDmsStatus(`DMS warm-up did not finish: ${formatWarmBrowserFailure(err)}`);
       });
     },
-    [dmsUrl, siteUrlsLoading, siteUrlsError]
+    [dmsUrl, siteUrlsLoading, siteUrlsError, formatWarmBrowserFailure]
   );
 
   const applyExtractedDetails = (details: { vehicle?: unknown; customer?: unknown; insurance?: unknown }) => {
