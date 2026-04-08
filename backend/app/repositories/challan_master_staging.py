@@ -259,19 +259,25 @@ def list_masters_recent(
         conn.close()
 
 
-def count_failed_detail_lines_recent(from_dealer_id: int, *, days: int = 15) -> int:
-    """Badge: Failed detail lines for this dealer in window (join master created_at)."""
+def count_masters_needing_attention_recent(from_dealer_id: int, *, days: int = 15) -> int:
+    """Badge: number of ``challan_master_staging`` rows in the default Processed list (same filter as ``list_masters_recent`` without book search)."""
     conn = get_connection()
     try:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 SELECT COUNT(*)::integer AS c
-                FROM challan_details_staging d
-                JOIN challan_master_staging m ON m.challan_batch_id = d.challan_batch_id
+                FROM challan_master_staging m
                 WHERE m.from_dealer_id = %s
-                  AND LOWER(TRIM(COALESCE(d.status, ''))) = 'failed'
                   AND m.created_at >= CURRENT_TIMESTAMP - (%s::integer * INTERVAL '1 day')
+                  AND (
+                    EXISTS (
+                        SELECT 1 FROM challan_details_staging d
+                        WHERE d.challan_batch_id = m.challan_batch_id
+                          AND LOWER(TRIM(COALESCE(d.status, ''))) = 'failed'
+                    )
+                    OR LOWER(TRIM(COALESCE(m.invoice_status, ''))) = 'failed'
+                  )
                 """,
                 (int(from_dealer_id), int(days)),
             )

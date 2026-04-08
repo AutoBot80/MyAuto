@@ -1708,8 +1708,9 @@ def _fill_challan_account_institution_name_verify_pin(
     note: Callable[..., None],
 ) -> tuple[bool, str]:
     """
-    Subdealer challan: Account/Institution Name must be focused on the **input** (not the pick icon),
-    then typed + Tab. Success when Pin Code field shows a value (Siebel autopopulate after institution match).
+    Subdealer challan: dismiss any open MVG applet (Escape), focus the **input** without using the
+    pick icon (``focus()`` first; far-left click only as last resort), type the name, then Tab out.
+    Success when Pin Code shows a value (Siebel autopopulate after institution match).
     """
     nm = (institution_name or "").strip()
     if not nm:
@@ -1756,25 +1757,48 @@ def _fill_challan_account_institution_name_verify_pin(
     if inst_loc is None:
         return False, "Could not find Account/Institution Name input (challan)."
 
+    # If a prior step opened the MVG / pick applet, close it — we only type in the field and Tab out.
+    for _esc_i in range(3):
+        try:
+            page.keyboard.press("Escape")
+        except Exception:
+            pass
+        _safe_page_wait(page, 120, log_label=f"challan_institution_dismiss_applet_esc{_esc_i}")
+
     try:
         inst_loc.scroll_into_view_if_needed(timeout=_tmo)
     except Exception:
         pass
-    # Click inside the text field (left area) so we do not hit the pick/MVG icon on the right.
+
+    # Prefer focus without clicking: any click risks the pick/MVG icon on the right opening an applet.
+    _focus_ok = False
     try:
-        box = inst_loc.bounding_box()
-        if box and box.get("width", 0) > 40:
-            inst_loc.click(
-                position={"x": min(24, max(8, box["width"] * 0.25)), "y": box["height"] / 2},
-                timeout=_tmo,
-            )
-        else:
-            inst_loc.click(timeout=_tmo)
+        inst_loc.focus(timeout=_tmo)
+        _focus_ok = True
     except Exception:
+        pass
+    if not _focus_ok:
         try:
-            inst_loc.click(timeout=_tmo, force=True)
+            inst_loc.evaluate("el => { try { el.focus(); } catch (e) {} }")
+            _focus_ok = True
+        except Exception:
+            pass
+    if not _focus_ok:
+        # Last resort: click only the far-left strip of the input (never center/right).
+        try:
+            box = inst_loc.bounding_box()
+            if box and float(box.get("width") or 0) > 12:
+                w = float(box["width"])
+                h = float(box.get("height") or 20)
+                # ~6–14px from left edge, or ~7% of width — whichever is smaller (stays out of icon zone).
+                x_left = min(14.0, max(6.0, w * 0.07))
+                inst_loc.click(position={"x": x_left, "y": h / 2.0}, timeout=_tmo)
+            else:
+                inst_loc.click(position={"x": 6, "y": 12}, timeout=_tmo)
         except Exception as e:
             return False, f"Account/Institution Name: could not focus input ({e!s})."
+
+    _safe_page_wait(page, 120, log_label="challan_institution_after_focus")
 
     try:
         inst_loc.press("Control+a", timeout=1200)

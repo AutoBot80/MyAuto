@@ -328,8 +328,9 @@ export function SubdealerChallanPage({
       setProcessedError(err instanceof Error ? err.message : String(err));
     } finally {
       setProcessedLoading(false);
+      onChallanCountsRefresh();
     }
-  }, [dealerId, processedChallanSearchApplied]);
+  }, [dealerId, processedChallanSearchApplied, onChallanCountsRefresh]);
 
   const applyProcessedChallanSearch = useCallback(() => {
     setProcessedChallanSearchApplied(processedChallanSearchDraft.trim());

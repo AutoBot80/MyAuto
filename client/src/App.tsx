@@ -117,7 +117,7 @@ function App() {
     return () => clearInterval(interval);
   }, [mode, pageVisible]);
 
-  // Subdealer Challans: failed staging rows in the last 15 days (main tab + Processed sub-tab badges).
+  // Subdealer Challans: master batches needing attention in the last 15 days (nav + Processed sub-tab badges).
   useEffect(() => {
     if (mode !== "pos") {
       setChallanFailedCount(0);

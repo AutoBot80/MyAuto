@@ -134,7 +134,7 @@ export async function listRecentChallanStaging(
   return apiFetch<ChallanMasterProcessedRow[]>(`/subdealer-challan/staging/recent?${search.toString()}`);
 }
 
-/** GET /subdealer-challan/staging/failed-count — badge for failed detail lines in the window. */
+/** GET /subdealer-challan/staging/failed-count — badge: master-table row count (batches needing attention in the window). */
 export async function getChallanStagingFailedCount(
   dealerId?: number,
   days: number = CHALLAN_STAGING_RECENT_DAYS

@@ -165,10 +165,10 @@ def staging_failed_count(
     dealer_id: int | None = Query(None),
     days: int = Query(15, ge=1, le=365),
 ) -> dict[str, int]:
-    """Count of Failed **detail** lines in the window (badges)."""
+    """Count of **master** batches in the default Processed window (same rows as ``GET …/staging/recent`` without ``challan_book_num``)."""
     did = int(dealer_id) if dealer_id is not None else int(DEALER_ID)
     try:
-        n = master_repo.count_failed_detail_lines_recent(did, days=days)
+        n = master_repo.count_masters_needing_attention_recent(did, days=days)
     except pg_errors.UndefinedTable as e:
         logger.warning("subdealer_challan: missing schema: %s", e)
         raise HTTPException(status_code=503, detail=CHALLAN_STAGING_SCHEMA_HINT) from e
