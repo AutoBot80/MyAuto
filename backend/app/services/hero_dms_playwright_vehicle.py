@@ -701,9 +701,12 @@ def _siebel_try_click_vin_search_hit_link(
     vin_key = _vin_match_key(chassis)
     use_key = bool(vin_key) and len(vin_key) >= 4
 
+    # Left Search Results jqGrid often paints after the main list — give the Title row time to appear.
+    _safe_page_wait(page, 1500, log_label="vin_left_search_pre_drill_settle")
+
     def _try_click_siebel_drilldown(loc) -> bool:
         try:
-            if not loc.is_visible(timeout=600):
+            if not loc.is_visible(timeout=1400):
                 return False
         except Exception:
             return False
@@ -722,7 +725,7 @@ def _siebel_try_click_vin_search_hit_link(
     def _title_link_vin_compact(link) -> str:
         parts: list[str] = []
         try:
-            parts.append(link.inner_text(timeout=500) or "")
+            parts.append(link.inner_text(timeout=800) or "")
         except Exception:
             pass
         for attr in ("title", "aria-label"):
@@ -768,14 +771,14 @@ def _siebel_try_click_vin_search_hit_link(
         """
         try:
             g = scope.locator(f"#{gview_id}").first
-            if g.count() == 0 or not g.is_visible(timeout=600):
+            if g.count() == 0 or not g.is_visible(timeout=1200):
                 return False
             titles = g.locator('a[name="Title"], a[id*="_l_Title"]')
             n = titles.count()
             if n != 1:
                 return False
             link = titles.first
-            if not link.is_visible(timeout=800):
+            if not link.is_visible(timeout=1500):
                 return False
             t = _title_link_vin_compact(link)
             if len(t) < 11 or len(t) > 19:
@@ -799,7 +802,7 @@ def _siebel_try_click_vin_search_hit_link(
                 for ti in range(min(tn, 40)):
                     link = titles.nth(ti)
                     try:
-                        if not link.is_visible(timeout=900):
+                        if not link.is_visible(timeout=1600):
                             continue
                         compact = _title_link_vin_compact(link)
                         if not row_contains_vin(compact):
@@ -939,9 +942,14 @@ def _siebel_try_click_vin_search_hit_link(
                 continue
         return False
 
-    for attempt in range(3):
+    _vin_drill_retry_ms = (800, 1100, 1400, 1700)
+    for attempt in range(1 + len(_vin_drill_retry_ms)):
         if attempt:
-            _safe_page_wait(page, 600, log_label="vin_left_search_drill_retry")
+            _safe_page_wait(
+                page,
+                _vin_drill_retry_ms[attempt - 1],
+                log_label=f"vin_left_search_drill_retry_{attempt}",
+            )
         if _one_attempt():
             return True
     return False
