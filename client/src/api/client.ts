@@ -33,24 +33,6 @@ export async function apiFetch<T>(
   path: string,
   options: RequestInit = {}
 ): Promise<T> {
-  // #region agent log
-  const __dbg_startedAt = Date.now();
-  if (path.includes("/fill-forms") || path.includes("/fill-dms")) {
-    fetch("http://127.0.0.1:7384/ingest/843041b7-64c1-4933-bb72-235d36224f70", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "0875fe" },
-      body: JSON.stringify({
-        sessionId: "0875fe",
-        runId: "pre-fix",
-        hypothesisId: "G3",
-        location: "client.ts:apiFetch",
-        message: "fill_dms_fetch_start",
-        data: { path, method: String(options.method || "GET") },
-        timestamp: Date.now(),
-      }),
-    }).catch(() => {});
-  }
-  // #endregion
   let res: Response;
   try {
     res = await fetch(`${baseUrl}${path}`, {
@@ -61,27 +43,6 @@ export async function apiFetch<T>(
     throwMappedFetchError(err);
   }
   if (!res.ok) {
-    // #region agent log
-    if (path.includes("/fill-forms") || path.includes("/fill-dms")) {
-      fetch("http://127.0.0.1:7384/ingest/843041b7-64c1-4933-bb72-235d36224f70", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "0875fe" },
-        body: JSON.stringify({
-          sessionId: "0875fe",
-          runId: "pre-fix",
-          hypothesisId: "G4",
-          location: "client.ts:apiFetch",
-          message: "fill_dms_fetch_non_ok",
-          data: {
-            path,
-            status: res.status,
-            elapsed_ms: Date.now() - __dbg_startedAt,
-          },
-          timestamp: Date.now(),
-        }),
-      }).catch(() => {});
-    }
-    // #endregion
     const text = await res.text();
     let detail: string | undefined;
     try {
@@ -98,9 +59,9 @@ export async function apiFetch<T>(
     } else if (gatewayOrTimeout) {
       msg =
         `Service unavailable (${res.status}). The browser or a proxy stopped waiting for the server. ` +
-        `Create Invoice (DMS) / Playwright can take several minutes — increase dev-server or reverse-proxy timeouts ` +
-        `(Vite: \`vite.config.ts\` \`/fill-forms\` proxyTimeout; client: \`fillForms.ts\`), ` +
-        `confirm the Python API on port 8000 is running, then try again.`;
+        `Create Invoice (DMS) / Playwright can take many minutes — ensure \`vite.config.ts\` dev-server plugin + \`/fill-forms\` proxy ` +
+        `(restart \`npm run dev\`), match \`fillForms.ts\` timeouts, leave \`VITE_API_URL\` unset for the Vite proxy, ` +
+        `or raise production reverse-proxy limits — then confirm the API on port 8000 is running.`;
     } else {
       const trimmed = (text || "").trim();
       msg =

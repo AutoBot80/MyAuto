@@ -1,34 +1,58 @@
-import { defineConfig } from 'vite'
+import { defineConfig, type Plugin, type ProxyOptions } from 'vite'
 import react from '@vitejs/plugin-react'
+import type { Server as Http1Server } from 'node:http'
+
+/** Must exceed longest Playwright/DMS run; keep in sync with `fillForms.ts` abort timers. */
+const LONG_RUNNING_MS = 900_000 // 15 min
+
+/**
+ * Node 18+ defaults `http.Server.requestTimeout` to 5 minutes, which can drop the browser→Vite
+ * connection while uvicorn is still working — the proxy then surfaces **502**. Disable on dev only.
+ */
+function devServerDisableRequestTimeout(): Plugin {
+  return {
+    name: 'dev-server-disable-request-timeout',
+    configureServer(server) {
+      const apply = () => {
+        const httpServer = server.httpServer
+        if (!httpServer) return
+        const s = httpServer as Http1Server
+        s.requestTimeout = 0
+        s.headersTimeout = 0
+      }
+      server.httpServer?.once('listening', apply)
+    },
+  }
+}
+
+function longProxy(target: string): ProxyOptions {
+  return {
+    target,
+    changeOrigin: true,
+    timeout: LONG_RUNNING_MS,
+    proxyTimeout: LONG_RUNNING_MS,
+    configure(proxy) {
+      proxy.on('proxyReq', (proxyReq, req) => {
+        req.setTimeout(0)
+        proxyReq.setTimeout(0)
+      })
+      proxy.on('proxyRes', (proxyRes) => {
+        proxyRes.setTimeout(0)
+      })
+    },
+  }
+}
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), devServerDisableRequestTimeout()],
   server: {
     proxy: {
       '/rto-queue': 'http://127.0.0.1:8000',
-      // Fill Forms (DMS / insurance / etc.) runs Playwright (often several minutes); default proxy timeout causes 502 Bad Gateway.
-      '/fill-forms': {
-        target: 'http://127.0.0.1:8000',
-        changeOrigin: true,
-        timeout: 600_000,
-        proxyTimeout: 600_000,
-      },
+      '/fill-forms': longProxy('http://127.0.0.1:8000'),
       '/submit-info': 'http://127.0.0.1:8000',
-      // Upload endpoints run OCR in the same request; default proxy timeout → browser "Failed to fetch".
-      '/uploads': {
-        target: 'http://127.0.0.1:8000',
-        changeOrigin: true,
-        timeout: 600_000,
-        proxyTimeout: 600_000,
-      },
-      // Subdealer challan OCR (Textract in same request — same timeout idea as uploads)
-      '/subdealer-challan': {
-        target: 'http://127.0.0.1:8000',
-        changeOrigin: true,
-        timeout: 600_000,
-        proxyTimeout: 600_000,
-      },
+      '/uploads': longProxy('http://127.0.0.1:8000'),
+      '/subdealer-challan': longProxy('http://127.0.0.1:8000'),
       '/ai-reader-queue': 'http://127.0.0.1:8000',
       '/vision': 'http://127.0.0.1:8000',
       '/dealers': 'http://127.0.0.1:8000',
