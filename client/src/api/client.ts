@@ -8,6 +8,17 @@ export function getBaseUrl(): string {
   return baseUrl;
 }
 
+/** Thrown when ``fetch`` returns a non-OK status; includes HTTP status for branching (e.g. 409 conflict). */
+export class ApiHttpError extends Error {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "ApiHttpError";
+    this.status = status;
+  }
+}
+
 const BACKEND_HINT =
   "Start the API on port 8000 from the `backend` folder, then refresh: " +
   "`python -m uvicorn app.main:app --reload --port 8000` " +
@@ -69,7 +80,7 @@ export async function apiFetch<T>(
           ? trimmed
           : `Request failed (${res.status})`;
     }
-    throw new Error(msg);
+    throw new ApiHttpError(res.status, msg);
   }
   const contentType = (res.headers.get("content-type") || "").toLowerCase();
   const bodyText = await res.text();

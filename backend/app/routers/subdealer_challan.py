@@ -1,8 +1,10 @@
 """Subdealer challan: OCR parse Daily Delivery Report uploads + staging / DMS batch."""
 
+import logging
 import uuid
 
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
+from psycopg2 import errors as pg_errors
 from pydantic import BaseModel, Field
 
 from app.config import DMS_BASE_URL, DEALER_ID
@@ -16,7 +18,16 @@ from app.services.add_subdealer_challan_service import (
 )
 from app.services.subdealer_challan_ocr_service import parse_subdealer_challan
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/subdealer-challan", tags=["subdealer-challan"])
+
+# Returned as HTTP 503 detail when DDL 23/24 was not applied (relation does not exist).
+CHALLAN_STAGING_SCHEMA_HINT = (
+    "Subdealer challan tables are missing. Apply, in order: DDL/23_challan_master_staging.sql, "
+    "DDL/24_challan_details_staging.sql (requires dealer_ref and vehicle_inventory_master). "
+    "See Documentation/Database DDL.md and DDL/README.md."
+)
 
 
 class ChallanLineIn(BaseModel):
@@ -55,13 +66,35 @@ def create_staging(req: CreateChallanStagingRequest) -> CreateChallanStagingResp
     lines = [x for x in lines if x["raw_engine"] or x["raw_chassis"]]
     if not lines:
         raise HTTPException(status_code=400, detail="At least one line with engine or chassis is required.")
-    bid = create_challan_staging_batch(
-        from_dealer_id=req.from_dealer_id,
-        to_dealer_id=req.to_dealer_id,
-        challan_date=req.challan_date,
-        challan_book_num=req.challan_book_num,
-        lines=lines,
-    )
+
+    book = (str(req.challan_book_num).strip() if req.challan_book_num is not None else "") or None
+    date = (str(req.challan_date).strip() if req.challan_date is not None else "") or None
+    if book and date:
+        existing = master_repo.find_existing_batch_for_dealer_book_date(
+            from_dealer_id=int(req.from_dealer_id),
+            challan_book_num=book,
+            challan_date=date,
+        )
+        if existing is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "This challan (same book number and date) was already created for your dealer. "
+                    "Use the Processed tab to view status, failed vehicles, or retry."
+                ),
+            )
+
+    try:
+        bid = create_challan_staging_batch(
+            from_dealer_id=req.from_dealer_id,
+            to_dealer_id=req.to_dealer_id,
+            challan_date=date,
+            challan_book_num=book,
+            lines=lines,
+        )
+    except pg_errors.UndefinedTable as e:
+        logger.warning("subdealer_challan: missing schema: %s", e)
+        raise HTTPException(status_code=503, detail=CHALLAN_STAGING_SCHEMA_HINT) from e
     return CreateChallanStagingResponse(challan_batch_id=str(bid))
 
 
@@ -94,7 +127,11 @@ def list_recent_staging(
 ) -> list[dict]:
     """Recent ``challan_master_staging`` rows with ``failed_lines`` (detail rows in Failed) for the Processed tab."""
     did = int(dealer_id) if dealer_id is not None else int(DEALER_ID)
-    masters = master_repo.list_masters_recent(did, days=days)
+    try:
+        masters = master_repo.list_masters_recent(did, days=days)
+    except pg_errors.UndefinedTable as e:
+        logger.warning("subdealer_challan: missing schema: %s", e)
+        raise HTTPException(status_code=503, detail=CHALLAN_STAGING_SCHEMA_HINT) from e
     out: list[dict] = []
     for m in masters:
         row = dict(m)
@@ -116,7 +153,12 @@ def staging_failed_count(
 ) -> dict[str, int]:
     """Count of Failed **detail** lines in the window (badges)."""
     did = int(dealer_id) if dealer_id is not None else int(DEALER_ID)
-    return {"failed": master_repo.count_failed_detail_lines_recent(did, days=days)}
+    try:
+        n = master_repo.count_failed_detail_lines_recent(did, days=days)
+    except pg_errors.UndefinedTable as e:
+        logger.warning("subdealer_challan: missing schema: %s", e)
+        raise HTTPException(status_code=503, detail=CHALLAN_STAGING_SCHEMA_HINT) from e
+    return {"failed": n}
 
 
 @router.post("/staging/{challan_detail_staging_id}/retry")

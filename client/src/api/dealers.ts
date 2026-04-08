@@ -20,3 +20,14 @@ export interface Dealer {
 export async function getDealer(dealerId: number): Promise<Dealer> {
   return apiFetch<Dealer>(`/dealers/${dealerId}`);
 }
+
+/** Row for subdealer dropdown: ``dealer_ref.parent_id`` = logged-in dealer. */
+export type DealerByParentRow = {
+  dealer_id: number;
+  dealer_name: string;
+};
+
+/** GET /dealers/by-parent/{parentDealerId} — child dealers (``parent_id`` = parent). */
+export async function listDealersByParent(parentDealerId: number): Promise<DealerByParentRow[]> {
+  return apiFetch<DealerByParentRow[]>(`/dealers/by-parent/${parentDealerId}`);
+}

@@ -1,7 +1,7 @@
 # High Level Design (HLD)
 ## Auto Dealer Management System
 
-**Version:** 1.17  
+**Version:** 1.18  
 **Last Updated:** April 2026
 
 ---
@@ -47,7 +47,7 @@
 |-----------|----------------|
 | **Client (React)** | UI, forms, validation, calls to backend API; Add Sales, Fill Forms, RTO Payments, View Customer, Bulk Loads, Subdealer Challan (POS Saathi), and Admin reset actions. |
 | **FastAPI App** | REST API, CRUD, Submit Info, Fill DMS, Form 20, Vahan, RTO payment, customer search, OCR queue, bulk upload monitoring, subdealer challan staging/process/OCR parse, and admin reset utilities. |
-| **PostgreSQL** | Persistent store for dealers, vehicles, customers, sales, insurance, RTO payments, service reminders, **`add_sales_staging`** (OCR merge snapshot; **LLD §2.2a**), **`challan_staging`** / **`challan_master`** / **`challan_details`**, **`vehicle_inventory_master`**, and **`subdealer_discount_master`** (**BR-22**, **Database DDL**). **Generate Insurance** uses **`form_insurance_view`** (post–Create Invoice) **and** **`add_sales_staging.payload_json`** via **`staging_id`** as the joint input set (**BR-20**). |
+| **PostgreSQL** | Persistent store for dealers, vehicles, customers, sales, insurance, RTO payments, service reminders, **`add_sales_staging`** (OCR merge snapshot; **LLD §2.2a**), **`challan_master_staging`** / **`challan_details_staging`** (subdealer batch header + per-line staging), **`challan_master`** / **`challan_details`** (committed challan), **`vehicle_inventory_master`**, and **`subdealer_discount_master`** (**BR-22**, **Database DDL**). Legacy deployments may still have **`challan_staging`**; greenfield uses **23**/**24** DDL. **Generate Insurance** uses **`form_insurance_view`** (post–Create Invoice) **and** **`add_sales_staging.payload_json`** via **`staging_id`** as the joint input set (**BR-20**). |
 | **Queue (local or SQS)** | Decouple bulk job creation from execution; current bulk processing uses SQS or a local in-process fallback queue. |
 | **OCR Worker** | Runs OCR/pre-OCR, writes extracted artifacts to `ocr_output`, and supports bulk processing. |
 | **Playwright Worker** | DMS: fill row from **`form_dms.py`** / staging JSON (**BR-9**); Vahan/insurance: views and persisted records as specified. Reuses already open DMS/Vahan tabs when available, can auto-open Edge/Chrome when no detectable tab exists, and writes form trace artifacts. It must not infer, default, remember, or interpret field values outside approved sources. |
@@ -102,7 +102,7 @@ My Auto.AI/
 | `routers/qr_decode` | Decode Aadhar QR. |
 | `routers/vision` | Vision API (Aadhar analyze). |
 | `routers/textract_router` | AWS Textract extraction (`services/sales_textract_service`). |
-| `routers/subdealer_challan` | **`POST /subdealer-challan/parse-scan`** (Daily Delivery Report OCR), **`POST /subdealer-challan/staging`**, **`POST /subdealer-challan/process/{challan_batch_id}`** — **FR-25**, **LLD §2.4e**. |
+| `routers/subdealer_challan` | **`POST /subdealer-challan/parse-scan`**, **`POST /subdealer-challan/staging`** (master + detail rows), **`POST /subdealer-challan/process/{challan_batch_id}`**, **`GET /subdealer-challan/staging/recent`** (batches + failed lines), **`GET /subdealer-challan/staging/failed-count`**, **`POST /subdealer-challan/staging/{challan_detail_staging_id}/retry`**, **`POST /subdealer-challan/batch/{challan_batch_id}/retry-order`** — **FR-25**, **LLD §2.4e**. |
 | `services/sales_ocr_service` | Add Sales / queue OCR: **`OcrService`** — Aadhaar + Sales Detail sheet extraction and merge to per-subfolder JSON; uses **`sales_textract_service`** for AWS Textract. |
 | `services/sales_textract_service` | AWS Textract wrappers: **`extract_text_from_bytes`** (DetectDocumentText), **`extract_forms_from_bytes`** (AnalyzeDocument FORMS+TABLES). |
 | `services/bulk_job_service` | Bulk ingest, queue publish, job lease, pre-OCR, and terminal status updates. |
@@ -117,18 +117,18 @@ My Auto.AI/
 | `services/fill_hero_insurance_service` | Hero MISP: **`pre_process`** delegates to **`run_fill_insurance_only`** (real MISP: KYC then **`_hero_misp_fill_vin_and_click_submit`**); **`main_process`** runs **`_hero_misp_i_agree_after_vin_submit`**, then proposal / DB / Issue Policy. Uses `handle_browser_opening.get_or_open_site_page`; `insurance_form_values` / `insurance_kyc_payloads` / `utility_functions`; writes `Insurance_Form_Values.txt` and `Playwright_insurance.txt`. Public API: **`POST /fill-forms/insurance/hero`** only (no separate bare insurance route). |
 | `services/submit_info_service` | Submit Info business logic; builds staging **`payload_json`** and calls **`persist_staging_for_submit`**. |
 | `services/subdealer_challan_ocr_service` | Textract FORMS+TABLES parse of Daily Delivery Report scans; optional artifact writes under **`CHALLANS_DIR`**. |
-| `services/add_subdealer_challan_service` | Orchestrates **`prepare_vehicle`** per **`challan_staging`** line, **`vehicle_inventory_master`** upsert + **`subdealer_discount_master`** lookup, **`prepare_customer_for_challan`** (**`hero_dms_playwright_customer_challan`**), **`Playwright_Hero_DMS_fill_subdealer_challan_order_only`** → **`prepare_order`**; delegates commit to **`add_subdealer_challan_commit_service`**. |
+| `services/add_subdealer_challan_service` | Orchestrates **`prepare_vehicle`** per **`challan_details_staging`** line (joined to **`challan_master_staging`**), **`vehicle_inventory_master`** upsert + **`subdealer_discount_master`** lookup, **`prepare_customer_for_challan`** (**`hero_dms_playwright_customer_challan`**), **`Playwright_Hero_DMS_fill_subdealer_challan_order_only`** → **`prepare_order`**; optional phases **`prepare_only`** / **`order_only`**; **`retry_failed_staging_row`** / **`retry_order_only_batch`**; delegates commit to **`add_subdealer_challan_commit_service`**. |
 | `services/add_subdealer_challan_commit_service` | Persists **`challan_master`** + **`challan_details`** after successful Siebel batch. |
 | `services/hero_dms_playwright_customer_challan` | **`prepare_customer_for_challan`**: dummy mobile, Network / institution from **`dealer_ref`**, helmet Comments — **BR-22**, **LLD §2.4e**. |
 | `services/rto_payment_service` | Dealer-scoped RTO batch runner, progress state, advisory locking, scrape-back persistence into `rto_queue` / `vehicle_master`, and downstream payment updates. |
-| `repositories/*` | Data access for ai_reader_queue, bulk_loads, dealer_ref, **`form_dms`** (DMS fill row SQL, no view), `form_vahan_view`, rto_queue, rc_status_sms_queue, **`challan_staging`**, **`vehicle_inventory_master`**. |
+| `repositories/*` | Data access for ai_reader_queue, bulk_loads, dealer_ref, **`form_dms`** (DMS fill row SQL, no view), `form_vahan_view`, rto_queue, rc_status_sms_queue, **`challan_master_staging`**, **`challan_details_staging`**, **`vehicle_inventory_master`**. |
 
 ### 3.3 Client Pages
 
 | Page | Purpose |
 |------|---------|
 | `AddSalesPage` | Add Sales flow: **Submit Info** persists **draft** **`add_sales_staging`** (`staging_id`); Hero OEM (**`oem_id`** from **`GET /dealers/:id`**) + financier starting with “Bajaj” → staging **`customer.financier`** = **Hinduja** + in-form note. **Create Invoice** (DMS) uses **`staging_id`** then commits masters and returns **IDs**; **Generate Insurance** uses **IDs** + **`staging_id`** with **`form_insurance_view`** (**BR-20**). Eligibility from `GET /add-sales/create-invoice-eligibility` (chassis, engine, mobile — **no** dealer filter). |
-| `SubdealerChallanPage` | POS Saathi — Subdealer Challan (**FR-25**): numeric **To Dealer ID** (**`dealer_ref`**), **Upload Scan** → **`POST /subdealer-challan/parse-scan`**, **Create Challans** → staging then **`POST /subdealer-challan/process/{challan_batch_id}`** (extended client timeout); per-line status from **`challan_staging`**. Not Add Sales / **`add_sales_staging`**. |
+| `SubdealerChallanPage` | POS Saathi — Subdealer Challan (**FR-25**): numeric **To Dealer ID** (**`dealer_ref`**), **Upload Scan** → **`POST /subdealer-challan/parse-scan`**, **Create Challans** → **`challan_master_staging`** + **`challan_details_staging`** then **`POST /subdealer-challan/process/{challan_batch_id}`** (extended client timeout); **Processed** tab lists batches from **`GET …/staging/recent`**, expand failed lines, **Retry line** / **Retry order** as in **FR-25**. Not Add Sales / **`add_sales_staging`**. |
 | `BulkLoadsPage` | View hot bulk processing status, unresolved failures, and retry/corrective actions. |
 | `RtoPaymentsPendingPage` | List queued RTO work items, start the oldest-7 dealer batch, and show live RTO Cart progress. |
 | `ViewCustomerPage` | Search customer; view vehicles, insurance, and the bottom single-row `form_vahan_view` projection for the selected vehicle. |
@@ -467,3 +467,4 @@ The SQL view **`form_dms_view`** is **removed**; the same mapping is implemented
 | 1.159 | Apr 2026 | — | **`hero_dms_playwright_invoice`**: multi-line **`_attach_vehicle_to_bkg`** (**`order_line_vehicles`** / **`attach_vehicles`**, **`order_line_ex_showroom`** scrape) — **BRD** **3.158**, **LLD** **6.278** |
 | 1.160 | Apr 2026 | — | **`sales_ocr_service`** / **`sales_textract_service`**: renamed from **`ocr_service`** / **`textract_service`**; **`OcrService`** class unchanged — **BRD** **3.159**, **LLD** **6.279** |
 | 1.161 | Apr 2026 | — | **Subdealer Challan**: **`routers/subdealer_challan`**, orchestrator + commit + OCR + **`hero_dms_playwright_customer_challan`**; PostgreSQL **`challan_*`** / **`vehicle_inventory_master`** / **`subdealer_discount_master`**; **`SubdealerChallanPage`** — **BRD** **3.160**, **FR-25**, **LLD** **§2.4e**, **6.280** |
+| 1.162 | Apr 2026 | — | **Subdealer Challan** staging split + APIs: **`challan_master_staging`** / **`challan_details_staging`**, **`GET …/staging/recent`**, **`retry-order`**, failed-count badge; repos + **`SubdealerChallanPage`** Processed UI — **BRD** **3.161**, **LLD** **§2.4e**, **6.281**, **Database DDL** **2.72** |

@@ -1,4 +1,6 @@
 import { Fragment, type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ApiHttpError } from "../api/client";
+import { listDealersByParent, type DealerByParentRow } from "../api/dealers";
 import {
   CHALLAN_STAGING_RECENT_DAYS,
   createChallanStaging,
@@ -133,7 +135,11 @@ export function SubdealerChallanPage({
   onChallanCountsRefresh,
 }: SubdealerChallanPageProps) {
   const [challanSubTab, setChallanSubTab] = useState<ChallanSubTab>("new");
-  const [toDealerId, setToDealerId] = useState("");
+  const [subdealerOptions, setSubdealerOptions] = useState<DealerByParentRow[]>([]);
+  const [subdealersLoading, setSubdealersLoading] = useState(false);
+  const [subdealersError, setSubdealersError] = useState<string | null>(null);
+  /** Selected child ``dealer_id`` (``to_dealer_id``); null = placeholder. */
+  const [selectedToDealerId, setSelectedToDealerId] = useState<number | null>(null);
   const [challanNo, setChallanNo] = useState<string | null>(null);
   const [challanDateRaw, setChallanDateRaw] = useState<string | null>(null);
   const [challanDateIso, setChallanDateIso] = useState<string | null>(null);
@@ -143,6 +149,8 @@ export function SubdealerChallanPage({
   const [loading, setLoading] = useState(false);
   const [processingChallan, setProcessingChallan] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** Set when POST /staging returns 409 (duplicate book+date); show Processed tab hint. */
+  const [duplicateChallanGuide, setDuplicateChallanGuide] = useState(false);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [processedRows, setProcessedRows] = useState<ChallanMasterProcessedRow[]>([]);
   const [processedLoading, setProcessedLoading] = useState(false);
@@ -166,6 +174,34 @@ export function SubdealerChallanPage({
     const tp = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
     setPage((p) => Math.min(p, tp - 1));
   }, [rows.length]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setSubdealersLoading(true);
+    setSubdealersError(null);
+    listDealersByParent(dealerId)
+      .then((rows) => {
+        if (!cancelled) {
+          setSubdealerOptions(rows);
+          setSelectedToDealerId((prev) => {
+            if (prev !== null && rows.some((r) => r.dealer_id === prev)) return prev;
+            return null;
+          });
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setSubdealersError(err instanceof Error ? err.message : String(err));
+          setSubdealerOptions([]);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setSubdealersLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [dealerId]);
 
   const updateRowField = useCallback((globalIndex: number, field: keyof ChallanRow, value: string) => {
     if (field === "id") return;
@@ -262,6 +298,7 @@ export function SubdealerChallanPage({
     if (!file) return;
     setLoading(true);
     setError(null);
+    setDuplicateChallanGuide(false);
     setWarnings([]);
     try {
       const res = await parseSubdealerChallanScan(file);
@@ -291,17 +328,18 @@ export function SubdealerChallanPage({
   };
 
   const onCreateChallans = async () => {
-    const toId = parseInt(toDealerId.trim(), 10);
-    if (!Number.isFinite(toId) || toId <= 0) {
-      setError("Enter a valid numeric To Dealer ID (subdealer).");
+    if (selectedToDealerId === null) {
+      setError("Select a subdealer (To Dealer).");
       return;
     }
+    const toId = selectedToDealerId;
     const dataRows = rows.filter((r) => rowHasVehicleData(r));
     if (dataRows.length === 0) {
       setError("Add at least one engine/chassis line.");
       return;
     }
     setError(null);
+    setDuplicateChallanGuide(false);
     setProcessingChallan(true);
     try {
       const lines = dataRows.map((r) => ({
@@ -330,7 +368,13 @@ export function SubdealerChallanPage({
         prev.map((r) => (rowHasVehicleData(r) ? { ...r, status: "Committed" } : r)),
       );
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      if (err instanceof ApiHttpError && err.status === 409) {
+        setDuplicateChallanGuide(true);
+        setError(err.message);
+      } else {
+        setDuplicateChallanGuide(false);
+        setError(err instanceof Error ? err.message : String(err));
+      }
     } finally {
       setProcessingChallan(false);
       onChallanCountsRefresh();
@@ -384,18 +428,42 @@ export function SubdealerChallanPage({
 
         <div className="subdealer-challan-top-grid">
         <label htmlFor="sdc-dealer" className="subdealer-challan-label subdealer-challan-l-dealer">
-          To Dealer ID (Subdealer):
+          To Dealer (Subdealer):
         </label>
-        <input
-          id="sdc-dealer"
-          type="text"
-          inputMode="numeric"
-          className="subdealer-challan-input"
-          value={toDealerId}
-          onChange={(e) => setToDealerId(e.target.value.replace(/\D/g, ""))}
-          autoComplete="off"
-          placeholder="e.g. 100002"
-        />
+        <div className="subdealer-challan-dealer-cell">
+          <select
+            id="sdc-dealer"
+            className="subdealer-challan-select"
+            value={selectedToDealerId === null ? "" : String(selectedToDealerId)}
+            onChange={(e) => {
+              const v = e.target.value;
+              setSelectedToDealerId(v === "" ? null : parseInt(v, 10));
+            }}
+            disabled={subdealersLoading || Boolean(subdealersError)}
+            aria-busy={subdealersLoading}
+            aria-label="Subdealer receiving stock"
+          >
+            <option value="">
+              {subdealersLoading ? "Loading subdealers…" : "Select subdealer…"}
+            </option>
+            {subdealerOptions.map((d) => (
+              <option key={d.dealer_id} value={d.dealer_id}>
+                {d.dealer_name}
+              </option>
+            ))}
+          </select>
+          {subdealersError ? (
+            <span className="subdealer-challan-subdealer-err" role="alert">
+              {subdealersError}
+            </span>
+          ) : null}
+          {!subdealersLoading && !subdealersError && subdealerOptions.length === 0 ? (
+            <span className="subdealer-challan-subdealer-hint">
+              No subdealers for this dealer (set <code>parent_id</code> on child rows in{" "}
+              <code>dealer_ref</code>).
+            </span>
+          ) : null}
+        </div>
         <div className="subdealer-challan-scan-btns" role="group" aria-label="Scan sources">
           <button
             type="button"
@@ -412,7 +480,13 @@ export function SubdealerChallanPage({
         <button
           type="button"
           className="app-button app-button--primary subdealer-challan-add-btn"
-          disabled={loading || processingChallan}
+          disabled={
+            loading ||
+            processingChallan ||
+            subdealersLoading ||
+            Boolean(subdealersError) ||
+            selectedToDealerId === null
+          }
           onClick={() => void onCreateChallans()}
         >
           {processingChallan ? "Creating Challans…" : "Create Challans"}
@@ -438,7 +512,22 @@ export function SubdealerChallanPage({
 
       {error && (
         <div className="subdealer-challan-error" role="alert">
-          {error}
+          <p className="subdealer-challan-error-text">{error}</p>
+          {duplicateChallanGuide ? (
+            <div className="subdealer-challan-error-actions">
+              <button
+                type="button"
+                className="app-button app-button--primary"
+                onClick={() => {
+                  setError(null);
+                  setDuplicateChallanGuide(false);
+                  setChallanSubTab("processed");
+                }}
+              >
+                Open Processed tab
+              </button>
+            </div>
+          ) : null}
         </div>
       )}
       {warnings.length > 0 && (

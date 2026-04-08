@@ -26,3 +26,19 @@ class DealerRefRepository:
         out = dict(row)
         out["dealer_of"] = out.get("oem_name")  # backward compatibility for client
         return out
+
+    @staticmethod
+    def list_by_parent_id(conn, parent_id: int) -> list[dict]:
+        """Child dealers where ``dealer_ref.parent_id`` = *parent_id* (subdealers of a parent)."""
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT dealer_id, dealer_name
+                FROM dealer_ref
+                WHERE parent_id = %s
+                ORDER BY dealer_name ASC
+                """,
+                (int(parent_id),),
+            )
+            rows = cur.fetchall() or []
+        return [dict(r) for r in rows]

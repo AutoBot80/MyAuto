@@ -23,6 +23,40 @@ def _row_jsonable(r: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def find_existing_batch_for_dealer_book_date(
+    *,
+    from_dealer_id: int,
+    challan_book_num: str,
+    challan_date: str,
+) -> uuid.UUID | None:
+    """
+    Return an existing ``challan_batch_id`` when the same dealer already has a master row
+    with the same trimmed book number and date (duplicate challan upload).
+    Caller must pass non-empty *challan_book_num* and *challan_date*.
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT challan_batch_id
+                FROM challan_master_staging
+                WHERE from_dealer_id = %s
+                  AND TRIM(COALESCE(challan_book_num, '')) = %s
+                  AND TRIM(COALESCE(challan_date, '')) = %s
+                LIMIT 1
+                """,
+                (int(from_dealer_id), challan_book_num.strip(), challan_date.strip()),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            raw = row["challan_batch_id"] if isinstance(row, dict) else row[0]
+            return uuid.UUID(str(raw))
+    finally:
+        conn.close()
+
+
 def insert_master(
     *,
     challan_batch_id: uuid.UUID,

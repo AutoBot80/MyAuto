@@ -2184,6 +2184,15 @@
   font-size: 13px;
 }
 
+.subdealer-challan-error-text {
+  margin: 0;
+  line-height: 1.4;
+}
+
+.subdealer-challan-error-actions {
+  margin-top: 8px;
+}
+
 .subdealer-challan-warnings {
   margin: 6px 0 0;
   padding-left: 22px;
@@ -2310,9 +2319,35 @@
   align-self: end;
 }
 
-.subdealer-challan-top-grid .subdealer-challan-input {
+.subdealer-challan-top-grid .subdealer-challan-dealer-cell {
   grid-column: 1;
   grid-row: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  align-self: center;
+}
+
+.subdealer-challan-dealer-cell .subdealer-challan-select {
+  width: 100%;
+  max-width: 100%;
+}
+
+.subdealer-challan-subdealer-err {
+  font-size: 12px;
+  color: #b00020;
+  line-height: 1.3;
+}
+
+.subdealer-challan-subdealer-hint {
+  font-size: 11px;
+  color: #5a6b7a;
+  line-height: 1.35;
+}
+
+.subdealer-challan-subdealer-hint code {
+  font-size: 11px;
 }
 
 .subdealer-challan-top-grid .subdealer-challan-scan-btns {
@@ -2352,6 +2387,7 @@
 
 .subdealer-challan-top-grid .subdealer-challan-input {
   width: 100%;
+  max-width: 100%;
 }
 
 .subdealer-challan-scan-btns {
