@@ -13,7 +13,7 @@ import re
 import time
 from collections.abc import Callable
 from datetime import date, datetime, timedelta
-from playwright.sync_api import Frame, Page, TimeoutError as PlaywrightTimeout
+from playwright.sync_api import Frame, FrameLocator, Page, TimeoutError as PlaywrightTimeout
 
 from app.config import (
     DEALER_ID,
@@ -75,6 +75,10 @@ _SIEBEL_VEHICLE_LEFT_SEARCH_GVIEW_IDS: tuple[str, ...] = (
     "gview_s_100_1_l",
 )
 
+# Left Search Results stale-pane poll: bounded rounds (no long deadline loop).
+_LEFT_SEARCH_STALE_PANE_POLL_MS = 300
+_LEFT_SEARCH_STALE_PANE_MAX_POLLS = 10
+
 
 def _siebel_left_search_gview_table_id(gview_id: str) -> str:
     """``gview_s_1001_l`` → ``s_1001_l`` (Siebel table id parallel to the gview wrapper)."""
@@ -84,11 +88,14 @@ def _siebel_left_search_gview_table_id(gview_id: str) -> str:
     return s
 
 
-# Dry-run probe: same Title/VIN matching rules as ``_siebel_try_click_vin_search_hit_link`` (incl. JS click
-# fallback) — used to wait out a **stale** left pane after a prior vehicle (pane still shows old VIN row).
-_LEFT_SEARCH_VIN_TITLE_PRESENT_JS = """({ vk, useKey, knownIds }) => {
+# Dry-run probe: same Title/VIN matching as ``_siebel_try_click_vin_search_hit_link`` / JS click fallback.
+# Uses explicit ``doc`` so we can run in **Frame.evaluate** (document) and **FrameLocator** (iframe html's
+# ownerDocument) — must match :func:`_siebel_locator_search_roots` order used by the click path.
+_LEFT_SEARCH_PROBE_FN = """function probeLeftSearchVinTitle(doc, arg) {
   const norm = (s) => String(s || '').replace(/[^A-Za-z0-9]/g, '');
-  const key = norm(vk);
+  const key = norm(arg.vk);
+  const useKey = arg.useKey;
+  const knownIds = arg.knownIds || [];
   const vis = (el) => {
     if (!el) return false;
     const st = window.getComputedStyle(el);
@@ -134,12 +141,12 @@ _LEFT_SEARCH_VIN_TITLE_PRESENT_JS = """({ vk, useKey, knownIds }) => {
     return scanNodes(nodes);
   };
   for (const id of knownIds) {
-    const g = document.getElementById(id);
+    const g = doc.getElementById(id);
     if (g && scanGrid(g)) return true;
   }
   const skip = new Set(['gview_s_1_l']);
   const seen = new Set(knownIds);
-  for (const g of document.querySelectorAll('div.ui-jqgrid-view[id^="gview_s_"]')) {
+  for (const g of doc.querySelectorAll('div.ui-jqgrid-view[id^="gview_s_"]')) {
     const id = g.id || '';
     if (!id || skip.has(id) || seen.has(id)) continue;
     if (scanGrid(g)) return true;
@@ -148,18 +155,32 @@ _LEFT_SEARCH_VIN_TITLE_PRESENT_JS = """({ vk, useKey, knownIds }) => {
 }"""
 
 
-def _siebel_frame_has_left_search_vin_title_match(
-    frame: Frame, vk: str, use_key: bool
-) -> bool:
+def _siebel_probe_left_search_vin_match_in_root(root: Frame | FrameLocator, arg: dict) -> bool:
+    """True if this root's document has a matching left Search Results Title (same roots as drilldown)."""
     try:
+        if isinstance(root, FrameLocator):
+            loc = root.locator("html").first
+            if loc.count() == 0:
+                return False
+            return bool(
+                loc.evaluate(
+                    f"""\
+(el, arg) => {{
+  {_LEFT_SEARCH_PROBE_FN}
+  const doc = el && el.ownerDocument ? el.ownerDocument : document;
+  return probeLeftSearchVinTitle(doc, arg);
+}}""",
+                    arg,
+                )
+            )
         return bool(
-            frame.evaluate(
-                _LEFT_SEARCH_VIN_TITLE_PRESENT_JS,
-                {
-                    "vk": vk,
-                    "useKey": use_key,
-                    "knownIds": list(_SIEBEL_VEHICLE_LEFT_SEARCH_GVIEW_IDS),
-                },
+            root.evaluate(
+                f"""\
+(arg) => {{
+  {_LEFT_SEARCH_PROBE_FN}
+  return probeLeftSearchVinTitle(document, arg);
+}}""",
+                arg,
             )
         )
     except Exception:
@@ -171,38 +192,52 @@ def _siebel_poll_until_left_search_title_matches_current_vin(
     chassis: str,
     *,
     content_frame_selector: str | None,
-    max_wait_ms: int = 14000,
-    poll_ms: int = 450,
+    poll_ms: int = _LEFT_SEARCH_STALE_PANE_POLL_MS,
+    max_polls: int = _LEFT_SEARCH_STALE_PANE_MAX_POLLS,
 ) -> bool:
     """
     After Find→Vehicles, the **main** list can update before the left **Search Results** jqGrid —
     especially on the 2nd+ vehicle in one browser session — so drilldown would find no matching Title.
-    Poll until a visible Title matches this chassis (same rules as the click path) or timeout.
+
+    Uses the **same** roots as :func:`_siebel_locator_search_roots` (explicit iframe chain + auto iframes +
+    ordered frames). The previous implementation only scanned ``_ordered_frames`` + main, so it could miss
+    the pane that ``_try_left_search_gviews_in_root`` uses on the first vehicle — causing long polls and
+    failed drilldowns on subsequent searches.
+
+    Polls at ``poll_ms`` intervals for at most ``max_polls`` full scans (default **300 ms × 10**).
     """
-    _ = content_frame_selector
     vin_key = _vin_match_key(chassis)
     use_key = bool(vin_key) and len(vin_key) >= 4
-    start = time.monotonic()
-    deadline = start + max(0.5, max_wait_ms / 1000.0)
+    arg = {
+        "vk": vin_key,
+        "useKey": use_key,
+        "knownIds": list(_SIEBEL_VEHICLE_LEFT_SEARCH_GVIEW_IDS),
+    }
     stale_logged = False
-    while time.monotonic() < deadline:
-        for fr in list(_ordered_frames(page)) + [page.main_frame]:
+    polls = max(1, int(max_polls))
+    interval = max(50, int(poll_ms))
+    for round_i in range(polls):
+        for root in _siebel_locator_search_roots(page, content_frame_selector):
             try:
-                if _siebel_frame_has_left_search_vin_title_match(fr, vin_key, use_key):
+                if _siebel_probe_left_search_vin_match_in_root(root, arg):
                     _safe_page_wait(
-                        page, 400, log_label="vin_left_search_stale_pane_match_settle"
+                        page, interval, log_label="vin_left_search_stale_pane_match_settle"
                     )
                     return True
             except Exception:
                 continue
-        if not stale_logged and (time.monotonic() - start) >= 2.5:
+        if not stale_logged and round_i == 2:
             stale_logged = True
             logger.info(
                 "siebel: left Search Results pane still syncing (possible stale row from prior vehicle); "
-                "polling up to %sms for current VIN Title",
-                max_wait_ms,
+                "polling up to %d rounds × %sms (same iframe roots as drilldown)",
+                polls,
+                interval,
             )
-        _safe_page_wait(page, poll_ms, log_label="vin_left_search_stale_pane_poll")
+        if round_i < polls - 1:
+            _safe_page_wait(
+                page, interval, log_label="vin_left_search_stale_pane_poll"
+            )
     return False
 
 
@@ -830,8 +865,6 @@ def _siebel_try_click_vin_search_hit_link(
         page,
         chassis,
         content_frame_selector=content_frame_selector,
-        max_wait_ms=14000,
-        poll_ms=450,
     )
     _safe_page_wait(page, 600, log_label="vin_left_search_after_stale_pane_poll")
 
