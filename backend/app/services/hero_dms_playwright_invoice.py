@@ -1038,14 +1038,14 @@ def _attach_vehicle_to_bkg(
                     pass
 
             def _tab_out_vin(vin_loc) -> None:
+                # One Tab only — double Tab was skipping past the VIN without a reliable commit.
                 try:
                     vin_loc.press("Tab", timeout=1500)
                 except Exception:
-                    pass
-                try:
-                    page.keyboard.press("Tab")
-                except Exception:
-                    pass
+                    try:
+                        page.keyboard.press("Tab")
+                    except Exception:
+                        pass
 
             def _try_fill_vin_locator(vin_loc) -> bool:
                 # Do not use a full-area click (pick/MVG icon on the right). Do not send Escape here: after **New**,
@@ -1090,18 +1090,22 @@ def _attach_vehicle_to_bkg(
                     vin_loc.fill("", timeout=1000)
                 except Exception:
                     pass
+                # Keystrokes must go to this input — page.keyboard.* targets whatever is focused (often wrong).
                 try:
-                    page.keyboard.type(_ch, delay=28)
+                    vin_loc.focus(timeout=1200)
+                except Exception:
+                    pass
+                try:
+                    vin_loc.type(
+                        _ch,
+                        delay=28,
+                        timeout=min(12000, max(6000, int(action_timeout_ms or 3000) * 2)),
+                    )
                 except Exception:
                     pass
                 if not _vin_readback_ok(vin_loc):
                     try:
-                        vin_loc.type(_ch, delay=28, timeout=min(8000, int(action_timeout_ms or 3000)))
-                    except Exception:
-                        pass
-                if not _vin_readback_ok(vin_loc):
-                    try:
-                        vin_loc.fill(_ch, timeout=2000)
+                        vin_loc.fill(_ch, timeout=2500)
                     except Exception:
                         pass
                 if not _vin_readback_ok(vin_loc):
@@ -1185,10 +1189,6 @@ def _attach_vehicle_to_bkg(
                             _vin_filled = True
                             note(f"attach_vehicle_to_bkg: JS set VIN field (broad query), row={row_n}, chassis={_ch!r}.")
                             _safe_page_wait(page, 200, log_label="after_vin_js_fill")
-                            try:
-                                page.keyboard.press("Tab")
-                            except Exception:
-                                pass
                             try:
                                 page.keyboard.press("Tab")
                             except Exception:

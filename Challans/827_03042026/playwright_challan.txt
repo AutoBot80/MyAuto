@@ -1,36 +1,41 @@
-2026-04-08T19:54:13.040+05:30  === subdealer challan run start ===
-2026-04-08T19:54:13.040+05:30  challan_batch_id=3e7affb6-873e-4d21-923d-bef0528f7801 phase=order_only log_file=C:\Users\arya_\OneDrive\Desktop\My Auto.AI\Challans\827_03042026\playwright_challan.txt
-2026-04-08T19:54:13.041+05:30  dealer_id(session)=100001 from_dealer_id=100001 to_dealer_id=100002
-2026-04-08T19:54:13.042+05:30  challan_book_num='827' challan_date='03042026' artifact_folder=827_03042026
-2026-04-08T19:54:13.042+05:30  staging_row_count=10
-2026-04-08T19:54:13.043+05:30  dms_base_url='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=Login&SWECM=S&SWEHo=connect.heromotocorp.biz'
-2026-04-08T19:54:25.000+05:30  DMS tab opened (get_or_open_site_page OK)
-2026-04-08T19:54:25.211+05:30  All staging rows Ready — applying discounts and building order lines
-2026-04-08T19:54:28.375+05:30  Order phase: 10 line(s); appending STEP/NOTE trace to challan log: C:\Users\arya_\OneDrive\Desktop\My Auto.AI\Challans\827_03042026\playwright_challan.txt
+2026-04-08T19:57:26.521+05:30  === subdealer challan run start ===
+2026-04-08T19:57:26.522+05:30  challan_batch_id=3e7affb6-873e-4d21-923d-bef0528f7801 phase=order_only log_file=C:\Users\arya_\OneDrive\Desktop\My Auto.AI\Challans\827_03042026\playwright_challan.txt
+2026-04-08T19:57:26.523+05:30  dealer_id(session)=100001 from_dealer_id=100001 to_dealer_id=100002
+2026-04-08T19:57:26.523+05:30  challan_book_num='827' challan_date='03042026' artifact_folder=827_03042026
+2026-04-08T19:57:26.524+05:30  staging_row_count=10
+2026-04-08T19:57:26.525+05:30  dms_base_url='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=Login&SWECM=S&SWEHo=connect.heromotocorp.biz'
+2026-04-08T19:57:39.567+05:30  DMS tab opened (get_or_open_site_page OK)
+2026-04-08T19:57:39.770+05:30  All staging rows Ready — applying discounts and building order lines
+2026-04-08T19:57:42.675+05:30  Order phase: 10 line(s); appending STEP/NOTE trace to challan log: C:\Users\arya_\OneDrive\Desktop\My Auto.AI\Challans\827_03042026\playwright_challan.txt
 
 
 --- subdealer challan order phase (structured STEP/NOTE trace) ---
-started_ist=2026-04-08T19:54:28.773+05:30
-2026-04-08T19:54:28.773+05:30 [STEP] Subdealer challan: Sales Orders / create order (Network, multi-VIN).
-2026-04-08T19:54:36.484+05:30 [NOTE] Video path: clicked Generate Booking before create_order.
-2026-04-08T19:54:36.484+05:30 [MILESTONE] Booking generated
-2026-04-08T19:54:36.484+05:30 [FORM] siebel_step=v4_create_order | form=Vehicle Sales / Sales Orders | action=vehicle_sales_new_order_then_pick_contact_then_vin_search_price_allocate | first_name='SHRI' | mobile_phone='0000000000'
-2026-04-08T19:54:36.484+05:30 [FORM] siebel_step=v4_create_order | form=Vehicle Sales / Sales Orders | action=open_vehicle_sales_then_create_order | mobile_phone='0000000000'
-2026-04-08T19:54:36.484+05:30 [NOTE] Create Order: navigating to Vehicle Sales URL. base=https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/
-2026-04-08T19:54:41.944+05:30 [NOTE] Create Order: arrived at Vehicle Sales (post-goto wait). URL=https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=Order+Entry+-+My+Orders+View+(Sales
-2026-04-08T19:54:41.945+05:30 [NOTE] Create Order: add_subdealer_challan — skipping My Orders mobile search; opening new booking via Sales Orders List:New (+).
-2026-04-08T19:54:43.343+05:30 [NOTE] Create Order: clicked Sales Orders New:List (+).
-2026-04-08T19:54:44.659+05:30 [NOTE] Create Order: set Booking Order Type = Normal Booking.
-2026-04-08T19:54:45.396+05:30 [NOTE] Create Order: set Customer Type = Network (challan).
-2026-04-08T19:54:47.863+05:30 [NOTE] Create Order: Account/Institution Name typed + Tab (challan); waiting for Pin Code autopopulate.
-2026-04-08T19:54:48.376+05:30 [NOTE] Create Order: Pin Code autopopulated after Institution → '321024'.
-2026-04-08T19:54:49.107+05:30 [NOTE] Create Order: filled Comments (challan) → 'From Arya Agencies. Helmet credited'.
-2026-04-08T19:54:49.107+05:30 [FORM] siebel_step=v4_create_order_comments | form=Sales order / create booking | action=fill_Comments_challan_helmet | comments='From Arya Agencies. Helmet credited'
-2026-04-08T19:54:50.759+05:30 [NOTE] Create Order: set Finance Required = N.
-2026-04-08T19:54:50.763+05:30 [NOTE] Create Order: financier empty — skipped Financier and Hypothecation fields.
-2026-04-08T19:54:50.763+05:30 [NOTE] Create Order: locked booking form context for Contact Last Name/F2 (url='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=Order+Entry+-+My+Orders+View+(Sales').
-2026-04-08T19:54:50.763+05:30 [NOTE] Create Order: subdealer challan — skipped Contact Last Name F2 applet.
-2026-04-08T19:54:52.357+05:30 [NOTE] Create Order: pressed Ctrl+S on Sales Order form.
-2026-04-08T19:54:54.257+05:30 [NOTE] Create Order: scraped Order#='11870-02-SVSO-0426-85' after save.
-2026-04-08T19:54:54.563+05:30 [NOTE] attach_vehicle_to_bkg: clicked Order header drill-down via "a[name='Order Number'][tabindex='-1']".
-2026-04-08T19:54:56.254+05:30 [NOTE] attach_vehicle_to_bkg: clicked New button (id='s_1_1_35_0_Ctrl').
+started_ist=2026-04-08T19:57:42.970+05:30
+2026-04-08T19:57:42.971+05:30 [STEP] Subdealer challan: Sales Orders / create order (Network, multi-VIN).
+2026-04-08T19:57:51.217+05:30 [NOTE] Video path: clicked Generate Booking before create_order.
+2026-04-08T19:57:51.217+05:30 [MILESTONE] Booking generated
+2026-04-08T19:57:51.217+05:30 [FORM] siebel_step=v4_create_order | form=Vehicle Sales / Sales Orders | action=vehicle_sales_new_order_then_pick_contact_then_vin_search_price_allocate | first_name='SHRI' | mobile_phone='0000000000'
+2026-04-08T19:57:51.217+05:30 [FORM] siebel_step=v4_create_order | form=Vehicle Sales / Sales Orders | action=open_vehicle_sales_then_create_order | mobile_phone='0000000000'
+2026-04-08T19:57:51.217+05:30 [NOTE] Create Order: navigating to Vehicle Sales URL. base=https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/
+2026-04-08T19:57:56.648+05:30 [NOTE] Create Order: arrived at Vehicle Sales (post-goto wait). URL=https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=Order+Entry+-+My+Orders+View+(Sales
+2026-04-08T19:57:56.648+05:30 [NOTE] Create Order: add_subdealer_challan — skipping My Orders mobile search; opening new booking via Sales Orders List:New (+).
+2026-04-08T19:57:58.565+05:30 [NOTE] Create Order: clicked Sales Orders New:List (+).
+2026-04-08T19:58:00.230+05:30 [NOTE] Create Order: set Booking Order Type = Normal Booking.
+2026-04-08T19:58:01.849+05:30 [NOTE] Create Order: set Customer Type = Network (challan).
+2026-04-08T19:58:04.823+05:30 [NOTE] Create Order: Account/Institution Name typed + Tab (challan); waiting for Pin Code autopopulate.
+2026-04-08T19:58:05.306+05:30 [NOTE] Create Order: Pin Code autopopulated after Institution → '321024'.
+2026-04-08T19:58:05.991+05:30 [NOTE] Create Order: filled Comments (challan) → 'From Arya Agencies. Helmet credited'.
+2026-04-08T19:58:05.991+05:30 [FORM] siebel_step=v4_create_order_comments | form=Sales order / create booking | action=fill_Comments_challan_helmet | comments='From Arya Agencies. Helmet credited'
+2026-04-08T19:58:07.749+05:30 [NOTE] Create Order: set Finance Required = N.
+2026-04-08T19:58:07.753+05:30 [NOTE] Create Order: financier empty — skipped Financier and Hypothecation fields.
+2026-04-08T19:58:07.753+05:30 [NOTE] Create Order: locked booking form context for Contact Last Name/F2 (url='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=Order+Entry+-+My+Orders+View+(Sales').
+2026-04-08T19:58:07.754+05:30 [NOTE] Create Order: subdealer challan — skipped Contact Last Name F2 applet.
+2026-04-08T19:58:09.349+05:30 [NOTE] Create Order: pressed Ctrl+S on Sales Order form.
+2026-04-08T19:58:11.312+05:30 [NOTE] Create Order: scraped Order#='11870-02-SVSO-0426-85' after save.
+2026-04-08T19:58:11.601+05:30 [NOTE] attach_vehicle_to_bkg: clicked Order header drill-down via "a[name='Order Number'][tabindex='-1']".
+2026-04-08T19:58:13.295+05:30 [NOTE] attach_vehicle_to_bkg: clicked New button (id='s_1_1_35_0_Ctrl').
+2026-04-08T19:58:21.957+05:30 [NOTE] attach_vehicle_to_bkg: JS set VIN field (broad query), row=1, chassis='MBLHAW433T9A53768'.
+2026-04-08T19:58:23.662+05:30 [STEP] Stopped: create_order flow failed.
+
+2026-04-08T19:58:23.662+05:30 [END] error=Siebel: create_order failed. Could not fill line-item Discount for row 1 (id/_l_Discount/name=Discount) with '1705.00'.
+2026-04-08T19:58:23.663+05:30  ERROR order phase: "Siebel: create_order failed. Could not fill line-item Discount for row 1 (id/_l_Discount/name=Discount) with '1705.00'."
