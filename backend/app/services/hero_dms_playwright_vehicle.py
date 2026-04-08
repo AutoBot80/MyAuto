@@ -79,6 +79,10 @@ _SIEBEL_VEHICLE_LEFT_SEARCH_GVIEW_IDS: tuple[str, ...] = (
 _LEFT_SEARCH_STALE_PANE_POLL_MS = 300
 _LEFT_SEARCH_STALE_PANE_MAX_POLLS = 10
 
+# After left Title drill-in, Siebel may update the **center** list (#s_1_l) asynchronously.
+_CENTER_LIST_AFTER_LEFT_POLL_MS = 300
+_CENTER_LIST_AFTER_LEFT_MAX_POLLS = 15
+
 
 def _siebel_left_search_gview_table_id(gview_id: str) -> str:
     """``gview_s_1001_l`` → ``s_1001_l`` (Siebel table id parallel to the gview wrapper)."""
@@ -238,6 +242,130 @@ def _siebel_poll_until_left_search_title_matches_current_vin(
             _safe_page_wait(
                 page, interval, log_label="vin_left_search_stale_pane_poll"
             )
+    return False
+
+
+# Center (main) vehicle list jqGrid — updates **after** left Search Results Title click in production.
+_CENTER_LIST_PROBE_FN = """function probeCenterListVin(doc, arg) {
+  const norm = (s) => String(s || '').replace(/[^A-Za-z0-9]/g, '');
+  const key = norm(arg.vk);
+  const useKey = arg.useKey;
+  const vis = (el) => {
+    if (!el) return false;
+    const st = window.getComputedStyle(el);
+    if (st.display === 'none' || st.visibility === 'hidden') return false;
+    const r = el.getBoundingClientRect();
+    return r.width >= 1 && r.height >= 1;
+  };
+  const rowContainsVin = (rowCompact) => {
+    if (!useKey || !rowCompact) return false;
+    if (!key || key.length < 4) return false;
+    const rk = rowCompact.toUpperCase();
+    const vk = key.toUpperCase();
+    if (rk.includes(vk)) return true;
+    if (rk.length >= 4 && vk.includes(rk)) return true;
+    if (rk.endsWith(vk) || rk.startsWith(vk)) return true;
+    if (rk.length >= 4 && vk.length >= 4 && (vk.startsWith(rk) || rk.startsWith(vk))) return true;
+    return false;
+  };
+  const scanTable = (tbl) => {
+    if (!tbl || !vis(tbl)) return false;
+    const rows = tbl.querySelectorAll('tbody tr');
+    for (const tr of rows) {
+      if (!vis(tr)) continue;
+      const cls = (tr.className || '').toLowerCase();
+      if (cls.includes('jqgfirstrow')) continue;
+      const tds = tr.querySelectorAll('td');
+      for (const td of tds) {
+        const raw = norm(td.innerText || td.textContent || '');
+        if (rowContainsVin(raw)) return true;
+      }
+    }
+    return false;
+  };
+  const main = doc.getElementById('s_1_l');
+  if (main && scanTable(main)) return true;
+  const gv = doc.getElementById('gview_s_1_l');
+  if (gv) {
+    const inner = gv.querySelector('table.ui-jqgrid-btable, table[id$="_l"]');
+    if (inner && scanTable(inner)) return true;
+  }
+  return false;
+}"""
+
+
+def _siebel_probe_center_list_vin_match_in_root(root: Frame | FrameLocator, arg: dict) -> bool:
+    """True if the main Auto Vehicle list grid shows a cell matching the expected VIN/chassis key."""
+    try:
+        if isinstance(root, FrameLocator):
+            loc = root.locator("html").first
+            if loc.count() == 0:
+                return False
+            return bool(
+                loc.evaluate(
+                    f"""\
+(el, arg) => {{
+  {_CENTER_LIST_PROBE_FN}
+  const doc = el && el.ownerDocument ? el.ownerDocument : document;
+  return probeCenterListVin(doc, arg);
+}}""",
+                    arg,
+                )
+            )
+        return bool(
+            root.evaluate(
+                f"""\
+(arg) => {{
+  {_CENTER_LIST_PROBE_FN}
+  return probeCenterListVin(document, arg);
+}}""",
+                arg,
+            )
+        )
+    except Exception:
+        return False
+
+
+def _siebel_poll_until_center_list_matches_chassis_after_left_drill(
+    page: Page,
+    chassis: str,
+    *,
+    content_frame_selector: str | None,
+    poll_ms: int = _CENTER_LIST_AFTER_LEFT_POLL_MS,
+    max_polls: int = _CENTER_LIST_AFTER_LEFT_MAX_POLLS,
+) -> bool:
+    """
+    After clicking the left **Search Results** VIN Title, Siebel updates the **center** vehicle list
+    on its own schedule. Poll until ``#s_1_l`` (main list) shows a cell that matches the chassis key.
+    """
+    vin_key = _vin_match_key(chassis)
+    use_key = bool(vin_key) and len(vin_key) >= 4
+    if not use_key:
+        return True
+    arg = {"vk": vin_key, "useKey": use_key}
+    polls = max(1, int(max_polls))
+    interval = max(50, int(poll_ms))
+    sync_logged = False
+    for round_i in range(polls):
+        for root in _siebel_locator_search_roots(page, content_frame_selector):
+            try:
+                if _siebel_probe_center_list_vin_match_in_root(root, arg):
+                    _safe_page_wait(
+                        page, interval, log_label="vin_center_list_sync_match_settle"
+                    )
+                    return True
+            except Exception:
+                continue
+        if not sync_logged and round_i == 2:
+            sync_logged = True
+            logger.info(
+                "siebel: waiting for center vehicle list (#s_1_l) to show VIN after left drill-in; "
+                "up to %d rounds × %sms",
+                polls,
+                interval,
+            )
+        if round_i < polls - 1:
+            _safe_page_wait(page, interval, log_label="vin_center_list_after_left_poll")
     return False
 
 
@@ -4072,7 +4200,8 @@ def prepare_vehicle(
     """
     Pre-booking **vehicle preparation** (runs before Generate Booking): navigate to **Auto Vehicle List**,
     Find→Vehicles query, scrape the list grid row, **require** left **Search Results** VIN (Title) drill-in,
-    then **Key Number** / **Battery No.** (save), merge **Vehicle Information** from aria-labels, evaluate
+    then **wait until the center vehicle list** (``#s_1_l``) shows the selected VIN (Siebel updates it after
+    the left click), refresh the list scrape, then **Key Number** / **Battery No.** (save), merge **Vehicle Information** from aria-labels, evaluate
     **Inventory Location** (fail if **in transit**). For dealer stock: top-grid **VIN** (best-effort) →
     **Serial Number** drilldown → **Features and Image** (``cubic_capacity`` / ``vehicle_type``) →
     **Pre-check** + **PDI** (``_siebel_run_vehicle_serial_detail_precheck_pdi``).
@@ -4172,6 +4301,35 @@ def prepare_vehicle(
             vm_info,
         )
     note("prepare_vehicle: opened vehicle from left Search Results (VIN Title drilldown).")
+
+    _safe_page_wait(page, 300, log_label="after_left_title_click_tick")
+    if not _siebel_poll_until_center_list_matches_chassis_after_left_drill(
+        page,
+        _chassis_for_left_hit,
+        content_frame_selector=content_frame_selector,
+    ):
+        merged = _merge_dms_and_grid_for_vehicle_master(dms_values, scraped)
+        vm_crit, vm_info = _vehicle_master_prepare_gaps(merged)
+        return (
+            False,
+            "Siebel: center vehicle list did not update to show the selected VIN after left Search Results "
+            "drill-in (wait for #s_1_l row to match).",
+            merged,
+            bool(scraped.get("in_transit")),
+            vm_crit,
+            vm_info,
+        )
+    note(
+        "prepare_vehicle: center vehicle list shows selected VIN (synced after left Search Results drill-in)."
+    )
+    refreshed = scrape_siebel_vehicle_row(
+        page, content_frame_selector=content_frame_selector
+    )
+    if refreshed:
+        for _k, _v in refreshed.items():
+            if _v is not None and str(_v).strip():
+                scraped[_k] = _v
+        note("prepare_vehicle: refreshed vehicle list scrape after center pane synced.")
 
     try:
         _safe_page_wait(page, 1200, log_label="after_vehicle_left_pane_vin_settle")
