@@ -357,7 +357,29 @@ _JS_MY_ORDERS_JQGRID_ROWS = """() => {
         const r = el.getBoundingClientRect();
         return r.width > 1 && r.height > 1;
     };
-    const tables = document.querySelectorAll('table.ui-jqgrid-btable');
+    /** Prefer Vehicle Sales list grid: ``#gview_s_1_l`` / ``#s_1_ld`` (``data-vis-mode="Grid"``). */
+    const collectTables = () => {
+        const list = [];
+        const seen = new Set();
+        const push = (t) => {
+            if (!t || !vis(t) || seen.has(t)) return;
+            seen.add(t);
+            list.push(t);
+        };
+        const gview = document.querySelector('#gview_s_1_l');
+        if (gview) {
+            gview.querySelectorAll('table.ui-jqgrid-btable').forEach((t) => push(t));
+        }
+        const s1ld = document.querySelector('#s_1_ld[data-vis-mode="Grid"], #s_1_ld');
+        if (s1ld) {
+            s1ld.querySelectorAll('table.ui-jqgrid-btable').forEach((t) => push(t));
+        }
+        if (list.length === 0) {
+            document.querySelectorAll('table.ui-jqgrid-btable').forEach((t) => push(t));
+        }
+        return list;
+    };
+    const tables = collectTables();
     for (const table of tables) {
         if (!vis(table)) continue;
         const headerRow = table.querySelector('thead tr.ui-jqgrid-labels') || table.querySelector('thead tr');
@@ -388,6 +410,23 @@ _JS_MY_ORDERS_JQGRID_ROWS = """() => {
                     row.order = ((a && a.textContent) ? a.textContent : txt).trim();
                 }
             });
+            const invTd = tr.querySelector('td[role="gridcell"][id*="_l_Invoice"]');
+            if (invTd && vis(invTd)) {
+                const tit = (invTd.getAttribute('title') || '').trim();
+                const tx = (invTd.textContent || '').trim();
+                if (tit || tx) {
+                    row.invoice = tit || tx;
+                }
+            }
+            const ordInp = tr.querySelector(
+                'input[name="Order_Number"], input[id*="Order_Number"], input[id$="_Order_Number"]'
+            );
+            if (ordInp) {
+                const ov = String(ordInp.value || '').trim();
+                if (ov) {
+                    row.order = ov;
+                }
+            }
             if (!row.order && !row.status && !row.invoice) {
                 const a = tr.querySelector("a[name='Order Number'], a[name='Order #']");
                 if (a && vis(a)) row.order = (a.textContent || '').trim();
@@ -565,27 +604,159 @@ _JS_CLICK_MY_ORDERS_ORDER_LINK = """({ orderNeedle, mobileDigits }) => {
         const r = el.getBoundingClientRect();
         return r.width > 0 && r.height > 0;
     };
+    const normKey = (s) => String(s || '').replace(/\\s+/g, '').toUpperCase();
     const od = String(orderNeedle || '').replace(/\\D/g, '');
+    const needleNorm = normKey(orderNeedle);
     const md = String(mobileDigits || '').replace(/\\D/g, '');
-    const rows = document.querySelectorAll(
-        'table.ui-jqgrid-btable tbody tr.jqgrow, table.ui-jqgrid-btable tbody tr[role="row"]'
-    );
+    const rowSel =
+        '#gview_s_1_l table.ui-jqgrid-btable tbody tr.jqgrow, #gview_s_1_l table.ui-jqgrid-btable tbody tr[role="row"], '
+        + '#s_1_ld table.ui-jqgrid-btable tbody tr.jqgrow, #s_1_ld table.ui-jqgrid-btable tbody tr[role="row"], '
+        + 'table.ui-jqgrid-btable tbody tr.jqgrow, table.ui-jqgrid-btable tbody tr[role="row"]';
+    const rows = document.querySelectorAll(rowSel);
     for (const tr of rows) {
         if (tr.classList.contains('jqgfirstrow')) continue;
         if (!vis(tr)) continue;
         const rowText = tr.innerText || '';
         if (md && !rowText.replace(/\\D/g, '').includes(md)) continue;
+        const inp = tr.querySelector(
+            'input[name="Order_Number"], input[id*="Order_Number"], input[id$="_Order_Number"]'
+        );
+        if (inp && vis(inp)) {
+            const ov = String(inp.value || '').trim();
+            if (!ov) continue;
+            const otd = ov.replace(/\\D/g, '');
+            let match = true;
+            if (od && otd) {
+                match = otd === od || otd.includes(od) || od.includes(otd);
+            }
+            if (match && needleNorm && normKey(ov) !== needleNorm) {
+                const vn = normKey(ov);
+                if (!vn.includes(needleNorm) && !needleNorm.includes(vn)) match = false;
+            }
+            if (!match) continue;
+            try { inp.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
+            try { inp.click(); } catch (e) {}
+            return 'ok:' + ov;
+        }
         const a = tr.querySelector("a[name='Order Number'], a[name='Order #']") || tr.querySelector('td a');
         if (!a || !vis(a)) continue;
         const ot = (a.textContent || '').trim();
         const otd = ot.replace(/\\D/g, '');
         if (od && otd && otd !== od && !otd.includes(od) && !od.includes(otd)) continue;
+        if (needleNorm && normKey(ot) !== needleNorm) {
+            const tn = normKey(ot);
+            if (!tn.includes(needleNorm) && !needleNorm.includes(tn)) continue;
+        }
         try { a.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
         try { a.click(); } catch (e) {}
         return 'ok:' + ot;
     }
     return '';
 }"""
+
+
+_JS_CLICK_MY_ORDERS_INVOICE_LINK = """({ invoiceNeedle, mobileDigits }) => {
+    const vis = (el) => {
+        if (!el) return false;
+        const st = window.getComputedStyle(el);
+        if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity) === 0) return false;
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+    };
+    /** Match Siebel My Orders invoice cell: ``td#N_s_1_l_Invoice__`` with ``title`` = Invoice# (alphanumeric). */
+    const normInv = (s) => String(s || '').replace(/\\s+/g, '').toUpperCase();
+    const needle = normInv(invoiceNeedle);
+    const md = String(mobileDigits || '').replace(/\\D/g, '');
+    if (!needle) return '';
+    const rowSel =
+        '#gview_s_1_l table.ui-jqgrid-btable tbody tr.jqgrow, #gview_s_1_l table.ui-jqgrid-btable tbody tr[role="row"], '
+        + '#s_1_ld table.ui-jqgrid-btable tbody tr.jqgrow, #s_1_ld table.ui-jqgrid-btable tbody tr[role="row"], '
+        + 'table.ui-jqgrid-btable tbody tr.jqgrow, table.ui-jqgrid-btable tbody tr[role="row"]';
+    const rows = document.querySelectorAll(rowSel);
+    for (const tr of rows) {
+        if (tr.classList.contains('jqgfirstrow')) continue;
+        if (!vis(tr)) continue;
+        const rowText = tr.innerText || '';
+        if (md && !rowText.replace(/\\D/g, '').includes(md)) continue;
+        let td = tr.querySelector('td[role="gridcell"][id*="_l_Invoice"]');
+        if (!td || !vis(td)) {
+            td = tr.querySelector('td[role="gridcell"][aria-labelledby="s_1_l_altLink"][id*="Invoice"]');
+        }
+        if (!td || !vis(td)) {
+            td = tr.querySelector('td[role="gridcell"][aria-labelledby="s_1_l_altLink"]');
+        }
+        let target = null;
+        if (td && vis(td)) {
+            target = td;
+        } else {
+            const a = tr.querySelector("a[name='Invoice Number'], a[name='Invoice #']");
+            if (a && vis(a)) target = a;
+        }
+        if (!target || !vis(target)) {
+            const tds = tr.querySelectorAll('td[role="gridcell"], td');
+            for (const c of tds) {
+                const adb = (c.getAttribute('aria-describedby') || '').toLowerCase();
+                if (!adb.includes('invoice')) continue;
+                const inner = c.querySelector('a');
+                target = (inner && vis(inner)) ? inner : c;
+                break;
+            }
+        }
+        if (!target || !vis(target)) continue;
+        const fromTitle = (target.getAttribute && target.getAttribute('title')) ? target.getAttribute('title').trim() : '';
+        const txt = fromTitle || (target.textContent || '').trim();
+        const tnorm = normInv(txt);
+        if (!tnorm) continue;
+        if (tnorm !== needle && !tnorm.includes(needle) && !needle.includes(tnorm)) continue;
+        try { target.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
+        try { target.click(); } catch (e) {}
+        return 'ok:' + txt;
+    }
+    return '';
+}"""
+
+
+def _click_my_orders_jqgrid_invoice_for_mobile_or_invoice(
+    page: Page,
+    *,
+    mobile: str,
+    invoice_number: str,
+    content_frame_selector: str | None,
+    note,
+    action_timeout_ms: int,
+) -> bool:
+    """Open the sales order from My Orders jqGrid by clicking the **Invoice#** cell/link (Run Report prep)."""
+    nd = re.sub(r"\D", "", (mobile or "").strip())
+    inv = (invoice_number or "").strip()
+    if not inv or not _my_orders_invoice_meaningful(inv):
+        return False
+    roots: list = []
+    try:
+        roots.extend(list(_siebel_locator_search_roots(page, content_frame_selector)))
+    except Exception:
+        pass
+    try:
+        roots.extend(list(_ordered_frames(page)))
+    except Exception:
+        pass
+    roots.append(page)
+    for root in roots:
+        try:
+            hit = root.evaluate(
+                _JS_CLICK_MY_ORDERS_INVOICE_LINK,
+                {"invoiceNeedle": inv, "mobileDigits": nd},
+            )
+            if hit:
+                note(f"Create Order: opened order from My Orders grid via Invoice# ({hit!r}).")
+                _safe_page_wait(page, 1500, log_label="after_my_orders_jqgrid_invoice_click")
+                try:
+                    page.wait_for_load_state("networkidle", timeout=10_000)
+                except Exception:
+                    pass
+                return True
+        except Exception:
+            continue
+    return False
 
 
 def _click_my_orders_jqgrid_order_for_mobile_or_order(
@@ -4215,6 +4386,7 @@ def print_hero_dms_forms(
     *,
     mobile: str,
     order_number: str = "",
+    invoice_number: str = "",
     action_timeout_ms: int,
     content_frame_selector: str | None,
     note: Callable[..., None] | None = None,
@@ -4225,7 +4397,8 @@ def print_hero_dms_forms(
     continue_on_report_error: bool = True,
 ) -> tuple[bool, str | None, list[str], list[dict[str, Any]]]:
     """
-    Vehicle Sales → **My Orders** (mobile search + Order# drill-down, same as ``_create_order`` pending path),
+    Vehicle Sales → **My Orders** (mobile search), then drill-down on **Invoice#** when available
+    (argument or grid ``primary_invoice``), otherwise **Order#** (same as ``_create_order`` pending path),
     then **Report(s)** → Run Report applet. For each name in ``report_names``: select **Report Name**,
     **Submit**, save download.
 
@@ -4294,35 +4467,69 @@ def print_hero_dms_forms(
         note=_note,
     )
     _mo_po = (_mos.primary_order or "").strip()
+    _mo_pi = (_mos.primary_invoice or "").strip()
     _on = (order_number or "").strip() or _mo_po
-    if not _on:
-        return False, "print_hero_dms_forms: need Order# (from argument or My Orders grid).", [], []
-
-    if not _click_my_orders_jqgrid_order_for_mobile_or_order(
-        page,
-        mobile=mobile,
-        order_number=_on,
-        content_frame_selector=content_frame_selector,
-        note=_note,
-        action_timeout_ms=action_timeout_ms,
-    ):
-        return False, "Create Order: Pending My Orders row but could not open Order# drill-down.", [], []
+    _inv_eff = (invoice_number or "").strip() or _mo_pi
+    _opened = False
+    _drill_via = ""
+    if _inv_eff and _my_orders_invoice_meaningful(_inv_eff):
+        _opened = _click_my_orders_jqgrid_invoice_for_mobile_or_invoice(
+            page,
+            mobile=mobile,
+            invoice_number=_inv_eff,
+            content_frame_selector=content_frame_selector,
+            note=_note,
+            action_timeout_ms=action_timeout_ms,
+        )
+        if _opened:
+            _drill_via = "invoice"
+    if not _opened:
+        if not _on:
+            return (
+                False,
+                "print_hero_dms_forms: need Order# or Invoice# (from argument or My Orders grid).",
+                [],
+                [],
+            )
+        _opened = _click_my_orders_jqgrid_order_for_mobile_or_order(
+            page,
+            mobile=mobile,
+            order_number=_on,
+            content_frame_selector=content_frame_selector,
+            note=_note,
+            action_timeout_ms=action_timeout_ms,
+        )
+        if _opened:
+            _drill_via = "order"
+    if not _opened:
+        return (
+            False,
+            "Create Order: Pending My Orders row but could not open Invoice# or Order# drill-down.",
+            [],
+            [],
+        )
     try:
         page.wait_for_load_state("networkidle", timeout=8_000)
     except Exception:
         pass
+    _ctx = (
+        "Create Order after My Orders Invoice# click (pending)"
+        if _drill_via == "invoice"
+        else "Create Order after My Orders Order# click (pending)"
+    )
     _err_mo = _poll_and_handle_siebel_error_popup(
         page,
         content_frame_selector,
         _note,
-        context="Create Order after My Orders Order# click (pending)",
+        context=_ctx,
         total_ms=1400,
         step_ms=300,
     )
     if _err_mo:
+        _lbl = "Invoice#" if _drill_via == "invoice" else "Order#"
         return (
             False,
-            f"Create Order: Siebel error after My Orders Order# click (pending): {_err_mo[:220]}",
+            f"Create Order: Siebel error after My Orders {_lbl} click (pending): {_err_mo[:220]}",
             [],
             [],
         )
