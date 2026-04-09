@@ -2919,6 +2919,9 @@ def Playwright_Hero_DMS_fill(
             form_trace=form_trace,
             ms_done=ms_done,
             log_vehicle_snapshot=log_vehicle_snapshot,
+            playwright_dms_execution_log_path=(
+                str(_exec_log_path) if _exec_log_path is not None else None
+            ),
         )
         if out.get("error"):
             return out
@@ -3127,6 +3130,9 @@ def Playwright_Hero_DMS_fill_subdealer_challan_order_only(
             form_trace=form_trace,
             ms_done=ms_done,
             log_vehicle_snapshot=log_vehicle_snapshot,
+            playwright_dms_execution_log_path=(
+                str(_exec_log_path) if _exec_log_path is not None else None
+            ),
         )
         if out.get("error"):
             return out

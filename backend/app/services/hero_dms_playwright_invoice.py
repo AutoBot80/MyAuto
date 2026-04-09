@@ -468,6 +468,98 @@ _JS_MY_ORDERS_JQGRID_ROWS = """() => {
 }"""
 
 
+_JS_DUMP_MY_ORDERS_JQGRID = """() => {
+    const vis = (el) => {
+        if (!el) return false;
+        const st = window.getComputedStyle(el);
+        if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity) === 0) return false;
+        const r = el.getBoundingClientRect();
+        return r.width > 1 && r.height > 1;
+    };
+    const lines = [];
+    const tables = document.querySelectorAll('table.ui-jqgrid-btable');
+    lines.push('ui-jqgrid-btable_count=' + tables.length);
+    tables.forEach((table, ti) => {
+        lines.push('');
+        lines.push('=== table[' + ti + '] id=' + (table.id || '') + ' class=' + (table.className || '').slice(0, 120));
+        if (!vis(table)) {
+            lines.push('  (not visible — skipped body walk)');
+            return;
+        }
+        const headerRow = table.querySelector('thead tr.ui-jqgrid-labels') || table.querySelector('thead tr');
+        if (headerRow) {
+            const ths = headerRow.querySelectorAll('th');
+            lines.push('  thead th count=' + ths.length);
+            ths.forEach((th, hi) => {
+                lines.push('    th[' + hi + '] id=' + (th.id || '') + ' text=' + JSON.stringify((th.textContent || '').trim().slice(0, 200)));
+            });
+        }
+        const dataRows = table.querySelectorAll('tbody tr.jqgrow, tbody tr[role="row"]');
+        lines.push('  tbody candidate rows=' + dataRows.length);
+        let ri = 0;
+        for (const tr of dataRows) {
+            if (tr.classList.contains('jqgfirstrow')) continue;
+            lines.push('  --- tr[' + ri + '] id=' + (tr.id || '') + ' class=' + (tr.className || '').slice(0, 80));
+            lines.push('  innerText=' + JSON.stringify((tr.innerText || '').trim().slice(0, 2000)));
+            if (!vis(tr)) lines.push('  (tr not visible)');
+            const tds = tr.querySelectorAll('td[role="gridcell"], td');
+            tds.forEach((td, di) => {
+                const inp = td.querySelector('input');
+                const inv = inp ? ' input_value=' + JSON.stringify(String(inp.value || '').slice(0, 200)) : '';
+                lines.push(
+                    '    td[' + di + '] id=' + (td.id || '') +
+                    ' adb=' + JSON.stringify(td.getAttribute('aria-describedby') || '') +
+                    ' title=' + JSON.stringify((td.getAttribute('title') || '').slice(0, 200)) +
+                    ' text=' + JSON.stringify((td.textContent || '').trim().slice(0, 400)) + inv
+                );
+            });
+            ri += 1;
+        }
+    });
+    return lines.join('\\n');
+}"""
+
+
+def _dump_my_orders_jqgrid_snapshot(
+    page: Page,
+    content_frame_selector: str | None,
+    out_path: Path,
+) -> None:
+    """
+    Diagnostic: write all ``table.ui-jqgrid-btable`` markup summaries from every search root (main + iframes).
+    """
+    roots: list = []
+    try:
+        roots.extend(list(_siebel_locator_search_roots(page, content_frame_selector)))
+    except Exception:
+        pass
+    try:
+        roots.extend(list(_ordered_frames(page)))
+    except Exception:
+        pass
+    roots.append(page)
+    chunks: list[str] = []
+    chunks.append("My Orders jqGrid DOM snapshot (diagnostic)")
+    chunks.append(f"written_ist={_ts_ist_iso()}")
+    chunks.append("")
+    for i, root in enumerate(roots):
+        try:
+            u = ""
+            try:
+                u = str(getattr(root, "url", "") or "")[:400]
+            except Exception:
+                u = ""
+            chunks.append(f"--- frame[{i}] url={u!r} ---")
+            blob = root.evaluate(_JS_DUMP_MY_ORDERS_JQGRID)
+            chunks.append(blob if isinstance(blob, str) else repr(blob))
+            chunks.append("")
+        except Exception as ex:
+            chunks.append(f"--- frame[{i}] evaluate error: {ex!s} ---")
+            chunks.append("")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text("\n".join(chunks), encoding="utf-8")
+
+
 def _my_orders_invoice_meaningful(s: str) -> bool:
     """Whether jqGrid **invoice** cell text looks like a real Invoice# (not dash/placeholder / date-time)."""
     t = (s or "").strip()
@@ -810,9 +902,13 @@ def _run_vehicle_sales_my_orders_mobile_search(
     action_timeout_ms: int,
     content_frame_selector: str | None,
     note,
+    playwright_dms_log_path: Path | str | None = None,
 ) -> _MyOrdersGridSearchResult:
     """
     My Orders view: Find dropdown ``s_1_1_1_0`` → Mobile Phone# → value field → Enter → read ``ui-jqgrid-btable``.
+
+    When ``playwright_dms_log_path`` is set (path to ``Playwright_DMS_*.txt`` or any trace file), writes a
+    sibling dump file ``My_Orders_jqgrid_dump_<timestamp>.txt`` in the same directory for debugging.
     """
     _tmo = min(int(action_timeout_ms or 3000), 8000)
     root = _find_vehicle_sales_my_orders_search_root(page, content_frame_selector)
@@ -905,6 +1001,15 @@ def _run_vehicle_sales_my_orders_mobile_search(
             pass
         _safe_page_wait(page, min(2500, _tmo), log_label="after_my_orders_find_enter")
         rows = _read_my_orders_jqgrid_rows_anywhere(page, content_frame_selector)
+        if playwright_dms_log_path:
+            try:
+                _lp = Path(str(playwright_dms_log_path))
+                _stamp = datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%Y%m%d_%H%M%S")
+                _dump_path = _lp.parent / f"My_Orders_jqgrid_dump_{_stamp}.txt"
+                _dump_my_orders_jqgrid_snapshot(page, content_frame_selector, _dump_path)
+                note(f"Create Order: My Orders jqGrid DOM dump written next to Playwright log: {_dump_path!s}.")
+            except Exception as _dex:
+                note(f"Create Order: My Orders jqGrid DOM dump failed: {_dex!r}.")
         oc, po, pi = _classify_my_orders_grid_rows(rows)
         note(
             f"Create Order: My Orders grid search outcome={oc!r} rows={len(rows)} "
@@ -2358,6 +2463,7 @@ def _create_order(
     challan_comments_text: str = "",
     network_dealer_name: str = "",
     challan_network_pin: str = "",
+    playwright_dms_execution_log_path: Path | str | None = None,
 ) -> tuple[bool, str | None, dict]:
     """
     Vehicle Sales → Sales Orders flow (same frame as the ``+`` New control):
@@ -2569,6 +2675,7 @@ def _create_order(
             action_timeout_ms=action_timeout_ms,
             content_frame_selector=content_frame_selector,
             note=note,
+            playwright_dms_log_path=playwright_dms_execution_log_path,
         )
         _mo_oc = (_mos.outcome or "").strip()
         _mo_po = (_mos.primary_order or "").strip()
@@ -4535,6 +4642,7 @@ def print_hero_dms_forms(
         action_timeout_ms=action_timeout_ms,
         content_frame_selector=content_frame_selector,
         note=_note,
+        playwright_dms_log_path=execution_log_path,
     )
     _mo_po = (_mos.primary_order or "").strip()
     _mo_pi = (_mos.primary_invoice or "").strip()
@@ -4857,6 +4965,7 @@ def prepare_order(
     form_trace: Callable[..., None] | None,
     ms_done: Callable[[str], None] | None,
     log_vehicle_snapshot: Callable[[str], None],
+    playwright_dms_execution_log_path: Path | str | None = None,
 ) -> dict:
     """
     Generate Booking + ``_create_order`` + merge scrape into ``out[\"vehicle\"]``.
@@ -4923,6 +5032,7 @@ def prepare_order(
         challan_network_pin=str(
             dms_values.get("network_pin_code") or dms_values.get("pin_code") or ""
         ).strip(),
+        playwright_dms_execution_log_path=playwright_dms_execution_log_path,
     )
     if not ok_order:
         step("Stopped: create_order flow failed.")
