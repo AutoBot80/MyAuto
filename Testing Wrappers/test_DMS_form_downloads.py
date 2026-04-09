@@ -66,7 +66,7 @@ def main() -> int:
 
     _install_playwright_js_dialog_handler(page)
 
-    _leaf = f"{mobile_num}_{date.today().strftime('%d%m%Y')}"
+    _leaf = f"{mobile_num}_{date.today().strftime('%d%m%y')}"
     logger.info(
         "Saving under ocr_output/%s/%s/ as {mobile}_{Report_Name}.pdf (default when downloads_dir omitted).",
         DEALER_ID,

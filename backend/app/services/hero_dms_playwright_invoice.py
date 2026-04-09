@@ -401,10 +401,21 @@ _JS_MY_ORDERS_JQGRID_ROWS = """() => {
             if (tr.classList.contains('jqgfirstrow')) continue;
             if (!vis(tr)) continue;
             const row = { status: '', invoice: '', order: '', raw: (tr.innerText || '').trim() };
-            /** 1) Canonical Invoice# — try ``td[role=gridcell][id*=_l_Invoice]`` then id-only fallback.
-             *  Skip vis() on the td: wide grids scroll columns offscreen, giving zero-width rects. */
-            const invTd = tr.querySelector('td[role="gridcell"][id*="_l_Invoice"]')
-                || tr.querySelector('td[id*="_l_Invoice__"]');
+            /** 1) Canonical Invoice# — id-based selectors; skip vis() because wide
+             *  grids scroll columns offscreen giving zero-width bounding rects.
+             *  Prefer ``_l_Invoice__`` (double-underscore, the # column) to avoid
+             *  ``_l_Invoice_Date`` which shares the ``_l_Invoice`` substring. */
+            const invTd = tr.querySelector('td[id$="_l_Invoice__"]')
+                || tr.querySelector('td[id*="_l_Invoice__"]')
+                || (() => {
+                    const cands = tr.querySelectorAll('td[id*="_l_Invoice"]');
+                    for (const c of cands) {
+                        const cid = (c.getAttribute('id') || '');
+                        if (cid.includes('_Date') || cid.includes('_Dt')) continue;
+                        return c;
+                    }
+                    return null;
+                })();
             if (invTd) {
                 const tit = (invTd.getAttribute('title') || '').trim();
                 const tx = (invTd.textContent || '').trim();
@@ -412,12 +423,6 @@ _JS_MY_ORDERS_JQGRID_ROWS = """() => {
                     row.invoice = tit;
                 } else if (tx && !looksLikeDateTime(tx)) {
                     row.invoice = tx;
-                } else if (tx && looksLikeDateTime(tx)) {
-                    const withTitle = invTd.querySelector('[title]');
-                    if (withTitle) {
-                        const tt = (withTitle.getAttribute('title') || '').trim();
-                        if (tt && !looksLikeDateTime(tt)) row.invoice = tt;
-                    }
                 }
             }
             /** 2) Order# — input first, then ``td[id*=_l_Order_Number]`` id fallback. */
@@ -4092,7 +4097,7 @@ def _mobile_digits_10(mobile: str) -> str:
 
 
 def _default_run_report_downloads_dir(mobile: str, *, dealer_id: int | None = None) -> Path:
-    """``Uploaded scans/{dealer_id}/{mobile10}_{ddmmYYYY}/`` — same leaf as Add Sales / pre-OCR."""
+    """``Uploaded scans/{dealer_id}/{mobile10}_{ddmmyy}/`` — same leaf as Add Sales / pre-OCR."""
     did = int(dealer_id) if dealer_id is not None else int(DEALER_ID)
     return get_uploaded_scans_sale_folder(did, mobile)
 
@@ -4222,7 +4227,7 @@ def print_hero_dms_forms(
     ``report_names`` to run a different set or order.
 
     When ``downloads_dir`` is omitted, files go under
-    ``Uploaded scans/{dealer_id}/{mobile}_{ddmmYYYY}/`` (see ``get_uploaded_scans_sale_folder`` and ``downloads_dealer_id``).
+    ``Uploaded scans/{dealer_id}/{mobile}_{ddmmyy}/`` (see ``get_uploaded_scans_sale_folder`` and ``downloads_dealer_id``).
     Each file is saved as ``{mobile}_{Report Name}.pdf`` (spaces in the report title become underscores).
 
     When ``execution_log_path`` is set (Playwright DMS ``Playwright_DMS_*.txt``), appends a

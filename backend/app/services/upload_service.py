@@ -3,7 +3,7 @@ from pathlib import Path
 
 from fastapi import UploadFile
 
-from app.config import get_uploads_dir
+from app.config import get_uploaded_scans_sale_subfolder_leaf, get_uploads_dir
 
 # ai_reader_queue disabled; extraction runs directly after upload (Option 1)
 
@@ -32,9 +32,8 @@ class UploadService:
         return True, None
 
     def get_subdir_name_mobile(self, mobile: str) -> str:
-        digits = "".join(c for c in mobile if c.isdigit())
-        ddmmyy = datetime.now().strftime("%d%m%y")
-        return f"{digits}_{ddmmyy}"
+        # Same leaf as get_uploaded_scans_sale_folder / DMS report downloads (ddmmyy, last 10 digits).
+        return get_uploaded_scans_sale_subfolder_leaf(mobile)
 
     def _unique_path(self, base_dir: Path, filename: str) -> Path:
         target = base_dir / Path(filename).name

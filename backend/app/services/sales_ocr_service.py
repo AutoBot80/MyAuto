@@ -48,7 +48,7 @@ def _safe_output_basename(subfolder: str, filename: str) -> str:
 
 
 def _ocr_subfolder_path(output_dir: Path, subfolder: str) -> Path:
-    """Path to per-customer subfolder under ocr_output: ocr_output/mobile_ddmmyyyy/."""
+    """Path to per-customer subfolder under ocr_output: ocr_output/mobile_ddmmyy/."""
     return output_dir / _safe_subfolder_name(subfolder)
 
 

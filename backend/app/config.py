@@ -29,10 +29,10 @@ def get_uploads_dir(dealer_id: int) -> Path:
     return UPLOADS_DIR / str(dealer_id)
 
 
-def get_uploaded_scans_sale_folder(dealer_id: int, mobile: str) -> Path:
+def get_uploaded_scans_sale_subfolder_leaf(mobile: str) -> str:
     """
-    Per-sale folder under **Uploaded scans**, same leaf convention as Add Sales / OCR:
-    ``Uploaded scans/{dealer_id}/{10-digit-mobile}_{ddmmyyyy}/``.
+    Leaf directory name for a sale: ``{10-digit-mobile}_{ddmmyy}``.
+    Must stay in sync with **get_uploaded_scans_sale_folder** and **UploadService** scans-v2 paths.
     """
     dig = re.sub(r"\D", "", str(mobile or ""))
     if len(dig) >= 10:
@@ -41,8 +41,15 @@ def get_uploaded_scans_sale_folder(dealer_id: int, mobile: str) -> Path:
         mob = dig.zfill(10)[:10]
     else:
         mob = "0000000000"
-    leaf = f"{mob}_{date.today().strftime('%d%m%Y')}"
-    return get_uploads_dir(int(dealer_id)) / leaf
+    return f"{mob}_{date.today().strftime('%d%m%y')}"
+
+
+def get_uploaded_scans_sale_folder(dealer_id: int, mobile: str) -> Path:
+    """
+    Per-sale folder under **Uploaded scans**, same leaf convention as Add Sales / OCR:
+    ``Uploaded scans/{dealer_id}/{10-digit-mobile}_{ddmmyy}/``.
+    """
+    return get_uploads_dir(int(dealer_id)) / get_uploaded_scans_sale_subfolder_leaf(mobile)
 
 
 def get_ocr_output_dir(dealer_id: int) -> Path:

@@ -48,6 +48,7 @@ from app.config import (
     dms_automation_is_real_siebel,
     get_ocr_output_dir,
     get_uploaded_scans_sale_folder,
+    get_uploaded_scans_sale_subfolder_leaf,
 )
 from app.services.hero_dms_shared_utilities import (
     SiebelDmsUrls,
@@ -337,9 +338,9 @@ def resolve_ocr_sale_folder_paths(
     file_location_override: str | None = None,
 ) -> tuple[str, str]:
     """
-    Per-sale OCR folder: ``ocr_output/{dealer_id}/{mobile}_{ddmmyyyy}`` (same layout as Add Sales / pre-OCR).
+    Per-sale OCR folder: ``ocr_output/{dealer_id}/{mobile}_{ddmmyy}`` (same layout as Add Sales / pre-OCR).
 
-    Leaf directory: ``dms_values['subfolder']`` when set, else ``{10-digit mobile}_{today as ddmmyyyy}``.
+    Leaf directory: ``dms_values['subfolder']`` when set, else ``{10-digit mobile}_{today as ddmmyy}`` (see **get_uploaded_scans_sale_subfolder_leaf**).
     Returns ``(customer_master.file_location, sales_master.file_location)`` as posix paths; the latter is ≤128 chars.
     Optional ``file_location_override`` is a full path, or a single segment treated as the leaf under the dealer OCR dir.
     """
@@ -357,14 +358,7 @@ def resolve_ocr_sale_folder_paths(
     else:
         leaf = (dv.get("subfolder") or "").strip()
         if not leaf:
-            dig = re.sub(r"\D", "", str(dv.get("mobile_phone") or ""))
-            if len(dig) >= 10:
-                mob = dig[-10:]
-            elif dig:
-                mob = dig.zfill(10)[:10]
-            else:
-                mob = "0000000000"
-            leaf = f"{mob}_{date.today().strftime('%d%m%Y')}"
+            leaf = get_uploaded_scans_sale_subfolder_leaf(str(dv.get("mobile_phone") or ""))
         safe_leaf = _safe_subfolder_name(leaf)
         full_path = (get_ocr_output_dir(did) / safe_leaf).resolve().as_posix()
     sales_loc = _sales_file_location_varchar128(full_path, did, safe_leaf)
@@ -1634,7 +1628,7 @@ def insert_dms_masters_from_siebel_scrape(
     Requires name, mobile, and Aadhar last-4 derivable from ``dms_values`` and/or ``collated_customer_fields``.
 
     ``customer_master.file_location`` / ``sales_master.file_location`` are set to the per-sale OCR folder
-    ``ocr_output/{dealer_id}/{mobile}_{ddmmyyyy}`` (see ``resolve_ocr_sale_folder_paths``), unless
+    ``ocr_output/{dealer_id}/{mobile}_{ddmmyy}`` (see ``resolve_ocr_sale_folder_paths``), unless
     ``file_location`` overrides (full path or leaf segment).
 
     Returns ``(customer_id, vehicle_id, sales_id)``.
