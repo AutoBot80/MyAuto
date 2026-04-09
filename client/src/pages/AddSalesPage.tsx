@@ -437,9 +437,10 @@ export function AddSalesPage({
       setGenerateInsuranceReason(null);
       return;
     }
-    const veh = normalizeVehicleDetails(extractedVehicle) ?? extractedVehicle;
-    const ch = (veh?.frame_no ?? "").trim();
-    const eng = (veh?.engine_no ?? "").trim();
+    const dmsVeh = normalizeVehicleDetails(dmsScrapedVehicle) ?? dmsScrapedVehicle;
+    const ocrVeh = normalizeVehicleDetails(extractedVehicle) ?? extractedVehicle;
+    const ch = (dmsVeh?.frame_no ?? ocrVeh?.frame_no ?? "").trim();
+    const eng = (dmsVeh?.engine_no ?? ocrVeh?.engine_no ?? "").trim();
     const mob = mobile.trim();
     if (!ch || !eng || !mob) {
       setCreateInvoiceEligibilityLoading(false);
@@ -480,7 +481,7 @@ export function AddSalesPage({
     } finally {
       setCreateInvoiceEligibilityLoading(false);
     }
-  }, [submitInfoActionsComplete, mobile, extractedVehicle]);
+  }, [submitInfoActionsComplete, mobile, extractedVehicle, dmsScrapedVehicle]);
 
   useEffect(() => {
     void refreshCreateInvoiceEligibility();
