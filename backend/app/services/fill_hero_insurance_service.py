@@ -300,78 +300,6 @@ def _kyc_local_scan_paths_from_values(values: dict | None) -> list[str] | None:
     return [str(x) for x in raw[:3]]
 
 
-# #region agent log
-_DEBUG_INSURER_TAB_NDJSON = Path(__file__).resolve().parents[3] / "debug-d1a375.log"
-
-
-def _dbg_kyc_insurer_tab_ndjson(
-    hypothesis_id: str, location: str, message: str, data: dict[str, Any]
-) -> None:
-    try:
-        payload: dict[str, Any] = {
-            "sessionId": "d1a375",
-            "hypothesisId": hypothesis_id,
-            "location": location,
-            "message": message,
-            "data": data,
-            "timestamp": int(time.time() * 1000),
-        }
-        with open(_DEBUG_INSURER_TAB_NDJSON, "a", encoding="utf-8") as _df:
-            _df.write(json.dumps(payload, ensure_ascii=False) + "\n")
-    except Exception:
-        pass
-
-
-def _dbg_kyc_focus_snapshot(kyc_fr, page) -> dict[str, Any]:
-    snap: dict[str, Any] = {}
-    try:
-        snap["kyc_is_child"] = kyc_fr != page.main_frame
-    except Exception:
-        snap["kyc_is_child"] = None
-    try:
-        snap["in_kyc_frame"] = kyc_fr.evaluate(
-            """() => {
-              const vis = document.visibilityState;
-              const hf = document.hasFocus();
-              const a = document.activeElement;
-              let active = null;
-              if (a) {
-                active = {
-                  tag: (a.tagName || '').toLowerCase(),
-                  id: (a.id || '').slice(0, 96),
-                  nm: (a.name || '').slice(0, 96),
-                  role: String((a.getAttribute && a.getAttribute('role')) || '').slice(0, 48)
-                };
-              }
-              return { doc_visibilityState: vis, doc_hasFocus: hf, active: active };
-            }"""
-        )
-    except Exception as exc:
-        snap["in_kyc_frame_err"] = str(exc)[:120]
-    try:
-        snap["in_main_frame"] = page.main_frame.evaluate(
-            """() => {
-              const vis = document.visibilityState;
-              const hf = document.hasFocus();
-              const a = document.activeElement;
-              let active = null;
-              if (a) {
-                active = {
-                  tag: (a.tagName || '').toLowerCase(),
-                  id: (a.id || '').slice(0, 96),
-                  nm: (a.name || '').slice(0, 96)
-                };
-              }
-              return { doc_visibilityState: vis, doc_hasFocus: hf, active: active };
-            }"""
-        )
-    except Exception as exc:
-        snap["in_main_err"] = str(exc)[:120]
-    return snap
-
-
-# #endregion
-
 # Native form submit for MISP partner login (in addition to button clicks).
 _REQUEST_SUBMIT_PARTNER_PASSWORD_FORM_JS = """() => {
     const forms = document.querySelectorAll('form');
@@ -725,14 +653,6 @@ def _kyc_simulate_tab_away_and_back(
         "NOTE",
         "KYC: simulated tab away/back (temporary about:blank tab) to finalize insurer visibility for MISP.",
     )
-    # #region agent log
-    _dbg_kyc_insurer_tab_ndjson(
-        "H8",
-        "_kyc_simulate_tab_away_and_back:after",
-        "restored KYC tab after temp tab",
-        _dbg_kyc_focus_snapshot(_kyc_preferred_kyc_frame(page), page),
-    )
-    # #endregion
 
 
 def _hero_insurance_kyc_nav_after_insurer_commit(
@@ -2773,14 +2693,6 @@ def _kyc_aspnet_signal_insurer_committed(kyc_fr, page) -> None:
         )
     except Exception:
         pass
-    # #region agent log
-    _dbg_kyc_insurer_tab_ndjson(
-        "H6",
-        "_kyc_aspnet_signal_insurer_committed:after",
-        "post change events (before corner body blur in caller)",
-        {**commit_report, **_dbg_kyc_focus_snapshot(kyc_fr, page)},
-    )
-    # #endregion
 
 
 def _kyc_tab_out_of_insurer_after_escape(page, kyc_fr) -> None:
@@ -2788,14 +2700,6 @@ def _kyc_tab_out_of_insurer_after_escape(page, kyc_fr) -> None:
     After Enter/Escape on Insurance Company, focus often stays in the combobox until the user Tabs.
     Re-focus the KYC document (iframe click when needed) then send Tab — not configurable via .env.
     """
-    # #region agent log
-    _dbg_kyc_insurer_tab_ndjson(
-        "H3",
-        "_kyc_tab_out_of_insurer_after_escape:entry",
-        "before iframe/body click and Tab",
-        _dbg_kyc_focus_snapshot(kyc_fr, page),
-    )
-    # #endregion
     try:
         if kyc_fr != page.main_frame:
             try:
@@ -2823,14 +2727,6 @@ def _kyc_tab_out_of_insurer_after_escape(page, kyc_fr) -> None:
         except Exception:
             pass
         _t(page, 120)
-    # #region agent log
-    _dbg_kyc_insurer_tab_ndjson(
-        "H5",
-        "_kyc_tab_out_of_insurer_after_escape:exit",
-        "after Enter blur and 2x Tab",
-        _dbg_kyc_focus_snapshot(kyc_fr, page),
-    )
-    # #endregion
 
 
 def _kyc_fill_mobile_digits_in_frame(kyc_fr, digits: str, *, timeout_ms: int) -> bool:
@@ -3980,22 +3876,6 @@ def _fill_kyc_ekyc_keyboard_sop(
                 winning = strat
                 break
 
-    # #region agent log
-    _dbg_kyc_insurer_tab_ndjson(
-        "H1",
-        "fill_kyc_ekyc_keyboard_sop:after_insurer_strategies",
-        "dom_ok matched winning",
-        {
-            "dom_ok": bool(dom_ok),
-            "matched": bool(matched),
-            "winning": winning,
-            "type_prefer_skip_dom": bool(type_prefer_skip_dom),
-            "will_skip_keyboard_and_maybe_tab_out": bool(dom_ok),
-            **_dbg_kyc_focus_snapshot(kyc_fr, page),
-        },
-    )
-    # #endregion
-
     if not dom_ok and not matched:
         return (
             "KYC keyboard SOP: could not match insurer after typing and ArrowDown. "
@@ -4053,18 +3933,6 @@ def _fill_kyc_ekyc_keyboard_sop(
         _kyc_aspnet_signal_insurer_committed(kyc_fr, page)
         _kyc_force_blur_insurance_company_dropdown(kyc_fr)
         _t(page, 80)
-    # #region agent log
-    _dbg_kyc_insurer_tab_ndjson(
-        "H1",
-        "fill_kyc_ekyc_keyboard_sop:before_nav_after_insurer",
-        "pre _hero_insurance_kyc_nav_after_insurer_commit",
-        {
-            "dom_ok": bool(dom_ok),
-            "keyboard_tab_out_ran": not bool(dom_ok),
-            **_dbg_kyc_focus_snapshot(kyc_fr, page),
-        },
-    )
-    # #endregion
     # Proposer/OVD are often not in the DOM until insurer is chosen.
     # eKYC keyboard SOP: use light nav — insurer path already sent Enter/Tab/Escape or DOM select_option;
     # extra Enter+Tab+tab-away duplicated commits and moved focus to KYC Partner.

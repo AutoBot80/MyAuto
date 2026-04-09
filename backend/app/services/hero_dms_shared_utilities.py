@@ -139,7 +139,7 @@ def _siebel_ist_now() -> datetime:
 
 
 def _ts_ist_iso() -> str:
-    """ISO-8601 timestamps with +05:30 for Playwright_DMS and in-flow debug JSON (IST)."""
+    """ISO-8601 timestamps with +05:30 for Playwright_DMS and operator traces (IST)."""
     return _siebel_ist_now().isoformat(timespec="milliseconds")
 
 
@@ -153,29 +153,6 @@ def _siebel_naive_datetime_as_ist(dt: datetime) -> datetime:
     if dt.tzinfo is not None:
         return dt.astimezone(_SIEBEL_TZ)
     return dt.replace(tzinfo=_SIEBEL_TZ)
-
-
-# region agent log
-def _agent_debug_log(hypothesis_id: str, location: str, message: str, data: dict) -> None:
-    """Session-scoped NDJSON debug log for runtime hypothesis validation."""
-    try:
-        payload = {
-            "sessionId": "0875fe",
-            "runId": "pre-fix",
-            "hypothesisId": hypothesis_id,
-            "location": location,
-            "message": message,
-            "data": data,
-            "timestamp": _ts_ist_iso(),
-        }
-        log_path = Path(__file__).resolve().parents[3] / "debug-0875fe.log"
-        with log_path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(payload, ensure_ascii=True) + "\n")
-    except Exception:
-        pass
-
-
-# endregion
 
 
 def _normalize_cubic_cc_digits(val: object) -> str:

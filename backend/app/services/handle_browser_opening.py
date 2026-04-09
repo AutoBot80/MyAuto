@@ -270,12 +270,6 @@ def _launch_managed_browser_for_site(
                                 pass
                             u = (page.url or "").strip()
                             if u and _playwright_page_url_matches_site_base(u, base_url):
-                                _agent_debug_browser_ndjson(
-                                    "H9",
-                                    "handle_browser_opening._launch_managed_browser_for_site",
-                                    "independent_launch_matched_multi_tab",
-                                    {"existing_count": len(existing)},
-                                )
                                 return page, channel
                         if want_host:
                             for page in existing:

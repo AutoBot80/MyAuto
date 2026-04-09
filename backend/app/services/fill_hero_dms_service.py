@@ -649,36 +649,6 @@ def _load_vehicle_master_identity(vehicle_id: int | None) -> dict[str, str]:
                 _eng, _eng_src = _coalesce_vehicle_master_engine(
                     row.get("engine"), row.get("raw_engine_num")
                 )
-                # #region agent log
-                try:
-                    _dbg = Path(__file__).resolve().parents[3] / "debug-08e634.log"
-                    with open(_dbg, "a", encoding="utf-8") as _lf:
-                        _lf.write(
-                            json.dumps(
-                                {
-                                    "sessionId": "08e634",
-                                    "hypothesisId": "H_vm_vin",
-                                    "location": "fill_hero_dms_service.py:_load_vehicle_master_identity",
-                                    "message": "vehicle_master chassis/raw merge",
-                                    "data": {
-                                        "vehicle_id": int(vehicle_id),
-                                        "len_chassis_col": len(_clean_text(row.get("chassis"))),
-                                        "len_raw_frame_col": len(_clean_text(row.get("raw_frame_num"))),
-                                        "vin_source": _vin_src,
-                                        "len_merged_vin": len(_vin),
-                                        "len_engine_col": len(_clean_text(row.get("engine"))),
-                                        "len_raw_engine_col": len(_clean_text(row.get("raw_engine_num"))),
-                                        "engine_source": _eng_src,
-                                        "len_merged_engine": len(_eng),
-                                    },
-                                    "timestamp": int(time.time() * 1000),
-                                }
-                            )
-                            + "\n"
-                        )
-                except Exception:
-                    pass
-                # #endregion
                 return {
                     "chassis": _vin,
                     "engine": _eng,
@@ -2919,9 +2889,6 @@ def Playwright_Hero_DMS_fill(
             form_trace=form_trace,
             ms_done=ms_done,
             log_vehicle_snapshot=log_vehicle_snapshot,
-            playwright_dms_execution_log_path=(
-                str(_exec_log_path) if _exec_log_path is not None else None
-            ),
         )
         if out.get("error"):
             return out
@@ -3130,9 +3097,6 @@ def Playwright_Hero_DMS_fill_subdealer_challan_order_only(
             form_trace=form_trace,
             ms_done=ms_done,
             log_vehicle_snapshot=log_vehicle_snapshot,
-            playwright_dms_execution_log_path=(
-                str(_exec_log_path) if _exec_log_path is not None else None
-            ),
         )
         if out.get("error"):
             return out

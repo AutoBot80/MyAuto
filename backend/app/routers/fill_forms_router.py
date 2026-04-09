@@ -1,9 +1,7 @@
 """POST /fill-forms: Playwright fill for DMS, Vahan, insurance (hero), Form 21/22, etc."""
 import asyncio
-import json
 import logging
 import re
-import time
 from copy import deepcopy
 from functools import partial
 from pathlib import Path
@@ -52,28 +50,6 @@ DMS_REAL_MODE_FORMS_NOT_FILLED_WARNING = (
     "Siebel automation did not complete (no contact/vehicle fill). "
     "Check backend logs and set DMS_SIEBEL_CONTENT_FRAME_SELECTOR / DMS_SIEBEL_MOBILE_ARIA_HINTS if needed."
 )
-
-
-# region agent log
-def _agent_debug_log(hypothesis_id: str, location: str, message: str, data: dict) -> None:
-    try:
-        payload = {
-            "sessionId": "0875fe",
-            "runId": "pre-fix",
-            "hypothesisId": hypothesis_id,
-            "location": location,
-            "message": message,
-            "data": data,
-            "timestamp": int(time.time() * 1000),
-        }
-        path = Path(__file__).resolve().parents[3] / "debug-0875fe.log"
-        with path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(payload, ensure_ascii=True) + "\n")
-    except Exception:
-        pass
-
-
-# endregion
 
 
 def _normalize_automation_error(raw_error: str | None) -> str | None:
@@ -428,19 +404,6 @@ async def warm_dms_browser(req: WarmDmsBrowserRequest) -> WarmDmsBrowserResponse
 @router.post("/dms", response_model=FillDmsResponse)
 async def fill_dms_only(req: FillDmsRequest) -> FillDmsResponse:
     """Run only DMS (login, enquiry, vehicle search, scrape, PDFs). Independent process."""
-    # region agent log
-    _agent_debug_log(
-        "G1",
-        "fill_forms_router.py:fill_dms_only",
-        "fill_dms_route_enter",
-        {
-            "has_staging_id": bool((req.staging_id or "").strip()),
-            "has_dms_base_url": bool((req.dms_base_url or "").strip()),
-            "has_customer_id": req.customer_id is not None,
-            "has_vehicle_id": req.vehicle_id is not None,
-        },
-    )
-    # endregion
     base_url = (req.dms_base_url or DMS_BASE_URL or "").strip()
     if not base_url:
         raise HTTPException(status_code=400, detail="dms_base_url required (or set DMS_BASE_URL)")
@@ -464,7 +427,6 @@ async def fill_dms_only(req: FillDmsRequest) -> FillDmsResponse:
         vehicle_dict,
     )
     sid_for_commit = (req.staging_id or "").strip() or None
-    exec_started = time.monotonic()
     result = await _run_playwright_work(
         partial(
             run_fill_dms_only,
@@ -483,19 +445,6 @@ async def fill_dms_only(req: FillDmsRequest) -> FillDmsResponse:
             staging_id=sid_for_commit,
         )
     )
-    # region agent log
-    _agent_debug_log(
-        "G2",
-        "fill_forms_router.py:fill_dms_only",
-        "fill_dms_route_executor_return",
-        {
-            "elapsed_ms": int((time.monotonic() - exec_started) * 1000),
-            "has_error": bool(result.get("error")),
-            "error_preview": str(result.get("error") or "")[:140],
-            "dms_mode": str(result.get("dms_automation_mode") or ""),
-        },
-    )
-    # endregion
     scraped = result.get("vehicle") or {}
     has_vehicle = _has_scraped_vehicle(scraped)
     # Real Siebel before automation, or incomplete run: do not force "no vehicle" when we never searched.

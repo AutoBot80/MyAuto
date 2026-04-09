@@ -28,7 +28,6 @@ from app.config import (
 )
 from app.services.hero_dms_shared_utilities import (
     SiebelDmsUrls,
-    _agent_debug_log,
     _click_find_go_query,
     _detect_siebel_error_popup,
     _fill_by_label_on_frame,
@@ -402,12 +401,13 @@ _JS_MY_ORDERS_JQGRID_ROWS = """() => {
             if (tr.classList.contains('jqgfirstrow')) continue;
             if (!vis(tr)) continue;
             const row = { status: '', invoice: '', order: '', raw: (tr.innerText || '').trim() };
-            /** 1) Canonical Invoice# ``td#N_s_1_l_Invoice__`` — ``title`` holds the real id; cell text may be a date. */
-            const invTd = tr.querySelector('td[role="gridcell"][id*="_l_Invoice"]');
+            /** 1) Canonical Invoice# — try ``td[role=gridcell][id*=_l_Invoice]`` then id-only fallback. */
+            const invTd = tr.querySelector('td[role="gridcell"][id*="_l_Invoice"]')
+                || tr.querySelector('td[id*="_l_Invoice__"]');
             if (invTd && vis(invTd)) {
                 const tit = (invTd.getAttribute('title') || '').trim();
                 const tx = (invTd.textContent || '').trim();
-                if (tit) {
+                if (tit && !looksLikeDateTime(tit)) {
                     row.invoice = tit;
                 } else if (tx && !looksLikeDateTime(tx)) {
                     row.invoice = tx;
@@ -419,7 +419,7 @@ _JS_MY_ORDERS_JQGRID_ROWS = """() => {
                     }
                 }
             }
-            /** 2) Order# list-control input (before generic column walk). */
+            /** 2) Order# — input first, then ``td[id*=_l_Order_Number]`` id fallback. */
             const ordInp = tr.querySelector(
                 'input[name="Order_Number"], input[name="Order Number"], '
                 + 'input[id*="Order_Number"], input[id$="_Order_Number"], '
@@ -432,13 +432,28 @@ _JS_MY_ORDERS_JQGRID_ROWS = """() => {
                     row.order = ov;
                 }
             }
+            if (!row.order) {
+                const ordTd = tr.querySelector('td[id*="_l_Order_Number"]');
+                if (ordTd) {
+                    const ot = (ordTd.getAttribute('title') || '').trim() || (ordTd.textContent || '').trim();
+                    if (ot) row.order = ot;
+                }
+            }
+            /** 3) Status — ``td[id*=_l_Status]`` id-based pick. */
+            if (!row.status) {
+                const stTd = tr.querySelector('td[id*="_l_Status"]');
+                if (stTd) {
+                    const st = (stTd.getAttribute('title') || '').trim() || (stTd.textContent || '').trim();
+                    if (st) row.status = st;
+                }
+            }
             const tds = tr.querySelectorAll('td[role="gridcell"], td');
             tds.forEach((td, i) => {
                 const txt = (td.textContent || '').trim();
                 const adb = (td.getAttribute('aria-describedby') || '').toLowerCase();
                 const cn = (colNames[i] || '').toLowerCase();
                 const key = (cn + ' ' + adb).toLowerCase();
-                if (key.includes('status') || adb.includes('status')) row.status = txt;
+                if (!row.status && (key.includes('status') || adb.includes('status'))) row.status = txt;
                 else if (
                     !row.invoice
                     && (key.includes('invoice') || adb.includes('invoice'))
@@ -466,98 +481,6 @@ _JS_MY_ORDERS_JQGRID_ROWS = """() => {
     }
     return out;
 }"""
-
-
-_JS_DUMP_MY_ORDERS_JQGRID = """() => {
-    const vis = (el) => {
-        if (!el) return false;
-        const st = window.getComputedStyle(el);
-        if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity) === 0) return false;
-        const r = el.getBoundingClientRect();
-        return r.width > 1 && r.height > 1;
-    };
-    const lines = [];
-    const tables = document.querySelectorAll('table.ui-jqgrid-btable');
-    lines.push('ui-jqgrid-btable_count=' + tables.length);
-    tables.forEach((table, ti) => {
-        lines.push('');
-        lines.push('=== table[' + ti + '] id=' + (table.id || '') + ' class=' + (table.className || '').slice(0, 120));
-        if (!vis(table)) {
-            lines.push('  (not visible — skipped body walk)');
-            return;
-        }
-        const headerRow = table.querySelector('thead tr.ui-jqgrid-labels') || table.querySelector('thead tr');
-        if (headerRow) {
-            const ths = headerRow.querySelectorAll('th');
-            lines.push('  thead th count=' + ths.length);
-            ths.forEach((th, hi) => {
-                lines.push('    th[' + hi + '] id=' + (th.id || '') + ' text=' + JSON.stringify((th.textContent || '').trim().slice(0, 200)));
-            });
-        }
-        const dataRows = table.querySelectorAll('tbody tr.jqgrow, tbody tr[role="row"]');
-        lines.push('  tbody candidate rows=' + dataRows.length);
-        let ri = 0;
-        for (const tr of dataRows) {
-            if (tr.classList.contains('jqgfirstrow')) continue;
-            lines.push('  --- tr[' + ri + '] id=' + (tr.id || '') + ' class=' + (tr.className || '').slice(0, 80));
-            lines.push('  innerText=' + JSON.stringify((tr.innerText || '').trim().slice(0, 2000)));
-            if (!vis(tr)) lines.push('  (tr not visible)');
-            const tds = tr.querySelectorAll('td[role="gridcell"], td');
-            tds.forEach((td, di) => {
-                const inp = td.querySelector('input');
-                const inv = inp ? ' input_value=' + JSON.stringify(String(inp.value || '').slice(0, 200)) : '';
-                lines.push(
-                    '    td[' + di + '] id=' + (td.id || '') +
-                    ' adb=' + JSON.stringify(td.getAttribute('aria-describedby') || '') +
-                    ' title=' + JSON.stringify((td.getAttribute('title') || '').slice(0, 200)) +
-                    ' text=' + JSON.stringify((td.textContent || '').trim().slice(0, 400)) + inv
-                );
-            });
-            ri += 1;
-        }
-    });
-    return lines.join('\\n');
-}"""
-
-
-def _dump_my_orders_jqgrid_snapshot(
-    page: Page,
-    content_frame_selector: str | None,
-    out_path: Path,
-) -> None:
-    """
-    Diagnostic: write all ``table.ui-jqgrid-btable`` markup summaries from every search root (main + iframes).
-    """
-    roots: list = []
-    try:
-        roots.extend(list(_siebel_locator_search_roots(page, content_frame_selector)))
-    except Exception:
-        pass
-    try:
-        roots.extend(list(_ordered_frames(page)))
-    except Exception:
-        pass
-    roots.append(page)
-    chunks: list[str] = []
-    chunks.append("My Orders jqGrid DOM snapshot (diagnostic)")
-    chunks.append(f"written_ist={_ts_ist_iso()}")
-    chunks.append("")
-    for i, root in enumerate(roots):
-        try:
-            u = ""
-            try:
-                u = str(getattr(root, "url", "") or "")[:400]
-            except Exception:
-                u = ""
-            chunks.append(f"--- frame[{i}] url={u!r} ---")
-            blob = root.evaluate(_JS_DUMP_MY_ORDERS_JQGRID)
-            chunks.append(blob if isinstance(blob, str) else repr(blob))
-            chunks.append("")
-        except Exception as ex:
-            chunks.append(f"--- frame[{i}] evaluate error: {ex!s} ---")
-            chunks.append("")
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text("\n".join(chunks), encoding="utf-8")
 
 
 def _my_orders_invoice_meaningful(s: str) -> bool:
@@ -902,13 +825,9 @@ def _run_vehicle_sales_my_orders_mobile_search(
     action_timeout_ms: int,
     content_frame_selector: str | None,
     note,
-    playwright_dms_log_path: Path | str | None = None,
 ) -> _MyOrdersGridSearchResult:
     """
     My Orders view: Find dropdown ``s_1_1_1_0`` → Mobile Phone# → value field → Enter → read ``ui-jqgrid-btable``.
-
-    When ``playwright_dms_log_path`` is set (path to ``Playwright_DMS_*.txt`` or any trace file), writes a
-    sibling dump file ``My_Orders_jqgrid_dump_<timestamp>.txt`` in the same directory for debugging.
     """
     _tmo = min(int(action_timeout_ms or 3000), 8000)
     root = _find_vehicle_sales_my_orders_search_root(page, content_frame_selector)
@@ -1001,15 +920,6 @@ def _run_vehicle_sales_my_orders_mobile_search(
             pass
         _safe_page_wait(page, min(2500, _tmo), log_label="after_my_orders_find_enter")
         rows = _read_my_orders_jqgrid_rows_anywhere(page, content_frame_selector)
-        if playwright_dms_log_path:
-            try:
-                _lp = Path(str(playwright_dms_log_path))
-                _stamp = datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%Y%m%d_%H%M%S")
-                _dump_path = _lp.parent / f"My_Orders_jqgrid_dump_{_stamp}.txt"
-                _dump_my_orders_jqgrid_snapshot(page, content_frame_selector, _dump_path)
-                note(f"Create Order: My Orders jqGrid DOM dump written next to Playwright log: {_dump_path!s}.")
-            except Exception as _dex:
-                note(f"Create Order: My Orders jqGrid DOM dump failed: {_dex!r}.")
         oc, po, pi = _classify_my_orders_grid_rows(rows)
         note(
             f"Create Order: My Orders grid search outcome={oc!r} rows={len(rows)} "
@@ -2463,7 +2373,6 @@ def _create_order(
     challan_comments_text: str = "",
     network_dealer_name: str = "",
     challan_network_pin: str = "",
-    playwright_dms_execution_log_path: Path | str | None = None,
 ) -> tuple[bool, str | None, dict]:
     """
     Vehicle Sales → Sales Orders flow (same frame as the ``+`` New control):
@@ -2675,7 +2584,6 @@ def _create_order(
             action_timeout_ms=action_timeout_ms,
             content_frame_selector=content_frame_selector,
             note=note,
-            playwright_dms_log_path=playwright_dms_execution_log_path,
         )
         _mo_oc = (_mos.outcome or "").strip()
         _mo_po = (_mos.primary_order or "").strip()
@@ -3224,28 +3132,6 @@ def _create_order(
 #         _fin_name = (financier_name or "").strip()
 #         _is_financed = bool(_fin_name)
 #         _fin_val = "Y" if _is_financed else "N"
-#         # #region agent log — finance branch input
-#         try:
-#             with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-#                 import json as _j_fin, time as _t_fin
-#                 _fin_token = _fin_name.lower()
-#                 _lf.write(_j_fin.dumps({
-#                     "sessionId": "08e634",
-#                     "runId": "pre-fix",
-#                     "hypothesisId": "H1_H2",
-#                     "location": "hero_dms_playwright_invoice.py:_create_order_finance_input",
-#                     "message": "Finance branch decision inputs",
-#                     "data": {
-#                         "financier_present": bool(_fin_name),
-#                         "financier_len": len(_fin_name),
-#                         "financier_token": _fin_token if _fin_token in ("", "na", "n/a", "null", "none", "-") else "other",
-#                         "finance_required_target": _fin_val,
-#                     },
-#                     "timestamp": _ts_ist_iso(),
-#                 }) + "\n")
-#         except Exception:
-#             pass
-#         # #endregion
 
 #         _fin_ok = False
 #         for root in _roots():
@@ -3272,24 +3158,6 @@ def _create_order(
 #             return False, f"Could not set Finance Required = {_fin_val}.", scraped
 #         _safe_page_wait(page, 400, log_label="after_finance_required")
 #         note(f"Create Order: set Finance Required = {_fin_val}.")
-#         # #region agent log — finance required set outcome
-#         try:
-#             with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-#                 _lf.write(_j_fin.dumps({
-#                     "sessionId": "08e634",
-#                     "runId": "pre-fix",
-#                     "hypothesisId": "H3",
-#                     "location": "hero_dms_playwright_invoice.py:_create_order_finance_required_outcome",
-#                     "message": "Finance Required set result",
-#                     "data": {
-#                         "finance_required_target": _fin_val,
-#                         "finance_required_set": bool(_fin_ok),
-#                     },
-#                     "timestamp": _ts_ist_iso(),
-#                 }) + "\n")
-#         except Exception:
-#             pass
-#         # #endregion
 
 #         if _is_financed:
 #             _fin_caps = _fin_name.upper()
@@ -3398,24 +3266,6 @@ def _create_order(
 #                 return False, f"Could not set Hypothecation = {_hyp_val}.", scraped
 #             _safe_page_wait(page, 400, log_label="after_hypothecation")
 #             note(f"Create Order: set Hypothecation = {_hyp_val}.")
-#             # #region agent log — hypothecation set outcome
-#             try:
-#                 with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-#                     _lf.write(_j_fin.dumps({
-#                         "sessionId": "08e634",
-#                         "runId": "pre-fix",
-#                         "hypothesisId": "H3",
-#                         "location": "hero_dms_playwright_invoice.py:_create_order_hypothecation_outcome",
-#                         "message": "Hypothecation set result",
-#                         "data": {
-#                             "hypothecation_target": _hyp_val,
-#                             "hypothecation_set": bool(_hyp_ok),
-#                         },
-#                         "timestamp": _ts_ist_iso(),
-#                     }) + "\n")
-#             except Exception:
-#                 pass
-#             # #endregion
 #         else:
 #             note("Create Order: financier empty — skipped Financier and Hypothecation fields.")
         if _locked_root is not None:
@@ -3438,17 +3288,6 @@ def _create_order(
             _contact_pin_rb = ""
             _contact_roots = [_locked_root] if _locked_root is not None else list(_roots())
 
-            # #region agent log — F2 applet context
-            try:
-                _lr_url = getattr(_locked_root, 'url', None) if _locked_root else None
-                _lr_type = type(_locked_root).__name__ if _locked_root else "None"
-                _cr_count = len(_contact_roots)
-                with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-                    import json as _j_f2, time as _t_f2
-                    _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H1_H4","location":"hero_dms_playwright_invoice.py:create_order_f2_start","message":"F2 applet context","data":{"locked_root_type":_lr_type,"locked_root_url":(_lr_url or "")[:150],"contact_roots_count":_cr_count},"timestamp":_ts_ist_iso()}) + "\n")
-            except Exception:
-                pass
-            # #endregion
 
             for root in _contact_roots:
                 try:
@@ -3457,25 +3296,8 @@ def _create_order(
                     if fld.count() <= 0 or not fld.is_visible(timeout=700):
                         fld = root.locator("input[aria-label='Contact Last Name']").first
                     if fld.count() <= 0 or not fld.is_visible(timeout=700):
-                        # #region agent log — CLS not found in root
-                        try:
-                            with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-                                _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H10","location":"hero_dms_playwright_invoice.py:create_order_cls_miss","message":"CLS field not found via aria-label CSS selector","data":{"root_url":getattr(root,'url','?')[:120]},"timestamp":_ts_ist_iso()}) + "\n")
-                        except Exception:
-                            pass
-                        # #endregion
                         continue
     
-                    # #region agent log — CLS found, about to click + F2
-                    try:
-                        _cls_aria = fld.evaluate("el => el.getAttribute('aria-label') || ''")
-                        _cls_name = fld.evaluate("el => el.getAttribute('name') || ''")
-                        _cls_id = fld.evaluate("el => el.getAttribute('id') || ''")
-                        with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-                            _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H10","location":"hero_dms_playwright_invoice.py:create_order_cls_found","message":"CLS field found via aria-label CSS","data":{"aria":_cls_aria[:80],"name":_cls_name,"id":_cls_id[:40],"root_url":getattr(root,'url','?')[:120]},"timestamp":_ts_ist_iso()}) + "\n")
-                    except Exception:
-                        pass
-                    # #endregion
     
                     try:
                         fld.click(timeout=min(action_timeout_ms, 2500))
@@ -3535,13 +3357,6 @@ def _create_order(
                         except Exception:
                             _icon_clicked = False
     
-                        # #region agent log — icon click result
-                        try:
-                            with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-                                _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H11","location":"hero_dms_playwright_invoice.py:create_order_icon_handle","message":"F2 icon click via evaluate_handle","data":{"icon_clicked": _icon_clicked},"timestamp":_ts_ist_iso()}) + "\n")
-                        except Exception:
-                            pass
-                        # #endregion
     
                         if _icon_clicked:
                             _safe_page_wait(page, 1500, log_label="after_f2_icon_click")
@@ -3562,18 +3377,6 @@ def _create_order(
                     except Exception:
                         pass
     
-                    # #region agent log — focused element after applet open
-                    try:
-                        _focus_info = page.evaluate("""() => {
-                            const el = document.activeElement;
-                            if (!el) return {tag: 'none'};
-                            return {tag: el.tagName, name: el.getAttribute('name') || '', aria: (el.getAttribute('aria-label') || '').substring(0,60), val: (el.value || '').substring(0,60)};
-                        }""") or {}
-                        with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-                            _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H14","location":"hero_dms_playwright_invoice.py:create_order_applet_focus","message":"Focused element after applet open","data":_focus_info,"timestamp":_ts_ist_iso()}) + "\n")
-                    except Exception:
-                        pass
-                    # #endregion
     
                     # Determine search value: use Contact ID if available (keeps default "Contact Id" dropdown),
                     # otherwise fall back to mobile with dropdown change attempt.
@@ -3625,13 +3428,6 @@ def _create_order(
                     except Exception:
                         pass
     
-                    # #region agent log — focus after Tab to value field
-                    try:
-                        with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-                            _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H18","location":"hero_dms_playwright_invoice.py:create_order_val_focus","message":"Focus after Tab to value field","data":{**_val_focus, "search_type": _search_type, "search_val": _search_val},"timestamp":_ts_ist_iso()}) + "\n")
-                    except Exception:
-                        pass
-                    # #endregion
     
                     # Value field: fill via Playwright locator (page.keyboard.type doesn't work on this Siebel field).
                     _val_filled = False
@@ -3684,13 +3480,6 @@ def _create_order(
                             except Exception:
                                 continue
     
-                    # #region agent log — value field fill result
-                    try:
-                        with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-                            _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H20","location":"hero_dms_playwright_invoice.py:create_order_val_fill","message":"Value field fill result","data":{"typed": _search_val, "readback": _val_readback, "filled": _val_filled, "strategy": _fill_strategy},"timestamp":_ts_ist_iso()}) + "\n")
-                    except Exception:
-                        pass
-                    # #endregion
     
                     note(f"Create Order: applet value field fill={_val_filled}, readback='{_val_readback}'.")
     
@@ -3722,35 +3511,6 @@ def _create_order(
                     _safe_page_wait(page, 1200, log_label="after_contact_pick_query")
                     note(f"Create Order: applet query triggered (button={_qry_clicked}).")
     
-                    # #region agent log — post-query applet state
-                    try:
-                        _pq_data = {}
-                        for _sr in _fresh_roots:
-                            try:
-                                _pq_data = _sr.evaluate("""() => {
-                                    const rows = Array.from(document.querySelectorAll("tr")).slice(0, 20);
-                                    const cells = [];
-                                    for (const tr of rows) {
-                                        for (const c of tr.querySelectorAll("td, th, a, span")) {
-                                            const t = (c.textContent || '').trim();
-                                            if (t && t.length <= 50 && t.length > 1) cells.push(t);
-                                            if (cells.length >= 20) break;
-                                        }
-                                        if (cells.length >= 20) break;
-                                    }
-                                    const ok = document.querySelector("button[name$='_315_0'], a[name$='_315_0']");
-                                    return {row_sample: cells.join(' | ').substring(0, 300), ok_visible: ok ? window.getComputedStyle(ok).display !== 'none' : null};
-                                }""")
-                                if _pq_data.get("row_sample"):
-                                    _pq_data["frame_url"] = getattr(_sr, 'url', '?')[:120]
-                                    break
-                            except Exception:
-                                continue
-                        with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-                            _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H13","location":"hero_dms_playwright_invoice.py:create_order_post_query","message":"Post-query applet state","data":_pq_data,"timestamp":_ts_ist_iso()}) + "\n")
-                    except Exception:
-                        pass
-                    # #endregion
     
                     # Match row by first name: find "Contact First Name" column index from header, then match data rows.
                     _row_ok = False
@@ -3817,13 +3577,6 @@ def _create_order(
                                 _first_need,
                             )
     
-                            # #region agent log — row match result
-                            try:
-                                with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-                                    _lf.write(_j_f2.dumps({"sessionId":"08e634","hypothesisId":"H15","location":"hero_dms_playwright_invoice.py:create_order_row_match","message":"Row match result","data":_result or {},"timestamp":_ts_ist_iso()}) + "\n")
-                            except Exception:
-                                pass
-                            # #endregion
     
                             if _result and _result.get("clicked"):
                                 _row_ok = True
@@ -3851,24 +3604,6 @@ def _create_order(
     
                     # OK button — search fresh roots, fallback Enter
                     _ok_clicked = False
-                    # #region agent log — applet ok precheck
-                    try:
-                        with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-                            _lf.write(_j_f2.dumps({
-                                "sessionId": "08e634",
-                                "runId": "pre-fix",
-                                "hypothesisId": "H4_H5",
-                                "location": "hero_dms_playwright_invoice.py:create_order_applet_ok_precheck",
-                                "message": "Preparing to click applet OK",
-                                "data": {
-                                    "fresh_roots_count": len(_fresh_roots2),
-                                    "row_matched": bool(_row_ok),
-                                },
-                                "timestamp": _ts_ist_iso(),
-                            }) + "\n")
-                    except Exception:
-                        pass
-                    # #endregion
                     for r2 in _fresh_roots2:
                         try:
                             for _ok_sel in (
@@ -3932,24 +3667,6 @@ def _create_order(
                                 continue
                     if not _ok_clicked:
                         page.keyboard.press("Enter")
-                    # #region agent log — applet ok click outcome
-                    try:
-                        with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-                            _lf.write(_j_f2.dumps({
-                                "sessionId": "08e634",
-                                "runId": "pre-fix",
-                                "hypothesisId": "H4",
-                                "location": "hero_dms_playwright_invoice.py:create_order_applet_ok_outcome",
-                                "message": "Applet OK click outcome",
-                                "data": {
-                                    "ok_button_clicked": bool(_ok_clicked),
-                                    "enter_fallback_used": not bool(_ok_clicked),
-                                },
-                                "timestamp": _ts_ist_iso(),
-                            }) + "\n")
-                    except Exception:
-                        pass
-                    # #endregion
     
                     # Poll for Siebel error popup after OK — applet closes, focus
                     # shifts to main form, and error may render with a delay.
@@ -3987,70 +3704,16 @@ def _create_order(
                             continue
                     note(f"Create Order: post-contact applet readback — Pincode={_pin_rb!r}.")
                     _contact_pin_rb = (_pin_rb or "").strip()
-                    # #region agent log — pincode readback outcome
-                    try:
-                        with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-                            _lf.write(_j_f2.dumps({
-                                "sessionId": "08e634",
-                                "runId": "pre-fix",
-                                "hypothesisId": "H6_H7",
-                                "location": "hero_dms_playwright_invoice.py:create_order_pincode_readback",
-                                "message": "Pincode readback after contact applet",
-                                "data": {
-                                    "pincode_non_empty": bool((_pin_rb or "").strip()),
-                                    "pincode_len": len((_pin_rb or "").strip()),
-                                },
-                                "timestamp": _ts_ist_iso(),
-                            }) + "\n")
-                    except Exception:
-                        pass
-                    # #endregion
                     if not _contact_pin_rb:
                         _applet_err = "Contact applet completed but Pincode stayed empty after selection."
                         continue
                     _applet_done = True
-                    # #region agent log — applet completion flag
-                    try:
-                        with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-                            _lf.write(_j_f2.dumps({
-                                "sessionId": "08e634",
-                                "runId": "pre-fix",
-                                "hypothesisId": "H7",
-                                "location": "hero_dms_playwright_invoice.py:create_order_applet_done_flag",
-                                "message": "Applet flow completion flag set",
-                                "data": {
-                                    "applet_done": True,
-                                    "pincode_non_empty": bool((_pin_rb or "").strip()),
-                                },
-                                "timestamp": _ts_ist_iso(),
-                            }) + "\n")
-                    except Exception:
-                        pass
-                    # #endregion
                     break
                 except Exception:
                     continue
             if not _applet_done:
                 return False, f"Could not complete Contact Last Name F2 applet flow. {_applet_err}".strip(), scraped
 
-        # #region agent log — pre-save pincode guard
-        try:
-            with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-                _lf.write(_j_f2.dumps({
-                    "sessionId": "08e634",
-                    "runId": "pre-fix",
-                    "hypothesisId": "H8",
-                    "location": "hero_dms_playwright_invoice.py:create_order_pre_save_pin_guard",
-                    "message": "Pre-save pincode guard check",
-                    "data": {
-                        "pincode_non_empty": bool(_contact_pin_rb),
-                        "pincode_len": len(_contact_pin_rb),
-                    },
-                    "timestamp": _ts_ist_iso(),
-                }) + "\n")
-        except Exception:
-            pass
-        # #endregion
         if not _contact_pin_rb:
             return False, "Pincode is empty after contact selection; skipping save (Ctrl+S).", scraped
 
@@ -4642,7 +4305,6 @@ def print_hero_dms_forms(
         action_timeout_ms=action_timeout_ms,
         content_frame_selector=content_frame_selector,
         note=_note,
-        playwright_dms_log_path=execution_log_path,
     )
     _mo_po = (_mos.primary_order or "").strip()
     _mo_pi = (_mos.primary_invoice or "").strip()
@@ -4965,7 +4627,6 @@ def prepare_order(
     form_trace: Callable[..., None] | None,
     ms_done: Callable[[str], None] | None,
     log_vehicle_snapshot: Callable[[str], None],
-    playwright_dms_execution_log_path: Path | str | None = None,
 ) -> dict:
     """
     Generate Booking + ``_create_order`` + merge scrape into ``out[\"vehicle\"]``.
@@ -5032,7 +4693,6 @@ def prepare_order(
         challan_network_pin=str(
             dms_values.get("network_pin_code") or dms_values.get("pin_code") or ""
         ).strip(),
-        playwright_dms_execution_log_path=playwright_dms_execution_log_path,
     )
     if not ok_order:
         step("Stopped: create_order flow failed.")

@@ -1,0 +1,170 @@
+My Orders jqGrid DOM snapshot (diagnostic)
+written_ist=2026-04-09T20:16:27.665+05:30
+
+--- frame[0] url='' ---
+--- frame[0] evaluate error: 'FrameLocator' object has no attribute 'evaluate' ---
+
+--- frame[1] url='' ---
+--- frame[1] evaluate error: 'FrameLocator' object has no attribute 'evaluate' ---
+
+--- frame[2] url='' ---
+--- frame[2] evaluate error: 'FrameLocator' object has no attribute 'evaluate' ---
+
+--- frame[3] url='' ---
+--- frame[3] evaluate error: 'FrameLocator' object has no attribute 'evaluate' ---
+
+--- frame[4] url='' ---
+--- frame[4] evaluate error: 'FrameLocator' object has no attribute 'evaluate' ---
+
+--- frame[5] url='' ---
+--- frame[5] evaluate error: 'FrameLocator' object has no attribute 'evaluate' ---
+
+--- frame[6] url='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=Order+Entry+-+My+Orders+View+(Sales)&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=HMCL+Perf+Order+Entry+-+Order+List+Applet+Sales&SWERowId0=2-1K5JYQIZ' ---
+ui-jqgrid-btable_count=2
+
+=== table[0] id=s_1007_l class=ui-jqgrid-btable
+  tbody candidate rows=2
+  --- tr[0] id=1 class=ui-widget-content jqgrow ui-row-ltr ui-state-highlight
+  innerText="8905969604"
+    td[0] id= adb="" title="" text="" input_value="on"
+    td[1] id=1_s_1007_l_CDIcon adb="" title="Show Details" text="Show Details"
+    td[2] id=1_s_1007_l_title adb="" title="8905969604" text="8905969604"
+
+=== table[1] id=s_1_l class=ui-jqgrid-btable
+  tbody candidate rows=2
+  --- tr[0] id=1 class=ui-widget-content jqgrow ui-row-ltr ui-state-highlight
+  innerText="09/04/2026 02:13:45 PM\t09/04/2026 06:19:44 PM\t11870BD26S85\tInvoiced\tIndividual\tAJAY\tFAUJDAR\t11870-02-SVSO-0426-88\t \t8905969604\t\tRs.12,334.00\t \t \tSPLENDOR +\tHSPUNIRSCFI\tBLA\tGopal Choudhary\tRs.77,666.00\t \t \tHC\t \t \t \t\n\t \t \tWalk-In"
+    td[0] id= adb="" title="" text="" input_value="on"
+    td[1] id=1_s_1_l_Order_Date adb="" title="09/04/2026 02:13:45 PM" text="09/04/2026 02:13:45 PM"
+    td[2] id=1_s_1_l_Invoice_Date adb="" title="09/04/2026 06:19:44 PM" text="09/04/2026 06:19:44 PM"
+    td[3] id=1_s_1_l_Invoice__ adb="" title="11870BD26S85" text="11870BD26S85"
+    td[4] id=1_s_1_l_Status adb="" title="Invoiced" text="Invoiced"
+    td[5] id=1_s_1_l_Customer_Category adb="" title="Individual" text="Individual"
+    td[6] id=1_s_1_l_Contact_First_Name adb="" title="AJAY" text="AJAY"
+    td[7] id=1_s_1_l_Contact_Last_Name adb="" title="FAUJDAR" text="FAUJDAR"
+    td[8] id=1_s_1_l_Order_Number adb="" title="11870-02-SVSO-0426-88" text="11870-02-SVSO-0426-88"
+    td[9] id=1_s_1_l_LSO_Number adb="" title="" text=""
+    td[10] id=1_s_1_l_Mobile_Phone__ adb="" title="8905969604" text="8905969604"
+    td[11] id=1_s_1_l_Account adb="" title="" text=""
+    td[12] id=1_s_1_l_HMCL_Contact_Balance_Amt adb="" title="Rs.12,334.00" text="Rs.12,334.00"
+    td[13] id=1_s_1_l_HMCL_Account_Balance_Amt adb="" title="" text=""
+    td[14] id=1_s_1_l_HHML_RTO_ChkLst adb="" title="" text=""
+    td[15] id=1_s_1_l_Model adb="" title="SPLENDOR +" text="SPLENDOR +"
+    td[16] id=1_s_1_l_Variant adb="" title="HSPUNIRSCFI" text="HSPUNIRSCFI"
+    td[17] id=1_s_1_l_Color adb="" title="BLA" text="BLA"
+    td[18] id=1_s_1_l_HHML_Responsible_DSE adb="" title="Gopal Choudhary" text="Gopal Choudhary"
+    td[19] id=1_s_1_l_Total_Cost adb="" title="Rs.77,666.00" text="Rs.77,666.00"
+    td[20] id=1_s_1_l_HMCL_Transaction_Id adb="" title="" text=""
+    td[21] id=1_s_1_l_HHML_Reason adb="" title="" text=""
+    td[22] id=1_s_1_l_HMCL_SD_UID adb="" title="HC" text="HC"
+    td[23] id=1_s_1_l_Invoice_Cancellation_Reason adb="" title="" text=""
+    td[24] id=1_s_1_l_Campaign_Name adb="" title="" text=""
+    td[25] id=1_s_1_l_Campaign_Type adb="" title="" text=""
+    td[26] id=1_s_1_l_Campaign_Remarks adb="" title="" text=""
+    td[27] id=1_s_1_l_HMCL_Campaign_Discount adb="" title="" text=""
+    td[28] id=1_s_1_l_HHML_Finance_ChkLst adb="" title="" text=""
+    td[29] id=1_s_1_l_HHML_Enquiry_Source adb="" title="Walk-In" text="Walk-In"
+    td[30] id=1_s_1_l_HMCL_Asli_Hero_Code adb="" title="" text=""
+    td[31] id=1_s_1_l_HMCL_Asli_Hero_Name adb="" title="" text=""
+    td[32] id=1_s_1_l_HMCL_Lead_Id adb="" title="" text=""
+    td[33] id=1_s_1_l_HMCL_Lead_Source adb="" title="" text=""
+
+--- frame[7] url='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=Order+Entry+-+My+Orders+View+(Sales)&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=HMCL+Perf+Order+Entry+-+Order+List+Applet+Sales&SWERowId0=2-1K5JYQIZ' ---
+ui-jqgrid-btable_count=2
+
+=== table[0] id=s_1007_l class=ui-jqgrid-btable
+  tbody candidate rows=2
+  --- tr[0] id=1 class=ui-widget-content jqgrow ui-row-ltr ui-state-highlight
+  innerText="8905969604"
+    td[0] id= adb="" title="" text="" input_value="on"
+    td[1] id=1_s_1007_l_CDIcon adb="" title="Show Details" text="Show Details"
+    td[2] id=1_s_1007_l_title adb="" title="8905969604" text="8905969604"
+
+=== table[1] id=s_1_l class=ui-jqgrid-btable
+  tbody candidate rows=2
+  --- tr[0] id=1 class=ui-widget-content jqgrow ui-row-ltr ui-state-highlight
+  innerText="09/04/2026 02:13:45 PM\t09/04/2026 06:19:44 PM\t11870BD26S85\tInvoiced\tIndividual\tAJAY\tFAUJDAR\t11870-02-SVSO-0426-88\t \t8905969604\t\tRs.12,334.00\t \t \tSPLENDOR +\tHSPUNIRSCFI\tBLA\tGopal Choudhary\tRs.77,666.00\t \t \tHC\t \t \t \t\n\t \t \tWalk-In"
+    td[0] id= adb="" title="" text="" input_value="on"
+    td[1] id=1_s_1_l_Order_Date adb="" title="09/04/2026 02:13:45 PM" text="09/04/2026 02:13:45 PM"
+    td[2] id=1_s_1_l_Invoice_Date adb="" title="09/04/2026 06:19:44 PM" text="09/04/2026 06:19:44 PM"
+    td[3] id=1_s_1_l_Invoice__ adb="" title="11870BD26S85" text="11870BD26S85"
+    td[4] id=1_s_1_l_Status adb="" title="Invoiced" text="Invoiced"
+    td[5] id=1_s_1_l_Customer_Category adb="" title="Individual" text="Individual"
+    td[6] id=1_s_1_l_Contact_First_Name adb="" title="AJAY" text="AJAY"
+    td[7] id=1_s_1_l_Contact_Last_Name adb="" title="FAUJDAR" text="FAUJDAR"
+    td[8] id=1_s_1_l_Order_Number adb="" title="11870-02-SVSO-0426-88" text="11870-02-SVSO-0426-88"
+    td[9] id=1_s_1_l_LSO_Number adb="" title="" text=""
+    td[10] id=1_s_1_l_Mobile_Phone__ adb="" title="8905969604" text="8905969604"
+    td[11] id=1_s_1_l_Account adb="" title="" text=""
+    td[12] id=1_s_1_l_HMCL_Contact_Balance_Amt adb="" title="Rs.12,334.00" text="Rs.12,334.00"
+    td[13] id=1_s_1_l_HMCL_Account_Balance_Amt adb="" title="" text=""
+    td[14] id=1_s_1_l_HHML_RTO_ChkLst adb="" title="" text=""
+    td[15] id=1_s_1_l_Model adb="" title="SPLENDOR +" text="SPLENDOR +"
+    td[16] id=1_s_1_l_Variant adb="" title="HSPUNIRSCFI" text="HSPUNIRSCFI"
+    td[17] id=1_s_1_l_Color adb="" title="BLA" text="BLA"
+    td[18] id=1_s_1_l_HHML_Responsible_DSE adb="" title="Gopal Choudhary" text="Gopal Choudhary"
+    td[19] id=1_s_1_l_Total_Cost adb="" title="Rs.77,666.00" text="Rs.77,666.00"
+    td[20] id=1_s_1_l_HMCL_Transaction_Id adb="" title="" text=""
+    td[21] id=1_s_1_l_HHML_Reason adb="" title="" text=""
+    td[22] id=1_s_1_l_HMCL_SD_UID adb="" title="HC" text="HC"
+    td[23] id=1_s_1_l_Invoice_Cancellation_Reason adb="" title="" text=""
+    td[24] id=1_s_1_l_Campaign_Name adb="" title="" text=""
+    td[25] id=1_s_1_l_Campaign_Type adb="" title="" text=""
+    td[26] id=1_s_1_l_Campaign_Remarks adb="" title="" text=""
+    td[27] id=1_s_1_l_HMCL_Campaign_Discount adb="" title="" text=""
+    td[28] id=1_s_1_l_HHML_Finance_ChkLst adb="" title="" text=""
+    td[29] id=1_s_1_l_HHML_Enquiry_Source adb="" title="Walk-In" text="Walk-In"
+    td[30] id=1_s_1_l_HMCL_Asli_Hero_Code adb="" title="" text=""
+    td[31] id=1_s_1_l_HMCL_Asli_Hero_Name adb="" title="" text=""
+    td[32] id=1_s_1_l_HMCL_Lead_Id adb="" title="" text=""
+    td[33] id=1_s_1_l_HMCL_Lead_Source adb="" title="" text=""
+
+--- frame[8] url='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=Order+Entry+-+My+Orders+View+(Sales)&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=HMCL+Perf+Order+Entry+-+Order+List+Applet+Sales&SWERowId0=2-1K5JYQIZ' ---
+ui-jqgrid-btable_count=2
+
+=== table[0] id=s_1007_l class=ui-jqgrid-btable
+  tbody candidate rows=2
+  --- tr[0] id=1 class=ui-widget-content jqgrow ui-row-ltr ui-state-highlight
+  innerText="8905969604"
+    td[0] id= adb="" title="" text="" input_value="on"
+    td[1] id=1_s_1007_l_CDIcon adb="" title="Show Details" text="Show Details"
+    td[2] id=1_s_1007_l_title adb="" title="8905969604" text="8905969604"
+
+=== table[1] id=s_1_l class=ui-jqgrid-btable
+  tbody candidate rows=2
+  --- tr[0] id=1 class=ui-widget-content jqgrow ui-row-ltr ui-state-highlight
+  innerText="09/04/2026 02:13:45 PM\t09/04/2026 06:19:44 PM\t11870BD26S85\tInvoiced\tIndividual\tAJAY\tFAUJDAR\t11870-02-SVSO-0426-88\t \t8905969604\t\tRs.12,334.00\t \t \tSPLENDOR +\tHSPUNIRSCFI\tBLA\tGopal Choudhary\tRs.77,666.00\t \t \tHC\t \t \t \t\n\t \t \tWalk-In"
+    td[0] id= adb="" title="" text="" input_value="on"
+    td[1] id=1_s_1_l_Order_Date adb="" title="09/04/2026 02:13:45 PM" text="09/04/2026 02:13:45 PM"
+    td[2] id=1_s_1_l_Invoice_Date adb="" title="09/04/2026 06:19:44 PM" text="09/04/2026 06:19:44 PM"
+    td[3] id=1_s_1_l_Invoice__ adb="" title="11870BD26S85" text="11870BD26S85"
+    td[4] id=1_s_1_l_Status adb="" title="Invoiced" text="Invoiced"
+    td[5] id=1_s_1_l_Customer_Category adb="" title="Individual" text="Individual"
+    td[6] id=1_s_1_l_Contact_First_Name adb="" title="AJAY" text="AJAY"
+    td[7] id=1_s_1_l_Contact_Last_Name adb="" title="FAUJDAR" text="FAUJDAR"
+    td[8] id=1_s_1_l_Order_Number adb="" title="11870-02-SVSO-0426-88" text="11870-02-SVSO-0426-88"
+    td[9] id=1_s_1_l_LSO_Number adb="" title="" text=""
+    td[10] id=1_s_1_l_Mobile_Phone__ adb="" title="8905969604" text="8905969604"
+    td[11] id=1_s_1_l_Account adb="" title="" text=""
+    td[12] id=1_s_1_l_HMCL_Contact_Balance_Amt adb="" title="Rs.12,334.00" text="Rs.12,334.00"
+    td[13] id=1_s_1_l_HMCL_Account_Balance_Amt adb="" title="" text=""
+    td[14] id=1_s_1_l_HHML_RTO_ChkLst adb="" title="" text=""
+    td[15] id=1_s_1_l_Model adb="" title="SPLENDOR +" text="SPLENDOR +"
+    td[16] id=1_s_1_l_Variant adb="" title="HSPUNIRSCFI" text="HSPUNIRSCFI"
+    td[17] id=1_s_1_l_Color adb="" title="BLA" text="BLA"
+    td[18] id=1_s_1_l_HHML_Responsible_DSE adb="" title="Gopal Choudhary" text="Gopal Choudhary"
+    td[19] id=1_s_1_l_Total_Cost adb="" title="Rs.77,666.00" text="Rs.77,666.00"
+    td[20] id=1_s_1_l_HMCL_Transaction_Id adb="" title="" text=""
+    td[21] id=1_s_1_l_HHML_Reason adb="" title="" text=""
+    td[22] id=1_s_1_l_HMCL_SD_UID adb="" title="HC" text="HC"
+    td[23] id=1_s_1_l_Invoice_Cancellation_Reason adb="" title="" text=""
+    td[24] id=1_s_1_l_Campaign_Name adb="" title="" text=""
+    td[25] id=1_s_1_l_Campaign_Type adb="" title="" text=""
+    td[26] id=1_s_1_l_Campaign_Remarks adb="" title="" text=""
+    td[27] id=1_s_1_l_HMCL_Campaign_Discount adb="" title="" text=""
+    td[28] id=1_s_1_l_HHML_Finance_ChkLst adb="" title="" text=""
+    td[29] id=1_s_1_l_HHML_Enquiry_Source adb="" title="Walk-In" text="Walk-In"
+    td[30] id=1_s_1_l_HMCL_Asli_Hero_Code adb="" title="" text=""
+    td[31] id=1_s_1_l_HMCL_Asli_Hero_Name adb="" title="" text=""
+    td[32] id=1_s_1_l_HMCL_Lead_Id adb="" title="" text=""
+    td[33] id=1_s_1_l_HMCL_Lead_Source adb="" title="" text=""

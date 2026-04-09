@@ -29,7 +29,6 @@ from app.config import (
 from app.services.hero_dms_shared_utilities import (
     SiebelDmsUrls,
     _MOBILE_DOM_EVAL_JS,
-    _agent_debug_log,
     _click_find_go_query,
     _detect_siebel_error_popup,
     _fill_by_label_on_frame,
@@ -118,39 +117,6 @@ def _try_fill_mobile_and_find_in_contact_applet(
     if not (mobile or "").strip():
         return False
 
-    # #region agent log - contact find same-frame diagnostics
-    def _dbg(hypothesis_id: str, message: str, data: dict) -> None:
-        try:
-            import json as _j_dbg, time as _t_dbg
-            from pathlib import Path as _P_dbg
-            _log_path = _P_dbg(__file__).resolve().parents[3] / "debug-08e634.log"
-            with open(_log_path, "a", encoding="utf-8") as _lf_dbg:
-                _lf_dbg.write(
-                    _j_dbg.dumps(
-                        {
-                            "sessionId": "08e634",
-                            "runId": "pre-fix",
-                            "hypothesisId": hypothesis_id,
-                            "location": "hero_dms_playwright_customer.py:_try_fill_mobile_and_find_in_contact_applet",
-                            "message": message,
-                            "data": data,
-                            "timestamp": _ts_ist_iso(),
-                        }
-                    )
-                    + "\n"
-                )
-        except Exception:
-            pass
-    # #endregion
-    _dbg(
-        "H1",
-        "contact_find_entry",
-        {
-            "has_mobile": bool((mobile or "").strip()),
-            "has_first_name": bool((first_name or "").strip()),
-            "first_name_len": len((first_name or "").strip()),
-        },
-    )
     mobile_selectors = _mobile_selectors(mobile_aria_hints)
     mobile_selectors = [
         'input[title="Mobile Phone"]',
@@ -233,40 +199,6 @@ def _try_fill_mobile_and_find_in_contact_applet(
     }"""
 
     def try_root(root) -> bool:
-        # #region agent log - findfieldsbox probe on this root
-        try:
-            _ff_probe = root.evaluate(
-                """() => {
-                  const box = document.getElementById('findfieldsbox');
-                  if (!box) return { has_box: false, editable_inputs: 0, mobile_title_inputs: 0, first_id_present: false };
-                  const vis = (el) => {
-                    if (!el) return false;
-                    const st = window.getComputedStyle(el);
-                    if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
-                    const r = el.getBoundingClientRect();
-                    return r.width >= 2 && r.height >= 2;
-                  };
-                  const inputs = Array.from(box.querySelectorAll('input')).filter(vis);
-                  const editable = inputs.filter((i) => {
-                    const t = String(i.type || 'text').toLowerCase();
-                    if (['hidden','submit','button','checkbox','radio','file','image'].includes(t)) return false;
-                    return !i.readOnly && !i.disabled;
-                  });
-                  const mobileByTitle = editable.filter((i) => String(i.getAttribute('title') || '') === 'Mobile Phone').length;
-                  const firstId = !!box.querySelector('input#field_textbox_1');
-                  return {
-                    has_box: true,
-                    editable_inputs: editable.length,
-                    mobile_title_inputs: mobileByTitle,
-                    first_id_present: firstId,
-                  };
-                }"""
-            )
-            _dbg("H6", "findfieldsbox_probe", _ff_probe or {})
-        except Exception:
-            _dbg("H6", "findfieldsbox_probe_eval_failed", {})
-        # #endregion
-
         # Strict path: fill inside same-frame #findfieldsbox using required selectors.
         try:
             fn_raw = (first_name or "").strip()
@@ -329,11 +261,10 @@ def _try_fill_mobile_and_find_in_contact_applet(
                 }""",
                 {"mobile": mobile, "first": fn_find},
             )
-            _dbg("H8", "findfieldsbox_strict_fill_attempt", ff_out or {})
             if ff_out and ff_out.get("ok"):
                 return True
         except Exception:
-            _dbg("H8", "findfieldsbox_strict_fill_eval_failed", {})
+            pass
 
         applets: list = []
         # Prefer applet that looks like Find->Contact (contains Mobile Phone + First/Last name labels).
@@ -368,33 +299,6 @@ def _try_fill_mobile_and_find_in_contact_applet(
                 pass
 
         for applet in applets:
-            # #region agent log - applet-level candidate quality
-            try:
-                _applet_diag = applet.evaluate(
-                    """(el) => {
-                      const vis = (n) => {
-                        if (!n) return false;
-                        const st = window.getComputedStyle(n);
-                        if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
-                        const r = n.getBoundingClientRect();
-                        return r.width >= 2 && r.height >= 2;
-                      };
-                      const txt = String(el.innerText || '').slice(0, 300);
-                      const mobile = el.querySelector('input[title="Mobile Phone"]');
-                      const first = el.querySelector('input#field_textbox_1');
-                      return {
-                        has_mobile_title_exact: !!mobile,
-                        mobile_editable: !!(mobile && vis(mobile) && !mobile.readOnly && !mobile.disabled),
-                        has_first_id: !!first,
-                        first_editable: !!(first && vis(first) && !first.readOnly && !first.disabled),
-                        text_sample: txt,
-                      };
-                    }"""
-                )
-                _dbg("H7", "applet_candidate_probe", _applet_diag or {})
-            except Exception:
-                _dbg("H7", "applet_candidate_probe_eval_failed", {})
-            # #endregion
             # Fill mobile only within this applet.
             filled = False
             for css in mobile_selectors:
@@ -427,37 +331,6 @@ def _try_fill_mobile_and_find_in_contact_applet(
             fn_raw = (first_name or "").strip()
             fn_find = _first_name_for_contact_find_query_field(fn_raw)
             if fn_find:
-                # #region agent log - same applet selector visibility
-                _strict_id_count = 0
-                _strict_id_visible = False
-                _fallback_selector_hits = 0
-                try:
-                    _strict = applet.locator('input#field_textbox_1, input[id="field_textbox_1"]')
-                    _strict_id_count = _strict.count()
-                    if _strict_id_count > 0:
-                        try:
-                            _strict_id_visible = _strict.first.is_visible(timeout=300)
-                        except Exception:
-                            _strict_id_visible = False
-                except Exception:
-                    pass
-                for _s in _SIEBEL_FIND_FIRST_NAME_SELECTORS:
-                    try:
-                        _l = applet.locator(_s)
-                        if _l.count() > 0:
-                            _fallback_selector_hits += 1
-                    except Exception:
-                        continue
-                _dbg(
-                    "H2",
-                    "first_name_selector_probe_same_applet",
-                    {
-                        "strict_id_count": _strict_id_count,
-                        "strict_id_visible": _strict_id_visible,
-                        "fallback_selector_hits": _fallback_selector_hits,
-                    },
-                )
-                # #endregion
                 fn_filled = False
                 for css in _SIEBEL_FIND_FIRST_NAME_SELECTORS:
                     try:
@@ -479,13 +352,6 @@ def _try_fill_mobile_and_find_in_contact_applet(
                     except Exception:
                         pass
                 if not fn_filled:
-                    _dbg(
-                        "H3",
-                        "first_name_not_filled_in_same_applet",
-                        {
-                            "reason": "selectors_not_visible_or_fill_failed",
-                        },
-                    )
                     continue
 
             _safe_page_wait(page, 150, log_label="contact_applet_mobile_filled")
@@ -498,11 +364,6 @@ def _try_fill_mobile_and_find_in_contact_applet(
                             btn.click(timeout=timeout_ms)
                         except Exception:
                             btn.click(timeout=timeout_ms, force=True)
-                        _dbg(
-                            "H4",
-                            "find_clicked_same_applet",
-                            {"used_selector": css, "had_first_name": bool(fn_raw)},
-                        )
                         return True
                 except Exception:
                     continue
@@ -514,11 +375,6 @@ def _try_fill_mobile_and_find_in_contact_applet(
                         btn.click(timeout=timeout_ms)
                     except Exception:
                         btn.click(timeout=timeout_ms, force=True)
-                    _dbg(
-                        "H4",
-                        "find_clicked_same_applet_title_fallback",
-                        {"had_first_name": bool(fn_raw)},
-                    )
                     return True
             except Exception:
                 pass
@@ -532,12 +388,9 @@ def _try_fill_mobile_and_find_in_contact_applet(
                     logger.info(
                         "siebel_dms: filled first visible input + clicked Find in right Contact popup (DOM fallback)"
                     )
-                    _dbg("H5", "dom_fallback_used_for_mobile", {"first_name_required": False})
                     return True
             except Exception:
                 continue
-    else:
-        _dbg("H5", "dom_fallback_skipped_due_to_first_name_requirement", {"first_name_required": True})
 
     for fl in _iter_frame_locator_roots(page, content_frame_selector):
         try:
@@ -551,7 +404,6 @@ def _try_fill_mobile_and_find_in_contact_applet(
                 return True
         except Exception:
             continue
-    _dbg("H1", "contact_find_same_frame_failed_all_roots", {"first_name_required": bool((first_name or "").strip())})
     return False
 
 
@@ -2131,114 +1983,6 @@ def _siebel_ui_suggests_contact_match_mobile_first(page: Page, mobile: str, firs
       }
       return false;
     }"""
-    # #region agent log - mobile+first matcher diagnostics
-    def _dbg_mf(hypothesis_id: str, message: str, data: dict) -> None:
-        try:
-            import json as _j_mf, time as _t_mf
-            from pathlib import Path as _p_mf
-            _log_path = _p_mf(__file__).resolve().parents[3] / "debug-08e634.log"
-            with open(_log_path, "a", encoding="utf-8") as _lf_mf:
-                _lf_mf.write(
-                    _j_mf.dumps(
-                        {
-                            "sessionId": "08e634",
-                            "runId": "post-fix",
-                            "hypothesisId": hypothesis_id,
-                            "location": "hero_dms_playwright_customer.py:_siebel_ui_suggests_contact_match_mobile_first",
-                            "message": message,
-                            "data": data,
-                            "timestamp": _ts_ist_iso(),
-                        }
-                    )
-                    + "\n"
-                )
-        except Exception:
-            pass
-    _dbg_mf(
-        "M1",
-        "match_entry",
-        {"needle": needle, "target_first_name": target},
-    )
-    diag_js = """([needle, target]) => {
-      const compact = (s) => String(s || '').replace(/\\s+/g, '');
-      const norm = (s) => String(s || '').replace(/\\u00a0/g, ' ').trim();
-      const firstNameKeyFromFind = (raw) => {
-        let s = String(raw || '').replace(/\\u00a0/g, ' ').trim().toLowerCase();
-        while (s.endsWith('.')) s = s.slice(0, -1).trim();
-        return s;
-      };
-      const textMatchesFindFirstName = (text, keyBase) => {
-        if (!keyBase || text == null) return false;
-        const c = String(text).replace(/\\u00a0/g, ' ').trim().toLowerCase();
-        if (!c) return false;
-        if (c === keyBase) return true;
-        if (c.startsWith(keyBase + ' ')) return true;
-        const keyHead = keyBase.split(/\\s+/).filter(Boolean)[0] || '';
-        if (keyHead && c === keyHead) return true;
-        const first = c.split(/\\s+/).filter(Boolean)[0] || '';
-        let fs = first;
-        while (fs.endsWith('.')) fs = fs.slice(0, -1).trim();
-        if (fs === keyBase) return true;
-        if (keyHead && fs === keyHead) return true;
-        return false;
-      };
-      const rowContainsFindFirstKey = (tr, keyBase) => {
-        if (!keyBase) return false;
-        const keyHead = keyBase.split(/\\s+/).filter(Boolean)[0] || '';
-        const raw = norm(tr.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase();
-        if (!raw || (!raw.includes(keyBase) && !(keyHead && raw.includes(keyHead)))) return false;
-        if (raw.startsWith(keyBase + ' ')) return true;
-        if (keyHead && raw.startsWith(keyHead + ' ')) return true;
-        const parts = raw.split(/[\\s,;|\\/\\u2013\\u2014-]+/).filter(Boolean);
-        for (const p of parts) {
-          let q = p;
-          while (q.endsWith('.')) q = q.slice(0, -1).trim();
-          if (q === keyBase || (keyHead && q === keyHead)) return true;
-          if (p.startsWith(keyBase + ' ')) return true;
-          if (keyHead && p.startsWith(keyHead + ' ')) return true;
-        }
-        return false;
-      };
-      const keyBase = firstNameKeyFromFind(target);
-      const rowHasFirst = (tr) => {
-        if (!keyBase) return false;
-        const tds = tr.querySelectorAll('td');
-        for (const td of tds) {
-          if (textMatchesFindFirstName(td.textContent, keyBase)) return true;
-          if (textMatchesFindFirstName(td.getAttribute('title') || '', keyBase)) return true;
-          if (textMatchesFindFirstName(td.getAttribute('aria-label') || '', keyBase)) return true;
-          for (const inp of td.querySelectorAll('input, textarea')) {
-            if (textMatchesFindFirstName(inp.value, keyBase)) return true;
-          }
-        }
-        return rowContainsFindFirstKey(tr, keyBase);
-      };
-      const out = { table_rows_seen: 0, mobile_rows_seen: 0, first_resolved_rows_seen: 0, sample_rows: [] };
-      const rows = Array.from(document.querySelectorAll('table tr'));
-      for (const tr of rows) {
-        if (tr.closest('thead')) continue;
-        const tds = tr.querySelectorAll('td');
-        if (tds.length < 2) continue;
-        out.table_rows_seen += 1;
-        const rowFull = String(tr.textContent || '');
-        const rowInner = String(tr.innerText || '');
-        const hasMobile = needle && compact(rowFull).includes(needle);
-        const firstOk = target ? rowHasFirst(tr) : false;
-        if (hasMobile) out.mobile_rows_seen += 1;
-        if (firstOk) out.first_resolved_rows_seen += 1;
-        if (out.sample_rows.length < 3) {
-          out.sample_rows.push({
-            text_inner: rowInner.slice(0, 180),
-            text_content: rowFull.slice(0, 220),
-            has_mobile: hasMobile,
-            first_resolved: firstOk,
-            td_count: tds.length
-          });
-        }
-      }
-      return out;
-    }"""
-    # #endregion
     mobile_only_js = """(needle) => {
       if (!needle || needle.length < 8) return false;
       const compact = (s) => String(s || '').replace(/\\s+/g, '');
@@ -2252,21 +1996,14 @@ def _siebel_ui_suggests_contact_match_mobile_first(page: Page, mobile: str, firs
     }"""
     for frame in _ordered_frames(page):
         try:
-            try:
-                _dbg_mf("M2", "frame_diag", frame.evaluate(diag_js, [needle, target]) or {})
-            except Exception:
-                _dbg_mf("M2", "frame_diag_eval_failed", {})
             if frame.evaluate(script, [needle, target]):
-                _dbg_mf("M3", "match_true_frame", {"matched": True})
                 return True
             # Runtime-proven fallback: some Siebel grids expose only mobile under Title/Show Details
             # in row text while first-name cells are not present in DOM.
             if bool(frame.evaluate(mobile_only_js, needle)):
-                _dbg_mf("M4", "match_mobile_only_fallback_true", {"matched": True})
                 return True
         except Exception:
             continue
-    _dbg_mf("M3", "match_false_all_frames", {"matched": False})
     return False
 
 
@@ -7593,28 +7330,6 @@ def _add_enquiry_opportunity(
             full_chassis=str(scraped_v.get("full_chassis") or ""),
             full_engine=str(scraped_v.get("full_engine") or ""),
         )
-
-    # #region agent log
-    try:
-        import json as _j_ae
-
-        with open(Path(__file__).resolve().parents[3] / "debug-0875fe.log", "a", encoding="utf-8") as _lf:
-            _lf.write(
-                _j_ae.dumps(
-                    {
-                        "sessionId": "0875fe",
-                        "hypothesisId": "KB-B",
-                        "location": "hero_dms_playwright_customer.py:_add_enquiry_opportunity",
-                        "message": "add_enquiry_before_key_battery_fill",
-                        "data": {"after_vehicle_grid_scrape": True},
-                        "timestamp": _ts_ist_iso(),
-                    }
-                )
-                + "\n"
-            )
-    except Exception:
-        pass
-    # #endregion
 
     _siebel_fill_key_battery_from_dms_values(
         page,
