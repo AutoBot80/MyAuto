@@ -1,14 +1,14 @@
-"""Vehicle search by chassis and/or engine (partial / wildcard) with master + challan context."""
+"""Vehicle search by chassis and/or engine (partial / wildcard) — no dealer scoping on match keys."""
 
 from __future__ import annotations
 
 import logging
+import re
 from datetime import date, datetime
 from decimal import Decimal
 
 from fastapi import APIRouter, HTTPException, Query
 
-from app.config import DEALER_ID
 from app.db import get_connection
 
 logger = logging.getLogger(__name__)
@@ -26,6 +26,185 @@ def _search_pattern(raw: str) -> str:
     if s.isdigit() and 4 <= len(s) <= 6:
         return f"%{s}"
     return f"%{p}%"
+
+
+def _alnum_loose_pattern(raw: str) -> str | None:
+    """Strip non-alphanumeric from user text; if 4+ chars remain, build %%…%% ILIKE for noisy DB values."""
+    s = re.sub(r"[^0-9A-Za-z]", "", (raw or "").strip())
+    if len(s) < 4:
+        return None
+    return f"%{s}%"
+
+
+def _inventory_patterns_for_sql(chassis_pat: str, engine_pat: str, chassis_q: str, engine_q: str) -> tuple[list[str], list]:
+    """ILIKE on vim columns OR stripped-alphanumeric ILIKE."""
+    frags: list[str] = []
+    params: list = []
+    if chassis_pat:
+        loose = _alnum_loose_pattern(chassis_q)
+        if loose and loose != chassis_pat:
+            frags.append(
+                "("
+                "COALESCE(vim.chassis_no, '') ILIKE %s OR "
+                "REGEXP_REPLACE(COALESCE(vim.chassis_no, ''), '[^0-9A-Za-z]', '', 'g') ILIKE %s"
+                ")"
+            )
+            params.extend([chassis_pat, loose])
+        else:
+            frags.append("COALESCE(vim.chassis_no, '') ILIKE %s")
+            params.append(chassis_pat)
+    if engine_pat:
+        loose_e = _alnum_loose_pattern(engine_q)
+        if loose_e and loose_e != engine_pat:
+            frags.append(
+                "("
+                "COALESCE(vim.engine_no, '') ILIKE %s OR "
+                "REGEXP_REPLACE(COALESCE(vim.engine_no, ''), '[^0-9A-Za-z]', '', 'g') ILIKE %s"
+                ")"
+            )
+            params.extend([engine_pat, loose_e])
+        else:
+            frags.append("COALESCE(vim.engine_no, '') ILIKE %s")
+            params.append(engine_pat)
+    if not frags:
+        return ["FALSE"], []
+    joined = " AND ".join(frags) if len(frags) > 1 else frags[0]
+    return [f"({joined})"], params
+
+
+def _detail_raw_pattern_sql(
+    chassis_pat: str, engine_pat: str, chassis_q: str, engine_q: str
+) -> tuple[str, list]:
+    """Pattern match on challan_details_staging raw_chassis / raw_engine."""
+    frags: list[str] = []
+    params: list = []
+    if chassis_pat:
+        loose = _alnum_loose_pattern(chassis_q)
+        if loose and loose != chassis_pat:
+            frags.append(
+                "("
+                "COALESCE(d.raw_chassis, '') ILIKE %s OR "
+                "REGEXP_REPLACE(COALESCE(d.raw_chassis, ''), '[^0-9A-Za-z]', '', 'g') ILIKE %s"
+                ")"
+            )
+            params.extend([chassis_pat, loose])
+        else:
+            frags.append("COALESCE(d.raw_chassis, '') ILIKE %s")
+            params.append(chassis_pat)
+    if engine_pat:
+        loose_e = _alnum_loose_pattern(engine_q)
+        if loose_e and loose_e != engine_pat:
+            frags.append(
+                "("
+                "COALESCE(d.raw_engine, '') ILIKE %s OR "
+                "REGEXP_REPLACE(COALESCE(d.raw_engine, ''), '[^0-9A-Za-z]', '', 'g') ILIKE %s"
+                ")"
+            )
+            params.extend([engine_pat, loose_e])
+        else:
+            frags.append("COALESCE(d.raw_engine, '') ILIKE %s")
+            params.append(engine_pat)
+    if not frags:
+        return "FALSE", []
+    return "(" + " AND ".join(frags) + ")", params
+
+
+def _fetch_staging_detail_rows_global(
+    cur,
+    chassis_pat: str,
+    engine_pat: str,
+    chassis_q: str,
+    engine_q: str,
+    limit: int,
+) -> list[dict]:
+    raw_sql, raw_params = _detail_raw_pattern_sql(chassis_pat, engine_pat, chassis_q, engine_q)
+    cur.execute(
+        f"""
+        SELECT d.challan_detail_staging_id, d.challan_batch_id, d.raw_chassis, d.raw_engine,
+               d.status, d.inventory_line_id, d.last_error, d.created_at,
+               s.challan_book_num, s.challan_date, s.from_dealer_id, s.to_dealer_id, s.invoice_status,
+               s.num_vehicles
+        FROM challan_details_staging d
+        INNER JOIN challan_master_staging s ON s.challan_batch_id = d.challan_batch_id
+        WHERE {raw_sql}
+        ORDER BY d.created_at DESC NULLS LAST
+        LIMIT %s
+        """,
+        (*raw_params, limit),
+    )
+    return [dict(r) for r in cur.fetchall()]
+
+
+def _staging_inventory_hits_as_vim_shape(
+    cur,
+    chassis_pat: str,
+    engine_pat: str,
+    chassis_q: str,
+    engine_q: str,
+) -> list[dict]:
+    """Use challan staging lines and prefer linked inventory rows."""
+    rows = _fetch_staging_detail_rows_global(
+        cur, chassis_pat, engine_pat, chassis_q, engine_q, limit=50
+    )
+    out: list[dict] = []
+    seen_vim: set[int] = set()
+    seen_stg: set[int] = set()
+    for r in rows:
+        sid = r.get("challan_detail_staging_id")
+        if isinstance(sid, int) and sid in seen_stg:
+            continue
+        if isinstance(sid, int):
+            seen_stg.add(sid)
+        iid = r.get("inventory_line_id")
+        if iid:
+            iid_int = int(iid) if isinstance(iid, (int, float)) else None
+            if iid_int is not None and iid_int in seen_vim:
+                continue
+            cur.execute(
+                "SELECT * FROM vehicle_inventory_master WHERE inventory_line_id = %s",
+                (iid,),
+            )
+            vim_row = cur.fetchone()
+            if vim_row:
+                vd = dict(vim_row)
+                vid = vd.get("inventory_line_id")
+                if isinstance(vid, int):
+                    seen_vim.add(vid)
+                out.append(vd)
+                continue
+        out.append(
+            {
+                "inventory_line_id": iid,
+                "chassis_no": r.get("raw_chassis"),
+                "engine_no": r.get("raw_engine"),
+                "_from_staging": True,
+                "challan_detail_staging_id": r.get("challan_detail_staging_id"),
+            }
+        )
+    return out
+
+
+def _fetch_inventory_lines(
+    cur,
+    chassis_pat: str,
+    engine_pat: str,
+    chassis_q: str,
+    engine_q: str,
+    limit: int,
+) -> list[dict]:
+    """All yard rows matching chassis/engine patterns (any dealer)."""
+    inv_frags, inv_params = _inventory_patterns_for_sql(chassis_pat, engine_pat, chassis_q, engine_q)
+    cur.execute(
+        f"""
+        SELECT vim.*
+        FROM vehicle_inventory_master vim
+        WHERE {inv_frags[0]}
+        ORDER BY vim.inventory_line_id DESC
+        LIMIT %s
+        """,
+        (*inv_params, limit),
+    )
+    return [dict(r) for r in cur.fetchall()]
 
 
 def _json_safe_row(row: dict) -> dict:
@@ -69,20 +248,18 @@ def _synthetic_vehicle_master_from_vim(vim: dict) -> dict:
         "engine": vim.get("engine_no"),
         "model": vim.get("model"),
         "colour": vim.get("color"),
-        "_match_note": "No vehicle_master row with a sale in this OEM; matched from yard inventory only.",
+        "_match_note": "No vehicle_master row found; matched from yard inventory or staging only.",
     }
 
 
 def _fetch_staging_lines(
     cur,
-    did: int,
     chassis_pat: str,
     engine_pat: str,
     inventory_line_ids: list[int],
 ) -> list[dict]:
-    stg_wheres = ["(s.from_dealer_id = %s OR s.to_dealer_id = %s)"]
-    stg_params: list = [did, did]
-    or_parts = []
+    or_parts: list[str] = []
+    stg_params: list = []
     if chassis_pat and engine_pat:
         or_parts.append("(COALESCE(d.raw_chassis, '') ILIKE %s AND COALESCE(d.raw_engine, '') ILIKE %s)")
         stg_params.extend([chassis_pat, engine_pat])
@@ -97,7 +274,7 @@ def _fetch_staging_lines(
         stg_params.append(inventory_line_ids)
     if not or_parts:
         return []
-    stg_wheres.append(f"({' OR '.join(or_parts)})")
+    stg_where = f"({' OR '.join(or_parts)})"
     cur.execute(
         f"""
         SELECT d.challan_detail_staging_id, d.challan_batch_id, d.raw_chassis, d.raw_engine,
@@ -106,7 +283,7 @@ def _fetch_staging_lines(
                s.num_vehicles
         FROM challan_details_staging d
         INNER JOIN challan_master_staging s ON s.challan_batch_id = d.challan_batch_id
-        WHERE {' AND '.join(stg_wheres)}
+        WHERE {stg_where}
         ORDER BY d.created_at DESC NULLS LAST
         LIMIT 200
         """,
@@ -121,7 +298,7 @@ def _inventory_sql_filters(
     chassis_pat: str,
     engine_pat: str,
 ) -> tuple[list[str], list]:
-    """Match inventory lines to a vehicle row (exact vm strings) or to user ILIKE patterns."""
+    """Match inventory lines to a vehicle row or user ILIKE patterns."""
     inv_where: list[str] = []
     inv_params: list = []
     if vc:
@@ -142,23 +319,20 @@ def _inventory_sql_filters(
 def _fetch_match_bundle(
     cur,
     vm: dict,
-    did: int,
-    oem_id: int,
     chassis_pat: str,
     engine_pat: str,
 ) -> dict:
-    """Sales, inventory, committed challans, staging lines for one vehicle_master row."""
+    """Sales, inventory, committed challans, staging lines for one vehicle_master row (no dealer filter)."""
     sales_row = None
     cur.execute(
         """
         SELECT sm.*
         FROM sales_master sm
-        INNER JOIN dealer_ref dr ON dr.dealer_id = sm.dealer_id
-        WHERE sm.vehicle_id = %s AND dr.oem_id = %s
+        WHERE sm.vehicle_id = %s
         ORDER BY sm.billing_date DESC NULLS LAST
         LIMIT 1
         """,
-        (vm["vehicle_id"], oem_id),
+        (vm["vehicle_id"],),
     )
     sm_row = cur.fetchone()
     if sm_row:
@@ -169,8 +343,8 @@ def _fetch_match_bundle(
     vc = (vm.get("chassis") or "").strip()
     ve = (vm.get("engine") or "").strip()
 
-    inv_base = ["vim.dealer_id = %s"]
-    inv_p: list = [did]
+    inv_base: list[str] = []
+    inv_p: list = []
     ew, ep = _inventory_sql_filters(vc, ve, chassis_pat, engine_pat)
     if ew:
         inv_base.extend(ew)
@@ -189,8 +363,8 @@ def _fetch_match_bundle(
     )
     inventory_rows = [_json_safe_row(dict(r)) for r in cur.fetchall()]
 
-    sub_where = ["(cm.dealer_from = %s OR cm.dealer_to = %s)"]
-    sub_params: list = [did, did]
+    sub_where: list[str] = []
+    sub_params: list = []
     if ew:
         sub_where.extend(ew)
         sub_params.extend(ep)
@@ -219,7 +393,7 @@ def _fetch_match_bundle(
     challans = [_json_safe_row(dict(r)) for r in cur.fetchall()]
 
     inv_ids = [r["inventory_line_id"] for r in inventory_rows if r.get("inventory_line_id") is not None]
-    staging = _fetch_staging_lines(cur, did, chassis_pat, engine_pat, inv_ids)
+    staging = _fetch_staging_lines(cur, chassis_pat, engine_pat, inv_ids)
 
     return {
         "vehicle_master": _json_safe_row(vm),
@@ -234,15 +408,14 @@ def _fetch_match_bundle(
 def search_vehicles(
     chassis: str | None = Query(None, description="Chassis / VIN fragment; * as wildcard; 4–6 digits = suffix match"),
     engine: str | None = Query(None, description="Engine number fragment; same rules as chassis"),
-    dealer_id: int | None = Query(None, description="Dealer ID; OEM scope from this dealer"),
+    dealer_id: int | None = Query(None, description="Ignored; matching uses chassis/engine only."),
 ) -> dict:
     """
-    Find vehicles: **vehicle_master** + **sales_master** in OEM, with engine match satisfied by
-    **vehicle_inventory_master** when master engine fields are blank. If none, fall back to
-    **vehicle_inventory_master** (this dealer) by ILIKE, then resolve **vehicle_master** or return
-    inventory-only synthetic master. Includes **challan_details_staging** lines matching patterns
-    or linked **inventory_line_id**.
+    Match **vehicle_master**, yard inventory, challans, and staging by **chassis** and **engine** patterns only
+    (no dealer filter).
     """
+    del dealer_id  # optional query param kept for backward compatibility
+
     chassis_q = (chassis or "").strip()
     engine_q = (engine or "").strip()
     if not chassis_q and not engine_q:
@@ -251,21 +424,11 @@ def search_vehicles(
     chassis_pat = _search_pattern(chassis_q) if chassis_q else ""
     engine_pat = _search_pattern(engine_q) if engine_q else ""
 
-    did = dealer_id if dealer_id is not None else DEALER_ID
-
     conn = get_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT oem_id FROM dealer_ref WHERE dealer_id = %s", (did,))
-            dealer_row = cur.fetchone()
-            if not dealer_row:
-                raise HTTPException(status_code=404, detail="Dealer not found.")
-            oem_id = dealer_row.get("oem_id")
-            if oem_id is None:
-                raise HTTPException(status_code=400, detail="Dealer has no OEM configured.")
-
-            wheres = ["dr.oem_id = %s"]
-            params: list = [oem_id]
+            wheres: list[str] = []
+            params: list = []
             if chassis_pat:
                 wheres.append(f"{_vm_chassis_expr()} ILIKE %s")
                 params.append(chassis_pat)
@@ -275,20 +438,17 @@ def search_vehicles(
                     f"{_vm_engine_expr()} ILIKE %s OR ( "
                     f"{_vm_chassis_expr()} <> '' AND EXISTS ( "
                     "SELECT 1 FROM vehicle_inventory_master vim_eng "
-                    "WHERE vim_eng.dealer_id = %s "
-                    "AND TRIM(UPPER(COALESCE(vim_eng.chassis_no, ''))) = "
+                    "WHERE TRIM(UPPER(COALESCE(vim_eng.chassis_no, ''))) = "
                     f"TRIM(UPPER({_vm_chassis_expr()})) "
                     "AND COALESCE(vim_eng.engine_no, '') ILIKE %s "
                     ") )"
                     ")"
                 )
-                params.extend([engine_pat, did, engine_pat])
+                params.extend([engine_pat, engine_pat])
 
             sql = f"""
                 SELECT DISTINCT ON (vm.vehicle_id) vm.*
                 FROM vehicle_master vm
-                INNER JOIN sales_master sm ON sm.vehicle_id = vm.vehicle_id
-                INNER JOIN dealer_ref dr ON dr.dealer_id = sm.dealer_id
                 WHERE {' AND '.join(wheres)}
                 ORDER BY vm.vehicle_id
             """
@@ -302,25 +462,13 @@ def search_vehicles(
                     seen_vehicle_ids.add(vid)
 
             if not vm_rows:
-                vim_wheres = ["vim.dealer_id = %s"]
-                vim_params: list = [did]
-                if chassis_pat:
-                    vim_wheres.append("COALESCE(vim.chassis_no, '') ILIKE %s")
-                    vim_params.append(chassis_pat)
-                if engine_pat:
-                    vim_wheres.append("COALESCE(vim.engine_no, '') ILIKE %s")
-                    vim_params.append(engine_pat)
-                cur.execute(
-                    f"""
-                    SELECT vim.*
-                    FROM vehicle_inventory_master vim
-                    WHERE {' AND '.join(vim_wheres)}
-                    ORDER BY vim.inventory_line_id DESC
-                    LIMIT 100
-                    """,
-                    vim_params,
+                vim_list = _fetch_inventory_lines(
+                    cur, chassis_pat, engine_pat, chassis_q, engine_q, limit=100
                 )
-                vim_list = [dict(r) for r in cur.fetchall()]
+                if not vim_list:
+                    vim_list = _staging_inventory_hits_as_vim_shape(
+                        cur, chassis_pat, engine_pat, chassis_q, engine_q
+                    )
 
                 for vim in vim_list:
                     ch = (vim.get("chassis_no") or "").strip()
@@ -329,15 +477,13 @@ def search_vehicles(
                         """
                         SELECT vm.*
                         FROM vehicle_master vm
-                        INNER JOIN sales_master sm ON sm.vehicle_id = vm.vehicle_id
-                        INNER JOIN dealer_ref dr ON dr.dealer_id = sm.dealer_id AND dr.oem_id = %s
                         WHERE TRIM(UPPER(COALESCE(NULLIF(BTRIM(vm.chassis), ''), NULLIF(BTRIM(vm.raw_frame_num), ''))))
                               = TRIM(UPPER(COALESCE(%s, '')))
                           AND TRIM(UPPER(COALESCE(NULLIF(BTRIM(vm.engine), ''), NULLIF(BTRIM(vm.raw_engine_num), ''))))
                               = TRIM(UPPER(COALESCE(%s, '')))
                         LIMIT 1
                         """,
-                        (oem_id, ch, eng),
+                        (ch, eng),
                     )
                     row = cur.fetchone()
                     if row:
@@ -352,17 +498,17 @@ def search_vehicles(
                     for vim in vim_list:
                         vim_safe = _json_safe_row(vim)
                         inv_ids = [vim_safe["inventory_line_id"]] if vim_safe.get("inventory_line_id") else []
-                        staging = _fetch_staging_lines(cur, did, chassis_pat, engine_pat, inv_ids)
-                        sub_where = ["(cm.dealer_from = %s OR cm.dealer_to = %s)"]
-                        sub_params: list = [did, did]
+                        staging = _fetch_staging_lines(cur, chassis_pat, engine_pat, inv_ids)
                         cw, cp = _inventory_sql_filters(
                             (vim.get("chassis_no") or "").strip(),
                             (vim.get("engine_no") or "").strip(),
                             chassis_pat,
                             engine_pat,
                         )
-                        sub_where.extend(cw)
-                        sub_params.extend(cp)
+                        sub_where = list(cw)
+                        sub_params = list(cp)
+                        if not sub_where:
+                            sub_where = ["FALSE"]
                         cur.execute(
                             f"""
                             SELECT cm.challan_id, cm.challan_date, cm.challan_book_num,
@@ -398,13 +544,13 @@ def search_vehicles(
             return {
                 "found": False,
                 "matches": [],
-                "message": "No vehicle found for the given chassis/engine criteria (including yard inventory).",
+                "message": "No match for these chassis/engine patterns in vehicle master, yard, or challan staging.",
             }
 
         matches: list[dict] = []
         with conn.cursor() as cur:
             for vm in vm_rows:
-                matches.append(_fetch_match_bundle(cur, vm, did, oem_id, chassis_pat, engine_pat))
+                matches.append(_fetch_match_bundle(cur, vm, chassis_pat, engine_pat))
 
         return {"found": True, "matches": matches}
     except HTTPException:
