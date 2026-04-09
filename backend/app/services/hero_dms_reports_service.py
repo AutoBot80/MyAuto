@@ -24,11 +24,15 @@ def run_hero_dms_reports(
     content_frame_selector: str | None,
     downloads_dir: Path,
     note: Callable[[str], None] | None = None,
-) -> tuple[bool, str | None, list[str], dict[str, Any]]:
+    execution_log_path: Path | str | None = None,
+) -> tuple[bool, str | None, list[str], list[dict[str, Any]]]:
     """
     Download Hero DMS forms (e.g. Form 22) after successful master persistence.
 
     Returns the same tuple as ``print_hero_dms_forms``: ``(ok, error, paths, reports)``.
+
+    ``execution_log_path``: optional ``Playwright_DMS_*.txt`` path; appends a
+    ``run_hero_dms_reports`` section with download dir and per-report results.
     """
     from app.services.hero_dms_playwright_invoice import print_hero_dms_forms
 
@@ -41,4 +45,5 @@ def run_hero_dms_reports(
         content_frame_selector=content_frame_selector,
         note=note or (lambda _m: None),
         downloads_dir=downloads_dir,
+        execution_log_path=execution_log_path,
     )

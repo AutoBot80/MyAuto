@@ -6,7 +6,7 @@ from app.db import get_connection
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
-PRESERVED_TABLES = ("dealer_ref", "oem_ref", "oem_service_schedule")
+PRESERVED_TABLES = ("dealer_ref", "oem_ref", "oem_service_schedule", "subdealer_discount_master")
 CONFIRMATION_TEXT = "DELETE ALL DATA"
 
 
@@ -16,7 +16,7 @@ class ResetAllDataRequest(BaseModel):
 
 @router.post("/reset-all-data")
 def reset_all_data(payload: ResetAllDataRequest) -> dict:
-    """Delete all public-table data except reference tables that must be preserved."""
+    """Delete all public-table data except reference tables in PRESERVED_TABLES."""
     if payload.confirmation != CONFIRMATION_TEXT:
         raise HTTPException(status_code=400, detail="Invalid confirmation text")
 

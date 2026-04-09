@@ -1,4 +1,6 @@
 import os
+import re
+from datetime import date
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -25,6 +27,22 @@ DEALER_ID = int(os.getenv("DEALER_ID", "100001"))
 def get_uploads_dir(dealer_id: int) -> Path:
     """Dealer-scoped uploads: Uploaded scans/{dealer_id}/."""
     return UPLOADS_DIR / str(dealer_id)
+
+
+def get_uploaded_scans_sale_folder(dealer_id: int, mobile: str) -> Path:
+    """
+    Per-sale folder under **Uploaded scans**, same leaf convention as Add Sales / OCR:
+    ``Uploaded scans/{dealer_id}/{10-digit-mobile}_{ddmmyyyy}/``.
+    """
+    dig = re.sub(r"\D", "", str(mobile or ""))
+    if len(dig) >= 10:
+        mob = dig[-10:]
+    elif dig:
+        mob = dig.zfill(10)[:10]
+    else:
+        mob = "0000000000"
+    leaf = f"{mob}_{date.today().strftime('%d%m%Y')}"
+    return get_uploads_dir(int(dealer_id)) / leaf
 
 
 def get_ocr_output_dir(dealer_id: int) -> Path:

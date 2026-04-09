@@ -24,7 +24,7 @@ from app.config import (
     DMS_SIEBEL_AUTO_IFRAME_SELECTORS,
     DMS_SIEBEL_INTER_ACTION_DELAY_MS,
     DMS_SIEBEL_POST_GOTO_WAIT_MS,
-    get_ocr_output_dir,
+    get_uploaded_scans_sale_folder,
 )
 from app.services.hero_dms_shared_utilities import (
     SiebelDmsUrls,
@@ -393,33 +393,38 @@ _JS_MY_ORDERS_JQGRID_ROWS = """() => {
             });
         }
         const dataRows = table.querySelectorAll('tbody tr.jqgrow, tbody tr[role="row"]');
+        const looksLikeDateTime = (s) => {
+            const t = String(s || '').trim();
+            if (!t) return false;
+            return /\\d{1,2}\\/\\d{1,2}\\/\\d{4}/.test(t) && /\\d{1,2}:\\d{2}/.test(t);
+        };
         for (const tr of dataRows) {
             if (tr.classList.contains('jqgfirstrow')) continue;
             if (!vis(tr)) continue;
             const row = { status: '', invoice: '', order: '', raw: (tr.innerText || '').trim() };
-            const tds = tr.querySelectorAll('td[role="gridcell"], td');
-            tds.forEach((td, i) => {
-                const txt = (td.textContent || '').trim();
-                const adb = (td.getAttribute('aria-describedby') || '').toLowerCase();
-                const cn = (colNames[i] || '').toLowerCase();
-                const key = (cn + ' ' + adb).toLowerCase();
-                if (key.includes('status') || adb.includes('status')) row.status = txt;
-                else if (key.includes('invoice') || adb.includes('invoice')) row.invoice = txt;
-                else if (key.includes('order') && (key.includes('order_number') || key.includes('order#') || key.includes('order_no') || adb.includes('order_number') || adb.includes('order#'))) {
-                    const a = td.querySelector('a[name="Order Number"], a[name="Order #"], a');
-                    row.order = ((a && a.textContent) ? a.textContent : txt).trim();
-                }
-            });
+            /** 1) Canonical Invoice# ``td#N_s_1_l_Invoice__`` — ``title`` holds the real id; cell text may be a date. */
             const invTd = tr.querySelector('td[role="gridcell"][id*="_l_Invoice"]');
             if (invTd && vis(invTd)) {
                 const tit = (invTd.getAttribute('title') || '').trim();
                 const tx = (invTd.textContent || '').trim();
-                if (tit || tx) {
-                    row.invoice = tit || tx;
+                if (tit) {
+                    row.invoice = tit;
+                } else if (tx && !looksLikeDateTime(tx)) {
+                    row.invoice = tx;
+                } else if (tx && looksLikeDateTime(tx)) {
+                    const withTitle = invTd.querySelector('[title]');
+                    if (withTitle) {
+                        const tt = (withTitle.getAttribute('title') || '').trim();
+                        if (tt && !looksLikeDateTime(tt)) row.invoice = tt;
+                    }
                 }
             }
+            /** 2) Order# list-control input (before generic column walk). */
             const ordInp = tr.querySelector(
-                'input[name="Order_Number"], input[id*="Order_Number"], input[id$="_Order_Number"]'
+                'input[name="Order_Number"], input[name="Order Number"], '
+                + 'input[id*="Order_Number"], input[id$="_Order_Number"], '
+                + 'input[aria-labelledby*="Order_Number"], input[aria-labelledby*="Order Number"], '
+                + 'input.siebui-list-ctrl[id*="Order_Number"]'
             );
             if (ordInp) {
                 const ov = String(ordInp.value || '').trim();
@@ -427,6 +432,31 @@ _JS_MY_ORDERS_JQGRID_ROWS = """() => {
                     row.order = ov;
                 }
             }
+            const tds = tr.querySelectorAll('td[role="gridcell"], td');
+            tds.forEach((td, i) => {
+                const txt = (td.textContent || '').trim();
+                const adb = (td.getAttribute('aria-describedby') || '').toLowerCase();
+                const cn = (colNames[i] || '').toLowerCase();
+                const key = (cn + ' ' + adb).toLowerCase();
+                if (key.includes('status') || adb.includes('status')) row.status = txt;
+                else if (
+                    !row.invoice
+                    && (key.includes('invoice') || adb.includes('invoice'))
+                    && !key.includes('invoice_date')
+                    && !adb.includes('invoice_date')
+                    && !key.includes('inv_dt')
+                    && !adb.includes('inv_dt')
+                ) {
+                    if (!looksLikeDateTime(txt)) row.invoice = txt;
+                } else if (
+                    !row.order
+                    && key.includes('order')
+                    && (key.includes('order_number') || key.includes('order#') || key.includes('order_no') || adb.includes('order_number') || adb.includes('order#'))
+                ) {
+                    const a = td.querySelector('a[name="Order Number"], a[name="Order #"], a');
+                    row.order = ((a && a.textContent) ? a.textContent : txt).trim();
+                }
+            });
             if (!row.order && !row.status && !row.invoice) {
                 const a = tr.querySelector("a[name='Order Number'], a[name='Order #']");
                 if (a && vis(a)) row.order = (a.textContent || '').trim();
@@ -439,11 +469,14 @@ _JS_MY_ORDERS_JQGRID_ROWS = """() => {
 
 
 def _my_orders_invoice_meaningful(s: str) -> bool:
-    """Whether jqGrid **invoice** cell text looks like a real Invoice# (not dash/placeholder)."""
+    """Whether jqGrid **invoice** cell text looks like a real Invoice# (not dash/placeholder / date-time)."""
     t = (s or "").strip()
     if len(t) < 2:
         return False
     if re.match(r"^(—|-+|–|pending|n/?a)$", t, re.I):
+        return False
+    # Siebel sometimes puts "Invoice Date" in a column whose id contains ``invoice`` — reject bare datetimes.
+    if re.search(r"\d{1,2}/\d{1,2}/\d{4}", t) and re.search(r"\d{1,2}:\d{2}", t):
         return False
     return bool(re.search(r"[A-Za-z0-9]", t))
 
@@ -619,7 +652,9 @@ _JS_CLICK_MY_ORDERS_ORDER_LINK = """({ orderNeedle, mobileDigits }) => {
         const rowText = tr.innerText || '';
         if (md && !rowText.replace(/\\D/g, '').includes(md)) continue;
         const inp = tr.querySelector(
-            'input[name="Order_Number"], input[id*="Order_Number"], input[id$="_Order_Number"]'
+            'input[name="Order_Number"], input[name="Order Number"], '
+            + 'input[id*="Order_Number"], input[id$="_Order_Number"], '
+            + 'input[aria-labelledby*="Order_Number"], input[aria-labelledby*="Order Number"]'
         );
         if (inp && vis(inp)) {
             const ov = String(inp.value || '').trim();
@@ -4323,13 +4358,58 @@ def _mobile_digits_10(mobile: str) -> str:
 
 
 def _default_run_report_downloads_dir(mobile: str, *, dealer_id: int | None = None) -> Path:
-    """``ocr_output/{dealer_id}/{mobile10}_{ddmmYYYY}/`` — same leaf pattern as Add Sales / Fill DMS."""
-    from datetime import date
-
+    """``Uploaded scans/{dealer_id}/{mobile10}_{ddmmYYYY}/`` — same leaf as Add Sales / pre-OCR."""
     did = int(dealer_id) if dealer_id is not None else int(DEALER_ID)
-    mob = _mobile_digits_10(mobile)
-    leaf = f"{mob}_{date.today().strftime('%d%m%Y')}"
-    return get_ocr_output_dir(did) / leaf
+    return get_uploaded_scans_sale_folder(did, mobile)
+
+
+def _append_run_hero_dms_reports_to_playwright_log(
+    log_path: Path | str | None,
+    *,
+    downloads_dir: Path | None,
+    mobile: str,
+    report_names: list[str],
+    report_details: list[dict[str, Any]],
+    saved_paths: list[str],
+    summary: str | None,
+    all_ok: bool,
+    abort_message: str | None = None,
+) -> None:
+    """Append a ``--- run_hero_dms_reports ---`` block to the Playwright DMS execution log file."""
+    if not log_path:
+        return
+    try:
+        p = Path(str(log_path))
+        p.parent.mkdir(parents=True, exist_ok=True)
+        dd = ""
+        try:
+            dd = str(downloads_dir.resolve()) if downloads_dir is not None else ""
+        except Exception:
+            dd = str(downloads_dir or "")
+        lines = [
+            "",
+            f"--- run_hero_dms_reports ({_ts_ist_iso()}) ---",
+            f"downloads_dir={dd!r}",
+            f"mobile={_mobile_digits_10(mobile)!r}",
+            f"reports_requested={', '.join(report_names)}",
+        ]
+        if abort_message:
+            lines.append(f"status=aborted error={abort_message!r}")
+        for r in report_details:
+            lines.append(
+                "  "
+                f"report={r.get('report')!r} ok={r.get('ok')!r} "
+                f"path={r.get('path')!r} err={r.get('error')!r}"
+            )
+        lines.append(f"saved_pdf_paths={saved_paths!r}")
+        lines.append(f"all_reports_ok={all_ok!r}")
+        if summary:
+            lines.append(f"summary={summary!r}")
+        lines.append("--- end run_hero_dms_reports ---")
+        with open(p, "a", encoding="utf-8") as fp:
+            fp.write("\n".join(lines) + "\n")
+    except OSError as ex:
+        logger.warning("run_hero_dms_reports: could not append Playwright DMS log %s: %s", log_path, ex)
 
 
 def _mobile_report_pdf_filename(mobile: str, report_name: str) -> str:
@@ -4378,6 +4458,7 @@ DEFAULT_HERO_DMS_RUN_REPORT_NAMES: tuple[str, ...] = (
     "GST Booking Receipt",
     "Form22",
     "Sale Certificate",
+    "Form 20",
 )
 
 
@@ -4395,6 +4476,7 @@ def print_hero_dms_forms(
     report_names: str | list[str] | tuple[str, ...] = DEFAULT_HERO_DMS_RUN_REPORT_NAMES,
     between_reports_wait_ms: int = 500,
     continue_on_report_error: bool = True,
+    execution_log_path: Path | str | None = None,
 ) -> tuple[bool, str | None, list[str], list[dict[str, Any]]]:
     """
     Vehicle Sales → **My Orders** (mobile search), then drill-down on **Invoice#** when available
@@ -4406,8 +4488,11 @@ def print_hero_dms_forms(
     ``report_names`` to run a different set or order.
 
     When ``downloads_dir`` is omitted, files go under
-    ``ocr_output/{dealer_id}/{mobile}_{ddmmYYYY}/`` (see ``get_ocr_output_dir`` and ``downloads_dealer_id``).
+    ``Uploaded scans/{dealer_id}/{mobile}_{ddmmYYYY}/`` (see ``get_uploaded_scans_sale_folder`` and ``downloads_dealer_id``).
     Each file is saved as ``{mobile}_{Report Name}.pdf`` (spaces in the report title become underscores).
+
+    When ``execution_log_path`` is set (Playwright DMS ``Playwright_DMS_*.txt``), appends a
+    ``run_hero_dms_reports`` section listing downloads directory and per-report outcomes.
 
     By default ``continue_on_report_error`` is True: failures for one report do not stop the rest; the fourth
     return value lists each report with ``ok``, ``error``, and ``path``. Set False to stop on first failure.
@@ -4433,10 +4518,32 @@ def print_hero_dms_forms(
     else:
         _names = [str(x).strip() for x in (report_names or []) if str(x).strip()]
     if not _names:
+        _append_run_hero_dms_reports_to_playwright_log(
+            execution_log_path,
+            downloads_dir=None,
+            mobile=mobile or "",
+            report_names=_names,
+            report_details=[],
+            saved_paths=[],
+            summary=None,
+            all_ok=False,
+            abort_message="print_hero_dms_forms: report_names is empty.",
+        )
         return False, "print_hero_dms_forms: report_names is empty.", [], []
 
     digits = re.sub(r"\D", "", (mobile or "").strip())
     if not digits:
+        _append_run_hero_dms_reports_to_playwright_log(
+            execution_log_path,
+            downloads_dir=None,
+            mobile=mobile or "",
+            report_names=_names,
+            report_details=[],
+            saved_paths=[],
+            summary=None,
+            all_ok=False,
+            abort_message="print_hero_dms_forms: mobile_phone is empty.",
+        )
         return False, "print_hero_dms_forms: mobile_phone is empty.", [], []
 
     # ── Navigate to Vehicle Sales / My Orders (same URL + post-goto wait as ``_create_order``).
@@ -4485,6 +4592,19 @@ def print_hero_dms_forms(
             _drill_via = "invoice"
     if not _opened:
         if not _on:
+            _append_run_hero_dms_reports_to_playwright_log(
+                execution_log_path,
+                downloads_dir=None,
+                mobile=mobile,
+                report_names=_names,
+                report_details=[],
+                saved_paths=[],
+                summary=None,
+                all_ok=False,
+                abort_message=(
+                    "print_hero_dms_forms: need Order# or Invoice# (from argument or My Orders grid)."
+                ),
+            )
             return (
                 False,
                 "print_hero_dms_forms: need Order# or Invoice# (from argument or My Orders grid).",
@@ -4502,6 +4622,19 @@ def print_hero_dms_forms(
         if _opened:
             _drill_via = "order"
     if not _opened:
+        _append_run_hero_dms_reports_to_playwright_log(
+            execution_log_path,
+            downloads_dir=None,
+            mobile=mobile,
+            report_names=_names,
+            report_details=[],
+            saved_paths=[],
+            summary=None,
+            all_ok=False,
+            abort_message=(
+                "Create Order: Pending My Orders row but could not open Invoice# or Order# drill-down."
+            ),
+        )
         return (
             False,
             "Create Order: Pending My Orders row but could not open Invoice# or Order# drill-down.",
@@ -4527,9 +4660,21 @@ def print_hero_dms_forms(
     )
     if _err_mo:
         _lbl = "Invoice#" if _drill_via == "invoice" else "Order#"
+        _em = f"Create Order: Siebel error after My Orders {_lbl} click (pending): {_err_mo[:220]}"
+        _append_run_hero_dms_reports_to_playwright_log(
+            execution_log_path,
+            downloads_dir=None,
+            mobile=mobile,
+            report_names=_names,
+            report_details=[],
+            saved_paths=[],
+            summary=None,
+            all_ok=False,
+            abort_message=_em,
+        )
         return (
             False,
-            f"Create Order: Siebel error after My Orders {_lbl} click (pending): {_err_mo[:220]}",
+            _em,
             [],
             [],
         )
@@ -4555,6 +4700,19 @@ def print_hero_dms_forms(
         except Exception:
             continue
     if not _clicked_reports:
+        _append_run_hero_dms_reports_to_playwright_log(
+            execution_log_path,
+            downloads_dir=None,
+            mobile=mobile,
+            report_names=_names,
+            report_details=[],
+            saved_paths=[],
+            summary=None,
+            all_ok=False,
+            abort_message=(
+                "print_hero_dms_forms: Report(s) toolbar control (tb_14) not found or not clickable."
+            ),
+        )
         return (
             False,
             "print_hero_dms_forms: Report(s) toolbar control (tb_14) not found or not clickable.",
@@ -4679,6 +4837,18 @@ def print_hero_dms_forms(
             saved_paths.append(str(path_one))
         if not ok_one:
             if not continue_on_report_error:
+                _summary_partial = err_one or "download failed"
+                _append_run_hero_dms_reports_to_playwright_log(
+                    execution_log_path,
+                    downloads_dir=dest_root,
+                    mobile=mobile,
+                    report_names=_names,
+                    report_details=report_details,
+                    saved_paths=saved_paths,
+                    summary=_summary_partial,
+                    all_ok=False,
+                    abort_message=f"stopped on first failure (report: {_rn!r})",
+                )
                 return (
                     False,
                     f"print_hero_dms_forms: {err_one or 'download failed'} (report: {_rn!r})",
@@ -4694,6 +4864,17 @@ def print_hero_dms_forms(
             if not r.get("ok")
         ]
         _summary = "; ".join(_parts) if _parts else "one or more reports failed."
+    _append_run_hero_dms_reports_to_playwright_log(
+        execution_log_path,
+        downloads_dir=dest_root,
+        mobile=mobile,
+        report_names=_names,
+        report_details=report_details,
+        saved_paths=saved_paths,
+        summary=_summary,
+        all_ok=_all_ok,
+        abort_message=None,
+    )
     return _all_ok, _summary, saved_paths, report_details
 
 

@@ -7,7 +7,7 @@ export function AdminPage() {
 
   async function handleDeleteAllData() {
     const confirmed = window.confirm(
-      "This will delete all database data except oem_ref, dealer_ref, and oem_service_schedule. Do you want to continue?"
+      "This will delete all database data except oem_ref, dealer_ref, oem_service_schedule, and subdealer_discount_master. Do you want to continue?"
     );
     if (!confirmed) return;
 

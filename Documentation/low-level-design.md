@@ -100,7 +100,7 @@ backend/app/
 | GET | `/customer-search/form-vahan` | Get the `form_vahan_view` row for one customer/vehicle pair. |
 | GET | `/vehicle-search/search` | Query: **`chassis`**, **`engine`** (optional; at least one); **`dealer_id`** ignored (backward compat). Wildcard **`*`** → SQL `%`; 4–6 digit-only → suffix **`%digits`**. **No dealer filter:** **`vehicle_master`** ILIKE (engine may match via yard **`EXISTS`**); yard / challans / staging match **chassis** and **engine** only (ILIKE **OR** alnum-stripped). Returns **`vehicle_master`**, **`vehicle_inventory`**, **`sales_master`** (latest sale for that **`vehicle_id`**, any dealer), committed challans, **`challan_details_staging`**. |
 | GET | `/dealers/{dealer_id}` | Get dealer by ID (includes **`prefer_insurer`** from **`dealer_ref`** for Add Sales insurer default). |
-| POST | `/admin/reset-all-data` | Truncate all public base tables except `oem_ref`, `dealer_ref`, and `oem_service_schedule`. |
+| POST | `/admin/reset-all-data` | Truncate all public base tables except `oem_ref`, `dealer_ref`, `oem_service_schedule`, and `subdealer_discount_master`. |
 | GET | `/documents/{subfolder}/list` | List documents in subfolder. |
 | GET | `/documents/{subfolder}/{filename}` | Download document. |
 | POST | `/qr-decode` | Decode Aadhar QR. |
@@ -721,3 +721,4 @@ See **Documentation/Database DDL.md** for full table structures. Summary:
 | 6.284 | Apr 2026 | — | **`GET /vehicle-search/search`**: engine match via inventory **`EXISTS`**; inventory ILIKE fallback; **`challan_details_staging`** in response; **API Endpoints** table. |
 | 6.285 | Apr 2026 | — | **`GET /vehicle-search/search`**: OEM-wide yard inventory; **`EXISTS`** engine helper OEM-scoped; ILIKE **OR** alnum-stripped match; **`challan_details_staging`** fallback rows; **API Endpoints** table. |
 | 6.286 | Apr 2026 | — | **`GET /vehicle-search/search`**: **no dealer scoping** on match keys; **`vehicle_master`** without sales join; **`dealer_id`** query param ignored — **API Endpoints** table. |
+| 6.287 | Apr 2026 | — | **`POST /admin/reset-all-data`**: preserve **`subdealer_discount_master`** (with **`dealer_ref`**, **`oem_ref`**, **`oem_service_schedule`**); **`AdminPage`** confirm copy — **`app/routers/admin.py`** — **API Endpoints** table |

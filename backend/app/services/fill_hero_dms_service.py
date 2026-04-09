@@ -47,6 +47,7 @@ from app.config import (
     OCR_OUTPUT_DIR,
     dms_automation_is_real_siebel,
     get_ocr_output_dir,
+    get_uploaded_scans_sale_folder,
 )
 from app.services.hero_dms_shared_utilities import (
     SiebelDmsUrls,
@@ -2412,19 +2413,18 @@ def run_fill_dms_only(
             if page is not None:
                 try:
                     _frame_sel = (DMS_SIEBEL_CONTENT_FRAME_SELECTOR or "").strip() or None
-                    _dl_dir = (
-                        get_ocr_output_dir(int(DEALER_ID))
-                        / _safe_subfolder_name(effective_subfolder)
-                    ).resolve()
+                    _mob_pf = (dms_values.get("mobile_phone") or "").strip()
+                    _dl_dir = get_uploaded_scans_sale_folder(int(DEALER_ID), _mob_pf).resolve()
                     _ok_pf, _err_pf, _paths_pf, _reports_pf = run_hero_dms_reports(
                         page,
-                        mobile=(dms_values.get("mobile_phone") or "").strip(),
+                        mobile=_mob_pf,
                         order_number=(scraped_final.get("order_number") or "").strip(),
                         invoice_number=(scraped_final.get("invoice_number") or "").strip(),
                         action_timeout_ms=DMS_SIEBEL_ACTION_TIMEOUT_MS,
                         content_frame_selector=_frame_sel,
                         note=lambda m: logger.info("%s", m),
                         downloads_dir=_dl_dir,
+                        execution_log_path=result.get("playwright_dms_execution_log_path"),
                     )
                     result["hero_dms_form22_print"] = {
                         "ok": _ok_pf,
@@ -2938,10 +2938,7 @@ def Playwright_Hero_DMS_fill(
         if out.get("dms_master_persist_committed") is True:
             try:
                 _frame_sel_pf = (DMS_SIEBEL_CONTENT_FRAME_SELECTOR or "").strip() or None
-                _sub_pf = (dms_values.get("subfolder") or "").strip() or "default"
-                _dl_dir_pf = (
-                    get_ocr_output_dir(int(DEALER_ID)) / _safe_subfolder_name(_sub_pf)
-                ).resolve()
+                _dl_dir_pf = get_uploaded_scans_sale_folder(int(DEALER_ID), mobile).resolve()
                 _ok_pf, _err_pf, _paths_pf, _reports_pf = run_hero_dms_reports(
                     page,
                     mobile=mobile,
@@ -2951,6 +2948,7 @@ def Playwright_Hero_DMS_fill(
                     content_frame_selector=_frame_sel_pf,
                     note=note,
                     downloads_dir=_dl_dir_pf,
+                    execution_log_path=str(_exec_log_path) if _exec_log_path is not None else None,
                 )
                 out["hero_dms_form22_print"] = {
                     "ok": _ok_pf,
