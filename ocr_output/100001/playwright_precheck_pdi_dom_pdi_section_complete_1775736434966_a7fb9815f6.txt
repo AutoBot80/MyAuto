@@ -1,5 +1,5 @@
-timestamp_ist=2026-04-09T17:14:06.620+05:30
-reason=pdi_grid_and_expiry_evaluated
+timestamp_ist=2026-04-09T17:37:14.966+05:30
+reason=pdi_flow_finished
 main_page_url='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=HHML+Auto+Vehicle+PDI+Assessment+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Auto+Vehicle+Entry+Applet&SWERowId0=2-1JZNFGQY&SWEApplet1=HHML+PDI+List+Applet&SWERowId1=2-1K5GVKGN'
 
 --- frame[0] name='' url='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=HHML+Auto+Vehicle+PDI+Assessment+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Auto+Vehicle+Entry+Applet&SWERowId0=2-1JZNFGQY&SWEApplet1=HHML+PDI+List+Applet&SWERowId1=2-1K5GVKGN' ---

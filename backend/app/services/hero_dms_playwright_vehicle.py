@@ -12,7 +12,6 @@ import json
 import logging
 import re
 import time
-import uuid
 from pathlib import Path
 from contextlib import contextmanager
 from collections.abc import Callable
@@ -64,146 +63,6 @@ _BRANCH_HITS: dict[str, int] = {}
 def _branch_hit(func: str, branch: str) -> None:
     key = f"{func}::{branch}"
     _BRANCH_HITS[key] = _BRANCH_HITS.get(key, 0) + 1
-
-
-_PDI_DUMP_JS = """() => {
-    const vis = (el) => {
-        if (!el) return false;
-        const st = window.getComputedStyle(el);
-        if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
-        const r = el.getBoundingClientRect();
-        return r.width >= 2 && r.height >= 2;
-    };
-    const trunc = (s, n) => {
-        if (s == null || s === undefined) return '';
-        s = String(s).replace(/\\s+/g, ' ').trim();
-        return s.length > n ? s.slice(0, n - 3) + '...' : s;
-    };
-    const newrec = Array.from(document.querySelectorAll('button.siebui-icon-newrecord')).filter(vis).slice(0, 60).map(
-        (el) => ({
-            id: trunc(el.id, 100),
-            aria: trunc(el.getAttribute('aria-label'), 160),
-            title: trunc(el.getAttribute('title'), 160),
-            dataDisplay: trunc(el.getAttribute('data-display'), 80),
-        })
-    );
-    const tabTexts = Array.from(
-        document.querySelectorAll('.s_vctrl_div a, a[role="tab"], .ui-tabs-anchor, li.ui-state-default a')
-    )
-        .filter(vis)
-        .slice(0, 50)
-        .map((el) => trunc((el.innerText || el.textContent || '').trim(), 120));
-    const hints = [];
-    const pushHint = (el) => {
-        if (!vis(el) || hints.length >= 40) return;
-        hints.push({
-            tag: el.tagName,
-            id: trunc(el.id, 120),
-            cls: trunc(el.className, 140),
-            txt: trunc((el.innerText || '').trim(), 180),
-        });
-    };
-    ['PDI', 'pdi', 'Precheck', 'precheck', 'Pre-check', 'PreCheck', 'HMCL_PDI', 's_3_', 's_2_', 'gview_s_'].forEach((kw) => {
-        try {
-            document.querySelectorAll('[id*="' + kw.replace(/"/g, '') + '"]').forEach(pushHint);
-        } catch (e) {}
-    });
-    try {
-        document.querySelectorAll('table.ui-jqgrid-btable, tr.jqgrow').forEach((el, i) => {
-            if (i < 25) pushHint(el);
-        });
-    } catch (e) {}
-    const iframes = Array.from(document.querySelectorAll('iframe')).filter(vis).slice(0, 25).map((f) => ({
-        id: trunc(f.id, 80),
-        name: trunc(f.getAttribute('name'), 80),
-        title: trunc(f.getAttribute('title'), 80),
-        src: trunc(f.getAttribute('src'), 240),
-    }));
-    return JSON.stringify({
-        documentTitle: trunc(document.title, 240),
-        locationHref: trunc(location.href, 800),
-        newrecordButtons: newrec,
-        thirdLevelTabTexts: tabTexts,
-        pdiPrecheckGridHints: hints,
-        visibleIframes: iframes,
-    });
-}"""
-
-
-def _dump_precheck_pdi_dom_snapshot(
-    page: Page,
-    dump_dir: Path | str,
-    *,
-    reason: str,
-    tag: str,
-) -> str | None:
-    """
-    Write a text dump of visible frames and Pre-check/PDI-relevant DOM (``siebui-icon-newrecord``, tabs, hints).
-
-    Intended for the same directory as ``playwright_challan.txt`` (e.g. ``Challans/<leaf>/``).
-    Returns the resolved path written, or ``None`` on failure.
-    """
-    try:
-        d = Path(str(dump_dir)).resolve()
-        d.mkdir(parents=True, exist_ok=True)
-    except Exception as ex:
-        logger.warning("precheck_pdi_dom_dump: mkdir failed: %s", ex)
-        return None
-    safe = re.sub(r"[^\w\-.]+", "_", (tag or "dump").strip())[:72] or "dump"
-    fname = (
-        f"playwright_precheck_pdi_dom_{safe}_{int(time.time() * 1000)}_{uuid.uuid4().hex[:10]}.txt"
-    )
-    path = d / fname
-    lines: list[str] = [
-        f"timestamp_ist={_ts_ist_iso()}",
-        f"reason={reason}",
-        f"main_page_url={page.url!r}",
-        "",
-    ]
-    for fi, fr in enumerate(page.frames):
-        lines.append(f"--- frame[{fi}] name={fr.name!r} url={(fr.url or '')[:900]!r} ---")
-        try:
-            raw = fr.evaluate(_PDI_DUMP_JS)
-            if isinstance(raw, str) and raw.strip():
-                try:
-                    obj = json.loads(raw)
-                    lines.append(json.dumps(obj, indent=2, ensure_ascii=False))
-                except Exception:
-                    lines.append(raw[:200_000])
-            else:
-                lines.append(f"(empty evaluate result: {raw!r})")
-        except Exception as ex:
-            lines.append(f"(frame evaluate failed: {ex!r})")
-        lines.append("")
-    try:
-        path.write_text("\n".join(lines), encoding="utf-8")
-    except Exception as ex:
-        logger.warning("precheck_pdi_dom_dump: write failed %s: %s", path, ex)
-        return None
-    logger.info("precheck_pdi_dom_dump: wrote %s", path)
-    return str(path)
-
-
-def _emit_precheck_pdi_dom_dump(
-    page: Page,
-    diagnostic_dump_dir: Path | str | None,
-    *,
-    note,
-    log_prefix: str,
-    reason: str,
-    tag: str,
-) -> None:
-    """Write a Pre-check/PDI DOM snapshot when ``diagnostic_dump_dir`` is set (success or diagnostic checkpoints)."""
-    if not diagnostic_dump_dir:
-        return
-    _snap = _dump_precheck_pdi_dom_snapshot(
-        page,
-        diagnostic_dump_dir,
-        reason=reason,
-        tag=tag,
-    )
-    if _snap:
-        note(f"{log_prefix}: Pre-check/PDI DOM snapshot written: {_snap}")
 
 
 def _dump_branch_hits(note) -> None:
@@ -1549,7 +1408,6 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     scraped: dict | None = None,
     do_feature_id_scrape: bool = True,
     pdi_span_start_out: list[float] | None = None,
-    diagnostic_dump_dir: Path | str | None = None,
 ) -> tuple[bool, str | None]:
     """
     Pre-check + PDI applets on the **vehicle serial** detail view (after ``Serial Number`` drilldown).
@@ -2061,14 +1919,6 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             log_prefix=log_prefix,
             context="Pre-check",
         ):
-            _emit_precheck_pdi_dom_dump(
-                page,
-                diagnostic_dump_dir,
-                note=note,
-                log_prefix=log_prefix,
-                reason="precheck_service_request_list_new_failed",
-                tag="precheck_plus_fail",
-            )
             return (
                 False,
                 "Could not click Pre-check list '+' "
@@ -2213,14 +2063,6 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             return False, f"Siebel error after Pre-check Submit: {_submit_err[:200]}"
         note(f"{log_prefix}: Pre-check completed.")
 
-    _emit_precheck_pdi_dom_dump(
-        page,
-        diagnostic_dump_dir,
-        note=note,
-        log_prefix=log_prefix,
-        reason="precheck_section_complete_before_pdi_tab",
-        tag="precheck_section",
-    )
     _pdi_tab_clicked = _click_third_level_view_bar_tab(
         page, "PDI", wait_ms=300,
         content_frame_selector=content_frame_selector, note=note, log_prefix=log_prefix,
@@ -2530,14 +2372,6 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     note(
         f"{log_prefix}: pdi_decision need_new_row={_pdi_need_new_row} reason={_pdi_decision_reason}"
     )
-    _emit_precheck_pdi_dom_dump(
-        page,
-        diagnostic_dump_dir,
-        note=note,
-        log_prefix=log_prefix,
-        reason="pdi_grid_and_expiry_evaluated",
-        tag="pdi_after_eval",
-    )
 
     if _pdi_row_count > 0 and _pdi_expiry_raw and not _parsed_any:
         note(
@@ -2631,14 +2465,6 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 log_prefix=log_prefix,
                 pdi_row_count_hint=_pdi_rows_before_new,
                 expiry_raw_samples=_pdi_expiry_raw,
-            )
-            _emit_precheck_pdi_dom_dump(
-                page,
-                diagnostic_dump_dir,
-                note=note,
-                log_prefix=log_prefix,
-                reason="pdi_service_request_list_new_failed",
-                tag="pdi_plus_fail",
             )
             return (
                 False,
@@ -2743,14 +2569,6 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             f"({_pdi_rows_before_new} → {_pdi_rows_after_submit})."
         )
 
-    _emit_precheck_pdi_dom_dump(
-        page,
-        diagnostic_dump_dir,
-        note=note,
-        log_prefix=log_prefix,
-        reason="pdi_flow_finished",
-        tag="pdi_section_complete",
-    )
     note(f"{log_prefix}: PDI completed successfully.")
     if callable(form_trace):
         form_trace(
@@ -3779,7 +3597,6 @@ def _prepare_vehicle_scrape_serial_precheck_pdi_and_features(
     content_frame_selector: str | None,
     note,
     form_trace=None,
-    diagnostic_dump_dir: Path | str | None = None,
 ) -> str | None:
     """
     On the **vehicle** detail view (dealer stock): click **Serial Number**, run tab **Pre-check** + **PDI**
@@ -3823,7 +3640,6 @@ def _prepare_vehicle_scrape_serial_precheck_pdi_and_features(
         scraped=scraped,
         do_feature_id_scrape=True,
         pdi_span_start_out=_pdi_span_t0,
-        diagnostic_dump_dir=diagnostic_dump_dir,
     )
     if not _serial_pc_ok:
         return _serial_pc_err or "Pre-check / PDI failed after Serial Number drilldown (prepare_vehicle)."
@@ -4184,7 +4000,6 @@ def prepare_vehicle(
     form_trace=None,
     ms_done=None,
     step=None,
-    diagnostic_dump_dir: Path | str | None = None,
 ) -> tuple[bool, str | None, dict, bool, list[str], list[str]]:
     """
     Pre-booking **vehicle preparation** — ordered flow:
@@ -4196,10 +4011,6 @@ def prepare_vehicle(
     5. **Scrape** the center grid row (only now — avoids stale data from a prior vehicle).
     6. Key Number / Battery No. save, Vehicle Information aria-labels, Inventory Location gate.
     7. For dealer stock: Serial Number drilldown → Features → Pre-check + PDI.
-
-    ``diagnostic_dump_dir``: optional directory (e.g. parent of ``playwright_challan.txt``) for
-    ``playwright_precheck_pdi_dom_*.txt`` snapshots: on Pre-check/PDI checkpoints (end of Pre-check,
-    after PDI scrape/decision, end of PDI flow), and when Pre-check **+** or PDI **+** fails.
 
     Returns ``(ok, error, merged_vehicle_dict, in_transit, critical_gaps, informational_notes)``.
     """
@@ -4352,7 +4163,6 @@ def prepare_vehicle(
                 content_frame_selector=content_frame_selector,
                 note=note,
                 form_trace=form_trace,
-                diagnostic_dump_dir=diagnostic_dump_dir,
             )
             if _detail_pc_err:
                 merged = _merge_dms_and_grid_for_vehicle_master(dms_values, scraped)

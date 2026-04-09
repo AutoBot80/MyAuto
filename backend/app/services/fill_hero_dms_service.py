@@ -2202,6 +2202,8 @@ def _run_fill_dms_real_siebel_playwright(
         result["sales_id"] = frag.get("sales_id")
     if frag.get("dms_master_persist_committed") is not None:
         result["dms_master_persist_committed"] = frag.get("dms_master_persist_committed")
+    if frag.get("hero_dms_form22_print") is not None:
+        result["hero_dms_form22_print"] = frag.get("hero_dms_form22_print")
     result["dms_siebel_forms_filled"] = bool(frag.get("dms_siebel_forms_filled"))
     result["dms_siebel_notes"] = frag.get("dms_siebel_notes") or []
     result["dms_milestones"] = list(frag.get("dms_milestones") or [])
@@ -2660,7 +2662,9 @@ def Playwright_Hero_DMS_fill(
     ``prepare_vehicle`` → ``prepare_customer`` (``hero_dms_prepare_customer``) → ``prepare_order``
     (``hero_dms_playwright_invoice`` — **Generate Booking**, ``_create_order``) →
     ``persist_masters_after_create_order`` (``hero_dms_db_service``; delegates
-    ``insert_dms_masters_from_siebel_scrape`` when **Invoice#** and policy allow). Does not run a separate
+    ``insert_dms_masters_from_siebel_scrape`` when **Invoice#** and policy allow). When that persist commits
+    (``dms_master_persist_committed``), ``run_hero_dms_reports`` runs next (same Run Report PDF flow as
+    ``run_fill_dms_only``); report failure does not clear the DB success. Does not run a separate
     post-contact **Auto Vehicle List** stage after enquiry (vehicle prep is up front). Browser is not closed
     by this function.
 
@@ -2853,7 +2857,6 @@ def Playwright_Hero_DMS_fill(
             form_trace=form_trace,
             ms_done=ms_done,
             step=step,
-            diagnostic_dump_dir=_exec_log_path.parent if _exec_log_path is not None else None,
         )
         if not _pv_ok:
             out["error"] = _pv_err or "prepare_vehicle failed before contact find."
@@ -2931,6 +2934,34 @@ def Playwright_Hero_DMS_fill(
         if out.get("error"):
             return out
 
+        if out.get("dms_master_persist_committed") is True:
+            try:
+                _frame_sel_pf = (DMS_SIEBEL_CONTENT_FRAME_SELECTOR or "").strip() or None
+                _sub_pf = (dms_values.get("subfolder") or "").strip() or "default"
+                _dl_dir_pf = (
+                    get_ocr_output_dir(int(DEALER_ID)) / _safe_subfolder_name(_sub_pf)
+                ).resolve()
+                _ok_pf, _err_pf, _paths_pf, _reports_pf = run_hero_dms_reports(
+                    page,
+                    mobile=mobile,
+                    order_number=(str((out.get("vehicle") or {}).get("order_number") or "")).strip(),
+                    action_timeout_ms=DMS_SIEBEL_ACTION_TIMEOUT_MS,
+                    content_frame_selector=_frame_sel_pf,
+                    note=note,
+                    downloads_dir=_dl_dir_pf,
+                )
+                out["hero_dms_form22_print"] = {
+                    "ok": _ok_pf,
+                    "error": _err_pf,
+                    "paths": _paths_pf,
+                    "reports": _reports_pf,
+                }
+            except Exception as _pf_exc:
+                logger.warning(
+                    "fill_dms_service: run_hero_dms_reports after persist_masters_after_create_order: %s",
+                    _pf_exc,
+                )
+                out["hero_dms_form22_print"] = {"ok": False, "error": str(_pf_exc)}
 
         step(
             "Video SOP complete: customer record opened, payment added, and create_order flow completed. "
