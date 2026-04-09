@@ -70,6 +70,7 @@ def _run_prepare_vehicle_loop(
     frame_sel: str | None,
     steps: list[str],
     logln: Callable[[str], None],
+    diagnostic_dump_dir: Path,
 ) -> tuple[str | None, dict]:
     """Run prepare_vehicle for all Queued rows. Returns (error message or None, last successful scrape)."""
     last_vehicle_scrape: dict = {}
@@ -119,7 +120,7 @@ def _run_prepare_vehicle_loop(
                 form_trace=form_trace,
                 ms_done=ms_done,
                 step=step_msg,
-                diagnostic_dump_dir=log_path.parent,
+                diagnostic_dump_dir=diagnostic_dump_dir,
             )
             if not ok:
                 err_s = (err or "prepare_vehicle failed")[:2000]
@@ -413,6 +414,7 @@ def run_subdealer_challan_batch(
                 frame_sel=frame_sel,
                 steps=steps,
                 logln=logln,
+                diagnostic_dump_dir=log_path.parent,
             )
             master_repo.refresh_prepared_count(challan_batch_id)
             if prep_err:
