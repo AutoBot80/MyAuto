@@ -1526,12 +1526,14 @@ def _siebel_click_by_id_anywhere(
     label: str,
     log_prefix: str,
     wait_ms: int = 1000,
+    is_visible_timeout_ms: int = 700,
 ) -> bool:
     tmo = min(int(timeout_ms or 3000), 4000)
+    _vis = max(1, int(is_visible_timeout_ms or 700))
     for root in _siebel_all_search_roots(page, content_frame_selector):
         try:
             loc = root.locator(f"#{element_id}").first
-            if loc.count() > 0 and loc.is_visible(timeout=700):
+            if loc.count() > 0 and loc.is_visible(timeout=_vis):
                 try:
                     loc.click(timeout=tmo)
                 except Exception:

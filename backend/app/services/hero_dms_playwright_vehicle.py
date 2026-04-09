@@ -1048,14 +1048,14 @@ def _siebel_lov_pick_first_row_ok_pdi_style(
     """
     PDI **Service Request** pick-applet pattern (shared with Pre-check **Technician** LOV).
 
-    Sequence matches the inline PDI block: **800ms** settle → click first plausible table data row
-    (``table tbody tr`` / ``table tr``) → **600ms** → click **OK** (five selectors, **500ms** visibility) →
-    **1000ms** → **400ms** after-dialog settle.
+    Sequence matches the inline PDI block: **300ms** settle → click first plausible table data row
+    (``table tbody tr`` / ``table tr``) → **300ms** → click **OK** (five selectors, **300ms** visibility) →
+    **300ms** → **300ms** after-dialog settle.
 
     Returns ``(row_clicked, ok_clicked)``. Caller may require both before **Submit** / **Ctrl+S**.
     """
     _tmo = min(int(action_timeout_ms or 3000), 4000)
-    _safe_page_wait(page, 800, log_label=f"after_{stage_label}_lov_pdi_style_settle")
+    _safe_page_wait(page, 300, log_label=f"after_{stage_label}_lov_pdi_style_settle")
     _row_hit = False
     for root in roots():
         try:
@@ -1085,7 +1085,7 @@ def _siebel_lov_pick_first_row_ok_pdi_style(
             if _row_result:
                 _row_hit = True
                 note(f"{log_prefix}: picked first row in pick applet ({stage_label}).")
-                _safe_page_wait(page, 600, log_label=f"after_{stage_label}_row_pick")
+                _safe_page_wait(page, 300, log_label=f"after_{stage_label}_row_pick")
                 break
         except Exception:
             continue
@@ -1101,14 +1101,14 @@ def _siebel_lov_pick_first_row_ok_pdi_style(
         ):
             try:
                 ok_loc = root.locator(ok_css).first
-                if ok_loc.count() > 0 and ok_loc.is_visible(timeout=500):
+                if ok_loc.count() > 0 and ok_loc.is_visible(timeout=300):
                     try:
                         ok_loc.click(timeout=_tmo)
                     except Exception:
                         ok_loc.click(timeout=_tmo, force=True)
                     _ok_done = True
                     note(f"{log_prefix}: clicked OK on pick applet ({stage_label}).")
-                    _safe_page_wait(page, 1000, log_label=f"after_{stage_label}_ok")
+                    _safe_page_wait(page, 300, log_label=f"after_{stage_label}_ok")
                     break
             except Exception:
                 continue
@@ -1117,8 +1117,65 @@ def _siebel_lov_pick_first_row_ok_pdi_style(
     if not _ok_done:
         note(f"{log_prefix}: OK button not found on pick applet ({stage_label}) (best-effort).")
 
-    _safe_page_wait(page, 400, log_label=f"after_{stage_label}_lov_close_settle")
+    _safe_page_wait(page, 300, log_label=f"after_{stage_label}_lov_close_settle")
     return _row_hit, _ok_done
+
+
+def _pdi_note_service_request_new_click_diagnostics(
+    page: Page,
+    *,
+    roots: Callable[[], list],
+    note,
+    log_prefix: str,
+    pdi_row_count_hint: int,
+    expiry_raw_samples: list[str],
+) -> None:
+    """Compact DOM hints after a failed PDI **Service Request List:New** click (operator logs)."""
+    _js = """() => {
+        const vis = (el) => {
+            if (!el) return false;
+            const st = window.getComputedStyle(el);
+            if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+            const r = el.getBoundingClientRect();
+            return r.width >= 2 && r.height >= 2;
+        };
+        const btns = Array.from(document.querySelectorAll('button.siebui-icon-newrecord'));
+        let visCnt = 0;
+        const labels = [];
+        for (const el of btns) {
+            if (!vis(el)) continue;
+            visCnt++;
+            const al = (el.getAttribute('aria-label') || '').trim();
+            const tt = (el.getAttribute('title') || '').trim();
+            const id = (el.id || '').trim();
+            const one = (al || tt || id);
+            if (one) labels.push(one.slice(0, 80));
+            if (labels.length >= 6) break;
+        }
+        return { visibleNewrecord: visCnt, sampleLabels: labels };
+    }"""
+    best: dict | None = None
+    for _root in roots():
+        try:
+            _pr = _root.evaluate(_js)
+            if isinstance(_pr, dict):
+                best = _pr
+                break
+        except Exception:
+            continue
+    if best is None:
+        try:
+            _pg = page.evaluate(_js)
+            best = _pg if isinstance(_pg, dict) else None
+        except Exception:
+            best = None
+    _vc = int((best or {}).get("visibleNewrecord") or 0)
+    _labs = (best or {}).get("sampleLabels") or []
+    _raw_preview = [str(x)[:64] for x in (expiry_raw_samples or [])[:4]]
+    note(
+        f"{log_prefix}: PDI New click failure diagnostics: grid_rowCount_hint≈{pdi_row_count_hint} "
+        f"expiry_raw_preview={_raw_preview!r} visible_siebui_newrecord≈{_vc} label_samples={_labs!r}."
+    )
 
 
 def _siebel_click_service_request_list_new_record(
@@ -1139,6 +1196,9 @@ def _siebel_click_service_request_list_new_record(
     ids, not only **Service Request List:New**. See **LLD** **6.240**, **6.243**.
     """
     _tmo = min(int(action_timeout_ms or 3000), 4000)
+    _vis_tmo = 600
+    if str(context or "").strip().upper() == "PDI":
+        _vis_tmo = min(max(int(action_timeout_ms or 3000), 1500), 8000)
 
     def _label_is_list_new_not_menu(el) -> bool:
         try:
@@ -1271,7 +1331,7 @@ def _siebel_click_service_request_list_new_record(
             for _role in ("link", "button"):
                 try:
                     _rl = _root.get_by_role(_role, name=_sr_role_name, exact=True)
-                    if _rl.count() > 0 and _rl.first.is_visible(timeout=600):
+                    if _rl.count() > 0 and _rl.first.is_visible(timeout=_vis_tmo):
                         try:
                             _rl.first.click(timeout=_tmo)
                         except Exception:
@@ -1292,7 +1352,7 @@ def _siebel_click_service_request_list_new_record(
                 _n = _grp.count()
                 for _ii in range(min(_n, 12)):
                     _loc = _grp.nth(_ii)
-                    if not _loc.is_visible(timeout=500):
+                    if not _loc.is_visible(timeout=min(_vis_tmo, 2500)):
                         continue
                     if not _label_is_list_new_not_menu(_loc):
                         continue
@@ -1631,7 +1691,8 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 note=note,
                 label=f"Pre-check pick icon ({_pc_pick_id}) [{stage_label}]",
                 log_prefix=log_prefix,
-                wait_ms=1200,
+                wait_ms=300,
+                is_visible_timeout_ms=300,
             ):
                 _ok = True
                 _used = _pc_pick_id
@@ -1659,10 +1720,10 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                             if _ni >= _nmax:
                                 continue
                             _loc = _grp.nth(_ni)
-                            if not _loc.is_visible(timeout=700):
+                            if not _loc.is_visible(timeout=300):
                                 continue
                             try:
-                                _loc.scroll_into_view_if_needed(timeout=800)
+                                _loc.scroll_into_view_if_needed(timeout=300)
                             except Exception:
                                 pass
                             try:
@@ -1685,7 +1746,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         return _ok, _used
 
     def _pick_first_row_and_ok(stage_label: str) -> bool:
-        _safe_page_wait(page, 800, log_label=f"after_{stage_label}_icon_settle")
+        _safe_page_wait(page, 300, log_label=f"after_{stage_label}_icon_settle")
         _pick_ok = False
         for root in _roots():
             try:
@@ -1716,7 +1777,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 }""")
                 if _pick_result:
                     note(f"{log_prefix}: clicked search in pick applet ({stage_label}, {_pick_result!r}).")
-                    _safe_page_wait(page, 1200, log_label=f"after_{stage_label}_search_click")
+                    _safe_page_wait(page, 300, log_label=f"after_{stage_label}_search_click")
                     _pick_ok = True
                     break
             except Exception:
@@ -1726,12 +1787,12 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             note(f"{log_prefix}: search icon not found in pick applet ({stage_label}; trying Enter fallback).")
             try:
                 page.keyboard.press("Enter")
-                _safe_page_wait(page, 1200, log_label=f"after_{stage_label}_enter_fallback")
+                _safe_page_wait(page, 300, log_label=f"after_{stage_label}_enter_fallback")
                 _pick_ok = True
             except Exception:
                 pass
 
-        _safe_page_wait(page, 600, log_label=f"before_{stage_label}_pick_row")
+        _safe_page_wait(page, 300, log_label=f"before_{stage_label}_pick_row")
         _row_clicked = False
         for root in _roots():
             try:
@@ -1775,7 +1836,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 if _row_result:
                     _row_clicked = True
                     note(f"{log_prefix}: picked first row in pick applet ({stage_label}).")
-                    _safe_page_wait(page, 600, log_label=f"after_{stage_label}_row_pick")
+                    _safe_page_wait(page, 300, log_label=f"after_{stage_label}_row_pick")
                     break
             except Exception:
                 continue
@@ -1783,7 +1844,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         if _row_clicked:
             try:
                 page.keyboard.press("Enter")
-                _safe_page_wait(page, 450, log_label=f"after_{stage_label}_row_enter_commit")
+                _safe_page_wait(page, 300, log_label=f"after_{stage_label}_row_enter_commit")
             except Exception:
                 pass
 
@@ -1805,14 +1866,14 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 for ok_css in _ok_selectors:
                     try:
                         ok_loc = root.locator(ok_css).first
-                        if ok_loc.count() > 0 and ok_loc.is_visible(timeout=600):
+                        if ok_loc.count() > 0 and ok_loc.is_visible(timeout=300):
                             try:
                                 ok_loc.click(timeout=_tmo)
                             except Exception:
                                 ok_loc.click(timeout=_tmo, force=True)
                             _branch_hit("_pick_first_row_and_ok", f"ok_{ok_css[:30]}_{stage_label}")
                             note(f"{log_prefix}: clicked OK on pick applet ({stage_label}).")
-                            _safe_page_wait(page, 1000, log_label=f"after_{stage_label}_ok")
+                            _safe_page_wait(page, 300, log_label=f"after_{stage_label}_ok")
                             return True
                     except Exception:
                         continue
@@ -1822,7 +1883,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         if not _ok_done_local and _row_clicked:
             try:
                 page.keyboard.press("Enter")
-                _safe_page_wait(page, 500, log_label=f"after_{stage_label}_second_enter_for_ok")
+                _safe_page_wait(page, 300, log_label=f"after_{stage_label}_second_enter_for_ok")
             except Exception:
                 pass
             _ok_done_local = _scan_ok()
@@ -1906,7 +1967,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             try:
                 if bool(_root.evaluate(_jq_js)):
                     note(f"{log_prefix}: focused Pre-check list first data row (jqgrow) before Open pick.")
-                    _safe_page_wait(page, 450, log_label="after_precheck_jqgrow_focus")
+                    _safe_page_wait(page, 300, log_label="after_precheck_jqgrow_focus")
                     return
             except Exception:
                 continue
@@ -1927,7 +1988,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 "Precheck List:New; skipped Service Request List: Menu).",
             )
         note(f"{log_prefix}: clicked Pre-check list New (+).")
-        _safe_page_wait(page, 1200, log_label="after_precheck_list_new")
+        _safe_page_wait(page, 300, log_label="after_precheck_list_new")
 
     _precheck_icon_ok = True
     _precheck_icon_used = ""
@@ -1938,7 +1999,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             if _open_try > 0:
                 try:
                     page.keyboard.press("Tab")
-                    _safe_page_wait(page, 180, log_label=f"precheck_tab_before_open_pick_try_{_open_try}")
+                    _safe_page_wait(page, 300, log_label=f"precheck_tab_before_open_pick_try_{_open_try}")
                 except Exception:
                     pass
             _precheck_icon_ok, _precheck_icon_used = _click_precheck_pick_icon("precheck_open_status")
@@ -1980,14 +2041,14 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 ):
                     try:
                         sub_loc = root.locator(sub_css).first
-                        if sub_loc.count() > 0 and sub_loc.is_visible(timeout=700):
+                        if sub_loc.count() > 0 and sub_loc.is_visible(timeout=300):
                             try:
                                 sub_loc.click(timeout=_tmo)
                             except Exception:
                                 sub_loc.click(timeout=_tmo, force=True)
                             _done = True
                             note(f"{log_prefix}: clicked Submit (Pre-check).")
-                            _safe_page_wait(page, 1500, log_label="after_precheck_submit")
+                            _safe_page_wait(page, 300, log_label="after_precheck_submit")
                             break
                     except Exception:
                         continue
@@ -1996,7 +2057,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             if not _done:
                 try:
                     page.keyboard.press("Control+s")
-                    _safe_page_wait(page, 1200, log_label="after_precheck_ctrl_s_save")
+                    _safe_page_wait(page, 300, log_label="after_precheck_ctrl_s_save")
                     _done = True
                     note(f"{log_prefix}: Pre-check record save via Ctrl+S (no Submit control matched).")
                 except Exception:
@@ -2039,7 +2100,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 if _ti > 0:
                     try:
                         page.keyboard.press("Tab")
-                        _safe_page_wait(page, 220, log_label=f"precheck_tab_toward_technician_{_ti}")
+                        _safe_page_wait(page, 300, log_label=f"precheck_tab_toward_technician_{_ti}")
                     except Exception:
                         pass
                 _tech_icon_ok, _tech_icon_used = _click_precheck_pick_icon("precheck_technician_after_tab")
@@ -2086,7 +2147,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         % ((time.perf_counter() - _t_precheck_span) * 1000.0),
     )
     _pdi_tab_clicked = _click_third_level_view_bar_tab(
-        page, "PDI", wait_ms=1500,
+        page, "PDI", wait_ms=300,
         content_frame_selector=content_frame_selector, note=note, log_prefix=log_prefix,
     )
     for root in _roots():
@@ -2101,7 +2162,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         ):
             try:
                 loc = root.locator(_pdi_css).first
-                if loc.count() > 0 and loc.is_visible(timeout=700):
+                if loc.count() > 0 and loc.is_visible(timeout=300):
                     try:
                         loc.click(timeout=_tmo)
                     except Exception:
@@ -2140,8 +2201,8 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     if not _pdi_tab_clicked:
         return False, "Could not click PDI tab."
     note(f"{log_prefix}: clicked PDI tab.")
-    _safe_page_wait(page, 200, log_label="after_pdi_tab_click_refresh")
-    _safe_page_wait(page, 1500, log_label="after_pdi_tab")
+    _safe_page_wait(page, 300, log_label="after_pdi_tab_click_refresh")
+    _safe_page_wait(page, 300, log_label="after_pdi_tab")
     try:
         _pv_networkidle(note, page, 8_000, f"{log_prefix}_after_pdi_tab")
     except Exception as e:
@@ -2362,6 +2423,49 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     else:
         _pdi_need_new_row = True
 
+    _pdi_saw_row = _pdi_row_count > 0
+    _raw_samples_log: list[str] = []
+    for _sx in _pdi_expiry_raw[:12]:
+        _t = str(_sx or "").replace("\n", " ").strip()
+        if len(_t) > 96:
+            _t = _t[:93] + "..."
+        _raw_samples_log.append(_t)
+    _pd_iso = [d.isoformat() for d in _pdi_dates_only]
+    _pdt_iso = [dt.isoformat(timespec="seconds") for dt in _pdi_datetimes]
+    if not _pdi_need_new_row:
+        _pdi_decision_reason = "valid_skip"
+    elif _pdi_row_count == 0:
+        _pdi_decision_reason = "empty_list"
+    elif not _pdi_expiry_raw:
+        _pdi_decision_reason = "no_expiry_raw"
+    elif not _parsed_any:
+        _pdi_decision_reason = "unparsed"
+    elif not _pdi_valid:
+        _pdi_decision_reason = "expired"
+    else:
+        _pdi_decision_reason = "unknown"
+    _pv_timing(
+        note,
+        "pdi_scrape_saw_row saw_row=%s row_count=%d header_matched=%s"
+        % (_pdi_saw_row, _pdi_row_count, _pdi_header_matched),
+    )
+    _pv_timing(
+        note,
+        "pdi_scrape_expiry raw_count=%d raw_samples=%r parsed_dates=%r parsed_datetimes=%r pdi_valid=%s"
+        % (
+            len(_pdi_expiry_raw),
+            _raw_samples_log[:8],
+            _pd_iso,
+            _pdt_iso,
+            _pdi_valid,
+        ),
+    )
+    _pv_timing(
+        note,
+        "pdi_decision need_new_row=%s reason=%s"
+        % (_pdi_need_new_row, _pdi_decision_reason),
+    )
+
     if _pdi_row_count > 0 and _pdi_expiry_raw and not _parsed_any:
         note(
             f"{log_prefix}: PDI list has row(s) (count≈{_pdi_row_count}) but PDI Expiry text did not parse "
@@ -2418,22 +2522,50 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             f"{log_prefix}: PDI new-row flow — Service Request list rowCount≈{_pdi_rows_before_new} "
             "(before New)."
         )
-        _safe_page_wait(page, 1200, log_label="before_pdi_service_request_list_new")
-        if not _siebel_click_service_request_list_new_record(
-            page,
-            roots=_roots,
-            action_timeout_ms=action_timeout_ms,
-            note=note,
-            log_prefix=log_prefix,
-            context="PDI",
-        ):
+        _safe_page_wait(page, 300, log_label="before_pdi_service_request_list_new")
+        _pdi_new_ok = False
+        for _pdi_new_attempt in range(4):
+            if _siebel_click_service_request_list_new_record(
+                page,
+                roots=_roots,
+                action_timeout_ms=action_timeout_ms,
+                note=note,
+                log_prefix=log_prefix,
+                context="PDI",
+            ):
+                _pdi_new_ok = True
+                if _pdi_new_attempt > 0:
+                    note(
+                        f"{log_prefix}: Service Request List:New succeeded on attempt "
+                        f"{_pdi_new_attempt + 1}/4."
+                    )
+                break
+            if _pdi_new_attempt < 3:
+                note(
+                    f"{log_prefix}: Service Request List:New attempt {_pdi_new_attempt + 1}/4 failed — "
+                    "retrying."
+                )
+                _safe_page_wait(
+                    page,
+                    300,
+                    log_label=f"pdi_service_request_list_new_retry_{_pdi_new_attempt + 1}",
+                )
+        if not _pdi_new_ok:
+            _pdi_note_service_request_new_click_diagnostics(
+                page,
+                roots=_roots,
+                note=note,
+                log_prefix=log_prefix,
+                pdi_row_count_hint=_pdi_rows_before_new,
+                expiry_raw_samples=_pdi_expiry_raw,
+            )
             return (
                 False,
                 "Could not click 'Service Request List:New' on PDI tab "
                 "(same paths as Pre-check +; see _siebel_click_service_request_list_new_record).",
             )
         note(f"{log_prefix}: clicked Service Request List:New on PDI tab.")
-        _safe_page_wait(page, 1200, log_label="after_sr_list_new")
+        _safe_page_wait(page, 300, log_label="after_sr_list_new")
 
         # The "+" is often only title/aria "Service Request List:New" (clicked above). Some builds add a
         # separate Siebel pick id — try it, but do not fail the flow if absent (tenant has no s_2_2_32_0_icon).
@@ -2445,7 +2577,8 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             note=note,
             label="PDI pick icon (legacy s_2_2_32_0_icon)",
             log_prefix=log_prefix,
-            wait_ms=1200,
+            wait_ms=300,
+            is_visible_timeout_ms=300,
         )
         if not _pdi_legacy_pick:
             _pdi_legacy_pick = _siebel_click_by_id_anywhere(
@@ -2456,7 +2589,8 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 note=note,
                 label="PDI pick button (legacy s_2_2_32_0)",
                 log_prefix=log_prefix,
-                wait_ms=1200,
+                wait_ms=300,
+                is_visible_timeout_ms=300,
             )
         if not _pdi_legacy_pick:
             note(
@@ -2486,14 +2620,14 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             ):
                 try:
                     sub_loc = root.locator(sub_css).first
-                    if sub_loc.count() > 0 and sub_loc.is_visible(timeout=700):
+                    if sub_loc.count() > 0 and sub_loc.is_visible(timeout=300):
                         try:
                             sub_loc.click(timeout=_tmo)
                         except Exception:
                             sub_loc.click(timeout=_tmo, force=True)
                         _pdi_submit_done = True
                         note(f"{log_prefix}: clicked Submit on PDI form.")
-                        _safe_page_wait(page, 1500, log_label="after_pdi_submit")
+                        _safe_page_wait(page, 300, log_label="after_pdi_submit")
                         break
                 except Exception:
                     continue
@@ -2507,7 +2641,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             note(f"{log_prefix}: Siebel error after PDI Submit → {_pdi_submit_err!r:.300}")
             return False, f"Siebel error after PDI Submit: {_pdi_submit_err[:200]}"
 
-        _safe_page_wait(page, 2000, log_label="pdi_post_submit_row_verify")
+        _safe_page_wait(page, 300, log_label="pdi_post_submit_row_verify")
         _pdi_submit_err_late = _detect_siebel_error_popup(page, content_frame_selector)
         if _pdi_submit_err_late:
             note(f"{log_prefix}: Siebel error after PDI Submit (delayed) → {_pdi_submit_err_late!r:.300}")
@@ -2515,7 +2649,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
 
         _pdi_rows_after_submit = _eval_pdi_grid_rowcount()
         if _pdi_rows_after_submit <= _pdi_rows_before_new:
-            _safe_page_wait(page, 2000, log_label="pdi_rowcount_recheck")
+            _safe_page_wait(page, 300, log_label="pdi_rowcount_recheck")
             _pdi_rows_after_submit = _eval_pdi_grid_rowcount()
         if _pdi_rows_after_submit <= _pdi_rows_before_new:
             return (
