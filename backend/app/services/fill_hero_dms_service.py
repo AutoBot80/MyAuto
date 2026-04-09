@@ -2755,10 +2755,7 @@ def Playwright_Hero_DMS_fill(
     def note(msg: str) -> None:
         out["dms_siebel_notes"].append(msg)
         logger.info("siebel_dms: %s", msg)
-        if (msg or "").startswith("TIMING:"):
-            _exec_log("TIMING", (msg or "").strip())
-        else:
-            _exec_log("NOTE", msg)
+        _exec_log("NOTE", msg)
 
     def log_vehicle_snapshot(stage: str) -> None:
         """
@@ -3018,10 +3015,7 @@ def Playwright_Hero_DMS_fill_subdealer_challan_order_only(
     def note(msg: str) -> None:
         out["dms_siebel_notes"].append(msg)
         logger.info("siebel_dms_challan: %s", msg)
-        if (msg or "").startswith("TIMING:"):
-            _exec_log("TIMING", (msg or "").strip())
-        else:
-            _exec_log("NOTE", msg)
+        _exec_log("NOTE", msg)
 
     def log_vehicle_snapshot(stage: str) -> None:
         veh = out.get("vehicle") or {}

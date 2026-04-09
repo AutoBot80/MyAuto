@@ -10,6 +10,7 @@ from .submit_info import router as submit_info_router
 from .fill_forms_router import router as fill_forms_router
 from .rto_payment_details import router as rto_payment_details_router
 from .customer_search import router as customer_search_router
+from .vehicle_search import router as vehicle_search_router
 from .documents import router as documents_router
 from .bulk_loads import router as bulk_loads_router
 from .admin import router as admin_router
@@ -29,6 +30,7 @@ __all__ = [
     "fill_forms_router",
     "rto_payment_details_router",
     "customer_search_router",
+    "vehicle_search_router",
     "documents_router",
     "bulk_loads_router",
     "admin_router",

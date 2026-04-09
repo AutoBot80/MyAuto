@@ -27,9 +27,7 @@ from app.config import (
 )
 from app.services.hero_dms_shared_utilities import (
     SiebelDmsUrls,
-    begin_sleep_stats_tracking,
     _detect_siebel_error_popup,
-    end_sleep_stats_tracking,
     _goto,
     _is_browser_disconnected_error,
     _iter_frame_locator_roots,
@@ -215,18 +213,11 @@ def _dump_branch_hits(note) -> None:
     logger.info("branch_hits: %s", _BRANCH_HITS)
 
 
-def _pv_timing(note, msg: str) -> None:
-    """Emit one structured timing line for ``prepare_vehicle`` (``TIMING:`` prefix — Subdealer forwards to log file)."""
-    if callable(note):
-        note(f"TIMING: {msg}")
-
-
 def _pv_networkidle(note, page: Page, timeout_ms: int, label: str) -> bool:
     """
-    ``wait_for_load_state(networkidle)`` with elapsed ms + ok logged. Does not raise on timeout (matches existing flow).
+    ``wait_for_load_state(networkidle)``. Does not raise on timeout (matches existing flow).
     Returns True if network idle was reached.
     """
-    t0 = time.perf_counter()
     ok = True
     try:
         page.wait_for_load_state("networkidle", timeout=timeout_ms)
@@ -236,33 +227,13 @@ def _pv_networkidle(note, page: Page, timeout_ms: int, label: str) -> bool:
         if _is_browser_disconnected_error(e):
             raise
         ok = False
-    elapsed_ms = (time.perf_counter() - t0) * 1000.0
-    _pv_timing(
-        note,
-        f"networkidle label={label} timeout_ms={timeout_ms} elapsed_ms={elapsed_ms:.0f} ok={'true' if ok else 'false'}",
-    )
     return ok
 
 
 @contextmanager
 def _prepare_vehicle_timing_scope(note):
-    """Aggregate ``_safe_page_wait`` by label and log total wall time for ``prepare_vehicle`` body."""
-    tok = begin_sleep_stats_tracking()
-    t0 = time.perf_counter()
-    try:
-        yield
-    finally:
-        stats = end_sleep_stats_tracking(tok)
-        if stats and callable(note):
-            parts: list[str] = []
-            for k in sorted(stats.keys()):
-                c = stats[k]
-                parts.append(f"{k}={int(c['count'])}×{int(c['total_ms'])}ms")
-            _pv_timing(note, "sleep_summary " + "; ".join(parts))
-        _pv_timing(
-            note,
-            "phase=prepare_vehicle_total elapsed_ms=%.0f" % ((time.perf_counter() - t0) * 1000.0),
-        )
+    """Context manager wrapping ``prepare_vehicle`` body (timing traces removed)."""
+    yield
 
 
 # Left **Search Results** pane: usually ``div#gview_s_1001_l`` but Siebel may reassign the gview id
@@ -298,7 +269,6 @@ def _siebel_poll_left_search_title_matches(
     polls = max(1, int(max_polls))
     interval = max(50, int(poll_ms))
     stale_logged = False
-    start_t = time.perf_counter()
 
     js = """(vk) => {
       const norm = s => String(s || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
@@ -319,11 +289,6 @@ def _siebel_poll_left_search_title_matches(
         try:
             if page.evaluate(js, vk_upper):
                 _safe_page_wait(page, interval, log_label="left_search_match_settle")
-                _pv_timing(
-                    note,
-                    "poll_left_search_title_matches ok=true round=%d max_polls=%d interval_ms=%d elapsed_ms=%.0f"
-                    % (round_i + 1, polls, interval, (time.perf_counter() - start_t) * 1000.0),
-                )
                 return True
         except Exception:
             pass
@@ -336,11 +301,6 @@ def _siebel_poll_left_search_title_matches(
         if round_i < polls - 1:
             _safe_page_wait(page, interval, log_label="left_search_stale_poll")
 
-    _pv_timing(
-        note,
-        "poll_left_search_title_matches ok=false max_polls=%d interval_ms=%d elapsed_ms=%.0f"
-        % (polls, interval, (time.perf_counter() - start_t) * 1000.0),
-    )
     try:
         diag = page.evaluate("""() => {
           const gvs = [];
@@ -379,7 +339,6 @@ def _siebel_poll_center_list_matches(
     polls = max(1, int(max_polls))
     interval = max(50, int(poll_ms))
     sync_logged = False
-    start_t = time.perf_counter()
 
     js = """(vk) => {
       const norm = s => String(s || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
@@ -401,11 +360,6 @@ def _siebel_poll_center_list_matches(
         try:
             if page.evaluate(js, vk_upper):
                 _safe_page_wait(page, interval, log_label="center_list_match_settle")
-                _pv_timing(
-                    note,
-                    "poll_center_list_matches ok=true round=%d max_polls=%d interval_ms=%d elapsed_ms=%.0f"
-                    % (round_i + 1, polls, interval, (time.perf_counter() - start_t) * 1000.0),
-                )
                 return True
         except Exception:
             pass
@@ -418,11 +372,6 @@ def _siebel_poll_center_list_matches(
             )
         if round_i < polls - 1:
             _safe_page_wait(page, interval, log_label="center_list_poll")
-    _pv_timing(
-        note,
-        "poll_center_list_matches ok=false max_polls=%d interval_ms=%d elapsed_ms=%.0f"
-        % (polls, interval, (time.perf_counter() - start_t) * 1000.0),
-    )
     return False
 
 
@@ -1627,8 +1576,6 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     **gview_s_2** / **s_2_l** (PDI list). Unrelated large grids are still avoided (not every ``<table>``).
     """
     _tmo = min(int(action_timeout_ms or 3000), 4000)
-    _t_precheck_span = time.perf_counter()
-    _pv_timing(note, "precheck_checkpoint checkpoint=precheck_span_start elapsed_ms=0")
 
     def _roots():
         return _siebel_all_search_roots(page, content_frame_selector)
@@ -1793,17 +1740,6 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             f"{log_prefix}: Pre-check already has row(s) "
             f"(rows={_precheck_existing_rows}, signal={_precheck_existing_signal or 'n/a'}) — "
             "skipping Pre-check entry and continuing to PDI."
-        )
-        _elapsed_skip = (time.perf_counter() - _t_precheck_span) * 1000.0
-        _pv_timing(
-            note,
-            f"precheck_checkpoint checkpoint=precheck_after_open_lov elapsed_ms={_elapsed_skip:.0f} "
-            "skipped=true reason=precheck_already_has_rows",
-        )
-        _pv_timing(
-            note,
-            f"precheck_checkpoint checkpoint=precheck_before_technician_or_submit_done elapsed_ms={_elapsed_skip:.0f} "
-            "skipped=true reason=precheck_already_has_rows",
         )
 
     def _click_precheck_pick_icon(stage_label: str) -> tuple[bool, str]:
@@ -2173,11 +2109,6 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 "Pre-check: Open status pick applet did not complete (row/OK not confirmed). "
                 "Technician step was not run; Pre-check Submit and PDI were skipped.",
             )
-        _pv_timing(
-            note,
-            "precheck_checkpoint checkpoint=precheck_after_open_lov elapsed_ms=%.0f ok=true"
-            % ((time.perf_counter() - _t_precheck_span) * 1000.0),
-        )
 
         def _precheck_try_submit() -> bool:
             _done = False
@@ -2221,17 +2152,6 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         _submit_done = _precheck_try_submit()
         _err_after_submit = _detect_siebel_error_popup(page, content_frame_selector)
         _will_try_technician = not (_submit_done and not _err_after_submit)
-        _pv_timing(
-            note,
-            "precheck_checkpoint checkpoint=precheck_before_technician_or_submit_done elapsed_ms=%.0f "
-            "submit_done=%s err_after_submit=%s will_try_technician=%s"
-            % (
-                (time.perf_counter() - _t_precheck_span) * 1000.0,
-                _submit_done,
-                bool(_err_after_submit),
-                _will_try_technician,
-            ),
-        )
         if _submit_done and not _err_after_submit:
             note(f"{log_prefix}: Pre-check saved after Open LOV (Submit/Ctrl+S; Technician step skipped).")
         else:
@@ -2293,11 +2213,6 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             return False, f"Siebel error after Pre-check Submit: {_submit_err[:200]}"
         note(f"{log_prefix}: Pre-check completed.")
 
-    _pv_timing(
-        note,
-        "precheck_checkpoint checkpoint=precheck_complete_before_pdi_tab elapsed_ms=%.0f"
-        % ((time.perf_counter() - _t_precheck_span) * 1000.0),
-    )
     _emit_precheck_pdi_dom_dump(
         page,
         diagnostic_dump_dir,
@@ -2371,7 +2286,6 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     _t_pdi_span = time.perf_counter()
     if pdi_span_start_out is not None:
         pdi_span_start_out.append(_t_pdi_span)
-    _pv_timing(note, "pdi_checkpoint checkpoint=pdi_span_start elapsed_ms=0")
 
     _siebel_note_frame_focus_snapshot(
         page,
@@ -2604,26 +2518,17 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         _pdi_decision_reason = "expired"
     else:
         _pdi_decision_reason = "unknown"
-    _pv_timing(
-        note,
-        "pdi_scrape_saw_row saw_row=%s row_count=%d header_matched=%s"
-        % (_pdi_saw_row, _pdi_row_count, _pdi_header_matched),
+    note(
+        f"{log_prefix}: pdi_scrape_saw_row saw_row={_pdi_saw_row} "
+        f"row_count={_pdi_row_count} header_matched={_pdi_header_matched}"
     )
-    _pv_timing(
-        note,
-        "pdi_scrape_expiry raw_count=%d raw_samples=%r parsed_dates=%r parsed_datetimes=%r pdi_valid=%s"
-        % (
-            len(_pdi_expiry_raw),
-            _raw_samples_log[:8],
-            _pd_iso,
-            _pdt_iso,
-            _pdi_valid,
-        ),
+    note(
+        f"{log_prefix}: pdi_scrape_expiry raw_count={len(_pdi_expiry_raw)} "
+        f"raw_samples={_raw_samples_log[:8]!r} parsed_dates={_pd_iso!r} "
+        f"parsed_datetimes={_pdt_iso!r} pdi_valid={_pdi_valid}"
     )
-    _pv_timing(
-        note,
-        "pdi_decision need_new_row=%s reason=%s"
-        % (_pdi_need_new_row, _pdi_decision_reason),
+    note(
+        f"{log_prefix}: pdi_decision need_new_row={_pdi_need_new_row} reason={_pdi_decision_reason}"
     )
     _emit_precheck_pdi_dom_dump(
         page,
@@ -3270,24 +3175,10 @@ def _wait_for_vehicle_find_applet_ready(
         for root in _siebel_locator_search_roots(page, content_frame_selector):
             try:
                 if bool(root.evaluate(_js)):
-                    _pv_timing(
-                        note,
-                        "wait_vehicle_find_applet_ready ok=true wait_ms=%d polls=%d elapsed_ms=%.0f"
-                        % (
-                            wait_ms,
-                            poll_count,
-                            (time.monotonic() - start_t) * 1000.0,
-                        ),
-                    )
                     return True
             except Exception:
                 continue
         _safe_page_wait(page, 140, log_label="wait_vehicle_find_applet_ready")
-    _pv_timing(
-        note,
-        "wait_vehicle_find_applet_ready ok=false wait_ms=%d polls=%d elapsed_ms=%.0f"
-        % (wait_ms, poll_count, (time.monotonic() - start_t) * 1000.0),
-    )
     return False
 
 
@@ -3307,18 +3198,9 @@ def _siebel_goto_vehicle_list_and_search(
 
     Returns an error string on failure, or ``None`` on success. Does **not** scrape the grid — the
     caller polls the left pane, clicks, polls center pane, and only *then* scrapes."""
-    t_phase = time.perf_counter()
 
     def _log_phase_outcome(error_msg: str | None) -> str | None:
         em = (error_msg or "").strip()
-        _pv_timing(
-            note,
-            "phase=goto_vehicle_list_and_search elapsed_ms=%.0f %s"
-            % (
-                (time.perf_counter() - t_phase) * 1000.0,
-                ("error=" + em[:240]) if em else "ok=true",
-            ),
-        )
         return error_msg if em else None
 
     _goto(page, vehicle_url, "vehicle_list", nav_timeout_ms=nav_timeout_ms)
@@ -3946,13 +3828,6 @@ def _prepare_vehicle_scrape_serial_precheck_pdi_and_features(
     if not _serial_pc_ok:
         return _serial_pc_err or "Pre-check / PDI failed after Serial Number drilldown (prepare_vehicle)."
 
-    if _pdi_span_t0:
-        _pv_timing(
-            note,
-            "pdi_checkpoint checkpoint=pdi_before_features_tab elapsed_ms=%.0f"
-            % ((time.perf_counter() - _pdi_span_t0[0]) * 1000.0),
-        )
-
     if not _siebel_try_click_features_and_image_tab(
         page, action_timeout_ms=action_timeout_ms, note=note
     ):
@@ -4386,7 +4261,6 @@ def prepare_vehicle(
                 [],
             )
 
-        t_list_grid = time.perf_counter()
         # --- Step 2: Poll left pane until our VIN appears ---
         _safe_page_wait(page, 400, log_label="pre_left_pane_poll")
         if not _siebel_poll_left_search_title_matches(page, frame_p, note=note):
@@ -4444,13 +4318,7 @@ def prepare_vehicle(
         except Exception as e:
             if _is_browser_disconnected_error(e):
                 raise
-        _pv_timing(
-            note,
-            "phase=list_grid_through_post_scrape elapsed_ms=%.0f frame_partial=%r"
-            % ((time.perf_counter() - t_list_grid) * 1000.0, frame_p[:32] if frame_p else ""),
-        )
 
-        t_detail = time.perf_counter()
         _siebel_fill_key_battery_from_dms_values(
             page,
             dms_values,
@@ -4475,12 +4343,6 @@ def prepare_vehicle(
             vm_crit, vm_info = _vehicle_master_prepare_gaps(merged)
             return False, _inv_gate_err, merged, True, vm_crit, vm_info
 
-        _pv_timing(
-            note,
-            "phase=key_battery_aria_inventory_gate elapsed_ms=%.0f"
-            % ((time.perf_counter() - t_detail) * 1000.0),
-        )
-        t_serial = time.perf_counter()
         _detail_pc_err: str | None = None
         if not bool(scraped.get("in_transit")):
             _detail_pc_err = _prepare_vehicle_scrape_serial_precheck_pdi_and_features(
@@ -4510,14 +4372,6 @@ def prepare_vehicle(
                 "prepare_vehicle: vehicle flagged in-transit — skipping Serial / Features / Pre-check / PDI "
                 "(Siebel rejects Pre-check and PDI until received at dealer)."
             )
-        _pv_timing(
-            note,
-            "phase=serial_precheck_features_branch elapsed_ms=%.0f skipped_in_transit=%s"
-            % (
-                (time.perf_counter() - t_serial) * 1000.0,
-                "true" if bool(scraped.get("in_transit")) else "false",
-            ),
-        )
 
         note(
             "Vehicle grid scrape (prepare_vehicle): "

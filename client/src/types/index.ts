@@ -3,6 +3,7 @@ export type Page =
   | "subdealer-challan"
   | "bulk-loads"
   | "customer-details"
+  | "view-vehicles"
   | "rto-status"
   | "service-reminders"
   | "dealer-dashboard"

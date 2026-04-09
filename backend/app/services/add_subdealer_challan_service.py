@@ -84,9 +84,10 @@ def _run_prepare_vehicle_loop(
 
         def note(msg: str) -> None:
             _note(steps, msg)
-            if (msg or "").startswith("TIMING:"):
+            _m = msg or ""
+            if "DOM snapshot written" in _m:
                 logln(msg)
-            elif "DOM snapshot written" in (msg or ""):
+            elif "pdi_scrape_" in _m or ": pdi_decision " in _m:
                 logln(msg)
 
         def ms_done(_label: str) -> None:

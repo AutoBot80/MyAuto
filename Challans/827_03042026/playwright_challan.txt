@@ -1,57 +1,90 @@
-2026-04-09T10:43:55.769+05:30  === subdealer challan run start ===
-2026-04-09T10:43:55.770+05:30  challan_batch_id=4853e05e-11d7-4be3-94a5-f16a9e340564 phase=full log_file=C:\Users\arya_\OneDrive\Desktop\My Auto.AI\Challans\827_03042026\playwright_challan.txt
-2026-04-09T10:43:55.770+05:30  dealer_id(session)=100001 from_dealer_id=100001 to_dealer_id=100002
-2026-04-09T10:43:55.771+05:30  challan_book_num='827' challan_date='03042026' artifact_folder=827_03042026
-2026-04-09T10:43:55.772+05:30  staging_row_count=2
-2026-04-09T10:43:55.772+05:30  dms_base_url='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=Login&SWECM=S&SWEHo=connect.heromotocorp.biz'
-2026-04-09T10:44:09.600+05:30  DMS tab opened (get_or_open_site_page OK)
-2026-04-09T10:44:09.989+05:30  prepare_vehicle round 1/3: 1 Queued row(s)
-2026-04-09T10:44:09.989+05:30    sid=13 raw_chassis='58801' raw_engine='09115' → prepare_vehicle
-2026-04-09T10:44:11.341+05:30  TIMING: wait_vehicle_find_applet_ready ok=true wait_ms=4500 polls=2 elapsed_ms=281
-2026-04-09T10:44:15.527+05:30  TIMING: networkidle label=vehicle_search_after_find_settle timeout_ms=12000 elapsed_ms=5 ok=true
-2026-04-09T10:44:15.528+05:30  TIMING: phase=goto_vehicle_list_and_search elapsed_ms=5538 ok=true
-2026-04-09T10:44:16.262+05:30  TIMING: poll_left_search_title_matches ok=true round=1 max_polls=10 interval_ms=300 elapsed_ms=321
-2026-04-09T10:44:17.410+05:30  TIMING: poll_center_list_matches ok=true round=1 max_polls=15 interval_ms=300 elapsed_ms=607
-2026-04-09T10:44:17.945+05:30  TIMING: networkidle label=after_center_scrape_vin_drill_in timeout_ms=12000 elapsed_ms=5 ok=true
-2026-04-09T10:44:17.946+05:30  TIMING: phase=list_grid_through_post_scrape elapsed_ms=2417 frame_partial='58801'
-2026-04-09T10:44:18.479+05:30  TIMING: phase=key_battery_aria_inventory_gate elapsed_ms=526
-2026-04-09T10:44:20.045+05:30  TIMING: networkidle label=prepare_vehicle_scrape_after_serial_number_click timeout_ms=10000 elapsed_ms=5 ok=true
-2026-04-09T10:44:20.046+05:30  TIMING: precheck_checkpoint checkpoint=precheck_span_start elapsed_ms=0
-2026-04-09T10:44:21.644+05:30  TIMING: networkidle label=prepare_vehicle_after_precheck_tab timeout_ms=8000 elapsed_ms=6 ok=true
-2026-04-09T10:44:21.902+05:30  TIMING: precheck_checkpoint checkpoint=precheck_after_open_lov elapsed_ms=1856 skipped=true reason=precheck_already_has_rows
-2026-04-09T10:44:22.066+05:30  TIMING: precheck_checkpoint checkpoint=precheck_before_technician_or_submit_done elapsed_ms=1856 skipped=true reason=precheck_already_has_rows
-2026-04-09T10:44:22.104+05:30  TIMING: precheck_checkpoint checkpoint=precheck_complete_before_pdi_tab elapsed_ms=2058
-2026-04-09T10:44:23.143+05:30  TIMING: networkidle label=prepare_vehicle_after_pdi_tab timeout_ms=8000 elapsed_ms=6 ok=true
-2026-04-09T10:44:23.144+05:30  TIMING: pdi_checkpoint checkpoint=pdi_span_start elapsed_ms=0
-2026-04-09T10:44:23.875+05:30  TIMING: pdi_scrape_saw_row saw_row=False row_count=0 header_matched=False
-2026-04-09T10:44:23.877+05:30  TIMING: pdi_scrape_expiry raw_count=0 raw_samples=[] parsed_dates=[] parsed_datetimes=[] pdi_valid=False
-2026-04-09T10:44:23.877+05:30  TIMING: pdi_decision need_new_row=True reason=empty_list
-2026-04-09T10:44:40.264+05:30  TIMING: pdi_checkpoint checkpoint=pdi_before_features_tab elapsed_ms=17120
-2026-04-09T10:44:42.239+05:30  TIMING: networkidle label=prepare_vehicle_after_features_tab timeout_ms=8000 elapsed_ms=12 ok=true
-2026-04-09T10:44:42.261+05:30  TIMING: phase=serial_precheck_features_branch elapsed_ms=23781 skipped_in_transit=false
-2026-04-09T10:44:42.265+05:30  TIMING: sleep_summary after_PDI_lov_close_settle=1×300ms; after_PDI_lov_pdi_style_settle=1×300ms; after_PDI_row_pick=1×300ms; after_features_tab=1×1000ms; after_left_title_click_tick=1×300ms; after_pdi_submit=1×300ms; after_pdi_tab=1×300ms; after_pdi_tab_click_refresh=1×300ms; after_serial_number_click=1×1200ms; after_sr_list_new=1×300ms; after_third_level_pdi_tab=1×300ms; after_third_level_pre-check_tab=1×1500ms; after_vehicle_left_pane_vin_settle=1×500ms; before_pdi_service_request_list_new=1×300ms; center_list_match_settle=1×300ms; force_open_vehicles_find_dom=1×700ms; global_find_open_vehicles=1×250ms; global_find_open_vehicles_click=1×250ms; inter_action_delay=1×200ms; left_search_match_settle=1×300ms; pdi_post_submit_row_verify=1×300ms; pdi_service_request_list_new_retry_1=1×300ms; pdi_service_request_list_new_retry_2=1×300ms; pdi_service_request_list_new_retry_3=1×300ms; pre_left_pane_poll=1×400ms; prepare_vehicle_after_find_vehicles=1×500ms; vehicle_list_open=1×500ms; vehicle_search_settle=1×500ms; wait_vehicle_find_applet_ready=1×140ms
-2026-04-09T10:44:42.267+05:30  TIMING: phase=prepare_vehicle_total elapsed_ms=32276
-2026-04-09T10:44:42.268+05:30    sid=13 prepare_vehicle OK full_chassis='MBLHAW486T9A58801' model='SPLENDOR +'
-2026-04-09T10:44:42.413+05:30    sid=13 inventory upsert OK inventory_line_id=14
-2026-04-09T10:44:42.940+05:30  All staging rows Ready — applying discounts and building order lines
-2026-04-09T10:44:43.607+05:30  Order phase: 2 line(s); appending STEP/NOTE trace to challan log: C:\Users\arya_\OneDrive\Desktop\My Auto.AI\Challans\827_03042026\playwright_challan.txt
+2026-04-09T10:53:22.444+05:30  === subdealer challan run start ===
+2026-04-09T10:53:22.444+05:30  challan_batch_id=a779e27a-68ef-4c17-9bbc-716f4abe3842 phase=full log_file=C:\Users\arya_\OneDrive\Desktop\My Auto.AI\Challans\827_03042026\playwright_challan.txt
+2026-04-09T10:53:22.445+05:30  dealer_id(session)=100001 from_dealer_id=100001 to_dealer_id=100002
+2026-04-09T10:53:22.446+05:30  challan_book_num='827' challan_date='03042026' artifact_folder=827_03042026
+2026-04-09T10:53:22.446+05:30  staging_row_count=2
+2026-04-09T10:53:22.447+05:30  dms_base_url='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=Login&SWECM=S&SWEHo=connect.heromotocorp.biz'
+2026-04-09T10:53:35.457+05:30  DMS tab opened (get_or_open_site_page OK)
+2026-04-09T10:53:35.918+05:30  prepare_vehicle round 1/3: 2 Queued row(s)
+2026-04-09T10:53:35.922+05:30    sid=15 raw_chassis='18229' raw_engine='27156' → prepare_vehicle
+2026-04-09T10:53:37.396+05:30  TIMING: wait_vehicle_find_applet_ready ok=true wait_ms=4500 polls=2 elapsed_ms=197
+2026-04-09T10:53:41.824+05:30  TIMING: networkidle label=vehicle_search_after_find_settle timeout_ms=12000 elapsed_ms=4 ok=true
+2026-04-09T10:53:41.825+05:30  TIMING: phase=goto_vehicle_list_and_search elapsed_ms=5902 ok=true
+2026-04-09T10:53:42.552+05:30  TIMING: poll_left_search_title_matches ok=true round=1 max_polls=10 interval_ms=300 elapsed_ms=317
+2026-04-09T10:53:44.054+05:30  TIMING: poll_center_list_matches ok=true round=1 max_polls=15 interval_ms=300 elapsed_ms=968
+2026-04-09T10:53:44.611+05:30  TIMING: networkidle label=after_center_scrape_vin_drill_in timeout_ms=12000 elapsed_ms=5 ok=true
+2026-04-09T10:53:44.611+05:30  TIMING: phase=list_grid_through_post_scrape elapsed_ms=2786 frame_partial='18229'
+2026-04-09T10:53:44.984+05:30  TIMING: phase=key_battery_aria_inventory_gate elapsed_ms=372
+2026-04-09T10:53:46.457+05:30  TIMING: networkidle label=prepare_vehicle_scrape_after_serial_number_click timeout_ms=10000 elapsed_ms=19 ok=true
+2026-04-09T10:53:46.460+05:30  TIMING: precheck_checkpoint checkpoint=precheck_span_start elapsed_ms=0
+2026-04-09T10:53:48.056+05:30  TIMING: networkidle label=prepare_vehicle_after_precheck_tab timeout_ms=8000 elapsed_ms=5 ok=true
+2026-04-09T10:53:52.641+05:30  TIMING: precheck_checkpoint checkpoint=precheck_after_open_lov elapsed_ms=6180 ok=true
+2026-04-09T10:53:53.384+05:30  TIMING: precheck_checkpoint checkpoint=precheck_before_technician_or_submit_done elapsed_ms=6925 submit_done=True err_after_submit=False will_try_technician=False
+2026-04-09T10:53:53.404+05:30  TIMING: precheck_checkpoint checkpoint=precheck_complete_before_pdi_tab elapsed_ms=6945
+2026-04-09T10:53:53.421+05:30  prepare_vehicle: Pre-check/PDI DOM snapshot written: C:\Users\arya_\OneDrive\Desktop\My Auto.AI\Challans\827_03042026\playwright_precheck_pdi_dom_precheck_section_1775712233406_bce9f18741.txt
+2026-04-09T10:53:54.425+05:30  TIMING: networkidle label=prepare_vehicle_after_pdi_tab timeout_ms=8000 elapsed_ms=5 ok=true
+2026-04-09T10:53:54.426+05:30  TIMING: pdi_checkpoint checkpoint=pdi_span_start elapsed_ms=0
+2026-04-09T10:53:54.858+05:30  TIMING: pdi_scrape_saw_row saw_row=False row_count=0 header_matched=True
+2026-04-09T10:53:54.858+05:30  TIMING: pdi_scrape_expiry raw_count=1 raw_samples=['PDI Expiry Date'] parsed_dates=[] parsed_datetimes=[] pdi_valid=False
+2026-04-09T10:53:54.859+05:30  TIMING: pdi_decision need_new_row=True reason=empty_list
+2026-04-09T10:53:54.900+05:30  prepare_vehicle: Pre-check/PDI DOM snapshot written: C:\Users\arya_\OneDrive\Desktop\My Auto.AI\Challans\827_03042026\playwright_precheck_pdi_dom_pdi_after_eval_1775712234861_cc2ad3aa80.txt
+2026-04-09T10:53:59.009+05:30  prepare_vehicle: Pre-check/PDI DOM snapshot written: C:\Users\arya_\OneDrive\Desktop\My Auto.AI\Challans\827_03042026\playwright_precheck_pdi_dom_pdi_section_complete_1775712239000_34d481fc9a.txt
+2026-04-09T10:53:59.010+05:30  TIMING: pdi_checkpoint checkpoint=pdi_before_features_tab elapsed_ms=4584
+2026-04-09T10:54:00.193+05:30  TIMING: networkidle label=prepare_vehicle_after_features_tab timeout_ms=8000 elapsed_ms=5 ok=true
+2026-04-09T10:54:00.204+05:30  TIMING: phase=serial_precheck_features_branch elapsed_ms=15219 skipped_in_transit=false
+2026-04-09T10:54:00.207+05:30  TIMING: sleep_summary after_PDI_lov_close_settle=1×300ms; after_PDI_lov_pdi_style_settle=1×300ms; after_PDI_ok=1×300ms; after_PDI_row_pick=1×300ms; after_features_tab=1×1000ms; after_left_title_click_tick=1×300ms; after_pdi_pick_icon_(legacy_s_2_2_32_0_icon)_js=1×300ms; after_pdi_submit=1×300ms; after_pdi_tab=1×300ms; after_pdi_tab_click_refresh=1×300ms; after_pre-check_pick_icon_(s_3_2_25_0_icon)_[precheck_open_status]=1×300ms; after_precheck_jqgrow_focus=1×300ms; after_precheck_list_new=1×300ms; after_precheck_open_status_enter_fallback=1×300ms; after_precheck_open_status_icon_settle=1×300ms; after_precheck_open_status_ok=1×300ms; after_precheck_open_status_row_enter_commit=1×300ms; after_precheck_open_status_row_pick=1×300ms; after_precheck_submit=1×300ms; after_serial_number_click=1×1200ms; after_sr_list_new=1×300ms; after_third_level_pdi_tab=1×300ms; after_third_level_pre-check_tab=1×1500ms; after_vehicle_left_pane_vin_settle=1×500ms; before_pdi_service_request_list_new=1×300ms; before_precheck_open_status_pick_row=1×300ms; center_list_match_settle=1×300ms; force_open_vehicles_find_dom=1×700ms; global_find_open_vehicles=1×250ms; global_find_open_vehicles_click=1×250ms; inter_action_delay=1×200ms; left_search_match_settle=1×300ms; pdi_post_submit_row_verify=1×300ms; pre_left_pane_poll=1×400ms; precheck_tab_before_open_pick_try_1=1×300ms; prepare_vehicle_after_find_vehicles=1×500ms; vehicle_list_open=1×500ms; vehicle_search_settle=1×500ms; wait_vehicle_find_applet_ready=1×140ms
+2026-04-09T10:54:00.207+05:30  TIMING: phase=prepare_vehicle_total elapsed_ms=24285
+2026-04-09T10:54:00.208+05:30    sid=15 prepare_vehicle OK full_chassis='MBLHAW486T5C18229' model='SPLENDOR +'
+2026-04-09T10:54:00.445+05:30    sid=15 inventory upsert OK inventory_line_id=15
+2026-04-09T10:54:00.537+05:30    sid=16 raw_chassis='18133' raw_engine='27983' → prepare_vehicle
+2026-04-09T10:54:01.936+05:30  TIMING: wait_vehicle_find_applet_ready ok=true wait_ms=4500 polls=1 elapsed_ms=78
+2026-04-09T10:54:06.339+05:30  TIMING: networkidle label=vehicle_search_after_find_settle timeout_ms=12000 elapsed_ms=5 ok=true
+2026-04-09T10:54:06.340+05:30  TIMING: phase=goto_vehicle_list_and_search elapsed_ms=5802 ok=true
+2026-04-09T10:54:07.083+05:30  TIMING: poll_left_search_title_matches ok=true round=1 max_polls=10 interval_ms=300 elapsed_ms=320
+2026-04-09T10:54:08.415+05:30  TIMING: poll_center_list_matches ok=true round=1 max_polls=15 interval_ms=300 elapsed_ms=815
+2026-04-09T10:54:08.973+05:30  TIMING: networkidle label=after_center_scrape_vin_drill_in timeout_ms=12000 elapsed_ms=7 ok=true
+2026-04-09T10:54:08.975+05:30  TIMING: phase=list_grid_through_post_scrape elapsed_ms=2633 frame_partial='18133'
+2026-04-09T10:54:09.308+05:30  TIMING: phase=key_battery_aria_inventory_gate elapsed_ms=332
+2026-04-09T10:54:10.799+05:30  TIMING: networkidle label=prepare_vehicle_scrape_after_serial_number_click timeout_ms=10000 elapsed_ms=16 ok=true
+2026-04-09T10:54:10.803+05:30  TIMING: precheck_checkpoint checkpoint=precheck_span_start elapsed_ms=0
+2026-04-09T10:54:12.389+05:30  TIMING: networkidle label=prepare_vehicle_after_precheck_tab timeout_ms=8000 elapsed_ms=9 ok=true
+2026-04-09T10:54:17.983+05:30  TIMING: precheck_checkpoint checkpoint=precheck_after_open_lov elapsed_ms=7180 ok=true
+2026-04-09T10:54:18.732+05:30  TIMING: precheck_checkpoint checkpoint=precheck_before_technician_or_submit_done elapsed_ms=7930 submit_done=True err_after_submit=False will_try_technician=False
+2026-04-09T10:54:18.757+05:30  TIMING: precheck_checkpoint checkpoint=precheck_complete_before_pdi_tab elapsed_ms=7955
+2026-04-09T10:54:18.775+05:30  prepare_vehicle: Pre-check/PDI DOM snapshot written: C:\Users\arya_\OneDrive\Desktop\My Auto.AI\Challans\827_03042026\playwright_precheck_pdi_dom_precheck_section_1775712258760_57fbe68565.txt
+2026-04-09T10:54:19.741+05:30  TIMING: networkidle label=prepare_vehicle_after_pdi_tab timeout_ms=8000 elapsed_ms=3 ok=true
+2026-04-09T10:54:19.743+05:30  TIMING: pdi_checkpoint checkpoint=pdi_span_start elapsed_ms=0
+2026-04-09T10:54:19.837+05:30  TIMING: pdi_scrape_saw_row saw_row=False row_count=0 header_matched=True
+2026-04-09T10:54:19.838+05:30  TIMING: pdi_scrape_expiry raw_count=1 raw_samples=['PDI Expiry Date'] parsed_dates=[] parsed_datetimes=[] pdi_valid=False
+2026-04-09T10:54:19.839+05:30  TIMING: pdi_decision need_new_row=True reason=empty_list
+2026-04-09T10:54:19.865+05:30  prepare_vehicle: Pre-check/PDI DOM snapshot written: C:\Users\arya_\OneDrive\Desktop\My Auto.AI\Challans\827_03042026\playwright_precheck_pdi_dom_pdi_after_eval_1775712259840_c648a54871.txt
+2026-04-09T10:54:23.286+05:30  prepare_vehicle: Pre-check/PDI DOM snapshot written: C:\Users\arya_\OneDrive\Desktop\My Auto.AI\Challans\827_03042026\playwright_precheck_pdi_dom_pdi_section_complete_1775712263274_9ee23e79cb.txt
+2026-04-09T10:54:23.286+05:30  TIMING: pdi_checkpoint checkpoint=pdi_before_features_tab elapsed_ms=3544
+2026-04-09T10:54:24.440+05:30  TIMING: networkidle label=prepare_vehicle_after_features_tab timeout_ms=8000 elapsed_ms=11 ok=true
+2026-04-09T10:54:24.462+05:30  TIMING: phase=serial_precheck_features_branch elapsed_ms=15152 skipped_in_transit=false
+2026-04-09T10:54:24.464+05:30  TIMING: sleep_summary after_PDI_lov_close_settle=1×300ms; after_PDI_lov_pdi_style_settle=1×300ms; after_PDI_row_pick=1×300ms; after_features_tab=1×1000ms; after_left_title_click_tick=1×300ms; after_pdi_submit=1×300ms; after_pdi_tab=1×300ms; after_pdi_tab_click_refresh=1×300ms; after_pre-check_pick_icon_(s_3_2_25_0_icon)_[precheck_open_status]=1×300ms; after_precheck_jqgrow_focus=1×300ms; after_precheck_list_new=1×300ms; after_precheck_open_status_enter_fallback=1×300ms; after_precheck_open_status_icon_settle=1×300ms; after_precheck_open_status_ok=1×300ms; after_precheck_open_status_row_enter_commit=1×300ms; after_precheck_open_status_row_pick=1×300ms; after_precheck_submit=1×300ms; after_serial_number_click=1×1200ms; after_sr_list_new=1×300ms; after_third_level_pdi_tab=1×300ms; after_third_level_pre-check_tab=1×1500ms; after_vehicle_left_pane_vin_settle=1×500ms; before_pdi_service_request_list_new=1×300ms; before_precheck_open_status_pick_row=1×300ms; center_list_match_settle=1×300ms; force_open_vehicles_find_dom=1×700ms; global_find_open_vehicles=1×250ms; global_find_open_vehicles_click=1×250ms; inter_action_delay=1×200ms; left_search_match_settle=1×300ms; pdi_post_submit_row_verify=1×300ms; pre_left_pane_poll=1×400ms; precheck_tab_before_open_pick_try_1=1×300ms; precheck_tab_before_open_pick_try_2=1×300ms; prepare_vehicle_after_find_vehicles=1×500ms; vehicle_list_open=1×500ms; vehicle_search_settle=1×500ms
+2026-04-09T10:54:24.466+05:30  TIMING: phase=prepare_vehicle_total elapsed_ms=23928
+2026-04-09T10:54:24.468+05:30    sid=16 prepare_vehicle OK full_chassis='MBLHAW484T5C18133' model='SPLENDOR +'
+2026-04-09T10:54:24.718+05:30    sid=16 inventory upsert OK inventory_line_id=16
+2026-04-09T10:54:25.394+05:30  All staging rows Ready — applying discounts and building order lines
+2026-04-09T10:54:25.889+05:30  Order phase: 2 line(s); appending STEP/NOTE trace to challan log: C:\Users\arya_\OneDrive\Desktop\My Auto.AI\Challans\827_03042026\playwright_challan.txt
 
 
 --- subdealer challan order phase (structured STEP/NOTE trace) ---
-started_ist=2026-04-09T10:44:44.011+05:30
-2026-04-09T10:44:44.012+05:30 [STEP] Subdealer challan: Sales Orders / create order (Network, multi-VIN).
-2026-04-09T10:44:55.280+05:30 [NOTE] Video path: clicked Generate Booking before create_order.
-2026-04-09T10:44:55.280+05:30 [MILESTONE] Booking generated
-2026-04-09T10:44:55.280+05:30 [FORM] siebel_step=v4_create_order | form=Vehicle Sales / Sales Orders | action=vehicle_sales_new_order_then_pick_contact_then_vin_search_price_allocate | first_name='SHRI' | full_chassis='MBLHAW486T9A58801' | mobile_phone='0000000000'
-2026-04-09T10:44:55.281+05:30 [FORM] siebel_step=v4_create_order | form=Vehicle Sales / Sales Orders | action=open_vehicle_sales_then_create_order | full_chassis='MBLHAW486T9A58801' | mobile_phone='0000000000'
-2026-04-09T10:44:55.281+05:30 [NOTE] Create Order: navigating to Vehicle Sales URL. base=https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/
-2026-04-09T10:45:00.701+05:30 [NOTE] Create Order: arrived at Vehicle Sales (post-goto wait). URL=https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=Order+Entry+-+My+Orders+View+(Sales
-2026-04-09T10:45:00.703+05:30 [NOTE] Create Order: add_subdealer_challan — skipping My Orders mobile search; opening new booking via Sales Orders List:New (+).
-2026-04-09T10:45:02.130+05:30 [NOTE] Create Order: clicked Sales Orders New:List (+).
-2026-04-09T10:45:03.564+05:30 [NOTE] Create Order: set Booking Order Type = Normal Booking.
-2026-04-09T10:45:04.217+05:30 [NOTE] Create Order: set Customer Type = Network (challan).
-2026-04-09T10:45:10.712+05:30 [NOTE] Create Order: Account/Institution Name typed + Tab (challan); waiting for Pin Code autopopulate.
-2026-04-09T10:45:26.557+05:30 [STEP] Stopped: create_order flow failed.
+started_ist=2026-04-09T10:54:26.024+05:30
+2026-04-09T10:54:26.025+05:30 [STEP] Subdealer challan: Sales Orders / create order (Network, multi-VIN).
+2026-04-09T10:54:36.950+05:30 [NOTE] Video path: clicked Generate Booking before create_order.
+2026-04-09T10:54:36.950+05:30 [MILESTONE] Booking generated
+2026-04-09T10:54:36.951+05:30 [FORM] siebel_step=v4_create_order | form=Vehicle Sales / Sales Orders | action=vehicle_sales_new_order_then_pick_contact_then_vin_search_price_allocate | first_name='SHRI' | full_chassis='MBLHAW484T5C18133' | mobile_phone='0000000000'
+2026-04-09T10:54:36.951+05:30 [FORM] siebel_step=v4_create_order | form=Vehicle Sales / Sales Orders | action=open_vehicle_sales_then_create_order | full_chassis='MBLHAW484T5C18133' | mobile_phone='0000000000'
+2026-04-09T10:54:36.951+05:30 [NOTE] Create Order: navigating to Vehicle Sales URL. base=https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/
+2026-04-09T10:54:42.371+05:30 [NOTE] Create Order: arrived at Vehicle Sales (post-goto wait). URL=https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=Order+Entry+-+My+Orders+View+(Sales
+2026-04-09T10:54:42.371+05:30 [NOTE] Create Order: add_subdealer_challan — skipping My Orders mobile search; opening new booking via Sales Orders List:New (+).
+2026-04-09T10:54:43.733+05:30 [NOTE] Create Order: clicked Sales Orders New:List (+).
+2026-04-09T10:54:45.080+05:30 [NOTE] Create Order: set Booking Order Type = Normal Booking.
+2026-04-09T10:54:45.689+05:30 [NOTE] Create Order: set Customer Type = Network (challan).
+2026-04-09T10:54:52.061+05:30 [NOTE] Create Order: Account/Institution Name typed + Tab (challan); waiting for Pin Code autopopulate.
+2026-04-09T10:55:05.592+05:30 [STEP] Stopped: create_order flow failed.
 
-2026-04-09T10:45:26.557+05:30 [END] error=Siebel: create_order failed. Account/Institution Name: Pin Code did not autopopulate after Tab (challan).
-2026-04-09T10:45:26.558+05:30  ERROR order phase: 'Siebel: create_order failed. Account/Institution Name: Pin Code did not autopopulate after Tab (challan).'
+2026-04-09T10:55:05.592+05:30 [END] error=Siebel: create_order failed. Account/Institution Name: Pin Code did not autopopulate after Tab (challan).
+2026-04-09T10:55:05.593+05:30  ERROR order phase: 'Siebel: create_order failed. Account/Institution Name: Pin Code did not autopopulate after Tab (challan).'

@@ -45,7 +45,7 @@
 
 | Component | Responsibility |
 |-----------|----------------|
-| **Client (React)** | UI, forms, validation, calls to backend API; Add Sales, Fill Forms, RTO Payments, View Customer, Bulk Loads, Subdealer Challan (POS Saathi), and Admin reset actions. |
+| **Client (React)** | UI, forms, validation, calls to backend API; Add Sales, Fill Forms, RTO Payments, View Customer, View Vehicles (chassis/engine search), Bulk Loads, Subdealer Challan (POS Saathi), and Admin reset actions. |
 | **FastAPI App** | REST API, CRUD, Submit Info, Fill DMS, Form 20, Vahan, RTO payment, customer search, OCR queue, bulk upload monitoring, subdealer challan staging/process/OCR parse, and admin reset utilities. |
 | **PostgreSQL** | Persistent store for dealers, vehicles, customers, sales, insurance, RTO payments, service reminders, **`add_sales_staging`** (OCR merge snapshot; **LLD §2.2a**), **`challan_master_staging`** / **`challan_details_staging`** (subdealer batch header + per-line staging), **`challan_master`** / **`challan_details`** (committed challan), **`vehicle_inventory_master`**, and **`subdealer_discount_master`** (**BR-22**, **Database DDL**). Legacy deployments may still have **`challan_staging`**; greenfield uses **23**/**24** DDL. **Generate Insurance** uses **`form_insurance_view`** (post–Create Invoice) **and** **`add_sales_staging.payload_json`** via **`staging_id`** as the joint input set (**BR-20**). |
 | **Queue (local or SQS)** | Decouple bulk job creation from execution; current bulk processing uses SQS or a local in-process fallback queue. |
@@ -96,6 +96,7 @@ My Auto.AI/
 | `routers/submit_info` | Upsert customer, vehicle, sales, insurance; draft **`add_sales_staging`** row + **`staging_id`** in response. |
 | `routers/rto_payment_details` | List and insert RTO queue rows, start dealer-scoped oldest-7 batch processing, expose batch progress, and optionally update payment later. |
 | `routers/customer_search` | Search customers by mobile/plate and expose the read-only Vahan view row used by View Customer. |
+| `routers/vehicle_search` | Search vehicles by chassis/engine (wildcard / suffix); returns vehicle master, sales master, and matching challan inventory lines for the dealer OEM. |
 | `routers/dealers` | Get dealer by ID. |
 | `routers/documents` | List/download documents by subfolder. |
 | `routers/admin` | Clear all non-reference-table data while preserving `oem_ref`, `dealer_ref`, and `oem_service_schedule`. |
@@ -132,6 +133,7 @@ My Auto.AI/
 | `BulkLoadsPage` | View hot bulk processing status, unresolved failures, and retry/corrective actions. |
 | `RtoPaymentsPendingPage` | List queued RTO work items, start the oldest-7 dealer batch, and show live RTO Cart progress. |
 | `ViewCustomerPage` | Search customer; view vehicles, insurance, and the bottom single-row `form_vahan_view` projection for the selected vehicle. |
+| `ViewVehiclesPage` | POS — **View Vehicles**: chassis/engine search (`GET /vehicle-search/search`); read-only Vehicle Master, **vehicle inventory** rows, Sales Master, and challan lines when inventory matches. |
 | `HomePage` | Landing page with POS, RTO, Service, Dealer, and Admin tiles; Admin Saathi can clear non-reference-table data after confirmation. |
 | `AiReaderQueuePage` | OCR queue status and processing. |
 | `PlaceholderPage` | Coming-soon placeholder. |
@@ -468,3 +470,5 @@ The SQL view **`form_dms_view`** is **removed**; the same mapping is implemented
 | 1.160 | Apr 2026 | — | **`sales_ocr_service`** / **`sales_textract_service`**: renamed from **`ocr_service`** / **`textract_service`**; **`OcrService`** class unchanged — **BRD** **3.159**, **LLD** **6.279** |
 | 1.161 | Apr 2026 | — | **Subdealer Challan**: **`routers/subdealer_challan`**, orchestrator + commit + OCR + **`hero_dms_playwright_customer_challan`**; PostgreSQL **`challan_*`** / **`vehicle_inventory_master`** / **`subdealer_discount_master`**; **`SubdealerChallanPage`** — **BRD** **3.160**, **FR-25**, **LLD** **§2.4e**, **6.280** |
 | 1.162 | Apr 2026 | — | **Subdealer Challan** staging split + APIs: **`challan_master_staging`** / **`challan_details_staging`**, **`GET …/staging/recent`**, **`retry-order`**, failed-count badge; repos + **`SubdealerChallanPage`** Processed UI — **BRD** **3.161**, **LLD** **§2.4e**, **6.281**, **Database DDL** **2.72** |
+| 1.163 | Apr 2026 | — | **View Vehicles** POS tab + **`GET /vehicle-search/search`** + **`vehicle_search`** router — **LLD** **6.282** |
+| 1.164 | Apr 2026 | — | **View Vehicles**: API **`vehicle_inventory`** + UI **Vehicle inventory** section — **LLD** **6.283** |

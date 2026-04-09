@@ -26,6 +26,7 @@ from app.routers import (
     fill_forms_router,
     rto_payment_details_router,
     customer_search_router,
+    vehicle_search_router,
     documents_router,
     bulk_loads_router,
     admin_router,
@@ -75,6 +76,7 @@ app.include_router(submit_info_router)
 app.include_router(fill_forms_router)
 app.include_router(rto_payment_details_router)
 app.include_router(customer_search_router)
+app.include_router(vehicle_search_router)
 app.include_router(documents_router)
 app.include_router(bulk_loads_router)
 app.include_router(admin_router)

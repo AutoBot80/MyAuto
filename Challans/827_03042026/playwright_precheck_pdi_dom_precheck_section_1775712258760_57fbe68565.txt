@@ -1,0 +1,280 @@
+timestamp_ist=2026-04-09T10:54:18.760+05:30
+reason=precheck_section_complete_before_pdi_tab
+main_page_url='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=HMCL+Auto+Vehicle+PDIPre+Assessment+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Auto+Vehicle+Entry+Applet&SWERowId0=2-1JZ4MT20&SWEApplet1=HMCL+PDI+Precheck+List+Applet&SWERowId1=2-1K5BWBMZ'
+
+--- frame[0] name='' url='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=HMCL+Auto+Vehicle+PDIPre+Assessment+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Auto+Vehicle+Entry+Applet&SWERowId0=2-1JZ4MT20&SWEApplet1=HMCL+PDI+Precheck+List+Applet&SWERowId1=2-1K5BWBMZ' ---
+{
+  "documentTitle": "Auto Vehicle PDI Assessment",
+  "locationHref": "https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=HMCL+Auto+Vehicle+PDIPre+Assessment+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Auto+Vehicle+Entry+Applet&SWERowId0=2-1JZ4MT20&SWEApplet1=HMCL+PDI+Precheck+List+Applet&SWERowId1=2-1K5BWBMZ",
+  "newrecordButtons": [
+    {
+      "id": "s_3_1_12_0_Ctrl",
+      "aria": "Service Request List:New",
+      "title": "Service Request List:New",
+      "dataDisplay": "New"
+    }
+  ],
+  "thirdLevelTabTexts": [
+    "Home",
+    "My Dashboard",
+    "Payments",
+    "Vehicles",
+    "Enquiry",
+    "Vehicle Sales Invoices",
+    "Vehicles Receipt",
+    "Vehicles Inventory",
+    "Auto Vehicle List Find",
+    "Auto Vehicle List",
+    "Contacts",
+    "PDI",
+    "Features and Image",
+    "PreCheck",
+    "Finance Info",
+    "Complaints",
+    "RC FollowUp",
+    "HB Disclaimer"
+  ],
+  "pdiPrecheckGridHints": [
+    {
+      "tag": "SPAN",
+      "id": "PDI_Label_4",
+      "cls": "",
+      "txt": "PDI"
+    },
+    {
+      "tag": "SPAN",
+      "id": "HHML_PDI_Created_Date_Label_4",
+      "cls": "",
+      "txt": "PDI Created Date"
+    },
+    {
+      "tag": "SPAN",
+      "id": "HMCL_PreCheck_Flag_Label_4",
+      "cls": "",
+      "txt": "PreCheck Flag"
+    },
+    {
+      "tag": "BUTTON",
+      "id": "s_3_1_12_0_Ctrl",
+      "cls": "siebui-ctrl-btn appletButton siebui-icon-newrecord s_3_1_12_0",
+      "txt": ""
+    },
+    {
+      "tag": "BUTTON",
+      "id": "s_3_1_11_0_Ctrl",
+      "cls": "siebui-ctrl-btn appletButton siebui-icon-newquery s_3_1_11_0",
+      "txt": ""
+    },
+    {
+      "tag": "SPAN",
+      "id": "s_3_rc",
+      "cls": "siebui-row-counter",
+      "txt": "1 of 1+"
+    },
+    {
+      "tag": "BUTTON",
+      "id": "s_3_1_10_0_Ctrl",
+      "cls": "siebui-ctrl-btn appletButton siebui-icon-submitprecheck s_3_1_10_0",
+      "txt": "Submit"
+    },
+    {
+      "tag": "SPAN",
+      "id": "s_3_1_2_0_icon",
+      "cls": "siebui-icon-dropdown applet-form-combo applet-list-combo",
+      "txt": ""
+    },
+    {
+      "tag": "BUTTON",
+      "id": "s_3_1_1_0_Ctrl",
+      "cls": "siebui-ctrl-btn siebui-icon-find s_3_1_1_0 appletButton",
+      "txt": ""
+    },
+    {
+      "tag": "DIV",
+      "id": "s_3_ld",
+      "cls": "",
+      "txt": "PreCheck Opened Date PreCheck Status Technician PreCheck Closed Date Summary Source 09/04/2026 10:54:17 AM Closed . Abhishek 09/04/2026 10:54:17 AM Hero Connect"
+    },
+    {
+      "tag": "DIV",
+      "id": "gbox_s_3_l",
+      "cls": "ui-jqgrid ui-widget ui-widget-content ui-corner-all",
+      "txt": "PreCheck Opened Date PreCheck Status Technician PreCheck Closed Date Summary Source 09/04/2026 10:54:17 AM Closed . Abhishek 09/04/2026 10:54:17 AM Hero Connect"
+    },
+    {
+      "tag": "DIV",
+      "id": "gview_s_3_l",
+      "cls": "ui-jqgrid-view",
+      "txt": "PreCheck Opened Date PreCheck Status Technician PreCheck Closed Date Summary Source 09/04/2026 10:54:17 AM Closed . Abhishek 09/04/2026 10:54:17 AM Hero Connect"
+    },
+    {
+      "tag": "TH",
+      "id": "s_3_l_Created",
+      "cls": "ui-state-default ui-th-column ui-th-ltr ui-sortable-handle",
+      "txt": "PreCheck Opened Date"
+    },
+    {
+      "tag": "DIV",
+      "id": "jqgh_s_3_l_Created",
+      "cls": "ui-jqgrid-sortable",
+      "txt": "PreCheck Opened Date"
+    },
+    {
+      "tag": "TH",
+      "id": "s_3_l_Status",
+      "cls": "ui-state-default ui-th-column ui-th-ltr ui-sortable-handle",
+      "txt": "PreCheck Status"
+    },
+    {
+      "tag": "DIV",
+      "id": "jqgh_s_3_l_Status",
+      "cls": "ui-jqgrid-sortable",
+      "txt": "PreCheck Status"
+    },
+    {
+      "tag": "TH",
+      "id": "s_3_l_HHML_Mechanic_Full_Name",
+      "cls": "ui-state-default ui-th-column ui-th-ltr ui-sortable-handle",
+      "txt": "Technician"
+    },
+    {
+      "tag": "DIV",
+      "id": "jqgh_s_3_l_HHML_Mechanic_Full_Name",
+      "cls": "ui-jqgrid-sortable",
+      "txt": "Technician"
+    },
+    {
+      "tag": "TH",
+      "id": "s_3_l_Closed_Date",
+      "cls": "ui-state-default ui-th-column ui-th-ltr ui-sortable-handle",
+      "txt": "PreCheck Closed Date"
+    },
+    {
+      "tag": "DIV",
+      "id": "jqgh_s_3_l_Closed_Date",
+      "cls": "ui-jqgrid-sortable",
+      "txt": "PreCheck Closed Date"
+    },
+    {
+      "tag": "TH",
+      "id": "s_3_l_Abstract",
+      "cls": "ui-state-default ui-th-column ui-th-ltr ui-sortable-handle",
+      "txt": "Summary"
+    },
+    {
+      "tag": "DIV",
+      "id": "jqgh_s_3_l_Abstract",
+      "cls": "ui-jqgrid-sortable",
+      "txt": "Summary"
+    },
+    {
+      "tag": "TH",
+      "id": "s_3_l_Source",
+      "cls": "ui-state-default ui-th-column ui-th-ltr ui-sortable-handle",
+      "txt": "Source"
+    },
+    {
+      "tag": "DIV",
+      "id": "jqgh_s_3_l_Source",
+      "cls": "ui-jqgrid-sortable",
+      "txt": "Source"
+    },
+    {
+      "tag": "DIV",
+      "id": "s_3_l_scroll",
+      "cls": "",
+      "txt": "09/04/2026 10:54:17 AM Closed . Abhishek 09/04/2026 10:54:17 AM Hero Connect"
+    },
+    {
+      "tag": "TABLE",
+      "id": "s_3_l",
+      "cls": "ui-jqgrid-btable",
+      "txt": "09/04/2026 10:54:17 AM Closed . Abhishek 09/04/2026 10:54:17 AM Hero Connect"
+    },
+    {
+      "tag": "TD",
+      "id": "1_s_3_l_Created",
+      "cls": "",
+      "txt": "09/04/2026 10:54:17 AM"
+    },
+    {
+      "tag": "TD",
+      "id": "1_s_3_l_Status",
+      "cls": "",
+      "txt": "Closed"
+    },
+    {
+      "tag": "TD",
+      "id": "1_s_3_l_HHML_Mechanic_Full_Name",
+      "cls": "dirty-cell",
+      "txt": ". Abhishek"
+    },
+    {
+      "tag": "TD",
+      "id": "1_s_3_l_Closed_Date",
+      "cls": "",
+      "txt": "09/04/2026 10:54:17 AM"
+    },
+    {
+      "tag": "TD",
+      "id": "1_s_3_l_Abstract",
+      "cls": "",
+      "txt": ""
+    },
+    {
+      "tag": "TD",
+      "id": "1_s_3_l_Source",
+      "cls": "",
+      "txt": "Hero Connect"
+    },
+    {
+      "tag": "DIV",
+      "id": "pager_s_3_l",
+      "cls": "ui-state-default ui-jqgrid-pager ui-corner-bottom siebui-applet-footer",
+      "txt": ""
+    },
+    {
+      "tag": "DIV",
+      "id": "pg_pager_s_3_l",
+      "cls": "ui-pager-control",
+      "txt": ""
+    },
+    {
+      "tag": "TD",
+      "id": "pager_s_3_l_left",
+      "cls": "",
+      "txt": ""
+    },
+    {
+      "tag": "TD",
+      "id": "pager_s_3_l_center",
+      "cls": "",
+      "txt": ""
+    },
+    {
+      "tag": "TD",
+      "id": "pager_s_3_l_right",
+      "cls": "",
+      "txt": ""
+    },
+    {
+      "tag": "SPAN",
+      "id": "s_2_rc",
+      "cls": "siebui-row-counter",
+      "txt": "1 of 1+"
+    },
+    {
+      "tag": "DIV",
+      "id": "s_2_ld",
+      "cls": "",
+      "txt": "Description PDIPre Template"
+    },
+    {
+      "tag": "DIV",
+      "id": "gbox_s_2_l",
+      "cls": "ui-jqgrid ui-widget ui-widget-content ui-corner-all",
+      "txt": "Description PDIPre Template"
+    }
+  ],
+  "visibleIframes": []
+}

@@ -8,6 +8,7 @@ import { AdminPage } from "./pages/AdminPage";
 import { HomePage } from "./pages/HomePage";
 import { PlaceholderPage } from "./pages/PlaceholderPage";
 import { ViewCustomerPage } from "./pages/ViewCustomerPage";
+import { ViewVehiclesPage } from "./pages/ViewVehiclesPage";
 import { RtoPaymentsPendingPage } from "./pages/RtoPaymentsPendingPage";
 import { BulkLoadsPage } from "./pages/BulkLoadsPage";
 import { SubdealerChallanPage } from "./pages/SubdealerChallanPage";
@@ -44,8 +45,9 @@ type AppMode = "home" | "pos" | "service" | "rto" | "dealer" | "admin";
 const POS_PAGES: Page[] = [
   "add-sales",
   "subdealer-challan",
-  "customer-details",
   "bulk-loads",
+  "customer-details",
+  "view-vehicles",
   "contact-us",
 ];
 
@@ -169,6 +171,8 @@ function App() {
         return <BulkLoadsPage dealerId={DEALER_ID} onNavigateToAddSales={() => setPage("add-sales")} />;
       case "customer-details":
         return <ViewCustomerPage dealerId={DEALER_ID} />;
+      case "view-vehicles":
+        return <ViewVehiclesPage dealerId={DEALER_ID} />;
       case "rto-status":
         return <RtoPaymentsPendingPage dealerId={DEALER_ID} />;
       case "service-reminders":
