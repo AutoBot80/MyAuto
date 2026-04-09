@@ -1388,22 +1388,108 @@ def _pick_relation_type_from_dropdown(
 
     type_selectors = [
         'input[name="s_4_1_86_0"]',
-        'input[aria-label="S/O\\W/O\\D/O" i]',
-        'select[title*="S/O\\W/O\\D/O" i]',
-        'select[aria-label*="S/O\\W/O\\D/O" i]',
-        'input[title*="S/O\\W/O\\D/O" i]',
-        'input[aria-label*="S/O\\W/O\\D/O" i]',
+        'input[aria-label="S/O\\\\W/O\\\\D/O" i]',
         'select[title*="S/O" i]',
         'select[aria-label*="S/O" i]',
+        'input[title*="S/O" i]',
+        'input[aria-label*="S/O" i]',
     ]
 
+    # JS that finds the S/O\W/O\D/O field by label proximity, clicks, and picks target option.
+    _js_dom_relation_pick = """(target) => {
+      const vis = (el) => {
+        if (!el) return false;
+        const st = window.getComputedStyle(el);
+        if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+        const r = el.getBoundingClientRect();
+        return r.width >= 2 && r.height >= 2;
+      };
+      const n = (s) => String(s || '').trim().toLowerCase();
+      const targ = String(target || '').trim();
+      const targU = targ.toUpperCase();
+
+      // Strategy 1: find label containing "S/O" pattern and its associated input/select
+      const labels = Array.from(document.querySelectorAll('label,span,div,td,th')).filter(vis);
+      let ctrl = null;
+      for (const lbl of labels) {
+        const t = n(lbl.innerText || lbl.textContent || '');
+        if (!(t.includes('s/o') && (t.includes('w/o') || t.includes('d/o')))) continue;
+        // Found the label — find the associated control
+        const forId = lbl.getAttribute('for');
+        if (forId) {
+          const el = document.getElementById(forId);
+          if (el && vis(el)) { ctrl = el; break; }
+        }
+        // Adjacent/sibling input or select
+        const parent = lbl.closest('td,div,span,.siebui-ctrl');
+        if (parent) {
+          const inp = parent.querySelector('input,select');
+          if (inp && vis(inp)) { ctrl = inp; break; }
+        }
+        // Geometry: find closest control within 80px vertically and 200px horizontally
+        const lr = lbl.getBoundingClientRect();
+        const cands = Array.from(document.querySelectorAll('input,select'))
+          .filter(vis)
+          .filter(el => {
+            const er = el.getBoundingClientRect();
+            return Math.abs(er.top - lr.top) < 80 && Math.abs(er.left - lr.right) < 200 && er.left >= lr.left - 20;
+          })
+          .sort((a, b) => {
+            const ar = a.getBoundingClientRect(), br = b.getBoundingClientRect();
+            return (Math.abs(ar.top - lr.top) + Math.abs(ar.left - lr.right))
+                 - (Math.abs(br.top - lr.top) + Math.abs(br.left - lr.right));
+          });
+        if (cands.length) { ctrl = cands[0]; break; }
+      }
+
+      // Strategy 2: look for control by aria-label / title containing S/O
+      if (!ctrl) {
+        const inputs = Array.from(document.querySelectorAll('input,select')).filter(vis);
+        for (const el of inputs) {
+          const a = n(el.getAttribute('aria-label') || '');
+          const t = n(el.getAttribute('title') || '');
+          const nm = n(el.getAttribute('name') || '');
+          if ((a.includes('s/o') || t.includes('s/o') || nm === 's_4_1_86_0') && (a + t).includes('/o')) {
+            ctrl = el;
+            break;
+          }
+        }
+      }
+
+      if (!ctrl) return 'no_control';
+      try { ctrl.click(); } catch (e) {}
+      ctrl.focus();
+
+      const tag = (ctrl.tagName || '').toLowerCase();
+      if (tag === 'select') {
+        const options = Array.from(ctrl.options || []);
+        const hit = options.find(o => n(o.textContent).includes(n(targ)) || n(o.value).includes(n(targ)));
+        if (hit) {
+          ctrl.value = hit.value;
+          ctrl.dispatchEvent(new Event('input', { bubbles: true }));
+          ctrl.dispatchEvent(new Event('change', { bubbles: true }));
+          return 'select_ok';
+        }
+        return 'select_no_option';
+      }
+
+      // Input: clear then type the target text and blur
+      try {
+        ctrl.value = '';
+        ctrl.dispatchEvent(new Event('input', { bubbles: true }));
+        ctrl.value = targ;
+        ctrl.dispatchEvent(new Event('input', { bubbles: true }));
+        ctrl.dispatchEvent(new Event('change', { bubbles: true }));
+      } catch (e) {}
+      return 'input_set';
+    }"""
+
     def try_root(root) -> bool:
-        # Open relation dropdown control
         opened = False
         control = None
         for lbl in (
-            re.compile(r"^\s*S\s*/\s*W\s*/\s*D\s*/\s*O\s*:?\s*$", re.I),
-            re.compile(r"S\s*/\s*W\s*/\s*D\s*/\s*O", re.I),
+            re.compile(r"S\s*/\s*O.*W\s*/\s*O.*D\s*/\s*O", re.I),
+            re.compile(r"S\s*/\s*O", re.I),
         ):
             try:
                 c = root.get_by_label(lbl).first
@@ -1435,29 +1521,24 @@ def _pick_relation_type_from_dropdown(
             return False
         _safe_page_wait(page, 220, log_label="after_relation_type_click")
 
-        # Native select path
         if control is not None:
             try:
                 tag = (control.evaluate("el => (el.tagName || '').toLowerCase()") or "").strip()
                 if tag == "select":
                     control.select_option(label=re.compile(rf"^\s*{re.escape(target)}\s*$", re.I), timeout=timeout_ms)
                     return True
-                if tag == "input" and target in ("S/O", "W/O", "D/O"):
+                if tag == "input":
                     try:
-                        ta = target.replace("/", "")
-                        control.click(timeout=timeout_ms)
-                        page.keyboard.press("Control+a")
-                        page.keyboard.type(ta, delay=40)
-                        _safe_page_wait(page, 260, log_label="after_relation_type_typeahead")
-                        page.keyboard.press("Enter")
-                        _safe_page_wait(page, 180, log_label="after_relation_type_enter")
+                        control.fill("", timeout=timeout_ms)
+                        control.fill(target, timeout=timeout_ms)
+                        control.press("Tab", timeout=1200)
+                        _safe_page_wait(page, 200, log_label="after_relation_type_fill_tab")
                         return True
                     except Exception:
                         pass
             except Exception:
                 pass
 
-        # Open-UI dropdown list path
         option_patterns = (
             re.compile(rf"^\s*{re.escape(target)}\s*$", re.I),
             re.compile(rf"\b{re.escape(target)}\b", re.I),
@@ -1501,66 +1582,13 @@ def _pick_relation_type_from_dropdown(
         except Exception:
             continue
 
-    # Geometry fallback: click control directly above "Relation's Name", then pick target option.
-    js_geo_pick = """(target) => {
-      const vis = (el) => {
-        if (!el) return false;
-        const st = window.getComputedStyle(el);
-        if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
-        const r = el.getBoundingClientRect();
-        return r.width >= 4 && r.height >= 4;
-      };
-      const n = (s) => String(s || '').trim().toLowerCase();
-      const relNameInput = Array.from(document.querySelectorAll('input'))
-        .find(i => vis(i) && (n(i.getAttribute('title')).includes('relation') || n(i.getAttribute('aria-label')).includes('relation')));
-      if (!relNameInput) return false;
-      const rr = relNameInput.getBoundingClientRect();
-      const candidates = Array.from(document.querySelectorAll('input,select,div[role="combobox"],span[role="combobox"],a[role="button"],button'))
-        .filter(vis)
-        .filter(el => {
-          const r = el.getBoundingClientRect();
-          const dy = rr.top - r.top;
-          const dx = Math.abs(r.left - rr.left);
-          if (dy < 12 || dy > 80) return false;  // above relation name field
-          if (dx > 70) return false;
-          const t = n(el.getAttribute('title')) + ' ' + n(el.getAttribute('aria-label'));
-          return t.includes('s/o') || t.includes('w/o') || t.includes('d/o') || t.includes('relation') || r.width < 220;
-        })
-        .sort((a,b) => Math.abs((rr.top - a.getBoundingClientRect().top) - 35) - Math.abs((rr.top - b.getBoundingClientRect().top) - 35));
-      if (!candidates.length) return false;
-      const ctrl = candidates[0];
-      try { ctrl.click(); } catch (e) {}
-
-      const targ = String(target || '').trim().toUpperCase();
-      const opts = Array.from(document.querySelectorAll('[role="option"],li,div,span,a,td'))
-        .filter(vis)
-        .filter(el => {
-          const tx = n(el.innerText || el.textContent || '').toUpperCase();
-          return tx === targ || tx.includes(' ' + targ) || tx.startsWith(targ) || tx.endsWith(targ);
-        });
-      for (const o of opts) {
-        try { o.click(); return true; } catch (e) {}
-      }
-      // Native select fallback if control is select
-      if (ctrl.tagName === 'SELECT') {
-        const sel = ctrl;
-        const options = Array.from(sel.options || []);
-        const hit = options.find(o => String(o.textContent || '').toUpperCase().includes(targ));
-        if (hit) {
-          try {
-            sel.value = hit.value;
-            sel.dispatchEvent(new Event('input', { bubbles: true }));
-            sel.dispatchEvent(new Event('change', { bubbles: true }));
-            return true;
-          } catch (e) {}
-        }
-      }
-      return false;
-    }"""
+    # DOM scan fallback: JS finds the field by label proximity and sets value directly.
     for frame in _ordered_frames(page):
         try:
-            if bool(frame.evaluate(js_geo_pick, target)):
-                note(f"Relation type LOV: selected {target!r} (geometry fallback).")
+            result = str(frame.evaluate(_js_dom_relation_pick, target) or "")
+            if result in ("select_ok", "input_set"):
+                _safe_page_wait(page, 300, log_label="after_relation_dom_set")
+                note(f"Relation type LOV: selected {target!r} (DOM scan, result={result}).")
                 return True
         except Exception:
             continue
@@ -3894,6 +3922,11 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
         gender=gender,
     )
     occ_label = _occupation_siebel_label_from_staging_profession(customer_profession)
+    note(
+        f"Relation/Occupation resolve: care_of={care_val!r:.80}, relation_prefix={relation_prefix!r}, "
+        f"gender={gender!r}, rel_type={rel_type!r}, rel_name={rel_name!r:.80}, "
+        f"profession_src={customer_profession!r}, occ_label={occ_label!r}."
+    )
 
     _branch2_try_fill_contact_input(
         page,

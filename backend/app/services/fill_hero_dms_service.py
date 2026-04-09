@@ -787,6 +787,34 @@ def _load_customer_dob_from_master(customer_id: int | None) -> str:
         return ""
 
 
+def _load_customer_profession_from_master(customer_id: int | None) -> str:
+    """Profession from customer_master for Siebel Occupation LOV."""
+    if customer_id is None:
+        return ""
+    try:
+        conn = get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT COALESCE(BTRIM(profession), '') AS prof_val FROM customer_master WHERE customer_id = %s",
+                    (customer_id,),
+                )
+                row = cur.fetchone()
+                if not row:
+                    return ""
+                if isinstance(row, dict):
+                    return _clean_text(row.get("prof_val"))
+                try:
+                    return _clean_text(row[0])
+                except Exception:
+                    return ""
+        finally:
+            conn.close()
+    except Exception as exc:
+        logger.warning("fill_dms_service: customer_master profession lookup failed customer_id=%s: %s", customer_id, exc)
+        return ""
+
+
 def _derive_gender_from_care_of_text(care_of_text: str) -> str:
     """
     Fallback only when DB gender is missing.
@@ -837,6 +865,7 @@ def _build_dms_fill_values(
         gender_master = _clean_text(cust.get("gender"))
         dob_src = _clean_text(cust.get("date_of_birth"))
         aadhar_src = _aadhar_last4_from_customer(cust)
+        profession_src = _clean_text(cust.get("profession"))[:16]
     else:
         row = _load_required_form_dms_row(customer_id, vehicle_id)
         gender_master = _load_customer_gender_from_master(customer_id)
@@ -846,6 +875,7 @@ def _build_dms_fill_values(
             cid_for_aadhar = None
         dob_src = _load_customer_dob_from_master(cid_for_aadhar)
         aadhar_src = _load_customer_aadhar_last4(cid_for_aadhar)
+        profession_src = _load_customer_profession_from_master(cid_for_aadhar)
 
     addr_full = _clean_text(row.get("Address Line 1"))
     pin_raw = _clean_text(row.get("Pin Code"))[:6]
@@ -906,6 +936,7 @@ def _build_dms_fill_values(
         "gender": gender_effective,
         "date_of_birth": dob_src,
         "aadhar_id": aadhar_src,
+        "profession": profession_src,
         "customer_export": {
             "name": full_name,
             "address": _clean_text(inferred_addr.get("address")) or addr_full,
