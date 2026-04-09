@@ -7,6 +7,8 @@ export interface VehicleSearchMatch {
   vehicle_inventory: Array<Record<string, string | number | null>>;
   sales_master: Record<string, string | number | null> | null;
   challans: Array<Record<string, string | number | null>>;
+  /** Subdealer challan staging lines (`challan_details_staging`) matching patterns or inventory_line_id. */
+  challan_details_staging: Array<Record<string, string | number | null>>;
 }
 
 export interface VehicleSearchResult {

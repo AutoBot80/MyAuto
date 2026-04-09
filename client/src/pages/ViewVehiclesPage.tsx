@@ -34,7 +34,11 @@ function MatchBlock({ m, index }: { m: VehicleSearchMatch; index: number }) {
     <article className="view-vehicles-match" aria-labelledby={`${idPrefix}-title`}>
       <h3 className="view-vehicles-match-title" id={`${idPrefix}-title`}>
         Match {index + 1}
-        {m.vehicle_master.vehicle_id != null ? ` — vehicle_id ${m.vehicle_master.vehicle_id}` : ""}
+        {m.vehicle_master.vehicle_id != null
+          ? ` — vehicle_id ${m.vehicle_master.vehicle_id}`
+          : m.vehicle_inventory[0]?.inventory_line_id != null
+            ? ` — inventory #${m.vehicle_inventory[0].inventory_line_id}`
+            : ""}
       </h3>
 
       <section className="view-vehicles-section" aria-labelledby={`${idPrefix}-vm`}>
@@ -114,6 +118,46 @@ function MatchBlock({ m, index }: { m: VehicleSearchMatch; index: number }) {
           </table>
         )}
       </section>
+
+      <section className="view-vehicles-section" aria-labelledby={`${idPrefix}-stg`}>
+        <h4 className="view-vehicles-section-title" id={`${idPrefix}-stg`}>
+          Challan staging (subdealer batch lines)
+        </h4>
+        {(m.challan_details_staging?.length ?? 0) === 0 ? (
+          <p className="view-vehicles-empty">No staging lines matched for this search.</p>
+        ) : (
+          <table className="view-vehicles-table view-vehicles-table--staging">
+            <thead>
+              <tr>
+                <th>Staging ID</th>
+                <th>Batch</th>
+                <th>Status</th>
+                <th>Raw chassis</th>
+                <th>Raw engine</th>
+                <th>Inv. line</th>
+                <th>Book</th>
+                <th>From → To</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(m.challan_details_staging ?? []).map((row, i) => (
+                <tr key={`${row.challan_detail_staging_id}-${i}`}>
+                  <td>{row.challan_detail_staging_id ?? "—"}</td>
+                  <td className="view-vehicles-mono">{String(row.challan_batch_id ?? "—").slice(0, 8)}…</td>
+                  <td>{row.status ?? "—"}</td>
+                  <td className="view-vehicles-mono">{row.raw_chassis ?? "—"}</td>
+                  <td className="view-vehicles-mono">{row.raw_engine ?? "—"}</td>
+                  <td>{row.inventory_line_id ?? "—"}</td>
+                  <td>{row.challan_book_num ?? "—"}</td>
+                  <td>
+                    {row.from_dealer_id ?? "—"} → {row.to_dealer_id ?? "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
     </article>
   );
 }
@@ -155,7 +199,7 @@ export function ViewVehiclesPage({ dealerId = DEALER_ID }: ViewVehiclesPageProps
       <p className="view-vehicles-hint">
         Search by chassis (VIN) and/or engine. Use <strong>*</strong> as a wildcard, or enter 4–6 digits alone to
         match numbers ending in those digits. Results are scoped to your dealer&apos;s OEM; each hit shows Vehicle
-        Master, inventory (yard) lines for this dealer, Sales Master, and challans when a line is on a challan.
+        Master, yard inventory, Sales Master, committed challans, and subdealer challan staging lines when they match.
       </p>
       <section className="view-vehicles-search">
         <div className="view-vehicles-search-row">
@@ -200,7 +244,11 @@ export function ViewVehiclesPage({ dealerId = DEALER_ID }: ViewVehiclesPageProps
       )}
 
       {matches.map((m, i) => (
-        <MatchBlock key={m.vehicle_master.vehicle_id ?? i} m={m} index={i} />
+        <MatchBlock
+          key={m.vehicle_master.vehicle_id ?? m.vehicle_inventory[0]?.inventory_line_id ?? i}
+          m={m}
+          index={i}
+        />
       ))}
     </div>
   );
