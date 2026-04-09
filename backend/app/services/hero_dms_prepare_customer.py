@@ -327,6 +327,7 @@ def prepare_customer(
             first_name=video_first_name,
             care_of=care_of,
         )
+    _prof = (dms_values.get("profession") or dms_values.get("occupation") or "").strip() or None
     if not _siebel_video_path_after_find_go_to_all_enquiries(
         page,
         mobile=mobile,
@@ -337,7 +338,9 @@ def prepare_customer(
         content_frame_selector=content_frame_selector,
         note=note,
         skip_search_hit_click=True,
-        customer_profession=(dms_values.get("profession") or "").strip() or None,
+        customer_profession=_prof,
+        gender=(dms_values.get("gender") or "").strip() or None,
+        relation_prefix=(dms_values.get("relation_prefix") or "").strip() or None,
     ):
         step("Stopped: video SOP failed while opening customer record or filling Relation's Name.")
         out["error"] = (

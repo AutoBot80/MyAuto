@@ -1137,13 +1137,17 @@ def _derive_relation_and_name(
 
 def _relation_type_from_care_of(care_of: str) -> str:
     """S/O, W/O, or D/O from leading marker in ``care_of`` (case-insensitive)."""
-    co = (care_of or "").strip()
+    co = (care_of or "").strip().lstrip("\ufeff")
     if not co:
         return ""
-    m = re.match(r"^\s*(S\s*/?\s*O|W\s*/?\s*O|D\s*/?\s*O)\b", co, re.I)
+    m = re.match(
+        r"^\s*(S\s*[\./]?\s*O|W\s*[\./]?\s*O|D\s*[\./]?\s*O)\b",
+        co,
+        re.I,
+    )
     if not m:
         return ""
-    marker = re.sub(r"\s+", "", (m.group(1) or "").upper()).replace("/", "")
+    marker = re.sub(r"\s+", "", (m.group(1) or "").upper()).replace("/", "").replace(".", "")
     if marker == "SO":
         return "S/O"
     if marker == "WO":
@@ -1153,15 +1157,54 @@ def _relation_type_from_care_of(care_of: str) -> str:
     return ""
 
 
+def _relation_type_siebel_from_dms_relation_prefix(prefix: str | None) -> str:
+    """Map DMS ``relation_prefix`` (from Relation column / ``_normalize_dms_relation_prefix``) to Siebel LOV."""
+    s = (prefix or "").strip().upper().replace(" ", "")
+    if not s:
+        return ""
+    if s in ("S/O", "SO"):
+        return "S/O"
+    if s in ("W/O", "WO"):
+        return "W/O"
+    if s in ("D/O", "DO"):
+        return "D/O"
+    return ""
+
+
+def _resolve_relation_type_for_video_sop(
+    care_of: str,
+    *,
+    relation_prefix: str | None,
+    gender: str | None,
+) -> str:
+    """Prefer marker in ``care_of``, else DMS ``relation_prefix``, else gender (Male→S/O, Female→D/O)."""
+    r = _relation_type_from_care_of(care_of)
+    if r:
+        return r
+    r = _relation_type_siebel_from_dms_relation_prefix(relation_prefix)
+    if r:
+        return r
+    g = (gender or "").strip().lower()
+    if g.startswith("m"):
+        return "S/O"
+    if g.startswith("f"):
+        return "D/O"
+    return ""
+
+
 def _relation_display_name_from_care_of(care_of: str) -> str:
     """
     Relation's Name only: text after S/O, W/O, or D/O (strip marker/punctuation);
     if there is no marker, use full ``care_of`` (trimmed).
     """
-    co = (care_of or "").strip()
+    co = (care_of or "").strip().lstrip("\ufeff")
     if not co:
         return ""
-    m = re.match(r"^\s*(S\s*/?\s*O|W\s*/?\s*O|D\s*/?\s*O)\s*[:\-]?\s*(.*)\s*$", co, re.I)
+    m = re.match(
+        r"^\s*(S\s*[\./]?\s*O|W\s*[\./]?\s*O|D\s*[\./]?\s*O)\s*[:\-–—]?\s*(.*)\s*$",
+        co,
+        re.I,
+    )
     if m:
         rest = (m.group(2) or "").strip()
         return rest[:255] if rest else ""
@@ -1173,7 +1216,25 @@ def _occupation_siebel_label_from_staging_profession(profession: str | None) -> 
     p = (profession or "").strip().lower()
     if not p:
         return "Private Sector"
-    if "farmer" in p or "farming" in p or re.search(r"\bfarm\b", p):
+    farmer_hints = (
+        "farmer",
+        "farming",
+        "agriculture",
+        "agricultural",
+        "agri",
+        "cultivator",
+        "kisan",
+        "किसान",
+        "crop",
+        "peasant",
+        "farm worker",
+        "dairy",
+        "poultry",
+        "horticulture",
+    )
+    if any(h in p for h in farmer_hints):
+        return "Farmer/ Farm Related"
+    if "farm" in p or re.search(r"\bfarm\b", p):
         return "Farmer/ Farm Related"
     return "Private Sector"
 
@@ -1197,16 +1258,20 @@ def _pick_occupation_siebel_lov(
         'input[name="s_4_1_120_0"]',
         'input[aria-label="Occupation"]',
         'input[aria-label*="Occupation" i]',
+        'input[title*="Occupation" i]',
     ]
     option_patterns = [re.compile(r"^\s*" + re.escape(target) + r"\s*$", re.I)]
-    if "farmer" in target.lower():
+    tl = target.lower()
+    if "farmer" in tl or "farm" in tl:
         option_patterns.extend(
             [
                 re.compile(r"Farmer\s*/\s*Farm\s*Related", re.I),
                 re.compile(r"Farmer.*Farm\s*Related", re.I),
+                re.compile(r"Farmer\s*/\s*Farm", re.I),
+                re.compile(r".*Farmer.*Farm.*Related.*", re.I),
             ]
         )
-    if "private" in target.lower():
+    if "private" in tl:
         option_patterns.append(re.compile(r"Private\s+Sector", re.I))
 
     def try_root(root) -> bool:
@@ -1229,6 +1294,7 @@ def _pick_occupation_siebel_lov(
             return False
         _safe_page_wait(page, 220, log_label="after_occupation_click")
 
+        tag = ""
         if control is not None:
             try:
                 tag = (control.evaluate("el => (el.tagName || '').toLowerCase()") or "").strip()
@@ -1241,6 +1307,19 @@ def _pick_occupation_siebel_lov(
                             continue
             except Exception:
                 pass
+            # Siebel bounded LOV: type to narrow list then confirm
+            if tl and tag == "input":
+                try:
+                    prefix = target.split("/")[0].strip()[:12] if "/" in target else target[:12]
+                    control.click(timeout=timeout_ms)
+                    page.keyboard.press("Control+a")
+                    page.keyboard.type(prefix, delay=35)
+                    _safe_page_wait(page, 280, log_label="after_occupation_typeahead")
+                    page.keyboard.press("Enter")
+                    _safe_page_wait(page, 200, log_label="after_occupation_enter")
+                    return True
+                except Exception:
+                    pass
 
         for pat in option_patterns:
             for role in ("option", "menuitem", "listitem", "link"):
@@ -1290,6 +1369,7 @@ def _pick_relation_type_from_dropdown(
     relation: str,
     timeout_ms: int,
     content_frame_selector: str | None,
+    note,
 ) -> bool:
     """
     Click relation type field titled like ``S/O\\W/O\\D/O:`` and pick option from opened dropdown.
@@ -1321,9 +1401,12 @@ def _pick_relation_type_from_dropdown(
         # Open relation dropdown control
         opened = False
         control = None
-        for css in type_selectors:
+        for lbl in (
+            re.compile(r"^\s*S\s*/\s*W\s*/\s*D\s*/\s*O\s*:?\s*$", re.I),
+            re.compile(r"S\s*/\s*W\s*/\s*D\s*/\s*O", re.I),
+        ):
             try:
-                c = root.locator(css).first
+                c = root.get_by_label(lbl).first
                 if c.count() > 0 and c.is_visible(timeout=700):
                     try:
                         c.click(timeout=timeout_ms)
@@ -1335,6 +1418,20 @@ def _pick_relation_type_from_dropdown(
             except Exception:
                 continue
         if not opened:
+            for css in type_selectors:
+                try:
+                    c = root.locator(css).first
+                    if c.count() > 0 and c.is_visible(timeout=700):
+                        try:
+                            c.click(timeout=timeout_ms)
+                        except Exception:
+                            c.click(timeout=timeout_ms, force=True)
+                        opened = True
+                        control = c
+                        break
+                except Exception:
+                    continue
+        if not opened:
             return False
         _safe_page_wait(page, 220, log_label="after_relation_type_click")
 
@@ -1345,6 +1442,18 @@ def _pick_relation_type_from_dropdown(
                 if tag == "select":
                     control.select_option(label=re.compile(rf"^\s*{re.escape(target)}\s*$", re.I), timeout=timeout_ms)
                     return True
+                if tag == "input" and target in ("S/O", "W/O", "D/O"):
+                    try:
+                        ta = target.replace("/", "")
+                        control.click(timeout=timeout_ms)
+                        page.keyboard.press("Control+a")
+                        page.keyboard.type(ta, delay=40)
+                        _safe_page_wait(page, 260, log_label="after_relation_type_typeahead")
+                        page.keyboard.press("Enter")
+                        _safe_page_wait(page, 180, log_label="after_relation_type_enter")
+                        return True
+                    except Exception:
+                        pass
             except Exception:
                 pass
 
@@ -1387,6 +1496,7 @@ def _pick_relation_type_from_dropdown(
     for r in _siebel_locator_search_roots(page, content_frame_selector):
         try:
             if try_root(r):
+                note(f"Relation type LOV: selected {target!r}.")
                 return True
         except Exception:
             continue
@@ -1450,9 +1560,11 @@ def _pick_relation_type_from_dropdown(
     for frame in _ordered_frames(page):
         try:
             if bool(frame.evaluate(js_geo_pick, target)):
+                note(f"Relation type LOV: selected {target!r} (geometry fallback).")
                 return True
         except Exception:
             continue
+    note(f"Relation type LOV: could not select {target!r}.")
     return False
 
 
@@ -3696,6 +3808,8 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
     note,
     skip_search_hit_click: bool = False,
     customer_profession: str | None = None,
+    gender: str | None = None,
+    relation_prefix: str | None = None,
 ) -> bool:
     """
     Steps after **Find + Go** from operator recording *Find Contact Enquiry*:
@@ -3773,8 +3887,12 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
         note("No care_of from DB — skipping Relation's Name / Address Line 1 fill after First Name drilldown.")
         return True
 
-    rel_type = _relation_type_from_care_of(care_val)
     rel_name = _relation_display_name_from_care_of(care_val)
+    rel_type = _resolve_relation_type_for_video_sop(
+        care_val,
+        relation_prefix=relation_prefix,
+        gender=gender,
+    )
     occ_label = _occupation_siebel_label_from_staging_profession(customer_profession)
 
     _branch2_try_fill_contact_input(
@@ -3790,6 +3908,15 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
         log_label="Email (NA, relation path)",
     )
     _safe_page_wait(page, 200, log_label="after_relation_path_email_na")
+    if rel_type:
+        _pick_relation_type_from_dropdown(
+            page,
+            relation=rel_type,
+            timeout_ms=action_timeout_ms,
+            content_frame_selector=content_frame_selector,
+            note=note,
+        )
+        _safe_page_wait(page, 220, log_label="after_relation_path_relation_type")
     _pick_occupation_siebel_lov(
         page,
         occupation_label=occ_label,
@@ -3798,14 +3925,6 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
         note=note,
     )
     _safe_page_wait(page, 200, log_label="after_relation_path_occupation")
-    if rel_type:
-        _pick_relation_type_from_dropdown(
-            page,
-            relation=rel_type,
-            timeout_ms=action_timeout_ms,
-            content_frame_selector=content_frame_selector,
-        )
-        _safe_page_wait(page, 220, log_label="after_relation_path_relation_type")
 
     if not (rel_name or "").strip():
         note(
