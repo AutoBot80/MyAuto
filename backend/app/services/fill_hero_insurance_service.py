@@ -7405,15 +7405,16 @@ def _hero_misp_fill_proposal_and_review(
         if err:
             return _proposal_fail(ocr_output_dir, subfolder, err)
 
-    err = _proposal_step_date_of_registration_today(
-        page,
-        "date_of_registration",
-        ocr_output_dir,
-        subfolder,
-        timeout_ms=pt,
-    )
-    if err:
-        return _proposal_fail(ocr_output_dir, subfolder, err)
+    # Date of Registration — skipped; left for the operator to fill manually.
+    # err = _proposal_step_date_of_registration_today(
+    #     page,
+    #     "date_of_registration",
+    #     ocr_output_dir,
+    #     subfolder,
+    #     timeout_ms=pt,
+    # )
+    # if err:
+    #     return _proposal_fail(ocr_output_dir, subfolder, err)
 
     nn = (values.get("nominee_name") or "").strip()
     if nn:
