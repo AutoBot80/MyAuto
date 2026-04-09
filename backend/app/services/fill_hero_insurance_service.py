@@ -84,6 +84,10 @@ INSURANCE_NAV_IFRAME_SELECTOR = 'iframe[src*="2w" i]'
 # **insurance_master** INSERT is before **Proposal Preview**; **Proposal Preview** / **Proposal Review** is always clicked after proposal fill (not gated by this flag).
 HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY = True
 
+# When True: abort after proposal field fill (and optional ``insurance_master`` insert) and **before** clicking
+# **Proposal Preview** / **Proposal Review** — the first navigation control on the main MispPolicy proposal form.
+HERO_MISP_HARD_FAIL_BEFORE_PROPOSAL_PREVIEW = True
+
 # Optional: regex on checkbox **label/row text** (MispPolicy proposal grid) for a **new**
 # proposal checkbox MISP added — force **unchecked** when a matching visible checkbox exists. If **empty**, this
 # step is skipped (no error). **CPA Tenure** is native ``<select>`` ``ddlCPATenure`` (fuzzy option ``0``), not this hook.
@@ -7826,6 +7830,14 @@ def _hero_misp_fill_proposal_and_review(
                 f"main_process: insurance_master insert failed: {persist_exc!s}",
             )
             return f"insurance_master insert failed: {persist_exc!s}", {}
+
+    if HERO_MISP_HARD_FAIL_BEFORE_PROPOSAL_PREVIEW:
+        return _proposal_fail(
+            ocr_output_dir,
+            subfolder,
+            "hard_fail: stopped before Proposal Preview / Proposal Review "
+            "(HERO_MISP_HARD_FAIL_BEFORE_PROPOSAL_PREVIEW)",
+        )
 
     try:
         _proposal_preview_rx = re.compile(r"Proposal\s*(Preview|Review)", re.I)

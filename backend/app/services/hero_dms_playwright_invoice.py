@@ -747,6 +747,252 @@ def _run_vehicle_sales_my_orders_mobile_search(
         return _MyOrdersGridSearchResult(outcome="error", error=str(_ex))
 
 
+def _fill_order_finance_after_vin_attach(
+    page: Page,
+    *,
+    financier_name: str,
+    action_timeout_ms: int,
+    content_frame_selector: str | None,
+    note: Callable[..., None],
+) -> tuple[bool, str | None]:
+    """
+    On the **Sales Order** form during attach-VIN flow: when ``financier_name`` is non-empty, set
+    **Finance Required** = Y, fill **Financer** (same path as create booking), **Hypothecation** = Y.
+
+    Call after **Price All**, **Allocate All**, and ex-showroom / order-line scraping (attach path), or before
+    the **Order:** link on the ``start_at_order_link_before_apply`` shortcut.
+
+    Tries explicit Siebel controls (``s_2_1_118_0``, ``s_2_1_117_0``, ``s_2_1_119_0``) then label-based fallbacks.
+    """
+    _fn = (financier_name or "").strip()
+    if not _fn:
+        return True, None
+    _tmo = min(int(action_timeout_ms or 3000), 4000)
+    _fin_req = "Y"
+    _hyp_val = "Y"
+
+    def _roots() -> list:
+        r: list = []
+        try:
+            r.extend(list(_siebel_locator_search_roots(page, content_frame_selector)))
+        except Exception:
+            pass
+        try:
+            r.extend(list(_ordered_frames(page)))
+        except Exception:
+            pass
+        r.append(page)
+        return r
+
+    # 1) Finance Required = Y
+    _fr_ok = False
+    for root in _roots():
+        for css in (
+            'input[name="s_2_1_118_0"]',
+            'input[aria-labelledby="HHML_Finance_Flag_Label_2"]',
+            'input[aria-label="Finance Required" i]',
+            'input[aria-label*="Finance Required" i]',
+        ):
+            try:
+                loc = root.locator(css).first
+                if loc.count() > 0 and loc.is_visible(timeout=650):
+                    try:
+                        loc.click(timeout=_tmo)
+                    except Exception:
+                        loc.click(timeout=_tmo, force=True)
+                    try:
+                        loc.fill("", timeout=_tmo)
+                        loc.fill(_fin_req, timeout=_tmo)
+                    except Exception:
+                        pass
+                    try:
+                        loc.press("Tab", timeout=1200)
+                    except Exception:
+                        try:
+                            page.keyboard.press("Tab")
+                        except Exception:
+                            pass
+                    _fr_ok = True
+                    note(f"attach_vehicle_to_bkg: Finance Required={_fin_req!r} (selector {css!r}).")
+                    break
+            except Exception:
+                continue
+        if _fr_ok:
+            break
+    if not _fr_ok:
+        for root in _roots():
+            for _lbl in ("Finance Required", "FinanceRequired"):
+                if _fill_by_label_on_frame(root, _lbl, _fin_req, action_timeout_ms=action_timeout_ms):
+                    _fr_ok = True
+                    note(f"attach_vehicle_to_bkg: Finance Required={_fin_req!r} (label {_lbl!r}).")
+                    break
+                if _select_dropdown_by_label_on_frame(
+                    root,
+                    label=_lbl,
+                    value=_fin_req,
+                    action_timeout_ms=min(action_timeout_ms, 8000),
+                ):
+                    _fr_ok = True
+                    note(f"attach_vehicle_to_bkg: Finance Required={_fin_req!r} (dropdown {_lbl!r}).")
+                    break
+            if _fr_ok:
+                break
+    if not _fr_ok:
+        return False, "Could not set Finance Required = Y (attach order finance)."
+
+    _safe_page_wait(page, 500, log_label="after_attach_finance_required")
+
+    # 2) Financer — same methodology as create booking
+    _fin_name_ok = False
+    _fin_hard_err: str | None = None
+    for root in _roots():
+        try:
+            ok_fin, fin_msg = _fill_create_order_financier_field_on_frame(
+                page,
+                root,
+                _fn,
+                action_timeout_ms=action_timeout_ms,
+                content_frame_selector=content_frame_selector,
+                note=note,
+            )
+            if ok_fin:
+                _fin_name_ok = True
+                break
+            if fin_msg:
+                _fin_hard_err = fin_msg
+                break
+            for _lbl in ("Financer", "Financier", "Financer Name", "Financier Name"):
+                if _select_dropdown_by_label_on_frame(
+                    root,
+                    label=_lbl,
+                    value=_fn.upper(),
+                    action_timeout_ms=min(action_timeout_ms, 8000),
+                ):
+                    _fin_name_ok = True
+                    break
+            if _fin_name_ok:
+                break
+        except Exception:
+            continue
+    if _fin_hard_err:
+        _pop_err = _detect_siebel_error_popup(page, content_frame_selector)
+        if _pop_err:
+            return False, f"Siebel error while setting Financer (attach): {_pop_err[:200]}"
+        if _fin_hard_err in (
+            "Financer name not matched",
+            "Financer name could not be matched",
+        ):
+            return False, _fin_hard_err
+        return False, _fin_hard_err
+    if not _fin_name_ok:
+        for root in _roots():
+            for css in (
+                'input[name="s_2_1_117_0"]',
+                'input[aria-labelledby="HHML_Finance_Consultant_Name_Label_2"]',
+                'input[aria-label="Financer" i]',
+                'input[aria-label*="Financer" i]',
+            ):
+                try:
+                    loc = root.locator(css).first
+                    if loc.count() > 0 and loc.is_visible(timeout=650):
+                        try:
+                            loc.click(timeout=_tmo)
+                        except Exception:
+                            loc.click(timeout=_tmo, force=True)
+                        try:
+                            loc.fill("", timeout=_tmo)
+                        except Exception:
+                            pass
+                        try:
+                            page.keyboard.type(_fn.upper(), delay=35)
+                        except Exception:
+                            loc.fill(_fn.upper(), timeout=_tmo)
+                        try:
+                            loc.press("Tab", timeout=1200)
+                        except Exception:
+                            pass
+                        _fin_name_ok = True
+                        note(f"attach_vehicle_to_bkg: Financer filled via {css!r} (fallback).")
+                        break
+                except Exception:
+                    continue
+            if _fin_name_ok:
+                break
+    if not _fin_name_ok:
+        _pop_err = _detect_siebel_error_popup(page, content_frame_selector)
+        if _pop_err:
+            return False, f"Siebel error while setting Financer (attach): {_pop_err[:200]}"
+        return False, f"Could not set Financer from {_fn!r} (attach path)."
+
+    _fin_post = _detect_siebel_error_popup(page, content_frame_selector)
+    if _fin_post:
+        return False, f"Siebel error after Financer (attach): {_fin_post[:200]}"
+    try:
+        page.keyboard.press("Tab")
+    except Exception:
+        pass
+    _safe_page_wait(page, 400, log_label="after_attach_financer_tab_out")
+
+    # 3) Hypothecation = Y
+    _hyp_ok = False
+    for root in _roots():
+        for css in (
+            'input[name="s_2_1_119_0"]',
+            'input[aria-labelledby="HHML_Hypothecation_Flag_Label_2"]',
+            'input[aria-label="Hypothecation" i]',
+            'input[aria-label*="Hypothecation" i]',
+        ):
+            try:
+                loc = root.locator(css).first
+                if loc.count() > 0 and loc.is_visible(timeout=650):
+                    try:
+                        loc.click(timeout=_tmo)
+                    except Exception:
+                        loc.click(timeout=_tmo, force=True)
+                    try:
+                        loc.fill("", timeout=_tmo)
+                        loc.fill(_hyp_val, timeout=_tmo)
+                    except Exception:
+                        pass
+                    try:
+                        loc.press("Tab", timeout=1200)
+                    except Exception:
+                        try:
+                            page.keyboard.press("Tab")
+                        except Exception:
+                            pass
+                    _hyp_ok = True
+                    note(f"attach_vehicle_to_bkg: Hypothecation={_hyp_val!r} (selector {css!r}).")
+                    break
+            except Exception:
+                continue
+        if _hyp_ok:
+            break
+    if not _hyp_ok:
+        for root in _roots():
+            for _lbl in ("Hypothecation", "Hpothecation"):
+                if _fill_by_label_on_frame(root, _lbl, _hyp_val, action_timeout_ms=action_timeout_ms):
+                    _hyp_ok = True
+                    note(f"attach_vehicle_to_bkg: Hypothecation={_hyp_val!r} (label {_lbl!r}).")
+                    break
+                if _select_dropdown_by_label_on_frame(
+                    root,
+                    label=_lbl,
+                    value=_hyp_val,
+                    action_timeout_ms=min(action_timeout_ms, 8000),
+                ):
+                    _hyp_ok = True
+                    note(f"attach_vehicle_to_bkg: Hypothecation={_hyp_val!r} (dropdown {_lbl!r}).")
+                    break
+            if _hyp_ok:
+                break
+    if not _hyp_ok:
+        return False, "Could not set Hypothecation = Y (attach order finance)."
+
+    _safe_page_wait(page, 350, log_label="after_attach_hypothecation")
+    return True, None
+
+
 def _attach_vehicle_to_bkg(
     page: Page,
     *,
@@ -758,6 +1004,7 @@ def _attach_vehicle_to_bkg(
     start_at_order_link_before_apply: bool = False,
     line_item_discount: str = "",
     attach_line_items: list[dict] | None = None,
+    financier_name: str = "",
 ) -> tuple[bool, str | None, dict]:
     """
     After a new sales order is saved:
@@ -782,8 +1029,15 @@ def _attach_vehicle_to_bkg(
     and starts at the top **Order:<order#>** link (Step 10) — used when My Orders already shows
     **Allocated** stock.
     Returns ``(success, error_detail, extra_dict)``; ``extra_dict`` may be empty when scrape fails.
+
+    When ``financier_name`` is non-empty (from client / ``dms_values``), fills **Finance Required** = Y,
+    **Financer**, and **Hypothecation** = Y on the order form (same methodology as create booking), after
+    **Price All** + **Allocate All** and after ex-showroom / line-item scraping in that section; on the
+    ``start_at_order_link_before_apply`` shortcut (no Price/Allocate), fills those fields before the **Order:** link.
     """
     _tmo = min(int(action_timeout_ms or 3000), 4000)
+    _fin = (financier_name or "").strip()
+    _finance_attach_ok = False
 
     def _all_roots() -> list:
         r: list = []
@@ -1399,7 +1653,7 @@ def _attach_vehicle_to_bkg(
         if _aa_err:
             note(f"attach_vehicle_to_bkg: Siebel error after Allocate All → {_aa_err!r:.300}")
             return False, f"Siebel error after Allocate All: {_aa_err[:200]}", {}
-    
+
         _extra: dict = {}
         _safe_page_wait(page, 1200, log_label="after_allocate_all_before_ex_showroom_scrape")
         _n_lines = len(_line_items)
@@ -1465,7 +1719,23 @@ def _attach_vehicle_to_bkg(
                     "attach_vehicle_to_bkg: Total (Ex-showroom) not scraped or not numeric after Allocate All "
                     "(best-effort)."
                 )
-    
+
+        if _fin:
+            _fo_post, _fe_post = _fill_order_finance_after_vin_attach(
+                page,
+                financier_name=_fin,
+                action_timeout_ms=action_timeout_ms,
+                content_frame_selector=content_frame_selector,
+                note=note,
+            )
+            if not _fo_post:
+                return (
+                    False,
+                    (_fe_post or "attach: order finance failed after Allocate All and ex-showroom scrape."),
+                    _extra,
+                )
+            _finance_attach_ok = True
+
         note(
             "attach_vehicle_to_bkg: skipped VIN drilldown, Serial Number, and Pre-check/PDI through PDI submit (disabled)."
         )
@@ -1498,7 +1768,18 @@ def _attach_vehicle_to_bkg(
             )
             if not _pc_ok:
                 return False, _pc_err or "Pre-check / PDI failed after Serial Number drilldown.", {}
-    
+
+    if _fin and not _finance_attach_ok:
+        _fo3, _fe3 = _fill_order_finance_after_vin_attach(
+            page,
+            financier_name=_fin,
+            action_timeout_ms=action_timeout_ms,
+            content_frame_selector=content_frame_selector,
+            note=note,
+        )
+        if not _fo3:
+            return False, (_fe3 or "attach: order finance failed before Order link."), {}
+        _finance_attach_ok = True
 
     # ── Step 10: Click "Order:<order#>" link at top of page ──
     _order_link_clicked = False
@@ -2163,6 +2444,7 @@ def _create_order(
                 start_at_order_link_before_apply=(branch == "allocated"),
                 line_item_discount=line_item_discount,
                 attach_line_items=attach_line_items,
+                financier_name=financier_name,
             )
             scraped["order_drilldown_opened"] = bool(_att_ok)
             scraped["my_orders_branch"] = branch
@@ -2662,204 +2944,204 @@ def _create_order(
 
         _locked_root = None
 
-        # 3b-3d) Finance Required, Financier, Hypothecation
-        _fin_name = (financier_name or "").strip()
-        _is_financed = bool(_fin_name)
-        _fin_val = "Y" if _is_financed else "N"
-        # #region agent log — finance branch input
-        try:
-            with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-                import json as _j_fin, time as _t_fin
-                _fin_token = _fin_name.lower()
-                _lf.write(_j_fin.dumps({
-                    "sessionId": "08e634",
-                    "runId": "pre-fix",
-                    "hypothesisId": "H1_H2",
-                    "location": "hero_dms_playwright_invoice.py:_create_order_finance_input",
-                    "message": "Finance branch decision inputs",
-                    "data": {
-                        "financier_present": bool(_fin_name),
-                        "financier_len": len(_fin_name),
-                        "financier_token": _fin_token if _fin_token in ("", "na", "n/a", "null", "none", "-") else "other",
-                        "finance_required_target": _fin_val,
-                    },
-                    "timestamp": _ts_ist_iso(),
-                }) + "\n")
-        except Exception:
-            pass
-        # #endregion
+#         # 3b-3d) Finance Required, Financier, Hypothecation
+#         _fin_name = (financier_name or "").strip()
+#         _is_financed = bool(_fin_name)
+#         _fin_val = "Y" if _is_financed else "N"
+#         # #region agent log — finance branch input
+#         try:
+#             with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
+#                 import json as _j_fin, time as _t_fin
+#                 _fin_token = _fin_name.lower()
+#                 _lf.write(_j_fin.dumps({
+#                     "sessionId": "08e634",
+#                     "runId": "pre-fix",
+#                     "hypothesisId": "H1_H2",
+#                     "location": "hero_dms_playwright_invoice.py:_create_order_finance_input",
+#                     "message": "Finance branch decision inputs",
+#                     "data": {
+#                         "financier_present": bool(_fin_name),
+#                         "financier_len": len(_fin_name),
+#                         "financier_token": _fin_token if _fin_token in ("", "na", "n/a", "null", "none", "-") else "other",
+#                         "finance_required_target": _fin_val,
+#                     },
+#                     "timestamp": _ts_ist_iso(),
+#                 }) + "\n")
+#         except Exception:
+#             pass
+#         # #endregion
 
-        _fin_ok = False
-        for root in _roots():
-            try:
-                for _lbl in ("Finance Required", "FinanceRequired"):
-                    if _fill_by_label_on_frame(root, _lbl, _fin_val, action_timeout_ms=action_timeout_ms):
-                        _fin_ok = True
-                        _locked_root = root
-                        break
-                    if _select_dropdown_by_label_on_frame(
-                        root,
-                        label=_lbl,
-                        value=_fin_val,
-                        action_timeout_ms=min(action_timeout_ms, 8000),
-                    ):
-                        _fin_ok = True
-                        _locked_root = root
-                        break
-                if _fin_ok:
-                    break
-            except Exception:
-                continue
-        if not _fin_ok:
-            return False, f"Could not set Finance Required = {_fin_val}.", scraped
-        _safe_page_wait(page, 400, log_label="after_finance_required")
-        note(f"Create Order: set Finance Required = {_fin_val}.")
-        # #region agent log — finance required set outcome
-        try:
-            with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-                _lf.write(_j_fin.dumps({
-                    "sessionId": "08e634",
-                    "runId": "pre-fix",
-                    "hypothesisId": "H3",
-                    "location": "hero_dms_playwright_invoice.py:_create_order_finance_required_outcome",
-                    "message": "Finance Required set result",
-                    "data": {
-                        "finance_required_target": _fin_val,
-                        "finance_required_set": bool(_fin_ok),
-                    },
-                    "timestamp": _ts_ist_iso(),
-                }) + "\n")
-        except Exception:
-            pass
-        # #endregion
+#         _fin_ok = False
+#         for root in _roots():
+#             try:
+#                 for _lbl in ("Finance Required", "FinanceRequired"):
+#                     if _fill_by_label_on_frame(root, _lbl, _fin_val, action_timeout_ms=action_timeout_ms):
+#                         _fin_ok = True
+#                         _locked_root = root
+#                         break
+#                     if _select_dropdown_by_label_on_frame(
+#                         root,
+#                         label=_lbl,
+#                         value=_fin_val,
+#                         action_timeout_ms=min(action_timeout_ms, 8000),
+#                     ):
+#                         _fin_ok = True
+#                         _locked_root = root
+#                         break
+#                 if _fin_ok:
+#                     break
+#             except Exception:
+#                 continue
+#         if not _fin_ok:
+#             return False, f"Could not set Finance Required = {_fin_val}.", scraped
+#         _safe_page_wait(page, 400, log_label="after_finance_required")
+#         note(f"Create Order: set Finance Required = {_fin_val}.")
+#         # #region agent log — finance required set outcome
+#         try:
+#             with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
+#                 _lf.write(_j_fin.dumps({
+#                     "sessionId": "08e634",
+#                     "runId": "pre-fix",
+#                     "hypothesisId": "H3",
+#                     "location": "hero_dms_playwright_invoice.py:_create_order_finance_required_outcome",
+#                     "message": "Finance Required set result",
+#                     "data": {
+#                         "finance_required_target": _fin_val,
+#                         "finance_required_set": bool(_fin_ok),
+#                     },
+#                     "timestamp": _ts_ist_iso(),
+#                 }) + "\n")
+#         except Exception:
+#             pass
+#         # #endregion
 
-        if _is_financed:
-            _fin_caps = _fin_name.upper()
-            _fin_name_ok = False
-            _fin_hard_err: str | None = None
-            for root in _roots():
-                try:
-                    ok_fin, fin_msg = _fill_create_order_financier_field_on_frame(
-                        page,
-                        root,
-                        _fin_name,
-                        action_timeout_ms=action_timeout_ms,
-                        content_frame_selector=content_frame_selector,
-                        note=note,
-                    )
-                    if ok_fin:
-                        _fin_name_ok = True
-                        _locked_root = root
-                        break
-                    if fin_msg:
-                        _fin_hard_err = fin_msg
-                        break
-                    for _lbl in ("Financer", "Financier", "Financer Name", "Financier Name"):
-                        if _select_dropdown_by_label_on_frame(
-                            root,
-                            label=_lbl,
-                            value=_fin_caps,
-                            action_timeout_ms=min(action_timeout_ms, 8000),
-                        ):
-                            _fin_name_ok = True
-                            _locked_root = root
-                            break
-                    if _fin_name_ok:
-                        break
-                except Exception:
-                    continue
-            if _fin_hard_err:
-                _fin_err = _detect_siebel_error_popup(page, content_frame_selector)
-                if _fin_err:
-                    return False, f"Siebel error while setting Financier/Financer: {_fin_err[:200]}", scraped
-                if _fin_hard_err in (
-                    "Financer name not matched",
-                    "Financer name could not be matched",
-                ):
-                    return False, _fin_hard_err, scraped
-                return False, _fin_hard_err, scraped
-            if not _fin_name_ok:
-                _fin_err = _detect_siebel_error_popup(page, content_frame_selector)
-                if _fin_err:
-                    return False, f"Siebel error while setting Financier/Financer: {_fin_err[:200]}", scraped
-                return (
-                    False,
-                    f"Could not set Financier/Financer (ALL CAPS + Tab path) from {_fin_name!r} (typed {_fin_caps!r}).",
-                    scraped,
-                )
-            _safe_page_wait(page, 500, log_label="after_financier_fill")
-            _fin_resolved = _scrape_create_order_financier_display_value(
-                page, content_frame_selector=content_frame_selector
-            ).strip()
-            if _fin_resolved:
-                scraped["financier_name"] = _fin_resolved
-            note(
-                "Create Order: Financier/Financer main field + tablet field2 (ALL CAPS + Enter; no pick icon / "
-                f"no MVG). staging={_fin_name!r} typed={_fin_caps!r}"
-                + (
-                    f" siebel_display={scraped.get('financier_name')!r}."
-                    if scraped.get("financier_name")
-                    else "."
-                )
-            )
-            _fin_post_err = _detect_siebel_error_popup(page, content_frame_selector)
-            if _fin_post_err:
-                return False, f"Siebel error after Financier/Financer input: {_fin_post_err[:200]}", scraped
-            # Applet closed — focus is often still on Financer; Tab out before Hypothecation / remaining fields.
-            try:
-                page.keyboard.press("Tab")
-            except Exception:
-                pass
-            _safe_page_wait(page, 400, log_label="after_financier_tab_out_before_hypothecation")
-            note("Create Order: Tab out from Financer field; proceeding to Hypothecation and next fields.")
+#         if _is_financed:
+#             _fin_caps = _fin_name.upper()
+#             _fin_name_ok = False
+#             _fin_hard_err: str | None = None
+#             for root in _roots():
+#                 try:
+#                     ok_fin, fin_msg = _fill_create_order_financier_field_on_frame(
+#                         page,
+#                         root,
+#                         _fin_name,
+#                         action_timeout_ms=action_timeout_ms,
+#                         content_frame_selector=content_frame_selector,
+#                         note=note,
+#                     )
+#                     if ok_fin:
+#                         _fin_name_ok = True
+#                         _locked_root = root
+#                         break
+#                     if fin_msg:
+#                         _fin_hard_err = fin_msg
+#                         break
+#                     for _lbl in ("Financer", "Financier", "Financer Name", "Financier Name"):
+#                         if _select_dropdown_by_label_on_frame(
+#                             root,
+#                             label=_lbl,
+#                             value=_fin_caps,
+#                             action_timeout_ms=min(action_timeout_ms, 8000),
+#                         ):
+#                             _fin_name_ok = True
+#                             _locked_root = root
+#                             break
+#                     if _fin_name_ok:
+#                         break
+#                 except Exception:
+#                     continue
+#             if _fin_hard_err:
+#                 _fin_err = _detect_siebel_error_popup(page, content_frame_selector)
+#                 if _fin_err:
+#                     return False, f"Siebel error while setting Financier/Financer: {_fin_err[:200]}", scraped
+#                 if _fin_hard_err in (
+#                     "Financer name not matched",
+#                     "Financer name could not be matched",
+#                 ):
+#                     return False, _fin_hard_err, scraped
+#                 return False, _fin_hard_err, scraped
+#             if not _fin_name_ok:
+#                 _fin_err = _detect_siebel_error_popup(page, content_frame_selector)
+#                 if _fin_err:
+#                     return False, f"Siebel error while setting Financier/Financer: {_fin_err[:200]}", scraped
+#                 return (
+#                     False,
+#                     f"Could not set Financier/Financer (ALL CAPS + Tab path) from {_fin_name!r} (typed {_fin_caps!r}).",
+#                     scraped,
+#                 )
+#             _safe_page_wait(page, 500, log_label="after_financier_fill")
+#             _fin_resolved = _scrape_create_order_financier_display_value(
+#                 page, content_frame_selector=content_frame_selector
+#             ).strip()
+#             if _fin_resolved:
+#                 scraped["financier_name"] = _fin_resolved
+#             note(
+#                 "Create Order: Financier/Financer main field + tablet field2 (ALL CAPS + Enter; no pick icon / "
+#                 f"no MVG). staging={_fin_name!r} typed={_fin_caps!r}"
+#                 + (
+#                     f" siebel_display={scraped.get('financier_name')!r}."
+#                     if scraped.get("financier_name")
+#                     else "."
+#                 )
+#             )
+#             _fin_post_err = _detect_siebel_error_popup(page, content_frame_selector)
+#             if _fin_post_err:
+#                 return False, f"Siebel error after Financier/Financer input: {_fin_post_err[:200]}", scraped
+#             # Applet closed — focus is often still on Financer; Tab out before Hypothecation / remaining fields.
+#             try:
+#                 page.keyboard.press("Tab")
+#             except Exception:
+#                 pass
+#             _safe_page_wait(page, 400, log_label="after_financier_tab_out_before_hypothecation")
+#             note("Create Order: Tab out from Financer field; proceeding to Hypothecation and next fields.")
 
-        if _is_financed:
-            _hyp_val = "Y"
-            _hyp_ok = False
-            for root in _roots():
-                try:
-                    for _lbl in ("Hypothecation", "Hpothecation"):
-                        if _fill_by_label_on_frame(root, _lbl, _hyp_val, action_timeout_ms=action_timeout_ms):
-                            _hyp_ok = True
-                            _locked_root = root
-                            break
-                        if _select_dropdown_by_label_on_frame(
-                            root,
-                            label=_lbl,
-                            value=_hyp_val,
-                            action_timeout_ms=min(action_timeout_ms, 8000),
-                        ):
-                            _hyp_ok = True
-                            _locked_root = root
-                            break
-                    if _hyp_ok:
-                        break
-                except Exception:
-                    continue
-            if not _hyp_ok:
-                return False, f"Could not set Hypothecation = {_hyp_val}.", scraped
-            _safe_page_wait(page, 400, log_label="after_hypothecation")
-            note(f"Create Order: set Hypothecation = {_hyp_val}.")
-            # #region agent log — hypothecation set outcome
-            try:
-                with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
-                    _lf.write(_j_fin.dumps({
-                        "sessionId": "08e634",
-                        "runId": "pre-fix",
-                        "hypothesisId": "H3",
-                        "location": "hero_dms_playwright_invoice.py:_create_order_hypothecation_outcome",
-                        "message": "Hypothecation set result",
-                        "data": {
-                            "hypothecation_target": _hyp_val,
-                            "hypothecation_set": bool(_hyp_ok),
-                        },
-                        "timestamp": _ts_ist_iso(),
-                    }) + "\n")
-            except Exception:
-                pass
-            # #endregion
-        else:
-            note("Create Order: financier empty — skipped Financier and Hypothecation fields.")
+#         if _is_financed:
+#             _hyp_val = "Y"
+#             _hyp_ok = False
+#             for root in _roots():
+#                 try:
+#                     for _lbl in ("Hypothecation", "Hpothecation"):
+#                         if _fill_by_label_on_frame(root, _lbl, _hyp_val, action_timeout_ms=action_timeout_ms):
+#                             _hyp_ok = True
+#                             _locked_root = root
+#                             break
+#                         if _select_dropdown_by_label_on_frame(
+#                             root,
+#                             label=_lbl,
+#                             value=_hyp_val,
+#                             action_timeout_ms=min(action_timeout_ms, 8000),
+#                         ):
+#                             _hyp_ok = True
+#                             _locked_root = root
+#                             break
+#                     if _hyp_ok:
+#                         break
+#                 except Exception:
+#                     continue
+#             if not _hyp_ok:
+#                 return False, f"Could not set Hypothecation = {_hyp_val}.", scraped
+#             _safe_page_wait(page, 400, log_label="after_hypothecation")
+#             note(f"Create Order: set Hypothecation = {_hyp_val}.")
+#             # #region agent log — hypothecation set outcome
+#             try:
+#                 with open("debug-08e634.log", "a", encoding="utf-8") as _lf:
+#                     _lf.write(_j_fin.dumps({
+#                         "sessionId": "08e634",
+#                         "runId": "pre-fix",
+#                         "hypothesisId": "H3",
+#                         "location": "hero_dms_playwright_invoice.py:_create_order_hypothecation_outcome",
+#                         "message": "Hypothecation set result",
+#                         "data": {
+#                             "hypothecation_target": _hyp_val,
+#                             "hypothecation_set": bool(_hyp_ok),
+#                         },
+#                         "timestamp": _ts_ist_iso(),
+#                     }) + "\n")
+#             except Exception:
+#                 pass
+#             # #endregion
+#         else:
+#             note("Create Order: financier empty — skipped Financier and Hypothecation fields.")
         if _locked_root is not None:
             try:
                 note(f"Create Order: locked booking form context for Contact Last Name/F2 (url={(getattr(_locked_root, 'url', '') or '')[:120]!r}).")
@@ -3547,6 +3829,7 @@ def _create_order(
             note=note,
             line_item_discount=line_item_discount,
             attach_line_items=attach_line_items,
+            financier_name=financier_name,
         )
         scraped["order_drilldown_opened"] = bool(_att_ok)
         if _att_scraped:
