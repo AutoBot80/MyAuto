@@ -12,6 +12,7 @@ import json
 import logging
 import re
 import time
+import uuid
 from pathlib import Path
 from contextlib import contextmanager
 from collections.abc import Callable
@@ -151,7 +152,9 @@ def _dump_precheck_pdi_dom_snapshot(
         logger.warning("precheck_pdi_dom_dump: mkdir failed: %s", ex)
         return None
     safe = re.sub(r"[^\w\-.]+", "_", (tag or "dump").strip())[:72] or "dump"
-    fname = f"playwright_precheck_pdi_dom_{safe}_{int(time.time() * 1000)}.txt"
+    fname = (
+        f"playwright_precheck_pdi_dom_{safe}_{int(time.time() * 1000)}_{uuid.uuid4().hex[:10]}.txt"
+    )
     path = d / fname
     lines: list[str] = [
         f"timestamp_ist={_ts_ist_iso()}",
@@ -181,6 +184,28 @@ def _dump_precheck_pdi_dom_snapshot(
         return None
     logger.info("precheck_pdi_dom_dump: wrote %s", path)
     return str(path)
+
+
+def _emit_precheck_pdi_dom_dump(
+    page: Page,
+    diagnostic_dump_dir: Path | str | None,
+    *,
+    note,
+    log_prefix: str,
+    reason: str,
+    tag: str,
+) -> None:
+    """Write a Pre-check/PDI DOM snapshot when ``diagnostic_dump_dir`` is set (success or diagnostic checkpoints)."""
+    if not diagnostic_dump_dir:
+        return
+    _snap = _dump_precheck_pdi_dom_snapshot(
+        page,
+        diagnostic_dump_dir,
+        reason=reason,
+        tag=tag,
+    )
+    if _snap:
+        note(f"{log_prefix}: Pre-check/PDI DOM snapshot written: {_snap}")
 
 
 def _dump_branch_hits(note) -> None:
@@ -2100,15 +2125,14 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             log_prefix=log_prefix,
             context="Pre-check",
         ):
-            if diagnostic_dump_dir:
-                _snap = _dump_precheck_pdi_dom_snapshot(
-                    page,
-                    diagnostic_dump_dir,
-                    reason="precheck_service_request_list_new_failed",
-                    tag="precheck_plus",
-                )
-                if _snap:
-                    note(f"{log_prefix}: Pre-check/PDI DOM snapshot written: {_snap}")
+            _emit_precheck_pdi_dom_dump(
+                page,
+                diagnostic_dump_dir,
+                note=note,
+                log_prefix=log_prefix,
+                reason="precheck_service_request_list_new_failed",
+                tag="precheck_plus_fail",
+            )
             return (
                 False,
                 "Could not click Pre-check list '+' "
@@ -2273,6 +2297,14 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         note,
         "precheck_checkpoint checkpoint=precheck_complete_before_pdi_tab elapsed_ms=%.0f"
         % ((time.perf_counter() - _t_precheck_span) * 1000.0),
+    )
+    _emit_precheck_pdi_dom_dump(
+        page,
+        diagnostic_dump_dir,
+        note=note,
+        log_prefix=log_prefix,
+        reason="precheck_section_complete_before_pdi_tab",
+        tag="precheck_section",
     )
     _pdi_tab_clicked = _click_third_level_view_bar_tab(
         page, "PDI", wait_ms=300,
@@ -2593,6 +2625,14 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         "pdi_decision need_new_row=%s reason=%s"
         % (_pdi_need_new_row, _pdi_decision_reason),
     )
+    _emit_precheck_pdi_dom_dump(
+        page,
+        diagnostic_dump_dir,
+        note=note,
+        log_prefix=log_prefix,
+        reason="pdi_grid_and_expiry_evaluated",
+        tag="pdi_after_eval",
+    )
 
     if _pdi_row_count > 0 and _pdi_expiry_raw and not _parsed_any:
         note(
@@ -2687,15 +2727,14 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 pdi_row_count_hint=_pdi_rows_before_new,
                 expiry_raw_samples=_pdi_expiry_raw,
             )
-            if diagnostic_dump_dir:
-                _snap = _dump_precheck_pdi_dom_snapshot(
-                    page,
-                    diagnostic_dump_dir,
-                    reason="pdi_service_request_list_new_failed",
-                    tag="pdi_plus",
-                )
-                if _snap:
-                    note(f"{log_prefix}: Pre-check/PDI DOM snapshot written: {_snap}")
+            _emit_precheck_pdi_dom_dump(
+                page,
+                diagnostic_dump_dir,
+                note=note,
+                log_prefix=log_prefix,
+                reason="pdi_service_request_list_new_failed",
+                tag="pdi_plus_fail",
+            )
             return (
                 False,
                 "Could not click 'Service Request List:New' on PDI tab "
@@ -2799,6 +2838,14 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             f"({_pdi_rows_before_new} → {_pdi_rows_after_submit})."
         )
 
+    _emit_precheck_pdi_dom_dump(
+        page,
+        diagnostic_dump_dir,
+        note=note,
+        log_prefix=log_prefix,
+        reason="pdi_flow_finished",
+        tag="pdi_section_complete",
+    )
     note(f"{log_prefix}: PDI completed successfully.")
     if callable(form_trace):
         form_trace(
@@ -4276,7 +4323,8 @@ def prepare_vehicle(
     7. For dealer stock: Serial Number drilldown → Features → Pre-check + PDI.
 
     ``diagnostic_dump_dir``: optional directory (e.g. parent of ``playwright_challan.txt``) for
-    ``playwright_precheck_pdi_dom_*.txt`` snapshots when Pre-check **+** or PDI **+** click fails.
+    ``playwright_precheck_pdi_dom_*.txt`` snapshots: on Pre-check/PDI checkpoints (end of Pre-check,
+    after PDI scrape/decision, end of PDI flow), and when Pre-check **+** or PDI **+** fails.
 
     Returns ``(ok, error, merged_vehicle_dict, in_transit, critical_gaps, informational_notes)``.
     """
