@@ -1,0 +1,9 @@
+Playwright Insurance — execution log (IST / Asia/Kolkata timestamps)
+
+started_ist=2026-04-09T22:14:30.392+05:30
+subfolder='8905969604_090426'
+
+--- trace ---
+2026-04-09T22:14:30.394+05:30 [NOTE] run_fill_insurance_only: starting Fill Insurance flow
+2026-04-09T22:14:30.476+05:30 [NOTE] KYC uploads: using Uploaded scans (Aadhar.jpg, Aadhar_back.jpg; third slot reuses front).
+2026-04-09T22:14:30.650+05:30 [NOTE] run_fill_insurance_only: phase=page_open elapsed_ms=0
