@@ -1,0 +1,280 @@
+timestamp_ist=2026-04-09T13:47:27.854+05:30
+reason=pdi_flow_finished
+main_page_url='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=HHML+Auto+Vehicle+PDI+Assessment+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Auto+Vehicle+Entry+Applet&SWERowId0=2-1JZNFGQY&SWEApplet1=HHML+PDI+List+Applet&SWERowId1=2-1K5GVKGN'
+
+--- frame[0] name='' url='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=HHML+Auto+Vehicle+PDI+Assessment+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Auto+Vehicle+Entry+Applet&SWERowId0=2-1JZNFGQY&SWEApplet1=HHML+PDI+List+Applet&SWERowId1=2-1K5GVKGN' ---
+{
+  "documentTitle": "Auto Vehicle PDI Assessment",
+  "locationHref": "https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=HHML+Auto+Vehicle+PDI+Assessment+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Auto+Vehicle+Entry+Applet&SWERowId0=2-1JZNFGQY&SWEApplet1=HHML+PDI+List+Applet&SWERowId1=2-1K5GVKGN",
+  "newrecordButtons": [
+    {
+      "id": "s_2_1_14_0_Ctrl",
+      "aria": "Service Request List:New",
+      "title": "Service Request List:New",
+      "dataDisplay": "New"
+    }
+  ],
+  "thirdLevelTabTexts": [
+    "Home",
+    "My Dashboard",
+    "Payments",
+    "Vehicles",
+    "Enquiry",
+    "Vehicle Sales Invoices",
+    "Vehicles Receipt",
+    "Vehicles Inventory",
+    "Auto Vehicle List Find",
+    "Auto Vehicle List",
+    "Contacts",
+    "PDI",
+    "Features and Image",
+    "PreCheck",
+    "Finance Info",
+    "Complaints",
+    "RC FollowUp",
+    "HB Disclaimer"
+  ],
+  "pdiPrecheckGridHints": [
+    {
+      "tag": "SPAN",
+      "id": "PDI_Label_3",
+      "cls": "",
+      "txt": "PDI"
+    },
+    {
+      "tag": "SPAN",
+      "id": "HHML_PDI_Created_Date_Label_3",
+      "cls": "",
+      "txt": "PDI Created Date"
+    },
+    {
+      "tag": "TH",
+      "id": "s_2_l_HMCL_PDI_Expiry_Date",
+      "cls": "ui-state-default ui-th-column ui-th-ltr ui-sortable-handle",
+      "txt": "PDI Expiry Date"
+    },
+    {
+      "tag": "DIV",
+      "id": "jqgh_s_2_l_HMCL_PDI_Expiry_Date",
+      "cls": "ui-jqgrid-sortable",
+      "txt": "PDI Expiry Date"
+    },
+    {
+      "tag": "TH",
+      "id": "s_2_l_HMCL_PDI_Battery_Expiry_Flag",
+      "cls": "ui-state-default ui-th-column ui-th-ltr ui-sortable-handle",
+      "txt": "PDI/Battery Expiry Flag"
+    },
+    {
+      "tag": "DIV",
+      "id": "jqgh_s_2_l_HMCL_PDI_Battery_Expiry_Flag",
+      "cls": "ui-jqgrid-sortable",
+      "txt": "PDI/Battery Expiry Flag"
+    },
+    {
+      "tag": "TD",
+      "id": "1_s_2_l_HMCL_PDI_Expiry_Date",
+      "cls": "",
+      "txt": "19/04/2026 12:00:00 AM"
+    },
+    {
+      "tag": "TD",
+      "id": "1_s_2_l_HMCL_PDI_Battery_Expiry_Flag",
+      "cls": "force-overflow-visible",
+      "txt": ""
+    },
+    {
+      "tag": "SPAN",
+      "id": "HMCL_PreCheck_Flag_Label_3",
+      "cls": "",
+      "txt": "PreCheck Flag"
+    },
+    {
+      "tag": "TH",
+      "id": "s_2_l_HMCL_PDI_Expiry_Date",
+      "cls": "ui-state-default ui-th-column ui-th-ltr ui-sortable-handle",
+      "txt": "PDI Expiry Date"
+    },
+    {
+      "tag": "DIV",
+      "id": "jqgh_s_2_l_HMCL_PDI_Expiry_Date",
+      "cls": "ui-jqgrid-sortable",
+      "txt": "PDI Expiry Date"
+    },
+    {
+      "tag": "TH",
+      "id": "s_2_l_HMCL_PDI_Battery_Expiry_Flag",
+      "cls": "ui-state-default ui-th-column ui-th-ltr ui-sortable-handle",
+      "txt": "PDI/Battery Expiry Flag"
+    },
+    {
+      "tag": "DIV",
+      "id": "jqgh_s_2_l_HMCL_PDI_Battery_Expiry_Flag",
+      "cls": "ui-jqgrid-sortable",
+      "txt": "PDI/Battery Expiry Flag"
+    },
+    {
+      "tag": "TD",
+      "id": "1_s_2_l_HMCL_PDI_Expiry_Date",
+      "cls": "",
+      "txt": "19/04/2026 12:00:00 AM"
+    },
+    {
+      "tag": "TD",
+      "id": "1_s_2_l_HMCL_PDI_Battery_Expiry_Flag",
+      "cls": "force-overflow-visible",
+      "txt": ""
+    },
+    {
+      "tag": "SPAN",
+      "id": "s_3_1_81_0",
+      "cls": "siebui-ctrl-text siebui-input-align-left",
+      "txt": "MBLHAW472THC54831"
+    },
+    {
+      "tag": "LABEL",
+      "id": "s_3_1_81_0_Label",
+      "cls": "",
+      "txt": "MBLHAW472THC54831"
+    },
+    {
+      "tag": "BUTTON",
+      "id": "s_3_1_321_0_Ctrl",
+      "cls": "siebui-ctrl-btn appletButtonDis siebui-icon-undorecord s_3_1_321_0",
+      "txt": ""
+    },
+    {
+      "tag": "BUTTON",
+      "id": "s_3_1_312_0_Ctrl",
+      "cls": "siebui-ctrl-btn appletButton siebui-icon-newquery s_3_1_312_0",
+      "txt": ""
+    },
+    {
+      "tag": "SPAN",
+      "id": "s_3_1_311_0",
+      "cls": "siebui-btn-icon-d s_3_1_311_0",
+      "txt": ""
+    },
+    {
+      "tag": "SPAN",
+      "id": "s_3_rc",
+      "cls": "siebui-row-counter",
+      "txt": "1 of 1"
+    },
+    {
+      "tag": "SPAN",
+      "id": "s_3_1_310_0",
+      "cls": "siebui-btn-icon-d s_3_1_310_0",
+      "txt": ""
+    },
+    {
+      "tag": "SPAN",
+      "id": "s_3_1_257_0",
+      "cls": "siebui-ctrl-link siebui-link-icon-e siebui-align-left siebui-input-align-left",
+      "txt": ""
+    },
+    {
+      "tag": "BUTTON",
+      "id": "s_3_1_315_0_Ctrl",
+      "cls": "siebui-ctrl-btn appletButtonDis siebui-icon-digivinotp s_3_1_315_0",
+      "txt": "Vehicle Digitization"
+    },
+    {
+      "tag": "BUTTON",
+      "id": "s_3_1_316_0_Ctrl",
+      "cls": "siebui-ctrl-btn appletButtonDis siebui-icon-verifyvinotp s_3_1_316_0",
+      "txt": "Veryfy OTP"
+    },
+    {
+      "tag": "BUTTON",
+      "id": "s_3_1_317_0_Ctrl",
+      "cls": "siebui-ctrl-btn appletButtonDis siebui-icon-resendotp s_3_1_317_0",
+      "txt": "Resend OTP"
+    },
+    {
+      "tag": "BUTTON",
+      "id": "s_3_1_127_0_Ctrl",
+      "cls": "siebui-ctrl-btn appletButtonDis siebui-icon-sendforhsrp s_3_1_127_0",
+      "txt": "Send for HSRP"
+    },
+    {
+      "tag": "BUTTON",
+      "id": "s_3_1_9_0_Ctrl",
+      "cls": "siebui-ctrl-btn appletButtonDis siebui-icon-herosure s_3_1_9_0",
+      "txt": "Hero Sure"
+    },
+    {
+      "tag": "BUTTON",
+      "id": "s_3_1_190_0_Ctrl",
+      "cls": "siebui-ctrl-btn appletButtonDis siebui-icon-simactivate s_3_1_190_0",
+      "txt": "SIM Activate"
+    },
+    {
+      "tag": "SPAN",
+      "id": "s_3_1_263_0_icon",
+      "cls": "siebui-icon-pick applet-form-pick applet-list-pick",
+      "txt": ""
+    },
+    {
+      "tag": "SPAN",
+      "id": "s_3_1_267_0_icon",
+      "cls": "siebui-icon-dropdown applet-form-combo applet-list-combo",
+      "txt": ""
+    },
+    {
+      "tag": "SPAN",
+      "id": "s_3_1_39_0_icon",
+      "cls": "siebui-icon-date applet-form-date applet-list-date",
+      "txt": ""
+    },
+    {
+      "tag": "SPAN",
+      "id": "s_3_1_37_0_icon",
+      "cls": "siebui-icon-date applet-form-date applet-list-date",
+      "txt": ""
+    },
+    {
+      "tag": "SPAN",
+      "id": "s_3_1_20_0_icon",
+      "cls": "siebui-icon-dropdown applet-form-combo applet-list-combo",
+      "txt": ""
+    },
+    {
+      "tag": "SPAN",
+      "id": "s_3_1_279_0_icon",
+      "cls": "siebui-icon-dropdown applet-form-combo applet-list-combo",
+      "txt": ""
+    },
+    {
+      "tag": "SPAN",
+      "id": "s_3_1_276_0_icon",
+      "cls": "siebui-icon-dropdown applet-form-combo applet-list-combo",
+      "txt": ""
+    },
+    {
+      "tag": "SPAN",
+      "id": "s_3_1_87_0",
+      "cls": "siebui-ctrl-text siebui-input-align-left",
+      "txt": ""
+    },
+    {
+      "tag": "SPAN",
+      "id": "s_3_1_87_0_span",
+      "cls": "",
+      "txt": ""
+    },
+    {
+      "tag": "SPAN",
+      "id": "s_3_1_58_0_icon",
+      "cls": "siebui-icon-date applet-form-date applet-list-date",
+      "txt": ""
+    },
+    {
+      "tag": "SPAN",
+      "id": "s_3_1_253_0_icon",
+      "cls": "siebui-icon-date applet-form-date applet-list-date",
+      "txt": ""
+    }
+  ],
+  "visibleIframes": []
+}

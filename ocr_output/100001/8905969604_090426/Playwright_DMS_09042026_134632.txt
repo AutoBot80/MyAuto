@@ -1,0 +1,50 @@
+Playwright DMS — execution log (this run only; IST / Asia/Kolkata timestamps)
+
+started_ist=2026-04-09T13:46:32.580+05:30
+skip_contact_find=False
+dms_contact_path='found'
+mobile_phone='8905969604'
+first_name='Ajay'
+last_name='Faujdar'
+address_line_1='S/O Kamal Singh, Bansroli, Bharatpur, Rajasthan - . 321201'
+state='RAJASTHAN'
+pin_code='321201'
+landline='8696119510'
+care_of='S/O Kamal Singh'
+key_partial='1020'
+frame_partial='54831'
+engine_partial='48087'
+aadhar_id='0411'
+# Siebel: after prepare_vehicle / scrapes, a --- vehicle_master --- block lists merged keys for traceability (grid + DMS). Masters are persisted only after Invoice# is scraped (Create Invoice).
+url_contact_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+Contact+Opportunity+Buyer/CoBuyer+View+(SDW)&SWERF=1&SWEHo=&SWEBU=1'
+url_enquiry_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+Contact+Opportunity+Buyer/CoBuyer+View+(SDW)&SWERF=1&SWEHo=&SWEBU=1'
+url_vehicle_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+All+Vehicle+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Auto+Vehicle+List+Applet&SWERowId0=1-100-1676'
+
+--- trace ---
+Legend: [STEP]/[NOTE]/[MILESTONE] = operator narrative; [FORM] = siebel_step + Siebel form/screen + action + fields/values being applied on that form.
+
+2026-04-09T13:46:32.582+05:30 [STEP] Started Hero Connect / Siebel DMS automation (Find Contact Enquiry path).
+2026-04-09T13:46:32.582+05:30 [STEP] Pre-step: preparing vehicle before contact find (video path).
+2026-04-09T13:46:32.582+05:30 [FORM] siebel_step=5_vehicle_list | form=Auto Vehicle List (DMS_REAL_URL_VEHICLE) | action=begin_vehicle_flow_navigate_then_search_applet | engine_partial='48087' | frame_partial='54831' | key_partial='1020' | vehicle_url_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+All+Vehicle+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Auto+Vehicle+List+Applet&SWERowId0=1-100-1676'
+2026-04-09T13:46:38.067+05:30 [NOTE] prepare_vehicle: Find → Vehicles for list query.
+2026-04-09T13:46:38.616+05:30 [NOTE] prepare_vehicle: VIN + Engine# submitted in Find→Vehicles applet.
+2026-04-09T13:46:38.616+05:30 [FORM] siebel_step=5_vehicle_list | form=Auto Vehicle List — search/query row | action=find_vehicles_vin_engine_applet_only | engine_partial='48087' | find_vehicles_vin_engine_ok=True | frame_partial='54831'
+2026-04-09T13:46:39.878+05:30 [NOTE] prepare_vehicle: left Search Results pane shows the VIN.
+2026-04-09T13:46:40.176+05:30 [NOTE] prepare_vehicle: opened vehicle from left Search Results (VIN Title drilldown).
+2026-04-09T13:46:41.769+05:30 [NOTE] prepare_vehicle: center vehicle list shows selected VIN.
+2026-04-09T13:46:41.824+05:30 [NOTE] prepare_vehicle: scraped vehicle row from center grid.
+2026-04-09T13:46:42.849+05:30 [NOTE] Vehicle prep: filled Battery No. = 'BN3A2305613' on vehicle page.
+2026-04-09T13:46:43.261+05:30 [NOTE] Vehicle prep: filled Key Number = '1020' on vehicle page.
+2026-04-09T13:46:45.062+05:30 [NOTE] Vehicle prep: saved vehicle record after Key/Battery fill.
+2026-04-09T13:46:45.656+05:30 [NOTE] prepare_vehicle: vehicle detail applet (aria-labels) → ['full_chassis', 'model', 'year_of_mfg', 'variant', 'color', 'full_engine'].
+2026-04-09T13:46:45.656+05:30 [FORM] siebel_step=5_vehicle_detail | form=Auto Vehicle — detail applet | action=scrape_VIN_Model_Year_Manu_SKU_Color_Engine_by_aria_label | color='BLA' | full_chassis='MBLHAW472THC54831' | full_engine='HA11F6THC48087' | model='SPLENDOR +' | variant='HSPUNIRSCFIBLA' | year_of_mfg='2,026'
+2026-04-09T13:46:45.734+05:30 [NOTE] DECISION: vehicle with dealer per Inventory Location — '11870 DEALER SHOWROOM'; in_transit=False.
+2026-04-09T13:46:45.734+05:30 [FORM] siebel_step=5_vehicle_inventory_location | form=Auto Vehicle | action=inventory_location_scrape | in_transit=False | inventory_location='11870 DEALER SHOWROOM'
+2026-04-09T13:46:46.162+05:30 [NOTE] prepare_vehicle: clicked Serial Number drilldown (name='Serial Number', scoped #s_1_l).
+2026-04-09T13:46:47.435+05:30 [NOTE] prepare_vehicle: feature-id scrape cubic_capacity='100', vehicle_type='MOTORCYCLE WITH GEAR'.
+2026-04-09T13:46:47.435+05:30 [FORM] siebel_step=vehicle_serial_precheck_pdi | form=Vehicle serial detail | action=precheck_tab_open | log_prefix='prepare_vehicle'
+2026-04-09T13:46:47.502+05:30 [NOTE] prepare_vehicle: clicked Pre-check from #s_vctrl_div tab strip.
+2026-04-09T13:46:52.122+05:30 [NOTE] prepare_vehicle: Pre-check/PDI DOM snapshot written: C:\Users\arya_\OneDrive\Desktop\My Auto.AI\ocr_output\100001\8905969604_090426\playwright_precheck_pdi_dom_precheck_plus_fail_1775722612110_879a171909.txt
+2026-04-09T13:46:52.124+05:30 [STEP] Stopped: vehicle serial drilldown, Features, Pre-check, or PDI failed.
+
+2026-04-09T13:46:52.124+05:30 [END] error=Could not click Pre-check list '+' (tried button#s_3_1_12_0_Ctrl / s_2_2_32_0 siebui-icon-newrecord, Service Request List:New, Precheck List:New; skipped Service Request List: Menu).
