@@ -85,6 +85,8 @@ def _run_prepare_vehicle_loop(
             _note(steps, msg)
             if (msg or "").startswith("TIMING:"):
                 logln(msg)
+            elif "DOM snapshot written" in (msg or ""):
+                logln(msg)
 
         def ms_done(_label: str) -> None:
             pass
@@ -117,6 +119,7 @@ def _run_prepare_vehicle_loop(
                 form_trace=form_trace,
                 ms_done=ms_done,
                 step=step_msg,
+                diagnostic_dump_dir=log_path.parent,
             )
             if not ok:
                 err_s = (err or "prepare_vehicle failed")[:2000]
