@@ -834,7 +834,31 @@ export function AddSalesPage({
     } finally {
       setIsFillDmsLoading(false);
       void (async () => {
-        await refreshCreateInvoiceEligibility();
+        const scraped = dmsRes?.vehicle;
+        const dmsFrame = (scraped?.full_chassis ?? scraped?.frame_num ?? "").trim();
+        const dmsEngine = (scraped?.full_engine ?? scraped?.engine_num ?? "").trim();
+        const ocrVeh = normalizeVehicleDetails(extractedVehicle) ?? extractedVehicle;
+        const ch = dmsFrame || (ocrVeh?.frame_no ?? "").trim();
+        const eng = dmsEngine || (ocrVeh?.engine_no ?? "").trim();
+        const mob = mobile.trim();
+        if (ch && eng && mob) {
+          setCreateInvoiceEligibilityLoading(true);
+          try {
+            const res = await fetchCreateInvoiceEligibility({ chassisNum: ch, engineNum: eng, mobile: mob });
+            setCreateInvoiceEnabled(res.create_invoice_enabled);
+            setCreateInvoiceEligibilityReason(res.reason);
+            setGenerateInsuranceEnabled(res.generate_insurance_enabled);
+            setGenerateInsuranceReason(res.generate_insurance_reason);
+            if (res.resolved_customer_id != null) setLastSubmittedCustomerId(res.resolved_customer_id);
+            if (res.resolved_vehicle_id != null) setLastSubmittedVehicleId(res.resolved_vehicle_id);
+          } catch {
+            await refreshCreateInvoiceEligibility();
+          } finally {
+            setCreateInvoiceEligibilityLoading(false);
+          }
+        } else {
+          await refreshCreateInvoiceEligibility();
+        }
         if (dmsRes?.success && dmsRes.ready_for_client_create_invoice) {
           setCreateInvoiceEnabled(true);
           setCreateInvoiceEligibilityReason(

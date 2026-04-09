@@ -52,8 +52,8 @@ def get_create_invoice_eligibility(
                 """
                 SELECT vehicle_id
                 FROM vehicle_master
-                WHERE TRIM(COALESCE(raw_frame_num, '')) = %s
-                  AND TRIM(COALESCE(raw_engine_num, '')) = %s
+                WHERE TRIM(COALESCE(raw_frame_num, '')) LIKE '%%' || %s
+                  AND TRIM(COALESCE(raw_engine_num, '')) LIKE '%%' || %s
                 LIMIT 1
                 """,
                 (ch, eng),
