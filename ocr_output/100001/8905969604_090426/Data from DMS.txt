@@ -25,5 +25,5 @@ Num cylinders: 1
 Ex-showroom Price (Order Value): 2,026
 Year of Mfg: 2026
 Order # (DMS): —
-Invoice # (DMS): 09/04/2026 06:19:44 PM
+Invoice # (DMS): —
 Financier (DMS display): —
