@@ -621,10 +621,14 @@ def _read_my_orders_jqgrid_rows_anywhere(page: Page, content_frame_selector: str
     return []
 
 
-_JS_FIND_MY_ORDERS_ORDER_CELL = """({ orderNeedle, mobileDigits }) => {
-    /** Locate the Order# td/input in My Orders jqGrid and return its id for Playwright click.
-     *  Does NOT click — returns { tdId, value, hasLink, hasInput } so the caller can
-     *  use Playwright trusted events for the drilldown. */
+_JS_CLICK_MY_ORDERS_ORDER_LINK = """({ orderNeedle, mobileDigits }) => {
+    const vis = (el) => {
+        if (!el) return false;
+        const st = window.getComputedStyle(el);
+        if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity) === 0) return false;
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+    };
     const normKey = (s) => String(s || '').replace(/\\s+/g, '').toUpperCase();
     const od = String(orderNeedle || '').replace(/\\D/g, '');
     const needleNorm = normKey(orderNeedle);
@@ -636,53 +640,58 @@ _JS_FIND_MY_ORDERS_ORDER_CELL = """({ orderNeedle, mobileDigits }) => {
     const rows = document.querySelectorAll(rowSel);
     for (const tr of rows) {
         if (tr.classList.contains('jqgfirstrow')) continue;
+        if (!vis(tr)) continue;
         const rowText = tr.innerText || '';
         if (md && !rowText.replace(/\\D/g, '').includes(md)) continue;
-        let td = tr.querySelector('td[id*="_l_Order_Number"]');
-        if (!td) continue;
-        const tdId = (td.getAttribute('id') || '').trim();
-        if (!tdId) continue;
-        const inp = td.querySelector(
+        const inp = tr.querySelector(
             'input[name="Order_Number"], input[name="Order Number"], '
             + 'input[id*="Order_Number"], input[id$="_Order_Number"], '
             + 'input[aria-labelledby*="Order_Number"], input[aria-labelledby*="Order Number"]'
         );
-        let value = '';
-        let hasInput = false;
-        if (inp) {
-            value = String(inp.value || '').trim();
-            hasInput = true;
+        if (inp && vis(inp)) {
+            const ov = String(inp.value || '').trim();
+            if (!ov) continue;
+            const otd = ov.replace(/\\D/g, '');
+            let match = true;
+            if (od && otd) {
+                match = otd === od || otd.includes(od) || od.includes(otd);
+            }
+            if (match && needleNorm && normKey(ov) !== needleNorm) {
+                const vn = normKey(ov);
+                if (!vn.includes(needleNorm) && !needleNorm.includes(vn)) match = false;
+            }
+            if (!match) continue;
+            try { inp.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
+            try { inp.click(); } catch (e) {}
+            return 'ok:' + ov;
         }
-        if (!value) {
-            value = (td.getAttribute('title') || '').trim() || (td.textContent || '').trim();
+        const a = tr.querySelector("a[name='Order Number'], a[name='Order #']") || tr.querySelector('td a');
+        if (!a || !vis(a)) continue;
+        const ot = (a.textContent || '').trim();
+        const otd = ot.replace(/\\D/g, '');
+        if (od && otd && otd !== od && !otd.includes(od) && !od.includes(otd)) continue;
+        if (needleNorm && normKey(ot) !== needleNorm) {
+            const tn = normKey(ot);
+            if (!tn.includes(needleNorm) && !needleNorm.includes(tn)) continue;
         }
-        if (!value) continue;
-        const vd = value.replace(/\\D/g, '');
-        let match = true;
-        if (od && vd) {
-            match = vd === od || vd.includes(od) || od.includes(vd);
-        }
-        if (match && needleNorm && normKey(value) !== needleNorm) {
-            const vn = normKey(value);
-            if (!vn.includes(needleNorm) && !needleNorm.includes(vn)) match = false;
-        }
-        if (!match) continue;
-        const hasLink = !!(td.querySelector('a'));
-        try { td.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
-        return { tdId, value, hasLink, hasInput };
+        try { a.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
+        try { a.click(); } catch (e) {}
+        return 'ok:' + ot;
     }
-    return null;
+    return '';
 }"""
 
 
-_JS_FIND_MY_ORDERS_INVOICE_CELL = """({ invoiceNeedle, mobileDigits }) => {
-    /** Locate the Invoice# td in My Orders jqGrid and return its id for Playwright click.
-     *  Does NOT click — returns { tdId, value, hasLink } so the caller can use
-     *  Playwright trusted events for the drilldown. */
+_JS_CLICK_MY_ORDERS_INVOICE_LINK = """({ invoiceNeedle, mobileDigits }) => {
+    /** Click the Invoice# drilldown in My Orders jqGrid.
+     *  Same pattern as the Order# click: find the inner <a>/<input> inside the
+     *  Invoice# td, scrollIntoView, click it.  Uses id-based td selectors
+     *  (_l_Invoice__ double-underscore) to avoid the Invoice_Date column.
+     *  Skips vis() on the td because the Invoice column is often scrolled offscreen. */
     const normInv = (s) => String(s || '').replace(/\\s+/g, '').toUpperCase();
     const needle = normInv(invoiceNeedle);
     const md = String(mobileDigits || '').replace(/\\D/g, '');
-    if (!needle) return null;
+    if (!needle) return '';
     const rowSel =
         '#gview_s_1_l table.ui-jqgrid-btable tbody tr.jqgrow, #gview_s_1_l table.ui-jqgrid-btable tbody tr[role="row"], '
         + '#s_1_ld table.ui-jqgrid-btable tbody tr.jqgrow, #s_1_ld table.ui-jqgrid-btable tbody tr[role="row"], '
@@ -705,19 +714,23 @@ _JS_FIND_MY_ORDERS_INVOICE_CELL = """({ invoiceNeedle, mobileDigits }) => {
                 return null;
             })();
         if (!td) continue;
-        const tdId = (td.getAttribute('id') || '').trim();
-        if (!tdId) continue;
         const fromTitle = (td.getAttribute('title') || '').trim();
         const txt = fromTitle || (td.textContent || '').trim();
         if (ldt(txt)) continue;
         const tnorm = normInv(txt);
         if (!tnorm) continue;
         if (tnorm !== needle && !tnorm.includes(needle) && !needle.includes(tnorm)) continue;
-        const hasLink = !!(td.querySelector('a') || td.querySelector('input'));
+        const clickable = td.querySelector('a') || td.querySelector('input');
+        if (clickable) {
+            try { clickable.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
+            try { clickable.click(); } catch (e) {}
+            return 'ok_link:' + txt;
+        }
         try { td.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
-        return { tdId, value: txt, hasLink };
+        try { td.click(); } catch (e) {}
+        return 'ok_td:' + txt;
     }
-    return null;
+    return '';
 }"""
 
 
@@ -732,9 +745,8 @@ def _click_my_orders_jqgrid_invoice_for_mobile_or_invoice(
 ) -> bool:
     """Open the sales order from My Orders jqGrid by clicking the **Invoice#** cell/link (Run Report prep).
 
-    Uses JS only to **identify** the correct td (returns its DOM id), then uses
-    Playwright trusted-event clicks for the actual drilldown — JS ``element.click()``
-    only selects the cell in Siebel, it does not trigger navigation.
+    Same approach as the Order# click: JS finds the inner ``<a>``/``<input>`` inside
+    the Invoice# td, ``scrollIntoView`` + ``click()`` on that element.
     """
     nd = re.sub(r"\D", "", (mobile or "").strip())
     inv = (invoice_number or "").strip()
@@ -750,47 +762,15 @@ def _click_my_orders_jqgrid_invoice_for_mobile_or_invoice(
     except Exception:
         pass
     roots.append(page)
-    _tmo = min(int(action_timeout_ms or 3000), 8000)
     for root in roots:
         try:
-            found = root.evaluate(
-                _JS_FIND_MY_ORDERS_INVOICE_CELL,
+            hit = root.evaluate(
+                _JS_CLICK_MY_ORDERS_INVOICE_LINK,
                 {"invoiceNeedle": inv, "mobileDigits": nd},
             )
-            if not found or not isinstance(found, dict):
-                continue
-            td_id = found.get("tdId") or ""
-            val = found.get("value") or ""
-            has_link = found.get("hasLink", False)
-            note(f"Create Order: Invoice# cell located (id={td_id!r}, value={val!r}, hasLink={has_link}).")
-            if has_link:
-                _link = root.locator(f'td#{td_id} a').first
-                if _link.count() <= 0:
-                    _link = root.locator(f'td#{td_id} input').first
-                if _link.count() > 0:
-                    try:
-                        _link.scroll_into_view_if_needed(timeout=2000)
-                    except Exception:
-                        pass
-                    _link.click(timeout=_tmo)
-                    note(f"Create Order: Playwright clicked Invoice# drilldown link in td#{td_id}.")
-                    _safe_page_wait(page, 1500, log_label="after_my_orders_jqgrid_invoice_link_click")
-                    try:
-                        page.wait_for_load_state("networkidle", timeout=10_000)
-                    except Exception:
-                        pass
-                    return True
-            _td_loc = root.locator(f'td#{td_id}').first
-            if _td_loc.count() > 0:
-                try:
-                    _td_loc.scroll_into_view_if_needed(timeout=2000)
-                except Exception:
-                    pass
-                _td_loc.click(timeout=_tmo)
-                _safe_page_wait(page, 400, log_label="after_invoice_td_select")
-                _td_loc.dblclick(timeout=_tmo)
-                note(f"Create Order: Playwright click+dblclick on Invoice# td#{td_id} (no inner link).")
-                _safe_page_wait(page, 1500, log_label="after_my_orders_jqgrid_invoice_dblclick")
+            if hit:
+                note(f"Create Order: opened order from My Orders grid via Invoice# ({hit!r}).")
+                _safe_page_wait(page, 1500, log_label="after_my_orders_jqgrid_invoice_click")
                 try:
                     page.wait_for_load_state("networkidle", timeout=10_000)
                 except Exception:
@@ -810,11 +790,7 @@ def _click_my_orders_jqgrid_order_for_mobile_or_order(
     note,
     action_timeout_ms: int,
 ) -> bool:
-    """Open the sales order from My Orders jqGrid after mobile search (Pending / Allocated paths).
-
-    Uses JS only to **identify** the correct Order# td, then Playwright trusted-event
-    clicks for the actual drilldown (JS ``element.click()`` only selects the cell).
-    """
+    """Open the sales order from My Orders jqGrid after mobile search (Pending / Allocated paths)."""
     nd = re.sub(r"\D", "", (mobile or "").strip())
     on = (order_number or "").strip()
     roots: list = []
@@ -827,61 +803,12 @@ def _click_my_orders_jqgrid_order_for_mobile_or_order(
     except Exception:
         pass
     roots.append(page)
-    _tmo = min(int(action_timeout_ms or 3000), 8000)
     for root in roots:
         try:
-            found = root.evaluate(
-                _JS_FIND_MY_ORDERS_ORDER_CELL,
-                {"orderNeedle": on, "mobileDigits": nd},
-            )
-            if not found or not isinstance(found, dict):
-                continue
-            td_id = found.get("tdId") or ""
-            val = found.get("value") or ""
-            has_link = found.get("hasLink", False)
-            has_input = found.get("hasInput", False)
-            note(f"Create Order: Order# cell located (id={td_id!r}, value={val!r}, hasLink={has_link}, hasInput={has_input}).")
-            if has_input:
-                _inp = root.locator(f'td#{td_id} input').first
-                if _inp.count() > 0:
-                    try:
-                        _inp.scroll_into_view_if_needed(timeout=2000)
-                    except Exception:
-                        pass
-                    _inp.click(timeout=_tmo)
-                    note(f"Create Order: Playwright clicked Order# input in td#{td_id}.")
-                    _safe_page_wait(page, 1500, log_label="after_my_orders_jqgrid_order_input_click")
-                    try:
-                        page.wait_for_load_state("networkidle", timeout=10_000)
-                    except Exception:
-                        pass
-                    return True
-            if has_link:
-                _link = root.locator(f'td#{td_id} a').first
-                if _link.count() > 0:
-                    try:
-                        _link.scroll_into_view_if_needed(timeout=2000)
-                    except Exception:
-                        pass
-                    _link.click(timeout=_tmo)
-                    note(f"Create Order: Playwright clicked Order# link in td#{td_id}.")
-                    _safe_page_wait(page, 1500, log_label="after_my_orders_jqgrid_order_link_click")
-                    try:
-                        page.wait_for_load_state("networkidle", timeout=10_000)
-                    except Exception:
-                        pass
-                    return True
-            _td_loc = root.locator(f'td#{td_id}').first
-            if _td_loc.count() > 0:
-                try:
-                    _td_loc.scroll_into_view_if_needed(timeout=2000)
-                except Exception:
-                    pass
-                _td_loc.click(timeout=_tmo)
-                _safe_page_wait(page, 400, log_label="after_order_td_select")
-                _td_loc.dblclick(timeout=_tmo)
-                note(f"Create Order: Playwright click+dblclick on Order# td#{td_id} (no inner link/input).")
-                _safe_page_wait(page, 1500, log_label="after_my_orders_jqgrid_order_dblclick")
+            hit = root.evaluate(_JS_CLICK_MY_ORDERS_ORDER_LINK, {"orderNeedle": on, "mobileDigits": nd})
+            if hit:
+                note(f"Create Order: opened order from My Orders grid ({hit!r}).")
+                _safe_page_wait(page, 1500, log_label="after_my_orders_jqgrid_order_click")
                 try:
                     page.wait_for_load_state("networkidle", timeout=10_000)
                 except Exception:
