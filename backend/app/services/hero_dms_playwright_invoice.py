@@ -401,10 +401,11 @@ _JS_MY_ORDERS_JQGRID_ROWS = """() => {
             if (tr.classList.contains('jqgfirstrow')) continue;
             if (!vis(tr)) continue;
             const row = { status: '', invoice: '', order: '', raw: (tr.innerText || '').trim() };
-            /** 1) Canonical Invoice# — try ``td[role=gridcell][id*=_l_Invoice]`` then id-only fallback. */
+            /** 1) Canonical Invoice# — try ``td[role=gridcell][id*=_l_Invoice]`` then id-only fallback.
+             *  Skip vis() on the td: wide grids scroll columns offscreen, giving zero-width rects. */
             const invTd = tr.querySelector('td[role="gridcell"][id*="_l_Invoice"]')
                 || tr.querySelector('td[id*="_l_Invoice__"]');
-            if (invTd && vis(invTd)) {
+            if (invTd) {
                 const tit = (invTd.getAttribute('title') || '').trim();
                 const tx = (invTd.textContent || '').trim();
                 if (tit && !looksLikeDateTime(tit)) {
