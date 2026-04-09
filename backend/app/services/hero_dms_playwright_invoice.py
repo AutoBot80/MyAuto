@@ -683,14 +683,9 @@ _JS_CLICK_MY_ORDERS_ORDER_LINK = """({ orderNeedle, mobileDigits }) => {
 
 
 _JS_CLICK_MY_ORDERS_INVOICE_LINK = """({ invoiceNeedle, mobileDigits }) => {
-    const vis = (el) => {
-        if (!el) return false;
-        const st = window.getComputedStyle(el);
-        if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity) === 0) return false;
-        const r = el.getBoundingClientRect();
-        return r.width > 0 && r.height > 0;
-    };
-    /** Match Siebel My Orders invoice cell: ``td#N_s_1_l_Invoice__`` with ``title`` = Invoice# (alphanumeric). */
+    /** Click the Invoice# cell in My Orders jqGrid.
+     *  Invoice column is often scrolled offscreen → skip vis() on the td;
+     *  scrollIntoView before clicking so Siebel registers the interaction. */
     const normInv = (s) => String(s || '').replace(/\\s+/g, '').toUpperCase();
     const needle = normInv(invoiceNeedle);
     const md = String(mobileDigits || '').replace(/\\D/g, '');
@@ -700,38 +695,42 @@ _JS_CLICK_MY_ORDERS_INVOICE_LINK = """({ invoiceNeedle, mobileDigits }) => {
         + '#s_1_ld table.ui-jqgrid-btable tbody tr.jqgrow, #s_1_ld table.ui-jqgrid-btable tbody tr[role="row"], '
         + 'table.ui-jqgrid-btable tbody tr.jqgrow, table.ui-jqgrid-btable tbody tr[role="row"]';
     const rows = document.querySelectorAll(rowSel);
+    const ldt = (s) => { const t = String(s||'').trim(); return /\\d{1,2}\\/\\d{1,2}\\/\\d{4}/.test(t) && /\\d{1,2}:\\d{2}/.test(t); };
     for (const tr of rows) {
         if (tr.classList.contains('jqgfirstrow')) continue;
-        if (!vis(tr)) continue;
         const rowText = tr.innerText || '';
         if (md && !rowText.replace(/\\D/g, '').includes(md)) continue;
-        let td = tr.querySelector('td[role="gridcell"][id*="_l_Invoice"]');
-        if (!td || !vis(td)) {
-            td = tr.querySelector('td[role="gridcell"][aria-labelledby="s_1_l_altLink"][id*="Invoice"]');
+        let target = tr.querySelector('td[id$="_l_Invoice__"]')
+            || tr.querySelector('td[id*="_l_Invoice__"]')
+            || (() => {
+                const cands = tr.querySelectorAll('td[id*="_l_Invoice"]');
+                for (const c of cands) {
+                    const cid = (c.getAttribute('id') || '');
+                    if (cid.includes('_Date') || cid.includes('_Dt')) continue;
+                    return c;
+                }
+                return null;
+            })();
+        if (!target) {
+            target = tr.querySelector('td[role="gridcell"][id*="_l_Invoice"]');
         }
-        if (!td || !vis(td)) {
-            td = tr.querySelector('td[role="gridcell"][aria-labelledby="s_1_l_altLink"]');
-        }
-        let target = null;
-        if (td && vis(td)) {
-            target = td;
-        } else {
+        if (!target) {
             const a = tr.querySelector("a[name='Invoice Number'], a[name='Invoice #']");
-            if (a && vis(a)) target = a;
+            if (a) target = a;
         }
-        if (!target || !vis(target)) {
+        if (!target) {
             const tds = tr.querySelectorAll('td[role="gridcell"], td');
             for (const c of tds) {
                 const adb = (c.getAttribute('aria-describedby') || '').toLowerCase();
-                if (!adb.includes('invoice')) continue;
-                const inner = c.querySelector('a');
-                target = (inner && vis(inner)) ? inner : c;
+                if (!adb.includes('invoice') || adb.includes('invoice_date')) continue;
+                target = c;
                 break;
             }
         }
-        if (!target || !vis(target)) continue;
+        if (!target) continue;
         const fromTitle = (target.getAttribute && target.getAttribute('title')) ? target.getAttribute('title').trim() : '';
         const txt = fromTitle || (target.textContent || '').trim();
+        if (ldt(txt)) continue;
         const tnorm = normInv(txt);
         if (!tnorm) continue;
         if (tnorm !== needle && !tnorm.includes(needle) && !needle.includes(tnorm)) continue;
