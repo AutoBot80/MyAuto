@@ -71,13 +71,11 @@ from app.services.hero_dms_shared_utilities import (
     _try_click_generate_booking,
 )
 from app.services.hero_dms_playwright_vehicle import (
-    _add_enquiry_reuse_vehicle_dict_ready,
     _add_enquiry_vehicle_scrape_has_model_year_color,
     _apply_year_of_mfg_yyyy,
     _merge_add_enquiry_vehicle_scrape,
     _normalize_manufacturing_year_yyyy,
     _siebel_fill_key_battery_from_dms_values,
-    _siebel_vehicle_find_chassis_engine_enter,
     scrape_siebel_vehicle_row,
 )
 
@@ -7330,14 +7328,12 @@ def _add_enquiry_opportunity(
     vehicle_merge: dict | None = None,
 ) -> tuple[bool, str | None, str]:
     """
-    Vehicle find (**Find→Vehicles**, VIN drill) so the **Enquiry** tab is on the vehicle view, then
-    **Opportunity Form:New**, fill opportunity fields from DB + vehicle model/color (**Financier** fields
-    are skipped), then **Ctrl+S**.
+    **Find→Vehicles** + VIN drill is **commented out** in this branch: assume the UI is already on a view
+    where **Enquiry → Opportunity Form:New** applies, and take model / YYYY ``year_of_mfg`` / color from
+    ``vehicle_merge`` (typically ``prepare_vehicle``).
 
-    When ``vehicle_merge`` already contains model, YYYY ``year_of_mfg``, and color (e.g. from
-    ``prepare_vehicle`` on the video path), **list/grid/detail scrape** after the VIN drill-down is skipped
-    inside ``_siebel_vehicle_find_chassis_engine_enter``; **Find→Vehicles** and VIN drill remain for the
-    Enquiry tab context.
+    Then **Opportunity Form:New**, fill opportunity fields from DB + vehicle model/color (**Financier**
+    fields are skipped), then **Ctrl+S**.
 
     **Contact First Name** comes from ``dms_values["first_name"]`` (caller passes base or dotted name).
 
@@ -7361,12 +7357,10 @@ def _add_enquiry_opportunity(
         note("Add Enquiry: aadhar_id from DB is empty — cannot fill UIN No.")
         return False, "Missing customer Aadhaar last 4 for UIN No.", ""
 
-    _reuse_vm = vehicle_merge if _add_enquiry_reuse_vehicle_dict_ready(vehicle_merge) else None
-
     if callable(form_trace):
         form_trace(
             "add_enquiry_branch",
-            "No contact table match → vehicle find + Opportunities",
+            "No contact table match → Enquiry + Opportunities (Find→Vehicles commented out)",
             "chassis_engine_Enter_then_Enquiry_tab_Opportunities_New_fields_Ctrl_S",
             frame_partial=frame_p,
             engine_partial=engine_p,
@@ -7375,51 +7369,65 @@ def _add_enquiry_opportunity(
             aadhar_id=aadhar,
         )
 
-    _vq_ok, scraped_v = _siebel_vehicle_find_chassis_engine_enter(
-        page,
-        (urls.vehicle or "").strip(),
-        frame_p,
-        engine_p,
-        nav_timeout_ms=nav_timeout_ms,
-        action_timeout_ms=action_timeout_ms,
-        content_frame_selector=content_frame_selector,
-        note=note,
-        reuse_vehicle_dict=_reuse_vm,
-    )
-    if not _vq_ok:
-        return False, "Vehicle find failed (chassis/engine query or VIN fly-in).", ""
+    # --- Find→Vehicles + VIN drill (commented out: proceed on current Siebel view to Enquiry tab) ---
+    # _reuse_vm = vehicle_merge if _add_enquiry_reuse_vehicle_dict_ready(vehicle_merge) else None
+    # _vq_ok, scraped_v = _siebel_vehicle_find_chassis_engine_enter(
+    #     page,
+    #     (urls.vehicle or "").strip(),
+    #     frame_p,
+    #     engine_p,
+    #     nav_timeout_ms=nav_timeout_ms,
+    #     action_timeout_ms=action_timeout_ms,
+    #     content_frame_selector=content_frame_selector,
+    #     note=note,
+    #     reuse_vehicle_dict=_reuse_vm,
+    # )
+    # if not _vq_ok:
+    #     return False, "Vehicle find failed (chassis/engine query or VIN fly-in).", ""
+    # _apply_year_of_mfg_yyyy(scraped_v)
+    # if not _add_enquiry_vehicle_scrape_has_model_year_color(scraped_v):
+    #     note(
+    #         "Add Enquiry: vehicle data missing model, year of manufacture, and color — "
+    #         "not opening Enquiry / new opportunity."
+    #     )
+    #     return (
+    #         False,
+    #         "Add Enquiry: vehicle data did not yield model, YYYY year of manufacture, and color.",
+    #         "",
+    #     )
+    # if _reuse_vm is None:
+    #     note(
+    #         "Add Enquiry: scraped from vehicle list — "
+    #         f"model={scraped_v.get('model')!r}, year_of_mfg={scraped_v.get('year_of_mfg')!r}, "
+    #         f"color={scraped_v.get('color')!r}."
+    #     )
+    # if vehicle_merge is not None:
+    #     _merge_add_enquiry_vehicle_scrape(vehicle_merge, scraped_v)
 
+    scraped_v = dict(vehicle_merge or {})
     _apply_year_of_mfg_yyyy(scraped_v)
-
     if not _add_enquiry_vehicle_scrape_has_model_year_color(scraped_v):
         note(
             "Add Enquiry: vehicle data missing model, year of manufacture, and color — "
-            "not opening Enquiry / new opportunity."
+            "with Find→Vehicles disabled, ensure prepare_vehicle populated vehicle_merge."
         )
         return (
             False,
-            "Add Enquiry: vehicle data did not yield model, YYYY year of manufacture, and color.",
+            "Add Enquiry: vehicle_merge did not yield model, YYYY year of manufacture, and color.",
             "",
         )
-
-    if _reuse_vm is None:
-        note(
-            "Add Enquiry: scraped from vehicle list — "
-            f"model={scraped_v.get('model')!r}, year_of_mfg={scraped_v.get('year_of_mfg')!r}, "
-            f"color={scraped_v.get('color')!r}."
-        )
-
+    note(
+        "Add Enquiry: using vehicle_merge for model/year/color (Find→Vehicles disabled) — "
+        f"model={scraped_v.get('model')!r}, year_of_mfg={scraped_v.get('year_of_mfg')!r}, "
+        f"color={scraped_v.get('color')!r}."
+    )
     if vehicle_merge is not None:
         _merge_add_enquiry_vehicle_scrape(vehicle_merge, scraped_v)
 
     if callable(form_trace):
         form_trace(
             "add_enquiry_vehicle_scrape",
-            (
-                "prepare_vehicle merge (skip duplicate scrape after VIN drill)"
-                if _reuse_vm is not None
-                else "Auto Vehicle List — results grid"
-            ),
+            "prepare_vehicle / vehicle_merge (Find→Vehicles disabled)",
             "read_model_year_color_before_Enquiry_Opportunity",
             model=str(scraped_v.get("model") or ""),
             year_of_mfg=str(scraped_v.get("year_of_mfg") or ""),
