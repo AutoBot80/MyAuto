@@ -683,9 +683,11 @@ _JS_CLICK_MY_ORDERS_ORDER_LINK = """({ orderNeedle, mobileDigits }) => {
 
 
 _JS_CLICK_MY_ORDERS_INVOICE_LINK = """({ invoiceNeedle, mobileDigits }) => {
-    /** Click the Invoice# cell in My Orders jqGrid.
-     *  Invoice column is often scrolled offscreen → skip vis() on the td;
-     *  scrollIntoView before clicking so Siebel registers the interaction. */
+    /** Drilldown on the Invoice# cell in My Orders jqGrid.
+     *  Invoice column is often scrolled offscreen → skip vis() on the td.
+     *  Siebel drilldown requires clicking the <a> or <input> *inside* the td
+     *  (clicking the td itself only selects the cell). When no inner clickable
+     *  element exists, fire a single click then a dblclick on the td as fallback. */
     const normInv = (s) => String(s || '').replace(/\\s+/g, '').toUpperCase();
     const needle = normInv(invoiceNeedle);
     const md = String(mobileDigits || '').replace(/\\D/g, '');
@@ -700,7 +702,7 @@ _JS_CLICK_MY_ORDERS_INVOICE_LINK = """({ invoiceNeedle, mobileDigits }) => {
         if (tr.classList.contains('jqgfirstrow')) continue;
         const rowText = tr.innerText || '';
         if (md && !rowText.replace(/\\D/g, '').includes(md)) continue;
-        let target = tr.querySelector('td[id$="_l_Invoice__"]')
+        let td = tr.querySelector('td[id$="_l_Invoice__"]')
             || tr.querySelector('td[id*="_l_Invoice__"]')
             || (() => {
                 const cands = tr.querySelectorAll('td[id*="_l_Invoice"]');
@@ -711,32 +713,26 @@ _JS_CLICK_MY_ORDERS_INVOICE_LINK = """({ invoiceNeedle, mobileDigits }) => {
                 }
                 return null;
             })();
-        if (!target) {
-            target = tr.querySelector('td[role="gridcell"][id*="_l_Invoice"]');
+        if (!td) {
+            td = tr.querySelector('td[role="gridcell"][id*="_l_Invoice"]');
         }
-        if (!target) {
-            const a = tr.querySelector("a[name='Invoice Number'], a[name='Invoice #']");
-            if (a) target = a;
-        }
-        if (!target) {
-            const tds = tr.querySelectorAll('td[role="gridcell"], td');
-            for (const c of tds) {
-                const adb = (c.getAttribute('aria-describedby') || '').toLowerCase();
-                if (!adb.includes('invoice') || adb.includes('invoice_date')) continue;
-                target = c;
-                break;
-            }
-        }
-        if (!target) continue;
-        const fromTitle = (target.getAttribute && target.getAttribute('title')) ? target.getAttribute('title').trim() : '';
-        const txt = fromTitle || (target.textContent || '').trim();
+        if (!td) continue;
+        const fromTitle = (td.getAttribute('title') || '').trim();
+        const txt = fromTitle || (td.textContent || '').trim();
         if (ldt(txt)) continue;
         const tnorm = normInv(txt);
         if (!tnorm) continue;
         if (tnorm !== needle && !tnorm.includes(needle) && !needle.includes(tnorm)) continue;
-        try { target.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
-        try { target.click(); } catch (e) {}
-        return 'ok:' + txt;
+        try { td.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
+        const drillEl = td.querySelector('a') || td.querySelector('input');
+        if (drillEl) {
+            try { drillEl.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
+            try { drillEl.click(); } catch (e) {}
+            return 'ok_link:' + txt;
+        }
+        try { td.click(); } catch (e) {}
+        try { td.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true })); } catch (e) {}
+        return 'ok_td:' + txt;
     }
     return '';
 }"""
@@ -766,20 +762,38 @@ def _click_my_orders_jqgrid_invoice_for_mobile_or_invoice(
     except Exception:
         pass
     roots.append(page)
+    _tmo = min(int(action_timeout_ms or 3000), 8000)
     for root in roots:
         try:
             hit = root.evaluate(
                 _JS_CLICK_MY_ORDERS_INVOICE_LINK,
                 {"invoiceNeedle": inv, "mobileDigits": nd},
             )
-            if hit:
-                note(f"Create Order: opened order from My Orders grid via Invoice# ({hit!r}).")
-                _safe_page_wait(page, 1500, log_label="after_my_orders_jqgrid_invoice_click")
+            if not hit:
+                continue
+            note(f"Create Order: opened order from My Orders grid via Invoice# ({hit!r}).")
+            if str(hit).startswith("ok_td:"):
+                _safe_page_wait(page, 600, log_label="after_my_orders_invoice_td_select")
                 try:
-                    page.wait_for_load_state("networkidle", timeout=10_000)
-                except Exception:
-                    pass
-                return True
+                    _inv_loc = root.locator(f'td[id$="_l_Invoice__"] a, td[id*="_l_Invoice__"] a').first
+                    if _inv_loc.count() > 0:
+                        _inv_loc.scroll_into_view_if_needed(timeout=2000)
+                        _inv_loc.click(timeout=_tmo)
+                        note("Create Order: Playwright click on Invoice# <a> drilldown (fallback).")
+                    else:
+                        _inv_td = root.locator(f'td[id$="_l_Invoice__"]').first
+                        if _inv_td.count() > 0:
+                            _inv_td.scroll_into_view_if_needed(timeout=2000)
+                            _inv_td.dblclick(timeout=_tmo)
+                            note("Create Order: Playwright dblclick on Invoice# td (fallback).")
+                except Exception as _pw_e:
+                    note(f"Create Order: Invoice# Playwright fallback click raised {_pw_e!r} — continuing.")
+            _safe_page_wait(page, 1500, log_label="after_my_orders_jqgrid_invoice_click")
+            try:
+                page.wait_for_load_state("networkidle", timeout=10_000)
+            except Exception:
+                pass
+            return True
         except Exception:
             continue
     return False
