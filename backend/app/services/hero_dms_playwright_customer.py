@@ -1307,16 +1307,22 @@ def _pick_occupation_siebel_lov(
                             continue
             except Exception:
                 pass
-            # Siebel bounded LOV: type to narrow list then confirm
+            # Siebel bounded LOV: clear field, type to narrow list, then confirm
             if tl and tag == "input":
                 try:
                     prefix = target.split("/")[0].strip()[:12] if "/" in target else target[:12]
                     control.click(timeout=timeout_ms)
-                    page.keyboard.press("Control+a")
+                    try:
+                        control.fill("", timeout=timeout_ms)
+                    except Exception:
+                        page.keyboard.press("Home")
+                        page.keyboard.press("Shift+End")
+                        page.keyboard.press("Delete")
+                    _safe_page_wait(page, 150, log_label="after_occupation_clear")
                     page.keyboard.type(prefix, delay=35)
-                    _safe_page_wait(page, 280, log_label="after_occupation_typeahead")
-                    page.keyboard.press("Enter")
-                    _safe_page_wait(page, 200, log_label="after_occupation_enter")
+                    _safe_page_wait(page, 400, log_label="after_occupation_typeahead")
+                    page.keyboard.press("Tab")
+                    _safe_page_wait(page, 200, log_label="after_occupation_tab")
                     return True
                 except Exception:
                     pass
