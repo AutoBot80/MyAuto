@@ -217,7 +217,6 @@ def process_bulk_pdf(
                 login_password=DMS_LOGIN_PASSWORD or "demo",
                 uploads_dir=Path(get_uploads_dir(dealer_id)),
                 ocr_output_dir=Path(get_ocr_output_dir(dealer_id)),
-                vahan_base_url=None,
                 dealer_id=dealer_id,
                 headless=False,
             )
@@ -237,27 +236,19 @@ def process_bulk_pdf(
         )
 
         # 6. Queue the sale for downstream RTO handling instead of filling Vahan inline.
-        if customer_id and vehicle_id:
-            chassis_no = (
-                (dms_result.get("vehicle") or {}).get("frame_num")
-                or vehicle.get("chassis")
-                or vehicle.get("frame_num")
-                or vehicle.get("frame_no")
-            )
+        eff_cid = dms_result.get("committed_customer_id") or customer_id
+        eff_vid = dms_result.get("committed_vehicle_id") or vehicle_id
+        sales_id = dms_result.get("sales_id") or (
+            rto_queue_repo._get_sales_id(int(eff_cid), int(eff_vid)) if eff_cid and eff_vid else None
+        )
+        if sales_id:
             rto_fees = _compute_rto_fees((dms_result.get("vehicle") or {}).get("vehicle_price") or vehicle.get("vehicle_price"))
             rto_queue_repo.insert(
-                application_id=None,
-                customer_id=int(customer_id),
-                vehicle_id=int(vehicle_id),
-                dealer_id=dealer_id,
-                name=customer.get("name"),
-                mobile=mobile or mobile_val,
-                chassis_num=chassis_no,
-                register_date=date.today(),
-                rto_fees=rto_fees,
+                sales_id=int(sales_id),
+                customer_mobile=mobile or mobile_val,
+                rto_application_date=date.today(),
+                rto_payment_amount=rto_fees,
                 status="Queued",
-                rto_status="Pending",
-                subfolder=subfolder,
             )
 
         name = customer.get("name") or ""

@@ -22,3 +22,22 @@ def get_by_customer_vehicle(customer_id: int, vehicle_id: int) -> dict | None:
             return dict(row) if row else None
     finally:
         conn.close()
+
+
+def get_by_sales_id(sales_id: int) -> dict | None:
+    """Return the Vahan form row by sales_id."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT *
+                FROM form_vahan_view
+                WHERE sales_id = %s
+                """,
+                (sales_id,),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+    finally:
+        conn.close()

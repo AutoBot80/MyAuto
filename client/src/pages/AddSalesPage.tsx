@@ -995,15 +995,10 @@ export function AddSalesPage({
         await insertRtoPayment({
           customer_id: lastSubmittedCustomerId,
           vehicle_id: lastSubmittedVehicleId,
-          dealer_id: dealerId,
-          name: c?.name ?? undefined,
-          mobile: mobile ?? undefined,
-          chassis_num: chassisNo || undefined,
-          register_date: registerDate,
-          rto_fees: rtoFees,
+          customer_mobile: mobile ?? undefined,
+          rto_application_date: registerDate,
+          rto_payment_amount: rtoFees,
           status: "Queued",
-          rto_status: "Pending",
-          subfolder: savedTo ?? undefined,
         });
         setPrintFormsStatus((prev) => (prev ? `${prev} Added to RTO Queue.` : "Added to RTO Queue."));
       } catch (queueErr) {

@@ -5,6 +5,13 @@ This document lists the current database tables and their columns. **Executable 
 
 **Date format:** The default date format for the application and database is **dd/mm/yyyy** (e.g. 30/05/1980). Use this format for all date fields (e.g. `date_of_birth`) in the app and in the DB.
 
+### Applying DDL with `psql`
+
+- Run scripts from **PowerShell or cmd**: `psql -f "DDL\alter\example.sql"` (working directory usually the repo root). This is **not** valid SQL—do not paste it at the `psql` interactive prompt (`dbname=#`).
+- **Inside** an interactive `psql` session, load a file with a meta-command, e.g. `\i 'C:/path/to/My Auto.AI/DDL/alter/example.sql'` (forward slashes are fine on Windows).
+- Connection: set **`PGUSER`**, **`PGDATABASE`**, **`PGHOST`**, **`PGPASSWORD`** as needed. **`PGDATABASE`** must be the **database name only** (e.g. `auto_ai`), not a full `postgresql://…` URL.
+- **Fresh database** (no `sales_master` yet): run numbered **`DDL/*.sql`** in dependency order (see §9 for `rto_queue`: OEM/dealer → customer → vehicle → sales → insurance → `DDL/10_rto_queue.sql`, etc.). **`DDL/alter/24a_rto_queue_schema_redesign.sql`** is for **upgrading** an existing legacy `rto_queue`/`rto_payment_details` table, not for an empty database.
+
 ---
 
 ## 1) `ai_reader_queue`
@@ -255,63 +262,77 @@ This document lists the current database tables and their columns. **Executable 
 
 ## 9) `rto_queue`
 
-**Purpose:** RTO work queue for a sale. Populated when Fill Forms completes DMS/Form 20 work; rows start in `Queued`/`Pending` and can later be claimed in dealer-scoped oldest-first batches that run Vahan up to the upload/cart checkpoint before any payment details are added.
+**Purpose:** RTO work queue for a sale. Populated when Fill Forms completes DMS/Form 20 work; rows start in `Queued` and can later be claimed in dealer-scoped oldest-first batches. Batch processing delegates per-row site fill to `fill_rto_service.py` (stub for now; real Vahan automation TBD).
 
 | Column | Type | Null | Default | Notes |
 |---|---|---:|---|---|
-| `application_id` | `varchar(128)` | NO |  | Primary key; stable queue/reference id |
+| `rto_queue_id` | `serial` | NO | auto | Primary key (system-generated) |
 | `sales_id` | `integer` | NO |  | FK → `sales_master(sales_id)`; UNIQUE |
-| `customer_id` | `integer` | NO |  | FK → `customer_master(customer_id)` |
-| `vehicle_id` | `integer` | NO |  | FK → `vehicle_master(vehicle_id)` |
-| `dealer_id` | `integer` | YES |  | Dealer reference |
-| `name` | `varchar(255)` | YES |  | Customer name (denormalized) |
-| `mobile` | `varchar(16)` | YES |  | Customer mobile |
-| `chassis_num` | `varchar(64)` | YES |  | Chassis number |
-| `vahan_application_id` | `varchar(128)` | YES |  | Real Vahan application number once the dealer batch reaches upload/cart |
-| `register_date` | `date` | NO | `CURRENT_DATE` | Date row added |
-| `rto_fees` | `numeric(12,2)` | NO |  | Estimated or final RTO fees; overwritten with the latest Vahan-scraped amount on successful retry |
-| `status` | `varchar(32)` | NO | `'Queued'` | e.g. Queued, In Progress, Added To Cart, Failed, Paid |
-| `pay_txn_id` | `varchar(64)` | YES |  | Transaction ID when paid |
-| `operator_id` | `varchar(64)` | YES |  | POS / operator identifier |
-| `payment_date` | `date` | YES |  | Date paid (when status = Paid) |
-| `rto_status` | `varchar(32)` | NO | `'Pending'` | RTO work status |
-| `subfolder` | `varchar(128)` | YES |  | Upload subfolder for this sale |
+| `insurance_id` | `integer` | YES |  | FK → `insurance_master(insurance_id)` |
+| `customer_mobile` | `varchar(16)` | YES |  | Customer mobile at queue time |
+| `rto_application_id` | `varchar(128)` | YES |  | Vahan application number (filled by automation) |
+| `rto_application_date` | `date` | YES |  | Date row added / application filed |
+| `rto_payment_id` | `varchar(64)` | YES |  | Transaction ID when paid |
+| `rto_payment_amount` | `numeric(12,2)` | YES |  | RTO fees / payment amount |
+| `status` | `varchar(32)` | NO | `'Queued'` | e.g. Queued, Pending, In Progress, Completed, Failed |
 | `processing_session_id` | `varchar(128)` | YES |  | Dealer batch/session id that claimed the row |
-| `worker_id` | `varchar(128)` | YES |  | Worker/browser identifier for the active batch |
+| `worker_id` | `varchar(128)` | YES |  | Worker identifier for the active batch |
 | `leased_until` | `timestamptz` | YES |  | Lease timeout for claimed queue rows |
 | `attempt_count` | `integer` | NO | `0` | How many times the row was claimed for processing |
 | `last_error` | `text` | YES |  | Latest processing failure text |
-| `started_at` | `timestamptz` | YES |  | Time the Vahan batch started this row |
-| `uploaded_at` | `timestamptz` | YES |  | Time the row reached the upload/cart checkpoint |
+| `started_at` | `timestamptz` | YES |  | Time the batch started this row |
+| `uploaded_at` | `timestamptz` | YES |  | Time the row reached completion/upload checkpoint |
 | `finished_at` | `timestamptz` | YES |  | Time the latest batch attempt completed |
 | `created_at` | `timestamptz` | NO | `now()` | Created timestamp |
 | `updated_at` | `timestamptz` | NO | `now()` | Last change timestamp |
 
-**Primary key:** `rto_queue_pkey` on (`application_id`)
+**Primary key:** `rto_queue_pkey` on (`rto_queue_id`)
 
-**Unique:** `uq_rto_sales_id` on (`sales_id`), `uq_rto_customer_vehicle` on (`customer_id`, `vehicle_id`)
+**Unique:** `uq_rto_sales_id` on (`sales_id`)
 
 **Foreign keys:**
 - `fk_rto_sales`: (`sales_id`) → `sales_master(sales_id)`
+- `fk_rto_insurance`: (`insurance_id`) → `insurance_master(insurance_id)`
+
+**Migration:** `DDL/alter/24a_rto_queue_schema_redesign.sql` — drops old denormalized columns (`application_id`, `customer_id`, `vehicle_id`, `dealer_id`, `name`, `mobile`, `chassis_num`, etc.), adds new serial PK and business columns, migrates data, and recreates downstream views.
 
 ---
 
 ## 9a) `form_vahan_view`
 
-**Purpose:** Read-only view that projects one sale into Vahan-friendly field labels so operators can inspect what the Vahan step will use without manually joining `sales_master`, `customer_master`, `vehicle_master`, `insurance_master`, and `rto_queue`.
+**Purpose:** Read-only view that projects one RTO queue row into clean column names for operator inspection, joining through `sales_master` to `customer_master`, `vehicle_master`, and `insurance_master`.
 
-**Primary keys / grain:** One row per submitted `(customer_id, vehicle_id)` sale, sourced from `sales_master` and enriched with the latest insurance and RTO rows when present.
+**Grain:** One row per `rto_queue` entry (= one row per sale with an RTO queue row).
 
-**Important columns:**
-- Technical/source columns: `sales_id`, `customer_id`, `vehicle_id`, `dealer_id`, `subfolder`, `queue_id`, `application_id`, `pay_txn_id`, `rto_payment_status`, `rto_fees`, `rto_dealer_id`, `vehicle_model`, `vehicle_colour`, `fuel_type`, `year_of_mfg`, `vehicle_price`.
-- Label-aligned columns: `"Registration Type *"`, `"Chassis No *"`, `"Engine/Motor No (Last 5 Chars)"`, `"Purchase Delivery Date"`, `"Owner Name *"`, `"Category *"`, `"Mobile No"`, `"Permanent Address"`, `"Insurance Type"`, `"Insurer"`, `"Policy No"`, `"Application No"`, `"Assigned Office & Action"`, `"Amount"`, and related Vahan labels used by the dummy site/export file.
+| Column | Source | Notes |
+|---|---|---|
+| `sales_id` | `rto_queue` | FK to sales_master |
+| `billing_date` | `sales_master` | Sale billing date |
+| `dealer_id` | `sales_master` | Dealer reference |
+| `dealer_rto` | `dealer_ref` | `COALESCE(dealer_ref.rto_name, 'RTO' \|\| sales_master.dealer_id::text)` — human-readable office name (e.g. **RTO-Bharatpur**) when `dealer_ref.rto_name` is set |
+| `customer_id` | `sales_master` | Customer reference |
+| `mobile` | `customer_master.mobile_number` | Customer mobile |
+| `name` | `customer_master` | Customer name |
+| `care_of` | `customer_master` | S/O, W/O |
+| `address` | `customer_master` | Customer address |
+| `city` | `customer_master` | Customer city |
+| `state` | `customer_master` | Customer state |
+| `pin` | `customer_master` | Customer PIN code |
+| `financier` | `customer_master` | Financier name |
+| `vehicle_id` | `sales_master` | Vehicle reference |
+| `vehicle_type` | `vehicle_master` | Vehicle type |
+| `chassis` | `vehicle_master` | COALESCE(chassis, raw_frame_num) |
+| `engine_short` | `vehicle_master` | Last 5 chars of engine number |
+| `ex_showroom_price` | `vehicle_master.vehicle_ex_showroom_price` | Ex-showroom price |
+| `insurance_id` | `rto_queue` | Insurance FK (nullable) |
+| `insurer` | `insurance_master` | Insurer name (LEFT JOIN) |
+| `policy_num` | `insurance_master` | Policy number |
+| `policy_from_date` | `insurance_master.policy_from` | Policy start date |
+| `idv` | `insurance_master.idv` | Insurance Declared Value |
 
-**Operational notes:**
-- The view uses the latest `insurance_master` row per `(customer_id, vehicle_id)` by `insurance_year`.
-- The view uses the latest `rto_queue` row per `(customer_id, vehicle_id)` by `created_at`.
-- `queue_id` is the stable `rto_queue.application_id`; `application_id` / `"Application No"` switch to `rto_queue.vahan_application_id` once the batch reaches the Vahan cart/upload checkpoint.
-- `vehicle_price` in the view is sourced from `vehicle_master.vehicle_ex_showroom_price`, populated by Fill DMS (`update_vehicle_master_from_dms`) so Vahan automation can read only from `form_vahan_view`.
-- Successful RTO batch runs overwrite the latest scraped Vahan application id / RTO charges in both `rto_queue` and `sales_master`; session-expiry failures return the queue row to `Pending` without clearing previously scraped values.
+**Joins:** `rto_queue` → `sales_master` (INNER) → `dealer_ref` (LEFT on `sales_master.dealer_id` — supplies `rto_name` for `dealer_rto`) → `customer_master` (INNER), `vehicle_master` (INNER); `insurance_master` (LEFT on `rto_queue.insurance_id`).
+
+**DDL:** `DDL/alter/10e_form_vahan_view.sql` (also embedded at end of `DDL/alter/24a_rto_queue_schema_redesign.sql` for upgrades).
 
 ---
 
@@ -711,3 +732,5 @@ Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.
 | 2.71 | Apr 2026 | **`challan_staging.created_at`** — **`DDL/alter/19b_challan_staging_created_at.sql`** (Processed tab list / failed-count window) |
 | 2.72 | Apr 2026 | **`challan_master_staging`**, **`challan_details_staging`** — subdealer challan staging split (header + lines); greenfield prefers **`DDL/23_…sql`**, **`DDL/24_…sql`** over legacy **`challan_staging`** |
 | 2.73 | Apr 2026 | **`challan_master_staging.last_run_at`** — **`DDL/alter/23a_challan_master_staging_last_run_at.sql`**; greenfield: **`DDL/23_challan_master_staging.sql`** — Processed tab **Latest run** |
+| 2.74 | Apr 2026 | **`rto_queue`** redesign (serial **`rto_queue_id`**, **`insurance_id`**, **`customer_mobile`**, application/payment columns, batch columns); **`form_vahan_view`** minimal columns, **`dealer_rto`** from **`dealer_ref.rto_name`** with fallback; **`rc_status_sms_queue`** constraints via **`sales_master`**; greenfield: **`DDL/10_rto_queue.sql`**, **`DDL/11_rc_status_sms_queue.sql`**, **`DDL/alter/10e_form_vahan_view.sql`**, **`DDL/alter/11a_*.sql`**, **`DDL/alter/11b_*.sql`**; upgrade: **`DDL/alter/24a_rto_queue_schema_redesign.sql`** |
+| 2.75 | Apr 2026 | **`form_vahan_view`** extended with **`city`**, **`state`**, **`pin`** (from `customer_master`) and **`idv`** (from `insurance_master`) for Vahan portal automation; updated **`DDL/alter/10e_form_vahan_view.sql`** and **`DDL/alter/24a_rto_queue_schema_redesign.sql`** |

@@ -194,8 +194,11 @@ PLAYWRIGHT_MANAGED_REMOTE_DEBUG_PORT: int | None = (
     int(_mdbg_raw) if _mdbg_raw.isdigit() and int(_mdbg_raw) > 0 else None
 )
 
-# VAHAN base URL (production portal). Static training Vaahan automation was removed from the codebase.
-VAHAN_BASE_URL = (os.getenv("VAHAN_BASE_URL") or "").strip().rstrip("/")
+# VAHAN portal login URL — used by fill_rto_service Playwright automation.
+VAHAN_BASE_URL = (
+    os.getenv("VAHAN_BASE_URL")
+    or "https://vahan.parivahan.gov.in/vahan/vahan/ui/login/login.xhtml"
+).strip().rstrip("/")
 
 # Insurance portal base URL for Playwright (e.g. Hero MISP).
 INSURANCE_BASE_URL = (os.getenv("INSURANCE_BASE_URL") or "").strip().rstrip("/")
@@ -281,8 +284,6 @@ def validate_external_site_urls() -> None:
     missing: list[str] = []
     if not DMS_BASE_URL:
         missing.append("DMS_BASE_URL")
-    if not VAHAN_BASE_URL:
-        missing.append("VAHAN_BASE_URL")
     if not INSURANCE_BASE_URL:
         missing.append("INSURANCE_BASE_URL")
     if missing:

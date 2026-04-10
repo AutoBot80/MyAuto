@@ -1,4 +1,4 @@
-"""POST /fill-forms: Playwright fill for DMS, Vahan, insurance (hero), Form 21/22, etc."""
+"""POST /fill-forms: Playwright fill for DMS, insurance (hero), Form 21/22, etc."""
 import asyncio
 import logging
 import re
@@ -16,14 +16,12 @@ from app.config import (
     DMS_LOGIN_USER,
     DMS_LOGIN_PASSWORD,
     INSURANCE_BASE_URL,
-    VAHAN_BASE_URL,
     get_ocr_output_dir,
     get_uploads_dir,
 )
 from app.services.fill_hero_dms_service import (
     run_fill_dms,
     run_fill_dms_only,
-    run_fill_vahan_only,
     warm_dms_browser_session,
 )
 from app.services.fill_hero_insurance_service import (
@@ -76,16 +74,6 @@ def _normalize_automation_error(raw_error: str | None) -> str | None:
             + "."
         )
 
-    if "Missing required Vahan DB values:" in message:
-        fields = [p.strip() for p in message.split(":", 1)[1].split(",") if p.strip()]
-        if not fields:
-            return "Vahan cannot continue because required database fields are missing."
-        return (
-            "Vahan cannot continue because required DB fields are missing. "
-            "Please complete Submit Info / DMS data and retry. Missing: "
-            + ", ".join(fields)
-            + "."
-        )
     if "Missing required Insurance DB values:" in message:
         fields = [p.strip() for p in message.split(":", 1)[1].split(",") if p.strip()]
         if not fields:
@@ -96,19 +84,6 @@ def _normalize_automation_error(raw_error: str | None) -> str | None:
             + ", ".join(fields)
             + "."
         )
-
-    if "form_vahan_view.vehicle_price is empty" in message or "vehicle_price must be positive" in message:
-        return (
-            "Vahan cannot continue because vehicle price is missing in DB. "
-            "Run DMS first so vehicle price is scraped and saved, then retry."
-        )
-
-    if "Vahan result missing data-rto-fees value" in message:
-        return "Vahan completed navigation but RTO fees could not be scraped from the result screen. Please retry."
-    if "Vahan result row not found for rto_fees scrape" in message:
-        return "Vahan result section did not return a fees row. Please retry after confirming site session is active."
-    if "Vahan rto_fees could not be scraped" in message:
-        return "Vahan could not scrape RTO fees. Please retry."
 
     return message
 
@@ -157,8 +132,6 @@ class FillDmsVehicle(BaseModel):
 class FillDmsRequest(BaseModel):
     subfolder: str
     dms_base_url: str | None = None
-    vahan_base_url: str | None = None
-    rto_dealer_id: str | None = None
     dealer_id: int | None = None
     staging_id: str | None = Field(
         None,
@@ -196,29 +169,6 @@ class FillDmsResponse(BaseModel):
     ready_for_client_create_invoice: bool | None = None
     # After staging commit: Run Report PDF batch status (GST Retail Invoice, GST Booking Receipt); see BR-21 / LLD 6.276.
     hero_dms_form22_print: dict | None = None
-
-
-class FillVahanRequest(BaseModel):
-    vahan_base_url: str
-    rto_dealer_id: str | None = None
-    dealer_id: int | None = None
-    customer_id: int | None = None
-    vehicle_id: int | None = None
-    subfolder: str | None = None
-    customer_name: str | None = None
-    chassis_no: str | None = None
-    vehicle_model: str | None = None
-    vehicle_colour: str | None = None
-    fuel_type: str | None = None
-    year_of_mfg: str | None = None
-    vehicle_price: float | None = None
-
-
-class FillVahanResponse(BaseModel):
-    success: bool
-    application_id: str | None = None
-    rto_fees: float | None = None
-    error: str | None = None
 
 
 class FillHeroInsuranceRequest(BaseModel):
@@ -338,7 +288,7 @@ def _require_absolute_http_url(url: str, field_name: str) -> str:
     if not u.startswith(("http://", "https://")):
         raise HTTPException(
             status_code=400,
-            detail=f"{field_name} must be an absolute URL (http:// or https://). Set DMS_BASE_URL, VAHAN_BASE_URL, or INSURANCE_BASE_URL in backend/.env.",
+            detail=f"{field_name} must be an absolute URL (http:// or https://). Set DMS_BASE_URL or INSURANCE_BASE_URL in backend/.env.",
         )
     return u.rstrip("/")
 
@@ -553,40 +503,6 @@ async def print_form20(req: PrintForm20Request) -> PrintForm20Response:
         return PrintForm20Response(success=False, pdfs_saved=[], error=str(e))
 
 
-@router.post("/vahan", response_model=FillVahanResponse)
-async def fill_vahan_only(req: FillVahanRequest) -> FillVahanResponse:
-    """Run only Vahan (RTO registration). Independent process."""
-    vahan_url = (req.vahan_base_url or VAHAN_BASE_URL or "").strip()
-    if not vahan_url:
-        raise HTTPException(status_code=400, detail="vahan_base_url required")
-    vahan_url = _require_absolute_http_url(vahan_url, "vahan_base_url")
-    did = req.dealer_id if req.dealer_id is not None else DEALER_ID
-    result = await _run_playwright_work(
-        partial(
-            run_fill_vahan_only,
-            vahan_base_url=vahan_url,
-            rto_dealer_id=(req.rto_dealer_id or "").strip(),
-            customer_name=str(req.customer_name or ""),
-            chassis_no=str(req.chassis_no or ""),
-            vehicle_model=str(req.vehicle_model or ""),
-            vehicle_colour=str(req.vehicle_colour or ""),
-            fuel_type=str(req.fuel_type or ""),
-            year_of_mfg=str(req.year_of_mfg or ""),
-            vehicle_price=float(req.vehicle_price or 0),
-            ocr_output_dir=Path(get_ocr_output_dir(did)),
-            subfolder=req.subfolder,
-            customer_id=req.customer_id,
-            vehicle_id=req.vehicle_id,
-        )
-    )
-    return FillVahanResponse(
-        success=result.get("error") is None,
-        application_id=result.get("application_id"),
-        rto_fees=result.get("rto_fees"),
-        error=_normalize_automation_error(result.get("error")),
-    )
-
-
 @router.post("/insurance/hero", response_model=FillHeroInsuranceResponse)
 async def fill_hero_insurance(req: FillHeroInsuranceRequest = FillHeroInsuranceRequest()) -> FillHeroInsuranceResponse:
     """
@@ -649,7 +565,7 @@ async def fill_hero_insurance(req: FillHeroInsuranceRequest = FillHeroInsuranceR
 
 @router.post("", response_model=FillDmsResponse)
 async def fill_dms(req: FillDmsRequest) -> FillDmsResponse:
-    logger.info("fill_dms: start subfolder=%s dms=%s vahan=%s", req.subfolder, bool(req.dms_base_url), bool(req.vahan_base_url))
+    logger.info("fill_dms: start subfolder=%s dms=%s", req.subfolder, bool(req.dms_base_url))
     base_url = (req.dms_base_url or DMS_BASE_URL or "").strip()
     if not base_url:
         logger.warning("fill_dms: dms_base_url missing")
@@ -665,10 +581,7 @@ async def fill_dms(req: FillDmsRequest) -> FillDmsResponse:
     if req.customer.mobile:
         customer_dict["mobile"] = req.customer.mobile
     vehicle_dict = req.vehicle.model_dump(exclude_none=True)
-    vahan_url = (req.vahan_base_url or VAHAN_BASE_URL or "").strip() or None
-    if vahan_url:
-        vahan_url = _require_absolute_http_url(vahan_url, "vahan_base_url")
-    logger.info("fill_dms: calling run_fill_dms base_url=%s vahan_url=%s", base_url[:60] if base_url else None, (vahan_url[:60] if vahan_url else None))
+    logger.info("fill_dms: calling run_fill_dms base_url=%s", base_url[:60] if base_url else None)
     staging_payload, cid, vid = _fill_dms_staging_or_ids(
         req.staging_id,
         did,
@@ -689,8 +602,6 @@ async def fill_dms(req: FillDmsRequest) -> FillDmsResponse:
             login_password=DMS_LOGIN_PASSWORD,
             uploads_dir=uploads_dir,
             ocr_output_dir=Path(get_ocr_output_dir(did)),
-            vahan_base_url=vahan_url,
-            rto_dealer_id=req.rto_dealer_id,
             dealer_id=did,
             customer_id=cid,
             vehicle_id=vid,

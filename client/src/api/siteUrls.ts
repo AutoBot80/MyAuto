@@ -6,7 +6,8 @@ export interface SiteUrls {
   dms_mode?: string;
   dms_real_siebel?: boolean;
   dms_real_contact_url_configured?: boolean;
-  vahan_base_url: string;
+  /** Informational only; Vahan automation not yet wired. */
+  vahan_base_url?: string;
   insurance_base_url: string;
 }
 

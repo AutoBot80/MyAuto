@@ -21,8 +21,6 @@ export interface FillDmsVehicle {
 export interface FillDmsRequest {
   subfolder: string;
   dms_base_url?: string | null;
-  vahan_base_url?: string | null;
-  rto_dealer_id?: string | null;
   /** Dealer ID for Form 20 field 10 (dealer name & address from dealer_ref). */
   dealer_id?: number | null;
   /**
@@ -77,7 +75,6 @@ export interface FillDmsResponse {
 const FILL_FORMS_TIMEOUT_MS = 900_000; // 15 min
 /** Pre-open DMS browser after upload; allow enough time for first managed-browser launch. */
 const DMS_WARM_BROWSER_TIMEOUT_MS = 300_000; // 5 min
-const FILL_VAHAN_TIMEOUT_MS = 60000; // 1 min for Vahan
 const FILL_HERO_INSURANCE_TIMEOUT_MS = 900_000; // pre + main + post (Playwright)
 
 export interface WarmDmsBrowserRequest {
@@ -105,29 +102,6 @@ export async function warmDmsBrowser(req: WarmDmsBrowserRequest): Promise<WarmDm
   }
 }
 
-export interface FillVahanRequest {
-  vahan_base_url: string;
-  rto_dealer_id?: string | null;
-  dealer_id?: number | null;
-  customer_id?: number | null;
-  vehicle_id?: number | null;
-  subfolder?: string | null;
-  customer_name?: string | null;
-  chassis_no?: string | null;
-  vehicle_model?: string | null;
-  vehicle_colour?: string | null;
-  fuel_type?: string | null;
-  year_of_mfg?: string | null;
-  vehicle_price?: number | null;
-}
-
-export interface FillVahanResponse {
-  success: boolean;
-  application_id?: string | null;
-  rto_fees?: number | null;
-  error?: string | null;
-}
-
 export interface FillHeroInsuranceRequest {
   insurance_base_url?: string | null;
   customer_id?: number | null;
@@ -151,23 +125,6 @@ export async function fillDmsOnly(req: FillDmsRequest): Promise<FillDmsResponse>
   const timeoutId = setTimeout(() => controller.abort(), FILL_FORMS_TIMEOUT_MS);
   try {
     const res = await apiFetch<FillDmsResponse>("/fill-forms/dms", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(req),
-      signal: controller.signal,
-    });
-    return res;
-  } finally {
-    clearTimeout(timeoutId);
-  }
-}
-
-/** Run only Vahan (RTO) section. Independent process. */
-export async function fillVahanOnly(req: FillVahanRequest): Promise<FillVahanResponse> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), FILL_VAHAN_TIMEOUT_MS);
-  try {
-    const res = await apiFetch<FillVahanResponse>("/fill-forms/vahan", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(req),

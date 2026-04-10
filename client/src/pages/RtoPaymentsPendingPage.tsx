@@ -19,7 +19,7 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
   const [error, setError] = useState<string | null>(null);
   const [batchError, setBatchError] = useState<string | null>(null);
   const [startingBatch, setStartingBatch] = useState(false);
-  const [retryingQueueId, setRetryingQueueId] = useState<string | null>(null);
+  const [retryingQueueId, setRetryingQueueId] = useState<number | null>(null);
 
   const progressPercent = useMemo(() => {
     if (!batchStatus || batchStatus.total_count <= 0) return 0;
@@ -81,7 +81,7 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
     }
   };
 
-  const handleTryAgain = async (queueId: string) => {
+  const handleTryAgain = async (queueId: number) => {
     setBatchError(null);
     setRetryingQueueId(queueId);
     try {
@@ -113,25 +113,14 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
 
   const columns = [
     "Queue ID",
-    "Vahan App ID",
-    "Customer ID",
+    "RTO App ID",
     "Customer Name",
     "Mobile",
-    "Vehicle ID",
     "Chassis No.",
-    "Register Date",
-    "RTO Fees",
+    "RTO Amount",
     "Status",
     "Actions",
   ];
-
-  const isInstructionalVahanError = (msg?: string | null) => {
-    const text = String(msg || "").toLowerCase();
-    return (
-      text.includes("opened. please login") ||
-      text.includes("cannot switch to a different thread")
-    );
-  };
 
   return (
     <div className="rto-payments-page">
@@ -148,19 +137,19 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
             ? "Processing oldest 7..."
             : "Fill Vahan Site"}
         </button>
-        <span className="rto-batch-toolbar-note">If Vahan opens, login and press Fill Vahan Site again.</span>
+        <span className="rto-batch-toolbar-note">Batch processes up to 7 queued rows.</span>
         </div>
       </div>
       {batchStatus && batchStatus.state !== "idle" && (
         <section className="rto-batch-status-card">
           <div className="app-process-status-bar">
             <span className="app-process-count">
-              Processing: {batchStatus.processed_count}/{batchStatus.total_count}, Added to cart: {batchStatus.cart_count}, Failed: {batchStatus.failed_count}
+              Processing: {batchStatus.processed_count}/{batchStatus.total_count}, Completed: {batchStatus.completed_count}, Failed: {batchStatus.failed_count}
             </span>
           </div>
         </section>
       )}
-      {batchError && !isInstructionalVahanError(batchError) && <p className="rto-payments-error">{batchError}</p>}
+      {batchError && <p className="rto-payments-error">{batchError}</p>}
       <div className="rto-payments-table-wrap">
         <table className="rto-payments-table">
           <thead>
@@ -177,26 +166,23 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
               </tr>
             ) : (
               rows.map((r) => (
-                <tr key={r.queue_id}>
-                  <td>{r.queue_id}</td>
-                  <td>{r.vahan_application_id ?? "—"}</td>
-                  <td>{r.customer_id}</td>
-                  <td>{r.name ?? "—"}</td>
-                  <td>{r.mobile ?? "—"}</td>
-                  <td>{r.vehicle_id}</td>
+                <tr key={r.rto_queue_id}>
+                  <td>{r.rto_queue_id}</td>
+                  <td>{r.rto_application_id ?? "—"}</td>
+                  <td>{r.customer_name ?? "—"}</td>
+                  <td>{r.mobile ?? r.customer_mobile ?? "—"}</td>
                   <td>{r.chassis_num ?? "—"}</td>
-                  <td>{r.register_date}</td>
-                  <td>{r.rto_fees != null ? `₹${r.rto_fees}` : "—"}</td>
+                  <td>{r.rto_payment_amount != null ? `₹${r.rto_payment_amount}` : "—"}</td>
                   <td>{r.status ?? "Pending"}</td>
                   <td>
                     {String(r.status || "").toLowerCase() === "failed" ? (
                       <button
                         type="button"
                         className="app-button"
-                        onClick={() => handleTryAgain(r.queue_id)}
-                        disabled={retryingQueueId === r.queue_id}
+                        onClick={() => handleTryAgain(r.rto_queue_id)}
+                        disabled={retryingQueueId === r.rto_queue_id}
                       >
-                        {retryingQueueId === r.queue_id ? "Retrying..." : "Retry"}
+                        {retryingQueueId === r.rto_queue_id ? "Retrying..." : "Retry"}
                       </button>
                     ) : (
                       "—"

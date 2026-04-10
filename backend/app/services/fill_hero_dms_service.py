@@ -1,7 +1,6 @@
 """
 Fill DMS flow using Playwright: Hero Connect / Siebel (``DMS_MODE=real`` and ``DMS_REAL_URL_*``).
-Vaahan Playwright against static training HTML was removed; ``run_fill_vahan_only`` / batch RTO helpers
-raise until a production VAHAN automation is implemented.
+Vahan automation was moved to ``fill_rto_service.py`` (called via ``rto_payment_service`` batch loop).
 Uses Chromium (faster launch). Requires: pip install playwright && playwright install chromium.
 Uses headed browser by default (set DMS_PLAYWRIGHT_HEADED=false for headless).
 Writes pulled data to ocr_output/subfolder/Data from DMS.txt for consistency with other OCR outputs.
@@ -67,7 +66,6 @@ from app.services.hero_dms_db_service import persist_masters_after_create_order
 from app.services.hero_dms_prepare_customer import prepare_customer
 from app.services.hero_dms_playwright_invoice import prepare_order
 from app.repositories import form_dms as form_dms_repo
-from app.repositories import form_vahan as form_vahan_repo
 from app.db import get_connection
 from app.services.customer_address_infer import enrich_customer_address_from_freeform
 from app.services.dms_relation_prefix import compute_dms_relation_prefix
@@ -277,36 +275,6 @@ def _merge_staging_payload_with_scrape_for_commit(staging_payload: dict, scraped
         if isinstance(cust, dict):
             cust["financier"] = fn[:255]
     return merged
-
-
-def _fill_vahan_and_scrape(
-    page,
-    vahan_base_url: str,
-    rto_dealer_id: str,
-    customer_name: str,
-    chassis_no: str,
-    vehicle_model: str,
-    vehicle_colour: str,
-    fuel_type: str,
-    year_of_mfg: str,
-    vehicle_price: float,
-) -> tuple[str | None, float]:
-    """
-    Static Vaahan training HTML was removed. Production VAHAN Playwright is not implemented here.
-    """
-    del page, vahan_base_url, rto_dealer_id, customer_name, chassis_no
-    del vehicle_model, vehicle_colour, fuel_type, year_of_mfg, vehicle_price
-    raise NotImplementedError(
-        "Vaahan Playwright for the old static training site was removed. "
-        "Point VAHAN_BASE_URL at the production VAHAN portal and add selectors, or complete RTO steps manually."
-    )
-
-
-def _complete_vahan_upload_step(page) -> bool:
-    del page
-    raise NotImplementedError(
-        "Vaahan cart/upload automation for the static training site was removed."
-    )
 
 
 def _split_name(full_name: str | None) -> tuple[str, str]:
@@ -558,28 +526,6 @@ def _require_customer_vehicle_ids(customer_id: int | None, vehicle_id: int | Non
         raise ValueError(f"customer_id and vehicle_id are required because automation now reads from {view_name} only")
     return customer_id, vehicle_id
 
-
-def _load_form_vahan_row(customer_id: int | None, vehicle_id: int | None) -> dict:
-    if customer_id is None or vehicle_id is None:
-        return {}
-    try:
-        return form_vahan_repo.get_by_customer_vehicle(customer_id, vehicle_id) or {}
-    except Exception as exc:
-        logger.warning(
-            "fill_dms_service: form_vahan_view lookup failed customer_id=%s vehicle_id=%s: %s",
-            customer_id,
-            vehicle_id,
-            exc,
-        )
-        return {}
-
-
-def _load_required_form_vahan_row(customer_id: int | None, vehicle_id: int | None) -> dict:
-    cid, vid = _require_customer_vehicle_ids(customer_id, vehicle_id, "form_vahan_view")
-    row = _load_form_vahan_row(cid, vid)
-    if not row:
-        raise ValueError(f"No form_vahan_view row found for customer_id={cid} vehicle_id={vid}")
-    return row
 
 
 def _load_form_dms_row(customer_id: int | None, vehicle_id: int | None) -> dict:
@@ -955,42 +901,6 @@ def _build_dms_fill_values(
     return values
 
 
-def _build_vahan_fill_values(customer_id: int | None, vehicle_id: int | None, subfolder: str | None = None) -> dict:
-    row = _load_required_form_vahan_row(customer_id, vehicle_id)
-    vehicle_price = _parse_float_or_zero(row.get("vehicle_price"))
-    if vehicle_price <= 0:
-        raise ValueError(
-            f"form_vahan_view.vehicle_price is empty for customer_id={customer_id} vehicle_id={vehicle_id}; "
-            "run DMS first so vehicle_ex_showroom_price is stored on vehicle_master"
-        )
-    effective_subfolder = _clean_text(row.get("subfolder")) or _clean_text(subfolder)
-    values = {
-        "row": row,
-        "subfolder": effective_subfolder,
-        "rto_dealer_id": _clean_text(row.get("rto_dealer_id")),
-        "customer_name": _clean_text(row.get("Owner Name *")),
-        "chassis_no": _clean_text(row.get("Chassis No *")),
-        "vehicle_model": _clean_text(row.get("vehicle_model")),
-        "vehicle_colour": _clean_text(row.get("vehicle_colour")),
-        "fuel_type": _clean_text(row.get("fuel_type")),
-        "year_of_mfg": _clean_text(row.get("year_of_mfg")),
-        "vehicle_price": vehicle_price,
-    }
-    required_keys = [
-        ("form_vahan_view.rto_dealer_id", values["rto_dealer_id"]),
-        ("form_vahan_view.Owner Name *", values["customer_name"]),
-        ("form_vahan_view.Chassis No *", values["chassis_no"]),
-        ("form_vahan_view.vehicle_model", values["vehicle_model"]),
-        ("form_vahan_view.vehicle_colour", values["vehicle_colour"]),
-        ("form_vahan_view.fuel_type", values["fuel_type"]),
-        ("form_vahan_view.year_of_mfg", values["year_of_mfg"]),
-    ]
-    missing = [label for label, val in required_keys if not val]
-    if missing:
-        raise ValueError("Missing required Vahan DB values: " + ", ".join(missing))
-    return values
-
-
 def _write_dms_form_values(
     ocr_output_dir: Path,
     subfolder: str | None,
@@ -1092,213 +1002,6 @@ def _write_dms_form_values(
         lines.append(f"{label}: {value or '—'}")
 
     path.write_text("\n".join(lines), encoding="utf-8")
-
-
-def _write_vahan_form_values(
-    ocr_output_dir: Path,
-    subfolder: str | None,
-    customer_id: int | None,
-    vehicle_id: int | None,
-    *,
-    rto_dealer_id: str,
-    customer_name: str,
-    chassis_no: str,
-    vehicle_model: str,
-    vehicle_colour: str,
-    fuel_type: str,
-    year_of_mfg: str,
-    vehicle_price: float,
-    application_id: str | None,
-    rto_fees: float | None,
-) -> None:
-    if not subfolder or not str(subfolder).strip():
-        return
-
-    row = _load_form_vahan_row(customer_id, vehicle_id)
-    safe_subfolder = _safe_subfolder_name(subfolder)
-    subfolder_path = Path(ocr_output_dir).resolve() / safe_subfolder
-    subfolder_path.mkdir(parents=True, exist_ok=True)
-    path = subfolder_path / "Vahan_Form_Values.txt"
-
-    effective_rto_dealer_id = _clean_text(rto_dealer_id) or _clean_text(row.get("rto_dealer_id"))
-    effective_customer_name = _clean_text(customer_name) or _clean_text(row.get("Owner Name *"))
-    effective_chassis_no = _clean_text(chassis_no) or _clean_text(row.get("Chassis No *"))
-    effective_vehicle_model = _clean_text(vehicle_model) or _clean_text(row.get("vehicle_model"))
-    effective_vehicle_colour = _clean_text(vehicle_colour) or _clean_text(row.get("vehicle_colour"))
-    effective_fuel_type = _clean_text(fuel_type) or _clean_text(row.get("fuel_type"))
-    effective_year_of_mfg = _clean_text(year_of_mfg) or _clean_text(row.get("year_of_mfg"))
-    effective_vehicle_price = float(vehicle_price or 0)
-    if effective_vehicle_price <= 0:
-        raise ValueError("vehicle_price must be positive for Vahan form values export")
-
-    label_values: list[tuple[str, str]] = [
-        ("Registration Type *", _clean_text(row.get("Registration Type *"))),
-        ("Chassis No *", effective_chassis_no),
-        ("Engine/Motor No (Last 5 Chars)", effective_chassis_no[-5:] if effective_chassis_no else ""),
-        ("Purchase Delivery Date", _clean_text(row.get("Purchase Delivery Date"))),
-        ("Do You want to Opt Choice Number / Fancy Number / Retention Number", _clean_text(row.get("Do You want to Opt Choice Number / Fancy Number / Retention Number"))),
-        ("Owner Name *", effective_customer_name),
-        ("Owner Type", _clean_text(row.get("Owner Type"))),
-        ("Son/Wife/Daughter of", _clean_text(row.get("Son/Wife/Daughter of"))),
-        ("Ownership Serial", _clean_text(row.get("Ownership Serial"))),
-        ("Aadhaar Mode", _clean_text(row.get("Aadhaar Mode"))),
-        ("Category *", _clean_text(row.get("Category *"))),
-        ("Mobile No", _clean_text(row.get("Mobile No"))),
-        ("PAN Card", _clean_text(row.get("PAN Card"))),
-        ("Voter ID", _clean_text(row.get("Voter ID"))),
-        ("Aadhaar No", _clean_text(row.get("Aadhaar No"))),
-        ("Permanent Address", _clean_text(row.get("Permanent Address"))),
-        ("House No & Street Name", _clean_text(row.get("House No & Street Name"))),
-        ("Village/Town/City", _clean_text(row.get("Village/Town/City"))),
-        ("Insurance Type", _clean_text(row.get("Insurance Type"))),
-        ("Insurer", _clean_text(row.get("Insurer"))),
-        ("Policy No", _clean_text(row.get("Policy No"))),
-        ("Insurance From (DD-MMM-YYYY)", _clean_text(row.get("Insurance From (DD-MMM-YYYY)"))),
-        ("Insurance Upto (DD-MMM-YYYY)", _clean_text(row.get("Insurance Upto (DD-MMM-YYYY)"))),
-        ("Insured Declared Value", _clean_text(row.get("Insured Declared Value"))),
-        ("Please Select Series Type", _clean_text(row.get("Please Select Series Type"))),
-        ("Financier / Bank", _clean_text(row.get("Financier / Bank"))),
-        ("Application No", _clean_text(application_id) or _clean_text(row.get("Application No"))),
-        ("Assigned Office & Action", _clean_text(row.get("Assigned Office & Action")) or effective_rto_dealer_id),
-        ("Registration No", _clean_text(row.get("Registration No"))),
-        ("Amount", _format_amount(rto_fees) or _clean_text(row.get("Amount"))),
-    ]
-
-    runtime_values: list[tuple[str, str]] = [
-        ("sales_id", _clean_text(row.get("sales_id"))),
-        ("customer_id", _clean_text(customer_id or row.get("customer_id"))),
-        ("vehicle_id", _clean_text(vehicle_id or row.get("vehicle_id"))),
-        ("dealer_id", _clean_text(row.get("dealer_id"))),
-        ("subfolder", safe_subfolder),
-        ("rto_dealer_id", effective_rto_dealer_id),
-        ("vehicle_model", effective_vehicle_model),
-        ("vehicle_colour", effective_vehicle_colour),
-        ("fuel_type", effective_fuel_type),
-        ("year_of_mfg", effective_year_of_mfg),
-        ("vehicle_price", _format_amount(effective_vehicle_price)),
-        ("generated_at", datetime.now().strftime("%d-%m-%Y %H:%M:%S")),
-    ]
-
-    lines = ["Vahan Form Values", "", "--- Values sent to Vahan labels ---"]
-    for label, value in label_values:
-        lines.append(f"{label}: {value or '—'}")
-
-    lines.extend(["", "--- Runtime values used by Playwright ---"])
-    for label, value in runtime_values:
-        lines.append(f"{label}: {value or '—'}")
-
-    path.write_text("\n".join(lines), encoding="utf-8")
-
-
-def _run_vahan_in_context(
-    context,
-    vahan_base_url: str,
-    *,
-    customer_id: int | None,
-    vehicle_id: int | None,
-    subfolder: str | None,
-    ocr_output_dir: Path | None,
-    complete_upload_step: bool,
-) -> dict:
-    """Run Vahan using an existing browser context so batches can reuse one session."""
-    vahan_values = _build_vahan_fill_values(customer_id, vehicle_id, subfolder)
-    effective_subfolder = vahan_values.get("subfolder") or subfolder
-    page = context.new_page()
-    page.set_default_timeout(15_000)
-    try:
-        app_id, fees = _fill_vahan_and_scrape(
-            page,
-            vahan_base_url=vahan_base_url.strip(),
-            rto_dealer_id=vahan_values["rto_dealer_id"],
-            customer_name=vahan_values["customer_name"],
-            chassis_no=vahan_values["chassis_no"],
-            vehicle_model=vahan_values["vehicle_model"],
-            vehicle_colour=vahan_values["vehicle_colour"],
-            fuel_type=vahan_values["fuel_type"],
-            year_of_mfg=vahan_values["year_of_mfg"],
-            vehicle_price=vahan_values["vehicle_price"],
-        )
-        added_to_cart = False
-        if complete_upload_step:
-            added_to_cart = _complete_vahan_upload_step(page)
-        if ocr_output_dir is not None and effective_subfolder:
-            _write_vahan_form_values(
-                ocr_output_dir=ocr_output_dir,
-                subfolder=effective_subfolder,
-                customer_id=customer_id,
-                vehicle_id=vehicle_id,
-                rto_dealer_id=vahan_values["rto_dealer_id"],
-                customer_name=vahan_values["customer_name"],
-                chassis_no=vahan_values["chassis_no"],
-                vehicle_model=vahan_values["vehicle_model"],
-                vehicle_colour=vahan_values["vehicle_colour"],
-                fuel_type=vahan_values["fuel_type"],
-                year_of_mfg=vahan_values["year_of_mfg"],
-                vehicle_price=vahan_values["vehicle_price"],
-                application_id=app_id,
-                rto_fees=fees,
-            )
-        return {
-            "application_id": app_id,
-            "rto_fees": fees,
-            "added_to_cart": added_to_cart,
-            "subfolder": effective_subfolder,
-        }
-    finally:
-        page.close()
-
-
-def run_fill_vahan_batch_row(
-    context,
-    vahan_base_url: str,
-    *,
-    customer_id: int,
-    vehicle_id: int,
-    subfolder: str | None,
-    ocr_output_dir: Path | None,
-) -> dict:
-    """Batch-safe Vahan helper that reuses one browser/context and stops after cart upload."""
-    del context  # Existing open tab mode does not create/reuse server-owned contexts.
-    page, open_error = get_or_open_site_page(vahan_base_url, "Vahan", require_login_on_open=False)
-    if page is None:
-        raise ValueError(open_error or "Vahan site not open. Please open Vahan site and keep it logged in.")
-    vahan_values = _build_vahan_fill_values(customer_id, vehicle_id, subfolder)
-    app_id, fees = _fill_vahan_and_scrape(
-        page,
-        vahan_base_url=vahan_base_url.strip(),
-        rto_dealer_id=vahan_values["rto_dealer_id"],
-        customer_name=vahan_values["customer_name"],
-        chassis_no=vahan_values["chassis_no"],
-        vehicle_model=vahan_values["vehicle_model"],
-        vehicle_colour=vahan_values["vehicle_colour"],
-        fuel_type=vahan_values["fuel_type"],
-        year_of_mfg=vahan_values["year_of_mfg"],
-        vehicle_price=vahan_values["vehicle_price"],
-    )
-    added_to_cart = _complete_vahan_upload_step(page)
-    if ocr_output_dir is not None and (vahan_values.get("subfolder") or subfolder):
-        _write_vahan_form_values(
-            ocr_output_dir=ocr_output_dir,
-            subfolder=vahan_values.get("subfolder") or subfolder,
-            customer_id=customer_id,
-            vehicle_id=vehicle_id,
-            rto_dealer_id=vahan_values["rto_dealer_id"],
-            customer_name=vahan_values["customer_name"],
-            chassis_no=vahan_values["chassis_no"],
-            vehicle_model=vahan_values["vehicle_model"],
-            vehicle_colour=vahan_values["vehicle_colour"],
-            fuel_type=vahan_values["fuel_type"],
-            year_of_mfg=vahan_values["year_of_mfg"],
-            vehicle_price=vahan_values["vehicle_price"],
-            application_id=app_id,
-            rto_fees=fees,
-        )
-    return {
-        "application_id": app_id,
-        "rto_fees": fees,
-        "added_to_cart": added_to_cart,
-        "subfolder": vahan_values.get("subfolder") or subfolder,
-    }
 
 
 def _parse_vehicle_year_int_for_db(raw) -> int | None:
@@ -2406,82 +2109,6 @@ def run_fill_dms_only(
     return result
 
 
-def run_fill_vahan_only(
-    vahan_base_url: str,
-    rto_dealer_id: str,
-    customer_name: str,
-    chassis_no: str,
-    vehicle_model: str,
-    vehicle_colour: str,
-    fuel_type: str,
-    year_of_mfg: str,
-    vehicle_price: float,
-    ocr_output_dir: Path | None = None,
-    subfolder: str | None = None,
-    customer_id: int | None = None,
-    vehicle_id: int | None = None,
-) -> dict:
-    """
-    Run only Vahan step: fill registration form, submit, scrape application_id and rto_fees.
-    Separate Playwright process (new browser). Returns application_id, rto_fees, error.
-    """
-    result: dict = {"application_id": None, "rto_fees": None, "added_to_cart": False, "error": None}
-    if not vahan_base_url or not vahan_base_url.strip():
-        result["error"] = "vahan_base_url required"
-        return result
-    try:
-        logger.info("fill_dms_service: run_fill_vahan_only starting")
-        page, open_error = get_or_open_site_page(vahan_base_url, "Vahan", require_login_on_open=False)
-        if page is None:
-            result["error"] = open_error
-            return result
-        vahan_values = _build_vahan_fill_values(customer_id, vehicle_id, subfolder)
-        app_id, fees = _fill_vahan_and_scrape(
-            page,
-            vahan_base_url=vahan_base_url.strip(),
-            rto_dealer_id=vahan_values["rto_dealer_id"],
-            customer_name=vahan_values["customer_name"],
-            chassis_no=vahan_values["chassis_no"],
-            vehicle_model=vahan_values["vehicle_model"],
-            vehicle_colour=vahan_values["vehicle_colour"],
-            fuel_type=vahan_values["fuel_type"],
-            year_of_mfg=vahan_values["year_of_mfg"],
-            vehicle_price=vahan_values["vehicle_price"],
-        )
-        result.update(
-            {
-                "application_id": app_id,
-                "rto_fees": fees,
-                "added_to_cart": False,
-                "subfolder": vahan_values.get("subfolder") or subfolder,
-            }
-        )
-        if ocr_output_dir is not None and (vahan_values.get("subfolder") or subfolder):
-            _write_vahan_form_values(
-                ocr_output_dir=ocr_output_dir,
-                subfolder=vahan_values.get("subfolder") or subfolder,
-                customer_id=customer_id,
-                vehicle_id=vehicle_id,
-                rto_dealer_id=vahan_values["rto_dealer_id"],
-                customer_name=vahan_values["customer_name"],
-                chassis_no=vahan_values["chassis_no"],
-                vehicle_model=vahan_values["vehicle_model"],
-                vehicle_colour=vahan_values["vehicle_colour"],
-                fuel_type=vahan_values["fuel_type"],
-                year_of_mfg=vahan_values["year_of_mfg"],
-                vehicle_price=vahan_values["vehicle_price"],
-                application_id=app_id,
-                rto_fees=fees,
-            )
-    except PlaywrightTimeout as e:
-        result["error"] = f"Timeout: {e!s}"
-        logger.warning("fill_dms_service: run_fill_vahan_only PlaywrightTimeout %s", e)
-    except Exception as e:
-        result["error"] = str(e)
-        logger.warning("fill_dms_service: run_fill_vahan_only exception %s", e)
-    return result
-
-
 def run_fill_dms(
     dms_base_url: str,
     subfolder: str,
@@ -2491,8 +2118,6 @@ def run_fill_dms(
     login_password: str,
     uploads_dir: Path,
     ocr_output_dir: Path | None = None,
-    vahan_base_url: str | None = None,
-    rto_dealer_id: str | None = None,
     dealer_id: int | None = None,
     customer_id: int | None = None,
     vehicle_id: int | None = None,
@@ -2501,8 +2126,7 @@ def run_fill_dms(
     staging_id: str | None = None,
 ) -> dict:
     """
-    Run Playwright: same DMS flow as `run_fill_dms_only` (Siebel). Optional ``vahan_base_url`` triggers
-    ``run_fill_vahan_only``, which is not implemented for production VAHAN (returns ``NotImplementedError``).
+    Run Playwright: DMS flow (Siebel Create Invoice).
     Writes pulled data to ocr_output_dir/subfolder/Data from DMS.txt.
     Returns dict with vehicle details (key_num, frame_num, vehicle_price / ex-showroom, order_number, invoice_number, …),
     optional application_id, rto_fees, and any error. When ``staging_payload`` is set, DMS fill avoids
@@ -2537,52 +2161,6 @@ def run_fill_dms(
             "application_id": None,
             "rto_fees": None,
             "error": result.get("error"),
-            "dms_automation_mode": dms_mode,
-            "dms_siebel_forms_filled": siebel_ok,
-            "dms_milestones": milestones,
-            "dms_step_messages": step_msgs,
-            "committed_customer_id": result.get("committed_customer_id"),
-            "committed_vehicle_id": result.get("committed_vehicle_id"),
-            "hero_dms_form22_print": result.get("hero_dms_form22_print"),
-        }
-
-    if vahan_base_url and vahan_base_url.strip():
-        vahan_result = run_fill_vahan_only(
-            vahan_base_url=vahan_base_url.strip(),
-            rto_dealer_id=rto_dealer_id or "",
-            customer_name=str((customer or {}).get("name") or ""),
-            chassis_no=str((result.get("vehicle") or {}).get("frame_num") or (vehicle or {}).get("frame_no") or ""),
-            vehicle_model=str((result.get("vehicle") or {}).get("model") or ""),
-            vehicle_colour=str((result.get("vehicle") or {}).get("color") or ""),
-            fuel_type=str((result.get("vehicle") or {}).get("fuel_type") or ""),
-            year_of_mfg=str((result.get("vehicle") or {}).get("year_of_mfg") or ""),
-            vehicle_price=_parse_vehicle_price(result.get("vehicle") or {}),
-            ocr_output_dir=ocr_output_dir,
-            subfolder=subfolder,
-            customer_id=cid_eff,
-            vehicle_id=vid_eff,
-        )
-        if vahan_result.get("error"):
-            return {
-                "vehicle": result.get("vehicle") or {},
-                "pdfs_saved": result.get("pdfs_saved") or [],
-                "application_id": None,
-                "rto_fees": None,
-                "error": vahan_result.get("error"),
-                "dms_automation_mode": dms_mode,
-                "dms_siebel_forms_filled": siebel_ok,
-                "dms_milestones": milestones,
-                "dms_step_messages": step_msgs,
-                "committed_customer_id": result.get("committed_customer_id"),
-                "committed_vehicle_id": result.get("committed_vehicle_id"),
-                "hero_dms_form22_print": result.get("hero_dms_form22_print"),
-            }
-        return {
-            "vehicle": result.get("vehicle") or {},
-            "pdfs_saved": result.get("pdfs_saved") or [],
-            "application_id": vahan_result.get("application_id"),
-            "rto_fees": vahan_result.get("rto_fees"),
-            "error": None,
             "dms_automation_mode": dms_mode,
             "dms_siebel_forms_filled": siebel_ok,
             "dms_milestones": milestones,

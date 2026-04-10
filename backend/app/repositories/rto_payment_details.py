@@ -1,43 +1,63 @@
-"""Data access for rto_queue table."""
+"""Data access for rto_queue table (redesigned schema: rto_queue_id serial PK)."""
 
 from datetime import date, datetime, timezone
 
 from app.db import get_connection
 
 SELECT_COLUMNS = """
-application_id,
-sales_id,
-customer_id,
-vehicle_id,
-dealer_id,
-name,
-mobile,
-chassis_num,
-vahan_application_id,
-register_date,
-rto_fees,
-status,
-pay_txn_id,
-operator_id,
-payment_date,
-rto_status,
-subfolder,
-processing_session_id,
-worker_id,
-leased_until,
-attempt_count,
-last_error,
-started_at,
-uploaded_at,
-finished_at,
-created_at,
-updated_at
+rq.rto_queue_id,
+rq.sales_id,
+rq.insurance_id,
+rq.customer_mobile,
+rq.rto_application_id,
+rq.rto_application_date,
+rq.rto_payment_id,
+rq.rto_payment_amount,
+rq.status,
+rq.processing_session_id,
+rq.worker_id,
+rq.leased_until,
+rq.attempt_count,
+rq.last_error,
+rq.started_at,
+rq.uploaded_at,
+rq.finished_at,
+rq.created_at,
+rq.updated_at
 """.strip()
 
+JOINED_COLUMNS = f"""
+{SELECT_COLUMNS},
+sm.customer_id,
+sm.vehicle_id,
+sm.dealer_id,
+sm.billing_date,
+cm.name AS customer_name,
+cm.mobile_number AS mobile,
+cm.care_of,
+cm.address,
+cm.city,
+cm.state,
+cm.pin,
+cm.financier,
+COALESCE(vm.chassis, vm.raw_frame_num) AS chassis_num,
+RIGHT(COALESCE(vm.engine, vm.raw_engine_num, ''), 5) AS engine_short,
+COALESCE(sm.file_location, cm.file_location) AS subfolder,
+COALESCE(dr.rto_name, 'RTO' || sm.dealer_id::text) AS dealer_rto,
+im.insurer,
+im.policy_num,
+im.policy_from,
+im.idv
+""".strip()
 
-def _make_queue_id(customer_id: int, vehicle_id: int) -> str:
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
-    return f"RQ-{stamp}-{customer_id}-{vehicle_id}"
+JOIN_CLAUSE = """
+FROM rto_queue rq
+JOIN sales_master sm ON sm.sales_id = rq.sales_id
+JOIN customer_master cm ON cm.customer_id = sm.customer_id
+JOIN vehicle_master vm ON vm.vehicle_id = sm.vehicle_id
+LEFT JOIN dealer_ref dr ON dr.dealer_id = sm.dealer_id
+LEFT JOIN insurance_master im ON im.insurance_id = rq.insurance_id
+""".strip()
 
 
 def _get_sales_id(customer_id: int, vehicle_id: int) -> int | None:
@@ -56,27 +76,14 @@ def _get_sales_id(customer_id: int, vehicle_id: int) -> int | None:
 
 
 def insert(
-    application_id: str | None,
-    customer_id: int,
-    vehicle_id: int,
-    dealer_id: int | None,
-    name: str | None,
-    mobile: str | None,
-    chassis_num: str | None,
-    register_date: date,
-    rto_fees: float,
+    sales_id: int,
+    insurance_id: int | None = None,
+    customer_mobile: str | None = None,
+    rto_application_date: date | None = None,
+    rto_payment_amount: float | None = None,
     status: str = "Queued",
-    pay_txn_id: str | None = None,
-    operator_id: str | None = None,
-    payment_date: date | None = None,
-    rto_status: str = "Pending",
-    subfolder: str | None = None,
-) -> str:
-    """Insert a queue row; returns the queue/reference id. Resolves sales_id from sales_master."""
-    sales_id = _get_sales_id(customer_id, vehicle_id)
-    if sales_id is None:
-        raise ValueError(f"No sale found for customer_id={customer_id} vehicle_id={vehicle_id}")
-    queue_id = (application_id or "").strip() or _make_queue_id(customer_id, vehicle_id)
+) -> int:
+    """Insert a queue row; returns rto_queue_id. Upserts on sales_id conflict."""
     conn = get_connection()
     try:
         with conn.cursor() as cur:
@@ -84,79 +91,54 @@ def insert(
                 """
                 INSERT INTO rto_queue
                 (
-                    application_id,
                     sales_id,
-                    customer_id,
-                    vehicle_id,
-                    dealer_id,
-                    name,
-                    mobile,
-                    chassis_num,
-                    register_date,
-                    rto_fees,
+                    insurance_id,
+                    customer_mobile,
+                    rto_application_date,
+                    rto_payment_amount,
                     status,
-                    pay_txn_id,
-                    operator_id,
-                    payment_date,
-                    rto_status,
-                    subfolder,
                     updated_at
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                VALUES (%s, %s, %s, %s, %s, %s, NOW())
                 ON CONFLICT (sales_id) DO UPDATE SET
-                  application_id = EXCLUDED.application_id,
-                  dealer_id = EXCLUDED.dealer_id,
-                  name = EXCLUDED.name,
-                  mobile = EXCLUDED.mobile,
-                  chassis_num = EXCLUDED.chassis_num,
-                  register_date = EXCLUDED.register_date,
-                  rto_fees = EXCLUDED.rto_fees,
+                  insurance_id = COALESCE(EXCLUDED.insurance_id, rto_queue.insurance_id),
+                  customer_mobile = COALESCE(EXCLUDED.customer_mobile, rto_queue.customer_mobile),
+                  rto_application_date = COALESCE(EXCLUDED.rto_application_date, rto_queue.rto_application_date),
+                  rto_payment_amount = COALESCE(EXCLUDED.rto_payment_amount, rto_queue.rto_payment_amount),
                   status = EXCLUDED.status,
-                  rto_status = EXCLUDED.rto_status,
-                  subfolder = COALESCE(EXCLUDED.subfolder, rto_queue.subfolder),
                   last_error = NULL,
                   leased_until = NULL,
                   processing_session_id = NULL,
                   worker_id = NULL,
                   updated_at = NOW()
-                RETURNING application_id
+                RETURNING rto_queue_id
                 """,
                 (
-                    queue_id,
                     sales_id,
-                    customer_id,
-                    vehicle_id,
-                    dealer_id,
-                    (name or "").strip() or None,
-                    (mobile or "").strip() or None,
-                    (chassis_num or "").strip() or None,
-                    register_date,
-                    rto_fees,
+                    insurance_id,
+                    (customer_mobile or "").strip() or None,
+                    rto_application_date,
+                    rto_payment_amount,
                     (status or "Queued").strip(),
-                    (pay_txn_id or "").strip() or None,
-                    (operator_id or "").strip() or None,
-                    payment_date,
-                    (rto_status or "Pending").strip(),
-                    (subfolder or "").strip() or None,
                 ),
             )
             row = cur.fetchone()
             conn.commit()
-            return row["application_id"]
+            return row["rto_queue_id"]
     finally:
         conn.close()
 
 
 def get_by_customer_vehicle(customer_id: int, vehicle_id: int) -> dict | None:
-    """Get one row by (customer_id, vehicle_id)."""
+    """Get one row by (customer_id, vehicle_id) via sales_master join."""
     conn = get_connection()
     try:
         with conn.cursor() as cur:
             cur.execute(
                 f"""
-                SELECT {SELECT_COLUMNS}
-                FROM rto_queue
-                WHERE customer_id = %s AND vehicle_id = %s
+                SELECT {JOINED_COLUMNS}
+                {JOIN_CLAUSE}
+                WHERE sm.customer_id = %s AND sm.vehicle_id = %s
                 """,
                 (customer_id, vehicle_id),
             )
@@ -166,18 +148,37 @@ def get_by_customer_vehicle(customer_id: int, vehicle_id: int) -> dict | None:
         conn.close()
 
 
-def get_by_application_id(application_id: str) -> dict | None:
-    """Get one row by queue/application id."""
+def get_by_queue_id(rto_queue_id: int) -> dict | None:
+    """Get one row by rto_queue_id."""
     conn = get_connection()
     try:
         with conn.cursor() as cur:
             cur.execute(
                 f"""
-                SELECT {SELECT_COLUMNS}
-                FROM rto_queue
-                WHERE application_id = %s
+                SELECT {JOINED_COLUMNS}
+                {JOIN_CLAUSE}
+                WHERE rq.rto_queue_id = %s
                 """,
-                ((application_id or "").strip(),),
+                (rto_queue_id,),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def get_by_sales_id(sales_id: int) -> dict | None:
+    """Get one row by sales_id."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT {JOINED_COLUMNS}
+                {JOIN_CLAUSE}
+                WHERE rq.sales_id = %s
+                """,
+                (sales_id,),
             )
             row = cur.fetchone()
             return dict(row) if row else None
@@ -186,9 +187,9 @@ def get_by_application_id(application_id: str) -> dict | None:
 
 
 def update_payment(
-    application_id: str,
-    pay_txn_id: str,
-    payment_date: date,
+    rto_queue_id: int,
+    rto_payment_id: str,
+    rto_payment_amount: float | None = None,
     status: str = "Paid",
 ) -> bool:
     """Update payment fields after Pay completes."""
@@ -198,14 +199,18 @@ def update_payment(
             cur.execute(
                 """
                 UPDATE rto_queue
-                SET pay_txn_id = %s,
-                    payment_date = %s,
+                SET rto_payment_id = %s,
+                    rto_payment_amount = COALESCE(%s, rto_payment_amount),
                     status = %s,
-                    rto_status = 'Paid',
                     updated_at = NOW()
-                WHERE application_id = %s
+                WHERE rto_queue_id = %s
                 """,
-                ((pay_txn_id or "").strip(), payment_date, (status or "Paid").strip(), (application_id or "").strip()),
+                (
+                    (rto_payment_id or "").strip(),
+                    rto_payment_amount,
+                    (status or "Paid").strip(),
+                    rto_queue_id,
+                ),
             )
             conn.commit()
             return cur.rowcount > 0
@@ -217,7 +222,6 @@ def claim_oldest_batch(
     dealer_id: int,
     processing_session_id: str,
     worker_id: str,
-    operator_id: str | None,
     *,
     limit: int = 7,
     lease_seconds: int = 1800,
@@ -230,58 +234,61 @@ def claim_oldest_batch(
                 """
                 UPDATE rto_queue
                 SET status = 'Pending',
-                    rto_status = 'Pending',
                     leased_until = NULL,
                     processing_session_id = NULL,
                     worker_id = NULL,
                     last_error = COALESCE(last_error, 'Session expired or lease timed out'),
                     updated_at = NOW()
-                WHERE dealer_id = %s
-                  AND status = 'In Progress'
-                  AND leased_until IS NOT NULL
-                  AND leased_until < NOW()
+                WHERE rto_queue_id IN (
+                    SELECT rq.rto_queue_id
+                    FROM rto_queue rq
+                    JOIN sales_master sm ON sm.sales_id = rq.sales_id
+                    WHERE sm.dealer_id = %s
+                      AND rq.status = 'In Progress'
+                      AND rq.leased_until IS NOT NULL
+                      AND rq.leased_until < NOW()
+                )
                 """,
                 (dealer_id,),
             )
             cur.execute(
                 """
                 WITH candidates AS (
-                    SELECT application_id
-                    FROM rto_queue
-                    WHERE dealer_id = %s
-                      AND status IN ('Queued', 'Pending')
-                      AND COALESCE(NULLIF(BTRIM(pay_txn_id), ''), NULL) IS NULL
-                      AND payment_date IS NULL
-                      AND (leased_until IS NULL OR leased_until < NOW())
-                    ORDER BY created_at ASC
+                    SELECT rq.rto_queue_id
+                    FROM rto_queue rq
+                    JOIN sales_master sm ON sm.sales_id = rq.sales_id
+                    WHERE sm.dealer_id = %s
+                      AND rq.status IN ('Queued', 'Pending')
+                      AND rq.rto_payment_id IS NULL
+                      AND (rq.leased_until IS NULL OR rq.leased_until < NOW())
+                    ORDER BY rq.created_at ASC
                     LIMIT %s
-                    FOR UPDATE SKIP LOCKED
+                    FOR UPDATE OF rq SKIP LOCKED
                 )
                 UPDATE rto_queue q
                 SET processing_session_id = %s,
                     worker_id = %s,
-                    operator_id = COALESCE(%s, q.operator_id),
                     leased_until = NOW() + make_interval(secs => %s),
                     attempt_count = COALESCE(q.attempt_count, 0) + 1,
                     last_error = NULL,
                     updated_at = NOW()
                 FROM candidates
-                WHERE q.application_id = candidates.application_id
-                RETURNING q.application_id
+                WHERE q.rto_queue_id = candidates.rto_queue_id
+                RETURNING q.rto_queue_id
                 """,
-                (dealer_id, limit, processing_session_id, worker_id, (operator_id or "").strip() or None, lease_seconds),
+                (dealer_id, limit, processing_session_id, worker_id, lease_seconds),
             )
-            claimed_ids = [row["application_id"] for row in cur.fetchall()]
+            claimed_ids = [row["rto_queue_id"] for row in cur.fetchall()]
             if not claimed_ids:
                 conn.commit()
                 return []
             cur.execute(
                 f"""
-                SELECT {SELECT_COLUMNS}
-                FROM rto_queue
-                WHERE processing_session_id = %s
-                  AND application_id = ANY(%s)
-                ORDER BY created_at ASC
+                SELECT {JOINED_COLUMNS}
+                {JOIN_CLAUSE}
+                WHERE rq.processing_session_id = %s
+                  AND rq.rto_queue_id = ANY(%s)
+                ORDER BY rq.created_at ASC
                 """,
                 (processing_session_id, claimed_ids),
             )
@@ -292,7 +299,7 @@ def claim_oldest_batch(
         conn.close()
 
 
-def mark_batch_row_in_progress(queue_id: str, processing_session_id: str, worker_id: str) -> None:
+def mark_batch_row_in_progress(rto_queue_id: int, processing_session_id: str, worker_id: str) -> None:
     conn = get_connection()
     try:
         with conn.cursor() as cur:
@@ -300,29 +307,28 @@ def mark_batch_row_in_progress(queue_id: str, processing_session_id: str, worker
                 """
                 UPDATE rto_queue
                 SET status = 'In Progress',
-                    rto_status = 'Processing',
                     started_at = COALESCE(started_at, NOW()),
                     leased_until = NOW() + make_interval(secs => 1800),
                     processing_session_id = %s,
                     worker_id = %s,
                     updated_at = NOW()
-                WHERE application_id = %s
+                WHERE rto_queue_id = %s
                 """,
-                (processing_session_id, worker_id, (queue_id or "").strip()),
+                (processing_session_id, worker_id, rto_queue_id),
             )
             conn.commit()
     finally:
         conn.close()
 
 
-def mark_batch_row_cart_added(
-    queue_id: str,
+def mark_batch_row_completed(
+    rto_queue_id: int,
     sales_id: int,
     processing_session_id: str,
     worker_id: str,
     *,
-    vahan_application_id: str | None,
-    rto_fees: float | None,
+    rto_application_id: str | None,
+    rto_payment_amount: float | None,
 ) -> None:
     conn = get_connection()
     try:
@@ -330,10 +336,9 @@ def mark_batch_row_cart_added(
             cur.execute(
                 """
                 UPDATE rto_queue
-                SET status = 'Added To Cart',
-                    rto_status = 'Files Uploaded',
-                    vahan_application_id = %s,
-                    rto_fees = %s,
+                SET status = 'Completed',
+                    rto_application_id = %s,
+                    rto_payment_amount = %s,
                     uploaded_at = NOW(),
                     finished_at = NOW(),
                     leased_until = NULL,
@@ -341,9 +346,9 @@ def mark_batch_row_cart_added(
                     worker_id = %s,
                     last_error = NULL,
                     updated_at = NOW()
-                WHERE application_id = %s
+                WHERE rto_queue_id = %s
                 """,
-                (vahan_application_id, rto_fees, processing_session_id, worker_id, (queue_id or "").strip()),
+                (rto_application_id, rto_payment_amount, processing_session_id, worker_id, rto_queue_id),
             )
             cur.execute(
                 """
@@ -352,14 +357,14 @@ def mark_batch_row_cart_added(
                     rto_charges = %s
                 WHERE sales_id = %s
                 """,
-                (vahan_application_id, rto_fees, sales_id),
+                (rto_application_id, rto_payment_amount, sales_id),
             )
             conn.commit()
     finally:
         conn.close()
 
 
-def mark_batch_row_failed(queue_id: str, processing_session_id: str, worker_id: str, error_message: str) -> None:
+def mark_batch_row_failed(rto_queue_id: int, processing_session_id: str, worker_id: str, error_message: str) -> None:
     conn = get_connection()
     try:
         with conn.cursor() as cur:
@@ -367,16 +372,15 @@ def mark_batch_row_failed(queue_id: str, processing_session_id: str, worker_id: 
                 """
                 UPDATE rto_queue
                 SET status = 'Failed',
-                    rto_status = 'Failed',
                     finished_at = NOW(),
                     leased_until = NULL,
                     processing_session_id = %s,
                     worker_id = %s,
                     last_error = %s,
                     updated_at = NOW()
-                WHERE application_id = %s
+                WHERE rto_queue_id = %s
                 """,
-                (processing_session_id, worker_id, (error_message or "").strip()[:4000], (queue_id or "").strip()),
+                (processing_session_id, worker_id, (error_message or "").strip()[:4000], rto_queue_id),
             )
             conn.commit()
     finally:
@@ -384,7 +388,7 @@ def mark_batch_row_failed(queue_id: str, processing_session_id: str, worker_id: 
 
 
 def mark_batch_row_pending(
-    queue_id: str,
+    rto_queue_id: int,
     processing_session_id: str,
     worker_id: str,
     error_message: str | None = None,
@@ -397,15 +401,14 @@ def mark_batch_row_pending(
                 """
                 UPDATE rto_queue
                 SET status = 'Pending',
-                    rto_status = 'Pending',
                     leased_until = NULL,
                     processing_session_id = NULL,
                     worker_id = NULL,
                     last_error = %s,
                     updated_at = NOW()
-                WHERE application_id = %s
+                WHERE rto_queue_id = %s
                 """,
-                (((error_message or "").strip() or None), (queue_id or "").strip()),
+                (((error_message or "").strip() or None), rto_queue_id),
             )
             conn.commit()
     finally:
@@ -421,7 +424,6 @@ def release_batch_claims(processing_session_id: str) -> int:
                 """
                 UPDATE rto_queue
                 SET status = CASE WHEN status = 'In Progress' THEN 'Pending' ELSE status END,
-                    rto_status = CASE WHEN status = 'In Progress' THEN 'Pending' ELSE rto_status END,
                     processing_session_id = NULL,
                     worker_id = NULL,
                     leased_until = NULL,
@@ -437,7 +439,7 @@ def release_batch_claims(processing_session_id: str) -> int:
         conn.close()
 
 
-def retry_failed_row(application_id: str) -> bool:
+def retry_failed_row(rto_queue_id: int) -> bool:
     """Set one failed queue row back to Queued for operator retry."""
     conn = get_connection()
     try:
@@ -446,7 +448,6 @@ def retry_failed_row(application_id: str) -> bool:
                 """
                 UPDATE rto_queue
                 SET status = 'Queued',
-                    rto_status = 'Pending',
                     leased_until = NULL,
                     processing_session_id = NULL,
                     worker_id = NULL,
@@ -454,10 +455,10 @@ def retry_failed_row(application_id: str) -> bool:
                     started_at = NULL,
                     finished_at = NULL,
                     updated_at = NOW()
-                WHERE application_id = %s
+                WHERE rto_queue_id = %s
                   AND status = 'Failed'
                 """,
-                ((application_id or "").strip(),),
+                (rto_queue_id,),
             )
             conn.commit()
             return cur.rowcount > 0
@@ -466,26 +467,26 @@ def retry_failed_row(application_id: str) -> bool:
 
 
 def list_all(dealer_id: int | None = None) -> list[dict]:
-    """Return rows for RTO Queue, newest first. Filter by dealer_id when provided."""
+    """Return rows for RTO Queue, newest first. Filter by dealer_id via sales_master join."""
     conn = get_connection()
     try:
         with conn.cursor() as cur:
             if dealer_id is not None:
                 cur.execute(
                     f"""
-                    SELECT {SELECT_COLUMNS}
-                    FROM rto_queue
-                    WHERE dealer_id = %s
-                    ORDER BY created_at DESC
+                    SELECT {JOINED_COLUMNS}
+                    {JOIN_CLAUSE}
+                    WHERE sm.dealer_id = %s
+                    ORDER BY rq.created_at DESC
                     """,
                     (dealer_id,),
                 )
             else:
                 cur.execute(
                     f"""
-                    SELECT {SELECT_COLUMNS}
-                    FROM rto_queue
-                    ORDER BY created_at DESC
+                    SELECT {JOINED_COLUMNS}
+                    {JOIN_CLAUSE}
+                    ORDER BY rq.created_at DESC
                     """
                 )
             return [dict(r) for r in cur.fetchall()]

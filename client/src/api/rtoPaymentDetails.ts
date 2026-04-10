@@ -2,41 +2,32 @@ import { apiFetch } from "./client";
 import { DEALER_ID } from "./dealerId";
 
 export interface RtoPaymentInsertPayload {
-  application_id?: string | null;
-  customer_id: number;
-  vehicle_id: number;
-  dealer_id?: number | null;
-  name?: string | null;
-  mobile?: string | null;
-  chassis_num?: string | null;
-  register_date: string; // dd-mm-yyyy
-  rto_fees: number;
+  sales_id?: number | null;
+  customer_id?: number | null;
+  vehicle_id?: number | null;
+  insurance_id?: number | null;
+  customer_mobile?: string | null;
+  rto_application_date?: string | null;
+  rto_payment_amount?: number | null;
   status?: string;
-  pay_txn_id?: string | null;
-  operator_id?: string | null;
-  payment_date?: string | null;
-  rto_status?: string;
-  subfolder?: string | null;
 }
 
 export interface RtoPaymentRow {
-  queue_id: string;
-  application_id: string;
-  vahan_application_id?: string | null;
-  sales_id?: number;
-  customer_id: number;
-  vehicle_id: number;
-  dealer_id: number | null;
-  name: string | null;
-  mobile: string | null;
-  chassis_num: string | null;
-  register_date: string;
-  rto_fees: number;
+  rto_queue_id: number;
+  sales_id: number;
+  insurance_id?: number | null;
+  customer_mobile?: string | null;
+  rto_application_id?: string | null;
+  rto_application_date?: string | null;
+  rto_payment_id?: string | null;
+  rto_payment_amount?: number | null;
   status: string;
-  pay_txn_id: string | null;
-  operator_id: string | null;
-  payment_date: string | null;
-  rto_status: string;
+  customer_id?: number;
+  vehicle_id?: number;
+  dealer_id?: number | null;
+  customer_name?: string | null;
+  mobile?: string | null;
+  chassis_num?: string | null;
   subfolder?: string | null;
   created_at?: string;
   leased_until?: string | null;
@@ -51,11 +42,11 @@ export interface RtoPaymentRow {
 }
 
 export interface RtoBatchRowResult {
-  queue_id: string | null;
+  rto_queue_id: number | null;
   customer_name: string | null;
   status: string;
-  vahan_application_id?: string | null;
-  rto_fees?: number | null;
+  rto_application_id?: string | null;
+  rto_payment_amount?: number | null;
   error?: string | null;
 }
 
@@ -66,19 +57,18 @@ export interface RtoBatchStatus {
   message: string;
   started_at: string | null;
   completed_at: string | null;
-  current_queue_id: string | null;
+  current_rto_queue_id: number | null;
   current_customer_name: string | null;
-  current_vahan_application_id: string | null;
   total_count: number;
   processed_count: number;
-  cart_count: number;
+  completed_count: number;
   failed_count: number;
   last_error: string | null;
   rows: RtoBatchRowResult[];
 }
 
-export async function insertRtoPayment(payload: RtoPaymentInsertPayload): Promise<{ queue_id: string; application_id: string; ok: boolean }> {
-  return apiFetch<{ queue_id: string; application_id: string; ok: boolean }>("/rto-queue", {
+export async function insertRtoPayment(payload: RtoPaymentInsertPayload): Promise<{ rto_queue_id: number; ok: boolean }> {
+  return apiFetch<{ rto_queue_id: number; ok: boolean }>("/rto-queue", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -92,9 +82,7 @@ export async function listRtoPayments(dealerId?: number): Promise<RtoPaymentRow[
 
 export async function startRtoBatch(payload?: {
   dealer_id?: number;
-  operator_id?: string | null;
   limit?: number;
-  vahan_base_url?: string | null;
 }): Promise<{ started: boolean; session_id: string; message: string }> {
   return apiFetch<{ started: boolean; session_id: string; message: string }>("/rto-queue/process-batch", {
     method: "POST",
@@ -116,30 +104,9 @@ export async function getRtoPaymentBySale(customerId: number, vehicleId: number)
   return res;
 }
 
-/**
- * URL to Vahan search/payment page for a given application_id.
- * @param vahanBaseUrl Absolute base from GET /settings/site-urls (`vahan_base_url`); no client-side fallbacks.
- */
-export function getVahanPayUrl(applicationId: string, vahanBaseUrl: string): string {
-  const base = vahanBaseUrl.replace(/\/$/, "");
-  return `${base}/search.html?application_id=${encodeURIComponent(applicationId)}`;
-}
-
-/** Pay uses VAHAN_BASE_URL from the server only (request body omitted). */
-export async function payRtoPayment(applicationId: string): Promise<{ ok: boolean; pay_txn_id?: string; status?: string }> {
-  return apiFetch<{ ok: boolean; pay_txn_id?: string; status?: string }>(
-    `/rto-queue/${encodeURIComponent(applicationId)}/pay`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
-    }
-  );
-}
-
-export async function retryRtoQueueRow(applicationId: string): Promise<{ ok: boolean; application_id: string; status: string }> {
-  return apiFetch<{ ok: boolean; application_id: string; status: string }>(
-    `/rto-queue/${encodeURIComponent(applicationId)}/retry`,
+export async function retryRtoQueueRow(rtoQueueId: number): Promise<{ ok: boolean; rto_queue_id: number; status: string }> {
+  return apiFetch<{ ok: boolean; rto_queue_id: number; status: string }>(
+    `/rto-queue/${encodeURIComponent(rtoQueueId)}/retry`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
