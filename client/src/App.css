@@ -1601,46 +1601,49 @@
   min-height: 0;
 }
 
-.view-vehicles-hint {
-  margin: 0;
-  font-size: 13px;
-  color: #3a4a5a;
-  line-height: 1.45;
-}
-
 .view-vehicles-search {
   display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 8px 16px;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 12px 16px;
   padding: 10px 12px;
   background: #f4f8fc;
   border: 1px solid #c5d9ed;
   border-radius: 8px;
+  min-width: 0;
 }
 
-.view-vehicles-search-row {
+.view-vehicles-search-field {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 0;
+  min-width: 0;
 }
 
-.view-vehicles-search-row label {
+.view-vehicles-search-field label {
+  flex-shrink: 0;
+  white-space: nowrap;
   font-size: 12px;
   font-weight: 600;
   color: #1e5a9e;
 }
 
-.view-vehicles-search-row input {
+.view-vehicles-search-field input {
+  flex: 1 1 auto;
+  min-width: 140px;
   padding: 6px 10px;
   font-size: 14px;
   border: 1px solid #c5d9ed;
   border-radius: 6px;
-  min-width: 200px;
 }
 
 .view-vehicles-search-btn {
   flex-shrink: 0;
+  align-self: center;
 }
 
 .view-vehicles-error {
@@ -1676,6 +1679,11 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.view-vehicles-match .view-vehicles-section:not(:first-of-type) {
+  border-top: 1px solid #c5d9ed;
+  padding-top: 14px;
 }
 
 .view-vehicles-section-title {

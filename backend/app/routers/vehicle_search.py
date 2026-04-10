@@ -225,12 +225,16 @@ def _json_safe_row(row: dict) -> dict:
     return out
 
 
-def _billing_ts(val) -> str | None:
+def _billing_date_ddmmyyyy(val) -> str | None:
+    """Format `sales_master.billing_date` for API as dd/mm/yyyy (calendar date only)."""
     if val is None:
         return None
     if isinstance(val, datetime):
-        return val.strftime("%d-%m-%Y %H:%M:%S")
-    return str(val)
+        return val.strftime("%d/%m/%Y")
+    if isinstance(val, date):
+        return val.strftime("%d/%m/%Y")
+    s = str(val).strip()
+    return s if s else None
 
 
 def _vm_chassis_expr() -> str:
@@ -250,46 +254,6 @@ def _synthetic_vehicle_master_from_vim(vim: dict) -> dict:
         "colour": vim.get("color"),
         "_match_note": "No vehicle_master row found; matched from yard inventory or staging only.",
     }
-
-
-def _fetch_staging_lines(
-    cur,
-    chassis_pat: str,
-    engine_pat: str,
-    inventory_line_ids: list[int],
-) -> list[dict]:
-    or_parts: list[str] = []
-    stg_params: list = []
-    if chassis_pat and engine_pat:
-        or_parts.append("(COALESCE(d.raw_chassis, '') ILIKE %s AND COALESCE(d.raw_engine, '') ILIKE %s)")
-        stg_params.extend([chassis_pat, engine_pat])
-    elif chassis_pat:
-        or_parts.append("COALESCE(d.raw_chassis, '') ILIKE %s")
-        stg_params.append(chassis_pat)
-    elif engine_pat:
-        or_parts.append("COALESCE(d.raw_engine, '') ILIKE %s")
-        stg_params.append(engine_pat)
-    if inventory_line_ids:
-        or_parts.append("d.inventory_line_id = ANY(%s)")
-        stg_params.append(inventory_line_ids)
-    if not or_parts:
-        return []
-    stg_where = f"({' OR '.join(or_parts)})"
-    cur.execute(
-        f"""
-        SELECT d.challan_detail_staging_id, d.challan_batch_id, d.raw_chassis, d.raw_engine,
-               d.status, d.inventory_line_id, d.last_error, d.created_at,
-               s.challan_book_num, s.challan_date, s.from_dealer_id, s.to_dealer_id, s.invoice_status,
-               s.num_vehicles
-        FROM challan_details_staging d
-        INNER JOIN challan_master_staging s ON s.challan_batch_id = d.challan_batch_id
-        WHERE {stg_where}
-        ORDER BY d.created_at DESC NULLS LAST
-        LIMIT 200
-        """,
-        stg_params,
-    )
-    return [_json_safe_row(dict(r)) for r in cur.fetchall()]
 
 
 def _inventory_sql_filters(
@@ -322,23 +286,72 @@ def _fetch_match_bundle(
     chassis_pat: str,
     engine_pat: str,
 ) -> dict:
-    """Sales, inventory, committed challans, staging lines for one vehicle_master row (no dealer filter)."""
+    """Sales, inventory (all dealers), committed challans for one vehicle_master row."""
     sales_row = None
-    cur.execute(
-        """
-        SELECT sm.*
-        FROM sales_master sm
-        WHERE sm.vehicle_id = %s
-        ORDER BY sm.billing_date DESC NULLS LAST
-        LIMIT 1
-        """,
-        (vm["vehicle_id"],),
-    )
-    sm_row = cur.fetchone()
-    if sm_row:
-        smd = dict(sm_row)
-        smd["billing_date"] = _billing_ts(smd.get("billing_date"))
-        sales_row = _json_safe_row(smd)
+    raw_vid = vm.get("vehicle_id")
+    try:
+        vid_i = int(raw_vid) if raw_vid is not None else None
+    except (TypeError, ValueError):
+        vid_i = None
+    if vid_i is not None:
+        # Avoid ``SELECT sm.*`` with JOINs: duplicate column names (e.g. customer_id / dealer_id)
+        # collapse in RealDictCursor so joined enrichments were lost. Use explicit ``sm`` columns
+        # and scalar subqueries; dealer_name also falls back to yard inventory when ``sm.dealer_id`` is null.
+        cur.execute(
+            """
+            SELECT
+                sm.sales_id,
+                sm.customer_id,
+                sm.vehicle_id,
+                sm.billing_date,
+                sm.dealer_id,
+                sm.vahan_application_id,
+                sm.rto_charges,
+                sm.file_location,
+                sm.order_number,
+                sm.invoice_number,
+                sm.enquiry_number,
+                (SELECT cm.name FROM customer_master cm WHERE cm.customer_id = sm.customer_id LIMIT 1)
+                    AS customer_name,
+                (
+                    SELECT dr.dealer_name FROM dealer_ref dr
+                    WHERE dr.dealer_id = COALESCE(
+                        sm.dealer_id,
+                        (
+                            SELECT vim.dealer_id FROM vehicle_inventory_master vim
+                            WHERE TRIM(UPPER(COALESCE(vim.chassis_no, ''))) = (
+                                SELECT TRIM(UPPER(COALESCE(
+                                    NULLIF(BTRIM(vmc.chassis), ''),
+                                    NULLIF(BTRIM(vmc.raw_frame_num), '')
+                                )))
+                                FROM vehicle_master vmc WHERE vmc.vehicle_id = sm.vehicle_id
+                            )
+                            ORDER BY vim.inventory_line_id DESC
+                            LIMIT 1
+                        )
+                    )
+                    LIMIT 1
+                ) AS dealer_name,
+                (SELECT cm.address FROM customer_master cm WHERE cm.customer_id = sm.customer_id LIMIT 1)
+                    AS customer_address,
+                (SELECT cm.mobile_number FROM customer_master cm WHERE cm.customer_id = sm.customer_id LIMIT 1)
+                    AS customer_mobile,
+                (SELECT cm.alt_phone_num FROM customer_master cm WHERE cm.customer_id = sm.customer_id LIMIT 1)
+                    AS alt_phone_num,
+                (SELECT cm.financier FROM customer_master cm WHERE cm.customer_id = sm.customer_id LIMIT 1)
+                    AS financier_name
+            FROM sales_master sm
+            WHERE sm.vehicle_id = %s
+            ORDER BY sm.billing_date DESC NULLS LAST
+            LIMIT 1
+            """,
+            (vid_i,),
+        )
+        sm_row = cur.fetchone()
+        if sm_row:
+            smd = dict(sm_row)
+            smd["billing_date"] = _billing_date_ddmmyyyy(smd.get("billing_date"))
+            sales_row = _json_safe_row(smd)
 
     vc = (vm.get("chassis") or "").strip()
     ve = (vm.get("engine") or "").strip()
@@ -392,15 +405,11 @@ def _fetch_match_bundle(
     )
     challans = [_json_safe_row(dict(r)) for r in cur.fetchall()]
 
-    inv_ids = [r["inventory_line_id"] for r in inventory_rows if r.get("inventory_line_id") is not None]
-    staging = _fetch_staging_lines(cur, chassis_pat, engine_pat, inv_ids)
-
     return {
         "vehicle_master": _json_safe_row(vm),
         "vehicle_inventory": inventory_rows,
         "sales_master": sales_row,
         "challans": challans,
-        "challan_details_staging": staging,
     }
 
 
@@ -411,8 +420,8 @@ def search_vehicles(
     dealer_id: int | None = Query(None, description="Ignored; matching uses chassis/engine only."),
 ) -> dict:
     """
-    Match **vehicle_master**, yard inventory, challans, and staging by **chassis** and **engine** patterns only
-    (no dealer filter).
+    Match **vehicle_master**, yard inventory, and challans by **chassis** and **engine** patterns only
+    (no dealer filter; internal fallback may use challan staging to discover inventory rows).
     """
     del dealer_id  # optional query param kept for backward compatibility
 
@@ -497,8 +506,6 @@ def search_vehicles(
                     matches = []
                     for vim in vim_list:
                         vim_safe = _json_safe_row(vim)
-                        inv_ids = [vim_safe["inventory_line_id"]] if vim_safe.get("inventory_line_id") else []
-                        staging = _fetch_staging_lines(cur, chassis_pat, engine_pat, inv_ids)
                         cw, cp = _inventory_sql_filters(
                             (vim.get("chassis_no") or "").strip(),
                             (vim.get("engine_no") or "").strip(),
@@ -535,7 +542,6 @@ def search_vehicles(
                                 "vehicle_inventory": [vim_safe],
                                 "sales_master": None,
                                 "challans": challans,
-                                "challan_details_staging": staging,
                             }
                         )
                     return {"found": True, "matches": matches}
@@ -544,7 +550,7 @@ def search_vehicles(
             return {
                 "found": False,
                 "matches": [],
-                "message": "No match for these chassis/engine patterns in vehicle master, yard, or challan staging.",
+                "message": "No match for these chassis/engine patterns in vehicle master or yard inventory.",
             }
 
         matches: list[dict] = []

@@ -6,8 +6,103 @@ interface ViewVehiclesPageProps {
   dealerId?: number;
 }
 
+/** vehicle_master API keys in display order (left → right, then wrap). */
+const VEHICLE_MASTER_FIELDS: { key: string; label: string }[] = [
+  { key: "chassis", label: "CHASSIS" },
+  { key: "engine", label: "Engine" },
+  { key: "battery", label: "Battery" },
+  { key: "key_num", label: "Key" },
+  { key: "model", label: "Model" },
+  { key: "colour", label: "Colour" },
+  { key: "year_of_mfg", label: "YEAR OF MFG" },
+  { key: "place_of_registeration", label: "Place of registration" },
+  { key: "plate_num", label: "Plate Number" },
+];
+
+const SALES_MASTER_FIELDS: { key: string; label: string }[] = [
+  { key: "order_number", label: "Order" },
+  { key: "dealer_name", label: "Dealer Name" },
+  { key: "billing_date", label: "Billing Date" },
+  { key: "invoice_number", label: "Invoice Number" },
+  { key: "customer_name", label: "Customer Name" },
+  { key: "customer_address", label: "Customer Address" },
+  { key: "customer_mobile", label: "Customer Mobile" },
+  { key: "alt_phone_num", label: "Alt phone num" },
+  { key: "financier_name", label: "Financier name" },
+];
+
 function formatKeyLabel(key: string): string {
   return key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function vehicleMasterValue(
+  data: Record<string, string | number | null | undefined>,
+  key: string
+): string {
+  const direct = data[key];
+  if (direct != null && String(direct).trim() !== "") return String(direct);
+  if (key === "chassis" && data.chassis_no != null && String(data.chassis_no).trim() !== "") {
+    return String(data.chassis_no);
+  }
+  if (key === "engine" && data.engine_no != null && String(data.engine_no).trim() !== "") {
+    return String(data.engine_no);
+  }
+  if (key === "key_num" && data.raw_key_num != null && String(data.raw_key_num).trim() !== "") {
+    return String(data.raw_key_num);
+  }
+  return "—";
+}
+
+function VehicleMasterFieldGrid({
+  data,
+  idPrefix,
+}: {
+  data: Record<string, string | number | null | undefined>;
+  idPrefix: string;
+}) {
+  return (
+    <div className="view-vehicles-kv-grid view-vehicles-kv-grid--ordered">
+      {VEHICLE_MASTER_FIELDS.map(({ key, label }) => (
+        <div key={key} className="view-vehicles-kv-item">
+          <span className="view-vehicles-kv-label" id={`${idPrefix}-${key}-l`}>
+            {label}
+          </span>
+          <span className="view-vehicles-kv-value" aria-labelledby={`${idPrefix}-${key}-l`}>
+            {vehicleMasterValue(data, key)}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function salesMasterValue(data: Record<string, string | number | null | undefined>, key: string): string {
+  const v = data[key];
+  if (v != null && String(v).trim() !== "") return String(v);
+  return "—";
+}
+
+function SalesFieldGrid({
+  data,
+  idPrefix,
+}: {
+  data: Record<string, string | number | null | undefined>;
+  idPrefix: string;
+}) {
+  return (
+    <div className="view-vehicles-kv-grid view-vehicles-kv-grid--ordered">
+      {SALES_MASTER_FIELDS.map(({ key, label }) => (
+        <div key={key} className="view-vehicles-kv-item">
+          <span className="view-vehicles-kv-label" id={`${idPrefix}-${key}-l`}>
+            {label}
+          </span>
+          <span className="view-vehicles-kv-value" aria-labelledby={`${idPrefix}-${key}-l`}>
+            {salesMasterValue(data, key)}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function KeyValueGrid({ data, idPrefix }: { data: Record<string, string | number | null>; idPrefix: string }) {
@@ -31,41 +126,12 @@ function KeyValueGrid({ data, idPrefix }: { data: Record<string, string | number
 function MatchBlock({ m, index }: { m: VehicleSearchMatch; index: number }) {
   const idPrefix = `vv-${index}`;
   return (
-    <article className="view-vehicles-match" aria-labelledby={`${idPrefix}-title`}>
-      <h3 className="view-vehicles-match-title" id={`${idPrefix}-title`}>
-        Match {index + 1}
-        {m.vehicle_master.vehicle_id != null
-          ? ` — vehicle_id ${m.vehicle_master.vehicle_id}`
-          : m.vehicle_inventory[0]?.inventory_line_id != null
-            ? ` — inventory #${m.vehicle_inventory[0].inventory_line_id}`
-            : ""}
-      </h3>
-
+    <article className="view-vehicles-match">
       <section className="view-vehicles-section" aria-labelledby={`${idPrefix}-vm`}>
         <h4 className="view-vehicles-section-title" id={`${idPrefix}-vm`}>
           Vehicle Master
         </h4>
-        <KeyValueGrid data={m.vehicle_master} idPrefix={`${idPrefix}-vm`} />
-      </section>
-
-      <section className="view-vehicles-section" aria-labelledby={`${idPrefix}-vim`}>
-        <h4 className="view-vehicles-section-title" id={`${idPrefix}-vim`}>
-          Vehicle inventory
-        </h4>
-        {m.vehicle_inventory.length === 0 ? (
-          <p className="view-vehicles-empty">
-            No inventory lines for this dealer matching this vehicle&apos;s chassis / engine.
-          </p>
-        ) : (
-          m.vehicle_inventory.map((row, ri) => (
-            <div key={row.inventory_line_id ?? ri} className="view-vehicles-inventory-block">
-              <p className="view-vehicles-inventory-line-id">
-                Inventory line {row.inventory_line_id != null ? `#${row.inventory_line_id}` : ri + 1}
-              </p>
-              <KeyValueGrid data={row} idPrefix={`${idPrefix}-vim-${ri}`} />
-            </div>
-          ))
-        )}
+        <VehicleMasterFieldGrid data={m.vehicle_master} idPrefix={`${idPrefix}-vm`} />
       </section>
 
       <section className="view-vehicles-section" aria-labelledby={`${idPrefix}-sm`}>
@@ -73,18 +139,39 @@ function MatchBlock({ m, index }: { m: VehicleSearchMatch; index: number }) {
           Sales Master
         </h4>
         {m.sales_master ? (
-          <KeyValueGrid data={m.sales_master} idPrefix={`${idPrefix}-sm`} />
+          <SalesFieldGrid data={m.sales_master} idPrefix={`${idPrefix}-sm`} />
         ) : (
-          <p className="view-vehicles-empty">No sales row for this vehicle in this OEM scope.</p>
+          <p className="view-vehicles-empty">No sales row for this vehicle.</p>
+        )}
+      </section>
+
+      <section className="view-vehicles-section" aria-labelledby={`${idPrefix}-vim`}>
+        <h4 className="view-vehicles-section-title" id={`${idPrefix}-vim`}>
+          Vehicle Inventory
+        </h4>
+        {m.vehicle_inventory.length === 0 ? (
+          <p className="view-vehicles-empty">
+            No inventory lines matching this vehicle&apos;s chassis / engine (all dealers).
+          </p>
+        ) : (
+          m.vehicle_inventory.map((row, ri) => (
+            <div key={row.inventory_line_id ?? ri} className="view-vehicles-inventory-block">
+              <p className="view-vehicles-inventory-line-id">
+                Inventory line {row.inventory_line_id != null ? `#${row.inventory_line_id}` : ri + 1}
+                {row.dealer_id != null ? ` · dealer_id ${row.dealer_id}` : ""}
+              </p>
+              <KeyValueGrid data={row} idPrefix={`${idPrefix}-vim-${ri}`} />
+            </div>
+          ))
         )}
       </section>
 
       <section className="view-vehicles-section" aria-labelledby={`${idPrefix}-ch`}>
         <h4 className="view-vehicles-section-title" id={`${idPrefix}-ch`}>
-          Challan (inventory lines linked to this chassis / engine)
+          Challan Master
         </h4>
         {m.challans.length === 0 ? (
-          <p className="view-vehicles-empty">No challan line matched this vehicle in inventory.</p>
+          <p className="view-vehicles-empty">No committed challan lines for this chassis / engine in inventory.</p>
         ) : (
           <table className="view-vehicles-table">
             <thead>
@@ -112,46 +199,6 @@ function MatchBlock({ m, index }: { m: VehicleSearchMatch; index: number }) {
                   <td>{row.invoice_number ?? "—"}</td>
                   <td className="view-vehicles-mono">{row.chassis_no ?? "—"}</td>
                   <td className="view-vehicles-mono">{row.engine_no ?? "—"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </section>
-
-      <section className="view-vehicles-section" aria-labelledby={`${idPrefix}-stg`}>
-        <h4 className="view-vehicles-section-title" id={`${idPrefix}-stg`}>
-          Challan staging (subdealer batch lines)
-        </h4>
-        {(m.challan_details_staging?.length ?? 0) === 0 ? (
-          <p className="view-vehicles-empty">No staging lines matched for this search.</p>
-        ) : (
-          <table className="view-vehicles-table view-vehicles-table--staging">
-            <thead>
-              <tr>
-                <th>Staging ID</th>
-                <th>Batch</th>
-                <th>Status</th>
-                <th>Raw chassis</th>
-                <th>Raw engine</th>
-                <th>Inv. line</th>
-                <th>Book</th>
-                <th>From → To</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(m.challan_details_staging ?? []).map((row, i) => (
-                <tr key={`${row.challan_detail_staging_id}-${i}`}>
-                  <td>{row.challan_detail_staging_id ?? "—"}</td>
-                  <td className="view-vehicles-mono">{String(row.challan_batch_id ?? "—").slice(0, 8)}…</td>
-                  <td>{row.status ?? "—"}</td>
-                  <td className="view-vehicles-mono">{row.raw_chassis ?? "—"}</td>
-                  <td className="view-vehicles-mono">{row.raw_engine ?? "—"}</td>
-                  <td>{row.inventory_line_id ?? "—"}</td>
-                  <td>{row.challan_book_num ?? "—"}</td>
-                  <td>
-                    {row.from_dealer_id ?? "—"} → {row.to_dealer_id ?? "—"}
-                  </td>
                 </tr>
               ))}
             </tbody>
@@ -196,13 +243,8 @@ export function ViewVehiclesPage({ dealerId = DEALER_ID }: ViewVehiclesPageProps
 
   return (
     <div className="view-vehicles-page">
-      <p className="view-vehicles-hint">
-        Search by chassis (VIN) and/or engine. Use <strong>*</strong> as a wildcard, or enter 4–6 digits alone to
-        match numbers ending in those digits. Results are scoped to your dealer&apos;s OEM; each hit shows Vehicle
-        Master, yard inventory, Sales Master, committed challans, and subdealer challan staging lines when they match.
-      </p>
       <section className="view-vehicles-search">
-        <div className="view-vehicles-search-row">
+        <div className="view-vehicles-search-field">
           <label htmlFor="vv-chassis">Chassis / VIN</label>
           <input
             id="vv-chassis"
@@ -214,7 +256,7 @@ export function ViewVehiclesPage({ dealerId = DEALER_ID }: ViewVehiclesPageProps
             onKeyDown={(e) => e.key === "Enter" && handleSearch()}
           />
         </div>
-        <div className="view-vehicles-search-row">
+        <div className="view-vehicles-search-field">
           <label htmlFor="vv-engine">Engine</label>
           <input
             id="vv-engine"

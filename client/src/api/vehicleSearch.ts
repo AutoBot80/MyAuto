@@ -3,12 +3,11 @@ import { DEALER_ID } from "./dealerId";
 
 export interface VehicleSearchMatch {
   vehicle_master: Record<string, string | number | null>;
-  /** Rows from `vehicle_inventory_master` for this dealer where chassis/engine match the vehicle. */
+  /** Rows from `vehicle_inventory_master` where chassis/engine match (any dealer). */
   vehicle_inventory: Array<Record<string, string | number | null>>;
   sales_master: Record<string, string | number | null> | null;
+  /** Committed challan lines (`challan_master` / `challan_details`). */
   challans: Array<Record<string, string | number | null>>;
-  /** Subdealer challan staging lines (`challan_details_staging`) matching patterns or inventory_line_id. */
-  challan_details_staging: Array<Record<string, string | number | null>>;
 }
 
 export interface VehicleSearchResult {

@@ -42,6 +42,7 @@ Cursor agents follow **`.cursor/rules/checkpoints-registry.mdc`**: full workflow
 | 13 | DMS Reports Downloaded | `checkpoint/dms-reports-downloaded` | `2bd01d4d3d54170aaab4a83bc37db80b2ff720d9` | 2026-04-05T19:37:23+05:30 | — |
 | 14 | Enabled Add Vehicle Looping | `checkpoint/enabled-add-vehicle-looping` | `3df79152f68720501aec83643572f9ee7778763a` | 2026-04-07T20:16:46+05:30 | 1) Create subdealer challan wrapper; 2) Test single sale; 3) Test Challan creation |
 | 15 | Added Subdealer Challan module | `checkpoint/added-subdealer-challan-module` | `2f0b91c5a54367ead502b8d0469f54b627bb3c40` | 2026-04-08T20:46:48+05:30 | 1) Need to speed up prepare_vehicle |
+| 16 | View vehicles added. Many bugs fixed | `checkpoint/view-vehicles-added-many-bugs-fixed` | `149f518e7836cda7aadb69e599c578c9b3c3c5fa` | 2026-04-10T12:03:08+05:30 | 1) PDI still fragile; 2) Create Order to be tested again; 3) Insurance upload docs not working yet |
 
 ## Rollback / Restore
 
