@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { warmVahanBrowser } from "../api/fillForms";
 import {
   getRtoBatchStatus,
   listRtoPayments,
@@ -20,6 +21,9 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
   const [batchError, setBatchError] = useState<string | null>(null);
   const [startingBatch, setStartingBatch] = useState(false);
   const [retryingQueueId, setRetryingQueueId] = useState<number | null>(null);
+  /** After warm-browser succeeds, next click starts the batch (same UX as Create Invoice / login gate). */
+  const [vahanReadyForBatch, setVahanReadyForBatch] = useState(false);
+  const [vahanWarmMessage, setVahanWarmMessage] = useState<string | null>(null);
 
   const progressPercent = useMemo(() => {
     if (!batchStatus || batchStatus.total_count <= 0) return 0;
@@ -41,6 +45,8 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
         setBatchStatus(data);
         if (data.state === "completed" || data.state === "failed") {
           setStartingBatch(false);
+          setVahanReadyForBatch(false);
+          setVahanWarmMessage(null);
           fetchFromDb(false);
         }
       })
@@ -53,6 +59,11 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
     fetchFromDb(true);
     fetchBatchStatus();
     return undefined;
+  }, [dealerId]);
+
+  useEffect(() => {
+    setVahanReadyForBatch(false);
+    setVahanWarmMessage(null);
   }, [dealerId]);
 
   useEffect(() => {
@@ -69,13 +80,41 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
 
   const handleStartBatch = async () => {
     setBatchError(null);
+
+    if (!vahanReadyForBatch) {
+      setStartingBatch(true);
+      setVahanWarmMessage(null);
+      try {
+        const warm = await warmVahanBrowser();
+        if (!warm.success) {
+          setBatchError(warm.error ?? "Could not open Vahan site");
+          return;
+        }
+        setVahanReadyForBatch(true);
+        setVahanWarmMessage(
+          warm.message ??
+            "Vahan Opened. Please login. And then press button again"
+        );
+      } catch (err) {
+        setBatchError(err instanceof Error ? err.message : "Failed to open Vahan site");
+      } finally {
+        setStartingBatch(false);
+      }
+      return;
+    }
+
     setStartingBatch(true);
+    const prevWarmMsg = vahanWarmMessage;
+    setVahanWarmMessage(null);
+    setVahanReadyForBatch(false);
     try {
       await startRtoBatch({ dealer_id: dealerId });
       fetchBatchStatus();
       fetchFromDb(false);
     } catch (err) {
       setStartingBatch(false);
+      setVahanReadyForBatch(true);
+      setVahanWarmMessage(prevWarmMsg);
       setBatchError(err instanceof Error ? err.message : "Failed to start batch");
       fetchBatchStatus();
     }
@@ -132,12 +171,27 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
           className="app-button app-button--primary"
           onClick={handleStartBatch}
           disabled={startingBatch || batchStatus?.state === "running" || batchStatus?.state === "starting"}
+          title={
+            vahanReadyForBatch
+              ? "Start processing queued RTO rows on the logged-in Vahan tab"
+              : "Open Vahan in the browser; log in; then press again to run the batch"
+          }
         >
           {startingBatch || batchStatus?.state === "running" || batchStatus?.state === "starting"
             ? "Processing oldest 7..."
-            : "Fill Vahan Site"}
+            : vahanReadyForBatch
+              ? "Continue Vahan batch"
+              : "Fill Vahan Site"}
         </button>
-        <span className="rto-batch-toolbar-note">Batch processes up to 7 queued rows.</span>
+        <span className="rto-batch-toolbar-note">
+          {vahanWarmMessage ? (
+            <span className="rto-batch-vahan-warm-msg" role="status">
+              {vahanWarmMessage}
+            </span>
+          ) : (
+            <>Batch processes up to 7 queued rows. First click opens Vahan—log in, then press again to run.</>
+          )}
+        </span>
         </div>
       </div>
       {batchStatus && batchStatus.state !== "idle" && (

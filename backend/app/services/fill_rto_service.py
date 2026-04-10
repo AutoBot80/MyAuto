@@ -689,6 +689,40 @@ def _screen_6(page: Page) -> float | None:
     return total
 
 
+# Message aligned with ``handle_browser_opening._wait_login_or_prompt_after_open`` (DMS / Create Invoice UX).
+VAHAN_WARM_THEN_CONTINUE_MESSAGE = "Vahan Opened. Please login. And then press button again"
+
+
+def warm_vahan_browser_session() -> dict:
+    """Open or attach to the Vahan browser without running fill automation (no login gate).
+
+    Operator should log in, then start the RTO batch from the client so ``fill_rto_row`` can proceed.
+    """
+    out: dict = {"success": False, "error": None, "message": None}
+    u = (VAHAN_BASE_URL or "").strip()
+    if not u:
+        out["error"] = "VAHAN_BASE_URL not set"
+        return out
+    try:
+        from app.services.fill_hero_dms_service import _install_playwright_js_dialog_handler
+
+        page, open_error = get_or_open_site_page(
+            u,
+            "Vahan",
+            require_login_on_open=False,
+        )
+        if page is None:
+            out["error"] = open_error or "Could not open Vahan browser"
+            return out
+        _install_playwright_js_dialog_handler(page)
+        out["success"] = True
+        out["message"] = VAHAN_WARM_THEN_CONTINUE_MESSAGE
+    except Exception as e:
+        out["error"] = str(e)
+        logger.warning("fill_rto_service: warm_vahan_browser_session %s", e)
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------

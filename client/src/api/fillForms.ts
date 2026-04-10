@@ -102,6 +102,27 @@ export async function warmDmsBrowser(req: WarmDmsBrowserRequest): Promise<WarmDm
   }
 }
 
+export interface WarmVahanBrowserResponse {
+  success: boolean;
+  error?: string | null;
+  message?: string | null;
+}
+
+/** Open/attach Vahan login (no fill). RTO Queue: first click warms browser; operator logs in; second click runs batch. */
+export async function warmVahanBrowser(): Promise<WarmVahanBrowserResponse> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), DMS_WARM_BROWSER_TIMEOUT_MS);
+  try {
+    return await apiFetch<WarmVahanBrowserResponse>("/fill-forms/vahan/warm-browser", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 export interface FillHeroInsuranceRequest {
   insurance_base_url?: string | null;
   customer_id?: number | null;

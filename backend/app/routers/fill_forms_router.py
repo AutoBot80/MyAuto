@@ -29,6 +29,7 @@ from app.services.fill_hero_insurance_service import (
     post_process,
     pre_process,
 )
+from app.services.fill_rto_service import warm_vahan_browser_session
 from app.services.playwright_executor import get_playwright_executor
 
 logger = logging.getLogger(__name__)
@@ -223,6 +224,12 @@ class WarmDmsBrowserResponse(BaseModel):
     error: str | None = None
 
 
+class WarmVahanBrowserResponse(BaseModel):
+    success: bool
+    error: str | None = None
+    message: str | None = None
+
+
 def _safe_subfolder_name(subfolder: str) -> str:
     """Safe directory name for ocr_output."""
     import re
@@ -348,6 +355,17 @@ async def warm_dms_browser(req: WarmDmsBrowserRequest) -> WarmDmsBrowserResponse
     return WarmDmsBrowserResponse(
         success=bool(result.get("success")),
         error=result.get("error"),
+    )
+
+
+@router.post("/vahan/warm-browser", response_model=WarmVahanBrowserResponse)
+async def warm_vahan_browser() -> WarmVahanBrowserResponse:
+    """Open or attach to Vahan (no fill). RTO Queue: first click runs this; operator logs in; second click starts batch."""
+    result = await _run_playwright_work(warm_vahan_browser_session)
+    return WarmVahanBrowserResponse(
+        success=bool(result.get("success")),
+        error=result.get("error"),
+        message=result.get("message"),
     )
 
 
