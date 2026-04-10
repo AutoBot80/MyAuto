@@ -7591,12 +7591,15 @@ def _hero_misp_fill_proposal_and_review(
     _is_national_insurance = bool(
         re.search(r"national\s+insurance", (values.get("insurer") or ""), re.IGNORECASE)
     )
+    # MispPolicy add-on grid: **ND Cover** is the top row; **ND Plus Cover** is directly below.
+    # Do not use plain ``Nil\s*Depreciation`` for ND Cover — it matches **Nil Depreciation Plus** on the next row.
+    _nd_cover_label_pat = r"ND\s*Cover(?!\s*Plus)|Nil\s*Depreciation(?!\s*Plus)"
     err = _proposal_addon_checkbox_id_or_label(
         page,
         "chkNilDepreciation",
         True,
         "addon_nd_cover",
-        r"ND\s*Cover|Nil\s*Depreciation",
+        _nd_cover_label_pat,
         ocr_output_dir,
         subfolder,
         timeout_ms=pt,
@@ -7604,12 +7607,13 @@ def _hero_misp_fill_proposal_and_review(
     if err:
         return _proposal_fail(ocr_output_dir, subfolder, err)
     if _is_national_insurance:
+        _nd_plus_label_pat = r"ND\s*Plus\s*Cover|Nil\s*Depreciation\s*Plus"
         err = _proposal_addon_checkbox_id_or_label(
             page,
             "chkNDPlusCover",
             True,
             "addon_nd_plus_cover",
-            r"ND\s*Plus\s*Cover|Nil\s*Depreciation\s*Plus",
+            _nd_plus_label_pat,
             ocr_output_dir,
             subfolder,
             timeout_ms=pt,
