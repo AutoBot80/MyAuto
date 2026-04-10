@@ -1,6 +1,6 @@
 # Checkpoint: View vehicles added. Many bugs fixed
 
-**Registry:** This milestone is listed in **`Documentation/checkpoints.md`** (canonical index) under tag **`checkpoint/view-vehicles-added-many-bugs-fixed`** (commit **`149f518e7836cda7aadb69e599c578c9b3c3c5fa`**, annotated tag created **2026-04-10T12:03:08+05:30** IST).
+**Registry:** This milestone is listed in **`Documentation/checkpoints.md`** (canonical index) under tag **`checkpoint/view-vehicles-added-many-bugs-fixed`** (commit **`0e94dceb1bb0bf71709b1ed122ee52071327a19d`**, annotated tag created **2026-04-10T12:03:08+05:30** IST).
 
 View-vehicles work and related bug fixes are captured at this snapshot.
 
