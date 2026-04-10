@@ -7560,6 +7560,9 @@ def _hero_misp_fill_proposal_and_review(
                     return _proposal_fail(ocr_output_dir, subfolder, err)
 
     _t(page, 400)
+    _is_national_insurance = bool(
+        re.search(r"national\s+insurance", (values.get("insurer") or ""), re.IGNORECASE)
+    )
     err = _proposal_addon_checkbox_id_or_label(
         page,
         "chkNilDepreciation",
@@ -7572,10 +7575,23 @@ def _hero_misp_fill_proposal_and_review(
     )
     if err:
         return _proposal_fail(ocr_output_dir, subfolder, err)
+    if _is_national_insurance:
+        err = _proposal_addon_checkbox_id_or_label(
+            page,
+            "chkNDPlusCover",
+            True,
+            "addon_nd_plus_cover",
+            r"ND\s*Plus\s*Cover|Nil\s*Depreciation\s*Plus",
+            ocr_output_dir,
+            subfolder,
+            timeout_ms=pt,
+        )
+        if err:
+            return _proposal_fail(ocr_output_dir, subfolder, err)
     err = _proposal_addon_checkbox_id_or_label(
         page,
         "chkroicover",
-        True,
+        not _is_national_insurance,
         "addon_rti",
         r"RTI\s*Cover|RTI\s*&?\s*Cover|R\.?T\.?I\.?\s*Cover|Return\s+to\s+Invoice|"
         r"Return\s*to\s*Invoice\s*\(?\s*RTI|Invoice\s*Cover|Cover\s*[-–]?\s*RTI|ROI",
