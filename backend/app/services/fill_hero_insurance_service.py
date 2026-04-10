@@ -6549,13 +6549,17 @@ def _hero_misp_post_vin_i_agree_modal_visible(page, *, timeout_ms: int = 1_500) 
     """
     True when the Bootstrap post–VIN **I Agree** modal (``#btnOK``) is actually visible.
     Scans main document and a capped list of frames.
+
+    **Do not** use ``div.modal-content button#btnOK`` without ``.show`` / ``.in`` — a hidden modal
+    can leave that node in the DOM and ``is_visible`` would stall for the full timeout per probe,
+    making main_process appear stuck after the main form loads.
     """
-    vt = min(max(300, int(timeout_ms)), 5_000)
+    vt = min(max(200, int(timeout_ms)), 1_200)
     selectors = (
         "div.modal.show button#btnOK",
         "div.modal.in button#btnOK",
         "div.modal.fade.in button#btnOK",
-        "div.modal-content button#btnOK",
+        "div.modal.show.in button#btnOK",
     )
     roots: list = [page]
     try:
@@ -6579,33 +6583,36 @@ def _hero_misp_proposal_form_markers_visible(page, *, timeout_ms: int = 2_000) -
     """
     True when main **MispPolicy** proposal ``ContentPlaceHolder1`` controls are visible — i.e. user is
     already past VIN Submit + **I agree** (common when KYC / modal steps were completed manually).
-    Checks top document first, then ``INSURANCE_NAV_IFRAME_SELECTOR`` (same order as proposal fills).
+
+    Uses the same **roots** as proposal fills (``_hero_misp_page_and_frame_roots(..., proposal)``)
+    so markers are found when CPH1 lives in a child frame, not only on the top document / nav iframe.
+    Short per-locator timeouts avoid stalling ``main_process`` when many frames are scanned.
     """
-    to = min(max(400, int(timeout_ms)), 8_000)
-    for root in (page,):
-        for suffix in ("ddlOccupatnType", "ddlRTO", "ddlMaritalStatus"):
+    to = min(max(300, int(timeout_ms)), 4_000)
+    vis = min(600, to)
+    suffixes = (
+        "ddlOccupatnType",
+        "ddlRTO",
+        "ddlMaritalStatus",
+        "ddlModelName",
+        "txtEmail",
+        "chkNilDepreciation",
+        "ddlPaymentMode",
+    )
+    try:
+        roots = _hero_misp_page_and_frame_roots(page, purpose="proposal")
+    except Exception:
+        roots = [page]
+    for root in roots:
+        for suffix in suffixes:
             try:
                 loc = _proposal_cph1_locator(root, suffix)
                 if loc.count() == 0:
                     continue
-                if loc.first.is_visible(timeout=min(1_500, to)):
+                if loc.first.is_visible(timeout=vis):
                     return True
             except Exception:
                 continue
-    if INSURANCE_NAV_IFRAME_SELECTOR:
-        try:
-            fl = page.frame_locator(INSURANCE_NAV_IFRAME_SELECTOR)
-            for suffix in ("ddlOccupatnType", "ddlRTO", "ddlMaritalStatus"):
-                try:
-                    loc = _proposal_cph1_locator(fl, suffix)
-                    if loc.count() == 0:
-                        continue
-                    if loc.first.is_visible(timeout=min(1_200, to)):
-                        return True
-                except Exception:
-                    continue
-        except Exception:
-            pass
     return False
 
 
@@ -6621,12 +6628,17 @@ def _hero_misp_click_vin_post_submit_modal_i_agree(
     """
     to = min(int(timeout_ms), 60_000)
     vt = min(int(visible_timeout_ms), 30_000)
+    # Prefer **visible** Bootstrap modals first — bare ``div.modal-content #btnOK`` can match a hidden
+    # modal node and ``wait_for(visible)`` stalls while the main form is already interactive.
     selectors = (
-        'div.modal-content button#btnOK',
-        'div.modal-content.w-100 button#btnOK',
-        'button#btnOK.button-modal.flex-fill',
-        'button#btnOK.button-modal',
-        'button#btnOK[type="button"]',
+        "div.modal.show button#btnOK",
+        "div.modal.in button#btnOK",
+        "div.modal.fade.in button#btnOK",
+        "div.modal-content.w-100 button#btnOK",
+        "div.modal-content button#btnOK",
+        "button#btnOK.button-modal.flex-fill",
+        "button#btnOK.button-modal",
+        "button#btnOK[type=\"button\"]",
     )
     roots: list = [page]
     try:
@@ -6698,13 +6710,29 @@ def _hero_misp_i_agree_after_vin_submit(
         logger.debug("Hero Insurance: proposal/modal probe before I agree: %s", exc)
 
     agreed = False
-    # First: wait up to ~20s for modal after navigation (VIN submit → main form + popup).
+    # First pass: shorter visible wait — a visible modal usually appears quickly; long waits here
+    # multiplied across roots/selectors felt like a hang after the main form was already shown.
     if _hero_misp_click_vin_post_submit_modal_i_agree(
-        page, timeout_ms=to, visible_timeout_ms=min(20_000, to)
+        page, timeout_ms=to, visible_timeout_ms=min(6_000, to)
     ):
         agreed = True
     else:
         for _ in range(28):
+            try:
+                prop_now = _hero_misp_proposal_form_markers_visible(page, timeout_ms=min(2_500, to))
+                modal_now = _hero_misp_post_vin_i_agree_modal_visible(page, timeout_ms=min(1_200, to))
+                if prop_now and not modal_now:
+                    append_playwright_insurance_line(
+                        ocr_output_dir,
+                        subfolder,
+                        "NOTE",
+                        "main_process: skipped I agree (retry loop) — proposal visible, no modal",
+                    )
+                    _wait_load_optional(page, min(15_000, max(to, 5_000) * 4))
+                    _t(page, 400)
+                    return None
+            except Exception:
+                pass
             if _hero_misp_click_vin_post_submit_modal_i_agree(
                 page, timeout_ms=to, visible_timeout_ms=min(4_000, to)
             ):
