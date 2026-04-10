@@ -7601,31 +7601,59 @@ def _hero_misp_fill_proposal_and_review(
     )
     if err:
         return _proposal_fail(ocr_output_dir, subfolder, err)
-    err = _proposal_addon_checkbox_id_or_label(
-        page,
-        "chkRSA",
-        False,
-        "addon_rsa",
-        r"^RSA$|RSA\s*cover|RSA\s*Cover|Road\s*Side\s*Assist|Roadside\s*Assist",
-        ocr_output_dir,
-        subfolder,
-        timeout_ms=pt,
+    _rsa_addon_pat = (
+        r"^RSA$|RSA\s*cover|RSA\s*Cover|Road\s*Side\s*Assist|Roadside\s*Assist"
     )
-    if err:
-        return _proposal_fail(ocr_output_dir, subfolder, err)
-    err = _proposal_addon_checkbox_id_or_label(
-        page,
-        "chkEME",
-        False,
-        "addon_emergency_medical",
+    _eme_addon_pat = (
         r"Emergency\s*Medical\s*Expenses?|Emergency\s*Medical|Medical\s*Emergency|"
-        r"Emerg(?:ency)?\.?\s*Medical|Medical\s*Expenses?\s*\(?\s*Emerg|EME\b",
-        ocr_output_dir,
-        subfolder,
-        timeout_ms=pt,
+        r"Emerg(?:ency)?\.?\s*Medical|Medical\s*Expenses?\s*\(?\s*Emerg|EME\b"
     )
-    if err:
-        return _proposal_fail(ocr_output_dir, subfolder, err)
+    if _is_national_insurance:
+        err = _proposal_step_checkbox_uncheck_if_present(
+            page,
+            _rsa_addon_pat,
+            "addon_rsa",
+            ocr_output_dir,
+            subfolder,
+            timeout_ms=pt,
+        )
+        if err:
+            return _proposal_fail(ocr_output_dir, subfolder, err)
+        err = _proposal_step_checkbox_uncheck_if_present(
+            page,
+            _eme_addon_pat,
+            "addon_emergency_medical",
+            ocr_output_dir,
+            subfolder,
+            timeout_ms=pt,
+        )
+        if err:
+            return _proposal_fail(ocr_output_dir, subfolder, err)
+    else:
+        err = _proposal_addon_checkbox_id_or_label(
+            page,
+            "chkRSA",
+            False,
+            "addon_rsa",
+            _rsa_addon_pat,
+            ocr_output_dir,
+            subfolder,
+            timeout_ms=pt,
+        )
+        if err:
+            return _proposal_fail(ocr_output_dir, subfolder, err)
+        err = _proposal_addon_checkbox_id_or_label(
+            page,
+            "chkEME",
+            False,
+            "addon_emergency_medical",
+            _eme_addon_pat,
+            ocr_output_dir,
+            subfolder,
+            timeout_ms=pt,
+        )
+        if err:
+            return _proposal_fail(ocr_output_dir, subfolder, err)
 
     _opt_uncheck = (HERO_MISP_PROPOSAL_OPTIONAL_UNCHECK_CHECKBOX_REGEX or "").strip()
     if _opt_uncheck:
@@ -7663,6 +7691,16 @@ def _hero_misp_fill_proposal_and_review(
     if err:
         return _proposal_fail(ocr_output_dir, subfolder, err)
 
+    _t(page, 400)
+    err = _proposal_step_hdfc_payment(
+        page, "payment_hdfc", ocr_output_dir, subfolder, timeout_ms=pt
+    )
+    if err:
+        return _proposal_fail(ocr_output_dir, subfolder, err)
+
+    for _r in _hero_misp_page_and_frame_roots(page, purpose="proposal") or [page]:
+        _proposal_scroll_root_to_bottom(_r)
+    _t(page, 400)
     err = _proposal_step_hero_cpi_addon_by_dealer_flag(
         page,
         values,
@@ -7670,13 +7708,6 @@ def _hero_misp_fill_proposal_and_review(
         ocr_output_dir,
         subfolder,
         timeout_ms=pt,
-    )
-    if err:
-        return _proposal_fail(ocr_output_dir, subfolder, err)
-
-    _t(page, 400)
-    err = _proposal_step_hdfc_payment(
-        page, "payment_hdfc", ocr_output_dir, subfolder, timeout_ms=pt
     )
     if err:
         return _proposal_fail(ocr_output_dir, subfolder, err)
