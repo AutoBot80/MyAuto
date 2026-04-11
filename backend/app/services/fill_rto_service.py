@@ -303,6 +303,54 @@ def _type_typeahead(page: Page, selector: str, value: str, *, timeout: int = _DE
         _rto_log(f"typeahead: {label} = {value}")
 
 
+def _select_pf_dropdown(
+    page: Page,
+    wrapper_selector: str,
+    value: str,
+    *,
+    timeout: int = _DEFAULT_TIMEOUT_MS,
+    label: str = "",
+) -> None:
+    """Select an item from a PrimeFaces ``ui-selectonemenu`` by visible text.
+
+    PrimeFaces renders a custom overlay panel (``{id}_panel``) appended to ``<body>``,
+    not adjacent to the wrapper.  Workflow: click the trigger ``<div>`` → locate the
+    panel by ID or class → click the ``<li>`` whose text matches ``value``.
+    """
+    if not value:
+        return
+    try:
+        wrapper = page.locator(wrapper_selector).first
+        wrapper.wait_for(state="visible", timeout=timeout)
+
+        wrapper_id = wrapper.get_attribute("id") or ""
+        wrapper.click()
+        _pause(0.4)
+
+        if wrapper_id:
+            panel_sel = f"div#{wrapper_id}_panel"
+        else:
+            panel_sel = "div.ui-selectonemenu-panel"
+        items_panel = page.locator(panel_sel).first
+        items_panel.wait_for(state="visible", timeout=5000)
+
+        item = items_panel.locator("li.ui-selectonemenu-item").filter(
+            has_text=re.compile(f"^\\s*{re.escape(value)}\\s*$", re.IGNORECASE),
+        )
+        if item.count() == 0:
+            item = items_panel.locator("li.ui-selectonemenu-item").filter(has_text=value)
+        item.first.scroll_into_view_if_needed(timeout=3000)
+        item.first.click(timeout=5000)
+    except PwTimeout:
+        _rto_log(f"TIMEOUT pf-dropdown: {label} selector={wrapper_selector} value={value}")
+        _dump_page_state(page, f"pf-dropdown failed: {label}")
+        raise
+    logger.debug("fill_rto: pf-dropdown %s = %s (%s)", wrapper_selector, value, label)
+    if label:
+        _rto_log(f"pf-dropdown: {label} = {value}")
+    _pause(0.3)
+
+
 def _dismiss_dialog(page: Page, button_text: str = "OK", *, timeout: int = 8000) -> None:
     """Click a dialog/popup button by its text."""
     btn = page.get_by_role("button", name=re.compile(button_text, re.IGNORECASE)).first
@@ -349,24 +397,25 @@ def _screen_1(page: Page, office: str) -> None:
     logger.info("fill_rto: Screen 1 — office=%s", office)
     _rto_log("--- Screen 1: Assigned office, Entry-New Registeration, Show Form ---")
 
-    _type_typeahead(
+    _select_pf_dropdown(
         page,
-        "input[id*='officeName'], input[id*='assignedOffice'], input[name*='officeName']",
+        "div#officeList",
         office,
         label="Select Assigned Office",
     )
     _pause(0.5)
 
-    _select(
+    _select_pf_dropdown(
         page,
-        "select[id*='action'], select[id*='selectAction'], select[name*='action']",
+        "div#actionList",
         "Entry-New Registeration",
         label="Select Action",
     )
-    _pause(0.3)
+    _pause(0.5)
 
-    _click(page, "input[value='Show Form'], button:has-text('Show Form')", label="Show Form")
-    _pause(1.0)
+    _click(page, "button#pending_action", label="Show Form")
+    _pause(1.5)
+    _wait_for_progress_close(page)
 
     _dismiss_dialog(page, "OK")
 
