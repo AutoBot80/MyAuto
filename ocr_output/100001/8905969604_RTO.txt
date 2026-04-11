@@ -1,105 +1,91 @@
-[2026-04-11 05:09:24 UTC] [Setup] fill_rto_row start rto_queue_id=1 sales_id=1 dealer_id=100001 log_file=C:\Users\arya_\OneDrive\Desktop\My Auto.AI\ocr_output\100001\8905969604_RTO.txt
-[2026-04-11 05:09:24 UTC] [Setup] warning: missing document categories: FORM 22, INSURANCE CERTIFICATE, AADHAAR_FRONT, AADHAAR_BACK, OWNER UNDERTAKING FORM
-[2026-04-11 05:09:30 UTC] [Setup] browser page url: https://vahan.parivahan.gov.in/vahan/vahan/home.xhtml
-[2026-04-11 05:09:30 UTC] [Screen 1] --- Screen 1: Assigned office, Entry-New Registeration, Show Form ---
-[2026-04-11 05:09:45 UTC] [Screen 1] TIMEOUT typeahead: Select Assigned Office selector=input[id*='officeName'], input[id*='assignedOffice'], input[name*='officeName'] value=BHARATPUR RTO
-[2026-04-11 05:09:45 UTC] [Screen 1] === PAGE STATE DUMP (typeahead failed: Select Assigned Office) ===
-[2026-04-11 05:09:45 UTC] [Screen 1] url: https://vahan.parivahan.gov.in/vahan/vahan/home.xhtml
-[2026-04-11 05:09:45 UTC] [Screen 1] frames: 1
-[2026-04-11 05:09:45 UTC] [Screen 1]   frame[0] name='(main)' url=https://vahan.parivahan.gov.in/vahan/vahan/home.xhtml
-[2026-04-11 05:09:45 UTC] [Screen 1]   [frame[0] main] visible interactive elements (41):
-[2026-04-11 05:09:45 UTC] [Screen 1]     nav role='navigation' text=' Home  Report   Update Profile   Language  Welcome HARSH ARY' class='navbar navbar-default navigation-background'
-[2026-04-11 05:09:45 UTC] [Screen 1]     a id='homeId1' name='homeId1'
-[2026-04-11 05:09:45 UTC] [Screen 1]     a id='homeId2' name='homeId2' text=' Home'
-[2026-04-11 05:09:45 UTC] [Screen 1]     a text=' Report ' class='dropdown-toggle'
-[2026-04-11 05:09:45 UTC] [Screen 1]     a text=' Update Profile ' class='dropdown-toggle'
-[2026-04-11 05:09:45 UTC] [Screen 1]     a text=' Language ' class='dropdown-toggle'
-[2026-04-11 05:09:45 UTC] [Screen 1]     a id='welcomeUserId' name='welcomeUserId' text='Welcome HARSH ARYA , DEALER STAFF, Rajasthan'
-[2026-04-11 05:09:45 UTC] [Screen 1]     a id='logout' text='Logout' class='ui-commandlink ui-widget glyphicon glyphicon-log-out'
-[2026-04-11 05:09:45 UTC] [Screen 1]     label text='User Permissions' class='field-label resp-label-section sidebar-brand '
-[2026-04-11 05:09:45 UTC] [Screen 1]     input id='j_idt133:j_idt134:filter' name='j_idt133:j_idt134:filter' role='textbox' class='ui-column-filter ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner'
-[2026-04-11 05:09:45 UTC] [Screen 1]     button id='menu-toggle' text=' User Profile' class='btn btn-secondary'
-[2026-04-11 05:09:45 UTC] [Screen 1]     label id='availableRegnListID' text='RJ38CA6617 | RJ38EA0818 | RJ38EG0029 | RJ38EP0043 | RJ38EV04' class='ui-outputlabel ui-widget'
-[2026-04-11 05:09:45 UTC] [Screen 1]     label id='tradeCertList' text='Trade Certificate No RJ05A0033TC issued by ABU ROAD DTO vali' class='ui-outputlabel ui-widget'
-[2026-04-11 05:09:45 UTC] [Screen 1]     button id='instructionBtn' name='instructionBtn' type='button' role='button' text='Vehicle No RJ34AS0042 generated against Application No RJ260' class='ui-button ui-widget ui-state-default ui-corner-all ui-button-text-only'
-[2026-04-11 05:09:45 UTC] [Screen 1]     label text='Select Assigned Office:' class='field-label resp-label-section'
-[2026-04-11 05:09:45 UTC] [Screen 1]     div id='officeList' role='combobox' text='Select Assigned Office ABU ROAD DTO AJMER RTO ALWAR RTO ANOO' class='ui-selectonemenu ui-widget ui-state-default ui-corner-all bottom-space'
-[2026-04-11 05:09:45 UTC] [Screen 1]     input id='officeList_focus' name='officeList_focus' type='text'
-[2026-04-11 05:09:45 UTC] [Screen 1]     select id='officeList_input' name='officeList_input' value='38' text='Select Assigned Office ABU ROAD DTO AJMER RTO ALWAR RTO ANOO'
-[2026-04-11 05:09:45 UTC] [Screen 1]     label id='officeList_label' text='ABU ROAD DTO' class='ui-selectonemenu-label ui-inputfield ui-corner-all'
-[2026-04-11 05:09:45 UTC] [Screen 1]     label text='Select Action:' class='field-label resp-label-section'
-[2026-04-11 05:09:45 UTC] [Screen 1]     div id='actionList' role='combobox' text='Select Action Account Statement Cart Payment DEALER-DOCUMENT' class='ui-selectonemenu ui-widget ui-state-default ui-corner-all bottom-space'
-[2026-04-11 05:09:45 UTC] [Screen 1]     input id='actionList_focus' name='actionList_focus' type='text'
-[2026-04-11 05:09:45 UTC] [Screen 1]     select id='actionList_input' name='actionList_input' value='12303' text='Select Action Account Statement Cart Payment DEALER-DOCUMENT'
-[2026-04-11 05:09:45 UTC] [Screen 1]     label id='actionList_label' text='Account Statement' class='ui-selectonemenu-label ui-inputfield ui-corner-all'
-[2026-04-11 05:09:45 UTC] [Screen 1]     button id='pending_action' name='pending_action' type='submit' role='button' text='Show Form' class='ui-button ui-widget ui-state-default ui-corner-all ui-button-text-only'
-[2026-04-11 05:09:45 UTC] [Screen 1]     input id='j_idt210:0' name='j_idt210' type='radio' value='applNo'
-[2026-04-11 05:09:45 UTC] [Screen 1]     label text='Application No'
-[2026-04-11 05:09:45 UTC] [Screen 1]     input id='j_idt210:1' name='j_idt210' type='radio' value='oldApplNo'
-[2026-04-11 05:09:45 UTC] [Screen 1]     label text='Old Software Appl No'
-[2026-04-11 05:09:45 UTC] [Screen 1]     input id='j_idt210:2' name='j_idt210' type='radio' value='regnNo'
-[2026-04-11 05:09:45 UTC] [Screen 1]     label text='Registration No'
-[2026-04-11 05:09:45 UTC] [Screen 1]     input id='j_idt210:3' name='j_idt210' type='radio' value='all'
-[2026-04-11 05:09:45 UTC] [Screen 1]     label text='Pending Applications'
-[2026-04-11 05:09:45 UTC] [Screen 1]     label text='Application No: Part 1 (First Six Chars)Part 2 (Next Ten Cha' class='field-label resp-label-section'
-[2026-04-11 05:09:45 UTC] [Screen 1]     label id='j_idt216' text='Application No:' class='ui-outputlabel ui-widget'
-[2026-04-11 05:09:45 UTC] [Screen 1]     label id='j_idt217' text='Part 1 (First Six Chars)' class='ui-outputlabel ui-widget inline-section'
-[2026-04-11 05:09:45 UTC] [Screen 1]     label id='j_idt218' text='Part 2 (Next Ten Chars)' class='ui-outputlabel ui-widget inline-section'
-[2026-04-11 05:09:45 UTC] [Screen 1]     input id='firstPartAppNo' name='firstPartAppNo' type='text' role='textbox' value='RJ2604' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all text-upperca'
-[2026-04-11 05:09:45 UTC] [Screen 1]     input id='secondPartAppNo' name='secondPartAppNo' type='text' role='textbox' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all text-upperca'
-[2026-04-11 05:09:45 UTC] [Screen 1]     button id='j_idt228' name='j_idt228' type='submit' role='button' text='Get Pending Work' class='ui-button ui-widget ui-state-default ui-corner-all ui-button-text-only'
-[2026-04-11 05:09:45 UTC] [Screen 1]     button id='j_idt229' name='j_idt229' type='submit' role='button' text='Pull Back Application' class='ui-button ui-widget ui-state-default ui-corner-all ui-button-text-only'
-[2026-04-11 05:09:45 UTC] [Screen 1] === END PAGE STATE DUMP ===
-[2026-04-11 05:09:45 UTC] [Screen 1] fill_rto_row FAILED: Locator.wait_for: Timeout 15000ms exceeded.
+[2026-04-11 11:43:59 IST] [Setup] fill_rto_row start rto_queue_id=1 sales_id=1 dealer_id=100001 log_file=C:\Users\arya_\OneDrive\Desktop\My Auto.AI\ocr_output\100001\8905969604_RTO.txt
+[2026-04-11 11:43:59 IST] [Setup] uploads root (dealer): C:\Users\arya_\OneDrive\Desktop\My Auto.AI\Uploaded scans\100001
+[2026-04-11 11:43:59 IST] [Setup] searched folder (absolute): C:\Users\arya_\OneDrive\Desktop\My Auto.AI\Uploaded scans\100001\8905969604_100426
+[2026-04-11 11:43:59 IST] [Setup] subfolder from DB (file_location): '8905969604_100426'
+[2026-04-11 11:43:59 IST] [Setup] Filename rules: each pattern is a case-insensitive substring the file name must contain (asterisks in patterns are stripped before matching). Extension must match.
+[2026-04-11 11:43:59 IST] [Setup]   [FORM 20] ← filename contains any of: *Form_20* OR *Form 20* OR *FORM_20* OR *FORM 20*  (ext: .pdf)
+[2026-04-11 11:43:59 IST] [Setup]   [FORM 21] ← filename contains any of: *Sale_Certificate* OR *Sale Certificate* OR *Form_21* OR *Form 21* OR *FORM_21*  (ext: .pdf)
+[2026-04-11 11:43:59 IST] [Setup]   [FORM 22] ← filename contains any of: *Form_22* OR *Form22* OR *FORM22* OR *Form 22* OR *FORM_22* OR *FORM 22*  (ext: .pdf)
+[2026-04-11 11:43:59 IST] [Setup]   [INSURANCE CERTIFICATE] ← filename contains any of: *Insurance*  (ext: .pdf)
+[2026-04-11 11:43:59 IST] [Setup]   [INVOICE ORIGINAL] ← filename contains any of: *GST_Retail_Invoice* OR *GST*Invoice* OR *Tax_Invoice* OR *Tax Invoice* OR *Retail_Invoice*  (ext: .pdf)
+[2026-04-11 11:43:59 IST] [Setup]   [AADHAAR_FRONT] ← filename contains any of: *Aadhar*front* OR *aadhaar*front* OR *adhaar*front* OR *Aadhar*consolidated* OR *aadhaar*consolidated* OR *adhaar*consolidated* OR *Aadhar_Card* OR *Aadhaar* OR *aadhar*  (ext: .jpg, .jpeg, .png)
+[2026-04-11 11:43:59 IST] [Setup]   [AADHAAR_BACK] ← filename contains any of: *Aadhar_back* OR *aadhaar_back* OR *adhaar_back*  (ext: .jpg, .jpeg, .png)
+[2026-04-11 11:43:59 IST] [Setup]   [OWNER UNDERTAKING FORM] ← filename contains any of: *Detail* OR *Details* OR *Sales_Detail* OR *Detail_Sheet* OR *Sales Detail*  (ext: .pdf, .jpg, .jpeg, .png)
+[2026-04-11 11:43:59 IST] [Setup] all files in searched folder (8 total, sorted):
+[2026-04-11 11:43:59 IST] [Setup]   - 8905969604_Form22.pdf
+[2026-04-11 11:43:59 IST] [Setup]   - 8905969604_Form_20.pdf
+[2026-04-11 11:43:59 IST] [Setup]   - 8905969604_GST_Retail_Invoice.pdf
+[2026-04-11 11:43:59 IST] [Setup]   - 8905969604_Insurance.pdf
+[2026-04-11 11:43:59 IST] [Setup]   - 8905969604_Sale_Certificate.pdf
+[2026-04-11 11:43:59 IST] [Setup]   - Aadhar.jpg
+[2026-04-11 11:43:59 IST] [Setup]   - Aadhar_back.jpg
+[2026-04-11 11:43:59 IST] [Setup]   - Details.jpg
+[2026-04-11 11:43:59 IST] [Setup] documents matched to categories: {'FORM 20': '8905969604_Form_20.pdf', 'FORM 21': '8905969604_Sale_Certificate.pdf', 'FORM 22': '8905969604_Form22.pdf', 'INSURANCE CERTIFICATE': '8905969604_Insurance.pdf', 'INVOICE ORIGINAL': '8905969604_GST_Retail_Invoice.pdf', 'AADHAAR_FRONT': 'Aadhar.jpg', 'AADHAAR_BACK': 'Aadhar_back.jpg', 'OWNER UNDERTAKING FORM': 'Details.jpg'}
+[2026-04-11 11:44:05 IST] [Setup] browser page url: https://vahan.parivahan.gov.in/vahan/vahan/home.xhtml
+[2026-04-11 11:44:05 IST] [Screen 1] --- Screen 1: Assigned office, Entry-New Registeration, Show Form ---
+[2026-04-11 11:44:06 IST] [Screen 1] pf-dropdown: Select Assigned Office = BHARATPUR RTO
+[2026-04-11 11:44:11 IST] [Screen 1] TIMEOUT pf-dropdown: Select Action selector=div#actionList value=Entry-New Registeration
+[2026-04-11 11:44:11 IST] [Screen 1] === PAGE STATE DUMP (pf-dropdown failed: Select Action) ===
+[2026-04-11 11:44:11 IST] [Screen 1] url: https://vahan.parivahan.gov.in/vahan/vahan/home.xhtml
+[2026-04-11 11:44:11 IST] [Screen 1] frames: 1
+[2026-04-11 11:44:11 IST] [Screen 1]   frame[0] name='(main)' url=https://vahan.parivahan.gov.in/vahan/vahan/home.xhtml
+[2026-04-11 11:44:11 IST] [Screen 1]   [frame[0] main] visible interactive elements (54):
+[2026-04-11 11:44:11 IST] [Screen 1]     nav role='navigation' text=' Home  Report   Update Profile   Language  Welcome YOGESH AG' class='navbar navbar-default navigation-background'
+[2026-04-11 11:44:11 IST] [Screen 1]     a id='homeId1' name='homeId1'
+[2026-04-11 11:44:11 IST] [Screen 1]     a id='homeId2' name='homeId2' text=' Home'
+[2026-04-11 11:44:11 IST] [Screen 1]     a text=' Report ' class='dropdown-toggle'
+[2026-04-11 11:44:11 IST] [Screen 1]     a text=' Update Profile ' class='dropdown-toggle'
+[2026-04-11 11:44:11 IST] [Screen 1]     a text=' Language ' class='dropdown-toggle'
+[2026-04-11 11:44:11 IST] [Screen 1]     a id='welcomeUserId' name='welcomeUserId' text='Welcome YOGESH AGRAWAL , DEALER STAFF, Rajasthan'
+[2026-04-11 11:44:11 IST] [Screen 1]     a id='logout' text='Logout' class='ui-commandlink ui-widget glyphicon glyphicon-log-out'
+[2026-04-11 11:44:11 IST] [Screen 1]     label text='User Permissions' class='field-label resp-label-section sidebar-brand '
+[2026-04-11 11:44:11 IST] [Screen 1]     input id='j_idt133:j_idt134:filter' name='j_idt133:j_idt134:filter' role='textbox' class='ui-column-filter ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner'
+[2026-04-11 11:44:11 IST] [Screen 1]     button id='menu-toggle' text=' User Profile' class='btn btn-secondary'
+[2026-04-11 11:44:11 IST] [Screen 1]     label id='availableRegnListID' text='RJ05BD8188 | RJ05CD6288 | RJ05EA2388 | RJ05EG0605 | RJ05EP26' class='ui-outputlabel ui-widget'
+[2026-04-11 11:44:11 IST] [Screen 1]     label id='tradeCertList' text='Trade Certificate No RJ05A0020TC issued by BHARATPUR RTO val' class='ui-outputlabel ui-widget'
+[2026-04-11 11:44:11 IST] [Screen 1]     label text='Select Assigned Office:' class='field-label resp-label-section'
+[2026-04-11 11:44:11 IST] [Screen 1]     div id='officeList' role='combobox' text='Select Assigned Office ABU ROAD DTO AJMER RTO ALWAR RTO ANOO' class='ui-selectonemenu ui-widget ui-state-default ui-corner-all bottom-space'
+[2026-04-11 11:44:11 IST] [Screen 1]     input id='officeList_focus' name='officeList_focus' type='text'
+[2026-04-11 11:44:11 IST] [Screen 1]     select id='officeList_input' name='officeList_input' value='5' text='Select Assigned Office ABU ROAD DTO AJMER RTO ALWAR RTO ANOO'
+[2026-04-11 11:44:11 IST] [Screen 1]     label id='officeList_label' text='BHARATPUR RTO' class='ui-selectonemenu-label ui-inputfield ui-corner-all'
+[2026-04-11 11:44:11 IST] [Screen 1]     label text='Select Action:' class='field-label resp-label-section'
+[2026-04-11 11:44:11 IST] [Screen 1]     div id='actionList' role='combobox' text='Select Action Account Statement Cart Payment DEALER-DOCUMENT' class='ui-selectonemenu ui-widget ui-state-default ui-corner-all bottom-space'
+[2026-04-11 11:44:11 IST] [Screen 1]     input id='actionList_focus' name='actionList_focus' type='text'
+[2026-04-11 11:44:11 IST] [Screen 1]     select id='actionList_input' name='actionList_input' value='12303' text='Select Action Account Statement Cart Payment DEALER-DOCUMENT'
+[2026-04-11 11:44:11 IST] [Screen 1]     label id='actionList_label' text='Account Statement' class='ui-selectonemenu-label ui-inputfield ui-corner-all'
+[2026-04-11 11:44:11 IST] [Screen 1]     button id='pending_action' name='pending_action' type='submit' role='button' text='Show Form' class='ui-button ui-widget ui-state-default ui-corner-all ui-button-text-only'
+[2026-04-11 11:44:11 IST] [Screen 1]     input id='j_idt210:0' name='j_idt210' type='radio' value='applNo'
+[2026-04-11 11:44:11 IST] [Screen 1]     label text='Application No'
+[2026-04-11 11:44:11 IST] [Screen 1]     input id='j_idt210:1' name='j_idt210' type='radio' value='oldApplNo'
+[2026-04-11 11:44:11 IST] [Screen 1]     label text='Old Software Appl No'
+[2026-04-11 11:44:11 IST] [Screen 1]     input id='j_idt210:2' name='j_idt210' type='radio' value='regnNo'
+[2026-04-11 11:44:11 IST] [Screen 1]     label text='Registration No'
+[2026-04-11 11:44:11 IST] [Screen 1]     input id='j_idt210:3' name='j_idt210' type='radio' value='all'
+[2026-04-11 11:44:11 IST] [Screen 1]     label text='Pending Applications'
+[2026-04-11 11:44:11 IST] [Screen 1]     label text='Application No: Part 1 (First Six Chars)Part 2 (Next Ten Cha' class='field-label resp-label-section'
+[2026-04-11 11:44:11 IST] [Screen 1]     label id='j_idt217' text='Application No:' class='ui-outputlabel ui-widget'
+[2026-04-11 11:44:11 IST] [Screen 1]     label id='j_idt218' text='Part 1 (First Six Chars)' class='ui-outputlabel ui-widget inline-section'
+[2026-04-11 11:44:11 IST] [Screen 1]     label id='j_idt219' text='Part 2 (Next Ten Chars)' class='ui-outputlabel ui-widget inline-section'
+[2026-04-11 11:44:11 IST] [Screen 1]     input id='firstPartAppNo' name='firstPartAppNo' type='text' role='textbox' value='RJ2604' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all text-upperca'
+[2026-04-11 11:44:11 IST] [Screen 1]     input id='secondPartAppNo' name='secondPartAppNo' type='text' role='textbox' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all text-upperca'
+[2026-04-11 11:44:11 IST] [Screen 1]     button id='j_idt229' name='j_idt229' type='submit' role='button' text='Get Pending Work' class='ui-button ui-widget ui-state-default ui-corner-all ui-button-text-only'
+[2026-04-11 11:44:11 IST] [Screen 1]     button id='j_idt230' name='j_idt230' type='submit' role='button' text='Pull Back Application' class='ui-button ui-widget ui-state-default ui-corner-all ui-button-text-only'
+[2026-04-11 11:44:11 IST] [Screen 1]     input id='actionList_filter' name='actionList_filter' type='text' role='textbox' class='ui-selectonemenu-filter ui-inputfield ui-inputtext ui-widget ui-state-default ui'
+[2026-04-11 11:44:11 IST] [Screen 1]     ul id='actionList_items' role='listbox' text='Select Action Account Statement Cart Payment DEALER-DOCUMENT' class='ui-selectonemenu-items ui-selectonemenu-list ui-widget-content ui-widget ui-corn'
+[2026-04-11 11:44:11 IST] [Screen 1]     li id='actionList_0' role='option' text='Select Action' class='ui-selectonemenu-item ui-selectonemenu-list-item ui-corner-all'
+[2026-04-11 11:44:11 IST] [Screen 1]     li id='actionList_1' role='option' text='Account Statement' class='ui-selectonemenu-item ui-selectonemenu-list-item ui-corner-all ui-state-highligh'
+[2026-04-11 11:44:11 IST] [Screen 1]     li id='actionList_2' role='option' text='Cart Payment' class='ui-selectonemenu-item ui-selectonemenu-list-item ui-corner-all'
+[2026-04-11 11:44:11 IST] [Screen 1]     li id='actionList_3' role='option' text='DEALER-DOCUMENT-VIEW/MODIFY' class='ui-selectonemenu-item ui-selectonemenu-list-item ui-corner-all'
+[2026-04-11 11:44:11 IST] [Screen 1]     li id='actionList_4' role='option' text='Dealer-Entry-HSRP' class='ui-selectonemenu-item ui-selectonemenu-list-item ui-corner-all'
+[2026-04-11 11:44:11 IST] [Screen 1]     li id='actionList_5' role='option' text='Dispose-Application' class='ui-selectonemenu-item ui-selectonemenu-list-item ui-corner-all'
+[2026-04-11 11:44:11 IST] [Screen 1]     li id='actionList_6' role='option' text='Entry-New Registration' class='ui-selectonemenu-item ui-selectonemenu-list-item ui-corner-all'
+[2026-04-11 11:44:11 IST] [Screen 1]     li id='actionList_7' role='option' text='Entry-Temporary RC' class='ui-selectonemenu-item ui-selectonemenu-list-item ui-corner-all'
+[2026-04-11 11:44:11 IST] [Screen 1]     li id='actionList_8' role='option' text='Print-Form20-21/Disclaimer/Receipt' class='ui-selectonemenu-item ui-selectonemenu-list-item ui-corner-all'
+[2026-04-11 11:44:11 IST] [Screen 1]     li id='actionList_9' role='option' text='Print-HSRP Auth.Slip' class='ui-selectonemenu-item ui-selectonemenu-list-item ui-corner-all'
+[2026-04-11 11:44:11 IST] [Screen 1]     li id='actionList_10' role='option' text='Print-Temporary RC' class='ui-selectonemenu-item ui-selectonemenu-list-item ui-corner-all'
+[2026-04-11 11:44:11 IST] [Screen 1]     li id='actionList_11' role='option' text='Report-Collection Statement' class='ui-selectonemenu-item ui-selectonemenu-list-item ui-corner-all'
+[2026-04-11 11:44:11 IST] [Screen 1] === END PAGE STATE DUMP ===
+[2026-04-11 11:44:11 IST] [Screen 1] fill_rto_row FAILED: Locator.scroll_into_view_if_needed: Timeout 3000ms exceeded.
 Call log:
-  - waiting for locator("input[id*='officeName'], input[id*='assignedOffice'], input[name*='officeName']").first to be visible
-
-[2026-04-11 05:14:09 UTC] [Setup] fill_rto_row start rto_queue_id=1 sales_id=1 dealer_id=100001 log_file=C:\Users\arya_\OneDrive\Desktop\My Auto.AI\ocr_output\100001\8905969604_RTO.txt
-[2026-04-11 05:14:09 UTC] [Setup] warning: missing document categories: FORM 22, INSURANCE CERTIFICATE, AADHAAR_FRONT, AADHAAR_BACK, OWNER UNDERTAKING FORM
-[2026-04-11 05:14:16 UTC] [Setup] browser page url: https://vahan.parivahan.gov.in/vahan/vahan/home.xhtml
-[2026-04-11 05:14:16 UTC] [Screen 1] --- Screen 1: Assigned office, Entry-New Registeration, Show Form ---
-[2026-04-11 05:14:22 UTC] [Screen 1] pf-dropdown: Select Assigned Office = BHARATPUR RTO
-[2026-04-11 05:14:38 UTC] [Screen 1] TIMEOUT pf-dropdown: Select Action selector=div#actionList value=Entry-New Registeration
-[2026-04-11 05:14:38 UTC] [Screen 1] === PAGE STATE DUMP (pf-dropdown failed: Select Action) ===
-[2026-04-11 05:14:38 UTC] [Screen 1] url: https://vahan.parivahan.gov.in/vahan/vahan/ui/session/warning.xhtml
-[2026-04-11 05:14:38 UTC] [Screen 1] frames: 1
-[2026-04-11 05:14:38 UTC] [Screen 1]   frame[0] name='(main)' url=https://vahan.parivahan.gov.in/vahan/vahan/ui/session/warning.xhtml
-[2026-04-11 05:14:38 UTC] [Screen 1]   [frame[0] main] visible interactive elements (33):
-[2026-04-11 05:14:38 UTC] [Screen 1]     a text=' Home'
-[2026-04-11 05:14:38 UTC] [Screen 1]     a text=' Skip Main Content'
-[2026-04-11 05:14:38 UTC] [Screen 1]     a text=' Skip Navigation'
-[2026-04-11 05:14:38 UTC] [Screen 1]     a id='decfont' text='A-'
-[2026-04-11 05:14:38 UTC] [Screen 1]     a id='resetfont' text='A'
-[2026-04-11 05:14:38 UTC] [Screen 1]     a id='incfont' text='A+'
-[2026-04-11 05:14:38 UTC] [Screen 1]     a text=' Language ' class='dropdown-toggle'
-[2026-04-11 05:14:38 UTC] [Screen 1]     a id='loginId' name='loginId'
-[2026-04-11 05:14:38 UTC] [Screen 1]     a id='loginId1' name='loginId1'
-[2026-04-11 05:14:38 UTC] [Screen 1]     nav role='navigation' text=' Home  Parivahan  Know Your MV Tax  Financier Regn  Online P' class='navbar-default navigation-background'
-[2026-04-11 05:14:38 UTC] [Screen 1]     a text=' Home'
-[2026-04-11 05:14:38 UTC] [Screen 1]     a text=' Parivahan'
-[2026-04-11 05:14:38 UTC] [Screen 1]     a id='j_idt26' text=' Know Your MV Tax'
-[2026-04-11 05:14:38 UTC] [Screen 1]     a id='j_idt30' text=' Financier Regn'
-[2026-04-11 05:14:38 UTC] [Screen 1]     a text=' Online Payment'
-[2026-04-11 05:14:38 UTC] [Screen 1]     a text=' Transaction Status ' class='dropdown-toggle'
-[2026-04-11 05:14:38 UTC] [Screen 1]     a text=' Informational Services ' class='dropdown-toggle'
-[2026-04-11 05:14:38 UTC] [Screen 1]     a id='contact' name='contact' text=' Contact us'
-[2026-04-11 05:14:38 UTC] [Screen 1]     a id='loginId2' name='loginId2' text=' Login'
-[2026-04-11 05:14:38 UTC] [Screen 1]     h3 text='Please Re-Login to Continue After Some Time or Contact to th'
-[2026-04-11 05:14:38 UTC] [Screen 1]     a text='About Us'
-[2026-04-11 05:14:38 UTC] [Screen 1]     a text='Terms of Use'
-[2026-04-11 05:14:38 UTC] [Screen 1]     a text='FAQs'
-[2026-04-11 05:14:38 UTC] [Screen 1]     a text='Privacy Policy'
-[2026-04-11 05:14:38 UTC] [Screen 1]     a text='Copyright Policy'
-[2026-04-11 05:14:38 UTC] [Screen 1]     a text='Hyperlink Policy'
-[2026-04-11 05:14:38 UTC] [Screen 1]     a text='Act, Rules & Policies'
-[2026-04-11 05:14:38 UTC] [Screen 1]     a text='Fees & User Charges'
-[2026-04-11 05:14:38 UTC] [Screen 1]     a id='contactusLink' name='contactusLink' text='Contact us'
-[2026-04-11 05:14:38 UTC] [Screen 1]     a
-[2026-04-11 05:14:38 UTC] [Screen 1]     a
-[2026-04-11 05:14:38 UTC] [Screen 1]     a
-[2026-04-11 05:14:38 UTC] [Screen 1]     label id='j_idt56' text='Total number of visitors-417787767' class='ui-outputlabel ui-widget'
-[2026-04-11 05:14:38 UTC] [Screen 1] === END PAGE STATE DUMP ===
-[2026-04-11 05:14:38 UTC] [Screen 1] fill_rto_row FAILED: Locator.wait_for: Timeout 15000ms exceeded.
-Call log:
-  - waiting for locator("div#actionList").first to be visible
+  - waiting for locator("div#actionList_panel").first.locator("li.ui-selectonemenu-item").filter(has_text="Entry-New Registeration").first
 

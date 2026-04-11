@@ -79,9 +79,14 @@ def _mobile_digits_for_filename(mobile: str | None) -> str:
         return d.zfill(10)[:10]
     return "unknown_mobile"
 
-_DEFAULT_TIMEOUT_MS = 15_000
-_LONG_TIMEOUT_MS = 60_000
-_SHORT_WAIT_S = 0.6
+# Playwright locator/action waits (ms). User preference: 10s.
+_DEFAULT_TIMEOUT_MS = 10_000
+_LONG_TIMEOUT_MS = 10_000
+# Delay after each discrete UI action (s) — not a Playwright timeout.
+_ACTION_WAIT_S = 0.2
+
+# Vahan spells this either "Registration" or "Registeration" depending on build / locale.
+_ENTRY_NEW_REG_LABEL_RE = re.compile(r"Entry-New Regist(?:ration|eration)", re.IGNORECASE)
 
 _VAHAN_SESSION_DEAD_PATTERNS = (
     "/session/warning",
@@ -158,19 +163,6 @@ _DOC_PATTERNS: list[tuple[str, list[str], list[str]]] = [
 ]
 
 
-def _doc_patterns_reference_for_log() -> str:
-    """Human-readable mapping of Vahan document category → filename substrings we match."""
-    parts = [
-        "Filename rules: each pattern is a case-insensitive substring the file name must contain "
-        "(asterisks in patterns are stripped before matching). Extension must match.",
-    ]
-    for cat, patterns, exts in _DOC_PATTERNS:
-        pat_joined = " OR ".join(patterns)
-        ext_joined = ", ".join(exts)
-        parts.append(f"  [{cat}] ← filename contains any of: {pat_joined}  (ext: {ext_joined})")
-    return "\n".join(parts)
-
-
 def _resolve_sale_documents(sale_dir: Path) -> dict[str, Path | None]:
     """Map Vahan sub-category names to files found in the sale directory."""
     result: dict[str, Path | None] = {}
@@ -205,8 +197,8 @@ def _resolve_sale_documents(sale_dir: Path) -> dict[str, Path | None]:
 # Playwright micro-helpers
 # ---------------------------------------------------------------------------
 
-def _pause(seconds: float = _SHORT_WAIT_S) -> None:
-    time.sleep(seconds)
+def _pause() -> None:
+    time.sleep(_ACTION_WAIT_S)
 
 
 def _dump_page_state(page: Page, context: str) -> None:
@@ -349,10 +341,10 @@ def _type_typeahead(page: Page, selector: str, value: str, *, timeout: int = _DE
         _rto_log(f"TIMEOUT typeahead: {label} selector={selector} value={value}")
         _dump_page_state(page, f"typeahead failed: {label}")
         raise
-    _pause(1.0)
+    _pause()
     suggestion = page.locator(".ui-autocomplete li, .ui-menu-item, [role='option']").first
     try:
-        suggestion.wait_for(state="visible", timeout=5000)
+        suggestion.wait_for(state="visible", timeout=_DEFAULT_TIMEOUT_MS)
         suggestion.click()
     except PwTimeout:
         page.keyboard.press("Enter")
@@ -368,49 +360,77 @@ def _select_pf_dropdown(
     *,
     timeout: int = _DEFAULT_TIMEOUT_MS,
     label: str = "",
+    option_label_regex: re.Pattern | None = None,
 ) -> None:
     """Select an item from a PrimeFaces ``ui-selectonemenu`` by visible text.
 
-    PrimeFaces renders a custom overlay panel (``{id}_panel``) appended to ``<body>``,
-    not adjacent to the wrapper.  Workflow: click the trigger ``<div>`` → locate the
-    panel by ID or class → click the ``<li>`` whose text matches ``value``.
+    Tries the hidden native ``select#{wrapper_id}_input`` first (fast, reliable) when
+    ``wrapper_selector`` is ``div#something`` with an id.  Falls back to opening the
+    overlay and clicking ``li.ui-selectonemenu-item``.
+
+    Pass ``option_label_regex`` when the portal label varies (e.g. Registration vs Registeration).
     """
-    if not value:
+    if not value and option_label_regex is None:
         return
     try:
         wrapper = page.locator(wrapper_selector).first
         wrapper.wait_for(state="visible", timeout=timeout)
 
         wrapper_id = wrapper.get_attribute("id") or ""
+
+        # 1) Native <select> (PrimeFaces keeps options in sync; avoids overlay timing issues).
+        if wrapper_id:
+            native_sel = page.locator(f"select#{wrapper_id}_input")
+            try:
+                if native_sel.count() > 0:
+                    if option_label_regex is not None:
+                        native_sel.select_option(label=option_label_regex, timeout=_DEFAULT_TIMEOUT_MS)
+                        log_val = f"regex:{option_label_regex.pattern}"
+                    else:
+                        native_sel.select_option(label=value, timeout=_DEFAULT_TIMEOUT_MS)
+                        log_val = value
+                    logger.debug("fill_rto: native select %s = %s", wrapper_selector, log_val)
+                    if label:
+                        _rto_log(f"pf-dropdown (native): {label} = {log_val}")
+                    _pause()
+                    return
+            except Exception:
+                pass
+
+        # 2) Custom overlay panel
         wrapper.click()
-        _pause(0.4)
+        _pause()
 
         if wrapper_id:
             panel_sel = f"div#{wrapper_id}_panel"
         else:
             panel_sel = "div.ui-selectonemenu-panel"
         items_panel = page.locator(panel_sel).first
-        items_panel.wait_for(state="visible", timeout=5000)
+        items_panel.wait_for(state="visible", timeout=_DEFAULT_TIMEOUT_MS)
 
-        item = items_panel.locator("li.ui-selectonemenu-item").filter(
-            has_text=re.compile(f"^\\s*{re.escape(value)}\\s*$", re.IGNORECASE),
-        )
-        if item.count() == 0:
-            item = items_panel.locator("li.ui-selectonemenu-item").filter(has_text=value)
-        item.first.scroll_into_view_if_needed(timeout=3000)
-        item.first.click(timeout=5000)
+        if option_label_regex is not None:
+            item = items_panel.locator("li.ui-selectonemenu-item").filter(has_text=option_label_regex)
+        else:
+            item = items_panel.locator("li.ui-selectonemenu-item").filter(
+                has_text=re.compile(f"^\\s*{re.escape(value)}\\s*$", re.IGNORECASE),
+            )
+            if item.count() == 0:
+                item = items_panel.locator("li.ui-selectonemenu-item").filter(has_text=value)
+        item.first.scroll_into_view_if_needed(timeout=_DEFAULT_TIMEOUT_MS)
+        item.first.click(timeout=_DEFAULT_TIMEOUT_MS)
     except PwTimeout:
         _assert_vahan_session_alive(page)
-        _rto_log(f"TIMEOUT pf-dropdown: {label} selector={wrapper_selector} value={value}")
+        _rto_log(f"TIMEOUT pf-dropdown: {label} selector={wrapper_selector} value={value!r}")
         _dump_page_state(page, f"pf-dropdown failed: {label}")
         raise
     logger.debug("fill_rto: pf-dropdown %s = %s (%s)", wrapper_selector, value, label)
     if label:
-        _rto_log(f"pf-dropdown: {label} = {value}")
-    _pause(0.3)
+        shown = value or (option_label_regex.pattern if option_label_regex else "")
+        _rto_log(f"pf-dropdown: {label} = {shown}")
+    _pause()
 
 
-def _dismiss_dialog(page: Page, button_text: str = "OK", *, timeout: int = 8000) -> None:
+def _dismiss_dialog(page: Page, button_text: str = "OK", *, timeout: int = _DEFAULT_TIMEOUT_MS) -> None:
     """Click a dialog/popup button by its text."""
     btn = page.get_by_role("button", name=re.compile(button_text, re.IGNORECASE)).first
     try:
@@ -429,7 +449,7 @@ def _wait_for_progress_close(page: Page, timeout_ms: int = _LONG_TIMEOUT_MS) -> 
         overlay.wait_for(state="hidden", timeout=timeout_ms)
     except PwTimeout:
         pass
-    _pause(0.5)
+    _pause()
 
 
 def _upload_file(page: Page, file_path: Path, *, timeout: int = _DEFAULT_TIMEOUT_MS) -> None:
@@ -443,7 +463,7 @@ def _upload_file(page: Page, file_path: Path, *, timeout: int = _DEFAULT_TIMEOUT
         _dump_page_state(page, f"upload failed: {file_path.name}")
         raise
     _rto_log(f"upload: {file_path.name}")
-    _pause(2.0)
+    _pause()
     _wait_for_progress_close(page)
 
 
@@ -455,7 +475,7 @@ def _screen_1(page: Page, office: str) -> None:
     """Screen 1: Select office, action, Show Form."""
     _set_screen("Screen 1")
     logger.info("fill_rto: Screen 1 — office=%s", office)
-    _rto_log("--- Screen 1: Assigned office, Entry-New Registeration, Show Form ---")
+    _rto_log("--- Screen 1: Assigned office, Entry-New Registration, Show Form ---")
 
     _select_pf_dropdown(
         page,
@@ -463,18 +483,19 @@ def _screen_1(page: Page, office: str) -> None:
         office,
         label="Select Assigned Office",
     )
-    _pause(0.5)
+    _pause()
 
     _select_pf_dropdown(
         page,
         "div#actionList",
-        "Entry-New Registeration",
+        "Entry-New Registration",
         label="Select Action",
+        option_label_regex=_ENTRY_NEW_REG_LABEL_RE,
     )
-    _pause(0.5)
+    _pause()
 
     _click(page, "button#pending_action", label="Show Form")
-    _pause(1.5)
+    _pause()
     _wait_for_progress_close(page)
 
     _dismiss_dialog(page, "OK")
@@ -490,12 +511,12 @@ def _screen_2(page: Page, data: dict) -> None:
     _fill(page, "input[id*='chassisNo'], input[name*='chassisNo']", data["chassis_num"], label="Chassis No")
     _fill(page, "input[id*='engineNo'], input[name*='engineNo']", data["engine_short"], label="Engine No (last 5)")
     _click(page, "input[value='Get Details'], button:has-text('Get Details')", label="Get Details")
-    _pause(2.0)
+    _pause()
     _wait_for_progress_close(page)
 
     # 2b: Choice number = No
     try:
-        _select(page, "select[id*='choiceNo'], select[id*='choice']", "No", label="Choice number opt", timeout=5000)
+        _select(page, "select[id*='choiceNo'], select[id*='choice']", "No", label="Choice number opt", timeout=_DEFAULT_TIMEOUT_MS)
     except PwTimeout:
         logger.debug("fill_rto: choice number dropdown not found, skipping")
 
@@ -507,14 +528,14 @@ def _screen_2(page: Page, data: dict) -> None:
         label="Purchase/Delivery Date",
     )
     _fill(page, "input[id*='ownerName'], input[name*='ownerName']", data["customer_name"], label="Owner Name")
-    _pause(0.5)
+    _pause()
 
     # Popup: pick "Not Available" radio
     try:
         not_avail = page.locator("input[type='radio'][value*='Not Available'], label:has-text('Not Available') input[type='radio']").first
-        not_avail.wait_for(state="visible", timeout=5000)
+        not_avail.wait_for(state="visible", timeout=_DEFAULT_TIMEOUT_MS)
         not_avail.click()
-        _pause(0.3)
+        _pause()
     except PwTimeout:
         logger.debug("fill_rto: 'Not Available' radio not found, skipping")
 
@@ -549,7 +570,7 @@ def _screen_2(page: Page, data: dict) -> None:
                 "select[id*='state'], select[name*='state']",
                 data["state"],
                 label="State",
-                timeout=5000,
+                timeout=_DEFAULT_TIMEOUT_MS,
             )
         except (PwTimeout, Exception):
             _type_typeahead(
@@ -557,13 +578,13 @@ def _screen_2(page: Page, data: dict) -> None:
                 "input[id*='state'], input[name*='state']",
                 data["state"],
                 label="State (typeahead)",
-                timeout=5000,
+                timeout=_DEFAULT_TIMEOUT_MS,
             )
 
     # Skip district per user instruction
 
     _fill(page, "input[id*='pin'], input[name*='pin']", data.get("pin", ""), label="Pin")
-    _pause(0.3)
+    _pause()
 
     # Same as Current Address checkbox
     try:
@@ -572,7 +593,7 @@ def _screen_2(page: Page, data: dict) -> None:
             "input[type='checkbox'][id*='currentAddress'], "
             "label:has-text('Same as Current') input[type='checkbox']"
         ).first
-        same_addr.wait_for(state="visible", timeout=5000)
+        same_addr.wait_for(state="visible", timeout=_DEFAULT_TIMEOUT_MS)
         if not same_addr.is_checked():
             same_addr.click()
             _rto_log("checkbox: Same as Current Address")
@@ -580,17 +601,17 @@ def _screen_2(page: Page, data: dict) -> None:
         logger.debug("fill_rto: 'Same as Current Address' checkbox not found, skipping")
 
     # 2e: Save and file movement
-    _pause(0.5)
+    _pause()
     _click(
         page,
         "input[value*='Save'], button:has-text('Save and file movement'), button:has-text('Save and File Movement')",
         label="Save and file movement",
         timeout=_DEFAULT_TIMEOUT_MS,
     )
-    _pause(1.0)
+    _pause()
     _dismiss_dialog(page, "Yes")
-    _pause(1.0)
-    _dismiss_dialog(page, "Close", timeout=5000)
+    _pause()
+    _dismiss_dialog(page, "Close", timeout=_DEFAULT_TIMEOUT_MS)
 
 
 def _screen_3(page: Page, data: dict) -> str:
@@ -601,11 +622,11 @@ def _screen_3(page: Page, data: dict) -> str:
 
     # 3a: Home then Entry
     _click(page, "a:has-text('Home'), button:has-text('Home'), [id*='home']", label="Home link")
-    _pause(1.5)
+    _pause()
     _wait_for_progress_close(page)
 
     _click(page, "input[value='Entry'], button:has-text('Entry'), a:has-text('Entry')", label="Entry button")
-    _pause(1.5)
+    _pause()
     _wait_for_progress_close(page)
 
     # 3b: Vehicle Details — Tax Mode
@@ -615,7 +636,7 @@ def _screen_3(page: Page, data: dict) -> str:
             "select[id*='taxMode'], select[name*='taxMode']",
             "ONE TIME",
             label="Tax Mode",
-            timeout=8000,
+            timeout=_DEFAULT_TIMEOUT_MS,
         )
     except (PwTimeout, Exception):
         logger.debug("fill_rto: Tax Mode dropdown not found or failed, skipping")
@@ -627,12 +648,12 @@ def _screen_3(page: Page, data: dict) -> str:
             "select[id*='insuranceType'], select[name*='insuranceType']",
             "THIRD PARTY",
             label="Insurance Type",
-            timeout=8000,
+            timeout=_DEFAULT_TIMEOUT_MS,
         )
     except (PwTimeout, Exception):
         logger.debug("fill_rto: Insurance Type dropdown issue, trying typeahead")
         try:
-            _type_typeahead(page, "input[id*='insuranceType']", "THIRD PARTY", label="Insurance Type typeahead", timeout=5000)
+            _type_typeahead(page, "input[id*='insuranceType']", "THIRD PARTY", label="Insurance Type typeahead", timeout=_DEFAULT_TIMEOUT_MS)
         except PwTimeout:
             pass
 
@@ -643,7 +664,7 @@ def _screen_3(page: Page, data: dict) -> str:
                 "select[id*='insuranceCompany'], select[name*='insuranceCompany']",
                 data["insurer"],
                 label="Insurance Company",
-                timeout=8000,
+                timeout=_DEFAULT_TIMEOUT_MS,
             )
         except (PwTimeout, Exception):
             _type_typeahead(
@@ -651,7 +672,7 @@ def _screen_3(page: Page, data: dict) -> str:
                 "input[id*='insuranceCompany'], input[name*='insuranceCompany']",
                 data["insurer"],
                 label="Insurance Company typeahead",
-                timeout=8000,
+                timeout=_DEFAULT_TIMEOUT_MS,
             )
 
     _fill(
@@ -682,10 +703,10 @@ def _screen_3(page: Page, data: dict) -> str:
                 "input[type='checkbox'][id*='hypothecated'], "
                 "input[type='checkbox'][id*='isHypothecated']"
             ).first
-            hyp_check.wait_for(state="visible", timeout=5000)
+            hyp_check.wait_for(state="visible", timeout=_DEFAULT_TIMEOUT_MS)
             if not hyp_check.is_checked():
                 hyp_check.click()
-            _pause(0.5)
+            _pause()
         except PwTimeout:
             logger.debug("fill_rto: hypothecation checkbox not found")
 
@@ -695,7 +716,7 @@ def _screen_3(page: Page, data: dict) -> str:
                 "select[id*='hypothecationType'], select[name*='hypothecationType']",
                 "Hypothecation",
                 label="Hypothecation Type",
-                timeout=5000,
+                timeout=_DEFAULT_TIMEOUT_MS,
             )
         except (PwTimeout, Exception):
             pass
@@ -713,7 +734,7 @@ def _screen_3(page: Page, data: dict) -> str:
                 "input[id*='financierName'], input[id*='financer']",
                 financier,
                 label="Financier typeahead",
-                timeout=8000,
+                timeout=_DEFAULT_TIMEOUT_MS,
             )
 
         _fill(
@@ -730,7 +751,7 @@ def _screen_3(page: Page, data: dict) -> str:
                     "select[id*='finState'], select[id*='hypState']",
                     data["state"],
                     label="Financier State",
-                    timeout=5000,
+                    timeout=_DEFAULT_TIMEOUT_MS,
                 )
             except (PwTimeout, Exception):
                 pass
@@ -749,13 +770,13 @@ def _screen_3(page: Page, data: dict) -> str:
         "input[value*='Save'], button:has-text('Save and File Movement'), button:has-text('Save and file movement')",
         label="Save and File Movement (Screen 3)",
     )
-    _pause(1.5)
+    _pause()
     _dismiss_dialog(page, "Yes")
-    _pause(1.0)
+    _pause()
 
     # "Are you sure" popup
-    _dismiss_dialog(page, "Yes", timeout=5000)
-    _pause(1.0)
+    _dismiss_dialog(page, "Yes", timeout=_DEFAULT_TIMEOUT_MS)
+    _pause()
 
     # Scrape Application No from success popup
     application_id = ""
@@ -764,7 +785,7 @@ def _screen_3(page: Page, data: dict) -> str:
             ".ui-dialog-content, .ui-messages-info, .ui-growl-message, "
             "[class*='dialog'] [class*='message'], [class*='success']"
         ).first
-        dialog_text.wait_for(state="visible", timeout=10000)
+        dialog_text.wait_for(state="visible", timeout=_DEFAULT_TIMEOUT_MS)
         text = dialog_text.inner_text()
         match = re.search(r'(?:application\s*(?:no\.?|number)\s*[:\-]?\s*)(\S+)', text, re.IGNORECASE)
         if match:
@@ -781,8 +802,8 @@ def _screen_3(page: Page, data: dict) -> str:
         _rto_log("WARNING: could not scrape application number from popup")
         _dump_page_state(page, "scrape application number failed")
 
-    _dismiss_dialog(page, "OK", timeout=5000)
-    _pause(0.5)
+    _dismiss_dialog(page, "OK", timeout=_DEFAULT_TIMEOUT_MS)
+    _pause()
 
     return application_id
 
@@ -795,14 +816,14 @@ def _screen_4(page: Page) -> None:
 
     # Scroll down and click Verify
     page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-    _pause(0.5)
+    _pause()
     _click(page, "input[value='Verify'], button:has-text('Verify')", label="Verify", timeout=_DEFAULT_TIMEOUT_MS)
-    _pause(1.5)
+    _pause()
     _wait_for_progress_close(page)
 
     # Save Options > File Movement
     page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-    _pause(0.5)
+    _pause()
 
     try:
         _click(
@@ -811,12 +832,12 @@ def _screen_4(page: Page) -> None:
             label="Save Options",
             timeout=_DEFAULT_TIMEOUT_MS,
         )
-        _pause(0.5)
+        _pause()
         _click(
             page,
             "a:has-text('File Movement'), [id*='fileMovement'], button:has-text('File Movement')",
             label="File Movement menu item",
-            timeout=8000,
+            timeout=_DEFAULT_TIMEOUT_MS,
         )
     except PwTimeout:
         _click(
@@ -826,13 +847,13 @@ def _screen_4(page: Page) -> None:
             timeout=_DEFAULT_TIMEOUT_MS,
         )
 
-    _pause(1.0)
+    _pause()
 
     # Popups: State -> Save, then Yes
-    _dismiss_dialog(page, "Save", timeout=5000)
-    _pause(0.5)
-    _dismiss_dialog(page, "Yes", timeout=5000)
-    _pause(1.0)
+    _dismiss_dialog(page, "Save", timeout=_DEFAULT_TIMEOUT_MS)
+    _pause()
+    _dismiss_dialog(page, "Yes", timeout=_DEFAULT_TIMEOUT_MS)
+    _pause()
 
     # Dealer Document Upload
     _click(
@@ -840,7 +861,7 @@ def _screen_4(page: Page) -> None:
         "input[value*='Dealer Document Upload'], button:has-text('Dealer Document Upload'), a:has-text('Dealer Document Upload')",
         label="Dealer Document Upload",
     )
-    _pause(2.0)
+    _pause()
     _wait_for_progress_close(page)
 
 
@@ -877,7 +898,7 @@ def _screen_5(page: Page, docs: dict[str, Path | None]) -> None:
                 "select[id*='subCategory'], select[id*='docCategory'], select[name*='subCategory']",
                 sub_category_text,
                 label=f"Sub Category: {sub_category_text}",
-                timeout=8000,
+                timeout=_DEFAULT_TIMEOUT_MS,
             )
         except (PwTimeout, Exception):
             _type_typeahead(
@@ -885,10 +906,10 @@ def _screen_5(page: Page, docs: dict[str, Path | None]) -> None:
                 "input[id*='subCategory']",
                 sub_category_text,
                 label=f"Sub Category typeahead: {sub_category_text}",
-                timeout=8000,
+                timeout=_DEFAULT_TIMEOUT_MS,
             )
 
-        _pause(0.5)
+        _pause()
 
         # Upload the file
         _upload_file(page, file_path)
@@ -901,27 +922,27 @@ def _screen_5(page: Page, docs: dict[str, Path | None]) -> None:
                 "a:has-text('>>'), [class*='chevron-right'], "
                 "[class*='ui-icon-arrowthick-1-e']"
             ).first
-            chevron.wait_for(state="visible", timeout=8000)
+            chevron.wait_for(state="visible", timeout=_DEFAULT_TIMEOUT_MS)
             chevron.click()
             _rto_log(f"chevron next after upload: {doc_key}")
-            _pause(1.5)
+            _pause()
             _wait_for_progress_close(page)
         except PwTimeout:
             logger.warning("fill_rto: right-chevron not found for %s, continuing", doc_key)
 
     # After all uploads, click File Movement
-    _pause(0.5)
+    _pause()
     _click(
         page,
         "input[value*='File Movement'], button:has-text('File Movement'), a:has-text('File Movement')",
         label="File Movement (after uploads)",
         timeout=_DEFAULT_TIMEOUT_MS,
     )
-    _pause(1.0)
+    _pause()
     _dismiss_dialog(page, "Yes")
-    _pause(0.5)
-    _dismiss_dialog(page, "Ok", timeout=5000)
-    _pause(0.5)
+    _pause()
+    _dismiss_dialog(page, "Ok", timeout=_DEFAULT_TIMEOUT_MS)
+    _pause()
 
 
 def _screen_6(page: Page) -> float | None:
@@ -936,7 +957,7 @@ def _screen_6(page: Page) -> float | None:
         label="Dealer Regn Fee Tax",
         timeout=_DEFAULT_TIMEOUT_MS,
     )
-    _pause(2.0)
+    _pause()
     _wait_for_progress_close(page)
 
     # Scrape Total Payable Amount
@@ -948,7 +969,7 @@ def _screen_6(page: Page) -> float | None:
             "span:has-text('Total Payable'), "
             "label:has-text('Total Payable')"
         ).first
-        amount_el.wait_for(state="visible", timeout=10000)
+        amount_el.wait_for(state="visible", timeout=_DEFAULT_TIMEOUT_MS)
         text = amount_el.inner_text().strip()
         nums = re.findall(r'[\d,]+\.?\d*', text)
         if nums:
@@ -962,18 +983,18 @@ def _screen_6(page: Page) -> float | None:
         _dump_page_state(page, "scrape total payable failed")
 
     # Dismiss popups
-    _dismiss_dialog(page, "Yes", timeout=5000)
-    _pause(0.5)
+    _dismiss_dialog(page, "Yes", timeout=_DEFAULT_TIMEOUT_MS)
+    _pause()
     try:
         close_btn = page.locator(
             "button:has-text('×'), button:has-text('X'), "
             "[class*='ui-dialog-titlebar-close'], a[class*='close']"
         ).first
-        close_btn.wait_for(state="visible", timeout=5000)
+        close_btn.wait_for(state="visible", timeout=_DEFAULT_TIMEOUT_MS)
         close_btn.click()
     except PwTimeout:
         pass
-    _pause(0.5)
+    _pause()
 
     return total
 
@@ -1064,40 +1085,29 @@ def fill_rto_row(row: dict) -> dict:
 
         office = _transform_dealer_rto(row.get("dealer_rto") or "")
 
-        # --- Resolve document files ---
+        # --- Resolve document files (log: uploads root, searched folder, one summary line) ---
         subfolder = row.get("subfolder") or ""
         uploads_root = get_uploads_dir(dealer_id)
         _rto_log(f"uploads root (dealer): {uploads_root.resolve()}")
         if subfolder:
             sale_dir = uploads_root / subfolder
             _rto_log(f"searched folder (absolute): {sale_dir.resolve()}")
-            _rto_log(f"subfolder from DB (file_location): {subfolder!r}")
         else:
             sale_dir = None
             _rto_log(
-                f"warning: no subfolder — file_location is empty in sales_master/customer_master "
-                f"for sales_id={row.get('sales_id')}. Document uploads will be skipped."
+                f"searched folder: (none — file_location empty for sales_id={row.get('sales_id')})"
             )
-        for ref_line in _doc_patterns_reference_for_log().splitlines():
-            _rto_log(ref_line)
 
         docs = _resolve_sale_documents(sale_dir) if sale_dir else {cat: None for cat, _, _ in _DOC_PATTERNS}
 
-        if sale_dir and sale_dir.is_dir():
-            all_files = sorted(f.name for f in sale_dir.iterdir() if f.is_file())
-            _rto_log(f"all files in searched folder ({len(all_files)} total, sorted):")
-            for name in all_files[:400]:
-                _rto_log(f"  - {name}")
-            if len(all_files) > 400:
-                _rto_log(f"  … ({len(all_files) - 400} more files not listed)")
-
         found = {k: v.name for k, v in docs.items() if v is not None}
         missing = [k for k, v in docs.items() if v is None]
-        if found:
-            _rto_log(f"documents matched to categories: {found}")
         if missing:
             logger.warning("fill_rto: missing documents: %s", ", ".join(missing))
-            _rto_log(f"warning: missing document categories: {', '.join(missing)}")
+        summary = f"documents matched to categories: {found!r}"
+        if missing:
+            summary += f"; missing: {missing!r}"
+        _rto_log(summary)
 
         # --- Open Vahan browser (reuse existing tab on same host when possible; see handle_browser_opening) ---
         page, open_error = get_or_open_site_page(
