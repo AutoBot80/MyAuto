@@ -41,11 +41,15 @@ _SCREEN3_TAX_MODE_PF_WRAPPERS: tuple[str, ...] = (
     '[id="workbench_tabview:tax_mode"]',
     '[id="workbench_tabview:taxMode"]',
 )
+# Prefer the **broad** native selector first: RTO log ``9650693610_RTO.txt`` — PF ``tax_mode`` times out;
+# ``workbench_tabview:tax_mode_input`` matches the **hidden** PF <select> (``visible`` wait fails); the
+# visible dropdown is the generic ``select[id*='taxMode']`` (success: ``select: Tax Mode = ONE TIME``).
 _SCREEN3_TAX_MODE_NATIVE_SELECTORS: tuple[str, ...] = (
+    "select[id*='taxMode'], select[name*='taxMode']",
     'select[id="workbench_tabview:tax_mode_input"]',
     'select[id="workbench_tabview:taxMode_input"]',
-    "select[id*='taxMode'], select[name*='taxMode']",
 )
+_TAX_MODE_ONE_TIME_LABEL_RE = re.compile(r"ONE\s*TIME", re.I)
 _SCREEN3_SAVE_VEHICLE_DETAILS_SELECTORS: tuple[str, ...] = (
     '[id="workbench_tabview:save_vehicle_dtls_btn"]',
     '[id="workbench_tabview:saveVehDtls_btn"]',
@@ -1547,11 +1551,30 @@ def _screen_3_pf_subtab_click(page: Page, label_pattern: str, *, log_name: str) 
 
 
 def _screen_3_scroll_to_tax_mode(page: Page) -> None:
-    """Scroll the Tax Mode control into view (Vehicle Details tab is often long)."""
-    for sel in _SCREEN3_TAX_MODE_PF_WRAPPERS + _SCREEN3_TAX_MODE_NATIVE_SELECTORS:
+    """Scroll so **Tax Mode** is visible — it sits far down the Vehicle Details tab (often off-screen).
+
+    PrimeFaces tab body ``veh_info_tab`` may be the scroll container; we scroll that panel toward
+    the bottom, then ``scrollIntoView({ block: 'center' })`` on the tax control.
+    """
+    tab_panel = page.locator('[id="workbench_tabview:veh_info_tab"]').first
+    try:
+        tab_panel.wait_for(state="attached", timeout=8000)
+        tab_panel.evaluate(
+            """(el) => {
+                el.scrollTop = Math.max(0, el.scrollHeight - el.clientHeight);
+            }"""
+        )
+        _pause()
+        _rto_log("Screen 3: scrolled Vehicle Details tab panel toward bottom (Tax Mode region)")
+    except Exception as e:
+        _rto_log(f"Screen 3: tab panel scroll skipped ({e!s})")
+
+    for sel in _SCREEN3_TAX_MODE_NATIVE_SELECTORS + _SCREEN3_TAX_MODE_PF_WRAPPERS:
         loc = page.locator(sel).first
         try:
-            loc.wait_for(state="attached", timeout=3000)
+            loc.wait_for(state="attached", timeout=8000)
+            loc.evaluate("el => el.scrollIntoView({ block: 'center', inline: 'nearest' })")
+            _pause()
             loc.scroll_into_view_if_needed(timeout=_DEFAULT_TIMEOUT_MS)
             _pause()
             _rto_log(f"Screen 3: scrolled to Tax Mode ({sel!r})")
@@ -1562,26 +1585,46 @@ def _screen_3_scroll_to_tax_mode(page: Page) -> None:
 
 
 def _screen_3_select_tax_mode_one_time(page: Page) -> None:
-    """Set Tax Mode to **ONE TIME** using workbench PF widgets / native ``select`` (RTO log ids)."""
+    """Set Tax Mode to **ONE TIME** — native ``select`` first (visible control; PF hidden input last)."""
+    for nsel in _SCREEN3_TAX_MODE_NATIVE_SELECTORS:
+        try:
+            loc = page.locator(nsel).first
+            loc.wait_for(state="attached", timeout=_DEFAULT_TIMEOUT_MS)
+            loc.evaluate("el => el.scrollIntoView({ block: 'center', inline: 'nearest' })")
+            _pause()
+            loc.select_option(label=_TAX_MODE_ONE_TIME_LABEL_RE, timeout=_DEFAULT_TIMEOUT_MS, force=True)
+            _pause()
+            _rto_log(f"select: Tax Mode = ONE TIME ({nsel!r})")
+            return
+        except Exception as e:
+            logger.debug("fill_rto: Tax Mode native try %s: %s", nsel, e)
+            continue
+
     for wsel in _SCREEN3_TAX_MODE_PF_WRAPPERS:
+        if page.locator(wsel).count() == 0:
+            continue
         try:
             wid_m = re.search(r'id="([^"]+)"', wsel)
             wrapper_id = wid_m.group(1) if wid_m else ""
-            _select_pf_dropdown(page, wsel, "ONE TIME", label="Tax Mode", timeout=_DEFAULT_TIMEOUT_MS)
+            _select_pf_dropdown(
+                page,
+                wsel,
+                "ONE TIME",
+                label="Tax Mode",
+                option_label_regex=_TAX_MODE_ONE_TIME_LABEL_RE,
+                timeout=_DEFAULT_TIMEOUT_MS,
+            )
             if wrapper_id:
                 _close_pf_selectonemenu_overlay(page, wrapper_id)
             _pause()
+            _rto_log(f"pf-dropdown: Tax Mode = ONE TIME ({wsel!r})")
             return
-        except Exception:
+        except Exception as e:
+            logger.debug("fill_rto: Tax Mode PF try %s: %s", wsel, e)
             continue
-    for nsel in _SCREEN3_TAX_MODE_NATIVE_SELECTORS:
-        try:
-            _select(page, nsel, "ONE TIME", label="Tax Mode", timeout=_DEFAULT_TIMEOUT_MS)
-            return
-        except Exception:
-            continue
+
     logger.debug("fill_rto: Tax Mode could not be set (ONE TIME)")
-    _rto_log("WARNING: Tax Mode not set — check workbench_tabview:tax_mode")
+    _rto_log("WARNING: Tax Mode not set (ONE TIME)")
 
 
 def _screen_3_click_save_vehicle_details(page: Page) -> None:
