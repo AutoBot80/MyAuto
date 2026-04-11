@@ -26,8 +26,11 @@ logger = logging.getLogger(__name__)
 # --- Testing / build: edit here only (not .env). Use 0 / False / "" for production full SOP. ---
 # ``RTO_FILL_SKIP_TO_SCREEN``: 0 = run all screens; 1–6 = start at that screen (skips dealer-home reset and earlier).
 RTO_FILL_SKIP_TO_SCREEN = 3
-# Screen 3: skip **Home** and only click **Entry** (you are already on ``home.xhtml`` with the grid). Also on when SKIP is 3.
+# Screen 3: skip **Home** (you are already on ``home.xhtml`` with the grid). Also on when SKIP is 3.
 RTO_FILL_SCREEN3_SKIP_HOME = False
+# Screen 3: skip **Entry** — only with ``skip_home``; go straight to **Vehicle Details** sub-tab (already past Entry on the form).
+# On when SKIP is 3 (and ``RTO_FILL_SCREEN3_SKIP_HOME`` is implied for that path).
+RTO_FILL_SCREEN3_SKIP_ENTRY = False
 # Optional seed for ``data["rto_application_id"]`` when the queue row has no app id (logging / return merge only).
 RTO_FILL_TEST_APPLICATION_ID = ""
 
@@ -1369,6 +1372,54 @@ def _screen_3_click_entry(page: Page, data: dict, *, skip_home: bool) -> None:
     _wait_for_progress_close(page)
 
 
+def _screen_3_pf_subtab_probe_log(page: Page, label_pattern: str) -> None:
+    """Log DOM hints for a sub-tab (ids/classes) to the RTO file for selector tuning."""
+    rx = re.compile(label_pattern, re.I)
+    try:
+        cand = page.get_by_role("tab", name=rx).first
+        if cand.count() == 0:
+            cand = page.locator(".ui-tabs-nav a, .ui-tabmenu-nav a, [role='tab']").filter(has_text=rx).first
+        if cand.count() == 0:
+            cand = page.locator("a, span").filter(has_text=rx).first
+        if cand.count() == 0:
+            _rto_log(f"tab probe [{label_pattern}]: no matching node")
+            return
+        bits = [
+            f"id={cand.get_attribute('id')!r}",
+            f"class={cand.get_attribute('class')!r}",
+            f"href={cand.get_attribute('href')!r}",
+            f"role={cand.get_attribute('role')!r}",
+            f"aria-controls={cand.get_attribute('aria-controls')!r}",
+            f"data-index={cand.get_attribute('data-index')!r}",
+        ]
+        tx = ""
+        try:
+            tx = (cand.inner_text(timeout=2000) or "").strip()[:120]
+        except Exception:
+            pass
+        _rto_log(f"tab probe [{label_pattern}]: {'; '.join(bits)}; text={tx!r}")
+    except Exception as e:
+        _rto_log(f"tab probe [{label_pattern}]: error {e!s}")
+
+
+def _screen_3_pf_subtab_click(page: Page, label_pattern: str, *, log_name: str) -> None:
+    """Activate a PrimeFaces-style sub-tab by visible title (e.g. *Vehicle Details*, *Hypothecation*)."""
+    rx = re.compile(label_pattern, re.I)
+    try:
+        try:
+            page.get_by_role("tab", name=rx).first.click(timeout=_DEFAULT_TIMEOUT_MS)
+        except Exception:
+            page.locator(".ui-tabs-nav a, .ui-tabmenu-nav a, ul.ui-tabs-nav li a").filter(has_text=rx).first.click(
+                timeout=_DEFAULT_TIMEOUT_MS
+            )
+        _pause()
+        _wait_for_progress_close_loop(page)
+        _rto_log(f"Screen 3: sub-tab {log_name}")
+    except Exception as e:
+        _rto_log(f"WARNING: sub-tab {log_name} click failed: {e!s}")
+        logger.warning("fill_rto: sub-tab %s: %s", log_name, e)
+
+
 def _screen_2(page: Page, data: dict) -> None:
     """Screen 2: Chassis/engine, owner details, address, Save."""
     _set_screen("Screen 2")
@@ -1619,19 +1670,23 @@ def _screen_2(page: Page, data: dict) -> None:
     _handle_inward_partial_save_followup(page, data)
 
 
-def _screen_3(page: Page, data: dict, *, skip_home: bool) -> str:
+def _screen_3(page: Page, data: dict, *, skip_home: bool, skip_entry: bool = False) -> str:
     """Screen 3: optional Home → Entry, Tax mode, Insurance, Hypothecation, Save. Returns application_id.
 
-    ``skip_home``: when True (skip point at screen 3, or ``RTO_FILL_SCREEN3_SKIP_HOME``), do not click Home—
-    only Entry on the pending-work table (Inwarded row matching ``rto_application_id`` when available).
+    ``skip_home``: when True (skip point at screen 3, or ``RTO_FILL_SCREEN3_SKIP_HOME``), do not click Home.
+    ``skip_entry``: when True (only valid with ``skip_home``), do not click Entry—already on the post-Entry form;
+    activate **Vehicle Details** sub-tab only.
     """
     _set_screen("Screen 3")
     logger.info("fill_rto: Screen 3 — insurer=%s", data.get("insurer", "")[:20])
     _rto_log("--- Screen 3: Home, Entry, tax, insurance, hypothecation, application no ---")
 
-    # 3a: Home (unless skip point) → Entry on pending-work grid.
+    # 3a: Home (unless skip point) → Entry on pending-work grid (unless skip_entry).
     if skip_home:
-        _rto_log("Screen 3: skip Home — Entry only (already on home.xhtml)")
+        if skip_entry:
+            _rto_log("Screen 3: skip Home + skip Entry — Vehicle Details sub-tab only (already on form)")
+        else:
+            _rto_log("Screen 3: skip Home — Entry only (already on home.xhtml)")
     else:
         _click(page, "a:has-text('Home'), button:has-text('Home'), [id*='home']", label="Home link")
         _pause()
@@ -1641,7 +1696,11 @@ def _screen_3(page: Page, data: dict, *, skip_home: bool) -> str:
         except Exception:
             pass
 
-    _screen_3_click_entry(page, data, skip_home=skip_home)
+    if not skip_entry:
+        _screen_3_click_entry(page, data, skip_home=skip_home)
+
+    # 3a2: Sub-tab **Vehicle Details** (post-Entry form uses PF tabs; tax/insurance live here).
+    _screen_3_pf_subtab_click(page, r"Vehicle\s*Details", log_name="Vehicle Details")
 
     # 3b: Vehicle Details — Tax Mode
     try:
@@ -1708,9 +1767,11 @@ def _screen_3(page: Page, data: dict, *, skip_home: bool) -> str:
         label="Insurance Declared Value",
     )
 
-    # 3d: Hypothecation (only if financier exists)
+    # 3d: Hypothecation — log tab element details, then open tab before fields (if financier).
+    _screen_3_pf_subtab_probe_log(page, r"Hypothecation")
     financier = (data.get("financier") or "").strip()
     if financier:
+        _screen_3_pf_subtab_click(page, r"Hypothecation", log_name="Hypothecation")
         logger.info("fill_rto: Screen 3d — hypothecation, financier=%s", financier[:30])
         try:
             hyp_check = page.locator(
@@ -2151,9 +2212,12 @@ def fill_rto_row(row: dict) -> dict:
             data["rto_application_id"] = RTO_FILL_TEST_APPLICATION_ID
 
         if skip_from > 0:
+            extra = ""
+            if skip_from == 3:
+                extra = " Screen 3: skip Home + Entry → Vehicle Details sub-tab first."
             _rto_log(
                 f"TEMP SKIP: RTO_FILL_SKIP_TO_SCREEN={skip_from} — start at Screen {skip_from} "
-                f"(skipped: dealer-home reset + screens 1..{skip_from - 1})"
+                f"(skipped: dealer-home reset + screens 1..{skip_from - 1}){extra}"
             )
             logger.warning("fill_rto_row: RTO_FILL_SKIP_TO_SCREEN=%s (dev/testing)", skip_from)
 
@@ -2168,7 +2232,12 @@ def fill_rto_row(row: dict) -> dict:
         application_id = ""
         if skip_from <= 3:
             screen3_skip_home = (skip_from == 3) or RTO_FILL_SCREEN3_SKIP_HOME
-            application_id = _screen_3(page, data, skip_home=screen3_skip_home)
+            screen3_skip_entry = screen3_skip_home and (
+                (skip_from == 3) or RTO_FILL_SCREEN3_SKIP_ENTRY
+            )
+            application_id = _screen_3(
+                page, data, skip_home=screen3_skip_home, skip_entry=screen3_skip_entry
+            )
             if not (str(application_id or "").strip()):
                 application_id = str(data.get("rto_application_id") or "").strip()
         else:

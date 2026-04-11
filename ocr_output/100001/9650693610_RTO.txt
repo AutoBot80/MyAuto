@@ -1,238 +1,28 @@
-[2026-04-11 17:50:36 IST] [Setup] fill_rto_row start rto_queue_id=1 sales_id=1 dealer_id=100001 log_file=C:\Users\arya_\OneDrive\Desktop\My Auto.AI\ocr_output\100001\9650693610_RTO.txt
-[2026-04-11 17:50:36 IST] [Setup] uploads root (dealer): C:\Users\arya_\OneDrive\Desktop\My Auto.AI\Uploaded scans\100001
-[2026-04-11 17:50:36 IST] [Setup] searched folder (absolute): C:\Users\arya_\OneDrive\Desktop\My Auto.AI\Uploaded scans\100001\8905969604_100426
-[2026-04-11 17:50:36 IST] [Setup] documents matched to categories: {'FORM 20': '8905969604_Form_20.pdf', 'FORM 21': '8905969604_Sale_Certificate.pdf', 'FORM 22': '8905969604_Form22.pdf', 'INSURANCE CERTIFICATE': '8905969604_Insurance.pdf', 'INVOICE ORIGINAL': '8905969604_GST_Retail_Invoice.pdf', 'AADHAAR_FRONT': 'Aadhar.jpg', 'AADHAAR_BACK': 'Aadhar_back.jpg', 'OWNER UNDERTAKING FORM': 'Details.jpg'}
-[2026-04-11 17:50:42 IST] [Setup] browser page url: https://vahan.parivahan.gov.in/vahan/vahan/home.xhtml
-[2026-04-11 17:50:42 IST] [Setup] TEMP SKIP: RTO_FILL_SKIP_TO_SCREEN=3 — start at Screen 3 (skipped: dealer-home reset + screens 1..2)
-[2026-04-11 17:50:42 IST] [Screen 3] --- Screen 3: Home, Entry, tax, insurance, hypothecation, application no ---
-[2026-04-11 17:50:42 IST] [Screen 3] Screen 3: skipping Home — clicking Entry only (already on home.xhtml with pending work)
-[2026-04-11 17:50:49 IST] [Screen 3] click: Entry button
-[2026-04-11 17:50:59 IST] [Screen 3] TIMEOUT select: Tax Mode selector=select[id*='taxMode'], select[name*='taxMode'] value=ONE TIME
-[2026-04-11 17:50:59 IST] [Screen 3] === PAGE STATE DUMP (select failed: Tax Mode) ===
-[2026-04-11 17:50:59 IST] [Screen 3] url: https://vahan.parivahan.gov.in/vahan/vahan/home.xhtml
-[2026-04-11 17:50:59 IST] [Screen 3] frames: 1
-[2026-04-11 17:50:59 IST] [Screen 3]   frame[0] name='(main)' url=https://vahan.parivahan.gov.in/vahan/vahan/home.xhtml
-[2026-04-11 17:50:59 IST] [Screen 3]   [frame[0] main] visible interactive elements (38):
-[2026-04-11 17:50:59 IST] [Screen 3]     nav role='navigation' text=' Home  Report   Update Profile   Language  Welcome , , Logou' class='navbar navbar-default navigation-background'
-[2026-04-11 17:50:59 IST] [Screen 3]     a id='homeId1' name='homeId1'
-[2026-04-11 17:50:59 IST] [Screen 3]     a id='homeId2' name='homeId2' text=' Home'
-[2026-04-11 17:50:59 IST] [Screen 3]     a text=' Report ' class='dropdown-toggle'
-[2026-04-11 17:50:59 IST] [Screen 3]     a text=' Update Profile ' class='dropdown-toggle'
-[2026-04-11 17:50:59 IST] [Screen 3]     a text=' Language ' class='dropdown-toggle'
-[2026-04-11 17:50:59 IST] [Screen 3]     a id='welcomeUserId' name='welcomeUserId' text='Welcome , ,'
-[2026-04-11 17:50:59 IST] [Screen 3]     a id='logout' text='Logout' class='ui-commandlink ui-widget glyphicon glyphicon-log-out'
-[2026-04-11 17:50:59 IST] [Screen 3]     label text='User Permissions' class='field-label resp-label-section sidebar-brand '
-[2026-04-11 17:50:59 IST] [Screen 3]     button id='menu-toggle' text=' User Profile' class='btn btn-secondary'
-[2026-04-11 17:50:59 IST] [Screen 3]     li role='alert' text='Please Enter Application No'
-[2026-04-11 17:50:59 IST] [Screen 3]     label text='Select Assigned Office:' class='field-label resp-label-section'
-[2026-04-11 17:50:59 IST] [Screen 3]     div id='officeList' role='combobox' text='Select Assigned Office Select Assigned Office' class='ui-selectonemenu ui-widget ui-state-default ui-corner-all bottom-space'
-[2026-04-11 17:50:59 IST] [Screen 3]     input id='officeList_focus' name='officeList_focus' type='text'
-[2026-04-11 17:50:59 IST] [Screen 3]     select id='officeList_input' name='officeList_input' value='-1' text='Select Assigned Office'
-[2026-04-11 17:50:59 IST] [Screen 3]     label id='officeList_label' text='Select Assigned Office' class='ui-selectonemenu-label ui-inputfield ui-corner-all'
-[2026-04-11 17:50:59 IST] [Screen 3]     label text='Select Action:' class='field-label resp-label-section'
-[2026-04-11 17:50:59 IST] [Screen 3]     div id='actionList' role='combobox' text='Select Action Select Action' class='ui-selectonemenu ui-widget ui-state-default ui-corner-all bottom-space'
-[2026-04-11 17:50:59 IST] [Screen 3]     input id='actionList_focus' name='actionList_focus' type='text'
-[2026-04-11 17:50:59 IST] [Screen 3]     select id='actionList_input' name='actionList_input' value='-1' text='Select Action'
-[2026-04-11 17:51:00 IST] [Screen 3]     label id='actionList_label' text='Select Action' class='ui-selectonemenu-label ui-inputfield ui-corner-all'
-[2026-04-11 17:51:00 IST] [Screen 3]     button id='pending_action' name='pending_action' type='submit' role='button' text='Show Form' class='ui-button ui-widget ui-state-default ui-corner-all ui-button-text-only'
-[2026-04-11 17:51:00 IST] [Screen 3]     input id='j_idt210:0' name='j_idt210' type='radio' value='applNo'
-[2026-04-11 17:51:00 IST] [Screen 3]     label text='Application No'
-[2026-04-11 17:51:00 IST] [Screen 3]     input id='j_idt210:1' name='j_idt210' type='radio' value='oldApplNo'
-[2026-04-11 17:51:00 IST] [Screen 3]     label text='Old Software Appl No'
-[2026-04-11 17:51:00 IST] [Screen 3]     input id='j_idt210:2' name='j_idt210' type='radio' value='regnNo'
-[2026-04-11 17:51:00 IST] [Screen 3]     label text='Registration No'
-[2026-04-11 17:51:00 IST] [Screen 3]     input id='j_idt210:3' name='j_idt210' type='radio' value='all'
-[2026-04-11 17:51:00 IST] [Screen 3]     label text='Pending Appls Last 2 Days'
-[2026-04-11 17:51:00 IST] [Screen 3]     label text='Application No: Part 1 (First Six Chars)Part 2 (Next Ten Cha' class='field-label resp-label-section'
-[2026-04-11 17:51:00 IST] [Screen 3]     label id='j_idt217' text='Application No:' class='ui-outputlabel ui-widget'
-[2026-04-11 17:51:00 IST] [Screen 3]     label id='j_idt218' text='Part 1 (First Six Chars)' class='ui-outputlabel ui-widget inline-section'
-[2026-04-11 17:51:00 IST] [Screen 3]     label id='j_idt219' text='Part 2 (Next Ten Chars)' class='ui-outputlabel ui-widget inline-section'
-[2026-04-11 17:51:00 IST] [Screen 3]     input id='firstPartAppNo' name='firstPartAppNo' type='text' role='textbox' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all text-upperca'
-[2026-04-11 17:51:00 IST] [Screen 3]     input id='secondPartAppNo' name='secondPartAppNo' type='text' role='textbox' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all text-upperca'
-[2026-04-11 17:51:00 IST] [Screen 3]     button id='j_idt229' name='j_idt229' type='submit' role='button' text='Get Pending Work' class='ui-button ui-widget ui-state-default ui-corner-all ui-button-text-only'
-[2026-04-11 17:51:00 IST] [Screen 3]     button id='j_idt230' name='j_idt230' type='submit' role='button' text='Pull Back Application' class='ui-button ui-widget ui-state-default ui-corner-all ui-button-text-only'
-[2026-04-11 17:51:00 IST] [Screen 3] === END PAGE STATE DUMP ===
-[2026-04-11 17:51:10 IST] [Screen 3] TIMEOUT select: Insurance Type selector=select[id*='insuranceType'], select[name*='insuranceType'] value=THIRD PARTY
-[2026-04-11 17:51:10 IST] [Screen 3] === PAGE STATE DUMP (select failed: Insurance Type) ===
-[2026-04-11 17:51:10 IST] [Screen 3] url: https://vahan.parivahan.gov.in/vahan/vahan/home.xhtml
-[2026-04-11 17:51:10 IST] [Screen 3] frames: 1
-[2026-04-11 17:51:10 IST] [Screen 3]   frame[0] name='(main)' url=https://vahan.parivahan.gov.in/vahan/vahan/home.xhtml
-[2026-04-11 17:51:10 IST] [Screen 3]   [frame[0] main] visible interactive elements (38):
-[2026-04-11 17:51:10 IST] [Screen 3]     nav role='navigation' text=' Home  Report   Update Profile   Language  Welcome , , Logou' class='navbar navbar-default navigation-background'
-[2026-04-11 17:51:10 IST] [Screen 3]     a id='homeId1' name='homeId1'
-[2026-04-11 17:51:10 IST] [Screen 3]     a id='homeId2' name='homeId2' text=' Home'
-[2026-04-11 17:51:10 IST] [Screen 3]     a text=' Report ' class='dropdown-toggle'
-[2026-04-11 17:51:10 IST] [Screen 3]     a text=' Update Profile ' class='dropdown-toggle'
-[2026-04-11 17:51:10 IST] [Screen 3]     a text=' Language ' class='dropdown-toggle'
-[2026-04-11 17:51:10 IST] [Screen 3]     a id='welcomeUserId' name='welcomeUserId' text='Welcome , ,'
-[2026-04-11 17:51:10 IST] [Screen 3]     a id='logout' text='Logout' class='ui-commandlink ui-widget glyphicon glyphicon-log-out'
-[2026-04-11 17:51:10 IST] [Screen 3]     label text='User Permissions' class='field-label resp-label-section sidebar-brand '
-[2026-04-11 17:51:10 IST] [Screen 3]     button id='menu-toggle' text=' User Profile' class='btn btn-secondary'
-[2026-04-11 17:51:10 IST] [Screen 3]     li role='alert' text='Please Enter Application No'
-[2026-04-11 17:51:10 IST] [Screen 3]     label text='Select Assigned Office:' class='field-label resp-label-section'
-[2026-04-11 17:51:10 IST] [Screen 3]     div id='officeList' role='combobox' text='Select Assigned Office Select Assigned Office' class='ui-selectonemenu ui-widget ui-state-default ui-corner-all bottom-space'
-[2026-04-11 17:51:10 IST] [Screen 3]     input id='officeList_focus' name='officeList_focus' type='text'
-[2026-04-11 17:51:10 IST] [Screen 3]     select id='officeList_input' name='officeList_input' value='-1' text='Select Assigned Office'
-[2026-04-11 17:51:10 IST] [Screen 3]     label id='officeList_label' text='Select Assigned Office' class='ui-selectonemenu-label ui-inputfield ui-corner-all'
-[2026-04-11 17:51:10 IST] [Screen 3]     label text='Select Action:' class='field-label resp-label-section'
-[2026-04-11 17:51:10 IST] [Screen 3]     div id='actionList' role='combobox' text='Select Action Select Action' class='ui-selectonemenu ui-widget ui-state-default ui-corner-all bottom-space'
-[2026-04-11 17:51:10 IST] [Screen 3]     input id='actionList_focus' name='actionList_focus' type='text'
-[2026-04-11 17:51:10 IST] [Screen 3]     select id='actionList_input' name='actionList_input' value='-1' text='Select Action'
-[2026-04-11 17:51:10 IST] [Screen 3]     label id='actionList_label' text='Select Action' class='ui-selectonemenu-label ui-inputfield ui-corner-all'
-[2026-04-11 17:51:10 IST] [Screen 3]     button id='pending_action' name='pending_action' type='submit' role='button' text='Show Form' class='ui-button ui-widget ui-state-default ui-corner-all ui-button-text-only'
-[2026-04-11 17:51:10 IST] [Screen 3]     input id='j_idt210:0' name='j_idt210' type='radio' value='applNo'
-[2026-04-11 17:51:10 IST] [Screen 3]     label text='Application No'
-[2026-04-11 17:51:10 IST] [Screen 3]     input id='j_idt210:1' name='j_idt210' type='radio' value='oldApplNo'
-[2026-04-11 17:51:10 IST] [Screen 3]     label text='Old Software Appl No'
-[2026-04-11 17:51:10 IST] [Screen 3]     input id='j_idt210:2' name='j_idt210' type='radio' value='regnNo'
-[2026-04-11 17:51:10 IST] [Screen 3]     label text='Registration No'
-[2026-04-11 17:51:10 IST] [Screen 3]     input id='j_idt210:3' name='j_idt210' type='radio' value='all'
-[2026-04-11 17:51:10 IST] [Screen 3]     label text='Pending Appls Last 2 Days'
-[2026-04-11 17:51:10 IST] [Screen 3]     label text='Application No: Part 1 (First Six Chars)Part 2 (Next Ten Cha' class='field-label resp-label-section'
-[2026-04-11 17:51:10 IST] [Screen 3]     label id='j_idt217' text='Application No:' class='ui-outputlabel ui-widget'
-[2026-04-11 17:51:10 IST] [Screen 3]     label id='j_idt218' text='Part 1 (First Six Chars)' class='ui-outputlabel ui-widget inline-section'
-[2026-04-11 17:51:10 IST] [Screen 3]     label id='j_idt219' text='Part 2 (Next Ten Chars)' class='ui-outputlabel ui-widget inline-section'
-[2026-04-11 17:51:10 IST] [Screen 3]     input id='firstPartAppNo' name='firstPartAppNo' type='text' role='textbox' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all text-upperca'
-[2026-04-11 17:51:10 IST] [Screen 3]     input id='secondPartAppNo' name='secondPartAppNo' type='text' role='textbox' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all text-upperca'
-[2026-04-11 17:51:10 IST] [Screen 3]     button id='j_idt229' name='j_idt229' type='submit' role='button' text='Get Pending Work' class='ui-button ui-widget ui-state-default ui-corner-all ui-button-text-only'
-[2026-04-11 17:51:10 IST] [Screen 3]     button id='j_idt230' name='j_idt230' type='submit' role='button' text='Pull Back Application' class='ui-button ui-widget ui-state-default ui-corner-all ui-button-text-only'
-[2026-04-11 17:51:10 IST] [Screen 3] === END PAGE STATE DUMP ===
-[2026-04-11 17:51:20 IST] [Screen 3] TIMEOUT typeahead: Insurance Type typeahead selector=input[id*='insuranceType'] value=THIRD PARTY
-[2026-04-11 17:51:20 IST] [Screen 3] === PAGE STATE DUMP (typeahead failed: Insurance Type typeahead) ===
-[2026-04-11 17:51:20 IST] [Screen 3] url: https://vahan.parivahan.gov.in/vahan/vahan/home.xhtml
-[2026-04-11 17:51:20 IST] [Screen 3] frames: 1
-[2026-04-11 17:51:20 IST] [Screen 3]   frame[0] name='(main)' url=https://vahan.parivahan.gov.in/vahan/vahan/home.xhtml
-[2026-04-11 17:51:20 IST] [Screen 3]   [frame[0] main] visible interactive elements (38):
-[2026-04-11 17:51:20 IST] [Screen 3]     nav role='navigation' text=' Home  Report   Update Profile   Language  Welcome , , Logou' class='navbar navbar-default navigation-background'
-[2026-04-11 17:51:20 IST] [Screen 3]     a id='homeId1' name='homeId1'
-[2026-04-11 17:51:20 IST] [Screen 3]     a id='homeId2' name='homeId2' text=' Home'
-[2026-04-11 17:51:20 IST] [Screen 3]     a text=' Report ' class='dropdown-toggle'
-[2026-04-11 17:51:20 IST] [Screen 3]     a text=' Update Profile ' class='dropdown-toggle'
-[2026-04-11 17:51:20 IST] [Screen 3]     a text=' Language ' class='dropdown-toggle'
-[2026-04-11 17:51:20 IST] [Screen 3]     a id='welcomeUserId' name='welcomeUserId' text='Welcome , ,'
-[2026-04-11 17:51:20 IST] [Screen 3]     a id='logout' text='Logout' class='ui-commandlink ui-widget glyphicon glyphicon-log-out'
-[2026-04-11 17:51:20 IST] [Screen 3]     label text='User Permissions' class='field-label resp-label-section sidebar-brand '
-[2026-04-11 17:51:20 IST] [Screen 3]     button id='menu-toggle' text=' User Profile' class='btn btn-secondary'
-[2026-04-11 17:51:20 IST] [Screen 3]     li role='alert' text='Please Enter Application No'
-[2026-04-11 17:51:20 IST] [Screen 3]     label text='Select Assigned Office:' class='field-label resp-label-section'
-[2026-04-11 17:51:20 IST] [Screen 3]     div id='officeList' role='combobox' text='Select Assigned Office Select Assigned Office' class='ui-selectonemenu ui-widget ui-state-default ui-corner-all bottom-space'
-[2026-04-11 17:51:20 IST] [Screen 3]     input id='officeList_focus' name='officeList_focus' type='text'
-[2026-04-11 17:51:20 IST] [Screen 3]     select id='officeList_input' name='officeList_input' value='-1' text='Select Assigned Office'
-[2026-04-11 17:51:20 IST] [Screen 3]     label id='officeList_label' text='Select Assigned Office' class='ui-selectonemenu-label ui-inputfield ui-corner-all'
-[2026-04-11 17:51:20 IST] [Screen 3]     label text='Select Action:' class='field-label resp-label-section'
-[2026-04-11 17:51:20 IST] [Screen 3]     div id='actionList' role='combobox' text='Select Action Select Action' class='ui-selectonemenu ui-widget ui-state-default ui-corner-all bottom-space'
-[2026-04-11 17:51:20 IST] [Screen 3]     input id='actionList_focus' name='actionList_focus' type='text'
-[2026-04-11 17:51:20 IST] [Screen 3]     select id='actionList_input' name='actionList_input' value='-1' text='Select Action'
-[2026-04-11 17:51:20 IST] [Screen 3]     label id='actionList_label' text='Select Action' class='ui-selectonemenu-label ui-inputfield ui-corner-all'
-[2026-04-11 17:51:20 IST] [Screen 3]     button id='pending_action' name='pending_action' type='submit' role='button' text='Show Form' class='ui-button ui-widget ui-state-default ui-corner-all ui-button-text-only'
-[2026-04-11 17:51:20 IST] [Screen 3]     input id='j_idt210:0' name='j_idt210' type='radio' value='applNo'
-[2026-04-11 17:51:20 IST] [Screen 3]     label text='Application No'
-[2026-04-11 17:51:20 IST] [Screen 3]     input id='j_idt210:1' name='j_idt210' type='radio' value='oldApplNo'
-[2026-04-11 17:51:20 IST] [Screen 3]     label text='Old Software Appl No'
-[2026-04-11 17:51:20 IST] [Screen 3]     input id='j_idt210:2' name='j_idt210' type='radio' value='regnNo'
-[2026-04-11 17:51:20 IST] [Screen 3]     label text='Registration No'
-[2026-04-11 17:51:20 IST] [Screen 3]     input id='j_idt210:3' name='j_idt210' type='radio' value='all'
-[2026-04-11 17:51:20 IST] [Screen 3]     label text='Pending Appls Last 2 Days'
-[2026-04-11 17:51:20 IST] [Screen 3]     label text='Application No: Part 1 (First Six Chars)Part 2 (Next Ten Cha' class='field-label resp-label-section'
-[2026-04-11 17:51:20 IST] [Screen 3]     label id='j_idt217' text='Application No:' class='ui-outputlabel ui-widget'
-[2026-04-11 17:51:20 IST] [Screen 3]     label id='j_idt218' text='Part 1 (First Six Chars)' class='ui-outputlabel ui-widget inline-section'
-[2026-04-11 17:51:20 IST] [Screen 3]     label id='j_idt219' text='Part 2 (Next Ten Chars)' class='ui-outputlabel ui-widget inline-section'
-[2026-04-11 17:51:20 IST] [Screen 3]     input id='firstPartAppNo' name='firstPartAppNo' type='text' role='textbox' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all text-upperca'
-[2026-04-11 17:51:20 IST] [Screen 3]     input id='secondPartAppNo' name='secondPartAppNo' type='text' role='textbox' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all text-upperca'
-[2026-04-11 17:51:20 IST] [Screen 3]     button id='j_idt229' name='j_idt229' type='submit' role='button' text='Get Pending Work' class='ui-button ui-widget ui-state-default ui-corner-all ui-button-text-only'
-[2026-04-11 17:51:20 IST] [Screen 3]     button id='j_idt230' name='j_idt230' type='submit' role='button' text='Pull Back Application' class='ui-button ui-widget ui-state-default ui-corner-all ui-button-text-only'
-[2026-04-11 17:51:20 IST] [Screen 3] === END PAGE STATE DUMP ===
-[2026-04-11 17:51:30 IST] [Screen 3] TIMEOUT select: Insurance Company selector=select[id*='insuranceCompany'], select[name*='insuranceCompany'] value=National Insurance Company
-[2026-04-11 17:51:30 IST] [Screen 3] === PAGE STATE DUMP (select failed: Insurance Company) ===
-[2026-04-11 17:51:30 IST] [Screen 3] url: https://vahan.parivahan.gov.in/vahan/vahan/home.xhtml
-[2026-04-11 17:51:30 IST] [Screen 3] frames: 1
-[2026-04-11 17:51:30 IST] [Screen 3]   frame[0] name='(main)' url=https://vahan.parivahan.gov.in/vahan/vahan/home.xhtml
-[2026-04-11 17:51:30 IST] [Screen 3]   [frame[0] main] visible interactive elements (38):
-[2026-04-11 17:51:30 IST] [Screen 3]     nav role='navigation' text=' Home  Report   Update Profile   Language  Welcome , , Logou' class='navbar navbar-default navigation-background'
-[2026-04-11 17:51:30 IST] [Screen 3]     a id='homeId1' name='homeId1'
-[2026-04-11 17:51:30 IST] [Screen 3]     a id='homeId2' name='homeId2' text=' Home'
-[2026-04-11 17:51:30 IST] [Screen 3]     a text=' Report ' class='dropdown-toggle'
-[2026-04-11 17:51:30 IST] [Screen 3]     a text=' Update Profile ' class='dropdown-toggle'
-[2026-04-11 17:51:30 IST] [Screen 3]     a text=' Language ' class='dropdown-toggle'
-[2026-04-11 17:51:30 IST] [Screen 3]     a id='welcomeUserId' name='welcomeUserId' text='Welcome , ,'
-[2026-04-11 17:51:30 IST] [Screen 3]     a id='logout' text='Logout' class='ui-commandlink ui-widget glyphicon glyphicon-log-out'
-[2026-04-11 17:51:30 IST] [Screen 3]     label text='User Permissions' class='field-label resp-label-section sidebar-brand '
-[2026-04-11 17:51:30 IST] [Screen 3]     button id='menu-toggle' text=' User Profile' class='btn btn-secondary'
-[2026-04-11 17:51:30 IST] [Screen 3]     li role='alert' text='Please Enter Application No'
-[2026-04-11 17:51:30 IST] [Screen 3]     label text='Select Assigned Office:' class='field-label resp-label-section'
-[2026-04-11 17:51:30 IST] [Screen 3]     div id='officeList' role='combobox' text='Select Assigned Office Select Assigned Office' class='ui-selectonemenu ui-widget ui-state-default ui-corner-all bottom-space ui-state-'
-[2026-04-11 17:51:30 IST] [Screen 3]     input id='officeList_focus' name='officeList_focus' type='text'
-[2026-04-11 17:51:30 IST] [Screen 3]     select id='officeList_input' name='officeList_input' value='-1' text='Select Assigned Office'
-[2026-04-11 17:51:30 IST] [Screen 3]     label id='officeList_label' text='Select Assigned Office' class='ui-selectonemenu-label ui-inputfield ui-corner-all'
-[2026-04-11 17:51:30 IST] [Screen 3]     label text='Select Action:' class='field-label resp-label-section'
-[2026-04-11 17:51:30 IST] [Screen 3]     div id='actionList' role='combobox' text='Select Action Select Action' class='ui-selectonemenu ui-widget ui-state-default ui-corner-all bottom-space ui-state-'
-[2026-04-11 17:51:30 IST] [Screen 3]     input id='actionList_focus' name='actionList_focus' type='text'
-[2026-04-11 17:51:30 IST] [Screen 3]     select id='actionList_input' name='actionList_input' value='-1' text='Select Action'
-[2026-04-11 17:51:30 IST] [Screen 3]     label id='actionList_label' text='Select Action' class='ui-selectonemenu-label ui-inputfield ui-corner-all'
-[2026-04-11 17:51:30 IST] [Screen 3]     button id='pending_action' name='pending_action' type='submit' role='button' text='Show Form' class='ui-button ui-widget ui-state-default ui-corner-all ui-button-text-only'
-[2026-04-11 17:51:30 IST] [Screen 3]     input id='j_idt210:0' name='j_idt210' type='radio' value='applNo'
-[2026-04-11 17:51:30 IST] [Screen 3]     label text='Application No'
-[2026-04-11 17:51:30 IST] [Screen 3]     input id='j_idt210:1' name='j_idt210' type='radio' value='oldApplNo'
-[2026-04-11 17:51:30 IST] [Screen 3]     label text='Old Software Appl No'
-[2026-04-11 17:51:30 IST] [Screen 3]     input id='j_idt210:2' name='j_idt210' type='radio' value='regnNo'
-[2026-04-11 17:51:30 IST] [Screen 3]     label text='Registration No'
-[2026-04-11 17:51:30 IST] [Screen 3]     input id='j_idt210:3' name='j_idt210' type='radio' value='all'
-[2026-04-11 17:51:30 IST] [Screen 3]     label text='Pending Appls Last 2 Days'
-[2026-04-11 17:51:30 IST] [Screen 3]     label text='Application No: Part 1 (First Six Chars)Part 2 (Next Ten Cha' class='field-label resp-label-section'
-[2026-04-11 17:51:30 IST] [Screen 3]     label id='j_idt217' text='Application No:' class='ui-outputlabel ui-widget'
-[2026-04-11 17:51:30 IST] [Screen 3]     label id='j_idt218' text='Part 1 (First Six Chars)' class='ui-outputlabel ui-widget inline-section'
-[2026-04-11 17:51:30 IST] [Screen 3]     label id='j_idt219' text='Part 2 (Next Ten Chars)' class='ui-outputlabel ui-widget inline-section'
-[2026-04-11 17:51:30 IST] [Screen 3]     input id='firstPartAppNo' name='firstPartAppNo' type='text' role='textbox' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all text-upperca'
-[2026-04-11 17:51:30 IST] [Screen 3]     input id='secondPartAppNo' name='secondPartAppNo' type='text' role='textbox' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all text-upperca'
-[2026-04-11 17:51:30 IST] [Screen 3]     button id='j_idt229' name='j_idt229' type='submit' role='button' text='Get Pending Work' class='ui-button ui-widget ui-state-default ui-corner-all ui-button-text-only'
-[2026-04-11 17:51:30 IST] [Screen 3]     button id='j_idt230' name='j_idt230' type='submit' role='button' text='Pull Back Application' class='ui-button ui-widget ui-state-default ui-corner-all ui-button-text-only'
-[2026-04-11 17:51:30 IST] [Screen 3] === END PAGE STATE DUMP ===
-[2026-04-11 17:51:40 IST] [Screen 3] TIMEOUT typeahead: Insurance Company typeahead selector=input[id*='insuranceCompany'], input[name*='insuranceCompany'] value=National Insurance Company
-[2026-04-11 17:51:40 IST] [Screen 3] === PAGE STATE DUMP (typeahead failed: Insurance Company typeahead) ===
-[2026-04-11 17:51:40 IST] [Screen 3] url: https://vahan.parivahan.gov.in/vahan/vahan/home.xhtml
-[2026-04-11 17:51:40 IST] [Screen 3] frames: 1
-[2026-04-11 17:51:40 IST] [Screen 3]   frame[0] name='(main)' url=https://vahan.parivahan.gov.in/vahan/vahan/home.xhtml
-[2026-04-11 17:51:40 IST] [Screen 3]   [frame[0] main] visible interactive elements (38):
-[2026-04-11 17:51:40 IST] [Screen 3]     nav role='navigation' text=' Home  Report   Update Profile   Language  Welcome , , Logou' class='navbar navbar-default navigation-background'
-[2026-04-11 17:51:40 IST] [Screen 3]     a id='homeId1' name='homeId1'
-[2026-04-11 17:51:40 IST] [Screen 3]     a id='homeId2' name='homeId2' text=' Home'
-[2026-04-11 17:51:40 IST] [Screen 3]     a text=' Report ' class='dropdown-toggle'
-[2026-04-11 17:51:40 IST] [Screen 3]     a text=' Update Profile ' class='dropdown-toggle'
-[2026-04-11 17:51:40 IST] [Screen 3]     a text=' Language ' class='dropdown-toggle'
-[2026-04-11 17:51:40 IST] [Screen 3]     a id='welcomeUserId' name='welcomeUserId' text='Welcome , ,'
-[2026-04-11 17:51:40 IST] [Screen 3]     a id='logout' text='Logout' class='ui-commandlink ui-widget glyphicon glyphicon-log-out'
-[2026-04-11 17:51:40 IST] [Screen 3]     label text='User Permissions' class='field-label resp-label-section sidebar-brand '
-[2026-04-11 17:51:40 IST] [Screen 3]     button id='menu-toggle' text=' User Profile' class='btn btn-secondary'
-[2026-04-11 17:51:40 IST] [Screen 3]     li role='alert' text='Please Enter Application No'
-[2026-04-11 17:51:40 IST] [Screen 3]     label text='Select Assigned Office:' class='field-label resp-label-section'
-[2026-04-11 17:51:40 IST] [Screen 3]     div id='officeList' role='combobox' text='Select Assigned Office Select Assigned Office' class='ui-selectonemenu ui-widget ui-state-default ui-corner-all bottom-space'
-[2026-04-11 17:51:40 IST] [Screen 3]     input id='officeList_focus' name='officeList_focus' type='text'
-[2026-04-11 17:51:40 IST] [Screen 3]     select id='officeList_input' name='officeList_input' value='-1' text='Select Assigned Office'
-[2026-04-11 17:51:40 IST] [Screen 3]     label id='officeList_label' text='Select Assigned Office' class='ui-selectonemenu-label ui-inputfield ui-corner-all'
-[2026-04-11 17:51:40 IST] [Screen 3]     label text='Select Action:' class='field-label resp-label-section'
-[2026-04-11 17:51:40 IST] [Screen 3]     div id='actionList' role='combobox' text='Select Action Select Action' class='ui-selectonemenu ui-widget ui-state-default ui-corner-all bottom-space'
-[2026-04-11 17:51:40 IST] [Screen 3]     input id='actionList_focus' name='actionList_focus' type='text'
-[2026-04-11 17:51:40 IST] [Screen 3]     select id='actionList_input' name='actionList_input' value='-1' text='Select Action'
-[2026-04-11 17:51:40 IST] [Screen 3]     label id='actionList_label' text='Select Action' class='ui-selectonemenu-label ui-inputfield ui-corner-all'
-[2026-04-11 17:51:40 IST] [Screen 3]     button id='pending_action' name='pending_action' type='submit' role='button' text='Show Form' class='ui-button ui-widget ui-state-default ui-corner-all ui-button-text-only'
-[2026-04-11 17:51:40 IST] [Screen 3]     input id='j_idt210:0' name='j_idt210' type='radio' value='applNo'
-[2026-04-11 17:51:40 IST] [Screen 3]     label text='Application No'
-[2026-04-11 17:51:40 IST] [Screen 3]     input id='j_idt210:1' name='j_idt210' type='radio' value='oldApplNo'
-[2026-04-11 17:51:40 IST] [Screen 3]     label text='Old Software Appl No'
-[2026-04-11 17:51:40 IST] [Screen 3]     input id='j_idt210:2' name='j_idt210' type='radio' value='regnNo'
-[2026-04-11 17:51:40 IST] [Screen 3]     label text='Registration No'
-[2026-04-11 17:51:40 IST] [Screen 3]     input id='j_idt210:3' name='j_idt210' type='radio' value='all'
-[2026-04-11 17:51:40 IST] [Screen 3]     label text='Pending Appls Last 2 Days'
-[2026-04-11 17:51:40 IST] [Screen 3]     label text='Application No: Part 1 (First Six Chars)Part 2 (Next Ten Cha' class='field-label resp-label-section'
-[2026-04-11 17:51:40 IST] [Screen 3]     label id='j_idt217' text='Application No:' class='ui-outputlabel ui-widget'
-[2026-04-11 17:51:40 IST] [Screen 3]     label id='j_idt218' text='Part 1 (First Six Chars)' class='ui-outputlabel ui-widget inline-section'
-[2026-04-11 17:51:40 IST] [Screen 3]     label id='j_idt219' text='Part 2 (Next Ten Chars)' class='ui-outputlabel ui-widget inline-section'
-[2026-04-11 17:51:40 IST] [Screen 3]     input id='firstPartAppNo' name='firstPartAppNo' type='text' role='textbox' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all text-upperca'
-[2026-04-11 17:51:40 IST] [Screen 3]     input id='secondPartAppNo' name='secondPartAppNo' type='text' role='textbox' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all text-upperca'
-[2026-04-11 17:51:40 IST] [Screen 3]     button id='j_idt229' name='j_idt229' type='submit' role='button' text='Get Pending Work' class='ui-button ui-widget ui-state-default ui-corner-all ui-button-text-only'
-[2026-04-11 17:51:40 IST] [Screen 3]     button id='j_idt230' name='j_idt230' type='submit' role='button' text='Pull Back Application' class='ui-button ui-widget ui-state-default ui-corner-all ui-button-text-only'
-[2026-04-11 17:51:40 IST] [Screen 3] === END PAGE STATE DUMP ===
-[2026-04-11 17:51:40 IST] [Screen 3] fill_rto_row FAILED: Locator.wait_for: Timeout 10000ms exceeded.
+[2026-04-11 18:01:23 IST] [Setup] fill_rto_row start rto_queue_id=1 sales_id=1 dealer_id=100001 log_file=C:\Users\arya_\OneDrive\Desktop\My Auto.AI\ocr_output\100001\9650693610_RTO.txt
+[2026-04-11 18:01:23 IST] [Setup] uploads root (dealer): C:\Users\arya_\OneDrive\Desktop\My Auto.AI\Uploaded scans\100001
+[2026-04-11 18:01:23 IST] [Setup] searched folder (absolute): C:\Users\arya_\OneDrive\Desktop\My Auto.AI\Uploaded scans\100001\8905969604_100426
+[2026-04-11 18:01:23 IST] [Setup] documents matched to categories: {'FORM 20': '8905969604_Form_20.pdf', 'FORM 21': '8905969604_Sale_Certificate.pdf', 'FORM 22': '8905969604_Form22.pdf', 'INSURANCE CERTIFICATE': '8905969604_Insurance.pdf', 'INVOICE ORIGINAL': '8905969604_GST_Retail_Invoice.pdf', 'AADHAAR_FRONT': 'Aadhar.jpg', 'AADHAAR_BACK': 'Aadhar_back.jpg', 'OWNER UNDERTAKING FORM': 'Details.jpg'}
+[2026-04-11 18:01:30 IST] [Setup] browser page url: https://vahan.parivahan.gov.in/vahan/vahan/home.xhtml
+[2026-04-11 18:01:30 IST] [Setup] TEMP SKIP: RTO_FILL_SKIP_TO_SCREEN=3 — start at Screen 3 (skipped: dealer-home reset + screens 1..2)
+[2026-04-11 18:01:30 IST] [Screen 3] --- Screen 3: Home, Entry, tax, insurance, hypothecation, application no ---
+[2026-04-11 18:01:30 IST] [Screen 3] Screen 3: skip Home — Entry only (already on home.xhtml)
+[2026-04-11 18:01:40 IST] [Screen 3] TIMEOUT click: Entry button selector=input[value='Entry'], button:has-text('Entry'), a:has-text('Entry')
+[2026-04-11 18:01:40 IST] [Screen 3] === PAGE STATE DUMP (click failed: Entry button) ===
+[2026-04-11 18:01:40 IST] [Screen 3] url: https://vahan.parivahan.gov.in/vahan/vahan/home.xhtml
+[2026-04-11 18:01:40 IST] [Screen 3] frames: 1
+[2026-04-11 18:01:40 IST] [Screen 3]   frame[0] name='(main)' url=https://vahan.parivahan.gov.in/vahan/vahan/home.xhtml
+[2026-04-11 18:01:44 IST] [Screen 3]   [frame[0]] element snapshot error: Frame.evaluate: Execution context was destroyed, most likely because of a navigation
+[2026-04-11 18:01:44 IST] [Screen 3] === END PAGE STATE DUMP ===
+[2026-04-11 18:01:44 IST] [Screen 3] fill_rto_row FAILED: Locator.click: Timeout 10000ms exceeded.
 Call log:
-  - waiting for locator("input[id*='insuranceCompany'], input[name*='insuranceCompany']").first to be visible
+  - waiting for locator("input[value='Entry'], button:has-text('Entry'), a:has-text('Entry')").first
+    - locator resolved to <button type="submit" role="button" aria-disabled="false" id="workDetails:4:j_idt273" name="workDetails:4:j_idt273" class="ui-button ui-widget ui-state-default ui-corner-all ui-button-text-only" onclick="PrimeFaces.bcn(this,event,[function(event){PF('bui').show();},function(event){PrimeFaces.addSubmitParam('masterLayout',{'cur_status':'N','pur_code':'123','regn_no':'NEW','actionCode':'12304','Purpose':'New Registration (Dealer Side)','public_remark':'','appl_dt':'11\-Apr\-2026','appl_no':'RJ2604114805…>…</button>
+  - attempting click action
+    - waiting for element to be visible, enabled and stable
+    - element is visible, enabled and stable
+    - scrolling into view if needed
+    - done scrolling
+    - performing click action
+    - click action done
+    - waiting for scheduled navigations to finish
 
