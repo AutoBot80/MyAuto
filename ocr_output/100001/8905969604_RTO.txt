@@ -54,3 +54,52 @@
 Call log:
   - waiting for locator("input[id*='officeName'], input[id*='assignedOffice'], input[name*='officeName']").first to be visible
 
+[2026-04-11 05:14:09 UTC] [Setup] fill_rto_row start rto_queue_id=1 sales_id=1 dealer_id=100001 log_file=C:\Users\arya_\OneDrive\Desktop\My Auto.AI\ocr_output\100001\8905969604_RTO.txt
+[2026-04-11 05:14:09 UTC] [Setup] warning: missing document categories: FORM 22, INSURANCE CERTIFICATE, AADHAAR_FRONT, AADHAAR_BACK, OWNER UNDERTAKING FORM
+[2026-04-11 05:14:16 UTC] [Setup] browser page url: https://vahan.parivahan.gov.in/vahan/vahan/home.xhtml
+[2026-04-11 05:14:16 UTC] [Screen 1] --- Screen 1: Assigned office, Entry-New Registeration, Show Form ---
+[2026-04-11 05:14:22 UTC] [Screen 1] pf-dropdown: Select Assigned Office = BHARATPUR RTO
+[2026-04-11 05:14:38 UTC] [Screen 1] TIMEOUT pf-dropdown: Select Action selector=div#actionList value=Entry-New Registeration
+[2026-04-11 05:14:38 UTC] [Screen 1] === PAGE STATE DUMP (pf-dropdown failed: Select Action) ===
+[2026-04-11 05:14:38 UTC] [Screen 1] url: https://vahan.parivahan.gov.in/vahan/vahan/ui/session/warning.xhtml
+[2026-04-11 05:14:38 UTC] [Screen 1] frames: 1
+[2026-04-11 05:14:38 UTC] [Screen 1]   frame[0] name='(main)' url=https://vahan.parivahan.gov.in/vahan/vahan/ui/session/warning.xhtml
+[2026-04-11 05:14:38 UTC] [Screen 1]   [frame[0] main] visible interactive elements (33):
+[2026-04-11 05:14:38 UTC] [Screen 1]     a text=' Home'
+[2026-04-11 05:14:38 UTC] [Screen 1]     a text=' Skip Main Content'
+[2026-04-11 05:14:38 UTC] [Screen 1]     a text=' Skip Navigation'
+[2026-04-11 05:14:38 UTC] [Screen 1]     a id='decfont' text='A-'
+[2026-04-11 05:14:38 UTC] [Screen 1]     a id='resetfont' text='A'
+[2026-04-11 05:14:38 UTC] [Screen 1]     a id='incfont' text='A+'
+[2026-04-11 05:14:38 UTC] [Screen 1]     a text=' Language ' class='dropdown-toggle'
+[2026-04-11 05:14:38 UTC] [Screen 1]     a id='loginId' name='loginId'
+[2026-04-11 05:14:38 UTC] [Screen 1]     a id='loginId1' name='loginId1'
+[2026-04-11 05:14:38 UTC] [Screen 1]     nav role='navigation' text=' Home  Parivahan  Know Your MV Tax  Financier Regn  Online P' class='navbar-default navigation-background'
+[2026-04-11 05:14:38 UTC] [Screen 1]     a text=' Home'
+[2026-04-11 05:14:38 UTC] [Screen 1]     a text=' Parivahan'
+[2026-04-11 05:14:38 UTC] [Screen 1]     a id='j_idt26' text=' Know Your MV Tax'
+[2026-04-11 05:14:38 UTC] [Screen 1]     a id='j_idt30' text=' Financier Regn'
+[2026-04-11 05:14:38 UTC] [Screen 1]     a text=' Online Payment'
+[2026-04-11 05:14:38 UTC] [Screen 1]     a text=' Transaction Status ' class='dropdown-toggle'
+[2026-04-11 05:14:38 UTC] [Screen 1]     a text=' Informational Services ' class='dropdown-toggle'
+[2026-04-11 05:14:38 UTC] [Screen 1]     a id='contact' name='contact' text=' Contact us'
+[2026-04-11 05:14:38 UTC] [Screen 1]     a id='loginId2' name='loginId2' text=' Login'
+[2026-04-11 05:14:38 UTC] [Screen 1]     h3 text='Please Re-Login to Continue After Some Time or Contact to th'
+[2026-04-11 05:14:38 UTC] [Screen 1]     a text='About Us'
+[2026-04-11 05:14:38 UTC] [Screen 1]     a text='Terms of Use'
+[2026-04-11 05:14:38 UTC] [Screen 1]     a text='FAQs'
+[2026-04-11 05:14:38 UTC] [Screen 1]     a text='Privacy Policy'
+[2026-04-11 05:14:38 UTC] [Screen 1]     a text='Copyright Policy'
+[2026-04-11 05:14:38 UTC] [Screen 1]     a text='Hyperlink Policy'
+[2026-04-11 05:14:38 UTC] [Screen 1]     a text='Act, Rules & Policies'
+[2026-04-11 05:14:38 UTC] [Screen 1]     a text='Fees & User Charges'
+[2026-04-11 05:14:38 UTC] [Screen 1]     a id='contactusLink' name='contactusLink' text='Contact us'
+[2026-04-11 05:14:38 UTC] [Screen 1]     a
+[2026-04-11 05:14:38 UTC] [Screen 1]     a
+[2026-04-11 05:14:38 UTC] [Screen 1]     a
+[2026-04-11 05:14:38 UTC] [Screen 1]     label id='j_idt56' text='Total number of visitors-417787767' class='ui-outputlabel ui-widget'
+[2026-04-11 05:14:38 UTC] [Screen 1] === END PAGE STATE DUMP ===
+[2026-04-11 05:14:38 UTC] [Screen 1] fill_rto_row FAILED: Locator.wait_for: Timeout 15000ms exceeded.
+Call log:
+  - waiting for locator("div#actionList").first to be visible
+

@@ -13,7 +13,7 @@ import contextvars
 import logging
 import re
 import time
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from playwright.sync_api import Page, TimeoutError as PwTimeout
@@ -31,17 +31,28 @@ _current_screen: contextvars.ContextVar[str] = contextvars.ContextVar(
 )
 
 
+# India Standard Time (no DST) — fixed offset avoids Windows ``tzdata`` dependency for ``zoneinfo``.
+_IST = timezone(timedelta(hours=5, minutes=30))
+
+
 class RtoActionLog:
-    """Append-only action log under ``ocr_output/{dealer_id}/{mobile}_RTO.txt``."""
+    """Per-run action log under ``ocr_output/{dealer_id}/{mobile}_RTO.txt``.
+
+    Each ``fill_rto_row`` run **overwrites** the file (no carry-over from prior runs).
+    Timestamps use **Asia/Kolkata (IST)**.
+    """
 
     def __init__(self, path: Path) -> None:
         self.path = path
+        self._started = False
 
     def line(self, message: str) -> None:
-        ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        ts = datetime.now(_IST).strftime("%Y-%m-%d %H:%M:%S IST")
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            with self.path.open("a", encoding="utf-8") as f:
+            mode = "w" if not self._started else "a"
+            self._started = True
+            with self.path.open(mode, encoding="utf-8") as f:
                 f.write(f"[{ts}] {message}\n")
         except OSError as e:
             logger.warning("fill_rto: RTO log write failed %s: %s", self.path, e)
@@ -71,6 +82,30 @@ def _mobile_digits_for_filename(mobile: str | None) -> str:
 _DEFAULT_TIMEOUT_MS = 15_000
 _LONG_TIMEOUT_MS = 60_000
 _SHORT_WAIT_S = 0.6
+
+_VAHAN_SESSION_DEAD_PATTERNS = (
+    "/session/warning",
+    "/ui/login/login",
+    "swecmd=login",
+)
+
+
+class VahanSessionExpired(RuntimeError):
+    """Raised when the Vahan portal redirects to login/session-expired mid-automation."""
+
+
+def _assert_vahan_session_alive(page: Page) -> None:
+    """Check the current URL; raise ``VahanSessionExpired`` if the site kicked us to login."""
+    try:
+        url = (page.url or "").lower()
+    except Exception:
+        return
+    for pat in _VAHAN_SESSION_DEAD_PATTERNS:
+        if pat in url:
+            msg = f"Vahan session expired (redirected to {page.url[:200]}). Please re-login and retry."
+            _rto_log(f"SESSION EXPIRED: {msg}")
+            raise VahanSessionExpired(msg)
+
 
 # ---------------------------------------------------------------------------
 # Data helpers
@@ -108,15 +143,32 @@ def _fmt_date(d: date | datetime | str | None) -> str:
 _DOC_PATTERNS: list[tuple[str, list[str], list[str]]] = [
     ("FORM 20", ["*Form_20*", "*Form 20*", "*FORM_20*", "*FORM 20*"], [".pdf"]),
     ("FORM 21", ["*Sale_Certificate*", "*Sale Certificate*", "*Form_21*", "*Form 21*", "*FORM_21*"], [".pdf"]),
-    ("FORM 22", ["*Form_22*", "*Form 22*", "*FORM_22*", "*FORM 22*"], [".pdf"]),
+    # Underscore optional: e.g. ``8905969604_Form22.pdf``
+    ("FORM 22", ["*Form_22*", "*Form22*", "*FORM22*", "*Form 22*", "*FORM_22*", "*FORM 22*"], [".pdf"]),
     ("INSURANCE CERTIFICATE", ["*Insurance*"], [".pdf"]),
     ("INVOICE ORIGINAL", ["*GST_Retail_Invoice*", "*GST*Invoice*", "*Tax_Invoice*", "*Tax Invoice*", "*Retail_Invoice*"], [".pdf"]),
+    # ``*Aadhaar*`` vs ``Aadhar``: include ``*aadhar*`` (one 'a').  Do not use a bare ``*back*`` glob here;
+    # ``_resolve_sale_documents`` skips ``*_back*`` filenames for FRONT so ``Aadhar_back`` is not taken as front.
     ("AADHAAR_FRONT", ["*Aadhar*front*", "*aadhaar*front*", "*adhaar*front*",
                         "*Aadhar*consolidated*", "*aadhaar*consolidated*", "*adhaar*consolidated*",
-                        "*Aadhar_Card*", "*Aadhaar*"], [".jpg", ".jpeg", ".png"]),
-    ("AADHAAR_BACK", ["*Aadhar*back*", "*aadhaar*back*", "*adhaar*back*"], [".jpg", ".jpeg", ".png"]),
-    ("OWNER UNDERTAKING FORM", ["*Detail*", "*Sales_Detail*", "*Detail_Sheet*", "*Sales Detail*"], [".pdf"]),
+                        "*Aadhar_Card*", "*Aadhaar*", "*aadhar*"], [".jpg", ".jpeg", ".png"]),
+    # Explicit ``*_back*`` — ``*Aadhar*back*`` alone becomes substring ``aadharback`` and misses ``Aadhar_back``.
+    ("AADHAAR_BACK", ["*Aadhar_back*", "*aadhaar_back*", "*adhaar_back*"], [".jpg", ".jpeg", ".png"]),
+    ("OWNER UNDERTAKING FORM", ["*Detail*", "*Details*", "*Sales_Detail*", "*Detail_Sheet*", "*Sales Detail*"], [".pdf", ".jpg", ".jpeg", ".png"]),
 ]
+
+
+def _doc_patterns_reference_for_log() -> str:
+    """Human-readable mapping of Vahan document category → filename substrings we match."""
+    parts = [
+        "Filename rules: each pattern is a case-insensitive substring the file name must contain "
+        "(asterisks in patterns are stripped before matching). Extension must match.",
+    ]
+    for cat, patterns, exts in _DOC_PATTERNS:
+        pat_joined = " OR ".join(patterns)
+        ext_joined = ", ".join(exts)
+        parts.append(f"  [{cat}] ← filename contains any of: {pat_joined}  (ext: {ext_joined})")
+    return "\n".join(parts)
 
 
 def _resolve_sale_documents(sale_dir: Path) -> dict[str, Path | None]:
@@ -136,6 +188,8 @@ def _resolve_sale_documents(sale_dir: Path) -> dict[str, Path | None]:
                 if not f.is_file():
                     continue
                 name_lower = f.name.lower()
+                if cat == "AADHAAR_FRONT" and "_back" in name_lower:
+                    continue
                 pat_lower = pat.lower().replace("*", "")
                 parts = [p for p in pat_lower.split("*") if p] if "*" in pat_lower else [pat_lower]
                 if all(p in name_lower for p in parts) and f.suffix.lower() in extensions:
@@ -235,6 +289,7 @@ def _click(page: Page, selector: str, *, timeout: int = _DEFAULT_TIMEOUT_MS, lab
         loc.wait_for(state="visible", timeout=timeout)
         loc.click(timeout=timeout)
     except PwTimeout:
+        _assert_vahan_session_alive(page)
         _rto_log(f"TIMEOUT click: {label} selector={selector}")
         _dump_page_state(page, f"click failed: {label}")
         raise
@@ -252,6 +307,7 @@ def _fill(page: Page, selector: str, value: str, *, timeout: int = _DEFAULT_TIME
         loc.wait_for(state="visible", timeout=timeout)
         loc.fill(value, timeout=timeout)
     except PwTimeout:
+        _assert_vahan_session_alive(page)
         _rto_log(f"TIMEOUT fill: {label} selector={selector} value={value[:40]}")
         _dump_page_state(page, f"fill failed: {label}")
         raise
@@ -269,6 +325,7 @@ def _select(page: Page, selector: str, value: str, *, timeout: int = _DEFAULT_TI
         loc.wait_for(state="visible", timeout=timeout)
         loc.select_option(label=value, timeout=timeout)
     except PwTimeout:
+        _assert_vahan_session_alive(page)
         _rto_log(f"TIMEOUT select: {label} selector={selector} value={value}")
         _dump_page_state(page, f"select failed: {label}")
         raise
@@ -288,6 +345,7 @@ def _type_typeahead(page: Page, selector: str, value: str, *, timeout: int = _DE
         loc.fill("")
         loc.type(value, delay=50)
     except PwTimeout:
+        _assert_vahan_session_alive(page)
         _rto_log(f"TIMEOUT typeahead: {label} selector={selector} value={value}")
         _dump_page_state(page, f"typeahead failed: {label}")
         raise
@@ -342,6 +400,7 @@ def _select_pf_dropdown(
         item.first.scroll_into_view_if_needed(timeout=3000)
         item.first.click(timeout=5000)
     except PwTimeout:
+        _assert_vahan_session_alive(page)
         _rto_log(f"TIMEOUT pf-dropdown: {label} selector={wrapper_selector} value={value}")
         _dump_page_state(page, f"pf-dropdown failed: {label}")
         raise
@@ -379,6 +438,7 @@ def _upload_file(page: Page, file_path: Path, *, timeout: int = _DEFAULT_TIMEOUT
         file_input = page.locator("input[type='file']").first
         file_input.set_input_files(str(file_path), timeout=timeout)
     except PwTimeout:
+        _assert_vahan_session_alive(page)
         _rto_log(f"TIMEOUT upload: {file_path.name}")
         _dump_page_state(page, f"upload failed: {file_path.name}")
         raise
@@ -1006,10 +1066,35 @@ def fill_rto_row(row: dict) -> dict:
 
         # --- Resolve document files ---
         subfolder = row.get("subfolder") or ""
-        sale_dir = get_uploads_dir(dealer_id) / subfolder if subfolder else None
+        uploads_root = get_uploads_dir(dealer_id)
+        _rto_log(f"uploads root (dealer): {uploads_root.resolve()}")
+        if subfolder:
+            sale_dir = uploads_root / subfolder
+            _rto_log(f"searched folder (absolute): {sale_dir.resolve()}")
+            _rto_log(f"subfolder from DB (file_location): {subfolder!r}")
+        else:
+            sale_dir = None
+            _rto_log(
+                f"warning: no subfolder — file_location is empty in sales_master/customer_master "
+                f"for sales_id={row.get('sales_id')}. Document uploads will be skipped."
+            )
+        for ref_line in _doc_patterns_reference_for_log().splitlines():
+            _rto_log(ref_line)
+
         docs = _resolve_sale_documents(sale_dir) if sale_dir else {cat: None for cat, _, _ in _DOC_PATTERNS}
 
+        if sale_dir and sale_dir.is_dir():
+            all_files = sorted(f.name for f in sale_dir.iterdir() if f.is_file())
+            _rto_log(f"all files in searched folder ({len(all_files)} total, sorted):")
+            for name in all_files[:400]:
+                _rto_log(f"  - {name}")
+            if len(all_files) > 400:
+                _rto_log(f"  … ({len(all_files) - 400} more files not listed)")
+
+        found = {k: v.name for k, v in docs.items() if v is not None}
         missing = [k for k, v in docs.items() if v is None]
+        if found:
+            _rto_log(f"documents matched to categories: {found}")
         if missing:
             logger.warning("fill_rto: missing documents: %s", ", ".join(missing))
             _rto_log(f"warning: missing document categories: {', '.join(missing)}")
