@@ -846,7 +846,7 @@ def _screen_2(page: Page, data: dict) -> None:
     """Screen 2: Chassis/engine, owner details, address, Save."""
     _set_screen("Screen 2")
     logger.info("fill_rto: Screen 2 — chassis=%s", data.get("chassis_num", "")[:8])
-    _rto_log("--- Screen 2: Chassis, engine, owner, address, Save and file movement ---")
+    _rto_log("--- Screen 2: Chassis, engine, owner, address, Inward Application (Partial Save) ---")
 
     # 2a: Chassis and engine (workbench uses ``chasi_no_new_entry`` / ``eng_no_new_entry`` — not *chassisNo*.)
     _fill(
@@ -1007,30 +1007,30 @@ def _screen_2(page: Page, data: dict) -> None:
     _fill(page, "input[id*='pin'], input[name*='pin']", data.get("pin", ""), label="Pin")
     _pause()
 
-    # Same as Current Address — immediately after Pin; workbench id ``samePermAdd_input``
+    # Same as Current Address — after Pin, focus stays in PIN; **Tab** moves to this checkbox (portal
+    # tab order). **Space** checks it and lets PrimeFaces copy correspondence → permanent fields
+    # (avoids scroll-into-view / retry jitter from clicking off-screen).
     try:
         same_cb = page.locator(
             '[id="workbench_tabview:samePermAdd_input"], '
-            "input[type='checkbox'][id*='samePermAdd'], "
-            "input[type='checkbox'][id*='sameAddress'], "
-            "label:has-text('Same as Current') input[type='checkbox']"
+            "input[type='checkbox'][id*='samePermAdd']"
         ).first
         same_cb.wait_for(state="attached", timeout=_DEFAULT_TIMEOUT_MS)
-        same_cb.scroll_into_view_if_needed(timeout=_DEFAULT_TIMEOUT_MS)
-        same_cb.wait_for(state="visible", timeout=_DEFAULT_TIMEOUT_MS)
+        page.keyboard.press("Tab")
+        _pause()
+        page.keyboard.press("Space")
+        _pause()
         if not same_cb.is_checked():
-            same_cb.click(timeout=_DEFAULT_TIMEOUT_MS)
+            same_cb.click(timeout=_DEFAULT_TIMEOUT_MS, force=True)
             _pause()
         if not same_cb.is_checked():
-            page.locator(
-                'label[for="workbench_tabview:samePermAdd_input"], '
-                "label:has-text('Same as Current')"
-            ).first.click(timeout=_DEFAULT_TIMEOUT_MS)
+            page.locator("label:has-text('Same as Current')").first.click(timeout=_DEFAULT_TIMEOUT_MS)
             _pause()
+        _wait_for_progress_close(page, timeout_ms=_PROGRESS_PF_SHORT_MS)
         if same_cb.is_checked():
-            _rto_log("checkbox: Same as Current Address — checked")
+            _rto_log("checkbox: Same as Current Address — checked (Tab/Space / click)")
         else:
-            _rto_log("WARNING: Same as Current Address checkbox may still be unchecked")
+            _rto_log("WARNING: Same as Current Address still unchecked")
     except PwTimeout:
         logger.debug("fill_rto: Same as Current Address checkbox not found, skipping")
 
@@ -1085,12 +1085,15 @@ def _screen_2(page: Page, data: dict) -> None:
     else:
         _rto_log("skip: Vehicle Category already set on form")
 
-    # 2e: Save and file movement
+    # 2e: Partial save / inward (workbench label: ``Inward Application(Partial Save)``)
     _pause()
     _click(
         page,
-        "input[value*='Save'], button:has-text('Save and file movement'), button:has-text('Save and File Movement')",
-        label="Save and file movement",
+        "button:has-text('Inward Application'), button:has-text('Partial Save'), "
+        "input[value*='Inward'], input[value*='Partial Save'], "
+        "input[value*='Save'], button:has-text('Save and file movement'), "
+        "button:has-text('Save and File Movement')",
+        label="Inward Application (Partial Save)",
         timeout=_DEFAULT_TIMEOUT_MS,
     )
     _pause()
