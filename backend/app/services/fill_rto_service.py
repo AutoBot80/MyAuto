@@ -308,22 +308,25 @@ def _click(page: Page, selector: str, *, timeout: int = _DEFAULT_TIMEOUT_MS, lab
         _rto_log(f"click: {label}")
 
 
-def _fill(page: Page, selector: str, value: str, *, timeout: int = _DEFAULT_TIMEOUT_MS, label: str = "") -> None:
-    """Clear and fill a text field."""
-    if not value:
+def _fill(page: Page, selector: str, value: object, *, timeout: int = _DEFAULT_TIMEOUT_MS, label: str = "") -> None:
+    """Clear and fill a text field. Coerces ``value`` to ``str`` (queue rows often pass mobile/pin as int)."""
+    if value is None:
+        return
+    text = str(value)
+    if text == "":
         return
     try:
         loc = page.locator(selector).first
         loc.wait_for(state="visible", timeout=timeout)
-        loc.fill(value, timeout=timeout)
+        loc.fill(text, timeout=timeout)
     except PwTimeout:
         _assert_vahan_session_alive(page)
-        _rto_log(f"TIMEOUT fill: {label} selector={selector} value={value[:40]}")
+        _rto_log(f"TIMEOUT fill: {label} selector={selector} value={text[:40]}")
         _dump_page_state(page, f"fill failed: {label}")
         raise
-    logger.debug("fill_rto: filled %s = %s (%s)", selector, value[:40], label)
+    logger.debug("fill_rto: filled %s = %s (%s)", selector, text[:40], label)
     if label:
-        _rto_log(f"fill: {label} = {value[:80]}{'…' if len(value) > 80 else ''}")
+        _rto_log(f"fill: {label} = {text[:80]}{'…' if len(text) > 80 else ''}")
 
 
 def _close_workbench_datepicker_if_open(page: Page) -> None:
@@ -343,14 +346,17 @@ def _close_workbench_datepicker_if_open(page: Page) -> None:
 
 
 def _fill_workbench_purchase_date(
-    page: Page, value: str, *, timeout: int = _DEFAULT_TIMEOUT_MS
+    page: Page, value: object, *, timeout: int = _DEFAULT_TIMEOUT_MS
 ) -> None:
     """Fill workbench Purchase/Delivery Date.
 
     Click/focus from ``fill()`` often opens the jQuery datepicker overlay. Prefer setting the
     value in-page (no focus) when possible, then dismiss any open calendar with Escape.
     """
-    if not value:
+    if value is None:
+        return
+    text = str(value).strip()
+    if text == "":
         return
     label = "Purchase/Delivery Date"
     sel = (
@@ -371,41 +377,44 @@ def _fill_workbench_purchase_date(
                     el.dispatchEvent(new Event('input', { bubbles: true }));
                     el.dispatchEvent(new Event('change', { bubbles: true }));
                 }""",
-                value,
+                text,
             )
         except Exception:
             try:
-                loc.fill(value, timeout=timeout)
+                loc.fill(text, timeout=timeout)
             except Exception:
-                loc.fill(value, timeout=timeout, force=True)
+                loc.fill(text, timeout=timeout, force=True)
 
         _pause()
         _close_workbench_datepicker_if_open(page)
     except PwTimeout:
         _assert_vahan_session_alive(page)
-        _rto_log(f"TIMEOUT fill: {label} selector={sel} value={value[:40]}")
+        _rto_log(f"TIMEOUT fill: {label} selector={sel} value={text[:40]}")
         _dump_page_state(page, f"fill failed: {label}")
         raise
-    logger.debug("fill_rto: filled purchase date = %s", value[:40])
-    _rto_log(f"fill: {label} = {value[:80]}{'…' if len(value) > 80 else ''}")
+    logger.debug("fill_rto: filled purchase date = %s", text[:40])
+    _rto_log(f"fill: {label} = {text[:80]}{'…' if len(text) > 80 else ''}")
 
 
-def _select(page: Page, selector: str, value: str, *, timeout: int = _DEFAULT_TIMEOUT_MS, label: str = "") -> None:
+def _select(page: Page, selector: str, value: object, *, timeout: int = _DEFAULT_TIMEOUT_MS, label: str = "") -> None:
     """Select an option from a <select> dropdown by visible text."""
-    if not value:
+    if value is None:
+        return
+    text = str(value)
+    if text == "":
         return
     try:
         loc = page.locator(selector).first
         loc.wait_for(state="visible", timeout=timeout)
-        loc.select_option(label=value, timeout=timeout)
+        loc.select_option(label=text, timeout=timeout)
     except PwTimeout:
         _assert_vahan_session_alive(page)
-        _rto_log(f"TIMEOUT select: {label} selector={selector} value={value}")
+        _rto_log(f"TIMEOUT select: {label} selector={selector} value={text}")
         _dump_page_state(page, f"select failed: {label}")
         raise
-    logger.debug("fill_rto: selected %s = %s (%s)", selector, value, label)
+    logger.debug("fill_rto: selected %s = %s (%s)", selector, text, label)
     if label:
-        _rto_log(f"select: {label} = {value}")
+        _rto_log(f"select: {label} = {text}")
 
 
 def _pf_native_select_selector(wrapper_id: str) -> str:
@@ -424,16 +433,103 @@ def _pf_selectonemenu_panel_selector(wrapper_id: str) -> str:
     return f"div#{pid}"
 
 
-def _close_pf_selectonemenu_overlay(page: Page, wrapper_id: str) -> None:
-    """Close an open PrimeFaces selectOneMenu list so it does not stay on screen."""
+def _close_pf_selectonemenu_overlay(page: Page, wrapper_id: str, *, use_escape: bool = True) -> None:
+    """Close an open PrimeFaces selectOneMenu list so it does not stay on screen.
+
+    ``use_escape=False``: only wait for the panel to hide (Escape can revert a selection on
+    some PrimeFaces builds when the panel is already closing).
+    """
     panel = page.locator(_pf_selectonemenu_panel_selector(wrapper_id)).first
     try:
         panel.wait_for(state="visible", timeout=400)
-        page.keyboard.press("Escape")
-        _pause()
+        if use_escape:
+            page.keyboard.press("Escape")
+            _pause()
         panel.wait_for(state="hidden", timeout=_DEFAULT_TIMEOUT_MS)
     except PwTimeout:
         pass
+
+
+def _select_choice_number_no(page: Page, *, timeout: int = _DEFAULT_TIMEOUT_MS) -> None:
+    """Set *Choice Number / Fancy / Retention* to **NO** and wait until the PF label reflects it.
+
+    Uses the native ``select`` plus ``input``/``change`` events so PrimeFaces updates the widget,
+    then verifies ``label#regnNoSelectionForAPS_label``. Falls back to overlay click.
+    Does **not** send Escape after choosing NO (can leave the value unset on some PF versions).
+    """
+    wrapper_id = "regnNoSelectionForAPS"
+
+    def _wait_label_no() -> None:
+        try:
+            page.wait_for_function(
+                """() => {
+                    const el = document.querySelector('label#regnNoSelectionForAPS_label');
+                    if (!el) return false;
+                    const t = (el.textContent || '').toUpperCase();
+                    return t.includes('NO') && !t.includes('SELECT');
+                }""",
+                timeout=8000,
+            )
+        except PwTimeout:
+            logger.warning("fill_rto: choice number label did not show NO in time")
+
+    native = page.locator('select[id="regnNoSelectionForAPS_input"]').first
+    try:
+        native.wait_for(state="attached", timeout=timeout)
+        try:
+            native.select_option(label="NO", timeout=timeout)
+        except PwTimeout:
+            native.select_option(label=re.compile(r"^\s*NO\s*$", re.I), timeout=timeout)
+        native.evaluate(
+            """(el) => {
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+            }"""
+        )
+        _pause()
+        _wait_for_progress_close(page)
+        _wait_label_no()
+    except Exception as e:
+        logger.debug("fill_rto: choice NO via native select: %s", e)
+
+    try:
+        lbl = page.locator("label#regnNoSelectionForAPS_label").first
+        t = (lbl.inner_text(timeout=2000) or "").upper()
+        if "NO" not in t or "SELECT" in t:
+            _select_pf_dropdown(
+                page,
+                "div#regnNoSelectionForAPS",
+                "NO",
+                label="Choice number opt (overlay fallback)",
+                timeout=timeout,
+                use_native_select=False,
+            )
+            _pause()
+            _wait_for_progress_close(page)
+            _wait_label_no()
+    except Exception as e:
+        logger.warning("fill_rto: choice NO overlay fallback: %s", e)
+
+    # Close stuck panel without Escape (see docstring).
+    try:
+        panel = page.locator(_pf_selectonemenu_panel_selector(wrapper_id)).first
+        panel.wait_for(state="hidden", timeout=3000)
+    except PwTimeout:
+        try:
+            page.locator("div#regnNoSelectionForAPS").first.click(position={"x": 4, "y": 8})
+            _pause()
+        except Exception:
+            pass
+
+    try:
+        lbl = page.locator("label#regnNoSelectionForAPS_label").first
+        t = (lbl.inner_text(timeout=2000) or "").strip()
+        if "NO" in t.upper() and "SELECT" not in t.upper():
+            _rto_log(f"verified: Choice number shows NO (label={t!r})")
+        else:
+            _rto_log(f"WARNING: Choice number label after automation: {t!r} (expected NO)")
+    except Exception as e:
+        _rto_log(f"WARNING: could not read Choice number label: {e!s}")
 
 
 def _pick_aadhaar_registration_not_available(page: Page, *, timeout: int = _DEFAULT_TIMEOUT_MS) -> None:
@@ -465,19 +561,22 @@ def _pick_aadhaar_registration_not_available(page: Page, *, timeout: int = _DEFA
             _rto_log("WARNING: could not select Not Available in Aadhaar registration dialog")
 
 
-def _type_typeahead(page: Page, selector: str, value: str, *, timeout: int = _DEFAULT_TIMEOUT_MS, label: str = "") -> None:
+def _type_typeahead(page: Page, selector: str, value: object, *, timeout: int = _DEFAULT_TIMEOUT_MS, label: str = "") -> None:
     """Type into a typeahead/autocomplete field and pick the first suggestion."""
-    if not value:
+    if value is None:
+        return
+    text = str(value)
+    if text == "":
         return
     try:
         loc = page.locator(selector).first
         loc.wait_for(state="visible", timeout=timeout)
         loc.click()
         loc.fill("")
-        loc.type(value, delay=50)
+        loc.type(text, delay=50)
     except PwTimeout:
         _assert_vahan_session_alive(page)
-        _rto_log(f"TIMEOUT typeahead: {label} selector={selector} value={value}")
+        _rto_log(f"TIMEOUT typeahead: {label} selector={selector} value={text}")
         _dump_page_state(page, f"typeahead failed: {label}")
         raise
     _pause()
@@ -487,9 +586,9 @@ def _type_typeahead(page: Page, selector: str, value: str, *, timeout: int = _DE
         suggestion.click()
     except PwTimeout:
         page.keyboard.press("Enter")
-    logger.debug("fill_rto: typeahead %s = %s (%s)", selector, value, label)
+    logger.debug("fill_rto: typeahead %s = %s (%s)", selector, text, label)
     if label:
-        _rto_log(f"typeahead: {label} = {value}")
+        _rto_log(f"typeahead: {label} = {text}")
 
 
 def _select_pf_dropdown(
@@ -729,39 +828,8 @@ def _screen_2(page: Page, data: dict) -> None:
     _pause()
     _wait_for_progress_close(page)
 
-    # 2b: Choice number = No (workbench: ``regnNoSelectionForAPS`` — not *choiceNo*.)
-    # Use overlay only: native ``select_option`` can succeed without updating the visible PF label.
-    try:
-        _select_pf_dropdown(
-            page,
-            "div#regnNoSelectionForAPS",
-            "NO",
-            label="Choice number opt",
-            timeout=_DEFAULT_TIMEOUT_MS,
-            use_native_select=False,
-        )
-    except PwTimeout:
-        try:
-            _select(
-                page,
-                "select#regnNoSelectionForAPS_input, select[id*='regnNoSelection']",
-                "NO",
-                label="Choice number opt (native select)",
-                timeout=_DEFAULT_TIMEOUT_MS,
-            )
-        except PwTimeout:
-            try:
-                _select(
-                    page,
-                    "select[id*='choiceNo'], select[id*='choice']",
-                    "No",
-                    label="Choice number opt (legacy)",
-                    timeout=_DEFAULT_TIMEOUT_MS,
-                )
-            except PwTimeout:
-                logger.debug("fill_rto: choice number dropdown not found, skipping")
-
-    _close_pf_selectonemenu_overlay(page, "regnNoSelectionForAPS")
+    # 2b: Choice number = NO (native + PF events, overlay fallback; do not Escape — can revert value)
+    _select_choice_number_no(page, timeout=_DEFAULT_TIMEOUT_MS)
 
     # Owner Details tab (workbench ids: ``purchase_dt_input``, ``tf_owner_name``, …)
     _fill_workbench_purchase_date(page, data["billing_date_str"], timeout=_DEFAULT_TIMEOUT_MS)
@@ -798,6 +866,21 @@ def _screen_2(page: Page, data: dict) -> None:
         data.get("care_of", ""),
         label="Son/Wife/Daughter of",
     )
+
+    # Owner Category = OTHERS (workbench: ``ownerCatg`` — before Mobile per portal flow)
+    try:
+        _select_pf_dropdown(
+            page,
+            '[id="workbench_tabview:ownerCatg"]',
+            "OTHERS",
+            label="Owner Category",
+            timeout=_DEFAULT_TIMEOUT_MS,
+        )
+    except PwTimeout:
+        logger.debug("fill_rto: Owner Category OTHERS failed, skipping")
+
+    _close_pf_selectonemenu_overlay(page, "workbench_tabview:ownerCatg")
+    _pause()
 
     # 2c: Mobile (workbench: ``tf_mobNo`` — not *mobileNo*.)
     _fill(
