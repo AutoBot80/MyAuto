@@ -82,6 +82,9 @@ def _mobile_digits_for_filename(mobile: str | None) -> str:
 # Playwright locator/action waits (ms). User preference: 10s.
 _DEFAULT_TIMEOUT_MS = 10_000
 _LONG_TIMEOUT_MS = 10_000
+# Shorter waits after small PrimeFaces field updates (avoid stacking multiple 10s + 8s waits).
+_PROGRESS_PF_SHORT_MS = 4_000
+_LABEL_VERIFY_MS = 5_000
 # Delay after each discrete UI action (s) — not a Playwright timeout.
 _ACTION_WAIT_S = 0.2
 
@@ -481,7 +484,7 @@ def _select_choice_number_no(page: Page, *, timeout: int = _DEFAULT_TIMEOUT_MS) 
                     const t = (el.textContent || '').toUpperCase();
                     return t.includes('NO') && !t.includes('SELECT');
                 }""",
-                timeout=8000,
+                timeout=_LABEL_VERIFY_MS,
             )
         except PwTimeout:
             logger.warning("fill_rto: choice number label did not show NO in time")
@@ -500,7 +503,7 @@ def _select_choice_number_no(page: Page, *, timeout: int = _DEFAULT_TIMEOUT_MS) 
             }"""
         )
         _pause()
-        _wait_for_progress_close(page)
+        _wait_for_progress_close(page, timeout_ms=_PROGRESS_PF_SHORT_MS)
         _wait_label_no()
     except Exception as e:
         logger.debug("fill_rto: choice NO via native select: %s", e)
@@ -518,7 +521,7 @@ def _select_choice_number_no(page: Page, *, timeout: int = _DEFAULT_TIMEOUT_MS) 
                 use_native_select=False,
             )
             _pause()
-            _wait_for_progress_close(page)
+            _wait_for_progress_close(page, timeout_ms=_PROGRESS_PF_SHORT_MS)
             _wait_label_no()
     except Exception as e:
         logger.warning("fill_rto: choice NO overlay fallback: %s", e)
@@ -526,7 +529,7 @@ def _select_choice_number_no(page: Page, *, timeout: int = _DEFAULT_TIMEOUT_MS) 
     # Close stuck panel without Escape (see docstring).
     try:
         panel = page.locator(_pf_selectonemenu_panel_selector(wrapper_id)).first
-        panel.wait_for(state="hidden", timeout=3000)
+        panel.wait_for(state="hidden", timeout=2000)
     except PwTimeout:
         try:
             page.locator("div#regnNoSelectionForAPS").first.click(position={"x": 4, "y": 8})
@@ -698,7 +701,11 @@ def _dismiss_dialog(page: Page, button_text: str = "OK", *, timeout: int = _DEFA
 
 
 def _wait_for_progress_close(page: Page, timeout_ms: int = _LONG_TIMEOUT_MS) -> None:
-    """Wait until a progress/loading overlay disappears."""
+    """Wait until a progress/loading overlay disappears (PrimeFaces ``ui-blockui``, etc.).
+
+    Uses ``timeout_ms`` max wait per call — many flows chain this after AJAX; use
+    ``_PROGRESS_PF_SHORT_MS`` for single-field updates so the total delay stays reasonable.
+    """
     try:
         overlay = page.locator(".ui-blockui, .blockUI, .loading-overlay, .ui-dialog-loading").first
         overlay.wait_for(state="hidden", timeout=timeout_ms)
@@ -1000,20 +1007,32 @@ def _screen_2(page: Page, data: dict) -> None:
     _fill(page, "input[id*='pin'], input[name*='pin']", data.get("pin", ""), label="Pin")
     _pause()
 
-    # Same as Current Address checkbox
+    # Same as Current Address — immediately after Pin; workbench id ``samePermAdd_input``
     try:
-        same_addr = page.locator(
+        same_cb = page.locator(
+            '[id="workbench_tabview:samePermAdd_input"], '
             "input[type='checkbox'][id*='samePermAdd'], "
             "input[type='checkbox'][id*='sameAddress'], "
-            "input[type='checkbox'][id*='currentAddress'], "
             "label:has-text('Same as Current') input[type='checkbox']"
         ).first
-        same_addr.wait_for(state="visible", timeout=_DEFAULT_TIMEOUT_MS)
-        if not same_addr.is_checked():
-            same_addr.click()
-            _rto_log("checkbox: Same as Current Address")
+        same_cb.wait_for(state="attached", timeout=_DEFAULT_TIMEOUT_MS)
+        same_cb.scroll_into_view_if_needed(timeout=_DEFAULT_TIMEOUT_MS)
+        same_cb.wait_for(state="visible", timeout=_DEFAULT_TIMEOUT_MS)
+        if not same_cb.is_checked():
+            same_cb.click(timeout=_DEFAULT_TIMEOUT_MS)
+            _pause()
+        if not same_cb.is_checked():
+            page.locator(
+                'label[for="workbench_tabview:samePermAdd_input"], '
+                "label:has-text('Same as Current')"
+            ).first.click(timeout=_DEFAULT_TIMEOUT_MS)
+            _pause()
+        if same_cb.is_checked():
+            _rto_log("checkbox: Same as Current Address — checked")
+        else:
+            _rto_log("WARNING: Same as Current Address checkbox may still be unchecked")
     except PwTimeout:
-        logger.debug("fill_rto: 'Same as Current Address' checkbox not found, skipping")
+        logger.debug("fill_rto: Same as Current Address checkbox not found, skipping")
 
     # Vehicle Class / Vehicle Category (partial vehicle block) — skip if already set
     _vh_class = "M-Cycle/Scooter"
