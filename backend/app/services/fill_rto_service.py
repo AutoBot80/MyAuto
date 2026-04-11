@@ -34,6 +34,116 @@ RTO_FILL_SCREEN3_SKIP_ENTRY = False
 # Optional seed for ``data["rto_application_id"]`` when the queue row has no app id (logging / return merge only).
 RTO_FILL_TEST_APPLICATION_ID = ""
 
+# Screen 3 — locators aligned with RTO trace page dumps (``ocr_output/.../*_RTO.txt``): sub-tab strip
+# ``ul.ui-tabs-nav`` / ``a text='Hypothecation/Insurance Information'``, panel ``workbench_tabview:veh_info_tab``,
+# and the same ``workbench_tabview:*`` id style as other workbench fields.
+_SCREEN3_TAX_MODE_PF_WRAPPERS: tuple[str, ...] = (
+    '[id="workbench_tabview:tax_mode"]',
+    '[id="workbench_tabview:taxMode"]',
+)
+_SCREEN3_TAX_MODE_NATIVE_SELECTORS: tuple[str, ...] = (
+    'select[id="workbench_tabview:tax_mode_input"]',
+    'select[id="workbench_tabview:taxMode_input"]',
+    "select[id*='taxMode'], select[name*='taxMode']",
+)
+_SCREEN3_SAVE_VEHICLE_DETAILS_SELECTORS: tuple[str, ...] = (
+    '[id="workbench_tabview:save_vehicle_dtls_btn"]',
+    '[id="workbench_tabview:saveVehDtls_btn"]',
+    "button:has-text('Save Vehicle Details')",
+    "input[value*='Save Vehicle Details']",
+    "a:has-text('Save Vehicle Details')",
+)
+_SCREEN3_HYP_INS_TAB_ANCHOR_RE = re.compile(
+    r"Hypothecation\s*/\s*Insurance\s*Information", re.I
+)
+
+# 3c / 3d — Insurance & Hypothecation (same tab). Ids follow ``workbench_tabview:*`` like other workbench fields
+# (RTO page dumps list the tab strip; field ids match this naming family when not in the first 150 elements).
+_SCREEN3_INSURANCE_TYPE_PF_WRAPPERS: tuple[str, ...] = (
+    '[id="workbench_tabview:insurance_type"]',
+    '[id="workbench_tabview:insuranceType"]',
+    '[id="workbench_tabview:ins_type"]',
+)
+_SCREEN3_INSURANCE_TYPE_NATIVE: tuple[str, ...] = (
+    'select[id="workbench_tabview:insurance_type_input"]',
+    'select[id="workbench_tabview:insuranceType_input"]',
+    "select[id*='insuranceType'], select[name*='insuranceType']",
+)
+_SCREEN3_INSURANCE_COMPANY_PF_WRAPPERS: tuple[str, ...] = (
+    '[id="workbench_tabview:insurance_company"]',
+    '[id="workbench_tabview:insuranceCompany"]',
+)
+_SCREEN3_INSURANCE_COMPANY_NATIVE: tuple[str, ...] = (
+    'select[id="workbench_tabview:insurance_company_input"]',
+    'select[id="workbench_tabview:insuranceCompany_input"]',
+    "select[id*='insuranceCompany'], select[name*='insuranceCompany']",
+)
+_SCREEN3_POLICY_NO_INPUT: tuple[str, ...] = (
+    '[id="workbench_tabview:policy_no"]',
+    '[id="workbench_tabview:policyNo"]',
+    "input[id*='policyNo'], input[id*='coverNote'], input[name*='policyNo']",
+)
+_SCREEN3_INSURANCE_FROM_INPUT: tuple[str, ...] = (
+    '[id="workbench_tabview:insurance_from"]',
+    '[id="workbench_tabview:insuranceFrom"]',
+    "input[id*='insuranceFrom'], input[name*='insuranceFrom']",
+)
+_SCREEN3_IDV_INPUT: tuple[str, ...] = (
+    '[id="workbench_tabview:idv"]',
+    "input[id*='idv'], input[id*='declaredValue'], input[name*='idv']",
+)
+_SCREEN3_HYP_CHECKBOX_SELECTORS: tuple[str, ...] = (
+    "input[type='checkbox'][id*='hypothecated']",
+    "input[type='checkbox'][id*='isHypothecated']",
+    "input[type='checkbox'][name*='hypothecated']",
+)
+_SCREEN3_HYP_TYPE_PF_WRAPPERS: tuple[str, ...] = (
+    '[id="workbench_tabview:hypothecation_type"]',
+    '[id="workbench_tabview:hypothecationType"]',
+)
+_SCREEN3_HYP_TYPE_NATIVE: tuple[str, ...] = (
+    'select[id="workbench_tabview:hypothecation_type_input"]',
+    'select[id="workbench_tabview:hypothecationType_input"]',
+    "select[id*='hypothecationType'], select[name*='hypothecationType']",
+)
+_SCREEN3_FINANCIER_NAME_INPUT: tuple[str, ...] = (
+    '[id="workbench_tabview:financier_name"]',
+    "input[id*='financierName'], input[id*='financer'], input[name*='financierName']",
+)
+_SCREEN3_HYP_FROM_DATE_INPUT: tuple[str, ...] = (
+    '[id="workbench_tabview:hyp_from_dt"]',
+    '[id="workbench_tabview:hypothecationFrom"]',
+    "input[id*='fromDate'][id*='hyp'], input[id*='hypothecationFrom'], input[name*='fromDate']",
+)
+_SCREEN3_FIN_STATE_PF_WRAPPERS: tuple[str, ...] = (
+    '[id="workbench_tabview:fin_state"]',
+    '[id="workbench_tabview:hyp_state"]',
+)
+_SCREEN3_FIN_STATE_NATIVE: tuple[str, ...] = (
+    'select[id="workbench_tabview:fin_state_input"]',
+    'select[id="workbench_tabview:hyp_state_input"]',
+    "select[id*='finState'], select[id*='hypState']",
+)
+_SCREEN3_FIN_DISTRICT_PF_WRAPPERS: tuple[str, ...] = (
+    '[id="workbench_tabview:fin_district"]',
+    '[id="workbench_tabview:hyp_district"]',
+)
+_SCREEN3_FIN_DISTRICT_NATIVE: tuple[str, ...] = (
+    'select[id="workbench_tabview:fin_district_input"]',
+    'select[id="workbench_tabview:hyp_district_input"]',
+    "select[id*='finDistrict'], select[id*='hypDistrict'], select[id*='fin_district']",
+)
+_SCREEN3_FIN_PIN_INPUT: tuple[str, ...] = (
+    '[id="workbench_tabview:fin_pin"]',
+    "input[id*='finPin'], input[id*='hypPin'], input[name*='finPin']",
+)
+_SCREEN3_SAVE_FILE_MOVEMENT_SELECTORS: tuple[str, ...] = (
+    '[id="workbench_tabview:save_file_movement_btn"]',
+    "button:has-text('Save and File Movement')",
+    "button:has-text('Save and file movement')",
+    "input[value*='Save and File Movement']",
+)
+
 _rto_action_log: contextvars.ContextVar["RtoActionLog | None"] = contextvars.ContextVar(
     "rto_action_log", default=None
 )
@@ -1376,7 +1486,10 @@ def _screen_3_pf_subtab_probe_log(page: Page, label_pattern: str) -> None:
     """Log DOM hints for a sub-tab (ids/classes) to the RTO file for selector tuning."""
     rx = re.compile(label_pattern, re.I)
     try:
-        cand = page.get_by_role("tab", name=rx).first
+        # Prefer workbench sub-tab row (matches RTO dumps: ``ul.ui-tabs-nav`` / ``li`` / ``a``).
+        cand = page.locator("ul.ui-tabs-nav li a").filter(has_text=rx).first
+        if cand.count() == 0:
+            cand = page.get_by_role("tab", name=rx).first
         if cand.count() == 0:
             cand = page.locator(".ui-tabs-nav a, .ui-tabmenu-nav a, [role='tab']").filter(has_text=rx).first
         if cand.count() == 0:
@@ -1402,22 +1515,131 @@ def _screen_3_pf_subtab_probe_log(page: Page, label_pattern: str) -> None:
         _rto_log(f"tab probe [{label_pattern}]: error {e!s}")
 
 
-def _screen_3_pf_subtab_click(page: Page, label_pattern: str, *, log_name: str) -> None:
-    """Activate a PrimeFaces-style sub-tab by visible title (e.g. *Vehicle Details*, *Hypothecation*)."""
+def _screen_3_try_pf_subtab_click(page: Page, label_pattern: str, *, log_name: str) -> bool:
+    """Activate a PrimeFaces-style sub-tab by visible title. Returns True if click path succeeded."""
     rx = re.compile(label_pattern, re.I)
     try:
         try:
-            page.get_by_role("tab", name=rx).first.click(timeout=_DEFAULT_TIMEOUT_MS)
+            nav = page.locator("ul.ui-tabs-nav li a").filter(has_text=rx).first
+            nav.wait_for(state="visible", timeout=_DEFAULT_TIMEOUT_MS)
+            nav.click(timeout=_DEFAULT_TIMEOUT_MS)
         except Exception:
-            page.locator(".ui-tabs-nav a, .ui-tabmenu-nav a, ul.ui-tabs-nav li a").filter(has_text=rx).first.click(
-                timeout=_DEFAULT_TIMEOUT_MS
-            )
+            try:
+                page.get_by_role("tab", name=rx).first.click(timeout=_DEFAULT_TIMEOUT_MS)
+            except Exception:
+                page.locator(".ui-tabs-nav a, .ui-tabmenu-nav a, ul.ui-tabs-nav li a").filter(has_text=rx).first.click(
+                    timeout=_DEFAULT_TIMEOUT_MS
+                )
         _pause()
         _wait_for_progress_close_loop(page)
         _rto_log(f"Screen 3: sub-tab {log_name}")
+        return True
     except Exception as e:
-        _rto_log(f"WARNING: sub-tab {log_name} click failed: {e!s}")
-        logger.warning("fill_rto: sub-tab %s: %s", log_name, e)
+        _rto_log(f"sub-tab try {log_name!r}: {e!s}")
+        return False
+
+
+def _screen_3_pf_subtab_click(page: Page, label_pattern: str, *, log_name: str) -> None:
+    """Activate a PrimeFaces-style sub-tab by visible title (e.g. *Vehicle Details*, *Hypothecation*)."""
+    if not _screen_3_try_pf_subtab_click(page, label_pattern, log_name=log_name):
+        _rto_log(f"WARNING: sub-tab {log_name} click failed after retries")
+        logger.warning("fill_rto: sub-tab %s: could not activate", log_name)
+
+
+def _screen_3_scroll_to_tax_mode(page: Page) -> None:
+    """Scroll the Tax Mode control into view (Vehicle Details tab is often long)."""
+    for sel in _SCREEN3_TAX_MODE_PF_WRAPPERS + _SCREEN3_TAX_MODE_NATIVE_SELECTORS:
+        loc = page.locator(sel).first
+        try:
+            loc.wait_for(state="attached", timeout=3000)
+            loc.scroll_into_view_if_needed(timeout=_DEFAULT_TIMEOUT_MS)
+            _pause()
+            _rto_log(f"Screen 3: scrolled to Tax Mode ({sel!r})")
+            return
+        except Exception:
+            continue
+    _rto_log("WARNING: scroll to Tax Mode: no matching locator")
+
+
+def _screen_3_select_tax_mode_one_time(page: Page) -> None:
+    """Set Tax Mode to **ONE TIME** using workbench PF widgets / native ``select`` (RTO log ids)."""
+    for wsel in _SCREEN3_TAX_MODE_PF_WRAPPERS:
+        try:
+            wid_m = re.search(r'id="([^"]+)"', wsel)
+            wrapper_id = wid_m.group(1) if wid_m else ""
+            _select_pf_dropdown(page, wsel, "ONE TIME", label="Tax Mode", timeout=_DEFAULT_TIMEOUT_MS)
+            if wrapper_id:
+                _close_pf_selectonemenu_overlay(page, wrapper_id)
+            _pause()
+            return
+        except Exception:
+            continue
+    for nsel in _SCREEN3_TAX_MODE_NATIVE_SELECTORS:
+        try:
+            _select(page, nsel, "ONE TIME", label="Tax Mode", timeout=_DEFAULT_TIMEOUT_MS)
+            return
+        except Exception:
+            continue
+    logger.debug("fill_rto: Tax Mode could not be set (ONE TIME)")
+    _rto_log("WARNING: Tax Mode not set — check workbench_tabview:tax_mode")
+
+
+def _screen_3_click_save_vehicle_details(page: Page) -> None:
+    """Persist Vehicle Details tab (Tax Mode, etc.) before switching to Hypothecation/Insurance."""
+    last_err: Exception | None = None
+    for sel in _SCREEN3_SAVE_VEHICLE_DETAILS_SELECTORS:
+        try:
+            loc = page.locator(sel).first
+            loc.wait_for(state="visible", timeout=_DEFAULT_TIMEOUT_MS)
+            loc.click(timeout=_DEFAULT_TIMEOUT_MS)
+            _pause()
+            _wait_for_progress_close_loop(page)
+            _rto_log(f"Screen 3: Save Vehicle Details ({sel!r})")
+            return
+        except Exception as e:
+            last_err = e
+            continue
+    msg = f"Save Vehicle Details: {last_err!s}" if last_err else "Save Vehicle Details: no selector matched"
+    _rto_log(f"TIMEOUT click: {msg}")
+    _dump_page_state(page, "Save Vehicle Details")
+    raise PwTimeout(msg)
+
+
+def _screen_3_open_hypothecation_insurance_tab(page: Page) -> None:
+    """Open **Hypothecation/Insurance Information** (log: ``ul.ui-tabs-nav`` / ``a`` with that text)."""
+    _screen_3_pf_subtab_probe_log(page, r"Hypothecation\s*/\s*Insurance")
+    try:
+        tab = page.locator("ul.ui-tabs-nav li a").filter(has_text=_SCREEN3_HYP_INS_TAB_ANCHOR_RE).first
+        tab.wait_for(state="visible", timeout=_DEFAULT_TIMEOUT_MS)
+        tab.click(timeout=_DEFAULT_TIMEOUT_MS)
+        _pause()
+        _wait_for_progress_close_loop(page)
+        _rto_log("Screen 3: sub-tab Hypothecation/Insurance Information (ui-tabs-nav)")
+        return
+    except Exception as e:
+        _rto_log(f"Hypothecation/Insurance (nav anchor): {e!s} — regex fallbacks")
+    tries = (
+        (r"Hypothecation\s*/\s*Insurance\s*Information", "Hypothecation/Insurance Information"),
+        (r"Hypothecation\s*/\s*Insurance", "Hypothecation/Insurance"),
+        (r"Hypothecation\.\.\.", "Hypothecation…"),
+    )
+    for pat, log_name in tries:
+        if _screen_3_try_pf_subtab_click(page, pat, log_name=log_name):
+            return
+    _rto_log("WARNING: Hypothecation/Insurance sub-tab not opened — check tab labels")
+    logger.warning("fill_rto: Hypothecation/Insurance tab not activated")
+
+
+def _screen_3_scroll_subtab_bar_into_view(page: Page) -> None:
+    """Scroll the horizontal sub-tab strip into view (after saving, page may be at bottom)."""
+    nav = page.locator(".ui-tabs-nav, .ui-tabmenu-nav, ul.ui-tabs-nav").first
+    try:
+        nav.wait_for(state="attached", timeout=_DEFAULT_TIMEOUT_MS)
+        nav.scroll_into_view_if_needed(timeout=_DEFAULT_TIMEOUT_MS)
+        _pause()
+        _rto_log("Screen 3: scrolled to sub-tab bar")
+    except Exception as e:
+        _rto_log(f"WARNING: scroll to sub-tab bar: {e!s}")
 
 
 def _screen_2(page: Page, data: dict) -> None:
@@ -1670,6 +1892,304 @@ def _screen_2(page: Page, data: dict) -> None:
     _handle_inward_partial_save_followup(page, data)
 
 
+def _screen_3_pf_dropdown_chain(
+    page: Page,
+    wrappers: tuple[str, ...],
+    value: str,
+    *,
+    label: str,
+    option_label_regex: re.Pattern | None = None,
+) -> bool:
+    """Try PrimeFaces ``ui-selectonemenu`` wrappers in order (``workbench_tabview:*`` ids)."""
+    if not (value or "").strip() and option_label_regex is None:
+        return False
+    for wsel in wrappers:
+        try:
+            wid_m = re.search(r'id="([^"]+)"', wsel)
+            wrapper_id = wid_m.group(1) if wid_m else ""
+            _select_pf_dropdown(
+                page,
+                wsel,
+                value,
+                label=label,
+                option_label_regex=option_label_regex,
+                timeout=_DEFAULT_TIMEOUT_MS,
+            )
+            if wrapper_id:
+                _close_pf_selectonemenu_overlay(page, wrapper_id)
+            _pause()
+            return True
+        except Exception:
+            continue
+    return False
+
+
+def _screen_3_native_select_chain(
+    page: Page,
+    selectors: tuple[str, ...],
+    value: str,
+    *,
+    label: str,
+) -> bool:
+    if not (value or "").strip():
+        return False
+    for sel in selectors:
+        try:
+            _select(page, sel, value, label=label, timeout=_DEFAULT_TIMEOUT_MS)
+            return True
+        except Exception:
+            continue
+    return False
+
+
+def _fill_first_matching(page: Page, selectors: tuple[str, ...], value: object, *, label: str) -> bool:
+    if value is None:
+        return True
+    text = str(value).strip()
+    if text == "":
+        return True
+    for sel in selectors:
+        try:
+            _fill(page, sel, text, label=label, timeout=_DEFAULT_TIMEOUT_MS)
+            return True
+        except Exception:
+            continue
+    _rto_log(f"WARNING: {label} not filled (no matching field)")
+    return False
+
+
+def _screen_3c_insurance_information(page: Page, data: dict) -> None:
+    """3c: On Hypothecation/Insurance tab — Insurance Type, Company, policy, dates, IDV."""
+    _rto_log("--- Screen 3c: Insurance (Hypothecation/Insurance Information tab) ---")
+    for scroll_sel in (
+        _SCREEN3_INSURANCE_TYPE_PF_WRAPPERS[0],
+        _SCREEN3_INSURANCE_TYPE_NATIVE[0],
+    ):
+        try:
+            loc = page.locator(scroll_sel).first
+            loc.wait_for(state="attached", timeout=3000)
+            loc.scroll_into_view_if_needed(timeout=_DEFAULT_TIMEOUT_MS)
+            _pause()
+            break
+        except Exception:
+            continue
+
+    if not _screen_3_pf_dropdown_chain(
+        page, _SCREEN3_INSURANCE_TYPE_PF_WRAPPERS, "THIRD PARTY", label="Insurance Type"
+    ):
+        if not _screen_3_native_select_chain(
+            page, _SCREEN3_INSURANCE_TYPE_NATIVE, "THIRD PARTY", label="Insurance Type"
+        ):
+            try:
+                _type_typeahead(
+                    page,
+                    "input[id*='insuranceType']",
+                    "THIRD PARTY",
+                    label="Insurance Type typeahead",
+                    timeout=_DEFAULT_TIMEOUT_MS,
+                )
+            except PwTimeout:
+                _rto_log("WARNING: Insurance Type not set (THIRD PARTY)")
+
+    insurer = (data.get("insurer") or "").strip()
+    if insurer:
+        if not _screen_3_pf_dropdown_chain(
+            page, _SCREEN3_INSURANCE_COMPANY_PF_WRAPPERS, insurer, label="Insurance Company"
+        ):
+            if not _screen_3_native_select_chain(
+                page, _SCREEN3_INSURANCE_COMPANY_NATIVE, insurer, label="Insurance Company"
+            ):
+                try:
+                    _type_typeahead(
+                        page,
+                        "input[id*='insuranceCompany'], input[name*='insuranceCompany']",
+                        insurer,
+                        label="Insurance Company typeahead",
+                        timeout=_DEFAULT_TIMEOUT_MS,
+                    )
+                except PwTimeout:
+                    _rto_log("WARNING: Insurance Company not set")
+
+    _fill_first_matching(
+        page, _SCREEN3_POLICY_NO_INPUT, data.get("policy_num", ""), label="Policy/Cover Note No."
+    )
+    _fill_first_matching(
+        page, _SCREEN3_INSURANCE_FROM_INPUT, data.get("policy_from_str", ""), label="Insurance From"
+    )
+    idv_v = data.get("idv")
+    idv_s = "" if idv_v is None else str(idv_v).strip()
+    if idv_s:
+        _fill_first_matching(page, _SCREEN3_IDV_INPUT, idv_s, label="Insurance Declared Value")
+
+
+def _screen_3_click_save_file_movement(page: Page) -> None:
+    """Click **Save and File Movement** (workbench id or button text)."""
+    last_err: Exception | None = None
+    for sel in _SCREEN3_SAVE_FILE_MOVEMENT_SELECTORS:
+        try:
+            loc = page.locator(sel).first
+            loc.wait_for(state="visible", timeout=_DEFAULT_TIMEOUT_MS)
+            loc.scroll_into_view_if_needed(timeout=_DEFAULT_TIMEOUT_MS)
+            loc.click(timeout=_DEFAULT_TIMEOUT_MS)
+            _pause()
+            _rto_log(f"click: Save and File Movement ({sel!r})")
+            return
+        except Exception as e:
+            last_err = e
+            continue
+    msg = f"Save and File Movement: {last_err!s}" if last_err else "Save and File Movement: no selector"
+    _rto_log(f"TIMEOUT click: {msg}")
+    _dump_page_state(page, "Save and File Movement")
+    raise PwTimeout(msg)
+
+
+def _screen_3_scrape_generated_application_id(page: Page) -> str:
+    """Read application number from success dialog (e.g. *Application generated successfully*)."""
+    application_id = ""
+    try:
+        dialog_text = page.locator(
+            ".ui-dialog-content, .ui-messages-info, .ui-growl-message, "
+            "[class*='dialog'] [class*='message'], [class*='success']"
+        ).first
+        dialog_text.wait_for(state="visible", timeout=_DEFAULT_TIMEOUT_MS)
+        text = dialog_text.inner_text()
+        match = re.search(
+            r"(?:application\s*(?:no\.?|number)\s*[:\-]?\s*|generated\s+successfully[^\n]*\s*)([A-Z0-9]{8,})",
+            text,
+            re.IGNORECASE | re.DOTALL,
+        )
+        if match:
+            application_id = match.group(1).strip()
+        if not application_id:
+            match2 = re.search(
+                r"(?:application\s*(?:no\.?|number)\s*[:\-]?\s*)(\S+)", text, re.IGNORECASE
+            )
+            if match2:
+                application_id = match2.group(1).strip()
+        if not application_id:
+            nums = re.findall(r"\b[A-Z]{2,}[0-9]{6,}\b|\b[0-9]{10,}\b", text)
+            if nums:
+                application_id = nums[0]
+        logger.info("fill_rto: scraped application_id=%s", application_id)
+        if application_id:
+            _rto_log(f"scraped: rto_application_id = {application_id}")
+    except PwTimeout:
+        logger.warning("fill_rto: could not scrape application number from popup")
+        _rto_log("WARNING: could not scrape application number from popup")
+        _dump_page_state(page, "scrape application number failed")
+    return application_id
+
+
+def _screen_3d_hypothecation_save_confirm_scrape(page: Page, data: dict) -> str:
+    """3d: Hypothecation if financier; Save and File Movement; Yes / Yes; scrape app no.; OK."""
+    _rto_log("--- Screen 3d: Hypothecation (if financier), Save and File Movement, popups ---")
+    financier = (data.get("financier") or "").strip()
+    invoice_date = (data.get("invoice_date_str") or data.get("billing_date_str") or "").strip()
+
+    if financier:
+        logger.info("fill_rto: Screen 3d — hypothecation, financier=%s", financier[:30])
+        hyp_ok = False
+        for csel in _SCREEN3_HYP_CHECKBOX_SELECTORS:
+            try:
+                loc = page.locator(csel).first
+                loc.wait_for(state="visible", timeout=_DEFAULT_TIMEOUT_MS)
+                loc.scroll_into_view_if_needed(timeout=_DEFAULT_TIMEOUT_MS)
+                if not loc.is_checked():
+                    loc.click()
+                hyp_ok = True
+                _rto_log("checkbox: Is vehicle hypothecated — checked")
+                break
+            except Exception:
+                continue
+        if not hyp_ok:
+            try:
+                page.get_by_label(re.compile(r"hypothecat", re.I)).first.click(timeout=_DEFAULT_TIMEOUT_MS)
+                _rto_log("checkbox: Is vehicle hypothecated — label click")
+            except Exception:
+                _rto_log("WARNING: Is vehicle hypothecated checkbox not set")
+        _pause()
+
+        if not _screen_3_pf_dropdown_chain(
+            page, _SCREEN3_HYP_TYPE_PF_WRAPPERS, "Hypothecation", label="Hypothecation Type"
+        ):
+            _screen_3_native_select_chain(
+                page, _SCREEN3_HYP_TYPE_NATIVE, "Hypothecation", label="Hypothecation Type"
+            )
+
+        fn_ok = _fill_first_matching(
+            page, _SCREEN3_FINANCIER_NAME_INPUT, financier, label="Financier Name"
+        )
+        if not fn_ok:
+            try:
+                _type_typeahead(
+                    page,
+                    "input[id*='financierName'], input[id*='financer']",
+                    financier,
+                    label="Financier typeahead",
+                    timeout=_DEFAULT_TIMEOUT_MS,
+                )
+            except PwTimeout:
+                _rto_log("WARNING: Financier Name not set")
+
+        if invoice_date:
+            _fill_first_matching(
+                page,
+                _SCREEN3_HYP_FROM_DATE_INPUT,
+                invoice_date,
+                label="Hypothecation From Date (invoice / billing date)",
+            )
+
+        st = (data.get("state") or "").strip()
+        if st:
+            st_disp = _init_cap_place_name(st)
+            if not _screen_3_pf_dropdown_chain(
+                page, _SCREEN3_FIN_STATE_PF_WRAPPERS, st_disp, label="Financier State"
+            ):
+                if not _screen_3_native_select_chain(
+                    page, _SCREEN3_FIN_STATE_NATIVE, st_disp, label="Financier State"
+                ):
+                    _screen_3_native_select_chain(
+                        page, _SCREEN3_FIN_STATE_NATIVE, st, label="Financier State (raw)"
+                    )
+
+        dist = (data.get("district") or "").strip()
+        if dist:
+            d_disp = _init_cap_place_name(dist)
+            if not _screen_3_pf_dropdown_chain(
+                page, _SCREEN3_FIN_DISTRICT_PF_WRAPPERS, d_disp, label="Financier District"
+            ):
+                if not _screen_3_native_select_chain(
+                    page, _SCREEN3_FIN_DISTRICT_NATIVE, d_disp, label="Financier District"
+                ):
+                    _screen_3_native_select_chain(
+                        page, _SCREEN3_FIN_DISTRICT_NATIVE, dist, label="Financier District (raw)"
+                    )
+
+        if data.get("pin"):
+            _fill_first_matching(page, _SCREEN3_FIN_PIN_INPUT, data["pin"], label="Financier Pincode")
+
+    _screen_3_click_save_file_movement(page)
+    _wait_for_progress_close_loop(page)
+    _dismiss_dialog(page, "Yes")
+    _pause()
+    _wait_for_progress_close_loop(page)
+    _dismiss_dialog(page, "Yes")
+    _rto_log("Screen 3: confirmation popups — Yes, Yes (incl. Are you sure)")
+    _pause()
+    _wait_for_progress_close_loop(page)
+
+    application_id = _screen_3_scrape_generated_application_id(page)
+    _dismiss_dialog(page, "OK", timeout=_DEFAULT_TIMEOUT_MS)
+    _pause()
+
+    wb_app = (data.get("rto_application_id") or "").strip()
+    if not (str(application_id or "").strip()) and wb_app:
+        application_id = wb_app
+        _rto_log(f"Screen 3: using application id from workbench: {application_id!r}")
+
+    return application_id
+
+
 def _screen_3(page: Page, data: dict, *, skip_home: bool, skip_entry: bool = False) -> str:
     """Screen 3: optional Home → Entry, Tax mode, Insurance, Hypothecation, Save. Returns application_id.
 
@@ -1699,193 +2219,22 @@ def _screen_3(page: Page, data: dict, *, skip_home: bool, skip_entry: bool = Fal
     if not skip_entry:
         _screen_3_click_entry(page, data, skip_home=skip_home)
 
-    # 3a2: Sub-tab **Vehicle Details** (post-Entry form uses PF tabs; tax/insurance live here).
+    # 3a2: Sub-tab **Vehicle Details** (post-Entry form uses PF tabs; Tax Mode at bottom of this tab).
     _screen_3_pf_subtab_click(page, r"Vehicle\s*Details", log_name="Vehicle Details")
 
-    # 3b: Vehicle Details — Tax Mode
-    try:
-        _select(
-            page,
-            "select[id*='taxMode'], select[name*='taxMode']",
-            "ONE TIME",
-            label="Tax Mode",
-            timeout=_DEFAULT_TIMEOUT_MS,
-        )
-    except (PwTimeout, Exception):
-        logger.debug("fill_rto: Tax Mode dropdown not found or failed, skipping")
+    # 3b: Tax Mode — scroll into view, ONE TIME, then **Save Vehicle Details** before other sub-tabs.
+    _screen_3_scroll_to_tax_mode(page)
+    _screen_3_select_tax_mode_one_time(page)
 
-    # 3c: Insurance Information
-    try:
-        _select(
-            page,
-            "select[id*='insuranceType'], select[name*='insuranceType']",
-            "THIRD PARTY",
-            label="Insurance Type",
-            timeout=_DEFAULT_TIMEOUT_MS,
-        )
-    except (PwTimeout, Exception):
-        logger.debug("fill_rto: Insurance Type dropdown issue, trying typeahead")
-        try:
-            _type_typeahead(page, "input[id*='insuranceType']", "THIRD PARTY", label="Insurance Type typeahead", timeout=_DEFAULT_TIMEOUT_MS)
-        except PwTimeout:
-            pass
+    _screen_3_click_save_vehicle_details(page)
 
-    if data.get("insurer"):
-        try:
-            _select(
-                page,
-                "select[id*='insuranceCompany'], select[name*='insuranceCompany']",
-                data["insurer"],
-                label="Insurance Company",
-                timeout=_DEFAULT_TIMEOUT_MS,
-            )
-        except (PwTimeout, Exception):
-            _type_typeahead(
-                page,
-                "input[id*='insuranceCompany'], input[name*='insuranceCompany']",
-                data["insurer"],
-                label="Insurance Company typeahead",
-                timeout=_DEFAULT_TIMEOUT_MS,
-            )
+    # 3c: Scroll to sub-tab strip, open **Hypothecation/Insurance Information**, then fill insurance.
+    _screen_3_scroll_subtab_bar_into_view(page)
+    _screen_3_open_hypothecation_insurance_tab(page)
+    _screen_3c_insurance_information(page, data)
 
-    _fill(
-        page,
-        "input[id*='policyNo'], input[id*='coverNote'], input[name*='policyNo']",
-        data.get("policy_num", ""),
-        label="Policy/Cover Note No",
-    )
-    _fill(
-        page,
-        "input[id*='insuranceFrom'], input[name*='insuranceFrom']",
-        data.get("policy_from_str", ""),
-        label="Insurance From",
-    )
-    _fill(
-        page,
-        "input[id*='idv'], input[id*='declaredValue'], input[name*='idv']",
-        str(data.get("idv", "")) if data.get("idv") else "",
-        label="Insurance Declared Value",
-    )
-
-    # 3d: Hypothecation — log tab element details, then open tab before fields (if financier).
-    _screen_3_pf_subtab_probe_log(page, r"Hypothecation")
-    financier = (data.get("financier") or "").strip()
-    if financier:
-        _screen_3_pf_subtab_click(page, r"Hypothecation", log_name="Hypothecation")
-        logger.info("fill_rto: Screen 3d — hypothecation, financier=%s", financier[:30])
-        try:
-            hyp_check = page.locator(
-                "input[type='checkbox'][id*='hypothecated'], "
-                "input[type='checkbox'][id*='isHypothecated']"
-            ).first
-            hyp_check.wait_for(state="visible", timeout=_DEFAULT_TIMEOUT_MS)
-            if not hyp_check.is_checked():
-                hyp_check.click()
-            _pause()
-        except PwTimeout:
-            logger.debug("fill_rto: hypothecation checkbox not found")
-
-        try:
-            _select(
-                page,
-                "select[id*='hypothecationType'], select[name*='hypothecationType']",
-                "Hypothecation",
-                label="Hypothecation Type",
-                timeout=_DEFAULT_TIMEOUT_MS,
-            )
-        except (PwTimeout, Exception):
-            pass
-
-        try:
-            _fill(
-                page,
-                "input[id*='financierName'], input[id*='financer'], input[name*='financierName']",
-                financier,
-                label="Financier Name",
-            )
-        except PwTimeout:
-            _type_typeahead(
-                page,
-                "input[id*='financierName'], input[id*='financer']",
-                financier,
-                label="Financier typeahead",
-                timeout=_DEFAULT_TIMEOUT_MS,
-            )
-
-        _fill(
-            page,
-            "input[id*='fromDate'][id*='hyp'], input[id*='hypothecationFrom'], input[name*='fromDate']",
-            data.get("billing_date_str", ""),
-            label="Hypothecation From Date",
-        )
-
-        if data.get("state"):
-            try:
-                _select(
-                    page,
-                    "select[id*='finState'], select[id*='hypState']",
-                    data["state"],
-                    label="Financier State",
-                    timeout=_DEFAULT_TIMEOUT_MS,
-                )
-            except (PwTimeout, Exception):
-                pass
-
-        if data.get("pin"):
-            _fill(
-                page,
-                "input[id*='finPin'], input[id*='hypPin'], input[name*='finPin']",
-                data["pin"],
-                label="Financier Pincode",
-            )
-
-    # Save and File Movement
-    _click(
-        page,
-        "input[value*='Save'], button:has-text('Save and File Movement'), button:has-text('Save and file movement')",
-        label="Save and File Movement (Screen 3)",
-    )
-    _pause()
-    _dismiss_dialog(page, "Yes")
-    _pause()
-
-    # "Are you sure" popup
-    _dismiss_dialog(page, "Yes", timeout=_DEFAULT_TIMEOUT_MS)
-    _pause()
-
-    # Scrape Application No from success popup
-    application_id = ""
-    try:
-        dialog_text = page.locator(
-            ".ui-dialog-content, .ui-messages-info, .ui-growl-message, "
-            "[class*='dialog'] [class*='message'], [class*='success']"
-        ).first
-        dialog_text.wait_for(state="visible", timeout=_DEFAULT_TIMEOUT_MS)
-        text = dialog_text.inner_text()
-        match = re.search(r'(?:application\s*(?:no\.?|number)\s*[:\-]?\s*)(\S+)', text, re.IGNORECASE)
-        if match:
-            application_id = match.group(1).strip()
-        else:
-            nums = re.findall(r'[A-Z0-9]{5,}', text)
-            if nums:
-                application_id = nums[0]
-        logger.info("fill_rto: scraped application_id=%s", application_id)
-        if application_id:
-            _rto_log(f"scraped: rto_application_id = {application_id}")
-    except PwTimeout:
-        logger.warning("fill_rto: could not scrape application number from popup")
-        _rto_log("WARNING: could not scrape application number from popup")
-        _dump_page_state(page, "scrape application number failed")
-
-    _dismiss_dialog(page, "OK", timeout=_DEFAULT_TIMEOUT_MS)
-    _pause()
-
-    wb_app = (data.get("rto_application_id") or "").strip()
-    if not (str(application_id or "").strip()) and wb_app:
-        application_id = wb_app
-        _rto_log(f"Screen 3: using application id from workbench: {application_id!r}")
-
-    return application_id
+    # 3d: Hypothecation (if financier), Save and File Movement, Yes / Yes, scrape app no., OK.
+    return _screen_3d_hypothecation_save_confirm_scrape(page, data)
 
 
 def _screen_4(page: Page) -> None:
@@ -2133,6 +2482,7 @@ def fill_rto_row(row: dict) -> dict:
 
     # --- Compose data dict for screen helpers ---
     _rqid = row.get("rto_queue_id")
+    _billing_fmt = _fmt_date(row.get("billing_date"))
     data: dict = {
         "dealer_id": dealer_id,
         "rto_queue_id": int(_rqid) if _rqid is not None else None,
@@ -2150,7 +2500,8 @@ def fill_rto_row(row: dict) -> dict:
         "insurer": row.get("insurer") or "",
         "policy_num": row.get("policy_num") or "",
         "idv": row.get("idv"),
-        "billing_date_str": _fmt_date(row.get("billing_date")),
+        "billing_date_str": _billing_fmt,
+        "invoice_date_str": _billing_fmt,
         "policy_from_str": _fmt_date(row.get("policy_from")),
     }
 
