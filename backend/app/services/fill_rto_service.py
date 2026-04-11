@@ -159,6 +159,19 @@ def _fmt_date(d: date | datetime | str | None) -> str:
     return f"{d.day:02d}-{_VAHAN_MONTH_EN[d.month - 1]}-{d.year}"
 
 
+def _init_cap_place_name(s: str) -> str:
+    """Init-cap each word so Vahan district/city options match (e.g. ``BHARATPUR`` → ``Bharatpur``)."""
+    s = (s or "").strip()
+    if not s:
+        return ""
+    parts: list[str] = []
+    for w in s.split():
+        if not w:
+            continue
+        parts.append(w[:1].upper() + w[1:].lower() if len(w) > 1 else w.upper())
+    return " ".join(parts)
+
+
 # ---------------------------------------------------------------------------
 # Document resolution
 # ---------------------------------------------------------------------------
@@ -714,19 +727,24 @@ def _upload_file(page: Page, file_path: Path, *, timeout: int = _DEFAULT_TIMEOUT
 # ---------------------------------------------------------------------------
 
 
-def _workbench_correspondence_state_is_set(page: Page) -> bool:
-    """True if correspondence *State* already shows a value (Vahan often pre-fills; do not overwrite)."""
+def _workbench_pf_menu_label_has_value(page: Page, label_id: str) -> bool:
+    """True if a PrimeFaces ``selectOneMenu`` label is not the empty / ``--SELECT--`` placeholder."""
     try:
-        lab = page.locator('[id="workbench_tabview:tf_c_state_label"]').first
+        lab = page.locator(f'[id="{label_id}"]').first
         t = (lab.inner_text(timeout=3000) or "").strip()
         if not t:
             return False
         u = t.upper()
-        if u == "--SELECT--" or u == "SELECT" or "SELECT" in u and "--" in t:
+        if u == "--SELECT--" or u == "SELECT" or ("SELECT" in u and "--" in t):
             return False
         return True
     except Exception:
         return False
+
+
+def _workbench_correspondence_state_is_set(page: Page) -> bool:
+    """True if correspondence *State* already shows a value (Vahan often pre-fills; do not overwrite)."""
+    return _workbench_pf_menu_label_has_value(page, "workbench_tabview:tf_c_state_label")
 
 
 def _ensure_vahan_dealer_home_for_screen1(page: Page) -> None:
@@ -948,9 +966,11 @@ def _screen_2(page: Page, data: dict) -> None:
         _rto_log("skip: correspondence State already set on form")
 
     # District — use ``district`` from row, or default to **city**; if district option missing, retry with city
-    district_raw = (data.get("district") or "").strip()
-    city_val = (data.get("city") or "").strip()
-    primary_district = district_raw or city_val
+    district_raw_in = (data.get("district") or "").strip()
+    city_raw_in = (data.get("city") or "").strip()
+    district_val = _init_cap_place_name(district_raw_in)
+    city_val_norm = _init_cap_place_name(city_raw_in)
+    primary_district = district_val or city_val_norm
     if primary_district:
         try:
             _select_pf_dropdown(
@@ -961,12 +981,12 @@ def _screen_2(page: Page, data: dict) -> None:
                 timeout=_DEFAULT_TIMEOUT_MS,
             )
         except PwTimeout:
-            if district_raw and city_val and district_raw.upper() != city_val.upper():
+            if district_raw_in and city_raw_in and district_raw_in.upper() != city_raw_in.upper():
                 try:
                     _select_pf_dropdown(
                         page,
                         '[id="workbench_tabview:tf_c_district"]',
-                        city_val,
+                        city_val_norm,
                         label="District (fallback to city)",
                         timeout=_DEFAULT_TIMEOUT_MS,
                     )
@@ -994,6 +1014,57 @@ def _screen_2(page: Page, data: dict) -> None:
             _rto_log("checkbox: Same as Current Address")
     except PwTimeout:
         logger.debug("fill_rto: 'Same as Current Address' checkbox not found, skipping")
+
+    # Vehicle Class / Vehicle Category (partial vehicle block) — skip if already set
+    _vh_class = "M-Cycle/Scooter"
+    _vh_cat = "TWO WHEELER(NT)"
+    if not _workbench_pf_menu_label_has_value(page, "workbench_tabview:partial_vh_class_label"):
+        try:
+            _select_pf_dropdown(
+                page,
+                '[id="workbench_tabview:partial_vh_class"]',
+                _vh_class,
+                label="Vehicle Class",
+                timeout=_DEFAULT_TIMEOUT_MS,
+            )
+        except PwTimeout:
+            logger.debug("fill_rto: Vehicle Class dropdown failed")
+        _close_pf_selectonemenu_overlay(page, "workbench_tabview:partial_vh_class")
+        _pause()
+    else:
+        _rto_log("skip: Vehicle Class already set on form")
+
+    _cat_labels = (
+        "workbench_tabview:partial_vh_catg_label",
+        "workbench_tabview:partial_vh_category_label",
+    )
+    _cat_already = any(
+        _workbench_pf_menu_label_has_value(page, lid) for lid in _cat_labels
+    )
+    if not _cat_already:
+        _cat_wrappers: tuple[tuple[str, str], ...] = (
+            ("workbench_tabview:partial_vh_catg", '[id="workbench_tabview:partial_vh_catg"]'),
+            ("workbench_tabview:partial_vh_category", '[id="workbench_tabview:partial_vh_category"]'),
+        )
+        for wid, wsel in _cat_wrappers:
+            try:
+                _select_pf_dropdown(
+                    page,
+                    wsel,
+                    _vh_cat,
+                    label="Vehicle Category",
+                    timeout=_DEFAULT_TIMEOUT_MS,
+                )
+                _close_pf_selectonemenu_overlay(page, wid)
+                _pause()
+                _rto_log(f"Vehicle Category set via wrapper id={wid}")
+                break
+            except PwTimeout:
+                continue
+        else:
+            _rto_log("WARNING: Vehicle Category could not be set (check portal ids)")
+    else:
+        _rto_log("skip: Vehicle Category already set on form")
 
     # 2e: Save and file movement
     _pause()
