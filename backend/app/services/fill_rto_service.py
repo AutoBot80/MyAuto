@@ -507,10 +507,24 @@ def _screen_2(page: Page, data: dict) -> None:
     logger.info("fill_rto: Screen 2 — chassis=%s", data.get("chassis_num", "")[:8])
     _rto_log("--- Screen 2: Chassis, engine, owner, address, Save and file movement ---")
 
-    # 2a: Chassis and engine
-    _fill(page, "input[id*='chassisNo'], input[name*='chassisNo']", data["chassis_num"], label="Chassis No")
-    _fill(page, "input[id*='engineNo'], input[name*='engineNo']", data["engine_short"], label="Engine No (last 5)")
-    _click(page, "input[value='Get Details'], button:has-text('Get Details')", label="Get Details")
+    # 2a: Chassis and engine (workbench uses ``chasi_no_new_entry`` / ``eng_no_new_entry`` — not *chassisNo*.)
+    _fill(
+        page,
+        "#chasi_no_new_entry, input[id*='chasi_no'], input[id*='chassisNo'], input[name*='chassisNo']",
+        data["chassis_num"],
+        label="Chassis No",
+    )
+    _fill(
+        page,
+        "#eng_no_new_entry, input[id*='eng_no_new'], input[id*='engineNo'], input[name*='engineNo']",
+        data["engine_short"],
+        label="Engine No (last 5)",
+    )
+    _click(
+        page,
+        "#get_dtls_btn, button[name='get_dtls_btn'], input[value='Get Details'], button:has-text('Get Details')",
+        label="Get Details",
+    )
     _pause()
     _wait_for_progress_close(page)
 
