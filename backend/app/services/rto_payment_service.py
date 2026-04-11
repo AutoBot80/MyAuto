@@ -88,6 +88,7 @@ def get_dealer_batch_status(dealer_id: int) -> dict:
         "otp_rto_queue_id": None,
         "otp_customer_mobile": None,
         "otp_prompt": None,
+        "otp_allow_change_mobile": True,
     }
     cur = _read_batch_status(dealer_id)
     if not cur:

@@ -5,6 +5,7 @@ import {
   listRtoPayments,
   retryRtoQueueRow,
   startRtoBatch,
+  submitOperatorMobileChange,
   submitOperatorOtp,
   type RtoBatchStatus,
   type RtoPaymentRow,
@@ -27,6 +28,8 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
   const [vahanReadyForBatch, setVahanReadyForBatch] = useState(false);
   const [vahanWarmMessage, setVahanWarmMessage] = useState<string | null>(null);
   const [otpInput, setOtpInput] = useState("");
+  const [otpUiMode, setOtpUiMode] = useState<"otp" | "mobile">("otp");
+  const [mobileChangeInput, setMobileChangeInput] = useState("");
   const [otpSubmitting, setOtpSubmitting] = useState(false);
   const [otpSubmitError, setOtpSubmitError] = useState<string | null>(null);
 
@@ -88,7 +91,9 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
   useEffect(() => {
     if (!batchStatus?.otp_pending) {
       setOtpInput("");
+      setMobileChangeInput("");
       setOtpSubmitError(null);
+      setOtpUiMode("otp");
     }
   }, [batchStatus?.otp_pending]);
 
@@ -157,6 +162,33 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
       fetchBatchStatus();
     } catch (err) {
       setOtpSubmitError(err instanceof Error ? err.message : "Could not submit OTP");
+    } finally {
+      setOtpSubmitting(false);
+    }
+  };
+
+  const handleSubmitMobileChange = async (e: FormEvent) => {
+    e.preventDefault();
+    const qid = batchStatus?.otp_rto_queue_id;
+    if (qid == null) return;
+    const did = dealerId ?? DEALER_ID;
+    const digits = mobileChangeInput.replace(/\D/g, "").slice(-10);
+    if (digits.length !== 10 || !/^[6-9]/.test(digits)) {
+      setOtpSubmitError("Enter a valid 10-digit Indian mobile (starts with 6–9).");
+      return;
+    }
+    setOtpSubmitting(true);
+    setOtpSubmitError(null);
+    try {
+      await submitOperatorMobileChange({
+        dealer_id: did,
+        rto_queue_id: qid,
+        mobile: digits,
+      });
+      setMobileChangeInput("");
+      fetchBatchStatus();
+    } catch (err) {
+      setOtpSubmitError(err instanceof Error ? err.message : "Could not apply mobile change");
     } finally {
       setOtpSubmitting(false);
     }
@@ -253,41 +285,99 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
       )}
       {batchStatus?.otp_pending && batchStatus.otp_rto_queue_id != null && (
         <section className="rto-otp-prompt-card" aria-live="polite">
-          <h3 className="rto-otp-prompt-title">Vahan OTP required</h3>
+          <h3 className="rto-otp-prompt-title">Vahan: OTP for Verify Owner&apos;s Mobile</h3>
           <p className="rto-otp-prompt-text">
             {batchStatus.otp_prompt ??
-              "The portal is asking for an OTP sent to the customer. Enter it below to continue automation."}
+              "The portal is asking for an OTP. Use Enter OTP, or switch to Use a different mobile."}
           </p>
           <p className="rto-otp-mobile-line">
-            <span className="rto-otp-mobile-label">Customer mobile (for calling them):</span>{" "}
+            <span className="rto-otp-mobile-label">Mobile OTP is sent to (call this number to ask for OTP):</span>{" "}
             <span className="rto-otp-mobile-value">
               {batchStatus.otp_customer_mobile && batchStatus.otp_customer_mobile !== "—"
                 ? batchStatus.otp_customer_mobile
                 : "— (check Vahan popup or your sale record)"}
             </span>
           </p>
-          <form className="rto-otp-form" onSubmit={handleSubmitOtp}>
-            <label className="rto-otp-label">
-              OTP
-              <input
-                className="rto-otp-input"
-                type="text"
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                value={otpInput}
-                onChange={(ev) => setOtpInput(ev.target.value.replace(/\D/g, "").slice(0, 8))}
-                placeholder="Enter OTP"
-                disabled={otpSubmitting}
-              />
-            </label>
-            <button
-              type="submit"
-              className="app-button app-button--primary"
-              disabled={otpSubmitting || otpInput.trim().length < 4}
-            >
-              {otpSubmitting ? "Sending…" : "Submit OTP to Vahan"}
-            </button>
-          </form>
+          {batchStatus.otp_allow_change_mobile !== false && (
+            <div className="rto-otp-mode-toggle" role="tablist" aria-label="OTP or change mobile">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={otpUiMode === "otp"}
+                className={`rto-otp-mode-btn${otpUiMode === "otp" ? " rto-otp-mode-btn--active" : ""}`}
+                onClick={() => {
+                  setOtpUiMode("otp");
+                  setOtpSubmitError(null);
+                }}
+              >
+                Enter OTP
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={otpUiMode === "mobile"}
+                className={`rto-otp-mode-btn${otpUiMode === "mobile" ? " rto-otp-mode-btn--active" : ""}`}
+                onClick={() => {
+                  setOtpUiMode("mobile");
+                  setOtpSubmitError(null);
+                }}
+              >
+                Use a different mobile
+              </button>
+            </div>
+          )}
+          {otpUiMode === "otp" || batchStatus.otp_allow_change_mobile === false ? (
+            <form className="rto-otp-form" onSubmit={handleSubmitOtp}>
+              <label className="rto-otp-label">
+                Enter OTP
+                <input
+                  className="rto-otp-input"
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  value={otpInput}
+                  onChange={(ev) => setOtpInput(ev.target.value.replace(/\D/g, "").slice(0, 8))}
+                  placeholder="OTP from SMS"
+                  disabled={otpSubmitting}
+                />
+              </label>
+              <button
+                type="submit"
+                className="app-button app-button--primary"
+                disabled={otpSubmitting || otpInput.trim().length < 4}
+              >
+                {otpSubmitting ? "Sending…" : "Submit OTP to Vahan"}
+              </button>
+            </form>
+          ) : (
+            <form className="rto-otp-form rto-otp-form--stack" onSubmit={handleSubmitMobileChange}>
+              <p className="rto-otp-hint">
+                Automation will cancel the Vahan popup, set this mobile on the form, and press{" "}
+                <strong>Inward Application (Partial Save)</strong> again so a new OTP goes to the new number.
+                You do not need to click Cancel on Vahan yourself.
+              </p>
+              <label className="rto-otp-label">
+                New mobile number
+                <input
+                  className="rto-otp-input"
+                  type="tel"
+                  inputMode="numeric"
+                  autoComplete="tel"
+                  value={mobileChangeInput}
+                  onChange={(ev) => setMobileChangeInput(ev.target.value.replace(/\D/g, "").slice(0, 10))}
+                  placeholder="10-digit mobile"
+                  disabled={otpSubmitting}
+                />
+              </label>
+              <button
+                type="submit"
+                className="app-button app-button--primary"
+                disabled={otpSubmitting || mobileChangeInput.replace(/\D/g, "").length !== 10}
+              >
+                {otpSubmitting ? "Applying…" : "Cancel popup, update mobile & reopen OTP"}
+              </button>
+            </form>
+          )}
           {otpSubmitError && <p className="rto-payments-error">{otpSubmitError}</p>}
         </section>
       )}

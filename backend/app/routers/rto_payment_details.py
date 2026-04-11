@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 
 from app.config import DEALER_ID
 from app.repositories import rto_payment_details as repo
-from app.services.rto_otp_bridge import deliver_operator_otp
+from app.services.rto_otp_bridge import deliver_operator_change_mobile, deliver_operator_otp
 from app.services.rto_payment_service import get_dealer_batch_status, start_dealer_rto_batch
 
 router = APIRouter(prefix="/rto-queue", tags=["rto-queue"])
@@ -45,6 +45,12 @@ class RtoOtpSubmitPayload(BaseModel):
     dealer_id: int | None = None
     rto_queue_id: int
     otp: str = Field(..., min_length=4, max_length=14)
+
+
+class RtoMobileChangePayload(BaseModel):
+    dealer_id: int | None = None
+    rto_queue_id: int
+    mobile: str = Field(..., min_length=10, max_length=15)
 
 
 def _serialize_row(row: dict) -> dict:
@@ -121,6 +127,28 @@ def submit_operator_otp(payload: RtoOtpSubmitPayload) -> dict:
         raise HTTPException(
             status_code=409,
             detail="Could not accept OTP (automation may have moved on — enter OTP in Vahan if the popup is still open)",
+        )
+    return {"ok": True}
+
+
+@router.post("/submit-operator-mobile-change")
+def submit_operator_mobile_change(payload: RtoMobileChangePayload) -> dict:
+    """Tell automation to Cancel the OTP dialog, set workbench mobile, and press Partial Save again."""
+    did = payload.dealer_id if payload.dealer_id is not None else DEALER_ID
+    st = get_dealer_batch_status(did)
+    if not st.get("otp_pending"):
+        raise HTTPException(status_code=400, detail="No OTP request is pending for this dealer")
+    want = st.get("otp_rto_queue_id")
+    if want is None or int(want) != int(payload.rto_queue_id):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Active OTP request is for queue {want}, not {payload.rto_queue_id}",
+        )
+    ok = deliver_operator_change_mobile(did, payload.rto_queue_id, payload.mobile.strip())
+    if not ok:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid mobile number (need 10 digits starting with 6–9) or automation is not waiting",
         )
     return {"ok": True}
 

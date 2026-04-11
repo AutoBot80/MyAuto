@@ -70,6 +70,8 @@ export interface RtoBatchStatus {
   otp_rto_queue_id?: number | null;
   otp_customer_mobile?: string | null;
   otp_prompt?: string | null;
+  /** When true, UI may offer "use different mobile" (automation cancels dialog, updates form, Partial Save again). */
+  otp_allow_change_mobile?: boolean;
 }
 
 export async function insertRtoPayment(payload: RtoPaymentInsertPayload): Promise<{ rto_queue_id: number; ok: boolean }> {
@@ -107,6 +109,18 @@ export async function submitOperatorOtp(payload: {
   otp: string;
 }): Promise<{ ok: boolean }> {
   return apiFetch<{ ok: boolean }>("/rto-queue/submit-operator-otp", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function submitOperatorMobileChange(payload: {
+  dealer_id?: number;
+  rto_queue_id: number;
+  mobile: string;
+}): Promise<{ ok: boolean }> {
+  return apiFetch<{ ok: boolean }>("/rto-queue/submit-operator-mobile-change", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),

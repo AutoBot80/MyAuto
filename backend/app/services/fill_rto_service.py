@@ -714,6 +714,10 @@ def _dismiss_dialog(page: Page, button_text: str = "OK", *, timeout: int = _DEFA
 def _find_visible_otp_dialog(page: Page):
     """Return a locator for a visible Vahan OTP dialog, or ``None``."""
     selectors = (
+        "[role='dialog']:has-text('OTP for Verify Owner')",
+        ".ui-dialog:has-text('OTP for Verify Owner')",
+        "[role='dialog']:has-text('Verify Owner')",
+        ".ui-dialog:has-text('Verify Owner')",
         "[role='dialog']:has-text('OTP')",
         ".ui-dialog:has-text('OTP')",
         "div.ui-dialog-content:has-text('OTP')",
@@ -739,6 +743,69 @@ def _poll_otp_dialog(page: Page, max_ms: int = 12_000):
             return dlg
         time.sleep(_FIRST_TRY_MS / 1000.0)
     return None
+
+
+def _otp_dialog_mobile_from_text(dlg) -> str | None:
+    """Parse 10-digit Indian mobile from OTP dialog body text."""
+    try:
+        txt = dlg.inner_text(timeout=5000) or ""
+        compact = re.sub(r"\s+", " ", txt)
+        m = re.search(r"(?:\+91[\s\-]*)?([6-9]\d{9})\b", compact)
+        return m.group(1) if m else None
+    except Exception:
+        return None
+
+
+def _fill_workbench_owner_mobile(page: Page, mobile: str) -> None:
+    """Update owner mobile on workbench (same field as Screen 2)."""
+    _fill(
+        page,
+        "input[id*='tf_mobNo'], input[id*='mobileNo'], input[name*='mobileNo'], input[id*='mobNo']",
+        mobile,
+        label="Mobile No (update for OTP)",
+    )
+
+
+def _click_inward_partial_save(page: Page) -> None:
+    _click(
+        page,
+        "button:has-text('Inward Application'), button:has-text('Partial Save'), "
+        "input[value*='Inward'], input[value*='Partial Save'], "
+        "input[value*='Save'], button:has-text('Save and file movement'), "
+        "button:has-text('Save and File Movement')",
+        label="Inward Application (Partial Save)",
+        timeout=_DEFAULT_TIMEOUT_MS,
+    )
+
+
+def _cancel_vahan_otp_dialog(page: Page) -> None:
+    """Click **Cancel** on the open OTP verification dialog (returns to workbench)."""
+    dlg = _find_visible_otp_dialog(page)
+    if dlg is None:
+        raise RuntimeError("OTP dialog is not visible — cannot cancel")
+    clicked = False
+    try:
+        dlg.get_by_role("button", name=re.compile(r"^\s*Cancel\s*$", re.I)).first.click(timeout=5000)
+        clicked = True
+    except Exception:
+        pass
+    if not clicked:
+        try:
+            dlg.locator("button, a").filter(has_text=re.compile(r"^\s*Cancel\s*$", re.I)).first.click(timeout=5000)
+            clicked = True
+        except Exception:
+            pass
+    if not clicked:
+        try:
+            page.locator(".ui-dialog:visible").get_by_role("button", name=re.compile(r"Cancel", re.I)).first.click(
+                timeout=5000
+            )
+            clicked = True
+        except Exception as e:
+            raise RuntimeError("Could not click Cancel on Vahan OTP dialog") from e
+    _rto_log("OTP dialog: Cancel")
+    _pause()
+    _wait_for_progress_close_loop(page)
 
 
 def _submit_vahan_otp_in_dialog(page: Page, dlg, otp: str) -> None:
@@ -775,18 +842,26 @@ def _submit_vahan_otp_in_dialog(page: Page, dlg, otp: str) -> None:
             raise RuntimeError("Could not find OTP input in Vahan dialog") from e
     _pause()
     clicked = False
-    for label in ("Submit", "Verify", "Validate", "OK", "Confirm", "Continue"):
+    for pattern, log_name in (
+        (r"Confirm\s+And\s+Inward\s+Application", "Confirm And Inward Application"),
+        (r"^\s*Submit\s*$", "Submit"),
+        (r"^\s*Verify\s*$", "Verify"),
+        (r"^\s*Validate\s*$", "Validate"),
+        (r"^\s*OK\s*$", "OK"),
+        (r"^\s*Confirm\s*$", "Confirm"),
+        (r"^\s*Continue\s*$", "Continue"),
+    ):
         try:
-            dlg.get_by_role("button", name=re.compile(rf"^\s*{label}\s*$", re.I)).first.click(timeout=4000)
+            dlg.get_by_role("button", name=re.compile(pattern, re.I)).first.click(timeout=5000)
             clicked = True
-            _rto_log(f"OTP dialog: clicked {label}")
+            _rto_log(f"OTP dialog: clicked {log_name}")
             break
         except Exception:
             continue
     if not clicked:
         try:
             dlg.locator("input[type='submit'], input[type='button']").filter(
-                has_text=re.compile(r"submit|verify|ok|confirm", re.I)
+                has_text=re.compile(r"submit|verify|ok|confirm|inward", re.I)
             ).first.click(timeout=5000)
             clicked = True
         except Exception:
@@ -811,6 +886,7 @@ def _clear_batch_otp_flags(dealer_id: int) -> None:
         otp_rto_queue_id=None,
         otp_customer_mobile=None,
         otp_prompt=None,
+        otp_allow_change_mobile=False,
     )
 
 
@@ -826,25 +902,17 @@ def _handle_inward_partial_save_followup(page: Page, data: dict) -> None:
         _dismiss_dialog(page, "Close", timeout=_DEFAULT_TIMEOUT_MS)
         return
 
-    _rto_log("Inward save: OTP dialog detected — waiting for operator to submit OTP in this app")
+    _rto_log("Inward save: OTP dialog detected — use app to enter OTP or change mobile")
     dealer_id = data.get("dealer_id")
     rto_queue_id = data.get("rto_queue_id")
-    mobile = (data.get("mobile") or "").strip() or None
-    try:
-        txt = dlg.inner_text(timeout=5000) or ""
-        compact = re.sub(r"\s+", " ", txt)
-        m = re.search(r"(?:\+91[\s\-]*)?([6-9]\d{9})\b", compact)
-        if m:
-            mobile = m.group(1)
-            _rto_log(f"OTP dialog: parsed mobile from portal text: {mobile}")
-    except Exception:
-        pass
-    if not mobile:
-        mobile = "—"
+    parsed_m = _otp_dialog_mobile_from_text(dlg)
+    mobile_display = parsed_m or (str(data.get("mobile") or "").strip()) or "—"
+    if parsed_m:
+        _rto_log(f"OTP dialog: parsed mobile from portal text: {parsed_m}")
 
     prompt = (
-        "Vahan sent an OTP to the customer's mobile. Enter the OTP below; "
-        "automation will fill the Vahan popup and continue."
+        "Vahan is verifying the owner's mobile. Enter the OTP here, or switch to **Use a different mobile** — "
+        "automation will click Cancel on the popup, update the mobile on the form, and press Partial Save again."
     )
 
     if dealer_id is None or rto_queue_id is None:
@@ -853,43 +921,75 @@ def _handle_inward_partial_save_followup(page: Page, data: dict) -> None:
             "Enter the OTP manually in the Vahan browser window."
         )
 
-    from app.services.rto_otp_bridge import OperatorOtpTimeout, wait_for_operator_otp
+    from app.services.rto_otp_bridge import OperatorAction, OperatorOtpTimeout, wait_for_operator_action
     from app.services.rto_payment_service import _write_batch_status
 
-    def notify() -> None:
-        _write_batch_status(
-            int(dealer_id),
-            otp_pending=True,
-            otp_rto_queue_id=int(rto_queue_id),
-            otp_customer_mobile=mobile,
-            otp_prompt=prompt,
-            message=f"Waiting for OTP — customer mobile {mobile} (queue {rto_queue_id})",
-        )
+    while True:
 
-    try:
-        otp = wait_for_operator_otp(int(dealer_id), int(rto_queue_id), notify, timeout_s=600.0)
-    except OperatorOtpTimeout:
-        _rto_log("Inward save: OTP wait timed out")
-        _clear_batch_otp_flags(int(dealer_id))
-        raise
-    except Exception:
-        _clear_batch_otp_flags(int(dealer_id))
-        raise
+        def notify() -> None:
+            _write_batch_status(
+                int(dealer_id),
+                otp_pending=True,
+                otp_rto_queue_id=int(rto_queue_id),
+                otp_customer_mobile=mobile_display,
+                otp_prompt=prompt,
+                otp_allow_change_mobile=True,
+                message=f"Vahan OTP — mobile {mobile_display} (queue {rto_queue_id})",
+            )
 
-    dlg2 = _find_visible_otp_dialog(page)
-    if dlg2 is None:
-        dlg2 = _poll_otp_dialog(page, max_ms=5000)
+        try:
+            action = wait_for_operator_action(int(dealer_id), int(rto_queue_id), notify, timeout_s=600.0)
+        except OperatorOtpTimeout:
+            _rto_log("Inward save: operator action timed out")
+            _clear_batch_otp_flags(int(dealer_id))
+            raise
+        except Exception:
+            _clear_batch_otp_flags(int(dealer_id))
+            raise
 
-    try:
-        if dlg2 is None:
-            raise RuntimeError("OTP received but Vahan OTP dialog is no longer visible")
-        _submit_vahan_otp_in_dialog(page, dlg2, otp)
-        _wait_for_progress_close(page)
-        _dismiss_dialog(page, "Yes")
-        _pause()
-        _dismiss_dialog(page, "Close", timeout=_DEFAULT_TIMEOUT_MS)
-    finally:
+        if action.kind == "otp":
+            dlg2 = _find_visible_otp_dialog(page) or _poll_otp_dialog(page, max_ms=5000)
+            try:
+                if dlg2 is None:
+                    raise RuntimeError("OTP received but Vahan OTP dialog is no longer visible")
+                _submit_vahan_otp_in_dialog(page, dlg2, action.value)
+                _wait_for_progress_close(page)
+                _dismiss_dialog(page, "Yes")
+                _pause()
+                _dismiss_dialog(page, "Close", timeout=_DEFAULT_TIMEOUT_MS)
+            finally:
+                _clear_batch_otp_flags(int(dealer_id))
+            return
+
+        if action.kind == "change_mobile":
+            new_mobile = action.value
+            data["mobile"] = new_mobile
+            mobile_display = new_mobile
+            try:
+                _cancel_vahan_otp_dialog(page)
+                _fill_workbench_owner_mobile(page, new_mobile)
+                _pause()
+                _click_inward_partial_save(page)
+                _pause()
+                _wait_for_progress_close_loop(page)
+                dlg = _poll_otp_dialog(page, max_ms=15_000)
+                if dlg is None:
+                    raise RuntimeError(
+                        "OTP dialog did not reappear after updating mobile — check Vahan for validation errors."
+                    )
+                parsed = _otp_dialog_mobile_from_text(dlg)
+                if parsed:
+                    mobile_display = parsed
+                else:
+                    mobile_display = new_mobile
+                _rto_log(f"Inward save: mobile set to {new_mobile}; OTP dialog shown again (display {mobile_display})")
+            except Exception:
+                _clear_batch_otp_flags(int(dealer_id))
+                raise
+            continue
+
         _clear_batch_otp_flags(int(dealer_id))
+        raise RuntimeError(f"Unknown operator action: {action.kind!r}")
 
 
 def _wait_for_progress_close(page: Page, timeout_ms: int = _LONG_TIMEOUT_MS) -> None:
@@ -1379,15 +1479,7 @@ def _screen_2(page: Page, data: dict) -> None:
 
     # 2e: Partial save / inward (workbench label: ``Inward Application(Partial Save)``)
     _pause()
-    _click(
-        page,
-        "button:has-text('Inward Application'), button:has-text('Partial Save'), "
-        "input[value*='Inward'], input[value*='Partial Save'], "
-        "input[value*='Save'], button:has-text('Save and file movement'), "
-        "button:has-text('Save and File Movement')",
-        label="Inward Application (Partial Save)",
-        timeout=_DEFAULT_TIMEOUT_MS,
-    )
+    _click_inward_partial_save(page)
     _pause()
     _handle_inward_partial_save_followup(page, data)
 
