@@ -408,6 +408,63 @@ def _select(page: Page, selector: str, value: str, *, timeout: int = _DEFAULT_TI
         _rto_log(f"select: {label} = {value}")
 
 
+def _pf_native_select_selector(wrapper_id: str) -> str:
+    """CSS locator for ``select`` inside a PrimeFaces selectOneMenu (ids may contain ``:``)."""
+    sid = f"{wrapper_id}_input"
+    if ":" in wrapper_id:
+        return f'select[id="{sid}"]'
+    return f"select#{sid}"
+
+
+def _pf_selectonemenu_panel_selector(wrapper_id: str) -> str:
+    """CSS locator for the overlay panel ``div[id$='_panel']`` (ids may contain ``:``)."""
+    pid = f"{wrapper_id}_panel"
+    if ":" in wrapper_id:
+        return f'div[id="{pid}"]'
+    return f"div#{pid}"
+
+
+def _close_pf_selectonemenu_overlay(page: Page, wrapper_id: str) -> None:
+    """Close an open PrimeFaces selectOneMenu list so it does not stay on screen."""
+    panel = page.locator(_pf_selectonemenu_panel_selector(wrapper_id)).first
+    try:
+        panel.wait_for(state="visible", timeout=400)
+        page.keyboard.press("Escape")
+        _pause()
+        panel.wait_for(state="hidden", timeout=_DEFAULT_TIMEOUT_MS)
+    except PwTimeout:
+        pass
+
+
+def _pick_aadhaar_registration_not_available(page: Page, *, timeout: int = _DEFAULT_TIMEOUT_MS) -> None:
+    """In the 'Aadhaar Based Registration Integration' modal, select the **Not Available** option."""
+    dlg = page.locator(
+        "[role='dialog']:has-text('Aadhaar'), "
+        ".ui-dialog:has-text('Aadhaar'), "
+        "div.ui-dialog:has-text('Aadhaar Based Registration')"
+    ).first
+    try:
+        dlg.wait_for(state="visible", timeout=timeout)
+    except PwTimeout:
+        logger.debug("fill_rto: Aadhaar registration modal not shown")
+        return
+    try:
+        lbl = dlg.locator("label:has-text('Not Available')").first
+        lbl.wait_for(state="visible", timeout=timeout)
+        lbl.click(timeout=timeout)
+        _pause()
+        _rto_log("dialog: Aadhaar registration — selected Not Available")
+    except PwTimeout:
+        try:
+            rad = dlg.get_by_role("radio", name=re.compile(r"Not\s*Available", re.I)).first
+            rad.click(timeout=timeout)
+            _pause()
+            _rto_log("dialog: Aadhaar registration — selected Not Available (radio role)")
+        except Exception as e:
+            logger.debug("fill_rto: Not Available in Aadhaar modal: %s", e)
+            _rto_log("WARNING: could not select Not Available in Aadhaar registration dialog")
+
+
 def _type_typeahead(page: Page, selector: str, value: str, *, timeout: int = _DEFAULT_TIMEOUT_MS, label: str = "") -> None:
     """Type into a typeahead/autocomplete field and pick the first suggestion."""
     if not value:
@@ -466,7 +523,7 @@ def _select_pf_dropdown(
 
         # 1) Native <select> (PrimeFaces keeps options in sync; avoids overlay timing issues).
         if wrapper_id and use_native_select:
-            native_sel = page.locator(f"select#{wrapper_id}_input")
+            native_sel = page.locator(_pf_native_select_selector(wrapper_id))
             try:
                 if native_sel.count() > 0:
                     if option_label_regex is not None:
@@ -488,7 +545,7 @@ def _select_pf_dropdown(
         _pause()
 
         if wrapper_id:
-            panel_sel = f"div#{wrapper_id}_panel"
+            panel_sel = _pf_selectonemenu_panel_selector(wrapper_id)
         else:
             panel_sel = "div.ui-selectonemenu-panel"
         items_panel = page.locator(panel_sel).first
@@ -704,8 +761,29 @@ def _screen_2(page: Page, data: dict) -> None:
             except PwTimeout:
                 logger.debug("fill_rto: choice number dropdown not found, skipping")
 
+    _close_pf_selectonemenu_overlay(page, "regnNoSelectionForAPS")
+
     # Owner Details tab (workbench ids: ``purchase_dt_input``, ``tf_owner_name``, …)
     _fill_workbench_purchase_date(page, data["billing_date_str"], timeout=_DEFAULT_TIMEOUT_MS)
+
+    # Ownership Type = INDIVIDUAL → opens "Aadhaar Based Registration Integration"; pick **Not Available**
+    # so Son/Wife/Daughter of enables (must run before that field).
+    try:
+        _select_pf_dropdown(
+            page,
+            '[id="workbench_tabview:tf_owner_cd"]',
+            "INDIVIDUAL",
+            label="Ownership Type",
+            timeout=_DEFAULT_TIMEOUT_MS,
+        )
+    except PwTimeout:
+        logger.debug("fill_rto: Ownership Type dropdown failed, skipping")
+
+    _close_pf_selectonemenu_overlay(page, "workbench_tabview:tf_owner_cd")
+    _pause()
+    _wait_for_progress_close(page)
+    _pick_aadhaar_registration_not_available(page, timeout=_DEFAULT_TIMEOUT_MS)
+
     _fill(
         page,
         "input[id*='tf_owner_name'], input[id*='ownerName'], input[name*='ownerName'], input[id*='owner_name']",
@@ -713,15 +791,6 @@ def _screen_2(page: Page, data: dict) -> None:
         label="Owner Name",
     )
     _pause()
-
-    # Popup: pick "Not Available" radio
-    try:
-        not_avail = page.locator("input[type='radio'][value*='Not Available'], label:has-text('Not Available') input[type='radio']").first
-        not_avail.wait_for(state="visible", timeout=_DEFAULT_TIMEOUT_MS)
-        not_avail.click()
-        _pause()
-    except PwTimeout:
-        logger.debug("fill_rto: 'Not Available' radio not found, skipping")
 
     _fill(
         page,
