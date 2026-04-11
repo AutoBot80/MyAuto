@@ -199,6 +199,11 @@ VAHAN_BASE_URL = (
     os.getenv("VAHAN_BASE_URL")
     or "https://vahan.parivahan.gov.in/vahan/vahan/ui/login/login.xhtml"
 ).strip().rstrip("/")
+# Logged-in dealer landing (office / action / Show Form). Used to reset when the tab was left on workbench.
+VAHAN_DEALER_HOME_URL = (
+    os.getenv("VAHAN_DEALER_HOME_URL")
+    or "https://vahan.parivahan.gov.in/vahan/vahan/home.xhtml"
+).strip().rstrip("/")
 
 # Insurance portal base URL for Playwright (e.g. Hero MISP).
 INSURANCE_BASE_URL = (os.getenv("INSURANCE_BASE_URL") or "").strip().rstrip("/")

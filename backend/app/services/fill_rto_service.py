@@ -18,7 +18,7 @@ from pathlib import Path
 
 from playwright.sync_api import Page, TimeoutError as PwTimeout
 
-from app.config import VAHAN_BASE_URL, get_ocr_output_dir, get_uploads_dir
+from app.config import VAHAN_BASE_URL, VAHAN_DEALER_HOME_URL, get_ocr_output_dir, get_uploads_dir
 from app.services.handle_browser_opening import get_or_open_site_page
 
 logger = logging.getLogger(__name__)
@@ -470,6 +470,64 @@ def _upload_file(page: Page, file_path: Path, *, timeout: int = _DEFAULT_TIMEOUT
 # ---------------------------------------------------------------------------
 # Screen implementations
 # ---------------------------------------------------------------------------
+
+def _ensure_vahan_dealer_home_for_screen1(page: Page) -> None:
+    """Reset the tab to **dealer home** so Screen 1 (``officeList`` / ``actionList`` / Show Form) is present.
+
+    If the operator (or last run) left the tab on ``workbench.xhtml`` or elsewhere, Screen 1 selectors
+    will not exist. We do **not** persist a step across restarts — we normalize by:
+
+    1. Clicking the top **Home** link (IDs from live Vahan: ``homeId2`` / ``homeId1``) — no pixel coordinates.
+    2. If that fails, ``page.goto(VAHAN_DEALER_HOME_URL)``.
+
+    A **new browser profile** is unchanged: first load still goes through login; after that this keeps
+    the flow aligned with Screen 1 → 2 → ….
+    """
+    _rto_log("ensure dealer home: resetting to Screen 1 entry (Home link or home.xhtml)")
+
+    home_link_selectors = (
+        "a#homeId2",
+        "a[name='homeId2']",
+        "a#homeId1",
+        "nav.navbar a:has-text('Home')",
+        "a:has-text('Home')",
+    )
+    clicked = False
+    for sel in home_link_selectors:
+        try:
+            loc = page.locator(sel).first
+            if loc.count() == 0:
+                continue
+            loc.wait_for(state="visible", timeout=3000)
+            loc.click(timeout=_DEFAULT_TIMEOUT_MS)
+            clicked = True
+            _rto_log(f"ensure dealer home: clicked Home ({sel})")
+            break
+        except Exception as exc:
+            logger.debug("fill_rto: Home selector %s: %s", sel, exc)
+            continue
+
+    _pause()
+    _wait_for_progress_close(page)
+
+    try:
+        page.locator("div#officeList").first.wait_for(state="visible", timeout=_DEFAULT_TIMEOUT_MS)
+        _rto_log("ensure dealer home: office list visible (Screen 1 ready)")
+        return
+    except PwTimeout:
+        pass
+
+    try:
+        page.goto(VAHAN_DEALER_HOME_URL, wait_until="domcontentloaded", timeout=20_000)
+        _rto_log(f"ensure dealer home: navigated to {VAHAN_DEALER_HOME_URL}")
+        _pause()
+        _wait_for_progress_close(page)
+        page.locator("div#officeList").first.wait_for(state="visible", timeout=_DEFAULT_TIMEOUT_MS)
+        _rto_log("ensure dealer home: office list visible after goto")
+    except Exception as exc:
+        _rto_log(f"ensure dealer home: could not reach Screen 1 — {exc!s}")
+        logger.warning("fill_rto: ensure dealer home failed: %s", exc)
+
 
 def _screen_1(page: Page, office: str) -> None:
     """Screen 1: Select office, action, Show Form."""
@@ -960,7 +1018,11 @@ def _screen_5(page: Page, docs: dict[str, Path | None]) -> None:
 
 
 def _screen_6(page: Page) -> float | None:
-    """Screen 6: Dealer Regn Fee Tax — scrape total payable amount."""
+    """Screen 6: Dealer Regn Fee Tax — open fee details and scrape total payable.
+
+    Steps 1–2: click **Dealer Regn Fee Tax**, wait for progress, scrape **Total Payable Amount**.
+    Then **hard-fails intentionally** (does not click Yes on popups or close secondary dialogs).
+    """
     _set_screen("Screen 6")
     logger.info("fill_rto: Screen 6 — fee details")
     _rto_log("--- Screen 6: Dealer Regn Fee Tax, total payable ---")
@@ -974,7 +1036,7 @@ def _screen_6(page: Page) -> float | None:
     _pause()
     _wait_for_progress_close(page)
 
-    # Scrape Total Payable Amount
+    # Step 2: Scrape Total Payable Amount
     total: float | None = None
     try:
         amount_el = page.locator(
@@ -996,21 +1058,15 @@ def _screen_6(page: Page) -> float | None:
         _rto_log("WARNING: could not scrape total payable amount")
         _dump_page_state(page, "scrape total payable failed")
 
-    # Dismiss popups
-    _dismiss_dialog(page, "Yes", timeout=_DEFAULT_TIMEOUT_MS)
-    _pause()
-    try:
-        close_btn = page.locator(
-            "button:has-text('×'), button:has-text('X'), "
-            "[class*='ui-dialog-titlebar-close'], a[class*='close']"
-        ).first
-        close_btn.wait_for(state="visible", timeout=_DEFAULT_TIMEOUT_MS)
-        close_btn.click()
-    except PwTimeout:
-        pass
-    _pause()
-
-    return total
+    # Hard stop after step 2: do not automate payment popups (Yes / close).
+    msg = (
+        "Screen 6: intentional stop after total payable scrape. "
+        f"Total Payable scraped: {total!r}. "
+        "Dismiss fee/payment dialogs manually on Vahan if needed."
+    )
+    logger.warning("fill_rto: %s", msg)
+    _rto_log(f"HARD STOP (Screen 6): {msg}")
+    raise RuntimeError(msg)
 
 
 # Message aligned with ``handle_browser_opening._wait_login_or_prompt_after_open`` (DMS / Create Invoice UX).
@@ -1138,6 +1194,8 @@ def fill_rto_row(row: dict) -> dict:
             pass
 
         page.set_default_timeout(_DEFAULT_TIMEOUT_MS)
+
+        _ensure_vahan_dealer_home_for_screen1(page)
 
         # --- Execute screens ---
         _screen_1(page, office)

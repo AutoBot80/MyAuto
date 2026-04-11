@@ -1,46 +1,41 @@
-[2026-04-11 11:53:47 IST] [Setup] fill_rto_row start rto_queue_id=1 sales_id=1 dealer_id=100001 log_file=C:\Users\arya_\OneDrive\Desktop\My Auto.AI\ocr_output\100001\8905969604_RTO.txt
-[2026-04-11 11:53:47 IST] [Setup] uploads root (dealer): C:\Users\arya_\OneDrive\Desktop\My Auto.AI\Uploaded scans\100001
-[2026-04-11 11:53:47 IST] [Setup] searched folder (absolute): C:\Users\arya_\OneDrive\Desktop\My Auto.AI\Uploaded scans\100001\8905969604_100426
-[2026-04-11 11:53:47 IST] [Setup] documents matched to categories: {'FORM 20': '8905969604_Form_20.pdf', 'FORM 21': '8905969604_Sale_Certificate.pdf', 'FORM 22': '8905969604_Form22.pdf', 'INSURANCE CERTIFICATE': '8905969604_Insurance.pdf', 'INVOICE ORIGINAL': '8905969604_GST_Retail_Invoice.pdf', 'AADHAAR_FRONT': 'Aadhar.jpg', 'AADHAAR_BACK': 'Aadhar_back.jpg', 'OWNER UNDERTAKING FORM': 'Details.jpg'}
-[2026-04-11 11:53:53 IST] [Setup] browser page url: https://vahan.parivahan.gov.in/vahan/vahan/home.xhtml
-[2026-04-11 11:53:53 IST] [Screen 1] --- Screen 1: Assigned office, Entry-New Registration, Show Form ---
-[2026-04-11 11:53:53 IST] [Screen 1] pf-dropdown (native): Select Assigned Office = BHARATPUR RTO
-[2026-04-11 11:53:54 IST] [Screen 1] pf-dropdown: Select Action = Entry-New Registration
-[2026-04-11 11:53:56 IST] [Screen 1] click: Show Form
-[2026-04-11 11:53:56 IST] [Screen 1] dialog: OK
-[2026-04-11 11:53:56 IST] [Screen 2] --- Screen 2: Chassis, engine, owner, address, Save and file movement ---
-[2026-04-11 11:54:06 IST] [Screen 2] TIMEOUT fill: Chassis No selector=input[id*='chassisNo'], input[name*='chassisNo'] value=MBLHAW472THC54831
-[2026-04-11 11:54:06 IST] [Screen 2] === PAGE STATE DUMP (fill failed: Chassis No) ===
-[2026-04-11 11:54:06 IST] [Screen 2] url: https://vahan.parivahan.gov.in/vahan/vahan/workbench.xhtml
-[2026-04-11 11:54:06 IST] [Screen 2] frames: 1
-[2026-04-11 11:54:06 IST] [Screen 2]   frame[0] name='(main)' url=https://vahan.parivahan.gov.in/vahan/vahan/workbench.xhtml
-[2026-04-11 11:54:06 IST] [Screen 2]   [frame[0] main] visible interactive elements (24):
-[2026-04-11 11:54:06 IST] [Screen 2]     nav role='navigation' text=' Home  Report   Update Profile   Language  Welcome YOGESH AG' class='navbar navbar-default navigation-background'
-[2026-04-11 11:54:06 IST] [Screen 2]     a id='homeId1' name='homeId1'
-[2026-04-11 11:54:06 IST] [Screen 2]     a id='homeId2' name='homeId2' text=' Home'
-[2026-04-11 11:54:06 IST] [Screen 2]     a text=' Report ' class='dropdown-toggle'
-[2026-04-11 11:54:06 IST] [Screen 2]     a text=' Update Profile ' class='dropdown-toggle'
-[2026-04-11 11:54:06 IST] [Screen 2]     a text=' Language ' class='dropdown-toggle'
-[2026-04-11 11:54:06 IST] [Screen 2]     a id='welcomeUserId' name='welcomeUserId' text='Welcome YOGESH AGRAWAL , DEALER STAFF, Rajasthan'
-[2026-04-11 11:54:06 IST] [Screen 2]     a id='logout' text='Logout' class='ui-commandlink ui-widget glyphicon glyphicon-log-out'
-[2026-04-11 11:54:06 IST] [Screen 2]     label text='Registration Type*' class='field-label resp-label-section'
-[2026-04-11 11:54:06 IST] [Screen 2]     label id='j_idt190' text='Registration Type*' class='ui-outputlabel ui-widget'
-[2026-04-11 11:54:06 IST] [Screen 2]     div id='regnType' role='combobox' text='---------------SELECT--------------- NEW NEW' class='ui-selectonemenu ui-widget ui-state-default ui-corner-all bottom-space'
-[2026-04-11 11:54:06 IST] [Screen 2]     input id='regnType_focus' name='regnType_focus' type='text'
-[2026-04-11 11:54:06 IST] [Screen 2]     select id='regnType_input' name='regnType_input' value='N' text='---------------SELECT--------------- NEW'
-[2026-04-11 11:54:06 IST] [Screen 2]     label id='regnType_label' text='NEW' class='ui-selectonemenu-label ui-inputfield ui-corner-all'
-[2026-04-11 11:54:06 IST] [Screen 2]     label text='Chassis No*' class='field-label resp-label-section'
-[2026-04-11 11:54:06 IST] [Screen 2]     label id='j_idt197' text='Chassis No*' class='ui-outputlabel ui-widget'
-[2026-04-11 11:54:06 IST] [Screen 2]     input id='chasi_no_new_entry' name='chasi_no_new_entry' type='text' role='textbox' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all input'
-[2026-04-11 11:54:06 IST] [Screen 2]     label text='Engine/Motor No (Last 5 Chars)*' class='field-label resp-label-section'
-[2026-04-11 11:54:06 IST] [Screen 2]     label id='j_idt200' text='Engine/Motor No (Last 5 Chars)*' class='ui-outputlabel ui-widget'
-[2026-04-11 11:54:06 IST] [Screen 2]     input id='eng_no_new_entry' name='eng_no_new_entry' type='text' role='textbox' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all input'
-[2026-04-11 11:54:06 IST] [Screen 2]     label text='Do you want to utilize Certificate of deposit (CD)' class='field-label resp-label-section'
-[2026-04-11 11:54:06 IST] [Screen 2]     input id='codCheckBox_input' name='codCheckBox_input' type='checkbox' value='on'
-[2026-04-11 11:54:06 IST] [Screen 2]     label id='j_idt233' text='Do you want to utilize Certificate of deposit (CD)' class='ui-outputlabel ui-widget inline-section'
-[2026-04-11 11:54:06 IST] [Screen 2]     button id='get_dtls_btn' name='get_dtls_btn' type='submit' role='button' text='Get Details' class='ui-button ui-widget ui-state-default ui-corner-all ui-button-text-only'
-[2026-04-11 11:54:06 IST] [Screen 2] === END PAGE STATE DUMP ===
-[2026-04-11 11:54:06 IST] [Screen 2] fill_rto_row FAILED: Locator.wait_for: Timeout 10000ms exceeded.
+[2026-04-11 11:56:29 IST] [Setup] fill_rto_row start rto_queue_id=1 sales_id=1 dealer_id=100001 log_file=C:\Users\arya_\OneDrive\Desktop\My Auto.AI\ocr_output\100001\8905969604_RTO.txt
+[2026-04-11 11:56:29 IST] [Setup] uploads root (dealer): C:\Users\arya_\OneDrive\Desktop\My Auto.AI\Uploaded scans\100001
+[2026-04-11 11:56:29 IST] [Setup] searched folder (absolute): C:\Users\arya_\OneDrive\Desktop\My Auto.AI\Uploaded scans\100001\8905969604_100426
+[2026-04-11 11:56:29 IST] [Setup] documents matched to categories: {'FORM 20': '8905969604_Form_20.pdf', 'FORM 21': '8905969604_Sale_Certificate.pdf', 'FORM 22': '8905969604_Form22.pdf', 'INSURANCE CERTIFICATE': '8905969604_Insurance.pdf', 'INVOICE ORIGINAL': '8905969604_GST_Retail_Invoice.pdf', 'AADHAAR_FRONT': 'Aadhar.jpg', 'AADHAAR_BACK': 'Aadhar_back.jpg', 'OWNER UNDERTAKING FORM': 'Details.jpg'}
+[2026-04-11 11:56:35 IST] [Setup] browser page url: https://vahan.parivahan.gov.in/vahan/vahan/workbench.xhtml
+[2026-04-11 11:56:35 IST] [Screen 1] --- Screen 1: Assigned office, Entry-New Registration, Show Form ---
+[2026-04-11 11:56:45 IST] [Screen 1] TIMEOUT pf-dropdown: Select Assigned Office selector=div#officeList value='BHARATPUR RTO'
+[2026-04-11 11:56:45 IST] [Screen 1] === PAGE STATE DUMP (pf-dropdown failed: Select Assigned Office) ===
+[2026-04-11 11:56:45 IST] [Screen 1] url: https://vahan.parivahan.gov.in/vahan/vahan/workbench.xhtml
+[2026-04-11 11:56:45 IST] [Screen 1] frames: 1
+[2026-04-11 11:56:45 IST] [Screen 1]   frame[0] name='(main)' url=https://vahan.parivahan.gov.in/vahan/vahan/workbench.xhtml
+[2026-04-11 11:56:45 IST] [Screen 1]   [frame[0] main] visible interactive elements (24):
+[2026-04-11 11:56:45 IST] [Screen 1]     nav role='navigation' text=' Home  Report   Update Profile   Language  Welcome YOGESH AG' class='navbar navbar-default navigation-background'
+[2026-04-11 11:56:45 IST] [Screen 1]     a id='homeId1' name='homeId1'
+[2026-04-11 11:56:45 IST] [Screen 1]     a id='homeId2' name='homeId2' text=' Home'
+[2026-04-11 11:56:45 IST] [Screen 1]     a text=' Report ' class='dropdown-toggle'
+[2026-04-11 11:56:45 IST] [Screen 1]     a text=' Update Profile ' class='dropdown-toggle'
+[2026-04-11 11:56:45 IST] [Screen 1]     a text=' Language ' class='dropdown-toggle'
+[2026-04-11 11:56:45 IST] [Screen 1]     a id='welcomeUserId' name='welcomeUserId' text='Welcome YOGESH AGRAWAL , DEALER STAFF, Rajasthan'
+[2026-04-11 11:56:45 IST] [Screen 1]     a id='logout' text='Logout' class='ui-commandlink ui-widget glyphicon glyphicon-log-out'
+[2026-04-11 11:56:45 IST] [Screen 1]     label text='Registration Type*' class='field-label resp-label-section'
+[2026-04-11 11:56:45 IST] [Screen 1]     label id='j_idt190' text='Registration Type*' class='ui-outputlabel ui-widget'
+[2026-04-11 11:56:45 IST] [Screen 1]     div id='regnType' role='combobox' text='---------------SELECT--------------- NEW NEW' class='ui-selectonemenu ui-widget ui-state-default ui-corner-all bottom-space'
+[2026-04-11 11:56:45 IST] [Screen 1]     input id='regnType_focus' name='regnType_focus' type='text'
+[2026-04-11 11:56:45 IST] [Screen 1]     select id='regnType_input' name='regnType_input' value='N' text='---------------SELECT--------------- NEW'
+[2026-04-11 11:56:45 IST] [Screen 1]     label id='regnType_label' text='NEW' class='ui-selectonemenu-label ui-inputfield ui-corner-all'
+[2026-04-11 11:56:45 IST] [Screen 1]     label text='Chassis No*' class='field-label resp-label-section'
+[2026-04-11 11:56:45 IST] [Screen 1]     label id='j_idt197' text='Chassis No*' class='ui-outputlabel ui-widget'
+[2026-04-11 11:56:45 IST] [Screen 1]     input id='chasi_no_new_entry' name='chasi_no_new_entry' type='text' role='textbox' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all input'
+[2026-04-11 11:56:45 IST] [Screen 1]     label text='Engine/Motor No (Last 5 Chars)*' class='field-label resp-label-section'
+[2026-04-11 11:56:45 IST] [Screen 1]     label id='j_idt200' text='Engine/Motor No (Last 5 Chars)*' class='ui-outputlabel ui-widget'
+[2026-04-11 11:56:45 IST] [Screen 1]     input id='eng_no_new_entry' name='eng_no_new_entry' type='text' role='textbox' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all input'
+[2026-04-11 11:56:45 IST] [Screen 1]     label text='Do you want to utilize Certificate of deposit (CD)' class='field-label resp-label-section'
+[2026-04-11 11:56:45 IST] [Screen 1]     input id='codCheckBox_input' name='codCheckBox_input' type='checkbox' value='on'
+[2026-04-11 11:56:45 IST] [Screen 1]     label id='j_idt233' text='Do you want to utilize Certificate of deposit (CD)' class='ui-outputlabel ui-widget inline-section'
+[2026-04-11 11:56:45 IST] [Screen 1]     button id='get_dtls_btn' name='get_dtls_btn' type='submit' role='button' text='Get Details' class='ui-button ui-widget ui-state-default ui-corner-all ui-button-text-only'
+[2026-04-11 11:56:45 IST] [Screen 1] === END PAGE STATE DUMP ===
+[2026-04-11 11:56:45 IST] [Screen 1] fill_rto_row FAILED: Locator.wait_for: Timeout 10000ms exceeded.
 Call log:
-  - waiting for locator("input[id*='chassisNo'], input[name*='chassisNo']").first to be visible
+  - waiting for locator("div#officeList").first to be visible
 
