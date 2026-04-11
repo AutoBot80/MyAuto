@@ -1337,11 +1337,36 @@ def _screen_1(page: Page, office: str) -> None:
     _dismiss_dialog(page, "OK")
 
 
-def _screen_3_should_skip_home() -> bool:
-    """True when Home is already showing the pending grid—only **Entry** is needed (skipper or explicit env)."""
-    if RTO_FILL_SCREEN3_SKIP_HOME:
-        return True
-    return RTO_FILL_SKIP_TO_SCREEN == 3
+def _screen_3_click_entry(page: Page, data: dict, *, skip_home: bool) -> None:
+    """Click **Entry** on the pending-work grid—prefer the **Inwarded** row for ``rto_application_id`` when ``skip_home``."""
+    app = (str(data.get("rto_application_id") or "").strip() or RTO_FILL_TEST_APPLICATION_ID or "").strip()
+    if skip_home and app:
+        try:
+            row = (
+                page.locator("tbody tr, table[role='grid'] tr, .ui-datatable-data tr, tr")
+                .filter(has_text=re.compile(re.escape(app), re.I))
+                .filter(has_text=re.compile(r"Inwarded", re.I))
+                .first
+            )
+            row.wait_for(state="visible", timeout=_DEFAULT_TIMEOUT_MS)
+            row.locator("button, a, input[type='button'], input[type='submit']").filter(
+                has_text=re.compile(r"^\s*Entry\s*$", re.I)
+            ).first.click(timeout=_DEFAULT_TIMEOUT_MS)
+            _rto_log(f"Screen 3: Entry on Inwarded row for Application No {app}")
+            _pause()
+            _wait_for_progress_close(page)
+            return
+        except Exception as e:
+            logger.warning("fill_rto: pending-work row Entry failed: %s", e)
+            _rto_log(f"WARNING: row-scoped Entry failed ({e!s}) — generic Entry")
+    _click(
+        page,
+        "input[value='Entry'], button:has-text('Entry'), a:has-text('Entry')",
+        label="Entry button",
+        timeout=_DEFAULT_TIMEOUT_MS,
+    )
+    _pause()
+    _wait_for_progress_close(page)
 
 
 def _screen_2(page: Page, data: dict) -> None:
@@ -1594,15 +1619,19 @@ def _screen_2(page: Page, data: dict) -> None:
     _handle_inward_partial_save_followup(page, data)
 
 
-def _screen_3(page: Page, data: dict) -> str:
-    """Screen 3: Home > Entry, Tax mode, Insurance, Hypothecation, Save. Returns application_id."""
+def _screen_3(page: Page, data: dict, *, skip_home: bool) -> str:
+    """Screen 3: optional Home → Entry, Tax mode, Insurance, Hypothecation, Save. Returns application_id.
+
+    ``skip_home``: when True (skip point at screen 3, or ``RTO_FILL_SCREEN3_SKIP_HOME``), do not click Home—
+    only Entry on the pending-work table (Inwarded row matching ``rto_application_id`` when available).
+    """
     _set_screen("Screen 3")
     logger.info("fill_rto: Screen 3 — insurer=%s", data.get("insurer", "")[:20])
     _rto_log("--- Screen 3: Home, Entry, tax, insurance, hypothecation, application no ---")
 
-    # 3a: Home (optional) → Entry. Vahan usually leaves Home open with the grid; no Get Pending Work automation.
-    if _screen_3_should_skip_home():
-        _rto_log("Screen 3: skipping Home — clicking Entry only (already on home.xhtml with pending work)")
+    # 3a: Home (unless skip point) → Entry on pending-work grid.
+    if skip_home:
+        _rto_log("Screen 3: skip Home — Entry only (already on home.xhtml)")
     else:
         _click(page, "a:has-text('Home'), button:has-text('Home'), [id*='home']", label="Home link")
         _pause()
@@ -1612,14 +1641,7 @@ def _screen_3(page: Page, data: dict) -> str:
         except Exception:
             pass
 
-    _click(
-        page,
-        "input[value='Entry'], button:has-text('Entry'), a:has-text('Entry')",
-        label="Entry button",
-        timeout=_DEFAULT_TIMEOUT_MS,
-    )
-    _pause()
-    _wait_for_progress_close(page)
+    _screen_3_click_entry(page, data, skip_home=skip_home)
 
     # 3b: Vehicle Details — Tax Mode
     try:
@@ -2145,7 +2167,8 @@ def fill_rto_row(row: dict) -> dict:
 
         application_id = ""
         if skip_from <= 3:
-            application_id = _screen_3(page, data)
+            screen3_skip_home = (skip_from == 3) or RTO_FILL_SCREEN3_SKIP_HOME
+            application_id = _screen_3(page, data, skip_home=screen3_skip_home)
             if not (str(application_id or "").strip()):
                 application_id = str(data.get("rto_application_id") or "").strip()
         else:
