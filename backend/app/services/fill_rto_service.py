@@ -713,6 +713,22 @@ def _upload_file(page: Page, file_path: Path, *, timeout: int = _DEFAULT_TIMEOUT
 # Screen implementations
 # ---------------------------------------------------------------------------
 
+
+def _workbench_correspondence_state_is_set(page: Page) -> bool:
+    """True if correspondence *State* already shows a value (Vahan often pre-fills; do not overwrite)."""
+    try:
+        lab = page.locator('[id="workbench_tabview:tf_c_state_label"]').first
+        t = (lab.inner_text(timeout=3000) or "").strip()
+        if not t:
+            return False
+        u = t.upper()
+        if u == "--SELECT--" or u == "SELECT" or "SELECT" in u and "--" in t:
+            return False
+        return True
+    except Exception:
+        return False
+
+
 def _ensure_vahan_dealer_home_for_screen1(page: Page) -> None:
     """Reset the tab to **dealer home** so Screen 1 (``officeList`` / ``actionList`` / Show Form) is present.
 
@@ -904,25 +920,62 @@ def _screen_2(page: Page, data: dict) -> None:
         label="Village/Town/City",
     )
 
-    if data.get("state"):
+    # Correspondence State — skip if already pre-filled (avoids timeout on PF / wrong selector)
+    state_val = (data.get("state") or "").strip()
+    if state_val and not _workbench_correspondence_state_is_set(page):
         try:
-            _select(
+            _select_pf_dropdown(
                 page,
-                "select[id*='state'], select[name*='state']",
-                data["state"],
-                label="State",
+                '[id="workbench_tabview:tf_c_state"]',
+                state_val,
+                label="State (correspondence)",
                 timeout=_DEFAULT_TIMEOUT_MS,
             )
-        except (PwTimeout, Exception):
-            _type_typeahead(
-                page,
-                "input[id*='state'], input[name*='state']",
-                data["state"],
-                label="State (typeahead)",
-                timeout=_DEFAULT_TIMEOUT_MS,
-            )
+        except PwTimeout:
+            try:
+                _type_typeahead(
+                    page,
+                    "[id='workbench_tabview:tf_c_state_focus'], input[id*='tf_c_state']",
+                    state_val,
+                    label="State (correspondence) typeahead",
+                    timeout=_DEFAULT_TIMEOUT_MS,
+                )
+            except PwTimeout:
+                logger.debug("fill_rto: correspondence state not set via PF/typeahead")
+        _close_pf_selectonemenu_overlay(page, "workbench_tabview:tf_c_state")
+        _pause()
+    elif state_val:
+        _rto_log("skip: correspondence State already set on form")
 
-    # Skip district per user instruction
+    # District — use ``district`` from row, or default to **city**; if district option missing, retry with city
+    district_raw = (data.get("district") or "").strip()
+    city_val = (data.get("city") or "").strip()
+    primary_district = district_raw or city_val
+    if primary_district:
+        try:
+            _select_pf_dropdown(
+                page,
+                '[id="workbench_tabview:tf_c_district"]',
+                primary_district,
+                label="District (correspondence)",
+                timeout=_DEFAULT_TIMEOUT_MS,
+            )
+        except PwTimeout:
+            if district_raw and city_val and district_raw.upper() != city_val.upper():
+                try:
+                    _select_pf_dropdown(
+                        page,
+                        '[id="workbench_tabview:tf_c_district"]',
+                        city_val,
+                        label="District (fallback to city)",
+                        timeout=_DEFAULT_TIMEOUT_MS,
+                    )
+                except PwTimeout:
+                    _rto_log("WARNING: District not set (tried district and city names)")
+            else:
+                _rto_log("WARNING: District not set")
+        _close_pf_selectonemenu_overlay(page, "workbench_tabview:tf_c_district")
+        _pause()
 
     _fill(page, "input[id*='pin'], input[name*='pin']", data.get("pin", ""), label="Pin")
     _pause()
@@ -1402,6 +1455,7 @@ def fill_rto_row(row: dict) -> dict:
         "mobile": row.get("mobile") or row.get("customer_mobile") or "",
         "address": row.get("address") or "",
         "city": row.get("city") or "",
+        "district": (row.get("district") or "").strip(),
         "state": row.get("state") or "",
         "pin": (row.get("pin") or "").strip(),
         "financier": row.get("financier") or "",
