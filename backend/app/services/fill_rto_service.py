@@ -123,14 +123,32 @@ def _transform_dealer_rto(raw_rto_name: str) -> str:
     return raw_rto_name[4:].strip().upper() + " RTO"
 
 
+# English month labels — avoids locale-dependent ``strftime('%b')`` on Windows.
+_VAHAN_MONTH_EN = (
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+)
+
+
 def _fmt_date(d: date | datetime | str | None) -> str:
-    """Format a date as dd-mm-yyyy for Vahan portal fields."""
+    """Format a date as dd-Mon-yyyy (English month) for Vahan workbench date fields."""
     if d is None:
         return ""
     if isinstance(d, str):
-        for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y"):
+        s = d.strip()
+        for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%d-%b-%Y", "%d-%B-%Y"):
             try:
-                d = datetime.strptime(d, fmt).date()
+                d = datetime.strptime(s, fmt).date()
                 break
             except ValueError:
                 continue
@@ -138,7 +156,7 @@ def _fmt_date(d: date | datetime | str | None) -> str:
             return d
     if isinstance(d, datetime):
         d = d.date()
-    return d.strftime("%d-%m-%Y")
+    return f"{d.day:02d}-{_VAHAN_MONTH_EN[d.month - 1]}-{d.year}"
 
 
 # ---------------------------------------------------------------------------
@@ -586,20 +604,50 @@ def _screen_2(page: Page, data: dict) -> None:
     _pause()
     _wait_for_progress_close(page)
 
-    # 2b: Choice number = No
+    # 2b: Choice number = No (workbench: ``regnNoSelectionForAPS`` — not *choiceNo*.)
     try:
-        _select(page, "select[id*='choiceNo'], select[id*='choice']", "No", label="Choice number opt", timeout=_DEFAULT_TIMEOUT_MS)
+        _select_pf_dropdown(
+            page,
+            "div#regnNoSelectionForAPS",
+            "NO",
+            label="Choice number opt",
+            timeout=_DEFAULT_TIMEOUT_MS,
+        )
     except PwTimeout:
-        logger.debug("fill_rto: choice number dropdown not found, skipping")
+        try:
+            _select(
+                page,
+                "select#regnNoSelectionForAPS_input, select[id*='regnNoSelection']",
+                "NO",
+                label="Choice number opt (native select)",
+                timeout=_DEFAULT_TIMEOUT_MS,
+            )
+        except PwTimeout:
+            try:
+                _select(
+                    page,
+                    "select[id*='choiceNo'], select[id*='choice']",
+                    "No",
+                    label="Choice number opt (legacy)",
+                    timeout=_DEFAULT_TIMEOUT_MS,
+                )
+            except PwTimeout:
+                logger.debug("fill_rto: choice number dropdown not found, skipping")
 
-    # Owner Details tab
+    # Owner Details tab (workbench ids: ``purchase_dt_input``, ``tf_owner_name``, …)
     _fill(
         page,
-        "input[id*='purchaseDate'], input[id*='deliveryDate'], input[name*='purchaseDate']",
+        "input[id*='purchase_dt'], input[id*='purchaseDate'], "
+        "input[id*='deliveryDate'], input[name*='purchaseDate'], input[name*='purchase_dt']",
         data["billing_date_str"],
         label="Purchase/Delivery Date",
     )
-    _fill(page, "input[id*='ownerName'], input[name*='ownerName']", data["customer_name"], label="Owner Name")
+    _fill(
+        page,
+        "input[id*='tf_owner_name'], input[id*='ownerName'], input[name*='ownerName'], input[id*='owner_name']",
+        data["customer_name"],
+        label="Owner Name",
+    )
     _pause()
 
     # Popup: pick "Not Available" radio
@@ -613,24 +661,29 @@ def _screen_2(page: Page, data: dict) -> None:
 
     _fill(
         page,
-        "input[id*='sonWife'], input[id*='relation'], input[name*='sonWife']",
+        "input[id*='tf_f_name'], input[id*='sonWife'], input[id*='relation'], input[name*='sonWife']",
         data.get("care_of", ""),
         label="Son/Wife/Daughter of",
     )
 
-    # 2c: Mobile
-    _fill(page, "input[id*='mobileNo'], input[name*='mobileNo']", data.get("mobile", ""), label="Mobile No")
-
-    # 2d: Address fields
+    # 2c: Mobile (workbench: ``tf_mobNo`` — not *mobileNo*.)
     _fill(
         page,
-        "input[id*='houseNo'], input[id*='streetName'], input[name*='houseNo']",
+        "input[id*='tf_mobNo'], input[id*='mobileNo'], input[name*='mobileNo'], input[id*='mobNo']",
+        data.get("mobile", ""),
+        label="Mobile No",
+    )
+
+    # 2d: Address fields (workbench: ``tf_c_add1`` / ``tf_c_add2``)
+    _fill(
+        page,
+        "input[id*='tf_c_add1'], input[id*='houseNo'], input[id*='streetName'], input[name*='houseNo']",
         data.get("address", ""),
         label="House no & street",
     )
     _fill(
         page,
-        "input[id*='village'], input[id*='town'], input[id*='city'], input[name*='village']",
+        "input[id*='tf_c_add2'], input[id*='village'], input[id*='town'], input[id*='city'], input[name*='village']",
         data.get("city", ""),
         label="Village/Town/City",
     )
@@ -661,6 +714,7 @@ def _screen_2(page: Page, data: dict) -> None:
     # Same as Current Address checkbox
     try:
         same_addr = page.locator(
+            "input[type='checkbox'][id*='samePermAdd'], "
             "input[type='checkbox'][id*='sameAddress'], "
             "input[type='checkbox'][id*='currentAddress'], "
             "label:has-text('Same as Current') input[type='checkbox']"
