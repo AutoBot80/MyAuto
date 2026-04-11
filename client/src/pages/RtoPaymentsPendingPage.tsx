@@ -1,13 +1,15 @@
-import { useEffect, useMemo, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 import { warmVahanBrowser } from "../api/fillForms";
 import {
   getRtoBatchStatus,
   listRtoPayments,
   retryRtoQueueRow,
   startRtoBatch,
+  submitOperatorOtp,
   type RtoBatchStatus,
   type RtoPaymentRow,
 } from "../api/rtoPaymentDetails";
+import { DEALER_ID } from "../api/dealerId";
 
 interface RtoPaymentsPendingPageProps {
   dealerId?: number;
@@ -24,11 +26,9 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
   /** After warm-browser succeeds, next click starts the batch (same UX as Create Invoice / login gate). */
   const [vahanReadyForBatch, setVahanReadyForBatch] = useState(false);
   const [vahanWarmMessage, setVahanWarmMessage] = useState<string | null>(null);
-
-  const progressPercent = useMemo(() => {
-    if (!batchStatus || batchStatus.total_count <= 0) return 0;
-    return Math.min(100, Math.round((batchStatus.processed_count / batchStatus.total_count) * 100));
-  }, [batchStatus]);
+  const [otpInput, setOtpInput] = useState("");
+  const [otpSubmitting, setOtpSubmitting] = useState(false);
+  const [otpSubmitError, setOtpSubmitError] = useState<string | null>(null);
 
   const fetchFromDb = (showLoading = true) => {
     if (showLoading) setLoading(true);
@@ -78,11 +78,19 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
       batchStatus?.state === "starting" ||
       batchStatus?.state === "running";
     if (!isActive) return undefined;
+    const ms = batchStatus?.otp_pending ? 1000 : 2000;
     const timer = window.setInterval(() => {
       fetchBatchStatus();
-    }, 2000);
+    }, ms);
     return () => window.clearInterval(timer);
-  }, [startingBatch, batchStatus?.state, dealerId]);
+  }, [startingBatch, batchStatus?.state, batchStatus?.otp_pending, dealerId]);
+
+  useEffect(() => {
+    if (!batchStatus?.otp_pending) {
+      setOtpInput("");
+      setOtpSubmitError(null);
+    }
+  }, [batchStatus?.otp_pending]);
 
   const handleStartBatch = async () => {
     setBatchError(null);
@@ -129,6 +137,28 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
       setVahanWarmMessage(prevWarmMsg);
       setBatchError(err instanceof Error ? err.message : "Failed to start batch");
       fetchBatchStatus();
+    }
+  };
+
+  const handleSubmitOtp = async (e: FormEvent) => {
+    e.preventDefault();
+    const qid = batchStatus?.otp_rto_queue_id;
+    if (qid == null) return;
+    const did = dealerId ?? DEALER_ID;
+    setOtpSubmitting(true);
+    setOtpSubmitError(null);
+    try {
+      await submitOperatorOtp({
+        dealer_id: did,
+        rto_queue_id: qid,
+        otp: otpInput.trim(),
+      });
+      setOtpInput("");
+      fetchBatchStatus();
+    } catch (err) {
+      setOtpSubmitError(err instanceof Error ? err.message : "Could not submit OTP");
+    } finally {
+      setOtpSubmitting(false);
     }
   };
 
@@ -219,6 +249,46 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
           {batchStatus.last_error && (
             <p className="rto-payments-error">Last error: {batchStatus.last_error}</p>
           )}
+        </section>
+      )}
+      {batchStatus?.otp_pending && batchStatus.otp_rto_queue_id != null && (
+        <section className="rto-otp-prompt-card" aria-live="polite">
+          <h3 className="rto-otp-prompt-title">Vahan OTP required</h3>
+          <p className="rto-otp-prompt-text">
+            {batchStatus.otp_prompt ??
+              "The portal is asking for an OTP sent to the customer. Enter it below to continue automation."}
+          </p>
+          <p className="rto-otp-mobile-line">
+            <span className="rto-otp-mobile-label">Customer mobile (for calling them):</span>{" "}
+            <span className="rto-otp-mobile-value">
+              {batchStatus.otp_customer_mobile && batchStatus.otp_customer_mobile !== "—"
+                ? batchStatus.otp_customer_mobile
+                : "— (check Vahan popup or your sale record)"}
+            </span>
+          </p>
+          <form className="rto-otp-form" onSubmit={handleSubmitOtp}>
+            <label className="rto-otp-label">
+              OTP
+              <input
+                className="rto-otp-input"
+                type="text"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                value={otpInput}
+                onChange={(ev) => setOtpInput(ev.target.value.replace(/\D/g, "").slice(0, 8))}
+                placeholder="Enter OTP"
+                disabled={otpSubmitting}
+              />
+            </label>
+            <button
+              type="submit"
+              className="app-button app-button--primary"
+              disabled={otpSubmitting || otpInput.trim().length < 4}
+            >
+              {otpSubmitting ? "Sending…" : "Submit OTP to Vahan"}
+            </button>
+          </form>
+          {otpSubmitError && <p className="rto-payments-error">{otpSubmitError}</p>}
         </section>
       )}
       {batchError && <p className="rto-payments-error">{batchError}</p>}

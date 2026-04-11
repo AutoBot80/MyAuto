@@ -65,6 +65,11 @@ export interface RtoBatchStatus {
   failed_count: number;
   last_error: string | null;
   rows: RtoBatchRowResult[];
+  /** True while Vahan is waiting for OTP after Inward Application (Partial Save). */
+  otp_pending?: boolean;
+  otp_rto_queue_id?: number | null;
+  otp_customer_mobile?: string | null;
+  otp_prompt?: string | null;
 }
 
 export async function insertRtoPayment(payload: RtoPaymentInsertPayload): Promise<{ rto_queue_id: number; ok: boolean }> {
@@ -94,6 +99,18 @@ export async function startRtoBatch(payload?: {
 export async function getRtoBatchStatus(dealerId?: number): Promise<RtoBatchStatus> {
   const did = dealerId ?? DEALER_ID;
   return apiFetch<RtoBatchStatus>(`/rto-queue/process-batch/status?dealer_id=${did}`);
+}
+
+export async function submitOperatorOtp(payload: {
+  dealer_id?: number;
+  rto_queue_id: number;
+  otp: string;
+}): Promise<{ ok: boolean }> {
+  return apiFetch<{ ok: boolean }>("/rto-queue/submit-operator-otp", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
 }
 
 /** Get RTO queue row for a sale. */

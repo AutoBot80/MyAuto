@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 from app.config import DEALER_ID
 from app.repositories import rto_payment_details as repo
+from app.services.rto_otp_bridge import deliver_operator_otp
 from app.services.rto_payment_service import get_dealer_batch_status, start_dealer_rto_batch
 
 router = APIRouter(prefix="/rto-queue", tags=["rto-queue"])
@@ -38,6 +39,12 @@ class RtoPaymentInsertPayload(BaseModel):
 class RtoBatchStartPayload(BaseModel):
     dealer_id: int | None = None
     limit: int = Field(default=7, ge=1, le=7)
+
+
+class RtoOtpSubmitPayload(BaseModel):
+    dealer_id: int | None = None
+    rto_queue_id: int
+    otp: str = Field(..., min_length=4, max_length=14)
 
 
 def _serialize_row(row: dict) -> dict:
@@ -94,6 +101,28 @@ def get_process_batch_status(
     """Return the latest dealer batch progress snapshot."""
     did = dealer_id if dealer_id is not None else DEALER_ID
     return get_dealer_batch_status(did)
+
+
+@router.post("/submit-operator-otp")
+def submit_operator_otp(payload: RtoOtpSubmitPayload) -> dict:
+    """Deliver operator-entered OTP to the in-progress Vahan fill (after Partial Save OTP popup)."""
+    did = payload.dealer_id if payload.dealer_id is not None else DEALER_ID
+    st = get_dealer_batch_status(did)
+    if not st.get("otp_pending"):
+        raise HTTPException(status_code=400, detail="No OTP request is pending for this dealer")
+    want = st.get("otp_rto_queue_id")
+    if want is None or int(want) != int(payload.rto_queue_id):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Active OTP request is for queue {want}, not {payload.rto_queue_id}",
+        )
+    ok = deliver_operator_otp(did, payload.rto_queue_id, payload.otp.strip())
+    if not ok:
+        raise HTTPException(
+            status_code=409,
+            detail="Could not accept OTP (automation may have moved on — enter OTP in Vahan if the popup is still open)",
+        )
+    return {"ok": True}
 
 
 @router.get("/by-sale")

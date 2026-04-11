@@ -62,12 +62,14 @@ def _is_retryable_error(error: Exception) -> bool:
         "site not open",
         "please open vahan site",
         "not yet implemented",
+        "no otp submitted",
+        "operatorotptimeout",
     )
     return any(marker in message for marker in markers)
 
 
 def get_dealer_batch_status(dealer_id: int) -> dict:
-    return _read_batch_status(dealer_id) or {
+    defaults = {
         "dealer_id": int(dealer_id),
         "session_id": None,
         "state": "idle",
@@ -82,7 +84,16 @@ def get_dealer_batch_status(dealer_id: int) -> dict:
         "failed_count": 0,
         "last_error": None,
         "rows": [],
+        "otp_pending": False,
+        "otp_rto_queue_id": None,
+        "otp_customer_mobile": None,
+        "otp_prompt": None,
     }
+    cur = _read_batch_status(dealer_id)
+    if not cur:
+        return dict(defaults)
+    merged = {**defaults, **cur}
+    return merged
 
 
 def start_dealer_rto_batch(

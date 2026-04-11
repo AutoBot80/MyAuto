@@ -82,11 +82,14 @@ def _mobile_digits_for_filename(mobile: str | None) -> str:
 # Playwright locator/action waits (ms). User preference: 10s.
 _DEFAULT_TIMEOUT_MS = 10_000
 _LONG_TIMEOUT_MS = 10_000
-# Shorter waits after small PrimeFaces field updates (avoid stacking multiple 10s + 8s waits).
-_PROGRESS_PF_SHORT_MS = 4_000
-_LABEL_VERIFY_MS = 5_000
+# Fast UI timing: **200ms** per attempt; **2s** total budget when looping (retries / polls).
+_FIRST_TRY_MS = 200
+_LOOP_BUDGET_MS = 2_000
 # Delay after each discrete UI action (s) — not a Playwright timeout.
 _ACTION_WAIT_S = 0.2
+# ``_ensure_vahan_dealer_home_for_screen1``: 200ms per selector, ≤2s total across attempts.
+_ENSURE_HOME_SELECTOR_WAIT_MS = _FIRST_TRY_MS
+_ENSURE_HOME_SELECTORS_TOTAL_S = _LOOP_BUDGET_MS / 1000.0
 
 # Vahan spells this either "Registration" or "Registeration" depending on build / locale.
 _ENTRY_NEW_REG_LABEL_RE = re.compile(r"Entry-New Regist(?:ration|eration)", re.IGNORECASE)
@@ -472,30 +475,24 @@ def _select_choice_number_no(page: Page, *, timeout: int = _DEFAULT_TIMEOUT_MS) 
     Uses the native ``select`` plus ``input``/``change`` events so PrimeFaces updates the widget,
     then verifies ``label#regnNoSelectionForAPS_label``. Falls back to overlay click.
     Does **not** send Escape after choosing NO (can leave the value unset on some PF versions).
+
+    Waits use **200ms** first slices and **up to 2s** total when polling or looping.
     """
     wrapper_id = "regnNoSelectionForAPS"
 
+    def _label_shows_no_text(text: str) -> bool:
+        u = text.upper()
+        return "NO" in u and "SELECT" not in u
+
     def _wait_label_no() -> None:
-        try:
-            page.wait_for_function(
-                """() => {
-                    const el = document.querySelector('label#regnNoSelectionForAPS_label');
-                    if (!el) return false;
-                    const t = (el.textContent || '').toUpperCase();
-                    return t.includes('NO') && !t.includes('SELECT');
-                }""",
-                timeout=_LABEL_VERIFY_MS,
-            )
-        except PwTimeout:
+        if not _poll_choice_no_label_ok(page):
             logger.warning("fill_rto: choice number label did not show NO in time")
 
     native = page.locator('select[id="regnNoSelectionForAPS_input"]').first
     try:
-        native.wait_for(state="attached", timeout=timeout)
-        try:
-            native.select_option(label="NO", timeout=timeout)
-        except PwTimeout:
-            native.select_option(label=re.compile(r"^\s*NO\s*$", re.I), timeout=timeout)
+        _wait_native_choice_select_attached(native)
+        if not _native_select_choice_no_loop(native):
+            raise PwTimeout()
         native.evaluate(
             """(el) => {
                 el.dispatchEvent(new Event('input', { bubbles: true }));
@@ -503,14 +500,26 @@ def _select_choice_number_no(page: Page, *, timeout: int = _DEFAULT_TIMEOUT_MS) 
             }"""
         )
         _pause()
-        _wait_for_progress_close(page, timeout_ms=_PROGRESS_PF_SHORT_MS)
-        _wait_label_no()
+        # Fast path: label often updates immediately — 200ms read, then loop up to 2s if needed.
+        try:
+            tx = (
+                page.locator("label#regnNoSelectionForAPS_label").first.inner_text(timeout=_FIRST_TRY_MS)
+                or ""
+            )
+            if _label_shows_no_text(tx):
+                _rto_log("choice number NO: label OK after native (fast path)")
+            else:
+                _wait_for_progress_close_loop(page)
+                _wait_label_no()
+        except Exception:
+            _wait_for_progress_close_loop(page)
+            _wait_label_no()
     except Exception as e:
         logger.debug("fill_rto: choice NO via native select: %s", e)
 
     try:
         lbl = page.locator("label#regnNoSelectionForAPS_label").first
-        t = (lbl.inner_text(timeout=2000) or "").upper()
+        t = (lbl.inner_text(timeout=_FIRST_TRY_MS) or "").upper()
         if "NO" not in t or "SELECT" in t:
             _select_pf_dropdown(
                 page,
@@ -521,7 +530,7 @@ def _select_choice_number_no(page: Page, *, timeout: int = _DEFAULT_TIMEOUT_MS) 
                 use_native_select=False,
             )
             _pause()
-            _wait_for_progress_close(page, timeout_ms=_PROGRESS_PF_SHORT_MS)
+            _wait_for_progress_close_loop(page)
             _wait_label_no()
     except Exception as e:
         logger.warning("fill_rto: choice NO overlay fallback: %s", e)
@@ -529,8 +538,10 @@ def _select_choice_number_no(page: Page, *, timeout: int = _DEFAULT_TIMEOUT_MS) 
     # Close stuck panel without Escape (see docstring).
     try:
         panel = page.locator(_pf_selectonemenu_panel_selector(wrapper_id)).first
-        panel.wait_for(state="hidden", timeout=2000)
-    except PwTimeout:
+        if not _wait_locator_hidden_loop(panel):
+            page.locator("div#regnNoSelectionForAPS").first.click(position={"x": 4, "y": 8})
+            _pause()
+    except Exception:
         try:
             page.locator("div#regnNoSelectionForAPS").first.click(position={"x": 4, "y": 8})
             _pause()
@@ -539,7 +550,7 @@ def _select_choice_number_no(page: Page, *, timeout: int = _DEFAULT_TIMEOUT_MS) 
 
     try:
         lbl = page.locator("label#regnNoSelectionForAPS_label").first
-        t = (lbl.inner_text(timeout=2000) or "").strip()
+        t = (lbl.inner_text(timeout=_LOOP_BUDGET_MS) or "").strip()
         if "NO" in t.upper() and "SELECT" not in t.upper():
             _rto_log(f"verified: Choice number shows NO (label={t!r})")
         else:
@@ -700,11 +711,192 @@ def _dismiss_dialog(page: Page, button_text: str = "OK", *, timeout: int = _DEFA
         logger.debug("fill_rto: no dialog with '%s' found (timeout), continuing", button_text)
 
 
+def _find_visible_otp_dialog(page: Page):
+    """Return a locator for a visible Vahan OTP dialog, or ``None``."""
+    selectors = (
+        "[role='dialog']:has-text('OTP')",
+        ".ui-dialog:has-text('OTP')",
+        "div.ui-dialog-content:has-text('OTP')",
+        "[role='dialog']:has-text('One Time Password')",
+        ".ui-dialog:has-text('One Time Password')",
+    )
+    for sel in selectors:
+        loc = page.locator(sel).first
+        try:
+            if loc.is_visible(timeout=_FIRST_TRY_MS):
+                return loc
+        except Exception:
+            continue
+    return None
+
+
+def _poll_otp_dialog(page: Page, max_ms: int = 12_000):
+    """Poll until an OTP dialog is visible or ``max_ms`` elapses."""
+    deadline = time.monotonic() + max_ms / 1000.0
+    while time.monotonic() < deadline:
+        dlg = _find_visible_otp_dialog(page)
+        if dlg is not None:
+            return dlg
+        time.sleep(_FIRST_TRY_MS / 1000.0)
+    return None
+
+
+def _submit_vahan_otp_in_dialog(page: Page, dlg, otp: str) -> None:
+    """Fill OTP into the open dialog and click the primary action button."""
+    otp_clean = re.sub(r"\D", "", otp) or otp
+    filled = False
+    for sel in (
+        "input[id*='otp' i]",
+        "input[name*='otp' i]",
+        "input[type='password']",
+        "input.otp",
+        "input[maxlength='6']",
+        "input[maxlength='8']",
+    ):
+        try:
+            cand = dlg.locator(sel)
+            if cand.count() == 0:
+                continue
+            inp = cand.first
+            inp.wait_for(state="visible", timeout=3000)
+            inp.fill(otp_clean, timeout=5000)
+            filled = True
+            _rto_log(f"OTP: filled field matching {sel!r}")
+            break
+        except Exception:
+            continue
+    if not filled:
+        try:
+            dlg.locator("input[type='text']").first.fill(otp_clean, timeout=5000)
+            filled = True
+            _rto_log("OTP: filled first text input in dialog")
+        except Exception as e:
+            _rto_log(f"OTP: could not find OTP input: {e!s}")
+            raise RuntimeError("Could not find OTP input in Vahan dialog") from e
+    _pause()
+    clicked = False
+    for label in ("Submit", "Verify", "Validate", "OK", "Confirm", "Continue"):
+        try:
+            dlg.get_by_role("button", name=re.compile(rf"^\s*{label}\s*$", re.I)).first.click(timeout=4000)
+            clicked = True
+            _rto_log(f"OTP dialog: clicked {label}")
+            break
+        except Exception:
+            continue
+    if not clicked:
+        try:
+            dlg.locator("input[type='submit'], input[type='button']").filter(
+                has_text=re.compile(r"submit|verify|ok|confirm", re.I)
+            ).first.click(timeout=5000)
+            clicked = True
+        except Exception:
+            try:
+                page.locator(
+                    ".ui-dialog-buttonpane button, .ui-dialog-footer input[type='submit']"
+                ).first.click(timeout=4000)
+                clicked = True
+            except Exception as e:
+                raise RuntimeError("Could not click OTP submit on Vahan dialog") from e
+    if not clicked:
+        raise RuntimeError("Could not click OTP submit on Vahan dialog")
+    _pause()
+
+
+def _clear_batch_otp_flags(dealer_id: int) -> None:
+    from app.services.rto_payment_service import _write_batch_status
+
+    _write_batch_status(
+        int(dealer_id),
+        otp_pending=False,
+        otp_rto_queue_id=None,
+        otp_customer_mobile=None,
+        otp_prompt=None,
+    )
+
+
+def _handle_inward_partial_save_followup(page: Page, data: dict) -> None:
+    """After *Inward Application (Partial Save)*: OTP popup (operator) or legacy Yes/Close dialogs."""
+    _wait_for_progress_close_loop(page)
+    _pause()
+    dlg = _poll_otp_dialog(page, max_ms=12_000)
+    if dlg is None:
+        _rto_log("Inward save: no OTP dialog detected within 12s — dismissing Yes/Close if present")
+        _dismiss_dialog(page, "Yes")
+        _pause()
+        _dismiss_dialog(page, "Close", timeout=_DEFAULT_TIMEOUT_MS)
+        return
+
+    _rto_log("Inward save: OTP dialog detected — waiting for operator to submit OTP in this app")
+    dealer_id = data.get("dealer_id")
+    rto_queue_id = data.get("rto_queue_id")
+    mobile = (data.get("mobile") or "").strip() or None
+    try:
+        txt = dlg.inner_text(timeout=5000) or ""
+        compact = re.sub(r"\s+", " ", txt)
+        m = re.search(r"(?:\+91[\s\-]*)?([6-9]\d{9})\b", compact)
+        if m:
+            mobile = m.group(1)
+            _rto_log(f"OTP dialog: parsed mobile from portal text: {mobile}")
+    except Exception:
+        pass
+    if not mobile:
+        mobile = "—"
+
+    prompt = (
+        "Vahan sent an OTP to the customer's mobile. Enter the OTP below; "
+        "automation will fill the Vahan popup and continue."
+    )
+
+    if dealer_id is None or rto_queue_id is None:
+        raise RuntimeError(
+            "Vahan is asking for OTP but dealer or queue id is missing — cannot sync with the app. "
+            "Enter the OTP manually in the Vahan browser window."
+        )
+
+    from app.services.rto_otp_bridge import OperatorOtpTimeout, wait_for_operator_otp
+    from app.services.rto_payment_service import _write_batch_status
+
+    def notify() -> None:
+        _write_batch_status(
+            int(dealer_id),
+            otp_pending=True,
+            otp_rto_queue_id=int(rto_queue_id),
+            otp_customer_mobile=mobile,
+            otp_prompt=prompt,
+            message=f"Waiting for OTP — customer mobile {mobile} (queue {rto_queue_id})",
+        )
+
+    try:
+        otp = wait_for_operator_otp(int(dealer_id), int(rto_queue_id), notify, timeout_s=600.0)
+    except OperatorOtpTimeout:
+        _rto_log("Inward save: OTP wait timed out")
+        _clear_batch_otp_flags(int(dealer_id))
+        raise
+    except Exception:
+        _clear_batch_otp_flags(int(dealer_id))
+        raise
+
+    dlg2 = _find_visible_otp_dialog(page)
+    if dlg2 is None:
+        dlg2 = _poll_otp_dialog(page, max_ms=5000)
+
+    try:
+        if dlg2 is None:
+            raise RuntimeError("OTP received but Vahan OTP dialog is no longer visible")
+        _submit_vahan_otp_in_dialog(page, dlg2, otp)
+        _wait_for_progress_close(page)
+        _dismiss_dialog(page, "Yes")
+        _pause()
+        _dismiss_dialog(page, "Close", timeout=_DEFAULT_TIMEOUT_MS)
+    finally:
+        _clear_batch_otp_flags(int(dealer_id))
+
+
 def _wait_for_progress_close(page: Page, timeout_ms: int = _LONG_TIMEOUT_MS) -> None:
     """Wait until a progress/loading overlay disappears (PrimeFaces ``ui-blockui``, etc.).
 
-    Uses ``timeout_ms`` max wait per call — many flows chain this after AJAX; use
-    ``_PROGRESS_PF_SHORT_MS`` for single-field updates so the total delay stays reasonable.
+    Uses ``timeout_ms`` max wait per call — many flows chain this after AJAX. For short
+    PrimeFaces overlays prefer ``_wait_for_progress_close_loop`` (200ms slices, 2s cap).
     """
     try:
         overlay = page.locator(".ui-blockui, .blockUI, .loading-overlay, .ui-dialog-loading").first
@@ -712,6 +904,99 @@ def _wait_for_progress_close(page: Page, timeout_ms: int = _LONG_TIMEOUT_MS) -> 
     except PwTimeout:
         pass
     _pause()
+
+
+def _wait_for_progress_close_loop(page: Page) -> None:
+    """Block UI gone: ``_FIRST_TRY_MS`` slices until hidden or ``_LOOP_BUDGET_MS`` total."""
+    overlay = page.locator(".ui-blockui, .blockUI, .loading-overlay, .ui-dialog-loading").first
+    t0 = time.monotonic()
+    while True:
+        elapsed_ms = (time.monotonic() - t0) * 1000
+        if elapsed_ms >= _LOOP_BUDGET_MS:
+            break
+        slice_ms = int(min(_FIRST_TRY_MS, _LOOP_BUDGET_MS - elapsed_ms))
+        if slice_ms < 1:
+            break
+        try:
+            overlay.wait_for(state="hidden", timeout=max(slice_ms, 1))
+            break
+        except PwTimeout:
+            continue
+    _pause()
+
+
+def _poll_choice_no_label_ok(page: Page) -> bool:
+    """True when choice-number label shows NO — polls every ``_FIRST_TRY_MS`` up to ``_LOOP_BUDGET_MS``."""
+    deadline = time.monotonic() + _LOOP_BUDGET_MS / 1000.0
+    while time.monotonic() < deadline:
+        try:
+            ok = page.evaluate(
+                """() => {
+                    const el = document.querySelector('label#regnNoSelectionForAPS_label');
+                    if (!el) return false;
+                    const t = (el.textContent || '').toUpperCase();
+                    return t.includes('NO') && !t.includes('SELECT');
+                }"""
+            )
+            if ok:
+                return True
+        except Exception:
+            pass
+        rem = deadline - time.monotonic()
+        if rem <= 0:
+            break
+        time.sleep(min(_FIRST_TRY_MS / 1000.0, rem))
+    return False
+
+
+def _wait_locator_hidden_loop(loc) -> bool:
+    """Wait for locator hidden: ``_FIRST_TRY_MS`` slices, ``_LOOP_BUDGET_MS`` total. Returns True if hidden."""
+    t0 = time.monotonic()
+    while True:
+        elapsed_ms = (time.monotonic() - t0) * 1000
+        if elapsed_ms >= _LOOP_BUDGET_MS:
+            return False
+        slice_ms = int(min(_FIRST_TRY_MS, _LOOP_BUDGET_MS - elapsed_ms))
+        if slice_ms < 1:
+            return False
+        try:
+            loc.wait_for(state="hidden", timeout=max(slice_ms, 1))
+            return True
+        except PwTimeout:
+            continue
+
+
+def _native_select_choice_no_loop(native) -> bool:
+    """Set native ``regnNoSelectionForAPS`` to NO; 200ms attempts, 2s total."""
+    t0 = time.monotonic()
+    while (time.monotonic() - t0) * 1000 < _LOOP_BUDGET_MS:
+        sm = int(min(_FIRST_TRY_MS, _LOOP_BUDGET_MS - (time.monotonic() - t0) * 1000))
+        if sm < 50:
+            break
+        try:
+            native.select_option(label="NO", timeout=max(sm, 1))
+            return True
+        except PwTimeout:
+            try:
+                native.select_option(label=re.compile(r"^\s*NO\s*$", re.I), timeout=max(sm, 1))
+                return True
+            except PwTimeout:
+                continue
+    return False
+
+
+def _wait_native_choice_select_attached(native) -> None:
+    """``attached`` on native select: 200ms slices, 2s total."""
+    t0 = time.monotonic()
+    while (time.monotonic() - t0) * 1000 < _LOOP_BUDGET_MS:
+        sm = int(min(_FIRST_TRY_MS, _LOOP_BUDGET_MS - (time.monotonic() - t0) * 1000))
+        if sm < 1:
+            break
+        try:
+            native.wait_for(state="attached", timeout=max(sm, 1))
+            return
+        except PwTimeout:
+            continue
 
 
 def _upload_file(page: Page, file_path: Path, *, timeout: int = _DEFAULT_TIMEOUT_MS) -> None:
@@ -761,6 +1046,7 @@ def _ensure_vahan_dealer_home_for_screen1(page: Page) -> None:
     will not exist. We do **not** persist a step across restarts — we normalize by:
 
     1. Clicking the top **Home** link (IDs from live Vahan: ``homeId2`` / ``homeId1``) — no pixel coordinates.
+       Each selector waits up to **0.5s** for visible; the whole Home-link loop stops after **5s** total.
     2. If that fails, ``page.goto(VAHAN_DEALER_HOME_URL)``.
 
     A **new browser profile** is unchanged: first load still goes through login; after that this keeps
@@ -776,12 +1062,18 @@ def _ensure_vahan_dealer_home_for_screen1(page: Page) -> None:
         "a:has-text('Home')",
     )
     clicked = False
+    t_home = time.monotonic()
     for sel in home_link_selectors:
+        elapsed = time.monotonic() - t_home
+        if elapsed >= _ENSURE_HOME_SELECTORS_TOTAL_S:
+            break
+        remaining_ms = int((_ENSURE_HOME_SELECTORS_TOTAL_S - elapsed) * 1000)
+        wait_ms = min(_ENSURE_HOME_SELECTOR_WAIT_MS, max(remaining_ms, 1))
         try:
             loc = page.locator(sel).first
             if loc.count() == 0:
                 continue
-            loc.wait_for(state="visible", timeout=3000)
+            loc.wait_for(state="visible", timeout=wait_ms)
             loc.click(timeout=_DEFAULT_TIMEOUT_MS)
             clicked = True
             _rto_log(f"ensure dealer home: clicked Home ({sel})")
@@ -1026,7 +1318,7 @@ def _screen_2(page: Page, data: dict) -> None:
         if not same_cb.is_checked():
             page.locator("label:has-text('Same as Current')").first.click(timeout=_DEFAULT_TIMEOUT_MS)
             _pause()
-        _wait_for_progress_close(page, timeout_ms=_PROGRESS_PF_SHORT_MS)
+        _wait_for_progress_close_loop(page)
         if same_cb.is_checked():
             _rto_log("checkbox: Same as Current Address — checked (Tab/Space / click)")
         else:
@@ -1097,9 +1389,7 @@ def _screen_2(page: Page, data: dict) -> None:
         timeout=_DEFAULT_TIMEOUT_MS,
     )
     _pause()
-    _dismiss_dialog(page, "Yes")
-    _pause()
-    _dismiss_dialog(page, "Close", timeout=_DEFAULT_TIMEOUT_MS)
+    _handle_inward_partial_save_followup(page, data)
 
 
 def _screen_3(page: Page, data: dict) -> str:
@@ -1540,7 +1830,10 @@ def fill_rto_row(row: dict) -> dict:
     logger.info("fill_rto_row: starting rto_queue_id=%s dealer=%s", rto_queue_id, dealer_id)
 
     # --- Compose data dict for screen helpers ---
+    _rqid = row.get("rto_queue_id")
     data: dict = {
+        "dealer_id": dealer_id,
+        "rto_queue_id": int(_rqid) if _rqid is not None else None,
         "chassis_num": row.get("chassis_num") or "",
         "engine_short": row.get("engine_short") or "",
         "customer_name": row.get("customer_name") or "",
