@@ -6,7 +6,11 @@ from app.db import get_connection
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
-PRESERVED_TABLES = ("dealer_ref", "oem_ref", "oem_service_schedule", "subdealer_discount_master")
+# Truncate all public base tables except:
+# - names ending with "ref" (SQL LIKE '%ref'), e.g. dealer_ref, roles_ref, login_ref
+# - legacy reference tables that do not end in "ref"
+PRESERVED_LIKE_SUFFIX = "%ref"
+PRESERVED_EXTRA_TABLES = ("oem_service_schedule", "subdealer_discount_master")
 CONFIRMATION_TEXT = "DELETE ALL DATA"
 
 
@@ -16,7 +20,7 @@ class ResetAllDataRequest(BaseModel):
 
 @router.post("/reset-all-data")
 def reset_all_data(payload: ResetAllDataRequest) -> dict:
-    """Delete all public-table data except reference tables in PRESERVED_TABLES."""
+    """Delete all public base-table rows except *ref tables (LIKE '%ref') and PRESERVED_EXTRA_TABLES."""
     if payload.confirmation != CONFIRMATION_TEXT:
         raise HTTPException(status_code=400, detail="Invalid confirmation text")
 
@@ -29,12 +33,31 @@ def reset_all_data(payload: ResetAllDataRequest) -> dict:
                 FROM information_schema.tables
                 WHERE table_schema = 'public'
                   AND table_type = 'BASE TABLE'
-                  AND table_name <> ALL(%s::text[])
+                  AND NOT (
+                    table_name LIKE %s
+                    OR table_name = ANY(%s::text[])
+                  )
                 ORDER BY table_name
                 """,
-                (list(PRESERVED_TABLES),),
+                (PRESERVED_LIKE_SUFFIX, list(PRESERVED_EXTRA_TABLES)),
             )
             table_names = [row["table_name"] for row in cur.fetchall()]
+
+            cur.execute(
+                """
+                SELECT table_name
+                FROM information_schema.tables
+                WHERE table_schema = 'public'
+                  AND table_type = 'BASE TABLE'
+                  AND (
+                    table_name LIKE %s
+                    OR table_name = ANY(%s::text[])
+                  )
+                ORDER BY table_name
+                """,
+                (PRESERVED_LIKE_SUFFIX, list(PRESERVED_EXTRA_TABLES)),
+            )
+            preserved_names = [row["table_name"] for row in cur.fetchall()]
 
             if table_names:
                 truncate_sql = sql.SQL("TRUNCATE TABLE {} RESTART IDENTITY CASCADE").format(
@@ -48,7 +71,7 @@ def reset_all_data(payload: ResetAllDataRequest) -> dict:
             "message": f"Deleted data from {len(table_names)} table(s).",
             "truncated_count": len(table_names),
             "truncated_tables": table_names,
-            "preserved_tables": list(PRESERVED_TABLES),
+            "preserved_tables": preserved_names,
         }
     except Exception:
         conn.rollback()

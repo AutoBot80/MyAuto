@@ -28,18 +28,18 @@ export function HomePage({ onSelectPos, onSelectService, onSelectRto, onSelectDe
               type="button"
               className="home-tile"
               onClick={onSelectPos}
-              aria-label="Open POS Saathi"
+              aria-label="Open Sales Window"
             >
-              <span className="home-tile-title">POS Saathi</span>
+              <span className="home-tile-title">Sales Window</span>
               <span className="home-tile-desc">Easy DMS, Insurance and RTO</span>
             </button>
             <button
               type="button"
               className="home-tile"
               onClick={onSelectRto}
-              aria-label="Open RTO Saathi"
+              aria-label="Open RTO Desk"
             >
-              <span className="home-tile-title">RTO Saathi</span>
+              <span className="home-tile-title">RTO Desk</span>
               <span className="home-tile-desc">Queue and track RTO work</span>
             </button>
             <button

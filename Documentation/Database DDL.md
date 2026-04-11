@@ -582,6 +582,74 @@ Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.
 
 ---
 
+## 17) `roles_ref`
+
+**Purpose:** Named roles with **Y**/**N** flags for each home-module tile (Sales Window, RTO Desk, Service, Admin, Dealer). Rows are **not** truncated by Admin **Delete All Data** (table name matches **`LIKE '%ref'`**; see `backend/app/routers/admin.py`).
+
+| Column | Type | Null | Default | Notes |
+|---|---|---:|---|---|
+| `role_id` | `integer` | NO | `nextval('roles_ref_role_id_seq'::regclass)` | Primary key (auto-generated) |
+| `role_name` | `varchar(128)` | NO |  | Unique role label |
+| `pos_flag` | `char(1)` | NO | `'N'` | **Y** or **N** — Sales Window tile |
+| `rto_flag` | `char(1)` | NO | `'N'` | **Y** or **N** — RTO Desk tile |
+| `service_flag` | `char(1)` | NO | `'N'` | **Y** or **N** — Service tile |
+| `admin_flag` | `char(1)` | NO | `'N'` | **Y** or **N** — Admin tile |
+| `dealer_flag` | `char(1)` | NO | `'N'` | **Y** or **N** — Dealer tile |
+
+**Primary key:** `roles_ref_pkey` on (`role_id`)
+
+**Unique:** `uq_roles_ref_role_name` on (`role_name`)
+
+**Checks:** `chk_roles_ref_*` — each `*_flag` IN ('Y', 'N')
+
+**Script:** `DDL/25_roles_ref.sql`
+
+---
+
+## 18) `login_ref`
+
+**Purpose:** User accounts: **`login_id`** is the **user-chosen** sign-in id (primary key), plus **`pwd_hash`**, profile (**`name`**, **`phone`**, optional **`email`**), **`active_flag`** **Y**/**N**. Rows are **not** truncated by Admin **Delete All Data** (table name matches **`LIKE '%ref'`**). Sign-in uses **`login_id`** + password; **`email`** is optional and **not** unique.
+
+| Column | Type | Null | Default | Notes |
+|---|---|---:|---|---|
+| `login_id` | `varchar(128)` | NO |  | **Primary key** — user-supplied id (not auto-generated) |
+| `pwd_hash` | `varchar(255)` | NO |  | Stored hash (e.g. argon2/bcrypt); not plaintext |
+| `name` | `varchar(255)` | NO |  | Display name |
+| `phone` | `varchar(32)` | YES |  | Contact phone |
+| `email` | `varchar(255)` | YES |  | Optional; duplicates allowed |
+| `active_flag` | `char(1)` | NO | `'Y'` | **Y** or **N** — active / disabled |
+
+**Primary key:** `login_ref_pkey` on (`login_id`)
+
+**Checks:** `chk_login_ref_active_flag` — `active_flag` IN ('Y', 'N')
+
+**Scripts:** `DDL/26_login_ref.sql` (greenfield); replace any prior **`login_ref`** (drops data) — **`DDL/alter/26b_login_ref_redesign.sql`**
+
+---
+
+## 19) `login_roles_ref`
+
+**Purpose:** Assigns **`roles_ref`** roles to **`login_ref`** users; optional **`dealer_id`** for dealer-scoped assignments (**no FK** — may be blank). Table name ends with **`ref`** → preserved on Admin **Delete All Data** (**`LIKE '%ref'`**). Surrogate PK **`login_roles_ref_id`**; uniqueness **`(login_id, role_id, dealer_id)`** with **`NULL`** **`dealer_id`** folded to **`-1`** in the index only (store positive **`dealer_id`** values when set).
+
+| Column | Type | Null | Default | Notes |
+|---|---|---:|---|---|
+| `login_roles_ref_id` | `integer` | NO | `nextval('login_roles_ref_login_roles_ref_id_seq'::regclass)` | Primary key (auto-generated) |
+| `login_id` | `varchar(128)` | NO |  | FK → `login_ref(login_id)` |
+| `role_id` | `integer` | NO |  | FK → `roles_ref(role_id)` |
+| `dealer_id` | `integer` | YES |  | Optional; **not** FK; blank = **NULL** |
+
+**Primary key:** `login_roles_ref_pkey` on (`login_roles_ref_id`)
+
+**Unique index:** `uq_login_roles_ref_login_role_dealer` on (`login_id`, `role_id`, **`COALESCE(dealer_id, -1)`**)
+
+**Foreign keys:**
+- `fk_login_roles_ref_login`: (`login_id`) → `login_ref(login_id)` **ON DELETE CASCADE**
+- `fk_login_roles_ref_role`: (`role_id`) → `roles_ref(role_id)` **ON DELETE RESTRICT**
+
+**Script:** `DDL/27_login_roles_ref.sql`
+
+---
+
 ## Table Usage Summary
 
 | Table | Used by |
@@ -609,6 +677,9 @@ Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.
 | `challan_master` | Challan headers; **`DDL/20_challan_master.sql`** |
 | `challan_details` | Challan ↔ inventory lines; **`DDL/21_challan_details.sql`** |
 | `subdealer_discount_master` | Dealer + model discount rules; **`DDL/22_subdealer_discount_master.sql`** |
+| `roles_ref` | Role ↔ home-tile access flags; **`DDL/25_roles_ref.sql`**; preserved on admin reset |
+| `login_ref` | User logins + password hashes; **`DDL/26_login_ref.sql`** |
+| `login_roles_ref` | Login ↔ role (+ optional `dealer_id`); **`DDL/27_login_roles_ref.sql`** |
 
 ---
 
@@ -734,3 +805,12 @@ Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.
 | 2.73 | Apr 2026 | **`challan_master_staging.last_run_at`** — **`DDL/alter/23a_challan_master_staging_last_run_at.sql`**; greenfield: **`DDL/23_challan_master_staging.sql`** — Processed tab **Latest run** |
 | 2.74 | Apr 2026 | **`rto_queue`** redesign (serial **`rto_queue_id`**, **`insurance_id`**, **`customer_mobile`**, application/payment columns, batch columns); **`form_vahan_view`** minimal columns, **`dealer_rto`** from **`dealer_ref.rto_name`** with fallback; **`rc_status_sms_queue`** constraints via **`sales_master`**; greenfield: **`DDL/10_rto_queue.sql`**, **`DDL/11_rc_status_sms_queue.sql`**, **`DDL/alter/10e_form_vahan_view.sql`**, **`DDL/alter/11a_*.sql`**, **`DDL/alter/11b_*.sql`**; upgrade: **`DDL/alter/24a_rto_queue_schema_redesign.sql`** |
 | 2.75 | Apr 2026 | **`form_vahan_view`** extended with **`city`**, **`state`**, **`pin`** (from `customer_master`) and **`idv`** (from `insurance_master`) for Vahan portal automation; updated **`DDL/alter/10e_form_vahan_view.sql`** and **`DDL/alter/24a_rto_queue_schema_redesign.sql`** |
+| 2.76 | Apr 2026 | **`roles_ref`** — **`role_name`**, **`pos_flag`**, **`rto_flag`**, **`service_flag`**, **`admin_flag`**, **`dealer_flag`** (**Y**/**N**); preserved on **`POST /admin/reset-all-data`** — **`DDL/25_roles_ref.sql`**, **`backend/app/routers/admin.py`** |
+| 2.77 | Apr 2026 | **`login_ref`** — **`dealer_id`** → **`dealer_ref`**, **`role_name`** → **`roles_ref`**, **`login`**, **`pwd_hash`**, **`valid_flag`** — **`DDL/26_login_ref.sql`** |
+| 2.78 | Apr 2026 | **`POST /admin/reset-all-data`**: preserve all public base tables whose name **`LIKE '%ref'`** (e.g. **`login_ref`**) plus **`oem_service_schedule`** and **`subdealer_discount_master`** — **`backend/app/routers/admin.py`** |
+| 2.79 | Apr 2026 | **`login_ref`**: dropped **`login_id`**; primary key **`(dealer_id, login)`** — **`DDL/26_login_ref.sql`**, **`DDL/alter/26a_login_ref_drop_login_id.sql`** (removed; use **2.80** migration) |
+| 2.80 | Apr 2026 | **`login_ref`** — **`login_id`**, **`pwd_hash`**, **`dealer_id`**, **`name`**, **`phone`**, **`email`**, **`active_flag`**; **`uq_login_ref_dealer_email`** — **`DDL/26_login_ref.sql`**, **`DDL/alter/26b_login_ref_redesign.sql`** |
+| 2.81 | Apr 2026 | **`login_ref`**: removed **`dealer_id`**; **`uq_login_ref_email`** on **`email`** — **`DDL/26_login_ref.sql`**, **`DDL/alter/26b_login_ref_redesign.sql`** |
+| 2.82 | Apr 2026 | **`login_ref`**: **`login_id`** **`varchar(128)`** user PK (not serial); **`email`** nullable, not unique — **`DDL/26_login_ref.sql`**, **`DDL/alter/26b_login_ref_redesign.sql`** |
+| 2.83 | Apr 2026 | **`login_roles_ref`** — **`login_id`** → **`login_ref`**, **`role_id`** → **`roles_ref`**, optional **`dealer_id`** (no FK) — **`DDL/27_login_roles_ref.sql`** |
+
