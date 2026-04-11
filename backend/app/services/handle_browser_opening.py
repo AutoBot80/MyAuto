@@ -3,6 +3,17 @@ Shared Playwright browser lifecycle: CDP attach to existing Edge/Chrome, or laun
 tab matching by site base URL, optional auto-login when credentials are pre-filled.
 
 Used by Fill DMS, Vahan, and Insurance — independent of Siebel/DMS business logic.
+
+**Browser persistence policy:** The browser is launched as an independent OS process with a *stable*
+user-data-dir (``<project>/.browser-profile``) and ``--remote-debugging-port``.  It survives backend
+restarts, retries, and frontend reloads.  On next startup the CDP reconnection logic in
+``_refresh_cdp_browsers`` re-attaches to the same process (session cookies, Vahan login,
+captcha/OTP state all survive).  No code path calls ``Browser.close()`` for operator sessions.
+
+**No new tabs:** For single-session portals like Vahan, a second tab to the same host would
+invalidate the running session.  ``get_or_open_site_page`` never opens an extra tab — it
+reuses a matching tab, or navigates an existing tab in-place, or (only when no browser exists)
+launches a fresh process with exactly one tab.
 """
 from __future__ import annotations
 
@@ -11,15 +22,25 @@ import logging
 import os
 import shutil
 import subprocess
-import tempfile
 import threading
 import time
 import urllib.parse
+from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 from app.config import DMS_PLAYWRIGHT_HEADED, PLAYWRIGHT_MANAGED_REMOTE_DEBUG_PORT
 
 logger = logging.getLogger(__name__)
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _browser_profile_dir() -> Path:
+    """Stable, project-local browser profile so session cookies survive backend restarts.
+
+    Falls back to ``<project>/.browser-profile``.  The directory is git-ignored.
+    """
+    return _PROJECT_ROOT / ".browser-profile"
 
 
 def _hostname_for_site_match(url_or_base: str) -> str:
@@ -165,7 +186,7 @@ def _launch_managed_browser_for_site(
     if exe:
         attempted_independent_launch = True
         try:
-            profile_dir = os.path.join(tempfile.gettempdir(), "myautoai-dms-browser-profile")
+            profile_dir = str(_browser_profile_dir())
             os.makedirs(profile_dir, exist_ok=True)
             cmd = [
                 exe,
@@ -210,7 +231,7 @@ def _launch_managed_browser_for_site(
                     matched = None
                     for page in existing:
                         url = (page.url or "").strip()
-                        if not url or not _playwright_page_url_matches_site_base(url, base_url):
+                        if not url or not _page_matches_site_for_reuse(url, base_url, site_label):
                             continue
                         if (site_label or "").strip() == "Insurance" and _url_looks_like_dms_siebel_tab(
                             url
@@ -269,7 +290,7 @@ def _launch_managed_browser_for_site(
                             except Exception:
                                 pass
                             u = (page.url or "").strip()
-                            if u and _playwright_page_url_matches_site_base(u, base_url):
+                            if u and _page_matches_site_for_reuse(u, base_url, site_label):
                                 return page, channel
                         if want_host:
                             for page in existing:
@@ -338,6 +359,21 @@ def _launch_managed_browser_for_site(
             logger.warning("handle_browser_opening: failed to launch %s browser: %s", ch, exc)
             continue
     return None, None
+
+
+def _page_matches_site_for_reuse(page_url: str, site_base_url: str, site_label: str) -> bool:
+    """Match an open browser tab to the configured site URL.
+
+    **Vahan** uses hostname-only matching so tabs still match after login (path changes away from
+    ``login.xhtml``). Other sites keep path-prefix matching via
+    :func:`_playwright_page_url_matches_site_base`.
+    """
+    sl = (site_label or "").strip()
+    if sl == "Vahan":
+        ph = _hostname_for_site_match(page_url)
+        bh = _hostname_for_site_match(site_base_url)
+        return bool(ph and bh and ph == bh)
+    return _playwright_page_url_matches_site_base(page_url, site_base_url)
 
 
 def _playwright_page_url_matches_site_base(page_url: str, site_base_url: str) -> bool:
@@ -583,6 +619,38 @@ def _wait_login_or_prompt_after_open(page, site_label: str):
     return None, f"{site_label} Opened. Please login. And then press button again"
 
 
+def _navigate_existing_tab_to_site(target_url: str, site_label: str = ""):
+    """Navigate an existing tab in a connected CDP browser to ``target_url``.
+
+    Instead of opening a new tab (which can invalidate single-session sites like Vahan),
+    this picks the first available page and navigates it in-place.  The browser profile's
+    cookies are preserved, so a prior login may still be valid.
+
+    Returns the ``Page`` or ``None`` if no CDP browser / tab is available.
+    """
+    _refresh_cdp_browsers()
+    browsers = list(_CDP_BROWSERS_BY_URL.values()) + list(_KEEP_OPEN_BROWSERS)
+    for browser in browsers:
+        try:
+            for ctx in browser.contexts:
+                for page in ctx.pages:
+                    try:
+                        page.goto(target_url, wait_until="domcontentloaded", timeout=20_000)
+                        logger.info(
+                            "handle_browser_opening: navigated existing tab to %s (no new tab/window)",
+                            site_label,
+                        )
+                        return page
+                    except Exception as exc:
+                        logger.debug(
+                            "handle_browser_opening: navigate existing tab failed: %s", exc
+                        )
+                        continue
+        except Exception:
+            continue
+    return None
+
+
 def get_or_open_site_page(
     base_url: str,
     site_label: str,
@@ -595,6 +663,16 @@ def get_or_open_site_page(
     Try finding an already-open site tab (``base_url`` is used for host/path matching).
     If not found, open a managed browser to ``launch_url`` or ``base_url``, then optional auto-login.
 
+    **Persistence priority** (avoids re-login / session invalidation):
+    1. Reuse an existing matching tab (session intact — zero network hits).
+    2. Navigate an existing tab in the connected browser to the target URL
+       (same profile & cookies — session cookie may keep the login alive).
+    3. Launch a new browser process with ``base_url`` on the command line
+       (stable profile dir preserves cookies from prior runs).
+
+    No step ever opens a **second tab** to the same site; single-session portals
+    like Vahan would invalidate the running session.
+
     ``launch_background`` (Windows): start the independently launched edge/chrome **minimized** so the
     operator SPA is less likely to lose focus (used for DMS warm-browser only).
     """
@@ -602,13 +680,22 @@ def get_or_open_site_page(
     if page is not None:
         if not require_login_on_open:
             return page, None
-        # Reused tab may still be on login (e.g. after warm-browser with no auto-login) — run same gate as new tab.
         auto_login_ok = _try_auto_login_if_prefilled(page)
         if auto_login_ok:
             return page, None
         return _wait_login_or_prompt_after_open(page, site_label)
 
     open_target = (launch_url or base_url or "").strip()
+
+    nav_page = _navigate_existing_tab_to_site(open_target, site_label)
+    if nav_page is not None:
+        if not require_login_on_open:
+            return nav_page, None
+        auto_login_ok = _try_auto_login_if_prefilled(nav_page)
+        if auto_login_ok:
+            return nav_page, None
+        return _wait_login_or_prompt_after_open(nav_page, site_label)
+
     opened_page, channel = _launch_managed_browser_for_site(
         open_target, launch_background=launch_background, site_label=site_label
     )
@@ -654,7 +741,7 @@ def find_open_site_page(base_url: str, site_label: str = ""):
                     url = (page.url or "").strip()
                     if len(sample_urls) < 15 and url:
                         sample_urls.append(url[:160])
-                    if _playwright_page_url_matches_site_base(url, base_url):
+                    if _page_matches_site_for_reuse(url, base_url, site_label):
                         if (site_label or "").strip() == "Insurance" and _url_looks_like_dms_siebel_tab(url):
                             logger.info(
                                 "handle_browser_opening: skipping Siebel/DMS tab when matching Insurance — %s",

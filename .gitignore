@@ -54,3 +54,6 @@ Scanner/
 
 # Hero MISP: persisted KYC insurer strategy (per portal host)
 backend/app/data/kyc_insurer_strategy_cache.json
+
+# Playwright browser profile (persists sessions across restarts)
+.browser-profile/

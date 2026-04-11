@@ -9,18 +9,64 @@ the operator Vahan tab stays open for the next row or manual use (same policy as
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import re
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from playwright.sync_api import Page, TimeoutError as PwTimeout
 
-from app.config import VAHAN_BASE_URL, get_uploads_dir
+from app.config import VAHAN_BASE_URL, get_ocr_output_dir, get_uploads_dir
 from app.services.handle_browser_opening import get_or_open_site_page
 
 logger = logging.getLogger(__name__)
+
+_rto_action_log: contextvars.ContextVar["RtoActionLog | None"] = contextvars.ContextVar(
+    "rto_action_log", default=None
+)
+_current_screen: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "rto_current_screen", default=""
+)
+
+
+class RtoActionLog:
+    """Append-only action log under ``ocr_output/{dealer_id}/{mobile}_RTO.txt``."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+
+    def line(self, message: str) -> None:
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with self.path.open("a", encoding="utf-8") as f:
+                f.write(f"[{ts}] {message}\n")
+        except OSError as e:
+            logger.warning("fill_rto: RTO log write failed %s: %s", self.path, e)
+
+
+def _set_screen(label: str) -> None:
+    """Set the current screen label that prefixes all subsequent log lines."""
+    _current_screen.set(label)
+
+
+def _rto_log(msg: str) -> None:
+    log = _rto_action_log.get()
+    if log is not None:
+        screen = _current_screen.get()
+        prefix = f"[{screen}] " if screen else ""
+        log.line(f"{prefix}{msg}")
+
+
+def _mobile_digits_for_filename(mobile: str | None) -> str:
+    d = re.sub(r"\D", "", str(mobile or ""))
+    if len(d) >= 10:
+        return d[-10:]
+    if d:
+        return d.zfill(10)[:10]
+    return "unknown_mobile"
 
 _DEFAULT_TIMEOUT_MS = 15_000
 _LONG_TIMEOUT_MS = 60_000
@@ -109,43 +155,142 @@ def _pause(seconds: float = _SHORT_WAIT_S) -> None:
     time.sleep(seconds)
 
 
+def _dump_page_state(page: Page, context: str) -> None:
+    """Dump frames and visible elements into the RTO log when a selector is not found."""
+    _rto_log(f"=== PAGE STATE DUMP ({context}) ===")
+    try:
+        _rto_log(f"url: {(page.url or '')[:300]}")
+    except Exception:
+        _rto_log("url: (could not read)")
+
+    try:
+        frames = page.frames
+        _rto_log(f"frames: {len(frames)}")
+        for i, frame in enumerate(frames):
+            try:
+                name = frame.name or "(main)"
+                url = (frame.url or "")[:200]
+                _rto_log(f"  frame[{i}] name={name!r} url={url}")
+            except Exception:
+                _rto_log(f"  frame[{i}] (could not read)")
+    except Exception as e:
+        _rto_log(f"frames: error listing — {e}")
+
+    _JS_ELEMENT_SNAPSHOT = """() => {
+        const els = [];
+        for (const el of document.querySelectorAll('input, select, textarea, button, a, [role], label, h1, h2, h3, h4, span.ui-outputlabel')) {
+            const r = el.getBoundingClientRect();
+            if (r.width < 2 || r.height < 2) continue;
+            const st = window.getComputedStyle(el);
+            if (st.display === 'none' || st.visibility === 'hidden') continue;
+            const tag = el.tagName.toLowerCase();
+            const id = el.id || '';
+            const name = el.getAttribute('name') || '';
+            const type = el.getAttribute('type') || '';
+            const role = el.getAttribute('role') || '';
+            const value = (el.value || '').substring(0, 60);
+            const text = (el.innerText || '').substring(0, 60).replace(/\\n/g, ' ');
+            const cls = (el.className || '').substring(0, 80);
+            els.push({tag, id, name, type, role, value, text, cls});
+            if (els.length >= 150) break;
+        }
+        return els;
+    }"""
+
+    def _log_element_list(tag: str, elements: list[dict]) -> None:
+        _rto_log(f"  [{tag}] visible interactive elements ({len(elements)}):")
+        for el in elements:
+            parts = [el.get("tag", "")]
+            if el.get("id"):
+                parts.append(f"id={el['id']!r}")
+            if el.get("name"):
+                parts.append(f"name={el['name']!r}")
+            if el.get("type"):
+                parts.append(f"type={el['type']!r}")
+            if el.get("role"):
+                parts.append(f"role={el['role']!r}")
+            if el.get("value"):
+                parts.append(f"value={el['value']!r}")
+            if el.get("text"):
+                parts.append(f"text={el['text']!r}")
+            if el.get("cls"):
+                parts.append(f"class={el['cls']!r}")
+            _rto_log(f"    {' '.join(parts)}")
+
+    for fi, frame in enumerate(page.frames):
+        try:
+            tag = f"frame[{fi}] {frame.name or 'main'}"
+            snapshot = frame.evaluate(_JS_ELEMENT_SNAPSHOT)
+            _log_element_list(tag, snapshot)
+        except Exception as e:
+            _rto_log(f"  [frame[{fi}]] element snapshot error: {e}")
+
+    _rto_log("=== END PAGE STATE DUMP ===")
+
+
 def _click(page: Page, selector: str, *, timeout: int = _DEFAULT_TIMEOUT_MS, label: str = "") -> None:
     """Wait for a selector and click it."""
-    loc = page.locator(selector).first
-    loc.wait_for(state="visible", timeout=timeout)
-    loc.click(timeout=timeout)
+    try:
+        loc = page.locator(selector).first
+        loc.wait_for(state="visible", timeout=timeout)
+        loc.click(timeout=timeout)
+    except PwTimeout:
+        _rto_log(f"TIMEOUT click: {label} selector={selector}")
+        _dump_page_state(page, f"click failed: {label}")
+        raise
     logger.debug("fill_rto: clicked %s (%s)", selector, label)
+    if label:
+        _rto_log(f"click: {label}")
 
 
 def _fill(page: Page, selector: str, value: str, *, timeout: int = _DEFAULT_TIMEOUT_MS, label: str = "") -> None:
     """Clear and fill a text field."""
     if not value:
         return
-    loc = page.locator(selector).first
-    loc.wait_for(state="visible", timeout=timeout)
-    loc.fill(value, timeout=timeout)
+    try:
+        loc = page.locator(selector).first
+        loc.wait_for(state="visible", timeout=timeout)
+        loc.fill(value, timeout=timeout)
+    except PwTimeout:
+        _rto_log(f"TIMEOUT fill: {label} selector={selector} value={value[:40]}")
+        _dump_page_state(page, f"fill failed: {label}")
+        raise
     logger.debug("fill_rto: filled %s = %s (%s)", selector, value[:40], label)
+    if label:
+        _rto_log(f"fill: {label} = {value[:80]}{'…' if len(value) > 80 else ''}")
 
 
 def _select(page: Page, selector: str, value: str, *, timeout: int = _DEFAULT_TIMEOUT_MS, label: str = "") -> None:
     """Select an option from a <select> dropdown by visible text."""
     if not value:
         return
-    loc = page.locator(selector).first
-    loc.wait_for(state="visible", timeout=timeout)
-    loc.select_option(label=value, timeout=timeout)
+    try:
+        loc = page.locator(selector).first
+        loc.wait_for(state="visible", timeout=timeout)
+        loc.select_option(label=value, timeout=timeout)
+    except PwTimeout:
+        _rto_log(f"TIMEOUT select: {label} selector={selector} value={value}")
+        _dump_page_state(page, f"select failed: {label}")
+        raise
     logger.debug("fill_rto: selected %s = %s (%s)", selector, value, label)
+    if label:
+        _rto_log(f"select: {label} = {value}")
 
 
 def _type_typeahead(page: Page, selector: str, value: str, *, timeout: int = _DEFAULT_TIMEOUT_MS, label: str = "") -> None:
     """Type into a typeahead/autocomplete field and pick the first suggestion."""
     if not value:
         return
-    loc = page.locator(selector).first
-    loc.wait_for(state="visible", timeout=timeout)
-    loc.click()
-    loc.fill("")
-    loc.type(value, delay=50)
+    try:
+        loc = page.locator(selector).first
+        loc.wait_for(state="visible", timeout=timeout)
+        loc.click()
+        loc.fill("")
+        loc.type(value, delay=50)
+    except PwTimeout:
+        _rto_log(f"TIMEOUT typeahead: {label} selector={selector} value={value}")
+        _dump_page_state(page, f"typeahead failed: {label}")
+        raise
     _pause(1.0)
     suggestion = page.locator(".ui-autocomplete li, .ui-menu-item, [role='option']").first
     try:
@@ -154,6 +299,8 @@ def _type_typeahead(page: Page, selector: str, value: str, *, timeout: int = _DE
     except PwTimeout:
         page.keyboard.press("Enter")
     logger.debug("fill_rto: typeahead %s = %s (%s)", selector, value, label)
+    if label:
+        _rto_log(f"typeahead: {label} = {value}")
 
 
 def _dismiss_dialog(page: Page, button_text: str = "OK", *, timeout: int = 8000) -> None:
@@ -163,6 +310,7 @@ def _dismiss_dialog(page: Page, button_text: str = "OK", *, timeout: int = 8000)
         btn.wait_for(state="visible", timeout=timeout)
         btn.click()
         logger.debug("fill_rto: dismissed dialog with '%s'", button_text)
+        _rto_log(f"dialog: {button_text}")
     except PwTimeout:
         logger.debug("fill_rto: no dialog with '%s' found (timeout), continuing", button_text)
 
@@ -179,8 +327,14 @@ def _wait_for_progress_close(page: Page, timeout_ms: int = _LONG_TIMEOUT_MS) -> 
 
 def _upload_file(page: Page, file_path: Path, *, timeout: int = _DEFAULT_TIMEOUT_MS) -> None:
     """Set the file on the visible file input and wait for upload to settle."""
-    file_input = page.locator("input[type='file']").first
-    file_input.set_input_files(str(file_path), timeout=timeout)
+    try:
+        file_input = page.locator("input[type='file']").first
+        file_input.set_input_files(str(file_path), timeout=timeout)
+    except PwTimeout:
+        _rto_log(f"TIMEOUT upload: {file_path.name}")
+        _dump_page_state(page, f"upload failed: {file_path.name}")
+        raise
+    _rto_log(f"upload: {file_path.name}")
     _pause(2.0)
     _wait_for_progress_close(page)
 
@@ -191,7 +345,9 @@ def _upload_file(page: Page, file_path: Path, *, timeout: int = _DEFAULT_TIMEOUT
 
 def _screen_1(page: Page, office: str) -> None:
     """Screen 1: Select office, action, Show Form."""
+    _set_screen("Screen 1")
     logger.info("fill_rto: Screen 1 — office=%s", office)
+    _rto_log("--- Screen 1: Assigned office, Entry-New Registeration, Show Form ---")
 
     _type_typeahead(
         page,
@@ -217,7 +373,9 @@ def _screen_1(page: Page, office: str) -> None:
 
 def _screen_2(page: Page, data: dict) -> None:
     """Screen 2: Chassis/engine, owner details, address, Save."""
+    _set_screen("Screen 2")
     logger.info("fill_rto: Screen 2 — chassis=%s", data.get("chassis_num", "")[:8])
+    _rto_log("--- Screen 2: Chassis, engine, owner, address, Save and file movement ---")
 
     # 2a: Chassis and engine
     _fill(page, "input[id*='chassisNo'], input[name*='chassisNo']", data["chassis_num"], label="Chassis No")
@@ -308,6 +466,7 @@ def _screen_2(page: Page, data: dict) -> None:
         same_addr.wait_for(state="visible", timeout=5000)
         if not same_addr.is_checked():
             same_addr.click()
+            _rto_log("checkbox: Same as Current Address")
     except PwTimeout:
         logger.debug("fill_rto: 'Same as Current Address' checkbox not found, skipping")
 
@@ -327,7 +486,9 @@ def _screen_2(page: Page, data: dict) -> None:
 
 def _screen_3(page: Page, data: dict) -> str:
     """Screen 3: Home > Entry, Tax mode, Insurance, Hypothecation, Save. Returns application_id."""
+    _set_screen("Screen 3")
     logger.info("fill_rto: Screen 3 — insurer=%s", data.get("insurer", "")[:20])
+    _rto_log("--- Screen 3: Home, Entry, tax, insurance, hypothecation, application no ---")
 
     # 3a: Home then Entry
     _click(page, "a:has-text('Home'), button:has-text('Home'), [id*='home']", label="Home link")
@@ -504,8 +665,12 @@ def _screen_3(page: Page, data: dict) -> str:
             if nums:
                 application_id = nums[0]
         logger.info("fill_rto: scraped application_id=%s", application_id)
+        if application_id:
+            _rto_log(f"scraped: rto_application_id = {application_id}")
     except PwTimeout:
         logger.warning("fill_rto: could not scrape application number from popup")
+        _rto_log("WARNING: could not scrape application number from popup")
+        _dump_page_state(page, "scrape application number failed")
 
     _dismiss_dialog(page, "OK", timeout=5000)
     _pause(0.5)
@@ -515,7 +680,9 @@ def _screen_3(page: Page, data: dict) -> str:
 
 def _screen_4(page: Page) -> None:
     """Screen 4: Verify, File Movement, Dealer Document Upload."""
+    _set_screen("Screen 4")
     logger.info("fill_rto: Screen 4 — Verify & Document Upload nav")
+    _rto_log("--- Screen 4: Verify, Save Options / File Movement, Dealer Document Upload ---")
 
     # Scroll down and click Verify
     page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
@@ -570,7 +737,9 @@ def _screen_4(page: Page) -> None:
 
 def _screen_5(page: Page, docs: dict[str, Path | None]) -> None:
     """Screen 5: Upload documents per sub-category."""
+    _set_screen("Screen 5")
     logger.info("fill_rto: Screen 5 — uploading %d document categories", len(docs))
+    _rto_log("--- Screen 5: Document uploads by sub-category ---")
 
     upload_sequence: list[tuple[str, str | None]] = [
         ("FORM 20", "FORM 20"),
@@ -587,6 +756,7 @@ def _screen_5(page: Page, docs: dict[str, Path | None]) -> None:
         file_path = docs.get(doc_key)
         if not file_path:
             logger.warning("fill_rto: no file found for %s, skipping upload", doc_key)
+            _rto_log(f"skip upload (missing file): {doc_key}")
             continue
 
         logger.info("fill_rto: uploading %s -> %s (%s)", doc_key, sub_category_text, file_path.name)
@@ -624,6 +794,7 @@ def _screen_5(page: Page, docs: dict[str, Path | None]) -> None:
             ).first
             chevron.wait_for(state="visible", timeout=8000)
             chevron.click()
+            _rto_log(f"chevron next after upload: {doc_key}")
             _pause(1.5)
             _wait_for_progress_close(page)
         except PwTimeout:
@@ -646,7 +817,9 @@ def _screen_5(page: Page, docs: dict[str, Path | None]) -> None:
 
 def _screen_6(page: Page) -> float | None:
     """Screen 6: Dealer Regn Fee Tax — scrape total payable amount."""
+    _set_screen("Screen 6")
     logger.info("fill_rto: Screen 6 — fee details")
+    _rto_log("--- Screen 6: Dealer Regn Fee Tax, total payable ---")
 
     _click(
         page,
@@ -672,8 +845,12 @@ def _screen_6(page: Page) -> float | None:
         if nums:
             total = float(nums[-1].replace(",", ""))
         logger.info("fill_rto: scraped total payable = %s", total)
+        if total is not None:
+            _rto_log(f"scraped: total payable = {total}")
     except PwTimeout:
         logger.warning("fill_rto: could not scrape total payable amount")
+        _rto_log("WARNING: could not scrape total payable amount")
+        _dump_page_state(page, "scrape total payable failed")
 
     # Dismiss popups
     _dismiss_dialog(page, "Yes", timeout=5000)
@@ -765,43 +942,70 @@ def fill_rto_row(row: dict) -> dict:
         "policy_from_str": _fmt_date(row.get("policy_from")),
     }
 
-    office = _transform_dealer_rto(row.get("dealer_rto") or "")
+    mob_fn = _mobile_digits_for_filename(data.get("mobile") or row.get("customer_mobile"))
+    log_path = get_ocr_output_dir(dealer_id) / f"{mob_fn}_RTO.txt"
+    rlog = RtoActionLog(log_path)
+    token = _rto_action_log.set(rlog)
+    screen_token = _current_screen.set("Setup")
+    try:
+        _rto_log(
+            f"fill_rto_row start rto_queue_id={rto_queue_id} sales_id={row.get('sales_id')} "
+            f"dealer_id={dealer_id} log_file={log_path}"
+        )
 
-    # --- Resolve document files ---
-    subfolder = row.get("subfolder") or ""
-    sale_dir = get_uploads_dir(dealer_id) / subfolder if subfolder else None
-    docs = _resolve_sale_documents(sale_dir) if sale_dir else {cat: None for cat, _, _ in _DOC_PATTERNS}
+        office = _transform_dealer_rto(row.get("dealer_rto") or "")
 
-    missing = [k for k, v in docs.items() if v is None]
-    if missing:
-        logger.warning("fill_rto: missing documents: %s", ", ".join(missing))
+        # --- Resolve document files ---
+        subfolder = row.get("subfolder") or ""
+        sale_dir = get_uploads_dir(dealer_id) / subfolder if subfolder else None
+        docs = _resolve_sale_documents(sale_dir) if sale_dir else {cat: None for cat, _, _ in _DOC_PATTERNS}
 
-    # --- Open Vahan browser ---
-    page, open_error = get_or_open_site_page(
-        VAHAN_BASE_URL,
-        "Vahan",
-        require_login_on_open=True,
-    )
-    if page is None:
-        raise RuntimeError(f"Vahan site not open or login failed: {open_error}")
+        missing = [k for k, v in docs.items() if v is None]
+        if missing:
+            logger.warning("fill_rto: missing documents: %s", ", ".join(missing))
+            _rto_log(f"warning: missing document categories: {', '.join(missing)}")
 
-    page.set_default_timeout(_DEFAULT_TIMEOUT_MS)
+        # --- Open Vahan browser (reuse existing tab on same host when possible; see handle_browser_opening) ---
+        page, open_error = get_or_open_site_page(
+            VAHAN_BASE_URL,
+            "Vahan",
+            require_login_on_open=True,
+        )
+        if page is None:
+            raise RuntimeError(f"Vahan site not open or login failed: {open_error}")
 
-    # --- Execute screens ---
-    _screen_1(page, office)
-    _screen_2(page, data)
-    application_id = _screen_3(page, data)
-    _screen_4(page)
-    _screen_5(page, docs)
-    total_payable = _screen_6(page)
+        try:
+            _rto_log(f"browser page url: {(page.url or '')[:220]}")
+        except Exception:
+            pass
 
-    logger.info(
-        "fill_rto_row: done rto_queue_id=%s app=%s amount=%s",
-        rto_queue_id, application_id, total_payable,
-    )
+        page.set_default_timeout(_DEFAULT_TIMEOUT_MS)
 
-    return {
-        "rto_application_id": application_id or None,
-        "rto_payment_amount": total_payable,
-        "completed": True,
-    }
+        # --- Execute screens ---
+        _screen_1(page, office)
+        _screen_2(page, data)
+        application_id = _screen_3(page, data)
+        _screen_4(page)
+        _screen_5(page, docs)
+        total_payable = _screen_6(page)
+
+        logger.info(
+            "fill_rto_row: done rto_queue_id=%s app=%s amount=%s",
+            rto_queue_id, application_id, total_payable,
+        )
+        _rto_log(
+            f"fill_rto_row completed rto_queue_id={rto_queue_id} "
+            f"rto_application_id={application_id!r} rto_payment_amount={total_payable!r}"
+        )
+
+        return {
+            "rto_application_id": application_id or None,
+            "rto_payment_amount": total_payable,
+            "completed": True,
+        }
+    except Exception as e:
+        _rto_log(f"fill_rto_row FAILED: {e!s}")
+        raise
+    finally:
+        _current_screen.reset(screen_token)
+        _rto_action_log.reset(token)

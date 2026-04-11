@@ -43,10 +43,16 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
     getRtoBatchStatus(dealerId)
       .then((data) => {
         setBatchStatus(data);
+        if (data.state === "running" || data.state === "starting") {
+          setVahanWarmMessage(data.message || "Processing…");
+        }
         if (data.state === "completed" || data.state === "failed") {
           setStartingBatch(false);
           setVahanReadyForBatch(false);
-          setVahanWarmMessage(null);
+          setVahanWarmMessage(data.message || (data.state === "completed" ? "Batch completed" : "Batch failed"));
+          if (data.last_error) {
+            setBatchError(data.last_error);
+          }
           fetchFromDb(false);
         }
       })
@@ -108,7 +114,13 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
     setVahanWarmMessage(null);
     setVahanReadyForBatch(false);
     try {
-      await startRtoBatch({ dealer_id: dealerId });
+      const res = await startRtoBatch({ dealer_id: dealerId });
+      if (!res.started) {
+        setStartingBatch(false);
+        setBatchError(res.message || "Batch was not started");
+        return;
+      }
+      setVahanWarmMessage(res.message || "Batch started — processing rows…");
       fetchBatchStatus();
       fetchFromDb(false);
     } catch (err) {
@@ -201,6 +213,12 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
               Processing: {batchStatus.processed_count}/{batchStatus.total_count}, Completed: {batchStatus.completed_count}, Failed: {batchStatus.failed_count}
             </span>
           </div>
+          {batchStatus.message && (
+            <p className="rto-batch-status-message">{batchStatus.message}</p>
+          )}
+          {batchStatus.last_error && (
+            <p className="rto-payments-error">Last error: {batchStatus.last_error}</p>
+          )}
         </section>
       )}
       {batchError && <p className="rto-payments-error">{batchError}</p>}
