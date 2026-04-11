@@ -23,6 +23,14 @@ from app.services.handle_browser_opening import get_or_open_site_page
 
 logger = logging.getLogger(__name__)
 
+# --- Testing / build: edit here only (not .env). Use 0 / False / "" for production full SOP. ---
+# ``RTO_FILL_SKIP_TO_SCREEN``: 0 = run all screens; 1–6 = start at that screen (skips dealer-home reset and earlier).
+RTO_FILL_SKIP_TO_SCREEN = 3
+# Screen 3: skip **Home** and only click **Entry** (you are already on ``home.xhtml`` with the grid). Also on when SKIP is 3.
+RTO_FILL_SCREEN3_SKIP_HOME = False
+# Optional seed for ``data["rto_application_id"]`` when the queue row has no app id (logging / return merge only).
+RTO_FILL_TEST_APPLICATION_ID = ""
+
 _rto_action_log: contextvars.ContextVar["RtoActionLog | None"] = contextvars.ContextVar(
     "rto_action_log", default=None
 )
@@ -890,6 +898,95 @@ def _clear_batch_otp_flags(dealer_id: int) -> None:
     )
 
 
+def _find_visible_generated_application_dialog(page: Page):
+    """Modal *Generated Application No* shown after successful Inward / OTP (workbench)."""
+    selectors = (
+        "[role='dialog']:has-text('Generated Application No')",
+        ".ui-dialog:has-text('Generated Application No')",
+        "[role='dialog']:has-text('Generated Application')",
+        ".ui-dialog:has-text('Generated Application')",
+        ".ui-dialog-content:has-text('Application No')",
+    )
+    for sel in selectors:
+        loc = page.locator(sel).first
+        try:
+            if loc.is_visible(timeout=_FIRST_TRY_MS):
+                return loc
+        except Exception:
+            continue
+    return None
+
+
+def _poll_generated_application_dialog(page: Page, max_ms: int = 15_000):
+    deadline = time.monotonic() + max_ms / 1000.0
+    while time.monotonic() < deadline:
+        dlg = _find_visible_generated_application_dialog(page)
+        if dlg is not None:
+            return dlg
+        time.sleep(_FIRST_TRY_MS / 1000.0)
+    return None
+
+
+def _scrape_application_id_from_dialog_text(text: str) -> str:
+    """Parse Vahan application number from dialog body (e.g. ``Application No. :RJ26041148051328``)."""
+    raw = (text or "").replace("\xa0", " ")
+    m = re.search(
+        r"Application\s*No\.?\s*[:\-]?\s*([A-Z]{2}\d{10,20})\b",
+        raw,
+        re.IGNORECASE,
+    )
+    if m:
+        return m.group(1).strip().upper()
+    m = re.search(
+        r"Application\s*(?:no\.?|number)\s*[:\-]?\s*(\S+)",
+        raw,
+        re.IGNORECASE,
+    )
+    if m:
+        return m.group(1).strip().rstrip(".,;")
+    found = re.findall(r"\b[A-Z]{2}\d{10,20}\b", raw)
+    return found[0].upper() if found else ""
+
+
+def _dismiss_generated_application_no_dialog(page: Page) -> str:
+    """If the *Generated Application No* modal is open: scrape id, click Ok, wait. Returns id or empty string."""
+    dlg = _find_visible_generated_application_dialog(page) or _poll_generated_application_dialog(page, max_ms=15_000)
+    if dlg is None:
+        return ""
+    try:
+        text = dlg.inner_text(timeout=5000) or ""
+    except Exception:
+        text = ""
+    app_id = _scrape_application_id_from_dialog_text(text)
+    if app_id:
+        _rto_log(f"dialog: Generated Application No — application_id={app_id}")
+        logger.info("fill_rto: Generated Application No dialog — application_id=%s", app_id)
+    else:
+        _rto_log("dialog: Generated Application No — could not parse application id from dialog text")
+    clicked = False
+    for pat in (r"^\s*Ok\s*$", r"^\s*OK\s*$"):
+        try:
+            dlg.get_by_role("button", name=re.compile(pat, re.I)).first.click(timeout=5000)
+            clicked = True
+            _rto_log("Generated Application dialog: Ok")
+            break
+        except Exception:
+            continue
+    if not clicked:
+        try:
+            dlg.locator("button, a").filter(has_text=re.compile(r"^\s*Ok\s*$", re.I)).first.click(timeout=5000)
+            clicked = True
+            _rto_log("Generated Application dialog: Ok (link/button)")
+        except Exception:
+            try:
+                _dismiss_dialog(page, "OK", timeout=4000)
+            except Exception:
+                pass
+    _pause()
+    _wait_for_progress_close_loop(page)
+    return app_id
+
+
 def _handle_inward_partial_save_followup(page: Page, data: dict) -> None:
     """After *Inward Application (Partial Save)*: OTP popup (operator) or legacy Yes/Close dialogs."""
     _wait_for_progress_close_loop(page)
@@ -900,6 +997,9 @@ def _handle_inward_partial_save_followup(page: Page, data: dict) -> None:
         _dismiss_dialog(page, "Yes")
         _pause()
         _dismiss_dialog(page, "Close", timeout=_DEFAULT_TIMEOUT_MS)
+        scraped = _dismiss_generated_application_no_dialog(page)
+        if scraped:
+            data["rto_application_id"] = scraped
         return
 
     _rto_log("Inward save: OTP dialog detected — use app to enter OTP or change mobile")
@@ -954,6 +1054,9 @@ def _handle_inward_partial_save_followup(page: Page, data: dict) -> None:
                     raise RuntimeError("OTP received but Vahan OTP dialog is no longer visible")
                 _submit_vahan_otp_in_dialog(page, dlg2, action.value)
                 _wait_for_progress_close(page)
+                scraped = _dismiss_generated_application_no_dialog(page)
+                if scraped:
+                    data["rto_application_id"] = scraped
                 _dismiss_dialog(page, "Yes")
                 _pause()
                 _dismiss_dialog(page, "Close", timeout=_DEFAULT_TIMEOUT_MS)
@@ -1234,6 +1337,13 @@ def _screen_1(page: Page, office: str) -> None:
     _dismiss_dialog(page, "OK")
 
 
+def _screen_3_should_skip_home() -> bool:
+    """True when Home is already showing the pending grid—only **Entry** is needed (skipper or explicit env)."""
+    if RTO_FILL_SCREEN3_SKIP_HOME:
+        return True
+    return RTO_FILL_SKIP_TO_SCREEN == 3
+
+
 def _screen_2(page: Page, data: dict) -> None:
     """Screen 2: Chassis/engine, owner details, address, Save."""
     _set_screen("Screen 2")
@@ -1490,12 +1600,24 @@ def _screen_3(page: Page, data: dict) -> str:
     logger.info("fill_rto: Screen 3 — insurer=%s", data.get("insurer", "")[:20])
     _rto_log("--- Screen 3: Home, Entry, tax, insurance, hypothecation, application no ---")
 
-    # 3a: Home then Entry
-    _click(page, "a:has-text('Home'), button:has-text('Home'), [id*='home']", label="Home link")
-    _pause()
-    _wait_for_progress_close(page)
+    # 3a: Home (optional) → Entry. Vahan usually leaves Home open with the grid; no Get Pending Work automation.
+    if _screen_3_should_skip_home():
+        _rto_log("Screen 3: skipping Home — clicking Entry only (already on home.xhtml with pending work)")
+    else:
+        _click(page, "a:has-text('Home'), button:has-text('Home'), [id*='home']", label="Home link")
+        _pause()
+        _wait_for_progress_close(page)
+        try:
+            page.wait_for_url(re.compile(r"home\.xhtml", re.I), timeout=15_000)
+        except Exception:
+            pass
 
-    _click(page, "input[value='Entry'], button:has-text('Entry'), a:has-text('Entry')", label="Entry button")
+    _click(
+        page,
+        "input[value='Entry'], button:has-text('Entry'), a:has-text('Entry')",
+        label="Entry button",
+        timeout=_DEFAULT_TIMEOUT_MS,
+    )
     _pause()
     _wait_for_progress_close(page)
 
@@ -1674,6 +1796,11 @@ def _screen_3(page: Page, data: dict) -> str:
 
     _dismiss_dialog(page, "OK", timeout=_DEFAULT_TIMEOUT_MS)
     _pause()
+
+    wb_app = (data.get("rto_application_id") or "").strip()
+    if not (str(application_id or "").strip()) and wb_app:
+        application_id = wb_app
+        _rto_log(f"Screen 3: using application id from workbench: {application_id!r}")
 
     return application_id
 
@@ -1997,15 +2124,40 @@ def fill_rto_row(row: dict) -> dict:
 
         page.set_default_timeout(_DEFAULT_TIMEOUT_MS)
 
-        _ensure_vahan_dealer_home_for_screen1(page)
+        skip_from = max(0, min(6, int(RTO_FILL_SKIP_TO_SCREEN)))
+        if RTO_FILL_TEST_APPLICATION_ID and not str(data.get("rto_application_id") or "").strip():
+            data["rto_application_id"] = RTO_FILL_TEST_APPLICATION_ID
 
-        # --- Execute screens ---
-        _screen_1(page, office)
-        _screen_2(page, data)
-        application_id = _screen_3(page, data)
-        _screen_4(page)
-        _screen_5(page, docs)
-        total_payable = _screen_6(page)
+        if skip_from > 0:
+            _rto_log(
+                f"TEMP SKIP: RTO_FILL_SKIP_TO_SCREEN={skip_from} — start at Screen {skip_from} "
+                f"(skipped: dealer-home reset + screens 1..{skip_from - 1})"
+            )
+            logger.warning("fill_rto_row: RTO_FILL_SKIP_TO_SCREEN=%s (dev/testing)", skip_from)
+
+        if skip_from <= 0:
+            _ensure_vahan_dealer_home_for_screen1(page)
+
+        if skip_from <= 1:
+            _screen_1(page, office)
+        if skip_from <= 2:
+            _screen_2(page, data)
+
+        application_id = ""
+        if skip_from <= 3:
+            application_id = _screen_3(page, data)
+            if not (str(application_id or "").strip()):
+                application_id = str(data.get("rto_application_id") or "").strip()
+        else:
+            application_id = str(data.get("rto_application_id") or "").strip()
+
+        if skip_from <= 4:
+            _screen_4(page)
+        if skip_from <= 5:
+            _screen_5(page, docs)
+        total_payable = None
+        if skip_from <= 6:
+            total_payable = _screen_6(page)
 
         logger.info(
             "fill_rto_row: done rto_queue_id=%s app=%s amount=%s",
