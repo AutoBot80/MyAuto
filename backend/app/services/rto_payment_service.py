@@ -8,6 +8,7 @@ from uuid import uuid4
 from app.db import get_connection
 from app.repositories import rto_payment_details as repo
 from app.services.fill_rto_service import fill_rto_row
+from app.services.playwright_executor import run_playwright_callable_sync
 
 logger = logging.getLogger(__name__)
 _BATCH_LOCK = threading.Lock()
@@ -186,7 +187,10 @@ def _run_dealer_rto_batch(
             try:
                 repo.mark_batch_row_in_progress(current_queue_id, session_id, worker_id)
 
-                batch_result = fill_rto_row(row)
+                # Run on the Playwright worker thread (same as warm-browser / Fill DMS). If fill_rto_row ran on
+                # this daemon batch thread, handle_browser_opening would start a second sync_playwright and
+                # discard the first driver — which can close the Vahan browser window.
+                batch_result = run_playwright_callable_sync(lambda: fill_rto_row(row))
 
                 rto_application_id = (batch_result.get("rto_application_id") or "").strip() or None
                 completed = bool(batch_result.get("completed"))

@@ -2,6 +2,9 @@
 
 Implements the 6-screen Playwright SOP for new vehicle registration on the
 Vahan (parivahan.gov.in) dealer portal.
+
+Browser lifetime: does not call ``Browser.close()``, ``BrowserContext.close()``, or ``Page.close()`` —
+the operator Vahan tab stays open for the next row or manual use (same policy as Fill DMS).
 """
 
 from __future__ import annotations
