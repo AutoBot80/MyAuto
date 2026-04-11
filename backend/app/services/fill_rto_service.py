@@ -326,6 +326,70 @@ def _fill(page: Page, selector: str, value: str, *, timeout: int = _DEFAULT_TIME
         _rto_log(f"fill: {label} = {value[:80]}{'…' if len(value) > 80 else ''}")
 
 
+def _close_workbench_datepicker_if_open(page: Page) -> None:
+    """Close PrimeFaces / jQuery UI datepicker overlay so it does not block later steps."""
+    cal = page.locator("div.ui-datepicker, div[id^='ui-datepicker-div']").first
+    try:
+        cal.wait_for(state="visible", timeout=250)
+    except PwTimeout:
+        return
+    page.keyboard.press("Escape")
+    _pause()
+    try:
+        cal.wait_for(state="hidden", timeout=_DEFAULT_TIMEOUT_MS)
+    except PwTimeout:
+        page.keyboard.press("Escape")
+        _pause()
+
+
+def _fill_workbench_purchase_date(
+    page: Page, value: str, *, timeout: int = _DEFAULT_TIMEOUT_MS
+) -> None:
+    """Fill workbench Purchase/Delivery Date.
+
+    Click/focus from ``fill()`` often opens the jQuery datepicker overlay. Prefer setting the
+    value in-page (no focus) when possible, then dismiss any open calendar with Escape.
+    """
+    if not value:
+        return
+    label = "Purchase/Delivery Date"
+    sel = (
+        "[id='workbench_tabview:purchase_dt_input'], "
+        "input[id*='purchase_dt'], input[id*='purchaseDate'], "
+        "input[id*='deliveryDate'], input[name*='purchaseDate'], input[name*='purchase_dt']"
+    )
+    loc = page.locator(sel).first
+    try:
+        loc.wait_for(state="attached", timeout=timeout)
+        loc.scroll_into_view_if_needed(timeout=timeout)
+
+        # 1) Set value without Playwright focus (reduces unwanted calendar popups).
+        try:
+            loc.evaluate(
+                """(el, v) => {
+                    el.value = v;
+                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                }""",
+                value,
+            )
+        except Exception:
+            try:
+                loc.fill(value, timeout=timeout)
+            except Exception:
+                loc.fill(value, timeout=timeout, force=True)
+
+        _pause()
+        _close_workbench_datepicker_if_open(page)
+    except PwTimeout:
+        _assert_vahan_session_alive(page)
+        _rto_log(f"TIMEOUT fill: {label} selector={sel} value={value[:40]}")
+        _dump_page_state(page, f"fill failed: {label}")
+        raise
+    logger.debug("fill_rto: filled purchase date = %s", value[:40])
+    _rto_log(f"fill: {label} = {value[:80]}{'…' if len(value) > 80 else ''}")
+
+
 def _select(page: Page, selector: str, value: str, *, timeout: int = _DEFAULT_TIMEOUT_MS, label: str = "") -> None:
     """Select an option from a <select> dropdown by visible text."""
     if not value:
@@ -379,6 +443,7 @@ def _select_pf_dropdown(
     timeout: int = _DEFAULT_TIMEOUT_MS,
     label: str = "",
     option_label_regex: re.Pattern | None = None,
+    use_native_select: bool = True,
 ) -> None:
     """Select an item from a PrimeFaces ``ui-selectonemenu`` by visible text.
 
@@ -387,6 +452,9 @@ def _select_pf_dropdown(
     overlay and clicking ``li.ui-selectonemenu-item``.
 
     Pass ``option_label_regex`` when the portal label varies (e.g. Registration vs Registeration).
+
+    Set ``use_native_select=False`` when the portal does not refresh the visible label from
+    the native ``<select>`` (operator only sees the change after an overlay click).
     """
     if not value and option_label_regex is None:
         return
@@ -397,7 +465,7 @@ def _select_pf_dropdown(
         wrapper_id = wrapper.get_attribute("id") or ""
 
         # 1) Native <select> (PrimeFaces keeps options in sync; avoids overlay timing issues).
-        if wrapper_id:
+        if wrapper_id and use_native_select:
             native_sel = page.locator(f"select#{wrapper_id}_input")
             try:
                 if native_sel.count() > 0:
@@ -444,7 +512,7 @@ def _select_pf_dropdown(
     logger.debug("fill_rto: pf-dropdown %s = %s (%s)", wrapper_selector, value, label)
     if label:
         shown = value or (option_label_regex.pattern if option_label_regex else "")
-        _rto_log(f"pf-dropdown: {label} = {shown}")
+        _rto_log(f"pf-dropdown (overlay): {label} = {shown}")
     _pause()
 
 
@@ -605,6 +673,7 @@ def _screen_2(page: Page, data: dict) -> None:
     _wait_for_progress_close(page)
 
     # 2b: Choice number = No (workbench: ``regnNoSelectionForAPS`` — not *choiceNo*.)
+    # Use overlay only: native ``select_option`` can succeed without updating the visible PF label.
     try:
         _select_pf_dropdown(
             page,
@@ -612,6 +681,7 @@ def _screen_2(page: Page, data: dict) -> None:
             "NO",
             label="Choice number opt",
             timeout=_DEFAULT_TIMEOUT_MS,
+            use_native_select=False,
         )
     except PwTimeout:
         try:
@@ -635,13 +705,7 @@ def _screen_2(page: Page, data: dict) -> None:
                 logger.debug("fill_rto: choice number dropdown not found, skipping")
 
     # Owner Details tab (workbench ids: ``purchase_dt_input``, ``tf_owner_name``, …)
-    _fill(
-        page,
-        "input[id*='purchase_dt'], input[id*='purchaseDate'], "
-        "input[id*='deliveryDate'], input[name*='purchaseDate'], input[name*='purchase_dt']",
-        data["billing_date_str"],
-        label="Purchase/Delivery Date",
-    )
+    _fill_workbench_purchase_date(page, data["billing_date_str"], timeout=_DEFAULT_TIMEOUT_MS)
     _fill(
         page,
         "input[id*='tf_owner_name'], input[id*='ownerName'], input[name*='ownerName'], input[id*='owner_name']",
