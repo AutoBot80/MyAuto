@@ -10,6 +10,7 @@ the operator Vahan tab stays open for the next row or manual use (same policy as
 from __future__ import annotations
 
 import contextvars
+import json
 import logging
 import re
 import time
@@ -2322,6 +2323,102 @@ def _screen_3_scroll_subtab_bar_into_view(page: Page) -> None:
         _rto_log(f"WARNING: scroll to sub-tab bar: {e!s}")
 
 
+_JS_POPUP_PREFLIGHT_SNAPSHOT = """() => {
+    const MAX_D = 28, MAX_B = 48, MAX_O = 20;
+    function clip(s, n) {
+        return String(s || '').substring(0, n).replace(/\\s+/g, ' ');
+    }
+    const seen = new Set();
+    function pushEl(el, arr, lim) {
+        if (!el || arr.length >= lim || seen.has(el)) return;
+        seen.add(el);
+        const r = el.getBoundingClientRect();
+        const st = window.getComputedStyle(el);
+        const vis = r.width >= 2 && r.height >= 2 && st.display !== 'none' && st.visibility !== 'hidden';
+        arr.push({
+            tag: el.tagName,
+            id: clip(el.id, 140),
+            cls: clip(el.className, 100),
+            vis: vis,
+            z: st.zIndex || '',
+            txt: clip(el.innerText, 200)
+        });
+    }
+    const dialogs = [];
+    document.querySelectorAll('.ui-dialog, [role="dialog"], .ui-confirm-dialog').forEach((e) => pushEl(e, dialogs, MAX_D));
+    const overlays = [];
+    document.querySelectorAll(
+        '.ui-widget-overlay, .ui-dialog-mask, #msgDialog_modal, .ui-blockui, .blockUI, [class*="ui-overlay"]'
+    ).forEach((e) => pushEl(e, overlays, MAX_O));
+    const dialogButtons = [];
+    document.querySelectorAll('.ui-dialog, [role="dialog"]').forEach((dlg) => {
+        const pid = clip(dlg.id, 100);
+        dlg.querySelectorAll(
+            'button, input[type="button"], input[type="submit"], a.ui-button, .ui-button, span.ui-button'
+        ).forEach((b) => {
+            if (dialogButtons.length >= MAX_B) return;
+            const t = (b.innerText || b.value || b.getAttribute('aria-label') || '').trim();
+            dialogButtons.push({
+                parentId: pid,
+                tag: b.tagName,
+                id: clip(b.id, 100),
+                cls: clip(b.className, 80),
+                typ: b.type || '',
+                val: clip(b.value, 48),
+                txt: clip(t, 72)
+            });
+        });
+    });
+    const extra = [];
+    document.querySelectorAll(
+        '[id*="dialog"], [id*="Dialog"], [id*="popup"], [id*="Popup"], [class*="modal"], [class*="Modal"]'
+    ).forEach((e) => {
+        if (extra.length >= 15) return;
+        if (e.closest('.ui-dialog')) return;
+        pushEl(e, extra, 15);
+    });
+    return { dialogs: dialogs, overlays: overlays, dialogButtons: dialogButtons, extraPopupLike: extra };
+}"""
+
+
+def _screen_3_dump_frames_and_popup_candidates(page: Page) -> None:
+    """Before Hypothecation sub-tab: log every frame plus dialog / overlay / Ok-button inventory (RTO.txt)."""
+    _rto_log("=== Pre–Hypothecation sub-tab: frames + popup-like DOM (for Ok / modal selectors) ===")
+    try:
+        _rto_log(f"page url: {(page.url or '')[:500]}")
+    except Exception:
+        _rto_log("page url: (unavailable)")
+    try:
+        frames = page.frames
+        _rto_log(f"frame count: {len(frames)}")
+        for fi, frame in enumerate(frames):
+            try:
+                fn = frame.name or "(main)"
+                fu = (frame.url or "")[:260]
+                _rto_log(f"  frame[{fi}] name={fn!r} url={fu}")
+            except Exception as e:
+                _rto_log(f"  frame[{fi}] meta error: {e!s}")
+            try:
+                snap = frame.evaluate(_JS_POPUP_PREFLIGHT_SNAPSHOT)
+            except Exception as e:
+                _rto_log(f"  frame[{fi}] evaluate error: {e!s}")
+                continue
+            try:
+                raw = json.dumps(snap, ensure_ascii=False)
+            except Exception:
+                raw = str(snap)
+            max_chunk = 6000
+            if len(raw) <= max_chunk:
+                _rto_log(f"  frame[{fi}] popup inventory JSON: {raw}")
+            else:
+                _rto_log(f"  frame[{fi}] popup inventory JSON (truncated, {len(raw)} chars):")
+                for start in range(0, len(raw), max_chunk):
+                    _rto_log(f"  frame[{fi}] ... chunk: {raw[start:start + max_chunk]}")
+    except Exception as e:
+        _rto_log(f"Pre–Hypothecation frame/popup dump error: {e!s}")
+    _rto_log("=== End Pre–Hypothecation frame / popup dump ===")
+
+
 def _screen_2(page: Page, data: dict) -> None:
     """Screen 2: Chassis/engine, owner details, address, Save."""
     _set_screen("Screen 2")
@@ -3137,6 +3234,7 @@ def _screen_3(page: Page, data: dict, *, skip_home: bool, skip_entry: bool = Fal
 
     # 3c: Scroll to sub-tab strip, open **Hypothecation/Insurance Information**, then fill insurance.
     _screen_3_scroll_subtab_bar_into_view(page)
+    _screen_3_dump_frames_and_popup_candidates(page)
     _screen_3_open_hypothecation_insurance_tab(page)
     _screen_3c_insurance_information(page, data)
 
