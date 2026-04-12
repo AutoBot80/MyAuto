@@ -132,6 +132,7 @@ _SCREEN3_HYP_CHECKBOX_SELECTORS: tuple[str, ...] = (
 )
 _SCREEN3_NOMINEE_NAME_INPUT: tuple[str, ...] = ('[id="workbench_tabview:nominationname1"]',)
 _SCREEN3_NOMINEE_RELATION_PF_WRAPPERS: tuple[str, ...] = ('[id="workbench_tabview:vm_rel1"]',)
+_SCREEN3_NOMINATION_DATE_INPUT = '[id="workbench_tabview:nominationdate1_input"]'
 _SCREEN3_HYP_TYPE_PF_WRAPPERS: tuple[str, ...] = (
     '[id="workbench_tabview:hpa_hp_type"]',
 )
@@ -228,12 +229,12 @@ def _mobile_digits_for_filename(mobile: str | None) -> str:
         return d.zfill(10)[:10]
     return "unknown_mobile"
 
-# Playwright locator/action waits (ms). User preference: 10s.
-_DEFAULT_TIMEOUT_MS = 10_000
-_LONG_TIMEOUT_MS = 10_000
 # Fast UI timing: **200ms** per attempt; **2s** total budget when looping (retries / polls).
 _FIRST_TRY_MS = 200
 _LOOP_BUDGET_MS = 2_000
+# Playwright locator/action waits (ms) — 2s default (matches loop budget).
+_DEFAULT_TIMEOUT_MS = _LOOP_BUDGET_MS
+_LONG_TIMEOUT_MS = 10_000
 # Delay after each discrete UI action (s) — not a Playwright timeout.
 _ACTION_WAIT_S = 0.2
 # ``_dump_page_state``: cap for mixed interactive list; **all** ``<select>`` are also logged separately.
@@ -2924,18 +2925,18 @@ def _screen_3_wait_hypothecation_ajax_panel(page: Page) -> None:
     _wait_for_progress_close_loop(page)
     try:
         page.locator('[id="workbench_tabview:hpa_fncr_name"]').first.wait_for(
-            state="visible", timeout=4000
+            state="visible", timeout=_LOOP_BUDGET_MS
         )
         _rto_log("hpa: financier name input visible")
     except Exception:
-        _rto_log("NOTE: hpa financier name input not visible after 4s")
+        _rto_log("NOTE: hpa financier name input not visible after AJAX wait")
 
 
 def _screen_3_toggle_pf_boolean_hypo(page: Page, *, want_checked: bool) -> bool:
     """Toggle **Is Vehicle Hypothecated** — click ``.ui-chkbox-box`` inside wrapper (fast, direct)."""
     inp = page.locator(_SCREEN3_ISHYPO_INPUT).first
     try:
-        inp.wait_for(state="attached", timeout=3000)
+        inp.wait_for(state="attached", timeout=_LOOP_BUDGET_MS)
     except Exception:
         _rto_log("WARNING: isHypo_input not in DOM")
         return False
@@ -2949,8 +2950,8 @@ def _screen_3_toggle_pf_boolean_hypo(page: Page, *, want_checked: bool) -> bool:
         pass
     box = page.locator(_SCREEN3_ISHYPO_BOX).first
     try:
-        box.scroll_into_view_if_needed(timeout=3000)
-        box.click(timeout=3000)
+        box.scroll_into_view_if_needed(timeout=_FIRST_TRY_MS)
+        box.click(timeout=_FIRST_TRY_MS)
         _pause()
         if inp.is_checked() == want_checked:
             _rto_log("checkbox: Is vehicle hypothecated — toggled via .ui-chkbox-box")
@@ -2992,20 +2993,14 @@ def _screen_3_set_vehicle_hypothecated_checkbox(page: Page, *, has_financier: bo
         _wait_for_progress_close_loop(page)
 
 
-def _screen_3_fill_hyp_from_date(page: Page, date_str: str) -> None:
-    """Fill **From Date (DD-MMM-YYYY)** — mirrors ``_fill_workbench_purchase_date`` (Screen 1).
-
-    Sets value via JS without focus to avoid triggering the jQuery datepicker overlay,
-    then dismisses any stale calendar.
-    """
+def _screen_3_fill_datepicker_js(page: Page, sel: str, date_str: str, *, label: str) -> None:
+    """Fill a ``hasDatepicker`` field via JS — mirrors ``_fill_workbench_purchase_date``."""
     if not date_str:
         return
-    label = "Hypothecation From Date"
-    sel = _SCREEN3_HYP_FROM_DATE_INPUT[0]
     loc = page.locator(sel).first
     try:
-        loc.wait_for(state="attached", timeout=_DEFAULT_TIMEOUT_MS)
-        loc.scroll_into_view_if_needed(timeout=_DEFAULT_TIMEOUT_MS)
+        loc.wait_for(state="attached", timeout=_LOOP_BUDGET_MS)
+        loc.scroll_into_view_if_needed(timeout=_FIRST_TRY_MS)
 
         try:
             loc.evaluate(
@@ -3018,9 +3013,9 @@ def _screen_3_fill_hyp_from_date(page: Page, date_str: str) -> None:
             )
         except Exception:
             try:
-                loc.fill(date_str, timeout=_DEFAULT_TIMEOUT_MS)
+                loc.fill(date_str, timeout=_LOOP_BUDGET_MS)
             except Exception:
-                loc.fill(date_str, timeout=_DEFAULT_TIMEOUT_MS, force=True)
+                loc.fill(date_str, timeout=_LOOP_BUDGET_MS, force=True)
 
         _pause()
         _close_workbench_datepicker_if_open(page)
@@ -3028,7 +3023,7 @@ def _screen_3_fill_hyp_from_date(page: Page, date_str: str) -> None:
         _assert_vahan_session_alive(page)
         _rto_log(f"TIMEOUT fill: {label} selector={sel} value={date_str[:40]}")
         raise
-    logger.debug("fill_rto: filled hyp from date = %s", date_str[:40])
+    logger.debug("fill_rto: filled %s = %s", label, date_str[:40])
     _rto_log(f"fill: {label} = {date_str[:80]}{'…' if len(date_str) > 80 else ''}")
 
 
@@ -3060,7 +3055,9 @@ def _screen_3_fill_financier_hypothecation_details(page: Page, data: dict) -> No
     _fill_first_matching(page, _SCREEN3_FINANCIER_NAME_INPUT, financier, label="Financier Name")
 
     if invoice_date:
-        _screen_3_fill_hyp_from_date(page, invoice_date)
+        _screen_3_fill_datepicker_js(
+            page, _SCREEN3_HYP_FROM_DATE_INPUT[0], invoice_date, label="Hypothecation From Date"
+        )
 
     # House No. & Street Name → financier address
     addr = (data.get("address") or "").strip()
@@ -3084,7 +3081,8 @@ def _screen_3_fill_financier_hypothecation_details(page: Page, data: dict) -> No
                 _rto_log("WARNING: Financier State not set")
                 _dump_page_state(page, "dropdown not set: Financier State")
         _close_pf_selectonemenu_overlay(page, "workbench_tabview:hpa_fncr_state")
-        _pause()
+        # State AJAX populates district options — wait for progress overlay to close
+        _wait_for_progress_close_loop(page)
 
     # District — use district from data; fall back to city (initcap) when district is empty
     dist = (data.get("district") or "").strip()
@@ -3117,31 +3115,26 @@ def _screen_3c_click_nominee_radio(page: Page, *, want_yes: bool) -> bool:
     label = "Yes" if want_yes else "No"
     inp_sel = f'[id="workbench_tabview:nomineeradiobtn1:{idx}"]'
 
-    # PrimeFaces wraps each radio in a <td> containing a <div class="ui-radiobutton"> with
-    # a child <div class="ui-radiobutton-box">.  The <input> is a sibling inside the same <td>.
-    # Strategy: find the <td> that contains the input, then click its .ui-radiobutton-box.
     try:
         td = page.locator(f'td:has({inp_sel}) .ui-radiobutton-box').first
-        td.scroll_into_view_if_needed(timeout=3000)
-        td.click(timeout=3000)
+        td.scroll_into_view_if_needed(timeout=_FIRST_TRY_MS)
+        td.click(timeout=_FIRST_TRY_MS)
         _rto_log(f"radio: Add Nominee Details — {label}")
         return True
     except Exception:
         pass
 
-    # Fallback: click the label text next to the radio
     try:
         tbl = page.locator('[id="workbench_tabview:nomineeradiobtn1"]').first
         lbl = tbl.locator("label", has_text=re.compile(rf"^\s*{label}\s*$", re.I)).first
-        lbl.click(timeout=3000)
+        lbl.click(timeout=_FIRST_TRY_MS)
         _rto_log(f"radio: Add Nominee Details — {label} (label click)")
         return True
     except Exception:
         pass
 
-    # Last resort: force-click the raw input (may not fire AJAX)
     try:
-        page.locator(inp_sel).first.click(force=True, timeout=3000)
+        page.locator(inp_sel).first.click(force=True, timeout=_FIRST_TRY_MS)
         _rto_log(f"radio: Add Nominee Details — {label} (force input)")
         return True
     except Exception as e:
@@ -3150,13 +3143,14 @@ def _screen_3c_click_nominee_radio(page: Page, *, want_yes: bool) -> bool:
 
 
 def _screen_3c_nominee_add_details(page: Page, data: dict) -> None:
-    """**Add Nominee Details** Yes/No radio; when Yes, fill nominee name + relation.
+    """**Add Nominee Details** Yes/No radio; when Yes, fill nominee name, relation, nomination date.
 
     Direct IDs from RTO log:
-      - Yes radio: ``workbench_tabview:nomineeradiobtn1:0``  (value='Y')
-      - No radio:  ``workbench_tabview:nomineeradiobtn1:1``  (value='N')
-      - Name:      ``workbench_tabview:nominationname1``
-      - Relation:  ``workbench_tabview:vm_rel1`` (PF) / ``workbench_tabview:vm_rel1_input`` (native)
+      - Yes radio:       ``workbench_tabview:nomineeradiobtn1:0``  (value='Y')
+      - No radio:        ``workbench_tabview:nomineeradiobtn1:1``  (value='N')
+      - Name:            ``workbench_tabview:nominationname1``
+      - Relation:        ``workbench_tabview:vm_rel1`` (PF) / ``workbench_tabview:vm_rel1_input`` (native)
+      - Nomination Date: ``workbench_tabview:nominationdate1_input`` (hasDatepicker)
     """
     nm_raw = (data.get("nominee_name") or "").strip()
     rel_raw = (data.get("nominee_relationship") or "").strip()
@@ -3180,13 +3174,12 @@ def _screen_3c_nominee_add_details(page: Page, data: dict) -> None:
     # Wait for nominee name input to appear (AJAX loads the panel after Yes click)
     nm_loc = page.locator(_SCREEN3_NOMINEE_NAME_INPUT[0]).first
     try:
-        nm_loc.wait_for(state="visible", timeout=5000)
+        nm_loc.wait_for(state="visible", timeout=_LOOP_BUDGET_MS)
         _rto_log("nominee: name input visible after Yes click")
     except Exception:
-        _rto_log("NOTE: nominee name input not visible after 5s, trying scroll")
+        _rto_log("NOTE: nominee name input not visible, trying scroll")
         try:
-            nm_loc.wait_for(state="attached", timeout=3000)
-            nm_loc.scroll_into_view_if_needed(timeout=3000)
+            nm_loc.scroll_into_view_if_needed(timeout=_FIRST_TRY_MS)
         except Exception:
             _rto_log("WARNING: nominee name input not found in DOM after Yes click")
             _dump_page_state(page, "nominee name input missing after Yes click")
@@ -3209,6 +3202,13 @@ def _screen_3c_nominee_add_details(page: Page, data: dict) -> None:
                 label="Relation with nominee (native)",
             )
         _close_pf_selectonemenu_overlay(page, "workbench_tabview:vm_rel1")
+
+    # Nomination Date — invoice date in DD-Mon-YYYY (same datepicker pattern)
+    nom_date = (data.get("invoice_date_str") or data.get("billing_date_str") or "").strip()
+    if nom_date:
+        _screen_3_fill_datepicker_js(
+            page, _SCREEN3_NOMINATION_DATE_INPUT, nom_date, label="Nomination Date"
+        )
 
 
 def _screen_3c_insurance_information(page: Page, data: dict) -> None:

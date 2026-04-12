@@ -1,492 +1,291 @@
-[2026-04-12 16:13:22 IST] [Setup] fill_rto_row start rto_queue_id=1 sales_id=1 dealer_id=100001 log_file=C:\Users\arya_\OneDrive\Desktop\My Auto.AI\ocr_output\100001\9650693610_RTO.txt
-[2026-04-12 16:13:22 IST] [Setup] uploads root (dealer): C:\Users\arya_\OneDrive\Desktop\My Auto.AI\Uploaded scans\100001
-[2026-04-12 16:13:22 IST] [Setup] searched folder (absolute): C:\Users\arya_\OneDrive\Desktop\My Auto.AI\Uploaded scans\100001\8905969604_100426
-[2026-04-12 16:13:22 IST] [Setup] documents matched to categories: {'FORM 20': '8905969604_Form_20.pdf', 'FORM 21': '8905969604_Sale_Certificate.pdf', 'FORM 22': '8905969604_Form22.pdf', 'INSURANCE CERTIFICATE': '8905969604_Insurance.pdf', 'INVOICE ORIGINAL': '8905969604_GST_Retail_Invoice.pdf', 'AADHAAR_FRONT': 'Aadhar.jpg', 'AADHAAR_BACK': 'Aadhar_back.jpg', 'OWNER UNDERTAKING FORM': 'Details.jpg'}
-[2026-04-12 16:13:28 IST] [Setup] browser page url: https://vahan.parivahan.gov.in/vahan/vahan/workbench.xhtml
-[2026-04-12 16:13:28 IST] [Setup] TEMP SKIP: RTO_FILL_SKIP_TO_SCREEN=3 — start at Screen 3 (skipped: dealer-home reset + screens 1..2) Screen 3: skip Home + Entry → Vehicle Details sub-tab first.
-[2026-04-12 16:13:28 IST] [Screen 3] --- Screen 3: Home, Entry, tax, insurance, hypothecation, application no ---
-[2026-04-12 16:13:28 IST] [Screen 3] Screen 3: skip Home + skip Entry — Vehicle Details sub-tab only (already on form)
-[2026-04-12 16:13:29 IST] [Screen 3] Screen 3: sub-tab Vehicle Details
-[2026-04-12 16:13:29 IST] [Screen 3] Screen 3: scrolled Vehicle Details tab panel toward bottom (Tax Mode region)
-[2026-04-12 16:13:30 IST] [Screen 3] Screen 3: scrolled to Tax Mode (fast tableTaxMode:0 'select[id="workbench_tabview:tableTaxMode:0:taxModeType_input"]')
-[2026-04-12 16:13:30 IST] [Screen 3] select: Tax Mode = ONE TIME (tableTaxMode:0:taxModeType_input (direct))
-[2026-04-12 16:13:41 IST] [Screen 3] Screen 3: Save Vehicle Details ("button:has-text('Save Vehicle Details')")
-[2026-04-12 16:13:41 IST] [Screen 3] Screen 3: Save Vehicle Details — dialog text snippet: 'Generated Application No\nApplication No. :RJ26041148051328\nOk'
-[2026-04-12 16:13:41 IST] [Screen 3] Screen 3: application_id from Save Vehicle Details dialog: 'RJ26041148051328'
-[2026-04-12 16:13:42 IST] [Screen 3] Generated Application dialog: Ok (control with Ok text)
-[2026-04-12 16:13:47 IST] [Screen 3] Screen 3: scrolled to sub-tab bar
-[2026-04-12 16:13:47 IST] [Screen 3] tab probe [Hypothecation\s*/\s*Insurance]: id=None; class=None; href='#workbench_tabview:HypothecationOwner'; role=None; aria-controls=None; data-index=None; text='Hypothecation/Insurance Information'
-[2026-04-12 16:13:48 IST] [Screen 3] Screen 3: sub-tab Hypothecation/Insurance Information (ui-tabs-nav)
-[2026-04-12 16:13:48 IST] [Screen 3] --- Screen 3c: Insurance (Hypothecation/Insurance Information tab) ---
-[2026-04-12 16:14:00 IST] [Screen 3] skip: Insurance Type already set on form (Vahan pre-fill)
-[2026-04-12 16:14:06 IST] [Screen 3] skip: Insurance Company already set on form (Vahan pre-fill)
-[2026-04-12 16:14:06 IST] [Screen 3] skip: Policy/Cover Note No. already set on form (Vahan pre-fill)
-[2026-04-12 16:14:06 IST] [Screen 3] skip: Insurance From already set on form (Vahan pre-fill)
-[2026-04-12 16:14:06 IST] [Screen 3] skip: Insurance Period (in year) already set on form (Vahan pre-fill)
-[2026-04-12 16:14:13 IST] [Screen 3] skip: Series Type already STATE SERIES (Vahan pre-fill)
-[2026-04-12 16:14:13 IST] [Screen 3] checkbox: Is vehicle hypothecated — toggled via .ui-chkbox-box
-[2026-04-12 16:14:14 IST] [Screen 3] hpa: financier name input visible
-[2026-04-12 16:14:14 IST] [Screen 3] pf-dropdown (native): Hypothecation Type = Hypothecation
-[2026-04-12 16:14:15 IST] [Screen 3] fill: Financier Name = Axis Bank
-[2026-04-12 16:14:25 IST] [Screen 3] TIMEOUT fill: Hypothecation From Date selector=[id="workbench_tabview:hpa_from_dt_input"] value=10-Apr-2026
-[2026-04-12 16:14:25 IST] [Screen 3] WARNING: Hypothecation From Date not filled (no matching field)
-[2026-04-12 16:14:25 IST] [Screen 3] === PAGE STATE DUMP (field not filled: Hypothecation From Date) ===
-[2026-04-12 16:14:25 IST] [Screen 3] url: https://vahan.parivahan.gov.in/vahan/vahan/workbench.xhtml
-[2026-04-12 16:14:25 IST] [Screen 3] frames: 1
-[2026-04-12 16:14:25 IST] [Screen 3]   frame[0] name='(main)' url=https://vahan.parivahan.gov.in/vahan/vahan/workbench.xhtml
-[2026-04-12 16:14:25 IST] [Screen 3]   [frame[0] main] visible interactive elements (127, selects first — cap 150):
-[2026-04-12 16:14:25 IST] [Screen 3]     select id='regnType_input' name='regnType_input' value='N' text='---------------SELECT--------------- NEW'
-[2026-04-12 16:14:25 IST] [Screen 3]     select id='regnNoSelectionForAPS_input' name='regnNoSelectionForAPS_input' value='No' text='---------------SELECT--------------- NO YES'
-[2026-04-12 16:14:25 IST] [Screen 3]     select id='workbench_tabview:ins_type_input' name='workbench_tabview:ins_type_input' value='2' text='--SELECT-- COMPREHENSIVE NOT AVAILABLE THEFT AND THIRD PARTY'
-[2026-04-12 16:14:25 IST] [Screen 3]     select id='workbench_tabview:ins_cd_input' name='workbench_tabview:ins_cd_input' value='1003' text='--SELECT-- AARVI GENERAL INS. ABN AMERO BANK LTD. Acko Gener'
-[2026-04-12 16:14:25 IST] [Screen 3]     select id='workbench_tabview:ins_year_input' name='workbench_tabview:ins_year_input' value='5' text='--SELECT-- 1 Year 2 Year 3 Year 4 Year 5 Year'
-[2026-04-12 16:14:25 IST] [Screen 3]     select id='workbench_tabview:seriesType_input' name='workbench_tabview:seriesType_input' value='N' text='STATE SERIES BHARAT SERIES'
-[2026-04-12 16:14:25 IST] [Screen 3]     select id='workbench_tabview:hpa_hp_type_input' name='workbench_tabview:hpa_hp_type_input' value='HT' text='--SELECT-- Hire-Purchase Hypothecation Lease Agreement'
-[2026-04-12 16:14:25 IST] [Screen 3]     select id='workbench_tabview:hpa_fncr_state_input' name='workbench_tabview:hpa_fncr_state_input' value='-1' text='--SELECT-- UT of DNH and DD Jammu and Kashmir Delhi Himachal'
-[2026-04-12 16:14:25 IST] [Screen 3]     select id='workbench_tabview:hpa_fncr_district_input' name='workbench_tabview:hpa_fncr_district_input' value='-1' text='--SELECT--'
-[2026-04-12 16:14:25 IST] [Screen 3]     nav role='navigation' text=' Home  Report   Update Profile   Language  Welcome YOGESH AG' class='navbar navbar-default navigation-background'
-[2026-04-12 16:14:25 IST] [Screen 3]     a id='homeId1' name='homeId1'
-[2026-04-12 16:14:25 IST] [Screen 3]     a id='homeId2' name='homeId2' text=' Home'
-[2026-04-12 16:14:25 IST] [Screen 3]     a text=' Report ' class='dropdown-toggle'
-[2026-04-12 16:14:25 IST] [Screen 3]     a text=' Update Profile ' class='dropdown-toggle'
-[2026-04-12 16:14:25 IST] [Screen 3]     a text=' Language ' class='dropdown-toggle'
-[2026-04-12 16:14:25 IST] [Screen 3]     a id='welcomeUserId' name='welcomeUserId' text='Welcome YOGESH AGRAWAL , DEALER STAFF, Rajasthan'
-[2026-04-12 16:14:25 IST] [Screen 3]     a id='logout' text='Logout' class='ui-commandlink ui-widget glyphicon glyphicon-log-out'
-[2026-04-12 16:14:25 IST] [Screen 3]     label text='Registration Type*' class='field-label resp-label-section'
-[2026-04-12 16:14:25 IST] [Screen 3]     label id='j_idt190' text='Registration Type*' class='ui-outputlabel ui-widget'
-[2026-04-12 16:14:25 IST] [Screen 3]     div id='regnType' role='combobox' text='---------------SELECT--------------- NEW NEW' class='ui-selectonemenu ui-widget ui-state-default ui-corner-all bottom-space ui-state-'
-[2026-04-12 16:14:25 IST] [Screen 3]     input id='regnType_focus' name='regnType_focus' type='text'
-[2026-04-12 16:14:25 IST] [Screen 3]     label id='regnType_label' text='NEW' class='ui-selectonemenu-label ui-inputfield ui-corner-all'
-[2026-04-12 16:14:25 IST] [Screen 3]     label text='Chassis No*' class='field-label resp-label-section'
-[2026-04-12 16:14:25 IST] [Screen 3]     label id='j_idt197' text='Chassis No*' class='ui-outputlabel ui-widget'
-[2026-04-12 16:14:25 IST] [Screen 3]     input id='chasi_no_new_entry' name='chasi_no_new_entry' type='text' role='textbox' value='MBLHAW48XT9B05182' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all ui-state-dis'
-[2026-04-12 16:14:25 IST] [Screen 3]     label text='Engine/Motor No (Last 5 Chars)*' class='field-label resp-label-section'
-[2026-04-12 16:14:25 IST] [Screen 3]     label id='j_idt200' text='Engine/Motor No (Last 5 Chars)*' class='ui-outputlabel ui-widget'
-[2026-04-12 16:14:25 IST] [Screen 3]     input id='eng_no_new_entry' name='eng_no_new_entry' type='text' role='textbox' value='33716' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all ui-state-dis'
-[2026-04-12 16:14:25 IST] [Screen 3]     label text='Do you want to utilize Certificate of deposit (CD)' class='field-label resp-label-section'
-[2026-04-12 16:14:25 IST] [Screen 3]     input id='codCheckBox_input' name='codCheckBox_input' type='checkbox' value='on'
-[2026-04-12 16:14:25 IST] [Screen 3]     label id='j_idt233' text='Do you want to utilize Certificate of deposit (CD)' class='ui-outputlabel ui-widget inline-section'
-[2026-04-12 16:14:25 IST] [Screen 3]     button id='get_dtls_btn' name='get_dtls_btn' type='submit' role='button' text='Get Details' class='ui-button ui-widget ui-state-default ui-corner-all ui-button-text-only ui-state-'
-[2026-04-12 16:14:25 IST] [Screen 3]     ul role='tablist' text='1 Dealer New Registration entry 2 Dealer Verify 3 Dealer Doc'
-[2026-04-12 16:14:25 IST] [Screen 3]     label text='Do You want to Opt Choice Number/Fancy Number / Retention Nu' class='field-label resp-label-section'
-[2026-04-12 16:14:25 IST] [Screen 3]     label id='j_idt285' text='Do You want to Opt Choice Number/Fancy Number / Retention Nu' class='ui-outputlabel ui-widget'
-[2026-04-12 16:14:25 IST] [Screen 3]     div id='regnNoSelectionForAPS' role='combobox' text='---------------SELECT--------------- NO YES NO' class='ui-selectonemenu ui-widget ui-state-default ui-corner-all'
-[2026-04-12 16:14:25 IST] [Screen 3]     input id='regnNoSelectionForAPS_focus' name='regnNoSelectionForAPS_focus' type='text'
-[2026-04-12 16:14:25 IST] [Screen 3]     label id='regnNoSelectionForAPS_label' text='NO' class='ui-selectonemenu-label ui-inputfield ui-corner-all'
-[2026-04-12 16:14:25 IST] [Screen 3]     label id='j_idt294' text=' Aadhaar Authenticated' class='ui-outputlabel ui-widget inline-section right-space'
-[2026-04-12 16:14:25 IST] [Screen 3]     h3 text=' Aadhaar Authenticated' class='close-counter counter-button inline-section center-position'
-[2026-04-12 16:14:25 IST] [Screen 3]     ul role='tablist' text='Owner Details Vehicle Details Hypothecation/Insurance Inform' class='ui-tabs-nav ui-helper-reset ui-widget-header ui-corner-all'
-[2026-04-12 16:14:25 IST] [Screen 3]     li role='tab' text='Owner Details' class='ui-tabs-header ui-state-default ui-corner-top'
-[2026-04-12 16:14:25 IST] [Screen 3]     a text='Owner Details'
-[2026-04-12 16:14:25 IST] [Screen 3]     li role='tab' text='Vehicle Details' class='ui-tabs-header ui-state-default ui-corner-top'
-[2026-04-12 16:14:25 IST] [Screen 3]     a text='Vehicle Details'
-[2026-04-12 16:14:25 IST] [Screen 3]     li role='tab' text='Hypothecation/Insurance Information' class='ui-tabs-header ui-state-default ui-corner-top ui-tabs-selected ui-state-active'
-[2026-04-12 16:14:25 IST] [Screen 3]     a text='Hypothecation/Insurance Information'
-[2026-04-12 16:14:25 IST] [Screen 3]     li role='tab' text='Attached Semi-Trailer Details' class='ui-tabs-header ui-state-default ui-corner-top'
-[2026-04-12 16:14:25 IST] [Screen 3]     a text='Attached Semi-Trailer Details'
-[2026-04-12 16:14:25 IST] [Screen 3]     div id='workbench_tabview:HypothecationOwner' role='tabpanel' text='Refresh Insurance Details from Company Insurance Details Not' class='ui-tabs-panel ui-widget-content ui-corner-bottom'
-[2026-04-12 16:14:25 IST] [Screen 3]     button id='workbench_tabview:refresh_ins_Button_id' name='workbench_tabview:refresh_ins_Button_id' type='submit' role='button' text='Refresh Insurance Details from Company' class='ui-button ui-widget ui-state-default ui-corner-all ui-button-text-only'
-[2026-04-12 16:14:25 IST] [Screen 3]     label text='Insurance Type*' class='field-label resp-label-section'
-[2026-04-12 16:14:25 IST] [Screen 3]     label id='workbench_tabview:j_idt1245' text='Insurance Type*' class='ui-outputlabel ui-widget'
-[2026-04-12 16:14:25 IST] [Screen 3]     div id='workbench_tabview:ins_type' role='combobox' text='--SELECT-- COMPREHENSIVE NOT AVAILABLE THEFT AND THIRD PARTY' class='ui-selectonemenu ui-widget ui-state-default ui-corner-all ui-state-disabled'
-[2026-04-12 16:14:25 IST] [Screen 3]     input id='workbench_tabview:ins_type_focus' name='workbench_tabview:ins_type_focus' type='text'
-[2026-04-12 16:14:25 IST] [Screen 3]     label id='workbench_tabview:ins_type_label' text='THIRD PARTY' class='ui-selectonemenu-label ui-inputfield ui-corner-all'
-[2026-04-12 16:14:25 IST] [Screen 3]     label text='Insurance Company*' class='field-label resp-label-section'
-[2026-04-12 16:14:25 IST] [Screen 3]     label id='workbench_tabview:j_idt1250' text='Insurance Company*' class='ui-outputlabel ui-widget'
-[2026-04-12 16:14:25 IST] [Screen 3]     div id='workbench_tabview:ins_cd' role='combobox' text='--SELECT-- AARVI GENERAL INS. ABN AMERO BANK LTD. Acko Gener' class='ui-selectonemenu ui-widget ui-state-default ui-corner-all ui-state-disabled'
-[2026-04-12 16:14:25 IST] [Screen 3]     input id='workbench_tabview:ins_cd_focus' name='workbench_tabview:ins_cd_focus' type='text'
-[2026-04-12 16:14:25 IST] [Screen 3]     label id='workbench_tabview:ins_cd_label' text='UNIVERSAL SOMPO GENERAL INSURANCE CO.LTD' class='ui-selectonemenu-label ui-inputfield ui-corner-all'
-[2026-04-12 16:14:25 IST] [Screen 3]     label text='Policy/CoverNote No*' class='field-label resp-label-section'
-[2026-04-12 16:14:25 IST] [Screen 3]     label id='workbench_tabview:j_idt1255' text='Policy/CoverNote No*' class='ui-outputlabel ui-widget'
-[2026-04-12 16:14:25 IST] [Screen 3]     input id='workbench_tabview:policy_no' name='workbench_tabview:policy_no' type='text' role='textbox' value='2369/82595323/00/000' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all ui-state-dis'
-[2026-04-12 16:14:25 IST] [Screen 3]     label text='Insurance from (DD-MMM-YYYY)*' class='field-label resp-label-section'
-[2026-04-12 16:14:25 IST] [Screen 3]     label id='workbench_tabview:j_idt1259' text='Insurance from (DD-MMM-YYYY)*' class='ui-outputlabel ui-widget'
-[2026-04-12 16:14:25 IST] [Screen 3]     input id='workbench_tabview:ins_from_input' name='workbench_tabview:ins_from_input' type='text' role='textbox' value='21-Feb-2026' class='ui-inputfield ui-widget ui-state-default ui-corner-all ui-state-disabled hasDate'
-[2026-04-12 16:14:25 IST] [Screen 3]     label text='Insurance Period(in year)*' class='field-label resp-label-section'
-[2026-04-12 16:14:25 IST] [Screen 3]     label id='workbench_tabview:j_idt1262' text='Insurance Period(in year)*' class='ui-outputlabel ui-widget'
-[2026-04-12 16:14:25 IST] [Screen 3]     div id='workbench_tabview:ins_year' role='combobox' text='--SELECT-- 1 Year 2 Year 3 Year 4 Year 5 Year 5 Year' class='ui-selectonemenu ui-widget ui-state-default ui-corner-all ui-state-disabled'
-[2026-04-12 16:14:25 IST] [Screen 3]     input id='workbench_tabview:ins_year_focus' name='workbench_tabview:ins_year_focus' type='text'
-[2026-04-12 16:14:25 IST] [Screen 3]     label id='workbench_tabview:ins_year_label' text='5 Year' class='ui-selectonemenu-label ui-inputfield ui-corner-all'
-[2026-04-12 16:14:25 IST] [Screen 3]     label text='Insurance upto (DD-MMM-YYYY)*' class='field-label resp-label-section'
-[2026-04-12 16:14:25 IST] [Screen 3]     label id='workbench_tabview:j_idt1267' text='Insurance upto (DD-MMM-YYYY)*' class='ui-outputlabel ui-widget'
-[2026-04-12 16:14:25 IST] [Screen 3]     input id='workbench_tabview:ins_upto_input' name='workbench_tabview:ins_upto_input' type='text' role='textbox' value='20-Feb-2031' class='ui-inputfield ui-widget ui-state-default ui-corner-all ui-state-disabled hasDate'
-[2026-04-12 16:14:25 IST] [Screen 3]     label text='Insurance Declared Value' class='field-label resp-label-section'
-[2026-04-12 16:14:25 IST] [Screen 3]     label id='workbench_tabview:j_idt1270' text='Insurance Declared Value' class='ui-outputlabel ui-widget'
-[2026-04-12 16:14:25 IST] [Screen 3]     input id='workbench_tabview:idv' name='workbench_tabview:idv' type='text' role='textbox' value='0' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all'
-[2026-04-12 16:14:25 IST] [Screen 3]     label text='Please Select Series Type*' class='field-label resp-label-section'
-[2026-04-12 16:14:25 IST] [Screen 3]     label id='workbench_tabview:j_idt1280' text='Please Select Series Type*' class='ui-outputlabel ui-widget'
-[2026-04-12 16:14:25 IST] [Screen 3]     div id='workbench_tabview:seriesType' role='combobox' text='STATE SERIES BHARAT SERIES STATE SERIES' class='ui-selectonemenu ui-widget ui-state-default ui-corner-all'
-[2026-04-12 16:14:25 IST] [Screen 3]     input id='workbench_tabview:seriesType_focus' name='workbench_tabview:seriesType_focus' type='text'
-[2026-04-12 16:14:25 IST] [Screen 3]     label id='workbench_tabview:seriesType_label' text='STATE SERIES' class='ui-selectonemenu-label ui-inputfield ui-corner-all'
-[2026-04-12 16:14:25 IST] [Screen 3]     input id='workbench_tabview:isHypo_input' name='workbench_tabview:isHypo_input' type='checkbox' value='on'
-[2026-04-12 16:14:25 IST] [Screen 3]     label text='Hypothecation Type:*' class='field-label resp-label-section'
-[2026-04-12 16:14:25 IST] [Screen 3]     label id='workbench_tabview:j_idt1303' text='Hypothecation Type:*' class='ui-outputlabel ui-widget'
-[2026-04-12 16:14:25 IST] [Screen 3]     div id='workbench_tabview:hpa_hp_type' role='combobox' text='--SELECT-- Hire-Purchase Hypothecation Lease Agreement --SEL' class='ui-selectonemenu ui-widget ui-state-default ui-corner-all'
-[2026-04-12 16:14:25 IST] [Screen 3]     input id='workbench_tabview:hpa_hp_type_focus' name='workbench_tabview:hpa_hp_type_focus' type='text'
-[2026-04-12 16:14:25 IST] [Screen 3]     label id='workbench_tabview:hpa_hp_type_label' text='--SELECT--' class='ui-selectonemenu-label ui-inputfield ui-corner-all'
-[2026-04-12 16:14:25 IST] [Screen 3]     label text='Financier Name:*' class='field-label resp-label-section'
-[2026-04-12 16:14:25 IST] [Screen 3]     label id='workbench_tabview:j_idt1308' text='Financier Name:*' class='ui-outputlabel ui-widget'
-[2026-04-12 16:14:25 IST] [Screen 3]     input id='workbench_tabview:hpa_fncr_name' name='workbench_tabview:hpa_fncr_name' type='text' role='textbox' value='Axis Bank' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all ui-state-foc'
-[2026-04-12 16:14:25 IST] [Screen 3]     label text='From Date (DD-MMM-YYYY)*' class='field-label resp-label-section'
-[2026-04-12 16:14:25 IST] [Screen 3]     label id='workbench_tabview:j_idt1313' text='From Date (DD-MMM-YYYY)*' class='ui-outputlabel ui-widget'
-[2026-04-12 16:14:25 IST] [Screen 3]     input id='workbench_tabview:hpa_from_dt_input' name='workbench_tabview:hpa_from_dt_input' type='text' role='textbox' value='12-Apr-2026' class='ui-inputfield ui-widget ui-state-default ui-corner-all hasDatepicker'
-[2026-04-12 16:14:25 IST] [Screen 3]     label text='House No. & Street Name*' class='field-label resp-label-section'
-[2026-04-12 16:14:25 IST] [Screen 3]     label id='workbench_tabview:j_idt1316' text='House No. & Street Name*' class='ui-outputlabel ui-widget'
-[2026-04-12 16:14:25 IST] [Screen 3]     input id='workbench_tabview:hpa_fncr_add1' name='workbench_tabview:hpa_fncr_add1' type='text' role='textbox' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all'
-[2026-04-12 16:14:25 IST] [Screen 3]     label text='Village/Town/City' class='field-label resp-label-section'
-[2026-04-12 16:14:25 IST] [Screen 3]     label id='workbench_tabview:j_idt1319' text='Village/Town/City' class='ui-outputlabel ui-widget'
-[2026-04-12 16:14:25 IST] [Screen 3]     input id='workbench_tabview:hpa_fncr_add2' name='workbench_tabview:hpa_fncr_add2' type='text' role='textbox' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all'
-[2026-04-12 16:14:25 IST] [Screen 3]     label text='Landmark/Police Station' class='field-label resp-label-section'
-[2026-04-12 16:14:25 IST] [Screen 3]     label id='workbench_tabview:j_idt1322' text='Landmark/Police Station' class='ui-outputlabel ui-widget'
-[2026-04-12 16:14:25 IST] [Screen 3]     input id='workbench_tabview:hpa_fncr_add3' name='workbench_tabview:hpa_fncr_add3' type='text' role='textbox' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all'
-[2026-04-12 16:14:25 IST] [Screen 3]     label text='State*' class='field-label resp-label-section'
-[2026-04-12 16:14:25 IST] [Screen 3]     label id='workbench_tabview:j_idt1325' text='State*' class='ui-outputlabel ui-widget'
-[2026-04-12 16:14:25 IST] [Screen 3]     div id='workbench_tabview:hpa_fncr_state' role='combobox' text='--SELECT-- UT of DNH and DD Jammu and Kashmir Delhi Himachal' class='ui-selectonemenu ui-widget ui-state-default ui-corner-all bottom-space'
-[2026-04-12 16:14:25 IST] [Screen 3]     input id='workbench_tabview:hpa_fncr_state_focus' name='workbench_tabview:hpa_fncr_state_focus' type='text'
-[2026-04-12 16:14:25 IST] [Screen 3]     label id='workbench_tabview:hpa_fncr_state_label' text='--SELECT--' class='ui-selectonemenu-label ui-inputfield ui-corner-all'
-[2026-04-12 16:14:25 IST] [Screen 3]     label text='District*' class='field-label resp-label-section'
-[2026-04-12 16:14:25 IST] [Screen 3]     label id='workbench_tabview:j_idt1330' text='District*' class='ui-outputlabel ui-widget'
-[2026-04-12 16:14:25 IST] [Screen 3]     div id='workbench_tabview:hpa_fncr_district' role='combobox' text='--SELECT-- --SELECT--' class='ui-selectonemenu ui-widget ui-state-default ui-corner-all bottom-space'
-[2026-04-12 16:14:25 IST] [Screen 3]     input id='workbench_tabview:hpa_fncr_district_focus' name='workbench_tabview:hpa_fncr_district_focus' type='text'
-[2026-04-12 16:14:25 IST] [Screen 3]     label id='workbench_tabview:hpa_fncr_district_label' text='--SELECT--' class='ui-selectonemenu-label ui-inputfield ui-corner-all'
-[2026-04-12 16:14:25 IST] [Screen 3]     label text='Pin Code*' class='field-label resp-label-section'
-[2026-04-12 16:14:25 IST] [Screen 3]     label id='workbench_tabview:j_idt1335' text='Pin Code*' class='ui-outputlabel ui-widget'
-[2026-04-12 16:14:25 IST] [Screen 3]     input id='workbench_tabview:hpa_fncr_pincode' name='workbench_tabview:hpa_fncr_pincode' type='text' role='textbox' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all'
-[2026-04-12 16:14:25 IST] [Screen 3]     label text='Sanction Amount*' class='field-label resp-label-section'
-[2026-04-12 16:14:25 IST] [Screen 3]     label id='workbench_tabview:j_idt1338' text='Sanction Amount*' class='ui-outputlabel ui-widget'
-[2026-04-12 16:14:25 IST] [Screen 3]     input id='workbench_tabview:sanction_amt_id' name='workbench_tabview:sanction_amt_id' type='text' role='textbox' value='0' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all ui-state-dis'
-[2026-04-12 16:14:25 IST] [Screen 3]     table id='workbench_tabview:nomineeradiobtn1' role='presentation' text='Yes\t No' class='ui-selectoneradio ui-widget'
-[2026-04-12 16:14:25 IST] [Screen 3]     input id='workbench_tabview:nomineeradiobtn1:0' name='workbench_tabview:nomineeradiobtn1' type='radio' value='Y'
-[2026-04-12 16:14:25 IST] [Screen 3]     label text='Yes'
-[2026-04-12 16:14:25 IST] [Screen 3]     input id='workbench_tabview:nomineeradiobtn1:1' name='workbench_tabview:nomineeradiobtn1' type='radio' value='N'
-[2026-04-12 16:14:25 IST] [Screen 3]     label text='No'
-[2026-04-12 16:14:25 IST] [Screen 3]     button id='app_disapp_form:j_idt1923' name='app_disapp_form:j_idt1923' type='submit' role='button' text='Save And File Movement' class='ui-button ui-widget ui-state-default ui-corner-all ui-button-text-icon-left'
-[2026-04-12 16:14:25 IST] [Screen 3]     button id='app_disapp_form:j_idt1924' name='app_disapp_form:j_idt1924' type='button' role='button' text='Back' class='ui-button ui-widget ui-state-default ui-corner-all ui-button-text-icon-left'
-[2026-04-12 16:14:25 IST] [Screen 3]   [frame[0] main] ALL <select> (31 — ids, selected label, options preview):
-[2026-04-12 16:14:25 IST] [Screen 3]     select[0] id='regnType_input' name='regnType_input' si=1 sel='NEW' nOpt=2 vis=True inVehTab=False inHypIns=False seriesHint=False
-[2026-04-12 16:14:25 IST] [Screen 3]       options: '---------------SELECT---------------' [value='-1'] | 'NEW' [value='N']
-[2026-04-12 16:14:25 IST] [Screen 3]     select[1] id='regnNoSelectionForAPS_input' name='regnNoSelectionForAPS_input' si=1 sel='NO' nOpt=3 vis=True inVehTab=False inHypIns=False seriesHint=False
-[2026-04-12 16:14:25 IST] [Screen 3]       options: '---------------SELECT---------------' [value='-1'] | 'NO' [value='No'] | 'YES' [value='Yes']
-[2026-04-12 16:14:25 IST] [Screen 3]     select[2] id='workbench_tabview:regn_type_input' name='workbench_tabview:regn_type_input' si=4 sel='NEW' nOpt=12 vis=False inVehTab=False inHypIns=False seriesHint=False
-[2026-04-12 16:14:25 IST] [Screen 3]       options: '--SELECT--' [value='0'] | 'EX-ARMY/AUCTION VEHICLE' [value='A'] | 'EX-DIPLOMAT/EMBASSY/FOREIGN VEHICLE' [value='D'] | 'IMPORTED VINTAGE VEHICLE' [value='V'] | 'NEW' [value='N'] | 'NEW REGN AGAINST AUCTION/CONFISCATED VEH' [value='C'] | 'NEW REGN AGAINST SCRAPPED VEHICLE' [value='S'] | 'OTHER COUNTRY VEHICLE' [value='I'] | 'OTHER RTO/MLO/ARTO/DTO/Region Vehicle' [value='R'] | 'OTHER STATE VEHICLE' [value='O'] | 'TEMPORARY REGISTERED VEHICLE' [value='T'] | 'VINTAGE VEHICLE' [value='B']
-[2026-04-12 16:14:25 IST] [Screen 3]     select[3] id='workbench_tabview:tf_owner_cd_input' name='workbench_tabview:tf_owner_cd_input' si=17 sel='INDIVIDUAL' nOpt=28 vis=False inVehTab=False inHypIns=False seriesHint=False
-[2026-04-12 16:14:25 IST] [Screen 3]       options: '--SELECT--' [value='-1'] | 'AUTONOMOUS BODY' [value='12'] | 'CENTRAL GOVERNMENT' [value='4'] | 'CHARITABLE TRUST' [value='9'] | 'DIVYANGJAN (Availing GST Concession)' [value='18'] | 'DIVYANGJAN (Without Availing GST Concession)' [value='19'] | 'DRAMA/TAMASHA GROUPS' [value='14'] | 'DRIVING TRAINING SCHOOL' [value='10'] | 'EDUCATIONAL INSTITUTE' [value='8'] | 'FIRM' [value='2'] | 'GOVERNMENT BOARD' [value='21'] | 'GOVERNMENT COMPANY' [value='23'] | 'GOVERNMENT CORPORATION' [value='22'] | 'GOVERNMENT DEPARTMENT' [value='25'] | 'GOVERNMENT ENTITY' [value='24'] | 'GOVERNMENT TRUST' [value='20'] | 'GOVT UNDERTAKING' [value='6'] | 'INDIVIDUAL' [value='1'] | 'JOINT STOCK COMPANY' [value='3'] | 'LOCAL AUTHORITY' [value='11'] | 'MULTIPLE OWNER' [value='7'] | 'OTHERS' [value='99'] | 'POLICE DEPARTMENT' [value='15'] | 'SCHOOL' [value='13'] | 'SOCIAL WELFARE' [value='17'] | 'STATE GOVERNMENT' [value='5'] | 'STATE TRANSPORT CORP/DEPT' [value='16'] | 'STATE UNIVERSITIES' [value='26']
-[2026-04-12 16:14:25 IST] [Screen 3]     select[4] id='workbench_tabview:ownerCatg_input' name='workbench_tabview:ownerCatg_input' si=5 sel='OTHERS' nOpt=8 vis=False inVehTab=False inHypIns=False seriesHint=False
-[2026-04-12 16:14:25 IST] [Screen 3]       options: '--SELECT--' [value='-1'] | 'DIVYANGJAN' [value='2'] | 'EX-SERVICEMAN' [value='1'] | 'GENERAL' [value='7'] | 'O B C' [value='5'] | 'OTHERS' [value='6'] | 'SCHEDULED CASTE' [value='3'] | 'SCHEDULED TRIBE' [value='4']
-[2026-04-12 16:14:25 IST] [Screen 3]     select[5] id='workbench_tabview:tf_c_state_input' name='workbench_tabview:tf_c_state_input' si=32 sel='Rajasthan' nOpt=37 vis=False inVehTab=False inHypIns=False seriesHint=False
-[2026-04-12 16:14:25 IST] [Screen 3]       options: '--SELECT--' [value='-1'] | 'UT of DNH and DD' [value='DD'] | 'Jammu and Kashmir' [value='JK'] | 'Delhi' [value='DL'] | 'Himachal Pradesh' [value='HP'] | 'Puducherry' [value='PY'] | 'Haryana' [value='HR'] | 'West Bengal' [value='WB'] | 'Bihar' [value='BR'] | 'Karnataka' [value='KA'] | 'Uttarakhand' [value='UK'] | 'Sikkim' [value='SK'] | 'Goa' [value='GA'] | 'Maharashtra' [value='MH'] | 'Uttar Pradesh' [value='UP'] | 'Meghalaya' [value='ML'] | 'Kerala' [value='KL'] | 'Manipur' [value='MN'] | 'Gujarat' [value='GJ'] | 'Madhya Pradesh' [value='MP'] | 'Odisha' [value='OR'] | 'Chhattisgarh' [value='CG'] | 'Chandigarh' [value='CH'] | 'Andaman & Nicobar Island' [value='AN'] | 'Mizoram' [value='MZ'] | 'Andhra Pradesh' [value='AP'] | 'Arunachal Pradesh' [value='AR'] | 'Assam' [value='AS'] | 'Punjab' [value='PB'] | 'Telangana' [value='TG'] | 'Ladakh' [value='LA'] | 'Lakshadweep' [value='LD']
-[2026-04-12 16:14:25 IST] [Screen 3]     select[6] id='workbench_tabview:tf_c_district_input' name='workbench_tabview:tf_c_district_input' si=6 sel='Bharatpur' nOpt=34 vis=False inVehTab=False inHypIns=False seriesHint=False
-[2026-04-12 16:14:25 IST] [Screen 3]       options: '--SELECT--' [value='-1'] | 'Ajmer' [value='119'] | 'Alwar' [value='104'] | 'Banswara' [value='125'] | 'Baran' [value='128'] | 'Barmer' [value='115'] | 'Bharatpur' [value='105'] | 'Bhilwara' [value='122'] | 'Bikaner' [value='101'] | 'Bundi' [value='121'] | 'Chittaurgarh' [value='126'] | 'Churu' [value='102'] | 'Dausa' [value='109'] | 'Dhaulpur' [value='106'] | 'Dungarpur' [value='124'] | 'Ganganagar' [value='99'] | 'Hanumangarh' [value='100'] | 'Jaipur' [value='110'] | 'Jaisalmer' [value='114'] | 'Jalor' [value='116'] | 'Jhalawar' [value='129'] | 'Jhunjhunun' [value='103'] | 'Jodhpur' [value='113'] | 'Karauli' [value='107'] | 'Kota' [value='127'] | 'Nagaur' [value='112'] | 'Pali' [value='118'] | 'Pratapgarh' [value='131'] | 'Rajsamand' [value='123'] | 'Sawai Madhopur' [value='108'] | 'Sikar' [value='111'] | 'Sirohi' [value='117']
-[2026-04-12 16:14:25 IST] [Screen 3]     select[7] id='workbench_tabview:tf_p_state_input' name='workbench_tabview:tf_p_state_input' si=32 sel='Rajasthan' nOpt=37 vis=False inVehTab=False inHypIns=False seriesHint=False
-[2026-04-12 16:14:25 IST] [Screen 3]       options: '--SELECT--' [value='-1'] | 'UT of DNH and DD' [value='DD'] | 'Jammu and Kashmir' [value='JK'] | 'Delhi' [value='DL'] | 'Himachal Pradesh' [value='HP'] | 'Puducherry' [value='PY'] | 'Haryana' [value='HR'] | 'West Bengal' [value='WB'] | 'Bihar' [value='BR'] | 'Karnataka' [value='KA'] | 'Uttarakhand' [value='UK'] | 'Sikkim' [value='SK'] | 'Goa' [value='GA'] | 'Maharashtra' [value='MH'] | 'Uttar Pradesh' [value='UP'] | 'Meghalaya' [value='ML'] | 'Kerala' [value='KL'] | 'Manipur' [value='MN'] | 'Gujarat' [value='GJ'] | 'Madhya Pradesh' [value='MP'] | 'Odisha' [value='OR'] | 'Chhattisgarh' [value='CG'] | 'Chandigarh' [value='CH'] | 'Andaman & Nicobar Island' [value='AN'] | 'Mizoram' [value='MZ'] | 'Andhra Pradesh' [value='AP'] | 'Arunachal Pradesh' [value='AR'] | 'Assam' [value='AS'] | 'Punjab' [value='PB'] | 'Telangana' [value='TG'] | 'Ladakh' [value='LA'] | 'Lakshadweep' [value='LD']
-[2026-04-12 16:14:25 IST] [Screen 3]     select[8] id='workbench_tabview:tf_p_district_input' name='workbench_tabview:tf_p_district_input' si=6 sel='Bharatpur' nOpt=34 vis=False inVehTab=False inHypIns=False seriesHint=False
-[2026-04-12 16:14:25 IST] [Screen 3]       options: '--SELECT--' [value='-1'] | 'Ajmer' [value='119'] | 'Alwar' [value='104'] | 'Banswara' [value='125'] | 'Baran' [value='128'] | 'Barmer' [value='115'] | 'Bharatpur' [value='105'] | 'Bhilwara' [value='122'] | 'Bikaner' [value='101'] | 'Bundi' [value='121'] | 'Chittaurgarh' [value='126'] | 'Churu' [value='102'] | 'Dausa' [value='109'] | 'Dhaulpur' [value='106'] | 'Dungarpur' [value='124'] | 'Ganganagar' [value='99'] | 'Hanumangarh' [value='100'] | 'Jaipur' [value='110'] | 'Jaisalmer' [value='114'] | 'Jalor' [value='116'] | 'Jhalawar' [value='129'] | 'Jhunjhunun' [value='103'] | 'Jodhpur' [value='113'] | 'Karauli' [value='107'] | 'Kota' [value='127'] | 'Nagaur' [value='112'] | 'Pali' [value='118'] | 'Pratapgarh' [value='131'] | 'Rajsamand' [value='123'] | 'Sawai Madhopur' [value='108'] | 'Sikar' [value='111'] | 'Sirohi' [value='117']
-[2026-04-12 16:14:25 IST] [Screen 3]     select[9] id='workbench_tabview:maker_input' name='workbench_tabview:maker_input' si=1 sel='HERO MOTOCORP LTD' nOpt=2 vis=False inVehTab=True inHypIns=False seriesHint=False
-[2026-04-12 16:14:25 IST] [Screen 3]       options: '-SELECT-' [value='-1'] | 'HERO MOTOCORP LTD' [value='32']
-[2026-04-12 16:14:25 IST] [Screen 3]     select[10] id='workbench_tabview:maker_model_input' name='workbench_tabview:maker_model_input' si=296 sel='SPLENDOR+ (DRS)-(ZZTN1122001)' nOpt=498 vis=False inVehTab=True inHypIns=False seriesHint=False
-[2026-04-12 16:14:25 IST] [Screen 3]       options: '-SELECT-' [value='0'] | 'ACHIEVER-(HACCDDSSCCR)' [value='HACCDDSSCCR'] | 'ACHIEVER 150 (DISC/SELF/CAST)-(ZZLN0153001)' [value='ZZLN0153001'] | 'ACHIEVER 150 (DRUM-SELF-CAST)-(ZZLN0153002)' [value='ZZLN0153002'] | 'ACHIEVER-DISC/SELF CAST WHEEL-(ZZFN0004010)' [value='ZZFN0004010'] | 'DESTINI 110 VX-(ZZUN0743001)' [value='ZZUN0743001'] | 'DESTINI 110 ZX-(ZZUN0743002)' [value='ZZUN0743002'] | 'DESTINI 125 LX-(ZZSN0249001)' [value='ZZSN0249001'] | 'DESTINI 125 (LX)-(ZZPN0046006)' [value='ZZPN0046006'] | 'DESTINI 125 (LX)-(ZZNN0128003)' [value='ZZNN0128003'] | 'DESTINI 125 (LX)-(ZZPN0046002)' [value='ZZPN0046002'] | 'DESTINI 125 PLATINUM EDITION-(ZZPN0046004)' [value='ZZPN0046004'] | 'DESTINI 125 (STD)-(ZZPN0046005)' [value='ZZPN0046005'] | 'DESTINI 125 VX-(ZZSN0249004)' [value='ZZSN0249004'] | 'DESTINI 125 VX-(ZZUN0257001)' [value='ZZUN0257001'] | 'DESTINI 125 VX-(ZZSN0249002)' [value='ZZSN0249002'] | 'DESTINI 125 (VX)-(ZZPN0046007)' [value='ZZPN0046007'] | 'DESTINI 125 (VX)-(ZZPN0046001)' [value='ZZPN0046001'] | 'DESTINI 125 (VX)-(ZZNN0128002)' [value='ZZNN0128002'] | 'DESTINI 125 VX (SE)-(ZZPN0046003)' [value='ZZPN0046003'] | 'DESTINI 125 ZX-(ZZUN0257003)' [value='ZZUN0257003'] | 'DESTINI 125 ZX-(ZZSN0249005)' [value='ZZSN0249005'] | 'DESTINI 125 ZX+-(ZZUN0257004)' [value='ZZUN0257004'] | 'DESTINI 125 ZX+-(ZZSN0249006)' [value='ZZSN0249006'] | 'DESTINI PRIME-(ZZSN0249003)' [value='ZZSN0249003'] | 'DESTINI PRIME-(ZZUN0257002)' [value='ZZUN0257002'] | 'DUET-(ZZKN0117001)' [value='ZZKN0117001'] | 'DUET-(ZZKN0117002)' [value='ZZKN0117002'] | 'DUET125-(ZZNN0128001)' [value='ZZNN0128001'] | 'DUET (BOTTOM LINK)-(ZZKN0117004)' [value='ZZKN0117004'] | 'DUET (TELESCOPIC FORK)-(ZZKN0117003)' [value='ZZKN0117003'] | 'ECO DELUXE(I3S-SELF-DRUM-CAST)-(ZZJN0008065)' [value='ZZJN0008065']
-[2026-04-12 16:14:25 IST] [Screen 3]     select[11] id='workbench_tabview:dealer_cd_input' name='workbench_tabview:dealer_cd_input' si=2 sel='ARORA AUTOMOBILES ( RJ5)' nOpt=3 vis=False inVehTab=True inHypIns=False seriesHint=False
-[2026-04-12 16:14:25 IST] [Screen 3]       options: '-SELECT-' [value='0'] | 'ARORA AUTOMOBILES' [value='RJ00500069'] | 'ARORA AUTOMOBILES ( RJ5)' [value='RJ00500069']
-[2026-04-12 16:14:25 IST] [Screen 3]     select[12] id='workbench_tabview:vh_type_input' name='workbench_tabview:vh_type_input' si=0 sel='Non-Transport' nOpt=1 vis=False inVehTab=True inHypIns=False seriesHint=False
-[2026-04-12 16:14:25 IST] [Screen 3]       options: 'Non-Transport' [value='2']
-[2026-04-12 16:14:25 IST] [Screen 3]     select[13] id='workbench_tabview:vh_class_input' name='workbench_tabview:vh_class_input' si=1 sel='M-Cycle/Scooter' nOpt=2 vis=False inVehTab=True inHypIns=False seriesHint=False
-[2026-04-12 16:14:25 IST] [Screen 3]       options: '-SELECT-' [value='-1'] | 'M-Cycle/Scooter' [value='1']
-[2026-04-12 16:14:25 IST] [Screen 3]     select[14] id='workbench_tabview:vh_catg_input' name='workbench_tabview:vh_catg_input' si=1 sel='TWO WHEELER(NT)' nOpt=2 vis=False inVehTab=True inHypIns=False seriesHint=False
-[2026-04-12 16:14:25 IST] [Screen 3]       options: '-SELECT-' [value='-1'] | 'TWO WHEELER(NT)' [value='2WN']
-[2026-04-12 16:14:25 IST] [Screen 3]     select[15] id='workbench_tabview:fuel_input' name='workbench_tabview:fuel_input' si=22 sel='PETROL' nOpt=37 vis=False inVehTab=True inHypIns=False seriesHint=False
-[2026-04-12 16:14:25 IST] [Screen 3]       options: '-SELECT-' [value='-1'] | 'DIESEL' [value='2'] | 'LPG ONLY' [value='8'] | 'SOLAR' [value='10'] | 'ELECTRIC(BOV)' [value='4'] | 'CNG ONLY' [value='6'] | 'PETROL/CNG' [value='3'] | 'PETROL/LPG' [value='5'] | 'PETROL/HYBRID' [value='11'] | 'DIESEL/HYBRID' [value='12'] | 'NOT APPLICABLE' [value='99'] | 'PETROL/METHANOL' [value='14'] | 'METHANOL' [value='15'] | 'LNG' [value='17'] | 'DUAL DIESEL/BIO CNG' [value='18'] | 'DUAL DIESEL/CNG' [value='19'] | 'DUAL DIESEL/LNG' [value='20'] | 'DI-METHYL ETHER' [value='21'] | 'FUEL CELL HYDROGEN' [value='22'] | 'PURE EV' [value='23'] | 'STRONG HYBRID EV' [value='25'] | 'PLUG-IN HYBRID EV' [value='26'] | 'PETROL' [value='1'] | 'PETROL(E20)' [value='16'] | 'PETROL/HYBRID/CNG' [value='39'] | 'PETROL(E20)/HYBRID/CNG' [value='40'] | 'ETHANOL(E100)' [value='13'] | 'PETROL(E20)/CNG' [value='29'] | 'PETROL(E20)/LPG' [value='30'] | 'PETROL(E20)/HYBRID' [value='31'] | 'BIO-METHANE' [value='32'] | 'BIO-CNG/BIO-GAS' [value='33']
-[2026-04-12 16:14:25 IST] [Screen 3]     select[16] id='workbench_tabview:norms_input' name='workbench_tabview:norms_input' si=7 sel='BHARAT STAGE VI' nOpt=27 vis=False inVehTab=True inHypIns=False seriesHint=False
-[2026-04-12 16:14:25 IST] [Screen 3]       options: '-SELECT-' [value='-1'] | 'BHARAT STAGE I' [value='1'] | 'BHARAT STAGE II' [value='2'] | 'BHARAT STAGE III' [value='3'] | 'Bharat Stage III (CEV)' [value='18'] | 'BHARAT STAGE III/IV' [value='11'] | 'BHARAT STAGE IV' [value='4'] | 'BHARAT STAGE VI' [value='15'] | 'Bharat (Trem) Stage III' [value='5'] | 'Bharat (Trem) Stage III A' [value='6'] | 'Bharat (Trem) Stage III B' [value='12'] | 'CEV STAGE IV' [value='24'] | 'CEV STAGE V' [value='25'] | 'EURO 1' [value='7'] | 'EURO 2' [value='8'] | 'EURO 3' [value='9'] | 'EURO 4' [value='10'] | 'EURO 6' [value='17'] | 'EURO 6A' [value='19'] | 'EURO  6AD' [value='23'] | 'EURO 6B' [value='20'] | 'EURO 6C' [value='21'] | 'EURO 6D' [value='22'] | 'Not Applicable' [value='98'] | 'Not Available' [value='99'] | 'TREM STAGE IV' [value='13'] | 'TREM STAGE V' [value='14']
-[2026-04-12 16:14:25 IST] [Screen 3]     select[17] id='workbench_tabview:purchase_as_input' name='workbench_tabview:purchase_as_input' si=1 sel='Fully Built' nOpt=3 vis=False inVehTab=True inHypIns=False seriesHint=False
-[2026-04-12 16:14:25 IST] [Screen 3]       options: '-SELECT-' [value='-1'] | 'Fully Built' [value='B'] | 'Drive Away Chasis' [value='C']
-[2026-04-12 16:14:25 IST] [Screen 3]     select[18] id='workbench_tabview:ac_fitted_input' name='workbench_tabview:ac_fitted_input' si=0 sel='NO' nOpt=1 vis=False inVehTab=True inHypIns=False seriesHint=False
-[2026-04-12 16:14:25 IST] [Screen 3]       options: 'NO' [value='N']
-[2026-04-12 16:14:25 IST] [Screen 3]     select[19] id='workbench_tabview:audio_fitted_input' name='workbench_tabview:audio_fitted_input' si=0 sel='NO' nOpt=1 vis=False inVehTab=True inHypIns=False seriesHint=False
-[2026-04-12 16:14:25 IST] [Screen 3]       options: 'NO' [value='N']
-[2026-04-12 16:14:25 IST] [Screen 3]     select[20] id='workbench_tabview:video_fitted_input' name='workbench_tabview:video_fitted_input' si=0 sel='NO' nOpt=1 vis=False inVehTab=True inHypIns=False seriesHint=False
-[2026-04-12 16:14:25 IST] [Screen 3]       options: 'NO' [value='N']
-[2026-04-12 16:14:25 IST] [Screen 3]     select[21] id='workbench_tabview:vm_other_criteria_input' name='workbench_tabview:vm_other_criteria_input' si=0 sel='Not Applicable' nOpt=12 vis=False inVehTab=True inHypIns=False seriesHint=False
-[2026-04-12 16:14:25 IST] [Screen 3]       options: 'Not Applicable' [value='0'] | 'NOT a Fleet Owner and NOT Playing Exclusively Within the Municipal Limit' [value='1'] | 'Plying Exclusively Wthin the Municipal Limits/U.I.T. Limits' [value='2'] | 'Plying Exclusively on Sub-Urban Routes' [value='3'] | 'Playing Exclusively on Rural Routes' [value='4'] | 'Ranthambore National Park' [value='5'] | 'Govt. Distributed Vehicle' [value='6'] | 'Akshyapatra Foundation Vehicle Used for Mid day Meal' [value='7'] | 'Spare Vehicle of Permit' [value='8'] | 'Social Security/Walfare Investment Promotion Scheme 2021' [value='9'] | 'Auction Unregistered Vehicle' [value='10'] | 'Strong Hybrid Vehicle' [value='11']
-[2026-04-12 16:14:25 IST] [Screen 3]     select[22] id='workbench_tabview:imported_veh_input' name='workbench_tabview:imported_veh_input' si=0 sel='No' nOpt=2 vis=False inVehTab=True inHypIns=False seriesHint=False
-[2026-04-12 16:14:25 IST] [Screen 3]       options: 'No' [value='N'] | 'Yes' [value='Y']
-[2026-04-12 16:14:25 IST] [Screen 3]     select[23] id='workbench_tabview:tableTaxMode:0:taxModeType_input' name='workbench_tabview:tableTaxMode:0:taxModeType_input' si=1 sel='ONE TIME' nOpt=3 vis=False inVehTab=True inHypIns=False seriesHint=False
-[2026-04-12 16:14:25 IST] [Screen 3]       options: '--Select--' [value='0'] | 'ONE TIME' [value='O'] | 'Tax Exempted' [value='E']
-[2026-04-12 16:14:25 IST] [Screen 3]     select[24] id='workbench_tabview:ins_type_input' name='workbench_tabview:ins_type_input' si=4 sel='THIRD PARTY' nOpt=5 vis=True inVehTab=False inHypIns=True seriesHint=False
-[2026-04-12 16:14:25 IST] [Screen 3]       options: '--SELECT--' [value='-1'] | 'COMPREHENSIVE' [value='1'] | 'NOT AVAILABLE' [value='4'] | 'THEFT AND THIRD PARTY' [value='3'] | 'THIRD PARTY' [value='2']
-[2026-04-12 16:14:25 IST] [Screen 3]     select[25] id='workbench_tabview:ins_cd_input' name='workbench_tabview:ins_cd_input' si=338 sel='UNIVERSAL SOMPO GENERAL INSURANCE CO.LTD' nOpt=358 vis=True inVehTab=False inHypIns=True seriesHint=False
-[2026-04-12 16:14:25 IST] [Screen 3]       options: '--SELECT--' [value='-1'] | 'AARVI GENERAL INS.' [value='1004'] | 'ABN AMERO BANK LTD.' [value='1005'] | 'Acko General Insurance Limited' [value='1347'] | 'ADHWANI INDIA INSURANCE' [value='1006'] | 'ADINATH AUTO FIN' [value='1007'] | 'Aditya Birla Health Insurance Co Ltd' [value='1352'] | 'ADROIT TECH SER PVT LTD' [value='1008'] | 'AGRICULTURE INSURANCE' [value='1009'] | 'AIG' [value='1010'] | 'ALLAHABAD BANK' [value='1011'] | 'ALLIED INSURANCE' [value='1012'] | 'ALPHA INDIA GEN INS CO' [value='1013'] | 'ANNAND INS. CO. LTD.' [value='1014'] | 'ANUSUYA A G' [value='1015'] | 'ANY OTHERS/ NOT AVAILABLE/ EXEMPTED' [value='9999'] | 'Apollo Munich Health Insurance Company Limited' [value='1354'] | 'Apple Auto Agency Pvt Ltd' [value='1028'] | 'APPOLO DKV' [value='1016'] | 'ARTO GANDHINAGAR' [value='1017'] | 'ASHOK LEYLAND FIANACE' [value='1018'] | 'ASIAN EARTH MOVERS' [value='1019'] | 'ASSURANCE INS. OF INDIA' [value='1020'] | 'A T O(I) LIMITED.' [value='1339'] | 'AUTO ASSURANZ' [value='1021'] | 'AUTO RISK M.SER.P.LTD.' [value='1022'] | 'AVIVA GENERAL INSURANCE' [value='1023'] | 'AVIVA LIFE INSURANCE' [value='1024'] | 'AXA' [value='1025'] | 'AXIS BANK' [value='1026'] | 'BACKLOG' [value='1029'] | 'BAI' [value='1030']
-[2026-04-12 16:14:25 IST] [Screen 3]     select[26] id='workbench_tabview:ins_year_input' name='workbench_tabview:ins_year_input' si=5 sel='5 Year' nOpt=6 vis=True inVehTab=False inHypIns=True seriesHint=False
-[2026-04-12 16:14:25 IST] [Screen 3]       options: '--SELECT--' [value='0'] | '1 Year' [value='1'] | '2 Year' [value='2'] | '3 Year' [value='3'] | '4 Year' [value='4'] | '5 Year' [value='5']
-[2026-04-12 16:14:25 IST] [Screen 3]     select[27] id='workbench_tabview:seriesType_input' name='workbench_tabview:seriesType_input' si=0 sel='STATE SERIES' nOpt=2 vis=True inVehTab=False inHypIns=True seriesHint=True
-[2026-04-12 16:14:25 IST] [Screen 3]       options: 'STATE SERIES' [value='N'] | 'BHARAT SERIES' [value='B']
-[2026-04-12 16:14:25 IST] [Screen 3]     select[28] id='workbench_tabview:hpa_hp_type_input' name='workbench_tabview:hpa_hp_type_input' si=2 sel='Hypothecation' nOpt=4 vis=True inVehTab=False inHypIns=True seriesHint=False
-[2026-04-12 16:14:25 IST] [Screen 3]       options: '--SELECT--' [value='-1'] | 'Hire-Purchase' [value='HP'] | 'Hypothecation' [value='HT'] | 'Lease Agreement' [value='LA']
-[2026-04-12 16:14:25 IST] [Screen 3]     select[29] id='workbench_tabview:hpa_fncr_state_input' name='workbench_tabview:hpa_fncr_state_input' si=0 sel='--SELECT--' nOpt=37 vis=True inVehTab=False inHypIns=True seriesHint=False
-[2026-04-12 16:14:25 IST] [Screen 3]       options: '--SELECT--' [value='-1'] | 'UT of DNH and DD' [value='DD'] | 'Jammu and Kashmir' [value='JK'] | 'Delhi' [value='DL'] | 'Himachal Pradesh' [value='HP'] | 'Puducherry' [value='PY'] | 'Haryana' [value='HR'] | 'West Bengal' [value='WB'] | 'Bihar' [value='BR'] | 'Karnataka' [value='KA'] | 'Uttarakhand' [value='UK'] | 'Sikkim' [value='SK'] | 'Goa' [value='GA'] | 'Maharashtra' [value='MH'] | 'Uttar Pradesh' [value='UP'] | 'Meghalaya' [value='ML'] | 'Kerala' [value='KL'] | 'Manipur' [value='MN'] | 'Gujarat' [value='GJ'] | 'Madhya Pradesh' [value='MP'] | 'Odisha' [value='OR'] | 'Chhattisgarh' [value='CG'] | 'Chandigarh' [value='CH'] | 'Andaman & Nicobar Island' [value='AN'] | 'Mizoram' [value='MZ'] | 'Andhra Pradesh' [value='AP'] | 'Arunachal Pradesh' [value='AR'] | 'Assam' [value='AS'] | 'Punjab' [value='PB'] | 'Telangana' [value='TG'] | 'Ladakh' [value='LA'] | 'Lakshadweep' [value='LD']
-[2026-04-12 16:14:25 IST] [Screen 3]     select[30] id='workbench_tabview:hpa_fncr_district_input' name='workbench_tabview:hpa_fncr_district_input' si=0 sel='--SELECT--' nOpt=1 vis=True inVehTab=False inHypIns=True seriesHint=False
-[2026-04-12 16:14:25 IST] [Screen 3]       options: '--SELECT--' [value='-1']
-[2026-04-12 16:14:25 IST] [Screen 3]   [frame[0] main] PF / id hints (tax / taxMode / mv_tax, non-SELECT, cap 40):
-[2026-04-12 16:14:25 IST] [Screen 3]     DIV id='workbench_tabview:uiTaxModes' hidden=True class='ui-outputpanel ui-widget' text='                             Tax Mode Details              Tax TypeTax ModeMV Tax--Select--ONE TIMETax ExemptedONE TIME '
-[2026-04-12 16:14:25 IST] [Screen 3]     DIV id='workbench_tabview:tableTaxMode' hidden=True class='ui-datatable ui-widget top-space bottom-space' text='                             Tax Mode Details              Tax TypeTax ModeMV Tax--Select--ONE TIMETax ExemptedONE TIME'
-[2026-04-12 16:14:25 IST] [Screen 3]     THEAD id='workbench_tabview:tableTaxMode_head' hidden=True class='' text='Tax TypeTax Mode'
-[2026-04-12 16:14:25 IST] [Screen 3]     TH id='workbench_tabview:tableTaxMode:j_idt930' hidden=True class='ui-state-default' text='Tax Type'
-[2026-04-12 16:14:25 IST] [Screen 3]     TH id='workbench_tabview:tableTaxMode:j_idt932' hidden=True class='ui-state-default' text='Tax Mode'
-[2026-04-12 16:14:25 IST] [Screen 3]     TBODY id='workbench_tabview:tableTaxMode_data' hidden=True class='ui-datatable-data ui-widget-content' text='MV Tax--Select--ONE TIMETax ExemptedONE TIME'
-[2026-04-12 16:14:25 IST] [Screen 3]     DIV id='workbench_tabview:tableTaxMode:0:taxModeType' hidden=True class='ui-selectonemenu ui-widget ui-state-default ui-corner-all' text='--Select--ONE TIMETax ExemptedONE TIME'
-[2026-04-12 16:14:25 IST] [Screen 3]     INPUT id='workbench_tabview:tableTaxMode:0:taxModeType_focus' hidden=True class='' text=''
-[2026-04-12 16:14:25 IST] [Screen 3]     LABEL id='workbench_tabview:tableTaxMode:0:taxModeType_label' hidden=True class='ui-selectonemenu-label ui-inputfield ui-corner-all' text='ONE TIME'
-[2026-04-12 16:14:25 IST] [Screen 3]     DIV id='workbench_tabview:tableTaxMode:0:taxModeType_panel' hidden=True class='ui-selectonemenu-panel ui-widget ui-widget-content ui-corner-all ui-helper-hidde' text='--Select--ONE TIMETax Exempted'
-[2026-04-12 16:14:25 IST] [Screen 3]     UL id='workbench_tabview:tableTaxMode:0:taxModeType_items' hidden=True class='ui-selectonemenu-items ui-selectonemenu-list ui-widget-content ui-widget ui-corn' text='--Select--ONE TIMETax Exempted'
-[2026-04-12 16:14:25 IST] [Screen 3]     LI id='workbench_tabview:tableTaxMode:0:taxModeType_0' hidden=True class='ui-selectonemenu-item ui-selectonemenu-list-item ui-corner-all' text='--Select--'
-[2026-04-12 16:14:25 IST] [Screen 3]     LI id='workbench_tabview:tableTaxMode:0:taxModeType_1' hidden=True class='ui-selectonemenu-item ui-selectonemenu-list-item ui-corner-all ui-state-highligh' text='ONE TIME'
-[2026-04-12 16:14:25 IST] [Screen 3]     LI id='workbench_tabview:tableTaxMode:0:taxModeType_2' hidden=True class='ui-selectonemenu-item ui-selectonemenu-list-item ui-corner-all' text='Tax Exempted'
-[2026-04-12 16:14:25 IST] [Screen 3]   [frame[0] main] PF / id hints (series_type / seriesType / regn_series / state_series, cap 40):
-[2026-04-12 16:14:25 IST] [Screen 3]     DIV id='workbench_tabview:seriesType' hidden=False inHypIns=True class='ui-selectonemenu ui-widget ui-state-default ui-corner-all' text='STATE SERIES BHARAT SERIES STATE SERIES'
-[2026-04-12 16:14:25 IST] [Screen 3]     INPUT id='workbench_tabview:seriesType_focus' hidden=False inHypIns=True class='' text=''
-[2026-04-12 16:14:25 IST] [Screen 3]     SELECT id='workbench_tabview:seriesType_input' hidden=False inHypIns=True class='' text='STATE SERIES BHARAT SERIES'
-[2026-04-12 16:14:25 IST] [Screen 3]     LABEL id='workbench_tabview:seriesType_label' hidden=False inHypIns=True class='ui-selectonemenu-label ui-inputfield ui-corner-all' text='STATE SERIES'
-[2026-04-12 16:14:25 IST] [Screen 3]     DIV id='workbench_tabview:seriesType_panel' hidden=True inHypIns=False class='ui-selectonemenu-panel ui-widget ui-widget-content ui-corner-all ui-helper-hidde' text='STATE SERIESBHARAT SERIES'
-[2026-04-12 16:14:25 IST] [Screen 3]     UL id='workbench_tabview:seriesType_items' hidden=True inHypIns=False class='ui-selectonemenu-items ui-selectonemenu-list ui-widget-content ui-widget ui-corn' text='STATE SERIESBHARAT SERIES'
-[2026-04-12 16:14:25 IST] [Screen 3]     LI id='workbench_tabview:seriesType_0' hidden=True inHypIns=False class='ui-selectonemenu-item ui-selectonemenu-list-item ui-corner-all ui-state-highligh' text='STATE SERIES'
-[2026-04-12 16:14:25 IST] [Screen 3]     LI id='workbench_tabview:seriesType_1' hidden=True inHypIns=False class='ui-selectonemenu-item ui-selectonemenu-list-item ui-corner-all' text='BHARAT SERIES'
-[2026-04-12 16:14:25 IST] [Screen 3] === END PAGE STATE DUMP ===
-[2026-04-12 16:14:25 IST] [Screen 3] pf-dropdown (native): Financier State = Rajasthan
-[2026-04-12 16:14:27 IST] [Screen 3] fill: Financier Pincode = 321201
-[2026-04-12 16:14:27 IST] [Screen 3] nominee: want=True, name='Harvesh', relationship='Brother'
-[2026-04-12 16:14:27 IST] [Screen 3] radio: Add Nominee Details — Yes
-[2026-04-12 16:14:38 IST] [Screen 3] TIMEOUT fill: Nominee Name selector=[id="workbench_tabview:nominationname1"] value=Harvesh
-[2026-04-12 16:14:38 IST] [Screen 3] WARNING: Nominee Name not filled (no matching field)
-[2026-04-12 16:14:38 IST] [Screen 3] === PAGE STATE DUMP (field not filled: Nominee Name) ===
-[2026-04-12 16:14:38 IST] [Screen 3] url: https://vahan.parivahan.gov.in/vahan/vahan/workbench.xhtml
-[2026-04-12 16:14:38 IST] [Screen 3] frames: 1
-[2026-04-12 16:14:38 IST] [Screen 3]   frame[0] name='(main)' url=https://vahan.parivahan.gov.in/vahan/vahan/workbench.xhtml
-[2026-04-12 16:14:38 IST] [Screen 3]   [frame[0] main] visible interactive elements (127, selects first — cap 150):
-[2026-04-12 16:14:38 IST] [Screen 3]     select id='regnType_input' name='regnType_input' value='N' text='---------------SELECT--------------- NEW'
-[2026-04-12 16:14:38 IST] [Screen 3]     select id='regnNoSelectionForAPS_input' name='regnNoSelectionForAPS_input' value='No' text='---------------SELECT--------------- NO YES'
-[2026-04-12 16:14:38 IST] [Screen 3]     select id='workbench_tabview:ins_type_input' name='workbench_tabview:ins_type_input' value='2' text='--SELECT-- COMPREHENSIVE NOT AVAILABLE THEFT AND THIRD PARTY'
-[2026-04-12 16:14:38 IST] [Screen 3]     select id='workbench_tabview:ins_cd_input' name='workbench_tabview:ins_cd_input' value='1003' text='--SELECT-- AARVI GENERAL INS. ABN AMERO BANK LTD. Acko Gener'
-[2026-04-12 16:14:38 IST] [Screen 3]     select id='workbench_tabview:ins_year_input' name='workbench_tabview:ins_year_input' value='5' text='--SELECT-- 1 Year 2 Year 3 Year 4 Year 5 Year'
-[2026-04-12 16:14:38 IST] [Screen 3]     select id='workbench_tabview:seriesType_input' name='workbench_tabview:seriesType_input' value='N' text='STATE SERIES BHARAT SERIES'
-[2026-04-12 16:14:38 IST] [Screen 3]     select id='workbench_tabview:hpa_hp_type_input' name='workbench_tabview:hpa_hp_type_input' value='HT' text='--SELECT-- Hire-Purchase Hypothecation Lease Agreement'
-[2026-04-12 16:14:38 IST] [Screen 3]     select id='workbench_tabview:hpa_fncr_state_input' name='workbench_tabview:hpa_fncr_state_input' value='RJ' text='--SELECT-- UT of DNH and DD Jammu and Kashmir Delhi Himachal'
-[2026-04-12 16:14:38 IST] [Screen 3]     select id='workbench_tabview:hpa_fncr_district_input' name='workbench_tabview:hpa_fncr_district_input' value='-1' text='--SELECT-- Ajmer Alwar Banswara Baran Barmer Bharatpur Bhilw'
-[2026-04-12 16:14:38 IST] [Screen 3]     nav role='navigation' text=' Home  Report   Update Profile   Language  Welcome YOGESH AG' class='navbar navbar-default navigation-background'
-[2026-04-12 16:14:38 IST] [Screen 3]     a id='homeId1' name='homeId1'
-[2026-04-12 16:14:38 IST] [Screen 3]     a id='homeId2' name='homeId2' text=' Home'
-[2026-04-12 16:14:38 IST] [Screen 3]     a text=' Report ' class='dropdown-toggle'
-[2026-04-12 16:14:38 IST] [Screen 3]     a text=' Update Profile ' class='dropdown-toggle'
-[2026-04-12 16:14:38 IST] [Screen 3]     a text=' Language ' class='dropdown-toggle'
-[2026-04-12 16:14:38 IST] [Screen 3]     a id='welcomeUserId' name='welcomeUserId' text='Welcome YOGESH AGRAWAL , DEALER STAFF, Rajasthan'
-[2026-04-12 16:14:38 IST] [Screen 3]     a id='logout' text='Logout' class='ui-commandlink ui-widget glyphicon glyphicon-log-out'
-[2026-04-12 16:14:38 IST] [Screen 3]     label text='Registration Type*' class='field-label resp-label-section'
-[2026-04-12 16:14:38 IST] [Screen 3]     label id='j_idt190' text='Registration Type*' class='ui-outputlabel ui-widget'
-[2026-04-12 16:14:38 IST] [Screen 3]     div id='regnType' role='combobox' text='---------------SELECT--------------- NEW NEW' class='ui-selectonemenu ui-widget ui-state-default ui-corner-all bottom-space ui-state-'
-[2026-04-12 16:14:38 IST] [Screen 3]     input id='regnType_focus' name='regnType_focus' type='text'
-[2026-04-12 16:14:38 IST] [Screen 3]     label id='regnType_label' text='NEW' class='ui-selectonemenu-label ui-inputfield ui-corner-all'
-[2026-04-12 16:14:38 IST] [Screen 3]     label text='Chassis No*' class='field-label resp-label-section'
-[2026-04-12 16:14:38 IST] [Screen 3]     label id='j_idt197' text='Chassis No*' class='ui-outputlabel ui-widget'
-[2026-04-12 16:14:38 IST] [Screen 3]     input id='chasi_no_new_entry' name='chasi_no_new_entry' type='text' role='textbox' value='MBLHAW48XT9B05182' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all ui-state-dis'
-[2026-04-12 16:14:38 IST] [Screen 3]     label text='Engine/Motor No (Last 5 Chars)*' class='field-label resp-label-section'
-[2026-04-12 16:14:38 IST] [Screen 3]     label id='j_idt200' text='Engine/Motor No (Last 5 Chars)*' class='ui-outputlabel ui-widget'
-[2026-04-12 16:14:38 IST] [Screen 3]     input id='eng_no_new_entry' name='eng_no_new_entry' type='text' role='textbox' value='33716' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all ui-state-dis'
-[2026-04-12 16:14:38 IST] [Screen 3]     label text='Do you want to utilize Certificate of deposit (CD)' class='field-label resp-label-section'
-[2026-04-12 16:14:38 IST] [Screen 3]     input id='codCheckBox_input' name='codCheckBox_input' type='checkbox' value='on'
-[2026-04-12 16:14:38 IST] [Screen 3]     label id='j_idt233' text='Do you want to utilize Certificate of deposit (CD)' class='ui-outputlabel ui-widget inline-section'
-[2026-04-12 16:14:38 IST] [Screen 3]     button id='get_dtls_btn' name='get_dtls_btn' type='submit' role='button' text='Get Details' class='ui-button ui-widget ui-state-default ui-corner-all ui-button-text-only ui-state-'
-[2026-04-12 16:14:38 IST] [Screen 3]     ul role='tablist' text='1 Dealer New Registration entry 2 Dealer Verify 3 Dealer Doc'
-[2026-04-12 16:14:38 IST] [Screen 3]     label text='Do You want to Opt Choice Number/Fancy Number / Retention Nu' class='field-label resp-label-section'
-[2026-04-12 16:14:38 IST] [Screen 3]     label id='j_idt285' text='Do You want to Opt Choice Number/Fancy Number / Retention Nu' class='ui-outputlabel ui-widget'
-[2026-04-12 16:14:38 IST] [Screen 3]     div id='regnNoSelectionForAPS' role='combobox' text='---------------SELECT--------------- NO YES NO' class='ui-selectonemenu ui-widget ui-state-default ui-corner-all'
-[2026-04-12 16:14:38 IST] [Screen 3]     input id='regnNoSelectionForAPS_focus' name='regnNoSelectionForAPS_focus' type='text'
-[2026-04-12 16:14:38 IST] [Screen 3]     label id='regnNoSelectionForAPS_label' text='NO' class='ui-selectonemenu-label ui-inputfield ui-corner-all'
-[2026-04-12 16:14:38 IST] [Screen 3]     label id='j_idt294' text=' Aadhaar Authenticated' class='ui-outputlabel ui-widget inline-section right-space'
-[2026-04-12 16:14:38 IST] [Screen 3]     h3 text=' Aadhaar Authenticated' class='close-counter counter-button inline-section center-position'
-[2026-04-12 16:14:38 IST] [Screen 3]     ul role='tablist' text='Owner Details Vehicle Details Hypothecation/Insurance Inform' class='ui-tabs-nav ui-helper-reset ui-widget-header ui-corner-all'
-[2026-04-12 16:14:38 IST] [Screen 3]     li role='tab' text='Owner Details' class='ui-tabs-header ui-state-default ui-corner-top'
-[2026-04-12 16:14:38 IST] [Screen 3]     a text='Owner Details'
-[2026-04-12 16:14:38 IST] [Screen 3]     li role='tab' text='Vehicle Details' class='ui-tabs-header ui-state-default ui-corner-top'
-[2026-04-12 16:14:38 IST] [Screen 3]     a text='Vehicle Details'
-[2026-04-12 16:14:38 IST] [Screen 3]     li role='tab' text='Hypothecation/Insurance Information' class='ui-tabs-header ui-state-default ui-corner-top ui-tabs-selected ui-state-active'
-[2026-04-12 16:14:38 IST] [Screen 3]     a text='Hypothecation/Insurance Information'
-[2026-04-12 16:14:38 IST] [Screen 3]     li role='tab' text='Attached Semi-Trailer Details' class='ui-tabs-header ui-state-default ui-corner-top'
-[2026-04-12 16:14:38 IST] [Screen 3]     a text='Attached Semi-Trailer Details'
-[2026-04-12 16:14:38 IST] [Screen 3]     div id='workbench_tabview:HypothecationOwner' role='tabpanel' text='Refresh Insurance Details from Company Insurance Details Not' class='ui-tabs-panel ui-widget-content ui-corner-bottom'
-[2026-04-12 16:14:38 IST] [Screen 3]     button id='workbench_tabview:refresh_ins_Button_id' name='workbench_tabview:refresh_ins_Button_id' type='submit' role='button' text='Refresh Insurance Details from Company' class='ui-button ui-widget ui-state-default ui-corner-all ui-button-text-only'
-[2026-04-12 16:14:38 IST] [Screen 3]     label text='Insurance Type*' class='field-label resp-label-section'
-[2026-04-12 16:14:38 IST] [Screen 3]     label id='workbench_tabview:j_idt1245' text='Insurance Type*' class='ui-outputlabel ui-widget'
-[2026-04-12 16:14:38 IST] [Screen 3]     div id='workbench_tabview:ins_type' role='combobox' text='--SELECT-- COMPREHENSIVE NOT AVAILABLE THEFT AND THIRD PARTY' class='ui-selectonemenu ui-widget ui-state-default ui-corner-all ui-state-disabled'
-[2026-04-12 16:14:38 IST] [Screen 3]     input id='workbench_tabview:ins_type_focus' name='workbench_tabview:ins_type_focus' type='text'
-[2026-04-12 16:14:38 IST] [Screen 3]     label id='workbench_tabview:ins_type_label' text='THIRD PARTY' class='ui-selectonemenu-label ui-inputfield ui-corner-all'
-[2026-04-12 16:14:38 IST] [Screen 3]     label text='Insurance Company*' class='field-label resp-label-section'
-[2026-04-12 16:14:38 IST] [Screen 3]     label id='workbench_tabview:j_idt1250' text='Insurance Company*' class='ui-outputlabel ui-widget'
-[2026-04-12 16:14:38 IST] [Screen 3]     div id='workbench_tabview:ins_cd' role='combobox' text='--SELECT-- AARVI GENERAL INS. ABN AMERO BANK LTD. Acko Gener' class='ui-selectonemenu ui-widget ui-state-default ui-corner-all ui-state-disabled'
-[2026-04-12 16:14:38 IST] [Screen 3]     input id='workbench_tabview:ins_cd_focus' name='workbench_tabview:ins_cd_focus' type='text'
-[2026-04-12 16:14:38 IST] [Screen 3]     label id='workbench_tabview:ins_cd_label' text='UNIVERSAL SOMPO GENERAL INSURANCE CO.LTD' class='ui-selectonemenu-label ui-inputfield ui-corner-all'
-[2026-04-12 16:14:38 IST] [Screen 3]     label text='Policy/CoverNote No*' class='field-label resp-label-section'
-[2026-04-12 16:14:38 IST] [Screen 3]     label id='workbench_tabview:j_idt1255' text='Policy/CoverNote No*' class='ui-outputlabel ui-widget'
-[2026-04-12 16:14:38 IST] [Screen 3]     input id='workbench_tabview:policy_no' name='workbench_tabview:policy_no' type='text' role='textbox' value='2369/82595323/00/000' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all ui-state-dis'
-[2026-04-12 16:14:38 IST] [Screen 3]     label text='Insurance from (DD-MMM-YYYY)*' class='field-label resp-label-section'
-[2026-04-12 16:14:38 IST] [Screen 3]     label id='workbench_tabview:j_idt1259' text='Insurance from (DD-MMM-YYYY)*' class='ui-outputlabel ui-widget'
-[2026-04-12 16:14:38 IST] [Screen 3]     input id='workbench_tabview:ins_from_input' name='workbench_tabview:ins_from_input' type='text' role='textbox' value='21-Feb-2026' class='ui-inputfield ui-widget ui-state-default ui-corner-all ui-state-disabled hasDate'
-[2026-04-12 16:14:38 IST] [Screen 3]     label text='Insurance Period(in year)*' class='field-label resp-label-section'
-[2026-04-12 16:14:38 IST] [Screen 3]     label id='workbench_tabview:j_idt1262' text='Insurance Period(in year)*' class='ui-outputlabel ui-widget'
-[2026-04-12 16:14:38 IST] [Screen 3]     div id='workbench_tabview:ins_year' role='combobox' text='--SELECT-- 1 Year 2 Year 3 Year 4 Year 5 Year 5 Year' class='ui-selectonemenu ui-widget ui-state-default ui-corner-all ui-state-disabled'
-[2026-04-12 16:14:38 IST] [Screen 3]     input id='workbench_tabview:ins_year_focus' name='workbench_tabview:ins_year_focus' type='text'
-[2026-04-12 16:14:38 IST] [Screen 3]     label id='workbench_tabview:ins_year_label' text='5 Year' class='ui-selectonemenu-label ui-inputfield ui-corner-all'
-[2026-04-12 16:14:38 IST] [Screen 3]     label text='Insurance upto (DD-MMM-YYYY)*' class='field-label resp-label-section'
-[2026-04-12 16:14:38 IST] [Screen 3]     label id='workbench_tabview:j_idt1267' text='Insurance upto (DD-MMM-YYYY)*' class='ui-outputlabel ui-widget'
-[2026-04-12 16:14:38 IST] [Screen 3]     input id='workbench_tabview:ins_upto_input' name='workbench_tabview:ins_upto_input' type='text' role='textbox' value='20-Feb-2031' class='ui-inputfield ui-widget ui-state-default ui-corner-all ui-state-disabled hasDate'
-[2026-04-12 16:14:38 IST] [Screen 3]     label text='Insurance Declared Value' class='field-label resp-label-section'
-[2026-04-12 16:14:38 IST] [Screen 3]     label id='workbench_tabview:j_idt1270' text='Insurance Declared Value' class='ui-outputlabel ui-widget'
-[2026-04-12 16:14:38 IST] [Screen 3]     input id='workbench_tabview:idv' name='workbench_tabview:idv' type='text' role='textbox' value='0' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all'
-[2026-04-12 16:14:38 IST] [Screen 3]     label text='Please Select Series Type*' class='field-label resp-label-section'
-[2026-04-12 16:14:38 IST] [Screen 3]     label id='workbench_tabview:j_idt1280' text='Please Select Series Type*' class='ui-outputlabel ui-widget'
-[2026-04-12 16:14:38 IST] [Screen 3]     div id='workbench_tabview:seriesType' role='combobox' text='STATE SERIES BHARAT SERIES STATE SERIES' class='ui-selectonemenu ui-widget ui-state-default ui-corner-all'
-[2026-04-12 16:14:38 IST] [Screen 3]     input id='workbench_tabview:seriesType_focus' name='workbench_tabview:seriesType_focus' type='text'
-[2026-04-12 16:14:38 IST] [Screen 3]     label id='workbench_tabview:seriesType_label' text='STATE SERIES' class='ui-selectonemenu-label ui-inputfield ui-corner-all'
-[2026-04-12 16:14:38 IST] [Screen 3]     input id='workbench_tabview:isHypo_input' name='workbench_tabview:isHypo_input' type='checkbox' value='on'
-[2026-04-12 16:14:38 IST] [Screen 3]     label text='Hypothecation Type:*' class='field-label resp-label-section'
-[2026-04-12 16:14:38 IST] [Screen 3]     label id='workbench_tabview:j_idt1303' text='Hypothecation Type:*' class='ui-outputlabel ui-widget'
-[2026-04-12 16:14:38 IST] [Screen 3]     div id='workbench_tabview:hpa_hp_type' role='combobox' text='--SELECT-- Hire-Purchase Hypothecation Lease Agreement --SEL' class='ui-selectonemenu ui-widget ui-state-default ui-corner-all'
-[2026-04-12 16:14:38 IST] [Screen 3]     input id='workbench_tabview:hpa_hp_type_focus' name='workbench_tabview:hpa_hp_type_focus' type='text'
-[2026-04-12 16:14:38 IST] [Screen 3]     label id='workbench_tabview:hpa_hp_type_label' text='--SELECT--' class='ui-selectonemenu-label ui-inputfield ui-corner-all'
-[2026-04-12 16:14:38 IST] [Screen 3]     label text='Financier Name:*' class='field-label resp-label-section'
-[2026-04-12 16:14:38 IST] [Screen 3]     label id='workbench_tabview:j_idt1308' text='Financier Name:*' class='ui-outputlabel ui-widget'
-[2026-04-12 16:14:38 IST] [Screen 3]     input id='workbench_tabview:hpa_fncr_name' name='workbench_tabview:hpa_fncr_name' type='text' role='textbox' value='Axis Bank' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all'
-[2026-04-12 16:14:38 IST] [Screen 3]     label text='From Date (DD-MMM-YYYY)*' class='field-label resp-label-section'
-[2026-04-12 16:14:38 IST] [Screen 3]     label id='workbench_tabview:j_idt1313' text='From Date (DD-MMM-YYYY)*' class='ui-outputlabel ui-widget'
-[2026-04-12 16:14:38 IST] [Screen 3]     input id='workbench_tabview:hpa_from_dt_input' name='workbench_tabview:hpa_from_dt_input' type='text' role='textbox' value='12-Apr-2026' class='ui-inputfield ui-widget ui-state-default ui-corner-all hasDatepicker'
-[2026-04-12 16:14:38 IST] [Screen 3]     label text='House No. & Street Name*' class='field-label resp-label-section'
-[2026-04-12 16:14:38 IST] [Screen 3]     label id='workbench_tabview:j_idt1316' text='House No. & Street Name*' class='ui-outputlabel ui-widget'
-[2026-04-12 16:14:38 IST] [Screen 3]     input id='workbench_tabview:hpa_fncr_add1' name='workbench_tabview:hpa_fncr_add1' type='text' role='textbox' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all'
-[2026-04-12 16:14:38 IST] [Screen 3]     label text='Village/Town/City' class='field-label resp-label-section'
-[2026-04-12 16:14:38 IST] [Screen 3]     label id='workbench_tabview:j_idt1319' text='Village/Town/City' class='ui-outputlabel ui-widget'
-[2026-04-12 16:14:38 IST] [Screen 3]     input id='workbench_tabview:hpa_fncr_add2' name='workbench_tabview:hpa_fncr_add2' type='text' role='textbox' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all'
-[2026-04-12 16:14:38 IST] [Screen 3]     label text='Landmark/Police Station' class='field-label resp-label-section'
-[2026-04-12 16:14:38 IST] [Screen 3]     label id='workbench_tabview:j_idt1322' text='Landmark/Police Station' class='ui-outputlabel ui-widget'
-[2026-04-12 16:14:38 IST] [Screen 3]     input id='workbench_tabview:hpa_fncr_add3' name='workbench_tabview:hpa_fncr_add3' type='text' role='textbox' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all'
-[2026-04-12 16:14:38 IST] [Screen 3]     label text='State*' class='field-label resp-label-section'
-[2026-04-12 16:14:38 IST] [Screen 3]     label id='workbench_tabview:j_idt1325' text='State*' class='ui-outputlabel ui-widget'
-[2026-04-12 16:14:38 IST] [Screen 3]     div id='workbench_tabview:hpa_fncr_state' role='combobox' text='--SELECT-- UT of DNH and DD Jammu and Kashmir Delhi Himachal' class='ui-selectonemenu ui-widget ui-state-default ui-corner-all bottom-space'
-[2026-04-12 16:14:38 IST] [Screen 3]     input id='workbench_tabview:hpa_fncr_state_focus' name='workbench_tabview:hpa_fncr_state_focus' type='text'
-[2026-04-12 16:14:38 IST] [Screen 3]     label id='workbench_tabview:hpa_fncr_state_label' text='--SELECT--' class='ui-selectonemenu-label ui-inputfield ui-corner-all'
-[2026-04-12 16:14:38 IST] [Screen 3]     label text='District*' class='field-label resp-label-section'
-[2026-04-12 16:14:38 IST] [Screen 3]     label id='workbench_tabview:j_idt1330' text='District*' class='ui-outputlabel ui-widget'
-[2026-04-12 16:14:38 IST] [Screen 3]     div id='workbench_tabview:hpa_fncr_district' role='combobox' text='--SELECT-- Ajmer Alwar Banswara Baran Barmer Bharatpur Bhilw' class='ui-selectonemenu ui-widget ui-state-default ui-corner-all bottom-space'
-[2026-04-12 16:14:38 IST] [Screen 3]     input id='workbench_tabview:hpa_fncr_district_focus' name='workbench_tabview:hpa_fncr_district_focus' type='text'
-[2026-04-12 16:14:38 IST] [Screen 3]     label id='workbench_tabview:hpa_fncr_district_label' text='--SELECT--' class='ui-selectonemenu-label ui-inputfield ui-corner-all'
-[2026-04-12 16:14:38 IST] [Screen 3]     label text='Pin Code*' class='field-label resp-label-section'
-[2026-04-12 16:14:38 IST] [Screen 3]     label id='workbench_tabview:j_idt1335' text='Pin Code*' class='ui-outputlabel ui-widget'
-[2026-04-12 16:14:38 IST] [Screen 3]     input id='workbench_tabview:hpa_fncr_pincode' name='workbench_tabview:hpa_fncr_pincode' type='text' role='textbox' value='321201' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all'
-[2026-04-12 16:14:38 IST] [Screen 3]     label text='Sanction Amount*' class='field-label resp-label-section'
-[2026-04-12 16:14:38 IST] [Screen 3]     label id='workbench_tabview:j_idt1338' text='Sanction Amount*' class='ui-outputlabel ui-widget'
-[2026-04-12 16:14:38 IST] [Screen 3]     input id='workbench_tabview:sanction_amt_id' name='workbench_tabview:sanction_amt_id' type='text' role='textbox' value='0' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all ui-state-dis'
-[2026-04-12 16:14:38 IST] [Screen 3]     table id='workbench_tabview:nomineeradiobtn1' role='presentation' text='Yes\t No' class='ui-selectoneradio ui-widget'
-[2026-04-12 16:14:38 IST] [Screen 3]     input id='workbench_tabview:nomineeradiobtn1:0' name='workbench_tabview:nomineeradiobtn1' type='radio' value='Y'
-[2026-04-12 16:14:38 IST] [Screen 3]     label text='Yes'
-[2026-04-12 16:14:38 IST] [Screen 3]     input id='workbench_tabview:nomineeradiobtn1:1' name='workbench_tabview:nomineeradiobtn1' type='radio' value='N'
-[2026-04-12 16:14:38 IST] [Screen 3]     label text='No'
-[2026-04-12 16:14:38 IST] [Screen 3]     button id='app_disapp_form:j_idt1923' name='app_disapp_form:j_idt1923' type='submit' role='button' text='Save And File Movement' class='ui-button ui-widget ui-state-default ui-corner-all ui-button-text-icon-left'
-[2026-04-12 16:14:38 IST] [Screen 3]     button id='app_disapp_form:j_idt1924' name='app_disapp_form:j_idt1924' type='button' role='button' text='Back' class='ui-button ui-widget ui-state-default ui-corner-all ui-button-text-icon-left'
-[2026-04-12 16:14:38 IST] [Screen 3]   [frame[0] main] ALL <select> (31 — ids, selected label, options preview):
-[2026-04-12 16:14:38 IST] [Screen 3]     select[0] id='regnType_input' name='regnType_input' si=1 sel='NEW' nOpt=2 vis=True inVehTab=False inHypIns=False seriesHint=False
-[2026-04-12 16:14:38 IST] [Screen 3]       options: '---------------SELECT---------------' [value='-1'] | 'NEW' [value='N']
-[2026-04-12 16:14:38 IST] [Screen 3]     select[1] id='regnNoSelectionForAPS_input' name='regnNoSelectionForAPS_input' si=1 sel='NO' nOpt=3 vis=True inVehTab=False inHypIns=False seriesHint=False
-[2026-04-12 16:14:38 IST] [Screen 3]       options: '---------------SELECT---------------' [value='-1'] | 'NO' [value='No'] | 'YES' [value='Yes']
-[2026-04-12 16:14:38 IST] [Screen 3]     select[2] id='workbench_tabview:regn_type_input' name='workbench_tabview:regn_type_input' si=4 sel='NEW' nOpt=12 vis=False inVehTab=False inHypIns=False seriesHint=False
-[2026-04-12 16:14:38 IST] [Screen 3]       options: '--SELECT--' [value='0'] | 'EX-ARMY/AUCTION VEHICLE' [value='A'] | 'EX-DIPLOMAT/EMBASSY/FOREIGN VEHICLE' [value='D'] | 'IMPORTED VINTAGE VEHICLE' [value='V'] | 'NEW' [value='N'] | 'NEW REGN AGAINST AUCTION/CONFISCATED VEH' [value='C'] | 'NEW REGN AGAINST SCRAPPED VEHICLE' [value='S'] | 'OTHER COUNTRY VEHICLE' [value='I'] | 'OTHER RTO/MLO/ARTO/DTO/Region Vehicle' [value='R'] | 'OTHER STATE VEHICLE' [value='O'] | 'TEMPORARY REGISTERED VEHICLE' [value='T'] | 'VINTAGE VEHICLE' [value='B']
-[2026-04-12 16:14:38 IST] [Screen 3]     select[3] id='workbench_tabview:tf_owner_cd_input' name='workbench_tabview:tf_owner_cd_input' si=17 sel='INDIVIDUAL' nOpt=28 vis=False inVehTab=False inHypIns=False seriesHint=False
-[2026-04-12 16:14:38 IST] [Screen 3]       options: '--SELECT--' [value='-1'] | 'AUTONOMOUS BODY' [value='12'] | 'CENTRAL GOVERNMENT' [value='4'] | 'CHARITABLE TRUST' [value='9'] | 'DIVYANGJAN (Availing GST Concession)' [value='18'] | 'DIVYANGJAN (Without Availing GST Concession)' [value='19'] | 'DRAMA/TAMASHA GROUPS' [value='14'] | 'DRIVING TRAINING SCHOOL' [value='10'] | 'EDUCATIONAL INSTITUTE' [value='8'] | 'FIRM' [value='2'] | 'GOVERNMENT BOARD' [value='21'] | 'GOVERNMENT COMPANY' [value='23'] | 'GOVERNMENT CORPORATION' [value='22'] | 'GOVERNMENT DEPARTMENT' [value='25'] | 'GOVERNMENT ENTITY' [value='24'] | 'GOVERNMENT TRUST' [value='20'] | 'GOVT UNDERTAKING' [value='6'] | 'INDIVIDUAL' [value='1'] | 'JOINT STOCK COMPANY' [value='3'] | 'LOCAL AUTHORITY' [value='11'] | 'MULTIPLE OWNER' [value='7'] | 'OTHERS' [value='99'] | 'POLICE DEPARTMENT' [value='15'] | 'SCHOOL' [value='13'] | 'SOCIAL WELFARE' [value='17'] | 'STATE GOVERNMENT' [value='5'] | 'STATE TRANSPORT CORP/DEPT' [value='16'] | 'STATE UNIVERSITIES' [value='26']
-[2026-04-12 16:14:38 IST] [Screen 3]     select[4] id='workbench_tabview:ownerCatg_input' name='workbench_tabview:ownerCatg_input' si=5 sel='OTHERS' nOpt=8 vis=False inVehTab=False inHypIns=False seriesHint=False
-[2026-04-12 16:14:38 IST] [Screen 3]       options: '--SELECT--' [value='-1'] | 'DIVYANGJAN' [value='2'] | 'EX-SERVICEMAN' [value='1'] | 'GENERAL' [value='7'] | 'O B C' [value='5'] | 'OTHERS' [value='6'] | 'SCHEDULED CASTE' [value='3'] | 'SCHEDULED TRIBE' [value='4']
-[2026-04-12 16:14:38 IST] [Screen 3]     select[5] id='workbench_tabview:tf_c_state_input' name='workbench_tabview:tf_c_state_input' si=32 sel='Rajasthan' nOpt=37 vis=False inVehTab=False inHypIns=False seriesHint=False
-[2026-04-12 16:14:38 IST] [Screen 3]       options: '--SELECT--' [value='-1'] | 'UT of DNH and DD' [value='DD'] | 'Jammu and Kashmir' [value='JK'] | 'Delhi' [value='DL'] | 'Himachal Pradesh' [value='HP'] | 'Puducherry' [value='PY'] | 'Haryana' [value='HR'] | 'West Bengal' [value='WB'] | 'Bihar' [value='BR'] | 'Karnataka' [value='KA'] | 'Uttarakhand' [value='UK'] | 'Sikkim' [value='SK'] | 'Goa' [value='GA'] | 'Maharashtra' [value='MH'] | 'Uttar Pradesh' [value='UP'] | 'Meghalaya' [value='ML'] | 'Kerala' [value='KL'] | 'Manipur' [value='MN'] | 'Gujarat' [value='GJ'] | 'Madhya Pradesh' [value='MP'] | 'Odisha' [value='OR'] | 'Chhattisgarh' [value='CG'] | 'Chandigarh' [value='CH'] | 'Andaman & Nicobar Island' [value='AN'] | 'Mizoram' [value='MZ'] | 'Andhra Pradesh' [value='AP'] | 'Arunachal Pradesh' [value='AR'] | 'Assam' [value='AS'] | 'Punjab' [value='PB'] | 'Telangana' [value='TG'] | 'Ladakh' [value='LA'] | 'Lakshadweep' [value='LD']
-[2026-04-12 16:14:38 IST] [Screen 3]     select[6] id='workbench_tabview:tf_c_district_input' name='workbench_tabview:tf_c_district_input' si=6 sel='Bharatpur' nOpt=34 vis=False inVehTab=False inHypIns=False seriesHint=False
-[2026-04-12 16:14:38 IST] [Screen 3]       options: '--SELECT--' [value='-1'] | 'Ajmer' [value='119'] | 'Alwar' [value='104'] | 'Banswara' [value='125'] | 'Baran' [value='128'] | 'Barmer' [value='115'] | 'Bharatpur' [value='105'] | 'Bhilwara' [value='122'] | 'Bikaner' [value='101'] | 'Bundi' [value='121'] | 'Chittaurgarh' [value='126'] | 'Churu' [value='102'] | 'Dausa' [value='109'] | 'Dhaulpur' [value='106'] | 'Dungarpur' [value='124'] | 'Ganganagar' [value='99'] | 'Hanumangarh' [value='100'] | 'Jaipur' [value='110'] | 'Jaisalmer' [value='114'] | 'Jalor' [value='116'] | 'Jhalawar' [value='129'] | 'Jhunjhunun' [value='103'] | 'Jodhpur' [value='113'] | 'Karauli' [value='107'] | 'Kota' [value='127'] | 'Nagaur' [value='112'] | 'Pali' [value='118'] | 'Pratapgarh' [value='131'] | 'Rajsamand' [value='123'] | 'Sawai Madhopur' [value='108'] | 'Sikar' [value='111'] | 'Sirohi' [value='117']
-[2026-04-12 16:14:38 IST] [Screen 3]     select[7] id='workbench_tabview:tf_p_state_input' name='workbench_tabview:tf_p_state_input' si=32 sel='Rajasthan' nOpt=37 vis=False inVehTab=False inHypIns=False seriesHint=False
-[2026-04-12 16:14:38 IST] [Screen 3]       options: '--SELECT--' [value='-1'] | 'UT of DNH and DD' [value='DD'] | 'Jammu and Kashmir' [value='JK'] | 'Delhi' [value='DL'] | 'Himachal Pradesh' [value='HP'] | 'Puducherry' [value='PY'] | 'Haryana' [value='HR'] | 'West Bengal' [value='WB'] | 'Bihar' [value='BR'] | 'Karnataka' [value='KA'] | 'Uttarakhand' [value='UK'] | 'Sikkim' [value='SK'] | 'Goa' [value='GA'] | 'Maharashtra' [value='MH'] | 'Uttar Pradesh' [value='UP'] | 'Meghalaya' [value='ML'] | 'Kerala' [value='KL'] | 'Manipur' [value='MN'] | 'Gujarat' [value='GJ'] | 'Madhya Pradesh' [value='MP'] | 'Odisha' [value='OR'] | 'Chhattisgarh' [value='CG'] | 'Chandigarh' [value='CH'] | 'Andaman & Nicobar Island' [value='AN'] | 'Mizoram' [value='MZ'] | 'Andhra Pradesh' [value='AP'] | 'Arunachal Pradesh' [value='AR'] | 'Assam' [value='AS'] | 'Punjab' [value='PB'] | 'Telangana' [value='TG'] | 'Ladakh' [value='LA'] | 'Lakshadweep' [value='LD']
-[2026-04-12 16:14:38 IST] [Screen 3]     select[8] id='workbench_tabview:tf_p_district_input' name='workbench_tabview:tf_p_district_input' si=6 sel='Bharatpur' nOpt=34 vis=False inVehTab=False inHypIns=False seriesHint=False
-[2026-04-12 16:14:38 IST] [Screen 3]       options: '--SELECT--' [value='-1'] | 'Ajmer' [value='119'] | 'Alwar' [value='104'] | 'Banswara' [value='125'] | 'Baran' [value='128'] | 'Barmer' [value='115'] | 'Bharatpur' [value='105'] | 'Bhilwara' [value='122'] | 'Bikaner' [value='101'] | 'Bundi' [value='121'] | 'Chittaurgarh' [value='126'] | 'Churu' [value='102'] | 'Dausa' [value='109'] | 'Dhaulpur' [value='106'] | 'Dungarpur' [value='124'] | 'Ganganagar' [value='99'] | 'Hanumangarh' [value='100'] | 'Jaipur' [value='110'] | 'Jaisalmer' [value='114'] | 'Jalor' [value='116'] | 'Jhalawar' [value='129'] | 'Jhunjhunun' [value='103'] | 'Jodhpur' [value='113'] | 'Karauli' [value='107'] | 'Kota' [value='127'] | 'Nagaur' [value='112'] | 'Pali' [value='118'] | 'Pratapgarh' [value='131'] | 'Rajsamand' [value='123'] | 'Sawai Madhopur' [value='108'] | 'Sikar' [value='111'] | 'Sirohi' [value='117']
-[2026-04-12 16:14:38 IST] [Screen 3]     select[9] id='workbench_tabview:maker_input' name='workbench_tabview:maker_input' si=1 sel='HERO MOTOCORP LTD' nOpt=2 vis=False inVehTab=True inHypIns=False seriesHint=False
-[2026-04-12 16:14:38 IST] [Screen 3]       options: '-SELECT-' [value='-1'] | 'HERO MOTOCORP LTD' [value='32']
-[2026-04-12 16:14:38 IST] [Screen 3]     select[10] id='workbench_tabview:maker_model_input' name='workbench_tabview:maker_model_input' si=296 sel='SPLENDOR+ (DRS)-(ZZTN1122001)' nOpt=498 vis=False inVehTab=True inHypIns=False seriesHint=False
-[2026-04-12 16:14:38 IST] [Screen 3]       options: '-SELECT-' [value='0'] | 'ACHIEVER-(HACCDDSSCCR)' [value='HACCDDSSCCR'] | 'ACHIEVER 150 (DISC/SELF/CAST)-(ZZLN0153001)' [value='ZZLN0153001'] | 'ACHIEVER 150 (DRUM-SELF-CAST)-(ZZLN0153002)' [value='ZZLN0153002'] | 'ACHIEVER-DISC/SELF CAST WHEEL-(ZZFN0004010)' [value='ZZFN0004010'] | 'DESTINI 110 VX-(ZZUN0743001)' [value='ZZUN0743001'] | 'DESTINI 110 ZX-(ZZUN0743002)' [value='ZZUN0743002'] | 'DESTINI 125 LX-(ZZSN0249001)' [value='ZZSN0249001'] | 'DESTINI 125 (LX)-(ZZPN0046006)' [value='ZZPN0046006'] | 'DESTINI 125 (LX)-(ZZNN0128003)' [value='ZZNN0128003'] | 'DESTINI 125 (LX)-(ZZPN0046002)' [value='ZZPN0046002'] | 'DESTINI 125 PLATINUM EDITION-(ZZPN0046004)' [value='ZZPN0046004'] | 'DESTINI 125 (STD)-(ZZPN0046005)' [value='ZZPN0046005'] | 'DESTINI 125 VX-(ZZSN0249004)' [value='ZZSN0249004'] | 'DESTINI 125 VX-(ZZUN0257001)' [value='ZZUN0257001'] | 'DESTINI 125 VX-(ZZSN0249002)' [value='ZZSN0249002'] | 'DESTINI 125 (VX)-(ZZPN0046007)' [value='ZZPN0046007'] | 'DESTINI 125 (VX)-(ZZPN0046001)' [value='ZZPN0046001'] | 'DESTINI 125 (VX)-(ZZNN0128002)' [value='ZZNN0128002'] | 'DESTINI 125 VX (SE)-(ZZPN0046003)' [value='ZZPN0046003'] | 'DESTINI 125 ZX-(ZZUN0257003)' [value='ZZUN0257003'] | 'DESTINI 125 ZX-(ZZSN0249005)' [value='ZZSN0249005'] | 'DESTINI 125 ZX+-(ZZUN0257004)' [value='ZZUN0257004'] | 'DESTINI 125 ZX+-(ZZSN0249006)' [value='ZZSN0249006'] | 'DESTINI PRIME-(ZZSN0249003)' [value='ZZSN0249003'] | 'DESTINI PRIME-(ZZUN0257002)' [value='ZZUN0257002'] | 'DUET-(ZZKN0117001)' [value='ZZKN0117001'] | 'DUET-(ZZKN0117002)' [value='ZZKN0117002'] | 'DUET125-(ZZNN0128001)' [value='ZZNN0128001'] | 'DUET (BOTTOM LINK)-(ZZKN0117004)' [value='ZZKN0117004'] | 'DUET (TELESCOPIC FORK)-(ZZKN0117003)' [value='ZZKN0117003'] | 'ECO DELUXE(I3S-SELF-DRUM-CAST)-(ZZJN0008065)' [value='ZZJN0008065']
-[2026-04-12 16:14:38 IST] [Screen 3]     select[11] id='workbench_tabview:dealer_cd_input' name='workbench_tabview:dealer_cd_input' si=2 sel='ARORA AUTOMOBILES ( RJ5)' nOpt=3 vis=False inVehTab=True inHypIns=False seriesHint=False
-[2026-04-12 16:14:38 IST] [Screen 3]       options: '-SELECT-' [value='0'] | 'ARORA AUTOMOBILES' [value='RJ00500069'] | 'ARORA AUTOMOBILES ( RJ5)' [value='RJ00500069']
-[2026-04-12 16:14:38 IST] [Screen 3]     select[12] id='workbench_tabview:vh_type_input' name='workbench_tabview:vh_type_input' si=0 sel='Non-Transport' nOpt=1 vis=False inVehTab=True inHypIns=False seriesHint=False
-[2026-04-12 16:14:38 IST] [Screen 3]       options: 'Non-Transport' [value='2']
-[2026-04-12 16:14:38 IST] [Screen 3]     select[13] id='workbench_tabview:vh_class_input' name='workbench_tabview:vh_class_input' si=1 sel='M-Cycle/Scooter' nOpt=2 vis=False inVehTab=True inHypIns=False seriesHint=False
-[2026-04-12 16:14:38 IST] [Screen 3]       options: '-SELECT-' [value='-1'] | 'M-Cycle/Scooter' [value='1']
-[2026-04-12 16:14:38 IST] [Screen 3]     select[14] id='workbench_tabview:vh_catg_input' name='workbench_tabview:vh_catg_input' si=1 sel='TWO WHEELER(NT)' nOpt=2 vis=False inVehTab=True inHypIns=False seriesHint=False
-[2026-04-12 16:14:38 IST] [Screen 3]       options: '-SELECT-' [value='-1'] | 'TWO WHEELER(NT)' [value='2WN']
-[2026-04-12 16:14:38 IST] [Screen 3]     select[15] id='workbench_tabview:fuel_input' name='workbench_tabview:fuel_input' si=22 sel='PETROL' nOpt=37 vis=False inVehTab=True inHypIns=False seriesHint=False
-[2026-04-12 16:14:38 IST] [Screen 3]       options: '-SELECT-' [value='-1'] | 'DIESEL' [value='2'] | 'LPG ONLY' [value='8'] | 'SOLAR' [value='10'] | 'ELECTRIC(BOV)' [value='4'] | 'CNG ONLY' [value='6'] | 'PETROL/CNG' [value='3'] | 'PETROL/LPG' [value='5'] | 'PETROL/HYBRID' [value='11'] | 'DIESEL/HYBRID' [value='12'] | 'NOT APPLICABLE' [value='99'] | 'PETROL/METHANOL' [value='14'] | 'METHANOL' [value='15'] | 'LNG' [value='17'] | 'DUAL DIESEL/BIO CNG' [value='18'] | 'DUAL DIESEL/CNG' [value='19'] | 'DUAL DIESEL/LNG' [value='20'] | 'DI-METHYL ETHER' [value='21'] | 'FUEL CELL HYDROGEN' [value='22'] | 'PURE EV' [value='23'] | 'STRONG HYBRID EV' [value='25'] | 'PLUG-IN HYBRID EV' [value='26'] | 'PETROL' [value='1'] | 'PETROL(E20)' [value='16'] | 'PETROL/HYBRID/CNG' [value='39'] | 'PETROL(E20)/HYBRID/CNG' [value='40'] | 'ETHANOL(E100)' [value='13'] | 'PETROL(E20)/CNG' [value='29'] | 'PETROL(E20)/LPG' [value='30'] | 'PETROL(E20)/HYBRID' [value='31'] | 'BIO-METHANE' [value='32'] | 'BIO-CNG/BIO-GAS' [value='33']
-[2026-04-12 16:14:38 IST] [Screen 3]     select[16] id='workbench_tabview:norms_input' name='workbench_tabview:norms_input' si=7 sel='BHARAT STAGE VI' nOpt=27 vis=False inVehTab=True inHypIns=False seriesHint=False
-[2026-04-12 16:14:38 IST] [Screen 3]       options: '-SELECT-' [value='-1'] | 'BHARAT STAGE I' [value='1'] | 'BHARAT STAGE II' [value='2'] | 'BHARAT STAGE III' [value='3'] | 'Bharat Stage III (CEV)' [value='18'] | 'BHARAT STAGE III/IV' [value='11'] | 'BHARAT STAGE IV' [value='4'] | 'BHARAT STAGE VI' [value='15'] | 'Bharat (Trem) Stage III' [value='5'] | 'Bharat (Trem) Stage III A' [value='6'] | 'Bharat (Trem) Stage III B' [value='12'] | 'CEV STAGE IV' [value='24'] | 'CEV STAGE V' [value='25'] | 'EURO 1' [value='7'] | 'EURO 2' [value='8'] | 'EURO 3' [value='9'] | 'EURO 4' [value='10'] | 'EURO 6' [value='17'] | 'EURO 6A' [value='19'] | 'EURO  6AD' [value='23'] | 'EURO 6B' [value='20'] | 'EURO 6C' [value='21'] | 'EURO 6D' [value='22'] | 'Not Applicable' [value='98'] | 'Not Available' [value='99'] | 'TREM STAGE IV' [value='13'] | 'TREM STAGE V' [value='14']
-[2026-04-12 16:14:38 IST] [Screen 3]     select[17] id='workbench_tabview:purchase_as_input' name='workbench_tabview:purchase_as_input' si=1 sel='Fully Built' nOpt=3 vis=False inVehTab=True inHypIns=False seriesHint=False
-[2026-04-12 16:14:38 IST] [Screen 3]       options: '-SELECT-' [value='-1'] | 'Fully Built' [value='B'] | 'Drive Away Chasis' [value='C']
-[2026-04-12 16:14:38 IST] [Screen 3]     select[18] id='workbench_tabview:ac_fitted_input' name='workbench_tabview:ac_fitted_input' si=0 sel='NO' nOpt=1 vis=False inVehTab=True inHypIns=False seriesHint=False
-[2026-04-12 16:14:38 IST] [Screen 3]       options: 'NO' [value='N']
-[2026-04-12 16:14:38 IST] [Screen 3]     select[19] id='workbench_tabview:audio_fitted_input' name='workbench_tabview:audio_fitted_input' si=0 sel='NO' nOpt=1 vis=False inVehTab=True inHypIns=False seriesHint=False
-[2026-04-12 16:14:38 IST] [Screen 3]       options: 'NO' [value='N']
-[2026-04-12 16:14:38 IST] [Screen 3]     select[20] id='workbench_tabview:video_fitted_input' name='workbench_tabview:video_fitted_input' si=0 sel='NO' nOpt=1 vis=False inVehTab=True inHypIns=False seriesHint=False
-[2026-04-12 16:14:38 IST] [Screen 3]       options: 'NO' [value='N']
-[2026-04-12 16:14:38 IST] [Screen 3]     select[21] id='workbench_tabview:vm_other_criteria_input' name='workbench_tabview:vm_other_criteria_input' si=0 sel='Not Applicable' nOpt=12 vis=False inVehTab=True inHypIns=False seriesHint=False
-[2026-04-12 16:14:38 IST] [Screen 3]       options: 'Not Applicable' [value='0'] | 'NOT a Fleet Owner and NOT Playing Exclusively Within the Municipal Limit' [value='1'] | 'Plying Exclusively Wthin the Municipal Limits/U.I.T. Limits' [value='2'] | 'Plying Exclusively on Sub-Urban Routes' [value='3'] | 'Playing Exclusively on Rural Routes' [value='4'] | 'Ranthambore National Park' [value='5'] | 'Govt. Distributed Vehicle' [value='6'] | 'Akshyapatra Foundation Vehicle Used for Mid day Meal' [value='7'] | 'Spare Vehicle of Permit' [value='8'] | 'Social Security/Walfare Investment Promotion Scheme 2021' [value='9'] | 'Auction Unregistered Vehicle' [value='10'] | 'Strong Hybrid Vehicle' [value='11']
-[2026-04-12 16:14:38 IST] [Screen 3]     select[22] id='workbench_tabview:imported_veh_input' name='workbench_tabview:imported_veh_input' si=0 sel='No' nOpt=2 vis=False inVehTab=True inHypIns=False seriesHint=False
-[2026-04-12 16:14:38 IST] [Screen 3]       options: 'No' [value='N'] | 'Yes' [value='Y']
-[2026-04-12 16:14:38 IST] [Screen 3]     select[23] id='workbench_tabview:tableTaxMode:0:taxModeType_input' name='workbench_tabview:tableTaxMode:0:taxModeType_input' si=1 sel='ONE TIME' nOpt=3 vis=False inVehTab=True inHypIns=False seriesHint=False
-[2026-04-12 16:14:38 IST] [Screen 3]       options: '--Select--' [value='0'] | 'ONE TIME' [value='O'] | 'Tax Exempted' [value='E']
-[2026-04-12 16:14:38 IST] [Screen 3]     select[24] id='workbench_tabview:ins_type_input' name='workbench_tabview:ins_type_input' si=4 sel='THIRD PARTY' nOpt=5 vis=True inVehTab=False inHypIns=True seriesHint=False
-[2026-04-12 16:14:38 IST] [Screen 3]       options: '--SELECT--' [value='-1'] | 'COMPREHENSIVE' [value='1'] | 'NOT AVAILABLE' [value='4'] | 'THEFT AND THIRD PARTY' [value='3'] | 'THIRD PARTY' [value='2']
-[2026-04-12 16:14:38 IST] [Screen 3]     select[25] id='workbench_tabview:ins_cd_input' name='workbench_tabview:ins_cd_input' si=338 sel='UNIVERSAL SOMPO GENERAL INSURANCE CO.LTD' nOpt=358 vis=True inVehTab=False inHypIns=True seriesHint=False
-[2026-04-12 16:14:38 IST] [Screen 3]       options: '--SELECT--' [value='-1'] | 'AARVI GENERAL INS.' [value='1004'] | 'ABN AMERO BANK LTD.' [value='1005'] | 'Acko General Insurance Limited' [value='1347'] | 'ADHWANI INDIA INSURANCE' [value='1006'] | 'ADINATH AUTO FIN' [value='1007'] | 'Aditya Birla Health Insurance Co Ltd' [value='1352'] | 'ADROIT TECH SER PVT LTD' [value='1008'] | 'AGRICULTURE INSURANCE' [value='1009'] | 'AIG' [value='1010'] | 'ALLAHABAD BANK' [value='1011'] | 'ALLIED INSURANCE' [value='1012'] | 'ALPHA INDIA GEN INS CO' [value='1013'] | 'ANNAND INS. CO. LTD.' [value='1014'] | 'ANUSUYA A G' [value='1015'] | 'ANY OTHERS/ NOT AVAILABLE/ EXEMPTED' [value='9999'] | 'Apollo Munich Health Insurance Company Limited' [value='1354'] | 'Apple Auto Agency Pvt Ltd' [value='1028'] | 'APPOLO DKV' [value='1016'] | 'ARTO GANDHINAGAR' [value='1017'] | 'ASHOK LEYLAND FIANACE' [value='1018'] | 'ASIAN EARTH MOVERS' [value='1019'] | 'ASSURANCE INS. OF INDIA' [value='1020'] | 'A T O(I) LIMITED.' [value='1339'] | 'AUTO ASSURANZ' [value='1021'] | 'AUTO RISK M.SER.P.LTD.' [value='1022'] | 'AVIVA GENERAL INSURANCE' [value='1023'] | 'AVIVA LIFE INSURANCE' [value='1024'] | 'AXA' [value='1025'] | 'AXIS BANK' [value='1026'] | 'BACKLOG' [value='1029'] | 'BAI' [value='1030']
-[2026-04-12 16:14:38 IST] [Screen 3]     select[26] id='workbench_tabview:ins_year_input' name='workbench_tabview:ins_year_input' si=5 sel='5 Year' nOpt=6 vis=True inVehTab=False inHypIns=True seriesHint=False
-[2026-04-12 16:14:38 IST] [Screen 3]       options: '--SELECT--' [value='0'] | '1 Year' [value='1'] | '2 Year' [value='2'] | '3 Year' [value='3'] | '4 Year' [value='4'] | '5 Year' [value='5']
-[2026-04-12 16:14:38 IST] [Screen 3]     select[27] id='workbench_tabview:seriesType_input' name='workbench_tabview:seriesType_input' si=0 sel='STATE SERIES' nOpt=2 vis=True inVehTab=False inHypIns=True seriesHint=True
-[2026-04-12 16:14:38 IST] [Screen 3]       options: 'STATE SERIES' [value='N'] | 'BHARAT SERIES' [value='B']
-[2026-04-12 16:14:38 IST] [Screen 3]     select[28] id='workbench_tabview:hpa_hp_type_input' name='workbench_tabview:hpa_hp_type_input' si=2 sel='Hypothecation' nOpt=4 vis=True inVehTab=False inHypIns=True seriesHint=False
-[2026-04-12 16:14:38 IST] [Screen 3]       options: '--SELECT--' [value='-1'] | 'Hire-Purchase' [value='HP'] | 'Hypothecation' [value='HT'] | 'Lease Agreement' [value='LA']
-[2026-04-12 16:14:38 IST] [Screen 3]     select[29] id='workbench_tabview:hpa_fncr_state_input' name='workbench_tabview:hpa_fncr_state_input' si=32 sel='Rajasthan' nOpt=37 vis=True inVehTab=False inHypIns=True seriesHint=False
-[2026-04-12 16:14:38 IST] [Screen 3]       options: '--SELECT--' [value='-1'] | 'UT of DNH and DD' [value='DD'] | 'Jammu and Kashmir' [value='JK'] | 'Delhi' [value='DL'] | 'Himachal Pradesh' [value='HP'] | 'Puducherry' [value='PY'] | 'Haryana' [value='HR'] | 'West Bengal' [value='WB'] | 'Bihar' [value='BR'] | 'Karnataka' [value='KA'] | 'Uttarakhand' [value='UK'] | 'Sikkim' [value='SK'] | 'Goa' [value='GA'] | 'Maharashtra' [value='MH'] | 'Uttar Pradesh' [value='UP'] | 'Meghalaya' [value='ML'] | 'Kerala' [value='KL'] | 'Manipur' [value='MN'] | 'Gujarat' [value='GJ'] | 'Madhya Pradesh' [value='MP'] | 'Odisha' [value='OR'] | 'Chhattisgarh' [value='CG'] | 'Chandigarh' [value='CH'] | 'Andaman & Nicobar Island' [value='AN'] | 'Mizoram' [value='MZ'] | 'Andhra Pradesh' [value='AP'] | 'Arunachal Pradesh' [value='AR'] | 'Assam' [value='AS'] | 'Punjab' [value='PB'] | 'Telangana' [value='TG'] | 'Ladakh' [value='LA'] | 'Lakshadweep' [value='LD']
-[2026-04-12 16:14:38 IST] [Screen 3]     select[30] id='workbench_tabview:hpa_fncr_district_input' name='workbench_tabview:hpa_fncr_district_input' si=0 sel='--SELECT--' nOpt=34 vis=True inVehTab=False inHypIns=True seriesHint=False
-[2026-04-12 16:14:38 IST] [Screen 3]       options: '--SELECT--' [value='-1'] | 'Ajmer' [value='119'] | 'Alwar' [value='104'] | 'Banswara' [value='125'] | 'Baran' [value='128'] | 'Barmer' [value='115'] | 'Bharatpur' [value='105'] | 'Bhilwara' [value='122'] | 'Bikaner' [value='101'] | 'Bundi' [value='121'] | 'Chittaurgarh' [value='126'] | 'Churu' [value='102'] | 'Dausa' [value='109'] | 'Dhaulpur' [value='106'] | 'Dungarpur' [value='124'] | 'Ganganagar' [value='99'] | 'Hanumangarh' [value='100'] | 'Jaipur' [value='110'] | 'Jaisalmer' [value='114'] | 'Jalor' [value='116'] | 'Jhalawar' [value='129'] | 'Jhunjhunun' [value='103'] | 'Jodhpur' [value='113'] | 'Karauli' [value='107'] | 'Kota' [value='127'] | 'Nagaur' [value='112'] | 'Pali' [value='118'] | 'Pratapgarh' [value='131'] | 'Rajsamand' [value='123'] | 'Sawai Madhopur' [value='108'] | 'Sikar' [value='111'] | 'Sirohi' [value='117']
-[2026-04-12 16:14:38 IST] [Screen 3]   [frame[0] main] PF / id hints (tax / taxMode / mv_tax, non-SELECT, cap 40):
-[2026-04-12 16:14:38 IST] [Screen 3]     DIV id='workbench_tabview:uiTaxModes' hidden=True class='ui-outputpanel ui-widget' text='                             Tax Mode Details              Tax TypeTax ModeMV Tax--Select--ONE TIMETax ExemptedONE TIME '
-[2026-04-12 16:14:38 IST] [Screen 3]     DIV id='workbench_tabview:tableTaxMode' hidden=True class='ui-datatable ui-widget top-space bottom-space' text='                             Tax Mode Details              Tax TypeTax ModeMV Tax--Select--ONE TIMETax ExemptedONE TIME'
-[2026-04-12 16:14:38 IST] [Screen 3]     THEAD id='workbench_tabview:tableTaxMode_head' hidden=True class='' text='Tax TypeTax Mode'
-[2026-04-12 16:14:38 IST] [Screen 3]     TH id='workbench_tabview:tableTaxMode:j_idt930' hidden=True class='ui-state-default' text='Tax Type'
-[2026-04-12 16:14:38 IST] [Screen 3]     TH id='workbench_tabview:tableTaxMode:j_idt932' hidden=True class='ui-state-default' text='Tax Mode'
-[2026-04-12 16:14:38 IST] [Screen 3]     TBODY id='workbench_tabview:tableTaxMode_data' hidden=True class='ui-datatable-data ui-widget-content' text='MV Tax--Select--ONE TIMETax ExemptedONE TIME'
-[2026-04-12 16:14:38 IST] [Screen 3]     DIV id='workbench_tabview:tableTaxMode:0:taxModeType' hidden=True class='ui-selectonemenu ui-widget ui-state-default ui-corner-all' text='--Select--ONE TIMETax ExemptedONE TIME'
-[2026-04-12 16:14:38 IST] [Screen 3]     INPUT id='workbench_tabview:tableTaxMode:0:taxModeType_focus' hidden=True class='' text=''
-[2026-04-12 16:14:38 IST] [Screen 3]     LABEL id='workbench_tabview:tableTaxMode:0:taxModeType_label' hidden=True class='ui-selectonemenu-label ui-inputfield ui-corner-all' text='ONE TIME'
-[2026-04-12 16:14:38 IST] [Screen 3]     DIV id='workbench_tabview:tableTaxMode:0:taxModeType_panel' hidden=True class='ui-selectonemenu-panel ui-widget ui-widget-content ui-corner-all ui-helper-hidde' text='--Select--ONE TIMETax Exempted'
-[2026-04-12 16:14:38 IST] [Screen 3]     UL id='workbench_tabview:tableTaxMode:0:taxModeType_items' hidden=True class='ui-selectonemenu-items ui-selectonemenu-list ui-widget-content ui-widget ui-corn' text='--Select--ONE TIMETax Exempted'
-[2026-04-12 16:14:38 IST] [Screen 3]     LI id='workbench_tabview:tableTaxMode:0:taxModeType_0' hidden=True class='ui-selectonemenu-item ui-selectonemenu-list-item ui-corner-all' text='--Select--'
-[2026-04-12 16:14:38 IST] [Screen 3]     LI id='workbench_tabview:tableTaxMode:0:taxModeType_1' hidden=True class='ui-selectonemenu-item ui-selectonemenu-list-item ui-corner-all ui-state-highligh' text='ONE TIME'
-[2026-04-12 16:14:38 IST] [Screen 3]     LI id='workbench_tabview:tableTaxMode:0:taxModeType_2' hidden=True class='ui-selectonemenu-item ui-selectonemenu-list-item ui-corner-all' text='Tax Exempted'
-[2026-04-12 16:14:38 IST] [Screen 3]   [frame[0] main] PF / id hints (series_type / seriesType / regn_series / state_series, cap 40):
-[2026-04-12 16:14:38 IST] [Screen 3]     DIV id='workbench_tabview:seriesType' hidden=False inHypIns=True class='ui-selectonemenu ui-widget ui-state-default ui-corner-all' text='STATE SERIES BHARAT SERIES STATE SERIES'
-[2026-04-12 16:14:38 IST] [Screen 3]     INPUT id='workbench_tabview:seriesType_focus' hidden=False inHypIns=True class='' text=''
-[2026-04-12 16:14:38 IST] [Screen 3]     SELECT id='workbench_tabview:seriesType_input' hidden=False inHypIns=True class='' text='STATE SERIES BHARAT SERIES'
-[2026-04-12 16:14:38 IST] [Screen 3]     LABEL id='workbench_tabview:seriesType_label' hidden=False inHypIns=True class='ui-selectonemenu-label ui-inputfield ui-corner-all' text='STATE SERIES'
-[2026-04-12 16:14:38 IST] [Screen 3]     DIV id='workbench_tabview:seriesType_panel' hidden=True inHypIns=False class='ui-selectonemenu-panel ui-widget ui-widget-content ui-corner-all ui-helper-hidde' text='STATE SERIESBHARAT SERIES'
-[2026-04-12 16:14:38 IST] [Screen 3]     UL id='workbench_tabview:seriesType_items' hidden=True inHypIns=False class='ui-selectonemenu-items ui-selectonemenu-list ui-widget-content ui-widget ui-corn' text='STATE SERIESBHARAT SERIES'
-[2026-04-12 16:14:38 IST] [Screen 3]     LI id='workbench_tabview:seriesType_0' hidden=True inHypIns=False class='ui-selectonemenu-item ui-selectonemenu-list-item ui-corner-all ui-state-highligh' text='STATE SERIES'
-[2026-04-12 16:14:38 IST] [Screen 3]     LI id='workbench_tabview:seriesType_1' hidden=True inHypIns=False class='ui-selectonemenu-item ui-selectonemenu-list-item ui-corner-all' text='BHARAT SERIES'
-[2026-04-12 16:14:38 IST] [Screen 3] === END PAGE STATE DUMP ===
-[2026-04-12 16:14:48 IST] [Screen 3] TIMEOUT pf-dropdown: Relation with nominee selector=[id="workbench_tabview:vm_rel1"] value='Brother'
-[2026-04-12 16:14:58 IST] [Screen 3] TIMEOUT select: Relation with nominee (native) selector=select[id="workbench_tabview:vm_rel1_input"] value=Brother
-[2026-04-12 16:14:59 IST] [Screen 3] --- Screen 3d: Save and File Movement, confirmation popups, scrape app no. ---
-[2026-04-12 16:15:10 IST] [Screen 3] click: Save and File Movement (exact button name)
-[2026-04-12 16:15:12 IST] [Screen 3] dialog: Yes
-[2026-04-12 16:15:22 IST] [Screen 3] Screen 3: confirmation popups — Yes, Yes (incl. Are you sure)
-[2026-04-12 16:15:23 IST] [Screen 3] Screen 3d: scrape fallback dialog snippet: 'Alert!\nClose\nFinancier Address\nInvalid District'
-[2026-04-12 16:15:33 IST] [Screen 3] Screen 3: using application id from workbench: 'RJ26041148051328'
-[2026-04-12 16:15:33 IST] [Screen 4] --- Screen 4: Verify, Save Options / File Movement, Dealer Document Upload ---
-[2026-04-12 16:15:43 IST] [Screen 4] TIMEOUT click: Verify selector=input[value='Verify'], button:has-text('Verify')
-[2026-04-12 16:15:43 IST] [Screen 4] fill_rto_row FAILED: Locator.wait_for: Timeout 10000ms exceeded.
+[2026-04-12 16:27:09 IST] [Setup] fill_rto_row start rto_queue_id=1 sales_id=1 dealer_id=100001 log_file=C:\Users\arya_\OneDrive\Desktop\My Auto.AI\ocr_output\100001\9650693610_RTO.txt
+[2026-04-12 16:27:09 IST] [Setup] uploads root (dealer): C:\Users\arya_\OneDrive\Desktop\My Auto.AI\Uploaded scans\100001
+[2026-04-12 16:27:09 IST] [Setup] searched folder (absolute): C:\Users\arya_\OneDrive\Desktop\My Auto.AI\Uploaded scans\100001\8905969604_100426
+[2026-04-12 16:27:09 IST] [Setup] documents matched to categories: {'FORM 20': '8905969604_Form_20.pdf', 'FORM 21': '8905969604_Sale_Certificate.pdf', 'FORM 22': '8905969604_Form22.pdf', 'INSURANCE CERTIFICATE': '8905969604_Insurance.pdf', 'INVOICE ORIGINAL': '8905969604_GST_Retail_Invoice.pdf', 'AADHAAR_FRONT': 'Aadhar.jpg', 'AADHAAR_BACK': 'Aadhar_back.jpg', 'OWNER UNDERTAKING FORM': 'Details.jpg'}
+[2026-04-12 16:27:15 IST] [Setup] browser page url: https://vahan.parivahan.gov.in/vahan/vahan/workbench.xhtml
+[2026-04-12 16:27:15 IST] [Setup] TEMP SKIP: RTO_FILL_SKIP_TO_SCREEN=3 — start at Screen 3 (skipped: dealer-home reset + screens 1..2) Screen 3: skip Home + Entry → Vehicle Details sub-tab first.
+[2026-04-12 16:27:15 IST] [Screen 3] --- Screen 3: Home, Entry, tax, insurance, hypothecation, application no ---
+[2026-04-12 16:27:15 IST] [Screen 3] Screen 3: skip Home + skip Entry — Vehicle Details sub-tab only (already on form)
+[2026-04-12 16:27:16 IST] [Screen 3] Screen 3: sub-tab Vehicle Details
+[2026-04-12 16:27:16 IST] [Screen 3] Screen 3: scrolled Vehicle Details tab panel toward bottom (Tax Mode region)
+[2026-04-12 16:27:17 IST] [Screen 3] Screen 3: scrolled to Tax Mode (fast tableTaxMode:0 'select[id="workbench_tabview:tableTaxMode:0:taxModeType_input"]')
+[2026-04-12 16:27:17 IST] [Screen 3] select: Tax Mode = ONE TIME (tableTaxMode:0:taxModeType_input (direct))
+[2026-04-12 16:27:28 IST] [Screen 3] Screen 3: Save Vehicle Details ("button:has-text('Save Vehicle Details')")
+[2026-04-12 16:27:34 IST] [Screen 3] Screen 3: Save Vehicle Details — dialog text snippet: 'Generated Application No\nApplication No. :RJ26041148051328\nOk'
+[2026-04-12 16:27:34 IST] [Screen 3] Screen 3: application_id from Save Vehicle Details dialog: 'RJ26041148051328'
+[2026-04-12 16:27:35 IST] [Screen 3] Generated Application dialog: Ok (control with Ok text)
+[2026-04-12 16:27:40 IST] [Screen 3] Screen 3: scrolled to sub-tab bar
+[2026-04-12 16:27:40 IST] [Screen 3] tab probe [Hypothecation\s*/\s*Insurance]: id=None; class=None; href='#workbench_tabview:HypothecationOwner'; role=None; aria-controls=None; data-index=None; text='Hypothecation/Insurance Information'
+[2026-04-12 16:27:41 IST] [Screen 3] Screen 3: sub-tab Hypothecation/Insurance Information (ui-tabs-nav)
+[2026-04-12 16:27:41 IST] [Screen 3] --- Screen 3c: Insurance (Hypothecation/Insurance Information tab) ---
+[2026-04-12 16:27:53 IST] [Screen 3] skip: Insurance Type already set on form (Vahan pre-fill)
+[2026-04-12 16:27:59 IST] [Screen 3] skip: Insurance Company already set on form (Vahan pre-fill)
+[2026-04-12 16:27:59 IST] [Screen 3] skip: Policy/Cover Note No. already set on form (Vahan pre-fill)
+[2026-04-12 16:27:59 IST] [Screen 3] skip: Insurance From already set on form (Vahan pre-fill)
+[2026-04-12 16:27:59 IST] [Screen 3] skip: Insurance Period (in year) already set on form (Vahan pre-fill)
+[2026-04-12 16:28:06 IST] [Screen 3] skip: Series Type already STATE SERIES (Vahan pre-fill)
+[2026-04-12 16:28:07 IST] [Screen 3] skip: isHypo already checked
+[2026-04-12 16:28:07 IST] [Screen 3] hpa: financier name input visible
+[2026-04-12 16:28:07 IST] [Screen 3] pf-dropdown (overlay): Hypothecation Type = Hypothecation
+[2026-04-12 16:28:08 IST] [Screen 3] fill: Financier Name = Axis Bank
+[2026-04-12 16:28:09 IST] [Screen 3] fill: Hypothecation From Date = 10-Apr-2026
+[2026-04-12 16:28:09 IST] [Screen 3] fill: Financier House No. = S/O Kamal Singh, Bansroli, Bharatpur, Rajasthan - . 321201
+[2026-04-12 16:28:09 IST] [Screen 3] fill: Financier City = Bharatpur
+[2026-04-12 16:28:09 IST] [Screen 3] pf-dropdown (native): Financier State = Rajasthan
+[2026-04-12 16:28:11 IST] [Screen 3] pf-dropdown (native): Financier District = Bharatpur
+[2026-04-12 16:28:12 IST] [Screen 3] fill: Financier Pincode = 321201
+[2026-04-12 16:28:12 IST] [Screen 3] nominee: want=True, name='Harvesh', relationship='Brother'
+[2026-04-12 16:28:13 IST] [Screen 3] radio: Add Nominee Details — Yes
+[2026-04-12 16:28:13 IST] [Screen 3] nominee: name input visible after Yes click
+[2026-04-12 16:28:13 IST] [Screen 3] fill: Nominee Name = Harvesh
+[2026-04-12 16:28:14 IST] [Screen 3] pf-dropdown (overlay): Relation with nominee = Brother
+[2026-04-12 16:28:16 IST] [Screen 3] --- Screen 3d: Save and File Movement, confirmation popups, scrape app no. ---
+[2026-04-12 16:28:16 IST] [Screen 3] click: Save and File Movement (exact button name)
+[2026-04-12 16:28:16 IST] [Screen 3] dialog: Yes
+[2026-04-12 16:28:28 IST] [Screen 3] Screen 3: confirmation popups — Yes, Yes (incl. Are you sure)
+[2026-04-12 16:28:38 IST] [Screen 3] WARNING: could not scrape application number from popup
+[2026-04-12 16:28:38 IST] [Screen 3] === PAGE STATE DUMP (scrape application number failed) ===
+[2026-04-12 16:28:38 IST] [Screen 3] url: https://vahan.parivahan.gov.in/vahan/vahan/workbench.xhtml
+[2026-04-12 16:28:38 IST] [Screen 3] frames: 1
+[2026-04-12 16:28:38 IST] [Screen 3]   frame[0] name='(main)' url=https://vahan.parivahan.gov.in/vahan/vahan/workbench.xhtml
+[2026-04-12 16:28:38 IST] [Screen 3]   [frame[0] main] visible interactive elements (139, selects first — cap 150):
+[2026-04-12 16:28:38 IST] [Screen 3]     select id='regnType_input' name='regnType_input' value='N' text='---------------SELECT--------------- NEW'
+[2026-04-12 16:28:38 IST] [Screen 3]     select id='regnNoSelectionForAPS_input' name='regnNoSelectionForAPS_input' value='No' text='---------------SELECT--------------- NO YES'
+[2026-04-12 16:28:38 IST] [Screen 3]     select id='workbench_tabview:ins_type_input' name='workbench_tabview:ins_type_input' value='2' text='--SELECT-- COMPREHENSIVE NOT AVAILABLE THEFT AND THIRD PARTY'
+[2026-04-12 16:28:38 IST] [Screen 3]     select id='workbench_tabview:ins_cd_input' name='workbench_tabview:ins_cd_input' value='1003' text='--SELECT-- AARVI GENERAL INS. ABN AMERO BANK LTD. Acko Gener'
+[2026-04-12 16:28:38 IST] [Screen 3]     select id='workbench_tabview:ins_year_input' name='workbench_tabview:ins_year_input' value='5' text='--SELECT-- 1 Year 2 Year 3 Year 4 Year 5 Year'
+[2026-04-12 16:28:38 IST] [Screen 3]     select id='workbench_tabview:seriesType_input' name='workbench_tabview:seriesType_input' value='N' text='STATE SERIES BHARAT SERIES'
+[2026-04-12 16:28:38 IST] [Screen 3]     select id='workbench_tabview:hpa_hp_type_input' name='workbench_tabview:hpa_hp_type_input' value='HT' text='--SELECT-- Hire-Purchase Hypothecation Lease Agreement'
+[2026-04-12 16:28:38 IST] [Screen 3]     select id='workbench_tabview:hpa_fncr_state_input' name='workbench_tabview:hpa_fncr_state_input' value='RJ' text='--SELECT-- UT of DNH and DD Jammu and Kashmir Delhi Himachal'
+[2026-04-12 16:28:38 IST] [Screen 3]     select id='workbench_tabview:hpa_fncr_district_input' name='workbench_tabview:hpa_fncr_district_input' value='105' text='--SELECT-- Ajmer Alwar Banswara Baran Barmer Bharatpur Bhilw'
+[2026-04-12 16:28:38 IST] [Screen 3]     select id='workbench_tabview:vm_rel1_input' name='workbench_tabview:vm_rel1_input' value='3' text='Select Relation Brother Daughter Father Mother Sister Son Sp'
+[2026-04-12 16:28:38 IST] [Screen 3]     nav role='navigation' text=' Home  Report   Update Profile   Language  Welcome YOGESH AG' class='navbar navbar-default navigation-background'
+[2026-04-12 16:28:38 IST] [Screen 3]     a id='homeId1' name='homeId1'
+[2026-04-12 16:28:38 IST] [Screen 3]     a id='homeId2' name='homeId2' text=' Home'
+[2026-04-12 16:28:38 IST] [Screen 3]     a text=' Report ' class='dropdown-toggle'
+[2026-04-12 16:28:38 IST] [Screen 3]     a text=' Update Profile ' class='dropdown-toggle'
+[2026-04-12 16:28:38 IST] [Screen 3]     a text=' Language ' class='dropdown-toggle'
+[2026-04-12 16:28:38 IST] [Screen 3]     a id='welcomeUserId' name='welcomeUserId' text='Welcome YOGESH AGRAWAL , DEALER STAFF, Rajasthan'
+[2026-04-12 16:28:38 IST] [Screen 3]     a id='logout' text='Logout' class='ui-commandlink ui-widget glyphicon glyphicon-log-out'
+[2026-04-12 16:28:38 IST] [Screen 3]     label text='Registration Type*' class='field-label resp-label-section'
+[2026-04-12 16:28:38 IST] [Screen 3]     label id='j_idt190' text='Registration Type*' class='ui-outputlabel ui-widget'
+[2026-04-12 16:28:38 IST] [Screen 3]     div id='regnType' role='combobox' text='---------------SELECT--------------- NEW NEW' class='ui-selectonemenu ui-widget ui-state-default ui-corner-all bottom-space ui-state-'
+[2026-04-12 16:28:38 IST] [Screen 3]     input id='regnType_focus' name='regnType_focus' type='text'
+[2026-04-12 16:28:38 IST] [Screen 3]     label id='regnType_label' text='NEW' class='ui-selectonemenu-label ui-inputfield ui-corner-all'
+[2026-04-12 16:28:38 IST] [Screen 3]     label text='Chassis No*' class='field-label resp-label-section'
+[2026-04-12 16:28:38 IST] [Screen 3]     label id='j_idt197' text='Chassis No*' class='ui-outputlabel ui-widget'
+[2026-04-12 16:28:38 IST] [Screen 3]     input id='chasi_no_new_entry' name='chasi_no_new_entry' type='text' role='textbox' value='MBLHAW48XT9B05182' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all ui-state-dis'
+[2026-04-12 16:28:38 IST] [Screen 3]     label text='Engine/Motor No (Last 5 Chars)*' class='field-label resp-label-section'
+[2026-04-12 16:28:38 IST] [Screen 3]     label id='j_idt200' text='Engine/Motor No (Last 5 Chars)*' class='ui-outputlabel ui-widget'
+[2026-04-12 16:28:38 IST] [Screen 3]     input id='eng_no_new_entry' name='eng_no_new_entry' type='text' role='textbox' value='33716' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all ui-state-dis'
+[2026-04-12 16:28:38 IST] [Screen 3]     label text='Do you want to utilize Certificate of deposit (CD)' class='field-label resp-label-section'
+[2026-04-12 16:28:38 IST] [Screen 3]     input id='codCheckBox_input' name='codCheckBox_input' type='checkbox' value='on'
+[2026-04-12 16:28:38 IST] [Screen 3]     label id='j_idt233' text='Do you want to utilize Certificate of deposit (CD)' class='ui-outputlabel ui-widget inline-section'
+[2026-04-12 16:28:38 IST] [Screen 3]     button id='get_dtls_btn' name='get_dtls_btn' type='submit' role='button' text='Get Details' class='ui-button ui-widget ui-state-default ui-corner-all ui-button-text-only ui-state-'
+[2026-04-12 16:28:38 IST] [Screen 3]     ul role='tablist' text='1 Dealer New Registration entry 2 Dealer Verify 3 Dealer Doc'
+[2026-04-12 16:28:38 IST] [Screen 3]     label text='Do You want to Opt Choice Number/Fancy Number / Retention Nu' class='field-label resp-label-section'
+[2026-04-12 16:28:38 IST] [Screen 3]     label id='j_idt285' text='Do You want to Opt Choice Number/Fancy Number / Retention Nu' class='ui-outputlabel ui-widget'
+[2026-04-12 16:28:38 IST] [Screen 3]     div id='regnNoSelectionForAPS' role='combobox' text='---------------SELECT--------------- NO YES NO' class='ui-selectonemenu ui-widget ui-state-default ui-corner-all'
+[2026-04-12 16:28:38 IST] [Screen 3]     input id='regnNoSelectionForAPS_focus' name='regnNoSelectionForAPS_focus' type='text'
+[2026-04-12 16:28:38 IST] [Screen 3]     label id='regnNoSelectionForAPS_label' text='NO' class='ui-selectonemenu-label ui-inputfield ui-corner-all'
+[2026-04-12 16:28:38 IST] [Screen 3]     label id='j_idt294' text=' Aadhaar Authenticated' class='ui-outputlabel ui-widget inline-section right-space'
+[2026-04-12 16:28:38 IST] [Screen 3]     h3 text=' Aadhaar Authenticated' class='close-counter counter-button inline-section center-position'
+[2026-04-12 16:28:38 IST] [Screen 3]     ul role='tablist' text='Owner Details Vehicle Details Hypothecation/Insurance Inform' class='ui-tabs-nav ui-helper-reset ui-widget-header ui-corner-all'
+[2026-04-12 16:28:38 IST] [Screen 3]     li role='tab' text='Owner Details' class='ui-tabs-header ui-state-default ui-corner-top'
+[2026-04-12 16:28:38 IST] [Screen 3]     a text='Owner Details'
+[2026-04-12 16:28:38 IST] [Screen 3]     li role='tab' text='Vehicle Details' class='ui-tabs-header ui-state-default ui-corner-top'
+[2026-04-12 16:28:38 IST] [Screen 3]     a text='Vehicle Details'
+[2026-04-12 16:28:38 IST] [Screen 3]     li role='tab' text='Hypothecation/Insurance Information' class='ui-tabs-header ui-state-default ui-corner-top ui-tabs-selected ui-state-active'
+[2026-04-12 16:28:38 IST] [Screen 3]     a text='Hypothecation/Insurance Information'
+[2026-04-12 16:28:38 IST] [Screen 3]     li role='tab' text='Attached Semi-Trailer Details' class='ui-tabs-header ui-state-default ui-corner-top'
+[2026-04-12 16:28:38 IST] [Screen 3]     a text='Attached Semi-Trailer Details'
+[2026-04-12 16:28:38 IST] [Screen 3]     div id='workbench_tabview:HypothecationOwner' role='tabpanel' text='Refresh Insurance Details from Company Insurance Details Not' class='ui-tabs-panel ui-widget-content ui-corner-bottom'
+[2026-04-12 16:28:38 IST] [Screen 3]     button id='workbench_tabview:refresh_ins_Button_id' name='workbench_tabview:refresh_ins_Button_id' type='submit' role='button' text='Refresh Insurance Details from Company' class='ui-button ui-widget ui-state-default ui-corner-all ui-button-text-only'
+[2026-04-12 16:28:38 IST] [Screen 3]     label text='Insurance Type*' class='field-label resp-label-section'
+[2026-04-12 16:28:38 IST] [Screen 3]     label id='workbench_tabview:j_idt1245' text='Insurance Type*' class='ui-outputlabel ui-widget'
+[2026-04-12 16:28:38 IST] [Screen 3]     div id='workbench_tabview:ins_type' role='combobox' text='--SELECT-- COMPREHENSIVE NOT AVAILABLE THEFT AND THIRD PARTY' class='ui-selectonemenu ui-widget ui-state-default ui-corner-all ui-state-disabled'
+[2026-04-12 16:28:38 IST] [Screen 3]     input id='workbench_tabview:ins_type_focus' name='workbench_tabview:ins_type_focus' type='text'
+[2026-04-12 16:28:38 IST] [Screen 3]     label id='workbench_tabview:ins_type_label' text='THIRD PARTY' class='ui-selectonemenu-label ui-inputfield ui-corner-all'
+[2026-04-12 16:28:38 IST] [Screen 3]     label text='Insurance Company*' class='field-label resp-label-section'
+[2026-04-12 16:28:38 IST] [Screen 3]     label id='workbench_tabview:j_idt1250' text='Insurance Company*' class='ui-outputlabel ui-widget'
+[2026-04-12 16:28:38 IST] [Screen 3]     div id='workbench_tabview:ins_cd' role='combobox' text='--SELECT-- AARVI GENERAL INS. ABN AMERO BANK LTD. Acko Gener' class='ui-selectonemenu ui-widget ui-state-default ui-corner-all ui-state-disabled'
+[2026-04-12 16:28:38 IST] [Screen 3]     input id='workbench_tabview:ins_cd_focus' name='workbench_tabview:ins_cd_focus' type='text'
+[2026-04-12 16:28:38 IST] [Screen 3]     label id='workbench_tabview:ins_cd_label' text='UNIVERSAL SOMPO GENERAL INSURANCE CO.LTD' class='ui-selectonemenu-label ui-inputfield ui-corner-all'
+[2026-04-12 16:28:38 IST] [Screen 3]     label text='Policy/CoverNote No*' class='field-label resp-label-section'
+[2026-04-12 16:28:38 IST] [Screen 3]     label id='workbench_tabview:j_idt1255' text='Policy/CoverNote No*' class='ui-outputlabel ui-widget'
+[2026-04-12 16:28:38 IST] [Screen 3]     input id='workbench_tabview:policy_no' name='workbench_tabview:policy_no' type='text' role='textbox' value='2369/82595323/00/000' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all ui-state-dis'
+[2026-04-12 16:28:38 IST] [Screen 3]     label text='Insurance from (DD-MMM-YYYY)*' class='field-label resp-label-section'
+[2026-04-12 16:28:38 IST] [Screen 3]     label id='workbench_tabview:j_idt1259' text='Insurance from (DD-MMM-YYYY)*' class='ui-outputlabel ui-widget'
+[2026-04-12 16:28:38 IST] [Screen 3]     input id='workbench_tabview:ins_from_input' name='workbench_tabview:ins_from_input' type='text' role='textbox' value='21-Feb-2026' class='ui-inputfield ui-widget ui-state-default ui-corner-all ui-state-disabled hasDate'
+[2026-04-12 16:28:38 IST] [Screen 3]     label text='Insurance Period(in year)*' class='field-label resp-label-section'
+[2026-04-12 16:28:38 IST] [Screen 3]     label id='workbench_tabview:j_idt1262' text='Insurance Period(in year)*' class='ui-outputlabel ui-widget'
+[2026-04-12 16:28:38 IST] [Screen 3]     div id='workbench_tabview:ins_year' role='combobox' text='--SELECT-- 1 Year 2 Year 3 Year 4 Year 5 Year 5 Year' class='ui-selectonemenu ui-widget ui-state-default ui-corner-all ui-state-disabled'
+[2026-04-12 16:28:38 IST] [Screen 3]     input id='workbench_tabview:ins_year_focus' name='workbench_tabview:ins_year_focus' type='text'
+[2026-04-12 16:28:38 IST] [Screen 3]     label id='workbench_tabview:ins_year_label' text='5 Year' class='ui-selectonemenu-label ui-inputfield ui-corner-all'
+[2026-04-12 16:28:38 IST] [Screen 3]     label text='Insurance upto (DD-MMM-YYYY)*' class='field-label resp-label-section'
+[2026-04-12 16:28:38 IST] [Screen 3]     label id='workbench_tabview:j_idt1267' text='Insurance upto (DD-MMM-YYYY)*' class='ui-outputlabel ui-widget'
+[2026-04-12 16:28:38 IST] [Screen 3]     input id='workbench_tabview:ins_upto_input' name='workbench_tabview:ins_upto_input' type='text' role='textbox' value='20-Feb-2031' class='ui-inputfield ui-widget ui-state-default ui-corner-all ui-state-disabled hasDate'
+[2026-04-12 16:28:38 IST] [Screen 3]     label text='Insurance Declared Value' class='field-label resp-label-section'
+[2026-04-12 16:28:38 IST] [Screen 3]     label id='workbench_tabview:j_idt1270' text='Insurance Declared Value' class='ui-outputlabel ui-widget'
+[2026-04-12 16:28:38 IST] [Screen 3]     input id='workbench_tabview:idv' name='workbench_tabview:idv' type='text' role='textbox' value='0' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all'
+[2026-04-12 16:28:38 IST] [Screen 3]     label text='Please Select Series Type*' class='field-label resp-label-section'
+[2026-04-12 16:28:38 IST] [Screen 3]     label id='workbench_tabview:j_idt1280' text='Please Select Series Type*' class='ui-outputlabel ui-widget'
+[2026-04-12 16:28:38 IST] [Screen 3]     div id='workbench_tabview:seriesType' role='combobox' text='STATE SERIES BHARAT SERIES STATE SERIES' class='ui-selectonemenu ui-widget ui-state-default ui-corner-all'
+[2026-04-12 16:28:38 IST] [Screen 3]     input id='workbench_tabview:seriesType_focus' name='workbench_tabview:seriesType_focus' type='text'
+[2026-04-12 16:28:38 IST] [Screen 3]     label id='workbench_tabview:seriesType_label' text='STATE SERIES' class='ui-selectonemenu-label ui-inputfield ui-corner-all'
+[2026-04-12 16:28:38 IST] [Screen 3]     input id='workbench_tabview:isHypo_input' name='workbench_tabview:isHypo_input' type='checkbox' value='on'
+[2026-04-12 16:28:38 IST] [Screen 3]     label text='Hypothecation Type:*' class='field-label resp-label-section'
+[2026-04-12 16:28:38 IST] [Screen 3]     label id='workbench_tabview:j_idt1303' text='Hypothecation Type:*' class='ui-outputlabel ui-widget'
+[2026-04-12 16:28:38 IST] [Screen 3]     div id='workbench_tabview:hpa_hp_type' role='combobox' text='--SELECT-- Hire-Purchase Hypothecation Lease Agreement Hypot' class='ui-selectonemenu ui-widget ui-state-default ui-corner-all'
+[2026-04-12 16:28:38 IST] [Screen 3]     input id='workbench_tabview:hpa_hp_type_focus' name='workbench_tabview:hpa_hp_type_focus' type='text'
+[2026-04-12 16:28:38 IST] [Screen 3]     label id='workbench_tabview:hpa_hp_type_label' text='Hypothecation' class='ui-selectonemenu-label ui-inputfield ui-corner-all'
+[2026-04-12 16:28:38 IST] [Screen 3]     label text='Financier Name:*' class='field-label resp-label-section'
+[2026-04-12 16:28:38 IST] [Screen 3]     label id='workbench_tabview:j_idt1308' text='Financier Name:*' class='ui-outputlabel ui-widget'
+[2026-04-12 16:28:38 IST] [Screen 3]     input id='workbench_tabview:hpa_fncr_name' name='workbench_tabview:hpa_fncr_name' type='text' role='textbox' value='Axis Bank' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all'
+[2026-04-12 16:28:38 IST] [Screen 3]     label text='From Date (DD-MMM-YYYY)*' class='field-label resp-label-section'
+[2026-04-12 16:28:38 IST] [Screen 3]     label id='workbench_tabview:j_idt1313' text='From Date (DD-MMM-YYYY)*' class='ui-outputlabel ui-widget'
+[2026-04-12 16:28:38 IST] [Screen 3]     input id='workbench_tabview:hpa_from_dt_input' name='workbench_tabview:hpa_from_dt_input' type='text' role='textbox' value='10-Apr-2026' class='ui-inputfield ui-widget ui-state-default ui-corner-all hasDatepicker'
+[2026-04-12 16:28:38 IST] [Screen 3]     label text='House No. & Street Name*' class='field-label resp-label-section'
+[2026-04-12 16:28:38 IST] [Screen 3]     label id='workbench_tabview:j_idt1316' text='House No. & Street Name*' class='ui-outputlabel ui-widget'
+[2026-04-12 16:28:38 IST] [Screen 3]     input id='workbench_tabview:hpa_fncr_add1' name='workbench_tabview:hpa_fncr_add1' type='text' role='textbox' value='S/O Kamal Singh, Bansroli, Bharatpu' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all'
+[2026-04-12 16:28:38 IST] [Screen 3]     label text='Village/Town/City' class='field-label resp-label-section'
+[2026-04-12 16:28:38 IST] [Screen 3]     label id='workbench_tabview:j_idt1319' text='Village/Town/City' class='ui-outputlabel ui-widget'
+[2026-04-12 16:28:38 IST] [Screen 3]     input id='workbench_tabview:hpa_fncr_add2' name='workbench_tabview:hpa_fncr_add2' type='text' role='textbox' value='Bharatpur' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all'
+[2026-04-12 16:28:39 IST] [Screen 3]     label text='Landmark/Police Station' class='field-label resp-label-section'
+[2026-04-12 16:28:39 IST] [Screen 3]     label id='workbench_tabview:j_idt1322' text='Landmark/Police Station' class='ui-outputlabel ui-widget'
+[2026-04-12 16:28:39 IST] [Screen 3]     input id='workbench_tabview:hpa_fncr_add3' name='workbench_tabview:hpa_fncr_add3' type='text' role='textbox' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all'
+[2026-04-12 16:28:39 IST] [Screen 3]     label text='State*' class='field-label resp-label-section'
+[2026-04-12 16:28:39 IST] [Screen 3]     label id='workbench_tabview:j_idt1325' text='State*' class='ui-outputlabel ui-widget'
+[2026-04-12 16:28:39 IST] [Screen 3]     div id='workbench_tabview:hpa_fncr_state' role='combobox' text='--SELECT-- UT of DNH and DD Jammu and Kashmir Delhi Himachal' class='ui-selectonemenu ui-widget ui-state-default ui-corner-all bottom-space'
+[2026-04-12 16:28:39 IST] [Screen 3]     input id='workbench_tabview:hpa_fncr_state_focus' name='workbench_tabview:hpa_fncr_state_focus' type='text'
+[2026-04-12 16:28:39 IST] [Screen 3]     label id='workbench_tabview:hpa_fncr_state_label' text='Rajasthan' class='ui-selectonemenu-label ui-inputfield ui-corner-all'
+[2026-04-12 16:28:39 IST] [Screen 3]     label text='District*' class='field-label resp-label-section'
+[2026-04-12 16:28:39 IST] [Screen 3]     label id='workbench_tabview:j_idt1330' text='District*' class='ui-outputlabel ui-widget'
+[2026-04-12 16:28:39 IST] [Screen 3]     div id='workbench_tabview:hpa_fncr_district' role='combobox' text='--SELECT-- Ajmer Alwar Banswara Baran Barmer Bharatpur Bhilw' class='ui-selectonemenu ui-widget ui-state-default ui-corner-all bottom-space'
+[2026-04-12 16:28:39 IST] [Screen 3]     input id='workbench_tabview:hpa_fncr_district_focus' name='workbench_tabview:hpa_fncr_district_focus' type='text'
+[2026-04-12 16:28:39 IST] [Screen 3]     label id='workbench_tabview:hpa_fncr_district_label' text='Bharatpur' class='ui-selectonemenu-label ui-inputfield ui-corner-all'
+[2026-04-12 16:28:39 IST] [Screen 3]     label text='Pin Code*' class='field-label resp-label-section'
+[2026-04-12 16:28:39 IST] [Screen 3]     label id='workbench_tabview:j_idt1335' text='Pin Code*' class='ui-outputlabel ui-widget'
+[2026-04-12 16:28:39 IST] [Screen 3]     input id='workbench_tabview:hpa_fncr_pincode' name='workbench_tabview:hpa_fncr_pincode' type='text' role='textbox' value='321201' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all'
+[2026-04-12 16:28:39 IST] [Screen 3]     label text='Sanction Amount*' class='field-label resp-label-section'
+[2026-04-12 16:28:39 IST] [Screen 3]     label id='workbench_tabview:j_idt1338' text='Sanction Amount*' class='ui-outputlabel ui-widget'
+[2026-04-12 16:28:39 IST] [Screen 3]     input id='workbench_tabview:sanction_amt_id' name='workbench_tabview:sanction_amt_id' type='text' role='textbox' value='0' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all ui-state-dis'
+[2026-04-12 16:28:39 IST] [Screen 3]     table id='workbench_tabview:nomineeradiobtn1' role='presentation' text='Yes\t No' class='ui-selectoneradio ui-widget'
+[2026-04-12 16:28:39 IST] [Screen 3]     input id='workbench_tabview:nomineeradiobtn1:0' name='workbench_tabview:nomineeradiobtn1' type='radio' value='Y'
+[2026-04-12 16:28:39 IST] [Screen 3]     label text='Yes'
+[2026-04-12 16:28:39 IST] [Screen 3]     input id='workbench_tabview:nomineeradiobtn1:1' name='workbench_tabview:nomineeradiobtn1' type='radio' value='N'
+[2026-04-12 16:28:39 IST] [Screen 3]     label text='No'
+[2026-04-12 16:28:39 IST] [Screen 3]     label text='Nominee Name' class='field-label resp-label-section'
+[2026-04-12 16:28:39 IST] [Screen 3]     label id='workbench_tabview:j_idt1351' text='Nominee Name' class='ui-outputlabel ui-widget'
+[2026-04-12 16:28:39 IST] [Screen 3]     input id='workbench_tabview:nominationname1' name='workbench_tabview:nominationname1' type='text' role='textbox' value='Harvesh' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all'
+[2026-04-12 16:28:39 IST] [Screen 3]     label text='Relation With Nominee*' class='field-label resp-label-section'
+[2026-04-12 16:28:39 IST] [Screen 3]     label id='workbench_tabview:j_idt1354' text='Relation With Nominee*' class='ui-outputlabel ui-widget'
+[2026-04-12 16:28:39 IST] [Screen 3]     div id='workbench_tabview:vm_rel1' role='combobox' text='Select Relation Brother Daughter Father Mother Sister Son Sp' class='ui-selectonemenu ui-widget ui-state-default ui-corner-all'
+[2026-04-12 16:28:39 IST] [Screen 3]     input id='workbench_tabview:vm_rel1_focus' name='workbench_tabview:vm_rel1_focus' type='text'
+[2026-04-12 16:28:39 IST] [Screen 3]     label id='workbench_tabview:vm_rel1_label' text='Brother' class='ui-selectonemenu-label ui-inputfield ui-corner-all'
+[2026-04-12 16:28:39 IST] [Screen 3]     label text='Nomination Date' class='field-label resp-label-section'
+[2026-04-12 16:28:39 IST] [Screen 3]     label id='workbench_tabview:j_idt1359' text='Nomination Date' class='ui-outputlabel ui-widget'
+[2026-04-12 16:28:39 IST] [Screen 3]     input id='workbench_tabview:nominationdate1_input' name='workbench_tabview:nominationdate1_input' type='text' role='textbox' class='ui-inputfield ui-widget ui-state-default ui-corner-all hasDatepicker'
+[2026-04-12 16:28:39 IST] [Screen 3]     button id='app_disapp_form:j_idt1923' name='app_disapp_form:j_idt1923' type='submit' role='button' text='Save And File Movement' class='ui-button ui-widget ui-state-default ui-corner-all ui-button-text-icon-left'
+[2026-04-12 16:28:39 IST] [Screen 3]     button id='app_disapp_form:j_idt1924' name='app_disapp_form:j_idt1924' type='button' role='button' text='Back' class='ui-button ui-widget ui-state-default ui-corner-all ui-button-text-icon-left'
+[2026-04-12 16:28:39 IST] [Screen 3]   [frame[0] main] ALL <select> (34 — ids, selected label, options preview):
+[2026-04-12 16:28:39 IST] [Screen 3]     select[0] id='regnType_input' name='regnType_input' si=1 sel='NEW' nOpt=2 vis=True inVehTab=False inHypIns=False seriesHint=False
+[2026-04-12 16:28:39 IST] [Screen 3]       options: '---------------SELECT---------------' [value='-1'] | 'NEW' [value='N']
+[2026-04-12 16:28:39 IST] [Screen 3]     select[1] id='regnNoSelectionForAPS_input' name='regnNoSelectionForAPS_input' si=1 sel='NO' nOpt=3 vis=True inVehTab=False inHypIns=False seriesHint=False
+[2026-04-12 16:28:39 IST] [Screen 3]       options: '---------------SELECT---------------' [value='-1'] | 'NO' [value='No'] | 'YES' [value='Yes']
+[2026-04-12 16:28:39 IST] [Screen 3]     select[2] id='workbench_tabview:regn_type_input' name='workbench_tabview:regn_type_input' si=4 sel='NEW' nOpt=12 vis=False inVehTab=False inHypIns=False seriesHint=False
+[2026-04-12 16:28:39 IST] [Screen 3]       options: '--SELECT--' [value='0'] | 'EX-ARMY/AUCTION VEHICLE' [value='A'] | 'EX-DIPLOMAT/EMBASSY/FOREIGN VEHICLE' [value='D'] | 'IMPORTED VINTAGE VEHICLE' [value='V'] | 'NEW' [value='N'] | 'NEW REGN AGAINST AUCTION/CONFISCATED VEH' [value='C'] | 'NEW REGN AGAINST SCRAPPED VEHICLE' [value='S'] | 'OTHER COUNTRY VEHICLE' [value='I'] | 'OTHER RTO/MLO/ARTO/DTO/Region Vehicle' [value='R'] | 'OTHER STATE VEHICLE' [value='O'] | 'TEMPORARY REGISTERED VEHICLE' [value='T'] | 'VINTAGE VEHICLE' [value='B']
+[2026-04-12 16:28:39 IST] [Screen 3]     select[3] id='workbench_tabview:tf_owner_cd_input' name='workbench_tabview:tf_owner_cd_input' si=17 sel='INDIVIDUAL' nOpt=28 vis=False inVehTab=False inHypIns=False seriesHint=False
+[2026-04-12 16:28:39 IST] [Screen 3]       options: '--SELECT--' [value='-1'] | 'AUTONOMOUS BODY' [value='12'] | 'CENTRAL GOVERNMENT' [value='4'] | 'CHARITABLE TRUST' [value='9'] | 'DIVYANGJAN (Availing GST Concession)' [value='18'] | 'DIVYANGJAN (Without Availing GST Concession)' [value='19'] | 'DRAMA/TAMASHA GROUPS' [value='14'] | 'DRIVING TRAINING SCHOOL' [value='10'] | 'EDUCATIONAL INSTITUTE' [value='8'] | 'FIRM' [value='2'] | 'GOVERNMENT BOARD' [value='21'] | 'GOVERNMENT COMPANY' [value='23'] | 'GOVERNMENT CORPORATION' [value='22'] | 'GOVERNMENT DEPARTMENT' [value='25'] | 'GOVERNMENT ENTITY' [value='24'] | 'GOVERNMENT TRUST' [value='20'] | 'GOVT UNDERTAKING' [value='6'] | 'INDIVIDUAL' [value='1'] | 'JOINT STOCK COMPANY' [value='3'] | 'LOCAL AUTHORITY' [value='11'] | 'MULTIPLE OWNER' [value='7'] | 'OTHERS' [value='99'] | 'POLICE DEPARTMENT' [value='15'] | 'SCHOOL' [value='13'] | 'SOCIAL WELFARE' [value='17'] | 'STATE GOVERNMENT' [value='5'] | 'STATE TRANSPORT CORP/DEPT' [value='16'] | 'STATE UNIVERSITIES' [value='26']
+[2026-04-12 16:28:39 IST] [Screen 3]     select[4] id='workbench_tabview:ownerCatg_input' name='workbench_tabview:ownerCatg_input' si=5 sel='OTHERS' nOpt=8 vis=False inVehTab=False inHypIns=False seriesHint=False
+[2026-04-12 16:28:39 IST] [Screen 3]       options: '--SELECT--' [value='-1'] | 'DIVYANGJAN' [value='2'] | 'EX-SERVICEMAN' [value='1'] | 'GENERAL' [value='7'] | 'O B C' [value='5'] | 'OTHERS' [value='6'] | 'SCHEDULED CASTE' [value='3'] | 'SCHEDULED TRIBE' [value='4']
+[2026-04-12 16:28:39 IST] [Screen 3]     select[5] id='workbench_tabview:tf_c_state_input' name='workbench_tabview:tf_c_state_input' si=32 sel='Rajasthan' nOpt=37 vis=False inVehTab=False inHypIns=False seriesHint=False
+[2026-04-12 16:28:39 IST] [Screen 3]       options: '--SELECT--' [value='-1'] | 'UT of DNH and DD' [value='DD'] | 'Jammu and Kashmir' [value='JK'] | 'Delhi' [value='DL'] | 'Himachal Pradesh' [value='HP'] | 'Puducherry' [value='PY'] | 'Haryana' [value='HR'] | 'West Bengal' [value='WB'] | 'Bihar' [value='BR'] | 'Karnataka' [value='KA'] | 'Uttarakhand' [value='UK'] | 'Sikkim' [value='SK'] | 'Goa' [value='GA'] | 'Maharashtra' [value='MH'] | 'Uttar Pradesh' [value='UP'] | 'Meghalaya' [value='ML'] | 'Kerala' [value='KL'] | 'Manipur' [value='MN'] | 'Gujarat' [value='GJ'] | 'Madhya Pradesh' [value='MP'] | 'Odisha' [value='OR'] | 'Chhattisgarh' [value='CG'] | 'Chandigarh' [value='CH'] | 'Andaman & Nicobar Island' [value='AN'] | 'Mizoram' [value='MZ'] | 'Andhra Pradesh' [value='AP'] | 'Arunachal Pradesh' [value='AR'] | 'Assam' [value='AS'] | 'Punjab' [value='PB'] | 'Telangana' [value='TG'] | 'Ladakh' [value='LA'] | 'Lakshadweep' [value='LD']
+[2026-04-12 16:28:39 IST] [Screen 3]     select[6] id='workbench_tabview:tf_c_district_input' name='workbench_tabview:tf_c_district_input' si=6 sel='Bharatpur' nOpt=34 vis=False inVehTab=False inHypIns=False seriesHint=False
+[2026-04-12 16:28:39 IST] [Screen 3]       options: '--SELECT--' [value='-1'] | 'Ajmer' [value='119'] | 'Alwar' [value='104'] | 'Banswara' [value='125'] | 'Baran' [value='128'] | 'Barmer' [value='115'] | 'Bharatpur' [value='105'] | 'Bhilwara' [value='122'] | 'Bikaner' [value='101'] | 'Bundi' [value='121'] | 'Chittaurgarh' [value='126'] | 'Churu' [value='102'] | 'Dausa' [value='109'] | 'Dhaulpur' [value='106'] | 'Dungarpur' [value='124'] | 'Ganganagar' [value='99'] | 'Hanumangarh' [value='100'] | 'Jaipur' [value='110'] | 'Jaisalmer' [value='114'] | 'Jalor' [value='116'] | 'Jhalawar' [value='129'] | 'Jhunjhunun' [value='103'] | 'Jodhpur' [value='113'] | 'Karauli' [value='107'] | 'Kota' [value='127'] | 'Nagaur' [value='112'] | 'Pali' [value='118'] | 'Pratapgarh' [value='131'] | 'Rajsamand' [value='123'] | 'Sawai Madhopur' [value='108'] | 'Sikar' [value='111'] | 'Sirohi' [value='117']
+[2026-04-12 16:28:39 IST] [Screen 3]     select[7] id='workbench_tabview:tf_p_state_input' name='workbench_tabview:tf_p_state_input' si=32 sel='Rajasthan' nOpt=37 vis=False inVehTab=False inHypIns=False seriesHint=False
+[2026-04-12 16:28:39 IST] [Screen 3]       options: '--SELECT--' [value='-1'] | 'UT of DNH and DD' [value='DD'] | 'Jammu and Kashmir' [value='JK'] | 'Delhi' [value='DL'] | 'Himachal Pradesh' [value='HP'] | 'Puducherry' [value='PY'] | 'Haryana' [value='HR'] | 'West Bengal' [value='WB'] | 'Bihar' [value='BR'] | 'Karnataka' [value='KA'] | 'Uttarakhand' [value='UK'] | 'Sikkim' [value='SK'] | 'Goa' [value='GA'] | 'Maharashtra' [value='MH'] | 'Uttar Pradesh' [value='UP'] | 'Meghalaya' [value='ML'] | 'Kerala' [value='KL'] | 'Manipur' [value='MN'] | 'Gujarat' [value='GJ'] | 'Madhya Pradesh' [value='MP'] | 'Odisha' [value='OR'] | 'Chhattisgarh' [value='CG'] | 'Chandigarh' [value='CH'] | 'Andaman & Nicobar Island' [value='AN'] | 'Mizoram' [value='MZ'] | 'Andhra Pradesh' [value='AP'] | 'Arunachal Pradesh' [value='AR'] | 'Assam' [value='AS'] | 'Punjab' [value='PB'] | 'Telangana' [value='TG'] | 'Ladakh' [value='LA'] | 'Lakshadweep' [value='LD']
+[2026-04-12 16:28:39 IST] [Screen 3]     select[8] id='workbench_tabview:tf_p_district_input' name='workbench_tabview:tf_p_district_input' si=6 sel='Bharatpur' nOpt=34 vis=False inVehTab=False inHypIns=False seriesHint=False
+[2026-04-12 16:28:39 IST] [Screen 3]       options: '--SELECT--' [value='-1'] | 'Ajmer' [value='119'] | 'Alwar' [value='104'] | 'Banswara' [value='125'] | 'Baran' [value='128'] | 'Barmer' [value='115'] | 'Bharatpur' [value='105'] | 'Bhilwara' [value='122'] | 'Bikaner' [value='101'] | 'Bundi' [value='121'] | 'Chittaurgarh' [value='126'] | 'Churu' [value='102'] | 'Dausa' [value='109'] | 'Dhaulpur' [value='106'] | 'Dungarpur' [value='124'] | 'Ganganagar' [value='99'] | 'Hanumangarh' [value='100'] | 'Jaipur' [value='110'] | 'Jaisalmer' [value='114'] | 'Jalor' [value='116'] | 'Jhalawar' [value='129'] | 'Jhunjhunun' [value='103'] | 'Jodhpur' [value='113'] | 'Karauli' [value='107'] | 'Kota' [value='127'] | 'Nagaur' [value='112'] | 'Pali' [value='118'] | 'Pratapgarh' [value='131'] | 'Rajsamand' [value='123'] | 'Sawai Madhopur' [value='108'] | 'Sikar' [value='111'] | 'Sirohi' [value='117']
+[2026-04-12 16:28:39 IST] [Screen 3]     select[9] id='workbench_tabview:maker_input' name='workbench_tabview:maker_input' si=1 sel='HERO MOTOCORP LTD' nOpt=2 vis=False inVehTab=True inHypIns=False seriesHint=False
+[2026-04-12 16:28:39 IST] [Screen 3]       options: '-SELECT-' [value='-1'] | 'HERO MOTOCORP LTD' [value='32']
+[2026-04-12 16:28:39 IST] [Screen 3]     select[10] id='workbench_tabview:maker_model_input' name='workbench_tabview:maker_model_input' si=296 sel='SPLENDOR+ (DRS)-(ZZTN1122001)' nOpt=498 vis=False inVehTab=True inHypIns=False seriesHint=False
+[2026-04-12 16:28:39 IST] [Screen 3]       options: '-SELECT-' [value='0'] | 'ACHIEVER-(HACCDDSSCCR)' [value='HACCDDSSCCR'] | 'ACHIEVER 150 (DISC/SELF/CAST)-(ZZLN0153001)' [value='ZZLN0153001'] | 'ACHIEVER 150 (DRUM-SELF-CAST)-(ZZLN0153002)' [value='ZZLN0153002'] | 'ACHIEVER-DISC/SELF CAST WHEEL-(ZZFN0004010)' [value='ZZFN0004010'] | 'DESTINI 110 VX-(ZZUN0743001)' [value='ZZUN0743001'] | 'DESTINI 110 ZX-(ZZUN0743002)' [value='ZZUN0743002'] | 'DESTINI 125 LX-(ZZSN0249001)' [value='ZZSN0249001'] | 'DESTINI 125 (LX)-(ZZPN0046006)' [value='ZZPN0046006'] | 'DESTINI 125 (LX)-(ZZNN0128003)' [value='ZZNN0128003'] | 'DESTINI 125 (LX)-(ZZPN0046002)' [value='ZZPN0046002'] | 'DESTINI 125 PLATINUM EDITION-(ZZPN0046004)' [value='ZZPN0046004'] | 'DESTINI 125 (STD)-(ZZPN0046005)' [value='ZZPN0046005'] | 'DESTINI 125 VX-(ZZSN0249004)' [value='ZZSN0249004'] | 'DESTINI 125 VX-(ZZUN0257001)' [value='ZZUN0257001'] | 'DESTINI 125 VX-(ZZSN0249002)' [value='ZZSN0249002'] | 'DESTINI 125 (VX)-(ZZPN0046007)' [value='ZZPN0046007'] | 'DESTINI 125 (VX)-(ZZPN0046001)' [value='ZZPN0046001'] | 'DESTINI 125 (VX)-(ZZNN0128002)' [value='ZZNN0128002'] | 'DESTINI 125 VX (SE)-(ZZPN0046003)' [value='ZZPN0046003'] | 'DESTINI 125 ZX-(ZZUN0257003)' [value='ZZUN0257003'] | 'DESTINI 125 ZX-(ZZSN0249005)' [value='ZZSN0249005'] | 'DESTINI 125 ZX+-(ZZUN0257004)' [value='ZZUN0257004'] | 'DESTINI 125 ZX+-(ZZSN0249006)' [value='ZZSN0249006'] | 'DESTINI PRIME-(ZZSN0249003)' [value='ZZSN0249003'] | 'DESTINI PRIME-(ZZUN0257002)' [value='ZZUN0257002'] | 'DUET-(ZZKN0117001)' [value='ZZKN0117001'] | 'DUET-(ZZKN0117002)' [value='ZZKN0117002'] | 'DUET125-(ZZNN0128001)' [value='ZZNN0128001'] | 'DUET (BOTTOM LINK)-(ZZKN0117004)' [value='ZZKN0117004'] | 'DUET (TELESCOPIC FORK)-(ZZKN0117003)' [value='ZZKN0117003'] | 'ECO DELUXE(I3S-SELF-DRUM-CAST)-(ZZJN0008065)' [value='ZZJN0008065']
+[2026-04-12 16:28:39 IST] [Screen 3]     select[11] id='workbench_tabview:dealer_cd_input' name='workbench_tabview:dealer_cd_input' si=2 sel='ARORA AUTOMOBILES ( RJ5)' nOpt=3 vis=False inVehTab=True inHypIns=False seriesHint=False
+[2026-04-12 16:28:39 IST] [Screen 3]       options: '-SELECT-' [value='0'] | 'ARORA AUTOMOBILES' [value='RJ00500069'] | 'ARORA AUTOMOBILES ( RJ5)' [value='RJ00500069']
+[2026-04-12 16:28:39 IST] [Screen 3]     select[12] id='workbench_tabview:vh_type_input' name='workbench_tabview:vh_type_input' si=0 sel='Non-Transport' nOpt=1 vis=False inVehTab=True inHypIns=False seriesHint=False
+[2026-04-12 16:28:39 IST] [Screen 3]       options: 'Non-Transport' [value='2']
+[2026-04-12 16:28:39 IST] [Screen 3]     select[13] id='workbench_tabview:vh_class_input' name='workbench_tabview:vh_class_input' si=1 sel='M-Cycle/Scooter' nOpt=2 vis=False inVehTab=True inHypIns=False seriesHint=False
+[2026-04-12 16:28:39 IST] [Screen 3]       options: '-SELECT-' [value='-1'] | 'M-Cycle/Scooter' [value='1']
+[2026-04-12 16:28:39 IST] [Screen 3]     select[14] id='workbench_tabview:vh_catg_input' name='workbench_tabview:vh_catg_input' si=1 sel='TWO WHEELER(NT)' nOpt=2 vis=False inVehTab=True inHypIns=False seriesHint=False
+[2026-04-12 16:28:39 IST] [Screen 3]       options: '-SELECT-' [value='-1'] | 'TWO WHEELER(NT)' [value='2WN']
+[2026-04-12 16:28:39 IST] [Screen 3]     select[15] id='workbench_tabview:fuel_input' name='workbench_tabview:fuel_input' si=22 sel='PETROL' nOpt=37 vis=False inVehTab=True inHypIns=False seriesHint=False
+[2026-04-12 16:28:39 IST] [Screen 3]       options: '-SELECT-' [value='-1'] | 'DIESEL' [value='2'] | 'LPG ONLY' [value='8'] | 'SOLAR' [value='10'] | 'ELECTRIC(BOV)' [value='4'] | 'CNG ONLY' [value='6'] | 'PETROL/CNG' [value='3'] | 'PETROL/LPG' [value='5'] | 'PETROL/HYBRID' [value='11'] | 'DIESEL/HYBRID' [value='12'] | 'NOT APPLICABLE' [value='99'] | 'PETROL/METHANOL' [value='14'] | 'METHANOL' [value='15'] | 'LNG' [value='17'] | 'DUAL DIESEL/BIO CNG' [value='18'] | 'DUAL DIESEL/CNG' [value='19'] | 'DUAL DIESEL/LNG' [value='20'] | 'DI-METHYL ETHER' [value='21'] | 'FUEL CELL HYDROGEN' [value='22'] | 'PURE EV' [value='23'] | 'STRONG HYBRID EV' [value='25'] | 'PLUG-IN HYBRID EV' [value='26'] | 'PETROL' [value='1'] | 'PETROL(E20)' [value='16'] | 'PETROL/HYBRID/CNG' [value='39'] | 'PETROL(E20)/HYBRID/CNG' [value='40'] | 'ETHANOL(E100)' [value='13'] | 'PETROL(E20)/CNG' [value='29'] | 'PETROL(E20)/LPG' [value='30'] | 'PETROL(E20)/HYBRID' [value='31'] | 'BIO-METHANE' [value='32'] | 'BIO-CNG/BIO-GAS' [value='33']
+[2026-04-12 16:28:39 IST] [Screen 3]     select[16] id='workbench_tabview:norms_input' name='workbench_tabview:norms_input' si=7 sel='BHARAT STAGE VI' nOpt=27 vis=False inVehTab=True inHypIns=False seriesHint=False
+[2026-04-12 16:28:39 IST] [Screen 3]       options: '-SELECT-' [value='-1'] | 'BHARAT STAGE I' [value='1'] | 'BHARAT STAGE II' [value='2'] | 'BHARAT STAGE III' [value='3'] | 'Bharat Stage III (CEV)' [value='18'] | 'BHARAT STAGE III/IV' [value='11'] | 'BHARAT STAGE IV' [value='4'] | 'BHARAT STAGE VI' [value='15'] | 'Bharat (Trem) Stage III' [value='5'] | 'Bharat (Trem) Stage III A' [value='6'] | 'Bharat (Trem) Stage III B' [value='12'] | 'CEV STAGE IV' [value='24'] | 'CEV STAGE V' [value='25'] | 'EURO 1' [value='7'] | 'EURO 2' [value='8'] | 'EURO 3' [value='9'] | 'EURO 4' [value='10'] | 'EURO 6' [value='17'] | 'EURO 6A' [value='19'] | 'EURO  6AD' [value='23'] | 'EURO 6B' [value='20'] | 'EURO 6C' [value='21'] | 'EURO 6D' [value='22'] | 'Not Applicable' [value='98'] | 'Not Available' [value='99'] | 'TREM STAGE IV' [value='13'] | 'TREM STAGE V' [value='14']
+[2026-04-12 16:28:39 IST] [Screen 3]     select[17] id='workbench_tabview:purchase_as_input' name='workbench_tabview:purchase_as_input' si=1 sel='Fully Built' nOpt=3 vis=False inVehTab=True inHypIns=False seriesHint=False
+[2026-04-12 16:28:39 IST] [Screen 3]       options: '-SELECT-' [value='-1'] | 'Fully Built' [value='B'] | 'Drive Away Chasis' [value='C']
+[2026-04-12 16:28:39 IST] [Screen 3]     select[18] id='workbench_tabview:ac_fitted_input' name='workbench_tabview:ac_fitted_input' si=0 sel='NO' nOpt=1 vis=False inVehTab=True inHypIns=False seriesHint=False
+[2026-04-12 16:28:39 IST] [Screen 3]       options: 'NO' [value='N']
+[2026-04-12 16:28:39 IST] [Screen 3]     select[19] id='workbench_tabview:audio_fitted_input' name='workbench_tabview:audio_fitted_input' si=0 sel='NO' nOpt=1 vis=False inVehTab=True inHypIns=False seriesHint=False
+[2026-04-12 16:28:39 IST] [Screen 3]       options: 'NO' [value='N']
+[2026-04-12 16:28:39 IST] [Screen 3]     select[20] id='workbench_tabview:video_fitted_input' name='workbench_tabview:video_fitted_input' si=0 sel='NO' nOpt=1 vis=False inVehTab=True inHypIns=False seriesHint=False
+[2026-04-12 16:28:39 IST] [Screen 3]       options: 'NO' [value='N']
+[2026-04-12 16:28:39 IST] [Screen 3]     select[21] id='workbench_tabview:vm_other_criteria_input' name='workbench_tabview:vm_other_criteria_input' si=0 sel='Not Applicable' nOpt=12 vis=False inVehTab=True inHypIns=False seriesHint=False
+[2026-04-12 16:28:39 IST] [Screen 3]       options: 'Not Applicable' [value='0'] | 'NOT a Fleet Owner and NOT Playing Exclusively Within the Municipal Limit' [value='1'] | 'Plying Exclusively Wthin the Municipal Limits/U.I.T. Limits' [value='2'] | 'Plying Exclusively on Sub-Urban Routes' [value='3'] | 'Playing Exclusively on Rural Routes' [value='4'] | 'Ranthambore National Park' [value='5'] | 'Govt. Distributed Vehicle' [value='6'] | 'Akshyapatra Foundation Vehicle Used for Mid day Meal' [value='7'] | 'Spare Vehicle of Permit' [value='8'] | 'Social Security/Walfare Investment Promotion Scheme 2021' [value='9'] | 'Auction Unregistered Vehicle' [value='10'] | 'Strong Hybrid Vehicle' [value='11']
+[2026-04-12 16:28:39 IST] [Screen 3]     select[22] id='workbench_tabview:imported_veh_input' name='workbench_tabview:imported_veh_input' si=0 sel='No' nOpt=2 vis=False inVehTab=True inHypIns=False seriesHint=False
+[2026-04-12 16:28:39 IST] [Screen 3]       options: 'No' [value='N'] | 'Yes' [value='Y']
+[2026-04-12 16:28:39 IST] [Screen 3]     select[23] id='workbench_tabview:tableTaxMode:0:taxModeType_input' name='workbench_tabview:tableTaxMode:0:taxModeType_input' si=1 sel='ONE TIME' nOpt=3 vis=False inVehTab=True inHypIns=False seriesHint=False
+[2026-04-12 16:28:39 IST] [Screen 3]       options: '--Select--' [value='0'] | 'ONE TIME' [value='O'] | 'Tax Exempted' [value='E']
+[2026-04-12 16:28:39 IST] [Screen 3]     select[24] id='workbench_tabview:ins_type_input' name='workbench_tabview:ins_type_input' si=4 sel='THIRD PARTY' nOpt=5 vis=True inVehTab=False inHypIns=True seriesHint=False
+[2026-04-12 16:28:39 IST] [Screen 3]       options: '--SELECT--' [value='-1'] | 'COMPREHENSIVE' [value='1'] | 'NOT AVAILABLE' [value='4'] | 'THEFT AND THIRD PARTY' [value='3'] | 'THIRD PARTY' [value='2']
+[2026-04-12 16:28:39 IST] [Screen 3]     select[25] id='workbench_tabview:ins_cd_input' name='workbench_tabview:ins_cd_input' si=338 sel='UNIVERSAL SOMPO GENERAL INSURANCE CO.LTD' nOpt=358 vis=True inVehTab=False inHypIns=True seriesHint=False
+[2026-04-12 16:28:39 IST] [Screen 3]       options: '--SELECT--' [value='-1'] | 'AARVI GENERAL INS.' [value='1004'] | 'ABN AMERO BANK LTD.' [value='1005'] | 'Acko General Insurance Limited' [value='1347'] | 'ADHWANI INDIA INSURANCE' [value='1006'] | 'ADINATH AUTO FIN' [value='1007'] | 'Aditya Birla Health Insurance Co Ltd' [value='1352'] | 'ADROIT TECH SER PVT LTD' [value='1008'] | 'AGRICULTURE INSURANCE' [value='1009'] | 'AIG' [value='1010'] | 'ALLAHABAD BANK' [value='1011'] | 'ALLIED INSURANCE' [value='1012'] | 'ALPHA INDIA GEN INS CO' [value='1013'] | 'ANNAND INS. CO. LTD.' [value='1014'] | 'ANUSUYA A G' [value='1015'] | 'ANY OTHERS/ NOT AVAILABLE/ EXEMPTED' [value='9999'] | 'Apollo Munich Health Insurance Company Limited' [value='1354'] | 'Apple Auto Agency Pvt Ltd' [value='1028'] | 'APPOLO DKV' [value='1016'] | 'ARTO GANDHINAGAR' [value='1017'] | 'ASHOK LEYLAND FIANACE' [value='1018'] | 'ASIAN EARTH MOVERS' [value='1019'] | 'ASSURANCE INS. OF INDIA' [value='1020'] | 'A T O(I) LIMITED.' [value='1339'] | 'AUTO ASSURANZ' [value='1021'] | 'AUTO RISK M.SER.P.LTD.' [value='1022'] | 'AVIVA GENERAL INSURANCE' [value='1023'] | 'AVIVA LIFE INSURANCE' [value='1024'] | 'AXA' [value='1025'] | 'AXIS BANK' [value='1026'] | 'BACKLOG' [value='1029'] | 'BAI' [value='1030']
+[2026-04-12 16:28:39 IST] [Screen 3]     select[26] id='workbench_tabview:ins_year_input' name='workbench_tabview:ins_year_input' si=5 sel='5 Year' nOpt=6 vis=True inVehTab=False inHypIns=True seriesHint=False
+[2026-04-12 16:28:39 IST] [Screen 3]       options: '--SELECT--' [value='0'] | '1 Year' [value='1'] | '2 Year' [value='2'] | '3 Year' [value='3'] | '4 Year' [value='4'] | '5 Year' [value='5']
+[2026-04-12 16:28:39 IST] [Screen 3]     select[27] id='workbench_tabview:seriesType_input' name='workbench_tabview:seriesType_input' si=0 sel='STATE SERIES' nOpt=2 vis=True inVehTab=False inHypIns=True seriesHint=True
+[2026-04-12 16:28:39 IST] [Screen 3]       options: 'STATE SERIES' [value='N'] | 'BHARAT SERIES' [value='B']
+[2026-04-12 16:28:39 IST] [Screen 3]     select[28] id='workbench_tabview:hpa_hp_type_input' name='workbench_tabview:hpa_hp_type_input' si=2 sel='Hypothecation' nOpt=4 vis=True inVehTab=False inHypIns=True seriesHint=False
+[2026-04-12 16:28:39 IST] [Screen 3]       options: '--SELECT--' [value='-1'] | 'Hire-Purchase' [value='HP'] | 'Hypothecation' [value='HT'] | 'Lease Agreement' [value='LA']
+[2026-04-12 16:28:39 IST] [Screen 3]     select[29] id='workbench_tabview:hpa_fncr_state_input' name='workbench_tabview:hpa_fncr_state_input' si=32 sel='Rajasthan' nOpt=37 vis=True inVehTab=False inHypIns=True seriesHint=False
+[2026-04-12 16:28:39 IST] [Screen 3]       options: '--SELECT--' [value='-1'] | 'UT of DNH and DD' [value='DD'] | 'Jammu and Kashmir' [value='JK'] | 'Delhi' [value='DL'] | 'Himachal Pradesh' [value='HP'] | 'Puducherry' [value='PY'] | 'Haryana' [value='HR'] | 'West Bengal' [value='WB'] | 'Bihar' [value='BR'] | 'Karnataka' [value='KA'] | 'Uttarakhand' [value='UK'] | 'Sikkim' [value='SK'] | 'Goa' [value='GA'] | 'Maharashtra' [value='MH'] | 'Uttar Pradesh' [value='UP'] | 'Meghalaya' [value='ML'] | 'Kerala' [value='KL'] | 'Manipur' [value='MN'] | 'Gujarat' [value='GJ'] | 'Madhya Pradesh' [value='MP'] | 'Odisha' [value='OR'] | 'Chhattisgarh' [value='CG'] | 'Chandigarh' [value='CH'] | 'Andaman & Nicobar Island' [value='AN'] | 'Mizoram' [value='MZ'] | 'Andhra Pradesh' [value='AP'] | 'Arunachal Pradesh' [value='AR'] | 'Assam' [value='AS'] | 'Punjab' [value='PB'] | 'Telangana' [value='TG'] | 'Ladakh' [value='LA'] | 'Lakshadweep' [value='LD']
+[2026-04-12 16:28:39 IST] [Screen 3]     select[30] id='workbench_tabview:hpa_fncr_district_input' name='workbench_tabview:hpa_fncr_district_input' si=6 sel='Bharatpur' nOpt=34 vis=True inVehTab=False inHypIns=True seriesHint=False
+[2026-04-12 16:28:39 IST] [Screen 3]       options: '--SELECT--' [value='-1'] | 'Ajmer' [value='119'] | 'Alwar' [value='104'] | 'Banswara' [value='125'] | 'Baran' [value='128'] | 'Barmer' [value='115'] | 'Bharatpur' [value='105'] | 'Bhilwara' [value='122'] | 'Bikaner' [value='101'] | 'Bundi' [value='121'] | 'Chittaurgarh' [value='126'] | 'Churu' [value='102'] | 'Dausa' [value='109'] | 'Dhaulpur' [value='106'] | 'Dungarpur' [value='124'] | 'Ganganagar' [value='99'] | 'Hanumangarh' [value='100'] | 'Jaipur' [value='110'] | 'Jaisalmer' [value='114'] | 'Jalor' [value='116'] | 'Jhalawar' [value='129'] | 'Jhunjhunun' [value='103'] | 'Jodhpur' [value='113'] | 'Karauli' [value='107'] | 'Kota' [value='127'] | 'Nagaur' [value='112'] | 'Pali' [value='118'] | 'Pratapgarh' [value='131'] | 'Rajsamand' [value='123'] | 'Sawai Madhopur' [value='108'] | 'Sikar' [value='111'] | 'Sirohi' [value='117']
+[2026-04-12 16:28:39 IST] [Screen 3]     select[31] id='workbench_tabview:vm_rel1_input' name='workbench_tabview:vm_rel1_input' si=1 sel='Brother' nOpt=8 vis=True inVehTab=False inHypIns=True seriesHint=False
+[2026-04-12 16:28:39 IST] [Screen 3]       options: 'Select Relation' [value='-1'] | 'Brother' [value='3'] | 'Daughter' [value='6'] | 'Father' [value='1'] | 'Mother' [value='2'] | 'Sister' [value='4'] | 'Son' [value='5'] | 'Spouse' [value='7']
+[2026-04-12 16:28:39 IST] [Screen 3]     select[32] id= si=0 sel='Apr' nOpt=1 vis=False inVehTab=False inHypIns=False seriesHint=False
+[2026-04-12 16:28:39 IST] [Screen 3]       options: 'Apr' [value='3']
+[2026-04-12 16:28:39 IST] [Screen 3]     select[33] id= si=0 sel='2026' nOpt=1 vis=False inVehTab=False inHypIns=False seriesHint=False
+[2026-04-12 16:28:39 IST] [Screen 3]       options: '2026' [value='2026']
+[2026-04-12 16:28:39 IST] [Screen 3]   [frame[0] main] PF / id hints (tax / taxMode / mv_tax, non-SELECT, cap 40):
+[2026-04-12 16:28:39 IST] [Screen 3]     DIV id='workbench_tabview:uiTaxModes' hidden=True class='ui-outputpanel ui-widget' text='                             Tax Mode Details              Tax TypeTax ModeMV Tax--Select--ONE TIMETax ExemptedONE TIME '
+[2026-04-12 16:28:39 IST] [Screen 3]     DIV id='workbench_tabview:tableTaxMode' hidden=True class='ui-datatable ui-widget top-space bottom-space' text='                             Tax Mode Details              Tax TypeTax ModeMV Tax--Select--ONE TIMETax ExemptedONE TIME'
+[2026-04-12 16:28:39 IST] [Screen 3]     THEAD id='workbench_tabview:tableTaxMode_head' hidden=True class='' text='Tax TypeTax Mode'
+[2026-04-12 16:28:39 IST] [Screen 3]     TH id='workbench_tabview:tableTaxMode:j_idt930' hidden=True class='ui-state-default' text='Tax Type'
+[2026-04-12 16:28:39 IST] [Screen 3]     TH id='workbench_tabview:tableTaxMode:j_idt932' hidden=True class='ui-state-default' text='Tax Mode'
+[2026-04-12 16:28:39 IST] [Screen 3]     TBODY id='workbench_tabview:tableTaxMode_data' hidden=True class='ui-datatable-data ui-widget-content' text='MV Tax--Select--ONE TIMETax ExemptedONE TIME'
+[2026-04-12 16:28:39 IST] [Screen 3]     DIV id='workbench_tabview:tableTaxMode:0:taxModeType' hidden=True class='ui-selectonemenu ui-widget ui-state-default ui-corner-all' text='--Select--ONE TIMETax ExemptedONE TIME'
+[2026-04-12 16:28:39 IST] [Screen 3]     INPUT id='workbench_tabview:tableTaxMode:0:taxModeType_focus' hidden=True class='' text=''
+[2026-04-12 16:28:39 IST] [Screen 3]     LABEL id='workbench_tabview:tableTaxMode:0:taxModeType_label' hidden=True class='ui-selectonemenu-label ui-inputfield ui-corner-all' text='ONE TIME'
+[2026-04-12 16:28:39 IST] [Screen 3]     DIV id='workbench_tabview:tableTaxMode:0:taxModeType_panel' hidden=True class='ui-selectonemenu-panel ui-widget ui-widget-content ui-corner-all ui-helper-hidde' text='--Select--ONE TIMETax Exempted'
+[2026-04-12 16:28:39 IST] [Screen 3]     UL id='workbench_tabview:tableTaxMode:0:taxModeType_items' hidden=True class='ui-selectonemenu-items ui-selectonemenu-list ui-widget-content ui-widget ui-corn' text='--Select--ONE TIMETax Exempted'
+[2026-04-12 16:28:39 IST] [Screen 3]     LI id='workbench_tabview:tableTaxMode:0:taxModeType_0' hidden=True class='ui-selectonemenu-item ui-selectonemenu-list-item ui-corner-all' text='--Select--'
+[2026-04-12 16:28:39 IST] [Screen 3]     LI id='workbench_tabview:tableTaxMode:0:taxModeType_1' hidden=True class='ui-selectonemenu-item ui-selectonemenu-list-item ui-corner-all ui-state-highligh' text='ONE TIME'
+[2026-04-12 16:28:39 IST] [Screen 3]     LI id='workbench_tabview:tableTaxMode:0:taxModeType_2' hidden=True class='ui-selectonemenu-item ui-selectonemenu-list-item ui-corner-all' text='Tax Exempted'
+[2026-04-12 16:28:39 IST] [Screen 3]   [frame[0] main] PF / id hints (series_type / seriesType / regn_series / state_series, cap 40):
+[2026-04-12 16:28:39 IST] [Screen 3]     DIV id='workbench_tabview:seriesType' hidden=False inHypIns=True class='ui-selectonemenu ui-widget ui-state-default ui-corner-all' text='STATE SERIES BHARAT SERIES STATE SERIES'
+[2026-04-12 16:28:39 IST] [Screen 3]     INPUT id='workbench_tabview:seriesType_focus' hidden=False inHypIns=True class='' text=''
+[2026-04-12 16:28:39 IST] [Screen 3]     SELECT id='workbench_tabview:seriesType_input' hidden=False inHypIns=True class='' text='STATE SERIES BHARAT SERIES'
+[2026-04-12 16:28:39 IST] [Screen 3]     LABEL id='workbench_tabview:seriesType_label' hidden=False inHypIns=True class='ui-selectonemenu-label ui-inputfield ui-corner-all' text='STATE SERIES'
+[2026-04-12 16:28:39 IST] [Screen 3]     DIV id='workbench_tabview:seriesType_panel' hidden=True inHypIns=False class='ui-selectonemenu-panel ui-widget ui-widget-content ui-corner-all ui-helper-hidde' text='STATE SERIESBHARAT SERIES'
+[2026-04-12 16:28:39 IST] [Screen 3]     UL id='workbench_tabview:seriesType_items' hidden=True inHypIns=False class='ui-selectonemenu-items ui-selectonemenu-list ui-widget-content ui-widget ui-corn' text='STATE SERIESBHARAT SERIES'
+[2026-04-12 16:28:39 IST] [Screen 3]     LI id='workbench_tabview:seriesType_0' hidden=True inHypIns=False class='ui-selectonemenu-item ui-selectonemenu-list-item ui-corner-all ui-state-highligh' text='STATE SERIES'
+[2026-04-12 16:28:39 IST] [Screen 3]     LI id='workbench_tabview:seriesType_1' hidden=True inHypIns=False class='ui-selectonemenu-item ui-selectonemenu-list-item ui-corner-all' text='BHARAT SERIES'
+[2026-04-12 16:28:39 IST] [Screen 3] === END PAGE STATE DUMP ===
+[2026-04-12 16:28:49 IST] [Screen 3] Screen 3: using application id from workbench: 'RJ26041148051328'
+[2026-04-12 16:28:49 IST] [Screen 4] --- Screen 4: Verify, Save Options / File Movement, Dealer Document Upload ---
+[2026-04-12 16:29:00 IST] [Screen 4] TIMEOUT click: Verify selector=input[value='Verify'], button:has-text('Verify')
+[2026-04-12 16:29:00 IST] [Screen 4] fill_rto_row FAILED: Locator.wait_for: Timeout 10000ms exceeded.
 Call log:
   - waiting for locator("input[value='Verify'], button:has-text('Verify')").first to be visible
 
