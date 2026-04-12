@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 # --- Testing / build: edit here only (not .env). Use 0 / False / "" for production full SOP. ---
 # ``RTO_FILL_SKIP_TO_SCREEN``: 0 = run all screens; 1–6 = start at that screen (skips dealer-home reset and earlier).
-RTO_FILL_SKIP_TO_SCREEN = 4
+RTO_FILL_SKIP_TO_SCREEN = 5
 # Screen 3: skip **Home** (you are already on ``home.xhtml`` with the grid). Also on when SKIP is 3.
 RTO_FILL_SCREEN3_SKIP_HOME = False
 # Screen 3: skip **Entry** — only with ``skip_home``; go straight to **Vehicle Details** sub-tab (already past Entry on the form).
@@ -39,6 +39,25 @@ RTO_FILL_SCREEN4_SKIP_VERIFY = True
 RTO_FILL_SCREEN4_SKIP_TO_DEALER_DOC_UPLOAD = True
 # Optional seed for ``data["rto_application_id"]`` when the queue row has no app id (logging / return merge only).
 RTO_FILL_TEST_APPLICATION_ID = ""
+
+# Screen 5 — dealer document upload form (``formDocumentUpload:*`` in RTO dumps, e.g. ``9650693610_RTO.txt``):
+# Sub Category PF wrapper + native ``select`` … ``subCatgId_input``; file input ``selectAndUploadFile_input``;
+# **Upload Document** span; right chevron ``nextBtn``; **File Movement** ``fileFlowId``.
+_SCREEN5_PF_SUBCAT_WRAPPER = '[id="formDocumentUpload:subCatgId"]'
+_SCREEN5_FILE_INPUT = '[id="formDocumentUpload:selectAndUploadFile_input"]'
+_SCREEN5_NEXT_BTN = '[id="formDocumentUpload:nextBtn"]'
+_SCREEN5_FILE_MOVEMENT_BTN = '[id="formDocumentUpload:fileFlowId"]'
+# Native ``<option>`` text varies (``Form 20`` vs ``FORM 20``) — match with regex per queue key.
+_SCREEN5_SUBCAT_REGEX_BY_DOC_KEY: dict[str, re.Pattern] = {
+    "FORM 20": re.compile(r"Form\s*20\b", re.I),
+    "FORM 21": re.compile(r"Form\s*21\b", re.I),
+    "FORM 22": re.compile(r"Form\s*22\b", re.I),
+    "INSURANCE CERTIFICATE": re.compile(r"INSURANCE\s*CERTIFICATE|Insurance\s*Certificate", re.I),
+    "INVOICE ORIGINAL": re.compile(r"INVOICE\s*ORIGINAL|Invoice\s*Original|GST\s*Retail", re.I),
+    "AADHAAR_FRONT": re.compile(r"AADHAAR\s*CARD|Aadhaar", re.I),
+    "AADHAAR_BACK": re.compile(r"AADHAAR\s*CARD|Aadhaar", re.I),
+    "OWNER UNDERTAKING FORM": re.compile(r"OWNER\s*UNDERTAKING|Undertaking", re.I),
+}
 
 # Screen 3 — locators aligned with RTO trace page dumps (``ocr_output/.../*_RTO.txt``): sub-tab strip
 # ``ul.ui-tabs-nav`` / ``a text='Hypothecation/Insurance Information'``, panel ``workbench_tabview:veh_info_tab``,
@@ -1584,10 +1603,18 @@ def _wait_native_choice_select_attached(native) -> None:
             continue
 
 
-def _upload_file(page: Page, file_path: Path, *, timeout: int = _DEFAULT_TIMEOUT_MS) -> None:
-    """Set the file on the visible file input and wait for upload to settle."""
+def _upload_file(
+    page: Page,
+    file_path: Path,
+    *,
+    timeout: int = _DEFAULT_TIMEOUT_MS,
+    file_input_selector: str | None = None,
+    wait_progress_after: bool = True,
+) -> None:
+    """Set the file on the file input (first ``input[type=file]`` unless *file_input_selector* is set)."""
+    sel = file_input_selector or "input[type='file']"
     try:
-        file_input = page.locator("input[type='file']").first
+        file_input = page.locator(sel).first
         file_input.set_input_files(str(file_path), timeout=timeout)
     except PwTimeout:
         _assert_vahan_session_alive(page)
@@ -1596,7 +1623,8 @@ def _upload_file(page: Page, file_path: Path, *, timeout: int = _DEFAULT_TIMEOUT
         raise
     _rto_log(f"upload: {file_path.name}")
     _pause()
-    _wait_for_progress_close(page)
+    if wait_progress_after:
+        _wait_for_progress_close(page)
 
 
 # ---------------------------------------------------------------------------
@@ -3702,8 +3730,57 @@ def _screen_4(page: Page) -> None:
     _wait_for_progress_close_loop(page)
 
 
+def _screen_5_select_subcategory(page: Page, doc_key: str, sub_category_text: str) -> None:
+    """PrimeFaces **Sub Category** on document upload: ``formDocumentUpload:subCatgId`` (see RTO dumps)."""
+    rx = _SCREEN5_SUBCAT_REGEX_BY_DOC_KEY.get(doc_key)
+    if rx is None:
+        rx = re.compile(re.escape(sub_category_text).replace(r"\ ", r"\s+"), re.I)
+    _select_pf_dropdown(
+        page,
+        _SCREEN5_PF_SUBCAT_WRAPPER,
+        "",
+        label=f"Sub Category ({doc_key})",
+        option_label_regex=rx,
+        use_native_select=True,
+        timeout=_DEFAULT_TIMEOUT_MS,
+    )
+
+
+def _screen_5_click_upload_document_trigger(page: Page) -> None:
+    """After choosing a file, Vahan often requires **Upload Document** (span with ui-button)."""
+    for sel in (
+        "span.ui-button:has-text('Upload Document')",
+        "button:has-text('Upload Document')",
+        "[id='formDocumentUpload:selectAndUploadFile'] span.ui-button",
+        "span[role='button']:has-text('Upload')",
+    ):
+        try:
+            loc = page.locator(sel).first
+            loc.wait_for(state="visible", timeout=_FIRST_TRY_MS)
+            loc.scroll_into_view_if_needed(timeout=_FIRST_TRY_MS)
+            loc.click(timeout=_FIRST_TRY_MS)
+            _rto_log(f"click: Upload Document ({sel})")
+            _pause()
+            _wait_for_progress_close(page)
+            return
+        except Exception:
+            continue
+    try:
+        page.get_by_role("button", name=re.compile(r"^\s*\+?\s*Upload\s+Documents?\s*$", re.I)).first.click(
+            timeout=_LOOP_BUDGET_MS
+        )
+        _rto_log("click: Upload Documents (get_by_role)")
+        _pause()
+        _wait_for_progress_close(page)
+    except Exception:
+        _rto_log(
+            "WARNING: Upload Document control not clicked — continuing "
+            "(portal may submit on file input alone)"
+        )
+
+
 def _screen_5(page: Page, docs: dict[str, Path | None]) -> None:
-    """Screen 5: Upload documents per sub-category."""
+    """Screen 5: Upload documents per sub-category (``formDocumentUpload`` form)."""
     _set_screen("Screen 5")
     logger.info("fill_rto: Screen 5 — uploading %d document categories", len(docs))
     _rto_log("--- Screen 5: Document uploads by sub-category ---")
@@ -3728,50 +3805,38 @@ def _screen_5(page: Page, docs: dict[str, Path | None]) -> None:
 
         logger.info("fill_rto: uploading %s -> %s (%s)", doc_key, sub_category_text, file_path.name)
 
-        # Select sub-category
-        try:
-            _select(
-                page,
-                "select[id*='subCategory'], select[id*='docCategory'], select[name*='subCategory']",
-                sub_category_text,
-                label=f"Sub Category: {sub_category_text}",
-                timeout=_DEFAULT_TIMEOUT_MS,
-            )
-        except (PwTimeout, Exception):
-            _type_typeahead(
-                page,
-                "input[id*='subCategory']",
-                sub_category_text,
-                label=f"Sub Category typeahead: {sub_category_text}",
-                timeout=_DEFAULT_TIMEOUT_MS,
-            )
-
+        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
         _pause()
 
-        # Upload the file
-        _upload_file(page, file_path)
+        assert sub_category_text is not None
+        _screen_5_select_subcategory(page, doc_key, sub_category_text)
+        _pause()
 
-        # Click right-chevron to confirm this upload
+        _upload_file(
+            page,
+            file_path,
+            file_input_selector=_SCREEN5_FILE_INPUT,
+            wait_progress_after=False,
+        )
+        _screen_5_click_upload_document_trigger(page)
+
         try:
-            chevron = page.locator(
-                "button:has-text('>>'), button:has-text('>'), "
-                "input[value='>>'], input[value='>'], "
-                "a:has-text('>>'), [class*='chevron-right'], "
-                "[class*='ui-icon-arrowthick-1-e']"
-            ).first
-            chevron.wait_for(state="visible", timeout=_DEFAULT_TIMEOUT_MS)
-            chevron.click()
-            _rto_log(f"chevron next after upload: {doc_key}")
+            nxt = page.locator(_SCREEN5_NEXT_BTN).first
+            nxt.wait_for(state="visible", timeout=_DEFAULT_TIMEOUT_MS)
+            nxt.scroll_into_view_if_needed(timeout=_FIRST_TRY_MS)
+            nxt.click(timeout=_FIRST_TRY_MS)
+            _rto_log(f"chevron next after upload: {doc_key} ({_SCREEN5_NEXT_BTN})")
             _pause()
             _wait_for_progress_close(page)
         except PwTimeout:
-            logger.warning("fill_rto: right-chevron not found for %s, continuing", doc_key)
+            logger.warning("fill_rto: nextBtn not found for %s", doc_key)
+            _rto_log(f"WARNING: nextBtn not found for {doc_key}")
 
-    # After all uploads, click File Movement
     _pause()
     _click(
         page,
-        "input[value*='File Movement'], button:has-text('File Movement'), a:has-text('File Movement')",
+        f"{_SCREEN5_FILE_MOVEMENT_BTN}, input[value*='File Movement'], "
+        "button:has-text('File Movement'), a:has-text('File Movement')",
         label="File Movement (after uploads)",
         timeout=_DEFAULT_TIMEOUT_MS,
     )
@@ -3984,6 +4049,11 @@ def fill_rto_row(row: dict) -> dict:
                 else:
                     s4_hint = "Verify → Save-Options → File Movement → None+Save → Save → Dealer Document Upload"
                 extra = f" Screen 4: {s4_hint}."
+            elif skip_from == 5:
+                extra = (
+                    " Screen 5: document upload — Sub Category **Form 20** first, "
+                    "then FORM 21/22, insurance, invoice, Aadhaar, undertaking; File Movement at end."
+                )
             _rto_log(
                 f"TEMP SKIP: RTO_FILL_SKIP_TO_SCREEN={skip_from} — start at Screen {skip_from} "
                 f"(skipped: dealer-home reset + screens 1..{skip_from - 1}){extra}"
