@@ -1,0 +1,155 @@
+/* Admin Dealers: View Vehicles–aligned layout; modal and local tweaks only. */
+
+.admin-dealers-page {
+  flex: 1;
+  min-height: 0;
+}
+
+.admin-dealers-card {
+  min-width: 0;
+}
+
+/* + button next to dealer search */
+.admin-dealers-add-btn {
+  min-width: 2.5rem;
+  min-height: 2.5rem;
+  padding: 0 0.75rem;
+  font-size: 1.35rem;
+  line-height: 1;
+  font-weight: 600;
+}
+
+.admin-dealers-save-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+.admin-dealers-unsaved {
+  font-size: 13px;
+  color: #666;
+}
+
+.admin-dealers-add-search {
+  margin-bottom: 10px;
+}
+
+.admin-dealers-discount-toolbar {
+  flex-wrap: wrap;
+  gap: 10px 12px;
+  margin-bottom: 10px;
+}
+
+.admin-dealers-discount-cell-input {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.admin-dealers-discount-draft-row td {
+  vertical-align: middle;
+}
+
+.admin-dealers-subtabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 10px;
+  padding-bottom: 0;
+  border-bottom: 1px solid #c5d9ed;
+}
+
+.admin-dealers-subtab {
+  padding: 8px 14px;
+  border: none;
+  border-radius: 6px 6px 0 0;
+  background: transparent;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  color: #4a6a8e;
+}
+
+.admin-dealers-subtab:hover {
+  background: #e8eef4;
+  color: #1e5a9e;
+}
+
+.admin-dealers-subtab.active {
+  background: #e8eef4;
+  color: #1e5a9e;
+}
+
+.admin-dealers-active-select {
+  max-width: 5rem;
+  min-width: 4rem;
+}
+
+.admin-dealers-inline-saving {
+  font-size: 12px;
+  color: #666;
+}
+
+.admin-dealers-wide-table {
+  font-size: 13px;
+}
+
+.admin-dealers-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  padding: 1rem;
+}
+
+.admin-dealers-modal {
+  background: #fff;
+  border-radius: 8px;
+  padding: 1.25rem;
+  max-width: 22rem;
+  width: 100%;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+  border: 1px solid #c5d9ed;
+}
+
+.admin-dealers-modal h3 {
+  margin: 0 0 1rem;
+  font-size: 16px;
+  font-weight: 600;
+  color: #1e5a9e;
+}
+
+.admin-dealers-modal-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-bottom: 0.85rem;
+  font-size: 0.9rem;
+}
+
+.admin-dealers-modal-field input {
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid #c5d9ed;
+  font-size: 14px;
+}
+
+.admin-dealers-req {
+  color: #b42318;
+}
+
+.admin-dealers-optional {
+  font-weight: normal;
+  color: #666;
+  font-size: 0.85rem;
+}
+
+.admin-dealers-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}

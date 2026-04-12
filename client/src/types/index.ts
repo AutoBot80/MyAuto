@@ -8,6 +8,7 @@ export type Page =
   | "service-reminders"
   | "dealer-dashboard"
   | "admin-tools"
+  | "admin-dealers"
   | "contact-us";
 
 export type AddSalesStep =

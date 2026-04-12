@@ -133,50 +133,31 @@ _SCREEN3_HYP_CHECKBOX_SELECTORS: tuple[str, ...] = (
 _SCREEN3_NOMINEE_NAME_INPUT: tuple[str, ...] = ('[id="workbench_tabview:nominationname1"]',)
 _SCREEN3_NOMINEE_RELATION_PF_WRAPPERS: tuple[str, ...] = ('[id="workbench_tabview:vm_rel1"]',)
 _SCREEN3_HYP_TYPE_PF_WRAPPERS: tuple[str, ...] = (
-    '[id="workbench_tabview:hypothecation_type"]',
-    '[id="workbench_tabview:hypothecationType"]',
-    '[id="workbench_tabview:hpa"] [id*="hypothecation_type"]',
-    '[id="workbench_tabview:hpa"] [id*="hypothecationType"]',
+    '[id="workbench_tabview:hpa_hp_type"]',
 )
 _SCREEN3_HYP_TYPE_NATIVE: tuple[str, ...] = (
-    'select[id="workbench_tabview:hypothecation_type_input"]',
-    'select[id="workbench_tabview:hypothecationType_input"]',
-    "select[id*='hypothecationType'], select[name*='hypothecationType']",
+    'select[id="workbench_tabview:hpa_hp_type_input"]',
 )
 _SCREEN3_FINANCIER_NAME_INPUT: tuple[str, ...] = (
-    '[id="workbench_tabview:financier_name"]',
-    '[id="workbench_tabview:hpa"] input[id*="financ"]',
-    '[id="workbench_tabview:hpa"] input[type="text"]',
-    "input[id*='financierName'], input[id*='financer'], input[name*='financierName']",
+    '[id="workbench_tabview:hpa_fncr_name"]',
 )
 _SCREEN3_HYP_FROM_DATE_INPUT: tuple[str, ...] = (
-    '[id="workbench_tabview:hyp_from_dt"]',
-    '[id="workbench_tabview:hypothecationFrom"]',
-    '[id="workbench_tabview:hpa"] input.hasDatepicker',
-    '[id="workbench_tabview:hpa"] input[type="text"]',
-    "input[id*='fromDate'][id*='hyp'], input[id*='hypothecationFrom'], input[name*='fromDate']",
+    '[id="workbench_tabview:hpa_from_dt_input"]',
 )
 _SCREEN3_FIN_STATE_PF_WRAPPERS: tuple[str, ...] = (
-    '[id="workbench_tabview:fin_state"]',
-    '[id="workbench_tabview:hyp_state"]',
+    '[id="workbench_tabview:hpa_fncr_state"]',
 )
 _SCREEN3_FIN_STATE_NATIVE: tuple[str, ...] = (
-    'select[id="workbench_tabview:fin_state_input"]',
-    'select[id="workbench_tabview:hyp_state_input"]',
-    "select[id*='finState'], select[id*='hypState']",
+    'select[id="workbench_tabview:hpa_fncr_state_input"]',
 )
 _SCREEN3_FIN_DISTRICT_PF_WRAPPERS: tuple[str, ...] = (
-    '[id="workbench_tabview:fin_district"]',
-    '[id="workbench_tabview:hyp_district"]',
+    '[id="workbench_tabview:hpa_fncr_district"]',
 )
 _SCREEN3_FIN_DISTRICT_NATIVE: tuple[str, ...] = (
-    'select[id="workbench_tabview:fin_district_input"]',
-    'select[id="workbench_tabview:hyp_district_input"]',
-    "select[id*='finDistrict'], select[id*='hypDistrict'], select[id*='fin_district']",
+    'select[id="workbench_tabview:hpa_fncr_district_input"]',
 )
 _SCREEN3_FIN_PIN_INPUT: tuple[str, ...] = (
-    '[id="workbench_tabview:fin_pin"]',
-    "input[id*='finPin'], input[id*='hypPin'], input[name*='finPin']",
+    '[id="workbench_tabview:hpa_fncr_pincode"]',
 )
 _SCREEN3_SAVE_FILE_MOVEMENT_SELECTORS: tuple[str, ...] = (
     '[id="workbench_tabview:save_file_movement_btn"]',
@@ -669,7 +650,6 @@ def _click(page: Page, selector: str, *, timeout: int = _DEFAULT_TIMEOUT_MS, lab
     except PwTimeout:
         _assert_vahan_session_alive(page)
         _rto_log(f"TIMEOUT click: {label} selector={selector}")
-        _dump_page_state(page, f"click failed: {label}")
         raise
     logger.debug("fill_rto: clicked %s (%s)", selector, label)
     if label:
@@ -690,7 +670,6 @@ def _fill(page: Page, selector: str, value: object, *, timeout: int = _DEFAULT_T
     except PwTimeout:
         _assert_vahan_session_alive(page)
         _rto_log(f"TIMEOUT fill: {label} selector={selector} value={text[:40]}")
-        _dump_page_state(page, f"fill failed: {label}")
         raise
     logger.debug("fill_rto: filled %s = %s (%s)", selector, text[:40], label)
     if label:
@@ -758,7 +737,6 @@ def _fill_workbench_purchase_date(
     except PwTimeout:
         _assert_vahan_session_alive(page)
         _rto_log(f"TIMEOUT fill: {label} selector={sel} value={text[:40]}")
-        _dump_page_state(page, f"fill failed: {label}")
         raise
     logger.debug("fill_rto: filled purchase date = %s", text[:40])
     _rto_log(f"fill: {label} = {text[:80]}{'…' if len(text) > 80 else ''}")
@@ -778,7 +756,6 @@ def _select(page: Page, selector: str, value: object, *, timeout: int = _DEFAULT
     except PwTimeout:
         _assert_vahan_session_alive(page)
         _rto_log(f"TIMEOUT select: {label} selector={selector} value={text}")
-        _dump_page_state(page, f"select failed: {label}")
         raise
     logger.debug("fill_rto: selected %s = %s (%s)", selector, text, label)
     if label:
@@ -953,7 +930,6 @@ def _type_typeahead(page: Page, selector: str, value: object, *, timeout: int = 
     except PwTimeout:
         _assert_vahan_session_alive(page)
         _rto_log(f"TIMEOUT typeahead: {label} selector={selector} value={text}")
-        _dump_page_state(page, f"typeahead failed: {label}")
         raise
     _pause()
     suggestion = page.locator(".ui-autocomplete li, .ui-menu-item, [role='option']").first
@@ -1039,7 +1015,6 @@ def _select_pf_dropdown(
     except PwTimeout:
         _assert_vahan_session_alive(page)
         _rto_log(f"TIMEOUT pf-dropdown: {label} selector={wrapper_selector} value={value!r}")
-        _dump_page_state(page, f"pf-dropdown failed: {label}")
         raise
     logger.debug("fill_rto: pf-dropdown %s = %s (%s)", wrapper_selector, value, label)
     if label:
@@ -1241,27 +1216,21 @@ def _clear_batch_otp_flags(dealer_id: int) -> None:
 
 def _find_visible_generated_application_dialog(page: Page):
     """Modal *Generated Application No* shown after successful Inward / OTP / Save Vehicle Details (PrimeFaces)."""
-    # Prefer visible ``.ui-dialog`` whose **descendants** match title or body (title bar alone may not match :has-text on some builds).
     try:
         loc = page.locator(".ui-dialog:visible").filter(
             has_text=re.compile(r"Generated\s+Application|Application\s*No\.?\s*:", re.I)
         )
         if loc.count() > 0:
-            loc.first.wait_for(state="visible", timeout=5000)
             return loc.first
     except Exception:
         pass
-    selectors = (
-        "[role='dialog']:has-text('Generated Application No')",
+    for sel in (
         ".ui-dialog:has-text('Generated Application No')",
-        "[role='dialog']:has-text('Generated Application')",
         ".ui-dialog:has-text('Generated Application')",
-        ".ui-dialog-content:has-text('Application No')",
-    )
-    for sel in selectors:
+    ):
         loc = page.locator(sel).first
         try:
-            if loc.is_visible(timeout=3000):
+            if loc.is_visible(timeout=1500):
                 return loc
         except Exception:
             continue
@@ -1327,42 +1296,39 @@ def _generated_application_dialog_full_text(dlg: Locator) -> str:
 
 
 def _click_ok_on_generated_application_dialog(page: Page, dlg: Locator) -> bool:
-    """Click **Ok** on *Generated Application No* — PrimeFaces ``buttonpane`` / span / ``force`` (mask safe)."""
-    for _ in range(3):
-        try:
-            dlg.locator(
-                ".ui-dialog-buttonpane button, .ui-dialog-buttonpane .ui-button, "
-                ".ui-dialog-buttonpane input[type='button'], .ui-dialog-buttonpane input[type='submit']"
-            ).first.click(timeout=6000, force=True)
-            _rto_log("Generated Application dialog: Ok (buttonpane)")
-            return True
-        except Exception:
-            pass
-        try:
-            dlg.locator("button, .ui-button, a.ui-button, input[type='button']").filter(
-                has_text=re.compile(r"^\s*Ok\s*$", re.I)
-            ).first.click(timeout=6000, force=True)
-            _rto_log("Generated Application dialog: Ok (control with Ok text)")
-            return True
-        except Exception:
-            pass
-        try:
-            page.locator(".ui-dialog:visible .ui-dialog-buttonpane button").first.click(
-                timeout=6000, force=True
-            )
-            _rto_log("Generated Application dialog: Ok (visible dialog buttonpane)")
-            return True
-        except Exception:
-            pass
-        try:
-            dlg.get_by_role("button", name=re.compile(r"^\s*Ok\s*$", re.I)).first.click(
-                timeout=6000, force=True
-            )
-            _rto_log("Generated Application dialog: Ok (role=button)")
-            return True
-        except Exception:
-            pass
-        time.sleep(0.2)
+    """Click **Ok** on *Generated Application No* — fast: text filter first, then buttonpane fallback."""
+    try:
+        dlg.locator("button, .ui-button, a.ui-button, input[type='button']").filter(
+            has_text=re.compile(r"^\s*Ok\s*$", re.I)
+        ).first.click(timeout=2000, force=True)
+        _rto_log("Generated Application dialog: Ok (control with Ok text)")
+        return True
+    except Exception:
+        pass
+    try:
+        dlg.locator(
+            ".ui-dialog-buttonpane button, .ui-dialog-buttonpane .ui-button"
+        ).first.click(timeout=2000, force=True)
+        _rto_log("Generated Application dialog: Ok (buttonpane)")
+        return True
+    except Exception:
+        pass
+    try:
+        page.locator(".ui-dialog:visible button").filter(
+            has_text=re.compile(r"^\s*Ok\s*$", re.I)
+        ).first.click(timeout=2000, force=True)
+        _rto_log("Generated Application dialog: Ok (visible dialog)")
+        return True
+    except Exception:
+        pass
+    try:
+        dlg.get_by_role("button", name=re.compile(r"^\s*Ok\s*$", re.I)).first.click(
+            timeout=2000, force=True
+        )
+        _rto_log("Generated Application dialog: Ok (role=button)")
+        return True
+    except Exception:
+        pass
     return False
 
 
@@ -1840,52 +1806,35 @@ def _screen_3_scroll_to_tax_mode(page: Page) -> None:
     """
     tab_panel = page.locator('[id="workbench_tabview:veh_info_tab"]').first
     try:
-        tab_panel.wait_for(state="attached", timeout=8000)
+        tab_panel.wait_for(state="attached", timeout=4000)
         tab_panel.evaluate(
-            """(el) => {
-                el.scrollTop = Math.max(0, el.scrollHeight - el.clientHeight);
-            }"""
+            "(el) => el.scrollTop = Math.max(0, el.scrollHeight - el.clientHeight)"
         )
         _pause()
         _rto_log("Screen 3: scrolled Vehicle Details tab panel toward bottom (Tax Mode region)")
     except Exception as e:
         _rto_log(f"Screen 3: tab panel scroll skipped ({e!s})")
 
-    for fast_sel in (
-        'select[id="workbench_tabview:tableTaxMode:0:taxModeType_input"]',
-        '[id="workbench_tabview:tableTaxMode:0:taxModeType"]',
-    ):
-        loc = page.locator(fast_sel).first
-        try:
-            loc.wait_for(state="attached", timeout=4000)
-            loc.evaluate("el => el.scrollIntoView({ block: 'center', inline: 'nearest' })")
-            _pause()
-            loc.scroll_into_view_if_needed(timeout=_DEFAULT_TIMEOUT_MS)
-            _pause()
-            _rto_log(f"Screen 3: scrolled to Tax Mode (fast tableTaxMode:0 {fast_sel!r})")
-            return
-        except Exception:
-            continue
-
+    fast_sel = 'select[id="workbench_tabview:tableTaxMode:0:taxModeType_input"]'
+    loc = page.locator(fast_sel).first
     try:
-        mv_row = tab_panel.locator("tr").filter(has_text=_MV_TAX_ROW_RE).first
-        mv_row.wait_for(state="attached", timeout=5000)
-        mv_row.evaluate("el => el.scrollIntoView({ block: 'center', inline: 'nearest' })")
+        loc.wait_for(state="attached", timeout=3000)
+        loc.evaluate("el => el.scrollIntoView({ block: 'center', inline: 'nearest' })")
         _pause()
-        mv_row.scroll_into_view_if_needed(timeout=_DEFAULT_TIMEOUT_MS)
-        _pause()
-        _rto_log("Screen 3: scrolled to MV Tax row (Tax Mode Details)")
+        _rto_log(f"Screen 3: scrolled to Tax Mode (fast tableTaxMode:0 {fast_sel!r})")
         return
-    except Exception as e:
-        logger.debug("fill_rto: MV Tax row scroll: %s", e)
+    except Exception:
+        pass
 
-    for sel in _SCREEN3_TAX_MODE_NATIVE_SELECTORS + _SCREEN3_TAX_MODE_PF_WRAPPERS:
+    for sel in (
+        '[id="workbench_tabview:tableTaxMode:0:taxModeType"]',
+        *_SCREEN3_TAX_MODE_NATIVE_SELECTORS,
+        *_SCREEN3_TAX_MODE_PF_WRAPPERS,
+    ):
         loc = page.locator(sel).first
         try:
-            loc.wait_for(state="attached", timeout=8000)
+            loc.wait_for(state="attached", timeout=3000)
             loc.evaluate("el => el.scrollIntoView({ block: 'center', inline: 'nearest' })")
-            _pause()
-            loc.scroll_into_view_if_needed(timeout=_DEFAULT_TIMEOUT_MS)
             _pause()
             _rto_log(f"Screen 3: scrolled to Tax Mode ({sel!r})")
             return
@@ -1914,26 +1863,20 @@ def _screen_3_verify_tax_mode_one_time(loc: Locator) -> bool:
 
 
 def _screen_3_try_select_tax_mode_on_locator(loc: Locator, log_tag: str) -> bool:
-    """Select **ONE TIME** on a native ``select`` and verify the chosen option text."""
+    """Select **ONE TIME** on a native ``select`` via JS index scan (fastest path)."""
     try:
-        loc.wait_for(state="attached", timeout=_DEFAULT_TIMEOUT_MS)
-        loc.evaluate("el => el.scrollIntoView({ block: 'center', inline: 'nearest' })")
-        _pause()
-        try:
-            loc.select_option(label=_TAX_MODE_ONE_TIME_LABEL_RE, timeout=_DEFAULT_TIMEOUT_MS, force=True)
-        except Exception as first_e:
-            idx = loc.evaluate(
-                """el => {
-                    for (let i = 0; i < el.options.length; i++) {
-                        const raw = (el.options[i].textContent || '').trim();
-                        if (/ONE\\s*TIME/i.test(raw)) return i;
-                    }
-                    return -1;
-                }"""
-            )
-            if idx is None or int(idx) < 0:
-                raise first_e
-            loc.select_option(index=int(idx), force=True)
+        loc.wait_for(state="attached", timeout=3000)
+        idx = loc.evaluate(
+            """el => {
+                for (let i = 0; i < el.options.length; i++) {
+                    if (/ONE\\s*TIME/i.test((el.options[i].textContent || '').trim())) return i;
+                }
+                return -1;
+            }"""
+        )
+        if idx is None or int(idx) < 0:
+            return False
+        loc.select_option(index=int(idx), force=True)
         _pause()
         if _screen_3_verify_tax_mode_one_time(loc):
             _rto_log(f"select: Tax Mode = ONE TIME ({log_tag})")
@@ -2155,7 +2098,7 @@ def _screen_3_click_dialog_dismiss_any(dlg: Locator, page: Page, *, log_prefix: 
         r"^\s*Proceed\s*$",
     ):
         try:
-            dlg.get_by_role("button", name=re.compile(pat, re.I)).first.click(timeout=4000)
+            dlg.get_by_role("button", name=re.compile(pat, re.I)).first.click(timeout=1500)
             _rto_log(f"{log_prefix}: dialog dismiss ({pat})")
             return True
         except Exception:
@@ -2163,7 +2106,7 @@ def _screen_3_click_dialog_dismiss_any(dlg: Locator, page: Page, *, log_prefix: 
     try:
         dlg.locator(
             "button, a.ui-button, input[type='button'], input[type='submit']"
-        ).first.click(timeout=4000)
+        ).first.click(timeout=1500)
         _rto_log(f"{log_prefix}: dialog dismiss (first control)")
         return True
     except Exception:
@@ -2221,7 +2164,7 @@ def _screen_3_post_save_vehicle_details_dialogs(page: Page, data: dict | None) -
     _wait_for_progress_close_loop(page)
     app_id = ""
     dlg0 = _find_visible_generated_application_dialog(page) or _poll_generated_application_dialog(
-        page, max_ms=18_000
+        page, max_ms=6_000
     )
     if dlg0 is not None:
         text0 = _generated_application_dialog_full_text(dlg0)
@@ -2274,8 +2217,8 @@ def _screen_3_click_save_vehicle_details(page: Page) -> None:
     for sel in _SCREEN3_SAVE_VEHICLE_DETAILS_SELECTORS:
         try:
             loc = page.locator(sel).first
-            loc.wait_for(state="visible", timeout=_DEFAULT_TIMEOUT_MS)
-            loc.click(timeout=_DEFAULT_TIMEOUT_MS)
+            loc.wait_for(state="visible", timeout=5000)
+            loc.click(timeout=5000)
             _pause()
             _wait_for_progress_close_loop(page)
             _rto_log(f"Screen 3: Save Vehicle Details ({sel!r})")
@@ -2293,13 +2236,13 @@ def _screen_3_clear_blocking_overlay_after_vehicle_save(page: Page, data: dict |
     """After **Save Vehicle Details**: scrape/dismiss application dialogs; clear ``#msgDialog_modal`` mask."""
     _screen_3_post_save_vehicle_details_dialogs(page, data)
     try:
-        page.locator("#msgDialog_modal").first.wait_for(state="hidden", timeout=12_000)
+        page.locator("#msgDialog_modal").first.wait_for(state="hidden", timeout=4000)
     except PwTimeout:
         _rto_log("WARNING: msgDialog_modal still visible — Escape then retry")
         try:
             page.keyboard.press("Escape")
             _pause()
-            page.locator("#msgDialog_modal").first.wait_for(state="hidden", timeout=6000)
+            page.locator("#msgDialog_modal").first.wait_for(state="hidden", timeout=3000)
         except PwTimeout:
             _rto_log("WARNING: msgDialog_modal overlay may block next step")
     _wait_for_progress_close_loop(page)
@@ -2751,6 +2694,7 @@ def _fill_first_matching(page: Page, selectors: tuple[str, ...], value: object, 
         except Exception:
             continue
     _rto_log(f"WARNING: {label} not filled (no matching field)")
+    _dump_page_state(page, f"field not filled: {label}")
     return False
 
 
@@ -2969,107 +2913,82 @@ def _screen_3_log_hypothecation_nominee_wiring(page: Page) -> None:
     _rto_log("=== End Hypothecation / nominee wiring snapshot ===")
 
 
-def _screen_3_wait_hypothecation_ajax_panel(page: Page, *, timeout_ms: int = 20_000) -> None:
-    """After toggling **Is Hypothecated**, PrimeFaces updates ``workbench_tabview:hpa`` — wait for controls."""
+def _screen_3_wait_hypothecation_ajax_panel(page: Page) -> None:
+    """After toggling **Is Hypothecated**, PrimeFaces updates ``workbench_tabview:hpa`` — wait for financier name input."""
     _wait_for_progress_close_loop(page)
     try:
-        page.wait_for_function(
-            """() => {
-                const h = document.getElementById("workbench_tabview:hpa");
-                if (!h) return false;
-                return h.querySelectorAll("input, select, textarea").length > 0;
-            }""",
-            timeout=timeout_ms,
+        page.locator('[id="workbench_tabview:hpa_fncr_name"]').first.wait_for(
+            state="visible", timeout=8000
         )
-        _rto_log("hpa: AJAX panel has input/select controls")
+        _rto_log("hpa: financier name input visible")
     except Exception:
-        _rto_log(
-            "NOTE: hpa panel still empty or missing — trying visible hypothecation/financier controls"
-        )
-    try:
-        page.locator(
-            "[id*='hypothecation_type'], [id*='hypothecationType'], "
-            "[id*='financier'], [id*='hpa'] input[type='text']"
-        ).first.wait_for(state="visible", timeout=min(8000, timeout_ms))
-    except Exception:
-        pass
-    _wait_for_progress_close_loop(page)
+        _rto_log("NOTE: hpa financier name input not visible after 8s")
+    _pause()
 
 
 def _screen_3_toggle_pf_boolean_hypo(page: Page, *, want_checked: bool) -> bool:
-    """Toggle **Is Vehicle Hypothecated** (PrimeFaces ``ui-selectbooleancheckbox`` — click box, not hidden input)."""
+    """Toggle **Is Vehicle Hypothecated** — click ``.ui-chkbox-box`` inside wrapper (fast, direct)."""
     inp = page.locator(_SCREEN3_ISHYPO_INPUT).first
     try:
-        inp.wait_for(state="attached", timeout=_DEFAULT_TIMEOUT_MS)
+        inp.wait_for(state="attached", timeout=3000)
     except Exception:
         _rto_log("WARNING: isHypo_input not in DOM")
         return False
     try:
         if inp.is_checked() == want_checked:
+            _rto_log(
+                f"skip: isHypo already {'checked' if want_checked else 'unchecked'}"
+            )
             return True
     except Exception:
         pass
     box = page.locator(_SCREEN3_ISHYPO_BOX).first
-    wrap = page.locator(_SCREEN3_ISHYPO_WRAPPER).first
     try:
-        wrap.scroll_into_view_if_needed(timeout=_DEFAULT_TIMEOUT_MS)
-        _pause()
-        if box.count() > 0:
-            box.click(timeout=_DEFAULT_TIMEOUT_MS)
-        else:
-            wrap.click(timeout=_DEFAULT_TIMEOUT_MS)
+        box.scroll_into_view_if_needed(timeout=3000)
+        box.click(timeout=3000)
         _pause()
         if inp.is_checked() == want_checked:
-            _rto_log("checkbox: Is vehicle hypothecated — toggled via .ui-chkbox-box / wrapper")
+            _rto_log("checkbox: Is vehicle hypothecated — toggled via .ui-chkbox-box")
             return True
-    except Exception as e:
-        _rto_log(f"NOTE: isHypo box click: {e!r} — trying force/JS")
-    try:
-        inp.click(force=True, timeout=_DEFAULT_TIMEOUT_MS)
-        _pause()
-        if inp.is_checked() == want_checked:
-            _rto_log("checkbox: Is vehicle hypothecated — toggled via force click on input")
-            return True
-    except Exception as e:
-        _rto_log(f"NOTE: isHypo force click: {e!r}")
+    except Exception:
+        pass
     try:
         page.evaluate(
             """(want) => {
-                const el = document.getElementById("workbench_tabview:isHypo_input");
-                if (!el) return;
-                if (!!el.checked !== want) el.click();
+                const box = document.querySelector("#workbench_tabview\\\\:isHypo .ui-chkbox-box");
+                if (box) { box.click(); return; }
+                const inp = document.getElementById("workbench_tabview:isHypo_input");
+                if (inp && !!inp.checked !== want) inp.click();
             }""",
             want_checked,
         )
         _pause()
         if inp.is_checked() == want_checked:
-            _rto_log("checkbox: Is vehicle hypothecated — toggled via JS click on input")
+            _rto_log("checkbox: Is vehicle hypothecated — toggled via JS")
             return True
     except Exception as e:
-        _rto_log(f"WARNING: isHypo JS toggle failed: {e!s}")
+        _rto_log(f"WARNING: isHypo toggle failed: {e!s}")
     return inp.is_checked() == want_checked
 
 
 def _screen_3_set_vehicle_hypothecated_checkbox(page: Page, *, has_financier: bool) -> None:
     """Set **Is Vehicle Hypothecated?** to match finance (checked when ``has_financier``)."""
-    _screen_3_log_hypothecation_nominee_wiring(page)
     want = bool(has_financier)
     ok = _screen_3_toggle_pf_boolean_hypo(page, want_checked=want)
     if not ok:
+        _screen_3_log_hypothecation_nominee_wiring(page)
         _rto_log(
             f"WARNING: Is vehicle hypothecated could not be set to "
             f"{'checked' if want else 'unchecked'} (see wiring snapshot above)"
         )
     elif want:
         _screen_3_wait_hypothecation_ajax_panel(page)
-        _screen_3_log_hypothecation_nominee_wiring(page)
     else:
         _wait_for_progress_close_loop(page)
-    _pause()
 
 
 def _screen_3_fill_financier_hypothecation_details(page: Page, data: dict) -> None:
-    """After hypothecation is checked — hypothecation type, financier name, from date, state, district, pin."""
+    """After hypothecation is checked — fill hpa_* fields (live ids from RTO log)."""
     financier = (data.get("financier") or "").strip()
     if not financier:
         return
@@ -3078,29 +2997,17 @@ def _screen_3_fill_financier_hypothecation_details(page: Page, data: dict) -> No
     if not _screen_3_pf_dropdown_chain(
         page, _SCREEN3_HYP_TYPE_PF_WRAPPERS, "Hypothecation", label="Hypothecation Type"
     ):
-        _screen_3_native_select_chain(
+        if not _screen_3_native_select_chain(
             page, _SCREEN3_HYP_TYPE_NATIVE, "Hypothecation", label="Hypothecation Type"
-        )
+        ):
+            _rto_log("WARNING: Hypothecation Type not set")
+            _dump_page_state(page, "dropdown not set: Hypothecation Type")
 
-    fn_ok = _fill_first_matching(page, _SCREEN3_FINANCIER_NAME_INPUT, financier, label="Financier Name")
-    if not fn_ok:
-        try:
-            _type_typeahead(
-                page,
-                "input[id*='financierName'], input[id*='financer']",
-                financier,
-                label="Financier typeahead",
-                timeout=_DEFAULT_TIMEOUT_MS,
-            )
-        except PwTimeout:
-            _rto_log("WARNING: Financier Name not set")
+    _fill_first_matching(page, _SCREEN3_FINANCIER_NAME_INPUT, financier, label="Financier Name")
 
     if invoice_date:
         _fill_first_matching(
-            page,
-            _SCREEN3_HYP_FROM_DATE_INPUT,
-            invoice_date,
-            label="Hypothecation From Date (invoice / billing date)",
+            page, _SCREEN3_HYP_FROM_DATE_INPUT, invoice_date, label="Hypothecation From Date"
         )
 
     st = (data.get("state") or "").strip()
@@ -3112,9 +3019,10 @@ def _screen_3_fill_financier_hypothecation_details(page: Page, data: dict) -> No
             if not _screen_3_native_select_chain(
                 page, _SCREEN3_FIN_STATE_NATIVE, st_disp, label="Financier State"
             ):
-                _screen_3_native_select_chain(
-                    page, _SCREEN3_FIN_STATE_NATIVE, st, label="Financier State (raw)"
-                )
+                _rto_log("WARNING: Financier State not set")
+                _dump_page_state(page, "dropdown not set: Financier State")
+        _close_pf_selectonemenu_overlay(page, "workbench_tabview:hpa_fncr_state")
+        _pause()
 
     dist = (data.get("district") or "").strip()
     if dist:
@@ -3125,95 +3033,72 @@ def _screen_3_fill_financier_hypothecation_details(page: Page, data: dict) -> No
             if not _screen_3_native_select_chain(
                 page, _SCREEN3_FIN_DISTRICT_NATIVE, d_disp, label="Financier District"
             ):
-                _screen_3_native_select_chain(
-                    page, _SCREEN3_FIN_DISTRICT_NATIVE, dist, label="Financier District (raw)"
-                )
+                _rto_log("WARNING: Financier District not set")
+                _dump_page_state(page, "dropdown not set: Financier District")
+        _close_pf_selectonemenu_overlay(page, "workbench_tabview:hpa_fncr_district")
 
     if data.get("pin"):
         _fill_first_matching(page, _SCREEN3_FIN_PIN_INPUT, data["pin"], label="Financier Pincode")
-    _pause()
 
 
 def _screen_3c_nominee_add_details(page: Page, data: dict) -> None:
-    """**Add Nominee Details** Yes/No; when Yes, nominee name + relation (from queue / insurance_master)."""
+    """**Add Nominee Details** Yes/No radio; when Yes, fill nominee name + relation.
+
+    Direct IDs from RTO log:
+      - Yes radio: ``workbench_tabview:nomineeradiobtn1:0``  (value='Y')
+      - No radio:  ``workbench_tabview:nomineeradiobtn1:1``  (value='N')
+      - Name:      ``workbench_tabview:nominationname1``
+      - Relation:  ``workbench_tabview:vm_rel1`` (PF) / ``workbench_tabview:vm_rel1_input`` (native)
+    """
     nm_raw = (data.get("nominee_name") or "").strip()
     rel_raw = (data.get("nominee_relationship") or "").strip()
     rel_norm = normalize_nominee_relationship_value(rel_raw) if rel_raw else ""
     want_nominee = bool(nm_raw or rel_norm)
 
-    try:
-        page.locator('[id="workbench_tabview:nomineeradiobtn1"]').first.scroll_into_view_if_needed(
-            timeout=_DEFAULT_TIMEOUT_MS
-        )
-    except Exception:
-        pass
-    _pause()
+    _rto_log(
+        f"nominee: want={want_nominee}, name={nm_raw!r}, relationship={rel_norm!r}"
+    )
 
     if not want_nominee:
         try:
-            page.locator('label[for="workbench_tabview:nomineeradiobtn1:1"]').first.click(
-                timeout=3000
+            page.locator('[id="workbench_tabview:nomineeradiobtn1:1"]').first.click(
+                force=True, timeout=3000
             )
-            _rto_log("radio: Add Nominee Details — No (label[for])")
-        except Exception:
-            try:
-                page.locator('input[name="workbench_tabview:nomineeradiobtn1"][value="N"]').first.click(
-                    force=True, timeout=_DEFAULT_TIMEOUT_MS
-                )
-                _rto_log("radio: Add Nominee Details — No (no nominee name/relationship in queue data)")
-            except Exception as e:
-                _rto_log(f"WARNING: Add Nominee Details No: {e!s}")
+            _rto_log("radio: Add Nominee Details — No")
+        except Exception as e:
+            _rto_log(f"WARNING: Add Nominee Details No: {e!s}")
         _pause()
         return
 
     try:
-        page.locator('label[for="workbench_tabview:nomineeradiobtn1:0"]').first.click(timeout=3000)
-        _rto_log("radio: Add Nominee Details — Yes (label[for])")
-    except Exception:
-        try:
-            page.locator('input[name="workbench_tabview:nomineeradiobtn1"][value="Y"]').first.click(
-                force=True, timeout=_DEFAULT_TIMEOUT_MS
-            )
-            _rto_log("radio: Add Nominee Details — Yes (input force)")
-        except Exception as e:
-            _rto_log(f"WARNING: Add Nominee Details Yes: {e!s}")
-            return
+        page.locator('[id="workbench_tabview:nomineeradiobtn1:0"]').first.click(
+            force=True, timeout=3000
+        )
+        _rto_log("radio: Add Nominee Details — Yes")
+    except Exception as e:
+        _rto_log(f"WARNING: Add Nominee Details Yes: {e!s}")
+        return
     _pause()
     _wait_for_progress_close_loop(page)
 
     if nm_raw:
         _fill_first_matching(page, _SCREEN3_NOMINEE_NAME_INPUT, nm_raw, label="Nominee Name")
+
     if rel_norm:
-        rel_pat = re.compile(rf"^\s*{re.escape(rel_norm)}\s*$", re.I)
-        ok = _screen_3_pf_dropdown_chain(
+        if not _screen_3_pf_dropdown_chain(
             page,
             _SCREEN3_NOMINEE_RELATION_PF_WRAPPERS,
             rel_norm,
             label="Relation with nominee",
-            option_label_regex=rel_pat,
-        )
-        if not ok:
-            token = rel_norm.split()[0] if rel_norm.split() else rel_norm
-            if token:
-                sub_pat = re.compile(re.escape(token), re.I)
-                ok = _screen_3_pf_dropdown_chain(
-                    page,
-                    _SCREEN3_NOMINEE_RELATION_PF_WRAPPERS,
-                    token,
-                    label="Relation with nominee (first token)",
-                    option_label_regex=sub_pat,
-                )
-        if ok:
-            _close_pf_selectonemenu_overlay(page, "workbench_tabview:vm_rel1")
-        else:
-            if not _screen_3_native_select_chain(
+            option_label_regex=re.compile(rf"^\s*{re.escape(rel_norm)}\s*$", re.I),
+        ):
+            _screen_3_native_select_chain(
                 page,
                 ('select[id="workbench_tabview:vm_rel1_input"]',),
                 rel_norm,
                 label="Relation with nominee (native)",
-            ):
-                _rto_log("WARNING: Relation with nominee not set")
-    _pause()
+            )
+        _close_pf_selectonemenu_overlay(page, "workbench_tabview:vm_rel1")
 
 
 def _screen_3c_insurance_information(page: Page, data: dict) -> None:
@@ -3298,7 +3183,6 @@ def _screen_3c_insurance_information(page: Page, data: dict) -> None:
         )
 
     # Series Type (*Please Select Series Type*) → **STATE SERIES** (skip if already STATE SERIES).
-    _screen_3_log_series_type_ids_probe(page)
     for scroll_sel in (_SCREEN3_SERIES_TYPE_PF_WRAPPERS[0], _SCREEN3_SERIES_TYPE_NATIVE[0]):
         try:
             s_loc = page.locator(scroll_sel).first
@@ -3514,13 +3398,11 @@ def _screen_3(page: Page, data: dict, *, skip_home: bool, skip_entry: bool = Fal
             "RTO Screen 3: Tax Mode must be ONE TIME before Save Vehicle Details — automation stopped"
         )
 
-    _screen_3_log_tax_mode_wiring_snapshot(page)
     _screen_3_click_save_vehicle_details(page)
     _screen_3_clear_blocking_overlay_after_vehicle_save(page, data)
 
     # 3c: Scroll to sub-tab strip, open **Hypothecation/Insurance Information**, then fill insurance.
     _screen_3_scroll_subtab_bar_into_view(page)
-    _screen_3_dump_frames_and_popup_candidates(page)
     _screen_3_open_hypothecation_insurance_tab(page)
     _screen_3c_insurance_information(page, data)
 

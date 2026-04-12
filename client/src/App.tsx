@@ -5,6 +5,7 @@ import { useToday } from "./hooks/useToday";
 import { AppLayoutV2 } from "./components/AppLayoutV2";
 import { AddSalesPage } from "./pages/AddSalesPage";
 import { AdminPage } from "./pages/AdminPage";
+import { AdminDealersPage } from "./pages/AdminDealersPage";
 import { HomePage } from "./pages/HomePage";
 import { PlaceholderPage } from "./pages/PlaceholderPage";
 import { ViewCustomerPage } from "./pages/ViewCustomerPage";
@@ -57,7 +58,7 @@ const RTO_PAGES: Page[] = ["rto-status", "contact-us"];
 
 const DEALER_PAGES: Page[] = ["dealer-dashboard", "contact-us"];
 
-const ADMIN_PAGES: Page[] = ["admin-tools"];
+const ADMIN_PAGES: Page[] = ["admin-dealers", "admin-tools"];
 
 function App() {
   const today = useToday();
@@ -139,7 +140,7 @@ function App() {
     else if (mode === "service" && !SERVICE_PAGES.includes(page)) setPage("service-reminders");
     else if (mode === "rto" && !RTO_PAGES.includes(page)) setPage("rto-status");
     else if (mode === "dealer" && !DEALER_PAGES.includes(page)) setPage("dealer-dashboard");
-    else if (mode === "admin" && !ADMIN_PAGES.includes(page)) setPage("admin-tools");
+    else if (mode === "admin" && !ADMIN_PAGES.includes(page)) setPage("admin-dealers");
   }, [mode, page]);
 
   const dmsUrl = siteUrls?.dms_base_url ?? "";
@@ -181,6 +182,8 @@ function App() {
         return <PlaceholderPage title="Dealer Saathi" message="RTO details, Sub-dealer sales etc. – Coming soon." />;
       case "admin-tools":
         return <AdminPage />;
+      case "admin-dealers":
+        return <AdminDealersPage />;
       case "contact-us":
         return <PlaceholderPage title="Contact Us" />;
       default:
@@ -234,7 +237,7 @@ function App() {
               }}
               onSelectAdmin={() => {
                 setMode("admin");
-                setPage("admin-tools");
+                setPage("admin-dealers");
               }}
             />
           </main>

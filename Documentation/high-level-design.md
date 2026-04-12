@@ -1,7 +1,7 @@
 # High Level Design (HLD)
 ## Auto Dealer Management System
 
-**Version:** 1.18  
+**Version:** 1.19  
 **Last Updated:** April 2026
 
 ---
@@ -121,7 +121,8 @@ My Auto.AI/
 | `services/add_subdealer_challan_service` | Orchestrates **`prepare_vehicle`** per **`challan_details_staging`** line (joined to **`challan_master_staging`**), **`vehicle_inventory_master`** upsert + **`subdealer_discount_master`** lookup, **`prepare_customer_for_challan`** (**`hero_dms_playwright_customer_challan`**), **`Playwright_Hero_DMS_fill_subdealer_challan_order_only`** → **`prepare_order`**; optional phases **`prepare_only`** / **`order_only`**; **`retry_failed_staging_row`** / **`retry_order_only_batch`**; delegates commit to **`add_subdealer_challan_commit_service`**. |
 | `services/add_subdealer_challan_commit_service` | Persists **`challan_master`** + **`challan_details`** after successful Siebel batch. |
 | `services/hero_dms_playwright_customer_challan` | **`prepare_customer_for_challan`**: dummy mobile, Network / institution from **`dealer_ref`**, helmet Comments — **BR-22**, **LLD §2.4e**. |
-| `services/rto_payment_service` | Dealer-scoped RTO batch runner, progress state, advisory locking, scrape-back persistence into `rto_queue` / `vehicle_master`, and downstream payment updates. |
+| `services/fill_rto_service` | Vahan **workbench** Playwright: per-queue-row fill from **`form_vahan_view`** + **`insurance_master`** (via RTO repo join); Screen 3 tax/insurance/hypothecation/nominee/save; PrimeFaces-aware selectors (`workbench_tabview:*`, **`hpa_*`** hypothecation panel); RTO trace log under **`ocr_output/<dealer>/<subfolder>/`**; full-page diagnostics only on final field or terminal failure — **LLD §2.4f**. |
+| `services/rto_payment_service` | Dealer-scoped RTO batch runner, progress state, advisory locking; delegates each row to **`fill_rto_service.fill_rto_row`**; scrape-back persistence into `rto_queue` / `vehicle_master`, and downstream payment updates. |
 | `repositories/*` | Data access for ai_reader_queue, bulk_loads, dealer_ref, **`form_dms`** (DMS fill row SQL, no view), `form_vahan_view`, rto_queue, rc_status_sms_queue, **`challan_master_staging`**, **`challan_details_staging`**, **`vehicle_inventory_master`**. |
 
 ### 3.3 Client Pages
@@ -472,3 +473,4 @@ The SQL view **`form_dms_view`** is **removed**; the same mapping is implemented
 | 1.162 | Apr 2026 | — | **Subdealer Challan** staging split + APIs: **`challan_master_staging`** / **`challan_details_staging`**, **`GET …/staging/recent`**, **`retry-order`**, failed-count badge; repos + **`SubdealerChallanPage`** Processed UI — **BRD** **3.161**, **LLD** **§2.4e**, **6.281**, **Database DDL** **2.72** |
 | 1.163 | Apr 2026 | — | **View Vehicles** POS tab + **`GET /vehicle-search/search`** + **`vehicle_search`** router — **LLD** **6.282** |
 | 1.164 | Apr 2026 | — | **View Vehicles**: API **`vehicle_inventory`** + UI **Vehicle inventory** section — **LLD** **6.283** |
+| 1.165 | Apr 2026 | — | **`fill_rto_service`**: Vahan workbench RTO automation; **`rto_payment_service`** delegates **`fill_rto_row`**; **`form_vahan_view`** + **`insurance_master`** nominee/financier; logging policy (dump on final failure only) — **BRD** **§6.3**, **3.162**; **LLD** **§2.4f**, **6.292** |

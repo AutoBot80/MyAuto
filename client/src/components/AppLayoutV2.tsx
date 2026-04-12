@@ -12,6 +12,7 @@ const PAGE_LABELS: Record<Page, string> = {
   "service-reminders": "Service Reminders",
   "dealer-dashboard": "Dealer Saathi",
   "admin-tools": "Admin Tools",
+  "admin-dealers": "Dealers",
   "contact-us": "Contact Us",
 };
 

@@ -1,7 +1,7 @@
 # Low Level Design (LLD)
 ## Auto Dealer Management System
 
-**Version:** 1.8  
+**Version:** 1.9  
 **Last Updated:** April 2026
 
 ---
@@ -45,7 +45,7 @@ backend/app/
   db.py                # get_connection()
   schemas/             # Pydantic request/response (uploads, ocr, fill_dms, etc.)
   repositories/        # Data access only (ai_reader_queue, bulk_loads, dealer_ref, form_dms, form_vahan, rto_queue, rc_status_sms_queue)
-  services/            # Business logic (UploadService, bulk_job_service, bulk_queue_service, bulk_watcher_service, form20_service, handle_browser_opening, utility_functions, insurance_form_values, insurance_kyc_payloads, sales_ocr_service, sales_textract_service, fill_hero_dms_service, hero_dms_db_service, hero_dms_reports_service, hero_dms_prepare_customer, fill_hero_insurance_service, siebel_dms_playwright, submit_info_service, add_sales_commit_service, rto_payment_service)
+  services/            # Business logic (UploadService, bulk_job_service, bulk_queue_service, bulk_watcher_service, form20_service, handle_browser_opening, utility_functions, insurance_form_values, insurance_kyc_payloads, sales_ocr_service, sales_textract_service, fill_hero_dms_service, hero_dms_db_service, hero_dms_reports_service, hero_dms_prepare_customer, fill_hero_insurance_service, siebel_dms_playwright, submit_info_service, add_sales_commit_service, fill_rto_service, rto_payment_service)
   routers/             # health, settings, uploads, ai_reader_queue, bulk_loads, fill_forms_router, add_sales, submit_info, rto_queue, customer_search, dealers, documents, qr_decode, vision, textract_router
   templates/           # form20_front.html, form20_back.html, form20_page3.html
 ```
@@ -87,7 +87,7 @@ backend/app/
 | GET | `/fill-forms/data-from-dms` | Get data from DMS.txt. |
 | GET | `/fill-forms/form20-status` | Form 20 template status. |
 | POST | `/fill-forms/print-form20` | Generate Form 20.pdf. |
-| POST | `/fill-forms/vahan` | Vahan (RTO) only; tab reuse / auto-open as above. **Playwright fill is not implemented** for production VAHAN (returns **NotImplementedError** until extended). |
+| POST | `/fill-forms/vahan` | **Not implemented.** Use **`POST /rto-queue/process-batch`** (**`fill_rto_service`**). For pre-open only: **`POST /fill-forms/vahan/warm-browser`**. |
 | POST | `/fill-forms/insurance/hero` | **Hero Insurance** — ``pre_process`` delegates to **`run_fill_insurance_only`** (Sign In → 2W → New Policy; insurer / OVD / mobile / consent; KYC **Proceed** or uploads; **VIN** + Submit on real MISP). Training-only **``#ins-company``** HTML is **disabled** (error). ``main_process``: **I agree** modal + proposal from ``form_insurance_view`` (merged with ``payload_json`` when ``staging_id`` is set, **BR-20**); proposal defaults **hardcoded**; **Proposal Review** is always clicked; **Issue Policy** click may be **skipped** when **`HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY`** is **True** (preview scrape still runs). **``insurance_master`` INSERT + preview/issue scrape + UPDATE** still run as coded. There is **no** separate ``POST .../insurance`` route; Add Sales calls this endpoint only. Request: optional ``insurance_base_url``, ``customer_id``, ``vehicle_id``, ``subfolder``, ``dealer_id``, ``staging_id``. Response: ``success``, ``error``, ``page_url``, ``login_url``, ``match_base``. |
 | GET | `/rto-queue` | List RTO queue rows. |
 | GET | `/rto-queue/by-sale` | Get RTO queue row by sale (customer_id, vehicle_id). |
@@ -170,7 +170,7 @@ backend/app/
 
 ### 2.4a VAHAN (Playwright)
 
-- **Static training HTML** under `dummy-sites/vaahan/` and Playwright that drove it **were removed**. Set **`VAHAN_BASE_URL`** in **`backend/.env`** to the **production** VAHAN portal. **`run_fill_vahan_only`**, **`run_fill_vahan_batch_row`**, and **`_fill_vahan_and_scrape`** raise **`NotImplementedError`** until production selectors exist. **`run_rto_pay`** in **`rto_payment_service.py`** returns a clear error (same reason).
+- **Static training HTML** under `dummy-sites/vaahan/` and Playwright that drove it **were removed**. Set **`VAHAN_BASE_URL`** in **`backend/.env`** to the **production** VAHAN portal. Legacy standalone Vahan fill helpers (if present) may still raise **`NotImplementedError`** until wired; **RTO queue batch processing** uses **`fill_rto_service.fill_rto_row`** from **`rto_payment_service`** against the live **workbench** — **§2.4f**.
 
 ### 2.4b DMS (Playwright)
 
@@ -302,6 +302,13 @@ Duplicate-mobile **Title** drilldown and **Contact_Enquiry** jqGrid detection us
 - **Retries:** **`retry_failed_staging_row`** (detail id): reset **Failed** line → **Queued**, **`invoice_status`** reset to Pending, then **`phase=full`**. **`retry_order_only_batch`**: **`phase=order_only`** for all-**Ready** batches after order/invoice failure.
 
 **Parity note:** This path is **not** **§6.1a** retail Add Sales; do not merge its behavior into **§2.4d** Contact Find / duplicate-mobile tables without an explicit owner request.
+
+### 2.4f Vahan workbench RTO fill (`fill_rto_service`)
+
+- **Entry:** **`rto_payment_service`** runs the dealer-scoped oldest-**batch** loop and calls **`fill_rto_row(row)`** on the Playwright worker thread (same CDP / tab-reuse patterns as other fills). **`row`** comes from **`rto_queue`** joined with **`form_vahan_view`** and **`insurance_master`** (see **`repositories/rto_payment_details`**) so financier, nominee, IDV, and address fields are available without inventing values (**BR-9**).
+- **Trace log:** Per run, **`ocr_output/<dealer_id>/<subfolder>/<mobile>_RTO.txt`** (or the configured RTO log path) receives structured **`[Screen N]`** lines. **`_dump_page_state`** (full selects + mixed visible controls) runs **only** on: terminal failures (**Save Vehicle Details**, **Save and File Movement**, scrape failures), **`_fill_first_matching`** after **all** selectors for a label fail, combined PF + native dropdown failure for hypothecation type / financier state / district, or **`upload`** failure — **not** on every `_fill` / `_select` / `_select_pf_dropdown` / `_click` timeout (those helpers log a short **`TIMEOUT`** line only).
+- **Screen 3 (workbench):** Sub-tabs **Vehicle Details** (MV Tax **`tableTaxMode:0:taxModeType_input`** → **ONE TIME**), **Save Vehicle Details**, **Hypothecation/Insurance Information** — insurance fields skipped when Vahan pre-filled; **Series Type** **STATE SERIES**; **Is Vehicle Hypothecated** via PrimeFaces **`isHypo`** (`.ui-chkbox-box`); when checked, hypothecation fields use **`workbench_tabview:hpa_*`** ids (e.g. **`hpa_hp_type`**, **`hpa_fncr_name`**, **`hpa_from_dt_input`**, **`hpa_fncr_state`**, **`hpa_fncr_district`**, **`hpa_fncr_pincode`**). **Add Nominee Details** radios **`nomineeradiobtn1:0`** (Yes) / **`:1`** (No); name **`nominationname1`**; relation **`vm_rel1`** / **`vm_rel1_input`**. **Generated Application No** dialog: dismiss **Ok** with text-filter-first click strategy. Unconditional happy-path dumps (tax wiring snapshot, pre-hypothecation frame/popup inventory, series-type id probe) were removed to reduce log size and wall time — **BRD §6.3**, **3.162**.
+- **API:** Production RTO work uses **`POST /rto-queue/process-batch`** and related **`/rto-queue/*`** routes (no standalone **`POST /fill-forms/vahan`** fill endpoint; **`POST /fill-forms/vahan/warm-browser`** only pre-opens the workbench) — **§2.2** API table.
 
 ### 2.5 Database Access
 
@@ -726,3 +733,4 @@ See **Documentation/Database DDL.md** for full table structures. Summary:
 | 6.289 | Apr 2026 | — | **`POST /admin/reset-all-data`**: preserve **`subdealer_discount_master`** (with **`dealer_ref`**, **`oem_ref`**, **`oem_service_schedule`**); **`AdminPage`** confirm copy — **`app/routers/admin.py`** — **API Endpoints** table |
 | 6.290 | Apr 2026 | — | **`GET /vehicle-search/search`** **`sales_master`**: address / mobile / alt phone / financier from **`customer_master`**; **`billing_date`** formatted **dd/mm/yyyy**; **View Vehicles** Sales Master column order — **API Endpoints** table. |
 | 6.291 | Apr 2026 | — | **`GET /vehicle-search/search`** **`sales_master`**: explicit **`sales_master`** columns + scalar lookups for customer/dealer (avoids **`RealDictCursor`** losing joined fields when duplicate SQL column names); **`dealer_name`** **`COALESCE`** with **`vehicle_inventory_master`** when **`sm.dealer_id`** null — **`vehicle_search`** — **API Endpoints** table. |
+| 6.292 | Apr 2026 | — | **`fill_rto_service`**: Vahan **workbench** Screen 3 — **`hpa_*`** hypothecation ids, nominee **`nomineeradiobtn1`**, **`nominationname1`**, **`vm_rel1`**; MV Tax / Save / dialog **Ok** fast paths; **`_dump_page_state`** only on final field or terminal failure; removed unconditional tax/popup/series probes — **§2.4f**; **BRD** **§6.3**, **3.162**; **HLD** **1.165** |

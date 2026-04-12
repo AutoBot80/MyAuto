@@ -1,7 +1,7 @@
 # Business Requirements Document (BRD)
 ## Auto Dealer Management System — Arya Agencies
 
-**Version:** 3.2  
+**Version:** 3.3  
 **Last Updated:** April 2026  
 **Status:** Draft
 
@@ -211,6 +211,7 @@ This is the **intended** real-DMS order (aligned with the operator screen record
 - All Vahan fields must be read from `form_vahan_view` labels and DB-backed technical columns (no hardcoded assumptions during runtime).
 - **Persist back to `sales_master`:** **`vahan_application_id`** and **`rto_charges`** on the sale row are updated when the Vahan / RTO batch run scrapes them — not during DMS (**§6.1d**).
 - Operator workflow remains: logged-in tab reuse first, fallback to auto-open browser and first-time login prompt, then retry.
+- **RTO queue batch (workbench automation):** Dealer-scoped processing (`POST /rto-queue/process-batch` and related APIs) runs Playwright against the Vahan **workbench** flow implemented in **`fill_rto_service`** (invoked from **`rto_payment_service`**). The per-row fill dict is built from **`form_vahan_view`** joined with **`insurance_master`** (e.g. financier context, **`nominee_name`**, **`nominee_relationship`**) via the RTO queue repository. Screen 3 targets PrimeFaces controls by stable **`workbench_tabview:*`** ids (e.g. MV Tax **`tableTaxMode:0:taxModeType_input`**, hypothecation panel **`hpa_*`**, nominee radios **`nomineeradiobtn1:0|1`**). **Diagnostics:** full page-state dumps (`_dump_page_state`) are written to the per-run RTO log **only when a step ultimately fails** (e.g. no matching control after all selectors, terminal click/scrape failure), not on every individual selector timeout — **LLD §2.4f**.
 
 ### 6.4 Insurance Fields to Fill (Submit Info Contract)
 
@@ -534,3 +535,4 @@ Bulk upload automates the ingestion of scanned documents from a shared folder in
 | 3.159 | Apr 2026 | — | **Implementation docs:** Add Sales / queue OCR modules renamed — **`ocr_service.py`** → **`sales_ocr_service.py`** (**`OcrService`**); **`textract_service.py`** → **`sales_textract_service.py`** (AWS Textract) — **LLD** **6.279**, **HLD** **1.160** |
 | 3.160 | Apr 2026 | — | **BR-22** / **FR-25** / **§6.9**: Subdealer Challan — **`challan_staging`** workflow, **`prepare_vehicle`** loop + batch **`prepare_order`**, **`vehicle_inventory_master`** + **`subdealer_discount_master`**, **`challan_master`** / **`challan_details`** — **LLD** **§2.4e**, **6.280**, **HLD** **1.161**, **Database DDL** **2.70** |
 | 3.161 | Apr 2026 | — | **BR-22** / **FR-25** / **§6.9**: Subdealer Challan staging split — **`challan_master_staging`** + **`challan_details_staging`**; Processed tab / **`staging/recent`**, **`retry-order`**, **`staging/failed-count`** — **LLD** **§2.4e**, **6.281**, **HLD** **1.162**, **Database DDL** **2.72** |
+| 3.162 | Apr 2026 | — | **§6.3** / **FR-21a**–**FR-21c**: Vahan **workbench** RTO fill — **`fill_rto_service`** + **`form_vahan_view`** / **`insurance_master`**; stable **`workbench_tabview`** / **`hpa_*`** wiring; RTO log dumps only on **final** field or terminal failure — **LLD** **§2.4f**, **6.292**, **HLD** **1.165** |

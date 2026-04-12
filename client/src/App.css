@@ -1733,13 +1733,15 @@
   color: #1e5a9e;
 }
 
-.view-vehicles-search-field input {
+.view-vehicles-search-field input,
+.view-vehicles-search-field select {
   flex: 1 1 auto;
   min-width: 140px;
   padding: 6px 10px;
   font-size: 14px;
   border: 1px solid #c5d9ed;
   border-radius: 6px;
+  background: #fff;
 }
 
 .view-vehicles-search-btn {
@@ -1836,8 +1838,51 @@
 
 .view-vehicles-kv-value {
   font-size: 14px;
-  color: #1b2a3a;
+  color: #111827;
   word-break: break-word;
+}
+
+.view-vehicles-kv-input,
+.view-vehicles-kv-select {
+  width: 100%;
+  max-width: 100%;
+  padding: 6px 10px;
+  font-size: 14px;
+  border: 1px solid #c5d9ed;
+  border-radius: 6px;
+  box-sizing: border-box;
+  background: #fff;
+  color: #111827;
+  -webkit-text-fill-color: #111827;
+}
+
+/* Browsers default disabled controls to low opacity — keep text readable (Admin Dealers, etc.). */
+.view-vehicles-kv-input:disabled,
+.view-vehicles-kv-select:disabled {
+  opacity: 1;
+  color: #111827;
+  -webkit-text-fill-color: #111827;
+  background: #f3f4f6;
+  cursor: not-allowed;
+}
+
+.view-vehicles-search-field select:disabled {
+  opacity: 1;
+  color: #111827;
+  -webkit-text-fill-color: #111827;
+  background: #f3f4f6;
+  cursor: not-allowed;
+}
+
+.view-vehicles-hint {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: #5a6a7a;
+  line-height: 1.4;
+}
+
+.view-vehicles-hint code {
+  font-size: 12px;
 }
 
 .view-vehicles-empty {
@@ -1868,6 +1913,13 @@
 
 .view-vehicles-table tbody tr:hover {
   background: #f8fafc;
+}
+
+.view-vehicles-table td.view-vehicles-table-empty {
+  text-align: center;
+  color: #666;
+  font-size: 13px;
+  padding: 12px 8px;
 }
 
 .view-vehicles-mono {
