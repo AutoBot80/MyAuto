@@ -37,14 +37,15 @@ RTO_FILL_TEST_APPLICATION_ID = ""
 # Screen 3 — locators aligned with RTO trace page dumps (``ocr_output/.../*_RTO.txt``): sub-tab strip
 # ``ul.ui-tabs-nav`` / ``a text='Hypothecation/Insurance Information'``, panel ``workbench_tabview:veh_info_tab``,
 # and the same ``workbench_tabview:*`` id style as other workbench fields.
+# **Tax Mode Details** is a PF ``ui-datatable`` row — live ids (``9650693610_RTO.txt``):
+# ``workbench_tabview:tableTaxMode:0:taxModeType`` / ``...taxModeType_input``. Prefer these first (fast).
 _SCREEN3_TAX_MODE_PF_WRAPPERS: tuple[str, ...] = (
+    '[id="workbench_tabview:tableTaxMode:0:taxModeType"]',
     '[id="workbench_tabview:tax_mode"]',
     '[id="workbench_tabview:taxMode"]',
 )
-# Prefer the **broad** native selector first: RTO log ``9650693610_RTO.txt`` — PF ``tax_mode`` times out;
-# ``workbench_tabview:tax_mode_input`` matches the **hidden** PF <select> (``visible`` wait fails); the
-# visible dropdown is the generic ``select[id*='taxMode']`` (success: ``select: Tax Mode = ONE TIME``).
 _SCREEN3_TAX_MODE_NATIVE_SELECTORS: tuple[str, ...] = (
+    'select[id="workbench_tabview:tableTaxMode:0:taxModeType_input"]',
     "select[id*='taxMode'], select[name*='taxMode']",
     'select[id="workbench_tabview:tax_mode_input"]',
     'select[id="workbench_tabview:taxMode_input"]',
@@ -1219,7 +1220,17 @@ def _clear_batch_otp_flags(dealer_id: int) -> None:
 
 
 def _find_visible_generated_application_dialog(page: Page):
-    """Modal *Generated Application No* shown after successful Inward / OTP (workbench)."""
+    """Modal *Generated Application No* shown after successful Inward / OTP / Save Vehicle Details (PrimeFaces)."""
+    # Prefer visible ``.ui-dialog`` whose **descendants** match title or body (title bar alone may not match :has-text on some builds).
+    try:
+        loc = page.locator(".ui-dialog:visible").filter(
+            has_text=re.compile(r"Generated\s+Application|Application\s*No\.?\s*:", re.I)
+        )
+        if loc.count() > 0:
+            loc.first.wait_for(state="visible", timeout=5000)
+            return loc.first
+    except Exception:
+        pass
     selectors = (
         "[role='dialog']:has-text('Generated Application No')",
         ".ui-dialog:has-text('Generated Application No')",
@@ -1230,7 +1241,7 @@ def _find_visible_generated_application_dialog(page: Page):
     for sel in selectors:
         loc = page.locator(sel).first
         try:
-            if loc.is_visible(timeout=_FIRST_TRY_MS):
+            if loc.is_visible(timeout=3000):
                 return loc
         except Exception:
             continue
@@ -1252,6 +1263,14 @@ def _poll_generated_application_dialog(page: Page, max_ms: int = 15_000):
 def _scrape_application_id_from_dialog_text(text: str) -> str:
     """Parse Vahan application number from dialog body (e.g. ``Application No. :RJ26041148051328``)."""
     raw = (text or "").replace("\xa0", " ")
+    # Common on workbench: ``Application No. :RJ26...`` (space before colon)
+    m = re.search(
+        r"Application\s*No\.?\s*:\s*([A-Z]{2}\d{8,24})\b",
+        raw,
+        re.IGNORECASE,
+    )
+    if m:
+        return m.group(1).strip().upper()
     m = re.search(
         r"Application\s*No\.?\s*[:\-]?\s*([A-Z]{2}\d{10,20})\b",
         raw,
@@ -1273,40 +1292,75 @@ def _scrape_application_id_from_dialog_text(text: str) -> str:
     return found[0].upper() if found else ""
 
 
+def _generated_application_dialog_full_text(dlg: Locator) -> str:
+    """Full text from PrimeFaces dialog (title bar + content)."""
+    try:
+        t = (dlg.inner_text(timeout=6000) or "").strip()
+        if t:
+            return t
+    except Exception:
+        pass
+    try:
+        return (dlg.locator(".ui-dialog-content").first.inner_text(timeout=4000) or "").strip()
+    except Exception:
+        return ""
+
+
+def _click_ok_on_generated_application_dialog(page: Page, dlg: Locator) -> bool:
+    """Click **Ok** on *Generated Application No* — PrimeFaces ``buttonpane`` / span / ``force`` (mask safe)."""
+    for _ in range(3):
+        try:
+            dlg.locator(
+                ".ui-dialog-buttonpane button, .ui-dialog-buttonpane .ui-button, "
+                ".ui-dialog-buttonpane input[type='button'], .ui-dialog-buttonpane input[type='submit']"
+            ).first.click(timeout=6000, force=True)
+            _rto_log("Generated Application dialog: Ok (buttonpane)")
+            return True
+        except Exception:
+            pass
+        try:
+            dlg.locator("button, .ui-button, a.ui-button, input[type='button']").filter(
+                has_text=re.compile(r"^\s*Ok\s*$", re.I)
+            ).first.click(timeout=6000, force=True)
+            _rto_log("Generated Application dialog: Ok (control with Ok text)")
+            return True
+        except Exception:
+            pass
+        try:
+            page.locator(".ui-dialog:visible .ui-dialog-buttonpane button").first.click(
+                timeout=6000, force=True
+            )
+            _rto_log("Generated Application dialog: Ok (visible dialog buttonpane)")
+            return True
+        except Exception:
+            pass
+        try:
+            dlg.get_by_role("button", name=re.compile(r"^\s*Ok\s*$", re.I)).first.click(
+                timeout=6000, force=True
+            )
+            _rto_log("Generated Application dialog: Ok (role=button)")
+            return True
+        except Exception:
+            pass
+        time.sleep(0.2)
+    return False
+
+
 def _dismiss_generated_application_no_dialog(page: Page) -> str:
     """If the *Generated Application No* modal is open: scrape id, click Ok, wait. Returns id or empty string."""
     dlg = _find_visible_generated_application_dialog(page) or _poll_generated_application_dialog(page, max_ms=15_000)
     if dlg is None:
         return ""
-    try:
-        text = dlg.inner_text(timeout=5000) or ""
-    except Exception:
-        text = ""
+    text = _generated_application_dialog_full_text(dlg)
     app_id = _scrape_application_id_from_dialog_text(text)
     if app_id:
         _rto_log(f"dialog: Generated Application No — application_id={app_id}")
         logger.info("fill_rto: Generated Application No dialog — application_id=%s", app_id)
     else:
-        _rto_log("dialog: Generated Application No — could not parse application id from dialog text")
-    clicked = False
-    for pat in (r"^\s*Ok\s*$", r"^\s*OK\s*$"):
-        try:
-            dlg.get_by_role("button", name=re.compile(pat, re.I)).first.click(timeout=5000)
-            clicked = True
-            _rto_log("Generated Application dialog: Ok")
-            break
-        except Exception:
-            continue
-    if not clicked:
-        try:
-            dlg.locator("button, a").filter(has_text=re.compile(r"^\s*Ok\s*$", re.I)).first.click(timeout=5000)
-            clicked = True
-            _rto_log("Generated Application dialog: Ok (link/button)")
-        except Exception:
-            try:
-                _dismiss_dialog(page, "OK", timeout=4000)
-            except Exception:
-                pass
+        _rto_log(f"dialog: Generated Application No — could not parse id; dialog text snippet: {text[:500]!r}")
+    if not _click_ok_on_generated_application_dialog(page, dlg):
+        _dismiss_dialog(page, "OK", timeout=3000)
+        _dismiss_dialog(page, "Ok", timeout=3000)
     _pause()
     _wait_for_progress_close_loop(page)
     return app_id
@@ -1777,6 +1831,22 @@ def _screen_3_scroll_to_tax_mode(page: Page) -> None:
     except Exception as e:
         _rto_log(f"Screen 3: tab panel scroll skipped ({e!s})")
 
+    for fast_sel in (
+        'select[id="workbench_tabview:tableTaxMode:0:taxModeType_input"]',
+        '[id="workbench_tabview:tableTaxMode:0:taxModeType"]',
+    ):
+        loc = page.locator(fast_sel).first
+        try:
+            loc.wait_for(state="attached", timeout=4000)
+            loc.evaluate("el => el.scrollIntoView({ block: 'center', inline: 'nearest' })")
+            _pause()
+            loc.scroll_into_view_if_needed(timeout=_DEFAULT_TIMEOUT_MS)
+            _pause()
+            _rto_log(f"Screen 3: scrolled to Tax Mode (fast tableTaxMode:0 {fast_sel!r})")
+            return
+        except Exception:
+            continue
+
     try:
         mv_row = tab_panel.locator("tr").filter(has_text=_MV_TAX_ROW_RE).first
         mv_row.wait_for(state="attached", timeout=5000)
@@ -1897,12 +1967,44 @@ def _screen_3_any_tax_mode_one_time_in_veh_tab(page: Page) -> bool:
 
 
 def _screen_3_select_tax_mode_one_time(page: Page) -> bool:
-    """Set Tax Mode to **ONE TIME** — MV Tax row / table first; then native ids (last match); PF; JS.
+    """Set Tax Mode to **ONE TIME** — direct ``tableTaxMode:0`` ids first; then MV Tax row; PF; JS.
 
     Returns ``True`` only when the MV Tax (or verified) ``select`` shows **ONE TIME**. On failure,
     returns ``False`` so Screen 3 does not save or advance.
     """
     veh = page.locator('[id="workbench_tabview:veh_info_tab"]')
+
+    fast_native = 'select[id="workbench_tabview:tableTaxMode:0:taxModeType_input"]'
+    fast_pf = '[id="workbench_tabview:tableTaxMode:0:taxModeType"]'
+    try:
+        fast_loc = page.locator(fast_native)
+        if fast_loc.count() > 0 and _screen_3_try_select_tax_mode_on_locator(
+            fast_loc.first, "tableTaxMode:0:taxModeType_input (direct)"
+        ):
+            return True
+    except Exception as e:
+        logger.debug("fill_rto: Tax Mode fast native: %s", e)
+
+    try:
+        if page.locator(fast_pf).count() > 0:
+            wid_m = re.search(r'id="([^"]+)"', fast_pf)
+            wrapper_id = wid_m.group(1) if wid_m else ""
+            _select_pf_dropdown(
+                page,
+                fast_pf,
+                "ONE TIME",
+                label="Tax Mode",
+                option_label_regex=_TAX_MODE_ONE_TIME_LABEL_RE,
+                timeout=_DEFAULT_TIMEOUT_MS,
+            )
+            if wrapper_id:
+                _close_pf_selectonemenu_overlay(page, wrapper_id)
+            _pause()
+            if _screen_3_any_tax_mode_one_time_in_veh_tab(page):
+                _rto_log(f"pf-dropdown: Tax Mode = ONE TIME ({fast_pf!r})")
+                return True
+    except Exception as e:
+        logger.debug("fill_rto: Tax Mode fast PF: %s", e)
 
     try:
         row_sel = veh.locator("tr").filter(has_text=_MV_TAX_ROW_RE).locator("select").first
@@ -2102,10 +2204,7 @@ def _screen_3_post_save_vehicle_details_dialogs(page: Page, data: dict | None) -
         page, max_ms=18_000
     )
     if dlg0 is not None:
-        try:
-            text0 = dlg0.inner_text(timeout=5000) or ""
-        except Exception:
-            text0 = ""
+        text0 = _generated_application_dialog_full_text(dlg0)
         _rto_log(f"Screen 3: Save Vehicle Details — dialog text snippet: {(text0 or '')[:900]!r}")
         app_id = _scrape_application_id_from_dialog_text(text0)
         if app_id:
@@ -2114,7 +2213,8 @@ def _screen_3_post_save_vehicle_details_dialogs(page: Page, data: dict | None) -
                 data["rto_application_id"] = app_id
         else:
             _rto_log("Screen 3: could not parse application id from Save Vehicle Details dialog (see snippet)")
-        _screen_3_click_dialog_dismiss_any(dlg0, page)
+        if not _click_ok_on_generated_application_dialog(page, dlg0):
+            _screen_3_click_dialog_dismiss_any(dlg0, page)
         _wait_for_progress_close_loop(page)
     # Residual popups / alternate wording
     for _ in range(12):
