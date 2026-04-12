@@ -121,8 +121,11 @@ _SCREEN3_IDV_INPUT: tuple[str, ...] = (
     '[id="workbench_tabview:idv"]',
     "input[id*='idv'], input[id*='declaredValue'], input[name*='idv']",
 )
+_SCREEN3_ISHYPO_WRAPPER = '[id="workbench_tabview:isHypo"]'
+_SCREEN3_ISHYPO_BOX = '[id="workbench_tabview:isHypo"] .ui-chkbox-box'
+_SCREEN3_ISHYPO_INPUT = '[id="workbench_tabview:isHypo_input"]'
 _SCREEN3_HYP_CHECKBOX_SELECTORS: tuple[str, ...] = (
-    '[id="workbench_tabview:isHypo_input"]',
+    _SCREEN3_ISHYPO_INPUT,
     "input[type='checkbox'][id*='hypothecated']",
     "input[type='checkbox'][id*='isHypothecated']",
     "input[type='checkbox'][name*='hypothecated']",
@@ -132,6 +135,8 @@ _SCREEN3_NOMINEE_RELATION_PF_WRAPPERS: tuple[str, ...] = ('[id="workbench_tabvie
 _SCREEN3_HYP_TYPE_PF_WRAPPERS: tuple[str, ...] = (
     '[id="workbench_tabview:hypothecation_type"]',
     '[id="workbench_tabview:hypothecationType"]',
+    '[id="workbench_tabview:hpa"] [id*="hypothecation_type"]',
+    '[id="workbench_tabview:hpa"] [id*="hypothecationType"]',
 )
 _SCREEN3_HYP_TYPE_NATIVE: tuple[str, ...] = (
     'select[id="workbench_tabview:hypothecation_type_input"]',
@@ -140,11 +145,15 @@ _SCREEN3_HYP_TYPE_NATIVE: tuple[str, ...] = (
 )
 _SCREEN3_FINANCIER_NAME_INPUT: tuple[str, ...] = (
     '[id="workbench_tabview:financier_name"]',
+    '[id="workbench_tabview:hpa"] input[id*="financ"]',
+    '[id="workbench_tabview:hpa"] input[type="text"]',
     "input[id*='financierName'], input[id*='financer'], input[name*='financierName']",
 )
 _SCREEN3_HYP_FROM_DATE_INPUT: tuple[str, ...] = (
     '[id="workbench_tabview:hyp_from_dt"]',
     '[id="workbench_tabview:hypothecationFrom"]',
+    '[id="workbench_tabview:hpa"] input.hasDatepicker',
+    '[id="workbench_tabview:hpa"] input[type="text"]',
     "input[id*='fromDate'][id*='hyp'], input[id*='hypothecationFrom'], input[name*='fromDate']",
 )
 _SCREEN3_FIN_STATE_PF_WRAPPERS: tuple[str, ...] = (
@@ -2881,41 +2890,181 @@ def _screen_3_input_already_has_value(page: Page, selectors: tuple[str, ...]) ->
     return False
 
 
+def _rto_log_json_chunks(label: str, payload: object, *, max_chunk: int = 6500) -> None:
+    """Log JSON in chunks so RTO.txt stays readable (same idea as frame popup dump)."""
+    try:
+        raw = json.dumps(payload, ensure_ascii=False)
+    except Exception as e:
+        _rto_log(f"{label} (JSON error: {e!s})")
+        return
+    if len(raw) <= max_chunk:
+        _rto_log(f"{label}: {raw}")
+        return
+    _rto_log(f"{label} (truncated, {len(raw)} chars):")
+    for start in range(0, len(raw), max_chunk):
+        _rto_log(f"  ... chunk: {raw[start : start + max_chunk]}")
+
+
+def _screen_3_log_hypothecation_nominee_wiring(page: Page) -> None:
+    """Log stable ids + hpa contents for **Is Hypothecated**, nominee, financier wiring (RTO.txt)."""
+    _rto_log("=== Hypothecation / nominee wiring snapshot (element ids for automation) ===")
+    _rto_log(
+        "direct: isHypo wrapper="
+        f"{_SCREEN3_ISHYPO_WRAPPER}; click box={_SCREEN3_ISHYPO_BOX}; "
+        f"hidden input={_SCREEN3_ISHYPO_INPUT}"
+    )
+    _rto_log(
+        "direct: Add Nominee Yes/No = input[name='workbench_tabview:nomineeradiobtn1'][value=Y|N]; "
+        "nominee name = [id='workbench_tabview:nominationname1']; "
+        "relation = [id='workbench_tabview:vm_rel1'] / select#workbench_tabview:vm_rel1_input"
+    )
+    try:
+        snap = page.evaluate(
+            """() => {
+                const out = { isHypo: null, hpa: null, nominee: null, hypRelatedIds: [] };
+                const inp = document.getElementById("workbench_tabview:isHypo_input");
+                const wrap = document.getElementById("workbench_tabview:isHypo");
+                if (inp || wrap) {
+                    out.isHypo = {
+                        inputId: inp ? inp.id : null,
+                        checked: inp ? !!inp.checked : null,
+                        wrapperClass: wrap ? (wrap.className || "").slice(0, 120) : null,
+                        hasBox: wrap ? !!wrap.querySelector(".ui-chkbox-box") : false,
+                    };
+                }
+                const hpa = document.getElementById("workbench_tabview:hpa");
+                if (hpa) {
+                    const controls = [];
+                    hpa.querySelectorAll("input, select, textarea").forEach((el) => {
+                        if (controls.length < 45) {
+                            controls.push({
+                                tag: el.tagName,
+                                id: el.id || "",
+                                name: el.name || "",
+                                type: el.type || "",
+                                vis: !!(el.offsetParent !== null && el.getClientRects().length),
+                            });
+                        }
+                    });
+                    out.hpa = { controlCount: controls.length, controls };
+                }
+                const nt = document.getElementById("workbench_tabview:nomineeradiobtn1");
+                if (nt) {
+                    out.nominee = {
+                        tableId: "workbench_tabview:nomineeradiobtn1",
+                        radios: ["workbench_tabview:nomineeradiobtn1:0", "workbench_tabview:nomineeradiobtn1:1"],
+                    };
+                }
+                document.querySelectorAll("[id]").forEach((el) => {
+                    const id = el.id || "";
+                    if (!id || out.hypRelatedIds.length >= 40) return;
+                    if (/hpa|hypothec|Hypothec|financ|isHypo/i.test(id)) out.hypRelatedIds.push(id);
+                });
+                return out;
+            }"""
+        )
+        _rto_log_json_chunks("Hypothecation/nominee wiring JSON", snap)
+    except Exception as e:
+        _rto_log(f"Hypothecation/nominee wiring snapshot JS failed: {e!s}")
+    _rto_log("=== End Hypothecation / nominee wiring snapshot ===")
+
+
+def _screen_3_wait_hypothecation_ajax_panel(page: Page, *, timeout_ms: int = 20_000) -> None:
+    """After toggling **Is Hypothecated**, PrimeFaces updates ``workbench_tabview:hpa`` — wait for controls."""
+    _wait_for_progress_close_loop(page)
+    try:
+        page.wait_for_function(
+            """() => {
+                const h = document.getElementById("workbench_tabview:hpa");
+                if (!h) return false;
+                return h.querySelectorAll("input, select, textarea").length > 0;
+            }""",
+            timeout=timeout_ms,
+        )
+        _rto_log("hpa: AJAX panel has input/select controls")
+    except Exception:
+        _rto_log(
+            "NOTE: hpa panel still empty or missing — trying visible hypothecation/financier controls"
+        )
+    try:
+        page.locator(
+            "[id*='hypothecation_type'], [id*='hypothecationType'], "
+            "[id*='financier'], [id*='hpa'] input[type='text']"
+        ).first.wait_for(state="visible", timeout=min(8000, timeout_ms))
+    except Exception:
+        pass
+    _wait_for_progress_close_loop(page)
+
+
+def _screen_3_toggle_pf_boolean_hypo(page: Page, *, want_checked: bool) -> bool:
+    """Toggle **Is Vehicle Hypothecated** (PrimeFaces ``ui-selectbooleancheckbox`` — click box, not hidden input)."""
+    inp = page.locator(_SCREEN3_ISHYPO_INPUT).first
+    try:
+        inp.wait_for(state="attached", timeout=_DEFAULT_TIMEOUT_MS)
+    except Exception:
+        _rto_log("WARNING: isHypo_input not in DOM")
+        return False
+    try:
+        if inp.is_checked() == want_checked:
+            return True
+    except Exception:
+        pass
+    box = page.locator(_SCREEN3_ISHYPO_BOX).first
+    wrap = page.locator(_SCREEN3_ISHYPO_WRAPPER).first
+    try:
+        wrap.scroll_into_view_if_needed(timeout=_DEFAULT_TIMEOUT_MS)
+        _pause()
+        if box.count() > 0:
+            box.click(timeout=_DEFAULT_TIMEOUT_MS)
+        else:
+            wrap.click(timeout=_DEFAULT_TIMEOUT_MS)
+        _pause()
+        if inp.is_checked() == want_checked:
+            _rto_log("checkbox: Is vehicle hypothecated — toggled via .ui-chkbox-box / wrapper")
+            return True
+    except Exception as e:
+        _rto_log(f"NOTE: isHypo box click: {e!r} — trying force/JS")
+    try:
+        inp.click(force=True, timeout=_DEFAULT_TIMEOUT_MS)
+        _pause()
+        if inp.is_checked() == want_checked:
+            _rto_log("checkbox: Is vehicle hypothecated — toggled via force click on input")
+            return True
+    except Exception as e:
+        _rto_log(f"NOTE: isHypo force click: {e!r}")
+    try:
+        page.evaluate(
+            """(want) => {
+                const el = document.getElementById("workbench_tabview:isHypo_input");
+                if (!el) return;
+                if (!!el.checked !== want) el.click();
+            }""",
+            want_checked,
+        )
+        _pause()
+        if inp.is_checked() == want_checked:
+            _rto_log("checkbox: Is vehicle hypothecated — toggled via JS click on input")
+            return True
+    except Exception as e:
+        _rto_log(f"WARNING: isHypo JS toggle failed: {e!s}")
+    return inp.is_checked() == want_checked
+
+
 def _screen_3_set_vehicle_hypothecated_checkbox(page: Page, *, has_financier: bool) -> None:
     """Set **Is Vehicle Hypothecated?** to match finance (checked when ``has_financier``)."""
-    hyp_loc = None
-    for csel in _SCREEN3_HYP_CHECKBOX_SELECTORS:
-        try:
-            loc = page.locator(csel).first
-            loc.wait_for(state="visible", timeout=_DEFAULT_TIMEOUT_MS)
-            hyp_loc = loc
-            break
-        except Exception:
-            continue
-    if hyp_loc is None:
-        try:
-            hyp_loc = page.get_by_label(re.compile(r"hypothecat", re.I)).first
-            hyp_loc.wait_for(state="visible", timeout=3000)
-        except Exception:
-            _rto_log("WARNING: Is vehicle hypothecated checkbox not found")
-            return
-    try:
-        hyp_loc.scroll_into_view_if_needed(timeout=_DEFAULT_TIMEOUT_MS)
-        _pause()
-        checked = hyp_loc.is_checked()
-        if has_financier and not checked:
-            hyp_loc.click()
-            _rto_log("checkbox: Is vehicle hypothecated — checked (financier present)")
-        elif not has_financier and checked:
-            hyp_loc.click()
-            _rto_log("checkbox: Is vehicle hypothecated — unchecked (no financier)")
-        else:
-            _rto_log(
-                "skip: Is vehicle hypothecated already "
-                f"{'checked' if checked else 'unchecked'} (matches financier)"
-            )
-    except Exception as e:
-        _rto_log(f"WARNING: Is vehicle hypothecated checkbox: {e!s}")
+    _screen_3_log_hypothecation_nominee_wiring(page)
+    want = bool(has_financier)
+    ok = _screen_3_toggle_pf_boolean_hypo(page, want_checked=want)
+    if not ok:
+        _rto_log(
+            f"WARNING: Is vehicle hypothecated could not be set to "
+            f"{'checked' if want else 'unchecked'} (see wiring snapshot above)"
+        )
+    elif want:
+        _screen_3_wait_hypothecation_ajax_panel(page)
+        _screen_3_log_hypothecation_nominee_wiring(page)
+    else:
+        _wait_for_progress_close_loop(page)
     _pause()
 
 
@@ -3002,23 +3151,33 @@ def _screen_3c_nominee_add_details(page: Page, data: dict) -> None:
 
     if not want_nominee:
         try:
-            page.locator('input[name="workbench_tabview:nomineeradiobtn1"][value="N"]').first.click(
-                timeout=_DEFAULT_TIMEOUT_MS
+            page.locator('label[for="workbench_tabview:nomineeradiobtn1:1"]').first.click(
+                timeout=3000
             )
-            _rto_log("radio: Add Nominee Details — No (no nominee name/relationship in queue data)")
-        except Exception as e:
-            _rto_log(f"WARNING: Add Nominee Details No: {e!s}")
+            _rto_log("radio: Add Nominee Details — No (label[for])")
+        except Exception:
+            try:
+                page.locator('input[name="workbench_tabview:nomineeradiobtn1"][value="N"]').first.click(
+                    force=True, timeout=_DEFAULT_TIMEOUT_MS
+                )
+                _rto_log("radio: Add Nominee Details — No (no nominee name/relationship in queue data)")
+            except Exception as e:
+                _rto_log(f"WARNING: Add Nominee Details No: {e!s}")
         _pause()
         return
 
     try:
-        page.locator('input[name="workbench_tabview:nomineeradiobtn1"][value="Y"]').first.click(
-            timeout=_DEFAULT_TIMEOUT_MS
-        )
-        _rto_log("radio: Add Nominee Details — Yes")
-    except Exception as e:
-        _rto_log(f"WARNING: Add Nominee Details Yes: {e!s}")
-        return
+        page.locator('label[for="workbench_tabview:nomineeradiobtn1:0"]').first.click(timeout=3000)
+        _rto_log("radio: Add Nominee Details — Yes (label[for])")
+    except Exception:
+        try:
+            page.locator('input[name="workbench_tabview:nomineeradiobtn1"][value="Y"]').first.click(
+                force=True, timeout=_DEFAULT_TIMEOUT_MS
+            )
+            _rto_log("radio: Add Nominee Details — Yes (input force)")
+        except Exception as e:
+            _rto_log(f"WARNING: Add Nominee Details Yes: {e!s}")
+            return
     _pause()
     _wait_for_progress_close_loop(page)
 
