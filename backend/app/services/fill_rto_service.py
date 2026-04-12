@@ -156,6 +156,12 @@ _SCREEN3_FIN_DISTRICT_PF_WRAPPERS: tuple[str, ...] = (
 _SCREEN3_FIN_DISTRICT_NATIVE: tuple[str, ...] = (
     'select[id="workbench_tabview:hpa_fncr_district_input"]',
 )
+_SCREEN3_FIN_HOUSE_INPUT: tuple[str, ...] = (
+    '[id="workbench_tabview:hpa_fncr_add1"]',
+)
+_SCREEN3_FIN_CITY_INPUT: tuple[str, ...] = (
+    '[id="workbench_tabview:hpa_fncr_add2"]',
+)
 _SCREEN3_FIN_PIN_INPUT: tuple[str, ...] = (
     '[id="workbench_tabview:hpa_fncr_pincode"]',
 )
@@ -2918,12 +2924,11 @@ def _screen_3_wait_hypothecation_ajax_panel(page: Page) -> None:
     _wait_for_progress_close_loop(page)
     try:
         page.locator('[id="workbench_tabview:hpa_fncr_name"]').first.wait_for(
-            state="visible", timeout=8000
+            state="visible", timeout=4000
         )
         _rto_log("hpa: financier name input visible")
     except Exception:
-        _rto_log("NOTE: hpa financier name input not visible after 8s")
-    _pause()
+        _rto_log("NOTE: hpa financier name input not visible after 4s")
 
 
 def _screen_3_toggle_pf_boolean_hypo(page: Page, *, want_checked: bool) -> bool:
@@ -2987,6 +2992,46 @@ def _screen_3_set_vehicle_hypothecated_checkbox(page: Page, *, has_financier: bo
         _wait_for_progress_close_loop(page)
 
 
+def _screen_3_fill_hyp_from_date(page: Page, date_str: str) -> None:
+    """Fill **From Date (DD-MMM-YYYY)** — mirrors ``_fill_workbench_purchase_date`` (Screen 1).
+
+    Sets value via JS without focus to avoid triggering the jQuery datepicker overlay,
+    then dismisses any stale calendar.
+    """
+    if not date_str:
+        return
+    label = "Hypothecation From Date"
+    sel = _SCREEN3_HYP_FROM_DATE_INPUT[0]
+    loc = page.locator(sel).first
+    try:
+        loc.wait_for(state="attached", timeout=_DEFAULT_TIMEOUT_MS)
+        loc.scroll_into_view_if_needed(timeout=_DEFAULT_TIMEOUT_MS)
+
+        try:
+            loc.evaluate(
+                """(el, v) => {
+                    el.value = v;
+                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                }""",
+                date_str,
+            )
+        except Exception:
+            try:
+                loc.fill(date_str, timeout=_DEFAULT_TIMEOUT_MS)
+            except Exception:
+                loc.fill(date_str, timeout=_DEFAULT_TIMEOUT_MS, force=True)
+
+        _pause()
+        _close_workbench_datepicker_if_open(page)
+    except PwTimeout:
+        _assert_vahan_session_alive(page)
+        _rto_log(f"TIMEOUT fill: {label} selector={sel} value={date_str[:40]}")
+        raise
+    logger.debug("fill_rto: filled hyp from date = %s", date_str[:40])
+    _rto_log(f"fill: {label} = {date_str[:80]}{'…' if len(date_str) > 80 else ''}")
+
+
 def _screen_3_fill_financier_hypothecation_details(page: Page, data: dict) -> None:
     """After hypothecation is checked — fill hpa_* fields (live ids from RTO log)."""
     financier = (data.get("financier") or "").strip()
@@ -2994,9 +3039,18 @@ def _screen_3_fill_financier_hypothecation_details(page: Page, data: dict) -> No
         return
     invoice_date = (data.get("invoice_date_str") or data.get("billing_date_str") or "").strip()
 
-    if not _screen_3_pf_dropdown_chain(
-        page, _SCREEN3_HYP_TYPE_PF_WRAPPERS, "Hypothecation", label="Hypothecation Type"
-    ):
+    # Hypothecation Type — use overlay click (use_native_select=False) because
+    # PrimeFaces does not update the visible label from the native <select> alone.
+    try:
+        _select_pf_dropdown(
+            page,
+            _SCREEN3_HYP_TYPE_PF_WRAPPERS[0],
+            "Hypothecation",
+            label="Hypothecation Type",
+            use_native_select=False,
+        )
+        _close_pf_selectonemenu_overlay(page, "workbench_tabview:hpa_hp_type")
+    except Exception:
         if not _screen_3_native_select_chain(
             page, _SCREEN3_HYP_TYPE_NATIVE, "Hypothecation", label="Hypothecation Type"
         ):
@@ -3006,9 +3060,17 @@ def _screen_3_fill_financier_hypothecation_details(page: Page, data: dict) -> No
     _fill_first_matching(page, _SCREEN3_FINANCIER_NAME_INPUT, financier, label="Financier Name")
 
     if invoice_date:
-        _fill_first_matching(
-            page, _SCREEN3_HYP_FROM_DATE_INPUT, invoice_date, label="Hypothecation From Date"
-        )
+        _screen_3_fill_hyp_from_date(page, invoice_date)
+
+    # House No. & Street Name → financier address
+    addr = (data.get("address") or "").strip()
+    if addr:
+        _fill_first_matching(page, _SCREEN3_FIN_HOUSE_INPUT, addr, label="Financier House No.")
+
+    # Village/Town/City
+    city = (data.get("city") or "").strip()
+    if city:
+        _fill_first_matching(page, _SCREEN3_FIN_CITY_INPUT, _init_cap_place_name(city), label="Financier City")
 
     st = (data.get("state") or "").strip()
     if st:
@@ -3024,7 +3086,10 @@ def _screen_3_fill_financier_hypothecation_details(page: Page, data: dict) -> No
         _close_pf_selectonemenu_overlay(page, "workbench_tabview:hpa_fncr_state")
         _pause()
 
+    # District — use district from data; fall back to city (initcap) when district is empty
     dist = (data.get("district") or "").strip()
+    if not dist:
+        dist = city
     if dist:
         d_disp = _init_cap_place_name(dist)
         if not _screen_3_pf_dropdown_chain(
@@ -3033,12 +3098,55 @@ def _screen_3_fill_financier_hypothecation_details(page: Page, data: dict) -> No
             if not _screen_3_native_select_chain(
                 page, _SCREEN3_FIN_DISTRICT_NATIVE, d_disp, label="Financier District"
             ):
-                _rto_log("WARNING: Financier District not set")
+                _rto_log(f"WARNING: Financier District not set (tried {d_disp!r})")
                 _dump_page_state(page, "dropdown not set: Financier District")
         _close_pf_selectonemenu_overlay(page, "workbench_tabview:hpa_fncr_district")
 
     if data.get("pin"):
         _fill_first_matching(page, _SCREEN3_FIN_PIN_INPUT, data["pin"], label="Financier Pincode")
+
+
+def _screen_3c_click_nominee_radio(page: Page, *, want_yes: bool) -> bool:
+    """Click **Add Nominee Details** Yes/No via PrimeFaces ``.ui-radiobutton-box`` to trigger AJAX.
+
+    The raw ``<input type="radio">`` is hidden; clicking it with ``force=True`` does not fire
+    PrimeFaces behaviours, so the nominee fields panel never loads.  We click the visible
+    ``.ui-radiobutton-box`` associated with the target radio instead.
+    """
+    idx = 0 if want_yes else 1
+    label = "Yes" if want_yes else "No"
+    inp_sel = f'[id="workbench_tabview:nomineeradiobtn1:{idx}"]'
+
+    # PrimeFaces wraps each radio in a <td> containing a <div class="ui-radiobutton"> with
+    # a child <div class="ui-radiobutton-box">.  The <input> is a sibling inside the same <td>.
+    # Strategy: find the <td> that contains the input, then click its .ui-radiobutton-box.
+    try:
+        td = page.locator(f'td:has({inp_sel}) .ui-radiobutton-box').first
+        td.scroll_into_view_if_needed(timeout=3000)
+        td.click(timeout=3000)
+        _rto_log(f"radio: Add Nominee Details — {label}")
+        return True
+    except Exception:
+        pass
+
+    # Fallback: click the label text next to the radio
+    try:
+        tbl = page.locator('[id="workbench_tabview:nomineeradiobtn1"]').first
+        lbl = tbl.locator("label", has_text=re.compile(rf"^\s*{label}\s*$", re.I)).first
+        lbl.click(timeout=3000)
+        _rto_log(f"radio: Add Nominee Details — {label} (label click)")
+        return True
+    except Exception:
+        pass
+
+    # Last resort: force-click the raw input (may not fire AJAX)
+    try:
+        page.locator(inp_sel).first.click(force=True, timeout=3000)
+        _rto_log(f"radio: Add Nominee Details — {label} (force input)")
+        return True
+    except Exception as e:
+        _rto_log(f"WARNING: Add Nominee Details {label}: {e!s}")
+    return False
 
 
 def _screen_3c_nominee_add_details(page: Page, data: dict) -> None:
@@ -3060,26 +3168,28 @@ def _screen_3c_nominee_add_details(page: Page, data: dict) -> None:
     )
 
     if not want_nominee:
-        try:
-            page.locator('[id="workbench_tabview:nomineeradiobtn1:1"]').first.click(
-                force=True, timeout=3000
-            )
-            _rto_log("radio: Add Nominee Details — No")
-        except Exception as e:
-            _rto_log(f"WARNING: Add Nominee Details No: {e!s}")
+        _screen_3c_click_nominee_radio(page, want_yes=False)
         _pause()
         return
 
-    try:
-        page.locator('[id="workbench_tabview:nomineeradiobtn1:0"]').first.click(
-            force=True, timeout=3000
-        )
-        _rto_log("radio: Add Nominee Details — Yes")
-    except Exception as e:
-        _rto_log(f"WARNING: Add Nominee Details Yes: {e!s}")
+    if not _screen_3c_click_nominee_radio(page, want_yes=True):
         return
     _pause()
     _wait_for_progress_close_loop(page)
+
+    # Wait for nominee name input to appear (AJAX loads the panel after Yes click)
+    nm_loc = page.locator(_SCREEN3_NOMINEE_NAME_INPUT[0]).first
+    try:
+        nm_loc.wait_for(state="visible", timeout=5000)
+        _rto_log("nominee: name input visible after Yes click")
+    except Exception:
+        _rto_log("NOTE: nominee name input not visible after 5s, trying scroll")
+        try:
+            nm_loc.wait_for(state="attached", timeout=3000)
+            nm_loc.scroll_into_view_if_needed(timeout=3000)
+        except Exception:
+            _rto_log("WARNING: nominee name input not found in DOM after Yes click")
+            _dump_page_state(page, "nominee name input missing after Yes click")
 
     if nm_raw:
         _fill_first_matching(page, _SCREEN3_NOMINEE_NAME_INPUT, nm_raw, label="Nominee Name")
