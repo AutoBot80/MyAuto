@@ -47,6 +47,10 @@ _SCREEN5_PF_SUBCAT_WRAPPER = '[id="formDocumentUpload:subCatgId"]'
 _SCREEN5_FILE_INPUT = '[id="formDocumentUpload:selectAndUploadFile_input"]'
 _SCREEN5_NEXT_BTN = '[id="formDocumentUpload:nextBtn"]'
 _SCREEN5_FILE_MOVEMENT_BTN = '[id="formDocumentUpload:fileFlowId"]'
+# When ``RTO_FILL_SKIP_TO_SCREEN >= 5``, Screen 5 begins with this many **next** chevron clicks (align row before Form 20).
+RTO_FILL_SCREEN5_START_WITH_NEXT_N = 5
+# After the 7th queued upload the portal can sit on intermediate rows (e.g. **Affidavit**) — extra **next** clicks before Owner Undertaking (0 = off if using START_WITH_NEXT_N only).
+RTO_FILL_SCREEN5_NEXT_BEFORE_OWNER_UNDERTAKING = 0
 # Native ``<option>`` text varies (``Form 20`` vs ``FORM 20``) — match with regex per queue key.
 _SCREEN5_SUBCAT_REGEX_BY_DOC_KEY: dict[str, re.Pattern] = {
     "FORM 20": re.compile(r"Form\s*20\b", re.I),
@@ -3730,6 +3734,36 @@ def _screen_4(page: Page) -> None:
     _wait_for_progress_close_loop(page)
 
 
+def _screen_5_escape_overlays(page: Page) -> None:
+    """Dismiss open Sub Category / PF panels so we do not stay stuck in the cell (Escape)."""
+    for _ in range(3):
+        try:
+            page.keyboard.press("Escape")
+        except Exception:
+            break
+        _pause()
+
+
+def _screen_5_click_next_n(page: Page, n: int, *, reason: str) -> None:
+    """Click **next** (right chevron) ``n`` times — used to skip portal-only document rows."""
+    if n <= 0:
+        return
+    _rto_log(f"nextBtn ×{n} — {reason}")
+    for i in range(n):
+        try:
+            nxt = page.locator(_SCREEN5_NEXT_BTN).first
+            nxt.wait_for(state="visible", timeout=_LOOP_BUDGET_MS)
+            nxt.scroll_into_view_if_needed(timeout=_FIRST_TRY_MS)
+            nxt.click(timeout=_FIRST_TRY_MS)
+            _rto_log(f"nextBtn click {i + 1}/{n}")
+            _pause()
+            _wait_for_progress_close(page)
+        except Exception as e:
+            _rto_log(f"WARNING: nextBtn {i + 1}/{n} failed: {e!s}")
+            break
+    _screen_5_escape_overlays(page)
+
+
 def _screen_5_select_subcategory(page: Page, doc_key: str, sub_category_text: str) -> None:
     """PrimeFaces **Sub Category** on document upload: ``formDocumentUpload:subCatgId`` (see RTO dumps)."""
     rx = _SCREEN5_SUBCAT_REGEX_BY_DOC_KEY.get(doc_key)
@@ -3785,6 +3819,16 @@ def _screen_5(page: Page, docs: dict[str, Path | None]) -> None:
     logger.info("fill_rto: Screen 5 — uploading %d document categories", len(docs))
     _rto_log("--- Screen 5: Document uploads by sub-category ---")
 
+    if (
+        int(RTO_FILL_SKIP_TO_SCREEN) >= 5
+        and int(RTO_FILL_SCREEN5_START_WITH_NEXT_N or 0) > 0
+    ):
+        _screen_5_click_next_n(
+            page,
+            int(RTO_FILL_SCREEN5_START_WITH_NEXT_N),
+            reason="skip to Screen 5 — nextBtn first to align document row before Sub Category (Form 20)",
+        )
+
     upload_sequence: list[tuple[str, str | None]] = [
         ("FORM 20", "FORM 20"),
         ("FORM 21", "FORM 21"),
@@ -3805,10 +3849,25 @@ def _screen_5(page: Page, docs: dict[str, Path | None]) -> None:
 
         logger.info("fill_rto: uploading %s -> %s (%s)", doc_key, sub_category_text, file_path.name)
 
+        _screen_5_escape_overlays(page)
+
+        # After Aadhaar back, the portal may land on optional rows (e.g. Affidavit, "8 of 17") — opening Sub
+        # Category there traps the flow. Advance past those rows with the right chevron, then fill Owner Undertaking.
+        if (
+            doc_key == "OWNER UNDERTAKING FORM"
+            and int(RTO_FILL_SCREEN5_NEXT_BEFORE_OWNER_UNDERTAKING or 0) > 0
+        ):
+            _screen_5_click_next_n(
+                page,
+                int(RTO_FILL_SCREEN5_NEXT_BEFORE_OWNER_UNDERTAKING),
+                reason="skip portal-only slots before Owner Undertaking (avoid Sub Category on Affidavit etc.)",
+            )
+
         page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
         _pause()
 
         assert sub_category_text is not None
+        _screen_5_escape_overlays(page)
         _screen_5_select_subcategory(page, doc_key, sub_category_text)
         _pause()
 
@@ -3848,51 +3907,14 @@ def _screen_5(page: Page, docs: dict[str, Path | None]) -> None:
 
 
 def _screen_6(page: Page) -> float | None:
-    """Screen 6: Dealer Regn Fee Tax — open fee details and scrape total payable.
-
-    Steps 1–2: click **Dealer Regn Fee Tax**, wait for progress, scrape **Total Payable Amount**.
-    Then **hard-fails intentionally** (does not click Yes on popups or close secondary dialogs).
-    """
+    """Screen 6: **Intentional hard stop** before **Dealer Regn Fee Tax** (no fee click, no payment automation)."""
     _set_screen("Screen 6")
-    logger.info("fill_rto: Screen 6 — fee details")
-    _rto_log("--- Screen 6: Dealer Regn Fee Tax, total payable ---")
+    logger.info("fill_rto: Screen 6 — hard stop before Dealer Regn Fee Tax")
+    _rto_log("--- Screen 6: hard stop before Dealer Regn Fee Tax ---")
 
-    _click(
-        page,
-        "input[value*='Dealer Regn Fee'], button:has-text('Dealer Regn Fee'), a:has-text('Dealer Regn Fee Tax')",
-        label="Dealer Regn Fee Tax",
-        timeout=_DEFAULT_TIMEOUT_MS,
-    )
-    _pause()
-    _wait_for_progress_close(page)
-
-    # Step 2: Scrape Total Payable Amount
-    total: float | None = None
-    try:
-        amount_el = page.locator(
-            "[id*='totalPayable'], [id*='totalAmount'], "
-            "td:has-text('Total Payable') + td, "
-            "span:has-text('Total Payable'), "
-            "label:has-text('Total Payable')"
-        ).first
-        amount_el.wait_for(state="visible", timeout=_DEFAULT_TIMEOUT_MS)
-        text = amount_el.inner_text().strip()
-        nums = re.findall(r'[\d,]+\.?\d*', text)
-        if nums:
-            total = float(nums[-1].replace(",", ""))
-        logger.info("fill_rto: scraped total payable = %s", total)
-        if total is not None:
-            _rto_log(f"scraped: total payable = {total}")
-    except PwTimeout:
-        logger.warning("fill_rto: could not scrape total payable amount")
-        _rto_log("WARNING: could not scrape total payable amount")
-        _dump_page_state(page, "scrape total payable failed")
-
-    # Hard stop after step 2: do not automate payment popups (Yes / close).
     msg = (
-        "Screen 6: intentional stop after total payable scrape. "
-        f"Total Payable scraped: {total!r}. "
-        "Dismiss fee/payment dialogs manually on Vahan if needed."
+        "Screen 6: intentional stop before clicking Dealer Regn Fee Tax. "
+        "Open fee details and complete payment steps manually on Vahan."
     )
     logger.warning("fill_rto: %s", msg)
     _rto_log(f"HARD STOP (Screen 6): {msg}")
@@ -4051,8 +4073,8 @@ def fill_rto_row(row: dict) -> dict:
                 extra = f" Screen 4: {s4_hint}."
             elif skip_from == 5:
                 extra = (
-                    " Screen 5: document upload — Sub Category **Form 20** first, "
-                    "then FORM 21/22, insurance, invoice, Aadhaar, undertaking; File Movement at end."
+                    f" Screen 5: nextBtn ×{int(RTO_FILL_SCREEN5_START_WITH_NEXT_N or 0)} first (when >0), "
+                    "then Sub Category **Form 20** → … → undertaking; File Movement at end."
                 )
             _rto_log(
                 f"TEMP SKIP: RTO_FILL_SKIP_TO_SCREEN={skip_from} — start at Screen {skip_from} "
