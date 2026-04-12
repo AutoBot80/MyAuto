@@ -3676,16 +3676,22 @@ def _screen_4(page: Page) -> None:
             "(RTO_FILL_SCREEN4_SKIP_TO_DEALER_DOC_UPLOAD=True) — start at Dealer Document Upload"
         )
 
-    # 4d: **Dealer Document Upload** — tab in the top tablist (or button)
-    page.evaluate("window.scrollTo(0, 0)")
+    # 4d: **Dealer Document Upload** — on ``home.xhtml`` pending-work grid it is a **button** in the Action
+    #     column (text ``Dealer-Document-Upload`` with hyphens; id like ``workDetails:0:j_idt273``).  On
+    #     ``workbench.xhtml`` it may be a top tab.  Scroll to bottom first — the grid action is below the fold.
+    page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
     _pause()
     _screen_4_click_first(
         page,
         (
+            "button:has-text('Dealer-Document-Upload')",
+            "button[id^='workDetails:'][id$=':j_idt273']",
+            "a:has-text('Dealer-Document-Upload')",
             "a:has-text('Dealer Document Upload')",
             "li[role='tab']:has-text('Dealer Doc') a",
             "button:has-text('Dealer Document Upload')",
             "input[value*='Dealer Document Upload']",
+            "input[value*='Dealer-Document-Upload']",
             "[role='tab']:has-text('Dealer Document')",
         ),
         label="Dealer Document Upload",
