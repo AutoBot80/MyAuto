@@ -1,54 +1,13 @@
-[2026-04-12 16:34:50 IST] [Setup] fill_rto_row start rto_queue_id=1 sales_id=1 dealer_id=100001 log_file=C:\Users\arya_\OneDrive\Desktop\My Auto.AI\ocr_output\100001\9650693610_RTO.txt
-[2026-04-12 16:34:50 IST] [Setup] uploads root (dealer): C:\Users\arya_\OneDrive\Desktop\My Auto.AI\Uploaded scans\100001
-[2026-04-12 16:34:50 IST] [Setup] searched folder (absolute): C:\Users\arya_\OneDrive\Desktop\My Auto.AI\Uploaded scans\100001\8905969604_100426
-[2026-04-12 16:34:50 IST] [Setup] documents matched to categories: {'FORM 20': '8905969604_Form_20.pdf', 'FORM 21': '8905969604_Sale_Certificate.pdf', 'FORM 22': '8905969604_Form22.pdf', 'INSURANCE CERTIFICATE': '8905969604_Insurance.pdf', 'INVOICE ORIGINAL': '8905969604_GST_Retail_Invoice.pdf', 'AADHAAR_FRONT': 'Aadhar.jpg', 'AADHAAR_BACK': 'Aadhar_back.jpg', 'OWNER UNDERTAKING FORM': 'Details.jpg'}
-[2026-04-12 16:34:56 IST] [Setup] browser page url: https://vahan.parivahan.gov.in/vahan/vahan/workbench.xhtml
-[2026-04-12 16:34:56 IST] [Setup] TEMP SKIP: RTO_FILL_SKIP_TO_SCREEN=3 — start at Screen 3 (skipped: dealer-home reset + screens 1..2) Screen 3: skip Home + Entry → Vehicle Details sub-tab first.
-[2026-04-12 16:34:56 IST] [Screen 3] --- Screen 3: Home, Entry, tax, insurance, hypothecation, application no ---
-[2026-04-12 16:34:56 IST] [Screen 3] Screen 3: skip Home + skip Entry — Vehicle Details sub-tab only (already on form)
-[2026-04-12 16:34:56 IST] [Screen 3] Screen 3: sub-tab Vehicle Details
-[2026-04-12 16:34:57 IST] [Screen 3] Screen 3: scrolled Vehicle Details tab panel toward bottom (Tax Mode region)
-[2026-04-12 16:34:57 IST] [Screen 3] Screen 3: scrolled to Tax Mode (fast tableTaxMode:0 'select[id="workbench_tabview:tableTaxMode:0:taxModeType_input"]')
-[2026-04-12 16:34:57 IST] [Screen 3] select: Tax Mode = ONE TIME (tableTaxMode:0:taxModeType_input (direct))
-[2026-04-12 16:35:08 IST] [Screen 3] Screen 3: Save Vehicle Details ("button:has-text('Save Vehicle Details')")
-[2026-04-12 16:35:09 IST] [Screen 3] Screen 3: Save Vehicle Details — dialog text snippet: 'Generated Application No\nApplication No. :RJ26041148051328\nOk'
-[2026-04-12 16:35:09 IST] [Screen 3] Screen 3: application_id from Save Vehicle Details dialog: 'RJ26041148051328'
-[2026-04-12 16:35:09 IST] [Screen 3] Generated Application dialog: Ok (control with Ok text)
-[2026-04-12 16:35:14 IST] [Screen 3] Screen 3: scrolled to sub-tab bar
-[2026-04-12 16:35:15 IST] [Screen 3] tab probe [Hypothecation\s*/\s*Insurance]: id=None; class=None; href='#workbench_tabview:HypothecationOwner'; role=None; aria-controls=None; data-index=None; text='Hypothecation/Insurance Information'
-[2026-04-12 16:35:15 IST] [Screen 3] Screen 3: sub-tab Hypothecation/Insurance Information (ui-tabs-nav)
-[2026-04-12 16:35:15 IST] [Screen 3] --- Screen 3c: Insurance (Hypothecation/Insurance Information tab) ---
-[2026-04-12 16:35:27 IST] [Screen 3] skip: Insurance Type already set on form (Vahan pre-fill)
-[2026-04-12 16:35:33 IST] [Screen 3] skip: Insurance Company already set on form (Vahan pre-fill)
-[2026-04-12 16:35:33 IST] [Screen 3] skip: Policy/Cover Note No. already set on form (Vahan pre-fill)
-[2026-04-12 16:35:33 IST] [Screen 3] skip: Insurance From already set on form (Vahan pre-fill)
-[2026-04-12 16:35:33 IST] [Screen 3] skip: Insurance Period (in year) already set on form (Vahan pre-fill)
-[2026-04-12 16:35:40 IST] [Screen 3] skip: Series Type already STATE SERIES (Vahan pre-fill)
-[2026-04-12 16:35:40 IST] [Screen 3] skip: isHypo already checked
-[2026-04-12 16:35:41 IST] [Screen 3] hpa: financier name input visible
-[2026-04-12 16:35:41 IST] [Screen 3] pf-dropdown (overlay): Hypothecation Type = Hypothecation
-[2026-04-12 16:35:42 IST] [Screen 3] fill: Financier Name = Axis Bank
-[2026-04-12 16:35:43 IST] [Screen 3] fill: Hypothecation From Date = 10-Apr-2026
-[2026-04-12 16:35:43 IST] [Screen 3] fill: Financier House No. = S/O Kamal Singh, Bansroli, Bharatpur, Rajasthan - . 321201
-[2026-04-12 16:35:43 IST] [Screen 3] fill: Financier City = Bharatpur
-[2026-04-12 16:35:43 IST] [Screen 3] pf-dropdown (native): Financier State = Rajasthan
-[2026-04-12 16:35:45 IST] [Screen 3] pf-dropdown (native): Financier District = Bharatpur
-[2026-04-12 16:35:46 IST] [Screen 3] fill: Financier Pincode = 321201
-[2026-04-12 16:35:46 IST] [Screen 3] nominee: want=True, name='Harvesh', relationship='Brother'
-[2026-04-12 16:35:46 IST] [Screen 3] radio: Add Nominee Details — Yes
-[2026-04-12 16:35:47 IST] [Screen 3] nominee: name input visible after Yes click
-[2026-04-12 16:35:47 IST] [Screen 3] fill: Nominee Name = Harvesh
-[2026-04-12 16:35:48 IST] [Screen 3] pf-dropdown (overlay): Relation with nominee = Brother
-[2026-04-12 16:35:50 IST] [Screen 3] fill: Nomination Date = 10-Apr-2026
-[2026-04-12 16:35:50 IST] [Screen 3] --- Screen 3d: Save and File Movement, confirmation popups, scrape app no. ---
-[2026-04-12 16:35:50 IST] [Screen 3] click: Save and File Movement (exact button name)
-[2026-04-12 16:35:51 IST] [Screen 3] dialog: Yes
-[2026-04-12 16:35:54 IST] [Screen 3] Screen 3: confirmation popups — Yes, Yes (incl. Are you sure)
-[2026-04-12 16:35:55 IST] [Screen 3] Screen 3d: scrape fallback dialog snippet: 'Alert!\nClose\nValidation Error: Value is out of range.\nValidation Error: Value is out of range.'
-[2026-04-12 16:35:57 IST] [Screen 3] Screen 3: using application id from workbench: 'RJ26041148051328'
-[2026-04-12 16:35:57 IST] [Screen 4] --- Screen 4: Verify, Save Options / File Movement, Dealer Document Upload ---
-[2026-04-12 16:35:59 IST] [Screen 4] TIMEOUT click: Verify selector=input[value='Verify'], button:has-text('Verify')
-[2026-04-12 16:35:59 IST] [Screen 4] fill_rto_row FAILED: Locator.wait_for: Timeout 2000ms exceeded.
+[2026-04-12 16:40:44 IST] [Setup] fill_rto_row start rto_queue_id=1 sales_id=1 dealer_id=100001 log_file=C:\Users\arya_\OneDrive\Desktop\My Auto.AI\ocr_output\100001\9650693610_RTO.txt
+[2026-04-12 16:40:44 IST] [Setup] uploads root (dealer): C:\Users\arya_\OneDrive\Desktop\My Auto.AI\Uploaded scans\100001
+[2026-04-12 16:40:44 IST] [Setup] searched folder (absolute): C:\Users\arya_\OneDrive\Desktop\My Auto.AI\Uploaded scans\100001\8905969604_100426
+[2026-04-12 16:40:44 IST] [Setup] documents matched to categories: {'FORM 20': '8905969604_Form_20.pdf', 'FORM 21': '8905969604_Sale_Certificate.pdf', 'FORM 22': '8905969604_Form22.pdf', 'INSURANCE CERTIFICATE': '8905969604_Insurance.pdf', 'INVOICE ORIGINAL': '8905969604_GST_Retail_Invoice.pdf', 'AADHAAR_FRONT': 'Aadhar.jpg', 'AADHAAR_BACK': 'Aadhar_back.jpg', 'OWNER UNDERTAKING FORM': 'Details.jpg'}
+[2026-04-12 16:40:50 IST] [Setup] browser page url: https://vahan.parivahan.gov.in/vahan/vahan/home.xhtml
+[2026-04-12 16:40:50 IST] [Setup] TEMP SKIP: RTO_FILL_SKIP_TO_SCREEN=4 — start at Screen 4 (skipped: dealer-home reset + screens 1..3) Screen 4: Verify → Save Options/File Movement → Dealer Document Upload.
+[2026-04-12 16:40:50 IST] [Screen 4] --- Screen 4: Verify, Save Options / File Movement, Dealer Document Upload ---
+[2026-04-12 16:40:52 IST] [Screen 4] WARNING: Verify button not found with fast selectors, trying broad search
+[2026-04-12 16:40:54 IST] [Screen 4] TIMEOUT click: Verify selector=button:has-text('Verify'), input[value='Verify']
+[2026-04-12 16:40:54 IST] [Screen 4] fill_rto_row FAILED: Locator.wait_for: Timeout 2000ms exceeded.
 Call log:
-  - waiting for locator("input[value='Verify'], button:has-text('Verify')").first to be visible
+  - waiting for locator("button:has-text('Verify'), input[value='Verify']").first to be visible
 

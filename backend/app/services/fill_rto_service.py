@@ -33,6 +33,8 @@ RTO_FILL_SCREEN3_SKIP_HOME = False
 # Screen 3: skip **Entry** — only with ``skip_home``; go straight to **Vehicle Details** sub-tab (already past Entry on the form).
 # On when SKIP is 3 (and ``RTO_FILL_SCREEN3_SKIP_HOME`` is implied for that path).
 RTO_FILL_SCREEN3_SKIP_ENTRY = False
+# Screen 4: skip Verify (already clicked) — jump straight to Save-Options.
+RTO_FILL_SCREEN4_SKIP_VERIFY = True
 # Optional seed for ``data["rto_application_id"]`` when the queue row has no app id (logging / return merge only).
 RTO_FILL_TEST_APPLICATION_ID = ""
 
@@ -657,6 +659,7 @@ def _click(page: Page, selector: str, *, timeout: int = _DEFAULT_TIMEOUT_MS, lab
     except PwTimeout:
         _assert_vahan_session_alive(page)
         _rto_log(f"TIMEOUT click: {label} selector={selector}")
+        _dump_page_state(page, f"TIMEOUT click: {label}")
         raise
     logger.debug("fill_rto: clicked %s (%s)", selector, label)
     if label:
@@ -677,6 +680,7 @@ def _fill(page: Page, selector: str, value: object, *, timeout: int = _DEFAULT_T
     except PwTimeout:
         _assert_vahan_session_alive(page)
         _rto_log(f"TIMEOUT fill: {label} selector={selector} value={text[:40]}")
+        _dump_page_state(page, f"TIMEOUT fill: {label}")
         raise
     logger.debug("fill_rto: filled %s = %s (%s)", selector, text[:40], label)
     if label:
@@ -744,6 +748,7 @@ def _fill_workbench_purchase_date(
     except PwTimeout:
         _assert_vahan_session_alive(page)
         _rto_log(f"TIMEOUT fill: {label} selector={sel} value={text[:40]}")
+        _dump_page_state(page, f"TIMEOUT fill: {label}")
         raise
     logger.debug("fill_rto: filled purchase date = %s", text[:40])
     _rto_log(f"fill: {label} = {text[:80]}{'…' if len(text) > 80 else ''}")
@@ -763,6 +768,7 @@ def _select(page: Page, selector: str, value: object, *, timeout: int = _DEFAULT
     except PwTimeout:
         _assert_vahan_session_alive(page)
         _rto_log(f"TIMEOUT select: {label} selector={selector} value={text}")
+        _dump_page_state(page, f"TIMEOUT select: {label}")
         raise
     logger.debug("fill_rto: selected %s = %s (%s)", selector, text, label)
     if label:
@@ -937,6 +943,7 @@ def _type_typeahead(page: Page, selector: str, value: object, *, timeout: int = 
     except PwTimeout:
         _assert_vahan_session_alive(page)
         _rto_log(f"TIMEOUT typeahead: {label} selector={selector} value={text}")
+        _dump_page_state(page, f"TIMEOUT typeahead: {label}")
         raise
     _pause()
     suggestion = page.locator(".ui-autocomplete li, .ui-menu-item, [role='option']").first
@@ -1022,6 +1029,7 @@ def _select_pf_dropdown(
     except PwTimeout:
         _assert_vahan_session_alive(page)
         _rto_log(f"TIMEOUT pf-dropdown: {label} selector={wrapper_selector} value={value!r}")
+        _dump_page_state(page, f"TIMEOUT pf-dropdown: {label}")
         raise
     logger.debug("fill_rto: pf-dropdown %s = %s (%s)", wrapper_selector, value, label)
     if label:
@@ -3022,6 +3030,7 @@ def _screen_3_fill_datepicker_js(page: Page, sel: str, date_str: str, *, label: 
     except PwTimeout:
         _assert_vahan_session_alive(page)
         _rto_log(f"TIMEOUT fill: {label} selector={sel} value={date_str[:40]}")
+        _dump_page_state(page, f"TIMEOUT fill: {label}")
         raise
     logger.debug("fill_rto: filled %s = %s", label, date_str[:40])
     _rto_log(f"fill: {label} = {date_str[:80]}{'…' if len(date_str) > 80 else ''}")
@@ -3520,91 +3529,98 @@ def _screen_3(page: Page, data: dict, *, skip_home: bool, skip_entry: bool = Fal
     return _screen_3d_hypothecation_save_confirm_scrape(page, data)
 
 
+def _screen_4_click_first(
+    page: Page,
+    selectors: tuple[str, ...],
+    *,
+    label: str,
+    scroll: bool = True,
+    optional: bool = False,
+) -> bool:
+    """Try each selector with ``_FIRST_TRY_MS``; on total failure dump page state.
+
+    Returns ``True`` if a selector was clicked, ``False`` only when *optional* is set
+    and nothing was found.  When *optional* is ``False`` (default), raises ``PwTimeout``.
+    """
+    for sel in selectors:
+        try:
+            loc = page.locator(sel).first
+            loc.wait_for(state="visible", timeout=_FIRST_TRY_MS)
+            if scroll:
+                loc.scroll_into_view_if_needed(timeout=_FIRST_TRY_MS)
+            loc.click(timeout=_FIRST_TRY_MS)
+            _rto_log(f"click: {label} ({sel})")
+            return True
+        except Exception:
+            continue
+    _rto_log(f"WARNING: {label} not found — dumping page state")
+    _dump_page_state(page, f"button not found: {label}")
+    if optional:
+        return False
+    raise RuntimeError(f"{label} button not found on page (tried {len(selectors)} selectors)")
+
+
 def _screen_4(page: Page) -> None:
-    """Screen 4: Verify → progress wheel → Save Options → File Movement → Save → Yes → Dealer Document Upload → progress wheel."""
+    """Screen 4: Verify → progress wheel → Save-Options → File Movement → Save → Yes → Dealer Document Upload → progress wheel."""
     _set_screen("Screen 4")
     logger.info("fill_rto: Screen 4 — Verify & Document Upload nav")
     _rto_log("--- Screen 4: Verify, Save Options / File Movement, Dealer Document Upload ---")
 
-    # 4a: Scroll down and click **Verify**
-    page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-    _pause()
+    # 4a: Scroll down and click **Verify** (skip if flag set or button absent)
+    if RTO_FILL_SCREEN4_SKIP_VERIFY:
+        _rto_log("SKIP: Verify (RTO_FILL_SCREEN4_SKIP_VERIFY=True)")
+    else:
+        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        _pause()
 
-    verify_selectors = (
-        "button:has-text('Verify')",
-        "input[value='Verify']",
-        "input[type='submit'][value*='Verify']",
-        "a:has-text('Verify')",
-    )
-    clicked = False
-    for sel in verify_selectors:
-        try:
-            loc = page.locator(sel).first
-            loc.wait_for(state="visible", timeout=_FIRST_TRY_MS)
-            loc.scroll_into_view_if_needed(timeout=_FIRST_TRY_MS)
-            loc.click(timeout=_FIRST_TRY_MS)
-            _rto_log(f"click: Verify ({sel})")
-            clicked = True
-            break
-        except Exception:
-            continue
-    if not clicked:
-        _rto_log("WARNING: Verify button not found with fast selectors, trying broad search")
-        _click(page, "button:has-text('Verify'), input[value='Verify']", label="Verify")
-
-    # Progress wheel popup — closes by itself
-    _pause()
-    _wait_for_progress_close_loop(page)
-
-    # 4b: Scroll to bottom, click **Save Options**, pick **File Movement**
-    page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-    _pause()
-
-    save_opts_selectors = (
-        "button:has-text('Save Options')",
-        "a:has-text('Save Options')",
-        "input[value*='Save Options']",
-    )
-    clicked = False
-    for sel in save_opts_selectors:
-        try:
-            loc = page.locator(sel).first
-            loc.wait_for(state="visible", timeout=_FIRST_TRY_MS)
-            loc.scroll_into_view_if_needed(timeout=_FIRST_TRY_MS)
-            loc.click(timeout=_FIRST_TRY_MS)
-            _rto_log(f"click: Save Options ({sel})")
-            clicked = True
-            break
-        except Exception:
-            continue
-    if not clicked:
-        _click(
+        verify_clicked = _screen_4_click_first(
             page,
-            "button:has-text('Save Options'), input[value*='Save']",
-            label="Save Options",
+            (
+                "button:has-text('Verify')",
+                "input[value='Verify']",
+                "input[type='submit'][value*='Verify']",
+                "a:has-text('Verify')",
+            ),
+            label="Verify",
+            optional=True,
         )
+
+        if verify_clicked:
+            _pause()
+            _wait_for_progress_close_loop(page)
+        else:
+            _rto_log("Verify button not visible — assuming already clicked, continuing")
+
+    # 4b: Scroll to bottom, click **Save-Options**, pick **File Movement**
+    page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
     _pause()
 
-    # Pick "File Movement" from the menu
-    fm_selectors = (
-        "a:has-text('File Movement')",
-        "[id*='fileMovement']",
-        "button:has-text('File Movement')",
-        "input[value*='File Movement']",
+    _screen_4_click_first(
+        page,
+        (
+            "button:has-text('Save-Options')",
+            "button:has-text('Save Options')",
+            "input[value*='Save-Options']",
+            "input[value*='Save Options']",
+            "a:has-text('Save-Options')",
+            "a:has-text('Save Options')",
+        ),
+        label="Save-Options",
     )
-    clicked = False
-    for sel in fm_selectors:
-        try:
-            loc = page.locator(sel).first
-            loc.wait_for(state="visible", timeout=_FIRST_TRY_MS)
-            loc.click(timeout=_FIRST_TRY_MS)
-            _rto_log(f"click: File Movement ({sel})")
-            clicked = True
-            break
-        except Exception:
-            continue
-    if not clicked:
-        _click(page, "a:has-text('File Movement')", label="File Movement")
+    _pause()
+
+    # Pick "File Movement" from the dropdown menu
+    _screen_4_click_first(
+        page,
+        (
+            "a:has-text('File Movement')",
+            "[id*='fileMovement']",
+            "button:has-text('File Movement')",
+            "input[value*='File Movement']",
+        ),
+        label="File Movement",
+        scroll=False,
+    )
     _pause()
 
     # 4c: Click on State → popup with **Save** button → another popup → **Yes**
@@ -3614,25 +3630,15 @@ def _screen_4(page: Page) -> None:
     _pause()
 
     # 4d: Click **Dealer Document Upload**
-    ddu_selectors = (
-        "button:has-text('Dealer Document Upload')",
-        "input[value*='Dealer Document Upload']",
-        "a:has-text('Dealer Document Upload')",
+    _screen_4_click_first(
+        page,
+        (
+            "button:has-text('Dealer Document Upload')",
+            "input[value*='Dealer Document Upload']",
+            "a:has-text('Dealer Document Upload')",
+        ),
+        label="Dealer Document Upload",
     )
-    clicked = False
-    for sel in ddu_selectors:
-        try:
-            loc = page.locator(sel).first
-            loc.wait_for(state="visible", timeout=_FIRST_TRY_MS)
-            loc.scroll_into_view_if_needed(timeout=_FIRST_TRY_MS)
-            loc.click(timeout=_FIRST_TRY_MS)
-            _rto_log(f"click: Dealer Document Upload ({sel})")
-            clicked = True
-            break
-        except Exception:
-            continue
-    if not clicked:
-        _click(page, "button:has-text('Dealer Document Upload')", label="Dealer Document Upload")
 
     # Progress wheel — closes by itself
     _pause()
@@ -3914,7 +3920,8 @@ def fill_rto_row(row: dict) -> dict:
             if skip_from == 3:
                 extra = " Screen 3: skip Home + Entry → Vehicle Details sub-tab first."
             elif skip_from == 4:
-                extra = " Screen 4: Verify → Save Options/File Movement → Dealer Document Upload."
+                s4_hint = "Save-Options → File Movement (Verify skipped)" if RTO_FILL_SCREEN4_SKIP_VERIFY else "Verify → Save-Options/File Movement"
+                extra = f" Screen 4: {s4_hint} → Dealer Document Upload."
             _rto_log(
                 f"TEMP SKIP: RTO_FILL_SKIP_TO_SCREEN={skip_from} — start at Screen {skip_from} "
                 f"(skipped: dealer-home reset + screens 1..{skip_from - 1}){extra}"
@@ -3966,8 +3973,12 @@ def fill_rto_row(row: dict) -> dict:
             "completed": True,
         }
     except Exception as e:
-        _rto_log(f"fill_rto_row FAILED: {e!s}")
-        raise
+        screen = _current_screen.get() or "unknown"
+        raw = str(e)
+        first_line = raw.split("\n", 1)[0].strip()
+        clean_msg = f"[{screen}] {first_line}"
+        _rto_log(f"fill_rto_row FAILED: {clean_msg}")
+        raise RuntimeError(clean_msg) from e
     finally:
         _current_screen.reset(screen_token)
         _rto_action_log.reset(token)

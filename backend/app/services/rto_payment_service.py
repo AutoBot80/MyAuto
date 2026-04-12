@@ -49,15 +49,21 @@ def _append_row_result(dealer_id: int, row_result: dict) -> None:
 
 
 def _is_retryable_error(error: Exception) -> bool:
-    """Errors that should return the row to Pending so operator can retry."""
+    """Errors that should return the row to Pending so operator can retry.
+
+    Playwright element-locator timeouts (``Timeout 2000ms exceeded``, etc.)
+    are **not** retryable — they indicate an automation/selector bug, not a
+    transient browser or network issue.  Only session-level or connectivity
+    failures qualify.
+    """
     message = str(error or "").lower()
-    markers = (
+    retryable_markers = (
         "session expired",
         "target page, context or browser has been closed",
         "browser has been closed",
         "target closed",
         "execution context was destroyed",
-        "timeout",
+        "navigation timeout",
         "opened. please login",
         "site not open",
         "please open vahan site",
@@ -65,7 +71,7 @@ def _is_retryable_error(error: Exception) -> bool:
         "no otp submitted",
         "operatorotptimeout",
     )
-    return any(marker in message for marker in markers)
+    return any(marker in message for marker in retryable_markers)
 
 
 def get_dealer_batch_status(dealer_id: int) -> dict:
