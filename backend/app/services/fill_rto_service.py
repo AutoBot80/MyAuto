@@ -35,6 +35,8 @@ RTO_FILL_SCREEN3_SKIP_HOME = False
 RTO_FILL_SCREEN3_SKIP_ENTRY = False
 # Screen 4: skip Verify (already clicked) — jump straight to Save-Options.
 RTO_FILL_SCREEN4_SKIP_VERIFY = True
+# Screen 4: skip everything up to **Dealer Document Upload** (Save-Options, File Movement, popups) — start at that tab/button.
+RTO_FILL_SCREEN4_SKIP_TO_DEALER_DOC_UPLOAD = True
 # Optional seed for ``data["rto_application_id"]`` when the queue row has no app id (logging / return merge only).
 RTO_FILL_TEST_APPLICATION_ID = ""
 
@@ -3529,6 +3531,45 @@ def _screen_3(page: Page, data: dict, *, skip_home: bool, skip_entry: bool = Fal
     return _screen_3d_hypothecation_save_confirm_scrape(page, data)
 
 
+def _screen_4_file_movement_dialogs(page: Page) -> None:
+    """After **File Movement**: first popup — type ``None`` in the input, **Save**; second popup — **Save** only."""
+    _pause()
+    try:
+        dlg = page.locator(".ui-dialog:visible, [role='dialog']:visible").first
+        dlg.wait_for(state="visible", timeout=_LOOP_BUDGET_MS)
+    except PwTimeout:
+        _rto_log("WARNING: File Movement — first dialog not visible within budget")
+        _dump_page_state(page, "File Movement first dialog missing")
+        return
+
+    filled = False
+    for sel in ("input[type='text']", "textarea", "input:not([type='hidden'])"):
+        try:
+            inp = dlg.locator(sel).first
+            inp.wait_for(state="visible", timeout=_FIRST_TRY_MS)
+            inp.fill("None")
+            _rto_log("fill: File Movement dialog — input = None")
+            filled = True
+            break
+        except Exception:
+            continue
+    if not filled:
+        try:
+            page.locator(".ui-dialog:visible input[type='text']").first.fill("None")
+            _rto_log("fill: File Movement dialog — input = None (page-scoped fallback)")
+        except Exception as e:
+            _rto_log(f"WARNING: File Movement dialog — could not fill None: {e!s}")
+
+    _pause()
+    _dismiss_dialog(page, "Save", timeout=_LOOP_BUDGET_MS)
+    _pause()
+    _wait_for_progress_close_loop(page)
+
+    _dismiss_dialog(page, "Save", timeout=_LOOP_BUDGET_MS)
+    _pause()
+    _wait_for_progress_close_loop(page)
+
+
 def _screen_4_click_first(
     page: Page,
     selectors: tuple[str, ...],
@@ -3561,82 +3602,83 @@ def _screen_4_click_first(
 
 
 def _screen_4(page: Page) -> None:
-    """Screen 4: Verify → progress wheel → Save-Options → File Movement → Save → Yes → Dealer Document Upload → progress wheel."""
+    """Screen 4: Verify → … → Save-Options → File Movement → (None + Save) → (Save) → Dealer Document Upload tab → progress wheel."""
     _set_screen("Screen 4")
     logger.info("fill_rto: Screen 4 — Verify & Document Upload nav")
     _rto_log("--- Screen 4: Verify, Save Options / File Movement, Dealer Document Upload ---")
 
-    # 4a: Scroll down and click **Verify** (skip if flag set or button absent)
-    if RTO_FILL_SCREEN4_SKIP_VERIFY:
-        _rto_log("SKIP: Verify (RTO_FILL_SCREEN4_SKIP_VERIFY=True)")
-    else:
+    if not RTO_FILL_SCREEN4_SKIP_TO_DEALER_DOC_UPLOAD:
+        # 4a: Scroll down and click **Verify** (skip if flag set or button absent)
+        if RTO_FILL_SCREEN4_SKIP_VERIFY:
+            _rto_log("SKIP: Verify (RTO_FILL_SCREEN4_SKIP_VERIFY=True)")
+        else:
+            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            _pause()
+
+            verify_clicked = _screen_4_click_first(
+                page,
+                (
+                    "button:has-text('Verify')",
+                    "input[value='Verify']",
+                    "input[type='submit'][value*='Verify']",
+                    "a:has-text('Verify')",
+                ),
+                label="Verify",
+                optional=True,
+            )
+
+            if verify_clicked:
+                _pause()
+                _wait_for_progress_close_loop(page)
+            else:
+                _rto_log("Verify button not visible — assuming already clicked, continuing")
+
+        # 4b: Scroll to bottom, click **Save-Options**, pick **File Movement**
+        #     id from page dump: button  app_disapp_form:j_idt1913_button  text='Save-Options'
+        #     File Movement:     a       app_disapp_form:fileMove          text='File Movement'
         page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
         _pause()
 
-        verify_clicked = _screen_4_click_first(
+        _screen_4_click_first(
             page,
             (
-                "button:has-text('Verify')",
-                "input[value='Verify']",
-                "input[type='submit'][value*='Verify']",
-                "a:has-text('Verify')",
+                '[id="app_disapp_form:j_idt1913_button"]',
+                "button:has-text('Save-Options')",
+                "button:has-text('Save Options')",
+                "input[value*='Save-Options']",
+                "input[value*='Save Options']",
+                "a:has-text('Save-Options')",
+                "a:has-text('Save Options')",
             ),
-            label="Verify",
-            optional=True,
+            label="Save-Options",
+        )
+        _pause()
+
+        _screen_4_click_first(
+            page,
+            (
+                '[id="app_disapp_form:fileMove"]',
+                'a:has-text("File Movement")',
+                '[id*="fileMove"]',
+            ),
+            label="File Movement",
+            scroll=False,
         )
 
-        if verify_clicked:
-            _pause()
-            _wait_for_progress_close_loop(page)
-        else:
-            _rto_log("Verify button not visible — assuming already clicked, continuing")
+        _pause()
+        _wait_for_progress_close_loop(page)
 
-    # 4b: Scroll to bottom, click **Save-Options**, pick **File Movement**
-    #     id from page dump: button  app_disapp_form:j_idt1913_button  text='Save-Options'
-    #     menu:              div     app_disapp_form:j_idt1913_menu
-    #     File Movement:     a       app_disapp_form:fileMove          text='File Movement'
-    page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        # 4c: First popup — fill **None** in input, **Save**; second popup — **Save** only
+        _screen_4_file_movement_dialogs(page)
+    else:
+        _rto_log(
+            "SKIP: Save-Options / File Movement / popups "
+            "(RTO_FILL_SCREEN4_SKIP_TO_DEALER_DOC_UPLOAD=True) — start at Dealer Document Upload"
+        )
+
+    # 4d: **Dealer Document Upload** — tab in the top tablist (or button)
+    page.evaluate("window.scrollTo(0, 0)")
     _pause()
-
-    _screen_4_click_first(
-        page,
-        (
-            '[id="app_disapp_form:j_idt1913_button"]',
-            "button:has-text('Save-Options')",
-            "button:has-text('Save Options')",
-            "input[value*='Save-Options']",
-            "input[value*='Save Options']",
-            "a:has-text('Save-Options')",
-            "a:has-text('Save Options')",
-        ),
-        label="Save-Options",
-    )
-    _pause()
-
-    _screen_4_click_first(
-        page,
-        (
-            '[id="app_disapp_form:fileMove"]',
-            'a:has-text("File Movement")',
-            '[id*="fileMove"]',
-        ),
-        label="File Movement",
-        scroll=False,
-    )
-
-    # File Movement triggers AJAX / navigation — wait for progress overlay
-    _pause()
-    _wait_for_progress_close_loop(page)
-
-    # 4c: Popup(s) after File Movement — **Save** then **Yes**
-    _dismiss_dialog(page, "Save", timeout=_LOOP_BUDGET_MS)
-    _pause()
-    _dismiss_dialog(page, "Yes", timeout=_LOOP_BUDGET_MS)
-    _pause()
-    _wait_for_progress_close_loop(page)
-
-    # 4d: Click **Dealer Document Upload** — this is a tab in the top tablist
-    #     tab bar text from dump: "1 Dealer New Registration entry 2 Dealer Verify 3 Dealer Doc..."
     _screen_4_click_first(
         page,
         (
@@ -3929,8 +3971,13 @@ def fill_rto_row(row: dict) -> dict:
             if skip_from == 3:
                 extra = " Screen 3: skip Home + Entry → Vehicle Details sub-tab first."
             elif skip_from == 4:
-                s4_hint = "Save-Options → File Movement (Verify skipped)" if RTO_FILL_SCREEN4_SKIP_VERIFY else "Verify → Save-Options/File Movement"
-                extra = f" Screen 4: {s4_hint} → Dealer Document Upload."
+                if RTO_FILL_SCREEN4_SKIP_TO_DEALER_DOC_UPLOAD:
+                    s4_hint = "start at Dealer Document Upload tab only"
+                elif RTO_FILL_SCREEN4_SKIP_VERIFY:
+                    s4_hint = "Save-Options → File Movement → None+Save → Save → Dealer Document Upload"
+                else:
+                    s4_hint = "Verify → Save-Options → File Movement → None+Save → Save → Dealer Document Upload"
+                extra = f" Screen 4: {s4_hint}."
             _rto_log(
                 f"TEMP SKIP: RTO_FILL_SKIP_TO_SCREEN={skip_from} — start at Screen {skip_from} "
                 f"(skipped: dealer-home reset + screens 1..{skip_from - 1}){extra}"
