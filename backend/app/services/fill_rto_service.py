@@ -47,8 +47,10 @@ _SCREEN5_PF_SUBCAT_WRAPPER = '[id="formDocumentUpload:subCatgId"]'
 _SCREEN5_FILE_INPUT = '[id="formDocumentUpload:selectAndUploadFile_input"]'
 _SCREEN5_NEXT_BTN = '[id="formDocumentUpload:nextBtn"]'
 _SCREEN5_FILE_MOVEMENT_BTN = '[id="formDocumentUpload:fileFlowId"]'
-# When ``RTO_FILL_SKIP_TO_SCREEN >= 5``, Screen 5 begins with this many **next** chevron clicks (align row before Form 20).
-RTO_FILL_SCREEN5_START_WITH_NEXT_N = 5
+# When ``RTO_FILL_SKIP_TO_SCREEN >= 5`` and this is **False**, Screen 5 begins with this many **next** chevrons (align before Form 20). Set **0** when skipping straight to Owner Undertaking.
+RTO_FILL_SCREEN5_START_WITH_NEXT_N = 0
+# When ``RTO_FILL_SKIP_TO_SCREEN >= 5`` and **True**, Screen 5 runs **only** Owner Undertaking: Sub Category → **Owner Undertaking Form** → file → Upload Document → next → File Movement (skips Form 20…Aadhaar).
+RTO_FILL_SCREEN5_SKIP_TO_OWNER_UNDERTAKING_ONLY = True
 # After the 7th queued upload the portal can sit on intermediate rows (e.g. **Affidavit**) — extra **next** clicks before Owner Undertaking (0 = off if using START_WITH_NEXT_N only).
 RTO_FILL_SCREEN5_NEXT_BEFORE_OWNER_UNDERTAKING = 0
 # Native ``<option>`` text varies (``Form 20`` vs ``FORM 20``) — match with regex per queue key.
@@ -60,7 +62,11 @@ _SCREEN5_SUBCAT_REGEX_BY_DOC_KEY: dict[str, re.Pattern] = {
     "INVOICE ORIGINAL": re.compile(r"INVOICE\s*ORIGINAL|Invoice\s*Original|GST\s*Retail", re.I),
     "AADHAAR_FRONT": re.compile(r"AADHAAR\s*CARD|Aadhaar", re.I),
     "AADHAAR_BACK": re.compile(r"AADHAAR\s*CARD|Aadhaar", re.I),
-    "OWNER UNDERTAKING FORM": re.compile(r"OWNER\s*UNDERTAKING|Undertaking", re.I),
+    # Overlay list shows **Owner Undertaking Form** (also **Owners Signature**) — match full label, not bare "Undertaking".
+    "OWNER UNDERTAKING FORM": re.compile(
+        r"Owner\s+Undertaking\s+Form|OWNER\s+UNDERTAKING\s+FORM",
+        re.I,
+    ),
 }
 
 # Screen 3 — locators aligned with RTO trace page dumps (``ocr_output/.../*_RTO.txt``): sub-tab strip
@@ -3764,8 +3770,62 @@ def _screen_5_click_next_n(page: Page, n: int, *, reason: str) -> None:
     _screen_5_escape_overlays(page)
 
 
+def _screen_5_select_owner_undertaking_overlay(page: Page) -> None:
+    """Pick **Owner Undertaking Form** in the Sub Category PF menu (search box + ``li`` list — not reliable via native ``<select>``)."""
+    wid = "formDocumentUpload:subCatgId"
+    wrap = page.locator(f'[id="{wid}"]').first
+    wrap.wait_for(state="visible", timeout=_DEFAULT_TIMEOUT_MS)
+    wrap.scroll_into_view_if_needed(timeout=_FIRST_TRY_MS)
+    wrap.click(timeout=_FIRST_TRY_MS)
+    _pause()
+    panel = page.locator(f'[id="{wid}_panel"]').first
+    panel.wait_for(state="visible", timeout=_LOOP_BUDGET_MS)
+
+    try:
+        fin = panel.locator("input.ui-selectonemenu-filter").first
+        fin.wait_for(state="visible", timeout=_FIRST_TRY_MS)
+        fin.fill("")
+        fin.fill("Undertaking")
+        _pause()
+    except Exception:
+        pass
+
+    opt_re = re.compile(r"Owner\s+Undertaking\s+Form", re.I)
+    item = panel.locator("li.ui-selectonemenu-item").filter(has_text=opt_re).last
+    try:
+        item.wait_for(state="visible", timeout=_LOOP_BUDGET_MS)
+        item.scroll_into_view_if_needed(timeout=_FIRST_TRY_MS)
+        item.click(timeout=_FIRST_TRY_MS)
+    except Exception:
+        # Last substantive option in the list (screenshot: last row is Owner Undertaking Form).
+        items = panel.locator("li.ui-selectonemenu-item")
+        n = items.count()
+        clicked = False
+        for idx in range(n - 1, -1, -1):
+            el = items.nth(idx)
+            txt = (el.inner_text(timeout=800) or "").strip()
+            if not txt:
+                continue
+            if re.match(r"^[\s\-]*SELECT[\s\-]*$", txt, re.I):
+                continue
+            if "undertaking" in txt.lower() and "form" in txt.lower():
+                el.click(timeout=_FIRST_TRY_MS)
+                clicked = True
+                _rto_log(f"pf-dropdown: Owner Undertaking — fallback click row text={txt[:80]!r}")
+                break
+        if not clicked:
+            raise
+
+    _rto_log("pf-dropdown: Sub Category (OWNER UNDERTAKING FORM) = Owner Undertaking Form")
+    _pause()
+
+
 def _screen_5_select_subcategory(page: Page, doc_key: str, sub_category_text: str) -> None:
     """PrimeFaces **Sub Category** on document upload: ``formDocumentUpload:subCatgId`` (see RTO dumps)."""
+    if doc_key == "OWNER UNDERTAKING FORM":
+        _screen_5_select_owner_undertaking_overlay(page)
+        return
+
     rx = _SCREEN5_SUBCAT_REGEX_BY_DOC_KEY.get(doc_key)
     if rx is None:
         rx = re.compile(re.escape(sub_category_text).replace(r"\ ", r"\s+"), re.I)
@@ -3819,17 +3879,7 @@ def _screen_5(page: Page, docs: dict[str, Path | None]) -> None:
     logger.info("fill_rto: Screen 5 — uploading %d document categories", len(docs))
     _rto_log("--- Screen 5: Document uploads by sub-category ---")
 
-    if (
-        int(RTO_FILL_SKIP_TO_SCREEN) >= 5
-        and int(RTO_FILL_SCREEN5_START_WITH_NEXT_N or 0) > 0
-    ):
-        _screen_5_click_next_n(
-            page,
-            int(RTO_FILL_SCREEN5_START_WITH_NEXT_N),
-            reason="skip to Screen 5 — nextBtn first to align document row before Sub Category (Form 20)",
-        )
-
-    upload_sequence: list[tuple[str, str | None]] = [
+    _full_upload_sequence: list[tuple[str, str | None]] = [
         ("FORM 20", "FORM 20"),
         ("FORM 21", "FORM 21"),
         ("FORM 22", "FORM 22"),
@@ -3839,6 +3889,24 @@ def _screen_5(page: Page, docs: dict[str, Path | None]) -> None:
         ("AADHAAR_BACK", "AADHAAR CARD"),
         ("OWNER UNDERTAKING FORM", "OWNER UNDERTAKING FORM"),
     ]
+
+    if int(RTO_FILL_SKIP_TO_SCREEN) >= 5 and RTO_FILL_SCREEN5_SKIP_TO_OWNER_UNDERTAKING_ONLY:
+        upload_sequence = [("OWNER UNDERTAKING FORM", "OWNER UNDERTAKING FORM")]
+        _rto_log(
+            "SKIP: Screen 5 — OWNER UNDERTAKING FORM only "
+            "(Sub Category → Owner Undertaking Form → upload → next; then File Movement)"
+        )
+    else:
+        upload_sequence = _full_upload_sequence
+        if (
+            int(RTO_FILL_SKIP_TO_SCREEN) >= 5
+            and int(RTO_FILL_SCREEN5_START_WITH_NEXT_N or 0) > 0
+        ):
+            _screen_5_click_next_n(
+                page,
+                int(RTO_FILL_SCREEN5_START_WITH_NEXT_N),
+                reason="skip to Screen 5 — nextBtn first to align document row before Sub Category (Form 20)",
+            )
 
     for doc_key, sub_category_text in upload_sequence:
         file_path = docs.get(doc_key)
@@ -4072,10 +4140,16 @@ def fill_rto_row(row: dict) -> dict:
                     s4_hint = "Verify → Save-Options → File Movement → None+Save → Save → Dealer Document Upload"
                 extra = f" Screen 4: {s4_hint}."
             elif skip_from == 5:
-                extra = (
-                    f" Screen 5: nextBtn ×{int(RTO_FILL_SCREEN5_START_WITH_NEXT_N or 0)} first (when >0), "
-                    "then Sub Category **Form 20** → … → undertaking; File Movement at end."
-                )
+                if RTO_FILL_SCREEN5_SKIP_TO_OWNER_UNDERTAKING_ONLY:
+                    extra = (
+                        " Screen 5: **Owner Undertaking Form** only — pick Sub Category, upload file, next; "
+                        "File Movement at end."
+                    )
+                else:
+                    extra = (
+                        f" Screen 5: nextBtn ×{int(RTO_FILL_SCREEN5_START_WITH_NEXT_N or 0)} first (when >0), "
+                        "then Sub Category **Form 20** → … → undertaking; File Movement at end."
+                    )
             _rto_log(
                 f"TEMP SKIP: RTO_FILL_SKIP_TO_SCREEN={skip_from} — start at Screen {skip_from} "
                 f"(skipped: dealer-home reset + screens 1..{skip_from - 1}){extra}"
