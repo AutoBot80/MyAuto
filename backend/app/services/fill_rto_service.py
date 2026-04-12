@@ -50,6 +50,9 @@ _SCREEN3_TAX_MODE_NATIVE_SELECTORS: tuple[str, ...] = (
     'select[id="workbench_tabview:taxMode_input"]',
 )
 _TAX_MODE_ONE_TIME_LABEL_RE = re.compile(r"ONE\s*TIME", re.I)
+# MV Tax row / Tax Mode Details table (RTO logs often omit these — past element-dump cap).
+_MV_TAX_ROW_RE = re.compile(r"MV\s*Tax", re.I)
+_TAX_MODE_DETAILS_HDR_RE = re.compile(r"Tax\s*Mode\s*Details", re.I)
 _SCREEN3_SAVE_VEHICLE_DETAILS_SELECTORS: tuple[str, ...] = (
     '[id="workbench_tabview:save_vehicle_dtls_btn"]',
     '[id="workbench_tabview:saveVehDtls_btn"]',
@@ -62,7 +65,7 @@ _SCREEN3_HYP_INS_TAB_ANCHOR_RE = re.compile(
 )
 
 # 3c / 3d — Insurance & Hypothecation (same tab). Ids follow ``workbench_tabview:*`` like other workbench fields
-# (RTO page dumps list the tab strip; field ids match this naming family when not in the first 150 elements).
+# (RTO page dumps: see ``_dump_page_state`` — all ``<select>`` + tax id hints; mixed list cap ``_DUMP_PAGE_STATE_GENERAL_CAP``).
 _SCREEN3_INSURANCE_TYPE_PF_WRAPPERS: tuple[str, ...] = (
     '[id="workbench_tabview:insurance_type"]',
     '[id="workbench_tabview:insuranceType"]',
@@ -91,6 +94,19 @@ _SCREEN3_INSURANCE_FROM_INPUT: tuple[str, ...] = (
     '[id="workbench_tabview:insurance_from"]',
     '[id="workbench_tabview:insuranceFrom"]',
     "input[id*='insuranceFrom'], input[name*='insuranceFrom']",
+)
+# Hypothecation/Insurance — *Please Select Series Type* (often after policy / insurance from).
+_SERIES_TYPE_STATE_SERIES_LABEL_RE = re.compile(r"STATE\s*SERIES", re.I)
+_SCREEN3_SERIES_TYPE_PF_WRAPPERS: tuple[str, ...] = (
+    '[id="workbench_tabview:series_type"]',
+    '[id="workbench_tabview:seriesType"]',
+    '[id="workbench_tabview:reg_series_type"]',
+    '[id="workbench_tabview:vh_series_type"]',
+)
+_SCREEN3_SERIES_TYPE_NATIVE: tuple[str, ...] = (
+    'select[id="workbench_tabview:series_type_input"]',
+    'select[id="workbench_tabview:seriesType_input"]',
+    "select[id*='seriesType'], select[name*='seriesType'], select[id*='series_type']",
 )
 _SCREEN3_IDV_INPUT: tuple[str, ...] = (
     '[id="workbench_tabview:idv"]',
@@ -212,6 +228,11 @@ _FIRST_TRY_MS = 200
 _LOOP_BUDGET_MS = 2_000
 # Delay after each discrete UI action (s) — not a Playwright timeout.
 _ACTION_WAIT_S = 0.2
+# ``_dump_page_state``: cap for mixed interactive list; **all** ``<select>`` are also logged separately.
+_DUMP_PAGE_STATE_GENERAL_CAP = 150
+_DUMP_PAGE_STATE_OPTION_PREVIEW = 32
+_DUMP_PAGE_STATE_PF_TAX_HINT_CAP = 40
+_DUMP_PAGE_STATE_PF_SERIES_HINT_CAP = 40
 # ``_ensure_vahan_dealer_home_for_screen1``: 200ms per selector, ≤2s total across attempts.
 _ENSURE_HOME_SELECTOR_WAIT_MS = _FIRST_TRY_MS
 _ENSURE_HOME_SELECTORS_TOTAL_S = _LOOP_BUDGET_MS / 1000.0
@@ -364,7 +385,13 @@ def _pause() -> None:
 
 
 def _dump_page_state(page: Page, context: str) -> None:
-    """Dump frames and visible elements into the RTO log when a selector is not found."""
+    """Dump frames, **all** ``<select>`` (with option previews), and mixed visible controls into the RTO log.
+
+    The legacy **150** cap applied in **DOM order**, so late controls (e.g. Tax Mode under Vehicle Details)
+    never appeared. We now (1) list **every** ``select`` with options / ``inVehTab`` / visibility, and
+    (2) build the mixed list with **visible selects first**, then other controls, up to
+    ``_DUMP_PAGE_STATE_GENERAL_CAP``.
+    """
     _rto_log(f"=== PAGE STATE DUMP ({context}) ===")
     try:
         _rto_log(f"url: {(page.url or '')[:300]}")
@@ -384,13 +411,36 @@ def _dump_page_state(page: Page, context: str) -> None:
     except Exception as e:
         _rto_log(f"frames: error listing — {e}")
 
-    _JS_ELEMENT_SNAPSHOT = """() => {
-        const els = [];
-        for (const el of document.querySelectorAll('input, select, textarea, button, a, [role], label, h1, h2, h3, h4, span.ui-outputlabel')) {
+    cap = _DUMP_PAGE_STATE_GENERAL_CAP
+    opt_prev = _DUMP_PAGE_STATE_OPTION_PREVIEW
+    pf_cap = _DUMP_PAGE_STATE_PF_TAX_HINT_CAP
+    pf_series_cap = _DUMP_PAGE_STATE_PF_SERIES_HINT_CAP
+
+    _JS_PAGE_STATE_SNAPSHOT = f"""() => {{
+        const GENERAL_CAP = {cap};
+        const OPT_PREVIEW = {opt_prev};
+        const PF_TAX_CAP = {pf_cap};
+        const PF_SERIES_CAP = {pf_series_cap};
+
+        function inHypInsurancePanel(el) {{
+            let p = el;
+            for (let d = 0; d < 22 && p; d++) {{
+                const id = (p.id || '');
+                if (/hypothec|Hypothec|HypothecationOwner|hyp_ins|insurance.*tab/i.test(id)) return true;
+                p = p.parentElement;
+            }}
+            return false;
+        }}
+
+        function visible(el) {{
             const r = el.getBoundingClientRect();
-            if (r.width < 2 || r.height < 2) continue;
+            if (r.width < 2 || r.height < 2) return false;
             const st = window.getComputedStyle(el);
-            if (st.display === 'none' || st.visibility === 'hidden') continue;
+            if (st.display === 'none' || st.visibility === 'hidden') return false;
+            return true;
+        }}
+
+        function pushGen(els, el) {{
             const tag = el.tagName.toLowerCase();
             const id = el.id || '';
             const name = el.getAttribute('name') || '';
@@ -399,14 +449,103 @@ def _dump_page_state(page: Page, context: str) -> None:
             const value = (el.value || '').substring(0, 60);
             const text = (el.innerText || '').substring(0, 60).replace(/\\n/g, ' ');
             const cls = (el.className || '').substring(0, 80);
-            els.push({tag, id, name, type, role, value, text, cls});
-            if (els.length >= 150) break;
-        }
-        return els;
-    }"""
+            els.push({{tag, id, name, type, role, value, text, cls}});
+        }}
+
+        const selector = 'input, select, textarea, button, a, [role], label, h1, h2, h3, h4, span.ui-outputlabel';
+        const allNodes = Array.from(document.querySelectorAll(selector));
+        const selectNodes = allNodes.filter(e => e.tagName === 'SELECT');
+        const otherNodes = allNodes.filter(e => e.tagName !== 'SELECT');
+
+        const general = [];
+        for (const el of selectNodes) {{
+            if (!visible(el)) continue;
+            if (general.length >= GENERAL_CAP) break;
+            pushGen(general, el);
+        }}
+        for (const el of otherNodes) {{
+            if (general.length >= GENERAL_CAP) break;
+            if (!visible(el)) continue;
+            pushGen(general, el);
+        }}
+
+        const tab = document.querySelector('[id="workbench_tabview:veh_info_tab"]');
+        const selectsDetailed = [];
+        document.querySelectorAll('select').forEach((el, i) => {{
+            const opts = Array.from(el.options).map(o => ({{
+                t: (o.textContent || '').trim().substring(0, 72),
+                v: (o.value || '').substring(0, 40)
+            }}));
+            const selLabel = el.options[el.selectedIndex]
+                ? el.options[el.selectedIndex].text.trim().substring(0, 120)
+                : '';
+            const idLower = (el.id || '').toLowerCase();
+            const looksSeries =
+                idLower.includes('series') ||
+                idLower.includes('regn_series') ||
+                idLower.includes('stateseries');
+            selectsDetailed.push({{
+                i,
+                id: el.id || '',
+                name: el.name || '',
+                cls: (el.className || '').substring(0, 100),
+                si: el.selectedIndex,
+                selLabel,
+                nOpt: el.options.length,
+                opts: opts.slice(0, OPT_PREVIEW),
+                vis: visible(el),
+                inVeh: !!(tab && tab.contains(el)),
+                inHypIns: inHypInsurancePanel(el),
+                seriesHint: looksSeries
+            }});
+        }});
+
+        const pfTaxHints = [];
+        document.querySelectorAll(
+            '[id*="tax_mode"], [id*="taxMode"], [id*="mv_tax"], [id*="mvTax"], [id*="TaxMode"]'
+        ).forEach((el) => {{
+            if (pfTaxHints.length >= PF_TAX_CAP) return;
+            if (el.tagName === 'SELECT') return;
+            const id = el.id || '';
+            if (!id) return;
+            const r = el.getBoundingClientRect();
+            const st = window.getComputedStyle(el);
+            const hidden = st.display === 'none' || st.visibility === 'hidden' || r.width < 2 || r.height < 2;
+            pfTaxHints.push({{
+                tag: el.tagName,
+                id,
+                cls: (el.className || '').substring(0, 80),
+                txt: (el.innerText || '').substring(0, 120).replace(/\\n/g, ' '),
+                hidden
+            }});
+        }});
+
+        const pfSeriesHints = [];
+        document.querySelectorAll(
+            '[id*="series_type"], [id*="seriesType"], [id*="regn_series"], [id*="SeriesType"], '
+            + '[id*="vh_series"], [id*="state_series"], [id*="STATE_SERIES"]'
+        ).forEach((el) => {{
+            if (pfSeriesHints.length >= PF_SERIES_CAP) return;
+            const id = el.id || '';
+            if (!id) return;
+            const r = el.getBoundingClientRect();
+            const st = window.getComputedStyle(el);
+            const hidden = st.display === 'none' || st.visibility === 'hidden' || r.width < 2 || r.height < 2;
+            pfSeriesHints.push({{
+                tag: el.tagName,
+                id,
+                cls: (el.className || '').substring(0, 80),
+                txt: (el.innerText || '').substring(0, 120).replace(/\\n/g, ' '),
+                hidden,
+                inHypIns: inHypInsurancePanel(el)
+            }});
+        }});
+
+        return {{ general, selectsDetailed, pfTaxHints, pfSeriesHints }};
+    }}"""
 
     def _log_element_list(tag: str, elements: list[dict]) -> None:
-        _rto_log(f"  [{tag}] visible interactive elements ({len(elements)}):")
+        _rto_log(f"  [{tag}] visible interactive elements ({len(elements)}, selects first — cap {cap}):")
         for el in elements:
             parts = [el.get("tag", "")]
             if el.get("id"):
@@ -425,11 +564,75 @@ def _dump_page_state(page: Page, context: str) -> None:
                 parts.append(f"class={el['cls']!r}")
             _rto_log(f"    {' '.join(parts)}")
 
+    def _log_select_dump(frame_tag: str, rows: list[dict]) -> None:
+        _rto_log(f"  [{frame_tag}] ALL <select> ({len(rows)} — ids, selected label, options preview):")
+        for row in rows:
+            oid = row.get("id") or ""
+            oname = row.get("name") or ""
+            opts = row.get("opts") or []
+            parts = [
+                f"select[{row.get('i', '')}]",
+                f"id={oid!r}" if oid else "id=",
+                f"name={oname!r}" if oname else "",
+                f"si={row.get('si')}",
+                f"sel={row.get('selLabel', '')!r}",
+                f"nOpt={row.get('nOpt')}",
+                f"vis={row.get('vis')}",
+                f"inVehTab={row.get('inVeh')}",
+                f"inHypIns={row.get('inHypIns')}",
+                f"seriesHint={row.get('seriesHint')}",
+            ]
+            _rto_log(f"    {' '.join(p for p in parts if p != '')}")
+            opt_bits = []
+            for o in opts:
+                t = (o.get("t") or "").strip()
+                v = (o.get("v") or "").strip()
+                if v:
+                    opt_bits.append(f"{t!r} [value={v!r}]")
+                else:
+                    opt_bits.append(f"{t!r}")
+            joined = " | ".join(opt_bits)
+            if len(joined) > 2000:
+                joined = joined[:1997] + "..."
+            _rto_log(f"      options: {joined}")
+
+    def _log_pf_tax_hints(frame_tag: str, hints: list[dict]) -> None:
+        if not hints:
+            return
+        _rto_log(
+            f"  [{frame_tag}] PF / id hints (tax / taxMode / mv_tax, non-SELECT, cap {pf_cap}):"
+        )
+        for h in hints:
+            _rto_log(
+                f"    {h.get('tag', '')} id={h.get('id', '')!r} hidden={h.get('hidden')} "
+                f"class={h.get('cls', '')!r} text={h.get('txt', '')!r}"
+            )
+
+    def _log_pf_series_hints(frame_tag: str, hints: list[dict]) -> None:
+        if not hints:
+            return
+        _rto_log(
+            f"  [{frame_tag}] PF / id hints (series_type / seriesType / regn_series / state_series, "
+            f"cap {pf_series_cap}):"
+        )
+        for h in hints:
+            _rto_log(
+                f"    {h.get('tag', '')} id={h.get('id', '')!r} hidden={h.get('hidden')} "
+                f"inHypIns={h.get('inHypIns')} class={h.get('cls', '')!r} text={h.get('txt', '')!r}"
+            )
+
     for fi, frame in enumerate(page.frames):
         try:
-            tag = f"frame[{fi}] {frame.name or 'main'}"
-            snapshot = frame.evaluate(_JS_ELEMENT_SNAPSHOT)
-            _log_element_list(tag, snapshot)
+            ftag = f"frame[{fi}] {frame.name or 'main'}"
+            snap = frame.evaluate(_JS_PAGE_STATE_SNAPSHOT)
+            general = snap.get("general") or []
+            selects_detailed = snap.get("selectsDetailed") or []
+            pf_hints = snap.get("pfTaxHints") or []
+            pf_series = snap.get("pfSeriesHints") or []
+            _log_element_list(ftag, general)
+            _log_select_dump(ftag, selects_detailed)
+            _log_pf_tax_hints(ftag, pf_hints)
+            _log_pf_series_hints(ftag, pf_series)
         except Exception as e:
             _rto_log(f"  [frame[{fi}]] element snapshot error: {e}")
 
@@ -1569,6 +1772,18 @@ def _screen_3_scroll_to_tax_mode(page: Page) -> None:
     except Exception as e:
         _rto_log(f"Screen 3: tab panel scroll skipped ({e!s})")
 
+    try:
+        mv_row = tab_panel.locator("tr").filter(has_text=_MV_TAX_ROW_RE).first
+        mv_row.wait_for(state="attached", timeout=5000)
+        mv_row.evaluate("el => el.scrollIntoView({ block: 'center', inline: 'nearest' })")
+        _pause()
+        mv_row.scroll_into_view_if_needed(timeout=_DEFAULT_TIMEOUT_MS)
+        _pause()
+        _rto_log("Screen 3: scrolled to MV Tax row (Tax Mode Details)")
+        return
+    except Exception as e:
+        logger.debug("fill_rto: MV Tax row scroll: %s", e)
+
     for sel in _SCREEN3_TAX_MODE_NATIVE_SELECTORS + _SCREEN3_TAX_MODE_PF_WRAPPERS:
         loc = page.locator(sel).first
         try:
@@ -1584,21 +1799,148 @@ def _screen_3_scroll_to_tax_mode(page: Page) -> None:
     _rto_log("WARNING: scroll to Tax Mode: no matching locator")
 
 
-def _screen_3_select_tax_mode_one_time(page: Page) -> None:
-    """Set Tax Mode to **ONE TIME** — native ``select`` first (visible control; PF hidden input last)."""
+def _screen_3_tax_mode_selected_option_text(loc: Locator) -> str:
+    """Visible label of the selected ``option`` (native ``select``)."""
+    try:
+        return (
+            loc.evaluate(
+                "el => { const o = el.options[el.selectedIndex]; "
+                "return o ? (o.textContent || '').trim() : ''; }"
+            )
+            or ""
+        ).strip()
+    except Exception:
+        return ""
+
+
+def _screen_3_verify_tax_mode_one_time(loc: Locator) -> bool:
+    t = _screen_3_tax_mode_selected_option_text(loc)
+    return bool(t and _TAX_MODE_ONE_TIME_LABEL_RE.search(t))
+
+
+def _screen_3_try_select_tax_mode_on_locator(loc: Locator, log_tag: str) -> bool:
+    """Select **ONE TIME** on a native ``select`` and verify the chosen option text."""
+    try:
+        loc.wait_for(state="attached", timeout=_DEFAULT_TIMEOUT_MS)
+        loc.evaluate("el => el.scrollIntoView({ block: 'center', inline: 'nearest' })")
+        _pause()
+        try:
+            loc.select_option(label=_TAX_MODE_ONE_TIME_LABEL_RE, timeout=_DEFAULT_TIMEOUT_MS, force=True)
+        except Exception as first_e:
+            idx = loc.evaluate(
+                """el => {
+                    for (let i = 0; i < el.options.length; i++) {
+                        const raw = (el.options[i].textContent || '').trim();
+                        if (/ONE\\s*TIME/i.test(raw)) return i;
+                    }
+                    return -1;
+                }"""
+            )
+            if idx is None or int(idx) < 0:
+                raise first_e
+            loc.select_option(index=int(idx), force=True)
+        _pause()
+        if _screen_3_verify_tax_mode_one_time(loc):
+            _rto_log(f"select: Tax Mode = ONE TIME ({log_tag})")
+            return True
+    except Exception as e:
+        logger.debug("fill_rto: Tax Mode try %s: %s", log_tag, e)
+    return False
+
+
+def _screen_3_select_tax_mode_js_in_veh_tab(page: Page) -> bool:
+    """Last-resort: set ``selectedIndex`` on the matching ``select`` inside ``veh_info_tab``."""
+    try:
+        return bool(
+            page.evaluate(
+                """() => {
+                    const tab = document.querySelector('[id="workbench_tabview:veh_info_tab"]');
+                    if (!tab) return false;
+                    const sels = tab.querySelectorAll('select');
+                    for (const s of sels) {
+                        for (let i = 0; i < s.options.length; i++) {
+                            const raw = (s.options[i].textContent || '').trim();
+                            if (/ONE\\s*TIME/i.test(raw)) {
+                                s.selectedIndex = i;
+                                s.dispatchEvent(new Event('input', { bubbles: true }));
+                                s.dispatchEvent(new Event('change', { bubbles: true }));
+                                return true;
+                            }
+                        }
+                    }
+                    return false;
+                }"""
+            )
+        )
+    except Exception as e:
+        logger.debug("fill_rto: Tax Mode JS veh tab: %s", e)
+        return False
+
+
+def _screen_3_any_tax_mode_one_time_in_veh_tab(page: Page) -> bool:
+    """True if any ``select`` inside Vehicle Details shows **ONE TIME**."""
+    tab = page.locator('[id="workbench_tabview:veh_info_tab"]')
+    try:
+        n = tab.locator("select").count()
+        for i in range(min(n, 48)):
+            loc = tab.locator("select").nth(i)
+            if _screen_3_verify_tax_mode_one_time(loc):
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def _screen_3_select_tax_mode_one_time(page: Page) -> bool:
+    """Set Tax Mode to **ONE TIME** — MV Tax row / table first; then native ids (last match); PF; JS.
+
+    Returns ``True`` only when the MV Tax (or verified) ``select`` shows **ONE TIME**. On failure,
+    returns ``False`` so Screen 3 does not save or advance.
+    """
+    veh = page.locator('[id="workbench_tabview:veh_info_tab"]')
+
+    try:
+        row_sel = veh.locator("tr").filter(has_text=_MV_TAX_ROW_RE).locator("select").first
+        if row_sel.count() > 0 and _screen_3_try_select_tax_mode_on_locator(row_sel, "MV Tax row"):
+            return True
+    except Exception as e:
+        logger.debug("fill_rto: Tax Mode MV Tax row: %s", e)
+
+    try:
+        tbl = veh.locator("table").filter(has_text=_TAX_MODE_DETAILS_HDR_RE).first
+        if tbl.count() > 0:
+            tsel = tbl.locator("select").last
+            if tsel.count() > 0 and _screen_3_try_select_tax_mode_on_locator(
+                tsel, "Tax Mode Details table"
+            ):
+                return True
+    except Exception as e:
+        logger.debug("fill_rto: Tax Mode Details table: %s", e)
+
+    try:
+        gsel = page.locator("tr").filter(has_text=_MV_TAX_ROW_RE).locator("select").first
+        if gsel.count() > 0 and _screen_3_try_select_tax_mode_on_locator(page, gsel, "MV Tax row (page)"):
+            return True
+    except Exception as e:
+        logger.debug("fill_rto: Tax Mode MV Tax row global: %s", e)
+
     for nsel in _SCREEN3_TAX_MODE_NATIVE_SELECTORS:
         try:
-            loc = page.locator(nsel).first
-            loc.wait_for(state="attached", timeout=_DEFAULT_TIMEOUT_MS)
-            loc.evaluate("el => el.scrollIntoView({ block: 'center', inline: 'nearest' })")
-            _pause()
-            loc.select_option(label=_TAX_MODE_ONE_TIME_LABEL_RE, timeout=_DEFAULT_TIMEOUT_MS, force=True)
-            _pause()
-            _rto_log(f"select: Tax Mode = ONE TIME ({nsel!r})")
-            return
+            all_l = page.locator(nsel)
+            c = all_l.count()
+            if c == 0:
+                continue
+            try_order = (c - 1, 0)
+            tried: set[int] = set()
+            for i in try_order:
+                if i in tried or i < 0:
+                    continue
+                tried.add(i)
+                loc = all_l.nth(i)
+                if _screen_3_try_select_tax_mode_on_locator(loc, f"native[{i}] {nsel!r}"):
+                    return True
         except Exception as e:
-            logger.debug("fill_rto: Tax Mode native try %s: %s", nsel, e)
-            continue
+            logger.debug("fill_rto: Tax Mode native %s: %s", nsel, e)
 
     for wsel in _SCREEN3_TAX_MODE_PF_WRAPPERS:
         if page.locator(wsel).count() == 0:
@@ -1617,14 +1959,22 @@ def _screen_3_select_tax_mode_one_time(page: Page) -> None:
             if wrapper_id:
                 _close_pf_selectonemenu_overlay(page, wrapper_id)
             _pause()
-            _rto_log(f"pf-dropdown: Tax Mode = ONE TIME ({wsel!r})")
-            return
+            if _screen_3_any_tax_mode_one_time_in_veh_tab(page):
+                _rto_log(f"pf-dropdown: Tax Mode = ONE TIME ({wsel!r})")
+                return True
         except Exception as e:
             logger.debug("fill_rto: Tax Mode PF try %s: %s", wsel, e)
-            continue
+
+    if _screen_3_select_tax_mode_js_in_veh_tab(page):
+        _pause()
+        _wait_for_progress_close_loop(page)
+        if _screen_3_any_tax_mode_one_time_in_veh_tab(page):
+            _rto_log("select: Tax Mode = ONE TIME (JS in veh_info_tab + verify)")
+            return True
 
     logger.debug("fill_rto: Tax Mode could not be set (ONE TIME)")
     _rto_log("WARNING: Tax Mode not set (ONE TIME)")
+    return False
 
 
 def _screen_3_click_save_vehicle_details(page: Page) -> None:
@@ -1646,6 +1996,18 @@ def _screen_3_click_save_vehicle_details(page: Page) -> None:
     _rto_log(f"TIMEOUT click: {msg}")
     _dump_page_state(page, "Save Vehicle Details")
     raise PwTimeout(msg)
+
+
+def _screen_3_clear_blocking_overlay_after_vehicle_save(page: Page) -> None:
+    """Dismiss stray dialogs and wait for ``#msgDialog_modal`` mask to clear before Hypothecation tab."""
+    _wait_for_progress_close_loop(page)
+    for btn in ("OK", "Yes", "Close"):
+        _dismiss_dialog(page, btn, timeout=1200)
+    try:
+        page.locator("#msgDialog_modal").first.wait_for(state="hidden", timeout=8000)
+    except PwTimeout:
+        _rto_log("WARNING: msgDialog_modal overlay still visible — next sub-tab click may need retry")
+    _wait_for_progress_close_loop(page)
 
 
 def _screen_3_open_hypothecation_insurance_tab(page: Page) -> None:
@@ -2001,8 +2363,136 @@ def _fill_first_matching(page: Page, selectors: tuple[str, ...], value: object, 
     return False
 
 
+def _screen_3_is_select_placeholder_label(t: str) -> bool:
+    """True if ``t`` looks like an empty PF/native dropdown placeholder (do not treat as user value)."""
+    u = t.upper().strip()
+    if not u:
+        return True
+    if u in ("--SELECT--", "--SELECT-", "SELECT", "--SELECT---"):
+        return True
+    if "SELECT" in u and "--" in t:
+        return True
+    return False
+
+
+def _screen_3_native_select_has_non_placeholder_value(page: Page, selectors: tuple[str, ...]) -> bool:
+    """True if the first matching ``select`` shows a non-placeholder selected option."""
+    for sel in selectors:
+        try:
+            loc = page.locator(sel).first
+            loc.wait_for(state="attached", timeout=2000)
+            txt = (
+                loc.evaluate(
+                    "el => { const o = el.options[el.selectedIndex]; "
+                    "return o ? (o.textContent || '').trim() : ''; }"
+                )
+                or ""
+            ).strip()
+            if txt and not _screen_3_is_select_placeholder_label(txt):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _screen_3_insurance_type_already_set(page: Page) -> bool:
+    """Vahan may pre-fill **Insurance Type** on Hypothecation/Insurance — do not overwrite."""
+    label_ids = (
+        "workbench_tabview:insurance_type_label",
+        "workbench_tabview:insuranceType_label",
+        "workbench_tabview:ins_type_label",
+    )
+    if any(_workbench_pf_menu_label_has_value(page, lid) for lid in label_ids):
+        return True
+    return _screen_3_native_select_has_non_placeholder_value(page, _SCREEN3_INSURANCE_TYPE_NATIVE)
+
+
+def _screen_3_insurance_company_already_set(page: Page) -> bool:
+    """Vahan may pre-fill **Insurance Company** — do not overwrite."""
+    label_ids = (
+        "workbench_tabview:insurance_company_label",
+        "workbench_tabview:insuranceCompany_label",
+    )
+    if any(_workbench_pf_menu_label_has_value(page, lid) for lid in label_ids):
+        return True
+    return _screen_3_native_select_has_non_placeholder_value(page, _SCREEN3_INSURANCE_COMPANY_NATIVE)
+
+
+def _screen_3_log_series_type_ids_probe(page: Page) -> None:
+    """Log distinct element ids matching **Series Type** / STATE SERIES naming (happy-path discovery for RTO.txt)."""
+    try:
+        ids = page.evaluate(
+            """() => {
+                const out = [];
+                document.querySelectorAll("[id]").forEach((el) => {
+                    const id = el.id || "";
+                    if (!id || out.length >= 40) return;
+                    if (/series|regn_series|state_series|SeriesType|series_type/i.test(id)) out.push(id);
+                });
+                return [...new Set(out)];
+            }"""
+        )
+        if ids:
+            _rto_log(f"Screen 3c: series-related ids in DOM (probe): {ids!r}")
+    except Exception as e:
+        logger.debug("fill_rto: series id probe: %s", e)
+
+
+def _screen_3_series_type_is_state_series(page: Page) -> bool:
+    """True if **Series Type** already shows **STATE SERIES** (Vahan pre-fill)."""
+    label_ids = (
+        "workbench_tabview:series_type_label",
+        "workbench_tabview:seriesType_label",
+        "workbench_tabview:reg_series_type_label",
+        "workbench_tabview:vh_series_type_label",
+    )
+    for lid in label_ids:
+        try:
+            lab = page.locator(f'[id="{lid}"]').first
+            t = (lab.inner_text(timeout=2000) or "").strip()
+            if t and _SERIES_TYPE_STATE_SERIES_LABEL_RE.search(t):
+                return True
+        except Exception:
+            continue
+    for sel in _SCREEN3_SERIES_TYPE_NATIVE:
+        try:
+            loc = page.locator(sel).first
+            loc.wait_for(state="attached", timeout=2000)
+            txt = (
+                loc.evaluate(
+                    "el => { const o = el.options[el.selectedIndex]; "
+                    "return o ? (o.textContent || '').trim() : ''; }"
+                )
+                or ""
+            ).strip()
+            if txt and _SERIES_TYPE_STATE_SERIES_LABEL_RE.search(txt):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _screen_3_input_already_has_value(page: Page, selectors: tuple[str, ...]) -> bool:
+    """True if the first matching control already has non-empty value (input or display)."""
+    for sel in selectors:
+        try:
+            loc = page.locator(sel).first
+            loc.wait_for(state="attached", timeout=2000)
+            v = (
+                loc.evaluate(
+                    "el => (el.value || el.getAttribute('value') || el.textContent || '').trim()"
+                )
+                or ""
+            ).strip()
+            if v:
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def _screen_3c_insurance_information(page: Page, data: dict) -> None:
-    """3c: On Hypothecation/Insurance tab — Insurance Type, Company, policy, dates, IDV."""
+    """3c: On Hypothecation/Insurance tab — insurance fields, Series Type (STATE SERIES), IDV."""
     _rto_log("--- Screen 3c: Insurance (Hypothecation/Insurance Information tab) ---")
     for scroll_sel in (
         _SCREEN3_INSURANCE_TYPE_PF_WRAPPERS[0],
@@ -2017,26 +2507,31 @@ def _screen_3c_insurance_information(page: Page, data: dict) -> None:
         except Exception:
             continue
 
-    if not _screen_3_pf_dropdown_chain(
-        page, _SCREEN3_INSURANCE_TYPE_PF_WRAPPERS, "THIRD PARTY", label="Insurance Type"
-    ):
-        if not _screen_3_native_select_chain(
-            page, _SCREEN3_INSURANCE_TYPE_NATIVE, "THIRD PARTY", label="Insurance Type"
+    if _screen_3_insurance_type_already_set(page):
+        _rto_log("skip: Insurance Type already set on form (Vahan pre-fill)")
+    else:
+        if not _screen_3_pf_dropdown_chain(
+            page, _SCREEN3_INSURANCE_TYPE_PF_WRAPPERS, "THIRD PARTY", label="Insurance Type"
         ):
-            try:
-                _type_typeahead(
-                    page,
-                    "input[id*='insuranceType']",
-                    "THIRD PARTY",
-                    label="Insurance Type typeahead",
-                    timeout=_DEFAULT_TIMEOUT_MS,
-                )
-            except PwTimeout:
-                _rto_log("WARNING: Insurance Type not set (THIRD PARTY)")
+            if not _screen_3_native_select_chain(
+                page, _SCREEN3_INSURANCE_TYPE_NATIVE, "THIRD PARTY", label="Insurance Type"
+            ):
+                try:
+                    _type_typeahead(
+                        page,
+                        "input[id*='insuranceType']",
+                        "THIRD PARTY",
+                        label="Insurance Type typeahead",
+                        timeout=_DEFAULT_TIMEOUT_MS,
+                    )
+                except PwTimeout:
+                    _rto_log("WARNING: Insurance Type not set (THIRD PARTY)")
 
     insurer = (data.get("insurer") or "").strip()
     if insurer:
-        if not _screen_3_pf_dropdown_chain(
+        if _screen_3_insurance_company_already_set(page):
+            _rto_log("skip: Insurance Company already set on form (Vahan pre-fill)")
+        elif not _screen_3_pf_dropdown_chain(
             page, _SCREEN3_INSURANCE_COMPANY_PF_WRAPPERS, insurer, label="Insurance Company"
         ):
             if not _screen_3_native_select_chain(
@@ -2053,12 +2548,67 @@ def _screen_3c_insurance_information(page: Page, data: dict) -> None:
                 except PwTimeout:
                     _rto_log("WARNING: Insurance Company not set")
 
-    _fill_first_matching(
-        page, _SCREEN3_POLICY_NO_INPUT, data.get("policy_num", ""), label="Policy/Cover Note No."
-    )
-    _fill_first_matching(
-        page, _SCREEN3_INSURANCE_FROM_INPUT, data.get("policy_from_str", ""), label="Insurance From"
-    )
+    if _screen_3_input_already_has_value(page, _SCREEN3_POLICY_NO_INPUT):
+        _rto_log("skip: Policy/Cover Note No. already set on form (Vahan pre-fill)")
+    else:
+        _fill_first_matching(
+            page, _SCREEN3_POLICY_NO_INPUT, data.get("policy_num", ""), label="Policy/Cover Note No."
+        )
+
+    if _screen_3_input_already_has_value(page, _SCREEN3_INSURANCE_FROM_INPUT):
+        _rto_log("skip: Insurance From already set on form (Vahan pre-fill)")
+    else:
+        _fill_first_matching(
+            page, _SCREEN3_INSURANCE_FROM_INPUT, data.get("policy_from_str", ""), label="Insurance From"
+        )
+
+    # Series Type (*Please Select Series Type*) → **STATE SERIES** (skip if already STATE SERIES).
+    _screen_3_log_series_type_ids_probe(page)
+    for scroll_sel in (_SCREEN3_SERIES_TYPE_PF_WRAPPERS[0], _SCREEN3_SERIES_TYPE_NATIVE[0]):
+        try:
+            s_loc = page.locator(scroll_sel).first
+            s_loc.wait_for(state="attached", timeout=2500)
+            s_loc.scroll_into_view_if_needed(timeout=_DEFAULT_TIMEOUT_MS)
+            _pause()
+            break
+        except Exception:
+            continue
+
+    if _screen_3_series_type_is_state_series(page):
+        _rto_log("skip: Series Type already STATE SERIES (Vahan pre-fill)")
+    else:
+        if not _screen_3_pf_dropdown_chain(
+            page,
+            _SCREEN3_SERIES_TYPE_PF_WRAPPERS,
+            "STATE SERIES",
+            label="Series Type",
+            option_label_regex=_SERIES_TYPE_STATE_SERIES_LABEL_RE,
+        ):
+            ser_ok = False
+            for sel in _SCREEN3_SERIES_TYPE_NATIVE:
+                try:
+                    nloc = page.locator(sel).first
+                    nloc.wait_for(state="visible", timeout=_DEFAULT_TIMEOUT_MS)
+                    nloc.select_option(
+                        label=_SERIES_TYPE_STATE_SERIES_LABEL_RE, timeout=_DEFAULT_TIMEOUT_MS
+                    )
+                    ser_ok = True
+                    _rto_log(f"select: Series Type = STATE SERIES ({sel!r})")
+                    break
+                except Exception:
+                    continue
+            if not ser_ok:
+                try:
+                    _type_typeahead(
+                        page,
+                        "input[id*='seriesType'], input[id*='series_type'], input[name*='seriesType']",
+                        "STATE SERIES",
+                        label="Series Type typeahead",
+                        timeout=_DEFAULT_TIMEOUT_MS,
+                    )
+                except PwTimeout:
+                    _rto_log("WARNING: Series Type not set (STATE SERIES)")
+
     idv_v = data.get("idv")
     idv_s = "" if idv_v is None else str(idv_v).strip()
     if idv_s:
@@ -2067,6 +2617,20 @@ def _screen_3c_insurance_information(page: Page, data: dict) -> None:
 
 def _screen_3_click_save_file_movement(page: Page) -> None:
     """Click **Save and File Movement** (workbench id or button text)."""
+    try:
+        btn = page.get_by_role(
+            "button",
+            name=re.compile(r"^\s*Save and File Movement\s*$", re.I),
+        ).first
+        btn.wait_for(state="visible", timeout=4000)
+        btn.scroll_into_view_if_needed(timeout=_DEFAULT_TIMEOUT_MS)
+        btn.click(timeout=_DEFAULT_TIMEOUT_MS)
+        _pause()
+        _rto_log("click: Save and File Movement (exact button name)")
+        return
+    except Exception as e:
+        logger.debug("fill_rto: Save and File Movement by role: %s", e)
+
     last_err: Exception | None = None
     for sel in _SCREEN3_SAVE_FILE_MOVEMENT_SELECTORS:
         try:
@@ -2267,9 +2831,17 @@ def _screen_3(page: Page, data: dict, *, skip_home: bool, skip_entry: bool = Fal
 
     # 3b: Tax Mode — scroll into view, ONE TIME, then **Save Vehicle Details** before other sub-tabs.
     _screen_3_scroll_to_tax_mode(page)
-    _screen_3_select_tax_mode_one_time(page)
+    if not _screen_3_select_tax_mode_one_time(page):
+        _rto_log(
+            "ABORT Screen 3: Tax Mode (ONE TIME) not verified — skipping Save Vehicle Details, "
+            "Hypothecation/Insurance, and Save and File Movement"
+        )
+        raise RuntimeError(
+            "RTO Screen 3: Tax Mode must be ONE TIME before Save Vehicle Details — automation stopped"
+        )
 
     _screen_3_click_save_vehicle_details(page)
+    _screen_3_clear_blocking_overlay_after_vehicle_save(page)
 
     # 3c: Scroll to sub-tab strip, open **Hypothecation/Insurance Information**, then fill insurance.
     _screen_3_scroll_subtab_bar_into_view(page)
