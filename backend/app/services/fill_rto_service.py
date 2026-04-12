@@ -3592,12 +3592,16 @@ def _screen_4(page: Page) -> None:
             _rto_log("Verify button not visible — assuming already clicked, continuing")
 
     # 4b: Scroll to bottom, click **Save-Options**, pick **File Movement**
+    #     id from page dump: button  app_disapp_form:j_idt1913_button  text='Save-Options'
+    #     menu:              div     app_disapp_form:j_idt1913_menu
+    #     File Movement:     a       app_disapp_form:fileMove          text='File Movement'
     page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
     _pause()
 
     _screen_4_click_first(
         page,
         (
+            '[id="app_disapp_form:j_idt1913_button"]',
             "button:has-text('Save-Options')",
             "button:has-text('Save Options')",
             "input[value*='Save-Options']",
@@ -3609,33 +3613,38 @@ def _screen_4(page: Page) -> None:
     )
     _pause()
 
-    # Pick "File Movement" from the dropdown menu
     _screen_4_click_first(
         page,
         (
-            "a:has-text('File Movement')",
-            "[id*='fileMovement']",
-            "button:has-text('File Movement')",
-            "input[value*='File Movement']",
+            '[id="app_disapp_form:fileMove"]',
+            'a:has-text("File Movement")',
+            '[id*="fileMove"]',
         ),
         label="File Movement",
         scroll=False,
     )
-    _pause()
 
-    # 4c: Click on State → popup with **Save** button → another popup → **Yes**
+    # File Movement triggers AJAX / navigation — wait for progress overlay
+    _pause()
+    _wait_for_progress_close_loop(page)
+
+    # 4c: Popup(s) after File Movement — **Save** then **Yes**
     _dismiss_dialog(page, "Save", timeout=_LOOP_BUDGET_MS)
     _pause()
     _dismiss_dialog(page, "Yes", timeout=_LOOP_BUDGET_MS)
     _pause()
+    _wait_for_progress_close_loop(page)
 
-    # 4d: Click **Dealer Document Upload**
+    # 4d: Click **Dealer Document Upload** — this is a tab in the top tablist
+    #     tab bar text from dump: "1 Dealer New Registration entry 2 Dealer Verify 3 Dealer Doc..."
     _screen_4_click_first(
         page,
         (
+            "a:has-text('Dealer Document Upload')",
+            "li[role='tab']:has-text('Dealer Doc') a",
             "button:has-text('Dealer Document Upload')",
             "input[value*='Dealer Document Upload']",
-            "a:has-text('Dealer Document Upload')",
+            "[role='tab']:has-text('Dealer Document')",
         ),
         label="Dealer Document Upload",
     )
