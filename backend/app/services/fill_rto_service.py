@@ -49,8 +49,10 @@ _SCREEN5_NEXT_BTN = '[id="formDocumentUpload:nextBtn"]'
 _SCREEN5_FILE_MOVEMENT_BTN = '[id="formDocumentUpload:fileFlowId"]'
 # When ``RTO_FILL_SKIP_TO_SCREEN >= 5`` and this is **False**, Screen 5 begins with this many **next** chevrons (align before Form 20). Set **0** when skipping straight to Owner Undertaking.
 RTO_FILL_SCREEN5_START_WITH_NEXT_N = 0
-# When ``RTO_FILL_SKIP_TO_SCREEN >= 5`` and **True**, Screen 5 runs **only** Owner Undertaking: Sub Category → **Owner Undertaking Form** → file → Upload Document → next → File Movement (skips Form 20…Aadhaar).
-RTO_FILL_SCREEN5_SKIP_TO_OWNER_UNDERTAKING_ONLY = True
+# When ``RTO_FILL_SKIP_TO_SCREEN >= 5`` and **True**, Screen 5 runs **only** Owner Undertaking: Sub Category → **Owner Undertaking Form** → file → Upload Document → next → File Movement (skips Form 20…Aadhaar). Ignored if SKIP_TO_FILE_MOVEMENT_ONLY.
+RTO_FILL_SCREEN5_SKIP_TO_OWNER_UNDERTAKING_ONLY = False
+# When ``RTO_FILL_SKIP_TO_SCREEN >= 5`` and **True**, Screen 5 **only** scrolls and clicks **File Movement** (``formDocumentUpload:fileFlowId``) + dialogs — no uploads. Takes precedence over OWNER_UNDERTAKING_ONLY.
+RTO_FILL_SCREEN5_SKIP_TO_FILE_MOVEMENT_ONLY = True
 # After the 7th queued upload the portal can sit on intermediate rows (e.g. **Affidavit**) — extra **next** clicks before Owner Undertaking (0 = off if using START_WITH_NEXT_N only).
 RTO_FILL_SCREEN5_NEXT_BEFORE_OWNER_UNDERTAKING = 0
 # Native ``<option>`` text varies (``Form 20`` vs ``FORM 20``) — match with regex per queue key.
@@ -3873,11 +3875,41 @@ def _screen_5_click_upload_document_trigger(page: Page) -> None:
         )
 
 
+def _screen_5_click_file_movement_after_uploads(page: Page) -> None:
+    """Click **File Movement** at bottom of document upload page (``formDocumentUpload:fileFlowId`` in RTO logs)."""
+    page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+    _pause()
+    _wait_for_progress_close_loop(page)
+    btn = page.locator(_SCREEN5_FILE_MOVEMENT_BTN).first
+    btn.wait_for(state="attached", timeout=_LOOP_BUDGET_MS)
+    btn.scroll_into_view_if_needed(timeout=_DEFAULT_TIMEOUT_MS)
+    _pause()
+    try:
+        btn.click(timeout=_LOOP_BUDGET_MS)
+    except Exception:
+        btn.click(timeout=_LOOP_BUDGET_MS, force=True)
+    _rto_log(f"click: File Movement ({_SCREEN5_FILE_MOVEMENT_BTN})")
+    _pause()
+    _wait_for_progress_close_loop(page)
+
+
 def _screen_5(page: Page, docs: dict[str, Path | None]) -> None:
     """Screen 5: Upload documents per sub-category (``formDocumentUpload`` form)."""
     _set_screen("Screen 5")
     logger.info("fill_rto: Screen 5 — uploading %d document categories", len(docs))
     _rto_log("--- Screen 5: Document uploads by sub-category ---")
+
+    if int(RTO_FILL_SKIP_TO_SCREEN) >= 5 and RTO_FILL_SCREEN5_SKIP_TO_FILE_MOVEMENT_ONLY:
+        _rto_log(
+            "SKIP: Screen 5 — File Movement only "
+            f"(scroll bottom → {_SCREEN5_FILE_MOVEMENT_BTN} → Yes / Ok dialogs)"
+        )
+        _screen_5_click_file_movement_after_uploads(page)
+        _dismiss_dialog(page, "Yes")
+        _pause()
+        _dismiss_dialog(page, "Ok", timeout=_DEFAULT_TIMEOUT_MS)
+        _pause()
+        return
 
     _full_upload_sequence: list[tuple[str, str | None]] = [
         ("FORM 20", "FORM 20"),
@@ -3960,14 +3992,7 @@ def _screen_5(page: Page, docs: dict[str, Path | None]) -> None:
             _rto_log(f"WARNING: nextBtn not found for {doc_key}")
 
     _pause()
-    _click(
-        page,
-        f"{_SCREEN5_FILE_MOVEMENT_BTN}, input[value*='File Movement'], "
-        "button:has-text('File Movement'), a:has-text('File Movement')",
-        label="File Movement (after uploads)",
-        timeout=_DEFAULT_TIMEOUT_MS,
-    )
-    _pause()
+    _screen_5_click_file_movement_after_uploads(page)
     _dismiss_dialog(page, "Yes")
     _pause()
     _dismiss_dialog(page, "Ok", timeout=_DEFAULT_TIMEOUT_MS)
@@ -4140,7 +4165,9 @@ def fill_rto_row(row: dict) -> dict:
                     s4_hint = "Verify → Save-Options → File Movement → None+Save → Save → Dealer Document Upload"
                 extra = f" Screen 4: {s4_hint}."
             elif skip_from == 5:
-                if RTO_FILL_SCREEN5_SKIP_TO_OWNER_UNDERTAKING_ONLY:
+                if RTO_FILL_SCREEN5_SKIP_TO_FILE_MOVEMENT_ONLY:
+                    extra = " Screen 5: **File Movement** button only (scroll bottom → formDocumentUpload:fileFlowId → dialogs)."
+                elif RTO_FILL_SCREEN5_SKIP_TO_OWNER_UNDERTAKING_ONLY:
                     extra = (
                         " Screen 5: **Owner Undertaking Form** only — pick Sub Category, upload file, next; "
                         "File Movement at end."
