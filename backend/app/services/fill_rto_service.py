@@ -16,7 +16,7 @@ import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-from playwright.sync_api import Page, TimeoutError as PwTimeout
+from playwright.sync_api import Locator, Page, TimeoutError as PwTimeout
 
 from app.config import VAHAN_BASE_URL, VAHAN_DEALER_HOME_URL, get_ocr_output_dir, get_uploads_dir
 from app.services.handle_browser_opening import get_or_open_site_page
@@ -1241,6 +1241,8 @@ def _poll_generated_application_dialog(page: Page, max_ms: int = 15_000):
     deadline = time.monotonic() + max_ms / 1000.0
     while time.monotonic() < deadline:
         dlg = _find_visible_generated_application_dialog(page)
+        if dlg is None:
+            dlg = _screen_3_find_visible_application_info_dialog(page)
         if dlg is not None:
             return dlg
         time.sleep(_FIRST_TRY_MS / 1000.0)
@@ -1264,6 +1266,9 @@ def _scrape_application_id_from_dialog_text(text: str) -> str:
     )
     if m:
         return m.group(1).strip().rstrip(".,;")
+    m = re.search(r"[:]\s*([A-Z]{2}\d{8,24})\b", raw, re.IGNORECASE)
+    if m:
+        return m.group(1).strip().upper()
     found = re.findall(r"\b[A-Z]{2}\d{10,20}\b", raw)
     return found[0].upper() if found else ""
 
@@ -1919,7 +1924,7 @@ def _screen_3_select_tax_mode_one_time(page: Page) -> bool:
 
     try:
         gsel = page.locator("tr").filter(has_text=_MV_TAX_ROW_RE).locator("select").first
-        if gsel.count() > 0 and _screen_3_try_select_tax_mode_on_locator(page, gsel, "MV Tax row (page)"):
+        if gsel.count() > 0 and _screen_3_try_select_tax_mode_on_locator(gsel, "MV Tax row (page)"):
             return True
     except Exception as e:
         logger.debug("fill_rto: Tax Mode MV Tax row global: %s", e)
@@ -1977,6 +1982,172 @@ def _screen_3_select_tax_mode_one_time(page: Page) -> bool:
     return False
 
 
+def _screen_3_log_tax_mode_wiring_snapshot(page: Page) -> None:
+    """Log Tax Mode control ids / selected labels (RTO.txt) so selectors can be wired for a fast path."""
+    try:
+        snap = page.evaluate(
+            """() => {
+                const tab = document.querySelector('[id="workbench_tabview:veh_info_tab"]');
+                const out = { taxSelects: [], mvTax: null };
+                if (!tab) return out;
+                tab.querySelectorAll('select').forEach((s) => {
+                    const id = (s.id || '').toLowerCase();
+                    if (!/tax|mv_tax|mvtax|taxmode|tax_mode/.test(id)) return;
+                    const o = s.options[s.selectedIndex];
+                    out.taxSelects.push({
+                        id: s.id || '',
+                        name: s.name || '',
+                        si: s.selectedIndex,
+                        sel: o ? o.textContent.trim().substring(0, 100) : '',
+                        nOpt: s.options.length
+                    });
+                });
+                for (const r of tab.querySelectorAll('tr')) {
+                    if (!/MV\\s*Tax/i.test(r.textContent || '')) continue;
+                    const s = r.querySelector('select');
+                    if (!s) continue;
+                    const o = s.options[s.selectedIndex];
+                    out.mvTax = {
+                        selectId: s.id || '',
+                        selectName: s.name || '',
+                        sel: o ? o.textContent.trim().substring(0, 100) : '',
+                        nOpt: s.options.length
+                    };
+                    break;
+                }
+                return out;
+            }"""
+        )
+        _rto_log(f"Screen 3: Tax Mode wiring snapshot (ids + MV Tax row): {snap!r}")
+    except Exception as e:
+        logger.debug("fill_rto: Tax Mode wiring snapshot: %s", e)
+
+
+def _screen_3_click_dialog_dismiss_any(dlg: Locator, page: Page, *, log_prefix: str = "Screen 3") -> bool:
+    """Click OK / Ok / Close / Yes / first button on a PrimeFaces ``ui-dialog`` (or similar)."""
+    for pat in (
+        r"^\s*OK\s*$",
+        r"^\s*Ok\s*$",
+        r"^\s*Close\s*$",
+        r"^\s*Yes\s*$",
+        r"^\s*Proceed\s*$",
+    ):
+        try:
+            dlg.get_by_role("button", name=re.compile(pat, re.I)).first.click(timeout=4000)
+            _rto_log(f"{log_prefix}: dialog dismiss ({pat})")
+            return True
+        except Exception:
+            continue
+    try:
+        dlg.locator(
+            "button, a.ui-button, input[type='button'], input[type='submit']"
+        ).first.click(timeout=4000)
+        _rto_log(f"{log_prefix}: dialog dismiss (first control)")
+        return True
+    except Exception:
+        pass
+    try:
+        page.locator(".ui-dialog-buttonpane:visible button").first.click(timeout=4000)
+        _rto_log(f"{log_prefix}: dialog dismiss (visible buttonpane)")
+        return True
+    except Exception:
+        pass
+    _dismiss_dialog(page, "OK", timeout=2000)
+    return False
+
+
+def _screen_3_find_visible_application_info_dialog(page: Page) -> Locator | None:
+    """Fallback: any **visible** dialog whose text suggests application / success (titles vary by build)."""
+    try:
+        loc = page.locator(".ui-dialog:visible").filter(
+            has_text=re.compile(
+                r"Application\s*No|Generated|successfully|saved|registration|No\.?\s*:",
+                re.I,
+            )
+        )
+        if loc.count() > 0 and loc.first.is_visible(timeout=400):
+            return loc.first
+    except Exception:
+        pass
+    try:
+        loc2 = page.locator("[role='dialog']:visible").filter(
+            has_text=re.compile(r"Application\s*No|Generated|successfully|saved", re.I)
+        )
+        if loc2.count() > 0 and loc2.first.is_visible(timeout=400):
+            return loc2.first
+    except Exception:
+        pass
+    return None
+
+
+def _screen_3_any_modal_dialog_visible(page: Page) -> bool:
+    try:
+        if page.locator(".ui-dialog:visible").count() > 0:
+            return True
+    except Exception:
+        pass
+    try:
+        if page.locator("[role='dialog']:visible").count() > 0:
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _screen_3_post_save_vehicle_details_dialogs(page: Page, data: dict | None) -> str:
+    """After **Save Vehicle Details**: scrape application no. if shown; dismiss OK/Close; return id or ``''``."""
+    _wait_for_progress_close_loop(page)
+    app_id = ""
+    dlg0 = _find_visible_generated_application_dialog(page) or _poll_generated_application_dialog(
+        page, max_ms=18_000
+    )
+    if dlg0 is not None:
+        try:
+            text0 = dlg0.inner_text(timeout=5000) or ""
+        except Exception:
+            text0 = ""
+        _rto_log(f"Screen 3: Save Vehicle Details — dialog text snippet: {(text0 or '')[:900]!r}")
+        app_id = _scrape_application_id_from_dialog_text(text0)
+        if app_id:
+            _rto_log(f"Screen 3: application_id from Save Vehicle Details dialog: {app_id!r}")
+            if data is not None:
+                data["rto_application_id"] = app_id
+        else:
+            _rto_log("Screen 3: could not parse application id from Save Vehicle Details dialog (see snippet)")
+        _screen_3_click_dialog_dismiss_any(dlg0, page)
+        _wait_for_progress_close_loop(page)
+    # Residual popups / alternate wording
+    for _ in range(12):
+        if not _screen_3_any_modal_dialog_visible(page):
+            break
+        dlg = _screen_3_find_visible_application_info_dialog(page)
+        if dlg is None:
+            try:
+                dlg = page.locator(".ui-dialog:visible").first
+                if not dlg.is_visible(timeout=300):
+                    break
+            except Exception:
+                break
+        try:
+            t = dlg.inner_text(timeout=4000) or ""
+        except Exception:
+            t = ""
+        if t:
+            _rto_log(f"Screen 3: follow-up dialog snippet: {t[:900]!r}")
+        aid = _scrape_application_id_from_dialog_text(t)
+        if aid and not app_id:
+            app_id = aid
+            if data is not None:
+                data["rto_application_id"] = aid
+            _rto_log(f"Screen 3: application_id from follow-up dialog: {aid!r}")
+        _screen_3_click_dialog_dismiss_any(dlg, page)
+        _wait_for_progress_close_loop(page)
+        time.sleep(0.2)
+    for btn in ("OK", "Yes", "Close"):
+        _dismiss_dialog(page, btn, timeout=1200)
+    return app_id
+
+
 def _screen_3_click_save_vehicle_details(page: Page) -> None:
     """Persist Vehicle Details tab (Tax Mode, etc.) before switching to Hypothecation/Insurance."""
     last_err: Exception | None = None
@@ -1998,15 +2169,19 @@ def _screen_3_click_save_vehicle_details(page: Page) -> None:
     raise PwTimeout(msg)
 
 
-def _screen_3_clear_blocking_overlay_after_vehicle_save(page: Page) -> None:
-    """Dismiss stray dialogs and wait for ``#msgDialog_modal`` mask to clear before Hypothecation tab."""
-    _wait_for_progress_close_loop(page)
-    for btn in ("OK", "Yes", "Close"):
-        _dismiss_dialog(page, btn, timeout=1200)
+def _screen_3_clear_blocking_overlay_after_vehicle_save(page: Page, data: dict | None = None) -> None:
+    """After **Save Vehicle Details**: scrape/dismiss application dialogs; clear ``#msgDialog_modal`` mask."""
+    _screen_3_post_save_vehicle_details_dialogs(page, data)
     try:
-        page.locator("#msgDialog_modal").first.wait_for(state="hidden", timeout=8000)
+        page.locator("#msgDialog_modal").first.wait_for(state="hidden", timeout=12_000)
     except PwTimeout:
-        _rto_log("WARNING: msgDialog_modal overlay still visible — next sub-tab click may need retry")
+        _rto_log("WARNING: msgDialog_modal still visible — Escape then retry")
+        try:
+            page.keyboard.press("Escape")
+            _pause()
+            page.locator("#msgDialog_modal").first.wait_for(state="hidden", timeout=6000)
+        except PwTimeout:
+            _rto_log("WARNING: msgDialog_modal overlay may block next step")
     _wait_for_progress_close_loop(page)
 
 
@@ -2653,20 +2828,34 @@ def _screen_3_click_save_file_movement(page: Page) -> None:
 def _screen_3_scrape_generated_application_id(page: Page) -> str:
     """Read application number from success dialog (e.g. *Application generated successfully*)."""
     application_id = ""
+    dlg = _screen_3_find_visible_application_info_dialog(page)
+    if dlg is not None:
+        try:
+            text = dlg.inner_text(timeout=6000) or ""
+            application_id = _scrape_application_id_from_dialog_text(text)
+            if application_id:
+                logger.info("fill_rto: scraped application_id=%s", application_id)
+                _rto_log(f"scraped: rto_application_id = {application_id} (visible ui-dialog)")
+                return application_id
+            _rto_log(f"Screen 3d: application dialog snippet (unparsed): {text[:900]!r}")
+        except Exception as e:
+            logger.debug("fill_rto: scrape from application dialog: %s", e)
     try:
         dialog_text = page.locator(
-            ".ui-dialog-content, .ui-messages-info, .ui-growl-message, "
+            ".ui-dialog-content:visible, .ui-dialog:visible, .ui-messages-info, .ui-growl-message, "
             "[class*='dialog'] [class*='message'], [class*='success']"
         ).first
         dialog_text.wait_for(state="visible", timeout=_DEFAULT_TIMEOUT_MS)
         text = dialog_text.inner_text()
-        match = re.search(
-            r"(?:application\s*(?:no\.?|number)\s*[:\-]?\s*|generated\s+successfully[^\n]*\s*)([A-Z0-9]{8,})",
-            text,
-            re.IGNORECASE | re.DOTALL,
-        )
-        if match:
-            application_id = match.group(1).strip()
+        application_id = _scrape_application_id_from_dialog_text(text)
+        if not application_id:
+            match = re.search(
+                r"(?:application\s*(?:no\.?|number)\s*[:\-]?\s*|generated\s+successfully[^\n]*\s*)([A-Z0-9]{8,})",
+                text,
+                re.IGNORECASE | re.DOTALL,
+            )
+            if match:
+                application_id = match.group(1).strip()
         if not application_id:
             match2 = re.search(
                 r"(?:application\s*(?:no\.?|number)\s*[:\-]?\s*)(\S+)", text, re.IGNORECASE
@@ -2680,6 +2869,8 @@ def _screen_3_scrape_generated_application_id(page: Page) -> str:
         logger.info("fill_rto: scraped application_id=%s", application_id)
         if application_id:
             _rto_log(f"scraped: rto_application_id = {application_id}")
+        elif text:
+            _rto_log(f"Screen 3d: scrape fallback dialog snippet: {text[:900]!r}")
     except PwTimeout:
         logger.warning("fill_rto: could not scrape application number from popup")
         _rto_log("WARNING: could not scrape application number from popup")
@@ -2840,8 +3031,9 @@ def _screen_3(page: Page, data: dict, *, skip_home: bool, skip_entry: bool = Fal
             "RTO Screen 3: Tax Mode must be ONE TIME before Save Vehicle Details — automation stopped"
         )
 
+    _screen_3_log_tax_mode_wiring_snapshot(page)
     _screen_3_click_save_vehicle_details(page)
-    _screen_3_clear_blocking_overlay_after_vehicle_save(page)
+    _screen_3_clear_blocking_overlay_after_vehicle_save(page, data)
 
     # 3c: Scroll to sub-tab strip, open **Hypothecation/Insurance Information**, then fill insurance.
     _screen_3_scroll_subtab_bar_into_view(page)

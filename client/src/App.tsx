@@ -57,7 +57,7 @@ const RTO_PAGES: Page[] = ["rto-status", "contact-us"];
 
 const DEALER_PAGES: Page[] = ["dealer-dashboard", "contact-us"];
 
-const ADMIN_PAGES: Page[] = ["admin-tools", "contact-us"];
+const ADMIN_PAGES: Page[] = ["admin-tools"];
 
 function App() {
   const today = useToday();
