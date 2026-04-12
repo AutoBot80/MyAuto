@@ -21,6 +21,7 @@ from playwright.sync_api import Locator, Page, TimeoutError as PwTimeout
 
 from app.config import VAHAN_BASE_URL, VAHAN_DEALER_HOME_URL, get_ocr_output_dir, get_uploads_dir
 from app.services.handle_browser_opening import get_or_open_site_page
+from app.services.utility_functions import normalize_nominee_relationship_value
 
 logger = logging.getLogger(__name__)
 
@@ -93,9 +94,15 @@ _SCREEN3_POLICY_NO_INPUT: tuple[str, ...] = (
     "input[id*='policyNo'], input[id*='coverNote'], input[name*='policyNo']",
 )
 _SCREEN3_INSURANCE_FROM_INPUT: tuple[str, ...] = (
+    '[id="workbench_tabview:ins_from_input"]',
     '[id="workbench_tabview:insurance_from"]',
     '[id="workbench_tabview:insuranceFrom"]',
     "input[id*='insuranceFrom'], input[name*='insuranceFrom']",
+)
+_SCREEN3_INSURANCE_PERIOD_PF_WRAPPERS: tuple[str, ...] = ('[id="workbench_tabview:ins_year"]',)
+_SCREEN3_INSURANCE_PERIOD_NATIVE: tuple[str, ...] = (
+    'select[id="workbench_tabview:ins_year_input"]',
+    "select[id*='ins_year'], select[name*='ins_year']",
 )
 # Hypothecation/Insurance — *Please Select Series Type* (often after policy / insurance from).
 _SERIES_TYPE_STATE_SERIES_LABEL_RE = re.compile(r"STATE\s*SERIES", re.I)
@@ -115,10 +122,13 @@ _SCREEN3_IDV_INPUT: tuple[str, ...] = (
     "input[id*='idv'], input[id*='declaredValue'], input[name*='idv']",
 )
 _SCREEN3_HYP_CHECKBOX_SELECTORS: tuple[str, ...] = (
+    '[id="workbench_tabview:isHypo_input"]',
     "input[type='checkbox'][id*='hypothecated']",
     "input[type='checkbox'][id*='isHypothecated']",
     "input[type='checkbox'][name*='hypothecated']",
 )
+_SCREEN3_NOMINEE_NAME_INPUT: tuple[str, ...] = ('[id="workbench_tabview:nominationname1"]',)
+_SCREEN3_NOMINEE_RELATION_PF_WRAPPERS: tuple[str, ...] = ('[id="workbench_tabview:vm_rel1"]',)
 _SCREEN3_HYP_TYPE_PF_WRAPPERS: tuple[str, ...] = (
     '[id="workbench_tabview:hypothecation_type"]',
     '[id="workbench_tabview:hypothecationType"]',
@@ -2784,10 +2794,18 @@ def _screen_3_insurance_company_already_set(page: Page) -> bool:
     label_ids = (
         "workbench_tabview:insurance_company_label",
         "workbench_tabview:insuranceCompany_label",
+        "workbench_tabview:ins_cd_label",
     )
     if any(_workbench_pf_menu_label_has_value(page, lid) for lid in label_ids):
         return True
     return _screen_3_native_select_has_non_placeholder_value(page, _SCREEN3_INSURANCE_COMPANY_NATIVE)
+
+
+def _screen_3_insurance_period_already_set(page: Page) -> bool:
+    """Vahan may pre-fill **Insurance Period (in year)** — do not overwrite."""
+    if _workbench_pf_menu_label_has_value(page, "workbench_tabview:ins_year_label"):
+        return True
+    return _screen_3_native_select_has_non_placeholder_value(page, _SCREEN3_INSURANCE_PERIOD_NATIVE)
 
 
 def _screen_3_log_series_type_ids_probe(page: Page) -> None:
@@ -2863,6 +2881,182 @@ def _screen_3_input_already_has_value(page: Page, selectors: tuple[str, ...]) ->
     return False
 
 
+def _screen_3_set_vehicle_hypothecated_checkbox(page: Page, *, has_financier: bool) -> None:
+    """Set **Is Vehicle Hypothecated?** to match finance (checked when ``has_financier``)."""
+    hyp_loc = None
+    for csel in _SCREEN3_HYP_CHECKBOX_SELECTORS:
+        try:
+            loc = page.locator(csel).first
+            loc.wait_for(state="visible", timeout=_DEFAULT_TIMEOUT_MS)
+            hyp_loc = loc
+            break
+        except Exception:
+            continue
+    if hyp_loc is None:
+        try:
+            hyp_loc = page.get_by_label(re.compile(r"hypothecat", re.I)).first
+            hyp_loc.wait_for(state="visible", timeout=3000)
+        except Exception:
+            _rto_log("WARNING: Is vehicle hypothecated checkbox not found")
+            return
+    try:
+        hyp_loc.scroll_into_view_if_needed(timeout=_DEFAULT_TIMEOUT_MS)
+        _pause()
+        checked = hyp_loc.is_checked()
+        if has_financier and not checked:
+            hyp_loc.click()
+            _rto_log("checkbox: Is vehicle hypothecated — checked (financier present)")
+        elif not has_financier and checked:
+            hyp_loc.click()
+            _rto_log("checkbox: Is vehicle hypothecated — unchecked (no financier)")
+        else:
+            _rto_log(
+                "skip: Is vehicle hypothecated already "
+                f"{'checked' if checked else 'unchecked'} (matches financier)"
+            )
+    except Exception as e:
+        _rto_log(f"WARNING: Is vehicle hypothecated checkbox: {e!s}")
+    _pause()
+
+
+def _screen_3_fill_financier_hypothecation_details(page: Page, data: dict) -> None:
+    """After hypothecation is checked — hypothecation type, financier name, from date, state, district, pin."""
+    financier = (data.get("financier") or "").strip()
+    if not financier:
+        return
+    invoice_date = (data.get("invoice_date_str") or data.get("billing_date_str") or "").strip()
+
+    if not _screen_3_pf_dropdown_chain(
+        page, _SCREEN3_HYP_TYPE_PF_WRAPPERS, "Hypothecation", label="Hypothecation Type"
+    ):
+        _screen_3_native_select_chain(
+            page, _SCREEN3_HYP_TYPE_NATIVE, "Hypothecation", label="Hypothecation Type"
+        )
+
+    fn_ok = _fill_first_matching(page, _SCREEN3_FINANCIER_NAME_INPUT, financier, label="Financier Name")
+    if not fn_ok:
+        try:
+            _type_typeahead(
+                page,
+                "input[id*='financierName'], input[id*='financer']",
+                financier,
+                label="Financier typeahead",
+                timeout=_DEFAULT_TIMEOUT_MS,
+            )
+        except PwTimeout:
+            _rto_log("WARNING: Financier Name not set")
+
+    if invoice_date:
+        _fill_first_matching(
+            page,
+            _SCREEN3_HYP_FROM_DATE_INPUT,
+            invoice_date,
+            label="Hypothecation From Date (invoice / billing date)",
+        )
+
+    st = (data.get("state") or "").strip()
+    if st:
+        st_disp = _init_cap_place_name(st)
+        if not _screen_3_pf_dropdown_chain(
+            page, _SCREEN3_FIN_STATE_PF_WRAPPERS, st_disp, label="Financier State"
+        ):
+            if not _screen_3_native_select_chain(
+                page, _SCREEN3_FIN_STATE_NATIVE, st_disp, label="Financier State"
+            ):
+                _screen_3_native_select_chain(
+                    page, _SCREEN3_FIN_STATE_NATIVE, st, label="Financier State (raw)"
+                )
+
+    dist = (data.get("district") or "").strip()
+    if dist:
+        d_disp = _init_cap_place_name(dist)
+        if not _screen_3_pf_dropdown_chain(
+            page, _SCREEN3_FIN_DISTRICT_PF_WRAPPERS, d_disp, label="Financier District"
+        ):
+            if not _screen_3_native_select_chain(
+                page, _SCREEN3_FIN_DISTRICT_NATIVE, d_disp, label="Financier District"
+            ):
+                _screen_3_native_select_chain(
+                    page, _SCREEN3_FIN_DISTRICT_NATIVE, dist, label="Financier District (raw)"
+                )
+
+    if data.get("pin"):
+        _fill_first_matching(page, _SCREEN3_FIN_PIN_INPUT, data["pin"], label="Financier Pincode")
+    _pause()
+
+
+def _screen_3c_nominee_add_details(page: Page, data: dict) -> None:
+    """**Add Nominee Details** Yes/No; when Yes, nominee name + relation (from queue / insurance_master)."""
+    nm_raw = (data.get("nominee_name") or "").strip()
+    rel_raw = (data.get("nominee_relationship") or "").strip()
+    rel_norm = normalize_nominee_relationship_value(rel_raw) if rel_raw else ""
+    want_nominee = bool(nm_raw or rel_norm)
+
+    try:
+        page.locator('[id="workbench_tabview:nomineeradiobtn1"]').first.scroll_into_view_if_needed(
+            timeout=_DEFAULT_TIMEOUT_MS
+        )
+    except Exception:
+        pass
+    _pause()
+
+    if not want_nominee:
+        try:
+            page.locator('input[name="workbench_tabview:nomineeradiobtn1"][value="N"]').first.click(
+                timeout=_DEFAULT_TIMEOUT_MS
+            )
+            _rto_log("radio: Add Nominee Details — No (no nominee name/relationship in queue data)")
+        except Exception as e:
+            _rto_log(f"WARNING: Add Nominee Details No: {e!s}")
+        _pause()
+        return
+
+    try:
+        page.locator('input[name="workbench_tabview:nomineeradiobtn1"][value="Y"]').first.click(
+            timeout=_DEFAULT_TIMEOUT_MS
+        )
+        _rto_log("radio: Add Nominee Details — Yes")
+    except Exception as e:
+        _rto_log(f"WARNING: Add Nominee Details Yes: {e!s}")
+        return
+    _pause()
+    _wait_for_progress_close_loop(page)
+
+    if nm_raw:
+        _fill_first_matching(page, _SCREEN3_NOMINEE_NAME_INPUT, nm_raw, label="Nominee Name")
+    if rel_norm:
+        rel_pat = re.compile(rf"^\s*{re.escape(rel_norm)}\s*$", re.I)
+        ok = _screen_3_pf_dropdown_chain(
+            page,
+            _SCREEN3_NOMINEE_RELATION_PF_WRAPPERS,
+            rel_norm,
+            label="Relation with nominee",
+            option_label_regex=rel_pat,
+        )
+        if not ok:
+            token = rel_norm.split()[0] if rel_norm.split() else rel_norm
+            if token:
+                sub_pat = re.compile(re.escape(token), re.I)
+                ok = _screen_3_pf_dropdown_chain(
+                    page,
+                    _SCREEN3_NOMINEE_RELATION_PF_WRAPPERS,
+                    token,
+                    label="Relation with nominee (first token)",
+                    option_label_regex=sub_pat,
+                )
+        if ok:
+            _close_pf_selectonemenu_overlay(page, "workbench_tabview:vm_rel1")
+        else:
+            if not _screen_3_native_select_chain(
+                page,
+                ('select[id="workbench_tabview:vm_rel1_input"]',),
+                rel_norm,
+                label="Relation with nominee (native)",
+            ):
+                _rto_log("WARNING: Relation with nominee not set")
+    _pause()
+
+
 def _screen_3c_insurance_information(page: Page, data: dict) -> None:
     """3c: On Hypothecation/Insurance tab — insurance fields, Series Type (STATE SERIES), IDV."""
     _rto_log("--- Screen 3c: Insurance (Hypothecation/Insurance Information tab) ---")
@@ -2919,6 +3113,8 @@ def _screen_3c_insurance_information(page: Page, data: dict) -> None:
                     )
                 except PwTimeout:
                     _rto_log("WARNING: Insurance Company not set")
+    elif _screen_3_insurance_company_already_set(page):
+        _rto_log("skip: Insurance Company already set on form (Vahan pre-fill; no insurer in queue data)")
 
     if _screen_3_input_already_has_value(page, _SCREEN3_POLICY_NO_INPUT):
         _rto_log("skip: Policy/Cover Note No. already set on form (Vahan pre-fill)")
@@ -2932,6 +3128,14 @@ def _screen_3c_insurance_information(page: Page, data: dict) -> None:
     else:
         _fill_first_matching(
             page, _SCREEN3_INSURANCE_FROM_INPUT, data.get("policy_from_str", ""), label="Insurance From"
+        )
+
+    if _screen_3_insurance_period_already_set(page):
+        _rto_log("skip: Insurance Period (in year) already set on form (Vahan pre-fill)")
+    else:
+        _rto_log(
+            "NOTE: Insurance Period (in year) not pre-filled — leaving as-is "
+            "(add insurance_period_label to queue data if automation must set it)"
         )
 
     # Series Type (*Please Select Series Type*) → **STATE SERIES** (skip if already STATE SERIES).
@@ -2985,6 +3189,13 @@ def _screen_3c_insurance_information(page: Page, data: dict) -> None:
     idv_s = "" if idv_v is None else str(idv_v).strip()
     if idv_s:
         _fill_first_matching(page, _SCREEN3_IDV_INPUT, idv_s, label="Insurance Declared Value")
+
+    financier = (data.get("financier") or "").strip()
+    _screen_3_set_vehicle_hypothecated_checkbox(page, has_financier=bool(financier))
+    if financier:
+        logger.info("fill_rto: Screen 3c — financier hypothecation details, financier=%s", financier[:40])
+        _screen_3_fill_financier_hypothecation_details(page, data)
+    _screen_3c_nominee_add_details(page, data)
 
 
 def _screen_3_click_save_file_movement(page: Page) -> None:
@@ -3076,92 +3287,8 @@ def _screen_3_scrape_generated_application_id(page: Page) -> str:
 
 
 def _screen_3d_hypothecation_save_confirm_scrape(page: Page, data: dict) -> str:
-    """3d: Hypothecation if financier; Save and File Movement; Yes / Yes; scrape app no.; OK."""
-    _rto_log("--- Screen 3d: Hypothecation (if financier), Save and File Movement, popups ---")
-    financier = (data.get("financier") or "").strip()
-    invoice_date = (data.get("invoice_date_str") or data.get("billing_date_str") or "").strip()
-
-    if financier:
-        logger.info("fill_rto: Screen 3d — hypothecation, financier=%s", financier[:30])
-        hyp_ok = False
-        for csel in _SCREEN3_HYP_CHECKBOX_SELECTORS:
-            try:
-                loc = page.locator(csel).first
-                loc.wait_for(state="visible", timeout=_DEFAULT_TIMEOUT_MS)
-                loc.scroll_into_view_if_needed(timeout=_DEFAULT_TIMEOUT_MS)
-                if not loc.is_checked():
-                    loc.click()
-                hyp_ok = True
-                _rto_log("checkbox: Is vehicle hypothecated — checked")
-                break
-            except Exception:
-                continue
-        if not hyp_ok:
-            try:
-                page.get_by_label(re.compile(r"hypothecat", re.I)).first.click(timeout=_DEFAULT_TIMEOUT_MS)
-                _rto_log("checkbox: Is vehicle hypothecated — label click")
-            except Exception:
-                _rto_log("WARNING: Is vehicle hypothecated checkbox not set")
-        _pause()
-
-        if not _screen_3_pf_dropdown_chain(
-            page, _SCREEN3_HYP_TYPE_PF_WRAPPERS, "Hypothecation", label="Hypothecation Type"
-        ):
-            _screen_3_native_select_chain(
-                page, _SCREEN3_HYP_TYPE_NATIVE, "Hypothecation", label="Hypothecation Type"
-            )
-
-        fn_ok = _fill_first_matching(
-            page, _SCREEN3_FINANCIER_NAME_INPUT, financier, label="Financier Name"
-        )
-        if not fn_ok:
-            try:
-                _type_typeahead(
-                    page,
-                    "input[id*='financierName'], input[id*='financer']",
-                    financier,
-                    label="Financier typeahead",
-                    timeout=_DEFAULT_TIMEOUT_MS,
-                )
-            except PwTimeout:
-                _rto_log("WARNING: Financier Name not set")
-
-        if invoice_date:
-            _fill_first_matching(
-                page,
-                _SCREEN3_HYP_FROM_DATE_INPUT,
-                invoice_date,
-                label="Hypothecation From Date (invoice / billing date)",
-            )
-
-        st = (data.get("state") or "").strip()
-        if st:
-            st_disp = _init_cap_place_name(st)
-            if not _screen_3_pf_dropdown_chain(
-                page, _SCREEN3_FIN_STATE_PF_WRAPPERS, st_disp, label="Financier State"
-            ):
-                if not _screen_3_native_select_chain(
-                    page, _SCREEN3_FIN_STATE_NATIVE, st_disp, label="Financier State"
-                ):
-                    _screen_3_native_select_chain(
-                        page, _SCREEN3_FIN_STATE_NATIVE, st, label="Financier State (raw)"
-                    )
-
-        dist = (data.get("district") or "").strip()
-        if dist:
-            d_disp = _init_cap_place_name(dist)
-            if not _screen_3_pf_dropdown_chain(
-                page, _SCREEN3_FIN_DISTRICT_PF_WRAPPERS, d_disp, label="Financier District"
-            ):
-                if not _screen_3_native_select_chain(
-                    page, _SCREEN3_FIN_DISTRICT_NATIVE, d_disp, label="Financier District"
-                ):
-                    _screen_3_native_select_chain(
-                        page, _SCREEN3_FIN_DISTRICT_NATIVE, dist, label="Financier District (raw)"
-                    )
-
-        if data.get("pin"):
-            _fill_first_matching(page, _SCREEN3_FIN_PIN_INPUT, data["pin"], label="Financier Pincode")
+    """3d: Save and File Movement; Yes / Yes; scrape app no.; OK. (Hypothecation / nominee filled in 3c.)"""
+    _rto_log("--- Screen 3d: Save and File Movement, confirmation popups, scrape app no. ---")
 
     _screen_3_click_save_file_movement(page)
     _wait_for_progress_close_loop(page)
@@ -3238,7 +3365,7 @@ def _screen_3(page: Page, data: dict, *, skip_home: bool, skip_entry: bool = Fal
     _screen_3_open_hypothecation_insurance_tab(page)
     _screen_3c_insurance_information(page, data)
 
-    # 3d: Hypothecation (if financier), Save and File Movement, Yes / Yes, scrape app no., OK.
+    # 3d: Save and File Movement, Yes / Yes, scrape app no., OK (hypothecation / nominee handled in 3c).
     return _screen_3d_hypothecation_save_confirm_scrape(page, data)
 
 
@@ -3508,6 +3635,8 @@ def fill_rto_row(row: dict) -> dict:
         "billing_date_str": _billing_fmt,
         "invoice_date_str": _billing_fmt,
         "policy_from_str": _fmt_date(row.get("policy_from")),
+        "nominee_name": (row.get("nominee_name") or "").strip(),
+        "nominee_relationship": (row.get("nominee_relationship") or "").strip(),
     }
 
     mob_fn = _mobile_digits_for_filename(data.get("mobile") or row.get("customer_mobile"))

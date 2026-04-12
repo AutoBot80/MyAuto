@@ -47,7 +47,9 @@ COALESCE(dr.rto_name, 'RTO' || sm.dealer_id::text) AS dealer_rto,
 im.insurer,
 im.policy_num,
 im.policy_from,
-im.idv
+im.idv,
+im.nominee_name,
+im.nominee_relationship
 """.strip()
 
 JOIN_CLAUSE = """
