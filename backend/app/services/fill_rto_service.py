@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 # --- Testing / build: edit here only (not .env). Use 0 / False / "" for production full SOP. ---
 # ``RTO_FILL_SKIP_TO_SCREEN``: 0 = run all screens; 1–6 = start at that screen (skips dealer-home reset and earlier).
-RTO_FILL_SKIP_TO_SCREEN = 3
+RTO_FILL_SKIP_TO_SCREEN = 4
 # Screen 3: skip **Home** (you are already on ``home.xhtml`` with the grid). Also on when SKIP is 3.
 RTO_FILL_SCREEN3_SKIP_HOME = False
 # Screen 3: skip **Entry** — only with ``skip_home``; go straight to **Vehicle Details** sub-tab (already past Entry on the form).
@@ -3521,60 +3521,122 @@ def _screen_3(page: Page, data: dict, *, skip_home: bool, skip_entry: bool = Fal
 
 
 def _screen_4(page: Page) -> None:
-    """Screen 4: Verify, File Movement, Dealer Document Upload."""
+    """Screen 4: Verify → progress wheel → Save Options → File Movement → Save → Yes → Dealer Document Upload → progress wheel."""
     _set_screen("Screen 4")
     logger.info("fill_rto: Screen 4 — Verify & Document Upload nav")
     _rto_log("--- Screen 4: Verify, Save Options / File Movement, Dealer Document Upload ---")
 
-    # Scroll down and click Verify
-    page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-    _pause()
-    _click(page, "input[value='Verify'], button:has-text('Verify')", label="Verify", timeout=_DEFAULT_TIMEOUT_MS)
-    _pause()
-    _wait_for_progress_close(page)
-
-    # Save Options > File Movement
+    # 4a: Scroll down and click **Verify**
     page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
     _pause()
 
-    try:
-        _click(
-            page,
-            "input[value*='Save'], button:has-text('Save Options'), a:has-text('Save Options')",
-            label="Save Options",
-            timeout=_DEFAULT_TIMEOUT_MS,
-        )
-        _pause()
-        _click(
-            page,
-            "a:has-text('File Movement'), [id*='fileMovement'], button:has-text('File Movement')",
-            label="File Movement menu item",
-            timeout=_DEFAULT_TIMEOUT_MS,
-        )
-    except PwTimeout:
-        _click(
-            page,
-            "button:has-text('File Movement'), input[value*='File Movement']",
-            label="File Movement direct",
-            timeout=_DEFAULT_TIMEOUT_MS,
-        )
-
-    _pause()
-
-    # Popups: State -> Save, then Yes
-    _dismiss_dialog(page, "Save", timeout=_DEFAULT_TIMEOUT_MS)
-    _pause()
-    _dismiss_dialog(page, "Yes", timeout=_DEFAULT_TIMEOUT_MS)
-    _pause()
-
-    # Dealer Document Upload
-    _click(
-        page,
-        "input[value*='Dealer Document Upload'], button:has-text('Dealer Document Upload'), a:has-text('Dealer Document Upload')",
-        label="Dealer Document Upload",
+    verify_selectors = (
+        "button:has-text('Verify')",
+        "input[value='Verify']",
+        "input[type='submit'][value*='Verify']",
+        "a:has-text('Verify')",
     )
+    clicked = False
+    for sel in verify_selectors:
+        try:
+            loc = page.locator(sel).first
+            loc.wait_for(state="visible", timeout=_FIRST_TRY_MS)
+            loc.scroll_into_view_if_needed(timeout=_FIRST_TRY_MS)
+            loc.click(timeout=_FIRST_TRY_MS)
+            _rto_log(f"click: Verify ({sel})")
+            clicked = True
+            break
+        except Exception:
+            continue
+    if not clicked:
+        _rto_log("WARNING: Verify button not found with fast selectors, trying broad search")
+        _click(page, "button:has-text('Verify'), input[value='Verify']", label="Verify")
+
+    # Progress wheel popup — closes by itself
     _pause()
-    _wait_for_progress_close(page)
+    _wait_for_progress_close_loop(page)
+
+    # 4b: Scroll to bottom, click **Save Options**, pick **File Movement**
+    page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+    _pause()
+
+    save_opts_selectors = (
+        "button:has-text('Save Options')",
+        "a:has-text('Save Options')",
+        "input[value*='Save Options']",
+    )
+    clicked = False
+    for sel in save_opts_selectors:
+        try:
+            loc = page.locator(sel).first
+            loc.wait_for(state="visible", timeout=_FIRST_TRY_MS)
+            loc.scroll_into_view_if_needed(timeout=_FIRST_TRY_MS)
+            loc.click(timeout=_FIRST_TRY_MS)
+            _rto_log(f"click: Save Options ({sel})")
+            clicked = True
+            break
+        except Exception:
+            continue
+    if not clicked:
+        _click(
+            page,
+            "button:has-text('Save Options'), input[value*='Save']",
+            label="Save Options",
+        )
+    _pause()
+
+    # Pick "File Movement" from the menu
+    fm_selectors = (
+        "a:has-text('File Movement')",
+        "[id*='fileMovement']",
+        "button:has-text('File Movement')",
+        "input[value*='File Movement']",
+    )
+    clicked = False
+    for sel in fm_selectors:
+        try:
+            loc = page.locator(sel).first
+            loc.wait_for(state="visible", timeout=_FIRST_TRY_MS)
+            loc.click(timeout=_FIRST_TRY_MS)
+            _rto_log(f"click: File Movement ({sel})")
+            clicked = True
+            break
+        except Exception:
+            continue
+    if not clicked:
+        _click(page, "a:has-text('File Movement')", label="File Movement")
+    _pause()
+
+    # 4c: Click on State → popup with **Save** button → another popup → **Yes**
+    _dismiss_dialog(page, "Save", timeout=_LOOP_BUDGET_MS)
+    _pause()
+    _dismiss_dialog(page, "Yes", timeout=_LOOP_BUDGET_MS)
+    _pause()
+
+    # 4d: Click **Dealer Document Upload**
+    ddu_selectors = (
+        "button:has-text('Dealer Document Upload')",
+        "input[value*='Dealer Document Upload']",
+        "a:has-text('Dealer Document Upload')",
+    )
+    clicked = False
+    for sel in ddu_selectors:
+        try:
+            loc = page.locator(sel).first
+            loc.wait_for(state="visible", timeout=_FIRST_TRY_MS)
+            loc.scroll_into_view_if_needed(timeout=_FIRST_TRY_MS)
+            loc.click(timeout=_FIRST_TRY_MS)
+            _rto_log(f"click: Dealer Document Upload ({sel})")
+            clicked = True
+            break
+        except Exception:
+            continue
+    if not clicked:
+        _click(page, "button:has-text('Dealer Document Upload')", label="Dealer Document Upload")
+
+    # Progress wheel — closes by itself
+    _pause()
+    _wait_for_progress_close_loop(page)
 
 
 def _screen_5(page: Page, docs: dict[str, Path | None]) -> None:
@@ -3851,6 +3913,8 @@ def fill_rto_row(row: dict) -> dict:
             extra = ""
             if skip_from == 3:
                 extra = " Screen 3: skip Home + Entry → Vehicle Details sub-tab first."
+            elif skip_from == 4:
+                extra = " Screen 4: Verify → Save Options/File Movement → Dealer Document Upload."
             _rto_log(
                 f"TEMP SKIP: RTO_FILL_SKIP_TO_SCREEN={skip_from} — start at Screen {skip_from} "
                 f"(skipped: dealer-home reset + screens 1..{skip_from - 1}){extra}"
