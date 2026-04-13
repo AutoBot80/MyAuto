@@ -174,18 +174,48 @@ def extract_page_text_from_pre_ocr_blocks(full_ocr_text: str, page_idx_0based: i
     return (m.group(1).strip() if m else "")
 
 
-def _aadhar_front_face_field_score(text: str) -> int:
+def aadhar_text_has_dob_and_gender(text: str) -> bool:
     """
-    Score how much OCR text looks like the **front** face: DOB and gender lines are typical on front;
-    the back usually lacks both (address / uidai URL instead).
+    Aadhaar **front** (photo side) reliably shows **DOB** and **Male/Female** on the same face;
+    the **back** (address / uidai) usually does not. Used to assign front vs back when OCR order is wrong.
     """
     t = text or ""
-    s = 0
-    if re.search(r"(?i)d\.?o\.?b\.|date\s+of\s+birth|year\s+of\s+birth", t):
-        s += 2
-    if re.search(r"(?i)\b(male|female)\b|\bm\s*/\s*f\b|\bf\s*/\s*m\b", t):
-        s += 2
-    return s
+    if not t.strip():
+        return False
+    has_dob = bool(
+        re.search(r"(?i)d\.?o\.?b\.|date\s+of\s+birth|year\s+of\s+birth", t)
+    )
+    has_gender = bool(
+        re.search(r"(?i)\b(male|female)\b|\bm\s*/\s*f\b|\bf\s*/\s*m\b", t)
+    )
+    return has_dob and has_gender
+
+
+def should_swap_aadhar_pages_by_dob_gender(text_at_front_slot: str, text_at_back_slot: str) -> bool | None:
+    """
+    Decide if front/back **slots** should be swapped using DOB + Male/Female = front.
+
+    Returns:
+        ``False`` — keep order (first arg is really the front face).
+        ``True`` — swap (second arg is the front face).
+        ``None`` — inconclusive; caller may fall back to uidai/govt markers.
+    """
+    f_ok = aadhar_text_has_dob_and_gender(text_at_front_slot)
+    b_ok = aadhar_text_has_dob_and_gender(text_at_back_slot)
+    if f_ok and not b_ok:
+        return False
+    if b_ok and not f_ok:
+        return True
+    if f_ok and b_ok:
+        # Rare OCR noise: prefer the side **without** uidai.gov.in as the photo front.
+        uf = bool(_AADHAR_BACK_MARKER.search(text_at_front_slot or ""))
+        ub = bool(_AADHAR_BACK_MARKER.search(text_at_back_slot or ""))
+        if uf and not ub:
+            return True
+        if ub and not uf:
+            return False
+        return None
+    return None
 
 
 def should_swap_aadhar_front_back_indices(text_classified_front: str, text_classified_back: str) -> bool:
@@ -199,31 +229,22 @@ def should_swap_aadhar_front_back_indices(text_classified_front: str, text_class
     return bool(has_uidai_f and not has_gov_f and has_gov_b and not has_uidai_b)
 
 
-def should_swap_aadhar_by_face_fields(text_classified_front: str, text_classified_back: str) -> bool:
-    """
-    Front card typically shows DOB + Male/Female; back does not. If the page labeled *back* has stronger
-    front-face signals than the page labeled *front*, indices are likely swapped.
-    """
-    sa = _aadhar_front_face_field_score(text_classified_front)
-    sb = _aadhar_front_face_field_score(text_classified_back)
-    if sb < 3 or (sb - sa) < 2:
-        return False
-    return bool(sa <= 2 and sb > sa)
-
-
 def maybe_swap_aadhar_page_indices(page_type_to_idx: dict[str, int], full_ocr_text: str) -> None:
-    """Mutates ``page_type_to_idx`` when front/back page indices contradict Aadhaar OCR markers."""
+    """Mutates ``page_type_to_idx`` when front/back slots disagree with DOB/gender (front) vs the other (back)."""
     ia = page_type_to_idx.get(PAGE_TYPE_AADHAR)
     ib = page_type_to_idx.get(PAGE_TYPE_AADHAR_BACK)
     if ia is None or ib is None or ia == ib:
         return
     ta = extract_page_text_from_pre_ocr_blocks(full_ocr_text, ia)
     tb = extract_page_text_from_pre_ocr_blocks(full_ocr_text, ib)
-    if should_swap_aadhar_front_back_indices(ta, tb) or should_swap_aadhar_by_face_fields(ta, tb):
+    by_dob = should_swap_aadhar_pages_by_dob_gender(ta, tb)
+    if by_dob is True or (by_dob is None and should_swap_aadhar_front_back_indices(ta, tb)):
         page_type_to_idx[PAGE_TYPE_AADHAR] = ib
         page_type_to_idx[PAGE_TYPE_AADHAR_BACK] = ia
+        reason = "dob_gender" if by_dob is not None else "uidai_govt_markers"
         logger.info(
-            "Swapped Aadhaar front/back page indices (pages %s <-> %s) after marker/face-field check",
+            "Swapped Aadhaar front/back page indices (pages %s <-> %s) [%s]",
             ia + 1,
             ib + 1,
+            reason,
         )

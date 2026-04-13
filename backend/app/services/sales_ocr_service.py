@@ -931,19 +931,19 @@ def _compile_details_sheet_fragment(
     insurance = _map_key_value_pairs_to_insurance(key_value_pairs)
     details_customer = _map_key_value_pairs_to_details_customer(key_value_pairs)
     details_customer_name = _extract_details_customer_name(key_value_pairs)
-    if result.get("full_text"):
-        from_vehicle = _parse_vehicle_from_full_text(result["full_text"])
+    if result.get("full_text") or result.get("tables"):
+        from_vehicle = _parse_vehicle_from_full_text(result["full_text"] or "")
         for k, v in from_vehicle.items():
             if v and not vehicle.get(k):
                 vehicle[k] = v
-        from_full = _parse_insurance_from_full_text(result["full_text"])
-        if from_full.get("customer_name") and not details_customer_name:
-            details_customer_name = from_full["customer_name"]
-        for k, v in from_full.items():
-            if k == "customer_name":
-                continue
-            if v and not insurance.get(k):
-                insurance[k] = v
+        extra = _merge_textract_details_fallbacks(
+            insurance,
+            details_customer,
+            full_text=result.get("full_text"),
+            tables=result.get("tables"),
+        )
+        if extra.get("customer_name") and not details_customer_name:
+            details_customer_name = extra["customer_name"]
     if details_customer.get("name") and not details_customer_name:
         details_customer_name = details_customer.get("name")
 
@@ -2528,6 +2528,188 @@ def _full_text_from_sales_detail_sheet_heading(text: str) -> str:
     return text.strip()
 
 
+# Textract FORMS may omit checkbox ticks on scanned PDFs; LINE ``full_text`` + TABLE cells still carry marks.
+_CHECKBOX_MERGE_FIELDS = frozenset(
+    {"profession", "marital_status", "nominee_gender", "nominee_relationship", "payment_mode"}
+)
+
+
+def _checkbox_field_fully_resolved(field: str, val: str | None) -> bool:
+    """True when ``val`` already parsed to a usable checkbox / normalized value for ``field``."""
+    if val is None or not str(val).strip():
+        return False
+    v = str(val).strip()
+    if _extract_checkbox_selection_value(v, field) is not None:
+        return True
+    if field == "profession":
+        return bool(_sanitize_details_profession_value(v))
+    if field == "marital_status":
+        return bool(_normalize_details_marital_status_value(v))
+    if field == "nominee_gender":
+        return bool(_normalize_nominee_gender_sheet_value(v))
+    if field == "nominee_relationship":
+        return bool(normalize_nominee_relationship_value(v))
+    if field == "payment_mode":
+        return bool(_normalize_payment_mode_sheet_value(v))
+    return bool(v)
+
+
+def _parse_sales_detail_checkbox_regions(full_text: str) -> dict[str, str]:
+    """
+    Scan a window after each printed label — checkbox ticks often appear in LINE text without FORMS pairs.
+    """
+    out: dict[str, str] = {}
+    if not full_text or not str(full_text).strip():
+        return out
+    text = _full_text_from_sales_detail_sheet_heading(full_text)
+    text = text.replace("\r", "\n")
+    # (regex after heading, field)
+    regions: list[tuple[str, str]] = [
+        (r"(?i)profession(?:\s+of\s+customer)?", "profession"),
+        (r"(?i)(?:customer\s+)?marital\s*status", "marital_status"),
+        (r"(?i)nominee\s*relationship(?:\s*with\s*customer)?", "nominee_relationship"),
+        (r"(?i)relationship\s*with\s*customer", "nominee_relationship"),
+        (r"(?i)nominee\s*gender|gender\s*of\s*nominee|sex\s*of\s*nominee", "nominee_gender"),
+    ]
+    for pat, field in regions:
+        if field in out:
+            continue
+        for m in re.finditer(pat, text):
+            region = text[m.start() : m.start() + 700]
+            cb = _extract_checkbox_selection_value(region, field)
+            if cb:
+                out[field] = cb
+                break
+            tail = text[m.end() : m.end() + 400]
+            cb = _extract_checkbox_selection_value(tail, field)
+            if cb:
+                out[field] = cb
+                break
+    return out
+
+
+def _parse_sales_detail_checkbox_from_tables(tables: list[list[list[str]]]) -> dict[str, str]:
+    """Use TABLE rows as a single string — checkbox rows are often emitted as tables, not KEY_VALUE_SET."""
+    out: dict[str, str] = {}
+    for table in tables or []:
+        for row in table:
+            cells = [str(c or "").strip() for c in row if c and str(c).strip()]
+            if not cells:
+                continue
+            joined = " ".join(cells)
+            if len(joined) < 6:
+                continue
+            low = joined.lower()
+            if "profession" in low and "profession" not in out:
+                cb = _extract_checkbox_selection_value(joined, "profession")
+                if cb:
+                    out["profession"] = cb
+            if "marital" in low and "status" in low and "marital_status" not in out:
+                cb = _extract_checkbox_selection_value(joined, "marital_status")
+                if cb:
+                    out["marital_status"] = cb
+            if (
+                ("nominee" in low and "relationship" in low)
+                or ("relationship" in low and "customer" in low)
+            ) and "nominee_relationship" not in out:
+                cb = _extract_checkbox_selection_value(joined, "nominee_relationship")
+                if cb:
+                    out["nominee_relationship"] = cb
+            if "nominee" in low and "gender" in low and "nominee_gender" not in out:
+                cb = _extract_checkbox_selection_value(joined, "nominee_gender")
+                if cb:
+                    out["nominee_gender"] = cb
+    return out
+
+
+def _normalize_scanned_checkbox_candidate(field: str, cand: str) -> str:
+    if not cand or not str(cand).strip():
+        return ""
+    v = _normalize_kv_value_for_checkbox_fields(field, cand.strip())
+    if field == "profession":
+        sp = _sanitize_details_profession_value(v)
+        return sp if sp else ""
+    if field == "marital_status":
+        ms = _normalize_details_marital_status_value(v)
+        return ms if ms else ""
+    if field == "nominee_gender":
+        ng = _normalize_nominee_gender_sheet_value(v)
+        return ng if ng else ""
+    if field == "nominee_relationship":
+        nr = normalize_nominee_relationship_value(v) or v
+        return nr.strip()
+    if field == "payment_mode":
+        pm = _normalize_payment_mode_sheet_value(v)
+        return pm if pm else ""
+    return v.strip()
+
+
+def _apply_sales_detail_checkbox_scan(
+    insurance: dict[str, str],
+    details_customer: dict[str, str],
+    *,
+    full_text: str,
+    tables: list | None,
+) -> None:
+    """Prefer region/table parses when FORMS values are missing or did not resolve checkboxes."""
+    scan: dict[str, str] = {}
+    if full_text and str(full_text).strip():
+        scan.update(_parse_sales_detail_checkbox_regions(full_text))
+    if tables:
+        for k, v in _parse_sales_detail_checkbox_from_tables(tables).items():
+            if v and (k not in scan or not scan[k]):
+                scan[k] = v
+    for field, cand in scan.items():
+        if not cand:
+            continue
+        prev = insurance.get(field) or details_customer.get(field)
+        if prev and _checkbox_field_fully_resolved(field, prev):
+            continue
+        norm = _normalize_scanned_checkbox_candidate(field, cand)
+        if not norm:
+            continue
+        insurance[field] = norm
+        details_customer[field] = norm
+
+
+def _merge_textract_details_fallbacks(
+    insurance: dict[str, str],
+    details_customer: dict[str, str],
+    *,
+    full_text: str | None,
+    tables: list | None = None,
+) -> dict[str, str]:
+    """
+    Merge LINE/table fallbacks into ``insurance`` (and checkbox fields into ``details_customer``).
+
+    Returns extra keys from the full-text parser that are not stored on ``insurance`` (e.g. ``customer_name``).
+    """
+    extra: dict[str, str] = {}
+    ft = (full_text or "").strip()
+    from_full: dict[str, str] = _parse_insurance_from_full_text(ft) if ft else {}
+    for k, v in from_full.items():
+        if k == "customer_name":
+            if v:
+                extra["customer_name"] = v.strip()
+            continue
+        if not v:
+            continue
+        if k in _CHECKBOX_MERGE_FIELDS:
+            prev = insurance.get(k)
+            if prev and _checkbox_field_fully_resolved(k, prev):
+                continue
+        elif insurance.get(k):
+            continue
+        insurance[k] = v.strip()
+    _apply_sales_detail_checkbox_scan(
+        insurance,
+        details_customer,
+        full_text=ft,
+        tables=tables,
+    )
+    return extra
+
+
 def _parse_insurance_from_full_text(full_text: str) -> dict[str, str]:
     """Try to extract insurance/customer extras from full text (fallback when not in key-value pairs)."""
     out: dict[str, str] = {}
@@ -3391,19 +3573,19 @@ class OcrService:
             insurance = _map_key_value_pairs_to_insurance(key_value_pairs)
             details_customer = _map_key_value_pairs_to_details_customer(key_value_pairs)
             details_customer_name = _extract_details_customer_name(key_value_pairs)
-            if result.get("full_text"):
-                from_vehicle = _parse_vehicle_from_full_text(result["full_text"])
+            if result.get("full_text") or result.get("tables"):
+                from_vehicle = _parse_vehicle_from_full_text(result["full_text"] or "")
                 for k, v in from_vehicle.items():
                     if v and not vehicle.get(k):
                         vehicle[k] = v
-                from_full = _parse_insurance_from_full_text(result["full_text"])
-                if from_full.get("customer_name") and not details_customer_name:
-                    details_customer_name = from_full["customer_name"]
-                for k, v in from_full.items():
-                    if k == "customer_name":
-                        continue  # Used for details_customer_name, not insurance
-                    if v and not insurance.get(k):
-                        insurance[k] = v
+                extra = _merge_textract_details_fallbacks(
+                    insurance,
+                    details_customer,
+                    full_text=result.get("full_text"),
+                    tables=result.get("tables"),
+                )
+                if extra.get("customer_name") and not details_customer_name:
+                    details_customer_name = extra["customer_name"]
             json_path = _json_output_path(self.ocr_output_dir, subfolder)
             json_path.parent.mkdir(parents=True, exist_ok=True)
             customer = {}

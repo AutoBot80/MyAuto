@@ -53,3 +53,26 @@ def append_ocr_extraction_log(
             f.write(line)
     except OSError as e:
         logger.debug("ocr_extraction_log: could not append %s: %s", phase, e)
+
+
+def append_pre_ocr_step_lines(
+    ocr_output_dir: Path | None,
+    subfolder: str,
+    steps: list[tuple[str, int | None, str]],
+) -> None:
+    """
+    Append multiple **pre** lines — typically one Tesseract/classify sub-step per line.
+
+    Each item is ``(step_id, elapsed_ms | None, detail)``. When ``elapsed_ms`` is ``None``, it is omitted.
+    Every line gets its own IST timestamp when written.
+    """
+    if not ocr_output_dir or not str(subfolder or "").strip() or not steps:
+        return
+    for step_id, ms, detail in steps:
+        parts: list[str] = [f"step={step_id}"]
+        if ms is not None:
+            parts.append(f"elapsed_ms={ms}")
+        d = (detail or "").strip()
+        if d:
+            parts.append(d)
+        append_ocr_extraction_log(ocr_output_dir, subfolder, "pre", " ".join(parts))
