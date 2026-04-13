@@ -31,7 +31,7 @@ async def upload_scans_v2(
     financing_doc: UploadFile | None = File(None),
     dealer_id: int | None = Form(None, description="Dealer ID; uses token dealer if omitted"),
 ) -> dict:
-    """Subfolder = mobile_ddmmyy; files saved as Aadhar.jpg, Aadhar_back.jpg, Details.jpg; optional Insurance.jpg, Financing.jpg."""
+    """Subfolder = mobile_ddmmyy; files saved as Aadhar_front.jpg, Aadhar_back.jpg, Details.jpg; optional Insurance.jpg, Financing.jpg."""
     did = resolve_dealer_id(principal, dealer_id)
     return await upload_service.save_and_queue_v2(
         mobile, aadhar_scan, aadhar_back, sales_detail, insurance_sheet, financing_doc, dealer_id=did

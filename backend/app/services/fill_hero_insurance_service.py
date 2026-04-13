@@ -259,16 +259,20 @@ def _kyc_local_scan_paths_from_uploaded_scans(
 ) -> list[str] | None:
     """
     Resolve KYC upload files from the client **Uploaded scans** tree (``get_uploads_dir``), same layout as
-    ``UploadService.save_and_queue_v2``: ``Aadhar.jpg`` (front), ``Aadhar_back.jpg`` (rear). The portal’s
+    ``UploadService.save_and_queue_v2``: ``Aadhar_front.jpg`` (front), ``Aadhar_back.jpg`` (rear). The portal’s
     third slot (customer photo) reuses the front image.
 
     Returns three absolute file paths, or ``None`` if the folder or required scans are missing.
     """
+    from app.services.page_classifier import FILENAME_AADHAR_FRONT, LEGACY_AADHAR_FRONT_JPG
+
     if not subfolder or not str(subfolder).strip():
         return None
     did = int(dealer_id) if dealer_id is not None else int(DEALER_ID)
     base = get_uploads_dir(did) / safe_subfolder_name(subfolder)
-    front = base / "Aadhar.jpg"
+    front = base / FILENAME_AADHAR_FRONT
+    if not front.is_file():
+        front = base / LEGACY_AADHAR_FRONT_JPG
     back = base / "Aadhar_back.jpg"
     if not front.is_file():
         logger.info(
@@ -4357,7 +4361,7 @@ def _kyc_proceed_or_upload(
         missing = [p for p in kyc_local_scan_paths[:3] if not Path(p).is_file()]
         if missing:
             return (
-                "KYC upload requires Aadhar.jpg and Aadhar_back.jpg under Uploaded scans for this subfolder; "
+                "KYC upload requires Aadhar_front.jpg (or Aadhar.jpg) and Aadhar_back.jpg under Uploaded scans for this subfolder; "
                 f"missing or not readable: {', '.join(missing[:3])}"
             )
         use_local = True
@@ -8227,7 +8231,7 @@ def run_fill_insurance_only(
                 ocr_output_dir,
                 subfolder,
                 "NOTE",
-                "KYC uploads: using Uploaded scans (Aadhar.jpg, Aadhar_back.jpg; third slot reuses front).",
+                "KYC uploads: using Uploaded scans (Aadhar_front.jpg / Aadhar.jpg, Aadhar_back.jpg; third slot reuses front).",
             )
         page, open_error = get_or_open_site_page(
             insurance_base_url, "Insurance", require_login_on_open=False

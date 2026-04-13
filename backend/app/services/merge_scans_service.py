@@ -1,15 +1,27 @@
 """
 Merge raw scans (Aadhar back, Insurance, Aadhar front, Details sheet) into a combined PDF.
-Order: Aadhar_back.jpg, Insurance.jpg, Aadhar.jpg, Details.jpg
+Order: Aadhar_back, Insurance, Aadhar front, Sales detail (PDF or image).
 Output: Bulk Upload/Input Scans/<subfolder>/Scans.pdf
 """
 import logging
 from pathlib import Path
 
+from app.services.page_classifier import (
+    FILENAME_AADHAR_FRONT,
+    FILENAME_SALES_DETAIL_SHEET_PDF,
+    LEGACY_AADHAR_FRONT_JPG,
+    LEGACY_DETAILS_JPG,
+)
+
 logger = logging.getLogger(__name__)
 
-# File order for merged PDF (as in user request)
-MERGE_ORDER = ["Aadhar_back.jpg", "Insurance.jpg", "Aadhar.jpg", "Details.jpg"]
+# First existing file in each slot wins (order within slot: preferred name first)
+MERGE_ORDER_SLOTS: list[list[str]] = [
+    ["Aadhar_back.jpg"],
+    ["Insurance.jpg"],
+    [FILENAME_AADHAR_FRONT, LEGACY_AADHAR_FRONT_JPG],
+    [FILENAME_SALES_DETAIL_SHEET_PDF, LEGACY_DETAILS_JPG],
+]
 
 
 def merge_scans_for_subfolder(
@@ -24,12 +36,17 @@ def merge_scans_for_subfolder(
     import fitz
 
     files_to_merge: list[Path] = []
-    for name in MERGE_ORDER:
-        p = subfolder_path / name
-        if p.exists():
-            files_to_merge.append(p)
+    for slot in MERGE_ORDER_SLOTS:
+        found: Path | None = None
+        for name in slot:
+            p = subfolder_path / name
+            if p.exists():
+                found = p
+                break
+        if found is not None:
+            files_to_merge.append(found)
         else:
-            logger.debug("merge_scans: skip missing %s in %s", name, subfolder_path)
+            logger.debug("merge_scans: skip missing slot %s in %s", slot, subfolder_path)
 
     if not files_to_merge:
         logger.warning("merge_scans: no files to merge in %s", subfolder_path)

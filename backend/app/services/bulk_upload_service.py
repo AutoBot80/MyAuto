@@ -19,13 +19,26 @@ from app.config import (
     get_ocr_output_dir,
     get_uploads_dir,
 )
+from app.services.page_classifier import (
+    FILENAME_AADHAR_FRONT,
+    FILENAME_SALES_DETAIL_SHEET_PDF,
+    LEGACY_AADHAR_FRONT_JPG,
+    LEGACY_DETAILS_JPG,
+)
 from app.repositories.bulk_loads import BulkLoadsRepository
 from app.repositories import rto_payment_details as rto_queue_repo
 
 logger = logging.getLogger(__name__)
 
 # Expected filenames from page classification (order no longer fixed)
-CLASSIFIED_FILENAMES = ["Aadhar_back.jpg", "Insurance.jpg", "Aadhar.jpg", "Details.jpg"]
+CLASSIFIED_FILENAMES = [
+    "Aadhar_back.jpg",
+    "Insurance.jpg",
+    FILENAME_AADHAR_FRONT,
+    LEGACY_AADHAR_FRONT_JPG,
+    FILENAME_SALES_DETAIL_SHEET_PDF,
+    LEGACY_DETAILS_JPG,
+]
 
 
 def _parse_amount(value: object | None) -> float | None:
@@ -121,12 +134,21 @@ def process_bulk_pdf(
             and source_path.resolve() == uploads_subdir.resolve()
             and (
                 (
-                    (uploads_subdir / "Aadhar.jpg").exists()
-                    and (uploads_subdir / "Details.jpg").exists()
+                    (
+                        (uploads_subdir / FILENAME_AADHAR_FRONT).exists()
+                        or (uploads_subdir / LEGACY_AADHAR_FRONT_JPG).exists()
+                    )
+                    and (
+                        (uploads_subdir / FILENAME_SALES_DETAIL_SHEET_PDF).exists()
+                        or (uploads_subdir / LEGACY_DETAILS_JPG).exists()
+                    )
                 )
                 or (
                     (for_ocr / "Aadhar.pdf").is_file()
-                    and (for_ocr / "Details.pdf").is_file()
+                    and (
+                        (for_ocr / FILENAME_SALES_DETAIL_SHEET_PDF).is_file()
+                        or (for_ocr / "Details.pdf").is_file()
+                    )
                 )
             )
         )
@@ -137,8 +159,17 @@ def process_bulk_pdf(
         else:
             saved = _split_pdf_to_images(source_path, uploads_subdir)
         # Need at least Details.jpg and Aadhar.jpg for Add Customer
-        has_details = (uploads_subdir / "Details.jpg").exists() or (for_ocr / "Details.pdf").is_file()
-        has_aadhar = (uploads_subdir / "Aadhar.jpg").exists() or (for_ocr / "Aadhar.pdf").is_file()
+        has_details = (
+            (uploads_subdir / FILENAME_SALES_DETAIL_SHEET_PDF).exists()
+            or (uploads_subdir / LEGACY_DETAILS_JPG).exists()
+            or (for_ocr / FILENAME_SALES_DETAIL_SHEET_PDF).is_file()
+            or (for_ocr / "Details.pdf").is_file()
+        )
+        has_aadhar = (
+            (uploads_subdir / FILENAME_AADHAR_FRONT).exists()
+            or (uploads_subdir / LEGACY_AADHAR_FRONT_JPG).exists()
+            or (for_ocr / "Aadhar.pdf").is_file()
+        )
         if not has_details or not has_aadhar:
             missing = []
             if not has_details:

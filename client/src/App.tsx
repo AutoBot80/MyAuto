@@ -22,6 +22,7 @@ import { getSiteUrls, type SiteUrls } from "./api/siteUrls";
 import { usePageVisible } from "./hooks/usePageVisible";
 import { LoginPage } from "./pages/LoginPage";
 import { ALL_HOME_TILES_TRUE, getMe, type HomeTileFlags } from "./api/auth";
+import { ApiHttpError } from "./api/client";
 import { clearAccessToken, getAccessToken } from "./auth/token";
 
 const authDisabled = import.meta.env.VITE_AUTH_DISABLED === "true";
@@ -71,11 +72,13 @@ function initialLoginNameFromEnv(): string | null {
   return v.trim();
 }
 
-type BootState = "loading" | "need-login" | "ready";
+type BootState = "loading" | "need-login" | "ready" | "session-pending";
 
 function App() {
   const today = useToday();
   const pageVisible = usePageVisible();
+  /** Increment to re-run session bootstrap (e.g. Retry when API was down). */
+  const [sessionRetryNonce, setSessionRetryNonce] = useState(0);
   const [boot, setBoot] = useState<BootState>(() => {
     if (authDisabled) return "ready";
     return getAccessToken() ? "loading" : "need-login";
@@ -120,6 +123,7 @@ function App() {
       setBoot("need-login");
       return;
     }
+    setBoot("loading");
     getMe()
       .then((m) => {
         setDealerId(m.dealer_id);
@@ -133,11 +137,15 @@ function App() {
         setSessionAdmin(m.admin);
         setBoot("ready");
       })
-      .catch(() => {
-        clearAccessToken();
-        setBoot("need-login");
+      .catch((err: unknown) => {
+        if (err instanceof ApiHttpError && err.status === 401) {
+          clearAccessToken();
+          setBoot("need-login");
+          return;
+        }
+        setBoot("session-pending");
       });
-  }, [authDisabled]);
+  }, [authDisabled, sessionRetryNonce]);
 
   useEffect(() => {
     getSiteUrls()
@@ -268,6 +276,37 @@ function App() {
     return (
       <div style={{ padding: "2rem", textAlign: "center", fontFamily: "system-ui, sans-serif" }}>
         Loading…
+      </div>
+    );
+  }
+  if (boot === "session-pending") {
+    return (
+      <div
+        style={{
+          padding: "2rem",
+          maxWidth: "28rem",
+          margin: "0 auto",
+          textAlign: "center",
+          fontFamily: "system-ui, sans-serif",
+        }}
+      >
+        <p style={{ marginBottom: "1rem" }}>
+          Cannot reach the server right now. Your login is saved on this device — try again when the API is running.
+        </p>
+        <div style={{ display: "flex", gap: "0.75rem", justifyContent: "center", flexWrap: "wrap" }}>
+          <button type="button" onClick={() => setSessionRetryNonce((n) => n + 1)}>
+            Retry
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              clearAccessToken();
+              setBoot("need-login");
+            }}
+          >
+            Use a different account
+          </button>
+        </div>
       </div>
     );
   }

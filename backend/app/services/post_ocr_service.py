@@ -1,10 +1,9 @@
 """
-Post-OCR: after Textract / ``process_uploaded_subfolder``, re-encode Aadhaar scans as JPEGs,
-optionally shrink the sale folder document set to a total size budget, and move ``for_OCR/*``
-artifacts into the sale root (outside ``for_OCR/``).
+Post-OCR: after Textract / ``process_uploaded_subfolder``, move ``for_OCR/*`` to the sale root
+and compress each upload-facing document to a per-file size limit (default **200 KB**).
 
 Environment:
-  ``POST_OCR_MAX_TOTAL_BYTES`` — max combined size for managed root documents (default **200 MiB**).
+  ``POST_OCR_MAX_FILE_BYTES`` — max size per managed document at sale root (default **204800**).
 """
 
 from __future__ import annotations
@@ -15,18 +14,21 @@ import os
 import shutil
 from pathlib import Path
 
+from app.services.page_classifier import FILENAME_AADHAR_FRONT
+
 logger = logging.getLogger(__name__)
 
 FOR_OCR_SUBDIR = "for_OCR"
-POST_OCR_MAX_TOTAL_BYTES = int(os.getenv("POST_OCR_MAX_TOTAL_BYTES", str(200 * 1024 * 1024)))
-JPEG_START_QUALITY = 88
-JPEG_MIN_QUALITY = 52
-PDF_DPI = 200
+PENCIL_MARK_FILENAME = "pencil_mark.jpeg"
+POST_OCR_MAX_FILE_BYTES = int(os.getenv("POST_OCR_MAX_FILE_BYTES", str(200 * 1024)))
+PDF_RASTER_DPI_MAX = 200
+PDF_RASTER_DPI_MIN = 72
 
 
-def _pdf_first_page_to_jpeg_bytes(pdf_path: Path, dpi: int = PDF_DPI) -> bytes | None:
+def _pdf_first_page_to_jpeg_bytes(pdf_path: Path, dpi: int = PDF_RASTER_DPI_MAX) -> bytes | None:
     """Rasterize first PDF page to JPEG bytes."""
     import fitz
+    from PIL import Image
 
     doc = fitz.open(str(pdf_path))
     try:
@@ -34,8 +36,6 @@ def _pdf_first_page_to_jpeg_bytes(pdf_path: Path, dpi: int = PDF_DPI) -> bytes |
             return None
         page = doc[0]
         pix = page.get_pixmap(dpi=dpi)
-        from PIL import Image
-
         img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
         buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=92, optimize=True)
@@ -47,41 +47,111 @@ def _pdf_first_page_to_jpeg_bytes(pdf_path: Path, dpi: int = PDF_DPI) -> bytes |
         doc.close()
 
 
-def _jpeg_reencode(data: bytes, quality: int) -> bytes:
+def _jpeg_bytes_to_single_page_pdf(jpeg_bytes: bytes) -> bytes:
+    """Embed a JPEG as a single-page PDF (compressed)."""
+    import fitz
+    from PIL import Image
+
+    img = Image.open(io.BytesIO(jpeg_bytes))
+    if img.mode != "RGB":
+        img = img.convert("RGB")
+    w, h = img.width, img.height
+    doc = fitz.open()
+    try:
+        page = doc.new_page(width=w, height=h)
+        page.insert_image(page.rect, stream=jpeg_bytes)
+        out = io.BytesIO()
+        doc.save(out, garbage=4, deflate=True)
+        return out.getvalue()
+    finally:
+        doc.close()
+
+
+def _jpeg_bytes_under_max(data: bytes, max_bytes: int) -> bytes:
     from PIL import Image
 
     img = Image.open(io.BytesIO(data))
     if img.mode != "RGB":
         img = img.convert("RGB")
+    cur = img
+    for _ in range(14):
+        q = 90
+        while q >= 28:
+            out = io.BytesIO()
+            cur.save(out, format="JPEG", quality=q, optimize=True)
+            b = out.getvalue()
+            if len(b) <= max_bytes:
+                return b
+            q -= 3
+        w, h = cur.size
+        if w < 400 and h < 400:
+            break
+        cur = cur.resize(
+            (max(360, w * 9 // 10), max(270, h * 9 // 10)),
+            Image.Resampling.LANCZOS,
+        )
     out = io.BytesIO()
-    img.save(out, format="JPEG", quality=quality, optimize=True)
+    cur.save(out, format="JPEG", quality=25, optimize=True)
     return out.getvalue()
 
 
-def _compress_pdf_inplace(path: Path) -> None:
+def _png_to_jpeg_bytes_under_max(data: bytes, max_bytes: int) -> bytes:
+    from PIL import Image
+
+    img = Image.open(io.BytesIO(data))
+    if img.mode != "RGB":
+        img = img.convert("RGB")
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=90, optimize=True)
+    return _jpeg_bytes_under_max(buf.getvalue(), max_bytes)
+
+
+def _pdf_file_under_max_bytes(pdf_path: Path, max_bytes: int) -> bytes:
     import fitz
 
+    doc = fitz.open(str(pdf_path))
     try:
-        doc = fitz.open(str(path))
-        try:
-            tmp = path.with_name(path.name + ".post_ocr_tmp")
-            doc.save(
-                str(tmp),
-                garbage=4,
-                deflate=True,
-                clean=True,
-            )
-        finally:
-            doc.close()
-        os.replace(str(tmp), str(path))
-    except Exception as e:
-        logger.warning("post_ocr: PDF shrink failed %s: %s", path, e)
-        try:
-            tmp = path.with_name(path.name + ".post_ocr_tmp")
-            if tmp.exists():
-                tmp.unlink(missing_ok=True)
-        except OSError:
-            pass
+        buf = io.BytesIO()
+        doc.save(buf, garbage=4, deflate=True, clean=True)
+        b = buf.getvalue()
+        if len(b) <= max_bytes:
+            return b
+    finally:
+        doc.close()
+
+    dpi = PDF_RASTER_DPI_MAX
+    best = b
+    while dpi >= PDF_RASTER_DPI_MIN:
+        jb = _pdf_first_page_to_jpeg_bytes(pdf_path, dpi=dpi)
+        if jb is None:
+            break
+        jb2 = _jpeg_bytes_under_max(jb, max_bytes)
+        pb = _jpeg_bytes_to_single_page_pdf(jb2)
+        if len(pb) <= max_bytes:
+            return pb
+        if len(pb) < len(best):
+            best = pb
+        dpi -= 24
+    if len(best) > max_bytes:
+        logger.warning(
+            "post_ocr: PDF still over limit after shrink %s (%sB > %sB)",
+            pdf_path.name,
+            len(best),
+            max_bytes,
+        )
+    return best
+
+
+def _compress_file_to_max_bytes(src: Path, max_bytes: int) -> tuple[bytes, str]:
+    """Return payload and destination basename (under sale root)."""
+    suf = src.suffix.lower()
+    if suf in (".jpg", ".jpeg"):
+        return _jpeg_bytes_under_max(src.read_bytes(), max_bytes), src.name
+    if suf == ".png":
+        return _png_to_jpeg_bytes_under_max(src.read_bytes(), max_bytes), f"{src.stem}.jpg"
+    if suf == ".pdf":
+        return _pdf_file_under_max_bytes(src, max_bytes), src.name
+    raise ValueError(f"unsupported type {suf}")
 
 
 def _list_root_documents(sale_dir: Path) -> list[Path]:
@@ -102,70 +172,64 @@ def _total_size(paths: list[Path]) -> int:
     return n
 
 
-def _fit_documents_under_budget(managed: list[Path], actions: list[str]) -> None:
-    """Re-encode JPEGs and deflate PDFs until combined size ≤ budget or limits hit."""
-    total = _total_size(managed)
-    if total <= POST_OCR_MAX_TOTAL_BYTES:
-        actions.append(f"size_ok={total}B (<={POST_OCR_MAX_TOTAL_BYTES}B)")
-        return
-
-    quality = JPEG_START_QUALITY
-    round_no = 0
-    while total > POST_OCR_MAX_TOTAL_BYTES and round_no < 40:
-        round_no += 1
-        for p in list(managed):
-            if not p.exists():
-                continue
-            suf = p.suffix.lower()
+def _remove_redundant_for_ocr_pdfs(for_ocr: Path, actions: list[str]) -> None:
+    """Drop ``Aadhar*.pdf`` in ``for_OCR`` when the corresponding JPEG is present."""
+    skip: set[str] = set()
+    if (for_ocr / FILENAME_AADHAR_FRONT).is_file():
+        skip.add("Aadhar.pdf")
+    if (for_ocr / "Aadhar_back.jpg").is_file():
+        skip.add("Aadhar_back.pdf")
+    for name in skip:
+        p = for_ocr / name
+        if p.is_file():
             try:
-                if suf in (".jpg", ".jpeg"):
-                    p.write_bytes(_jpeg_reencode(p.read_bytes(), quality))
-                elif suf == ".png":
-                    from PIL import Image
+                p.unlink()
+                actions.append(f"removed redundant {name} (JPEG present)")
+            except OSError as e:
+                logger.warning("post_ocr: unlink %s: %s", p, e)
 
-                    img = Image.open(io.BytesIO(p.read_bytes()))
-                    if img.mode != "RGB":
-                        img = img.convert("RGB")
-                    buf = io.BytesIO()
-                    img.save(buf, format="JPEG", quality=quality, optimize=True)
-                    new_p = p.with_suffix(".jpg")
-                    new_p.write_bytes(buf.getvalue())
-                    if new_p != p:
-                        p.unlink(missing_ok=True)
-                        if p in managed:
-                            managed.remove(p)
-                        if new_p not in managed:
-                            managed.append(new_p)
-                elif suf == ".pdf":
-                    _compress_pdf_inplace(p)
-            except Exception as e:
-                logger.warning("post_ocr: compress failed %s: %s", p, e)
 
-        total = _total_size(managed)
-        actions.append(f"compress_round={round_no} q={quality} total={total}B")
-        if total <= POST_OCR_MAX_TOTAL_BYTES:
-            break
-        quality -= 2
-        if quality < JPEG_MIN_QUALITY:
-            for p in list(managed):
-                if p.exists() and p.suffix.lower() == ".pdf":
-                    _compress_pdf_inplace(p)
-            total = _total_size(managed)
-            if total <= POST_OCR_MAX_TOTAL_BYTES:
-                break
-            logger.warning(
-                "post_ocr: still over budget total=%sB max=%sB",
-                total,
-                POST_OCR_MAX_TOTAL_BYTES,
-            )
-            break
+def _compress_root_document_inplace(
+    p: Path,
+    max_bytes: int,
+    actions: list[str],
+) -> None:
+    if p.name == PENCIL_MARK_FILENAME:
+        return
+    try:
+        size = p.stat().st_size
+    except OSError:
+        return
+    if size <= max_bytes:
+        return
+    suf = p.suffix.lower()
+    if suf == ".docx":
+        logger.warning(
+            "post_ocr: %s exceeds %sB; .docx not auto-compressed",
+            p.name,
+            max_bytes,
+        )
+        actions.append(f"warn_docx_oversize={p.name}")
+        return
+    try:
+        data, dest_name = _compress_file_to_max_bytes(p, max_bytes)
+        dest = p.parent / dest_name
+        if dest != p and dest.exists():
+            dest.unlink()
+        if dest != p:
+            p.unlink(missing_ok=True)
+        dest.write_bytes(data)
+        actions.append(f"compressed {dest_name} to {len(data)}B")
+    except Exception as e:
+        logger.warning("post_ocr: compress root file failed %s: %s", p, e)
 
 
 def run_post_ocr(uploads_dir: Path, subfolder: str) -> dict[str, object]:
     """
-    1. Build fresh ``Aadhar.jpg`` / ``Aadhar_back.jpg`` at sale root from ``for_OCR/*.pdf`` or re-encode existing JPEGs.
-    2. Move remaining ``for_OCR/*`` files into the sale root (not under ``for_OCR/``).
-    3. If combined size of root document files exceeds the budget, recompress JPEGs and deflate PDFs.
+    1. Remove redundant ``for_OCR`` PDFs when JPEGs exist; compress each remaining ``for_OCR`` file
+       to ≤ ``POST_OCR_MAX_FILE_BYTES`` and write to the sale root (not under ``for_OCR/``).
+    2. Remove empty ``for_OCR`` when possible.
+    3. Enforce the same per-file limit on documents already at sale root (manual V2 uploads).
 
     Does not modify ``raw/`` (archival PDFs).
     """
@@ -175,40 +239,31 @@ def run_post_ocr(uploads_dir: Path, subfolder: str) -> dict[str, object]:
 
     for_ocr = sale_dir / FOR_OCR_SUBDIR
     actions: list[str] = []
-
-    def emit_aadhar(pdf_name: str, jpg_name: str) -> None:
-        pdf_p = for_ocr / pdf_name
-        jpg_p = sale_dir / jpg_name
-        if pdf_p.is_file():
-            b = _pdf_first_page_to_jpeg_bytes(pdf_p)
-            if b:
-                jpg_p.write_bytes(b)
-                try:
-                    pdf_p.unlink()
-                except OSError:
-                    pass
-                actions.append(f"wrote {jpg_name} from {pdf_name}; removed {pdf_name}")
-        elif jpg_p.is_file():
-            jpg_p.write_bytes(_jpeg_reencode(jpg_p.read_bytes(), JPEG_START_QUALITY))
-            actions.append(f"re-encoded {jpg_name}")
-
-    emit_aadhar("Aadhar.pdf", "Aadhar.jpg")
-    emit_aadhar("Aadhar_back.pdf", "Aadhar_back.jpg")
+    max_b = POST_OCR_MAX_FILE_BYTES
 
     if for_ocr.is_dir():
+        _remove_redundant_for_ocr_pdfs(for_ocr, actions)
         for p in sorted(for_ocr.iterdir()):
             if not p.is_file():
                 continue
-            if p.name in ("Aadhar.pdf", "Aadhar_back.pdf"):
-                continue
-            dest = sale_dir / p.name
             try:
+                data, dest_name = _compress_file_to_max_bytes(p, max_b)
+                dest = sale_dir / dest_name
                 if dest.exists() and dest.resolve() != p.resolve():
                     dest.unlink()
-                shutil.move(str(p), str(dest))
-                actions.append(f"moved {p.name} → sale root")
+                p.unlink(missing_ok=True)
+                dest.write_bytes(data)
+                actions.append(f"for_OCR→root {dest_name} ({len(data)}B)")
             except Exception as e:
-                logger.warning("post_ocr: move failed %s → %s: %s", p, dest, e)
+                logger.warning("post_ocr: for_OCR file failed %s: %s", p, e)
+                try:
+                    dest = sale_dir / p.name
+                    if dest.exists() and dest.resolve() != p.resolve():
+                        dest.unlink()
+                    shutil.move(str(p), str(dest))
+                    actions.append(f"moved {p.name} → sale root (compress failed)")
+                except Exception as e2:
+                    logger.warning("post_ocr: move fallback failed %s: %s", p, e2)
 
         try:
             if for_ocr.is_dir() and not any(for_ocr.iterdir()):
@@ -219,21 +274,26 @@ def run_post_ocr(uploads_dir: Path, subfolder: str) -> dict[str, object]:
 
     managed = _list_root_documents(sale_dir)
     total_before = _total_size(managed)
-    _fit_documents_under_budget(managed, actions)
-    total_after = _total_size(managed)
-    over_budget = total_after > POST_OCR_MAX_TOTAL_BYTES
-    if over_budget:
-        logger.warning(
-            "post_ocr: documents still over budget (%sB > %sB); .docx and other files are not lossy-compressed",
-            total_after,
-            POST_OCR_MAX_TOTAL_BYTES,
-        )
+    for p in managed:
+        _compress_root_document_inplace(p, max_b, actions)
+    managed_after = _list_root_documents(sale_dir)
+    total_after = _total_size(managed_after)
+
+    files_over: list[str] = []
+    for p in managed_after:
+        if p.name == PENCIL_MARK_FILENAME:
+            continue
+        try:
+            if p.stat().st_size > max_b:
+                files_over.append(p.name)
+        except OSError:
+            continue
 
     return {
         "ok": True,
         "total_bytes_before": total_before,
         "total_bytes_after": total_after,
-        "max_bytes": POST_OCR_MAX_TOTAL_BYTES,
-        "over_budget": over_budget,
+        "max_file_bytes": max_b,
+        "files_still_over_limit": files_over,
         "actions": actions,
     }

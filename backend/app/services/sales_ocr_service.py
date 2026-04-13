@@ -22,18 +22,44 @@ from app.services.customer_address_infer import (
     enrich_customer_address_from_freeform,
     normalize_address_freeform,
 )
+from app.services.page_classifier import (
+    FILENAME_AADHAR_FRONT,
+    FILENAME_SALES_DETAIL_SHEET_PDF,
+    LEGACY_AADHAR_FRONT_JPG,
+    LEGACY_DETAILS_JPG,
+)
+
 logger = logging.getLogger(__name__)
 
 # Bulk pre-OCR drops single-page PDFs here for Textract (see ``pre_ocr_service.FOR_OCR_SUBDIR``).
 FOR_OCR_SUBDIR = "for_OCR"
 
 
-def _prefer_for_ocr_input(subdir: Path, pdf_name: str, jpg_name: str) -> Path:
-    """Prefer ``for_OCR/<pdf_name>`` when present (bulk pipeline); else sale-folder ``<jpg_name>``."""
+def _prefer_for_ocr_input(subdir: Path, pdf_name: str, jpg_name: str, *legacy_root: str) -> Path:
+    """Prefer ``for_OCR/<pdf_name>`` when present (bulk pipeline); else first existing sale-folder file."""
     p = subdir / FOR_OCR_SUBDIR / pdf_name
     if p.is_file():
         return p
+    for name in (jpg_name,) + legacy_root:
+        r = subdir / name
+        if r.is_file():
+            return r
     return subdir / jpg_name
+
+
+def _prefer_details_sheet_input(subdir: Path) -> Path:
+    """Sales detail: pre-OCR PDF ``Sales_Detail_Sheet.pdf``, ``for_OCR`` PDFs, or legacy ``Details.jpg``."""
+    candidates = [
+        subdir / FOR_OCR_SUBDIR / FILENAME_SALES_DETAIL_SHEET_PDF,
+        subdir / FOR_OCR_SUBDIR / "Details.pdf",
+        subdir / FILENAME_SALES_DETAIL_SHEET_PDF,
+        subdir / "Details.pdf",
+        subdir / LEGACY_DETAILS_JPG,
+    ]
+    for c in candidates:
+        if c.is_file():
+            return c
+    return subdir / LEGACY_DETAILS_JPG
 
 
 def _rel_upload_label(path: Path, subdir: Path) -> str:
@@ -197,14 +223,14 @@ def _load_aadhar_scan_bytes(subdir: Path) -> dict[str, Any]:
     out: dict[str, Any] = {
         "front_bytes": None,
         "back_bytes": None,
-        "front_src": "Aadhar.jpg",
+        "front_src": FILENAME_AADHAR_FRONT,
         "back_src": "Aadhar_back.jpg",
     }
-    ap = _prefer_for_ocr_input(subdir, "Aadhar.pdf", "Aadhar.jpg")
+    ap = _prefer_for_ocr_input(subdir, "Aadhar.pdf", FILENAME_AADHAR_FRONT, LEGACY_AADHAR_FRONT_JPG)
     bp = _prefer_for_ocr_input(subdir, "Aadhar_back.pdf", "Aadhar_back.jpg")
     try:
         out["front_bytes"] = ap.read_bytes() if ap.is_file() else None
-        out["front_src"] = _rel_upload_label(ap, subdir) if ap.is_file() else "Aadhar.jpg"
+        out["front_src"] = _rel_upload_label(ap, subdir) if ap.is_file() else FILENAME_AADHAR_FRONT
     except OSError:
         out["front_bytes"] = None
     try:
@@ -769,7 +795,7 @@ def _pipeline_merge_aadhar_customer(
     front_textract: dict | None,
     back_textract: dict | None,
     *,
-    front_raw_name: str = "Aadhar.jpg",
+    front_raw_name: str = FILENAME_AADHAR_FRONT,
     back_raw_name: str = "Aadhar_back.jpg",
 ) -> tuple[dict[str, str], list[tuple[str, str]], str | None, dict[str, int]]:
     """
@@ -880,6 +906,7 @@ def _compile_details_sheet_fragment(
             raise RuntimeError(
                 "Could not read the Word document (.docx). Ensure it is a valid .docx Sales Detail Sheet."
             )
+        docx_full = _full_text_from_sales_detail_sheet_heading(docx_full or "")
         result = {"error": None, "full_text": docx_full, "key_value_pairs": key_value_pairs}
     elif fmt in ("jpeg", "png", "pdf"):
         from app.services.sales_textract_service import extract_forms_from_bytes
@@ -1117,7 +1144,13 @@ _INSURANCE_KEY_ALIASES = {
         "insurance provider",
         # Do not use bare "company" — matches unrelated labels (e.g. finance company).
     ],
-    "marital_status": ["marital status", "customer marital status", "married status"],
+    "marital_status": [
+        "marital status",
+        "customer marital status",
+        "married status",
+        "martial status",
+        "customer martial status",
+    ],
     "nominee_gender": ["nominee gender", "gender of nominee", "sex of nominee", "nominee sex"],
     "nominee_name": [
         "nominee name",
@@ -1140,9 +1173,11 @@ _INSURANCE_KEY_ALIASES = {
         "nominee relationship",
         "nominee relationship:",
         "relationship with customer",
+        "nominee relationship with customer",
         "relation with proposer",
         "relation to insured",
         "nominee relation",
+        "relationship of nominee",
         "relationship",
         "relation",
     ],
@@ -1175,7 +1210,12 @@ _DETAILS_CUSTOMER_KEY_ALIASES = {
         "nature of occupation",
         "customer occupation",
     ],
-    "marital_status": ["marital status", "customer marital status"],
+    "marital_status": [
+        "marital status",
+        "customer marital status",
+        "martial status",
+        "customer martial status",
+    ],
     "financier": [
         "financier name",
         "financier",
@@ -1194,7 +1234,9 @@ _DETAILS_CUSTOMER_KEY_ALIASES = {
         "nominee relationship",
         "nominee relation",
         "relationship with customer",
+        "nominee relationship with customer",
         "relation with proposer",
+        "relationship of nominee",
         "relationship",
         "relation",
     ],
@@ -1234,6 +1276,9 @@ _FIELD_CHECKBOX_ALIASES: dict[str, list[tuple[str, str]]] = {
     "marital_status": [
         ("married", "Married"),
         ("single", "Single"),
+        ("unmarried", "Single"),
+        ("divorced", "Divorced"),
+        ("widowed", "Widowed"),
     ],
     "nominee_gender": [
         ("male", "Male"),
@@ -1278,6 +1323,31 @@ def _match_checkbox_canonical(segment: str, field: str) -> str | None:
     return None
 
 
+def _extract_tick_before_option_value(s: str, field: str) -> str | None:
+    """
+    Dealer forms place the **checkmark before the option** (reading order): ``[✓] Farmer`` / ``✓ Farmer``
+    means **Farmer** is selected — not ``Farmer [✓]`` after another option.
+
+    Match **tick / bracket mark immediately followed by** the option phrase (longest alias first).
+    """
+    if not s or not field:
+        return None
+    u = s.replace("[x]", "[✓]").replace("[X]", "[✓]")
+    tick_class = r"[\u2713\u2714\u2611\u2705☑✓✔]"
+    opts = sorted(
+        (_FIELD_CHECKBOX_ALIASES.get(field) or []),
+        key=lambda x: len(x[0]),
+        reverse=True,
+    )
+    for key, canonical in opts:
+        esc = re.escape(key)
+        if re.search(rf"(?i)\[✓\]\s*{esc}", u):
+            return canonical
+        if re.search(rf"(?i){tick_class}\s*{esc}\b", u):
+            return canonical
+    return None
+
+
 def _segments_after_selected_marks(s: str) -> list[str]:
     """Split on ``[✓]`` selected markers; legacy ``[x]`` / ``[X]`` strings are normalized first."""
     if not s:
@@ -1305,12 +1375,41 @@ def _segments_after_selected_marks(s: str) -> list[str]:
 def _extract_checkbox_selection_value(raw: str | None, field: str) -> str | None:
     """
     If ``raw`` looks like a Textract checkbox row (``[✓]`` / ``[ ]``, legacy ``[x]``, or legacy ``X``),
+    unicode tick marks next to labels, or handwritten ticks OCR'd as ``✓``/``✔``,
     return the canonical option for ``field``. Otherwise return ``None`` so callers keep ``raw``.
+
+    **Layout:** Forms use **mark then label** (``[✓] Farmer``). That case is handled first via
+    :func:`_extract_tick_before_option_value`; tick-after-label remains as fallback.
     """
     if raw is None or not str(raw).strip():
         return None
     s = str(raw).strip()
     s = s.replace("\u2013", "-").replace("\u2014", "-").replace("\xa0", " ")
+    tick_first = _extract_tick_before_option_value(s, field)
+    if tick_first is not None:
+        return tick_first
+    # Unicode / printed ticks beside option text (FORMS may omit SELECTION_ELEMENT on pencil scans).
+    # Prefer the option **immediately next to** a tick (earliest match in reading order), e.g. ``Farmer ✓ Private``.
+    tick_class = r"[\u2713\u2714\u2611\u2705☑✓✔]"
+    opts_u = sorted(
+        (_FIELD_CHECKBOX_ALIASES.get(field) or []),
+        key=lambda x: len(x[0]),
+        reverse=True,
+    )
+    best_canon: str | None = None
+    best_start: int | None = None
+    for key, canonical in opts_u:
+        esc = re.escape(key)
+        for pat in (rf"(?i){esc}\s*{tick_class}", rf"(?i){tick_class}\s*{esc}"):
+            m = re.search(pat, s)
+            if not m:
+                continue
+            st = m.start()
+            if best_start is None or st < best_start:
+                best_start = st
+                best_canon = canonical
+    if best_canon is not None:
+        return best_canon
     u = s.replace("[x]", "[✓]").replace("[X]", "[✓]")
     if "[✓]" in u or "[ ]" in u:
         segs = _segments_after_selected_marks(s)
@@ -1459,13 +1558,13 @@ def _parallel_textract_prefetch_upload_subfolder(subdir: Path) -> tuple[dict[str
     from app.services.sales_textract_service import extract_forms_from_bytes, extract_text_from_bytes
 
     jobs: list[tuple[str, bytes, str]] = []
-    ap = _prefer_for_ocr_input(subdir, "Aadhar.pdf", "Aadhar.jpg")
+    ap = _prefer_for_ocr_input(subdir, "Aadhar.pdf", FILENAME_AADHAR_FRONT, LEGACY_AADHAR_FRONT_JPG)
     if ap.is_file():
         try:
             jobs.append(("aadhar_front", ap.read_bytes(), "text"))
         except OSError as e:
             logger.warning("prefetch: could not read %s: %s", ap, e)
-    dp = _prefer_for_ocr_input(subdir, "Details.pdf", "Details.jpg")
+    dp = _prefer_details_sheet_input(subdir)
     if dp.is_file() and _details_input_format(dp) in ("jpeg", "png", "pdf"):
         try:
             jobs.append(("details_forms", dp.read_bytes(), "forms"))
@@ -2417,12 +2516,23 @@ def _map_key_value_pairs_to_details_customer(pairs: list[dict]) -> dict[str, str
     return out
 
 
+def _full_text_from_sales_detail_sheet_heading(text: str) -> str:
+    """Keep text from the first line containing ``Sales Detail Sheet`` downward (docx / extra preambles)."""
+    if not text or not isinstance(text, str):
+        return text if isinstance(text, str) else ""
+    lines = text.splitlines()
+    for i, ln in enumerate(lines):
+        if re.search(r"(?i)sales\s*detail\s*sheet", ln):
+            return "\n".join(lines[i:]).strip()
+    return text.strip()
+
+
 def _parse_insurance_from_full_text(full_text: str) -> dict[str, str]:
     """Try to extract insurance/customer extras from full text (fallback when not in key-value pairs)."""
     out: dict[str, str] = {}
     if not full_text or not isinstance(full_text, str):
         return out
-    text = full_text.strip()
+    text = _full_text_from_sales_detail_sheet_heading(full_text.strip())
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     pay_fin = _extract_financier_from_payment_line(text)
     if pay_fin:
@@ -2457,8 +2567,10 @@ def _parse_insurance_from_full_text(full_text: str) -> dict[str, str]:
         ("nominee's name", "nominee_name"),
         ("nominee age", "nominee_age"),
         ("age of nominee", "nominee_age"),
+        ("nominee relationship with customer", "nominee_relationship"),
         ("nominee relationship", "nominee_relationship"),
         ("relationship with customer", "nominee_relationship"),
+        ("relationship of nominee", "nominee_relationship"),
         ("relation with proposer", "nominee_relationship"),
         ("customer name", "customer_name"),
         ("buyer name", "customer_name"),
@@ -2849,7 +2961,7 @@ class OcrService:
 
     def _write_aadhar_fields_summary_file(self, subfolder: str, customer: dict[str, str]) -> None:
         self._ensure_ocr_output_dir()
-        output_path = self.get_output_path(subfolder, "Aadhar.jpg")
+        output_path = self.get_output_path(subfolder, "Aadhar_front_fields.txt")
         output_path.parent.mkdir(parents=True, exist_ok=True)
         lines = ["Aadhar scan – 15 extracted fields", ""]
         for key, label in AADHAR_15_FIELDS:
@@ -2966,7 +3078,7 @@ class OcrService:
             scan_bundle.get("back_bytes"),
             prefetch.get("aadhar_front"),
             prefetch.get("aadhar_back"),
-            front_raw_name=str(scan_bundle.get("front_src") or "Aadhar.jpg"),
+            front_raw_name=str(scan_bundle.get("front_src") or FILENAME_AADHAR_FRONT),
             back_raw_name=str(scan_bundle.get("back_src") or "Aadhar_back.jpg"),
         )
         return {
@@ -3023,8 +3135,8 @@ class OcrService:
                 (time.perf_counter() - t_pref) * 1000
             )
 
-        aadhar_path = _prefer_for_ocr_input(subdir, "Aadhar.pdf", "Aadhar.jpg")
-        details_path = _prefer_for_ocr_input(subdir, "Details.pdf", "Details.jpg")
+        aadhar_path = _prefer_for_ocr_input(subdir, "Aadhar.pdf", FILENAME_AADHAR_FRONT, LEGACY_AADHAR_FRONT_JPG)
+        details_path = _prefer_details_sheet_input(subdir)
 
         frag_a: dict[str, Any] | None = None
         frag_d: dict[str, Any] | None = None
@@ -3195,6 +3307,7 @@ class OcrService:
                     raise RuntimeError(
                         "Could not read the Word document (.docx). Ensure it is a valid .docx Sales Detail Sheet."
                     )
+                docx_full = _full_text_from_sales_detail_sheet_heading(docx_full or "")
                 result = {
                     "error": None,
                     "full_text": docx_full,
@@ -3551,7 +3664,7 @@ class OcrService:
         if not isinstance(customer, dict):
             customer = {}
         subdir_gc = self.uploads_dir / subfolder
-        aadhar_path = _prefer_for_ocr_input(subdir_gc, "Aadhar.pdf", "Aadhar.jpg")
+        aadhar_path = _prefer_for_ocr_input(subdir_gc, "Aadhar.pdf", FILENAME_AADHAR_FRONT, LEGACY_AADHAR_FRONT_JPG)
         back_p = _prefer_for_ocr_input(subdir_gc, "Aadhar_back.pdf", "Aadhar_back.jpg")
 
         # Textract text in Raw_OCR.txt: fill DOB/gender from front, address from back when parsers missed fields.

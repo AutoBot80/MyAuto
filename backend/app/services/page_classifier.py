@@ -17,12 +17,20 @@ PAGE_TYPE_DETAILS = "Details"
 PAGE_TYPE_INSURANCE = "Insurance"
 PAGE_TYPE_UNUSED = "unused"
 
-# Output filename for each type (excluding unused, which goes to unused.pdf)
+# Sale-folder output names after pre-OCR / classification (root of mobile_ddmmyy/)
+FILENAME_AADHAR_FRONT = "Aadhar_front.jpg"
+FILENAME_AADHAR_BACK = "Aadhar_back.jpg"
+FILENAME_SALES_DETAIL_SHEET_PDF = "Sales_Detail_Sheet.pdf"
+FILENAME_INSURANCE = "Insurance.jpg"
+# Legacy manual-upload names (still accepted downstream)
+LEGACY_AADHAR_FRONT_JPG = "Aadhar.jpg"
+LEGACY_DETAILS_JPG = "Details.jpg"
+
 PAGE_TYPE_TO_FILENAME = {
-    PAGE_TYPE_AADHAR: "Aadhar.jpg",
-    PAGE_TYPE_AADHAR_BACK: "Aadhar_back.jpg",
-    PAGE_TYPE_DETAILS: "Details.jpg",
-    PAGE_TYPE_INSURANCE: "Insurance.jpg",
+    PAGE_TYPE_AADHAR: FILENAME_AADHAR_FRONT,
+    PAGE_TYPE_AADHAR_BACK: FILENAME_AADHAR_BACK,
+    PAGE_TYPE_DETAILS: FILENAME_SALES_DETAIL_SHEET_PDF,
+    PAGE_TYPE_INSURANCE: FILENAME_INSURANCE,
 }
 
 # Patterns to identify each page type. Order matters: more specific first.
@@ -157,3 +165,35 @@ def classify_pages_from_ocr_text(full_ocr_text: str) -> list[tuple[int, str]]:
             pass
         i += 2
     return result
+
+
+def extract_page_text_from_pre_ocr_blocks(full_ocr_text: str, page_idx_0based: int) -> str:
+    """Return OCR text for one page from ``--- Page N ---`` blocks (pre-OCR output)."""
+    pat = rf"---\s*Page\s+{page_idx_0based + 1}\s*---\s*(.*?)(?=\n---\s*Page\s+\d+\s*---|\Z)"
+    m = re.search(pat, full_ocr_text or "", re.DOTALL)
+    return (m.group(1).strip() if m else "")
+
+
+def should_swap_aadhar_front_back_indices(text_classified_front: str, text_classified_back: str) -> bool:
+    """
+    Detect swapped front/back: page marked front reads like back (uidai.gov.in) and back like front (Govt of India).
+    """
+    has_uidai_f = bool(_AADHAR_BACK_MARKER.search(text_classified_front or ""))
+    has_gov_f = bool(_AADHAR_FRONT_MARKER.search(text_classified_front or ""))
+    has_uidai_b = bool(_AADHAR_BACK_MARKER.search(text_classified_back or ""))
+    has_gov_b = bool(_AADHAR_FRONT_MARKER.search(text_classified_back or ""))
+    return bool(has_uidai_f and not has_gov_f and has_gov_b and not has_uidai_b)
+
+
+def maybe_swap_aadhar_page_indices(page_type_to_idx: dict[str, int], full_ocr_text: str) -> None:
+    """Mutates ``page_type_to_idx`` when front/back page indices contradict Aadhaar OCR markers."""
+    ia = page_type_to_idx.get(PAGE_TYPE_AADHAR)
+    ib = page_type_to_idx.get(PAGE_TYPE_AADHAR_BACK)
+    if ia is None or ib is None or ia == ib:
+        return
+    ta = extract_page_text_from_pre_ocr_blocks(full_ocr_text, ia)
+    tb = extract_page_text_from_pre_ocr_blocks(full_ocr_text, ib)
+    if should_swap_aadhar_front_back_indices(ta, tb):
+        page_type_to_idx[PAGE_TYPE_AADHAR] = ib
+        page_type_to_idx[PAGE_TYPE_AADHAR_BACK] = ia
+        logger.info("Swapped Aadhaar front/back page indices after marker check (pages %s <-> %s)", ia + 1, ib + 1)

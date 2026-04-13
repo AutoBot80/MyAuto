@@ -1,5 +1,6 @@
 """AWS Textract: extract text and forms from document images (e.g. Sales Detail Sheet)."""
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -7,15 +8,19 @@ from app.config import AWS_REGION
 
 # Note: Textract supports English, French, German, Italian, Portuguese, Spanish only. Hindi is not supported.
 
+# Consolidated scans often include Aadhaar / other pages above the Details form. FORMS should only use
+# blocks at or below the first "Sales Detail Sheet" heading (normalized page coordinates).
+_SALES_DETAIL_SHEET_LINE = re.compile(r"(?i)sales\s*detail\s*sheet")
+
 
 def _get_text_from_block(block: dict, block_map: dict[str, dict]) -> str:
     """
     Concatenate text from a block's CHILD ids in **document order**.
 
-    Textract emits ``SELECTION_ELEMENT`` blocks for checkboxes. Older code appended ``X`` only
-    when selected and did not preserve reading order relative to option labels, which made
-    multi-checkbox rows (Profession, Payment, etc.) hard to interpret. We emit ``[✓]`` / ``[ ]``
-    inline (tick = selected) so downstream parsers can see which option sits next to which box.
+    Textract emits ``SELECTION_ELEMENT`` blocks for checkboxes. Hero / dealer **Sales Detail** layouts
+    typically list the **mark before the label** (reading left-to-right): ``[✓]`` then ``Farmer`` means
+    Farmer is selected. CHILD order usually matches that; we emit ``[✓]`` / ``[ ]`` inline so
+    :mod:`sales_ocr_service` can resolve tick-before-option via ``_extract_tick_before_option_value``.
     """
     text_parts: list[str] = []
     for rel in block.get("Relationships") or []:
@@ -66,6 +71,55 @@ def _parse_key_value_pairs(blocks: list[dict]) -> list[dict[str, str]]:
         if key_text or value_text:
             pairs.append({"key": key_text, "value": value_text})
     return pairs
+
+
+def _bounding_box_top_height(block: dict) -> tuple[float | None, float | None]:
+    geom = block.get("Geometry") or {}
+    bb = geom.get("BoundingBox") or {}
+    top = bb.get("Top")
+    height = bb.get("Height")
+    if top is None or height is None:
+        return None, None
+    return float(top), float(height)
+
+
+def _anchor_top_first_sales_detail_sheet_line(blocks: list[dict]) -> float | None:
+    """Smallest ``Top`` among LINE blocks whose text contains ``Sales Detail Sheet`` (first title band)."""
+    best: float | None = None
+    for b in blocks:
+        if b.get("BlockType") != "LINE":
+            continue
+        text = (b.get("Text") or "").strip()
+        if not text or not _SALES_DETAIL_SHEET_LINE.search(text):
+            continue
+        top, _h = _bounding_box_top_height(b)
+        if top is None:
+            continue
+        if best is None or top < best:
+            best = top
+    return best
+
+
+def _block_keeps_for_sales_detail_sheet(block: dict, anchor_top: float) -> bool:
+    """
+    Drop blocks entirely **above** the Sales Detail Sheet title (smaller ``Top`` = higher on page).
+
+    Keeps blocks with no geometry (relationship-only ids) and any block that overlaps or lies below
+    ``anchor_top``.
+    """
+    top, height = _bounding_box_top_height(block)
+    if top is None or height is None:
+        return True
+    bottom = top + height
+    eps = 1e-5
+    return bottom > anchor_top + eps
+
+
+def _filter_blocks_after_sales_detail_sheet_heading(blocks: list[dict]) -> list[dict]:
+    anchor = _anchor_top_first_sales_detail_sheet_line(blocks)
+    if anchor is None:
+        return blocks
+    return [b for b in blocks if _block_keeps_for_sales_detail_sheet(b, anchor)]
 
 
 def _parse_tables_from_blocks(blocks: list[dict]) -> list[list[list[str]]]:
@@ -147,6 +201,7 @@ def analyze_document_forms_and_tables(document_bytes: bytes) -> dict[str, Any]:
         }
 
     blocks = response.get("Blocks") or []
+    blocks = _filter_blocks_after_sales_detail_sheet_heading(blocks)
     lines = [
         b.get("Text", "").strip()
         for b in blocks

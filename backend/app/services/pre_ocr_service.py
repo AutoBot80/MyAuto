@@ -6,20 +6,22 @@ then write normalized document files under ``Uploaded scans/{dealer_id}/{mobile}
 ``page_01.pdf``, ``page_02.pdf``, … (one single-page PDF per source page, with OSD orientation applied
 via PDF page rotation). **No** ``page_NN.jpg`` or other raster files are stored under ``raw/``.
 
-**for_OCR folder:** ``…/{mobile}_ddmmyy/for_OCR/`` holds one **single-page PDF per document slot**
-(``Aadhar.pdf``, ``Aadhar_back.pdf``, ``Details.pdf``, ``Insurance.pdf``) for :mod:`sales_ocr_service`
-Textract. Populated by :func:`_sync_for_ocr_pdfs` after classification (copy from ``raw/page_NN.pdf`` or
-embed split JPEGs as PDF for same-page Aadhaar). Root-level ``*.jpg`` copies remain for compatibility.
+**for_OCR folder:** ``…/{mobile}_ddmmyy/for_OCR/`` holds classified outputs (JPEGs such as
+``Aadhar_front.jpg``, ``Insurance.jpg``, and ``Sales_Detail_Sheet.pdf``) plus one **single-page PDF per
+document slot** (``Aadhar.pdf``, ``Aadhar_back.pdf``, …) for :mod:`sales_ocr_service` Textract, populated
+by classification and :func:`_sync_for_ocr_pdfs` (copy from ``raw/page_NN.pdf`` or embed split JPEGs for
+same-page Aadhaar). :mod:`post_ocr_service` then compresses and moves upload-facing files to the sale root.
 
 **Aadhaar handling (bulk):** separate front/back pages → copy as-is; same page top/bottom →
 :func:`split_aadhar_consolidated` then letter scissor fallback via :func:`_process_same_page_aadhar`;
 UIDAI letter layout → :func:`crop_aadhar_letter_below_scissors` / :func:`split_aadhar_letter_vertical`.
 
-Add Sales uploads call :func:`normalize_aadhar_upload_files` before Textract; :mod:`sales_ocr_service`
+Add Sales uploads call :func:`orient_and_normalize_sale_documents` before Textract; :mod:`sales_ocr_service`
 does not repeat scissor splits.
 
 **Chassis pencil mark:** :func:`write_pencil_mark_from_details_page` crops the top-right region of the
-classified Details page (default: top-right quadrant) and saves ``pencil_mark.jpeg`` next to ``Details.jpg``.
+classified Details page (default: top-right quadrant) and saves ``pencil_mark.jpeg`` at the sale folder root
+(not under ``for_OCR/``).
 """
 
 import os
@@ -33,6 +35,7 @@ from app.config import BULK_UPLOAD_DIR, OCR_LANG, OCR_PSM, OCR_PREPROCESS, UPLOA
 from app.services.page_classifier import (
     classify_page_by_text,
     classify_pages_from_ocr_text,
+    maybe_swap_aadhar_page_indices,
     PAGE_TYPE_TO_FILENAME,
     PAGE_TYPE_AADHAR,
     PAGE_TYPE_AADHAR_BACK,
@@ -40,6 +43,8 @@ from app.services.page_classifier import (
     PAGE_TYPE_DETAILS,
     PAGE_TYPE_INSURANCE,
     PAGE_TYPE_UNUSED,
+    FILENAME_AADHAR_FRONT,
+    FILENAME_SALES_DETAIL_SHEET_PDF,
 )
 
 logger = logging.getLogger(__name__)
@@ -52,6 +57,15 @@ REJECTED_DIR = BULK_UPLOAD_DIR / "Rejected scans"
 # Textract input PDFs after bulk pre-OCR (single-page, oriented); see :func:`_sync_for_ocr_pdfs`.
 FOR_OCR_SUBDIR = "for_OCR"
 
+
+def _for_ocr_pdf_basename(root_slot_filename: str) -> str:
+    """PDF filename under ``for_OCR/``; front Aadhaar slot keeps ``Aadhar.pdf`` for Textract callers."""
+    if root_slot_filename == FILENAME_AADHAR_FRONT:
+        return "Aadhar.pdf"
+    if root_slot_filename.lower().endswith(".pdf"):
+        return Path(root_slot_filename).name
+    return f"{Path(root_slot_filename).stem}.pdf"
+
 # Details sheet — Chassis Pencil Mark crop (fractions of page width/height on the oriented JPEG).
 # Default: **top-right quadrant** (right half × top half), where the pencil-mark box typically sits.
 PENCIL_MARK_FILENAME = "pencil_mark.jpeg"
@@ -59,6 +73,8 @@ PENCIL_MARK_X0_FRAC = float(os.getenv("PENCIL_MARK_X0_FRAC", "0.5"))
 PENCIL_MARK_X1_FRAC = float(os.getenv("PENCIL_MARK_X1_FRAC", "1.0"))
 PENCIL_MARK_Y0_FRAC = float(os.getenv("PENCIL_MARK_Y0_FRAC", "0.0"))
 PENCIL_MARK_Y1_FRAC = float(os.getenv("PENCIL_MARK_Y1_FRAC", "0.5"))
+# When "1", find the dense dark horizontal rubbing inside the quadrant ROI (see :func:`_detect_pencil_rubbing_tight_bbox`).
+PENCIL_MARK_TIGHT_DETECT = os.getenv("PENCIL_MARK_TIGHT_DETECT", "1").lower() not in ("0", "false", "no")
 
 # Indian mobile: 10 digits starting with 6, 7, 8, or 9 (optional +91 prefix, spaces, dashes)
 MOBILE_PATTERN = re.compile(r"(?:\+91[\s\-]*)?([6-9]\d{9})\b")
@@ -175,13 +191,116 @@ def _pdf_to_images(
     return result
 
 
+def _trim_pencil_bbox_to_dark_ink(roi_bgr, x: int, y: int, w: int, h: int) -> tuple[int, int, int, int]:
+    """Shrink a bbox to pixels that are not near-white (drops thin outer frame / margins)."""
+    import cv2
+    import numpy as np
+
+    rh, rw = roi_bgr.shape[:2]
+    x = max(0, min(x, rw - 1))
+    y = max(0, min(y, rh - 1))
+    w = max(1, min(w, rw - x))
+    h = max(1, min(h, rh - y))
+    patch = roi_bgr[y : y + h, x : x + w]
+    g = cv2.cvtColor(patch, cv2.COLOR_BGR2GRAY)
+    _, bin_inv = cv2.threshold(g, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    ys = np.where(bin_inv.sum(axis=1) > 0)[0]
+    xs = np.where(bin_inv.sum(axis=0) > 0)[0]
+    if ys.size == 0 or xs.size == 0:
+        return x, y, w, h
+    pad = max(1, min(3, w // 60))
+    y0, y1 = int(ys[0]), int(ys[-1])
+    x0, x1 = int(xs[0]), int(xs[-1])
+    nx = x + x0 - pad
+    ny = y + y0 - pad
+    nw = x1 - x0 + 1 + 2 * pad
+    nh = y1 - y0 + 1 + 2 * pad
+    nx = max(0, nx)
+    ny = max(0, ny)
+    nw = min(nw, rw - nx)
+    nh = min(nh, rh - ny)
+    return nx, ny, max(1, nw), max(1, nh)
+
+
+def _detect_pencil_rubbing_tight_bbox(roi_bgr) -> tuple[int, int, int, int] | None:
+    """
+    Inside the quadrant ROI, find the dark grey **pencil rubbing** block: dense, horizontal, in the upper band.
+
+    Returns ``(x, y, w, h)`` relative to ``roi_bgr``, or None to fall back to the full ROI crop.
+    """
+    import cv2
+    import numpy as np
+
+    rh, rw = roi_bgr.shape[:2]
+    if rh < 40 or rw < 40:
+        return None
+
+    # Upper band: rubbing sits above "DETAIL SHEET" / form rows in this quadrant.
+    y_cut = max(rh // 4, int(rh * 0.72))
+    search = roi_bgr[0:y_cut, :]
+    sh, sw = search.shape[:2]
+
+    def pick_from_binary(bin255) -> tuple[int, int, int, int] | None:
+        kx = max(12, sw // 20)
+        ky = max(4, sh // 25)
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kx, ky))
+        closed = cv2.morphologyEx(bin255, cv2.MORPH_CLOSE, kernel, iterations=2)
+        closed = cv2.morphologyEx(
+            closed,
+            cv2.MORPH_OPEN,
+            cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)),
+        )
+        contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        min_area = max(200, (sw * sh) * 0.012)
+        best: tuple[int, int, int, int] | None = None
+        best_score = 0.0
+        for c in contours:
+            area = cv2.contourArea(c)
+            if area < min_area:
+                continue
+            bx, by, bw, bh = cv2.boundingRect(c)
+            if bw < 20 or bh < 8:
+                continue
+            ar = bw / float(max(1, bh))
+            if ar < 1.8 or ar > 40:
+                continue
+            rect_a = bw * bh
+            extent = area / float(rect_a) if rect_a > 0 else 0
+            if extent < 0.12:
+                continue
+            cy = by + bh / 2.0
+            # Prefer candidates in the upper part of the search strip (label + box live here).
+            upper_bias = 1.0 + 0.9 * max(0.0, (sh * 0.55 - cy) / (sh * 0.55 + 1e-6))
+            score = area * (0.25 + 0.75 * min(extent, 0.95)) * upper_bias
+            if score > best_score:
+                best_score = score
+                best = (bx, by, bw, bh)
+        return best
+
+    gray = cv2.cvtColor(search, cv2.COLOR_BGR2GRAY)
+    blur = cv2.GaussianBlur(gray, (5, 5), 0)
+    _, otsu = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    box = pick_from_binary(otsu)
+    if box is None:
+        t = float(np.percentile(blur, 28))
+        pct = ((blur < t).astype(np.uint8) * 255)
+        box = pick_from_binary(pct)
+    if box is None:
+        return None
+    bx, by, bw, bh = box
+    if bw * bh > 0.88 * sw * sh:
+        return None
+    return bx, by, bw, bh
+
+
 def extract_details_chassis_pencil_mark_jpeg(page_jpeg_bytes: bytes) -> bytes | None:
     """
     Crop the **Chassis Pencil Mark** region from a full Details sheet page (JPEG bytes).
 
-    Uses the **top-right quadrant** by default: right half of the page (50–100% width) × top half
-    (0–50% height), which matches common dealer forms (pencil-mark box above chassis fields).
-    Bounds are set via :data:`PENCIL_MARK_*_FRAC` (override with env vars of the same name).
+    First selects the **top-right quadrant** (right half × top half by default) via
+    :data:`PENCIL_MARK_*_FRAC`, then — when :data:`PENCIL_MARK_TIGHT_DETECT` is enabled — locates the
+    dark horizontal **rubbing** block inside that ROI (threshold + morphology + contour scoring) and
+    trims to non-white ink. If detection fails, keeps the full quadrant crop.
     """
     import cv2
     import numpy as np
@@ -204,6 +323,13 @@ def extract_details_chassis_pencil_mark_jpeg(page_jpeg_bytes: bytes) -> bytes | 
     crop = img[y0:y1, x0:x1]
     if crop.size == 0 or crop.shape[0] < 10 or crop.shape[1] < 10:
         return None
+
+    if PENCIL_MARK_TIGHT_DETECT:
+        tight = _detect_pencil_rubbing_tight_bbox(crop)
+        if tight is not None:
+            tx, ty, tw, th = _trim_pencil_bbox_to_dark_ink(crop, *tight)
+            if tw >= 12 and th >= 8:
+                crop = crop[ty : ty + th, tx : tx + tw]
 
     ok, buf = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 92])
     if not ok:
@@ -238,6 +364,43 @@ def try_write_pencil_mark_from_details_jpeg_file(sale_dir: Path, details_jpeg_pa
         return write_pencil_mark_from_details_page(sale_dir, details_jpeg_path.read_bytes())
     except OSError as e:
         logger.warning("pencil_mark: read %s: %s", details_jpeg_path, e)
+        return False
+
+
+def try_write_pencil_mark_for_sale_folder(sale_dir: Path) -> bool:
+    """
+    Chassis pencil-mark crop: from ``Details.jpg`` if present, else rasterize ``Sales_Detail_Sheet.pdf`` page 1
+    (sale root or ``for_OCR/`` after consolidated pre-OCR).
+    """
+    legacy = sale_dir / "Details.jpg"
+    if legacy.is_file():
+        return try_write_pencil_mark_from_details_jpeg_file(sale_dir, legacy)
+    pdfp = sale_dir / FILENAME_SALES_DETAIL_SHEET_PDF
+    if not pdfp.is_file():
+        alt = sale_dir / FOR_OCR_SUBDIR / FILENAME_SALES_DETAIL_SHEET_PDF
+        if alt.is_file():
+            pdfp = alt
+    if not pdfp.is_file():
+        return False
+    try:
+        import io
+
+        import fitz
+        from PIL import Image
+
+        doc = fitz.open(str(pdfp))
+        try:
+            if doc.page_count < 1:
+                return False
+            pix = doc[0].get_pixmap(dpi=150)
+            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            buf = io.BytesIO()
+            img.save(buf, "JPEG", quality=90)
+            return write_pencil_mark_from_details_page(sale_dir, buf.getvalue())
+        finally:
+            doc.close()
+    except Exception as e:
+        logger.warning("pencil_mark: rasterize %s: %s", pdfp, e)
         return False
 
 
@@ -708,15 +871,15 @@ def _sync_for_ocr_pdfs(
     for_ocr = sale_dir / FOR_OCR_SUBDIR
     for_ocr.mkdir(parents=True, exist_ok=True)
 
-    for ptype, jpg_name in PAGE_TYPE_TO_FILENAME.items():
-        pdf_name = jpg_name.replace(".jpg", ".pdf")
+    for ptype, root_name in PAGE_TYPE_TO_FILENAME.items():
+        pdf_name = _for_ocr_pdf_basename(root_name)
         idx = page_type_to_idx.get(ptype)
         if idx is None:
             continue
         dest = for_ocr / pdf_name
 
         if idx in combined_indices and ptype in (PAGE_TYPE_AADHAR, PAGE_TYPE_AADHAR_BACK):
-            jpg_path = sale_dir / jpg_name
+            jpg_path = for_ocr / root_name
             if jpg_path.is_file():
                 dest.write_bytes(_jpeg_bytes_to_single_page_pdf(jpg_path.read_bytes()))
                 logger.info("for_OCR: %s from split JPEG", pdf_name)
@@ -730,7 +893,7 @@ def _sync_for_ocr_pdfs(
             logger.warning("for_OCR: missing raw PDF for %s (page index %s)", pdf_name, idx)
 
 
-def _process_same_page_aadhar(page_bytes: bytes, sale_dir: Path) -> bool:
+def _process_same_page_aadhar(page_bytes: bytes, out_dir: Path) -> bool:
     """
     One physical page with both Aadhaar faces.
 
@@ -738,14 +901,14 @@ def _process_same_page_aadhar(page_bytes: bytes, sale_dir: Path) -> bool:
     2) Letter (scissor lines): :func:`crop_aadhar_letter_below_scissors` +
        :func:`split_aadhar_letter_vertical`.
 
-    Writes ``Aadhar.jpg`` and ``Aadhar_back.jpg`` under ``sale_dir``.
+    Writes ``Aadhar_front.jpg`` and ``Aadhar_back.jpg`` under ``out_dir`` (typically ``for_OCR/``).
     Returns True if both files were produced.
     """
-    sale_dir.mkdir(parents=True, exist_ok=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
     if split_aadhar_consolidated(
         page_bytes,
-        out_dir=sale_dir,
-        front_name="Aadhar.jpg",
+        out_dir=out_dir,
+        front_name=FILENAME_AADHAR_FRONT,
         back_name="Aadhar_back.jpg",
         require_tesseract_match=False,
     ):
@@ -757,21 +920,35 @@ def _process_same_page_aadhar(page_bytes: bytes, sale_dir: Path) -> bool:
         return False
     split = split_aadhar_letter_vertical(cropped)
     if split:
-        (sale_dir / "Aadhar.jpg").write_bytes(split[0])
-        (sale_dir / "Aadhar_back.jpg").write_bytes(split[1])
+        (out_dir / FILENAME_AADHAR_FRONT).write_bytes(split[0])
+        (out_dir / "Aadhar_back.jpg").write_bytes(split[1])
         logger.info("Same-page Aadhaar: letter (scissor) split into front/back")
         return True
-    (sale_dir / "Aadhar.jpg").write_bytes(cropped)
+    (out_dir / FILENAME_AADHAR_FRONT).write_bytes(cropped)
     logger.warning("Same-page Aadhaar: letter crop only; missing Aadhar_back.jpg")
     return False
 
 
 def orient_common_sale_jpegs(subdir: Path) -> None:
-    """Run :func:`correct_image_orientation_upright` on Details / Insurance / Financing JPEGs (Add Sales)."""
+    """Run :func:`correct_image_orientation_upright` on Details (legacy JPEG) / Insurance / Financing."""
     for name in ("Details.jpg", "Insurance.jpg", "Financing.jpg"):
         p = subdir / name
         if p.is_file():
             p.write_bytes(correct_image_orientation_upright(p.read_bytes()))
+
+
+def orient_and_normalize_sale_documents(sale_dir: Path) -> None:
+    """
+    Run orientation + Aadhaar normalization on ``for_OCR/`` when consolidated pre-OCR wrote there;
+    otherwise on the sale root (manual V2 uploads).
+    """
+    for_ocr = sale_dir / FOR_OCR_SUBDIR
+    if for_ocr.is_dir() and any(p.is_file() for p in for_ocr.iterdir()):
+        orient_common_sale_jpegs(for_ocr)
+        normalize_aadhar_upload_files(for_ocr)
+    else:
+        orient_common_sale_jpegs(sale_dir)
+        normalize_aadhar_upload_files(sale_dir)
 
 
 def normalize_aadhar_upload_files(subdir: Path) -> None:
@@ -779,7 +956,9 @@ def normalize_aadhar_upload_files(subdir: Path) -> None:
     OSD upright orientation on Aadhaar JPEGs, then physical layout fixes (letter / scissors) before Textract.
     Used by Add Sales upload; bulk pre-OCR already writes normalized card crops. Idempotent on plain scans.
     """
-    front_p = subdir / "Aadhar.jpg"
+    front_p = subdir / FILENAME_AADHAR_FRONT
+    if not front_p.is_file():
+        front_p = subdir / "Aadhar.jpg"
     if not front_p.is_file():
         return
     front_p.write_bytes(correct_image_orientation_upright(front_p.read_bytes()))
@@ -1124,8 +1303,10 @@ def _split_pdf_multi_customer_to_sale_dirs(
         m = bundle.get("mobile") or ""
         subfolder = us.get_subdir_name_mobile(m) if m else f"{pdf_path.stem}_cust{i + 1}"
         sale_dir = get_uploads_dir(dealer_id) / subfolder
+        for_ocr_dir = sale_dir / FOR_OCR_SUBDIR
         raw_dir = sale_dir / "raw"
         sale_dir.mkdir(parents=True, exist_ok=True)
+        for_ocr_dir.mkdir(parents=True, exist_ok=True)
         raw_dir.mkdir(parents=True, exist_ok=True)
         shutil.copy2(pdf_path, raw_dir / pdf_path.name)
         _export_pdf_pages_to_raw(pdf_path, raw_dir)
@@ -1133,23 +1314,37 @@ def _split_pdf_multi_customer_to_sale_dirs(
         fi = bundle.get("aadhar_front_idx")
         bi = bundle.get("aadhar_back_idx")
         if fi is not None and bi is not None and fi == bi and fi in page_bytes:
-            if not _process_same_page_aadhar(page_bytes[fi], sale_dir):
-                logger.warning("Multi bundle %d: same-page Aadhaar split failed; saving full page as Aadhar.jpg", i + 1)
+            if not _process_same_page_aadhar(page_bytes[fi], for_ocr_dir):
+                logger.warning(
+                    "Multi bundle %d: same-page Aadhaar split failed; saving full page as %s",
+                    i + 1,
+                    FILENAME_AADHAR_FRONT,
+                )
                 img = Image.open(io.BytesIO(page_bytes[fi]))
-                img.save(sale_dir / "Aadhar.jpg", "JPEG", quality=90)
+                img.save(for_ocr_dir / FILENAME_AADHAR_FRONT, "JPEG", quality=90)
         else:
             for key, filename in [
-                ("aadhar_front_idx", "Aadhar.jpg"),
+                ("aadhar_front_idx", FILENAME_AADHAR_FRONT),
                 ("aadhar_back_idx", "Aadhar_back.jpg"),
-                ("details_idx", "Details.jpg"),
                 ("insurance_idx", "Insurance.jpg"),
             ]:
                 idx = bundle.get(key)
                 if idx is not None and idx in page_bytes:
-                    out_path = sale_dir / filename
+                    out_path = for_ocr_dir / filename
                     img = Image.open(io.BytesIO(page_bytes[idx]))
                     img.save(out_path, "JPEG", quality=90)
                     logger.info("Multi-customer: bundle %d page %d -> %s", i + 1, idx + 1, filename)
+            didx_b = bundle.get("details_idx")
+            if didx_b is not None:
+                src_d = raw_dir / f"page_{didx_b + 1:02d}.pdf"
+                if src_d.is_file():
+                    shutil.copy2(src_d, for_ocr_dir / FILENAME_SALES_DETAIL_SHEET_PDF)
+                    logger.info(
+                        "Multi-customer: bundle %d page %d -> %s",
+                        i + 1,
+                        didx_b + 1,
+                        FILENAME_SALES_DETAIL_SHEET_PDF,
+                    )
 
         didx = bundle.get("details_idx")
         if didx is not None and didx in page_bytes:
@@ -1216,7 +1411,8 @@ def _split_pdf_by_classification(
     raw_dir: Path | None = None,
 ) -> Path:
     """
-    Classify each page from OCR text; write card/sheet JPEGs under ``sale_dir``.
+    Classify each page from OCR text; write rotated/cut/named outputs under ``sale_dir/for_OCR/``.
+    ``pencil_mark.jpeg`` and ``unused.pdf`` stay at ``sale_dir`` root.
     If ``raw_dir`` is set, store the consolidated PDF copy and per-page PDFs under ``raw/`` (``page_NN.pdf``, no raster).
 
     Same-page Aadhaar: consolidated top/bottom split, then letter scissor split via :func:`_process_same_page_aadhar`.
@@ -1226,6 +1422,8 @@ def _split_pdf_by_classification(
     import io
 
     sale_dir.mkdir(parents=True, exist_ok=True)
+    for_ocr_dir = sale_dir / FOR_OCR_SUBDIR
+    for_ocr_dir.mkdir(parents=True, exist_ok=True)
     if raw_dir is not None:
         raw_dir.mkdir(parents=True, exist_ok=True)
         shutil.copy2(pdf_path, raw_dir / pdf_path.name)
@@ -1246,6 +1444,8 @@ def _split_pdf_by_classification(
         elif ptype not in page_type_to_idx:
             page_type_to_idx[ptype] = idx
 
+    maybe_swap_aadhar_page_indices(page_type_to_idx, full_ocr_text)
+
     pages = _pdf_to_images(pdf_path)
     page_bytes: dict[int, bytes] = {idx: b for idx, b in pages}
 
@@ -1253,26 +1453,37 @@ def _split_pdf_by_classification(
     for idx in combined_indices:
         if idx not in page_bytes:
             continue
-        if not _process_same_page_aadhar(page_bytes[idx], sale_dir):
+        if not _process_same_page_aadhar(page_bytes[idx], for_ocr_dir):
             logger.warning(
-                "Aadhaar combined page %d: consolidated + letter split failed; copying full page to Aadhar.jpg only",
+                "Aadhaar combined page %d: consolidated + letter split failed; copying full page to %s only",
                 idx + 1,
+                FILENAME_AADHAR_FRONT,
             )
-            out_path = sale_dir / "Aadhar.jpg"
+            out_path = for_ocr_dir / FILENAME_AADHAR_FRONT
             img = Image.open(io.BytesIO(page_bytes[idx]))
             img.save(out_path, "JPEG", quality=90)
 
     # Write known types (skip Aadhar slots already produced from combined split)
     for ptype, filename in PAGE_TYPE_TO_FILENAME.items():
-        if ptype in page_type_to_idx:
-            idx = page_type_to_idx[ptype]
-            if idx in combined_indices and ptype in (PAGE_TYPE_AADHAR, PAGE_TYPE_AADHAR_BACK):
-                continue
-            if idx in page_bytes:
-                out_path = sale_dir / filename
-                img = Image.open(io.BytesIO(page_bytes[idx]))
-                img.save(out_path, "JPEG", quality=90)
-                logger.info("Classified page %d -> %s", idx + 1, filename)
+        if ptype not in page_type_to_idx:
+            continue
+        idx = page_type_to_idx[ptype]
+        if idx in combined_indices and ptype in (PAGE_TYPE_AADHAR, PAGE_TYPE_AADHAR_BACK):
+            continue
+        if idx not in page_bytes:
+            continue
+        if filename == FILENAME_SALES_DETAIL_SHEET_PDF:
+            src_pdf = raw_dir / f"page_{idx + 1:02d}.pdf" if raw_dir else None
+            if src_pdf and src_pdf.is_file():
+                shutil.copy2(src_pdf, for_ocr_dir / filename)
+                logger.info("Classified page %d -> %s (PDF only)", idx + 1, filename)
+            else:
+                logger.warning("Details page %d: missing raw PDF for Sales_Detail_Sheet.pdf", idx + 1)
+            continue
+        out_path = for_ocr_dir / filename
+        img = Image.open(io.BytesIO(page_bytes[idx]))
+        img.save(out_path, "JPEG", quality=90)
+        logger.info("Classified page %d -> %s", idx + 1, filename)
 
     if PAGE_TYPE_DETAILS in page_type_to_idx:
         didx = page_type_to_idx[PAGE_TYPE_DETAILS]
@@ -1308,8 +1519,8 @@ def run_pre_ocr_and_prepare(
 ) -> tuple[list[tuple[Path, str, str]] | None, str, str | None, Path | None, list[str] | None]:
     """
     Copy PDF to Processing, run pre-OCR (Tesseract on in-memory rasters), classify pages, write normalized
-    JPEGs under ``Uploaded scans/{dealer_id}/{mobile}_ddmmyy/`` with ``raw/`` holding **PDF only**
-    (consolidated copy + ``page_NN.pdf`` per page).
+    document files under ``Uploaded scans/{dealer_id}/{mobile}_ddmmyy/for_OCR/`` (with ``raw/`` holding
+    **PDF only**: consolidated copy + ``page_NN.pdf`` per page).
 
     Validates BEFORE splitting: mobile + 3 critical classifications (Aadhar, Aadhar_back, Details).
     Returns (bundles | None, subfolder_stem, mobile_or_none, ocr_path, missing_list | None).

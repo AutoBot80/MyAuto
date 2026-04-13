@@ -15,6 +15,7 @@ from app.config import (
     get_uploaded_scans_sale_subfolder_leaf,
     get_uploads_dir,
 )
+from app.services.page_classifier import FILENAME_AADHAR_FRONT
 from app.services.upload_file_validation import (
     read_upload_capped,
     sanitize_legacy_upload_filename,
@@ -107,7 +108,7 @@ class UploadService:
         financing_doc: UploadFile | None = None,
         dealer_id: int = 100001,
     ) -> dict:
-        """Subfolder = mobile_ddmmyy; save as Aadhar.jpg, Aadhar_back.jpg, Details.jpg; optional Insurance.jpg, Financing.jpg."""
+        """Subfolder = mobile_ddmmyy; save as Aadhar_front.jpg, Aadhar_back.jpg, Details.jpg; optional Insurance.jpg, Financing.jpg."""
         ok, err = self.validate_mobile(mobile)
         if not ok:
             return {"error": err}
@@ -130,7 +131,7 @@ class UploadService:
             saved.append(save_name)
             return None
 
-        err_msg = await save_image_field(aadhar_scan, "Aadhar.jpg", "Aadhar front")
+        err_msg = await save_image_field(aadhar_scan, FILENAME_AADHAR_FRONT, "Aadhar front")
         if err_msg:
             return {"error": err_msg}
         err_msg = await save_image_field(aadhar_back, "Aadhar_back.jpg", "Aadhar back")
@@ -163,15 +164,13 @@ class UploadService:
         extraction_result: dict = {}
         try:
             from app.services.pre_ocr_service import (
-                normalize_aadhar_upload_files,
-                orient_common_sale_jpegs,
-                try_write_pencil_mark_from_details_jpeg_file,
+                orient_and_normalize_sale_documents,
+                try_write_pencil_mark_for_sale_folder,
             )
 
             sale_path = uploads_dir / subdir_name
-            orient_common_sale_jpegs(sale_path)
-            normalize_aadhar_upload_files(sale_path)
-            try_write_pencil_mark_from_details_jpeg_file(sale_path, sale_path / "Details.jpg")
+            orient_and_normalize_sale_documents(sale_path)
+            try_write_pencil_mark_for_sale_folder(sale_path)
 
             from app.services.sales_ocr_service import OcrService
 
@@ -232,15 +231,13 @@ class UploadService:
         extraction_result: dict = {}
         try:
             from app.services.pre_ocr_service import (
-                normalize_aadhar_upload_files,
-                orient_common_sale_jpegs,
-                try_write_pencil_mark_from_details_jpeg_file,
+                orient_and_normalize_sale_documents,
+                try_write_pencil_mark_for_sale_folder,
             )
 
             sale_path = uploads_dir / subdir_name
-            orient_common_sale_jpegs(sale_path)
-            normalize_aadhar_upload_files(sale_path)
-            try_write_pencil_mark_from_details_jpeg_file(sale_path, sale_path / "Details.jpg")
+            orient_and_normalize_sale_documents(sale_path)
+            try_write_pencil_mark_for_sale_folder(sale_path)
 
             from app.services.sales_ocr_service import OcrService
 
