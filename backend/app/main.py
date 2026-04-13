@@ -11,6 +11,7 @@ from app.config import (
     CORS_ORIGINS,
     DEALER_ID,
     JWT_SECRET,
+    get_add_sales_pre_ocr_work_dir,
     get_bulk_input_scans_dir,
     get_bulk_processing_dir,
     get_bulk_queue_dir,
@@ -67,6 +68,7 @@ app.add_middleware(AuthMiddleware)
 
 # Create dealer-scoped dirs for app's DEALER_ID
 get_uploads_dir(DEALER_ID).mkdir(parents=True, exist_ok=True)
+get_add_sales_pre_ocr_work_dir(DEALER_ID).mkdir(parents=True, exist_ok=True)
 get_ocr_output_dir(DEALER_ID).mkdir(parents=True, exist_ok=True)
 get_bulk_input_scans_dir(DEALER_ID).mkdir(parents=True, exist_ok=True)
 get_bulk_queue_dir(DEALER_ID).mkdir(parents=True, exist_ok=True)

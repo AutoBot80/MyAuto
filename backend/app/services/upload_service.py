@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
@@ -8,7 +9,7 @@ from app.config import (
     UPLOAD_MAX_IMAGE_BYTES,
     UPLOAD_MAX_LEGACY_FILE_BYTES,
     UPLOAD_MAX_PDF_BYTES,
-    get_bulk_processing_dir,
+    get_add_sales_pre_ocr_work_dir,
     get_ocr_output_dir,
     get_uploaded_scans_sale_subfolder_leaf,
     get_uploads_dir,
@@ -200,29 +201,8 @@ class UploadService:
             "with Aadhar (front & back) and the sales details form (vehicle & customer info)."
         )
 
-    async def save_and_queue_v2_consolidated(
-        self,
-        consolidated_pdf: UploadFile,
-        dealer_id: int = 100001,
-    ) -> dict:
-        """
-        Single multi-page PDF (Aadhaar + sales detail in one file): run bulk pre-OCR pipeline
-        (``run_pre_ocr_and_prepare``), then the same orient / normalize / pencil / Textract path as
-        ``save_and_queue_v2``. Mobile and subfolder come from pre-OCR text, not the form.
-        """
-        try:
-            content = await read_upload_capped(consolidated_pdf, UPLOAD_MAX_PDF_BYTES)
-            validate_magic_jpeg_png_or_pdf(content, label="Consolidated scan")
-        except ValueError as e:
-            return {"error": str(e)}
-
-        proc_dir = get_bulk_processing_dir(dealer_id)
-        proc_dir.mkdir(parents=True, exist_ok=True)
-        stem = Path(f"{(consolidated_pdf.filename or 'consolidated').strip() or 'consolidated'}").stem
-        safe_stem = stem[:80] if stem else "consolidated"
-        dest_pdf = proc_dir / f"add_sales_{safe_stem}_{uuid4().hex[:12]}.pdf"
-        dest_pdf.write_bytes(content)
-
+    def _process_consolidated_pdf_sync(self, dest_pdf: Path, proc_dir: Path, dealer_id: int) -> dict:
+        """CPU-bound pre-OCR + Textract; must run in a worker thread (see ``save_and_queue_v2_consolidated``)."""
         # Lazy import: ``pre_ocr_service`` references ``UploadService`` to avoid import cycles.
         from app.services.pre_ocr_service import run_pre_ocr_and_prepare
 
@@ -244,7 +224,7 @@ class UploadService:
                 "error": "Multiple customers detected in this PDF. Use Bulk Upload for multi-customer consolidated scans.",
             }
 
-        sale_dir, subfolder_name, _mobile_str = bundles[0]
+        _sale_dir, subfolder_name, _mobile_str = bundles[0]
         uploads_dir = self.uploads_dir or get_uploads_dir(dealer_id)
         subdir_name = subfolder_name
 
@@ -288,3 +268,37 @@ class UploadService:
             "queued_items": [],
             "extraction": extraction_result,
         }
+
+    async def save_and_queue_v2_consolidated(
+        self,
+        consolidated_pdf: UploadFile,
+        dealer_id: int = 100001,
+    ) -> dict:
+        """
+        Single multi-page PDF (Aadhaar + sales detail in one file): run bulk pre-OCR pipeline
+        (``run_pre_ocr_and_prepare``), then the same orient / normalize / pencil / Textract path as
+        ``save_and_queue_v2``. Mobile and subfolder come from pre-OCR text, not the form.
+
+        Heavy work runs in a thread pool so the asyncio loop keeps servicing the socket while the
+        client uploads the multipart body (avoids ``ECONNRESET`` on the Vite dev proxy).
+
+        **Not** the bulk load queue: no ``bulk_loads`` row, no worker lease — pre-OCR runs in this request only.
+        """
+        try:
+            content = await read_upload_capped(consolidated_pdf, UPLOAD_MAX_PDF_BYTES)
+            validate_magic_jpeg_png_or_pdf(content, label="Consolidated scan")
+        except ValueError as e:
+            return {"error": str(e)}
+
+        # Add Sales only: same ``run_pre_ocr_and_prepare`` as bulk, but no ``bulk_loads`` / SQS — not Bulk Upload/Processing.
+        proc_dir = get_add_sales_pre_ocr_work_dir(dealer_id)
+        proc_dir.mkdir(parents=True, exist_ok=True)
+        stem = Path(f"{(consolidated_pdf.filename or 'consolidated').strip() or 'consolidated'}").stem
+        safe_stem = stem[:80] if stem else "consolidated"
+        dest_pdf = proc_dir / f"add_sales_{safe_stem}_{uuid4().hex[:12]}.pdf"
+        dest_pdf.write_bytes(content)
+
+        try:
+            return await asyncio.to_thread(self._process_consolidated_pdf_sync, dest_pdf, proc_dir, dealer_id)
+        except Exception as e:
+            return {"error": f"Consolidated processing failed: {e}"}

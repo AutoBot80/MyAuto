@@ -1,6 +1,14 @@
 import { defineConfig, type Plugin, type ProxyOptions } from 'vite'
 import react from '@vitejs/plugin-react'
+import http from 'node:http'
 import type { Server as Http1Server } from 'node:http'
+
+/** Shared agent for long proxies: keep-alive + no socket timeout (reduces ECONNRESET on large POSTs to uvicorn on Windows). */
+const longRunningAgent = new http.Agent({
+  keepAlive: true,
+  keepAliveMsecs: 60_000,
+  timeout: 0,
+})
 
 /** Must exceed longest Playwright/DMS run; keep in sync with `fillForms.ts` abort timers. */
 const LONG_RUNNING_MS = 900_000 // 15 min
@@ -31,13 +39,23 @@ function longProxy(target: string): ProxyOptions {
     changeOrigin: true,
     timeout: LONG_RUNNING_MS,
     proxyTimeout: LONG_RUNNING_MS,
+    agent: longRunningAgent,
     configure(proxy) {
       proxy.on('proxyReq', (proxyReq, req) => {
         req.setTimeout(0)
         proxyReq.setTimeout(0)
+        const sock = req.socket
+        if (sock && !sock.destroyed) {
+          sock.setTimeout(0)
+          sock.setKeepAlive(true, 60_000)
+        }
       })
       proxy.on('proxyRes', (proxyRes) => {
         proxyRes.setTimeout(0)
+      })
+      proxy.on('open', (proxySocket) => {
+        proxySocket.setTimeout(0)
+        proxySocket.setKeepAlive(true, 60_000)
       })
     },
   }

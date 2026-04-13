@@ -146,6 +146,15 @@ def get_bulk_queue_dir(dealer_id: int) -> Path:
 def get_bulk_processing_dir(dealer_id: int) -> Path:
     return get_bulk_upload_dir(dealer_id) / "Processing"
 
+
+def get_add_sales_pre_ocr_work_dir(dealer_id: int) -> Path:
+    """
+    Temp working directory for Add Sales consolidated-PDF pre-OCR (PDF copy + Tesseract ``*_pre_ocr.txt``).
+    Under **Uploaded scans**, not **Bulk Upload**. Used only by in-request ``run_pre_ocr_and_prepare`` —
+    does **not** enqueue ``bulk_loads`` or the bulk worker queue.
+    """
+    return get_uploads_dir(dealer_id) / "_add_sales_pre_ocr_work"
+
 # Form 20 blank templates (PDF). Prefer single official PDF (page 0=front, page 1=back).
 # Or use separate Form 20 Front.pdf and Form 20 back.pdf in Raw Scans/.
 _FORM20_SINGLE = os.getenv("FORM20_TEMPLATE_SINGLE", "")
