@@ -86,7 +86,7 @@ function App() {
   const [bulkLoadsPendingCount, setBulkLoadsPendingCount] = useState<number>(0);
   const [challanFailedCount, setChallanFailedCount] = useState<number>(0);
   const [dealerName, setDealerName] = useState<string>("—");
-  const [dealerCity, setDealerCity] = useState<string | null>(null);
+  const [dealerAddress, setDealerAddress] = useState<string | null>(null);
   const [dealerOemId, setDealerOemId] = useState<number | null>(null);
   const [dealerPreferInsurer, setDealerPreferInsurer] = useState<string | null>(null);
   const [siteUrls, setSiteUrls] = useState<SiteUrls | null>(null);
@@ -103,11 +103,15 @@ function App() {
     getDealer(dealerId)
       .then((d) => {
         setDealerName(d.dealer_name);
-        setDealerCity(d.city ?? null);
+        const addr = d.address?.trim();
+        setDealerAddress(addr ? addr : null);
         setDealerOemId(d.oem_id ?? null);
         setDealerPreferInsurer(d.prefer_insurer ?? null);
       })
-      .catch(() => setDealerName("Dealer"));
+      .catch(() => {
+        setDealerName("Dealer");
+        setDealerAddress(null);
+      });
   }, [boot, dealerId]);
 
   useEffect(() => {
@@ -272,7 +276,7 @@ function App() {
       <LoginPage
         onLoggedIn={(s) => {
           setDealerId(s.dealer_id);
-          _setLoginName(s.login_id);
+          _setLoginName(s.name || s.login_id);
           setHomeTiles({
             tile_pos: s.tile_pos,
             tile_rto: s.tile_rto,
@@ -298,8 +302,8 @@ function App() {
               <div className="app-topbar-spacer" />
               <div className="app-topbar-title-block">
                 <h1 className="app-topbar-title">{dealerName}</h1>
-                {dealerCity ? (
-                  <span className="app-topbar-subtitle">{dealerCity}</span>
+                {dealerAddress ? (
+                  <span className="app-topbar-subtitle">{dealerAddress}</span>
                 ) : null}
               </div>
               <div className="app-topbar-spacer" />
@@ -355,7 +359,7 @@ function App() {
       <div className="app-layout-root" key={mode}>
         <AppLayoutV2
           headerTitle={dealerName}
-          headerSubtitle={dealerCity}
+          headerSubtitle={dealerAddress}
           headerRight={headerRight}
           currentPage={currentPage}
           onNavigate={(p) => setPage(p)}

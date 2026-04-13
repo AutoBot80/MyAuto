@@ -187,10 +187,14 @@ def login(request: Request, payload: LoginRequest) -> dict[str, Any]:
                 )
 
             display_name = row.get("name")
+            name_out: str | None = None
+            if display_name is not None:
+                stripped = str(display_name).strip()
+                name_out = stripped if stripped else None
             token = create_access_token(
                 login_id=lid,
                 dealer_id=int(dealer_id),
-                name=str(display_name) if display_name is not None else None,
+                name=name_out,
                 roles=roles,
                 admin=admin,
                 tile_pos=tile_pos,
@@ -204,6 +208,7 @@ def login(request: Request, payload: LoginRequest) -> dict[str, Any]:
                 "token_type": "bearer",
                 "dealer_id": dealer_id,
                 "login_id": lid,
+                "name": name_out,
                 "roles": roles,
                 "admin": admin,
                 "tile_pos": tile_pos,

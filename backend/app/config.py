@@ -5,9 +5,45 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from app.builtin_defaults import (
+    DMS_PLAYWRIGHT_HEADED as _DEFAULT_DMS_PLAYWRIGHT_HEADED,
+    OCR_UPLOAD_PARALLEL_TEXTRACT as _DEFAULT_OCR_UPLOAD_PARALLEL_TEXTRACT,
+    PLAYWRIGHT_KEEP_OPEN as _DEFAULT_PLAYWRIGHT_KEEP_OPEN,
+)
+from app.hero_dms_defaults import (
+    HERO_DMS_BASE_URL,
+    HERO_DMS_REAL_URL_CONTACT,
+    HERO_DMS_REAL_URL_ENQUIRY,
+    HERO_DMS_REAL_URL_LINE_ITEMS,
+    HERO_DMS_REAL_URL_PDI,
+    HERO_DMS_REAL_URL_REPORTS,
+    HERO_DMS_REAL_URL_VEHICLE,
+    HERO_DMS_REAL_URL_VEHICLES,
+    HERO_DMS_SIEBEL_INTER_ACTION_DELAY_MS,
+)
+from app.sqs_queue_defaults import (
+    BULK_INGEST_ENABLED as _DEFAULT_BULK_INGEST_ENABLED,
+    BULK_QUEUE_PROVIDER as _DEFAULT_BULK_QUEUE_PROVIDER,
+    BULK_SQS_REGION as _DEFAULT_BULK_SQS_REGION,
+    BULK_SQS_VISIBILITY_TIMEOUT_SEC as _DEFAULT_BULK_SQS_VISIBILITY_TIMEOUT_SEC,
+    BULK_SQS_WAIT_TIME_SEC as _DEFAULT_BULK_SQS_WAIT_TIME_SEC,
+    BULK_WORKER_ENABLED as _DEFAULT_BULK_WORKER_ENABLED,
+)
+
 # Load .env from backend/ so AWS and DB credentials are found when running from any cwd
 _BACKEND_DIR = Path(__file__).resolve().parents[1]
 load_dotenv(_BACKEND_DIR / ".env")
+
+
+def _bool_env(name: str, default: bool) -> bool:
+    """Truthy: 1 / true / yes (case-insensitive). Unset uses ``default``; empty string is falsy."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    s = raw.strip().lower()
+    if not s:
+        return False
+    return s in ("1", "true", "yes")
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
@@ -150,44 +186,51 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 # AWS Textract (optional: for better extraction on details/sales sheets).
 AWS_REGION = os.getenv("AWS_REGION", "ap-south-1")
 # Upload scans-v2: run independent Textract API calls (Aadhar front, Details forms, Insurance, …) in parallel.
-OCR_UPLOAD_PARALLEL_TEXTRACT = os.getenv("OCR_UPLOAD_PARALLEL_TEXTRACT", "true").lower() in (
-    "1",
-    "true",
-    "yes",
+OCR_UPLOAD_PARALLEL_TEXTRACT = _bool_env(
+    "OCR_UPLOAD_PARALLEL_TEXTRACT", _DEFAULT_OCR_UPLOAD_PARALLEL_TEXTRACT
 )
 OCR_UPLOAD_TEXTRACT_TIMEOUT_SEC = int(os.getenv("OCR_UPLOAD_TEXTRACT_TIMEOUT_SEC", "240"))
 # Credentials: set AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY (or use default profile).
 
-# Bulk queue / worker settings.
-BULK_QUEUE_PROVIDER = os.getenv("BULK_QUEUE_PROVIDER", "local").strip().lower() or "local"
+# Bulk queue / worker settings. Defaults: ``sqs_queue_defaults``; ``BULK_SQS_QUEUE_URL`` still from env only.
+BULK_QUEUE_PROVIDER = (
+    (os.getenv("BULK_QUEUE_PROVIDER") or _DEFAULT_BULK_QUEUE_PROVIDER).strip().lower()
+    or _DEFAULT_BULK_QUEUE_PROVIDER
+)
 BULK_SQS_QUEUE_URL = os.getenv("BULK_SQS_QUEUE_URL", "").strip()
-BULK_SQS_REGION = os.getenv("BULK_SQS_REGION", AWS_REGION).strip() or AWS_REGION
-BULK_SQS_WAIT_TIME_SEC = int(os.getenv("BULK_SQS_WAIT_TIME_SEC", "20"))
-BULK_SQS_VISIBILITY_TIMEOUT_SEC = int(os.getenv("BULK_SQS_VISIBILITY_TIMEOUT_SEC", "900"))
+BULK_SQS_REGION = (
+    (os.getenv("BULK_SQS_REGION") or _DEFAULT_BULK_SQS_REGION).strip() or AWS_REGION
+)
+BULK_SQS_WAIT_TIME_SEC = int(
+    os.getenv("BULK_SQS_WAIT_TIME_SEC", str(_DEFAULT_BULK_SQS_WAIT_TIME_SEC))
+)
+BULK_SQS_VISIBILITY_TIMEOUT_SEC = int(
+    os.getenv("BULK_SQS_VISIBILITY_TIMEOUT_SEC", str(_DEFAULT_BULK_SQS_VISIBILITY_TIMEOUT_SEC))
+)
 BULK_INGEST_POLL_SEC = int(os.getenv("BULK_INGEST_POLL_SEC", "5"))
 BULK_WORKER_THREADS = int(os.getenv("BULK_WORKER_THREADS", "1"))
-BULK_WORKER_ENABLED = os.getenv("BULK_WORKER_ENABLED", "true").lower() in ("1", "true", "yes")
-BULK_INGEST_ENABLED = os.getenv("BULK_INGEST_ENABLED", "true").lower() in ("1", "true", "yes")
+BULK_WORKER_ENABLED = _bool_env("BULK_WORKER_ENABLED", _DEFAULT_BULK_WORKER_ENABLED)
+BULK_INGEST_ENABLED = _bool_env("BULK_INGEST_ENABLED", _DEFAULT_BULK_INGEST_ENABLED)
 BULK_JOB_MAX_ATTEMPTS = int(os.getenv("BULK_JOB_MAX_ATTEMPTS", "3"))
 
 # DMS fill (Playwright): base URL and login. Used when client calls POST /fill-forms.
-# DMS_BASE_URL / VAHAN_BASE_URL / INSURANCE_BASE_URL: required in .env (no in-code defaults); validated at app startup.
-DMS_BASE_URL = (os.getenv("DMS_BASE_URL") or "").strip().rstrip("/")
+# Hero DMS URLs default from ``app.hero_dms_defaults``; optional env overrides (e.g. tests) may replace them.
+# VAHAN_BASE_URL / INSURANCE_BASE_URL: required in .env (no in-code defaults); validated at app startup.
+DMS_BASE_URL = (os.getenv("DMS_BASE_URL") or HERO_DMS_BASE_URL).strip().rstrip("/")
 # Default **real** = Hero Connect / Siebel (``hero_dms_*`` modules). Values: ``real``, ``siebel``, ``live``, ``production``, ``hero``.
 # ``dummy`` is no longer supported (static training HTML removed).
 DMS_MODE = (os.getenv("DMS_MODE") or "real").strip().lower()
-# Required for Fill DMS: ``DMS_REAL_URL_CONTACT`` for Stage 1 Find (always; ``skip_find`` in DB does not bypass).
-# Also set ``DMS_REAL_URL_VEHICLE`` and other ``DMS_REAL_URL_*`` as needed (see fill_dms_service / LLD §2.4d).
-DMS_REAL_URL_CONTACT = (os.getenv("DMS_REAL_URL_CONTACT") or "").strip()
+# Fill DMS Stage 1 Find (always; ``skip_find`` in DB does not bypass). Defaults: ``hero_dms_defaults``.
+DMS_REAL_URL_CONTACT = (os.getenv("DMS_REAL_URL_CONTACT") or HERO_DMS_REAL_URL_CONTACT).strip()
 # In Transit branch: e.g. Vehicles Receipt / HMCL In Transit (Process Receipt). See BRD §6.1a / run_hero_siebel_dms_flow.
-DMS_REAL_URL_VEHICLES = (os.getenv("DMS_REAL_URL_VEHICLES") or "").strip()
+DMS_REAL_URL_VEHICLES = (os.getenv("DMS_REAL_URL_VEHICLES") or HERO_DMS_REAL_URL_VEHICLES).strip()
 # Optional: separate Pre Check view; if empty, Pre Check is attempted on ``DMS_REAL_URL_PDI`` after goto.
 DMS_REAL_URL_PRECHECK = (os.getenv("DMS_REAL_URL_PRECHECK") or "").strip()
-DMS_REAL_URL_PDI = (os.getenv("DMS_REAL_URL_PDI") or "").strip()
-DMS_REAL_URL_VEHICLE = (os.getenv("DMS_REAL_URL_VEHICLE") or "").strip()
-DMS_REAL_URL_ENQUIRY = (os.getenv("DMS_REAL_URL_ENQUIRY") or "").strip()
-DMS_REAL_URL_LINE_ITEMS = (os.getenv("DMS_REAL_URL_LINE_ITEMS") or "").strip()
-DMS_REAL_URL_REPORTS = (os.getenv("DMS_REAL_URL_REPORTS") or "").strip()
+DMS_REAL_URL_PDI = (os.getenv("DMS_REAL_URL_PDI") or HERO_DMS_REAL_URL_PDI).strip()
+DMS_REAL_URL_VEHICLE = (os.getenv("DMS_REAL_URL_VEHICLE") or HERO_DMS_REAL_URL_VEHICLE).strip()
+DMS_REAL_URL_ENQUIRY = (os.getenv("DMS_REAL_URL_ENQUIRY") or HERO_DMS_REAL_URL_ENQUIRY).strip()
+DMS_REAL_URL_LINE_ITEMS = (os.getenv("DMS_REAL_URL_LINE_ITEMS") or HERO_DMS_REAL_URL_LINE_ITEMS).strip()
+DMS_REAL_URL_REPORTS = (os.getenv("DMS_REAL_URL_REPORTS") or HERO_DMS_REAL_URL_REPORTS).strip()
 # Siebel Open UI automation: optional tuning
 DMS_SIEBEL_ACTION_TIMEOUT_MS = int(os.getenv("DMS_SIEBEL_ACTION_TIMEOUT_MS", "30000"))
 DMS_SIEBEL_NAV_TIMEOUT_MS = int(os.getenv("DMS_SIEBEL_NAV_TIMEOUT_MS", "90000"))
@@ -196,9 +239,8 @@ _siebel_mobile_hints = (os.getenv("DMS_SIEBEL_MOBILE_ARIA_HINTS") or "").strip()
 DMS_SIEBEL_MOBILE_ARIA_HINTS = [x.strip() for x in _siebel_mobile_hints.split(",") if x.strip()]
 # Extra ms after GotoView contact URL so nested iframes/applets can render (Hero Connect).
 DMS_SIEBEL_POST_GOTO_WAIT_MS = int(os.getenv("DMS_SIEBEL_POST_GOTO_WAIT_MS", "5000"))
-# Optional extra ms after every Siebel ``goto`` (before other waits). Use for flaky applets — not for
-# “anti-bot” evasion (very short values like 10ms are ineffective). Typical stability tries: 150-500.
-DMS_SIEBEL_INTER_ACTION_DELAY_MS = int(os.getenv("DMS_SIEBEL_INTER_ACTION_DELAY_MS", "0"))
+# Optional extra ms after every Siebel ``goto`` (before other waits). Hero default in ``hero_dms_defaults``.
+DMS_SIEBEL_INTER_ACTION_DELAY_MS = HERO_DMS_SIEBEL_INTER_ACTION_DELAY_MS
 # Optional extra iframe CSS selectors (comma-separated) tried before built-in Siebel patterns.
 _siebel_if = (os.getenv("DMS_SIEBEL_AUTO_IFRAME_SELECTORS") or "").strip()
 DMS_SIEBEL_AUTO_IFRAME_SELECTORS = [x.strip() for x in _siebel_if.split(",") if x.strip()]
@@ -217,10 +259,10 @@ DMS_SIEBEL_CONTACT_ENQUIRY_SUBGRID_HINT_JSON = (
 ).strip()
 DMS_LOGIN_USER = os.getenv("DMS_LOGIN_USER", "demo")
 DMS_LOGIN_PASSWORD = os.getenv("DMS_LOGIN_PASSWORD", "demo")
-# Run browser visible (headed) so user sees DMS page and automation. Set to "false" for headless.
-DMS_PLAYWRIGHT_HEADED = os.getenv("DMS_PLAYWRIGHT_HEADED", "true").lower() in ("1", "true", "yes")
+# Run browser visible (headed) so user sees DMS page and automation. Default: ``builtin_defaults``.
+DMS_PLAYWRIGHT_HEADED = _bool_env("DMS_PLAYWRIGHT_HEADED", _DEFAULT_DMS_PLAYWRIGHT_HEADED)
 # Legacy flag (unused). ``fill_dms_service`` never calls ``Browser.close()`` / ``Playwright.stop()`` for operator sessions.
-PLAYWRIGHT_KEEP_OPEN = os.getenv("PLAYWRIGHT_KEEP_OPEN", "false").lower() in ("1", "true", "yes")
+PLAYWRIGHT_KEEP_OPEN = _bool_env("PLAYWRIGHT_KEEP_OPEN", _DEFAULT_PLAYWRIGHT_KEEP_OPEN)
 # When the backend launches Edge/Chrome (no existing CDP session), Chromium is started with
 # ``--remote-debugging-port=<port>`` so DevTools / ``chrome://inspect`` / a matching
 # ``PLAYWRIGHT_CDP_URL=http://127.0.0.1:<port>`` can attach. Default **9333** avoids clashing with
@@ -336,6 +378,6 @@ def validate_external_site_urls() -> None:
     if (DMS_MODE or "").strip().lower() == "dummy":
         raise RuntimeError(
             "DMS_MODE=dummy is no longer supported (static training sites were removed). "
-            "Set DMS_MODE=real (or siebel/live/production/hero) and configure DMS_REAL_URL_CONTACT."
+            "Set DMS_MODE=real (or siebel/live/production/hero); Hero DMS URLs default from app.hero_dms_defaults."
         )
 

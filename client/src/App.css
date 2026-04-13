@@ -48,7 +48,7 @@
   transform-origin: top center;
 }
 
-/* Blue top bar: Dealer Saathi, Arya Agencies, home icon top-aligned; Bharatpur and date bottom-aligned */
+/* Blue top bar: Dealer Saathi, dealer name, home icon top-aligned; dealer address and date bottom-aligned */
 .app-topbar {
   position: relative;
   display: flex;
@@ -111,7 +111,7 @@
   min-width: 0;
 }
 
-/* Center dealer name and city in the blue band: title top, subtitle (Bharatpur) bottom */
+/* Center dealer name and address in the blue band: title top, subtitle bottom */
 .app-topbar-title-block {
   position: absolute;
   left: 50%;

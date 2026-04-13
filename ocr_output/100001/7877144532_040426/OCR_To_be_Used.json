@@ -1,0 +1,34 @@
+{
+  "vehicle": {
+    "frame_no": "43285",
+    "engine_no": "11046",
+    "model_colour": "spl + AHO, BHG",
+    "key_no": "1969",
+    "battery_no": "3302405"
+  },
+  "customer": {
+    "year_of_birth": "2005",
+    "date_of_birth": "09/05/2005",
+    "name": "Nishant Kumar",
+    "care_of": "S/O Brij Gopal",
+    "city": "Bharatpur",
+    "district": "Bharatpur",
+    "state": "Rajasthan",
+    "pin_code": "321001",
+    "address": "S/O Brij Gopal, ward no 43, basant vihar Bharatpur, PO: Bharatpur, DIST: Bharatpur, Rajasthan - 321001",
+    "gender": "Male",
+    "mobile_number": "7877144532",
+    "alt_phone_num": "6378027115",
+    "aadhar_id": "0981"
+  },
+  "insurance": {
+    "profession": "Employed",
+    "financier": "Shri Ram",
+    "marital_status": "Single",
+    "nominee_gender": "Female",
+    "nominee_name": "Priya (Mother)",
+    "nominee_age": "35",
+    "nominee_relationship": "Mother"
+  },
+  "details_customer_name": "Nishaut Kumar S/O Brij Gopal"
+}

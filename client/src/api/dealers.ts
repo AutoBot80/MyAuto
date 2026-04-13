@@ -7,6 +7,7 @@ export interface Dealer {
   dealer_name: string;
   dealer_of: string | null;
   dms_link: string | null;
+  /** Street / mailing address from ``dealer_ref.address`` (shown in app header subtitle). */
   address: string | null;
   pin: string | null;
   city: string | null;

@@ -32,6 +32,8 @@ export type LoginResponse = {
   token_type: string;
   dealer_id: number;
   login_id: string;
+  /** Display name from ``login_ref.name``; use for Welcome line, fallback to ``login_id``. */
+  name: string | null;
   roles: string[];
   admin: boolean;
 } & HomeTileFlags;

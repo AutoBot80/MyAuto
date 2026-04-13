@@ -217,7 +217,7 @@ class PrintForm20Response(BaseModel):
 class WarmDmsBrowserRequest(BaseModel):
     dms_base_url: str | None = Field(
         default=None,
-        description="Absolute DMS base URL; defaults to DMS_BASE_URL from backend/.env",
+        description="Absolute DMS base URL; defaults to DMS_BASE_URL (Hero defaults in app.hero_dms_defaults).",
     )
 
 
@@ -297,7 +297,7 @@ def _require_absolute_http_url(url: str, field_name: str) -> str:
     if not u.startswith(("http://", "https://")):
         raise HTTPException(
             status_code=400,
-            detail=f"{field_name} must be an absolute URL (http:// or https://). Set DMS_BASE_URL or INSURANCE_BASE_URL in backend/.env.",
+            detail=f"{field_name} must be an absolute URL (http:// or https://). Set INSURANCE_BASE_URL in backend/.env or override DMS_BASE_URL in server config.",
         )
     return u.rstrip("/")
 

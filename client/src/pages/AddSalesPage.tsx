@@ -195,7 +195,7 @@ interface AddSalesPageProps {
   oemId: number | null;
   /** ``dealer_ref.prefer_insurer`` — shown and submitted when extracted ``insurer`` is empty. */
   preferInsurer?: string | null;
-  /** DMS base URL from GET /settings/site-urls (backend/.env DMS_BASE_URL). No client fallbacks. */
+  /** DMS base URL from GET /settings/site-urls (server config; Hero defaults in `app/hero_dms_defaults.py`). No client fallbacks. */
   dmsUrl?: string;
   /** True while fetching /settings/site-urls. */
   siteUrlsLoading?: boolean;
@@ -722,7 +722,7 @@ export function AddSalesPage({
       return;
     }
     if (!dmsUrl) {
-      setFillDmsStatus("DMS URL is not available. Set DMS_BASE_URL in backend/.env, restart the server, and refresh this page.");
+      setFillDmsStatus("DMS URL is not available from the server. Check backend configuration and refresh this page.");
       return;
     }
     const c = extractedCustomer;
@@ -1025,7 +1025,7 @@ export function AddSalesPage({
           : !createInvoiceEnabled
             ? createInvoiceEligibilityReason ?? "Create Invoice is not available for this sale."
             : !dmsUrl || siteUrlsError
-              ? "Configure DMS_BASE_URL in backend/.env"
+              ? "DMS base URL is not available from the server (check backend configuration)"
               : undefined;
 
   const generateInsuranceButtonTitle =
@@ -1702,7 +1702,7 @@ export function AddSalesPage({
           <section className={`add-sales-v2-box add-sales-v2-box-fill-forms ${!savedTo || !submitInfoActionsComplete ? "add-sales-v2-box--greyed" : ""}`}>
             <div className="add-sales-v2-box-title-row add-sales-v2-fill-forms-title-row">
               <div className="add-sales-v2-fill-forms-title-block">
-                <h2 className="add-sales-v2-box-title">3. Fill Forms &amp; Print File</h2>
+                <h2 className="add-sales-v2-box-title">3. Fill Forms (with AI Agents)</h2>
               </div>
             </div>
             <div className="add-sales-v2-box-body">
