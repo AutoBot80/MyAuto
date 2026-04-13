@@ -6,6 +6,7 @@ from uuid import uuid4
 from fastapi import UploadFile
 
 from app.config import (
+    UPLOAD_MAX_CONSOLIDATED_PDF_BYTES,
     UPLOAD_MAX_IMAGE_BYTES,
     UPLOAD_MAX_LEGACY_FILE_BYTES,
     UPLOAD_MAX_PDF_BYTES,
@@ -285,7 +286,7 @@ class UploadService:
         **Not** the bulk load queue: no ``bulk_loads`` row, no worker lease — pre-OCR runs in this request only.
         """
         try:
-            content = await read_upload_capped(consolidated_pdf, UPLOAD_MAX_PDF_BYTES)
+            content = await read_upload_capped(consolidated_pdf, UPLOAD_MAX_CONSOLIDATED_PDF_BYTES)
             validate_magic_jpeg_png_or_pdf(content, label="Consolidated scan")
         except ValueError as e:
             return {"error": str(e)}

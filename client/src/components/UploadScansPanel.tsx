@@ -38,7 +38,8 @@ export function UploadScansPanel({
   void onUpload;
   void mobile;
   const isPreUploaded = Boolean(savedTo && uploadedFiles.length > 0);
-  const [useConsolidatedScan, setUseConsolidatedScan] = useState(false);
+  /** When consolidated API exists: default is consolidated PDF; checking this shows per-document uploads. */
+  const [uploadIndividualFiles, setUploadIndividualFiles] = useState(false);
   const [selectedConsolidatedPdf, setSelectedConsolidatedPdf] = useState<File | null>(null);
   const consolidatedInputRef = useRef<HTMLInputElement | null>(null);
   const aadharInputRef = useRef<HTMLInputElement | null>(null);
@@ -60,9 +61,13 @@ export function UploadScansPanel({
     setSelectedDetailsFile,
   ] as const;
 
+  const hasConsolidated = Boolean(onUploadConsolidated);
+  /** Show Aadhaar / detail / insurance rows: always when no consolidated API; otherwise when checkbox is checked. */
+  const individualMode = !hasConsolidated || uploadIndividualFiles;
+
   const insuranceRequired = hasInsurance ? selectedInsuranceFile : true;
   const canUploadV2 =
-    !useConsolidatedScan &&
+    individualMode &&
     onUploadV2 &&
     isMobileValid &&
     selectedAadharFile &&
@@ -72,7 +77,28 @@ export function UploadScansPanel({
     !isUploading;
 
   const canUploadConsolidated =
-    useConsolidatedScan && onUploadConsolidated && selectedConsolidatedPdf && !isUploading;
+    hasConsolidated &&
+    !individualMode &&
+    selectedConsolidatedPdf &&
+    !isUploading;
+
+  function clearIndividualSelections() {
+    setSelectedAadharFile(null);
+    setSelectedAadharBackFile(null);
+    setSelectedDetailsFile(null);
+    setSelectedInsuranceFile(null);
+    setHasInsurance(false);
+    setAadharFileError(null);
+    refs.forEach((r) => {
+      if (r.current) r.current.value = "";
+    });
+    if (insuranceInputRef.current) insuranceInputRef.current.value = "";
+  }
+
+  function clearConsolidatedSelection() {
+    setSelectedConsolidatedPdf(null);
+    if (consolidatedInputRef.current) consolidatedInputRef.current.value = "";
+  }
 
   return (
     <section className="app-panel">
@@ -86,190 +112,205 @@ export function UploadScansPanel({
           </div>
         </div>
       ) : (
-      <>
-      {onUploadConsolidated ? (
-        <div className="app-panel-row app-panel-consolidated-toggle">
-          <label className="app-panel-insurance-check">
-            <input
-              type="checkbox"
-              checked={useConsolidatedScan}
-              onChange={(e) => {
-                const on = e.target.checked;
-                setUseConsolidatedScan(on);
-                if (!on) {
-                  setSelectedConsolidatedPdf(null);
-                  consolidatedInputRef.current && (consolidatedInputRef.current.value = "");
-                }
-              }}
-              aria-label="Use consolidated PDF scan"
-            />
-            <span>Consolidated scan (single PDF: Aadhaar + sales detail)</span>
-          </label>
-        </div>
-      ) : null}
-      {useConsolidatedScan && onUploadConsolidated ? (
         <>
-          <p className="app-panel-hint-aadhar" role="note">
-            Upload one PDF with all required pages (Aadhaar front/back and sales detail). You do not need the separate
-            file slots or mobile entry first — mobile is detected from the scan. Max size follows server limits.
-          </p>
-          <div className="app-panel-row app-panel-scan-row">
-            <label className="app-panel-scan-label" htmlFor="upload-scan-consolidated">
-              Consolidated Scan
-            </label>
-            <input
-              id="upload-scan-consolidated"
-              ref={consolidatedInputRef}
-              type="file"
-              accept=".pdf,application/pdf"
-              style={{ display: "none" }}
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) setSelectedConsolidatedPdf(file);
-                e.target.value = "";
-              }}
-            />
-            <button
-              type="button"
-              className="app-button app-panel-scan-button"
-              disabled={isUploading}
-              onClick={() => consolidatedInputRef.current?.click()}
-            >
-              {selectedConsolidatedPdf ? selectedConsolidatedPdf.name : "Choose PDF"}
-            </button>
-          </div>
-          <div className="app-panel-row app-panel-actions">
-            <button
-              type="button"
-              className="app-button app-button--primary"
-              disabled={!canUploadConsolidated}
-              onClick={() => {
-                if (selectedConsolidatedPdf) void onUploadConsolidated(selectedConsolidatedPdf);
-              }}
-            >
-              {isUploading ? "Uploading…" : "Upload documents"}
-            </button>
-          </div>
+          {/* Default: consolidated PDF — same row layout as Aadhaar / detail scans */}
+          {hasConsolidated && !individualMode ? (
+            <>
+              <p className="app-panel-hint-consolidated" role="note">
+                Consolidated PDF should contain Sales Detail Sheet, Aadhaar Front and Aadhaar Back information
+              </p>
+              <div className="app-panel-row app-panel-scan-row">
+                <label className="app-panel-scan-label" htmlFor="upload-scan-consolidated">
+                  Consolidated Scan
+                </label>
+                <input
+                  id="upload-scan-consolidated"
+                  ref={consolidatedInputRef}
+                  type="file"
+                  accept=".pdf,application/pdf"
+                  style={{ display: "none" }}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) setSelectedConsolidatedPdf(file);
+                    e.target.value = "";
+                  }}
+                />
+                <button
+                  type="button"
+                  className="app-button app-panel-scan-button"
+                  disabled={isUploading}
+                  onClick={() => consolidatedInputRef.current?.click()}
+                >
+                  {selectedConsolidatedPdf ? selectedConsolidatedPdf.name : "Choose file"}
+                </button>
+              </div>
+              {onUploadV2 ? (
+                <div className="app-panel-row app-panel-insurance-check-row">
+                  <label className="app-panel-insurance-check">
+                    <input
+                      type="checkbox"
+                      checked={uploadIndividualFiles}
+                      onChange={(e) => {
+                        const on = e.target.checked;
+                        setUploadIndividualFiles(on);
+                        if (on) clearConsolidatedSelection();
+                        else clearIndividualSelections();
+                      }}
+                      aria-label="I want to upload individual files"
+                    />
+                    <span>I want to upload individual files</span>
+                  </label>
+                </div>
+              ) : null}
+              <div className="app-panel-row app-panel-actions">
+                <button
+                  type="button"
+                  className="app-button app-button--primary"
+                  disabled={!canUploadConsolidated}
+                  onClick={() => {
+                    if (selectedConsolidatedPdf && onUploadConsolidated) void onUploadConsolidated(selectedConsolidatedPdf);
+                  }}
+                >
+                  {isUploading ? "Uploading…" : "Upload documents"}
+                </button>
+              </div>
+            </>
+          ) : null}
+
+          {/* Individual file uploads */}
+          {individualMode && onUploadV2 ? (
+            <>
+              {hasConsolidated ? (
+                <div className="app-panel-row app-panel-insurance-check-row">
+                  <label className="app-panel-insurance-check">
+                    <input
+                      type="checkbox"
+                      checked={uploadIndividualFiles}
+                      onChange={(e) => {
+                        const on = e.target.checked;
+                        setUploadIndividualFiles(on);
+                        if (!on) clearIndividualSelections();
+                        else clearConsolidatedSelection();
+                      }}
+                      aria-label="I want to upload individual files"
+                    />
+                    <span>I want to upload individual files</span>
+                  </label>
+                </div>
+              ) : null}
+              <p className="app-panel-hint-aadhar" role="note">
+                Aadhaar files should be only jpg, jpeg, png, img files. Max size 512 KB allowed.
+              </p>
+              {aadharFileError ? (
+                <p className="app-panel-file-error" role="alert">
+                  {aadharFileError}
+                </p>
+              ) : null}
+              {SCAN_LABELS.map((label, index) => (
+                <div key={label} className="app-panel-row app-panel-scan-row">
+                  <label className="app-panel-scan-label" htmlFor={`upload-scan-${index}`}>{label}</label>
+                  <input
+                    id={`upload-scan-${index}`}
+                    ref={refs[index]}
+                    type="file"
+                    accept={
+                      index < 2
+                        ? ".jpg,.jpeg,.png,.img,image/jpeg,image/png"
+                        : ".jpg,.jpeg,.png,.pdf,image/jpeg,image/png,application/pdf"
+                    }
+                    style={{ display: "none" }}
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (!file) {
+                        e.target.value = "";
+                        return;
+                      }
+                      if (index < 2) {
+                        const err = validateAadharScanFile(file);
+                        if (err) {
+                          setAadharFileError(err);
+                          e.target.value = "";
+                          return;
+                        }
+                        setAadharFileError(null);
+                      }
+                      setSelectedFiles[index](file);
+                      e.target.value = "";
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="app-button app-panel-scan-button"
+                    disabled={isUploading}
+                    onClick={() => refs[index].current?.click()}
+                  >
+                    {selectedFiles[index] ? selectedFiles[index].name : "Choose file"}
+                  </button>
+                </div>
+              ))}
+              <div className="app-panel-insurance-block">
+                <div className="app-panel-row app-panel-insurance-check-row">
+                  <label className="app-panel-insurance-check">
+                    <input
+                      type="checkbox"
+                      checked={hasInsurance}
+                      onChange={(e) => {
+                        setHasInsurance(e.target.checked);
+                        if (!e.target.checked) setSelectedInsuranceFile(null);
+                      }}
+                      aria-label="I have insurance"
+                    />
+                    <span>I have insurance</span>
+                  </label>
+                </div>
+                <div className="app-panel-row app-panel-scan-row">
+                  <label className={`app-panel-scan-label ${!hasInsurance ? "app-panel-scan-label--muted" : ""}`} htmlFor="upload-scan-insurance">
+                    Insurance Sheet
+                  </label>
+                  <input
+                    id="upload-scan-insurance"
+                    ref={insuranceInputRef}
+                    type="file"
+                    accept=".jpg,.jpeg,.png,.pdf,image/jpeg,image/png,application/pdf"
+                    style={{ display: "none" }}
+                    disabled={!hasInsurance}
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) setSelectedInsuranceFile(file);
+                      e.target.value = "";
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="app-button app-panel-scan-button"
+                    disabled={!hasInsurance || isUploading}
+                    onClick={() => hasInsurance && insuranceInputRef.current?.click()}
+                  >
+                    {selectedInsuranceFile ? selectedInsuranceFile.name : "Choose file"}
+                  </button>
+                </div>
+              </div>
+              <div className="app-panel-row app-panel-actions">
+                <button
+                  type="button"
+                  className="app-button app-button--primary"
+                  disabled={!canUploadV2}
+                  onClick={() => {
+                    if (selectedAadharFile && selectedAadharBackFile && selectedDetailsFile)
+                      onUploadV2(
+                        selectedAadharFile,
+                        selectedAadharBackFile,
+                        selectedDetailsFile,
+                        hasInsurance ? selectedInsuranceFile ?? undefined : undefined
+                      );
+                  }}
+                >
+                  {isUploading ? "Uploading…" : "Upload documents"}
+                </button>
+              </div>
+            </>
+          ) : null}
         </>
-      ) : (
-        <>
-      <p className="app-panel-hint-aadhar" role="note">
-        Aadhaar files should be only jpg, jpeg, png, img files. Max size 512 KB allowed.
-      </p>
-      {aadharFileError ? (
-        <p className="app-panel-file-error" role="alert">
-          {aadharFileError}
-        </p>
-      ) : null}
-      {SCAN_LABELS.map((label, index) => (
-        <div key={label} className="app-panel-row app-panel-scan-row">
-          <label className="app-panel-scan-label" htmlFor={`upload-scan-${index}`}>{label}</label>
-          <input
-            id={`upload-scan-${index}`}
-            ref={refs[index]}
-            type="file"
-            accept={
-              index < 2
-                ? ".jpg,.jpeg,.png,.img,image/jpeg,image/png"
-                : ".jpg,.jpeg,.png,.pdf,image/jpeg,image/png,application/pdf"
-            }
-            style={{ display: "none" }}
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (!file) {
-                e.target.value = "";
-                return;
-              }
-              if (index < 2) {
-                const err = validateAadharScanFile(file);
-                if (err) {
-                  setAadharFileError(err);
-                  e.target.value = "";
-                  return;
-                }
-                setAadharFileError(null);
-              }
-              setSelectedFiles[index](file);
-              e.target.value = "";
-            }}
-          />
-          <button
-            type="button"
-            className="app-button app-panel-scan-button"
-            disabled={isUploading}
-            onClick={() => refs[index].current?.click()}
-          >
-            {selectedFiles[index] ? selectedFiles[index].name : "Choose file"}
-          </button>
-        </div>
-      ))}
-      {onUploadV2 && (
-        <div className="app-panel-insurance-block">
-          <div className="app-panel-row app-panel-insurance-check-row">
-            <label className="app-panel-insurance-check">
-              <input
-                type="checkbox"
-                checked={hasInsurance}
-                onChange={(e) => {
-                  setHasInsurance(e.target.checked);
-                  if (!e.target.checked) setSelectedInsuranceFile(null);
-                }}
-                aria-label="I have insurance"
-              />
-              <span>I have insurance</span>
-            </label>
-          </div>
-          <div className="app-panel-row app-panel-scan-row">
-            <label className={`app-panel-scan-label ${!hasInsurance ? "app-panel-scan-label--muted" : ""}`} htmlFor="upload-scan-insurance">
-              Insurance Sheet
-            </label>
-            <input
-              id="upload-scan-insurance"
-              ref={insuranceInputRef}
-              type="file"
-              accept=".jpg,.jpeg,.png,.pdf,image/jpeg,image/png,application/pdf"
-              style={{ display: "none" }}
-              disabled={!hasInsurance}
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) setSelectedInsuranceFile(file);
-                e.target.value = "";
-              }}
-            />
-            <button
-              type="button"
-              className="app-button app-panel-scan-button"
-              disabled={!hasInsurance || isUploading}
-              onClick={() => hasInsurance && insuranceInputRef.current?.click()}
-            >
-              {selectedInsuranceFile ? selectedInsuranceFile.name : "Choose file"}
-            </button>
-          </div>
-        </div>
-      )}
-      {onUploadV2 && (
-        <div className="app-panel-row app-panel-actions">
-          <button
-            type="button"
-            className="app-button app-button--primary"
-            disabled={!canUploadV2}
-            onClick={() => {
-              if (selectedAadharFile && selectedAadharBackFile && selectedDetailsFile)
-                onUploadV2(
-                  selectedAadharFile,
-                  selectedAadharBackFile,
-                  selectedDetailsFile,
-                  hasInsurance ? selectedInsuranceFile ?? undefined : undefined
-                );
-            }}
-          >
-            {isUploading ? "Uploading…" : "Upload documents"}
-          </button>
-        </div>
-      )}
-        </>
-      )}
-      </>
       )}
       {uploadStatus ? (
         <div className="app-panel-status">{uploadStatus}</div>

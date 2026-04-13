@@ -77,15 +77,23 @@ CORS_ORIGINS = [x.strip() for x in (os.getenv("CORS_ORIGINS") or "").split(",") 
 MAX_JSON_BODY_BYTES = int(os.getenv("MAX_JSON_BODY_BYTES", str(2 * 1024 * 1024)))
 # Default max size for a single uploaded file (500 KB)
 UPLOAD_MAX_FILE_BYTES = int(os.getenv("UPLOAD_MAX_FILE_BYTES", str(500 * 1024)))
+# Add Sales consolidated PDF (multi-page Aadhaar + details); larger than per-image scans
+UPLOAD_MAX_CONSOLIDATED_PDF_BYTES = int(
+    os.getenv("UPLOAD_MAX_CONSOLIDATED_PDF_BYTES", str(5 * 1024 * 1024))
+)
 # Single-file upload routes: /qr-decode, /vision, /textract (POST), /subdealer-challan/parse-scan
 MAX_SINGLE_UPLOAD_BODY_BYTES = int(
     os.getenv("MAX_SINGLE_UPLOAD_BODY_BYTES", str(int(UPLOAD_MAX_FILE_BYTES * 1.2)))
 )
 # Legacy name: non-/uploads binary routes use MAX_SINGLE_UPLOAD_BODY_BYTES in middleware
 MAX_UPLOAD_BODY_BYTES = int(os.getenv("MAX_UPLOAD_BODY_BYTES", str(MAX_SINGLE_UPLOAD_BODY_BYTES)))
-# Whole multipart body for POST /uploads/* (several parts; default ~10 × 500KB)
+# Whole multipart body for POST /uploads/* (several parts; must fit consolidated PDF + boundaries)
+_MAX_UPLOAD_ROUTE_DEFAULT = max(
+    10 * UPLOAD_MAX_FILE_BYTES + 256 * 1024,
+    UPLOAD_MAX_CONSOLIDATED_PDF_BYTES + 512 * 1024,
+)
 MAX_UPLOAD_ROUTE_BODY_BYTES = int(
-    os.getenv("MAX_UPLOAD_ROUTE_BODY_BYTES", str(10 * UPLOAD_MAX_FILE_BYTES + 256 * 1024))
+    os.getenv("MAX_UPLOAD_ROUTE_BODY_BYTES", str(_MAX_UPLOAD_ROUTE_DEFAULT))
 )
 
 # Per-file caps in UploadService (bytes) — default 500 KB each

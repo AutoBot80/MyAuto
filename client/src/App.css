@@ -2206,6 +2206,13 @@
   line-height: 1.45;
 }
 
+.app-panel-hint-consolidated {
+  font-size: 13px;
+  color: #6b7280;
+  margin: 0 0 12px;
+  line-height: 1.45;
+}
+
 .app-panel-file-error {
   font-size: 13px;
   color: #b91c1c;
