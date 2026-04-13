@@ -5,10 +5,12 @@ import re
 from urllib.parse import quote
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse
 
-from app.config import DEALER_ID, get_uploads_dir
+from app.config import get_uploads_dir
+from app.security.deps import get_principal, resolve_dealer_id
+from app.security.principal import Principal
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/documents", tags=["documents"])
@@ -30,10 +32,11 @@ def _safe_subfolder(name: str | None) -> str | None:
 @router.get("/{subfolder}", response_class=HTMLResponse)
 def browse_documents(
     subfolder: str,
-    dealer_id: int | None = Query(None, description="Dealer ID; uses app default if omitted"),
+    principal: Principal = Depends(get_principal),
+    dealer_id: int | None = Query(None, description="Dealer ID; uses token dealer if omitted"),
 ) -> HTMLResponse:
     """Return HTML page listing files in the subfolder with download links."""
-    did = dealer_id if dealer_id is not None else DEALER_ID
+    did = resolve_dealer_id(principal, dealer_id)
     try:
         safe = _safe_subfolder(subfolder)
         if not safe:
@@ -63,10 +66,11 @@ def browse_documents(
 @router.get("/{subfolder}/list")
 def list_documents(
     subfolder: str,
-    dealer_id: int | None = Query(None, description="Dealer ID; uses app default if omitted"),
+    principal: Principal = Depends(get_principal),
+    dealer_id: int | None = Query(None, description="Dealer ID; uses token dealer if omitted"),
 ) -> dict:
     """List files in a customer's document subfolder (e.g. mobile_ddmmyy)."""
-    did = dealer_id if dealer_id is not None else DEALER_ID
+    did = resolve_dealer_id(principal, dealer_id)
     try:
         safe = _safe_subfolder(subfolder)
         if not safe:
@@ -90,10 +94,11 @@ def list_documents(
 def get_document(
     subfolder: str,
     filename: str,
-    dealer_id: int | None = Query(None, description="Dealer ID; uses app default if omitted"),
+    principal: Principal = Depends(get_principal),
+    dealer_id: int | None = Query(None, description="Dealer ID; uses token dealer if omitted"),
 ) -> FileResponse:
     """Serve a single file from a customer's document subfolder."""
-    did = dealer_id if dealer_id is not None else DEALER_ID
+    did = resolve_dealer_id(principal, dealer_id)
     safe_sub = _safe_subfolder(subfolder)
     if not safe_sub:
         raise HTTPException(status_code=400, detail="Invalid subfolder")

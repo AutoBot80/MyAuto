@@ -27,16 +27,16 @@ logger = logging.getLogger(__name__)
 
 # --- Testing / build: edit here only (not .env). Use 0 / False / "" for production full SOP. ---
 # ``RTO_FILL_SKIP_TO_SCREEN``: 0 = run all screens; 1–6 = start at that screen (skips dealer-home reset and earlier).
-RTO_FILL_SKIP_TO_SCREEN = 5
+RTO_FILL_SKIP_TO_SCREEN = 0
 # Screen 3: skip **Home** (you are already on ``home.xhtml`` with the grid). Also on when SKIP is 3.
 RTO_FILL_SCREEN3_SKIP_HOME = False
 # Screen 3: skip **Entry** — only with ``skip_home``; go straight to **Vehicle Details** sub-tab (already past Entry on the form).
 # On when SKIP is 3 (and ``RTO_FILL_SCREEN3_SKIP_HOME`` is implied for that path).
 RTO_FILL_SCREEN3_SKIP_ENTRY = False
 # Screen 4: skip Verify (already clicked) — jump straight to Save-Options.
-RTO_FILL_SCREEN4_SKIP_VERIFY = True
+RTO_FILL_SCREEN4_SKIP_VERIFY = False
 # Screen 4: skip everything up to **Dealer Document Upload** (Save-Options, File Movement, popups) — start at that tab/button.
-RTO_FILL_SCREEN4_SKIP_TO_DEALER_DOC_UPLOAD = True
+RTO_FILL_SCREEN4_SKIP_TO_DEALER_DOC_UPLOAD = False
 # Optional seed for ``data["rto_application_id"]`` when the queue row has no app id (logging / return merge only).
 RTO_FILL_TEST_APPLICATION_ID = ""
 
@@ -52,7 +52,7 @@ RTO_FILL_SCREEN5_START_WITH_NEXT_N = 0
 # When ``RTO_FILL_SKIP_TO_SCREEN >= 5`` and **True**, Screen 5 runs **only** Owner Undertaking: Sub Category → **Owner Undertaking Form** → file → Upload Document → next → File Movement (skips Form 20…Aadhaar). Ignored if SKIP_TO_FILE_MOVEMENT_ONLY.
 RTO_FILL_SCREEN5_SKIP_TO_OWNER_UNDERTAKING_ONLY = False
 # When ``RTO_FILL_SKIP_TO_SCREEN >= 5`` and **True**, Screen 5 **only** scrolls and clicks **File Movement** (``formDocumentUpload:fileFlowId``) + dialogs — no uploads. Takes precedence over OWNER_UNDERTAKING_ONLY.
-RTO_FILL_SCREEN5_SKIP_TO_FILE_MOVEMENT_ONLY = True
+RTO_FILL_SCREEN5_SKIP_TO_FILE_MOVEMENT_ONLY = False
 # After the 7th queued upload the portal can sit on intermediate rows (e.g. **Affidavit**) — extra **next** clicks before Owner Undertaking (0 = off if using START_WITH_NEXT_N only).
 RTO_FILL_SCREEN5_NEXT_BEFORE_OWNER_UNDERTAKING = 0
 # Native ``<option>`` text varies (``Form 20`` vs ``FORM 20``) — match with regex per queue key.
@@ -221,8 +221,9 @@ _IST = timezone(timedelta(hours=5, minutes=30))
 
 
 class RtoActionLog:
-    """Per-run action log under ``ocr_output/{dealer_id}/{mobile}_RTO.txt``.
+    """Per-run action log under ``ocr_output/{dealer_id}/[{subfolder}/]{mobile}_RTO.txt``.
 
+    *subfolder* is taken from sales ``file_location`` when present (see ``_rto_action_log_path``).
     Each ``fill_rto_row`` run **overwrites** the file (no carry-over from prior runs).
     Timestamps use **Asia/Kolkata (IST)**.
     """
@@ -263,6 +264,47 @@ def _mobile_digits_for_filename(mobile: str | None) -> str:
     if d:
         return d.zfill(10)[:10]
     return "unknown_mobile"
+
+
+def _rto_action_log_path(dealer_id: int, row: dict, mob_fn: str) -> Path:
+    """``ocr_output/{dealer_id}/[{subfolder}/]{mobile}_RTO.txt``.
+
+    *subfolder* is ``row['subfolder']`` from the RTO batch query
+    (``COALESCE(sm.file_location, cm.file_location)``). Matches the per-sale folder under uploads
+    (e.g. ``{mobile}_{ddmmyy}``). If missing or path cannot be resolved safely, falls back to
+    ``ocr_output/{dealer_id}/{mobile}_RTO.txt`` (previous behavior).
+    """
+    base = get_ocr_output_dir(dealer_id)
+    default = base / f"{mob_fn}_RTO.txt"
+    raw = (row.get("subfolder") or "").strip()
+    if not raw:
+        return default
+
+    p = Path(raw.replace("\\", "/"))
+    uploads = get_uploads_dir(dealer_id)
+    rel: Path | None = None
+    try:
+        if p.is_absolute():
+            rp = p.resolve()
+            for anchor in (uploads, base):
+                try:
+                    rel = rp.relative_to(anchor.resolve())
+                    break
+                except ValueError:
+                    continue
+            if rel is None:
+                rel = Path(p.name)
+        else:
+            rel = p
+    except OSError:
+        logger.warning("fill_rto: could not resolve file_location for RTO log, using default path")
+        return default
+
+    parts = [x for x in rel.parts if x and x not in (".", "..")]
+    if not parts:
+        return default
+    return base.joinpath(*parts) / f"{mob_fn}_RTO.txt"
+
 
 # Fast UI timing: **200ms** per attempt; **2s** total budget when looping (retries / polls).
 _FIRST_TRY_MS = 200
@@ -3893,6 +3935,16 @@ def _screen_5_click_file_movement_after_uploads(page: Page) -> None:
     _wait_for_progress_close_loop(page)
 
 
+def _screen_5_dismiss_file_movement_followup_dialogs(page: Page) -> None:
+    """Popups after **File Movement** on document upload: **Yes** → **Ok** → **OK** (Application ID dialog)."""
+    _dismiss_dialog(page, "Yes")
+    _pause()
+    _dismiss_dialog(page, "Ok", timeout=_DEFAULT_TIMEOUT_MS)
+    _pause()
+    _dismiss_dialog(page, "OK", timeout=_LOOP_BUDGET_MS)
+    _pause()
+
+
 def _screen_5(page: Page, docs: dict[str, Path | None]) -> None:
     """Screen 5: Upload documents per sub-category (``formDocumentUpload`` form)."""
     _set_screen("Screen 5")
@@ -3902,13 +3954,10 @@ def _screen_5(page: Page, docs: dict[str, Path | None]) -> None:
     if int(RTO_FILL_SKIP_TO_SCREEN) >= 5 and RTO_FILL_SCREEN5_SKIP_TO_FILE_MOVEMENT_ONLY:
         _rto_log(
             "SKIP: Screen 5 — File Movement only "
-            f"(scroll bottom → {_SCREEN5_FILE_MOVEMENT_BTN} → Yes / Ok dialogs)"
+            f"(scroll bottom → {_SCREEN5_FILE_MOVEMENT_BTN} → Yes / Ok / OK Application ID)"
         )
         _screen_5_click_file_movement_after_uploads(page)
-        _dismiss_dialog(page, "Yes")
-        _pause()
-        _dismiss_dialog(page, "Ok", timeout=_DEFAULT_TIMEOUT_MS)
-        _pause()
+        _screen_5_dismiss_file_movement_followup_dialogs(page)
         return
 
     _full_upload_sequence: list[tuple[str, str | None]] = [
@@ -3993,10 +4042,7 @@ def _screen_5(page: Page, docs: dict[str, Path | None]) -> None:
 
     _pause()
     _screen_5_click_file_movement_after_uploads(page)
-    _dismiss_dialog(page, "Yes")
-    _pause()
-    _dismiss_dialog(page, "Ok", timeout=_DEFAULT_TIMEOUT_MS)
-    _pause()
+    _screen_5_dismiss_file_movement_followup_dialogs(page)
 
 
 def _screen_6(page: Page) -> float | None:
@@ -4096,7 +4142,7 @@ def fill_rto_row(row: dict) -> dict:
     }
 
     mob_fn = _mobile_digits_for_filename(data.get("mobile") or row.get("customer_mobile"))
-    log_path = get_ocr_output_dir(dealer_id) / f"{mob_fn}_RTO.txt"
+    log_path = _rto_action_log_path(dealer_id, row, mob_fn)
     rlog = RtoActionLog(log_path)
     token = _rto_action_log.set(rlog)
     screen_token = _current_screen.set("Setup")
@@ -4166,7 +4212,9 @@ def fill_rto_row(row: dict) -> dict:
                 extra = f" Screen 4: {s4_hint}."
             elif skip_from == 5:
                 if RTO_FILL_SCREEN5_SKIP_TO_FILE_MOVEMENT_ONLY:
-                    extra = " Screen 5: **File Movement** button only (scroll bottom → formDocumentUpload:fileFlowId → dialogs)."
+                    extra = (
+                        " Screen 5: **File Movement** only (scroll → fileFlowId → Yes → Ok → OK Application ID)."
+                    )
                 elif RTO_FILL_SCREEN5_SKIP_TO_OWNER_UNDERTAKING_ONLY:
                     extra = (
                         " Screen 5: **Owner Undertaking Form** only — pick Sub Category, upload file, next; "

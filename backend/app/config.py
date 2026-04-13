@@ -20,8 +20,39 @@ _CHALLANS_DIR = os.getenv("CHALLANS_DIR", "").strip()
 CHALLANS_DIR = Path(_CHALLANS_DIR) if _CHALLANS_DIR else APP_ROOT.parent / "Challans"
 BULK_UPLOAD_DIR = APP_ROOT.parent / "Bulk Upload"
 
-# Dealer ID for app (JWT later). Used by bulk watcher and when client omits dealer_id.
+# Dealer ID for app. Used by bulk watcher, AUTH_DISABLED dev principal, and when client omits dealer_id.
 DEALER_ID = int(os.getenv("DEALER_ID", "100001"))
+
+# --- Auth (JWT) ---
+# When true, requests skip JWT validation and use a dev Principal (DEALER_ID, admin=True). Local use only.
+AUTH_DISABLED = os.getenv("AUTH_DISABLED", "false").lower() in ("1", "true", "yes")
+JWT_SECRET = (os.getenv("JWT_SECRET") or "").strip()
+JWT_ALGORITHM = (os.getenv("JWT_ALGORITHM") or "HS256").strip()
+JWT_EXPIRE_MINUTES = int(os.getenv("JWT_EXPIRE_MINUTES", "480"))
+# Comma-separated list; empty = use built-in dev defaults in main.py
+CORS_ORIGINS = [x.strip() for x in (os.getenv("CORS_ORIGINS") or "").split(",") if x.strip()]
+# Request body size limits (bytes)
+MAX_JSON_BODY_BYTES = int(os.getenv("MAX_JSON_BODY_BYTES", str(2 * 1024 * 1024)))
+# Default max size for a single uploaded file (500 KB)
+UPLOAD_MAX_FILE_BYTES = int(os.getenv("UPLOAD_MAX_FILE_BYTES", str(500 * 1024)))
+# Single-file upload routes: /qr-decode, /vision, /textract (POST), /subdealer-challan/parse-scan
+MAX_SINGLE_UPLOAD_BODY_BYTES = int(
+    os.getenv("MAX_SINGLE_UPLOAD_BODY_BYTES", str(int(UPLOAD_MAX_FILE_BYTES * 1.2)))
+)
+# Legacy name: non-/uploads binary routes use MAX_SINGLE_UPLOAD_BODY_BYTES in middleware
+MAX_UPLOAD_BODY_BYTES = int(os.getenv("MAX_UPLOAD_BODY_BYTES", str(MAX_SINGLE_UPLOAD_BODY_BYTES)))
+# Whole multipart body for POST /uploads/* (several parts; default ~10 × 500KB)
+MAX_UPLOAD_ROUTE_BODY_BYTES = int(
+    os.getenv("MAX_UPLOAD_ROUTE_BODY_BYTES", str(10 * UPLOAD_MAX_FILE_BYTES + 256 * 1024))
+)
+
+# Per-file caps in UploadService (bytes) — default 500 KB each
+UPLOAD_MAX_IMAGE_BYTES = int(os.getenv("UPLOAD_MAX_IMAGE_BYTES", str(UPLOAD_MAX_FILE_BYTES)))
+UPLOAD_MAX_PDF_BYTES = int(os.getenv("UPLOAD_MAX_PDF_BYTES", str(UPLOAD_MAX_FILE_BYTES)))
+UPLOAD_MAX_LEGACY_FILE_BYTES = int(os.getenv("UPLOAD_MAX_LEGACY_FILE_BYTES", str(UPLOAD_MAX_FILE_BYTES)))
+
+# All user-supplied text fields in JSON (unless overridden per call)
+MAX_TEXT_CHARS = int(os.getenv("MAX_TEXT_CHARS", "300"))
 
 
 def get_uploads_dir(dealer_id: int) -> Path:
@@ -72,8 +103,7 @@ def get_bulk_queue_dir(dealer_id: int) -> Path:
 
 def get_bulk_processing_dir(dealer_id: int) -> Path:
     return get_bulk_upload_dir(dealer_id) / "Processing"
-# Pre-OCR for bulk: use AWS Textract (default) for better mobile extraction; set false for Tesseract
-BULK_PRE_OCR_USE_TEXTRACT = os.getenv("BULK_PRE_OCR_USE_TEXTRACT", "true").lower() in ("1", "true", "yes")
+
 # Form 20 blank templates (PDF). Prefer single official PDF (page 0=front, page 1=back).
 # Or use separate Form 20 Front.pdf and Form 20 back.pdf in Raw Scans/.
 _FORM20_SINGLE = os.getenv("FORM20_TEMPLATE_SINGLE", "")

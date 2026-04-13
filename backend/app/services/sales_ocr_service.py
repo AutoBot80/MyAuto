@@ -22,6 +22,10 @@ from app.services.customer_address_infer import (
     enrich_customer_address_from_freeform,
     normalize_address_freeform,
 )
+from app.services.pre_ocr_service import (
+    crop_aadhar_letter_below_scissors,
+    split_aadhar_letter_vertical,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -185,174 +189,6 @@ def _load_aadhar_scan_bytes(subdir: Path) -> dict[str, Any]:
     except OSError:
         out["back_bytes"] = None
     return out
-
-
-def _crop_aadhar_letter_below_scissors(image_bytes: bytes) -> bytes | None:
-    """
-    Aadhaar *letter* (A4 printout from UIDAI) has scissors marks on the left and
-    right margins with a dashed/dotted cut-line across the page (~55% down).
-    Below the line is a compact **mini-card strip** with name, DOB, gender, photo,
-    address, and Aadhaar number in a clean standard layout.
-
-    Returns cropped JPEG bytes of the mini-card portion,
-    or ``None`` when the image is not a letter format or no cut-line is found.
-    """
-    import cv2
-    import numpy as np
-
-    nparr = np.frombuffer(image_bytes, dtype=np.uint8)
-    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-    if img is None:
-        return None
-
-    h, w = img.shape[:2]
-    if h < 300 or w < 200:
-        return None
-
-    if h < w * 1.15:
-        return None
-
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-    y_top = int(h * 0.38)
-    y_bot = int(h * 0.63)
-    band = gray[y_top:y_bot, :]
-    band_h = y_bot - y_top
-
-    _, bw = cv2.threshold(band, 175, 255, cv2.THRESH_BINARY_INV)
-
-    seg_len = max(int(w * 0.04), 12)
-    h_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (seg_len, 1))
-    h_morph = cv2.morphologyEx(bw, cv2.MORPH_OPEN, h_kernel)
-
-    row_cov = np.sum(h_morph > 0, axis=1).astype(float) / w
-
-    line_rows = np.where(row_cov >= 0.08)[0]
-    if len(line_rows) < 1:
-        return None
-
-    clusters: list[list[int]] = []
-    cur = [line_rows[0]]
-    for i in range(1, len(line_rows)):
-        if line_rows[i] - line_rows[i - 1] <= 10:
-            cur.append(line_rows[i])
-        else:
-            clusters.append(cur)
-            cur = [line_rows[i]]
-    clusters.append(cur)
-
-    best_cluster = None
-    best_score = -999.0
-    for cl in clusters:
-        median_y = float(np.median(cl))
-        center_dist = abs(median_y - band_h * 0.5) / band_h
-        avg_cov = float(np.mean(row_cov[cl]))
-        score = avg_cov * 2.0 - center_dist
-        if score > best_score:
-            best_score = score
-            best_cluster = cl
-
-    if best_cluster is None or best_score < 0.02:
-        return None
-
-    cut_y = y_top + max(best_cluster)
-    margin = max(int(h * 0.012), 8)
-    crop_y = min(cut_y + margin, h - 80)
-
-    if h - crop_y < int(h * 0.20):
-        return None
-
-    cropped = img[crop_y:, :]
-    ok, buf = cv2.imencode(".jpg", cropped, [cv2.IMWRITE_JPEG_QUALITY, 92])
-    if not ok:
-        return None
-
-    return buf.tobytes()
-
-
-def _split_aadhar_letter_vertical(strip_bytes: bytes) -> tuple[bytes, bytes] | None:
-    """
-    The mini-card strip from an Aadhaar letter has front (left) and back (right)
-    side-by-side, separated by a vertical dashed/dotted line with scissors.
-    Sending the full strip to Textract causes it to merge text from both sides
-    into garbled rows.
-
-    Detects the vertical cut-line and returns ``(left_bytes, right_bytes)``
-    (front card, back card) or ``None`` if no vertical split is found.
-    """
-    import cv2
-    import numpy as np
-
-    nparr = np.frombuffer(strip_bytes, dtype=np.uint8)
-    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-    if img is None:
-        return None
-
-    h, w = img.shape[:2]
-    if w < 200 or h < 100:
-        return None
-
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-    x_left = int(w * 0.35)
-    x_right = int(w * 0.65)
-    band = gray[:, x_left:x_right]
-    band_w = x_right - x_left
-
-    _, bw = cv2.threshold(band, 175, 255, cv2.THRESH_BINARY_INV)
-
-    seg_len = max(int(h * 0.04), 12)
-    v_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, seg_len))
-    v_morph = cv2.morphologyEx(bw, cv2.MORPH_OPEN, v_kernel)
-
-    col_cov = np.sum(v_morph > 0, axis=0).astype(float) / h
-
-    line_cols = np.where(col_cov >= 0.08)[0]
-    if len(line_cols) < 1:
-        return None
-
-    clusters: list[list[int]] = []
-    cur = [line_cols[0]]
-    for i in range(1, len(line_cols)):
-        if line_cols[i] - line_cols[i - 1] <= 10:
-            cur.append(line_cols[i])
-        else:
-            clusters.append(cur)
-            cur = [line_cols[i]]
-    clusters.append(cur)
-
-    best_cluster = None
-    best_score = -999.0
-    for cl in clusters:
-        median_x = float(np.median(cl))
-        center_dist = abs(median_x - band_w * 0.5) / band_w
-        avg_cov = float(np.mean(col_cov[cl]))
-        score = avg_cov * 2.0 - center_dist
-        if score > best_score:
-            best_score = score
-            best_cluster = cl
-
-    if best_cluster is None or best_score < 0.02:
-        return None
-
-    split_x = x_left + int(np.median(best_cluster))
-    margin = max(int(w * 0.008), 4)
-
-    left_end = max(split_x - margin, 50)
-    right_start = min(split_x + margin, w - 50)
-
-    left_img = img[:, :left_end]
-    right_img = img[:, right_start:]
-
-    if left_img.shape[1] < 50 or right_img.shape[1] < 50:
-        return None
-
-    ok_l, buf_l = cv2.imencode(".jpg", left_img, [cv2.IMWRITE_JPEG_QUALITY, 92])
-    ok_r, buf_r = cv2.imencode(".jpg", right_img, [cv2.IMWRITE_JPEG_QUALITY, 92])
-    if not ok_l or not ok_r:
-        return None
-
-    return buf_l.tobytes(), buf_r.tobytes()
 
 
 def _normalize_aadhar_back_address_chunk(chunk: str) -> str:
@@ -933,11 +769,11 @@ def _pipeline_merge_aadhar_customer(
     # The noisy top half causes Textract to read *wrong* values.
     # Keeping left+right unsplit causes Textract to merge rows across both cards.
     if front_bytes:
-        front_cropped = _crop_aadhar_letter_below_scissors(front_bytes)
+        front_cropped = crop_aadhar_letter_below_scissors(front_bytes)
         if front_cropped:
             is_letter = True
             front_textract = None
-            split = _split_aadhar_letter_vertical(front_cropped)
+            split = split_aadhar_letter_vertical(front_cropped)
             if split:
                 front_bytes, back_bytes = split[0], split[1]
                 back_textract = None
@@ -946,10 +782,10 @@ def _pipeline_merge_aadhar_customer(
                 front_bytes = front_cropped
                 logger.info("Aadhaar letter (front): cropped below scissors (no vertical split found)")
     if not is_letter and back_bytes:
-        back_cropped = _crop_aadhar_letter_below_scissors(back_bytes)
+        back_cropped = crop_aadhar_letter_below_scissors(back_bytes)
         if back_cropped:
             back_textract = None
-            split = _split_aadhar_letter_vertical(back_cropped)
+            split = split_aadhar_letter_vertical(back_cropped)
             if split:
                 front_bytes, back_bytes = split[0], split[1]
                 front_textract = None

@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter, HTTPException, Query
 
+from app.config import MAX_TEXT_CHARS
 from app.db import get_connection
 
 router = APIRouter(prefix="/add-sales", tags=["add-sales"])
@@ -21,10 +22,21 @@ def get_create_invoice_eligibility(
     chassis_num: str = Query(
         ...,
         min_length=1,
+        max_length=MAX_TEXT_CHARS,
         description="Chassis / frame; matches vehicle_master.raw_frame_num (trimmed)",
     ),
-    engine_num: str = Query(..., min_length=1, description="Matches vehicle_master.raw_engine_num (trimmed)"),
-    mobile: str = Query(..., min_length=1, description="Customer mobile; matches customer_master.mobile_number (10-digit int)"),
+    engine_num: str = Query(
+        ...,
+        min_length=1,
+        max_length=MAX_TEXT_CHARS,
+        description="Matches vehicle_master.raw_engine_num (trimmed)",
+    ),
+    mobile: str = Query(
+        ...,
+        min_length=1,
+        max_length=MAX_TEXT_CHARS,
+        description="Customer mobile; matches customer_master.mobile_number (10-digit int)",
+    ),
 ) -> dict:
     """
     Eligibility uses **vehicle** identity (``raw_frame_num`` + ``raw_engine_num``) and **customer**

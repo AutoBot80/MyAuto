@@ -1,14 +1,19 @@
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
+from pathlib import Path
 from typing import Literal
 
 from psycopg2 import sql, IntegrityError
 from pydantic import BaseModel, Field
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import FileResponse
 
+from app.config import get_ocr_output_dir, get_uploads_dir
 from app.db import get_connection
+from app.security.deps import get_principal, require_admin, resolve_dealer_id
+from app.security.principal import Principal
 
-router = APIRouter(prefix="/admin", tags=["admin"])
+router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(require_admin)])
 
 
 def _jsonable_value(v):
@@ -61,6 +66,127 @@ CONFIRMATION_TEXT = "DELETE ALL DATA"
 
 class ResetAllDataRequest(BaseModel):
     confirmation: str
+
+
+class DataFoldersResponse(BaseModel):
+    dealer_id: int
+    upload_scans_path: str
+    ocr_output_path: str
+
+
+@router.get("/data-folders", response_model=DataFoldersResponse)
+def get_data_folders(
+    principal: Principal = Depends(get_principal),
+    dealer_id: int | None = Query(None, description="Defaults to token dealer when omitted."),
+) -> DataFoldersResponse:
+    """Resolved absolute paths for dealer-scoped Upload Scans and ocr_output folders."""
+    did = resolve_dealer_id(principal, dealer_id)
+    uploads = get_uploads_dir(did).resolve()
+    ocr = get_ocr_output_dir(did).resolve()
+    return DataFoldersResponse(
+        dealer_id=did,
+        upload_scans_path=str(uploads),
+        ocr_output_path=str(ocr),
+    )
+
+
+AdminFolderRoot = Literal["upload_scans", "ocr_output"]
+
+
+def _admin_folder_base(root: AdminFolderRoot, did: int) -> Path:
+    if root == "upload_scans":
+        return get_uploads_dir(did)
+    return get_ocr_output_dir(did)
+
+
+def _resolve_under_dealer_root(base: Path, rel: str) -> Path:
+    """Resolve ``rel`` under ``base``; reject ``..`` and escapes."""
+    base_resolved = base.resolve()
+    rel = (rel or "").strip().replace("\\", "/")
+    if not rel:
+        return base_resolved
+    parts = [p for p in rel.split("/") if p and p != "."]
+    for p in parts:
+        if p == "..":
+            raise HTTPException(status_code=400, detail="Invalid path")
+    target = base_resolved.joinpath(*parts) if parts else base_resolved
+    target = target.resolve()
+    try:
+        target.relative_to(base_resolved)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail="Invalid path") from e
+    return target
+
+
+class FolderEntry(BaseModel):
+    name: str
+    kind: Literal["file", "dir"]
+    size: int | None = None
+    modified_at: str = Field(..., description="UTC ISO 8601 from filesystem mtime")
+
+
+class FolderListResponse(BaseModel):
+    root: str
+    rel_path: str
+    dealer_id: int
+    current_folder_abs: str
+    items: list[FolderEntry]
+
+
+@router.get("/folder-contents", response_model=FolderListResponse)
+def list_admin_folder_contents(
+    principal: Principal = Depends(get_principal),
+    root: AdminFolderRoot = Query(..., description="upload_scans or ocr_output"),
+    rel_path: str = Query("", description="Path under the dealer folder, / separators"),
+    dealer_id: int | None = Query(None, description="Defaults to token dealer when omitted."),
+) -> FolderListResponse:
+    """List files and subfolders under the dealer Upload Scans or ocr_output tree."""
+    did = resolve_dealer_id(principal, dealer_id)
+    base = _admin_folder_base(root, did)
+    folder = _resolve_under_dealer_root(base, rel_path)
+    if not folder.is_dir():
+        raise HTTPException(status_code=404, detail="Folder not found")
+
+    rows: list[tuple[Path, float, int | None]] = []
+    for f in folder.iterdir():
+        if f.name.startswith("."):
+            continue
+        st = f.stat()
+        size = None if f.is_dir() else st.st_size
+        rows.append((f, st.st_mtime, size))
+    rows.sort(key=lambda x: x[1], reverse=True)
+
+    items: list[FolderEntry] = []
+    for f, mtime_ts, size in rows:
+        mt = datetime.fromtimestamp(mtime_ts, tz=timezone.utc).isoformat()
+        if f.is_dir():
+            items.append(FolderEntry(name=f.name, kind="dir", modified_at=mt))
+        else:
+            items.append(FolderEntry(name=f.name, kind="file", size=size, modified_at=mt))
+    rel_norm = rel_path.strip().replace("\\", "/")
+    return FolderListResponse(
+        root=root,
+        rel_path=rel_norm,
+        dealer_id=did,
+        current_folder_abs=str(folder.resolve()),
+        items=items,
+    )
+
+
+@router.get("/folder-file")
+def get_admin_folder_file(
+    principal: Principal = Depends(get_principal),
+    root: AdminFolderRoot = Query(...),
+    path: str = Query(..., description="File path relative to dealer upload/ocr root"),
+    dealer_id: int | None = Query(None, description="Defaults to token dealer when omitted."),
+) -> FileResponse:
+    """Serve a file from under the dealer Upload Scans or ocr_output tree (read-only)."""
+    did = resolve_dealer_id(principal, dealer_id)
+    base = _admin_folder_base(root, did)
+    file_path = _resolve_under_dealer_root(base, path)
+    if not file_path.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(file_path, filename=file_path.name, content_disposition_type="inline")
 
 
 @router.post("/reset-all-data")

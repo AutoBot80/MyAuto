@@ -7,11 +7,10 @@ from functools import partial
 from pathlib import Path
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.config import (
-    DEALER_ID,
     DMS_BASE_URL,
     DMS_LOGIN_USER,
     DMS_LOGIN_PASSWORD,
@@ -31,6 +30,9 @@ from app.services.fill_hero_insurance_service import (
 )
 from app.services.fill_rto_service import warm_vahan_browser_session
 from app.services.playwright_executor import get_playwright_executor
+from app.security.deps import get_principal, resolve_dealer_id
+from app.security.principal import Principal
+from app.validation.text_limits import enforce_max_text_depth
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/fill-forms", tags=["fill-forms"])
@@ -301,9 +303,13 @@ def _require_absolute_http_url(url: str, field_name: str) -> str:
 
 
 @router.get("/data-from-dms")
-def get_data_from_dms(subfolder: str, dealer_id: int | None = Query(None, description="Dealer ID; uses app default if omitted")) -> dict:
+def get_data_from_dms(
+    subfolder: str,
+    principal: Principal = Depends(get_principal),
+    dealer_id: int | None = Query(None, description="Dealer ID; uses token dealer if omitted"),
+) -> dict:
     """Read Data from DMS.txt for a subfolder; return parsed vehicle and customer. Used when Fill Forms data was written but UI state was lost."""
-    did = dealer_id if dealer_id is not None else DEALER_ID
+    did = resolve_dealer_id(principal, dealer_id)
     safe_name = _safe_subfolder_name(subfolder)
     path = get_ocr_output_dir(did) / safe_name / "Data from DMS.txt"
     if not path.exists():
@@ -347,6 +353,7 @@ async def warm_dms_browser(req: WarmDmsBrowserRequest) -> WarmDmsBrowserResponse
     Open or attach to DMS (login wait only); no fill. Add Sales calls this after upload so the browser
     is closer to **Create Invoice** when the operator clicks it.
     """
+    enforce_max_text_depth(req.model_dump())
     base_url = (req.dms_base_url or DMS_BASE_URL or "").strip()
     if not base_url:
         raise HTTPException(status_code=400, detail="dms_base_url required (or set DMS_BASE_URL)")
@@ -370,13 +377,17 @@ async def warm_vahan_browser() -> WarmVahanBrowserResponse:
 
 
 @router.post("/dms", response_model=FillDmsResponse)
-async def fill_dms_only(req: FillDmsRequest) -> FillDmsResponse:
+async def fill_dms_only(
+    req: FillDmsRequest,
+    principal: Principal = Depends(get_principal),
+) -> FillDmsResponse:
     """Run only DMS (login, enquiry, vehicle search, scrape, PDFs). Independent process."""
+    enforce_max_text_depth(req.model_dump())
     base_url = (req.dms_base_url or DMS_BASE_URL or "").strip()
     if not base_url:
         raise HTTPException(status_code=400, detail="dms_base_url required (or set DMS_BASE_URL)")
     base_url = _require_absolute_http_url(base_url, "dms_base_url")
-    did = req.dealer_id if req.dealer_id is not None else DEALER_ID
+    did = resolve_dealer_id(principal, req.dealer_id)
     uploads_dir = Path(get_uploads_dir(did))
     if not uploads_dir.is_dir():
         raise HTTPException(status_code=500, detail="Uploads directory not found")
@@ -442,13 +453,13 @@ async def fill_dms_only(req: FillDmsRequest) -> FillDmsResponse:
 
 
 @router.get("/form20-status")
-def form20_status() -> dict:
+def form20_status(principal: Principal = Depends(get_principal)) -> dict:
     """Debug: check Form 20 template paths and fitz availability."""
     from pathlib import Path
 
     from app.config import FORM20_TEMPLATE_SINGLE, FORM20_TEMPLATE_FRONT, FORM20_TEMPLATE_BACK, FORM20_TEMPLATE_DOCX, GATE_PASS_TEMPLATE_DOCX, UPLOADS_DIR
 
-    project_root = Path(get_uploads_dir(DEALER_ID)).resolve().parent
+    project_root = Path(get_uploads_dir(principal.dealer_id)).resolve().parent
     single = Path(FORM20_TEMPLATE_SINGLE).resolve()
     front = Path(FORM20_TEMPLATE_FRONT).resolve()
     back = Path(FORM20_TEMPLATE_BACK).resolve()
@@ -485,9 +496,13 @@ def form20_status() -> dict:
 
 
 @router.post("/print-form20", response_model=PrintForm20Response)
-async def print_form20(req: PrintForm20Request) -> PrintForm20Response:
+async def print_form20(
+    req: PrintForm20Request,
+    principal: Principal = Depends(get_principal),
+) -> PrintForm20Response:
     """Generate Form 20 (all pages) and save to Uploaded scans/subfolder. Called from Print forms button."""
-    did = req.dealer_id if req.dealer_id is not None else DEALER_ID
+    enforce_max_text_depth(req.model_dump())
+    did = resolve_dealer_id(principal, req.dealer_id)
     uploads_dir = Path(get_uploads_dir(did))
     if not uploads_dir.is_dir():
         raise HTTPException(status_code=500, detail="Uploads directory not found")
@@ -512,27 +527,33 @@ async def print_form20(req: PrintForm20Request) -> PrintForm20Response:
             customer=customer_dict,
             vehicle=vehicle_dict,
             vehicle_id=req.vehicle_id,
-            dealer_id=req.dealer_id,
+            dealer_id=did,
             uploads_dir=uploads_dir,
         )
         return PrintForm20Response(success=True, pdfs_saved=form20_saved)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.warning("print_form20: Form 20 generation failed: %s", e)
         return PrintForm20Response(success=False, pdfs_saved=[], error=str(e))
 
 
 @router.post("/insurance/hero", response_model=FillHeroInsuranceResponse)
-async def fill_hero_insurance(req: FillHeroInsuranceRequest = FillHeroInsuranceRequest()) -> FillHeroInsuranceResponse:
+async def fill_hero_insurance(
+    req: FillHeroInsuranceRequest = FillHeroInsuranceRequest(),
+    principal: Principal = Depends(get_principal),
+) -> FillHeroInsuranceResponse:
     """
     Hero Insurance: ``pre_process`` (Sign In → 2W → New Policy → insurer / OVD / mobile / KYC **Proceed**
     or uploads) then ``main_process`` (VIN/chassis from ``form_insurance_view``, proposal defaults hardcoded).
     Requires ``customer_id`` and ``vehicle_id`` for the main stage. Optional ``staging_id`` merges
     ``add_sales_staging.payload_json`` (OCR merge) for insurer/nominee when the view has no ``insurance_master`` row yet.
     """
+    enforce_max_text_depth(req.model_dump())
     url = (req.insurance_base_url or INSURANCE_BASE_URL or "").strip()
     if url:
         url = _require_absolute_http_url(url, "insurance_base_url")
-    did = req.dealer_id if req.dealer_id is not None else DEALER_ID
+    did = resolve_dealer_id(principal, req.dealer_id)
     ocr_dir = Path(get_ocr_output_dir(did))
 
     staging_payload = None
@@ -582,14 +603,18 @@ async def fill_hero_insurance(req: FillHeroInsuranceRequest = FillHeroInsuranceR
 
 
 @router.post("", response_model=FillDmsResponse)
-async def fill_dms(req: FillDmsRequest) -> FillDmsResponse:
+async def fill_dms(
+    req: FillDmsRequest,
+    principal: Principal = Depends(get_principal),
+) -> FillDmsResponse:
+    enforce_max_text_depth(req.model_dump())
     logger.info("fill_dms: start subfolder=%s dms=%s", req.subfolder, bool(req.dms_base_url))
     base_url = (req.dms_base_url or DMS_BASE_URL or "").strip()
     if not base_url:
         logger.warning("fill_dms: dms_base_url missing")
         raise HTTPException(status_code=400, detail="dms_base_url required (or set DMS_BASE_URL)")
     base_url = _require_absolute_http_url(base_url, "dms_base_url")
-    did = req.dealer_id if req.dealer_id is not None else DEALER_ID
+    did = resolve_dealer_id(principal, req.dealer_id)
     uploads_dir = Path(get_uploads_dir(did))
     if not uploads_dir.is_dir():
         raise HTTPException(status_code=500, detail="Uploads directory not found")

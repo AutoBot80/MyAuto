@@ -1,0 +1,102 @@
+.admin-data-folder-page {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.admin-data-folder-page__dealer-bar {
+  flex-shrink: 0;
+  margin-bottom: 10px;
+}
+
+.admin-data-folder-page__dealers-err {
+  margin: 0 0 8px;
+}
+
+.admin-data-folder-page .bulk-folder-view {
+  flex: 1;
+  min-height: 0;
+}
+
+.admin-data-folder-page__header {
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+}
+
+.admin-data-folder-page__heading {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+
+.admin-data-folder-page__title {
+  margin: 0 0 0.35rem;
+  word-break: break-word;
+}
+
+.admin-data-folder-page__path-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  max-width: 100%;
+}
+
+.admin-data-folder-page__path {
+  flex: 1 1 200px;
+  min-width: 0;
+  padding: 0.35rem 0.5rem;
+  background: #f4f6f8;
+  border: 1px solid #cfd8e3;
+  border-radius: 4px;
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.admin-data-folder-list .app-table tbody td:first-child {
+  white-space: normal;
+  max-width: min(52vw, 36rem);
+}
+
+.admin-data-folder-list__name-cell {
+  vertical-align: middle;
+}
+
+.admin-data-folder-list__name-btn,
+.admin-data-folder-list__name-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  max-width: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: #1e5a9e;
+  cursor: pointer;
+  text-align: left;
+  text-decoration: none;
+}
+
+.admin-data-folder-list__name-link:hover {
+  text-decoration: underline;
+}
+
+.admin-data-folder-list__name-text {
+  word-break: break-all;
+}
+
+.admin-data-folder-list__mini-icon {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.admin-data-folder-list__mini-icon svg {
+  width: 100%;
+  height: 100%;
+}

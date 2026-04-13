@@ -1,3 +1,5 @@
+import { getAccessToken } from "../auth/token";
+
 /**
  * Base API client. Swap baseUrl per environment or microservice.
  * When unset, uses empty string so Vite dev proxy forwards to backend (avoids CORS).
@@ -45,10 +47,15 @@ export async function apiFetch<T>(
   options: RequestInit = {}
 ): Promise<T> {
   let res: Response;
+  const headers = new Headers(options.headers as HeadersInit | undefined);
+  const token = getAccessToken();
+  if (token && !path.startsWith("/auth/login")) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
   try {
     res = await fetch(`${baseUrl}${path}`, {
       ...options,
-      headers: { ...options.headers },
+      headers,
     });
   } catch (err) {
     throwMappedFetchError(err);

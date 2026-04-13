@@ -10,24 +10,12 @@ from pathlib import Path
 
 from fastapi import APIRouter, File, UploadFile
 
+from app.config import UPLOAD_MAX_FILE_BYTES
+from app.services.upload_file_validation import read_upload_capped
+
 router = APIRouter(prefix="/qr-decode", tags=["qr-decode"])
 
-MAX_IMAGE_BYTES = 2 * 1024 * 1024  # 2 MB
 DECODE_TIMEOUT_SECONDS = 25  # Hard kill worker after this so server always responds
-
-
-async def _read_file_capped(upload: UploadFile, max_bytes: int) -> bytes:
-    """Read upload up to max_bytes so we never buffer huge files."""
-    chunks = []
-    total = 0
-    while total < max_bytes:
-        to_read = min(64 * 1024, max_bytes - total)
-        chunk = await upload.read(to_read)
-        if not chunk:
-            break
-        chunks.append(chunk)
-        total += len(chunk)
-    return b"".join(chunks)
 
 
 def _run_decode_subprocess(image_path: Path, timeout: int) -> tuple[dict | None, str | None]:
@@ -68,11 +56,12 @@ async def decode_qr(file: UploadFile = File(..., description="Scan image contain
     Decode QR code(s) from uploaded image and parse payload.
     Runs in a subprocess so a hanging OpenCV does not freeze the server; we kill the process after timeout.
     """
-    raw = await _read_file_capped(file, MAX_IMAGE_BYTES + 1)
+    try:
+        raw = await read_upload_capped(file, UPLOAD_MAX_FILE_BYTES)
+    except ValueError as e:
+        return {"decoded": [], "error": str(e)}
     if not raw:
         return {"decoded": [], "error": "Empty file"}
-    if len(raw) > MAX_IMAGE_BYTES:
-        return {"decoded": [], "error": "Image too large (max 2 MB). Use a smaller or cropped image."}
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".bin") as f:
         f.write(raw)

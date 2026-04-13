@@ -9,6 +9,8 @@ export type Page =
   | "dealer-dashboard"
   | "admin-tools"
   | "admin-dealers"
+  | "admin-upload-scans"
+  | "admin-run-logs"
   | "contact-us";
 
 export type AddSalesStep =

@@ -1,7 +1,9 @@
 """AI reader queue endpoints. Queue disabled (table dropped); extracted-details still works from JSON files."""
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.config import DEALER_ID, get_ocr_output_dir, get_uploads_dir
+from app.config import get_ocr_output_dir, get_uploads_dir
+from app.security.deps import get_principal, resolve_dealer_id
+from app.security.principal import Principal
 from app.services.sales_ocr_service import OcrService
 
 router = APIRouter(prefix="/ai-reader-queue", tags=["ai-reader-queue"])
@@ -28,11 +30,12 @@ def list_extractions(limit: int = 200) -> list[dict]:
 @router.get("/extracted-details")
 def get_extracted_details(
     subfolder: str,
-    dealer_id: int | None = Query(None, description="Dealer ID; uses app default if omitted"),
+    principal: Principal = Depends(get_principal),
+    dealer_id: int | None = Query(None, description="Dealer ID; uses token dealer if omitted"),
 ) -> dict:
     """Return structured vehicle (and customer) details for a subfolder from JSON files.
     May include extraction_error when Aadhar QR failed; vehicle and insurance are still returned."""
-    did = dealer_id if dealer_id is not None else DEALER_ID
+    did = resolve_dealer_id(principal, dealer_id)
     service = OcrService(
         uploads_dir=get_uploads_dir(did),
         ocr_output_dir=get_ocr_output_dir(did),
@@ -46,13 +49,14 @@ def get_extracted_details(
 @router.get("/insurance-extraction")
 def get_insurance_extraction(
     subfolder: str,
-    dealer_id: int | None = Query(None, description="Dealer ID; uses app default if omitted"),
+    principal: Principal = Depends(get_principal),
+    dealer_id: int | None = Query(None, description="Dealer ID; uses token dealer if omitted"),
 ) -> dict:
     """Debug: return what Textract extracted from Insurance.jpg (raw + parsed) and file status."""
     import re
     from pathlib import Path
 
-    did = dealer_id if dealer_id is not None else DEALER_ID
+    did = resolve_dealer_id(principal, dealer_id)
     ocr_dir = get_ocr_output_dir(did)
     uploads_dir = get_uploads_dir(did)
 

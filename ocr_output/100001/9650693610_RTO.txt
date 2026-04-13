@@ -1,70 +1,13 @@
-[2026-04-12 17:55:59 IST] [Setup] fill_rto_row start rto_queue_id=1 sales_id=1 dealer_id=100001 log_file=C:\Users\arya_\OneDrive\Desktop\My Auto.AI\ocr_output\100001\9650693610_RTO.txt
-[2026-04-12 17:55:59 IST] [Setup] uploads root (dealer): C:\Users\arya_\OneDrive\Desktop\My Auto.AI\Uploaded scans\100001
-[2026-04-12 17:55:59 IST] [Setup] searched folder (absolute): C:\Users\arya_\OneDrive\Desktop\My Auto.AI\Uploaded scans\100001\8905969604_100426
-[2026-04-12 17:55:59 IST] [Setup] documents matched to categories: {'FORM 20': '8905969604_Form_20.pdf', 'FORM 21': '8905969604_Sale_Certificate.pdf', 'FORM 22': '8905969604_Form22.pdf', 'INSURANCE CERTIFICATE': '8905969604_Insurance.pdf', 'INVOICE ORIGINAL': '8905969604_GST_Retail_Invoice.pdf', 'AADHAAR_FRONT': 'Aadhar.jpg', 'AADHAAR_BACK': 'Aadhar_back.jpg', 'OWNER UNDERTAKING FORM': 'Details.jpg'}
-[2026-04-12 17:56:05 IST] [Setup] browser page url: https://vahan.parivahan.gov.in/vahan/vahan/ui/form_documents_upload.xhtml
-[2026-04-12 17:56:05 IST] [Setup] TEMP SKIP: RTO_FILL_SKIP_TO_SCREEN=5 — start at Screen 5 (skipped: dealer-home reset + screens 1..4) Screen 5: **Owner Undertaking Form** only — pick Sub Category, upload file, next; File Movement at end.
-[2026-04-12 17:56:05 IST] [Screen 5] --- Screen 5: Document uploads by sub-category ---
-[2026-04-12 17:56:05 IST] [Screen 5] SKIP: Screen 5 — OWNER UNDERTAKING FORM only (Sub Category → Owner Undertaking Form → upload → next; then File Movement)
-[2026-04-12 17:56:08 IST] [Screen 5] pf-dropdown: Sub Category (OWNER UNDERTAKING FORM) = Owner Undertaking Form
-[2026-04-12 17:56:08 IST] [Screen 5] upload: Details.jpg
-[2026-04-12 17:56:12 IST] [Screen 5] WARNING: Upload Document control not clicked — continuing (portal may submit on file input alone)
-[2026-04-12 17:56:12 IST] [Screen 5] WARNING: nextBtn not found for OWNER UNDERTAKING FORM
-[2026-04-12 17:56:15 IST] [Screen 5] TIMEOUT click: File Movement (after uploads) selector=[id="formDocumentUpload:fileFlowId"], input[value*='File Movement'], button:has-text('File Movement'), a:has-text('File Movement')
-[2026-04-12 17:56:15 IST] [Screen 5] === PAGE STATE DUMP (TIMEOUT click: File Movement (after uploads)) ===
-[2026-04-12 17:56:15 IST] [Screen 5] url: https://vahan.parivahan.gov.in/vahan/vahan/ui/form_documents_upload.xhtml
-[2026-04-12 17:56:15 IST] [Screen 5] frames: 1
-[2026-04-12 17:56:15 IST] [Screen 5]   frame[0] name='(main)' url=https://vahan.parivahan.gov.in/vahan/vahan/ui/form_documents_upload.xhtml
-[2026-04-12 17:56:15 IST] [Screen 5]   [frame[0] main] visible interactive elements (47, selects first — cap 150):
-[2026-04-12 17:56:15 IST] [Screen 5]     select id='formDocumentUpload:subCatgId_input' name='formDocumentUpload:subCatgId_input' value='1193' text='---------------SELECT--------------- Owners Signature Owner '
-[2026-04-12 17:56:15 IST] [Screen 5]     nav role='navigation' text=' Home  Report   Update Profile   Language  Welcome YOGESH AG' class='navbar navbar-default navigation-background'
-[2026-04-12 17:56:15 IST] [Screen 5]     a id='homeId1' name='homeId1'
-[2026-04-12 17:56:15 IST] [Screen 5]     a id='homeId2' name='homeId2' text=' Home'
-[2026-04-12 17:56:15 IST] [Screen 5]     a text=' Report ' class='dropdown-toggle'
-[2026-04-12 17:56:15 IST] [Screen 5]     a text=' Update Profile ' class='dropdown-toggle'
-[2026-04-12 17:56:15 IST] [Screen 5]     a text=' Language ' class='dropdown-toggle'
-[2026-04-12 17:56:15 IST] [Screen 5]     a id='welcomeUserId' name='welcomeUserId' text='Welcome YOGESH AGRAWAL , DEALER STAFF, Rajasthan'
-[2026-04-12 17:56:15 IST] [Screen 5]     a id='logout' text='Logout' class='ui-commandlink ui-widget glyphicon glyphicon-log-out'
-[2026-04-12 17:56:15 IST] [Screen 5]     h1 text='DOCUMENTS UPLOAD' class='header-main'
-[2026-04-12 17:56:15 IST] [Screen 5]     a class='ui-messages-close'
-[2026-04-12 17:56:15 IST] [Screen 5]     li role='alert' text='Details.jpg is uploaded.'
-[2026-04-12 17:56:15 IST] [Screen 5]     label text='Application No' class='field-label resp-label-section'
-[2026-04-12 17:56:15 IST] [Screen 5]     label id='formDocumentUpload:j_idt189' text='Application No' class='ui-outputlabel ui-widget'
-[2026-04-12 17:56:15 IST] [Screen 5]     input id='formDocumentUpload:application_no' name='formDocumentUpload:application_no' type='text' role='textbox' value='RJ26041148051328' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all input'
-[2026-04-12 17:56:15 IST] [Screen 5]     label text='Application Date' class='field-label resp-label-section'
-[2026-04-12 17:56:15 IST] [Screen 5]     label id='formDocumentUpload:j_idt192' text='Application Date' class='ui-outputlabel ui-widget'
-[2026-04-12 17:56:15 IST] [Screen 5]     input id='formDocumentUpload:application_dt' name='formDocumentUpload:application_dt' type='text' role='textbox' value='11-Apr-2026' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all input'
-[2026-04-12 17:56:15 IST] [Screen 5]     label text='Registration No' class='field-label resp-label-section'
-[2026-04-12 17:56:15 IST] [Screen 5]     label id='formDocumentUpload:j_idt195' text='Registration No' class='ui-outputlabel ui-widget'
-[2026-04-12 17:56:15 IST] [Screen 5]     input id='formDocumentUpload:j_idt197' name='formDocumentUpload:j_idt197' type='text' role='textbox' value='NEW' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all input'
-[2026-04-12 17:56:15 IST] [Screen 5]     label text='Owner Name' class='field-label resp-label-section'
-[2026-04-12 17:56:15 IST] [Screen 5]     label id='formDocumentUpload:j_idt199' text='Owner Name' class='ui-outputlabel ui-widget'
-[2026-04-12 17:56:15 IST] [Screen 5]     input id='formDocumentUpload:owner_name' name='formDocumentUpload:owner_name' type='text' role='textbox' value='AJAY FAUJDAR' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all input'
-[2026-04-12 17:56:15 IST] [Screen 5]     label text='Chassis No' class='field-label resp-label-section'
-[2026-04-12 17:56:15 IST] [Screen 5]     label id='formDocumentUpload:j_idt202' text='Chassis No' class='ui-outputlabel ui-widget'
-[2026-04-12 17:56:15 IST] [Screen 5]     input id='formDocumentUpload:chasi_no' name='formDocumentUpload:chasi_no' type='text' role='textbox' value='MBLHAW48XT9B05182' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all input'
-[2026-04-12 17:56:15 IST] [Screen 5]     label text='Purpose' class='field-label resp-label-section'
-[2026-04-12 17:56:15 IST] [Screen 5]     label id='formDocumentUpload:j_idt205' text='Purpose' class='ui-outputlabel ui-widget'
-[2026-04-12 17:56:15 IST] [Screen 5]     input id='formDocumentUpload:purpose_description' name='formDocumentUpload:purpose_description' type='text' role='textbox' value='New Registration (Dealer Side)' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all input'
-[2026-04-12 17:56:15 IST] [Screen 5]     label id='formDocumentUpload:j_idt219' text='Owner Details AJAY FAUJDAR S/W/D of S/O KAMAL SINGH R/o S/O ' class='ui-outputlabel ui-widget'
-[2026-04-12 17:56:15 IST] [Screen 5]     label text='Document (13 of 17)' class='field-label resp-label-section'
-[2026-04-12 17:56:15 IST] [Screen 5]     input id='formDocumentUpload:catgId' name='formDocumentUpload:catgId' type='text' role='textbox' value='Owner Undertaking Form' class='ui-inputfield ui-inputtext ui-widget ui-state-default ui-corner-all ui-state-dis'
-[2026-04-12 17:56:15 IST] [Screen 5]     label text='Sub Category*' class='field-label resp-label-section'
-[2026-04-12 17:56:15 IST] [Screen 5]     label id='formDocumentUpload:j_idt229' text='Sub Category*' class='ui-outputlabel ui-widget'
-[2026-04-12 17:56:15 IST] [Screen 5]     div id='formDocumentUpload:subCatgId' role='combobox' text='---------------SELECT--------------- Owners Signature Owner ' class='ui-selectonemenu ui-widget ui-state-default ui-corner-all bottom-space ui-state-'
-[2026-04-12 17:56:15 IST] [Screen 5]     input id='formDocumentUpload:subCatgId_focus' name='formDocumentUpload:subCatgId_focus' type='text'
-[2026-04-12 17:56:15 IST] [Screen 5]     label id='formDocumentUpload:subCatgId_label' text='Owner Undertaking Form' class='ui-selectonemenu-label ui-inputfield ui-corner-all'
-[2026-04-12 17:56:15 IST] [Screen 5]     span role='button' text='Modify Document' class='ui-button ui-widget ui-state-default ui-corner-all ui-button-text-icon-left ui-f'
-[2026-04-12 17:56:15 IST] [Screen 5]     input id='formDocumentUpload:selectAndModifyFile_input' name='formDocumentUpload:selectAndModifyFile_input' type='file'
-[2026-04-12 17:56:15 IST] [Screen 5]     a id='formDocumentUpload:prevBtn' class='ui-commandlink ui-widget arrow'
-[2026-04-12 17:56:15 IST] [Screen 5]     a id='formDocumentUpload:nextBtn' class='ui-commandlink ui-widget arrow'
-[2026-04-12 17:56:15 IST] [Screen 5]     a id='formDocumentUpload:j_idt239' class='ui-commandlink ui-widget zoomin-zoomout'
-[2026-04-12 17:56:15 IST] [Screen 5]     a id='formDocumentUpload:j_idt241' class='ui-commandlink ui-widget zoomin-zoomout'
-[2026-04-12 17:56:15 IST] [Screen 5]     button id='formDocumentUpload:fileFlowId' name='formDocumentUpload:fileFlowId' type='submit' role='button' text='File Movement' class='ui-button ui-widget ui-state-default ui-corner-all ui-button-text-icon-left'
-[2026-04-12 17:56:15 IST] [Screen 5]     button id='formDocumentUpload:j_idt252' name='formDocumentUpload:j_idt252' type='button' role='button' text='Home' class='ui-button ui-widget ui-state-default ui-corner-all ui-button-text-icon-left'
-[2026-04-12 17:56:15 IST] [Screen 5]     label id='formDocumentUpload:j_idt260' text='Please wait.......' class='ui-outputlabel ui-widget'
-[2026-04-12 17:56:15 IST] [Screen 5]   [frame[0] main] ALL <select> (1 — ids, selected label, options preview):
-[2026-04-12 17:56:15 IST] [Screen 5]     select[0] id='formDocumentUpload:subCatgId_input' name='formDocumentUpload:subCatgId_input' si=2 sel='Owner Undertaking Form' nOpt=3 vis=True inVehTab=False inHypIns=False seriesHint=False
-[2026-04-12 17:56:15 IST] [Screen 5]       options: '---------------SELECT---------------' [value='-1'] | 'Owners Signature' [value='1019'] | 'Owner Undertaking Form' [value='1193']
-[2026-04-12 17:56:15 IST] [Screen 5] === END PAGE STATE DUMP ===
-[2026-04-12 17:56:15 IST] [Screen 5] fill_rto_row FAILED: [Screen 5] Locator.click: Timeout 2000ms exceeded.
+[2026-04-12 17:59:59 IST] [Setup] fill_rto_row start rto_queue_id=1 sales_id=1 dealer_id=100001 log_file=C:\Users\arya_\OneDrive\Desktop\My Auto.AI\ocr_output\100001\9650693610_RTO.txt
+[2026-04-12 17:59:59 IST] [Setup] uploads root (dealer): C:\Users\arya_\OneDrive\Desktop\My Auto.AI\Uploaded scans\100001
+[2026-04-12 17:59:59 IST] [Setup] searched folder (absolute): C:\Users\arya_\OneDrive\Desktop\My Auto.AI\Uploaded scans\100001\8905969604_100426
+[2026-04-12 17:59:59 IST] [Setup] documents matched to categories: {'FORM 20': '8905969604_Form_20.pdf', 'FORM 21': '8905969604_Sale_Certificate.pdf', 'FORM 22': '8905969604_Form22.pdf', 'INSURANCE CERTIFICATE': '8905969604_Insurance.pdf', 'INVOICE ORIGINAL': '8905969604_GST_Retail_Invoice.pdf', 'AADHAAR_FRONT': 'Aadhar.jpg', 'AADHAAR_BACK': 'Aadhar_back.jpg', 'OWNER UNDERTAKING FORM': 'Details.jpg'}
+[2026-04-12 18:00:05 IST] [Setup] browser page url: https://vahan.parivahan.gov.in/vahan/vahan/ui/form_documents_upload.xhtml
+[2026-04-12 18:00:05 IST] [Setup] TEMP SKIP: RTO_FILL_SKIP_TO_SCREEN=5 — start at Screen 5 (skipped: dealer-home reset + screens 1..4) Screen 5: **File Movement** button only (scroll bottom → formDocumentUpload:fileFlowId → dialogs).
+[2026-04-12 18:00:05 IST] [Screen 5] --- Screen 5: Document uploads by sub-category ---
+[2026-04-12 18:00:05 IST] [Screen 5] SKIP: Screen 5 — File Movement only (scroll bottom → [id="formDocumentUpload:fileFlowId"] → Yes / Ok dialogs)
+[2026-04-12 18:00:06 IST] [Screen 5] click: File Movement ([id="formDocumentUpload:fileFlowId"])
+[2026-04-12 18:00:06 IST] [Screen 5] dialog: Yes
+[2026-04-12 18:00:09 IST] [Screen 6] --- Screen 6: hard stop before Dealer Regn Fee Tax ---
+[2026-04-12 18:00:09 IST] [Screen 6] HARD STOP (Screen 6): Screen 6: intentional stop before clicking Dealer Regn Fee Tax. Open fee details and complete payment steps manually on Vahan.
+[2026-04-12 18:00:09 IST] [Screen 6] fill_rto_row FAILED: [Screen 6] Screen 6: intentional stop before clicking Dealer Regn Fee Tax. Open fee details and complete payment steps manually on Vahan.

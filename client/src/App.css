@@ -1742,6 +1742,14 @@
   border: 1px solid #c5d9ed;
   border-radius: 6px;
   background: #fff;
+  color: #111827;
+  -webkit-text-fill-color: #111827;
+  color-scheme: light;
+}
+
+.view-vehicles-search-field select option {
+  color: #111827;
+  background-color: #fff;
 }
 
 .view-vehicles-search-btn {
@@ -1854,6 +1862,12 @@
   background: #fff;
   color: #111827;
   -webkit-text-fill-color: #111827;
+  color-scheme: light;
+}
+
+.view-vehicles-kv-select option {
+  color: #111827;
+  background-color: #fff;
 }
 
 /* Browsers default disabled controls to low opacity — keep text readable (Admin Dealers, etc.). */
@@ -3158,4 +3172,42 @@
   .subdealer-challan-table-wrap {
     max-width: none;
   }
+}
+
+/* App shell: deterrents (see AppChrome) */
+.app-chrome {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+.app-deterrent {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.app-deterrent input,
+.app-deterrent textarea,
+.app-deterrent select,
+.app-deterrent [contenteditable="true"] {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.app-topbar-left-column {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+.app-topbar-welcome {
+  font-size: 12px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.95);
+  max-width: 200px;
+  line-height: 1.25;
 }

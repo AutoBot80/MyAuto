@@ -2,11 +2,13 @@
 
 from datetime import date, datetime
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from app.config import DEALER_ID
 from app.repositories import rto_payment_details as repo
+from app.security.deps import get_principal, resolve_dealer_id
+from app.security.principal import Principal
+from app.validation.text_limits import enforce_max_text_depth
 from app.services.rto_otp_bridge import deliver_operator_change_mobile, deliver_operator_otp
 from app.services.rto_payment_service import get_dealer_batch_status, start_dealer_rto_batch
 
@@ -67,6 +69,7 @@ def _serialize_row(row: dict) -> dict:
 @router.post("")
 def insert_rto_payment(payload: RtoPaymentInsertPayload) -> dict:
     """Insert one RTO queue row after Fill Forms completes DMS/Form 20 work."""
+    enforce_max_text_depth(payload.model_dump())
     sid = payload.sales_id
     if sid is None and payload.customer_id is not None and payload.vehicle_id is not None:
         sid = repo._get_sales_id(payload.customer_id, payload.vehicle_id)
@@ -83,14 +86,20 @@ def insert_rto_payment(payload: RtoPaymentInsertPayload) -> dict:
             status=payload.status or "Queued",
         )
         return {"rto_queue_id": queue_id, "ok": True}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/process-batch")
-def process_rto_batch(payload: RtoBatchStartPayload) -> dict:
+def process_rto_batch(
+    payload: RtoBatchStartPayload,
+    principal: Principal = Depends(get_principal),
+) -> dict:
     """Start dealer-scoped batch processing."""
-    did = payload.dealer_id if payload.dealer_id is not None else DEALER_ID
+    enforce_max_text_depth(payload.model_dump())
+    did = resolve_dealer_id(principal, payload.dealer_id)
     result = start_dealer_rto_batch(
         dealer_id=did,
         limit=payload.limit,
@@ -102,17 +111,22 @@ def process_rto_batch(payload: RtoBatchStartPayload) -> dict:
 
 @router.get("/process-batch/status")
 def get_process_batch_status(
-    dealer_id: int | None = Query(None, description="Dealer ID; uses app default if omitted"),
+    principal: Principal = Depends(get_principal),
+    dealer_id: int | None = Query(None, description="Dealer ID; uses token dealer if omitted"),
 ) -> dict:
     """Return the latest dealer batch progress snapshot."""
-    did = dealer_id if dealer_id is not None else DEALER_ID
+    did = resolve_dealer_id(principal, dealer_id)
     return get_dealer_batch_status(did)
 
 
 @router.post("/submit-operator-otp")
-def submit_operator_otp(payload: RtoOtpSubmitPayload) -> dict:
+def submit_operator_otp(
+    payload: RtoOtpSubmitPayload,
+    principal: Principal = Depends(get_principal),
+) -> dict:
     """Deliver operator-entered OTP to the in-progress Vahan fill (after Partial Save OTP popup)."""
-    did = payload.dealer_id if payload.dealer_id is not None else DEALER_ID
+    enforce_max_text_depth(payload.model_dump())
+    did = resolve_dealer_id(principal, payload.dealer_id)
     st = get_dealer_batch_status(did)
     if not st.get("otp_pending"):
         raise HTTPException(status_code=400, detail="No OTP request is pending for this dealer")
@@ -132,9 +146,13 @@ def submit_operator_otp(payload: RtoOtpSubmitPayload) -> dict:
 
 
 @router.post("/submit-operator-mobile-change")
-def submit_operator_mobile_change(payload: RtoMobileChangePayload) -> dict:
+def submit_operator_mobile_change(
+    payload: RtoMobileChangePayload,
+    principal: Principal = Depends(get_principal),
+) -> dict:
     """Tell automation to Cancel the OTP dialog, set workbench mobile, and press Partial Save again."""
-    did = payload.dealer_id if payload.dealer_id is not None else DEALER_ID
+    enforce_max_text_depth(payload.model_dump())
+    did = resolve_dealer_id(principal, payload.dealer_id)
     st = get_dealer_batch_status(did)
     if not st.get("otp_pending"):
         raise HTTPException(status_code=400, detail="No OTP request is pending for this dealer")
@@ -163,9 +181,12 @@ def get_rto_payment_by_sale(customer_id: int, vehicle_id: int) -> dict | None:
 
 
 @router.get("")
-def list_rto_payments(dealer_id: int | None = Query(None, description="Dealer ID; uses app default if omitted")) -> list[dict]:
+def list_rto_payments(
+    principal: Principal = Depends(get_principal),
+    dealer_id: int | None = Query(None, description="Dealer ID; uses token dealer if omitted"),
+) -> list[dict]:
     """List RTO queue rows, filtered by dealer."""
-    did = dealer_id if dealer_id is not None else DEALER_ID
+    did = resolve_dealer_id(principal, dealer_id)
     rows = repo.list_all(dealer_id=did)
     return [_serialize_row(r) for r in rows]
 

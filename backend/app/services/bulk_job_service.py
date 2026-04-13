@@ -10,7 +10,6 @@ from uuid import uuid4
 
 from app.config import (
     BULK_JOB_MAX_ATTEMPTS,
-    BULK_PRE_OCR_USE_TEXTRACT,
     BULK_SQS_VISIBILITY_TIMEOUT_SEC,
     get_bulk_input_scans_dir,
     get_bulk_processing_dir,
@@ -482,7 +481,6 @@ def process_job(job_id: str, dealer_id: int, worker_id: str) -> str:
         bundles, subfolder_stem, mobile, ocr_path, missing = run_pre_ocr_and_prepare(
             scans_pdf,
             processing_dir=proc_dir,
-            use_textract=BULK_PRE_OCR_USE_TEXTRACT,
         )
     except Exception as exc:
         logger.exception("bulk_jobs: pre-OCR failed for %s", scans_pdf)

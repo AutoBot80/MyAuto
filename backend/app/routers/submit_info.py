@@ -1,9 +1,12 @@
 """Submit Info: persist customer, vehicle, sales, insurance from Add Sales form."""
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from app.security.deps import get_principal, resolve_dealer_id
+from app.security.principal import Principal
 from app.services.submit_info_service import submit_info
+from app.validation.text_limits import enforce_max_text_depth
 
 router = APIRouter(prefix="/submit-info", tags=["submit-info"])
 
@@ -64,18 +67,25 @@ def _to_dict(m: BaseModel) -> dict:
 
 
 @router.post("")
-def post_submit_info(payload: SubmitInfoPayload) -> dict:
+def post_submit_info(
+    payload: SubmitInfoPayload,
+    principal: Principal = Depends(get_principal),
+) -> dict:
     """Validate and persist **draft** ``add_sales_staging`` only. Returns ``ok`` and ``staging_id``."""
     try:
+        enforce_max_text_depth(payload.model_dump())
+        did = resolve_dealer_id(principal, payload.dealer_id)
         result = submit_info(
             customer=_to_dict(payload.customer),
             vehicle=_to_dict(payload.vehicle),
             insurance=_to_dict(payload.insurance),
-            dealer_id=payload.dealer_id,
+            dealer_id=did,
             file_location=payload.file_location,
             staging_id=payload.staging_id,
         )
         return result
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:

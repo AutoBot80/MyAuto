@@ -3,7 +3,21 @@ from pathlib import Path
 
 from fastapi import UploadFile
 
-from app.config import get_uploaded_scans_sale_subfolder_leaf, get_uploads_dir
+from app.config import (
+    UPLOAD_MAX_IMAGE_BYTES,
+    UPLOAD_MAX_LEGACY_FILE_BYTES,
+    UPLOAD_MAX_PDF_BYTES,
+    get_ocr_output_dir,
+    get_uploaded_scans_sale_subfolder_leaf,
+    get_uploads_dir,
+)
+from app.services.upload_file_validation import (
+    read_upload_capped,
+    sanitize_legacy_upload_filename,
+    validate_magic_jpeg_or_png,
+    validate_magic_jpeg_png_or_pdf,
+    validate_magic_jpeg_png_pdf_legacy,
+)
 
 # ai_reader_queue disabled; extraction runs directly after upload (Option 1)
 
@@ -62,9 +76,13 @@ class UploadService:
         saved: list[str] = []
 
         for f in files:
-            filename = Path(f.filename or "scan").name
-            target = self._unique_path(subdir, filename)
-            content = await f.read()
+            try:
+                safe_name = sanitize_legacy_upload_filename(f.filename, default="scan.jpg")
+                content = await read_upload_capped(f, UPLOAD_MAX_LEGACY_FILE_BYTES)
+                validate_magic_jpeg_png_pdf_legacy(content, label=safe_name)
+            except ValueError as e:
+                return {"error": str(e)}
+            target = self._unique_path(subdir, safe_name)
             target.write_bytes(content)
             saved.append(target.name)
 
@@ -97,25 +115,49 @@ class UploadService:
 
         saved: list[str] = []
 
-        file_defs: list[tuple[UploadFile, str]] = [
-            (aadhar_scan, "Aadhar.jpg"),
-            (aadhar_back, "Aadhar_back.jpg"),
-            (sales_detail, "Details.jpg"),
-        ]
-        if insurance_sheet and insurance_sheet.filename:
-            file_defs.append((insurance_sheet, "Insurance.jpg"))
-        if financing_doc and financing_doc.filename:
-            file_defs.append((financing_doc, "Financing.jpg"))
-        for role, save_name in file_defs:
-            content = await role.read()
+        async def save_image_field(upload: UploadFile, save_name: str, label: str) -> str | None:
+            try:
+                content = await read_upload_capped(upload, UPLOAD_MAX_IMAGE_BYTES)
+                validate_magic_jpeg_or_png(content, label=label)
+            except ValueError as e:
+                return str(e)
             target = subdir / save_name
             target.write_bytes(content)
             saved.append(save_name)
+            return None
+
+        err_msg = await save_image_field(aadhar_scan, "Aadhar.jpg", "Aadhar front")
+        if err_msg:
+            return {"error": err_msg}
+        err_msg = await save_image_field(aadhar_back, "Aadhar_back.jpg", "Aadhar back")
+        if err_msg:
+            return {"error": err_msg}
+        err_msg = await save_image_field(sales_detail, "Details.jpg", "Sales details")
+        if err_msg:
+            return {"error": err_msg}
+
+        if insurance_sheet and insurance_sheet.filename:
+            try:
+                content = await read_upload_capped(insurance_sheet, UPLOAD_MAX_IMAGE_BYTES)
+                validate_magic_jpeg_or_png(content, label="Insurance sheet")
+            except ValueError as e:
+                return {"error": str(e)}
+            (subdir / "Insurance.jpg").write_bytes(content)
+            saved.append("Insurance.jpg")
+
+        if financing_doc and financing_doc.filename:
+            try:
+                content = await read_upload_capped(financing_doc, UPLOAD_MAX_PDF_BYTES)
+                validate_magic_jpeg_png_or_pdf(content, label="Financing document")
+            except ValueError as e:
+                return {"error": str(e)}
+            # OCR pipeline expects this exact name (bytes may be PDF or image).
+            (subdir / "Financing.jpg").write_bytes(content)
+            saved.append("Financing.jpg")
 
         # Run extraction directly after upload (Option 1: no queue)
         extraction_result: dict = {}
         try:
-            from app.config import get_ocr_output_dir
             from app.services.sales_ocr_service import OcrService
 
             ocr = OcrService(

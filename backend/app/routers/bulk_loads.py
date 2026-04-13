@@ -5,26 +5,26 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import HTMLResponse
 
-from app.config import DEALER_ID, get_bulk_upload_dir, get_ocr_output_dir, get_uploads_dir
+from app.config import get_bulk_upload_dir, get_ocr_output_dir, get_uploads_dir
 from app.db import get_connection
 from app.repositories.bulk_loads import BulkLoadsRepository
+from app.security.deps import get_principal, resolve_dealer_id
+from app.security.principal import Principal
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/bulk-loads", tags=["bulk-loads"])
 
 
-def _dealer_id(dealer_id: int | None) -> int:
-    """Use provided dealer_id or app default."""
-    return dealer_id if dealer_id is not None else DEALER_ID
-
-
 @router.delete("")
-def clear_bulk_loads(dealer_id: int | None = Query(None, description="Dealer ID; uses app default if omitted")) -> dict:
+def clear_bulk_loads(
+    principal: Principal = Depends(get_principal),
+    dealer_id: int | None = Query(None, description="Dealer ID; uses token dealer if omitted"),
+) -> dict:
     """Clear bulk_loads rows for the given dealer."""
-    did = _dealer_id(dealer_id)
+    did = resolve_dealer_id(principal, dealer_id)
     conn = get_connection()
     try:
         BulkLoadsRepository.ensure_table(conn)
@@ -37,15 +37,16 @@ def clear_bulk_loads(dealer_id: int | None = Query(None, description="Dealer ID;
 
 @router.get("")
 def list_bulk_loads(
+    principal: Principal = Depends(get_principal),
     status: str | None = Query(None, description="Filter: Success, Error, Rejected, Queued, Processing"),
     status_in: str | None = Query(None, description="Comma-separated statuses, e.g. Success,Error,Queued,Processing"),
     date_from: str | None = Query(None, description="Filter from date (dd-mm-yyyy)"),
     date_to: str | None = Query(None, description="Filter to date (dd-mm-yyyy)"),
     limit: int = Query(200, ge=1, le=500),
-    dealer_id: int | None = Query(None, description="Dealer ID; uses app default if omitted"),
+    dealer_id: int | None = Query(None, description="Dealer ID; uses token dealer if omitted"),
 ) -> list[dict]:
     """List bulk loads, sorted latest first. Filter by status and/or date range."""
-    did = _dealer_id(dealer_id)
+    did = resolve_dealer_id(principal, dealer_id)
     conn = get_connection()
     try:
         BulkLoadsRepository.ensure_table(conn)
@@ -73,12 +74,13 @@ def list_bulk_loads(
 
 @router.get("/counts")
 def get_bulk_load_counts(
+    principal: Principal = Depends(get_principal),
     date_from: str | None = Query(None, description="Filter from date (dd-mm-yyyy)"),
     date_to: str | None = Query(None, description="Filter to date (dd-mm-yyyy)"),
-    dealer_id: int | None = Query(None, description="Dealer ID; uses app default if omitted"),
+    dealer_id: int | None = Query(None, description="Dealer ID; uses token dealer if omitted"),
 ) -> dict[str, int]:
     """Return counts per status. Error and Rejected exclude action_taken records (for tab display)."""
-    did = _dealer_id(dealer_id)
+    did = resolve_dealer_id(principal, dealer_id)
     conn = get_connection()
     try:
         BulkLoadsRepository.ensure_table(conn)
@@ -92,11 +94,12 @@ def get_bulk_load_counts(
 
 @router.post("/reset-stale-processing")
 def reset_stale_processing(
+    principal: Principal = Depends(get_principal),
     stale_sec: int = Query(60, ge=10, le=3600, description="Mark Processing older than this (seconds) as Error"),
-    dealer_id: int | None = Query(None, description="Dealer ID; uses app default if omitted"),
+    dealer_id: int | None = Query(None, description="Dealer ID; uses token dealer if omitted"),
 ) -> dict:
     """Reset stuck Processing rows so the watcher can pick up new files. Use when scan 2 (etc.) does not start."""
-    did = _dealer_id(dealer_id)
+    did = resolve_dealer_id(principal, dealer_id)
     conn = get_connection()
     try:
         BulkLoadsRepository.ensure_table(conn)
@@ -108,9 +111,12 @@ def reset_stale_processing(
 
 
 @router.get("/pending-count")
-def get_pending_attention_count(dealer_id: int | None = Query(None, description="Dealer ID; uses app default if omitted")) -> dict[str, int]:
+def get_pending_attention_count(
+    principal: Principal = Depends(get_principal),
+    dealer_id: int | None = Query(None, description="Dealer ID; uses token dealer if omitted"),
+) -> dict[str, int]:
     """Return count of Error + Rejected records not yet marked as action taken (for tab badge)."""
-    did = _dealer_id(dealer_id)
+    did = resolve_dealer_id(principal, dealer_id)
     conn = get_connection()
     try:
         BulkLoadsRepository.ensure_table(conn)
@@ -122,11 +128,12 @@ def get_pending_attention_count(dealer_id: int | None = Query(None, description=
 @router.patch("/{bulk_load_id:int}/action-taken")
 def set_action_taken(
     bulk_load_id: int,
+    principal: Principal = Depends(get_principal),
     action_taken: bool = True,
-    dealer_id: int | None = Query(None, description="Dealer ID; uses app default if omitted"),
+    dealer_id: int | None = Query(None, description="Dealer ID; uses token dealer if omitted"),
 ) -> dict:
     """Mark a Failure or Rejected record as action taken (operator has addressed it)."""
-    did = _dealer_id(dealer_id)
+    did = resolve_dealer_id(principal, dealer_id)
     conn = get_connection()
     try:
         BulkLoadsRepository.ensure_table(conn)
@@ -142,11 +149,12 @@ def set_action_taken(
 @router.patch("/{bulk_load_id:int}/mark-success")
 def mark_bulk_load_success(
     bulk_load_id: int,
+    principal: Principal = Depends(get_principal),
     subfolder: str = Query(..., description="Uploads subfolder for documents link"),
-    dealer_id: int | None = Query(None, description="Dealer ID; uses app default if omitted"),
+    dealer_id: int | None = Query(None, description="Dealer ID; uses token dealer if omitted"),
 ) -> dict:
     """Mark an Error record as Success after manual completion via Add Customer (Re-Try flow)."""
-    did = _dealer_id(dealer_id)
+    did = resolve_dealer_id(principal, dealer_id)
     conn = get_connection()
     try:
         BulkLoadsRepository.ensure_table(conn)
@@ -185,10 +193,11 @@ def _list_bulk_folder_files(folder_path: str, dealer_id: int) -> list[dict]:
 @router.get("/folder/{folder_path:path}/list")
 def list_bulk_folder(
     folder_path: str,
-    dealer_id: int | None = Query(None, description="Dealer ID; uses app default if omitted"),
+    principal: Principal = Depends(get_principal),
+    dealer_id: int | None = Query(None, description="Dealer ID; uses token dealer if omitted"),
 ) -> dict:
     """List files in a Bulk Upload subfolder (JSON for in-app display)."""
-    did = _dealer_id(dealer_id)
+    did = resolve_dealer_id(principal, dealer_id)
     files = _list_bulk_folder_files(folder_path, did)
     return {"folder_path": folder_path, "files": files}
 
@@ -196,11 +205,12 @@ def list_bulk_folder(
 @router.get("/folder/{folder_path:path}", response_class=HTMLResponse)
 def browse_bulk_folder(
     folder_path: str,
-    dealer_id: int | None = Query(None, description="Dealer ID; uses app default if omitted"),
+    principal: Principal = Depends(get_principal),
+    dealer_id: int | None = Query(None, description="Dealer ID; uses token dealer if omitted"),
 ) -> HTMLResponse:
     """List files in a Bulk Upload subfolder (legacy HTML for direct links)."""
     from urllib.parse import quote
-    did = _dealer_id(dealer_id)
+    did = resolve_dealer_id(principal, dealer_id)
     files = _list_bulk_folder_files(folder_path, did)
     rows = "".join(
         f'<tr><td><a href="/bulk-loads/file/{quote(folder_path + "/" + f["name"], safe="")}">{f["name"]}</a></td></tr>'
@@ -216,13 +226,14 @@ def browse_bulk_folder(
 @router.get("/file/{file_path:path}")
 def get_bulk_file(
     file_path: str,
-    dealer_id: int | None = Query(None, description="Dealer ID; uses app default if omitted"),
+    principal: Principal = Depends(get_principal),
+    dealer_id: int | None = Query(None, description="Dealer ID; uses token dealer if omitted"),
 ):
     """Serve a file from Bulk Upload (path: Rejected scans/Scan1_15032025/file.pdf)."""
     from fastapi.responses import FileResponse
     if ".." in file_path or file_path.startswith("/"):
         raise HTTPException(status_code=400, detail="Invalid path")
-    did = _dealer_id(dealer_id)
+    did = resolve_dealer_id(principal, dealer_id)
     path = get_bulk_upload_dir(did) / file_path
     if not path.is_file():
         raise HTTPException(status_code=404, detail="File not found")
@@ -232,13 +243,14 @@ def get_bulk_file(
 @router.post("/{bulk_load_id:int}/prepare-reprocess")
 def prepare_reprocess(
     bulk_load_id: int,
-    dealer_id: int | None = Query(None, description="Dealer ID; uses app default if omitted"),
+    principal: Principal = Depends(get_principal),
+    dealer_id: int | None = Query(None, description="Dealer ID; uses token dealer if omitted"),
 ) -> dict:
     """
     Prepare an error record for re-processing: split PDF from result_folder into Uploaded scans,
     run OCR, return subfolder and mobile for Add Customer view.
     """
-    did = _dealer_id(dealer_id)
+    did = resolve_dealer_id(principal, dealer_id)
     conn = get_connection()
     try:
         row = BulkLoadsRepository.get_by_id(conn, bulk_load_id, dealer_id=did)

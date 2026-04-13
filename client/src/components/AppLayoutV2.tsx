@@ -13,6 +13,8 @@ const PAGE_LABELS: Record<Page, string> = {
   "dealer-dashboard": "Dealer Saathi",
   "admin-tools": "Admin Tools",
   "admin-dealers": "Dealers",
+  "admin-upload-scans": "Upload Scans",
+  "admin-run-logs": "Run Logs",
   "contact-us": "Contact Us",
 };
 
@@ -29,6 +31,8 @@ interface AppLayoutV2Props {
   onGoHome?: () => void;
   /** Badge counts for tabs, e.g. { "bulk-loads": 5 } shows "Bulk Loads (5)" */
   tabBadges?: Partial<Record<Page, number>>;
+  /** Shown below the Home control when set (from login). */
+  welcomeLoginName?: string | null;
 }
 
 export function AppLayoutV2({
@@ -41,6 +45,7 @@ export function AppLayoutV2({
   visiblePages,
   onGoHome,
   tabBadges,
+  welcomeLoginName,
 }: AppLayoutV2Props) {
   const tabs: Page[] = visiblePages ?? (Object.keys(PAGE_LABELS) as Page[]);
   const homeLogo = onGoHome ? (
@@ -58,11 +63,23 @@ export function AppLayoutV2({
     </button>
   ) : null;
 
-  const leftSlot = homeLogo;
+  const welcomeTrimmed = welcomeLoginName?.trim() ?? "";
+  const welcomeLine =
+    welcomeTrimmed.length > 0 ? (
+      <span className="app-topbar-welcome">Welcome {welcomeTrimmed}</span>
+    ) : null;
+
+  const leftSlot =
+    homeLogo || welcomeLine ? (
+      <div className="app-topbar-left-column">
+        {homeLogo}
+        {welcomeLine}
+      </div>
+    ) : null;
 
   const rightSlot = (
     <div className="app-topbar-right-with-home">
-      <span className="app-topbar-brand">Dealer Saathi <sup>©</sup></span>
+      <span className="app-topbar-brand">© Dealer Saathi ™</span>
       <div className="app-topbar-date">{headerRight}</div>
     </div>
   );

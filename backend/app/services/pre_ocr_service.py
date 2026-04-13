@@ -1,7 +1,14 @@
 """
 Pre-OCR for bulk upload: extract mobile number before folder structure and Add customer.
-Uses Textract/Tesseract on full PDF (Details sheet has mobile). Saves OCR to Bulk Upload/Processing/filename_ddmmyyyy_pre_ocr.txt.
+Uses Tesseract on full PDF pages (Details sheet has mobile). Saves OCR to Bulk Upload/Processing/filename_ddmmyyyy_pre_ocr.txt.
 After processing: move scan + OCR to Success/mobile_ddmmyyyy or Error/filename_ddmmyyyy; clear Processing.
+
+Also hosts **Aadhaar letter** image helpers (horizontal crop + vertical split at UIDAI scissor lines),
+used by Add Sales OCR when processing A4 letter scans.
+
+**Consolidated Aadhaar** (single portrait page, front above / back below): Tesseract checks for both
+UIDAI front + back phrases, then OpenCV finds a horizontal cut and writes ``aadhar_front.jpeg`` /
+``aadhar_back.jpeg`` (or ``Aadhar.jpg`` / ``Aadhar_back.jpg`` for bulk uploads).
 """
 
 import re
@@ -12,6 +19,7 @@ from pathlib import Path
 
 from app.config import BULK_UPLOAD_DIR, OCR_LANG, OCR_PSM, OCR_PREPROCESS
 from app.services.page_classifier import (
+    classify_page_by_text,
     classify_pages_from_ocr_text,
     PAGE_TYPE_TO_FILENAME,
     PAGE_TYPE_AADHAR,
@@ -84,13 +92,300 @@ def _tesseract_ocr(image_bytes: bytes) -> str:
     return pytesseract.image_to_string(img, lang=OCR_LANG, config=f"--psm {OCR_PSM}")
 
 
-def _textract_ocr(image_bytes: bytes) -> str:
-    """Run AWS Textract on image bytes. Returns full text."""
-    from app.services.sales_textract_service import extract_text_from_bytes
-    result = extract_text_from_bytes(image_bytes)
-    if result.get("error"):
-        raise RuntimeError(result["error"])
-    return result.get("full_text") or ""
+def crop_aadhar_letter_below_scissors(image_bytes: bytes) -> bytes | None:
+    """
+    Aadhaar *letter* (A4 printout from UIDAI) has scissors marks on the left and
+    right margins with a dashed/dotted cut-line across the page (~55% down).
+    Below the line is a compact **mini-card strip** with name, DOB, gender, photo,
+    address, and Aadhaar number in a clean standard layout.
+
+    Returns cropped JPEG bytes of the mini-card portion,
+    or ``None`` when the image is not a letter format or no cut-line is found.
+    """
+    import cv2
+    import numpy as np
+
+    nparr = np.frombuffer(image_bytes, dtype=np.uint8)
+    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    if img is None:
+        return None
+
+    h, w = img.shape[:2]
+    if h < 300 or w < 200:
+        return None
+
+    if h < w * 1.15:
+        return None
+
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    y_top = int(h * 0.38)
+    y_bot = int(h * 0.63)
+    band = gray[y_top:y_bot, :]
+    band_h = y_bot - y_top
+
+    _, bw = cv2.threshold(band, 175, 255, cv2.THRESH_BINARY_INV)
+
+    seg_len = max(int(w * 0.04), 12)
+    h_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (seg_len, 1))
+    h_morph = cv2.morphologyEx(bw, cv2.MORPH_OPEN, h_kernel)
+
+    row_cov = np.sum(h_morph > 0, axis=1).astype(float) / w
+
+    line_rows = np.where(row_cov >= 0.08)[0]
+    if len(line_rows) < 1:
+        return None
+
+    clusters: list[list[int]] = []
+    cur = [line_rows[0]]
+    for i in range(1, len(line_rows)):
+        if line_rows[i] - line_rows[i - 1] <= 10:
+            cur.append(line_rows[i])
+        else:
+            clusters.append(cur)
+            cur = [line_rows[i]]
+    clusters.append(cur)
+
+    best_cluster = None
+    best_score = -999.0
+    for cl in clusters:
+        median_y = float(np.median(cl))
+        center_dist = abs(median_y - band_h * 0.5) / band_h
+        avg_cov = float(np.mean(row_cov[cl]))
+        score = avg_cov * 2.0 - center_dist
+        if score > best_score:
+            best_score = score
+            best_cluster = cl
+
+    if best_cluster is None or best_score < 0.02:
+        return None
+
+    cut_y = y_top + max(best_cluster)
+    margin = max(int(h * 0.012), 8)
+    crop_y = min(cut_y + margin, h - 80)
+
+    if h - crop_y < int(h * 0.20):
+        return None
+
+    cropped = img[crop_y:, :]
+    ok, buf = cv2.imencode(".jpg", cropped, [cv2.IMWRITE_JPEG_QUALITY, 92])
+    if not ok:
+        return None
+
+    return buf.tobytes()
+
+
+def split_aadhar_letter_vertical(strip_bytes: bytes) -> tuple[bytes, bytes] | None:
+    """
+    The mini-card strip from an Aadhaar letter has front (left) and back (right)
+    side-by-side, separated by a vertical dashed/dotted line with scissors.
+    Sending the full strip to Textract causes it to merge text from both sides
+    into garbled rows.
+
+    Detects the vertical cut-line and returns ``(left_bytes, right_bytes)``
+    (front card, back card) or ``None`` if no vertical split is found.
+    """
+    import cv2
+    import numpy as np
+
+    nparr = np.frombuffer(strip_bytes, dtype=np.uint8)
+    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    if img is None:
+        return None
+
+    h, w = img.shape[:2]
+    if w < 200 or h < 100:
+        return None
+
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    x_left = int(w * 0.35)
+    x_right = int(w * 0.65)
+    band = gray[:, x_left:x_right]
+    band_w = x_right - x_left
+
+    _, bw = cv2.threshold(band, 175, 255, cv2.THRESH_BINARY_INV)
+
+    seg_len = max(int(h * 0.04), 12)
+    v_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, seg_len))
+    v_morph = cv2.morphologyEx(bw, cv2.MORPH_OPEN, v_kernel)
+
+    col_cov = np.sum(v_morph > 0, axis=0).astype(float) / h
+
+    line_cols = np.where(col_cov >= 0.08)[0]
+    if len(line_cols) < 1:
+        return None
+
+    clusters: list[list[int]] = []
+    cur = [line_cols[0]]
+    for i in range(1, len(line_cols)):
+        if line_cols[i] - line_cols[i - 1] <= 10:
+            cur.append(line_cols[i])
+        else:
+            clusters.append(cur)
+            cur = [line_cols[i]]
+    clusters.append(cur)
+
+    best_cluster = None
+    best_score = -999.0
+    for cl in clusters:
+        median_x = float(np.median(cl))
+        center_dist = abs(median_x - band_w * 0.5) / band_w
+        avg_cov = float(np.mean(col_cov[cl]))
+        score = avg_cov * 2.0 - center_dist
+        if score > best_score:
+            best_score = score
+            best_cluster = cl
+
+    if best_cluster is None or best_score < 0.02:
+        return None
+
+    split_x = x_left + int(np.median(best_cluster))
+    margin = max(int(w * 0.008), 4)
+
+    left_end = max(split_x - margin, 50)
+    right_start = min(split_x + margin, w - 50)
+
+    left_img = img[:, :left_end]
+    right_img = img[:, right_start:]
+
+    if left_img.shape[1] < 50 or right_img.shape[1] < 50:
+        return None
+
+    ok_l, buf_l = cv2.imencode(".jpg", left_img, [cv2.IMWRITE_JPEG_QUALITY, 92])
+    ok_r, buf_r = cv2.imencode(".jpg", right_img, [cv2.IMWRITE_JPEG_QUALITY, 92])
+    if not ok_l or not ok_r:
+        return None
+
+    return buf_l.tobytes(), buf_r.tobytes()
+
+
+def detect_aadhar_consolidated_from_ocr(ocr_text: str) -> bool:
+    """
+    True when Tesseract (or equivalent) text matches **both** UIDAI front and back markers
+    on one page: ``Government of India`` and ``uidai.gov.in`` (see ``classify_page_by_text``).
+    """
+    return classify_page_by_text(ocr_text or "") == PAGE_TYPE_AADHAR_COMBINED
+
+
+def _find_consolidated_horizontal_split_y(img_bgr) -> int | None:
+    """
+    Find a horizontal cut between two vertically stacked card regions (front above, back below).
+    Looks for a band of low ink (whitespace) in the middle of the page.
+    """
+    import cv2
+    import numpy as np
+
+    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+    h, w = gray.shape[:2]
+    if h < 200 or w < 200:
+        return None
+
+    _, bw = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    row_ink = np.sum(bw > 0, axis=1).astype(np.float64) / max(w, 1)
+
+    k = max(11, min(51, h // 60 | 1))
+    if k % 2 == 0:
+        k += 1
+    pad = k // 2
+    padded = np.pad(row_ink, (pad, pad), mode="edge")
+    smoothed = np.convolve(padded, np.ones(k) / k, mode="valid")
+
+    y_lo, y_hi = int(h * 0.20), int(h * 0.80)
+    if y_hi <= y_lo + 30:
+        return None
+    region = smoothed[y_lo:y_hi]
+    rel_min = int(np.argmin(region)) + y_lo
+
+    # Require a meaningful dip vs page mean (avoid noisy uniform pages)
+    mid_mean = float(np.mean(region))
+    min_val = float(smoothed[rel_min])
+    if mid_mean < 1e-6:
+        return None
+    if (mid_mean - min_val) / mid_mean < 0.08:
+        return None
+
+    if rel_min < h * 0.14 or rel_min > h * 0.86:
+        return None
+    return rel_min
+
+
+def split_aadhar_consolidated(
+    image_bytes: bytes,
+    *,
+    out_dir: Path | None = None,
+    front_name: str = "aadhar_front.jpeg",
+    back_name: str = "aadhar_back.jpeg",
+    require_tesseract_match: bool = True,
+) -> tuple[bytes, bytes] | None:
+    """
+    Single portrait scan with **front (top)** and **back (bottom)** on one page.
+
+    1. Runs Tesseract on the full image; requires combined Aadhaar markers unless
+       ``require_tesseract_match`` is False (e.g. caller already classified the page).
+    2. Finds a horizontal split (whitespace valley) and crops top = front, bottom = back.
+    3. Optionally writes JPEGs under ``out_dir`` using ``front_name`` / ``back_name``.
+
+    Returns ``(front_jpeg_bytes, back_jpeg_bytes)`` or ``None`` if not consolidated or split fails.
+    """
+    import cv2
+    import numpy as np
+
+    if not image_bytes or len(image_bytes) < 500:
+        return None
+
+    ocr_text = ""
+    if require_tesseract_match:
+        ocr_text = _tesseract_ocr(image_bytes)
+        if not detect_aadhar_consolidated_from_ocr(ocr_text):
+            return None
+
+    nparr = np.frombuffer(image_bytes, dtype=np.uint8)
+    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    if img is None:
+        return None
+
+    split_y = _find_consolidated_horizontal_split_y(img)
+    if split_y is None:
+        h0 = img.shape[0]
+        split_y = int(h0 * 0.50)
+        logger.info(
+            "split_aadhar_consolidated: no clear whitespace gap; using horizontal mid-split at y=%s",
+            split_y,
+        )
+
+    h = img.shape[0]
+    margin = max(4, int(h * 0.004))
+    mt = max(1, min(margin, split_y // 4))
+    mb = max(1, min(margin, (h - split_y) // 4))
+    y_cut_top = max(split_y - mt, 1)
+    y_cut_bot = min(split_y + mb, h - 1)
+    top = img[:y_cut_top, :]
+    bot = img[y_cut_bot:, :]
+
+    if top.shape[0] < 80 or bot.shape[0] < 80:
+        return None
+
+    ok_t, buf_t = cv2.imencode(".jpg", top, [cv2.IMWRITE_JPEG_QUALITY, 92])
+    ok_b, buf_b = cv2.imencode(".jpg", bot, [cv2.IMWRITE_JPEG_QUALITY, 92])
+    if not ok_t or not ok_b:
+        return None
+
+    front_bytes = buf_t.tobytes()
+    back_bytes = buf_b.tobytes()
+
+    if out_dir is not None:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / front_name).write_bytes(front_bytes)
+        (out_dir / back_name).write_bytes(back_bytes)
+        logger.info(
+            "split_aadhar_consolidated: wrote %s / %s (split_y=%s)",
+            front_name,
+            back_name,
+            split_y,
+        )
+
+    return front_bytes, back_bytes
 
 
 def _extract_mobile_from_text(text: str) -> str | None:
@@ -421,10 +716,9 @@ def _split_pdf_multi_customer(
 def pre_ocr_pdf(
     pdf_path: Path,
     processing_dir: Path | None = None,
-    use_textract: bool = False,
 ) -> tuple[str, Path | None, str | None]:
     """
-    Extract mobile from PDF using Textract/Tesseract (Details sheet has mobile).
+    Extract mobile from PDF using Tesseract per page (Details sheet has mobile).
     Saves to Processing/filename_ddmmyyyy_pre_ocr.txt. Returns (full_text, ocr_file_path, mobile_or_none).
     """
     proc_dir = processing_dir or PROCESSING_DIR
@@ -439,14 +733,7 @@ def pre_ocr_pdf(
         pages = _pdf_to_images(pdf_path)
         all_text_parts: list[str] = []
         for page_idx, jpeg_bytes in pages:
-            if use_textract:
-                try:
-                    text = _textract_ocr(jpeg_bytes)
-                except Exception as e:
-                    logger.warning("pre_ocr: Textract failed for page %s, fallback to Tesseract: %s", page_idx, e)
-                    text = _tesseract_ocr(jpeg_bytes)
-            else:
-                text = _tesseract_ocr(jpeg_bytes)
+            text = _tesseract_ocr(jpeg_bytes)
             if text.strip():
                 all_text_parts.append(f"--- Page {page_idx + 1} ---\n{text}")
 
@@ -494,10 +781,33 @@ def _split_pdf_by_classification(
     pages = _pdf_to_images(pdf_path)
     page_bytes: dict[int, bytes] = {idx: b for idx, b in pages}
 
-    # Write known types
+    combined_indices = {idx for idx, ptype in classifications if ptype == PAGE_TYPE_AADHAR_COMBINED}
+    for idx in combined_indices:
+        if idx not in page_bytes:
+            continue
+        # Page already classified as combined from the same pre-OCR pass; split by image only.
+        split = split_aadhar_consolidated(
+            page_bytes[idx],
+            out_dir=out_dir,
+            front_name="Aadhar.jpg",
+            back_name="Aadhar_back.jpg",
+            require_tesseract_match=False,
+        )
+        if not split:
+            logger.warning(
+                "Aadhaar combined page %d: split_aadhar_consolidated failed; copying full page to Aadhar.jpg only",
+                idx + 1,
+            )
+            out_path = out_dir / "Aadhar.jpg"
+            img = Image.open(io.BytesIO(page_bytes[idx]))
+            img.save(out_path, "JPEG", quality=90)
+
+    # Write known types (skip Aadhar slots already produced from combined split)
     for ptype, filename in PAGE_TYPE_TO_FILENAME.items():
         if ptype in page_type_to_idx:
             idx = page_type_to_idx[ptype]
+            if idx in combined_indices and ptype in (PAGE_TYPE_AADHAR, PAGE_TYPE_AADHAR_BACK):
+                continue
             if idx in page_bytes:
                 out_path = out_dir / filename
                 img = Image.open(io.BytesIO(page_bytes[idx]))
@@ -526,7 +836,6 @@ def _split_pdf_by_classification(
 def run_pre_ocr_and_prepare(
     source_pdf: Path,
     processing_dir: Path | None = None,
-    use_textract: bool = True,
 ) -> tuple[list[tuple[Path, str, str]] | None, str, str | None, Path | None, list[str] | None]:
     """
     Copy PDF to Processing, run pre-OCR, classify pages, split into Aadhar.jpg, etc.
@@ -545,7 +854,7 @@ def run_pre_ocr_and_prepare(
     dest_pdf.write_bytes(source_pdf.read_bytes())
 
     # Run pre-OCR
-    full_text, ocr_path, mobile = pre_ocr_pdf(dest_pdf, processing_dir=proc_dir, use_textract=use_textract)
+    full_text, ocr_path, mobile = pre_ocr_pdf(dest_pdf, processing_dir=proc_dir)
 
     classifications = classify_pages_from_ocr_text(full_text)
     all_mobiles = _extract_all_mobiles_from_text(full_text)

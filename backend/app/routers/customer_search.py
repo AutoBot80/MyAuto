@@ -2,10 +2,12 @@
 
 import logging
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.config import DEALER_ID
+from app.config import MAX_TEXT_CHARS
 from app.db import get_connection
+from app.security.deps import get_principal, resolve_dealer_id
+from app.security.principal import Principal
 from app.repositories.form_vahan import get_by_customer_vehicle as get_form_vahan_by_customer_vehicle
 
 logger = logging.getLogger(__name__)
@@ -14,9 +16,18 @@ router = APIRouter(prefix="/customer-search", tags=["customer-search"])
 
 @router.get("/search")
 def search_customer(
-    mobile: str | None = Query(None, description="Customer mobile number"),
-    plate_num: str | None = Query(None, description="Vehicle plate number"),
-    dealer_id: int | None = Query(None, description="Dealer ID; uses app default if omitted"),
+    principal: Principal = Depends(get_principal),
+    mobile: str | None = Query(
+        None,
+        max_length=MAX_TEXT_CHARS,
+        description="Customer mobile number",
+    ),
+    plate_num: str | None = Query(
+        None,
+        max_length=MAX_TEXT_CHARS,
+        description="Vehicle plate number",
+    ),
+    dealer_id: int | None = Query(None, description="Dealer ID; uses token dealer if omitted"),
 ) -> dict:
     """
     Search by customer mobile and/or vehicle plate number.
@@ -33,7 +44,7 @@ def search_customer(
 
     by_mobile: set[int] = set()
     by_plate: set[int] = set()
-    did = dealer_id if dealer_id is not None else DEALER_ID
+    did = resolve_dealer_id(principal, dealer_id)
 
     conn = get_connection()
     try:

@@ -3,11 +3,13 @@
 import logging
 import uuid
 
-from fastapi import APIRouter, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from psycopg2 import errors as pg_errors
 from pydantic import BaseModel, Field
 
-from app.config import DMS_BASE_URL, DEALER_ID
+from app.config import DMS_BASE_URL, UPLOAD_MAX_FILE_BYTES
+from app.security.deps import get_principal, resolve_dealer_id
+from app.security.principal import Principal
 from app.repositories import challan_details_staging as detail_repo
 from app.repositories import challan_master_staging as master_repo
 from app.services.add_subdealer_challan_service import (
@@ -17,6 +19,8 @@ from app.services.add_subdealer_challan_service import (
     run_subdealer_challan_batch,
 )
 from app.services.subdealer_challan_ocr_service import dedupe_raw_challan_lines, parse_subdealer_challan
+from app.services.upload_file_validation import read_upload_capped, validate_magic_jpeg_png_or_pdf
+from app.validation.text_limits import enforce_max_text_depth
 
 logger = logging.getLogger(__name__)
 
@@ -65,15 +69,27 @@ class ProcessChallanRequest(BaseModel):
 
 
 @router.post("/staging", response_model=CreateChallanStagingResponse)
-def create_staging(req: CreateChallanStagingRequest) -> CreateChallanStagingResponse:
+def create_staging(
+    req: CreateChallanStagingRequest,
+    principal: Principal = Depends(get_principal),
+) -> CreateChallanStagingResponse:
     """
     Insert ``challan_master_staging`` + ``challan_details_staging`` rows (details **Queued**) for each non-empty line.
+
+    ``from_dealer_id`` must match the logged-in dealer unless the user has an admin role.
 
     Same ``challan_book_num`` + ``challan_date`` as a previous upload is allowed: a **new** batch is created so DMS can
     receive a new order/invoice. Lines matching vehicles **already present** on any prior batch for that book+date
     (Queued / Failed / Ready / Committed) are dropped to avoid duplicate detail rows; duplicate rows within the
     request are deduped. If nothing remains, HTTP 400.
     """
+    enforce_max_text_depth(req.model_dump())
+    if not principal.admin and int(req.from_dealer_id) != int(principal.dealer_id):
+        raise HTTPException(
+            status_code=403,
+            detail="from_dealer_id must match your logged-in dealer",
+        )
+
     lines_in = [ln.model_dump() for ln in req.lines]
     lines = [
         {"raw_engine": (x.get("raw_engine") or "").strip(), "raw_chassis": (x.get("raw_chassis") or "").strip()}
@@ -141,6 +157,7 @@ def create_staging(req: CreateChallanStagingRequest) -> CreateChallanStagingResp
 @router.post("/process/{challan_batch_id}")
 def process_batch(
     challan_batch_id: str,
+    principal: Principal = Depends(get_principal),
     req: ProcessChallanRequest = ProcessChallanRequest(),
 ) -> dict:
     """
@@ -152,7 +169,8 @@ def process_batch(
         bid = uuid.UUID(challan_batch_id.strip())
     except ValueError as e:
         raise HTTPException(status_code=400, detail="Invalid challan_batch_id") from e
-    did = int(req.dealer_id) if req.dealer_id is not None else int(DEALER_ID)
+    enforce_max_text_depth(req.model_dump())
+    did = resolve_dealer_id(principal, req.dealer_id)
     base = (req.dms_base_url or DMS_BASE_URL or "").strip()
     if not base:
         raise HTTPException(status_code=400, detail="dms_base_url required (or set DMS_BASE_URL)")
@@ -162,7 +180,8 @@ def process_batch(
 
 @router.get("/staging/recent")
 def list_recent_staging(
-    dealer_id: int | None = Query(None, description="from_dealer_id; defaults to server DEALER_ID"),
+    principal: Principal = Depends(get_principal),
+    dealer_id: int | None = Query(None, description="from_dealer_id; uses token dealer if omitted"),
     days: int = Query(
         15,
         ge=1,
@@ -180,7 +199,7 @@ def list_recent_staging(
     Default: batches from the last *days* matching the attention filter (see ``list_masters_recent``).
     With ``challan_book_num``: batches matching that book number (``challan_book_num`` column), no date limit.
     """
-    did = int(dealer_id) if dealer_id is not None else int(DEALER_ID)
+    did = resolve_dealer_id(principal, dealer_id)
     book = (challan_book_num or "").strip() or None
     try:
         masters = master_repo.list_masters_recent(did, days=days, challan_book_num=book)
@@ -205,11 +224,12 @@ def list_recent_staging(
 
 @router.get("/staging/failed-count")
 def staging_failed_count(
+    principal: Principal = Depends(get_principal),
     dealer_id: int | None = Query(None),
     days: int = Query(15, ge=1, le=365),
 ) -> dict[str, int]:
     """Count of **master** batches in the default Processed window (same rows as ``GET …/staging/recent`` without ``challan_book_num``)."""
-    did = int(dealer_id) if dealer_id is not None else int(DEALER_ID)
+    did = resolve_dealer_id(principal, dealer_id)
     try:
         n = master_repo.count_masters_needing_attention_recent(did, days=days)
     except pg_errors.UndefinedTable as e:
@@ -221,10 +241,12 @@ def staging_failed_count(
 @router.post("/staging/{challan_detail_staging_id}/retry")
 def retry_staging_row_endpoint(
     challan_detail_staging_id: int,
+    principal: Principal = Depends(get_principal),
     req: ProcessChallanRequest = ProcessChallanRequest(),
 ) -> dict:
     """Re-queue one Failed detail line and run prepare + order for the batch (long-running)."""
-    did = int(req.dealer_id) if req.dealer_id is not None else int(DEALER_ID)
+    enforce_max_text_depth(req.model_dump())
+    did = resolve_dealer_id(principal, req.dealer_id)
     base = (req.dms_base_url or DMS_BASE_URL or "").strip()
     if not base:
         raise HTTPException(status_code=400, detail="dms_base_url required (or set DMS_BASE_URL)")
@@ -238,6 +260,7 @@ def retry_staging_row_endpoint(
 @router.post("/batch/{challan_batch_id}/retry-order")
 def retry_order_endpoint(
     challan_batch_id: str,
+    principal: Principal = Depends(get_principal),
     req: ProcessChallanRequest = ProcessChallanRequest(),
 ) -> dict:
     """Run create order / invoice phase only (all detail lines must be Ready)."""
@@ -245,7 +268,8 @@ def retry_order_endpoint(
         bid = uuid.UUID(challan_batch_id.strip())
     except ValueError as e:
         raise HTTPException(status_code=400, detail="Invalid challan_batch_id") from e
-    did = int(req.dealer_id) if req.dealer_id is not None else int(DEALER_ID)
+    enforce_max_text_depth(req.model_dump())
+    did = resolve_dealer_id(principal, req.dealer_id)
     base = (req.dms_base_url or DMS_BASE_URL or "").strip()
     if not base:
         raise HTTPException(status_code=400, detail="dms_base_url required (or set DMS_BASE_URL)")
@@ -254,15 +278,22 @@ def retry_order_endpoint(
 
 @router.post("/parse-scan")
 async def parse_scan(
-    file: UploadFile = File(..., description="Challan scan (JPEG/PNG/PDF, max 5 MB)"),
+    file: UploadFile = File(..., description="Challan scan (JPEG/PNG/PDF, max 500 KB)"),
 ) -> dict:
     """
     Run Textract FORMS+TABLES, parse challan no / date / engine-chassis rows,
     write Raw_OCR.txt and OCR_To_be_Used.json under CHALLANS_DIR.
     """
-    raw = await file.read()
+    try:
+        raw = await read_upload_capped(file, UPLOAD_MAX_FILE_BYTES)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     if not raw:
         raise HTTPException(status_code=400, detail="Empty file")
+    try:
+        validate_magic_jpeg_png_or_pdf(raw, label="Challan scan")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     result = parse_subdealer_challan(raw, write_artifacts=True)
     if result.get("error"):
         raise HTTPException(status_code=502, detail=result["error"])
