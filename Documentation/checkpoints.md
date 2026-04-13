@@ -43,6 +43,7 @@ Cursor agents follow **`.cursor/rules/checkpoints-registry.mdc`**: full workflow
 | 14 | Enabled Add Vehicle Looping | `checkpoint/enabled-add-vehicle-looping` | `3df79152f68720501aec83643572f9ee7778763a` | 2026-04-07T20:16:46+05:30 | 1) Create subdealer challan wrapper; 2) Test single sale; 3) Test Challan creation |
 | 15 | Added Subdealer Challan module | `checkpoint/added-subdealer-challan-module` | `2f0b91c5a54367ead502b8d0469f54b627bb3c40` | 2026-04-08T20:46:48+05:30 | 1) Need to speed up prepare_vehicle |
 | 16 | View vehicles added. Many bugs fixed | `checkpoint/view-vehicles-added-many-bugs-fixed` | `0e94dceb1bb0bf71709b1ed122ee52071327a19d` | 2026-04-10T12:03:08+05:30 | 1) PDI still fragile; 2) Create Order to be tested again; 3) Insurance upload docs not working yet |
+| 17 | Vahan completed. OCR Streghtened | `checkpoint/vahan-completed-ocr-strengthened` | `2a4adabd8b8512a887af791303bcc79410db94d7` | 2026-04-13T14:43:47+05:30 | 1) Test OCR; 2) Test clean runs; 3) Move to AWS |
 
 ## Rollback / Restore
 
