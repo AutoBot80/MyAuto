@@ -76,37 +76,3 @@ def append_pre_ocr_step_lines(
         if d:
             parts.append(d)
         append_ocr_extraction_log(ocr_output_dir, subfolder, "pre", " ".join(parts))
-
-
-# Live trace under ``ocr_output/{dealer}/_add_sales_pre_ocr_work/`` (Add Sales consolidated PDF only).
-ADD_SALES_PRE_OCR_WORK_LOG = "add_sales_pre_ocr_work.log"
-
-
-def append_pre_ocr_work_session_line(work_dir: Path | None, message: str) -> None:
-    """One freeform line into ``add_sales_pre_ocr_work.log`` (IST). No-op if ``work_dir`` is missing."""
-    if not work_dir or not str(message or "").strip():
-        return
-    try:
-        p = Path(work_dir).resolve() / ADD_SALES_PRE_OCR_WORK_LOG
-        p.parent.mkdir(parents=True, exist_ok=True)
-        with p.open("a", encoding="utf-8") as f:
-            f.write(f"{_ist_line_prefix()} [pre_ocr_work] {message.rstrip()}\n")
-    except OSError as e:
-        logger.debug("add_sales_pre_ocr_work.log: %s", e)
-
-
-def append_pre_ocr_work_session_lines(work_dir: Path | None, steps: list[tuple[str, int | None, str]]) -> None:
-    """
-    Same tuple format as :func:`append_pre_ocr_step_lines`, written to ``add_sales_pre_ocr_work.log``
-    under the Add Sales pre-OCR work directory (incremental / live visibility).
-    """
-    if not work_dir or not steps:
-        return
-    for step_id, ms, detail in steps:
-        parts: list[str] = [f"step={step_id}"]
-        if ms is not None:
-            parts.append(f"elapsed_ms={ms}")
-        d = (detail or "").strip()
-        if d:
-            parts.append(d)
-        append_pre_ocr_work_session_line(work_dir, " ".join(parts))

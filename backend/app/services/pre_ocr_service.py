@@ -44,11 +44,7 @@ from app.config import (
     get_add_sales_pre_ocr_work_dir,
     get_uploads_dir,
 )
-from app.services.ocr_extraction_log import (
-    append_pre_ocr_step_lines,
-    append_pre_ocr_work_session_line,
-    append_pre_ocr_work_session_lines,
-)
+from app.services.ocr_extraction_log import append_pre_ocr_step_lines
 from app.services.page_classifier import (
     classify_page_by_text,
     classify_pages_from_ocr_text,
@@ -1446,18 +1442,13 @@ def _split_pdf_multi_customer_to_sale_dirs(
 def pre_ocr_pdf(
     pdf_path: Path,
     processing_dir: Path | None = None,
-    *,
-    work_session_log_dir: Path | None = None,
 ) -> tuple[str, Path | None, str | None, list[tuple[str, int | None, str]]]:
     """
     Extract mobile from PDF using Tesseract per page (Details sheet has mobile).
     Saves to Processing/filename_ddmmyyyy_pre_ocr.txt.
 
     Returns ``(full_text, ocr_file_path, mobile_or_none, step_log)`` where ``step_log`` is a list of
-    ``(step_id, elapsed_ms, detail)`` for :func:`append_pre_ocr_step_lines`.
-
-    When ``work_session_log_dir`` is set (Add Sales consolidated PDF under ``_add_sales_pre_ocr_work``),
-    each step is also appended incrementally to ``add_sales_pre_ocr_work.log`` there for live visibility.
+    ``(step_id, elapsed_ms, detail)`` for :func:`append_pre_ocr_step_lines` (via :func:`run_pre_ocr_and_prepare` ``_flush_pre``).
     """
     proc_dir = processing_dir or PROCESSING_DIR
     proc_dir.mkdir(parents=True, exist_ok=True)
@@ -1470,8 +1461,6 @@ def pre_ocr_pdf(
 
     def _step(t: tuple[str, int | None, str]) -> None:
         step_log.append(t)
-        if work_session_log_dir is not None:
-            append_pre_ocr_work_session_lines(work_session_log_dir, [t])
 
     try:
         t0 = time.perf_counter()
@@ -1677,12 +1666,11 @@ def run_pre_ocr_and_prepare(
     proc_dir = processing_dir or PROCESSING_DIR
     proc_dir.mkdir(parents=True, exist_ok=True)
 
-    ws: Path | None = None
+    is_add_sales_work = False
     try:
-        if proc_dir.resolve() == get_add_sales_pre_ocr_work_dir(dealer_id).resolve():
-            ws = proc_dir
+        is_add_sales_work = proc_dir.resolve() == get_add_sales_pre_ocr_work_dir(dealer_id).resolve()
     except OSError:
-        ws = None
+        is_add_sales_work = False
 
     us = UploadService()
 
@@ -1700,93 +1688,68 @@ def run_pre_ocr_and_prepare(
     dest_pdf.write_bytes(source_pdf.read_bytes())
     copy_ms = int((time.perf_counter() - t_copy0) * 1000)
 
-    if ws:
-        append_pre_ocr_work_session_line(
-            ws,
-            f"=== add_sales_pre_ocr session work_dir={proc_dir.resolve()} dealer_id={dealer_id} "
-            f"source_pdf={source_pdf.name} ===",
-        )
-        append_pre_ocr_work_session_lines(
-            ws,
-            [
-                (
-                    "copy_pdf_to_processing",
-                    copy_ms,
-                    f"bytes={dest_pdf.stat().st_size} name={dest_pdf.name}",
-                ),
-            ],
-        )
-
     # Run pre-OCR (Tesseract per page — usually dominant cost)
     t_pre0 = time.perf_counter()
-    full_text, ocr_path, mobile, pre_steps = pre_ocr_pdf(
-        dest_pdf, processing_dir=proc_dir, work_session_log_dir=ws
-    )
+    full_text, ocr_path, mobile, pre_steps = pre_ocr_pdf(dest_pdf, processing_dir=proc_dir)
     pre_ocr_wall_ms = int((time.perf_counter() - t_pre0) * 1000)
 
-    if ws:
-        append_pre_ocr_work_session_lines(
-            ws,
-            [
-                (
-                    "pre_ocr_pdf_total_wall",
-                    pre_ocr_wall_ms,
-                    "includes_tesseract_and_io",
-                ),
-            ],
+    orchestration: list[tuple[str, int | None, str]] = []
+    if is_add_sales_work:
+        orchestration.append(
+            (
+                "add_sales_pre_ocr_session",
+                None,
+                f"work_dir={proc_dir.resolve()} dealer_id={dealer_id} source_pdf={source_pdf.name}",
+            ),
         )
-
-    orchestration: list[tuple[str, int | None, str]] = [
-        ("copy_pdf_to_processing", copy_ms, f"bytes={dest_pdf.stat().st_size} name={dest_pdf.name}"),
-        ("pre_ocr_pdf_total_wall", pre_ocr_wall_ms, "includes_tesseract_and_io"),
-    ]
+    orchestration.extend(
+        [
+            ("copy_pdf_to_processing", copy_ms, f"bytes={dest_pdf.stat().st_size} name={dest_pdf.name}"),
+            ("pre_ocr_pdf_total_wall", pre_ocr_wall_ms, "includes_tesseract_and_io"),
+        ]
+    )
     orchestration.extend(pre_steps)
-
-    def _orch_append(t: tuple[str, int | None, str]) -> None:
-        orchestration.append(t)
-        if ws:
-            append_pre_ocr_work_session_lines(ws, [t])
 
     t_cls0 = time.perf_counter()
     classifications = classify_pages_from_ocr_text(full_text)
     cls_ms = int((time.perf_counter() - t_cls0) * 1000)
-    _orch_append(
+    orchestration.append(
         ("classify_pages_from_ocr_text", cls_ms, f"slots={len(classifications)}"),
     )
 
     t_ms0 = time.perf_counter()
     mobile_scope = _pre_ocr_text_from_sales_detail_sheet_onward(full_text)
     ms_ms = int((time.perf_counter() - t_ms0) * 1000)
-    _orch_append(("sales_detail_onward_scope", ms_ms, f"chars={len(mobile_scope)}"))
+    orchestration.append(("sales_detail_onward_scope", ms_ms, f"chars={len(mobile_scope)}"))
 
     t_am0 = time.perf_counter()
     all_mobiles = _extract_all_mobiles_from_text(mobile_scope)
     am_ms = int((time.perf_counter() - t_am0) * 1000)
-    _orch_append(("extract_all_mobiles", am_ms, f"count={len(all_mobiles)}"))
+    orchestration.append(("extract_all_mobiles", am_ms, f"count={len(all_mobiles)}"))
 
     t_mc0 = time.perf_counter()
     is_multi = _detect_multi_customer(classifications) or len(all_mobiles) >= 2
-    _orch_append(("detect_multi_customer", int((time.perf_counter() - t_mc0) * 1000), f"is_multi={is_multi}"))
+    orchestration.append(("detect_multi_customer", int((time.perf_counter() - t_mc0) * 1000), f"is_multi={is_multi}"))
 
     # Multi-customer: when multiple document sets OR 2+ distinct mobiles in full text
     if is_multi:
         t_bd0 = time.perf_counter()
         bundles_data = _build_multi_customer_bundles(dest_pdf, full_text, classifications, all_mobiles)
         bd_ms = int((time.perf_counter() - t_bd0) * 1000)
-        _orch_append(("build_multi_customer_bundles", bd_ms, f"bundles_data={len(bundles_data) if bundles_data else 0}"))
+        orchestration.append(("build_multi_customer_bundles", bd_ms, f"bundles_data={len(bundles_data) if bundles_data else 0}"))
         if bundles_data:
             logger.info("Multi-customer: built %d bundles for %s", len(bundles_data), source_pdf.name)
             t_sp0 = time.perf_counter()
             result_bundles = _split_pdf_multi_customer_to_sale_dirs(dest_pdf, bundles_data, dealer_id)
             sp_ms = int((time.perf_counter() - t_sp0) * 1000)
-            _orch_append(
+            orchestration.append(
                 ("split_pdf_multi_customer_to_sale_dirs", sp_ms, f"customers={len(result_bundles)}"),
             )
 
             first_mobile = result_bundles[0][2] if result_bundles else mobile
             # Same pre-OCR timings apply to all customers; log full timeline under first sale folder.
             sf0 = result_bundles[0][1] if result_bundles else _log_subfolder(first_mobile)
-            _orch_append(
+            orchestration.append(
                 ("run_pre_ocr_and_prepare_done", None, f"path=multi_customer bundles={len(result_bundles)}"),
             )
             _flush_pre(orchestration, first_mobile)
@@ -1811,7 +1774,7 @@ def run_pre_ocr_and_prepare(
             classifications = [(i, PAGE_TYPE_AADHAR_COMBINED if i == idx else p) for i, p in classifications]
             has_aadhar_back = True
             logger.info("Treating single Aadhar page %d as Aadhar_combined (back may be blurred)", idx + 1)
-    _orch_append(
+    orchestration.append(
         ("aadhar_combined_fallback", int((time.perf_counter() - t_fb0) * 1000), ""),
     )
 
@@ -1825,12 +1788,12 @@ def run_pre_ocr_and_prepare(
         missing.append("Aadhar back")
     if PAGE_TYPE_DETAILS not in classified_types:
         missing.append("sales details form (vehicle & customer info)")
-    _orch_append(
+    orchestration.append(
         ("validate_required_pages", int((time.perf_counter() - t_val0) * 1000), f"missing={len(missing)}"),
     )
 
     if missing:
-        _orch_append(("run_pre_ocr_and_prepare_rejected", None, f"missing={','.join(missing)}"))
+        orchestration.append(("run_pre_ocr_and_prepare_rejected", None, f"missing={','.join(missing)}"))
         _flush_pre(orchestration, mobile)
         return None, source_pdf.stem, mobile, ocr_path, missing
 
@@ -1841,14 +1804,14 @@ def run_pre_ocr_and_prepare(
     _split_pdf_by_classification(
         dest_pdf, full_text, sale_dir, classifications_override=classifications, raw_dir=raw_dir
     )
-    _orch_append(
+    orchestration.append(
         (
             "split_pdf_by_classification",
             int((time.perf_counter() - t_sp0) * 1000),
             f"sale_dir={subfolder}",
         ),
     )
-    _orch_append(("run_pre_ocr_and_prepare_done", None, "path=single_customer"))
+    orchestration.append(("run_pre_ocr_and_prepare_done", None, "path=single_customer"))
     _flush_pre(orchestration, mobile)
 
     return [(sale_dir, subfolder, mobile or "")], source_pdf.stem, mobile, ocr_path, None

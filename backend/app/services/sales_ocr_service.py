@@ -307,11 +307,111 @@ def _clean_aadhar_back_cross_column_noise(addr: str) -> str:
     return re.sub(r"\s+", " ", out).strip(" ,")
 
 
-def _parse_aadhar_back_address_from_ocr(ocr_text: str) -> dict[str, str]:
+_DATE_ONLY_LINE_RE = re.compile(r"^\s*\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}\s*$")
+
+
+def _is_aadhar_back_date_only_line(line: str) -> bool:
+    """Strip standalone enrollment / issue dates (e.g. ``05/10/2014``) from letter-format address blocks."""
+    s = (line or "").strip()
+    if not s:
+        return False
+    return bool(_DATE_ONLY_LINE_RE.match(s))
+
+
+def _looks_like_aadhar_letter_printed_name_line(line: str) -> bool:
+    """Two title-case words, no digits — typical ``First Last`` line under ``To,`` (avoid stripping 3-word localities)."""
+    s = (line or "").strip()
+    if re.search(r"\d", s):
+        return False
+    parts = s.split()
+    if len(parts) != 2:
+        return False
+    for p in parts:
+        if not re.match(r"^[A-Z][a-zA-Z'.-]+$", p):
+            return False
+    return True
+
+
+def _aadhar_back_name_line_matches_hint(line: str, name_hint: str | None) -> bool:
+    if not name_hint or len(name_hint.strip()) < 2:
+        return False
+    a = re.sub(r"\s+", " ", line.strip().lower())
+    b = re.sub(r"\s+", " ", name_hint.strip().lower())
+    return a == b or (len(b) >= 5 and (a in b or b in a))
+
+
+def _trim_aadhar_letter_to_block_noise(lines: list[str]) -> list[str]:
+    """Drop short OCR junk after ``To,`` (e.g. ``arries 3114``) before the real name/address."""
+    out = list(lines)
+    while out:
+        ln = out[0]
+        if re.match(r"(?i)^[a-z]{4,}\s+\d{3,}\s*$", ln) or re.match(r"(?i)^[A-Za-z]+\s+\d{4,}\s*$", ln):
+            out.pop(0)
+            continue
+        if len(ln) <= 4 and re.search(r"\d", ln):
+            out.pop(0)
+            continue
+        break
+    return out
+
+
+def _parse_aadhar_back_letter_format_address(text: str, name_hint: str | None = None) -> str | None:
     """
-    English (and noisy OCR) address on Aadhaar back. UIDAI layout uses ``Address:``;
-    OCR often merges lines — fall back to ``C/O:`` … through PIN / Aadhaar line.
-    DOB/Gender are not printed on the back; use **Aadhar.jpg** (front) Textract text.
+    UIDAI **letter** printout (no ``Address:`` label): block after ``To,`` is often
+    boilerplate → Enrollment → ``To,`` → name → address lines → standalone **date** → state + PIN → **mobile**.
+
+    Used **only as a last resort** from :func:`_parse_aadhar_back_address_from_ocr` after card-style
+    ``Address:`` / ``C/O:`` / ``Near`` patterns (and optional retry when trimmed text is still too short).
+
+    We keep lines from the first address-like content through state+PIN, strip date-only lines,
+    and drop a printed **name** line when it matches ``name_hint`` (from front) or looks like two title-case words.
+    """
+    if not re.search(r"(?is)(?:^|\n)\s*To\s*,\s*\n", text):
+        return None
+    if not re.search(
+        r"(?i)Unique\s+Identification\s+Authority|Enrollment\s+No|Government\s+of\s+India",
+        text,
+    ):
+        return None
+    m = re.search(r"(?is)(?:^|\n)\s*To\s*,\s*\n([\s\S]+)$", text)
+    if not m:
+        return None
+    block = m.group(1)
+    lines = [ln.strip() for ln in block.splitlines() if ln.strip()]
+    cut: list[str] = []
+    for ln in lines:
+        if re.search(r"(?i)www\.|help@uidai|virtual\s+id\b", ln):
+            break
+        cut.append(ln)
+    lines = _trim_aadhar_letter_to_block_noise(cut)
+    if len(lines) < 1:
+        return None
+    if _aadhar_back_name_line_matches_hint(lines[0], name_hint):
+        lines = lines[1:]
+    elif _looks_like_aadhar_letter_printed_name_line(lines[0]):
+        lines = lines[1:]
+    lines = [ln for ln in lines if not _is_aadhar_back_date_only_line(ln)]
+    if lines:
+        last_compact = re.sub(r"\D", "", lines[-1])
+        if len(last_compact) == 10 and last_compact[0] in "6789":
+            lines = lines[:-1]
+    if not lines:
+        return None
+    raw = "\n".join(lines).strip()
+    if len(raw) < 12:
+        return None
+    return raw
+
+
+def _parse_aadhar_back_address_from_ocr(ocr_text: str, name_hint: str | None = None) -> dict[str, str]:
+    """
+    English (and noisy OCR) address on Aadhaar back.
+
+    **Order:** (1) Card-style — ``Address:``, ``C/O:`` …, ``Address`` newline + block, ``Near …``.
+    (2) **Last resort only:** UIDAI **letter** printout (``To,`` / enrollment / name / address / date / PIN / mobile)
+    via :func:`_parse_aadhar_back_letter_format_address` when (1) did not yield a usable address, or after
+    trimming/footer the text is still too short. Pass ``name_hint`` (holder name from front) to drop the
+    duplicate name line under ``To,``. DOB/Gender are not printed on the back; use **Aadhar.jpg** (front).
     """
     out: dict[str, str] = {}
     if not ocr_text or len(ocr_text.strip()) < 8:
@@ -361,6 +461,14 @@ def _parse_aadhar_back_address_from_ocr(ocr_text: str) -> dict[str, str]:
             )
             if near_m:
                 raw = near_m.group(1).strip()
+
+    used_letter = False
+    if not raw or len(raw.strip()) < 12:
+        letter = _parse_aadhar_back_letter_format_address(text, name_hint=name_hint)
+        if letter:
+            raw = letter
+            used_letter = True
+
     if not raw:
         return out
     raw = _normalize_aadhar_back_address_chunk(raw)
@@ -370,6 +478,16 @@ def _parse_aadhar_back_address_from_ocr(ocr_text: str) -> dict[str, str]:
         maxsplit=1,
     )
     raw = foot[0].strip(" ,.-") if foot else raw
+    if len(raw) < 15 and not used_letter:
+        letter = _parse_aadhar_back_letter_format_address(text, name_hint=name_hint)
+        if letter:
+            raw = _normalize_aadhar_back_address_chunk(letter)
+            foot2 = re.split(
+                r"(?i)(www\.uidai|help@uidai|unique\s+identification|virtual\s+id)",
+                raw,
+                maxsplit=1,
+            )
+            raw = foot2[0].strip(" ,.-") if foot2 else raw
     if len(raw) < 15:
         return out
     parsed = normalize_address_freeform(raw)
@@ -851,7 +969,11 @@ def _pipeline_merge_aadhar_customer(
         if back_txt:
             raw_parts.append((back_raw_name, back_txt))
             customer = _merge_aadhar_textract_fallback_dict(
-                customer, _parse_aadhar_back_address_from_ocr(back_txt)
+                customer,
+                _parse_aadhar_back_address_from_ocr(
+                    back_txt,
+                    name_hint=(customer.get("name") or "").strip() or None,
+                ),
             )
 
     note: str | None = None
@@ -1035,7 +1157,16 @@ def _apply_aadhar_textract_fallbacks_from_parts(
     customer = data.get("customer") or {}
     if not isinstance(customer, dict):
         customer = {}
-    for fn, tx in parts:
+
+    def _aadhar_section_order(fn: str) -> int:
+        fl = fn.strip().replace("\\", "/").split("/")[-1].lower()
+        if fl in ("aadhar.jpg", "aadhar.pdf"):
+            return 0
+        if fl in ("aadhar_back.jpg", "aadhar_back.pdf"):
+            return 1
+        return 2
+
+    for fn, tx in sorted(parts, key=lambda p: _aadhar_section_order(p[0])):
         if not tx or not str(tx).strip():
             continue
         fl = fn.strip().replace("\\", "/").split("/")[-1].lower()
@@ -1044,8 +1175,9 @@ def _apply_aadhar_textract_fallbacks_from_parts(
                 customer, _parse_aadhar_front_textract_fallback(tx)
             )
         elif fl in ("aadhar_back.jpg", "aadhar_back.pdf"):
+            hint = (customer.get("name") or "").strip() or None
             customer = _merge_aadhar_textract_fallback_dict(
-                customer, _parse_aadhar_back_address_from_ocr(tx)
+                customer, _parse_aadhar_back_address_from_ocr(tx, name_hint=hint)
             )
     if customer.get("aadhar_id"):
         customer["aadhar_id"] = _aadhar_last4(customer["aadhar_id"]) or ""
