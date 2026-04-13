@@ -2,9 +2,10 @@
 Pre-OCR for bulk upload: Tesseract pass on each PDF page (in-memory raster), classify (Aadhaar, Details, …),
 then write normalized document files under ``Uploaded scans/{dealer_id}/{mobile}_ddmmyy/``.
 
-**Raw folder:** ``…/{mobile}_ddmmyy/raw/`` holds the consolidated PDF copy, per-page PDFs
-(``page_01.pdf``, …), and **per-page JPEG rasters** (``page_01.jpg``, …) — the same bytes used for
-Tesseract pre-OCR / classification **before** post-OCR compression of ``for_OCR/`` outputs.
+**Raw folder:** ``…/{mobile}_ddmmyy/raw/`` holds **PDFs only**: the consolidated scan copy and per-page
+``page_NN.pdf`` files. Rasters are **not** stored under ``raw/``; pre-OCR renders each PDF page to **PIL RGB**
+(PyMuPDF) and passes pixels straight to Tesseract (no intermediate JPEG). Upload-facing JPEGs/PDFs for
+:mod:`sales_ocr_service` are written under ``for_OCR/`` after classification.
 
 **for_OCR folder:** ``…/{mobile}_ddmmyy/for_OCR/`` holds classified outputs (JPEGs such as
 ``Aadhar_front.jpg``, ``Insurance.jpg``, and ``Sales_Detail_Sheet.pdf``) plus one **single-page PDF per
@@ -32,7 +33,22 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from app.config import BULK_UPLOAD_DIR, OCR_LANG, OCR_PSM, OCR_PREPROCESS, UPLOADS_DIR, get_uploads_dir
+from PIL import Image
+
+from app.config import (
+    BULK_UPLOAD_DIR,
+    OCR_LANG,
+    OCR_PSM,
+    OCR_PREPROCESS,
+    UPLOADS_DIR,
+    get_add_sales_pre_ocr_work_dir,
+    get_uploads_dir,
+)
+from app.services.ocr_extraction_log import (
+    append_pre_ocr_step_lines,
+    append_pre_ocr_work_session_line,
+    append_pre_ocr_work_session_lines,
+)
 from app.services.page_classifier import (
     classify_page_by_text,
     classify_pages_from_ocr_text,
@@ -97,27 +113,23 @@ _DETAILS_OR_INSURANCE_SNIFF = [
 ]
 
 
-def osd_deskew_clockwise_degrees(image_bytes: bytes) -> int:
+def osd_deskew_clockwise_degrees_from_image(img: Image.Image) -> int:
     """
     Return clockwise degrees (0, 90, 180, or 270) to rotate a raster so text reads upright,
     using Tesseract **OSD** (``osd`` trained data). Returns **0** on failure, ambiguous output,
     or orientation confidence below **2.0**.
     """
-    import io
     import re
 
     import pytesseract
-    from PIL import Image
 
-    if not image_bytes or len(image_bytes) < 800:
+    if img.width < 12 or img.height < 12:
         return 0
     try:
-        img = Image.open(io.BytesIO(image_bytes))
-        if img.mode != "RGB":
-            img = img.convert("RGB")
-        osd = pytesseract.image_to_osd(img, lang="osd")
+        work = img.convert("RGB") if img.mode != "RGB" else img
+        osd = pytesseract.image_to_osd(work, lang="osd")
     except Exception as e:
-        logger.debug("osd_deskew_clockwise_degrees: OSD skipped: %s", e)
+        logger.debug("osd_deskew_clockwise_degrees_from_image: OSD skipped: %s", e)
         return 0
 
     m_rot = re.search(r"Rotate:\s*(\d+)", osd)
@@ -138,56 +150,91 @@ def osd_deskew_clockwise_degrees(image_bytes: bytes) -> int:
     return rot_cw
 
 
+def osd_deskew_clockwise_degrees(image_bytes: bytes) -> int:
+    """Same as :func:`osd_deskew_clockwise_degrees_from_image` but for encoded image bytes (e.g. JPEG on disk)."""
+    import io
+
+    if not image_bytes or len(image_bytes) < 800:
+        return 0
+    try:
+        return osd_deskew_clockwise_degrees_from_image(Image.open(io.BytesIO(image_bytes)))
+    except Exception as e:
+        logger.debug("osd_deskew_clockwise_degrees: OSD skipped: %s", e)
+        return 0
+
+
+def correct_image_orientation_upright_image(img: Image.Image) -> Image.Image:
+    """
+    Rotate a PIL image to upright using Tesseract OSD. No JPEG encode/decode — use this on PDF renders.
+
+    On OSD failure or ambiguous output, returns the input image unchanged.
+    """
+    rot_cw = osd_deskew_clockwise_degrees_from_image(img)
+    if rot_cw == 0:
+        return img
+
+    work = img.convert("RGB") if img.mode != "RGB" else img
+    # Tesseract ``Rotate`` = degrees to turn **clockwise** to deskew. PIL positive angle = CCW.
+    img2 = work.rotate(-rot_cw, expand=True, fillcolor="white")
+    logger.info("correct_image_orientation_upright_image: applied %s° CW correction (PIL -%s)", rot_cw, rot_cw)
+    return img2
+
+
 def correct_image_orientation_upright(image_bytes: bytes) -> bytes:
     """
-    Detect page orientation (upright / 90° / 180° / 270°) via Tesseract **OSD** (``osd`` language)
-    and rotate the image so text reads normally. Requires ``tessdata/osd.traineddata``.
+    Detect page orientation via Tesseract **OSD** and rotate so text reads normally (JPEG in / JPEG out).
 
-    On OSD failure or ambiguous output, returns the input bytes unchanged.
+    For PDF → Tesseract, prefer :func:`correct_image_orientation_upright_image` on a PIL RGB render
+    to avoid a lossy JPEG round-trip.
     """
     import io
 
-    from PIL import Image
-
-    rot_cw = osd_deskew_clockwise_degrees(image_bytes)
-    if rot_cw == 0:
+    try:
+        img = Image.open(io.BytesIO(image_bytes))
+    except Exception:
         return image_bytes
 
-    img = Image.open(io.BytesIO(image_bytes))
-    if img.mode != "RGB":
-        img = img.convert("RGB")
-    # Tesseract ``Rotate`` = degrees to turn **clockwise** to deskew. PIL positive angle = CCW.
-    img2 = img.rotate(-rot_cw, expand=True, fillcolor="white")
+    img2 = correct_image_orientation_upright_image(img)
+    if img2 is img:
+        return image_bytes
+
     out = io.BytesIO()
     img2.save(out, "JPEG", quality=92)
-    logger.info("correct_image_orientation_upright: applied %s° CW correction (PIL -%s)", rot_cw, rot_cw)
     return out.getvalue()
 
 
-def _pdf_to_images(
+def _pil_rgb_to_jpeg_bytes(img: Image.Image, quality: int = 90) -> bytes:
+    """Encode RGB (or convertible) PIL image to JPEG for APIs that still expect bytes (cv2, Aadhaar splits)."""
+    import io
+
+    work = img.convert("RGB") if img.mode != "RGB" else img
+    buf = io.BytesIO()
+    work.save(buf, "JPEG", quality=quality)
+    return buf.getvalue()
+
+
+def _pdf_to_page_images(
     pdf_path: Path,
     max_pages: int = 20,
     *,
     fix_orientation: bool = True,
-) -> list[tuple[int, bytes]]:
-    """Convert PDF pages to JPEG bytes. Optionally deskew to upright via :func:`correct_image_orientation_upright`."""
+) -> list[tuple[int, Image.Image]]:
+    """
+    Render PDF pages to **PIL RGB** (PyMuPDF pixmap). Tesseract needs pixels, not vectors; this avoids
+    an intermediate **JPEG** encode/decode — pass images straight to :func:`_tesseract_ocr_image`.
+    """
     import fitz
-    from PIL import Image
-    import io
 
-    result: list[tuple[int, bytes]] = []
+    result: list[tuple[int, Image.Image]] = []
     doc = fitz.open(str(pdf_path))
     try:
         for i in range(min(doc.page_count, max_pages)):
             page = doc[i]
             pix = page.get_pixmap(dpi=150)
             img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-            buf = io.BytesIO()
-            img.save(buf, "JPEG", quality=90)
-            data = buf.getvalue()
             if fix_orientation:
-                data = correct_image_orientation_upright(data)
-            result.append((i, data))
+                img = correct_image_orientation_upright_image(img)
+            result.append((i, img))
     finally:
         doc.close()
     return result
@@ -411,11 +458,9 @@ def _export_single_page_pdfs_to_raw(pdf_path: Path, raw_dir: Path, max_pages: in
     Split a multi-page PDF into ``page_01.pdf``, ``page_02.pdf``, … under ``raw_dir``
     (one PDF per original page). Applies **Tesseract OSD** on a raster render of each page and
     sets **PDF page rotation** so the saved single-page PDF is upright.
-    Per-page JPEG rasters are written separately by :func:`_split_pdf_by_classification` (``page_NN.jpg``).
+    Does **not** write JPEGs to ``raw/`` (PDF archival only).
     """
     import fitz
-    from PIL import Image
-    import io
 
     raw_dir.mkdir(parents=True, exist_ok=True)
     src = fitz.open(str(pdf_path))
@@ -425,9 +470,7 @@ def _export_single_page_pdfs_to_raw(pdf_path: Path, raw_dir: Path, max_pages: in
             page = src[i]
             pix = page.get_pixmap(dpi=150)
             img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-            buf = io.BytesIO()
-            img.save(buf, "JPEG", quality=90)
-            rot = osd_deskew_clockwise_degrees(buf.getvalue())
+            rot = osd_deskew_clockwise_degrees_from_image(img)
 
             dst = fitz.open()
             try:
@@ -450,19 +493,24 @@ def _export_single_page_pdfs_to_raw(pdf_path: Path, raw_dir: Path, max_pages: in
         src.close()
 
 
-def _tesseract_ocr(image_bytes: bytes) -> str:
-    """Run Tesseract OCR on image bytes. Returns full text."""
+def _tesseract_ocr_image(img: Image.Image) -> str:
+    """Run Tesseract OCR on a PIL image (RGB or L). Prefer this over bytes to skip JPEG encode/decode."""
     import pytesseract
-    from PIL import Image
+    from PIL import ImageEnhance
+
+    work = img
+    if OCR_PREPROCESS:
+        work = work.convert("L")
+        enhancer = ImageEnhance.Contrast(work)
+        work = enhancer.enhance(2.0)
+    return pytesseract.image_to_string(work, lang=OCR_LANG, config=f"--psm {OCR_PSM}")
+
+
+def _tesseract_ocr(image_bytes: bytes) -> str:
+    """Run Tesseract OCR on encoded image bytes (JPEG/PNG, etc.)."""
     import io
 
-    img = Image.open(io.BytesIO(image_bytes))
-    if OCR_PREPROCESS:
-        img = img.convert("L")
-        from PIL import ImageEnhance
-        enhancer = ImageEnhance.Contrast(img)
-        img = enhancer.enhance(2.0)
-    return pytesseract.image_to_string(img, lang=OCR_LANG, config=f"--psm {OCR_PSM}")
+    return _tesseract_ocr_image(Image.open(io.BytesIO(image_bytes)))
 
 
 def crop_aadhar_letter_below_scissors(image_bytes: bytes) -> bytes | None:
@@ -635,8 +683,8 @@ def split_aadhar_letter_vertical(strip_bytes: bytes) -> tuple[bytes, bytes] | No
 
 def detect_aadhar_consolidated_from_ocr(ocr_text: str) -> bool:
     """
-    True when Tesseract (or equivalent) text matches **both** UIDAI front and back markers
-    on one page: ``Government of India`` and ``uidai.gov.in`` (see ``classify_page_by_text``).
+    True when ``classify_page_by_text`` returns **Aadhar_combined** (DOB+gender row plus long text
+    with address/authority cues on one page — see :mod:`page_classifier`).
     """
     return classify_page_by_text(ocr_text or "") == PAGE_TYPE_AADHAR_COMBINED
 
@@ -646,8 +694,8 @@ def _consolidated_halves_need_swap(top_ocr: str, bottom_ocr: str) -> bool:
     After a horizontal cut, decide whether the **top** image is actually the card **back**
     (so we swap before writing front/back files).
 
-    Primary rule: **DOB + Male/Female** on one half → that half is the **front**; the other is **back**.
-    If inconclusive, uses ``classify_page_by_text`` and uidai/govt heuristics.
+    **Only** :func:`should_swap_aadhar_pages_by_dob_gender` (DOB + Male/Female on one half = front).
+    If inconclusive, uses ``classify_page_by_text`` / ink heuristics (no uidai URL rule).
     """
     by_dob = should_swap_aadhar_pages_by_dob_gender(top_ocr or "", bottom_ocr or "")
     if by_dob is not None:
@@ -1320,14 +1368,11 @@ def _split_pdf_multi_customer_to_sale_dirs(
     Same index for front+back → :func:`_process_same_page_aadhar`; else one raster per slot for outputs.
     Returns ``(sale_dir, subfolder, mobile)`` per bundle.
     """
-    from PIL import Image
-    import io
-
     from app.services.upload_service import UploadService
 
     us = UploadService()
-    pages = _pdf_to_images(pdf_path)
-    page_bytes: dict[int, bytes] = {idx: b for idx, b in pages}
+    pages = _pdf_to_page_images(pdf_path)
+    page_images: dict[int, Image.Image] = {idx: im for idx, im in pages}
     result: list[tuple[Path, str, str]] = []
 
     for i, bundle in enumerate(bundles):
@@ -1344,15 +1389,14 @@ def _split_pdf_multi_customer_to_sale_dirs(
 
         fi = bundle.get("aadhar_front_idx")
         bi = bundle.get("aadhar_back_idx")
-        if fi is not None and bi is not None and fi == bi and fi in page_bytes:
-            if not _process_same_page_aadhar(page_bytes[fi], for_ocr_dir):
+        if fi is not None and bi is not None and fi == bi and fi in page_images:
+            if not _process_same_page_aadhar(_pil_rgb_to_jpeg_bytes(page_images[fi]), for_ocr_dir):
                 logger.warning(
                     "Multi bundle %d: same-page Aadhaar split failed; saving full page as %s",
                     i + 1,
                     FILENAME_AADHAR_FRONT,
                 )
-                img = Image.open(io.BytesIO(page_bytes[fi]))
-                img.save(for_ocr_dir / FILENAME_AADHAR_FRONT, "JPEG", quality=90)
+                page_images[fi].save(for_ocr_dir / FILENAME_AADHAR_FRONT, "JPEG", quality=90)
         else:
             for key, filename in [
                 ("aadhar_front_idx", FILENAME_AADHAR_FRONT),
@@ -1360,10 +1404,9 @@ def _split_pdf_multi_customer_to_sale_dirs(
                 ("insurance_idx", "Insurance.jpg"),
             ]:
                 idx = bundle.get(key)
-                if idx is not None and idx in page_bytes:
+                if idx is not None and idx in page_images:
                     out_path = for_ocr_dir / filename
-                    img = Image.open(io.BytesIO(page_bytes[idx]))
-                    img.save(out_path, "JPEG", quality=90)
+                    page_images[idx].save(out_path, "JPEG", quality=90)
                     logger.info("Multi-customer: bundle %d page %d -> %s", i + 1, idx + 1, filename)
             didx_b = bundle.get("details_idx")
             if didx_b is not None:
@@ -1378,8 +1421,8 @@ def _split_pdf_multi_customer_to_sale_dirs(
                     )
 
         didx = bundle.get("details_idx")
-        if didx is not None and didx in page_bytes:
-            write_pencil_mark_from_details_page(sale_dir, page_bytes[didx])
+        if didx is not None and didx in page_images:
+            write_pencil_mark_from_details_page(sale_dir, _pil_rgb_to_jpeg_bytes(page_images[didx]))
 
         page_type_to_idx_m: dict[str, int] = {}
         if bundle.get("aadhar_front_idx") is not None:
@@ -1403,6 +1446,8 @@ def _split_pdf_multi_customer_to_sale_dirs(
 def pre_ocr_pdf(
     pdf_path: Path,
     processing_dir: Path | None = None,
+    *,
+    work_session_log_dir: Path | None = None,
 ) -> tuple[str, Path | None, str | None, list[tuple[str, int | None, str]]]:
     """
     Extract mobile from PDF using Tesseract per page (Details sheet has mobile).
@@ -1410,6 +1455,9 @@ def pre_ocr_pdf(
 
     Returns ``(full_text, ocr_file_path, mobile_or_none, step_log)`` where ``step_log`` is a list of
     ``(step_id, elapsed_ms, detail)`` for :func:`append_pre_ocr_step_lines`.
+
+    When ``work_session_log_dir`` is set (Add Sales consolidated PDF under ``_add_sales_pre_ocr_work``),
+    each step is also appended incrementally to ``add_sales_pre_ocr_work.log`` there for live visibility.
     """
     proc_dir = processing_dir or PROCESSING_DIR
     proc_dir.mkdir(parents=True, exist_ok=True)
@@ -1420,52 +1468,58 @@ def pre_ocr_pdf(
     ocr_path = proc_dir / ocr_basename
     step_log: list[tuple[str, int | None, str]] = []
 
+    def _step(t: tuple[str, int | None, str]) -> None:
+        step_log.append(t)
+        if work_session_log_dir is not None:
+            append_pre_ocr_work_session_lines(work_session_log_dir, [t])
+
     try:
         t0 = time.perf_counter()
-        pages = _pdf_to_images(pdf_path)
+        pages = _pdf_to_page_images(pdf_path)
         raster_ms = int((time.perf_counter() - t0) * 1000)
-        step_log.append(
-            ("pdf_to_page_images", raster_ms, f"pages={len(pages)} file={pdf_path.name}"),
+        _step(
+            ("pdf_to_page_rasters", raster_ms, f"pages={len(pages)} file={pdf_path.name}"),
         )
 
         all_text_parts: list[str] = []
         tess_total = 0
-        for page_idx, jpeg_bytes in pages:
+        for page_idx, page_img in pages:
             t1 = time.perf_counter()
-            text = _tesseract_ocr(jpeg_bytes)
+            text = _tesseract_ocr_image(page_img)
             p_ms = int((time.perf_counter() - t1) * 1000)
             tess_total += p_ms
             ch = len(text.strip())
-            step_log.append(
-                (f"tesseract_page_{page_idx + 1}", p_ms, f"chars={ch} jpeg_bytes={len(jpeg_bytes)}"),
+            px = page_img.width * page_img.height * 3
+            _step(
+                (f"tesseract_page_{page_idx + 1}", p_ms, f"chars={ch} rgb_bytes≈{px}"),
             )
             if text.strip():
                 all_text_parts.append(f"--- Page {page_idx + 1} ---\n{text}")
 
-        step_log.append(("tesseract_all_pages_total", tess_total, f"pages={len(pages)}"))
+        _step(("tesseract_all_pages_total", tess_total, f"pages={len(pages)}"))
 
         t_merge0 = time.perf_counter()
         full_text = "\n\n".join(all_text_parts)
         t_after_merge = time.perf_counter()
-        step_log.append(
+        _step(
             ("merge_page_text", int((t_after_merge - t_merge0) * 1000), f"chars={len(full_text)}"),
         )
 
         t_wr = time.perf_counter()
         ocr_path.write_text(full_text, encoding="utf-8")
-        step_log.append(
+        _step(
             ("write_pre_ocr_txt", int((time.perf_counter() - t_wr) * 1000), f"path={ocr_basename}"),
         )
 
         t3 = time.perf_counter()
         mobile_scope = _pre_ocr_text_from_sales_detail_sheet_onward(full_text)
-        step_log.append(
+        _step(
             ("scope_text_sales_detail_onward", int((time.perf_counter() - t3) * 1000), f"chars={len(mobile_scope)}"),
         )
 
         t4 = time.perf_counter()
         mobile = _extract_mobile_from_text(mobile_scope)
-        step_log.append(
+        _step(
             ("extract_mobile", int((time.perf_counter() - t4) * 1000), f"mobile={'set' if mobile else 'none'}"),
         )
 
@@ -1476,7 +1530,7 @@ def pre_ocr_pdf(
             ocr_path.write_text(f"OCR error: {e}\n", encoding="utf-8")
         except OSError:
             pass
-        step_log.append(("pre_ocr_error", None, str(e)[:200]))
+        _step(("pre_ocr_error", None, str(e)[:200]))
         return "", ocr_path, None, step_log
 
 
@@ -1495,8 +1549,6 @@ def _split_pdf_by_classification(
     Same-page Aadhaar: consolidated top/bottom split, then letter scissor split via :func:`_process_same_page_aadhar`.
     """
     import fitz
-    from PIL import Image
-    import io
 
     sale_dir.mkdir(parents=True, exist_ok=True)
     for_ocr_dir = sale_dir / FOR_OCR_SUBDIR
@@ -1523,28 +1575,38 @@ def _split_pdf_by_classification(
 
     maybe_swap_aadhar_page_indices(page_type_to_idx, full_ocr_text)
 
-    pages = _pdf_to_images(pdf_path)
-    page_bytes: dict[int, bytes] = {idx: b for idx, b in pages}
-    if raw_dir is not None:
-        for idx, jpeg_bytes in page_bytes.items():
-            try:
-                (raw_dir / f"page_{idx + 1:02d}.jpg").write_bytes(jpeg_bytes)
-            except OSError as e:
-                logger.warning("raw: could not write page_%02d.jpg: %s", idx + 1, e)
+    pages = _pdf_to_page_images(pdf_path)
+    page_images: dict[int, Image.Image] = {idx: im for idx, im in pages}
+
+    # Same per-page rasters as pre-OCR ``--- Page N ---`` (Tesseract order) for operator review.
+    ci_dir = for_ocr_dir / "classify_inputs"
+    try:
+        ci_dir.mkdir(parents=True, exist_ok=True)
+        (ci_dir / "README.txt").write_text(
+            "PNG files here are the per-page raster cuts (PDF → RGB, lossless save) used with pre-OCR text "
+            "for page classification.\n"
+            "Aadhaar photo **front** is detected only when OCR contains both a DOB cue and Male/Female "
+            "(English/Hindi; any common casing).\n"
+            "Sibling folder ../raw/ holds PDF copies only (no rasters).\n",
+            encoding="utf-8",
+        )
+        for idx, pim in sorted(page_images.items()):
+            pim.save(ci_dir / f"page_{idx + 1:02d}.png", "PNG")
+    except OSError as e:
+        logger.warning("for_OCR/classify_inputs: could not write: %s", e)
 
     combined_indices = {idx for idx, ptype in classifications if ptype == PAGE_TYPE_AADHAR_COMBINED}
     for idx in combined_indices:
-        if idx not in page_bytes:
+        if idx not in page_images:
             continue
-        if not _process_same_page_aadhar(page_bytes[idx], for_ocr_dir):
+        if not _process_same_page_aadhar(_pil_rgb_to_jpeg_bytes(page_images[idx]), for_ocr_dir):
             logger.warning(
                 "Aadhaar combined page %d: consolidated + letter split failed; copying full page to %s only",
                 idx + 1,
                 FILENAME_AADHAR_FRONT,
             )
             out_path = for_ocr_dir / FILENAME_AADHAR_FRONT
-            img = Image.open(io.BytesIO(page_bytes[idx]))
-            img.save(out_path, "JPEG", quality=90)
+            page_images[idx].save(out_path, "JPEG", quality=90)
 
     # Write known types (skip Aadhar slots already produced from combined split)
     for ptype, filename in PAGE_TYPE_TO_FILENAME.items():
@@ -1553,7 +1615,7 @@ def _split_pdf_by_classification(
         idx = page_type_to_idx[ptype]
         if idx in combined_indices and ptype in (PAGE_TYPE_AADHAR, PAGE_TYPE_AADHAR_BACK):
             continue
-        if idx not in page_bytes:
+        if idx not in page_images:
             continue
         if filename == FILENAME_SALES_DETAIL_SHEET_PDF:
             src_pdf = raw_dir / f"page_{idx + 1:02d}.pdf" if raw_dir else None
@@ -1564,14 +1626,13 @@ def _split_pdf_by_classification(
                 logger.warning("Details page %d: missing raw PDF for Sales_Detail_Sheet.pdf", idx + 1)
             continue
         out_path = for_ocr_dir / filename
-        img = Image.open(io.BytesIO(page_bytes[idx]))
-        img.save(out_path, "JPEG", quality=90)
+        page_images[idx].save(out_path, "JPEG", quality=90)
         logger.info("Classified page %d -> %s", idx + 1, filename)
 
     if PAGE_TYPE_DETAILS in page_type_to_idx:
         didx = page_type_to_idx[PAGE_TYPE_DETAILS]
-        if didx in page_bytes:
-            write_pencil_mark_from_details_page(sale_dir, page_bytes[didx])
+        if didx in page_images:
+            write_pencil_mark_from_details_page(sale_dir, _pil_rgb_to_jpeg_bytes(page_images[didx]))
 
     # Merge unused pages into unused.pdf
     if unused_indices:
@@ -1611,11 +1672,17 @@ def run_pre_ocr_and_prepare(
     If missing_list is non-empty, validation failed; do not split. bundles is None.
     """
     from app.config import get_ocr_output_dir
-    from app.services.ocr_extraction_log import append_pre_ocr_step_lines
     from app.services.upload_service import UploadService
 
     proc_dir = processing_dir or PROCESSING_DIR
     proc_dir.mkdir(parents=True, exist_ok=True)
+
+    ws: Path | None = None
+    try:
+        if proc_dir.resolve() == get_add_sales_pre_ocr_work_dir(dealer_id).resolve():
+            ws = proc_dir
+    except OSError:
+        ws = None
 
     us = UploadService()
 
@@ -1633,10 +1700,41 @@ def run_pre_ocr_and_prepare(
     dest_pdf.write_bytes(source_pdf.read_bytes())
     copy_ms = int((time.perf_counter() - t_copy0) * 1000)
 
+    if ws:
+        append_pre_ocr_work_session_line(
+            ws,
+            f"=== add_sales_pre_ocr session work_dir={proc_dir.resolve()} dealer_id={dealer_id} "
+            f"source_pdf={source_pdf.name} ===",
+        )
+        append_pre_ocr_work_session_lines(
+            ws,
+            [
+                (
+                    "copy_pdf_to_processing",
+                    copy_ms,
+                    f"bytes={dest_pdf.stat().st_size} name={dest_pdf.name}",
+                ),
+            ],
+        )
+
     # Run pre-OCR (Tesseract per page — usually dominant cost)
     t_pre0 = time.perf_counter()
-    full_text, ocr_path, mobile, pre_steps = pre_ocr_pdf(dest_pdf, processing_dir=proc_dir)
+    full_text, ocr_path, mobile, pre_steps = pre_ocr_pdf(
+        dest_pdf, processing_dir=proc_dir, work_session_log_dir=ws
+    )
     pre_ocr_wall_ms = int((time.perf_counter() - t_pre0) * 1000)
+
+    if ws:
+        append_pre_ocr_work_session_lines(
+            ws,
+            [
+                (
+                    "pre_ocr_pdf_total_wall",
+                    pre_ocr_wall_ms,
+                    "includes_tesseract_and_io",
+                ),
+            ],
+        )
 
     orchestration: list[tuple[str, int | None, str]] = [
         ("copy_pdf_to_processing", copy_ms, f"bytes={dest_pdf.stat().st_size} name={dest_pdf.name}"),
@@ -1644,46 +1742,51 @@ def run_pre_ocr_and_prepare(
     ]
     orchestration.extend(pre_steps)
 
+    def _orch_append(t: tuple[str, int | None, str]) -> None:
+        orchestration.append(t)
+        if ws:
+            append_pre_ocr_work_session_lines(ws, [t])
+
     t_cls0 = time.perf_counter()
     classifications = classify_pages_from_ocr_text(full_text)
     cls_ms = int((time.perf_counter() - t_cls0) * 1000)
-    orchestration.append(
+    _orch_append(
         ("classify_pages_from_ocr_text", cls_ms, f"slots={len(classifications)}"),
     )
 
     t_ms0 = time.perf_counter()
     mobile_scope = _pre_ocr_text_from_sales_detail_sheet_onward(full_text)
     ms_ms = int((time.perf_counter() - t_ms0) * 1000)
-    orchestration.append(("sales_detail_onward_scope", ms_ms, f"chars={len(mobile_scope)}"))
+    _orch_append(("sales_detail_onward_scope", ms_ms, f"chars={len(mobile_scope)}"))
 
     t_am0 = time.perf_counter()
     all_mobiles = _extract_all_mobiles_from_text(mobile_scope)
     am_ms = int((time.perf_counter() - t_am0) * 1000)
-    orchestration.append(("extract_all_mobiles", am_ms, f"count={len(all_mobiles)}"))
+    _orch_append(("extract_all_mobiles", am_ms, f"count={len(all_mobiles)}"))
 
     t_mc0 = time.perf_counter()
     is_multi = _detect_multi_customer(classifications) or len(all_mobiles) >= 2
-    orchestration.append(("detect_multi_customer", int((time.perf_counter() - t_mc0) * 1000), f"is_multi={is_multi}"))
+    _orch_append(("detect_multi_customer", int((time.perf_counter() - t_mc0) * 1000), f"is_multi={is_multi}"))
 
     # Multi-customer: when multiple document sets OR 2+ distinct mobiles in full text
     if is_multi:
         t_bd0 = time.perf_counter()
         bundles_data = _build_multi_customer_bundles(dest_pdf, full_text, classifications, all_mobiles)
         bd_ms = int((time.perf_counter() - t_bd0) * 1000)
-        orchestration.append(("build_multi_customer_bundles", bd_ms, f"bundles_data={len(bundles_data) if bundles_data else 0}"))
+        _orch_append(("build_multi_customer_bundles", bd_ms, f"bundles_data={len(bundles_data) if bundles_data else 0}"))
         if bundles_data:
             logger.info("Multi-customer: built %d bundles for %s", len(bundles_data), source_pdf.name)
             t_sp0 = time.perf_counter()
             result_bundles = _split_pdf_multi_customer_to_sale_dirs(dest_pdf, bundles_data, dealer_id)
             sp_ms = int((time.perf_counter() - t_sp0) * 1000)
-            orchestration.append(
+            _orch_append(
                 ("split_pdf_multi_customer_to_sale_dirs", sp_ms, f"customers={len(result_bundles)}"),
             )
 
             first_mobile = result_bundles[0][2] if result_bundles else mobile
             # Same pre-OCR timings apply to all customers; log full timeline under first sale folder.
             sf0 = result_bundles[0][1] if result_bundles else _log_subfolder(first_mobile)
-            orchestration.append(
+            _orch_append(
                 ("run_pre_ocr_and_prepare_done", None, f"path=multi_customer bundles={len(result_bundles)}"),
             )
             _flush_pre(orchestration, first_mobile)
@@ -1708,7 +1811,7 @@ def run_pre_ocr_and_prepare(
             classifications = [(i, PAGE_TYPE_AADHAR_COMBINED if i == idx else p) for i, p in classifications]
             has_aadhar_back = True
             logger.info("Treating single Aadhar page %d as Aadhar_combined (back may be blurred)", idx + 1)
-    orchestration.append(
+    _orch_append(
         ("aadhar_combined_fallback", int((time.perf_counter() - t_fb0) * 1000), ""),
     )
 
@@ -1722,12 +1825,12 @@ def run_pre_ocr_and_prepare(
         missing.append("Aadhar back")
     if PAGE_TYPE_DETAILS not in classified_types:
         missing.append("sales details form (vehicle & customer info)")
-    orchestration.append(
+    _orch_append(
         ("validate_required_pages", int((time.perf_counter() - t_val0) * 1000), f"missing={len(missing)}"),
     )
 
     if missing:
-        orchestration.append(("run_pre_ocr_and_prepare_rejected", None, f"missing={','.join(missing)}"))
+        _orch_append(("run_pre_ocr_and_prepare_rejected", None, f"missing={','.join(missing)}"))
         _flush_pre(orchestration, mobile)
         return None, source_pdf.stem, mobile, ocr_path, missing
 
@@ -1738,14 +1841,14 @@ def run_pre_ocr_and_prepare(
     _split_pdf_by_classification(
         dest_pdf, full_text, sale_dir, classifications_override=classifications, raw_dir=raw_dir
     )
-    orchestration.append(
+    _orch_append(
         (
             "split_pdf_by_classification",
             int((time.perf_counter() - t_sp0) * 1000),
             f"sale_dir={subfolder}",
         ),
     )
-    orchestration.append(("run_pre_ocr_and_prepare_done", None, "path=single_customer"))
+    _orch_append(("run_pre_ocr_and_prepare_done", None, "path=single_customer"))
     _flush_pre(orchestration, mobile)
 
     return [(sale_dir, subfolder, mobile or "")], source_pdf.stem, mobile, ocr_path, None
