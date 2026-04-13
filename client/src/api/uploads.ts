@@ -1,3 +1,4 @@
+import { getAccessToken } from "../auth/token";
 import { getBaseUrl, throwMappedFetchError } from "./client";
 import type { UploadScansResponse } from "../types";
 import { DEALER_ID } from "./dealerId";
@@ -7,11 +8,17 @@ const PROXY_TIMEOUT_HINT =
   "Otherwise increase reverse-proxy timeouts for POST /uploads.";
 
 async function postUploadForm(path: string, form: FormData): Promise<UploadScansResponse> {
+  const headers = new Headers();
+  const token = getAccessToken();
+  if (token) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
   let res: Response;
   try {
     res = await fetch(`${getBaseUrl()}${path}`, {
       method: "POST",
       body: form,
+      headers,
     });
   } catch (err) {
     throwMappedFetchError(err);
