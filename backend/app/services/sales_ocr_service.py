@@ -22,12 +22,26 @@ from app.services.customer_address_infer import (
     enrich_customer_address_from_freeform,
     normalize_address_freeform,
 )
-from app.services.pre_ocr_service import (
-    crop_aadhar_letter_below_scissors,
-    split_aadhar_letter_vertical,
-)
-
 logger = logging.getLogger(__name__)
+
+# Bulk pre-OCR drops single-page PDFs here for Textract (see ``pre_ocr_service.FOR_OCR_SUBDIR``).
+FOR_OCR_SUBDIR = "for_OCR"
+
+
+def _prefer_for_ocr_input(subdir: Path, pdf_name: str, jpg_name: str) -> Path:
+    """Prefer ``for_OCR/<pdf_name>`` when present (bulk pipeline); else sale-folder ``<jpg_name>``."""
+    p = subdir / FOR_OCR_SUBDIR / pdf_name
+    if p.is_file():
+        return p
+    return subdir / jpg_name
+
+
+def _rel_upload_label(path: Path, subdir: Path) -> str:
+    """Stable label for Raw_OCR / logs (e.g. ``for_OCR/Aadhar.pdf``)."""
+    try:
+        return str(path.relative_to(subdir)).replace("\\", "/")
+    except ValueError:
+        return path.name
 
 
 def _aadhar_last4(aadhar_id: str | None) -> str | None:
@@ -176,16 +190,26 @@ def _merge_qr_customer_into_existing(
 
 
 def _load_aadhar_scan_bytes(subdir: Path) -> dict[str, Any]:
-    """Load ``Aadhar.jpg`` / ``Aadhar_back.jpg`` bytes for the Textract pipeline (no QR decode)."""
-    out: dict[str, Any] = {"front_bytes": None, "back_bytes": None}
-    ap = subdir / "Aadhar.jpg"
-    bp = subdir / "Aadhar_back.jpg"
+    """
+    Load Aadhaar front/back bytes for the Textract pipeline (no QR decode).
+    Prefers ``for_OCR/Aadhar.pdf`` (and ``Aadhar_back.pdf``) when present.
+    """
+    out: dict[str, Any] = {
+        "front_bytes": None,
+        "back_bytes": None,
+        "front_src": "Aadhar.jpg",
+        "back_src": "Aadhar_back.jpg",
+    }
+    ap = _prefer_for_ocr_input(subdir, "Aadhar.pdf", "Aadhar.jpg")
+    bp = _prefer_for_ocr_input(subdir, "Aadhar_back.pdf", "Aadhar_back.jpg")
     try:
         out["front_bytes"] = ap.read_bytes() if ap.is_file() else None
+        out["front_src"] = _rel_upload_label(ap, subdir) if ap.is_file() else "Aadhar.jpg"
     except OSError:
         out["front_bytes"] = None
     try:
         out["back_bytes"] = bp.read_bytes() if bp.is_file() else None
+        out["back_src"] = _rel_upload_label(bp, subdir) if bp.is_file() else "Aadhar_back.jpg"
     except OSError:
         out["back_bytes"] = None
     return out
@@ -744,6 +768,9 @@ def _pipeline_merge_aadhar_customer(
     back_bytes: bytes | None,
     front_textract: dict | None,
     back_textract: dict | None,
+    *,
+    front_raw_name: str = "Aadhar.jpg",
+    back_raw_name: str = "Aadhar_back.jpg",
 ) -> tuple[dict[str, str], list[tuple[str, str]], str | None, dict[str, int]]:
     """
     **AWS Textract only** on front/back (no Tesseract, no UIDAI QR in this pipeline).
@@ -762,38 +789,9 @@ def _pipeline_merge_aadhar_customer(
 
     raw_parts: list[tuple[str, str]] = []
     customer: dict[str, str] = {}
-    is_letter = False
 
-    # ── Preprocess: Aadhaar letter (A4) — crop below horizontal scissors,
-    #    then split at vertical scissors into left (front) / right (back). ──
-    # The noisy top half causes Textract to read *wrong* values.
-    # Keeping left+right unsplit causes Textract to merge rows across both cards.
-    if front_bytes:
-        front_cropped = crop_aadhar_letter_below_scissors(front_bytes)
-        if front_cropped:
-            is_letter = True
-            front_textract = None
-            split = split_aadhar_letter_vertical(front_cropped)
-            if split:
-                front_bytes, back_bytes = split[0], split[1]
-                back_textract = None
-                logger.info("Aadhaar letter: horizontal + vertical split into front (left) / back (right)")
-            else:
-                front_bytes = front_cropped
-                logger.info("Aadhaar letter (front): cropped below scissors (no vertical split found)")
-    if not is_letter and back_bytes:
-        back_cropped = crop_aadhar_letter_below_scissors(back_bytes)
-        if back_cropped:
-            back_textract = None
-            split = split_aadhar_letter_vertical(back_cropped)
-            if split:
-                front_bytes, back_bytes = split[0], split[1]
-                front_textract = None
-                is_letter = True
-                logger.info("Aadhaar letter (back upload): horizontal + vertical split into front/back")
-            else:
-                back_bytes = back_cropped
-                logger.info("Aadhaar letter (back): cropped below scissors")
+    # Physical layout (letter / consolidated) is normalized in pre-OCR or
+    # :func:`normalize_aadhar_upload_files` before this pipeline runs.
 
     ft = front_textract
     if front_bytes and (not ft or ft.get("error") or not _ftext(ft)):
@@ -805,17 +803,13 @@ def _pipeline_merge_aadhar_customer(
         timings["aadhar_textract_front_ms"] += int((time.perf_counter() - t_tx) * 1000)
     front_txt = _ftext(ft)
     if front_txt:
-        raw_parts.append(("Aadhar.jpg", front_txt))
+        raw_parts.append((front_raw_name, front_txt))
         customer = _merge_aadhar_textract_fallback_dict(
             customer, _parse_aadhar_front_textract_fallback(front_txt)
         )
         customer = _merge_aadhar_textract_fallback_dict(
             customer, _parse_aadhar_name_from_aadhaar_textract(front_txt)
         )
-        if is_letter:
-            customer = _merge_aadhar_textract_fallback_dict(
-                customer, _parse_aadhar_back_address_from_ocr(front_txt)
-            )
 
     bt = back_textract
     if back_bytes and not _aadhar_geo_ok(customer):
@@ -828,7 +822,7 @@ def _pipeline_merge_aadhar_customer(
             timings["aadhar_textract_back_ms"] += int((time.perf_counter() - t_tx) * 1000)
         back_txt = _ftext(bt)
         if back_txt:
-            raw_parts.append(("Aadhar_back.jpg", back_txt))
+            raw_parts.append((back_raw_name, back_txt))
             customer = _merge_aadhar_textract_fallback_dict(
                 customer, _parse_aadhar_back_address_from_ocr(back_txt)
             )
@@ -925,6 +919,8 @@ def _compile_details_sheet_fragment(
     if details_customer.get("name") and not details_customer_name:
         details_customer_name = details_customer.get("name")
 
+    _sync_nominee_relation_with_gender_across_fragments(insurance, details_customer)
+
     return {
         "vehicle": vehicle,
         "insurance": insurance,
@@ -1015,11 +1011,11 @@ def _apply_aadhar_textract_fallbacks_from_parts(
         if not tx or not str(tx).strip():
             continue
         fl = fn.strip().replace("\\", "/").split("/")[-1].lower()
-        if fl == "aadhar.jpg":
+        if fl in ("aadhar.jpg", "aadhar.pdf"):
             customer = _merge_aadhar_textract_fallback_dict(
                 customer, _parse_aadhar_front_textract_fallback(tx)
             )
-        elif fl == "aadhar_back.jpg":
+        elif fl in ("aadhar_back.jpg", "aadhar_back.pdf"):
             customer = _merge_aadhar_textract_fallback_dict(
                 customer, _parse_aadhar_back_address_from_ocr(tx)
             )
@@ -1150,6 +1146,13 @@ _INSURANCE_KEY_ALIASES = {
         "relationship",
         "relation",
     ],
+    "payment_mode": [
+        "payment",
+        "payment:",
+        "payment mode",
+        "mode of payment",
+        "payment type",
+    ],
 }
 
 # Map Textract form keys to customer name on Details sheet.
@@ -1195,6 +1198,12 @@ _DETAILS_CUSTOMER_KEY_ALIASES = {
         "relationship",
         "relation",
     ],
+    "payment_mode": [
+        "payment",
+        "payment mode",
+        "mode of payment",
+        "payment type",
+    ],
 }
 
 # Map Textract form keys for insurance policy document (Insurance.jpg).
@@ -1210,6 +1219,209 @@ _INSURANCE_POLICY_KEY_ALIASES = {
 def _normalize_key_for_match(key: str) -> str:
     """Lowercase and collapse spaces for key matching."""
     return re.sub(r"\s+", " ", (key or "").lower().strip())
+
+
+# Printed Details sheets (A5) use checkbox rows for Profession, Marital status, Nominee, Payment, etc.
+# Textract FORMS values are normalized with ``_normalize_kv_value_for_checkbox_fields`` using
+# inline ``[✓]`` / ``[ ]`` markers from ``sales_textract_service._get_text_from_block``.
+_FIELD_CHECKBOX_ALIASES: dict[str, list[tuple[str, str]]] = {
+    "profession": [
+        ("private", "Private"),
+        ("job", "Job"),
+        ("business", "Business"),
+        ("farmer", "Farmer"),
+    ],
+    "marital_status": [
+        ("married", "Married"),
+        ("single", "Single"),
+    ],
+    "nominee_gender": [
+        ("male", "Male"),
+        ("female", "Female"),
+    ],
+    "nominee_relationship": [
+        ("father/mother", "Father/Mother"),
+        ("son/daughter", "Son/Daughter"),
+        ("wife/husband", "Wife/Husband"),
+        ("father", "Father/Mother"),
+        ("mother", "Father/Mother"),
+        ("son", "Son/Daughter"),
+        ("daughter", "Son/Daughter"),
+        ("wife", "Wife/Husband"),
+        ("husband", "Wife/Husband"),
+    ],
+    "payment_mode": [
+        ("upi/ qr", "UPI/QR"),
+        ("upi/qr", "UPI/QR"),
+        ("upi", "UPI/QR"),
+        ("qr", "UPI/QR"),
+        ("cash", "Cash"),
+        ("finance", "Finance"),
+        ("flipkart", "Flipkart"),
+    ],
+}
+
+
+def _match_checkbox_canonical(segment: str, field: str) -> str | None:
+    """Map a substring (one checkbox option region) to a canonical label for ``field``."""
+    if not segment or not field:
+        return None
+    seg = re.sub(r"\s+", " ", segment.lower().strip())
+    opts = _FIELD_CHECKBOX_ALIASES.get(field)
+    if not opts:
+        return None
+    # Longer keys first so "father/mother" wins over "father"
+    ordered = sorted(opts, key=lambda x: len(x[0]), reverse=True)
+    for key, canonical in ordered:
+        if key in seg:
+            return canonical
+    return None
+
+
+def _segments_after_selected_marks(s: str) -> list[str]:
+    """Split on ``[✓]`` selected markers; legacy ``[x]`` / ``[X]`` strings are normalized first."""
+    if not s:
+        return []
+    u = s.replace("[x]", "[✓]").replace("[X]", "[✓]")
+    out: list[str] = []
+    pos = 0
+    token = "[✓]"
+    while True:
+        idx = u.find(token, pos)
+        if idx < 0:
+            break
+        start = idx + len(token)
+        rest = u[start:]
+        nxt = re.search(r"\[", rest)
+        end = nxt.start() if nxt else len(rest)
+        chunk = rest[:end].strip()
+        if chunk:
+            out.append(chunk)
+        # Advance past this option + following bracket so a second ``[✓]`` on the same line is found.
+        pos = start + end
+    return out
+
+
+def _extract_checkbox_selection_value(raw: str | None, field: str) -> str | None:
+    """
+    If ``raw`` looks like a Textract checkbox row (``[✓]`` / ``[ ]``, legacy ``[x]``, or legacy ``X``),
+    return the canonical option for ``field``. Otherwise return ``None`` so callers keep ``raw``.
+    """
+    if raw is None or not str(raw).strip():
+        return None
+    s = str(raw).strip()
+    s = s.replace("\u2013", "-").replace("\u2014", "-").replace("\xa0", " ")
+    u = s.replace("[x]", "[✓]").replace("[X]", "[✓]")
+    if "[✓]" in u or "[ ]" in u:
+        segs = _segments_after_selected_marks(s)
+        if not segs:
+            return None
+        primary = segs[0]
+        got = _match_checkbox_canonical(primary, field)
+        if got:
+            return got
+        # Short free text after a mark (e.g. OCR typo) — still better than the whole row
+        if len(primary.split()) <= 5 and len(primary) <= 80:
+            return primary.strip()
+        return None
+    # Legacy Textract: ``X`` next to an option label (unordered append)
+    if re.search(r"(?i)(?<![A-Za-z0-9])X(?![A-Za-z0-9])", s):
+        m = re.search(r"(?i)(?<![A-Za-z0-9])X(?![A-Za-z0-9])\s+([A-Za-z][A-Za-z0-9 /]{0,48})", s)
+        if m:
+            got = _match_checkbox_canonical(m.group(1).strip(), field)
+            if got:
+                return got
+        m = re.search(
+            r"(?i)([A-Za-z][A-Za-z0-9 /]{0,48})\s+(?<![A-Za-z0-9])X(?![A-Za-z0-9])",
+            s,
+        )
+        if m:
+            got = _match_checkbox_canonical(m.group(1).strip(), field)
+            if got:
+                return got
+    return None
+
+
+def _normalize_kv_value_for_checkbox_fields(field: str, value: str | None) -> str:
+    """Apply checkbox semantics when ``value`` encodes selection marks; else return ``value`` unchanged."""
+    if value is None:
+        return ""
+    v = str(value).strip()
+    sel = _extract_checkbox_selection_value(v, field)
+    if sel is not None:
+        return sel
+    return v
+
+
+def _normalize_nominee_gender_sheet_value(val: str | None) -> str | None:
+    """Normalize nominee gender to **Male** / **Female** when OCR/checkbox text is noisy."""
+    if val is None or not str(val).strip():
+        return None
+    s = re.sub(r"\s+", " ", str(val).strip().lower())
+    if "female" in s:
+        return "Female"
+    if "male" in s:
+        return "Male"
+    return str(val).strip()[:80]
+
+
+def _normalize_payment_mode_sheet_value(val: str | None) -> str | None:
+    """Keep payment mode labels stable (avoid title-casing **UPI**)."""
+    if val is None or not str(val).strip():
+        return None
+    s = str(val).strip()
+    got = _extract_checkbox_selection_value(s, "payment_mode")
+    if got:
+        return got
+    got2 = _match_checkbox_canonical(s.lower(), "payment_mode")
+    return got2 if got2 else s[:120]
+
+
+def _refine_nominee_relationship_with_gender(rel: str | None, gender: str | None) -> str | None:
+    """
+    Checkbox templates use combined labels (**Father/Mother**, **Son/Daughter**, **Wife/Husband**).
+    With nominee gender (Male/Female), store the specific relation: e.g. Son/Daughter + Female -> Daughter.
+    """
+    if rel is None or not str(rel).strip():
+        return None
+    g = _normalize_nominee_gender_sheet_value(gender) if gender else None
+    if g not in ("Male", "Female"):
+        return str(rel).strip()
+    raw = str(rel).strip()
+    r = normalize_nominee_relationship_value(raw) or raw
+    r = r.rstrip(".")
+    m = re.match(r"(?i)^\s*([A-Za-z]+)\s*/\s*([A-Za-z]+)\s*$", r)
+    if not m:
+        return r
+    a, b = m.group(1).lower(), m.group(2).lower()
+    pair = frozenset((a, b))
+    if pair == frozenset(("father", "mother")):
+        return "Mother" if g == "Female" else "Father"
+    if pair == frozenset(("son", "daughter")):
+        return "Daughter" if g == "Female" else "Son"
+    if pair == frozenset(("wife", "husband")):
+        return "Wife" if g == "Female" else "Husband"
+    return r
+
+
+def _sync_nominee_relation_with_gender_across_fragments(
+    insurance: dict[str, str],
+    details_customer: dict[str, str],
+) -> None:
+    """
+    Relation may land in ``insurance`` and gender in ``details_customer`` (or vice versa).
+    Apply combined-label -> specific relation using the best available gender + relation pair.
+    """
+    rel = (insurance.get("nominee_relationship") or details_customer.get("nominee_relationship") or "").strip()
+    gender = (insurance.get("nominee_gender") or details_customer.get("nominee_gender") or "").strip()
+    if not rel or not gender:
+        return
+    refined = _refine_nominee_relationship_with_gender(rel, gender)
+    if not refined or refined.strip() == rel.strip():
+        return
+    insurance["nominee_relationship"] = refined
+    if details_customer.get("nominee_relationship"):
+        details_customer["nominee_relationship"] = refined
 
 
 def _details_input_format(path: Path) -> str:
@@ -1247,31 +1459,34 @@ def _parallel_textract_prefetch_upload_subfolder(subdir: Path) -> tuple[dict[str
     from app.services.sales_textract_service import extract_forms_from_bytes, extract_text_from_bytes
 
     jobs: list[tuple[str, bytes, str]] = []
-    ap = subdir / "Aadhar.jpg"
+    ap = _prefer_for_ocr_input(subdir, "Aadhar.pdf", "Aadhar.jpg")
     if ap.is_file():
         try:
             jobs.append(("aadhar_front", ap.read_bytes(), "text"))
         except OSError as e:
-            logger.warning("prefetch: could not read Aadhar.jpg: %s", e)
-    dp = subdir / "Details.jpg"
+            logger.warning("prefetch: could not read %s: %s", ap, e)
+    dp = _prefer_for_ocr_input(subdir, "Details.pdf", "Details.jpg")
     if dp.is_file() and _details_input_format(dp) in ("jpeg", "png", "pdf"):
         try:
             jobs.append(("details_forms", dp.read_bytes(), "forms"))
         except OSError as e:
-            logger.warning("prefetch: could not read Details.jpg: %s", e)
-    ip = subdir / "Insurance.jpg"
+            logger.warning("prefetch: could not read %s: %s", dp, e)
+    ip = _prefer_for_ocr_input(subdir, "Insurance.pdf", "Insurance.jpg")
     if ip.is_file():
         try:
             jobs.append(("insurance", ip.read_bytes(), "text"))
         except OSError as e:
-            logger.warning("prefetch: could not read Insurance.jpg: %s", e)
-    for fname, key in (("Aadhar_back.jpg", "aadhar_back"), ("Financing.jpg", "financing")):
-        p = subdir / fname
+            logger.warning("prefetch: could not read %s: %s", ip, e)
+    for pdf_name, jpg_name, key in (
+        ("Aadhar_back.pdf", "Aadhar_back.jpg", "aadhar_back"),
+        ("Financing.pdf", "Financing.jpg", "financing"),
+    ):
+        p = _prefer_for_ocr_input(subdir, pdf_name, jpg_name)
         if p.is_file():
             try:
                 jobs.append((key, p.read_bytes(), "text"))
             except OSError as e:
-                logger.warning("prefetch: could not read %s: %s", fname, e)
+                logger.warning("prefetch: could not read %s: %s", p, e)
 
     out: dict[str, dict] = {}
     job_ms: dict[str, int] = {}
@@ -1606,6 +1821,12 @@ def _apply_initcap_on_read(data: dict[str, Any]) -> None:
                 insurance["nominee_relationship"] = _initcap_words(nr)
             else:
                 insurance.pop("nominee_relationship", None)
+        if insurance.get("payment_mode"):
+            pm = _normalize_payment_mode_sheet_value(insurance.get("payment_mode"))
+            if pm:
+                insurance["payment_mode"] = pm
+            else:
+                insurance.pop("payment_mode", None)
         for k in ("nominee_name", "financier", "policy_holder_name"):
             if insurance.get(k):
                 insurance[k] = _initcap_words(insurance.get(k))
@@ -2079,6 +2300,10 @@ def _map_key_value_pairs_to_insurance(pairs: list[dict]) -> dict[str, str]:
             if field in out:
                 break
 
+    for _f in ("profession", "marital_status", "nominee_gender", "nominee_relationship", "payment_mode"):
+        if _f in out and out[_f]:
+            out[_f] = _normalize_kv_value_for_checkbox_fields(_f, out[_f])
+
     if "financier" not in out:
         for vv in key_lower_to_value.values():
             got = _extract_financier_from_payment_line(vv)
@@ -2094,6 +2319,18 @@ def _map_key_value_pairs_to_insurance(pairs: list[dict]) -> dict[str, str]:
             out["marital_status"] = ms
         else:
             out.pop("marital_status", None)
+    if out.get("nominee_gender"):
+        ng = _normalize_nominee_gender_sheet_value(out.get("nominee_gender"))
+        if ng:
+            out["nominee_gender"] = ng
+        else:
+            out.pop("nominee_gender", None)
+    if out.get("payment_mode"):
+        pm = _normalize_payment_mode_sheet_value(out.get("payment_mode"))
+        if pm:
+            out["payment_mode"] = pm
+        else:
+            out.pop("payment_mode", None)
     if "insurer" in out:
         ins = sanitize_details_sheet_insurer_value(out.get("insurer"))
         if ins:
@@ -2102,6 +2339,9 @@ def _map_key_value_pairs_to_insurance(pairs: list[dict]) -> dict[str, str]:
             out.pop("insurer", None)
     if out.get("nominee_relationship"):
         out["nominee_relationship"] = normalize_nominee_relationship_value(out["nominee_relationship"])
+    rfn = _refine_nominee_relationship_with_gender(out.get("nominee_relationship"), out.get("nominee_gender"))
+    if rfn:
+        out["nominee_relationship"] = rfn
     return out
 
 
@@ -2134,6 +2374,10 @@ def _map_key_value_pairs_to_details_customer(pairs: list[dict]) -> dict[str, str
             if field in out:
                 break
 
+    for _f in ("profession", "marital_status", "nominee_gender", "nominee_relationship", "payment_mode"):
+        if _f in out and out[_f]:
+            out[_f] = _normalize_kv_value_for_checkbox_fields(_f, out[_f])
+
     if out.get("mobile_number"):
         digits = "".join(ch for ch in out["mobile_number"] if ch.isdigit())
         out["mobile_number"] = digits[-10:] if digits else ""
@@ -2153,6 +2397,23 @@ def _map_key_value_pairs_to_details_customer(pairs: list[dict]) -> dict[str, str
             out["marital_status"] = ms
         else:
             out.pop("marital_status", None)
+    if out.get("nominee_gender"):
+        ng = _normalize_nominee_gender_sheet_value(out.get("nominee_gender"))
+        if ng:
+            out["nominee_gender"] = ng
+        else:
+            out.pop("nominee_gender", None)
+    if out.get("payment_mode"):
+        pm = _normalize_payment_mode_sheet_value(out.get("payment_mode"))
+        if pm:
+            out["payment_mode"] = pm
+        else:
+            out.pop("payment_mode", None)
+    if out.get("nominee_relationship"):
+        out["nominee_relationship"] = normalize_nominee_relationship_value(out["nominee_relationship"])
+    rfn = _refine_nominee_relationship_with_gender(out.get("nominee_relationship"), out.get("nominee_gender"))
+    if rfn:
+        out["nominee_relationship"] = rfn
     return out
 
 
@@ -2162,6 +2423,7 @@ def _parse_insurance_from_full_text(full_text: str) -> dict[str, str]:
     if not full_text or not isinstance(full_text, str):
         return out
     text = full_text.strip()
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     pay_fin = _extract_financier_from_payment_line(text)
     if pay_fin:
         out["financier"] = pay_fin
@@ -2184,6 +2446,8 @@ def _parse_insurance_from_full_text(full_text: str) -> dict[str, str]:
         ("financier / bank", "financier"),
         ("bank / financier", "financier"),
         ("financier", "financier"),
+        ("mode of payment", "payment_mode"),
+        ("payment mode", "payment_mode"),
         ("marital status", "marital_status"),
         ("nominee gender", "nominee_gender"),
         ("sex of nominee", "nominee_gender"),
@@ -2210,11 +2474,28 @@ def _parse_insurance_from_full_text(full_text: str) -> dict[str, str]:
         if m:
             val = m.group(1).strip()
             if key == "profession":
+                cb = _extract_checkbox_selection_value(val, "profession")
+                if cb:
+                    val = cb
                 val = _sanitize_details_profession_value(val)
                 if not val:
                     continue
             elif key == "marital_status":
+                cb = _extract_checkbox_selection_value(val, "marital_status")
+                if cb:
+                    val = cb
                 val = _normalize_details_marital_status_value(val)
+                if not val:
+                    continue
+            elif key == "nominee_gender":
+                cb = _extract_checkbox_selection_value(val, "nominee_gender")
+                if cb:
+                    val = cb
+                val = _normalize_nominee_gender_sheet_value(val)
+                if not val:
+                    continue
+            elif key == "payment_mode":
+                val = _normalize_payment_mode_sheet_value(val)
                 if not val:
                     continue
             elif key == "insurer":
@@ -2222,6 +2503,9 @@ def _parse_insurance_from_full_text(full_text: str) -> dict[str, str]:
                 if not val:
                     continue
             elif key == "nominee_relationship":
+                cb = _extract_checkbox_selection_value(val, "nominee_relationship")
+                if cb:
+                    val = cb
                 val = normalize_nominee_relationship_value(val)
                 if not val:
                     continue
@@ -2230,14 +2514,13 @@ def _parse_insurance_from_full_text(full_text: str) -> dict[str, str]:
             out[key] = val
 
     # Word / table layouts: label alone on one line, value on the next (e.g. "Profession" then "Farmer")
-    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     for i, ln in enumerate(lines):
         low = _normalize_key_for_match(ln)
         nxt = lines[i + 1].strip() if i + 1 < len(lines) else ""
         if not nxt or len(nxt) > 180:
             continue
         if "profession" not in out and low in ("profession", "occupation", "customer profession", "employment"):
-            cand = _sanitize_details_profession_value(nxt)
+            cand = _extract_checkbox_selection_value(nxt, "profession") or _sanitize_details_profession_value(nxt)
             if cand:
                 out["profession"] = cand
         if "financier" not in out and low in (
@@ -2253,7 +2536,9 @@ def _parse_insurance_from_full_text(full_text: str) -> dict[str, str]:
         if "nominee_age" not in out and low in ("nominee age", "age of nominee", "nominee age (years)"):
             out["nominee_age"] = _sanitize_nominee_age(nxt) or nxt
         if "nominee_gender" not in out and low in ("nominee gender", "gender of nominee", "sex of nominee"):
-            out["nominee_gender"] = nxt
+            ng = _extract_checkbox_selection_value(nxt, "nominee_gender") or _normalize_nominee_gender_sheet_value(nxt)
+            if ng:
+                out["nominee_gender"] = ng
         if "nominee_relationship" not in out and low in (
             "nominee relationship",
             "relationship with customer",
@@ -2265,7 +2550,8 @@ def _parse_insurance_from_full_text(full_text: str) -> dict[str, str]:
                 out["nominee_relationship"] = nr
         same = re.match(r"(?i)^(profession|occupation|customer profession)\s+(.{1,120})$", ln)
         if same and "profession" not in out:
-            cand = _sanitize_details_profession_value(same.group(2).strip())
+            rest = same.group(2).strip()
+            cand = _extract_checkbox_selection_value(rest, "profession") or _sanitize_details_profession_value(rest)
             if cand:
                 out["profession"] = cand
         same_f = re.match(
@@ -2280,6 +2566,51 @@ def _parse_insurance_from_full_text(full_text: str) -> dict[str, str]:
                 if cand:
                     out["insurer"] = cand
 
+    # Single LINE blocks with label + checkbox row (new template): "Profession: [✓] Private [ ] Job ..."
+    _inline_checkbox = [
+        (re.compile(r"(?i)^\s*Profession\s*:\s*(.+)$"), "profession"),
+        (re.compile(r"(?i)^\s*Marital\s+Status\s*:\s*(.+)$"), "marital_status"),
+        (re.compile(r"(?i)^\s*Nominee\s+Gender\s*:\s*(.+)$"), "nominee_gender"),
+        (re.compile(r"(?i)^\s*Nominee\s+Relationship\s*:\s*(.+)$"), "nominee_relationship"),
+        (re.compile(r"(?i)^\s*Relation\s*:\s*(.+)$"), "nominee_relationship"),
+        (re.compile(r"(?i)^\s*Payment\s*:\s*(.+)$"), "payment_mode"),
+    ]
+    for ln in lines:
+        for rx, field in _inline_checkbox:
+            key = field
+            if key in out:
+                continue
+            m = rx.match(ln)
+            if not m:
+                continue
+            rest = m.group(1).strip()
+            if field == "profession":
+                cand = _extract_checkbox_selection_value(rest, field) or _sanitize_details_profession_value(rest)
+                if cand:
+                    out[key] = cand
+            elif field == "marital_status":
+                cand = _extract_checkbox_selection_value(rest, field) or _normalize_details_marital_status_value(rest)
+                if cand:
+                    out[key] = cand
+            elif field == "nominee_gender":
+                cand = _extract_checkbox_selection_value(rest, field) or _normalize_nominee_gender_sheet_value(rest)
+                if cand:
+                    out[key] = cand
+            elif field == "nominee_relationship":
+                cand = _extract_checkbox_selection_value(rest, field)
+                if not cand:
+                    cand = normalize_nominee_relationship_value(rest)
+                if cand:
+                    out[key] = cand
+            elif field == "payment_mode":
+                cand = _normalize_payment_mode_sheet_value(rest)
+                if cand:
+                    out[key] = cand
+            break
+
+    rfn = _refine_nominee_relationship_with_gender(out.get("nominee_relationship"), out.get("nominee_gender"))
+    if rfn:
+        out["nominee_relationship"] = rfn
     return out
 
 
@@ -2561,6 +2892,7 @@ class OcrService:
                     "nominee_age",
                     "nominee_gender",
                     "nominee_relationship",
+                    "payment_mode",
                 ):
                     continue
                 if not customer.get(key):
@@ -2580,6 +2912,7 @@ class OcrService:
                         "nominee_age",
                         "nominee_gender",
                         "nominee_relationship",
+                        "payment_mode",
                     )
                     and v
                 },
@@ -2633,6 +2966,8 @@ class OcrService:
             scan_bundle.get("back_bytes"),
             prefetch.get("aadhar_front"),
             prefetch.get("aadhar_back"),
+            front_raw_name=str(scan_bundle.get("front_src") or "Aadhar.jpg"),
+            back_raw_name=str(scan_bundle.get("back_src") or "Aadhar_back.jpg"),
         )
         return {
             "ok": True,
@@ -2688,8 +3023,8 @@ class OcrService:
                 (time.perf_counter() - t_pref) * 1000
             )
 
-        aadhar_path = subdir / "Aadhar.jpg"
-        details_path = subdir / "Details.jpg"
+        aadhar_path = _prefer_for_ocr_input(subdir, "Aadhar.pdf", "Aadhar.jpg")
+        details_path = _prefer_for_ocr_input(subdir, "Details.pdf", "Details.jpg")
 
         frag_a: dict[str, Any] | None = None
         frag_d: dict[str, Any] | None = None
@@ -2733,18 +3068,22 @@ class OcrService:
         if frag_a and frag_a.get("raw_parts"):
             self._raw_ocr_parts.extend(frag_a["raw_parts"])
         if frag_d and frag_d.get("ok") and frag_d.get("full_text"):
-            self._raw_ocr_parts.append(("Details.jpg", frag_d["full_text"]))
+            self._raw_ocr_parts.append((_rel_upload_label(details_path, subdir), frag_d["full_text"]))
 
         if aadhar_path.exists():
             if frag_a and frag_a.get("ok"):
-                processed.append("Aadhar.jpg")
+                processed.append(_rel_upload_label(aadhar_path, subdir))
             else:
-                errors.append(f"Aadhar.jpg: {frag_a.get('error') if frag_a else 'failed'}")
+                errors.append(
+                    f"{_rel_upload_label(aadhar_path, subdir)}: {frag_a.get('error') if frag_a else 'failed'}"
+                )
         if details_path.exists():
             if frag_d and frag_d.get("ok"):
-                processed.append("Details.jpg")
+                processed.append(_rel_upload_label(details_path, subdir))
             else:
-                errors.append(f"Details.jpg: {frag_d.get('error') if frag_d else 'failed'}")
+                errors.append(
+                    f"{_rel_upload_label(details_path, subdir)}: {frag_d.get('error') if frag_d else 'failed'}"
+                )
 
         t_merge = time.perf_counter()
         merged_customer: dict[str, str] = {}
@@ -2754,30 +3093,32 @@ class OcrService:
                 self._write_aadhar_fields_summary_file(subfolder, merged_customer)
         section_timings_ms["merge_write_json_ms"] = int((time.perf_counter() - t_merge) * 1000)
 
-        insurance_path = subdir / "Insurance.jpg"
+        insurance_path = _prefer_for_ocr_input(subdir, "Insurance.pdf", "Insurance.jpg")
         t_ins = time.perf_counter()
         if insurance_path.exists():
             try:
+                ins_label = _rel_upload_label(insurance_path, subdir)
                 self._process_insurance_sheet(
                     subfolder,
-                    "Insurance.jpg",
+                    ins_label,
                     insurance_path,
                     textract_prefetch=prefetch.get("insurance"),
                 )
-                processed.append("Insurance.jpg")
+                processed.append(ins_label)
             except Exception as e:
-                errors.append(f"Insurance.jpg: {e}")
+                errors.append(f"{_rel_upload_label(insurance_path, subdir)}: {e}")
         section_timings_ms["insurance_ms"] = int((time.perf_counter() - t_ins) * 1000)
 
         t_extras = time.perf_counter()
         seen_raw = {fn for fn, _ in self._raw_ocr_parts}
-        for extra_file, prefetch_key in (
-            ("Aadhar_back.jpg", "aadhar_back"),
-            ("Financing.jpg", "financing"),
+        for pdf_name, jpg_name, prefetch_key in (
+            ("Aadhar_back.pdf", "Aadhar_back.jpg", "aadhar_back"),
+            ("Financing.pdf", "Financing.jpg", "financing"),
         ):
-            if extra_file in seen_raw:
+            extra_path = _prefer_for_ocr_input(subdir, pdf_name, jpg_name)
+            extra_label = _rel_upload_label(extra_path, subdir)
+            if extra_label in seen_raw:
                 continue
-            extra_path = subdir / extra_file
             if extra_path.exists():
                 try:
                     from app.services.sales_textract_service import extract_text_from_bytes
@@ -2787,7 +3128,7 @@ class OcrService:
                     else:
                         result = extract_text_from_bytes(extra_path.read_bytes())
                     if not result.get("error") and result.get("full_text"):
-                        self._raw_ocr_parts.append((extra_file, result["full_text"]))
+                        self._raw_ocr_parts.append((extra_label, result["full_text"]))
                 except Exception:
                     pass
         section_timings_ms["extras_raw_ms"] = int((time.perf_counter() - t_extras) * 1000)
@@ -2811,9 +3152,24 @@ class OcrService:
 
         self._raw_ocr_parts = None
 
+        t_post = time.perf_counter()
+        post_ocr_result: dict[str, Any] = {"ok": True, "skipped": True}
+        try:
+            from app.services.post_ocr_service import run_post_ocr
+
+            post_ocr_result = run_post_ocr(self.uploads_dir, subfolder)
+        except Exception as e:
+            logger.exception("post_ocr failed subfolder=%s", subfolder)
+            post_ocr_result = {"ok": False, "error": str(e)}
+        section_timings_ms["post_ocr_ms"] = int((time.perf_counter() - t_post) * 1000)
+
         section_timings_ms["total_ms"] = int((time.perf_counter() - t_total) * 1000)
 
-        result: dict[str, Any] = {"processed": processed, "section_timings_ms": section_timings_ms}
+        result: dict[str, Any] = {
+            "processed": processed,
+            "section_timings_ms": section_timings_ms,
+            "post_ocr": post_ocr_result,
+        }
         if errors:
             result["errors"] = errors
         return result
@@ -2925,6 +3281,7 @@ class OcrService:
                     "nominee_age",
                     "nominee_gender",
                     "nominee_relationship",
+                    "payment_mode",
                 ):
                     continue
                 if not customer_merged.get(key):
@@ -2945,6 +3302,7 @@ class OcrService:
                         "nominee_age",
                         "nominee_gender",
                         "nominee_relationship",
+                        "payment_mode",
                     )
                     and v
                 },
@@ -3140,7 +3498,7 @@ class OcrService:
         insurance_policy = _parse_insurance_policy_from_full_text(full_text)
 
         if hasattr(self, "_raw_ocr_parts") and self._raw_ocr_parts is not None:
-            self._raw_ocr_parts.append(("Insurance.jpg", full_text))
+            self._raw_ocr_parts.append((filename, full_text))
 
         # Merge into Details.json insurance section
         json_path = _json_output_path(self.ocr_output_dir, subfolder)
@@ -3192,8 +3550,9 @@ class OcrService:
         customer = data.get("customer") or {}
         if not isinstance(customer, dict):
             customer = {}
-        aadhar_path = self.uploads_dir / subfolder / "Aadhar.jpg"
-        back_p = self.uploads_dir / subfolder / "Aadhar_back.jpg"
+        subdir_gc = self.uploads_dir / subfolder
+        aadhar_path = _prefer_for_ocr_input(subdir_gc, "Aadhar.pdf", "Aadhar.jpg")
+        back_p = _prefer_for_ocr_input(subdir_gc, "Aadhar_back.pdf", "Aadhar_back.jpg")
 
         # Textract text in Raw_OCR.txt: fill DOB/gender from front, address from back when parsers missed fields.
         _apply_aadhar_textract_fallbacks_from_raw_ocr_file(self.ocr_output_dir, subfolder)

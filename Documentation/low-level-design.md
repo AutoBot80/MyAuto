@@ -1,7 +1,7 @@
 # Low Level Design (LLD)
 ## Auto Dealer Management System
 
-**Version:** 1.9  
+**Version:** 1.21  
 **Last Updated:** April 2026
 
 ---
@@ -45,7 +45,7 @@ backend/app/
   db.py                # get_connection()
   schemas/             # Pydantic request/response (uploads, ocr, fill_dms, etc.)
   repositories/        # Data access only (ai_reader_queue, bulk_loads, dealer_ref, form_dms, form_vahan, rto_queue, rc_status_sms_queue)
-  services/            # Business logic (UploadService, bulk_job_service, bulk_queue_service, bulk_watcher_service, form20_service, handle_browser_opening, utility_functions, insurance_form_values, insurance_kyc_payloads, sales_ocr_service, sales_textract_service, fill_hero_dms_service, hero_dms_db_service, hero_dms_reports_service, hero_dms_prepare_customer, fill_hero_insurance_service, siebel_dms_playwright, submit_info_service, add_sales_commit_service, fill_rto_service, rto_payment_service)
+  services/            # Business logic (UploadService, bulk_job_service, bulk_queue_service, bulk_watcher_service, pre_ocr_service, form20_service, handle_browser_opening, utility_functions, insurance_form_values, insurance_kyc_payloads, sales_ocr_service, sales_textract_service, fill_hero_dms_service, hero_dms_db_service, hero_dms_reports_service, hero_dms_prepare_customer, fill_hero_insurance_service, siebel_dms_playwright, submit_info_service, add_sales_commit_service, fill_rto_service, rto_payment_service)
   routers/             # health, settings, uploads, ai_reader_queue, bulk_loads, fill_forms_router, add_sales, submit_info, rto_queue, customer_search, dealers, documents, qr_decode, vision, textract_router
   templates/           # form20_front.html, form20_back.html, form20_page3.html
 ```
@@ -160,6 +160,38 @@ backend/app/
 - **Sales detail template mapping:** Details-sheet extraction also supports the A5 Sales Detail Sheet label style (e.g., `Full Name`, `Mobile Number`, `Aadhaar Number`, `Profession`, `Marital Status`, `Nominee ...`, `Financier Name`) and merges these into `OCR_To_be_Used.json` (`customer` + `insurance`) for Add Sales auto-population.
 - **Add Sales v2 `Details.jpg`:** The file is always stored under that name; content is detected by magic bytes (JPEG/PNG/PDF or ZIP-based `.docx`), so Word exports mislabeled as `.jpg` still use the docx parser instead of Textract on invalid bytes.
 - **Vehicle fields from Details:** Textract FORMS keys are mapped with normalized labels (including `Chassis Number`, `Engine Number`, etc.). If pairs are sparse on a PDF, `full_text` is parsed for the same labels (e.g. `Chassis Number: … Engine Number: …` on one line).
+
+### 2.3a Bulk pre-OCR (`pre_ocr_service.py`)
+
+**Purpose:** For **bulk** consolidated PDFs, validate and normalize scans **before** `OcrService` / AWS Textract: **in-memory** rasterization from the PDF for Tesseract, **detect and fix orientation** (Tesseract OSD), run **Tesseract** (not Textract) for keyword-based page classification, enforce mobile format and required page types (Aadhaar, Details, Insurance), write a **PDF-only** **`raw/`** archive, and write normalized **JPEG** outputs **outside** `raw/` for Textract.
+
+**End-to-end (see also **HLD §4.3**, **BRD BR-23 / BR-24**, **FR-26**):**
+
+1. A working copy of the PDF may sit under **`Bulk Upload/<dealer_id>/Processing/`** while Tesseract pre-OCR runs.
+2. **`run_pre_ocr_and_prepare`** materializes **`Uploaded scans/<dealer_id>/<mobile>_<ddmmyy>/`** (multi-customer PDFs may fan out to multiple such folders — same module).
+3. **`raw/`** subfolder — **PDF only:** copy of the **consolidated** PDF; **`page_NN.pdf`** — one **single-page PDF** per source page, with **OSD** applied via **`osd_deskew_clockwise_degrees`** → **PDF `page.set_rotation(...)`** (no **`page_NN.jpg`** or other rasters stored here).
+4. **Outside `raw/`:** **`for_OCR/`** — single-page PDFs (**`Aadhar.pdf`**, **`Aadhar_back.pdf`**, **`Details.pdf`**, **`Insurance.pdf`**) copied from **`raw/page_NN.pdf`** (or PDFs built from split JPEGs when front/back share one page). **`sales_ocr_service`** prefers these for Textract; root **`Aadhar.jpg`**, etc. remain as raster copies for compatibility.
+5. **Outside `raw/` (root):** normalized **`Aadhar.jpg`**, **`Aadhar_back.jpg`**, **`Details.jpg`**, **`Insurance.jpg`**, optional **`unused.pdf`**, following per-page classification and **BR-23** Aadhaar rules (separate pages → one output image per slot; combined front/back on one page → **`split_aadhar_consolidated`**; UIDAI letter → scissor crop + vertical split helpers).
+6. **Orientation:** in-memory rasters use **`correct_image_orientation_upright`** (OSD); **`raw/`** single-page PDFs use the same OSD angles on a render, then **page rotation** on the exported PDF (**BR-24**). Low-confidence OSD leaves content unchanged.
+7. **`process_bulk_pdf`** (bulk worker): if the sale folder is **already** prepared, **skip** re-copying from Processing and run **`OcrService`** + Submit Info / DMS / Form 20 / RTO steps on the normalized files.
+
+**Key functions:**
+
+| Function | Responsibility |
+|----------|------------------|
+| `osd_deskew_clockwise_degrees` | OSD → clockwise degrees (0/90/180/270); used for PDF **`page.set_rotation`** and by **`correct_image_orientation_upright`** |
+| `correct_image_orientation_upright` | OSD → rotate raster to upright; no-op on failure / low confidence |
+| `pre_ocr_pdf` | In-memory raster from PDF (orientation fix), Tesseract per page, validate mobile |
+| `_export_pdf_pages_to_raw` | Write **`…/raw/page_NN.pdf`** only (oriented via PDF rotation; no rasters in **`raw/`**) |
+| `split_aadhar_consolidated` | Same-page Aadhaar: OpenCV line split + optional half swap |
+| `crop_aadhar_letter_below_scissors` / `split_aadhar_letter_vertical` | UIDAI letter layout |
+| `validate_pre_ocr` | Mobile + required document checks |
+| `run_pre_ocr_and_prepare` | Orchestrates the full pipeline into the sale folder |
+| `_sync_for_ocr_pdfs` | Fills **`for_OCR/*.pdf`** from **`raw/page_NN.pdf`** or split JPEGs |
+
+**Downstream:** **`sales_ocr_service`** prefers **`for_OCR/*.pdf`** for Textract, else root **`Aadhar.jpg`**, **`Details.jpg`**, etc. It **does not** repeat physical letter scissor or consolidated Aadhaar splitting — those are **only** in **`pre_ocr_service`** for bulk (and **`normalize_aadhar_upload_files`** / **`orient_*`** paths for Add Sales where applicable).
+
+**Configuration:** **`PRE_OCR_*`** env vars; **`osd.traineddata`** must be present for orientation.
 
 ### 2.4 Form 20 Generation
 
@@ -366,7 +398,8 @@ See **Documentation/Database DDL.md** for full table structures. Summary:
 ### 4.4 Bulk Worker
 
 - Ingest scans from `Bulk Upload/<dealer_id>/Input Scans/`, create hot `bulk_loads` rows with `status='Queued'`, move files into `Queued/`, and publish queue messages.
-- Worker leases jobs through `bulk_loads` lease columns, switches the row to `Processing`, and processes them through pre-OCR, Add Sales, DMS, Form 20, RTO queue insertion, and terminal folder placement.
+- Worker leases jobs through `bulk_loads` lease columns, switches the row to `Processing`, and runs **`pre_ocr_service.run_pre_ocr_and_prepare`** (in-memory raster → **OSD** → Tesseract classification → **`raw/`** holds **PDF only** including **`page_NN.pdf`**; normalized JPEGs live **outside** **`raw/`** per **§2.3a**), then **`process_bulk_pdf`** / Add Sales OCR (**`OcrService`**), Submit Info, DMS, Form 20, RTO queue insertion, and terminal folder placement.
+- When the sale directory under **`Uploaded scans/`** is already populated from a prior pre-OCR pass, **`process_bulk_pdf`** avoids duplicating files from **`Processing/`** and continues from normalized artifacts.
 - API/UI reads remain hot-only for now. Older bulk rows are retained directly in `bulk_loads`.
 - `Error` and `Rejected` rows remain visible in `bulk_loads` until `action_taken=true`.
 
@@ -734,3 +767,5 @@ See **Documentation/Database DDL.md** for full table structures. Summary:
 | 6.290 | Apr 2026 | — | **`GET /vehicle-search/search`** **`sales_master`**: address / mobile / alt phone / financier from **`customer_master`**; **`billing_date`** formatted **dd/mm/yyyy**; **View Vehicles** Sales Master column order — **API Endpoints** table. |
 | 6.291 | Apr 2026 | — | **`GET /vehicle-search/search`** **`sales_master`**: explicit **`sales_master`** columns + scalar lookups for customer/dealer (avoids **`RealDictCursor`** losing joined fields when duplicate SQL column names); **`dealer_name`** **`COALESCE`** with **`vehicle_inventory_master`** when **`sm.dealer_id`** null — **`vehicle_search`** — **API Endpoints** table. |
 | 6.292 | Apr 2026 | — | **`fill_rto_service`**: Vahan **workbench** Screen 3 — **`hpa_*`** hypothecation ids, nominee **`nomineeradiobtn1`**, **`nominationname1`**, **`vm_rel1`**; MV Tax / Save / dialog **Ok** fast paths; **`_dump_page_state`** only on final field or terminal failure; removed unconditional tax/popup/series probes — **§2.4f**; **BRD** **§6.3**, **3.162**; **HLD** **1.165** |
+| 6.293 | Apr 2026 | — | **Bulk pre-OCR** — **§2.3a**: **`pre_ocr_service`** (`run_pre_ocr_and_prepare`, **`raw/`**, **`page_NN.pdf`**, OSD **`correct_image_orientation_upright`**, Tesseract classification, Aadhaar split helpers); **`sales_ocr_service`** Textract-only on normalized files; **§4.4** bulk worker narrative — **BRD** **BR-23**, **BR-24**, **FR-26**; **HLD** **§4.3**, **1.166** |
+| 6.294 | Apr 2026 | — | **`raw/`** PDF-only (no **`page_NN.jpg`**); **`osd_deskew_clockwise_degrees`** + **`page.set_rotation`** on single-page exports; **§2.3a** / **§4.4** — **BRD** **3.164**; **HLD** **1.167** |

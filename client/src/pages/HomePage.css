@@ -7,6 +7,21 @@
   padding: 2rem;
 }
 
+.home-page-no-tiles {
+  position: relative;
+  z-index: 1;
+  max-width: 420px;
+  margin: 0;
+  padding: 1.25rem 1.5rem;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #444;
+  text-align: center;
+  background: #fff;
+  border: 2px solid #c5d9ed;
+  border-radius: 8px;
+}
+
 .home-page-tiles-wrap {
   position: relative;
   display: flex;

@@ -1,36 +1,49 @@
-.login-page {
-  min-height: 100vh;
+/* Same shell as HomePage: .home-page + watermark from HomePage.css */
+
+.login-page-content {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 420px;
+  margin: 0 auto;
   display: flex;
-  align-items: center;
   justify-content: center;
-  padding: 1.5rem;
-  box-sizing: border-box;
-  background: linear-gradient(160deg, #0f172a 0%, #1e293b 45%, #0f172a 100%);
+  align-items: center;
 }
 
 .login-card {
   width: 100%;
-  max-width: 400px;
-  padding: 1.75rem 1.5rem;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+  padding: 1.5rem;
+  border: 2px solid #1e5a9e;
+  border-radius: 8px;
+  background: #fff;
+  box-sizing: border-box;
 }
 
-.login-title {
-  margin: 0 0 0.35rem;
-  font-size: 1.35rem;
+/* Blue bar: welcome line + superscript trademark */
+.login-topbar-welcome {
+  font-size: clamp(16px, 2.2vw, 22px);
   font-weight: 600;
-  color: #f8fafc;
+}
+
+.login-topbar-tm {
+  font-size: 0.55em;
+  font-weight: 600;
+  line-height: 0;
+  vertical-align: super;
+  margin-left: 0.06em;
+}
+
+.login-intro {
   text-align: center;
+  margin-bottom: 1.25rem;
 }
 
 .login-hint {
-  margin: 0 0 1.25rem;
-  font-size: 0.9rem;
-  color: #94a3b8;
-  text-align: center;
+  margin: 0;
+  font-size: 13px;
+  color: #555;
+  line-height: 1.45;
 }
 
 .login-form {
@@ -43,43 +56,33 @@
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
-  font-size: 0.8rem;
-  color: #cbd5e1;
+  font-size: 13px;
+  color: #333;
 }
 
 .login-input {
   padding: 0.5rem 0.65rem;
-  border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  background: rgba(15, 23, 42, 0.6);
-  color: #f1f5f9;
-  font-size: 0.95rem;
+  border-radius: 6px;
+  border: 1px solid #c5d9ed;
+  background: #fff;
+  color: #1b2a3a;
+  font-size: 14px;
 }
 
 .login-input:focus {
-  outline: 2px solid #38bdf8;
+  outline: 2px solid #1e5a9e;
   outline-offset: 0;
 }
 
 .login-error {
   margin: 0;
-  font-size: 0.85rem;
-  color: #fca5a5;
+  font-size: 13px;
+  color: #b91c1c;
 }
 
 .login-submit {
   margin-top: 0.25rem;
-  padding: 0.6rem 1rem;
-  border: none;
-  border-radius: 8px;
-  background: #0ea5e9;
-  color: #0f172a;
-  font-weight: 600;
-  font-size: 0.95rem;
-  cursor: pointer;
-}
-
-.login-submit:disabled {
-  opacity: 0.65;
-  cursor: not-allowed;
+  width: 100%;
+  padding: 10px 16px;
+  font-size: 15px;
 }

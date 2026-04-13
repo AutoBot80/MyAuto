@@ -9,8 +9,15 @@ from app.config import AWS_REGION
 
 
 def _get_text_from_block(block: dict, block_map: dict[str, dict]) -> str:
-    """Get concatenated text from a block via CHILD WORD blocks."""
-    text_parts = []
+    """
+    Concatenate text from a block's CHILD ids in **document order**.
+
+    Textract emits ``SELECTION_ELEMENT`` blocks for checkboxes. Older code appended ``X`` only
+    when selected and did not preserve reading order relative to option labels, which made
+    multi-checkbox rows (Profession, Payment, etc.) hard to interpret. We emit ``[✓]`` / ``[ ]``
+    inline (tick = selected) so downstream parsers can see which option sits next to which box.
+    """
+    text_parts: list[str] = []
     for rel in block.get("Relationships") or []:
         if rel.get("Type") != "CHILD":
             continue
@@ -18,10 +25,18 @@ def _get_text_from_block(block: dict, block_map: dict[str, dict]) -> str:
             child = block_map.get(child_id)
             if not child:
                 continue
-            if child.get("BlockType") == "WORD":
-                text_parts.append(child.get("Text", ""))
-            if child.get("BlockType") == "SELECTION_ELEMENT" and child.get("SelectionStatus") == "SELECTED":
-                text_parts.append("X")
+            bt = child.get("BlockType")
+            if bt == "WORD":
+                t = (child.get("Text") or "").strip()
+                if t:
+                    text_parts.append(t)
+            elif bt == "SELECTION_ELEMENT":
+                st = (child.get("SelectionStatus") or "").upper()
+                if st == "SELECTED":
+                    text_parts.append("[✓]")
+                elif st == "NOT_SELECTED":
+                    text_parts.append("[ ]")
+                # UNKNOWN / missing: omit to avoid false positives
     return " ".join(text_parts).strip()
 
 

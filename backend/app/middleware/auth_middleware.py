@@ -38,6 +38,10 @@ def _dev_principal() -> Principal:
         name="Dev",
         roles=("Dev",),
         admin=True,
+        tile_pos=True,
+        tile_rto=True,
+        tile_service=True,
+        tile_dealer=True,
     )
 
 
@@ -71,6 +75,10 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 name=claims["name"],
                 roles=tuple(claims["roles"]),
                 admin=bool(claims["admin"]),
+                tile_pos=bool(claims.get("tile_pos")),
+                tile_rto=bool(claims.get("tile_rto")),
+                tile_service=bool(claims.get("tile_service")),
+                tile_dealer=bool(claims.get("tile_dealer")),
             )
         except JWTError:
             return JSONResponse(status_code=401, content={"detail": "Invalid or expired token"})

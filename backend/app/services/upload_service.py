@@ -158,6 +158,17 @@ class UploadService:
         # Run extraction directly after upload (Option 1: no queue)
         extraction_result: dict = {}
         try:
+            from app.services.pre_ocr_service import (
+                normalize_aadhar_upload_files,
+                orient_common_sale_jpegs,
+                try_write_pencil_mark_from_details_jpeg_file,
+            )
+
+            sale_path = uploads_dir / subdir_name
+            orient_common_sale_jpegs(sale_path)
+            normalize_aadhar_upload_files(sale_path)
+            try_write_pencil_mark_from_details_jpeg_file(sale_path, sale_path / "Details.jpg")
+
             from app.services.sales_ocr_service import OcrService
 
             ocr = OcrService(

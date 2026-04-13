@@ -1,7 +1,7 @@
 # High Level Design (HLD)
 ## Auto Dealer Management System
 
-**Version:** 1.19  
+**Version:** 1.167  
 **Last Updated:** April 2026
 
 ---
@@ -166,9 +166,17 @@ My Auto.AI/
 1. Operator drops a scan PDF into `Bulk Upload/<dealer_id>/Input Scans/`.
 2. The API process can start bulk ingest and worker loops on startup, and the system also supports a standalone `run_bulk_worker.py` worker shape.
 3. Ingest writes a hot `bulk_loads` row with `status='Queued'`, moves the file into the queued working area, and publishes a queue message through SQS or the local fallback queue.
-4. A worker lease changes the hot row to `Processing`, then runs pre-OCR and Add Sales automation (including RTO queue insertion) and updates lifecycle fields (`job_status`, `processing_stage`, `attempt_count`, `leased_until`, `worker_id`).
-5. OCR artifacts and form-value traces are written into `ocr_output/<dealer>/<subfolder>/` while upload/result folders hold customer-facing files.
-6. Terminal rows stay in the hot `bulk_loads` table for the current UI; unresolved `Error` and `Rejected` rows remain visible until `action_taken=true`.
+4. A worker lease changes the hot row to `Processing`, then runs **`pre_ocr_service.run_pre_ocr_and_prepare`** and Add Sales automation (including RTO queue insertion) and updates lifecycle fields (`job_status`, `processing_stage`, `attempt_count`, `leased_until`, `worker_id`).
+5. **Pre-OCR pipeline (consolidated PDF):**
+   - Working copy in **`Bulk Upload/<dealer_id>/Processing/`** for Tesseract pre-OCR text and validation (mobile, required page types).
+   - **Sale folder** `Uploaded scans/<dealer_id>/<mobile>_<ddmmyy>/`:
+     - **`raw/`** — **PDF only:** copy of the consolidated PDF plus **`page_NN.pdf`** (one single-page PDF per source page). **Orientation** uses Tesseract **OSD** on a raster render, then applies **PDF page rotation** to each **`page_NN.pdf`** — **no** raster files (e.g. **`page_NN.jpg`**) under **`raw/`** (**BR-23**). Tesseract classification still uses **in-memory** rasterization from the PDF; that is not stored in **`raw/`**.
+     - **Outside `raw/`** — normalized outputs for Textract: **`Aadhar.jpg`**, **`Aadhar_back.jpg`**, **`Details.jpg`**, **`Insurance.jpg`**, optional **`unused.pdf`**, following page classification and Aadhaar-specific rules (separate pages vs same-page combined split vs UIDAI letter scissor layout — **BR-23**).
+     - **Orientation:** OSD deskews in-memory rasters for classification and for writing those JPEGs; **`osd`** tessdata required (**BR-24**).
+   - **`sales_ocr_service`** runs **AWS Textract** (and parsers) on the normalized files only — **no** repeated physical Aadhaar letter/consolidated splitting there.
+6. **`process_bulk_pdf`** detects when files are **already** in the sale folder and skips re-copy; runs **`OcrService`**, Submit Info, DMS, Form 20, RTO queue as today.
+7. OCR artifacts and form-value traces are written into `ocr_output/<dealer>/<subfolder>/` while upload/result folders hold customer-facing files.
+8. Terminal rows stay in the hot `bulk_loads` table for the current UI; unresolved `Error` and `Rejected` rows remain visible until `action_taken=true`.
 
 ---
 
@@ -474,3 +482,5 @@ The SQL view **`form_dms_view`** is **removed**; the same mapping is implemented
 | 1.163 | Apr 2026 | — | **View Vehicles** POS tab + **`GET /vehicle-search/search`** + **`vehicle_search`** router — **LLD** **6.282** |
 | 1.164 | Apr 2026 | — | **View Vehicles**: API **`vehicle_inventory`** + UI **Vehicle inventory** section — **LLD** **6.283** |
 | 1.165 | Apr 2026 | — | **`fill_rto_service`**: Vahan workbench RTO automation; **`rto_payment_service`** delegates **`fill_rto_row`**; **`form_vahan_view`** + **`insurance_master`** nominee/financier; logging policy (dump on final failure only) — **BRD** **§6.3**, **3.162**; **LLD** **§2.4f**, **6.292** |
+| 1.166 | Apr 2026 | — | **§4.3 Bulk upload flow**: **`run_pre_ocr_and_prepare`** — **`Uploaded scans/.../raw/`** (consolidated PDF + **`page_NN.pdf`**), normalized JPEGs outside **`raw/`**, **`process_bulk_pdf`** idempotent copy skip — **BRD** **BR-23**, **FR-26**; **LLD** **§2.3a**, **§4.4**, **6.293** ( **`raw/`** PDF-only detail — **1.167** ) |
+| 1.167 | Apr 2026 | — | **§4.3**: **`raw/`** PDF-only — no **`page_NN.jpg`**; OSD → **PDF page rotation** on **`page_NN.pdf`**; in-memory raster for Tesseract only — **BRD** **BR-23**, **3.164**; **LLD** **§2.3a**, **6.294** |

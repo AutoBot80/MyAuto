@@ -276,7 +276,7 @@ def _finalize_retry_or_error(
 
 
 def _handle_single_customer(row: dict, dealer_id: int, scans_pdf: Path, bundles: list[tuple[Path, str, str | None]], ocr_path: Path) -> str:
-    classified_dir, subfolder, mobile = bundles[0]
+    sale_dir, subfolder, mobile = bundles[0]
     conn = get_connection()
     try:
         BulkLoadsRepository.update_status(
@@ -293,10 +293,10 @@ def _handle_single_customer(row: dict, dealer_id: int, scans_pdf: Path, bundles:
     finally:
         conn.close()
 
-    result = process_bulk_pdf(classified_dir, dealer_id=dealer_id, subfolder_override=subfolder)
+    result = process_bulk_pdf(sale_dir, dealer_id=dealer_id, subfolder_override=subfolder)
     if result.get("ok"):
         result_folder = move_processing_to_success_or_error(
-            classified_dir,
+            None,
             ocr_path,
             scans_pdf.stem,
             mobile,
@@ -336,7 +336,7 @@ def _handle_single_customer(row: dict, dealer_id: int, scans_pdf: Path, bundles:
         )
 
     result_folder = move_processing_to_success_or_error(
-        classified_dir,
+        None,
         ocr_path,
         scans_pdf.stem,
         mobile,
@@ -388,7 +388,7 @@ def _handle_multi_customer(row: dict, dealer_id: int, scans_pdf: Path, bundles: 
         conn.close()
 
     results: list[bool] = []
-    for index, (classified_dir, subfolder, mobile) in enumerate(bundles):
+    for index, (sale_dir, subfolder, mobile) in enumerate(bundles):
         target_row = child_rows[index]
         conn = get_connection()
         try:
@@ -406,7 +406,7 @@ def _handle_multi_customer(row: dict, dealer_id: int, scans_pdf: Path, bundles: 
         finally:
             conn.close()
 
-        result = process_bulk_pdf(classified_dir, dealer_id=dealer_id, subfolder_override=subfolder)
+        result = process_bulk_pdf(sale_dir, dealer_id=dealer_id, subfolder_override=subfolder)
         results.append(bool(result.get("ok")))
         conn = get_connection()
         try:
@@ -481,6 +481,7 @@ def process_job(job_id: str, dealer_id: int, worker_id: str) -> str:
         bundles, subfolder_stem, mobile, ocr_path, missing = run_pre_ocr_and_prepare(
             scans_pdf,
             processing_dir=proc_dir,
+            dealer_id=dealer_id,
         )
     except Exception as exc:
         logger.exception("bulk_jobs: pre-OCR failed for %s", scans_pdf)

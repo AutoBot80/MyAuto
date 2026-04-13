@@ -21,7 +21,7 @@ import { getChallanStagingFailedCount } from "./api/subdealerChallan";
 import { getSiteUrls, type SiteUrls } from "./api/siteUrls";
 import { usePageVisible } from "./hooks/usePageVisible";
 import { LoginPage } from "./pages/LoginPage";
-import { getMe } from "./api/auth";
+import { ALL_HOME_TILES_TRUE, getMe, type HomeTileFlags } from "./api/auth";
 import { clearAccessToken, getAccessToken } from "./auth/token";
 
 const authDisabled = import.meta.env.VITE_AUTH_DISABLED === "true";
@@ -94,6 +94,9 @@ function App() {
   const [addSalesAutoNewTrigger, setAddSalesAutoNewTrigger] = useState(0);
   /** Display name for Welcome line; rename _setLoginName when wiring the Login screen. */
   const [loginName, _setLoginName] = useState<string | null>(initialLoginNameFromEnv);
+  /** Home tiles from ``roles_ref`` flags (JWT / ``/auth/me``). Dev bypass: all true. */
+  const [homeTiles, setHomeTiles] = useState<HomeTileFlags>(ALL_HOME_TILES_TRUE);
+  const [sessionAdmin, setSessionAdmin] = useState(authDisabled);
 
   useEffect(() => {
     if (boot !== "ready") return;
@@ -117,6 +120,13 @@ function App() {
       .then((m) => {
         setDealerId(m.dealer_id);
         _setLoginName(m.name || m.login_id);
+        setHomeTiles({
+          tile_pos: m.tile_pos,
+          tile_rto: m.tile_rto,
+          tile_service: m.tile_service,
+          tile_dealer: m.tile_dealer,
+        });
+        setSessionAdmin(m.admin);
         setBoot("ready");
       })
       .catch(() => {
@@ -181,6 +191,16 @@ function App() {
     else if (mode === "dealer" && !DEALER_PAGES.includes(page)) setPage("dealer-dashboard");
     else if (mode === "admin" && !ADMIN_PAGES.includes(page)) setPage("admin-dealers");
   }, [mode, page]);
+
+  // If session loses access to a module (roles / JWT), leave that mode.
+  useEffect(() => {
+    if (boot !== "ready" || authDisabled) return;
+    if (mode === "pos" && !homeTiles.tile_pos) setMode("home");
+    else if (mode === "service" && !homeTiles.tile_service) setMode("home");
+    else if (mode === "rto" && !homeTiles.tile_rto) setMode("home");
+    else if (mode === "dealer" && !homeTiles.tile_dealer) setMode("home");
+    else if (mode === "admin" && !sessionAdmin) setMode("home");
+  }, [boot, authDisabled, mode, homeTiles, sessionAdmin]);
 
   const dmsUrl = siteUrls?.dms_base_url ?? "";
 
@@ -253,6 +273,13 @@ function App() {
         onLoggedIn={(s) => {
           setDealerId(s.dealer_id);
           _setLoginName(s.login_id);
+          setHomeTiles({
+            tile_pos: s.tile_pos,
+            tile_rto: s.tile_rto,
+            tile_service: s.tile_service,
+            tile_dealer: s.tile_dealer,
+          });
+          setSessionAdmin(s.admin);
           setBoot("ready");
         }}
       />
@@ -283,6 +310,8 @@ function App() {
             </header>
             <main className="app-main-v2">
               <HomePage
+                tiles={homeTiles}
+                showAdmin={sessionAdmin}
                 onSelectPos={() => {
                   setMode("pos");
                   setPage("add-sales");

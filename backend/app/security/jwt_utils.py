@@ -13,6 +13,10 @@ def create_access_token(
     name: str | None,
     roles: list[str],
     admin: bool,
+    tile_pos: bool = False,
+    tile_rto: bool = False,
+    tile_service: bool = False,
+    tile_dealer: bool = False,
 ) -> str:
     now = datetime.now(timezone.utc)
     exp_at = now + timedelta(minutes=JWT_EXPIRE_MINUTES)
@@ -22,6 +26,10 @@ def create_access_token(
         "name": name,
         "roles": roles,
         "admin": admin,
+        "tile_pos": tile_pos,
+        "tile_rto": tile_rto,
+        "tile_service": tile_service,
+        "tile_dealer": tile_dealer,
         "iat": int(now.timestamp()),
         "exp": int(exp_at.timestamp()),
     }
@@ -47,10 +55,27 @@ def payload_to_claims(data: dict[str, Any]) -> dict[str, Any]:
     admin = bool(data.get("admin"))
     name = data.get("name")
     name_str = str(name) if isinstance(name, str) else None
+
+    def _flag(key: str) -> bool:
+        v = data.get(key)
+        if v is None:
+            return False
+        if isinstance(v, bool):
+            return v
+        return str(v).lower() in ("1", "true", "yes")
+
+    # Tokens minted before tile claims omitted them — allow full home until re-login.
+    _tile_keys = ("tile_pos", "tile_rto", "tile_service", "tile_dealer")
+    legacy_tiles = not any(k in data for k in _tile_keys)
+
     return {
         "login_id": sub.strip(),
         "dealer_id": did,
         "name": name_str,
         "roles": roles_str,
         "admin": admin,
+        "tile_pos": True if legacy_tiles else _flag("tile_pos"),
+        "tile_rto": True if legacy_tiles else _flag("tile_rto"),
+        "tile_service": True if legacy_tiles else _flag("tile_service"),
+        "tile_dealer": True if legacy_tiles else _flag("tile_dealer"),
     }

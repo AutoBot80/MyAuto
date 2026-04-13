@@ -114,14 +114,31 @@ def process_bulk_pdf(
     uploads_subdir.mkdir(parents=True, exist_ok=True)
 
     try:
-        # 1. Copy classified files or split PDF to images
-        if source_path.is_dir():
+        # 1. Copy classified files or split PDF to images (skip if pre-OCR already wrote into this sale folder)
+        for_ocr = uploads_subdir / "for_OCR"
+        already_prepared = (
+            source_path.is_dir()
+            and source_path.resolve() == uploads_subdir.resolve()
+            and (
+                (
+                    (uploads_subdir / "Aadhar.jpg").exists()
+                    and (uploads_subdir / "Details.jpg").exists()
+                )
+                or (
+                    (for_ocr / "Aadhar.pdf").is_file()
+                    and (for_ocr / "Details.pdf").is_file()
+                )
+            )
+        )
+        if already_prepared:
+            saved = []
+        elif source_path.is_dir():
             saved = _copy_classified_to_uploads(source_path, uploads_subdir)
         else:
             saved = _split_pdf_to_images(source_path, uploads_subdir)
         # Need at least Details.jpg and Aadhar.jpg for Add Customer
-        has_details = (uploads_subdir / "Details.jpg").exists()
-        has_aadhar = (uploads_subdir / "Aadhar.jpg").exists()
+        has_details = (uploads_subdir / "Details.jpg").exists() or (for_ocr / "Details.pdf").is_file()
+        has_aadhar = (uploads_subdir / "Aadhar.jpg").exists() or (for_ocr / "Aadhar.pdf").is_file()
         if not has_details or not has_aadhar:
             missing = []
             if not has_details:

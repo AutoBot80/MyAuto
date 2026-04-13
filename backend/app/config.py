@@ -26,6 +26,12 @@ DEALER_ID = int(os.getenv("DEALER_ID", "100001"))
 # --- Auth (JWT) ---
 # When true, requests skip JWT validation and use a dev Principal (DEALER_ID, admin=True). Local use only.
 AUTH_DISABLED = os.getenv("AUTH_DISABLED", "false").lower() in ("1", "true", "yes")
+# When true, POST /auth/login does not verify password against login_ref.pwd_hash (build/test only).
+SKIP_PASSWORD_VERIFICATION = os.getenv("SKIP_PASSWORD_VERIFICATION", "false").lower() in (
+    "1",
+    "true",
+    "yes",
+)
 JWT_SECRET = (os.getenv("JWT_SECRET") or "").strip()
 JWT_ALGORITHM = (os.getenv("JWT_ALGORITHM") or "HS256").strip()
 JWT_EXPIRE_MINUTES = int(os.getenv("JWT_EXPIRE_MINUTES", "480"))

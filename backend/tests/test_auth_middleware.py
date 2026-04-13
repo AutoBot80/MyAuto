@@ -27,3 +27,8 @@ def test_auth_me_with_auth_disabled(client: TestClient) -> None:
     body = r.json()
     assert body["login_id"] == "dev"
     assert "dealer_id" in body
+    assert body.get("tile_pos") is True
+    assert body.get("tile_rto") is True
+    assert body.get("tile_service") is True
+    assert body.get("tile_dealer") is True
+    assert body.get("admin") is True

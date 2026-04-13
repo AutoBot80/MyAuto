@@ -294,7 +294,12 @@ def prepare_reprocess(
 
     def run_ocr_background() -> None:
         try:
+            from app.services.pre_ocr_service import normalize_aadhar_upload_files, orient_common_sale_jpegs
             from app.services.sales_ocr_service import OcrService
+
+            sp = get_uploads_dir(did) / subfolder
+            orient_common_sale_jpegs(sp)
+            normalize_aadhar_upload_files(sp)
             OcrService(
                 uploads_dir=get_uploads_dir(did),
                 ocr_output_dir=get_ocr_output_dir(did),
