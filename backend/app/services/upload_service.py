@@ -1,5 +1,6 @@
 from datetime import datetime
 from pathlib import Path
+from uuid import uuid4
 
 from fastapi import UploadFile
 
@@ -7,6 +8,7 @@ from app.config import (
     UPLOAD_MAX_IMAGE_BYTES,
     UPLOAD_MAX_LEGACY_FILE_BYTES,
     UPLOAD_MAX_PDF_BYTES,
+    get_bulk_processing_dir,
     get_ocr_output_dir,
     get_uploaded_scans_sale_subfolder_leaf,
     get_uploads_dir,
@@ -182,6 +184,102 @@ class UploadService:
                 extraction_result["details"] = details
         except Exception as e:
             extraction_result = {"error": str(e), "processed": []}
+
+        return {
+            "saved_count": len(saved),
+            "saved_files": saved,
+            "saved_to": subdir_name,
+            "queued_items": [],
+            "extraction": extraction_result,
+        }
+
+    def _pre_ocr_rejection_message(self, missing: list[str]) -> str:
+        return (
+            f"Could not identify required pages: {', '.join(missing)}. "
+            "Please ensure your scan includes all pages clearly visible and not blurry, "
+            "with Aadhar (front & back) and the sales details form (vehicle & customer info)."
+        )
+
+    async def save_and_queue_v2_consolidated(
+        self,
+        consolidated_pdf: UploadFile,
+        dealer_id: int = 100001,
+    ) -> dict:
+        """
+        Single multi-page PDF (Aadhaar + sales detail in one file): run bulk pre-OCR pipeline
+        (``run_pre_ocr_and_prepare``), then the same orient / normalize / pencil / Textract path as
+        ``save_and_queue_v2``. Mobile and subfolder come from pre-OCR text, not the form.
+        """
+        try:
+            content = await read_upload_capped(consolidated_pdf, UPLOAD_MAX_PDF_BYTES)
+            validate_magic_jpeg_png_or_pdf(content, label="Consolidated scan")
+        except ValueError as e:
+            return {"error": str(e)}
+
+        proc_dir = get_bulk_processing_dir(dealer_id)
+        proc_dir.mkdir(parents=True, exist_ok=True)
+        stem = Path(f"{(consolidated_pdf.filename or 'consolidated').strip() or 'consolidated'}").stem
+        safe_stem = stem[:80] if stem else "consolidated"
+        dest_pdf = proc_dir / f"add_sales_{safe_stem}_{uuid4().hex[:12]}.pdf"
+        dest_pdf.write_bytes(content)
+
+        # Lazy import: ``pre_ocr_service`` references ``UploadService`` to avoid import cycles.
+        from app.services.pre_ocr_service import run_pre_ocr_and_prepare
+
+        try:
+            bundles, _stem, _mobile_ocr, _ocr_path, missing = run_pre_ocr_and_prepare(
+                dest_pdf,
+                processing_dir=proc_dir,
+                dealer_id=dealer_id,
+            )
+        except Exception as e:
+            return {"error": f"Pre-OCR failed: {e}"}
+
+        if missing:
+            return {"error": self._pre_ocr_rejection_message(missing)}
+        if not bundles:
+            return {"error": "Pre-OCR did not produce a sale folder."}
+        if len(bundles) > 1:
+            return {
+                "error": "Multiple customers detected in this PDF. Use Bulk Upload for multi-customer consolidated scans.",
+            }
+
+        sale_dir, subfolder_name, _mobile_str = bundles[0]
+        uploads_dir = self.uploads_dir or get_uploads_dir(dealer_id)
+        subdir_name = subfolder_name
+
+        extraction_result: dict = {}
+        try:
+            from app.services.pre_ocr_service import (
+                normalize_aadhar_upload_files,
+                orient_common_sale_jpegs,
+                try_write_pencil_mark_from_details_jpeg_file,
+            )
+
+            sale_path = uploads_dir / subdir_name
+            orient_common_sale_jpegs(sale_path)
+            normalize_aadhar_upload_files(sale_path)
+            try_write_pencil_mark_from_details_jpeg_file(sale_path, sale_path / "Details.jpg")
+
+            from app.services.sales_ocr_service import OcrService
+
+            ocr = OcrService(
+                uploads_dir=uploads_dir,
+                ocr_output_dir=get_ocr_output_dir(dealer_id),
+            )
+            extraction_result = ocr.process_uploaded_subfolder(subdir_name)
+            details = ocr.get_extracted_details(subdir_name)
+            if details:
+                extraction_result["details"] = details
+        except Exception as e:
+            extraction_result = {"error": str(e), "processed": []}
+
+        saved: list[str] = []
+        final_sale = uploads_dir / subdir_name
+        if final_sale.is_dir():
+            for p in sorted(final_sale.iterdir()):
+                if p.is_file():
+                    saved.append(p.name)
 
         return {
             "saved_count": len(saved),

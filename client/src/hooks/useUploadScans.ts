@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { uploadScans, uploadScansV2 } from "../api/uploads";
+import { uploadScans, uploadScansV2, uploadScansV2Consolidated } from "../api/uploads";
 import { validateAadharScanFile } from "../utils/aadharScanFileValidation";
 import type { ExtractedDetailsResponse } from "../types";
 
@@ -83,7 +83,9 @@ export function useUploadScans(
     try {
       const data = await uploadScansV2(mobileDigits, aadharScan, aadharBackScan, salesDetail, insuranceSheet, dealerId);
       setSavedTo(data.saved_to);
-      setUploadStatus(`Uploaded ${data.saved_count} file(s) to ${data.saved_to}.`);
+      let msg = `Uploaded ${data.saved_count} file(s) to ${data.saved_to}.`;
+      if (data.extraction?.error) msg += ` Warning: ${data.extraction.error}`;
+      setUploadStatus(msg);
       controlled?.onUploadSuccess?.(data.saved_to);
       if (data.saved_files?.length)
         setUploadedFiles((prev) => [...(data.saved_files ?? []), ...prev]);
@@ -92,6 +94,29 @@ export function useUploadScans(
         controlled.onExtractionComplete(details);
       }
       // Extraction already ran on the server inside upload (save_and_queue_v2). No AI reader queue / process-all.
+    } catch (err) {
+      setUploadStatus(err instanceof Error ? err.message : "Upload failed.");
+    } finally {
+      setIsUploading(false);
+    }
+  }
+
+  async function uploadConsolidatedV2(consolidatedPdf: File) {
+    setIsUploading(true);
+    setUploadStatus("Uploading…");
+    try {
+      const data = await uploadScansV2Consolidated(consolidatedPdf, dealerId);
+      setSavedTo(data.saved_to);
+      let msg = `Uploaded consolidated scan to ${data.saved_to}.`;
+      if (data.extraction?.error) msg += ` Warning: ${data.extraction.error}`;
+      setUploadStatus(msg);
+      controlled?.onUploadSuccess?.(data.saved_to);
+      if (data.saved_files?.length)
+        setUploadedFiles((prev) => [...(data.saved_files ?? []), ...prev]);
+      const details = data.extraction?.details;
+      if (details && controlled?.onExtractionComplete) {
+        controlled.onExtractionComplete(details);
+      }
     } catch (err) {
       setUploadStatus(err instanceof Error ? err.message : "Upload failed.");
     } finally {
@@ -108,6 +133,7 @@ export function useUploadScans(
   return {
     upload,
     uploadV2,
+    uploadConsolidatedV2,
     uploadStatus,
     isUploading,
     uploadedFiles,

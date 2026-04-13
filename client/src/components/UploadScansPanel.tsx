@@ -14,6 +14,8 @@ interface UploadScansPanelProps {
   isMobileValid?: boolean;
   /** Upload scans to subfolder mobile_ddmmyy as Aadhar.jpg, Aadhar_back.jpg, Details.jpg; optional Insurance.jpg */
   onUploadV2?: (aadharScan: File, aadharBackScan: File, salesDetail: File, insuranceSheet?: File) => Promise<void>;
+  /** Single multi-page PDF: pre-OCR classify/split then Textract (mobile from document). */
+  onUploadConsolidated?: (consolidatedPdf: File) => Promise<void>;
 }
 
 const SCAN_LABELS = [
@@ -31,10 +33,14 @@ export function UploadScansPanel({
   mobile,
   isMobileValid,
   onUploadV2,
+  onUploadConsolidated,
 }: UploadScansPanelProps) {
   void onUpload;
   void mobile;
   const isPreUploaded = Boolean(savedTo && uploadedFiles.length > 0);
+  const [useConsolidatedScan, setUseConsolidatedScan] = useState(false);
+  const [selectedConsolidatedPdf, setSelectedConsolidatedPdf] = useState<File | null>(null);
+  const consolidatedInputRef = useRef<HTMLInputElement | null>(null);
   const aadharInputRef = useRef<HTMLInputElement | null>(null);
   const aadharBackInputRef = useRef<HTMLInputElement | null>(null);
   const salesInputRef = useRef<HTMLInputElement | null>(null);
@@ -56,6 +62,7 @@ export function UploadScansPanel({
 
   const insuranceRequired = hasInsurance ? selectedInsuranceFile : true;
   const canUploadV2 =
+    !useConsolidatedScan &&
     onUploadV2 &&
     isMobileValid &&
     selectedAadharFile &&
@@ -63,6 +70,9 @@ export function UploadScansPanel({
     selectedDetailsFile &&
     insuranceRequired &&
     !isUploading;
+
+  const canUploadConsolidated =
+    useConsolidatedScan && onUploadConsolidated && selectedConsolidatedPdf && !isUploading;
 
   return (
     <section className="app-panel">
@@ -77,6 +87,72 @@ export function UploadScansPanel({
         </div>
       ) : (
       <>
+      {onUploadConsolidated ? (
+        <div className="app-panel-row app-panel-consolidated-toggle">
+          <label className="app-panel-insurance-check">
+            <input
+              type="checkbox"
+              checked={useConsolidatedScan}
+              onChange={(e) => {
+                const on = e.target.checked;
+                setUseConsolidatedScan(on);
+                if (!on) {
+                  setSelectedConsolidatedPdf(null);
+                  consolidatedInputRef.current && (consolidatedInputRef.current.value = "");
+                }
+              }}
+              aria-label="Use consolidated PDF scan"
+            />
+            <span>Consolidated scan (single PDF: Aadhaar + sales detail)</span>
+          </label>
+        </div>
+      ) : null}
+      {useConsolidatedScan && onUploadConsolidated ? (
+        <>
+          <p className="app-panel-hint-aadhar" role="note">
+            Upload one PDF with all required pages (Aadhaar front/back and sales detail). You do not need the separate
+            file slots or mobile entry first — mobile is detected from the scan. Max size follows server limits.
+          </p>
+          <div className="app-panel-row app-panel-scan-row">
+            <label className="app-panel-scan-label" htmlFor="upload-scan-consolidated">
+              Consolidated Scan
+            </label>
+            <input
+              id="upload-scan-consolidated"
+              ref={consolidatedInputRef}
+              type="file"
+              accept=".pdf,application/pdf"
+              style={{ display: "none" }}
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) setSelectedConsolidatedPdf(file);
+                e.target.value = "";
+              }}
+            />
+            <button
+              type="button"
+              className="app-button app-panel-scan-button"
+              disabled={isUploading}
+              onClick={() => consolidatedInputRef.current?.click()}
+            >
+              {selectedConsolidatedPdf ? selectedConsolidatedPdf.name : "Choose PDF"}
+            </button>
+          </div>
+          <div className="app-panel-row app-panel-actions">
+            <button
+              type="button"
+              className="app-button app-button--primary"
+              disabled={!canUploadConsolidated}
+              onClick={() => {
+                if (selectedConsolidatedPdf) void onUploadConsolidated(selectedConsolidatedPdf);
+              }}
+            >
+              {isUploading ? "Uploading…" : "Upload documents"}
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
       <p className="app-panel-hint-aadhar" role="note">
         Aadhaar files should be only jpg, jpeg, png, img files. Max size 512 KB allowed.
       </p>
@@ -187,9 +263,11 @@ export function UploadScansPanel({
                 );
             }}
           >
-            {isUploading ? "Uploading..." : "Upload all files"}
+            {isUploading ? "Uploading…" : "Upload documents"}
           </button>
         </div>
+      )}
+        </>
       )}
       </>
       )}

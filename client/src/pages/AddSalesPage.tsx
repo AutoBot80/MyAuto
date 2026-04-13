@@ -317,7 +317,13 @@ export function AddSalesPage({
     if (normalized) setExtractedVehicle(normalized);
     const cust = details?.customer;
     if (cust && typeof cust === "object" && !Array.isArray(cust)) {
-      setExtractedCustomer(mapApiCustomerToExtracted(cust as Record<string, unknown>));
+      const rec = cust as Record<string, unknown>;
+      setExtractedCustomer(mapApiCustomerToExtracted(rec));
+      const mobRaw = rec.mobile_number ?? rec.mobile;
+      if (mobRaw != null) {
+        const digits = String(mobRaw).replace(/\D/g, "").slice(-10);
+        if (digits.length === 10) setMobile(digits);
+      }
     }
     const ins = details?.insurance;
     if (ins && typeof ins === "object" && !Array.isArray(ins)) {
@@ -330,6 +336,7 @@ export function AddSalesPage({
   const {
     upload,
     uploadV2,
+    uploadConsolidatedV2,
     isUploading,
     isMobileValid,
     clearUploaded,
@@ -1121,6 +1128,7 @@ export function AddSalesPage({
       mobile={mobile}
       isMobileValid={isMobileValid}
       onUploadV2={uploadV2}
+      onUploadConsolidated={uploadConsolidatedV2}
     />
   );
 

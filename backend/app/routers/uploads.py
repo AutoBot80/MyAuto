@@ -36,3 +36,14 @@ async def upload_scans_v2(
     return await upload_service.save_and_queue_v2(
         mobile, aadhar_scan, aadhar_back, sales_detail, insurance_sheet, financing_doc, dealer_id=did
     )
+
+
+@router.post("/scans-v2-consolidated")
+async def upload_scans_v2_consolidated(
+    principal: Principal = Depends(get_principal),
+    consolidated_pdf: UploadFile = File(..., description="Single PDF: Aadhaar + sales detail (multi-page ok)"),
+    dealer_id: int | None = Form(None, description="Dealer ID; uses token dealer if omitted"),
+) -> dict:
+    """Pre-OCR (Tesseract classify + split) then same Textract pipeline as scans-v2; mobile/subfolder from PDF."""
+    did = resolve_dealer_id(principal, dealer_id)
+    return await upload_service.save_and_queue_v2_consolidated(consolidated_pdf, dealer_id=did)
