@@ -2,9 +2,9 @@
 Pre-OCR for bulk upload: Tesseract pass on each PDF page (in-memory raster), classify (Aadhaar, Details, …),
 then write normalized document files under ``Uploaded scans/{dealer_id}/{mobile}_ddmmyy/``.
 
-**Raw folder:** ``…/{mobile}_ddmmyy/raw/`` holds only **PDF** artifacts: the consolidated PDF copy and
-``page_01.pdf``, ``page_02.pdf``, … (one single-page PDF per source page, with OSD orientation applied
-via PDF page rotation). **No** ``page_NN.jpg`` or other raster files are stored under ``raw/``.
+**Raw folder:** ``…/{mobile}_ddmmyy/raw/`` holds the consolidated PDF copy, per-page PDFs
+(``page_01.pdf``, …), and **per-page JPEG rasters** (``page_01.jpg``, …) — the same bytes used for
+Tesseract pre-OCR / classification **before** post-OCR compression of ``for_OCR/`` outputs.
 
 **for_OCR folder:** ``…/{mobile}_ddmmyy/for_OCR/`` holds classified outputs (JPEGs such as
 ``Aadhar_front.jpg``, ``Insurance.jpg``, and ``Sales_Detail_Sheet.pdf``) plus one **single-page PDF per
@@ -408,7 +408,8 @@ def _export_single_page_pdfs_to_raw(pdf_path: Path, raw_dir: Path, max_pages: in
     """
     Split a multi-page PDF into ``page_01.pdf``, ``page_02.pdf``, … under ``raw_dir``
     (one PDF per original page). Applies **Tesseract OSD** on a raster render of each page and
-    sets **PDF page rotation** so the saved single-page PDF is upright (no JPEG files under ``raw/``).
+    sets **PDF page rotation** so the saved single-page PDF is upright.
+    Per-page JPEG rasters are written separately by :func:`_split_pdf_by_classification` (``page_NN.jpg``).
     """
     import fitz
     from PIL import Image
@@ -991,6 +992,30 @@ def normalize_aadhar_upload_files(subdir: Path) -> None:
             back_p.write_bytes(back_cropped)
 
 
+def _pre_ocr_text_from_sales_detail_sheet_onward(full_text: str) -> str:
+    """
+    Return OCR text from the first **Sales Detail Sheet** heading onward (same page and following pages).
+
+    Dealer phone / other numbers often appear *above* that heading on the Details page; mobile extraction
+    must ignore them. If the heading is found, text **before** that phrase on the first matching page is
+    dropped; Aadhaar/insurance pages above the Details page are excluded entirely.
+    If no heading is found, returns ``full_text`` unchanged.
+    """
+    if not full_text or not full_text.strip():
+        return full_text
+    anchor = re.compile(r"(?i)sales\s*detail\s*sheet")
+    headers = list(re.finditer(r"(?ms)^---\s*Page\s+\d+\s*---\s*$", full_text))
+    for i, m in enumerate(headers):
+        start = m.start()
+        end = headers[i + 1].start() if i + 1 < len(headers) else len(full_text)
+        block = full_text[start:end]
+        mline = anchor.search(block)
+        if mline:
+            cut = start + mline.start()
+            return full_text[cut:].strip()
+    return full_text
+
+
 def _extract_mobile_from_text(text: str) -> str | None:
     """
     Extract Indian 10-digit mobile from text.
@@ -1395,7 +1420,8 @@ def pre_ocr_pdf(
 
         full_text = "\n\n".join(all_text_parts)
         ocr_path.write_text(full_text, encoding="utf-8")
-        mobile = _extract_mobile_from_text(full_text)
+        mobile_scope = _pre_ocr_text_from_sales_detail_sheet_onward(full_text)
+        mobile = _extract_mobile_from_text(mobile_scope)
         return full_text, ocr_path, mobile
     except Exception as e:
         logger.exception("pre_ocr failed for %s", pdf_path)
@@ -1448,6 +1474,12 @@ def _split_pdf_by_classification(
 
     pages = _pdf_to_images(pdf_path)
     page_bytes: dict[int, bytes] = {idx: b for idx, b in pages}
+    if raw_dir is not None:
+        for idx, jpeg_bytes in page_bytes.items():
+            try:
+                (raw_dir / f"page_{idx + 1:02d}.jpg").write_bytes(jpeg_bytes)
+            except OSError as e:
+                logger.warning("raw: could not write page_%02d.jpg: %s", idx + 1, e)
 
     combined_indices = {idx for idx, ptype in classifications if ptype == PAGE_TYPE_AADHAR_COMBINED}
     for idx in combined_indices:
@@ -1540,7 +1572,8 @@ def run_pre_ocr_and_prepare(
     full_text, ocr_path, mobile = pre_ocr_pdf(dest_pdf, processing_dir=proc_dir)
 
     classifications = classify_pages_from_ocr_text(full_text)
-    all_mobiles = _extract_all_mobiles_from_text(full_text)
+    mobile_scope = _pre_ocr_text_from_sales_detail_sheet_onward(full_text)
+    all_mobiles = _extract_all_mobiles_from_text(mobile_scope)
 
     # Multi-customer: when multiple document sets OR 2+ distinct mobiles in full text
     is_multi = _detect_multi_customer(classifications) or len(all_mobiles) >= 2

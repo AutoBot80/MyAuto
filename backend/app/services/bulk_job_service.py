@@ -21,6 +21,7 @@ from app.config import (
 from app.db import get_connection
 from app.repositories.bulk_loads import BulkLoadsRepository
 from app.services.bulk_queue_service import BulkQueueService
+from app.services.ocr_extraction_log import append_ocr_extraction_log
 from app.services.bulk_upload_service import process_bulk_pdf
 from app.services.pre_ocr_service import (
     move_multi_customer_to_success_or_error,
@@ -492,6 +493,18 @@ def process_job(job_id: str, dealer_id: int, worker_id: str) -> str:
             error_message=f"Pre-OCR failed: {exc}",
             error_code="PRE_OCR_FAILED",
             retryable=True,
+        )
+
+    if bundles:
+        _pre_sf, _pre_mob = bundles[0][1], bundles[0][2]
+        append_ocr_extraction_log(
+            get_ocr_output_dir(dealer_id),
+            _pre_sf,
+            "pre",
+            (
+                f"Bulk pre-OCR complete: mobile={_pre_mob!r} scan_stem={subfolder_stem!r} "
+                f"ocr_text={ocr_path.name if ocr_path else 'none'}"
+            ),
         )
 
     if missing:

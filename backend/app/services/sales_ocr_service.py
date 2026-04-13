@@ -22,6 +22,7 @@ from app.services.customer_address_infer import (
     enrich_customer_address_from_freeform,
     normalize_address_freeform,
 )
+from app.services.ocr_extraction_log import append_ocr_extraction_log
 from app.services.page_classifier import (
     FILENAME_AADHAR_FRONT,
     FILENAME_SALES_DETAIL_SHEET_PDF,
@@ -3120,6 +3121,12 @@ class OcrService:
         errors: list[str] = []
         section_timings_ms: dict[str, int] = {}
         t_total = time.perf_counter()
+        append_ocr_extraction_log(
+            self.ocr_output_dir,
+            subfolder,
+            "ocr",
+            "started (Textract prefetch, parallel compile, merge, Raw_OCR)",
+        )
 
         from concurrent.futures import ThreadPoolExecutor
 
@@ -3275,6 +3282,27 @@ class OcrService:
             post_ocr_result = {"ok": False, "error": str(e)}
         section_timings_ms["post_ocr_ms"] = int((time.perf_counter() - t_post) * 1000)
 
+        if post_ocr_result.get("ok") and "total_bytes_before" in post_ocr_result:
+            append_ocr_extraction_log(
+                self.ocr_output_dir,
+                subfolder,
+                "post",
+                (
+                    f"ok bytes_before={post_ocr_result.get('total_bytes_before')} "
+                    f"bytes_after={post_ocr_result.get('total_bytes_after')} "
+                    f"max_file_bytes={post_ocr_result.get('max_file_bytes')} "
+                    f"still_over={len(post_ocr_result.get('files_still_over_limit') or [])} "
+                    f"actions={len(post_ocr_result.get('actions') or [])}"
+                ),
+            )
+        else:
+            append_ocr_extraction_log(
+                self.ocr_output_dir,
+                subfolder,
+                "post",
+                f"failed error={post_ocr_result.get('error', 'unknown')!r}",
+            )
+
         section_timings_ms["total_ms"] = int((time.perf_counter() - t_total) * 1000)
 
         result: dict[str, Any] = {
@@ -3284,6 +3312,21 @@ class OcrService:
         }
         if errors:
             result["errors"] = errors
+        append_ocr_extraction_log(
+            self.ocr_output_dir,
+            subfolder,
+            "ocr",
+            (
+                f"completed total_ms={section_timings_ms.get('total_ms')} "
+                f"textract_prefetch_ms={section_timings_ms.get('aws_textract_prefetch_ms')} "
+                f"parallel_compile_ms={section_timings_ms.get('parallel_aadhar_details_compile_ms')} "
+                f"merge_write_ms={section_timings_ms.get('merge_write_json_ms')} "
+                f"insurance_ms={section_timings_ms.get('insurance_ms')} "
+                f"raw_finalize_ms={section_timings_ms.get('raw_ocr_finalize_ms')} "
+                f"post_ocr_ms={section_timings_ms.get('post_ocr_ms')} "
+                f"processed={len(processed)} errors={len(errors)}"
+            ),
+        )
         return result
 
     def _process_details_sheet(

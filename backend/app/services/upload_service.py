@@ -15,6 +15,7 @@ from app.config import (
     get_uploaded_scans_sale_subfolder_leaf,
     get_uploads_dir,
 )
+from app.services.ocr_extraction_log import append_ocr_extraction_log
 from app.services.page_classifier import FILENAME_AADHAR_FRONT
 from app.services.upload_file_validation import (
     read_upload_capped,
@@ -171,6 +172,12 @@ class UploadService:
             sale_path = uploads_dir / subdir_name
             orient_and_normalize_sale_documents(sale_path)
             try_write_pencil_mark_for_sale_folder(sale_path)
+            append_ocr_extraction_log(
+                get_ocr_output_dir(dealer_id),
+                subdir_name,
+                "pre",
+                "Manual multi-file upload: orient/normalize/pencil complete (no consolidated PDF pre-OCR).",
+            )
 
             from app.services.sales_ocr_service import OcrService
 
@@ -227,6 +234,12 @@ class UploadService:
         _sale_dir, subfolder_name, _mobile_str = bundles[0]
         uploads_dir = self.uploads_dir or get_uploads_dir(dealer_id)
         subdir_name = subfolder_name
+        append_ocr_extraction_log(
+            get_ocr_output_dir(dealer_id),
+            subfolder_name,
+            "pre",
+            f"Consolidated PDF pre-OCR complete: mobile={_mobile_str!r}.",
+        )
 
         extraction_result: dict = {}
         try:
