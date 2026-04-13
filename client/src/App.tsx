@@ -61,7 +61,7 @@ const SERVICE_PAGES: Page[] = ["service-reminders", "contact-us"];
 
 const RTO_PAGES: Page[] = ["rto-status", "contact-us"];
 
-const DEALER_PAGES: Page[] = ["dealer-dashboard", "contact-us"];
+const DEALER_PAGES: Page[] = ["dealer-dashboard", "customer-details", "view-vehicles", "contact-us"];
 
 const ADMIN_PAGES: Page[] = ["admin-dealers", "admin-upload-scans", "admin-run-logs", "admin-tools"];
 
