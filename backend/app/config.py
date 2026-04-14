@@ -207,6 +207,9 @@ OCR_UPLOAD_PARALLEL_TEXTRACT = _bool_env(
     "OCR_UPLOAD_PARALLEL_TEXTRACT", _DEFAULT_OCR_UPLOAD_PARALLEL_TEXTRACT
 )
 OCR_UPLOAD_TEXTRACT_TIMEOUT_SEC = int(os.getenv("OCR_UPLOAD_TEXTRACT_TIMEOUT_SEC", "240"))
+# Pre-OCR: run Textract DetectDocumentText on the Details page (after Tesseract classification) for
+# higher-quality text (handwriting). Adds ~$1.50/1000 pages. Aadhaar stays Tesseract-only.
+OCR_PRE_OCR_TEXTRACT_DETAILS = _bool_env("OCR_PRE_OCR_TEXTRACT_DETAILS", True)
 # Credentials: set AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY (or use default profile).
 
 # Bulk queue / worker settings. Defaults: ``sqs_queue_defaults``; ``BULK_SQS_QUEUE_URL`` still from env only.

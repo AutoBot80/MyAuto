@@ -40,6 +40,7 @@ from app.config import (
     OCR_LANG,
     OCR_PSM,
     OCR_PREPROCESS,
+    OCR_PRE_OCR_TEXTRACT_DETAILS,
     UPLOADS_DIR,
     get_add_sales_pre_ocr_work_dir,
     get_uploads_dir,
@@ -234,6 +235,71 @@ def _pdf_to_page_images(
     finally:
         doc.close()
     return result
+
+
+def _rasterize_single_pdf_page(pdf_path: Path, page_0: int, *, dpi: int = 150) -> Image.Image:
+    """Render one PDF page to PIL RGB via PyMuPDF."""
+    import fitz
+
+    doc = fitz.open(str(pdf_path))
+    try:
+        pix = doc[page_0].get_pixmap(dpi=dpi)
+        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        return correct_image_orientation_upright_image(img)
+    finally:
+        doc.close()
+
+
+def _pil_image_to_jpeg_bytes(img: Image.Image, quality: int = 92) -> bytes:
+    """Encode a PIL image to JPEG bytes (Textract accepts JPEG/PNG ≤ 5 MB)."""
+    import io
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=quality)
+    return buf.getvalue()
+
+
+def _textract_ddt_for_page(
+    pdf_path: Path,
+    page_0: int,
+) -> str | None:
+    """
+    Run Textract DetectDocumentText on a single PDF page.
+    Returns the full text (lines joined) or ``None`` on error.
+    """
+    from app.services.sales_textract_service import extract_text_from_bytes
+
+    try:
+        img = _rasterize_single_pdf_page(pdf_path, page_0)
+        jpeg_bytes = _pil_image_to_jpeg_bytes(img)
+        result = extract_text_from_bytes(jpeg_bytes)
+        if result.get("error"):
+            logger.warning("Textract DDT page %d failed: %s", page_0 + 1, result["error"])
+            return None
+        text = result.get("full_text", "")
+        if text.strip():
+            return text
+        logger.info("Textract DDT page %d returned empty text, keeping Tesseract output", page_0 + 1)
+        return None
+    except Exception:
+        logger.exception("Textract DDT page %d exception", page_0 + 1)
+        return None
+
+
+def _replace_page_block_in_full_text(full_text: str, page_0: int, new_page_text: str) -> str:
+    """
+    Replace the ``--- Page N ---`` block in ``full_text`` with new content.
+    If the block doesn't exist, appends it.
+    """
+    page_num = page_0 + 1
+    pat = re.compile(
+        rf"(---\s*Page\s+{page_num}\s*---\s*)(.*?)(?=\n---\s*Page\s+\d+\s*---|\Z)",
+        re.DOTALL,
+    )
+    replacement = rf"\g<1>{new_page_text}"
+    new, n = pat.subn(replacement, full_text, count=1)
+    if n:
+        return new
+    return full_text + f"\n\n--- Page {page_num} ---\n{new_page_text}"
 
 
 def _trim_pencil_bbox_to_dark_ink(roi_bgr, x: int, y: int, w: int, h: int) -> tuple[int, int, int, int]:
@@ -1768,6 +1834,44 @@ def run_pre_ocr_and_prepare(
     orchestration.append(
         ("classify_pages_from_ocr_text", cls_ms, f"slots={len(classifications)}"),
     )
+
+    # ── Textract DDT enhancement for the Details page ──
+    # Tesseract struggles with handwritten Details sheets. If enabled, re-OCR just the
+    # Details page via Textract DetectDocumentText (much better handwriting recognition),
+    # replace its block in full_text, and rewrite the _pre_ocr.txt artifact.
+    if OCR_PRE_OCR_TEXTRACT_DETAILS:
+        details_pages = [
+            idx for idx, ptype in classifications if ptype == PAGE_TYPE_DETAILS
+        ]
+        for dp_idx in details_pages:
+            t_td0 = time.perf_counter()
+            ddt_text = _textract_ddt_for_page(dest_pdf, dp_idx)
+            td_ms = int((time.perf_counter() - t_td0) * 1000)
+            if ddt_text:
+                full_text = _replace_page_block_in_full_text(full_text, dp_idx, ddt_text)
+                orchestration.append(
+                    ("textract_ddt_details_page", td_ms, f"page={dp_idx + 1} chars={len(ddt_text)} replaced=yes"),
+                )
+                logger.info(
+                    "Pre-OCR: Textract DDT replaced Tesseract text for Details page %d (%d chars, %d ms)",
+                    dp_idx + 1, len(ddt_text), td_ms,
+                )
+                # Re-extract mobile from the improved text
+                mobile_from_ddt = _extract_mobile_from_text(ddt_text)
+                if mobile_from_ddt and not hint:
+                    mobile = mobile_from_ddt
+                    logger.info("Pre-OCR: mobile updated from Textract DDT: %s", mobile)
+            else:
+                orchestration.append(
+                    ("textract_ddt_details_page", td_ms, f"page={dp_idx + 1} replaced=no"),
+                )
+        # Rewrite _pre_ocr.txt with enhanced text
+        if details_pages and ocr_path:
+            try:
+                ocr_path.write_text(full_text, encoding="utf-8")
+                orchestration.append(("rewrite_pre_ocr_txt_with_ddt", None, f"path={ocr_path.name}"))
+            except OSError:
+                logger.warning("Could not rewrite pre_ocr.txt after Textract DDT")
 
     t_ms0 = time.perf_counter()
     mobile_scope = _pre_ocr_text_from_sales_detail_sheet_onward(full_text)
