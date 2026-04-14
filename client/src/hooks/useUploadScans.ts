@@ -3,6 +3,11 @@ import { uploadScans, uploadScansV2, uploadScansV2Consolidated } from "../api/up
 import { validateAadharScanFile } from "../utils/aadharScanFileValidation";
 import type { ExtractedDetailsResponse } from "../types";
 
+/** Second argument when upload response includes OCR — run after applying details so DMS warm-up can follow. */
+export interface ExtractionCompleteContext {
+  savedTo: string;
+}
+
 export interface UseUploadScansControlled {
   savedTo: string | null;
   setSavedTo: (v: string | null) => void;
@@ -10,9 +15,9 @@ export interface UseUploadScansControlled {
   setUploadedFiles: React.Dispatch<React.SetStateAction<string[]>>;
   uploadStatus: string;
   setUploadStatus: (v: string) => void;
-  /** Called when upload completes with extraction.details so form can populate immediately */
-  onExtractionComplete?: (details: ExtractedDetailsResponse) => void;
-  /** After a successful upload (e.g. clear stale Fill DMS banner; receives saved_to for V2). */
+  /** Called when upload completes with extraction.details so form can populate immediately (before onUploadSuccess). */
+  onExtractionComplete?: (details: ExtractedDetailsResponse, ctx: ExtractionCompleteContext) => void;
+  /** After a successful upload (e.g. clear stale Fill DMS banner; receives saved_to for V2). Runs after onExtractionComplete when both apply. */
   onUploadSuccess?: (savedTo?: string) => void;
 }
 
@@ -86,13 +91,13 @@ export function useUploadScans(
       let msg = `Uploaded ${data.saved_count} file(s) to ${data.saved_to}.`;
       if (data.extraction?.error) msg += ` Warning: ${data.extraction.error}`;
       setUploadStatus(msg);
-      controlled?.onUploadSuccess?.(data.saved_to);
       if (data.saved_files?.length)
         setUploadedFiles((prev) => [...(data.saved_files ?? []), ...prev]);
       const details = data.extraction?.details;
       if (details && controlled?.onExtractionComplete) {
-        controlled.onExtractionComplete(details);
+        controlled.onExtractionComplete(details, { savedTo: data.saved_to });
       }
+      controlled?.onUploadSuccess?.(data.saved_to);
       // Extraction already ran on the server inside upload (save_and_queue_v2). No AI reader queue / process-all.
     } catch (err) {
       setUploadStatus(err instanceof Error ? err.message : "Upload failed.");
@@ -110,13 +115,13 @@ export function useUploadScans(
       let msg = `Uploaded consolidated scan to ${data.saved_to}.`;
       if (data.extraction?.error) msg += ` Warning: ${data.extraction.error}`;
       setUploadStatus(msg);
-      controlled?.onUploadSuccess?.(data.saved_to);
       if (data.saved_files?.length)
         setUploadedFiles((prev) => [...(data.saved_files ?? []), ...prev]);
       const details = data.extraction?.details;
       if (details && controlled?.onExtractionComplete) {
-        controlled.onExtractionComplete(details);
+        controlled.onExtractionComplete(details, { savedTo: data.saved_to });
       }
+      controlled?.onUploadSuccess?.(data.saved_to);
     } catch (err) {
       setUploadStatus(err instanceof Error ? err.message : "Upload failed.");
     } finally {

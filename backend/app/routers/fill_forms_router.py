@@ -350,8 +350,8 @@ def get_data_from_dms(
 @router.post("/dms/warm-browser", response_model=WarmDmsBrowserResponse)
 async def warm_dms_browser(req: WarmDmsBrowserRequest) -> WarmDmsBrowserResponse:
     """
-    Open or attach to DMS (login wait only); no fill. Add Sales calls this after upload so the browser
-    is closer to **Create Invoice** when the operator clicks it.
+    Open or attach to DMS (login wait only); no fill. Add Sales calls this **after** OCR text has been
+    applied in the client (upload extraction or polling), so the browser starts once the form has data.
     """
     enforce_max_text_depth(req.model_dump())
     base_url = (req.dms_base_url or DMS_BASE_URL or "").strip()

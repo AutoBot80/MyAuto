@@ -1398,7 +1398,8 @@ def _normalize_key_for_match(key: str) -> str:
 
 # Printed Details sheets (A5) use checkbox rows for Profession, Marital status, Nominee, Payment, etc.
 # Textract FORMS values are normalized with ``_normalize_kv_value_for_checkbox_fields`` using
-# inline ``[✓]`` / ``[ ]`` markers from ``sales_textract_service._get_text_from_block``.
+# inline ``[✓]`` / ``[ ]`` markers from ``sales_textract_service._get_text_from_block``, plus
+# **filled boxes** (■ █ ▪ …) from scanned Canon-style forms — see ``_normalize_filled_box_marks_to_selected_token``.
 _FIELD_CHECKBOX_ALIASES: dict[str, list[tuple[str, str]]] = {
     "profession": [
         ("private", "Private"),
@@ -1456,17 +1457,50 @@ def _match_checkbox_canonical(segment: str, field: str) -> str | None:
     return None
 
 
+def _normalize_filled_box_marks_to_selected_token(s: str) -> str:
+    """
+    Map **filled checkbox squares** (scanned forms, e.g. Canon) to the same token as a tick ``[✓]``
+    so :func:`_extract_tick_before_option_value` and segment splitters behave identically.
+
+    Handles bracketed shapes ``[■]``, ``[█]``, ballot ``[☒]`` / ``[☑]``, and unbracketed ``■ Farmer``-style
+    marks before the option label. Empty boxes ``[ ]`` / ``☐`` are left unchanged.
+    """
+    if not s:
+        return s
+    u = s
+    for sym in (
+        "[■]",
+        "[█]",
+        "[▪]",
+        "[◼]",
+        "[◾]",
+        "[⬛]",
+        "[▮]",
+        "[●]",
+        "[☒]",
+        "[☑]",
+    ):
+        u = u.replace(sym, "[✓]")
+    # Unbracketed filled glyphs before an option word (same reading order as ``[✓] Private``)
+    u = re.sub(
+        r"(?<![\[\w/])([\u25A0\u2588\u25AA\u25FC\u25FE\u2B1B\u25CF\u25AE\u2612])\s+(?=[A-Za-z(])",
+        "[✓] ",
+        u,
+    )
+    return u
+
+
 def _extract_tick_before_option_value(s: str, field: str) -> str | None:
     """
     Dealer forms place the **checkmark before the option** (reading order): ``[✓] Farmer`` / ``✓ Farmer``
-    means **Farmer** is selected — not ``Farmer [✓]`` after another option.
+    or filled-box ``[■] Farmer`` / ``■ Farmer`` — means **Farmer** is selected — not ``Farmer [✓]`` after another option.
 
-    Match **tick / bracket mark immediately followed by** the option phrase (longest alias first).
+    Match **tick / filled box / bracket mark immediately followed by** the option phrase (longest alias first).
     """
     if not s or not field:
         return None
     u = s.replace("[x]", "[✓]").replace("[X]", "[✓]")
-    tick_class = r"[\u2713\u2714\u2611\u2705☑✓✔]"
+    tick_class = r"[\u2713\u2714\u2611\u2612\u2705☑☒✓✔■▪█◼◾⬛●▮]"
     opts = sorted(
         (_FIELD_CHECKBOX_ALIASES.get(field) or []),
         key=lambda x: len(x[0]),
@@ -1508,22 +1542,23 @@ def _segments_after_selected_marks(s: str) -> list[str]:
 def _extract_checkbox_selection_value(raw: str | None, field: str) -> str | None:
     """
     If ``raw`` looks like a Textract checkbox row (``[✓]`` / ``[ ]``, legacy ``[x]``, or legacy ``X``),
-    unicode tick marks next to labels, or handwritten ticks OCR'd as ``✓``/``✔``,
-    return the canonical option for ``field``. Otherwise return ``None`` so callers keep ``raw``.
+    **filled boxes** (``[■]``, ``■``, ``█``, …), unicode tick marks next to labels, or handwritten ticks
+    OCR'd as ``✓``/``✔``, return the canonical option for ``field``. Otherwise return ``None`` so callers keep ``raw``.
 
-    **Layout:** Forms use **mark then label** (``[✓] Farmer``). That case is handled first via
+    **Layout:** Forms use **mark then label** (``[✓] Farmer`` or ``[■] Farmer``). That case is handled first via
     :func:`_extract_tick_before_option_value`; tick-after-label remains as fallback.
     """
     if raw is None or not str(raw).strip():
         return None
     s = str(raw).strip()
     s = s.replace("\u2013", "-").replace("\u2014", "-").replace("\xa0", " ")
+    s = _normalize_filled_box_marks_to_selected_token(s)
     tick_first = _extract_tick_before_option_value(s, field)
     if tick_first is not None:
         return tick_first
-    # Unicode / printed ticks beside option text (FORMS may omit SELECTION_ELEMENT on pencil scans).
-    # Prefer the option **immediately next to** a tick (earliest match in reading order), e.g. ``Farmer ✓ Private``.
-    tick_class = r"[\u2713\u2714\u2611\u2705☑✓✔]"
+    # Unicode / printed ticks or filled squares beside option text (FORMS may omit SELECTION_ELEMENT on pencil scans).
+    # Prefer the option **immediately next to** a tick or filled box (earliest match in reading order), e.g. ``Farmer ✓ Private``.
+    tick_class = r"[\u2713\u2714\u2611\u2612\u2705☑☒✓✔■▪█◼◾⬛●▮]"
     opts_u = sorted(
         (_FIELD_CHECKBOX_ALIASES.get(field) or []),
         key=lambda x: len(x[0]),

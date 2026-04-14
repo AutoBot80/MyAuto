@@ -21,6 +21,16 @@ import {
 import { StatusMessage } from "../components/StatusMessage";
 import { usePageVisible } from "../hooks/usePageVisible";
 
+/** True when extracted-details payload has at least one structured OCR block — used before DMS warm-browser. */
+function detailsHasOcrPayloadForWarm(details: unknown): boolean {
+  if (!details || typeof details !== "object" || Array.isArray(details)) return false;
+  const d = details as Record<string, unknown>;
+  if (d.customer && typeof d.customer === "object") return true;
+  if (d.insurance && typeof d.insurance === "object") return true;
+  if (d.vehicle != null && typeof d.vehicle === "object") return true;
+  return false;
+}
+
 function getInitialForm() {
   const d = loadAddSalesForm();
   return d;
@@ -283,7 +293,7 @@ export function AddSalesPage({
   });
   const [formResetKey, setFormResetKey] = useState(0);
 
-  /** Warm-browser runs on upload and when `savedTo` is restored from sessionStorage — not user-initiated Create Invoice. */
+  /** DMS warm-browser runs only after OCR text has been applied to the form (upload response or poll), or on restore when persisted extraction exists — not before. */
   const formatWarmBrowserFailure = useCallback((err: unknown): string => {
     const raw = err instanceof Error ? err.message : String(err);
     const unreachable =
@@ -311,27 +321,37 @@ export function AddSalesPage({
     [dmsUrl, siteUrlsLoading, siteUrlsError, formatWarmBrowserFailure]
   );
 
-  const applyExtractedDetails = (details: { vehicle?: unknown; customer?: unknown; insurance?: unknown }) => {
-    const rawVehicle = details?.vehicle ?? details;
-    const normalized = normalizeVehicleDetails(rawVehicle);
-    if (normalized) setExtractedVehicle(normalized);
-    const cust = details?.customer;
-    if (cust && typeof cust === "object" && !Array.isArray(cust)) {
-      const rec = cust as Record<string, unknown>;
-      setExtractedCustomer(mapApiCustomerToExtracted(rec));
-      const mobRaw = rec.mobile_number ?? rec.mobile;
-      if (mobRaw != null) {
-        const digits = String(mobRaw).replace(/\D/g, "").slice(-10);
-        if (digits.length === 10) setMobile(digits);
+  const applyExtractedDetails = useCallback(
+    (
+      details: { vehicle?: unknown; customer?: unknown; insurance?: unknown },
+      opts?: { savedToForWarm?: string }
+    ) => {
+      const rawVehicle = details?.vehicle ?? details;
+      const normalized = normalizeVehicleDetails(rawVehicle);
+      if (normalized) setExtractedVehicle(normalized);
+      const cust = details?.customer;
+      if (cust && typeof cust === "object" && !Array.isArray(cust)) {
+        const rec = cust as Record<string, unknown>;
+        setExtractedCustomer(mapApiCustomerToExtracted(rec));
+        const mobRaw = rec.mobile_number ?? rec.mobile;
+        if (mobRaw != null) {
+          const digits = String(mobRaw).replace(/\D/g, "").slice(-10);
+          if (digits.length === 10) setMobile(digits);
+        }
       }
-    }
-    const ins = details?.insurance;
-    if (ins && typeof ins === "object" && !Array.isArray(ins)) {
-      setInsuranceReadByTextract(true);
-      const r = ins as Record<string, unknown>;
-      setExtractedInsurance((prev) => mergeInsuranceFromOcrPayload(prev, r));
-    }
-  };
+      const ins = details?.insurance;
+      if (ins && typeof ins === "object" && !Array.isArray(ins)) {
+        setInsuranceReadByTextract(true);
+        const r = ins as Record<string, unknown>;
+        setExtractedInsurance((prev) => mergeInsuranceFromOcrPayload(prev, r));
+      }
+      const sf = (opts?.savedToForWarm ?? "").trim();
+      if (sf && detailsHasOcrPayloadForWarm(details)) {
+        triggerWarmBrowser(sf);
+      }
+    },
+    [triggerWarmBrowser]
+  );
 
   const {
     upload,
@@ -347,15 +367,16 @@ export function AddSalesPage({
     setUploadedFiles,
     uploadStatus,
     setUploadStatus,
-    onExtractionComplete: applyExtractedDetails,
-    onUploadSuccess: (savedSubfolder?: string) => {
+    onExtractionComplete: (details, ctx) => {
+      applyExtractedDetails(details, { savedToForWarm: ctx.savedTo });
+    },
+    onUploadSuccess: () => {
       setFillDmsStatus(null);
       setDmsMilestones([]);
       setDmsBannerIsStepMessages(false);
       setDmsRunEndedWithError(false);
       setDmsScrapedVehicle(null);
       setDmsPdfsDownloaded(false);
-      if (savedSubfolder) triggerWarmBrowser(savedSubfolder);
     },
   }, dealerId);
 
@@ -388,15 +409,6 @@ export function AddSalesPage({
       extractedInsurance,
     });
   }, [mobile, savedTo, uploadedFiles, uploadStatus, dmsScrapedVehicle, hasSubmittedInfo, lastSubmittedCustomerId, lastSubmittedVehicleId, lastStagingId, extractedVehicle, extractedCustomer, extractedInsurance]);
-
-  // After upload path is known, pre-open DMS (reuse/CDP + login wait) so Create Invoice starts closer to ready.
-  useEffect(() => {
-    if (!savedTo) {
-      dmsWarmSubfolderRef.current = null;
-      return;
-    }
-    triggerWarmBrowser(savedTo);
-  }, [savedTo, triggerWarmBrowser]);
 
   // DMS and RTO sections populate only when user presses Fill Forms. No auto-fetch from file or DB.
 
@@ -681,24 +693,14 @@ export function AddSalesPage({
       pollCountRef.current += 1;
       try {
         const details = await getExtractedDetails(savedTo, dealerId);
-        const extractionErr = (details as Record<string, unknown>)?.extraction_error;
-        const nameMismatchErr = (details as Record<string, unknown>)?.name_mismatch_error;
+        if (!details) return;
+        const dmeta = details as unknown as Record<string, unknown>;
+        const extractionErr = dmeta?.extraction_error;
+        const nameMismatchErr = dmeta?.name_mismatch_error;
         const err = typeof nameMismatchErr === "string" ? nameMismatchErr : typeof extractionErr === "string" ? extractionErr : null;
         setExtractionError(err);
         if (err && intervalId) clearInterval(intervalId);
-        const rawVehicle = details?.vehicle ?? details;
-        const normalized = normalizeVehicleDetails(rawVehicle);
-        if (normalized) setExtractedVehicle(normalized);
-        const cust = details?.customer;
-        if (cust && typeof cust === "object" && !Array.isArray(cust)) {
-          setExtractedCustomer(mapApiCustomerToExtracted(cust as Record<string, unknown>));
-        }
-        const insPoll = details?.insurance;
-        if (insPoll && typeof insPoll === "object" && !Array.isArray(insPoll)) {
-          setInsuranceReadByTextract(true);
-          const r = insPoll as Record<string, unknown>;
-          setExtractedInsurance((prev) => mergeInsuranceFromOcrPayload(prev, r));
-        }
+        applyExtractedDetails(details, { savedToForWarm: savedTo });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         setExtractionError(msg);
@@ -711,7 +713,19 @@ export function AddSalesPage({
     return () => {
       if (intervalId) clearInterval(intervalId);
     };
-  }, [savedTo, extractionSectionsDone, dealerId, pageVisible]);
+  }, [savedTo, extractionSectionsDone, dealerId, pageVisible, applyExtractedDetails]);
+
+  useEffect(() => {
+    if (!savedTo) {
+      dmsWarmSubfolderRef.current = null;
+    }
+  }, [savedTo]);
+
+  useEffect(() => {
+    if (!savedTo || !pageVisible) return;
+    if (!hasMeaningfulCustomer(c) && !hasVehicleData(v ?? null) && !hasMeaningfulInsurance(ins)) return;
+    triggerWarmBrowser(savedTo);
+  }, [savedTo, pageVisible, c, v, ins, triggerWarmBrowser]);
 
   useEffect(() => {
     if (hasSuppliedInsuranceDoc) {
