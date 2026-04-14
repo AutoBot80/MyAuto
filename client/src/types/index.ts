@@ -73,6 +73,8 @@ export interface UploadScansResponse {
     processed?: string[];
     errors?: string[];
     error?: string;
+    /** Non-fatal messages (e.g. optional pencil mark not saved). */
+    warnings?: string[];
     details?: ExtractedDetailsResponse;
     section_timings_ms?: UploadExtractionSectionTimings;
   };

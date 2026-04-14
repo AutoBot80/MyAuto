@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, File, Form, UploadFile
+from fastapi.responses import StreamingResponse
 
 from app.security.deps import get_principal, resolve_dealer_id
 from app.security.principal import Principal
@@ -54,4 +55,35 @@ async def upload_scans_v2_consolidated(
         consolidated_pdf,
         dealer_id=did,
         form_mobile=mobile or None,
+    )
+
+
+@router.post("/scans-v2-consolidated-stream")
+async def upload_scans_v2_consolidated_stream(
+    principal: Principal = Depends(get_principal),
+    consolidated_pdf: UploadFile = File(..., description="Single PDF: Aadhaar + sales detail (multi-page ok)"),
+    dealer_id: int | None = Form(None, description="Dealer ID; uses token dealer if omitted"),
+    mobile: str = Form(
+        "",
+        description="Optional 10-digit Customer Mobile from Add Sales; used when OCR cannot read it on the scan.",
+    ),
+) -> StreamingResponse:
+    """
+    Same processing as ``/scans-v2-consolidated``, but responds with **SSE** (``text/event-stream``):
+    ``event: partial`` when Aadhaar or Details merge is persisted (includes ``details`` + ``saved_to``),
+    then ``event: complete`` with the same final JSON as the non-streaming route.
+    """
+    did = resolve_dealer_id(principal, dealer_id)
+    return StreamingResponse(
+        upload_service.save_and_queue_v2_consolidated_stream(
+            consolidated_pdf,
+            dealer_id=did,
+            form_mobile=mobile or None,
+        ),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )

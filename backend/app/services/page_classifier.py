@@ -115,6 +115,11 @@ def _aadhaar_combined_single_page_candidate(t: str) -> bool:
     return bool(_AADHAR_COMBINED_EXTRA.search(t))
 
 
+def aadhar_combined_ocr_looks_ok(text: str) -> bool:
+    """True when OCR matches the bar for classifying a page as ``Aadhar_combined``."""
+    return _aadhaar_combined_single_page_candidate(text or "")
+
+
 def classify_page_by_text(text: str) -> str:
     """
     Classify a single page from its OCR text.

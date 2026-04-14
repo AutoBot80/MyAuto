@@ -9,7 +9,7 @@ import time
 from difflib import SequenceMatcher
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from app.db import get_connection
 from app.repositories.ai_reader_queue import AiReaderQueueRepository
@@ -3567,7 +3567,12 @@ class OcrService:
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
-    def process_uploaded_subfolder(self, subfolder: str) -> dict:
+    def process_uploaded_subfolder(
+        self,
+        subfolder: str,
+        *,
+        on_extraction_event: Callable[[str, dict[str, Any]], None] | None = None,
+    ) -> dict:
         """
         Run extraction directly on uploaded files (no queue).
 
@@ -3594,7 +3599,7 @@ class OcrService:
             "started (Textract prefetch, parallel compile, merge, Raw_OCR)",
         )
 
-        from concurrent.futures import ThreadPoolExecutor
+        from concurrent.futures import ThreadPoolExecutor, as_completed
 
         from app.config import OCR_UPLOAD_PARALLEL_TEXTRACT
 
@@ -3616,20 +3621,40 @@ class OcrService:
         t_par = time.perf_counter()
         if aadhar_path.exists() or details_path.exists():
             with ThreadPoolExecutor(max_workers=2) as ex:
-                fa = (
-                    ex.submit(self._upload_fragment_aadhar, scan_bundle, prefetch)
-                    if aadhar_path.exists()
-                    else None
-                )
-                fb = (
-                    ex.submit(self._upload_fragment_details, details_path, prefetch)
-                    if details_path.exists()
-                    else None
-                )
-                if fa is not None:
-                    frag_a = fa.result()
-                if fb is not None:
-                    frag_d = fb.result()
+                futures_map = {}
+                if aadhar_path.exists():
+                    futures_map[ex.submit(self._upload_fragment_aadhar, scan_bundle, prefetch)] = "aadhar"
+                if details_path.exists():
+                    futures_map[ex.submit(self._upload_fragment_details, details_path, prefetch)] = "details"
+                for fut in as_completed(futures_map.keys()):
+                    kind = futures_map[fut]
+                    try:
+                        res = fut.result()
+                    except Exception as exc:
+                        logger.exception("upload fragment %s failed", kind)
+                        if kind == "aadhar":
+                            frag_a = {"ok": False, "error": str(exc), "customer": {}, "raw_parts": []}
+                        else:
+                            frag_d = {"ok": False, "error": str(exc)}
+                    else:
+                        if kind == "aadhar":
+                            frag_a = res
+                        else:
+                            frag_d = res
+                    try:
+                        self._persist_upload_merge(subfolder, frag_a, frag_d)
+                    except Exception:
+                        logger.exception("partial persist_upload_merge failed subfolder=%s", subfolder)
+                    if on_extraction_event:
+                        try:
+                            det = self.get_extracted_details(subfolder)
+                            if det:
+                                on_extraction_event(
+                                    "partial",
+                                    {"fragment": kind, "details": det, "saved_to": subfolder},
+                                )
+                        except Exception:
+                            logger.exception("on_extraction_event partial failed subfolder=%s", subfolder)
         section_timings_ms["parallel_aadhar_details_compile_ms"] = int(
             (time.perf_counter() - t_par) * 1000
         )

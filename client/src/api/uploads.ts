@@ -1,6 +1,6 @@
 import { getAccessToken } from "../auth/token";
 import { getBaseUrl, throwMappedFetchError } from "./client";
-import type { UploadScansResponse } from "../types";
+import type { ExtractedDetailsResponse, UploadScansResponse } from "../types";
 import { DEALER_ID } from "./dealerId";
 
 const PROXY_TIMEOUT_HINT =
@@ -90,4 +90,112 @@ export async function uploadScansV2Consolidated(
   }
   form.append("consolidated_pdf", consolidatedPdf);
   return postUploadForm("/uploads/scans-v2-consolidated", form);
+}
+
+export interface ConsolidatedUploadPartial {
+  fragment: string;
+  details: ExtractedDetailsResponse;
+  savedTo: string;
+}
+
+/**
+ * Consolidated PDF upload with **SSE**: Aadhaar and Details merges can arrive in either order;
+ * ``onPartial`` fires as each fragment is persisted so the UI can fill fields before the slowest job finishes.
+ */
+export async function uploadScansV2ConsolidatedStream(
+  consolidatedPdf: File,
+  dealerId: number | undefined,
+  customerMobile: string | undefined,
+  onPartial: (p: ConsolidatedUploadPartial) => void
+): Promise<UploadScansResponse> {
+  const form = new FormData();
+  form.append("dealer_id", String(dealerId ?? DEALER_ID));
+  const m = (customerMobile ?? "").replace(/\D/g, "");
+  if (m.length === 10) {
+    form.append("mobile", m);
+  }
+  form.append("consolidated_pdf", consolidatedPdf);
+
+  const headers = new Headers();
+  const token = getAccessToken();
+  if (token) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+  headers.set("Accept", "text/event-stream");
+
+  let res: Response;
+  try {
+    res = await fetch(`${getBaseUrl()}/uploads/scans-v2-consolidated-stream`, {
+      method: "POST",
+      body: form,
+      headers,
+    });
+  } catch (err) {
+    throwMappedFetchError(err);
+    throw new Error("unreachable");
+  }
+
+  if (!res.ok) {
+    const text = await res.text();
+    let detail = text;
+    try {
+      const j = JSON.parse(text) as { detail?: string };
+      if (j.detail) detail = typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail);
+    } catch {
+      /* plain text */
+    }
+    const gateway = res.status === 502 || res.status === 503 || res.status === 504;
+    throw new Error(
+      gateway ? `Upload failed (${res.status}). ${PROXY_TIMEOUT_HINT}` : `Upload failed (${res.status}): ${detail}`
+    );
+  }
+
+  const reader = res.body?.getReader();
+  if (!reader) {
+    throw new Error("No response body from stream");
+  }
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let final: UploadScansResponse | null = null;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let sep: number;
+    while ((sep = buffer.indexOf("\n\n")) >= 0) {
+      const block = buffer.slice(0, sep).trim();
+      buffer = buffer.slice(sep + 2);
+      if (!block.startsWith("data:")) continue;
+      const jsonStr = block.replace(/^data:\s*/i, "").trim();
+      if (!jsonStr) continue;
+      const msg = JSON.parse(jsonStr) as {
+        event: string;
+        fragment?: string;
+        details?: ExtractedDetailsResponse;
+        saved_to?: string;
+        result?: UploadScansResponse;
+        message?: string;
+      };
+      if (msg.event === "error") {
+        throw new Error(msg.message || "Stream error");
+      }
+      if (msg.event === "partial" && msg.details && msg.saved_to) {
+        onPartial({
+          fragment: msg.fragment ?? "",
+          details: msg.details,
+          savedTo: msg.saved_to,
+        });
+      }
+      if (msg.event === "complete" && msg.result) {
+        final = msg.result;
+      }
+    }
+  }
+
+  if (!final) {
+    throw new Error("Stream ended without a complete event");
+  }
+  return final;
 }

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { uploadScans, uploadScansV2, uploadScansV2Consolidated } from "../api/uploads";
+import { uploadScans, uploadScansV2, uploadScansV2ConsolidatedStream } from "../api/uploads";
 import { validateAadharScanFile } from "../utils/aadharScanFileValidation";
 import type { ExtractedDetailsResponse } from "../types";
 
@@ -112,7 +112,19 @@ export function useUploadScans(
     setIsUploading(true);
     setUploadStatus("Uploading…");
     try {
-      const data = await uploadScansV2Consolidated(consolidatedPdf, dealerId, mobileDigits);
+      const data = await uploadScansV2ConsolidatedStream(consolidatedPdf, dealerId, mobileDigits, (p) => {
+        setSavedTo(p.savedTo);
+        const hint =
+          p.fragment === "aadhar"
+            ? "Aadhaar read — updating form…"
+            : p.fragment === "details"
+              ? "Details sheet read — updating form…"
+              : "Extracting…";
+        setUploadStatus(hint);
+        if (p.details && controlled?.onExtractionComplete) {
+          controlled.onExtractionComplete(p.details, { savedTo: p.savedTo });
+        }
+      });
       setSavedTo(data.saved_to);
       let msg = `Uploaded consolidated scan to ${data.saved_to}.`;
       if (data.extraction?.error) msg += ` Warning: ${data.extraction.error}`;

@@ -1,6 +1,9 @@
 import asyncio
+import json
+import threading
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 from fastapi import UploadFile
@@ -224,8 +227,13 @@ class UploadService:
         dealer_id: int,
         *,
         mobile_hint: str | None = None,
+        on_extraction_event: Any | None = None,
     ) -> dict:
-        """CPU-bound pre-OCR + Textract; must run in a worker thread (see ``save_and_queue_v2_consolidated``)."""
+        """CPU-bound pre-OCR + Textract; must run in a worker thread (see ``save_and_queue_v2_consolidated``).
+
+        ``on_extraction_event(event_name, payload)`` is called from the worker when Aadhaar or Details
+        fragment merge is persisted (``event_name`` == ``\"partial\"``) so the client can stream updates.
+        """
         # Lazy import: ``pre_ocr_service`` references ``UploadService`` to avoid import cycles.
         from app.services.pre_ocr_service import run_pre_ocr_and_prepare
 
@@ -282,7 +290,10 @@ class UploadService:
                 uploads_dir=uploads_dir,
                 ocr_output_dir=get_ocr_output_dir(dealer_id),
             )
-            extraction_result = ocr.process_uploaded_subfolder(subdir_name)
+            extraction_result = ocr.process_uploaded_subfolder(
+                subdir_name,
+                on_extraction_event=on_extraction_event,
+            )
             if pencil_warnings:
                 extraction_result = {**extraction_result, "warnings": pencil_warnings}
             details = ocr.get_extracted_details(subdir_name)
@@ -348,3 +359,64 @@ class UploadService:
             )
         except Exception as e:
             return {"error": f"Consolidated processing failed: {e}"}
+
+    async def save_and_queue_v2_consolidated_stream(
+        self,
+        consolidated_pdf: UploadFile,
+        dealer_id: int = 100001,
+        *,
+        form_mobile: str | None = None,
+    ):
+        """
+        Same as ``save_and_queue_v2_consolidated`` but yields **SSE** lines (``text/event-stream``):
+        ``partial`` when Aadhaar or Details merge is written, ``complete`` with the final JSON payload.
+        """
+        try:
+            content = await read_upload_capped(consolidated_pdf, UPLOAD_MAX_CONSOLIDATED_PDF_BYTES)
+            validate_magic_jpeg_png_or_pdf(content, label="Consolidated scan")
+        except ValueError as e:
+            yield f"data: {json.dumps({'event': 'error', 'message': str(e)})}\n\n"
+            return
+
+        proc_dir = get_add_sales_pre_ocr_work_dir(dealer_id)
+        proc_dir.mkdir(parents=True, exist_ok=True)
+        stem = Path(f"{(consolidated_pdf.filename or 'consolidated').strip() or 'consolidated'}").stem
+        safe_stem = stem[:80] if stem else "consolidated"
+        dest_pdf = proc_dir / f"add_sales_{safe_stem}_{uuid4().hex[:12]}.pdf"
+        dest_pdf.write_bytes(content)
+
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue = asyncio.Queue()
+
+        def worker() -> None:
+            try:
+
+                def bridge(event_name: str, payload: dict) -> None:
+                    loop.call_soon_threadsafe(queue.put_nowait, ("msg", event_name, payload))
+
+                result = self._process_consolidated_pdf_sync(
+                    dest_pdf,
+                    proc_dir,
+                    dealer_id,
+                    mobile_hint=form_mobile,
+                    on_extraction_event=bridge,
+                )
+                loop.call_soon_threadsafe(queue.put_nowait, ("done", result))
+            except Exception as e:
+                loop.call_soon_threadsafe(queue.put_nowait, ("error", str(e)))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+        while True:
+            item = await queue.get()
+            if item[0] == "msg":
+                _, event_name, payload = item
+                body: dict = {"event": event_name, **payload}
+                yield f"data: {json.dumps(body)}\n\n"
+            elif item[0] == "done":
+                result = item[1]
+                yield f"data: {json.dumps({'event': 'complete', 'result': result})}\n\n"
+                return
+            elif item[0] == "error":
+                yield f"data: {json.dumps({'event': 'error', 'message': item[1]})}\n\n"
+                return

@@ -40,6 +40,7 @@ from app.config import (
     OCR_LANG,
     OCR_PSM,
     OCR_PREPROCESS,
+    OCR_PRE_OCR_TEXTRACT_AADHAR_FALLBACK,
     OCR_PRE_OCR_TEXTRACT_DETAILS,
     UPLOADS_DIR,
     get_add_sales_pre_ocr_work_dir,
@@ -47,8 +48,11 @@ from app.config import (
 )
 from app.services.ocr_extraction_log import append_pre_ocr_step_lines
 from app.services.page_classifier import (
+    aadhar_combined_ocr_looks_ok,
+    aadhar_front_face_ocr,
     classify_page_by_text,
     classify_pages_from_ocr_text,
+    extract_page_text_from_pre_ocr_blocks,
     maybe_swap_aadhar_page_indices,
     should_swap_aadhar_pages_by_dob_gender,
     PAGE_TYPE_TO_FILENAME,
@@ -301,6 +305,37 @@ def _textract_ddt_for_page(
     except Exception:
         logger.exception("Textract DDT page %d exception", page_0 + 1)
         return None
+
+
+# Aadhaar back: enough signal that Tesseract likely captured address / UIDAI footer (DDT fallback if not).
+_AADHAR_BACK_OCR_OK = re.compile(
+    r"(?i)(?:uidai\.gov|address\s+of\s+the\s+cardholder|address\s+is\s+as\s+per|"
+    r"पता|virtual\s*id|help@uidai)",
+)
+
+
+def _aadhar_page_needs_textract_fallback(page_text: str, page_type: str) -> bool:
+    """True when Tesseract output for an Aadhaar-classified page is too weak; try Textract DDT."""
+    t = (page_text or "").strip()
+    if not t:
+        return True
+    if page_type == PAGE_TYPE_AADHAR:
+        if not aadhar_front_face_ocr(t):
+            return True
+        if sum(1 for c in t if c.isdigit()) < 8:
+            return True
+        return False
+    if page_type == PAGE_TYPE_AADHAR_BACK:
+        if len(t) < 50:
+            return True
+        if not _AADHAR_BACK_OCR_OK.search(t):
+            return True
+        if sum(1 for c in t if c.isdigit()) < 4 and len(t) < 200:
+            return True
+        return False
+    if page_type == PAGE_TYPE_AADHAR_COMBINED:
+        return not aadhar_combined_ocr_looks_ok(t)
+    return False
 
 
 def _replace_page_block_in_full_text(full_text: str, page_0: int, new_page_text: str) -> str:
@@ -1928,6 +1963,54 @@ def run_pre_ocr_and_prepare(
                 orchestration.append(("rewrite_pre_ocr_txt_with_ddt", None, f"path={ocr_path.name}"))
             except OSError:
                 logger.warning("Could not rewrite pre_ocr.txt after Textract DDT")
+
+    # ── Textract DDT fallback for Aadhaar front / back / combined when Tesseract text is too weak ──
+    aadhar_ddt_touched = False
+    if OCR_PRE_OCR_TEXTRACT_AADHAR_FALLBACK:
+        aadhar_indices = [
+            (idx, ptype)
+            for idx, ptype in classifications
+            if ptype
+            in (PAGE_TYPE_AADHAR, PAGE_TYPE_AADHAR_BACK, PAGE_TYPE_AADHAR_COMBINED)
+        ]
+        for ah_idx, ah_type in aadhar_indices:
+            per_page = extract_page_text_from_pre_ocr_blocks(full_text, ah_idx)
+            if not _aadhar_page_needs_textract_fallback(per_page, ah_type):
+                continue
+            t_ah0 = time.perf_counter()
+            ah_ddt = _textract_ddt_for_page(dest_pdf, ah_idx, page_image=page_images.get(ah_idx))
+            ah_ms = int((time.perf_counter() - t_ah0) * 1000)
+            if ah_ddt:
+                full_text = _replace_page_block_in_full_text(full_text, ah_idx, ah_ddt)
+                aadhar_ddt_touched = True
+                orchestration.append(
+                    (
+                        "textract_ddt_aadhar_page",
+                        ah_ms,
+                        f"page={ah_idx + 1} type={ah_type} chars={len(ah_ddt)} replaced=yes",
+                    ),
+                )
+                logger.info(
+                    "Pre-OCR: Textract DDT replaced Tesseract text for Aadhaar page %d (%s, %d chars, %d ms)",
+                    ah_idx + 1,
+                    ah_type,
+                    len(ah_ddt),
+                    ah_ms,
+                )
+            else:
+                orchestration.append(
+                    (
+                        "textract_ddt_aadhar_page",
+                        ah_ms,
+                        f"page={ah_idx + 1} type={ah_type} replaced=no",
+                    ),
+                )
+        if aadhar_ddt_touched and ocr_path:
+            try:
+                ocr_path.write_text(full_text, encoding="utf-8")
+                orchestration.append(("rewrite_pre_ocr_txt_with_aadhar_ddt", None, f"path={ocr_path.name}"))
+            except OSError:
+                logger.warning("Could not rewrite pre_ocr.txt after Textract DDT (Aadhaar)")
 
     t_ms0 = time.perf_counter()
     mobile_scope = _pre_ocr_text_from_sales_detail_sheet_onward(full_text)
