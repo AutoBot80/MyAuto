@@ -189,6 +189,9 @@ OCR_PSM = int(os.getenv("OCR_PSM", "3"))
 # Preprocess image before OCR (grayscale + contrast) to improve text extraction when logos/pictures are present.
 OCR_PREPROCESS = os.getenv("OCR_PREPROCESS", "true").lower() in ("1", "true", "yes")
 
+# PyMuPDF rasterization DPI for bulk pre-OCR (PDF → PIL → Tesseract). Higher improves small text; slower and more RAM.
+OCR_PRE_OCR_PDF_DPI = int(os.getenv("OCR_PRE_OCR_PDF_DPI", "300"))
+
 # Two-step pipeline: Step 1 = AI classify image, Step 2 = Tesseract OCR. Set to "true" to use CLIP for classification.
 USE_AI_CLASSIFIER = os.getenv("USE_AI_CLASSIFIER", "false").lower() in ("1", "true", "yes")
 # Labels for zero-shot classification (comma-separated). Used when USE_AI_CLASSIFIER=true.

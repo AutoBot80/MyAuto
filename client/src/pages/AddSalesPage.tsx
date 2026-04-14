@@ -21,6 +21,9 @@ import {
 import { StatusMessage } from "../components/StatusMessage";
 import { usePageVisible } from "../hooks/usePageVisible";
 
+/** Shown under Upload documents while upload or OCR polling runs; counts down toward 00m:00s. */
+const ADD_SALES_OCR_COUNTDOWN_START_SEC = 40;
+
 /** True when extracted-details payload has at least one structured OCR block — used before DMS warm-browser. */
 function detailsHasOcrPayloadForWarm(details: unknown): boolean {
   if (!details || typeof details !== "object" || Array.isArray(details)) return false;
@@ -665,6 +668,23 @@ export function AddSalesPage({
     hasVehicleData(v ?? null) &&
     hasMeaningfulInsurance(ins);
 
+  const ocrWaitActive =
+    !extractionError && (isUploading || (Boolean(savedTo) && !extractionSectionsDone));
+
+  const [ocrCountdownSec, setOcrCountdownSec] = useState(ADD_SALES_OCR_COUNTDOWN_START_SEC);
+
+  useEffect(() => {
+    if (!ocrWaitActive) {
+      setOcrCountdownSec(ADD_SALES_OCR_COUNTDOWN_START_SEC);
+      return;
+    }
+    setOcrCountdownSec(ADD_SALES_OCR_COUNTDOWN_START_SEC);
+    const id = setInterval(() => {
+      setOcrCountdownSec((s) => Math.max(0, s - 1));
+    }, 1000);
+    return () => clearInterval(id);
+  }, [ocrWaitActive]);
+
   // Poll for extracted details until customer, vehicle, and insurance blocks match the same "complete" rules as the UI.
   useEffect(() => {
     if (!savedTo) {
@@ -1143,6 +1163,7 @@ export function AddSalesPage({
       isMobileValid={isMobileValid}
       onUploadV2={uploadV2}
       onUploadConsolidated={uploadConsolidatedV2}
+      ocrCountdownSeconds={ocrWaitActive ? ocrCountdownSec : null}
     />
   );
 

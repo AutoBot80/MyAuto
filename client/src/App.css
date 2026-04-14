@@ -2269,6 +2269,19 @@
   flex-wrap: wrap;
 }
 
+.app-panel-actions--stack {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.app-panel-ocr-countdown {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: #5a6b7c;
+  letter-spacing: 0.02em;
+}
+
 .app-panel-pre-uploaded {
   margin-bottom: 8px;
 }

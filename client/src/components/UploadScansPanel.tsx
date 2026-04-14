@@ -16,6 +16,14 @@ interface UploadScansPanelProps {
   onUploadV2?: (aadharScan: File, aadharBackScan: File, salesDetail: File, insuranceSheet?: File) => Promise<void>;
   /** Single multi-page PDF: pre-OCR classify/split then Textract (mobile from document). */
   onUploadConsolidated?: (consolidatedPdf: File) => Promise<void>;
+  /** Reverse countdown (e.g. 00m:40s → 00m:00s) while OCR runs; omit or null to hide. */
+  ocrCountdownSeconds?: number | null;
+}
+
+function formatOcrCountdown(totalSec: number): string {
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return `${String(m).padStart(2, "0")}m:${String(s).padStart(2, "0")}s`;
 }
 
 const SCAN_LABELS = [
@@ -34,6 +42,7 @@ export function UploadScansPanel({
   isMobileValid,
   onUploadV2,
   onUploadConsolidated,
+  ocrCountdownSeconds = null,
 }: UploadScansPanelProps) {
   void onUpload;
   void mobile;
@@ -162,7 +171,7 @@ export function UploadScansPanel({
                   </label>
                 </div>
               ) : null}
-              <div className="app-panel-row app-panel-actions">
+              <div className="app-panel-row app-panel-actions app-panel-actions--stack">
                 <button
                   type="button"
                   className="app-button app-button--primary"
@@ -173,6 +182,11 @@ export function UploadScansPanel({
                 >
                   {isUploading ? "Uploading…" : "Upload documents"}
                 </button>
+                {ocrCountdownSeconds != null ? (
+                  <div className="app-panel-ocr-countdown" role="timer" aria-live="polite">
+                    {formatOcrCountdown(ocrCountdownSeconds)}
+                  </div>
+                ) : null}
               </div>
             </>
           ) : null}
@@ -290,7 +304,7 @@ export function UploadScansPanel({
                   </button>
                 </div>
               </div>
-              <div className="app-panel-row app-panel-actions">
+              <div className="app-panel-row app-panel-actions app-panel-actions--stack">
                 <button
                   type="button"
                   className="app-button app-button--primary"
@@ -307,6 +321,11 @@ export function UploadScansPanel({
                 >
                   {isUploading ? "Uploading…" : "Upload documents"}
                 </button>
+                {ocrCountdownSeconds != null ? (
+                  <div className="app-panel-ocr-countdown" role="timer" aria-live="polite">
+                    {formatOcrCountdown(ocrCountdownSeconds)}
+                  </div>
+                ) : null}
               </div>
             </>
           ) : null}
