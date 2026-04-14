@@ -76,13 +76,18 @@ export async function uploadScansV2(
   return postUploadForm("/uploads/scans-v2", form);
 }
 
-/** Pre-OCR + Textract: one PDF with Aadhaar + sales detail; mobile/subfolder come from the document. */
+/** Pre-OCR + Textract: one PDF with Aadhaar + sales detail; subfolder mobile from OCR or optional ``customerMobile``. */
 export async function uploadScansV2Consolidated(
   consolidatedPdf: File,
-  dealerId?: number
+  dealerId?: number,
+  customerMobile?: string
 ): Promise<UploadScansResponse> {
   const form = new FormData();
   form.append("dealer_id", String(dealerId ?? DEALER_ID));
+  const m = (customerMobile ?? "").replace(/\D/g, "");
+  if (m.length === 10) {
+    form.append("mobile", m);
+  }
   form.append("consolidated_pdf", consolidatedPdf);
   return postUploadForm("/uploads/scans-v2-consolidated", form);
 }

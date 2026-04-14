@@ -112,7 +112,7 @@ export function useUploadScans(
     setIsUploading(true);
     setUploadStatus("Uploading…");
     try {
-      const data = await uploadScansV2Consolidated(consolidatedPdf, dealerId);
+      const data = await uploadScansV2Consolidated(consolidatedPdf, dealerId, mobileDigits);
       setSavedTo(data.saved_to);
       let msg = `Uploaded consolidated scan to ${data.saved_to}.`;
       if (data.extraction?.error) msg += ` Warning: ${data.extraction.error}`;

@@ -1091,6 +1091,19 @@ def _pre_ocr_text_from_sales_detail_sheet_onward(full_text: str) -> str:
     return full_text
 
 
+def _normalize_indian_mobile_hint(raw: str | None) -> str | None:
+    """Return a valid 10-digit Indian mobile from user/form input (handles spaces, +91)."""
+    if not raw or not str(raw).strip():
+        return None
+    digits = "".join(c for c in str(raw) if c.isdigit())
+    if len(digits) < 10:
+        return None
+    ten = digits[-10:]
+    if ten[0] in "6789":
+        return ten
+    return None
+
+
 def _extract_mobile_from_text(text: str) -> str | None:
     """
     Extract Indian 10-digit mobile from text.
@@ -1533,6 +1546,11 @@ def pre_ocr_pdf(
 
         t4 = time.perf_counter()
         mobile = _extract_mobile_from_text(mobile_scope)
+        if not mobile:
+            # Scope starts at "Sales Detail Sheet", so it drops earlier pages (e.g. Aadhaar with a phone)
+            # and header lines above the heading on the Details page (dealer Ph.). When the customer
+            # mobile row is OCR-garbled, a valid 10-digit may only appear in ``full_text``.
+            mobile = _extract_mobile_from_text(full_text)
         _step(
             ("extract_mobile", int((time.perf_counter() - t4) * 1000), f"mobile={'set' if mobile else 'none'}"),
         )
@@ -1674,6 +1692,8 @@ def run_pre_ocr_and_prepare(
     source_pdf: Path,
     processing_dir: Path | None = None,
     dealer_id: int = 100001,
+    *,
+    mobile_hint: str | None = None,
 ) -> tuple[list[tuple[Path, str, str]] | None, str, str | None, Path | None, list[str] | None]:
     """
     Copy PDF to Processing, run pre-OCR (Tesseract on in-memory rasters), classify pages, write normalized
@@ -1684,6 +1704,9 @@ def run_pre_ocr_and_prepare(
     Returns (bundles | None, subfolder_stem, mobile_or_none, ocr_path, missing_list | None).
     bundles: list of ``(sale_dir, subfolder, mobile)`` where ``sale_dir`` is the uploads folder for the sale.
     If missing_list is non-empty, validation failed; do not split. bundles is None.
+
+    ``mobile_hint``: optional 10-digit mobile from Add Sales (consolidated PDF upload) when Tesseract cannot
+    read the customer mobile from the scan (common when the Details row is smudged or OCR-garbled).
     """
     from app.config import get_ocr_output_dir
     from app.services.upload_service import UploadService
@@ -1716,6 +1739,10 @@ def run_pre_ocr_and_prepare(
     # Run pre-OCR (Tesseract per page — usually dominant cost)
     t_pre0 = time.perf_counter()
     full_text, ocr_path, mobile, pre_steps = pre_ocr_pdf(dest_pdf, processing_dir=proc_dir)
+    # Consolidated Add Sales: user-entered mobile must win over OCR (letter/other pages may show a different number).
+    hint = _normalize_indian_mobile_hint(mobile_hint)
+    if hint:
+        mobile = hint
     pre_ocr_wall_ms = int((time.perf_counter() - t_pre0) * 1000)
 
     orchestration: list[tuple[str, int | None, str]] = []

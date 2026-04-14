@@ -43,7 +43,15 @@ async def upload_scans_v2_consolidated(
     principal: Principal = Depends(get_principal),
     consolidated_pdf: UploadFile = File(..., description="Single PDF: Aadhaar + sales detail (multi-page ok)"),
     dealer_id: int | None = Form(None, description="Dealer ID; uses token dealer if omitted"),
+    mobile: str = Form(
+        "",
+        description="Optional 10-digit Customer Mobile from Add Sales; used when OCR cannot read it on the scan.",
+    ),
 ) -> dict:
     """Direct pre-OCR (in-process ``run_pre_ocr_and_prepare``) + Textract — not bulk ingest / ``bulk_loads``."""
     did = resolve_dealer_id(principal, dealer_id)
-    return await upload_service.save_and_queue_v2_consolidated(consolidated_pdf, dealer_id=did)
+    return await upload_service.save_and_queue_v2_consolidated(
+        consolidated_pdf,
+        dealer_id=did,
+        form_mobile=mobile or None,
+    )

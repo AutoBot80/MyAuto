@@ -217,7 +217,14 @@ class UploadService:
             "with Aadhar (front & back) and the sales details form (vehicle & customer info)."
         )
 
-    def _process_consolidated_pdf_sync(self, dest_pdf: Path, proc_dir: Path, dealer_id: int) -> dict:
+    def _process_consolidated_pdf_sync(
+        self,
+        dest_pdf: Path,
+        proc_dir: Path,
+        dealer_id: int,
+        *,
+        mobile_hint: str | None = None,
+    ) -> dict:
         """CPU-bound pre-OCR + Textract; must run in a worker thread (see ``save_and_queue_v2_consolidated``)."""
         # Lazy import: ``pre_ocr_service`` references ``UploadService`` to avoid import cycles.
         from app.services.pre_ocr_service import run_pre_ocr_and_prepare
@@ -227,6 +234,7 @@ class UploadService:
                 dest_pdf,
                 processing_dir=proc_dir,
                 dealer_id=dealer_id,
+                mobile_hint=mobile_hint,
             )
         except Exception as e:
             return {"error": f"Pre-OCR failed: {e}"}
@@ -302,11 +310,14 @@ class UploadService:
         self,
         consolidated_pdf: UploadFile,
         dealer_id: int = 100001,
+        *,
+        form_mobile: str | None = None,
     ) -> dict:
         """
         Single multi-page PDF (Aadhaar + sales detail in one file): run bulk pre-OCR pipeline
         (``run_pre_ocr_and_prepare``), then the same orient / normalize / pencil / Textract path as
-        ``save_and_queue_v2``. Mobile and subfolder come from pre-OCR text, not the form.
+        ``save_and_queue_v2``. Subfolder mobile comes from OCR when readable; optional ``form_mobile``
+        (Add Sales **Customer Mobile**) is used when the Details mobile row is missing or garbled in Tesseract.
 
         Heavy work runs in a thread pool so the asyncio loop keeps servicing the socket while the
         client uploads the multipart body (avoids ``ECONNRESET`` on the Vite dev proxy).
@@ -328,6 +339,12 @@ class UploadService:
         dest_pdf.write_bytes(content)
 
         try:
-            return await asyncio.to_thread(self._process_consolidated_pdf_sync, dest_pdf, proc_dir, dealer_id)
+            return await asyncio.to_thread(
+                self._process_consolidated_pdf_sync,
+                dest_pdf,
+                proc_dir,
+                dealer_id,
+                mobile_hint=form_mobile,
+            )
         except Exception as e:
             return {"error": f"Consolidated processing failed: {e}"}
