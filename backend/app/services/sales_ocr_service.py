@@ -13,6 +13,7 @@ from typing import Any
 
 from app.db import get_connection
 from app.repositories.ai_reader_queue import AiReaderQueueRepository
+from app.repositories.master_ref import REF_TYPE_FINANCER, REF_TYPE_INSURER, list_ref_values
 from app.services.utility_functions import (
     default_profession_if_empty,
     fuzzy_best_option_label,
@@ -2097,10 +2098,18 @@ def _initcap_words(value: str | None) -> str:
     return s.title()
 
 
-def _apply_initcap_on_read(data: dict[str, Any]) -> None:
+def _apply_initcap_on_read(
+    data: dict[str, Any],
+    *,
+    master_insurers: list[str] | None = None,
+    master_financers: list[str] | None = None,
+) -> None:
     """
     Presentation normalization for API reads:
     convert human-readable OCR text fields to InitCap.
+
+    When ``master_insurers`` / ``master_financers`` are non-empty, fuzzy-match (50%+ score)
+    OCR text to canonical ``master_ref.ref_value`` rows and replace with the table value on match.
     """
     customer = data.get("customer") or {}
     if isinstance(customer, dict):
@@ -2132,7 +2141,11 @@ def _apply_initcap_on_read(data: dict[str, Any]) -> None:
         if "insurer" in insurance:
             ins = sanitize_details_sheet_insurer_value(insurance.get("insurer"))
             if ins:
-                insurance["insurer"] = _initcap_words(ins)
+                if master_insurers:
+                    canon = fuzzy_best_option_label(ins, master_insurers, min_score=0.5)
+                    insurance["insurer"] = canon if canon else _initcap_words(ins)
+                else:
+                    insurance["insurer"] = _initcap_words(ins)
             else:
                 insurance.pop("insurer", None)
         if insurance.get("nominee_relationship"):
@@ -2147,9 +2160,17 @@ def _apply_initcap_on_read(data: dict[str, Any]) -> None:
                 insurance["payment_mode"] = pm
             else:
                 insurance.pop("payment_mode", None)
-        for k in ("nominee_name", "financier", "policy_holder_name"):
+        for k in ("nominee_name", "policy_holder_name"):
             if insurance.get(k):
                 insurance[k] = _initcap_words(insurance.get(k))
+        if insurance.get("financier"):
+            fv = str(insurance.get("financier") or "").strip()
+            if fv:
+                if master_financers:
+                    fcanon = fuzzy_best_option_label(fv, master_financers, min_score=0.5)
+                    insurance["financier"] = fcanon if fcanon else _initcap_words(fv)
+                else:
+                    insurance["financier"] = _initcap_words(fv)
         data["insurance"] = insurance
 
     if data.get("details_customer_name"):
@@ -4212,7 +4233,21 @@ class OcrService:
         )
         if name_err:
             data["name_mismatch_error"] = name_err
-        _apply_initcap_on_read(data)
+        master_insurers: list[str] | None = None
+        master_financers: list[str] | None = None
+        try:
+            with get_connection() as conn:
+                mi = list_ref_values(conn, REF_TYPE_INSURER)
+                mf = list_ref_values(conn, REF_TYPE_FINANCER)
+                master_insurers = mi if mi else None
+                master_financers = mf if mf else None
+        except Exception as exc:
+            logger.debug("master_ref: could not load INSURER/FINANCER lists: %s", exc)
+        _apply_initcap_on_read(
+            data,
+            master_insurers=master_insurers,
+            master_financers=master_financers,
+        )
         try:
             json_path.parent.mkdir(parents=True, exist_ok=True)
             json_path.write_text(json.dumps(data, indent=2), encoding="utf-8")

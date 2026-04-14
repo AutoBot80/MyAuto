@@ -1,0 +1,11 @@
+Aadhar scan – 15 extracted fields
+
+Aadhar ID: 7945
+Name: Shashank Arya
+Gender: Male
+Year of birth: 1980
+Date of birth: 30/05/1980
+City: Gurgaon
+State: Haryana
+Pin Code: 122101
+Address (constructed): C107 FF ASTAIRE GARDENS VILL PALRA SEC 70 AND 70A BADSHAHPUR GURGAON GURGAON Badshahpur Badshahpur Farrukhnagar Gurgaon Haryana 122101

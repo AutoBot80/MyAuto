@@ -1,0 +1,46 @@
+Date: 4-Apr-2026
+SALES DETAIL SHEET
+Customer Details
+Mobile Number: 9650693610
+Alternate No.: 941 3112499
+Full Name:
+SUASHANK ARYA
+Aadhaar Number: (Last 4 digits)
+7945
+Profession:
+PRIVATE JOB
+Marital Status:
+SINGLE
+Vehicle Details
+Model:
+Splendort
+Key Number:
+1234
+Chassis Number:
+5678
+Engine Number: 7932
+Battery Number:
+AB1234
+INSURANCE Nominee Details
+Nominee Name:
+ADVAYA
+SON
+Relationship:
+MALE
+Nominee Gender:
+Age:
+12
+Payment Mode and Insurance Details
+Cash
+UPI/ QR
+Finance
+Flipkart
+Payment:
+Financier Name (if needed):
+HDFC
+SOMPO
+Insurer Name (if needed):
+I agree to receiving periodic SMS updates about registration and service status.
+2
+Customer Signature:
+Chassis Pencil Mark:
