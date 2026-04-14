@@ -86,14 +86,33 @@ def sanitize_details_sheet_insurer_value(val: str | None) -> str | None:
     return s
 
 
+_NOMINEE_RELATIONSHIP_CANONICALS = (
+    "Son",
+    "Daughter",
+    "Father",
+    "Mother",
+    "Husband",
+    "Wife",
+    "Uncle",
+)
+
+
 def normalize_nominee_relationship_value(val: str | None) -> str:
     """
     Strip trailing period OCR often attaches to relation labels (e.g. **Mother.** printed next to **Relation**).
+
+    When the text matches a known relation (**Son**, **Daughter**, **Father**, **Mother**, **Husband**, **Wife**,
+    **Uncle**) with fuzzy score ≥ 0.5 (:func:`fuzzy_best_option_label`), return that canonical label; otherwise
+    return the cleaned string (e.g. legacy **Father/Mother** slash rows for gender refinement).
     """
     s = " ".join(clean_text(val).split())
     if not s:
         return ""
-    return s.rstrip(".").strip()
+    s = s.rstrip(".").strip()
+    matched = fuzzy_best_option_label(s, list(_NOMINEE_RELATIONSHIP_CANONICALS), min_score=0.5)
+    if matched:
+        return matched
+    return s
 
 
 def fuzzy_best_option_label(query: str, candidates: list[str], *, min_score: float = 0.42) -> str | None:

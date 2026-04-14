@@ -15,6 +15,8 @@ from app.db import get_connection
 from app.repositories.ai_reader_queue import AiReaderQueueRepository
 from app.services.utility_functions import (
     default_profession_if_empty,
+    fuzzy_best_option_label,
+    normalize_for_fuzzy_match,
     normalize_nominee_relationship_value,
     sanitize_details_sheet_insurer_value,
 )
@@ -1396,14 +1398,16 @@ def _normalize_key_for_match(key: str) -> str:
     return re.sub(r"\s+", " ", (key or "").lower().strip())
 
 
-# Printed Details sheets (A5) use checkbox rows for Profession, Marital status, Nominee, Payment, etc.
-# Textract FORMS values are normalized with ``_normalize_kv_value_for_checkbox_fields`` using
-# inline ``[✓]`` / ``[ ]`` markers from ``sales_textract_service._get_text_from_block``, plus
-# **filled boxes** (■ █ ▪ …) from scanned Canon-style forms — see ``_normalize_filled_box_marks_to_selected_token``.
+# Printed Details sheets: **handwritten or typed words** for Profession, Marital status, Nominee (fuzzy ≥ 0.5);
+# legacy checkbox / tick / **filled-box** rows still supported via ``_normalize_kv_value_for_checkbox_fields`` and
+# ``_normalize_filled_box_marks_to_selected_token``.
+_WRITTEN_PROFESSION_OPTIONS = ("Private Job", "Employed", "Business", "Farmer")
+
 _FIELD_CHECKBOX_ALIASES: dict[str, list[tuple[str, str]]] = {
     "profession": [
-        ("private", "Private"),
-        ("job", "Job"),
+        ("private job", "Private Job"),
+        ("private", "Private Job"),
+        ("employed", "Employed"),
         ("business", "Business"),
         ("farmer", "Farmer"),
     ],
@@ -1411,8 +1415,9 @@ _FIELD_CHECKBOX_ALIASES: dict[str, list[tuple[str, str]]] = {
         ("married", "Married"),
         ("single", "Single"),
         ("unmarried", "Single"),
-        ("divorced", "Divorced"),
-        ("widowed", "Widowed"),
+        ("divorced", "Single"),
+        ("widowed", "Single"),
+        ("never married", "Single"),
     ],
     "nominee_gender": [
         ("male", "Male"),
@@ -1422,12 +1427,13 @@ _FIELD_CHECKBOX_ALIASES: dict[str, list[tuple[str, str]]] = {
         ("father/mother", "Father/Mother"),
         ("son/daughter", "Son/Daughter"),
         ("wife/husband", "Wife/Husband"),
-        ("father", "Father/Mother"),
-        ("mother", "Father/Mother"),
-        ("son", "Son/Daughter"),
-        ("daughter", "Son/Daughter"),
-        ("wife", "Wife/Husband"),
-        ("husband", "Wife/Husband"),
+        ("father", "Father"),
+        ("mother", "Mother"),
+        ("son", "Son"),
+        ("daughter", "Daughter"),
+        ("wife", "Wife"),
+        ("husband", "Husband"),
+        ("uncle", "Uncle"),
     ],
     "payment_mode": [
         ("upi/ qr", "UPI/QR"),
@@ -1621,15 +1627,16 @@ def _normalize_kv_value_for_checkbox_fields(field: str, value: str | None) -> st
 
 
 def _normalize_nominee_gender_sheet_value(val: str | None) -> str | None:
-    """Normalize nominee gender to **Male** / **Female** when OCR/checkbox text is noisy."""
+    """Normalize nominee gender to **Male** / **Female** (substring + fuzzy ≥ 0.5 on those labels)."""
     if val is None or not str(val).strip():
         return None
-    s = re.sub(r"\s+", " ", str(val).strip().lower())
+    raw = re.sub(r"\s+", " ", str(val).strip())
+    s = raw.lower()
     if "female" in s:
         return "Female"
     if "male" in s:
         return "Male"
-    return str(val).strip()[:80]
+    return fuzzy_best_option_label(raw, ["Male", "Female"], min_score=0.5)
 
 
 def _normalize_payment_mode_sheet_value(val: str | None) -> str | None:
@@ -2234,6 +2241,36 @@ def _clean_sales_sheet_scalar(value: str) -> str:
     return s.strip()
 
 
+def _canonical_marital_status_from_text(s: str) -> str | None:
+    """
+    Map OCR / handwritten marital text to **Married** or **Single** (Synonyms for Single: unmarried,
+    divorced, widowed, never married). Uses substring rules first, then fuzzy match ≥ 0.5 vs Married/Single.
+    """
+    t = (s or "").strip()
+    t = t.replace("\u2013", "-").replace("\u2014", "-").replace("\u2012", "-")
+    t = re.sub(
+        r"(?i)^[\s\-–—:._]*(?:marital|martial|marrital)\s*status\s*[:\s]*",
+        "",
+        t,
+    ).strip()
+    sl = re.sub(r"\s+", " ", t.lower())
+    if not sl:
+        return None
+    if re.search(r"\bnever\s+married\b", sl):
+        return "Single"
+    if re.search(r"\b(unmarried|unmaried|un-maried)\b", sl):
+        return "Single"
+    if re.search(r"\bdivorced\b", sl):
+        return "Single"
+    if re.search(r"\bwidowed\b", sl) or re.search(r"\bwidow\b", sl):
+        return "Single"
+    if re.search(r"\bsingle\b", sl):
+        return "Single"
+    if re.search(r"\bmarried\b", sl):
+        return "Married"
+    return fuzzy_best_option_label(t, ["Married", "Single"], min_score=0.5)
+
+
 def _sanitize_details_profession_value(val: str | None) -> str | None:
     """
     Sales detail sheets often place **Profession** and **Marital Status** on one row. When
@@ -2292,13 +2329,25 @@ def _sanitize_details_profession_value(val: str | None) -> str | None:
     if re.match(r"(?i)^(marital|martial|marrital|maritalstatus|mari\s*ta?l)\b", s):
         return None
 
-    return s[:200]
+    got = fuzzy_best_option_label(s, list(_WRITTEN_PROFESSION_OPTIONS), min_score=0.5)
+    if got:
+        return got
+    q = normalize_for_fuzzy_match(s)
+    ws = [w for w in q.split() if w]
+    wset = set(ws)
+    if "private" in wset and "job" in wset:
+        return "Private Job"
+    if ("pvt" in wset or "pvt." in wset) and "job" in wset:
+        return "Private Job"
+    if q.replace(" ", "") in ("privatejob", "pvtjob"):
+        return "Private Job"
+    return None
 
 
 def _normalize_details_marital_status_value(val: str | None) -> str | None:
     """
-    OCR often misreads **Unmarried** as **Unmaried**. Normalize to portal-friendly **Single**
-    (aligned with MISP ``ddlMaritalStatus`` and ``_proposal_map_marital_for_misp``).
+    Normalize to **Married** or **Single** only. **Single** includes unmarried, divorced, widowed,
+    never married (plus OCR **Unmaried**). Fuzzy match ≥ 0.5 vs Married/Single when keywords do not apply.
     """
     if val is None or not str(val).strip():
         return None
@@ -2307,7 +2356,7 @@ def _normalize_details_marital_status_value(val: str | None) -> str | None:
     sl = re.sub(r"\s+", " ", s.lower())
     if sl in ("unmaried", "un-maried"):
         return "Single"
-    return s[:200]
+    return _canonical_marital_status_from_text(s)
 
 
 def _parse_vehicle_from_full_text(full_text: str) -> dict[str, str]:
@@ -3007,7 +3056,9 @@ def _parse_insurance_from_full_text(full_text: str) -> dict[str, str]:
             "relation with proposer",
             "relation to insured",
         ):
-            nr = normalize_nominee_relationship_value(nxt)
+            nr = _extract_checkbox_selection_value(nxt, "nominee_relationship") or normalize_nominee_relationship_value(
+                nxt
+            )
             if nr:
                 out["nominee_relationship"] = nr
         same = re.match(r"(?i)^(profession|occupation|customer profession)\s+(.{1,120})$", ln)
@@ -3059,9 +3110,7 @@ def _parse_insurance_from_full_text(full_text: str) -> dict[str, str]:
                 if cand:
                     out[key] = cand
             elif field == "nominee_relationship":
-                cand = _extract_checkbox_selection_value(rest, field)
-                if not cand:
-                    cand = normalize_nominee_relationship_value(rest)
+                cand = _extract_checkbox_selection_value(rest, field) or normalize_nominee_relationship_value(rest)
                 if cand:
                     out[key] = cand
             elif field == "payment_mode":
