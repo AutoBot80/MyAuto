@@ -1,0 +1,34 @@
+{
+  "vehicle": {
+    "frame_no": "5678",
+    "engine_no": "7932",
+    "model_colour": "Splendort",
+    "key_no": "1234",
+    "battery_no": "AB1234"
+  },
+  "customer": {
+    "gender": "Male",
+    "year_of_birth": "1980",
+    "date_of_birth": "30/05/1980",
+    "name": "Shashank Arya",
+    "state": "Haryana",
+    "pin_code": "122101",
+    "address": "C107 FF ASTAIRE GARDENS VILL PALRA SEC 70 AND 70A BADSHAHPUR GURGAON GURGAON Badshahpur Badshahpur Farrukhnagar Gurgaon Haryana 122101",
+    "city": "Gurgaon",
+    "mobile_number": "9650693610",
+    "alt_phone_num": "9413112499",
+    "aadhar_id": "7945"
+  },
+  "insurance": {
+    "profession": "Private Job",
+    "financier": "HDFC Bank",
+    "insurer": "Universal Sompo General Insurance",
+    "marital_status": "Single",
+    "nominee_gender": "Male",
+    "nominee_name": "Advaya",
+    "nominee_age": "12",
+    "nominee_relationship": "Son",
+    "payment_mode": "and Insurance Details"
+  },
+  "details_customer_name": "Suashank Arya"
+}

@@ -391,6 +391,9 @@ export function AddSalesPage({
       setManualFallbackPayload(payload);
       setExtractionError(null);
       setManualFormOnly(false);
+      setExtractedCustomer((prev) => prev ?? {});
+      setExtractedVehicle((prev) => prev ?? {});
+      setExtractedInsurance((prev) => prev ?? {});
     },
   }, dealerId);
 
@@ -565,6 +568,29 @@ export function AddSalesPage({
   const c = extractedCustomer;
   const ins = extractedInsurance;
   const display = (s: string | undefined) => (s && String(s).trim() ? String(s).trim() : "—");
+
+  const alternateMobileRow = (
+    <div className="app-field-row">
+      <label className="app-field" htmlFor="add-sales-alt-phone">
+        <div className="app-field-label">Alternate mobile</div>
+        <input
+          id="add-sales-alt-phone"
+          name="alt_phone_num"
+          className="app-field-input"
+          inputMode="numeric"
+          placeholder="Optional"
+          value={c?.alt_phone_num ?? ""}
+          onChange={(e) => {
+            const digits = e.target.value.replace(/\D/g, "").slice(0, 10);
+            setExtractedCustomer((prev) => ({
+              ...(prev ?? {}),
+              alt_phone_num: digits,
+            }));
+          }}
+        />
+      </label>
+    </div>
+  );
 
   const requiredFieldChecks: { label: string; value: string | undefined }[] = [
     { label: "Aadhar ID", value: c?.aadhar_id },
@@ -1317,10 +1343,15 @@ export function AddSalesPage({
                   </button>
               </div>
               <div className="add-sales-v2-box-body">
-                <div className="add-sales-v2-fields-row add-sales-v2-fields-row--section2-mobile">
+                <div className="add-sales-v2-fields-row add-sales-v2-fields-row--section2-identity">
                   <div className="add-sales-v2-input-wrap add-sales-v2-input-mobile">{mobileRow}</div>
+                  <div className="add-sales-v2-input-wrap add-sales-v2-input-alt">{alternateMobileRow}</div>
                 </div>
-                <div className={!savedTo ? "add-sales-v2-box--greyed" : ""}>
+                <div
+                  className={
+                    !savedTo && !manualFallbackPayload ? "add-sales-v2-box--greyed" : ""
+                  }
+                >
                 {extractionComplete && savedTo && !manualFormOnly && !insuranceReadByTextract && (
                   <div className="add-sales-v2-status-row add-sales-v2-status-row--error" role="alert">
                     <span className="add-sales-v2-status-text">Waiting for insurance details from document.</span>
@@ -1360,22 +1391,6 @@ export function AddSalesPage({
                         <dt>Name</dt>
                         <dd>{display(c?.name)}</dd>
                       </div>
-                      <div className="add-sales-v2-dl-row">
-                        <dt>Care of</dt>
-                        <dd>
-                          <input
-                            className="add-sales-v2-dl-input"
-                            value={c?.care_of ?? ""}
-                            onChange={(e) =>
-                              setExtractedCustomer((prev) => ({
-                                ...(prev ?? {}),
-                                care_of: sanitizeFormFieldValue(e.target.value),
-                              }))
-                            }
-                            placeholder="C/o, S/o, W/o…"
-                          />
-                        </dd>
-                      </div>
                     </div>
                     <div className="add-sales-v2-dl-row-group">
                       <div className="add-sales-v2-dl-row">
@@ -1403,8 +1418,20 @@ export function AddSalesPage({
                       </div>
                     </div>
                     <div className="add-sales-v2-dl-row">
-                      <dt>Alternate</dt>
-                      <dd>{display(c?.alt_phone_num)}</dd>
+                      <dt>Care of</dt>
+                      <dd>
+                        <input
+                          className="add-sales-v2-dl-input"
+                          value={c?.care_of ?? ""}
+                          onChange={(e) =>
+                            setExtractedCustomer((prev) => ({
+                              ...(prev ?? {}),
+                              care_of: sanitizeFormFieldValue(e.target.value),
+                            }))
+                          }
+                          placeholder="C/o, S/o, W/o…"
+                        />
+                      </dd>
                     </div>
                     <div className="add-sales-v2-dl-row">
                       <dt>Address</dt>

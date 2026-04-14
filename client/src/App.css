@@ -481,6 +481,20 @@
   margin-bottom: 10px;
 }
 
+.add-sales-v2-fields-row--section2-identity {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px 24px;
+  margin-bottom: 10px;
+  align-items: flex-end;
+}
+
+.add-sales-v2-fields-row--section2-identity .add-sales-v2-input-wrap {
+  flex: 1 1 200px;
+  min-width: 180px;
+  max-width: 320px;
+}
+
 .manual-fallback-split-review {
   margin-top: 14px;
   padding: 12px;

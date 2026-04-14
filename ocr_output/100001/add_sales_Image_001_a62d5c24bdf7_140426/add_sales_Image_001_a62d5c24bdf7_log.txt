@@ -1,0 +1,22 @@
+[2026-04-14 20:31:14 IST] [pre] step=add_sales_pre_ocr_session work_dir=C:\Users\arya_\OneDrive\Desktop\My Auto.AI\ocr_output\100001\_add_sales_pre_ocr_work dealer_id=100001 source_pdf=add_sales_Image_001_a62d5c24bdf7.pdf
+[2026-04-14 20:31:14 IST] [pre] step=copy_pdf_to_processing elapsed_ms=32 bytes=1187583 name=add_sales_Image_001_a62d5c24bdf7.pdf
+[2026-04-14 20:31:14 IST] [pre] step=pre_ocr_pdf_total_wall elapsed_ms=19657 includes_tesseract_and_io
+[2026-04-14 20:31:14 IST] [pre] step=pdf_to_page_rasters elapsed_ms=9681 pages=2 file=add_sales_Image_001_a62d5c24bdf7.pdf
+[2026-04-14 20:31:14 IST] [pre] step=tesseract_page_1 elapsed_ms=7253 chars=905 rgb_bytes≈6841800
+[2026-04-14 20:31:14 IST] [pre] step=tesseract_page_2 elapsed_ms=2718 chars=486 rgb_bytes≈6705006
+[2026-04-14 20:31:14 IST] [pre] step=tesseract_all_pages_total elapsed_ms=9971 pages=2
+[2026-04-14 20:31:14 IST] [pre] step=merge_page_text elapsed_ms=0 chars=1426
+[2026-04-14 20:31:14 IST] [pre] step=write_pre_ocr_txt elapsed_ms=1 path=add_sales_Image_001_a62d5c24bdf7_14042026_pre_ocr.txt
+[2026-04-14 20:31:14 IST] [pre] step=scope_text_sales_detail_onward elapsed_ms=0 chars=1250
+[2026-04-14 20:31:14 IST] [pre] step=extract_mobile elapsed_ms=0 mobile=set
+[2026-04-14 20:31:14 IST] [pre] step=classify_pages_from_ocr_text elapsed_ms=1 slots=2
+[2026-04-14 20:31:14 IST] [pre] step=textract_ddt_details_page elapsed_ms=3415 page=1 chars=821 replaced=yes
+[2026-04-14 20:31:14 IST] [pre] step=rewrite_pre_ocr_txt_with_ddt path=add_sales_Image_001_a62d5c24bdf7_14042026_pre_ocr.txt
+[2026-04-14 20:31:14 IST] [pre] step=sales_detail_onward_scope elapsed_ms=0 chars=1169
+[2026-04-14 20:31:14 IST] [pre] step=extract_all_mobiles elapsed_ms=0 count=2
+[2026-04-14 20:31:14 IST] [pre] step=detect_multi_customer elapsed_ms=0 is_multi=True
+[2026-04-14 20:31:14 IST] [pre] step=build_multi_customer_bundles elapsed_ms=1 bundles_data=0
+[2026-04-14 20:31:14 IST] [pre] step=aadhar_combined_fallback elapsed_ms=0
+[2026-04-14 20:31:14 IST] [pre] step=validate_required_pages elapsed_ms=0 missing=0
+[2026-04-14 20:31:14 IST] [pre] step=split_pdf_by_classification elapsed_ms=5753 sale_dir=9650693610_140426
+[2026-04-14 20:31:14 IST] [pre] step=run_pre_ocr_and_prepare_done path=single_customer

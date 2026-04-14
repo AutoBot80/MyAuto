@@ -126,7 +126,9 @@ export function ManualFallbackSplitReview({
       <h3 className="manual-fallback-split-review__title">Manual Form Fill</h3>
       <p className="manual-fallback-split-review__hint">
         Auto-read did not identify all pages. Each page is saved as a compressed JPEG (under 200KB). Assign
-        each page to a document slot, enter <strong>Customer Mobile</strong> in Section 2, then apply.
+        each page to a document slot, then fill or edit all fields in Section 2 (mobile, vehicle, insurance,
+        etc.). Press <strong>Apply document layout</strong> to save scans to the server, then use{" "}
+        <strong>Submit Info.</strong> to validate and save the form.
       </p>
       {applyError && (
         <div className="manual-fallback-split-review__error" role="alert">
