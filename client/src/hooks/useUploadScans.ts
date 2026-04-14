@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { uploadScans, uploadScansV2, uploadScansV2ConsolidatedStream } from "../api/uploads";
 import { validateAadharScanFile } from "../utils/aadharScanFileValidation";
-import type { ExtractedDetailsResponse } from "../types";
+import type { ExtractedDetailsResponse, ManualFallbackPayload } from "../types";
 
 /** Second argument when upload response includes OCR — run after applying details so DMS warm-up can follow. */
 export interface ExtractionCompleteContext {
@@ -19,6 +19,8 @@ export interface UseUploadScansControlled {
   onExtractionComplete?: (details: ExtractedDetailsResponse, ctx: ExtractionCompleteContext) => void;
   /** After a successful upload (e.g. clear stale Fill DMS banner; receives saved_to for V2). Runs after onExtractionComplete when both apply. */
   onUploadSuccess?: (savedTo?: string) => void;
+  /** Pre-OCR could not classify pages; server created a manual split session (JPEGs under 200KB). */
+  onManualFallback?: (payload: ManualFallbackPayload, warning?: string) => void;
 }
 
 export function useUploadScans(
@@ -87,8 +89,13 @@ export function useUploadScans(
     setUploadStatus("Uploading...");
     try {
       const data = await uploadScansV2(mobileDigits, aadharScan, aadharBackScan, salesDetail, insuranceSheet, dealerId);
-      setSavedTo(data.saved_to);
-      let msg = `Uploaded ${data.saved_count} file(s) to ${data.saved_to}.`;
+      const savedToFolder = data.saved_to;
+      if (!savedToFolder) {
+        setUploadStatus("Upload failed: server did not return saved_to.");
+        return;
+      }
+      setSavedTo(savedToFolder);
+      let msg = `Uploaded ${data.saved_count} file(s) to ${savedToFolder}.`;
       if (data.extraction?.error) msg += ` Warning: ${data.extraction.error}`;
       const soft = data.extraction?.warnings;
       if (Array.isArray(soft) && soft.length > 0) msg += ` ${soft.join(" ")}`;
@@ -97,9 +104,9 @@ export function useUploadScans(
         setUploadedFiles((prev) => [...(data.saved_files ?? []), ...prev]);
       const details = data.extraction?.details;
       if (details && controlled?.onExtractionComplete) {
-        controlled.onExtractionComplete(details, { savedTo: data.saved_to });
+        controlled.onExtractionComplete(details, { savedTo: savedToFolder });
       }
-      controlled?.onUploadSuccess?.(data.saved_to);
+      controlled?.onUploadSuccess?.(savedToFolder);
       // Extraction already ran on the server inside upload (save_and_queue_v2). No AI reader queue / process-all.
     } catch (err) {
       setUploadStatus(err instanceof Error ? err.message : "Upload failed.");
@@ -113,7 +120,9 @@ export function useUploadScans(
     setUploadStatus("Uploading…");
     try {
       const data = await uploadScansV2ConsolidatedStream(consolidatedPdf, dealerId, mobileDigits, (p) => {
-        setSavedTo(p.savedTo);
+        if (p.savedTo) {
+          setSavedTo(p.savedTo);
+        }
         const hint =
           p.fragment === "aadhar"
             ? "Aadhaar read — updating form…"
@@ -125,8 +134,20 @@ export function useUploadScans(
           controlled.onExtractionComplete(p.details, { savedTo: p.savedTo });
         }
       });
-      setSavedTo(data.saved_to);
-      let msg = `Uploaded consolidated scan to ${data.saved_to}.`;
+      if (data.manual_fallback && controlled?.onManualFallback) {
+        controlled.onManualFallback(data.manual_fallback, data.warning);
+        setUploadStatus(
+          data.warning ??
+            "Could not auto-read all pages. Assign each page below, enter Customer Mobile, then Apply."
+        );
+        return;
+      }
+      if (data.saved_to) {
+        setSavedTo(data.saved_to);
+      }
+      let msg = data.saved_to
+        ? `Uploaded consolidated scan to ${data.saved_to}.`
+        : "Consolidated scan processed.";
       if (data.extraction?.error) msg += ` Warning: ${data.extraction.error}`;
       const soft = data.extraction?.warnings;
       if (Array.isArray(soft) && soft.length > 0) msg += ` ${soft.join(" ")}`;
@@ -135,9 +156,11 @@ export function useUploadScans(
         setUploadedFiles((prev) => [...(data.saved_files ?? []), ...prev]);
       const details = data.extraction?.details;
       if (details && controlled?.onExtractionComplete) {
-        controlled.onExtractionComplete(details, { savedTo: data.saved_to });
+        controlled.onExtractionComplete(details, { savedTo: data.saved_to ?? "" });
       }
-      controlled?.onUploadSuccess?.(data.saved_to);
+      if (data.saved_to) {
+        controlled?.onUploadSuccess?.(data.saved_to);
+      }
     } catch (err) {
       setUploadStatus(err instanceof Error ? err.message : "Upload failed.");
     } finally {

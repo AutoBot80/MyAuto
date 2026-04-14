@@ -3,6 +3,8 @@ import type { ExtractedVehicleDetails, ExtractedCustomerDetails, ExtractedInsura
 import { buildDisplayAddress } from "../types";
 import { useUploadScans } from "../hooks/useUploadScans";
 import { UploadScansPanel } from "../components/UploadScansPanel";
+import { ManualFallbackSplitReview } from "../components/ManualFallbackSplitReview";
+import type { ManualFallbackPayload } from "../types";
 import { getExtractedDetails } from "../api/aiReaderQueue";
 import { submitInfo } from "../api/submitInfo";
 import { fillDmsOnly, fillHeroInsurance, printForm20, isFillDmsAbortError, warmDmsBrowser } from "../api/fillForms";
@@ -249,7 +251,7 @@ export function AddSalesPage({
   /** True when banner lines are Siebel `dms_step_messages` (sentence-style) vs checklist milestones. */
   const [dmsBannerIsStepMessages, setDmsBannerIsStepMessages] = useState(false);
   const [isFillDmsLoading, setIsFillDmsLoading] = useState(false);
-  const [dmsRunEndedWithError, setDmsRunEndedWithError] = useState(false);
+  const [, setDmsRunEndedWithError] = useState(false);
   const [isFillInsuranceLoading, setIsFillInsuranceLoading] = useState(false);
   const [isPrintFormsLoading, setIsPrintFormsLoading] = useState(false);
   const [printFormsStatus, setPrintFormsStatus] = useState<string | null>(null);
@@ -274,6 +276,10 @@ export function AddSalesPage({
   const [lastStagingId, setLastStagingId] = useState<string | null>(() => getInitialForm().lastStagingId);
   /** Extraction error (e.g. QR code not readable) – stops poll and shows message. */
   const [extractionError, setExtractionError] = useState<string | null>(null);
+  /** Pre-OCR failed validation; server returned JPEG split session for manual slot assignment. */
+  const [manualFallbackPayload, setManualFallbackPayload] = useState<ManualFallbackPayload | null>(null);
+  /** Documents placed via manual assign; no Textract/OCR — user fills Section 2 by hand. */
+  const [manualFormOnly, setManualFormOnly] = useState(false);
   /** True once Textract has returned insurance data for this upload (details sheet processed). */
   const [insuranceReadByTextract, setInsuranceReadByTextract] = useState(() => {
     const stored = loadAddSalesForm().extractedInsurance;
@@ -380,6 +386,11 @@ export function AddSalesPage({
       setDmsRunEndedWithError(false);
       setDmsScrapedVehicle(null);
       setDmsPdfsDownloaded(false);
+    },
+    onManualFallback: (payload) => {
+      setManualFallbackPayload(payload);
+      setExtractionError(null);
+      setManualFormOnly(false);
     },
   }, dealerId);
 
@@ -517,6 +528,8 @@ export function AddSalesPage({
     setExtractedCustomer(null);
     setExtractedInsurance(null);
     setExtractionError(null);
+    setManualFallbackPayload(null);
+    setManualFormOnly(false);
     setInsuranceReadByTextract(false);
     setDmsScrapedVehicle(null);
     setDmsPdfsDownloaded(false);
@@ -651,10 +664,16 @@ export function AddSalesPage({
 
   /** Show per-subsection status while files upload (before savedTo) and while OCR/extraction is still filling that block. */
   const customerProcessing = Boolean(
-    (isUploading || savedTo) && !hasMeaningfulCustomer(c)
+    !(manualFormOnly && savedTo) &&
+      (isUploading || savedTo) &&
+      !hasMeaningfulCustomer(c)
   );
-  const vehicleProcessing = Boolean((isUploading || savedTo) && !hasVehicleData(v ?? null));
-  const insuranceProcessing = Boolean((isUploading || savedTo) && !hasMeaningfulInsurance(ins));
+  const vehicleProcessing = Boolean(
+    !(manualFormOnly && savedTo) && (isUploading || savedTo) && !hasVehicleData(v ?? null)
+  );
+  const insuranceProcessing = Boolean(
+    !(manualFormOnly && savedTo) && (isUploading || savedTo) && !hasMeaningfulInsurance(ins)
+  );
   const hasSuppliedInsuranceDoc = uploadedFiles.some((f) =>
     /insurance/i.test(String(f || ""))
   );
@@ -664,12 +683,14 @@ export function AddSalesPage({
   /** When true, polling is not needed; use this as effect deps so we don't restart the interval on every field merge. */
   const extractionSectionsDone =
     Boolean(savedTo) &&
-    hasMeaningfulCustomer(c) &&
-    hasVehicleData(v ?? null) &&
-    hasMeaningfulInsurance(ins);
+    (manualFormOnly ||
+      (hasMeaningfulCustomer(c) && hasVehicleData(v ?? null) && hasMeaningfulInsurance(ins)));
 
   const ocrWaitActive =
-    !extractionError && (isUploading || (Boolean(savedTo) && !extractionSectionsDone));
+    !extractionError &&
+    !manualFormOnly &&
+    manualFallbackPayload == null &&
+    (isUploading || (Boolean(savedTo) && !extractionSectionsDone));
 
   const [ocrCountdownSec, setOcrCountdownSec] = useState(ADD_SALES_OCR_COUNTDOWN_START_SEC);
 
@@ -687,6 +708,10 @@ export function AddSalesPage({
 
   // Poll for extracted details until customer, vehicle, and insurance blocks match the same "complete" rules as the UI.
   useEffect(() => {
+    if (manualFormOnly) {
+      pollCountRef.current = 0;
+      return;
+    }
     if (!savedTo) {
       pollCountRef.current = 0;
       setExtractionError(null);
@@ -733,7 +758,7 @@ export function AddSalesPage({
     return () => {
       if (intervalId) clearInterval(intervalId);
     };
-  }, [savedTo, extractionSectionsDone, dealerId, pageVisible, applyExtractedDetails]);
+  }, [savedTo, extractionSectionsDone, dealerId, pageVisible, applyExtractedDetails, manualFormOnly]);
 
   useEffect(() => {
     if (!savedTo) {
@@ -1030,7 +1055,6 @@ export function AddSalesPage({
       const yyyy = today.getFullYear();
       const registerDate = `${dd}-${mm}-${yyyy}`;
       const queueVehicle = dmsScrapedVehicle ?? v;
-      const chassisNo = queueVehicle?.frame_no ?? v?.frame_no ?? "";
       const rtoFees = computeRtoFees(queueVehicle?.vehicle_price);
       try {
         await insertRtoPayment({
@@ -1100,7 +1124,7 @@ export function AddSalesPage({
     isSubmitting ||
     !mobile ||
     !c ||
-    !insuranceReadByTextract ||
+    (!manualFormOnly && !insuranceReadByTextract) ||
     !hasAllRequiredExtractedFields() ||
     hasVehicleOrInsuranceValidationErrors ||
     !!extractionError ||
@@ -1208,17 +1232,31 @@ export function AddSalesPage({
                 </button>
               </div>
               <div className="add-sales-v2-box-body">
-                <div className="add-sales-v2-fields-row">
-                  <div className="add-sales-v2-input-wrap add-sales-v2-input-mobile">
-                    {mobileRow}
-                  </div>
-                </div>
                 <div className="add-sales-v2-panel-wrap">
                   {panel}
                 </div>
+                {manualFallbackPayload && (
+                  <ManualFallbackSplitReview
+                    payload={manualFallbackPayload}
+                    dealerId={dealerId}
+                    mobile={mobile}
+                    isMobileValid={isMobileValid}
+                    onApplied={(to, files) => {
+                      setSavedTo(to);
+                      setUploadedFiles(files);
+                      setManualFallbackPayload(null);
+                      setManualFormOnly(true);
+                      setExtractedCustomer((x) => x ?? {});
+                      setExtractedVehicle((x) => x ?? {});
+                      setExtractedInsurance((x) => x ?? {});
+                      setUploadStatus(`Documents saved to ${to}. Fill Section 2 manually.`);
+                    }}
+                    onDismiss={() => setManualFallbackPayload(null)}
+                  />
+                )}
               </div>
           </section>
-          <section className={`add-sales-v2-box add-sales-v2-box-extracted ${!savedTo ? "add-sales-v2-box--greyed" : ""}`}>
+          <section className="add-sales-v2-box add-sales-v2-box-extracted">
               <div className="add-sales-v2-box-title-row">
                 <h2 className="add-sales-v2-box-title">2. AI Extracted Information</h2>
                 <button
@@ -1227,7 +1265,7 @@ export function AddSalesPage({
                     disabled={submitInfoPrimaryButtonDisabled}
                     onClick={async () => {
                       if (!mobile || !c) return;
-                      if (!insuranceReadByTextract) {
+                      if (!manualFormOnly && !insuranceReadByTextract) {
                         setSubmitStatus("Waiting for insurance details from document.");
                         return;
                       }
@@ -1279,19 +1317,23 @@ export function AddSalesPage({
                   </button>
               </div>
               <div className="add-sales-v2-box-body">
-                {extractionComplete && savedTo && !insuranceReadByTextract && (
+                <div className="add-sales-v2-fields-row add-sales-v2-fields-row--section2-mobile">
+                  <div className="add-sales-v2-input-wrap add-sales-v2-input-mobile">{mobileRow}</div>
+                </div>
+                <div className={!savedTo ? "add-sales-v2-box--greyed" : ""}>
+                {extractionComplete && savedTo && !manualFormOnly && !insuranceReadByTextract && (
                   <div className="add-sales-v2-status-row add-sales-v2-status-row--error" role="alert">
                     <span className="add-sales-v2-status-text">Waiting for insurance details from document.</span>
                   </div>
                 )}
-                {extractionComplete && savedTo && insuranceReadByTextract && getMissingRequiredFields().length > 0 && (
+                {extractionComplete && savedTo && (insuranceReadByTextract || manualFormOnly) && getMissingRequiredFields().length > 0 && (
                   <div className="add-sales-v2-status-row add-sales-v2-status-row--error" role="alert">
                     <span className="add-sales-v2-status-text">
                       Please fill: {getMissingRequiredFields().join(", ")}.
                     </span>
                   </div>
                 )}
-                {submitStatus && (!savedTo || (insuranceReadByTextract && getMissingRequiredFields().length === 0)) && (
+                {submitStatus && (!savedTo || ((insuranceReadByTextract || manualFormOnly) && getMissingRequiredFields().length === 0)) && (
                   <div className={`add-sales-v2-status-row ${submitStatus === "Saved" ? "add-sales-v2-status-row--success" : "add-sales-v2-status-row--error"}`}>
                     <StatusMessage message={submitStatus} className="add-sales-v2-status-text" role="status" />
                   </div>
@@ -1317,6 +1359,22 @@ export function AddSalesPage({
                       <div className="add-sales-v2-dl-row">
                         <dt>Name</dt>
                         <dd>{display(c?.name)}</dd>
+                      </div>
+                      <div className="add-sales-v2-dl-row">
+                        <dt>Care of</dt>
+                        <dd>
+                          <input
+                            className="add-sales-v2-dl-input"
+                            value={c?.care_of ?? ""}
+                            onChange={(e) =>
+                              setExtractedCustomer((prev) => ({
+                                ...(prev ?? {}),
+                                care_of: sanitizeFormFieldValue(e.target.value),
+                              }))
+                            }
+                            placeholder="C/o, S/o, W/o…"
+                          />
+                        </dd>
                       </div>
                     </div>
                     <div className="add-sales-v2-dl-row-group">
@@ -1738,6 +1796,7 @@ export function AddSalesPage({
                       </dd>
                     </div>
                   </dl>
+                </div>
                 </div>
               </div>
           </section>

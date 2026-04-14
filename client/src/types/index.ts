@@ -56,10 +56,18 @@ export interface UploadExtractionSectionTimings {
   total_ms?: number;
 }
 
+/** Consolidated pre-OCR could not classify pages; server split JPEGs for manual slot assignment. */
+export interface ManualFallbackPayload {
+  session_id: string;
+  page_count: number;
+  missing_reasons: string[];
+}
+
 export interface UploadScansResponse {
   saved_count: number;
   saved_files?: string[];
-  saved_to: string;
+  /** Empty when ``manual_fallback`` is returned (apply manual mapping to set ``saved_to``). */
+  saved_to?: string;
   queued_items?: Array<{
     id: number;
     subfolder: string;
@@ -68,6 +76,9 @@ export interface UploadScansResponse {
     created_at?: string;
   }>;
   error?: string;
+  /** Human-readable pre-OCR message when ``manual_fallback`` is present. */
+  warning?: string;
+  manual_fallback?: ManualFallbackPayload;
   /** Present for scans-v2 when extraction runs in the same request. */
   extraction?: {
     processed?: string[];
@@ -77,6 +88,9 @@ export interface UploadScansResponse {
     warnings?: string[];
     details?: ExtractedDetailsResponse;
     section_timings_ms?: UploadExtractionSectionTimings;
+    /** User-assigned pages; no Textract/OCR extraction run. */
+    manual_only?: boolean;
+    pending?: boolean;
   };
 }
 

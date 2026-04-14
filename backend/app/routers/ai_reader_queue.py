@@ -2,6 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.config import get_ocr_output_dir, get_uploads_dir
+from app.services.ocr_sale_artifacts import merged_text_artifact_path
 from app.security.deps import get_principal, resolve_dealer_id
 from app.security.principal import Principal
 from app.services.sales_ocr_service import OcrService
@@ -89,7 +90,7 @@ def get_insurance_extraction(
         except Exception as e:
             result["insurance_ocr_json_error"] = str(e)
 
-    raw_ocr_txt = subfolder_path / "Raw_OCR.txt"
+    raw_ocr_txt = merged_text_artifact_path(get_ocr_output_dir(did), subfolder)
     if raw_ocr_txt.exists():
         result["raw_ocr_txt"] = raw_ocr_txt.read_text(encoding="utf-8")
 

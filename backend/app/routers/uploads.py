@@ -1,5 +1,5 @@
-from fastapi import APIRouter, Depends, File, Form, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse, StreamingResponse
 
 from app.security.deps import get_principal, resolve_dealer_id
 from app.security.principal import Principal
@@ -86,4 +86,43 @@ async def upload_scans_v2_consolidated_stream(
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
         },
+    )
+
+
+@router.get("/manual-session/{session_id}/page/{page_1based}")
+def get_manual_session_page(
+    session_id: str,
+    page_1based: int,
+    principal: Principal = Depends(get_principal),
+    dealer_id: int | None = Query(None, description="Dealer ID; uses token dealer if omitted"),
+) -> FileResponse:
+    """Serve a JPEG page from a pending manual split session (pre-OCR fallback)."""
+    from app.services.manual_fallback_service import manual_session_page_path
+
+    did = resolve_dealer_id(principal, dealer_id)
+    path = manual_session_page_path(did, session_id, page_1based)
+    if not path:
+        raise HTTPException(status_code=404, detail="Page not found")
+    return FileResponse(path, media_type="image/jpeg", filename=path.name)
+
+
+@router.post("/scans-v2-consolidated/manual-apply")
+async def apply_consolidated_manual_fallback(
+    principal: Principal = Depends(get_principal),
+    session_id: str = Form(..., description="Session id from manual_fallback response"),
+    mobile: str = Form(..., description="10-digit customer mobile; determines upload subfolder"),
+    assignments_json: str = Form(
+        ...,
+        description='JSON object mapping page index (string "0","1",…) to '
+        '"aadhar_front" | "aadhar_back" | "details" | "unused"',
+    ),
+    dealer_id: int | None = Form(None, description="Dealer ID; uses token dealer if omitted"),
+) -> dict:
+    """Materialize ``for_OCR/`` from a manual session without running Textract/OCR extraction."""
+    did = resolve_dealer_id(principal, dealer_id)
+    return await upload_service.apply_consolidated_manual_fallback(
+        session_id,
+        mobile,
+        assignments_json,
+        dealer_id=did,
     )

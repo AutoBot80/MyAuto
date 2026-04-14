@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -29,6 +30,8 @@ from app.services.upload_file_validation import (
 )
 
 # ai_reader_queue disabled; extraction runs directly after upload (Option 1)
+
+logger = logging.getLogger(__name__)
 
 
 class UploadService:
@@ -238,7 +241,7 @@ class UploadService:
         from app.services.pre_ocr_service import run_pre_ocr_and_prepare
 
         try:
-            bundles, _stem, _mobile_ocr, _ocr_path, missing = run_pre_ocr_and_prepare(
+            bundles, _stem, _mobile_ocr, _ocr_path, missing, page_images, _ = run_pre_ocr_and_prepare(
                 dest_pdf,
                 processing_dir=proc_dir,
                 dealer_id=dealer_id,
@@ -248,7 +251,27 @@ class UploadService:
             return {"error": f"Pre-OCR failed: {e}"}
 
         if missing:
-            return {"error": self._pre_ocr_rejection_message(missing)}
+            from app.services.manual_fallback_service import write_manual_session_jpegs
+
+            try:
+                session_id, page_count = write_manual_session_jpegs(dealer_id, dest_pdf, page_images or {})
+            except Exception as e:
+                logger.exception("manual fallback split failed")
+                return {"error": f"{self._pre_ocr_rejection_message(missing)} (Could not prepare manual split: {e})"}
+
+            return {
+                "saved_count": 0,
+                "saved_files": [],
+                "saved_to": "",
+                "queued_items": [],
+                "warning": self._pre_ocr_rejection_message(missing),
+                "manual_fallback": {
+                    "session_id": session_id,
+                    "page_count": page_count,
+                    "missing_reasons": missing,
+                },
+                "extraction": {"manual_only": True, "pending": True},
+            }
         if not bundles:
             return {"error": "Pre-OCR did not produce a sale folder."}
         if len(bundles) > 1:
@@ -316,6 +339,61 @@ class UploadService:
             "queued_items": [],
             "extraction": extraction_result,
         }
+
+    def _apply_consolidated_manual_fallback_sync(
+        self,
+        session_id: str,
+        mobile: str,
+        assignments_json: str,
+        dealer_id: int,
+    ) -> dict:
+        from app.services.manual_fallback_service import apply_manual_session
+
+        try:
+            assignments = json.loads(assignments_json)
+        except json.JSONDecodeError as e:
+            return {"error": f"Invalid assignments JSON: {e}"}
+        if not isinstance(assignments, dict):
+            return {"error": "assignments must be a JSON object"}
+        str_map = {str(k): str(v) for k, v in assignments.items()}
+        try:
+            subfolder, _saved_paths = apply_manual_session(dealer_id, session_id, mobile, str_map)
+        except ValueError as e:
+            return {"error": str(e)}
+        uploads_dir = self.uploads_dir or get_uploads_dir(dealer_id)
+        final_sale = uploads_dir / subfolder
+        saved_names: list[str] = []
+        if final_sale.is_dir():
+            for p in sorted(final_sale.iterdir()):
+                if p.is_file():
+                    saved_names.append(p.name)
+            fo = final_sale / "for_OCR"
+            if fo.is_dir():
+                for p in sorted(fo.iterdir()):
+                    if p.is_file():
+                        saved_names.append(f"for_OCR/{p.name}")
+        return {
+            "saved_count": len(saved_names),
+            "saved_files": saved_names,
+            "saved_to": subfolder,
+            "queued_items": [],
+            "extraction": {"manual_only": True},
+        }
+
+    async def apply_consolidated_manual_fallback(
+        self,
+        session_id: str,
+        mobile: str,
+        assignments_json: str,
+        dealer_id: int = 100001,
+    ) -> dict:
+        return await asyncio.to_thread(
+            self._apply_consolidated_manual_fallback_sync,
+            session_id,
+            mobile,
+            assignments_json,
+            dealer_id,
+        )
 
     async def save_and_queue_v2_consolidated(
         self,

@@ -33,25 +33,29 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-import cv2
-import numpy as np
-import pytesseract
 from PIL import Image
-from PIL import ImageEnhance
 
 from app.config import (
     BULK_UPLOAD_DIR,
     OCR_LANG,
     OCR_PSM,
-    OCR_PRE_OCR_PDF_DPI,
     OCR_PREPROCESS,
     OCR_PRE_OCR_TEXTRACT_AADHAR_FALLBACK,
     OCR_PRE_OCR_TEXTRACT_DETAILS,
     UPLOADS_DIR,
     get_add_sales_pre_ocr_work_dir,
+    get_ocr_output_dir,
     get_uploads_dir,
 )
 from app.services.ocr_extraction_log import append_pre_ocr_step_lines
+from app.services.ocr_sale_artifacts import (
+    copy_incoming_scan_pdf,
+    initial_artifact_leaf,
+    mobile_file_stem,
+    rename_sale_artifact_bundle,
+    safe_file_stem,
+    write_sale_text_artifact,
+)
 from app.services.page_classifier import (
     aadhar_combined_ocr_looks_ok,
     aadhar_front_face_ocr,
@@ -124,202 +128,39 @@ _DETAILS_OR_INSURANCE_SNIFF = [
 ]
 
 
-def _parse_tesseract_osd_text(osd: str) -> tuple[int, float | None]:
-    """Parse ``image_to_osd`` output: clockwise rotation (0/90/180/270) and orientation confidence."""
-    m_rot = re.search(r"Rotate:\s*(\d+)", osd)
-    m_conf = re.search(r"Orientation confidence:\s*([\d.]+)", osd)
-    rot_cw = int(m_rot.group(1)) % 360 if m_rot else 0
-    conf = float(m_conf.group(1)) if m_conf else None
-    return rot_cw, conf
+def osd_deskew_clockwise_degrees_from_image(img: Image.Image) -> int:
+    """
+    Return clockwise degrees (0, 90, 180, or 270) to rotate a raster so text reads upright,
+    using Tesseract **OSD** (``osd`` trained data). Returns **0** on failure, ambiguous output,
+    or orientation confidence below **2.0**.
+    """
+    import pytesseract
 
-
-def _read_osd_rot_and_conf(img: Image.Image) -> tuple[int, float | None] | None:
-    """Return ``(rotate_cw, orientation_conf)`` from Tesseract OSD, or ``None`` if OSD fails."""
     if img.width < 12 or img.height < 12:
-        return (0, None)
+        return 0
     try:
         work = img.convert("RGB") if img.mode != "RGB" else img
         osd = pytesseract.image_to_osd(work, lang="osd")
-        return _parse_tesseract_osd_text(osd)
     except Exception as e:
-        logger.debug("Tesseract OSD failed: %s", e)
-        return None
+        logger.debug("osd_deskew_clockwise_degrees_from_image: OSD skipped: %s", e)
+        return 0
 
-
-def _rotate_pil_clockwise(img: Image.Image, rot_cw: int) -> Image.Image:
-    """Rotate PIL image clockwise by ``rot_cw`` (0, 90, 180, or 270)."""
-    rot_cw = int(rot_cw) % 360
+    m_rot = re.search(r"Rotate:\s*(\d+)", osd)
+    if not m_rot:
+        return 0
+    rot_cw = int(m_rot.group(1)) % 360
     if rot_cw == 0:
-        return img
-    work = img.convert("RGB") if img.mode != "RGB" else img
-    return work.rotate(-rot_cw, expand=True, fillcolor="white")
+        return 0
 
-
-def _image_looks_like_id_document(img: Image.Image) -> bool:
-    """
-    Heuristic for phone-photo ID cards (Aadhaar, etc.): rectangular frame, not tiny, not extreme panorama.
-    Used when OSD orientation confidence is low: still apply OSD ``Rotate`` (do not skip).
-    """
-    w, h = img.size
-    if min(w, h) < 200:
-        return False
-    r = w / float(max(h, 1))
-    if r < 0.45 or r > 2.2:
-        return False
-    return True
-
-
-def _ocr_orientation_quality_score(img: Image.Image) -> float:
-    """Higher is better — mean Tesseract word confidence, or raw text length if no confidences."""
-    work: Image.Image = img
-    if OCR_PREPROCESS:
-        work = work.convert("L")
-        work = ImageEnhance.Contrast(work).enhance(2.0)
-    try:
-        data = pytesseract.image_to_data(
-            work, lang=OCR_LANG, config=f"--psm {OCR_PSM}", output_type=pytesseract.Output.DICT
+    m_conf = re.search(r"Orientation confidence:\s*([\d.]+)", osd)
+    if m_conf and float(m_conf.group(1)) < 2.0:
+        logger.info(
+            "OSD orientation confidence low (%s); not rotating (Rotate would be %s°)",
+            m_conf.group(1),
+            rot_cw,
         )
-    except Exception:
-        return 0.0
-    confs: list[int] = []
-    for c in data.get("conf", []):
-        if isinstance(c, (int, float)) and int(c) > 0:
-            confs.append(int(c))
-        elif isinstance(c, str) and c.isdigit() and int(c) > 0:
-            confs.append(int(c))
-    if confs:
-        return float(sum(confs)) / len(confs)
-    try:
-        s = pytesseract.image_to_string(work, lang=OCR_LANG, config=f"--psm {OCR_PSM}").strip()
-        return float(len(s))
-    except Exception:
-        return 0.0
-
-
-def _best_of_four_coarse_rotations(img: Image.Image) -> tuple[Image.Image, int]:
-    """
-    When OSD is unreliable, try 0/90/180/270° and keep the orientation with best OCR quality score.
-    Returns ``(image, clockwise_degrees_applied_from_original)``.
-    """
-    best_cw = 0
-    best_score = -1.0
-    best_img = img
-    for cw in (0, 90, 180, 270):
-        cand = _rotate_pil_clockwise(img, cw) if cw else img
-        sc = _ocr_orientation_quality_score(cand)
-        if sc > best_score:
-            best_score = sc
-            best_cw = cw
-            best_img = cand
-    return best_img, best_cw
-
-
-def _apply_coarse_osd_rotation(img: Image.Image) -> tuple[Image.Image, int, float | None]:
-    """
-    Coarse upright orientation: OSD with high confidence, or ID-like + low confidence (keep OSD rotate),
-    or best-of-four rotations. Returns ``(rotated_image, cw_degrees_applied, orientation_conf_or_none)``.
-    """
-    parsed = _read_osd_rot_and_conf(img)
-    if parsed is None:
-        work, cw = _best_of_four_coarse_rotations(img)
-        return work, cw, None
-    rot_osd, conf = parsed
-    if conf is not None and conf >= 2.0:
-        return _rotate_pil_clockwise(img, rot_osd), rot_osd, conf
-    # Low or missing orientation confidence
-    if _image_looks_like_id_document(img):
-        out = _rotate_pil_clockwise(img, rot_osd)
-        if conf is not None and conf < 2.0:
-            logger.info(
-                "OSD orientation confidence low (%s); applying Rotate=%s° anyway (ID-like page)",
-                conf,
-                rot_osd,
-            )
-        return out, rot_osd, conf
-    logger.info(
-        "OSD orientation confidence low (%s); trying four-way rotation fallback",
-        conf if conf is not None else "missing",
-    )
-    return _best_of_four_coarse_rotations(img)
-
-
-def _fine_deskew_pil_rgb(img: Image.Image, max_angle: float = 12.0) -> Image.Image:
-    """
-    Small-angle deskew (skewed phone photos) via dominant line angle on edge map.
-    Runs only when OSD orientation confidence was low (see :func:`_prepare_raster_for_pre_ocr`).
-    """
-    w, h = img.size
-    if min(w, h) < 80:
-        return img
-    arr = np.array(img.convert("RGB"))
-    bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
-    scale = min(1.0, 1200.0 / max(w, h))
-    if scale < 1.0:
-        small = cv2.resize(bgr, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
-    else:
-        small = bgr
-    gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
-    gray = cv2.GaussianBlur(gray, (3, 3), 0)
-    edges = cv2.Canny(gray, 50, 150, apertureSize=3)
-    sh, sw = small.shape[:2]
-    min_len = max(30, min(sh, sw) // 12)
-    thresh_h = max(40, min(sh, sw) // 25)
-    lines = cv2.HoughLinesP(
-        edges, 1, np.pi / 180, threshold=thresh_h, minLineLength=min_len, maxLineGap=15
-    )
-    if lines is None or len(lines) < 2:
-        return img
-    angles: list[float] = []
-    for line in lines[:, 0]:
-        x1, y1, x2, y2 = line
-        dx, dy = float(x2 - x1), float(y2 - y1)
-        if dx * dx + dy * dy < min_len * min_len * 0.25:
-            continue
-        ang = float(np.degrees(np.arctan2(dy, dx)))
-        if ang > 45:
-            ang -= 90.0
-        elif ang < -45:
-            ang += 90.0
-        if abs(ang) <= max_angle:
-            angles.append(ang)
-    if len(angles) < 2:
-        return img
-    median_ang = float(np.median(angles))
-    if abs(median_ang) < 0.3:
-        return img
-    correction = -median_ang
-    h0, w0 = arr.shape[:2]
-    m = cv2.getRotationMatrix2D((w0 / 2.0, h0 / 2.0), correction, 1.0)
-    cos, sin = abs(m[0, 0]), abs(m[0, 1])
-    nw = int(h0 * sin + w0 * cos)
-    nh = int(h0 * cos + w0 * sin)
-    m[0, 2] += (nw - w0) / 2.0
-    m[1, 2] += (nh - h0) / 2.0
-    rotated = cv2.warpAffine(bgr, m, (nw, nh), borderValue=(255, 255, 255))
-    return Image.fromarray(cv2.cvtColor(rotated, cv2.COLOR_BGR2RGB))
-
-
-def _prepare_raster_for_pre_ocr(img: Image.Image) -> tuple[Image.Image, int]:
-    """
-    Full pre-OCR raster prep: coarse orientation (OSD / ID-like / four-way) and fine deskew when OSD
-    orientation confidence is low.
-    """
-    work, coarse_cw, conf = _apply_coarse_osd_rotation(img)
-    if conf is None or conf < 2.0:
-        work = _fine_deskew_pil_rgb(work)
-    return work, coarse_cw
-
-
-def osd_deskew_clockwise_degrees_from_image(img: Image.Image) -> int:
-    """
-    Clockwise degrees (0, 90, 180, or 270) to rotate a raster upright for PDF metadata / archival.
-
-    Uses Tesseract OSD; when orientation confidence is low, ID-like pages still apply OSD rotation,
-    otherwise picks the best of four orientations by OCR quality (same rules as :func:`_prepare_raster_for_pre_ocr`
-    without fine deskew).
-    """
-    _, cw, _ = _apply_coarse_osd_rotation(img)
-    return cw
+        return 0
+    return rot_cw
 
 
 def osd_deskew_clockwise_degrees(image_bytes: bytes) -> int:
@@ -337,17 +178,19 @@ def osd_deskew_clockwise_degrees(image_bytes: bytes) -> int:
 
 def correct_image_orientation_upright_image(img: Image.Image) -> Image.Image:
     """
-    Rotate a PIL image to upright using Tesseract OSD (and the same coarse rules as pre-OCR: ID-like
-    low-confidence handling and four-way fallback). Does **not** apply fine deskew — use
-    :func:`_prepare_raster_for_pre_ocr` for the full PDF pre-OCR raster pipeline.
+    Rotate a PIL image to upright using Tesseract OSD. No JPEG encode/decode — use this on PDF renders.
+
+    On OSD failure or ambiguous output, returns the input image unchanged.
     """
-    out, rot_cw, _ = _apply_coarse_osd_rotation(img)
-    if rot_cw:
-        logger.info(
-            "correct_image_orientation_upright_image: applied %s° CW coarse correction",
-            rot_cw,
-        )
-    return out
+    rot_cw = osd_deskew_clockwise_degrees_from_image(img)
+    if rot_cw == 0:
+        return img
+
+    work = img.convert("RGB") if img.mode != "RGB" else img
+    # Tesseract ``Rotate`` = degrees to turn **clockwise** to deskew. PIL positive angle = CCW.
+    img2 = work.rotate(-rot_cw, expand=True, fillcolor="white")
+    logger.info("correct_image_orientation_upright_image: applied %s° CW correction (PIL -%s)", rot_cw, rot_cw)
+    return img2
 
 
 def correct_image_orientation_upright(image_bytes: bytes) -> bytes:
@@ -390,13 +233,12 @@ def _pdf_to_page_images(
     fix_orientation: bool = True,
 ) -> tuple[list[tuple[int, Image.Image]], dict[int, int]]:
     """
-    Render PDF pages to **PIL RGB** (PyMuPDF pixmap) at :data:`OCR_PRE_OCR_PDF_DPI` (default 300).
-    Applies :func:`_prepare_raster_for_pre_ocr` when ``fix_orientation`` is True: coarse upright
-    (OSD / ID-like low-confidence / four-way) plus fine deskew when OSD confidence is low.
+    Render PDF pages to **PIL RGB** (PyMuPDF pixmap). Tesseract needs pixels, not vectors; this avoids
+    an intermediate **JPEG** encode/decode — pass images straight to :func:`_tesseract_ocr_image`.
 
-    Returns ``(page_list, osd_rotations)`` where ``osd_rotations`` maps page index to the **coarse**
-    clockwise rotation applied (0/90/180/270) for PDF ``/Rotate`` metadata. Fine deskew is not encoded
-    there; downstream consumers should use the returned images as-is.
+    Returns ``(page_list, osd_rotations)`` where ``osd_rotations`` maps page index to the clockwise
+    OSD rotation applied (0/90/180/270). Downstream code that writes PDFs can reuse these values
+    instead of re-running OSD.
     """
     import fitz
 
@@ -406,11 +248,14 @@ def _pdf_to_page_images(
     try:
         for i in range(min(doc.page_count, max_pages)):
             page = doc[i]
-            pix = page.get_pixmap(dpi=OCR_PRE_OCR_PDF_DPI)
+            pix = page.get_pixmap(dpi=150)
             img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
             if fix_orientation:
-                img, rot_cw = _prepare_raster_for_pre_ocr(img)
+                rot_cw = osd_deskew_clockwise_degrees_from_image(img)
                 osd_rotations[i] = rot_cw
+                if rot_cw:
+                    work = img.convert("RGB") if img.mode != "RGB" else img
+                    img = work.rotate(-rot_cw, expand=True, fillcolor="white")
             else:
                 osd_rotations[i] = 0
             result.append((i, img))
@@ -419,22 +264,15 @@ def _pdf_to_page_images(
     return result, osd_rotations
 
 
-def _rasterize_single_pdf_page(
-    pdf_path: Path,
-    page_0: int,
-    *,
-    dpi: int | None = None,
-) -> Image.Image:
-    """Render one PDF page like pre-OCR: same DPI and :func:`_prepare_raster_for_pre_ocr` pipeline."""
+def _rasterize_single_pdf_page(pdf_path: Path, page_0: int, *, dpi: int = 150) -> Image.Image:
+    """Render one PDF page to PIL RGB via PyMuPDF."""
     import fitz
 
-    d = OCR_PRE_OCR_PDF_DPI if dpi is None else dpi
     doc = fitz.open(str(pdf_path))
     try:
-        pix = doc[page_0].get_pixmap(dpi=d)
+        pix = doc[page_0].get_pixmap(dpi=dpi)
         img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-        out, _ = _prepare_raster_for_pre_ocr(img)
-        return out
+        return correct_image_orientation_upright_image(img)
     finally:
         doc.close()
 
@@ -750,7 +588,7 @@ def try_write_pencil_mark_for_sale_folder(sale_dir: Path) -> bool:
         try:
             if doc.page_count < 1:
                 return False
-            pix = doc[0].get_pixmap(dpi=OCR_PRE_OCR_PDF_DPI)
+            pix = doc[0].get_pixmap(dpi=150)
             img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
             buf = io.BytesIO()
             img.save(buf, "JPEG", quality=90)
@@ -787,7 +625,7 @@ def _export_single_page_pdfs_to_raw(
                 rot = osd_rotations[i]
             else:
                 page = src[i]
-                pix = page.get_pixmap(dpi=OCR_PRE_OCR_PDF_DPI)
+                pix = page.get_pixmap(dpi=150)
                 img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
                 rot = osd_deskew_clockwise_degrees_from_image(img)
 
@@ -814,10 +652,14 @@ def _export_single_page_pdfs_to_raw(
 
 def _tesseract_ocr_image(img: Image.Image) -> str:
     """Run Tesseract OCR on a PIL image (RGB or L). Prefer this over bytes to skip JPEG encode/decode."""
+    import pytesseract
+    from PIL import ImageEnhance
+
     work = img
     if OCR_PREPROCESS:
         work = work.convert("L")
-        work = ImageEnhance.Contrast(work).enhance(2.0)
+        enhancer = ImageEnhance.Contrast(work)
+        work = enhancer.enhance(2.0)
     return pytesseract.image_to_string(work, lang=OCR_LANG, config=f"--psm {OCR_PSM}")
 
 
@@ -2015,21 +1857,29 @@ def run_pre_ocr_and_prepare(
     dealer_id: int = 100001,
     *,
     mobile_hint: str | None = None,
-) -> tuple[list[tuple[Path, str, str]] | None, str, str | None, Path | None, list[str] | None]:
+) -> tuple[
+    list[tuple[Path, str, str]] | None,
+    str,
+    str | None,
+    Path | None,
+    list[str] | None,
+    dict[int, Image.Image] | None,
+    Path | None,
+]:
     """
     Copy PDF to Processing, run pre-OCR (Tesseract on in-memory rasters), classify pages, write normalized
     document files under ``Uploaded scans/{dealer_id}/{mobile}_ddmmyy/for_OCR/`` (with ``raw/`` holding
     **PDF only**: consolidated copy + ``page_NN.pdf`` per page).
 
     Validates BEFORE splitting: mobile + 3 critical classifications (Aadhar, Aadhar_back, Details).
-    Returns (bundles | None, subfolder_stem, mobile_or_none, ocr_path, missing_list | None).
-    bundles: list of ``(sale_dir, subfolder, mobile)`` where ``sale_dir`` is the uploads folder for the sale.
-    If missing_list is non-empty, validation failed; do not split. bundles is None.
+    Returns (bundles | None, subfolder_stem, mobile_or_none, ocr_path, missing_list | None,
+    page_images | None, dest_pdf | None).
+    When ``missing_list`` is non-empty, ``page_images`` and ``dest_pdf`` are set for manual JPEG split fallback;
+    otherwise those two entries are None.
 
     ``mobile_hint``: optional 10-digit mobile from Add Sales (consolidated PDF upload) when Tesseract cannot
     read the customer mobile from the scan (common when the Details row is smudged or OCR-garbled).
     """
-    from app.config import get_ocr_output_dir
     from app.services.upload_service import UploadService
 
     proc_dir = processing_dir or PROCESSING_DIR
@@ -2042,20 +1892,24 @@ def run_pre_ocr_and_prepare(
         is_add_sales_work = False
 
     us = UploadService()
+    ocr_out = get_ocr_output_dir(dealer_id)
+    file_stem_safe = safe_file_stem(source_pdf.stem)
+    artifact_leaf = initial_artifact_leaf(source_pdf.stem)
+    current_artifact_leaf = artifact_leaf
 
-    def _log_subfolder(mob: str | None) -> str:
-        return us.get_subdir_name_mobile(mob) if mob else source_pdf.stem
-
-    def _flush_pre(steps: list[tuple[str, int | None, str]], mob: str | None) -> None:
+    def _flush_pre(steps: list[tuple[str, int | None, str]], log_leaf: str | None = None) -> None:
         if not steps:
             return
-        append_pre_ocr_step_lines(get_ocr_output_dir(dealer_id), _log_subfolder(mob), steps)
+        append_pre_ocr_step_lines(ocr_out, log_leaf or current_artifact_leaf, steps)
 
     # Copy PDF to Processing (work on copy so original stays for .processed marker)
     dest_pdf = proc_dir / source_pdf.name
     t_copy0 = time.perf_counter()
     dest_pdf.write_bytes(source_pdf.read_bytes())
     copy_ms = int((time.perf_counter() - t_copy0) * 1000)
+
+    # Consolidated OCR artifacts: incoming PDF copy under ocr_output/{stem}_{ddmmyy}/
+    copy_incoming_scan_pdf(ocr_out, artifact_leaf, dest_pdf)
 
     # Run pre-OCR (Tesseract per page — usually dominant cost). Also returns the
     # rendered page images and OSD rotations so downstream steps skip re-rasterization.
@@ -2211,13 +2065,16 @@ def run_pre_ocr_and_prepare(
             )
 
             first_mobile = result_bundles[0][2] if result_bundles else mobile
-            # Same pre-OCR timings apply to all customers; log full timeline under first sale folder.
-            sf0 = result_bundles[0][1] if result_bundles else _log_subfolder(first_mobile)
+            first_sub = result_bundles[0][1] if result_bundles else artifact_leaf
+            mob_stem = mobile_file_stem(first_mobile)
+            if first_sub != artifact_leaf:
+                rename_sale_artifact_bundle(ocr_out, artifact_leaf, first_sub, file_stem_safe, mob_stem)
+            write_sale_text_artifact(ocr_out, first_sub, full_text)
             orchestration.append(
                 ("run_pre_ocr_and_prepare_done", None, f"path=multi_customer bundles={len(result_bundles)}"),
             )
-            _flush_pre(orchestration, first_mobile)
-            return result_bundles, source_pdf.stem, first_mobile, ocr_path, None
+            _flush_pre(orchestration)
+            return result_bundles, source_pdf.stem, first_mobile, ocr_path, None, None, None
         # Fall back to single-customer (e.g. scan has 2 mobiles but only 1 customer)
         logger.info("Multi-customer detected but could not build bundles; falling back to single-customer (classifications=%s, mobiles=%s)",
                     [(i, t) for i, t in classifications], all_mobiles)
@@ -2258,10 +2115,15 @@ def run_pre_ocr_and_prepare(
 
     if missing:
         orchestration.append(("run_pre_ocr_and_prepare_rejected", None, f"missing={','.join(missing)}"))
-        _flush_pre(orchestration, mobile)
-        return None, source_pdf.stem, mobile, ocr_path, missing
+        write_sale_text_artifact(ocr_out, artifact_leaf, full_text)
+        _flush_pre(orchestration)
+        return None, source_pdf.stem, mobile, ocr_path, missing, page_images, dest_pdf
 
-    subfolder = us.get_subdir_name_mobile(mobile) if mobile else source_pdf.stem
+    mobile_leaf = us.get_subdir_name_mobile(mobile)
+    if mobile_leaf != artifact_leaf:
+        rename_sale_artifact_bundle(ocr_out, artifact_leaf, mobile_leaf, file_stem_safe, mobile_file_stem(mobile))
+
+    subfolder = mobile_leaf
     sale_dir = get_uploads_dir(dealer_id) / subfolder
     raw_dir = sale_dir / "raw"
     t_sp0 = time.perf_counter()
@@ -2280,9 +2142,10 @@ def run_pre_ocr_and_prepare(
         ),
     )
     orchestration.append(("run_pre_ocr_and_prepare_done", None, "path=single_customer"))
-    _flush_pre(orchestration, mobile)
+    write_sale_text_artifact(ocr_out, mobile_leaf, full_text)
+    _flush_pre(orchestration)
 
-    return [(sale_dir, subfolder, mobile or "")], source_pdf.stem, mobile, ocr_path, None
+    return [(sale_dir, subfolder, mobile or "")], source_pdf.stem, mobile, ocr_path, None, None, None
 
 
 def move_multi_customer_to_success_or_error(

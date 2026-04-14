@@ -26,6 +26,7 @@ from app.services.customer_address_infer import (
     normalize_address_freeform,
 )
 from app.services.ocr_extraction_log import append_ocr_extraction_log
+from app.services.ocr_sale_artifacts import merged_text_artifact_path, stem_from_subfolder_leaf
 from app.services.page_classifier import (
     FILENAME_AADHAR_FRONT,
     FILENAME_SALES_DETAIL_SHEET_PDF,
@@ -1256,8 +1257,8 @@ def _apply_aadhar_textract_fallbacks_from_raw_ocr_file(
     ocr_output_dir: Path,
     subfolder: str,
 ) -> None:
-    """Same as parts merge, using persisted Raw_OCR.txt (e.g. get_extracted_details)."""
-    raw_path = _ocr_subfolder_path(ocr_output_dir, subfolder) / "Raw_OCR.txt"
+    """Same as parts merge, using persisted merged text artifact (``{stem}_text.txt`` or legacy ``Raw_OCR.txt``)."""
+    raw_path = merged_text_artifact_path(ocr_output_dir, subfolder)
     if not raw_path.is_file():
         return
     try:
@@ -3581,8 +3582,8 @@ class OcrService:
         compiled in **parallel** with the Aadhaar pipeline, then results are merged once into JSON.
         **Details** raster/PDF: Textract **AnalyzeDocument FORMS** (structured key-values).
 
-        Writes ``Raw_OCR.txt`` (all sections), ``Details_Textract.txt`` (details sheet text: LINE
-        ``full_text`` or FORMS/TABLE fallback when LINE text is empty), and returns ``section_timings_ms``.
+        Writes ``{stem}_text.txt`` (all sections; replaces legacy ``Raw_OCR.txt``), including Details sheet
+        LINE ``full_text`` or FORMS/TABLE fallback when LINE text is empty, and returns ``section_timings_ms``.
         """
         subdir = self.uploads_dir / subfolder
         if not subdir.exists() or not subdir.is_dir():
@@ -3756,12 +3757,12 @@ class OcrService:
                 raw_lines.append(f"--- {fname} ---")
                 raw_lines.append(text.strip() if text else "")
                 raw_lines.append("")
-            (subfolder_path / "Raw_OCR.txt").write_text("\n".join(raw_lines), encoding="utf-8")
-            if details_raw_for_file is not None:
-                (subfolder_path / "Details_Textract.txt").write_text(
-                    details_raw_for_file,
-                    encoding="utf-8",
-                )
+            text_body = "\n".join(raw_lines)
+            stem = stem_from_subfolder_leaf(subfolder_name)
+            if stem:
+                (subfolder_path / f"{stem}_text.txt").write_text(text_body, encoding="utf-8")
+            else:
+                (subfolder_path / "Raw_OCR.txt").write_text(text_body, encoding="utf-8")
             _apply_aadhar_textract_fallbacks_from_parts(
                 self.ocr_output_dir, subfolder, list(self._raw_ocr_parts)
             )

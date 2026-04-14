@@ -199,3 +199,47 @@ export async function uploadScansV2ConsolidatedStream(
   }
   return final;
 }
+
+/** Assign split pages to document slots after pre-OCR failure (no Textract/OCR run). */
+export async function applyConsolidatedManualFallback(
+  sessionId: string,
+  mobile: string,
+  assignments: Record<string, string>,
+  dealerId?: number
+): Promise<UploadScansResponse> {
+  const form = new FormData();
+  form.append("session_id", sessionId);
+  form.append("mobile", mobile.replace(/\D/g, "").slice(0, 10));
+  form.append("assignments_json", JSON.stringify(assignments));
+  form.append("dealer_id", String(dealerId ?? DEALER_ID));
+  return postUploadForm("/uploads/scans-v2-consolidated/manual-apply", form);
+}
+
+/** Fetch a manual-session page JPEG with auth; caller must ``URL.revokeObjectURL`` when done. */
+export async function fetchManualSessionPageObjectUrl(
+  sessionId: string,
+  page1Based: number,
+  dealerId?: number
+): Promise<string> {
+  const headers = new Headers();
+  const token = getAccessToken();
+  if (token) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+  const q = dealerId != null ? `?dealer_id=${dealerId}` : "";
+  let res: Response;
+  try {
+    res = await fetch(
+      `${getBaseUrl()}/uploads/manual-session/${encodeURIComponent(sessionId)}/page/${page1Based}${q}`,
+      { headers }
+    );
+  } catch (err) {
+    throwMappedFetchError(err);
+    throw new Error("unreachable");
+  }
+  if (!res.ok) {
+    throw new Error(`Preview failed (${res.status})`);
+  }
+  const blob = await res.blob();
+  return URL.createObjectURL(blob);
+}

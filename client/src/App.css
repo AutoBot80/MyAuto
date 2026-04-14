@@ -477,6 +477,115 @@
   min-width: 320px;
 }
 
+.add-sales-v2-fields-row--section2-mobile {
+  margin-bottom: 10px;
+}
+
+.manual-fallback-split-review {
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid #c5d9ed;
+  border-radius: 8px;
+  background: #f8faff;
+}
+
+.manual-fallback-split-review__title {
+  margin: 0 0 8px 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: #1e5a9e;
+}
+
+.manual-fallback-split-review__hint {
+  margin: 0 0 12px 0;
+  font-size: 13px;
+  color: #444;
+  line-height: 1.4;
+}
+
+.manual-fallback-split-review__error {
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: #fff4f4;
+  color: #a40000;
+  font-size: 13px;
+}
+
+.manual-fallback-split-review--error {
+  padding: 10px;
+  font-size: 13px;
+  color: #a40000;
+}
+
+.manual-fallback-split-review__pages {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.manual-fallback-split-review__page {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.manual-fallback-split-review__thumb-wrap {
+  flex: 0 0 auto;
+  width: 120px;
+  min-height: 90px;
+  border: 1px solid #c5d9ed;
+  border-radius: 6px;
+  background: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.manual-fallback-split-review__thumb {
+  max-width: 100%;
+  max-height: 140px;
+  object-fit: contain;
+}
+
+.manual-fallback-split-review__thumb-ph {
+  font-size: 12px;
+  color: #888;
+}
+
+.manual-fallback-split-review__assign {
+  flex: 1 1 180px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.manual-fallback-split-review__label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #333;
+}
+
+.manual-fallback-split-review__select {
+  max-width: 280px;
+  padding: 6px 8px;
+  font-size: 13px;
+  border: 1px solid #c5d9ed;
+  border-radius: 6px;
+}
+
+.manual-fallback-split-review__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+
 .add-sales-v2-box-title-row {
   display: flex;
   align-items: center;

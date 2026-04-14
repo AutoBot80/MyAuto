@@ -8,6 +8,7 @@ import {
   getDocumentsFolderFiles,
   type BulkLoadRow,
   type BulkLoadCounts,
+  type ListBulkLoadsParams,
 } from "../api/bulkLoads";
 import { DEALER_ID } from "../api/dealerId";
 import { saveAddSalesForm } from "../utils/addSalesStorage";
@@ -271,7 +272,7 @@ export function BulkLoadsPage({ dealerId, onNavigateToAddSales, onRefreshPending
 
   const fetchRows = useCallback(() => {
     setError(null);
-    const params = {
+    const params: ListBulkLoadsParams = {
       date_from: dateFrom,
       date_to: dateTo,
     };
