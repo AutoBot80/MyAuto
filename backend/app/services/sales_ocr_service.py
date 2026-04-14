@@ -1015,6 +1015,50 @@ def _merge_granular_upload_process_timings(
     section_timings_ms["detail_sheet_textract_ms"] = int(prefetch_job_ms.get("details_forms", 0)) + dsync
 
 
+def _format_textract_tables_for_raw(tables: Any) -> str:
+    """Human-readable TABLE blocks for Raw_OCR when LINE ``full_text`` is empty."""
+    if not tables:
+        return ""
+    lines: list[str] = []
+    for ti, table in enumerate(tables):
+        lines.append(f"--- Textract table {ti + 1} ---")
+        for row in table or []:
+            lines.append(" | ".join(str(c or "").strip() for c in row))
+    return "\n".join(lines)
+
+
+def _details_sheet_text_for_raw_artifact(frag: dict[str, Any]) -> str:
+    """
+    Text to store under ``--- <Details file> ---`` in ``Raw_OCR.txt``.
+
+    Textract often returns rich FORMS key-values while **LINE** ``full_text`` is empty (handwriting,
+    skew, or layout). We still need something to verify; fall back to key-value lines + tables.
+    """
+    ft = (frag.get("full_text") or "").strip()
+    if ft:
+        return str(frag.get("full_text") or "")
+    parts: list[str] = []
+    kvp = frag.get("key_value_pairs") or []
+    if kvp:
+        parts.append("Document: Details sheet (Textract FORMS; LINE full_text empty)\n")
+        for kv in kvp:
+            k = (kv.get("key") or "").strip()
+            v = (kv.get("value") or "").strip()
+            if k or v:
+                parts.append(f"{k}: {v}")
+    tbl = _format_textract_tables_for_raw(frag.get("tables"))
+    if tbl:
+        if parts:
+            parts.append("")
+        parts.append(tbl)
+    if parts:
+        return "\n".join(parts)
+    return (
+        "[Details sheet: Textract returned no LINE text, no FORMS pairs, and no tables. "
+        "Check scan quality, orientation, and AWS credentials or quotas.]\n"
+    )
+
+
 def _compile_details_sheet_fragment(
     input_path: Path,
     textract_forms_prefetch: dict | None,
@@ -1079,6 +1123,8 @@ def _compile_details_sheet_fragment(
         "details_customer": details_customer,
         "details_customer_name": details_customer_name,
         "full_text": result.get("full_text") or "",
+        "key_value_pairs": key_value_pairs,
+        "tables": result.get("tables"),
         "detail_sheet_textract_sync_ms": detail_sheet_textract_sync_ms,
     }
 
@@ -3509,7 +3555,8 @@ class OcrService:
         compiled in **parallel** with the Aadhaar pipeline, then results are merged once into JSON.
         **Details** raster/PDF: Textract **AnalyzeDocument FORMS** (structured key-values).
 
-        Writes Raw_OCR.txt and returns ``section_timings_ms`` for operator visibility.
+        Writes ``Raw_OCR.txt`` (all sections), ``Details_Textract.txt`` (details sheet text: LINE
+        ``full_text`` or FORMS/TABLE fallback when LINE text is empty), and returns ``section_timings_ms``.
         """
         subdir = self.uploads_dir / subfolder
         if not subdir.exists() or not subdir.is_dir():
@@ -3581,11 +3628,13 @@ class OcrService:
             section_timings_ms.get("detail_sheet_textract_ms", 0),
         )
 
+        details_raw_for_file: str | None = None
         self._raw_ocr_parts = []
         if frag_a and frag_a.get("raw_parts"):
             self._raw_ocr_parts.extend(frag_a["raw_parts"])
-        if frag_d and frag_d.get("ok") and frag_d.get("full_text"):
-            self._raw_ocr_parts.append((_rel_upload_label(details_path, subdir), frag_d["full_text"]))
+        if frag_d and frag_d.get("ok"):
+            details_raw_for_file = _details_sheet_text_for_raw_artifact(frag_d)
+            self._raw_ocr_parts.append((_rel_upload_label(details_path, subdir), details_raw_for_file))
 
         if aadhar_path.exists():
             if frag_a and frag_a.get("ok"):
@@ -3662,6 +3711,11 @@ class OcrService:
                 raw_lines.append(text.strip() if text else "")
                 raw_lines.append("")
             (subfolder_path / "Raw_OCR.txt").write_text("\n".join(raw_lines), encoding="utf-8")
+            if details_raw_for_file is not None:
+                (subfolder_path / "Details_Textract.txt").write_text(
+                    details_raw_for_file,
+                    encoding="utf-8",
+                )
             _apply_aadhar_textract_fallbacks_from_parts(
                 self.ocr_output_dir, subfolder, list(self._raw_ocr_parts)
             )

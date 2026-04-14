@@ -166,12 +166,19 @@ class UploadService:
         try:
             from app.services.pre_ocr_service import (
                 orient_and_normalize_sale_documents,
+                sale_folder_has_details_for_pencil_crop,
                 try_write_pencil_mark_for_sale_folder,
             )
 
             sale_path = uploads_dir / subdir_name
             orient_and_normalize_sale_documents(sale_path)
-            try_write_pencil_mark_for_sale_folder(sale_path)
+            pencil_ok = try_write_pencil_mark_for_sale_folder(sale_path)
+            pencil_warnings: list[str] = []
+            if not pencil_ok and sale_folder_has_details_for_pencil_crop(sale_path):
+                pencil_warnings.append(
+                    "Chassis pencil mark image was not saved (optional). "
+                    "OCR and DMS can still supply frame/chassis; verify manually if needed."
+                )
             append_ocr_extraction_log(
                 get_ocr_output_dir(dealer_id),
                 subdir_name,
@@ -186,6 +193,8 @@ class UploadService:
                 ocr_output_dir=get_ocr_output_dir(dealer_id),
             )
             extraction_result = ocr.process_uploaded_subfolder(subdir_name)
+            if pencil_warnings:
+                extraction_result = {**extraction_result, "warnings": pencil_warnings}
             # Include full extracted details so client can populate immediately (no polling)
             details = ocr.get_extracted_details(subdir_name)
             if details:
@@ -245,12 +254,19 @@ class UploadService:
         try:
             from app.services.pre_ocr_service import (
                 orient_and_normalize_sale_documents,
+                sale_folder_has_details_for_pencil_crop,
                 try_write_pencil_mark_for_sale_folder,
             )
 
             sale_path = uploads_dir / subdir_name
             orient_and_normalize_sale_documents(sale_path)
-            try_write_pencil_mark_for_sale_folder(sale_path)
+            pencil_ok = try_write_pencil_mark_for_sale_folder(sale_path)
+            pencil_warnings: list[str] = []
+            if not pencil_ok and sale_folder_has_details_for_pencil_crop(sale_path):
+                pencil_warnings.append(
+                    "Chassis pencil mark image was not saved (optional). "
+                    "OCR and DMS can still supply frame/chassis; verify manually if needed."
+                )
 
             from app.services.sales_ocr_service import OcrService
 
@@ -259,6 +275,8 @@ class UploadService:
                 ocr_output_dir=get_ocr_output_dir(dealer_id),
             )
             extraction_result = ocr.process_uploaded_subfolder(subdir_name)
+            if pencil_warnings:
+                extraction_result = {**extraction_result, "warnings": pencil_warnings}
             details = ocr.get_extracted_details(subdir_name)
             if details:
                 extraction_result["details"] = details

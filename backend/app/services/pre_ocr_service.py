@@ -346,57 +346,70 @@ def extract_details_chassis_pencil_mark_jpeg(page_jpeg_bytes: bytes) -> bytes | 
     :data:`PENCIL_MARK_*_FRAC`, then — when :data:`PENCIL_MARK_TIGHT_DETECT` is enabled — locates the
     dark horizontal **rubbing** block inside that ROI (threshold + morphology + contour scoring) and
     trims to non-white ink. If detection fails, keeps the full quadrant crop.
+
+    Never raises: failures return ``None`` (optional artifact; must not abort upload/OCR).
     """
-    import cv2
-    import numpy as np
+    try:
+        import cv2
+        import numpy as np
 
-    if not page_jpeg_bytes or len(page_jpeg_bytes) < 800:
-        return None
-    nparr = np.frombuffer(page_jpeg_bytes, dtype=np.uint8)
-    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-    if img is None:
-        return None
-    h, w = img.shape[:2]
-    if h < 80 or w < 80:
-        return None
+        if not page_jpeg_bytes or len(page_jpeg_bytes) < 800:
+            return None
+        nparr = np.frombuffer(page_jpeg_bytes, dtype=np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        if img is None:
+            return None
+        h, w = img.shape[:2]
+        if h < 80 or w < 80:
+            return None
 
-    x0 = int(max(0, min(w - 1, PENCIL_MARK_X0_FRAC * w)))
-    x1 = int(max(x0 + 1, min(w, PENCIL_MARK_X1_FRAC * w)))
-    y0 = int(max(0, min(h - 1, PENCIL_MARK_Y0_FRAC * h)))
-    y1 = int(max(y0 + 1, min(h, PENCIL_MARK_Y1_FRAC * h)))
+        x0 = int(max(0, min(w - 1, PENCIL_MARK_X0_FRAC * w)))
+        x1 = int(max(x0 + 1, min(w, PENCIL_MARK_X1_FRAC * w)))
+        y0 = int(max(0, min(h - 1, PENCIL_MARK_Y0_FRAC * h)))
+        y1 = int(max(y0 + 1, min(h, PENCIL_MARK_Y1_FRAC * h)))
 
-    crop = img[y0:y1, x0:x1]
-    if crop.size == 0 or crop.shape[0] < 10 or crop.shape[1] < 10:
+        crop = img[y0:y1, x0:x1]
+        if crop.size == 0 or crop.shape[0] < 10 or crop.shape[1] < 10:
+            return None
+
+        if PENCIL_MARK_TIGHT_DETECT:
+            tight = _detect_pencil_rubbing_tight_bbox(crop)
+            if tight is not None:
+                tx, ty, tw, th = _trim_pencil_bbox_to_dark_ink(crop, *tight)
+                if tw >= 12 and th >= 8:
+                    crop = crop[ty : ty + th, tx : tx + tw]
+
+        ok, buf = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 92])
+        if not ok:
+            return None
+        return buf.tobytes()
+    except Exception as e:
+        logger.warning("pencil_mark: extract failed (non-fatal): %s", e)
         return None
-
-    if PENCIL_MARK_TIGHT_DETECT:
-        tight = _detect_pencil_rubbing_tight_bbox(crop)
-        if tight is not None:
-            tx, ty, tw, th = _trim_pencil_bbox_to_dark_ink(crop, *tight)
-            if tw >= 12 and th >= 8:
-                crop = crop[ty : ty + th, tx : tx + tw]
-
-    ok, buf = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 92])
-    if not ok:
-        return None
-    return buf.tobytes()
 
 
 def write_pencil_mark_from_details_page(sale_dir: Path, page_jpeg_bytes: bytes) -> bool:
     """
     Write ``pencil_mark.jpeg`` under ``sale_dir`` from the full Details page raster.
 
-    Returns True if a non-empty crop was written.
+    Returns True if a non-empty crop was written. Never raises — optional crop must not fail the pipeline.
     """
-    out = extract_details_chassis_pencil_mark_jpeg(page_jpeg_bytes)
-    if not out:
-        logger.warning("pencil_mark: crop failed or empty for %s", sale_dir)
+    try:
+        out = extract_details_chassis_pencil_mark_jpeg(page_jpeg_bytes)
+        if not out:
+            logger.warning("pencil_mark: crop failed or empty for %s", sale_dir)
+            return False
+        sale_dir.mkdir(parents=True, exist_ok=True)
+        dest = sale_dir / PENCIL_MARK_FILENAME
+        dest.write_bytes(out)
+        logger.info("Wrote %s (Chassis Pencil Mark crop)", dest.name)
+        return True
+    except OSError as e:
+        logger.warning("pencil_mark: could not write %s: %s", sale_dir, e)
         return False
-    sale_dir.mkdir(parents=True, exist_ok=True)
-    dest = sale_dir / PENCIL_MARK_FILENAME
-    dest.write_bytes(out)
-    logger.info("Wrote %s (Chassis Pencil Mark crop)", dest.name)
-    return True
+    except Exception as e:
+        logger.warning("pencil_mark: unexpected error for %s: %s", sale_dir, e)
+        return False
 
 
 def try_write_pencil_mark_from_details_jpeg_file(sale_dir: Path, details_jpeg_path: Path) -> bool:
@@ -410,6 +423,18 @@ def try_write_pencil_mark_from_details_jpeg_file(sale_dir: Path, details_jpeg_pa
     except OSError as e:
         logger.warning("pencil_mark: read %s: %s", details_jpeg_path, e)
         return False
+
+
+def sale_folder_has_details_for_pencil_crop(sale_dir: Path) -> bool:
+    """
+    True when a Details page file is present (JPEG or PDF), so a missing ``pencil_mark.jpeg`` may warrant
+    a user-visible warning — not an error.
+    """
+    if (sale_dir / "Details.jpg").is_file():
+        return True
+    if (sale_dir / FILENAME_SALES_DETAIL_SHEET_PDF).is_file():
+        return True
+    return (sale_dir / FOR_OCR_SUBDIR / FILENAME_SALES_DETAIL_SHEET_PDF).is_file()
 
 
 def try_write_pencil_mark_for_sale_folder(sale_dir: Path) -> bool:

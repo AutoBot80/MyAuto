@@ -90,6 +90,8 @@ export function useUploadScans(
       setSavedTo(data.saved_to);
       let msg = `Uploaded ${data.saved_count} file(s) to ${data.saved_to}.`;
       if (data.extraction?.error) msg += ` Warning: ${data.extraction.error}`;
+      const soft = data.extraction?.warnings;
+      if (Array.isArray(soft) && soft.length > 0) msg += ` ${soft.join(" ")}`;
       setUploadStatus(msg);
       if (data.saved_files?.length)
         setUploadedFiles((prev) => [...(data.saved_files ?? []), ...prev]);
@@ -114,6 +116,8 @@ export function useUploadScans(
       setSavedTo(data.saved_to);
       let msg = `Uploaded consolidated scan to ${data.saved_to}.`;
       if (data.extraction?.error) msg += ` Warning: ${data.extraction.error}`;
+      const soft = data.extraction?.warnings;
+      if (Array.isArray(soft) && soft.length > 0) msg += ` ${soft.join(" ")}`;
       setUploadStatus(msg);
       if (data.saved_files?.length)
         setUploadedFiles((prev) => [...(data.saved_files ?? []), ...prev]);
