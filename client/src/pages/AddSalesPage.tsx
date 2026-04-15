@@ -1045,16 +1045,13 @@ export function AddSalesPage({
     setIsFillInsuranceLoading(true);
     setFillInsuranceStatus(null);
     try {
-      const insuranceRes = await fillHeroInsurance(
-        lastStagingId
-          ? { staging_id: lastStagingId }
-          : {
-              subfolder: savedTo,
-              dealer_id: dealerId,
-              customer_id: lastSubmittedCustomerId ?? undefined,
-              vehicle_id: lastSubmittedVehicleId ?? undefined,
-            }
-      );
+      const insuranceRes = await fillHeroInsurance({
+        staging_id: lastStagingId?.trim() || undefined,
+        subfolder: savedTo,
+        dealer_id: dealerId,
+        customer_id: lastSubmittedCustomerId ?? undefined,
+        vehicle_id: lastSubmittedVehicleId ?? undefined,
+      });
       if (!insuranceRes.success) {
         setFillInsuranceStatus(insuranceRes.error ?? "Generate Insurance (Hero) failed.");
       } else {
