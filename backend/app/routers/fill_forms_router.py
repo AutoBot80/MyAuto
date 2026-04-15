@@ -485,6 +485,10 @@ async def fill_dms_only(
     warn, dms_mode = _dms_response_warning_and_mode(result)
     cc = result.get("committed_customer_id")
     vv = result.get("committed_vehicle_id")
+    if cc is None:
+        cc = result.get("customer_id")
+    if vv is None:
+        vv = result.get("vehicle_id")
     if result.get("error") is None:
         from app.services.upload_scans_invoice_print import schedule_dispatch_pdfs_after_create_invoice
 
@@ -819,6 +823,10 @@ async def fill_dms(
     warn, dms_mode = _dms_response_warning_and_mode(result)
     cc = result.get("committed_customer_id")
     vv = result.get("committed_vehicle_id")
+    if cc is None:
+        cc = result.get("customer_id")
+    if vv is None:
+        vv = result.get("vehicle_id")
     if result.get("error") is None:
         from app.services.upload_scans_invoice_print import schedule_dispatch_pdfs_after_create_invoice
 

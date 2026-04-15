@@ -68,6 +68,7 @@ from app.services.hero_dms_db_service import persist_masters_after_create_order
 from app.services.hero_dms_prepare_customer import prepare_customer
 from app.services.hero_dms_playwright_invoice import prepare_order
 from app.repositories import form_dms as form_dms_repo
+from app.repositories.add_sales_staging import merge_staging_payload_on_cursor
 from app.db import get_connection
 from app.services.customer_address_infer import enrich_customer_address_from_freeform
 from app.services.dms_relation_prefix import compute_dms_relation_prefix
@@ -2124,6 +2125,39 @@ def run_fill_dms_only(
         except Exception as commit_exc:
             logger.warning("fill_dms_service: staging master commit failed: %s", commit_exc)
             result["error"] = f"Database commit after DMS failed: {commit_exc!s}"
+
+    # Siebel path may have INSERTed masters via ``persist_masters_after_create_order`` inside
+    # ``Playwright_Hero_DMS_fill`` while the full staging txn above was skipped (e.g. Invoice# not
+    # present in scrape when ``HERO_DMS_ATTACH_AUTO_CLICK_CREATE_INVOICE`` is true). Sync ids into
+    # ``add_sales_staging.payload_json`` so downstream calls need only ``staging_id``.
+    sid_clean = (staging_id or "").strip()
+    did_eff = int(dealer_id) if dealer_id is not None else int(DEALER_ID)
+    if (
+        sid_clean
+        and staging_payload is not None
+        and not result.get("error")
+        and result.get("committed_customer_id") is None
+        and result.get("committed_vehicle_id") is None
+    ):
+        cid_s = result.get("customer_id")
+        vid_s = result.get("vehicle_id")
+        if cid_s is not None and vid_s is not None:
+            try:
+                patch_ids: dict[str, Any] = {
+                    "customer_id": int(cid_s),
+                    "vehicle_id": int(vid_s),
+                }
+                sal = result.get("sales_id")
+                if sal is not None:
+                    patch_ids["sales_id"] = int(sal)
+                with get_connection() as conn:
+                    with conn.cursor() as cur:
+                        merge_staging_payload_on_cursor(cur, sid_clean, did_eff, patch_ids)
+                    conn.commit()
+                result["committed_customer_id"] = int(cid_s)
+                result["committed_vehicle_id"] = int(vid_s)
+            except Exception as patch_exc:
+                logger.warning("fill_dms_service: staging payload patch (Siebel master ids) failed: %s", patch_exc)
 
     return result
 

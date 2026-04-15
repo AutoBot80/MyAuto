@@ -4646,18 +4646,23 @@ def _proposal_dob_readback_matches_expected(want_norm: str, got: str) -> bool:
 
 
 def _proposal_read_dob_txt(page) -> str | None:
-    """Best-effort current value of ``txtDOB`` across proposal roots."""
+    """Best-effort current value of ``txtDOB`` across proposal roots (all id matches per root)."""
     for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
         try:
             loc = _proposal_cph1_locator(root, "txtDOB")
-            if loc.count() == 0:
+            n = loc.count()
+            if n == 0:
                 continue
-            el = loc.first
-            if not el.is_visible(timeout=400):
-                continue
-            got = (el.input_value() or "").strip()
-            if got:
-                return got
+            for idx in range(min(n, 12)):
+                el = loc.nth(idx)
+                try:
+                    if not el.is_visible(timeout=400):
+                        continue
+                except Exception:
+                    continue
+                got = _proposal_read_input_value_best_effort(el)
+                if got:
+                    return got
         except Exception:
             continue
     return None
@@ -4680,67 +4685,80 @@ def _proposal_step_fill_dob(
     for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
         try:
             loc = _proposal_cph1_locator(root, "txtDOB")
-            if loc.count() == 0:
+            n = loc.count()
+            if n == 0:
                 continue
-            el = loc.first
-            if not el.is_visible(timeout=800):
-                _proposal_scroll_visible(el, timeout_ms=timeout_ms)
-            if not el.is_visible(timeout=1_800):
-                continue
-            el.fill("", timeout=timeout_ms)
-            el.fill(v, timeout=timeout_ms)
-            got = (el.input_value() or "").strip()
-            if not got:
+            for idx in range(min(n, 12)):
+                el = loc.nth(idx)
                 try:
-                    el.evaluate(
-                        """(node, val) => {
+                    if not el.is_visible(timeout=800):
+                        _proposal_scroll_visible(el, timeout_ms=timeout_ms)
+                    if not el.is_visible(timeout=1_800):
+                        continue
+                except Exception:
+                    continue
+                el.fill("", timeout=timeout_ms)
+                el.fill(v, timeout=timeout_ms)
+                got = _proposal_read_input_value_best_effort(el)
+                if not got:
+                    try:
+                        el.evaluate(
+                            """(node, val) => {
                           node.value = val;
                           ['input','change','blur'].forEach(k =>
                             node.dispatchEvent(new Event(k, { bubbles: true })));
                         }""",
-                        v,
-                    )
-                    got = (el.input_value() or "").strip()
-                except Exception:
-                    got = ""
-            if not got:
-                return f"{step_id}: DOB readback empty after fill"
-            if normalize_for_fuzzy_match(got) != normalize_for_fuzzy_match(v) and v not in got and got not in v:
-                if not any(
-                    x in got.replace("-", "/") for x in (v, v.replace("/", "-"))
-                ):
-                    return f"{step_id}: DOB readback mismatch want={v!r} got={got!r}"
-            # Flatpickr / WebForms: commit value (avoid revert when focus moves to Marital/RTO/etc.).
-            try:
-                el.press("Tab")
-            except Exception:
+                            v,
+                        )
+                        got = _proposal_read_input_value_best_effort(el)
+                    except Exception:
+                        got = ""
+                if not got:
+                    continue
+                if normalize_for_fuzzy_match(got) != normalize_for_fuzzy_match(v) and v not in got and got not in v:
+                    if not any(
+                        x in got.replace("-", "/") for x in (v, v.replace("/", "-"))
+                    ):
+                        continue
+                # Flatpickr / WebForms: commit value (avoid revert when focus moves to Marital/RTO/etc.).
                 try:
-                    page.keyboard.press("Tab")
-                except Exception:
-                    pass
-            _t(page, 180)
-            got2 = (el.input_value() or "").strip()
-            if not got2 or (
-                normalize_for_fuzzy_match(got2) != normalize_for_fuzzy_match(v)
-                and v not in got2
-                and got2 not in v
-                and not any(x in got2.replace("-", "/") for x in (v, v.replace("/", "-")))
-            ):
-                try:
-                    el.click(timeout=timeout_ms)
-                    el.fill("", timeout=timeout_ms)
-                    el.fill(v, timeout=timeout_ms)
                     el.press("Tab")
                 except Exception:
-                    pass
-                _t(page, 150)
-            _proposal_log(
-                ocr_output_dir,
-                subfolder,
-                step_id,
-                f"fill ok id_suffix=txtDOB readback={(el.input_value() or got)!r}",
-            )
-            return None
+                    try:
+                        page.keyboard.press("Tab")
+                    except Exception:
+                        pass
+                _t(page, 180)
+                got2 = _proposal_read_input_value_best_effort(el)
+                if not got2 or (
+                    normalize_for_fuzzy_match(got2) != normalize_for_fuzzy_match(v)
+                    and v not in got2
+                    and got2 not in v
+                    and not any(x in got2.replace("-", "/") for x in (v, v.replace("/", "-")))
+                ):
+                    try:
+                        el.click(timeout=timeout_ms)
+                        el.fill("", timeout=timeout_ms)
+                        el.fill(v, timeout=timeout_ms)
+                        el.press("Tab")
+                    except Exception:
+                        pass
+                    _t(page, 150)
+                rb = _proposal_read_input_value_best_effort(el)
+                if not rb or (
+                    normalize_for_fuzzy_match(rb) != normalize_for_fuzzy_match(v)
+                    and v not in rb
+                    and rb not in v
+                    and not any(x in rb.replace("-", "/") for x in (v, v.replace("/", "-")))
+                ):
+                    continue
+                _proposal_log(
+                    ocr_output_dir,
+                    subfolder,
+                    step_id,
+                    f"fill ok id_suffix=txtDOB idx={idx} readback={rb!r}",
+                )
+                return None
         except Exception as exc:
             last = str(exc)
             continue
@@ -5666,6 +5684,85 @@ def _proposal_step_hero_cpi_addon_by_dealer_flag(
     )
 
 
+def _proposal_try_fill_email_id_input(
+    page,
+    el,
+    email_fixed: str,
+    *,
+    timeout_ms: int,
+) -> tuple[bool, str]:
+    """
+    Same readback + DOM-dispatch + typing fallbacks as ``_proposal_step_fill_input`` — MISP email
+    is often ``type=text`` and can stay empty on ``input_value()`` until events fire.
+    """
+    try:
+        el.fill("", timeout=timeout_ms)
+        el.fill(email_fixed, timeout=timeout_ms)
+    except Exception:
+        pass
+    try:
+        el.press("Tab")
+    except Exception:
+        pass
+    _t(page, 180)
+    snap = _read_locator_value_snapshot(el)
+    got = (snap.get("value") or "").strip()
+    if not got:
+        got = _proposal_read_input_value_best_effort(el)
+    if got != email_fixed and normalize_for_fuzzy_match(got) != normalize_for_fuzzy_match(
+        email_fixed
+    ):
+        try:
+            el.evaluate(
+                """(node, val) => {
+                  if (!node) return;
+                  node.value = val;
+                  ['input','change','blur'].forEach(k =>
+                    node.dispatchEvent(new Event(k, { bubbles: true })));
+                }""",
+                email_fixed,
+            )
+        except Exception:
+            pass
+        _t(page, 200)
+        got = _proposal_read_input_value_best_effort(el)
+        if not got:
+            got = (_read_locator_value_snapshot(el).get("value") or "").strip()
+    if got != email_fixed and normalize_for_fuzzy_match(got) != normalize_for_fuzzy_match(
+        email_fixed
+    ):
+        try:
+            el.click(timeout=timeout_ms, force=True)
+            el.fill("", timeout=timeout_ms, force=True)
+            el.press_sequentially(email_fixed, delay=35, timeout=timeout_ms)
+        except Exception:
+            try:
+                el.fill(email_fixed, timeout=timeout_ms, force=True)
+            except Exception:
+                pass
+        _t(page, 200)
+        try:
+            el.evaluate(
+                """(node, val) => {
+                  if (!node) return;
+                  node.value = val;
+                  ['input','change','blur'].forEach(k =>
+                    node.dispatchEvent(new Event(k, { bubbles: true })));
+                }""",
+                email_fixed,
+            )
+        except Exception:
+            pass
+        _t(page, 150)
+        got = _proposal_read_input_value_best_effort(el)
+        if not got:
+            got = (_read_locator_value_snapshot(el).get("value") or "").strip()
+    ok = got == email_fixed or normalize_for_fuzzy_match(got) == normalize_for_fuzzy_match(
+        email_fixed
+    )
+    return ok, got
+
+
 def _proposal_step_email_hardcoded(
     page,
     email_fixed: str,
@@ -5688,27 +5785,28 @@ def _proposal_step_email_hardcoded(
         ):
             try:
                 loc = factory(root)
-                if loc.count() == 0:
+                n = loc.count()
+                if n == 0:
                     continue
-                el = loc.first
-                if not el.is_visible(timeout=800):
-                    _proposal_scroll_visible(el, timeout_ms=timeout_ms)
-                if not el.is_visible(timeout=1_800):
-                    continue
-                el.fill("", timeout=timeout_ms)
-                el.fill(email_fixed, timeout=timeout_ms)
-                got = (el.input_value() or "").strip()
-                if got != email_fixed and normalize_for_fuzzy_match(got) != normalize_for_fuzzy_match(
-                    email_fixed
-                ):
-                    return f"{step_id}: email readback mismatch want={email_fixed!r} got={got!r}"
-                _proposal_log(
-                    ocr_output_dir,
-                    subfolder,
-                    step_id,
-                    f"fill ok readback={got!r}",
-                )
-                return None
+                for idx in range(min(n, 12)):
+                    el = loc.nth(idx)
+                    if not el.is_visible(timeout=800):
+                        _proposal_scroll_visible(el, timeout_ms=timeout_ms)
+                    if not el.is_visible(timeout=1_800):
+                        continue
+                    ok, got = _proposal_try_fill_email_id_input(
+                        page, el, email_fixed, timeout_ms=timeout_ms
+                    )
+                    if not ok:
+                        last_err = f"idx={idx} got={got!r}"
+                        continue
+                    _proposal_log(
+                        ocr_output_dir,
+                        subfolder,
+                        step_id,
+                        f"fill ok readback={got!r}",
+                    )
+                    return None
             except Exception as exc:
                 last_err = str(exc)
                 continue
