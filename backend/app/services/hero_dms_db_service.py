@@ -16,7 +16,7 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
-from app.config import DEALER_ID
+from app.config import DEALER_ID, HERO_DMS_ATTACH_AUTO_CLICK_CREATE_INVOICE, HERO_DMS_NONPROD_DUMMY_INVOICE_NUMBER
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +45,13 @@ def persist_masters_after_create_order(
 
     if not order_scraped:
         return
+
+    _veh0 = out.get("vehicle")
+    if isinstance(_veh0, dict):
+        _veh0 = dict(_veh0)
+        if not str(_veh0.get("invoice_number") or "").strip() and not HERO_DMS_ATTACH_AUTO_CLICK_CREATE_INVOICE:
+            _veh0["invoice_number"] = HERO_DMS_NONPROD_DUMMY_INVOICE_NUMBER
+        out["vehicle"] = _veh0
 
     did = int(dealer_id) if dealer_id is not None else int(DEALER_ID)
 

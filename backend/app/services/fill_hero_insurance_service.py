@@ -45,6 +45,7 @@ from app.config import (
     KYC_INSURER_FUZZY_MIN_SCORE,
     KYC_USE_KEYBOARD_EKYC_SOP,
     KYC_DEFAULT_KYC_PARTNER_LABEL,
+    HERO_MISP_CLICK_PROPOSAL_PREVIEW_REVIEW,
     get_uploads_dir,
 )
 from app.services.add_sales_commit_service import (
@@ -84,8 +85,9 @@ INSURANCE_NAV_IFRAME_SELECTOR = 'iframe[src*="2w" i]'
 # **insurance_master** INSERT is before **Proposal Preview**; **Proposal Preview** / **Proposal Review** is always clicked after proposal fill (not gated by this flag).
 HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY = True
 
-# When True: abort after proposal field fill (and optional ``insurance_master`` insert) and **before** clicking
-# **Proposal Preview** / **Proposal Review** — the first navigation control on the main MispPolicy proposal form.
+# When True **and** ``ENVIRONMENT`` is prod/production: abort after proposal field fill (and optional
+# ``insurance_master`` insert) and **before** clicking **Proposal Preview** / **Proposal Review**.
+# Non-production envs skip the review click via ``HERO_MISP_CLICK_PROPOSAL_PREVIEW_REVIEW`` and return success first.
 HERO_MISP_HARD_FAIL_BEFORE_PROPOSAL_PREVIEW = True
 
 # Optional: regex on checkbox **label/row text** (MispPolicy proposal grid) for a **new**
@@ -7783,6 +7785,19 @@ def _hero_misp_fill_proposal_and_review(
             )
             return f"insurance_master insert failed: {persist_exc!s}", {}
 
+    if not HERO_MISP_CLICK_PROPOSAL_PREVIEW_REVIEW:
+        append_playwright_insurance_line(
+            ocr_output_dir,
+            subfolder,
+            "NOTE",
+            "main_process: Proposal Preview / Proposal Review click skipped (non-production ENVIRONMENT); "
+            "completing successfully without review navigation.",
+        )
+        logger.info(
+            "Hero Insurance: non-production ENVIRONMENT — skipped Proposal Preview/Review click; returning success."
+        )
+        return None, {}
+
     if HERO_MISP_HARD_FAIL_BEFORE_PROPOSAL_PREVIEW:
         return _proposal_fail(
             ocr_output_dir,
@@ -7923,8 +7938,10 @@ def main_process(
     ``form_insurance_view`` / ``_build_insurance_fill_values``; **email, add-ons, CPA tenure, payment (HDFC),
     and registration date** use hardcoded defaults for now. **insurance_master** INSERT runs inside proposal fill,
     before **Proposal Preview**; preview fields are updated after the preview scrape and again after **Issue Policy**
-    when applicable. **Issue Policy** click may be skipped when ``HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY``
-    is True; **Proposal Review** is always attempted.
+    when applicable.     **Issue Policy** click may be skipped when ``HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY``
+    is True. **Proposal Preview** / **Proposal Review** is clicked only when ``ENVIRONMENT`` is
+    ``prod`` / ``production`` (``HERO_MISP_CLICK_PROPOSAL_PREVIEW_REVIEW``); otherwise the flow
+    completes successfully without that navigation.
     Reuses the open Insurance tab via ``match_base`` from ``pre_result``.
     """
     out: dict = {
@@ -8053,8 +8070,9 @@ def main_process(
             ocr_output_dir,
             subfolder,
             "NOTE",
-            "main_process: completed — insurance_master insert (pre-preview), Proposal Review, preview + post-issue "
-            f"updates (Issue Policy click skipped={HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY})",
+            "main_process: completed — insurance_master insert (pre-preview), "
+            f"proposal review navigated={HERO_MISP_CLICK_PROPOSAL_PREVIEW_REVIEW}, "
+            f"preview + post-issue updates (Issue Policy click skipped={HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY})",
         )
         try:
             out["page_url"] = (page.url or "").strip() or None

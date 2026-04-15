@@ -24,6 +24,7 @@ from app.config import (
     DMS_SIEBEL_AUTO_IFRAME_SELECTORS,
     DMS_SIEBEL_INTER_ACTION_DELAY_MS,
     DMS_SIEBEL_POST_GOTO_WAIT_MS,
+    HERO_DMS_ATTACH_AUTO_CLICK_CREATE_INVOICE,
     get_uploaded_scans_sale_folder,
 )
 from app.services.hero_dms_shared_utilities import (
@@ -71,9 +72,9 @@ from app.services.hero_dms_playwright_customer import (
 logger = logging.getLogger(__name__)
 
 
-# Siebel **Create Invoice** after order attach: off by default — enable only when product wants automation
-# to submit the invoice (operator may complete this step manually).
-_ATTACH_VEHICLE_AUTO_CLICK_CREATE_INVOICE = False  # temporarily: skip auto-click (set True to re-enable)
+# Siebel **Create Invoice** after order attach: enabled only when ``ENVIRONMENT`` is ``prod`` / ``production``
+# (see ``HERO_DMS_ATTACH_AUTO_CLICK_CREATE_INVOICE`` in ``app.config``). Dev/test/staging skip the UI click.
+_ATTACH_VEHICLE_AUTO_CLICK_CREATE_INVOICE = HERO_DMS_ATTACH_AUTO_CLICK_CREATE_INVOICE
 
 
 def _scrape_total_ex_showroom_after_price_allocate(
@@ -1199,7 +1200,7 @@ def _attach_vehicle_to_bkg(
     3. *(Currently disabled via `if False`.)* Single-click **VIN** drilldown → **Serial Number** →
        ``_siebel_run_vehicle_serial_detail_precheck_pdi`` (Pre-check + PDI through submit).
     4. Click ``Order:<order#>`` link → **Apply Campaign** → **Create Invoice** when
-       ``_ATTACH_VEHICLE_AUTO_CLICK_CREATE_INVOICE`` is True (default: enabled).
+       ``_ATTACH_VEHICLE_AUTO_CLICK_CREATE_INVOICE`` is True (``ENVIRONMENT=prod`` in ``.env``).
 
     After **Allocate All**, best-effort scrape of **Total (Ex-showroom)** into ``extra_dict`` as
     ``vehicle_price`` / ``vehicle_ex_showroom_cost`` (for ``vehicle_master.vehicle_ex_showroom_price``).
@@ -2157,7 +2158,7 @@ def _attach_vehicle_to_bkg(
     else:
         note(
             "attach_vehicle_to_bkg: Create Invoice not auto-clicked "
-            "(set _ATTACH_VEHICLE_AUTO_CLICK_CREATE_INVOICE=True in hero_dms_playwright_invoice.py to enable)."
+            "(set ENVIRONMENT=prod or ENVIRONMENT=production in backend/.env to enable in production)."
         )
 
     note(

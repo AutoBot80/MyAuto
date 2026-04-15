@@ -30,6 +30,8 @@ from playwright.sync_api import Page, TimeoutError as PlaywrightTimeout
 
 from app.config import (
     DEALER_ID,
+    HERO_DMS_ATTACH_AUTO_CLICK_CREATE_INVOICE,
+    HERO_DMS_NONPROD_DUMMY_INVOICE_NUMBER,
     DMS_PLAYWRIGHT_HEADED,
     DMS_REAL_URL_CONTACT,
     DMS_REAL_URL_ENQUIRY,
@@ -175,8 +177,14 @@ def _requires_operator_create_invoice(page) -> bool:
 
 
 def invoice_number_ready_for_master_commit(vehicle_dict: dict | None) -> bool:
-    """True when DMS scrape has an **Invoice#** — policy: persist masters only after Create Invoice in Siebel."""
-    return bool(str((vehicle_dict or {}).get("invoice_number") or "").strip())
+    """
+    True when Siebel scrape has an **Invoice#**, or when ``ENVIRONMENT`` is not prod/production
+    (masters insert uses ``HERO_DMS_NONPROD_DUMMY_INVOICE_NUMBER`` — no real Create Invoice in UI).
+    """
+    vd = vehicle_dict or {}
+    if str(vd.get("invoice_number") or "").strip():
+        return True
+    return not HERO_DMS_ATTACH_AUTO_CLICK_CREATE_INVOICE
 
 
 def fetch_three_masters_snapshot_for_log(customer_id: int, vehicle_id: int) -> dict[str, Any]:
@@ -269,6 +277,8 @@ def _merge_staging_payload_with_scrape_for_commit(staging_payload: dict, scraped
         v = s.get(k)
         if v is not None and str(v).strip():
             veh[k] = str(v).strip()
+    if not str(veh.get("invoice_number") or "").strip() and not HERO_DMS_ATTACH_AUTO_CLICK_CREATE_INVOICE:
+        veh["invoice_number"] = HERO_DMS_NONPROD_DUMMY_INVOICE_NUMBER
     fn = (s.get("financier_name") or "").strip()
     if fn:
         cust = merged.setdefault("customer", {})
@@ -1325,8 +1335,9 @@ def insert_dms_masters_from_siebel_scrape(
     Single transaction: **INSERT** ``customer_master``, ``vehicle_master``, and ``sales_master`` when
     no prior rows exist (Siebel-only / staging-less Fill DMS). Before commit, **UPDATE**
     ``vehicle_inventory_master.sold_date`` to today (dd/mm/yyyy) when trimmed chassis/engine match
-    full scraped frame/engine (not ``raw_*``). Call only **after Create Invoice** in DMS
-    (caller gates on scraped **Invoice#** — see ``invoice_number_ready_for_master_commit``).
+    full scraped frame/engine (not ``raw_*``).     Call after Create Invoice in DMS when **Invoice#** is scraped; in non-production, **Invoice#**
+    may be ``HERO_DMS_NONPROD_DUMMY_INVOICE_NUMBER`` when the UI never issued an invoice
+    (see ``invoice_number_ready_for_master_commit``).
 
     Requires name, mobile, and Aadhar last-4 derivable from ``dms_values`` and/or ``collated_customer_fields``.
 
@@ -1449,6 +1460,8 @@ def insert_dms_masters_from_siebel_scrape(
     order_n = (vd.get("order_number") or "").strip() or None
     inv_n = (vd.get("invoice_number") or "").strip() or None
     enq_n = (vd.get("enquiry_number") or "").strip() or None
+    if not inv_n and not HERO_DMS_ATTACH_AUTO_CLICK_CREATE_INVOICE:
+        inv_n = HERO_DMS_NONPROD_DUMMY_INVOICE_NUMBER
 
     conn = get_connection()
     try:
@@ -2026,11 +2039,17 @@ def run_fill_dms_only(
 
         _install_playwright_js_dialog_handler(page)
 
-        # Operator-controlled step: Playwright must not click "Create Invoice".
-        # If that action is pending on screen, instruct operator and stop.
+        # Operator-controlled step in production: Create Invoice must be clicked manually if still pending.
+        # Non-production: continue (dummy Invoice# on ``sales_master`` insert — see ``HERO_DMS_NONPROD_DUMMY_INVOICE_NUMBER``).
         if _requires_operator_create_invoice(page):
-            result["error"] = "Please click Create Invoice manually in DMS, then press Fill DMS again."
-            return result
+            if HERO_DMS_ATTACH_AUTO_CLICK_CREATE_INVOICE:
+                result["error"] = "Please click Create Invoice manually in DMS, then press Fill DMS again."
+                return result
+            logger.info(
+                "fill_dms_service: Create Invoice control visible — continuing (non-production ENVIRONMENT; "
+                "master commit uses %s if scrape has no Invoice#).",
+                HERO_DMS_NONPROD_DUMMY_INVOICE_NUMBER,
+            )
 
         _run_fill_dms_real_siebel_playwright(
             page,
@@ -2215,7 +2234,7 @@ def Playwright_Hero_DMS_fill(
     ``skip_contact_find=False``). ``dms_contact_path=skip_find`` in DB does not bypass Find.
 
     ``_attach_vehicle_to_bkg`` clicks **Apply Campaign**; **Create Invoice** only if
-    ``_ATTACH_VEHICLE_AUTO_CLICK_CREATE_INVOICE`` is True. Returns ``vehicle``,
+    ``HERO_DMS_ATTACH_AUTO_CLICK_CREATE_INVOICE`` is True (``ENVIRONMENT=prod`` in ``.env``). Returns ``vehicle``,
     ``error``, ``dms_siebel_forms_filled``, notes, milestones, ``dms_step_messages``, and on the video SOP path
     after **Add customer payment** ``dms_customer_master_collated``
     (``fill_hero_dms_service.collate_customer_master_from_dms_siebel_inputs`` — ``fields``, ``notes``, ``mapping_unclear``).

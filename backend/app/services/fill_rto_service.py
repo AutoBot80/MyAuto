@@ -19,7 +19,13 @@ from pathlib import Path
 
 from playwright.sync_api import Locator, Page, TimeoutError as PwTimeout
 
-from app.config import VAHAN_BASE_URL, VAHAN_DEALER_HOME_URL, get_ocr_output_dir, get_uploads_dir
+from app.config import (
+    ENVIRONMENT_IS_PRODUCTION,
+    VAHAN_BASE_URL,
+    VAHAN_DEALER_HOME_URL,
+    get_ocr_output_dir,
+    get_uploads_dir,
+)
 from app.services.handle_browser_opening import get_or_open_site_page
 from app.services.utility_functions import normalize_nominee_relationship_value
 
@@ -4046,7 +4052,12 @@ def _screen_5(page: Page, docs: dict[str, Path | None]) -> None:
 
 
 def _screen_6(page: Page) -> float | None:
-    """Screen 6: **Intentional hard stop** before **Dealer Regn Fee Tax** (no fee click, no payment automation)."""
+    """Screen 6: **Intentional stop** before **Dealer Regn Fee Tax** (no fee click, no payment automation).
+
+    In **production** (``ENVIRONMENT`` = ``prod`` / ``production``), raises ``RuntimeError`` so the run
+    surfaces that fee/payment is still manual. In any other ``ENVIRONMENT``, logs the same stop and
+    returns ``None`` so ``fill_rto_row`` completes with ``completed: True`` (dev/test full SOP without payment).
+    """
     _set_screen("Screen 6")
     logger.info("fill_rto: Screen 6 — hard stop before Dealer Regn Fee Tax")
     _rto_log("--- Screen 6: hard stop before Dealer Regn Fee Tax ---")
@@ -4057,7 +4068,17 @@ def _screen_6(page: Page) -> float | None:
     )
     logger.warning("fill_rto: %s", msg)
     _rto_log(f"HARD STOP (Screen 6): {msg}")
-    raise RuntimeError(msg)
+    if ENVIRONMENT_IS_PRODUCTION:
+        raise RuntimeError(msg)
+    logger.info(
+        "fill_rto: Screen 6 — non-production ENVIRONMENT: stopping before Dealer Regn Fee Tax; "
+        "returning success (completed=True, rto_payment_amount=None)."
+    )
+    _rto_log(
+        "Screen 6: non-production ENVIRONMENT — same hard stop (no payment automation); "
+        "fill_rto_row returns completed=True."
+    )
+    return None
 
 
 # Message aligned with ``handle_browser_opening._wait_login_or_prompt_after_open`` (DMS / Create Invoice UX).

@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { uploadScans, uploadScansV2, uploadScansV2ConsolidatedStream } from "../api/uploads";
 import { validateAadharScanFile } from "../utils/aadharScanFileValidation";
+import type { ConsolidatedFsArchiveContext } from "../utils/scannerArchive";
+import { moveConsolidatedToProcessed } from "../utils/scannerArchive";
 import type { ExtractedDetailsResponse, ManualFallbackPayload } from "../types";
 
 /** Second argument when upload response includes OCR — run after applying details so DMS warm-up can follow. */
@@ -20,7 +22,11 @@ export interface UseUploadScansControlled {
   /** After a successful upload (e.g. clear stale Fill DMS banner; receives saved_to for V2). Runs after onExtractionComplete when both apply. */
   onUploadSuccess?: (savedTo?: string) => void;
   /** Pre-OCR could not classify pages; server created a manual split session (JPEGs under 200KB). */
-  onManualFallback?: (payload: ManualFallbackPayload, warning?: string) => void;
+  onManualFallback?: (
+    payload: ManualFallbackPayload,
+    warning?: string,
+    scannerArchive?: ConsolidatedFsArchiveContext | null
+  ) => void;
 }
 
 export function useUploadScans(
@@ -115,7 +121,10 @@ export function useUploadScans(
     }
   }
 
-  async function uploadConsolidatedV2(consolidatedPdf: File) {
+  async function uploadConsolidatedV2(
+    consolidatedPdf: File,
+    fsArchive?: ConsolidatedFsArchiveContext | null
+  ) {
     setIsUploading(true);
     setUploadStatus("Uploading…");
     try {
@@ -135,7 +144,7 @@ export function useUploadScans(
         }
       });
       if (data.manual_fallback && controlled?.onManualFallback) {
-        controlled.onManualFallback(data.manual_fallback, data.warning);
+        controlled.onManualFallback(data.manual_fallback, data.warning, fsArchive ?? null);
         setUploadStatus(
           data.warning ??
             "Could not auto-read all pages. Assign each page below, enter Customer Mobile, then Apply."
@@ -151,6 +160,15 @@ export function useUploadScans(
       if (data.extraction?.error) msg += ` Warning: ${data.extraction.error}`;
       const soft = data.extraction?.warnings;
       if (Array.isArray(soft) && soft.length > 0) msg += ` ${soft.join(" ")}`;
+      if (fsArchive) {
+        try {
+          await moveConsolidatedToProcessed(fsArchive.fileHandle, fsArchive.scannerRoot);
+          msg += " Moved scan to processed folder.";
+        } catch (moveErr) {
+          const detail = moveErr instanceof Error ? moveErr.message : String(moveErr);
+          msg += ` Could not move file to processed: ${detail}`;
+        }
+      }
       setUploadStatus(msg);
       if (data.saved_files?.length)
         setUploadedFiles((prev) => [...(data.saved_files ?? []), ...prev]);

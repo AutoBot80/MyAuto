@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, Component, type ReactNode } from "react";
+import { useState, useEffect, useCallback, useMemo, Component, type ReactNode } from "react";
 import "./App.css";
 import type { Page } from "./types";
 import { useToday } from "./hooks/useToday";
@@ -49,14 +49,21 @@ class PageErrorBoundary extends Component<{ children: ReactNode }, { hasError: b
 
 type AppMode = "home" | "pos" | "service" | "rto" | "dealer" | "admin";
 
-const POS_PAGES: Page[] = [
-  "add-sales",
-  "subdealer-challan",
-  "bulk-loads",
-  "customer-details",
-  "view-vehicles",
-  "contact-us",
-];
+/** Bulk Loads tab and Add Sales “individual files” upload toggle (see ``posPagesForSession`` / AddSalesPage). */
+const BULK_LOADS_VISIBLE_LOGIN_ID = "shashank";
+
+function isShashankLogin(loginId: string | null): boolean {
+  return (loginId ?? "").trim().toLowerCase() === BULK_LOADS_VISIBLE_LOGIN_ID;
+}
+
+function posPagesForSession(loginId: string | null): Page[] {
+  const core: Page[] = ["add-sales", "subdealer-challan"];
+  const tail: Page[] = ["customer-details", "view-vehicles", "contact-us"];
+  if (isShashankLogin(loginId)) {
+    return [...core, "bulk-loads", ...tail];
+  }
+  return [...core, ...tail];
+}
 
 const SERVICE_PAGES: Page[] = ["service-reminders", "contact-us"];
 
@@ -68,6 +75,13 @@ const ADMIN_PAGES: Page[] = ["admin-dealers", "admin-upload-scans", "admin-run-l
 
 function initialLoginNameFromEnv(): string | null {
   const v = import.meta.env.VITE_LOGIN_NAME;
+  if (typeof v !== "string" || !v.trim()) return null;
+  return v.trim();
+}
+
+/** When ``VITE_AUTH_DISABLED`` is true, optional login_id for UI (e.g. Bulk Loads tab). */
+function initialLoginIdFromEnv(): string | null {
+  const v = import.meta.env.VITE_LOGIN_ID;
   if (typeof v !== "string" || !v.trim()) return null;
   return v.trim();
 }
@@ -97,6 +111,9 @@ function App() {
   const [addSalesAutoNewTrigger, setAddSalesAutoNewTrigger] = useState(0);
   /** Display name for Welcome line; rename _setLoginName when wiring the Login screen. */
   const [loginName, _setLoginName] = useState<string | null>(initialLoginNameFromEnv);
+  const [sessionLoginId, setSessionLoginId] = useState<string | null>(() =>
+    authDisabled ? initialLoginIdFromEnv() : null,
+  );
   /** Home tiles from ``roles_ref`` flags (JWT / ``/auth/me``). Dev bypass: all true. */
   const [homeTiles, setHomeTiles] = useState<HomeTileFlags>(ALL_HOME_TILES_TRUE);
   const [sessionAdmin, setSessionAdmin] = useState(authDisabled);
@@ -127,6 +144,7 @@ function App() {
     getMe()
       .then((m) => {
         setDealerId(m.dealer_id);
+        setSessionLoginId(m.login_id);
         _setLoginName(m.name || m.login_id);
         setHomeTiles({
           tile_pos: m.tile_pos,
@@ -153,13 +171,16 @@ function App() {
       .catch((e) => setSiteUrlsError(e instanceof Error ? e.message : "Could not load site URLs from server."));
   }, []);
 
-  const refreshBulkLoadsPendingCount = () => {
-    if (mode === "pos") {
+  const canSeeBulkLoads = sessionLoginId === BULK_LOADS_VISIBLE_LOGIN_ID;
+  const posPages = useMemo(() => posPagesForSession(sessionLoginId), [sessionLoginId]);
+
+  const refreshBulkLoadsPendingCount = useCallback(() => {
+    if (mode === "pos" && canSeeBulkLoads) {
       getBulkLoadPendingCount()
         .then(setBulkLoadsPendingCount)
         .catch(() => setBulkLoadsPendingCount(0));
     }
-  };
+  }, [mode, canSeeBulkLoads]);
 
   const refreshChallanFailedCount = useCallback(() => {
     getChallanStagingFailedCount(dealerId)
@@ -169,7 +190,7 @@ function App() {
 
   // Bulk-loads badge only: not tied to Add Sales OCR (upload runs extraction synchronously on the server).
   useEffect(() => {
-    if (mode !== "pos") {
+    if (mode !== "pos" || !canSeeBulkLoads) {
       setBulkLoadsPendingCount(0);
       return;
     }
@@ -179,7 +200,7 @@ function App() {
     refreshBulkLoadsPendingCount();
     const interval = setInterval(refreshBulkLoadsPendingCount, 60000);
     return () => clearInterval(interval);
-  }, [mode, pageVisible]);
+  }, [mode, pageVisible, canSeeBulkLoads, refreshBulkLoadsPendingCount]);
 
   // Subdealer Challans: master batches needing attention in the last 15 days (nav + Processed sub-tab badges).
   useEffect(() => {
@@ -197,12 +218,12 @@ function App() {
 
   // When switching mode, ensure page is in the current tab list (avoid blank screen). Must run on every render (before any early return).
   useEffect(() => {
-    if (mode === "pos" && !POS_PAGES.includes(page)) setPage("add-sales");
+    if (mode === "pos" && !posPages.includes(page)) setPage("add-sales");
     else if (mode === "service" && !SERVICE_PAGES.includes(page)) setPage("service-reminders");
     else if (mode === "rto" && !RTO_PAGES.includes(page)) setPage("rto-status");
     else if (mode === "dealer" && !DEALER_PAGES.includes(page)) setPage("dealer-dashboard");
     else if (mode === "admin" && !ADMIN_PAGES.includes(page)) setPage("admin-dealers");
-  }, [mode, page]);
+  }, [mode, page, posPages]);
 
   // If session loses access to a module (roles / JWT), leave that mode.
   useEffect(() => {
@@ -228,6 +249,7 @@ function App() {
             siteUrlsError={siteUrlsError}
             siteUrlsLoading={!siteUrls && !siteUrlsError}
             autoNewTrigger={addSalesAutoNewTrigger}
+            showIndividualFileUploadToggle={isShashankLogin(sessionLoginId)}
           />
         );
       case "subdealer-challan":
@@ -315,6 +337,7 @@ function App() {
       <LoginPage
         onLoggedIn={(s) => {
           setDealerId(s.dealer_id);
+          setSessionLoginId(s.login_id);
           _setLoginName(s.name || s.login_id);
           setHomeTiles({
             tile_pos: s.tile_pos,
@@ -385,7 +408,7 @@ function App() {
   }
 
   const visiblePages =
-    mode === "pos" ? POS_PAGES
+    mode === "pos" ? posPages
     : mode === "rto" ? RTO_PAGES
     : mode === "dealer" ? DEALER_PAGES
     : mode === "admin" ? ADMIN_PAGES
@@ -407,7 +430,10 @@ function App() {
           welcomeLoginName={loginName}
           tabBadges={
             mode === "pos"
-              ? { "bulk-loads": bulkLoadsPendingCount, "subdealer-challan": challanFailedCount }
+              ? {
+                  ...(canSeeBulkLoads ? { "bulk-loads": bulkLoadsPendingCount } : {}),
+                  "subdealer-challan": challanFailedCount,
+                }
               : undefined
           }
         >

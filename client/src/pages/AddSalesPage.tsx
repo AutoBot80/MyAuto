@@ -22,6 +22,8 @@ import {
 } from "../utils/formFieldSanitize";
 import { StatusMessage } from "../components/StatusMessage";
 import { usePageVisible } from "../hooks/usePageVisible";
+import type { ConsolidatedFsArchiveContext } from "../utils/scannerArchive";
+import { moveConsolidatedToProcessed } from "../utils/scannerArchive";
 
 /** Shown under Upload documents while upload or OCR polling runs; counts down toward 00m:00s. */
 const ADD_SALES_OCR_COUNTDOWN_START_SEC = 40;
@@ -218,6 +220,8 @@ interface AddSalesPageProps {
   siteUrlsError?: string | null;
   /** Increment to force the same behavior as pressing "New". */
   autoNewTrigger?: number;
+  /** When true, show “I want to upload individual files” (login_id shashank only). */
+  showIndividualFileUploadToggle?: boolean;
 }
 
 export function AddSalesPage({
@@ -228,6 +232,7 @@ export function AddSalesPage({
   siteUrlsLoading,
   siteUrlsError,
   autoNewTrigger,
+  showIndividualFileUploadToggle = false,
 }: AddSalesPageProps) {
   const pageVisible = usePageVisible();
   const [mobile, setMobile] = useState(() => getInitialForm().mobile);
@@ -278,6 +283,8 @@ export function AddSalesPage({
   const [extractionError, setExtractionError] = useState<string | null>(null);
   /** Pre-OCR failed validation; server returned JPEG split session for manual slot assignment. */
   const [manualFallbackPayload, setManualFallbackPayload] = useState<ManualFallbackPayload | null>(null);
+  /** After consolidated upload with FS access + manual OCR fallback: move landing → processed when Submit Info succeeds. */
+  const [pendingScannerArchiveMove, setPendingScannerArchiveMove] = useState<ConsolidatedFsArchiveContext | null>(null);
   /** Documents placed via manual assign; no Textract/OCR — user fills Section 2 by hand. */
   const [manualFormOnly, setManualFormOnly] = useState(false);
   /** True once Textract has returned insurance data for this upload (details sheet processed). */
@@ -387,8 +394,9 @@ export function AddSalesPage({
       setDmsScrapedVehicle(null);
       setDmsPdfsDownloaded(false);
     },
-    onManualFallback: (payload) => {
+    onManualFallback: (payload, _warning, scannerArchive) => {
       setManualFallbackPayload(payload);
+      if (scannerArchive) setPendingScannerArchiveMove(scannerArchive);
       setExtractionError(null);
       setManualFormOnly(false);
       setExtractedCustomer((prev) => prev ?? {});
@@ -532,6 +540,7 @@ export function AddSalesPage({
     setExtractedInsurance(null);
     setExtractionError(null);
     setManualFallbackPayload(null);
+    setPendingScannerArchiveMove(null);
     setManualFormOnly(false);
     setInsuranceReadByTextract(false);
     setDmsScrapedVehicle(null);
@@ -1214,6 +1223,7 @@ export function AddSalesPage({
       onUploadV2={uploadV2}
       onUploadConsolidated={uploadConsolidatedV2}
       ocrCountdownSeconds={ocrWaitActive ? ocrCountdownSec : null}
+      showIndividualFileUploadToggle={showIndividualFileUploadToggle}
     />
   );
 
@@ -1277,7 +1287,10 @@ export function AddSalesPage({
                       setExtractedInsurance((x) => x ?? {});
                       setUploadStatus(`Documents saved to ${to}. Fill Section 2 manually.`);
                     }}
-                    onDismiss={() => setManualFallbackPayload(null)}
+                    onDismiss={() => {
+                      setManualFallbackPayload(null);
+                      setPendingScannerArchiveMove(null);
+                    }}
                   />
                 )}
               </div>
@@ -1318,7 +1331,22 @@ export function AddSalesPage({
                           stagingId: lastStagingId,
                           preferInsurer,
                         });
-                        setSubmitStatus("Saved");
+                        let submitStatusMsg = "Saved";
+                        const arch = pendingScannerArchiveMove;
+                        if (arch) {
+                          try {
+                            await moveConsolidatedToProcessed(arch.fileHandle, arch.scannerRoot);
+                            submitStatusMsg += ". Moved scan to processed folder.";
+                            setUploadStatus((prev) => (prev ? `${prev} ` : "") + "Moved scan to processed folder.");
+                            setPendingScannerArchiveMove(null);
+                          } catch (e) {
+                            const detail = e instanceof Error ? e.message : String(e);
+                            submitStatusMsg += `. Could not move file to processed: ${detail}`;
+                            setUploadStatus((prev) => (prev ? `${prev} ` : "") + `Could not move file to processed: ${detail}`);
+                            setPendingScannerArchiveMove(null);
+                          }
+                        }
+                        setSubmitStatus(submitStatusMsg);
                         setHasSubmittedInfo(true);
                         if (submitRes?.staging_id != null && String(submitRes.staging_id).trim())
                           setLastStagingId(String(submitRes.staging_id).trim());

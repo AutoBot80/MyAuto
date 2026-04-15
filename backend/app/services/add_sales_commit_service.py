@@ -16,7 +16,11 @@ from typing import Any
 
 from psycopg2 import IntegrityError
 
-from app.config import DEALER_ID
+from app.config import (
+    DEALER_ID,
+    HERO_DMS_ATTACH_AUTO_CLICK_CREATE_INVOICE,
+    HERO_DMS_NONPROD_DUMMY_INVOICE_NUMBER,
+)
 from app.services.dms_relation_prefix import compute_dms_relation_prefix
 from app.services.utility_functions import sanitize_details_sheet_insurer_value
 
@@ -90,6 +94,8 @@ def upsert_customer_vehicle_sales(cur, payload: dict[str, Any]) -> tuple[int, in
 
     order_n = _str_or_none(vehicle.get("order_number"), 128)
     inv_n = _str_or_none(vehicle.get("invoice_number"), 128)
+    if inv_n is None and not HERO_DMS_ATTACH_AUTO_CLICK_CREATE_INVOICE:
+        inv_n = HERO_DMS_NONPROD_DUMMY_INVOICE_NUMBER[:128]
     enq_n = _str_or_none(vehicle.get("enquiry_number"), 128)
 
     raw_f = frame_no or None

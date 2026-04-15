@@ -59,6 +59,19 @@ BULK_UPLOAD_DIR = APP_ROOT.parent / "Bulk Upload"
 # Dealer ID for app. Used by bulk watcher, AUTH_DISABLED dev principal, and when client omits dealer_id.
 DEALER_ID = int(os.getenv("DEALER_ID", "100001"))
 
+# Deployment label from ``.env`` (e.g. dev, test, staging, prod). Case-insensitive ``prod`` / ``production``
+# enable production-only automation; all other values keep dev/test-safe defaults.
+ENVIRONMENT = (os.getenv("ENVIRONMENT") or "").strip()
+_ENV_LOWER = ENVIRONMENT.lower()
+# ``ENVIRONMENT`` in ``prod`` / ``production`` (case-insensitive) — shared gate for production-only automation.
+ENVIRONMENT_IS_PRODUCTION = _ENV_LOWER in ("prod", "production")
+# Siebel attach flow: auto-click **Create Invoice** only in production — never in dev/test/staging.
+HERO_DMS_ATTACH_AUTO_CLICK_CREATE_INVOICE = ENVIRONMENT_IS_PRODUCTION
+# When Create Invoice is not used (non-production), ``sales_master`` / staging commit uses this placeholder Invoice#.
+HERO_DMS_NONPROD_DUMMY_INVOICE_NUMBER = (os.getenv("HERO_DMS_NONPROD_DUMMY_INVOICE_NUMBER") or "DUMMY111").strip() or "DUMMY111"
+# Insurance MISP: click **Proposal Preview** / **Proposal Review** only in production; dev/test skip and succeed without it.
+HERO_MISP_CLICK_PROPOSAL_PREVIEW_REVIEW = ENVIRONMENT_IS_PRODUCTION
+
 # --- Auth (JWT) ---
 # When true, requests skip JWT validation and use a dev Principal (DEALER_ID, admin=True). Local use only.
 AUTH_DISABLED = os.getenv("AUTH_DISABLED", "false").lower() in ("1", "true", "yes")
