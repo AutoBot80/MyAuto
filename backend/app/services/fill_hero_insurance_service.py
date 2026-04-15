@@ -7302,6 +7302,8 @@ def _hero_misp_fill_proposal_and_review(
     customer_id: int | None = None,
     vehicle_id: int | None = None,
     staging_payload: dict | None = None,
+    staging_id: str | None = None,
+    dealer_id: int | None = None,
 ) -> tuple[str | None, dict[str, Any]]:
     """
     Proposal page after **I agree**: each fill is read back and logged (``Playwright_insurance.txt``);
@@ -7767,6 +7769,8 @@ def _hero_misp_fill_proposal_and_review(
                 preview_scrape=None,
                 ocr_output_dir=ocr_output_dir,
                 subfolder=subfolder,
+                staging_id=staging_id,
+                dealer_id=dealer_id,
             )
         except ValueError as persist_exc:
             append_playwright_insurance_line(
@@ -7931,6 +7935,8 @@ def main_process(
     subfolder: str | None = None,
     ocr_output_dir: Path | None = None,
     staging_payload: dict | None = None,
+    staging_id: str | None = None,
+    dealer_id: int | None = None,
 ) -> dict:
     """
     After **pre_process** (KYC → **VIN fill** → **Submit** on real MISP): **I agree** (if shown) → proposal form.
@@ -8048,6 +8054,8 @@ def main_process(
             customer_id=int(customer_id),
             vehicle_id=int(vehicle_id),
             staging_payload=staging_payload,
+            staging_id=staging_id,
+            dealer_id=dealer_id,
         )
         if prop_err:
             out["error"] = prop_err

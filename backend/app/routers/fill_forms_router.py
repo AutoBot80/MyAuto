@@ -434,6 +434,15 @@ async def fill_dms_only(
     warn, dms_mode = _dms_response_warning_and_mode(result)
     cc = result.get("committed_customer_id")
     vv = result.get("committed_vehicle_id")
+    if result.get("error") is None:
+        from app.services.upload_scans_invoice_print import schedule_dispatch_pdfs_after_create_invoice
+
+        schedule_dispatch_pdfs_after_create_invoice(
+            did,
+            req.subfolder,
+            str(customer_dict.get("mobile_number") or customer_dict.get("mobile") or ""),
+            list(result.get("pdfs_saved") or []),
+        )
     return FillDmsResponse(
         success=result.get("error") is None,
         vehicle=scraped,
@@ -538,6 +547,56 @@ async def print_form20(
         return PrintForm20Response(success=False, pdfs_saved=[], error=str(e))
 
 
+@router.post("/print-gate-pass", response_model=PrintForm20Response)
+async def print_gate_pass(
+    req: PrintForm20Request,
+    principal: Principal = Depends(get_principal),
+) -> PrintForm20Response:
+    """
+    Generate ``Gate Pass.pdf`` from ``templates/word/Gate Pass Template.docx`` (or ``GATE_PASS_TEMPLATE_DOCX``),
+    save under Uploaded scans, then schedule print/open per ``ENVIRONMENT`` (non-blocking).
+    """
+    enforce_max_text_depth(req.model_dump())
+    did = resolve_dealer_id(principal, req.dealer_id)
+    uploads_dir = Path(get_uploads_dir(did))
+    if not uploads_dir.is_dir():
+        raise HTTPException(status_code=500, detail="Uploads directory not found")
+    customer_dict = req.customer.model_dump(exclude_none=True)
+    if req.customer.mobile_number:
+        customer_dict["mobile_number"] = req.customer.mobile_number
+    if req.customer.mobile:
+        customer_dict["mobile"] = req.customer.mobile
+    vehicle_dict = dict(req.vehicle or {})
+    if "key_no" in vehicle_dict and "key_num" not in vehicle_dict:
+        vehicle_dict["key_num"] = vehicle_dict.get("key_no")
+    if "frame_no" in vehicle_dict and "frame_num" not in vehicle_dict:
+        vehicle_dict["frame_num"] = vehicle_dict.get("frame_no")
+    if "engine_no" in vehicle_dict and "engine_num" not in vehicle_dict:
+        vehicle_dict["engine_num"] = vehicle_dict.get("engine_no")
+    try:
+        from app.services.form20_service import generate_gate_pass_pdf_only
+        from app.services.upload_scans_pdf_dispatch import schedule_dispatch_local_pdf
+
+        pdf_path = generate_gate_pass_pdf_only(
+            subfolder=req.subfolder,
+            customer=customer_dict,
+            vehicle=vehicle_dict,
+            vehicle_id=req.vehicle_id,
+            dealer_id=did,
+            uploads_dir=uploads_dir,
+        )
+        schedule_dispatch_local_pdf(pdf_path)
+        return PrintForm20Response(success=True, pdfs_saved=["Gate Pass.pdf"])
+    except HTTPException:
+        raise
+    except FileNotFoundError as e:
+        logger.warning("print_gate_pass: %s", e)
+        return PrintForm20Response(success=False, pdfs_saved=[], error=str(e))
+    except Exception as e:
+        logger.warning("print_gate_pass: Gate Pass generation failed: %s", e)
+        return PrintForm20Response(success=False, pdfs_saved=[], error=str(e))
+
+
 @router.post("/insurance/hero", response_model=FillHeroInsuranceResponse)
 async def fill_hero_insurance(
     req: FillHeroInsuranceRequest = FillHeroInsuranceRequest(),
@@ -589,10 +648,16 @@ async def fill_hero_insurance(
             subfolder=req.subfolder,
             ocr_output_dir=ocr_dir,
             staging_payload=staging_payload,
+            staging_id=sid if sid else None,
+            dealer_id=did,
         )
         return post_process(pre_result=pre, main_result=main)
 
     result = await _run_playwright_work(_hero_insurance_run)
+    if result.get("success") and (req.subfolder or "").strip():
+        from app.services.upload_scans_invoice_print import schedule_dispatch_pdf_after_generate_insurance
+
+        schedule_dispatch_pdf_after_generate_insurance(did, (req.subfolder or "").strip())
     return FillHeroInsuranceResponse(
         success=bool(result.get("success")),
         error=result.get("error"),
@@ -669,6 +734,15 @@ async def fill_dms(
     warn, dms_mode = _dms_response_warning_and_mode(result)
     cc = result.get("committed_customer_id")
     vv = result.get("committed_vehicle_id")
+    if result.get("error") is None:
+        from app.services.upload_scans_invoice_print import schedule_dispatch_pdfs_after_create_invoice
+
+        schedule_dispatch_pdfs_after_create_invoice(
+            did,
+            req.subfolder,
+            str(customer_dict.get("mobile_number") or customer_dict.get("mobile") or ""),
+            list(result.get("pdfs_saved") or []),
+        )
     return FillDmsResponse(
         success=result.get("error") is None,
         vehicle=scraped,

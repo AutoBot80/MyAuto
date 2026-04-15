@@ -15,6 +15,10 @@ export interface AddSalesStored {
   lastSubmittedVehicleId: number | null;
   /** Draft ``add_sales_staging`` id from last successful Submit Info; passed to Create Invoice. */
   lastStagingId: string | null;
+  /** Create Invoice API returned success — keep button disabled until New. */
+  createInvoiceCompleted: boolean;
+  /** Generate Insurance API returned success — keep button disabled until New. */
+  generateInsuranceCompleted: boolean;
   extractedVehicle: {
     frame_no?: string;
     engine_no?: string;
@@ -49,6 +53,8 @@ const DEFAULT: AddSalesStored = {
   lastSubmittedCustomerId: null,
   lastSubmittedVehicleId: null,
   lastStagingId: null,
+  createInvoiceCompleted: false,
+  generateInsuranceCompleted: false,
   extractedVehicle: null,
   extractedCustomer: null,
   extractedInsurance: null,
@@ -58,9 +64,16 @@ import type { ExtractedCustomerDetails } from "../types";
 import { normalizeVehicleDetails } from "./vehicleDetails";
 import { sanitizeNomineeAgeInput, sanitizeOptionalFormField } from "./formFieldSanitize";
 
+import {
+  composeCareOf,
+  parseCareOfFromCombined,
+} from "./section2CustomerFormat";
+
 const CUSTOMER_KEYS: (keyof ExtractedCustomerDetails)[] = [
   "aadhar_id", "name", "gender", "year_of_birth", "date_of_birth",
-  "care_of", "house", "street", "location", "city", "post_office",
+  "alt_phone_num",
+  "care_of", "care_of_relation", "care_of_name",
+  "house", "street", "location", "city", "post_office",
   "district", "sub_district", "state", "pin_code", "address",
   "dms_relation_prefix", "dms_contact_path",
 ];
@@ -83,6 +96,18 @@ function normalizeExtractedCustomer(val: unknown): ExtractedCustomerDetails | nu
   if (!out.pin_code && o.pin != null && String(o.pin).trim() !== "") {
     const p = sanitizeOptionalFormField(String(o.pin).trim());
     if (p) out.pin_code = p;
+  }
+  if (out.care_of != null || out.care_of_name != null || out.care_of_relation != null) {
+    const rel = (out.care_of_relation && String(out.care_of_relation).trim()) || parseCareOfFromCombined(out.care_of).relation;
+    const name = (out.care_of_name && String(out.care_of_name).trim()) || parseCareOfFromCombined(out.care_of).name;
+    out.care_of_relation = rel;
+    out.care_of_name = name;
+    const composed = composeCareOf(rel, name);
+    if (composed) out.care_of = composed;
+  }
+  if (out.aadhar_id) {
+    const digits = String(out.aadhar_id).replace(/\D/g, "");
+    out.aadhar_id = digits.length >= 4 ? digits.slice(-4) : digits;
   }
   return Object.keys(out).length > 0 ? out : null;
 }
@@ -119,6 +144,8 @@ export function loadAddSalesForm(): AddSalesStored {
       lastSubmittedCustomerId: typeof parsed.lastSubmittedCustomerId === "number" ? parsed.lastSubmittedCustomerId : null,
       lastSubmittedVehicleId: typeof parsed.lastSubmittedVehicleId === "number" ? parsed.lastSubmittedVehicleId : null,
       lastStagingId: typeof parsed.lastStagingId === "string" && parsed.lastStagingId.trim() ? parsed.lastStagingId.trim() : null,
+      createInvoiceCompleted: Boolean(parsed.createInvoiceCompleted),
+      generateInsuranceCompleted: Boolean(parsed.generateInsuranceCompleted),
       extractedVehicle: normalizeExtractedVehicle(parsed.extractedVehicle),
       extractedCustomer: extractedCustomer && hasAnyCustomerValue(extractedCustomer) ? extractedCustomer : null,
       extractedInsurance: (() => {

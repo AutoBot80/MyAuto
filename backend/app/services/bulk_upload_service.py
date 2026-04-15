@@ -297,6 +297,7 @@ def process_bulk_pdf(
                 rto_application_date=date.today(),
                 rto_payment_amount=rto_fees,
                 status="Queued",
+                dealer_id=int(dealer_id),
             )
 
         name = customer.get("name") or ""

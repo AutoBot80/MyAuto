@@ -1,7 +1,7 @@
 -- Subdealer model discount rules. Run after dealer_ref.
 -- Run against database: auto_ai
 
-CREATE TABLE IF NOT EXISTS subdealer_discount_master (
+CREATE TABLE IF NOT EXISTS subdealer_discount_master_ref (
     subdealer_discount_id SERIAL PRIMARY KEY,
     dealer_id INTEGER NOT NULL,
     model VARCHAR(64) NOT NULL,
@@ -12,6 +12,6 @@ CREATE TABLE IF NOT EXISTS subdealer_discount_master (
     CONSTRAINT chk_subdealer_discount_valid_flag CHECK (valid_flag IN ('Y', 'N'))
 );
 
-COMMENT ON TABLE subdealer_discount_master IS 'Per-dealer model discount configuration';
-COMMENT ON COLUMN subdealer_discount_master.create_date IS 'dd/mm/yyyy';
-COMMENT ON COLUMN subdealer_discount_master.valid_flag IS 'Y = active, N = inactive';
+COMMENT ON TABLE subdealer_discount_master_ref IS 'Per-dealer model discount configuration';
+COMMENT ON COLUMN subdealer_discount_master_ref.create_date IS 'dd/mm/yyyy';
+COMMENT ON COLUMN subdealer_discount_master_ref.valid_flag IS 'Y = active, N = inactive';

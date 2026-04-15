@@ -81,33 +81,64 @@ def persist_staging_for_submit(
     dealer_id: int,
     payload: dict[str, Any],
     staging_id_existing: str | None,
+    login_id: str | None = None,
 ) -> str:
     """
     INSERT a new draft row or UPDATE ``payload_json`` when ``staging_id_existing`` matches a draft row
-    for the same ``dealer_id``. Returns the staging UUID string (existing or new).
+    for the same ``dealer_id``. Sets ``login_id`` when the column exists and a value is provided.
+    Returns the staging UUID string (existing or new).
     """
     payload_str = json.dumps(payload, default=str)
     sid = (staging_id_existing or "").strip()
+    lid = (login_id or "").strip() or None
     if sid:
         cur.execute(
             """
             UPDATE add_sales_staging
-            SET payload_json = %s::jsonb, updated_at = now()
+            SET payload_json = %s::jsonb,
+                updated_at = now(),
+                login_id = COALESCE(%s, login_id)
             WHERE staging_id = %s::uuid AND dealer_id = %s AND status = 'draft'
             """,
-            (payload_str, sid, dealer_id),
+            (payload_str, lid, sid, dealer_id),
         )
         if cur.rowcount:
             return sid
     new_id = str(uuid.uuid4())
     cur.execute(
         """
-        INSERT INTO add_sales_staging (staging_id, dealer_id, payload_json, status)
-        VALUES (%s::uuid, %s, %s::jsonb, 'draft')
+        INSERT INTO add_sales_staging (staging_id, dealer_id, payload_json, status, login_id)
+        VALUES (%s::uuid, %s, %s::jsonb, 'draft', %s)
         """,
-        (new_id, dealer_id, payload_str),
+        (new_id, dealer_id, payload_str, lid),
     )
     return new_id
+
+
+def merge_staging_payload_on_cursor(
+    cur,
+    staging_id: str,
+    dealer_id: int,
+    patch: dict[str, Any],
+) -> None:
+    """
+    Merge ``patch`` into ``payload_json`` without changing ``status`` (e.g. ``insurance_id`` after GI).
+    Only updates rows where ``staging_id`` / ``dealer_id`` match and ``status`` is draft or committed.
+    """
+    sid = (staging_id or "").strip()
+    if not sid or not patch:
+        return
+    frag = json.dumps(patch, default=str)
+    cur.execute(
+        """
+        UPDATE add_sales_staging
+        SET updated_at = now(),
+            payload_json = payload_json || %s::jsonb
+        WHERE staging_id = %s::uuid AND dealer_id = %s
+          AND status IN ('draft', 'committed')
+        """,
+        (frag, sid, int(dealer_id)),
+    )
 
 
 def mark_staging_committed_on_cursor(cur, staging_id: str, dealer_id: int, *, patch_json_fragment: str) -> None:

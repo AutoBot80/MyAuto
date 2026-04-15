@@ -124,6 +124,10 @@ export interface ExtractedCustomerDetails {
   year_of_birth?: string;
   date_of_birth?: string;
   care_of?: string;
+  /** Relation prefix for C/O line (dropdown); combined with ``care_of_name`` into ``care_of``. */
+  care_of_relation?: string;
+  /** Name after the relation marker; combined into ``care_of`` for submit. */
+  care_of_name?: string;
   house?: string;
   street?: string;
   location?: string;

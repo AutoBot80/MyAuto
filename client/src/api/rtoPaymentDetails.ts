@@ -5,16 +5,20 @@ export interface RtoPaymentInsertPayload {
   sales_id?: number | null;
   customer_id?: number | null;
   vehicle_id?: number | null;
+  dealer_id?: number | null;
   insurance_id?: number | null;
   customer_mobile?: string | null;
   rto_application_date?: string | null;
   rto_payment_amount?: number | null;
   status?: string;
+  /** Add Sales draft handle (`add_sales_staging.staging_id`). */
+  staging_id?: string | null;
 }
 
 export interface RtoPaymentRow {
   rto_queue_id: number;
   sales_id: number;
+  staging_id?: string | null;
   insurance_id?: number | null;
   customer_mobile?: string | null;
   rto_application_id?: string | null;

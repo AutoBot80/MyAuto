@@ -54,11 +54,12 @@ def _last4(aadhar_id: str | None) -> str | None:
     return digits[-4:] if len(digits) >= 4 else digits or None
 
 
-def upsert_customer_vehicle_sales(cur, payload: dict[str, Any]) -> tuple[int, int]:
+def upsert_customer_vehicle_sales(cur, payload: dict[str, Any]) -> tuple[int, int, int]:
     """
     Customer by (aadhar last 4, mobile_number), vehicle by raw triple upsert; **sales** is a plain
     ``INSERT``. If ``sales_master`` already has a row for the resulting ``(customer_id, vehicle_id)``,
     raises ``ValueError`` (unique ``uq_sales_customer_vehicle``).
+    Returns ``(customer_id, vehicle_id, sales_id)``.
     """
     customer = payload.get("customer") if isinstance(payload.get("customer"), dict) else {}
     vehicle = payload.get("vehicle") if isinstance(payload.get("vehicle"), dict) else {}
@@ -221,9 +222,12 @@ def upsert_customer_vehicle_sales(cur, payload: dict[str, Any]) -> tuple[int, in
                 order_number, invoice_number, enquiry_number
             )
             VALUES (%s, %s, %s, %s, %s, %s, %s)
+            RETURNING sales_id
             """,
             (customer_id, vehicle_id, sale_dealer_id, loc, order_n, inv_n, enq_n),
         )
+        row = cur.fetchone()
+        sales_id = int(row["sales_id"]) if row else None
     except IntegrityError as exc:
         cname = getattr(getattr(exc, "diag", None), "constraint_name", None) or ""
         if cname == "uq_sales_customer_vehicle" or "uq_sales_customer_vehicle" in str(exc):
@@ -232,7 +236,10 @@ def upsert_customer_vehicle_sales(cur, payload: dict[str, Any]) -> tuple[int, in
             ) from exc
         raise
 
-    return int(customer_id), int(vehicle_id)
+    if sales_id is None:
+        raise RuntimeError("sales_master INSERT did not return sales_id")
+
+    return int(customer_id), int(vehicle_id), sales_id
 
 
 def commit_staging_masters_and_finalize_row(
@@ -261,8 +268,8 @@ def commit_staging_masters_and_finalize_row(
 
     with get_connection() as conn:
         with conn.cursor() as cur:
-            cid, vid = upsert_customer_vehicle_sales(cur, merged_payload)
-            patch_obj: dict[str, Any] = {"customer_id": cid, "vehicle_id": vid}
+            cid, vid, sid_sale = upsert_customer_vehicle_sales(cur, merged_payload)
+            patch_obj: dict[str, Any] = {"customer_id": cid, "vehicle_id": vid, "sales_id": sid_sale}
             cust_m = merged_payload.get("customer") if isinstance(merged_payload.get("customer"), dict) else {}
             fn = (cust_m.get("financier") or "").strip()
             if fn:
@@ -489,6 +496,8 @@ def insert_insurance_master_after_gi(
     preview_scrape: dict[str, Any] | None = None,
     ocr_output_dir: Path | str | None = None,
     subfolder: str | None = None,
+    staging_id: str | None = None,
+    dealer_id: int | None = None,
 ) -> None:
     """
     INSERT ``insurance_master`` for the current calendar ``insurance_year`` after proposal form fill on MISP,
@@ -499,6 +508,7 @@ def insert_insurance_master_after_gi(
     (``uq_insurance_customer_vehicle_year``). After **Issue Policy**, call
     ``update_insurance_master_policy_after_issue`` with the post-issue preview scrape dict.
     Does not write pre-commit INSERT snapshot lines to ``Playwright_insurance.txt`` (see **LLD** **6.215**).
+    When ``staging_id`` and ``dealer_id`` are set, merges ``insurance_id`` into ``add_sales_staging.payload_json``.
     """
     snap = compute_insurance_master_insert_snapshot(
         customer_id,
@@ -534,9 +544,11 @@ def insert_insurance_master_after_gi(
     policy_broker = ir["policy_broker"]
 
     from app.db import get_connection
+    from app.repositories.add_sales_staging import merge_staging_payload_on_cursor
 
     with get_connection() as conn:
         with conn.cursor() as cur:
+            insurance_id: int | None = None
             try:
                 cur.execute(
                     """
@@ -547,6 +559,7 @@ def insert_insurance_master_after_gi(
                         idv, policy_broker
                     )
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING insurance_id
                     """,
                     (
                         int(customer_id),
@@ -565,6 +578,9 @@ def insert_insurance_master_after_gi(
                         policy_broker,
                     ),
                 )
+                row_ins = cur.fetchone()
+                if row_ins:
+                    insurance_id = int(row_ins["insurance_id"])
             except IntegrityError as exc:
                 cname = getattr(getattr(exc, "diag", None), "constraint_name", None) or ""
                 if cname == "uq_insurance_customer_vehicle_year" or "uq_insurance_customer_vehicle_year" in str(
@@ -575,6 +591,11 @@ def insert_insurance_master_after_gi(
                         "duplicate insurance_master row is not allowed."
                     ) from exc
                 raise
+            sid_merge = (staging_id or "").strip()
+            if insurance_id is not None and sid_merge and dealer_id is not None:
+                merge_staging_payload_on_cursor(
+                    cur, sid_merge, int(dealer_id), {"insurance_id": insurance_id}
+                )
         conn.commit()
     logger.info(
         "insurance_master insert after GI: customer_id=%s vehicle_id=%s year=%s policy_num=%r premium=%s",

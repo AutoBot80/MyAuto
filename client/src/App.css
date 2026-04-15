@@ -440,6 +440,10 @@
   justify-content: flex-end;
 }
 
+.add-sales-v2-box-fill-forms .add-sales-v2-print-forms-actions {
+  margin-top: 10px;
+}
+
 .add-sales-v2-print-forms-row {
   display: flex;
   align-items: center;
@@ -483,16 +487,69 @@
 
 .add-sales-v2-fields-row--section2-identity {
   display: flex;
-  flex-wrap: wrap;
-  gap: 16px 24px;
+  flex-direction: column;
+  flex-wrap: nowrap;
+  gap: 2px;
   margin-bottom: 10px;
-  align-items: flex-end;
+  align-items: flex-start;
 }
 
 .add-sales-v2-fields-row--section2-identity .add-sales-v2-input-wrap {
-  flex: 1 1 200px;
-  min-width: 180px;
-  max-width: 320px;
+  flex: 0 0 auto;
+  min-width: 0;
+  max-width: none;
+  width: auto;
+}
+
+.add-sales-v2-fields-row--section2-identity .app-field-row {
+  margin-bottom: 0;
+  align-items: center;
+  width: 100%;
+}
+
+.add-sales-v2-fields-row--section2-identity .app-field {
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  justify-content: flex-start;
+}
+
+/* Label column matches Name row (150px dt); gap + margin match grid gap + dd pad so inputs line up with Name */
+.add-sales-v2-fields-row--section2-identity .app-field-label {
+  flex: 0 0 150px;
+  width: 150px;
+  min-width: 150px;
+  text-align: left;
+  box-sizing: border-box;
+}
+
+.add-sales-v2-care-of-split {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  width: 100%;
+}
+
+.add-sales-v2-dl-select {
+  flex: 0 0 auto;
+  min-width: 4.5rem;
+  max-width: 100%;
+}
+
+.add-sales-v2-care-of-name-label {
+  flex: 0 0 auto;
+  font-size: 13px;
+  color: #444;
+}
+
+.add-sales-v2-care-of-name-input {
+  flex: 1 1 140px;
+  min-width: 0;
+}
+
+.add-sales-v2-dl-row--care-of dd {
+  width: 100%;
 }
 
 .manual-fallback-split-review {
@@ -734,19 +791,84 @@
   font-size: 13px;
 }
 
-.add-sales-v2-dl--customer .add-sales-v2-dl-row,
-.add-sales-v2-dl--customer .add-sales-v2-dl-row-group {
-  gap: 1px;
+/* Section 2 Customer Details: label column + gaps match Financier row (150px dt, 12px gap, 6px dd pad) */
+.add-sales-v2-dl--customer {
+  --add-sales-customer-label-col: 150px;
 }
-.add-sales-v2-dl--customer .add-sales-v2-dl-row {
-  margin-bottom: 2px;
+
+.add-sales-v2-dl-customer-line {
+  display: grid;
+  align-items: center;
+  column-gap: 12px;
+  row-gap: 4px;
+  margin-bottom: 6px;
 }
-.add-sales-v2-dl--customer .add-sales-v2-dl-row dt {
-  min-width: 80px;
-  max-width: 80px;
+
+.add-sales-v2-dl-customer-line dt {
+  margin: 0;
+  font-weight: 500;
+  color: #555;
 }
-.add-sales-v2-dl--customer .add-sales-v2-dl-row dd {
-  padding-left: 1px;
+
+.add-sales-v2-dl-customer-line dd {
+  margin: 0;
+  color: #333;
+  min-width: 0;
+  padding-left: 0;
+}
+
+.add-sales-v2-dl-customer-line--full {
+  grid-template-columns: var(--add-sales-customer-label-col) 1fr;
+}
+
+.add-sales-v2-dl--customer .add-sales-v2-dl-customer-line--full dd {
+  padding-left: 6px; /* match .add-sales-v2-dl-row dd — inputs line up with Financier */
+}
+
+/* Gender column max-content (no fixed 7.25rem gap) pulls “DOB” left; last column min width fits DD/MM/YYYY */
+.add-sales-v2-dl-customer-line--dob-gender {
+  grid-template-columns:
+    var(--add-sales-customer-label-col)
+    max-content
+    min-content
+    minmax(11rem, 1fr);
+}
+
+.add-sales-v2-dl--customer .add-sales-v2-dd--gender-narrow {
+  display: flex;
+  justify-content: flex-start;
+  align-items: center;
+  padding-left: 6px; /* same inset as Financier / full rows */
+}
+
+.add-sales-v2-dl--customer .add-sales-v2-dl-customer-line--dob-gender dt:nth-of-type(2) {
+  margin-left: -2px;
+}
+
+.add-sales-v2-dl--customer .add-sales-v2-dl-input--care-of-free::placeholder {
+  color: #8a96a3;
+  opacity: 1;
+}
+
+/* Gender field width matches former C/O relation column */
+.add-sales-v2-dl--customer .add-sales-v2-dl-input--gender-narrow {
+  display: block;
+  flex: none;
+  width: 4.25ch;
+  min-width: 4.25ch;
+  max-width: 100%;
+  box-sizing: content-box;
+}
+
+.add-sales-v2-dl--customer .add-sales-v2-dd--dob-full {
+  margin-left: -3px; /* shift DOB input left (grid gap) */
+}
+
+.add-sales-v2-dl--customer .add-sales-v2-dd--dob-full .add-sales-v2-dl-input--dob {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .add-sales-v2-dl--dms .add-sales-v2-dl-row,
@@ -790,13 +912,8 @@
   padding-left: 6px; /* shift extracted values slightly right while keeping labels fixed */
 }
 
-/* DOB: dd had flex:1 — column stretched to half the row-group; cap the cell + input together */
-.add-sales-v2-dl--customer .add-sales-v2-dl-row dd.add-sales-v2-dl-dd--dob {
-  flex: 0 0 auto;
-  /* Compact YYYY-MM-DD; 10% wider than 5.85rem */
-  width: 6.435rem;
-  max-width: 6.435rem;
-  min-width: 0;
+.add-sales-v2-dl-input--aadhar4 {
+  box-sizing: border-box;
 }
 
 .add-sales-v2-inline-label {
@@ -828,7 +945,14 @@
   border-color: #1e5a9e;
 }
 
-/* DOB — short date; fill the capped dd (see .add-sales-v2-dl-dd--dob) */
+/* Section 3 B. Insurance — stretch to match subsection head (Generate Insurance button right edge) */
+.add-sales-v2-dl-input--insurance-provider-wide {
+  max-width: none;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* DOB — fill wide date cell (see .add-sales-v2-dd--dob-full) */
 .add-sales-v2-dl-input.add-sales-v2-dl-input--dob {
   display: block;
   flex: none;
@@ -863,6 +987,7 @@
   flex-direction: row;
   align-items: center;
   gap: 10px;
+  justify-content: flex-start;
 }
 .add-sales-v2-input-mobile .app-field-label {
   margin-bottom: 0;
@@ -876,9 +1001,44 @@
 }
 
 .add-sales-v2-input-mobile .app-field-input {
-  width: 11.5ch;
-  min-width: 11.5ch;
+  width: 14ch;
+  min-width: 14ch;
   box-sizing: content-box;
+}
+
+.add-sales-v2-input-alt .app-field {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  justify-content: flex-start;
+}
+.add-sales-v2-input-alt .app-field-label {
+  margin-bottom: 0;
+  flex-shrink: 0;
+}
+.add-sales-v2-input-alt .app-field-input {
+  width: 14ch;
+  min-width: 14ch;
+  box-sizing: content-box;
+}
+
+.add-sales-v2-fields-row--section2-identity .add-sales-v2-input-mobile .app-field,
+.add-sales-v2-fields-row--section2-identity .add-sales-v2-input-alt .app-field {
+  gap: 12px;
+}
+
+.add-sales-v2-fields-row--section2-identity .add-sales-v2-input-mobile .app-field-input,
+.add-sales-v2-fields-row--section2-identity .add-sales-v2-input-alt .app-field-input {
+  margin-left: 6px;
+  padding: 6px 10px;
+  font-size: 13px;
+  border-radius: 6px;
+  color: #333;
+  box-sizing: border-box;
+  /* ~10 digits + horizontal padding inside border box (aligned with Name — only grows right) */
+  width: 14ch;
+  min-width: 14ch;
 }
 
 .add-sales-v2-panel-wrap {
@@ -897,6 +1057,14 @@
 .add-sales-v2-box-upload .app-panel .app-panel-scan-button {
   min-width: 120px;
   box-sizing: border-box;
+}
+
+.add-sales-v2-box-upload .app-panel .app-panel-scan-folder-picker {
+  max-width: min(100%, 22rem);
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .app-panel-insurance-block {
@@ -2356,27 +2524,11 @@
   min-width: 140px;
 }
 
-.app-panel-scan-archive-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px 14px;
-  flex: 1;
-  min-width: 0;
-}
-
-.app-panel-scan-archive-hint {
+.app-panel-scan-folder-note {
   font-size: 12px;
-  color: #555;
-  line-height: 1.4;
-  max-width: 42em;
-}
-
-.app-panel-scan-archive-hint code {
-  font-size: 11px;
-  padding: 0 4px;
-  background: #f3f4f6;
-  border-radius: 3px;
+  color: #6b7280;
+  margin: 0 0 12px;
+  line-height: 1.45;
 }
 
 .app-panel-scan-env-path {

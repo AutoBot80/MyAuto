@@ -215,6 +215,15 @@ export async function printForm20(req: PrintForm20Request): Promise<PrintForm20R
   });
 }
 
+/** Gate Pass only: Word template → PDF under Uploaded scans, then server schedules print/open. */
+export async function printGatePass(req: PrintForm20Request): Promise<PrintForm20Response> {
+  return apiFetch<PrintForm20Response>("/fill-forms/print-gate-pass", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+  });
+}
+
 /** Fetch Data from DMS for a subfolder (fallback when Fill Forms response was lost). */
 export async function getDataFromDms(subfolder: string, dealerId?: number): Promise<{ vehicle: Record<string, string>; customer: Record<string, string> }> {
   const params = new URLSearchParams();

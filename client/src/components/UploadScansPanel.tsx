@@ -39,6 +39,36 @@ function formatOcrCountdown(totalSec: number): string {
   return `${String(m).padStart(2, "0")}m:${String(s).padStart(2, "0")}s`;
 }
 
+/** e.g. `C:\Users\me\Saathi Docs\scanner` → `.../Saathi Docs/scanner` */
+function formatLastTwoPathSegments(absolutePath: string): string {
+  const norm = absolutePath.trim().replace(/\\/g, "/").replace(/\/+$/, "");
+  const parts = norm.split("/").filter(Boolean);
+  if (parts.length >= 2) {
+    return `.../${parts[parts.length - 2]}/${parts[parts.length - 1]}`;
+  }
+  if (parts.length === 1) return `.../${parts[0]}`;
+  return absolutePath.trim();
+}
+
+function scansFolderPickerButtonLabel(
+  handle: FileSystemDirectoryHandle | null,
+  envPath: string
+): string {
+  if (!handle) return "Choose folder";
+  if (envPath) return formatLastTwoPathSegments(envPath);
+  return `.../${handle.name}`;
+}
+
+function scansFolderPickerTitle(handle: FileSystemDirectoryHandle | null, envPath: string): string {
+  if (!handle) {
+    return envPath
+      ? `Choose folder (expected near ${envPath})`
+      : "Choose a folder that contains landing and processed";
+  }
+  if (envPath) return envPath;
+  return `${handle.name} (full path not available from browser)`;
+}
+
 const SCAN_LABELS = [
   "Aadhar (front side)",
   "Aadhar (back side)",
@@ -182,6 +212,13 @@ export function UploadScansPanel({
     consolidatedInputRef.current?.click();
   }
 
+  const showScannerArchiveRow =
+    !isPreUploaded && fsAccessSupported() && hasConsolidated && !individualMode;
+
+  const envScannerPath = import.meta.env.VITE_SCANNER_ROOT?.trim() ?? "";
+  const scansFolderButtonLabel = scansFolderPickerButtonLabel(scannerRootHandle, envScannerPath);
+  const scansFolderButtonTitle = scansFolderPickerTitle(scannerRootHandle, envScannerPath);
+
   return (
     <section className="app-panel">
       <div className="app-panel-title">Upload scans</div>
@@ -201,38 +238,36 @@ export function UploadScansPanel({
               <p className="app-panel-hint-consolidated" role="note">
                 Consolidated PDF should contain Sales Detail Sheet, Aadhaar Front and Aadhaar Back information
               </p>
-              {fsAccessSupported() ? (
-                <div className="app-panel-row app-panel-scan-row">
-                  <span className="app-panel-scan-label">Scanner archive</span>
-                  <div className="app-panel-scan-archive-actions">
+              {showScannerArchiveRow ? (
+                <>
+                  <div className="app-panel-row app-panel-scan-row">
+                    <span className="app-panel-scan-label">Scans Folder</span>
                     <button
                       type="button"
-                      className="app-button app-button--small app-panel-scan-button"
+                      className="app-button app-panel-scan-button app-panel-scan-folder-picker"
                       disabled={isUploading}
+                      title={scansFolderButtonTitle}
                       onClick={() => void onChooseScannerFolder()}
                     >
-                      {scannerRootHandle ? "Change scanner folder…" : "Set scanner folder…"}
+                      {scansFolderButtonLabel}
                     </button>
-                    {scannerRootHandle ? (
-                      <span className="app-panel-scan-archive-hint" title="PDFs are moved to the processed subfolder after OCR.">
-                        landing → processed enabled
-                      </span>
-                    ) : (
-                      <span className="app-panel-scan-archive-hint">
-                        Select the folder that contains <code>landing</code> and <code>processed</code> once (see{" "}
-                        <code className="app-panel-scan-env-path">
-                          {import.meta.env.VITE_SCANNER_ROOT?.trim() || "VITE_SCANNER_ROOT in .env"}
-                        </code>
-                        ); then Choose file opens in landing.
-                      </span>
-                    )}
                   </div>
-                </div>
-              ) : null}
-              {scannerFolderError ? (
-                <p className="app-panel-file-error" role="alert">
-                  {scannerFolderError}
-                </p>
+                  {scannerRootHandle ? (
+                    <p className="app-panel-scan-folder-note" role="note">
+                      After processing, PDFs will be moved from landing to processed folder.
+                    </p>
+                  ) : (
+                    <p className="app-panel-scan-folder-note" role="note">
+                      Pick the folder that contains landing and processed
+                      {envScannerPath ? " (button shows last two segments from env when set)." : "."}
+                    </p>
+                  )}
+                  {scannerFolderError ? (
+                    <p className="app-panel-file-error" role="alert">
+                      {scannerFolderError}
+                    </p>
+                  ) : null}
+                </>
               ) : null}
               <div className="app-panel-row app-panel-scan-row">
                 <label className="app-panel-scan-label" htmlFor="upload-scan-consolidated">

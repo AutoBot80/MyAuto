@@ -82,6 +82,7 @@ def post_submit_info(
             dealer_id=did,
             file_location=payload.file_location,
             staging_id=payload.staging_id,
+            login_id=principal.login_id,
         )
         return result
     except HTTPException:

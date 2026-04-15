@@ -7,6 +7,8 @@ from app.db import get_connection
 SELECT_COLUMNS = """
 rq.rto_queue_id,
 rq.sales_id,
+rq.staging_id,
+rq.dealer_id,
 rq.insurance_id,
 rq.customer_mobile,
 rq.rto_application_id,
@@ -30,7 +32,6 @@ JOINED_COLUMNS = f"""
 {SELECT_COLUMNS},
 sm.customer_id,
 sm.vehicle_id,
-sm.dealer_id,
 sm.billing_date,
 cm.name AS customer_name,
 cm.mobile_number AS mobile,
@@ -77,6 +78,23 @@ def _get_sales_id(customer_id: int, vehicle_id: int) -> int | None:
         conn.close()
 
 
+def get_dealer_id_for_sales(sales_id: int) -> int | None:
+    """Return dealer_id from sales_master for this sale."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT dealer_id FROM sales_master WHERE sales_id = %s",
+                (sales_id,),
+            )
+            row = cur.fetchone()
+            if not row or row.get("dealer_id") is None:
+                return None
+            return int(row["dealer_id"])
+    finally:
+        conn.close()
+
+
 def insert(
     sales_id: int,
     insurance_id: int | None = None,
@@ -84,6 +102,8 @@ def insert(
     rto_application_date: date | None = None,
     rto_payment_amount: float | None = None,
     status: str = "Queued",
+    staging_id: str | None = None,
+    dealer_id: int | None = None,
 ) -> int:
     """Insert a queue row; returns rto_queue_id. Upserts on sales_id conflict."""
     conn = get_connection()
@@ -94,6 +114,8 @@ def insert(
                 INSERT INTO rto_queue
                 (
                     sales_id,
+                    staging_id,
+                    dealer_id,
                     insurance_id,
                     customer_mobile,
                     rto_application_date,
@@ -101,8 +123,10 @@ def insert(
                     status,
                     updated_at
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, NOW())
+                VALUES (%s, %s::uuid, %s, %s, %s, %s, %s, %s, NOW())
                 ON CONFLICT (sales_id) DO UPDATE SET
+                  staging_id = COALESCE(EXCLUDED.staging_id, rto_queue.staging_id),
+                  dealer_id = COALESCE(EXCLUDED.dealer_id, rto_queue.dealer_id),
                   insurance_id = COALESCE(EXCLUDED.insurance_id, rto_queue.insurance_id),
                   customer_mobile = COALESCE(EXCLUDED.customer_mobile, rto_queue.customer_mobile),
                   rto_application_date = COALESCE(EXCLUDED.rto_application_date, rto_queue.rto_application_date),
@@ -117,6 +141,8 @@ def insert(
                 """,
                 (
                     sales_id,
+                    (staging_id or "").strip() or None,
+                    dealer_id,
                     insurance_id,
                     (customer_mobile or "").strip() or None,
                     rto_application_date,

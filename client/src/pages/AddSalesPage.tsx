@@ -7,7 +7,7 @@ import { ManualFallbackSplitReview } from "../components/ManualFallbackSplitRevi
 import type { ManualFallbackPayload } from "../types";
 import { getExtractedDetails } from "../api/aiReaderQueue";
 import { submitInfo } from "../api/submitInfo";
-import { fillDmsOnly, fillHeroInsurance, printForm20, isFillDmsAbortError, warmDmsBrowser } from "../api/fillForms";
+import { fillDmsOnly, fillHeroInsurance, printGatePass, isFillDmsAbortError, warmDmsBrowser } from "../api/fillForms";
 import { fetchCreateInvoiceEligibility } from "../api/addSales";
 import { insertRtoPayment } from "../api/rtoPaymentDetails";
 import { loadAddSalesForm, saveAddSalesForm, clearAddSalesForm } from "../utils/addSalesStorage";
@@ -24,6 +24,13 @@ import { StatusMessage } from "../components/StatusMessage";
 import { usePageVisible } from "../hooks/usePageVisible";
 import type { ConsolidatedFsArchiveContext } from "../utils/scannerArchive";
 import { moveConsolidatedToProcessed } from "../utils/scannerArchive";
+import {
+  composeCareOf,
+  formatDobDigitsInput,
+  isValidDdMmYyyy,
+  normalizeDobToDdMmYyyy,
+  parseCareOfFromCombined,
+} from "../utils/section2CustomerFormat";
 
 /** Shown under Upload documents while upload or OCR polling runs; counts down toward 00m:00s. */
 const ADD_SALES_OCR_COUNTDOWN_START_SEC = 40;
@@ -46,14 +53,28 @@ function getInitialForm() {
 function mapApiCustomerToExtracted(cust: Record<string, unknown>): ExtractedCustomerDetails {
   const r = cust;
   const pinVal = sanitizeOptionalFormField(String(r.pin ?? r.pin_code ?? "").trim());
+  const dobRaw = sanitizeOptionalFormField(String(r.date_of_birth ?? "").trim());
+  const dobNorm = dobRaw ? normalizeDobToDdMmYyyy(dobRaw) : "";
+  const careRaw = sanitizeOptionalFormField(String(r.care_of ?? "").trim());
+  const careParts = parseCareOfFromCombined(careRaw);
+  const careComposed = composeCareOf(careParts.relation, careParts.name) || careRaw;
+  const aadharDigits = String(r.aadhar_id ?? "").replace(/\D/g, "");
+  const aadharLast4 =
+    aadharDigits.length >= 4
+      ? aadharDigits.slice(-4)
+      : aadharDigits.length > 0
+        ? aadharDigits
+        : undefined;
   return {
-    aadhar_id: sanitizeOptionalFormField(String(r.aadhar_id ?? "").trim()),
+    aadhar_id: sanitizeOptionalFormField(aadharLast4 ?? ""),
     name: sanitizeOptionalFormField(String(r.name ?? "").trim()),
     alt_phone_num: sanitizeOptionalFormField(String(r.alt_phone_num ?? r.alternate_mobile_number ?? "").trim()),
     gender: sanitizeOptionalFormField(String(r.gender ?? "").trim()),
     year_of_birth: sanitizeOptionalFormField(String(r.year_of_birth ?? "").trim()),
-    date_of_birth: sanitizeOptionalFormField(String(r.date_of_birth ?? "").trim()),
-    care_of: sanitizeOptionalFormField(String(r.care_of ?? "").trim()),
+    date_of_birth: dobNorm || undefined,
+    care_of: careComposed || undefined,
+    care_of_relation: careParts.relation,
+    care_of_name: careParts.name || undefined,
     house: sanitizeOptionalFormField(String(r.house ?? "").trim()),
     street: sanitizeOptionalFormField(String(r.street ?? "").trim()),
     location: sanitizeOptionalFormField(String(r.location ?? "").trim()),
@@ -193,19 +214,6 @@ function mergeInsuranceFromOcrPayload(
   };
 }
 
-function parseAmount(value: unknown): number | null {
-  if (value == null) return null;
-  const cleaned = String(value).replace(/,/g, "").trim();
-  if (!cleaned) return null;
-  const parsed = Number(cleaned);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function computeRtoFees(totalAmount: unknown): number {
-      const total = parseAmount(totalAmount) ?? 72000;
-  return Math.round(total * 0.01 + 200);
-}
-
 interface AddSalesPageProps {
   dealerId: number;
   /** From GET /dealers/:id — Hero MotoCorp is ``1`` (financier staging remap rules). */
@@ -276,9 +284,19 @@ export function AddSalesPage({
   /** True after user has used Print forms. (Used for beforeunload warning.) */
   const [hasPrintedForms, setHasPrintedForms] = useState(false);
   /** From last successful Submit Info; used when inserting the RTO queue row after Fill Forms. */
+  /**
+   * Committed `customer_master` / `vehicle_master` ids for this sale.
+   * Set from: Create Invoice (`fillDmsOnly`) response; eligibility API (`fetchCreateInvoiceEligibility` /
+   * `refreshCreateInvoiceEligibility`) `resolved_*` when chassis/engine/mobile match DB; restored from session storage.
+   * Submit Info alone only stores `lastStagingId` — masters are committed after Create Invoice.
+   */
   const [lastSubmittedCustomerId, setLastSubmittedCustomerId] = useState<number | null>(() => getInitialForm().lastSubmittedCustomerId);
   const [lastSubmittedVehicleId, setLastSubmittedVehicleId] = useState<number | null>(() => getInitialForm().lastSubmittedVehicleId);
   const [lastStagingId, setLastStagingId] = useState<string | null>(() => getInitialForm().lastStagingId);
+  const [createInvoiceCompleted, setCreateInvoiceCompleted] = useState(() => getInitialForm().createInvoiceCompleted);
+  const [generateInsuranceCompleted, setGenerateInsuranceCompleted] = useState(
+    () => getInitialForm().generateInsuranceCompleted
+  );
   /** Extraction error (e.g. QR code not readable) – stops poll and shows message. */
   const [extractionError, setExtractionError] = useState<string | null>(null);
   /** Pre-OCR failed validation; server returned JPEG split session for manual slot assignment. */
@@ -429,11 +447,28 @@ export function AddSalesPage({
       lastSubmittedCustomerId,
       lastSubmittedVehicleId,
       lastStagingId,
+      createInvoiceCompleted,
+      generateInsuranceCompleted,
       extractedVehicle,
       extractedCustomer,
       extractedInsurance,
     });
-  }, [mobile, savedTo, uploadedFiles, uploadStatus, dmsScrapedVehicle, hasSubmittedInfo, lastSubmittedCustomerId, lastSubmittedVehicleId, lastStagingId, extractedVehicle, extractedCustomer, extractedInsurance]);
+  }, [
+    mobile,
+    savedTo,
+    uploadedFiles,
+    uploadStatus,
+    dmsScrapedVehicle,
+    hasSubmittedInfo,
+    lastSubmittedCustomerId,
+    lastSubmittedVehicleId,
+    lastStagingId,
+    createInvoiceCompleted,
+    generateInsuranceCompleted,
+    extractedVehicle,
+    extractedCustomer,
+    extractedInsurance,
+  ]);
 
   // DMS and RTO sections populate only when user presses Fill Forms. No auto-fetch from file or DB.
 
@@ -454,7 +489,7 @@ export function AddSalesPage({
   const mobileRow = (
     <div className="app-field-row">
       <label className="app-field" htmlFor="add-sales-mobile">
-        <div className="app-field-label">Customer Mobile (10 digits)</div>
+        <div className="app-field-label">Customer Mobile</div>
         <input
           id="add-sales-mobile"
           name="mobile"
@@ -479,6 +514,8 @@ export function AddSalesPage({
       setCreateInvoiceEligibilityReason(null);
       setGenerateInsuranceEnabled(false);
       setGenerateInsuranceReason(null);
+      setCreateInvoiceCompleted(false);
+      setGenerateInsuranceCompleted(false);
       return;
     }
     const dmsVeh = normalizeVehicleDetails(dmsScrapedVehicle) ?? dmsScrapedVehicle;
@@ -561,6 +598,8 @@ export function AddSalesPage({
     setCreateInvoiceEligibilityReason(null);
     setGenerateInsuranceEnabled(false);
     setGenerateInsuranceReason(null);
+    setCreateInvoiceCompleted(false);
+    setGenerateInsuranceCompleted(false);
     setFormResetKey((k) => k + 1);
   };
 
@@ -576,18 +615,16 @@ export function AddSalesPage({
   const v = normalizeVehicleDetails(extractedVehicle) ?? extractedVehicle;
   const c = extractedCustomer;
   const ins = extractedInsurance;
-  const display = (s: string | undefined) => (s && String(s).trim() ? String(s).trim() : "—");
-
   const alternateMobileRow = (
     <div className="app-field-row">
       <label className="app-field" htmlFor="add-sales-alt-phone">
-        <div className="app-field-label">Alternate mobile</div>
+        <div className="app-field-label">Alternate No.</div>
         <input
           id="add-sales-alt-phone"
           name="alt_phone_num"
           className="app-field-input"
           inputMode="numeric"
-          placeholder="Optional"
+          placeholder="9876543210"
           value={c?.alt_phone_num ?? ""}
           onChange={(e) => {
             const digits = e.target.value.replace(/\D/g, "").slice(0, 10);
@@ -601,31 +638,39 @@ export function AddSalesPage({
     </div>
   );
 
-  const requiredFieldChecks: { label: string; value: string | undefined }[] = [
-    { label: "Aadhar ID", value: c?.aadhar_id },
+  /** Required Section 2 text fields (financier optional). Date of birth and mobiles validated separately. */
+  const requiredTextFieldChecks: { label: string; value: string | undefined }[] = [
     { label: "Name", value: c?.name },
     { label: "Gender", value: c?.gender },
-    { label: "Date of birth", value: c?.date_of_birth },
     { label: "Address", value: c ? buildDisplayAddress(c) : undefined },
-    { label: "Frame no.", value: v?.frame_no },
-    { label: "Engine no.", value: v?.engine_no },
     { label: "Key no.", value: v?.key_no },
+    { label: "Chassis No.", value: v?.frame_no },
+    { label: "Engine no.", value: v?.engine_no },
     { label: "Battery no.", value: v?.battery_no },
     { label: "Customer Profession", value: ins?.profession },
+    { label: "Customer Marital Status", value: ins?.marital_status },
     { label: "Nominee Name", value: ins?.nominee_name },
     { label: "Nominee Age", value: ins?.nominee_age },
     { label: "Nominee Relationship", value: ins?.nominee_relationship },
+    { label: "Nominee Gender", value: ins?.nominee_gender },
   ];
 
-  const getMissingRequiredFields = (): string[] => {
-    return requiredFieldChecks
-      .filter(({ value }) => value == null || String(value).trim() === "" || String(value).trim() === "—")
-      .map(({ label }) => label);
+  const getSection2SubmitIssues = (): string[] => {
+    const issues: string[] = [];
+    if (!/^\d{10}$/.test(mobile.trim())) issues.push("Customer Mobile (10 digits)");
+    if (!/^\d{10}$/.test((c?.alt_phone_num ?? "").trim())) issues.push("Alternate No. (10 digits)");
+    if (!isValidDdMmYyyy(c?.date_of_birth)) issues.push("DOB (valid DD/MM/YYYY)");
+    if (!(c?.care_of ?? "").trim()) issues.push("C/O");
+    if (!/^\d{4}$/.test((c?.aadhar_id ?? "").trim())) issues.push("Aadhar (last 4 digits)");
+    requiredTextFieldChecks.forEach(({ label, value }) => {
+      if (value == null || String(value).trim() === "" || String(value).trim() === "—") {
+        issues.push(label);
+      }
+    });
+    return issues;
   };
 
-  const hasAllRequiredExtractedFields = () => {
-    return getMissingRequiredFields().length === 0;
-  };
+  const hasAllRequiredExtractedFields = () => getSection2SubmitIssues().length === 0;
 
   /** Allowed: letters, digits, space, hyphen, period, slash, comma. No other special characters. */
   const ALLOWED_CHAR_REGEX = /^[a-zA-Z0-9\s\-./,]*$/;
@@ -635,9 +680,9 @@ export function AddSalesPage({
     val != null && String(val).trim() !== "" && !ALLOWED_CHAR_REGEX.test(String(val).trim());
 
   const vehicleValidationFields: { label: string; value: string | undefined }[] = [
-    { label: "Frame no.", value: v?.frame_no },
-    { label: "Engine no.", value: v?.engine_no },
     { label: "Key no.", value: v?.key_no },
+    { label: "Chassis No.", value: v?.frame_no },
+    { label: "Engine no.", value: v?.engine_no },
     { label: "Battery no.", value: v?.battery_no },
   ];
   const getVehicleValidationErrors = (): string[] => {
@@ -651,9 +696,11 @@ export function AddSalesPage({
 
   const insuranceValidationFields: { label: string; value: string | undefined }[] = [
     { label: "Customer Profession", value: ins?.profession },
+    { label: "Customer Marital Status", value: ins?.marital_status },
     { label: "Nominee Name", value: ins?.nominee_name },
     { label: "Nominee Age", value: ins?.nominee_age },
     { label: "Nominee Relationship", value: ins?.nominee_relationship },
+    { label: "Nominee Gender", value: ins?.nominee_gender },
   ];
   const isValidNomineeAge = (val: string | undefined | null): boolean => {
     if (val == null || String(val).trim() === "") return true;
@@ -925,6 +972,9 @@ export function AddSalesPage({
         setFillDmsStatus("DMS / Create Invoice run completed successfully.");
         setDmsRunEndedWithError(false);
       }
+      if (dmsRes.success) {
+        setCreateInvoiceCompleted(true);
+      }
     } catch (err) {
       if (isFillDmsAbortError(err)) {
         setFillDmsStatus("Create Invoice request timed out. Check the upload folder for PDFs.");
@@ -1007,6 +1057,7 @@ export function AddSalesPage({
         setFillInsuranceStatus(insuranceRes.error ?? "Generate Insurance (Hero) failed.");
       } else {
         setFillInsuranceStatus("Hero Insurance run completed (pre + main + post). Browser may remain open for operator.");
+        setGenerateInsuranceCompleted(true);
       }
     } catch (insuranceErr) {
       if (isFillDmsAbortError(insuranceErr)) {
@@ -1027,11 +1078,11 @@ export function AddSalesPage({
     }
     const c = extractedCustomer;
     const v = extractedVehicle;
-    const scrapedForForm20 = dmsScrapedVehicle as Record<string, unknown> | null;
-    let vehicleDataForForm20: Record<string, unknown> = {};
-    if (scrapedForForm20 && typeof scrapedForForm20 === "object") {
-      const s = scrapedForForm20 as Record<string, unknown>;
-      vehicleDataForForm20 = {
+    const scrapedForGatePass = dmsScrapedVehicle as Record<string, unknown> | null;
+    let vehicleDataForGatePass: Record<string, unknown> = {};
+    if (scrapedForGatePass && typeof scrapedForGatePass === "object") {
+      const s = scrapedForGatePass as Record<string, unknown>;
+      vehicleDataForGatePass = {
         key_no: s.key_num ?? s.key_no,
         frame_no: s.full_chassis ?? s.frame_num ?? s.frame_no,
         engine_no: s.full_engine ?? s.engine_num ?? s.engine_no,
@@ -1046,7 +1097,7 @@ export function AddSalesPage({
         year_of_mfg: s.year_of_mfg,
       };
     } else if (v) {
-      vehicleDataForForm20 = {
+      vehicleDataForGatePass = {
         key_no: v.key_no,
         frame_no: v.frame_no,
         engine_no: v.engine_no,
@@ -1054,9 +1105,59 @@ export function AddSalesPage({
         color: v.color,
       };
     }
+
     setIsPrintFormsLoading(true);
+    setPrintFormsStatus(null);
+
+    const statusLines: string[] = [];
+
+    if (lastSubmittedCustomerId != null && lastSubmittedVehicleId != null) {
+      try {
+        await insertRtoPayment({
+          customer_id: lastSubmittedCustomerId,
+          vehicle_id: lastSubmittedVehicleId,
+          dealer_id: dealerId,
+          customer_mobile: mobile ?? undefined,
+          staging_id: lastStagingId?.trim() || undefined,
+          status: "Queued",
+        });
+        statusLines.push("Added to RTO Queue.");
+      } catch (queueErr) {
+        setPrintFormsStatus(
+          queueErr instanceof Error ? `RTO queue: ${queueErr.message}` : "RTO queue insert failed."
+        );
+        setIsPrintFormsLoading(false);
+        return;
+      }
+    } else {
+      statusLines.push("RTO queue skipped (customer/vehicle IDs missing — run Create Invoice first).");
+    }
+
     try {
-      const form20Res = await printForm20({
+      // Form 20 generation (print-form20) — disabled; Gate Pass only below.
+      // const form20Res = await printForm20({
+      //   subfolder: savedTo,
+      //   customer: {
+      //     name: c?.name ?? undefined,
+      //     care_of: c?.care_of ?? undefined,
+      //     address: c?.address ?? buildDisplayAddress(c),
+      //     city: c?.city ?? undefined,
+      //     state: c?.state ?? undefined,
+      //     pin_code: c?.pin_code ?? undefined,
+      //     aadhar_id: c?.aadhar_id ?? undefined,
+      //   },
+      //   vehicle: vehicleDataForGatePass,
+      //   vehicle_id: lastSubmittedVehicleId ?? undefined,
+      //   dealer_id: dealerId,
+      // });
+      // if (form20Res.success) {
+      //   setHasPrintedForms(true);
+      //   statusLines.push(`Form 20 saved: ${(form20Res.pdfs_saved ?? []).join(", ")}`);
+      // } else if (form20Res.error) {
+      //   statusLines.push(`Form 20: ${form20Res.error}`);
+      // }
+
+      const gatePassRes = await printGatePass({
         subfolder: savedTo,
         customer: {
           name: c?.name ?? undefined,
@@ -1067,48 +1168,25 @@ export function AddSalesPage({
           pin_code: c?.pin_code ?? undefined,
           aadhar_id: c?.aadhar_id ?? undefined,
         },
-        vehicle: vehicleDataForForm20,
+        vehicle: vehicleDataForGatePass,
         vehicle_id: lastSubmittedVehicleId ?? undefined,
         dealer_id: dealerId,
       });
-      if (form20Res.success) {
+      if (gatePassRes.success) {
         setHasPrintedForms(true);
-        setPrintFormsStatus(`Form 20 saved: ${(form20Res.pdfs_saved ?? []).join(", ")}`);
-      } else if (form20Res.error) {
-        setPrintFormsStatus(`Form 20: ${form20Res.error}`);
+        statusLines.push(`Gate Pass saved: ${(gatePassRes.pdfs_saved ?? []).join(", ")}`);
+      } else if (gatePassRes.error) {
+        statusLines.push(`Gate Pass: ${gatePassRes.error}`);
       }
-    } catch (form20Err) {
-      setPrintFormsStatus(`Form 20: ${form20Err instanceof Error ? form20Err.message : "Create & print file failed."}`);
+    } catch (printErr) {
+      statusLines.push(
+        `Gate Pass: ${printErr instanceof Error ? printErr.message : "Generate & print failed."}`
+      );
     } finally {
       setIsPrintFormsLoading(false);
     }
 
-    if (lastSubmittedCustomerId != null && lastSubmittedVehicleId != null) {
-      const today = new Date();
-      const dd = String(today.getDate()).padStart(2, "0");
-      const mm = String(today.getMonth() + 1).padStart(2, "0");
-      const yyyy = today.getFullYear();
-      const registerDate = `${dd}-${mm}-${yyyy}`;
-      const queueVehicle = dmsScrapedVehicle ?? v;
-      const rtoFees = computeRtoFees(queueVehicle?.vehicle_price);
-      try {
-        await insertRtoPayment({
-          customer_id: lastSubmittedCustomerId,
-          vehicle_id: lastSubmittedVehicleId,
-          customer_mobile: mobile ?? undefined,
-          rto_application_date: registerDate,
-          rto_payment_amount: rtoFees,
-          status: "Queued",
-        });
-        setPrintFormsStatus((prev) => (prev ? `${prev} Added to RTO Queue.` : "Added to RTO Queue."));
-      } catch (queueErr) {
-        setPrintFormsStatus(
-          queueErr instanceof Error
-            ? `Print done but adding to RTO Queue failed: ${queueErr.message}`
-            : "Print done but adding to RTO Queue failed."
-        );
-      }
-    }
+    setPrintFormsStatus(statusLines.join(" "));
   };
 
   const d = dmsScrapedVehicle;
@@ -1116,7 +1194,9 @@ export function AddSalesPage({
   const createInvoiceButtonTitle =
     isSubmitting
       ? "Wait for Submit Info to finish."
-      : !submitInfoActionsComplete
+      : createInvoiceCompleted
+        ? "Create Invoice already completed for this sale."
+        : !submitInfoActionsComplete
         ? "Complete Submit Info (Section 2) — staging must be saved to the server."
         : dealerId == null || dealerId <= 0
         ? "Dealer is not configured."
@@ -1131,7 +1211,9 @@ export function AddSalesPage({
   const generateInsuranceButtonTitle =
     isSubmitting
       ? "Wait for Submit Info to finish."
-      : !submitInfoActionsComplete
+      : generateInsuranceCompleted
+        ? "Generate Insurance already completed for this sale."
+        : !submitInfoActionsComplete
         ? "Complete Submit Info (Section 2) — staging must be saved to the server."
         : !hasCommittedSaleIds
           ? "Run Create Invoice (DMS) successfully first so master IDs exist for insurance automation."
@@ -1157,7 +1239,6 @@ export function AddSalesPage({
 
   const submitInfoPrimaryButtonDisabled =
     isSubmitting ||
-    !mobile ||
     !c ||
     (!manualFormOnly && !insuranceReadByTextract) ||
     !hasAllRequiredExtractedFields() ||
@@ -1171,6 +1252,7 @@ export function AddSalesPage({
     isSubmitting ||
     !submitInfoActionsComplete ||
     createInvoiceEligibilityLoading ||
+    createInvoiceCompleted ||
     !createInvoiceEnabled ||
     siteUrlsLoading ||
     !!siteUrlsError ||
@@ -1183,6 +1265,7 @@ export function AddSalesPage({
     !submitInfoActionsComplete ||
     !hasCommittedSaleIds ||
     createInvoiceEligibilityLoading ||
+    generateInsuranceCompleted ||
     !generateInsuranceEnabled ||
     hasSuppliedInsuranceDoc ||
     siteUrlsLoading ||
@@ -1303,13 +1386,13 @@ export function AddSalesPage({
                     className="app-button add-sales-v2-submit-btn"
                     disabled={submitInfoPrimaryButtonDisabled}
                     onClick={async () => {
-                      if (!mobile || !c) return;
+                      if (!c) return;
                       if (!manualFormOnly && !insuranceReadByTextract) {
                         setSubmitStatus("Waiting for insurance details from document.");
                         return;
                       }
                       if (!hasAllRequiredExtractedFields()) {
-                        setSubmitStatus(`Please fill: ${getMissingRequiredFields().join(", ")}.`);
+                        setSubmitStatus(`Please fill or fix: ${getSection2SubmitIssues().join(", ")}.`);
                         return;
                       }
                       if (hasVehicleOrInsuranceValidationErrors) {
@@ -1385,14 +1468,14 @@ export function AddSalesPage({
                     <span className="add-sales-v2-status-text">Waiting for insurance details from document.</span>
                   </div>
                 )}
-                {extractionComplete && savedTo && (insuranceReadByTextract || manualFormOnly) && getMissingRequiredFields().length > 0 && (
+                {extractionComplete && savedTo && (insuranceReadByTextract || manualFormOnly) && getSection2SubmitIssues().length > 0 && (
                   <div className="add-sales-v2-status-row add-sales-v2-status-row--error" role="alert">
                     <span className="add-sales-v2-status-text">
-                      Please fill: {getMissingRequiredFields().join(", ")}.
+                      Please fill or fix: {getSection2SubmitIssues().join(", ")}.
                     </span>
                   </div>
                 )}
-                {submitStatus && (!savedTo || ((insuranceReadByTextract || manualFormOnly) && getMissingRequiredFields().length === 0)) && (
+                {submitStatus && (!savedTo || ((insuranceReadByTextract || manualFormOnly) && getSection2SubmitIssues().length === 0)) && (
                   <div className={`add-sales-v2-status-row ${submitStatus === "Saved" ? "add-sales-v2-status-row--success" : "add-sales-v2-status-row--error"}`}>
                     <StatusMessage message={submitStatus} className="add-sales-v2-status-text" role="status" />
                   </div>
@@ -1410,58 +1493,47 @@ export function AddSalesPage({
                     </div>
                   )}
                   <dl className="add-sales-v2-dl add-sales-v2-dl--customer">
-                    <div className="add-sales-v2-dl-row-group">
-                      <div className="add-sales-v2-dl-row">
-                        <dt>Aadhar ID</dt>
-                        <dd>{display(c?.aadhar_id)}</dd>
-                      </div>
-                      <div className="add-sales-v2-dl-row">
-                        <dt>Name</dt>
-                        <dd>{display(c?.name)}</dd>
-                      </div>
-                    </div>
-                    <div className="add-sales-v2-dl-row-group">
-                      <div className="add-sales-v2-dl-row">
-                        <dt>Date of birth</dt>
-                        <dd className="add-sales-v2-dl-dd--dob">
-                          <input
-                            className="add-sales-v2-dl-input add-sales-v2-dl-input--dob"
-                            type="text"
-                            inputMode="numeric"
-                            autoComplete="bday"
-                            value={c?.date_of_birth ?? ""}
-                            onChange={(e) =>
-                              setExtractedCustomer((prev) => ({
-                                ...(prev ?? {}),
-                                date_of_birth: sanitizeFormFieldValue(e.target.value),
-                              }))
-                            }
-                            placeholder="YYYY-MM-DD"
-                          />
-                        </dd>
-                      </div>
-                      <div className="add-sales-v2-dl-row">
-                        <dt>Gender</dt>
-                        <dd>{display(c?.gender)}</dd>
-                      </div>
-                    </div>
-                    <div className="add-sales-v2-dl-row">
-                      <dt>Care of</dt>
+                    <div className="add-sales-v2-dl-customer-line add-sales-v2-dl-customer-line--full">
+                      <dt>Name</dt>
                       <dd>
                         <input
                           className="add-sales-v2-dl-input"
-                          value={c?.care_of ?? ""}
+                          value={c?.name ?? ""}
                           onChange={(e) =>
                             setExtractedCustomer((prev) => ({
                               ...(prev ?? {}),
-                              care_of: sanitizeFormFieldValue(e.target.value),
+                              name: sanitizeFormFieldValue(e.target.value),
                             }))
                           }
-                          placeholder="C/o, S/o, W/o…"
+                          placeholder="—"
+                          autoComplete="name"
                         />
                       </dd>
                     </div>
-                    <div className="add-sales-v2-dl-row">
+                    <div className="add-sales-v2-dl-customer-line add-sales-v2-dl-customer-line--full">
+                      <dt>C/O</dt>
+                      <dd>
+                        <input
+                          className="add-sales-v2-dl-input add-sales-v2-dl-input--care-of-free"
+                          value={c?.care_of ?? ""}
+                          onChange={(e) => {
+                            const raw = sanitizeFormFieldValue(e.target.value);
+                            const parsed = parseCareOfFromCombined(raw);
+                            const has = raw.trim() !== "";
+                            setExtractedCustomer((prev) => ({
+                              ...(prev ?? {}),
+                              care_of: raw || undefined,
+                              care_of_relation: has ? parsed.relation : undefined,
+                              care_of_name: has ? parsed.name || undefined : undefined,
+                            }));
+                          }}
+                          placeholder="C/o Father's Name"
+                          autoComplete="off"
+                          spellCheck={false}
+                        />
+                      </dd>
+                    </div>
+                    <div className="add-sales-v2-dl-customer-line add-sales-v2-dl-customer-line--full">
                       <dt>Address</dt>
                       <dd>
                         <input
@@ -1475,6 +1547,89 @@ export function AddSalesPage({
                           }
                           placeholder="—"
                         />
+                      </dd>
+                    </div>
+                    <div className="add-sales-v2-dl-customer-line add-sales-v2-dl-customer-line--dob-gender">
+                      <dt>Gender</dt>
+                      <dd className="add-sales-v2-dd--gender-narrow">
+                        <input
+                          className="add-sales-v2-dl-input add-sales-v2-dl-input--gender-narrow"
+                          value={c?.gender ?? ""}
+                          onChange={(e) =>
+                            setExtractedCustomer((prev) => ({
+                              ...(prev ?? {}),
+                              gender: sanitizeFormFieldValue(e.target.value),
+                            }))
+                          }
+                          placeholder="—"
+                          autoComplete="sex"
+                        />
+                      </dd>
+                      <dt>DOB</dt>
+                      <dd className="add-sales-v2-dd--dob-full">
+                        <input
+                          className="add-sales-v2-dl-input add-sales-v2-dl-input--dob"
+                          type="text"
+                          inputMode="numeric"
+                          autoComplete="bday"
+                          value={c?.date_of_birth ?? ""}
+                          onChange={(e) =>
+                            setExtractedCustomer((prev) => ({
+                              ...(prev ?? {}),
+                              date_of_birth: formatDobDigitsInput(e.target.value),
+                            }))
+                          }
+                          placeholder="DD/MM/YYYY"
+                        />
+                      </dd>
+                    </div>
+                    <div className="add-sales-v2-dl-customer-line add-sales-v2-dl-customer-line--full">
+                      <dt>Aadhar (last 4 digits)</dt>
+                      <dd>
+                        <input
+                          className="add-sales-v2-dl-input add-sales-v2-dl-input--aadhar4"
+                          inputMode="numeric"
+                          autoComplete="off"
+                          maxLength={4}
+                          value={c?.aadhar_id ?? ""}
+                          onChange={(e) => {
+                            const digits = e.target.value.replace(/\D/g, "").slice(0, 4);
+                            setExtractedCustomer((prev) => ({
+                              ...(prev ?? {}),
+                              aadhar_id: digits,
+                            }));
+                          }}
+                          placeholder="0000"
+                        />
+                      </dd>
+                    </div>
+                  </dl>
+                </div>
+                <div className="add-sales-v2-subsection">
+                  <div className="add-sales-v2-subsection-head">
+                    <h3 className="add-sales-v2-subsection-title">Finance Details</h3>
+                  </div>
+                  <dl className="add-sales-v2-dl add-sales-v2-dl--insurance">
+                    <div className="add-sales-v2-dl-row">
+                      <dt>Financier</dt>
+                      <dd>
+                        <input
+                          className="add-sales-v2-dl-input"
+                          value={ins?.financier ?? ""}
+                          onChange={(e) =>
+                            setExtractedInsurance((prev) => ({
+                              ...(prev ?? {}),
+                              financier: sanitizeFormFieldValue(e.target.value),
+                            }))
+                          }
+                          placeholder="—"
+                          autoComplete="off"
+                        />
+                        {isHeroBajajFinancierForStaging(oemId, ins?.financier) && (
+                          <p className="add-sales-v2-field-note">
+                            This financier will be logged in systems as Hinduja.
+                          </p>
+                        )}
                       </dd>
                     </div>
                   </dl>
@@ -1495,7 +1650,23 @@ export function AddSalesPage({
                   )}
                   <dl className="add-sales-v2-dl add-sales-v2-dl--vehicle">
                     <div className="add-sales-v2-dl-row">
-                      <dt>Frame no.</dt>
+                      <dt>Key no.</dt>
+                      <dd>
+                        <input
+                          className="add-sales-v2-dl-input"
+                          value={v?.key_no ?? ""}
+                          onChange={(e) =>
+                            setExtractedVehicle((prev) => ({
+                              ...(prev ?? {}),
+                              key_no: sanitizeFormFieldValue(e.target.value),
+                            }))
+                          }
+                          placeholder="—"
+                        />
+                      </dd>
+                    </div>
+                    <div className="add-sales-v2-dl-row">
+                      <dt>Chassis No.</dt>
                       <dd>
                         <input
                           className="add-sales-v2-dl-input"
@@ -1527,22 +1698,6 @@ export function AddSalesPage({
                       </dd>
                     </div>
                     <div className="add-sales-v2-dl-row">
-                      <dt>Key no.</dt>
-                      <dd>
-                        <input
-                          className="add-sales-v2-dl-input"
-                          value={v?.key_no ?? ""}
-                          onChange={(e) =>
-                            setExtractedVehicle((prev) => ({
-                              ...(prev ?? {}),
-                              key_no: sanitizeFormFieldValue(e.target.value),
-                            }))
-                          }
-                          placeholder="—"
-                        />
-                      </dd>
-                    </div>
-                    <div className="add-sales-v2-dl-row">
                       <dt>Battery no.</dt>
                       <dd>
                         <input
@@ -1556,183 +1711,6 @@ export function AddSalesPage({
                           }
                           placeholder="—"
                         />
-                      </dd>
-                    </div>
-                    {(v?.model ?? v?.color ?? v?.cubic_capacity ?? v?.seating_capacity ?? v?.body_type ?? v?.vehicle_type ?? v?.num_cylinders ?? v?.vehicle_price ?? v?.year_of_mfg) && (
-                      <>
-                        <div className="add-sales-v2-dl-row">
-                          <dt>Model</dt>
-                          <dd>
-                            <input
-                              className="add-sales-v2-dl-input"
-                              value={v?.model ?? ""}
-                              onChange={(e) =>
-                              setExtractedVehicle((prev) => ({
-                                ...(prev ?? {}),
-                                model: sanitizeFormFieldValue(e.target.value),
-                              }))
-                            }
-                              placeholder="—"
-                            />
-                          </dd>
-                        </div>
-                        <div className="add-sales-v2-dl-row">
-                          <dt>Color</dt>
-                          <dd>
-                            <input
-                              className="add-sales-v2-dl-input"
-                              value={v?.color ?? ""}
-                              onChange={(e) =>
-                              setExtractedVehicle((prev) => ({
-                                ...(prev ?? {}),
-                                color: sanitizeFormFieldValue(e.target.value),
-                              }))
-                            }
-                              placeholder="—"
-                            />
-                          </dd>
-                        </div>
-                        <div className="add-sales-v2-dl-row">
-                          <dt>Cubic Cap.</dt>
-                          <dd>
-                            <input
-                              className="add-sales-v2-dl-input"
-                              value={v?.cubic_capacity ?? ""}
-                              onChange={(e) =>
-                              setExtractedVehicle((prev) => ({
-                                ...(prev ?? {}),
-                                cubic_capacity: sanitizeFormFieldValue(e.target.value),
-                              }))
-                            }
-                              placeholder="—"
-                            />
-                          </dd>
-                        </div>
-                        <div className="add-sales-v2-dl-row">
-                          <dt>Seating Cap.</dt>
-                          <dd>
-                            <input
-                              className="add-sales-v2-dl-input"
-                              value={v?.seating_capacity ?? ""}
-                              onChange={(e) =>
-                              setExtractedVehicle((prev) => ({
-                                ...(prev ?? {}),
-                                seating_capacity: sanitizeFormFieldValue(e.target.value),
-                              }))
-                            }
-                              placeholder="—"
-                            />
-                          </dd>
-                        </div>
-                        <div className="add-sales-v2-dl-row">
-                          <dt>Body type</dt>
-                          <dd>
-                            <input
-                              className="add-sales-v2-dl-input"
-                              value={v?.body_type ?? ""}
-                              onChange={(e) =>
-                              setExtractedVehicle((prev) => ({
-                                ...(prev ?? {}),
-                                body_type: sanitizeFormFieldValue(e.target.value),
-                              }))
-                            }
-                              placeholder="—"
-                            />
-                          </dd>
-                        </div>
-                        <div className="add-sales-v2-dl-row">
-                          <dt>Vehicle type</dt>
-                          <dd>
-                            <input
-                              className="add-sales-v2-dl-input"
-                              value={v?.vehicle_type ?? ""}
-                              onChange={(e) =>
-                              setExtractedVehicle((prev) => ({
-                                ...(prev ?? {}),
-                                vehicle_type: sanitizeFormFieldValue(e.target.value),
-                              }))
-                            }
-                              placeholder="—"
-                            />
-                          </dd>
-                        </div>
-                        <div className="add-sales-v2-dl-row">
-                          <dt>Num cylinders</dt>
-                          <dd>
-                            <input
-                              className="add-sales-v2-dl-input"
-                              value={v?.num_cylinders ?? ""}
-                              onChange={(e) =>
-                              setExtractedVehicle((prev) => ({
-                                ...(prev ?? {}),
-                                num_cylinders: sanitizeFormFieldValue(e.target.value),
-                              }))
-                            }
-                              placeholder="—"
-                            />
-                          </dd>
-                        </div>
-                        <div className="add-sales-v2-dl-row">
-                          <dt>Vehicle Price</dt>
-                          <dd>
-                            <input
-                              className="add-sales-v2-dl-input"
-                              value={v?.vehicle_price ?? ""}
-                              onChange={(e) =>
-                              setExtractedVehicle((prev) => ({
-                                ...(prev ?? {}),
-                                vehicle_price: sanitizeFormFieldValue(e.target.value),
-                              }))
-                            }
-                              placeholder="—"
-                            />
-                          </dd>
-                        </div>
-                        <div className="add-sales-v2-dl-row">
-                          <dt>Year of Mfg</dt>
-                          <dd>
-                            <input
-                              className="add-sales-v2-dl-input"
-                              value={v?.year_of_mfg ?? ""}
-                              onChange={(e) =>
-                              setExtractedVehicle((prev) => ({
-                                ...(prev ?? {}),
-                                year_of_mfg: sanitizeFormFieldValue(e.target.value),
-                              }))
-                            }
-                              placeholder="—"
-                            />
-                          </dd>
-                        </div>
-                      </>
-                    )}
-                  </dl>
-                </div>
-                <div className="add-sales-v2-subsection">
-                  <div className="add-sales-v2-subsection-head">
-                    <h3 className="add-sales-v2-subsection-title">Finance Details</h3>
-                  </div>
-                  <dl className="add-sales-v2-dl add-sales-v2-dl--insurance">
-                    <div className="add-sales-v2-dl-row">
-                      <dt>Financier</dt>
-                      <dd>
-                        <input
-                          className="add-sales-v2-dl-input"
-                          value={ins?.financier ?? ""}
-                          onChange={(e) =>
-                            setExtractedInsurance((prev) => ({
-                              ...(prev ?? {}),
-                              financier: sanitizeFormFieldValue(e.target.value),
-                            }))
-                          }
-                          placeholder="—"
-                          autoComplete="off"
-                        />
-                        {isHeroBajajFinancierForStaging(oemId, ins?.financier) && (
-                          <p className="add-sales-v2-field-note">
-                            This financier will be logged in systems as Hinduja.
-                          </p>
-                        )}
                       </dd>
                     </div>
                   </dl>
@@ -1890,7 +1868,8 @@ export function AddSalesPage({
                 {submitInfoActionsComplete &&
                   createInvoiceEligibilityReason &&
                   !createInvoiceEnabled &&
-                  !createInvoiceEligibilityLoading && (
+                  !createInvoiceEligibilityLoading &&
+                  !createInvoiceCompleted && (
                     <div className="add-sales-v2-status-row" role="status">
                       <span className="add-sales-v2-status-text">{createInvoiceEligibilityReason}</span>
                     </div>
@@ -1903,10 +1882,6 @@ export function AddSalesPage({
                   <dl className="add-sales-v2-dl add-sales-v2-dl--dms">
                     <div className="add-sales-v2-dl-row-group">
                       <div className="add-sales-v2-dl-row">
-                        <dt>Key no.</dt>
-                        <dd>{d?.key_no ?? "—"}</dd>
-                      </div>
-                      <div className="add-sales-v2-dl-row">
                         <dt>Chassis no.</dt>
                         <dd>{d?.frame_no ?? "—"}</dd>
                       </div>
@@ -1916,22 +1891,12 @@ export function AddSalesPage({
                         <dt>Engine no.</dt>
                         <dd>{d?.engine_no ?? "—"}</dd>
                       </div>
+                    </div>
+                    <div className="add-sales-v2-dl-row-group">
                       <div className="add-sales-v2-dl-row">
                         <dt>Model</dt>
                         <dd>{d?.model ?? "—"}</dd>
                       </div>
-                    </div>
-                    <div className="add-sales-v2-dl-row-group">
-                      <div className="add-sales-v2-dl-row">
-                        <dt>Color</dt>
-                        <dd>{d?.color ?? "—"}</dd>
-                      </div>
-                      <div className="add-sales-v2-dl-row">
-                        <dt>Year of Mfg</dt>
-                        <dd>{d?.year_of_mfg ?? "—"}</dd>
-                      </div>
-                    </div>
-                    <div className="add-sales-v2-dl-row-group">
                       <div className="add-sales-v2-dl-row">
                         <dt>Vehicle Price</dt>
                         <dd>{d?.vehicle_price ?? "—"}</dd>
@@ -1984,7 +1949,8 @@ export function AddSalesPage({
                   !hasSuppliedInsuranceDoc &&
                   generateInsuranceReason &&
                   !generateInsuranceEnabled &&
-                  !createInvoiceEligibilityLoading && (
+                  !createInvoiceEligibilityLoading &&
+                  !generateInsuranceCompleted && (
                     <div className="add-sales-v2-status-row" role="status">
                       <span className="add-sales-v2-status-text">{generateInsuranceReason}</span>
                     </div>
@@ -1998,7 +1964,7 @@ export function AddSalesPage({
                         <dd>
                           <input
                             type="text"
-                            className="add-sales-v2-dl-input"
+                            className="add-sales-v2-dl-input add-sales-v2-dl-input--insurance-provider-wide"
                             value={ins?.insurer ?? preferInsurer ?? ""}
                             onChange={(e) =>
                             setExtractedInsurance((prev) => ({
@@ -2023,12 +1989,6 @@ export function AddSalesPage({
                         <dd>{ins?.policy_from ?? "—"}</dd>
                       </div>
                       <div className="add-sales-v2-dl-row">
-                        <dt>Valid To</dt>
-                        <dd>{ins?.policy_to ?? "—"}</dd>
-                      </div>
-                    </div>
-                    <div className="add-sales-v2-dl-row-group">
-                      <div className="add-sales-v2-dl-row">
                         <dt>Gross Premium</dt>
                         <dd>{ins?.premium ?? "—"}</dd>
                       </div>
@@ -2046,7 +2006,7 @@ export function AddSalesPage({
                   </div>
                 )}
               </div>
-              <div className="add-sales-v2-print-forms-row" style={{ marginTop: 10 }}>
+              <div className="add-sales-v2-rto-actions add-sales-v2-print-forms-actions">
                 <button
                   type="button"
                   className="app-button app-button--primary"

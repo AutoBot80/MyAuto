@@ -558,27 +558,27 @@ Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.
 
 ---
 
-## 16) `subdealer_discount_master`
+## 16) `subdealer_discount_master_ref`
 
-**Purpose:** Subdealer discount amounts keyed by dealer and vehicle model.
+**Purpose:** Subdealer discount amounts keyed by dealer and vehicle model. Table name ends with **`_ref`** so rows are preserved on Admin **Delete All Data** (**`LIKE '%ref'`**; see `backend/app/routers/admin.py`).
 
 | Column | Type | Null | Default | Notes |
 |---|---|---:|---|---|
-| `subdealer_discount_id` | `integer` | NO | `nextval('subdealer_discount_master_subdealer_discount_id_seq'::regclass)` | Primary key (auto-generated) |
+| `subdealer_discount_id` | `integer` | NO | `nextval('subdealer_discount_master_ref_subdealer_discount_id_seq'::regclass)` | Primary key (auto-generated) |
 | `dealer_id` | `integer` | NO |  | FK → `dealer_ref(dealer_id)` |
 | `model` | `varchar(64)` | NO |  | Vehicle model |
 | `discount` | `numeric(12,2)` | YES |  | |
 | `create_date` | `varchar(20)` | YES |  | dd/mm/yyyy |
 | `valid_flag` | `char(1)` | NO | `'Y'` | **Y** or **N** |
 
-**Primary key:** `subdealer_discount_master_pkey` on (`subdealer_discount_id`)
+**Primary key:** `subdealer_discount_master_ref_pkey` on (`subdealer_discount_id`)
 
 **Checks:** `chk_subdealer_discount_valid_flag` — `valid_flag` IN ('Y', 'N')
 
 **Foreign keys:**
 - `fk_subdealer_discount_dealer`: (`dealer_id`) → `dealer_ref(dealer_id)`
 
-**Script:** `DDL/22_subdealer_discount_master.sql`
+**Scripts:** `DDL/22_subdealer_discount_master_ref.sql` (greenfield); existing DBs that still have **`subdealer_discount_master`**: **`DDL/alter/22a_rename_subdealer_discount_master_to_ref.sql`**
 
 ---
 
@@ -669,14 +669,14 @@ Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.
 | `form_insurance_view` | Hero/MISP insurance fill and `Insurance_Form_Values.txt` generation |
 | `rc_status_sms_queue` | RC status SMS sending |
 | `bulk_loads` | Bulk ingest, queue publish/lease, dashboard, retry prep, action-taken tracking |
-| `add_sales_staging` | Validated Add Sales JSON before master commit; **`staging_id`** for Create Invoice (**LLD §2.2a**); script **`DDL/alter/13a_add_sales_staging.sql`** |
+| `add_sales_staging` | Validated Add Sales JSON before master commit; **`staging_id`** for Create Invoice (**LLD §2.2a**); scripts **`DDL/alter/13a_add_sales_staging.sql`**, **`DDL/alter/13c_add_sales_staging_login_id.sql`** (`login_id`) |
 | `vehicle_inventory_master` | Subdealer challan / stock lines; **`DDL/18_vehicle_inventory_master.sql`** |
 | `challan_master_staging` | Subdealer challan batch header (staging); **`DDL/23_challan_master_staging.sql`** |
 | `challan_details_staging` | Per-line subdealer challan staging; **`DDL/24_challan_details_staging.sql`** |
 | `challan_staging` | Legacy single-table staging (optional; **`DDL/19_challan_staging.sql`**) |
 | `challan_master` | Challan headers; **`DDL/20_challan_master.sql`** |
 | `challan_details` | Challan ↔ inventory lines; **`DDL/21_challan_details.sql`** |
-| `subdealer_discount_master` | Dealer + model discount rules; **`DDL/22_subdealer_discount_master.sql`** |
+| `subdealer_discount_master_ref` | Dealer + model discount rules; **`DDL/22_subdealer_discount_master_ref.sql`** |
 | `roles_ref` | Role ↔ home-tile access flags; **`DDL/25_roles_ref.sql`**; preserved on admin reset |
 | `login_ref` | User logins + password hashes; **`DDL/26_login_ref.sql`** |
 | `login_roles_ref` | Login ↔ role (+ optional `dealer_id`); **`DDL/27_login_roles_ref.sql`** |
@@ -685,13 +685,14 @@ Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.
 
 ## `add_sales_staging`
 
-**Purpose:** Server-side snapshot for Add Sales **Create Invoice (DMS)**. On each successful **`POST /submit-info`**, the API inserts or updates a **draft** row (`payload_json`, `dealer_id`) only and returns **`staging_id`**. Masters upsert after successful **Create Invoice**; the row may then move to **`committed`** (**LLD §2.2a**). **Create Invoice** passes **`staging_id`** so DMS fill reads **`payload_json`**.
+**Purpose:** Server-side snapshot for Add Sales **Create Invoice (DMS)**. On each successful **`POST /submit-info`**, the API inserts or updates a **draft** row (`payload_json`, `dealer_id`, optional **`login_id`**) and returns **`staging_id`**. Masters upsert after successful **Create Invoice**; the row may then move to **`committed`** (**LLD §2.2a**). **Create Invoice** passes **`staging_id`** so DMS fill reads **`payload_json`**.
 
 | Column | Type | Null | Default | Notes |
 |--------|------|-----:|---------|-------|
 | `staging_id` | `uuid` | NO |  | Primary key; new UUID on insert, or client may send existing **`staging_id`** on **`POST /submit-info`** to update that draft (same **`dealer_id`**) |
 | `dealer_id` | `integer` | NO |  | FK → `dealer_ref.dealer_id` |
-| `payload_json` | `jsonb` | NO |  | Merged payload (same logical shape as **`POST /submit-info`**); after DMS commit may include **`customer_id`** / **`vehicle_id`** |
+| `login_id` | `varchar(128)` | YES |  | FK → `login_ref.login_id` — operator at Submit Info (**`DDL/alter/13c_add_sales_staging_login_id.sql`**) |
+| `payload_json` | `jsonb` | NO |  | Merged payload (same logical shape as **`POST /submit-info`**); after **Create Invoice** commit merged with **`customer_id`**, **`vehicle_id`**, **`sales_id`**; after **Generate Insurance** merged with **`insurance_id`** when **`staging_id`** was passed to Hero insurance |
 | `status` | `varchar(32)` | NO | `'draft'` | `draft` / `committed` / `abandoned` |
 | `created_at` | `timestamptz` | NO | `now()` | |
 | `updated_at` | `timestamptz` | NO | `now()` | |
@@ -699,9 +700,9 @@ Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.
 
 **Primary key:** `staging_id`
 
-**Foreign key:** `dealer_id` → `dealer_ref(dealer_id)`
+**Foreign keys:** `dealer_id` → `dealer_ref(dealer_id)`; `login_id` → `login_ref(login_id)` (nullable)
 
-**Script:** `DDL/alter/13a_add_sales_staging.sql`
+**Scripts:** `DDL/alter/13a_add_sales_staging.sql`; optional column and index: **`DDL/alter/13c_add_sales_staging_login_id.sql`**
 
 ---
 
@@ -808,9 +809,11 @@ Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.
 | 2.76 | Apr 2026 | **`roles_ref`** — **`role_name`**, **`pos_flag`**, **`rto_flag`**, **`service_flag`**, **`admin_flag`**, **`dealer_flag`** (**Y**/**N**); preserved on **`POST /admin/reset-all-data`** — **`DDL/25_roles_ref.sql`**, **`backend/app/routers/admin.py`** |
 | 2.77 | Apr 2026 | **`login_ref`** — **`dealer_id`** → **`dealer_ref`**, **`role_name`** → **`roles_ref`**, **`login`**, **`pwd_hash`**, **`valid_flag`** — **`DDL/26_login_ref.sql`** |
 | 2.78 | Apr 2026 | **`POST /admin/reset-all-data`**: preserve all public base tables whose name **`LIKE '%ref'`** (e.g. **`login_ref`**) plus **`oem_service_schedule`** and **`subdealer_discount_master`** — **`backend/app/routers/admin.py`** |
+| 2.84 | Apr 2026 | **`subdealer_discount_master`** renamed to **`subdealer_discount_master_ref`** — **`DDL/22_subdealer_discount_master_ref.sql`**, **`DDL/alter/22a_rename_subdealer_discount_master_to_ref.sql`** |
 | 2.79 | Apr 2026 | **`login_ref`**: dropped **`login_id`**; primary key **`(dealer_id, login)`** — **`DDL/26_login_ref.sql`**, **`DDL/alter/26a_login_ref_drop_login_id.sql`** (removed; use **2.80** migration) |
 | 2.80 | Apr 2026 | **`login_ref`** — **`login_id`**, **`pwd_hash`**, **`dealer_id`**, **`name`**, **`phone`**, **`email`**, **`active_flag`**; **`uq_login_ref_dealer_email`** — **`DDL/26_login_ref.sql`**, **`DDL/alter/26b_login_ref_redesign.sql`** |
 | 2.81 | Apr 2026 | **`login_ref`**: removed **`dealer_id`**; **`uq_login_ref_email`** on **`email`** — **`DDL/26_login_ref.sql`**, **`DDL/alter/26b_login_ref_redesign.sql`** |
 | 2.82 | Apr 2026 | **`login_ref`**: **`login_id`** **`varchar(128)`** user PK (not serial); **`email`** nullable, not unique — **`DDL/26_login_ref.sql`**, **`DDL/alter/26b_login_ref_redesign.sql`** |
 | 2.83 | Apr 2026 | **`login_roles_ref`** — **`login_id`** → **`login_ref`**, **`role_id`** → **`roles_ref`**, optional **`dealer_id`** (no FK) — **`DDL/27_login_roles_ref.sql`** |
+| 2.84 | Apr 2026 | **`add_sales_staging.login_id`** → **`login_ref`**; **`payload_json`** back-fill **`sales_id`** (Create Invoice commit), **`insurance_id`** (Generate Insurance insert) — **`DDL/alter/13c_add_sales_staging_login_id.sql`**, **`add_sales_commit_service`**, **`add_sales_staging.merge_staging_payload_on_cursor`** |
 

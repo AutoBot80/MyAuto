@@ -54,6 +54,7 @@ def submit_info(
     dealer_id: int | None,
     file_location: str | None = None,
     staging_id: str | None = None,
+    login_id: str | None = None,
 ) -> dict[str, Any]:
     """
     Validate, enrich address, INSERT/UPDATE draft ``add_sales_staging`` only.
@@ -174,6 +175,7 @@ def submit_info(
                 dealer_id=effective_dealer_id,
                 payload=staging_payload,
                 staging_id_existing=staging_id,
+                login_id=login_id,
             )
         conn.commit()
 

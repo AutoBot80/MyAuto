@@ -449,6 +449,43 @@ def _generate_gate_pass_via_docx(
     return ["Gate Pass.pdf"]
 
 
+def generate_gate_pass_pdf_only(
+    subfolder: str,
+    customer: dict[str, Any],
+    vehicle: dict[str, Any],
+    vehicle_id: int | None = None,
+    dealer_id: int | None = None,
+    uploads_dir: Path | None = None,
+) -> Path:
+    """
+    Generate only ``Gate Pass.pdf`` from ``GATE_PASS_TEMPLATE_DOCX``
+    (default: ``<project>/templates/word/Gate Pass Template.docx``).
+    Word placeholders are filled via :func:`_build_gate_pass_data` (``{{field_*}}`` keys).
+    """
+    import re
+
+    uploads_path = Path(uploads_dir or UPLOADS_DIR).resolve()
+    safe_sub = re.sub(r"[^\w\-]", "_", (subfolder or "").strip()) or "default"
+    subfolder_path = uploads_path / safe_sub
+    subfolder_path.mkdir(parents=True, exist_ok=True)
+    gate_pass_template = Path(GATE_PASS_TEMPLATE_DOCX).resolve()
+    if not gate_pass_template.is_file():
+        raise FileNotFoundError(
+            f"Gate Pass template not found: {gate_pass_template}. "
+            "Set GATE_PASS_TEMPLATE_DOCX or add templates/word/Gate Pass Template.docx"
+        )
+    gate_pass_data = _build_gate_pass_data(customer, vehicle, vehicle_id, dealer_id)
+    saved = _generate_gate_pass_via_docx(gate_pass_template, subfolder_path, gate_pass_data)
+    if not saved:
+        raise RuntimeError(
+            "Gate Pass PDF was not produced (docx fill or PDF conversion failed — see logs)."
+        )
+    out = subfolder_path / "Gate Pass.pdf"
+    if not out.is_file():
+        raise RuntimeError("Gate Pass.pdf missing after generation.")
+    return out
+
+
 def _overlay_on_page(
     page,
     data: dict[str, str],

@@ -1,6 +1,7 @@
 """RTO queue: insert, list, batch processing, and retry endpoints."""
 
 from datetime import date, datetime
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -31,11 +32,13 @@ class RtoPaymentInsertPayload(BaseModel):
     sales_id: int | None = None
     customer_id: int | None = None
     vehicle_id: int | None = None
+    dealer_id: int | None = None
     insurance_id: int | None = None
     customer_mobile: str | None = None
     rto_application_date: str | None = None
     rto_payment_amount: float | None = None
     status: str = "Queued"
+    staging_id: str | None = None
 
 
 class RtoBatchStartPayload(BaseModel):
@@ -57,6 +60,8 @@ class RtoMobileChangePayload(BaseModel):
 
 def _serialize_row(row: dict) -> dict:
     d = dict(row)
+    if d.get("staging_id") is not None:
+        d["staging_id"] = str(d["staging_id"])
     for key in ("rto_application_date",):
         if d.get(key):
             d[key] = d[key].strftime("%d-%m-%Y")
@@ -75,6 +80,21 @@ def insert_rto_payment(payload: RtoPaymentInsertPayload) -> dict:
         sid = repo._get_sales_id(payload.customer_id, payload.vehicle_id)
     if sid is None:
         raise HTTPException(status_code=400, detail="sales_id required (or provide customer_id + vehicle_id)")
+    sm_dealer = repo.get_dealer_id_for_sales(sid)
+    eff_dealer = payload.dealer_id
+    if eff_dealer is not None:
+        if sm_dealer is None or int(eff_dealer) != int(sm_dealer):
+            raise HTTPException(status_code=400, detail="dealer_id does not match this sale")
+    else:
+        eff_dealer = sm_dealer
+    if eff_dealer is None:
+        raise HTTPException(status_code=400, detail="dealer_id is required (could not resolve from sales_master)")
+    staging_clean = (payload.staging_id or "").strip() or None
+    if staging_clean:
+        try:
+            UUID(staging_clean)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid staging_id (expected UUID)")
     app_date = _parse_date(payload.rto_application_date) if payload.rto_application_date else None
     try:
         queue_id = repo.insert(
@@ -84,6 +104,8 @@ def insert_rto_payment(payload: RtoPaymentInsertPayload) -> dict:
             rto_application_date=app_date,
             rto_payment_amount=payload.rto_payment_amount,
             status=payload.status or "Queued",
+            staging_id=staging_clean,
+            dealer_id=int(eff_dealer),
         )
         return {"rto_queue_id": queue_id, "ok": True}
     except HTTPException:
