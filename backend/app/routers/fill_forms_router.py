@@ -18,6 +18,12 @@ from app.config import (
     get_ocr_output_dir,
     get_uploads_dir,
 )
+from app.db import get_connection
+from app.repositories.add_sales_staging import merge_staging_payload_on_cursor
+from app.services.add_sales_natural_key_resolve import (
+    natural_keys_from_staging_payload,
+    resolve_customer_vehicle_ids_by_natural_keys,
+)
 from app.services.fill_hero_dms_service import (
     run_fill_dms,
     run_fill_dms_only,
@@ -735,10 +741,39 @@ async def fill_hero_insurance(
             except (TypeError, ValueError):
                 vid = None
 
+    # When top-level ids are missing (Create Invoice did not patch ``payload_json``), resolve from
+    # chassis / engine / mobile — same natural keys as ``GET /add-sales/create-invoice-eligibility``.
+    if staging_payload is not None and (cid is None or vid is None):
+        keys = natural_keys_from_staging_payload(staging_payload)
+        if keys:
+            ch, eng, mob = keys
+            rk_cid, rk_vid = resolve_customer_vehicle_ids_by_natural_keys(ch, eng, mob)
+            if rk_cid is not None and rk_vid is not None:
+                cid, vid = rk_cid, rk_vid
+                if sid:
+                    try:
+                        with get_connection() as conn:
+                            with conn.cursor() as cur:
+                                merge_staging_payload_on_cursor(
+                                    cur,
+                                    sid,
+                                    did,
+                                    {"customer_id": int(cid), "vehicle_id": int(vid)},
+                                )
+                            conn.commit()
+                    except Exception as exc:
+                        logger.warning(
+                            "fill_hero_insurance: persist resolved ids to staging failed: %s",
+                            exc,
+                        )
+
     if cid is None or vid is None:
         raise HTTPException(
             status_code=400,
-            detail="customer_id and vehicle_id are required, or staging must include them after Create Invoice.",
+            detail=(
+                "customer_id and vehicle_id are required, or staging must include them or resolvable "
+                "chassis, engine, and mobile in the staging snapshot."
+            ),
         )
 
     sid_for_process = (sid or None) if staging_payload is not None else None
