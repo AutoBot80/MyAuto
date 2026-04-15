@@ -1482,6 +1482,10 @@ _FIELD_CHECKBOX_ALIASES: dict[str, list[tuple[str, str]]] = {
         ("wife", "Wife"),
         ("husband", "Husband"),
         ("uncle", "Uncle"),
+        ("brother", "Brother"),
+        ("sister", "Sister"),
+        ("nephew", "Nephew"),
+        ("niece", "Niece"),
     ],
     "payment_mode": [
         ("upi/ qr", "UPI/QR"),
@@ -2321,6 +2325,8 @@ def _canonical_marital_status_from_text(s: str) -> str | None:
         "",
         t,
     ).strip()
+    # Handwriting / OCR: "Mar...", "Mar…" (ellipsis) — remove so **Mar** fuzzy-maps to **Married** (see tests below).
+    t = re.sub(r"\u2026|\.{2,}", "", t).strip()
     sl = re.sub(r"\s+", " ", t.lower())
     if not sl:
         return None

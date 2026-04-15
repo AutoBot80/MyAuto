@@ -91,6 +91,10 @@ _NOMINEE_RELATIONSHIP_CANONICALS = (
     "Daughter",
     "Father",
     "Mother",
+    "Brother",
+    "Sister",
+    "Nephew",
+    "Niece",
     "Husband",
     "Wife",
     "Uncle",
@@ -101,8 +105,8 @@ def normalize_nominee_relationship_value(val: str | None) -> str:
     """
     Strip trailing period OCR often attaches to relation labels (e.g. **Mother.** printed next to **Relation**).
 
-    When the text matches a known relation (**Son**, **Daughter**, **Father**, **Mother**, **Husband**, **Wife**,
-    **Uncle**) with fuzzy score ≥ 0.5 (:func:`fuzzy_best_option_label`), return that canonical label; otherwise
+    When the text matches a known relation (**Son**, **Daughter**, **Father**, **Mother**, **Brother**, **Sister**,
+    **Nephew**, **Niece**, **Husband**, **Wife**, **Uncle**) with fuzzy score ≥ 0.5 (:func:`fuzzy_best_option_label`), return that canonical label; otherwise
     return the cleaned string (e.g. legacy **Father/Mother** slash rows for gender refinement).
     """
     s = " ".join(clean_text(val).split())
