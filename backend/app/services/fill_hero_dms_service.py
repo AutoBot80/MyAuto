@@ -2524,6 +2524,7 @@ def Playwright_Hero_DMS_fill(
                 )
                 out["hero_dms_form22_print"] = {"ok": False, "error": str(_pf_exc)}
 
+        out["dms_siebel_forms_filled"] = True
         step(
             "Video SOP complete: customer record opened, payment added, and create_order flow completed. "
             "Automation stops here; browser left open."

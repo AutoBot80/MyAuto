@@ -4190,7 +4190,6 @@ def _pick_best_run_report_download(downloads: list, report_name: str):
 # Default Run Report batch after staging commit: order matters (GST Retail Invoice first).
 DEFAULT_HERO_DMS_RUN_REPORT_NAMES: tuple[str, ...] = (
     "GST Retail Invoice",
-    "GST Booking Receipt",
     "Form22",
     "Sale Certificate",
     "Form 20",

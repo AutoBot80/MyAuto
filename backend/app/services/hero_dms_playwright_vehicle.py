@@ -1229,40 +1229,69 @@ def _siebel_click_service_request_list_new_record(
             if (lab.includes('list:new') || lab.includes('list : new')) return true;
             return false;
         };
+        const diag = { tried: [], clicked: '', allNewrecordBtns: [] };
         const tryClickId = (hid) => {
             const el = document.getElementById(hid);
-            if (!el || String(el.tagName).toLowerCase() !== 'button') return false;
-            if (!el.classList.contains('siebui-icon-newrecord')) return false;
+            if (!el) { diag.tried.push(hid + ':missing'); return false; }
+            if (String(el.tagName).toLowerCase() !== 'button') { diag.tried.push(hid + ':not-button'); return false; }
+            if (!el.classList.contains('siebui-icon-newrecord')) { diag.tried.push(hid + ':no-newrecord-cls'); return false; }
             const dd = (el.getAttribute('data-display') || '').trim();
+            const al = (el.getAttribute('aria-label') || '').trim();
+            const tt = (el.getAttribute('title') || '').trim();
             const idOk =
                 isListNewNotMenu(el)
                 || (dd === 'New' && (hid.indexOf('s_2_') === 0 || hid.indexOf('s_3_1_12') === 0));
-            if (!idOk) return false;
-            if (!vis(el)) return false;
+            if (!idOk) { diag.tried.push(hid + ':label-mismatch(al=' + al.slice(0,40) + ',tt=' + tt.slice(0,40) + ')'); return false; }
+            if (!vis(el)) { diag.tried.push(hid + ':not-visible'); return false; }
             try { el.scrollIntoView({ block: 'center' }); } catch (e) {}
             el.click();
+            diag.clicked = hid;
             return true;
         };
+        const allBtns = Array.from(document.querySelectorAll('button.siebui-icon-newrecord'));
+        for (const b of allBtns) {
+            const bid = b.id || '(no-id)';
+            const al = (b.getAttribute('aria-label') || '').slice(0, 50);
+            const tt = (b.getAttribute('title') || '').slice(0, 50);
+            const v = vis(b);
+            diag.allNewrecordBtns.push(bid + '|al=' + al + '|tt=' + tt + '|vis=' + v);
+        }
         const ids = [
             's_3_1_12_0_Ctrl', 's_2_2_32_0', 's_2_1_12_0_Ctrl', 's_2_2_31_0_Ctrl', 's_2_2_33_0_Ctrl',
             's_2_1_11_0_Ctrl', 's_2_2_30_0_Ctrl',
         ];
         for (const hid of ids) {
-            if (tryClickId(hid)) return true;
+            if (tryClickId(hid)) return diag;
         }
-        const btns = Array.from(document.querySelectorAll('button.siebui-icon-newrecord'));
-        for (const el of btns) {
+        for (const el of allBtns) {
             if (!vis(el) || !isListNewNotMenu(el)) continue;
             try { el.scrollIntoView({ block: 'center' }); } catch (e) {}
             el.click();
-            return true;
+            diag.clicked = el.id || '(scan-match)';
+            return diag;
         }
-        return false;
+        return diag;
     }"""
 
     for _root in roots():
         try:
-            if bool(_root.evaluate(_js_plus)):
+            _js_res = _root.evaluate(_js_plus)
+            if isinstance(_js_res, dict):
+                _js_clicked = str(_js_res.get("clicked") or "")
+                _js_tried = _js_res.get("tried") or []
+                _js_all_btns = _js_res.get("allNewrecordBtns") or []
+                if _js_clicked:
+                    _branch_hit("_click_sr_list_new", f"js_newrecord_{context}")
+                    note(
+                        f"{log_prefix}: clicked {context} + (JS id={_js_clicked!r}). "
+                        f"tried={_js_tried!r} all_newrecord_btns={_js_all_btns!r}"
+                    )
+                    return True
+                note(
+                    f"{log_prefix}: {context} + JS phase miss. "
+                    f"tried={_js_tried!r} all_newrecord_btns={_js_all_btns!r}"
+                )
+            elif bool(_js_res):
                 _branch_hit("_click_sr_list_new", f"js_newrecord_{context}")
                 note(
                     f"{log_prefix}: clicked {context} + (JS: siebui-icon-newrecord — "
@@ -1271,6 +1300,8 @@ def _siebel_click_service_request_list_new_record(
                 return True
         except Exception:
             continue
+
+    note(f"{log_prefix}: {context} + JS phase exhausted all roots, trying role-based scan.")
 
     for _sr_role_name in (
         "Service Request List:New",
@@ -1282,7 +1313,8 @@ def _siebel_click_service_request_list_new_record(
             for _role in ("link", "button"):
                 try:
                     _rl = _root.get_by_role(_role, name=_sr_role_name, exact=True)
-                    if _rl.count() > 0 and _rl.first.is_visible(timeout=_vis_tmo):
+                    _rl_count = _rl.count()
+                    if _rl_count > 0 and _rl.first.is_visible(timeout=_vis_tmo):
                         try:
                             _rl.first.click(timeout=_tmo)
                         except Exception:
@@ -1293,8 +1325,15 @@ def _siebel_click_service_request_list_new_record(
                             f"name={_sr_role_name!r}."
                         )
                         return True
+                    elif _rl_count > 0:
+                        note(
+                            f"{log_prefix}: {context} + role={_role!r} name={_sr_role_name!r} "
+                            f"found count={_rl_count} but not visible."
+                        )
                 except Exception:
                     continue
+
+    note(f"{log_prefix}: {context} + role-based scan exhausted, trying CSS selectors.")
 
     for _root in roots():
         for _css in _sr_new_selectors:
@@ -1317,6 +1356,7 @@ def _siebel_click_service_request_list_new_record(
             except Exception:
                 continue
 
+    note(f"{log_prefix}: {context} + all phases (JS/role/CSS) failed — returning False.")
     return False
 
 
@@ -1499,6 +1539,8 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         if _is_browser_disconnected_error(e):
             raise
 
+    note(f"{log_prefix}: Pre-check tab loaded (networkidle complete).")
+
     _siebel_note_frame_focus_snapshot(
         page,
         note,
@@ -1593,6 +1635,20 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     logger.debug("precheck_existing: rows=%d signal=%s", _precheck_existing_rows, _precheck_existing_signal)
 
     _precheck_already_present = _precheck_existing_rows > 0
+    note(
+        f"{log_prefix}: precheck_row_probe rows={_precheck_existing_rows} "
+        f"signal={_precheck_existing_signal or 'none'} already_present={_precheck_already_present}"
+    )
+    if callable(form_trace):
+        form_trace(
+            "vehicle_serial_precheck_pdi",
+            "Vehicle serial detail",
+            "precheck_row_probe",
+            log_prefix=log_prefix,
+            precheck_existing_rows=_precheck_existing_rows,
+            precheck_signal=_precheck_existing_signal or "none",
+            precheck_already_present=_precheck_already_present,
+        )
     if _precheck_already_present:
         note(
             f"{log_prefix}: Pre-check already has row(s) "
@@ -1911,6 +1967,41 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 continue
 
     if not _precheck_already_present:
+        _active_applet_js = """() => {
+            const ae = document.activeElement;
+            const info = { tag: '', id: '', ariaLabel: '', title: '', parentApplet: '' };
+            if (!ae) return info;
+            info.tag = String(ae.tagName || '').toLowerCase();
+            info.id = (ae.id || '').slice(0, 60);
+            info.ariaLabel = (ae.getAttribute('aria-label') || '').slice(0, 60);
+            info.title = (ae.getAttribute('title') || '').slice(0, 60);
+            let n = ae;
+            for (let d = 0; d < 20 && n; d++) {
+                const hay = ((n.id || '') + ' ' + (n.getAttribute('name') || '') + ' '
+                    + (n.getAttribute('title') || '')).toLowerCase();
+                if (hay.includes('applet') || hay.includes('list') || hay.includes('precheck')
+                    || hay.includes('pre-check') || hay.includes('service request') || hay.includes('pdi')) {
+                    info.parentApplet = (n.id || n.getAttribute('name') || n.getAttribute('title') || '').slice(0, 80);
+                    break;
+                }
+                n = n.parentElement;
+            }
+            return info;
+        }"""
+        for _root in _roots():
+            try:
+                _focus_info = _root.evaluate(_active_applet_js)
+                if isinstance(_focus_info, dict) and _focus_info.get("tag"):
+                    note(
+                        f"{log_prefix}: active_element_before_plus "
+                        f"tag={_focus_info.get('tag')!r} id={_focus_info.get('id')!r} "
+                        f"aria-label={_focus_info.get('ariaLabel')!r} "
+                        f"parent_applet={_focus_info.get('parentApplet')!r}"
+                    )
+                    break
+            except Exception:
+                continue
+
         if not _siebel_click_service_request_list_new_record(
             page,
             roots=_roots,
