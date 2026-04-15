@@ -184,7 +184,8 @@ class FillHeroInsuranceRequest(BaseModel):
     """
     ``insurance_base_url`` overrides ``INSURANCE_BASE_URL`` from ``.env``.
     With ``staging_id``, ``customer_id`` / ``vehicle_id`` / ``subfolder`` are read from staging payload when omitted
-    (after Create Invoice, payload carries committed ids).
+    (after Create Invoice, payload carries committed ids). If the staging row cannot be loaded (e.g. not draft/committed),
+    pass both ``customer_id`` and ``vehicle_id`` to run on masters only without the staging snapshot.
     """
 
     insurance_base_url: str | None = Field(
@@ -200,7 +201,10 @@ class FillHeroInsuranceRequest(BaseModel):
     dealer_id: int | None = None
     staging_id: str | None = Field(
         None,
-        description="add_sales_staging UUID; merges OCR/Submit snapshot when form_insurance_view is sparse.",
+        description=(
+            "add_sales_staging UUID; merges OCR/Submit snapshot when form_insurance_view is sparse. "
+            "If the row is missing or not draft/committed, pass customer_id and vehicle_id together."
+        ),
     )
 
 
@@ -261,7 +265,8 @@ def _fill_dms_staging_or_ids(
     """
     Returns ``(staging_payload, customer_id, vehicle_id)``.
     When ``staging_id`` is set, loads ``add_sales_staging`` (``draft`` or ``committed``) and merges request overrides.
-    Otherwise requires both ``customer_id`` and ``vehicle_id`` (legacy master-backed path).
+    If that load fails but both ``customer_id`` and ``vehicle_id`` are set, returns ``(None, customer_id, vehicle_id)``
+    (masters-only path). Otherwise requires both ids when ``staging_id`` is omitted (legacy master-backed path).
     """
     sid = (staging_id or "").strip()
     if sid:
@@ -273,9 +278,22 @@ def _fill_dms_staging_or_ids(
 
         raw = fetch_staging_payload(sid, dealer_id)
         if not raw:
+            if customer_id is not None and vehicle_id is not None:
+                logger.info(
+                    "fill_staging: staging_id=%s not loaded (missing, wrong dealer, or not draft/committed); "
+                    "using customer_id=%s vehicle_id=%s",
+                    sid,
+                    customer_id,
+                    vehicle_id,
+                )
+                return None, customer_id, vehicle_id
             raise HTTPException(
                 status_code=404,
-                detail="Staging not found, abandoned, or dealer_id does not match.",
+                detail=(
+                    "Staging not found, abandoned, or dealer_id does not match, "
+                    "or row is not in draft/committed status. "
+                    "Pass customer_id and vehicle_id to continue without staging snapshot."
+                ),
             )
         payload = deepcopy(raw)
         if customer_dict:
@@ -450,13 +468,15 @@ async def fill_dms_only(
         customer_dict,
         vehicle_dict,
     )
-    subfolder_resolved = _resolve_subfolder_for_fill(req.subfolder, req.staging_id, did, staging_payload)
+    sid_for_commit = (req.staging_id or "").strip() or None
+    if sid_for_commit and staging_payload is None:
+        sid_for_commit = None
+    subfolder_resolved = _resolve_subfolder_for_fill(req.subfolder, sid_for_commit, did, staging_payload)
     if not subfolder_resolved:
         raise HTTPException(
             status_code=400,
             detail="subfolder is required unless staging has file_location (Submit Info) or pass subfolder explicitly.",
         )
-    sid_for_commit = (req.staging_id or "").strip() or None
     result = await _run_playwright_work(
         partial(
             run_fill_dms_only,
@@ -660,6 +680,7 @@ async def fill_hero_insurance(
     """
     Hero Insurance: ``pre_process`` then ``main_process``. With ``staging_id`` only, resolves
     ``customer_id``, ``vehicle_id``, and ``subfolder`` from ``add_sales_staging.payload_json`` (after Create Invoice).
+    If staging cannot be loaded, pass both ``customer_id`` and ``vehicle_id`` to use masters only (no staging merge).
     ``INSURANCE_BASE_URL`` from config when ``insurance_base_url`` is omitted.
     """
     enforce_max_text_depth(req.model_dump())
@@ -680,10 +701,23 @@ async def fill_hero_insurance(
 
         staging_payload = fetch_staging_payload(sid, did)
         if not staging_payload:
-            raise HTTPException(
-                status_code=404,
-                detail="Staging not found, abandoned, or dealer_id does not match.",
-            )
+            if req.customer_id is not None and req.vehicle_id is not None:
+                logger.info(
+                    "fill_hero_insurance: staging_id=%s not loaded; using customer_id=%s vehicle_id=%s",
+                    sid,
+                    req.customer_id,
+                    req.vehicle_id,
+                )
+                staging_payload = None
+            else:
+                raise HTTPException(
+                    status_code=404,
+                    detail=(
+                        "Staging not found, abandoned, or dealer_id does not match, "
+                        "or row is not in draft/committed status. "
+                        "Pass customer_id and vehicle_id to continue without staging snapshot."
+                    ),
+                )
 
     cid = req.customer_id
     vid = req.vehicle_id
@@ -707,7 +741,8 @@ async def fill_hero_insurance(
             detail="customer_id and vehicle_id are required, or staging must include them after Create Invoice.",
         )
 
-    subfolder_resolved = _resolve_subfolder_for_fill(req.subfolder, req.staging_id, did, staging_payload)
+    sid_for_process = (sid or None) if staging_payload is not None else None
+    subfolder_resolved = _resolve_subfolder_for_fill(req.subfolder, sid_for_process, did, staging_payload)
     if not subfolder_resolved:
         raise HTTPException(
             status_code=400,
@@ -731,7 +766,7 @@ async def fill_hero_insurance(
             subfolder=subfolder_resolved,
             ocr_output_dir=ocr_dir,
             staging_payload=staging_payload,
-            staging_id=sid if sid else None,
+            staging_id=sid_for_process,
             dealer_id=did,
         )
         return post_process(pre_result=pre, main_result=main)
@@ -781,13 +816,15 @@ async def fill_dms(
         customer_dict,
         vehicle_dict,
     )
-    subfolder_resolved = _resolve_subfolder_for_fill(req.subfolder, req.staging_id, did, staging_payload)
+    sid_for_commit = (req.staging_id or "").strip() or None
+    if sid_for_commit and staging_payload is None:
+        sid_for_commit = None
+    subfolder_resolved = _resolve_subfolder_for_fill(req.subfolder, sid_for_commit, did, staging_payload)
     if not subfolder_resolved:
         raise HTTPException(
             status_code=400,
             detail="subfolder is required unless staging has file_location (Submit Info) or pass subfolder explicitly.",
         )
-    sid_for_commit = (req.staging_id or "").strip() or None
     result = await _run_playwright_work(
         partial(
             run_fill_dms,

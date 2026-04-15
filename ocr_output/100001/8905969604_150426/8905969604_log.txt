@@ -14,3 +14,7 @@
 [2026-04-15 19:29:19 IST] [ocr] started (Textract prefetch, parallel compile, merge, Raw_OCR)
 [2026-04-15 19:29:25 IST] [post] ok bytes_before=428678 bytes_after=428678 max_file_bytes=204800 still_over=0 actions=0
 [2026-04-15 19:29:25 IST] [ocr] completed total_ms=5550 textract_prefetch_ms=5439 parallel_compile_ms=85 merge_write_ms=5 insurance_ms=0 raw_finalize_ms=6 post_ocr_ms=6 processed=2 errors=0
+[2026-04-15 19:38:01 IST] [pre] Manual multi-file upload: orient/normalize/pencil complete (no consolidated PDF pre-OCR).
+[2026-04-15 19:38:01 IST] [ocr] started (Textract prefetch, parallel compile, merge, Raw_OCR)
+[2026-04-15 19:38:06 IST] [post] ok bytes_before=428678 bytes_after=428678 max_file_bytes=204800 still_over=0 actions=0
+[2026-04-15 19:38:06 IST] [ocr] completed total_ms=5494 textract_prefetch_ms=5390 parallel_compile_ms=77 merge_write_ms=5 insurance_ms=0 raw_finalize_ms=6 post_ocr_ms=7 processed=2 errors=0
