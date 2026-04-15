@@ -883,32 +883,31 @@ export function AddSalesPage({
     setDmsRunEndedWithError(false);
     let dmsRes: Awaited<ReturnType<typeof fillDmsOnly>> | null = null;
     try {
-      dmsRes = await fillDmsOnly({
-        subfolder: savedTo,
-        dms_base_url: dmsUrl,
-        dealer_id: dealerId,
-        staging_id: lastStagingId ?? undefined,
-        ...(lastStagingId
-          ? {}
+      dmsRes = await fillDmsOnly(
+        lastStagingId
+          ? { staging_id: lastStagingId }
           : {
+              subfolder: savedTo!,
+              dms_base_url: dmsUrl,
+              dealer_id: dealerId,
               customer_id: lastSubmittedCustomerId ?? undefined,
               vehicle_id: lastSubmittedVehicleId ?? undefined,
-            }),
-        customer: {
-          name: c?.name ?? undefined,
-          care_of: c?.care_of ?? undefined,
-          address: c?.address ?? buildDisplayAddress(c),
-          city: c?.city ?? undefined,
-          state: c?.state ?? undefined,
-          pin_code: c?.pin_code ?? undefined,
-          mobile_number: mobile ?? undefined,
-        },
-        vehicle: {
-          key_no: v?.key_no ?? undefined,
-          frame_no: v?.frame_no ?? undefined,
-          engine_no: v?.engine_no ?? undefined,
-        },
-      });
+              customer: {
+                name: c?.name ?? undefined,
+                care_of: c?.care_of ?? undefined,
+                address: c?.address ?? buildDisplayAddress(c),
+                city: c?.city ?? undefined,
+                state: c?.state ?? undefined,
+                pin_code: c?.pin_code ?? undefined,
+                mobile_number: mobile ?? undefined,
+              },
+              vehicle: {
+                key_no: v?.key_no ?? undefined,
+                frame_no: v?.frame_no ?? undefined,
+                engine_no: v?.engine_no ?? undefined,
+              },
+            }
+      );
       const scraped = dmsRes.vehicle;
       const hasAnyVehicle = !!(scraped && typeof scraped === "object" && (
         (scraped.key_num && String(scraped.key_num).trim()) ||
@@ -1046,13 +1045,16 @@ export function AddSalesPage({
     setIsFillInsuranceLoading(true);
     setFillInsuranceStatus(null);
     try {
-      const insuranceRes = await fillHeroInsurance({
-        subfolder: savedTo,
-        dealer_id: dealerId,
-        customer_id: lastSubmittedCustomerId ?? undefined,
-        vehicle_id: lastSubmittedVehicleId ?? undefined,
-        staging_id: lastStagingId ?? undefined,
-      });
+      const insuranceRes = await fillHeroInsurance(
+        lastStagingId
+          ? { staging_id: lastStagingId }
+          : {
+              subfolder: savedTo,
+              dealer_id: dealerId,
+              customer_id: lastSubmittedCustomerId ?? undefined,
+              vehicle_id: lastSubmittedVehicleId ?? undefined,
+            }
+      );
       if (!insuranceRes.success) {
         setFillInsuranceStatus(insuranceRes.error ?? "Generate Insurance (Hero) failed.");
       } else {

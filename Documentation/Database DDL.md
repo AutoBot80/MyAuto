@@ -669,7 +669,7 @@ Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.
 | `form_insurance_view` | Hero/MISP insurance fill and `Insurance_Form_Values.txt` generation |
 | `rc_status_sms_queue` | RC status SMS sending |
 | `bulk_loads` | Bulk ingest, queue publish/lease, dashboard, retry prep, action-taken tracking |
-| `add_sales_staging` | Validated Add Sales JSON before master commit; **`staging_id`** for Create Invoice (**LLD §2.2a**); scripts **`DDL/alter/13a_add_sales_staging.sql`**, **`DDL/alter/13c_add_sales_staging_login_id.sql`** (`login_id`) |
+| `add_sales_staging` | Validated Add Sales JSON before master commit; **`staging_id`** for Create Invoice (**LLD §2.2a**); scripts **`DDL/alter/13a`**, **`13c`** (`login_id`), **`13d`** (`subfolder`) |
 | `vehicle_inventory_master` | Subdealer challan / stock lines; **`DDL/18_vehicle_inventory_master.sql`** |
 | `challan_master_staging` | Subdealer challan batch header (staging); **`DDL/23_challan_master_staging.sql`** |
 | `challan_details_staging` | Per-line subdealer challan staging; **`DDL/24_challan_details_staging.sql`** |
@@ -692,6 +692,7 @@ Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.
 | `staging_id` | `uuid` | NO |  | Primary key; new UUID on insert, or client may send existing **`staging_id`** on **`POST /submit-info`** to update that draft (same **`dealer_id`**) |
 | `dealer_id` | `integer` | NO |  | FK → `dealer_ref.dealer_id` |
 | `login_id` | `varchar(128)` | YES |  | FK → `login_ref.login_id` — operator at Submit Info (**`DDL/alter/13c_add_sales_staging_login_id.sql`**) |
+| `subfolder` | `varchar(256)` | YES |  | Upload scans / OCR folder (mirrors **`payload_json.file_location`**); **`DDL/alter/13d_add_sales_staging_subfolder.sql`** |
 | `payload_json` | `jsonb` | NO |  | Merged payload (same logical shape as **`POST /submit-info`**); after **Create Invoice** commit merged with **`customer_id`**, **`vehicle_id`**, **`sales_id`**; after **Generate Insurance** merged with **`insurance_id`** when **`staging_id`** was passed to Hero insurance |
 | `status` | `varchar(32)` | NO | `'draft'` | `draft` / `committed` / `abandoned` |
 | `created_at` | `timestamptz` | NO | `now()` | |
@@ -702,7 +703,7 @@ Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.
 
 **Foreign keys:** `dealer_id` → `dealer_ref(dealer_id)`; `login_id` → `login_ref(login_id)` (nullable)
 
-**Scripts:** `DDL/alter/13a_add_sales_staging.sql`; optional column and index: **`DDL/alter/13c_add_sales_staging_login_id.sql`**
+**Scripts:** `DDL/alter/13a_add_sales_staging.sql`; **`DDL/alter/13c_add_sales_staging_login_id.sql`**; **`DDL/alter/13d_add_sales_staging_subfolder.sql`**
 
 ---
 
@@ -816,4 +817,5 @@ Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.
 | 2.82 | Apr 2026 | **`login_ref`**: **`login_id`** **`varchar(128)`** user PK (not serial); **`email`** nullable, not unique — **`DDL/26_login_ref.sql`**, **`DDL/alter/26b_login_ref_redesign.sql`** |
 | 2.83 | Apr 2026 | **`login_roles_ref`** — **`login_id`** → **`login_ref`**, **`role_id`** → **`roles_ref`**, optional **`dealer_id`** (no FK) — **`DDL/27_login_roles_ref.sql`** |
 | 2.84 | Apr 2026 | **`add_sales_staging.login_id`** → **`login_ref`**; **`payload_json`** back-fill **`sales_id`** (Create Invoice commit), **`insurance_id`** (Generate Insurance insert) — **`DDL/alter/13c_add_sales_staging_login_id.sql`**, **`add_sales_commit_service`**, **`add_sales_staging.merge_staging_payload_on_cursor`** |
+| 2.85 | Apr 2026 | **`add_sales_staging.subfolder`**; **`POST /fill-forms/dms`** and **`/insurance/hero`** resolve **`subfolder`** / ids from staging when only **`staging_id`** is sent — **`DDL/alter/13d_add_sales_staging_subfolder.sql`**, **`fill_forms_router`** |
 

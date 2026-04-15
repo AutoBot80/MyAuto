@@ -41,6 +41,15 @@ def fetch_staging_payload(staging_id: str, dealer_id: int) -> dict[str, Any] | N
         conn.close()
 
 
+def fetch_staging_subfolder(staging_id: str, dealer_id: int) -> str | None:
+    """Return upload subfolder from staging (``payload_json.file_location``; ``subfolder`` column synced on persist)."""
+    p = fetch_staging_payload(staging_id, dealer_id)
+    if not p:
+        return None
+    s = (p.get("file_location") or "").strip()
+    return s or None
+
+
 def fetch_draft_payload(staging_id: str, dealer_id: int) -> dict[str, Any] | None:
     """
     Return ``payload_json`` for a **draft** staging row when ``staging_id`` and ``dealer_id`` match.
@@ -91,26 +100,28 @@ def persist_staging_for_submit(
     payload_str = json.dumps(payload, default=str)
     sid = (staging_id_existing or "").strip()
     lid = (login_id or "").strip() or None
+    sf = (payload.get("file_location") or "").strip() or None
     if sid:
         cur.execute(
             """
             UPDATE add_sales_staging
             SET payload_json = %s::jsonb,
                 updated_at = now(),
-                login_id = COALESCE(%s, login_id)
+                login_id = COALESCE(%s, login_id),
+                subfolder = COALESCE(%s, subfolder)
             WHERE staging_id = %s::uuid AND dealer_id = %s AND status = 'draft'
             """,
-            (payload_str, lid, sid, dealer_id),
+            (payload_str, lid, sf, sid, dealer_id),
         )
         if cur.rowcount:
             return sid
     new_id = str(uuid.uuid4())
     cur.execute(
         """
-        INSERT INTO add_sales_staging (staging_id, dealer_id, payload_json, status, login_id)
-        VALUES (%s::uuid, %s, %s::jsonb, 'draft', %s)
+        INSERT INTO add_sales_staging (staging_id, dealer_id, payload_json, status, login_id, subfolder)
+        VALUES (%s::uuid, %s, %s::jsonb, 'draft', %s, %s)
         """,
-        (new_id, dealer_id, payload_str, lid),
+        (new_id, dealer_id, payload_str, lid, sf),
     )
     return new_id
 

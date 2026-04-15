@@ -19,7 +19,9 @@ export interface FillDmsVehicle {
 }
 
 export interface FillDmsRequest {
-  subfolder: string;
+  /** Optional when staging_id is set; server resolves from staging (file_location). */
+  subfolder?: string | null;
+  /** Optional; defaults to server DMS_BASE_URL. */
   dms_base_url?: string | null;
   /** Dealer ID for Form 20 field 10 (dealer name & address from dealer_ref). */
   dealer_id?: number | null;
@@ -31,8 +33,9 @@ export interface FillDmsRequest {
   /** From Submit Info; used for legacy master join and to persist DMS scrape when no ``staging_id``. */
   customer_id?: number | null;
   vehicle_id?: number | null;
-  customer: FillDmsCustomer;
-  vehicle: FillDmsVehicle;
+  /** Optional when ``staging_id`` is set (fill values come from staging payload). */
+  customer?: FillDmsCustomer;
+  vehicle?: FillDmsVehicle;
 }
 
 export interface FillDmsResponse {
@@ -125,10 +128,13 @@ export async function warmVahanBrowser(): Promise<WarmVahanBrowserResponse> {
 
 export interface FillHeroInsuranceRequest {
   insurance_base_url?: string | null;
+  /** Optional when staging_id is set (resolved from staging after Create Invoice). */
   customer_id?: number | null;
   vehicle_id?: number | null;
+  /** Optional when staging_id is set. */
   subfolder?: string | null;
   dealer_id?: number | null;
+  /** When set, server resolves subfolder and can resolve customer_id / vehicle_id from staging payload. */
   staging_id?: string | null;
 }
 

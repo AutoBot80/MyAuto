@@ -133,8 +133,14 @@ class FillDmsVehicle(BaseModel):
 
 
 class FillDmsRequest(BaseModel):
-    subfolder: str
-    dms_base_url: str | None = None
+    subfolder: str | None = Field(
+        None,
+        description="Upload scans subfolder; optional when staging_id is set (resolved from staging file_location / subfolder column).",
+    )
+    dms_base_url: str | None = Field(
+        None,
+        description="Overrides DMS_BASE_URL from server config when set.",
+    )
     dealer_id: int | None = None
     staging_id: str | None = Field(
         None,
@@ -177,18 +183,24 @@ class FillDmsResponse(BaseModel):
 class FillHeroInsuranceRequest(BaseModel):
     """
     ``insurance_base_url`` overrides ``INSURANCE_BASE_URL`` from ``.env``.
-    With ``customer_id`` and ``vehicle_id``, **pre_process** loads insurer / mobile / KYC steps; **main_process**
-    fills VIN (chassis from DB), **I agree**, and the proposal form (master-backed fields + hardcoded proposal defaults).
+    With ``staging_id``, ``customer_id`` / ``vehicle_id`` / ``subfolder`` are read from staging payload when omitted
+    (after Create Invoice, payload carries committed ids).
     """
 
-    insurance_base_url: str | None = None
+    insurance_base_url: str | None = Field(
+        None,
+        description="Overrides INSURANCE_BASE_URL from server config when set.",
+    )
     customer_id: int | None = None
     vehicle_id: int | None = None
-    subfolder: str | None = None
+    subfolder: str | None = Field(
+        None,
+        description="OCR/upload subfolder; optional when staging_id is set (resolved from staging).",
+    )
     dealer_id: int | None = None
     staging_id: str | None = Field(
         None,
-        description="Optional add_sales_staging UUID (draft or committed); merges OCR/Submit snapshot into insurer/nominee when form_insurance_view is sparse.",
+        description="add_sales_staging UUID; merges OCR/Submit snapshot when form_insurance_view is sparse.",
     )
 
 
@@ -287,6 +299,39 @@ def _fill_dms_staging_or_ids(
             detail="Provide staging_id (OCR staging snapshot) or both customer_id and vehicle_id.",
         )
     return None, customer_id, vehicle_id
+
+
+def _resolve_subfolder_for_fill(
+    req_subfolder: str | None,
+    staging_id: str | None,
+    dealer_id: int,
+    staging_payload: dict | None,
+) -> str:
+    """Prefer request subfolder; else staging row (file_location); required for DMS/insurance paths that write under ocr_output."""
+    s = (req_subfolder or "").strip()
+    if s:
+        return s
+    sid = (staging_id or "").strip()
+    if sid:
+        from app.repositories.add_sales_staging import fetch_staging_subfolder
+
+        fs = fetch_staging_subfolder(sid, dealer_id)
+        if fs:
+            return fs.strip()
+    if staging_payload and isinstance(staging_payload, dict):
+        fl = (staging_payload.get("file_location") or "").strip()
+        if fl:
+            return fl
+    return ""
+
+
+def _mobile_for_invoice_dispatch(staging_payload: dict | None, customer_dict: dict) -> str:
+    if staging_payload and isinstance(staging_payload.get("customer"), dict):
+        c = staging_payload["customer"]
+        m = c.get("mobile_number") if c.get("mobile_number") is not None else c.get("mobile")
+        if m is not None and str(m).strip():
+            return str(m).strip()
+    return str(customer_dict.get("mobile_number") or customer_dict.get("mobile") or "").strip()
 
 
 def _require_absolute_http_url(url: str, field_name: str) -> str:
@@ -405,12 +450,18 @@ async def fill_dms_only(
         customer_dict,
         vehicle_dict,
     )
+    subfolder_resolved = _resolve_subfolder_for_fill(req.subfolder, req.staging_id, did, staging_payload)
+    if not subfolder_resolved:
+        raise HTTPException(
+            status_code=400,
+            detail="subfolder is required unless staging has file_location (Submit Info) or pass subfolder explicitly.",
+        )
     sid_for_commit = (req.staging_id or "").strip() or None
     result = await _run_playwright_work(
         partial(
             run_fill_dms_only,
             dms_base_url=base_url,
-            subfolder=req.subfolder,
+            subfolder=subfolder_resolved,
             customer=customer_dict,
             vehicle=vehicle_dict,
             login_user=DMS_LOGIN_USER,
@@ -439,8 +490,8 @@ async def fill_dms_only(
 
         schedule_dispatch_pdfs_after_create_invoice(
             did,
-            req.subfolder,
-            str(customer_dict.get("mobile_number") or customer_dict.get("mobile") or ""),
+            subfolder_resolved,
+            _mobile_for_invoice_dispatch(staging_payload, customer_dict),
             list(result.get("pdfs_saved") or []),
         )
     return FillDmsResponse(
@@ -603,10 +654,9 @@ async def fill_hero_insurance(
     principal: Principal = Depends(get_principal),
 ) -> FillHeroInsuranceResponse:
     """
-    Hero Insurance: ``pre_process`` (Sign In → 2W → New Policy → insurer / OVD / mobile / KYC **Proceed**
-    or uploads) then ``main_process`` (VIN/chassis from ``form_insurance_view``, proposal defaults hardcoded).
-    Requires ``customer_id`` and ``vehicle_id`` for the main stage. Optional ``staging_id`` merges
-    ``add_sales_staging.payload_json`` (OCR merge) for insurer/nominee when the view has no ``insurance_master`` row yet.
+    Hero Insurance: ``pre_process`` then ``main_process``. With ``staging_id`` only, resolves
+    ``customer_id``, ``vehicle_id``, and ``subfolder`` from ``add_sales_staging.payload_json`` (after Create Invoice).
+    ``INSURANCE_BASE_URL`` from config when ``insurance_base_url`` is omitted.
     """
     enforce_max_text_depth(req.model_dump())
     url = (req.insurance_base_url or INSURANCE_BASE_URL or "").strip()
@@ -631,21 +681,50 @@ async def fill_hero_insurance(
                 detail="Staging not found, abandoned, or dealer_id does not match.",
             )
 
+    cid = req.customer_id
+    vid = req.vehicle_id
+    if staging_payload is not None:
+        if cid is None:
+            try:
+                raw_c = staging_payload.get("customer_id")
+                cid = int(raw_c) if raw_c is not None else None
+            except (TypeError, ValueError):
+                cid = None
+        if vid is None:
+            try:
+                raw_v = staging_payload.get("vehicle_id")
+                vid = int(raw_v) if raw_v is not None else None
+            except (TypeError, ValueError):
+                vid = None
+
+    if cid is None or vid is None:
+        raise HTTPException(
+            status_code=400,
+            detail="customer_id and vehicle_id are required, or staging must include them after Create Invoice.",
+        )
+
+    subfolder_resolved = _resolve_subfolder_for_fill(req.subfolder, req.staging_id, did, staging_payload)
+    if not subfolder_resolved:
+        raise HTTPException(
+            status_code=400,
+            detail="subfolder is required unless staging has file_location (Submit Info) or pass subfolder explicitly.",
+        )
+
     def _hero_insurance_run() -> dict:
         pre = pre_process(
             insurance_base_url=url if url else None,
-            customer_id=req.customer_id,
-            vehicle_id=req.vehicle_id,
-            subfolder=req.subfolder,
+            customer_id=cid,
+            vehicle_id=vid,
+            subfolder=subfolder_resolved,
             ocr_output_dir=ocr_dir,
             staging_payload=staging_payload,
             dealer_id=did,
         )
         main = main_process(
             pre_result=pre,
-            customer_id=req.customer_id,
-            vehicle_id=req.vehicle_id,
-            subfolder=req.subfolder,
+            customer_id=cid,
+            vehicle_id=vid,
+            subfolder=subfolder_resolved,
             ocr_output_dir=ocr_dir,
             staging_payload=staging_payload,
             staging_id=sid if sid else None,
@@ -654,10 +733,10 @@ async def fill_hero_insurance(
         return post_process(pre_result=pre, main_result=main)
 
     result = await _run_playwright_work(_hero_insurance_run)
-    if result.get("success") and (req.subfolder or "").strip():
+    if result.get("success") and subfolder_resolved:
         from app.services.upload_scans_invoice_print import schedule_dispatch_pdf_after_generate_insurance
 
-        schedule_dispatch_pdf_after_generate_insurance(did, (req.subfolder or "").strip())
+        schedule_dispatch_pdf_after_generate_insurance(did, subfolder_resolved)
     return FillHeroInsuranceResponse(
         success=bool(result.get("success")),
         error=result.get("error"),
@@ -673,7 +752,7 @@ async def fill_dms(
     principal: Principal = Depends(get_principal),
 ) -> FillDmsResponse:
     enforce_max_text_depth(req.model_dump())
-    logger.info("fill_dms: start subfolder=%s dms=%s", req.subfolder, bool(req.dms_base_url))
+    logger.info("fill_dms: start staging_id=%s dms=%s", req.staging_id, bool(req.dms_base_url))
     base_url = (req.dms_base_url or DMS_BASE_URL or "").strip()
     if not base_url:
         logger.warning("fill_dms: dms_base_url missing")
@@ -698,12 +777,18 @@ async def fill_dms(
         customer_dict,
         vehicle_dict,
     )
+    subfolder_resolved = _resolve_subfolder_for_fill(req.subfolder, req.staging_id, did, staging_payload)
+    if not subfolder_resolved:
+        raise HTTPException(
+            status_code=400,
+            detail="subfolder is required unless staging has file_location (Submit Info) or pass subfolder explicitly.",
+        )
     sid_for_commit = (req.staging_id or "").strip() or None
     result = await _run_playwright_work(
         partial(
             run_fill_dms,
             dms_base_url=base_url,
-            subfolder=req.subfolder,
+            subfolder=subfolder_resolved,
             customer=customer_dict,
             vehicle=vehicle_dict,
             login_user=DMS_LOGIN_USER,
@@ -739,8 +824,8 @@ async def fill_dms(
 
         schedule_dispatch_pdfs_after_create_invoice(
             did,
-            req.subfolder,
-            str(customer_dict.get("mobile_number") or customer_dict.get("mobile") or ""),
+            subfolder_resolved,
+            _mobile_for_invoice_dispatch(staging_payload, customer_dict),
             list(result.get("pdfs_saved") or []),
         )
     return FillDmsResponse(
