@@ -162,7 +162,7 @@ def get_discount_for_model(from_dealer_id: int, model: str) -> float | None:
             cur.execute(
                 """
                 SELECT discount
-                FROM subdealer_discount_master
+                FROM subdealer_discount_master_ref
                 WHERE dealer_id = %s
                   AND TRIM(model) = %s
                   AND valid_flag = 'Y'

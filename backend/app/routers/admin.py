@@ -60,7 +60,7 @@ def _dealer_admin_detail_dict(cur, dealer_id: int) -> dict | None:
 # - names ending with "ref" (SQL LIKE '%ref'), e.g. dealer_ref, roles_ref, login_ref
 # - legacy reference tables that do not end in "ref"
 PRESERVED_LIKE_SUFFIX = "%ref"
-PRESERVED_EXTRA_TABLES = ("oem_service_schedule", "subdealer_discount_master")
+PRESERVED_EXTRA_TABLES = ("oem_service_schedule",)
 CONFIRMATION_TEXT = "DELETE ALL DATA"
 
 
@@ -251,7 +251,7 @@ def reset_all_data(payload: ResetAllDataRequest) -> dict:
         conn.close()
 
 
-# --- Admin Saathi: dealers (dealer_ref, login_roles_ref, subdealer_discount_master) ---
+# --- Admin Saathi: dealers (dealer_ref, login_roles_ref, subdealer_discount_master_ref) ---
 
 
 class CreateDealerRequest(BaseModel):
@@ -648,7 +648,7 @@ def add_dealer_login_role(dealer_id: int, payload: AddDealerLoginRoleRequest) ->
 
 @router.get("/dealers/{dealer_id:int}/discounts")
 def list_dealer_discounts(dealer_id: int) -> list[dict]:
-    """Per-dealer model discounts from ``subdealer_discount_master`` (no separate ``discounts`` table in schema)."""
+    """Per-dealer model discounts from ``subdealer_discount_master_ref`` (no separate ``discounts`` table in schema)."""
     conn = get_connection()
     try:
         with conn.cursor() as cur:
@@ -659,7 +659,7 @@ def list_dealer_discounts(dealer_id: int) -> list[dict]:
             cur.execute(
                 """
                 SELECT subdealer_discount_id, dealer_id, model, discount, create_date, valid_flag
-                FROM subdealer_discount_master
+                FROM subdealer_discount_master_ref
                 WHERE dealer_id = %s
                 ORDER BY model ASC
                 """,
@@ -674,7 +674,7 @@ def list_dealer_discounts(dealer_id: int) -> list[dict]:
 
 @router.post("/dealers/{dealer_id:int}/discounts", status_code=201)
 def create_dealer_discount(dealer_id: int, payload: CreateDiscountRequest) -> dict:
-    """Insert one ``subdealer_discount_master`` row for the dealer."""
+    """Insert one ``subdealer_discount_master_ref`` row for the dealer."""
     m = payload.model.strip()
     if not m:
         raise HTTPException(status_code=400, detail="model is required")
@@ -700,7 +700,7 @@ def create_dealer_discount(dealer_id: int, payload: CreateDiscountRequest) -> di
 
             cur.execute(
                 """
-                INSERT INTO subdealer_discount_master (dealer_id, model, discount, create_date, valid_flag)
+                INSERT INTO subdealer_discount_master_ref (dealer_id, model, discount, create_date, valid_flag)
                 VALUES (%s, %s, %s, %s, %s)
                 RETURNING subdealer_discount_id, dealer_id, model, discount, create_date, valid_flag
                 """,

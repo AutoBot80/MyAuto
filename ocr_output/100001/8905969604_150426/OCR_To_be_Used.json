@@ -1,0 +1,33 @@
+{
+  "vehicle": {
+    "frame_no": "54831",
+    "engine_no": "48087",
+    "model_colour": "specting, BLA",
+    "key_no": "1020",
+    "battery_no": "BN3A2305613"
+  },
+  "customer": {
+    "year_of_birth": "2004",
+    "date_of_birth": "16/06/2004",
+    "name": "Ajay Faujdar",
+    "care_of": "S/O Kamal Singh",
+    "state": "Rajasthan",
+    "pin_code": "321201",
+    "address": "S/O Kamal Singh, Bansroli, Bharatpur, Rajasthan - . 321201",
+    "gender": "Male",
+    "city": "Bharatpur",
+    "mobile_number": "8905969604",
+    "alt_phone_num": "8696119510",
+    "aadhar_id": "0411"
+  },
+  "insurance": {
+    "profession": "Farmer",
+    "financier": "Axis Bank",
+    "nominee_gender": "Male",
+    "nominee_name": "Harvesh",
+    "nominee_age": "34",
+    "nominee_relationship": "Brother",
+    "payment_mode": "and Insurance Details"
+  },
+  "details_customer_name": "Ajoy Faujdan S/O Kamal Singh"
+}
