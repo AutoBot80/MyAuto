@@ -1,25 +1,22 @@
 """
 Local handling of PDFs under ``Uploaded scans/<dealer_id>/<subfolder>/``.
 
-When ``ENVIRONMENT`` is exactly ``prod`` (case-insensitive), PDFs are sent to the default system printer.
-For any other value (including empty), the PDF is opened with the default viewer (dev / non-prod).
+When ``ENVIRONMENT`` indicates production (``prod`` or ``production``, any casing, per
+``ENVIRONMENT_IS_PRODUCTION`` in ``app.config``), PDFs are sent to the default system printer.
+Otherwise the PDF is opened with the default viewer (dev / non-prod).
 """
 
 from __future__ import annotations
 
 import logging
-import os
 import platform
 import subprocess
 import threading
 from pathlib import Path
 
+from app.config import ENVIRONMENT_IS_PRODUCTION
+
 logger = logging.getLogger(__name__)
-
-
-def environment_is_strict_prod() -> bool:
-    """True only when ``ENVIRONMENT`` is ``prod`` (any casing). Not ``production``."""
-    return (os.getenv("ENVIRONMENT") or "").strip().lower() == "prod"
 
 
 def schedule_dispatch_local_pdf(pdf_path: Path) -> None:
@@ -47,7 +44,7 @@ def dispatch_local_pdf(pdf_path: Path) -> None:
         logger.warning("upload_scans_pdf_dispatch: not a PDF, skipping: %s", p)
         return
     try:
-        if environment_is_strict_prod():
+        if ENVIRONMENT_IS_PRODUCTION:
             _send_pdf_to_default_printer(p)
         else:
             _open_pdf_default_viewer(p)

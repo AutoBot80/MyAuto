@@ -11,9 +11,10 @@ from __future__ import annotations
 import logging
 import re
 import threading
+import time
 from pathlib import Path
 
-from app.config import get_uploads_dir
+from app.config import get_ocr_output_dir, get_uploads_dir
 from app.services.hero_dms_playwright_invoice import _mobile_report_pdf_filename
 from app.services.upload_scans_pdf_dispatch import dispatch_local_pdf
 
@@ -46,22 +47,28 @@ def dispatch_pdfs_after_create_invoice(
     """
     Print or open GST Retail Invoice and Sale Certificate PDFs after a successful Create Invoice / DMS run.
     Resolves paths under ``Uploaded scans/<dealer_id>/<subfolder>/``.
+
+    ``pdfs_saved`` should include paths from ``run_hero_dms_reports`` (returned on
+    ``hero_dms_form22_print["paths"]`` in the DMS result) — ``result["pdfs_saved"]`` is often empty because
+    Playwright stores downloads only on that object.
     """
+    base = get_uploads_dir(dealer_id) / subfolder
+    saved_list = [Path(s).resolve() for s in (pdfs_saved or []) if s and str(s).strip()]
     mob = _digits_10(mobile) or _mobile_from_subfolder(subfolder)
-    if not mob:
+    if not mob and not saved_list:
         logger.info(
-            "upload_scans_invoice_print: skip DMS dispatch (no 10-digit mobile): subfolder=%r",
+            "upload_scans_invoice_print: skip DMS dispatch (no 10-digit mobile and no saved paths): subfolder=%r",
             subfolder,
         )
         return
-    base = get_uploads_dir(dealer_id) / subfolder
-    saved_list = [Path(s).resolve() for s in (pdfs_saved or []) if s and str(s).strip()]
     for report in _DMS_REPORTS_AFTER_INVOICE:
-        expected = base / _mobile_report_pdf_filename(mob, report)
         chosen: Path | None = None
-        if expected.is_file():
-            chosen = expected
-        else:
+        expected: Path | None = None
+        if mob:
+            expected = base / _mobile_report_pdf_filename(mob, report)
+            if expected.is_file():
+                chosen = expected
+        if chosen is None:
             for p in saved_list:
                 if not p.is_file():
                     continue
@@ -76,42 +83,38 @@ def dispatch_pdfs_after_create_invoice(
             logger.info(
                 "upload_scans_invoice_print: DMS PDF not found for %r (expected %s)",
                 report,
-                expected,
+                expected if expected is not None else f"(match from paths only; base={base})",
             )
             continue
         dispatch_local_pdf(chosen)
 
-    try:
-        from app.services.form20_pencil_overlay import form20_pencil_overlay_and_dispatch
+    if mob:
+        try:
+            from app.services.form20_pencil_overlay import form20_pencil_overlay_and_dispatch
 
-        form20_pencil_overlay_and_dispatch(base, mob)
-    except Exception as exc:
-        # Missing optional pencil-mark file does not raise — only unexpected failures (e.g. corrupt PDF).
-        logger.warning("upload_scans_invoice_print: Form 20 pencil overlay failed unexpectedly: %s", exc)
+            form20_pencil_overlay_and_dispatch(base, mob)
+        except Exception as exc:
+            # Missing optional pencil-mark file does not raise — only unexpected failures (e.g. corrupt PDF).
+            logger.warning("upload_scans_invoice_print: Form 20 pencil overlay failed unexpectedly: %s", exc)
 
 
-def dispatch_pdf_after_generate_insurance(dealer_id: int, subfolder: str) -> None:
-    """
-    Print or open the insurance policy PDF if present under the sale folder.
-    Prefers ``<mobile>_Insurance.pdf``, then common names, then newest *insurance* / *proposal* / *policy* PDF.
-    """
-    base = get_uploads_dir(dealer_id) / subfolder
+def _try_dispatch_insurance_pdf_from_dir(base: Path) -> bool:
+    """Return True if a PDF was dispatched from ``base``."""
     if not base.is_dir():
-        logger.info("upload_scans_invoice_print: insurance folder missing: %s", base)
-        return
-    mob = _mobile_from_subfolder(subfolder)
+        return False
+    mob = _mobile_from_subfolder(str(base.name))
 
     if mob:
         for name in (f"{mob}_Insurance.pdf", f"{mob}_Insurance_Policy.pdf"):
             p = base / name
             if p.is_file():
                 dispatch_local_pdf(p)
-                return
+                return True
     for name in ("Insurance.pdf", "Insurance_Policy.pdf", "Hero_Insurance.pdf", "MISP_Insurance.pdf"):
         p = base / name
         if p.is_file():
             dispatch_local_pdf(p)
-            return
+            return True
 
     skip_parts = ("gst_retail", "sale_certificate", "form22", "form_20", "booking_receipt", "invoice_details")
     scored: list[tuple[float, Path]] = []
@@ -126,11 +129,31 @@ def dispatch_pdf_after_generate_insurance(dealer_id: int, subfolder: str) -> Non
                 continue
     if scored:
         dispatch_local_pdf(max(scored, key=lambda x: x[0])[1])
-        return
+        return True
+    return False
+
+
+def dispatch_pdf_after_generate_insurance(dealer_id: int, subfolder: str) -> None:
+    """
+    Print or open the insurance policy PDF if present under the sale folder.
+    Checks **Uploaded scans** and **ocr_output** (same ``<dealer_id>/<subfolder>`` leaf).
+
+    Prefers ``<mobile>_Insurance.pdf``, then common names, then newest *insurance* / *proposal* / *policy* PDF.
+    Retries briefly — downloads may finish just after the API returns.
+    """
+    uploads_base = get_uploads_dir(dealer_id) / subfolder
+    ocr_base = get_ocr_output_dir(dealer_id) / subfolder
+
+    for attempt in range(15):
+        for folder in (uploads_base, ocr_base):
+            if _try_dispatch_insurance_pdf_from_dir(folder):
+                return
+        time.sleep(0.35)
 
     logger.info(
-        "upload_scans_invoice_print: no insurance PDF found under %s (skipping dispatch)",
-        base,
+        "upload_scans_invoice_print: no insurance PDF found under %s or %s (skipping dispatch)",
+        uploads_base,
+        ocr_base,
     )
 
 

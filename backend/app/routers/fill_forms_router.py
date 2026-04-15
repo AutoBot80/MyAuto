@@ -349,6 +349,25 @@ def _resolve_subfolder_for_fill(
     return ""
 
 
+def _invoice_dispatch_pdf_paths(result: dict) -> list[str]:
+    """Merge legacy ``pdfs_saved`` with Run Report paths from ``hero_dms_form22_print`` (Playwright stores downloads there)."""
+    merged: list[str] = []
+    seen: set[str] = set()
+    for p in result.get("pdfs_saved") or []:
+        s = str(p).strip()
+        if s and s not in seen:
+            seen.add(s)
+            merged.append(s)
+    h = result.get("hero_dms_form22_print")
+    if isinstance(h, dict):
+        for p in h.get("paths") or []:
+            s = str(p).strip()
+            if s and s not in seen:
+                seen.add(s)
+                merged.append(s)
+    return merged
+
+
 def _mobile_for_invoice_dispatch(staging_payload: dict | None, customer_dict: dict) -> str:
     if staging_payload and isinstance(staging_payload.get("customer"), dict):
         c = staging_payload["customer"]
@@ -522,12 +541,12 @@ async def fill_dms_only(
             did,
             subfolder_resolved,
             _mobile_for_invoice_dispatch(staging_payload, customer_dict),
-            list(result.get("pdfs_saved") or []),
+            _invoice_dispatch_pdf_paths(result),
         )
     return FillDmsResponse(
         success=result.get("error") is None,
         vehicle=scraped,
-        pdfs_saved=result.get("pdfs_saved") or [],
+        pdfs_saved=_invoice_dispatch_pdf_paths(result),
         application_id=None,
         rto_fees=None,
         error=_normalize_automation_error(result.get("error")),
@@ -906,12 +925,12 @@ async def fill_dms(
             did,
             subfolder_resolved,
             _mobile_for_invoice_dispatch(staging_payload, customer_dict),
-            list(result.get("pdfs_saved") or []),
+            _invoice_dispatch_pdf_paths(result),
         )
     return FillDmsResponse(
         success=result.get("error") is None,
         vehicle=scraped,
-        pdfs_saved=result.get("pdfs_saved") or [],
+        pdfs_saved=_invoice_dispatch_pdf_paths(result),
         application_id=result.get("application_id"),
         rto_fees=result.get("rto_fees"),
         error=_normalize_automation_error(result.get("error")),
