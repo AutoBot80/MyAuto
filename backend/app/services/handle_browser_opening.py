@@ -622,18 +622,66 @@ def _wait_login_or_prompt_after_open(page, site_label: str):
 def _navigate_existing_tab_to_site(target_url: str, site_label: str = ""):
     """Navigate an existing tab in a connected CDP browser to ``target_url``.
 
-    Instead of opening a new tab (which can invalidate single-session sites like Vahan),
-    this picks the first available page and navigates it in-place.  The browser profile's
-    cookies are preserved, so a prior login may still be valid.
+    For **Insurance**, never navigates a Siebel/DMS tab to MISP — those tabs are skipped
+    (same rules as :func:`find_open_site_page`). If every open tab is DMS-only, opens a
+    **new** tab in the same context instead of hijacking DMS.
+
+    For other ``site_label`` values, the first tab is still navigated in-place (Vahan, etc.).
 
     Returns the ``Page`` or ``None`` if no CDP browser / tab is available.
     """
     _refresh_cdp_browsers()
     browsers = list(_CDP_BROWSERS_BY_URL.values()) + list(_KEEP_OPEN_BROWSERS)
+    want_insurance = (site_label or "").strip() == "Insurance"
+
     for browser in browsers:
         try:
             for ctx in browser.contexts:
-                for page in ctx.pages:
+                pages = list(ctx.pages)
+                if not pages:
+                    continue
+
+                if want_insurance:
+                    navigable: list = []
+                    for page in pages:
+                        try:
+                            u = (page.url or "").strip()
+                        except Exception:
+                            u = ""
+                        if _url_looks_like_dms_siebel_tab(u):
+                            logger.info(
+                                "handle_browser_opening: skip DMS/Siebel tab for Insurance navigate — %s",
+                                u[:120],
+                            )
+                            continue
+                        navigable.append(page)
+
+                    for page in navigable:
+                        try:
+                            page.goto(target_url, wait_until="domcontentloaded", timeout=20_000)
+                            logger.info(
+                                "handle_browser_opening: navigated non-DMS tab to Insurance URL",
+                            )
+                            return page
+                        except Exception as exc:
+                            logger.debug(
+                                "handle_browser_opening: navigate Insurance tab failed: %s", exc
+                            )
+                            continue
+                    try:
+                        pg_new = ctx.new_page()
+                        pg_new.goto(target_url, wait_until="domcontentloaded", timeout=20_000)
+                        logger.info(
+                            "handle_browser_opening: opened new Insurance tab (skipped DMS-only or failed reuses).",
+                        )
+                        return pg_new
+                    except Exception as exc:
+                        logger.debug(
+                            "handle_browser_opening: new_page/goto Insurance failed: %s", exc
+                        )
+                        continue
+
+                for page in pages:
                     try:
                         page.goto(target_url, wait_until="domcontentloaded", timeout=20_000)
                         logger.info(
