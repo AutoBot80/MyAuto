@@ -4685,202 +4685,6 @@ def _proposal_checkbox_context_text(cb) -> str:
         return ""
 
 
-def _proposal_checkbox_immediate_text(cb) -> str:
-    """
-    Narrow context: associated ``<label>``, immediate sibling text nodes, and
-    the innermost ``<td>`` / ``<label>`` / ``<span>`` / ``<div>`` parent only.
-    Does **not** walk up beyond the first structural parent so adjacent grid
-    rows (e.g. ND Cover vs ND Plus Cover) stay separate.
-    """
-    try:
-        return (
-            cb.evaluate(
-                """e => {
-                  const parts = [];
-                  // 1. <label for="...">
-                  if (e.id) {
-                    const lab = document.querySelector('label[for="' + e.id + '"]');
-                    if (lab) parts.push((lab.innerText || '').trim());
-                  }
-                  // 2. Wrapping <label>
-                  const wrapLabel = e.closest('label');
-                  if (wrapLabel) parts.push((wrapLabel.innerText || '').trim());
-                  // 3. Immediate next sibling text
-                  let sib = e.nextSibling;
-                  for (let s = 0; s < 3 && sib; s++) {
-                    const st = (sib.textContent || '').trim();
-                    if (st) parts.push(st.slice(0, 200));
-                    sib = sib.nextSibling;
-                  }
-                  // 4. Immediate previous sibling text
-                  sib = e.previousSibling;
-                  for (let s = 0; s < 3 && sib; s++) {
-                    const st = (sib.textContent || '').trim();
-                    if (st) parts.push(st.slice(0, 200));
-                    sib = sib.previousSibling;
-                  }
-                  // 5. Closest small structural parent (td, span, label, or first div/li)
-                  const small = e.closest('td, th, span, label, li') || e.closest('div');
-                  if (small && small !== document.body) {
-                    parts.push((small.innerText || '').trim().slice(0, 300));
-                  }
-                  return parts.join('\\n');
-                }"""
-            )
-            or ""
-        )[:1500]
-    except Exception:
-        return ""
-
-
-def _proposal_checkbox_label_only_text(cb) -> str:
-    """
-    Narrowest possible context: only the ``<label>`` text and the checkbox's
-    own text-node siblings.  No parent walk-up at all.  Used to disambiguate
-    grid checkboxes that share a common parent container.
-    """
-    try:
-        return (
-            cb.evaluate(
-                """e => {
-                  const parts = [];
-                  if (e.id) {
-                    const lab = document.querySelector('label[for="' + e.id + '"]');
-                    if (lab) parts.push((lab.innerText || '').trim());
-                  }
-                  const wrapLabel = e.closest('label');
-                  if (wrapLabel) parts.push((wrapLabel.innerText || '').trim());
-                  let sib = e.nextSibling;
-                  for (let s = 0; s < 3 && sib; s++) {
-                    if (sib.nodeType === 3 || sib.nodeType === 1) {
-                      const st = (sib.textContent || '').trim();
-                      if (st) parts.push(st.slice(0, 200));
-                    }
-                    sib = sib.nextSibling;
-                  }
-                  sib = e.previousSibling;
-                  for (let s = 0; s < 3 && sib; s++) {
-                    if (sib.nodeType === 3 || sib.nodeType === 1) {
-                      const st = (sib.textContent || '').trim();
-                      if (st) parts.push(st.slice(0, 200));
-                    }
-                    sib = sib.previousSibling;
-                  }
-                  return parts.join('\\n');
-                }"""
-            )
-            or ""
-        )[:800]
-    except Exception:
-        return ""
-
-
-def _dump_addon_checkboxes_diagnostic(
-    page,
-    ocr_output_dir: Path | None,
-    subfolder: str | None,
-    tag: str = "addon_diag",
-) -> None:
-    """
-    Write a diagnostic dump of every visible checkbox in every proposal root to
-    ``<ocr_output_dir>/<subfolder>/addon_checkboxes_dump.txt``.
-    Includes: frame URL, element id, checked state, label-only text, immediate
-    text, and broad context text for each checkbox.
-    """
-    if not ocr_output_dir or not subfolder:
-        return
-    safe = safe_subfolder_name(subfolder)
-    dump_path = Path(ocr_output_dir).resolve() / safe / "addon_checkboxes_dump.txt"
-    lines: list[str] = []
-    lines.append(f"=== Addon Checkbox Diagnostic Dump [{tag}] ===")
-    try:
-        from datetime import datetime, timezone, timedelta
-
-        lines.append(f"timestamp={datetime.now(timezone(timedelta(hours=5, minutes=30))).isoformat()}")
-    except Exception:
-        pass
-    lines.append(f"page.url={page.url}")
-    lines.append("")
-
-    root_idx = 0
-    for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
-        root_label = ""
-        try:
-            if hasattr(root, "url"):
-                root_label = f"Frame url={root.url}"
-            elif hasattr(root, "_frame_locator"):
-                root_label = "FrameLocator"
-            else:
-                root_label = f"Page url={page.url}"
-        except Exception:
-            root_label = f"root#{root_idx}"
-        lines.append(f"--- root[{root_idx}] {root_label} ---")
-
-        try:
-            cbs = root.locator('input[type="checkbox"]')
-            n = cbs.count()
-            lines.append(f"  checkbox count={n}")
-        except Exception as exc:
-            lines.append(f"  ERROR enumerating checkboxes: {exc}")
-            root_idx += 1
-            continue
-
-        for i in range(min(n, 80)):
-            cb = cbs.nth(i)
-            try:
-                vis = False
-                try:
-                    vis = cb.is_visible(timeout=300)
-                except Exception:
-                    pass
-                cb_id = ""
-                try:
-                    cb_id = cb.get_attribute("id") or ""
-                except Exception:
-                    pass
-                cb_name = ""
-                try:
-                    cb_name = cb.get_attribute("name") or ""
-                except Exception:
-                    pass
-                checked = None
-                try:
-                    checked = cb.is_checked()
-                except Exception:
-                    pass
-                t_label = ""
-                try:
-                    t_label = _proposal_checkbox_label_only_text(cb)
-                except Exception as exc:
-                    t_label = f"<ERROR: {exc}>"
-                t_immediate = ""
-                try:
-                    t_immediate = _proposal_checkbox_immediate_text(cb)
-                except Exception as exc:
-                    t_immediate = f"<ERROR: {exc}>"
-                t_broad = ""
-                try:
-                    t_broad = _proposal_checkbox_context_text(cb)
-                except Exception as exc:
-                    t_broad = f"<ERROR: {exc}>"
-
-                lines.append(f"  [{i}] id={cb_id!r} name={cb_name!r} visible={vis} checked={checked}")
-                lines.append(f"      label_only: {t_label[:300]!r}")
-                lines.append(f"      immediate:  {t_immediate[:300]!r}")
-                lines.append(f"      broad:      {t_broad[:300]!r}")
-            except Exception as exc:
-                lines.append(f"  [{i}] ERROR: {exc}")
-        lines.append("")
-        root_idx += 1
-
-    try:
-        dump_path.parent.mkdir(parents=True, exist_ok=True)
-        dump_path.write_text("\n".join(lines), encoding="utf-8")
-        logger.info("Hero Insurance: addon checkbox dump written to %s", dump_path)
-    except Exception as exc:
-        logger.warning("Hero Insurance: failed to write addon checkbox dump: %s", exc)
-
-
 def _proposal_dob_readback_matches_expected(want_norm: str, got: str) -> bool:
     """``txtDOB`` readback vs expected **dd/mm/yyyy** (same spirit as ``_proposal_step_fill_dob``)."""
     if not want_norm or not got:
@@ -5739,98 +5543,6 @@ def _proposal_step_checkbox_by_cph1_id(
     return f"{step_id}: checkbox id={id_suffix!r} failed ({last_err or 'not visible'})"
 
 
-def _proposal_step_checkbox_narrow(
-    page,
-    text_pattern: str,
-    want_checked: bool,
-    step_id: str,
-    ocr_output_dir: Path | None,
-    subfolder: str | None,
-    *,
-    timeout_ms: int,
-    exclude_immediate_pattern: str | None = None,
-) -> str | None:
-    """
-    Like ``_proposal_step_checkbox`` but uses **label-only** text first
-    (``_proposal_checkbox_label_only_text``) and falls back to
-    ``_proposal_checkbox_immediate_text`` so adjacent grid rows with similar
-    names (ND Cover vs ND Plus Cover) are disambiguated.
-
-    Optional ``exclude_immediate_pattern``: skip checkboxes whose **label-only**
-    text matches this regex (used to skip ND Cover when looking for ND Plus).
-    When both the wanted pattern and the exclude pattern match (ambiguous parent
-    text), the exclude wins and the checkbox is skipped.
-    """
-    rx = re.compile(text_pattern, re.I | re.M)
-    rx_excl = re.compile(exclude_immediate_pattern, re.I) if exclude_immediate_pattern else None
-    last_exc = ""
-    for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
-        try:
-            cbs = root.locator('input[type="checkbox"]')
-            n = cbs.count()
-        except Exception:
-            continue
-        for i in range(min(n, 160)):
-            cb = cbs.nth(i)
-            try:
-                if not cb.is_visible(timeout=400):
-                    continue
-                t_label = _proposal_checkbox_label_only_text(cb)
-                t = t_label
-                if not t.strip():
-                    t = _proposal_checkbox_immediate_text(cb)
-                if not t.strip():
-                    cid = cb.get_attribute("id") or ""
-                    if cid:
-                        try:
-                            lab = root.locator(f'label[for="{cid}"]')
-                            if lab.count() > 0:
-                                t = (lab.first.inner_text() or "")[:400]
-                        except Exception:
-                            pass
-                if not t.strip():
-                    t = (
-                        cb.evaluate(
-                            "e => (e.closest('label, td, span') && e.closest('label, td, span').innerText) || ''"
-                        )
-                        or ""
-                    )[:500]
-                if not rx.search(t):
-                    continue
-                if rx_excl:
-                    excl_text = t_label if t_label.strip() else t
-                    if rx_excl.search(excl_text):
-                        continue
-                if want_checked and not cb.is_checked():
-                    try:
-                        cb.check(timeout=timeout_ms, force=True)
-                    except Exception:
-                        cb.check(timeout=timeout_ms)
-                elif not want_checked and cb.is_checked():
-                    try:
-                        cb.uncheck(timeout=timeout_ms, force=True)
-                    except Exception:
-                        cb.uncheck(timeout=timeout_ms)
-                if cb.is_checked() != want_checked:
-                    return (
-                        f"{step_id}: checkbox readback want_checked={want_checked} "
-                        f"got={cb.is_checked()} pattern={text_pattern!r}"
-                    )
-                _proposal_log(
-                    ocr_output_dir,
-                    subfolder,
-                    step_id,
-                    f"checkbox(narrow) {'checked' if want_checked else 'unchecked'} ok "
-                    f"pattern={text_pattern[:56]!r} label={t[:80]!r}",
-                )
-                return None
-            except Exception as exc:
-                last_exc = str(exc)
-                continue
-    suf = f" ({last_exc})" if last_exc else ""
-    return f"{step_id}: checkbox not found (narrow) for pattern {text_pattern!r}{suf}"
-
-
 def _proposal_addon_checkbox_id_or_label(
     page,
     id_suffix: str,
@@ -5841,8 +5553,6 @@ def _proposal_addon_checkbox_id_or_label(
     subfolder: str | None,
     *,
     timeout_ms: int,
-    narrow: bool = False,
-    exclude_immediate_pattern: str | None = None,
 ) -> str | None:
     """Prefer stable CPH1 id from MispPolicy scrape; fall back to row/label regex."""
     r = _proposal_step_checkbox_by_cph1_id(
@@ -5857,17 +5567,6 @@ def _proposal_addon_checkbox_id_or_label(
     if r is None:
         return None
     if r == PROPOSAL_CHECKBOX_ID_NOT_FOUND:
-        if narrow:
-            return _proposal_step_checkbox_narrow(
-                page,
-                label_pattern,
-                want_checked,
-                step_id,
-                ocr_output_dir,
-                subfolder,
-                timeout_ms=timeout_ms,
-                exclude_immediate_pattern=exclude_immediate_pattern,
-            )
         return _proposal_step_checkbox(
             page,
             label_pattern,
@@ -8066,23 +7765,19 @@ def _hero_misp_fill_proposal_and_review(
             ocr_output_dir,
             subfolder,
             timeout_ms=pt,
-            narrow=True,
         )
         if err:
             return _proposal_fail(ocr_output_dir, subfolder, err)
         _t(page, 600)
-        _dump_addon_checkboxes_diagnostic(page, ocr_output_dir, subfolder, tag="before_nd_plus_cover")
         err = _proposal_addon_checkbox_id_or_label(
             page,
-            "chkNDPlusCover",
+            "chkNilDepreciationPlus",
             True,
             "addon_nd_plus_cover",
             _nd_plus_label_pat,
             ocr_output_dir,
             subfolder,
             timeout_ms=pt,
-            narrow=True,
-            exclude_immediate_pattern=_nd_cover_label_pat,
         )
         if err:
             return _proposal_fail(ocr_output_dir, subfolder, err)
@@ -8097,8 +7792,6 @@ def _hero_misp_fill_proposal_and_review(
             ocr_output_dir,
             subfolder,
             timeout_ms=pt,
-            narrow=True,
-            exclude_immediate_pattern=r"ND\s*Plus|Plus\s*Cover",
         )
         if err:
             return _proposal_fail(ocr_output_dir, subfolder, err)
@@ -8196,31 +7889,27 @@ def _hero_misp_fill_proposal_and_review(
                 ocr_output_dir,
                 subfolder,
                 timeout_ms=pt,
-                narrow=True,
             )
             if err:
                 return _proposal_fail(ocr_output_dir, subfolder, err)
             _t(page, 400)
             err = _proposal_addon_checkbox_id_or_label(
                 page,
-                "chkNDPlusCover",
+                "chkNilDepreciationPlus",
                 True,
                 "addon_nd_plus_cover_reassert",
                 _nd_plus_label_pat,
                 ocr_output_dir,
                 subfolder,
                 timeout_ms=pt,
-                narrow=True,
-                exclude_immediate_pattern=_nd_cover_label_pat,
             )
             if err:
                 return _proposal_fail(ocr_output_dir, subfolder, err)
             _t(page, 600)
-            # Verify ND Plus Cover is still checked using immediate text
             _nd_plus_still_ok = False
             for _root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
                 try:
-                    _loc = _proposal_cph1_locator(_root, "chkNDPlusCover")
+                    _loc = _proposal_cph1_locator(_root, "chkNilDepreciationPlus")
                     if _loc.count() == 0:
                         continue
                     _cb = _proposal_first_visible_locator_nth(_loc, max_n=4, vis_timeout_ms=500)
@@ -8229,27 +7918,6 @@ def _hero_misp_fill_proposal_and_review(
                         break
                 except Exception:
                     continue
-            if not _nd_plus_still_ok:
-                _rx_plus = re.compile(_nd_plus_label_pat, re.I)
-                _rx_excl = re.compile(_nd_cover_label_pat, re.I)
-                for _root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
-                    try:
-                        _cbs = _root.locator('input[type="checkbox"]')
-                        for _ci in range(min(_cbs.count(), 80)):
-                            _el = _cbs.nth(_ci)
-                            try:
-                                if not _el.is_visible(timeout=300):
-                                    continue
-                                _ctx = _proposal_checkbox_immediate_text(_el)
-                                if _rx_plus.search(_ctx) and not _rx_excl.search(_ctx) and _el.is_checked():
-                                    _nd_plus_still_ok = True
-                                    break
-                            except Exception:
-                                continue
-                        if _nd_plus_still_ok:
-                            break
-                    except Exception:
-                        continue
             if _nd_plus_still_ok:
                 _proposal_log(
                     ocr_output_dir,
