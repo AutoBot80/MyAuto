@@ -5632,75 +5632,6 @@ def _proposal_step_nominee_gender_radio(
     return f"{step_id}: nominee gender radio not found ({last_err or 'no candidate'})"
 
 
-def _proposal_step_usgi_uncheck(
-    page,
-    step_id: str,
-    ocr_output_dir: Path | None,
-    subfolder: str | None,
-    *,
-    timeout_ms: int,
-) -> str | None:
-    """CPA **USGI** checkbox (grid ``chlGMC`` ``ctl02``); force **unchecked** per SOP."""
-    rid = _proposal_step_checkbox_by_cph1_id(
-        page,
-        "gridGMc_ctl02_chlGMC",
-        False,
-        step_id,
-        ocr_output_dir,
-        subfolder,
-        timeout_ms=timeout_ms,
-    )
-    if rid is None:
-        return None
-    if rid != PROPOSAL_CHECKBOX_ID_NOT_FOUND:
-        return rid
-    last_err = ""
-    for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
-        try:
-            locs = root.locator("[id*='chlGMC']")
-            n = locs.count()
-        except Exception:
-            continue
-        for i in range(min(n, 48)):
-            try:
-                cb = locs.nth(i)
-                typ = (cb.get_attribute("type") or "").lower()
-                if typ != "checkbox":
-                    continue
-                ctx = _proposal_checkbox_context_text(cb)
-                if not re.search(r"\bUSGI\b", ctx, re.I):
-                    continue
-                if not cb.is_visible(timeout=600):
-                    _proposal_scroll_visible(cb, timeout_ms=timeout_ms)
-                if not cb.is_visible(timeout=2_000):
-                    continue
-                if cb.is_checked():
-                    cb.uncheck(timeout=timeout_ms, force=True)
-                if cb.is_checked():
-                    try:
-                        cb.evaluate(
-                            "e => { e.checked = false; e.dispatchEvent(new Event('change', { bubbles: true })); }"
-                        )
-                    except Exception:
-                        pass
-                if cb.is_checked():
-                    return f"{step_id}: USGI checkbox still checked after uncheck"
-                _proposal_log(
-                    ocr_output_dir,
-                    subfolder,
-                    step_id,
-                    "USGI checkbox unchecked ok readback=unchecked",
-                )
-                return None
-            except Exception as exc:
-                last_err = str(exc)
-                continue
-    err = _proposal_step_checkbox(page, r"^USGI$|USGI", False, step_id, ocr_output_dir, subfolder, timeout_ms=timeout_ms)
-    if err is None:
-        return None
-    return f"{step_id}: USGI checkbox not found ({last_err or err})"
-
-
 # CPA bottom add-on: portal label varies (NIC / CPI / Hero CPI / …); match by row text; state from ``form_insurance_view.hero_cpi``.
 # Inline ``(?i)``/``(?m)`` mid-pattern breaks ``re.compile(..., re.I)`` — use flags on ``compile`` only (**LLD** **6.212**).
 HERO_MISP_HERO_CPI_ADDON_CHECKBOX_PATTERN = (
@@ -7952,15 +7883,7 @@ def _hero_misp_fill_proposal_and_review(
     if err:
         return _proposal_fail(ocr_output_dir, subfolder, err)
 
-    err = _proposal_step_usgi_uncheck(
-        page,
-        "cpa_usgi_uncheck",
-        ocr_output_dir,
-        subfolder,
-        timeout_ms=pt,
-    )
-    if err:
-        return _proposal_fail(ocr_output_dir, subfolder, err)
+    # No USGI uncheck: CPA Tenure 0 removes that grid row; uncheck caused detached-DOM failures.
 
     _t(page, 400)
     err = _proposal_step_hdfc_payment(
