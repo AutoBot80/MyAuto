@@ -247,7 +247,7 @@ class UploadService:
         from app.services.pre_ocr_service import run_pre_ocr_and_prepare
 
         try:
-            bundles, _stem, _mobile_ocr, _ocr_path, missing, page_images, _, rejected_extras = run_pre_ocr_and_prepare(
+            bundles, _stem, _mobile_ocr, _ocr_path, missing, page_images, _, rejected_extras, ddt_prefetch = run_pre_ocr_and_prepare(
                 dest_pdf,
                 processing_dir=proc_dir,
                 dealer_id=dealer_id,
@@ -371,6 +371,7 @@ class UploadService:
             extraction_result = ocr.process_uploaded_subfolder(
                 subdir_name,
                 on_extraction_event=on_extraction_event,
+                ddt_prefetch=ddt_prefetch or None,
             )
             if pencil_warnings:
                 extraction_result = {**extraction_result, "warnings": pencil_warnings}

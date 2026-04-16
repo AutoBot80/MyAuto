@@ -1,10 +1,11 @@
 """
-Pre-OCR for bulk upload: Tesseract pass on each PDF page (in-memory raster), classify (Aadhaar, Details, …),
-then write normalized document files under ``Uploaded scans/{dealer_id}/{mobile}_ddmmyy/``.
+Pre-OCR for bulk upload: parallel Textract DDT on each PDF page (in-memory raster → JPEG → AWS
+DetectDocumentText), classify (Aadhaar, Details, …), then write normalized document files under
+``Uploaded scans/{dealer_id}/{mobile}_ddmmyy/``.
 
 **Raw folder:** ``…/{mobile}_ddmmyy/raw/`` holds **PDFs only**: the consolidated scan copy and per-page
 ``page_NN.pdf`` files. Rasters are **not** stored under ``raw/``; pre-OCR renders each PDF page to **PIL RGB**
-(PyMuPDF) and passes pixels straight to Tesseract (no intermediate JPEG). Upload-facing JPEGs/PDFs for
+(PyMuPDF), encodes to JPEG, and sends to Textract DDT in parallel. Upload-facing JPEGs/PDFs for
 :mod:`sales_ocr_service` are written under ``for_OCR/`` after classification.
 
 **for_OCR folder:** ``…/{mobile}_ddmmyy/for_OCR/`` holds classified outputs (JPEGs such as
@@ -44,8 +45,6 @@ from app.config import (
     OCR_PREPROCESS,
     OCR_PRE_OCR_OSD_ENABLED,
     OCR_PRE_OCR_RASTER_DPI,
-    OCR_PRE_OCR_TEXTRACT_AADHAR_FALLBACK,
-    OCR_PRE_OCR_TEXTRACT_DETAILS,
     UPLOADS_DIR,
     get_add_sales_pre_ocr_work_dir,
     get_ocr_output_dir,
@@ -1653,17 +1652,22 @@ def pre_ocr_pdf(
     pdf_path: Path,
     processing_dir: Path | None = None,
     t0_wall: float | None = None,
-) -> tuple[str, Path | None, str | None, list[tuple[str, int | None, str, int]], dict[int, Image.Image], dict[int, int]]:
+) -> tuple[str, Path | None, str | None, list[tuple[str, int | None, str, int]], dict[int, Image.Image], dict[int, int], dict[int, dict]]:
     """
-    Extract mobile from PDF using Tesseract per page (Details sheet has mobile).
+    Extract mobile from PDF using parallel Textract DDT per page (Details sheet has mobile).
     Saves to Processing/filename_ddmmyyyy_pre_ocr.txt.
 
-    Returns ``(full_text, ocr_file_path, mobile_or_none, step_log, page_images, osd_rotations)``
+    Returns ``(full_text, ocr_file_path, mobile_or_none, step_log, page_images, osd_rotations, ddt_results)``
     where ``step_log`` is a list of ``(step_id, elapsed_ms, detail, t_offset_ms)`` for
     :func:`append_pre_ocr_step_lines`, ``page_images`` maps ``{page_idx: PIL_Image}`` (oriented),
-    and ``osd_rotations`` maps ``{page_idx: clockwise_degrees}`` (for reuse by downstream PDF writers).
+    ``osd_rotations`` maps ``{page_idx: clockwise_degrees}`` (for reuse by downstream PDF writers),
+    and ``ddt_results`` maps ``{page_idx: textract_ddt_dict}`` (full ``extract_text_from_bytes`` results
+    for reuse by downstream OCR — avoids redundant Textract DDT calls).
     ``t0_wall``: ``time.perf_counter()`` at request start — used for ``T+`` offset in each step.
     """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from app.services.sales_textract_service import extract_text_from_bytes
+
     _t0 = t0_wall if t0_wall is not None else time.perf_counter()
     proc_dir = processing_dir or PROCESSING_DIR
     proc_dir.mkdir(parents=True, exist_ok=True)
@@ -1689,19 +1693,42 @@ def pre_ocr_pdf(
             _step(rt_id, rt_ms, rt_detail)
         page_images: dict[int, Image.Image] = {idx: im for idx, im in pages}
 
-        all_text_parts: list[str] = []
-        tess_total = 0
-        for page_idx, page_img in pages:
+        def _ddt_one_page(page_idx: int, page_img: Image.Image) -> tuple[int, str, dict, int]:
             t1 = time.perf_counter()
-            text = _tesseract_ocr_image(page_img)
+            jpeg_bytes = _pil_image_to_jpeg_bytes(page_img)
+            try:
+                result = extract_text_from_bytes(jpeg_bytes)
+            except Exception as exc:
+                result = {"error": str(exc), "full_text": "", "blocks": [], "raw_response": None}
             p_ms = int((time.perf_counter() - t1) * 1000)
-            tess_total += p_ms
-            ch = len(text.strip())
-            px = page_img.width * page_img.height * 3
-            _step(f"tesseract_page_{page_idx + 1}", p_ms, f"chars={ch} rgb_bytes≈{px}")
-            all_text_parts.append(f"--- Page {page_idx + 1} ---\n{text}")
+            text = (result.get("full_text") or "") if not result.get("error") else ""
+            return page_idx, text, result, p_ms
 
-        _step("tesseract_all_pages_total", tess_total, f"pages={len(pages)}")
+        all_text_parts: list[str] = []
+        ddt_results: dict[int, dict] = {}
+        ddt_total = 0
+
+        max_workers = min(5, len(pages)) if pages else 1
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            futures = {ex.submit(_ddt_one_page, idx, img): idx for idx, img in pages}
+            page_texts: dict[int, str] = {}
+            for fut in as_completed(futures):
+                page_idx, text, result_dict, p_ms = fut.result()
+                ddt_total += p_ms
+                ch = len(text.strip())
+                px = page_images[page_idx].width * page_images[page_idx].height * 3
+                err = result_dict.get("error")
+                detail_str = f"chars={ch} rgb_bytes≈{px}"
+                if err:
+                    detail_str += f" error={err[:80]}"
+                _step(f"textract_ddt_page_{page_idx + 1}", p_ms, detail_str)
+                page_texts[page_idx] = text
+                ddt_results[page_idx] = result_dict
+
+        for page_idx, _img in pages:
+            all_text_parts.append(f"--- Page {page_idx + 1} ---\n{page_texts.get(page_idx, '')}")
+
+        _step("textract_ddt_all_pages_total", ddt_total, f"pages={len(pages)}")
 
         t_merge0 = time.perf_counter()
         full_text = "\n\n".join(all_text_parts)
@@ -1721,7 +1748,7 @@ def pre_ocr_pdf(
             mobile = _extract_mobile_from_text(full_text)
         _step("extract_mobile", int((time.perf_counter() - t4) * 1000), f"mobile={'set' if mobile else 'none'}")
 
-        return full_text, ocr_path, mobile, step_log, page_images, osd_rotations
+        return full_text, ocr_path, mobile, step_log, page_images, osd_rotations, ddt_results
     except Exception as e:
         logger.exception("pre_ocr failed for %s", pdf_path)
         try:
@@ -1729,7 +1756,7 @@ def pre_ocr_pdf(
         except OSError:
             pass
         _step("pre_ocr_error", None, str(e)[:200])
-        return "", ocr_path, None, step_log, {}, {}
+        return "", ocr_path, None, step_log, {}, {}, {}
 
 
 def _split_pdf_by_classification(
@@ -2008,6 +2035,40 @@ def _build_aadhaar_only_rejected_extras(
     return base
 
 
+_PAGE_TYPE_TO_PREFETCH_KEY: dict[str, str] = {
+    PAGE_TYPE_AADHAR: "aadhar_front",
+    PAGE_TYPE_AADHAR_BACK: "aadhar_back",
+    PAGE_TYPE_AADHAR_COMBINED: "aadhar_front",
+    PAGE_TYPE_INSURANCE: "insurance",
+}
+
+
+def _build_ddt_prefetch(
+    classifications: list[tuple[int, str]],
+    ddt_results: dict[int, dict],
+) -> dict[str, dict]:
+    """Map per-page DDT results to role-keyed prefetch dict for ``process_uploaded_subfolder``.
+
+    Keys match ``_parallel_textract_prefetch_upload_subfolder`` output: ``aadhar_front``,
+    ``aadhar_back``, ``insurance``.  ``details_forms`` is **not** included because the main
+    OCR pipeline needs AnalyzeDocument FORMS (not DDT) for the Details sheet.
+    ``Aadhar_combined`` populates both ``aadhar_front`` and ``aadhar_back``.
+    """
+    out: dict[str, dict] = {}
+    for page_idx, ptype in classifications:
+        key = _PAGE_TYPE_TO_PREFETCH_KEY.get(ptype)
+        if not key:
+            continue
+        result = ddt_results.get(page_idx)
+        if not result or result.get("error"):
+            continue
+        if key not in out:
+            out[key] = result
+        if ptype == PAGE_TYPE_AADHAR_COMBINED and "aadhar_back" not in out:
+            out["aadhar_back"] = result
+    return out
+
+
 def run_pre_ocr_and_prepare(
     source_pdf: Path,
     processing_dir: Path | None = None,
@@ -2023,21 +2084,28 @@ def run_pre_ocr_and_prepare(
     dict[int, Image.Image] | None,
     Path | None,
     dict[str, Any] | None,
+    dict[int, dict] | None,
 ]:
     """
-    Copy PDF to Processing, run pre-OCR (Tesseract on in-memory rasters), classify pages, write normalized
-    document files under ``Uploaded scans/{dealer_id}/{mobile}_ddmmyy/for_OCR/`` (with ``raw/`` holding
-    **PDF only**: consolidated copy + ``page_NN.pdf`` per page).
+    Copy PDF to Processing, run pre-OCR (parallel Textract DDT on in-memory rasters), classify pages,
+    write normalized document files under ``Uploaded scans/{dealer_id}/{mobile}_ddmmyy/for_OCR/``
+    (with ``raw/`` holding **PDF only**: consolidated copy + ``page_NN.pdf`` per page).
 
     Validates BEFORE splitting: mobile + 3 critical classifications (Aadhar, Aadhar_back, Details).
-    Returns (bundles | None, subfolder_stem, mobile_or_none, ocr_path, missing_list | None,
-    page_images | None, dest_pdf | None).
+    Returns ``(bundles | None, subfolder_stem, mobile_or_none, ocr_path, missing_list | None,
+    page_images | None, dest_pdf | None, rejected_extras | None, ddt_results | None)``.
+
+    The ninth return value ``ddt_prefetch`` is a role-keyed dict (``aadhar_front``, ``aadhar_back``,
+    ``insurance``, etc.) mapping to Textract DDT result dicts from the initial parallel DDT pass;
+    callers thread these into ``process_uploaded_subfolder`` as prefetch to avoid redundant Textract
+    DDT calls in the main OCR pipeline.
+
     When ``missing_list`` is non-empty, ``page_images`` and ``dest_pdf`` are set for manual JPEG split fallback;
     otherwise those two entries are None. The eighth return value is **rejected_extras** (optional ``suggested_roles``,
     ``locked_details_index``, and when Aadhaar-only rejection with successful Details FORMS: ``details_forms_cache``,
     ``extraction_details``).
 
-    ``mobile_hint``: optional 10-digit mobile from Add Sales (consolidated PDF upload) when Tesseract cannot
+    ``mobile_hint``: optional 10-digit mobile from Add Sales (consolidated PDF upload) when OCR cannot
     read the customer mobile from the scan (common when the Details row is smudged or OCR-garbled).
     """
     from app.services.upload_service import UploadService
@@ -2079,10 +2147,11 @@ def run_pre_ocr_and_prepare(
     # Consolidated OCR artifacts: incoming PDF copy under ocr_output/{stem}_{ddmmyy}/
     copy_incoming_scan_pdf(ocr_out, artifact_leaf, dest_pdf)
 
-    # Run pre-OCR (Tesseract per page — usually dominant cost). Also returns the
-    # rendered page images and OSD rotations so downstream steps skip re-rasterization.
+    # Run pre-OCR (parallel Textract DDT per page). Also returns the
+    # rendered page images, OSD rotations, and per-page DDT result dicts so downstream
+    # steps skip re-rasterization and can reuse DDT results in the main OCR pipeline.
     t_pre0 = time.perf_counter()
-    full_text, ocr_path, mobile, pre_steps, page_images, osd_rotations = pre_ocr_pdf(dest_pdf, processing_dir=proc_dir, t0_wall=t0_wall)
+    full_text, ocr_path, mobile, pre_steps, page_images, osd_rotations, ddt_results = pre_ocr_pdf(dest_pdf, processing_dir=proc_dir, t0_wall=t0_wall)
     # Consolidated Add Sales: user-entered mobile must win over OCR (letter/other pages may show a different number).
     hint = _normalize_indian_mobile_hint(mobile_hint)
     if hint:
@@ -2102,7 +2171,7 @@ def run_pre_ocr_and_prepare(
     orchestration.extend(
         [
             ("copy_pdf_to_processing", copy_ms, f"bytes={dest_pdf.stat().st_size} name={dest_pdf.name}", _off()),
-            ("pre_ocr_pdf_total_wall", pre_ocr_wall_ms, "includes_tesseract_and_io", _off()),
+            ("pre_ocr_pdf_total_wall", pre_ocr_wall_ms, "includes_textract_ddt_and_io", _off()),
         ]
     )
     orchestration.extend(pre_steps)
@@ -2114,134 +2183,9 @@ def run_pre_ocr_and_prepare(
         ("classify_pages_from_ocr_text", cls_ms, f"slots={len(classifications)}", _off()),
     )
 
-    # ── Textract DDT enhancement for the Details page ──
-    # Tesseract struggles with handwritten Details sheets. If enabled, re-OCR just the
-    # Details page via Textract DetectDocumentText (much better handwriting recognition),
-    # replace its block in full_text, and rewrite the _pre_ocr.txt artifact.
-    if OCR_PRE_OCR_TEXTRACT_DETAILS:
-        details_pages = [
-            idx for idx, ptype in classifications if ptype == PAGE_TYPE_DETAILS
-        ]
-        for dp_idx in details_pages:
-            t_td0 = time.perf_counter()
-            ddt_text = _textract_ddt_for_page(dest_pdf, dp_idx, page_image=page_images.get(dp_idx))
-            td_ms = int((time.perf_counter() - t_td0) * 1000)
-            if ddt_text:
-                full_text = _replace_page_block_in_full_text(full_text, dp_idx, ddt_text)
-                orchestration.append(
-                    ("textract_ddt_details_page", td_ms, f"page={dp_idx + 1} chars={len(ddt_text)} replaced=yes", _off()),
-                )
-                logger.info(
-                    "Pre-OCR: Textract DDT replaced Tesseract text for Details page %d (%d chars, %d ms)",
-                    dp_idx + 1, len(ddt_text), td_ms,
-                )
-                # Re-extract mobile from the improved text
-                mobile_from_ddt = _extract_mobile_from_text(ddt_text)
-                if mobile_from_ddt and not hint:
-                    mobile = mobile_from_ddt
-                    logger.info("Pre-OCR: mobile updated from Textract DDT: %s", mobile)
-            else:
-                orchestration.append(
-                    ("textract_ddt_details_page", td_ms, f"page={dp_idx + 1} replaced=no", _off()),
-                )
-        # Rewrite _pre_ocr.txt with enhanced text
-        if details_pages and ocr_path:
-            try:
-                ocr_path.write_text(full_text, encoding="utf-8")
-                orchestration.append(("rewrite_pre_ocr_txt_with_ddt", None, f"path={ocr_path.name}", _off()))
-            except OSError:
-                logger.warning("Could not rewrite pre_ocr.txt after Textract DDT")
-
-    # ── Textract DDT fallback for Aadhaar front / back / combined when Tesseract text is too weak ──
-    aadhar_ddt_touched = False
-    if OCR_PRE_OCR_TEXTRACT_AADHAR_FALLBACK:
-        aadhar_indices = [
-            (idx, ptype)
-            for idx, ptype in classifications
-            if ptype
-            in (PAGE_TYPE_AADHAR, PAGE_TYPE_AADHAR_BACK, PAGE_TYPE_AADHAR_COMBINED)
-        ]
-        for ah_idx, ah_type in aadhar_indices:
-            per_page = extract_page_text_from_pre_ocr_blocks(full_text, ah_idx)
-            if not _aadhar_page_needs_textract_fallback(per_page, ah_type):
-                continue
-            t_ah0 = time.perf_counter()
-            ah_ddt = _textract_ddt_for_page(dest_pdf, ah_idx, page_image=page_images.get(ah_idx))
-            ah_ms = int((time.perf_counter() - t_ah0) * 1000)
-            if ah_ddt:
-                full_text = _replace_page_block_in_full_text(full_text, ah_idx, ah_ddt)
-                aadhar_ddt_touched = True
-                orchestration.append(
-                    (
-                        "textract_ddt_aadhar_page",
-                        ah_ms,
-                        f"page={ah_idx + 1} type={ah_type} chars={len(ah_ddt)} replaced=yes",
-                        _off(),
-                    ),
-                )
-                logger.info(
-                    "Pre-OCR: Textract DDT replaced Tesseract text for Aadhaar page %d (%s, %d chars, %d ms)",
-                    ah_idx + 1,
-                    ah_type,
-                    len(ah_ddt),
-                    ah_ms,
-                )
-            else:
-                orchestration.append(
-                    (
-                        "textract_ddt_aadhar_page",
-                        ah_ms,
-                        f"page={ah_idx + 1} type={ah_type} replaced=no",
-                        _off(),
-                    ),
-                )
-        if aadhar_ddt_touched and ocr_path:
-            try:
-                ocr_path.write_text(full_text, encoding="utf-8")
-                orchestration.append(("rewrite_pre_ocr_txt_with_aadhar_ddt", None, f"path={ocr_path.name}", _off()))
-            except OSError:
-                logger.warning("Could not rewrite pre_ocr.txt after Textract DDT (Aadhaar)")
-
-    # ── Textract DDT rescue for UNUSED pages (Tesseract failed → page invisible to classifier) ──
-    # When Tesseract returns nothing useful, the page is classified UNUSED and the Aadhaar DDT
-    # fallback above never fires (catch-22). Break that by running DDT on UNUSED pages, then
-    # reclassifying from the DDT text.
-    unused_indices = [idx for idx, ptype in classifications if ptype == PAGE_TYPE_UNUSED]
-    if unused_indices and OCR_PRE_OCR_TEXTRACT_AADHAR_FALLBACK:
-        unused_reclassified = False
-        for u_idx in unused_indices:
-            per_page = extract_page_text_from_pre_ocr_blocks(full_text, u_idx)
-            if len(per_page.strip()) >= 80:
-                continue
-            t_ud0 = time.perf_counter()
-            ud_text = _textract_ddt_for_page(dest_pdf, u_idx, page_image=page_images.get(u_idx))
-            ud_ms = int((time.perf_counter() - t_ud0) * 1000)
-            if not ud_text:
-                orchestration.append(
-                    ("textract_ddt_unused_page", ud_ms, f"page={u_idx + 1} ddt_returned=none", _off()),
-                )
-                continue
-            new_type = classify_page_by_text(ud_text)
-            orchestration.append(
-                ("textract_ddt_unused_page", ud_ms,
-                 f"page={u_idx + 1} chars={len(ud_text)} reclassified={new_type}", _off()),
-            )
-            logger.info(
-                "Pre-OCR: Textract DDT rescued UNUSED page %d → %s (%d chars, %d ms)",
-                u_idx + 1, new_type, len(ud_text), ud_ms,
-            )
-            full_text = _replace_page_block_in_full_text(full_text, u_idx, ud_text)
-            if new_type != PAGE_TYPE_UNUSED:
-                classifications = [(i, new_type if i == u_idx else t) for i, t in classifications]
-                unused_reclassified = True
-        if unused_reclassified and ocr_path:
-            try:
-                ocr_path.write_text(full_text, encoding="utf-8")
-                orchestration.append(
-                    ("rewrite_pre_ocr_txt_with_unused_ddt", None, f"path={ocr_path.name}", _off()),
-                )
-            except OSError:
-                logger.warning("Could not rewrite pre_ocr.txt after UNUSED page DDT rescue")
+    # DDT was already run for all pages inside pre_ocr_pdf (parallel), so no
+    # conditional per-page DDT passes are needed here — classification text is
+    # already Textract quality.
 
     t_ms0 = time.perf_counter()
     mobile_scope = _pre_ocr_text_from_sales_detail_sheet_onward(full_text)
@@ -2286,7 +2230,7 @@ def run_pre_ocr_and_prepare(
                 ("run_pre_ocr_and_prepare_done", None, f"path=multi_customer bundles={len(result_bundles)}", _off()),
             )
             _flush_pre(orchestration)
-            return result_bundles, source_pdf.stem, first_mobile, ocr_path, None, None, None, None
+            return result_bundles, source_pdf.stem, first_mobile, ocr_path, None, None, None, None, None
         # Fall back to single-customer (e.g. scan has 2 mobiles but only 1 customer)
         logger.info("Multi-customer detected but could not build bundles; falling back to single-customer (classifications=%s, mobiles=%s)",
                     [(i, t) for i, t in classifications], all_mobiles)
@@ -2340,6 +2284,8 @@ def run_pre_ocr_and_prepare(
         ("aadhar_combined_fallback", int((time.perf_counter() - t_fb0) * 1000), "", _off()),
     )
 
+    ddt_prefetch = _build_ddt_prefetch(classifications, ddt_results)
+
     t_val0 = time.perf_counter()
     missing: list[str] = []
     if not mobile:
@@ -2372,7 +2318,7 @@ def run_pre_ocr_and_prepare(
         if rejected_extras is None:
             rejected_extras = {}
         rejected_extras["_t0_wall"] = t0_wall
-        return None, source_pdf.stem, mobile, ocr_path, missing, page_images, dest_pdf, rejected_extras
+        return None, source_pdf.stem, mobile, ocr_path, missing, page_images, dest_pdf, rejected_extras, ddt_prefetch
 
     mobile_leaf = us.get_subdir_name_mobile(mobile)
     if mobile_leaf != artifact_leaf:
@@ -2401,7 +2347,7 @@ def run_pre_ocr_and_prepare(
     write_sale_text_artifact(ocr_out, mobile_leaf, full_text)
     _flush_pre(orchestration)
 
-    return [(sale_dir, subfolder, mobile or "")], source_pdf.stem, mobile, ocr_path, None, None, None, None
+    return [(sale_dir, subfolder, mobile or "")], source_pdf.stem, mobile, ocr_path, None, None, None, None, ddt_prefetch
 
 
 def move_multi_customer_to_success_or_error(

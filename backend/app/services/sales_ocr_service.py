@@ -1834,6 +1834,7 @@ def _parallel_textract_prefetch_upload_subfolder(
     subdir: Path,
     *,
     details_forms_prefetch: dict[str, Any] | None = None,
+    skip_keys: set[str] | None = None,
 ) -> tuple[dict[str, dict], dict[str, int]]:
     """
     Run AWS Textract calls for all upload files concurrently to cut wall time on scans-v2.
@@ -1844,6 +1845,8 @@ def _parallel_textract_prefetch_upload_subfolder(
     When ``details_forms_prefetch`` is set (manual-fallback reuse path), **no** AnalyzeDocument call is made
     for the Details sheet; the cached dict is used as ``details_forms``.
 
+    Keys in ``skip_keys`` are excluded from Textract calls (pre-populated by caller from pre-OCR DDT).
+
     Returns ``(results_by_key, job_duration_ms_by_key)`` for logging and ``section_timings_ms``.
     """
     from concurrent.futures import ThreadPoolExecutor
@@ -1851,9 +1854,10 @@ def _parallel_textract_prefetch_upload_subfolder(
     from app.config import OCR_UPLOAD_TEXTRACT_TIMEOUT_SEC
     from app.services.sales_textract_service import extract_forms_from_bytes, extract_text_from_bytes
 
+    _skip = skip_keys or set()
     jobs: list[tuple[str, bytes, str]] = []
     ap = _prefer_for_ocr_input(subdir, "Aadhar.pdf", FILENAME_AADHAR_FRONT, LEGACY_AADHAR_FRONT_JPG)
-    if ap.is_file():
+    if ap.is_file() and "aadhar_front" not in _skip:
         try:
             jobs.append(("aadhar_front", ap.read_bytes(), "text"))
         except OSError as e:
@@ -1866,7 +1870,7 @@ def _parallel_textract_prefetch_upload_subfolder(
         except OSError as e:
             logger.warning("prefetch: could not read %s: %s", dp, e)
     ip = _prefer_for_ocr_input(subdir, "Insurance.pdf", "Insurance.jpg")
-    if ip.is_file():
+    if ip.is_file() and "insurance" not in _skip:
         try:
             jobs.append(("insurance", ip.read_bytes(), "text"))
         except OSError as e:
@@ -1875,6 +1879,8 @@ def _parallel_textract_prefetch_upload_subfolder(
         ("Aadhar_back.pdf", "Aadhar_back.jpg", "aadhar_back"),
         ("Financing.pdf", "Financing.jpg", "financing"),
     ):
+        if key in _skip:
+            continue
         p = _prefer_for_ocr_input(subdir, pdf_name, jpg_name)
         if p.is_file():
             try:
@@ -3654,6 +3660,7 @@ class OcrService:
         *,
         on_extraction_event: Callable[[str, dict[str, Any]], None] | None = None,
         details_forms_prefetch: dict[str, Any] | None = None,
+        ddt_prefetch: dict[str, dict] | None = None,
     ) -> dict:
         """
         Run extraction directly on uploaded files (no queue).
@@ -3664,6 +3671,10 @@ class OcrService:
         **Details** raster/PDF: Textract **AnalyzeDocument FORMS** (structured key-values).
         When ``details_forms_prefetch`` is set (manual session reuse), that dict is used as the Details
         FORMS result and **no** second AnalyzeDocument call is made for the sales detail sheet.
+
+        When ``ddt_prefetch`` is set (from pre-OCR parallel DDT), the role-keyed DDT results
+        (``aadhar_front``, ``aadhar_back``, ``insurance``) are merged into the prefetch dict so
+        ``_parallel_textract_prefetch_upload_subfolder`` skips redundant DDT calls for those scans.
 
         Writes ``{stem}_AWS_ocr_text.txt`` (all sections; replaces legacy ``Raw_OCR.txt``), including Details sheet
         LINE ``full_text`` or FORMS/TABLE fallback when LINE text is empty, and returns ``section_timings_ms``.
@@ -3699,12 +3710,20 @@ class OcrService:
         scan_bundle = _load_aadhar_scan_bytes(subdir)
         prefetch: dict[str, dict] = {}
         prefetch_job_ms: dict[str, int] = {}
+        if ddt_prefetch:
+            for k, v in ddt_prefetch.items():
+                if v and not v.get("error"):
+                    prefetch[k] = v
+                    prefetch_job_ms[k] = 0
         t_pref = time.perf_counter()
         if OCR_UPLOAD_PARALLEL_TEXTRACT:
-            prefetch, prefetch_job_ms = _parallel_textract_prefetch_upload_subfolder(
+            new_prefetch, new_job_ms = _parallel_textract_prefetch_upload_subfolder(
                 subdir,
                 details_forms_prefetch=details_forms_prefetch,
+                skip_keys=set(prefetch.keys()),
             )
+            prefetch.update(new_prefetch)
+            prefetch_job_ms.update(new_job_ms)
             section_timings_ms["aws_textract_prefetch_ms"] = int(
                 (time.perf_counter() - t_pref) * 1000
             )

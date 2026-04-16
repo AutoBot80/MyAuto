@@ -2,7 +2,7 @@
 Consolidated OCR artifacts under ``ocr_output/{dealer}/{stem}_{ddmmyy}/``:
 
 - ``inputs_scan.pdf`` — copy of the incoming consolidated PDF (fixed name)
-- ``pre_ocr_tesseract_text.txt`` — Tesseract / pre-OCR combined page text
+- ``pre_ocr_ddt_text.txt`` — Textract DDT / pre-OCR combined page text (replaces legacy ``pre_ocr_tesseract_text.txt`` / ``pre_ocr_text.txt``)
 - ``{stem}_AWS_ocr_text.txt`` — merged Amazon Textract extraction text (replaces legacy ``{stem}_ocr_text.txt``, ``Raw_OCR.txt``, ``{stem}_text.txt``)
 - ``{stem}_ocr_log.txt`` — single append-only IST diary for **pre**, **ocr**, and **post** phases (line prefix ``[pre]`` / ``[ocr]`` / ``[post]``)
 - Legacy ``pre_ocr_log.txt`` (older runs) is merged into ``{stem}_ocr_log.txt`` on rename/consolidate and removed
@@ -27,8 +27,9 @@ _IST = ZoneInfo("Asia/Kolkata")
 
 # Fixed names (no stem prefix) for the incoming consolidated scan and pre-OCR artifacts
 INPUTS_SCAN_PDF = "inputs_scan.pdf"
-PRE_OCR_TESSERACT_TEXT_TXT = "pre_ocr_tesseract_text.txt"
-# Older runs used this name for the same Tesseract pre-OCR blob
+PRE_OCR_DDT_TEXT_TXT = "pre_ocr_ddt_text.txt"
+# Older runs used these names; read-fallback supported during rename/consolidate
+LEGACY_PRE_OCR_TESSERACT_TEXT_TXT = "pre_ocr_tesseract_text.txt"
 LEGACY_PRE_OCR_TEXT_TXT = "pre_ocr_text.txt"
 PRE_OCR_LOG_TXT = "pre_ocr_log.txt"
 
@@ -103,7 +104,7 @@ def artifact_paths(ocr_output_dir: Path, subfolder_leaf: str) -> dict[str, Path]
     return {
         "base": base,
         "inputs_scan": base / INPUTS_SCAN_PDF,
-        "pre_ocr_text": base / PRE_OCR_TESSERACT_TEXT_TXT,
+        "pre_ocr_text": base / PRE_OCR_DDT_TEXT_TXT,
         "pre_ocr_log": base / PRE_OCR_LOG_TXT,
         "ocr_text": base / ocr_text_filename(stem),
         "ocr_log": base / ocr_log_filename(stem),
@@ -218,7 +219,7 @@ def write_sale_text_artifact(
     subfolder_leaf: str,
     text: str,
 ) -> None:
-    """Write or overwrite ``pre_ocr_tesseract_text.txt`` (pre-OCR combined Tesseract text)."""
+    """Write or overwrite ``pre_ocr_ddt_text.txt`` (pre-OCR combined Textract DDT text)."""
     if not ocr_output_dir or not str(subfolder_leaf or "").strip():
         return
     try:
@@ -286,13 +287,15 @@ def rename_sale_artifact_bundle(
                 if op.exists() and not np.exists():
                     op.rename(np)
 
-        leg_pre = base / LEGACY_PRE_OCR_TEXT_TXT
-        new_pre = base / PRE_OCR_TESSERACT_TEXT_TXT
-        if leg_pre.is_file() and not new_pre.is_file():
-            try:
-                leg_pre.rename(new_pre)
-            except OSError as e:
-                logger.warning("rename_sale_artifact_bundle pre tesseract migrate: %s", e)
+        new_pre = base / PRE_OCR_DDT_TEXT_TXT
+        for legacy_name in (LEGACY_PRE_OCR_TESSERACT_TEXT_TXT, LEGACY_PRE_OCR_TEXT_TXT):
+            leg_pre = base / legacy_name
+            if leg_pre.is_file() and not new_pre.is_file():
+                try:
+                    leg_pre.rename(new_pre)
+                except OSError as e:
+                    logger.warning("rename_sale_artifact_bundle pre-OCR text migrate: %s", e)
+                break
 
         merge_pre_ocr_log_into_stem_ocr_log(base, new_file_stem)
     except OSError as e:
@@ -334,7 +337,7 @@ def _peer_has_textract_merged_text(peer: Path) -> bool:
 def _peer_has_consolidatable_artifacts(peer: Path) -> bool:
     if (peer / INPUTS_SCAN_PDF).is_file():
         return True
-    if (peer / PRE_OCR_TESSERACT_TEXT_TXT).is_file() or (peer / LEGACY_PRE_OCR_TEXT_TXT).is_file():
+    if (peer / PRE_OCR_DDT_TEXT_TXT).is_file() or (peer / LEGACY_PRE_OCR_TESSERACT_TEXT_TXT).is_file() or (peer / LEGACY_PRE_OCR_TEXT_TXT).is_file():
         return True
     if (peer / PRE_OCR_LOG_TXT).is_file():
         return True
@@ -349,7 +352,7 @@ def consolidate_peer_pre_ocr_folder_into_mobile(
 ) -> None:
     """
     After manual-apply OCR, merge a leftover ``add_sales_*_{ddmmyy}`` (or similar) folder that still holds
-    ``inputs_scan.pdf`` / ``pre_ocr_tesseract_text.txt`` / legacy ``pre_ocr_log.txt`` / ``{stem}_ocr_log.txt`` into
+    ``inputs_scan.pdf`` / ``pre_ocr_ddt_text.txt`` / legacy ``pre_ocr_log.txt`` / ``{stem}_ocr_log.txt`` into
     ``{mobile}_{ddmmyy}/``, then remove the peer folder.
     """
     safe_mobile = _safe_subfolder_name(mobile_subfolder_leaf)
@@ -378,8 +381,8 @@ def consolidate_peer_pre_ocr_folder_into_mobile(
                     shutil.move(str(scan_p), str(dp))
                 else:
                     scan_p.unlink(missing_ok=True)
-            dest_pre = mobile_dir / PRE_OCR_TESSERACT_TEXT_TXT
-            for src_name in (PRE_OCR_TESSERACT_TEXT_TXT, LEGACY_PRE_OCR_TEXT_TXT):
+            dest_pre = mobile_dir / PRE_OCR_DDT_TEXT_TXT
+            for src_name in (PRE_OCR_DDT_TEXT_TXT, LEGACY_PRE_OCR_TESSERACT_TEXT_TXT, LEGACY_PRE_OCR_TEXT_TXT):
                 sp = peer / src_name
                 if not sp.is_file():
                     continue
