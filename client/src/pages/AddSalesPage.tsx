@@ -461,6 +461,7 @@ export function AddSalesPage({
       setExtractionError(null);
       setManualFormOnly(false);
     },
+    onConsolidatedScannerArchiveDeferred: (archive) => setPendingScannerArchiveMove(archive),
   }, dealerId);
 
   const pollCountRef = useRef(0);
@@ -650,6 +651,11 @@ export function AddSalesPage({
   };
 
   const getSection2ValidationErrors = (): Section2FieldError[] => {
+    /** Field-level Section 2 messages only after a successful upload (same moment `savedTo` is set). */
+    if (!savedTo || String(savedTo).trim() === "") {
+      return [];
+    }
+
     const m = new Map<string, string>();
     const setErr = (field: string, message: string) => {
       if (!m.has(field)) m.set(field, message);
@@ -692,39 +698,37 @@ export function AddSalesPage({
       }
     }
 
-    if (savedTo) {
-      const veh: { field: string; label: string; value: string | undefined }[] = [
-        { field: "key_no", label: "Key no.", value: v?.key_no },
-        { field: "chassis_no", label: "Chassis No.", value: v?.frame_no },
-        { field: "engine_no", label: "Engine no.", value: v?.engine_no },
-        { field: "battery_no", label: "Battery no.", value: v?.battery_no },
-      ];
-      for (const { field, label, value } of veh) {
-        if (!isBlank(value) && hasDisallowedSpecialChars(value)) {
-          setErr(field, `${label} must not contain special characters.`);
-        }
+    const veh: { field: string; label: string; value: string | undefined }[] = [
+      { field: "key_no", label: "Key no.", value: v?.key_no },
+      { field: "chassis_no", label: "Chassis No.", value: v?.frame_no },
+      { field: "engine_no", label: "Engine no.", value: v?.engine_no },
+      { field: "battery_no", label: "Battery no.", value: v?.battery_no },
+    ];
+    for (const { field, label, value } of veh) {
+      if (!isBlank(value) && hasDisallowedSpecialChars(value)) {
+        setErr(field, `${label} must not contain special characters.`);
       }
+    }
 
-      const insFields: { field: string; label: string; value: string | undefined }[] = [
-        { field: "profession", label: "Customer Profession", value: ins?.profession },
-        { field: "marital_status", label: "Customer Marital Status", value: ins?.marital_status },
-        { field: "nominee_name", label: "Nominee Name", value: ins?.nominee_name },
-        { field: "nominee_age", label: "Nominee Age", value: ins?.nominee_age },
-        { field: "nominee_relationship", label: "Relationship", value: ins?.nominee_relationship },
-        { field: "nominee_gender", label: "Nominee Gender", value: ins?.nominee_gender },
-      ];
-      for (const { field, label, value } of insFields) {
-        if (field === "nominee_age") {
-          if (!isBlank(value)) {
-            if (!isValidNomineeAgeVal(value)) {
-              setErr(field, "Nominee Age must be a number between 1 and 150.");
-            } else if (hasDisallowedSpecialChars(value)) {
-              setErr(field, `${label} must not contain special characters.`);
-            }
+    const insFields: { field: string; label: string; value: string | undefined }[] = [
+      { field: "profession", label: "Customer Profession", value: ins?.profession },
+      { field: "marital_status", label: "Customer Marital Status", value: ins?.marital_status },
+      { field: "nominee_name", label: "Nominee Name", value: ins?.nominee_name },
+      { field: "nominee_age", label: "Nominee Age", value: ins?.nominee_age },
+      { field: "nominee_relationship", label: "Relationship", value: ins?.nominee_relationship },
+      { field: "nominee_gender", label: "Nominee Gender", value: ins?.nominee_gender },
+    ];
+    for (const { field, label, value } of insFields) {
+      if (field === "nominee_age") {
+        if (!isBlank(value)) {
+          if (!isValidNomineeAgeVal(value)) {
+            setErr(field, "Nominee Age must be a number between 1 and 150.");
+          } else if (hasDisallowedSpecialChars(value)) {
+            setErr(field, `${label} must not contain special characters.`);
           }
-        } else if (!isBlank(value) && hasDisallowedSpecialChars(value)) {
-          setErr(field, `${label} must not contain special characters.`);
         }
+      } else if (!isBlank(value) && hasDisallowedSpecialChars(value)) {
+        setErr(field, `${label} must not contain special characters.`);
       }
     }
 
@@ -1189,6 +1193,7 @@ export function AddSalesPage({
       statusLines.push("RTO queue skipped (customer/vehicle IDs missing — run Create Invoice first).");
     }
 
+    let gatePassSucceeded = false;
     try {
       // Form 20 generation (print-form20) — disabled; Gate Pass only below.
       // const form20Res = await printForm20({
@@ -1228,6 +1233,7 @@ export function AddSalesPage({
         vehicle_id: lastSubmittedVehicleId ?? undefined,
         dealer_id: dealerId,
       });
+      gatePassSucceeded = !!gatePassRes.success;
       if (gatePassRes.success) {
         setHasPrintedForms(true);
         statusLines.push(`Gate Pass saved: ${(gatePassRes.pdfs_saved ?? []).join(", ")}`);
@@ -1240,6 +1246,20 @@ export function AddSalesPage({
       );
     } finally {
       setIsPrintFormsLoading(false);
+    }
+
+    if (gatePassSucceeded && pendingScannerArchiveMove) {
+      const arch = pendingScannerArchiveMove;
+      try {
+        await moveConsolidatedToProcessed(arch.fileHandle, arch.scannerRoot);
+        statusLines.push("Moved scan from landing to processed folder.");
+        setPendingScannerArchiveMove(null);
+        setUploadStatus((prev) => (prev ? `${prev} ` : "") + "Moved scan to processed folder.");
+      } catch (e) {
+        const detail = e instanceof Error ? e.message : String(e);
+        statusLines.push(`Could not move file to processed: ${detail}`);
+        setPendingScannerArchiveMove(null);
+      }
     }
 
     setPrintFormsStatus(statusLines.join(" "));
@@ -1477,21 +1497,7 @@ export function AddSalesPage({
                           stagingId: lastStagingId,
                           preferInsurer,
                         });
-                        let submitStatusMsg = "Saved";
-                        const arch = pendingScannerArchiveMove;
-                        if (arch) {
-                          try {
-                            await moveConsolidatedToProcessed(arch.fileHandle, arch.scannerRoot);
-                            submitStatusMsg += ". Moved scan to processed folder.";
-                            setUploadStatus((prev) => (prev ? `${prev} ` : "") + "Moved scan to processed folder.");
-                            setPendingScannerArchiveMove(null);
-                          } catch (e) {
-                            const detail = e instanceof Error ? e.message : String(e);
-                            submitStatusMsg += `. Could not move file to processed: ${detail}`;
-                            setUploadStatus((prev) => (prev ? `${prev} ` : "") + `Could not move file to processed: ${detail}`);
-                            setPendingScannerArchiveMove(null);
-                          }
-                        }
+                        const submitStatusMsg = "Saved";
                         setSubmitStatus(submitStatusMsg);
                         setHasSubmittedInfo(true);
                         if (submitRes?.staging_id != null && String(submitRes.staging_id).trim())

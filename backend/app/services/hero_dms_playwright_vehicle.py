@@ -1168,6 +1168,7 @@ def _siebel_click_service_request_list_new_record(
 
     _sr_new_selectors = (
         "button#s_3_1_12_0_Ctrl.siebui-icon-newrecord",
+        "button#s_2_1_14_0_Ctrl.siebui-icon-newrecord",
         "button#s_2_1_12_0_Ctrl.siebui-icon-newrecord",
         "button#s_2_2_31_0_Ctrl.siebui-icon-newrecord",
         "button.siebui-icon-newrecord[aria-label='Service Request List:New']",
@@ -1257,8 +1258,8 @@ def _siebel_click_service_request_list_new_record(
             diag.allNewrecordBtns.push(bid + '|al=' + al + '|tt=' + tt + '|vis=' + v);
         }
         const ids = [
-            's_3_1_12_0_Ctrl', 's_2_2_32_0', 's_2_1_12_0_Ctrl', 's_2_2_31_0_Ctrl', 's_2_2_33_0_Ctrl',
-            's_2_1_11_0_Ctrl', 's_2_2_30_0_Ctrl',
+            's_3_1_12_0_Ctrl', 's_2_1_14_0_Ctrl', 's_2_2_32_0', 's_2_1_12_0_Ctrl',
+            's_2_2_31_0_Ctrl', 's_2_2_33_0_Ctrl', 's_2_1_11_0_Ctrl', 's_2_2_30_0_Ctrl',
         ];
         for (const hid of ids) {
             if (tryClickId(hid)) return diag;
@@ -1437,6 +1438,115 @@ def _click_third_level_view_bar_tab(
     return False
 
 
+def _dump_frames_and_elements_for_debug(
+    page: Page,
+    *,
+    content_frame_selector: str | None,
+    output_dir: Path | None,
+    label: str = "debug",
+    note=None,
+    log_prefix: str = "",
+) -> None:
+    """
+    Write ``temp_frame_dump.txt`` into *output_dir* with all frames, their URLs,
+    and every visible element on each frame (tag, id, name, aria-label, title, classes,
+    text snippet). Called when the Pre-check ``+`` button cannot be found so operators
+    have a full DOM snapshot to diagnose why.
+    """
+    if output_dir is None:
+        if note:
+            note(f"{log_prefix}: frame dump skipped — no output_dir supplied.")
+        return
+    try:
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        dump_path = output_dir / "temp_frame_dump.txt"
+
+        _dump_js = """() => {
+            const vis = (el) => {
+                if (!el) return false;
+                try {
+                    const st = window.getComputedStyle(el);
+                    if (st.display === 'none' || st.visibility === 'hidden') return false;
+                    const r = el.getBoundingClientRect();
+                    return r.width > 0 && r.height > 0;
+                } catch(e) { return false; }
+            };
+            const els = [];
+            const all = document.querySelectorAll('*');
+            for (let i = 0; i < all.length && els.length < 2000; i++) {
+                const el = all[i];
+                if (!vis(el)) continue;
+                const tag = (el.tagName || '').toLowerCase();
+                if (['html','head','meta','link','style','script','br','hr'].includes(tag)) continue;
+                els.push({
+                    tag,
+                    id: (el.id || '').slice(0, 120),
+                    name: (el.getAttribute('name') || '').slice(0, 120),
+                    ariaLabel: (el.getAttribute('aria-label') || '').slice(0, 120),
+                    title: (el.getAttribute('title') || '').slice(0, 120),
+                    cls: (el.className && typeof el.className === 'string' ? el.className : '').slice(0, 200),
+                    role: (el.getAttribute('role') || '').slice(0, 40),
+                    txt: (el.textContent || '').trim().slice(0, 100),
+                });
+            }
+            return els;
+        }"""
+
+        lines: list[str] = []
+        ts = _siebel_ist_now().isoformat(timespec="milliseconds")
+        lines.append(f"=== Frame & Element Dump — {label} — {ts} ===\n")
+        lines.append(f"page.url = {page.url!r}\n")
+
+        frames = _ordered_frames(page)
+        lines.append(f"total_frames = {len(frames)}\n\n")
+
+        for fi, frame in enumerate(frames):
+            f_url = ""
+            f_name = ""
+            try:
+                f_url = frame.url or ""
+                f_name = frame.name or ""
+            except Exception:
+                pass
+            lines.append(f"--- frame[{fi}] name={f_name!r} url={f_url[:300]!r} ---\n")
+            try:
+                elements = frame.evaluate(_dump_js)
+                if not isinstance(elements, list):
+                    lines.append("  (evaluate returned non-list)\n")
+                    continue
+                lines.append(f"  visible_elements={len(elements)}\n")
+                for ei, el in enumerate(elements):
+                    parts = [f"  [{ei}] <{el.get('tag', '?')}>"]
+                    if el.get("id"):
+                        parts.append(f"id={el['id']!r}")
+                    if el.get("name"):
+                        parts.append(f"name={el['name']!r}")
+                    if el.get("ariaLabel"):
+                        parts.append(f"aria-label={el['ariaLabel']!r}")
+                    if el.get("title"):
+                        parts.append(f"title={el['title']!r}")
+                    if el.get("role"):
+                        parts.append(f"role={el['role']!r}")
+                    if el.get("cls"):
+                        parts.append(f"class={el['cls']!r}")
+                    txt = (el.get("txt") or "").strip()
+                    if txt:
+                        parts.append(f"text={txt[:80]!r}")
+                    lines.append(" ".join(parts) + "\n")
+            except Exception as exc:
+                lines.append(f"  (error evaluating frame: {exc!r})\n")
+            lines.append("\n")
+
+        dump_path.write_text("".join(lines), encoding="utf-8")
+        if note:
+            note(f"{log_prefix}: frame dump written to {dump_path} ({len(lines)} lines).")
+    except Exception as exc:
+        logger.warning("_dump_frames_and_elements_for_debug failed: %s", exc)
+        if note:
+            note(f"{log_prefix}: frame dump failed — {exc!r}")
+
+
 def _siebel_run_vehicle_serial_detail_precheck_pdi(
     page: Page,
     *,
@@ -1448,6 +1558,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     scraped: dict | None = None,
     do_feature_id_scrape: bool = True,
     pdi_span_start_out: list[float] | None = None,
+    debug_dump_dir: str | Path | None = None,
 ) -> tuple[bool, str | None]:
     """
     Pre-check + PDI applets on the **vehicle serial** detail view (after ``Serial Number`` drilldown).
@@ -1474,6 +1585,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     **gview_s_2** / **s_2_l** (PDI list). Unrelated large grids are still avoided (not every ``<table>``).
     """
     _tmo = min(int(action_timeout_ms or 3000), 4000)
+    _debug_dump_dir: Path | None = Path(debug_dump_dir) if debug_dump_dir else None
 
     def _roots():
         return _siebel_all_search_roots(page, content_frame_selector)
@@ -1551,6 +1663,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
 
     _precheck_existing_rows = 0
     _precheck_existing_signal = ""
+    _precheck_third_level_tabs_loaded = False
     for _ri, _root in enumerate(_roots()):
         try:
             _probe = _root.evaluate("""() => {
@@ -1561,19 +1674,16 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                     const r = el.getBoundingClientRect();
                     return r.width > 0 && r.height > 0;
                 };
-                // Only jqGrid list tables under a Pre-check / Precheck List applet. Counting every
-                // visible <table> on the page (or max across iframes) picked unrelated grids (e.g. 89 rows)
-                // and skipped Pre-check entry when the Pre-check list was actually empty.
+                const isPdiGrid = (node) => {
+                    let x = node;
+                    for (let d = 0; d < 22 && x; d++) {
+                        const pid = String(x.id || '').toLowerCase();
+                        if (pid.includes('gview_s_2') || pid.includes('s_2_l') || pid === 'gbox_s_2_l') return true;
+                        x = x.parentElement;
+                    }
+                    return false;
+                };
                 const isPrecheckScoped = (el) => {
-                    const isPdiGrid = (node) => {
-                        let x = node;
-                        for (let d = 0; d < 22 && x; d++) {
-                            const pid = String(x.id || '').toLowerCase();
-                            if (pid.includes('gview_s_2') || pid.includes('s_2_l')) return true;
-                            x = x.parentElement;
-                        }
-                        return false;
-                    };
                     if (isPdiGrid(el)) return false;
                     let n = el;
                     for (let d = 0; d < 28 && n; d++) {
@@ -1593,19 +1703,16 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                     n = el;
                     for (let d = 0; d < 12 && n; d++) {
                         const pid = String(n.id || '').toLowerCase();
-                        if (pid.includes('gview_s_3') || (pid.includes('s_3_') && pid.includes('_l') && !pid.includes('s_2'))) {
+                        if (pid.includes('gview_s_3') || pid === 'gbox_s_3_l' ||
+                            (pid.includes('s_3_') && pid.includes('_l') && !pid.includes('s_2'))) {
                             return true;
                         }
                         n = n.parentElement;
                     }
                     return false;
                 };
-                let maxRows = 0;
-                const tables = Array.from(document.querySelectorAll('table.ui-jqgrid-btable')).filter(
-                    (tb) => vis(tb) && isPrecheckScoped(tb)
-                );
-                for (const tb of tables) {
-                    const rows = Array.from(
+                const countDataRows = (tb) => {
+                    return Array.from(
                         tb.querySelectorAll('tbody tr.jqgrow, tbody tr[role="row"]')
                     ).filter((tr) => {
                         if (!vis(tr)) return false;
@@ -1617,18 +1724,116 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                         if (tds.length < 2) return false;
                         const txt = (tr.textContent || '').trim();
                         return txt.length >= 2;
-                    });
-                    if (rows.length > maxRows) maxRows = rows.length;
+                    }).length;
+                };
+                let maxRows = 0;
+                // Phase 1: scoped search via ancestry heuristic
+                const tables = Array.from(document.querySelectorAll('table.ui-jqgrid-btable')).filter(
+                    (tb) => vis(tb) && isPrecheckScoped(tb)
+                );
+                for (const tb of tables) {
+                    const c = countDataRows(tb);
+                    if (c > maxRows) maxRows = c;
+                }
+                // Phase 2: direct-id lookup for table#s_3_l (the known PreCheck list grid id)
+                let directIdRows = 0;
+                const s3l = document.getElementById('s_3_l');
+                if (s3l && vis(s3l) && !isPdiGrid(s3l)) {
+                    directIdRows = countDataRows(s3l);
+                }
+                // Phase 3: check gview_s_3_l / gbox_s_3_l container text for data signals
+                let containerHasData = false;
+                for (const cid of ['gview_s_3_l', 'gbox_s_3_l', 's_3_ld']) {
+                    const el = document.getElementById(cid);
+                    if (!el || !vis(el)) continue;
+                    const txt = (el.textContent || '').trim();
+                    if (txt.length > 10 && (/precheck/i.test(txt) || /closed|open|submitted/i.test(txt))) {
+                        containerHasData = true;
+                        break;
+                    }
+                }
+                // Phase 4: row counter s_3_rc ("1 of 1+", "1 of 2", etc.)
+                let rowCounterValue = '';
+                let rowCounterRows = 0;
+                const rc = document.getElementById('s_3_rc');
+                if (rc && vis(rc)) {
+                    rowCounterValue = (rc.textContent || '').trim();
+                    const m = rowCounterValue.match(/^(\\d+)\\s+of\\s+(\\d+)/);
+                    if (m) rowCounterRows = parseInt(m[2], 10) || 0;
+                }
+                // Phase 5: data cell IDs that only exist when a precheck row is present
+                let dataCellHit = false;
+                for (const dcid of ['1_s_3_l_Status', '1_s_3_l_Created', '1_s_3_l_Closed_Date',
+                                     '1_s_3_l_HHML_Mechanic_Full_Name', '1_s_3_l_Abstract', '1_s_3_l_Source']) {
+                    const dc = document.getElementById(dcid);
+                    if (dc) { dataCellHit = true; break; }
+                }
+                // Phase 6: column headers with precheck-specific text
+                let precheckColumnHeaders = false;
+                for (const hid of ['s_3_l_Status', 's_3_l_Created', 's_3_l_Closed_Date',
+                                    'jqgh_s_3_l_Status', 'jqgh_s_3_l_Created']) {
+                    const hel = document.getElementById(hid);
+                    if (hel && vis(hel)) {
+                        const htxt = (hel.textContent || '').toLowerCase();
+                        if (htxt.includes('precheck') || htxt.includes('status') || htxt.includes('opened')) {
+                            precheckColumnHeaders = true;
+                            break;
+                        }
+                    }
+                }
+                // Phase 7: unscoped fallback (non-PDI small grids on the precheck tab)
+                let fallbackRows = 0;
+                if (maxRows === 0 && directIdRows === 0) {
+                    const allTables = Array.from(document.querySelectorAll('table.ui-jqgrid-btable')).filter(
+                        (tb) => vis(tb) && !isPdiGrid(tb)
+                    );
+                    for (const tb of allTables) {
+                        const c = countDataRows(tb);
+                        if (c > 0 && c <= 3) fallbackRows = Math.max(fallbackRows, c);
+                    }
                 }
                 const href = String(window.location.href || '');
                 const hasPrecheckRowId = href.includes('HMCL+PDI+Precheck+List+Applet') && href.includes('SWERowId1=');
-                return { maxRows, hasPrecheckRowId };
+                // Third-level tab check: verify PreCheck tab is actually loaded
+                let thirdLevelTabsLoaded = false;
+                const vctrl = document.getElementById('s_vctrl_div');
+                if (vctrl) {
+                    const tabTexts = Array.from(vctrl.querySelectorAll('a, li, span, [role="tab"]'))
+                        .map(e => (e.textContent || '').trim().toLowerCase())
+                        .filter(t => t.length > 0);
+                    thirdLevelTabsLoaded = tabTexts.some(t => t === 'precheck' || t === 'pre-check' || t === 'pdi');
+                }
+                return {
+                    maxRows, directIdRows, containerHasData, rowCounterValue, rowCounterRows,
+                    dataCellHit, precheckColumnHeaders, fallbackRows,
+                    hasPrecheckRowId, thirdLevelTabsLoaded,
+                };
             }""")
             if isinstance(_probe, dict):
                 _rows = int(_probe.get("maxRows") or 0)
                 if _rows > _precheck_existing_rows:
                     _precheck_existing_rows = _rows
                     _precheck_existing_signal = f"root[{_ri}]:maxRows={_rows}"
+                _did = int(_probe.get("directIdRows") or 0)
+                if _did > 0 and _did > _precheck_existing_rows:
+                    _precheck_existing_rows = _did
+                    _precheck_existing_signal = f"root[{_ri}]:directId_s_3_l={_did}"
+                _rc_rows = int(_probe.get("rowCounterRows") or 0)
+                if _rc_rows > 0 and _precheck_existing_rows == 0:
+                    _precheck_existing_rows = _rc_rows
+                    _precheck_existing_signal = f"root[{_ri}]:rowCounter_s_3_rc={_probe.get('rowCounterValue', '')!r}"
+                if _probe.get("dataCellHit") and _precheck_existing_rows == 0:
+                    _precheck_existing_rows = 1
+                    _precheck_existing_signal = f"root[{_ri}]:dataCellId(1_s_3_l_*)"
+                if _probe.get("containerHasData") and _precheck_existing_rows == 0:
+                    _precheck_existing_rows = 1
+                    _precheck_existing_signal = f"root[{_ri}]:containerText(s_3_ld/gview/gbox)"
+                _fb = int(_probe.get("fallbackRows") or 0)
+                if _fb > 0 and _precheck_existing_rows == 0:
+                    _precheck_existing_rows = _fb
+                    _precheck_existing_signal = f"root[{_ri}]:fallbackRows={_fb}(unscoped_non_pdi)"
+                if _probe.get("thirdLevelTabsLoaded"):
+                    _precheck_third_level_tabs_loaded = True
                 # Stale ``SWERowId1=`` in the URL is common; **do not** skip Pre-check when scoped jqGrid count is 0 (**LLD** **6.237**).
         except Exception:
             continue
@@ -1637,7 +1842,8 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     _precheck_already_present = _precheck_existing_rows > 0
     note(
         f"{log_prefix}: precheck_row_probe rows={_precheck_existing_rows} "
-        f"signal={_precheck_existing_signal or 'none'} already_present={_precheck_already_present}"
+        f"signal={_precheck_existing_signal or 'none'} already_present={_precheck_already_present} "
+        f"third_level_tabs_loaded={_precheck_third_level_tabs_loaded}"
     )
     if callable(form_trace):
         form_trace(
@@ -2010,11 +2216,29 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             log_prefix=log_prefix,
             context="Pre-check",
         ):
+            _dump_frames_and_elements_for_debug(
+                page, content_frame_selector=content_frame_selector,
+                output_dir=_debug_dump_dir, label="precheck_plus_not_found",
+                note=note, log_prefix=log_prefix,
+            )
+            _tab_hint = ""
+            if not _precheck_third_level_tabs_loaded:
+                _tab_hint = (
+                    " Third-level tabs (PreCheck/PDI/Features) are NOT loaded in #s_vctrl_div — "
+                    "the Pre-check tab click may not have navigated to the serial detail view. "
+                    "s_3_1_12_0 exists as a SPAN (not BUTTON) when tabs are missing."
+                )
+                note(
+                    f"{log_prefix}: DIAGNOSTIC — third-level tabs not loaded. "
+                    "The serial detail view (PreCheck/PDI/Features tabs) did not render. "
+                    "s_3_1_12_0_Ctrl (button) is absent; s_3_1_12_0 exists only as an empty SPAN."
+                )
             return (
                 False,
                 "Could not click Pre-check list '+' "
-                "(tried button#s_3_1_12_0_Ctrl / s_2_2_32_0 siebui-icon-newrecord, Service Request List:New, "
-                "Precheck List:New; skipped Service Request List: Menu).",
+                "(tried button#s_3_1_12_0_Ctrl / s_2_1_14_0_Ctrl / s_2_2_32_0 siebui-icon-newrecord, "
+                "Service Request List:New, Precheck List:New; skipped Service Request List: Menu)."
+                + _tab_hint,
             )
         note(f"{log_prefix}: clicked Pre-check list New (+).")
         _safe_page_wait(page, 300, log_label="after_precheck_list_new")
@@ -2320,6 +2544,11 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             return false;
         };
         let tables = Array.from(document.querySelectorAll('table.ui-jqgrid-btable')).filter((tb) => vis(tb) && isPdiListScoped(tb));
+        // Direct-id lookup for the known PDI list table
+        const s2l = document.getElementById('s_2_l');
+        if (s2l && vis(s2l) && !tables.includes(s2l)) {
+            tables.push(s2l);
+        }
         if (tables.length === 0) {
             tables = Array.from(document.querySelectorAll('table')).filter((tb) => vis(tb) && isPdiListScoped(tb));
         }
@@ -2557,10 +2786,16 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 pdi_row_count_hint=_pdi_rows_before_new,
                 expiry_raw_samples=_pdi_expiry_raw,
             )
+            _dump_frames_and_elements_for_debug(
+                page, content_frame_selector=content_frame_selector,
+                output_dir=_debug_dump_dir, label="pdi_plus_not_found",
+                note=note, log_prefix=log_prefix,
+            )
             return (
                 False,
                 "Could not click 'Service Request List:New' on PDI tab "
-                "(same paths as Pre-check +; see _siebel_click_service_request_list_new_record).",
+                "(tried s_3_1_12_0_Ctrl / s_2_1_14_0_Ctrl / s_2_2_32_0 + scan; "
+                "see _siebel_click_service_request_list_new_record).",
             )
         note(f"{log_prefix}: clicked Service Request List:New on PDI tab.")
         _safe_page_wait(page, 300, log_label="after_sr_list_new")
@@ -3688,6 +3923,7 @@ def _prepare_vehicle_scrape_serial_precheck_pdi_and_features(
     content_frame_selector: str | None,
     note,
     form_trace=None,
+    debug_dump_dir: str | Path | None = None,
 ) -> str | None:
     """
     On the **vehicle** detail view (dealer stock): click **Serial Number**, run tab **Pre-check** + **PDI**
@@ -3731,6 +3967,7 @@ def _prepare_vehicle_scrape_serial_precheck_pdi_and_features(
         scraped=scraped,
         do_feature_id_scrape=True,
         pdi_span_start_out=_pdi_span_t0,
+        debug_dump_dir=debug_dump_dir,
     )
     if not _serial_pc_ok:
         return _serial_pc_err or "Pre-check / PDI failed after Serial Number drilldown (prepare_vehicle)."
@@ -4091,6 +4328,7 @@ def prepare_vehicle(
     form_trace=None,
     ms_done=None,
     step=None,
+    debug_dump_dir: str | Path | None = None,
 ) -> tuple[bool, str | None, dict, bool, list[str], list[str]]:
     """
     Pre-booking **vehicle preparation** — ordered flow:
@@ -4254,6 +4492,7 @@ def prepare_vehicle(
                 content_frame_selector=content_frame_selector,
                 note=note,
                 form_trace=form_trace,
+                debug_dump_dir=debug_dump_dir,
             )
             if _detail_pc_err:
                 merged = _merge_dms_and_grid_for_vehicle_master(dms_values, scraped)

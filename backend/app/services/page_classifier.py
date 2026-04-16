@@ -135,6 +135,52 @@ def aadhar_combined_ocr_looks_ok(text: str) -> bool:
     return _aadhaar_combined_single_page_candidate(text or "")
 
 
+def classify_aadhar_page_forced_single_face(text: str) -> str:
+    """
+    Same Aadhaar logic as :func:`classify_page_by_text`, but **never** returns ``Aadhar_combined``.
+
+    Used when a multi-page PDF makes "both faces on one raster" impossible and we must map a page to
+    either the photo front or the address back.
+    """
+    if not text or not isinstance(text, str):
+        return PAGE_TYPE_UNUSED
+
+    t = text.strip()
+    if len(t) < 20:
+        return PAGE_TYPE_UNUSED
+
+    details_score = sum(1 for pat in _DETAILS_PATTERNS if pat.search(t))
+    insurance_score = sum(1 for pat in _INSURANCE_PATTERNS if pat.search(t))
+
+    if details_score >= 2:
+        return PAGE_TYPE_DETAILS
+    if insurance_score >= 2:
+        return PAGE_TYPE_INSURANCE
+
+    aadhar_general = sum(1 for pat in _AADHAR_GENERAL_PATTERNS if pat.search(t))
+    if aadhar_general >= 1:
+        if aadhar_front_face_ocr(t):
+            return PAGE_TYPE_AADHAR
+        back_score = sum(1 for pat in _AADHAR_BACK_PATTERNS if pat.search(t))
+        if back_score >= 1:
+            return PAGE_TYPE_AADHAR_BACK
+        return PAGE_TYPE_AADHAR
+
+    scores: dict[str, int] = {
+        PAGE_TYPE_AADHAR_BACK: sum(1 for pat in _AADHAR_BACK_PATTERNS if pat.search(t)),
+        PAGE_TYPE_AADHAR: sum(1 for pat in _AADHAR_FRONT_PATTERNS if pat.search(t)),
+    }
+    best_type = PAGE_TYPE_UNUSED
+    best_score = 0
+    for ptype, score in scores.items():
+        if score > best_score:
+            best_score = score
+            best_type = ptype
+    if best_score == 0:
+        return PAGE_TYPE_UNUSED
+    return best_type
+
+
 def classify_page_by_text(text: str) -> str:
     """
     Classify a single page from its OCR text.

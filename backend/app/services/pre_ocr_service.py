@@ -63,6 +63,7 @@ from app.services.ocr_sale_artifacts import (
 from app.services.page_classifier import (
     aadhar_combined_ocr_looks_ok,
     aadhar_front_face_ocr,
+    classify_aadhar_page_forced_single_face,
     classify_page_by_text,
     classify_pages_from_ocr_text,
     extract_page_text_from_pre_ocr_blocks,
@@ -1282,8 +1283,11 @@ def orient_and_normalize_sale_documents(sale_dir: Path) -> None:
 
 def normalize_aadhar_upload_files(subdir: Path) -> None:
     """
-    OSD upright orientation on Aadhaar JPEGs, then physical layout fixes (letter / scissors) before Textract.
-    Used by Add Sales upload; bulk pre-OCR already writes normalized card crops. Idempotent on plain scans.
+    OSD upright orientation on Aadhaar JPEGs before Textract.
+
+    UIDAI **letter** crop (scissors line + vertical split) is **not** applied here: it misclassified
+    full-page plastic card scans as letters and destroyed crops. Letter handling stays in
+    :func:`_process_same_page_aadhar` when a page is truly ``Aadhar_combined`` / letter flow.
     """
     front_p = subdir / FILENAME_AADHAR_FRONT
     if not front_p.is_file():
@@ -1294,30 +1298,6 @@ def normalize_aadhar_upload_files(subdir: Path) -> None:
     back_p = subdir / "Aadhar_back.jpg"
     if back_p.is_file():
         back_p.write_bytes(correct_image_orientation_upright(back_p.read_bytes()))
-
-    front_bytes = front_p.read_bytes()
-    back_bytes = back_p.read_bytes() if back_p.is_file() else None
-
-    is_letter = False
-    if front_bytes:
-        front_cropped = crop_aadhar_letter_below_scissors(front_bytes)
-        if front_cropped:
-            is_letter = True
-            split = split_aadhar_letter_vertical(front_cropped)
-            if split:
-                front_p.write_bytes(split[0])
-                back_p.write_bytes(split[1])
-                return
-            front_p.write_bytes(front_cropped)
-    if not is_letter and back_bytes:
-        back_cropped = crop_aadhar_letter_below_scissors(back_bytes)
-        if back_cropped:
-            split = split_aadhar_letter_vertical(back_cropped)
-            if split:
-                front_p.write_bytes(split[0])
-                back_p.write_bytes(split[1])
-                return
-            back_p.write_bytes(back_cropped)
 
 
 def _pre_ocr_text_from_sales_detail_sheet_onward(full_text: str) -> str:
@@ -1857,6 +1837,84 @@ def pre_ocr_pdf(
         return "", ocr_path, None, step_log, {}, {}, {}
 
 
+def reconcile_aadhar_classifications_multipage(
+    classifications: list[tuple[int, str]], full_ocr_text: str
+) -> list[tuple[int, str]]:
+    """
+    ``Aadhar_combined`` means both card faces share one raster. That cannot apply to two different pages,
+    and it cannot apply *and* a separate ``Aadhar`` / ``Aadhar_back`` page exist. Fix OCR overcalls so
+    each physical page maps to a single face when required.
+    """
+    if len(classifications) <= 1:
+        return classifications
+
+    combined_idxs = [i for i, p in classifications if p == PAGE_TYPE_AADHAR_COMBINED]
+    if not combined_idxs:
+        return classifications
+
+    out = list(classifications)
+
+    if len(combined_idxs) >= 2:
+        for idx in sorted(combined_idxs)[1:]:
+            text = extract_page_text_from_pre_ocr_blocks(full_ocr_text, idx)
+            new_p = classify_aadhar_page_forced_single_face(text)
+            out = [(i, new_p if i == idx else p) for i, p in out]
+            logger.info(
+                "Reconciled duplicate Aadhar_combined: page %d -> %s",
+                idx + 1,
+                new_p,
+            )
+        combined_idxs = [i for i, p in out if p == PAGE_TYPE_AADHAR_COMBINED]
+
+    if len(combined_idxs) == 1:
+        ci = combined_idxs[0]
+        other = [
+            i
+            for i, p in out
+            if p in (PAGE_TYPE_AADHAR, PAGE_TYPE_AADHAR_BACK) and i != ci
+        ]
+        if other:
+            text = extract_page_text_from_pre_ocr_blocks(full_ocr_text, ci)
+            new_p = classify_aadhar_page_forced_single_face(text)
+            out = [(i, new_p if i == ci else p) for i, p in out]
+            logger.info(
+                "Reconciled Aadhar_combined page %d -> %s (other Aadhaar page(s) on %s)",
+                ci + 1,
+                new_p,
+                [x + 1 for x in other],
+            )
+
+    return out
+
+
+def _aadhar_slot_indices_from_classifications(classifications: list[tuple[int, str]]) -> dict[str, int]:
+    """
+    Resolve ``Aadhar`` / ``Aadhar_back`` page indices. Explicit ``Aadhar`` / ``Aadhar_back`` classifications
+    win; ``Aadhar_combined`` only fills slots still empty (same physical page for both faces).
+    """
+    fronts: list[int] = []
+    backs: list[int] = []
+    combined: list[int] = []
+    for idx, ptype in classifications:
+        if ptype == PAGE_TYPE_AADHAR:
+            fronts.append(idx)
+        elif ptype == PAGE_TYPE_AADHAR_BACK:
+            backs.append(idx)
+        elif ptype == PAGE_TYPE_AADHAR_COMBINED:
+            combined.append(idx)
+    out: dict[str, int] = {}
+    if fronts:
+        out[PAGE_TYPE_AADHAR] = fronts[0]
+    if backs:
+        out[PAGE_TYPE_AADHAR_BACK] = backs[0]
+    for ci in sorted(combined):
+        if PAGE_TYPE_AADHAR not in out:
+            out[PAGE_TYPE_AADHAR] = ci
+        if PAGE_TYPE_AADHAR_BACK not in out:
+            out[PAGE_TYPE_AADHAR_BACK] = ci
+    return out
+
+
 def _split_pdf_by_classification(
     pdf_path: Path,
     full_ocr_text: str,
@@ -1887,18 +1945,17 @@ def _split_pdf_by_classification(
         _export_pdf_pages_to_raw(pdf_path, raw_dir, osd_rotations=osd_rotations)
 
     classifications = classifications_override if classifications_override is not None else classify_pages_from_ocr_text(full_ocr_text)
-    page_type_to_idx: dict[str, int] = {}  # first page index per type
+    page_type_to_idx: dict[str, int] = {}  # first page index per non-Aadhaar type
     unused_indices: list[int] = []
     for idx, ptype in classifications:
         if ptype == PAGE_TYPE_UNUSED:
             unused_indices.append(idx)
-        elif ptype == PAGE_TYPE_AADHAR_COMBINED:
-            if PAGE_TYPE_AADHAR not in page_type_to_idx:
-                page_type_to_idx[PAGE_TYPE_AADHAR] = idx
-            if PAGE_TYPE_AADHAR_BACK not in page_type_to_idx:
-                page_type_to_idx[PAGE_TYPE_AADHAR_BACK] = idx
+        elif ptype in (PAGE_TYPE_AADHAR, PAGE_TYPE_AADHAR_BACK, PAGE_TYPE_AADHAR_COMBINED):
+            continue
         elif ptype not in page_type_to_idx:
             page_type_to_idx[ptype] = idx
+
+    page_type_to_idx.update(_aadhar_slot_indices_from_classifications(classifications))
 
     maybe_swap_aadhar_page_indices(page_type_to_idx, full_ocr_text)
 
@@ -2276,6 +2333,7 @@ def run_pre_ocr_and_prepare(
 
     t_cls0 = time.perf_counter()
     classifications = classify_pages_from_ocr_text(full_text)
+    classifications = reconcile_aadhar_classifications_multipage(classifications, full_text)
     cls_ms = int((time.perf_counter() - t_cls0) * 1000)
     orchestration.append(
         ("classify_pages_from_ocr_text", cls_ms, f"slots={len(classifications)}", _off()),
@@ -2358,7 +2416,12 @@ def run_pre_ocr_and_prepare(
             if demoted:
                 demoted_set = set(demoted)
                 classifications = [
-                    (i, PAGE_TYPE_AADHAR_BACK if i in demoted_set and p == PAGE_TYPE_AADHAR else p)
+                    (
+                        i,
+                        PAGE_TYPE_AADHAR_BACK
+                        if i in demoted_set and p in (PAGE_TYPE_AADHAR, PAGE_TYPE_AADHAR_COMBINED)
+                        else p,
+                    )
                     for i, p in classifications
                 ]
                 has_aadhar_back = True

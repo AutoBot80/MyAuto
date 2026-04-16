@@ -2,7 +2,6 @@ import { useState } from "react";
 import { uploadScans, uploadScansV2, uploadScansV2ConsolidatedStream } from "../api/uploads";
 import { validateAadharScanFile } from "../utils/aadharScanFileValidation";
 import type { ConsolidatedFsArchiveContext } from "../utils/scannerArchive";
-import { moveConsolidatedToProcessed } from "../utils/scannerArchive";
 import type { ExtractedDetailsResponse, ManualFallbackPayload } from "../types";
 
 /** Second argument when upload response includes OCR — run after applying details so DMS warm-up can follow. */
@@ -27,6 +26,8 @@ export interface UseUploadScansControlled {
     warning?: string,
     scannerArchive?: ConsolidatedFsArchiveContext | null
   ) => void;
+  /** Consolidated PDF came from scanner `landing`; parent defers FS move until Print Forms and Queue RTO succeeds. */
+  onConsolidatedScannerArchiveDeferred?: (archive: ConsolidatedFsArchiveContext) => void;
 }
 
 export function useUploadScans(
@@ -167,13 +168,7 @@ export function useUploadScans(
       const soft = data.extraction?.warnings;
       if (Array.isArray(soft) && soft.length > 0) msg += ` ${soft.join(" ")}`;
       if (fsArchive) {
-        try {
-          await moveConsolidatedToProcessed(fsArchive.fileHandle, fsArchive.scannerRoot);
-          msg += " Moved scan to processed folder.";
-        } catch (moveErr) {
-          const detail = moveErr instanceof Error ? moveErr.message : String(moveErr);
-          msg += ` Could not move file to processed: ${detail}`;
-        }
+        controlled?.onConsolidatedScannerArchiveDeferred?.(fsArchive);
       }
       setUploadStatus(msg);
       if (data.saved_files?.length)

@@ -2453,6 +2453,7 @@ def Playwright_Hero_DMS_fill(
             form_trace=form_trace,
             ms_done=ms_done,
             step=step,
+            debug_dump_dir=_exec_log_path.parent if _exec_log_path else None,
         )
         if not _pv_ok:
             out["error"] = _pv_err or "prepare_vehicle failed before contact find."

@@ -94,7 +94,7 @@ export function UploadScansPanel({
   /** When consolidated API exists: default is consolidated PDF; checking this shows per-document uploads. */
   const [uploadIndividualFiles, setUploadIndividualFiles] = useState(false);
   const [selectedConsolidatedPdf, setSelectedConsolidatedPdf] = useState<File | null>(null);
-  /** When set, after successful OCR the file is moved from `landing` to `processed` under this root. */
+  /** When set, the landing file is moved to `processed` only after Print Forms and Queue RTO succeeds (not right after OCR). */
   const [scannerRootHandle, setScannerRootHandle] = useState<FileSystemDirectoryHandle | null>(null);
   const [consolidatedFsArchive, setConsolidatedFsArchive] = useState<ConsolidatedFsArchiveContext | null>(null);
   const [scannerFolderError, setScannerFolderError] = useState<string | null>(null);
