@@ -2,6 +2,7 @@ import { getAccessToken } from "../auth/token";
 import { getBaseUrl, throwMappedFetchError } from "./client";
 import type { ExtractedDetailsResponse, UploadScansResponse } from "../types";
 import { DEALER_ID } from "./dealerId";
+import { isPlaceholderCustomerMobileDigits } from "../utils/customerMobile";
 
 const PROXY_TIMEOUT_HINT =
   "If you use the Vite dev server, upload + OCR can take several minutes — the proxy timeout was raised; restart `npm run dev` after pulling. " +
@@ -85,7 +86,7 @@ export async function uploadScansV2Consolidated(
   const form = new FormData();
   form.append("dealer_id", String(dealerId ?? DEALER_ID));
   const m = (customerMobile ?? "").replace(/\D/g, "");
-  if (m.length === 10) {
+  if (m.length === 10 && !isPlaceholderCustomerMobileDigits(m)) {
     form.append("mobile", m);
   }
   form.append("consolidated_pdf", consolidatedPdf);
@@ -111,7 +112,7 @@ export async function uploadScansV2ConsolidatedStream(
   const form = new FormData();
   form.append("dealer_id", String(dealerId ?? DEALER_ID));
   const m = (customerMobile ?? "").replace(/\D/g, "");
-  if (m.length === 10) {
+  if (m.length === 10 && !isPlaceholderCustomerMobileDigits(m)) {
     form.append("mobile", m);
   }
   form.append("consolidated_pdf", consolidatedPdf);

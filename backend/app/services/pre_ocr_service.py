@@ -41,6 +41,7 @@ from app.config import (
     OCR_LANG,
     OCR_PSM,
     OCR_PREPROCESS,
+    OCR_PRE_OCR_OSD_ENABLED,
     OCR_PRE_OCR_TEXTRACT_AADHAR_FALLBACK,
     OCR_PRE_OCR_TEXTRACT_DETAILS,
     UPLOADS_DIR,
@@ -227,33 +228,48 @@ def _pil_rgb_to_jpeg_bytes(img: Image.Image, quality: int = 90) -> bytes:
     return buf.getvalue()
 
 
+_PDF_RASTER_DPI = 200
+
+
 def _pdf_to_page_images(
     pdf_path: Path,
     max_pages: int = 20,
     *,
     fix_orientation: bool = True,
-) -> tuple[list[tuple[int, Image.Image]], dict[int, int]]:
+    dpi: int = _PDF_RASTER_DPI,
+) -> tuple[list[tuple[int, Image.Image]], dict[int, int], list[tuple[str, int, str]]]:
     """
     Render PDF pages to **PIL RGB** (PyMuPDF pixmap). Tesseract needs pixels, not vectors; this avoids
     an intermediate **JPEG** encode/decode — pass images straight to :func:`_tesseract_ocr_image`.
 
-    Returns ``(page_list, osd_rotations)`` where ``osd_rotations`` maps page index to the clockwise
-    OSD rotation applied (0/90/180/270). Downstream code that writes PDFs can reuse these values
-    instead of re-running OSD.
+    Returns ``(page_list, osd_rotations, page_timings)`` where ``osd_rotations`` maps page index to
+    the clockwise OSD rotation applied (0/90/180/270), and ``page_timings`` is a list of
+    ``(step_id, elapsed_ms, detail)`` for per-page raster + OSD breakdown.
     """
     import fitz
 
     result: list[tuple[int, Image.Image]] = []
     osd_rotations: dict[int, int] = {}
+    page_timings: list[tuple[str, int, str]] = []
     doc = fitz.open(str(pdf_path))
     try:
         for i in range(min(doc.page_count, max_pages)):
             page = doc[i]
-            pix = page.get_pixmap(dpi=150)
+            t_r = time.perf_counter()
+            pix = page.get_pixmap(dpi=dpi)
             img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            raster_ms = int((time.perf_counter() - t_r) * 1000)
+            page_timings.append(
+                (f"raster_page_{i + 1}", raster_ms, f"dpi={dpi} px={pix.width}x{pix.height}"),
+            )
             if fix_orientation:
+                t_osd = time.perf_counter()
                 rot_cw = osd_deskew_clockwise_degrees_from_image(img)
+                osd_ms = int((time.perf_counter() - t_osd) * 1000)
                 osd_rotations[i] = rot_cw
+                page_timings.append(
+                    (f"osd_page_{i + 1}", osd_ms, f"rotation={rot_cw}"),
+                )
                 if rot_cw:
                     work = img.convert("RGB") if img.mode != "RGB" else img
                     img = work.rotate(-rot_cw, expand=True, fillcolor="white")
@@ -262,10 +278,10 @@ def _pdf_to_page_images(
             result.append((i, img))
     finally:
         doc.close()
-    return result, osd_rotations
+    return result, osd_rotations, page_timings
 
 
-def _rasterize_single_pdf_page(pdf_path: Path, page_0: int, *, dpi: int = 150) -> Image.Image:
+def _rasterize_single_pdf_page(pdf_path: Path, page_0: int, *, dpi: int = _PDF_RASTER_DPI) -> Image.Image:
     """Render one PDF page to PIL RGB via PyMuPDF."""
     import fitz
 
@@ -1232,6 +1248,14 @@ def _pre_ocr_text_from_sales_detail_sheet_onward(full_text: str) -> str:
     return full_text
 
 
+# Printed sample / UI placeholder numbers — must not become customer folder names or “resolved” mobile.
+_PLACEHOLDER_INDIAN_MOBILES: frozenset[str] = frozenset({"9876543210"})
+
+
+def _is_placeholder_indian_mobile(ten: str) -> bool:
+    return bool(ten) and ten in _PLACEHOLDER_INDIAN_MOBILES
+
+
 def _normalize_indian_mobile_hint(raw: str | None) -> str | None:
     """Return a valid 10-digit Indian mobile from user/form input (handles spaces, +91)."""
     if not raw or not str(raw).strip():
@@ -1240,7 +1264,7 @@ def _normalize_indian_mobile_hint(raw: str | None) -> str | None:
     if len(digits) < 10:
         return None
     ten = digits[-10:]
-    if ten[0] in "6789":
+    if ten[0] in "6789" and not _is_placeholder_indian_mobile(ten):
         return ten
     return None
 
@@ -1251,17 +1275,20 @@ def _extract_mobile_from_text(text: str) -> str | None:
     Prefer explicit **Mobile Number** on the Details sheet, then legacy "Tel. Name No. …" / Mobile / Phone.
     Never treat **Alternate No.** as the customer mobile (see ``CUSTOMER_MOBILE_CONTEXT``).
     Falls back to first valid mobile if no context match.
+    Skips known sample/placeholder numbers (e.g. printed ``9876543210`` on forms).
     """
     if not text:
         return None
-    match = DETAILS_SHEET_MOBILE_NUMBER_LABEL.search(text)
-    if match:
-        return match.group(1)
-    match = CUSTOMER_MOBILE_CONTEXT.search(text)
-    if match:
-        return match.group(1)
-    match = MOBILE_PATTERN.search(text)
-    return match.group(1) if match else None
+    for pattern in (DETAILS_SHEET_MOBILE_NUMBER_LABEL, CUSTOMER_MOBILE_CONTEXT):
+        for match in pattern.finditer(text):
+            ten = match.group(1)
+            if ten and not _is_placeholder_indian_mobile(ten):
+                return ten
+    for match in MOBILE_PATTERN.finditer(text):
+        ten = match.group(1)
+        if ten and not _is_placeholder_indian_mobile(ten):
+            return ten
+    return None
 
 
 def _extract_all_mobiles_from_text(text: str) -> list[str]:
@@ -1272,17 +1299,17 @@ def _extract_all_mobiles_from_text(text: str) -> list[str]:
     result: list[str] = []
     for match in DETAILS_SHEET_MOBILE_NUMBER_LABEL.finditer(text):
         m = match.group(1)
-        if m and m not in seen:
+        if m and m not in seen and not _is_placeholder_indian_mobile(m):
             seen.add(m)
             result.append(m)
     for match in CUSTOMER_MOBILE_CONTEXT.finditer(text):
         m = match.group(1)
-        if m and m not in seen:
+        if m and m not in seen and not _is_placeholder_indian_mobile(m):
             seen.add(m)
             result.append(m)
     for match in MOBILE_PATTERN.finditer(text):
         m = match.group(1)
-        if m and m not in seen:
+        if m and m not in seen and not _is_placeholder_indian_mobile(m):
             seen.add(m)
             result.append(m)
     return result
@@ -1559,7 +1586,7 @@ def _split_pdf_multi_customer_to_sale_dirs(
     if page_images_cache is not None:
         page_images = page_images_cache
     else:
-        pages, _osd = _pdf_to_page_images(pdf_path)
+        pages, _osd, _timings = _pdf_to_page_images(pdf_path)
         page_images = {idx: im for idx, im in pages}
     result: list[tuple[Path, str, str]] = []
 
@@ -1634,16 +1661,19 @@ def _split_pdf_multi_customer_to_sale_dirs(
 def pre_ocr_pdf(
     pdf_path: Path,
     processing_dir: Path | None = None,
-) -> tuple[str, Path | None, str | None, list[tuple[str, int | None, str]], dict[int, Image.Image], dict[int, int]]:
+    t0_wall: float | None = None,
+) -> tuple[str, Path | None, str | None, list[tuple[str, int | None, str, int]], dict[int, Image.Image], dict[int, int]]:
     """
     Extract mobile from PDF using Tesseract per page (Details sheet has mobile).
     Saves to Processing/filename_ddmmyyyy_pre_ocr.txt.
 
     Returns ``(full_text, ocr_file_path, mobile_or_none, step_log, page_images, osd_rotations)``
-    where ``step_log`` is a list of ``(step_id, elapsed_ms, detail)`` for
+    where ``step_log`` is a list of ``(step_id, elapsed_ms, detail, t_offset_ms)`` for
     :func:`append_pre_ocr_step_lines`, ``page_images`` maps ``{page_idx: PIL_Image}`` (oriented),
     and ``osd_rotations`` maps ``{page_idx: clockwise_degrees}`` (for reuse by downstream PDF writers).
+    ``t0_wall``: ``time.perf_counter()`` at request start — used for ``T+`` offset in each step.
     """
+    _t0 = t0_wall if t0_wall is not None else time.perf_counter()
     proc_dir = processing_dir or PROCESSING_DIR
     proc_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1651,18 +1681,21 @@ def pre_ocr_pdf(
     ddmmyyyy = datetime.now().strftime("%d%m%Y")
     ocr_basename = f"{filename_stem}_{ddmmyyyy}_pre_ocr.txt"
     ocr_path = proc_dir / ocr_basename
-    step_log: list[tuple[str, int | None, str]] = []
+    step_log: list[tuple[str, int | None, str, int]] = []
 
-    def _step(t: tuple[str, int | None, str]) -> None:
-        step_log.append(t)
+    def _off() -> int:
+        return int((time.perf_counter() - _t0) * 1000)
+
+    def _step(step_id: str, ms: int | None, detail: str) -> None:
+        step_log.append((step_id, ms, detail, _off()))
 
     try:
         t0 = time.perf_counter()
-        pages, osd_rotations = _pdf_to_page_images(pdf_path)
+        pages, osd_rotations, raster_timings = _pdf_to_page_images(pdf_path, fix_orientation=OCR_PRE_OCR_OSD_ENABLED)
         raster_ms = int((time.perf_counter() - t0) * 1000)
-        _step(
-            ("pdf_to_page_rasters", raster_ms, f"pages={len(pages)} file={pdf_path.name}"),
-        )
+        _step("pdf_to_page_rasters", raster_ms, f"pages={len(pages)} osd={OCR_PRE_OCR_OSD_ENABLED} file={pdf_path.name}")
+        for rt_id, rt_ms, rt_detail in raster_timings:
+            _step(rt_id, rt_ms, rt_detail)
         page_images: dict[int, Image.Image] = {idx: im for idx, im in pages}
 
         all_text_parts: list[str] = []
@@ -1674,43 +1707,28 @@ def pre_ocr_pdf(
             tess_total += p_ms
             ch = len(text.strip())
             px = page_img.width * page_img.height * 3
-            _step(
-                (f"tesseract_page_{page_idx + 1}", p_ms, f"chars={ch} rgb_bytes≈{px}"),
-            )
-            if text.strip():
-                all_text_parts.append(f"--- Page {page_idx + 1} ---\n{text}")
+            _step(f"tesseract_page_{page_idx + 1}", p_ms, f"chars={ch} rgb_bytes≈{px}")
+            all_text_parts.append(f"--- Page {page_idx + 1} ---\n{text}")
 
-        _step(("tesseract_all_pages_total", tess_total, f"pages={len(pages)}"))
+        _step("tesseract_all_pages_total", tess_total, f"pages={len(pages)}")
 
         t_merge0 = time.perf_counter()
         full_text = "\n\n".join(all_text_parts)
-        t_after_merge = time.perf_counter()
-        _step(
-            ("merge_page_text", int((t_after_merge - t_merge0) * 1000), f"chars={len(full_text)}"),
-        )
+        _step("merge_page_text", int((time.perf_counter() - t_merge0) * 1000), f"chars={len(full_text)}")
 
         t_wr = time.perf_counter()
         ocr_path.write_text(full_text, encoding="utf-8")
-        _step(
-            ("write_pre_ocr_txt", int((time.perf_counter() - t_wr) * 1000), f"path={ocr_basename}"),
-        )
+        _step("write_pre_ocr_txt", int((time.perf_counter() - t_wr) * 1000), f"path={ocr_basename}")
 
         t3 = time.perf_counter()
         mobile_scope = _pre_ocr_text_from_sales_detail_sheet_onward(full_text)
-        _step(
-            ("scope_text_sales_detail_onward", int((time.perf_counter() - t3) * 1000), f"chars={len(mobile_scope)}"),
-        )
+        _step("scope_text_sales_detail_onward", int((time.perf_counter() - t3) * 1000), f"chars={len(mobile_scope)}")
 
         t4 = time.perf_counter()
         mobile = _extract_mobile_from_text(mobile_scope)
         if not mobile:
-            # Scope starts at "Sales Detail Sheet", so it drops earlier pages (e.g. Aadhaar with a phone)
-            # and header lines above the heading on the Details page (dealer Ph.). When the customer
-            # mobile row is OCR-garbled, a valid 10-digit may only appear in ``full_text``.
             mobile = _extract_mobile_from_text(full_text)
-        _step(
-            ("extract_mobile", int((time.perf_counter() - t4) * 1000), f"mobile={'set' if mobile else 'none'}"),
-        )
+        _step("extract_mobile", int((time.perf_counter() - t4) * 1000), f"mobile={'set' if mobile else 'none'}")
 
         return full_text, ocr_path, mobile, step_log, page_images, osd_rotations
     except Exception as e:
@@ -1719,7 +1737,7 @@ def pre_ocr_pdf(
             ocr_path.write_text(f"OCR error: {e}\n", encoding="utf-8")
         except OSError:
             pass
-        _step(("pre_ocr_error", None, str(e)[:200]))
+        _step("pre_ocr_error", None, str(e)[:200])
         return "", ocr_path, None, step_log, {}, {}
 
 
@@ -1771,7 +1789,7 @@ def _split_pdf_by_classification(
     if page_images_cache is not None:
         page_images = page_images_cache
     else:
-        pages, _osd = _pdf_to_page_images(pdf_path)
+        pages, _osd, _timings = _pdf_to_page_images(pdf_path)
         page_images = {idx: im for idx, im in pages}
 
     # Same per-page rasters as pre-OCR ``--- Page N ---`` (Tesseract order) for operator review.
@@ -1897,7 +1915,8 @@ def _build_aadhaar_only_rejected_extras(
     page_images: dict[int, Image.Image] | None,
     proc_dir: Path,
     mobile: str | None,
-    orchestration_out: list[tuple[str, int | None, str]] | None = None,
+    orchestration_out: list[tuple[str, int | None, str, int]] | None = None,
+    t0_wall: float | None = None,
 ) -> dict[str, Any] | None:
     """
     When pre-OCR rejects for missing Aadhaar slots but Details + mobile are OK, run **one** FORMS Textract
@@ -1908,9 +1927,14 @@ def _build_aadhaar_only_rejected_extras(
     """
     from uuid import uuid4
 
+    _t0 = t0_wall if t0_wall is not None else time.perf_counter()
+
+    def _roff() -> int:
+        return int((time.perf_counter() - _t0) * 1000)
+
     def _out(step_id: str, ms: int | None, detail: str) -> None:
         if orchestration_out is not None:
-            orchestration_out.append((step_id, ms, detail))
+            orchestration_out.append((step_id, ms, detail, _roff()))
 
     page_count = _page_count_from_pre_ocr(classifications, page_images)
     if page_count < 1:
@@ -2036,15 +2060,23 @@ def run_pre_ocr_and_prepare(
     except OSError:
         is_add_sales_work = False
 
+    t0_wall = time.perf_counter()
+
+    def _off() -> int:
+        return int((time.perf_counter() - t0_wall) * 1000)
+
     us = UploadService()
     ocr_out = get_ocr_output_dir(dealer_id)
     file_stem_safe = safe_file_stem(source_pdf.stem)
     artifact_leaf = initial_artifact_leaf(source_pdf.stem)
     current_artifact_leaf = artifact_leaf
 
-    def _flush_pre(steps: list[tuple[str, int | None, str]], log_leaf: str | None = None) -> None:
+    def _flush_pre(steps: list[tuple[str, int | None, str, int]], log_leaf: str | None = None) -> None:
         if not steps:
             return
+        total_wall = _off()
+        sum_ms = sum(ms for _, ms, _, _ in steps if ms is not None)
+        steps.append(("pre_ocr_total_wall", total_wall, f"sum_of_steps_ms={sum_ms}", _off()))
         append_pre_ocr_step_lines(ocr_out, log_leaf or current_artifact_leaf, steps)
 
     # Copy PDF to Processing (work on copy so original stays for .processed marker)
@@ -2059,26 +2091,27 @@ def run_pre_ocr_and_prepare(
     # Run pre-OCR (Tesseract per page — usually dominant cost). Also returns the
     # rendered page images and OSD rotations so downstream steps skip re-rasterization.
     t_pre0 = time.perf_counter()
-    full_text, ocr_path, mobile, pre_steps, page_images, osd_rotations = pre_ocr_pdf(dest_pdf, processing_dir=proc_dir)
+    full_text, ocr_path, mobile, pre_steps, page_images, osd_rotations = pre_ocr_pdf(dest_pdf, processing_dir=proc_dir, t0_wall=t0_wall)
     # Consolidated Add Sales: user-entered mobile must win over OCR (letter/other pages may show a different number).
     hint = _normalize_indian_mobile_hint(mobile_hint)
     if hint:
         mobile = hint
     pre_ocr_wall_ms = int((time.perf_counter() - t_pre0) * 1000)
 
-    orchestration: list[tuple[str, int | None, str]] = []
+    orchestration: list[tuple[str, int | None, str, int]] = []
     if is_add_sales_work:
         orchestration.append(
             (
                 "add_sales_pre_ocr_session",
                 None,
                 f"work_dir={proc_dir.resolve()} dealer_id={dealer_id} source_pdf={source_pdf.name}",
+                _off(),
             ),
         )
     orchestration.extend(
         [
-            ("copy_pdf_to_processing", copy_ms, f"bytes={dest_pdf.stat().st_size} name={dest_pdf.name}"),
-            ("pre_ocr_pdf_total_wall", pre_ocr_wall_ms, "includes_tesseract_and_io"),
+            ("copy_pdf_to_processing", copy_ms, f"bytes={dest_pdf.stat().st_size} name={dest_pdf.name}", _off()),
+            ("pre_ocr_pdf_total_wall", pre_ocr_wall_ms, "includes_tesseract_and_io", _off()),
         ]
     )
     orchestration.extend(pre_steps)
@@ -2087,7 +2120,7 @@ def run_pre_ocr_and_prepare(
     classifications = classify_pages_from_ocr_text(full_text)
     cls_ms = int((time.perf_counter() - t_cls0) * 1000)
     orchestration.append(
-        ("classify_pages_from_ocr_text", cls_ms, f"slots={len(classifications)}"),
+        ("classify_pages_from_ocr_text", cls_ms, f"slots={len(classifications)}", _off()),
     )
 
     # ── Textract DDT enhancement for the Details page ──
@@ -2105,7 +2138,7 @@ def run_pre_ocr_and_prepare(
             if ddt_text:
                 full_text = _replace_page_block_in_full_text(full_text, dp_idx, ddt_text)
                 orchestration.append(
-                    ("textract_ddt_details_page", td_ms, f"page={dp_idx + 1} chars={len(ddt_text)} replaced=yes"),
+                    ("textract_ddt_details_page", td_ms, f"page={dp_idx + 1} chars={len(ddt_text)} replaced=yes", _off()),
                 )
                 logger.info(
                     "Pre-OCR: Textract DDT replaced Tesseract text for Details page %d (%d chars, %d ms)",
@@ -2118,13 +2151,13 @@ def run_pre_ocr_and_prepare(
                     logger.info("Pre-OCR: mobile updated from Textract DDT: %s", mobile)
             else:
                 orchestration.append(
-                    ("textract_ddt_details_page", td_ms, f"page={dp_idx + 1} replaced=no"),
+                    ("textract_ddt_details_page", td_ms, f"page={dp_idx + 1} replaced=no", _off()),
                 )
         # Rewrite _pre_ocr.txt with enhanced text
         if details_pages and ocr_path:
             try:
                 ocr_path.write_text(full_text, encoding="utf-8")
-                orchestration.append(("rewrite_pre_ocr_txt_with_ddt", None, f"path={ocr_path.name}"))
+                orchestration.append(("rewrite_pre_ocr_txt_with_ddt", None, f"path={ocr_path.name}", _off()))
             except OSError:
                 logger.warning("Could not rewrite pre_ocr.txt after Textract DDT")
 
@@ -2152,6 +2185,7 @@ def run_pre_ocr_and_prepare(
                         "textract_ddt_aadhar_page",
                         ah_ms,
                         f"page={ah_idx + 1} type={ah_type} chars={len(ah_ddt)} replaced=yes",
+                        _off(),
                     ),
                 )
                 logger.info(
@@ -2167,35 +2201,77 @@ def run_pre_ocr_and_prepare(
                         "textract_ddt_aadhar_page",
                         ah_ms,
                         f"page={ah_idx + 1} type={ah_type} replaced=no",
+                        _off(),
                     ),
                 )
         if aadhar_ddt_touched and ocr_path:
             try:
                 ocr_path.write_text(full_text, encoding="utf-8")
-                orchestration.append(("rewrite_pre_ocr_txt_with_aadhar_ddt", None, f"path={ocr_path.name}"))
+                orchestration.append(("rewrite_pre_ocr_txt_with_aadhar_ddt", None, f"path={ocr_path.name}", _off()))
             except OSError:
                 logger.warning("Could not rewrite pre_ocr.txt after Textract DDT (Aadhaar)")
+
+    # ── Textract DDT rescue for UNUSED pages (Tesseract failed → page invisible to classifier) ──
+    # When Tesseract returns nothing useful, the page is classified UNUSED and the Aadhaar DDT
+    # fallback above never fires (catch-22). Break that by running DDT on UNUSED pages, then
+    # reclassifying from the DDT text.
+    unused_indices = [idx for idx, ptype in classifications if ptype == PAGE_TYPE_UNUSED]
+    if unused_indices and OCR_PRE_OCR_TEXTRACT_AADHAR_FALLBACK:
+        unused_reclassified = False
+        for u_idx in unused_indices:
+            per_page = extract_page_text_from_pre_ocr_blocks(full_text, u_idx)
+            if len(per_page.strip()) >= 80:
+                continue
+            t_ud0 = time.perf_counter()
+            ud_text = _textract_ddt_for_page(dest_pdf, u_idx, page_image=page_images.get(u_idx))
+            ud_ms = int((time.perf_counter() - t_ud0) * 1000)
+            if not ud_text:
+                orchestration.append(
+                    ("textract_ddt_unused_page", ud_ms, f"page={u_idx + 1} ddt_returned=none", _off()),
+                )
+                continue
+            new_type = classify_page_by_text(ud_text)
+            orchestration.append(
+                ("textract_ddt_unused_page", ud_ms,
+                 f"page={u_idx + 1} chars={len(ud_text)} reclassified={new_type}", _off()),
+            )
+            logger.info(
+                "Pre-OCR: Textract DDT rescued UNUSED page %d → %s (%d chars, %d ms)",
+                u_idx + 1, new_type, len(ud_text), ud_ms,
+            )
+            full_text = _replace_page_block_in_full_text(full_text, u_idx, ud_text)
+            if new_type != PAGE_TYPE_UNUSED:
+                classifications = [(i, new_type if i == u_idx else t) for i, t in classifications]
+                unused_reclassified = True
+        if unused_reclassified and ocr_path:
+            try:
+                ocr_path.write_text(full_text, encoding="utf-8")
+                orchestration.append(
+                    ("rewrite_pre_ocr_txt_with_unused_ddt", None, f"path={ocr_path.name}", _off()),
+                )
+            except OSError:
+                logger.warning("Could not rewrite pre_ocr.txt after UNUSED page DDT rescue")
 
     t_ms0 = time.perf_counter()
     mobile_scope = _pre_ocr_text_from_sales_detail_sheet_onward(full_text)
     ms_ms = int((time.perf_counter() - t_ms0) * 1000)
-    orchestration.append(("sales_detail_onward_scope", ms_ms, f"chars={len(mobile_scope)}"))
+    orchestration.append(("sales_detail_onward_scope", ms_ms, f"chars={len(mobile_scope)}", _off()))
 
     t_am0 = time.perf_counter()
     all_mobiles = _extract_all_mobiles_from_text(mobile_scope)
     am_ms = int((time.perf_counter() - t_am0) * 1000)
-    orchestration.append(("extract_all_mobiles", am_ms, f"count={len(all_mobiles)}"))
+    orchestration.append(("extract_all_mobiles", am_ms, f"count={len(all_mobiles)}", _off()))
 
     t_mc0 = time.perf_counter()
     is_multi = _detect_multi_customer(classifications) or len(all_mobiles) >= 2
-    orchestration.append(("detect_multi_customer", int((time.perf_counter() - t_mc0) * 1000), f"is_multi={is_multi}"))
+    orchestration.append(("detect_multi_customer", int((time.perf_counter() - t_mc0) * 1000), f"is_multi={is_multi}", _off()))
 
     # Multi-customer: when multiple document sets OR 2+ distinct mobiles in full text
     if is_multi:
         t_bd0 = time.perf_counter()
         bundles_data = _build_multi_customer_bundles(dest_pdf, full_text, classifications, all_mobiles)
         bd_ms = int((time.perf_counter() - t_bd0) * 1000)
-        orchestration.append(("build_multi_customer_bundles", bd_ms, f"bundles_data={len(bundles_data) if bundles_data else 0}"))
+        orchestration.append(("build_multi_customer_bundles", bd_ms, f"bundles_data={len(bundles_data) if bundles_data else 0}", _off()))
         if bundles_data:
             logger.info("Multi-customer: built %d bundles for %s", len(bundles_data), source_pdf.name)
             t_sp0 = time.perf_counter()
@@ -2206,7 +2282,7 @@ def run_pre_ocr_and_prepare(
             )
             sp_ms = int((time.perf_counter() - t_sp0) * 1000)
             orchestration.append(
-                ("split_pdf_multi_customer_to_sale_dirs", sp_ms, f"customers={len(result_bundles)}"),
+                ("split_pdf_multi_customer_to_sale_dirs", sp_ms, f"customers={len(result_bundles)}", _off()),
             )
 
             first_mobile = result_bundles[0][2] if result_bundles else mobile
@@ -2216,7 +2292,7 @@ def run_pre_ocr_and_prepare(
                 rename_sale_artifact_bundle(ocr_out, artifact_leaf, first_sub, file_stem_safe, mob_stem)
             write_sale_text_artifact(ocr_out, first_sub, full_text)
             orchestration.append(
-                ("run_pre_ocr_and_prepare_done", None, f"path=multi_customer bundles={len(result_bundles)}"),
+                ("run_pre_ocr_and_prepare_done", None, f"path=multi_customer bundles={len(result_bundles)}", _off()),
             )
             _flush_pre(orchestration)
             return result_bundles, source_pdf.stem, first_mobile, ocr_path, None, None, None, None
@@ -2241,7 +2317,7 @@ def run_pre_ocr_and_prepare(
             has_aadhar_back = True
             logger.info("Treating single Aadhar page %d as Aadhar_combined (back may be blurred)", idx + 1)
     orchestration.append(
-        ("aadhar_combined_fallback", int((time.perf_counter() - t_fb0) * 1000), ""),
+        ("aadhar_combined_fallback", int((time.perf_counter() - t_fb0) * 1000), "", _off()),
     )
 
     t_val0 = time.perf_counter()
@@ -2255,13 +2331,13 @@ def run_pre_ocr_and_prepare(
     if PAGE_TYPE_DETAILS not in classified_types:
         missing.append("sales details form (vehicle & customer info)")
     orchestration.append(
-        ("validate_required_pages", int((time.perf_counter() - t_val0) * 1000), f"missing={len(missing)}"),
+        ("validate_required_pages", int((time.perf_counter() - t_val0) * 1000), f"missing={len(missing)}", _off()),
     )
 
     if missing:
-        orchestration.append(("run_pre_ocr_and_prepare_rejected", None, f"missing={','.join(missing)}"))
+        orchestration.append(("run_pre_ocr_and_prepare_rejected", None, f"missing={','.join(missing)}", _off()))
         write_sale_text_artifact(ocr_out, artifact_leaf, full_text)
-        early_orchestration: list[tuple[str, int | None, str]] = []
+        early_orchestration: list[tuple[str, int | None, str, int]] = []
         rejected_extras = _build_aadhaar_only_rejected_extras(
             missing=missing,
             classifications=classifications,
@@ -2269,9 +2345,13 @@ def run_pre_ocr_and_prepare(
             proc_dir=proc_dir,
             mobile=mobile,
             orchestration_out=early_orchestration,
+            t0_wall=t0_wall,
         )
         orchestration.extend(early_orchestration)
         _flush_pre(orchestration)
+        if rejected_extras is None:
+            rejected_extras = {}
+        rejected_extras["_t0_wall"] = t0_wall
         return None, source_pdf.stem, mobile, ocr_path, missing, page_images, dest_pdf, rejected_extras
 
     mobile_leaf = us.get_subdir_name_mobile(mobile)
@@ -2294,9 +2374,10 @@ def run_pre_ocr_and_prepare(
             "split_pdf_by_classification",
             int((time.perf_counter() - t_sp0) * 1000),
             f"sale_dir={subfolder}",
+            _off(),
         ),
     )
-    orchestration.append(("run_pre_ocr_and_prepare_done", None, "path=single_customer"))
+    orchestration.append(("run_pre_ocr_and_prepare_done", None, "path=single_customer", _off()))
     write_sale_text_artifact(ocr_out, mobile_leaf, full_text)
     _flush_pre(orchestration)
 

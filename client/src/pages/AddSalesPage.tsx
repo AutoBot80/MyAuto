@@ -31,6 +31,7 @@ import {
   normalizeDobToDdMmYyyy,
   parseCareOfFromCombined,
 } from "../utils/section2CustomerFormat";
+import { isPlaceholderCustomerMobileDigits } from "../utils/customerMobile";
 
 /** Shown under Upload documents while upload or OCR polling runs; counts down toward 00m:00s. */
 const ADD_SALES_OCR_COUNTDOWN_START_SEC = 40;
@@ -370,7 +371,7 @@ export function AddSalesPage({
         const mobRaw = rec.mobile_number ?? rec.mobile;
         if (mobRaw != null) {
           const digits = String(mobRaw).replace(/\D/g, "").slice(-10);
-          if (digits.length === 10) setMobile(digits);
+          if (digits.length === 10 && !isPlaceholderCustomerMobileDigits(digits)) setMobile(digits);
         }
       }
       const ins = details?.insurance;

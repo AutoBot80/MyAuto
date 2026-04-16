@@ -170,11 +170,12 @@ def get_bulk_processing_dir(dealer_id: int) -> Path:
 
 def get_add_sales_pre_ocr_work_dir(dealer_id: int) -> Path:
     """
-    Temp working directory for Add Sales consolidated-PDF pre-OCR (PDF copy + Tesseract ``*_pre_ocr.txt``).
-    Under **ocr_output/{dealer_id}/_add_sales_pre_ocr_work**, alongside per-sale OCR artifacts.
+    Temp working directory for Add Sales consolidated-PDF pre-OCR (PDF copy + Tesseract ``*_pre_ocr.txt``),
+    manual-fallback sessions, etc. Placed under **Uploaded scans/{dealer_id}/_add_sales_pre_ocr_work** so
+    ``ocr_output`` only holds per-sale OCR logs and text artifacts, not transient processing state.
     Used only by in-request ``run_pre_ocr_and_prepare`` — does **not** enqueue ``bulk_loads`` or the bulk worker queue.
     """
-    return get_ocr_output_dir(dealer_id) / "_add_sales_pre_ocr_work"
+    return get_uploads_dir(dealer_id) / "_add_sales_pre_ocr_work"
 
 # Form 20 blank templates (PDF). Prefer single official PDF (page 0=front, page 1=back).
 # Or use separate Form 20 Front.pdf and Form 20 back.pdf in Raw Scans/.
@@ -225,6 +226,12 @@ OCR_UPLOAD_TEXTRACT_TIMEOUT_SEC = int(os.getenv("OCR_UPLOAD_TEXTRACT_TIMEOUT_SEC
 OCR_PRE_OCR_TEXTRACT_DETAILS = _bool_env("OCR_PRE_OCR_TEXTRACT_DETAILS", True)
 # Pre-OCR: if Tesseract text on Aadhaar front/back/combined pages looks failed, retry via Textract DDT.
 OCR_PRE_OCR_TEXTRACT_AADHAR_FALLBACK = _bool_env("OCR_PRE_OCR_TEXTRACT_AADHAR_FALLBACK", True)
+# Pre-OCR: run Tesseract OSD (orientation detection) on each page before OCR. OSD costs ~5-6s per
+# page and only helps Tesseract (AWS Textract handles orientation automatically). With the UNUSED-page
+# DDT rescue in place, Tesseract failures on rotated pages are recoverable — so OSD is off by default.
+# Set to true only if scans regularly arrive rotated 90/180/270° and you want Tesseract (not just
+# Textract) to read them correctly on the first pass.
+OCR_PRE_OCR_OSD_ENABLED = _bool_env("OCR_PRE_OCR_OSD_ENABLED", False)
 # Credentials: set AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY (or use default profile).
 
 # Bulk queue / worker settings. Defaults: ``sqs_queue_defaults``; ``BULK_SQS_QUEUE_URL`` still from env only.

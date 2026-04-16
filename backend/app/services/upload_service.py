@@ -264,7 +264,12 @@ class UploadService:
 
             log_leaf = initial_artifact_leaf(safe_file_stem(dest_pdf.stem))
             ocr_out_dir = get_ocr_output_dir(dealer_id)
-            post_pre_steps: list[tuple[str, int | None, str]] = []
+            _t0_wall: float = (rejected_extras or {}).get("_t0_wall") or time.perf_counter()
+
+            def _post_off() -> int:
+                return int((time.perf_counter() - _t0_wall) * 1000)
+
+            post_pre_steps: list[tuple[str, int | None, str, int]] = []
 
             try:
                 t_split0 = time.perf_counter()
@@ -275,6 +280,7 @@ class UploadService:
                         "manual_session_jpeg_split",
                         split_ms,
                         f"pages={page_count} session={session_id[:8]}…",
+                        _post_off(),
                     ),
                 )
             except Exception as e:
@@ -287,7 +293,7 @@ class UploadService:
                     write_details_forms_cache(dealer_id, session_id, rejected_extras["details_forms_cache"])
                     cache_ms = int((time.perf_counter() - t_cache0) * 1000)
                     post_pre_steps.append(
-                        ("details_forms_cache_json_write", cache_ms, "details_forms_cache.json for manual-apply reuse"),
+                        ("details_forms_cache_json_write", cache_ms, "details_forms_cache.json for manual-apply reuse", _post_off()),
                     )
                 except Exception:
                     logger.exception("Could not write details_forms cache for session %s", session_id)

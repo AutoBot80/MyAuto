@@ -81,7 +81,7 @@ def write_manual_session_jpegs(
 
     imgs = page_images
     if not imgs:
-        pages, _osd = _pdf_to_page_images(dest_pdf)
+        pages, _osd, _timings = _pdf_to_page_images(dest_pdf)
         imgs = {idx: im for idx, im in pages}
 
     if not imgs:
