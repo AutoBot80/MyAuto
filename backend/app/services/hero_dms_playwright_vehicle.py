@@ -1262,9 +1262,10 @@ def _siebel_click_service_request_list_new_record(
             const hasNr = el.classList.contains('siebui-icon-newrecord');
             const al = (el.getAttribute('aria-label') || '').toLowerCase();
             const tt = (el.getAttribute('title') || '').toLowerCase();
+            const isSrToolbarSpan = (hid === 's_2_1_12_0' || hid === 's_3_1_12_0');
             const idOk = hasNr || isListNewNotMenu(el)
-                || (hid === 's_2_1_12_0' && (al.includes('new') || tt.includes('new') || al.includes('list') || tt.includes('list')))
-                || (hid === 's_2_1_12_0' && vis(el));
+                || (isSrToolbarSpan && (al.includes('new') || tt.includes('new') || al.includes('list') || tt.includes('list')))
+                || (isSrToolbarSpan && vis(el));
             if (!idOk) { diag.tried.push(hid + ':span-label-mismatch'); return false; }
             if (!vis(el)) { diag.tried.push(hid + ':not-visible'); return false; }
             try { el.scrollIntoView({ block: 'center' }); } catch (e) {}
@@ -1286,7 +1287,7 @@ def _siebel_click_service_request_list_new_record(
         const ids = [
             's_3_1_12_0_Ctrl', 's_2_1_14_0_Ctrl', 's_2_2_32_0', 's_2_1_12_0_Ctrl',
             's_2_2_31_0_Ctrl', 's_2_2_33_0_Ctrl', 's_2_1_11_0_Ctrl', 's_2_2_30_0_Ctrl',
-            's_2_1_12_0',
+            's_2_1_12_0', 's_3_1_12_0',
         ];
         for (const hid of ids) {
             if (tryClickId(hid)) return diag;
@@ -2408,55 +2409,149 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             return False, f"Siebel error after Pre-check Submit: {_submit_err[:200]}"
         note(f"{log_prefix}: Pre-check completed.")
 
+    _third_level_poll_js = """(needle) => {
+        const vis = (el) => {
+            if (!el) return false;
+            const st = window.getComputedStyle(el);
+            if (st.display === 'none' || st.visibility === 'hidden') return false;
+            const r = el.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+        };
+        const compact = (s) => s.replace(/[-\\s]+/g, '').toLowerCase();
+        const bar = document.getElementById('s_vctrl_div');
+        if (!bar || !vis(bar)) return { found: false, tabs: [] };
+        const tabs = Array.from(bar.querySelectorAll('a, button, [role="tab"], span, li'))
+            .filter(t => vis(t))
+            .map(t => (t.innerText || t.textContent || '').trim())
+            .filter(t => t.length > 0 && t.length < 40);
+        const hasPdi = tabs.some(t => compact(t) === compact(needle));
+        return { found: hasPdi, tabs };
+    }"""
+    if not _precheck_third_level_tabs_loaded:
+        note(f"{log_prefix}: third-level tabs not loaded after Pre-check — polling for PDI tab in s_vctrl_div.")
+        for _tl_poll in range(20):
+            _tl_found = False
+            for _root in _roots():
+                try:
+                    _tl_res = _root.evaluate(_third_level_poll_js, "PDI")
+                    if isinstance(_tl_res, dict) and _tl_res.get("found"):
+                        _tl_found = True
+                        note(
+                            f"{log_prefix}: third_level_tab_poll found PDI (attempt {_tl_poll + 1}/20) "
+                            f"tabs={_tl_res.get('tabs')!r}"
+                        )
+                        break
+                except Exception:
+                    continue
+            if _tl_found:
+                break
+            _safe_page_wait(page, 500, log_label=f"third_level_tab_poll_{_tl_poll}")
+        else:
+            _last_tabs = None
+            for _root in _roots():
+                try:
+                    _last_tabs = _root.evaluate(_third_level_poll_js, "PDI")
+                    if isinstance(_last_tabs, dict):
+                        break
+                except Exception:
+                    continue
+            note(
+                f"{log_prefix}: third_level_tab_poll exhausted (20 × 500ms) — "
+                f"last={_last_tabs!r}. Will attempt PDI tab click anyway."
+            )
+
     _pdi_tab_clicked = _click_third_level_view_bar_tab(
-        page, "PDI", wait_ms=300,
+        page, "PDI", wait_ms=1500,
         content_frame_selector=content_frame_selector, note=note, log_prefix=log_prefix,
     )
-    for root in _roots():
-        if _pdi_tab_clicked:
-            break
-        for _pdi_css in (
-            "a:has-text('PDI')",
-            "li:has-text('PDI') a",
-            "span:has-text('PDI')",
-            "[role='tab']:has-text('PDI')",
-            "button:has-text('PDI')",
-        ):
-            try:
-                loc = root.locator(_pdi_css).first
-                if loc.count() > 0 and loc.is_visible(timeout=300):
-                    try:
-                        loc.click(timeout=_tmo)
-                    except Exception:
-                        loc.click(timeout=_tmo, force=True)
-                    _pdi_tab_clicked = True
-                    break
-            except Exception:
-                continue
-        if _pdi_tab_clicked:
-            break
     if not _pdi_tab_clicked:
+        _pdi_tab_fallback_js = """() => {
+            const vis = (el) => {
+                if (!el) return false;
+                const st = window.getComputedStyle(el);
+                if (st.display === 'none' || st.visibility === 'hidden') return false;
+                const r = el.getBoundingClientRect();
+                return r.width > 0 && r.height > 0;
+            };
+            const isTabContext = (el) => {
+                let n = el;
+                for (let d = 0; d < 15 && n; d++) {
+                    const id = (n.id || '').toLowerCase();
+                    const cls = (n.className || '').toLowerCase();
+                    const role = (n.getAttribute('role') || '').toLowerCase();
+                    if (id === 's_vctrl_div' || id.includes('vctrl') || id.includes('tabview')
+                        || id.includes('tabscreen') || id.includes('sctrl_tab')
+                        || role === 'tablist' || role === 'tabpanel'
+                        || cls.includes('siebui-nav-tab') || cls.includes('ui-tabs-nav')
+                        || cls.includes('siebui-nav-tabs')) {
+                        return true;
+                    }
+                    n = n.parentElement;
+                }
+                return false;
+            };
+            const isFormLabel = (el) => {
+                let n = el;
+                for (let d = 0; d < 8 && n; d++) {
+                    const cls = (n.className || '').toLowerCase();
+                    if (cls.includes('mcegridlabel') || cls.includes('mcegridfield')
+                        || cls.includes('siebui-label') || cls.includes('siebui-value')
+                        || cls.includes('gridback') || cls.includes('formsection')
+                        || cls.includes('appletback') || cls.includes('siebui-applet-content')) {
+                        return true;
+                    }
+                    n = n.parentElement;
+                }
+                return false;
+            };
+            const compact = (s) => s.replace(/[-\\s]+/g, '').toLowerCase();
+            const containers = [
+                document.getElementById('s_vctrl_div'),
+                document.getElementById('s_sctrl_tabView'),
+                document.getElementById('s_sctrl'),
+            ].filter(c => c && vis(c));
+            for (const container of containers) {
+                const tabs = Array.from(container.querySelectorAll('a, li > a, span, button, [role="tab"]'));
+                for (const t of tabs) {
+                    if (!vis(t)) continue;
+                    const txt = (t.innerText || t.textContent || '').trim();
+                    if (compact(txt) !== 'pdi') continue;
+                    if (isFormLabel(t)) continue;
+                    try { t.scrollIntoView({ block: 'center' }); } catch (e) {}
+                    t.click();
+                    return { ok: true, src: 'container:' + (container.id || '?') };
+                }
+            }
+            const tabEls = Array.from(document.querySelectorAll('[role="tab"]'));
+            for (const t of tabEls) {
+                if (!vis(t)) continue;
+                const txt = (t.innerText || t.textContent || '').trim();
+                if (compact(txt) !== 'pdi') continue;
+                if (isFormLabel(t)) continue;
+                try { t.scrollIntoView({ block: 'center' }); } catch (e) {}
+                t.click();
+                return { ok: true, src: 'role-tab' };
+            }
+            const navTabs = Array.from(document.querySelectorAll(
+                '.siebui-nav-tab a, .siebui-nav-tabs a, .ui-tabs-nav a, .ui-tabs-nav li a'
+            ));
+            for (const t of navTabs) {
+                if (!vis(t)) continue;
+                const txt = (t.innerText || t.textContent || '').trim();
+                if (compact(txt) !== 'pdi') continue;
+                if (isFormLabel(t)) continue;
+                try { t.scrollIntoView({ block: 'center' }); } catch (e) {}
+                t.click();
+                return { ok: true, src: 'nav-tab' };
+            }
+            return { ok: false };
+        }"""
         for root in _roots():
             try:
-                hit = root.evaluate("""() => {
-                    const vis = (el) => {
-                        if (!el) return false;
-                        const st = window.getComputedStyle(el);
-                        if (st.display === 'none' || st.visibility === 'hidden') return false;
-                        const r = el.getBoundingClientRect();
-                        return r.width > 0 && r.height > 0;
-                    };
-                    const all = Array.from(document.querySelectorAll('a, li, span, button, [role="tab"]'));
-                    for (const el of all) {
-                        if ((el.innerText || '').trim() === 'PDI' && vis(el)) {
-                            el.click();
-                            return true;
-                        }
-                    }
-                    return false;
-                }""")
-                if hit:
+                _fb = root.evaluate(_pdi_tab_fallback_js)
+                if isinstance(_fb, dict) and _fb.get("ok"):
                     _pdi_tab_clicked = True
+                    note(f"{log_prefix}: clicked PDI tab (fallback src={_fb.get('src')!r}).")
                     break
             except Exception:
                 continue
@@ -2470,6 +2565,20 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     except Exception as e:
         if _is_browser_disconnected_error(e):
             raise
+
+    try:
+        _post_pdi_url = page.url or ""
+        _post_pdi_url_norm = _post_pdi_url.replace(" ", "+")
+        if "PDIPre+Assessment" in _post_pdi_url_norm or "Precheck+List+Applet" in _post_pdi_url_norm:
+            note(
+                f"{log_prefix}: WARNING — PDI tab click navigated to PDIPre Assessment / "
+                f"Precheck view ({_post_pdi_url_norm[:200]}). "
+                "This usually means the fallback matched a form label instead of a tab. "
+                "The Service Request grid will not render on this view."
+            )
+    except Exception:
+        pass
+
     _t_pdi_span = time.perf_counter()
     if pdi_span_start_out is not None:
         pdi_span_start_out.append(_t_pdi_span)
@@ -2490,21 +2599,48 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             const r = el.getBoundingClientRect();
             return r.width > 0 && r.height > 0;
         };
-        const s2l = document.getElementById('s_2_l');
         let jqRows = 0;
-        if (s2l && vis(s2l)) {
-            jqRows = s2l.querySelectorAll('tbody tr.jqgrow').length;
+        let gridId = '';
+        for (const gid of ['s_2_l', 's_3_l']) {
+            const tbl = document.getElementById(gid);
+            if (tbl && vis(tbl)) {
+                const rows = tbl.querySelectorAll('tbody tr.jqgrow').length;
+                if (rows > jqRows) {
+                    jqRows = rows;
+                    gridId = gid;
+                }
+            }
+        }
+        if (jqRows === 0) {
+            const btables = document.querySelectorAll('table.ui-jqgrid-btable');
+            for (const tb of btables) {
+                if (!vis(tb)) continue;
+                const rows = tb.querySelectorAll('tbody tr.jqgrow').length;
+                if (rows > jqRows) {
+                    jqRows = rows;
+                    gridId = tb.id || '(unnamed)';
+                }
+            }
         }
         let rcTotal = 0;
         let rcText = '';
-        const rc = document.getElementById('s_2_rc');
-        if (rc && vis(rc)) {
-            rcText = (rc.textContent || '').trim();
-            const m = rcText.match(/^(\\d+)\\s+of\\s+(\\d+)/);
-            if (m) rcTotal = parseInt(m[2], 10) || 0;
+        for (const rcId of ['s_2_rc', 's_3_rc']) {
+            const rc = document.getElementById(rcId);
+            if (rc && vis(rc)) {
+                const txt = (rc.textContent || '').trim();
+                const m = txt.match(/^(\\d+)\\s+of\\s+(\\d+)/);
+                if (m) {
+                    const total = parseInt(m[2], 10) || 0;
+                    if (total > rcTotal) {
+                        rcTotal = total;
+                        rcText = txt;
+                    }
+                }
+            }
         }
         return {
             jqRows,
+            gridId,
             rcTotal,
             rcText,
             ready: jqRows > 0 || rcTotal > 0,
@@ -2526,7 +2662,8 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             if _poll_diag and note:
                 note(
                     f"{log_prefix}: pdi_grid_ready_poll ok (attempt {_poll_i + 1}/15) "
-                    f"jqRows={_poll_diag.get('jqRows')} rcTotal={_poll_diag.get('rcTotal')} "
+                    f"jqRows={_poll_diag.get('jqRows')} gridId={_poll_diag.get('gridId')!r} "
+                    f"rcTotal={_poll_diag.get('rcTotal')} "
                     f"rcText={_poll_diag.get('rcText')!r}"
                 )
             break
@@ -2576,7 +2713,9 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             '[aria-labelledby*="HMCL_PDI_Expiry_Date"]',
             '[aria-labelledby*="PDI_Expiry_Date"]',
             '[aria-labelledby*="s_2_l_altDateTime"]',
+            '[aria-labelledby*="s_3_l_altDateTime"]',
             '[id*="s_2_l_altDateTime"]',
+            '[id*="s_3_l_altDateTime"]',
             '[id*="HMCL_PDI_Expiry"]',
         ].join(', ');
         document.querySelectorAll(sel).forEach((el) => {
@@ -2667,6 +2806,9 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 if (id.includes('s_2_l') || id.includes('gview_s_2') || id === 'gbox_s_2_l' || hay.includes('hmcl+pdi')) {
                     return true;
                 }
+                if (id.includes('s_3_l') || id.includes('gview_s_3') || id === 'gbox_s_3_l') {
+                    return true;
+                }
                 if (hay.includes('pdi') && (hay.includes('list') || hay.includes('applet') || hay.includes('service'))) {
                     return true;
                 }
@@ -2692,32 +2834,47 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             }).length;
         };
         let tables = Array.from(document.querySelectorAll('table.ui-jqgrid-btable')).filter((tb) => vis(tb) && isPdiListScoped(tb));
-        const s2l = document.getElementById('s_2_l');
-        if (s2l && vis(s2l) && !tables.includes(s2l)) {
-            tables.push(s2l);
+        for (const directId of ['s_2_l', 's_3_l']) {
+            const tbl = document.getElementById(directId);
+            if (tbl && vis(tbl) && !tables.includes(tbl)) {
+                tables.push(tbl);
+            }
         }
         if (tables.length === 0) {
             tables = Array.from(document.querySelectorAll('table')).filter((tb) => vis(tb) && isPdiListScoped(tb));
         }
         let rowCounterValue = '';
         let rowCounterRows = 0;
-        const rcEl = document.getElementById('s_2_rc');
-        if (rcEl && vis(rcEl)) {
-            rowCounterValue = (rcEl.textContent || '').trim();
-            const rm = rowCounterValue.match(/^(\\d+)\\s+of\\s+(\\d+)/);
-            if (rm) rowCounterRows = parseInt(rm[2], 10) || 0;
+        for (const rcId of ['s_2_rc', 's_3_rc']) {
+            const rcEl = document.getElementById(rcId);
+            if (rcEl && vis(rcEl)) {
+                const txt = (rcEl.textContent || '').trim();
+                const rm = txt.match(/^(\\d+)\\s+of\\s+(\\d+)/);
+                if (rm) {
+                    const total = parseInt(rm[2], 10) || 0;
+                    if (total > rowCounterRows) {
+                        rowCounterRows = total;
+                        rowCounterValue = txt;
+                    }
+                }
+            }
         }
         let pdiDataCellHit = false;
         const cellProbeIds = [
             '1_s_2_l_HMCL_PDI_Expiry_Date', '1_s_2_l_PDI_Expiry_Date', '1_s_2_l_HHML_PDI_Expiry',
             '2_s_2_l_HMCL_PDI_Expiry_Date', '2_s_2_l_PDI_Expiry_Date',
+            '1_s_3_l_HMCL_PDI_Expiry_Date', '1_s_3_l_PDI_Expiry_Date', '1_s_3_l_HHML_PDI_Expiry',
+            '2_s_3_l_HMCL_PDI_Expiry_Date', '2_s_3_l_PDI_Expiry_Date',
         ];
         for (const cid of cellProbeIds) {
             const dc = document.getElementById(cid);
             if (dc && vis(dc)) { pdiDataCellHit = true; break; }
         }
         if (!pdiDataCellHit) {
-            const probe = document.querySelector('[id^="1_s_2_l_"][id*="Expiry"], [id^="2_s_2_l_"][id*="Expiry"]');
+            const probe = document.querySelector(
+                '[id^="1_s_2_l_"][id*="Expiry"], [id^="2_s_2_l_"][id*="Expiry"], '
+                + '[id^="1_s_3_l_"][id*="Expiry"], [id^="2_s_3_l_"][id*="Expiry"]'
+            );
             if (probe && vis(probe)) pdiDataCellHit = true;
         }
         let best = {
