@@ -7639,8 +7639,19 @@ def _hero_misp_fill_proposal_and_review(
         )
         if err:
             return _proposal_fail(ocr_output_dir, subfolder, err)
+        # Financer + agreement often trigger UpdatePanel; branch textbox may attach late.
+        # ``_t`` caps at 200ms — use an explicit settle for postbacks.
+        try:
+            page.wait_for_timeout(600)
+        except Exception:
+            try:
+                time.sleep(0.6)
+            except Exception:
+                pass
 
-    branch_city = city
+    # Prefer proposer city; else RTO name (dealer_ref) — matches "Finance Company Branch"
+    # when customer city is empty or differs from the loan/RTO location (e.g. Bharatpur).
+    branch_city = city or (values.get("rto_name") or "").strip()
     if branch_city and fin:
         err = _proposal_step_fill_input(
             page,
@@ -7657,6 +7668,29 @@ def _hero_misp_fill_proposal_and_review(
             timeout_ms=pt,
             cph1_id_suffix="txtFinComBranch",
         )
+        if err:
+            try:
+                page.wait_for_timeout(1_000)
+            except Exception:
+                try:
+                    time.sleep(1.0)
+                except Exception:
+                    pass
+            err = _proposal_step_fill_input(
+                page,
+                (
+                    r"Finance\s*Company\s*Branch",
+                    r"Financier\s*Branch",
+                    r"Branch\s*Name",
+                    r"Finance\s*Branch",
+                ),
+                branch_city,
+                "finance_branch_retry",
+                ocr_output_dir,
+                subfolder,
+                timeout_ms=pt,
+                cph1_id_suffix="txtFinComBranch",
+            )
         if err:
             return _proposal_fail(ocr_output_dir, subfolder, err)
 
