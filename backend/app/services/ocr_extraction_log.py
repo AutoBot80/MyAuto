@@ -1,5 +1,5 @@
 """
-Append-only extraction diary: ``ocr_output/{dealer}/{stem}_{ddmmyy}/{stem}_log.txt`` (IST).
+Append-only extraction diary: ``pre`` → ``pre_ocr_log.txt``; ``ocr``/``post`` → ``{stem}_ocr_log.txt`` under ``ocr_output/{dealer}/{stem}_{ddmmyy}/``.
 
 Phases: **pre** (Tesseract pre-OCR / manual prep), **ocr** (Textract + merge), **post** (compress/move).
 
@@ -23,7 +23,7 @@ def append_ocr_extraction_log(
     message: str,
 ) -> None:
     """
-    Append one line to ``{stem}_log.txt`` under the sale's OCR subfolder.
+    Append one line to ``pre_ocr_log.txt`` (phase **pre**) or ``{stem}_ocr_log.txt`` (other phases).
 
     ``phase`` is typically ``pre``, ``ocr``, or ``post`` (informational only).
     Silently no-ops if ``ocr_output_dir`` is missing or the path cannot be written.

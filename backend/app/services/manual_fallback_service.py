@@ -196,7 +196,7 @@ def apply_manual_session(
     append_ocr_extraction_log(
         ocr_dir,
         subfolder,
-        "pre",
+        "ocr",
         "Manual fallback: for_OCR populated from user-assigned pages (Textract may follow in upload handler).",
     )
 

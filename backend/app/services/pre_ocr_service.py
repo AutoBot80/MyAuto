@@ -1897,15 +1897,24 @@ def _build_aadhaar_only_rejected_extras(
     page_images: dict[int, Image.Image] | None,
     proc_dir: Path,
     mobile: str | None,
+    orchestration_out: list[tuple[str, int | None, str]] | None = None,
 ) -> dict[str, Any] | None:
     """
     When pre-OCR rejects for missing Aadhaar slots but Details + mobile are OK, run **one** FORMS Textract
     on the classified Details page and return cache + UI hints. On failure, return hints only.
+
+    Appends timed steps to ``orchestration_out`` so they can be flushed to the same pre-OCR log as the rest
+    of the pipeline (this work previously ran *after* the first flush, appearing as a silent gap).
     """
     from uuid import uuid4
 
+    def _out(step_id: str, ms: int | None, detail: str) -> None:
+        if orchestration_out is not None:
+            orchestration_out.append((step_id, ms, detail))
+
     page_count = _page_count_from_pre_ocr(classifications, page_images)
     if page_count < 1:
+        _out("details_forms_early_extract_skipped", None, "page_count=0")
         return None
     suggested_roles = _suggested_roles_from_classifications(classifications, page_count)
     locked_details_index = _locked_details_page_index(classifications)
@@ -1921,9 +1930,19 @@ def _build_aadhaar_only_rejected_extras(
         "locked_details_index": locked_details_index,
     }
     if not aadhaar_only or not page_images:
+        _out(
+            "details_forms_early_extract_skipped",
+            None,
+            f"aadhaar_only={aadhaar_only} has_page_images={bool(page_images)}",
+        )
         return base
     details_idx = locked_details_index
     if details_idx is None or details_idx not in page_images:
+        _out(
+            "details_forms_early_extract_skipped",
+            None,
+            f"details_idx={details_idx!r} raster_keys={sorted(page_images.keys()) if page_images else []}",
+        )
         return base
     try:
         from app.services.sales_ocr_service import (
@@ -1934,14 +1953,34 @@ def _build_aadhaar_only_rejected_extras(
 
         img = page_images[details_idx]
         jpeg_bytes = _pil_rgb_to_jpeg_bytes(img)
+        logger.info(
+            "Aadhaar-only reject: running Details AnalyzeDocument FORMS (page_index=%s, jpeg_bytes=%s)",
+            details_idx,
+            len(jpeg_bytes),
+        )
+        t_forms = time.perf_counter()
         details_forms_cache = extract_forms_from_bytes(jpeg_bytes)
+        forms_ms = int((time.perf_counter() - t_forms) * 1000)
+        _out(
+            "details_forms_early_extract_analyze_document",
+            forms_ms,
+            f"page_index={details_idx} jpeg_bytes={len(jpeg_bytes)}",
+        )
         if details_forms_cache.get("error"):
             logger.warning("Details FORMS early extract failed: %s", details_forms_cache.get("error"))
+            _out("details_forms_early_extract_error", forms_ms, str(details_forms_cache.get("error"))[:240])
             return base
         tmp_path = proc_dir / f"details_early_{uuid4().hex[:12]}.jpg"
         tmp_path.write_bytes(jpeg_bytes)
         try:
+            t_comp = time.perf_counter()
             frag = _compile_details_sheet_fragment(tmp_path, details_forms_cache)
+            comp_ms = int((time.perf_counter() - t_comp) * 1000)
+            _out(
+                "details_fragment_compile_after_early_forms",
+                comp_ms,
+                "merge vehicle/customer/insurance for API",
+            )
             frag["ok"] = True
             api_details = details_fragment_to_api_payload(frag)
             base["details_forms_cache"] = details_forms_cache
@@ -1950,6 +1989,7 @@ def _build_aadhaar_only_rejected_extras(
             tmp_path.unlink(missing_ok=True)
     except Exception:
         logger.exception("Aadhaar-only rejected path: Details FORMS early extract failed")
+        _out("details_forms_early_extract_exception", None, "see server log for traceback")
     return base
 
 
@@ -2221,14 +2261,17 @@ def run_pre_ocr_and_prepare(
     if missing:
         orchestration.append(("run_pre_ocr_and_prepare_rejected", None, f"missing={','.join(missing)}"))
         write_sale_text_artifact(ocr_out, artifact_leaf, full_text)
-        _flush_pre(orchestration)
+        early_orchestration: list[tuple[str, int | None, str]] = []
         rejected_extras = _build_aadhaar_only_rejected_extras(
             missing=missing,
             classifications=classifications,
             page_images=page_images,
             proc_dir=proc_dir,
             mobile=mobile,
+            orchestration_out=early_orchestration,
         )
+        orchestration.extend(early_orchestration)
+        _flush_pre(orchestration)
         return None, source_pdf.stem, mobile, ocr_path, missing, page_images, dest_pdf, rejected_extras
 
     mobile_leaf = us.get_subdir_name_mobile(mobile)

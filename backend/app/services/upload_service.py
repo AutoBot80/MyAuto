@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -19,7 +20,12 @@ from app.config import (
     get_uploaded_scans_sale_subfolder_leaf,
     get_uploads_dir,
 )
-from app.services.ocr_extraction_log import append_ocr_extraction_log
+from app.services.ocr_extraction_log import append_ocr_extraction_log, append_pre_ocr_step_lines
+from app.services.ocr_sale_artifacts import (
+    consolidate_peer_pre_ocr_folder_into_mobile,
+    initial_artifact_leaf,
+    safe_file_stem,
+)
 from app.services.page_classifier import FILENAME_AADHAR_FRONT
 from app.services.upload_file_validation import (
     read_upload_capped,
@@ -256,17 +262,37 @@ class UploadService:
                 write_manual_session_jpegs,
             )
 
+            log_leaf = initial_artifact_leaf(safe_file_stem(dest_pdf.stem))
+            ocr_out_dir = get_ocr_output_dir(dealer_id)
+            post_pre_steps: list[tuple[str, int | None, str]] = []
+
             try:
+                t_split0 = time.perf_counter()
                 session_id, page_count = write_manual_session_jpegs(dealer_id, dest_pdf, page_images or {})
+                split_ms = int((time.perf_counter() - t_split0) * 1000)
+                post_pre_steps.append(
+                    (
+                        "manual_session_jpeg_split",
+                        split_ms,
+                        f"pages={page_count} session={session_id[:8]}…",
+                    ),
+                )
             except Exception as e:
                 logger.exception("manual fallback split failed")
                 return {"error": f"{self._pre_ocr_rejection_message(missing)} (Could not prepare manual split: {e})"}
 
             if rejected_extras and rejected_extras.get("details_forms_cache"):
+                t_cache0 = time.perf_counter()
                 try:
                     write_details_forms_cache(dealer_id, session_id, rejected_extras["details_forms_cache"])
+                    cache_ms = int((time.perf_counter() - t_cache0) * 1000)
+                    post_pre_steps.append(
+                        ("details_forms_cache_json_write", cache_ms, "details_forms_cache.json for manual-apply reuse"),
+                    )
                 except Exception:
                     logger.exception("Could not write details_forms cache for session %s", session_id)
+
+            append_pre_ocr_step_lines(ocr_out_dir, log_leaf, post_pre_steps)
 
             mf: dict[str, Any] = {
                 "session_id": session_id,
@@ -423,6 +449,11 @@ class UploadService:
         except Exception as e:
             logger.exception("manual-apply OCR failed subfolder=%s", subfolder)
             extraction_result = {"error": str(e), "manual_only": True}
+        finally:
+            try:
+                consolidate_peer_pre_ocr_folder_into_mobile(get_ocr_output_dir(dealer_id), subfolder)
+            except Exception:
+                logger.exception("consolidate_peer_pre_ocr_folder_into_mobile failed subfolder=%s", subfolder)
 
         final_sale = uploads_dir / subfolder
         saved_names: list[str] = []
