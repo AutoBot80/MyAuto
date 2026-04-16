@@ -36,12 +36,14 @@ from typing import Any
 
 from PIL import Image
 
+from app.placeholder_mobile import is_placeholder_indian_mobile
 from app.config import (
     BULK_UPLOAD_DIR,
     OCR_LANG,
     OCR_PSM,
     OCR_PREPROCESS,
     OCR_PRE_OCR_OSD_ENABLED,
+    OCR_PRE_OCR_RASTER_DPI,
     OCR_PRE_OCR_TEXTRACT_AADHAR_FALLBACK,
     OCR_PRE_OCR_TEXTRACT_DETAILS,
     UPLOADS_DIR,
@@ -228,15 +230,12 @@ def _pil_rgb_to_jpeg_bytes(img: Image.Image, quality: int = 90) -> bytes:
     return buf.getvalue()
 
 
-_PDF_RASTER_DPI = 200
-
-
 def _pdf_to_page_images(
     pdf_path: Path,
     max_pages: int = 20,
     *,
     fix_orientation: bool = True,
-    dpi: int = _PDF_RASTER_DPI,
+    dpi: int = OCR_PRE_OCR_RASTER_DPI,
 ) -> tuple[list[tuple[int, Image.Image]], dict[int, int], list[tuple[str, int, str]]]:
     """
     Render PDF pages to **PIL RGB** (PyMuPDF pixmap). Tesseract needs pixels, not vectors; this avoids
@@ -281,7 +280,7 @@ def _pdf_to_page_images(
     return result, osd_rotations, page_timings
 
 
-def _rasterize_single_pdf_page(pdf_path: Path, page_0: int, *, dpi: int = _PDF_RASTER_DPI) -> Image.Image:
+def _rasterize_single_pdf_page(pdf_path: Path, page_0: int, *, dpi: int = OCR_PRE_OCR_RASTER_DPI) -> Image.Image:
     """Render one PDF page to PIL RGB via PyMuPDF."""
     import fitz
 
@@ -605,7 +604,7 @@ def try_write_pencil_mark_for_sale_folder(sale_dir: Path) -> bool:
         try:
             if doc.page_count < 1:
                 return False
-            pix = doc[0].get_pixmap(dpi=150)
+            pix = doc[0].get_pixmap(dpi=OCR_PRE_OCR_RASTER_DPI)
             img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
             buf = io.BytesIO()
             img.save(buf, "JPEG", quality=90)
@@ -642,7 +641,7 @@ def _export_single_page_pdfs_to_raw(
                 rot = osd_rotations[i]
             else:
                 page = src[i]
-                pix = page.get_pixmap(dpi=150)
+                pix = page.get_pixmap(dpi=OCR_PRE_OCR_RASTER_DPI)
                 img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
                 rot = osd_deskew_clockwise_degrees_from_image(img)
 
@@ -1248,14 +1247,6 @@ def _pre_ocr_text_from_sales_detail_sheet_onward(full_text: str) -> str:
     return full_text
 
 
-# Printed sample / UI placeholder numbers — must not become customer folder names or “resolved” mobile.
-_PLACEHOLDER_INDIAN_MOBILES: frozenset[str] = frozenset({"9876543210"})
-
-
-def _is_placeholder_indian_mobile(ten: str) -> bool:
-    return bool(ten) and ten in _PLACEHOLDER_INDIAN_MOBILES
-
-
 def _normalize_indian_mobile_hint(raw: str | None) -> str | None:
     """Return a valid 10-digit Indian mobile from user/form input (handles spaces, +91)."""
     if not raw or not str(raw).strip():
@@ -1264,7 +1255,7 @@ def _normalize_indian_mobile_hint(raw: str | None) -> str | None:
     if len(digits) < 10:
         return None
     ten = digits[-10:]
-    if ten[0] in "6789" and not _is_placeholder_indian_mobile(ten):
+    if ten[0] in "6789" and not is_placeholder_indian_mobile(ten):
         return ten
     return None
 
@@ -1282,11 +1273,11 @@ def _extract_mobile_from_text(text: str) -> str | None:
     for pattern in (DETAILS_SHEET_MOBILE_NUMBER_LABEL, CUSTOMER_MOBILE_CONTEXT):
         for match in pattern.finditer(text):
             ten = match.group(1)
-            if ten and not _is_placeholder_indian_mobile(ten):
+            if ten and not is_placeholder_indian_mobile(ten):
                 return ten
     for match in MOBILE_PATTERN.finditer(text):
         ten = match.group(1)
-        if ten and not _is_placeholder_indian_mobile(ten):
+        if ten and not is_placeholder_indian_mobile(ten):
             return ten
     return None
 
@@ -1299,17 +1290,17 @@ def _extract_all_mobiles_from_text(text: str) -> list[str]:
     result: list[str] = []
     for match in DETAILS_SHEET_MOBILE_NUMBER_LABEL.finditer(text):
         m = match.group(1)
-        if m and m not in seen and not _is_placeholder_indian_mobile(m):
+        if m and m not in seen and not is_placeholder_indian_mobile(m):
             seen.add(m)
             result.append(m)
     for match in CUSTOMER_MOBILE_CONTEXT.finditer(text):
         m = match.group(1)
-        if m and m not in seen and not _is_placeholder_indian_mobile(m):
+        if m and m not in seen and not is_placeholder_indian_mobile(m):
             seen.add(m)
             result.append(m)
     for match in MOBILE_PATTERN.finditer(text):
         m = match.group(1)
-        if m and m not in seen and not _is_placeholder_indian_mobile(m):
+        if m and m not in seen and not is_placeholder_indian_mobile(m):
             seen.add(m)
             result.append(m)
     return result

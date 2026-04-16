@@ -77,7 +77,7 @@ def test_write_and_apply_manual_session(mock_work, tmp_path: Path) -> None:
         sub, saved = apply_manual_session(
             100001,
             session_id,
-            "9876543210",
+            "9876501234",
             {
                 "0": ROLE_AADHAR_FRONT,
                 "1": ROLE_AADHAR_BACK,
@@ -97,6 +97,22 @@ def test_write_and_apply_manual_session(mock_work, tmp_path: Path) -> None:
 
 
 @patch("app.services.manual_fallback_service.get_add_sales_pre_ocr_work_dir")
+def test_apply_rejects_placeholder_mobile(mock_work, tmp_path: Path) -> None:
+    work = tmp_path / "work"
+    work.mkdir()
+    mock_work.return_value = work
+    pdf = _rgb_pdf_with_pages(tmp_path, 3)
+    session_id, _ = write_manual_session_jpegs(100001, pdf, {})
+    with pytest.raises(ValueError, match="placeholder"):
+        apply_manual_session(
+            100001,
+            session_id,
+            "9876543210",
+            {"0": ROLE_AADHAR_FRONT, "1": ROLE_AADHAR_BACK, "2": ROLE_DETAILS},
+        )
+
+
+@patch("app.services.manual_fallback_service.get_add_sales_pre_ocr_work_dir")
 def test_apply_rejects_bad_role_count(mock_work, tmp_path: Path) -> None:
     work = tmp_path / "work"
     work.mkdir()
@@ -108,6 +124,6 @@ def test_apply_rejects_bad_role_count(mock_work, tmp_path: Path) -> None:
         apply_manual_session(
             100001,
             session_id,
-            "9876543210",
+            "9876501234",
             {"0": ROLE_AADHAR_FRONT, "1": ROLE_AADHAR_BACK, "2": ROLE_UNUSED},
         )

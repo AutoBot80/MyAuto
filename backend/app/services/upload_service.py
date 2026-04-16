@@ -379,6 +379,14 @@ class UploadService:
                 extraction_result["details"] = details
         except Exception as e:
             extraction_result = {"error": str(e), "processed": []}
+        finally:
+            try:
+                consolidate_peer_pre_ocr_folder_into_mobile(get_ocr_output_dir(dealer_id), subdir_name)
+            except Exception:
+                logger.exception(
+                    "consolidate_peer_pre_ocr_folder_into_mobile failed subfolder=%s",
+                    subdir_name,
+                )
 
         saved: list[str] = []
         final_sale = uploads_dir / subdir_name

@@ -16,6 +16,7 @@ from uuid import uuid4
 from PIL import Image
 
 from app.config import get_add_sales_pre_ocr_work_dir, get_ocr_output_dir, get_uploaded_scans_sale_subfolder_leaf, get_uploads_dir
+from app.placeholder_mobile import is_placeholder_indian_mobile
 from app.services.ocr_extraction_log import append_ocr_extraction_log
 from app.services.page_classifier import (
     FILENAME_AADHAR_BACK,
@@ -122,6 +123,8 @@ def apply_manual_session(
     digits = "".join(c for c in mobile if c.isdigit())
     if len(digits) != 10:
         raise ValueError("Invalid mobile. Expected 10 digits.")
+    if is_placeholder_indian_mobile(digits):
+        raise ValueError("Invalid mobile. Sample / placeholder numbers are not allowed.")
 
     session_dir = _session_base(dealer_id, session_id)
     if not session_dir.is_dir():

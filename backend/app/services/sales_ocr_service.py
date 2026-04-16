@@ -26,7 +26,13 @@ from app.services.customer_address_infer import (
     normalize_address_freeform,
 )
 from app.services.ocr_extraction_log import append_ocr_extraction_log
-from app.services.ocr_sale_artifacts import merged_text_artifact_path, stem_from_subfolder_leaf
+from app.placeholder_mobile import is_placeholder_indian_mobile
+from app.services.ocr_sale_artifacts import (
+    merged_text_artifact_path,
+    ocr_text_filename,
+    parse_sale_subfolder_leaf,
+    stem_from_subfolder_leaf,
+)
 from app.services.page_classifier import (
     FILENAME_AADHAR_FRONT,
     FILENAME_SALES_DETAIL_SHEET_PDF,
@@ -1257,7 +1263,7 @@ def _apply_aadhar_textract_fallbacks_from_raw_ocr_file(
     ocr_output_dir: Path,
     subfolder: str,
 ) -> None:
-    """Same as parts merge, using persisted merged text artifact (``{stem}_ocr_text.txt`` or legacy ``Raw_OCR.txt``)."""
+    """Same as parts merge, using persisted merged text artifact (``{stem}_AWS_ocr_text.txt`` or legacy ``Raw_OCR.txt``)."""
     raw_path = merged_text_artifact_path(ocr_output_dir, subfolder)
     if not raw_path.is_file():
         return
@@ -3659,12 +3665,21 @@ class OcrService:
         When ``details_forms_prefetch`` is set (manual session reuse), that dict is used as the Details
         FORMS result and **no** second AnalyzeDocument call is made for the sales detail sheet.
 
-        Writes ``{stem}_ocr_text.txt`` (all sections; replaces legacy ``Raw_OCR.txt``), including Details sheet
+        Writes ``{stem}_AWS_ocr_text.txt`` (all sections; replaces legacy ``Raw_OCR.txt``), including Details sheet
         LINE ``full_text`` or FORMS/TABLE fallback when LINE text is empty, and returns ``section_timings_ms``.
         """
         subdir = self.uploads_dir / subfolder
         if not subdir.exists() or not subdir.is_dir():
             return {"error": f"Subfolder not found: {subfolder}", "processed": []}
+
+        parsed_leaf = parse_sale_subfolder_leaf(subfolder)
+        if parsed_leaf:
+            leaf_stem, _dd = parsed_leaf
+            if len(leaf_stem) == 10 and leaf_stem.isdigit() and is_placeholder_indian_mobile(leaf_stem):
+                return {
+                    "error": "Sale subfolder uses a placeholder mobile; use a real 10-digit customer number.",
+                    "processed": [],
+                }
 
         processed: list[str] = []
         errors: list[str] = []
@@ -3843,7 +3858,7 @@ class OcrService:
             text_body = "\n".join(raw_lines)
             stem = stem_from_subfolder_leaf(subfolder_name)
             if stem:
-                (subfolder_path / f"{stem}_ocr_text.txt").write_text(text_body, encoding="utf-8")
+                (subfolder_path / ocr_text_filename(stem)).write_text(text_body, encoding="utf-8")
             else:
                 (subfolder_path / "Raw_OCR.txt").write_text(text_body, encoding="utf-8")
             _apply_aadhar_textract_fallbacks_from_parts(
