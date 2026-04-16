@@ -1,4 +1,4 @@
-"""Tests for manual OCR fallback split and apply (no Textract)."""
+"""Tests for manual OCR fallback split and apply."""
 
 from __future__ import annotations
 
@@ -13,7 +13,9 @@ from app.services.manual_fallback_service import (
     ROLE_DETAILS,
     ROLE_UNUSED,
     apply_manual_session,
+    read_details_forms_cache,
     validate_session_id,
+    write_details_forms_cache,
     write_manual_session_jpegs,
 )
 
@@ -29,6 +31,19 @@ def _rgb_pdf_with_pages(tmp_path: Path, n: int) -> Path:
     doc.save(str(pdf))
     doc.close()
     return pdf
+
+
+@patch("app.services.manual_fallback_service.get_add_sales_pre_ocr_work_dir")
+def test_details_forms_cache_roundtrip(mock_work, tmp_path: Path) -> None:
+    work = tmp_path / "work"
+    work.mkdir()
+    mock_work.return_value = work
+    pdf = _rgb_pdf_with_pages(tmp_path, 3)
+    session_id, _ = write_manual_session_jpegs(100001, pdf, {})
+    cache = {"full_text": "hello", "key_value_pairs": [], "tables": [], "error": None}
+    write_details_forms_cache(100001, session_id, cache)
+    loaded = read_details_forms_cache(100001, session_id)
+    assert loaded == cache
 
 
 def test_validate_session_id() -> None:

@@ -200,7 +200,7 @@ export async function uploadScansV2ConsolidatedStream(
   return final;
 }
 
-/** Assign split pages to document slots after pre-OCR failure (no Textract/OCR run). */
+/** Assign split pages to document slots after pre-OCR failure; then runs Textract (reuses cached Details FORMS when present). */
 export async function applyConsolidatedManualFallback(
   sessionId: string,
   mobile: string,

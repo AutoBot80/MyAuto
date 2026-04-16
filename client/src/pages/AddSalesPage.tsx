@@ -417,9 +417,6 @@ export function AddSalesPage({
       if (scannerArchive) setPendingScannerArchiveMove(scannerArchive);
       setExtractionError(null);
       setManualFormOnly(false);
-      setExtractedCustomer((prev) => prev ?? {});
-      setExtractedVehicle((prev) => prev ?? {});
-      setExtractedInsurance((prev) => prev ?? {});
     },
   }, dealerId);
 
@@ -1362,15 +1359,24 @@ export function AddSalesPage({
                     dealerId={dealerId}
                     mobile={mobile}
                     isMobileValid={isMobileValid}
-                    onApplied={(to, files) => {
+                    onApplied={(to, files, extraction) => {
                       setSavedTo(to);
                       setUploadedFiles(files);
                       setManualFallbackPayload(null);
-                      setManualFormOnly(true);
-                      setExtractedCustomer((x) => x ?? {});
-                      setExtractedVehicle((x) => x ?? {});
-                      setExtractedInsurance((x) => x ?? {});
-                      setUploadStatus(`Documents saved to ${to}. Fill Section 2 manually.`);
+                      const err = extraction?.error;
+                      const details = extraction?.details;
+                      if (!err && details) {
+                        applyExtractedDetails(details, { savedToForWarm: to });
+                        setManualFormOnly(false);
+                        setUploadStatus(`Documents saved to ${to}. Review Section 2 and Submit Info when ready.`);
+                      } else {
+                        setManualFormOnly(true);
+                        setUploadStatus(
+                          err
+                            ? `Documents saved to ${to}. OCR: ${err}. Fill Section 2 manually.`
+                            : `Documents saved to ${to}. Fill Section 2 manually.`
+                        );
+                      }
                     }}
                     onDismiss={() => {
                       setManualFallbackPayload(null);

@@ -20,7 +20,7 @@ _Add entries below. Remove them after the corresponding BRD/HLD/LLD/DDL updates 
 
 | Date (IST) | Doc / area | Summary |
 |------------|------------|---------|
-| | | |
+| 2026-04-15 | New doc / cloud | Added `Production_cloud_design.md`—AWS prod flow (CloudFront→WAF→ALB→ASG), Gunicorn/Nginx, Terraform pointer, deployment BR, ASG max=2 + watcher decision placeholder. |
 
 ---
 

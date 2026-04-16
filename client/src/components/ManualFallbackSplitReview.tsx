@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { applyConsolidatedManualFallback, fetchManualSessionPageObjectUrl } from "../api/uploads";
-import type { ManualFallbackPayload } from "../types";
+import type { ManualFallbackPayload, UploadScansResponse } from "../types";
 
 const ROLE_OPTIONS = [
   { value: "aadhar_front", label: "Aadhar_front.jpg" },
@@ -18,12 +18,20 @@ function defaultRoles(pageCount: number): string[] {
   });
 }
 
+function initialRolesFromPayload(payload: ManualFallbackPayload): string[] {
+  const { page_count: pageCount, suggested_roles: sr } = payload;
+  if (Array.isArray(sr) && sr.length === pageCount) {
+    return sr.map((r) => (typeof r === "string" ? r : "unused"));
+  }
+  return defaultRoles(pageCount);
+}
+
 export interface ManualFallbackSplitReviewProps {
   payload: ManualFallbackPayload;
   dealerId: number;
   mobile: string;
   isMobileValid: boolean;
-  onApplied: (savedTo: string, savedFiles: string[]) => void;
+  onApplied: (savedTo: string, savedFiles: string[], extraction?: UploadScansResponse["extraction"]) => void;
   onDismiss: () => void;
 }
 
@@ -36,15 +44,18 @@ export function ManualFallbackSplitReview({
   onDismiss,
 }: ManualFallbackSplitReviewProps) {
   const { session_id: sessionId, page_count: pageCount } = payload;
-  const [roles, setRoles] = useState<string[]>(() => defaultRoles(pageCount));
+  const [roles, setRoles] = useState<string[]>(() => initialRolesFromPayload(payload));
   const [previewUrls, setPreviewUrls] = useState<string[]>([]);
   const [applyError, setApplyError] = useState<string | null>(null);
   const [applying, setApplying] = useState(false);
   const blobUrlsRef = useRef<string[]>([]);
 
+  const suggestedRolesKey = Array.isArray(payload.suggested_roles)
+    ? payload.suggested_roles.join("|")
+    : "";
   useEffect(() => {
-    setRoles(defaultRoles(pageCount));
-  }, [sessionId, pageCount]);
+    setRoles(initialRolesFromPayload(payload));
+  }, [sessionId, pageCount, suggestedRolesKey]);
 
   useEffect(() => {
     blobUrlsRef.current.forEach((u) => URL.revokeObjectURL(u));
@@ -102,7 +113,7 @@ export function ManualFallbackSplitReview({
       const data = await applyConsolidatedManualFallback(sessionId, mobile, assignments, dealerId);
       const to = data.saved_to;
       if (!to) throw new Error("Server did not return saved_to");
-      onApplied(to, data.saved_files ?? []);
+      onApplied(to, data.saved_files ?? [], data.extraction);
     } catch (e) {
       setApplyError(e instanceof Error ? e.message : "Apply failed.");
     } finally {
@@ -123,12 +134,12 @@ export function ManualFallbackSplitReview({
 
   return (
     <div className="manual-fallback-split-review">
-      <h3 className="manual-fallback-split-review__title">Manual Form Fill</h3>
+      <h3 className="manual-fallback-split-review__title">Confirm document pages</h3>
       <p className="manual-fallback-split-review__hint">
-        Auto-read did not identify all pages. Each page is saved as a compressed JPEG (under 200KB). Assign
-        each page to a document slot, then fill or edit all fields in Section 2 (mobile, vehicle, insurance,
-        etc.). Press <strong>Apply document layout</strong> to save scans to the server, then use{" "}
-        <strong>Submit Info.</strong> to validate and save the form.
+        If the details sheet was already read, Section 2 may be partially filled. Assign each page to{" "}
+        <strong>Aadhaar front</strong>, <strong>Aadhaar back</strong>, or <strong>Sales Detail Sheet</strong>, then
+        press <strong>Apply document layout</strong> to run Aadhaar OCR and save scans. Fix any remaining fields,
+        then <strong>Submit Info.</strong>
       </p>
       {applyError && (
         <div className="manual-fallback-split-review__error" role="alert">

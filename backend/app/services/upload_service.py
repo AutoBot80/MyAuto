@@ -241,7 +241,7 @@ class UploadService:
         from app.services.pre_ocr_service import run_pre_ocr_and_prepare
 
         try:
-            bundles, _stem, _mobile_ocr, _ocr_path, missing, page_images, _ = run_pre_ocr_and_prepare(
+            bundles, _stem, _mobile_ocr, _ocr_path, missing, page_images, _, rejected_extras = run_pre_ocr_and_prepare(
                 dest_pdf,
                 processing_dir=proc_dir,
                 dealer_id=dealer_id,
@@ -251,7 +251,10 @@ class UploadService:
             return {"error": f"Pre-OCR failed: {e}"}
 
         if missing:
-            from app.services.manual_fallback_service import write_manual_session_jpegs
+            from app.services.manual_fallback_service import (
+                write_details_forms_cache,
+                write_manual_session_jpegs,
+            )
 
             try:
                 session_id, page_count = write_manual_session_jpegs(dealer_id, dest_pdf, page_images or {})
@@ -259,18 +262,38 @@ class UploadService:
                 logger.exception("manual fallback split failed")
                 return {"error": f"{self._pre_ocr_rejection_message(missing)} (Could not prepare manual split: {e})"}
 
+            if rejected_extras and rejected_extras.get("details_forms_cache"):
+                try:
+                    write_details_forms_cache(dealer_id, session_id, rejected_extras["details_forms_cache"])
+                except Exception:
+                    logger.exception("Could not write details_forms cache for session %s", session_id)
+
+            mf: dict[str, Any] = {
+                "session_id": session_id,
+                "page_count": page_count,
+                "missing_reasons": missing,
+            }
+            if rejected_extras:
+                sr = rejected_extras.get("suggested_roles")
+                if isinstance(sr, list) and sr:
+                    mf["suggested_roles"] = sr
+                li = rejected_extras.get("locked_details_index")
+                if li is not None:
+                    mf["locked_details_index"] = li
+
+            extraction: dict[str, Any] = {"manual_only": True, "pending": True}
+            ed = rejected_extras.get("extraction_details") if rejected_extras else None
+            if ed:
+                extraction["details"] = ed
+
             return {
                 "saved_count": 0,
                 "saved_files": [],
                 "saved_to": "",
                 "queued_items": [],
                 "warning": self._pre_ocr_rejection_message(missing),
-                "manual_fallback": {
-                    "session_id": session_id,
-                    "page_count": page_count,
-                    "missing_reasons": missing,
-                },
-                "extraction": {"manual_only": True, "pending": True},
+                "manual_fallback": mf,
+                "extraction": extraction,
             }
         if not bundles:
             return {"error": "Pre-OCR did not produce a sale folder."}
@@ -347,7 +370,7 @@ class UploadService:
         assignments_json: str,
         dealer_id: int,
     ) -> dict:
-        from app.services.manual_fallback_service import apply_manual_session
+        from app.services.manual_fallback_service import apply_manual_session, read_details_forms_cache
 
         try:
             assignments = json.loads(assignments_json)
@@ -356,11 +379,51 @@ class UploadService:
         if not isinstance(assignments, dict):
             return {"error": "assignments must be a JSON object"}
         str_map = {str(k): str(v) for k, v in assignments.items()}
+
+        details_forms_prefetch = read_details_forms_cache(dealer_id, session_id)
         try:
             subfolder, _saved_paths = apply_manual_session(dealer_id, session_id, mobile, str_map)
         except ValueError as e:
             return {"error": str(e)}
+
         uploads_dir = self.uploads_dir or get_uploads_dir(dealer_id)
+        extraction_result: dict[str, Any] = {}
+        try:
+            from app.services.pre_ocr_service import (
+                orient_and_normalize_sale_documents,
+                sale_folder_has_details_for_pencil_crop,
+                try_write_pencil_mark_for_sale_folder,
+            )
+            from app.services.sales_ocr_service import OcrService
+
+            sale_path = uploads_dir / subfolder
+            orient_and_normalize_sale_documents(sale_path)
+            pencil_ok = try_write_pencil_mark_for_sale_folder(sale_path)
+            pencil_warnings: list[str] = []
+            if not pencil_ok and sale_folder_has_details_for_pencil_crop(sale_path):
+                pencil_warnings.append(
+                    "Chassis pencil mark image was not saved (optional). "
+                    "OCR and DMS can still supply frame/chassis; verify manually if needed."
+                )
+
+            prefetch = details_forms_prefetch if details_forms_prefetch and not details_forms_prefetch.get("error") else None
+            ocr = OcrService(
+                uploads_dir=uploads_dir,
+                ocr_output_dir=get_ocr_output_dir(dealer_id),
+            )
+            extraction_result = ocr.process_uploaded_subfolder(
+                subfolder,
+                details_forms_prefetch=prefetch,
+            )
+            if pencil_warnings:
+                extraction_result = {**extraction_result, "warnings": pencil_warnings}
+            details = ocr.get_extracted_details(subfolder)
+            if details:
+                extraction_result["details"] = details
+        except Exception as e:
+            logger.exception("manual-apply OCR failed subfolder=%s", subfolder)
+            extraction_result = {"error": str(e), "manual_only": True}
+
         final_sale = uploads_dir / subfolder
         saved_names: list[str] = []
         if final_sale.is_dir():
@@ -377,7 +440,7 @@ class UploadService:
             "saved_files": saved_names,
             "saved_to": subfolder,
             "queued_items": [],
-            "extraction": {"manual_only": True},
+            "extraction": extraction_result,
         }
 
     async def apply_consolidated_manual_fallback(

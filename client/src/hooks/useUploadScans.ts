@@ -144,10 +144,16 @@ export function useUploadScans(
         }
       });
       if (data.manual_fallback && controlled?.onManualFallback) {
+        const partialDetails = data.extraction?.details;
+        if (partialDetails && controlled?.onExtractionComplete) {
+          controlled.onExtractionComplete(partialDetails, { savedTo: data.saved_to ?? "" });
+        }
         controlled.onManualFallback(data.manual_fallback, data.warning, fsArchive ?? null);
         setUploadStatus(
-          data.warning ??
-            "Could not auto-read all pages. Assign each page below, enter Customer Mobile, then Apply."
+          partialDetails
+            ? "Details sheet applied. Confirm Aadhaar front/back for each page below, then Apply document layout."
+            : data.warning ??
+                "Could not auto-read all pages. Assign each page below, enter Customer Mobile, then Apply."
         );
         return;
       }

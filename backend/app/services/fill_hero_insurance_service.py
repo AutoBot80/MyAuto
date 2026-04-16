@@ -375,6 +375,58 @@ def _wait_load_optional(page, timeout: int = 8_000, *, state: str = "domcontentl
         pass
 
 
+# VIN step: post-URL DOM settle and txtFrameNo attach use short stepped watches (see plan KYC→VIN).
+_VIN_WATCH_STEP_MS = 200
+_VIN_WATCH_MAX_TRIES = 10
+
+
+def _wait_load_state_stepped(
+    page,
+    *,
+    state: str = "domcontentloaded",
+    step_ms: int = _VIN_WATCH_STEP_MS,
+    max_tries: int = _VIN_WATCH_MAX_TRIES,
+) -> None:
+    """Up to ``max_tries`` × ``step_ms`` wall time (e.g. 10×200ms) for ``wait_for_load_state``."""
+    for _ in range(max(1, int(max_tries))):
+        try:
+            page.wait_for_load_state(state, timeout=max(1, int(step_ms)))
+            return
+        except Exception:
+            pass
+
+
+def _locator_wait_state_stepped(
+    locator,
+    state: str,
+    *,
+    step_ms: int = _VIN_WATCH_STEP_MS,
+    max_tries: int = _VIN_WATCH_MAX_TRIES,
+) -> bool:
+    """Return True if ``locator`` reaches ``state`` within ``max_tries`` attempts of ``step_ms`` each."""
+    for _ in range(max(1, int(max_tries))):
+        try:
+            locator.wait_for(state=state, timeout=max(1, int(step_ms)))
+            return True
+        except Exception:
+            pass
+    return False
+
+
+def _locator_scroll_into_view_stepped(
+    locator,
+    *,
+    step_ms: int = _VIN_WATCH_STEP_MS,
+    max_tries: int = _VIN_WATCH_MAX_TRIES,
+) -> None:
+    for _ in range(max(1, int(max_tries))):
+        try:
+            locator.scroll_into_view_if_needed(timeout=max(1, int(step_ms)))
+            return
+        except Exception:
+            pass
+
+
 def _proposal_fail(
     ocr_output_dir, subfolder, msg: str,
 ) -> tuple[str | None, dict[str, Any]]:
@@ -6314,9 +6366,9 @@ def _hero_misp_wait_for_vin_txt_frame_no_attached(
     """
     **URL first (event-driven):** ``wait_for_url`` **MispDms.aspx** — no fixed-duration “wait then fill”.
 
-    **Field second:** Playwright ``locator(...).first.wait_for(state='attached')`` per selector/root — auto-waits
-    on DOM updates, not a tight poll/sleep loop. MISP may show **Please wait** on **ekycpage** same-URL before
-    navigation; the URL wait resolves when the browser actually navigates.
+    **Field second:** Per selector/root, ``_locator_wait_state_stepped(..., 'attached')`` — **200 ms** steps,
+    **10 tries** max per attempt (same pattern as post-URL ``domcontentloaded``). MISP may show **Please wait** on
+    **ekycpage** same-URL before navigation; the URL wait resolves when the browser actually navigates.
     """
     budget_ms = min(int(timeout_ms), 90_000)
     deadline = time.monotonic() + budget_ms / 1000.0
@@ -6378,7 +6430,7 @@ def _hero_misp_wait_for_vin_txt_frame_no_attached(
     )
     try:
         if post_cap_ms > 0:
-            _wait_load_optional(page, post_cap_ms)
+            _wait_load_state_stepped(page, state="domcontentloaded")
     except Exception:
         pass
     _insurance_vin_phase_note(
@@ -6393,8 +6445,8 @@ def _hero_misp_wait_for_vin_txt_frame_no_attached(
             attach_attempts += 1
             try:
                 el = root.locator(sel).first
-                # Cap each attempt so wrong selector/frame does not consume the whole budget (still event-driven).
-                el.wait_for(state="attached", timeout=min(8_000, remain_ms))
+                if not _locator_wait_state_stepped(el, "attached"):
+                    continue
                 logger.info("Hero Insurance: VIN field attached (%s).", sel[:72])
                 _insurance_vin_phase_note(
                     ocr_output_dir,
@@ -6443,6 +6495,8 @@ def _hero_misp_fill_vin_txt_frame_no(
     """
     Real MISP VIN step: ``ctl00$ContentPlaceHolder1$txtFrameNo`` — often under ``upnlAddStateMaster`` /
     ``mainContainer`` in a **frame**; visibility checks alone can skip inputs that need ``force`` / scroll.
+    After ``_hero_misp_wait_for_vin_txt_frame_no_attached``, attach + scroll use **200 ms** × **10 tries** stepped
+    helpers before ``fill``.
     """
     v = (vin or "").strip()[:64]
     if not v:
@@ -6467,11 +6521,9 @@ def _hero_misp_fill_vin_txt_frame_no(
                 if loc.count() == 0:
                     continue
                 el = loc.first
-                el.wait_for(state="attached", timeout=min(12_000, to))
-                try:
-                    el.scroll_into_view_if_needed(timeout=3_000)
-                except Exception:
-                    pass
+                if not _locator_wait_state_stepped(el, "attached"):
+                    continue
+                _locator_scroll_into_view_stepped(el)
                 el.fill("", timeout=to)
                 el.fill(v, timeout=to, force=True)
                 logger.info("Hero Insurance: filled VIN/Chassis (%s).", sel[:72])

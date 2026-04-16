@@ -1,10 +1,12 @@
 """
 Consolidated PDF pre-OCR failure: split pages to compressed JPEGs for manual slot assignment,
-then materialize ``for_OCR/`` without running Textract/OCR extraction.
+then materialize ``for_OCR/``. Optional ``details_forms_cache.json`` stores a reused AnalyzeDocument
+FORMS result for the Details sheet (single FORMS call across pre-reject + post-apply Textract).
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import shutil
@@ -26,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 FOR_OCR_SUBDIR = "for_OCR"
 MANUAL_SESSIONS = "manual_sessions"
+DETAILS_FORMS_CACHE_FILE = "details_forms_cache.json"
 SESSION_ID_RE = re.compile(r"^[a-f0-9]{32}$")
 
 ROLE_AADHAR_FRONT = "aadhar_front"
@@ -40,6 +43,29 @@ def _session_base(dealer_id: int, session_id: str) -> Path:
 
 def validate_session_id(session_id: str) -> bool:
     return bool(session_id and SESSION_ID_RE.match(session_id))
+
+
+def write_details_forms_cache(dealer_id: int, session_id: str, cache: dict) -> None:
+    """Persist AnalyzeDocument FORMS result for reuse after manual-apply (single FORMS call)."""
+    if not validate_session_id(session_id):
+        raise ValueError("Invalid session id")
+    path = _session_base(dealer_id, session_id) / DETAILS_FORMS_CACHE_FILE
+    path.write_text(json.dumps(cache, default=str), encoding="utf-8")
+
+
+def read_details_forms_cache(dealer_id: int, session_id: str) -> dict | None:
+    """Load cached Details FORMS dict if present (call before :func:`apply_manual_session` deletes the session)."""
+    if not validate_session_id(session_id):
+        return None
+    path = _session_base(dealer_id, session_id) / DETAILS_FORMS_CACHE_FILE
+    if not path.is_file():
+        return None
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        logger.warning("Invalid JSON in details forms cache: %s", path)
+        return None
+    return raw if isinstance(raw, dict) else None
 
 
 def write_manual_session_jpegs(
@@ -83,7 +109,8 @@ def apply_manual_session(
 ) -> tuple[str, list[str]]:
     """
     Validate session, copy mapped JPEGs into ``for_OCR/``, embed details as single-page PDF,
-    merge unused pages into ``unused.pdf``. Does not run OcrService.
+    merge unused pages into ``unused.pdf``. Does not run OcrService (callers such as consolidated
+    manual-apply run Textract after this).
 
     ``assignments`` maps "0".."n-1" to aadhar_front | aadhar_back | details | unused.
     Returns (subfolder_name e.g. mobile_ddmmyy, list of saved file basenames at sale root and under for_OCR).
@@ -170,7 +197,7 @@ def apply_manual_session(
         ocr_dir,
         subfolder,
         "pre",
-        "Manual fallback: for_OCR populated from user-assigned pages (no Textract/OCR).",
+        "Manual fallback: for_OCR populated from user-assigned pages (Textract may follow in upload handler).",
     )
 
     return subfolder, saved

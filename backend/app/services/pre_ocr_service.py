@@ -32,6 +32,7 @@ import logging
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from PIL import Image
 
@@ -1851,6 +1852,107 @@ def _split_pdf_by_classification(
     return sale_dir
 
 
+def _page_count_from_pre_ocr(
+    classifications: list[tuple[int, str]],
+    page_images: dict[int, Image.Image] | None,
+) -> int:
+    n = 0
+    if page_images:
+        n = max(page_images.keys()) + 1
+    for idx, _ in classifications:
+        n = max(n, idx + 1)
+    return n
+
+
+def _suggested_roles_from_classifications(
+    classifications: list[tuple[int, str]],
+    page_count: int,
+) -> list[str]:
+    by_idx = {i: t for i, t in classifications}
+    roles: list[str] = []
+    for i in range(page_count):
+        ptype = by_idx.get(i, PAGE_TYPE_UNUSED)
+        if ptype in (PAGE_TYPE_AADHAR, PAGE_TYPE_AADHAR_COMBINED):
+            roles.append("aadhar_front")
+        elif ptype == PAGE_TYPE_AADHAR_BACK:
+            roles.append("aadhar_back")
+        elif ptype == PAGE_TYPE_DETAILS:
+            roles.append("details")
+        else:
+            roles.append("unused")
+    return roles
+
+
+def _locked_details_page_index(classifications: list[tuple[int, str]]) -> int | None:
+    for idx, ptype in classifications:
+        if ptype == PAGE_TYPE_DETAILS:
+            return idx
+    return None
+
+
+def _build_aadhaar_only_rejected_extras(
+    *,
+    missing: list[str],
+    classifications: list[tuple[int, str]],
+    page_images: dict[int, Image.Image] | None,
+    proc_dir: Path,
+    mobile: str | None,
+) -> dict[str, Any] | None:
+    """
+    When pre-OCR rejects for missing Aadhaar slots but Details + mobile are OK, run **one** FORMS Textract
+    on the classified Details page and return cache + UI hints. On failure, return hints only.
+    """
+    from uuid import uuid4
+
+    page_count = _page_count_from_pre_ocr(classifications, page_images)
+    if page_count < 1:
+        return None
+    suggested_roles = _suggested_roles_from_classifications(classifications, page_count)
+    locked_details_index = _locked_details_page_index(classifications)
+    types_set = {ptype for _, ptype in classifications}
+    aadhaar_only = (
+        bool(mobile)
+        and PAGE_TYPE_DETAILS in types_set
+        and "mobile number" not in missing
+        and "sales details form (vehicle & customer info)" not in missing
+    )
+    base: dict[str, Any] = {
+        "suggested_roles": suggested_roles,
+        "locked_details_index": locked_details_index,
+    }
+    if not aadhaar_only or not page_images:
+        return base
+    details_idx = locked_details_index
+    if details_idx is None or details_idx not in page_images:
+        return base
+    try:
+        from app.services.sales_ocr_service import (
+            _compile_details_sheet_fragment,
+            details_fragment_to_api_payload,
+        )
+        from app.services.sales_textract_service import extract_forms_from_bytes
+
+        img = page_images[details_idx]
+        jpeg_bytes = _pil_rgb_to_jpeg_bytes(img)
+        details_forms_cache = extract_forms_from_bytes(jpeg_bytes)
+        if details_forms_cache.get("error"):
+            logger.warning("Details FORMS early extract failed: %s", details_forms_cache.get("error"))
+            return base
+        tmp_path = proc_dir / f"details_early_{uuid4().hex[:12]}.jpg"
+        tmp_path.write_bytes(jpeg_bytes)
+        try:
+            frag = _compile_details_sheet_fragment(tmp_path, details_forms_cache)
+            frag["ok"] = True
+            api_details = details_fragment_to_api_payload(frag)
+            base["details_forms_cache"] = details_forms_cache
+            base["extraction_details"] = api_details
+        finally:
+            tmp_path.unlink(missing_ok=True)
+    except Exception:
+        logger.exception("Aadhaar-only rejected path: Details FORMS early extract failed")
+    return base
+
+
 def run_pre_ocr_and_prepare(
     source_pdf: Path,
     processing_dir: Path | None = None,
@@ -1865,6 +1967,7 @@ def run_pre_ocr_and_prepare(
     list[str] | None,
     dict[int, Image.Image] | None,
     Path | None,
+    dict[str, Any] | None,
 ]:
     """
     Copy PDF to Processing, run pre-OCR (Tesseract on in-memory rasters), classify pages, write normalized
@@ -1875,7 +1978,9 @@ def run_pre_ocr_and_prepare(
     Returns (bundles | None, subfolder_stem, mobile_or_none, ocr_path, missing_list | None,
     page_images | None, dest_pdf | None).
     When ``missing_list`` is non-empty, ``page_images`` and ``dest_pdf`` are set for manual JPEG split fallback;
-    otherwise those two entries are None.
+    otherwise those two entries are None. The eighth return value is **rejected_extras** (optional ``suggested_roles``,
+    ``locked_details_index``, and when Aadhaar-only rejection with successful Details FORMS: ``details_forms_cache``,
+    ``extraction_details``).
 
     ``mobile_hint``: optional 10-digit mobile from Add Sales (consolidated PDF upload) when Tesseract cannot
     read the customer mobile from the scan (common when the Details row is smudged or OCR-garbled).
@@ -2074,7 +2179,7 @@ def run_pre_ocr_and_prepare(
                 ("run_pre_ocr_and_prepare_done", None, f"path=multi_customer bundles={len(result_bundles)}"),
             )
             _flush_pre(orchestration)
-            return result_bundles, source_pdf.stem, first_mobile, ocr_path, None, None, None
+            return result_bundles, source_pdf.stem, first_mobile, ocr_path, None, None, None, None
         # Fall back to single-customer (e.g. scan has 2 mobiles but only 1 customer)
         logger.info("Multi-customer detected but could not build bundles; falling back to single-customer (classifications=%s, mobiles=%s)",
                     [(i, t) for i, t in classifications], all_mobiles)
@@ -2117,7 +2222,14 @@ def run_pre_ocr_and_prepare(
         orchestration.append(("run_pre_ocr_and_prepare_rejected", None, f"missing={','.join(missing)}"))
         write_sale_text_artifact(ocr_out, artifact_leaf, full_text)
         _flush_pre(orchestration)
-        return None, source_pdf.stem, mobile, ocr_path, missing, page_images, dest_pdf
+        rejected_extras = _build_aadhaar_only_rejected_extras(
+            missing=missing,
+            classifications=classifications,
+            page_images=page_images,
+            proc_dir=proc_dir,
+            mobile=mobile,
+        )
+        return None, source_pdf.stem, mobile, ocr_path, missing, page_images, dest_pdf, rejected_extras
 
     mobile_leaf = us.get_subdir_name_mobile(mobile)
     if mobile_leaf != artifact_leaf:
@@ -2145,7 +2257,7 @@ def run_pre_ocr_and_prepare(
     write_sale_text_artifact(ocr_out, mobile_leaf, full_text)
     _flush_pre(orchestration)
 
-    return [(sale_dir, subfolder, mobile or "")], source_pdf.stem, mobile, ocr_path, None, None, None
+    return [(sale_dir, subfolder, mobile or "")], source_pdf.stem, mobile, ocr_path, None, None, None, None
 
 
 def move_multi_customer_to_success_or_error(

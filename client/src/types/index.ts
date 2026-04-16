@@ -61,6 +61,10 @@ export interface ManualFallbackPayload {
   session_id: string;
   page_count: number;
   missing_reasons: string[];
+  /** Best-effort page roles from Tesseract classification (aadhar_front | aadhar_back | details | unused). */
+  suggested_roles?: string[];
+  /** 0-based page index of the classified Details sheet, when known. */
+  locked_details_index?: number | null;
 }
 
 export interface UploadScansResponse {

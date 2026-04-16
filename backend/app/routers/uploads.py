@@ -118,7 +118,10 @@ async def apply_consolidated_manual_fallback(
     ),
     dealer_id: int | None = Form(None, description="Dealer ID; uses token dealer if omitted"),
 ) -> dict:
-    """Materialize ``for_OCR/`` from a manual session without running Textract/OCR extraction."""
+    """
+    Materialize ``for_OCR/`` from a manual session, then run the same orient / pencil / Textract path as
+    consolidated success. Cached **Details FORMS** from the pre-reject step is reused (single AnalyzeDocument).
+    """
     did = resolve_dealer_id(principal, dealer_id)
     return await upload_service.apply_consolidated_manual_fallback(
         session_id,

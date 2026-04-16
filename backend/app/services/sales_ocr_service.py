@@ -1770,12 +1770,73 @@ def _details_input_format(path: Path) -> str:
     return "unknown"
 
 
-def _parallel_textract_prefetch_upload_subfolder(subdir: Path) -> tuple[dict[str, dict], dict[str, int]]:
+def details_fragment_to_api_payload(frag_d: dict[str, Any]) -> dict[str, Any]:
+    """
+    Build API-shaped ``{vehicle, customer, insurance}`` from a Details sheet fragment only (no Aadhaar).
+    Mirrors the Details half of :meth:`OcrService._persist_upload_merge` when no Aadhaar fragment exists.
+    """
+    if not frag_d or frag_d.get("error"):
+        return {"vehicle": {}, "customer": {}, "insurance": {}}
+    vehicle = frag_d.get("vehicle") or {}
+    insurance = frag_d.get("insurance") or {}
+    dc = frag_d.get("details_customer") or {}
+    customer: dict[str, str] = {}
+    for key, val in dc.items():
+        if not val:
+            continue
+        if key in (
+            "profession",
+            "marital_status",
+            "financier",
+            "nominee_name",
+            "nominee_age",
+            "nominee_gender",
+            "nominee_relationship",
+            "payment_mode",
+        ):
+            continue
+        customer[str(key)] = str(val).strip() if val else ""
+
+    insurance_merged = {
+        **{k: v for k, v in insurance.items() if v},
+        **{
+            k: v
+            for k, v in dc.items()
+            if k
+            in (
+                "profession",
+                "marital_status",
+                "financier",
+                "nominee_name",
+                "nominee_age",
+                "nominee_gender",
+                "nominee_relationship",
+                "payment_mode",
+            )
+            and v
+        },
+    }
+    if "profession" in insurance_merged:
+        sp_im = _sanitize_details_profession_value(insurance_merged.get("profession"))
+        insurance_merged["profession"] = sp_im if sp_im else default_profession_if_empty("")
+
+    customer = enrich_customer_address_from_freeform(customer)
+    return {"vehicle": vehicle, "customer": customer, "insurance": insurance_merged}
+
+
+def _parallel_textract_prefetch_upload_subfolder(
+    subdir: Path,
+    *,
+    details_forms_prefetch: dict[str, Any] | None = None,
+) -> tuple[dict[str, dict], dict[str, int]]:
     """
     Run AWS Textract calls for all upload files concurrently to cut wall time on scans-v2.
     Keys: ``aadhar_front`` / ``aadhar_back`` (DetectDocumentText), ``details_forms``
     (**AnalyzeDocument** FORMS+TABLES for structured sales detail scans/PDFs), ``insurance``,
     ``financing``. ``.docx`` Details is not prefetched (parsed locally).
+
+    When ``details_forms_prefetch`` is set (manual-fallback reuse path), **no** AnalyzeDocument call is made
+    for the Details sheet; the cached dict is used as ``details_forms``.
 
     Returns ``(results_by_key, job_duration_ms_by_key)`` for logging and ``section_timings_ms``.
     """
@@ -1792,7 +1853,8 @@ def _parallel_textract_prefetch_upload_subfolder(subdir: Path) -> tuple[dict[str
         except OSError as e:
             logger.warning("prefetch: could not read %s: %s", ap, e)
     dp = _prefer_details_sheet_input(subdir)
-    if dp.is_file() and _details_input_format(dp) in ("jpeg", "png", "pdf"):
+    skip_details_forms_job = details_forms_prefetch is not None and not (details_forms_prefetch.get("error"))
+    if dp.is_file() and _details_input_format(dp) in ("jpeg", "png", "pdf") and not skip_details_forms_job:
         try:
             jobs.append(("details_forms", dp.read_bytes(), "forms"))
         except OSError as e:
@@ -1817,6 +1879,9 @@ def _parallel_textract_prefetch_upload_subfolder(subdir: Path) -> tuple[dict[str
     out: dict[str, dict] = {}
     job_ms: dict[str, int] = {}
     if not jobs:
+        if skip_details_forms_job and details_forms_prefetch is not None:
+            out["details_forms"] = details_forms_prefetch
+            job_ms["details_forms"] = 0
         return out, job_ms
 
     timeout = max(30, OCR_UPLOAD_TEXTRACT_TIMEOUT_SEC)
@@ -1860,6 +1925,9 @@ def _parallel_textract_prefetch_upload_subfolder(subdir: Path) -> tuple[dict[str
                     "raw_response": None,
                 }
                 job_ms[key] = 0
+    if skip_details_forms_job and details_forms_prefetch is not None:
+        out["details_forms"] = details_forms_prefetch
+        job_ms["details_forms"] = 0
     return out, job_ms
 
 
@@ -3579,6 +3647,7 @@ class OcrService:
         subfolder: str,
         *,
         on_extraction_event: Callable[[str, dict[str, Any]], None] | None = None,
+        details_forms_prefetch: dict[str, Any] | None = None,
     ) -> dict:
         """
         Run extraction directly on uploaded files (no queue).
@@ -3587,6 +3656,8 @@ class OcrService:
         uses **Textract text only** on front/back (no UIDAI QR in this path). **Details sheet** is
         compiled in **parallel** with the Aadhaar pipeline, then results are merged once into JSON.
         **Details** raster/PDF: Textract **AnalyzeDocument FORMS** (structured key-values).
+        When ``details_forms_prefetch`` is set (manual session reuse), that dict is used as the Details
+        FORMS result and **no** second AnalyzeDocument call is made for the sales detail sheet.
 
         Writes ``{stem}_text.txt`` (all sections; replaces legacy ``Raw_OCR.txt``), including Details sheet
         LINE ``full_text`` or FORMS/TABLE fallback when LINE text is empty, and returns ``section_timings_ms``.
@@ -3615,10 +3686,16 @@ class OcrService:
         prefetch_job_ms: dict[str, int] = {}
         t_pref = time.perf_counter()
         if OCR_UPLOAD_PARALLEL_TEXTRACT:
-            prefetch, prefetch_job_ms = _parallel_textract_prefetch_upload_subfolder(subdir)
+            prefetch, prefetch_job_ms = _parallel_textract_prefetch_upload_subfolder(
+                subdir,
+                details_forms_prefetch=details_forms_prefetch,
+            )
             section_timings_ms["aws_textract_prefetch_ms"] = int(
                 (time.perf_counter() - t_pref) * 1000
             )
+        elif details_forms_prefetch is not None and not details_forms_prefetch.get("error"):
+            prefetch["details_forms"] = details_forms_prefetch
+            prefetch_job_ms["details_forms"] = 0
 
         aadhar_path = _prefer_for_ocr_input(subdir, "Aadhar.pdf", FILENAME_AADHAR_FRONT, LEGACY_AADHAR_FRONT_JPG)
         details_path = _prefer_details_sheet_input(subdir)
