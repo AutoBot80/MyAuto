@@ -4775,6 +4775,112 @@ def _proposal_checkbox_label_only_text(cb) -> str:
         return ""
 
 
+def _dump_addon_checkboxes_diagnostic(
+    page,
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
+    tag: str = "addon_diag",
+) -> None:
+    """
+    Write a diagnostic dump of every visible checkbox in every proposal root to
+    ``<ocr_output_dir>/<subfolder>/addon_checkboxes_dump.txt``.
+    Includes: frame URL, element id, checked state, label-only text, immediate
+    text, and broad context text for each checkbox.
+    """
+    if not ocr_output_dir or not subfolder:
+        return
+    safe = safe_subfolder_name(subfolder)
+    dump_path = Path(ocr_output_dir).resolve() / safe / "addon_checkboxes_dump.txt"
+    lines: list[str] = []
+    lines.append(f"=== Addon Checkbox Diagnostic Dump [{tag}] ===")
+    try:
+        from datetime import datetime, timezone, timedelta
+
+        lines.append(f"timestamp={datetime.now(timezone(timedelta(hours=5, minutes=30))).isoformat()}")
+    except Exception:
+        pass
+    lines.append(f"page.url={page.url}")
+    lines.append("")
+
+    root_idx = 0
+    for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
+        root_label = ""
+        try:
+            if hasattr(root, "url"):
+                root_label = f"Frame url={root.url}"
+            elif hasattr(root, "_frame_locator"):
+                root_label = "FrameLocator"
+            else:
+                root_label = f"Page url={page.url}"
+        except Exception:
+            root_label = f"root#{root_idx}"
+        lines.append(f"--- root[{root_idx}] {root_label} ---")
+
+        try:
+            cbs = root.locator('input[type="checkbox"]')
+            n = cbs.count()
+            lines.append(f"  checkbox count={n}")
+        except Exception as exc:
+            lines.append(f"  ERROR enumerating checkboxes: {exc}")
+            root_idx += 1
+            continue
+
+        for i in range(min(n, 80)):
+            cb = cbs.nth(i)
+            try:
+                vis = False
+                try:
+                    vis = cb.is_visible(timeout=300)
+                except Exception:
+                    pass
+                cb_id = ""
+                try:
+                    cb_id = cb.get_attribute("id") or ""
+                except Exception:
+                    pass
+                cb_name = ""
+                try:
+                    cb_name = cb.get_attribute("name") or ""
+                except Exception:
+                    pass
+                checked = None
+                try:
+                    checked = cb.is_checked()
+                except Exception:
+                    pass
+                t_label = ""
+                try:
+                    t_label = _proposal_checkbox_label_only_text(cb)
+                except Exception as exc:
+                    t_label = f"<ERROR: {exc}>"
+                t_immediate = ""
+                try:
+                    t_immediate = _proposal_checkbox_immediate_text(cb)
+                except Exception as exc:
+                    t_immediate = f"<ERROR: {exc}>"
+                t_broad = ""
+                try:
+                    t_broad = _proposal_checkbox_context_text(cb)
+                except Exception as exc:
+                    t_broad = f"<ERROR: {exc}>"
+
+                lines.append(f"  [{i}] id={cb_id!r} name={cb_name!r} visible={vis} checked={checked}")
+                lines.append(f"      label_only: {t_label[:300]!r}")
+                lines.append(f"      immediate:  {t_immediate[:300]!r}")
+                lines.append(f"      broad:      {t_broad[:300]!r}")
+            except Exception as exc:
+                lines.append(f"  [{i}] ERROR: {exc}")
+        lines.append("")
+        root_idx += 1
+
+    try:
+        dump_path.parent.mkdir(parents=True, exist_ok=True)
+        dump_path.write_text("\n".join(lines), encoding="utf-8")
+        logger.info("Hero Insurance: addon checkbox dump written to %s", dump_path)
+    except Exception as exc:
+        logger.warning("Hero Insurance: failed to write addon checkbox dump: %s", exc)
+
+
 def _proposal_dob_readback_matches_expected(want_norm: str, got: str) -> bool:
     """``txtDOB`` readback vs expected **dd/mm/yyyy** (same spirit as ``_proposal_step_fill_dob``)."""
     if not want_norm or not got:
@@ -7965,6 +8071,7 @@ def _hero_misp_fill_proposal_and_review(
         if err:
             return _proposal_fail(ocr_output_dir, subfolder, err)
         _t(page, 600)
+        _dump_addon_checkboxes_diagnostic(page, ocr_output_dir, subfolder, tag="before_nd_plus_cover")
         err = _proposal_addon_checkbox_id_or_label(
             page,
             "chkNDPlusCover",
