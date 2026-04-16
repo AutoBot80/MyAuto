@@ -1090,10 +1090,12 @@ def _pdi_note_service_request_new_click_diagnostics(
             const r = el.getBoundingClientRect();
             return r.width >= 2 && r.height >= 2;
         };
-        const btns = Array.from(document.querySelectorAll('button.siebui-icon-newrecord'));
+        const candidates = Array.from(document.querySelectorAll(
+            'button.siebui-icon-newrecord, span.siebui-icon-newrecord, a.siebui-icon-newrecord'
+        ));
         let visCnt = 0;
         const labels = [];
-        for (const el of btns) {
+        for (const el of candidates) {
             if (!vis(el)) continue;
             visCnt++;
             const al = (el.getAttribute('aria-label') || '').trim();
@@ -1170,6 +1172,9 @@ def _siebel_click_service_request_list_new_record(
         "button#s_3_1_12_0_Ctrl.siebui-icon-newrecord",
         "button#s_2_1_14_0_Ctrl.siebui-icon-newrecord",
         "button#s_2_1_12_0_Ctrl.siebui-icon-newrecord",
+        "span#s_2_1_12_0.siebui-icon-newrecord",
+        "span.siebui-icon-newrecord#s_2_1_12_0",
+        "a#s_2_1_12_0.siebui-icon-newrecord",
         "button#s_2_2_31_0_Ctrl.siebui-icon-newrecord",
         "button.siebui-icon-newrecord[aria-label='Service Request List:New']",
         "button.siebui-icon-newrecord[title='Service Request List:New']",
@@ -1249,20 +1254,45 @@ def _siebel_click_service_request_list_new_record(
             diag.clicked = hid;
             return true;
         };
-        const allBtns = Array.from(document.querySelectorAll('button.siebui-icon-newrecord'));
+        const tryClickSpanOrAnchorNew = (hid) => {
+            const el = document.getElementById(hid);
+            if (!el) { diag.tried.push(hid + ':missing'); return false; }
+            const tag = String(el.tagName).toLowerCase();
+            if (tag !== 'span' && tag !== 'a') { diag.tried.push(hid + ':not-span-or-a'); return false; }
+            const hasNr = el.classList.contains('siebui-icon-newrecord');
+            const al = (el.getAttribute('aria-label') || '').toLowerCase();
+            const tt = (el.getAttribute('title') || '').toLowerCase();
+            const idOk = hasNr || isListNewNotMenu(el)
+                || (hid === 's_2_1_12_0' && (al.includes('new') || tt.includes('new') || al.includes('list') || tt.includes('list')))
+                || (hid === 's_2_1_12_0' && vis(el));
+            if (!idOk) { diag.tried.push(hid + ':span-label-mismatch'); return false; }
+            if (!vis(el)) { diag.tried.push(hid + ':not-visible'); return false; }
+            try { el.scrollIntoView({ block: 'center' }); } catch (e) {}
+            el.click();
+            diag.clicked = hid;
+            return true;
+        };
+        const allBtns = Array.from(document.querySelectorAll(
+            'button.siebui-icon-newrecord, span.siebui-icon-newrecord, a.siebui-icon-newrecord'
+        ));
         for (const b of allBtns) {
             const bid = b.id || '(no-id)';
             const al = (b.getAttribute('aria-label') || '').slice(0, 50);
             const tt = (b.getAttribute('title') || '').slice(0, 50);
             const v = vis(b);
-            diag.allNewrecordBtns.push(bid + '|al=' + al + '|tt=' + tt + '|vis=' + v);
+            const tg = String(b.tagName || '').toLowerCase();
+            diag.allNewrecordBtns.push(tg + ':' + bid + '|al=' + al + '|tt=' + tt + '|vis=' + v);
         }
         const ids = [
             's_3_1_12_0_Ctrl', 's_2_1_14_0_Ctrl', 's_2_2_32_0', 's_2_1_12_0_Ctrl',
             's_2_2_31_0_Ctrl', 's_2_2_33_0_Ctrl', 's_2_1_11_0_Ctrl', 's_2_2_30_0_Ctrl',
+            's_2_1_12_0',
         ];
         for (const hid of ids) {
             if (tryClickId(hid)) return diag;
+        }
+        for (const hid of ids) {
+            if (tryClickSpanOrAnchorNew(hid)) return diag;
         }
         for (const el of allBtns) {
             if (!vis(el) || !isListNewNotMenu(el)) continue;
@@ -2452,6 +2482,79 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         content_frame_selector=content_frame_selector,
     )
 
+    _pdi_grid_ready_poll_js = """() => {
+        const vis = (el) => {
+            if (!el) return false;
+            const st = window.getComputedStyle(el);
+            if (st.display === 'none' || st.visibility === 'hidden') return false;
+            const r = el.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+        };
+        const s2l = document.getElementById('s_2_l');
+        let jqRows = 0;
+        if (s2l && vis(s2l)) {
+            jqRows = s2l.querySelectorAll('tbody tr.jqgrow').length;
+        }
+        let rcTotal = 0;
+        let rcText = '';
+        const rc = document.getElementById('s_2_rc');
+        if (rc && vis(rc)) {
+            rcText = (rc.textContent || '').trim();
+            const m = rcText.match(/^(\\d+)\\s+of\\s+(\\d+)/);
+            if (m) rcTotal = parseInt(m[2], 10) || 0;
+        }
+        return {
+            jqRows,
+            rcTotal,
+            rcText,
+            ready: jqRows > 0 || rcTotal > 0,
+        };
+    }"""
+    for _poll_i in range(15):
+        _ready_any = False
+        _poll_diag = None
+        for _proot in _roots():
+            try:
+                _pd = _proot.evaluate(_pdi_grid_ready_poll_js)
+                if isinstance(_pd, dict) and _pd.get("ready"):
+                    _ready_any = True
+                    _poll_diag = _pd
+                    break
+            except Exception:
+                continue
+        if _ready_any:
+            if _poll_diag and note:
+                note(
+                    f"{log_prefix}: pdi_grid_ready_poll ok (attempt {_poll_i + 1}/15) "
+                    f"jqRows={_poll_diag.get('jqRows')} rcTotal={_poll_diag.get('rcTotal')} "
+                    f"rcText={_poll_diag.get('rcText')!r}"
+                )
+            break
+        _safe_page_wait(page, 300, log_label=f"pdi_grid_ready_poll_{_poll_i}")
+    else:
+        _last = None
+        for _proot in _roots():
+            try:
+                _last = _proot.evaluate(_pdi_grid_ready_poll_js)
+                break
+            except Exception:
+                continue
+        if note:
+            note(
+                f"{log_prefix}: pdi_grid_ready_poll exhausted — last={_last!r} "
+                "(continuing with scrape)."
+            )
+
+    try:
+        _href = page.url or ""
+        if "HHML+Auto+Vehicle+PDI+Assessment" in _href.replace(" ", "+"):
+            note(
+                f"{log_prefix}: PDI Assessment view URL — toolbar New may be span/a "
+                "(not only button#*_Ctrl); using extended + discovery."
+            )
+    except Exception:
+        pass
+
     _pdi_expiry_aria_js = """() => {
         const vis = (el) => {
             if (!el) return false;
@@ -2515,7 +2618,35 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             const c = norm(txt);
             return (c.includes('pdi') && c.includes('expir')) || c === 'pdi expiry date' || c.includes('pdi expiry');
         };
+        const isLeftSearchPane = (el) => {
+            let n = el;
+            for (let d = 0; d < 22 && n; d++) {
+                const pid = String(n.id || '').toLowerCase();
+                if (pid.includes('s_1001_l') || pid.includes('gview_s_1001') || pid === 'gbox_s_1001_l') {
+                    return true;
+                }
+                n = n.parentElement;
+            }
+            return false;
+        };
+        const isPrecheckListGrid = (el) => {
+            let n = el;
+            for (let d = 0; d < 22 && n; d++) {
+                const pid = String(n.id || '').toLowerCase();
+                if (pid.includes('gview_s_3') || pid.includes('s_3_l') || pid === 'gbox_s_3_l') {
+                    return true;
+                }
+                const hay = ((n.id || '') + ' ' + (n.getAttribute('name') || '') + ' '
+                    + (n.getAttribute('title') || '')).toLowerCase();
+                if (hay.includes('precheck') || hay.includes('pre-check') || hay.includes('pre_check')) {
+                    return true;
+                }
+                n = n.parentElement;
+            }
+            return false;
+        };
         const isPdiListScoped = (el) => {
+            if (isLeftSearchPane(el) || isPrecheckListGrid(el)) return false;
             let n = el;
             for (let d = 0; d < 28 && n; d++) {
                 const id = String(n.id || '');
@@ -2533,18 +2664,34 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 const nm = String(n.getAttribute('name') || '').toLowerCase();
                 const tit = String(n.getAttribute('title') || '').toLowerCase();
                 const hay = id + ' ' + nm + ' ' + tit;
-                if (id.includes('s_2_l') || id.includes('gview_s_2') || hay.includes('hmcl+pdi')) {
+                if (id.includes('s_2_l') || id.includes('gview_s_2') || id === 'gbox_s_2_l' || hay.includes('hmcl+pdi')) {
                     return true;
                 }
                 if (hay.includes('pdi') && (hay.includes('list') || hay.includes('applet') || hay.includes('service'))) {
+                    return true;
+                }
+                if ((hay.includes('service request') && (hay.includes('list') || hay.includes('applet')))
+                    || hay.includes('service request list')) {
                     return true;
                 }
                 n = n.parentElement;
             }
             return false;
         };
+        const countPdiDataRows = (tb) => {
+            return Array.from(tb.querySelectorAll('tbody tr.jqgrow, tbody tr[role="row"]')).filter((tr) => {
+                if (!vis(tr)) return false;
+                const cls = String(tr.className || '').toLowerCase();
+                if (cls.includes('jqgfirstrow') || cls.includes('ui-jqgrid-labels') || cls.includes('jqg-empty')) {
+                    return false;
+                }
+                const tds = tr.querySelectorAll('td');
+                if (tds.length < 2) return false;
+                const txt = (tr.textContent || '').trim();
+                return txt.length >= 2;
+            }).length;
+        };
         let tables = Array.from(document.querySelectorAll('table.ui-jqgrid-btable')).filter((tb) => vis(tb) && isPdiListScoped(tb));
-        // Direct-id lookup for the known PDI list table
         const s2l = document.getElementById('s_2_l');
         if (s2l && vis(s2l) && !tables.includes(s2l)) {
             tables.push(s2l);
@@ -2552,7 +2699,36 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         if (tables.length === 0) {
             tables = Array.from(document.querySelectorAll('table')).filter((tb) => vis(tb) && isPdiListScoped(tb));
         }
-        let best = { rowCount: 0, headerMatched: false, colIdx: -1, expiryRaw: [] };
+        let rowCounterValue = '';
+        let rowCounterRows = 0;
+        const rcEl = document.getElementById('s_2_rc');
+        if (rcEl && vis(rcEl)) {
+            rowCounterValue = (rcEl.textContent || '').trim();
+            const rm = rowCounterValue.match(/^(\\d+)\\s+of\\s+(\\d+)/);
+            if (rm) rowCounterRows = parseInt(rm[2], 10) || 0;
+        }
+        let pdiDataCellHit = false;
+        const cellProbeIds = [
+            '1_s_2_l_HMCL_PDI_Expiry_Date', '1_s_2_l_PDI_Expiry_Date', '1_s_2_l_HHML_PDI_Expiry',
+            '2_s_2_l_HMCL_PDI_Expiry_Date', '2_s_2_l_PDI_Expiry_Date',
+        ];
+        for (const cid of cellProbeIds) {
+            const dc = document.getElementById(cid);
+            if (dc && vis(dc)) { pdiDataCellHit = true; break; }
+        }
+        if (!pdiDataCellHit) {
+            const probe = document.querySelector('[id^="1_s_2_l_"][id*="Expiry"], [id^="2_s_2_l_"][id*="Expiry"]');
+            if (probe && vis(probe)) pdiDataCellHit = true;
+        }
+        let best = {
+            rowCount: 0,
+            headerMatched: false,
+            colIdx: -1,
+            expiryRaw: [],
+            rowCounterRows,
+            rowCounterValue,
+            pdiDataCellHit,
+        };
         for (const tb of tables) {
             const rows = Array.from(tb.querySelectorAll('tr')).filter(vis);
             if (rows.length < 1) continue;
@@ -2568,20 +2744,33 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 if (colIdx >= 0) break;
             }
             const expiryRaw = [];
-            let dataRows = 0;
-            for (const tr of rows) {
-                const cls = String(tr.className || '').toLowerCase();
-                if (cls.includes('jqgfirstrow')) continue;
-                const tds = tr.querySelectorAll('td');
-                if (tds.length < 2) continue;
-                const rowTxt = (tr.textContent || '').trim();
-                if (rowTxt.length < 2) continue;
-                const ths = tr.querySelectorAll('th');
-                if (ths.length > 0 && tds.length === 0) continue;
-                dataRows++;
-                if (colIdx >= 0 && colIdx < tds.length) {
-                    const cellVal = (tds[colIdx].innerText || tds[colIdx].textContent || '').trim();
-                    if (cellVal) expiryRaw.push(cellVal.slice(0, 48));
+            let dataRows = countPdiDataRows(tb);
+            if (dataRows === 0) {
+                for (const tr of rows) {
+                    const cls = String(tr.className || '').toLowerCase();
+                    if (cls.includes('jqgfirstrow')) continue;
+                    const tds = tr.querySelectorAll('td');
+                    if (tds.length < 2) continue;
+                    const rowTxt = (tr.textContent || '').trim();
+                    if (rowTxt.length < 2) continue;
+                    const ths = tr.querySelectorAll('th');
+                    if (ths.length > 0 && tds.length === 0) continue;
+                    dataRows++;
+                    if (colIdx >= 0 && colIdx < tds.length) {
+                        const cellVal = (tds[colIdx].innerText || tds[colIdx].textContent || '').trim();
+                        if (cellVal) expiryRaw.push(cellVal.slice(0, 48));
+                    }
+                }
+            } else {
+                for (const tr of tb.querySelectorAll('tbody tr.jqgrow, tbody tr[role="row"]')) {
+                    if (!vis(tr)) continue;
+                    const cls = String(tr.className || '').toLowerCase();
+                    if (cls.includes('jqgfirstrow') || cls.includes('jqg-empty')) continue;
+                    const tds = tr.querySelectorAll('td');
+                    if (colIdx >= 0 && colIdx < tds.length) {
+                        const cellVal = (tds[colIdx].innerText || tds[colIdx].textContent || '').trim();
+                        if (cellVal) expiryRaw.push(cellVal.slice(0, 48));
+                    }
                 }
             }
             if (dataRows > best.rowCount || (colIdx >= 0 && !best.headerMatched)) {
@@ -2590,9 +2779,17 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                     headerMatched: colIdx >= 0,
                     colIdx,
                     expiryRaw: colIdx >= 0 ? expiryRaw.slice(0, 12) : [],
+                    rowCounterRows,
+                    rowCounterValue,
+                    pdiDataCellHit,
                 };
             }
         }
+        let effRow = Math.max(best.rowCount || 0, rowCounterRows || 0, pdiDataCellHit ? 1 : 0);
+        best.rowCount = effRow;
+        best.rowCounterRows = rowCounterRows;
+        best.rowCounterValue = rowCounterValue;
+        best.pdiDataCellHit = pdiDataCellHit;
         return best;
     }"""
     _pdi_row_count = 0
