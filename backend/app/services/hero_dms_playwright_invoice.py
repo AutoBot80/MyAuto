@@ -4235,7 +4235,13 @@ def print_hero_dms_forms(
     browser tray may still briefly list them depending on timing.
     """
     _note: Callable[..., None] = note if callable(note) else (lambda m: logger.info("%s", m))
+    # Keep click/type timeouts bounded so Siebel UI steps fail fast; do not use this for PDF download waits.
     _tmo = min(int(action_timeout_ms or 3000), 8000)
+    # After Run Report **Submit**, Siebel often needs well over 45–50s to emit the download (especially for
+    # **Form22**, the 2nd report after GST Retail Invoice). Previously we used ``min(180, max(45, _tmo*6/1000))``
+    # with ``_tmo`` capped at 8s → ~48s max — too short on many tenants. Scale from full ``action_timeout_ms``.
+    _raw_action_ms = max(int(action_timeout_ms or 3000), 3000)
+    _download_wait_sec = float(min(300, max(90, (int(_raw_action_ms / 1000)) * 3)))
 
     def _unique_dest(path: Path) -> Path:
         if not path.exists():
@@ -4503,7 +4509,7 @@ def print_hero_dms_forms(
                 sub_btn.click(timeout=_tmo)
             except Exception:
                 sub_btn.click(timeout=_tmo, force=True)
-            _deadline = time.time() + min(180.0, max(45.0, _tmo / 1000.0 * 6))
+            _deadline = time.time() + _download_wait_sec
             while time.time() < _deadline:
                 page.wait_for_timeout(120)
                 if len(_collected) >= 1:

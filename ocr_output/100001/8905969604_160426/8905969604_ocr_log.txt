@@ -1,0 +1,29 @@
+[2026-04-16 14:57:21 IST] [pre] Consolidated PDF pre-OCR complete: mobile='8905969604'.
+[2026-04-16 14:57:26 IST] [ocr] started (Textract prefetch, parallel compile, merge, Raw_OCR)
+[2026-04-16 14:57:36 IST] [post] ok bytes_before=666682 bytes_after=666682 max_file_bytes=204800 still_over=0 actions=6
+[2026-04-16 14:57:36 IST] [ocr] completed total_ms=9597 textract_prefetch_ms=6943 parallel_compile_ms=534 merge_write_ms=5 insurance_ms=0 raw_finalize_ms=10 post_ocr_ms=2090 processed=2 errors=0
+
+[2026-04-16 14:57:36 IST] [pre] step=peer_stem_ocr_log_merged name=add_sales_Ajay_Faujdar_Consoliadated_eed1f52fac51_ocr_log.txt
+[2026-04-16 14:57:21 IST] [pre] T+9796ms step=add_sales_pre_ocr_session work_dir=C:\Users\arya_\OneDrive\Desktop\My Auto.AI\.cache\add_sales_pre_ocr_work\100001 dealer_id=100001 source_pdf=add_sales_Ajay Faujdar Consoliadated_eed1f52fac51.pdf
+[2026-04-16 14:57:21 IST] [pre] T+9797ms step=copy_pdf_to_processing elapsed_ms=64 bytes=1567097 name=add_sales_Ajay Faujdar Consoliadated_eed1f52fac51.pdf
+[2026-04-16 14:57:21 IST] [pre] T+9797ms step=pre_ocr_pdf_total_wall elapsed_ms=9719 includes_textract_ddt_and_io
+[2026-04-16 14:57:21 IST] [pre] T+2427ms step=pdf_to_page_rasters elapsed_ms=2350 pages=3 osd=False file=add_sales_Ajay Faujdar Consoliadated_eed1f52fac51.pdf
+[2026-04-16 14:57:21 IST] [pre] T+2427ms step=raster_page_1 elapsed_ms=438 dpi=300 px=2084x2996
+[2026-04-16 14:57:21 IST] [pre] T+2427ms step=raster_page_2 elapsed_ms=73 dpi=300 px=738x1155
+[2026-04-16 14:57:21 IST] [pre] T+2427ms step=raster_page_3 elapsed_ms=97 dpi=300 px=850x1234
+[2026-04-16 14:57:21 IST] [pre] T+7915ms step=textract_ddt_page_3 elapsed_ms=5367 chars=291 rgb_bytes≈3146700
+[2026-04-16 14:57:21 IST] [pre] T+7960ms step=textract_ddt_page_2 elapsed_ms=5482 chars=167 rgb_bytes≈2557170
+[2026-04-16 14:57:21 IST] [pre] T+9793ms step=textract_ddt_page_1 elapsed_ms=7349 chars=743 rgb_bytes≈18730992
+[2026-04-16 14:57:21 IST] [pre] T+9794ms step=textract_ddt_all_pages_total elapsed_ms=18198 pages=3
+[2026-04-16 14:57:21 IST] [pre] T+9794ms step=merge_page_text elapsed_ms=0 chars=1250
+[2026-04-16 14:57:21 IST] [pre] T+9795ms step=write_pre_ocr_txt elapsed_ms=1 path=add_sales_Ajay Faujdar Consoliadated_eed1f52fac51_16042026_pre_ocr.txt
+[2026-04-16 14:57:21 IST] [pre] T+9796ms step=scope_text_sales_detail_onward elapsed_ms=0 chars=1150
+[2026-04-16 14:57:21 IST] [pre] T+9796ms step=extract_mobile elapsed_ms=0 mobile=set
+[2026-04-16 14:57:21 IST] [pre] T+9801ms step=classify_pages_from_ocr_text elapsed_ms=4 slots=3
+[2026-04-16 14:57:21 IST] [pre] T+9802ms step=sales_detail_onward_scope elapsed_ms=0 chars=1150
+[2026-04-16 14:57:21 IST] [pre] T+9802ms step=extract_all_mobiles elapsed_ms=0 count=3
+[2026-04-16 14:57:21 IST] [pre] T+9802ms step=detect_multi_customer elapsed_ms=0 is_multi=True
+[2026-04-16 14:57:21 IST] [pre] T+9806ms step=build_multi_customer_bundles elapsed_ms=3 bundles_data=1
+[2026-04-16 14:57:21 IST] [pre] T+19811ms step=split_pdf_multi_customer_to_sale_dirs elapsed_ms=10004 customers=1
+[2026-04-16 14:57:21 IST] [pre] T+19817ms step=run_pre_ocr_and_prepare_done path=multi_customer bundles=1
+[2026-04-16 14:57:21 IST] [pre] T+19817ms step=pre_ocr_total_wall elapsed_ms=19817 sum_of_steps_ms=59149

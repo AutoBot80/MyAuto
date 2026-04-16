@@ -32,6 +32,7 @@ import {
   parseCareOfFromCombined,
 } from "../utils/section2CustomerFormat";
 import { isPlaceholderCustomerMobileDigits } from "../utils/customerMobile";
+import { openCreateInvoicePdfsInBrowser } from "../utils/openCreateInvoicePdfs";
 
 /** Shown under Upload documents while upload or OCR polling runs; counts down toward 00m:00s. */
 const ADD_SALES_OCR_COUNTDOWN_START_SEC = 40;
@@ -1005,11 +1006,6 @@ export function AddSalesPage({
           }) as ExtractedVehicleDetails
         );
       }
-      const pdfs = dmsRes.pdfs_saved ?? [];
-      const hasForm21 = pdfs.some((f) => /form\s*21|form21/i.test(f));
-      const hasForm22 = pdfs.some((f) => /form\s*22|form22/i.test(f));
-      const hasInvoiceDetails = pdfs.some((f) => /invoice_details|invoice\s*details/i.test(f));
-      if (hasForm21 && hasForm22 && hasInvoiceDetails) setDmsPdfsDownloaded(true);
       if (dmsRes.customer_id != null) setLastSubmittedCustomerId(dmsRes.customer_id);
       if (dmsRes.vehicle_id != null) setLastSubmittedVehicleId(dmsRes.vehicle_id);
       const narrative =
@@ -1031,6 +1027,26 @@ export function AddSalesPage({
       }
       if (dmsRes.success) {
         setCreateInvoiceCompleted(true);
+        if (savedTo && dealerId > 0) {
+          void openCreateInvoicePdfsInBrowser(savedTo, dealerId, dmsRes.pdfs_saved ?? []).then((r) => {
+            if (r.candidateCount > 0) {
+              setDmsPdfsDownloaded(true);
+            }
+            if (r.opened > 0) {
+              setFillDmsStatus((prev) => {
+                const base = (prev ?? "").trim();
+                const extra = `Opened ${r.opened} PDF(s) in new browser tab(s).`;
+                return base ? `${base} ${extra}` : extra;
+              });
+            } else if (r.candidateCount > 0 && r.hint) {
+              setFillDmsStatus((prev) => {
+                const base = (prev ?? "").trim();
+                const extra = `PDFs are in the sale folder but did not open (${r.hint}).`;
+                return base ? `${base} ${extra}` : extra;
+              });
+            }
+          });
+        }
       }
     } catch (err) {
       if (isFillDmsAbortError(err)) {

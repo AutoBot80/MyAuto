@@ -7768,6 +7768,7 @@ def _hero_misp_fill_proposal_and_review(
         )
         if err:
             return _proposal_fail(ocr_output_dir, subfolder, err)
+        _t(page, 600)
         err = _proposal_addon_checkbox_id_or_label(
             page,
             "chkNDPlusCover",
@@ -7780,6 +7781,7 @@ def _hero_misp_fill_proposal_and_review(
         )
         if err:
             return _proposal_fail(ocr_output_dir, subfolder, err)
+        _t(page, 800)
     else:
         err = _proposal_addon_checkbox_id_or_label(
             page,
@@ -7872,6 +7874,91 @@ def _hero_misp_fill_proposal_and_review(
         )
         if err:
             return _proposal_fail(ocr_output_dir, subfolder, err)
+
+    # Re-assert ND Plus Cover for NIC after all other addon toggles which may
+    # have triggered ASP.NET postbacks that reset the addon grid.
+    if _is_national_insurance:
+        _t(page, 500)
+        for _nd_retry in range(3):
+            err = _proposal_addon_checkbox_id_or_label(
+                page,
+                "chkNilDepreciation",
+                False,
+                "addon_nd_cover_reassert_uncheck",
+                _nd_cover_label_pat,
+                ocr_output_dir,
+                subfolder,
+                timeout_ms=pt,
+            )
+            if err:
+                return _proposal_fail(ocr_output_dir, subfolder, err)
+            _t(page, 400)
+            err = _proposal_addon_checkbox_id_or_label(
+                page,
+                "chkNDPlusCover",
+                True,
+                "addon_nd_plus_cover_reassert",
+                _nd_plus_label_pat,
+                ocr_output_dir,
+                subfolder,
+                timeout_ms=pt,
+            )
+            if err:
+                return _proposal_fail(ocr_output_dir, subfolder, err)
+            _t(page, 600)
+            # Verify ND Plus Cover is still checked after the settle
+            _nd_plus_still_ok = False
+            for _root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
+                try:
+                    _loc = _proposal_cph1_locator(_root, "chkNDPlusCover")
+                    if _loc.count() == 0:
+                        continue
+                    _cb = _proposal_first_visible_locator_nth(_loc, max_n=4, vis_timeout_ms=500)
+                    if _cb is not None and _cb.is_checked():
+                        _nd_plus_still_ok = True
+                        break
+                except Exception:
+                    continue
+            if not _nd_plus_still_ok:
+                # Fallback: check via label pattern
+                for _root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
+                    try:
+                        _cbs = _root.locator('input[type="checkbox"]')
+                        for _ci in range(min(_cbs.count(), 80)):
+                            _el = _cbs.nth(_ci)
+                            try:
+                                if not _el.is_visible(timeout=300):
+                                    continue
+                                _ctx = _proposal_checkbox_context_text(_el)
+                                if re.search(_nd_plus_label_pat, _ctx, re.I) and _el.is_checked():
+                                    _nd_plus_still_ok = True
+                                    break
+                            except Exception:
+                                continue
+                        if _nd_plus_still_ok:
+                            break
+                    except Exception:
+                        continue
+            if _nd_plus_still_ok:
+                _proposal_log(
+                    ocr_output_dir,
+                    subfolder,
+                    "addon_nd_plus_cover_final_verify",
+                    f"ND Plus Cover confirmed checked after reassert (attempt {_nd_retry + 1})",
+                )
+                break
+            _proposal_log(
+                ocr_output_dir,
+                subfolder,
+                "addon_nd_plus_cover_final_verify",
+                f"ND Plus Cover NOT checked after reassert attempt {_nd_retry + 1}, retrying",
+            )
+        else:
+            return _proposal_fail(
+                ocr_output_dir,
+                subfolder,
+                "addon_nd_plus_cover_final_verify: ND Plus Cover could not be kept checked after 3 reassert attempts",
+            )
 
     err = _proposal_step_select_fuzzy(
         page,
