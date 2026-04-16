@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-PLACEHOLDER_INDIAN_MOBILES: frozenset[str] = frozenset({"9876543210"})
+PLACEHOLDER_INDIAN_MOBILES: frozenset[str] = frozenset({
+    "9876543210",
+    "9876501234",
+})
 
 
 def is_placeholder_indian_mobile(ten: str) -> bool:

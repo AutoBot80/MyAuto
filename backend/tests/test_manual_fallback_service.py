@@ -73,17 +73,21 @@ def test_write_and_apply_manual_session(mock_work, tmp_path: Path) -> None:
     uploads = tmp_path / "uploads"
     uploads.mkdir()
 
+    ocr_out = tmp_path / "ocr_output"
+    ocr_out.mkdir()
+
     with patch("app.services.manual_fallback_service.get_uploads_dir", return_value=uploads):
         sub, saved = apply_manual_session(
             100001,
             session_id,
-            "9876501234",
+            "7014512345",
             {
                 "0": ROLE_AADHAR_FRONT,
                 "1": ROLE_AADHAR_BACK,
                 "2": ROLE_DETAILS,
                 "3": ROLE_UNUSED,
             },
+            ocr_output_dir=ocr_out,
         )
 
     assert sub
@@ -124,6 +128,6 @@ def test_apply_rejects_bad_role_count(mock_work, tmp_path: Path) -> None:
         apply_manual_session(
             100001,
             session_id,
-            "9876501234",
+            "7014512345",
             {"0": ROLE_AADHAR_FRONT, "1": ROLE_AADHAR_BACK, "2": ROLE_UNUSED},
         )

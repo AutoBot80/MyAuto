@@ -2297,9 +2297,38 @@ def run_pre_ocr_and_prepare(
     has_aadhar_front = PAGE_TYPE_AADHAR in classified_types or PAGE_TYPE_AADHAR_COMBINED in classified_types
     has_aadhar_back = PAGE_TYPE_AADHAR_BACK in classified_types or PAGE_TYPE_AADHAR_COMBINED in classified_types
 
-    # Fallback: Aadhar back may be blurred/darker on same page; OCR might miss uidai.gov.in.
-    # If we have front but no back, and exactly one Aadhar page, treat it as combined.
+    # Dedup: 2+ pages classified as Aadhar front, 0 as back → use DOB+gender to pick the
+    # true front and demote the other(s) to Aadhar_back.
     t_fb0 = time.perf_counter()
+    if has_aadhar_front and not has_aadhar_back:
+        aadhar_pages = [(i, p) for i, p in classifications if p in (PAGE_TYPE_AADHAR, PAGE_TYPE_AADHAR_COMBINED)]
+        if len(aadhar_pages) >= 2:
+            face_results = []
+            for idx, _pt in aadhar_pages:
+                pg_text = extract_page_text_from_pre_ocr_blocks(full_text, idx)
+                face_results.append((idx, aadhar_front_face_ocr(pg_text)))
+            true_fronts = [idx for idx, ok in face_results if ok]
+            keep_front = true_fronts[0] if true_fronts else aadhar_pages[0][0]
+            demoted = []
+            for idx, _pt in aadhar_pages:
+                if idx != keep_front:
+                    demoted.append(idx)
+            if demoted:
+                demoted_set = set(demoted)
+                classifications = [
+                    (i, PAGE_TYPE_AADHAR_BACK if i in demoted_set and p == PAGE_TYPE_AADHAR else p)
+                    for i, p in classifications
+                ]
+                has_aadhar_back = True
+                classified_types = {ptype for _, ptype in classifications}
+                has_aadhar_front = PAGE_TYPE_AADHAR in classified_types or PAGE_TYPE_AADHAR_COMBINED in classified_types
+                logger.info(
+                    "Dedup: kept page %d as Aadhar front, demoted %s to Aadhar_back",
+                    keep_front + 1, [d + 1 for d in demoted],
+                )
+
+    # Fallback: Aadhar back may be blurred/darker on same page; OCR might miss back cues.
+    # If we have front but no back, and exactly one Aadhar page, treat it as combined.
     if has_aadhar_front and not has_aadhar_back:
         aadhar_pages = [(i, p) for i, p in classifications if p in (PAGE_TYPE_AADHAR, PAGE_TYPE_AADHAR_COMBINED)]
         if len(aadhar_pages) == 1:

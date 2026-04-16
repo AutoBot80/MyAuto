@@ -61,18 +61,27 @@ _INSURANCE_PATTERNS = [
     re.compile(r"premium\s+of\s+rs\.?", re.IGNORECASE),
 ]
 
-# Fallback scoring only (not used for front vs back — see :func:`aadhar_front_face_ocr`).
-# **Front** is defined only by DOB + Male/Female cues; **back** is inferred when not front.
+# Tier-1: shared Aadhaar markers (appear on both front and back).
+# Any match means "this is an Aadhaar page" — tier-2 then decides front vs back.
+_AADHAR_GENERAL_PATTERNS = [
+    re.compile(r"government\s+of\s+india", re.IGNORECASE),
+    re.compile(r"unique\s+identification\s+authority\s+of\s+india", re.IGNORECASE),
+    re.compile(r"\b\d{4}\s+\d{4}\s+\d{4}\b"),
+    re.compile(r"uidai\.gov", re.IGNORECASE),
+]
+
+# Tier-2 back: cues that appear only on the address (back) side.
 _AADHAR_BACK_PATTERNS = [
+    re.compile(r"\bS/O\b|\bD/O\b|\bW/O\b|\bC/O\b", re.IGNORECASE),
+    re.compile(r"\baddress\s*:", re.IGNORECASE),
+    re.compile(r"download\s+date", re.IGNORECASE),
     re.compile(r"address\s+of\s+the\s+cardholder", re.IGNORECASE),
     re.compile(r"address\s+is\s+as\s+per", re.IGNORECASE),
     re.compile(r"पता", re.IGNORECASE),
 ]
 
+# Tier-2 front: cues specific to the photo (front) side (used only for legacy fallback scoring).
 _AADHAR_FRONT_PATTERNS = [
-    re.compile(r"government\s+of\s+india", re.IGNORECASE),
-    re.compile(r"unique\s+identification\s+authority\s+of\s+india", re.IGNORECASE),
-    re.compile(r"\b\d{4}\s+\d{4}\s+\d{4}\b"),
     re.compile(r"(?:male|female)\s*/\s*(?:m|f)\b", re.IGNORECASE),
     re.compile(r"date\s+of\s+birth|year\s+of\s+birth|d\.?o\.?b\.?", re.IGNORECASE),
     re.compile(r"care\s+of\s*[:]?", re.IGNORECASE),
@@ -124,8 +133,14 @@ def classify_page_by_text(text: str) -> str:
     """
     Classify a single page from its OCR text.
 
-    **Aadhaar photo front** is determined **only** by :func:`aadhar_front_face_ocr` (DOB + Male/Female cues).
-    **Aadhaar back** is a non-front Aadhaar-like page (fallback scoring). **uidai.gov.in** is not used for front/back.
+    Two-tier Aadhaar logic:
+
+    1. **Tier 1 — "Is this an Aadhaar page?"** Shared markers (UID Authority, 12-digit number,
+       ``uidai.gov``, Government of India) appear on both front and back.
+    2. **Tier 2 — "Front or back?"**
+       - **Front**: :func:`aadhar_front_face_ocr` (DOB + Male/Female).
+       - **Back**: ``S/O`` / ``D/O`` / ``W/O``, ``Address:``, ``Download Date:``, etc.
+       - Default to front when neither tier-2 check fires.
     """
     if not text or not isinstance(text, str):
         return PAGE_TYPE_UNUSED
@@ -134,44 +149,39 @@ def classify_page_by_text(text: str) -> str:
     if len(t) < 20:
         return PAGE_TYPE_UNUSED
 
-    scores: dict[str, int] = {
-        PAGE_TYPE_DETAILS: 0,
-        PAGE_TYPE_INSURANCE: 0,
-        PAGE_TYPE_AADHAR_BACK: 0,
-        PAGE_TYPE_AADHAR: 0,
-    }
+    # ── Details / Insurance (early exit) ──
+    details_score = sum(1 for pat in _DETAILS_PATTERNS if pat.search(t))
+    insurance_score = sum(1 for pat in _INSURANCE_PATTERNS if pat.search(t))
 
-    for pat in _DETAILS_PATTERNS:
-        if pat.search(t):
-            scores[PAGE_TYPE_DETAILS] += 1
-    for pat in _INSURANCE_PATTERNS:
-        if pat.search(t):
-            scores[PAGE_TYPE_INSURANCE] += 1
-
-    if scores[PAGE_TYPE_DETAILS] >= 2:
+    if details_score >= 2:
         return PAGE_TYPE_DETAILS
-    if scores[PAGE_TYPE_INSURANCE] >= 2:
+    if insurance_score >= 2:
         return PAGE_TYPE_INSURANCE
 
-    if _aadhaar_combined_single_page_candidate(t):
-        return PAGE_TYPE_AADHAR_COMBINED
-    if aadhar_front_face_ocr(t):
+    # ── Tier 1: is this an Aadhaar page at all? ──
+    aadhar_general = sum(1 for pat in _AADHAR_GENERAL_PATTERNS if pat.search(t))
+    if aadhar_general >= 1:
+        # Tier 2: front vs back
+        if _aadhaar_combined_single_page_candidate(t):
+            return PAGE_TYPE_AADHAR_COMBINED
+        if aadhar_front_face_ocr(t):
+            return PAGE_TYPE_AADHAR
+        back_score = sum(1 for pat in _AADHAR_BACK_PATTERNS if pat.search(t))
+        if back_score >= 1:
+            return PAGE_TYPE_AADHAR_BACK
         return PAGE_TYPE_AADHAR
 
-    for pat in _AADHAR_BACK_PATTERNS:
-        if pat.search(t):
-            scores[PAGE_TYPE_AADHAR_BACK] += 1
-    for pat in _AADHAR_FRONT_PATTERNS:
-        if pat.search(t):
-            scores[PAGE_TYPE_AADHAR] += 1
-
+    # ── Fallback scoring (no tier-1 Aadhaar gate hit) ──
+    scores: dict[str, int] = {
+        PAGE_TYPE_AADHAR_BACK: sum(1 for pat in _AADHAR_BACK_PATTERNS if pat.search(t)),
+        PAGE_TYPE_AADHAR: sum(1 for pat in _AADHAR_FRONT_PATTERNS if pat.search(t)),
+    }
     best_type = PAGE_TYPE_UNUSED
     best_score = 0
     for ptype, score in scores.items():
         if score > best_score:
             best_score = score
             best_type = ptype
-
     if best_score == 0:
         return PAGE_TYPE_UNUSED
     return best_type
