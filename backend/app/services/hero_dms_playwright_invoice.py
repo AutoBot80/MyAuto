@@ -565,6 +565,40 @@ def _classify_my_orders_grid_rows(rows: list[dict]) -> tuple[str, str, str]:
     return "unknown_rows", (rows[0].get("order") or "").strip(), ""
 
 
+def _norm_my_orders_order_key(s: str) -> str:
+    return re.sub(r"\s+", "", (s or "").strip().upper())
+
+
+def _my_orders_row_matches_order_number(row: dict, order_needle: str) -> bool:
+    """
+    Whether a jqGrid row's parsed **Order#** matches the expected value (same idea as
+    ``_JS_CLICK_MY_ORDERS_ORDER_LINK`` / Order# drill-down matching).
+    """
+    needle = (order_needle or "").strip()
+    if not needle:
+        return True
+    ov = (row.get("order") or "").strip()
+    if not ov:
+        raw_d = re.sub(r"\D", "", (row.get("raw") or ""))
+        nd = re.sub(r"\D", "", needle)
+        if nd and raw_d and nd in raw_d:
+            return True
+        return False
+    od = re.sub(r"\D", "", needle)
+    otd = re.sub(r"\D", "", ov)
+    needle_norm = _norm_my_orders_order_key(needle)
+    ov_norm = _norm_my_orders_order_key(ov)
+    if needle_norm and ov_norm:
+        if needle_norm == ov_norm:
+            return True
+        if needle_norm in ov_norm or ov_norm in needle_norm:
+            return True
+    if od and otd:
+        if od == otd or od in otd or otd in od:
+            return True
+    return False
+
+
 def _find_vehicle_sales_my_orders_search_root(page: Page, content_frame_selector: str | None):
     """Frame (or page) that contains Find field ``name=s_1_1_1_0`` and Sales Orders New (+)."""
     roots: list = []
@@ -827,9 +861,14 @@ def _run_vehicle_sales_my_orders_mobile_search(
     action_timeout_ms: int,
     content_frame_selector: str | None,
     note,
+    restrict_to_order_number: str = "",
 ) -> _MyOrdersGridSearchResult:
     """
     My Orders view: Find dropdown ``s_1_1_1_0`` → Mobile Phone# → value field → Enter → read ``ui-jqgrid-btable``.
+
+    When ``restrict_to_order_number`` is non-empty, only grid rows whose Order# matches that value
+    are used for classification and primary Order#/Invoice#; if the mobile search returns rows but
+    none match, outcome is ``error`` with ``error='my_orders_no_matching_order'``.
     """
     _tmo = min(int(action_timeout_ms or 3000), 8000)
     root = _find_vehicle_sales_my_orders_search_root(page, content_frame_selector)
@@ -922,10 +961,25 @@ def _run_vehicle_sales_my_orders_mobile_search(
             pass
         _safe_page_wait(page, min(2500, _tmo), log_label="after_my_orders_find_enter")
         rows = _read_my_orders_jqgrid_rows_anywhere(page, content_frame_selector)
+        _full_row_count = len(rows or [])
+        _needle = (restrict_to_order_number or "").strip()
+        if _needle and rows:
+            _matched = [r for r in rows if _my_orders_row_matches_order_number(r, _needle)]
+            if not _matched:
+                note(
+                    f"Create Order: My Orders grid has {_full_row_count} row(s) for mobile but none match "
+                    f"expected Order# {_needle!r}."
+                )
+                return _MyOrdersGridSearchResult(
+                    outcome="error",
+                    error="my_orders_no_matching_order",
+                    rows=rows or [],
+                )
+            rows = _matched
         oc, po, pi = _classify_my_orders_grid_rows(rows)
         note(
             f"Create Order: My Orders grid search outcome={oc!r} rows={len(rows)} "
-            f"primary_order={po!r} primary_invoice={pi!r}."
+            f"(full_grid_rows={_full_row_count}) primary_order={po!r} primary_invoice={pi!r}."
         )
         return _MyOrdersGridSearchResult(outcome=oc, primary_order=po, primary_invoice=pi, rows=rows or [])
     except Exception as _ex:
@@ -2375,6 +2429,7 @@ def _create_order(
     challan_comments_text: str = "",
     network_dealer_name: str = "",
     challan_network_pin: str = "",
+    expected_order_number: str = "",
 ) -> tuple[bool, str | None, dict]:
     """
     Vehicle Sales → Sales Orders flow (same frame as the ``+`` New control):
@@ -2383,7 +2438,8 @@ def _create_order(
       **Sales Orders List:New (+)** after loading the Vehicle Sales URL (avoids dummy-mobile grid loops).
 
     - Otherwise, after opening **My Orders**, run ``_run_vehicle_sales_my_orders_mobile_search`` (Find ``s_1_1_1_0`` →
-      Mobile Phone# → mobile → Enter → ``ui-jqgrid-btable``):
+      Mobile Phone# → mobile → Enter → ``ui-jqgrid-btable``). If ``expected_order_number`` is set, only rows
+      whose Order# matches it are considered (one mobile can list multiple orders).
 
       - **invoiced** (meaningful Invoice# on a row): return success with Order#/Invoice# scrape and
         ``ready_for_client_create_invoice=True`` (skip ``+`` booking and attach).
@@ -2586,10 +2642,19 @@ def _create_order(
             action_timeout_ms=action_timeout_ms,
             content_frame_selector=content_frame_selector,
             note=note,
+            restrict_to_order_number=(expected_order_number or "").strip(),
         )
         _mo_oc = (_mos.outcome or "").strip()
         _mo_po = (_mos.primary_order or "").strip()
         _mo_pi = (_mos.primary_invoice or "").strip()
+
+        if _mo_oc == "error" and (_mos.error or "").strip() == "my_orders_no_matching_order":
+            _exp = (expected_order_number or "").strip()
+            return (
+                False,
+                f"Create Order: My Orders has no row matching expected Order# {_exp!r} for this mobile.",
+                scraped,
+            )
 
         # Grid returned rows but status/invoice columns did not classify (e.g. nonstandard header ids). If we
         # have Order# links and no meaningful Invoice# on any row, prefer allocated-style attach (Order# drill
@@ -4306,16 +4371,34 @@ def print_hero_dms_forms(
     _siebel_after_goto_wait(page, floor_ms=4500)
     _note(f"Create Order: arrived at Vehicle Sales (post-goto wait). URL={page.url[:120]}")
 
+    _on_arg = (order_number or "").strip()
     _mos = _run_vehicle_sales_my_orders_mobile_search(
         page,
         mobile=mobile,
         action_timeout_ms=action_timeout_ms,
         content_frame_selector=content_frame_selector,
         note=_note,
+        restrict_to_order_number=_on_arg,
     )
+    if (_mos.outcome or "").strip() == "error" and (_mos.error or "").strip() == "my_orders_no_matching_order":
+        _msg = (
+            f"print_hero_dms_forms: My Orders has no row matching Order# {_on_arg!r} for this mobile."
+        )
+        _append_run_hero_dms_reports_to_playwright_log(
+            execution_log_path,
+            downloads_dir=None,
+            mobile=mobile or "",
+            report_names=_names,
+            report_details=[],
+            saved_paths=[],
+            summary=None,
+            all_ok=False,
+            abort_message=_msg,
+        )
+        return False, _msg, [], []
     _mo_po = (_mos.primary_order or "").strip()
     _mo_pi = (_mos.primary_invoice or "").strip()
-    _on = (order_number or "").strip() or _mo_po
+    _on = _on_arg or _mo_po
     _inv_eff = (invoice_number or "").strip() or _mo_pi
     _opened = False
     _drill_via = ""
@@ -4678,6 +4761,10 @@ def prepare_order(
     _raw_olv = dms_values.get("order_line_vehicles") or dms_values.get("attach_vehicles")
     _attach_li = _raw_olv if isinstance(_raw_olv, list) and len(_raw_olv) > 0 else None
     _flow_pv = str(dms_values.get("hero_dms_flow") or "add_sales").strip()
+    _expected_order = (
+        str(dms_values.get("order_number") or "").strip()
+        or str((out.get("vehicle") or {}).get("order_number") or "").strip()
+    )
     ok_order, order_err, order_scraped = _create_order(
         page,
         mobile=mobile,
@@ -4700,6 +4787,7 @@ def prepare_order(
         challan_network_pin=str(
             dms_values.get("network_pin_code") or dms_values.get("pin_code") or ""
         ).strip(),
+        expected_order_number=_expected_order,
     )
     if not ok_order:
         step("Stopped: create_order flow failed.")
