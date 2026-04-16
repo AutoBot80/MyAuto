@@ -87,10 +87,9 @@ _AADHAR_FRONT_PATTERNS = [
     re.compile(r"care\s+of\s*[:]?", re.IGNORECASE),
 ]
 
-# Optional: same-page folded card (front+back OCR in one page) — DOB row + long text + address/authority cues
-_AADHAR_COMBINED_EXTRA = re.compile(
-    r"(?i)(?:address|cardholder|पता|विशेष\s*पहचान|unique\s+identification)",
-)
+# Optional: same-page folded card — requires **back-face** cues in the same OCR blob as the photo front.
+# Do **not** use phrases that appear on the normal front (e.g. "Unique Identification Authority"),
+# or every full front page is misclassified as ``Aadhar_combined`` and gets a destructive split.
 
 
 def aadhar_front_face_ocr(text: str) -> bool:
@@ -118,10 +117,17 @@ def aadhar_front_face_ocr(text: str) -> bool:
 
 
 def _aadhaar_combined_single_page_candidate(t: str) -> bool:
-    """Folded / one-page scan with both faces: front row + extra back-like body text."""
+    """
+    Folded / one-page scan where **both** faces appear in one raster (OCR interleaves front + back text).
+
+    Requires photo-front cues **and** at least one **back-only** line (address / S-O / download date, etc.).
+    A normal one-face scan has either front markers or back markers — not both strong signals — so it
+    stays ``Aadhar`` or ``Aadhar_back``.
+    """
     if not aadhar_front_face_ocr(t) or len(t) < 400:
         return False
-    return bool(_AADHAR_COMBINED_EXTRA.search(t))
+    back_hits = sum(1 for pat in _AADHAR_BACK_PATTERNS if pat.search(t))
+    return back_hits >= 1
 
 
 def aadhar_combined_ocr_looks_ok(text: str) -> bool:

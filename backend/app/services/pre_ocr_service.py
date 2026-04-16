@@ -14,8 +14,9 @@ document slot** (``Aadhar.pdf``, ``Aadhar_back.pdf``, …) for :mod:`sales_ocr_s
 by classification and :func:`_sync_for_ocr_pdfs` (copy from ``raw/page_NN.pdf`` or embed split JPEGs for
 same-page Aadhaar). :mod:`post_ocr_service` then compresses and moves upload-facing files to the sale root.
 
-**Aadhaar handling (bulk):** separate front/back pages → copy as-is; same page top/bottom →
-:func:`split_aadhar_consolidated` then letter scissor fallback via :func:`_process_same_page_aadhar`;
+**Aadhaar handling (bulk):** separate front/back pages → copy as-is; same page with both faces →
+:func:`split_aadhar_consolidated` (vertical **or** horizontal ink-valley split for stacked vs side-by-side),
+then letter scissor fallback via :func:`_process_same_page_aadhar`;
 UIDAI letter layout → :func:`crop_aadhar_letter_below_scissors` / :func:`split_aadhar_letter_vertical`.
 
 Add Sales uploads call :func:`orient_and_normalize_sale_documents` before Textract; :mod:`sales_ocr_service`
@@ -911,10 +912,13 @@ def _consolidated_halves_need_swap(top_ocr: str, bottom_ocr: str) -> bool:
     return False
 
 
-def _find_consolidated_horizontal_split_y(img_bgr) -> int | None:
+def _ink_valley_horizontal_split(img_bgr, *, min_strength: float = 0.08) -> tuple[int | None, float]:
     """
     Find a horizontal cut between two vertically stacked card regions.
     Looks for a band of low ink (whitespace) in the middle of the page.
+
+    Returns ``(split_y, strength)`` where ``strength`` is in ``[0, 1]`` (relative dip);
+    ``(None, 0.0)`` when no reliable valley.
     """
     import cv2
     import numpy as np
@@ -922,7 +926,7 @@ def _find_consolidated_horizontal_split_y(img_bgr) -> int | None:
     gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
     h, w = gray.shape[:2]
     if h < 200 or w < 200:
-        return None
+        return None, 0.0
 
     _, bw = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
     row_ink = np.sum(bw > 0, axis=1).astype(np.float64) / max(w, 1)
@@ -936,21 +940,63 @@ def _find_consolidated_horizontal_split_y(img_bgr) -> int | None:
 
     y_lo, y_hi = int(h * 0.20), int(h * 0.80)
     if y_hi <= y_lo + 30:
-        return None
+        return None, 0.0
     region = smoothed[y_lo:y_hi]
     rel_min = int(np.argmin(region)) + y_lo
 
-    # Require a meaningful dip vs page mean (avoid noisy uniform pages)
     mid_mean = float(np.mean(region))
     min_val = float(smoothed[rel_min])
     if mid_mean < 1e-6:
-        return None
-    if (mid_mean - min_val) / mid_mean < 0.08:
-        return None
+        return None, 0.0
+    strength = (mid_mean - min_val) / mid_mean
+    if strength < min_strength:
+        return None, 0.0
 
     if rel_min < h * 0.14 or rel_min > h * 0.86:
-        return None
-    return rel_min
+        return None, 0.0
+    return rel_min, float(strength)
+
+
+def _ink_valley_vertical_split(img_bgr, *, min_strength: float = 0.08) -> tuple[int | None, float]:
+    """
+    Find a vertical cut between two side-by-side card regions (left / right).
+    Same ink-valley idea as :func:`_ink_valley_horizontal_split`, on column density.
+    """
+    import cv2
+    import numpy as np
+
+    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+    h, w = gray.shape[:2]
+    if h < 200 or w < 200:
+        return None, 0.0
+
+    _, bw = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    col_ink = np.sum(bw > 0, axis=0).astype(np.float64) / max(h, 1)
+
+    k = max(11, min(51, w // 60 | 1))
+    if k % 2 == 0:
+        k += 1
+    pad = k // 2
+    padded = np.pad(col_ink, (pad, pad), mode="edge")
+    smoothed = np.convolve(padded, np.ones(k) / k, mode="valid")
+
+    x_lo, x_hi = int(w * 0.20), int(w * 0.80)
+    if x_hi <= x_lo + 30:
+        return None, 0.0
+    region = smoothed[x_lo:x_hi]
+    rel_min = int(np.argmin(region)) + x_lo
+
+    mid_mean = float(np.mean(region))
+    min_val = float(smoothed[rel_min])
+    if mid_mean < 1e-6:
+        return None, 0.0
+    strength = (mid_mean - min_val) / mid_mean
+    if strength < min_strength:
+        return None, 0.0
+
+    if rel_min < w * 0.14 or rel_min > w * 0.86:
+        return None, 0.0
+    return rel_min, float(strength)
 
 
 def split_aadhar_consolidated(
@@ -962,13 +1008,14 @@ def split_aadhar_consolidated(
     require_tesseract_match: bool = True,
 ) -> tuple[bytes, bytes] | None:
     """
-    Single scan with **two card faces** stacked vertically (either order).
+    Single scan with **two card faces** on one page: either **stacked vertically** (top/bottom)
+    or **side by side** (left/right). Letter-style layouts are handled elsewhere.
 
     1. Runs Tesseract on the full image; requires combined Aadhaar markers unless
        ``require_tesseract_match`` is False (e.g. caller already classified the page).
-    2. Finds a horizontal split (whitespace valley) and crops **top** and **bottom** halves.
+    2. Finds the stronger ink-valley split — horizontal **or** vertical — and crops the two halves.
     3. Runs Tesseract on each half and assigns **front** vs **back** using UIDAI cues
-       (same logic as ``classify_page_by_text``), swapping halves when the back is on top.
+       (same logic as ``classify_page_by_text``), swapping when order is back-then-front.
     4. Optionally writes JPEGs under ``out_dir`` using ``front_name`` / ``back_name``.
 
     Returns ``(front_jpeg_bytes, back_jpeg_bytes)`` or ``None`` if not consolidated or split fails.
@@ -990,44 +1037,94 @@ def split_aadhar_consolidated(
     if img is None:
         return None
 
-    split_y = _find_consolidated_horizontal_split_y(img)
-    if split_y is None:
-        h0 = img.shape[0]
-        split_y = int(h0 * 0.50)
-        logger.info(
-            "split_aadhar_consolidated: no clear whitespace gap; using horizontal mid-split at y=%s",
-            split_y,
-        )
+    h, w = img.shape[:2]
+    split_y, h_strength = _ink_valley_horizontal_split(img)
+    split_x, v_strength = _ink_valley_vertical_split(img)
+    if split_y is None and split_x is None:
+        split_y, h_strength = _ink_valley_horizontal_split(img, min_strength=0.05)
+        split_x, v_strength = _ink_valley_vertical_split(img, min_strength=0.05)
 
-    h = img.shape[0]
-    margin = max(4, int(h * 0.004))
-    mt = max(1, min(margin, split_y // 4))
-    mb = max(1, min(margin, (h - split_y) // 4))
-    y_cut_top = max(split_y - mt, 1)
-    y_cut_bot = min(split_y + mb, h - 1)
-    top = img[:y_cut_top, :]
-    bot = img[y_cut_bot:, :]
+    use_vertical = False
+    split_y_eff: int | None = split_y
+    split_x_eff: int | None = split_x
+    if split_x is not None and split_y is not None:
+        use_vertical = v_strength > h_strength
+    elif split_x is not None and split_y is None:
+        use_vertical = True
+    elif split_x is None and split_y is None:
+        # No valley: default by aspect — many one-page scans are **left/right**, not top/bottom.
+        if w > h * 1.02:
+            use_vertical = True
+            split_x_eff = w // 2
+            logger.info(
+                "split_aadhar_consolidated: no ink valley; landscape-ish page — vertical mid-split at x=%s",
+                split_x_eff,
+            )
+        else:
+            split_y_eff = h // 2
+            logger.info(
+                "split_aadhar_consolidated: no ink valley; using horizontal mid-split at y=%s",
+                split_y_eff,
+            )
 
-    if top.shape[0] < 80 or bot.shape[0] < 80:
-        return None
-
-    ok_t, buf_t = cv2.imencode(".jpg", top, [cv2.IMWRITE_JPEG_QUALITY, 92])
-    ok_b, buf_b = cv2.imencode(".jpg", bot, [cv2.IMWRITE_JPEG_QUALITY, 92])
-    if not ok_t or not ok_b:
-        return None
-
-    top_txt = _tesseract_ocr(buf_t.tobytes())
-    bot_txt = _tesseract_ocr(buf_b.tobytes())
-    swap = _consolidated_halves_need_swap(top_txt, bot_txt)
-    if swap:
-        logger.info(
-            "split_aadhar_consolidated: detected back-on-top; swapping halves for %s / %s",
-            front_name,
-            back_name,
-        )
-        front_img, back_img = bot, top
+    if use_vertical:
+        assert split_x_eff is not None
+        sx = split_x_eff
+        margin = max(4, int(w * 0.004))
+        ml = max(1, min(margin, sx // 4))
+        mr = max(1, min(margin, (w - sx) // 4))
+        x_cut_l = max(sx - ml, 1)
+        x_cut_r = min(sx + mr, w - 1)
+        left = img[:, :x_cut_l]
+        right = img[:, x_cut_r:]
+        if left.shape[1] < 80 or right.shape[1] < 80:
+            return None
+        ok_a, buf_a = cv2.imencode(".jpg", left, [cv2.IMWRITE_JPEG_QUALITY, 92])
+        ok_b, buf_b = cv2.imencode(".jpg", right, [cv2.IMWRITE_JPEG_QUALITY, 92])
+        if not ok_a or not ok_b:
+            return None
+        first_txt = _tesseract_ocr(buf_a.tobytes())
+        second_txt = _tesseract_ocr(buf_b.tobytes())
+        swap = _consolidated_halves_need_swap(first_txt, second_txt)
+        if swap:
+            logger.info(
+                "split_aadhar_consolidated: side-by-side — back-on-left; swapping for %s / %s",
+                front_name,
+                back_name,
+            )
+            front_img, back_img = right, left
+        else:
+            front_img, back_img = left, right
+        split_log = f"x={sx}, v_strength={v_strength:.3f}, h_strength={h_strength:.3f}"
     else:
-        front_img, back_img = top, bot
+        assert split_y_eff is not None
+        sy = split_y_eff
+        margin = max(4, int(h * 0.004))
+        mt = max(1, min(margin, sy // 4))
+        mb = max(1, min(margin, (h - sy) // 4))
+        y_cut_top = max(sy - mt, 1)
+        y_cut_bot = min(sy + mb, h - 1)
+        top = img[:y_cut_top, :]
+        bot = img[y_cut_bot:, :]
+        if top.shape[0] < 80 or bot.shape[0] < 80:
+            return None
+        ok_t, buf_t = cv2.imencode(".jpg", top, [cv2.IMWRITE_JPEG_QUALITY, 92])
+        ok_b, buf_b = cv2.imencode(".jpg", bot, [cv2.IMWRITE_JPEG_QUALITY, 92])
+        if not ok_t or not ok_b:
+            return None
+        top_txt = _tesseract_ocr(buf_t.tobytes())
+        bot_txt = _tesseract_ocr(buf_b.tobytes())
+        swap = _consolidated_halves_need_swap(top_txt, bot_txt)
+        if swap:
+            logger.info(
+                "split_aadhar_consolidated: stacked — back-on-top; swapping halves for %s / %s",
+                front_name,
+                back_name,
+            )
+            front_img, back_img = bot, top
+        else:
+            front_img, back_img = top, bot
+        split_log = f"y={sy}, h_strength={h_strength:.3f}, v_strength={v_strength:.3f}"
 
     ok_f, buf_f = cv2.imencode(".jpg", front_img, [cv2.IMWRITE_JPEG_QUALITY, 92])
     ok_k, buf_k = cv2.imencode(".jpg", back_img, [cv2.IMWRITE_JPEG_QUALITY, 92])
@@ -1042,10 +1139,11 @@ def split_aadhar_consolidated(
         (out_dir / front_name).write_bytes(front_bytes)
         (out_dir / back_name).write_bytes(back_bytes)
         logger.info(
-            "split_aadhar_consolidated: wrote %s / %s (split_y=%s, swap=%s)",
+            "split_aadhar_consolidated: wrote %s / %s (%s, vertical=%s, swap=%s)",
             front_name,
             back_name,
-            split_y,
+            split_log,
+            use_vertical,
             swap,
         )
 
@@ -2271,15 +2369,21 @@ def run_pre_ocr_and_prepare(
                     keep_front + 1, [d + 1 for d in demoted],
                 )
 
-    # Fallback: Aadhar back may be blurred/darker on same page; OCR might miss back cues.
-    # If we have front but no back, and exactly one Aadhar page, treat it as combined.
+    # Fallback: true one-page PDF where both faces are folded into a single raster — promote to combined
+    # so we split. **Do not** do this when the file has multiple pages: separate front/back pages (e.g. pg 2 + 3)
+    # are often misread as "front only" + UNUSED; promoting would wrongly run :func:`_process_same_page_aadhar`
+    # on a full single-face page.
     if has_aadhar_front and not has_aadhar_back:
         aadhar_pages = [(i, p) for i, p in classifications if p in (PAGE_TYPE_AADHAR, PAGE_TYPE_AADHAR_COMBINED)]
-        if len(aadhar_pages) == 1:
+        total_pages = len(classifications)
+        if len(aadhar_pages) == 1 and total_pages <= 1:
             idx, _ = aadhar_pages[0]
             classifications = [(i, PAGE_TYPE_AADHAR_COMBINED if i == idx else p) for i, p in classifications]
             has_aadhar_back = True
-            logger.info("Treating single Aadhar page %d as Aadhar_combined (back may be blurred)", idx + 1)
+            logger.info(
+                "Single-page PDF: treating page %d as Aadhar_combined (both faces on one page)",
+                idx + 1,
+            )
     orchestration.append(
         ("aadhar_combined_fallback", int((time.perf_counter() - t_fb0) * 1000), "", _off()),
     )

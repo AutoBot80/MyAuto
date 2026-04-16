@@ -767,6 +767,29 @@
   margin-bottom: 2px;
 }
 
+.add-sales-v2-validation-list {
+  margin: 0;
+  padding-left: 1.15rem;
+  font-size: 13px;
+  color: #c00;
+  line-height: 1.45;
+}
+
+.add-sales-v2-validation-list li {
+  margin-bottom: 4px;
+}
+
+.add-sales-v2-validation-list li:last-child {
+  margin-bottom: 0;
+}
+
+.add-sales-v2-field-error {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #c00;
+  line-height: 1.35;
+}
+
 .add-sales-v2-dl {
   margin: 0;
   padding: 0;

@@ -1,4 +1,4 @@
-import { apiFetch } from "./client";
+import { apiFetch, ApiHttpError } from "./client";
 import type {
   AiReaderQueueItem,
   ProcessStatusResponse,
@@ -46,26 +46,17 @@ export async function getExtractedDetails(
   subfolder: string,
   dealerId?: number
 ): Promise<ExtractedDetailsResponse | null> {
-  const base = await import("./client").then((m) => m.getBaseUrl());
   const params = new URLSearchParams();
   params.set("subfolder", subfolder);
   if (dealerId != null) params.set("dealer_id", String(dealerId));
-  const res = await fetch(
-    `${base}/ai-reader-queue/extracted-details?${params.toString()}`
-  );
-  if (res.status === 404) return null;
-  if (!res.ok) {
-    const text = await res.text();
-    let msg = text || `Failed (${res.status})`;
-    try {
-      const json = JSON.parse(text) as { detail?: string };
-      if (json.detail) msg = json.detail;
-    } catch {
-      /* use msg as is */
-    }
-    throw new Error(msg);
+  try {
+    return await apiFetch<ExtractedDetailsResponse>(
+      `/ai-reader-queue/extracted-details?${params.toString()}`
+    );
+  } catch (e) {
+    if (e instanceof ApiHttpError && e.status === 404) return null;
+    throw e;
   }
-  return res.json() as Promise<ExtractedDetailsResponse>;
 }
 
 /** Debug: get what Textract extracted from Insurance.jpg (raw + parsed) and file status. */
@@ -78,10 +69,7 @@ export async function getInsuranceExtraction(subfolder: string): Promise<{
   raw_ocr_txt: string | null;
   insurance_txt_preview?: string;
 }> {
-  const base = await import("./client").then((m) => m.getBaseUrl());
-  const res = await fetch(
-    `${base}/ai-reader-queue/insurance-extraction?subfolder=${encodeURIComponent(subfolder)}`
-  );
-  if (!res.ok) throw new Error(await res.text().then((t) => t || `Failed (${res.status})`));
-  return res.json();
+  const params = new URLSearchParams();
+  params.set("subfolder", subfolder);
+  return apiFetch(`/ai-reader-queue/insurance-extraction?${params.toString()}`);
 }
