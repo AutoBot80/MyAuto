@@ -1,0 +1,17 @@
+[Unit]
+Description=Saathi FastAPI (Gunicorn + Uvicorn workers)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/saathi/backend
+EnvironmentFile=-/opt/saathi/backend/.env
+ExecStart=/opt/saathi/venv/bin/gunicorn -c /opt/saathi/deploy/ec2/gunicorn.conf.py app.main:app
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

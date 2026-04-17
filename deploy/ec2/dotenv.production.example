@@ -1,0 +1,21 @@
+# Copy to /opt/saathi/backend/.env on the app server and fill values.
+# Do not commit real secrets. DATABASE_URL can be generated with write-database-url.sh.
+
+# --- Required for production API startup ---
+DATABASE_URL=postgresql://user:pass@host:5432/saathi
+JWT_SECRET=
+AUTH_DISABLED=false
+ENVIRONMENT=production
+
+# Comma-separated browser/Electron origins allowed to call the API (no wildcards in prod).
+CORS_ORIGINS=https://app.example.com
+
+# Portal bases (validated at startup) — set to your real production URLs.
+DMS_BASE_URL=
+DMS_MODE=real
+VAHAN_BASE_URL=
+INSURANCE_BASE_URL=
+
+# Optional: same layout as local dev; defaults assume repo-root sibling folders of backend/
+# UPLOADS_DIR=
+# OCR_OUTPUT_DIR=
