@@ -1,0 +1,9 @@
+# Copy to terraform.tfvars (or pass -var-file) when ready for CloudFront + WAF.
+# Requires a Route 53 hosted zone for the domain (same account) for ACM DNS validation.
+
+# enable_cloudfront_waf = true
+# cloudfront_api_fqdn   = "api.dealersaathi.co.in"
+# route53_zone_id       = "Z0123456789ABCDEFGHIJ" # Route 53 → Hosted zones → your zone
+
+# Optional:
+# cloudfront_price_class = "PriceClass_200"

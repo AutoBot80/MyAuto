@@ -57,3 +57,13 @@ backend/app/data/kyc_insurer_strategy_cache.json
 
 # Playwright browser profile (persists sessions across restarts)
 .browser-profile/
+
+# Local login payloads / secrets (never commit)
+client/login.json
+
+# Terraform: commit .tf and .terraform.lock.hcl; not provider cache or state
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
