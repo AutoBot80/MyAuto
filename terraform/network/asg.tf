@@ -14,11 +14,30 @@ data "aws_ami" "al2023_x86" {
 }
 
 locals {
-  # Bootstrap: Nginx serves ALB health checks on /health until you deploy the real app behind Nginx → Gunicorn.
+  # Full self-deploy: system deps → clone repo → venv → pip → Nginx → Gunicorn systemd service.
+  # CloudWatch Agent publishes mem_used_percent + disk_used_percent to namespace CWAgent (see cloudwatch_alarms_ec2.tf).
   app_user_data = <<-EOT
     #!/bin/bash
     set -euxo pipefail
-    dnf install -y nginx
+    exec > /var/log/user-data.log 2>&1
+
+    # ── 1. System packages ───────────────────────────────────────────────
+    dnf install -y nginx amazon-cloudwatch-agent git \
+      python3.11 python3.11-devel python3.11-pip \
+      gcc pkg-config cairo-devel
+
+    # ── 2. CloudWatch Agent ──────────────────────────────────────────────
+    mkdir -p /opt/aws/amazon-cloudwatch-agent/etc
+    python3 <<'PY'
+    import json; cfg={"agent":{"metrics_collection_interval":60,"run_as_user":"root"},"metrics":{"namespace":"CWAgent","append_dimensions":{"InstanceId":"$${aws:InstanceId}"},"metrics_collected":{"mem":{"measurement":["mem_used_percent"]},"disk":{"measurement":["disk_used_percent"],"resources":["*"]}}}}; open("/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json","w").write(json.dumps(cfg,indent=2))
+    PY
+    /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
+      -a fetch-config -m ec2 -s \
+      -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
+    systemctl enable amazon-cloudwatch-agent
+    systemctl restart amazon-cloudwatch-agent
+
+    # ── 3. Nginx — stub health check (replaced after app clone) ──────────
     cat > /etc/nginx/conf.d/saathi-health.conf <<'NGINX'
     server {
       listen 80 default_server;
@@ -30,12 +49,58 @@ locals {
       }
       location / {
         default_type text/plain;
-        return 503 'bootstrap: deploy app here';
+        return 503 'bootstrap: deploying app...';
       }
     }
     NGINX
+    rm -f /etc/nginx/conf.d/default.conf
     systemctl enable nginx
     systemctl restart nginx
+
+    # ── 4. Clone application repo ────────────────────────────────────────
+    REPO_URL="${var.app_git_repo_url}"
+    %{if var.app_github_pat_ssm_param != ""}
+    GH_PAT=$(aws ssm get-parameter --name "${var.app_github_pat_ssm_param}" \
+      --with-decryption --query "Parameter.Value" --output text --region ${var.aws_region})
+    REPO_URL=$(echo "$REPO_URL" | sed "s|https://|https://$${GH_PAT}@|")
+    %{endif}
+    git clone --branch "${var.app_git_branch}" --single-branch "$REPO_URL" /opt/saathi
+
+    # ── 5. Python venv + dependencies ────────────────────────────────────
+    python3.11 -m venv /opt/saathi/backend/venv
+    ln -sfn /opt/saathi/backend/venv /opt/saathi/venv
+    /opt/saathi/backend/venv/bin/pip install --upgrade pip
+    /opt/saathi/backend/venv/bin/pip install -r /opt/saathi/backend/requirements.txt
+
+    # ── 6. .env from SSM (optional) ──────────────────────────────────────
+    %{if var.app_dotenv_ssm_param != ""}
+    aws ssm get-parameter --name "${var.app_dotenv_ssm_param}" \
+      --with-decryption --query "Parameter.Value" --output text \
+      --region ${var.aws_region} > /opt/saathi/backend/.env
+    chmod 600 /opt/saathi/backend/.env
+    %{endif}
+
+    # ── 7. Nginx — real proxy config (replaces stub) ─────────────────────
+    rm -f /etc/nginx/conf.d/saathi-health.conf
+    cp /opt/saathi/deploy/ec2/nginx-saathi.conf /etc/nginx/conf.d/saathi.conf
+    rm -f /etc/nginx/conf.d/default.conf
+    nginx -t && systemctl reload nginx
+
+    # ── 8. Systemd service ───────────────────────────────────────────────
+    chmod +x /opt/saathi/deploy/ec2/run-gunicorn.sh
+    cp /opt/saathi/deploy/ec2/saathi-api.service /etc/systemd/system/saathi-api.service
+    systemctl daemon-reload
+    systemctl enable saathi-api
+    systemctl start saathi-api
+
+    # ── 9. Readiness check (retries for ALB health check grace period) ───
+    for i in $(seq 1 12); do
+      if curl -sf http://127.0.0.1:8000/health; then
+        echo "App healthy after attempt $i"
+        break
+      fi
+      sleep 5
+    done
   EOT
 }
 
@@ -82,6 +147,8 @@ resource "aws_autoscaling_group" "app" {
   vpc_zone_identifier       = aws_subnet.private[*].id
   health_check_type         = "ELB"
   health_check_grace_period = 300
+  default_cooldown          = 300
+  protect_from_scale_in     = false
   min_size                  = var.asg_min_size
   max_size                  = var.asg_max_size
   desired_capacity          = var.asg_desired_capacity

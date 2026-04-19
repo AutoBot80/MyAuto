@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 import re
 from datetime import date
@@ -49,12 +51,24 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 
 # Paths (injectable for tests / different envs)
 APP_ROOT = Path(__file__).resolve().parents[1]
-UPLOADS_DIR = APP_ROOT.parent / "Uploaded scans"
-OCR_OUTPUT_DIR = APP_ROOT.parent / "ocr_output"
+# Electron dealer app: set SAATHI_BASE_DIR (e.g. D:\Saathi) so uploads/OCR align with the desktop install.
+_SAATHI_BASE_RAW = os.getenv("SAATHI_BASE_DIR", "").strip()
+if _SAATHI_BASE_RAW:
+    _SAATHI_BASE = Path(_SAATHI_BASE_RAW)
+    UPLOADS_DIR = _SAATHI_BASE / "Uploaded scans"
+    OCR_OUTPUT_DIR = _SAATHI_BASE / "ocr_output"
+    _CHALLANS_DEFAULT = _SAATHI_BASE / "Challans"
+    _BULK_DEFAULT = _SAATHI_BASE / "Bulk Upload"
+else:
+    UPLOADS_DIR = APP_ROOT.parent / "Uploaded scans"
+    OCR_OUTPUT_DIR = APP_ROOT.parent / "ocr_output"
+    _CHALLANS_DEFAULT = APP_ROOT.parent / "Challans"
+    _BULK_DEFAULT = APP_ROOT.parent / "Bulk Upload"
 # Subdealer challan OCR artifacts: Raw_OCR.txt, OCR_To_be_Used.json per challan folder
 _CHALLANS_DIR = os.getenv("CHALLANS_DIR", "").strip()
-CHALLANS_DIR = Path(_CHALLANS_DIR) if _CHALLANS_DIR else APP_ROOT.parent / "Challans"
-BULK_UPLOAD_DIR = APP_ROOT.parent / "Bulk Upload"
+CHALLANS_DIR = Path(_CHALLANS_DIR) if _CHALLANS_DIR else _CHALLANS_DEFAULT
+_BULK_UPLOAD_ENV = os.getenv("BULK_UPLOAD_DIR", "").strip()
+BULK_UPLOAD_DIR = Path(_BULK_UPLOAD_ENV) if _BULK_UPLOAD_ENV else _BULK_DEFAULT
 
 # Dealer ID for app. Used by bulk watcher, AUTH_DISABLED dev principal, and when client omits dealer_id.
 DEALER_ID = int(os.getenv("DEALER_ID", "100001"))
