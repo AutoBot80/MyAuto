@@ -86,6 +86,22 @@ logger = logging.getLogger(__name__)
 _PLAYWRIGHT_DMS_LOG_TZ = ZoneInfo("Asia/Kolkata")
 
 
+def _git_commit_short() -> str:
+    """Return the short git commit hash of the running backend code, or '' on failure."""
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=str(Path(__file__).resolve().parent),
+            timeout=5,
+            stderr=subprocess.DEVNULL,
+        ).decode().strip()
+    except Exception:
+        return ""
+
+
+_GIT_COMMIT_SHORT: str = _git_commit_short()
+
+
 def playwright_dms_execution_log_filename() -> str:
     """
     Per-run Siebel trace file: ``Playwright_DMS_<ddmmyyyy>_<hhmmss>.txt`` (IST).
@@ -2381,6 +2397,7 @@ def Playwright_Hero_DMS_fill(
         lp.parent.mkdir(parents=True, exist_ok=True)
         log_fp = open(lp, "w", encoding="utf-8")
         log_fp.write("Playwright DMS — execution log (this run only; IST / Asia/Kolkata timestamps)\n\n")
+        log_fp.write(f"git_commit={_GIT_COMMIT_SHORT!r}\n")
         _capi = (execution_log_client_api_base_url or "").strip()
         _hreq = (execution_log_http_request_base_url or "").strip()
         log_fp.write(
