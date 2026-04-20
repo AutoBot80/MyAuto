@@ -159,7 +159,13 @@ variable "app_github_pat_ssm_param" {
 
 variable "app_dotenv_ssm_param" {
   type        = string
-  description = "SSM Parameter Store name holding the full .env file content (SecureString). If set, user_data writes it to /opt/saathi/backend/.env on boot."
+  description = "DEPRECATED — use app_dotenv_secret_arn instead. SSM Parameter Store name holding the full .env file content (SecureString). Ignored when app_dotenv_secret_arn is set."
+  default     = ""
+}
+
+variable "app_dotenv_secret_arn" {
+  type        = string
+  description = "Secrets Manager secret ARN holding the full .env file as a plaintext string. On boot, user_data writes it to /opt/saathi/backend/.env. Takes precedence over app_dotenv_ssm_param."
   default     = ""
 }
 

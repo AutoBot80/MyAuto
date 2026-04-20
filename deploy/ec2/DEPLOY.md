@@ -16,9 +16,9 @@ sudo yum install -y nano htop postgresql15
 
 ---
 
-## Step 0.5 — Restore `.env` from SSM (if missing)
+## Step 0.5 — Restore `.env` from Secrets Manager (if missing)
 
-**The `.env` file is not in git.** If the instance was replaced by the ASG (scale event, health check failure, instance refresh) and `app_dotenv_ssm_param` was not configured in Terraform, the new instance will have **no** `.env` and the backend will fail to start.
+**The `.env` file is not in git.** If the instance was replaced by the ASG (scale event, health check failure, instance refresh) and `app_dotenv_secret_arn` was not configured in Terraform, the new instance will have **no** `.env` and the backend will fail to start.
 
 Check if `.env` exists and has content:
 
@@ -28,18 +28,25 @@ wc -l /opt/saathi/backend/.env 2>/dev/null || echo "FILE MISSING"
 
 If the file is missing or empty, restore it:
 
-- **Option A — SSM (recommended, if stored):**
+- **Option A — Secrets Manager (recommended):**
 
   ```bash
-  aws ssm get-parameter \
-    --name "/saathi/production/dotenv" \
-    --with-decryption \
-    --query "Parameter.Value" \
+  aws secretsmanager get-secret-value \
+    --secret-id "saathi/production/dotenv" \
+    --query SecretString \
     --output text \
     --region ap-south-1 | sudo tee /opt/saathi/backend/.env > /dev/null
+  sudo chmod 600 /opt/saathi/backend/.env
   ```
 
-- **Option B — manual paste:**
+- **Option B — use the helper script (same thing):**
+
+  ```bash
+  sudo DOTENV_SECRET_ARN="arn:aws:secretsmanager:ap-south-1:ACCOUNT_ID:secret:saathi/production/dotenv-XXXXXX" \
+    bash /opt/saathi/deploy/ec2/load-dotenv.sh
+  ```
+
+- **Option C — manual paste (last resort):**
 
   ```bash
   sudo nano /opt/saathi/backend/.env
@@ -55,8 +62,8 @@ grep -cE '^(DATABASE_URL|JWT_SECRET|CORS_ORIGINS|INSURANCE_BASE_URL|DMS_BASE_URL
 
 Expected count: **6** (one per key). If fewer, the file is incomplete — add the missing vars before proceeding.
 
-> **Tip:** To prevent this on future instances, store `.env` in SSM and set
-> `app_dotenv_ssm_param = "/saathi/production/dotenv"` in `terraform.tfvars`.
+> **Tip:** To prevent this on future instances, store `.env` in Secrets Manager and set
+> `app_dotenv_secret_arn` in `terraform.tfvars`.
 > The launch-template user_data will write it automatically on boot (see [README.md](./README.md)).
 
 ---
@@ -168,7 +175,7 @@ the new instance boots from scratch via the launch-template `user_data`. Common 
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| Backend crashes: `Missing required environment variables` | `.env` not written (SSM param missing or `app_dotenv_ssm_param` not set) | Store `.env` in SSM — see **Step 0.5** above |
+| Backend crashes: `Missing required environment variables` | `.env` not written (Secrets Manager secret missing or `app_dotenv_secret_arn` not set) | Store `.env` in Secrets Manager — see **Step 0.5** above |
 | `ModuleNotFoundError: argon2` (or any Python package) | `requirements.txt` was updated after the AMI was baked, or pip install failed silently | SSH in and run `source /opt/saathi/backend/venv/bin/activate && pip install -r /opt/saathi/backend/requirements.txt && sudo systemctl restart saathi-api` |
 | `Permission denied` installing into `venv/.../site-packages` (e.g. `_argon2_cffi_bindings`) | Venv dirs owned by `root` from an earlier `sudo pip install` | `sudo chown -R "$(whoami):$(whoami)" /opt/saathi/backend/venv` then `pip install -r backend/requirements.txt` as that user, **or** `sudo /opt/saathi/backend/venv/bin/pip install -r /opt/saathi/backend/requirements.txt` once, then fix ownership |
 | `passlib.exc.MissingBackendError: argon2: no backends available` | `argon2-cffi` not installed in the active venv (failed pip, wrong venv, or permissions) | `pip install 'argon2-cffi>=23.1.0'` in `/opt/saathi/backend/venv`, restart `saathi-api`. `requirements.txt` includes `passlib[bcrypt,argon2]` and `argon2-cffi`—always install from `backend/requirements.txt` after `git pull`. |
@@ -176,27 +183,48 @@ the new instance boots from scratch via the launch-template `user_data`. Common 
 | Nginx shows `conflicting server_name` warning | Stub health config not removed | `sudo rm /etc/nginx/conf.d/saathi-health.conf && sudo nginx -t && sudo systemctl reload nginx` |
 | `saathi-api.service not found` | Service file not copied to systemd | `sudo cp /opt/saathi/deploy/ec2/saathi-api.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl enable --now saathi-api` |
 
-### Storing `.env` in SSM (one-time, from workstation)
+### Storing `.env` in Secrets Manager (one-time, from workstation)
 
 This is the **permanent fix** for `.env` disappearing on new instances. Run from your
-local machine (PowerShell) where you have AWS admin credentials:
+local machine (PowerShell) where you have AWS admin credentials.
+
+**First time — create the secret:**
 
 ```powershell
 $envContent = Get-Content 'C:\Users\arya_\OneDrive\Desktop\Saathi Docs\Save - Prod .env' -Raw
-[IO.File]::WriteAllText('C:\temp\ssm-input.json', (ConvertTo-Json @{
-    Name      = '/saathi/production/dotenv'
-    Type      = 'SecureString'
-    Value     = $envContent
-    Overwrite = $true
-}))
-aws ssm put-parameter --cli-input-json "file://C:/temp/ssm-input.json" --region ap-south-1
+aws secretsmanager create-secret `
+  --name "saathi/production/dotenv" `
+  --description "Full backend .env for production EC2 instances" `
+  --secret-string $envContent `
+  --region ap-south-1
 ```
 
-Verify `app_dotenv_ssm_param = "/saathi/production/dotenv"` is set in `terraform.tfvars`
-(already configured). Future instances will pull `.env` automatically during boot.
+Copy the **ARN** from the output and set it in `terraform.tfvars`:
 
-### Updating `.env` in SSM after changes
+```hcl
+app_dotenv_secret_arn = "arn:aws:secretsmanager:ap-south-1:ACCOUNT_ID:secret:saathi/production/dotenv-XXXXXX"
+```
 
-Whenever you change the production `.env` (new keys, rotated secrets), re-run the
-PowerShell commands above to update SSM. The next instance refresh will pick up the
-new values.
+Then `terraform apply` to update the launch template. Future instances will pull `.env`
+automatically during boot.
+
+### Updating `.env` in Secrets Manager after changes
+
+Whenever you change the production `.env` (new keys, rotated secrets), update the secret:
+
+```powershell
+$envContent = Get-Content 'C:\Users\arya_\OneDrive\Desktop\Saathi Docs\Save - Prod .env' -Raw
+aws secretsmanager put-secret-value `
+  --secret-id "saathi/production/dotenv" `
+  --secret-string $envContent `
+  --region ap-south-1
+```
+
+The next instance launch or refresh will pick up the new values. Existing running instances
+keep their current `.env` until restarted — to update a live instance without replacing it:
+
+```bash
+sudo DOTENV_SECRET_ARN="arn:aws:secretsmanager:ap-south-1:ACCOUNT_ID:secret:saathi/production/dotenv-XXXXXX" \
+  bash /opt/saathi/deploy/ec2/load-dotenv.sh
+sudo systemctl restart saathi-api
+```

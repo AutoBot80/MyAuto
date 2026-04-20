@@ -74,8 +74,11 @@ locals {
     # Deployments over SSH use ec2-user; pip must not require sudo (avoid root-owned site-packages).
     chown -R ec2-user:ec2-user /opt/saathi/backend/venv
 
-    # ── 6. .env from SSM (optional) ──────────────────────────────────────
-    %{if var.app_dotenv_ssm_param != ""}
+    # ── 6. .env from Secrets Manager (preferred) or SSM (legacy) ──────────
+    %{if var.app_dotenv_secret_arn != ""}
+    DOTENV_SECRET_ARN="${var.app_dotenv_secret_arn}" \
+      bash /opt/saathi/deploy/ec2/load-dotenv.sh /opt/saathi/backend/.env
+    %{elseif var.app_dotenv_ssm_param != ""}
     aws ssm get-parameter --name "${var.app_dotenv_ssm_param}" \
       --with-decryption --query "Parameter.Value" --output text \
       --region ${var.aws_region} > /opt/saathi/backend/.env

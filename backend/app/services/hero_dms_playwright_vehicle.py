@@ -1686,6 +1686,26 @@ def _recover_pdi_view_via_swe_goto(
     except Exception:
         pass
 
+    _swe_error_text = ""
+    for _root in roots():
+        try:
+            _swe_error_text = _root.evaluate("""() => {
+                const el = document.querySelector('span.error, td.AppletTitle');
+                if (!el) return '';
+                const t = (el.textContent || '').trim();
+                return (t.includes('Error') || t.includes('SBL-')) ? t.substring(0, 300) : '';
+            }""") or ""
+            if _swe_error_text:
+                break
+        except Exception:
+            continue
+    if _swe_error_text:
+        note(
+            f"{log_prefix}: SWE recovery — Siebel returned an error page after GotoView: "
+            f"{_swe_error_text!r}. Aborting SWE recovery."
+        )
+        return False
+
     _recovered = False
     for _rp in range(10):
         for _root in roots():
@@ -1776,6 +1796,12 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         note(
             f"{log_prefix}: feature-id scrape cubic_capacity={_cc_log!r}, vehicle_type={vt!r}."
         )
+
+    _pre_precheck_url = ""
+    try:
+        _pre_precheck_url = page.url or ""
+    except Exception:
+        pass
 
     _siebel_note_frame_focus_snapshot(
         page,
@@ -2097,77 +2123,218 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     if not _precheck_third_level_tabs_loaded:
         note(
             f"{log_prefix}: third-level tabs (PreCheck/PDI) NOT loaded after Pre-check tab click — "
-            "attempting SWE GotoView recovery to reach serial-detail view."
+            "attempting navigate-back recovery to serial-detail view."
         )
         _dump_frames_and_elements_for_debug(
             page, content_frame_selector=content_frame_selector,
             output_dir=_debug_dump_dir, label="precheck_wrong_view",
             note=note, log_prefix=log_prefix,
         )
-        _swe_precheck_recovery = _recover_pdi_view_via_swe_goto(
-            page,
-            roots=_roots,
-            content_frame_selector=content_frame_selector,
-            note=note,
-            log_prefix=log_prefix,
-            action_timeout_ms=action_timeout_ms,
-            third_level_poll_js=_third_level_poll_js,
-        )
-        if _swe_precheck_recovery:
-            _precheck_third_level_tabs_loaded = True
+
+        _navback_recovered = False
+        if _pre_precheck_url and "SWECmd=GotoView" in _pre_precheck_url:
             note(
-                f"{log_prefix}: SWE recovery succeeded — now on PDI Assessment View with "
-                "third-level tabs. Re-clicking Pre-check tab and re-probing."
+                f"{log_prefix}: navigate-back recovery — returning to pre-Pre-check URL "
+                f"({_pre_precheck_url[:300]!r})."
             )
-            _precheck_tab_ok = _click_third_level_view_bar_tab(
-                page, "Pre-check", wait_ms=1500,
-                content_frame_selector=content_frame_selector, note=note, log_prefix=log_prefix,
-            )
-            if _precheck_tab_ok:
-                try:
-                    _pv_networkidle(note, page, 8_000, f"{log_prefix}_after_precheck_tab_recovery")
-                except Exception as _e:
-                    if _is_browser_disconnected_error(_e):
-                        raise
-                _precheck_existing_rows = 0
-                _precheck_existing_signal = ""
-                for _ri2, _root2 in enumerate(_roots()):
+            try:
+                page.goto(
+                    _pre_precheck_url,
+                    wait_until="domcontentloaded",
+                    timeout=min(action_timeout_ms * 5, 45000),
+                )
+            except Exception as _nb_exc:
+                if _is_browser_disconnected_error(_nb_exc):
+                    raise
+                note(f"{log_prefix}: navigate-back goto raised {_nb_exc!r} — continuing.")
+
+            _siebel_after_goto_wait(page, floor_ms=3000)
+            try:
+                _pv_networkidle(note, page, 12_000, f"{log_prefix}_navback_recovery")
+            except Exception as _nb_ni:
+                if _is_browser_disconnected_error(_nb_ni):
+                    raise
+
+            try:
+                _navback_post_url = (page.url or "")[:400]
+                note(f"{log_prefix}: navigate-back recovery — post-navigation url={_navback_post_url!r}")
+            except Exception:
+                pass
+
+            _safe_page_wait(page, 1000, log_label="navback_settle")
+
+            _navback_tabs_ok = False
+            for _nb_settle in range(5):
+                for _root in _roots():
                     try:
-                        _probe2 = _root2.evaluate(_precheck_probe_js)
-                        if isinstance(_probe2, dict):
-                            _rows2 = int(_probe2.get("maxRows") or 0)
-                            if _rows2 > _precheck_existing_rows:
-                                _precheck_existing_rows = _rows2
-                                _precheck_existing_signal = f"root[{_ri2}]:maxRows={_rows2}(recovery)"
-                            _did2 = int(_probe2.get("directIdRows") or 0)
-                            if _did2 > 0 and _did2 > _precheck_existing_rows:
-                                _precheck_existing_rows = _did2
-                                _precheck_existing_signal = f"root[{_ri2}]:directId_s_3_l={_did2}(recovery)"
-                            _rc2 = int(_probe2.get("rowCounterRows") or 0)
-                            if _rc2 > 0 and _precheck_existing_rows == 0:
-                                _precheck_existing_rows = _rc2
-                                _precheck_existing_signal = f"root[{_ri2}]:rowCounter(recovery)"
-                            if _probe2.get("dataCellHit") and _precheck_existing_rows == 0:
-                                _precheck_existing_rows = 1
-                                _precheck_existing_signal = f"root[{_ri2}]:dataCellId(recovery)"
-                            if _probe2.get("containerHasData") and _precheck_existing_rows == 0:
-                                _precheck_existing_rows = 1
-                                _precheck_existing_signal = f"root[{_ri2}]:containerText(recovery)"
-                            _fb2 = int(_probe2.get("fallbackRows") or 0)
-                            if _fb2 > 0 and _precheck_existing_rows == 0:
-                                _precheck_existing_rows = _fb2
-                                _precheck_existing_signal = f"root[{_ri2}]:fallbackRows={_fb2}(recovery)"
+                        _nb_res = _root.evaluate(_settle_poll_js)
+                        if isinstance(_nb_res, dict) and _nb_res.get("loaded"):
+                            _navback_tabs_ok = True
+                            note(
+                                f"{log_prefix}: navigate-back recovery — third-level tabs visible "
+                                f"(poll {_nb_settle + 1}/5) tabs={_nb_res.get('tabs')!r}"
+                            )
+                            break
                     except Exception:
                         continue
-                note(
-                    f"{log_prefix}: re-probe after recovery: precheck rows={_precheck_existing_rows} "
-                    f"signal={_precheck_existing_signal or 'none'}"
+                if _navback_tabs_ok:
+                    break
+                _safe_page_wait(page, 500, log_label=f"navback_settle_poll_{_nb_settle}")
+
+            if _navback_tabs_ok:
+                note(f"{log_prefix}: navigate-back recovery — re-clicking Pre-check tab (attempt 1/1).")
+                _precheck_tab_ok = _click_third_level_view_bar_tab(
+                    page, "Pre-check", wait_ms=1500,
+                    content_frame_selector=content_frame_selector, note=note, log_prefix=log_prefix,
                 )
+                if _precheck_tab_ok:
+                    try:
+                        _pv_networkidle(note, page, 8_000, f"{log_prefix}_after_precheck_tab_navback")
+                    except Exception as _nb_e:
+                        if _is_browser_disconnected_error(_nb_e):
+                            raise
+                    _safe_page_wait(page, 1000, log_label="navback_precheck_settle")
+
+                    _navback_wrong_again = False
+                    try:
+                        _nb_recheck_url = (page.url or "").replace(" ", "+")
+                        _navback_wrong_again = (
+                            "PDIPre+Assessment" in _nb_recheck_url
+                            or "Precheck+List+Applet" in _nb_recheck_url
+                        )
+                    except Exception:
+                        pass
+
+                    if _navback_wrong_again:
+                        note(
+                            f"{log_prefix}: navigate-back recovery — Pre-check click landed on "
+                            "wrong view AGAIN. Will fall through to SWE GotoView recovery."
+                        )
+                    else:
+                        _navback_recovered = True
+                        _precheck_third_level_tabs_loaded = True
+                        note(
+                            f"{log_prefix}: navigate-back recovery SUCCEEDED — on correct view "
+                            "after Pre-check re-click. Re-probing rows."
+                        )
+                        _precheck_existing_rows = 0
+                        _precheck_existing_signal = ""
+                        for _ri2, _root2 in enumerate(_roots()):
+                            try:
+                                _probe2 = _root2.evaluate(_precheck_probe_js)
+                                if isinstance(_probe2, dict):
+                                    _rows2 = int(_probe2.get("maxRows") or 0)
+                                    if _rows2 > _precheck_existing_rows:
+                                        _precheck_existing_rows = _rows2
+                                        _precheck_existing_signal = f"root[{_ri2}]:maxRows={_rows2}(navback)"
+                                    _did2 = int(_probe2.get("directIdRows") or 0)
+                                    if _did2 > 0 and _did2 > _precheck_existing_rows:
+                                        _precheck_existing_rows = _did2
+                                        _precheck_existing_signal = f"root[{_ri2}]:directId_s_3_l={_did2}(navback)"
+                                    _rc2 = int(_probe2.get("rowCounterRows") or 0)
+                                    if _rc2 > 0 and _precheck_existing_rows == 0:
+                                        _precheck_existing_rows = _rc2
+                                        _precheck_existing_signal = f"root[{_ri2}]:rowCounter(navback)"
+                                    if _probe2.get("dataCellHit") and _precheck_existing_rows == 0:
+                                        _precheck_existing_rows = 1
+                                        _precheck_existing_signal = f"root[{_ri2}]:dataCellId(navback)"
+                                    if _probe2.get("containerHasData") and _precheck_existing_rows == 0:
+                                        _precheck_existing_rows = 1
+                                        _precheck_existing_signal = f"root[{_ri2}]:containerText(navback)"
+                                    _fb2 = int(_probe2.get("fallbackRows") or 0)
+                                    if _fb2 > 0 and _precheck_existing_rows == 0:
+                                        _precheck_existing_rows = _fb2
+                                        _precheck_existing_signal = f"root[{_ri2}]:fallbackRows={_fb2}(navback)"
+                            except Exception:
+                                continue
+                        note(
+                            f"{log_prefix}: re-probe after navback recovery: precheck rows="
+                            f"{_precheck_existing_rows} signal={_precheck_existing_signal or 'none'}"
+                        )
+                else:
+                    note(
+                        f"{log_prefix}: navigate-back recovery — Pre-check tab re-click failed. "
+                        "Will fall through to SWE GotoView recovery."
+                    )
             else:
                 note(
-                    f"{log_prefix}: Pre-check tab re-click failed after SWE recovery — "
-                    "will continue to PDI directly."
+                    f"{log_prefix}: navigate-back recovery — third-level tabs NOT found after "
+                    "navigating back. Will fall through to SWE GotoView recovery."
                 )
+        else:
+            note(
+                f"{log_prefix}: navigate-back recovery skipped — no valid pre-Pre-check URL "
+                f"captured ({_pre_precheck_url[:120]!r})."
+            )
+
+        if not _navback_recovered and not _precheck_third_level_tabs_loaded:
+            note(
+                f"{log_prefix}: falling through to SWE GotoView recovery (last resort)."
+            )
+            _swe_precheck_recovery = _recover_pdi_view_via_swe_goto(
+                page,
+                roots=_roots,
+                content_frame_selector=content_frame_selector,
+                note=note,
+                log_prefix=log_prefix,
+                action_timeout_ms=action_timeout_ms,
+                third_level_poll_js=_third_level_poll_js,
+            )
+            if _swe_precheck_recovery:
+                _precheck_third_level_tabs_loaded = True
+                note(
+                    f"{log_prefix}: SWE recovery succeeded — now on PDI Assessment View with "
+                    "third-level tabs. Re-clicking Pre-check tab and re-probing."
+                )
+                _precheck_tab_ok = _click_third_level_view_bar_tab(
+                    page, "Pre-check", wait_ms=1500,
+                    content_frame_selector=content_frame_selector, note=note, log_prefix=log_prefix,
+                )
+                if _precheck_tab_ok:
+                    try:
+                        _pv_networkidle(note, page, 8_000, f"{log_prefix}_after_precheck_tab_recovery")
+                    except Exception as _e:
+                        if _is_browser_disconnected_error(_e):
+                            raise
+                    _precheck_existing_rows = 0
+                    _precheck_existing_signal = ""
+                    for _ri2, _root2 in enumerate(_roots()):
+                        try:
+                            _probe2 = _root2.evaluate(_precheck_probe_js)
+                            if isinstance(_probe2, dict):
+                                _rows2 = int(_probe2.get("maxRows") or 0)
+                                if _rows2 > _precheck_existing_rows:
+                                    _precheck_existing_rows = _rows2
+                                    _precheck_existing_signal = f"root[{_ri2}]:maxRows={_rows2}(recovery)"
+                                _did2 = int(_probe2.get("directIdRows") or 0)
+                                if _did2 > 0 and _did2 > _precheck_existing_rows:
+                                    _precheck_existing_rows = _did2
+                                    _precheck_existing_signal = f"root[{_ri2}]:directId_s_3_l={_did2}(recovery)"
+                                _rc2 = int(_probe2.get("rowCounterRows") or 0)
+                                if _rc2 > 0 and _precheck_existing_rows == 0:
+                                    _precheck_existing_rows = _rc2
+                                    _precheck_existing_signal = f"root[{_ri2}]:rowCounter(recovery)"
+                                if _probe2.get("dataCellHit") and _precheck_existing_rows == 0:
+                                    _precheck_existing_rows = 1
+                                    _precheck_existing_signal = f"root[{_ri2}]:dataCellId(recovery)"
+                                if _probe2.get("containerHasData") and _precheck_existing_rows == 0:
+                                    _precheck_existing_rows = 1
+                                    _precheck_existing_signal = f"root[{_ri2}]:containerText(recovery)"
+                                _fb2 = int(_probe2.get("fallbackRows") or 0)
+                                if _fb2 > 0 and _precheck_existing_rows == 0:
+                                    _precheck_existing_rows = _fb2
+                                    _precheck_existing_signal = f"root[{_ri2}]:fallbackRows={_fb2}(recovery)"
+                        except Exception:
+                            continue
+                    note(
+                        f"{log_prefix}: re-probe after recovery: precheck rows={_precheck_existing_rows} "
+                        f"signal={_precheck_existing_signal or 'none'}"
+                    )
+                else:
+                    note(
+                        f"{log_prefix}: Pre-check tab re-click failed after SWE recovery — "
+                        "will continue to PDI directly."
+                    )
 
     _precheck_already_present = _precheck_existing_rows > 0
     note(

@@ -51,21 +51,25 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 
 # Paths (injectable for tests / different envs)
 APP_ROOT = Path(__file__).resolve().parents[1]
+_IS_LINUX = os.name != "nt"
 # Electron dealer app: set SAATHI_BASE_DIR (e.g. D:\Saathi) so uploads/OCR align with the desktop install.
+# On Linux/EC2 use hyphenated names (no spaces) to avoid systemd EnvironmentFile quoting issues.
 _SAATHI_BASE_RAW = os.getenv("SAATHI_BASE_DIR", "").strip()
+_UPLOADS_LEAF = "uploaded-scans" if _IS_LINUX else "Uploaded scans"
+_BULK_LEAF = "bulk-upload" if _IS_LINUX else "Bulk Upload"
 if _SAATHI_BASE_RAW:
     _SAATHI_BASE = Path(_SAATHI_BASE_RAW)
-    UPLOADS_DIR = _SAATHI_BASE / "Uploaded scans"
+    UPLOADS_DIR = _SAATHI_BASE / _UPLOADS_LEAF
     OCR_OUTPUT_DIR = _SAATHI_BASE / "ocr_output"
     _CHALLANS_DEFAULT = _SAATHI_BASE / "Challans"
-    _BULK_DEFAULT = _SAATHI_BASE / "Bulk Upload"
+    _BULK_DEFAULT = _SAATHI_BASE / _BULK_LEAF
 else:
-    UPLOADS_DIR = APP_ROOT.parent / "Uploaded scans"
+    UPLOADS_DIR = APP_ROOT.parent / _UPLOADS_LEAF
     OCR_OUTPUT_DIR = APP_ROOT.parent / "ocr_output"
     _CHALLANS_DEFAULT = APP_ROOT.parent / "Challans"
-    _BULK_DEFAULT = APP_ROOT.parent / "Bulk Upload"
+    _BULK_DEFAULT = APP_ROOT.parent / _BULK_LEAF
 
-# Optional absolute overrides (e.g. EC2: ``UPLOADS_DIR=/opt/saathi/Uploaded scans``). Win over ``SAATHI_BASE_DIR`` paths above.
+# Optional absolute overrides (e.g. EC2: ``UPLOADS_DIR=/opt/saathi/data/uploaded-scans``). Win over ``SAATHI_BASE_DIR`` paths above.
 _UPLOADS_ENV = os.getenv("UPLOADS_DIR", "").strip()
 _OCR_ENV = os.getenv("OCR_OUTPUT_DIR", "").strip()
 if _UPLOADS_ENV:
