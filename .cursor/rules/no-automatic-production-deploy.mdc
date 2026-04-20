@@ -1,0 +1,23 @@
+---
+description: Do not run production deploy scripts unless the user explicitly asks in the same turn
+alwaysApply: true
+---
+
+# Production deploy — manual only
+
+**Never** run production deployment scripts on your own initiative (including after commits, “shipping,” or “we’re done”). The user must **explicitly** ask to deploy to production in that conversation turn.
+
+## In scope (examples)
+
+- [`Update-Prod-App-Backend.ps1`](Update-Prod-App-Backend.ps1) — git push + SSM to EC2 (`saathi-api`)
+- [`Update-Prod-App-Electron.ps1`](Update-Prod-App-Electron.ps1) or any similar script that pushes code and updates production hosts
+- Equivalent: `aws ssm send-command` targeting production app instances for deploy/restart, when used to ship app code
+
+## Allowed without a deploy ask
+
+- Local `git commit`, tests, builds, and **documenting** the exact command the user can run (e.g. “Run `Update-Prod-App-Backend.ps1` when ready”)
+- Preparing a PR or describing deploy steps in prose — **do not execute** the deploy script
+
+## When the user says “deploy to production” (or clearly equivalent)
+
+Then you may run the appropriate script or follow the repo’s deploy docs.
