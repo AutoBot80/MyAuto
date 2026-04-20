@@ -1817,6 +1817,43 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     _precheck_existing_rows = 0
     _precheck_existing_signal = ""
     _precheck_third_level_tabs_loaded = False
+    _settle_poll_js = """() => {
+        const vis = (el) => {
+            if (!el) return false;
+            const st = window.getComputedStyle(el);
+            if (st.display === 'none' || st.visibility === 'hidden') return false;
+            const r = el.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+        };
+        const bar = document.getElementById('s_vctrl_div');
+        if (!bar || !vis(bar)) return { loaded: false, tabs: [] };
+        const compact = (s) => s.replace(/[-\\s]+/g, '').toLowerCase();
+        const tabs = Array.from(bar.querySelectorAll('a, button, [role="tab"], span, li'))
+            .filter(t => vis(t))
+            .map(t => (t.innerText || t.textContent || '').trim())
+            .filter(t => t.length > 0 && t.length < 40);
+        const hasTabs = tabs.some(t => {
+            const c = compact(t);
+            return c === 'precheck' || c === 'pre-check' || c === 'pdi';
+        });
+        return { loaded: hasTabs, tabs };
+    }"""
+    for _settle in range(3):
+        for _root in _roots():
+            try:
+                _settle_res = _root.evaluate(_settle_poll_js)
+                if isinstance(_settle_res, dict) and _settle_res.get("loaded"):
+                    _precheck_third_level_tabs_loaded = True
+                    note(
+                        f"{log_prefix}: third-level tabs visible after settle poll "
+                        f"(attempt {_settle + 1}/3) tabs={_settle_res.get('tabs')!r}"
+                    )
+                    break
+            except Exception:
+                continue
+        if _precheck_third_level_tabs_loaded:
+            break
+        _safe_page_wait(page, 500, log_label=f"precheck_tab_settle_{_settle}")
     _precheck_probe_js = """() => {
                 const vis = (el) => {
                     if (!el) return false;
