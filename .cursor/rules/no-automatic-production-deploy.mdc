@@ -5,7 +5,7 @@ alwaysApply: true
 
 # Production deploy — manual only
 
-**Never** run production deployment scripts on your own initiative (including after commits, “shipping,” or “we’re done”). The user must **explicitly** ask to deploy to production in that conversation turn.
+**Never** run production deployment scripts on your own initiative (including after commits, "shipping," or "we're done"). The user must **explicitly** ask to deploy to production in that conversation turn.
 
 ## In scope (examples)
 
@@ -15,9 +15,16 @@ alwaysApply: true
 
 ## Allowed without a deploy ask
 
-- Local `git commit`, tests, builds, and **documenting** the exact command the user can run (e.g. “Run `Update-Prod-App-Backend.ps1` when ready”)
+- Local `git commit`, tests, builds, and **documenting** the exact command the user can run (e.g. "Run `Update-Prod-App-Backend.ps1` when ready")
 - Preparing a PR or describing deploy steps in prose — **do not execute** the deploy script
 
-## When the user says “deploy to production” (or clearly equivalent)
+## Sidecar hot-sync: EC2 deploy covers Electron too
 
-Then you may run the appropriate script or follow the repo’s deploy docs.
+Since the sidecar hot-syncs `backend/app` scripts from the server at job start, `Update-Prod-App-Backend.ps1` (EC2 deploy) is sufficient for backend Python changes — no Electron rebuild needed. Only rebuild the Electron app (`Update-Prod-App-Electron.ps1`) when changing:
+- `electron/` TypeScript/UI code
+- `electron/sidecar/job_runner.py` (the sidecar entry point itself)
+- Python pip dependencies in `backend/requirements.txt`
+
+## When the user says "deploy to production" (or clearly equivalent)
+
+Then you may run the appropriate script or follow the repo's deploy docs.

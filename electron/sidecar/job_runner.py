@@ -36,13 +36,94 @@ def _setup_logging(saathi_base: Path) -> None:
     root.addHandler(sh)
 
 
+_is_frozen = getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS")
+_scripts_synced = False
+
+
 def _repo_backend() -> Path:
-    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+    if _is_frozen:
         return Path(sys._MEIPASS) / "backend"
     return Path(__file__).resolve().parents[2] / "backend"
 
 
-def _bootstrap_imports(saathi_base: str) -> None:
+def _script_cache_dir(saathi_base: str) -> Path:
+    return Path(saathi_base) / "script_cache"
+
+
+def _sync_scripts(api_url: str, jwt: str, saathi_base: str) -> None:
+    """
+    In frozen (packaged) mode, check whether the local script cache matches
+    the server's git commit.  If stale or absent, download the bundle zip and
+    extract it.  In dev mode this is a no-op.
+    """
+    global _scripts_synced
+    if _scripts_synced or not _is_frozen:
+        return
+    _scripts_synced = True
+
+    cache = _script_cache_dir(saathi_base)
+    version_file = cache / ".version"
+    cached_commit = ""
+    if version_file.is_file():
+        try:
+            cached_commit = version_file.read_text(encoding="utf-8").strip()
+        except Exception:
+            pass
+
+    base = api_url.rstrip("/")
+    server_commit = ""
+    try:
+        req = urllib.request.Request(
+            f"{base}/sidecar/scripts/version",
+            headers={"Authorization": f"Bearer {jwt}"},
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            server_commit = json.loads(resp.read().decode("utf-8")).get("git_commit", "")
+    except Exception as exc:
+        logging.warning("script-sync: version check failed (%s); using cache", exc)
+        return
+
+    if server_commit and server_commit == cached_commit:
+        logging.info("script-sync: cache up-to-date (commit=%s)", cached_commit)
+        return
+
+    logging.info(
+        "script-sync: updating cache (server=%s, cached=%s)",
+        server_commit or "?", cached_commit or "none",
+    )
+    try:
+        req = urllib.request.Request(
+            f"{base}/sidecar/scripts/bundle",
+            headers={"Authorization": f"Bearer {jwt}"},
+        )
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            zip_bytes = resp.read()
+    except Exception as exc:
+        logging.warning("script-sync: bundle download failed (%s); using cache", exc)
+        return
+
+    import io
+    import shutil
+    import zipfile
+
+    try:
+        staging = cache.parent / "script_cache_staging"
+        if staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
+        staging.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+            zf.extractall(staging)
+        if cache.exists():
+            shutil.rmtree(cache, ignore_errors=True)
+        staging.rename(cache)
+        version_file = cache / ".version"
+        version_file.write_text(server_commit, encoding="utf-8")
+        logging.info("script-sync: cache updated to commit=%s", server_commit)
+    except Exception as exc:
+        logging.warning("script-sync: extract/swap failed (%s); using stale cache", exc)
+
+
+def _bootstrap_imports(saathi_base: str, *, api_url: str = "", jwt: str = "") -> None:
     os.environ["SAATHI_BASE_DIR"] = saathi_base
     saathi_path = Path(saathi_base)
     env_file = saathi_path / ".env"
@@ -50,6 +131,20 @@ def _bootstrap_imports(saathi_base: str) -> None:
         from dotenv import load_dotenv
 
         load_dotenv(env_file)
+
+    if _is_frozen and api_url:
+        _sync_scripts(api_url, jwt, saathi_base)
+
+    if _is_frozen:
+        cache = _script_cache_dir(saathi_base)
+        if (cache / "backend").is_dir():
+            sys.path.insert(0, str(cache / "backend"))
+            be_env = cache / "backend" / ".env"
+            if be_env.is_file():
+                from dotenv import load_dotenv
+                load_dotenv(be_env)
+            return
+
     backend = _repo_backend()
     sys.path.insert(0, str(backend))
     be_env = backend / ".env"
@@ -700,7 +795,11 @@ def main_daemon() -> None:
                 out = dispatch(payload)
             else:
                 if not bootstrapped:
-                    _bootstrap_imports(saathi)
+                    _bootstrap_imports(
+                        saathi,
+                        api_url=payload.get("api_url") or "",
+                        jwt=payload.get("jwt") or "",
+                    )
                     bootstrapped = True
                 logging.info("Daemon job start: %s", job_type)
                 out = dispatch(payload)
@@ -738,7 +837,11 @@ def main() -> None:
             print(json.dumps(out, default=str))
             sys.exit(0 if out.get("success") else 1)
 
-        _bootstrap_imports(saathi)
+        _bootstrap_imports(
+            saathi,
+            api_url=payload.get("api_url") or "",
+            jwt=payload.get("jwt") or "",
+        )
         logging.info("Job start: %s", job_type)
         out = dispatch(payload)
         logging.info("Job end: success=%s", out.get("success"))

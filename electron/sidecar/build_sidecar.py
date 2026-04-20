@@ -85,9 +85,6 @@ def main() -> int:
 
     _remove_pyinstaller_artifacts()
 
-    sep = ";" if os.name == "nt" else ":"
-    add_data = f"--add-data={BACKEND / 'app'}{sep}backend/app"
-
     cmd = [
         sys.executable,
         "-m",
@@ -101,7 +98,6 @@ def main() -> int:
         "--workpath",
         str(ROOT / "build"),
         f"--paths={BACKEND}",
-        add_data,
         str(ENTRY),
     ]
     print(" ", " ".join(cmd))
