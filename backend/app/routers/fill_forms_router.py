@@ -7,7 +7,7 @@ from functools import partial
 from pathlib import Path
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from app.config import (
@@ -157,6 +157,13 @@ class FillDmsRequest(BaseModel):
     vehicle_id: int | None = None
     customer: FillDmsCustomer = FillDmsCustomer()
     vehicle: FillDmsVehicle = FillDmsVehicle()
+    client_api_base_url: str | None = Field(
+        None,
+        description=(
+            "Optional. Client-reported API base URL (e.g. VITE_API_URL at build). "
+            "Logged at top of Playwright_DMS_*.txt; empty means relative / Vite proxy."
+        ),
+    )
 
 
 class FillDmsResponse(BaseModel):
@@ -469,9 +476,18 @@ async def warm_vahan_browser() -> WarmVahanBrowserResponse:
     )
 
 
+def _fill_forms_http_request_base(request: Request) -> str:
+    """Base URL the API saw for this HTTP request (for Playwright_DMS*.txt diagnostics)."""
+    try:
+        return str(request.base_url).rstrip("/")
+    except Exception:
+        return ""
+
+
 @router.post("/dms", response_model=FillDmsResponse)
 async def fill_dms_only(
     req: FillDmsRequest,
+    request: Request,
     principal: Principal = Depends(get_principal),
 ) -> FillDmsResponse:
     """Run only DMS (login, enquiry, vehicle search, scrape, PDFs). Independent process."""
@@ -507,6 +523,8 @@ async def fill_dms_only(
             status_code=400,
             detail="subfolder is required unless staging has file_location (Submit Info) or pass subfolder explicitly.",
         )
+    _http_base = _fill_forms_http_request_base(request)
+    _client_api = (req.client_api_base_url or "").strip() or None
     result = await _run_playwright_work(
         partial(
             run_fill_dms_only,
@@ -523,6 +541,8 @@ async def fill_dms_only(
             vehicle_id=vid,
             staging_payload=staging_payload,
             staging_id=sid_for_commit,
+            execution_log_client_api_base_url=_client_api,
+            execution_log_http_request_base_url=_http_base or None,
         )
     )
     scraped = result.get("vehicle") or {}
@@ -888,6 +908,7 @@ async def fill_hero_insurance(
 @router.post("", response_model=FillDmsResponse)
 async def fill_dms(
     req: FillDmsRequest,
+    request: Request,
     principal: Principal = Depends(get_principal),
 ) -> FillDmsResponse:
     enforce_max_text_depth(req.model_dump())
@@ -925,6 +946,8 @@ async def fill_dms(
             status_code=400,
             detail="subfolder is required unless staging has file_location (Submit Info) or pass subfolder explicitly.",
         )
+    _http_base = _fill_forms_http_request_base(request)
+    _client_api = (req.client_api_base_url or "").strip() or None
     result = await _run_playwright_work(
         partial(
             run_fill_dms,
@@ -941,6 +964,8 @@ async def fill_dms(
             vehicle_id=vid,
             staging_payload=staging_payload,
             staging_id=sid_for_commit,
+            execution_log_client_api_base_url=_client_api,
+            execution_log_http_request_base_url=_http_base or None,
         )
     )
     scraped = result.get("vehicle") or {}

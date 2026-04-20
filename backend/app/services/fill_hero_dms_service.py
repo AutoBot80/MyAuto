@@ -1842,6 +1842,9 @@ def _run_fill_dms_real_siebel_playwright(
     customer_id: int | None,
     vehicle_id: int | None,
     result: dict,
+    *,
+    execution_log_client_api_base_url: str | None = None,
+    execution_log_http_request_base_url: str | None = None,
 ) -> None:
     """
     Hero Connect / Siebel Open UI: ``Playwright_Hero_DMS_fill`` — **Find Contact Enquiry** path
@@ -1922,6 +1925,8 @@ def _run_fill_dms_real_siebel_playwright(
         execution_log_path=playwright_dms_log,
         customer_id=customer_id,
         vehicle_id=vehicle_id,
+        execution_log_client_api_base_url=execution_log_client_api_base_url,
+        execution_log_http_request_base_url=execution_log_http_request_base_url,
     )
 
     result["vehicle"] = frag.get("vehicle") or {}
@@ -2032,6 +2037,9 @@ def run_fill_dms_only(
     vehicle_id: int | None = None,
     staging_payload: dict | None = None,
     staging_id: str | None = None,
+    *,
+    execution_log_client_api_base_url: str | None = None,
+    execution_log_http_request_base_url: str | None = None,
 ) -> dict:
     """
     Run DMS steps via Hero Connect / Siebel Open UI (``DMS_MODE`` real/siebel/live/production/hero and
@@ -2110,6 +2118,8 @@ def run_fill_dms_only(
             customer_id,
             vehicle_id,
             result,
+            execution_log_client_api_base_url=execution_log_client_api_base_url,
+            execution_log_http_request_base_url=execution_log_http_request_base_url,
         )
     except PlaywrightTimeout as e:
         result["error"] = f"Timeout: {e!s}"
@@ -2227,6 +2237,9 @@ def run_fill_dms(
     headless: bool | None = None,
     staging_payload: dict | None = None,
     staging_id: str | None = None,
+    *,
+    execution_log_client_api_base_url: str | None = None,
+    execution_log_http_request_base_url: str | None = None,
 ) -> dict:
     """
     Run Playwright: DMS flow (Siebel Create Invoice).
@@ -2249,6 +2262,8 @@ def run_fill_dms(
         vehicle_id=vehicle_id,
         staging_payload=staging_payload,
         staging_id=staging_id,
+        execution_log_client_api_base_url=execution_log_client_api_base_url,
+        execution_log_http_request_base_url=execution_log_http_request_base_url,
     )
     cid_eff = customer_id if customer_id is not None else result.get("committed_customer_id")
     vid_eff = vehicle_id if vehicle_id is not None else result.get("committed_vehicle_id")
@@ -2302,6 +2317,8 @@ def Playwright_Hero_DMS_fill(
     execution_log_path: Path | None = None,
     customer_id: int | None = None,
     vehicle_id: int | None = None,
+    execution_log_client_api_base_url: str | None = None,
+    execution_log_http_request_base_url: str | None = None,
 ) -> dict:
     """
     Hero Connect / Siebel automation — **Find Contact Enquiry** path. Pipeline:
@@ -2364,6 +2381,16 @@ def Playwright_Hero_DMS_fill(
         lp.parent.mkdir(parents=True, exist_ok=True)
         log_fp = open(lp, "w", encoding="utf-8")
         log_fp.write("Playwright DMS — execution log (this run only; IST / Asia/Kolkata timestamps)\n\n")
+        _capi = (execution_log_client_api_base_url or "").strip()
+        _hreq = (execution_log_http_request_base_url or "").strip()
+        log_fp.write(
+            "# Client API base: VITE_API_URL at build (browser/Electron); empty string = relative URLs / Vite proxy.\n"
+        )
+        log_fp.write(f"client_api_base_url={_capi[:400]!r}\n")
+        log_fp.write(
+            "# HTTP request base: FastAPI Request.base_url for this fill-forms call (which host the API saw).\n"
+        )
+        log_fp.write(f"http_request_base_url={_hreq[:400]!r}\n\n")
         log_fp.write(f"started_ist={run_started_ist}\n")
         log_fp.write(f"skip_contact_find={skip_contact_find}\n")
         log_fp.write(f"dms_contact_path={dms_path!r}\n")
@@ -2831,6 +2858,8 @@ def run_hero_siebel_dms_flow(
     execution_log_path: Path | None = None,
     customer_id: int | None = None,
     vehicle_id: int | None = None,
+    execution_log_client_api_base_url: str | None = None,
+    execution_log_http_request_base_url: str | None = None,
 ) -> dict:
     """
     Backward-compatible alias for older callers.
@@ -2848,4 +2877,6 @@ def run_hero_siebel_dms_flow(
         execution_log_path=execution_log_path,
         customer_id=customer_id,
         vehicle_id=vehicle_id,
+        execution_log_client_api_base_url=execution_log_client_api_base_url,
+        execution_log_http_request_base_url=execution_log_http_request_base_url,
     )

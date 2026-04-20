@@ -269,6 +269,8 @@ def _dispatch_fill_dms(params: dict) -> dict:
     from app.services.upload_scans_invoice_print import collect_invoice_print_jobs_electron_local
 
     api_url, jwt = _require_api_credentials(params)
+    _client_api_log = (params.get("client_api_base_url") or "").strip() or None
+    _http_api_log = str(api_url).strip().rstrip("/")
 
     resolve_body = {
         "staging_id": params.get("staging_id"),
@@ -334,6 +336,8 @@ def _dispatch_fill_dms(params: dict) -> dict:
                 params.get("customer_id"),
                 params.get("vehicle_id"),
                 result,
+                execution_log_client_api_base_url=_client_api_log,
+                execution_log_http_request_base_url=_http_api_log,
             )
     except Exception as e:
         result["error"] = str(e)

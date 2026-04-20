@@ -38,6 +38,11 @@ export interface FillDmsRequest {
   /** Optional when ``staging_id`` is set (fill values come from staging payload). */
   customer?: FillDmsCustomer;
   vehicle?: FillDmsVehicle;
+  /**
+   * Client API base (``VITE_API_URL`` at build). Sent automatically by ``fillDms`` / ``fillDmsOnly``;
+   * logged at the top of ``Playwright_DMS_*.txt`` next to the server-reported request base URL.
+   */
+  client_api_base_url?: string | null;
 }
 
 export interface FillDmsResponse {
@@ -200,7 +205,7 @@ export async function fillDmsOnly(req: FillDmsRequest): Promise<FillDmsResponse>
     const res = await apiFetch<FillDmsResponse>("/fill-forms/dms", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(req),
+      body: JSON.stringify({ ...req, client_api_base_url: getBaseUrl() ?? "" }),
       signal: controller.signal,
     });
     return res;
@@ -220,7 +225,7 @@ export async function fillDmsLocal(req: FillDmsRequest): Promise<FillDmsResponse
       type: "fill_dms",
       api_url: getBaseUrl(),
       jwt: getAccessToken() ?? "",
-      params: { ...req },
+      params: { ...req, client_api_base_url: getBaseUrl() ?? "" },
       timeoutMs: FILL_FORMS_TIMEOUT_MS,
     });
     if (result.timedOut) {
@@ -254,7 +259,7 @@ export async function fillDms(req: FillDmsRequest): Promise<FillDmsResponse> {
     const res = await apiFetch<FillDmsResponse>("/fill-forms", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(req),
+      body: JSON.stringify({ ...req, client_api_base_url: getBaseUrl() ?? "" }),
       signal: controller.signal,
     });
     return res;
