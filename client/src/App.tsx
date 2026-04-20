@@ -4,6 +4,7 @@ import type { Page } from "./types";
 import { useToday } from "./hooks/useToday";
 import { AppChrome } from "./components/AppChrome";
 import { AppLayoutV2 } from "./components/AppLayoutV2";
+import { VersionBadge } from "./components/VersionBadge";
 import { AddSalesPage } from "./pages/AddSalesPage";
 import { AdminPage } from "./pages/AdminPage";
 import { AdminDataFolderPage } from "./pages/AdminDataFolderPage";
@@ -401,6 +402,7 @@ function App() {
                 }}
               />
             </main>
+            <VersionBadge />
           </div>
         </div>
       </AppChrome>

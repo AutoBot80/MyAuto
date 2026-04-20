@@ -30,13 +30,7 @@ export function setupAutoUpdater(send: UpdateSender): void {
     logInfo("updater: no GH_TOKEN found — auto-update disabled");
     return;
   }
-  autoUpdater.setFeedURL({
-    provider: "github",
-    owner: "AutoBot80",
-    repo: "MyAuto",
-    private: true,
-    token,
-  });
+  (autoUpdater as any).requestHeaders = { Authorization: `token ${token}` };
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = false;
 

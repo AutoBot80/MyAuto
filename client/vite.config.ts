@@ -1,6 +1,8 @@
 import { defineConfig, type Plugin, type ProxyOptions } from 'vite'
 import react from '@vitejs/plugin-react'
 import http from 'node:http'
+import fs from 'node:fs'
+import path from 'node:path'
 import type { Server as Http1Server } from 'node:http'
 
 /** Shared agent for long proxies: keep-alive + no socket timeout (reduces ECONNRESET on large POSTs to uvicorn on Windows). */
@@ -64,8 +66,19 @@ function longProxy(target: string): ProxyOptions {
 // https://vite.dev/config/
 // Production builds must use a relative base so `file://` loads work in the Electron shell
 // (absolute "/assets/..." breaks when opening packaged `client-dist/index.html`).
+function readAppVersion(): string {
+  try {
+    const p = path.resolve(__dirname, '..', 'electron', 'package.json')
+    const pkg = JSON.parse(fs.readFileSync(p, 'utf-8'))
+    return pkg.version || '0.0.0'
+  } catch {
+    return '0.0.0'
+  }
+}
+
 export default defineConfig(({ command }) => ({
   base: command === 'build' ? './' : '/',
+  define: { __APP_VERSION__: JSON.stringify(readAppVersion()) },
   plugins: [react(), devServerDisableRequestTimeout()],
   server: {
     proxy: {
