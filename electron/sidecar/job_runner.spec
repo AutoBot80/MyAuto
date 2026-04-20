@@ -5,7 +5,7 @@ a = Analysis(
     ['C:\\Users\\arya_\\OneDrive\\Desktop\\My Auto.AI\\electron\\sidecar\\job_runner.py'],
     pathex=['C:\\Users\\arya_\\OneDrive\\Desktop\\My Auto.AI\\backend'],
     binaries=[],
-    datas=[('C:\\Users\\arya_\\OneDrive\\Desktop\\My Auto.AI\\backend\\app', 'backend/app')],
+    datas=[],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
