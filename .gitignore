@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+!client/.env.production
 backend/.env
 # AWS keys (never commit)
 AWS*.csv
