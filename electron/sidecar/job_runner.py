@@ -145,6 +145,7 @@ def _dispatch_fill_dms(params: dict) -> dict:
     staging_payload = ctx.get("staging_payload")
     dms_base_url = ctx["dms_base_url"]
 
+    # Use LOCAL paths (SAATHI_BASE_DIR on dealer PC), not server-returned Linux paths.
     from app.config import get_uploads_dir, get_ocr_output_dir
     dealer_id = params.get("dealer_id") or int(os.getenv("DEALER_ID", "100001"))
     uploads_dir = get_uploads_dir(int(dealer_id))
@@ -251,9 +252,10 @@ def _dispatch_fill_insurance(params: dict) -> dict:
     staging_payload = ctx.get("staging_payload")
     staging_id = ctx.get("staging_id")
 
-    from app.config import get_ocr_output_dir as _get_ocr
-    ins_dealer_id = params.get("dealer_id") or int(os.getenv("DEALER_ID", "100001"))
-    ocr_dir = _get_ocr(int(ins_dealer_id))
+    # Use LOCAL paths, not server-returned Linux paths.
+    from app.config import get_ocr_output_dir
+    dealer_id = params.get("dealer_id") or int(os.getenv("DEALER_ID", "100001"))
+    ocr_dir = get_ocr_output_dir(int(dealer_id))
 
     # Monkey-patch DB-dependent functions so pre_process / main_process can run
     # without DATABASE_URL. The sidecar delegates all DB writes to /sidecar/insurance/commit.
