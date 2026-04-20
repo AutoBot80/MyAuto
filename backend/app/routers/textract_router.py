@@ -2,7 +2,8 @@
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 
-from app.config import UPLOAD_MAX_FILE_BYTES, get_uploads_dir
+from app.config import STORAGE_USE_S3, UPLOAD_MAX_FILE_BYTES, get_uploads_dir
+from app.services.dealer_storage import ensure_uploads_local_file
 from app.security.deps import get_principal, resolve_dealer_id
 from app.security.principal import Principal
 from app.services.sales_textract_service import (
@@ -63,6 +64,10 @@ def textract_extract_from_queue(
     """
     did = resolve_dealer_id(principal, dealer_id)
     path = get_uploads_dir(did) / subfolder / filename
+    if STORAGE_USE_S3 and not path.is_file():
+        dl = ensure_uploads_local_file(did, subfolder, filename)
+        if dl is not None:
+            path = dl
     if not path.exists():
         raise HTTPException(status_code=404, detail="File not found in uploads")
     try:

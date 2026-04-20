@@ -17,7 +17,7 @@ Instances run **Amazon Linux 2023**. The launch template **user_data** now **sel
 
 The Terraform `app_user_data` in `asg.tf` runs on every new instance:
 
-1. Installs `nginx`, `git`, `python3.11`, `gcc`, `pkg-config`, `cairo-devel`, CloudWatch Agent
+1. Installs `nginx`, `git`, `python3.11`, `gcc`, `pkg-config`, `cairo-devel`, `nano`, `htop`, `postgresql15`, CloudWatch Agent
 2. Configures and starts CloudWatch Agent (mem + disk metrics)
 3. Starts Nginx with a stub `/health` → `200` (so the ALB marks the target healthy immediately)
 4. Clones the repo to `/opt/saathi` (uses `app_git_repo_url`; optional GitHub PAT from SSM via `app_github_pat_ssm_param`)

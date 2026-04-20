@@ -6,9 +6,10 @@ from urllib.parse import quote
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 
-from app.config import get_uploads_dir
+from app.config import STORAGE_USE_S3, get_uploads_dir
+from app.services.dealer_storage import list_uploads_subfolder_s3, presigned_uploads_get_by_rel_path
 from app.security.deps import get_principal, resolve_dealer_id
 from app.security.principal import Principal
 
@@ -41,13 +42,19 @@ def browse_documents(
         safe = _safe_subfolder(subfolder)
         if not safe:
             raise HTTPException(status_code=400, detail="Invalid subfolder")
-        folder = get_uploads_dir(did) / safe
-        if not folder.is_dir():
-            raise HTTPException(status_code=404, detail="Folder not found")
-        files = sorted(
-            f.name for f in folder.iterdir()
-            if f.is_file() and not _is_ocr_output_file(f.name)
-        )
+        if STORAGE_USE_S3:
+            s3_files = list_uploads_subfolder_s3(did, safe)
+            files = sorted(
+                f["name"] for f in s3_files if not _is_ocr_output_file(f["name"])
+            )
+        else:
+            folder = get_uploads_dir(did) / safe
+            if not folder.is_dir():
+                raise HTTPException(status_code=404, detail="Folder not found")
+            files = sorted(
+                f.name for f in folder.iterdir()
+                if f.is_file() and not _is_ocr_output_file(f.name)
+            )
         rows = "".join(
             f'<tr><td><a href="/documents/{quote(safe, safe="")}/{quote(f, safe="")}">{f}</a></td></tr>'
             for f in files
@@ -75,13 +82,21 @@ def list_documents(
         safe = _safe_subfolder(subfolder)
         if not safe:
             raise HTTPException(status_code=400, detail="Invalid subfolder")
-        folder = get_uploads_dir(did) / safe
-        if not folder.is_dir():
-            raise HTTPException(status_code=404, detail="Folder not found")
-        files: list[dict] = []
-        for f in sorted(folder.iterdir()):
-            if f.is_file() and not _is_ocr_output_file(f.name):
-                files.append({"name": f.name, "size": f.stat().st_size})
+        if STORAGE_USE_S3:
+            s3_files = list_uploads_subfolder_s3(did, safe)
+            files = [
+                {"name": f["name"], "size": f["size"]}
+                for f in sorted(s3_files, key=lambda x: x["name"])
+                if not _is_ocr_output_file(f["name"])
+            ]
+        else:
+            folder = get_uploads_dir(did) / safe
+            if not folder.is_dir():
+                raise HTTPException(status_code=404, detail="Folder not found")
+            files = []
+            for f in sorted(folder.iterdir()):
+                if f.is_file() and not _is_ocr_output_file(f.name):
+                    files.append({"name": f.name, "size": f.stat().st_size})
         return {"subfolder": safe, "files": files}
     except HTTPException:
         raise
@@ -110,6 +125,12 @@ def get_document(
     requested_name = Path(filename).name
     if requested_name != filename or requested_name in {".", ".."}:
         raise HTTPException(status_code=400, detail="Invalid filename")
+    if STORAGE_USE_S3:
+        url = presigned_uploads_get_by_rel_path(did, f"{safe_sub}/{requested_name}")
+        if not url:
+            raise HTTPException(status_code=404, detail="File not found")
+        return RedirectResponse(url=url, status_code=307)
+
     path = get_uploads_dir(did) / safe_sub / requested_name
     if not path.is_file():
         raise HTTPException(status_code=404, detail="File not found")

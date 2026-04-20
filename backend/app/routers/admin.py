@@ -6,9 +6,10 @@ from typing import Literal
 from psycopg2 import sql, IntegrityError
 from pydantic import BaseModel, Field
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 
-from app.config import get_ocr_output_dir, get_uploads_dir
+from app.config import STORAGE_USE_S3, get_ocr_output_dir, get_uploads_dir
+from app.services.dealer_storage import list_admin_folder_s3, presigned_ocr_get_by_rel_path, presigned_uploads_get_by_rel_path
 from app.db import get_connection
 from app.security.deps import get_principal, require_admin, resolve_dealer_id
 from app.security.principal import Principal
@@ -80,7 +81,15 @@ def get_data_folders(
     dealer_id: int | None = Query(None, description="Defaults to token dealer when omitted."),
 ) -> DataFoldersResponse:
     """Resolved absolute paths for dealer-scoped Upload Scans and ocr_output folders."""
+    from app.config import S3_DATA_BUCKET, S3_OCR_PREFIX, S3_UPLOADS_PREFIX
+
     did = resolve_dealer_id(principal, dealer_id)
+    if STORAGE_USE_S3:
+        return DataFoldersResponse(
+            dealer_id=did,
+            upload_scans_path=f"s3://{S3_DATA_BUCKET}/{S3_UPLOADS_PREFIX}/{did}/",
+            ocr_output_path=f"s3://{S3_DATA_BUCKET}/{S3_OCR_PREFIX}/{did}/",
+        )
     uploads = get_uploads_dir(did).resolve()
     ocr = get_ocr_output_dir(did).resolve()
     return DataFoldersResponse(
@@ -142,6 +151,26 @@ def list_admin_folder_contents(
 ) -> FolderListResponse:
     """List files and subfolders under the dealer Upload Scans or ocr_output tree."""
     did = resolve_dealer_id(principal, dealer_id)
+    rel_norm = rel_path.strip().replace("\\", "/")
+    if STORAGE_USE_S3:
+        display_abs, raw_items = list_admin_folder_s3(root, did, rel_norm)
+        items = [
+            FolderEntry(
+                name=x["name"],
+                kind=x["kind"],
+                size=x.get("size"),
+                modified_at=x["modified_at"],
+            )
+            for x in raw_items
+        ]
+        return FolderListResponse(
+            root=root,
+            rel_path=rel_norm,
+            dealer_id=did,
+            current_folder_abs=display_abs,
+            items=items,
+        )
+
     base = _admin_folder_base(root, did)
     folder = _resolve_under_dealer_root(base, rel_path)
     if not folder.is_dir():
@@ -163,7 +192,6 @@ def list_admin_folder_contents(
             items.append(FolderEntry(name=f.name, kind="dir", modified_at=mt))
         else:
             items.append(FolderEntry(name=f.name, kind="file", size=size, modified_at=mt))
-    rel_norm = rel_path.strip().replace("\\", "/")
     return FolderListResponse(
         root=root,
         rel_path=rel_norm,
@@ -184,6 +212,18 @@ def get_admin_folder_file(
     did = resolve_dealer_id(principal, dealer_id)
     base = _admin_folder_base(root, did)
     file_path = _resolve_under_dealer_root(base, path)
+    if STORAGE_USE_S3:
+        try:
+            rel = file_path.resolve().relative_to(base.resolve()).as_posix()
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail="Invalid path") from e
+        if root == "upload_scans":
+            url = presigned_uploads_get_by_rel_path(did, rel)
+        else:
+            url = presigned_ocr_get_by_rel_path(did, rel)
+        if not url:
+            raise HTTPException(status_code=404, detail="File not found")
+        return RedirectResponse(url=url, status_code=307)
     if not file_path.is_file():
         raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(file_path, filename=file_path.name, content_disposition_type="inline")

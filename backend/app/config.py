@@ -64,11 +64,32 @@ else:
     OCR_OUTPUT_DIR = APP_ROOT.parent / "ocr_output"
     _CHALLANS_DEFAULT = APP_ROOT.parent / "Challans"
     _BULK_DEFAULT = APP_ROOT.parent / "Bulk Upload"
+
+# Optional absolute overrides (e.g. EC2: ``UPLOADS_DIR=/opt/saathi/Uploaded scans``). Win over ``SAATHI_BASE_DIR`` paths above.
+_UPLOADS_ENV = os.getenv("UPLOADS_DIR", "").strip()
+_OCR_ENV = os.getenv("OCR_OUTPUT_DIR", "").strip()
+if _UPLOADS_ENV:
+    UPLOADS_DIR = Path(_UPLOADS_ENV)
+if _OCR_ENV:
+    OCR_OUTPUT_DIR = Path(_OCR_ENV)
+
 # Subdealer challan OCR artifacts: Raw_OCR.txt, OCR_To_be_Used.json per challan folder
 _CHALLANS_DIR = os.getenv("CHALLANS_DIR", "").strip()
 CHALLANS_DIR = Path(_CHALLANS_DIR) if _CHALLANS_DIR else _CHALLANS_DEFAULT
 _BULK_UPLOAD_ENV = os.getenv("BULK_UPLOAD_DIR", "").strip()
 BULK_UPLOAD_DIR = Path(_BULK_UPLOAD_ENV) if _BULK_UPLOAD_ENV else _BULK_DEFAULT
+
+# Object storage: ``local`` (default) = files only on disk; ``s3`` = sync uploads/OCR to S3 (production EC2).
+_STORAGE_BACKEND_RAW = (os.getenv("STORAGE_BACKEND") or "local").strip().lower()
+STORAGE_BACKEND = _STORAGE_BACKEND_RAW if _STORAGE_BACKEND_RAW in ("local", "s3") else "local"
+STORAGE_USE_S3 = STORAGE_BACKEND == "s3"
+S3_DATA_BUCKET = (os.getenv("S3_DATA_BUCKET") or "").strip()
+S3_UPLOADS_PREFIX = (os.getenv("S3_UPLOADS_PREFIX") or "uploaded-scans").strip().strip("/") or "uploaded-scans"
+S3_OCR_PREFIX = (os.getenv("S3_OCR_PREFIX") or "ocr-output").strip().strip("/") or "ocr-output"
+try:
+    S3_PRESIGNED_EXPIRES_SEC = int((os.getenv("S3_PRESIGNED_EXPIRES_SEC") or "3600").strip())
+except ValueError:
+    S3_PRESIGNED_EXPIRES_SEC = 3600
 
 # Dealer ID for app. Used by bulk watcher, AUTH_DISABLED dev principal, and when client omits dealer_id.
 DEALER_ID = int(os.getenv("DEALER_ID", "100001"))

@@ -14,7 +14,13 @@ import threading
 import time
 from pathlib import Path
 
-from app.config import get_ocr_output_dir, get_uploads_dir
+from app.config import STORAGE_USE_S3, get_ocr_output_dir, get_uploads_dir
+from app.services.dealer_storage import (
+    presigned_ocr_get_by_rel_path,
+    presigned_uploads_get_by_rel_path,
+    sync_ocr_subfolder_to_s3,
+    sync_uploads_subfolder_to_s3,
+)
 from app.services.hero_dms_playwright_invoice import _mobile_report_pdf_filename
 from app.services.upload_scans_pdf_dispatch import dispatch_local_pdf
 
@@ -157,6 +163,123 @@ def dispatch_pdf_after_generate_insurance(dealer_id: int, subfolder: str) -> Non
     )
 
 
+def _print_job(filename: str, url: str, kind: str) -> dict:
+    return {"filename": filename, "presigned_url": url, "kind": kind}
+
+
+def collect_invoice_print_jobs_s3(
+    dealer_id: int,
+    subfolder: str,
+    mobile: str,
+    pdfs_saved: list[str] | None = None,
+) -> list[dict]:
+    """
+    Sync sale folder to S3 and return presigned GET URLs for PDFs that would have been printed locally.
+    Used when ``STORAGE_USE_S3`` — Electron downloads and prints on the dealer PC.
+    """
+    sync_uploads_subfolder_to_s3(dealer_id, subfolder)
+    base = get_uploads_dir(dealer_id) / subfolder
+    saved_list = [Path(s).resolve() for s in (pdfs_saved or []) if s and str(s).strip()]
+    mob = _digits_10(mobile) or _mobile_from_subfolder(subfolder)
+    jobs: list[dict] = []
+
+    for report in _DMS_REPORTS_AFTER_INVOICE:
+        chosen: Path | None = None
+        expected: Path | None = None
+        if mob:
+            expected = base / _mobile_report_pdf_filename(mob, report)
+            if expected.is_file():
+                chosen = expected
+        if chosen is None:
+            for p in saved_list:
+                if not p.is_file():
+                    continue
+                low = p.name.lower()
+                if report == "GST Retail Invoice" and "gst" in low and "retail" in low:
+                    chosen = p
+                    break
+                if report == "Sale Certificate" and "sale" in low and "certificate" in low:
+                    chosen = p
+                    break
+        if chosen is None or not chosen.is_file():
+            continue
+        rel = f"{subfolder}/{chosen.name}"
+        url = presigned_uploads_get_by_rel_path(dealer_id, rel)
+        if url:
+            kind = "gst_retail_invoice" if report == "GST Retail Invoice" else "sale_certificate"
+            jobs.append(_print_job(chosen.name, url, kind))
+
+    if mob:
+        try:
+            from app.services.form20_pencil_overlay import form20_pencil_overlay_write_only
+
+            stamped = form20_pencil_overlay_write_only(base, mob)
+            if stamped is not None and stamped.is_file():
+                sync_uploads_subfolder_to_s3(dealer_id, subfolder)
+                rel = f"{subfolder}/{stamped.name}"
+                url = presigned_uploads_get_by_rel_path(dealer_id, rel)
+                if url:
+                    jobs.append(_print_job(stamped.name, url, "form20_pencil"))
+        except Exception as exc:
+            logger.warning("collect_invoice_print_jobs_s3: pencil overlay: %s", exc)
+
+    return jobs
+
+
+def collect_insurance_print_jobs_s3(dealer_id: int, subfolder: str) -> list[dict]:
+    """After insurance automation, sync and return a presigned URL for the policy PDF if found."""
+    sync_uploads_subfolder_to_s3(dealer_id, subfolder)
+    sync_ocr_subfolder_to_s3(dealer_id, subfolder)
+    uploads_base = get_uploads_dir(dealer_id) / subfolder
+    ocr_base = get_ocr_output_dir(dealer_id) / subfolder
+
+    def _try_path(base: Path) -> dict | None:
+        if not base.is_dir():
+            return None
+        mob = _mobile_from_subfolder(str(base.name))
+        if mob:
+            for name in (f"{mob}_Insurance.pdf", f"{mob}_Insurance_Policy.pdf"):
+                p = base / name
+                if p.is_file():
+                    return {"path": p, "name": name}
+        for name in ("Insurance.pdf", "Insurance_Policy.pdf", "Hero_Insurance.pdf", "MISP_Insurance.pdf"):
+            p = base / name
+            if p.is_file():
+                return {"path": p, "name": name}
+        skip_parts = ("gst_retail", "sale_certificate", "form22", "form_20", "booking_receipt", "invoice_details")
+        scored: list[tuple[float, Path]] = []
+        for p in base.glob("*.pdf"):
+            low = p.name.lower()
+            if any(sp in low.replace(" ", "_") for sp in skip_parts):
+                continue
+            if any(k in low for k in ("insurance", "proposal", "policy", "misp")):
+                try:
+                    scored.append((p.stat().st_mtime, p))
+                except OSError:
+                    continue
+        if scored:
+            best = max(scored, key=lambda x: x[0])[1]
+            return {"path": best, "name": best.name}
+        return None
+
+    for attempt in range(15):
+        for folder, root in ((uploads_base, "uploads"), (ocr_base, "ocr")):
+            hit = _try_path(folder)
+            if hit is None:
+                continue
+            p = hit["path"]
+            rel = f"{subfolder}/{p.name}"
+            if root == "uploads":
+                url = presigned_uploads_get_by_rel_path(dealer_id, rel)
+            else:
+                url = presigned_ocr_get_by_rel_path(dealer_id, rel)
+            if url:
+                return [_print_job(p.name, url, "insurance")]
+        time.sleep(0.35)
+
+    return []
+
+
 def schedule_dispatch_pdfs_after_create_invoice(
     dealer_id: int,
     subfolder: str,
@@ -167,6 +290,9 @@ def schedule_dispatch_pdfs_after_create_invoice(
     Queue :func:`dispatch_pdfs_after_create_invoice` on a daemon thread so the HTTP response
     (and client UI) are not blocked by opening apps or printing.
     """
+    if STORAGE_USE_S3:
+        return
+
     paths_copy = list(pdfs_saved) if pdfs_saved else None
 
     def _run() -> None:
@@ -180,6 +306,9 @@ def schedule_dispatch_pdfs_after_create_invoice(
 
 def schedule_dispatch_pdf_after_generate_insurance(dealer_id: int, subfolder: str) -> None:
     """Queue insurance PDF dispatch on a daemon thread (non-blocking for API/UI)."""
+
+    if STORAGE_USE_S3:
+        return
 
     def _run() -> None:
         try:

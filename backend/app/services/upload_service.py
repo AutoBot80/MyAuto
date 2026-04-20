@@ -34,6 +34,7 @@ from app.services.upload_file_validation import (
     validate_magic_jpeg_png_or_pdf,
     validate_magic_jpeg_png_pdf_legacy,
 )
+from app.services.dealer_storage import sync_ocr_subfolder_to_s3, sync_uploads_subfolder_to_s3
 
 # ai_reader_queue disabled; extraction runs directly after upload (Option 1)
 
@@ -104,6 +105,7 @@ class UploadService:
             target.write_bytes(content)
             saved.append(target.name)
 
+        sync_uploads_subfolder_to_s3(dealer_id, subdir_name)
         return {
             "saved_count": len(saved),
             "saved_files": saved,
@@ -214,6 +216,7 @@ class UploadService:
         except Exception as e:
             extraction_result = {"error": str(e), "processed": []}
 
+        sync_uploads_subfolder_to_s3(dealer_id, subdir_name)
         return {
             "saved_count": len(saved),
             "saved_files": saved,
@@ -388,6 +391,9 @@ class UploadService:
                     "consolidate_peer_pre_ocr_folder_into_mobile failed subfolder=%s",
                     subdir_name,
                 )
+
+        sync_uploads_subfolder_to_s3(dealer_id, subdir_name)
+        sync_ocr_subfolder_to_s3(dealer_id, subdir_name)
 
         saved: list[str] = []
         final_sale = uploads_dir / subdir_name

@@ -14,13 +14,16 @@ import subprocess
 import threading
 from pathlib import Path
 
-from app.config import ENVIRONMENT_IS_PRODUCTION
+from app.config import ENVIRONMENT_IS_PRODUCTION, STORAGE_USE_S3
 
 logger = logging.getLogger(__name__)
 
 
 def schedule_dispatch_local_pdf(pdf_path: Path) -> None:
     """Run :func:`dispatch_local_pdf` on a daemon thread so HTTP handlers return without waiting on print/UI."""
+
+    if STORAGE_USE_S3:
+        return
 
     def _run() -> None:
         try:
@@ -35,7 +38,10 @@ def dispatch_local_pdf(pdf_path: Path) -> None:
     """
     Non-prod: open PDF with the default application.
     Prod: send the file to the default printer (OS-specific).
+    When ``STORAGE_USE_S3``, the API does not print on the server — use ``print_jobs`` presigned URLs in the client.
     """
+    if STORAGE_USE_S3:
+        return
     p = pdf_path.resolve()
     if not p.is_file():
         logger.warning("upload_scans_pdf_dispatch: file missing: %s", p)
@@ -53,6 +59,8 @@ def dispatch_local_pdf(pdf_path: Path) -> None:
 
 
 def _open_pdf_default_viewer(p: Path) -> None:
+    import os
+
     system = platform.system()
     if system == "Windows":
         os.startfile(str(p))  # type: ignore[attr-defined]
@@ -63,6 +71,8 @@ def _open_pdf_default_viewer(p: Path) -> None:
 
 
 def _send_pdf_to_default_printer(p: Path) -> None:
+    import os
+
     system = platform.system()
     if system == "Windows":
         os.startfile(str(p), "print")  # type: ignore[attr-defined]

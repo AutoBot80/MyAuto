@@ -147,3 +147,39 @@ def form20_pencil_overlay_and_dispatch(sale_dir: Path, mobile_10: str) -> None:
         return
 
     dispatch_local_pdf(out)
+
+
+def form20_pencil_overlay_write_only(sale_dir: Path, mobile_10: str) -> Path | None:
+    """
+    Same as :func:`form20_pencil_overlay_and_dispatch` but does not print/open; returns the stamped PDF path if written.
+    Used when ``STORAGE_USE_S3`` — caller syncs to S3 and returns presigned URLs to the Electron client.
+    """
+    try:
+        import fitz  # noqa: F401
+    except ImportError:
+        logger.warning("form20_pencil_overlay: PyMuPDF (fitz) not installed; skipping overlay")
+        return None
+
+    form20 = find_form20_pdf(sale_dir, mobile_10)
+    if form20 is None:
+        logger.info(
+            "form20_pencil_overlay: Form 20 PDF not found under %s; skipping overlay",
+            sale_dir,
+        )
+        return None
+
+    pencil = find_pencil_mark_file(sale_dir)
+    if pencil is None:
+        logger.info(
+            "form20_pencil_overlay: optional pencil-mark file not present; skipping stamp"
+        )
+        return None
+
+    out = sale_dir / f"{form20.stem}_with_pencil_mark.pdf"
+    try:
+        composite_form20_first_page_with_stamp(form20, pencil, out)
+    except Exception as exc:
+        logger.warning("form20_pencil_overlay: composite failed: %s", exc)
+        return None
+
+    return out if out.is_file() else None

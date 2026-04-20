@@ -15,6 +15,7 @@ from app.config import (
     DMS_LOGIN_USER,
     DMS_LOGIN_PASSWORD,
     INSURANCE_BASE_URL,
+    STORAGE_USE_S3,
     get_ocr_output_dir,
     get_uploads_dir,
 )
@@ -184,6 +185,8 @@ class FillDmsResponse(BaseModel):
     ready_for_client_create_invoice: bool | None = None
     # After staging commit: Run Report PDF batch status (GST Retail Invoice, GST Booking Receipt); see BR-21 / LLD 6.276.
     hero_dms_form22_print: dict | None = None
+    # When ``STORAGE_BACKEND=s3``, presigned PDF URLs for the Electron app to download and print locally.
+    print_jobs: list[dict] = Field(default_factory=list)
 
 
 class FillHeroInsuranceRequest(BaseModel):
@@ -220,6 +223,7 @@ class FillHeroInsuranceResponse(BaseModel):
     page_url: str | None = None
     login_url: str | None = None
     match_base: str | None = None
+    print_jobs: list[dict] = Field(default_factory=list)
 
 
 class PrintForm20Request(BaseModel):
@@ -234,6 +238,7 @@ class PrintForm20Response(BaseModel):
     success: bool
     pdfs_saved: list[str]
     error: str | None = None
+    print_jobs: list[dict] = Field(default_factory=list)
 
 
 class WarmDmsBrowserRequest(BaseModel):
@@ -534,15 +539,27 @@ async def fill_dms_only(
         cc = result.get("customer_id")
     if vv is None:
         vv = result.get("vehicle_id")
+    print_jobs: list[dict] = []
     if result.get("error") is None:
-        from app.services.upload_scans_invoice_print import schedule_dispatch_pdfs_after_create_invoice
-
-        schedule_dispatch_pdfs_after_create_invoice(
-            did,
-            subfolder_resolved,
-            _mobile_for_invoice_dispatch(staging_payload, customer_dict),
-            _invoice_dispatch_pdf_paths(result),
+        from app.services.upload_scans_invoice_print import (
+            collect_invoice_print_jobs_s3,
+            schedule_dispatch_pdfs_after_create_invoice,
         )
+
+        if STORAGE_USE_S3:
+            print_jobs = collect_invoice_print_jobs_s3(
+                did,
+                subfolder_resolved,
+                _mobile_for_invoice_dispatch(staging_payload, customer_dict),
+                _invoice_dispatch_pdf_paths(result),
+            )
+        else:
+            schedule_dispatch_pdfs_after_create_invoice(
+                did,
+                subfolder_resolved,
+                _mobile_for_invoice_dispatch(staging_payload, customer_dict),
+                _invoice_dispatch_pdf_paths(result),
+            )
     return FillDmsResponse(
         success=result.get("error") is None,
         vehicle=scraped,
@@ -558,6 +575,7 @@ async def fill_dms_only(
         dms_step_messages=list(result.get("dms_step_messages") or []),
         ready_for_client_create_invoice=result.get("ready_for_client_create_invoice"),
         hero_dms_form22_print=result.get("hero_dms_form22_print"),
+        print_jobs=print_jobs,
     )
 
 
@@ -639,7 +657,17 @@ async def print_form20(
             dealer_id=did,
             uploads_dir=uploads_dir,
         )
-        return PrintForm20Response(success=True, pdfs_saved=form20_saved)
+        print_jobs: list[dict] = []
+        if STORAGE_USE_S3 and form20_saved:
+            from app.services.dealer_storage import presigned_uploads_get_by_rel_path, sync_uploads_subfolder_to_s3
+
+            safe_sub = re.sub(r"[^\w\-]", "_", (req.subfolder or "").strip()) or "default"
+            sync_uploads_subfolder_to_s3(did, safe_sub)
+            for name in form20_saved:
+                url = presigned_uploads_get_by_rel_path(did, f"{safe_sub}/{name}")
+                if url:
+                    print_jobs.append({"filename": name, "presigned_url": url, "kind": "form20"})
+        return PrintForm20Response(success=True, pdfs_saved=form20_saved, print_jobs=print_jobs)
     except HTTPException:
         raise
     except Exception as e:
@@ -685,8 +713,18 @@ async def print_gate_pass(
             dealer_id=did,
             uploads_dir=uploads_dir,
         )
-        schedule_dispatch_local_pdf(pdf_path)
-        return PrintForm20Response(success=True, pdfs_saved=["Gate Pass.pdf"])
+        print_jobs: list[dict] = []
+        if STORAGE_USE_S3:
+            from app.services.dealer_storage import presigned_uploads_get_by_rel_path, sync_uploads_subfolder_to_s3
+
+            safe_sub = re.sub(r"[^\w\-]", "_", (req.subfolder or "").strip()) or "default"
+            sync_uploads_subfolder_to_s3(did, safe_sub)
+            url = presigned_uploads_get_by_rel_path(did, f"{safe_sub}/Gate Pass.pdf")
+            if url:
+                print_jobs.append({"filename": "Gate Pass.pdf", "presigned_url": url, "kind": "gate_pass"})
+        else:
+            schedule_dispatch_local_pdf(pdf_path)
+        return PrintForm20Response(success=True, pdfs_saved=["Gate Pass.pdf"], print_jobs=print_jobs)
     except HTTPException:
         raise
     except FileNotFoundError as e:
@@ -826,16 +864,24 @@ async def fill_hero_insurance(
         return post_process(pre_result=pre, main_result=main)
 
     result = await _run_playwright_work(_hero_insurance_run)
+    print_jobs: list[dict] = []
     if result.get("success") and subfolder_resolved:
-        from app.services.upload_scans_invoice_print import schedule_dispatch_pdf_after_generate_insurance
+        from app.services.upload_scans_invoice_print import (
+            collect_insurance_print_jobs_s3,
+            schedule_dispatch_pdf_after_generate_insurance,
+        )
 
-        schedule_dispatch_pdf_after_generate_insurance(did, subfolder_resolved)
+        if STORAGE_USE_S3:
+            print_jobs = collect_insurance_print_jobs_s3(did, subfolder_resolved)
+        else:
+            schedule_dispatch_pdf_after_generate_insurance(did, subfolder_resolved)
     return FillHeroInsuranceResponse(
         success=bool(result.get("success")),
         error=result.get("error"),
         page_url=result.get("page_url"),
         login_url=result.get("login_url"),
         match_base=result.get("match_base"),
+        print_jobs=print_jobs,
     )
 
 
@@ -918,15 +964,27 @@ async def fill_dms(
         cc = result.get("customer_id")
     if vv is None:
         vv = result.get("vehicle_id")
+    print_jobs: list[dict] = []
     if result.get("error") is None:
-        from app.services.upload_scans_invoice_print import schedule_dispatch_pdfs_after_create_invoice
-
-        schedule_dispatch_pdfs_after_create_invoice(
-            did,
-            subfolder_resolved,
-            _mobile_for_invoice_dispatch(staging_payload, customer_dict),
-            _invoice_dispatch_pdf_paths(result),
+        from app.services.upload_scans_invoice_print import (
+            collect_invoice_print_jobs_s3,
+            schedule_dispatch_pdfs_after_create_invoice,
         )
+
+        if STORAGE_USE_S3:
+            print_jobs = collect_invoice_print_jobs_s3(
+                did,
+                subfolder_resolved,
+                _mobile_for_invoice_dispatch(staging_payload, customer_dict),
+                _invoice_dispatch_pdf_paths(result),
+            )
+        else:
+            schedule_dispatch_pdfs_after_create_invoice(
+                did,
+                subfolder_resolved,
+                _mobile_for_invoice_dispatch(staging_payload, customer_dict),
+                _invoice_dispatch_pdf_paths(result),
+            )
     return FillDmsResponse(
         success=result.get("error") is None,
         vehicle=scraped,
@@ -942,4 +1000,5 @@ async def fill_dms(
         dms_step_messages=list(result.get("dms_step_messages") or []),
         ready_for_client_create_invoice=result.get("ready_for_client_create_invoice"),
         hero_dms_form22_print=result.get("hero_dms_form22_print"),
+        print_jobs=print_jobs,
     )
