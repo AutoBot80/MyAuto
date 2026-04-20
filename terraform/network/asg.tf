@@ -21,6 +21,11 @@ locals {
     set -euxo pipefail
     exec > /var/log/user-data.log 2>&1
 
+    # All `aws` CLI calls (including deploy/ec2/load-dotenv.sh) must use this region —
+    # otherwise Secrets Manager / SSM default to the wrong region and bootstrap fails.
+    export AWS_DEFAULT_REGION="${var.aws_region}"
+    export AWS_REGION="${var.aws_region}"
+
     # ── 1. System packages ───────────────────────────────────────────────
     dnf install -y nginx amazon-cloudwatch-agent git \
       python3.11 python3.11-devel python3.11-pip \
@@ -75,14 +80,35 @@ locals {
     chown -R ec2-user:ec2-user /opt/saathi/backend/venv
 
     # ── 6. .env from Secrets Manager (preferred) or SSM (legacy) ──────────
+    # Inline (do not rely on deploy/ec2/load-dotenv.sh in git — remote branch may omit it).
     %{if var.app_dotenv_secret_arn != ""}
-    DOTENV_SECRET_ARN="${var.app_dotenv_secret_arn}" \
-      bash /opt/saathi/deploy/ec2/load-dotenv.sh /opt/saathi/backend/.env
-    %{elseif var.app_dotenv_ssm_param != ""}
+    DOTENV_SECRET_ARN="${var.app_dotenv_secret_arn}"
+    ENV_FILE="/opt/saathi/backend/.env"
+    mkdir -p "$$(dirname "$$ENV_FILE")"
+    TMP=$$(mktemp)
+    trap 'rm -f "$$TMP"' EXIT
+    if ! aws --region ${var.aws_region} secretsmanager get-secret-value \
+      --secret-id "$$DOTENV_SECRET_ARN" \
+      --query SecretString \
+      --output text > "$$TMP"; then
+      echo "aws secretsmanager get-secret-value failed (IAM, ARN, region)." >&2
+      exit 1
+    fi
+    if [[ ! -s "$$TMP" ]]; then
+      echo "SecretString was empty — refusing to write .env" >&2
+      exit 1
+    fi
+    mv -f "$$TMP" "$$ENV_FILE"
+    trap - EXIT
+    chmod 600 "$$ENV_FILE"
+    echo "Wrote .env from Secrets Manager to $$ENV_FILE"
+    %{else}
+    %{if var.app_dotenv_ssm_param != ""}
     aws ssm get-parameter --name "${var.app_dotenv_ssm_param}" \
       --with-decryption --query "Parameter.Value" --output text \
       --region ${var.aws_region} > /opt/saathi/backend/.env
     chmod 600 /opt/saathi/backend/.env
+    %{endif}
     %{endif}
 
     # ── 7. Nginx — real proxy config (replaces stub) ─────────────────────
@@ -151,7 +177,7 @@ resource "aws_autoscaling_group" "app" {
   name                      = "${var.project_name}-asg-app"
   vpc_zone_identifier       = aws_subnet.private[*].id
   health_check_type         = "ELB"
-  health_check_grace_period = 300
+  health_check_grace_period = var.asg_health_check_grace_period
   default_cooldown          = 300
   protect_from_scale_in     = false
   min_size                  = var.asg_min_size

@@ -12,7 +12,7 @@ resource "aws_cloudwatch_metric_alarm" "ec2_cpu_warn" {
 
   metric_query {
     id          = "cpu_max"
-    expression  = length(local.app_instance_ids_sorted) == 1 ? "m0" : "MAX(${join(",", [for i in range(length(local.app_instance_ids_sorted)) : "m${i}"])})"
+    expression  = local.cw_ec2_max_expr
     label       = "MaxCPU"
     return_data = true
   }
@@ -50,7 +50,7 @@ resource "aws_cloudwatch_metric_alarm" "ec2_cpu_crit" {
 
   metric_query {
     id          = "cpu_max"
-    expression  = length(local.app_instance_ids_sorted) == 1 ? "m0" : "MAX(${join(",", [for i in range(length(local.app_instance_ids_sorted)) : "m${i}"])})"
+    expression  = local.cw_ec2_max_expr
     label       = "MaxCPU"
     return_data = true
   }
@@ -89,7 +89,7 @@ resource "aws_cloudwatch_metric_alarm" "ec2_cpu_scale_in" {
 
   metric_query {
     id          = "cpu_avg"
-    expression  = length(local.app_instance_ids_sorted) == 1 ? "m0" : "AVG(${join(",", [for i in range(length(local.app_instance_ids_sorted)) : "m${i}"])})"
+    expression  = local.cw_ec2_avg_expr
     label       = "AvgCPU"
     return_data = true
   }
@@ -127,7 +127,7 @@ resource "aws_cloudwatch_metric_alarm" "ec2_mem_warn" {
 
   metric_query {
     id          = "mem_max"
-    expression  = length(local.app_instance_ids_sorted) == 1 ? "m0" : "MAX(${join(",", [for i in range(length(local.app_instance_ids_sorted)) : "m${i}"])})"
+    expression  = local.cw_ec2_max_expr
     label       = "MaxMemPct"
     return_data = true
   }
@@ -165,7 +165,7 @@ resource "aws_cloudwatch_metric_alarm" "ec2_mem_crit" {
 
   metric_query {
     id          = "mem_max"
-    expression  = length(local.app_instance_ids_sorted) == 1 ? "m0" : "MAX(${join(",", [for i in range(length(local.app_instance_ids_sorted)) : "m${i}"])})"
+    expression  = local.cw_ec2_max_expr
     label       = "MaxMemPct"
     return_data = true
   }

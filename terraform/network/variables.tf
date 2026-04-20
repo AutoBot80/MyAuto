@@ -131,6 +131,12 @@ variable "asg_max_size" {
   }
 }
 
+variable "asg_health_check_grace_period" {
+  type        = number
+  description = "Seconds after instance launch before failed ELB health checks count against ASG replacement (user_data + app warm-up)."
+  default     = 300
+}
+
 variable "asg_scale_out_warmup_seconds" {
   type        = number
   description = "Step scaling: estimated instance warmup (matches scale-out cooldown intent)."
